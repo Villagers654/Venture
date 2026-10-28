@@ -1,0 +1,468 @@
+// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+/* This file is part of the dynarmic project.
+ * Copyright (c) 2018 MerryMage
+ * SPDX-License-Identifier: 0BSD
+ */
+
+#pragma once
+
+#include <array>
+#include <atomic>
+#include <cstddef>
+#include <cstdint>
+#include <functional>
+#include <memory>
+#include <optional>
+
+#include "dynarmic/interface/optimization_flags.h"
+
+namespace Dynarmic {
+class ExclusiveMonitor;
+}  // namespace Dynarmic
+
+namespace Dynarmic {
+namespace A64 {
+
+using VAddr = std::uint64_t;
+
+// Maximum monotonic forward interval between optional halt checkpoints.
+// 64 KiB: each window boundary also ends a block and forces a poll; 512 bytes
+// cost Batman 2.5% main-thread time. Forward-only chains cannot loop.
+inline constexpr std::uint64_t halt_polling_window_size = 65536;
+
+using Vector = std::array<std::uint64_t, 2>;
+static_assert(sizeof(Vector) == sizeof(std::uint64_t) * 2, "Vector must be 128 bits in size");
+
+enum class Exception {
+    /// An UndefinedFault occured due to executing instruction with an unallocated encoding
+    UnallocatedEncoding,
+    /// An UndefinedFault occured due to executing instruction containing a reserved value
+    ReservedValue,
+    /// An unpredictable instruction is to be executed. Implementation-defined behaviour should now happen.
+    /// This behaviour is up to the user of this library to define.
+    /// Note: Constraints on unpredictable behaviour are specified in the ARMv8 ARM.
+    UnpredictableInstruction,
+    /// A WFI instruction was executed. You may now enter a low-power state. (Hint instruction.)
+    WaitForInterrupt,
+    /// A WFE instruction was executed. You may now enter a low-power state if the event register is clear. (Hint instruction.)
+    WaitForEvent,
+    /// A SEV instruction was executed. The event register of all PEs should be set. (Hint instruction.)
+    SendEvent,
+    /// A SEVL instruction was executed. The event register of the current PE should be set. (Hint instruction.)
+    SendEventLocal,
+    /// A YIELD instruction was executed. (Hint instruction.)
+    Yield,
+    /// A BRK instruction was executed. (Hint instruction.)
+    Breakpoint,
+    /// Attempted to execute a code block at an address for which MemoryReadCode returned std::nullopt.
+    /// (Intended to be used to emulate memory protection faults.)
+    NoExecuteFault,
+};
+
+enum class DataCacheOperation {
+    /// DC CISW
+    CleanAndInvalidateBySetWay,
+    /// DC CIVAC
+    CleanAndInvalidateByVAToPoC,
+    /// DC CSW
+    CleanBySetWay,
+    /// DC CVAC
+    CleanByVAToPoC,
+    /// DC CVAU
+    CleanByVAToPoU,
+    /// DC CVAP
+    CleanByVAToPoP,
+    /// DC ISW
+    InvalidateBySetWay,
+    /// DC IVAC
+    InvalidateByVAToPoC,
+    /// DC ZVA
+    ZeroByVA,
+};
+
+/// ARMv8.1 atomic operations, numbered as the o3:opc field of LDADD..SWP.
+enum class AtomicOp : std::uint8_t {
+    Add, Clear, Eor, Set, SMax, SMin, UMax, UMin, Swap, CompareAndSwap
+};
+
+enum class InstructionCacheOperation {
+    /// IC IVAU
+    InvalidateByVAToPoU,
+    /// IC IALLU
+    InvalidateAllToPoU,
+    /// IC IALLUIS
+    InvalidateAllToPoUInnerSharable
+};
+
+struct UserCallbacks {
+    virtual ~UserCallbacks() = default;
+
+    // All reads through this callback are 4-byte aligned.
+    // Memory must be interpreted as little endian.
+    virtual std::optional<std::uint32_t> MemoryReadCode(VAddr vaddr) {
+        return std::uint32_t(MemoryRead(vaddr, sizeof(std::uint32_t)));
+    }
+
+    // Reads through these callbacks may not be aligned.
+    virtual std::uint64_t MemoryRead(VAddr vaddr, std::size_t size) = 0;
+    virtual Vector MemoryRead128(VAddr vaddr) = 0;
+
+    // Writes through these callbacks may not be aligned.
+    virtual void MemoryWrite(VAddr vaddr, std::uint64_t value, std::size_t size) = 0;
+    virtual void MemoryWrite128(VAddr vaddr, Vector value) = 0;
+
+    // Writes through these callbacks may not be aligned.
+    virtual bool MemoryWriteExclusive8(VAddr /*vaddr*/, std::uint8_t /*value*/, std::uint8_t /*expected*/) { return false; }
+    virtual bool MemoryWriteExclusive16(VAddr /*vaddr*/, std::uint16_t /*value*/, std::uint16_t /*expected*/) { return false; }
+    virtual bool MemoryWriteExclusive32(VAddr /*vaddr*/, std::uint32_t /*value*/, std::uint32_t /*expected*/) { return false; }
+    virtual bool MemoryWriteExclusive64(VAddr /*vaddr*/, std::uint64_t /*value*/, std::uint64_t /*expected*/) { return false; }
+    virtual bool MemoryWriteExclusive128(VAddr /*vaddr*/, Vector /*value*/, Vector /*expected*/) { return false; }
+
+    // ARMv8.1 atomics that cannot use fastmem: one atomic access of a naturally
+    // aligned 1/2/4/8-byte object, returning its previous value zero-extended.
+    // CompareAndSwap stores `desired` only when the old value equals `value`.
+    // Faults are reported as for the other memory callbacks.
+    virtual std::uint64_t MemoryAtomic(VAddr vaddr, std::size_t bytes, AtomicOp op, std::uint64_t value, std::uint64_t desired) = 0;
+    virtual Vector MemoryAtomicCompareAndSwap128(VAddr vaddr, Vector expected, Vector desired) = 0;
+
+    // If this callback returns true, the JIT will assume MemoryRead* callbacks will always
+    // return the same value at any point in time for this vaddr. The JIT may use this information
+    // in optimizations.
+    // A conservative implementation that always returns false is safe.
+    virtual bool IsReadOnlyMemory(VAddr /*vaddr*/) { return false; }
+
+    // This callback is called whenever a SVC instruction is executed.
+    virtual void CallSVC(std::uint32_t swi) = 0;
+    virtual void CallSVCFast(std::uint32_t swi) { CallSVC(swi); }
+    virtual void CallSVCFastKnown(std::uint32_t swi, const void*, void*) { CallSVCFast(swi); }
+
+    virtual void ExceptionRaised(VAddr pc, Exception exception) = 0;
+    virtual void DataCacheOperationRaised(DataCacheOperation /*op*/, VAddr /*value*/) {}
+    virtual void InstructionCacheOperationRaised(InstructionCacheOperation /*op*/, VAddr /*value*/) {}
+    virtual void InstructionSynchronizationBarrierRaised() {}
+
+    // Timing-related callbacks
+    // ticks ticks have passed
+    virtual void AddTicks(std::uint64_t ticks) = 0;
+    // How many more ticks am I allowed to execute?
+    virtual std::uint64_t GetTicksRemaining() = 0;
+    // Get value in the emulated counter-timer physical count register.
+    virtual std::uint64_t GetCNTPCT() = 0;
+};
+
+struct UserConfig {
+    // Diagnostic only: selected instruction boundaries, no guest code mutation.
+    // state is a read-only backend A64JitState, valid only during the callback.
+    struct DiagnosticEntry {
+        std::function<bool(VAddr)> selected;
+        void (*record)(void* user, VAddr pc, const void* state) noexcept = nullptr;
+        void* user = nullptr;
+    } diagnostic_entry;
+    bool enable_register_cache = false;
+    /// Fastmem Pointer
+    /// This should point to the beginning of a 2^page_table_address_space_bits bytes
+    /// address space which is in arranged just like what you wish for emulated memory to
+    /// be. If the host page faults on an address, the JIT will fallback to calling the
+    /// MemoryRead*/MemoryWrite* callbacks.
+    std::optional<std::uintptr_t> fastmem_pointer = std::nullopt;
+
+    UserCallbacks* callbacks;
+
+    ExclusiveMonitor* global_monitor = nullptr;
+
+    /// Pointer to where TPIDRRO_EL0 is stored. This pointer will be inserted into
+    /// emitted code.
+    const std::uint64_t* tpidrro_el0 = nullptr;
+
+    /// Pointer to where TPIDR_EL0 is stored. This pointer will be inserted into
+    /// emitted code.
+    std::uint64_t* tpidr_el0 = nullptr;
+
+    /// Pointer to the page table which we can use for direct page table access.
+    /// If an entry in page_table is null, the relevant memory callback will be called.
+    /// If page_table is nullptr, all memory accesses hit the memory callbacks.
+    void** page_table = nullptr;
+
+    /// This selects other optimizations than can't otherwise be disabled by setting other
+    /// configuration options. This includes:
+    /// - IR optimizations
+    /// - Block linking optimizations
+    /// - RSB optimizations
+    /// This is intended to be used for debugging.
+    OptimizationFlag optimizations = all_safe_optimizations;
+
+    /// Declares how many valid address bits are there in virtual addresses.
+    /// Determines the size of page_table. Valid values are between 12 and 64 inclusive.
+    /// This is only used if page_table is not nullptr.
+    std::uint32_t page_table_address_space_bits = 36;
+
+    /// Applies a bit mask to the bits in host pointers from the page table.
+    /// The intention behind this is to allow users of Dynarmic to pack attributes in the
+    /// same integer and update the pointer attribute pair atomically.
+    /// If the configured value is ~(0b111ULL), all pointers will be forcefully aligned to 8 bytes.
+    std::uint64_t page_table_pointer_mask = 0;
+
+    /// Log2 of the size per page entry, value should be either 3 or 4
+    std::uint32_t page_table_log2_stride = 3;
+
+    /// Setting this value has Dynarmic check the specified bit of the page pointer provided by page table.
+    /// If the bit is set to 1, Dynarmic will treat it as unmapped.
+    /// This bit should be included as part of `page_table_pointer_mask`.
+    std::optional<std::uint8_t> page_table_marked_bit = std::nullopt;
+
+    /// If this value is set, Dynarmic will sign extend the page table pointer by this bit.
+    /// Useful for compacting bits into the page table and should be used as part of `page_table_pointer_mask`.
+    std::optional<std::uint8_t> page_table_sign_extension = std::nullopt;
+
+    /// Counter-timer frequency register. The value of the register is not interpreted by
+    /// dynarmic.
+    std::uint32_t cntfrq_el0 = 600000000;
+
+    /// CTR_EL0<27:24> is log2 of the cache writeback granule in words.
+    /// CTR_EL0<23:20> is log2 of the exclusives reservation granule in words.
+    /// CTR_EL0<19:16> is log2 of the smallest data/unified cacheline in words.
+    /// CTR_EL0<15:14> is the level 1 instruction cache policy.
+    /// CTR_EL0<3:0> is log2 of the smallest instruction cacheline in words.
+    std::uint32_t ctr_el0 = 0x8444c004;
+
+    /// DCZID_EL0<3:0> is log2 of the block size in words
+    /// DCZID_EL0<4> is 0 if the DC ZVA instruction is permitted.
+    std::uint32_t dczid_el0 = 4;
+
+    /// Declares how many valid address bits are there in virtual addresses.
+    /// Determines the size of fastmem arena. Valid values are between 12 and 64 inclusive.
+    /// This is only used if fastmem_pointer is set.
+    std::uint32_t fastmem_address_space_bits = 36;
+
+    // Minimum size is about 8MiB. Maximum size is about 128MiB (arm64 host) or 2GiB (x64 host).
+    // Maximum size is limited by the maximum length of a x86_64 / arm64 jump.
+    std::uint32_t code_cache_size = 128 * 1024 * 1024;  // bytes
+    /// Venture (x64): emit blocks' deferred handlers into a separate upper part of
+    /// the code cache, keeping consecutively compiled hot code contiguous.
+    bool cold_code_region = false;
+    /// Venture (x64), requires cold_code_region: block links keep only the
+    /// patchable rel32 jump in hot code; unlinked exits are cold-region stubs.
+    bool compact_block_links = false;
+    /// Venture (x64): alignment of block entry points in bytes (a power of two;
+    /// 1 packs blocks without padding).
+    std::uint32_t block_alignment = 16;
+
+    /// Determines if we should detect memory accesses via page_table that straddle are
+    /// misaligned. Accesses that straddle page boundaries will fallback to the relevant
+    /// memory callback.
+    /// This value should be the required access sizes this applies to ORed together.
+    /// To detect any access, use: 8 | 16 | 32 | 64 | 128.
+    std::uint8_t detect_misaligned_access_via_page_table = 0;
+
+    /// Processor ID
+    std::uint8_t processor_id = 0;
+
+    /// This enables unsafe optimizations that reduce emulation accuracy in favour of speed.
+    /// For safety, in order to enable unsafe optimizations you have to set BOTH this flag
+    /// AND the appropriate flag bits above.
+    /// The prefered and tested mode for this library is with unsafe optimizations disabled.
+    bool unsafe_optimizations = false;
+
+    /// When set to true, UserCallbacks::DataCacheOperationRaised will be called when any
+    /// data cache instruction is executed. Notably DC ZVA will not implicitly do anything.
+    /// When set to false, UserCallbacks::DataCacheOperationRaised will never be called.
+    /// Executing DC ZVA in this mode will result in zeros being written to memory.
+    bool hook_data_cache_operations = false;
+
+    /// When set to true, UserCallbacks::InstructionSynchronizationBarrierRaised will be
+    /// called when an ISB instruction is executed.
+    /// When set to false, ISB will be treated as a NOP instruction.
+    bool hook_isb = false;
+
+    /// When set to true, UserCallbacks::ExceptionRaised will be called when any hint
+    /// instruction is executed.
+    bool hook_hint_instructions = false;
+
+    /// Determines what happens if the guest accesses an entry that is off the end of the
+    /// page table. If true, Dynarmic will silently mirror page_table's address space. If
+    /// false, accessing memory outside of page_table bounds will result in a call to the
+    /// relevant memory callback.
+    /// This is only used if page_table is not nullptr.
+    bool silently_mirror_page_table = true;
+
+    /// Determines if the pointer in the page_table shall be offseted locally or globally.
+    /// 'false' will access page_table[addr >> bits][addr & mask]
+    /// 'true'  will access page_table[addr >> bits][addr]
+    /// Note: page_table[addr >> bits] will still be checked to verify active pages.
+    ///       So there might be wrongly faulted pages which maps to nullptr.
+    ///       This can be avoided by carefully allocating the memory region.
+    bool absolute_offset_page_table = false;
+
+    /// Determines if the above option only triggers when the misalignment straddles a
+    /// page boundary.
+    bool only_detect_misalignment_via_page_table_on_page_boundary = false;
+
+    /// Determines if instructions that pagefault should cause recompilation of that block
+    /// with fastmem disabled.
+    /// Recompiled code will use the page_table if this is available, otherwise memory
+    /// accesses will hit the memory callbacks.
+    bool recompile_on_fastmem_failure = true;
+
+    /// Determines what happens if the guest accesses an entry that is off the end of the
+    /// fastmem arena. If true, Dynarmic will silently mirror fastmem's address space. If
+    /// false, accessing memory outside of fastmem bounds will result in a call to the
+    /// relevant memory callback.
+    /// This is only used if fastmem_pointer is set.
+    bool silently_mirror_fastmem = true;
+
+    /// Determines if we should use the above fastmem_pointer for exclusive reads and
+    /// writes. On x64, dynarmic currently relies on x64 cmpxchg semantics which may not
+    /// provide fully accurate emulation.
+    bool fastmem_exclusive_access = false;
+
+    /// Venture: emit fastmem exclusive loads of 8 to 64 bits as plain MOVs. x64
+    /// TSO makes aligned loads single-copy atomic with acquire ordering, and
+    /// ordered stores stay XCHG, so LOCK XADD adds only a locked read-modify-write.
+    bool plain_exclusive_loads = false;
+    /// Venture: a plain store-exclusive of 8 to 64 bits whose value equals
+    /// what its exclusive load in the same block returned, with no memory
+    /// access in between, succeeds without writing (fastmem exclusives).
+    /// Release stores keep the locked compare-exchange.
+    bool elide_unchanged_exclusive_stores = false;
+    /// Determines if exclusive access instructions that pagefault should cause
+    /// recompilation of that block with fastmem disabled. Recompiled code will use memory
+    /// callbacks.
+    bool recompile_on_exclusive_fastmem_failure = true;
+
+    /// This option relates to translation. Generally when we run into an unpredictable
+    /// instruction the ExceptionRaised callback is called. If this is true, we define
+    /// definite behaviour for some unpredictable instructions.
+    bool define_unpredictable_behaviour = false;
+
+    /// HACK:
+    /// This tells the translator a wall clock will be used, thus allowing it
+    /// to avoid writting certain unnecessary code only needed for cycle timers.
+    bool wall_clock_cntpct = false;
+
+    /// This allows accurately emulating protection fault handlers. If true, we check
+    /// for exit after every data memory access by the emulated program.
+    bool check_halt_on_memory_access = false;
+    /// With check_halt_on_memory_access, a register write that a later write in the
+    /// block overwrites is normally still stored before every memory access in
+    /// between. Live: when the value is held anyway at that access, store it only on
+    /// the access's abort exit (x64). All: also extend other values (tests only).
+    enum class ColdAbortState : std::uint8_t { Off, Live, All };
+    ColdAbortState cold_memory_abort_state = ColdAbortState::Off;
+
+    /// This option allows you to disable cycle counting. If this is set to false,
+    /// AddTicks and GetTicksRemaining are never called, and no cycle counting is done.
+    bool enable_cycle_counting = true;
+
+    /// Elide ordinary forward conditional-link halt checks within a bounded
+    /// PC window. Backward, window-crossing and indirect links still poll.
+    /// Disabled for cycle counting and single stepping.
+    bool enable_bounded_halt_polling = false;
+    /// Diagnostic x64 frame chain. Requires RBP, so Jit disables its optional
+    /// register cache when this or verbose debug emission is requested.
+    /// Native unwind records use RSP and the run-code saved-register slots.
+    bool enable_block_frame_chain = false;
+    /// log2 of the fast-dispatch table's entry count (16 bytes each), 10 to 24.
+    std::uint8_t fast_dispatch_table_bits = 20;
+    /// Back the table with zero-filled OS pages (a zero tag is empty) cleared
+    /// by decommit/recommit. False keeps upstream's zero-initialized array of
+    /// empty entries cleared by filling.
+    bool fast_dispatch_table_pages = false;
+    /// Diagnostic dispatch counters, null for none (no emitted change). Layout:
+    /// [0] RSB pops, [1] RSB misses, [2] fast-dispatch hints, [3] table misses,
+    /// [4] misses of a simulated 2^18-entry table, [5] of a 2^16-entry table.
+    std::uint64_t* fast_dispatch_census = nullptr;
+    /// Emit the fast-dispatch lookup at each indirect-branch site instead of
+    /// jumping to the shared handler, so each site has its own host indirect
+    /// jump for branch prediction. Sites whose FPCR may change use the handler.
+    bool inline_fast_dispatch = false;
+    /// Emit the return-stack-buffer pop at each return site instead of jumping
+    /// to the shared handler, under the same FPCR condition as inline_fast_dispatch.
+    bool inline_rsb_pop = false;
+    /// Return sites call one shared RSB lookup that returns the jump target in
+    /// RAX, then jump to it: each site keeps its own host indirect jump with a
+    /// 7-byte site instead of the inlined pop. Takes precedence over inline_rsb_pop.
+    bool compact_rsb_pop = false;
+    /// A block that pushes the RSB and ends in a PopRSBHint (SVC: the call returns
+    /// to the next instruction) skips both: its exit compares the location with
+    /// the pushed one and links to that block directly, and a supervisor call
+    /// that changed PC or FPCR takes the fast-dispatch lookup.
+    bool svc_return_link = false;
+    /// Guest calls and returns use the host's own CALL and RET, so the CPU's
+    /// return-address predictor predicts guest returns. BL/BLR pushes the return
+    /// location on a per-JIT stack with a host CALL; RET compares the location
+    /// with the top entry and executes a host RET to the caller's link to its
+    /// continuation. A mismatch empties the stack and takes the fast-dispatch
+    /// lookup. Replaces the RSB arrays; implies svc_return_link. Must be off
+    /// while a hardware user shadow stack (CET) is enforced: the stack drops
+    /// entries without a RET. Ignored with the census.
+    bool host_return_stack = false;
+    /// Give each indirect-branch site (BR, BLR) a slot holding its last target's
+    /// guest PC and host code. A matching PC jumps through the slot (one compare
+    /// and a per-site indirect jump); a mismatch refills it from the fast-dispatch
+    /// lookup. Sites whose FPCR may change or is nonzero use the shared handler.
+    /// Takes precedence over inline_fast_dispatch.
+    bool dispatch_site_cache = false;
+
+    /// A conditional block exit stores the NZCV of its final ADDS/SUBS only on the
+    /// paths whose successor may read it. A successor whose straight-line code
+    /// overwrites NZCV (CMP, TST, FCMP...) before any flag read, branch or
+    /// unrecognised instruction needs no store; the scanned successor code joins
+    /// the block's invalidation range. NZCV in the JIT state is then stale
+    /// between that exit and the overwrite, which only a halt or a fault there
+    /// can observe.
+    bool nzcv_exit_liveness = false;
+
+    /// A BL to a compiler-rt outlined atomic helper (__aarch64_cas*, ldadd*, ldclr*,
+    /// ldeor*, ldset*, swp*: the ADRP/LDRB/CBZ prefix, one LSE instruction and RET)
+    /// is translated as that LSE instruction in the calling block, which continues
+    /// at the return address with X30 set as the BL sets it. The helper's code
+    /// joins the block's invalidation range. Its other registers (x15-x17) are
+    /// call-clobbered under AAPCS64 and keep their values.
+    bool inline_outlined_atomics = false;
+    std::optional<std::uint32_t> svc_fast;
+    // Translation-only immutable metadata for an exact registered thunk.
+    std::function<const void*(VAddr, std::uint32_t)> svc_lookup;
+    std::optional<std::uint32_t> svc_fp_transfer;
+    /// A fast supervisor call whose callback keeps the guest MXCSR: no switch to
+    /// the host MXCSR and back. Host floating-point code in the callback rounds in
+    /// the guest mode and raises guest FPSR flags directly; the callback must not
+    /// read or write FPSR or FPCR through the Jit interface meanwhile.
+    std::optional<std::uint32_t> svc_fp_guest;
+
+    /// Internal use only
+    bool very_verbose_debugging_output = false;
+    // Experimental profiling, emission-time callbacks only. Neither emits
+    // anything when empty. Cookie publication is one flag-preserving MOV.
+    std::function<std::uint32_t(VAddr)> profile_cookie;
+    // Compilation-only predicate for the entry/return-site comparison.
+    std::function<bool(VAddr)> profile_cookie_site;
+    // Cookie identities describe functions. Direct links within one known
+    // function bypass the publication prefix; dispatch/RSB/cross-function
+    // entries publish. No extra instruction executes on internal loop edges.
+    bool profile_function_links = false;
+    std::function<std::uint64_t*(VAddr)> profile_entry_counter;
+    // Translation-only counter allocation; emitted increment preserves flags/GPRs.
+    std::function<std::uint64_t*(VAddr, VAddr)> profile_direct_call_counter;
+    // Diagnostic runtime callback: BL=1, BLR=2, BR=3; optional RET=4, no SVCs.
+    // Empty record pointer leaves emitted code unchanged.
+    struct CallEdgeCallback {
+        void (*record)(void*, VAddr, VAddr, std::uint32_t) = nullptr;
+        void* user = nullptr;
+        bool record_returns = false; // optional nesting diagnostics, not graph edges
+    };
+    CallEdgeCallback profile_call_edge;
+
+    inline bool HasOptimization(OptimizationFlag f) const {
+        if (!unsafe_optimizations) {
+            f &= all_safe_optimizations;
+        }
+        return (f & optimizations) != no_optimizations;
+    }
+    // Diagnostic JIT feature mask (Backend::X64::HostFeature bits). Only disables detected features.
+    std::uint32_t disabled_host_features = 0;
+};
+
+}  // namespace A64
+}  // namespace Dynarmic

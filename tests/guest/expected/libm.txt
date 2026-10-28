@@ -1,0 +1,4 @@
+double: transcendental fused remainder ULP checks OK
+double: decomposition rounding signed zero OK
+float: transcendental fused decomposition ULP checks OK
+VTEST RESULT libm PASS

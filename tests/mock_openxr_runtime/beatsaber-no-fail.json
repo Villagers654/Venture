@@ -1,0 +1,26 @@
+{
+  "description": "Fresh profile: dismiss health warning, Solo, answer No to the tutorial prompt, then set No Fail. Tutorial prompt left button inspected in both eyes of oob-fresh/e78c6415/com.beatgames.beatsaber/003003-nofail frame 001140.",
+  "events": [
+    {"time":0,"head":{"position":[0,1.6,0],"orientation":[0,0,0,1]},"left":{"aim":{"position":[-0.25,1.25,-0.35],"orientation":[0,0,0,1]},"grip":{"position":[-0.25,1.25,-0.35],"orientation":[0,0,0,1]},"trigger":0,"squeeze":0},"right":{"aim":{"position":[0.25,1.25,-0.35],"orientation":[0,0,0,1]},"grip":{"position":[0.25,1.25,-0.35],"orientation":[0,0,0,1]},"trigger":0,"squeeze":0}},
+    {"time":60,"right":{"aim":{"position":[0,1.6,-0.35],"orientation":[0.013089595571344441,0.0,-0.0,0.999914327574007]},"grip":{"position":[0,1.6,-0.35],"orientation":[0.013089595571344441,0.0,-0.0,0.999914327574007]},"trigger":0}},
+    {"time":63,"right":{"trigger":1}},
+    {"time":65,"right":{"trigger":0}},
+    {"time":90,"right":{"aim":{"position":[0,1.6,-0.35],"orientation":[0.16953202249987687,0.2131514098652129,-0.0375843445352855,0.9614638770465722]},"grip":{"position":[0,1.6,-0.35],"orientation":[0.16953202249987687,0.2131514098652129,-0.0375843445352855,0.9614638770465722]},"trigger":0}},
+    {"time":93,"right":{"trigger":1}},
+    {"time":95,"right":{"trigger":0}},
+    {"time":100,"right":{"aim":{"position":[0,1.6,-0.35],"orientation":[0.1562200770427064,0.051691613775052936,-0.008187147317233849,0.9863347480510395]},"grip":{"position":[0,1.6,-0.35],"orientation":[0.1562200770427064,0.051691613775052936,-0.008187147317233849,0.9863347480510395]},"trigger":0}},
+    {"time":103,"right":{"trigger":1}},
+    {"time":105,"right":{"trigger":0}},
+    {"time":125,"right":{"aim":{"position":[0,1.6,-0.35],"orientation":[0.09037508189942499,0.15577821112956805,-0.014314006765924557,0.983544916472679]},"grip":{"position":[0,1.6,-0.35],"orientation":[0.09037508189942499,0.15577821112956805,-0.014314006765924557,0.983544916472679]},"trigger":0}},
+    {"time":128,"right":{"trigger":1}},
+    {"time":130,"right":{"trigger":0}},
+    {"time":140,"right":{"aim":{"position":[0,1.6,-0.35],"orientation":[0.060990434852468495,-0.043538028415184976,0.0026628998940589513,0.9971847952623323]},"grip":{"position":[0,1.6,-0.35],"orientation":[0.060990434852468495,-0.043538028415184976,0.0026628998940589513,0.9971847952623323]},"trigger":0}},
+    {"time":143,"right":{"trigger":1}},
+    {"time":145,"right":{"trigger":0}},
+    {"time":155,"head":{"orientation":[0,0.3826834323650898,0,0.9238795325112867]}},
+    {"time":165,"right":{"aim":{"position":[0,1.6,-0.35],"orientation":[0.14649127741504653,0.5848624242041239,-0.10839784311833425,0.7903962031808327]},"grip":{"position":[0,1.6,-0.35],"orientation":[0.14649127741504653,0.5848624242041239,-0.10839784311833425,0.7903962031808327]},"trigger":0}},
+    {"time":168,"right":{"trigger":1}},
+    {"time":170,"right":{"trigger":0}},
+    {"time":180,"head":{"orientation":[0,0,0,1]}}
+  ]
+}

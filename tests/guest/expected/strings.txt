@@ -1,0 +1,4 @@
+memory: copy overlap fill OK
+strings: search tokenize duplicate OK
+wide: copy search conversion OK
+VTEST RESULT strings PASS

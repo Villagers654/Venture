@@ -1,0 +1,473 @@
+{
+ "description": "Beat Saber first launch from a fresh data root, one process: beatsaber-first-visit.json with English pressed at 115 s (the Select Language screen is up by about 50 s on main e78c6415), then beatsaber-region.json from its first press shifted by +35.08 s (Region: North and South America, Privacy Policy accept, EULA scroll and agree, health-and-safety and explicit-content warnings). Ends at the 3D main menu by about 390 s; verified in oob-fresh/e78c6415/com.beatgames.beatsaber/220005, where these events were applied live. Next launches: beatsaber-no-fail.json once, then beatsaber-solo-song.json.",
+ "events": [
+  {
+   "time": 0.0,
+   "head": {
+    "position": [
+     0,
+     1.6,
+     0
+    ],
+    "orientation": [
+     0,
+     0,
+     0,
+     1
+    ]
+   },
+   "left": {
+    "aim": {
+     "position": [
+      -0.25,
+      1.25,
+      -0.35
+     ],
+     "orientation": [
+      0,
+      0,
+      0,
+      1
+     ]
+    },
+    "grip": {
+     "position": [
+      -0.25,
+      1.25,
+      -0.35
+     ],
+     "orientation": [
+      0,
+      0,
+      0,
+      1
+     ]
+    },
+    "trigger": 0,
+    "squeeze": 0
+   },
+   "right": {
+    "aim": {
+     "position": [
+      0.25,
+      1.25,
+      -0.35
+     ],
+     "orientation": [
+      0,
+      0,
+      0,
+      1
+     ]
+    },
+    "grip": {
+     "position": [
+      0.25,
+      1.25,
+      -0.35
+     ],
+     "orientation": [
+      0,
+      0,
+      0,
+      1
+     ]
+    },
+    "trigger": 0,
+    "squeeze": 0
+   }
+  },
+  {
+   "time": 76.0,
+   "right": {
+    "aim": {
+     "position": [
+      0,
+      1.6,
+      -0.35
+     ],
+     "orientation": [
+      0.21643961393810288,
+      0,
+      0,
+      0.9762960071199334
+     ]
+    },
+    "grip": {
+     "position": [
+      0,
+      1.6,
+      -0.35
+     ],
+     "orientation": [
+      0.21643961393810288,
+      0,
+      0,
+      0.9762960071199334
+     ]
+    },
+    "trigger": 0
+   }
+  },
+  {
+   "time": 115.0,
+   "right": {
+    "trigger": 1
+   }
+  },
+  {
+   "time": 117.0,
+   "right": {
+    "trigger": 0
+   }
+  },
+  {
+   "time": 165.08,
+   "right": {
+    "aim": {
+     "position": [
+      0,
+      1.6,
+      -0.35
+     ],
+     "orientation": [
+      0.24615329302899305,
+      0,
+      0,
+      0.9692309097067544
+     ]
+    },
+    "grip": {
+     "position": [
+      0,
+      1.6,
+      -0.35
+     ],
+     "orientation": [
+      0.24615329302899305,
+      0,
+      0,
+      0.9692309097067544
+     ]
+    },
+    "trigger": 0
+   }
+  },
+  {
+   "time": 168.08,
+   "right": {
+    "trigger": 1
+   }
+  },
+  {
+   "time": 170.08,
+   "right": {
+    "trigger": 0
+   }
+  },
+  {
+   "time": 214.08,
+   "right": {
+    "aim": {
+     "position": [
+      0,
+      1.6,
+      -0.35
+     ],
+     "orientation": [
+      0.27144044986507426,
+      0,
+      0,
+      0.9624552364536473
+     ]
+    },
+    "grip": {
+     "position": [
+      0,
+      1.6,
+      -0.35
+     ],
+     "orientation": [
+      0.27144044986507426,
+      0,
+      0,
+      0.9624552364536473
+     ]
+    },
+    "trigger": 0
+   }
+  },
+  {
+   "time": 238.08,
+   "right": {
+    "trigger": 1
+   }
+  },
+  {
+   "time": 240.08,
+   "right": {
+    "trigger": 0
+   }
+  },
+  {
+   "time": 261.08,
+   "right": {
+    "aim": {
+     "position": [
+      0,
+      1.6,
+      -0.35
+     ],
+     "orientation": [
+      0.21643961393810288,
+      0,
+      0,
+      0.9762960071199334
+     ]
+    },
+    "grip": {
+     "position": [
+      0,
+      1.6,
+      -0.35
+     ],
+     "orientation": [
+      0.21643961393810288,
+      0,
+      0,
+      0.9762960071199334
+     ]
+    },
+    "trigger": 0
+   }
+  },
+  {
+   "time": 264.08,
+   "right": {
+    "trigger": 1
+   }
+  },
+  {
+   "time": 266.08,
+   "right": {
+    "trigger": 0
+   }
+  },
+  {
+   "time": 285.08,
+   "right": {
+    "aim": {
+     "position": [
+      0,
+      1.6,
+      -0.35
+     ],
+     "orientation": [
+      0.0,
+      0.0,
+      -0.0,
+      1.0
+     ]
+    },
+    "grip": {
+     "position": [
+      0,
+      1.6,
+      -0.35
+     ],
+     "orientation": [
+      0.0,
+      0.0,
+      -0.0,
+      1.0
+     ]
+    },
+    "trigger": 0
+   }
+  },
+  {
+   "time": 288.08,
+   "right": {
+    "trigger": 1
+   }
+  },
+  {
+   "time": 290.08,
+   "right": {
+    "trigger": 0
+   }
+  },
+  {
+   "time": 305.08,
+   "right": {
+    "aim": {
+     "position": [
+      0,
+      1.6,
+      -0.35
+     ],
+     "orientation": [
+      0.17364817766693033,
+      0.0,
+      -0.0,
+      0.984807753012208
+     ]
+    },
+    "grip": {
+     "position": [
+      0,
+      1.6,
+      -0.35
+     ],
+     "orientation": [
+      0.17364817766693033,
+      0.0,
+      -0.0,
+      0.984807753012208
+     ]
+    },
+    "trigger": 0,
+    "thumbstick": [
+     0,
+     -1
+    ]
+   }
+  },
+  {
+   "time": 335.08,
+   "right": {
+    "aim": {
+     "position": [
+      0,
+      1.6,
+      -0.35
+     ],
+     "orientation": [
+      0.021761745071029216,
+      -0.06973987359237317,
+      0.0015217294551444747,
+      0.9973266570298062
+     ]
+    },
+    "grip": {
+     "position": [
+      0,
+      1.6,
+      -0.35
+     ],
+     "orientation": [
+      0.021761745071029216,
+      -0.06973987359237317,
+      0.0015217294551444747,
+      0.9973266570298062
+     ]
+    },
+    "trigger": 0,
+    "thumbstick": [
+     0,
+     0
+    ]
+   }
+  },
+  {
+   "time": 338.08,
+   "right": {
+    "trigger": 1
+   }
+  },
+  {
+   "time": 340.08,
+   "right": {
+    "trigger": 0
+   }
+  },
+  {
+   "time": 360.08,
+   "right": {
+    "aim": {
+     "position": [
+      0,
+      1.6,
+      -0.35
+     ],
+     "orientation": [
+      0.013089595571344441,
+      0.0,
+      -0.0,
+      0.999914327574007
+     ]
+    },
+    "grip": {
+     "position": [
+      0,
+      1.6,
+      -0.35
+     ],
+     "orientation": [
+      0.013089595571344441,
+      0.0,
+      -0.0,
+      0.999914327574007
+     ]
+    },
+    "trigger": 0
+   }
+  },
+  {
+   "time": 363.08,
+   "right": {
+    "trigger": 1
+   }
+  },
+  {
+   "time": 365.08,
+   "right": {
+    "trigger": 0
+   }
+  },
+  {
+   "time": 380.08,
+   "right": {
+    "aim": {
+     "position": [
+      0,
+      1.6,
+      -0.35
+     ],
+     "orientation": [
+      0.09150161866340238,
+      0.0,
+      -0.0,
+      0.9958049275746618
+     ]
+    },
+    "grip": {
+     "position": [
+      0,
+      1.6,
+      -0.35
+     ],
+     "orientation": [
+      0.09150161866340238,
+      0.0,
+      -0.0,
+      0.9958049275746618
+     ]
+    },
+    "trigger": 0
+   }
+  },
+  {
+   "time": 383.08,
+   "right": {
+    "trigger": 1
+   }
+  },
+  {
+   "time": 385.08,
+   "right": {
+    "trigger": 0
+   }
+  }
+ ]
+}

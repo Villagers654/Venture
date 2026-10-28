@@ -1,0 +1,17 @@
+{
+  "description": "North Star opening bell interaction after selecting Play. Chain at input 70 seconds. Reach the right controller to the glowing bell clapper, estimated from the inspected stereo frame at input 80.6 seconds, hold grip and rock it sideways three times, then release. Play enables the bell counter; the published project advances after three bell collisions. This interaction route is a probe pending hardware confirmation. Finish with a head turn to inspect the surrounding deck. Times are relative to this route's offset.",
+  "events": [
+    {"time":10,"pose_interpolation":"linear","right":{"aim":{"position":[0.39,1.66,-0.53],"orientation":[0,0,0,1]},"grip":{"position":[0.39,1.66,-0.53],"orientation":[0,0,0,1]}}},
+    {"time":12,"right":{"squeeze":1}},
+    {"time":14,"pose_interpolation":"linear","right":{"grip":{"position":[0.58,1.66,-0.53]}}},
+    {"time":16,"pose_interpolation":"linear","right":{"grip":{"position":[0.2,1.66,-0.53]}}},
+    {"time":18,"pose_interpolation":"linear","right":{"grip":{"position":[0.58,1.66,-0.53]}}},
+    {"time":20,"pose_interpolation":"linear","right":{"grip":{"position":[0.2,1.66,-0.53]}}},
+    {"time":22,"pose_interpolation":"linear","right":{"grip":{"position":[0.58,1.66,-0.53]}}},
+    {"time":24,"pose_interpolation":"linear","right":{"grip":{"position":[0.2,1.66,-0.53]}}},
+    {"time":26,"right":{"squeeze":0}},
+    {"time":30,"pose_interpolation":"linear","head":{"orientation":[0,0,0,1]},"right":{"aim":{"position":[0.25,1.25,-0.35],"orientation":[0,0,0,1]},"grip":{"position":[0.25,1.25,-0.35],"orientation":[0,0,0,1]}}},
+    {"time":60,"pose_interpolation":"linear","head":{"orientation":[0,0.70710678,0,0.70710678]}},
+    {"time":80,"pose_interpolation":"linear","head":{"orientation":[0,1,0,0]}}
+  ]
+}

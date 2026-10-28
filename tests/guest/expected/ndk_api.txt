@@ -1,0 +1,4 @@
+NDK: native window entry points OK
+NDK: API-guarded choreographer entry points OK
+NDK: asset manager probe linked OK
+VTEST RESULT ndk_api PASS

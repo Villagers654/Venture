@@ -1,0 +1,18 @@
+{
+  "comment": "One base-file rule for the launcher (meta::build_plan) and tools/meta_cli.py: an asset file is part of the base install only when Meta marks it is_required: true and no IAP item gates it. A missing or null is_required is optional, matching the Platform SDK default; Meta sent explicit booleans for every asset of Batman, AW2, AC Nexus and RE4 (2026-10-10).",
+  "app_id": "12345",
+  "binary": {
+    "id": "456789", "package_name": "com.example.rule", "version": "1.0", "version_code": 12,
+    "platform": "ANDROID_6DOF", "size": 4,
+    "obb_binary": {"id": "111111", "file_name": "main.12.com.example.rule.obb", "size": 3},
+    "asset_files": {"count": 5, "nodes": [
+      {"id": "222221", "file_name": "required.pak", "size": 2, "is_required": true},
+      {"id": "222222", "file_name": "optional.pak", "size": 2, "is_required": false},
+      {"id": "222223", "file_name": "unflagged.pak", "size": 2},
+      {"id": "222224", "file_name": "null-flag.pak", "size": 2, "is_required": null},
+      {"id": "222225", "file_name": "paid.pak", "size": 2, "is_required": true, "iap_item": {"id": "999999", "sku": "paid"}}
+    ]}
+  },
+  "base": ["com.example.rule.apk", "main.12.com.example.rule.obb", "required.pak"],
+  "catalog": 7
+}

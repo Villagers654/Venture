@@ -1,0 +1,36 @@
+name: Bug report
+description: A game that doesn't start, crashes, looks wrong or plays badly.
+body:
+  - type: input
+    id: game
+    attributes:
+      label: Game
+      placeholder: e.g. Beat Saber
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you expected, and what you saw or heard instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: How to make it happen again
+      placeholder: |
+        1. Start the game
+        2. ...
+    validations:
+      required: true
+  - type: input
+    id: debug-report
+    attributes:
+      label: Debug report
+      description: >-
+        Make the problem happen, then click Report issue on the game's error, or Settings › Troubleshooting ›
+        Upload debug report, and paste the link here.
+      placeholder: https://dpaste.com/...
+    validations:
+      required: true

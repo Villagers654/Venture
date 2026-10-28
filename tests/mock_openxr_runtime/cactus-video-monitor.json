@@ -1,0 +1,186 @@
+{
+  "description": "Media acceptance: use verified campaign menu timings, then look left at the computer monitor during its battle trailer.",
+  "events": [
+    {
+      "time": 0,
+      "hand_tracking_active": false,
+      "right": {
+        "aim": {
+          "position": [
+            0.25,
+            1.2,
+            -0.35
+          ],
+          "orientation": [
+            0.448,
+            0.133,
+            0,
+            0.8840854031144276
+          ]
+        },
+        "grip": {
+          "position": [
+            0.25,
+            1.2,
+            -0.35
+          ],
+          "orientation": [
+            0.448,
+            0.133,
+            0,
+            0.8840854031144276
+          ]
+        },
+        "trigger": 0
+      }
+    },
+    {
+      "time": 110,
+      "right": {
+        "trigger": 1
+      }
+    },
+    {
+      "time": 118,
+      "right": {
+        "trigger": 0
+      }
+    },
+    {
+      "time": 134,
+      "right": {
+        "aim": {
+          "position": [
+            0.25,
+            1.2,
+            -0.35
+          ],
+          "orientation": [
+            0.19,
+            0.23,
+            0,
+            0.9544631999192007
+          ]
+        },
+        "grip": {
+          "position": [
+            0.25,
+            1.2,
+            -0.35
+          ],
+          "orientation": [
+            0.19,
+            0.23,
+            0,
+            0.9544631999192007
+          ]
+        }
+      }
+    },
+    {
+      "time": 140,
+      "right": {
+        "trigger": 1
+      }
+    },
+    {
+      "time": 150,
+      "right": {
+        "trigger": 0
+      }
+    },
+    {
+      "time": 160,
+      "head": {
+        "position": [
+          0,
+          1.6,
+          0
+        ],
+        "orientation": [
+          0,
+          0.3826834323650898,
+          0,
+          0.9238795325112867
+        ]
+      }
+    },
+    {
+      "time": 180,
+      "head": {
+        "position": [
+          0,
+          1.6,
+          0
+        ],
+        "orientation": [
+          0,
+          0,
+          0,
+          1
+        ]
+      }
+    },
+    {
+      "time": 190,
+      "right": {
+        "aim": {
+          "position": [
+            0.25,
+            1.25,
+            -0.35
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        "grip": {
+          "position": [
+            0.25,
+            1.25,
+            -0.35
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        "trigger": 0
+      },
+      "left": {
+        "aim": {
+          "position": [
+            -0.25,
+            1.25,
+            -0.35
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        "grip": {
+          "position": [
+            -0.25,
+            1.25,
+            -0.35
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        "trigger": 0
+      }
+    }
+  ]
+}

@@ -1,0 +1,26 @@
+# Prebuilt Linux release (tools/packaging/linux/build_packages.sh aur).
+pkgname=venture-bin
+pkgver=@VERSION@
+pkgrel=1
+pkgdesc="Play Meta Quest games on PC VR (prebuilt Linux release)"
+arch=('x86_64')
+url="https://venture-emu.org/"
+license=('GPL-3.0-or-later')
+depends=('glibc>=2.35' 'gcc-libs')
+optdepends=('vulkan-icd-loader: Vulkan loader (required to run games)'
+            'libsecret: keep sign-ins in the desktop keyring'
+            'fontconfig: system fonts in the launcher')
+provides=('venture')
+conflicts=('venture')
+options=('!strip' '!debug')
+source=("Venture-${pkgver}-linux-x86_64.tar.gz::https://github.com/Villagers654/Venture/releases/download/v${pkgver}/Venture-${pkgver}-linux-x86_64.tar.gz")
+sha256sums=('@SHA256@')
+
+package() {
+  cd "$srcdir/Venture-linux64"
+  install -d "$pkgdir/opt/venture" "$pkgdir/usr/bin" "$pkgdir/usr/share"
+  cp -a share/. "$pkgdir/usr/share/"
+  find . -mindepth 1 -maxdepth 1 ! -name share -exec cp -a {} "$pkgdir/opt/venture/" \;
+  ln -s /opt/venture/venture "$pkgdir/usr/bin/venture"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

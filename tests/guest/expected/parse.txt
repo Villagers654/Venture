@@ -1,0 +1,4 @@
+sscanf: widths scansets mixed values OK
+integer parsing: bases limits errno OK
+floating parsing: hex special overflow underflow OK
+VTEST RESULT parse PASS

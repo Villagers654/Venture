@@ -1,0 +1,387 @@
+{
+  "description": "Chain after vspeedway-race.json. Hold the wheel and accelerate through alternating steering turns to exercise driving or contact haptics. Confirm the car is driving and the guest emits a request.",
+  "events": [
+    {
+      "time": 0,
+      "left": {
+        "aim": {
+          "position": [
+            -0.18,
+            1.35,
+            -0.45
+          ],
+          "orientation": [
+            0,
+            0,
+            0.0,
+            1.0
+          ]
+        },
+        "grip": {
+          "position": [
+            -0.18,
+            1.35,
+            -0.45
+          ],
+          "orientation": [
+            0,
+            0,
+            0.0,
+            1.0
+          ]
+        },
+        "squeeze": 1
+      },
+      "right": {
+        "aim": {
+          "position": [
+            0.18,
+            1.35,
+            -0.45
+          ],
+          "orientation": [
+            0,
+            0,
+            0.0,
+            1.0
+          ]
+        },
+        "grip": {
+          "position": [
+            0.18,
+            1.35,
+            -0.45
+          ],
+          "orientation": [
+            0,
+            0,
+            0.0,
+            1.0
+          ]
+        },
+        "squeeze": 1,
+        "trigger": 1
+      }
+    },
+    {
+      "time": 5,
+      "left": {
+        "aim": {
+          "position": [
+            -0.157965,
+            1.263703,
+            -0.45
+          ],
+          "orientation": [
+            0,
+            0,
+            0.247404,
+            0.968912
+          ]
+        },
+        "grip": {
+          "position": [
+            -0.157965,
+            1.263703,
+            -0.45
+          ],
+          "orientation": [
+            0,
+            0,
+            0.247404,
+            0.968912
+          ]
+        },
+        "squeeze": 1
+      },
+      "right": {
+        "aim": {
+          "position": [
+            0.157965,
+            1.436297,
+            -0.45
+          ],
+          "orientation": [
+            0,
+            0,
+            0.247404,
+            0.968912
+          ]
+        },
+        "grip": {
+          "position": [
+            0.157965,
+            1.436297,
+            -0.45
+          ],
+          "orientation": [
+            0,
+            0,
+            0.247404,
+            0.968912
+          ]
+        },
+        "squeeze": 1,
+        "trigger": 1
+      }
+    },
+    {
+      "time": 12,
+      "left": {
+        "aim": {
+          "position": [
+            -0.157965,
+            1.436297,
+            -0.45
+          ],
+          "orientation": [
+            0,
+            0,
+            -0.247404,
+            0.968912
+          ]
+        },
+        "grip": {
+          "position": [
+            -0.157965,
+            1.436297,
+            -0.45
+          ],
+          "orientation": [
+            0,
+            0,
+            -0.247404,
+            0.968912
+          ]
+        },
+        "squeeze": 1
+      },
+      "right": {
+        "aim": {
+          "position": [
+            0.157965,
+            1.263703,
+            -0.45
+          ],
+          "orientation": [
+            0,
+            0,
+            -0.247404,
+            0.968912
+          ]
+        },
+        "grip": {
+          "position": [
+            0.157965,
+            1.263703,
+            -0.45
+          ],
+          "orientation": [
+            0,
+            0,
+            -0.247404,
+            0.968912
+          ]
+        },
+        "squeeze": 1,
+        "trigger": 1
+      }
+    },
+    {
+      "time": 20,
+      "left": {
+        "aim": {
+          "position": [
+            -0.143295,
+            1.241066,
+            -0.45
+          ],
+          "orientation": [
+            0,
+            0,
+            0.319309,
+            0.947651
+          ]
+        },
+        "grip": {
+          "position": [
+            -0.143295,
+            1.241066,
+            -0.45
+          ],
+          "orientation": [
+            0,
+            0,
+            0.319309,
+            0.947651
+          ]
+        },
+        "squeeze": 1
+      },
+      "right": {
+        "aim": {
+          "position": [
+            0.143295,
+            1.458934,
+            -0.45
+          ],
+          "orientation": [
+            0,
+            0,
+            0.319309,
+            0.947651
+          ]
+        },
+        "grip": {
+          "position": [
+            0.143295,
+            1.458934,
+            -0.45
+          ],
+          "orientation": [
+            0,
+            0,
+            0.319309,
+            0.947651
+          ]
+        },
+        "squeeze": 1,
+        "trigger": 1
+      }
+    },
+    {
+      "time": 28,
+      "left": {
+        "aim": {
+          "position": [
+            -0.143295,
+            1.458934,
+            -0.45
+          ],
+          "orientation": [
+            0,
+            0,
+            -0.319309,
+            0.947651
+          ]
+        },
+        "grip": {
+          "position": [
+            -0.143295,
+            1.458934,
+            -0.45
+          ],
+          "orientation": [
+            0,
+            0,
+            -0.319309,
+            0.947651
+          ]
+        },
+        "squeeze": 1
+      },
+      "right": {
+        "aim": {
+          "position": [
+            0.143295,
+            1.241066,
+            -0.45
+          ],
+          "orientation": [
+            0,
+            0,
+            -0.319309,
+            0.947651
+          ]
+        },
+        "grip": {
+          "position": [
+            0.143295,
+            1.241066,
+            -0.45
+          ],
+          "orientation": [
+            0,
+            0,
+            -0.319309,
+            0.947651
+          ]
+        },
+        "squeeze": 1,
+        "trigger": 1
+      }
+    },
+    {
+      "time": 36,
+      "left": {
+        "aim": {
+          "position": [
+            -0.18,
+            1.35,
+            -0.45
+          ],
+          "orientation": [
+            0,
+            0,
+            0.0,
+            1.0
+          ]
+        },
+        "grip": {
+          "position": [
+            -0.18,
+            1.35,
+            -0.45
+          ],
+          "orientation": [
+            0,
+            0,
+            0.0,
+            1.0
+          ]
+        },
+        "squeeze": 1
+      },
+      "right": {
+        "aim": {
+          "position": [
+            0.18,
+            1.35,
+            -0.45
+          ],
+          "orientation": [
+            0,
+            0,
+            0.0,
+            1.0
+          ]
+        },
+        "grip": {
+          "position": [
+            0.18,
+            1.35,
+            -0.45
+          ],
+          "orientation": [
+            0,
+            0,
+            0.0,
+            1.0
+          ]
+        },
+        "squeeze": 1,
+        "trigger": 1
+      }
+    },
+    {
+      "time": 45,
+      "right": {
+        "trigger": 0,
+        "squeeze": 0
+      },
+      "left": {
+        "squeeze": 0
+      }
+    }
+  ]
+}

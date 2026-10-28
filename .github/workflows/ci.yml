@@ -1,0 +1,27 @@
+# Builds and tests every push to main and every pull request on Windows and Linux.
+name: CI
+
+# Changes that only touch documentation or issue templates build nothing.
+on:
+  push:
+    branches: [main]
+    paths-ignore: ["**.md", "docs/**", "LICENSES/**", ".github/ISSUE_TEMPLATE/**"]
+  pull_request:
+    paths-ignore: ["**.md", "docs/**", "LICENSES/**", ".github/ISSUE_TEMPLATE/**"]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    # The private development mirror does not spend Actions minutes.
+    if: github.repository == 'Villagers654/Venture'
+    uses: ./.github/workflows/windows.yml
+  linux:
+    if: github.repository == 'Villagers654/Venture'
+    uses: ./.github/workflows/linux.yml

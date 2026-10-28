@@ -1,0 +1,507 @@
+{
+  "description": "After puzzling-first-launch.json has been shown and the game has closed, launch this route on a separate copy of its saved data. Select Tutorial and Replay All, continue the input card, pull tutorial puzzle pieces into both hands with trigger rays, bring them near each other and release. The close head view at 403 s inspects the nearby 3D pieces. Both hands produced bound core haptic feedback. The first-grab prompt remained: no successful join, assembled puzzle or pond environment is claimed.",
+  "events": [
+    {
+      "time": 0,
+      "head": {
+        "position": [
+          0,
+          1.6,
+          0
+        ],
+        "orientation": [
+          0,
+          0,
+          0,
+          1
+        ]
+      },
+      "left": {
+        "aim": {
+          "position": [
+            -0.25,
+            1.25,
+            -0.35
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        "grip": {
+          "position": [
+            -0.25,
+            1.25,
+            -0.35
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        "trigger": 0,
+        "squeeze": 0
+      },
+      "right": {
+        "aim": {
+          "position": [
+            0.25,
+            1.25,
+            -0.35
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        "grip": {
+          "position": [
+            0.25,
+            1.25,
+            -0.35
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        "trigger": 0,
+        "squeeze": 0
+      }
+    },
+    {
+      "time": 94.697,
+      "right": {
+        "aim": {
+          "position": [
+            -0.897,
+            1.565,
+            -1.0
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        "grip": {
+          "position": [
+            -0.897,
+            1.565,
+            -1.0
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        "trigger": 0
+      }
+    },
+    {
+      "time": 95.897,
+      "right": {
+        "trigger": 1
+      }
+    },
+    {
+      "time": 96.197,
+      "right": {
+        "trigger": 0
+      }
+    },
+    {
+      "time": 124.308,
+      "right": {
+        "aim": {
+          "position": [
+            0.077,
+            1.412,
+            -1.0
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        "grip": {
+          "position": [
+            0.077,
+            1.412,
+            -1.0
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        "trigger": 0
+      }
+    },
+    {
+      "time": 125.508,
+      "right": {
+        "trigger": 1
+      }
+    },
+    {
+      "time": 125.808,
+      "right": {
+        "trigger": 0
+      }
+    },
+    {
+      "time": 159.021,
+      "right": {
+        "aim": {
+          "position": [
+            0.25,
+            1.25,
+            -0.35
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        "grip": {
+          "position": [
+            0.25,
+            1.25,
+            -0.35
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        "trigger": 0
+      }
+    },
+    {
+      "time": 159.621,
+      "right": {
+        "trigger": 1
+      }
+    },
+    {
+      "time": 159.921,
+      "right": {
+        "trigger": 0
+      }
+    },
+    {
+      "time": 186.16,
+      "right": {
+        "aim": {
+          "position": [
+            0.446,
+            1.559,
+            -1.0
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        "grip": {
+          "position": [
+            0.446,
+            1.559,
+            -1.0
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        "trigger": 0
+      }
+    },
+    {
+      "time": 187.16,
+      "right": {
+        "trigger": 1
+      }
+    },
+    {
+      "time": 189.66,
+      "right": {
+        "trigger": 0
+      }
+    },
+    {
+      "time": 234.102,
+      "left": {
+        "aim": {
+          "position": [
+            -0.25,
+            1.25,
+            -0.35
+          ],
+          "orientation": [
+            0.09526,
+            0.25558,
+            -0.02532,
+            0.96175
+          ]
+        },
+        "grip": {
+          "position": [
+            -0.25,
+            1.25,
+            -0.35
+          ],
+          "orientation": [
+            0.09526,
+            0.25558,
+            -0.02532,
+            0.96175
+          ]
+        },
+        "trigger": 0
+      }
+    },
+    {
+      "time": 235.102,
+      "left": {
+        "trigger": 1
+      }
+    },
+    {
+      "time": 237.602,
+      "left": {
+        "trigger": 0
+      }
+    },
+    {
+      "time": 277.272,
+      "right": {
+        "aim": {
+          "position": [
+            0.25,
+            1.25,
+            -0.35
+          ],
+          "orientation": [
+            0.08885,
+            0.31366,
+            -0.02949,
+            0.94491
+          ]
+        },
+        "grip": {
+          "position": [
+            0.25,
+            1.25,
+            -0.35
+          ],
+          "orientation": [
+            0.08885,
+            0.31366,
+            -0.02949,
+            0.94491
+          ]
+        },
+        "trigger": 0
+      }
+    },
+    {
+      "time": 278.272,
+      "right": {
+        "trigger": 1
+      }
+    },
+    {
+      "time": 280.772,
+      "right": {
+        "trigger": 0
+      }
+    },
+    {
+      "time": 305.756,
+      "head": {
+        "position": [
+          0,
+          1.6,
+          0
+        ],
+        "orientation": [
+          0,
+          0.57358,
+          0,
+          0.81915
+        ]
+      }
+    },
+    {
+      "time": 308.256,
+      "head": {
+        "position": [
+          0,
+          1.6,
+          0
+        ],
+        "orientation": [
+          0,
+          -0.57358,
+          0,
+          0.81915
+        ]
+      }
+    },
+    {
+      "time": 310.756,
+      "head": {
+        "position": [
+          0,
+          1.6,
+          0
+        ],
+        "orientation": [
+          0,
+          1.0,
+          0,
+          0.0
+        ]
+      }
+    },
+    {
+      "time": 313.256,
+      "head": {
+        "position": [
+          0,
+          1.6,
+          0
+        ],
+        "orientation": [
+          0,
+          0,
+          0,
+          1
+        ]
+      }
+    },
+    {
+      "time": 320,
+      "left": {
+        "aim": {
+          "position": [
+            -0.12,
+            1.3,
+            -0.55
+          ]
+        },
+        "grip": {
+          "position": [
+            -0.12,
+            1.3,
+            -0.55
+          ]
+        }
+      },
+      "right": {
+        "aim": {
+          "position": [
+            0.12,
+            1.3,
+            -0.55
+          ]
+        },
+        "grip": {
+          "position": [
+            0.12,
+            1.3,
+            -0.55
+          ]
+        }
+      }
+    },
+    {
+      "time": 323,
+      "pose_interpolation": "linear",
+      "left": {
+        "aim": {
+          "position": [
+            -0.04,
+            1.3,
+            -0.55
+          ]
+        },
+        "grip": {
+          "position": [
+            -0.04,
+            1.3,
+            -0.55
+          ]
+        }
+      },
+      "right": {
+        "aim": {
+          "position": [
+            0.04,
+            1.3,
+            -0.55
+          ]
+        },
+        "grip": {
+          "position": [
+            0.04,
+            1.3,
+            -0.55
+          ]
+        }
+      }
+    },
+    {
+      "time": 328,
+      "left": {
+        "trigger": 0,
+        "squeeze": 0
+      },
+      "right": {
+        "trigger": 0,
+        "squeeze": 0
+      }
+    },
+    {
+      "time": 403,
+      "head": {
+        "position": [
+          0,
+          1.4,
+          -0.2
+        ],
+        "orientation": [
+          -0.25881904510252074,
+          0,
+          0,
+          0.9659258262890683
+        ]
+      }
+    }
+  ]
+}

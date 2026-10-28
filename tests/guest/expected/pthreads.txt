@@ -1,0 +1,4 @@
+pthread: normal recursive errorcheck trylock timedlock OK
+pthread: create join cond broadcast barrier once keys names stack OK
+pthread: rwlock detached thread semaphores OK
+VTEST RESULT pthreads PASS

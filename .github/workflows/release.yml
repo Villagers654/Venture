@@ -1,0 +1,62 @@
+# A version tag (v1.2.3, or v1.2.3-rc1 for a pre-release) builds every download from source, runs the
+# tests on those builds, and attaches them to a draft GitHub Release; the release text is reviewed before it is published.
+# The website (Villagers654/venture-site) picks up published releases.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  # Run on a tag ("Use workflow from" > Tags) to rebuild that release's downloads.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref_name }}
+
+jobs:
+  windows:
+    if: github.repository == 'Villagers654/Venture'
+    uses: ./.github/workflows/windows.yml
+    with:
+      test: true
+      package: true
+  linux:
+    if: github.repository == 'Villagers654/Venture'
+    uses: ./.github/workflows/linux.yml
+    with:
+      test: true
+      package: true
+
+  publish:
+    needs: [windows, linux]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ github.ref_name }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Tag only
+        run: '[[ "$GITHUB_REF" == refs/tags/v* ]] || { echo "Run this on a v* tag"; exit 1; }'
+      - uses: actions/download-artifact@v4
+        with:
+          path: assets
+          merge-multiple: true
+      - name: Checksums
+        working-directory: assets
+        run: |
+          rm -f SHA256SUMS
+          sha256sum -- * > SHA256SUMS
+          cat SHA256SUMS
+      - name: Draft release
+        run: |
+          version="${TAG#v}"
+          if gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" assets/* --clobber -R "$GITHUB_REPOSITORY"
+          else
+            flags=(--draft --verify-tag --generate-notes --title "Venture ${version}")
+            [[ "$version" == *-* ]] && flags+=(--prerelease)
+            gh release create "$TAG" assets/* "${flags[@]}" -R "$GITHUB_REPOSITORY"
+          fi

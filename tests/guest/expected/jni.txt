@@ -1,0 +1,3 @@
+JNI: GetEnv FindClass RegisterNatives OK
+JNI: registered and exported native functions OK
+VTEST RESULT jni PASS

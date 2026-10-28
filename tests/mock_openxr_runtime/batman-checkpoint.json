@@ -1,0 +1,38 @@
+{
+  "events": [
+    {
+      "time": 0,
+      "head": {"position": [0, 1.6, 0], "orientation": [0, 0, 0, 1]},
+      "left": {
+        "aim": {"position": [-0.25, 1.25, -0.35], "orientation": [0, 0, 0, 1]},
+        "grip": {"position": [-0.25, 1.25, -0.35], "orientation": [0, 0, 0, 1]},
+        "trigger": 0,
+        "squeeze": 0
+      },
+      "right": {
+        "aim": {"position": [0.25, 1.25, -0.35], "orientation": [0, 0, 0, 1]},
+        "grip": {"position": [0.25, 1.25, -0.35], "orientation": [0, 0, 0, 1]},
+        "trigger": 0,
+        "squeeze": 0
+      }
+    },
+    {"time": 69.82, "left": {"menu": true}},
+    {"time": 72.82, "left": {"menu": false}},
+    {"time": 73.82, "right": {"aim": {"orientation": [-0.069626, 0.0609, 0.004259, 0.995703]}}},
+    {"time": 74.82, "right": {"trigger": 1}},
+    {"time": 75.22, "right": {"trigger": 0}},
+    {"time": 100.18, "right": {"trigger": 1}},
+    {"time": 100.58, "right": {"trigger": 0}},
+    {"time": 125.44, "right": {"trigger": 1}},
+    {"time": 125.84, "right": {"trigger": 0}},
+    {"time": 151.65, "right": {"aim": {"orientation": [0.103242, 0.155578, -0.016352, 0.982278]}}},
+    {"time": 177.22, "right": {"trigger": 1}},
+    {"time": 177.62, "right": {"trigger": 0}},
+    {"time": 400.0, "left": {"thumbstick": [0, 1], "thumbstick_touch": true}},
+    {"time": 403.0, "left": {"thumbstick": [0, 0], "thumbstick_touch": false}},
+    {"time": 415.0, "right": {"thumbstick": [1, 0], "thumbstick_touch": true}},
+    {"time": 415.5, "right": {"thumbstick": [0, 0], "thumbstick_touch": false}},
+    {"time": 425.0, "left": {"thumbstick": [0, 1], "thumbstick_touch": true}},
+    {"time": 428.0, "left": {"thumbstick": [0, 0], "thumbstick_touch": false}}
+  ]
+}

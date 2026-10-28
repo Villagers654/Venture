@@ -1,0 +1,164 @@
+diff --git a/src/libANGLE/renderer/vulkan/vk_renderer.cpp b/src/libANGLE/renderer/vulkan/vk_renderer.cpp
+--- a/src/libANGLE/renderer/vulkan/vk_renderer.cpp
++++ b/src/libANGLE/renderer/vulkan/vk_renderer.cpp
+@@ -6024,10 +6024,6 @@
+ 
+     ANGLE_FEATURE_CONDITION(&mFeatures, supportsMultiview, mMultiviewFeatures.multiview == VK_TRUE);
+ 
+-    ANGLE_FEATURE_CONDITION(&mFeatures, supportsMultiviewMultisampleRenderToTexture,
+-                            mFeatures.supportsMultisampledRenderToSingleSampled.enabled &&
+-                                mFeatures.supportsMultiview.enabled);
+-
+     // VK_EXT_device_fault can provide more information when the device is lost.
+     ANGLE_FEATURE_CONDITION(
+         &mFeatures, supportsDeviceFault,
+@@ -6210,6 +6206,10 @@
+                             mFeatures.supportsMultisampledRenderToSingleSampled.enabled ||
+                                 (mFeatures.supportsDepthStencilResolve.enabled &&
+                                  mFeatures.allowMultisampledRenderToTextureEmulation.enabled));
++
++    ANGLE_FEATURE_CONDITION(&mFeatures, supportsMultiviewMultisampleRenderToTexture,
++                            mFeatures.enableMultisampledRenderToTexture.enabled &&
++                                mFeatures.supportsMultiview.enabled);
+ 
+     // Currently we enable cube map arrays based on the imageCubeArray Vk feature.
+     // TODO: Check device caps for full cube map array support. http://anglebug.com/42263705
+diff --git a/src/libANGLE/renderer/vulkan/vk_cache_utils.cpp b/src/libANGLE/renderer/vulkan/vk_cache_utils.cpp
+--- a/src/libANGLE/renderer/vulkan/vk_cache_utils.cpp
++++ b/src/libANGLE/renderer/vulkan/vk_cache_utils.cpp
+@@ -8061,13 +8061,6 @@
+         createInfo.pDependencies   = subpassDependencies.data();
+     }
+ 
+-    if (desc.viewCount() && desc.isRenderToTexture())
+-    {
+-        // GL_OVR_multiview_multisampled_render_to_texture is only implemented
+-        // through the VK_EXT_multisampled_render_to_single_sampled extension, and not emulated.
+-        ASSERT(isRenderToTextureThroughExtension);
+-    }
+-
+     const uint32_t viewMask = angle::BitMask<uint32_t>(desc.viewCount());
+     if (desc.viewCount() > 0)
+     {
+diff --git a/src/libANGLE/renderer/vulkan/TextureVk.h b/src/libANGLE/renderer/vulkan/TextureVk.h
+--- a/src/libANGLE/renderer/vulkan/TextureVk.h
++++ b/src/libANGLE/renderer/vulkan/TextureVk.h
+@@ -550,7 +550,8 @@
+     RenderTargetVk *getMultiLayerRenderTarget(ContextVk *contextVk,
+                                               gl::LevelIndex level,
+                                               gl::LayerIndex layer,
+-                                              GLuint layerCount);
++                                              GLuint layerCount,
++                                              gl::RenderToTextureImageIndex renderToTextureIndex);
+     angle::Result getLevelLayerImageView(ContextVk *contextVk,
+                                          gl::OwnerLevel level,
+                                          gl::OwnerLayer layer,
+@@ -690,7 +691,8 @@
+     // Multi-layer render targets stored as a hash map.  This is used for layered attachments
+     // which covers the entire layer (glFramebufferTextureLayer) or multiview attachments which
+     // cover a range of layers (glFramebufferTextureMultiviewOVR).
+-    angle::HashMap<vk::ImageSubresourceRange, std::unique_ptr<RenderTargetVk>>
++    angle::HashMap<vk::ImageSubresourceRange,
++                   gl::RenderToTextureImageMap<std::unique_ptr<RenderTargetVk>>>
+         mMultiLayerRenderTargets;
+ 
+     // |mImage| wraps a VkImage and VkDeviceMemory that represents the gl::Texture. |mOwnsImage|
+diff --git a/src/libANGLE/renderer/vulkan/TextureVk.cpp b/src/libANGLE/renderer/vulkan/TextureVk.cpp
+--- a/src/libANGLE/renderer/vulkan/TextureVk.cpp
++++ b/src/libANGLE/renderer/vulkan/TextureVk.cpp
+@@ -3549,7 +3549,8 @@
+     else
+     {
+         ASSERT(layerCount > 0);
+-        *rtOut = getMultiLayerRenderTarget(contextVk, requestedLevel, layerIndex, layerCount);
++        *rtOut = getMultiLayerRenderTarget(contextVk, requestedLevel, layerIndex, layerCount,
++                                            renderToTextureIndex);
+     }
+ 
+     return angle::Result::Continue;
+@@ -3737,7 +3738,8 @@
+ RenderTargetVk *TextureVk::getMultiLayerRenderTarget(ContextVk *contextVk,
+                                                      gl::LevelIndex ownLevel,
+                                                      gl::LayerIndex ownLayer,
+-                                                     GLuint layerCount)
++                                                     GLuint layerCount,
++                                                     gl::RenderToTextureImageIndex renderToTextureIndex)
+ {
+     const gl::OwnerLevel level = mState.toOwnerLevel(ownLevel);
+     const gl::OwnerLayer layer = mState.toOwnerLayer(ownLayer);
+@@ -3745,22 +3747,33 @@
+     vk::ImageSubresourceRange range =
+         mImageView.getSubresourceDrawRange(level, layer, vk::GetLayerMode(*mImage, layerCount));
+ 
+-    auto iter = mMultiLayerRenderTargets.find(range);
+-    if (iter != mMultiLayerRenderTargets.end())
+-    {
+-        return iter->second.get();
+-    }
+-
+-    // Create the layered render target.  Note that multisampled render to texture is not
+-    // allowed with layered render targets; nor is YUV rendering.
+-    std::unique_ptr<RenderTargetVk> &rt = mMultiLayerRenderTargets[range];
+-    if (!rt)
+-    {
+-        rt = std::make_unique<RenderTargetVk>();
+-    }
+-
+-    rt->init(mImage, &mImageView, nullptr, nullptr, level, layer, layerCount,
+-             RenderTargetTransience::Default);
++    auto &rt = mMultiLayerRenderTargets[range][renderToTextureIndex];
++    if (rt)
++    {
++        return rt.get();
++    }
++    rt = std::make_unique<RenderTargetVk>();
++
++    vk::ImageHelper *drawImage            = mImage;
++    vk::ImageViewHelper *drawImageViews    = &mImageView;
++    vk::ImageHelper *resolveImage          = nullptr;
++    vk::ImageViewHelper *resolveImageViews = nullptr;
++    RenderTargetTransience transience = RenderTargetTransience::Default;
++    if (renderToTextureIndex != gl::RenderToTextureImageIndex::Default)
++    {
++        // OVR_multiview_multisampled_render_to_texture: the implicit MSAA
++        // attachment and its resolve view must cover the same view layers.
++        const uint32_t imageLevel = ownLevel.get();
++        resolveImage = mImage;
++        resolveImageViews = &mImageView;
++        drawImage = &mMultisampledImages->at(renderToTextureIndex)[imageLevel];
++        drawImageViews = &mMultisampledImageViews->at(renderToTextureIndex)[imageLevel];
++        transience = mImage->getAspectFlags() == VK_IMAGE_ASPECT_COLOR_BIT
++                         ? RenderTargetTransience::MultisampledTransient
++                         : RenderTargetTransience::EntirelyTransient;
++    }
++    rt->init(drawImage, drawImageViews, resolveImage, resolveImageViews, level, layer,
++             layerCount, transience);
+ 
+     return rt.get();
+ }
+@@ -4681,7 +4694,11 @@
+ 
+     for (auto &renderTargetPair : mMultiLayerRenderTargets)
+     {
+-        renderTargetPair.second->releaseFramebuffers(contextVk);
++        for (auto &renderTarget : renderTargetPair.second)
++        {
++            if (renderTarget)
++                renderTarget->releaseFramebuffers(contextVk);
++        }
+     }
+     mMultiLayerRenderTargets.clear();
+ }
+@@ -5001,7 +5018,11 @@
+         }
+         for (auto &renderTargetPair : mMultiLayerRenderTargets)
+         {
+-            renderTargetPair.second->releaseFramebuffers(contextVk);
++            for (auto &renderTarget : renderTargetPair.second)
++            {
++                if (renderTarget)
++                    renderTarget->releaseFramebuffers(contextVk);
++            }
+         }
+     }
+ 

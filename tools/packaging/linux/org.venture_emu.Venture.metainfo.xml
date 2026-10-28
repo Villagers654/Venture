@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>org.venture_emu.Venture</id>
+  <name>Venture</name>
+  <summary>Play Meta Quest games on PC VR</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <description>
+    <p>Venture runs Meta Quest games on a PC VR headset through OpenXR.</p>
+  </description>
+  <launchable type="desktop-id">org.venture_emu.Venture.desktop</launchable>
+  <url type="homepage">https://venture-emu.org/</url>
+  <url type="bugtracker">https://github.com/Villagers654/Venture/issues</url>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="@VERSION@"/>
+  </releases>
+</component>

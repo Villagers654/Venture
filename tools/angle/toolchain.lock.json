@@ -1,0 +1,20 @@
+{
+  "depot_tools_commit": "04c1a455860dfe75e9bce450d9ad349606fe4dd6",
+  "portable_msvc": {
+    "url": "https://gist.githubusercontent.com/mmozeiko/7f3162ec2988e81e56d5c4e22cde9977/raw/553d55bb7f0405a2fbd0228b8ed87c2b8ad200f8/portable-msvc.py",
+    "sha256": "1791cccca594ff083ce8d3e0a139e6156d2c312e24332a909e608010f0230a51"
+  },
+  "vs_channel": {
+    "url": "https://download.visualstudio.microsoft.com/download/pr/e5f740e0-92f9-49d7-ab3b-5d17b84108fd/8061f93be2aee4bfacc85dbebbd174a9d6571882c151a492b21bfc71b87c13ca/VisualStudio.18.Release.chman",
+    "sha256": "4b7622ddec2ef331171698019538642be0df63162f2924ccb18110ef4f75d867"
+  },
+  "vs_manifest": {
+    "url": "https://download.visualstudio.microsoft.com/download/pr/e5f740e0-92f9-49d7-ab3b-5d17b84108fd/5a0474ac0d50b9805144617bc0e9fd93c18a7a80a1a82ec690e9bf6b8a25ccc8/VisualStudio.vsman",
+    "sha256": "7c3ba7bdc81a44b65b98dbc1c7cebc3d49249624a642f08ee7e8ae6fb7534867"
+  },
+  "msvc_version": "14.44",
+  "sdk_version": "28000",
+  "sdk_full_version": "10.0.28000.0",
+  "vs_channel_version": "2026",
+  "license_url": "https://go.microsoft.com/fwlink/?LinkId=2327714"
+}

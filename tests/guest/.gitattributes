@@ -1,0 +1,3 @@
+# Guest stdout and the packaged asset are byte-for-byte fixtures on Windows too.
+expected/*.txt text eol=lf
+assets/*.txt text eol=lf

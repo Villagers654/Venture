@@ -1,0 +1,5 @@
+files: stdio write flush seek read EOF OK
+files: descriptors positional IO stat access OK
+files: private file mmap anonymous mmap mprotect msync OK
+files: rename directory iteration realpath cwd cleanup OK
+VTEST RESULT files PASS

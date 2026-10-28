@@ -1,0 +1,30 @@
+# Toolchain and fetched dependencies (tools/bootstrap.py)
+/.deps/
+
+# Build outputs
+/build/
+/out/
+cmake-build-*/
+CMakeUserPresets.json
+
+# Python
+__pycache__/
+*.pyc
+
+# Editors / OS
+.vs/
+.vscode/
+.idea/
+Thumbs.db
+Desktop.ini
+.DS_Store
+*.swp
+*~
+
+# Never commit game content, credentials or caches
+*.apk
+*.obb
+*.dex
+meta-session.*
+
+/dist/

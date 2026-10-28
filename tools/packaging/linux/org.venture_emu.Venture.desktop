@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Venture
+GenericName=Quest game runtime
+Comment=Play Meta Quest games on PC VR
+Exec=venture %U
+Icon=org.venture_emu.Venture
+Terminal=false
+Categories=Game;
+Keywords=VR;OpenXR;Quest;
+StartupWMClass=venture

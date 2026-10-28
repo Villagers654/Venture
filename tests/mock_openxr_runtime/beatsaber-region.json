@@ -1,0 +1,28 @@
+{
+  "events": [
+    {"time":0,"head":{"position":[0,1.6,0],"orientation":[0,0,0,1]},"left":{"aim":{"position":[-0.25,1.25,-0.35],"orientation":[0,0,0,1]},"grip":{"position":[-0.25,1.25,-0.35],"orientation":[0,0,0,1]},"trigger":0,"squeeze":0},"right":{"aim":{"position":[0.25,1.25,-0.35],"orientation":[0,0,0,1]},"grip":{"position":[0.25,1.25,-0.35],"orientation":[0,0,0,1]},"trigger":0,"squeeze":0}},
+    {"time":60,"right":{"aim":{"position":[0,1.6,-0.35],"orientation":[0.26723837607825685,0,0,0.963630453208623]},"grip":{"position":[0,1.6,-0.35],"orientation":[0.26723837607825685,0,0,0.963630453208623]},"trigger":0}},
+    {"time":130,"right":{"aim":{"position":[0,1.6,-0.35],"orientation":[0.24615329302899305,0,0,0.9692309097067544]},"grip":{"position":[0,1.6,-0.35],"orientation":[0.24615329302899305,0,0,0.9692309097067544]},"trigger":0}},
+    {"time":133,"right":{"trigger":1}},
+    {"time":135,"right":{"trigger":0}},
+    {"time":179,"right":{"aim":{"position":[0,1.6,-0.35],"orientation":[0.27144044986507426,0,0,0.9624552364536473]},"grip":{"position":[0,1.6,-0.35],"orientation":[0.27144044986507426,0,0,0.9624552364536473]},"trigger":0}},
+    {"time":203,"right":{"trigger":1}},
+    {"time":205,"right":{"trigger":0}},
+    {"time":226,"right":{"aim":{"position":[0,1.6,-0.35],"orientation":[0.21643961393810288,0,0,0.9762960071199334]},"grip":{"position":[0,1.6,-0.35],"orientation":[0.21643961393810288,0,0,0.9762960071199334]},"trigger":0}},
+    {"time":229,"right":{"trigger":1}},
+    {"time":231,"right":{"trigger":0}},
+    {"time":250,"right":{"aim":{"position":[0,1.6,-0.35],"orientation":[0.0,0.0,-0.0,1.0]},"grip":{"position":[0,1.6,-0.35],"orientation":[0.0,0.0,-0.0,1.0]},"trigger":0}},
+    {"time":253,"right":{"trigger":1}},
+    {"time":255,"right":{"trigger":0}},
+    {"time":270,"right":{"aim":{"position":[0,1.6,-0.35],"orientation":[0.17364817766693033,0.0,-0.0,0.984807753012208]},"grip":{"position":[0,1.6,-0.35],"orientation":[0.17364817766693033,0.0,-0.0,0.984807753012208]},"trigger":0,"thumbstick":[0,-1]}},
+    {"time":300,"right":{"aim":{"position":[0,1.6,-0.35],"orientation":[0.021761745071029216,-0.06973987359237317,0.0015217294551444747,0.9973266570298062]},"grip":{"position":[0,1.6,-0.35],"orientation":[0.021761745071029216,-0.06973987359237317,0.0015217294551444747,0.9973266570298062]},"trigger":0,"thumbstick":[0,0]}},
+    {"time":303,"right":{"trigger":1}},
+    {"time":305,"right":{"trigger":0}},
+    {"time":325,"right":{"aim":{"position":[0,1.6,-0.35],"orientation":[0.013089595571344441,0.0,-0.0,0.999914327574007]},"grip":{"position":[0,1.6,-0.35],"orientation":[0.013089595571344441,0.0,-0.0,0.999914327574007]},"trigger":0}},
+    {"time":328,"right":{"trigger":1}},
+    {"time":330,"right":{"trigger":0}},
+    {"time":345,"right":{"aim":{"position":[0,1.6,-0.35],"orientation":[0.09150161866340238,0.0,-0.0,0.9958049275746618]},"grip":{"position":[0,1.6,-0.35],"orientation":[0.09150161866340238,0.0,-0.0,0.9958049275746618]},"trigger":0}},
+    {"time":348,"right":{"trigger":1}},
+    {"time":350,"right":{"trigger":0}}
+  ]
+}

@@ -1,0 +1,9 @@
+package android.graphics;
+public class PorterDuffColorFilter extends ColorFilter {
+  public final int color;
+  public final PorterDuff.Mode mode;
+  public PorterDuffColorFilter(int c, PorterDuff.Mode m) {
+    color = c;
+    mode = m;
+  }
+}

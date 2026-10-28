@@ -1,0 +1,81 @@
+{
+  "description": "Puzzling Places 889, first launch on fresh data: hands idle while the one-time stereo 'Join the pieces to start!' intro (logo, four pieces, ghost hands over a gradient sky) is shown; the run is then ended. The game records the intro as seen, so the next launch opens the main menu, where puzzling-tutorial.json starts (the t-puzzling mock35 -> mock36 sequence).",
+  "events": [
+    {
+      "time": 0,
+      "head": {
+        "position": [
+          0,
+          1.6,
+          0
+        ],
+        "orientation": [
+          0,
+          0,
+          0,
+          1
+        ]
+      },
+      "left": {
+        "aim": {
+          "position": [
+            -0.25,
+            1.25,
+            -0.35
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        "grip": {
+          "position": [
+            -0.25,
+            1.25,
+            -0.35
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        "trigger": 0,
+        "squeeze": 0
+      },
+      "right": {
+        "aim": {
+          "position": [
+            0.25,
+            1.25,
+            -0.35
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        "grip": {
+          "position": [
+            0.25,
+            1.25,
+            -0.35
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        "trigger": 0,
+        "squeeze": 0
+      }
+    }
+  ]
+}

@@ -1,0 +1,166 @@
+# Linux build in the glibc 2.35 baseline container (tools/linux-baseline), the linux-baseline preset as
+# shipped, then its tests (on a current Mesa lavapipe); releases also make the packages.
+# Called by ci.yml and release.yml.
+#
+# Only changed work runs: the container image is cached by its Containerfile, the toolchains (with
+# FFmpeg) and ANGLE by their recipe and saved as soon as they are built, FetchContent sources by
+# the CMake files, and compiles go through ccache (compiler_check=content).
+name: Linux
+
+on:
+  workflow_call:
+    inputs:
+      test:
+        type: boolean
+        default: true
+      package:
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  VENTURE_BASELINE_JOBS: 4
+  # Runners have no FUSE; AppImages (appimagetool) extract themselves instead.
+  APPIMAGE_EXTRACT_AND_RUN: 1
+  APPIMAGETOOL_URL: https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage
+  APPIMAGETOOL_SHA256: ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0
+  CCACHE_KEY: linux-ccache-${{ inputs.package && 'release' || 'ci' }}
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    steps:
+      - name: Free disk space
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+      - uses: actions/checkout@v5
+      # hashFiles and the runner context only exist inside steps.
+      - name: Cache keys
+        run: |
+          {
+            echo "IMAGE_KEY=linux-image-${{ hashFiles('tools/linux-baseline/Containerfile') }}"
+            echo "DEPS_KEY=linux-deps-${{ hashFiles('tools/linux-baseline/Containerfile', 'tools/bootstrap.py', 'tools/bootstrap_framework.py', 'tools/ffmpeg/**', 'tools/dex/**', 'tools/angle/**') }}"
+            echo "FETCH_KEY=linux-fetch-${{ hashFiles('CMakeLists.txt', 'cmake/**', 'src/**/CMakeLists.txt', 'third_party/**/CMakeLists.txt') }}"
+            echo "CACHE_ARGS=-DVENTURE_AGENT_CACHE=ON -DVENTURE_AGENT_CACHE_ROOT=$RUNNER_TEMP -DVENTURE_CCACHE_MAX_SIZE=3GiB"
+          } >> "$GITHUB_ENV"
+
+      - name: Restore baseline image
+        id: image
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/baseline-image.tar
+          key: ${{ env.IMAGE_KEY }}
+      - name: Baseline image
+        run: |
+          if [ -f "$RUNNER_TEMP/baseline-image.tar" ]; then
+            podman load -q -i "$RUNNER_TEMP/baseline-image.tar"
+          else
+            tools/linux-baseline/baseline.sh image
+            podman save -o "$RUNNER_TEMP/baseline-image.tar" localhost/venture-linux-baseline:22.04
+          fi
+      - name: Save baseline image
+        if: steps.image.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/baseline-image.tar
+          key: ${{ env.IMAGE_KEY }}
+
+      - name: Restore baseline dependencies
+        id: deps
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            .deps/baseline-data/dev-cache/toolchains
+            .deps/baseline-data/dev-cache/angle/prebuilt
+          key: ${{ env.DEPS_KEY }}
+      - name: Restore FetchContent sources
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            .deps/fetch
+            !.deps/fetch/*-build
+          key: ${{ env.FETCH_KEY }}
+          restore-keys: linux-fetch-
+      - name: Restore compiler cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/ccache
+          key: ${{ env.CCACHE_KEY }}-${{ github.run_id }}
+          restore-keys: ${{ env.CCACHE_KEY }}-
+
+      - name: Bootstrap (toolchain, JDK, FFmpeg, ccache) and ANGLE in the baseline
+        run: |
+          tools/linux-baseline/baseline.sh run python3 tools/bootstrap.py --jdk --ccache
+          tools/linux-baseline/baseline.sh run python3 tools/angle/build_angle.py --jobs 4
+      # Saved right away, so a later failure never throws away a multi-hour ANGLE build.
+      - name: Save baseline dependencies
+        if: steps.deps.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            .deps/baseline-data/dev-cache/toolchains
+            .deps/baseline-data/dev-cache/angle/prebuilt
+          key: ${{ env.DEPS_KEY }}
+
+      # Always the shipped configuration: the linux-baseline preset (its toolchain file selects libc++). Test
+      # scratch directories go under the mounted runner temp, as the tests run in a second container.
+      - name: Build
+        run: >-
+          tools/linux-baseline/baseline.sh run bash -c
+          "export TMPDIR=$RUNNER_TEMP/tests && mkdir -p $RUNNER_TEMP/tests &&
+          cmake --preset linux-baseline $CACHE_ARGS -DVENTURE_BUILD_TESTS=${{ inputs.test && 'ON' || 'OFF' }} &&
+          cmake --build build/linux-baseline -j 4 ${{ inputs.package && '--target all package-release' || '' }}"
+      # Runners have no GPU: tests run on Mesa lavapipe (software Vulkan), as tools/gpu_policy.py does. Jammy's
+      # lavapipe lacks features the runtime needs, so tests use a current Mesa (kisak's turtle PPA, which still
+      # builds for jammy) layered on the baseline; the release itself is built on the unmodified baseline above.
+      # Releases are gated on the Windows tests; a Linux failure here is reported and the packages still build.
+      - name: Test
+        if: inputs.test
+        continue-on-error: ${{ inputs.package }}
+        run: |
+          printf '%s\n' 'FROM localhost/venture-linux-baseline:22.04' \
+            'RUN apt-get update && apt-get install -y --no-install-recommends software-properties-common gpg-agent && add-apt-repository -y ppa:kisak/turtle && apt-get install -y --no-install-recommends mesa-vulkan-drivers && rm -rf /var/lib/apt/lists/* && dpkg-query -W mesa-vulkan-drivers | grep -q kisak' |
+            podman build -t localhost/venture-linux-test -
+          VENTURE_BASELINE_IMAGE=localhost/venture-linux-test tools/linux-baseline/baseline.sh run bash -c \
+            "export TMPDIR=$RUNNER_TEMP/tests VK_DRIVER_FILES=\$(ls /usr/share/vulkan/icd.d/lvp_icd*.json | head -1) &&
+            export VK_ICD_FILENAMES=\$VK_DRIVER_FILES &&
+            ctest --test-dir build/linux-baseline -j 4 --timeout 900 --output-on-failure"
+
+      - name: Save FetchContent sources
+        if: always()
+        continue-on-error: true  # the key already exists when the CMake files did not change
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            .deps/fetch
+            !.deps/fetch/*-build
+          key: ${{ env.FETCH_KEY }}
+      - name: Save compiler cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/ccache
+          key: ${{ env.CCACHE_KEY }}-${{ github.run_id }}
+
+      - name: Packaging tools
+        if: inputs.package
+        run: |
+          sudo apt-get update -q && sudo apt-get install -y -q flatpak ostree librsvg2-common
+          flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+          flatpak install --user -y --noninteractive flathub org.freedesktop.Platform//26.08
+          curl -fsSL -o "$RUNNER_TEMP/appimagetool" "$APPIMAGETOOL_URL"
+          echo "$APPIMAGETOOL_SHA256  $RUNNER_TEMP/appimagetool" | sha256sum -c -
+          chmod +x "$RUNNER_TEMP/appimagetool"
+          echo "APPIMAGETOOL=$RUNNER_TEMP/appimagetool" >> "$GITHUB_ENV"
+      - name: Packages
+        if: inputs.package
+        run: tools/packaging/linux/build_packages.sh --out dist/packages
+      - uses: actions/upload-artifact@v4
+        if: inputs.package
+        with:
+          name: linux
+          path: dist/packages/Venture-*
+          if-no-files-found: error
+          compression-level: 0

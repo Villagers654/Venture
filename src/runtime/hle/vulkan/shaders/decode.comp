@@ -1,0 +1,111 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#include "astc_decompressor.glsl"
+#include "etc2.glsl"
+
+layout(local_size_x=8, local_size_y=8, local_size_z=1) in;
+layout(set=0, binding=0, std430) readonly buffer Source { uint words[]; } src;
+#ifdef IMAGE_OUTPUT
+#ifdef IMAGE_VOLUME
+#define OutputImage image3D
+#else
+#define OutputImage image2DArray
+#endif
+#ifdef IMAGE_OUTPUT_8BIT
+layout(set=0, binding=1, rgba8) uniform writeonly OutputImage dst;
+#else
+layout(set=0, binding=1, rgba16f) uniform writeonly OutputImage dst;
+#endif
+layout(set=0, binding=2, std430) readonly buffer Activation { uint enabled; } activation;
+#else
+layout(set=0, binding=1, std430) writeonly buffer Destination { uint words[]; } dst;
+#endif
+layout(push_constant) uniform Params {
+    uint format;
+    uint blockWidth;
+    uint blockHeight;
+    uint width;
+    uint height;
+    uint rowBlocks;
+    uint sourceWord;
+    // Buffer output: bit 31 selects FP16; image output: array layer or depth slice.
+    uint outputModeOrLayer;
+} p;
+
+// ASTC's required float16 decode truncates UNORM16, rather than rounding a
+// normalized float to nearest half. Arm astcenc unorm16_to_sf16 is the oracle.
+uint unorm16ToHalf(uint value) {
+    if (value == 65535u) return 0x3c00u;
+    if (value < 4u) return value << 8u;
+    uint lz = 15u - uint(findMSB(value));
+    uint normalized = value << lz;
+    return ((14u - lz) << 10u) | ((normalized >> 5u) & 0x3ffu);
+}
+
+void main() {
+#ifdef IMAGE_OUTPUT
+    if (activation.enabled == 0u) return;
+#endif
+    uvec2 xy = gl_GlobalInvocationID.xy;
+    if (xy.x >= p.width || xy.y >= p.height) return;
+    uvec2 block = xy / uvec2(p.blockWidth, p.blockHeight);
+    uvec2 local = xy % uvec2(p.blockWidth, p.blockHeight);
+    uint pixel = xy.y * p.width + xy.x;
+    bool astc = p.format >= 157u;
+    uint blockWords = astc || p.format == 151u || p.format == 152u || p.format >= 155u ? 4u : 2u;
+    uint address = p.sourceWord + (block.y * p.rowBlocks + block.x) * blockWords;
+    uvec4 bits = uvec4(src.words[address], src.words[address+1u], 0, 0);
+    if (blockWords == 4u) bits.zw = uvec2(src.words[address+2u], src.words[address+3u]);
+    if (astc) {
+        bool srgb = (p.format & 1u) == 0u;
+        astcDecoderInitialize(bits.wzyx, uvec2(p.blockWidth, p.blockHeight));
+        uvec4 color = astcDecodeTexel(local, srgb);
+        bool floatOutput = (p.outputModeOrLayer & 0x80000000u) != 0u;
+#ifdef IMAGE_FLOAT
+        floatOutput = true;
+#endif
+        if (!floatOutput) {
+            color >>= 8u;
+#ifdef IMAGE_OUTPUT
+            imageStore(dst, ivec3(xy, p.outputModeOrLayer), vec4(color) / 255.0);
+#else
+            dst.words[pixel] = color.x | (color.y << 8u) | (color.z << 16u) | (color.w << 24u);
+#endif
+        } else {
+            uvec4 halfColor = uvec4(unorm16ToHalf(color.x), unorm16ToHalf(color.y),
+                                    unorm16ToHalf(color.z), unorm16ToHalf(color.w));
+#ifdef IMAGE_OUTPUT
+            imageStore(dst, ivec3(xy, p.outputModeOrLayer),
+                vec4(unpackHalf2x16(halfColor.x | (halfColor.y << 16u)),
+                     unpackHalf2x16(halfColor.z | (halfColor.w << 16u))));
+#else
+            dst.words[pixel*2u] = halfColor.x | (halfColor.y << 16u);
+            dst.words[pixel*2u+1u] = halfColor.z | (halfColor.w << 16u);
+#endif
+        }
+        return;
+    }
+#ifndef IMAGE_OUTPUT
+    bits = uvec4(flip32(bits.x), flip32(bits.y), flip32(bits.z), flip32(bits.w));
+    uint index = local.y * 4u + local.x;
+    if (p.format >= 153u) {
+        bool signedFormat = (p.format & 1u) == 0u;
+        float channel[16] = eac_decode_single_channel_block_float(bits.x, bits.y, signedFormat);
+        if (p.format >= 155u) {
+            float green[16] = eac_decode_single_channel_block_float(bits.z, bits.w, signedFormat);
+            dst.words[pixel*2u] = floatBitsToUint(channel[index]);
+            dst.words[pixel*2u+1u] = floatBitsToUint(green[index]);
+        } else dst.words[pixel] = floatBitsToUint(channel[index]);
+        return;
+    }
+    bool rgba = p.format == 151u || p.format == 152u;
+    bool punch = p.format == 149u || p.format == 150u;
+    ivec4 colors[16] = etc2_decode_rgb_block(rgba ? bits.z : bits.x, rgba ? bits.w : bits.y, punch);
+    uvec4 color = uvec4(colors[index]);
+    if (rgba) {
+        uint alpha[16] = eac_decode_single_channel_block(bits.x, bits.y, false);
+        color.a = alpha[index];
+    }
+    dst.words[pixel] = color.x | (color.y << 8u) | (color.z << 16u) | (color.w << 24u);
+#endif
+}

@@ -1,0 +1,11 @@
+add_library(venture_steam STATIC abi.cpp bridge.cpp library.cpp
+  generated/sdk163.cpp generated/sdk164.cpp generated/sdk165.cpp)
+target_include_directories(venture_steam PRIVATE ${PROJECT_SOURCE_DIR}/third_party)
+target_link_libraries(venture_steam PUBLIC venture_common venture_runtime PRIVATE miniz)
+target_compile_options(venture_steam PRIVATE -Wall -Wextra)
+if(WIN32)
+  target_sources(venture_steam PRIVATE ../../platform/win32/steam_client.cpp)
+  target_link_libraries(venture_steam PRIVATE advapi32)
+else()
+  target_sources(venture_steam PRIVATE ../../platform/posix/steam_client.cpp)
+endif()

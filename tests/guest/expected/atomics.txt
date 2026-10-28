@@ -1,0 +1,4 @@
+atomic: widths bool pointer wide CAS OK
+atomic: eight-thread CAS contention OK
+atomic: acquire release message passing OK
+VTEST RESULT atomics PASS

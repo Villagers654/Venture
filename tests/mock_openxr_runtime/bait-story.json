@@ -1,0 +1,9 @@
+{
+  "events": [
+    {"time":0,"hand_tracking_active":false,"head":{"position":[0,1.6,0],"orientation":[0,0,0,1]},"right":{"aim":{"position":[0.3,1.2,-0.5],"orientation":[0.18236446666955547,-0.03473270894459647,0.0,0.9826173417082046]},"grip":{"position":[0.3,1.2,-0.5],"orientation":[0.18236446666955547,-0.03473270894459647,0.0,0.9826173417082046]},"trigger":0},"left":{"trigger":0}},
+    {"time":200,"right":{"trigger":1}},
+    {"time":240,"right":{"trigger":0}},
+    {"time":290,"right":{"trigger":1}},
+    {"time":310,"right":{"trigger":0}}
+  ]
+}

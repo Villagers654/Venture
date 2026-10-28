@@ -1,0 +1,157 @@
+# Windows build from source: pinned toolchain, JDK and ANGLE (tools/bootstrap.py), then the
+# windows-release preset. Called by ci.yml (build + tests) and release.yml (tests, zip + installer).
+#
+# Only changed work runs: the toolchains (with FFmpeg) and ANGLE are cached by their recipe and
+# saved as soon as they are built, FetchContent sources by the CMake files, and compiles go
+# through ccache (compiler_check=content), restored from the newest earlier run.
+name: Windows
+
+on:
+  workflow_call:
+    inputs:
+      test:
+        type: boolean
+        default: true
+      package:
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  # Toolchains and the ANGLE build live under the data root; D: has the space for them.
+  VENTURE_DATA_DIR: D:\venture
+
+jobs:
+  build:
+    runs-on: windows-2025
+    timeout-minutes: 360
+    steps:
+      - name: Long paths
+        run: git config --global core.longpaths true
+      - uses: actions/checkout@v5
+      # hashFiles only exists inside steps.
+      - name: Cache keys
+        shell: bash
+        run: |
+          {
+            echo "TOOLCHAINS_KEY=win-toolchains-${{ hashFiles('tools/bootstrap.py', 'tools/bootstrap_framework.py', 'tools/ffmpeg/**', 'tools/dex/**') }}"
+            echo "ANGLE_KEY=win-angle-${{ hashFiles('tools/angle/**') }}"
+            echo "FETCH_KEY=win-fetch-${{ hashFiles('CMakeLists.txt', 'cmake/**', 'src/**/CMakeLists.txt', 'third_party/**/CMakeLists.txt') }}"
+          } >> "$GITHUB_ENV"
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Restore toolchains
+        id: toolchains
+        uses: actions/cache/restore@v4
+        with:
+          path: D:\venture\dev-cache\toolchains
+          key: ${{ env.TOOLCHAINS_KEY }}
+      - name: Restore ANGLE
+        id: angle
+        uses: actions/cache/restore@v4
+        with:
+          path: D:\venture\dev-cache\angle\prebuilt
+          key: ${{ env.ANGLE_KEY }}
+      - name: Restore FetchContent sources
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            .deps/fetch
+            !.deps/fetch/*-build
+          key: ${{ env.FETCH_KEY }}
+          restore-keys: win-fetch-
+      - name: Restore compiler cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}\ccache
+          key: win-ccache-${{ inputs.package && 'release' || 'ci' }}-${{ github.run_id }}
+          restore-keys: win-ccache-${{ inputs.package && 'release' || 'ci' }}-
+
+      - name: Bootstrap (toolchain, JDK, FFmpeg, ANGLE, ccache)
+        run: python tools/bootstrap.py --jdk --angle --ccache
+      # Saved right away, so a later failure never throws away a long ANGLE build. ANGLE is saved even when a later
+      # bootstrap step fails (its prebuilt folder only appears once the build is complete).
+      - name: Save toolchains
+        if: steps.toolchains.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: D:\venture\dev-cache\toolchains
+          key: ${{ env.TOOLCHAINS_KEY }}
+      - name: Save ANGLE
+        if: always() && steps.angle.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: D:\venture\dev-cache\angle\prebuilt
+          key: ${{ env.ANGLE_KEY }}
+
+      - name: Configure
+        run: >-
+          .deps/cmake/bin/cmake --preset windows-release -DVENTURE_BUILD_TESTS=${{ inputs.test && 'ON' || 'OFF' }}
+          -DVENTURE_AGENT_CACHE=ON "-DVENTURE_AGENT_CACHE_ROOT=${{ runner.temp }}" -DVENTURE_CCACHE_MAX_SIZE=3GiB
+      - name: Build
+        run: .deps/cmake/bin/cmake --build --preset windows-release ${{ inputs.package && '--target all package-release' || '' }}
+      - name: Save FetchContent sources
+        if: always()
+        uses: actions/cache/save@v4
+        continue-on-error: true  # the key already exists when the CMake files did not change
+        with:
+          path: |
+            .deps/fetch
+            !.deps/fetch/*-build
+          key: ${{ env.FETCH_KEY }}
+      - name: Save compiler cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}\ccache
+          key: win-ccache-${{ inputs.package && 'release' || 'ci' }}-${{ github.run_id }}
+
+      # Runners have no GPU: Vulkan runs on the SwiftShader that ships with the runner's Chrome, as
+      # tools/gpu_policy.py does on development machines. The runner is elevated, where the Vulkan loader ignores
+      # VK_DRIVER_FILES, so the driver is registered (the only one: runners have no other ICD).
+      - name: Software Vulkan
+        if: inputs.test
+        shell: pwsh
+        run: |
+          $dll = Get-ChildItem "C:\Program Files\Google\Chrome\Application\*\vk_swiftshader.dll" | Select-Object -First 1
+          if (-not $dll) { throw "Chrome's SwiftShader not found" }
+          $icd = Join-Path $env:RUNNER_TEMP "swiftshader_icd.json"
+          @{ file_format_version = "1.0.0"; ICD = @{ library_path = $dll.FullName; api_version = "1.3.0" } } |
+            ConvertTo-Json | Set-Content -Encoding utf8NoBOM $icd
+          # The loader normally comes with a GPU driver; Venture loads it from System32 only.
+          $loader = "$env:SystemRoot\System32\vulkan-1.dll"
+          if (-not (Test-Path $loader)) { Copy-Item (Join-Path $dll.DirectoryName "vulkan-1.dll") $loader }
+          $key = "HKLM:\SOFTWARE\Khronos\Vulkan\Drivers"
+          if (-not (Test-Path $key)) { New-Item -Force $key | Out-Null }
+          New-ItemProperty $key -Name $icd -PropertyType DWord -Value 0 -Force | Out-Null
+      # The runner is elevated, where the OpenXR loader ignores XR_RUNTIME_JSON: the missing-runtime test runs while
+      # no runtime is registered, then the mock is registered as the active runtime for the rest.
+      - name: Test
+        if: inputs.test
+        shell: pwsh
+        run: |
+          .deps/cmake/bin/ctest --preset windows-release -R '^xr_missing_runtime$' --output-on-failure
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $key = "HKLM:\SOFTWARE\Khronos\OpenXR\1"
+          if (-not (Test-Path $key)) { New-Item -Force $key | Out-Null }
+          Set-ItemProperty $key ActiveRuntime "$pwd\build\windows-release\bin\mock_openxr_runtime.json"
+          .deps/cmake/bin/ctest --preset windows-release -E '^xr_missing_runtime$' -j 4 --timeout 900 --output-on-failure
+
+      - name: Package (zip and installer)
+        if: inputs.package
+        run: |
+          choco install nsis -y --no-progress
+          python tools/packaging/windows/build_installer.py --makensis "C:\Program Files (x86)\NSIS\makensis.exe" --readobj .deps/llvm-mingw/bin/llvm-readobj.exe
+      - uses: actions/upload-artifact@v4
+        if: inputs.package
+        with:
+          name: windows
+          path: |
+            dist/Venture-windows64.zip
+            dist/Venture-windows64-setup.exe
+          if-no-files-found: error
+          compression-level: 0

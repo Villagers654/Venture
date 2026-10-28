@@ -1,0 +1,62 @@
+diff --git a/include/EGL/eglext_angle_venture.h b/include/EGL/eglext_angle_venture.h
+--- a/include/EGL/eglext_angle_venture.h
++++ b/include/EGL/eglext_angle_venture.h
+@@ -34,6 +34,10 @@
+     void (VKAPI_PTR *deviceReady)(void *userData, VkInstance instance,
+                                   VkPhysicalDevice physicalDevice, VkDevice device,
+                                   uint32_t queueFamily, uint32_t queueIndex, VkQueue queue);
++    // Optional tail; a 48-byte v1 table remains valid. Called before volk loads
++    // dispatch, so pipeline entry points can be observed without a Vulkan layer.
++    PFN_vkGetInstanceProcAddr (VKAPI_PTR *wrapLoader)(void *userData,
++                                                    PFN_vkGetInstanceProcAddr loader);
+ } EGLVulkanCreationCallbacksVENTURE;
+ 
+ #endif  // INCLUDE_EGL_EGLEXT_ANGLE_VENTURE_H_
+diff --git a/src/libANGLE/renderer/vulkan/DisplayVk.cpp b/src/libANGLE/renderer/vulkan/DisplayVk.cpp
+--- a/src/libANGLE/renderer/vulkan/DisplayVk.cpp
++++ b/src/libANGLE/renderer/vulkan/DisplayVk.cpp
+@@ -185,7 +185,7 @@
+         attribs.get(EGL_PLATFORM_ANGLE_VULKAN_CREATION_CALLBACKS_VENTURE, 0));
+     if (callbacks &&
+         (callbacks->version != EGL_VULKAN_CREATION_CALLBACKS_VERSION_VENTURE ||
+-         callbacks->size < sizeof(EGLVulkanCreationCallbacksVENTURE) ||
++         callbacks->size < offsetof(EGLVulkanCreationCallbacksVENTURE, wrapLoader) ||
+          !callbacks->createInstance || !callbacks->choosePhysicalDevice ||
+          !callbacks->createDevice || !callbacks->deviceReady))
+     {
+diff --git a/src/libANGLE/renderer/vulkan/vk_renderer.cpp b/src/libANGLE/renderer/vulkan/vk_renderer.cpp
+--- a/src/libANGLE/renderer/vulkan/vk_renderer.cpp
++++ b/src/libANGLE/renderer/vulkan/vk_renderer.cpp
+@@ -2494,7 +2494,16 @@
+                                    const angle::FeatureOverrides &featureOverrides,
+                                    const EGLVulkanCreationCallbacksVENTURE *creationCallbacks)
+ {
+-    mCreationCallbacks = creationCallbacks ? *creationCallbacks : EGLVulkanCreationCallbacksVENTURE{};
++    mCreationCallbacks = {};
++    if (creationCallbacks)
++    {
++        memcpy(&mCreationCallbacks, creationCallbacks,
++               offsetof(EGLVulkanCreationCallbacksVENTURE, wrapLoader));
++        if (creationCallbacks->size >= sizeof(mCreationCallbacks))
++        {
++            mCreationCallbacks.wrapLoader = creationCallbacks->wrapLoader;
++        }
++    }
+     const std::string enableVulkanApiPerfCountersProp = angle::GetEnvironmentVarOrAndroidProperty(
+         "ANGLE_ENABLE_VULKAN_API_PERF_COUNTERS", "debug.angle.enable_vulkan_api_perf_counters");
+     if (enableVulkanApiPerfCountersProp == "1")
+@@ -2512,6 +2521,14 @@
+         PFN_vkGetInstanceProcAddr vulkanLoaderGetInstanceProcAddr =
+             reinterpret_cast<PFN_vkGetInstanceProcAddr>(
+                 angle::GetLibrarySymbol(mLibVulkanLibrary, "vkGetInstanceProcAddr"));
++
++        if (mCreationCallbacks.wrapLoader)
++        {
++            vulkanLoaderGetInstanceProcAddr = mCreationCallbacks.wrapLoader(
++                mCreationCallbacks.userData, vulkanLoaderGetInstanceProcAddr);
++            ANGLE_VK_CHECK(context, vulkanLoaderGetInstanceProcAddr,
++                           VK_ERROR_INITIALIZATION_FAILED);
++        }
+ 
+         // Set all vk* function ptrs
+         VK_CALL(volkInitializeCustom, vulkanLoaderGetInstanceProcAddr);

@@ -1,0 +1,478 @@
+{
+  "description": "Chain after vader-first-run.json at 440 s. Reuse the verified dojo saber pickup pose, squeeze, lift, activation and one saber swing to exercise guest haptics. Candidate timing; inspect the saber and telemetry before declaring proof.",
+  "events": [
+    {
+      "time": 0,
+      "right": {
+        "aim": {
+          "position": [
+            -0.05,
+            0.9,
+            -0.9
+          ]
+        },
+        "grip": {
+          "position": [
+            -0.05,
+            0.9,
+            -0.9
+          ]
+        },
+        "squeeze": 0
+      },
+      "head": {
+        "position": [
+          0,
+          1.6,
+          0
+        ],
+        "orientation": [
+          0,
+          0,
+          0,
+          1
+        ]
+      }
+    },
+    {
+      "time": 5,
+      "right": {
+        "squeeze": 1
+      }
+    },
+    {
+      "time": 10,
+      "right": {
+        "aim": {
+          "position": [
+            0.1,
+            1.25,
+            -0.5
+          ]
+        },
+        "grip": {
+          "position": [
+            0.1,
+            1.25,
+            -0.5
+          ]
+        }
+      }
+    },
+    {
+      "time": 20,
+      "right": {
+        "trigger": 1
+      }
+    },
+    {
+      "time": 25,
+      "right": {
+        "trigger": 0
+      }
+    },
+    {
+      "time": 28,
+      "right": {
+        "aim": {
+          "position": [
+            0,
+            1.1,
+            -0.45
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        "grip": {
+          "position": [
+            0,
+            1.1,
+            -0.45
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        }
+      }
+    },
+    {
+      "time": 38.0,
+      "right": {
+        "aim": {
+          "position": [
+            -0.35,
+            1.25,
+            -0.65
+          ],
+          "orientation": [
+            0,
+            0,
+            0.35,
+            0.93675
+          ]
+        },
+        "grip": {
+          "position": [
+            -0.35,
+            1.25,
+            -0.65
+          ],
+          "orientation": [
+            0,
+            0,
+            0.35,
+            0.93675
+          ]
+        }
+      }
+    },
+    {
+      "time": 38.2,
+      "right": {
+        "aim": {
+          "position": [
+            -0.28,
+            1.25,
+            -0.65
+          ],
+          "orientation": [
+            0,
+            0,
+            0.28,
+            0.96
+          ]
+        },
+        "grip": {
+          "position": [
+            -0.28,
+            1.25,
+            -0.65
+          ],
+          "orientation": [
+            0,
+            0,
+            0.28,
+            0.96
+          ]
+        }
+      }
+    },
+    {
+      "time": 38.4,
+      "right": {
+        "aim": {
+          "position": [
+            -0.21,
+            1.25,
+            -0.65
+          ],
+          "orientation": [
+            0,
+            0,
+            0.21,
+            0.977701
+          ]
+        },
+        "grip": {
+          "position": [
+            -0.21,
+            1.25,
+            -0.65
+          ],
+          "orientation": [
+            0,
+            0,
+            0.21,
+            0.977701
+          ]
+        }
+      }
+    },
+    {
+      "time": 38.6,
+      "right": {
+        "aim": {
+          "position": [
+            -0.14,
+            1.25,
+            -0.65
+          ],
+          "orientation": [
+            0,
+            0,
+            0.14,
+            0.990152
+          ]
+        },
+        "grip": {
+          "position": [
+            -0.14,
+            1.25,
+            -0.65
+          ],
+          "orientation": [
+            0,
+            0,
+            0.14,
+            0.990152
+          ]
+        }
+      }
+    },
+    {
+      "time": 38.8,
+      "right": {
+        "aim": {
+          "position": [
+            -0.07,
+            1.25,
+            -0.65
+          ],
+          "orientation": [
+            0,
+            0,
+            0.07,
+            0.997547
+          ]
+        },
+        "grip": {
+          "position": [
+            -0.07,
+            1.25,
+            -0.65
+          ],
+          "orientation": [
+            0,
+            0,
+            0.07,
+            0.997547
+          ]
+        }
+      }
+    },
+    {
+      "time": 39.0,
+      "right": {
+        "aim": {
+          "position": [
+            0.0,
+            1.25,
+            -0.65
+          ],
+          "orientation": [
+            0,
+            0,
+            -0.0,
+            1.0
+          ]
+        },
+        "grip": {
+          "position": [
+            0.0,
+            1.25,
+            -0.65
+          ],
+          "orientation": [
+            0,
+            0,
+            -0.0,
+            1.0
+          ]
+        }
+      }
+    },
+    {
+      "time": 39.2,
+      "right": {
+        "aim": {
+          "position": [
+            0.07,
+            1.25,
+            -0.65
+          ],
+          "orientation": [
+            0,
+            0,
+            -0.07,
+            0.997547
+          ]
+        },
+        "grip": {
+          "position": [
+            0.07,
+            1.25,
+            -0.65
+          ],
+          "orientation": [
+            0,
+            0,
+            -0.07,
+            0.997547
+          ]
+        }
+      }
+    },
+    {
+      "time": 39.4,
+      "right": {
+        "aim": {
+          "position": [
+            0.14,
+            1.25,
+            -0.65
+          ],
+          "orientation": [
+            0,
+            0,
+            -0.14,
+            0.990152
+          ]
+        },
+        "grip": {
+          "position": [
+            0.14,
+            1.25,
+            -0.65
+          ],
+          "orientation": [
+            0,
+            0,
+            -0.14,
+            0.990152
+          ]
+        }
+      }
+    },
+    {
+      "time": 39.6,
+      "right": {
+        "aim": {
+          "position": [
+            0.21,
+            1.25,
+            -0.65
+          ],
+          "orientation": [
+            0,
+            0,
+            -0.21,
+            0.977701
+          ]
+        },
+        "grip": {
+          "position": [
+            0.21,
+            1.25,
+            -0.65
+          ],
+          "orientation": [
+            0,
+            0,
+            -0.21,
+            0.977701
+          ]
+        }
+      }
+    },
+    {
+      "time": 39.8,
+      "right": {
+        "aim": {
+          "position": [
+            0.28,
+            1.25,
+            -0.65
+          ],
+          "orientation": [
+            0,
+            0,
+            -0.28,
+            0.96
+          ]
+        },
+        "grip": {
+          "position": [
+            0.28,
+            1.25,
+            -0.65
+          ],
+          "orientation": [
+            0,
+            0,
+            -0.28,
+            0.96
+          ]
+        }
+      }
+    },
+    {
+      "time": 40.0,
+      "right": {
+        "aim": {
+          "position": [
+            0.35,
+            1.25,
+            -0.65
+          ],
+          "orientation": [
+            0,
+            0,
+            -0.35,
+            0.93675
+          ]
+        },
+        "grip": {
+          "position": [
+            0.35,
+            1.25,
+            -0.65
+          ],
+          "orientation": [
+            0,
+            0,
+            -0.35,
+            0.93675
+          ]
+        }
+      }
+    },
+    {
+      "time": 42,
+      "right": {
+        "aim": {
+          "position": [
+            0,
+            1.1,
+            -0.45
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        "grip": {
+          "position": [
+            0,
+            1.1,
+            -0.45
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        }
+      }
+    }
+  ]
+}

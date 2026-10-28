@@ -1,0 +1,4 @@
+NEON: float arithmetic table lookup saturation OK
+NEON: float16 roundtrip OK
+NEON: guarded dot product OK
+VTEST RESULT neon PASS

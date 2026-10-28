@@ -1,0 +1,259 @@
+{
+  "description": "Warm-copy entry after cooking-first-run.json has saved standing calibration: New Game, explicitly select Cooking School, Play Classic, then neutral tracked hands. Both eyes verified the mode selection and nearby bread/knife tutorial. This route does not establish a pickup or haptic output.",
+  "events": [
+    {
+      "time": 0.0,
+      "head": {
+        "position": [
+          0,
+          1.6,
+          0
+        ],
+        "orientation": [
+          0,
+          0,
+          0,
+          1
+        ]
+      },
+      "left": {
+        "aim": {
+          "position": [
+            -0.25,
+            1.25,
+            -0.35
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        "grip": {
+          "position": [
+            -0.25,
+            1.25,
+            -0.35
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        "trigger": 0,
+        "squeeze": 0
+      },
+      "right": {
+        "aim": {
+          "position": [
+            0.25,
+            1.25,
+            -0.35
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        "grip": {
+          "position": [
+            0.25,
+            1.25,
+            -0.35
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        "trigger": 0,
+        "squeeze": 0
+      }
+    },
+    {
+      "time": 130.0,
+      "right": {
+        "aim": {
+          "position": [
+            -0.23,
+            1.21,
+            -0.8
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1.0
+          ]
+        },
+        "grip": {
+          "position": [
+            -0.23,
+            1.21,
+            -0.8
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1.0
+          ]
+        },
+        "trigger": 0,
+        "squeeze": 0
+      }
+    },
+    {
+      "time": 150.0,
+      "right": {
+        "trigger": 1
+      }
+    },
+    {
+      "time": 154.0,
+      "right": {
+        "trigger": 0
+      }
+    },
+    {
+      "time": 170,
+      "right": {
+        "aim": {
+          "position": [
+            -0.3,
+            1.27,
+            -0.8
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        "grip": {
+          "position": [
+            -0.3,
+            1.27,
+            -0.8
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        "trigger": 0,
+        "squeeze": 0,
+        "trigger_touch": true,
+        "thumbrest_touch": true
+      }
+    },
+    {
+      "time": 180,
+      "right": {
+        "trigger": 1
+      }
+    },
+    {
+      "time": 184,
+      "right": {
+        "trigger": 0
+      }
+    },
+    {
+      "time": 220,
+      "right": {
+        "aim": {
+          "position": [
+            0.5,
+            1.41,
+            0.125
+          ],
+          "orientation": [
+            -0.19,
+            -0.015,
+            0,
+            0.9816694963173705
+          ]
+        },
+        "grip": {
+          "position": [
+            0.5,
+            1.41,
+            0.125
+          ],
+          "orientation": [
+            -0.19,
+            -0.015,
+            0,
+            0.9816694963173705
+          ]
+        },
+        "trigger": 0,
+        "squeeze": 0
+      }
+    },
+    {
+      "time": 240,
+      "right": {
+        "trigger": 1
+      }
+    },
+    {
+      "time": 244,
+      "right": {
+        "trigger": 0
+      }
+    },
+    {
+      "time": 260,
+      "head": {
+        "orientation": [
+          0,
+          0,
+          0,
+          1
+        ]
+      },
+      "right": {
+        "aim": {
+          "position": [
+            0.25,
+            1.25,
+            -0.35
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        "grip": {
+          "position": [
+            0.25,
+            1.25,
+            -0.35
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        "trigger": 0,
+        "squeeze": 0
+      }
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+diff --git a/BUILD.gn b/BUILD.gn
+--- a/BUILD.gn
++++ b/BUILD.gn
+@@ -427,7 +427,7 @@ config("build_id_config") {
+   ldflags = [ "-Wl,--build-id" ]
+ }
+ 
+-_use_copy_compiler_dll = angle_has_build && is_win
++_use_copy_compiler_dll = angle_has_build && is_win && angle_enable_d3d11
+ 
+ if (_use_copy_compiler_dll) {
+   copy("copy_compiler_dll") {

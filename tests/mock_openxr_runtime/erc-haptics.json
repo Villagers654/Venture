@@ -1,0 +1,56 @@
+{
+  "description": "Chain after erc-ride.json. Test both controller triggers separately and together during the loaded ride/interaction. Verify which mode and guest request are reached; this does not assert a shooting mode was selected.",
+  "events": [
+    {
+      "time": 0,
+      "right": {
+        "trigger": 0
+      },
+      "left": {
+        "trigger": 0
+      }
+    },
+    {
+      "time": 10,
+      "right": {
+        "trigger": 1
+      }
+    },
+    {
+      "time": 12,
+      "right": {
+        "trigger": 0
+      }
+    },
+    {
+      "time": 20,
+      "left": {
+        "trigger": 1
+      }
+    },
+    {
+      "time": 22,
+      "left": {
+        "trigger": 0
+      }
+    },
+    {
+      "time": 30,
+      "right": {
+        "trigger": 1
+      },
+      "left": {
+        "trigger": 1
+      }
+    },
+    {
+      "time": 32,
+      "right": {
+        "trigger": 0
+      },
+      "left": {
+        "trigger": 0
+      }
+    }
+  ]
+}

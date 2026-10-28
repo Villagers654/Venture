@@ -1,0 +1,29 @@
+{
+  "description": "Two-launch tutorial replay after puzzling-first-launch.json. Aim at the center of the first shelf piece and hold trigger through arrival, then pull another piece and move both pieces. Verified past Hi there to Connecting Pieces with stereo piece interaction and AV270:330; the connection and later tutorial stages are not completed.",
+  "events": [
+    {"time":0.0,"head":{"position":[0,1.6,0],"orientation":[0,0,0,1]},"left":{"aim":{"position":[-0.25,1.25,-0.35],"orientation":[0,0,0,1]},"grip":{"position":[-0.25,1.25,-0.35],"orientation":[0,0,0,1]},"trigger":0,"squeeze":0},"right":{"aim":{"position":[0.25,1.25,-0.35],"orientation":[0,0,0,1]},"grip":{"position":[0.25,1.25,-0.35],"orientation":[0,0,0,1]},"trigger":0,"squeeze":0}},
+    {"time":94.697,"right":{"aim":{"position":[-0.897,1.565,-1.0],"orientation":[0,0,0,1]},"grip":{"position":[-0.897,1.565,-1.0],"orientation":[0,0,0,1]},"trigger":0}},
+    {"time":95.897,"right":{"trigger":1}},
+    {"time":96.197,"right":{"trigger":0}},
+    {"time":124.308,"right":{"aim":{"position":[0.077,1.412,-1.0],"orientation":[0,0,0,1]},"grip":{"position":[0.077,1.412,-1.0],"orientation":[0,0,0,1]},"trigger":0}},
+    {"time":125.508,"right":{"trigger":1}},
+    {"time":125.808,"right":{"trigger":0}},
+    {"time":159.021,"right":{"aim":{"position":[0.25,1.25,-0.35],"orientation":[0,0,0,1]},"grip":{"position":[0.25,1.25,-0.35],"orientation":[0,0,0,1]},"trigger":0}},
+    {"time":159.621,"right":{"trigger":1}},
+    {"time":159.921,"right":{"trigger":0}},
+    {"time":184.5,"right":{"aim":{"position":[0.25,1.25,-0.35],"orientation":[0.171047386690079,0.2290634593685853,0.0,0.9582654763105009]},"grip":{"position":[0.25,1.25,-0.35],"orientation":[0.171047386690079,0.2290634593685853,0.0,0.9582654763105009]},"trigger":0}},
+    {"time":187.5,"right":{"trigger":1}},
+    {"time":195.5,"right":{"trigger":0}},
+    {"time":198.5,"right":{"trigger":1}},
+    {"time":206.5,"right":{"trigger":0}},
+    {"time":277.5,"left":{"aim":{"position":[-0.25,1.25,-0.35],"orientation":[0.19203802729447925,0.17203406611797098,0.0,0.9661913248253486]},"grip":{"position":[-0.25,1.25,-0.35],"orientation":[0.19203802729447925,0.17203406611797098,0.0,0.9661913248253486]},"trigger":0}},
+    {"time":280.5,"left":{"trigger":1}},
+    {"time":290.5,"right":{"trigger":1}},
+    {"time":293.5,"left":{"aim":{"position":[-0.08,1.35,-0.5],"orientation":[0.19203802729447925,0.17203406611797098,0.0,0.9661913248253486]},"grip":{"position":[-0.08,1.35,-0.5],"orientation":[0.19203802729447925,0.17203406611797098,0.0,0.9661913248253486]}},"right":{"aim":{"position":[0.08,1.35,-0.5],"orientation":[0.171,0.229,0,0.958]},"grip":{"position":[0.08,1.35,-0.5],"orientation":[0.171,0.229,0,0.958]}},"pose_interpolation":"linear"},
+    {"time":297.5,"left":{"trigger":0},"right":{"trigger":0}},
+    {"time":312.0,"right":{"aim":{"position":[0.25,1.25,-0.35],"orientation":[0,0,0,1]},"grip":{"position":[0.25,1.25,-0.35],"orientation":[0,0,0,1]},"trigger":0},"left":{"trigger":0}},
+    {"time":314.0,"right":{"trigger":1},"left":{"trigger":1}},
+    {"time":317.0,"right":{"aim":{"position":[0.15,1.35,-0.5],"orientation":[0,0,0,1]},"grip":{"position":[0.15,1.35,-0.5],"orientation":[0,0,0,1]}},"pose_interpolation":"linear"},
+    {"time":321.0,"right":{"trigger":0},"left":{"trigger":0}}
+  ]
+}

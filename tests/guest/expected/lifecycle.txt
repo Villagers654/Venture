@@ -1,0 +1,3 @@
+lifecycle: constructors in declaration order OK
+lifecycle: cxa_atexit and destructors in reverse order OK
+VTEST RESULT lifecycle PASS

@@ -1,0 +1,182 @@
+{
+  "schema": 1,
+  "updated": "2026-10-10",
+  "titles": [
+    {
+      "app_id": "3931148300302917",
+      "package": "com.RealitiesIO.puzzlingPlaces",
+      "name": "Puzzling Places",
+      "status": "ingame",
+      "tested": "889",
+      "note": "Loads the tutorial puzzle's pond environment on hardware from the main menu, and trigger rays pull its pieces into both hands. The first tutorial card does not advance yet. SwiftShader stops at Unreal's OpenGL ES 3.2 requirement. Optional puzzle packs have not been downloaded."
+    },
+    {
+      "app_id": "4428409203954512",
+      "package": "com.gameboomvr.CookingSimulatorVR",
+      "name": "Cooking Simulator VR",
+      "status": "ingame",
+      "tested": "10401",
+      "note": "Renders the Classic Sandbox kitchen and mipmapped cursor overlays in both eyes on hardware and SwiftShader after scripted menu selection. Cooking interactions, audio quality and play on a physical headset have not been verified."
+    },
+    {
+      "app_id": "2448060205267927",
+      "package": "com.beatgames.beatsaber",
+      "name": "Beat Saber",
+      "status": "ingame",
+      "tested": "3148",
+      "note": "Completes a Solo Easy song with sound and controller input. Tested with simulated controllers and No Fail enabled; play on a physical headset has not been confirmed yet."
+    },
+    {
+      "app_id": "3927222113966481",
+      "package": "com.commutergames.vspeedwayalpha",
+      "name": "V-Speedway",
+      "status": "ingame",
+      "tested": "745",
+      "note": "Races with controller input, sound and saves. Tested with simulated controllers; play on a physical headset hasn't been confirmed yet."
+    },
+    {
+      "app_id": "2082595615120854",
+      "package": "com.resolutiongames.baitsantacruz",
+      "name": "Bait!",
+      "status": "ingame",
+      "tested": "119014291",
+      "note": "Casts, hooks, reels in and grabs a fish in Story with sound. Tested with simulated controllers; play on a physical headset hasn't been confirmed yet."
+    },
+    {
+      "app_id": "2307085352735834",
+      "package": "com.resolutiongames.ignis",
+      "name": "Blaston",
+      "status": "menus",
+      "tested": "203302372",
+      "note": "Passes its headset and privacy checks, completes the introduction and opens Campaign, with sound. Online matches are not supported."
+    },
+    {
+      "app_id": "2299465166734471",
+      "package": "games.b4t.epicrollercoasters.oculus",
+      "name": "Epic Roller Coasters",
+      "status": "ingame",
+      "tested": "6419",
+      "note": "Rides the free Tropical Island coaster in stereo on a hardware Vulkan GPU after the welcome tour's Play now and a trigger press at the start prompt, with simulated controllers. Rock Falls, the other modes and play on a physical headset haven't been verified yet."
+    },
+    {
+      "app_id": "5569487753065341",
+      "package": "com.CactusVRStudios.CactusCowboyPlantsAtWar",
+      "name": "Cactus Cowboy - Plants At War",
+      "status": "ingame",
+      "tested": "31",
+      "note": "Starts a new game and reaches its opening room in stereo, with audio. Later gameplay hasn't been verified yet."
+    },
+    {
+      "app_id": "3793077684043441",
+      "package": "com.magnopus.ElixirStore",
+      "name": "Elixir",
+      "status": "ingame",
+      "tested": "2400",
+      "note": "Hand tracking works: completes the rune calibration and reaches the first teleport tutorial. Later chapters haven't been verified yet."
+    },
+    {
+      "app_id": "2108775495884888",
+      "package": "com.ILMxLAB.VaderImmortal.ep1",
+      "name": "Vader Immortal: Episode I",
+      "status": "ingame",
+      "tested": "387770",
+      "note": "Played Lightsaber Dojo combat with simulated controllers and sound, reaching the first wave's results. Further waves haven't been verified. The current graphics library renders black; combat was retested with the earlier library."
+    },
+    {
+      "app_id": "3551691271620960",
+      "package": "com.camouflaj.manta",
+      "name": "Batman: Arkham Shadow",
+      "status": "ingame",
+      "tested": "350961",
+      "note": "Resumes the saved campaign checkpoint into the opening apartment and walks with the left stick in both eyes on hardware. Interaction and combat have not been verified. The game needs a hardware GPU."
+    },
+    {
+      "app_id": "2603836099654226",
+      "package": "com.Sanzaru.Wrath2",
+      "name": "Asgard's Wrath 2",
+      "status": "ingame",
+      "tested": "5513",
+      "note": "Renders Aegir's Hall, the opening tavern, in stereo after calibration and Godly Form selection on native Vulkan. Both eyes inspected at the bar and across the room. Combat, traversal and physical-headset play remain unverified."
+    },
+    {
+      "app_id": "2223615721048141",
+      "package": "com.ILMxLAB.VaderImmortal.ep2",
+      "name": "Vader Immortal: Episode II",
+      "status": "ingame",
+      "tested": "387778",
+      "note": "Reaches Vader's opening scene and the movement tutorial with simulated controllers and sound. Audio interruptions have been observed; later progression hasn't been verified."
+    },
+    {
+      "app_id": "2426206484098337",
+      "package": "com.ILMxLAB.VaderImmortal.ep3",
+      "name": "Vader Immortal: Episode III",
+      "status": "ingame",
+      "tested": "387932",
+      "note": "Renders the opening cavern and can draw and ignite the saber with simulated controllers and sound. First combat hasn't been verified. The full scene retest exits normally after five-second interruption; its later view loses most scene geometry. Audio interruptions remain under software load."
+    },
+    {
+      "app_id": "2637179839719680",
+      "package": "com.Armature.VR4",
+      "name": "Resident Evil 4",
+      "status": "menus",
+      "tested": "203",
+      "note": "Renders the large castle title world in both eyes with tracked hands and audio on hardware using the mock runtime. Default owning-account boot needs no voice config override and exits normally. The reverse-alpha fade layer is unsupported and briefly rejects frames; the title world renders afterward. Menu interaction, gameplay and a physical headset remain unverified."
+    },
+    {
+      "app_id": "2897337400373711",
+      "package": "com.SDI.TWD",
+      "name": "The Walking Dead: Saints & Sinners",
+      "status": "menus",
+      "tested": "40035500",
+      "note": "Renders a large 3D street in both eyes and reaches the HMD reset/stance prompt with simulated controllers on the software renderer. Initial scene validation passed; menu interaction, gameplay and a physical headset remain unverified."
+    },
+    {
+      "app_id": "2188021891257542",
+      "package": "com.Oculus.FirstContact",
+      "name": "Oculus First Contact",
+      "status": "ingame",
+      "tested": "7",
+      "note": "Renders its opening room in stereo with ANGLE 0006. A checked-in controller route wakes the robot and grabs, lifts and rotates its first cartridge. Cold shader-cache restarts now launch a fresh process automatically; hardware and software replays verified in both eyes. Printer insertion and printed-object use remain unverified."
+    },
+    {
+      "app_id": "3235570703151406",
+      "package": "com.owlchemylabs.jobsimulator",
+      "name": "Job Simulator",
+      "status": "ingame",
+      "tested": "49",
+      "note": "Reaches the Job Bot museum and Office Worker in stereo with simulated controllers. Cartridge insertion, the start lever and lifting an office cup work; later tasks haven't been verified yet."
+    },
+    {
+      "app_id": "5812519008825194",
+      "package": "com.Ubisoft.ACNexusVR",
+      "name": "Assassin's Creed Nexus VR",
+      "status": "menus",
+      "tested": "207706",
+      "note": "Renders the Animus menu worlds and the opening briefing call in stereo on hardware: offline notice, calibration, New Game, cube touch, call and voice selection. The first memory is not reached yet; Ubisoft Connect is unreachable."
+    },
+    {
+      "app_id": "1654565391314903",
+      "package": "com.polyarc.MossGame",
+      "name": "Moss",
+      "status": "menus",
+      "tested": "151047",
+      "note": "Renders the library hall main menu in both eyes on hardware using the mock runtime after confirming the Controls panel. SwiftShader is not supported. Menu interaction, the story and a physical headset remain unverified."
+    },
+    {
+      "app_id": "4395292760584049",
+      "package": "com.polyarc.Moss2",
+      "name": "Moss: Book II",
+      "status": "menus",
+      "tested": "149619",
+      "note": "Renders the library hall main menu in both eyes on hardware using the mock runtime after confirming the Play Area and Controls panels. Menu interaction, the story and a physical headset remain unverified."
+    },
+    {
+      "app_id": "3634830803298285",
+      "package": "com.resolutiongames.demeo",
+      "name": "Demeo",
+      "status": "ingame",
+      "tested": "142040696",
+      "note": "Accepts its privacy policy and renders the tavern basement with the tutorial board in both eyes on hardware. The second tutorial prompt does not advance yet. The game needs a hardware GPU; adventures and audio quality have not been verified."
+    }
+  ]
+}

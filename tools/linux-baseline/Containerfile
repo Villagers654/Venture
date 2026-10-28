@@ -1,0 +1,37 @@
+# Venture Linux release baseline: Ubuntu 22.04 (glibc 2.35) with LLVM/clang 22
+# and a static libc++. Binaries built here run on glibc >= 2.35 distributions.
+# See docs/LINUX_RELEASE_BUILD.md. Build: tools/linux-baseline/baseline.sh image
+FROM docker.io/library/ubuntu:22.04
+
+ARG LLVM=22
+ENV DEBIAN_FRONTEND=noninteractive LANG=C.UTF-8
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      ca-certificates curl gnupg && \
+    curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key | gpg --dearmor -o /usr/share/keyrings/llvm.gpg && \
+    echo "deb [signed-by=/usr/share/keyrings/llvm.gpg] http://apt.llvm.org/jammy/ llvm-toolchain-jammy-${LLVM} main" \
+      > /etc/apt/sources.list.d/llvm.list && \
+    curl -fsSL "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0xF23C5A6CF475977595C89F51BA6932366A755776" \
+      | gpg --dearmor -o /usr/share/keyrings/deadsnakes.gpg && \
+    echo "deb [signed-by=/usr/share/keyrings/deadsnakes.gpg] https://ppa.launchpadcontent.net/deadsnakes/ppa/ubuntu jammy main" \
+      > /etc/apt/sources.list.d/deadsnakes.list && \
+    apt-get update && apt-get install -y --no-install-recommends \
+      clang-${LLVM} lld-${LLVM} llvm-${LLVM} libc++-${LLVM}-dev libc++abi-${LLVM}-dev \
+      libgcc-11-dev binutils make patch file git xz-utils gpgv pkg-config \
+      python3 python3.12 \
+      libssl-dev libsecret-1-dev \
+      libwayland-dev libxkbcommon-dev libegl-dev libdrm-dev libgbm-dev \
+      libpipewire-0.3-dev libpulse-dev libasound2-dev libdbus-1-dev libudev-dev libusb-1.0-0-dev \
+      libvulkan1 mesa-vulkan-drivers && \
+    rm -rf /var/lib/apt/lists/*
+# libvulkan1 mesa-vulkan-drivers above: the Vulkan loader and lavapipe, the software Vulkan the test suite runs on
+# (as tools/gpu_policy.py does).
+
+# Unversioned LLVM tool names first on PATH; tools/*.py need Python >= 3.12 (deadsnakes).
+# libatomic is linked statically: a directory holding only the archive is
+# searched before the system one, so -latomic resolves to libatomic.a.
+RUN mkdir -p /opt/venture-baseline/bin /opt/venture-baseline/static && \
+    ln -s /usr/bin/python3.12 /opt/venture-baseline/bin/python3 && \
+    ln -s /usr/bin/python3.12 /opt/venture-baseline/bin/python && \
+    ln -s /usr/lib/gcc/x86_64-linux-gnu/11/libatomic.a /opt/venture-baseline/static/libatomic.a
+ENV PATH=/opt/venture-baseline/bin:/usr/lib/llvm-${LLVM}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin

@@ -1,0 +1,81 @@
+{
+  "version": 6,
+  "configurePresets": [
+    {
+      "name": "windows-base",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "environment": {
+        "PATH": "${sourceDir}/.deps/llvm-mingw/bin;${sourceDir}/.deps/ninja;${sourceDir}/.deps/cmake/bin;$penv{PATH}"
+      },
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "${sourceDir}/.deps/llvm-mingw/bin/clang.exe",
+        "CMAKE_CXX_COMPILER": "${sourceDir}/.deps/llvm-mingw/bin/clang++.exe",
+        "CMAKE_RC_COMPILER": "${sourceDir}/.deps/llvm-mingw/bin/llvm-rc.exe",
+        "CMAKE_MAKE_PROGRAM": "${sourceDir}/.deps/ninja/ninja.exe",
+        "FETCHCONTENT_BASE_DIR": "${sourceDir}/.deps/fetch",
+        "VENTURE_PROBE_CACHE": "ON",
+        "FETCHCONTENT_UPDATES_DISCONNECTED": "ON"
+      },
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows" }
+    },
+    {
+      "name": "windows-debug",
+      "inherits": "windows-base",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" }
+    },
+    {
+      "name": "windows-release",
+      "inherits": "windows-base",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "RelWithDebInfo" }
+    },
+    {
+      "name": "linux-release",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "CMAKE_C_COMPILER": "clang",
+        "CMAKE_CXX_COMPILER": "clang++",
+        "FETCHCONTENT_BASE_DIR": "${sourceDir}/.deps/fetch",
+        "VENTURE_PROBE_CACHE": "ON",
+        "FETCHCONTENT_UPDATES_DISCONNECTED": "ON"
+      },
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Linux" }
+    },
+    {
+      "name": "linux-baseline",
+      "displayName": "Linux release baseline (run inside tools/linux-baseline, glibc 2.35)",
+      "inherits": "linux-release",
+      "toolchainFile": "${sourceDir}/cmake/toolchains/linux-baseline.cmake",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "clang",
+        "CMAKE_CXX_COMPILER": "clang++",
+        "CMAKE_C_FLAGS_RELWITHDEBINFO": "-O2 -DNDEBUG",
+        "CMAKE_CXX_FLAGS_RELWITHDEBINFO": "-O2 -DNDEBUG",
+        "VENTURE_BUILD_TESTS": "OFF"
+      }
+    },
+    {
+      "name": "windows-agent", "inherits": "windows-release",
+      "cacheVariables": { "VENTURE_AGENT_CACHE": "ON" }
+    },
+    {
+      "name": "linux-agent", "inherits": "linux-release",
+      "cacheVariables": { "VENTURE_AGENT_CACHE": "ON" }
+    }
+  ],
+  "buildPresets": [
+    { "name": "windows-debug", "configurePreset": "windows-debug" },
+    { "name": "windows-release", "configurePreset": "windows-release" },
+    { "name": "linux-release", "configurePreset": "linux-release" },
+    { "name": "linux-baseline", "configurePreset": "linux-baseline" },
+    { "name": "windows-agent", "configurePreset": "windows-agent" },
+    { "name": "linux-agent", "configurePreset": "linux-agent" }
+  ],
+  "testPresets": [
+    { "name": "windows-release", "configurePreset": "windows-release", "output": { "outputOnFailure": true } },
+    { "name": "linux-release", "configurePreset": "linux-release", "output": { "outputOnFailure": true } }
+  ]
+}

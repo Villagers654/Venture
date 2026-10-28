@@ -1,0 +1,3 @@
+TLS: existing thread late-loaded module initial values isolation OK
+TLS: new thread isolation reverse destructor order OK
+VTEST RESULT tls PASS

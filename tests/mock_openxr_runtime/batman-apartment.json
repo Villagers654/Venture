@@ -1,0 +1,277 @@
+{
+  "description": "Shared Batman apartment replay: proven calibration-checkpoint recipe, including the left-menu hold through 315.5 seconds.",
+  "events": [
+    {
+      "time": 0.0,
+      "head": {
+        "position": [
+          0,
+          1.6,
+          0
+        ],
+        "orientation": [
+          0,
+          0,
+          0,
+          1
+        ]
+      },
+      "left": {
+        "aim": {
+          "position": [
+            -0.25,
+            1.25,
+            -0.35
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        "grip": {
+          "position": [
+            -0.25,
+            1.25,
+            -0.35
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        "trigger": 0,
+        "squeeze": 0
+      },
+      "right": {
+        "aim": {
+          "position": [
+            0.25,
+            1.25,
+            -0.35
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        "grip": {
+          "position": [
+            0.25,
+            1.25,
+            -0.35
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        "trigger": 0,
+        "squeeze": 0
+      }
+    },
+    {
+      "time": 91.7,
+      "right": {
+        "aim": {
+          "orientation": [
+            0.103242,
+            0.155578,
+            -0.016352,
+            0.982278
+          ]
+        }
+      }
+    },
+    {
+      "time": 112.99,
+      "right": {
+        "trigger": 1
+      }
+    },
+    {
+      "time": 113.39,
+      "right": {
+        "trigger": 0
+      }
+    },
+    {
+      "time": 131.92,
+      "right": {
+        "aim": {
+          "orientation": [
+            -0.069626,
+            0.0609,
+            0.004259,
+            0.995703
+          ]
+        }
+      }
+    },
+    {
+      "time": 132.92,
+      "right": {
+        "trigger": 1
+      }
+    },
+    {
+      "time": 133.32,
+      "right": {
+        "trigger": 0
+      }
+    },
+    {
+      "time": 150.96,
+      "right": {
+        "trigger": 1
+      }
+    },
+    {
+      "time": 151.36,
+      "right": {
+        "trigger": 0
+      }
+    },
+    {
+      "time": 218.3,
+      "left": {
+        "menu": true
+      }
+    },
+    {
+      "time": 243.36,
+      "right": {
+        "trigger": 1
+      }
+    },
+    {
+      "time": 243.76,
+      "right": {
+        "trigger": 0
+      }
+    },
+    {
+      "time": 267.63,
+      "right": {
+        "trigger": 1
+      }
+    },
+    {
+      "time": 268.03,
+      "right": {
+        "trigger": 0
+      }
+    },
+    {
+      "time": 298.83,
+      "right": {
+        "aim": {
+          "orientation": [
+            0.034834,
+            0.061011,
+            -0.002131,
+            0.997527
+          ]
+        }
+      }
+    },
+    {
+      "time": 299.83,
+      "right": {
+        "trigger": 1
+      }
+    },
+    {
+      "time": 300.23,
+      "right": {
+        "trigger": 0
+      }
+    },
+    {
+      "time": 315.5,
+      "left": {
+        "menu": false
+      }
+    },
+    {
+      "time": 318.25,
+      "right": {
+        "aim": {
+          "orientation": [
+            -0.086993,
+            0.060816,
+            0.005321,
+            0.994337
+          ]
+        }
+      }
+    },
+    {
+      "time": 319.25,
+      "right": {
+        "trigger": 1
+      }
+    },
+    {
+      "time": 319.65,
+      "right": {
+        "trigger": 0
+      }
+    },
+    {
+      "time": 338.25,
+      "right": {
+        "trigger": 1
+      }
+    },
+    {
+      "time": 338.65,
+      "right": {
+        "trigger": 0
+      }
+    },
+    {
+      "time": 373.1,
+      "right": {
+        "aim": {
+          "orientation": [
+            0.01742,
+            0.061039,
+            -0.001065,
+            0.997983
+          ]
+        }
+      }
+    },
+    {
+      "time": 374.1,
+      "right": {
+        "trigger": 1
+      }
+    },
+    {
+      "time": 374.5,
+      "right": {
+        "trigger": 0
+      }
+    }
+  ],
+  "benchmark": {
+    "seed_relative_to_runs": "perf-sweep/batman-calibration-seed-074b377f/payload",
+    "seed_sha256": "074b377f12eafc137a2fbae0dff8e7e188fc311d7c8e1f27554412101f1241d3",
+    "seed_hash_method": "perf_sweep.copy_warm",
+    "scene_at": 450,
+    "segment_at": 482,
+    "segment_seconds": 60,
+    "proof_input_s": 477.48,
+    "proof_build": "fe8607ba",
+    "source_recipe": "pcvr-frame 03475f47, executed input preserved verbatim; candidate apartment seed failed replay"
+  }
+}

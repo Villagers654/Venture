@@ -1,0 +1,15 @@
+diff --git a/src/libANGLE/renderer/vulkan/vk_caps_utils.cpp b/src/libANGLE/renderer/vulkan/vk_caps_utils.cpp
+--- a/src/libANGLE/renderer/vulkan/vk_caps_utils.cpp
++++ b/src/libANGLE/renderer/vulkan/vk_caps_utils.cpp
+@@ -1324,6 +1324,11 @@
+     mNativeExtensions.multiviewOVR =
+         mFeatures.supportsMultiview.enabled && mFeatures.bresenhamLineRasterization.enabled;
+     mNativeExtensions.multiview2OVR = mNativeExtensions.multiviewOVR;
++    // Vulkan multiview render passes also support explicit multisample array
++    // attachments. Implicit resolve for multisampled render-to-texture is
++    // advertised separately below.
++    mNativeExtensions.multiviewMultisampleANGLE =
++        mNativeExtensions.multiviewOVR && mNativeExtensions.textureStorageMultisample2dArrayOES;
+     // Max views affects the number of Vulkan queries per GL query in render pass, and
+     // SecondaryCommandBuffer's ResetQueryPoolParams would like this to have an upper limit (of
+     // 255).

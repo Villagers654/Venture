@@ -1,0 +1,3 @@
+jump: setjmp longjmp register stack restore OK
+jump: sigsetjmp siglongjmp signal mask restore OK
+VTEST RESULT jumps PASS

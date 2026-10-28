@@ -1,0 +1,160 @@
+{
+  "description": "Chain after vader-ep2-corridor.json. Reuse the verified belt saber pickup position with the left hand, lift and activate, then swing. Confirm that the game supports left-hand ownership.",
+  "events": [
+    {
+      "time": 0,
+      "right": {
+        "trigger": 0,
+        "squeeze": 0
+      },
+      "left": {
+        "aim": {
+          "position": [
+            0.25,
+            0.85,
+            0.05
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        "grip": {
+          "position": [
+            0.25,
+            0.85,
+            0.05
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        "trigger": 0,
+        "squeeze": 0
+      }
+    },
+    {
+      "time": 3,
+      "left": {
+        "squeeze": 1
+      }
+    },
+    {
+      "time": 8,
+      "left": {
+        "aim": {
+          "position": [
+            -0.15,
+            1.25,
+            -0.35
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        "grip": {
+          "position": [
+            -0.15,
+            1.25,
+            -0.35
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        }
+      }
+    },
+    {
+      "time": 13,
+      "left": {
+        "trigger": 1
+      }
+    },
+    {
+      "time": 15,
+      "left": {
+        "trigger": 0
+      }
+    },
+    {
+      "time": 20,
+      "left": {
+        "aim": {
+          "position": [
+            -0.35,
+            1.25,
+            -0.55
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        "grip": {
+          "position": [
+            -0.35,
+            1.25,
+            -0.55
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        }
+      }
+    },
+    {
+      "time": 21,
+      "pose_interpolation": "linear",
+      "left": {
+        "aim": {
+          "position": [
+            0.25,
+            1.25,
+            -0.55
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        "grip": {
+          "position": [
+            0.25,
+            1.25,
+            -0.55
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        }
+      }
+    },
+    {
+      "time": 24,
+      "left": {
+        "squeeze": 0
+      }
+    }
+  ]
+}

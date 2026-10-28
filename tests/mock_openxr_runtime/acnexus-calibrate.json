@@ -1,0 +1,12 @@
+{
+  "events": [
+    {"time": 0, "head": {"position": [0, 1.7, 0], "orientation": [0, 0, 0, 1]}, "left": {"active": true, "aim": {"position": [-0.25, 1.25, -0.4], "orientation": [0, 0, 0, 1]}, "grip": {"position": [-0.25, 1.25, -0.4], "orientation": [0, 0, 0, 1]}, "trigger": 0, "squeeze": 0}, "right": {"active": true, "aim": {"position": [0.25, 1.25, -0.4], "orientation": [0, 0, 0, 1]}, "grip": {"position": [0.25, 1.25, -0.4], "orientation": [0, 0, 0, 1]}, "trigger": 0, "squeeze": 0}},
+    {"time": 168, "right": {"aim": {"position": [0.25, 1.25, -0.4], "orientation": [0.008724, -0.024431, 0.000213, 0.999663]}, "grip": {"position": [0.25, 1.25, -0.4], "orientation": [0.008724, -0.024431, 0.000213, 0.999663]}}},
+    {"time": 170, "right": {"trigger": 1}},
+    {"time": 170.4, "right": {"trigger": 0}},
+    {"time": 215, "left": {"aim": {"position": [-0.8, 1.5, -0.05], "orientation": [0, 0, 0, 1]}, "grip": {"position": [-0.8, 1.5, -0.05], "orientation": [0, 0, 0, 1]}}, "right": {"aim": {"position": [0.8, 1.5, -0.05], "orientation": [0, 0, 0, 1]}, "grip": {"position": [0.8, 1.5, -0.05], "orientation": [0, 0, 0, 1]}}},
+    {"time": 218, "right": {"a": true}},
+    {"time": 223, "right": {"a": false}},
+    {"time": 226, "left": {"aim": {"position": [-0.25, 1.25, -0.4], "orientation": [0, 0, 0, 1]}, "grip": {"position": [-0.25, 1.25, -0.4], "orientation": [0, 0, 0, 1]}}, "right": {"aim": {"position": [0.25, 1.25, -0.4], "orientation": [0, 0, 0, 1]}, "grip": {"position": [0.25, 1.25, -0.4], "orientation": [0, 0, 0, 1]}}}
+  ]
+}

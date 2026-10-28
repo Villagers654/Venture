@@ -1,0 +1,24 @@
+diff --git a/config/win/visual_studio_version.gni b/config/win/visual_studio_version.gni
+--- a/config/win/visual_studio_version.gni
++++ b/config/win/visual_studio_version.gni
+@@ -40,7 +40,7 @@ if (visual_studio_path == "") {
+          "You must set the windows_sdk_version if you set the path")
+   assert(wdk_path != "",
+          "You must set the wdk_path if you set the visual studio path")
+-  visual_studio_runtime_dirs = []
++  visual_studio_runtime_dirs = "None"
+ }
+ 
+ visual_studio_version_logs = [ "windows_sdk_version=${windows_sdk_version}" ]
+diff --git a/toolchain/win/BUILD.gn b/toolchain/win/BUILD.gn
+--- a/toolchain/win/BUILD.gn
++++ b/toolchain/win/BUILD.gn
+@@ -15,7 +15,7 @@ assert(is_win, "Should only be running on Windows")
+ 
+ # Copy the VS runtime DLL for the default toolchain to the root build directory
+ # so things will run.
+-if (current_toolchain == default_toolchain) {
++if (current_toolchain == default_toolchain && visual_studio_runtime_dirs != "None") {
+   if (is_debug) {
+     configuration_name = "Debug"
+   } else {

@@ -1,0 +1,177 @@
+{
+  "controller_pose": {"profile":"oculus_touch","reference":"grip"},
+  "description": "Chain after re4-forest-radio.json at the default five-second gap. Select Yes using an actual widget hit, advance both weapon-management introductions, and equip the knife from the left chest with the right grip. Hardware verified through knife acquisition. The Swing step still blocks completion, locomotion and pistol firing.",
+  "events": [
+    {
+      "time": 47,
+      "left": {
+        "aim": {
+          "position": [
+            -0.075,
+            1.4,
+            -0.45
+          ],
+          "orientation": [
+            -0.049979169,
+            0,
+            0,
+            0.99875026
+          ]
+        },
+        "grip": {
+          "position": [
+            -0.075,
+            1.4,
+            -0.45
+          ],
+          "orientation": [
+            -0.049979169,
+            0,
+            0,
+            0.99875026
+          ]
+        },
+        "trigger": 0,
+        "squeeze": 0
+      }
+    },
+    {
+      "time": 51,
+      "left": {
+        "trigger": 1
+      }
+    },
+    {
+      "time": 53,
+      "left": {
+        "trigger": 0
+      }
+    },
+    {
+      "time": 67,
+      "right": {
+        "aim": {
+          "position": [
+            0,
+            1.4,
+            -0.45
+          ],
+          "orientation": [
+            -0.074929707,
+            0,
+            0,
+            0.997188818
+          ]
+        },
+        "grip": {
+          "position": [
+            0,
+            1.4,
+            -0.45
+          ],
+          "orientation": [
+            -0.074929707,
+            0,
+            0,
+            0.997188818
+          ]
+        },
+        "trigger": 0,
+        "squeeze": 0
+      }
+    },
+    {
+      "time": 71,
+      "right": {
+        "trigger": 1
+      }
+    },
+    {
+      "time": 73,
+      "right": {
+        "trigger": 0
+      }
+    },
+    {
+      "time": 83,
+      "right": {
+        "trigger": 1
+      }
+    },
+    {
+      "time": 85,
+      "right": {
+        "trigger": 0
+      }
+    },
+    {
+      "time": 95,
+      "right": {
+        "aim": {
+          "position": [
+            -0.18,
+            1.3,
+            -0.05
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        "grip": {
+          "position": [
+            -0.18,
+            1.3,
+            -0.05
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        "squeeze": 0
+      }
+    },
+    {
+      "time": 99,
+      "right": {
+        "squeeze": 1
+      }
+    },
+    {
+      "time": 103,
+      "right": {
+        "aim": {
+          "position": [
+            0.2,
+            1.4,
+            -0.5
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        "grip": {
+          "position": [
+            0.2,
+            1.4,
+            -0.5
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        }
+      }
+    }
+  ]
+}

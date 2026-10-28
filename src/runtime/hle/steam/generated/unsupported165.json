@@ -1,0 +1,218 @@
+[
+  {
+    "symbol": "SteamAPI_ISteamUtils_SetWarningMessageHook",
+    "reason": "guest callback needs trampoline"
+  },
+  {
+    "symbol": "SteamAPI_ISteamUtils_StartVRDashboard",
+    "reason": "host client management is outside game runtime scope"
+  },
+  {
+    "symbol": "SteamAPI_ISteamUtils_SetVRHeadsetStreamingEnabled",
+    "reason": "host client management is outside game runtime scope"
+  },
+  {
+    "symbol": "SteamAPI_ISteamMatchmakingServers_RequestInternetServerList",
+    "reason": "record pointer array or opaque record"
+  },
+  {
+    "symbol": "SteamAPI_ISteamMatchmakingServers_RequestLANServerList",
+    "reason": "guest callback/object needs trampoline"
+  },
+  {
+    "symbol": "SteamAPI_ISteamMatchmakingServers_RequestFriendsServerList",
+    "reason": "record pointer array or opaque record"
+  },
+  {
+    "symbol": "SteamAPI_ISteamMatchmakingServers_RequestFavoritesServerList",
+    "reason": "record pointer array or opaque record"
+  },
+  {
+    "symbol": "SteamAPI_ISteamMatchmakingServers_RequestHistoryServerList",
+    "reason": "record pointer array or opaque record"
+  },
+  {
+    "symbol": "SteamAPI_ISteamMatchmakingServers_RequestSpectatorServerList",
+    "reason": "record pointer array or opaque record"
+  },
+  {
+    "symbol": "SteamAPI_ISteamMatchmakingServers_GetServerDetails",
+    "reason": "composite or owned-object return needs adapter"
+  },
+  {
+    "symbol": "SteamAPI_ISteamMatchmakingServers_PingServer",
+    "reason": "guest callback/object needs trampoline"
+  },
+  {
+    "symbol": "SteamAPI_ISteamMatchmakingServers_PlayerDetails",
+    "reason": "guest callback/object needs trampoline"
+  },
+  {
+    "symbol": "SteamAPI_ISteamMatchmakingServers_ServerRules",
+    "reason": "guest callback/object needs trampoline"
+  },
+  {
+    "symbol": "SteamAPI_ISteamMatchmakingServers_ServerFriends",
+    "reason": "guest callback/object needs trampoline"
+  },
+  {
+    "symbol": "SteamAPI_ISteamApps_InstallDLC",
+    "reason": "host client management is outside game runtime scope"
+  },
+  {
+    "symbol": "SteamAPI_ISteamApps_UninstallDLC",
+    "reason": "host client management is outside game runtime scope"
+  },
+  {
+    "symbol": "SteamAPI_ISteamApps_MarkContentCorrupt",
+    "reason": "host client management is outside game runtime scope"
+  },
+  {
+    "symbol": "SteamAPI_ISteamInput_EnableActionEventCallbacks",
+    "reason": "guest callback/object needs trampoline"
+  },
+  {
+    "symbol": "SteamAPI_ISteamNetworkingMessages_ReceiveMessagesOnChannel",
+    "reason": "guest callback/object needs trampoline"
+  },
+  {
+    "symbol": "SteamAPI_ISteamNetworkingSockets_CreateListenSocketIP",
+    "reason": "guest callback/object needs trampoline"
+  },
+  {
+    "symbol": "SteamAPI_ISteamNetworkingSockets_ConnectByIPAddress",
+    "reason": "guest callback/object needs trampoline"
+  },
+  {
+    "symbol": "SteamAPI_ISteamNetworkingSockets_CreateListenSocketP2P",
+    "reason": "guest callback/object needs trampoline"
+  },
+  {
+    "symbol": "SteamAPI_ISteamNetworkingSockets_ConnectP2P",
+    "reason": "guest callback/object needs trampoline"
+  },
+  {
+    "symbol": "SteamAPI_ISteamNetworkingSockets_SendMessages",
+    "reason": "guest callback/object needs trampoline"
+  },
+  {
+    "symbol": "SteamAPI_ISteamNetworkingSockets_ReceiveMessagesOnConnection",
+    "reason": "guest callback/object needs trampoline"
+  },
+  {
+    "symbol": "SteamAPI_ISteamNetworkingSockets_ReceiveMessagesOnPollGroup",
+    "reason": "guest callback/object needs trampoline"
+  },
+  {
+    "symbol": "SteamAPI_ISteamNetworkingSockets_ConnectToHostedDedicatedServer",
+    "reason": "guest callback/object needs trampoline"
+  },
+  {
+    "symbol": "SteamAPI_ISteamNetworkingSockets_GetHostedDedicatedServerAddress",
+    "reason": "record pointer array or opaque record"
+  },
+  {
+    "symbol": "SteamAPI_ISteamNetworkingSockets_CreateHostedDedicatedServerListenSocket",
+    "reason": "guest callback/object needs trampoline"
+  },
+  {
+    "symbol": "SteamAPI_ISteamNetworkingSockets_GetGameCoordinatorServerLogin",
+    "reason": "record pointer array or opaque record"
+  },
+  {
+    "symbol": "SteamAPI_ISteamNetworkingSockets_ConnectP2PCustomSignaling",
+    "reason": "guest callback/object needs trampoline"
+  },
+  {
+    "symbol": "SteamAPI_ISteamNetworkingSockets_ReceivedP2PCustomSignal",
+    "reason": "guest callback/object needs trampoline"
+  },
+  {
+    "symbol": "SteamAPI_ISteamNetworkingSockets_CreateListenSocketP2PFakeIP",
+    "reason": "guest callback/object needs trampoline"
+  },
+  {
+    "symbol": "SteamAPI_ISteamNetworkingSockets_CreateFakeUDPPort",
+    "reason": "composite or owned-object return needs adapter"
+  },
+  {
+    "symbol": "SteamAPI_ISteamNetworkingUtils_AllocateMessage",
+    "reason": "composite or owned-object return needs adapter"
+  },
+  {
+    "symbol": "SteamAPI_ISteamNetworkingUtils_InitRelayNetworkAccess",
+    "reason": "SDK inline helper"
+  },
+  {
+    "symbol": "SteamAPI_ISteamNetworkingUtils_SetDebugOutputFunction",
+    "reason": "guest callback/object needs trampoline"
+  },
+  {
+    "symbol": "SteamAPI_ISteamNetworkingUtils_IsFakeIPv4",
+    "reason": "SDK inline helper"
+  },
+  {
+    "symbol": "SteamAPI_ISteamNetworkingUtils_SetGlobalConfigValueInt32",
+    "reason": "SDK inline helper"
+  },
+  {
+    "symbol": "SteamAPI_ISteamNetworkingUtils_SetGlobalConfigValueFloat",
+    "reason": "SDK inline helper"
+  },
+  {
+    "symbol": "SteamAPI_ISteamNetworkingUtils_SetGlobalConfigValueString",
+    "reason": "SDK inline helper"
+  },
+  {
+    "symbol": "SteamAPI_ISteamNetworkingUtils_SetGlobalConfigValuePtr",
+    "reason": "SDK inline helper"
+  },
+  {
+    "symbol": "SteamAPI_ISteamNetworkingUtils_SetConnectionConfigValueInt32",
+    "reason": "SDK inline helper"
+  },
+  {
+    "symbol": "SteamAPI_ISteamNetworkingUtils_SetConnectionConfigValueFloat",
+    "reason": "SDK inline helper"
+  },
+  {
+    "symbol": "SteamAPI_ISteamNetworkingUtils_SetConnectionConfigValueString",
+    "reason": "SDK inline helper"
+  },
+  {
+    "symbol": "SteamAPI_ISteamNetworkingUtils_SetGlobalCallback_SteamNetConnectionStatusChanged",
+    "reason": "SDK inline helper"
+  },
+  {
+    "symbol": "SteamAPI_ISteamNetworkingUtils_SetGlobalCallback_SteamNetAuthenticationStatusChanged",
+    "reason": "SDK inline helper"
+  },
+  {
+    "symbol": "SteamAPI_ISteamNetworkingUtils_SetGlobalCallback_SteamRelayNetworkStatusChanged",
+    "reason": "SDK inline helper"
+  },
+  {
+    "symbol": "SteamAPI_ISteamNetworkingUtils_SetGlobalCallback_FakeIPResult",
+    "reason": "SDK inline helper"
+  },
+  {
+    "symbol": "SteamAPI_ISteamNetworkingUtils_SetGlobalCallback_MessagesSessionRequest",
+    "reason": "SDK inline helper"
+  },
+  {
+    "symbol": "SteamAPI_ISteamNetworkingUtils_SetGlobalCallback_MessagesSessionFailed",
+    "reason": "SDK inline helper"
+  },
+  {
+    "symbol": "SteamAPI_ISteamNetworkingUtils_SetConfigValue",
+    "reason": "network config may contain guest function pointers; needs trampoline"
+  },
+  {
+    "symbol": "SteamAPI_ISteamNetworkingUtils_SetConfigValueStruct",
+    "reason": "SDK inline helper"
+  },
+  {
+    "symbol": "SteamAPI_ISteamNetworkingUtils_GetConfigValue",
+    "reason": "network config may contain guest function pointers; needs trampoline"
+  }
+]

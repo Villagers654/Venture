@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <assemblyIdentity type="win32" name="Venture.Runtime" version="0.1.0.0"/>
+  <!-- JNI VM options use the platform encoding; our paths are UTF-8.
+       https://docs.oracle.com/en/java/javase/21/docs/specs/jni/invocation.html#jni_createjavavm
+       https://learn.microsoft.com/windows/apps/design/globalizing/use-utf8-code-page -->
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <activeCodePage xmlns="http://schemas.microsoft.com/SMI/2019/WindowsSettings">UTF-8</activeCodePage>
+    </windowsSettings>
+  </application>
+</assembly>

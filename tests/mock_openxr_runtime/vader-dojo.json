@@ -1,0 +1,31 @@
+{
+  "events": [
+    {"time":0,"head":{"position":[0,1.6,0],"orientation":[0,0,0,1]},"left":{"trigger":0,"squeeze":0},"right":{"trigger":0,"squeeze":0}},
+    {"time":130,"right":{"aim":{"position":[0.28,1.53,-0.35],"orientation":[0,0,0,1]},"grip":{"position":[0.28,1.53,-0.35],"orientation":[0,0,0,1]}}},
+    {"time":133,"right":{"trigger":1}},
+    {"time":134,"right":{"trigger":0}},
+    {"time":145,"right":{"aim":{"position":[0.28,1.53,-0.58],"orientation":[0,0,0,1]},"grip":{"position":[0.28,1.53,-0.58],"orientation":[0,0,0,1]}}},
+    {"time":148,"right":{"trigger":1}},
+    {"time":149,"right":{"trigger":0}},
+    {"time":160,"right":{"aim":{"position":[0.28,1.53,-0.65],"orientation":[0,0,0,1]},"grip":{"position":[0.28,1.53,-0.65],"orientation":[0,0,0,1]}}},
+    {"time":163,"right":{"trigger":1}},
+    {"time":164,"right":{"trigger":0}},
+    {"time":175,"right":{"aim":{"position":[0.28,1.53,-0.7],"orientation":[0,0,0,1]},"grip":{"position":[0.28,1.53,-0.7],"orientation":[0,0,0,1]}}},
+    {"time":178,"right":{"trigger":1}},
+    {"time":179,"right":{"trigger":0}},
+    {"time":202,"right":{"aim":{"position":[0.28,1.42,-0.7],"orientation":[0,0,0,1]},"grip":{"position":[0.28,1.42,-0.7],"orientation":[0,0,0,1]},"trigger":0}},
+    {"time":204,"right":{"trigger":1}},
+    {"time":205,"right":{"trigger":0}},
+    {"time":245,"right":{"aim":{"position":[0.25,1.25,-0.35],"orientation":[0,0,0,1]},"grip":{"position":[0.25,1.25,-0.35],"orientation":[0,0,0,1]},"trigger":0,"squeeze":0}},
+    {"time":255,"right":{"aim":{"position":[0.28,1.42,-0.58],"orientation":[0,0,0,1]},"grip":{"position":[0.28,1.42,-0.58],"orientation":[0,0,0,1]},"trigger":0}},
+    {"time":258,"right":{"trigger":1}},
+    {"time":259,"right":{"trigger":0}},
+    {"time":406,"right":{"aim":{"position":[-0.05,0.9,-0.9],"orientation":[0,0,0,1]},"grip":{"position":[-0.05,0.9,-0.9],"orientation":[0,0,0,1]},"squeeze":0,"trigger":0}},
+    {"time":409,"right":{"squeeze":1}},
+    {"time":413,"right":{"aim":{"position":[0.1,1.25,-0.5],"orientation":[0,0,0,1]},"grip":{"position":[0.1,1.25,-0.5],"orientation":[0,0,0,1]}}},
+    {"time":415,"right":{"trigger":1}},
+    {"time":416,"right":{"trigger":0}},
+    {"time":421,"right":{"a":true}},
+    {"time":422,"right":{"a":false}}
+  ]
+}

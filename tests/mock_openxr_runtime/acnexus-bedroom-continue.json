@@ -1,0 +1,22 @@
+{
+  "description": "Continue from the complete first-memory bedroom save. Select Continue, then hold A on the mission-loading card and walk forward. Uses the normal saved-game path; run 420 seconds.",
+  "events": [
+    {"time":0,"head":{"position":[0,1.7,0],"orientation":[0,0,0,1]},"left":{"active":true,"aim":{"position":[-0.25,1.25,-0.4],"orientation":[0,0,0,1]},"grip":{"position":[-0.25,1.25,-0.4],"orientation":[0,0,0,1]},"trigger":0,"squeeze":0},"right":{"active":true,"aim":{"position":[0.25,1.25,-0.4],"orientation":[0,0,0,1]},"grip":{"position":[0.25,1.25,-0.4],"orientation":[0,0,0,1]},"trigger":0,"squeeze":0}},
+    {"time":168,"right":{"aim":{"position":[0.25,1.25,-0.4],"orientation":[0.008724,-0.024431,0.000213,0.999663]},"grip":{"position":[0.25,1.25,-0.4],"orientation":[0.008724,-0.024431,0.000213,0.999663]}}},
+    {"time":170,"right":{"trigger":1}},
+    {"time":170.4,"right":{"trigger":0}},
+    {"time":215,"left":{"aim":{"position":[-0.8,1.5,-0.05],"orientation":[0,0,0,1]},"grip":{"position":[-0.8,1.5,-0.05],"orientation":[0,0,0,1]}},"right":{"aim":{"position":[0.8,1.5,-0.05],"orientation":[0,0,0,1]},"grip":{"position":[0.8,1.5,-0.05],"orientation":[0,0,0,1]}}},
+    {"time":222,"right":{"a":true}},
+    {"time":227,"right":{"a":false}},
+    {"time":228,"left":{"aim":{"position":[-0.25,1.25,-0.4],"orientation":[0,0,0,1]},"grip":{"position":[-0.25,1.25,-0.4],"orientation":[0,0,0,1]}},"right":{"aim":{"position":[0.25,1.25,-0.4],"orientation":[0,0,0,1]},"grip":{"position":[0.25,1.25,-0.4],"orientation":[0,0,0,1]}}},
+    {"time":236,"right":{"aim":{"position":[0.0,1.68,-0.2],"orientation":[0.04885,0,0,0.99881]},"grip":{"position":[0.0,1.68,-0.2],"orientation":[0.04885,0,0,0.99881]}}},
+    {"time":238,"right":{"trigger":1}},
+    {"time":238.4,"right":{"trigger":0}},
+    {"time":241,"right":{"aim":{"position":[0.1,1.45,-0.3],"orientation":[0.034899,0,0,0.999391]},"grip":{"position":[0.1,1.45,-0.3],"orientation":[0.034899,0,0,0.999391]}}},
+    {"time":250,"right":{"aim":{"position":[0.25,1.25,-0.4],"orientation":[0,0,0,1]},"grip":{"position":[0.25,1.25,-0.4],"orientation":[0,0,0,1]},"trigger":0,"squeeze":0,"a":false},"left":{"menu":false,"thumbstick":[0,0]}},
+    {"time":300,"right":{"a":true}},
+    {"time":306,"right":{"a":false}},
+    {"time":350,"left":{"thumbstick":[0,0.8]}},
+    {"time":354,"left":{"thumbstick":[0,0]}}
+  ]
+}

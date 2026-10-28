@@ -1,0 +1,140 @@
+{
+ "description": "Fresh-data privacy panel: tick the consent checkbox, aim at Accept and press it, then restore the opening aim. Verified on hardware with cold data; chain bait-intro.json at 140 s.",
+ "events": [
+  {
+   "time": 0,
+   "hand_tracking_active": false,
+   "head": {
+    "position": [
+     0,
+     1.6,
+     0
+    ],
+    "orientation": [
+     0,
+     0,
+     0,
+     1
+    ]
+   },
+   "right": {
+    "aim": {
+     "position": [
+      0.3,
+      1.2,
+      -0.5
+     ],
+     "orientation": [
+      0.18236446666955547,
+      -0.03473270894459647,
+      0.0,
+      0.9826173417082046
+     ]
+    },
+    "grip": {
+     "position": [
+      0.3,
+      1.2,
+      -0.5
+     ],
+     "orientation": [
+      0.18236446666955547,
+      -0.03473270894459647,
+      0.0,
+      0.9826173417082046
+     ]
+    },
+    "trigger": 0
+   },
+   "left": {
+    "trigger": 0
+   }
+  },
+  {
+   "time": 95,
+   "right": {
+    "trigger": 1
+   }
+  },
+  {
+   "time": 99,
+   "right": {
+    "trigger": 0
+   }
+  },
+  {
+   "time": 105,
+   "right": {
+    "aim": {
+     "position": [
+      0.112,
+      1.525,
+      -0.6394
+     ],
+     "orientation": [
+      0.013082,
+      -0.034897,
+      0.000457,
+      0.999305
+     ]
+    },
+    "grip": {
+     "position": [
+      0.112,
+      1.525,
+      -0.6394
+     ],
+     "orientation": [
+      0.013082,
+      -0.034897,
+      0.000457,
+      0.999305
+     ]
+    }
+   }
+  },
+  {
+   "time": 125,
+   "right": {
+    "trigger": 1
+   }
+  },
+  {
+   "time": 129,
+   "right": {
+    "trigger": 0
+   }
+  },
+  {
+   "time": 135,
+   "right": {
+    "aim": {
+     "position": [
+      0.3,
+      1.2,
+      -0.5
+     ],
+     "orientation": [
+      0.18236446666955547,
+      -0.03473270894459647,
+      0.0,
+      0.9826173417082046
+     ]
+    },
+    "grip": {
+     "position": [
+      0.3,
+      1.2,
+      -0.5
+     ],
+     "orientation": [
+      0.18236446666955547,
+      -0.03473270894459647,
+      0.0,
+      0.9826173417082046
+     ]
+    }
+   }
+  }
+ ]
+}

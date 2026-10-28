@@ -1,0 +1,23 @@
+{
+  "description": "Fresh hardware startup verified on main 754a8d0a: New Game at 110 s, difficulty at 140 s, campaign room at 190 s process time. Later campaign movement and pickup timings retain the original route.",
+  "events": [
+    {"time":0,"hand_tracking_active":false,"right":{"aim":{"position":[0.25,1.2,-0.35],"orientation":[0.448,0.133,0,0.8840854031144276]},"grip":{"position":[0.25,1.2,-0.35],"orientation":[0.448,0.133,0,0.8840854031144276]},"trigger":0}},
+    {"time":110,"right":{"trigger":1}},
+    {"time":118,"right":{"trigger":0}},
+    {"time":134,"right":{"aim":{"position":[0.25,1.2,-0.35],"orientation":[0.19,0.23,0,0.9544631999192007]},"grip":{"position":[0.25,1.2,-0.35],"orientation":[0.19,0.23,0,0.9544631999192007]}}},
+    {"time":140,"right":{"trigger":1}},
+    {"time":150,"right":{"trigger":0}},
+    {"time":190,"right":{"aim":{"position":[0.25,1.25,-0.35],"orientation":[0,0,0,1]},"grip":{"position":[0.25,1.25,-0.35],"orientation":[0,0,0,1]},"trigger":0},"left":{"aim":{"position":[-0.25,1.25,-0.35],"orientation":[0,0,0,1]},"grip":{"position":[-0.25,1.25,-0.35],"orientation":[0,0,0,1]},"trigger":0}},
+    {"time":814,"left":{"thumbstick":[1,1]}},
+    {"time":817,"left":{"thumbstick":[0,0]}},
+    {"time":1035,"right":{"aim":{"position":[0,1,-0.7],"orientation":[0,0,0,1]},"grip":{"position":[0,1,-0.7],"orientation":[0,0,0,1]},"squeeze":0,"trigger":0}},
+    {"time":1038,"right":{"squeeze":1}},
+    {"time":1043,"right":{"aim":{"position":[0.25,1.25,-0.4],"orientation":[0,0,0,1]},"grip":{"position":[0.25,1.25,-0.4],"orientation":[0,0,0,1]}}},
+    {"time":1191,"right":{"aim":{"position":[-0.02,0.98,-1.0],"orientation":[0,0,0,1]},"grip":{"position":[-0.02,0.98,-1.0],"orientation":[0,0,0,1]},"squeeze":0,"trigger":0}},
+    {"time":1194,"right":{"squeeze":1}},
+    {"time":1201,"right":{"aim":{"position":[0.25,1.25,-0.4],"orientation":[0,0,0,1]},"grip":{"position":[0.25,1.25,-0.4],"orientation":[0,0,0,1]}}},
+    {"time":1267,"right":{"aim":{"position":[0,1.2,-0.9],"orientation":[0,0,0,1]},"grip":{"position":[0,1.2,-0.9],"orientation":[0,0,0,1]},"squeeze":0,"trigger":0}},
+    {"time":1270,"right":{"squeeze":1,"trigger":1}},
+    {"time":1282,"right":{"aim":{"position":[0.25,1.25,-0.4],"orientation":[0,0,0,1]},"grip":{"position":[0.25,1.25,-0.4],"orientation":[0,0,0,1]},"trigger":0}}
+  ]
+}

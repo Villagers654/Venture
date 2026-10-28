@@ -1,0 +1,22 @@
+#pragma once
+#include "common/paths.h"
+#include <span>
+namespace venture {
+struct SaveMigration {
+  std::size_t moved = 0, conflicts = 0, deferred = 0;
+};
+// Idempotent same-volume moves. Unreadable, linked or busy roots stay in place.
+SaveMigration migrate_saves(const fs::path &data, std::string_view primary,
+                            bool adopt_local = false);
+fs::path account_data_dir(const fs::path &data, std::string_view key,
+                          std::string_view package);
+// Reconcile a dedicated Java/native OBB directory with the installed plan.
+// Hard links are an optimization; other filesystems use atomically published copies.
+void sync_obb_view(const fs::path& install, const fs::path& view,
+                   std::span<const std::string> names);
+void publish_obb_file(const fs::path& source, const fs::path& view);
+void remove_cached_obb_aliases(const fs::path& data, std::string_view package);
+// Removes dedicated OBB views (including legacy cache views), preserving saves.
+void remove_obb_aliases(const fs::path &data, std::string_view package,
+                        const fs::path &install);
+} // namespace venture

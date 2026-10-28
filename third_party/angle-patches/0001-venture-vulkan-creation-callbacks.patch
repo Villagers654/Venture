@@ -1,0 +1,485 @@
+diff --git a/extensions/EGL_VENTURE_vulkan_creation_callbacks.txt b/extensions/EGL_VENTURE_vulkan_creation_callbacks.txt
+new file mode 100644
+index 0000000..750eb15
+--- /dev/null
++++ b/extensions/EGL_VENTURE_vulkan_creation_callbacks.txt
+@@ -0,0 +1,66 @@
++EGL_VENTURE_vulkan_creation_callbacks (Venture private, version 1)
++
++This patch implements the creation-hook protocol proposed in Venture's
++2026-10-08 r3b-angle-vulkan report, "Concrete common initialization and frame
++protocol". It is not a Khronos-registered extension. The private token values
++0x51500001 and 0x51500002 must be kept out of guest-facing extension registries.
++
++Include EGL/eglext_angle_venture.h. Pass an EGLAttrib-sized pointer to an
++EGLVulkanCreationCallbacksVENTURE as the
++EGL_PLATFORM_ANGLE_VULKAN_CREATION_CALLBACKS_VENTURE display attribute to the
++EGL 1.5 eglGetPlatformDisplay function. Do not use the EGLint-sized attribute
++list of eglGetPlatformDisplayEXT: it truncates pointers on 64-bit hosts.
++Explicit EGL_PLATFORM_ANGLE_ANGLE and EGL_PLATFORM_ANGLE_TYPE_VULKAN_ANGLE are
++required. Zero selects unmodified stock behavior.
++
++The client extension string advertises availability. The table's version must
++be 1, size must be at least sizeof(the version 1 table), and all four functions
++must be non-null. Invalid tables make eglInitialize fail with EGL_BAD_ATTRIBUTE.
++The pointer must refer to readable host memory. It is part of display identity:
++different table pointers produce distinct displays. Keep the table address,
++contents, callback code and userData valid and unchanged throughout the display's
++lifetime, including reinitialization after eglTerminate. ANGLE copies the table
++at initialization; it never invokes guest machine code.
++
++Callbacks are synchronous on the initializing thread. Do not throw exceptions
++across this C ABI or reenter EGL/GLES. The create-info structures, pNext chains,
++extension name arrays and allocator are borrowed only for the call. The loader
++argument is the real Vulkan resolver used by ANGLE, not ANGLE's device-query
++resolver (whose create functions are wrappers). In an XR_KHR_vulkan_enable2
++integration pass this resolver to xrCreateVulkanInstanceKHR and
++xrCreateVulkanDeviceKHR, and check both XrResult and VkResult. The physical-device
++callback can call xrGetVulkanGraphicsDevice2KHR. Its returned handle must be one
++of the supplied instance's enumerated devices; otherwise initialization fails,
++without falling back to another GPU.
++
++Preserve all ANGLE-requested features, extensions, queue create infos, and Vulkan
++API requirements. An XR runtime may add requirements. The integration must obey
++the XR API-version bounds; return VK_ERROR_INCOMPATIBLE_DRIVER for an empty
++intersection. If additions need to be recorded, wrap the supplied resolver when
++passing it to OpenXR, as described by the enable2 specification. The existing
++EGL_VULKAN_*_EXTENSIONS_ANGLE / FEATURES_ANGLE queries describe ANGLE's requests,
++not additions made inside the callbacks. The caller owns that final record.
++
++On failure return a Vulkan error with a null output handle; ANGLE translates it
++through its existing error path. Successful instance/device creation immediately
++transfers ownership to ANGLE, including cleanup if a later initialization step
++fails. ANGLE destroys them with its original allocator. They must be created
++through the supplied loader and must not be destroyed by the caller.
++
++Callback mode creates one unprotected graphics queue. Context-priority and
++protected-content extensions are not advertised in this mode. deviceReady
++reports the actual VkQueue, queue family and queue index after queue retrieval.
++These are borrowed handles, usable only after eglInitialize succeeds and before
++eglTerminate. Destroy XR sessions/swapchains and other borrowers before terminating
++ANGLE. A later initialization failure invalidates the deviceReady handles.
++
++eglQueryDeviceAttribEXT accepts EGL_VULKAN_QUEUE_INDEX_VENTURE and returns the
++index of the queue already exposed by EGL_VULKAN_QUEUE_ANGLE (Medium priority).
++The existing, misspelled EGL_VULKAN_QUEUE_FAMILIY_INDEX_ANGLE returns its family.
++This query also works for stock displays; stock queue-selection policy is unchanged.
++
++Share the queue using eglLockVulkanQueueANGLE / eglUnlockVulkanQueueANGLE around
++external queue operations; never hold that lock while calling GLES entrypoints
++that submit. This is CPU external synchronization, not GPU completion. This
++extension does not change image import, image layout, submission or XR swapchain
++lifetime rules and is not a general external-device adoption API.
+diff --git a/include/EGL/eglext_angle.h b/include/EGL/eglext_angle.h
+index 2daad19..9e740c3 100644
+--- a/include/EGL/eglext_angle.h
++++ b/include/EGL/eglext_angle.h
+@@ -469,4 +469,11 @@ EGLAPI void EGLAPIENTRY eglSetValidationEnabledANGLE(EGLBoolean validationState)
+ 
+ // clang-format on
+ 
++/* Venture private tokens, not allocated by the Khronos registry. */
++#ifndef EGL_VENTURE_vulkan_creation_callbacks
++#define EGL_VENTURE_vulkan_creation_callbacks 1
++#define EGL_PLATFORM_ANGLE_VULKAN_CREATION_CALLBACKS_VENTURE 0x51500001
++#define EGL_VULKAN_QUEUE_INDEX_VENTURE 0x51500002
++#endif
++
+ #endif  // INCLUDE_EGL_EGLEXT_ANGLE_
+diff --git a/include/EGL/eglext_angle_venture.h b/include/EGL/eglext_angle_venture.h
+new file mode 100644
+index 0000000..4551e62
+--- /dev/null
++++ b/include/EGL/eglext_angle_venture.h
+@@ -0,0 +1,39 @@
++// Copyright 2026 The ANGLE Project Authors. All rights reserved.
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++#ifndef INCLUDE_EGL_EGLEXT_ANGLE_VENTURE_H_
++#define INCLUDE_EGL_EGLEXT_ANGLE_VENTURE_H_
++
++#include <stdint.h>
++#include <EGL/egl.h>
++#include <EGL/eglext.h>
++#include <EGL/eglext_angle.h>
++#include <vulkan/vulkan_core.h>
++
++#define EGL_VULKAN_CREATION_CALLBACKS_VERSION_VENTURE 1
++
++// Host C ABI, never a guest callback table. See
++// extensions/EGL_VENTURE_vulkan_creation_callbacks.txt for ownership and lifetime.
++typedef struct EGLVulkanCreationCallbacksVENTURE
++{
++    uint32_t version;
++    uint32_t size;
++    void *userData;
++    VkResult (VKAPI_PTR *createInstance)(void *userData, PFN_vkGetInstanceProcAddr loader,
++                                        const VkInstanceCreateInfo *info,
++                                        const VkAllocationCallbacks *allocator,
++                                        VkInstance *instance);
++    VkResult (VKAPI_PTR *choosePhysicalDevice)(void *userData, PFN_vkGetInstanceProcAddr loader,
++                                              VkInstance instance, uint32_t deviceCount,
++                                              const VkPhysicalDevice *devices,
++                                              VkPhysicalDevice *physicalDevice);
++    VkResult (VKAPI_PTR *createDevice)(void *userData, PFN_vkGetInstanceProcAddr loader,
++                                      VkInstance instance, VkPhysicalDevice physicalDevice,
++                                      const VkDeviceCreateInfo *info,
++                                      const VkAllocationCallbacks *allocator, VkDevice *device);
++    void (VKAPI_PTR *deviceReady)(void *userData, VkInstance instance,
++                                  VkPhysicalDevice physicalDevice, VkDevice device,
++                                  uint32_t queueFamily, uint32_t queueIndex, VkQueue queue);
++} EGLVulkanCreationCallbacksVENTURE;
++
++#endif  // INCLUDE_EGL_EGLEXT_ANGLE_VENTURE_H_
+diff --git a/src/libANGLE/Caps.cpp b/src/libANGLE/Caps.cpp
+index 3fa2184..be03db2 100644
+--- a/src/libANGLE/Caps.cpp
++++ b/src/libANGLE/Caps.cpp
+@@ -1309,6 +1309,7 @@ std::vector<std::string> ClientExtensions::getStrings() const
+     InsertExtensionString("EGL_ANGLE_platform_angle_opengl",                  platformANGLEOpenGL,                &extensionStrings);
+     InsertExtensionString("EGL_ANGLE_platform_angle_null",                    platformANGLENULL,                  &extensionStrings);
+     InsertExtensionString("EGL_ANGLE_platform_angle_webgpu",                  platformANGLEWebgpu,                &extensionStrings);
++    InsertExtensionString("EGL_VENTURE_vulkan_creation_callbacks", vulkanCreationCallbacksVENTURE, &extensionStrings);
+     InsertExtensionString("EGL_ANGLE_platform_angle_vulkan",                  platformANGLEVulkan,                &extensionStrings);
+     InsertExtensionString("EGL_ANGLE_platform_angle_vulkan_device_uuid",      platformANGLEVulkanDeviceUUID,      &extensionStrings);
+     InsertExtensionString("EGL_ANGLE_platform_angle_metal",                   platformANGLEMetal,                 &extensionStrings);
+diff --git a/src/libANGLE/Caps.h b/src/libANGLE/Caps.h
+index ab70456..d049132 100644
+--- a/src/libANGLE/Caps.h
++++ b/src/libANGLE/Caps.h
+@@ -815,6 +815,7 @@ struct ClientExtensions
+ 
+     // EGL_ANGLE_platform_angle_vulkan
+     bool platformANGLEVulkan = false;
++    bool vulkanCreationCallbacksVENTURE = false;
+ 
+     // EGL_ANGLE_platform_angle_vulkan_device_uuid
+     bool platformANGLEVulkanDeviceUUID = false;
+diff --git a/src/libANGLE/Display.cpp b/src/libANGLE/Display.cpp
+index 9c3c7ee..6ecbfa0 100644
+--- a/src/libANGLE/Display.cpp
++++ b/src/libANGLE/Display.cpp
+@@ -271,6 +271,7 @@ struct ANGLEPlatformDisplay
+                          EGLAttrib vulkanDeviceUUID,
+                          EGLAttrib vulkanDriverUUID,
+                          EGLAttrib vulkanDriverID,
++                         EGLAttrib vulkanCreationCallbacks,
+                          EGLAttrib enabledFeatureOverrides,
+                          EGLAttrib disabledFeatureOverrides,
+                          EGLAttrib disableAllNonOverriddenFeatures)
+@@ -285,6 +286,7 @@ struct ANGLEPlatformDisplay
+           vulkanDeviceUUID(EGLAttribToVulkanUUID(vulkanDeviceUUID)),
+           vulkanDriverUUID(EGLAttribToVulkanUUID(vulkanDriverUUID)),
+           vulkanDriverID(vulkanDriverID),
++          vulkanCreationCallbacks(vulkanCreationCallbacks),
+           disableAllNonOverriddenFeatures(static_cast<bool>(disableAllNonOverriddenFeatures))
+     {
+         enabledFeatureOverridesHash =
+@@ -297,7 +299,7 @@ struct ANGLEPlatformDisplay
+     {
+         return std::tie(nativeDisplayType, powerPreference, platformANGLEType, deviceIdHigh,
+                         deviceIdLow, displayKey, nativePlatformType, x11VisualID, vulkanDeviceUUID,
+-                        vulkanDriverUUID, vulkanDriverID, enabledFeatureOverridesHash,
++                        vulkanDriverUUID, vulkanDriverID, vulkanCreationCallbacks, enabledFeatureOverridesHash,
+                         disabledFeatureOverridesHash, disableAllNonOverriddenFeatures);
+     }
+ 
+@@ -312,6 +314,7 @@ struct ANGLEPlatformDisplay
+     VulkanUUID vulkanDeviceUUID{};
+     VulkanUUID vulkanDriverUUID{};
+     EGLAttrib vulkanDriverID{0};
++    EGLAttrib vulkanCreationCallbacks{0};
+     size_t enabledFeatureOverridesHash;
+     size_t disabledFeatureOverridesHash;
+     bool disableAllNonOverriddenFeatures;
+@@ -1250,10 +1253,12 @@ Display *Display::GetDisplayFromNativeDisplay(EGLenum platform,
+         updatedAttribMap.get(EGL_PLATFORM_ANGLE_VULKAN_DRIVER_UUID_ANGLE, 0);
+     const EGLAttrib vulkanDriverID =
+         updatedAttribMap.get(EGL_PLATFORM_ANGLE_VULKAN_DRIVER_ID_ANGLE, 0);
++    const EGLAttrib vulkanCreationCallbacks =
++        updatedAttribMap.get(EGL_PLATFORM_ANGLE_VULKAN_CREATION_CALLBACKS_VENTURE, 0);
+     const ANGLEPlatformDisplay combinedDisplayKey(
+         nativeDisplay, powerPreference, platformANGLEType, deviceIdHigh, deviceIdLow, displayKey,
+         nativePlatformType, x11VisualID, vulkanDeviceUUID, vulkanDriverUUID, vulkanDriverID,
+-        enabledFeatureOverrides, disabledFeatureOverrides, disableAllNonOverriddenFeatures);
++        vulkanCreationCallbacks, enabledFeatureOverrides, disabledFeatureOverrides, disableAllNonOverriddenFeatures);
+ 
+     display = GetANGLEPlatformDisplayMap()->getOrInsert(
+         combinedDisplayKey, [platform, nativeDisplay]() -> Display * {
+@@ -2493,6 +2498,7 @@ static ClientExtensions GenerateClientExtensions()
+ 
+ #if defined(ANGLE_ENABLE_VULKAN)
+     extensions.platformANGLEVulkan           = true;
++    extensions.vulkanCreationCallbacksVENTURE = true;
+     extensions.platformANGLEVulkanDeviceUUID = true;
+     extensions.platformANGLEDeviceId         = true;
+ #endif
+diff --git a/src/libANGLE/renderer/vulkan/DeviceVk.cpp b/src/libANGLE/renderer/vulkan/DeviceVk.cpp
+index fddd054..a9d1396 100644
+--- a/src/libANGLE/renderer/vulkan/DeviceVk.cpp
++++ b/src/libANGLE/renderer/vulkan/DeviceVk.cpp
+@@ -92,6 +92,13 @@ egl::Error DeviceVk::getAttribute(const egl::Display *display, EGLint attribute,
+             *outValue = mRenderer->getQueue(egl::ContextPriority::Medium);
+             return egl::NoError();
+         }
++        case EGL_VULKAN_QUEUE_INDEX_VENTURE:
++        {
++            intptr_t index = static_cast<intptr_t>(
++                mRenderer->getDeviceQueueIndex(egl::ContextPriority::Medium).queueIndex());
++            *outValue = reinterpret_cast<void *>(index);
++            return egl::NoError();
++        }
+         case EGL_VULKAN_QUEUE_FAMILIY_INDEX_ANGLE:
+         {
+             intptr_t index = static_cast<intptr_t>(mRenderer->getQueueFamilyIndex());
+diff --git a/src/libANGLE/renderer/vulkan/DisplayVk.cpp b/src/libANGLE/renderer/vulkan/DisplayVk.cpp
+index 072ab0b..5d5bba3 100644
+--- a/src/libANGLE/renderer/vulkan/DisplayVk.cpp
++++ b/src/libANGLE/renderer/vulkan/DisplayVk.cpp
+@@ -181,10 +181,21 @@ egl::Error DisplayVk::initialize(egl::Display *display)
+     const VkDriverId preferredDriverId =
+         static_cast<VkDriverId>(attribs.get(EGL_PLATFORM_ANGLE_VULKAN_DRIVER_ID_ANGLE, 0));
+ 
++    const auto *callbacks = reinterpret_cast<const EGLVulkanCreationCallbacksVENTURE *>(
++        attribs.get(EGL_PLATFORM_ANGLE_VULKAN_CREATION_CALLBACKS_VENTURE, 0));
++    if (callbacks &&
++        (callbacks->version != EGL_VULKAN_CREATION_CALLBACKS_VERSION_VENTURE ||
++         callbacks->size < sizeof(EGLVulkanCreationCallbacksVENTURE) ||
++         !callbacks->createInstance || !callbacks->choosePhysicalDevice ||
++         !callbacks->createDevice || !callbacks->deviceReady))
++    {
++        return egl::Error(EGL_BAD_ATTRIBUTE, "Invalid Venture Vulkan callback table");
++    }
++
+     angle::Result result = mRenderer->initialize(
+         this, this, desiredICD, preferredVendorId, preferredDeviceId, preferredDeviceUuid,
+         preferredDriverUuid, preferredDriverId, useDebugLayers, getWSIExtension(), getWSILayer(),
+-        getWindowSystem(), mState.featureOverrides);
++        getWindowSystem(), mState.featureOverrides, callbacks);
+     ANGLE_TRY(angle::ToEGL(result, EGL_NOT_INITIALIZED));
+ 
+     mDeviceQueueIndex = mRenderer->getDeviceQueueIndex(egl::ContextPriority::Medium);
+@@ -562,7 +573,8 @@ void DisplayVk::generateExtensions(egl::DisplayExtensions *outExtensions) const
+     outExtensions->imageDmaBufImportModifiersEXT = outExtensions->imageDmaBufImportEXT;
+ 
+     // Disable context priority when non-zero memory init is enabled. This enforces a queue order.
+-    outExtensions->contextPriority = !getFeatures().allocateNonZeroMemory.enabled;
++    outExtensions->contextPriority = !getFeatures().allocateNonZeroMemory.enabled &&
++                                     !mRenderer->hasCreationCallbacksVENTURE();
+     outExtensions->noConfigContext = true;
+ 
+ #if defined(ANGLE_PLATFORM_ANDROID) || defined(ANGLE_PLATFORM_LINUX)
+diff --git a/src/libANGLE/renderer/vulkan/vk_renderer.cpp b/src/libANGLE/renderer/vulkan/vk_renderer.cpp
+index dc19f30..987c6c8 100644
+--- a/src/libANGLE/renderer/vulkan/vk_renderer.cpp
++++ b/src/libANGLE/renderer/vulkan/vk_renderer.cpp
+@@ -2491,8 +2491,10 @@ angle::Result Renderer::initialize(vk::ErrorContext *context,
+                                    const char *wsiExtension,
+                                    const char *wsiLayer,
+                                    angle::NativeWindowSystem nativeWindowSystem,
+-                                   const angle::FeatureOverrides &featureOverrides)
++                                   const angle::FeatureOverrides &featureOverrides,
++                                   const EGLVulkanCreationCallbacksVENTURE *creationCallbacks)
+ {
++    mCreationCallbacks = creationCallbacks ? *creationCallbacks : EGLVulkanCreationCallbacksVENTURE{};
+     const std::string enableVulkanApiPerfCountersProp = angle::GetEnvironmentVarOrAndroidProperty(
+         "ANGLE_ENABLE_VULKAN_API_PERF_COUNTERS", "debug.angle.enable_vulkan_api_perf_counters");
+     if (enableVulkanApiPerfCountersProp == "1")
+@@ -2673,7 +2675,16 @@ angle::Result Renderer::initialize(vk::ErrorContext *context,
+ 
+     {
+         ANGLE_SCOPED_DISABLE_MSAN();
+-        ANGLE_VK_TRY(context, VK_CALL(vkCreateInstance, &instanceInfo, nullptr, &mInstance));
++        if (hasCreationCallbacksVENTURE())
++        {
++            ANGLE_VK_TRY(context, mCreationCallbacks.createInstance(
++                mCreationCallbacks.userData, vkGetInstanceProcAddr, &instanceInfo, nullptr, &mInstance));
++            ANGLE_VK_CHECK(context, mInstance != VK_NULL_HANDLE, VK_ERROR_INITIALIZATION_FAILED);
++        }
++        else
++        {
++            ANGLE_VK_TRY(context, VK_CALL(vkCreateInstance, &instanceInfo, nullptr, &mInstance));
++        }
+ #if defined(ANGLE_SHARED_LIBVULKAN)
+         // Load volk if we are linking dynamically
+         VK_CALL(volkLoadInstance, mInstance);
+@@ -2720,6 +2731,18 @@ angle::Result Renderer::initialize(vk::ErrorContext *context,
+     std::vector<VkPhysicalDevice> physicalDevices(physicalDeviceCount);
+     ANGLE_VK_TRY(context, VK_CALL(vkEnumeratePhysicalDevices, mInstance, &physicalDeviceCount,
+                                   physicalDevices.data()));
++    if (hasCreationCallbacksVENTURE())
++    {
++        VkPhysicalDevice selected = VK_NULL_HANDLE;
++        ANGLE_VK_TRY(context, mCreationCallbacks.choosePhysicalDevice(
++            mCreationCallbacks.userData, vkGetInstanceProcAddr, mInstance,
++            physicalDeviceCount, physicalDevices.data(), &selected));
++        ANGLE_VK_CHECK(context,
++            std::find(physicalDevices.begin(), physicalDevices.end(), selected) != physicalDevices.end(),
++            VK_ERROR_INITIALIZATION_FAILED);
++        // Retain ANGLE's property/driver queries, with no fallback to another GPU.
++        physicalDevices.assign(1, selected);
++    }
+     VK_CALL_WITH_API(
+         VulkanApiFunction::vkGetPhysicalDeviceProperties2,
+         ChoosePhysicalDevice(vkGetPhysicalDeviceProperties2, physicalDevices, mEnabledICD,
+@@ -2837,6 +2860,12 @@ angle::Result Renderer::initialize(vk::ErrorContext *context,
+     // present because of EGL_KHR_surfaceless_context or simply pbuffers.  So far, only MoltenVk
+     // seems to expose multiple queue families, and using the first queue family is fine with
+     // it.
++    if (hasCreationCallbacksVENTURE())
++    {
++        // Venture r3b's common initialization protocol: one unprotected queue
++        // shared with XR_KHR_vulkan_enable2, including its actual queue index.
++        mFeatures.supportsProtectedMemory.enabled = false;
++    }
+     ANGLE_TRY(createDeviceAndQueue(context, firstQueueFamily, globalPriority));
+ 
+     // Initialize the format table.
+@@ -4845,6 +4874,12 @@ angle::Result Renderer::createDeviceAndQueue(vk::ErrorContext *context,
+     uint32_t queueCount = std::min(queueFamily.getDeviceQueueCount(),
+                                    static_cast<uint32_t>(egl::ContextPriority::EnumCount));
+ 
++    if (hasCreationCallbacksVENTURE())
++    {
++        queueCount = 1;
++        globalPriority = VK_QUEUE_GLOBAL_PRIORITY_MEDIUM;
++    }
++
+     // We use VK_QUEUE_GLOBAL_PRIORITY_REALTIME only if queueCount >=3
+     if (globalPriority == VK_QUEUE_GLOBAL_PRIORITY_REALTIME && queueCount < 3)
+     {
+@@ -4950,7 +4985,17 @@ angle::Result Renderer::createDeviceAndQueue(vk::ErrorContext *context,
+     // may also generate messages.
+     initializeValidationMessageSuppressions();
+ 
+-    ANGLE_VK_TRY(context, VK_CALL(vkCreateDevice, mPhysicalDevice, &createInfo, nullptr, &mDevice));
++    if (hasCreationCallbacksVENTURE())
++    {
++        ANGLE_VK_TRY(context, mCreationCallbacks.createDevice(
++            mCreationCallbacks.userData, vkGetInstanceProcAddr, mInstance, mPhysicalDevice,
++            &createInfo, nullptr, &mDevice));
++        ANGLE_VK_CHECK(context, mDevice != VK_NULL_HANDLE, VK_ERROR_INITIALIZATION_FAILED);
++    }
++    else
++    {
++        ANGLE_VK_TRY(context, VK_CALL(vkCreateDevice, mPhysicalDevice, &createInfo, nullptr, &mDevice));
++    }
+ #if defined(ANGLE_SHARED_LIBVULKAN)
+     // Load volk if we are loading dynamically
+     VK_CALL(volkLoadDevice, mDevice);
+@@ -4959,6 +5004,12 @@ angle::Result Renderer::createDeviceAndQueue(vk::ErrorContext *context,
+     initDeviceExtensionEntryPoints();
+ 
+     ANGLE_TRY(mCommandQueue.init(context, queueFamily, enableProtectedContent, queueCount));
++    if (hasCreationCallbacksVENTURE())
++    {
++        const DeviceQueueIndex queue = getDeviceQueueIndex(egl::ContextPriority::Medium);
++        mCreationCallbacks.deviceReady(mCreationCallbacks.userData, mInstance, mPhysicalDevice,
++            mDevice, queue.familyIndex(), queue.queueIndex(), getQueue(egl::ContextPriority::Medium));
++    }
+     ANGLE_TRY(mCleanUpThread.init());
+ 
+     if (mFeatures.forceMaxUniformBufferSize16KB.enabled)
+diff --git a/src/libANGLE/renderer/vulkan/vk_renderer.h b/src/libANGLE/renderer/vulkan/vk_renderer.h
+index 19c3aac..4fba67a 100644
+--- a/src/libANGLE/renderer/vulkan/vk_renderer.h
++++ b/src/libANGLE/renderer/vulkan/vk_renderer.h
+@@ -36,6 +36,7 @@
+ #include "libANGLE/renderer/vulkan/vk_mem_alloc_wrapper.h"
+ #include "libANGLE/renderer/vulkan/vk_resource.h"
+ #include "vulkan/vulkan_core.h"
++#include "EGL/eglext_angle_venture.h"
+ 
+ namespace angle
+ {
+@@ -175,7 +176,8 @@ class Renderer : angle::NonCopyable
+                              const char *wsiExtension,
+                              const char *wsiLayer,
+                              angle::NativeWindowSystem nativeWindowSystem,
+-                             const angle::FeatureOverrides &featureOverrides);
++                             const angle::FeatureOverrides &featureOverrides,
++                             const EGLVulkanCreationCallbacksVENTURE *creationCallbacks = nullptr);
+ 
+     // Reload volk vk* function ptrs if needed for an already initialized Renderer
+     void reloadVolkIfNeeded() const;
+@@ -255,6 +257,7 @@ class Renderer : angle::NonCopyable
+     const ShPixelLocalStorageOptions &getNativePixelLocalStorageOptions() const;
+     void initializeFrontendFeatures(angle::FrontendFeatures *features) const;
+ 
++    bool hasCreationCallbacksVENTURE() const { return mCreationCallbacks.createInstance != nullptr; }
+     uint32_t getQueueFamilyIndex() const { return mCurrentQueueFamilyIndex; }
+     const VkQueueFamilyProperties &getQueueFamilyProperties() const
+     {
+@@ -969,6 +972,7 @@ class Renderer : angle::NonCopyable
+     angle::ShadingRateMap mSupportedFragmentShadingRateEXTSampleCounts;
+ 
+     std::vector<VkQueueFamilyProperties2> mQueueFamilyProperties2;
++    EGLVulkanCreationCallbacksVENTURE mCreationCallbacks = {};
+     uint32_t mCurrentQueueFamilyIndex;
+     uint32_t mMaxVertexAttribDivisor;
+     VkDeviceSize mMaxVertexAttribStride;
+diff --git a/src/libANGLE/validationEGL.cpp b/src/libANGLE/validationEGL.cpp
+index a06d98e..f4150ee 100644
+--- a/src/libANGLE/validationEGL.cpp
++++ b/src/libANGLE/validationEGL.cpp
+@@ -686,6 +686,13 @@ bool ValidateGetPlatformDisplayCommon(const ValidationContext *val,
+ 
+     attribMap.initializeWithoutValidation();
+ 
++    if (attribMap.contains(EGL_PLATFORM_ANGLE_VULKAN_CREATION_CALLBACKS_VENTURE) &&
++        platform != EGL_PLATFORM_ANGLE_ANGLE)
++    {
++        val->setError(EGL_BAD_ATTRIBUTE, "Venture callbacks require the ANGLE platform");
++        return false;
++    }
++
+     if (platform != EGL_PLATFORM_DEVICE_EXT)
+     {
+         EGLAttrib platformType       = EGL_PLATFORM_ANGLE_TYPE_DEFAULT_ANGLE;
+@@ -695,6 +702,7 @@ bool ValidateGetPlatformDisplayCommon(const ValidationContext *val,
+         bool luidSpecified           = false;
+         bool deviceIdSpecified       = false;
+         bool vkDeviceUuidSpecified   = false;
++        bool vulkanCreationCallbacksSpecified = false;
+ 
+         Optional<EGLAttrib> majorVersion;
+         Optional<EGLAttrib> minorVersion;
+@@ -862,6 +870,15 @@ bool ValidateGetPlatformDisplayCommon(const ValidationContext *val,
+                     luidSpecified = true;
+                     break;
+ 
++                case EGL_PLATFORM_ANGLE_VULKAN_CREATION_CALLBACKS_VENTURE:
++                    if (!clientExtensions.vulkanCreationCallbacksVENTURE)
++                    {
++                        val->setError(EGL_BAD_ATTRIBUTE, "Venture Vulkan callbacks unavailable");
++                        return false;
++                    }
++                    vulkanCreationCallbacksSpecified = true;
++                    break;
++
+                 case EGL_PLATFORM_ANGLE_VULKAN_DEVICE_UUID_ANGLE:
+                 case EGL_PLATFORM_ANGLE_VULKAN_DRIVER_UUID_ANGLE:
+                 case EGL_PLATFORM_ANGLE_VULKAN_DRIVER_ID_ANGLE:
+@@ -1070,6 +1087,14 @@ bool ValidateGetPlatformDisplayCommon(const ValidationContext *val,
+             }
+         }
+ 
++        if (vulkanCreationCallbacksSpecified &&
++            (platform != EGL_PLATFORM_ANGLE_ANGLE ||
++             platformType != EGL_PLATFORM_ANGLE_TYPE_VULKAN_ANGLE))
++        {
++            val->setError(EGL_BAD_ATTRIBUTE, "Venture callbacks require explicit ANGLE Vulkan");
++            return false;
++        }
++
+         if (platformType == EGL_PLATFORM_ANGLE_TYPE_VULKAN_ANGLE)
+         {
+             if ((majorVersion.valid() && majorVersion.value() != 1) ||
+@@ -6930,6 +6955,7 @@ bool ValidateQueryDeviceAttribEXT(const ValidationContext *val,
+         case EGL_VULKAN_DEVICE_EXTENSIONS_ANGLE:
+         case EGL_VULKAN_FEATURES_ANGLE:
+         case EGL_VULKAN_QUEUE_ANGLE:
++        case EGL_VULKAN_QUEUE_INDEX_VENTURE:
+         case EGL_VULKAN_QUEUE_FAMILIY_INDEX_ANGLE:
+         case EGL_VULKAN_GET_INSTANCE_PROC_ADDR:
+             if (!device->getExtensions().deviceVulkan)

@@ -1,0 +1,734 @@
+{
+  "description": "Cold launch: Settings, VR, Standing calibration, Hands Position Close, Input guide, Done, New Game, Classic Cooking School kitchen. Hold the pointer on each control before pressing and through release.",
+  "events": [
+    {
+      "time": 0,
+      "head": {
+        "position": [
+          0,
+          1.6,
+          0
+        ],
+        "orientation": [
+          0,
+          0,
+          0,
+          1
+        ]
+      },
+      "left": {
+        "aim": {
+          "position": [
+            -0.25,
+            1.25,
+            -0.35
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        "grip": {
+          "position": [
+            -0.25,
+            1.25,
+            -0.35
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        "trigger": 0,
+        "squeeze": 0
+      },
+      "right": {
+        "aim": {
+          "position": [
+            0.25,
+            1.25,
+            -0.35
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        "grip": {
+          "position": [
+            0.25,
+            1.25,
+            -0.35
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        "trigger": 0,
+        "squeeze": 0
+      }
+    },
+    {
+      "time": 90,
+      "head": {
+        "orientation": [
+          -0.2588190451,
+          0,
+          0,
+          0.9659258263
+        ]
+      },
+      "right": {
+        "aim": {
+          "position": [
+            -0.18,
+            1.25,
+            -0.35
+          ],
+          "orientation": [
+            -0.19,
+            -0.015,
+            0,
+            0.9816694963173705
+          ]
+        },
+        "grip": {
+          "position": [
+            -0.18,
+            1.25,
+            -0.35
+          ],
+          "orientation": [
+            -0.19,
+            -0.015,
+            0,
+            0.9816694963173705
+          ]
+        }
+      }
+    },
+    {
+      "time": 110,
+      "right": {
+        "trigger": 1
+      }
+    },
+    {
+      "time": 114,
+      "right": {
+        "trigger": 0
+      }
+    },
+    {
+      "time": 130,
+      "right": {
+        "aim": {
+          "position": [
+            0.32,
+            1.25,
+            -0.35
+          ],
+          "orientation": [
+            -0.1,
+            -0.03,
+            0,
+            0.9945350672550466
+          ]
+        },
+        "grip": {
+          "position": [
+            0.32,
+            1.25,
+            -0.35
+          ],
+          "orientation": [
+            -0.1,
+            -0.03,
+            0,
+            0.9945350672550466
+          ]
+        },
+        "trigger": 0,
+        "squeeze": 0
+      }
+    },
+    {
+      "time": 150,
+      "right": {
+        "trigger": 1
+      }
+    },
+    {
+      "time": 154,
+      "right": {
+        "trigger": 0
+      }
+    },
+    {
+      "time": 170,
+      "right": {
+        "aim": {
+          "position": [
+            0.32,
+            1.25,
+            -0.35
+          ],
+          "orientation": [
+            -0.38,
+            0.02,
+            0,
+            0.9247702417357514
+          ]
+        },
+        "grip": {
+          "position": [
+            0.32,
+            1.25,
+            -0.35
+          ],
+          "orientation": [
+            -0.38,
+            0.02,
+            0,
+            0.9247702417357514
+          ]
+        },
+        "trigger": 0,
+        "squeeze": 0
+      }
+    },
+    {
+      "time": 190,
+      "right": {
+        "trigger": 1
+      }
+    },
+    {
+      "time": 194,
+      "right": {
+        "trigger": 0
+      }
+    },
+    {
+      "time": 210,
+      "right": {
+        "aim": {
+          "position": [
+            0,
+            1.6,
+            -0.8
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1.0
+          ]
+        },
+        "grip": {
+          "position": [
+            0,
+            1.6,
+            -0.8
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1.0
+          ]
+        },
+        "trigger": 0,
+        "squeeze": 0
+      }
+    },
+    {
+      "time": 226,
+      "right": {
+        "trigger": 1,
+        "squeeze": 1
+      }
+    },
+    {
+      "time": 230,
+      "right": {
+        "trigger": 0,
+        "squeeze": 0
+      }
+    },
+    {
+      "time": 240,
+      "right": {
+        "aim": {
+          "position": [
+            0,
+            1.8,
+            -0.8
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1.0
+          ]
+        },
+        "grip": {
+          "position": [
+            0,
+            1.8,
+            -0.8
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1.0
+          ]
+        },
+        "trigger": 0,
+        "squeeze": 0
+      }
+    },
+    {
+      "time": 246,
+      "right": {
+        "trigger": 1
+      }
+    },
+    {
+      "time": 250,
+      "right": {
+        "trigger": 0
+      }
+    },
+    {
+      "time": 260,
+      "right": {
+        "aim": {
+          "position": [
+            0.32,
+            1.25,
+            -0.35
+          ],
+          "orientation": [
+            -0.1,
+            -0.03,
+            0,
+            0.9945350672550466
+          ]
+        },
+        "grip": {
+          "position": [
+            0.32,
+            1.25,
+            -0.35
+          ],
+          "orientation": [
+            -0.1,
+            -0.03,
+            0,
+            0.9945350672550466
+          ]
+        },
+        "trigger": 0,
+        "squeeze": 0
+      }
+    },
+    {
+      "time": 280,
+      "right": {
+        "trigger": 1
+      }
+    },
+    {
+      "time": 284,
+      "right": {
+        "trigger": 0
+      }
+    },
+    {
+      "time": 320,
+      "right": {
+        "aim": {
+          "position": [
+            0.42,
+            1.315,
+            -0.8
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1.0
+          ]
+        },
+        "grip": {
+          "position": [
+            0.42,
+            1.315,
+            -0.8
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1.0
+          ]
+        },
+        "trigger": 0,
+        "squeeze": 0
+      }
+    },
+    {
+      "time": 340,
+      "right": {
+        "trigger": 1,
+        "squeeze": 1
+      }
+    },
+    {
+      "time": 344,
+      "right": {
+        "trigger": 0,
+        "squeeze": 0
+      }
+    },
+    {
+      "time": 370,
+      "right": {
+        "aim": {
+          "position": [
+            0.15,
+            1.335,
+            -0.8
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1.0
+          ]
+        },
+        "grip": {
+          "position": [
+            0.15,
+            1.335,
+            -0.8
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1.0
+          ]
+        },
+        "trigger": 0,
+        "squeeze": 0
+      }
+    },
+    {
+      "time": 390,
+      "right": {
+        "trigger": 1
+      }
+    },
+    {
+      "time": 394,
+      "right": {
+        "trigger": 0
+      }
+    },
+    {
+      "time": 430,
+      "right": {
+        "aim": {
+          "position": [
+            0,
+            1.6,
+            -0.8
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1.0
+          ]
+        },
+        "grip": {
+          "position": [
+            0,
+            1.6,
+            -0.8
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1.0
+          ]
+        },
+        "trigger": 0,
+        "squeeze": 0
+      }
+    },
+    {
+      "time": 450,
+      "right": {
+        "trigger": 1,
+        "squeeze": 1
+      }
+    },
+    {
+      "time": 454,
+      "right": {
+        "trigger": 0,
+        "squeeze": 0
+      }
+    },
+    {
+      "time": 480,
+      "right": {
+        "aim": {
+          "position": [
+            0,
+            1.6,
+            -0.8
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1.0
+          ]
+        },
+        "grip": {
+          "position": [
+            0,
+            1.6,
+            -0.8
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1.0
+          ]
+        },
+        "trigger": 0,
+        "squeeze": 0
+      }
+    },
+    {
+      "time": 500,
+      "right": {
+        "trigger": 1,
+        "squeeze": 1
+      }
+    },
+    {
+      "time": 504,
+      "right": {
+        "trigger": 0,
+        "squeeze": 0
+      }
+    },
+    {
+      "time": 530,
+      "right": {
+        "aim": {
+          "position": [
+            0,
+            1.6,
+            -0.8
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1.0
+          ]
+        },
+        "grip": {
+          "position": [
+            0,
+            1.6,
+            -0.8
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1.0
+          ]
+        },
+        "trigger": 0,
+        "squeeze": 0
+      }
+    },
+    {
+      "time": 550,
+      "right": {
+        "trigger": 1,
+        "squeeze": 1
+      }
+    },
+    {
+      "time": 554,
+      "right": {
+        "trigger": 0,
+        "squeeze": 0
+      }
+    },
+    {
+      "time": 590,
+      "right": {
+        "aim": {
+          "position": [
+            -0.23,
+            1.21,
+            -0.8
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1.0
+          ]
+        },
+        "grip": {
+          "position": [
+            -0.23,
+            1.21,
+            -0.8
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1.0
+          ]
+        },
+        "trigger": 0,
+        "squeeze": 0
+      }
+    },
+    {
+      "time": 610,
+      "right": {
+        "trigger": 1
+      }
+    },
+    {
+      "time": 614,
+      "right": {
+        "trigger": 0
+      }
+    },
+    {
+      "time": 640,
+      "right": {
+        "aim": {
+          "position": [
+            0.5,
+            1.41,
+            0.125
+          ],
+          "orientation": [
+            -0.19,
+            -0.015,
+            0,
+            0.9816694963173705
+          ]
+        },
+        "grip": {
+          "position": [
+            0.5,
+            1.41,
+            0.125
+          ],
+          "orientation": [
+            -0.19,
+            -0.015,
+            0,
+            0.9816694963173705
+          ]
+        },
+        "trigger": 0,
+        "squeeze": 0
+      }
+    },
+    {
+      "time": 660,
+      "right": {
+        "trigger": 1
+      }
+    },
+    {
+      "time": 664,
+      "right": {
+        "trigger": 0
+      }
+    },
+    {
+      "time": 680,
+      "head": {
+        "orientation": [
+          0,
+          0,
+          0,
+          1
+        ]
+      },
+      "right": {
+        "aim": {
+          "position": [
+            0.25,
+            1.25,
+            -0.35
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        "grip": {
+          "position": [
+            0.25,
+            1.25,
+            -0.35
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        "trigger": 0,
+        "squeeze": 0
+      }
+    },
+    {
+      "time": 740,
+      "head": {
+        "orientation": [
+          0,
+          1,
+          0,
+          0
+        ]
+      }
+    }
+  ]
+}

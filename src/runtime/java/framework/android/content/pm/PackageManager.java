@@ -1,0 +1,168 @@
+package android.content.pm;
+import android.content.*;
+import com.venture.runtime.*;
+public class PackageManager {
+  public static final String FEATURE_BLUETOOTH = "android.hardware.bluetooth";
+  public static final String FEATURE_BLUETOOTH_LE = "android.hardware.bluetooth_le";
+  public static final String FEATURE_AUDIO_LOW_LATENCY = "android.hardware.audio.low_latency";
+  public static final int GET_ACTIVITIES = 1, GET_INTENT_FILTERS = 32, GET_META_DATA = 128, GET_SIGNATURES = 64,
+                          GET_SIGNING_CERTIFICATES = 0x08000000, PERMISSION_GRANTED = 0,
+                          PERMISSION_DENIED = -1;
+  public static final String FEATURE_VR_MODE_HIGH_PERFORMANCE =
+      "android.hardware.vr.high_performance";
+  public static final String FEATURE_VULKAN_HARDWARE_LEVEL = "android.hardware.vulkan.level",
+      FEATURE_VULKAN_HARDWARE_VERSION = "android.hardware.vulkan.version";
+  public static class NameNotFoundException extends Exception {
+    public NameNotFoundException() {}
+    public NameNotFoundException(String m) {
+      super(m);
+    }
+  }
+  private final PackageModel model;
+  public PackageManager(PackageModel m) {
+    model = m;
+  }
+  public ApplicationInfo getApplicationInfo(String pkg, int flags) throws NameNotFoundException {
+    // Unity's built-in Oculus provider checks this package after reading the
+    // application's vr_only/vr_dual metadata. Venture supplies the runtime
+    // through libvrapi HLE, so expose that system-runtime package's identity.
+    // It has no launchable Activity or bindable service in this framework.
+    if ("com.oculus.systemactivities".equals(pkg)) {
+      ApplicationInfo runtime = new ApplicationInfo();
+      runtime.packageName = pkg;
+      runtime.processName = pkg;
+      runtime.className = "android.app.Application";
+      runtime.name = runtime.className;
+      runtime.flags = ApplicationInfo.FLAG_SYSTEM;
+      runtime.nativeLibraryDir = "/system/lib64";
+      return runtime;
+    }
+    check(pkg);
+    return model.info.applicationInfo;
+  }
+  public PackageInfo getPackageInfo(String pkg, int flags) throws NameNotFoundException {
+    check(pkg);
+    if ((flags & (GET_SIGNATURES | GET_SIGNING_CERTIFICATES)) != 0) {
+      try {
+        model.info.signatures = ApkSignatures.read(RuntimeEnvironment.get().apk);
+        model.info.signingInfo = new SigningInfo(model.info.signatures);
+      } catch (java.io.IOException e) {
+        throw new IllegalStateException("Cannot read APK signer certificates", e);
+      }
+    }
+    return model.info;
+  }
+  public ProviderInfo getProviderInfo(ComponentName name, int flags) throws NameNotFoundException {
+    check(name.getPackageName());
+    return model.providers.stream()
+        .filter(p -> p.name.equals(name.getClassName()))
+        .findFirst()
+        .orElseThrow(() -> new NameNotFoundException(name.toString()));
+  }
+  private void check(String pkg) throws NameNotFoundException {
+    if (!model.info.packageName.equals(pkg))
+      throw new NameNotFoundException(pkg);
+  }
+  public ActivityInfo getActivityInfo(ComponentName name, int flags) throws NameNotFoundException {
+    check(name.getPackageName());
+    return model.activities.stream()
+        .filter(a -> a.name.equals(name.getClassName()))
+        .findFirst()
+        .orElseThrow(() -> new NameNotFoundException(name.toString()));
+  }
+  public ServiceInfo getServiceInfo(ComponentName name, int flags) throws NameNotFoundException {
+    check(name.getPackageName());
+    return model.services.stream()
+        .filter(s -> s.name.equals(name.getClassName()))
+        .findFirst()
+        .orElseThrow(() -> new NameNotFoundException(name.toString()));
+  }
+  public Intent getLaunchIntentForPackage(String pkg) {
+    return model.info.packageName.equals(pkg) ? model.launchIntent() : null;
+  }
+  public static final int MATCH_DEFAULT_ONLY = 0x10000;
+  public java.util.List<ResolveInfo> queryIntentActivities(Intent intent, int flags) {
+    return new java.util.ArrayList<>(model.resolveActivities(intent, flags));
+  }
+  /** Installed packages visible to the app: with package visibility (API 30), its own. */
+  public java.util.List<PackageInfo> getInstalledPackages(int flags) {
+    try {
+      return new java.util.ArrayList<>(java.util.List.of(getPackageInfo(model.info.packageName, flags)));
+    } catch (NameNotFoundException e) {
+      throw new IllegalStateException(e);
+    }
+  }
+  /** Services are matched by explicit component; this framework records no service intent filters. */
+  public ResolveInfo resolveService(Intent intent, int flags) {
+    var matches = model.resolveServices(intent, flags);
+    return matches.isEmpty() ? null : matches.get(0);
+  }
+  public ResolveInfo resolveActivity(Intent intent, int flags) {
+    var matches = queryIntentActivities(intent, flags);
+    return matches.isEmpty() ? null : matches.get(0);
+  }
+  public boolean hasSystemFeature(String name) {
+    return hasSystemFeature(name, 0);
+  }
+  // XR supplies these features; optional Quest sensors are not exposed by Java.
+  private static final java.util.Set<String> FEATURES =
+      java.util.Set.of("android.hardware.vr.headtracking", "android.hardware.vr.high_performance",
+          "android.software.vr.mode", FEATURE_BLUETOOTH, FEATURE_BLUETOOTH_LE);
+  public FeatureInfo[] getSystemAvailableFeatures() {
+    var features = new java.util.ArrayList<FeatureInfo>();
+    FEATURES.stream()
+        .sorted()
+        .map(name -> {
+          FeatureInfo feature = new FeatureInfo();
+          feature.name = name;
+          feature.version = 1;
+          return feature;
+        })
+        .forEach(features::add);
+    int version = RuntimeEnvironment.host().vulkanHardwareVersion();
+    if (version != 0) {
+      FeatureInfo level = new FeatureInfo();
+      level.name = FEATURE_VULKAN_HARDWARE_LEVEL;
+      level.version = 0;
+      features.add(level);
+      FeatureInfo api = new FeatureInfo();
+      api.name = FEATURE_VULKAN_HARDWARE_VERSION;
+      api.version = version;
+      features.add(api);
+    }
+    return features.toArray(FeatureInfo[]::new);
+  }
+  public boolean hasSystemFeature(String name, int version) {
+    if (FEATURES.contains(name)) return version <= 1;
+    if (FEATURE_VULKAN_HARDWARE_LEVEL.equals(name))
+      return version <= 0 && RuntimeEnvironment.host().vulkanHardwareVersion() != 0;
+    if (FEATURE_VULKAN_HARDWARE_VERSION.equals(name)) {
+      int available = RuntimeEnvironment.host().vulkanHardwareVersion();
+      return available != 0 && version <= available;
+    }
+    return false;
+  }
+  public int checkPermission(String permission, String pkg) {
+    return model.info.packageName.equals(pkg) && model.permissions.contains(permission)
+            && java.util.Set
+                   .of("android.permission.INTERNET", "android.permission.ACCESS_NETWORK_STATE",
+                       "android.permission.BLUETOOTH", "android.permission.BLUETOOTH_ADMIN",
+                       "android.permission.WAKE_LOCK", "android.permission.READ_EXTERNAL_STORAGE",
+                       "android.permission.WRITE_EXTERNAL_STORAGE",
+                       // Meta documents BODY_TRACKING as an automatically granted
+                       // install-time permission. This grant does not imply XR support.
+                       "com.oculus.permission.BODY_TRACKING")
+                   .contains(permission)
+        ? 0
+        : -1;
+  }
+  public CharSequence getApplicationLabel(ApplicationInfo info) {
+    return info.nonLocalizedLabel != null ? info.nonLocalizedLabel : info.packageName;
+  }
+  public android.content.res.Resources getResourcesForApplication(ApplicationInfo info) {
+    return RuntimeEnvironment.resources();
+  }
+  public String getInstallerPackageName(String pkg) {
+    return null;
+  }
+}

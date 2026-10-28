@@ -1,0 +1,18 @@
+diff --git a/src/common/angle_version.h b/src/common/angle_version.h
+--- a/src/common/angle_version.h
++++ b/src/common/angle_version.h
+@@ -27,9 +27,13 @@
+ #    define ANGLE_REVISION_SUFFIX ""
+ #endif
+ 
++// Downstream patches can change serialized program compatibility without
++// changing ANGLE_COMMIT_HASH. Applications key their program binary caches on
++// the GL implementation version; expose the same source-derived identity that
++// Program::deserialize checks before accepting a binary.
+ #define ANGLE_VERSION_STRING                                             \
+     ANGLE_MACRO_STRINGIFY(ANGLE_MAJOR_VERSION)                           \
+     "." ANGLE_MACRO_STRINGIFY(ANGLE_MINOR_VERSION) ANGLE_REVISION_SUFFIX \
+-        " git hash: " ANGLE_COMMIT_HASH
++        " git hash: " ANGLE_COMMIT_HASH " program version: " ANGLE_PROGRAM_VERSION
+ 
+ #endif  // COMMON_ANGLE_VERSION_H_

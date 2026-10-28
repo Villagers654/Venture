@@ -1,0 +1,5 @@
+libc: environment guest callbacks deterministic random OK
+libc: errno TLS sysconf uname IDs prctl OK
+libc: futex blocked wait wake OK
+libc: pipe poll eventfd epoll socketpair OK
+VTEST RESULT misc PASS

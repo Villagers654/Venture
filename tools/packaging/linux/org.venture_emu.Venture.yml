@@ -1,0 +1,37 @@
+# Flatpak of the baseline release layout (build_packages.sh flatpak).
+# OpenXR: the bundled loader reaches the host runtime through
+# venture-flatpak.sh; see docs/LINUX_RELEASE_BUILD.md ("Flatpak and OpenXR").
+id: org.venture_emu.Venture
+runtime: org.freedesktop.Platform
+runtime-version: '26.08'
+sdk: org.freedesktop.Sdk
+command: venture-flatpak.sh
+separate-locales: false
+finish-args:
+  - --share=network
+  - --share=ipc
+  - --socket=wayland
+  - --socket=pulseaudio
+  - --device=dri
+  # OpenXR runtimes: Monado/Envision and WiVRn sockets, the user's runtime
+  # manifest, Envision's runtime prefix, and host /etc + /usr (/run/host) for
+  # system-installed runtimes such as distribution Monado packages.
+  - --filesystem=xdg-run/monado_comp_ipc
+  - --filesystem=xdg-run/wivrn
+  - --filesystem=xdg-config/openxr:ro
+  - --filesystem=xdg-data/envision:ro
+  - --filesystem=host-os:ro
+  - --filesystem=host-etc:ro
+  # APK/OBB imports from the usual download location (file dialogs use portals).
+  - --filesystem=xdg-download:ro
+  - --talk-name=org.freedesktop.secrets
+modules:
+  - name: venture
+    buildsystem: simple
+    build-commands:
+      - cp -a venture /app/venture
+      - install -Dm755 venture-flatpak.sh /app/bin/venture-flatpak.sh
+      - cp -a share /app/share
+    sources:
+      - type: dir
+        path: src

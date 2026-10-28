@@ -1,0 +1,156 @@
+# Reuse native CMake check results; never reuse generated targets or paths.
+option(VENTURE_PROBE_CACHE "Reuse completed dependency checks for identical toolchains" ON)
+if(NOT VENTURE_PROBE_CACHE)
+  return()
+endif()
+if(WIN32)
+  file(TO_CMAKE_PATH "$ENV{LOCALAPPDATA}/Venture/dev-cache/probes" default_root)
+elseif(DEFINED ENV{XDG_CACHE_HOME} AND NOT "$ENV{XDG_CACHE_HOME}" STREQUAL "")
+  set(default_root "$ENV{XDG_CACHE_HOME}/Venture/dev-cache/probes")
+else()
+  set(default_root "$ENV{HOME}/.cache/Venture/dev-cache/probes")
+endif()
+set(VENTURE_PROBE_CACHE_ROOT "${default_root}" CACHE PATH "Completed CMake check cache")
+
+function(venture_probe_results output)
+  get_cmake_property(variables CACHE_VARIABLES)
+  set(results "")
+  foreach(variable IN LISTS variables)
+    get_property(type CACHE "${variable}" PROPERTY TYPE)
+    get_property(help CACHE "${variable}" PROPERTY HELPSTRING)
+    # These are the standard Check* / try_compile result descriptions. Never
+    # copy dependency options, discovery paths, compiler setup or target state.
+    if(NOT variable MATCHES "^(CMAKE_|_)" AND NOT variable MATCHES "_ffile_prefix_map" AND type STREQUAL "INTERNAL" AND help MATCHES "^(Test |Have (include|includes|symbol|function|library) |CHECK_TYPE_SIZE:|Result of TRY_COMPILE$)")
+      if("${${variable}}" MATCHES "^(|[0-9]+|TRUE|FALSE|ON|OFF)$")
+        list(APPEND results "${variable}")
+      endif()
+    endif()
+  endforeach()
+  list(SORT results)
+  set(${output} "${results}" PARENT_SCOPE)
+endfunction()
+
+function(venture_probe_key output)
+  file(SHA256 "${CMAKE_CURRENT_FUNCTION_LIST_FILE}" implementation_hash)
+  set(identity "probe-cache-v1;${implementation_hash};${CMAKE_VERSION};${CMAKE_SYSTEM};${CMAKE_SYSTEM_PROCESSOR};${CMAKE_SIZEOF_VOID_P}")
+  set(compiler_identity "")
+  foreach(language C CXX)
+    if(NOT CMAKE_${language}_COMPILER)
+      continue()
+    endif()
+    file(REAL_PATH "${CMAKE_${language}_COMPILER}" compiler)
+    file(SHA256 "${compiler}" digest)
+    execute_process(COMMAND "${compiler}" -dumpmachine OUTPUT_VARIABLE triple
+      OUTPUT_STRIP_TRAILING_WHITESPACE RESULT_VARIABLE rc)
+    if(NOT rc EQUAL 0)
+      set(${output} "" PARENT_SCOPE)
+      return()
+    endif()
+    string(APPEND compiler_identity ";${compiler};${digest};${CMAKE_${language}_COMPILER_ID};${CMAKE_${language}_COMPILER_VERSION};${triple}")
+  endforeach()
+  # Enumerate actual inputs, not all cached dependency variables: SDL/CURL
+  # publish check results and options during configure, so hashing their whole
+  # namespaces would change the key on the very first regeneration.
+  foreach(prefix C CXX EXE_LINKER SHARED_LINKER MODULE_LINKER STATIC_LINKER)
+    string(APPEND identity ";CMAKE_${prefix}_FLAGS=${CMAKE_${prefix}_FLAGS}")
+    foreach(configuration DEBUG RELEASE RELWITHDEBINFO MINSIZEREL)
+      string(APPEND identity ";CMAKE_${prefix}_FLAGS_${configuration}=${CMAKE_${prefix}_FLAGS_${configuration}}")
+    endforeach()
+    string(TOUPPER "${CMAKE_BUILD_TYPE}" configuration)
+    if(configuration)
+      string(APPEND identity ";active:${prefix}=${CMAKE_${prefix}_FLAGS_${configuration}}")
+    endif()
+  endforeach()
+  foreach(variable CMAKE_BUILD_TYPE CMAKE_CROSSCOMPILING CMAKE_SYSROOT CMAKE_SYSROOT_COMPILE CMAKE_SYSROOT_LINK
+      CMAKE_OSX_ARCHITECTURES CMAKE_OSX_DEPLOYMENT_TARGET CMAKE_OSX_SYSROOT
+      CMAKE_C_COMPILER_TARGET CMAKE_CXX_COMPILER_TARGET CMAKE_C_COMPILER_EXTERNAL_TOOLCHAIN CMAKE_CXX_COMPILER_EXTERNAL_TOOLCHAIN
+      CMAKE_C_STANDARD CMAKE_CXX_STANDARD CMAKE_C_STANDARD_REQUIRED CMAKE_CXX_STANDARD_REQUIRED
+      CMAKE_C_EXTENSIONS CMAKE_CXX_EXTENSIONS CMAKE_POSITION_INDEPENDENT_CODE CMAKE_TOOLCHAIN_FILE
+      CMAKE_TRY_COMPILE_CONFIGURATION CMAKE_TRY_COMPILE_TARGET_TYPE
+      CMAKE_REQUIRED_FLAGS CMAKE_REQUIRED_DEFINITIONS CMAKE_REQUIRED_INCLUDES CMAKE_REQUIRED_LIBRARIES
+      CMAKE_REQUIRED_LINK_OPTIONS CMAKE_REQUIRED_LINK_DIRECTORIES)
+    string(APPEND identity ";${variable}=${${variable}}")
+  endforeach()
+  get_cmake_property(variables VARIABLES)
+  foreach(variable IN LISTS variables)
+    # A caller-provided source override can contain unreviewed local changes.
+    if(variable MATCHES "^FETCHCONTENT_SOURCE_DIR_" AND NOT "${${variable}}" STREQUAL "")
+      set(${output} "" PARENT_SCOPE)
+      return()
+    endif()
+  endforeach()
+  foreach(variable CPATH C_INCLUDE_PATH CPLUS_INCLUDE_PATH LIBRARY_PATH INCLUDE LIB SDKROOT PKG_CONFIG_PATH)
+    string(APPEND identity ";env:${variable}=$ENV{${variable}}")
+  endforeach()
+  foreach(variable CMAKE_PREFIX_PATH CMAKE_INCLUDE_PATH CMAKE_LIBRARY_PATH)
+    string(APPEND identity ";${variable}=${${variable}}")
+  endforeach()
+  # On distro-managed POSIX toolchains, package revisions also identify the
+  # system headers/libraries used by checks. Compiler paths identify the pinned
+  # Windows SDK install; bootstrap script edits do not invalidate checks.
+  foreach(database /var/lib/dpkg/status /usr/lib/sysimage/rpm/rpmdb.sqlite)
+    if(EXISTS "${database}")
+      file(SHA256 "${database}" digest)
+      string(APPEND identity ";sdk=${digest}")
+    endif()
+  endforeach()
+  foreach(property COMPILE_OPTIONS COMPILE_DEFINITIONS LINK_OPTIONS)
+    get_directory_property(value ${property})
+    string(APPEND identity ";${property}=${value}")
+  endforeach()
+  # Hash the dependency declarations: every external source is pinned there by
+  # archive SHA256, so the declarations carry exact revision/option identity.
+  set(inputs cmake/Dependencies.cmake cmake/FFmpegDependency.cmake src/jit/CMakeLists.txt
+    src/runtime/hle/CMakeLists.txt)
+  list(SORT inputs)
+  foreach(input IN LISTS inputs)
+    if(EXISTS "${CMAKE_SOURCE_DIR}/${input}")
+      file(SHA256 "${CMAKE_SOURCE_DIR}/${input}" digest)
+      string(APPEND identity ";${input}=${digest}")
+    endif()
+  endforeach()
+  # Compiler check names sometimes embed prefix-map flags. Canonicalize only
+  # Venture's known relocation paths, keeping all other flags significant.
+  string(REPLACE "${CMAKE_SOURCE_DIR}" "<source>" identity "${identity}")
+  string(REPLACE "${CMAKE_BINARY_DIR}" "<build>" identity "${identity}")
+  if(VENTURE_AGENT_CACHE_ROOT)
+    string(REPLACE "${VENTURE_AGENT_CACHE_ROOT}" "<cache>" identity "${identity}")
+  endif()
+  string(SHA256 key "${compiler_identity};${identity}")
+  set(${output} "${key}" PARENT_SCOPE)
+endfunction()
+
+venture_probe_key(probe_key)
+if(NOT probe_key)
+  message(STATUS "Probe reuse disabled for unkeyed toolchain/source override")
+  return()
+endif()
+set(probe_file "${VENTURE_PROBE_CACHE_ROOT}/${probe_key}.cmake")
+# Changed flags must also invalidate check results in an existing build tree.
+if(VENTURE_PROBE_KEY AND NOT VENTURE_PROBE_KEY STREQUAL probe_key)
+  venture_probe_results(old_results)
+  foreach(variable IN LISTS old_results)
+    unset(${variable} CACHE)
+  endforeach()
+endif()
+set(VENTURE_PROBE_KEY "${probe_key}" CACHE INTERNAL "Dependency check identity" FORCE)
+if(EXISTS "${probe_file}")
+  include("${probe_file}")
+  message(STATUS "Reused dependency checks: ${probe_key}")
+else()
+  message(STATUS "Recording fresh dependency checks: ${probe_key}")
+endif()
+
+function(venture_publish_probes)
+  venture_probe_results(results)
+  set(content "# Native check results from completed CMake generation.\n")
+  foreach(variable IN LISTS results)
+    get_property(help CACHE "${variable}" PROPERTY HELPSTRING)
+    string(APPEND content "if(NOT DEFINED ${variable})\n  set(${variable} [==[${${variable}}]==] CACHE INTERNAL [==[${help}]==])\nendif()\n")
+  endforeach()
+  # Generation happens only after configure succeeds. No cache publication on
+  # failed/incomplete configure; file(GENERATE) preserves unchanged timestamps.
+  file(GENERATE OUTPUT "${VENTURE_PROBE_CACHE_ROOT}/${VENTURE_PROBE_KEY}.cmake" CONTENT "${content}")
+  file(GENERATE OUTPUT "${CMAKE_BINARY_DIR}/venture-probe-results.cmake" CONTENT "${content}")
+endfunction()
+cmake_language(DEFER DIRECTORY "${CMAKE_SOURCE_DIR}" CALL venture_publish_probes)

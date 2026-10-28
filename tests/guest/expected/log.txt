@@ -1,0 +1,2 @@
+log: print write vprint OK
+VTEST RESULT log PASS

@@ -1,0 +1,936 @@
+{
+  "native_repository": "https://github.com/InnerLoopLLC/OculusPlatformSDK",
+  "native_revision": "ef0e75ba4f72a91227652011be6dc555b5ad76cb",
+  "packages": [
+    {
+      "version": "53.0.0-preview",
+      "sha256": "f824849f0a6d55e9da3ac4f3d618186b97266d5c767a4029f431a79abb8dcc22"
+    },
+    {
+      "version": "69.0.0",
+      "sha256": "948722f60b1c2c53f842ae7fae957fce08d9fe20d49162f97c213caef6413b85"
+    },
+    {
+      "version": "207.0.0",
+      "sha256": "f9dbd5f5d32b2b5aca664307ab25c10442d32163ce35d882a5f94daa14b89baf"
+    }
+  ],
+  "inputs": [
+    {
+      "path": "ovrplatform-207.0.0/package/Scripts/Core/Message.Types.cs",
+      "sha256": "84833c16dba7bd629095b66a073b51e9b5bda8c6b463d0586ffebc123d6ba160"
+    },
+    {
+      "path": "ovrplatform-53.0.0-preview/package/Scripts/CAPI.cs",
+      "sha256": "a0d4be470618e6ceca87006869db771ac84f5ba3dbbc6701a362edfe4b6c1715"
+    },
+    {
+      "path": "ovrplatform-53.0.0-preview/package/Scripts/Message.cs",
+      "sha256": "dfbb0612dd15c8417221092f313e559fb61c7beb5865afa5c4d5c7ca90282680"
+    },
+    {
+      "path": "ovrplatform-69.0.0/package/Scripts/CAPI.cs",
+      "sha256": "1277c4011d939c166e253c2b641a4e06340202a44dfdc4eb9ad177c4434d4837"
+    },
+    {
+      "path": "ovrplatform-69.0.0/package/Scripts/Message.cs",
+      "sha256": "b91b6ce53d1a3b896022c2ca28f1735a3d92e26cb6f5ab8984e252798c6812f6"
+    },
+    {
+      "path": "ovrplatform-old/OVR_AbuseReportOptions.h",
+      "sha256": "37f060d4db5f6e4a79fd6ef843b60c456cc5a850df0c56a7aed7a06ead07ff6d"
+    },
+    {
+      "path": "ovrplatform-old/OVR_AbuseReportRecording.h",
+      "sha256": "ed3e2a562bc4bb6acb10a7a88cadb1adcc4600b321bf89c6a04ee05d2ce648b4"
+    },
+    {
+      "path": "ovrplatform-old/OVR_AbuseReportType.h",
+      "sha256": "df8faa9e8d7527df8ba747858cbaa27fcc332a33ad863dc7e00b20bd5f26f350"
+    },
+    {
+      "path": "ovrplatform-old/OVR_AbuseReportVideoMode.h",
+      "sha256": "b414f2f5cb1f554291f83011506ae2d007e0272433c1dafb0c5e10048e2acd48"
+    },
+    {
+      "path": "ovrplatform-old/OVR_AchievementDefinition.h",
+      "sha256": "a87f3e2cf3b2473f6fceb866ef6d0f537648fc1927cd391f06f87f8a7505a2f6"
+    },
+    {
+      "path": "ovrplatform-old/OVR_AchievementDefinitionArray.h",
+      "sha256": "ec5c01140990b5234724e5ad60bbc3b8e4bbf28b86bc4010a4ddcffbebf80315"
+    },
+    {
+      "path": "ovrplatform-old/OVR_AchievementProgress.h",
+      "sha256": "d843ebcb189252d7bfa5470fcd6c93ddd34de19a2c88f8403c1af7ee9438111d"
+    },
+    {
+      "path": "ovrplatform-old/OVR_AchievementProgressArray.h",
+      "sha256": "2fcca9be2cc49c7a0c8d5a0488e1e836e5c2323576ddc1100159611ce14f5765"
+    },
+    {
+      "path": "ovrplatform-old/OVR_AchievementType.h",
+      "sha256": "447a9c83b7197b29d139e5d64876ca1e9f2fe88a584df01ce7bbb7a7a44e96bb"
+    },
+    {
+      "path": "ovrplatform-old/OVR_AchievementUpdate.h",
+      "sha256": "af30a2749429abb784c1b71beafef3cd3a98fa02e3c0ff3c93b10be501d8d374"
+    },
+    {
+      "path": "ovrplatform-old/OVR_AdvancedAbuseReportOptions.h",
+      "sha256": "681c0b0952a01685d4f38f6ae2a3166ac176db43a21eacaab35a83807121a08b"
+    },
+    {
+      "path": "ovrplatform-old/OVR_ApplicationInvite.h",
+      "sha256": "d91381d7a385710d22d42635b19ec19b22d0ef72cc5d7c57be050e7a1fbea54f"
+    },
+    {
+      "path": "ovrplatform-old/OVR_ApplicationInviteArray.h",
+      "sha256": "cd0b76a9c92f26572265432ec8c311fcc566fd313b9c098ff1d14a85f6be51cb"
+    },
+    {
+      "path": "ovrplatform-old/OVR_ApplicationOptions.h",
+      "sha256": "e945d5786e1c85d9dae45c0554747d8715f77770998704f034710a0b8e09ff0f"
+    },
+    {
+      "path": "ovrplatform-old/OVR_ApplicationVersion.h",
+      "sha256": "d6ebc6db78f4ba615b15a2d5c12748e871116421874d1cd66476932a4de363a4"
+    },
+    {
+      "path": "ovrplatform-old/OVR_AssetDetails.h",
+      "sha256": "9c4b1172450b32cc13cafe5af9ccf29137fe9d30af224b6c709376a77465d923"
+    },
+    {
+      "path": "ovrplatform-old/OVR_AssetDetailsArray.h",
+      "sha256": "2b42c7ac24241334463ebb0c4f8d2b5ab41db1ea26a7ffce29fcf58924aaa1cb"
+    },
+    {
+      "path": "ovrplatform-old/OVR_AssetFileDeleteResult.h",
+      "sha256": "b52405fb846ebcddedb4872b1c7eb0738c9350989470c671fab154f2cc5745cb"
+    },
+    {
+      "path": "ovrplatform-old/OVR_AssetFileDownloadCancelResult.h",
+      "sha256": "2f3b7ae475e93600f816b96bbad3239a9b6364afad1c1ac26e156da09b1b9bea"
+    },
+    {
+      "path": "ovrplatform-old/OVR_AssetFileDownloadResult.h",
+      "sha256": "877b901fde0df469e07da96ed1160f709598540c2f4a87f9bb38760a0c2141fe"
+    },
+    {
+      "path": "ovrplatform-old/OVR_AssetFileDownloadUpdate.h",
+      "sha256": "71365f8e6054aec1bf3fcbb2664a8a6f125b5b3cd5a7c426abf068acff163f85"
+    },
+    {
+      "path": "ovrplatform-old/OVR_CalApplicationFinalized.h",
+      "sha256": "febf72ab7f0d10b999367841d0060d4b97a5a87959346850a6c0cbd2adc57256"
+    },
+    {
+      "path": "ovrplatform-old/OVR_CalApplicationProposed.h",
+      "sha256": "6e9a7e310920475243a45c9970dfda700eed19a17c7dfced417ea4b1f31e0652"
+    },
+    {
+      "path": "ovrplatform-old/OVR_CalApplicationSuggestion.h",
+      "sha256": "198df5f6da2552f3df0853a619b1018421795866b314666713f9dfb9b9fdee6c"
+    },
+    {
+      "path": "ovrplatform-old/OVR_CalApplicationSuggestionArray.h",
+      "sha256": "864b498a5bf1603ba76f7c2f349051bba47815984f7aa491be720def77a21369"
+    },
+    {
+      "path": "ovrplatform-old/OVR_Challenge.h",
+      "sha256": "9207643cd455ad42d5059952f41b4f3cbabcef01a1c76176729e37447f92c349"
+    },
+    {
+      "path": "ovrplatform-old/OVR_ChallengeArray.h",
+      "sha256": "ea85f62d92120f25a541906d5b3c53587fe39a4fca78e8e3414658d859aaff74"
+    },
+    {
+      "path": "ovrplatform-old/OVR_ChallengeCreationType.h",
+      "sha256": "9335ac67259b4c1c01b307a26d992dd0f3f03cae225a46332cff37762f763f94"
+    },
+    {
+      "path": "ovrplatform-old/OVR_ChallengeEntry.h",
+      "sha256": "f11fd1750d3d0c56fc5e6e6ca68d8e4229a830f56a5bedbeeaaf10a3625f31cf"
+    },
+    {
+      "path": "ovrplatform-old/OVR_ChallengeEntryArray.h",
+      "sha256": "35fb7649770975df921d44b915c55d026465c1d28fdf1adbd5409ad14a79b288"
+    },
+    {
+      "path": "ovrplatform-old/OVR_ChallengeOptions.h",
+      "sha256": "96942ececc951c2f46af6082f7cd99ebfdba03212c5caf80e6eceb40c5a6f503"
+    },
+    {
+      "path": "ovrplatform-old/OVR_ChallengeViewerFilter.h",
+      "sha256": "3fc08180dc2d4771530ed6f9de9ec4a1873dab225a6ac051ea2dd40b5eff1a90"
+    },
+    {
+      "path": "ovrplatform-old/OVR_ChallengeVisibility.h",
+      "sha256": "83d1bca5ef2833e1b85d6fca22f9bb2010d660766716d02984dc637ea6eb2136"
+    },
+    {
+      "path": "ovrplatform-old/OVR_CloudStorage.h",
+      "sha256": "56949ae07a337aa1d828ad0b38d43127abf789f45a11aac171f27f3ce98cde83"
+    },
+    {
+      "path": "ovrplatform-old/OVR_CloudStorageConflictMetadata.h",
+      "sha256": "d0bc780332e8543397bd2aa8a887cbffc61bb7d0f09d0931d3047d117f3b3f78"
+    },
+    {
+      "path": "ovrplatform-old/OVR_CloudStorageData.h",
+      "sha256": "aa7b9c21623b7401e9c4ff52458f21e964a949e453d7d18ed8f796a6ad2a5fc7"
+    },
+    {
+      "path": "ovrplatform-old/OVR_CloudStorageDataStatus.h",
+      "sha256": "b7d7f02c335061c6a079cfc595a7f3f6200f9fce0de6036276de1b6789e23d76"
+    },
+    {
+      "path": "ovrplatform-old/OVR_CloudStorageMetadata.h",
+      "sha256": "4aa1ec7eb7dd058f96704d84726395b7d71684f18abd7f16125987217c7a2d0f"
+    },
+    {
+      "path": "ovrplatform-old/OVR_CloudStorageMetadataArray.h",
+      "sha256": "25589244c754a07178e1e7a9cbc3b3b6eb5be3128bb29231fbbba01eb2843bdd"
+    },
+    {
+      "path": "ovrplatform-old/OVR_CloudStorageUpdateResponse.h",
+      "sha256": "8ab790e1fac9e7175e2cae09cddc05c72f9bac78f0b726d5137f79d46f47bac7"
+    },
+    {
+      "path": "ovrplatform-old/OVR_CloudStorageUpdateStatus.h",
+      "sha256": "dd4777e8dcd75d70388c2716817b748e0810abd124d71119cefdb1b9061e13e6"
+    },
+    {
+      "path": "ovrplatform-old/OVR_DataStore.h",
+      "sha256": "5117ca0a91a818299b204258aa41f5747ecd52486a56e9c90f36a345253cb7ec"
+    },
+    {
+      "path": "ovrplatform-old/OVR_Destination.h",
+      "sha256": "9c824546d636a0b44ca376cc8c145c1a983f1bfa2c15198b8ffcd4017fc3c094"
+    },
+    {
+      "path": "ovrplatform-old/OVR_DestinationArray.h",
+      "sha256": "ed10c33367f356c908d2bc2865d86f3d10dd4e1301b1086ad066465cdc9b9148"
+    },
+    {
+      "path": "ovrplatform-old/OVR_Error.h",
+      "sha256": "da067baedd207252b27bfda6ecf418c932697517dfdabef18b52dd75c2a30cf1"
+    },
+    {
+      "path": "ovrplatform-old/OVR_Functions_ApplicationLifecycle.h",
+      "sha256": "4fe80ab7a2cf6e60d9fcce8dec76f05b0c41ec03ea8714001d273cd9489004f5"
+    },
+    {
+      "path": "ovrplatform-old/OVR_Functions_Networking.h",
+      "sha256": "7d27bae03f3ec0d7aff3232c57acb7627bb9f732588abeab7ef737a5de5d5260"
+    },
+    {
+      "path": "ovrplatform-old/OVR_Functions_Voip.h",
+      "sha256": "19c61ee2d06912cf0ee934b4653418df6c679f91f7af238cdbf74f18e26953d0"
+    },
+    {
+      "path": "ovrplatform-old/OVR_GroupPresenceJoinIntent.h",
+      "sha256": "d34713072b4e3cd7a55a2a59632a33677e16475fdd7dfb7f5bd679f007377d33"
+    },
+    {
+      "path": "ovrplatform-old/OVR_GroupPresenceLeaveIntent.h",
+      "sha256": "9726ce2b9762c449ee1511a60580ec5c8c7f89fcca639d2977cac6537f33c761"
+    },
+    {
+      "path": "ovrplatform-old/OVR_GroupPresenceOptions.h",
+      "sha256": "02743ea21735e0011d78a427005e16fb36f0a6c76bf6772d15797d1fe6ffab76"
+    },
+    {
+      "path": "ovrplatform-old/OVR_HttpTransferUpdate.h",
+      "sha256": "2b19c19a8c900738f0b090dc99ac3f91ef97b4d24665dd57942da8cf627182dd"
+    },
+    {
+      "path": "ovrplatform-old/OVR_InstalledApplication.h",
+      "sha256": "9a2c010d2b9d8c57fc39bf3a7f525b60eeb6019028e04da718901c4e5087f421"
+    },
+    {
+      "path": "ovrplatform-old/OVR_InstalledApplicationArray.h",
+      "sha256": "921553c8562b81ca76f2f158a6375375565ccbcbfbb0bbc2ecc71ed8e66ebaaf"
+    },
+    {
+      "path": "ovrplatform-old/OVR_InviteOptions.h",
+      "sha256": "131186ab2c866dcf425a09a30b57e3b9e60395cb2f3e7f31a0d0f77c6ca2b926"
+    },
+    {
+      "path": "ovrplatform-old/OVR_InvitePanelResultInfo.h",
+      "sha256": "bd5e6fe86f4c4960be86c3c6b2f8854cfe2c23ff3e40c5b3f83e1aaaf4bcb7e5"
+    },
+    {
+      "path": "ovrplatform-old/OVR_KeyValuePairType.h",
+      "sha256": "7fc75a91137e36f4b9dd8791e48a79d741c1919773abbc4e61d1282183c345b9"
+    },
+    {
+      "path": "ovrplatform-old/OVR_LanguagePackInfo.h",
+      "sha256": "6781f20542c272e323f05a5e12ba8c7c7ee8be92e89fcaffc1f5309bfcbcabdf"
+    },
+    {
+      "path": "ovrplatform-old/OVR_LaunchBlockFlowResult.h",
+      "sha256": "10331209f5525dc5c43872d4bda49b32f4e69ad7bd8181b06522bc80b6bc1be9"
+    },
+    {
+      "path": "ovrplatform-old/OVR_LaunchDetails.h",
+      "sha256": "afba9e6ed407419e54e0d9e57088ba6bf927b18feb876eee5f9a72d9f73c0666"
+    },
+    {
+      "path": "ovrplatform-old/OVR_LaunchFriendRequestFlowResult.h",
+      "sha256": "da9c031abc1038a424fa941f66d88847680363c03a9766fe414c454330543939"
+    },
+    {
+      "path": "ovrplatform-old/OVR_LaunchInvitePanelFlowResult.h",
+      "sha256": "43c5adcc916fc5c4c7bf95c40e01405689d6c6f5eef13f26492950500395bfbb"
+    },
+    {
+      "path": "ovrplatform-old/OVR_LaunchReportFlowResult.h",
+      "sha256": "14272781e19354a4cba31def9e6ca85493068b606170b5af2502f941653a1223"
+    },
+    {
+      "path": "ovrplatform-old/OVR_LaunchResult.h",
+      "sha256": "bab633affcda321d65f06b01eae6c18ff328c1ae2d0b923a2062ba542945444f"
+    },
+    {
+      "path": "ovrplatform-old/OVR_LaunchType.h",
+      "sha256": "26726f38032191b9e2edc5313ee71c7ce625fe3547a3408b5688a69f24bbfa65"
+    },
+    {
+      "path": "ovrplatform-old/OVR_LaunchUnblockFlowResult.h",
+      "sha256": "45e13afe401602b4097e0d46e603d2eb101507b6f60178ce41722d5ba0e2b62e"
+    },
+    {
+      "path": "ovrplatform-old/OVR_Leaderboard.h",
+      "sha256": "702c633843e996500371eb3e13382c983a0d7fccf7a9ca49b8733124af22227f"
+    },
+    {
+      "path": "ovrplatform-old/OVR_LeaderboardArray.h",
+      "sha256": "27a59b55cba5350e19e326c0c5fee8fde0575a4edbf4a8eb348e1e7f4325191f"
+    },
+    {
+      "path": "ovrplatform-old/OVR_LeaderboardEntry.h",
+      "sha256": "52527ba13117f0301aff35b63e93cd81ca6d18f3c52d913130a7f3db81af284c"
+    },
+    {
+      "path": "ovrplatform-old/OVR_LeaderboardEntryArray.h",
+      "sha256": "7fc25f178997ab01063769843f2ce83c3f6abbf6fed790005c4dae51d510ccb0"
+    },
+    {
+      "path": "ovrplatform-old/OVR_LeaderboardFilterType.h",
+      "sha256": "442965c4f7a95c9907f8064c03a062c8ae3e86710986acdb3ae281e7451c39cd"
+    },
+    {
+      "path": "ovrplatform-old/OVR_LeaderboardStartAt.h",
+      "sha256": "84e02bda589d7cbff4c383f2434211cbcdc38874fecac10b59121a30dbe4260c"
+    },
+    {
+      "path": "ovrplatform-old/OVR_LeaderboardUpdateStatus.h",
+      "sha256": "9773376a0a88b8b29b225efacac884ca64a3bd8ce6e45babfca9312c546b2954"
+    },
+    {
+      "path": "ovrplatform-old/OVR_LinkedAccount.h",
+      "sha256": "db92211be9092e8c210994ee8b7ee13c0e85a2ce2d453385d9fc2526f69e732e"
+    },
+    {
+      "path": "ovrplatform-old/OVR_LinkedAccountArray.h",
+      "sha256": "811404d433449a47d352de9a739632192283610c5675256d53e447e39d362142"
+    },
+    {
+      "path": "ovrplatform-old/OVR_LivestreamingApplicationStatus.h",
+      "sha256": "c9d7a05880772423ca4dfde37f8b920195f1392010d07970589a26acca1ccc1c"
+    },
+    {
+      "path": "ovrplatform-old/OVR_LivestreamingAudience.h",
+      "sha256": "0142b565d536acdc0c837a5e3e117c4f9fc33e42293f3f7792bbda9f41e8008f"
+    },
+    {
+      "path": "ovrplatform-old/OVR_LivestreamingMicrophoneStatus.h",
+      "sha256": "ad8f144d23eb681cf4a90ff4b765668b8d3c4a1e45727fb42095b4c1ac2f76cd"
+    },
+    {
+      "path": "ovrplatform-old/OVR_LivestreamingStartResult.h",
+      "sha256": "fb13d7bdb3389f4e1863b4b42b25c41c8a9ef8cf3ef49c2cbde0094beb9f7ccf"
+    },
+    {
+      "path": "ovrplatform-old/OVR_LivestreamingStartStatus.h",
+      "sha256": "0886153eacd2aea5a8bc05b247651466fe027a59d4a59335d004035d4ada9ab7"
+    },
+    {
+      "path": "ovrplatform-old/OVR_LivestreamingStatus.h",
+      "sha256": "68c472fcc6a8865abfc5dc6a9a2acac9a26b9ed8e38c5f8f8bf6623713604770"
+    },
+    {
+      "path": "ovrplatform-old/OVR_LivestreamingVideoStats.h",
+      "sha256": "aee571eae5759c2219cd7f75cfed366cc1b9d61168c328a805fe073f458953e7"
+    },
+    {
+      "path": "ovrplatform-old/OVR_MatchmakingAdminSnapshot.h",
+      "sha256": "5fd60d9dffedd5c28884e433940410351b80ee10e23acefe08be082691754969"
+    },
+    {
+      "path": "ovrplatform-old/OVR_MatchmakingAdminSnapshotCandidate.h",
+      "sha256": "b848f2e54ceee2436cd27f040e5d779ead016e6f4e16eec107cac068005c3fa1"
+    },
+    {
+      "path": "ovrplatform-old/OVR_MatchmakingAdminSnapshotCandidateArray.h",
+      "sha256": "5ec4df5148a95f316bdd269190d2e9a8845d270722288f9f5ba3495959e2dbd4"
+    },
+    {
+      "path": "ovrplatform-old/OVR_MatchmakingBrowseResult.h",
+      "sha256": "bdfb36da68750dad3e606c3cecfca19ae6d494ad171b514602fd50f0140cf1c2"
+    },
+    {
+      "path": "ovrplatform-old/OVR_MatchmakingCriterionImportance.h",
+      "sha256": "2ee4cdcf78004363015cab6c2cd1518ab462c63254aee0ec72addcc9f3fa22f1"
+    },
+    {
+      "path": "ovrplatform-old/OVR_MatchmakingEnqueuedUser.h",
+      "sha256": "1ac9e4db7d27ee1d0cddbed16137e113006df36dbe9ea960a4345b4f7845e8c0"
+    },
+    {
+      "path": "ovrplatform-old/OVR_MatchmakingEnqueuedUserArray.h",
+      "sha256": "78a87c98f3013046f148b98f0a8fa81321a80b07755b28a990d903c3ad31f0e6"
+    },
+    {
+      "path": "ovrplatform-old/OVR_MatchmakingEnqueueResult.h",
+      "sha256": "0114c006417f99a9f0ee767403cfb2da97266c7a3facb63a1c3311aaae467619"
+    },
+    {
+      "path": "ovrplatform-old/OVR_MatchmakingEnqueueResultAndRoom.h",
+      "sha256": "fbf2c4f9b46c0f24c220be8b50d5d7922285e34e085b21da530ea3d2b7f04d41"
+    },
+    {
+      "path": "ovrplatform-old/OVR_MatchmakingOptions.h",
+      "sha256": "75ce8bdfdeb2f728cf92d31c669c2b37b6b9fff75e6c825375a052039ce79ae2"
+    },
+    {
+      "path": "ovrplatform-old/OVR_MatchmakingRoom.h",
+      "sha256": "66a82f45a0814f7077a5b65a7f6230ee9d4774efd925ac2369419a5905a01b6a"
+    },
+    {
+      "path": "ovrplatform-old/OVR_MatchmakingRoomArray.h",
+      "sha256": "573fa13f39b0b2cb70bfacaf1753b8c4109778c9caebf5ce1d45c477f1d3674c"
+    },
+    {
+      "path": "ovrplatform-old/OVR_MatchmakingStatApproach.h",
+      "sha256": "9697317ed2d3a3ac6cc208d04c70c78bb319f34a36e0b2c5275745604ab6d6df"
+    },
+    {
+      "path": "ovrplatform-old/OVR_MatchmakingStats.h",
+      "sha256": "fe6f3aafcfd8708a7878b83459c7b2f5c30cc100921c56be1884fa6ac46436fc"
+    },
+    {
+      "path": "ovrplatform-old/OVR_MediaContentType.h",
+      "sha256": "b580b01543103aac7be266afdf12dcd0c2f52963aeefb61c7cf804be80adae53"
+    },
+    {
+      "path": "ovrplatform-old/OVR_Message.h",
+      "sha256": "ac8e4dd34d1da91c5bcd4d67abde534dd7aac042bb5d4d04f40b9830147d51f5"
+    },
+    {
+      "path": "ovrplatform-old/OVR_MessageType.h",
+      "sha256": "afd1206f4b73810c66ea5fc493ff49686ea8ebd0f5343458621186b3529edd1c"
+    },
+    {
+      "path": "ovrplatform-old/OVR_Microphone.h",
+      "sha256": "9f45674583f9388a26ab2567f7b8bb5293a0acd6a5af3567c5462f8586e79234"
+    },
+    {
+      "path": "ovrplatform-old/OVR_MicrophoneAvailabilityState.h",
+      "sha256": "ded0ffcb948154aa433946ecf19feffb481c030c189d3eb30df87ee06ce683f5"
+    },
+    {
+      "path": "ovrplatform-old/OVR_MultiplayerErrorErrorKey.h",
+      "sha256": "df72982553ae9d3d538e309dd58096adf4b13d61967369d2433ef86a9b5d2ac5"
+    },
+    {
+      "path": "ovrplatform-old/OVR_MultiplayerErrorOptions.h",
+      "sha256": "bea3186d1bb2d175caa230037b546b3080c72856e7ec4de30b2c402a51e65417"
+    },
+    {
+      "path": "ovrplatform-old/OVR_NetSyncConnection.h",
+      "sha256": "4b4049f3108820b61643971630ad19abd8115a6af3e557dd3ed0556bfb037e68"
+    },
+    {
+      "path": "ovrplatform-old/OVR_NetSyncConnectionStatus.h",
+      "sha256": "7ebf5537d299a4917b96c53fea5370b77f9e2397bb3d640c98f0f0e8dd432435"
+    },
+    {
+      "path": "ovrplatform-old/OVR_NetSyncDisconnectReason.h",
+      "sha256": "5237ac4afba033057b01577ecf7db1890b536c39537493d13b62d0d7f86634b8"
+    },
+    {
+      "path": "ovrplatform-old/OVR_NetSyncOptions.h",
+      "sha256": "67914e12942c47dfc12b4237b9712ad046d9740e8d80d65ca47ba0593840c777"
+    },
+    {
+      "path": "ovrplatform-old/OVR_NetSyncSession.h",
+      "sha256": "76eb4a9ef5a6c3edfbeb6f6e9c3de8e2748ea3a74dfbe02d6209869c9fd5016f"
+    },
+    {
+      "path": "ovrplatform-old/OVR_NetSyncSessionArray.h",
+      "sha256": "a6c400eb6ae42fe4ac084d23b9970f8b28b74379d1e178e072f414956e31b48d"
+    },
+    {
+      "path": "ovrplatform-old/OVR_NetSyncSessionsChangedNotification.h",
+      "sha256": "567c82cb688c00fca819a58857f471073ab0c8ec0cbfbfe2b976800e68fcc5c3"
+    },
+    {
+      "path": "ovrplatform-old/OVR_NetSyncSetSessionPropertyResult.h",
+      "sha256": "78043c7c981cf517440cd2d0ed44f135e86e0b63e1902d2d80a73068fb4ea82f"
+    },
+    {
+      "path": "ovrplatform-old/OVR_NetSyncVoipAttenuationValue.h",
+      "sha256": "1ffad41d1701cf84e065447abd2bc82db1dc672d583fd2c73a4cafe9cc5caceb"
+    },
+    {
+      "path": "ovrplatform-old/OVR_NetSyncVoipAttenuationValueArray.h",
+      "sha256": "90a2d4ed8cd90317ea1f82078ff0e72997c11b9c8c43e5e0b384b456539e8d95"
+    },
+    {
+      "path": "ovrplatform-old/OVR_NetSyncVoipMicSource.h",
+      "sha256": "6bbdb534f9aefbff52521c83d618191727eaa86631395515bc41b43589251505"
+    },
+    {
+      "path": "ovrplatform-old/OVR_NetSyncVoipStreamMode.h",
+      "sha256": "266fbe3798204448abe612ce5b9de0768099cb42bfa9b702845a1b09412651f7"
+    },
+    {
+      "path": "ovrplatform-old/OVR_NetworkingPeer.h",
+      "sha256": "f537b2049b52e7b0e6bdac31cbd116203508f8a8c89a56e79b00a91b80bb632e"
+    },
+    {
+      "path": "ovrplatform-old/OVR_OrgScopedID.h",
+      "sha256": "abb505522ca181eee457f1ed927326250ff464b06728a0a9742cb7c6a1b7771e"
+    },
+    {
+      "path": "ovrplatform-old/OVR_Packet.h",
+      "sha256": "7a3ea00dc123c562ab18e8c6c4a5e07a3ca26b1dae76fdf243f4255e04f48447"
+    },
+    {
+      "path": "ovrplatform-old/OVR_Party.h",
+      "sha256": "1d7b643951e215d8bf898414991b141181288e4f6294f551f48407ec5ff74a9b"
+    },
+    {
+      "path": "ovrplatform-old/OVR_PartyID.h",
+      "sha256": "6f67920b2a98330cc9c48348e118b12eeca7546835d151b6fa34a584afa3e732"
+    },
+    {
+      "path": "ovrplatform-old/OVR_PartyUpdateAction.h",
+      "sha256": "bded10238ebb430567f9db57091bfc8c11a359984f19036ed78d3863f6241f02"
+    },
+    {
+      "path": "ovrplatform-old/OVR_PartyUpdateNotification.h",
+      "sha256": "36e6ba1ebd246dbf46964566dbde1aa443171040907ba59fef927912e0b5d619"
+    },
+    {
+      "path": "ovrplatform-old/OVR_PeerConnectionState.h",
+      "sha256": "30481c0faf71ba9841a386c784b00c448d8b808c59b07edf75ec5c3a707adbd6"
+    },
+    {
+      "path": "ovrplatform-old/OVR_PermissionGrantStatus.h",
+      "sha256": "56ad6abd35ec3b5f58a9124a9f24409c839fad17f492149be2322fb4c8fa94d5"
+    },
+    {
+      "path": "ovrplatform-old/OVR_PermissionType.h",
+      "sha256": "a1fd169ad9911ebd9e6f32295096989f932aabe9e8bd5614ab782a7e6b786358"
+    },
+    {
+      "path": "ovrplatform-old/OVR_Pid.h",
+      "sha256": "31aebacc03a663c8b6beb74b1daae737ec4101bd274bb16222dea4735699c132"
+    },
+    {
+      "path": "ovrplatform-old/OVR_PidArray.h",
+      "sha256": "aa25eb2f6a284e9fab5bc0155fd8fd36e0c9e402e5d974689e980c48552e545c"
+    },
+    {
+      "path": "ovrplatform-old/OVR_PingResult.h",
+      "sha256": "9ceecab55a25b44a73a4d3229f5cc8fd8bfa78d71b67f550a8e329ece35565c8"
+    },
+    {
+      "path": "ovrplatform-old/OVR_Platform.h",
+      "sha256": "e0ded376e658279de09fca099e13f749c81761c51efbbf839a97515358eff3ef"
+    },
+    {
+      "path": "ovrplatform-old/OVR_Platform_Defs.h",
+      "sha256": "9b629014f4586690bbb7ca3f26b48281b2900eed91a110bf7247e5db6bf5bf31"
+    },
+    {
+      "path": "ovrplatform-old/OVR_PlatformInitialize.h",
+      "sha256": "c92d1e492d9d956603ea9d3c328ca868023e05bcbfd4b783cdb0ca4e068147f4"
+    },
+    {
+      "path": "ovrplatform-old/OVR_PlatformInitializeResult.h",
+      "sha256": "d4e0ca0db50ae2d26d454617ffc67a78967dc0b09dc53bd08fa3198ebee0a37f"
+    },
+    {
+      "path": "ovrplatform-old/OVR_PlatformVersion.h",
+      "sha256": "f369252f71883cbb7db9e9bd7e879940bec25037ed585c0e2c759260d6e2af78"
+    },
+    {
+      "path": "ovrplatform-old/OVR_Product.h",
+      "sha256": "933e6827d1f9c24982f1317b99a2181328d72fa4efd45b8c24ba27937984a04b"
+    },
+    {
+      "path": "ovrplatform-old/OVR_ProductArray.h",
+      "sha256": "06a3373bb025dca79c3e4e21f6252fe0fee702c99d36bb3928e17442026f7d16"
+    },
+    {
+      "path": "ovrplatform-old/OVR_Purchase.h",
+      "sha256": "f205fd6fc6fabcb89f27448ce9460fa5aa0f0e5f7b24a6161180dbdcd7ed0ccc"
+    },
+    {
+      "path": "ovrplatform-old/OVR_PurchaseArray.h",
+      "sha256": "088f2cc54763f3a3849c89632b149306ba268e5c1ef9b7631c14f9090a123dc7"
+    },
+    {
+      "path": "ovrplatform-old/OVR_RejoinDialogResult.h",
+      "sha256": "d5d56e21bd68589aba2737eb8629a5e5e01eb91354b224ae62365a1c346918be"
+    },
+    {
+      "path": "ovrplatform-old/OVR_Requests_Achievements.h",
+      "sha256": "d525cad907f98c2032b507d71c0b7a0c0b5f20dec85eb33947d1232be3329585"
+    },
+    {
+      "path": "ovrplatform-old/OVR_Requests_Application.h",
+      "sha256": "5d7859df776ca96bde27d25dd203b60aabeb15795bfab982fc668c98d11998a6"
+    },
+    {
+      "path": "ovrplatform-old/OVR_Requests_ApplicationLifecycle.h",
+      "sha256": "6dd1cd03bf56db9571a4430f4d7c34970e59169d7898891433b258bd4bf3cdcb"
+    },
+    {
+      "path": "ovrplatform-old/OVR_Requests_AssetFile.h",
+      "sha256": "483a964c742a038fa4e891bb0b38ef1980a3a800073194b8318d64864849b225"
+    },
+    {
+      "path": "ovrplatform-old/OVR_Requests_Challenges.h",
+      "sha256": "d4382f6c54554719a1077716c086131f6f19d521e4345d24244245070856f291"
+    },
+    {
+      "path": "ovrplatform-old/OVR_Requests_CloudStorage.h",
+      "sha256": "8925b42b3098818eb0052eb379cb7632bab78da4444b38d3fbe494f3079702f7"
+    },
+    {
+      "path": "ovrplatform-old/OVR_Requests_CloudStorage2.h",
+      "sha256": "37d9866a9ce0b24c792d0e06afb20168aaeaa63c483159e6ec0158de1485631e"
+    },
+    {
+      "path": "ovrplatform-old/OVR_Requests_Entitlement.h",
+      "sha256": "63e5ccc1cf4cce732cf0a1ee6b7f58a94f68b2236ea966c1727d8724e0f451f9"
+    },
+    {
+      "path": "ovrplatform-old/OVR_Requests_GroupPresence.h",
+      "sha256": "9fdce97a1d893ed5c34d2312496c04c5ea90159a9dc962c8f9a2933347df2425"
+    },
+    {
+      "path": "ovrplatform-old/OVR_Requests_IAP.h",
+      "sha256": "c4d76dc4ac56e1b1e37fb652b46fb2e19f0022d09408d06cd06a26abe125ea75"
+    },
+    {
+      "path": "ovrplatform-old/OVR_Requests_LanguagePack.h",
+      "sha256": "4060953fdb847092ce1aebd8cbcff6377718f040c68f59fe336c2b5ef005b647"
+    },
+    {
+      "path": "ovrplatform-old/OVR_Requests_Leaderboard.h",
+      "sha256": "64d94d4046750e78c56a8a6f4f721fe6494aaa9c0f73a6d00607a0785dd60dd8"
+    },
+    {
+      "path": "ovrplatform-old/OVR_Requests_Matchmaking.h",
+      "sha256": "1b0df80fcfa9839a0de4d9bbe7badeeef25216bc43d5d3341c4c261415abfff5"
+    },
+    {
+      "path": "ovrplatform-old/OVR_Requests_Media.h",
+      "sha256": "4788244ccc49004814c28924d18c790a06cbdf0bf89b03e9b657a6b9a91ad935"
+    },
+    {
+      "path": "ovrplatform-old/OVR_Requests_Notification.h",
+      "sha256": "32955a25b8347eacb6dc7de5d02d639eef93ecd5c3b94d1017fb4f06646dc569"
+    },
+    {
+      "path": "ovrplatform-old/OVR_Requests_Party.h",
+      "sha256": "4d65be1d550241391860a62712554a6f2518f6a61642685c6198bb156919a799"
+    },
+    {
+      "path": "ovrplatform-old/OVR_Requests_RichPresence.h",
+      "sha256": "5fbe2726b28ddb7a8c108cb0548fa356e26b35672f154f8125fb52fd9ad94724"
+    },
+    {
+      "path": "ovrplatform-old/OVR_Requests_Room.h",
+      "sha256": "a33b8e136b9a2d07626286b85460f6e7e61d2e9c9669c5d144ee2e13ece0b9d1"
+    },
+    {
+      "path": "ovrplatform-old/OVR_Requests_User.h",
+      "sha256": "371f675a57af391b88d794686a0630a5d580a87e9800da367a8f1d0d891017be"
+    },
+    {
+      "path": "ovrplatform-old/OVR_Requests_UserDataStore.h",
+      "sha256": "7666804d442ee6b5e4ce5f7d1c7d85b536439f2fe55e07ae60f85bfe1aa117e4"
+    },
+    {
+      "path": "ovrplatform-old/OVR_Requests_Voip.h",
+      "sha256": "bcc4f3ebd120424b30e661b2a49f9a494131c96a459bd930bbadb07faff23fd3"
+    },
+    {
+      "path": "ovrplatform-old/OVR_RichPresenceExtraContext.h",
+      "sha256": "d03684eb8c3d37836d5fd102499a3407fc150959ebbd1b38c8b768e0200e074c"
+    },
+    {
+      "path": "ovrplatform-old/OVR_RichPresenceOptions.h",
+      "sha256": "6fb65dff5389323ff3f5f2f74979f61ce66ea7295437cd719e9f615cf683864b"
+    },
+    {
+      "path": "ovrplatform-old/OVR_Room.h",
+      "sha256": "ed30cff1c6551172e71919fa2400e8d3cba8143d2206cde0bc8c34e63efe8620"
+    },
+    {
+      "path": "ovrplatform-old/OVR_RoomArray.h",
+      "sha256": "591294be354339c0b7d4c58be6a8fada4247478c07e828fa6c769b65058dda27"
+    },
+    {
+      "path": "ovrplatform-old/OVR_RoomInviteNotification.h",
+      "sha256": "ce38e28e107b03f5fc400796dc5fed4888ecca965b7596f60e8ca191a61c4a9a"
+    },
+    {
+      "path": "ovrplatform-old/OVR_RoomInviteNotificationArray.h",
+      "sha256": "7c10ad05923486e39ff3795d1a50de9fd54e385a0ca6e2505583bce16c4106c9"
+    },
+    {
+      "path": "ovrplatform-old/OVR_RoomJoinability.h",
+      "sha256": "cab37e99ba025983163f5cba078c20d2bc31133051150807f66e790aeb86600d"
+    },
+    {
+      "path": "ovrplatform-old/OVR_RoomJoinPolicy.h",
+      "sha256": "5f46ff70d01c111b0f5874391919f63d7dbc12eb280c83c7d39296a10772c0e5"
+    },
+    {
+      "path": "ovrplatform-old/OVR_RoomMembershipLockStatus.h",
+      "sha256": "763e8a60b09b01d89aada40fbf8c550a3276b7d37dd90e9f2f004924f6ced721"
+    },
+    {
+      "path": "ovrplatform-old/OVR_RoomOptions.h",
+      "sha256": "e9d12494b651e145ddf7b4655aea7e4fd50450ef356ba1ff28b3ff3ade1f3f98"
+    },
+    {
+      "path": "ovrplatform-old/OVR_RoomType.h",
+      "sha256": "55cf3ab175165ee654b49945fa9402deaadf4ef7726c6b53f9bbdd9422766464"
+    },
+    {
+      "path": "ovrplatform-old/OVR_RosterOptions.h",
+      "sha256": "478c89a32de8894c744f9d4381887405ee822d52a7886191bf62f03024bd41c1"
+    },
+    {
+      "path": "ovrplatform-old/OVR_SdkAccount.h",
+      "sha256": "b473f14646b9380d83d6253c6fb05d905f3d572525d8f66b6b963ec3d1304cb4"
+    },
+    {
+      "path": "ovrplatform-old/OVR_SdkAccountArray.h",
+      "sha256": "193e0eed295af236de5fc3bb7a4a994c600d506ff9542ec0d7f8fc33fc964c54"
+    },
+    {
+      "path": "ovrplatform-old/OVR_SdkAccountType.h",
+      "sha256": "37679deaa84dcd9c49134ef7c7930def3a2fb6f52449a24fb2a7394336867ff3"
+    },
+    {
+      "path": "ovrplatform-old/OVR_SendInvitesResult.h",
+      "sha256": "75a618e275f5d01d5618c528842a07666489c991cd0cd0c7e14a6404cf57e474"
+    },
+    {
+      "path": "ovrplatform-old/OVR_SendPolicy.h",
+      "sha256": "d9ae9181218deb4ec20f176b5c3ce841aecac7476f72ff0968fc8b8b2a56191d"
+    },
+    {
+      "path": "ovrplatform-old/OVR_ServiceProvider.h",
+      "sha256": "e2cc8e8a6b2e9a637898abfcdebab7e01d55b9bab8e462c389b734bab106d905"
+    },
+    {
+      "path": "ovrplatform-old/OVR_ShareMediaResult.h",
+      "sha256": "81a28e6160d54d8a224e263512c3c61b73e6aa9b7aa0ce3782dfff56c1878ede"
+    },
+    {
+      "path": "ovrplatform-old/OVR_ShareMediaStatus.h",
+      "sha256": "ba016bdb13a19ece6f31c6c5fd64f3abcd0868f27538ceef172701f7d04ec8a9"
+    },
+    {
+      "path": "ovrplatform-old/OVR_SupplementaryMetric.h",
+      "sha256": "0b18973893e9b7169b501b02f45109fb45e8143fb45649aec19cd4a69d5a032b"
+    },
+    {
+      "path": "ovrplatform-old/OVR_SystemVoipState.h",
+      "sha256": "42a085769286057f2e6c113b0002e6a0e58f9af483693036f878c1fa148b12f1"
+    },
+    {
+      "path": "ovrplatform-old/OVR_SystemVoipStatus.h",
+      "sha256": "643e002d80f186b866fd0a87f70c6bce9387ebbceec0511e8356a375925383d5"
+    },
+    {
+      "path": "ovrplatform-old/OVR_Team.h",
+      "sha256": "cfd3cd124c77de86df050963f8bda0bad8b152c47ba0a5c31b1ddd6dcac09498"
+    },
+    {
+      "path": "ovrplatform-old/OVR_TeamArray.h",
+      "sha256": "a73f289c234e4843c7c59e3013030af2bcfd4bf9fd598f89ea5c2ced5382bc03"
+    },
+    {
+      "path": "ovrplatform-old/OVR_TimeWindow.h",
+      "sha256": "eaab95a89baa3912f9c4b13ac50b76e86bc4a4ee1480b1d4d587b1b1acc48a5d"
+    },
+    {
+      "path": "ovrplatform-old/OVR_Types.h",
+      "sha256": "44c548d8c2dd3b495f01f62cdadcaf41c21e9a430c465a7a032c57f4d3ddbf8e"
+    },
+    {
+      "path": "ovrplatform-old/OVR_User.h",
+      "sha256": "f784f7e4df8093a371e6279c30487178564f3ce9af102d73de810edbaa9069c0"
+    },
+    {
+      "path": "ovrplatform-old/OVR_UserAndRoom.h",
+      "sha256": "44a7a06d67176d85de98e01ee02e702f7f44066001633b7f2e0fcfe257139d1e"
+    },
+    {
+      "path": "ovrplatform-old/OVR_UserAndRoomArray.h",
+      "sha256": "f277f136d3e5cddc9055edcaf85c2aea3edf55281a920483c2fef4ebf6c3a82e"
+    },
+    {
+      "path": "ovrplatform-old/OVR_UserArray.h",
+      "sha256": "862996e43bb6ae97f0b9fe67d658f59d7fc1e2ae1b317d04d948c51bea3ddef8"
+    },
+    {
+      "path": "ovrplatform-old/OVR_UserCapability.h",
+      "sha256": "388ec94a425ace9bcecab6bed8ccfe71db7891976333b26b5a597e01ee5b812e"
+    },
+    {
+      "path": "ovrplatform-old/OVR_UserCapabilityArray.h",
+      "sha256": "7848bd105cf1538a50ddffb3d0927e1ca69b09674c5690700add637d2b84a121"
+    },
+    {
+      "path": "ovrplatform-old/OVR_UserDataStoreUpdateResponse.h",
+      "sha256": "3eec02482d0e984134fa97ff12e462f11f51a4107201bc38acc375263774e409"
+    },
+    {
+      "path": "ovrplatform-old/OVR_UserOptions.h",
+      "sha256": "050557a8bf74944325b9c0aa3c0f0815cfa7f78212a6df4805e791dc7c2bf6db"
+    },
+    {
+      "path": "ovrplatform-old/OVR_UserOrdering.h",
+      "sha256": "7ff4d1d9a36aa94f6455278858ef1a03034d5b21b997ad636a0b6f17108da875"
+    },
+    {
+      "path": "ovrplatform-old/OVR_UserPresenceStatus.h",
+      "sha256": "7e8b52bff6a8bfb5d0f46ed4d91e6208a8b3572dbde5ce2491dff7a7ea1a6d68"
+    },
+    {
+      "path": "ovrplatform-old/OVR_UserProof.h",
+      "sha256": "bcc13f2d2278d5cfc3fecbcbc4f33c3f56443dcd23070551fc081b294de50e2f"
+    },
+    {
+      "path": "ovrplatform-old/OVR_UserReportID.h",
+      "sha256": "79ae2f959e84b5d0c07badbe2028ae7053c6e49c503173010580b807ff32c58c"
+    },
+    {
+      "path": "ovrplatform-old/OVR_Voip_LowLevel.h",
+      "sha256": "4b53ebd1d673ef9964aed157142b841a902feb4cf9909a5b49bac89b71fd8913"
+    },
+    {
+      "path": "ovrplatform-old/OVR_VoipBitrate.h",
+      "sha256": "3bae27a293b931f954b26ec970eec110d3bf474f99dbac25945b9f5e80bd6900"
+    },
+    {
+      "path": "ovrplatform-old/OVR_VoipDecoder.h",
+      "sha256": "405a57d66bdf8e1c94dec272e30fdc9293acede9bfa8c1c59f50bf49576d0399"
+    },
+    {
+      "path": "ovrplatform-old/OVR_VoipDtxState.h",
+      "sha256": "055d02a4d618503487e0078c96eb936a20f619d0e240dfb6ee6e64cded9a1079"
+    },
+    {
+      "path": "ovrplatform-old/OVR_VoipEncoder.h",
+      "sha256": "ceb5d38c5e52c724ccb85c4b746f575a9d97c82f1447a7a0044a80b497209bf3"
+    },
+    {
+      "path": "ovrplatform-old/OVR_VoipMuteState.h",
+      "sha256": "d0aaf24235a9e240db21bebe7f254a83061ca234e3843c5b21c038ed396a359f"
+    },
+    {
+      "path": "ovrplatform-old/OVR_VoipOptions.h",
+      "sha256": "f31cdab63126c4b3eec0f3ee3c6093693399f9bcb9dd2515eec2bb279116e70b"
+    },
+    {
+      "path": "ovrplatform-old/OVR_VoipSampleRate.h",
+      "sha256": "c814fe0da0216d5d36999739b051b5c0bd8b2082074887797966c7c8c4001bda"
+    },
+    {
+      "path": "ovrplatform-53.0.0-preview/package/Scripts/PlatformInternal.cs",
+      "sha256": "4e138a586d204a5be945cb774d702e799c2cd8ee317e5090647855d6c6c21e80"
+    },
+    {
+      "path": "ovrplatform-69.0.0/package/Scripts/PlatformInternal.cs",
+      "sha256": "4e138a586d204a5be945cb774d702e799c2cd8ee317e5090647855d6c6c21e80"
+    },
+    {
+      "path": "ovrplatform-207.0.0/package/Scripts/Packages/iap/Models/BillingPlan.cs",
+      "sha256": "721af7df7a794f21d08148df8caf6960a6f28b84cc2c1c56c35a635de933afd1"
+    },
+    {
+      "path": "ovrplatform-207.0.0/package/Scripts/Packages/iap/Models/ContentRating.cs",
+      "sha256": "f87ee9f4ac6492066dc5c0f98705e778db66280fbf4deaec0df88cfcf4adcf86"
+    },
+    {
+      "path": "ovrplatform-207.0.0/package/Scripts/Packages/iap/Models/PaidOffer.cs",
+      "sha256": "db962eee9dfe5514be5bfa3e9b621384c552b81c0c2d98556398405224523bfb"
+    },
+    {
+      "path": "ovrplatform-207.0.0/package/Scripts/Packages/iap/Models/Price.cs",
+      "sha256": "1d6ff6998ed0d372520c3759c98ea42065f94aae92a973fbba7d0db5904be4de"
+    },
+    {
+      "path": "ovrplatform-207.0.0/package/Scripts/Packages/iap/Models/Product.cs",
+      "sha256": "3ac9f199153e98a153fd0b15d471584c6d9041bbb91de0ca736522d1e6f1833d"
+    },
+    {
+      "path": "ovrplatform-207.0.0/package/Scripts/Packages/iap/Models/Purchase.cs",
+      "sha256": "eeda4a01a69962fd4118ce2e63d10b87ddf28b14afd4a21df7a9e1ef8031b8cf"
+    },
+    {
+      "path": "ovrplatform-207.0.0/package/Scripts/Packages/iap/Models/PurchaseItem.cs",
+      "sha256": "600266fa0858712cc06d8df073d247405b44bc00dc0eba358c2f33f5f57ad823"
+    },
+    {
+      "path": "ovrplatform-207.0.0/package/Scripts/Packages/iap/Models/PurchaseV0.cs",
+      "sha256": "77ca5cb0df4b53bf89f1194f72e261ed3cdb324731a7ab8dd95d81399ad94303"
+    },
+    {
+      "path": "ovrplatform-207.0.0/package/Scripts/Packages/iap/Models/TrialOffer.cs",
+      "sha256": "e76816a3472f956299de0ef0d3ecb1ddabbebab6e5445ccdb6658dc8b3f36a82"
+    },
+    {
+      "path": "ovrplatform-207.0.0/package/Scripts/Packages/iap/Enums/OfferTerm.cs",
+      "sha256": "7549ceb71c93a4c8a09bfa31653d84232aa5e8c3e434607851bc923de1bb76d7"
+    },
+    {
+      "path": "ovrplatform-207.0.0/package/Scripts/Packages/iap/Enums/OfferType.cs",
+      "sha256": "d68b747d5d77af30e1c7042f77ab8f27df39c9c727eb7857dcfb7c799132bdea"
+    },
+    {
+      "path": "ovrplatform-207.0.0/package/Scripts/Packages/iap/Enums/ProductType.cs",
+      "sha256": "d4dcd244475b366ded6b473ceeeaf4adc5d8f5a89224459f4a462703e57300b1"
+    },
+    {
+      "path": "ovrplatform-207.0.0/package/Scripts/Packages/user_age_category/Enums/AccountAgeCategory.cs",
+      "sha256": "525b701e993877d9ae6b03b0fee077f30c99c6e91a641baa214d2767043b4859"
+    },
+    {
+      "path": "ovrplatform-207.0.0/package/Scripts/Packages/users/Models/User.cs",
+      "sha256": "de905ea2e7691c500ceb71026329c69dcdf01d09f7f65ccef9592a4ba6dcf0c5"
+    },
+    {
+      "path": "ovrplatform-207.0.0/package/Scripts/Packages/users/Models/ManagedInfo.cs",
+      "sha256": "8a11121dabda1ddec7e6de6838defb4ed2ca34414b0f469ff381eaccf059d59b"
+    },
+    {
+      "path": "ovrplatform-207.0.0/package/Scripts/Packages/users/Enums/UserPresenceStatus.cs",
+      "sha256": "9db5d5e8fc94cb1703c947bfc67f9fb56f279eab8cfdeffbaa1d851980be3f9a"
+    }
+  ]
+}

@@ -1,0 +1,188 @@
+{
+  "description": "Chain after vader-ep3-saber.json. Test a saber handoff from the right grip to the left, activate and swing. This is a controller interaction probe, not a forced haptic output.",
+  "events": [
+    {
+      "time": 0,
+      "right": {
+        "aim": {
+          "position": [
+            0.15,
+            1.25,
+            -0.35
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        "grip": {
+          "position": [
+            0.15,
+            1.25,
+            -0.35
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        "trigger": 0
+      },
+      "left": {
+        "aim": {
+          "position": [
+            0.15,
+            1.25,
+            -0.35
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        "grip": {
+          "position": [
+            0.15,
+            1.25,
+            -0.35
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        "trigger": 0,
+        "squeeze": 0
+      }
+    },
+    {
+      "time": 3,
+      "right": {
+        "squeeze": 0
+      },
+      "left": {
+        "squeeze": 1
+      }
+    },
+    {
+      "time": 8,
+      "left": {
+        "aim": {
+          "position": [
+            -0.15,
+            1.25,
+            -0.35
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        "grip": {
+          "position": [
+            -0.15,
+            1.25,
+            -0.35
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        }
+      }
+    },
+    {
+      "time": 13,
+      "left": {
+        "trigger": 1
+      }
+    },
+    {
+      "time": 15,
+      "left": {
+        "trigger": 0
+      }
+    },
+    {
+      "time": 20,
+      "left": {
+        "aim": {
+          "position": [
+            -0.35,
+            1.25,
+            -0.55
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        "grip": {
+          "position": [
+            -0.35,
+            1.25,
+            -0.55
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        }
+      }
+    },
+    {
+      "time": 21,
+      "pose_interpolation": "linear",
+      "left": {
+        "aim": {
+          "position": [
+            0.25,
+            1.25,
+            -0.55
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        "grip": {
+          "position": [
+            0.25,
+            1.25,
+            -0.55
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        }
+      }
+    },
+    {
+      "time": 24,
+      "left": {
+        "squeeze": 0
+      }
+    }
+  ]
+}

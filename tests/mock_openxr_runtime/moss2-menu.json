@@ -1,0 +1,77 @@
+{
+ "description": "Moss: Book II first boot: A confirms the Play Area and Controls panels (and the panel after them); the Unreal and Polyarc splashes then open the library hall main menu at about 91 s. Each A is held 3 s so a SwiftShader host near 1 fps still samples it.",
+ "events": [
+  {
+   "time": 0,
+   "head": {
+    "position": [
+     0,
+     1.6,
+     0
+    ],
+    "orientation": [
+     0,
+     0,
+     0,
+     1
+    ]
+   },
+   "left": {
+    "trigger": 0,
+    "squeeze": 0
+   },
+   "right": {
+    "trigger": 0,
+    "squeeze": 0
+   }
+  },
+  {
+   "time": 52,
+   "right": {
+    "a": true
+   }
+  },
+  {
+   "time": 55.0,
+   "right": {
+    "a": false
+   }
+  },
+  {
+   "time": 64,
+   "right": {
+    "a": true
+   }
+  },
+  {
+   "time": 67.0,
+   "right": {
+    "a": false
+   }
+  },
+  {
+   "time": 76,
+   "right": {
+    "a": true
+   }
+  },
+  {
+   "time": 79.0,
+   "right": {
+    "a": false
+   }
+  },
+  {
+   "time": 88,
+   "right": {
+    "a": true
+   }
+  },
+  {
+   "time": 91.0,
+   "right": {
+    "a": false
+   }
+  }
+ ]
+}

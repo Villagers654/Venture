@@ -1,0 +1,5 @@
+heap: allocate zero grow shrink usable size OK
+heap: aligned allocation OK
+heap: 256 MiB arena OK
+heap: 4096 small allocations OK
+VTEST RESULT malloc PASS

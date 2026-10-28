@@ -1,0 +1,4 @@
+dl: NOW LAZY GLOBAL symbols refcounts errors OK
+loaded: libvtest_dl.so libvtest_dl_peer.so
+dl: auxv and SDK property OK
+VTEST RESULT dl PASS

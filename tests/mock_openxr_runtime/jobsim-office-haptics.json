@@ -1,0 +1,238 @@
+{
+  "description": "Bounded prefix of the verified job-selection route: grasp the office job cartridge from its rack at 426.4 s, lift it at 434.4 s, insert it into the selector and release it. Captures pickup/insertion haptics in the 3D museum; the later office-launch lever is outside this prefix.",
+  "events": [
+    {
+      "time": 0,
+      "hand_tracking_active": false,
+      "head": {
+        "position": [
+          0,
+          1.6,
+          0
+        ]
+      },
+      "left": {
+        "trigger": 0,
+        "squeeze": 0,
+        "aim": {
+          "position": [
+            -0.25,
+            1.2,
+            -0.35
+          ]
+        },
+        "grip": {
+          "position": [
+            -0.25,
+            1.2,
+            -0.35
+          ]
+        }
+      },
+      "right": {
+        "trigger": 0,
+        "squeeze": 0,
+        "aim": {
+          "position": [
+            0.25,
+            1.2,
+            -0.35
+          ]
+        },
+        "grip": {
+          "position": [
+            0.25,
+            1.2,
+            -0.35
+          ]
+        }
+      }
+    },
+    {
+      "time": 320,
+      "head": {
+        "position": [
+          0.4,
+          1.45,
+          -0.45
+        ],
+        "orientation": [
+          0,
+          -0.258819,
+          0,
+          0.965926
+        ]
+      },
+      "right": {
+        "aim": {
+          "position": [
+            0.95,
+            0.96,
+            -1.32
+          ]
+        },
+        "grip": {
+          "position": [
+            0.95,
+            0.96,
+            -1.32
+          ]
+        },
+        "trigger": 0,
+        "squeeze": 0
+      }
+    },
+    {
+      "time": 426.4,
+      "right": {
+        "trigger": 1,
+        "squeeze": 1,
+        "aim": {
+          "position": [
+            0.95,
+            0.96,
+            -1.32
+          ]
+        },
+        "grip": {
+          "position": [
+            0.95,
+            0.96,
+            -1.32
+          ]
+        }
+      }
+    },
+    {
+      "time": 434.4,
+      "right": {
+        "trigger": 1,
+        "squeeze": 1,
+        "aim": {
+          "position": [
+            0.95,
+            1.25,
+            -1.32
+          ]
+        },
+        "grip": {
+          "position": [
+            0.95,
+            1.25,
+            -1.32
+          ]
+        }
+      }
+    },
+    {
+      "time": 499.2,
+      "head": {
+        "position": [
+          0,
+          1.6,
+          0
+        ],
+        "orientation": [
+          0,
+          0,
+          0,
+          1
+        ]
+      }
+    },
+    {
+      "time": 503.2,
+      "right": {
+        "aim": {
+          "position": [
+            -0.013,
+            1.24,
+            -0.59
+          ]
+        },
+        "grip": {
+          "position": [
+            -0.013,
+            1.24,
+            -0.59
+          ]
+        }
+      }
+    },
+    {
+      "time": 509.2,
+      "right": {
+        "aim": {
+          "position": [
+            -0.013,
+            1.1,
+            -0.59
+          ]
+        },
+        "grip": {
+          "position": [
+            -0.013,
+            1.1,
+            -0.59
+          ]
+        }
+      }
+    },
+    {
+      "time": 587.8,
+      "right": {
+        "aim": {
+          "position": [
+            -0.04,
+            1.18,
+            -0.64
+          ]
+        },
+        "grip": {
+          "position": [
+            -0.04,
+            1.18,
+            -0.64
+          ]
+        }
+      }
+    },
+    {
+      "time": 596.8,
+      "right": {
+        "trigger": 0,
+        "squeeze": 0
+      }
+    },
+    {
+      "time": 602.8,
+      "right": {
+        "aim": {
+          "position": [
+            0.25,
+            1.2,
+            -0.35
+          ]
+        },
+        "grip": {
+          "position": [
+            0.25,
+            1.2,
+            -0.35
+          ]
+        }
+      }
+    },
+    {
+      "time": 640,
+      "left": {
+        "trigger": 0,
+        "squeeze": 0
+      },
+      "right": {
+        "trigger": 0,
+        "squeeze": 0
+      }
+    }
+  ]
+}

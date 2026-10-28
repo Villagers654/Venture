@@ -1,0 +1,30 @@
+{
+  "description": "North Star 101 controller route: wait for the startup settings panel, aim the right controller ray at Play at 55 seconds, press and release trigger at 60-61 seconds with one retry at 62.5-63.5 seconds, then hold still for the opening deck sequence. Preserve the default comfort settings and skip height calibration. Play targeting corrects the cursor above Play in stereo frame 3600 of the bell replay; gameplay progression and interactions remain to be confirmed. Times are seconds after the first xrSyncActions.",
+  "events": [
+    {
+      "time": 0,
+      "hand_tracking_active": false,
+      "head": {"position": [0, 1.6, 0], "orientation": [0, 0, 0, 1]},
+      "left": {
+        "active": true,
+        "aim": {"position": [-0.25, 1.25, -0.35], "orientation": [0, 0, 0, 1]},
+        "grip": {"position": [-0.25, 1.25, -0.35], "orientation": [0, 0, 0, 1]},
+        "trigger": 0,
+        "squeeze": 0
+      },
+      "right": {
+        "active": true,
+        "aim": {"position": [0.25, 1.25, -0.35], "orientation": [0, 0, 0, 1]},
+        "grip": {"position": [0.25, 1.25, -0.35], "orientation": [0, 0, 0, 1]},
+        "trigger": 0,
+        "squeeze": 0
+      }
+    },
+    {"time":55,"right":{"aim":{"position":[0.25,1.25,-0.35],"orientation":[-0.112,0.148,0,0.98262506]},"grip":{"position":[0.25,1.25,-0.35],"orientation":[-0.112,0.148,0,0.98262506]}}},
+    {"time":60,"right":{"trigger":1}},
+    {"time":61,"right":{"trigger":0}},
+    {"time":62.5,"right":{"trigger":1}},
+    {"time":63.5,"right":{"trigger":0}},
+    {"time":65,"right":{"aim":{"position":[0.25,1.25,-0.35],"orientation":[0,0,0,1]},"grip":{"position":[0.25,1.25,-0.35],"orientation":[0,0,0,1]}}}
+  ]
+}

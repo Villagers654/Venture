@@ -1,0 +1,76 @@
+{
+  "description": "Chain after elixir-gameplay.json. First leave hand tracking active with both controllers present, then disable hand tracking and exercise controller triggers/grips. Compare guest haptic requests and the rendered interaction mode. Installed manifest requires hand tracking; this probe verifies controller behavior rather than injecting vibration.",
+  "events": [
+    {
+      "time": 0,
+      "left": {
+        "active": true,
+        "trigger": 0,
+        "squeeze": 0
+      },
+      "right": {
+        "active": true,
+        "trigger": 0,
+        "squeeze": 0
+      }
+    },
+    {
+      "time": 5,
+      "left": {
+        "trigger": 1,
+        "squeeze": 1
+      },
+      "right": {
+        "trigger": 1,
+        "squeeze": 1
+      }
+    },
+    {
+      "time": 8,
+      "left": {
+        "trigger": 0,
+        "squeeze": 0
+      },
+      "right": {
+        "trigger": 0,
+        "squeeze": 0
+      }
+    },
+    {
+      "time": 15,
+      "hand_tracking_active": false
+    },
+    {
+      "time": 20,
+      "left": {
+        "trigger": 1,
+        "squeeze": 1
+      },
+      "right": {
+        "trigger": 1,
+        "squeeze": 1
+      }
+    },
+    {
+      "time": 23,
+      "left": {
+        "trigger": 0,
+        "squeeze": 0
+      },
+      "right": {
+        "trigger": 0,
+        "squeeze": 0
+      }
+    },
+    {
+      "time": 30,
+      "hand_tracking_active": true,
+      "left": {
+        "active": false
+      },
+      "right": {
+        "active": false
+      }
+    }
+  ]
+}

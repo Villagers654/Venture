@@ -1,0 +1,101 @@
+{
+ "description": "Moss first boot: neutral head and controllers; A every 12 s from 40 s confirms the startup panels (Polyarc's Book II layout) toward the library menu. Each A is held 3 s so a SwiftShader host near 1 fps still samples it.",
+ "events": [
+  {
+   "time": 0,
+   "head": {
+    "position": [
+     0,
+     1.6,
+     0
+    ],
+    "orientation": [
+     0,
+     0,
+     0,
+     1
+    ]
+   },
+   "left": {
+    "trigger": 0,
+    "squeeze": 0
+   },
+   "right": {
+    "trigger": 0,
+    "squeeze": 0
+   }
+  },
+  {
+   "time": 40,
+   "right": {
+    "a": true
+   }
+  },
+  {
+   "time": 43.0,
+   "right": {
+    "a": false
+   }
+  },
+  {
+   "time": 52,
+   "right": {
+    "a": true
+   }
+  },
+  {
+   "time": 55.0,
+   "right": {
+    "a": false
+   }
+  },
+  {
+   "time": 64,
+   "right": {
+    "a": true
+   }
+  },
+  {
+   "time": 67.0,
+   "right": {
+    "a": false
+   }
+  },
+  {
+   "time": 76,
+   "right": {
+    "a": true
+   }
+  },
+  {
+   "time": 79.0,
+   "right": {
+    "a": false
+   }
+  },
+  {
+   "time": 88,
+   "right": {
+    "a": true
+   }
+  },
+  {
+   "time": 91.0,
+   "right": {
+    "a": false
+   }
+  },
+  {
+   "time": 100,
+   "right": {
+    "a": true
+   }
+  },
+  {
+   "time": 103.0,
+   "right": {
+    "a": false
+   }
+  }
+ ]
+}

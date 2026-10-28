@@ -1,0 +1,5 @@
+#pragma once
+#include <string_view>
+namespace venture {
+inline constexpr std::string_view hosted_java_source = R"VENTURE_JS(@VENTURE_HOSTED_JAVA_SOURCE@)VENTURE_JS";
+}

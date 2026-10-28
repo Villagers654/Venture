@@ -1,0 +1,16 @@
+set(VENTURE_ANGLE_ROOT "${PROJECT_SOURCE_DIR}/.deps/angle/d2e5e488da0c6215f8276e5b8d992a4a6ec20c32"
+    CACHE PATH "Installed Venture ANGLE dependency")
+if(NOT EXISTS "${VENTURE_ANGLE_ROOT}/include/EGL/eglext_angle_venture.h")
+  message(FATAL_ERROR "Run python tools/bootstrap.py --angle before building the ANGLE smoke test")
+endif()
+add_executable(venture_angle_smoke smoke/angle_smoke.cpp)
+target_include_directories(venture_angle_smoke SYSTEM PRIVATE "${VENTURE_ANGLE_ROOT}/include")
+target_link_libraries(venture_angle_smoke PRIVATE ${CMAKE_DL_LIBS})
+if(VENTURE_BUILD_TESTS)
+  add_test(NAME angle_smoke COMMAND venture_angle_smoke "${VENTURE_ANGLE_ROOT}/bin")
+  add_test(NAME angle_smoke_stock COMMAND venture_angle_smoke "${VENTURE_ANGLE_ROOT}/bin" --stock)
+  foreach(mode backend version size null instance physical device)
+    add_test(NAME angle_smoke_reject_${mode}
+             COMMAND venture_angle_smoke "${VENTURE_ANGLE_ROOT}/bin" --negative ${mode})
+  endforeach()
+endif()

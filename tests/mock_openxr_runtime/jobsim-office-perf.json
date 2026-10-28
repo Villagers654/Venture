@@ -1,0 +1,29 @@
+{
+  "events": [
+    {"time":0,"hand_tracking_active":false,"head":{"position":[0,1.6,0]},"left":{"trigger":0,"squeeze":0,"aim":{"position":[-0.25,1.2,-0.35]},"grip":{"position":[-0.25,1.2,-0.35]}},"right":{"trigger":0,"squeeze":0,"aim":{"position":[0.25,1.2,-0.35]},"grip":{"position":[0.25,1.2,-0.35]}}},
+    {"time":96,"head":{"position":[0.4,1.45,-0.45],"orientation":[0,-0.258819,0,0.965926]},"right":{"aim":{"position":[0.95,0.96,-1.32]},"grip":{"position":[0.95,0.96,-1.32]},"trigger":0,"squeeze":0}},
+    {"time":127.92,"right":{"trigger":1,"squeeze":1,"aim":{"position":[0.95,0.96,-1.32]},"grip":{"position":[0.95,0.96,-1.32]}}},
+    {"time":130.32,"right":{"trigger":1,"squeeze":1,"aim":{"position":[0.95,1.25,-1.32]},"grip":{"position":[0.95,1.25,-1.32]}}},
+    {"time":149.76,"head":{"position":[0,1.6,0],"orientation":[0,0,0,1]}},
+    {"time":150.96,"right":{"aim":{"position":[-0.013,1.24,-0.59]},"grip":{"position":[-0.013,1.24,-0.59]}}},
+    {"time":152.76,"right":{"aim":{"position":[-0.013,1.1,-0.59]},"grip":{"position":[-0.013,1.1,-0.59]}}},
+    {"time":176.34,"right":{"aim":{"position":[-0.04,1.18,-0.64]},"grip":{"position":[-0.04,1.18,-0.64]}}},
+    {"time":179.04,"right":{"trigger":0,"squeeze":0}},
+    {"time":180.84,"right":{"aim":{"position":[0.25,1.2,-0.35]},"grip":{"position":[0.25,1.2,-0.35]}}},
+    {"time":197.31,"head":{"orientation":[-0.258819,0,0,0.965926]},"right":{"aim":{"position":[0.368,1.12,-0.45]},"grip":{"position":[0.368,1.12,-0.45]},"trigger":0,"squeeze":0}},
+    {"time":214.56,"right":{"aim":{"position":[0.368,1.17,-0.429]},"grip":{"position":[0.368,1.17,-0.429]},"trigger":0,"squeeze":0}},
+    {"time":216.06,"right":{"aim":{"position":[0.368,1.17,-0.429]},"grip":{"position":[0.368,1.17,-0.429]},"trigger":1,"squeeze":1}},
+    {"time":217.56,"right":{"aim":{"position":[0.368,1.1604,-0.3332]},"grip":{"position":[0.368,1.1604,-0.3332]},"trigger":1,"squeeze":1}},
+    {"time":218.46,"right":{"aim":{"position":[0.368,1.1234,-0.244]},"grip":{"position":[0.368,1.1234,-0.244]},"trigger":1,"squeeze":1}},
+    {"time":219.36,"right":{"aim":{"position":[0.368,1.0646,-0.1674]},"grip":{"position":[0.368,1.0646,-0.1674]},"trigger":1,"squeeze":1}},
+    {"time":220.26,"right":{"aim":{"position":[0.368,0.988,-0.1086]},"grip":{"position":[0.368,0.988,-0.1086]},"trigger":1,"squeeze":1}},
+    {"time":221.16,"right":{"aim":{"position":[0.368,0.8988,-0.0716]},"grip":{"position":[0.368,0.8988,-0.0716]},"trigger":1,"squeeze":1}},
+    {"time":222.66,"right":{"aim":{"position":[0.25,1.2,-0.35]},"grip":{"position":[0.25,1.2,-0.35]},"trigger":0,"squeeze":0}},
+    {"time":223.86,"head":{"orientation":[0,0,0,1]}},
+    {"time":248.88,"left":{"menu":true},"head":{"orientation":[-0.258819,0,0,0.965926]},"right":{"aim":{"position":[0.368,1.2,-0.44]},"grip":{"position":[0.368,1.2,-0.44]},"trigger":0,"squeeze":0}},
+    {"time":250.08,"left":{"menu":false}},
+    {"time":360,"right":{"aim":{"position":[0.02,1.0,-0.54]},"grip":{"position":[0.02,1.0,-0.54]},"trigger":0,"squeeze":0}},
+    {"time":378,"right":{"aim":{"position":[0.02,1.0,-0.54]},"grip":{"position":[0.02,1.0,-0.54]},"trigger":1,"squeeze":1}},
+    {"time":396,"right":{"aim":{"position":[0.02,1.3,-0.54]},"grip":{"position":[0.02,1.3,-0.54]},"trigger":1,"squeeze":1}}
+  ]
+}

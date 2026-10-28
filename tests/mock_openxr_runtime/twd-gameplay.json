@@ -1,0 +1,323 @@
+{
+  "description": "Chain after twd-first-run.json at 30 seconds. Hold the right thumbstick to reset stance, aim and trigger-select New Game, the first empty local save slot, and the default difficulty, voice, arm and skin choices. Start New Game, enter its offline holster tutorial, look down, grab and lift the left weapon, return and release it, then grab and lift the right pistol. Verified stereo weapon grabs and tutorial instruction advancement. The tutorial proof shows its floor, player arms and held pistol.",
+  "events": [
+    {
+      "time": 0.0,
+      "right": {
+        "thumbstick_click": true
+      }
+    },
+    {
+      "time": 8.0,
+      "right": {
+        "thumbstick_click": false
+      }
+    },
+    {
+      "time": 40.0,
+      "right": {
+        "thumbstick_click": true
+      }
+    },
+    {
+      "time": 48.0,
+      "right": {
+        "thumbstick_click": false
+      }
+    },
+    {
+      "time": 80.0,
+      "right": {
+        "thumbstick_click": true
+      }
+    },
+    {
+      "time": 88.0,
+      "right": {
+        "thumbstick_click": false
+      }
+    },
+    {
+      "time": 110.0,
+      "right": {
+        "grip": {
+          "position": [0, 1.25, -0.35],
+          "orientation": [0.255, 0, 0, 0.966941053012023]
+        },
+        "aim": {
+          "position": [0, 1.25, -0.35],
+          "orientation": [0.255, 0, 0, 0.966941053012023]
+        },
+        "trigger": 0
+      }
+    },
+    {
+      "time": 113.0,
+      "right": {
+        "trigger": 1
+      }
+    },
+    {
+      "time": 116.0,
+      "right": {
+        "trigger": 0
+      }
+    },
+    {
+      "time": 135.0,
+      "right": {
+        "grip": {
+          "position": [0, 1.25, -0.35],
+          "orientation": [0.24, 0, 0, 0.9707728879609278]
+        },
+        "aim": {
+          "position": [0, 1.25, -0.35],
+          "orientation": [0.24, 0, 0, 0.9707728879609278]
+        },
+        "trigger": 0
+      }
+    },
+    {
+      "time": 138.0,
+      "right": {
+        "trigger": 1
+      }
+    },
+    {
+      "time": 141.0,
+      "right": {
+        "trigger": 0
+      }
+    },
+    {
+      "time": 160.0,
+      "right": {
+        "grip": {
+          "position": [0, 1.25, -0.35],
+          "orientation": [0.05, -0.1, 0, 0.9937303457175896]
+        },
+        "aim": {
+          "position": [0, 1.25, -0.35],
+          "orientation": [0.05, -0.1, 0, 0.9937303457175896]
+        },
+        "trigger": 0
+      }
+    },
+    {
+      "time": 163.0,
+      "right": {
+        "trigger": 1
+      }
+    },
+    {
+      "time": 166.0,
+      "right": {
+        "trigger": 0
+      }
+    },
+    {
+      "time": 185.0,
+      "right": {
+        "grip": {
+          "position": [0, 1.25, -0.35],
+          "orientation": [0.05, -0.15, 0, 0.987420882906575]
+        },
+        "aim": {
+          "position": [0, 1.25, -0.35],
+          "orientation": [0.05, -0.15, 0, 0.987420882906575]
+        },
+        "trigger": 0
+      }
+    },
+    {
+      "time": 188.0,
+      "right": {
+        "trigger": 1
+      }
+    },
+    {
+      "time": 191.0,
+      "right": {
+        "trigger": 0
+      }
+    },
+    {
+      "time": 210.0,
+      "right": {
+        "grip": {
+          "position": [0, 1.25, -0.35],
+          "orientation": [0.05, -0.1, 0, 0.9937303457175896]
+        },
+        "aim": {
+          "position": [0, 1.25, -0.35],
+          "orientation": [0.05, -0.1, 0, 0.9937303457175896]
+        },
+        "trigger": 0
+      }
+    },
+    {
+      "time": 213.0,
+      "right": {
+        "trigger": 1
+      }
+    },
+    {
+      "time": 216.0,
+      "right": {
+        "trigger": 0
+      }
+    },
+    {
+      "time": 235.0,
+      "right": {
+        "grip": {
+          "position": [0, 1.25, -0.35],
+          "orientation": [0.05, -0.15, 0, 0.987420882906575]
+        },
+        "aim": {
+          "position": [0, 1.25, -0.35],
+          "orientation": [0.05, -0.15, 0, 0.987420882906575]
+        },
+        "trigger": 0
+      }
+    },
+    {
+      "time": 238.0,
+      "right": {
+        "trigger": 1
+      }
+    },
+    {
+      "time": 241.0,
+      "right": {
+        "trigger": 0
+      }
+    },
+    {
+      "time": 291.93579,
+      "right": {
+        "grip": {
+          "position": [0, 1.25, -0.35],
+          "orientation": [0.1, -0.15, 0, 0.9836157786453001]
+        },
+        "aim": {
+          "position": [0, 1.25, -0.35],
+          "orientation": [0.1, -0.15, 0, 0.9836157786453001]
+        },
+        "trigger": 0
+      }
+    },
+    {
+      "time": 294.93579,
+      "right": {
+        "trigger": 1
+      }
+    },
+    {
+      "time": 297.93579,
+      "right": {
+        "trigger": 0
+      }
+    },
+    {
+      "time": 346.3411,
+      "head": {
+        "position": [0, 1.6, 0],
+        "orientation": [-0.3826834324, 0, 0, 0.9238795325]
+      },
+      "left": {
+        "grip": {
+          "position": [-0.2, 0.95, 0],
+          "orientation": [0, 0, 0, 1]
+        },
+        "aim": {
+          "position": [-0.2, 0.95, 0],
+          "orientation": [0, 0, 0, 1]
+        },
+        "squeeze": 0
+      },
+      "right": {
+        "grip": {
+          "position": [0.25, 1.25, -0.35],
+          "orientation": [0, 0, 0, 1]
+        },
+        "aim": {
+          "position": [0.25, 1.25, -0.35],
+          "orientation": [0, 0, 0, 1]
+        },
+        "squeeze": 0
+      }
+    },
+    {
+      "time": 350.3411,
+      "left": {
+        "squeeze": 1
+      }
+    },
+    {
+      "time": 355.3411,
+      "left": {
+        "grip": {
+          "position": [-0.2, 1.25, -0.45],
+          "orientation": [0, 0, 0, 1]
+        },
+        "aim": {
+          "position": [-0.2, 1.25, -0.45],
+          "orientation": [0, 0, 0, 1]
+        }
+      }
+    },
+    {
+      "time": 411.504611,
+      "left": {
+        "grip": {
+          "position": [-0.2, 0.95, 0],
+          "orientation": [0, 0, 0, 1]
+        },
+        "aim": {
+          "position": [-0.2, 0.95, 0],
+          "orientation": [0, 0, 0, 1]
+        }
+      }
+    },
+    {
+      "time": 415.504611,
+      "left": {
+        "squeeze": 0
+      }
+    },
+    {
+      "time": 495.198944,
+      "right": {
+        "grip": {
+          "position": [0.2, 0.95, 0],
+          "orientation": [0, 0, 0, 1]
+        },
+        "aim": {
+          "position": [0.2, 0.95, 0],
+          "orientation": [0, 0, 0, 1]
+        },
+        "squeeze": 0
+      }
+    },
+    {
+      "time": 499.198944,
+      "right": {
+        "squeeze": 1
+      }
+    },
+    {
+      "time": 504.198944,
+      "right": {
+        "grip": {
+          "position": [0.2, 1.35, -0.45],
+          "orientation": [0, 0, 0, 1]
+        },
+        "aim": {
+          "position": [0.2, 1.35, -0.45],
+          "orientation": [0, 0, 0, 1]
+        }
+      }
+    }
+  ]
+}

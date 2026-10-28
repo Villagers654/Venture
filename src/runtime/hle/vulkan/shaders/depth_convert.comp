@@ -1,0 +1,39 @@
+#version 450
+// Converts the depth-aspect buffer words of guest D24 images in place: the
+// guest's packed 24-bit UNORM (low bits) to the 32-bit float of the host's
+// substituted D32 format, or back. Stencil and X8 bits read back as zero.
+layout(local_size_x = 64) in;
+layout(std430, binding = 0) buffer Words { uint words[]; };
+layout(push_constant) uniform Push {
+  uint base;
+  uint count;
+  uint to_unorm;
+} push;
+
+// value / (2^24 - 1) = (value + value * 2^-24 + ...) * 2^-24. Only the add
+// rounds (scaling by powers of two is exact), so unlike a GPU division the
+// result is distinct for every 24-bit value and within an ulp of exact.
+float unorm_depth(uint value) {
+  float v = float(value);
+  return (v + v * 5.9604644775390625e-8) * 5.9604644775390625e-8;
+}
+
+void main() {
+  uint i = push.base + gl_GlobalInvocationID.x;
+  if (i >= push.count) return;
+  uint value = words[i];
+  if (push.to_unorm == 0u) {
+    words[i] = floatBitsToUint(unorm_depth(value & 0xFFFFFFu));
+    return;
+  }
+  float depth = clamp(uintBitsToFloat(value), 0.0, 1.0);
+  // Nearest UNORM; no +0.5, since above 2^23 a float holds only integers. A
+  // value this shader uploaded reads back exactly even where the division is
+  // approximate: prefer the neighbour that converts to the stored float.
+  uint unorm = min(uint(roundEven(depth * 16777215.0)), 0xFFFFFFu);
+  if (unorm_depth(unorm) != depth) {
+    if (unorm > 0u && unorm_depth(unorm - 1u) == depth) unorm -= 1u;
+    else if (unorm < 0xFFFFFFu && unorm_depth(unorm + 1u) == depth) unorm += 1u;
+  }
+  words[i] = unorm;
+}

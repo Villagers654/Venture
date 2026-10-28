@@ -1,0 +1,17 @@
+{
+  "description": "First-launch intro, normal lifecycle stop, then tutorial on the same data copy.",
+  "launches": [
+    {
+      "routes": [
+        "puzzling-first-launch.json"
+      ],
+      "seconds": 180
+    },
+    {
+      "routes": [
+        "puzzling-tutorial.json"
+      ],
+      "seconds": 420
+    }
+  ]
+}

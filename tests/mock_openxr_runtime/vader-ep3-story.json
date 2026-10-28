@@ -1,0 +1,6 @@
+{
+  "events": [
+    {"time":0,"head":{"position":[0,1.6,0],"orientation":[0,0,0,1]},"left":{"trigger":0,"squeeze":0},"right":{"aim":{"position":[0.28,1.42,-0.58],"orientation":[0,0,0,1]},"grip":{"position":[0.28,1.42,-0.58],"orientation":[0,0,0,1]},"trigger":0,"squeeze":0}},
+    {"time":600,"right":{"aim":{"position":[0.25,1.25,-0.35],"orientation":[0,0,0,1]},"grip":{"position":[0.25,1.25,-0.35],"orientation":[0,0,0,1]},"trigger":0,"squeeze":0}}
+  ]
+}

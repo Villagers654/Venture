@@ -1,0 +1,7 @@
+integers: -42 42 -1234567890123 18446744073709551615 12345 0x2a 011
+padding: [+00042][venture    ][   1.250][  2.50]
+floating: 1.25 1.250e+01 1.250E+01 123.5 123.5 0x1.8p+0
+direct: -7 9876543210 8 1.25 2.5
+positional and null pointer OK
+va_list forwarding and truncation OK
+VTEST RESULT printf PASS

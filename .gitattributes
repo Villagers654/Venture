@@ -1,0 +1,8 @@
+* text=auto eol=lf
+*.cmd text eol=crlf
+*.patch -whitespace
+# Pinned SDK inputs retain upstream whitespace and file hashes.
+third_party/steamworks/sdk*/** -whitespace
+# The JIT and its libraries keep their existing line endings byte for byte.
+src/jit/** -text -whitespace
+

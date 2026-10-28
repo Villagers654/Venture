@@ -1,0 +1,8 @@
+{
+  "description": "North Star platform (diagnostic), distinct from crew gameplay. Chain after the Play route at input 70 seconds. Leave the bell untouched and turn to face the wooden starting platform and crates in fog. Hold the final camera and controllers for a stable diagnostic performance window; this route does not claim crew progression.",
+  "events": [
+    {"time":0,"head":{"position":[0,1.6,0],"orientation":[0,0,0,1]},"left":{"trigger":0,"squeeze":0},"right":{"trigger":0,"squeeze":0}},
+    {"time":40,"head":{"orientation":[0,1,0,0]}},
+    {"time":80,"head":{"orientation":[0,1,0,0]}}
+  ]
+}

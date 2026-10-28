@@ -1,0 +1,137 @@
+{
+  "description": "Chain after cactus-campaign.json. Attempt a weapon handoff by bringing both grips together, releasing the right hand, gripping with the left and firing. Inspect weapon ownership before claiming left output.",
+  "events": [
+    {
+      "time": 0,
+      "right": {
+        "aim": {
+          "position": [
+            0.15,
+            1.25,
+            -0.45
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        "grip": {
+          "position": [
+            0.15,
+            1.25,
+            -0.45
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        "trigger": 0
+      },
+      "left": {
+        "aim": {
+          "position": [
+            0.15,
+            1.25,
+            -0.45
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        "grip": {
+          "position": [
+            0.15,
+            1.25,
+            -0.45
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        "trigger": 0,
+        "squeeze": 0
+      }
+    },
+    {
+      "time": 3,
+      "right": {
+        "squeeze": 0
+      },
+      "left": {
+        "squeeze": 1
+      }
+    },
+    {
+      "time": 5,
+      "left": {
+        "aim": {
+          "position": [
+            -0.15,
+            1.25,
+            -0.45
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        "grip": {
+          "position": [
+            -0.15,
+            1.25,
+            -0.45
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        }
+      }
+    },
+    {
+      "time": 8,
+      "left": {
+        "trigger": 1
+      }
+    },
+    {
+      "time": 9,
+      "left": {
+        "trigger": 0
+      }
+    },
+    {
+      "time": 12,
+      "left": {
+        "trigger": 1
+      }
+    },
+    {
+      "time": 13,
+      "left": {
+        "trigger": 0
+      }
+    },
+    {
+      "time": 16,
+      "left": {
+        "squeeze": 0
+      }
+    }
+  ]
+}

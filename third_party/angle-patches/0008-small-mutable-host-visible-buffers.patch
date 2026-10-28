@@ -1,0 +1,20 @@
+--- a/src/libANGLE/renderer/vulkan/BufferVk.cpp
++++ b/src/libANGLE/renderer/vulkan/BufferVk.cpp
+@@ -465,7 +465,16 @@
+     else
+     {
+         // glBufferData API call
+-        memoryPropertyFlags = GetPreferredMemoryType(contextVk->getRenderer(), target, usage);
++        // Usage is a hint. Keep small mutable stores host-visible and cached:
++        // staging a few bytes in device-local memory costs a GPU submission and
++        // wait on the first synchronized map. Host-visible stores use the normal
++        // map path, including ghosting GPU readers and waiting for GPU writers.
++        // Bound this policy to one CPU page; larger/static GPU stores retain
++        // their existing memory preference, as do immutable/external stores.
++        constexpr size_t kSmallMutableBufferSize = 4096;
++        memoryPropertyFlags = !isExternalBuffer && size <= kSmallMutableBufferSize
++                                  ? kHostCachedFlags
++                                  : GetPreferredMemoryType(contextVk->getRenderer(), target, usage);
+     }
+ 
+     if (isExternalBuffer)

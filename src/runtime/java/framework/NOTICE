@@ -1,0 +1,45 @@
+QuestPort Android framework
+
+The static coordinate mathematics in android/hardware/SensorManager.java is adapted from
+AOSP frameworks/base, tag android-12.1.0_r1, core/java/android/hardware/SensorManager.java.
+Copyright (C) 2008 The Android Open Source Project. Apache License 2.0;
+see APACHE-2.0.txt and the retained source header. In-place remapping uses a
+temporary with the input matrix dimension. Sensor device handling is QuestPort code.
+
+android/os/PatternMatcher.java is adapted from AOSP frameworks/base, tag android-12.1.0_r1:
+https://android.googlesource.com/platform/frameworks/base/+/android-12.1.0_r1/core/java/android/os/PatternMatcher.java
+Copyright (C) 2008 The Android Open Source Project. Apache License 2.0;
+see APACHE-2.0.txt and the retained source header. Proto diagnostics are omitted;
+the in-process Parcel representation reconstructs the parsed pattern on read.
+
+android/os/Messenger.java is adapted from AOSP frameworks/base, tag android-12.1.0_r27:
+https://android.googlesource.com/platform/frameworks/base/+/android-12.1.0_r27/core/java/android/os/Messenger.java
+Copyright (C) 2006 The Android Open Source Project. Apache License 2.0;
+see APACHE-2.0.txt and the retained source header. Android annotations are removed.
+
+org/json/*.java is from AOSP libcore, tag android-4.4.4_r2:
+https://android.googlesource.com/platform/libcore/+/android-4.4.4_r2/json/src/main/java/org/json/
+Copyright (C) 2010 The Android Open Source Project. Apache License 2.0;
+see APACHE-2.0.txt and the retained source headers.
+
+org/xmlpull/v1/*.java is the XMLPULL API from AOSP libcore, same tag:
+https://android.googlesource.com/platform/libcore/+/android-4.4.4_r2/xml/src/main/java/org/xmlpull/v1/
+The XMLPULL API is public domain; see org/xmlpull/v1/LICENSE.txt.
+The LGPL XMLPULL conformance tests are NOT included.
+
+org/kxml2/io/*.java is from kxml2 2.3.0 (MIT), with original license headers:
+https://repo.maven.apache.org/maven2/net/sf/kxml/kxml2/2.3.0/kxml2-2.3.0-sources.jar
+Source archive SHA-256:
+85495366666158b58961e8911ced0f6f3bc92f1ebee865518b493fdb90760250
+Copyright (c) 2002,2003 Stefan Haustein.
+Vendored source indentation and trailing whitespace have been normalized.
+
+The built jar also contains AOSP Android 32 resource data extracted from the
+Android SDK Platform 32 revision 1 android.jar, but NO SDK Java class stubs.
+Its notices are included at questport/android-32/NOTICE.txt. The archive URL
+and SHA-256 are pinned in tools/bootstrap_framework.py.
+
+Temurin is a separately provisioned OpenJDK binary dependency, not copied source.
+Keep its bundled legal/ directory when distributing the runtime. dex2jar/ASM are
+test/development tools, not embedded framework code; their notices remain with
+the provisioned tool distribution.

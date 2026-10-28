@@ -1,0 +1,309 @@
+{
+  "description": "Chain after aw2-opening.json. Candidate belt pickup, lift, trigger and swing interactions with the right hand. Inspect the opening scene and acquired weapon; revise the probe if the game has not reached a controllable weapon moment. No forced vibration.",
+  "events": [
+    {
+      "time": 0,
+      "head": {
+        "orientation": [
+          0,
+          0,
+          0,
+          1
+        ]
+      },
+      "left": {
+        "trigger": 0,
+        "squeeze": 0
+      },
+      "right": {
+        "trigger": 0,
+        "squeeze": 0
+      }
+    },
+    {
+      "time": 10,
+      "right": {
+        "aim": {
+          "position": [
+            0.25,
+            0.85,
+            0.05
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        "grip": {
+          "position": [
+            0.25,
+            0.85,
+            0.05
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        "squeeze": 0
+      }
+    },
+    {
+      "time": 12,
+      "right": {
+        "squeeze": 1
+      }
+    },
+    {
+      "time": 15,
+      "right": {
+        "aim": {
+          "position": [
+            0.15,
+            1.25,
+            -0.45
+          ]
+        },
+        "grip": {
+          "position": [
+            0.15,
+            1.25,
+            -0.45
+          ]
+        }
+      }
+    },
+    {
+      "time": 17,
+      "right": {
+        "trigger": 1
+      }
+    },
+    {
+      "time": 18,
+      "right": {
+        "trigger": 0
+      }
+    },
+    {
+      "time": 20,
+      "pose_interpolation": "linear",
+      "right": {
+        "aim": {
+          "position": [
+            -0.25,
+            1.25,
+            -0.65
+          ]
+        },
+        "grip": {
+          "position": [
+            -0.25,
+            1.25,
+            -0.65
+          ]
+        }
+      }
+    },
+    {
+      "time": 22,
+      "right": {
+        "squeeze": 0
+      }
+    },
+    {
+      "time": 25,
+      "right": {
+        "aim": {
+          "position": [
+            0.25,
+            0.95,
+            -0.25
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        "grip": {
+          "position": [
+            0.25,
+            0.95,
+            -0.25
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        "squeeze": 0
+      }
+    },
+    {
+      "time": 27,
+      "right": {
+        "squeeze": 1
+      }
+    },
+    {
+      "time": 30,
+      "right": {
+        "aim": {
+          "position": [
+            0.15,
+            1.25,
+            -0.45
+          ]
+        },
+        "grip": {
+          "position": [
+            0.15,
+            1.25,
+            -0.45
+          ]
+        }
+      }
+    },
+    {
+      "time": 32,
+      "right": {
+        "trigger": 1
+      }
+    },
+    {
+      "time": 33,
+      "right": {
+        "trigger": 0
+      }
+    },
+    {
+      "time": 35,
+      "pose_interpolation": "linear",
+      "right": {
+        "aim": {
+          "position": [
+            -0.25,
+            1.25,
+            -0.65
+          ]
+        },
+        "grip": {
+          "position": [
+            -0.25,
+            1.25,
+            -0.65
+          ]
+        }
+      }
+    },
+    {
+      "time": 37,
+      "right": {
+        "squeeze": 0
+      }
+    },
+    {
+      "time": 40,
+      "right": {
+        "aim": {
+          "position": [
+            -0.25,
+            0.85,
+            0.05
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        "grip": {
+          "position": [
+            -0.25,
+            0.85,
+            0.05
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        "squeeze": 0
+      }
+    },
+    {
+      "time": 42,
+      "right": {
+        "squeeze": 1
+      }
+    },
+    {
+      "time": 45,
+      "right": {
+        "aim": {
+          "position": [
+            0.15,
+            1.25,
+            -0.45
+          ]
+        },
+        "grip": {
+          "position": [
+            0.15,
+            1.25,
+            -0.45
+          ]
+        }
+      }
+    },
+    {
+      "time": 47,
+      "right": {
+        "trigger": 1
+      }
+    },
+    {
+      "time": 48,
+      "right": {
+        "trigger": 0
+      }
+    },
+    {
+      "time": 50,
+      "pose_interpolation": "linear",
+      "right": {
+        "aim": {
+          "position": [
+            -0.25,
+            1.25,
+            -0.65
+          ]
+        },
+        "grip": {
+          "position": [
+            -0.25,
+            1.25,
+            -0.65
+          ]
+        }
+      }
+    },
+    {
+      "time": 52,
+      "right": {
+        "squeeze": 0
+      }
+    }
+  ]
+}

@@ -1,0 +1,146 @@
+{
+  "controller_pose": {"profile":"oculus_touch","reference":"grip"},
+  "description": "Chain after re4-new-game.json at its default five-second gap. Finish the opening cinematic, touch the radio with the right hand, and enter the first forest scene. Hardware verified through the radio call; the weapon tutorial choice still blocks locomotion and aiming proof.",
+  "events": [
+    {
+      "time": 270,
+      "left": {
+        "aim": {
+          "position": [
+            -0.15,
+            1.45,
+            -0.3
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        "grip": {
+          "position": [
+            -0.15,
+            1.45,
+            -0.3
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        }
+      },
+      "right": {
+        "aim": {
+          "position": [
+            -0.15,
+            1.55,
+            -0.28
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        "grip": {
+          "position": [
+            -0.15,
+            1.55,
+            -0.28
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        }
+      }
+    },
+    {
+      "time": 272,
+      "right": {
+        "aim": {
+          "position": [
+            -0.15,
+            1.49,
+            -0.28
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        "grip": {
+          "position": [
+            -0.15,
+            1.49,
+            -0.28
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        }
+      }
+    },
+    {
+      "time": 274,
+      "right": {
+        "trigger": 1
+      }
+    },
+    {
+      "time": 275,
+      "right": {
+        "trigger": 0,
+        "a": true
+      }
+    },
+    {
+      "time": 276,
+      "right": {
+        "a": false
+      }
+    },
+    {
+      "time": 278,
+      "right": {
+        "aim": {
+          "position": [
+            0.25,
+            1.4,
+            -0.45
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        "grip": {
+          "position": [
+            0.25,
+            1.4,
+            -0.45
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        }
+      }
+    }
+  ]
+}

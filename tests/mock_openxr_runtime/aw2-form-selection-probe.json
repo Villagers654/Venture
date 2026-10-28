@@ -1,0 +1,15 @@
+{
+  "description": "Candidate follow-up to aw2-opening.json at input 340 s. Restore forward view, aim the right ray toward the left avatar and try trigger then primary-button confirmation. Inspect both eyes for selection and opening-hall entry; this route is not verified gameplay evidence.",
+  "events": [
+    {"time": 0, "head": {"orientation": [0,0,0,1]}, "right": {"aim": {"position": [0.25,1.3,-0.4], "orientation": [0,0.28,0,0.96]}, "grip": {"position": [0.25,1.3,-0.4], "orientation": [0,0.28,0,0.96]}, "trigger": 0, "a": false}},
+    {"time": 5, "right": {"trigger": 1}},
+    {"time": 7, "right": {"trigger": 0}},
+    {"time": 15, "right": {"a": true}},
+    {"time": 17, "right": {"a": false}},
+    {"time": 25, "right": {"trigger": 1}},
+    {"time": 27, "right": {"trigger": 0}},
+    {"time": 40, "right": {"a": true}},
+    {"time": 42, "right": {"a": false}},
+    {"time": 60, "right": {"aim": {"position": [0.25,1.2,-0.4], "orientation": [0,0,0,1]}, "grip": {"position": [0.25,1.2,-0.4], "orientation": [0,0,0,1]}}}
+  ]
+}

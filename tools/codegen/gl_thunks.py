@@ -1,0 +1,173 @@
+#!/usr/bin/env python3
+"""Generate fixed-width AAPCS64 dispatch from pinned Khronos GL/EGL XML.
+
+Only GLES2-family core (including ES 3.x) and GLES extension requirements enter
+this table. Host address availability does not imply extension support: runtime
+capability filtering checks the host extension string and the whole command set.
+"""
+import argparse
+from pathlib import Path
+import re
+import xml.etree.ElementTree as ET
+
+TYPES = {
+    'GLenum': 'std::uint32_t', 'GLboolean': 'std::uint8_t',
+    'GLbitfield': 'std::uint32_t', 'GLbyte': 'std::int8_t',
+    'GLshort': 'std::int16_t', 'GLint': 'std::int32_t', 'GLsizei': 'std::int32_t',
+    'GLubyte': 'std::uint8_t', 'GLushort': 'std::uint16_t', 'GLuint': 'std::uint32_t',
+    'GLfloat': 'float', 'GLclampf': 'float', 'GLdouble': 'double', 'GLclampd': 'double',
+    'GLchar': 'char', 'GLcharARB': 'char', 'GLvoid': 'void',
+    'GLintptr': 'std::int64_t', 'GLsizeiptr': 'std::int64_t',
+    'GLintptrARB': 'std::int64_t', 'GLsizeiptrARB': 'std::int64_t',
+    'GLint64': 'std::int64_t', 'GLint64EXT': 'std::int64_t',
+    'GLuint64': 'std::uint64_t', 'GLuint64EXT': 'std::uint64_t',
+    'GLfixed': 'std::int32_t', 'GLhalfNV': 'std::uint16_t',
+    'GLsync': 'void*', 'GLeglImageOES': 'void*', 'GLeglClientBufferEXT': 'void*',
+    # All callbacks require a handwritten reverse thunk, never call an A64 PC.
+    'GLDEBUGPROC': 'std::uint64_t', 'GLDEBUGPROCKHR': 'std::uint64_t',
+    'GLDEBUGPROCAMD': 'std::uint64_t', 'GLVULKANPROCNV': 'std::uint64_t',
+    'EGLAttrib': 'std::int64_t', 'EGLAttribKHR': 'std::int64_t',
+    'EGLNativeWindowType': 'venture::GuestAddr',
+    '__eglMustCastToProperFunctionPointerType': 'venture::GuestAddr',
+}
+
+EGL_COMMANDS = '''eglGetDisplay eglInitialize eglTerminate eglGetError
+eglChooseConfig eglGetConfigs eglGetConfigAttrib eglCreateContext eglDestroyContext
+eglCreateWindowSurface eglCreatePbufferSurface eglDestroySurface eglMakeCurrent
+eglGetCurrentContext eglGetCurrentDisplay eglGetCurrentSurface eglSwapBuffers
+eglSwapInterval eglQuerySurface eglQueryContext eglQueryString eglGetProcAddress
+eglBindAPI eglQueryAPI eglReleaseThread eglWaitClient eglWaitGL eglWaitNative
+eglSurfaceAttrib eglBindTexImage eglReleaseTexImage
+eglCreateSyncKHR eglDestroySyncKHR eglClientWaitSyncKHR eglGetSyncAttribKHR eglWaitSyncKHR
+eglCreateImageKHR eglDestroyImageKHR
+eglCreateSync eglDestroySync eglClientWaitSync eglGetSyncAttrib eglWaitSync
+eglCreateImage eglDestroyImage'''.split()
+
+def gl_check(name):
+    """The ASTC fallback framebuffer check a command needs (gfx/dispatch.h GlCheck)."""
+    if name.startswith('glFramebuffer') or name == 'glDeleteFramebuffers':
+        return 'framebuffer_change'
+    if ((name.startswith('glDraw') and name not in ('glDrawBuffers', 'glDrawBuffersEXT'))
+            or name.startswith('glMultiDraw') or name == 'glClear' or name.startswith('glClearBuffer')):
+        return 'draw'
+    if name in ('glReadPixels', 'glReadnPixels', 'glReadnPixelsEXT', 'glReadnPixelsKHR'):
+        return 'read'
+    if name == 'glBlitFramebuffer':
+        return 'blit'
+    if (name.startswith(('glDispatchCompute', 'glTexImage', 'glTexSubImage', 'glCompressedTexImage', 'glCompressedTexSubImage'))
+            or name in ('glBeginTransformFeedback', 'glResumeTransformFeedback')):
+        return 'buffers'
+    return None
+
+def spelling(element):
+    raw = (element.text or '') + ''.join(
+        (''.join(child.itertext()) if child.tag != 'name' else '') + (child.tail or '')
+        for child in element)
+    raw = raw.strip()
+    for before, after in TYPES.items():
+        raw = re.sub(r'\b' + before + r'\b', after, raw)
+    return raw
+
+def generate(gl_path, egl_path, output, a32_output=None):
+    gl, egl = ET.parse(gl_path).getroot(), ET.parse(egl_path).getroot()
+    selected = set()
+    for feature in gl.findall('feature'):
+        if feature.get('api') == 'gles2':
+            selected.update(c.get('name') for c in feature.findall('require/command'))
+    exts = {}
+    for ext in gl.findall('extensions/extension'):
+        if 'gles2' not in ext.get('supported', '').split('|'):
+            continue
+        names = {c.get('name') for r in ext.findall('require')
+                 if r.get('api') in (None, 'gles2') for c in r.findall('command')}
+        if ext.get('name') == 'GL_OVR_multiview':
+            # OVR_multiview.txt, "New Procedures": this DSA entry point is
+            # conditional on desktop GL 4.5 / ARB_direct_state_access. gl.xml
+            # records that condition in a comment, without an api attribute.
+            # Requiring it on GLES hides real multiview support from Unity.
+            names.discard('glNamedFramebufferTextureMultiviewOVR')
+        exts[ext.get('name')] = sorted(names)
+        selected.update(names)
+    commands = {c.findtext('proto/name'): c for c in gl.findall('commands/command') if c.find('proto') is not None}
+    lines = ['// Generated by gl_thunks.py; do not edit.', '#include "gfx/dispatch.h"', 'namespace venture::gfx {', 'namespace {', 'const Command commands[] = {']
+    for name in sorted(selected):
+        c = commands[name]
+        signature = spelling(c.find('proto')) + '(' + ', '.join(spelling(p) for p in c.findall('param')) + ')'
+        unknown = re.findall(r'\bGL\w+', signature)
+        if unknown:
+            raise ValueError(f'{name}: unmapped XML types {unknown}')
+        check = gl_check(name)
+        lines.append(f'  {{"{name}", dynamic_thunk<{signature}' + (f', GlCheck::{check}' if check else '') +
+                     '>()' + (f', GlCheck::{check}' if check else '') + '},')
+    lines += ['};']
+    for i, (name, names) in enumerate(sorted(exts.items())):
+        if names:
+            lines.append(f'const char* const extension_{i}[] = {{' + ', '.join(f'"{n}"' for n in names) + '};')
+    lines.append('const Extension extensions[] = {')
+    for i, (name, names) in enumerate(sorted(exts.items())):
+        lines.append(f'  {{"{name}", ' + (f'extension_{i}' if names else '{}') + '},')
+    lines += ['};', '}', 'std::span<const Command> gl_commands() { return commands; }', 'std::span<const Extension> gl_extensions() { return extensions; }', '}']
+    output.mkdir(parents=True, exist_ok=True)
+    (output/'gl_dispatch.cpp').write_text('\n'.join(lines)+'\n')
+    egl_cmds = {c.findtext('proto/name'): c for c in egl.findall('commands/command') if c.find('proto') is not None}
+    lines = ['// Generated declarations and registrations, checked against egl.xml.', '#ifdef VENTURE_EGL_DECLARE']
+    for name in EGL_COMMANDS:
+        c = egl_cmds[name]
+        lines.append(spelling(c.find('proto')) + ' guest_' + name + '(' + ', '.join(spelling(p) for p in c.findall('param')) + ');')
+    lines += ['#else']
+    for name in EGL_COMMANDS:
+        lines.append(f'add_graphics_function(library, "{name}", wrap<&guest_{name}>());')
+    lines += ['#endif']
+    (output/'egl_dispatch.inc').write_text('\n'.join(lines)+'\n')
+    overrides = {'eglChooseConfig': 'choose_config32', 'eglGetConfigs': 'get_configs32',
+                 'eglQueryString': 'query_string32', 'eglCreateSync': 'create_sync32',
+                 'eglCreateImage': 'create_image32', 'eglGetSyncAttrib': 'get_sync_attrib32'}
+    (output/'egl_a32_adapters.inc').write_text('// Generated explicit ILP32 EGL bindings.\n' +
+        ''.join(f'VENTURE_EGL_ADAPT("{name}", {overrides.get(name, "guest_" + name)})\n' for name in EGL_COMMANDS))
+    if a32_output:
+        from a32_descriptors import emit
+        kinds = {
+            'void': 'Void', 'GLvoid': 'Void', 'GLboolean': 'U8', 'GLbyte': 'I8', 'GLubyte': 'U8',
+            'GLshort': 'I16', 'GLushort': 'U16', 'GLhalfNV': 'U16',
+            'GLenum': 'U32', 'GLbitfield': 'U32', 'GLuint': 'U32', 'GLint': 'I32', 'GLsizei': 'I32', 'GLfixed': 'I32',
+            'GLfloat': 'F32', 'GLclampf': 'F32', 'GLdouble': 'F64', 'GLclampd': 'F64',
+            'GLintptr': 'Long', 'GLsizeiptr': 'SSize', 'GLintptrARB': 'Long', 'GLsizeiptrARB': 'SSize',
+            'GLint64': 'I64', 'GLint64EXT': 'I64', 'GLuint64': 'U64', 'GLuint64EXT': 'U64',
+            'EGLAttrib': 'Long', 'EGLAttribKHR': 'Long', 'EGLTime': 'U64', 'EGLTimeKHR': 'U64', 'EGLTimeNV': 'U64',
+            'EGLint': 'I32', 'EGLenum': 'U32', 'EGLBoolean': 'U32',
+        }
+        def a32_type(e, result=False):
+            raw = (e.text or '') + ''.join((''.join(c.itertext()) if c.tag != 'name' else '') + (c.tail or '') for c in e)
+            t = e.findtext('ptype') or raw.strip()
+            handle = t in ('GLsync', 'GLeglImageOES', 'GLeglClientBufferEXT') or t.startswith(('EGLDisplay', 'EGLContext', 'EGLSurface', 'EGLConfig', 'EGLSync', 'EGLImage', 'EGLClientBuffer', 'EGLNative'))
+            if raw.count('*') > 1:
+                kind = 'Layout'
+            elif '*' in raw:
+                # Pointer-sized integer arrays differ in stride, including the
+                # attribute arrays passed to core EGL 1.5 commands.
+                kind = 'Layout' if handle or kinds.get(t) in ('Long', 'SSize') else 'Ptr'
+                if result and t in ('void', 'GLvoid'): kind = 'Layout'
+            elif 'PROC' in t or t == '__eglMustCastToProperFunctionPointerType':
+                kind = 'Callback'
+            elif handle:
+                kind = 'Handle'
+            else:
+                kind = kinds.get(t, 'Unsupported')
+            return {'kind': kind, 'tag': raw.strip()}
+        rows = []
+        for library, names, lookup in [('libGLESv2.so', selected, commands), ('libGLESv3.so', selected, commands), ('libEGL.so', EGL_COMMANDS, egl_cmds)]:
+            for name in sorted(names):
+                command = lookup[name]
+                rows.append(dict(library=library, symbol=name, result=a32_type(command.find('proto'), True),
+                                 arguments=[a32_type(p) for p in command.findall('param')], source='Khronos ' + ('egl.xml' if library == 'libEGL.so' else 'gl.xml')))
+        emit(rows, a32_output / 'a32_graphics.cpp', 'graphics_descriptors')
+    print(f'Generated {len(selected)} GLES commands, {len(exts)} extension requirements, {len(EGL_COMMANDS)} EGL adapters')
+
+if __name__ == '__main__':
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument('--gl', type=Path, required=True)
+    p.add_argument('--egl', type=Path, required=True)
+    p.add_argument('--output', type=Path, required=True)
+    p.add_argument('--a32-output', type=Path)
+    a = p.parse_args()
+    generate(a.gl, a.egl, a.output, a.a32_output)

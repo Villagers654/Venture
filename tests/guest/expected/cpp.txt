@@ -1,0 +1,5 @@
+C++: cross-library exceptions exception_ptr RTTI OK
+C++: string vector map unordered_map OK
+C++: thread mutex condition future TLS destructor OK
+C++: chrono OK
+VTEST RESULT cpp PASS
