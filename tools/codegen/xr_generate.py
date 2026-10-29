@@ -150,6 +150,8 @@ def generate(registry, output, check=False):
             code.append('  if (XR_SUCCEEDED(result)) { auto &a = state().actions[*action]; a.type = createInfo->actionType; if (createInfo->countSubactionPaths) a.subactions.assign(createInfo->subactionPaths, createInfo->subactionPaths + createInfo->countSubactionPaths); }')
         if name == 'xrAttachSessionActionSets':
             code.append('  if (XR_SUCCEEDED(result)) { venture::xr::clear_haptic_bindings(session); for (uint32_t i = 0; i < attachInfo->countActionSets; ++i) state().attached_sets[session].insert(key(attachInfo->actionSets[i])); }')
+        if name == 'xrLocateViews':
+            code.append('  if (XR_SUCCEEDED(result) && views) sanitize_views(*viewState, std::min(viewCapacityInput, *viewCountOutput), views);')
         code += ['  return result;', '}']
         if name in ('xrLocateViews', 'xrSyncActions'):
             code = [code[0], f'  xr_call_trace::Call trace("guest.{name}");',

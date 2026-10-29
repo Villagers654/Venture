@@ -14,8 +14,10 @@ public:
   std::span<const XrSwapchainImageVulkanKHR> images() const;
   XrResult wait(std::uint32_t index, XrDuration timeout = XR_INFINITE_DURATION);
   // A destination extent other than the guest size (or {}) scales the base level.
+  // flip_rows reverses rows (XR_FB_composition_layer_image_layout VERTICAL_FLIP).
   XrResult copy(std::uint32_t index, VkImage destination,
-                VkFormat destination_format, VkExtent2D destination_extent = {});
+                VkFormat destination_format, VkExtent2D destination_extent = {},
+                bool flip_rows = false);
   XrResult drain();
 
 private:

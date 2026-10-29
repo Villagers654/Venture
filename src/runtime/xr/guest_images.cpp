@@ -316,7 +316,7 @@ XrResult GuestImages::drain() {
   return XR_SUCCESS;
 }
 XrResult GuestImages::copy(std::uint32_t index, VkImage target,
-                           VkFormat format, VkExtent2D extent) {
+                           VkFormat format, VkExtent2D extent, bool flip_rows) {
   auto &s = *impl_;
   const bool scaled = extent.width && extent.height &&
                       (extent.width != s.info.width || extent.height != s.info.height);
@@ -366,7 +366,7 @@ XrResult GuestImages::copy(std::uint32_t index, VkImage target,
     barrier(slot.image, s.layout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, s.info.mipCount);
     barrier(target, VK_IMAGE_LAYOUT_UNDEFINED,
             VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, host_mips);
-    if (format == VkFormat(s.info.format) && !scaled) {
+    if (format == VkFormat(s.info.format) && !scaled && !flip_rows) {
       for (const auto aspect :
            {VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_ASPECT_DEPTH_BIT,
             VK_IMAGE_ASPECT_STENCIL_BIT}) {
@@ -386,7 +386,7 @@ XrResult GuestImages::copy(std::uint32_t index, VkImage target,
       }
     } else {
       // GLES host format fallback: blit converts component order/encoding by
-      // value, and scales to a host chain smaller than the guest chain.
+      // value, scales to a host chain smaller than the guest chain and flips.
       // Multisample images cannot be blitted; depth converts no format.
       if (s.info.sampleCount != 1 ||
           (s.aspects != VK_IMAGE_ASPECT_COLOR_BIT && format != VkFormat(s.info.format)))
@@ -421,6 +421,8 @@ XrResult GuestImages::copy(std::uint32_t index, VkImage target,
             scaled ? VkOffset3D{int(std::max(1u, extent.width >> mip)),
                                 int(std::max(1u, extent.height >> mip)), 1}
                    : blit.srcOffsets[1];
+        if (flip_rows)
+          std::swap(blit.srcOffsets[0].y, blit.srcOffsets[1].y);
         s.fn<PFN_vkCmdBlitImage>("vkCmdBlitImage")(
             slot.command, slot.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
             target, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, filter);

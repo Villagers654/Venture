@@ -146,11 +146,8 @@ XrResult Session::create(SessionOwner requested, const XrGraphicsBindingVulkanKH
     // Guest Vulkan may own its VkDevice (gpu_device.h contract). Validate
     // runtime selection in that VkInstance's handle namespace, not by comparing
     // VkPhysicalDevice pointers belonging to different Vulkan instances.
-    XrVulkanGraphicsDeviceGetInfoKHR selection{XR_TYPE_VULKAN_GRAPHICS_DEVICE_GET_INFO_KHR};
-    selection.systemId = h.system;
-    selection.vulkanInstance = b.instance;
     VkPhysicalDevice selected{};
-    auto r = host_call<PFN_xrGetVulkanGraphicsDevice2KHR, "xrGetVulkanGraphicsDevice2KHR">(h.instance, &selection, &selected);
+    auto r = host_graphics_device(h.system, b.instance, &selected);
     if (XR_FAILED(r) || selected != b.physicalDevice)
       return XR_ERROR_GRAPHICS_DEVICE_INVALID;
   }

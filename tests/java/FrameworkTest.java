@@ -756,6 +756,21 @@ public final class FrameworkTest {
     long spin = System.nanoTime(); double sink = 0;
     while (System.nanoTime() - spin < 50_000_000L) sink += Math.sqrt(sink + 1);
     check(cpuBefore >= 0 && android.os.Process.getElapsedCpuTime() >= cpuBefore && sink > 0, "process CPU time is monotonic milliseconds");
+    // Unreal Engine 5's GameActivity reads the main thread's priority; its network monitor tags sockets.
+    check(android.os.Process.getThreadPriority(0) == android.os.Process.THREAD_PRIORITY_DEFAULT, "threads start at default priority");
+    android.os.Process.setThreadPriority(-4);
+    check(android.os.Process.getThreadPriority(android.os.Process.myTid()) == -4, "thread priority reads back the last set value");
+    android.os.Process.setThreadPriority(0);
+    android.net.TrafficStats.setThreadStatsTag(7);
+    check(android.net.TrafficStats.getAndSetThreadStatsTag(8) == 7 && android.net.TrafficStats.getThreadStatsTag() == 8, "traffic tags are per thread");
+    android.net.TrafficStats.clearThreadStatsTag();
+    check(android.net.TrafficStats.getThreadStatsTag() == -1 && android.net.TrafficStats.getTotalRxBytes() == android.net.TrafficStats.UNSUPPORTED,
+        "traffic counters are unsupported");
+    // Firebase checks androidx UserManagerCompat.isUserUnlocked through the API 23 class lookup.
+    var users = new android.content.Context().getSystemService(android.os.UserManager.class);
+    check(users != null && users.isUserUnlocked() && !users.isManagedProfile(), "the owner user is unlocked");
+    check(new android.content.Context().getSystemService(android.os.PowerManager.class) != null
+        && new android.content.Context().getSystemService(String.class) == null, "class service lookup follows service names");
   }
   private static void disabledTelemetry() throws Exception {
     // Reflect the exact class and method contracts requested by native clients.
@@ -1869,6 +1884,8 @@ public final class FrameworkTest {
             nativeCreates[0]++;
             return 1L;
           }
+          if (method.getName().equals("guestTid")) return 1;
+          if (method.getName().equals("setThreadPriority")) return null;
           throw new UnsupportedOperationException(method.getName());
         });
     RuntimeEnvironment.configure(new String[]{"test.game", obbRoot.resolve("base.apk").toString(),

@@ -52,4 +52,16 @@ template <class F, HostProcedureName Name, class... A> XrResult host_call(A... a
   auto f = host_proc<F, Name>();
   return f ? f(args...) : XR_ERROR_FUNCTION_UNSUPPORTED;
 }
+// The host's GPU for a VkInstance the application created itself. That is
+// XR_KHR_vulkan_enable's contract; enable2 accepts only instances made by
+// xrCreateVulkanInstanceKHR, which the Oculus runtime enforces.
+inline XrResult host_graphics_device(XrSystemId system, VkInstance instance, VkPhysicalDevice* out) {
+  auto& h = host_xr();
+  if (h.enabled_extensions.contains("XR_KHR_vulkan_enable") &&
+      XR_SUCCEEDED((host_call<PFN_xrGetVulkanGraphicsDeviceKHR, "xrGetVulkanGraphicsDeviceKHR">(
+          h.instance, system, instance, out))))
+    return XR_SUCCESS;
+  XrVulkanGraphicsDeviceGetInfoKHR info{XR_TYPE_VULKAN_GRAPHICS_DEVICE_GET_INFO_KHR, nullptr, system, instance};
+  return host_call<PFN_xrGetVulkanGraphicsDevice2KHR, "xrGetVulkanGraphicsDevice2KHR">(h.instance, &info, out);
+}
 } // namespace venture::xr

@@ -14,6 +14,7 @@
 #include "xr/math.h"
 #include "xr/native.h"
 #include <algorithm>
+#include <limits>
 #include <array>
 #include <atomic>
 #include <charconv>
@@ -1082,18 +1083,20 @@ XrResult m_xrGetVulkanDeviceExtensionsKHR(XrInstance i, XrSystemId s, std::uint3
                                           std::uint32_t *n, char *out) {
   return m_xrGetVulkanInstanceExtensionsKHR(i, s, c, n, out);
 }
+std::set<VkInstance> created_instances;
 XrResult m_xrCreateVulkanInstanceKHR(XrInstance, const XrVulkanInstanceCreateInfoKHR *info,
                                      VkInstance *out, VkResult *result) {
   auto create = reinterpret_cast<PFN_vkCreateInstance>(
       info->pfnGetInstanceProcAddr(nullptr, "vkCreateInstance"));
   *result = create(info->vulkanCreateInfo, info->vulkanAllocator, out);
-  if (*result == VK_SUCCESS)
+  if (*result == VK_SUCCESS) {
     vulkan_instance = *out;
+    created_instances.insert(*out);
+  }
   return XR_SUCCESS;
 }
-XrResult m_xrGetVulkanGraphicsDevice2KHR(XrInstance, const XrVulkanGraphicsDeviceGetInfoKHR *info,
-                                         VkPhysicalDevice *out) {
-  vulkan_instance = info->vulkanInstance;
+XrResult graphics_device(VkInstance instance, VkPhysicalDevice *out) {
+  vulkan_instance = instance;
   std::uint32_t n = 0;
   auto fn = vk<PFN_vkEnumeratePhysicalDevices>("vkEnumeratePhysicalDevices");
   if (fn(vulkan_instance, &n, nullptr) != VK_SUCCESS || !n)
@@ -1111,10 +1114,15 @@ XrResult m_xrGetVulkanGraphicsDevice2KHR(XrInstance, const XrVulkanGraphicsDevic
   }
   return XR_SUCCESS;
 }
-XrResult m_xrGetVulkanGraphicsDeviceKHR(XrInstance i, XrSystemId s, VkInstance v,
-                                        VkPhysicalDevice *out) {
-  XrVulkanGraphicsDeviceGetInfoKHR info{XR_TYPE_VULKAN_GRAPHICS_DEVICE_GET_INFO_KHR, nullptr, s, v};
-  return m_xrGetVulkanGraphicsDevice2KHR(i, &info, out);
+XrResult m_xrGetVulkanGraphicsDevice2KHR(XrInstance, const XrVulkanGraphicsDeviceGetInfoKHR *info,
+                                         VkPhysicalDevice *out) {
+  // XR_KHR_vulkan_enable2: the instance must come from xrCreateVulkanInstanceKHR.
+  // The Oculus runtime enforces this with XR_ERROR_RUNTIME_FAILURE.
+  if (!created_instances.contains(info->vulkanInstance)) return XR_ERROR_RUNTIME_FAILURE;
+  return graphics_device(info->vulkanInstance, out);
+}
+XrResult m_xrGetVulkanGraphicsDeviceKHR(XrInstance, XrSystemId, VkInstance v, VkPhysicalDevice *out) {
+  return graphics_device(v, out);  // XR_KHR_vulkan_enable: application-created instances
 }
 XrResult m_xrCreateVulkanDeviceKHR(XrInstance, const XrVulkanDeviceCreateInfoKHR *info,
                                    VkDevice *out, VkResult *result) {
@@ -1336,6 +1344,14 @@ XrResult m_xrLocateSpace(XrSpace space, XrSpace base, XrTime time, XrSpaceLocati
     velocity->velocityFlags = active ? relative.velocityFlags : 0;
     velocity->linearVelocity = relative.linearVelocity;
     velocity->angularVelocity = relative.angularVelocity;
+    // VENTURE_MOCK_NO_VELOCITY: a runtime that reports no velocities, leaving the (then undefined)
+    // values NaN, as the OpenXR spec allows.
+    static const bool no_velocity = venture::environment::getenv("VENTURE_MOCK_NO_VELOCITY") != nullptr;
+    if (no_velocity) {
+      constexpr float nan = std::numeric_limits<float>::quiet_NaN();
+      velocity->velocityFlags = 0;
+      velocity->linearVelocity = velocity->angularVelocity = {nan, nan, nan};
+    }
   }
   return XR_SUCCESS;
 }

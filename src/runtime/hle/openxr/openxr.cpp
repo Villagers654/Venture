@@ -27,12 +27,20 @@ namespace {
 // (gfx/xr_images.cpp), so the host must sample the mirrored rows. Host copies
 // of layer structures get y' = height - y - h for each XrSwapchainSubImage of a
 // bridged swapchain, including projection views and their next chains.
+// XR_FB_composition_layer_image_layout is applied here, not by the host: a
+// VERTICAL_FLIP layer's chains are copied with reversed rows, which mirrors
+// their rects again, and the node never reaches the host.
 // Guest handles are replaced by lazy host presentation handles in these
 // copies; application structures and private image handles stay unchanged.
 class PresentationLayers {
  public:
   explicit PresentationLayers(bool host = false) : host_(host) {}
-  std::set<XrSwapchain> submitted;
+  std::set<XrSwapchain> submitted, flipped;
+  // One application layer; collects its swapchains into `flipped` on request.
+  const void* layer(const void* node) {
+    flip_ = false;
+    return chain(node);
+  }
   const void* chain(const void* node, bool explicit_depth = false) {
     if (!node) return nullptr;
     auto base = static_cast<const XrBaseInStructure*>(node);
@@ -46,7 +54,7 @@ class PresentationLayers {
   }
 
  private:
-  bool host_;
+  bool host_, flip_ = false;
   // OpenXR "Valid Usage for Structure Pointer Chains": runtimes ignore
   // next-chain nodes of extensions the application did not enable. Host
   // copies omit them so the host never reads them either; OVRPlugin attaches
@@ -56,6 +64,13 @@ class PresentationLayers {
     // host-native depth. Preserve that normalized chain during handle mapping.
     if (host_) return chain(node, explicit_depth);
     for (auto p = static_cast<const XrBaseInStructure*>(node); p; p = p->next) {
+      if (p->type == XR_TYPE_COMPOSITION_LAYER_IMAGE_LAYOUT_FB) {
+        if (enabled("XR_FB_composition_layer_image_layout") &&
+            (reinterpret_cast<const XrCompositionLayerImageLayoutFB*>(p)->flags &
+             XR_COMPOSITION_LAYER_IMAGE_LAYOUT_VERTICAL_FLIP_BIT_FB))
+          flip_ = true;
+        continue;
+      }
       const StructureInfo* metadata = nullptr;
       for (const auto& m : structure_metadata())
         if (m.type == p->type) { metadata = &m; break; }
@@ -153,6 +168,7 @@ class PresentationLayers {
       std::memcpy(&handle, bytes + offset, sizeof(handle));
       if (state().swapchains.contains(handle)) {
         submitted.insert(handle);
+        if (flip_) flipped.insert(handle);
         if (host_) {
           handle = state().swapchains.at(handle).host_handle;
           std::memcpy(writable() + offset, &handle, sizeof(handle));
@@ -182,9 +198,10 @@ class PresentationLayers {
     auto it = state().swapchains.find(sub.swapchain);
     if (it == state().swapchains.end()) return false;
     submitted.insert(sub.swapchain);
+    if (flip_) flipped.insert(sub.swapchain);
     if (!host_) return false;
     sub.swapchain = it->second.host_handle;
-    if (!it->second.textures.empty()) {
+    if (it->second.textures.empty() == it->second.host_flip) {
       const auto y = std::int64_t(it->second.info.height) - sub.imageRect.offset.y -
                      sub.imageRect.extent.height;
       // An out-of-bounds rect stays as submitted for the host to reject.
@@ -1002,9 +1019,14 @@ XrResult xrEndFrame(XrSession handle, const XrFrameEndInfo *info) {
           return XR_ERROR_VALIDATION_FAILURE;
         }
     }
-    layers.push_back(static_cast<const XrCompositionLayerBaseHeader*>(rects.chain(layer)));
+    layers.push_back(static_cast<const XrCompositionLayerBaseHeader*>(rects.layer(layer)));
   }
-  for (auto chain : rects.submitted) state().swapchains.at(chain).ever_submitted = true;
+  for (auto chain : rects.submitted) {
+    auto& r = state().swapchains.at(chain);
+    r.ever_submitted = true;
+    // Blits, which reverse rows, take single-sample images only.
+    r.flip_rows = rects.flipped.contains(chain) && r.info.sampleCount == 1;
+  }
   if (venture::environment::getenv("VENTURE_XR_SWAPCHAIN_STATS")) {
     const auto ever = std::count_if(state().swapchains.begin(), state().swapchains.end(),
         [](const auto& entry) { return entry.second.ever_submitted; });

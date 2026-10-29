@@ -1,32 +1,315 @@
 {
-  "controller_pose": {"profile":"oculus_touch","reference":"grip"},
+  "controller_pose": {
+    "profile": "oculus_touch",
+    "reference": "grip"
+  },
   "description": "Chain after re4-first-run.json at its default offset of 5 seconds. Repeat A after title-scene warm-up so fresh data reaches the menu. Select New Game Normal and Seated/controller height/Right hand defaults, confirm Full Motion with the highlighted controller ray, finish configuration, and select Start. Hardware verified through Start; continue with re4-forest-radio.json.",
   "events": [
-    {"time":95,"right":{"a":true}},
-    {"time":96,"right":{"a":false}},
-    {"time":135,"right":{"a":true}},
-    {"time":136,"right":{"a":false}},
-    {"time":156,"right":{"aim":{"position":[0,1.46,-0.35],"orientation":[0,0,0,1]},"grip":{"position":[0,1.46,-0.35],"orientation":[0,0,0,1]}}},
-    {"time":158,"right":{"trigger":1}},
-    {"time":159,"right":{"trigger":0}},
-    {"time":212,"right":{"aim":{"position":[0,1.12,-0.35],"orientation":[0,0,0,1]},"grip":{"position":[0,1.12,-0.35],"orientation":[0,0,0,1]}}},
-    {"time":214,"right":{"trigger":1}},
-    {"time":215,"right":{"trigger":0}},
-    {"time":256,"right":{"trigger":1}},
-    {"time":257,"right":{"trigger":0}},
-    {"time":299,"right":{"trigger":1}},
-    {"time":300,"right":{"trigger":0}},
-    {"time":349,"right":{"aim":{"position":[0,1.53,-0.35],"orientation":[0,0,0,1]},"grip":{"position":[0,1.53,-0.35],"orientation":[0,0,0,1]}}},
-    {"time":351,"right":{"trigger":1}},
-    {"time":352,"right":{"trigger":0}},
-    {"time":463.246,"right":{"aim":{"position":[-0.15,1.12,-0.8],"orientation":[-0.04,0.04,0,0.9983987]},"grip":{"position":[-0.15,1.12,-0.8],"orientation":[-0.04,0.04,0,0.9983987]}}},
-    {"time":491.655,"right":{"trigger":1}},
-    {"time":493.655,"right":{"trigger":0}},
-    {"time":564.416,"right":{"aim":{"position":[0,1.3,-0.8],"orientation":[-0.07,0,0,0.997547]},"grip":{"position":[0,1.3,-0.8],"orientation":[-0.07,0,0,0.997547]}}},
-    {"time":592.377,"right":{"trigger":1}},
-    {"time":594.377,"right":{"trigger":0}},
-    {"time":667.664,"right":{"aim":{"position":[0,1.3,-0.8],"orientation":[0.075,-0.43,0.036,0.8989877640991562]},"grip":{"position":[0,1.3,-0.8],"orientation":[0.075,-0.43,0.036,0.8989877640991562]}}},
-    {"time":697.678,"right":{"trigger":1}},
-    {"time":699.678,"right":{"trigger":0}}
+    {
+      "time": 95,
+      "right": {
+        "a": true
+      }
+    },
+    {
+      "time": 96,
+      "right": {
+        "a": false
+      }
+    },
+    {
+      "time": 135,
+      "right": {
+        "a": true
+      }
+    },
+    {
+      "time": 136,
+      "right": {
+        "a": false
+      }
+    },
+    {
+      "time": 156,
+      "right": {
+        "aim": {
+          "position": [
+            0,
+            1.46,
+            -0.35
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        "grip": {
+          "position": [
+            0.0,
+            1.43,
+            -0.31
+          ],
+          "orientation": [
+            0.5,
+            0.0,
+            0.0,
+            0.866025404
+          ]
+        }
+      }
+    },
+    {
+      "time": 158,
+      "right": {
+        "trigger": 1
+      }
+    },
+    {
+      "time": 159,
+      "right": {
+        "trigger": 0
+      }
+    },
+    {
+      "time": 212,
+      "right": {
+        "aim": {
+          "position": [
+            0,
+            1.12,
+            -0.35
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        "grip": {
+          "position": [
+            0.0,
+            1.09,
+            -0.31
+          ],
+          "orientation": [
+            0.5,
+            0.0,
+            0.0,
+            0.866025404
+          ]
+        }
+      }
+    },
+    {
+      "time": 214,
+      "right": {
+        "trigger": 1
+      }
+    },
+    {
+      "time": 215,
+      "right": {
+        "trigger": 0
+      }
+    },
+    {
+      "time": 256,
+      "right": {
+        "trigger": 1
+      }
+    },
+    {
+      "time": 257,
+      "right": {
+        "trigger": 0
+      }
+    },
+    {
+      "time": 299,
+      "right": {
+        "trigger": 1
+      }
+    },
+    {
+      "time": 300,
+      "right": {
+        "trigger": 0
+      }
+    },
+    {
+      "time": 349,
+      "right": {
+        "aim": {
+          "position": [
+            0,
+            1.53,
+            -0.35
+          ],
+          "orientation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        "grip": {
+          "position": [
+            0.0,
+            1.5,
+            -0.31
+          ],
+          "orientation": [
+            0.5,
+            0.0,
+            0.0,
+            0.866025404
+          ]
+        }
+      }
+    },
+    {
+      "time": 351,
+      "right": {
+        "trigger": 1
+      }
+    },
+    {
+      "time": 352,
+      "right": {
+        "trigger": 0
+      }
+    },
+    {
+      "time": 463.246,
+      "right": {
+        "aim": {
+          "position": [
+            -0.15,
+            1.12,
+            -0.8
+          ],
+          "orientation": [
+            -0.04,
+            0.04,
+            0,
+            0.9983987
+          ]
+        },
+        "grip": {
+          "position": [
+            -0.146709124,
+            1.093290877,
+            -0.757859845
+          ],
+          "orientation": [
+            0.464558334,
+            0.034641016,
+            -0.02,
+            0.884638637
+          ]
+        }
+      }
+    },
+    {
+      "time": 491.655,
+      "right": {
+        "trigger": 1
+      }
+    },
+    {
+      "time": 493.655,
+      "right": {
+        "trigger": 0
+      }
+    },
+    {
+      "time": 564.416,
+      "right": {
+        "aim": {
+          "position": [
+            0,
+            1.3,
+            -0.8
+          ],
+          "orientation": [
+            -0.07,
+            0,
+            0,
+            0.997547
+          ]
+        },
+        "grip": {
+          "position": [
+            0.0,
+            1.275880263,
+            -0.756202302
+          ],
+          "orientation": [
+            0.438151722,
+            0.0,
+            0.0,
+            0.898901043
+          ]
+        }
+      }
+    },
+    {
+      "time": 592.377,
+      "right": {
+        "trigger": 1
+      }
+    },
+    {
+      "time": 594.377,
+      "right": {
+        "trigger": 0
+      }
+    },
+    {
+      "time": 667.664,
+      "right": {
+        "aim": {
+          "position": [
+            0,
+            1.3,
+            -0.8
+          ],
+          "orientation": [
+            0.075,
+            -0.43,
+            0.036,
+            0.8989877640991562
+          ]
+        },
+        "grip": {
+          "position": [
+            -0.026832366,
+            1.263782933,
+            -0.778358645
+          ],
+          "orientation": [
+            0.514445787,
+            -0.354390924,
+            0.246176915,
+            0.741046241
+          ]
+        }
+      }
+    },
+    {
+      "time": 697.678,
+      "right": {
+        "trigger": 1
+      }
+    },
+    {
+      "time": 699.678,
+      "right": {
+        "trigger": 0
+      }
+    }
   ]
 }

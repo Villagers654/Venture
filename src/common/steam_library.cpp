@@ -289,15 +289,31 @@ fs::path discover_root() {
 #endif
   return {};
 }
+namespace {
+// loginusers.vdf keys vary in case between Steam clients ("MostRecent", "mostrecent").
+std::string login_text(const Vdf &user, std::string_view key) {
+  for (auto &n : user.children)
+    if (n.type == 1 && !n.value.empty() &&
+        std::ranges::equal(n.key, key, [](char a, char b) { return std::tolower(uint8_t(a)) == std::tolower(uint8_t(b)); }))
+      return n.value.substr(0, n.value.size() - 1);
+  return {};
+}
+} // namespace
 fs::path account_config(const fs::path &root) {
   std::map<std::string, fs::path> users;
   if (fs::is_directory(root / "userdata"))
     for (auto &e : fs::directory_iterator(root / "userdata")) {
       auto key = paths::utf8(e.path().filename());
-      if (digits(key) && e.is_directory() && !is_link(e.path()))
+      // userdata/0 holds settings from before any sign-in, not an account.
+      if (digits(key) && key != "0" && e.is_directory() && !is_link(e.path()))
         users[key] = e.path() / "config";
     }
-  std::vector<fs::path> recent;
+  // The profile Steam marks most recent (older clients), else the one that signed in last (current
+  // clients write only a lowercase "timestamp"), else the only signed-in account with a profile.
+  std::vector<fs::path> recent, listed;
+  fs::path latest;
+  uint64_t latest_time = 0;
+  bool latest_tied = false;
   try {
     if (fs::exists(root / "config/loginusers.vdf")) {
       auto bytes = paths::read(root / "config/loginusers.vdf", limit);
@@ -305,25 +321,46 @@ fs::path account_config(const fs::path &root) {
       auto doc = r.object();
       auto list = field(doc, "users");
       if (list && list->type == 0)
-        for (auto &u : list->children)
-          if (digits(u.key) && text(u, "MostRecent") == "1") {
-            try {
-              auto id = std::to_string(uint32_t(std::stoull(u.key)));
-              if (users.contains(id))
-                recent.push_back(users.at(id));
-            } catch (const std::out_of_range &) {
+        for (auto &u : list->children) {
+          if (!digits(u.key) || u.type != 0)
+            continue;
+          try {
+            auto id = std::to_string(uint32_t(std::stoull(u.key)));
+            if (!users.contains(id))
+              continue;
+            listed.push_back(users.at(id));
+            if (login_text(u, "MostRecent") == "1")
+              recent.push_back(users.at(id));
+            auto stamp = login_text(u, "Timestamp");
+            if (digits(stamp, 1, 19)) {
+              auto time = std::stoull(stamp);
+              if (time > latest_time) {
+                latest_time = time;
+                latest = users.at(id);
+                latest_tied = false;
+              } else if (time == latest_time) {
+                latest_tied = true;
+              }
             }
+          } catch (const std::out_of_range &) {
           }
+        }
     }
   } catch (...) {
     recent.clear();
+    listed.clear();
+    latest.clear();
     log::warn("steam", "Cannot parse Steam loginusers; only a single local "
                        "profile can be selected.");
   }
   fs::path config;
   if (recent.size() == 1)
     config = recent.front();
-  else if (recent.empty() && users.size() == 1)
+  else if (!latest.empty() && !latest_tied)
+    config = latest;
+  else if (listed.size() == 1)
+    config = listed.front();
+  else if (users.size() == 1)
     config = users.begin()->second;
   else
     throw std::runtime_error(

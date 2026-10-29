@@ -1262,7 +1262,7 @@ TEST_CASE(
   REQUIRE(vr::sync_input() == XR_SUCCESS);
   REQUIRE(vg::vrapi_GetInputTrackingState(mobile, 1, time, &guarded.tracking) == 0);
   CHECK(guarded.tracking.head.linear_velocity.x == 0);
-  CHECK(guarded.tracking.head.angular_velocity.y == 0);
+  CHECK(std::abs(guarded.tracking.head.angular_velocity.y) < 1e-3f);  // float noise through the legacy-pose offset
   MockXrScript stationary{};
   ventureMockXrSetScript(&stationary);
   REQUIRE(vr::sync_input() == XR_SUCCESS);

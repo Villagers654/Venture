@@ -145,6 +145,10 @@ bool extends_structure(const StructureInfo &child, XrStructureType parent) {
     }
   return false;
 }
+// Extensions whose structures Venture applies itself and never forwards.
+static bool applied_locally(std::string_view extension) {
+  return extension == "XR_FB_composition_layer_image_layout";
+}
 XrResult validate_chain(const void *next, bool host_only, XrStructureType parent,
                         bool ignore_unenabled) {
   std::set<const void *> seen;
@@ -177,6 +181,7 @@ XrResult validate_chain(const void *next, bool host_only, XrStructureType parent
     if (*metadata->extension &&
         (!enabled(metadata->extension) ||
          (host_only && !host_xr().enabled_extensions.contains(metadata->extension) &&
+          !applied_locally(metadata->extension) &&
           !(full_rate_composition() && std::string_view(metadata->extension) == "XR_FB_space_warp")))) {
       static unsigned reports = 0;
       if (reports++ < 8) log::warn("xr", "Structure {} requires {}: guest={} host={}", metadata->name,
@@ -218,7 +223,7 @@ XrResult InputChain::copy(const void* root, bool validate_parent) {
         (p != root && validate_parent && !extends_structure(*metadata, parent)))
       return XR_ERROR_VALIDATION_FAILURE;
     if (p != root && *metadata->extension &&
-        !host_xr().enabled_extensions.contains(metadata->extension)) {
+        !host_xr().enabled_extensions.contains(metadata->extension) && !applied_locally(metadata->extension)) {
       log::warn("xr", "Host cannot forward enabled next-chain extension {}", metadata->extension);
       return XR_ERROR_FEATURE_UNSUPPORTED;
     }
@@ -248,6 +253,8 @@ std::map<std::string, std::uint32_t> capabilities() {
       {"XR_KHR_locate_spaces", 1},
       {"XR_FB_haptic_pcm", 1},
       {"XR_FB_haptic_amplitude_envelope", 1},
+      // Guest Vulkan images are copied to the host chain, which applies the flip.
+      {"XR_FB_composition_layer_image_layout", 1},
   };
   if (xr_images())
     result["XR_KHR_opengl_es_enable"] = 10;

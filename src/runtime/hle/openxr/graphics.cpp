@@ -164,6 +164,7 @@ XrResult destroy_host_swapchain(Swapchain& r) {
     r.host_images.clear();
     r.host_serial = 0;
     r.host_color = XR_COLOR_SPACE_UNMANAGED_FB;
+    r.host_flip = false;
   }
   return result;
 }
@@ -264,7 +265,7 @@ XrResult prepare_swapchains(const std::set<XrSwapchain>& submitted) {
   for (auto handle : submitted) {
     auto& r = s.swapchains.at(handle);
     r.last_submitted = s.presentation_epoch;
-    if (r.host_serial == r.release_serial && r.host_color == s.color_space) continue;
+    if (r.host_serial == r.release_serial && r.host_color == s.color_space && r.host_flip == r.flip_rows) continue;
     std::uint32_t target{};
     {
       HostQueueLock queue(session().uses_shared_gpu);
@@ -282,7 +283,7 @@ XrResult prepare_swapchains(const std::set<XrSwapchain>& submitted) {
     }
     if (result == XR_SESSION_LOSS_PENDING) qualified = result;
     result = r.backing->copy(std::uint32_t(r.released_index), r.host_images.at(target).image, VkFormat(r.host_info.format),
-                             {r.host_info.width, r.host_info.height});
+                             {r.host_info.width, r.host_info.height}, r.flip_rows);
     if (XR_SUCCEEDED(result)) result = convert_color_image(r, target, s.color_space);
     // Always balance an acquisition after a copy/conversion failure. The
     // serial is advanced only after a successful release; retries upload again.
@@ -297,6 +298,7 @@ XrResult prepare_swapchains(const std::set<XrSwapchain>& submitted) {
     r.host_index = target;
     r.host_serial = r.release_serial;
     r.host_color = s.color_space;
+    r.host_flip = r.flip_rows;
   }
   return qualified;
 }
@@ -784,7 +786,9 @@ XrResult xrGetVulkanGraphicsDevice2KHR(XrInstance i, const XrVulkanGraphicsDevic
     return XR_ERROR_HANDLE_INVALID;
   if (!out || XR_FAILED(validate_struct(info, XR_TYPE_VULKAN_GRAPHICS_DEVICE_GET_INFO_KHR)))
     return XR_ERROR_VALIDATION_FAILURE;
-  auto result = host_call<PFN_xrGetVulkanGraphicsDevice2KHR, "xrGetVulkanGraphicsDevice2KHR">(i, info, out);
+  // Guest instances are created by the game or by Venture, not by the host's
+  // xrCreateVulkanInstanceKHR, so even enable2 games query through enable.
+  auto result = venture::xr::host_graphics_device(info->systemId, info->vulkanInstance, out);
   if (XR_SUCCEEDED(result)) vulkan::adopt_physical_device(info->vulkanInstance, *out);
   return result;
 }

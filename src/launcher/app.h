@@ -13,6 +13,7 @@ public:
 
 private:
   void wake() override;
+  void fit_window();  // size from the display scale, within the screen
   void on_refresh() override;
   void on_install_queued() override;
   void on_import_scan() override;

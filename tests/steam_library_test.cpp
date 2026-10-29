@@ -192,6 +192,35 @@ TEST_CASE(
                     }));
   CHECK(paths::read(f.target) == concurrent);
 }
+TEST_CASE("Steam picks the most recent profile, else the last sign-in") {
+  Fixture f;
+  fs::create_directories(f.root / "userdata/0/config");
+  fs::create_directories(f.root / "userdata/7/config");
+  fs::create_directories(f.root / "config");
+  auto users = [&](std::string body) {
+    paths::atomic_write(f.root / "config/loginusers.vdf", "\"users\"\n{\n" + body + "}\n");
+  };
+  auto user = [](uint64_t account, std::string fields) {
+    return "\"" + std::to_string(76561197960265728ull + account) + "\"\n{\n" + fields + "}\n";
+  };
+  users(user(42, "\"mostrecent\" \"1\"\n") + user(7, "\"MostRecent\" \"0\"\n"));
+  CHECK(account_config(f.root) == f.config);
+  users(user(42, "\"Timestamp\" \"200\"\n") + user(7, "\"Timestamp\" \"100\"\n"));
+  CHECK(account_config(f.root) == f.config);
+  users(user(42, "\"Timestamp\" \"100\"\n") + user(7, "\"Timestamp\" \"100\"\n"));
+  CHECK_THROWS(account_config(f.root));
+  // Today's client: tab-separated, AutoLogin, a lowercase "timestamp" and no MostRecent.
+  users(user(7, "\t\t\"AccountName\"\t\t\"seven\"\n\t\t\"AutoLogin\"\t\t\"0\"\n\t\t\"timestamp\"\t\t\"1793137000\"\n") +
+        user(42, "\t\t\"AccountName\"\t\t\"main\"\n\t\t\"AutoLogin\"\t\t\"1\"\n\t\t\"timestamp\"\t\t\"1793137530\"\n"));
+  CHECK(account_config(f.root) == f.config);
+  // One signed-in account among several profile folders (the others left by old accounts).
+  users(user(42, "\"AccountName\" \"main\"\n"));
+  CHECK(account_config(f.root) == f.config);
+  fs::remove(f.root / "config/loginusers.vdf");
+  CHECK_THROWS(account_config(f.root));
+  fs::remove_all(f.root / "userdata/7");
+  CHECK(account_config(f.root) == f.config);  // userdata/0 is not an account
+}
 TEST_CASE("Steam's userdata may live elsewhere through a link; links inside it may not") {
   Fixture f;
   const auto persist = f.root.parent_path() / (f.root.filename().string() + "-persist");

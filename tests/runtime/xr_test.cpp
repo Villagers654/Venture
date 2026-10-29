@@ -3,6 +3,8 @@
 
 using EGLenum = unsigned int;
 #include "common/environment.h"
+#include <cmath>
+#include <cstdlib>
 #include <algorithm>
 #include "xr/menu_chord.h"
 #include "xr_menu_binding_fixture.h"
@@ -1019,11 +1021,12 @@ TEST_CASE("XR foveation hints preserve full-rate GLES stereo submission") {
 TEST_CASE("XR GLES subimage rects reach the host in the bridged image's row order") {
   venture::test::XrImageFixture interop;
   venture::xr::install_xr_images(&interop);
-  const char* extensions[]{"XR_KHR_opengl_es_enable", "XR_KHR_composition_layer_cylinder"};
+  const char* extensions[]{"XR_KHR_opengl_es_enable", "XR_KHR_composition_layer_cylinder",
+                           "XR_FB_composition_layer_image_layout"};
   XrInstanceCreateInfo create{XR_TYPE_INSTANCE_CREATE_INFO};
   create.applicationInfo.apiVersion = XR_MAKE_VERSION(1, 0, 0);
   create.enabledExtensionNames = extensions;
-  create.enabledExtensionCount = 2;
+  create.enabledExtensionCount = 3;
   XrInstance instance{};
   REQUIRE(xg::xrCreateInstance(&create, &instance) == XR_SUCCESS);
   xg::GlesBinding binding{XR_TYPE_GRAPHICS_BINDING_OPENGL_ES_ANDROID_KHR, nullptr, 1, 2, 3};
@@ -1114,6 +1117,32 @@ TEST_CASE("XR GLES subimage rects reach the host in the bridged image's row orde
     CHECK(views[0].subImage.imageRect.offset.y == 0);
     CHECK(views[1].subImage.imageRect.offset.y == 1);
     CHECK(cylinder.subImage.imageRect.offset.y == 1);
+  }
+  // XR_FB_composition_layer_image_layout: Venture reverses the flipped layer's
+  // rows once more in the host copy, so its rect keeps the application's y.
+  XrCompositionLayerImageLayoutFB flip{XR_TYPE_COMPOSITION_LAYER_IMAGE_LAYOUT_FB, nullptr,
+                                       XR_COMPOSITION_LAYER_IMAGE_LAYOUT_VERTICAL_FLIP_BIT_FB};
+  cylinder.next = &flip;
+  for (int frame = 0; frame < 2; ++frame) {
+    XrFrameState timing{XR_TYPE_FRAME_STATE};
+    REQUIRE(xg::xrWaitFrame(session, nullptr, &timing) == XR_SUCCESS);
+    REQUIRE(xg::xrBeginFrame(session, nullptr) == XR_SUCCESS);
+    for (auto chain : {eyes, overlay}) {
+      std::uint32_t index{};
+      REQUIRE(xg::xrAcquireSwapchainImage(chain, nullptr, &index) == XR_SUCCESS);
+      XrSwapchainImageWaitInfo wait{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO, nullptr, XR_INFINITE_DURATION};
+      REQUIRE(xg::xrWaitSwapchainImage(chain, &wait) == XR_SUCCESS);
+      REQUIRE(xg::xrReleaseSwapchainImage(chain, nullptr) == XR_SUCCESS);
+    }
+    XrFrameEndInfo end{XR_TYPE_FRAME_END_INFO, nullptr, timing.predictedDisplayTime,
+                       XR_ENVIRONMENT_BLEND_MODE_OPAQUE, 3, layers};
+    REQUIRE(xg::xrEndFrame(session, &end) == XR_SUCCESS);
+    XrSwapchainSubImage host[5]{};
+    REQUIRE(ventureMockXrLastSubImages(host, 5) == 4);
+    CHECK(host[0].imageRect.offset.y == 8);
+    CHECK(host[3].imageRect.offset.y == 1);
+    CHECK(venture::hle::openxr::state().swapchains.at(overlay).host_flip);
+    CHECK_FALSE(venture::hle::openxr::state().swapchains.at(eyes).host_flip);
   }
   REQUIRE(xg::xrRequestExitSession(session) == XR_SUCCESS);
   poll();
@@ -1606,6 +1635,33 @@ TEST_CASE("XR input-chain filtering preserves Equirect2 subimages") {
   CHECK(sphere.next == &unknown);
 }
 
+TEST_CASE("XR legacy Vulkan games get the shared GPU from their own instance") {
+  // XR_KHR_vulkan_enable games create their VkInstance themselves. The mock,
+  // like the Oculus runtime, rejects instances it did not create.
+  const char *extension = "XR_KHR_vulkan_enable";
+  XrInstanceCreateInfo create{XR_TYPE_INSTANCE_CREATE_INFO};
+  create.applicationInfo.apiVersion = XR_MAKE_VERSION(1, 0, 0);
+  create.enabledExtensionCount = 1;
+  create.enabledExtensionNames = &extension;
+  XrInstance instance{};
+  REQUIRE(xg::xrCreateInstance(&create, &instance) == XR_SUCCESS);
+  VkApplicationInfo app{VK_STRUCTURE_TYPE_APPLICATION_INFO};
+  app.apiVersion = VK_API_VERSION_1_1;
+  VkInstanceCreateInfo vci{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
+  vci.pApplicationInfo = &app;
+  VkInstance vkInstance{};
+  REQUIRE(venture::test::vk_call("vkCreateInstance", &vci, nullptr, &vkInstance) == VK_SUCCESS);
+  VkPhysicalDevice physical{};
+  REQUIRE(xg::xrGetVulkanGraphicsDeviceKHR(instance, venture::xr::host_xr().system, vkInstance, &physical) == XR_SUCCESS);
+  std::uint32_t count = 0;
+  REQUIRE(venture::test::vk_call("vkEnumeratePhysicalDevices", vkInstance, &count, nullptr) == VK_SUCCESS);
+  std::vector<VkPhysicalDevice> devices(count);
+  REQUIRE(venture::test::vk_call("vkEnumeratePhysicalDevices", vkInstance, &count, devices.data()) == VK_SUCCESS);
+  CHECK(std::find(devices.begin(), devices.end(), physical) != devices.end());
+  venture::test::vk_call("vkDestroyInstance", vkInstance, nullptr);
+  REQUIRE(xg::xrDestroyInstance(instance) == XR_SUCCESS);
+}
+
 TEST_CASE("XR enable2 creates tracked guest Vulkan objects with feature chains") {
   const char *extension = "XR_KHR_vulkan_enable2";
   XrInstanceCreateInfo create{XR_TYPE_INSTANCE_CREATE_INFO};
@@ -2037,6 +2093,18 @@ TEST_CASE("XR guest lifecycle and real Vulkan swapchain through mock loader") {
   ventureMockXrSetScript(&input);
   REQUIRE(xg::xrLocateSpace(view_space, local_space, venture::monotonic_ns(), &location) == XR_SUCCESS);
   CHECK(location.pose.position.y == doctest::Approx(0.1)); // LOCAL stays world-locked.
+  // Velocities the runtime does not report reach the guest as zero, never NaN (xr_no_velocity).
+  XrSpaceVelocity velocity{XR_TYPE_SPACE_VELOCITY};
+  location.next = &velocity;
+  REQUIRE(xg::xrLocateSpace(view_space, local_space, venture::monotonic_ns(), &location) == XR_SUCCESS);
+  location.next = nullptr;
+  for (auto v : {velocity.linearVelocity, velocity.angularVelocity})
+    CHECK((std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z)));
+  if (std::getenv("VENTURE_MOCK_NO_VELOCITY")) {
+    CHECK(velocity.velocityFlags == 0);
+    CHECK(velocity.linearVelocity.x == 0);
+    CHECK(velocity.angularVelocity.y == 0);
+  }
   REQUIRE(xg::xrLocateSpace(view_space, floor_space, venture::monotonic_ns(), &location) == XR_SUCCESS);
   CHECK(location.pose.position.y == doctest::Approx(1.7));
 

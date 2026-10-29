@@ -133,7 +133,18 @@ VkResult allocate(VkDevice device, const VkMemoryRequirements& req, VkDeviceMemo
   VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
   ai.allocationSize = req.size;
   ai.memoryTypeIndex = type;
-  return vk<PFN_vkAllocateMemory>(device, "vkAllocateMemory")(device, &ai, nullptr, out);
+  const auto allocate_memory = vk<PFN_vkAllocateMemory>(device, "vkAllocateMemory");
+  auto result = allocate_memory(device, &ai, nullptr, out);
+  if (result != VK_ERROR_OUT_OF_DEVICE_MEMORY) return result;
+  // VRAM is full (an 8 GB card in a large level): keep the game running from system memory.
+  const auto spill = gfx::spill_memory_type(memory, req.memoryTypeBits);
+  if (spill == memory.memoryTypeCount || spill == type) return result;
+  ai.memoryTypeIndex = spill;
+  result = allocate_memory(device, &ai, nullptr, out);
+  static std::atomic<bool> reported{false};
+  if (result == VK_SUCCESS && !reported.exchange(true))
+    log::warn("vulkan", "GPU memory is full; decoded textures now also use system memory (slower)");
+  return result;
 }
 VkResult make_buffer(VkDevice device, VkDeviceSize size, const VkImageCreateInfo* image_info,
                      std::shared_ptr<Buffer>& out, bool cpu_written = false, bool require_cached = false, bool mapped = false) {

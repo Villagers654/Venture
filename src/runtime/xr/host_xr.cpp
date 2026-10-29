@@ -67,7 +67,6 @@ HostXr initialize_host() {
                                        "XR_KHR_composition_layer_equirect",
                                        "XR_KHR_composition_layer_equirect2",
                                        "XR_KHR_composition_layer_color_scale_bias",
-                                       "XR_FB_composition_layer_image_layout",
                                        "XR_FB_space_warp",
                                        "XR_EXT_local_floor",
                                        "XR_EXT_performance_settings",

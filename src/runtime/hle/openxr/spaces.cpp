@@ -1,7 +1,10 @@
 #include "hle/openxr/state.h"
 #include "core/av_telemetry.h"
+#include "common/log.h"
 #include "xr/host_xr.h"
+#include <atomic>
 #include <chrono>
+#include <cmath>
 
 namespace venture::hle::openxr {
 namespace {
@@ -45,6 +48,56 @@ void report_hand_pose(XrSpace space, const XrSpaceLocation& location) {
 }  // namespace
 }  // namespace venture::hle::openxr
 
+namespace venture::hle::openxr {
+// A Quest never hands an app NaN. A PC runtime may leave values the flags mark invalid undefined
+// (velocities it does not track, for one), and games use them anyway: make them zero/identity.
+namespace {
+bool finite(const XrVector3f& v) { return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z); }
+// Logged once: what the host runtime left undefined.
+void note_sanitized(const char* what) {
+  static std::atomic<bool> noted{false};
+  if (!noted.exchange(true)) log::warn("xr", "Host runtime returned an undefined {}; the game gets a neutral value", what);
+}
+}  // namespace
+void sanitize(XrSpaceLocationFlags& flags, XrPosef& pose) {
+  auto& q = pose.orientation;
+  const auto norm = q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w;
+  if (!std::isfinite(norm) || norm < 1e-6f) {
+    if (flags & XR_SPACE_LOCATION_ORIENTATION_VALID_BIT) note_sanitized("orientation");
+    q = {0, 0, 0, 1};
+    flags &= ~XrSpaceLocationFlags(XR_SPACE_LOCATION_ORIENTATION_VALID_BIT | XR_SPACE_LOCATION_ORIENTATION_TRACKED_BIT);
+  }
+  if (!finite(pose.position)) {
+    if (flags & XR_SPACE_LOCATION_POSITION_VALID_BIT) note_sanitized("position");
+    pose.position = {};
+    flags &= ~XrSpaceLocationFlags(XR_SPACE_LOCATION_POSITION_VALID_BIT | XR_SPACE_LOCATION_POSITION_TRACKED_BIT);
+  }
+}
+void sanitize(XrSpaceVelocityFlags& flags, XrVector3f& linear, XrVector3f& angular) {
+  if (!(flags & XR_SPACE_VELOCITY_LINEAR_VALID_BIT) || !finite(linear)) {
+    linear = {};
+    flags &= ~XrSpaceVelocityFlags(XR_SPACE_VELOCITY_LINEAR_VALID_BIT);
+  }
+  if (!(flags & XR_SPACE_VELOCITY_ANGULAR_VALID_BIT) || !finite(angular)) {
+    angular = {};
+    flags &= ~XrSpaceVelocityFlags(XR_SPACE_VELOCITY_ANGULAR_VALID_BIT);
+  }
+}
+void sanitize_views(XrViewState& state, std::uint32_t count, XrView* views) {
+  for (std::uint32_t i = 0; i < count; ++i) {
+    auto flags = XrSpaceLocationFlags(state.viewStateFlags);
+    sanitize(flags, views[i].pose);
+    state.viewStateFlags = XrViewStateFlags(flags);
+    auto& f = views[i].fov;
+    if (!std::isfinite(f.angleLeft) || !std::isfinite(f.angleRight) || !std::isfinite(f.angleUp) ||
+        !std::isfinite(f.angleDown) || f.angleLeft >= f.angleRight || f.angleDown >= f.angleUp) {
+      note_sanitized("view field of view");
+      f = {-0.785398f, 0.785398f, 0.785398f, -0.785398f};
+    }
+  }
+}
+}  // namespace venture::hle::openxr
+
 namespace venture::hle::openxr::guest {
 XrResult xrCreateActionSpace(XrSession session, const XrActionSpaceCreateInfo* createInfo, XrSpace* space) {
   std::lock_guard lock(state().mutex);
@@ -64,7 +117,15 @@ XrResult xrLocateSpace(XrSpace space, XrSpace baseSpace, XrTime time, XrSpaceLoc
   if (!valid_handle(baseSpace, "XrSpace")) return XR_ERROR_HANDLE_INVALID;
   if (!location || XR_FAILED(validate_struct(location, XR_TYPE_SPACE_LOCATION))) return XR_ERROR_VALIDATION_FAILURE;
   auto result = host_call<PFN_xrLocateSpace, "xrLocateSpace">(space, baseSpace, time, location);
-  if (XR_SUCCEEDED(result)) report_hand_pose(space, *location);
+  if (XR_SUCCEEDED(result)) {
+    sanitize(location->locationFlags, location->pose);
+    for (auto* next = static_cast<XrBaseOutStructure*>(location->next); next; next = next->next)
+      if (next->type == XR_TYPE_SPACE_VELOCITY) {
+        auto* velocity = reinterpret_cast<XrSpaceVelocity*>(next);
+        sanitize(velocity->velocityFlags, velocity->linearVelocity, velocity->angularVelocity);
+      }
+    report_hand_pose(space, *location);
+  }
   return result;
 }
 XrResult xrLocateSpaces(XrSession handle, const XrSpacesLocateInfo *info, XrSpaceLocations *out) {
@@ -95,11 +156,14 @@ XrResult xrLocateSpaces(XrSession handle, const XrSpacesLocateInfo *info, XrSpac
       return r;
   }
   for (std::uint32_t i = 0; i < info->spaceCount; ++i) {
+    sanitize(locations[i].locationFlags, locations[i].pose);
     out->locations[i] = {locations[i].locationFlags, locations[i].pose};
     report_hand_pose(info->spaces[i], locations[i]);
-    if (velocities)
+    if (velocities) {
+      sanitize(speed[i].velocityFlags, speed[i].linearVelocity, speed[i].angularVelocity);
       velocities->velocities[i] = {speed[i].velocityFlags, speed[i].linearVelocity,
                                    speed[i].angularVelocity};
+    }
   }
   return XR_SUCCESS;
 }

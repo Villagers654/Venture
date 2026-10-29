@@ -116,10 +116,14 @@ XrResult initialize_input() {
     XrActionSpaceCreateInfo ci{XR_TYPE_ACTION_SPACE_CREATE_INFO};
     ci.action = input.grip_action;
     ci.subactionPath = input.hands[hand];
-    ci.poseInActionSpace.orientation.w = 1;
+    // VrApi reports the legacy Oculus controller pose, not the OpenXR grip: Meta's OpenXR plugin puts
+    // the grip 4 cm behind and 3 cm below it, pitched up 60 degrees (OculusPoseToGrip). This is
+    // that legacy pose within the grip.
+    ci.poseInActionSpace = {{-0.5f, 0, 0, 0.8660254f}, {0, -0.0196410f, -0.0459808f}};
     r = ::xrCreateActionSpace(session().handle, &ci, &input.grip[hand]);
     if (XR_FAILED(r))
       return r;
+    ci.poseInActionSpace = {{0, 0, 0, 1}, {0, 0, 0}};
     ci.action = input.aim_action;
     r = ::xrCreateActionSpace(session().handle, &ci, &input.aim[hand]);
     if (XR_FAILED(r))

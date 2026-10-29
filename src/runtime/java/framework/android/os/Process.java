@@ -1,6 +1,9 @@
 package android.os;
 public final class Process {
+  public static final int THREAD_PRIORITY_DEFAULT = 0;
   public static final int THREAD_PRIORITY_AUDIO = -16;
+  private static final java.util.concurrent.ConcurrentHashMap<Integer, Integer> PRIORITIES =
+      new java.util.concurrent.ConcurrentHashMap<>();
   public static final int THREAD_PRIORITY_URGENT_AUDIO = -19;
   public static int myPid() {
     return (int) ProcessHandle.current().pid();
@@ -20,6 +23,11 @@ public final class Process {
   }
   public static void setThreadPriority(int tid, int p) {
     com.venture.runtime.RuntimeEnvironment.host().setThreadPriority(tid, p);
+    PRIORITIES.put(tid == 0 ? myTid() : tid, p);
+  }
+  // The nice value last set through this class; threads start at THREAD_PRIORITY_DEFAULT.
+  public static int getThreadPriority(int tid) {
+    return PRIORITIES.getOrDefault(tid == 0 ? myTid() : tid, THREAD_PRIORITY_DEFAULT);
   }
   public static void killProcess(int pid) {
     if (pid != myPid())

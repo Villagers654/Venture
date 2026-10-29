@@ -20,6 +20,7 @@ public class Context {
   public static final String SENSOR_SERVICE = "sensor", LAYOUT_INFLATER_SERVICE = "layout_inflater",
       UI_MODE_SERVICE = "uimode";
   public static final String MEDIA_ROUTER_SERVICE = "media_router", INPUT_SERVICE = "input";
+  public static final String USER_SERVICE = "user";
   private static final Map<String, SharedPreferences> preferences =
       new java.util.concurrent.ConcurrentHashMap<>();
   // Dynamic receivers match process-wide, as ActivityManagerService does; each
@@ -232,8 +233,41 @@ public class Context {
       case BATTERY_SERVICE -> new BatteryManager();
       case DISPLAY_SERVICE -> new android.hardware.display.DisplayManager();
       case INPUT_SERVICE -> android.hardware.input.InputManager.getInstance();
+      case USER_SERVICE -> new android.os.UserManager();
       default -> null;
     });
+  }
+  // API 23: the service registered for a manager class, through the name lookup
+  // that wrappers and components may override.
+  private static final java.util.Map<Class<?>, String> SERVICE_NAMES = java.util.Map.ofEntries(
+      java.util.Map.entry(android.app.ActivityManager.class, ACTIVITY_SERVICE),
+      java.util.Map.entry(android.location.LocationManager.class, LOCATION_SERVICE),
+      java.util.Map.entry(android.bluetooth.BluetoothManager.class, BLUETOOTH_SERVICE),
+      java.util.Map.entry(android.app.UiModeManager.class, UI_MODE_SERVICE),
+      java.util.Map.entry(android.view.LayoutInflater.class, LAYOUT_INFLATER_SERVICE),
+      java.util.Map.entry(android.hardware.SensorManager.class, SENSOR_SERVICE),
+      java.util.Map.entry(android.view.WindowManager.class, WINDOW_SERVICE),
+      java.util.Map.entry(android.media.AudioManager.class, AUDIO_SERVICE),
+      java.util.Map.entry(android.media.MediaRouter.class, MEDIA_ROUTER_SERVICE),
+      java.util.Map.entry(PowerManager.class, POWER_SERVICE),
+      java.util.Map.entry(android.view.inputmethod.InputMethodManager.class, INPUT_METHOD_SERVICE),
+      java.util.Map.entry(Vibrator.class, VIBRATOR_SERVICE),
+      java.util.Map.entry(VibratorManager.class, VIBRATOR_MANAGER_SERVICE),
+      java.util.Map.entry(android.telephony.TelephonyManager.class, TELEPHONY_SERVICE),
+      java.util.Map.entry(android.net.ConnectivityManager.class, CONNECTIVITY_SERVICE),
+      java.util.Map.entry(ClipboardManager.class, CLIPBOARD_SERVICE),
+      java.util.Map.entry(BatteryManager.class, BATTERY_SERVICE),
+      java.util.Map.entry(android.hardware.display.DisplayManager.class, DISPLAY_SERVICE),
+      java.util.Map.entry(android.hardware.input.InputManager.class, INPUT_SERVICE),
+      java.util.Map.entry(android.os.UserManager.class, USER_SERVICE));
+  public String getSystemServiceName(Class<?> serviceClass) {
+    return SERVICE_NAMES.get(serviceClass);
+  }
+  public final <T> T getSystemService(Class<T> serviceClass) {
+    String name = getSystemServiceName(serviceClass);
+    if (name == null) return null;
+    Object service = getSystemService(name);
+    return serviceClass.isInstance(service) ? serviceClass.cast(service) : null;
   }
   public int checkPermission(String permission, int pid, int uid) {
     // AOSP ContextImpl.checkPermission checks the requested UID, with pid=-1

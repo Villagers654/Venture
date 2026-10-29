@@ -48,6 +48,9 @@ struct Swapchain {
   std::vector<XrSwapchainImageVulkanKHR> host_images;
   std::uint64_t release_serial = 0, host_serial = 0, last_submitted = 0;
   XrColorSpaceFB host_color = XR_COLOR_SPACE_UNMANAGED_FB;
+  // A layer this frame asked for XR_COMPOSITION_LAYER_IMAGE_LAYOUT_VERTICAL_FLIP_BIT_FB;
+  // the host copy reverses rows and layer rects mirror (map_subimage).
+  bool flip_rows = false, host_flip = false;
   std::int32_t released_index = -1;
   std::uint32_t next_index = 0, host_index = 0;
   bool static_acquired = false;
@@ -139,6 +142,10 @@ template <class H, class P> void track_handle(H h, const char *type, P parent) {
   state().objects[{type, key(h)}] = {type, key(parent), parent ? handle_type<P>() : std::string_view{}};
 }
 void forget_object(const ObjectKey&);
+// Undefined or non-finite host poses, velocities and views become neutral values (spaces.cpp).
+void sanitize(XrSpaceLocationFlags& flags, XrPosef& pose);
+void sanitize(XrSpaceVelocityFlags& flags, XrVector3f& linear, XrVector3f& angular);
+void sanitize_views(XrViewState& state, std::uint32_t count, XrView* views);
 // A sync or attach starts a new action state; destroying any object drops all.
 void forget_action_states(bool all = false);
 void cancel_object_haptics(const ObjectKey&);

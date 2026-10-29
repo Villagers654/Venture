@@ -1,5 +1,8 @@
 {
-  "controller_pose": {"profile":"oculus_touch","reference":"grip"},
+  "controller_pose": {
+    "profile": "oculus_touch",
+    "reference": "grip"
+  },
   "description": "Chain after re4-new-game.json at its default five-second gap. Finish the opening cinematic, touch the radio with the right hand, and enter the first forest scene. Hardware verified through the radio call; the weapon tutorial choice still blocks locomotion and aiming proof.",
   "events": [
     {
@@ -21,14 +24,14 @@
         "grip": {
           "position": [
             -0.15,
-            1.45,
-            -0.3
+            1.42,
+            -0.26
           ],
           "orientation": [
-            0,
-            0,
-            0,
-            1
+            0.5,
+            0.0,
+            0.0,
+            0.866025404
           ]
         }
       },
@@ -49,14 +52,14 @@
         "grip": {
           "position": [
             -0.15,
-            1.55,
-            -0.28
+            1.52,
+            -0.24
           ],
           "orientation": [
-            0,
-            0,
-            0,
-            1
+            0.5,
+            0.0,
+            0.0,
+            0.866025404
           ]
         }
       }
@@ -80,14 +83,14 @@
         "grip": {
           "position": [
             -0.15,
-            1.49,
-            -0.28
+            1.46,
+            -0.24
           ],
           "orientation": [
-            0,
-            0,
-            0,
-            1
+            0.5,
+            0.0,
+            0.0,
+            0.866025404
           ]
         }
       }
@@ -130,14 +133,14 @@
         "grip": {
           "position": [
             0.25,
-            1.4,
-            -0.45
+            1.37,
+            -0.41
           ],
           "orientation": [
-            0,
-            0,
-            0,
-            1
+            0.5,
+            0.0,
+            0.0,
+            0.866025404
           ]
         }
       }

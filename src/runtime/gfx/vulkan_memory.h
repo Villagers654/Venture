@@ -24,4 +24,19 @@ inline std::uint32_t gpu_only_memory_type(const VkPhysicalDeviceMemoryProperties
   if (type == memory.memoryTypeCount) type = lowest(0, 0);
   return type;
 }
+// Where an allocation goes when VRAM is full: the lowest allowed type in system memory (a heap
+// without DEVICE_LOCAL). Slower to sample, but the driver can place the resource there.
+inline std::uint32_t spill_memory_type(const VkPhysicalDeviceMemoryProperties& memory,
+                                       std::uint32_t compatible) {
+  constexpr VkMemoryPropertyFlags unusable = VK_MEMORY_PROPERTY_PROTECTED_BIT |
+                                             VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT |
+                                             VK_MEMORY_PROPERTY_DEVICE_COHERENT_BIT_AMD;
+  for (std::uint32_t i = 0; i < memory.memoryTypeCount; ++i) {
+    const auto& type = memory.memoryTypes[i];
+    if ((compatible & (1u << i)) && !(type.propertyFlags & unusable) &&
+        !(memory.memoryHeaps[type.heapIndex].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT))
+      return i;
+  }
+  return memory.memoryTypeCount;
+}
 } // namespace venture::gfx

@@ -134,10 +134,12 @@ void empty_state(char32_t glyph, std::string_view headline, std::string_view sub
   draw_glyph(dl, glyph, 26, {p.x + w * 0.5f, p.y + r}, color::text2);
   ImGui::Dummy({w, r * 2});
   gap(18);
-  ImVec2 hs = measure(fonts().semibold, kTitle, headline);
-  ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (w - hs.x) * 0.5f);
-  text(fonts().semibold, kTitle, color::text, headline, false);
-  gap(2);
+  if (!headline.empty()) {
+    ImVec2 hs = measure(fonts().semibold, kTitle, headline);
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (w - hs.x) * 0.5f);
+    text(fonts().semibold, kTitle, color::text, headline, false);
+    gap(2);
+  }
   ImVec2 ss = measure(fonts().regular, kBody, sub);
   ImGui::SetCursorPosX(ImGui::GetCursorPosX() + std::max(0.f, (w - ss.x) * 0.5f));
   text(fonts().regular, kBody, color::text2, sub, false);
@@ -629,8 +631,7 @@ void App::draw_library() {
     else if (installed_only_)
       empty_state(icons::download, "Nothing installed yet", "Install a game from your library to play it here.");
     else if (!session_)
-      empty_state(icons::library, "Your Quest library, on your PC",
-                  "Sign in with the Meta account that owns your Quest games.");
+      empty_state(icons::library, "", "Sign in with the Meta account that owns your Quest games.");
     else
       empty_state(icons::library, "No games yet", "Games you own on Meta Quest will appear here.");
     if (!session_ && !refreshing_ && search_.empty()) {

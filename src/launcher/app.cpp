@@ -36,6 +36,28 @@ void save_screenshot(SDL_Renderer *renderer, const fs::path &file) {
     throw std::runtime_error("Could not write the screenshot.");
 }
 } // namespace
+// The UI's scale in window coordinates. Those are physical pixels on Windows but logical units
+// on Wayland and macOS, where the renderer already applies the pixel density.
+static float ui_scale(SDL_Window *window) {
+  const auto density = SDL_GetWindowPixelDensity(window);
+  return std::max(1.f, SDL_GetWindowDisplayScale(window) / (density > 0 ? density : 1.f));
+}
+void App::fit_window() {
+  scale_ = ui_scale(window_);
+  int width = int(1380 * scale_), height = int(880 * scale_);
+  int min_width = int(900 * scale_), min_height = int(620 * scale_);
+  // Never larger than the screen: a compositor squeezes an oversized window, which puts the UI
+  // and the mouse out of step.
+  SDL_Rect usable{};
+  if (SDL_GetDisplayUsableBounds(SDL_GetDisplayForWindow(window_), &usable) && usable.w > 0 && usable.h > 0) {
+    width = std::min(width, usable.w * 9 / 10);
+    height = std::min(height, usable.h * 9 / 10);
+    min_width = std::min(min_width, width);
+    min_height = std::min(min_height, height);
+  }
+  SDL_SetWindowMinimumSize(window_, min_width, min_height);
+  SDL_SetWindowSize(window_, width, height);
+}
 App::App(Options options) : Core(std::move(options)) {
   settings_games_ = paths::utf8(settings_.games);
   settings_runtime_ =
@@ -44,13 +66,13 @@ App::App(Options options) : Core(std::move(options)) {
   prefer_native_video_driver();
   if (!SDL_Init(SDL_INIT_VIDEO))
     throw std::runtime_error(std::string(video_unavailable_message()) + " (" + SDL_GetError() + ")");
-  scale_ = std::max(1.f, SDL_GetDisplayContentScale(SDL_GetPrimaryDisplay()));
   window_ = SDL_CreateWindow(
-      "Venture", int(1380 * scale_), int(880 * scale_),
+      "Venture", 1380, 880,
       SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY | SDL_WINDOW_HIDDEN |
           (client_side_decorations() ? SDL_WINDOW_BORDERLESS : 0));
   if (!window_)
     throw std::runtime_error("Could not create the launcher window.");
+  fit_window();
   if (client_side_decorations())
     SDL_SetWindowHitTest(
         window_,
@@ -58,7 +80,6 @@ App::App(Options options) : Core(std::move(options)) {
           return chrome::hit_test(static_cast<App *>(app)->chrome_, *point);
         },
         this);
-  SDL_SetWindowMinimumSize(window_, int(900 * scale_), int(620 * scale_));
   SDL_SetWindowPosition(window_, SDL_WINDOWPOS_CENTERED,
                         SDL_WINDOWPOS_CENTERED);
   renderer_ = SDL_CreateRenderer(window_, nullptr);
@@ -421,7 +442,7 @@ int App::run() {
       if (e.type == SDL_EVENT_DROP_FILE && e.drop.data)
         scan_local(paths::from_utf8(e.drop.data));
       if (e.type == SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED) {
-        scale_ = std::max(1.f, SDL_GetWindowDisplayScale(window_));
+        scale_ = ui_scale(window_);
         theme();
       }
     };
@@ -500,6 +521,10 @@ int App::run() {
     ImGui::Render();
     SDL_SetRenderDrawColor(renderer_, 26, 27, 30, 255);
     SDL_RenderClear(renderer_);
+    // The backend scales clip rects but not vertices: map window coordinates
+    // to the HiDPI framebuffer (Wayland, macOS) through the render scale.
+    const auto framebuffer_scale = ImGui::GetIO().DisplayFramebufferScale;
+    SDL_SetRenderScale(renderer_, framebuffer_scale.x, framebuffer_scale.y);
     ImGui_ImplSDLRenderer3_RenderDrawData(ImGui::GetDrawData(), renderer_);
     const bool timed_out =
         options_.smoke_seconds &&

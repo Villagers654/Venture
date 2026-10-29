@@ -784,6 +784,10 @@ add_executable(venture_xr_tests test_main.cpp  runtime/xr_test.cpp runtime/xr_vr
   add_test(NAME xr_typed_handles COMMAND venture_xr_tests
     "--test-case=XR guest lifecycle and real Vulkan swapchain through mock loader")
   set_tests_properties(xr_typed_handles PROPERTIES ENVIRONMENT "XR_RUNTIME_JSON=${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/mock_openxr_runtime.json;VENTURE_DATA_DIR=${CMAKE_CURRENT_BINARY_DIR}/xr-typed-handles-data;VENTURE_MOCK_TYPED_HANDLES=1")
+  # A runtime that leaves untracked velocities undefined (NaN): the guest must see zeros.
+  add_test(NAME xr_no_velocity COMMAND venture_xr_tests
+    "--test-case=XR guest lifecycle and real Vulkan swapchain through mock loader")
+  set_tests_properties(xr_no_velocity PROPERTIES ENVIRONMENT "XR_RUNTIME_JSON=${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/mock_openxr_runtime.json;VENTURE_DATA_DIR=${CMAKE_CURRENT_BINARY_DIR}/xr-no-velocity-data;VENTURE_MOCK_NO_VELOCITY=1")
   add_test(NAME xr_no_hmd COMMAND venture_xr_probe)
   set_tests_properties(xr_no_hmd PROPERTIES
     ENVIRONMENT "XR_RUNTIME_JSON=${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/mock_openxr_runtime.json;VENTURE_MOCK_NO_HMD=1"

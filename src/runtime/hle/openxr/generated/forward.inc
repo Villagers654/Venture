@@ -179,6 +179,7 @@ XrResult xrLocateViews(XrSession session, const XrViewLocateInfo* viewLocateInfo
   if (!viewState || XR_FAILED(validate_struct(viewState, XR_TYPE_VIEW_STATE))) return XR_ERROR_VALIDATION_FAILURE;
   if (!viewCountOutput) return XR_ERROR_VALIDATION_FAILURE;
   auto result = host_call<PFN_xrLocateViews, "xrLocateViews">(session, viewLocateInfo, viewState, viewCapacityInput, viewCountOutput, views);
+  if (XR_SUCCEEDED(result) && views) sanitize_views(*viewState, std::min(viewCapacityInput, *viewCountOutput), views);
   return result;
   }());
 }
