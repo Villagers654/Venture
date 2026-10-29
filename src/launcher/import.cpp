@@ -178,7 +178,7 @@ Core::ImportMatch Core::import_match(const ImportItem &item) const {
   return m;
 }
 
-void Core::start_import(bool device) {
+void Core::start_import(bool device, const fs::path &root) {
   auto &scan = device ? import_device_ : import_local_;
   std::vector<std::string> accounts;
   size_t queued = 0;
@@ -198,8 +198,17 @@ void Core::start_import(bool device) {
     decltype(vault_.load(key)) session;
     if (!key.empty()) session = vault_.load(key);
     if (!session) key = "local";
+    auto target = root.empty() ? settings_.games : root.lexically_normal();
+    if (const auto *current = installed_package(item.package)) target = root_of(*current);
+    if (!target.is_absolute()) throw std::runtime_error("Choose an absolute folder to import to.");
+    if (!std::ranges::contains(settings_.roots(), target)) {
+      fs::create_directories(target);
+      auto next = settings_;
+      next.libraries.push_back(target);
+      apply_settings(std::move(next), false);
+    }
     downloads_->enqueue_import(id, match.game ? match.game->name : item.label.empty() ? item.package : item.label,
-                               settings_.games,
+                               target,
                                session ? session->access_token : std::string{}, key, item.spec, item.package);
     accounts.push_back(key);
     item.selected = false;

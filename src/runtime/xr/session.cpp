@@ -830,6 +830,53 @@ XrResult Session::end(const XrFrameEndInfo *info, std::shared_ptr<const void> ow
           break;
         }
     }
+    // Display time should advance with the PC's clock; a runtime whose clock
+    // drifts makes games run fast or slow. Logged once: the rate between the
+    // freshest frame (largest display-time lead) of a window 5-7 s after the
+    // first frame and one 20 s later, as a stalled frame's display time is stale.
+    if (!clock_fact_logged) {
+      const auto now_ns = monotonic_ns();
+      if (frame_index == 1) clock_start_ns = now_ns;
+      const auto since = now_ns - clock_start_ns;
+      auto sample = [&](ClockSample &best) {
+        if (!best.ns || info->displayTime - best.display > now_ns - best.ns)
+          best = {info->displayTime, now_ns};
+      };
+      if (since >= 5'000'000'000 && since < 7'000'000'000) sample(clock_first);
+      else if (since >= 25'000'000'000 && since < 27'000'000'000) sample(clock_last);
+      else if (since >= 27'000'000'000 && clock_first.ns && clock_last.ns) {
+        clock_fact_logged = true;
+        const double ratio = double(clock_last.display - clock_first.display) / double(clock_last.ns - clock_first.ns);
+        log::info("facts", "Display clock rate {:.4f} over {:.0f} s; refresh {:.2f} Hz", ratio,
+                  (clock_last.ns - clock_first.ns) / 1e9, display_timing.rate());
+      }
+    }
+    if (frame_index == 1) {
+      // The headset's per-eye field of view as the host reports it; in debug reports.
+      XrReferenceSpaceCreateInfo view_info{XR_TYPE_REFERENCE_SPACE_CREATE_INFO};
+      view_info.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_VIEW;
+      view_info.poseInReferenceSpace.orientation.w = 1;
+      XrSpace view_space{};
+      if (XR_SUCCEEDED(xrCreateReferenceSpace(handle, &view_info, &view_space))) {
+        XrViewLocateInfo locate{XR_TYPE_VIEW_LOCATE_INFO, nullptr, XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO,
+                                info->displayTime, view_space};
+        XrViewState view_state{XR_TYPE_VIEW_STATE};
+        XrView views[2]{{XR_TYPE_VIEW}, {XR_TYPE_VIEW}};
+        std::uint32_t count = 0;
+        constexpr double degrees = 57.29577951308232;
+        if (XR_SUCCEEDED(xrLocateViews(handle, &locate, &view_state, 2, &count, views)) && count == 2)
+          log::info("facts", "Host eye FOV (left/right/up/down degrees): left eye {:.1f}/{:.1f}/{:.1f}/{:.1f}, "
+                    "right eye {:.1f}/{:.1f}/{:.1f}/{:.1f}; eye separation {:.1f} mm",
+                    views[0].fov.angleLeft * degrees, views[0].fov.angleRight * degrees,
+                    views[0].fov.angleUp * degrees, views[0].fov.angleDown * degrees,
+                    views[1].fov.angleLeft * degrees, views[1].fov.angleRight * degrees,
+                    views[1].fov.angleUp * degrees, views[1].fov.angleDown * degrees,
+                    std::hypot(views[1].pose.position.x - views[0].pose.position.x,
+                               views[1].pose.position.y - views[0].pose.position.y,
+                               views[1].pose.position.z - views[0].pose.position.z) * 1000);
+        xrDestroySpace(view_space);
+      }
+    }
     if (frame_index == 1 || frame_index % 300 == 0) {
       const auto now = std::chrono::steady_clock::now();
       const auto seconds = last_report_frame

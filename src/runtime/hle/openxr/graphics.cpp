@@ -323,6 +323,14 @@ XrResult xrGetOpenGLESGraphicsRequirementsKHR(XrInstance instance, XrSystemId sy
 // A Vulkan guest's D24 depth chain on a host whose GPU attaches no D24: its
 // private images use the substituted 32-bit format (vulkan::host_depth_format),
 // which the host chain carries 1:1. UNDEFINED when no substitution applies.
+static bool depth_stencil_format(VkFormat format) {
+  switch (format) {
+  case VK_FORMAT_D16_UNORM: case VK_FORMAT_X8_D24_UNORM_PACK32: case VK_FORMAT_D32_SFLOAT:
+  case VK_FORMAT_D16_UNORM_S8_UINT: case VK_FORMAT_D24_UNORM_S8_UINT: case VK_FORMAT_D32_SFLOAT_S8_UINT:
+  case VK_FORMAT_S8_UINT: return true;
+  default: return false;
+  }
+}
 static VkFormat substituted_depth(std::int64_t format, const std::vector<std::int64_t>& host) {
   if (state().gles || !vulkan::depth_alias_candidate(VkFormat(format))) return VK_FORMAT_UNDEFINED;
   const auto wide = vulkan::host_depth_format(state().graphics.physicalDevice, VkFormat(format));
@@ -448,6 +456,19 @@ XrResult create_swapchain(XrSession handle, const XrSwapchainCreateInfo *info, X
   };
   if (const auto wide = substituted_depth(copy.format, formats); wide != VK_FORMAT_UNDEFINED) copy.format = wide;
   bool format_supported = offered(copy.format);
+  // A Quest takes any depth/stencil chain; OVRPlugin asks for D24S8 without
+  // checking the list and its frames fail when refused (SteamVR on AMD offers
+  // neither D24S8 nor D32S8). Such a chain stays the guest's own: its images
+  // use the device's depth format, and its depth is left out of host frames.
+  bool guest_only = false;
+  if (!format_supported && !state().gles && !surface && depth_stencil_format(VkFormat(copy.format))) {
+    copy.format = vulkan::host_depth_format(state().graphics.physicalDevice, VkFormat(copy.format));
+    format_supported = guest_only = true;
+    static std::atomic_flag reported = ATOMIC_FLAG_INIT;
+    if (!reported.test_and_set(std::memory_order_relaxed))
+      log::warn("xr", "The host offers no swapchain format {}; the game's depth stays its own and is not "
+                      "given to the host compositor", info->format);
+  }
   if (!format_supported && state().gles) {
     const auto rgba8 = [](std::int64_t f) {
       return f == VK_FORMAT_R8G8B8A8_UNORM || f == VK_FORMAT_B8G8R8A8_UNORM ||
@@ -478,6 +499,7 @@ XrResult create_swapchain(XrSession handle, const XrSwapchainCreateInfo *info, X
     copy.usageFlags |= XR_SWAPCHAIN_USAGE_TRANSFER_SRC_BIT | XR_SWAPCHAIN_USAGE_TRANSFER_DST_BIT;
   Swapchain record;
   record.full_rate_resource_requested = full_rate_resource_requested;
+  record.guest_only = guest_only;
   record.info = copy;
   record.desc = {info->format,    static_cast<VkFormat>(copy.format),
                  info->width,     info->height,

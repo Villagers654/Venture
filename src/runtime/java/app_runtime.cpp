@@ -308,7 +308,12 @@ void launch_android_app(const AppLaunchOptions& options) {
   auto& xr = xr::host_xr();
   if (!xr.available) throw std::runtime_error(xr.error);
   auto class_path = options.class_path;
-  if (class_path.empty()) {
+  if (class_path.empty() && !process_config().has_code) {
+    // As on Android, the class loader's path is the APK itself. With no code the
+    // manifest's activity is the framework's android.app.NativeActivity.
+    log::info("launch", "APK has no Java code; its native activity starts through the framework");
+    class_path.push_back(paths::utf8(process_config().apk));
+  } else if (class_path.empty()) {
     log::info("launch", "Converting and verifying APK Java (cached)");
     ConversionOptions conversion;
     conversion.java = paths::utf8(support.dex_java);

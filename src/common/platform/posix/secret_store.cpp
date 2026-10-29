@@ -139,6 +139,16 @@ struct Libsecret {
   void (*free_error)(GError *) = nullptr;
   GQuark (*dbus_quark)() = nullptr;
   GQuark (*io_quark)() = nullptr;
+  // Unlocking the default collection.
+  SecretService *(*service)(SecretServiceFlags, GCancellable *, GError **) = nullptr;
+  SecretCollection *(*for_alias)(SecretService *, const gchar *, SecretCollectionFlags, GCancellable *,
+                                 GError **) = nullptr;
+  gboolean (*collection_locked)(SecretCollection *) = nullptr;
+  gint (*unlock)(SecretService *, GList *, GCancellable *, GList **, GError **) = nullptr;
+  GList *(*list_append)(GList *, gpointer) = nullptr;
+  void (*list_free)(GList *) = nullptr;
+  void (*unref)(gpointer) = nullptr;
+  bool can_unlock = false;
   bool ok = false;
 };
 const Libsecret &libsecret() {
@@ -154,6 +164,11 @@ const Libsecret &libsecret() {
            bind(l.clear, "secret_password_clear_sync") && bind(l.free_password, "secret_password_free") &&
            bind(l.free_error, "g_error_free") && bind(l.dbus_quark, "g_dbus_error_quark") &&
            bind(l.io_quark, "g_io_error_quark");
+    l.can_unlock = bind(l.service, "secret_service_get_sync") &&
+                   bind(l.for_alias, "secret_collection_for_alias_sync") &&
+                   bind(l.collection_locked, "secret_collection_get_locked") &&
+                   bind(l.unlock, "secret_service_unlock_sync") && bind(l.list_append, "g_list_append") &&
+                   bind(l.list_free, "g_list_free") && bind(l.unref, "g_object_unref");
     return l;
   }();
   return api;
@@ -214,11 +229,40 @@ std::string marker_root(const fs::path &file, std::string_view key) {
     return {};
   }
 }
+// Unlocks the default collection, which shows the keyring's own password
+// prompt, at most once per process. A lookup unlocks the items it finds, but
+// KWallet encrypts attributes too, so a closed wallet finds none and never
+// prompts.
+void unlock_default_collection() {
+  static std::atomic_flag tried = ATOMIC_FLAG_INIT;
+  auto &l = libsecret();
+  if (!l.can_unlock || tried.test_and_set()) return;
+  GError *error = nullptr;
+  SecretService *service = l.service(SECRET_SERVICE_LOAD_COLLECTIONS, nullptr, &error);
+  if (!service) {
+    if (error) l.free_error(error);
+    return;
+  }
+  if (SecretCollection *collection =
+          l.for_alias(service, SECRET_COLLECTION_DEFAULT, SECRET_COLLECTION_NONE, nullptr, &error)) {
+    if (l.collection_locked(collection)) {
+      GList *objects = l.list_append(nullptr, collection);
+      l.unlock(service, objects, nullptr, nullptr, &error);
+      l.list_free(objects);
+    }
+    l.unref(collection);
+  }
+  if (error) l.free_error(error);
+  l.unref(service);
+}
 // Secret Service lookup; nullopt when absent or unreachable.
 std::optional<std::string> keyring_load(const fs::path &file, const std::string &key) {
   auto &l = libsecret();
   if (!l.ok) return std::nullopt;
   auto location = root(file, key.empty()), slot = slot_of(key);
+  // Saved to the keyring (a marker without a sealed file): open it first.
+  std::error_code ec;
+  if (fs::exists(file, ec) && !fs::exists(sealed_path(file), ec)) unlock_default_collection();
   GError *error = nullptr;
   auto *secret = l.lookup(&schema, nullptr, &error, "root", location.c_str(), "slot",
                           slot.c_str(), nullptr);

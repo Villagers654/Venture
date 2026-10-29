@@ -118,8 +118,12 @@ bool system_library(std::string_view name) {
   return names.contains(name);
 }
 std::filesystem::path library_file(State& s, std::string_view name, std::string_view base) {
-  auto path = resolve_guest_path(name);
-  if (!path.empty() && std::filesystem::is_regular_file(path)) return path;
+  // Like bionic's dlopen, a name without a slash is only searched for, never
+  // taken as a path (which would find a host file in the working directory).
+  if (name.find_first_of("/\\") != std::string_view::npos) {
+    auto path = resolve_guest_path(name);
+    if (!path.empty() && std::filesystem::is_regular_file(path)) return path;
+  }
   for (const auto& directory : s.search_paths) {
     auto candidate = paths::from_utf8(directory) / paths::from_utf8(base);
     if (std::filesystem::is_regular_file(candidate)) return candidate;
@@ -139,7 +143,8 @@ bool backing_exports(State& s, HleLibrary* slot, std::string_view name, std::str
   }
   return it->second.contains(std::string(name));
 }
-std::shared_ptr<Library> load(State& s, std::string_view name, int flags, bool backing = false) {
+std::shared_ptr<Library> load(State& s, std::string_view name, int flags, bool backing = false,
+                              const elf::Placement* placement = nullptr) {
   auto key = std::string(name);
   auto base = paths::utf8(paths::from_utf8(key).filename());
   std::shared_ptr<Library> lib;
@@ -154,7 +159,7 @@ std::shared_ptr<Library> load(State& s, std::string_view name, int flags, bool b
   if (backing) if (auto* slot = dynamic_cast<HleLibrary*>(lib.get()); slot && s.backing_files.contains(slot)) path = s.backing_files.at(slot);
   if (!path.empty()) {
     auto guest = process_config().guest_native_lib_dir() + "/" + base;
-    auto image = std::make_shared<elf::Image>(path, guest);
+    auto image = std::make_shared<elf::Image>(path, guest, placement);
     if (image->isa() != process_config().isa()) throw std::runtime_error("ELF ISA differs from selected process ABI: " + base);
     image->global |= (flags & kRtldGlobal) != 0;
     image->nodelete |= (flags & kRtldNoDelete) != 0;
@@ -483,16 +488,16 @@ Library* Linker::open_main(int flags) {
   }
   return &state().main;
 }
-Library* Linker::open(std::string_view name, int flags, Library*) {
+Library* Linker::open(std::string_view name, int flags, Library*, const elf::Placement* placement) {
   // bionic matches the executable by realpath, like any other loaded object.
   if (process_image::published() && name == process_image::program_path()) return open_main(flags);
-  return open_impl(name, flags, false);
+  return open_impl(name, flags, false, placement);
 }
 void Linker::publish_process_view() {
   auto& s = state(); auto lock = guest_loader_lock();
   process_image::sync(s.libraries);
 }
-Library* Linker::open_impl(std::string_view name, int flags, bool backing) {
+Library* Linker::open_impl(std::string_view name, int flags, bool backing, const elf::Placement* placement) {
   auto& s = state(); auto lock = guest_loader_lock();
   const auto initial_count = s.libraries.size();
   const auto initial_globals = s.globals;
@@ -506,7 +511,7 @@ Library* Linker::open_impl(std::string_view name, int flags, bool backing) {
   }
   std::shared_ptr<Library> root;
   try {
-    root = load(s, name, flags, backing);
+    root = load(s, name, flags, backing, placement);
     struct InitializationOwnership {
       Library& owner;
       explicit InitializationOwnership(Library& root) : owner(root) { ++owner.lifecycle_references; }

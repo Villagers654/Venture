@@ -1,10 +1,12 @@
 #include "hle/ovrplatform/asset_service.h"
 
 #include <algorithm>
+#include <cctype>
 #include <charconv>
 #include <condition_variable>
 
 #include "common/download/asset_files.h"
+#include "common/download/unity_bundle.h"
 #include "common/log.h"
 #include "common/saves_migration.h"
 
@@ -56,7 +58,17 @@ AssetService::AssetService(AppIdentity app, std::filesystem::path install,
       guest_root_(std::move(guest_root)),
       ownership_(std::move(ownership)),
       channel_(std::move(channel)) {
-  catalog();
+  // A bundle cut short before it reached this PC fails only when the game
+  // loads it, so name it up front for the log and debug report.
+  for (const auto& f : catalog().files) {
+    const auto file = install_ / paths::from_utf8(f.name);
+    std::error_code ec;
+    if (!paths::within(install_, file) || !std::filesystem::is_regular_file(file, ec)) continue;
+    const auto size = std::filesystem::file_size(file, ec);
+    if (const auto whole = download::unity_bundle_size(file); !ec && whole && *whole != size)
+      log::error("facts", "Game file {} is damaged: {} bytes of {}. Install or import the game again.", f.name,
+                 size, *whole);
+  }
   if (!language_state_.empty() && std::filesystem::exists(language_state_))
     language_ = str(paths::read_json(language_state_), "tag");
 }
@@ -70,9 +82,17 @@ meta::Plan AssetService::catalog() const {
       p.package != app_.package ||
       p.version_code != std::to_string(app_.version_code))
     throw std::runtime_error("Asset catalog identity changed");
-  // Files an import brought without a Meta asset id are not Meta assets; the
-  // OBB view publishes them like expansion files.
-  std::erase_if(p.files, [](const auto& f) { return f.kind == "asset" && f.id.empty(); });
+  reduced_ = !p.assets_complete;
+  // Files an import brought have no Meta asset id. Games still look them up
+  // by name (Batman's scene bundles), so each gets a stable id of its own:
+  // FNV-1a of its lowercase name with the top bit set, which Meta's ids
+  // (below 2^63) never use. The OBB view publishes them like store assets.
+  for (auto& f : p.files)
+    if (f.kind == "asset" && f.id.empty()) {
+      std::uint64_t h = 14695981039346656037ull;
+      for (unsigned char c : f.name) h = (h ^ std::uint64_t(std::tolower(c))) * 1099511628211ull;
+      f.id = std::to_string(h | (1ull << 63));
+    }
   for (auto& f : p.files)
     if (f.kind == "asset" &&
         (!valid_id(f.id) || !f.size || f.size > INT64_MAX ||
@@ -139,7 +159,9 @@ Model AssetService::details(const meta::File& f, std::stop_token stop) const {
            {"AssetType", type},
            {"DownloadStatus", status},
            {"Filepath", status == "installed" ? filepath(f) : std::string{}},
-           {"IapStatus", std::string(gated(f) ? "entitled" : "free")},
+           // Without Meta's full catalog an asset's add-on is unknown; the game
+           // still checks the account's real purchases before offering paid content.
+           {"IapStatus", std::string(gated(f) || reduced_ ? "entitled" : "free")},
            {"Metadata", f.metadata}}};
   if (!f.language_tag.empty())
     m.fields["Language"] = std::make_shared<const Model>(
@@ -250,9 +272,16 @@ Result AssetService::request(std::string_view op, const RequestArgs& args,
       Result r;
       r.model.kind = "AssetDetailsArray";
       std::set<std::string> ids;
+      std::size_t present = 0;
+      std::string languages;
       for (auto& f : files)
-        if (ids.insert(f.id).second)
+        if (ids.insert(f.id).second) {
           r.model.elements.push_back(details(f, stop));
+          present += installed(f);
+          if (!f.language_tag.empty()) languages += (languages.empty() ? "" : ",") + f.language_tag;
+        }
+      log::info("facts", "Game asset list: {} files, {} installed; language packs: {}", ids.size(), present,
+                languages.empty() ? "none" : languages);
       return r;
     }
     auto found = files.end();

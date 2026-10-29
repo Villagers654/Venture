@@ -1,6 +1,7 @@
 #include <astcenc.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <cstdlib>
 #include <filesystem>
@@ -271,6 +272,223 @@ TEST_CASE("Vulkan ETC2 EAC GPU decoder covers alpha signed and sRGB formats") {
     }
     REQUIRE(test::vk_call("vkResetCommandBuffer", gpu.command, 0u) == VK_SUCCESS);
   }
+}
+
+namespace {
+// BC7 mode 6 reference decode (the only mode the encoder writes).
+std::array<std::uint8_t, 64> decode_bc7_mode6(const std::uint8_t* block) {
+  unsigned position = 0;
+  auto bits = [&](unsigned count) {
+    unsigned value = 0;
+    for (unsigned i = 0; i < count; ++i, ++position) value |= ((block[position / 8] >> (position % 8)) & 1u) << i;
+    return value;
+  };
+  REQUIRE(bits(7) == 64);
+  unsigned endpoints[2][4];
+  for (auto& channel : {0, 1, 2, 3})
+    for (auto& end : endpoints) end[channel] = bits(7) << 1;
+  for (auto& end : endpoints) {
+    const auto p = bits(1);
+    for (auto& c : end) c |= p;
+  }
+  constexpr unsigned weights[16] = {0, 4, 9, 13, 17, 21, 26, 30, 34, 38, 43, 47, 51, 55, 60, 64};
+  std::array<std::uint8_t, 64> out{};
+  for (unsigned i = 0; i < 16; ++i) {
+    const auto w = weights[bits(i ? 4 : 3)];
+    for (unsigned c = 0; c < 4; ++c)
+      out[i * 4 + c] = std::uint8_t(((64 - w) * endpoints[0][c] + w * endpoints[1][c] + 32) >> 6);
+  }
+  return out;
+}
+}  // namespace
+
+TEST_CASE("Vulkan texture storage for memory pressure maps 8-bit planes to BC7") {
+  const auto astc = vulkan::texture_storage(VK_FORMAT_ASTC_6x6_SRGB_BLOCK, true, {}, true);
+  REQUIRE(astc.planes.size() == 2);
+  CHECK(astc.planes[0].format == VK_FORMAT_BC7_SRGB_BLOCK);
+  CHECK(astc.planes[1].format == VK_FORMAT_BC7_UNORM_BLOCK);
+  CHECK(vulkan::texture_view(astc, VK_FORMAT_ASTC_6x6_UNORM_BLOCK, VK_FORMAT_R8G8B8A8_UNORM)->plane == 1);
+  const auto etc2 = vulkan::texture_storage(VK_FORMAT_ETC2_R8G8B8A8_UNORM_BLOCK, true, {}, true);
+  REQUIRE(etc2.planes.size() == 1);
+  CHECK(etc2.planes[0].format == VK_FORMAT_BC7_UNORM_BLOCK);
+  CHECK(vulkan::texture_view(etc2, VK_FORMAT_ETC2_R8G8B8A8_SRGB_BLOCK)->format == VK_FORMAT_BC7_SRGB_BLOCK);
+  const auto eac = vulkan::texture_storage(VK_FORMAT_EAC_R11G11_UNORM_BLOCK, false, {}, true);
+  CHECK(eac.planes[0].format == VK_FORMAT_R32G32_SFLOAT);
+  CHECK(vulkan::plane_bytes(astc.planes[0], 61, 37) == 16 * 10 * 16);
+  CHECK(vulkan::plane_bytes(eac.planes[0], 61, 37) == 61 * 37 * 8);
+}
+
+TEST_CASE("Vulkan emulated textures under memory pressure are stored as BC7 close to the RGBA8 decode") {
+  struct Force {
+    Force() { vulkan::force_texture_emulation(true); vulkan::force_texture_compression(1); }
+    ~Force() { vulkan::force_texture_compression(-1); vulkan::force_texture_emulation(false); }
+  } force;
+  test::VulkanDevice gpu;
+  VkPhysicalDeviceFeatures features{};
+  test::vk_call("vkGetPhysicalDeviceFeatures", gpu.physical, &features);
+  if (!features.textureCompressionBC) {
+    MESSAGE("host has no BC textures");
+    return;
+  }
+  constexpr std::uint32_t width = 61, height = 37;
+  std::vector<std::uint8_t> rgba(width * height * 4);
+  std::mt19937 random(4417);
+  for (std::uint32_t y = 0; y < height; ++y)
+    for (std::uint32_t x = 0; x < width; ++x) {
+      auto i = (y * width + x) * 4;
+      rgba[i] = (x * 4 + y) & 255;
+      rgba[i + 1] = (y * 6 + (random() & 15)) & 255;
+      rgba[i + 2] = 128 + int((random() & 31)) - 16;
+      rgba[i + 3] = x < width / 2 ? 255 : (x * 3 + y * 5) & 255;
+    }
+  astcenc_swizzle swizzle{ASTCENC_SWZ_R, ASTCENC_SWZ_G, ASTCENC_SWZ_B, ASTCENC_SWZ_A};
+  auto blit = reinterpret_cast<PFN_vkCmdBlitImage>(vulkan::raw_device_proc(gpu.device, "vkCmdBlitImage"));
+  auto read = reinterpret_cast<PFN_vkCmdCopyImageToBuffer>(
+      vulkan::raw_device_proc(gpu.device, "vkCmdCopyImageToBuffer"));
+  for (auto format : {VK_FORMAT_ASTC_4x4_UNORM_BLOCK, VK_FORMAT_ASTC_6x6_SRGB_BLOCK, VK_FORMAT_ASTC_8x8_UNORM_BLOCK}) {
+    CAPTURE(int(format));
+    const auto info = vulkan::texture_format(format);
+    const bool srgb = info.decoded == VK_FORMAT_R8G8B8A8_SRGB;
+    astcenc_config config{};
+    REQUIRE(astcenc_config_init(srgb ? ASTCENC_PRF_LDR_SRGB : ASTCENC_PRF_LDR, info.width, info.height, 1,
+                                ASTCENC_PRE_FAST, 0, &config) == ASTCENC_SUCCESS);
+    astcenc_context* raw{};
+    REQUIRE(astcenc_context_alloc(&config, 1, &raw) == ASTCENC_SUCCESS);
+    std::unique_ptr<astcenc_context, decltype(&astcenc_context_free)> context(raw, astcenc_context_free);
+    void* input = rgba.data();
+    astcenc_image in{width, height, 1, ASTCENC_TYPE_U8, &input};
+    const auto row_blocks = (width + info.width - 1) / info.width;
+    const std::size_t compressed_size = row_blocks * ((height + info.height - 1) / info.height) * 16;
+    test::VulkanBuffer upload(gpu, compressed_size), reference(gpu, width * height * 4);
+    REQUIRE(astcenc_compress_image(raw, &in, &swizzle, static_cast<std::uint8_t*>(upload.mapped),
+                                   compressed_size, 0) == ASTCENC_SUCCESS);
+    constexpr std::uint32_t blocks = 16 * 10;
+    test::VulkanBuffer encoded(gpu, blocks * 16), hardware(gpu, width * height * 4);
+    test::VulkanImage texture(gpu, format, width, height);
+    // An sRGB destination keeps the blit from converting to linear; it may round by one.
+    test::VulkanImage decompressed(gpu, srgb ? VK_FORMAT_R8G8B8A8_SRGB : VK_FORMAT_R8G8B8A8_UNORM, width, height);
+    const auto plane = vulkan::emulated_texture_planes(texture.image).at(0);
+    VkFormatProperties bc7{};
+    test::vk_call("vkGetPhysicalDeviceFormatProperties", gpu.physical, VK_FORMAT_BC7_UNORM_BLOCK, &bc7);
+    const bool blit_supported = bc7.optimalTilingFeatures & VK_FORMAT_FEATURE_BLIT_SRC_BIT;
+    gpu.begin();
+    texture.transition();
+    decompressed.transition();
+    VkBufferImageCopy copy{};
+    copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    copy.imageExtent = {width, height, 1};
+    test::vk_call("vkCmdCopyBufferToImage", gpu.command, upload.buffer, texture.image, VK_IMAGE_LAYOUT_GENERAL,
+                  1u, &copy);
+    auto resources = vulkan::record_decode(gpu.device, gpu.command, upload.buffer, upload.size, reference.buffer,
+                                           reference.size, {info, width, height, row_blocks, 0});
+    gpu.barrier(VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                VK_ACCESS_TRANSFER_READ_BIT);
+    read(gpu.command, plane, VK_IMAGE_LAYOUT_GENERAL, encoded.buffer, 1, &copy);
+    if (blit_supported) {
+      VkImageBlit region{};
+      region.srcSubresource = region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+      region.srcOffsets[1] = region.dstOffsets[1] = {std::int32_t(width), std::int32_t(height), 1};
+      blit(gpu.command, plane, VK_IMAGE_LAYOUT_GENERAL, decompressed.image, VK_IMAGE_LAYOUT_GENERAL, 1, &region,
+           VK_FILTER_NEAREST);
+      gpu.barrier(VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                  VK_ACCESS_TRANSFER_READ_BIT);
+      read(gpu.command, decompressed.image, VK_IMAGE_LAYOUT_GENERAL, hardware.buffer, 1, &copy);
+    }
+    gpu.barrier(VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_HOST_BIT,
+                VK_ACCESS_HOST_READ_BIT);
+    gpu.submit();
+    const auto* expected = static_cast<const std::uint8_t*>(reference.mapped);
+    const auto* bytes = static_cast<const std::uint8_t*>(encoded.mapped);
+    const auto* sampled = static_cast<const std::uint8_t*>(hardware.mapped);
+    double squared = 0;
+    int worst = 0;
+    std::size_t hardware_mismatches = 0;
+    for (std::uint32_t by = 0; by < 10; ++by)
+      for (std::uint32_t bx = 0; bx < 16; ++bx) {
+        const auto texels = decode_bc7_mode6(bytes + (by * 16 + bx) * 16);
+        for (std::uint32_t i = 0; i < 16; ++i) {
+          const auto x = bx * 4 + i % 4, y = by * 4 + i / 4;
+          if (x >= width || y >= height) continue;
+          for (std::uint32_t c = 0; c < 4; ++c) {
+            const auto at = (y * width + x) * 4 + c;
+            const int error = int(texels[i * 4 + c]) - int(expected[at]);
+            squared += double(error) * error;
+            worst = std::max(worst, std::abs(error));
+            if (blit_supported && std::abs(int(sampled[at]) - int(texels[i * 4 + c])) > (srgb ? 1 : 0))
+              ++hardware_mismatches;
+          }
+        }
+      }
+    const double psnr = 10 * std::log10(255.0 * 255.0 / (squared / (width * height * 4)));
+    MESSAGE("BC7 vs RGBA8 decode: format ", int(format), " PSNR ", psnr, " dB, worst ", worst);
+    // Noisy, weakly correlated channels: the hard case for single-subset BC7.
+    CHECK(psnr > 35);
+    CHECK(worst <= 32);
+    CHECK(hardware_mismatches == 0);
+    REQUIRE(test::vk_call("vkResetCommandBuffer", gpu.command, 0u) == VK_SUCCESS);
+  }
+}
+
+TEST_CASE("Vulkan BC7 encode GPU time against the RGBA8 decode (VENTURE_BC7_BENCH)") {
+  if (!std::getenv("VENTURE_BC7_BENCH")) return;
+  test::VulkanDevice gpu;
+  constexpr std::uint32_t size = 2048;
+  const auto info = vulkan::texture_format(VK_FORMAT_ASTC_6x6_UNORM_BLOCK);
+  std::vector<std::uint8_t> rgba(size * size * 4);
+  std::mt19937 random(9);
+  for (std::uint32_t y = 0; y < size; ++y)
+    for (std::uint32_t x = 0; x < size; ++x) {
+      auto i = (y * size + x) * 4;
+      rgba[i] = (x + (random() & 7)) & 255; rgba[i + 1] = (y / 3) & 255;
+      rgba[i + 2] = ((x ^ y) >> 2) & 255; rgba[i + 3] = 255;
+    }
+  astcenc_config config{};
+  REQUIRE(astcenc_config_init(ASTCENC_PRF_LDR, 6, 6, 1, ASTCENC_PRE_FASTEST, 0, &config) == ASTCENC_SUCCESS);
+  astcenc_context* raw{};
+  REQUIRE(astcenc_context_alloc(&config, 1, &raw) == ASTCENC_SUCCESS);
+  std::unique_ptr<astcenc_context, decltype(&astcenc_context_free)> context(raw, astcenc_context_free);
+  astcenc_swizzle swizzle{ASTCENC_SWZ_R, ASTCENC_SWZ_G, ASTCENC_SWZ_B, ASTCENC_SWZ_A};
+  void* input = rgba.data();
+  astcenc_image in{size, size, 1, ASTCENC_TYPE_U8, &input};
+  const auto row_blocks = (size + 5) / 6;
+  const std::size_t compressed_size = row_blocks * row_blocks * 16;
+  test::VulkanBuffer source(gpu, compressed_size), rgba8(gpu, size * size * 4), bc7(gpu, size * size);
+  REQUIRE(astcenc_compress_image(raw, &in, &swizzle, static_cast<std::uint8_t*>(source.mapped), compressed_size,
+                                 0) == ASTCENC_SUCCESS);
+  VkQueryPoolCreateInfo qi{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
+  qi.queryType = VK_QUERY_TYPE_TIMESTAMP;
+  qi.queryCount = 4;
+  VkQueryPool pool{};
+  REQUIRE(test::vk_call("vkCreateQueryPool", gpu.device, &qi, nullptr, &pool) == VK_SUCCESS);
+  VkPhysicalDeviceProperties props{};
+  test::vk_call("vkGetPhysicalDeviceProperties", gpu.physical, &props);
+  double best[2] = {1e9, 1e9};
+  for (int run = 0; run < 8; ++run) {
+    gpu.begin();
+    test::vk_call("vkCmdResetQueryPool", gpu.command, pool, 0u, 4u);
+    auto decoded = info;
+    test::vk_call("vkCmdWriteTimestamp", gpu.command, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, pool, 0u);
+    auto a = vulkan::record_decode(gpu.device, gpu.command, source.buffer, source.size, rgba8.buffer, rgba8.size,
+                                   {decoded, size, size, row_blocks, 0});
+    test::vk_call("vkCmdWriteTimestamp", gpu.command, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, pool, 1u);
+    gpu.barrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                VK_ACCESS_SHADER_WRITE_BIT);
+    test::vk_call("vkCmdWriteTimestamp", gpu.command, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, pool, 2u);
+    auto b = vulkan::record_encode_bc7(gpu.device, gpu.command, rgba8.buffer, rgba8.size, bc7.buffer, bc7.size,
+                                       size, size);
+    test::vk_call("vkCmdWriteTimestamp", gpu.command, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, pool, 3u);
+    gpu.submit();
+    std::uint64_t t[4]{};
+    REQUIRE(test::vk_call("vkGetQueryPoolResults", gpu.device, pool, 0u, 4u, sizeof(t), t, sizeof(std::uint64_t),
+                          VkQueryResultFlags(VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT)) == VK_SUCCESS);
+    best[0] = std::min(best[0], double(t[1] - t[0]) * props.limits.timestampPeriod / 1e6);
+    best[1] = std::min(best[1], double(t[3] - t[2]) * props.limits.timestampPeriod / 1e6);
+    REQUIRE(test::vk_call("vkResetCommandBuffer", gpu.command, 0u) == VK_SUCCESS);
+  }
+  MESSAGE(props.deviceName, ": 2048x2048 ASTC 6x6 -> RGBA8 ", best[0], " ms, RGBA8 -> BC7 ", best[1], " ms");
+  test::vk_call("vkDestroyQueryPool", gpu.device, pool, nullptr);
 }
 
 TEST_CASE("Vulkan pageable compressed sources retain replay and restore partial updates exactly") {
@@ -919,6 +1137,58 @@ TEST_CASE("Vulkan emulated compressed 3D images upload, copy and read back depth
   REQUIRE(test::vk_call("vkCreateImageView", gpu.device, &vi, nullptr, &view) == VK_SUCCESS);
   test::vk_call("vkDestroyImageView", gpu.device, view, nullptr);
   REQUIRE(test::vk_call("vkResetCommandBuffer", gpu.command, 0u) == VK_SUCCESS);
+}
+
+TEST_CASE("Vulkan emulated compressed LINEAR images are created and lay out their raw blocks") {
+  struct ForceEmulation {
+    ForceEmulation() { vulkan::force_texture_emulation(true); }
+    ~ForceEmulation() { vulkan::force_texture_emulation(false); }
+  } force;
+  test::VulkanDevice gpu;
+  // Creed: Rise to Glory (UE4) creates a 128x128 ASTC 8x8 transfer-only LINEAR
+  // texture with 8 mips although the query reports linear unsupported, and
+  // quits when creation fails.
+  constexpr auto format = VK_FORMAT_ASTC_8x8_UNORM_BLOCK;
+  constexpr VkImageUsageFlags usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+  VkImageFormatProperties limits{};
+  CHECK(static_cast<std::int32_t>(test::vk_call("vkGetPhysicalDeviceImageFormatProperties", gpu.physical, format,
+                                                VK_IMAGE_TYPE_2D, VK_IMAGE_TILING_LINEAR, usage, 0u, &limits)) ==
+        VK_ERROR_FORMAT_NOT_SUPPORTED);
+  VkImageCreateInfo ci{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+  ci.imageType = VK_IMAGE_TYPE_2D;
+  ci.format = format;
+  ci.extent = {128, 128, 1};
+  ci.mipLevels = 8;
+  ci.arrayLayers = 1;
+  ci.samples = VK_SAMPLE_COUNT_1_BIT;
+  ci.tiling = VK_IMAGE_TILING_LINEAR;
+  ci.usage = usage;
+  VkImage image{};
+  REQUIRE(test::vk_call("vkCreateImage", gpu.device, &ci, nullptr, &image) == VK_SUCCESS);
+  VkMemoryRequirements requirements{};
+  test::vk_call("vkGetImageMemoryRequirements", gpu.device, image, &requirements);
+  // Mip 1 (64x64) follows mip 0's 16x16 blocks; 8 blocks of 16 bytes per row.
+  VkImageSubresource sub{VK_IMAGE_ASPECT_COLOR_BIT, 1, 0};
+  VkSubresourceLayout layout{};
+  test::vk_call("vkGetImageSubresourceLayout", gpu.device, image, &sub, &layout);
+  CHECK(layout.offset == 16 * 16 * 16);
+  CHECK(layout.rowPitch == 8 * 16);
+  CHECK(layout.size == 8 * 8 * 16);
+  sub.mipLevel = 7;  // 1x1: one block, the last bytes the image needs
+  test::vk_call("vkGetImageSubresourceLayout", gpu.device, image, &sub, &layout);
+  CHECK(layout.size == 16);
+  CHECK(layout.offset + layout.size <= requirements.size);
+  test::vk_call("vkDestroyImage", gpu.device, image, nullptr);
+  // An OPTIMAL image's guest memory is never read or written (the blocks live
+  // in the private source and decoded image): it reserves one alignment unit,
+  // not a second copy of the texture in VRAM.
+  ci.tiling = VK_IMAGE_TILING_OPTIMAL;
+  ci.usage |= VK_IMAGE_USAGE_SAMPLED_BIT;
+  REQUIRE(test::vk_call("vkCreateImage", gpu.device, &ci, nullptr, &image) == VK_SUCCESS);
+  test::vk_call("vkGetImageMemoryRequirements", gpu.device, image, &requirements);
+  CHECK(requirements.size <= std::max<VkDeviceSize>(requirements.alignment, 1));
+  CHECK(requirements.size < 16 * 16 * 16);
+  test::vk_call("vkDestroyImage", gpu.device, image, nullptr);
 }
 
 TEST_SUITE_END();

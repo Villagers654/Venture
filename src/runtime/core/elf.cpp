@@ -142,7 +142,7 @@ std::set<std::string> exported_names(const std::filesystem::path& file, std::str
   }
   return result;
 }
-Image::Image(const std::filesystem::path& file, std::string guest_path) {
+Image::Image(const std::filesystem::path& file, std::string guest_path, const Placement* placement) {
   // Host source path only for the features that read it (hint hashing, compile census).
   if (JitBlockList::enabled() || profile::compile_timing_enabled) source_file_ = file;
   path_ = std::move(guest_path); soname_ = file.filename().string();
@@ -189,7 +189,12 @@ Image::Image(const std::filesystem::path& file, std::string guest_path) {
   }
   if (high <= low || high - low > (1ull << 40)) throw std::runtime_error("invalid ELF load span");
   map_size = high - low + (low % alignment);
-  map_start = AddressSpace::get().allocate(map_size, kProtNone, path_, alignment);
+  if (placement && placement->address && map_size <= placement->size && !(placement->address & 4095))
+    map_start = AddressSpace::get().allocate_at(placement->address, map_size, kProtNone, path_);
+  else if (placement && placement->required)
+    throw std::runtime_error("android_dlopen_ext: the reserved address space is too small for " + soname_);
+  else
+    map_start = AddressSpace::get().allocate(map_size, kProtNone, path_, alignment);
   if (!map_start) throw std::bad_alloc();
   load_bias = map_start + (low % alignment) - low;
   try {

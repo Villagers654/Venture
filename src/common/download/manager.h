@@ -21,6 +21,8 @@ struct Job {
   // it rather than downloaded.
   std::string source, package;
   bool importing = false;
+  // The import brought saves, but this computer's saves for the game were kept.
+  bool saves_kept = false;
   std::uint64_t generation = 1;
 };
 // The base-game job of an app (no add-on SKU or single asset) in a snapshot.

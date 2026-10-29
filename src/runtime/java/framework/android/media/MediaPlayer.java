@@ -16,6 +16,7 @@ public class MediaPlayer {
   private static native void nativeVolume(long peer, float left, float right);
   private static native void nativeSurface(long peer, android.view.Surface surface);
   private static native void nativeRelease(long peer);
+  private static native String nativeTrack(long peer, int index, long[] values);
   private float leftVolume = 1, rightVolume = 1;
   private android.view.Surface surface;
   private android.view.SurfaceHolder display;
@@ -118,8 +119,49 @@ public class MediaPlayer {
     if (mode < 0 || mode > 3) throw new IllegalArgumentException("Invalid seek mode");
     seekTo((int)Math.min(Integer.MAX_VALUE, Math.max(0, position)));
   }
-  public synchronized void selectTrack(int index) {
-    query(); if (!prepared || index != 0) throw new IllegalStateException("Audio track unavailable");
+  /** The prepared source's tracks in container order (Unreal finds its video track here). */
+  public synchronized TrackInfo[] getTrackInfo() {
+    query();
+    if (!prepared) throw new IllegalStateException("getTrackInfo requires prepared media");
+    var list = new java.util.ArrayList<TrackInfo>();
+    for (long[] values = new long[5];; values = new long[5]) {
+      String mime = nativeTrack(peer, list.size(), values);
+      if (mime == null) break;
+      int type = mime.startsWith("video/") ? TrackInfo.MEDIA_TRACK_TYPE_VIDEO
+          : mime.startsWith("audio/") ? TrackInfo.MEDIA_TRACK_TYPE_AUDIO : TrackInfo.MEDIA_TRACK_TYPE_UNKNOWN;
+      list.add(new TrackInfo(type, MediaExtractor.format(mime, values)));
+    }
+    return list.toArray(new TrackInfo[0]);
+  }
+  // The player presents its source's first video and first audio track; selecting
+  // either (already selected) is a no-op, as on Android.
+  private void track(String operation, int index) {
+    query();
+    if (!prepared) throw new IllegalStateException(operation + " requires prepared media");
+    TrackInfo[] tracks = getTrackInfo();
+    if (index < 0 || index >= tracks.length || tracks[index].getTrackType() == TrackInfo.MEDIA_TRACK_TYPE_UNKNOWN)
+      throw new IllegalStateException("Track " + index + " unavailable");
+    com.venture.runtime.RuntimeEnvironment.trace("MediaPlayer: " + operation + " track=" + index);
+  }
+  public synchronized void selectTrack(int index) { track("selectTrack", index); }
+  public synchronized void deselectTrack(int index) { track("deselectTrack", index); }
+  public synchronized int getSelectedTrack(int type) {
+    query();
+    if (!prepared) return -1;
+    TrackInfo[] tracks = getTrackInfo();
+    for (int i = 0; i < tracks.length; ++i) if (tracks[i].getTrackType() == type) return i;
+    return -1;
+  }
+  public static class TrackInfo {
+    public static final int MEDIA_TRACK_TYPE_UNKNOWN = 0, MEDIA_TRACK_TYPE_VIDEO = 1, MEDIA_TRACK_TYPE_AUDIO = 2,
+        MEDIA_TRACK_TYPE_TIMEDTEXT = 3, MEDIA_TRACK_TYPE_SUBTITLE = 4, MEDIA_TRACK_TYPE_METADATA = 5;
+    private final int type;
+    private final MediaFormat format;
+    TrackInfo(int type, MediaFormat format) { this.type = type; this.format = format; }
+    public int getTrackType() { return type; }
+    public String getLanguage() { return "und"; }
+    public MediaFormat getFormat() { return format; }
+    public String toString() { return "TrackInfo{type=" + type + ", format=" + format + "}"; }
   }
   public synchronized void prepare() throws java.io.IOException {
     query();

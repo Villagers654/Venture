@@ -162,20 +162,25 @@ XrResult translate_layer(const LayerHeader &header, const XrView *eyes, LayerIma
   if (header.flags & ~supported_flags || header.reserved)
     return XR_ERROR_FEATURE_UNSUPPORTED;
   XrCompositionLayerFlags flags = 0;
+  // VrApi_Types.h ovrFrameLayerBlend: 1 ONE, 2 SRC_ALPHA, 5 ONE_MINUS_SRC_ALPHA.
+  // ONE_MINUS_SRC_ALPHA/SRC_ALPHA (RE4's fades) is source-alpha blending with
+  // inverted alpha; the color scale/bias extension inverts it (a' = 1 - a).
+  const bool inverse_alpha = header.src_blend == 5 && header.dst_blend == 2;
   if (header.src_blend == 1 && header.dst_blend == 5)
     flags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
-  else if (header.src_blend == 2 && header.dst_blend == 5)
+  else if ((header.src_blend == 2 && header.dst_blend == 5) || inverse_alpha)
     flags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT |
             XR_COMPOSITION_LAYER_UNPREMULTIPLIED_ALPHA_BIT;
   else if (header.src_blend != 1 || header.dst_blend != 0)
     return XR_ERROR_FEATURE_UNSUPPORTED;
-  const bool has_color = header.color_scale.x != 1 || header.color_scale.y != 1 ||
+  const bool has_color = inverse_alpha || header.color_scale.x != 1 || header.color_scale.y != 1 ||
                          header.color_scale.z != 1 || header.color_scale.w != 1;
   if (has_color &&
       !host_xr().enabled_extensions.contains("XR_KHR_composition_layer_color_scale_bias"))
     return XR_ERROR_FEATURE_UNSUPPORTED;
   dst.color.colorScale = {header.color_scale.x, header.color_scale.y, header.color_scale.z,
-                          header.color_scale.w};
+                          inverse_alpha ? -header.color_scale.w : header.color_scale.w};
+  dst.color.colorBias = {0, 0, 0, inverse_alpha ? 1.f : 0.f};
   auto append = [&](auto &layer) {
     layer.layerFlags = flags;
     layer.space = (header.flags & 4) ? state().view : state().app;

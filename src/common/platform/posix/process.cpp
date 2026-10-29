@@ -207,21 +207,43 @@ bool xdg_open(const char *target) {
   std::thread([pid] { waitpid(pid, nullptr, 0); }).detach();
   return true;
 }
+// The desktop portal opens files and folders in the user's apps, also from
+// inside a sandbox; the descriptor names the target without a path the portal
+// must parse. It is read-only: the portal refuses a sandboxed app's O_PATH
+// descriptor to anything the app may write (its own data, the logs) unless
+// writable access was requested.
+bool portal_open(const fs::path &p, int flags, bool (*open_fd)(int)) {
+  const int fd = open(p.c_str(), O_RDONLY | O_CLOEXEC | flags);
+  if (fd < 0) return false;
+  const bool opened = open_fd(fd);
+  close(fd);
+  return opened;
+}
 } // namespace
 void open_folder(const fs::path &p) {
-  // The desktop portal opens the folder in the file manager (also inside a
-  // sandbox); the descriptor names it without a path the portal must parse.
-  if (const int fd = open(p.c_str(), O_PATH | O_DIRECTORY | O_CLOEXEC); fd >= 0) {
-    const bool opened = dbus::portal_open_file(fd);
-    close(fd);
-    if (opened) return;
-  }
+  if (portal_open(p, O_DIRECTORY, dbus::portal_open_file)) return;
   if (!fs::is_directory(p) || !xdg_open(p.c_str()))
     throw std::runtime_error("Could not open the game folder.");
 }
-void reveal_file(const fs::path &file) { open_folder(file.parent_path()); }
+// OpenDirectory shows the file selected in its folder.
+void reveal_file(const fs::path &file) {
+  if (!portal_open(file, 0, dbus::portal_open_directory)) open_folder(file.parent_path());
+}
 void open_url(const std::string &url) {
   if (!dbus::portal_open_uri(url) && !xdg_open(url.c_str()))
     throw std::runtime_error("Could not open the link.");
+}
+void start_detached(const fs::path &executable, const std::vector<std::string> &args) {
+  std::vector<char *> argv{const_cast<char *>(executable.c_str())};
+  for (const auto &a : args) argv.push_back(const_cast<char *>(a.c_str()));
+  argv.push_back(nullptr);
+  posix_spawnattr_t attr;
+  posix_spawnattr_init(&attr);
+  posix_spawnattr_setflags(&attr, POSIX_SPAWN_SETSID);
+  pid_t pid = -1;
+  const int error = posix_spawn(&pid, executable.c_str(), nullptr, &attr, argv.data(), environ);
+  posix_spawnattr_destroy(&attr);
+  if (error != 0) throw std::runtime_error("Could not start " + executable.filename().string() + ".");
+  std::thread([pid] { waitpid(pid, nullptr, 0); }).detach();
 }
 } // namespace venture

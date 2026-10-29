@@ -3,6 +3,7 @@
 #include "common/saves_migration.h"
 #include "common/file_ops.h"
 #include <algorithm>
+#include <fstream>
 #include <set>
 namespace venture::library {
 std::vector<Install> scan(const fs::path &root, bool* authoritative) {
@@ -253,7 +254,6 @@ bool addon_installed(const Install &install, std::string_view sku) {
   return found;
 }
 void refresh_catalog(const fs::path &root, const meta::Plan &catalog) {
-  meta::require_asset_catalog(catalog);
   auto dir = paths::game_dir(root, catalog.package, catalog.version_code);
   if (!paths::within(dir, dir / "plan.json") ||
       !paths::within(dir, dir / "plan.json.tmp"))
@@ -263,6 +263,8 @@ void refresh_catalog(const fs::path &root, const meta::Plan &catalog) {
       previous.binary_id != catalog.binary_id)
     throw std::runtime_error(
         "Installed build does not match the add-on catalog.");
+  if (!meta::catalog_replaces(catalog, previous))
+    throw std::runtime_error(meta::catalog_unavailable);
   auto plan = catalog;
   // An import's own data files (no Meta id) and recorded hashes stay.
   for (auto &f : previous.files) {
@@ -320,6 +322,14 @@ void uninstall_addon(const fs::path &root, const Install &install,
   paths::atomic_write(target / "plan.json", manifest.json().dump(2));
   for (auto &path : files)
     fs::remove(path);
+}
+bool needed_meta_sign_in(const fs::path &log) {
+  std::ifstream in(log, std::ios::binary);
+  for (std::string line; std::getline(in, line);)
+    if (line.find("[ovrplatform] ovr_User_GetLoggedInUser request=") != std::string::npos ||
+        line.find("[ovrplatform] ovr_Entitlement_GetIsViewerEntitled request=") != std::string::npos)
+      if (line.find(" error=-20001") != std::string::npos) return true;
+  return false;
 }
 std::string runtime_failure(std::string_view tail, int code) {
   std::string_view last, last_runtime, dump;
@@ -379,6 +389,13 @@ bool Settings::runtime_override() const {
   return runtime.lexically_normal() !=
          defaults({}).runtime.lexically_normal();
 }
+std::vector<fs::path> Settings::roots() const {
+  std::vector<fs::path> result{games};
+  for (const auto &folder : libraries)
+    if (std::ranges::find(result, folder) == result.end())
+      result.push_back(folder);
+  return result;
+}
 Settings Settings::defaults(const fs::path &data) {
 #ifdef _WIN32
   return {data / "games",
@@ -405,12 +422,21 @@ Settings Settings::load(const fs::path &data) {
   if (auto adb = paths::from_utf8(str(j, "adbExecutable")); adb.is_absolute())
     s.adb = adb.lexically_normal();
   s.log_level = int(std::min<uint64_t>(4, number(j, "logLevel")));
+  if (const auto size = number(j, "interfaceSize"); size >= 100 && size <= 200)
+    s.interface_size = int(size);
+  s.menu_button = int(std::min<uint64_t>(2, number(j, "menuButton")));
   s.console = field(j, "launchWithConsole") == true;
   s.check_updates = field(j, "checkForUpdates") != false;
   s.dismissed_update = str(j, "dismissedUpdate");
   s.add_games_to_steam = field(j, "addGamesToSteam") != false;
   s.steam_add_new = field(j, "steamAddNew") != false;
-  s.steam_ask = field(j, "steamAsk") != false;
+  // Before install locations, the install dialog only asked about Steam.
+  s.install_ask = field(j, j.contains("installAsk") ? "installAsk" : "steamAsk") != false;
+  if (const auto &folders = field(j, "libraryFolders"); folders.is_array())
+    for (const auto &folder : folders)
+      if (auto path = folder.is_string() ? paths::from_utf8(folder.get<std::string>()) : fs::path();
+          path.is_absolute() && path.lexically_normal() != s.games)
+        s.libraries.push_back(path.lexically_normal());
   if (const auto &skip = field(j, "steamSkip"); skip.is_array())
     for (const auto &id : skip)
       if (id.is_string())
@@ -425,13 +451,21 @@ void Settings::save(const fs::path &data) const {
   Json j{{"version", 1},
          {"gamesDirectory", paths::utf8(games)},
          {"logLevel", log_level},
+         {"interfaceSize", interface_size},
+         {"menuButton", menu_button},
          {"launchWithConsole", console},
          {"checkForUpdates", check_updates},
          {"dismissedUpdate", dismissed_update},
          {"addGamesToSteam", add_games_to_steam},
          {"steamAddNew", steam_add_new},
-         {"steamAsk", steam_ask},
+         {"installAsk", install_ask},
          {"steamSkip", steam_skip}};
+  if (!libraries.empty()) {
+    Json folders = Json::array();
+    for (const auto &folder : libraries)
+      folders.push_back(paths::utf8(folder));
+    j["libraryFolders"] = std::move(folders);
+  }
   // The bundled runtime is never pinned: a later launcher update brings its own.
   if (runtime_override())
     j["runtimeExecutable"] = paths::utf8(runtime);

@@ -459,6 +459,44 @@ TEST_CASE(
         std::string::npos);
 }
 
+TEST_CASE("Platform entitlement asks the app's store listing when Meta fails the whole library") {
+  Server server;
+  auto store = std::make_shared<optest::FakeStore>();
+  auto provider = owned_library_provider(optest::app(), store, loopback_http_transport(server.port));
+  REQUIRE_FALSE(provider->prepare());
+  Json item{{"id", optest::app().app_id},
+            {"is_viewer_entitled", true},
+            {"latest_supported_binary", {{"package_name", optest::app().package}}}};
+  std::string user = "42";
+  ErrorCode expected = ErrorCode::none;
+  SUBCASE("owned") {}
+  SUBCASE("not owned") {
+    item["is_viewer_entitled"] = false;
+    expected = ErrorCode::not_entitled;
+  }
+  SUBCASE("another app's listing") {
+    item["id"] = "999";
+    expected = ErrorCode::unavailable;
+  }
+  SUBCASE("another package") {
+    item["latest_supported_binary"]["package_name"] = "com.example.other";
+    expected = ErrorCode::unavailable;
+  }
+  SUBCASE("no answer") {
+    item.erase("is_viewer_entitled");
+    expected = ErrorCode::unavailable;
+  }
+  auto library_attempts = 0;
+  for (int i = 0; i < 5; ++i) server.push("{}", 500);
+  server.push(Json{{"data", {{"item", item}, {"viewer", {{"user", {{"id", user}}}}}}}}.dump());
+  auto result = provider->entitlement({});
+  CHECK(result.error.code == expected);
+  for (auto& request : server.requests())
+    library_attempts += request.find("4850747515044496") != std::string::npos;
+  CHECK(library_attempts >= 1);
+  CHECK(server.requests().back().find("6549406941839522") != std::string::npos);
+}
+
 TEST_CASE(
     "Platform discards HTTP success if the account changes during the "
     "transfer") {

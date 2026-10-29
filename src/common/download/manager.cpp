@@ -1,11 +1,13 @@
 #include "common/download/manager.h"
 
 #include "common/download/asset_files.h"
+#include "common/download/unity_bundle.h"
 #include "common/digest.h"
 #include "common/library/library.h"
 #include "common/log.h"
 #include "common/meta/accounts.h"
 #include "common/saves_migration.h"
+#include <format>
 #include <fstream>
 namespace venture::download {
 namespace {
@@ -548,7 +550,7 @@ void Manager::run(std::stop_token shutdown) {
       if (fs::exists(dir / "plan.json")) {
         auto previous = meta::parse_plan(paths::read_json(dir / "plan.json"));
         // Never replace an installed asset catalog with the reduced one.
-        keep_manifest = !plan.assets_complete && previous.assets_complete;
+        keep_manifest = !meta::catalog_replaces(plan, previous);
         if (previous.binary_id != plan.binary_id ||
             previous.app_id != plan.app_id)
           throw std::runtime_error(
@@ -848,7 +850,9 @@ uint64_t Manager::run_import(Entry &e, meta::Store *store, std::stop_token stop)
   auto present = [&](const meta::File &f) {
     std::error_code ec;
     auto target = target_of(f);
-    return fs::is_regular_file(target, ec) && fs::file_size(target, ec) == f.size;
+    // A bundle cut short at an earlier source is copied again.
+    return fs::is_regular_file(target, ec) && fs::file_size(target, ec) == f.size &&
+           unity_bundle_size(target).value_or(f.size) == f.size;
   };
   // Saves go to the importing account's storage for the game ("local" for
   // none), only when it has none yet: saves made on this computer are never
@@ -860,6 +864,8 @@ uint64_t Manager::run_import(Entry &e, meta::Store *store, std::stop_token stop)
     if (fs::exists(saves, ec) || ec) {
       log::info("downloads", "Kept the saves of {} on this computer.", package);
       saves.clear();
+      std::lock_guard lock(mutex_);
+      e.job.saves_kept = true;
     }
   }
   uint64_t total = 0, remaining = 0;
@@ -916,6 +922,14 @@ uint64_t Manager::run_import(Entry &e, meta::Store *store, std::stop_token stop)
     if (step.from) {
       auto part = paths::from_utf8(paths::utf8(target) + ".part");
       const auto hash = copy(*source, *step.from, part, stop, report, true);
+      if (const auto whole = unity_bundle_size(part); whole && *whole != step.from->size) {
+        std::error_code ec;
+        fs::remove(part, ec);
+        throw std::runtime_error(std::format(
+            "{} is damaged in {}: it has {} bytes of {}. Reinstall the game on the headset, or copy the "
+            "file again, then retry.",
+            step.file.name, source->describe(), step.from->size, *whole));
+      }
       fs::rename(part, target);
       for (auto &f : plan.files)
         if (f.name == step.file.name) f.sha256 = hash;

@@ -233,6 +233,8 @@ VkResult host_texture_features(VkPhysicalDevice physical, VkPhysicalDeviceFeatur
 // Tests: decode compressed formats even where the host samples them natively
 // (SwiftShader has ASTC and ETC2), so suites exercise the emulated path.
 void force_texture_emulation(bool forced);
+// Tests: 1 stores every eligible decoded texture as BC7 as if GPU memory were full, 0 never, -1 by budget.
+void force_texture_compression(int mode);
 // Install an idle test queue only when the host has no private texture queue.
 void ensure_texture_source_test_queue(VkDevice device, VkQueue queue, std::uint32_t family);
 void force_pageable_texture_sources(bool forced);

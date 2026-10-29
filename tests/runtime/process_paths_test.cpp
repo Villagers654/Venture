@@ -80,3 +80,23 @@ TEST_CASE("first account adopts local saves with an explicit journal entry") {
         std::string::npos);
   remove_tree(root.parent_path(), root);
 }
+TEST_CASE("an OBB view stays in the data folder only where it can link the installed files") {
+  const auto root = fs::temp_directory_path() / ("venture-view-" + random_account_key());
+  struct Cleanup { fs::path root; ~Cleanup() { remove_tree(root.parent_path(), root); } } cleanup{root};
+  const auto install = root / "games/com.example.game/12", view = root / "data/obb/com.example.game";
+  paths::atomic_write(install / "plan.json", "{}");
+  paths::atomic_write(install / "main.12.com.example.game.obb", "obb");
+  CHECK(obb_view_for(install, view, "local") == view);
+  // Where no link can be made (another drive), the view moves beside the
+  // installation and copies an earlier launch left in the data folder go.
+  const auto linkless = root / "games/com.example.game/13";
+  fs::create_directories(linkless);
+  paths::atomic_write(view / "main.12.com.example.game.obb", "copied");
+  const auto moved = obb_view_for(linkless, view, "local");
+  CHECK(moved == linkless / ".obb" / "local");
+  CHECK_FALSE(fs::exists(view));
+  const std::string names[]{"main.12.com.example.game.obb"};
+  sync_obb_view(install, install / ".obb" / "local", names);
+  CHECK(fs::equivalent(install / "main.12.com.example.game.obb", install / ".obb/local/main.12.com.example.game.obb"));
+  CHECK_THROWS(obb_view_for(install, view, "../escape"));
+}

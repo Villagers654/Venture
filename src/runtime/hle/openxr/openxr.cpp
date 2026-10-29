@@ -3,6 +3,7 @@
 #include "xr/haptic_sequence.h"
 #include "xr/haptic_output.h"
 #include "xr/menu_chord.h"
+#include "xr/clock.h"
 #include "common/log.h"
 #include "core/engine_policy.h"
 #include "core/process.h"
@@ -17,7 +18,9 @@
 #include <cmath>
 #include <cstring>
 #include <deque>
+#include <format>
 #include <map>
+#include <mutex>
 #include <numbers>
 
 namespace venture::hle::openxr {
@@ -55,6 +58,17 @@ class PresentationLayers {
 
  private:
   bool host_, flip_ = false;
+  static bool guest_only_depth(const XrBaseInStructure* p) {
+    XrSwapchain chain{};
+    if (p->type == XR_TYPE_COMPOSITION_LAYER_DEPTH_INFO_KHR)
+      chain = reinterpret_cast<const XrCompositionLayerDepthInfoKHR*>(p)->subImage.swapchain;
+    else if (p->type == XR_TYPE_COMPOSITION_LAYER_SPACE_WARP_INFO_FB)
+      chain = reinterpret_cast<const XrCompositionLayerSpaceWarpInfoFB*>(p)->depthSubImage.swapchain;
+    else
+      return false;
+    const auto found = state().swapchains.find(chain);
+    return found != state().swapchains.end() && found->second.guest_only;
+  }
   // OpenXR "Valid Usage for Structure Pointer Chains": runtimes ignore
   // next-chain nodes of extensions the application did not enable. Host
   // copies omit them so the host never reads them either; OVRPlugin attaches
@@ -71,6 +85,8 @@ class PresentationLayers {
           flip_ = true;
         continue;
       }
+      // Depth in a chain the host has no format for stays the guest's.
+      if (guest_only_depth(p)) continue;
       const StructureInfo* metadata = nullptr;
       for (const auto& m : structure_metadata())
         if (m.type == p->type) { metadata = &m; break; }
@@ -201,6 +217,22 @@ class PresentationLayers {
     if (flip_) flipped.insert(sub.swapchain);
     if (!host_) return false;
     sub.swapchain = it->second.host_handle;
+    // Unreal's Meta OpenXR plugin can round a view's crop a pixel or two past
+    // the swapchain's right or bottom edge. Quest's compositor accepts that;
+    // desktop runtimes reject the whole frame (XR_ERROR_SWAPCHAIN_RECT_INVALID),
+    // so the overshoot is clipped. A rect that starts outside the image stays as
+    // submitted for the host to reject.
+    if (auto& r = sub.imageRect; r.offset.x >= 0 && r.offset.y >= 0 &&
+        r.offset.x < std::int64_t(it->second.info.width) && r.offset.y < std::int64_t(it->second.info.height)) {
+      const auto width = std::min<std::int64_t>(r.extent.width, it->second.info.width - std::int64_t(r.offset.x));
+      const auto height = std::min<std::int64_t>(r.extent.height, it->second.info.height - std::int64_t(r.offset.y));
+      if (width != r.extent.width || height != r.extent.height) {
+        if (!std::exchange(it->second.rect_clipped, true))
+          log::warn("xr", "Clipping a layer rect {}x{}+{}+{} to its {}x{} swapchain", r.extent.width,
+                    r.extent.height, r.offset.x, r.offset.y, it->second.info.width, it->second.info.height);
+        r.extent = {std::int32_t(width), std::int32_t(height)};
+      }
+    }
     if (it->second.textures.empty() == it->second.host_flip) {
       const auto y = std::int64_t(it->second.info.height) - sub.imageRect.offset.y -
                      sub.imageRect.extent.height;
@@ -682,6 +714,38 @@ XrResult xrDestroySession(XrSession handle) {
   if (shutdown_trace::enabled) log::info("shutdown", "xrDestroySession returned result={}", int(result));
   return result;
 }
+namespace {
+// A host without XR_EXT_local_floor (Virtual Desktop's runtime) gets the floor
+// space that extension specifies: LOCAL lowered to the STAGE floor, measured
+// now. Until the floor height is known, STAGE itself is the floor.
+// https://registry.khronos.org/OpenXR/specs/1.1/man/html/XR_EXT_local_floor.html
+XrReferenceSpaceCreateInfo emulated_local_floor(XrSession handle, XrReferenceSpaceCreateInfo native) {
+  native.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_STAGE;
+  XrReferenceSpaceCreateInfo probe{XR_TYPE_REFERENCE_SPACE_CREATE_INFO, nullptr, XR_REFERENCE_SPACE_TYPE_LOCAL,
+                                   {{0, 0, 0, 1}, {0, 0, 0}}};
+  XrSpace local{}, stage{};
+  bool ok = XR_SUCCEEDED(::xrCreateReferenceSpace(handle, &probe, &local));
+  probe.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_STAGE;
+  ok = ok && XR_SUCCEEDED(::xrCreateReferenceSpace(handle, &probe, &stage));
+  XrTime now{};
+  std::int64_t monotonic{};
+  XrSpaceLocation where{XR_TYPE_SPACE_LOCATION};
+  ok = ok && XR_SUCCEEDED(venture::xr::clock_sample(&now, &monotonic)) &&
+       XR_SUCCEEDED(::xrLocateSpace(local, stage, now, &where)) &&
+       (where.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT);
+  if (ok) {
+    native.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_LOCAL;
+    native.poseInReferenceSpace.position.y -= where.pose.position.y;
+  }
+  if (local) ::xrDestroySpace(local);
+  if (stage) ::xrDestroySpace(stage);
+  static std::atomic_flag reported = ATOMIC_FLAG_INIT;
+  if (!reported.test_and_set(std::memory_order_relaxed))
+    log::info("xr", "Host has no XR_EXT_local_floor; floor space is {}", ok
+        ? std::format("LOCAL lowered {:.3f} m to the STAGE floor", where.pose.position.y) : std::string("STAGE"));
+  return native;
+}
+}  // namespace
 XrResult xrCreateReferenceSpace(XrSession handle, const XrReferenceSpaceCreateInfo* info,
                                 XrSpace* out) {
   std::lock_guard lock(state().mutex);
@@ -703,11 +767,10 @@ XrResult xrCreateReferenceSpace(XrSession handle, const XrReferenceSpaceCreateIn
     native.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_STAGE;
   } else if (int(info->referenceSpaceType) == 1000043001) {
     // Our native instance is OpenXR 1.0 and must enable this host extension.
-    if (!host_xr().enabled_extensions.contains("XR_EXT_local_floor")) {
-      log::warn("xr", "Legacy floor reference space requires host XR_EXT_local_floor");
-      return XR_ERROR_REFERENCE_SPACE_UNSUPPORTED;
-    }
-    native.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_LOCAL_FLOOR;
+    if (host_xr().enabled_extensions.contains("XR_EXT_local_floor"))
+      native.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_LOCAL_FLOOR;
+    else
+      native = emulated_local_floor(handle, native);
   }
   auto result = ::xrCreateReferenceSpace(handle, &native, out);
   if (XR_SUCCEEDED(result)) track_handle(*out, "XrSpace", handle);
@@ -903,6 +966,67 @@ void probe_spaces(XrSession session, XrTime time, const char* why) {
   }
 }
 }  // namespace
+namespace {
+// The image area a layer shows, to choose what a host over its layer limit
+// leaves out; projection, cube and other layers are never left out.
+std::uint64_t layer_pixels(const XrCompositionLayerBaseHeader* layer) {
+  auto area = [](const XrSwapchainSubImage& image) {
+    return std::uint64_t(std::max(0, image.imageRect.extent.width)) *
+           std::uint64_t(std::max(0, image.imageRect.extent.height));
+  };
+  switch (layer->type) {
+    case XR_TYPE_COMPOSITION_LAYER_QUAD:
+      return area(reinterpret_cast<const XrCompositionLayerQuad*>(layer)->subImage);
+    case XR_TYPE_COMPOSITION_LAYER_CYLINDER_KHR:
+      return area(reinterpret_cast<const XrCompositionLayerCylinderKHR*>(layer)->subImage);
+    case XR_TYPE_COMPOSITION_LAYER_EQUIRECT_KHR:
+      return area(reinterpret_cast<const XrCompositionLayerEquirectKHR*>(layer)->subImage);
+    case XR_TYPE_COMPOSITION_LAYER_EQUIRECT2_KHR:
+      return area(reinterpret_cast<const XrCompositionLayerEquirect2KHR*>(layer)->subImage);
+    default:
+      return UINT64_MAX;
+  }
+}
+// The host's maxLayerCount, read once per session (0 when unknown).
+std::uint32_t host_layer_limit(XrSession session) {
+  static std::mutex mutex;
+  static XrSession cached{};
+  static std::uint32_t limit = 0;
+  std::lock_guard lock(mutex);
+  if (cached != session) {
+    cached = session;
+    limit = 0;
+    auto& host = venture::xr::host_xr();
+    XrSystemProperties properties{XR_TYPE_SYSTEM_PROPERTIES};
+    if (host.available && XR_SUCCEEDED(::xrGetSystemProperties(host.instance, host.system, &properties)))
+      limit = properties.graphicsProperties.maxLayerCount;
+  }
+  return limit;
+}
+// A frame over the host's layer limit fails whole (XR_ERROR_LAYER_LIMIT_EXCEEDED,
+// every frame after, so the game freezes) where a Quest takes it. The smallest
+// layers are left out instead; the projection always stays.
+void fit_layer_limit(XrSession session, std::vector<const XrCompositionLayerBaseHeader*>& layers) {
+  const auto limit = host_layer_limit(session);
+  if (!limit || layers.size() <= limit) return;
+  std::vector<std::size_t> order(layers.size());
+  for (std::size_t i = 0; i < order.size(); ++i) order[i] = i;
+  std::ranges::stable_sort(order, {}, [&](std::size_t i) { return layer_pixels(layers[i]); });
+  std::vector<bool> drop(layers.size());
+  std::size_t excess = layers.size() - limit, dropped = 0;
+  for (auto i : order)
+    if (dropped < excess && layer_pixels(layers[i]) != UINT64_MAX) drop[i] = true, ++dropped;
+  static std::atomic_uint reports{};
+  if (reports.fetch_add(1, std::memory_order_relaxed) < 4)
+    log::warn("xr", "The game submits {} layers and the host takes {}; the {} smallest are left out",
+              layers.size(), limit, dropped);
+  std::size_t out = 0;
+  for (std::size_t i = 0; i < layers.size(); ++i)
+    if (!drop[i]) layers[out++] = layers[i];
+  layers.resize(out);
+}
+}  // namespace
+
 XrResult xrEndFrame(XrSession handle, const XrFrameEndInfo *info) {
   xr_call_trace::Call trace("guest.xrEndFrame");
   return trace.finish([&]() -> XrResult {
@@ -1021,6 +1145,7 @@ XrResult xrEndFrame(XrSession handle, const XrFrameEndInfo *info) {
     }
     layers.push_back(static_cast<const XrCompositionLayerBaseHeader*>(rects.layer(layer)));
   }
+  fit_layer_limit(handle, layers);
   for (auto chain : rects.submitted) {
     auto& r = state().swapchains.at(chain);
     r.ever_submitted = true;

@@ -100,6 +100,38 @@ final class Hierarchy {
             }
         };
         new ClassReader(bytes).accept(visitor, ClassReader.SKIP_FRAMES);
-        return new FrameResult(failures.isEmpty() ? writer.toByteArray() : bytes, failures);
+        if (failures.isEmpty()) return new FrameResult(writer.toByteArray(), failures);
+        return new FrameResult(stubbed(bytes, failures), failures);
+    }
+    /** ART verifies a method that names a missing class softly: the class loads and
+     * only that method throws NoClassDefFoundError when it runs. HotSpot rejects the
+     * whole class without frames, so methods whose frames failed become that throw. */
+    byte[] stubbed(byte[] bytes, List<String> failures) {
+        Map<String,String> failed = new HashMap<>();
+        for (String f : failures) {
+            String method = f.substring(0, f.indexOf('\t'));
+            java.util.regex.Matcher m = java.util.regex.Pattern.compile("missing frame hierarchy: (\\S+)").matcher(f);
+            failed.putIfAbsent(method, m.find() ? m.group(1).replace('/', '.') : "unverifiable method " + method);
+        }
+        ClassWriter writer = new ClassWriter(ClassWriter.COMPUTE_FRAMES) {
+            @Override protected String getCommonSuperClass(String a, String b) { return common(a,b); }
+        };
+        new ClassReader(bytes).accept(new ClassVisitor(Opcodes.ASM9, writer) {
+            @Override public MethodVisitor visitMethod(int access, String name, String descriptor, String sig, String[] exceptions) {
+                String missing = failed.get(name + descriptor);
+                MethodVisitor mv = super.visitMethod(access, name, descriptor, sig, exceptions);
+                if (missing == null) return mv;
+                mv.visitCode();
+                mv.visitTypeInsn(Opcodes.NEW, "java/lang/NoClassDefFoundError");
+                mv.visitInsn(Opcodes.DUP);
+                mv.visitLdcInsn(missing);
+                mv.visitMethodInsn(Opcodes.INVOKESPECIAL, "java/lang/NoClassDefFoundError", "<init>", "(Ljava/lang/String;)V", false);
+                mv.visitInsn(Opcodes.ATHROW);
+                mv.visitMaxs(0, 0);
+                mv.visitEnd();
+                return null;
+            }
+        }, ClassReader.SKIP_FRAMES);
+        return writer.toByteArray();
     }
 }

@@ -117,6 +117,7 @@ for t in "${tests[@]}"; do case $t in
     if flatpak --user install -y --noninteractive --bundle "$(pkg flatpak)" >/dev/null && \
        flatpak run --command=/app/venture/venture $id --version && \
        flatpak run --command=/app/venture/venture-runtime $id --help | head -n 1 && \
+       flatpak run --command=sh $id -c 'ls /usr/lib/*/libwebkitgtk-6.0.so.4' && \
        flatpak run --filesystem="$probe_dir:ro" --command=/app/venture/java/jdk/bin/java $id \
          -Djava.awt.headless=true -cp "$probe_dir" FontProbe
     then result "Flatpak (user install)" PASS; else result "Flatpak (user install)" FAIL; fi

@@ -109,7 +109,8 @@ void check(CURLcode code, std::stop_token stop) {
     throw std::runtime_error(
         "Network transfer failed. Check your connection and retry.");
 }
-std::string redirect(std::string_view from, const Response &r) {
+std::string redirect(std::string_view from, const Response &r,
+                     bool (*allowed)(std::string_view) = allowed_delivery) {
   auto i = r.headers.find("location");
   if (i == r.headers.end())
     throw std::runtime_error("File redirect is missing its destination.");
@@ -121,8 +122,9 @@ std::string redirect(std::string_view from, const Response &r) {
   curl_url_get(u.get(), CURLUPART_URL, &text, 0);
   std::string result = text ? text : "";
   curl_free(text);
-  if (!allowed_delivery(result))
-    throw std::runtime_error("File redirect is outside Meta delivery domains.");
+  if (!allowed(result))
+    throw std::runtime_error(allowed == allowed_delivery ? "File redirect is outside Meta delivery domains."
+                                                         : "Update redirect is outside Venture's GitHub releases.");
   // A credential in a Location must obey the same host restriction as the
   // initial request.
   for (auto &[key, value] : query(parse_url(result).query))
@@ -267,6 +269,17 @@ bool domain(std::string_view host, std::string_view parent) {
          (host.size() > parent.size() &&
           host.ends_with(std::string(".") + std::string(parent)));
 }
+bool allowed_release(std::string_view url) {
+  try {
+    auto u = parse_url(url);
+    if (u.scheme != "https" || !u.user.empty() || !u.password.empty() ||
+        (!u.port.empty() && u.port != "443"))
+      return false;
+    return u.host == "github.com" || domain(u.host, "githubusercontent.com");
+  } catch (...) {
+  }
+  return false;
+}
 bool allowed_delivery(std::string_view url) {
   try {
     auto u = parse_url(url);
@@ -355,6 +368,48 @@ std::string get_image(std::string url, std::stop_token stop) {
   }
   throw std::runtime_error("Too many artwork redirects.");
 }
+static int hex_digit(char c) {
+  return c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : c >= 'A' && c <= 'F' ? c - 'A' + 10 : -1;
+}
+std::string delivery_file_name(std::string url, std::stop_token stop) {
+  for (int i = 0; i < 8; ++i) {
+    if (!allowed_delivery(url))
+      throw std::runtime_error("File URL is outside Meta delivery domains.");
+    auto r = memory(url, nullptr, 64 * 1024, stop, {{"Range", "bytes=0-0"}});
+    if (redirected(r.status)) {
+      url = redirect(url, r);
+      continue;
+    }
+    if (r.status != 200 && r.status != 206)
+      throw std::runtime_error("File server refused the request (HTTP " + std::to_string(r.status) + ").");
+    // RFC 6266: filename* (RFC 5987, UTF-8) is the exact name when present.
+    auto disposition = r.headers["content-disposition"];
+    std::string name;
+    if (auto p = disposition.find("filename*="); p != disposition.npos) {
+      auto value = trim(disposition.substr(p + 10, disposition.find(';', p) - p - 10));
+      if (auto quote = value.find("''"); quote != value.npos &&
+          lower(value.substr(0, quote)) == "utf-8")
+        for (std::size_t i = quote + 2; i < value.size(); ++i) {
+          // Percent escapes only: '+' is a literal in RFC 5987 values.
+          int hi, lo;
+          if (value[i] == '%' && i + 2 < value.size() &&
+              (hi = hex_digit(value[i + 1])) >= 0 && (lo = hex_digit(value[i + 2])) >= 0) {
+            name += char(hi * 16 + lo);
+            i += 2;
+          } else {
+            name += value[i];
+          }
+        }
+    }
+    if (auto p = disposition.find("filename="); name.empty() && p != disposition.npos) {
+      name = trim(disposition.substr(p + 9, disposition.find(';', p) - p - 9));
+      if (name.size() >= 2 && name.front() == '"' && name.back() == '"')
+        name = name.substr(1, name.size() - 2);
+    }
+    return name;
+  }
+  throw std::runtime_error("Too many file redirects.");
+}
 RangeDecision check_range(long status, uint64_t offset, uint64_t expected,
                           std::string_view range, uint64_t length) {
   if (status != 200 && status != 206)
@@ -375,8 +430,38 @@ RangeDecision check_range(long status, uint64_t offset, uint64_t expected,
     throw std::runtime_error("Inconsistent resume range. Retry the transfer.");
   return {offset, expected ? expected : total};
 }
+namespace {
+void fetch_file(std::string url, const fs::path &dest, uint64_t expected, std::stop_token stop,
+                const Progress &progress, bool (*allowed)(std::string_view), const char *outside);
+}
 void download(std::string url, const fs::path &dest, uint64_t expected,
               std::stop_token stop, const Progress &progress) {
+  fetch_file(std::move(url), dest, expected, stop, progress, allowed_delivery,
+             "File URL is outside Meta delivery domains.");
+}
+void download_release(std::string url, const fs::path &dest, uint64_t expected,
+                      std::stop_token stop, const Progress &progress) {
+  fetch_file(std::move(url), dest, expected, stop, progress, allowed_release,
+             "Update URL is outside Venture's GitHub releases.");
+}
+std::string get_release_text(std::string url, std::stop_token stop) {
+  for (int i = 0; i < 8; ++i) {
+    if (!allowed_release(url))
+      throw std::runtime_error("Update URL is outside Venture's GitHub releases.");
+    auto r = memory(url, nullptr, 1024 * 1024, stop);
+    if (redirected(r.status)) {
+      url = redirect(url, r, allowed_release);
+      continue;
+    }
+    if (r.status != 200)
+      throw std::runtime_error("GitHub returned HTTP " + std::to_string(r.status) + ".");
+    return r.body;
+  }
+  throw std::runtime_error("Too many redirects. Try again later.");
+}
+namespace {
+void fetch_file(std::string url, const fs::path &dest, uint64_t expected, std::stop_token stop,
+                const Progress &progress, bool (*allowed)(std::string_view), const char *outside) {
   fs::create_directories(dest.parent_path());
   auto part = dest;
   part += ".part";
@@ -397,8 +482,8 @@ void download(std::string url, const fs::path &dest, uint64_t expected,
     return;
   }
   for (int redirects = 0; redirects < 8; ++redirects) {
-    if (!allowed_delivery(url))
-      throw std::runtime_error("File URL is outside Meta delivery domains.");
+    if (!allowed(url))
+      throw std::runtime_error(outside);
     if (stop.stop_requested())
       throw std::runtime_error("Transfer paused. Resume when ready.");
     Response r;
@@ -465,7 +550,7 @@ void download(std::string url, const fs::path &dest, uint64_t expected,
       throw std::runtime_error(sink.error);
     check(code, stop);
     if (redirected(r.status)) {
-      url = redirect(url, r);
+      url = redirect(url, r, allowed);
       continue;
     }
     if (!sink.opened || !sink.done || (sink.total && sink.done != sink.total) ||
@@ -477,4 +562,5 @@ void download(std::string url, const fs::path &dest, uint64_t expected,
   }
   throw std::runtime_error("Too many file redirects. Try again later.");
 }
+} // namespace
 } // namespace venture::http

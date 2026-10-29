@@ -51,6 +51,7 @@ struct Swapchain {
   // A layer this frame asked for XR_COMPOSITION_LAYER_IMAGE_LAYOUT_VERTICAL_FLIP_BIT_FB;
   // the host copy reverses rows and layer rects mirror (map_subimage).
   bool flip_rows = false, host_flip = false;
+  bool rect_clipped = false; // logged once (map_subimage)
   std::int32_t released_index = -1;
   std::uint32_t next_index = 0, host_index = 0;
   bool static_acquired = false;
@@ -58,6 +59,9 @@ struct Swapchain {
   ImageDesc desc{};
   std::vector<XrSwapchainImageVulkanKHR> images;
   bool full_rate_resource_requested = false;
+  // A depth/stencil chain the host offers no format for: the guest renders to
+  // it, and the depth it carries never reaches the host (PresentationLayers).
+  bool guest_only = false;
   std::unique_ptr<vulkan::FullRateImage> full_rate_resource;
   std::vector<std::uint32_t> textures;
   std::unique_ptr<ColorImages> color_images;

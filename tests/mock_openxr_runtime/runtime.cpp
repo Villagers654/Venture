@@ -1033,6 +1033,9 @@ XrResult m_xrGetSystemProperties(XrInstance, XrSystemId id, XrSystemProperties *
       out->graphicsProperties.maxSwapchainImageHeight = height;
     }
   }
+  // A host that takes fewer composition layers than a Quest (SteamVR on Linux).
+  if (const char* text = venture::environment::getenv("VENTURE_MOCK_MAX_LAYERS"); text && std::atoi(text) > 0)
+    out->graphicsProperties.maxLayerCount = std::uint32_t(std::atoi(text));
   out->trackingProperties = {XR_TRUE, XR_TRUE};
   // SteamVR 2.18 with a Quest over Link reports zero limits and no tracking.
   if (const char* text = venture::environment::getenv("VENTURE_MOCK_ZERO_SYSTEM_LIMITS"); text && *text == '1') {
@@ -1473,6 +1476,11 @@ XrResult m_xrEndFrame(XrSession, const XrFrameEndInfo *info) {
     if (!script.retain_failed_end) frame_phase = 0;
     return script.end_frame_result;
   }
+  if (const char* text = venture::environment::getenv("VENTURE_MOCK_MAX_LAYERS");
+      text && std::atoi(text) > 0 && info->layerCount > std::uint32_t(std::atoi(text))) {
+    frame_phase = 0;
+    return XR_ERROR_LAYER_LIMIT_EXCEEDED;
+  }
   auto subimage = [](const XrSwapchainSubImage &sub) {
     auto it = chains.find(sub.swapchain);
     if (it == chains.end())
@@ -1616,6 +1624,11 @@ XrResult m_xrEnumerateSwapchainFormats(XrSession, std::uint32_t cap, std::uint32
     // else D32S8 (RADV has no D24S8).
     auto stencil = VK_FORMAT_D24_UNORM_S8_UINT;
     const auto* listed = venture::environment::getenv("VENTURE_MOCK_DEPTH_FORMATS");
+    if (listed && std::string_view(listed) == "nostencil") {
+      // SteamVR on AMD (Windows): no depth/stencil format at all.
+      formats.insert(formats.end(), {VK_FORMAT_D32_SFLOAT, VK_FORMAT_D16_UNORM});
+      return enumerate(cap, count, out, formats);
+    }
     if (listed && std::string_view(listed) == "radv") {
       stencil = VK_FORMAT_D32_SFLOAT_S8_UINT;  // Monado on RADV: D32_SFLOAT, D16, D32S8
     } else if (graphics.physicalDevice) {
@@ -2358,17 +2371,21 @@ XrResult m_xrLocateHandJointsEXT(XrHandTrackerEXT hand, const XrHandJointsLocate
                                      hands[hand] ? script.left_hand : script.right_hand);
   const bool active = script.active && script.hand_tracking_active;
   out->isActive = active;
+  // An inactive hand's joints are undefined (XR_EXT_hand_tracking): a strict runtime's NaN.
+  constexpr float nan = std::numeric_limits<float>::quiet_NaN();
   for (int j = 0; j < 26; ++j) {
-    out->jointLocations[j] = {active ? XrSpaceLocationFlags(15) : 0,
-                              venture::xr::compose(wrist, jointPoses[j]),
-                              model.radii[j]};
+    out->jointLocations[j] = active ? XrHandJointLocationEXT{XrSpaceLocationFlags(15),
+                                                             venture::xr::compose(wrist, jointPoses[j]),
+                                                             model.radii[j]}
+                                    : XrHandJointLocationEXT{0, {{nan, nan, nan, nan}, {nan, nan, nan}}, nan};
   }
   if (out->next) {
     auto v = static_cast<XrHandJointVelocitiesEXT *>(out->next);
     if (v->type != XR_TYPE_HAND_JOINT_VELOCITIES_EXT || v->jointCount != 26 || !v->jointVelocities)
       return XR_ERROR_VALIDATION_FAILURE;
     for (int j = 0; j < 26; ++j)
-      v->jointVelocities[j] = {active ? XrSpaceVelocityFlags(3) : 0, {}, {}};
+      v->jointVelocities[j] = active ? XrHandJointVelocityEXT{XrSpaceVelocityFlags(3), {}, {}}
+                                     : XrHandJointVelocityEXT{0, {nan, nan, nan}, {nan, nan, nan}};
   }
   return XR_SUCCESS;
 }

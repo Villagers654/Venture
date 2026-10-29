@@ -45,6 +45,10 @@ LaunchChoice launch_choice(const meta::AccountIndex &accounts,
 // "[runtime]" error line main() writes for a failed launch, found in the tail
 // of the runtime log, else the exit code with the last error line as context.
 std::string runtime_failure(std::string_view log_tail, int exit_code);
+// Whether a run's log shows the game asking Meta for its signed-in user or
+// entitlement and getting "not signed in" (no account, or an expired one).
+// Games such as Beat Saber then quit on their own, often with exit code 0.
+bool needed_meta_sign_in(const fs::path &log);
 // Before a launch: moves the previous run's log to <stem>.prev.log (replacing
 // an older one), so the runtime, which appends, starts a log of this run only.
 void rotate_log(const fs::path &log);
@@ -62,9 +66,22 @@ struct Settings {
   // A newly installed game goes to Steam unless the user opts out: the
   // default, and whether installing asks (a checkbox in the GUI). Games left
   // out are listed by app id.
-  bool steam_add_new = true, steam_ask = true;
+  bool steam_add_new = true;
   std::set<std::string> steam_skip;
+  // Starting a new game's install asks where it goes and whether it goes to
+  // Steam (a dialog in the GUI); off installs to `games` with the defaults.
+  bool install_ask = true;
+  // Other folders that hold games: earlier games folders and ones picked when
+  // installing. All are scanned; new downloads go to `games` unless one is picked.
+  std::vector<fs::path> libraries;
+  // Last, as defaults() initializes positionally. Launcher interface size in percent of the display's scale (Settings > Appearance).
+  int interface_size = 100;
+  // The game's menu from holding both stick clicks: 0 automatic (only when the
+  // runtime has no menu binding for that hand), 1 always, 2 off (Settings > Runtime).
+  int menu_button = 0;
   bool runtime_override() const;
+  // `games` first, then the other library folders.
+  std::vector<fs::path> roots() const;
   static Settings defaults(const fs::path &data);
   static Settings load(const fs::path &data);
   void save(const fs::path &data) const;

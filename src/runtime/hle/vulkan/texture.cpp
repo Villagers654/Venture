@@ -13,6 +13,8 @@
 #include <mutex>
 #include <set>
 #include <tuple>
+#include <thread>
+#include <format>
 #include <stdexcept>
 #include <vector>
 
@@ -49,6 +51,9 @@ namespace unorm_volume {
 }
 namespace depth {
 #include "texture_depth.inc"
+}
+namespace bc7 {
+#include "texture_bc7.inc"
 }
 template <class F>
 F vk(VkDevice device, const char* name) {
@@ -639,6 +644,8 @@ void retire_sources(VkDevice device, bool force_idle) {
 }
 // image_pipeline mode of the in-place depth word conversion (shaders/depth_convert.comp).
 constexpr unsigned depth_mode = 7;
+// image_pipeline mode of the BC7 encoder (shaders/bc7_encode.comp): RGBA8 words in, blocks out.
+constexpr unsigned bc7_mode = 8;
 std::shared_ptr<Pipeline> create_pipeline(VkDevice device, unsigned image_mode) {
   auto created = std::make_shared<Pipeline>();
   created->device = device;
@@ -647,11 +654,11 @@ std::shared_ptr<Pipeline> create_pipeline(VkDevice device, unsigned image_mode) 
   created->destroy_descriptors = vk<PFN_vkDestroyDescriptorSetLayout>(device, "vkDestroyDescriptorSetLayout");
   VkDescriptorSetLayoutBinding bindings[3] = {
       {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-      {1, image_mode ? VK_DESCRIPTOR_TYPE_STORAGE_IMAGE : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+      {1, image_mode && image_mode != bc7_mode ? VK_DESCRIPTOR_TYPE_STORAGE_IMAGE : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
           1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
       {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}};
   VkDescriptorSetLayoutCreateInfo di{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-  di.bindingCount = image_mode == depth_mode ? 1 : image_mode ? 3 : 2;
+  di.bindingCount = image_mode == depth_mode ? 1 : image_mode && image_mode != bc7_mode ? 3 : 2;
   di.pBindings = bindings;
   checked(vk<PFN_vkCreateDescriptorSetLayout>(device, "vkCreateDescriptorSetLayout")(device, &di, nullptr,
                                                                                      &created->descriptors));
@@ -674,6 +681,7 @@ std::shared_ptr<Pipeline> create_pipeline(VkDevice device, unsigned image_mode) 
     case 5: si.pCode = unorm_array::decode_shader; si.codeSize = sizeof(unorm_array::decode_shader); break;
     case 6: si.pCode = unorm_volume::decode_shader; si.codeSize = sizeof(unorm_volume::decode_shader); break;
     case depth_mode: si.pCode = depth::decode_shader; si.codeSize = sizeof(depth::decode_shader); break;
+    case bc7_mode: si.pCode = bc7::decode_shader; si.codeSize = sizeof(bc7::decode_shader); break;
     default: break;
   }
   VkShaderModule shader{};
@@ -772,10 +780,14 @@ void decode_mip(VkCommandBuffer cmd, const std::shared_ptr<Image>& img, std::uin
     throw std::runtime_error("compressed uploads require a compute-capable queue family");
   const auto extent = mip_extent(*img, mip);
   const auto& planes = img->storage.planes;
-  std::vector<std::shared_ptr<Buffer>> decoded;
-  for (std::size_t i = 0; i < planes.size(); ++i)
+  // BC7 planes decode to RGBA8 scratch (texels), then encode into their own (blocks).
+  std::vector<std::shared_ptr<Buffer>> decoded, texels(planes.size());
+  for (std::size_t i = 0; i < planes.size(); ++i) {
     decoded.push_back(i && img->companions[i - 1]->lazy ? nullptr :
-        decoded_buffer(d, cmd, i, VkDeviceSize(extent.width) * extent.height * planes[i].texel_bytes));
+        decoded_buffer(d, cmd, i, plane_bytes(planes[i], extent.width, extent.height)));
+    if (bc7_format(planes[i].format))
+      texels[i] = decoded_buffer(d, cmd, planes.size() + i, VkDeviceSize(extent.width) * extent.height * 4);
+  }
   // This execution dependency also finishes the previous decode's transfer
   // reads before a new dispatch writes reused output scratch. Each plane has
   // separate storage because all planes are dispatched before their copies.
@@ -804,6 +816,18 @@ void decode_mip(VkCommandBuffer cmd, const std::shared_ptr<Image>& img, std::uin
         resources = record_decode_image(d, cmd, source->buffer, source->size,
             companion.storage_views.at(mip), companion.activation->buffer, region,
             img->info.imageType == VK_IMAGE_TYPE_3D, img->info.imageType == VK_IMAGE_TYPE_3D ? z : layer);
+      } else if (texels[i]) {
+        region.format.decoded = planes[i].format == VK_FORMAT_BC7_SRGB_BLOCK ? VK_FORMAT_R8G8B8A8_SRGB
+                                                                              : VK_FORMAT_R8G8B8A8_UNORM;
+        resources = record_decode(d, cmd, source->buffer, source->size, texels[i]->buffer, texels[i]->size, region);
+        {
+          std::lock_guard lock(texture_lock);
+          command_state[cmd].resources.push_back(std::move(resources));
+        }
+        memory_barrier(d, cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
+                       VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
+        resources = record_encode_bc7(d, cmd, texels[i]->buffer, texels[i]->size, decoded[i]->buffer,
+                                      decoded[i]->size, extent.width, extent.height);
       } else {
         resources = record_decode(d, cmd, source->buffer, source->size, decoded[i]->buffer,
                                   decoded[i]->size, region);
@@ -844,7 +868,8 @@ constexpr VkImageCreateFlags emulated_flags = VK_IMAGE_CREATE_CUBE_COMPATIBLE_BI
 // Host image for a guest image of an emulated compressed format. Fails for
 // shapes the decoder cannot back, among them VK_IMAGE_CREATE_BLOCK_TEXEL_VIEW_
 // COMPATIBLE_BIT (views of the raw blocks) and chains other than a format list.
-bool host_image_info(const VkImageCreateInfo& guest, TextureStorage& storage, VkImageCreateInfo& host) {
+bool host_image_info(const VkImageCreateInfo& guest, TextureStorage& storage, VkImageCreateInfo& host,
+                     bool compressed = false) {
   std::span<const VkFormat> views;
   for (auto* next = static_cast<const VkBaseInStructure*>(guest.pNext); next; next = next->pNext) {
     if (next->sType != VK_STRUCTURE_TYPE_IMAGE_FORMAT_LIST_CREATE_INFO) return false;
@@ -852,16 +877,20 @@ bool host_image_info(const VkImageCreateInfo& guest, TextureStorage& storage, Vk
     views = {list.pViewFormats, list.viewFormatCount};
   }
   // 3D images of 2D-block formats are stacks of 2D slices (ASTC "sliced 3D").
+  // A LINEAR image is created although queries report linear unsupported (as
+  // Quest drivers allow it; Unreal's CPU-access textures): it is stored like an
+  // optimal one. Its memory is not the image's, like any emulated image's.
   if ((guest.imageType != VK_IMAGE_TYPE_2D && guest.imageType != VK_IMAGE_TYPE_3D) ||
-      guest.tiling != VK_IMAGE_TILING_OPTIMAL ||
+      (guest.tiling != VK_IMAGE_TILING_OPTIMAL && guest.tiling != VK_IMAGE_TILING_LINEAR) ||
       guest.samples != VK_SAMPLE_COUNT_1_BIT || (guest.usage & ~emulated_usage) ||
       (guest.flags & ~emulated_flags))
     return false;
-  storage = texture_storage(guest.format, guest.flags & VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT, views);
+  storage = texture_storage(guest.format, guest.flags & VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT, views, compressed);
   if (!storage) return false;
   host = guest;
   host.pNext = nullptr;  // A host format list is only a hint; MUTABLE alone permits the views.
   host.format = storage.planes[0].format;
+  host.tiling = VK_IMAGE_TILING_OPTIMAL;
   host.usage |= VK_IMAGE_USAGE_TRANSFER_DST_BIT;
   host.flags &= ~VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT;
   if (!storage.planes[0].view_formats.empty()) host.flags |= VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT;
@@ -940,6 +969,161 @@ VkResult try_lazy_companion(VkDevice d, const VkImageCreateInfo& info, Companion
   created = true;
   return VK_SUCCESS;
 }
+std::atomic<int> compression_forced{-1};
+// VENTURE_TEXTURE_COMPRESSION=always or never overrides the GPU memory budget.
+int compression_mode() {
+  if (auto forced = compression_forced.load(std::memory_order_relaxed); forced >= 0) return forced;
+  static const int mode = [] {
+    const char* value = std::getenv("VENTURE_TEXTURE_COMPRESSION");
+    if (!value) return -1;
+    if (!std::strcmp(value, "always") || !std::strcmp(value, "1")) return 1;
+    if (!std::strcmp(value, "never") || !std::strcmp(value, "0")) return 0;
+    return -1;
+  }();
+  return mode;
+}
+// Whether `incoming` more bytes would take device-local memory past 90% of the
+// budget the driver gives this process (VK_EXT_memory_budget). Past the budget
+// the OS moves resources to system memory and frames slow down.
+bool memory_pressure(VkPhysicalDevice physical, VkDeviceSize incoming) {
+  static std::mutex mutex;
+  static std::map<VkPhysicalDevice, bool> support;
+  bool supported;
+  {
+    std::lock_guard lock(mutex);
+    auto [it, inserted] = support.try_emplace(physical, false);
+    if (inserted) {
+      auto enumerate = phys<PFN_vkEnumerateDeviceExtensionProperties>(physical,
+          "vkEnumerateDeviceExtensionProperties");
+      std::uint32_t count = 0;
+      if (enumerate && enumerate(physical, nullptr, &count, nullptr) == VK_SUCCESS) {
+        std::vector<VkExtensionProperties> extensions(count);
+        if (enumerate(physical, nullptr, &count, extensions.data()) == VK_SUCCESS)
+          it->second = std::ranges::any_of(extensions, [](const auto& e) {
+            return std::string_view(e.extensionName) == VK_EXT_MEMORY_BUDGET_EXTENSION_NAME;
+          });
+      }
+    }
+    supported = it->second;
+  }
+  auto query = phys<PFN_vkGetPhysicalDeviceMemoryProperties2>(physical, "vkGetPhysicalDeviceMemoryProperties2");
+  if (!supported || !query) return false;
+  VkPhysicalDeviceMemoryBudgetPropertiesEXT budget{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_BUDGET_PROPERTIES_EXT};
+  VkPhysicalDeviceMemoryProperties2 memory{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_PROPERTIES_2, &budget};
+  query(physical, &memory);
+  VkDeviceSize usage = 0, limit = 0;
+  for (std::uint32_t i = 0; i < memory.memoryProperties.memoryHeapCount; ++i)
+    if (memory.memoryProperties.memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) {
+      usage += budget.heapUsage[i];
+      limit += budget.heapBudget[i];
+    }
+  if (!limit || usage + incoming <= limit / 10 * 9) return false;
+  static std::atomic<bool> reported{false};
+  if (!reported.exchange(true))
+    log::warn("vulkan", "GPU memory is nearly full ({} of {} MiB); new textures are stored as BC7 (quarter size)",
+              usage >> 20, limit >> 20);
+  return true;
+}
+// BC7 storage needs a 2D image, the BC feature (enabled with the device when
+// supported, host_texture_features) and 256-invocation encode groups.
+bool compressible(VkPhysicalDevice physical, const VkImageCreateInfo& host) {
+  if (host.imageType != VK_IMAGE_TYPE_2D) return false;
+  // An entry point the host lacks (a minimal or mock driver) means no compression.
+  auto get_features = phys<PFN_vkGetPhysicalDeviceFeatures>(physical, "vkGetPhysicalDeviceFeatures");
+  auto get_properties = phys<PFN_vkGetPhysicalDeviceProperties>(physical, "vkGetPhysicalDeviceProperties");
+  auto get_limits = phys<PFN_vkGetPhysicalDeviceImageFormatProperties>(physical, "vkGetPhysicalDeviceImageFormatProperties");
+  if (!get_features || !get_properties || !get_limits) return false;
+  VkPhysicalDeviceFeatures features{};
+  get_features(physical, &features);
+  VkPhysicalDeviceProperties props{};
+  get_properties(physical, &props);
+  if (!features.textureCompressionBC || props.limits.maxComputeWorkGroupInvocations < 256 ||
+      props.limits.maxComputeWorkGroupSize[0] < 16 || props.limits.maxComputeWorkGroupSize[1] < 16)
+    return false;
+  VkImageFormatProperties limits{};
+  return get_limits(physical, host.format, host.imageType, host.tiling, host.usage, host.flags, &limits) == VK_SUCCESS &&
+         host.extent.width <= limits.maxExtent.width && host.extent.height <= limits.maxExtent.height &&
+         host.mipLevels <= limits.maxMipLevels && host.arrayLayers <= limits.maxArrayLayers;
+}
+// Diagnostic: VENTURE_VULKAN_MEMORY_CENSUS=1 logs, every 10 s, the guest's
+// device memory and what its images hold, by kind, to show where VRAM goes.
+namespace census {
+enum Kind { msaa, depth, attachment, sampled, other, decoded, kinds };
+constexpr const char* names[kinds] = {"msaa", "depth", "attachment", "sampled", "other", "decoded"};
+struct State {
+  std::mutex mutex;
+  std::map<VkImage, Kind> pending;
+  std::map<VkImage, std::pair<Kind, VkDeviceSize>> bound;
+  std::map<VkDeviceMemory, std::pair<VkDeviceSize, bool>> memories;
+  std::array<VkDeviceSize, kinds> bytes{};
+  std::array<std::size_t, kinds> count{};
+  VkDeviceSize local = 0, host = 0;
+  std::jthread reporter;
+};
+bool enabled() {
+  static const bool on = [] {
+    const char* v = std::getenv("VENTURE_VULKAN_MEMORY_CENSUS");
+    return v && *v && std::strcmp(v, "0") != 0;
+  }();
+  return on;
+}
+State& state() {
+  static State s;
+  static std::once_flag started;
+  std::call_once(started, [] {
+    s.reporter = std::jthread([](std::stop_token stop) {
+      while (!stop.stop_requested()) {
+        std::this_thread::sleep_for(std::chrono::seconds(10));
+        std::lock_guard lock(s.mutex);
+        std::string kinds_text;
+        for (int k = 0; k < kinds; ++k)
+          kinds_text += std::format(" {}={:.0f}MiB/{}", names[k], double(s.bytes[k]) / 1048576, s.count[k]);
+        log::info("vulkan-census", "device-local={:.0f}MiB host={:.0f}MiB images:{}", double(s.local) / 1048576,
+                  double(s.host) / 1048576, kinds_text);
+      }
+    });
+  });
+  return s;
+}
+Kind classify(const VkImageCreateInfo& info) {
+  if (info.samples > VK_SAMPLE_COUNT_1_BIT) return msaa;
+  if (info.usage & VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT) return depth;
+  if (info.usage & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT) return attachment;
+  if (info.usage & VK_IMAGE_USAGE_SAMPLED_BIT) return sampled;
+  return other;
+}
+void created(VkImage image, Kind kind) {
+  auto& s = state();
+  std::lock_guard lock(s.mutex);
+  s.pending[image] = kind;
+}
+void bound(VkDevice d, VkImage image, VkDeviceSize size = 0) {
+  auto& s = state();
+  if (!size) {
+    VkMemoryRequirements requirements{};
+    vk<PFN_vkGetImageMemoryRequirements>(d, "vkGetImageMemoryRequirements")(d, image, &requirements);
+    size = requirements.size;
+  }
+  std::lock_guard lock(s.mutex);
+  auto it = s.pending.find(image);
+  if (it == s.pending.end()) return;
+  s.bound[image] = {it->second, size};
+  s.bytes[it->second] += size;
+  ++s.count[it->second];
+  s.pending.erase(it);
+}
+void destroyed(VkImage image) {
+  auto& s = state();
+  std::lock_guard lock(s.mutex);
+  s.pending.erase(image);
+  if (auto it = s.bound.find(image); it != s.bound.end()) {
+    s.bytes[it->second.first] -= it->second.second;
+    --s.count[it->second.first];
+    s.bound.erase(it);
+  }
+}
+}  // namespace census
+
 VkResult VKAPI_CALL create_image(VkDevice d, const VkImageCreateInfo* info,
                                  const VkAllocationCallbacks* alloc, VkImage* out) {
   auto create = vk<PFN_vkCreateImage>(d, "vkCreateImage");
@@ -953,6 +1137,13 @@ VkResult VKAPI_CALL create_image(VkDevice d, const VkImageCreateInfo* info,
       std::lock_guard lock(texture_lock);
       depth_aliases[*out] = d;
     }
+    if (result == VK_SUCCESS && census::enabled()) {
+      census::created(*out, census::classify(*info));
+      if (std::uint64_t(info->extent.width) * info->extent.height * info->arrayLayers * info->samples >= (8u << 20))
+        log::info("vulkan-census", "large image format={} {}x{}x{} samples={} usage={:#x} flags={:#x}",
+                  int(info->format), info->extent.width, info->extent.height, info->arrayLayers,
+                  unsigned(info->samples), info->usage, info->flags);
+    }
     return result;
   }
   auto img = std::make_shared<Image>();
@@ -965,6 +1156,37 @@ VkResult VKAPI_CALL create_image(VkDevice d, const VkImageCreateInfo* info,
                int(info->tiling), info->usage, info->flags,
                info->pNext ? int(static_cast<const VkBaseInStructure*>(info->pNext)->sType) : -1);
     return VK_ERROR_FORMAT_NOT_SUPPORTED;
+  }
+  if (info->tiling == VK_IMAGE_TILING_LINEAR) {
+    static std::atomic<bool> reported{false};
+    if (!reported.exchange(true))
+      log::warn("vulkan", "Linear compressed image (format {}) is stored as an optimal decoded image; "
+                          "CPU access to its memory does not reach it", int(info->format));
+  }
+  if (const auto mode = compression_mode(); mode != 0) {
+    VkDeviceSize decoded = 0;
+    for (const auto& plane : img->storage.planes)
+      for (std::uint32_t mip = 0; mip < info->mipLevels; ++mip)
+        decoded += plane_bytes(plane, std::max(1u, info->extent.width >> mip),
+                               std::max(1u, info->extent.height >> mip)) * info->arrayLayers;
+    TextureStorage storage;
+    VkImageCreateInfo compressed{};
+    const bool shaped = host_image_info(*info, storage, compressed, true) && bc7_format(storage.planes[0].format);
+    if (mode == 1 && !(shaped && compressible(physical, compressed))) {
+      static std::atomic<int> reported{0};
+      if (reported.fetch_add(1) < 4)
+        log::info("vulkan", "Texture format {} {}x{} usage={:#x} flags={:#x} stays decoded: {}", int(info->format),
+                  info->extent.width, info->extent.height, info->usage, info->flags,
+                  shaped ? "host cannot store it as BC7" : "no BC7 plane for this format");
+    }
+    if (shaped && compressible(physical, compressed) && (mode == 1 || memory_pressure(physical, decoded))) {
+      static std::atomic<bool> reported{false};
+      if (!reported.exchange(true))
+        log::info("vulkan", "Storing decoded textures as BC7 from a {}x{} texture on ({})",
+                  info->extent.width, info->extent.height, mode == 1 ? "forced" : "GPU memory budget");
+      img->storage = std::move(storage);
+      host = compressed;
+    }
   }
   img->device = d;
   img->format = texture_format(info->format);
@@ -1025,6 +1247,12 @@ VkResult VKAPI_CALL create_image(VkDevice d, const VkImageCreateInfo* info,
   // mobile texture pool must not reserve RGBA storage for every ASTC image.
   vk<PFN_vkGetBufferMemoryRequirements>(d, "vkGetBufferMemoryRequirements")(
       d, img->shadow->buffer, &img->guest_requirements);
+  // Nothing reads or writes an optimal image's guest memory: its blocks live in
+  // the private source and the decoded image. The guest reserves one alignment
+  // unit instead of a second, unused copy of every compressed texture in VRAM.
+  // A LINEAR image's memory is mapped by the guest and keeps its full size.
+  if (info->tiling == VK_IMAGE_TILING_OPTIMAL)
+    img->guest_requirements.size = std::max<VkDeviceSize>(img->guest_requirements.alignment, 1);
   if (img->pageable_source) {
     img->source_used = std::chrono::steady_clock::now();
     have_pageable_sources.store(true, std::memory_order_relaxed);
@@ -1054,10 +1282,26 @@ VkResult VKAPI_CALL create_image(VkDevice d, const VkImageCreateInfo* info,
   auto result = create(d, &host, alloc, out);
   if (result == VK_SUCCESS) {
     img->image = *out;
+    if (census::enabled()) census::created(*out, census::decoded);
     std::lock_guard lock(texture_lock);
     images[*out] = std::move(img);
   }
   return result;
+}
+// An emulated image's layout is its raw blocks, layer-major then mip, which
+// its memory requirements cover (a LINEAR image's mapped reads stay in range).
+void VKAPI_CALL subresource_layout(VkDevice d, VkImage handle, const VkImageSubresource* sub,
+                                   VkSubresourceLayout* out) {
+  if (auto img = image(handle); img && sub && out && sub->mipLevel < img->info.mipLevels &&
+                                sub->arrayLayer < img->info.arrayLayers) {
+    const auto slice = slice_bytes(*img, sub->mipLevel);
+    *out = {raw_offset(*img, sub->mipLevel, sub->arrayLayer), slice * mip_depth(*img, sub->mipLevel),
+            VkDeviceSize(ceil_div(mip_extent(*img, sub->mipLevel).width, img->format.width)) *
+                img->format.block_bytes,
+            img->layer_stride, slice};
+    return;
+  }
+  vk<PFN_vkGetImageSubresourceLayout>(d, "vkGetImageSubresourceLayout")(d, handle, sub, out);
 }
 void VKAPI_CALL destroy_image(VkDevice d, VkImage handle, const VkAllocationCallbacks* alloc) {
   // Forget the record before the host frees the handle: once it is freed, a
@@ -1074,6 +1318,7 @@ void VKAPI_CALL destroy_image(VkDevice d, VkImage handle, const VkAllocationCall
     }
     depth_aliases.erase(handle);
   }
+  if (census::enabled()) census::destroyed(handle);
   vk<PFN_vkDestroyImage>(d, "vkDestroyImage")(d, handle, alloc);
 }
 void VKAPI_CALL image_requirements(VkDevice d, VkImage handle, VkMemoryRequirements* out) {
@@ -1104,16 +1349,24 @@ VkResult bind_private_image(VkDevice d, const std::shared_ptr<Image>& img) {
   const auto r = bind_decoded_image(d, img->image, img->decoded_allocation);
   if (r != VK_SUCCESS) return r;
   img->memory_bound = true;
+  if (census::enabled()) census::bound(d, img->image);
   return VK_SUCCESS;
 }
 VkResult VKAPI_CALL bind_image(VkDevice d, VkImage handle, VkDeviceMemory memory, VkDeviceSize offset) {
   if (auto img = image(handle)) return bind_private_image(d, img);
-  return vk<PFN_vkBindImageMemory>(d, "vkBindImageMemory")(d, handle, memory, offset);
+  const auto result = vk<PFN_vkBindImageMemory>(d, "vkBindImageMemory")(d, handle, memory, offset);
+  if (result == VK_SUCCESS && census::enabled()) census::bound(d, handle);
+  return result;
 }
 VkResult VKAPI_CALL bind_images(VkDevice d, std::uint32_t count, const VkBindImageMemoryInfo* infos) {
   bool translated = false;
   for (std::uint32_t i = 0; i < count; ++i) translated |= bool(image(infos[i].image));
-  if (!translated) return vk<PFN_vkBindImageMemory2>(d, "vkBindImageMemory2")(d, count, infos);
+  if (!translated) {
+    const auto result = vk<PFN_vkBindImageMemory2>(d, "vkBindImageMemory2")(d, count, infos);
+    if (result == VK_SUCCESS && census::enabled())
+      for (std::uint32_t i = 0; i < count; ++i) census::bound(d, infos[i].image);
+    return result;
+  }
   for (std::uint32_t i = 0; i < count; ++i) {
     const auto& info = infos[i];
     VkResult result;
@@ -1122,7 +1375,10 @@ VkResult VKAPI_CALL bind_images(VkDevice d, std::uint32_t count, const VkBindIma
       // compressed-image translator and cannot reach this binding path.
       if (info.pNext) return VK_ERROR_FEATURE_NOT_PRESENT;
       result = bind_private_image(d, img);
-    } else result = vk<PFN_vkBindImageMemory2>(d, "vkBindImageMemory2")(d, 1, &info);
+    } else {
+      result = vk<PFN_vkBindImageMemory2>(d, "vkBindImageMemory2")(d, 1, &info);
+      if (result == VK_SUCCESS && census::enabled()) census::bound(d, info.image);
+    }
     if (result != VK_SUCCESS) return result;
   }
   return VK_SUCCESS;
@@ -1140,7 +1396,29 @@ VkResult VKAPI_CALL allocate_guest_memory(VkDevice d, const VkMemoryAllocateInfo
       link->pNext = next->pNext;
     } else link = next;
   }
-  return vk<PFN_vkAllocateMemory>(d, "vkAllocateMemory")(d, &copy, alloc, out);
+  const auto result = vk<PFN_vkAllocateMemory>(d, "vkAllocateMemory")(d, &copy, alloc, out);
+  if (result == VK_SUCCESS && census::enabled()) {
+    VkPhysicalDeviceMemoryProperties props{};
+    const auto physical = device_physical(d);
+    phys<PFN_vkGetPhysicalDeviceMemoryProperties>(physical, "vkGetPhysicalDeviceMemoryProperties")(physical, &props);
+    const bool local = props.memoryTypes[info->memoryTypeIndex].propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+    auto& s = census::state();
+    std::lock_guard lock(s.mutex);
+    s.memories[*out] = {info->allocationSize, local};
+    (local ? s.local : s.host) += info->allocationSize;
+  }
+  return result;
+}
+void VKAPI_CALL free_guest_memory(VkDevice d, VkDeviceMemory memory, const VkAllocationCallbacks* alloc) {
+  if (census::enabled() && memory) {
+    auto& s = census::state();
+    std::lock_guard lock(s.mutex);
+    if (auto it = s.memories.find(memory); it != s.memories.end()) {
+      (it->second.second ? s.local : s.host) -= it->second.first;
+      s.memories.erase(it);
+    }
+  }
+  vk<PFN_vkFreeMemory>(d, "vkFreeMemory")(d, memory, alloc);
 }
 VkResult VKAPI_CALL create_view(VkDevice d, const VkImageViewCreateInfo* info,
                                 const VkAllocationCallbacks* alloc, VkImageView* out) {
@@ -2132,6 +2410,7 @@ VkResult image_properties_chained(VkPhysicalDevice p, VkFormat f, VkImageType ty
     flags &= ~VkImageCreateFlags(VK_IMAGE_CREATE_SUBSAMPLED_BIT_EXT);
   }
   const bool needs_decode = emulated(p, f);
+  if (needs_decode && tiling != VK_IMAGE_TILING_OPTIMAL) return VK_ERROR_FORMAT_NOT_SUPPORTED;
   if (needs_decode) {
     VkImageCreateInfo guest{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO, chain, flags, type, f, {1, 1, 1}, 1, 1,
                             VK_SAMPLE_COUNT_1_BIT, tiling, usage};
@@ -2586,6 +2865,38 @@ std::shared_ptr<DecodeResources> record_decode(VkDevice d, VkCommandBuffer cmd, 
   vk<PFN_vkCmdDispatch>(d, "vkCmdDispatch")(cmd, ceil_div(region.width, 8), ceil_div(region.height, 8), 1);
   return resources;
 }
+std::shared_ptr<DecodeResources> record_encode_bc7(VkDevice d, VkCommandBuffer cmd, VkBuffer source,
+    VkDeviceSize source_size, VkBuffer dest, VkDeviceSize dest_size, std::uint32_t width, std::uint32_t height) {
+  auto resources = std::make_shared<DecodeResources>();
+  resources->pipeline = image_pipeline(d, bc7_mode);
+  resources->destroy_pool = vk<PFN_vkDestroyDescriptorPool>(d, "vkDestroyDescriptorPool");
+  auto& p = *resources->pipeline;
+  VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 2};
+  VkDescriptorPoolCreateInfo pi{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+  pi.maxSets = 1; pi.poolSizeCount = 1; pi.pPoolSizes = &size;
+  checked(vk<PFN_vkCreateDescriptorPool>(d, "vkCreateDescriptorPool")(d, &pi, nullptr, &resources->pool));
+  VkDescriptorSetAllocateInfo ai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+  ai.descriptorPool = resources->pool; ai.descriptorSetCount = 1; ai.pSetLayouts = &p.descriptors;
+  VkDescriptorSet set{};
+  checked(vk<PFN_vkAllocateDescriptorSets>(d, "vkAllocateDescriptorSets")(d, &ai, &set));
+  VkDescriptorBufferInfo buffers[2] = {{source, 0, source_size}, {dest, 0, dest_size}};
+  VkWriteDescriptorSet writes[2]{};
+  for (std::uint32_t i = 0; i < 2; ++i) {
+    writes[i] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    writes[i].dstSet = set; writes[i].dstBinding = i; writes[i].descriptorCount = 1;
+    writes[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    writes[i].pBufferInfo = &buffers[i];
+  }
+  vk<PFN_vkUpdateDescriptorSets>(d, "vkUpdateDescriptorSets")(d, 2, writes, 0, nullptr);
+  vk<PFN_vkCmdBindPipeline>(d, "vkCmdBindPipeline")(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, p.pipeline);
+  vk<PFN_vkCmdBindDescriptorSets>(d, "vkCmdBindDescriptorSets")(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, p.layout,
+                                                                0, 1, &set, 0, nullptr);
+  std::uint32_t push[8] = {width, height};
+  vk<PFN_vkCmdPushConstants>(d, "vkCmdPushConstants")(cmd, p.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
+                                                      sizeof(push), push);
+  vk<PFN_vkCmdDispatch>(d, "vkCmdDispatch")(cmd, ceil_div(ceil_div(width, 4), 8), ceil_div(ceil_div(height, 4), 8), 1);
+  return resources;
+}
 std::shared_ptr<DecodeResources> record_decode_image(VkDevice d, VkCommandBuffer cmd, VkBuffer source,
     VkDeviceSize source_size, VkImageView destination, VkBuffer activation, const DecodeRegion& region,
     bool volume, std::uint32_t slice) {
@@ -2696,7 +3007,8 @@ TextureFormat texture_format(VkFormat format) {
   }
   return {};
 }
-TextureStorage texture_storage(VkFormat format, bool mutable_format, std::span<const VkFormat> view_formats) {
+TextureStorage texture_storage(VkFormat format, bool mutable_format, std::span<const VkFormat> view_formats,
+                               bool compressed) {
   const auto base = texture_format(format);
   if (!base) return {};
   // Each decoded compatibility class is a pair of adjacent enums from
@@ -2735,6 +3047,16 @@ TextureStorage texture_storage(VkFormat format, bool mutable_format, std::span<c
     // image format's first.
     storage.planes = {plane(format), plane(format == first ? second : first)};
   }
+  if (compressed) {
+    auto bc7 = [](VkFormat& f) {
+      if (f == VK_FORMAT_R8G8B8A8_UNORM) f = VK_FORMAT_BC7_UNORM_BLOCK;
+      else if (f == VK_FORMAT_R8G8B8A8_SRGB) f = VK_FORMAT_BC7_SRGB_BLOCK;
+    };
+    for (auto& p : storage.planes) {
+      bc7(p.format);
+      for (auto& f : p.view_formats) bc7(f);
+    }
+  }
   return storage;
 }
 std::optional<TextureView> texture_view(const TextureStorage& storage, VkFormat format, VkFormat decode_mode) {
@@ -2744,7 +3066,9 @@ std::optional<TextureView> texture_view(const TextureStorage& storage, VkFormat 
   for (std::size_t i = 0; i < storage.planes.size(); ++i) {
     const auto& p = storage.planes[i];
     if (std::ranges::find(p.guest_views, format) == p.guest_views.end()) continue;
-    if (linear_astc && decode_mode != VK_FORMAT_UNDEFINED && p.format != decode_mode) continue;
+    // A BC7 plane holds the UNORM8 decode, re-encoded.
+    const auto stored = p.format == VK_FORMAT_BC7_UNORM_BLOCK ? VK_FORMAT_R8G8B8A8_UNORM : p.format;
+    if (linear_astc && decode_mode != VK_FORMAT_UNDEFINED && stored != decode_mode) continue;
     if (p.view_formats.empty()) return TextureView{i, p.format};
     const auto view = std::ranges::find(p.guest_views, format) - p.guest_views.begin();
     return TextureView{i, p.view_formats.at(view)};
@@ -2752,6 +3076,7 @@ std::optional<TextureView> texture_view(const TextureStorage& storage, VkFormat 
   return std::nullopt;
 }
 void force_texture_emulation(bool forced) { emulation_forced.store(forced, std::memory_order_relaxed); }
+void force_texture_compression(int mode) { compression_forced.store(mode, std::memory_order_relaxed); }
 std::vector<VkImage> emulated_texture_planes(VkImage handle) {
   std::vector<VkImage> out;
   if (auto img = image(handle))
@@ -2788,6 +3113,8 @@ VkResult host_texture_features(VkPhysicalDevice physical, VkPhysicalDeviceFeatur
     return VK_ERROR_FEATURE_NOT_PRESENT;
   if (!native.textureCompressionASTC_LDR) requested.textureCompressionASTC_LDR = VK_FALSE;
   if (!native.textureCompressionETC2) requested.textureCompressionETC2 = VK_FALSE;
+  // BC7 storage for decoded textures under GPU memory pressure (create_image).
+  requested.textureCompressionBC |= native.textureCompressionBC;
   return VK_SUCCESS;
 }
 void release_texture_commands(VkCommandBuffer command) {
@@ -2908,12 +3235,15 @@ PFN_vkVoidFunction texture_proc(std::string_view name) {
   FN(vkCreateImage, create_image);
   FN(vkDestroyImage, destroy_image);
   FN(vkGetImageMemoryRequirements, image_requirements);
+  FN(vkGetImageSubresourceLayout, subresource_layout);
   FN(vkGetImageMemoryRequirements2, image_requirements2);
   FN(vkGetImageMemoryRequirements2KHR, image_requirements2);
   FN(vkBindImageMemory, bind_image);
   FN(vkBindImageMemory2, bind_images);
   FN(vkBindImageMemory2KHR, bind_images);
   FN(vkAllocateMemory, allocate_guest_memory);
+  // Only the census needs frees; without it the chain stays as it was.
+  if (census::enabled()) FN(vkFreeMemory, free_guest_memory);
   FN(vkCreateImageView, create_view);
   FN(vkDestroyImageView, destroy_view);
   FN(vkUpdateDescriptorSets, update_descriptors);

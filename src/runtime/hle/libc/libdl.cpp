@@ -167,13 +167,24 @@ int iterate_fn(CallContext& c, GuestAddr callback, GuestAddr data) {
   AddressSpace::get().free(memory);
   return result;
 }
-Library* android_open(CallContext& c, const char* name, int flags, const std::uint64_t* ext) {
-  if (ext && *ext) {
+// android_dlextinfo: flags, reserved_addr, reserved_size, ... Only the
+// reserved-address flags are supported: the library loads into that range.
+constexpr std::uint64_t kDlextReservedAddress = 0x1, kDlextReservedAddressHint = 0x2;
+bool placement(const std::uint64_t* ext, elf::Placement& out) {
+  if (!ext || !*ext) return true;
+  if (*ext & ~(kDlextReservedAddress | kDlextReservedAddressHint)) {
     log::warn("libdl", "unsupported android_dlopen_ext flags {:#x}", *ext);
     local_error = "android_dlopen_ext: extended flags are not supported";
-    return nullptr;
+    return false;
   }
-  return dlopen_fn(c, name, flags);
+  out = {ext[1], ext[2], (*ext & kDlextReservedAddress) != 0};
+  return true;
+}
+Library* android_open(CallContext& c, const char* name, int flags, const std::uint64_t* ext) {
+  elf::Placement where;
+  if (!placement(ext, where)) return nullptr;
+  if (!name) return Linker::get().open_main(flags);
+  return Linker::get().open(name, flags, caller(c), where.address ? &where : nullptr);
 }
 void* exported_namespace(const char*) {
   // No namespace is exported by this flat linker. Bionic returns null for an
@@ -274,12 +285,10 @@ Library* loader_dlopen(const char* name, int flags, GuestAddr) {
   return Linker::get().open(name, flags, nullptr);
 }
 Library* loader_dlopen_ext(const char* name, int flags, const std::uint64_t* ext, GuestAddr caller) {
-  if (ext && *ext) {
-    log::warn("libdl", "unsupported android_dlopen_ext flags {:#x}", *ext);
-    local_error = "android_dlopen_ext: extended flags are not supported";
-    return nullptr;
-  }
-  return loader_dlopen(name, flags, caller);
+  elf::Placement where;
+  if (!placement(ext, where)) return nullptr;
+  if (!name || !where.address) return loader_dlopen(name, flags, caller);
+  return Linker::get().open(name, flags, nullptr, &where);
 }
 GuestAddr loader_dlvsym(Library* l, const char* name, const char* version, GuestAddr caller_address) {
   if (!name) {

@@ -84,7 +84,14 @@ add_custom_command(OUTPUT ${vk_generated}/texture_depth.inc
     ${vk_generated}/texture_depth.spv ${vk_generated}/texture_depth.inc
   DEPENDS glslang-standalone shaders/depth_convert.comp ${PROJECT_SOURCE_DIR}/tools/codegen/vk_spirv.py
   VERBATIM)
-target_sources(venture_vulkan PRIVATE texture.cpp render_area.cpp render_checks.cpp subpass_sync.cpp deferred_free.cpp ${vk_generated}/texture_decode.inc ${vk_generated}/texture_depth.inc)
+add_custom_command(OUTPUT ${vk_generated}/texture_bc7.inc
+  COMMAND $<TARGET_FILE:glslang-standalone> -V --target-env vulkan1.0
+    ${CMAKE_CURRENT_SOURCE_DIR}/shaders/bc7_encode.comp -o ${vk_generated}/texture_bc7.spv
+  COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tools/codegen/vk_spirv.py
+    ${vk_generated}/texture_bc7.spv ${vk_generated}/texture_bc7.inc
+  DEPENDS glslang-standalone shaders/bc7_encode.comp ${PROJECT_SOURCE_DIR}/tools/codegen/vk_spirv.py
+  VERBATIM)
+target_sources(venture_vulkan PRIVATE texture.cpp render_area.cpp render_checks.cpp subpass_sync.cpp deferred_free.cpp ${vk_generated}/texture_decode.inc ${vk_generated}/texture_depth.inc ${vk_generated}/texture_bc7.inc)
 foreach(mode float_array srgb_array float_volume srgb_volume unorm_array unorm_volume)
   set(image_defines -DIMAGE_OUTPUT=1)
   if(mode MATCHES "srgb|unorm")

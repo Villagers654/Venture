@@ -188,8 +188,7 @@ std::vector<Addon> Store::addons(const Plan &plan) const {
 Plan Store::owned_plan(std::string_view id, std::string_view binary_id) const {
   if (!digits(id, 5) || !digits(binary_id))
     throw std::runtime_error("Invalid application build.");
-  auto snapshot = library();
-  if (std::ranges::none_of(snapshot.games, [&](auto &g) { return g.id == id; }))
+  if (!owns(id))
     throw std::runtime_error("Meta did not confirm ownership of this game.");
   auto binary = binary_details(binary_id);
   auto parent = str(field(binary, "binary_application"), "id");

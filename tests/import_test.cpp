@@ -5,6 +5,7 @@
 #include "common/android/manifest.h"
 #include "common/digest.h"
 #include "common/download/manager.h"
+#include "common/download/unity_bundle.h"
 #include "common/library/import.h"
 #include "common/library/library.h"
 #include "common/process.h"
@@ -464,11 +465,13 @@ TEST_CASE("an import job installs the source's files, completes them from an own
   INFO("error: ", job.error);
   CHECK(job.state == download::State::complete);
   CHECK(paths::read(saves / "files" / "save.dat") == "save");
+  CHECK_FALSE(job.saves_kept);
   CHECK_FALSE(fs::exists(paths::utf8(saves) + ".import"));
   write(from / "Android" / "files" / "save.dat", "newer");
   manager.enqueue_import("123456", "Game", d.root / "games6", "fixture", "0123456789ab", spec, "com.example.game");
   REQUIRE(test::wait_until([&] { return !manager.busy(); }));
   CHECK(manager.snapshot().front().state == download::State::complete);
+  CHECK(manager.snapshot().front().saves_kept);
   CHECK(paths::read(saves / "files" / "save.dat") == "save");
   damaged = true;
   manager.enqueue_import("123456", "Game", d.root / "games7", "fixture", "0123456789ab", spec, "com.example.game");
@@ -512,6 +515,31 @@ TEST_CASE("an import job installs the source's files, completes them from an own
   CHECK_THROWS(manager.enqueue("123456", "Game", d.root / "games9", "", "local"));
   CHECK_THROWS(manager.enqueue("123456", "Game", d.root / "games9", "", "0123456789ab"));
   CHECK_THROWS(manager.enqueue_import("com.other", "Game", d.root / "games9", "", "local", spec, "com.example.game"));
+  // A Unity bundle shorter than its header says fails the import by name; a
+  // whole one imports.
+  headset = false;
+  auto bundle = [](std::uint64_t whole, std::size_t length) {
+    std::string bytes("UnityFS\0\0\0\0\x08" "5.x.x\0" "2022.3.45f1\0", 30);
+    for (int shift = 56; shift >= 0; shift -= 8) bytes += char(whole >> shift & 0xff);
+    bytes.resize(length, 'B');
+    return bytes;
+  };
+  write(from / "com.example.game" / "scenes.bundle", bundle(4096, 1000));
+  CHECK(download::unity_bundle_size(from / "com.example.game" / "scenes.bundle") == 4096);
+  CHECK_FALSE(download::unity_bundle_size(from / "com.example.game" / "save_cache.bin"));
+  manager.enqueue_import("com.example.game", "com.example.game", d.root / "games10", "", "local", spec,
+                         "com.example.game");
+  REQUIRE(test::wait_until([&] { return !manager.busy(); }));
+  job = manager.snapshot().front();
+  CHECK(job.state == download::State::failed);
+  CHECK(job.error.find("scenes.bundle is damaged") != std::string::npos);
+  write(from / "com.example.game" / "scenes.bundle", bundle(4096, 4096));
+  manager.enqueue_import("com.example.game", "com.example.game", d.root / "games11", "", "local", spec,
+                         "com.example.game");
+  REQUIRE(test::wait_until([&] { return !manager.busy(); }));
+  job = manager.snapshot().front();
+  INFO("error: ", job.error);
+  CHECK(job.state == download::State::complete);
 }
 
 TEST_CASE("queued jobs start in list order, move, and cancel; a running job stops before it leaves") {

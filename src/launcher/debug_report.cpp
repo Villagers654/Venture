@@ -2,6 +2,7 @@
 #include "common/environment.h"
 #include "common/http/client.h"
 #include "common/process.h"
+#include "common/json.h"
 #include <algorithm>
 #include <cctype>
 #include <chrono>
@@ -10,6 +11,7 @@
 #include <ctime>
 #include <format>
 #include <fstream>
+#include <map>
 #include <regex>
 #include <thread>
 #ifdef _WIN32
@@ -242,6 +244,54 @@ void log_section(std::string &out, const fs::path &file, size_t limit) {
   if (!text.empty() && text.back() != '\n') out += '\n';
 }
 
+// The runtime's [facts] lines (headset, FOV, audio endpoint, clock rate) from
+// the whole log, which the tail section may cut.
+void facts_section(std::string &out, const fs::path &file) {
+  std::ifstream in(file, std::ios::binary);
+  if (!in) return;
+  std::string facts;
+  for (std::string line; std::getline(in, line) && facts.size() < 16 * 1024;)
+    if (line.find(" [facts] ") != std::string::npos) facts += line.substr(0, 1024) + "\n";
+  if (!facts.empty()) out += "\n=== Session facts ===\n" + facts;
+}
+
+// The Android framework classes the game's Java needs and Venture lacks, from
+// the conversion report the runtime log names ("Details: .../report.json"):
+// each missing class with how many of the app's classes need it.
+void missing_classes_section(std::string &out, const fs::path &log) {
+  std::ifstream in(log, std::ios::binary);
+  if (!in) return;
+  fs::path report;
+  const std::string marker = "Details: ";
+  for (std::string line; std::getline(in, line);)
+    if (auto at = line.find(marker); at != std::string::npos && line.find("report.json") != std::string::npos) {
+      auto path = line.substr(at + marker.size());
+      while (!path.empty() && (path.back() == '\r' || path.back() == ' ')) path.pop_back();
+      report = paths::from_utf8(path);
+    }
+  if (report.empty()) return;
+  Json failures;
+  try {
+    failures = Json::parse(read_file(report, 8 << 20)).at("failures");
+  } catch (...) {
+    return;
+  }
+  std::map<std::string, std::pair<int, std::string>> missing;  // class -> (users, first user)
+  for (const auto &f : failures) {
+    auto name = f.value("detail", std::string());
+    if (name.empty()) continue;
+    auto &[users, first] = missing[name];
+    if (!users++) first = f.value("class", std::string());
+  }
+  if (missing.empty()) return;
+  std::vector<std::pair<std::string, std::pair<int, std::string>>> sorted(missing.begin(), missing.end());
+  std::ranges::stable_sort(sorted, [](auto &a, auto &b) { return a.second.first > b.second.first; });
+  out += std::format("\n=== Missing Android classes ({} needed by {} app classes) ===\n", sorted.size(),
+                     failures.size());
+  for (std::size_t i = 0; i < sorted.size() && i < 80; ++i)
+    out += std::format("{} ({}; e.g. {})\n", sorted[i].first, sorted[i].second.first, sorted[i].second.second);
+}
+
 // Keeps the newest few reports.
 void prune(const fs::path &dir) {
   std::error_code ec;
@@ -388,6 +438,8 @@ fs::path write_debug_report(const DebugReport &request) {
     }
     if (!dumps.empty()) out += "\n=== Crash dumps on this PC (not included) ===\n" + dumps;
     const std::string base = "runtime-" + package;
+    facts_section(out, logs / (base + ".log"));
+    missing_classes_section(out, logs / (base + ".log"));
     log_section(out, logs / (base + ".log"), kRuntimeLog);
     log_section(out, logs / (base + ".console.log"), kSideLog);
     log_section(out, logs / (base + ".prev.log"), kSideLog);

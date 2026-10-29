@@ -8,7 +8,7 @@
 #
 # Needs rootless podman (deb: baseline image, rpm: Fedora image), appimagetool
 # (APPIMAGETOOL, default appimagetool on PATH) and flatpak with
-# org.freedesktop.Platform//$FLATPAK_BRANCH (default 26.08) installed.
+# org.gnome.Platform//$FLATPAK_BRANCH (default 51) installed.
 set -euo pipefail
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 root=$(cd "$here/../../.." && pwd)
@@ -31,7 +31,7 @@ id=org.venture_emu.Venture
 base=Venture-$version-linux-x86_64
 baseline_image=${VENTURE_BASELINE_IMAGE:-localhost/venture-linux-baseline:22.04}
 fedora_image=${VENTURE_FEDORA_IMAGE:-registry.fedoraproject.org/fedora:44}
-flatpak_branch=${FLATPAK_BRANCH:-26.08}
+flatpak_branch=${FLATPAK_BRANCH:-51}
 work=$out/.work
 rm -rf "$work"; mkdir -p "$work" "$out"
 in_container() {  # IMAGE CMD... with $root and $out mounted at their own paths
@@ -155,7 +155,7 @@ do_flatpak() {
   # finish-args of org.venture_emu.Venture.yml (which flatpak-builder can also use).
   local fp=$work/flatpak app args
   app=$fp/app
-  flatpak build-init "$app" "$id" org.freedesktop.Platform org.freedesktop.Platform "$flatpak_branch" >/dev/null
+  flatpak build-init "$app" "$id" org.gnome.Platform org.gnome.Platform "$flatpak_branch" >/dev/null
   cp -a --reflink=auto "$layout" "$app/files/venture"
   install -Dm755 "$here/venture-flatpak.sh" "$app/files/bin/venture-flatpak.sh"
   desktop_files "$app/files/share"
@@ -169,7 +169,8 @@ do_flatpak() {
     ostree config --repo="$fp/repo" set core.min-free-space-size 256MB
   fi
   flatpak build-export "$fp/repo" "$app" stable >/dev/null
-  flatpak build-bundle "$fp/repo" "$out/$base.flatpak" "$id" stable
+  # Installing the bundle fetches its runtime from Flathub when it is missing.
+  flatpak build-bundle --runtime-repo=https://dl.flathub.org/repo/flathub.flatpakrepo "$fp/repo" "$out/$base.flatpak" "$id" stable
   echo "flatpak: $out/$base.flatpak"
 }
 

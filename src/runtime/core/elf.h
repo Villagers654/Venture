@@ -69,9 +69,17 @@ struct Report {
   std::uint64_t aps2_count{}, relr_count{}, deferred_resolvers{};
 };
 
+// android_dlopen_ext's ANDROID_DLEXT_RESERVED_ADDRESS(_HINT): load into a
+// range the caller reserved. Without `required`, a range too small is ignored.
+struct Placement {
+  GuestAddr address{};
+  std::uint64_t size{};
+  bool required{};
+};
+
 class Image final : public Library {
  public:
-  explicit Image(const std::filesystem::path& file, std::string guest_path);
+  explicit Image(const std::filesystem::path& file, std::string guest_path, const Placement* placement = nullptr);
   ~Image() override;
   GuestIsa isa() const override { return isa_; }
   const std::filesystem::path& source_file() const { return source_file_; }

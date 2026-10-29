@@ -197,6 +197,8 @@ std::vector<std::unique_ptr<Source>> open_local(const fs::path &picked, std::sto
       if (listing.size() >= kScanLimit) break;
       if (it.depth() >= 3) it.disable_recursion_pending();
       std::error_code entry_ec;
+      // A Venture install's .obb holds links to its own files, not more of them.
+      if (it->is_directory(entry_ec) && it->path().filename() == ".obb") it.disable_recursion_pending();
       if (!it->is_regular_file(entry_ec)) continue;
       auto relative = paths::utf8(it->path().lexically_relative(root));
       std::ranges::replace(relative, '\\', '/');

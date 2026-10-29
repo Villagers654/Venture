@@ -150,6 +150,8 @@ class Player {
   std::int64_t duration_us() const;
   int video_width() const;
   int video_height() const;
+  // The prepared source's tracks in container order; empty before prepare.
+  std::vector<Track> tracks() const;
   std::shared_ptr<audio::Stream> stream() const;
  private:
   struct Impl;

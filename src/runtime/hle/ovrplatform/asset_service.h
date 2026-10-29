@@ -1,4 +1,5 @@
 #pragma once
+#include <atomic>
 #include <mutex>
 #include <set>
 
@@ -43,6 +44,8 @@ class AssetService : public std::enable_shared_from_this<AssetService> {
   AssetOwnershipReader ownership_;
   std::shared_ptr<PipeChannel> channel_;
   mutable std::mutex mutex_;
+  // The plan is Meta's reduced catalog: assets without their IAP details.
+  mutable std::atomic<bool> reduced_{false};
 };
 AssetOwnershipReader asset_ownership_reader(std::shared_ptr<Provider>,
                                             std::shared_ptr<HttpTransport>);

@@ -42,6 +42,9 @@ std::string get_public(std::string url, std::stop_token stop = {});
 // Venture's latest published release from GitHub's API; no account data is sent.
 Response get_latest_release(std::stop_token stop = {});
 std::string get_image(std::string url, std::stop_token stop = {});
+// The file name a Meta delivery URL serves (its Content-Disposition), read
+// with a one-byte range request; empty when the server names none.
+std::string delivery_file_name(std::string url, std::stop_token stop = {});
 struct RangeDecision {
   uint64_t offset, total;
 };
@@ -50,4 +53,9 @@ RangeDecision check_range(long status, uint64_t offset, uint64_t expected,
 using Progress = std::function<void(uint64_t done, uint64_t total)>;
 void download(std::string url, const fs::path &destination, uint64_t expected,
               std::stop_token stop, const Progress &progress);
+// Venture's own release files: https on github.com or githubusercontent.com only.
+bool allowed_release(std::string_view url);
+void download_release(std::string url, const fs::path &destination, uint64_t expected,
+                      std::stop_token stop, const Progress &progress);
+std::string get_release_text(std::string url, std::stop_token stop = {});
 } // namespace venture::http

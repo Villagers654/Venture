@@ -11,7 +11,7 @@ target_include_directories(venture_imgui SYSTEM PUBLIC ${imgui_SOURCE_DIR} ${img
 target_link_libraries(venture_imgui PUBLIC SDL3::SDL3-static freetype)
 target_compile_definitions(venture_imgui PUBLIC IMGUI_ENABLE_FREETYPE IMGUI_USE_WCHAR32)
 # The launcher without its window (core.h): the GUI and venture-cli share it.
-add_library(venture_launcher_core STATIC core.cpp debug_report.cpp import.cpp ui/rich_text_parse.cpp)
+add_library(venture_launcher_core STATIC core.cpp debug_report.cpp drives.cpp import.cpp updater.cpp ui/rich_text_parse.cpp)
 target_link_libraries(venture_launcher_core PUBLIC venture_common venture_ovrplatform)
 add_executable(venture WIN32 main.cpp app.cpp ui/style.cpp ui/views.cpp ui/chrome.cpp ui/logo.cpp ui/rich_text.cpp assets/texture_cache.cpp)
 # The logos ship inside the executable; assets/venture.svg, assets/steam.svg and

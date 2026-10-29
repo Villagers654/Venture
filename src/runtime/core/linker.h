@@ -13,7 +13,7 @@
 #include "core/guest.h"
 
 namespace venture {
-namespace elf { class Image; }
+namespace elf { class Image; struct Placement; }
 
 // A library the guest can see: either a real ELF image mapped into guest
 // memory, or an HLE library whose symbols are host-implemented.
@@ -103,7 +103,7 @@ class Linker {
   // dlopen(): loads `name` (bare soname or guest path) and its DT_NEEDED
   // closure, relocates, assigns TLS, runs initializers on the calling guest
   // thread. Returns nullptr and sets the dlerror() message on failure.
-  Library* open(std::string_view name, int flags, Library* caller);
+  Library* open(std::string_view name, int flags, Library* caller, const elf::Placement* placement = nullptr);
   // dlopen(nullptr): the process's system dependencies and RTLD_GLOBAL images.
   // Kept separate from open("") so an empty filename still fails normally.
   Library* open_main(int flags);
@@ -133,7 +133,7 @@ class Linker {
   std::vector<std::string> unresolved_symbols() const;  // diagnostics
   GuestAddr find_exidx(GuestAddr pc, std::int32_t* count); // A32 EHABI, count in entries
  private:
-  Library* open_impl(std::string_view name, int flags, bool backing);
+  Library* open_impl(std::string_view name, int flags, bool backing, const elf::Placement* placement = nullptr);
 };
 
 }  // namespace venture

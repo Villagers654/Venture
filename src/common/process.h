@@ -50,5 +50,8 @@ void open_folder(const fs::path &directory);
 void reveal_file(const fs::path &file);
 // Opens a web link with the desktop's handler; throws if none accepted it.
 void open_url(const std::string &url);
+// Starts a program that outlives this process (an update's installer or new
+// AppImage); throws if it could not be started.
+void start_detached(const fs::path &executable, const std::vector<std::string> &args);
 std::string tail_log(const fs::path &file, size_t limit = 16 * 1024);
 } // namespace venture

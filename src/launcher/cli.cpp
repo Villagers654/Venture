@@ -39,7 +39,9 @@ Library
   library [--installed] [--search TEXT]
                                  Games your accounts own and games installed here
   info GAME                      Store details, installation and add-ons
-  install GAME [--as ACCOUNT]    Download and install (or update) a game
+  install GAME [--as ACCOUNT] [--to FOLDER]
+                                 Download and install (or update) a game; a new
+                                 one goes to FOLDER instead of the games folder
   uninstall GAME [--yes]         Remove a game's files; saves are kept
   play GAME [--as ACCOUNT|local] Launch a game and wait for it to exit
   logs GAME [--lines N]          The end of a game's last runtime log
@@ -55,9 +57,13 @@ Downloads
   downloads resume GAME          Resume a paused or failed download
 
 Import
-  import PATH [--yes]            Import an APK, a folder or an archive
-  import --headset [--serial SERIAL] [--only PKG,...] [--yes]
+  import PATH [--to FOLDER] [--yes]
+                                 Import an APK, a folder or an archive
+  import --headset [--serial SERIAL] [--only PKG,...] [--to FOLDER] [--yes]
                                  Import games from a Quest connected over adb
+  import-saves GAME --from FOLDER | --headset [--serial SERIAL]
+                                 Import an installed game's save data (the save
+                                 data it replaces is kept in a backup)
 
 Accounts
   accounts                       Signed-in Meta accounts
@@ -102,7 +108,7 @@ struct Args {
 };
 
 Args parse(const std::vector<std::string> &argv) {
-  static const std::set<std::string> with_value{"--as", "--search", "--serial", "--lines", "--only"};
+  static const std::set<std::string> with_value{"--as", "--to", "--search", "--serial", "--lines", "--only", "--from"};
   static const std::set<std::string> known{"--json",   "--offline", "--yes",          "-y",
                                            "--all",    "--installed", "--delete-saves", "--headset",
                                            "--help",   "-h",        "--version"};
@@ -520,6 +526,7 @@ private:
   int addons_owned(const Args &, const meta::Game &, const std::string &sub);
   int downloads_cmd(const Args &);
   int import_cmd(const Args &);
+  int import_saves_cmd(const Args &);
   int accounts_cmd(const Args &);
   int settings_cmd(const Args &);
 };
@@ -671,7 +678,8 @@ int Cli::install_game(const Args &args) {
     auto entry = game(g.id);
     if (!entry)
       throw std::runtime_error(std::format("{} is not in the Meta library.", g.name));
-    install_for_owner(*entry);
+    const auto to = args.value("--to");
+    install_for_owner(*entry, to ? fs::absolute(paths::from_utf8(*to)).lexically_normal() : fs::path{});
     if (!json_)
       std::cout << "Installing " << g.name << " as " << account_label(account_key_) << "\n";
     follow(g.id, "", "Downloading");
@@ -707,6 +715,21 @@ int Cli::uninstall_game(const Args &args) {
   if (json_)
     return print({{"id", g.id}, {"name", g.name}, {"uninstalled", true}}), 0;
   std::cout << "Uninstalled " << g.name << ". Its saves are kept.\n";
+  return 0;
+}
+
+int Cli::import_saves_cmd(const Args &args) {
+  wait_scan();
+  auto g = resolve_game(args.word(1, "game"));
+  const auto from = args.value("--from");
+  if (from.has_value() == args.flag("--headset"))
+    throw UsageError("Give --from FOLDER or --headset.");
+  auto task = import_saves(g.id, from ? paths::from_utf8(*from) : fs::path{}, args.value("--serial").value_or(""));
+  auto n = task(std::stop_token{});
+  if (json_)
+    return print({{"id", g.id}, {"files", n.files}, {"bytes", n.bytes}, {"backup", paths::utf8(n.backup)}}), 0;
+  std::cout << std::format("Imported {} save files ({}) of {}.\n", n.files, bytes(n.bytes), g.name);
+  if (!n.backup.empty()) std::cout << "The save data it replaced is in " << paths::utf8(n.backup) << "\n";
   return 0;
 }
 
@@ -945,7 +968,8 @@ int Cli::import_cmd(const Args &args) {
     if (item.selected)
       if (auto match = import_match(item); match.importable)
         ids.push_back(match.game ? match.game->id : item.package);
-  start_import(headset);
+  const auto to = args.value("--to");
+  start_import(headset, to ? fs::absolute(paths::from_utf8(*to)).lexically_normal() : fs::path{});
   for (auto &id : ids)
     follow(id, "", "Importing");
   wait_scan();
@@ -1076,6 +1100,10 @@ int Cli::settings_cmd(const Args &args) {
            {"console", settings_.console},
            {"add-to-steam", settings_.add_games_to_steam},
            {"add-new-to-steam", settings_.steam_add_new}};
+  Json folders = Json::array();
+  for (const auto &folder : settings_.libraries)
+    folders.push_back(paths::utf8(folder));
+  out["library-folders"] = std::move(folders);
   if (json_)
     return print(out), 0;
   for (auto &[k, v] : out.items())
@@ -1095,6 +1123,7 @@ int Cli::run(const Args &args) {
   if (cmd == "addons") return addons_cmd(args);
   if (cmd == "downloads") return downloads_cmd(args);
   if (cmd == "import") return import_cmd(args);
+  if (cmd == "import-saves") return import_saves_cmd(args);
   if (cmd == "accounts") return accounts_cmd(args);
   if (cmd == "settings") return settings_cmd(args);
   throw UsageError(std::format("Unknown command \"{}\".", cmd));

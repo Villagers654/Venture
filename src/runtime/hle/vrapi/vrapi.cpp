@@ -2,6 +2,7 @@
 #include "core/thread.h"
 #include "core/av_telemetry.h"
 #include "core/wait.h"
+#include "hle/openxr/state.h"
 #include "hle/vrapi/state.h"
 #include "core/engine_policy.h"
 #include "hle/vrapi/vulkan_images.h"
@@ -304,6 +305,8 @@ Tracking tracking_at(XrTime time, XrSpace target) {
   XrSpaceLocation location{XR_TYPE_SPACE_LOCATION, &velocity};
   if (!time || !target || XR_FAILED(::xrLocateSpace(target, state().app, time, &location)))
     return out;
+  // A Quest never reports NaN; undefined host values become neutral (hle/openxr/spaces.cpp).
+  hle::openxr::sanitize(location.locationFlags, location.pose);
   out.status = flags(location.locationFlags) | 128;
   out.head.pose = pose(location.pose);
   out.head.time = seconds_from_time(time);
@@ -320,11 +323,13 @@ Tracking tracking_at(XrTime time, XrSpace target) {
     XrViewState vs{XR_TYPE_VIEW_STATE};
     XrView views[2]{{XR_TYPE_VIEW}, {XR_TYPE_VIEW}};
     std::uint32_t count = 0;
-    if (XR_SUCCEEDED(::xrLocateViews(session().handle, &li, &vs, 2, &count, views)) && count == 2)
+    if (XR_SUCCEEDED(::xrLocateViews(session().handle, &li, &vs, 2, &count, views)) && count == 2) {
+      hle::openxr::sanitize_views(vs, count, views);
       for (int eye = 0; eye < 2; ++eye) {
         out.eye[eye].view = view_matrix(views[eye].pose);
         out.eye[eye].projection = projection_matrix(views[eye].fov);
       }
+    }
   }
   return out;
 }
@@ -566,6 +571,7 @@ Pose vrapi_LocateTrackingSpace(Mobile *mobile, std::int32_t target) {
     failure("LocateTrackingSpace", r);
     return {};
   }
+  hle::openxr::sanitize(loc.locationFlags, loc.pose);
   return pose(loc.pose);
 }
 Pose vrapi_GetTrackingTransform(Mobile *mobile, std::int32_t which) {
@@ -596,6 +602,7 @@ Pose vrapi_GetTrackingTransform(Mobile *mobile, std::int32_t which) {
     failure("GetTrackingTransform", r);
     return {};
   }
+  hle::openxr::sanitize(loc.locationFlags, loc.pose);
   return pose(loc.pose);
 }
 void set_tracking_transform(Mobile *mobile, const Pose *value) {

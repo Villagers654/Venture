@@ -604,6 +604,43 @@ bool search_field(const char* id, const char* hint, std::string* value, float wi
   return changed;
 }
 
+bool submit_field(const char* id, const char* hint, std::string* value, float width, char32_t glyph,
+                  bool enabled) {
+  ImGui::PushID(id);
+  const float height = s(34);
+  ImVec2 p = ImGui::GetCursorScreenPos();
+  ImDrawList* dl = ImGui::GetWindowDrawList();
+  bool focused = ImGui::GetID("##input") == ImGui::GetActiveID();
+  bool hovered = ImGui::IsMouseHoveringRect(p, {p.x + width, p.y + height});
+  float t = anim(ImGui::GetID("focus"), focused ? 1.f : 0.f, 16);
+  float h = anim(ImGui::GetID("hover"), hovered ? 1.f : 0.f, 16);
+  dl->AddRectFilled(p, {p.x + width, p.y + height}, field_bg(std::max(t, h * 0.6f)), height * 0.5f);
+  if (t > 0.01f)
+    dl->AddRect(p, {p.x + width, p.y + height}, color::alpha(color::selected, 0.55f * t), height * 0.5f, 0, s(1.5f));
+  draw_glyph(dl, glyph, kSmall, {p.x + s(20), p.y + height * 0.5f}, color::text2);
+  const float left = s(36), right = s(36);
+  ImGui::SetCursorScreenPos({p.x + left, p.y});
+  ImGui::PushStyleColor(ImGuiCol_FrameBg, IM_COL32(0, 0, 0, 0));
+  ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, IM_COL32(0, 0, 0, 0));
+  ImGui::PushStyleColor(ImGuiCol_FrameBgActive, IM_COL32(0, 0, 0, 0));
+  ImGui::PushStyleColor(ImGuiCol_TextDisabled, color::text3);
+  ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {0, text_y(ImGui::GetFont(), kSmall, 0, height)});
+  ImGui::PushFont(g_fonts.regular, kSmall);
+  ImGui::SetNextItemWidth(width - left - right);
+  bool submit = ImGui::InputTextWithHint("##input", hint, value, ImGuiInputTextFlags_EnterReturnsTrue);
+  ImGui::PopFont();
+  ImGui::PopStyleVar();
+  ImGui::PopStyleColor(4);
+  if (!value->empty()) {
+    ImGui::SetCursorScreenPos({p.x + width - s(31), p.y + (height - s(26)) * 0.5f});
+    submit |= icon_button("submit", icons::check, nullptr, 26, enabled);
+  }
+  ImGui::SetCursorScreenPos(p);
+  ImGui::Dummy({width, height});
+  ImGui::PopID();
+  return submit && enabled && !value->empty();
+}
+
 bool begin_menu(const char* id) {
   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {s(6), s(6)});
   ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {0, s(2)});

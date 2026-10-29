@@ -11,6 +11,7 @@
 #include <map>
 #include <mutex>
 #include <new>
+#include <thread>
 
 // Irreversible process state: runs alone in its own process (tests.cmake).
 TEST_CASE("Terminal allocator bridge drains a real native device without guest reentry" * doctest::skip()) {
@@ -84,6 +85,14 @@ TEST_CASE("Terminal allocator bridge drains a real native device without guest r
   REQUIRE(idle);
   const auto before_calls = calls.load();
   const auto before = idle(device);
+  // A driver's queue thread (lavapipe's) may still be releasing the idle's
+  // submission through the guest allocator; let it finish before the stop.
+  for (unsigned seen = calls.load(), quiet = 0, step = 0; quiet < 10 && step < 250; ++step) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    const unsigned now = calls.load();
+    quiet = now == seen ? quiet + 1 : 0;
+    seen = now;
+  }
   const auto running_calls = calls.load();
   os_quit::stopping.store(true);
   const auto after = idle(device);

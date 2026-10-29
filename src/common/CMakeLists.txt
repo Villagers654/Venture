@@ -18,6 +18,7 @@ add_library(venture_common STATIC
   meta/commerce.cpp
   library/library.cpp
   library/import.cpp
+  library/save_import.cpp
   android/adb.cpp
   android/archive.cpp
   android/manifest.cpp

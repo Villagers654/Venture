@@ -154,6 +154,15 @@ XrResult xrLocateHandJointsEXT(XrHandTrackerEXT tracker, const XrHandJointsLocat
   }
   auto r = host_call<PFN_xrLocateHandJointsEXT, "xrLocateHandJointsEXT">(tracker, info, &copy);
   if (XR_SUCCEEDED(r)) {
+    for (std::uint32_t i = 0; i < copy.jointCount; ++i) {
+      auto& joint = copy.jointLocations[i];
+      sanitize(joint.locationFlags, joint.pose);
+      if (!std::isfinite(joint.radius) || joint.radius < 0) joint.radius = 0;
+      if (velocities && velocities->jointVelocities && i < velocities->jointCount) {
+        auto& v = velocities->jointVelocities[i];
+        sanitize(v.velocityFlags, v.linearVelocity, v.angularVelocity);
+      }
+    }
     out->isActive = copy.isActive;
     if (scale) {
       if (native_scale) {

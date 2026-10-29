@@ -66,6 +66,10 @@ struct Web {
   void *(*context_ephemeral)() = nullptr; // 4.1
   void *(*view_with_context)(void *) = nullptr;
   void (*load_uri)(void *, const char *) = nullptr;
+  const char *(*view_uri)(void *) = nullptr;
+  void (*stop_loading)(void *) = nullptr;
+  void (*destroy4)(void *) = nullptr; // gtk_window_destroy
+  void (*destroy3)(void *) = nullptr; // gtk_widget_destroy
   void *(*decision_action)(void *) = nullptr;
   void *(*action_request)(void *) = nullptr;
   const char *(*request_uri)(void *) = nullptr;
@@ -96,6 +100,8 @@ bool load(Web &w) {
             bind(lib, w.set_default_size, "gtk_window_set_default_size") &&
             bind(lib, w.view_type, "webkit_web_view_get_type") &&
             bind(lib, w.load_uri, "webkit_web_view_load_uri") &&
+            bind(lib, w.view_uri, "webkit_web_view_get_uri") &&
+            bind(lib, w.stop_loading, "webkit_web_view_stop_loading") &&
             bind(lib, w.decision_action,
                  "webkit_navigation_policy_decision_get_navigation_action") &&
             bind(lib, w.action_request,
@@ -109,11 +115,13 @@ bool load(Web &w) {
            bind(lib, w.window_new4, "gtk_window_new") &&
            bind(lib, w.set_child, "gtk_window_set_child") &&
            bind(lib, w.present, "gtk_window_present") &&
+           bind(lib, w.destroy4, "gtk_window_destroy") &&
            bind(lib, w.session_ephemeral, "webkit_network_session_new_ephemeral");
   return ok && bind(lib, w.init3, "gtk_init_check") &&
          bind(lib, w.window_new3, "gtk_window_new") &&
          bind(lib, w.container_add, "gtk_container_add") &&
          bind(lib, w.show_all, "gtk_widget_show_all") &&
+         bind(lib, w.destroy3, "gtk_widget_destroy") &&
          bind(lib, w.context_ephemeral, "webkit_web_context_new_ephemeral") &&
          bind(lib, w.view_with_context, "webkit_web_view_new_with_context");
 }
@@ -128,8 +136,11 @@ struct Helper {
 Helper *g_helper = nullptr;
 // WebKitPolicyDecisionType / WebKitLoadEvent values (stable across 4.1 and 6.0).
 constexpr int kNavigationAction = 0, kNewWindowAction = 1;
-constexpr int kLoadStarted = 0, kLoadFinished = 3;
+constexpr int kLoadStarted = 0, kLoadRedirected = 1, kLoadCommitted = 2, kLoadFinished = 3;
 
+// Pages stay on Meta domains; embedded frames (security checks, captchas) may
+// be any plain HTTPS origin. WebKit asks one policy for every frame, so the page
+// rule is applied to each view's own load below.
 int on_decide_policy(void *, void *decision, int type, void *) {
   auto &h = *g_helper;
   if (type != kNavigationAction && type != kNewWindowAction)
@@ -147,14 +158,10 @@ int on_decide_policy(void *, void *decision, int type, void *) {
     h.web.loop_quit(h.loop);
     return 1;
   }
-  const bool allowed = meta::auth_navigation_allowed(uri);
-  if (type == kNewWindowAction) {
-    // Popups open in the same view, as in the Windows browser.
-    h.web.decision_ignore(decision);
-    if (allowed)
-      h.web.load_uri(h.view, uri.c_str());
-    return 1;
-  }
+  // An allowed new window continues to "create", which opens a real popup.
+  const bool allowed = type == kNewWindowAction
+                           ? uri.empty() || uri == "about:blank" || meta::auth_navigation_allowed(uri)
+                           : meta::auth_frame_allowed(uri);
   if (allowed)
     h.web.decision_use(decision);
   else
@@ -166,16 +173,81 @@ int on_permission(void *, void *request, void *) {
   return 1;
 }
 int on_suppress(void *, void *, void *, void *, void *) { return 1; }
-void on_load_changed(void *, int event, void *) {
+void on_load_changed(void *view, int event, void *) {
   auto &h = *g_helper;
+  if (event == kLoadStarted || event == kLoadRedirected || event == kLoadCommitted) {
+    const char *raw = h.web.view_uri(view);
+    std::string uri = raw ? raw : "";
+    if (!uri.empty() && uri != "about:blank" && !meta::auth_navigation_allowed(uri)) {
+      h.web.stop_loading(view);
+      return;
+    }
+  }
+  if (view != h.view)
+    return;
   if (event == kLoadStarted)
     h.load_failed = false;
   if (event == kLoadFinished && !h.load_failed)
     h.send("ready");
 }
-int on_load_failed(void *, int, void *, void *, void *) {
-  g_helper->load_failed = true;
+int on_load_failed(void *view, int, void *, void *, void *) {
+  if (view == g_helper->view)
+    g_helper->load_failed = true;
   return 0;
+}
+void connect(void *object, const char *signal, auto fn, void *data = nullptr) {
+  g_helper->web.signal_connect(object, signal, reinterpret_cast<Fn>(fn), data, nullptr, 0);
+}
+void *on_create(void *view, void *, void *);
+// The same rules for the sign-in view and its popups.
+void attach(void *view) {
+  connect(view, "decide-policy", on_decide_policy);
+  connect(view, "permission-request", on_permission);
+  connect(view, "context-menu", on_suppress);
+  connect(view, "load-changed", on_load_changed);
+  connect(view, "load-failed", on_load_failed);
+  connect(view, "create", on_create);
+}
+void *new_window(const char *title, int width, int height) {
+  auto &w = g_helper->web;
+  void *window = w.api == 6 ? w.window_new4() : w.window_new3(0);
+  if (window) {
+    w.set_title(window, title);
+    w.set_default_size(window, width, height);
+  }
+  return window;
+}
+void show(void *window, void *view) {
+  auto &w = g_helper->web;
+  if (w.api == 6) {
+    w.set_child(window, view);
+    w.present(window);
+  } else {
+    w.container_add(window, view);
+    w.show_all(window);
+  }
+}
+void on_popup_close(void *, void *window) {
+  auto &w = g_helper->web;
+  w.api == 6 ? w.destroy4(window) : w.destroy3(window);
+}
+void on_popup_ready(void *view, void *) {
+  if (void *window = new_window("Sign in to Meta - Venture", 560, 760)) {
+    connect(view, "close", on_popup_close, window);
+    show(window, view);
+  }
+}
+// A window.open() from the sign-in page, for example Facebook login and its
+// security check. A related view keeps window.opener and the ephemeral session,
+// so the popup can hand its result back and close itself.
+void *on_create(void *view, void *, void *) {
+  auto &w = g_helper->web;
+  void *popup = w.object_new(w.view_type(), "related-view", view, nullptr);
+  if (!popup)
+    return nullptr;
+  attach(popup);
+  connect(popup, "ready-to-show", on_popup_ready);
+  return popup;
 }
 void on_crashed(void *, int, void *) {
   g_helper->send("error crashed");
@@ -223,9 +295,7 @@ int helper_main() {
   if (w.api == 6 ? !w.init4() : !w.init3(nullptr, nullptr))
     return helper.send("error display"), 1;
   helper.loop = w.loop_new(nullptr, 0);
-  void *window = w.api == 6 ? w.window_new4() : w.window_new3(0);
-  w.set_title(window, "Sign in to Meta - Venture");
-  w.set_default_size(window, 650, 820);
+  void *window = new_window("Sign in to Meta - Venture", 650, 820);
   // Ephemeral sessions keep cookies in memory, isolated for each sign-in.
   if (w.api == 6)
     helper.view = w.object_new(w.view_type(), "network-session",
@@ -234,25 +304,10 @@ int helper_main() {
     helper.view = w.view_with_context(w.context_ephemeral());
   if (!window || !helper.view)
     return helper.send("error display"), 1;
-  auto connect = [&](void *object, const char *signal, auto fn) {
-    w.signal_connect(object, signal, reinterpret_cast<Fn>(fn), nullptr,
-                     nullptr, 0);
-  };
-  connect(helper.view, "decide-policy", on_decide_policy);
-  connect(helper.view, "permission-request", on_permission);
-  connect(helper.view, "context-menu", on_suppress);
-  connect(helper.view, "script-dialog", on_suppress);
-  connect(helper.view, "load-changed", on_load_changed);
-  connect(helper.view, "load-failed", on_load_failed);
+  attach(helper.view);
   connect(helper.view, "web-process-terminated", on_crashed);
   connect(window, "destroy", on_destroy);
-  if (w.api == 6) {
-    w.set_child(window, helper.view);
-    w.present(window);
-  } else {
-    w.container_add(window, helper.view);
-    w.show_all(window);
-  }
+  show(window, helper.view);
   w.load_uri(helper.view, url.c_str());
   w.loop_run(helper.loop);
   // Skip GTK/WebKit teardown; WebKit's subprocesses exit with this one.

@@ -393,6 +393,13 @@ GuestAddr AddressSpace::allocate(std::uint64_t size, std::uint32_t prot, std::st
   if (p < 0) return 0;
   s.allocations.emplace(p, align_up(size, 4096)); return p;
 }
+GuestAddr AddressSpace::allocate_at(GuestAddr address, std::uint64_t size, std::uint32_t prot, std::string_view name) {
+  if (a32_policy) return 0;
+  auto& s = state(); profile::TimedLock lock(s.mutex);
+  auto p = map_locked(s, address, size, prot, kMapPrivate | kMapAnonymous | kMapFixed, nullptr, 0, name, kGuestPageSize);
+  if (p < 0) return 0;
+  s.allocations.emplace(p, align_up(size, 4096)); return p;
+}
 void AddressSpace::free(GuestAddr p) {
   if (a32_policy) {
     low32::free(p);

@@ -132,6 +132,10 @@ bool portal_open_uri(const std::string& uri) {
 bool portal_open_file(int fd) {
   return call(Bus::session, portal, portal_path, "org.freedesktop.portal.OpenURI", "OpenFile", "sha{sv}", "", fd, 0u);
 }
+bool portal_open_directory(int fd) {
+  return call(Bus::session, portal, portal_path, "org.freedesktop.portal.OpenURI", "OpenDirectory", "sha{sv}", "", fd,
+              0u);
+}
 std::optional<std::int32_t> portal_min_nice() {
   return i32_property(Bus::session, portal, portal_path, "org.freedesktop.portal.Realtime", "MinNiceLevel");
 }

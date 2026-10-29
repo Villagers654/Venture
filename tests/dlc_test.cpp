@@ -373,3 +373,38 @@ TEST_CASE("DLC fallback catalogs never replace an installed catalog or count as 
   REQUIRE(installs.size() == 1);
   CHECK(installs[0].complete);
 }
+// Meta fails the whole-library query (HTTP 500 every time) for accounts with
+// very many games; each app's listing still says whether the account owns it.
+TEST_CASE("ownership comes from the app's own listing when Meta cannot list the library") {
+  for (bool entitled : {true, false}) {
+    auto full = queries();
+    meta::Store store("fixture", {}, [&](std::string_view url, const http::Fields &fields) -> Json {
+      std::map<std::string, std::string> f(fields.begin(), fields.end());
+      if (f["doc_id"] == "4850747515044496")
+        throw meta::RequestError(500, "Fixture error");
+      auto response = full(url, fields);
+      if (f["doc_id"] == "6549406941839522") {
+        response["data"]["item"]["is_viewer_entitled"] = entitled;
+        response["data"]["viewer"] = {{"user", {{"id", "777777"}}}};
+      }
+      return response;
+    });
+    auto listing = store.owned_listing("123456");
+    CHECK(listing.account_id == "777777");
+    CHECK_FALSE(listing.complete);
+    if (entitled) {
+      REQUIRE(listing.games.size() == 1);
+      CHECK(listing.games[0].id == "123456");
+      CHECK(listing.games[0].owned);
+      CHECK(store.owned_plan("123456").binary_id == "456789");
+      CHECK(store.owned_plan("123456", "456789").binary_id == "456789");
+    } else {
+      CHECK(listing.games.empty());
+      CHECK_THROWS(store.owned_plan("123456"));
+      CHECK_THROWS(store.owned_plan("123456", "456789"));
+    }
+  }
+  // A listing without an answer is not taken as either.
+  meta::Store silent("fixture", {}, queries());
+  CHECK_THROWS(silent.owned_listing("123456"));
+}

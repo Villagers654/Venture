@@ -1,5 +1,6 @@
 #include "common/meta/store.h"
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cctype>
@@ -7,6 +8,9 @@
 #include <mutex>
 #include <regex>
 #include <set>
+#include <thread>
+
+#include "common/log.h"
 namespace venture::meta {
 namespace {
 // Waits `delay` unless a stop is requested first; false when stopped.
@@ -268,6 +272,14 @@ bool valid_sku(std::string_view sku) {
            return c < 32 || c == 127 || c == ',';
          });
 }
+bool catalog_replaces(const Plan &catalog, const Plan &previous) {
+  if (catalog.assets_complete)
+    return true;
+  auto assets = [](const Plan &p) {
+    return std::ranges::count(p.files, std::string("asset"), &File::kind);
+  };
+  return !previous.assets_complete && assets(catalog) >= assets(previous);
+}
 std::vector<Addon> group_addons(const Plan &plan) {
   std::vector<Addon> result;
   for (const auto &f : plan.files) {
@@ -462,8 +474,40 @@ Json Store::query(std::string_view doc, const Json &vars) const {
 Json Store::request(std::string_view url, const http::Fields &fields) const {
   return transport_ ? transport_(url, fields) : post(url, fields, stop_);
 }
+Snapshot Store::identity() const {
+  if (token_.empty())
+    throw std::runtime_error("Not signed in to Meta.");
+  auto j = request("https://graph.oculus.com/me", {{"access_token", token_},
+                                                   {"fields", "id,alias,display_name"},
+                                                   {"method", "GET"}});
+  Snapshot s;
+  s.account_id = str(j, "id");
+  if (!digits(s.account_id))
+    throw std::runtime_error("Meta returned an invalid account identity.");
+  s.alias = str(j, "alias");
+  s.display_name = str(j, "display_name");
+  if (s.alias.empty())
+    s.alias = s.display_name;
+  return s;
+}
 Snapshot Store::library() const {
-  return parse_library(query("4850747515044496"));
+  // The whole library is one reply (the query has no paging); a one-off 5xx
+  // is retried before it counts.
+  for (int attempt = 0;; ++attempt) {
+    try {
+      return parse_library(query("4850747515044496"));
+    } catch (const RequestError &error) {
+      if (error.status < 500 || error.status >= 600 || stop_.stop_requested()) throw;
+      log::warn("meta", "Library query (doc 4850747515044496) attempt {} failed: {}", attempt + 1, error.what());
+      if (attempt == 2 || !pause_for(stop_, std::chrono::milliseconds(500 << attempt))) {
+        std::string reason = error.what();
+        if (auto end = reason.find(". Try signing in again."); end != reason.npos)
+          reason.resize(end);
+        throw RequestError(error.status, "Meta could not list your games right now (" + reason +
+                                             "). Use Refresh in the library to try again.");
+      }
+    }
+  }
 }
 Json Store::binary_details(std::string_view id) const {
   require_id(id);
@@ -502,8 +546,88 @@ Json Store::binary_details(std::string_view id) const {
     binary["obb_binary"] = metadata(obb_id, "OBBBinary");
   }
   binary["asset_files_unavailable"] = true;
+  try {
+    binary["asset_files"] = fallback_assets(id);
+  } catch (...) {
+    if (stop_.stop_requested())
+      throw;
+    log::warn("meta", "Meta's reduced asset list for build {} is unavailable.", id);
+  }
   return binary;
 }
+Json Store::fallback_assets(std::string_view id) const {
+  // Meta Platform Utility's binary details query lists every asset file's id
+  // and size where the full query fails, but no names: the delivery server
+  // names each file. An asset id's name never changes, so names are cached.
+  static std::mutex cache_mutex;
+  static std::map<std::string, std::string> cache;
+  auto response = query("24072064135771905", {{"binaryID", id}});
+  auto &binary = field(field(response, "data"), "node");
+  if (str(binary, "id") != id)
+    throw std::runtime_error("Meta did not return the requested build.");
+  auto &assets = field(binary, "asset_files");
+  auto list = nodes(assets);
+  if (number(assets, "count") > list.size() ||
+      field(field(assets, "page_info"), "has_next_page") == true)
+    throw std::runtime_error("Meta's asset list was incomplete.");
+  struct Entry {
+    std::string id, name;
+    uint64_t size;
+  };
+  std::vector<Entry> entries;
+  for (auto &a : list) {
+    Entry e{str(a, "id"), str(a, "file_name"), number(a, "size")};
+    if (!digits(e.id) || !e.size)
+      throw std::runtime_error("Meta returned invalid asset details.");
+    std::lock_guard lock(cache_mutex);
+    if (auto i = cache.find(e.id); i != cache.end())
+      e.name = i->second;
+    entries.push_back(std::move(e));
+  }
+  // The delivery credential is fetched once, before the workers share it.
+  if (std::ranges::any_of(entries, [](auto &e) { return e.name.empty(); }))
+    download_url(File{entries.front().id});
+  std::atomic<std::size_t> next{0};
+  auto worker = [&] {
+    for (std::size_t i; (i = next++) < entries.size() && !stop_.stop_requested();) {
+      auto &e = entries[i];
+      if (!e.name.empty())
+        continue;
+      try {
+        auto url = download_url(File{e.id});
+        e.name = names_ ? names_(url) : http::delivery_file_name(url, stop_);
+      } catch (...) {
+      }
+      if (!paths::safe_name(e.name)) {
+        e.name.clear();
+        continue;
+      }
+      std::lock_guard lock(cache_mutex);
+      cache[e.id] = e.name;
+    }
+  };
+  {
+    std::vector<std::jthread> workers;
+    for (int i = 0; i < 16; ++i)
+      workers.emplace_back(worker);
+  }
+  if (stop_.stop_requested())
+    throw std::runtime_error("Cancelled.");
+  Json out = Json::array();
+  std::set<std::string> names;
+  for (auto &e : entries) {
+    auto key = e.name;
+    std::transform(key.begin(), key.end(), key.begin(),
+                   [](unsigned char c) { return char(std::tolower(c)); });
+    if (!paths::safe_name(e.name) || !names.insert(key).second) {
+      log::warn("meta", "Asset {} of build {} has no usable file name; it is not listed.", e.id, id);
+      continue;
+    }
+    out.push_back({{"id", e.id}, {"file_name", e.name}, {"size", e.size}});
+  }
+  return Json{{"nodes", out}};
+}
+
 Details Store::details(std::string_view id) const {
   require_id(id);
   auto j = query("6549406941839522", {{"itemId", id}, {"hmdType", "EUREKA"}});
@@ -620,18 +744,50 @@ Json Store::builds(std::string_view id) const {
     menu.push_back(candidate);
   return menu;
 }
+Snapshot Store::owned_listing(std::string_view id) const {
+  require_id(id);
+  const auto response = query("6549406941839522", {{"itemId", id}, {"hmdType", "EUREKA"}});
+  const auto &data = field(response, "data");
+  const auto &item = field(data, "item");
+  if (str(item, "id") != id || !quest_app(item))
+    throw std::runtime_error("Meta has no Quest game at that link.");
+  const auto &entitled = field(item, "is_viewer_entitled");
+  Snapshot s;
+  s.account_id = str(field(field(data, "viewer"), "user"), "id");
+  if (!entitled.is_boolean() || !digits(s.account_id))
+    throw std::runtime_error("Meta did not say whether this account owns the game. Try again later.");
+  if (entitled.get<bool>()) {
+    auto g = card(item);
+    g.owned = true;
+    s.games.push_back(std::move(g));
+  }
+  return s;
+}
+bool Store::owns(std::string_view id) const {
+  const auto response = query("6549406941839522", {{"itemId", id}, {"hmdType", "EUREKA"}});
+  const auto &item = field(field(response, "data"), "item");
+  if (const auto &entitled = field(item, "is_viewer_entitled"); str(item, "id") == id && entitled.is_boolean())
+    return entitled.get<bool>();
+  const auto entitlement = library();
+  return std::ranges::find(entitlement.games, id, &Game::id) != entitlement.games.end();
+}
 Plan Store::owned_plan(std::string_view id) const {
   require_id(id);
-  const auto entitlement = library();
-  const auto game = std::ranges::find(entitlement.games, id, &Game::id);
-  if (game == entitlement.games.end())
-    throw std::runtime_error("Refresh your library: ownership could not be verified for this download.");
-
   // The live headset release is independent of the upload/version listing.
   const auto release = query("6549406941839522", {{"hmdType", "EUREKA"}, {"itemId", id}});
   const auto &application = field(field(release, "data"), "item");
   if (str(application, "id") != id || !quest_app(application))
     throw std::runtime_error("The live release response did not identify this Quest application.");
+  // The listing says whether this account owns the app; the whole library is
+  // asked only when it does not (Meta fails that query for some accounts).
+  if (const auto &entitled = field(application, "is_viewer_entitled"); entitled.is_boolean()) {
+    if (!entitled.get<bool>())
+      throw std::runtime_error("Meta says this account does not own this game.");
+  } else {
+    const auto entitlement = library();
+    if (std::ranges::find(entitlement.games, id, &Game::id) == entitlement.games.end())
+      throw std::runtime_error("Refresh your library: ownership could not be verified for this download.");
+  }
   auto selected = field(application, "latest_supported_binary");
   const auto selected_id = str(selected, "id");
   if (!digits(selected_id) || !android_build(selected))
@@ -640,7 +796,7 @@ Plan Store::owned_plan(std::string_view id) const {
   selected.update(details);
   return build_plan(id, selected);
 }
-std::string Store::download_url(const File &f) {
+std::string Store::download_url(const File &f) const {
   const auto address = [&] {
     if (!f.uri.empty())
       return f.uri;

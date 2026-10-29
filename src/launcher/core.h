@@ -10,6 +10,7 @@
 #include "common/file_ops.h"
 #include "common/launch_details.h"
 #include "common/library/library.h"
+#include "common/library/save_import.h"
 #include "common/meta/accounts.h"
 #include "common/process.h"
 #include "common/steam_library.h"
@@ -133,7 +134,8 @@ protected:
         console;      // its stdout and stderr
     std::string tail;
     std::optional<int> exit;
-    std::string failure; // shown for a non-zero exit
+    std::string failure; // shown for a non-zero exit, or why a game closed itself
+    bool quitting = false; // Quit game was pressed; the game is saving and closing
   };
   std::map<std::string, Running> running_;
   std::set<std::string> launch_pending_;
@@ -146,9 +148,9 @@ protected:
   std::atomic<uint64_t> steam_generation_{0};
   void sync_steam();
   void restart_steam();
-  // A new game that started installing while installs ask: the GUI offers to
-  // leave it out of Steam (app id, name).
-  std::optional<std::pair<std::string, std::string>> steam_ask_;
+  // A new game the GUI asks about before it installs: where it goes and
+  // whether it goes to Steam (app id, name).
+  std::optional<std::pair<std::string, std::string>> install_ask_;
   // Adds a game to Steam or leaves it out (saved), then syncs.
   void set_in_steam(std::string_view app_id, bool in);
   bool in_steam(std::string_view app_id) const { return !settings_.steam_skip.contains(std::string(app_id)); }
@@ -177,6 +179,9 @@ protected:
        verifying_ = false;
   bool auth_page_loaded_ = false; // the Meta sign-in page finished loading
   std::string refresh_error_;     // last library refresh
+  std::set<std::string> saves_kept_notified_;  // imports told their saves were kept
+  std::string owned_link_;        // store link of a game to add when Meta cannot list the library
+  bool adding_ = false;
   size_t last_completed_ = 0;
   std::uint64_t last_discarded_ = 0;
   uint64_t last_poll_ = 0;
@@ -211,28 +216,52 @@ protected:
   void scan_headset();
   void connect_headset();
   void scan_local(fs::path picked);
-  void start_import(bool device);
+  // New games go to `root` (default: the games folder); one already installed
+  // stays in its library folder.
+  void start_import(bool device, const fs::path &root = {});
   ImportMatch import_match(const ImportItem &item) const;
   fs::path adb_path() const;
   void refresh();
+  // Adds the game at owned_link_ once Meta confirms this account owns it.
+  void add_owned();
   void rescan();
   void select(std::string id);
   void sign_in();
   void sign_out();
   void play(const meta::Game &game);
-  void install(const meta::Game &game);
+  // Installs or updates a game. An installed game updates where it is; a new
+  // one goes to `root` (a library folder, added if new), else the games folder.
+  void install(const meta::Game &game, const fs::path &root = {});
   // The Install button: downloads belong to the active account, so a game
   // that only another signed-in account owns switches to that account first.
-  void install_for_owner(const meta::Game &game);
+  void install_for_owner(const meta::Game &game, const fs::path &root = {});
+  // The library folder an installed game is in.
+  static fs::path root_of(const library::Install &install) {
+    return install.directory.parent_path().parent_path();
+  }
   // Removes an installed game's files; saves stay.
   void uninstall(const library::Install &install);
-  // Saves settings and rescans the games folder they name.
+  // Imports an installed game's save data for the account it plays as: from
+  // `folder` (saves::find_local), or with none from a headset over adb (the
+  // first ready one unless `serial`). Checks now that the game is installed
+  // and closed and holds its lock; the returned task copies (on any thread).
+  using SaveImport = std::function<saves::Imported(std::stop_token)>;
+  SaveImport import_saves(std::string_view app_id, const fs::path &folder, std::string serial = {});
+  // The same on the import thread; a notice reports the result.
+  void import_saves_later(std::string_view app_id, const fs::path &folder);
+  // Saves settings and rescans the library folders they name.
   void apply_settings(library::Settings next, bool announce = true);
   void save_library();
   void action(const std::function<void()> &fn);
   void error(std::string message);
   const library::Install *installed(std::string_view id,
                                     bool complete = true) const;
+  // An installation of an Android package, whatever app id it has.
+  const library::Install *installed_package(std::string_view package) const {
+    for (const auto &i : installs_)
+      if (i.plan.package == package) return &i;
+    return nullptr;
+  }
   meta::Game *game(std::string_view id);
   std::vector<meta::Game> visible_games() const;
   // Meta lists a newer build than the installed one (needs the game's details).

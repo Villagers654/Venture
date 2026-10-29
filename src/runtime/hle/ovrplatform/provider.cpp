@@ -5,6 +5,7 @@
 #include <condition_variable>
 #include <fstream>
 #include <mutex>
+#include <optional>
 #include <nlohmann/json.hpp>
 #include <stdexcept>
 
@@ -93,6 +94,10 @@ class OwnedLibrary final : public Provider {
       Json body;
       if (auto error = response_error(response, body)) {
         if (error.code == ErrorCode::unauthenticated) invalidate_auth();
+        // Meta fails the whole-library query for some accounts (HTTP 500 on
+        // every try); the store listing answers for this app alone.
+        if (error.code == ErrorCode::unavailable)
+          if (auto answer = item_entitlement(credential, stop)) return std::move(*answer);
         return {std::move(error)};
       }
       const auto& viewer = body.at("data").at("viewer");
@@ -156,6 +161,7 @@ class OwnedLibrary final : public Provider {
             !page["has_next_page"].get<bool>())
           return {failure(ErrorCode::not_entitled)};
       }
+      if (auto answer = item_entitlement(credential, stop)) return std::move(*answer);
       return {failure(ErrorCode::incomplete)};
     } catch (...) {
       return {failure(ErrorCode::invalid_response)};
@@ -347,6 +353,38 @@ class OwnedLibrary final : public Provider {
   }
 
  private:
+  // The store listing of this app as the viewer sees it (the launcher's
+  // details query): is_viewer_entitled for the app alone. Empty when Meta gives
+  // no clear answer for this app, its package and this account.
+  std::optional<Result> item_entitlement(const Credential& credential, std::stop_token stop) {
+    try {
+      auto response = http_->post(
+          "/graphql",
+          {{"access_token", credential.access_token},
+           {"doc_id", "6549406941839522"},
+           {"variables", Json{{"itemId", app_.app_id}, {"hmdType", "EUREKA"}}.dump()}},
+          stop);
+      if (stop.stop_requested() || entitlement_store_->load() != credential) return {};
+      Json body;
+      if (response_error(response, body)) return {};
+      const auto& data = body.at("data");
+      const auto& item = data.at("item");
+      auto user_id = string(data.at("viewer").at("user"), "id");
+      if (string(item, "id") != app_.app_id || !valid_id(user_id) ||
+          (!credential.account_id.empty() && credential.account_id != user_id) ||
+          !item.contains("is_viewer_entitled") || !item["is_viewer_entitled"].is_boolean())
+        return {};
+      if (item.contains("latest_supported_binary") && item["latest_supported_binary"].is_object()) {
+        auto package = string(item["latest_supported_binary"], "package_name");
+        if (!package.empty() && package != app_.package) return {};
+      }
+      const bool entitled = item["is_viewer_entitled"].get<bool>();
+      log::info("ovrplatform", "Entitlement from the app's store listing: {}", entitled ? "owned" : "not owned");
+      return entitled ? Result{} : Result{failure(ErrorCode::not_entitled)};
+    } catch (...) {
+      return {};
+    }
+  }
   IapCache& cache() {
     // Lazy construction stays out of authentication/provider locks. call_once
     // also serializes cache path selection across the three service workers.

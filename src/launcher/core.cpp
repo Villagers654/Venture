@@ -55,7 +55,7 @@ Core::Core(Options options)
         options_.offline ? std::function<Session(Session)>{}
                          : std::function<Session(Session)>{[](Session s) {
                              auto snapshot =
-                                 meta::Store(s.access_token).library();
+                                 meta::Store(s.access_token).identity();
                              s.account_id = snapshot.account_id;
                              s.alias = snapshot.alias;
                              s.display_name = snapshot.display_name;
@@ -167,12 +167,19 @@ void Core::uninstall(const library::Install &install) {
   } catch (...) {
     throw std::runtime_error("Close this game before uninstalling it.");
   }
-  library::uninstall(settings_.games, install);
+  library::uninstall(root_of(install), install);
   rescan();
 }
 void Core::apply_settings(library::Settings next, bool announce) {
+  // Games already installed stay where they are: a games folder that holds
+  // some stays a library folder.
+  if (next.games != settings_.games &&
+      std::ranges::find(next.libraries, settings_.games) == next.libraries.end() &&
+      std::ranges::any_of(installs_, [&](auto &i) { return root_of(i) == settings_.games; }))
+    next.libraries.push_back(settings_.games);
+  std::erase(next.libraries, next.games);
   next.save(data_);
-  if (next.games != settings_.games) {
+  if (next.roots() != settings_.roots()) {
     addons_.clear();
     addon_errors_.clear();
   }
@@ -569,12 +576,21 @@ void Core::rescan() {
   scanning_ = true;
   steam_scan_reliable_ = false;
   ++steam_generation_;
-  auto root = settings_.games;
+  auto roots = settings_.roots();
   auto art = data_ / "cache/art";
-  worker_->submit([this, root, art](std::stop_token) -> Worker::Completion {
+  worker_->submit([this, roots, art](std::stop_token) -> Worker::Completion {
     try {
-      bool reliable = false;
-      auto result = library::scan(root, steam_sync_allowed_ ? &reliable : nullptr);
+      // The games folder first, so a game found in two folders is the one there.
+      bool reliable = true;
+      std::vector<library::Install> result;
+      for (const auto &root : roots) {
+        // Another library folder may be on a drive that is not connected now;
+        // its games are missing from this scan, which then is not reliable.
+        bool whole = false;
+        auto found = library::scan(root, steam_sync_allowed_ || root != roots.front() ? &whole : nullptr);
+        reliable = reliable && whole;
+        std::ranges::move(found, std::back_inserter(result));
+      }
       // An import without a Meta listing shows what a headset's home shows:
       // the APK's label, its banner (or icon) as the cover and its icon.
       for (auto &install : result) {
@@ -595,9 +611,9 @@ void Core::rescan() {
           log::warn("library", "Could not read how {} presents itself: {}", install.plan.package, e.what());
         }
       }
-      return [this, result = std::move(result), root, reliable] {
+      return [this, result = std::move(result), roots, reliable] {
         scanning_ = false;
-        if (root == settings_.games) {
+        if (roots == settings_.roots()) {
           std::erase_if(addons_, [&](auto &entry) {
             auto previous = installed(entry.first, false);
             auto next = std::ranges::find_if(result, [&](auto &install) {
@@ -625,6 +641,58 @@ void Core::rescan() {
       return [this, e] {
         scanning_ = false;
         error(e);
+      };
+    }
+  });
+}
+void Core::add_owned() {
+  if (adding_ || !session_ || options_.offline)
+    return;
+  // meta.com/experiences/<id>, oculus.com/experiences/quest/<id>, or the id:
+  // the last run of digits long enough to be an app id.
+  std::string id;
+  for (std::size_t i = 0; i < owned_link_.size();) {
+    auto end = i;
+    while (end < owned_link_.size() && owned_link_[end] >= '0' && owned_link_[end] <= '9')
+      ++end;
+    if (end - i >= 5)
+      id = owned_link_.substr(i, end - i);
+    i = std::max(end, i + 1);
+  }
+  if (id.empty()) {
+    error("Paste the game's Meta store link, like meta.com/experiences/1234567890123456.");
+    return;
+  }
+  adding_ = true;
+  auto token = session_->access_token;
+  auto epoch = epoch_;
+  worker_->submit([this, token, epoch, id](std::stop_token stop) -> Worker::Completion {
+    try {
+      auto snapshot = meta::Store(token, stop).owned_listing(id);
+      return [this, snapshot = std::move(snapshot), epoch] {
+        if (epoch != epoch_)
+          return;
+        adding_ = false;
+        action([&] {
+          if (snapshot.games.empty())
+            throw std::runtime_error("Meta says this account does not own that game.");
+          if (session_ && !session_->account_id.empty() && session_->account_id != snapshot.account_id)
+            throw std::runtime_error("Meta returned a different account. Sign out and reconnect.");
+          library::merge(games_, snapshot, account_scope_);
+          save_library();
+          owned_link_.clear();
+          log::info("library", "Added {} from its store listing", snapshot.games.front().id);
+          notice_ = snapshot.games.front().name + " is in your library.";
+          fill_metadata();
+        });
+      };
+    } catch (...) {
+      auto e = exception_text();
+      return [this, epoch, e] {
+        if (epoch == epoch_) {
+          adding_ = false;
+          error(e);
+        }
       };
     }
   });
@@ -807,20 +875,25 @@ void Core::sign_out() {
   secrets_.clear();
   notice_ = "Signed out. Installed games remain on this PC.";
 }
-void Core::install(const meta::Game &g) {
+void Core::install(const meta::Game &g, const fs::path &root) {
   if (options_.offline)
     throw std::runtime_error("Downloads are unavailable in offline mode.");
   if (!session_)
     throw std::runtime_error("Sign in to install or update this game.");
-  const bool fresh = !installed(g.id, false);
-  downloads_->enqueue(g.id, g.name, settings_.games, session_->access_token,
-                      account_key_);
-  // A new game takes the default for new games; the GUI then offers to change
-  // it while it downloads.
-  if (fresh && settings_.add_games_to_steam && !options_.launch_requested) {
-    set_in_steam(g.id, settings_.steam_add_new);
-    if (settings_.steam_ask && steam_sync_allowed_) steam_ask_ = {g.id, g.name};
+  const auto *current = installed(g.id, false);
+  auto target = current ? root_of(*current) : root.empty() ? settings_.games : root.lexically_normal();
+  if (!target.is_absolute())
+    throw std::runtime_error("Choose an absolute folder to install to.");
+  if (!std::ranges::contains(settings_.roots(), target)) {
+    fs::create_directories(target);
+    auto next = settings_;
+    next.libraries.push_back(target);
+    apply_settings(std::move(next), false);
   }
+  downloads_->enqueue(g.id, g.name, target, session_->access_token, account_key_);
+  // A new game takes the default for new games, unless the GUI asked.
+  if (!current && settings_.add_games_to_steam && !options_.launch_requested)
+    set_in_steam(g.id, settings_.steam_add_new);
   on_install_queued();
 }
 void Core::set_in_steam(std::string_view app_id, bool in) {
@@ -831,7 +904,7 @@ void Core::set_in_steam(std::string_view app_id, bool in) {
   settings_.save(data_);
   sync_steam();
 }
-void Core::install_for_owner(const meta::Game &g) {
+void Core::install_for_owner(const meta::Game &g, const fs::path &root) {
   const auto game_copy = g;
   const auto owner = owner_for(game_copy.id);
   if (!owner.empty() && owner != account_key_) {
@@ -840,7 +913,7 @@ void Core::install_for_owner(const meta::Game &g) {
       throw std::runtime_error("Reconnect the owning account before installing.");
     switch_account(owner);
   }
-  install(game_copy);
+  install(game_copy, root);
 }
 std::vector<meta::Addon> Core::addons(std::string_view app) const {
   auto found = addons_.find(std::string(app));
@@ -887,7 +960,7 @@ void Core::refresh_addons(std::string app) {
   auto plan = details_.at(app).plan;
   auto current = installed(app, false);
   auto binary = current ? current->plan.binary_id : plan.binary_id;
-  auto root = settings_.games;
+  auto root = current ? root_of(*current) : settings_.games;
   bool have_install = current != nullptr;
   auto token = session_->access_token;
   auto epoch = epoch_;
@@ -913,7 +986,7 @@ void Core::refresh_addons(std::string app) {
             d->second.plan.binary_id == catalog.binary_id)
           d->second.plan = catalog;
         auto current = installed(app, false);
-        if (root != settings_.games ||
+        if (root != (current ? root_of(*current) : settings_.games) ||
             (current && current->plan.binary_id != catalog.binary_id) ||
             (!current && have_install))
           return;
@@ -930,7 +1003,8 @@ void Core::refresh_addons(std::string app) {
         if (epoch != epoch_)
           return;
         addons_pending_.erase(app);
-        if (root == settings_.games)
+        auto current = installed(app, false);
+        if (root == (current ? root_of(*current) : settings_.games))
           addon_errors_[app] = message;
       };
     }
@@ -947,7 +1021,7 @@ void Core::install_addon(std::string_view app, std::string_view sku) {
   if (addon == list.end() || !addon->owned)
     throw std::runtime_error(
         "Refresh add-ons to confirm ownership before installing.");
-  downloads_->enqueue_addon(std::string(app), addon->name, settings_.games,
+  downloads_->enqueue_addon(std::string(app), addon->name, root_of(*current),
                             current->plan.binary_id, std::string(sku),
                             session_->access_token);
 }
@@ -959,9 +1033,64 @@ void Core::uninstall_addon(std::string_view app, std::string_view sku) {
   if (running != running_.end() && !running->second.exit)
     throw std::runtime_error("Close this game before removing an add-on.");
   FileLock lock(data_ / "locks" / ("game-" + current->plan.package + ".lock"), false);
-  downloads_->uninstall_addon(app, settings_.games, current->plan.binary_id,
+  downloads_->uninstall_addon(app, root_of(*current), current->plan.binary_id,
                               sku);
   rescan();
+}
+Core::SaveImport Core::import_saves(std::string_view app_id, const fs::path &folder, std::string serial) {
+  auto current = installed(app_id, false);
+  if (!current) throw std::runtime_error("Install this game before importing its save data.");
+  const auto package = current->plan.package;
+  auto running = running_.find(std::string(app_id));
+  if (running != running_.end() && !running->second.exit)
+    throw std::runtime_error("Close this game before importing its save data.");
+  // Also keeps the game from starting until the import is done.
+  auto lock = std::make_shared<FileLock>(data_ / "locks" / ("game-" + package + ".lock"), false);
+  auto key = launch_choice(app_id, play_key(app_id)).account_key;
+  if (key.empty()) key = "local";
+  if (!folder.empty())
+    return [data = data_, key, package, folder, lock](std::stop_token stop) {
+      auto found = saves::find_local(folder, package);
+      if (!found)
+        throw std::runtime_error("No save data for " + package + " was found there. Pick a copy of the game's "
+                                 "Android/data/" + package + " folder, or of its files folder.");
+      return saves::import_local(data, key, package, *found, stop);
+    };
+  const auto adb = adb_path();
+  if (adb.empty()) throw std::runtime_error("adb was not found. Install Android platform-tools, or set adb's location in Settings.");
+  return [data = data_, key, package, adb, serial, lock](std::stop_token stop) {
+    auto chosen = serial;
+    if (chosen.empty()) {
+      auto devices = android::adb::Client(adb).devices(stop);
+      auto ready = std::ranges::find_if(devices, &android::adb::Device::ready);
+      if (ready == devices.end())
+        throw std::runtime_error(devices.empty() ? "No headset found. Connect it with a USB cable (or turn on Wi-Fi "
+                                                   "debugging) and enable developer mode in the Meta Horizon app."
+                                                 : android::adb::state_message(devices.front()));
+      chosen = ready->serial;
+    }
+    return saves::import_headset(data, key, package, android::adb::Client(adb, chosen), stop);
+  };
+}
+void Core::import_saves_later(std::string_view app_id, const fs::path &folder) {
+  auto task = import_saves(app_id, folder);
+  notice_ = "Importing save data...";
+  import_worker_->submit([this, task = std::move(task)](std::stop_token stop) -> Worker::Completion {
+    std::string message;
+    bool imported = false;
+    try {
+      auto n = task(stop);
+      message = std::format("Imported {} save file{}.{}", n.files, n.files == 1 ? "" : "s",
+                            n.backup.empty() ? "" : " The save data it replaced is kept in a backup.");
+      imported = true;
+    } catch (...) {
+      message = exception_text();
+    }
+    return [this, message, imported] {
+      if (imported) notice_ = message;
+      else error(message);
+    };
+  });
 }
 void Core::install_all_owned_addons(std::string_view app) {
   if (!addons_.contains(std::string(app)))
@@ -1050,8 +1179,12 @@ void Core::launch_game(std::string_view id, std::string_view requested,
   // A manifest another installer wrote (the legacy CLI) lacks the launcher's
   // catalog record. With an account, Play upgrades it from Meta's same-build
   // catalog before the runtime reads it, as selecting the game would.
+  // A reduced catalog without asset files (Meta's full query failed at
+  // install) is retried too, so its assets appear once Meta lists them.
+  const bool no_assets = !i->plan.assets_complete &&
+      std::ranges::none_of(i->plan.files, [](auto &f) { return f.kind == "asset"; });
   std::string catalog_token;
-  if (!i->plan.launcher_format && !i->plan.local && !choice.account_key.empty())
+  if ((!i->plan.launcher_format || no_assets) && !i->plan.local && !choice.account_key.empty())
     if (auto owner = vault_.load(choice.account_key))
       catalog_token = owner->access_token;
   if ((running_.contains(game_id) && running_[game_id].process.active()) ||
@@ -1069,7 +1202,7 @@ void Core::launch_game(std::string_view id, std::string_view requested,
   // The runtime's account for saves and platform calls; "local" is none.
   const auto key = choice.account_key.empty() ? std::string("local") : choice.account_key;
   const auto runtime = settings_.runtime;
-  const auto root = settings_.games;
+  const auto root = root_of(install);
   const bool console = settings_.console;
   if (settings_.runtime_override())
     log::warn("launcher", "Using the runtime set in Settings: {}",
@@ -1095,7 +1228,8 @@ void Core::launch_game(std::string_view id, std::string_view requested,
           auto fresh =
               meta::Store(catalog_token, stop)
                   .owned_plan(install.plan.app_id, install.plan.binary_id);
-          if (fresh.assets_complete)
+          if (meta::catalog_replaces(fresh, install.plan) &&
+              (fresh.assets_complete || fresh.files.size() > install.plan.files.size()))
             catalog = std::move(fresh);
           else
             log::warn("launcher",
@@ -1136,11 +1270,11 @@ void Core::launch_game(std::string_view id, std::string_view requested,
             throw std::runtime_error(
                 "Account changed while the game was starting. Try again.");
           if (catalog) {
-            if (root != settings_.games ||
+            if (!std::ranges::contains(settings_.roots(), root) ||
                 paths::game_dir(root, catalog->package, catalog->version_code) !=
                     install.directory)
               throw std::runtime_error(
-                  "The games folder changed while the game was starting. Try "
+                  "The library folders changed while the game was starting. Try "
                   "again.");
             if (!downloads_->refresh_catalog(root, *catalog))
               throw std::runtime_error(
@@ -1152,6 +1286,7 @@ void Core::launch_game(std::string_view id, std::string_view requested,
             rescan();
           }
           auto &r = running_[app_id];
+          r.quitting = false;
           r.log = data_ / "logs" / ("runtime-" + install.plan.package + ".log");
           // The runtime writes its log itself; its stdio goes to a separate
           // file so lines are not written twice into one.
@@ -1173,11 +1308,14 @@ void Core::launch_game(std::string_view id, std::string_view requested,
                                      std::to_string(options_.smoke_seconds)});
           std::map<std::string, PipeChannel::Handler, std::less<>> routes{
               {"asset.", download::asset_launcher_handler(
-                             *downloads_, data_, settings_.games,
+                             *downloads_, data_, root,
                              install.directory, key)}};
           // VENTURE_LOG_LEVEL: the launcher's log level, 0 (trace) to 4 (error).
           Environment environment{
               {"VENTURE_LOG_LEVEL", std::to_string(settings_.log_level)}};
+          // The menu chord setting; automatic leaves the runtime's default.
+          if (settings_.menu_button == 1) environment.push_back({"VENTURE_MENU_CHORD", "stick-clicks"});
+          if (settings_.menu_button == 2) environment.push_back({"VENTURE_MENU_CHORD", "off"});
           r.process.spawn(runtime, args, r.console, console,
                           [broker, routes = std::move(routes), details, key, queue = launch_queue_](const Json &request) {
                             const auto op = str(request, "op");
@@ -1276,9 +1414,9 @@ void Core::sync_steam() {
     titles.push_back({i.plan.package, g ? g->name : i.label.empty() ? i.plan.package : i.label, i.plan.app_id});
   }
   auto art = data_ / "cache/art";
-  auto root = settings_.games;
+  auto roots = settings_.roots();
   const bool online = !options_.offline;
-  worker_->submit([this, titles, art, root, generation, online](std::stop_token stop) -> Worker::Completion {
+  worker_->submit([this, titles, art, roots, generation, online](std::stop_token stop) -> Worker::Completion {
     try {
       // Steam's library sidebar wants the square app icon; fetch each listing's once.
       for (const auto &title : titles) {
@@ -1294,8 +1432,10 @@ void Core::sync_steam() {
         }
       }
       // A root may disappear or become unreadable after the UI's scan.
-      if (!fs::is_directory(root)) throw std::runtime_error("Games root is unavailable.");
-      (void)fs::directory_iterator(root); // Do not suppress permission errors.
+      for (const auto &root : roots) {
+        if (!fs::is_directory(root)) throw std::runtime_error("Games root is unavailable.");
+        (void)fs::directory_iterator(root); // Do not suppress permission errors.
+      }
       auto result = steam_library::sync(steam_library::discover_root(), paths::executable(), art, titles,
           [this, generation] { return steam_generation_.load() != generation || steam_library::running(); });
       return [this, result, generation] {
@@ -1316,6 +1456,9 @@ void Core::sync_steam() {
       auto message = std::string(e.what());
       return [this, message, generation] {
         steam_busy_ = false;
+        // Retrying every poll cannot fix it (an ambiguous Steam profile, an
+        // unreadable root); the next scan or install tries again.
+        steam_pending_ = false;
         log::warn("steam", "Steam sync skipped: {}", message);
         if (steam_restart_) {
           steam_restart_ = false;
@@ -1392,11 +1535,22 @@ void Core::tick() {
                        epoch](std::stop_token stop) -> Worker::Completion {
         try {
           auto session = auth->complete(callback, stop);
-          auto snapshot = meta::Store(session.access_token, stop).library();
-          session.account_id = snapshot.account_id;
-          session.alias = snapshot.alias;
-          session.display_name = snapshot.display_name;
-          return [this, session, snapshot, epoch] {
+          meta::Store store(session.access_token, stop);
+          auto who = store.identity();
+          session.account_id = who.account_id;
+          session.alias = who.alias;
+          session.display_name = who.display_name;
+          // The account is saved even when its library cannot be listed yet;
+          // Refresh lists it later.
+          std::optional<meta::Snapshot> snapshot;
+          std::string library_error;
+          try {
+            snapshot = store.library();
+          } catch (...) {
+            library_error = exception_text();
+            log::warn("library", "Signed in, but the library could not be listed: {}", library_error);
+          }
+          return [this, session, snapshot, library_error, epoch] {
             if (epoch != epoch_)
               return;
             action([&] {
@@ -1416,8 +1570,13 @@ void Core::tick() {
               if (migrated.moved && first)
                 notice_ =
                     "Existing local saves were attached to your first account.";
-              library::merge(games_, snapshot, account_scope_);
-              warning_ = snapshot.warning;
+              if (snapshot) {
+                library::merge(games_, *snapshot, account_scope_);
+                warning_ = snapshot->warning;
+              } else {
+                refresh_error_ = library_error;
+                error(library_error);
+              }
               save_library();
             });
             signing_in_ = verifying_ = false;
@@ -1449,7 +1608,12 @@ void Core::tick() {
         game_locks_.erase(id);
         log::info("runtime", "Quest application {} exited with code {}.", id,
                   *r.exit);
-        if (*r.exit != 0) {
+        if (library::needed_meta_sign_in(r.log)) {
+          auto entry = game(id);
+          r.failure = "It needs a Meta account. Use Sign in at the bottom left with the account that owns it, then "
+                      "start it again.";
+          error(std::format("{} closed: {}", entry ? entry->name : id, r.failure));
+        } else if (*r.exit != 0) {
           // A runtime that failed before opening its log still wrote stderr.
           r.failure = library::runtime_failure(
               r.tail.empty() ? tail_log(r.console) : r.tail, *r.exit);
@@ -1467,6 +1631,11 @@ void Core::tick() {
       last_completed_ = complete;
       last_discarded_ = discarded;
       rescan();
+      for (const auto &j : jobs)
+        if (j.state == download::State::complete && j.saves_kept &&
+            saves_kept_notified_.insert(j.app_id + '/' + std::to_string(j.generation)).second)
+          notice_ = std::format("{} is installed with the saves already on this PC. To use the headset's saves "
+                                "instead, choose Import save data in its menu.", j.name);
     }
   }
 }

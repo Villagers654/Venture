@@ -44,6 +44,11 @@ struct Session {
   bool profile_eye_seen = false;
   std::uint64_t end_errors = 0, last_report_frame = 0;
   std::chrono::steady_clock::time_point last_report_time{};
+  // The first submission's display time and clock, for the display clock rate.
+  struct ClockSample { XrTime display = 0; std::int64_t ns = 0; };
+  ClockSample clock_first, clock_last;
+  std::int64_t clock_start_ns = 0;
+  bool clock_fact_logged = false;
   std::thread::id render_thread; // Thread that began the frame, not an EndFrame restriction.
   DisplayTiming& display_timing = display_timing_state();
   std::uint32_t guest_swap_interval = 1, logged_swap_interval = 0;

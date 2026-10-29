@@ -949,6 +949,67 @@ TEST_CASE("VrApi constant projective layers copy their texel across both eye fru
   venture::xr::install_xr_images(nullptr);
 }
 
+TEST_CASE("VrApi inverse alpha layers invert alpha through color scale and bias") {
+  venture::test::XrImageFixture images;
+  venture::xr::install_xr_images(&images);
+  vr::abi::Init init{1, 1, 1, 52, 0, 0x10300, {1, 2, 3}};
+  REQUIRE(vg::vrapi_Initialize(&init) == 0);
+  auto *ring = vg::vrapi_CreateTextureSwapChain3(0, 0x8058, 32, 32, 1, 1);
+  REQUIRE(ring);
+  vr::abi::Mode mode{2, 0, {1, 2, 3}, 4, 5, 6};
+  auto *mobile = vg::vrapi_EnterVrMode(&mode);
+  REQUIRE(mobile);
+  // RE4's fade layer: ONE_MINUS_SRC_ALPHA source, SRC_ALPHA destination.
+  vr::abi::Projection projection{};
+  projection.header = {1, 16, {1, 1, 1, .5f}, 5, 2, 0};
+  projection.head.pose.orientation.w = 1;
+  XrView eyes[2]{{XR_TYPE_VIEW}, {XR_TYPE_VIEW}};
+  for (int eye = 0; eye < 2; ++eye) {
+    auto &texture = projection.textures[eye];
+    texture.chain = ring;
+    texture.rect = {0, 0, 1, 1};
+    texture.tan_angles.m[0][0] = .5f;
+    texture.tan_angles.m[1][1] = -.5f;
+    texture.tan_angles.m[0][2] = texture.tan_angles.m[1][2] = -.5f;
+    texture.tan_angles.m[2][2] = -1;
+    eyes[eye].pose.orientation.w = 1;
+    eyes[eye].fov = {-.8f, .8f, .8f, -.8f};
+  }
+  vr::LayerStorage storage;
+  std::vector<const XrCompositionLayerBaseHeader *> layers;
+  auto image = [](vr::abi::TextureSwapChain *, int, vr::abi::Rect, int, bool, XrSwapchainSubImage &) {
+    return XR_SUCCESS;
+  };
+  REQUIRE(vr::translate_layer(projection.header, eyes, image, storage, layers) == XR_SUCCESS);
+  REQUIRE(layers.size() == 1);
+  CHECK(storage.projection.layerFlags == (XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT |
+                                          XR_COMPOSITION_LAYER_UNPREMULTIPLIED_ALPHA_BIT));
+  CHECK(storage.projection.next == &storage.color);
+  // a' = 1 - a * scale: source-alpha blending then weighs source by 1 - a.
+  CHECK(storage.color.colorScale.a == -.5f);
+  CHECK(storage.color.colorBias.a == 1);
+  CHECK(storage.color.colorScale.r == 1);
+  CHECK(storage.color.colorBias.r == 0);
+  // A layer the host cannot show is left out; the frame still displays.
+  vr::abi::Projection unsupported = projection;
+  unsupported.header.src_blend = 3;
+  unsupported.header.dst_blend = 0;
+  projection.header.color_scale = {1, 1, 1, 1};
+  projection.header.src_blend = 1;
+  projection.header.dst_blend = 0;
+  const vr::abi::LayerHeader *headers[]{&unsupported.header, &projection.header};
+  vr::abi::Submit submit{0, 1, 1, 0, 0, 2, headers};
+  const auto before = ventureMockXrStats();
+  REQUIRE(vg::vrapi_SubmitFrame2(mobile, &submit) == 0);
+  CHECK(images.copies == 1);
+  CHECK(ventureMockXrStats().ends == before.ends + 1);
+  CHECK(ventureMockXrStats().projection == before.projection + 1);
+  vg::vrapi_LeaveVrMode(mobile);
+  vg::vrapi_DestroyTextureSwapChain(ring);
+  vg::vrapi_Shutdown();
+  venture::xr::install_xr_images(nullptr);
+}
+
 namespace {
 // Exercise the optional host sampler extension without changing the mock's
 // advertised capabilities. All other XR calls still reach the real mock loader.
@@ -2192,6 +2253,33 @@ TEST_CASE("VrApi future predictions preserve a waited input snapshot") {
   REQUIRE(vg::vrapi_GetCurrentInputState(mobile, 1, &left.header) == 0);
   CHECK((left.buttons & 0x100000u) != 0);  // the held chord keeps the menu held
   CHECK(left.trigger == doctest::Approx(0.75));
+  vg::vrapi_LeaveVrMode(mobile); vg::vrapi_Shutdown();
+  venture::xr::install_xr_images(nullptr); MockXrScript restored{}; ventureMockXrSetScript(&restored);
+}
+
+TEST_CASE("A menu the host binds only to its system button still gets the stick-click menu") {
+  // SteamVR with Index controllers reports the game's menu on the system
+  // button, which opens SteamVR's dashboard and never reaches the game.
+  venture::test::ScopedMenuMode automatic("");
+  venture::test::XrImageFixture images; venture::xr::install_xr_images(&images);
+  vr::abi::Init init{1, 1, 1, 42, 0, 0x10300, {1, 2, 3}};
+  REQUIRE(vg::vrapi_Initialize(&init) == 0);
+  vr::abi::Mode mode{2, 0, {1, 2, 3}, 4, 5, 6};
+  auto* mobile = vg::vrapi_EnterVrMode(&mode); REQUIRE(mobile);
+  venture::test::NativeMenuBindingOverride host_menu(vr::state().input.menu);
+  host_menu.missing = false;
+  REQUIRE(XR_SUCCEEDED(xrStringToPath(venture::xr::host_xr().instance, "/user/hand/left/input/system/click",
+                                      &host_menu.appeared_source)));
+  MockXrScript script{}; ventureMockXrSetScript(&script);
+  REQUIRE(vr::sync_input() == XR_SUCCESS);
+  script.left.thumbstick_click = script.right.thumbstick_click = true;
+  ventureMockXrSetScript(&script); REQUIRE(vr::sync_input() == XR_SUCCESS);
+  std::this_thread::sleep_for(std::chrono::milliseconds(510));
+  REQUIRE(vg::vrapi_WaitFrame(mobile, 1) == 0);
+  vr::abi::RemoteState left{}; left.header.type = 4;
+  REQUIRE(vg::vrapi_GetCurrentInputState(mobile, 1, &left.header) == 0);
+  CHECK(host_menu.bound_queries > 0);
+  CHECK((left.buttons & 0x100000u) != 0);
   vg::vrapi_LeaveVrMode(mobile); vg::vrapi_Shutdown();
   venture::xr::install_xr_images(nullptr); MockXrScript restored{}; ventureMockXrSetScript(&restored);
 }

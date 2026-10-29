@@ -68,6 +68,16 @@ its progress, pause, resume and free-space check; an interrupted import
 resumes from the same source, continuing a partly copied file where it
 stopped. Split APKs are listed as skipped.
 
+**Import save data** in an installed game's menu (`venture-cli import-saves
+GAME --from FOLDER | --headset`) brings in saves alone, for the account the
+game plays as: from a headset, its `/sdcard/Android/data/<package>/` (a
+game's private storage cannot be read over adb); from this computer, a copy
+of that folder (or of `/sdcard`, or of the folder's `files/`), or a copy of
+the game's private storage (`shared_prefs/`, `databases/`...). Each top-level
+folder the import brings replaces the current one, which first moves to
+`data/save-backups/<account>/<package>/<time>/` in the data folder. The game
+must be closed, and cannot start until the import finishes.
+
 ## Steam library
 
 Settings → **Add games to Steam** is enabled by default (`addGamesToSteam`

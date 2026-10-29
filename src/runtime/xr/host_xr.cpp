@@ -121,8 +121,20 @@ HostXr initialize_host() {
               XR_VERSION_PATCH(h.runtime_version), int(result), h.available ? "" : " (flat mode)");
     if (h.available) {
       XrSystemProperties system_properties{XR_TYPE_SYSTEM_PROPERTIES};
-      if (XR_SUCCEEDED(xrGetSystemProperties(h.instance, h.system, &system_properties)))
+      if (XR_SUCCEEDED(xrGetSystemProperties(h.instance, h.system, &system_properties))) {
         recall_display_period(h.runtime_name, system_properties.systemName);
+        // [facts] lines are collected whole into debug reports.
+        XrViewConfigurationView views[2]{{XR_TYPE_VIEW_CONFIGURATION_VIEW}, {XR_TYPE_VIEW_CONFIGURATION_VIEW}};
+        std::uint32_t count = 0;
+        if (XR_FAILED(xrEnumerateViewConfigurationViews(h.instance, h.system, XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO,
+                                                        2, &count, views)))
+          count = 0;
+        log::info("facts", "Host runtime: {} {}.{}.{}; headset: {} (vendor {:#x}); recommended eye {}x{}, max {}x{}",
+                  h.runtime_name, XR_VERSION_MAJOR(h.runtime_version), XR_VERSION_MINOR(h.runtime_version),
+                  XR_VERSION_PATCH(h.runtime_version), system_properties.systemName, system_properties.vendorId,
+                  count ? views[0].recommendedImageRectWidth : 0, count ? views[0].recommendedImageRectHeight : 0,
+                  count ? views[0].maxImageRectWidth : 0, count ? views[0].maxImageRectHeight : 0);
+      }
     }
     if (result == XR_ERROR_RUNTIME_UNAVAILABLE)
       h.error = host_initialization_error(result, "get the headset system");

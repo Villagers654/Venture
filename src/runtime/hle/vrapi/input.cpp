@@ -217,8 +217,14 @@ XrResult joints(int hand, XrTime time, XrHandJointLocationsEXT &out) {
   if (!state().input.hands_supported)
     return XR_ERROR_FEATURE_UNSUPPORTED;
   XrHandJointsLocateInfoEXT li{XR_TYPE_HAND_JOINTS_LOCATE_INFO_EXT, nullptr, state().app, time};
-  return host_call<PFN_xrLocateHandJointsEXT, "xrLocateHandJointsEXT">(state().input.trackers[hand],
-                                              &li, &out);
+  auto r = host_call<PFN_xrLocateHandJointsEXT, "xrLocateHandJointsEXT">(state().input.trackers[hand],
+                                                                         &li, &out);
+  if (XR_SUCCEEDED(r))
+    for (std::uint32_t i = 0; i < out.jointCount; ++i) {
+      hle::openxr::sanitize(out.jointLocations[i].locationFlags, out.jointLocations[i].pose);
+      if (!std::isfinite(out.jointLocations[i].radius)) out.jointLocations[i].radius = 0;
+    }
+  return r;
 }
 XrQuaternionf hand_basis(bool left) {
   // OVR hand frames point along +/-X, whereas OpenXR fingers point along -Z.

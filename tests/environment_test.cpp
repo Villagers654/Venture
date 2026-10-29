@@ -43,3 +43,14 @@ TEST_CASE("host environment concurrent readers survive snapshot refresh") {
   CHECK_FALSE(bad.load());
   CHECK(std::string_view(first)=="first");
 }
+#ifdef _WIN32
+TEST_CASE("host environment values are UTF-8 whatever the ANSI code page") {
+  Fixture f;
+  // A Turkish user folder: S-cedilla and u-umlaut are outside most ANSI code pages' ASCII.
+  SetEnvironmentVariableW(L"VENTURE_ENV_TEST_VALUE", L"C:\\Users\\\u015e\u00fckr\u00fc\\bin");
+  venture::environment::refresh();
+  const char* value = venture::environment::getenv(f.key);
+  REQUIRE(value);
+  CHECK(std::string_view(value) == "C:\\Users\\\xC5\x9E\xC3\xBCkr\xC3\xBC\\bin");
+}
+#endif

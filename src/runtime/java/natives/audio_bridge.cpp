@@ -104,6 +104,9 @@ jint JNICALL control(JNIEnv* env, jclass, jlong id, jint operation) {
       }
       case 4: result = stream.flush_cancelling_drain(); break;
       case 5: return value->stopped.load() ? 0 : static_cast<jint>(stream.frames_read.load() - value->origin.load());
+      // AudioRecord: plain start and stop (input has nothing to drain).
+      case 6: return result_code(stream.start());
+      case 7: return result_code(stream.stop());
       default: return -2;
     }
     if (!result) value->origin.store(stream.frames_read.load());
@@ -135,6 +138,56 @@ jint JNICALL volume(JNIEnv*, jclass, jlong id, jfloat left, jfloat right) {
   return 0;
 }
 void JNICALL shutdown(JNIEnv*, jclass) { shutdown_audio_tracks(); }
+
+// android.media.AudioRecord: the default input, as AAudio and OpenSL record.
+jlong JNICALL open_input(JNIEnv* env, jclass, jint rate, jint channels, jint encoding, jint frames) {
+  return guard(env, [&]() -> jlong {
+    audio::Config c;
+    c.api = "AudioRecord";
+    c.direction = audio::Direction::input;
+    c.rate = rate; c.channels = channels;
+    switch (encoding) {
+      case 2: c.format = audio::Format::i16; break;
+      case 3: c.format = audio::Format::u8; break;
+      case 4: c.format = audio::Format::f32; break;
+      default: return 0;
+    }
+    c.burst_frames = audio::Backend::get().frames_per_burst(c.direction, rate);
+    if (c.burst_frames < 1) return 0;
+    c.callback_frames = c.burst_frames;
+    c.capacity = std::min(65536, std::max(frames, c.burst_frames * 4));
+    int result = 0;
+    auto stream = audio::Stream::create(c, &result);
+    if (!stream) { log::warn("AudioRecord", "Recording open failed: {}", result); return 0; }
+    // Wakes blocking Java readers outside the real-time device callback.
+    stream->launch_worker([](audio::Stream&) {});
+    log::info("AudioRecord", "Recording opened: {} Hz, {} channels, encoding {}", rate, channels, encoding);
+    auto value = std::make_shared<Track>(); value->stream = std::move(stream);
+    std::lock_guard lock(track_mutex);
+    if (closing) { value->stream->close(); return 0; }
+    const auto id = next_track++;
+    tracks.emplace(id, std::move(value));
+    return id;
+  });
+}
+jint JNICALL read(JNIEnv* env, jclass, jlong id, jbyteArray bytes, jint offset, jint size, jboolean blocking) {
+  return guard(env, [&]() -> jint {
+    auto value = track(id);
+    if (!value) return -3;
+    if (!bytes || offset < 0 || size < 0 || offset > env->GetArrayLength(bytes) - size) return -2;
+    auto& stream = *value->stream;
+    const auto stride = audio::sample_bytes(stream.config.format) * stream.config.channels;
+    const auto count = size / stride;
+    if (!count) return 0;
+    std::vector<jbyte> pcm(count * stride);
+    auto* caller = blocking ? &GuestThread::adopt_current() : nullptr;
+    const auto result = stream.transfer(caller, pcm.data(), static_cast<int>(count),
+        blocking ? std::numeric_limits<std::int64_t>::max() : 0, false);
+    if (result < 0) return result_code(result);
+    env->SetByteArrayRegion(bytes, offset, static_cast<jsize>(result * stride), pcm.data());
+    return static_cast<jint>(result * stride);
+  });
+}
 }
 void shutdown_audio_tracks() {
   shutdown_media_players();
@@ -153,6 +206,15 @@ void register_audio_tracks(JNIEnv* env) {
     {const_cast<char*>("nativeShutdown"), const_cast<char*>("()V"), reinterpret_cast<void*>(shutdown)},
   };
   env->RegisterNatives(cls, methods, static_cast<jint>(std::size(methods)));
+  env->DeleteLocalRef(cls);
+  cls = env->FindClass("android/media/AudioRecord");
+  if (!cls) return;
+  const JNINativeMethod record[]{
+    {const_cast<char*>("nativeOpen"), const_cast<char*>("(IIII)J"), reinterpret_cast<void*>(open_input)},
+    {const_cast<char*>("nativeControl"), const_cast<char*>("(JI)I"), reinterpret_cast<void*>(control)},
+    {const_cast<char*>("nativeRead"), const_cast<char*>("(J[BIIZ)I"), reinterpret_cast<void*>(read)},
+  };
+  env->RegisterNatives(cls, record, static_cast<jint>(std::size(record)));
   env->DeleteLocalRef(cls);
 }
 }

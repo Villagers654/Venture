@@ -149,7 +149,7 @@ jobs:
         run: |
           sudo apt-get update -q && sudo apt-get install -y -q flatpak ostree librsvg2-common
           flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
-          flatpak install --user -y --noninteractive flathub org.freedesktop.Platform//26.08
+          flatpak install --user -y --noninteractive flathub org.gnome.Platform//51
           curl -fsSL -o "$RUNNER_TEMP/appimagetool" "$APPIMAGETOOL_URL"
           echo "$APPIMAGETOOL_SHA256  $RUNNER_TEMP/appimagetool" | sha256sum -c -
           chmod +x "$RUNNER_TEMP/appimagetool"

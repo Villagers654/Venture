@@ -1090,6 +1090,10 @@ VkResult create_device_impl(VkPhysicalDevice physical, const VkDeviceCreateInfo*
          reinterpret_cast<VkPhysicalDeviceHostImageCopyFeatures*>(next)->hostImageCopy))
       return VK_ERROR_FEATURE_NOT_PRESENT;
   }
+  if (!info->pEnabledFeatures && !base_features) {
+    if (auto r = host_texture_features(physical, features); r != VK_SUCCESS) return r;
+    copy.pEnabledFeatures = &features;
+  }
   // A private sparse/compute queue lets first-use initialization wait for
   // completed texture producers without waiting for unrelated guest work.
   VkPhysicalDeviceFeatures native_features{};
@@ -1201,7 +1205,9 @@ VkResult create_device_impl(VkPhysicalDevice physical, const VkDeviceCreateInfo*
     host<PFN_vkGetPhysicalDeviceProperties>(physical, "vkGetPhysicalDeviceProperties")(physical, &properties);
     const bool flags2 = properties.apiVersion >= VK_API_VERSION_1_3 || std::ranges::any_of(host_extensions,
         [](const auto& e) { return std::string_view(e.extensionName) == VK_KHR_FORMAT_FEATURE_FLAGS_2_EXTENSION_NAME; });
-    auto query = host<PFN_vkGetPhysicalDeviceFormatProperties2>(physical, "vkGetPhysicalDeviceFormatProperties2");
+    // A 1.0 game instance has only the KHR alias (lavapipe's loader dispatch is null for the core name).
+    auto query = reinterpret_cast<PFN_vkGetPhysicalDeviceFormatProperties2>(
+        raw_physical_proc(physical, "vkGetPhysicalDeviceFormatProperties2"));
     std::string kept;
     for (std::uint32_t declared = 1; flags2 && query && declared < 64; ++declared) {
       const auto format = storage_image_format(declared);

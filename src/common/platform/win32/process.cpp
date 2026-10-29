@@ -301,6 +301,17 @@ void reveal_file(const fs::path &file) {
                                               SW_SHOWNORMAL)) <= 32)
     throw std::runtime_error("Could not show the file.");
 }
+void start_detached(const fs::path &executable, const std::vector<std::string> &args) {
+  std::wstring parameters;
+  for (const auto &a : args) {
+    if (!parameters.empty()) parameters += L' ';
+    parameters += quote_windows_arg(paths::from_utf8(a).wstring());
+  }
+  if (reinterpret_cast<INT_PTR>(ShellExecuteW(nullptr, L"open", executable.c_str(),
+                                              parameters.empty() ? nullptr : parameters.c_str(),
+                                              executable.parent_path().c_str(), SW_SHOWNORMAL)) <= 32)
+    throw std::runtime_error("Could not start " + paths::utf8(executable.filename()) + ".");
+}
 void open_url(const std::string &url) {
   if (reinterpret_cast<INT_PTR>(ShellExecuteW(nullptr, L"open", paths::from_utf8(url).c_str(), nullptr, nullptr,
                                               SW_SHOWNORMAL)) <= 32)

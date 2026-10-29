@@ -1,0 +1,122 @@
+#version 450
+// RGBA8 texels (the decode's tight output) to BC7 mode 6 blocks: one subset,
+// RGBA 7-bit endpoints with a p-bit each, 4-bit indices. One invocation per 4x4
+// block: principal-axis endpoints, nearest indices, one least-squares refit.
+layout(local_size_x=8, local_size_y=8, local_size_z=1) in;
+layout(set=0, binding=0, std430) readonly buffer Source { uint words[]; } src;
+layout(set=0, binding=1, std430) writeonly buffer Destination { uint words[]; } dst;
+layout(push_constant) uniform Params {
+    uint width;
+    uint height;
+} p;
+
+const uint weights[16] = uint[16](0u, 4u, 9u, 13u, 17u, 21u, 26u, 30u, 34u, 38u, 43u, 47u, 51u, 55u, 60u, 64u);
+vec4 texels[16];
+uint indices[16];
+uvec4 low, high;  // 7-bit endpoints
+uint lowP, highP;
+
+void quantize(vec4 v, out uvec4 q, out uint pbit) {
+    v = clamp(v, 0.0, 255.0);
+    float best = 1e30;
+    for (uint b = 0u; b < 2u; ++b) {
+        uvec4 c = uvec4(clamp(round((v - float(b)) * 0.5), 0.0, 127.0));
+        vec4 d = vec4(c * 2u + b) - v;
+        float e = dot(d, d);
+        if (e < best) { best = e; q = c; pbit = b; }
+    }
+}
+// Nearest index per texel: the projection's rounding and its neighbours, since
+// the weights are close to, but not exactly, k * 64 / 15.
+void chooseIndices() {
+    uvec4 e0 = low * 2u + lowP, e1 = high * 2u + highP;
+    vec4 base = vec4(e0), axis = vec4(e1) - base;
+    float length2 = dot(axis, axis);
+    for (uint i = 0u; i < 16u; ++i) {
+        float t = length2 > 0.0 ? dot(texels[i] - base, axis) / length2 : 0.0;
+        int guess = clamp(int(t * 15.0 + 0.5), 0, 15);
+        uint best = 0u; float bestError = 1e30;
+        for (int k = max(guess - 1, 0); k <= min(guess + 1, 15); ++k) {
+            uint w = weights[k];
+            vec4 d = vec4((e0 * (64u - w) + e1 * w + 32u) >> 6u) - texels[i];
+            float e = dot(d, d);
+            if (e < bestError) { bestError = e; best = uint(k); }
+        }
+        indices[i] = best;
+    }
+}
+uint encoded[4];
+uint bitPosition;
+void putBits(uint value, uint count) {
+    uint w = bitPosition >> 5u, o = bitPosition & 31u;
+    encoded[w] |= value << o;
+    if (o + count > 32u) encoded[w + 1u] |= value >> (32u - o);
+    bitPosition += count;
+}
+
+void main() {
+    uvec2 block = gl_GlobalInvocationID.xy, blocks = (uvec2(p.width, p.height) + 3u) >> 2u;
+    if (block.x >= blocks.x || block.y >= blocks.y) return;
+    // Texels past the edge repeat the edge, so partial blocks fit only real colors.
+    vec4 mean = vec4(0), lo = vec4(255), hi = vec4(0);
+    for (uint i = 0u; i < 16u; ++i) {
+        uvec2 xy = min(block * 4u + uvec2(i & 3u, i >> 2u), uvec2(p.width, p.height) - 1u);
+        texels[i] = unpackUnorm4x8(src.words[xy.y * p.width + xy.x]) * 255.0;
+        mean += texels[i]; lo = min(lo, texels[i]); hi = max(hi, texels[i]);
+    }
+    mean *= 1.0 / 16.0;
+    mat4 covariance = mat4(0);
+    for (uint i = 0u; i < 16u; ++i) {
+        vec4 d = texels[i] - mean;
+        covariance += outerProduct(d, d);
+    }
+    // Principal axis by power iteration, from the bounding-box diagonal.
+    vec4 axis = hi - lo;
+    for (int i = 0; i < 6; ++i) {
+        vec4 next = covariance * axis;
+        float scale = max(max(abs(next.x), abs(next.y)), max(abs(next.z), abs(next.w)));
+        if (scale == 0.0) break;
+        axis = next / scale;
+    }
+    float tmin = 0.0, tmax = 0.0;
+    if (dot(axis, axis) > 0.0) {
+        axis = normalize(axis);
+        tmin = 1e30; tmax = -1e30;
+        for (uint i = 0u; i < 16u; ++i) {
+            float t = dot(texels[i] - mean, axis);
+            tmin = min(tmin, t); tmax = max(tmax, t);
+        }
+    }
+    quantize(mean + axis * tmin, low, lowP);
+    quantize(mean + axis * tmax, high, highP);
+    chooseIndices();
+    // Least-squares endpoints for those indices.
+    float aa = 0.0, ab = 0.0, bb = 0.0;
+    vec4 ac = vec4(0), bc = vec4(0);
+    for (uint i = 0u; i < 16u; ++i) {
+        float b = float(weights[indices[i]]) / 64.0, a = 1.0 - b;
+        aa += a * a; ab += a * b; bb += b * b; ac += a * texels[i]; bc += b * texels[i];
+    }
+    float det = aa * bb - ab * ab;
+    if (abs(det) > 1e-4) {
+        quantize((bb * ac - ab * bc) / det, low, lowP);
+        quantize((aa * bc - ab * ac) / det, high, highP);
+        chooseIndices();
+    }
+    // The first index's top bit is implicit zero: swap the endpoints otherwise.
+    bool swapped = indices[0] >= 8u;
+    uvec4 q0 = swapped ? high : low, q1 = swapped ? low : high;
+    uint p0 = swapped ? highP : lowP, p1 = swapped ? lowP : highP;
+    encoded = uint[4](0u, 0u, 0u, 0u);
+    bitPosition = 0u;
+    putBits(64u, 7u);
+    for (int c = 0; c < 4; ++c) { putBits(q0[c], 7u); putBits(q1[c], 7u); }
+    putBits(p0, 1u);
+    putBits(p1, 1u);
+    for (uint i = 0u; i < 16u; ++i) putBits(swapped ? 15u - indices[i] : indices[i], i == 0u ? 3u : 4u);
+    uint address = (block.y * blocks.x + block.x) * 4u;
+    dst.words[address] = encoded[0];
+    dst.words[address + 1u] = encoded[1];
+    dst.words[address + 2u] = encoded[2];
+    dst.words[address + 3u] = encoded[3];
+}

@@ -842,12 +842,25 @@ TEST_CASE("XR legacy OVRPlugin reference spaces preserve floor tracking") {
   XrSpace unsupported{};
   CHECK(xg::xrCreateReferenceSpace(session, &info, &unsupported) == XR_ERROR_REFERENCE_SPACE_UNSUPPORTED);
   CHECK(unsupported == XR_NULL_HANDLE);
-  // The legacy alias must not manufacture floor tracking on an incapable host.
+  // A host without XR_EXT_local_floor (Virtual Desktop) gets that extension's
+  // floor: LOCAL lowered to the STAGE floor, where the host's own would be.
   info.referenceSpaceType = static_cast<XrReferenceSpaceType>(1000043001);
   auto floor_extension = venture::xr::host_xr().enabled_extensions.extract("XR_EXT_local_floor");
-  CHECK(xg::xrCreateReferenceSpace(session, &info, &unsupported) == XR_ERROR_REFERENCE_SPACE_UNSUPPORTED);
-  CHECK(unsupported == XR_NULL_HANDLE);
+  XrSpace emulated{};
+  REQUIRE(xg::xrCreateReferenceSpace(session, &info, &emulated) == XR_SUCCESS);
   venture::xr::host_xr().enabled_extensions.insert(std::move(floor_extension));
+  XrReferenceSpaceCreateInfo floor_info{XR_TYPE_REFERENCE_SPACE_CREATE_INFO, nullptr,
+                                        XR_REFERENCE_SPACE_TYPE_LOCAL_FLOOR, {{0, 0, 0, 1}, {0, 0, 0}}};
+  XrSpace floor{};
+  REQUIRE(::xrCreateReferenceSpace(session, &floor_info, &floor) == XR_SUCCESS);
+  XrSpaceLocation offset{XR_TYPE_SPACE_LOCATION};
+  REQUIRE(::xrLocateSpace(emulated, floor, time, &offset) == XR_SUCCESS);
+  CHECK(offset.pose.position.x == doctest::Approx(0).epsilon(.00001));
+  CHECK(offset.pose.position.y == doctest::Approx(0).epsilon(.00001));
+  CHECK(offset.pose.position.z == doctest::Approx(0).epsilon(.00001));
+  CHECK(offset.pose.orientation.w == doctest::Approx(1));
+  REQUIRE(::xrDestroySpace(floor) == XR_SUCCESS);
+  REQUIRE(xg::xrDestroySpace(emulated) == XR_SUCCESS);
   REQUIRE(xg::xrDestroySpace(view) == XR_SUCCESS);
   REQUIRE(xg::xrDestroySession(session) == XR_SUCCESS);
   REQUIRE(xg::xrDestroyInstance(instance) == XR_SUCCESS);
@@ -1143,6 +1156,136 @@ TEST_CASE("XR GLES subimage rects reach the host in the bridged image's row orde
     CHECK(host[3].imageRect.offset.y == 1);
     CHECK(venture::hle::openxr::state().swapchains.at(overlay).host_flip);
     CHECK_FALSE(venture::hle::openxr::state().swapchains.at(eyes).host_flip);
+  }
+  // Unreal can round a crop a pixel or two past the right and bottom edges;
+  // the host copy is clipped instead of the host rejecting the frame.
+  views[1].subImage.imageRect = {{4, 1}, {30, 25}};
+  {
+    XrFrameState timing{XR_TYPE_FRAME_STATE};
+    REQUIRE(xg::xrWaitFrame(session, nullptr, &timing) == XR_SUCCESS);
+    REQUIRE(xg::xrBeginFrame(session, nullptr) == XR_SUCCESS);
+    for (auto chain : {eyes, overlay}) {
+      std::uint32_t index{};
+      REQUIRE(xg::xrAcquireSwapchainImage(chain, nullptr, &index) == XR_SUCCESS);
+      XrSwapchainImageWaitInfo wait{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO, nullptr, XR_INFINITE_DURATION};
+      REQUIRE(xg::xrWaitSwapchainImage(chain, &wait) == XR_SUCCESS);
+      REQUIRE(xg::xrReleaseSwapchainImage(chain, nullptr) == XR_SUCCESS);
+    }
+    XrFrameEndInfo end{XR_TYPE_FRAME_END_INFO, nullptr, timing.predictedDisplayTime,
+                       XR_ENVIRONMENT_BLEND_MODE_OPAQUE, 3, layers};
+    REQUIRE(xg::xrEndFrame(session, &end) == XR_SUCCESS);
+    XrSwapchainSubImage host[5]{};
+    REQUIRE(ventureMockXrLastSubImages(host, 5) == 4);
+    CHECK(host[1].imageRect.offset.x == 4);
+    CHECK(host[1].imageRect.offset.y == 0);
+    CHECK(host[1].imageRect.extent.width == 28);
+    CHECK(host[1].imageRect.extent.height == 23);
+    CHECK(views[1].subImage.imageRect.extent.width == 30);
+  }
+  REQUIRE(xg::xrRequestExitSession(session) == XR_SUCCESS);
+  poll();
+  CHECK(xg::xrEndSession(session) == XR_SUCCESS);
+  CHECK(xg::xrDestroySpace(space) == XR_SUCCESS);
+  CHECK(xg::xrDestroySwapchain(overlay) == XR_SUCCESS);
+  CHECK(xg::xrDestroySwapchain(eyes) == XR_SUCCESS);
+  CHECK(xg::xrDestroySession(session) == XR_SUCCESS);
+  CHECK(xg::xrDestroyInstance(instance) == XR_SUCCESS);
+  venture::xr::install_xr_images(nullptr);
+}
+
+TEST_CASE("XR leaves out the smallest layers when the host takes fewer than the game submits") {
+  // SteamVR on Linux refused every frame (XR_ERROR_LAYER_LIMIT_EXCEEDED) once
+  // AC Nexus showed more panels than it takes; the game froze.
+  struct LayerLimit {
+    LayerLimit() { set("2"); }
+    ~LayerLimit() { set(""); }
+    static void set(const char* value) {
+#ifdef _WIN32
+      _putenv_s("VENTURE_MOCK_MAX_LAYERS", value);
+#else
+      if (*value) setenv("VENTURE_MOCK_MAX_LAYERS", value, 1); else unsetenv("VENTURE_MOCK_MAX_LAYERS");
+#endif
+      venture::environment::refresh();
+      ventureMockXrRefreshEnvironment();
+    }
+  } limit;
+  venture::test::XrImageFixture interop;
+  venture::xr::install_xr_images(&interop);
+  const char* extensions[]{"XR_KHR_opengl_es_enable", "XR_KHR_composition_layer_cylinder",
+                           "XR_FB_composition_layer_image_layout"};
+  XrInstanceCreateInfo create{XR_TYPE_INSTANCE_CREATE_INFO};
+  create.applicationInfo.apiVersion = XR_MAKE_VERSION(1, 0, 0);
+  create.enabledExtensionNames = extensions;
+  create.enabledExtensionCount = 3;
+  XrInstance instance{};
+  REQUIRE(xg::xrCreateInstance(&create, &instance) == XR_SUCCESS);
+  xg::GlesBinding binding{XR_TYPE_GRAPHICS_BINDING_OPENGL_ES_ANDROID_KHR, nullptr, 1, 2, 3};
+  XrSessionCreateInfo session_info{XR_TYPE_SESSION_CREATE_INFO, &binding, 0, 1};
+  XrSession session{};
+  REQUIRE(xg::xrCreateSession(instance, &session_info, &session) == XR_SUCCESS);
+  XrReferenceSpaceCreateInfo space_info{XR_TYPE_REFERENCE_SPACE_CREATE_INFO, nullptr,
+      XR_REFERENCE_SPACE_TYPE_LOCAL, {{0, 0, 0, 1}, {0, 0, 0}}};
+  XrSpace space{};
+  REQUIRE(xg::xrCreateReferenceSpace(session, &space_info, &space) == XR_SUCCESS);
+  auto make_chain = [&](std::uint32_t width, std::uint32_t height, std::uint32_t layers) {
+    XrSwapchainCreateInfo info{XR_TYPE_SWAPCHAIN_CREATE_INFO};
+    info.format = 0x8058;  // GL_RGBA8
+    info.width = width;
+    info.height = height;
+    info.arraySize = layers;
+    info.sampleCount = info.mipCount = info.faceCount = 1;
+    info.usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT;
+    XrSwapchain chain{};
+    REQUIRE(xg::xrCreateSwapchain(session, &info, &chain) == XR_SUCCESS);
+    return chain;
+  };
+  const auto eyes = make_chain(32, 24, 2);
+  const auto overlay = make_chain(16, 8, 1);
+  auto poll = [&] {
+    XrEventDataBuffer event{XR_TYPE_EVENT_DATA_BUFFER};
+    while (xg::xrPollEvent(instance, &event) == XR_SUCCESS) event = {XR_TYPE_EVENT_DATA_BUFFER};
+  };
+  poll();
+  XrSessionBeginInfo begin{XR_TYPE_SESSION_BEGIN_INFO, nullptr, XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO};
+  REQUIRE(xg::xrBeginSession(session, &begin) == XR_SUCCESS);
+  poll();
+  // OVRPlugin dynamic resolution renders part of a GLES image. Its rects are
+  // in XR_KHR_opengl_es_enable coordinates, with the origin at the lower left.
+  XrCompositionLayerProjectionView views[2]{{XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW},
+                                           {XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW}};
+  for (auto& view : views) {
+    view.pose.orientation.w = 1;
+    view.fov = {-0.5f, 0.5f, 0.5f, -0.5f};
+  }
+  views[0].subImage = {eyes, {{0, 0}, {32, 16}}, 0};
+  views[1].subImage = {eyes, {{4, 1}, {24, 20}}, 1};
+  XrCompositionLayerProjection projection{XR_TYPE_COMPOSITION_LAYER_PROJECTION, nullptr, 0, space, 2, views};
+  XrCompositionLayerQuad quad{XR_TYPE_COMPOSITION_LAYER_QUAD, nullptr, 0, space, XR_EYE_VISIBILITY_BOTH,
+      {overlay, {{0, 0}, {16, 8}}, 0}, {{0, 0, 0, 1}, {0, 0, -2}}, {2, 1}};
+  XrCompositionLayerCylinderKHR cylinder{XR_TYPE_COMPOSITION_LAYER_CYLINDER_KHR, nullptr, 0, space,
+      XR_EYE_VISIBILITY_BOTH, {overlay, {{2, 1}, {12, 3}}, 0}, {{0, 0, 0, 1}, {0, 0, 0}}, 2, 1, 4};
+  const XrCompositionLayerBaseHeader* layers[]{
+      reinterpret_cast<const XrCompositionLayerBaseHeader*>(&projection),
+      reinterpret_cast<const XrCompositionLayerBaseHeader*>(&quad),
+      reinterpret_cast<const XrCompositionLayerBaseHeader*>(&cylinder)};
+  for (int frame = 0; frame < 2; ++frame) {
+    XrFrameState timing{XR_TYPE_FRAME_STATE};
+    REQUIRE(xg::xrWaitFrame(session, nullptr, &timing) == XR_SUCCESS);
+    REQUIRE(xg::xrBeginFrame(session, nullptr) == XR_SUCCESS);
+    for (auto chain : {eyes, overlay}) {
+      std::uint32_t index{};
+      REQUIRE(xg::xrAcquireSwapchainImage(chain, nullptr, &index) == XR_SUCCESS);
+      XrSwapchainImageWaitInfo wait{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO, nullptr, XR_INFINITE_DURATION};
+      REQUIRE(xg::xrWaitSwapchainImage(chain, &wait) == XR_SUCCESS);
+      REQUIRE(xg::xrReleaseSwapchainImage(chain, nullptr) == XR_SUCCESS);
+    }
+    XrFrameEndInfo end{XR_TYPE_FRAME_END_INFO, nullptr, timing.predictedDisplayTime,
+                       XR_ENVIRONMENT_BLEND_MODE_OPAQUE, 3, layers};
+    CHECK(xg::xrEndFrame(session, &end) == XR_SUCCESS);
+    // Both eye views and the quad; the cylinder, the smallest, is left out.
+    XrSwapchainSubImage host[5]{};
+    CHECK(ventureMockXrLastSubImages(host, 5) == 3);
+    CHECK(host[2].imageRect.extent.width == 16);
   }
   REQUIRE(xg::xrRequestExitSession(session) == XR_SUCCESS);
   poll();
@@ -2844,6 +2987,12 @@ TEST_CASE("XR Android chains, GLES image copies, host-clock conversion and hands
   REQUIRE(xg::xrLocateHandJointsEXT(tracker, &li, &locations) == XR_SUCCESS);
   CHECK_FALSE(locations.isActive);
   CHECK(joints[XR_HAND_JOINT_WRIST_EXT].locationFlags == 0);
+  // The mock leaves an inactive hand's joints NaN; the guest sees neutral values.
+  for (const auto& joint : joints) {
+    CHECK(joint.pose.orientation.w == 1);
+    CHECK(joint.pose.position.x == 0);
+    CHECK(joint.radius == 0);
+  }
   CHECK(xg::xrDestroySpace(stage) == XR_SUCCESS);
   XrHandTrackingMeshFB mesh{XR_TYPE_HAND_TRACKING_MESH_FB};
   CHECK(xg::xrGetHandMeshFB(tracker, &mesh) == XR_SUCCESS);
@@ -3240,9 +3389,10 @@ static std::uint32_t space_warp_frame(bool negotiated, bool validate_full_rate =
   auto color = swapchain(VK_FORMAT_R8G8B8A8_SRGB, XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT, 64);
   auto motion = swapchain(VK_FORMAT_R16G16B16A16_SFLOAT, XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT, mv_size);
   // Quest's depth format; where the GPU attaches no D24S8 (RADV), Venture backs it with a D32S8 chain.
-  const auto depth_format = std::ranges::count(formats, VK_FORMAT_D24_UNORM_S8_UINT)
+  // A host listing neither (SteamVR on AMD) still gets OVRPlugin's D24S8 request.
+  const auto depth_format = std::ranges::count(formats, VK_FORMAT_D24_UNORM_S8_UINT) ||
+                                    !std::ranges::count(formats, VK_FORMAT_D32_SFLOAT_S8_UINT)
       ? VK_FORMAT_D24_UNORM_S8_UINT : VK_FORMAT_D32_SFLOAT_S8_UINT;
-  REQUIRE(std::ranges::count(formats, depth_format) == 1);
   auto depth = swapchain(depth_format, XR_SWAPCHAIN_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, mv_size);
   XrReferenceSpaceCreateInfo spaceInfo{XR_TYPE_REFERENCE_SPACE_CREATE_INFO, nullptr,
       XR_REFERENCE_SPACE_TYPE_LOCAL, {{0, 0, 0, 1}, {0, 0, 0}}};
@@ -3394,6 +3544,34 @@ TEST_CASE("XR offers Vulkan guests D24 depth chains on hosts that attach only D3
   CHECK(xg::xrDestroySwapchain(chain) == XR_SUCCESS);
   CHECK(xg::xrDestroySession(session) == XR_SUCCESS);
   CHECK(xg::xrDestroyInstance(instance) == XR_SUCCESS);
+}
+
+TEST_CASE("XR keeps a depth chain the host has no format for, and leaves its depth out of host frames") {
+  // Vampire: The Masquerade - Justice (OVRPlugin) asks for D24S8 depth chains
+  // without checking the list; SteamVR on an RX 5700 XT offers no D24S8 or
+  // D32S8, refused them, and every frame then failed: a black screen.
+  struct NoStencil {
+    std::string previous;
+    bool present = false;
+    NoStencil() {
+      if (const auto* value = venture::environment::getenv("VENTURE_MOCK_DEPTH_FORMATS")) { previous = value; present = true; }
+      set("nostencil");
+    }
+    ~NoStencil() { set(present ? previous.c_str() : ""); }
+    static void set(const char* value) {
+#ifdef _WIN32
+      _putenv_s("VENTURE_MOCK_DEPTH_FORMATS", value);
+#else
+      if (*value) setenv("VENTURE_MOCK_DEPTH_FORMATS", value, 1);
+      else unsetenv("VENTURE_MOCK_DEPTH_FORMATS");
+#endif
+      venture::environment::refresh();
+      ventureMockXrRefreshEnvironment();
+    }
+  } host;
+  const auto depth_before = ventureMockXrStats().projection_depth;
+  CHECK(space_warp_frame(false, false, 2) == 0);
+  CHECK(ventureMockXrStats().projection_depth == depth_before);
 }
 
 TEST_CASE("XR space warp forwards only when the host offers it and the guest enables it") {

@@ -2,8 +2,12 @@
 // The launcher window: an ImGui view over launcher::Core (launcher/core.h).
 #include "launcher/assets/texture_cache.h"
 #include "launcher/core.h"
+#include "launcher/drives.h"
+#include "launcher/updater.h"
 #include "launcher/ui/chrome.h"
 #include <imgui.h>
+#include <atomic>
+#include <memory>
 namespace venture::launcher {
 class App : public Core {
 public:
@@ -25,7 +29,13 @@ private:
   std::set<std::string> addons_expanded_;      // games showing unowned add-ons
   std::optional<std::string> remove_account_;  // pending removal confirmation
   bool remove_saves_ = false;
-  bool steam_ask_add_ = true, steam_ask_remember_ = false;  // the Steam dialog's checkboxes
+  // The install dialog: where the game goes (free bytes there), Steam, and "don't ask again".
+  std::vector<std::pair<launcher::InstallLocation, uint64_t>> install_choices_;
+  int install_choice_ = 0;
+  // Where imported games go, listed when the Import page opens or rescans.
+  std::vector<std::pair<launcher::InstallLocation, uint64_t>> import_choices_;
+  int import_choice_ = 0;
+  bool install_steam_ = true, install_remember_ = false;
   std::string direct_app_;
   bool direct_started_ = false;
   std::string backdrop_; // game whose ambient art tints the game page
@@ -71,8 +81,17 @@ private:
   // A newer published release than this build, offered once per version.
   struct Update {
     std::string version, url;
+    // "Update now" downloads `file` (checked against `sums`) where the method allows it.
+    update::Method method = update::Method::page;
+    std::optional<update::Asset> file, sums;
+    bool downloading = false;
+    std::shared_ptr<std::atomic<uint64_t>> done = std::make_shared<std::atomic<uint64_t>>(0),
+                                           total = std::make_shared<std::atomic<uint64_t>>(0);
+    std::string error;
   };
   std::optional<Update> update_;
+  std::unique_ptr<Worker> update_worker_;  // the update download, off the library worker
+  void start_update();
   bool update_checked_ = false;
   void check_update();
   void draw_update();
@@ -82,6 +101,11 @@ private:
   std::mutex import_mutex_;            // picks from dialogs and drops
   std::vector<fs::path> import_picks_;
   void choose_import(bool folder);
+  // Import save data: the game whose dialog is open, and folder picks for it.
+  std::string save_import_target_;
+  std::vector<std::pair<std::string, fs::path>> save_picks_;
+  void choose_save_folder(const std::string &app_id);
+  void draw_save_import();
   void take_import_picks();
   void draw_import();
   void draw_import_items(ImportScan &scan, bool device, float width);
@@ -97,7 +121,10 @@ private:
   void draw_cancel_download();
   void draw_report();
   void draw_remove_account();
-  void draw_steam_ask();
+  void draw_install_ask();
+  // The Install button: a new game asks where it goes and about Steam first,
+  // unless installs do not ask or there is nothing to choose.
+  void request_install(const meta::Game &game);
   void draw_addons(const meta::Game &game, float width);
   void draw_owner(const meta::Game &game, bool installed);
   void smoke_install();

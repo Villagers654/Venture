@@ -434,3 +434,21 @@ TEST_CASE("replacement exports finalization and adopted lookup preserve one lock
   CHECK(initialized); CHECK(gate.reentered); CHECK(activated);
   CHECK(linker.close(initialized) == 0); CHECK(linker.close(slot.get()) == 0);
 }
+
+TEST_CASE("linker never resolves a bare library name against the host working directory") {
+  // Linux packages keep host libEGL.so/libGLESv2.so beside the binary, which
+  // is the working directory of Steam shortcuts.
+  const auto dir = std::filesystem::temp_directory_path() / "venture-linker-cwd-probe";
+  std::filesystem::create_directories(dir / "empty");
+  { std::ofstream(dir / "libventure-cwd-probe.so") << "not an ARM ELF"; }
+  const auto previous = std::filesystem::current_path();
+  std::filesystem::current_path(dir);
+  auto& linker = Linker::get();
+  linker.set_search_paths({(dir / "empty").string()});
+  auto* lib = linker.open("libventure-cwd-probe.so", kRtldNow, nullptr);
+  const auto error = linker.take_error();
+  std::filesystem::current_path(previous);
+  std::filesystem::remove_all(dir);
+  CHECK(lib == nullptr);
+  CHECK(error.find("library not found") != std::string::npos);
+}

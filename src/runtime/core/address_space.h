@@ -81,6 +81,9 @@ class AddressSpace {
   // Runtime-owned guest memory (stacks, TLS, thunks, data symbols).
   GuestAddr allocate(std::uint64_t size, std::uint32_t prot, std::string_view name,
                      std::uint64_t alignment = kGuestPageSize);
+  // Runtime-owned memory at exactly `address`, replacing what the guest mapped
+  // there (a library loaded into a range the guest reserved for it).
+  GuestAddr allocate_at(GuestAddr address, std::uint64_t size, std::uint32_t prot, std::string_view name);
   void free(GuestAddr address);
 
   bool find(GuestAddr address, MemoryRegion* out) const;

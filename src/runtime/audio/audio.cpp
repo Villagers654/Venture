@@ -1093,11 +1093,15 @@ bool Backend::ensure_device(Direction direction) {
   }
   ready = true;
   endpoint_changed_.store(true);
-  log::info("audio", "Opened {} device '{}' via {}: {} Hz, {} channels",
-            direction == Direction::output ? "output" : "capture",
-            direction == Direction::output ? device.playback.name : device.capture.name,
-            ma_get_backend_name(context_.backend), device.sampleRate,
-            direction == Direction::output ? device.playback.channels : device.capture.channels);
+  // The endpoint's own format, which Venture converts its 48 kHz mix to; in debug reports.
+  auto fact = [&](const char *kind, const auto &endpoint) {
+    log::info("facts", "Audio {} device '{}' via {}: mix {} Hz {} ch; endpoint {} Hz {} ch {}, period {} frames",
+              kind, endpoint.name, ma_get_backend_name(context_.backend), device.sampleRate, endpoint.channels,
+              endpoint.internalSampleRate, endpoint.internalChannels, ma_get_format_name(endpoint.internalFormat),
+              endpoint.internalPeriodSizeInFrames);
+  };
+  if (direction == Direction::output) fact("output", device.playback);
+  else fact("capture", device.capture);
   return true;
 }
 std::int32_t Backend::attach(Stream& stream) {

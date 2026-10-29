@@ -59,8 +59,10 @@ public final class RuntimeEnvironment {
     info.nativeLibraryDir = nativeLib.toString();
     resources = new Resources(assets, new DisplayMetrics(), new Configuration());
     packageManager = new PackageManager(manifest);
-    loader = new dalvik.system.PathClassLoader(
-        args[7], guestNativeLibDir(), RuntimeEnvironment.class.getClassLoader());
+    // A native-only APK (no classes.dex) passes the APK itself: it has no classes
+    // to load, and its NativeActivity comes from the framework.
+    loader = new dalvik.system.PathClassLoader(args[7].equals(args[1]) ? "" : args[7],
+        guestNativeLibDir(), RuntimeEnvironment.class.getClassLoader());
   }
   public static synchronized void configure(String[] args, Host bridge) {
     if (current != null)

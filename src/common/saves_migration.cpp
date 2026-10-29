@@ -167,6 +167,25 @@ void sync_obb_view(const fs::path& install, const fs::path& raw_view,
   }
   for (const auto& name : names) publish_obb_file_locked(install / paths::from_utf8(name), view);
 }
+fs::path obb_view_for(const fs::path& install, const fs::path& view, std::string_view account) {
+  if (account != "local" && !meta::valid_account_key(account))
+    throw std::runtime_error("Invalid account for the OBB view.");
+  const auto parent = view.parent_path();
+  fs::create_directories(parent);
+  const auto probe = parent / (".link-" + random_account_key());
+  std::error_code ec;
+  fs::create_hard_link(install / "plan.json", probe, ec);
+  if (!ec) {
+    fs::remove(probe, ec);
+    return view;
+  }
+  if (fs::exists(view, ec) && !is_link(view)) {
+    log::info("obb", "Games folder is on another drive; removing the copied view at {}", paths::utf8(view));
+    remove_tree(parent, view);
+  }
+  if (const auto sidecar = obb_copy_sidecar(view); fs::exists(sidecar, ec)) remove_tree(parent, sidecar);
+  return install / ".obb" / paths::from_utf8(account);
+}
 void publish_obb_file(const fs::path& source, const fs::path& raw_view) {
 #ifdef _WIN32
   const fs::path view{platform::native_path(raw_view)};

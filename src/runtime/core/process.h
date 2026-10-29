@@ -49,6 +49,7 @@ struct ProcessConfig {
   std::filesystem::path guest_cache_dir;
   bool platform_leaderboard_writes = true; // per-launch opt-out, owner-authorized by default
   bool embedded_java_scripts = false; // tooling agent needed only for prepared Java loaders
+  bool has_code = true; // classes.dex present; a native-only APK (hasCode="false") has none
 };
 
 ProcessConfig& process_config();

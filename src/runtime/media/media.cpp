@@ -1028,5 +1028,8 @@ std::int64_t Player::position_us() const {
 std::int64_t Player::duration_us() const {std::lock_guard lock(impl->mutex);return impl->duration;}
 int Player::video_width() const {std::lock_guard lock(impl->mutex);return impl->width;}
 int Player::video_height() const {std::lock_guard lock(impl->mutex);return impl->height;}
+std::vector<Track> Player::tracks() const {
+  std::lock_guard lock(impl->mutex);return impl->extractor?impl->extractor->tracks():std::vector<Track>{};
+}
 std::shared_ptr<audio::Stream> Player::stream() const {std::lock_guard lock(impl->mutex);return impl->stream;}
 } // namespace venture::media

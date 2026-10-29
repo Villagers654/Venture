@@ -130,7 +130,11 @@ bool start_jvm(const JvmOptions& options, std::string* error) {
     // Keep room to grow; explicit extra_options below can override these limits.
     // android.graphics uses java.desktop (java.awt.image, ImageIO, Font) as a
     // pure library; headless keeps it off any display, e.g. Wayland-only hosts.
-    std::vector<std::string> values{"-Xss4m", "-XX:+UseG1GC", "-Xms32m", "-Xmx1g", "-Djava.awt.headless=true"};
+    // The heap stays above 4 GiB: HotSpot would otherwise place it just below,
+    // where native games reserve fixed windows (a 32-bit game address space at
+    // 0x80000000). Oops stay compressed and zero-based.
+    std::vector<std::string> values{"-Xss4m", "-XX:+UseG1GC", "-Xms32m", "-Xmx1g", "-XX:HeapBaseMinAddress=4g",
+                                    "-Djava.awt.headless=true"};
     if (!options.agent_path.empty()) {
       const auto agent = paths::from_utf8(options.agent_path);
       if (!agent.is_absolute() || !std::filesystem::is_regular_file(agent))

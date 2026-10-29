@@ -285,6 +285,44 @@ TEST_CASE(
   session.free_message(msg);
   CHECK(arena.live == 0);
 }
+TEST_CASE("AssetFile serves an import's own files by name, installed, with stable ids") {
+  Fixture f;
+  // An import without Meta: a local plan whose files carry no asset ids.
+  f.plan.local = true;
+  for (auto& file : f.plan.files) file.id.clear();
+  f.plan.app_id = f.app.package;
+  f.plan.binary_id.clear();
+  venture::paths::atomic_write(f.install / "plan.json", f.plan.json().dump());
+  f.app.app_id.clear();
+  f.app.binary_id.clear();
+  auto s = f.service();
+  auto status = query(s, "StatusByName", std::string("required.bundle"));
+  REQUIRE_FALSE(status.error);
+  CHECK(string_field(status.model, "DownloadStatus") == "installed");
+  CHECK(string_field(status.model, "Filepath") == "/sdcard/Android/obb/com.example.assets/required.bundle");
+  auto id = std::get<std::uint64_t>(status.model.fields.at("AssetId"));
+  CHECK(id >= (1ull << 63));
+  // The same id again, and it downloads (already installed) by id.
+  CHECK(std::get<std::uint64_t>(f.service()->request("StatusByName", {{std::string("required.bundle")}}, {})
+                                    .model.fields.at("AssetId")) == id);
+  CHECK_FALSE(query(s, "DownloadById", id).error);
+  CHECK(string_field(query(s, "StatusByName", std::string("optional.bundle")).model, "DownloadStatus") ==
+        "available");
+}
+
+TEST_CASE("AssetFile reports reduced-catalog assets as entitled") {
+  Fixture f;
+  auto iap = [&](std::string_view name) {
+    auto s = f.service();
+    return string_field(query(s, "StatusByName", std::string(name)).model, "IapStatus");
+  };
+  CHECK(iap("optional.bundle") == "free");
+  // Without Meta's full catalog an asset's add-on is unknown.
+  f.plan.assets_complete = false;
+  venture::paths::atomic_write(f.install / "plan.json", f.plan.json().dump());
+  CHECK(iap("optional.bundle") == "entitled");
+  CHECK(iap("required.bundle") == "entitled");
+}
 TEST_CASE(
     "AssetFile deletion invalidates the installed SKU and rejects escaping "
     "paths") {

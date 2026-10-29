@@ -18,6 +18,8 @@ add_executable(venture_tests
 
   ${PROJECT_SOURCE_DIR}/src/launcher/ui/rich_text_parse.cpp
   ${PROJECT_SOURCE_DIR}/src/launcher/debug_report.cpp
+  ${PROJECT_SOURCE_DIR}/src/launcher/drives.cpp
+  ${PROJECT_SOURCE_DIR}/src/launcher/updater.cpp
   broker_test.cpp
   broker_http_test.cpp
   launch_channel_test.cpp

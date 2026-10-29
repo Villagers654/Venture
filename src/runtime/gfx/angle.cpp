@@ -107,6 +107,17 @@ void init_display() {
     attributes.push_back(0x3467 /* EGL_FEATURE_OVERRIDES_DISABLED_ANGLE */);
     attributes.push_back(reinterpret_cast<EGLAttrib>(disabled_features));
   }
+#if defined(__linux__)
+  // Linux ANGLE's default headless display needs VK_EXT_headless_surface,
+  // which some drivers (NVIDIA's) lack. Venture only creates pbuffers, so the
+  // surfaceless display, which needs no WSI extension, works the same there.
+  if (!host_vulkan_instance_extension("VK_EXT_headless_surface")) {
+    constexpr EGLint native_platform_type = 0x348F, surfaceless = 0x31DD;
+    log::info("gfx", "Host Vulkan lacks VK_EXT_headless_surface; using ANGLE's surfaceless display");
+    attributes.push_back(native_platform_type);
+    attributes.push_back(surfaceless);
+  }
+#endif
   attributes.push_back(EGL_NONE);
   auto candidate = get_display(platform_angle, EGL_DEFAULT_DISPLAY, attributes.data());
   EGLint major{}, minor{};

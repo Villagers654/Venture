@@ -59,13 +59,16 @@ const Snapshot* capture(State& state) {
     next->try_emplace(std::string(name), std::string(entry.substr(split+1)));
   };
 #ifdef _WIN32
+  // Values are UTF-8, as every caller reads them (paths::from_utf8). The ANSI
+  // code page turned a non-ASCII PATH entry (a Turkish user folder) into bytes
+  // the launcher could not read ("locale not supported" looking for adb).
   auto* block = GetEnvironmentStringsW();
   if (block) {
     for (auto* p=block; *p; ) {
       const std::wstring_view entry(p);
-      const int length = WideCharToMultiByte(CP_ACP,0,p,static_cast<int>(entry.size()),nullptr,0,nullptr,nullptr);
+      const int length = WideCharToMultiByte(CP_UTF8,0,p,static_cast<int>(entry.size()),nullptr,0,nullptr,nullptr);
       std::string bytes(length, '\0');
-      if (length && WideCharToMultiByte(CP_ACP,0,p,static_cast<int>(entry.size()),bytes.data(),length,nullptr,nullptr)) add(bytes);
+      if (length && WideCharToMultiByte(CP_UTF8,0,p,static_cast<int>(entry.size()),bytes.data(),length,nullptr,nullptr)) add(bytes);
       p+=entry.size()+1;
     }
     FreeEnvironmentStringsW(block);

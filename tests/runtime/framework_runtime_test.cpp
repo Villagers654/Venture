@@ -726,5 +726,39 @@ TEST_CASE("production framework JNI owns real NativeWindow references") {
   CHECK(env->CallIntMethod(audio_track, audio_write, samples, 0, 4, 1) == -3);
   REQUIRE_FALSE(env->ExceptionCheck());
   env->DeleteLocalRef(samples); env->DeleteLocalRef(audio_track); env->DeleteLocalRef(audio_class);
+  // AudioRecord reads the default input through the same mixer (IMMERROCK).
+  auto record_class = env->FindClass("android/media/AudioRecord");
+  REQUIRE(record_class);
+  auto record = env->NewObject(record_class, env->GetMethodID(record_class, "<init>", "(IIIII)V"), 1, 48000, 16, 2, 3840);
+  REQUIRE_FALSE(env->ExceptionCheck());
+  CHECK(env->CallIntMethod(record, env->GetMethodID(record_class, "getState", "()I")) == 1);
+  env->CallVoidMethod(record, env->GetMethodID(record_class, "startRecording", "()V"));
+  REQUIRE_FALSE(env->ExceptionCheck());
+  std::vector<float> input(960, .5f);
+  audio::Backend::get().process(audio::Direction::input, nullptr, input.data(), 960);
+  auto captured = env->NewShortArray(960);
+  const auto read = env->CallIntMethod(record, env->GetMethodID(record_class, "read", "([SIII)I"), captured, 0, 960, 1);
+  REQUIRE_FALSE(env->ExceptionCheck());
+  CHECK(read > 0);
+  if (read > 0) {
+    jshort first = 0;
+    env->GetShortArrayRegion(captured, 0, 1, &first);
+    CHECK(std::abs(first - 16384) < 64);
+  }
+  env->CallVoidMethod(record, env->GetMethodID(record_class, "stop", "()V"));
+  env->CallVoidMethod(record, env->GetMethodID(record_class, "release", "()V"));
+  REQUIRE_FALSE(env->ExceptionCheck());
+  env->DeleteLocalRef(captured); env->DeleteLocalRef(record); env->DeleteLocalRef(record_class);
+  // Effects: pre-processing reports unavailable; output effects keep settings.
+  auto suppressor = env->FindClass("android/media/audiofx/NoiseSuppressor");
+  REQUIRE(suppressor);
+  CHECK_FALSE(env->CallStaticBooleanMethod(suppressor, env->GetStaticMethodID(suppressor, "isAvailable", "()Z")));
+  auto equalizer_class = env->FindClass("android/media/audiofx/Equalizer");
+  REQUIRE(equalizer_class);
+  auto equalizer = env->NewObject(equalizer_class, env->GetMethodID(equalizer_class, "<init>", "(II)V"), 0, 1);
+  REQUIRE_FALSE(env->ExceptionCheck());
+  CHECK(env->CallShortMethod(equalizer, env->GetMethodID(equalizer_class, "getNumberOfBands", "()S")) == 5);
+  REQUIRE_FALSE(env->ExceptionCheck());
+  env->DeleteLocalRef(equalizer); env->DeleteLocalRef(equalizer_class); env->DeleteLocalRef(suppressor);
   CHECK(java::stop_jvm(&error));
 }

@@ -110,6 +110,7 @@ void configure_game(const std::filesystem::path& install,
   if (!a64 && !a32) throw std::runtime_error("APK has no supported ARM native library slice");
   select_process_isa(a64 ? GuestIsa::a64 : GuestIsa::a32);
   log::info("launch", "Selected APK native slice {}", config.abi);
+  config.has_code = mz_zip_reader_locate_file(&zip, "classes.dex", nullptr, 0) >= 0;
   const auto index = mz_zip_reader_locate_file(&zip, "AndroidManifest.xml", nullptr, 0);
   mz_zip_archive_file_stat stat{};
   if (index < 0 || !mz_zip_reader_file_stat(&zip, index, &stat) || stat.m_uncomp_size > 16*1024*1024)
@@ -137,7 +138,8 @@ void configure_game(const std::filesystem::path& install,
   // for Context, Environment and native VFS, with cross-volume copy fallback.
   // Retire all legacy versioned views so updates cannot retain multi-GB files.
   remove_cached_obb_aliases(base, config.package);
-  config.obb_dir = config.data_dir / "external/Android/obb" / config.package;
+  config.obb_dir = obb_view_for(std::filesystem::absolute(install),
+                                config.data_dir / "external/Android/obb" / config.package, config.account_key);
   std::vector<std::string> obb_names;
   for (const auto& file : plan.at("files")) {
     const auto kind = file.value("kind", "");

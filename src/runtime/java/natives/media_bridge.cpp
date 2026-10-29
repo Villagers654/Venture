@@ -7,8 +7,10 @@
 #include "java/natives/surface_bridge.h"
 #include "common/paths.h"
 #include "common/log.h"
+#include <climits>
 #include <map>
 #include <mutex>
+#include <optional>
 
 namespace venture::java {
 namespace {
@@ -91,32 +93,111 @@ jint JNICALL codec_surface(JNIEnv* env,jclass,jlong id,jobject surface) {
 void JNICALL codec_release(JNIEnv* env,jclass,jlong id) {
   guard(env,[&]()->int {std::shared_ptr<media::Codec> c;{std::lock_guard lock(mutex);auto it=codecs.find(id);if(it!=codecs.end()){c=it->second;codecs.erase(it);}}if(c)c->release();return 0;});
 }
+// A path or descriptor region from an android.media setDataSource overload.
+std::optional<media::Input> java_input(JNIEnv* env,jstring path,jobject fd,jlong offset,jlong length) {
+  if(path) {
+    auto count=env->GetStringLength(path);
+    if(count>32768)return {};
+    std::u16string text(count,0);env->GetStringRegion(path,0,count,reinterpret_cast<jchar*>(text.data()));
+    if(env->ExceptionCheck() || text.find(u'\0')!=text.npos)return {};
+    auto name=paths::utf8(std::filesystem::path(text));
+    if(auto guest=framework_path_to_guest(name))name=*guest;
+    return media::path_input(name);
+  }
+  if(fd && offset>=0 && length>=0) {
+    auto cls=env->GetObjectClass(fd);
+#ifdef _WIN32
+    auto field=env->GetFieldID(cls,"handle","J");
+    auto handle=field?env->GetLongField(fd,field):-1;
+#else
+    auto field=env->GetFieldID(cls,"fd","I");
+    auto handle=field?env->GetIntField(fd,field):-1;
+#endif
+    env->DeleteLocalRef(cls);if(env->ExceptionCheck())return {};
+    return media::file_input(hle::libc::host::import_readonly_handle(static_cast<std::intptr_t>(handle)),offset,length);
+  }
+  return media::Input{};
+}
+// One track's MediaFormat values {width,height,sample-rate,channel-count,durationUs}; returns its mime.
+jstring track_values(JNIEnv* env,const std::vector<media::Track>& tracks,jint index,jlongArray values) {
+  if(index<0 || std::size_t(index)>=tracks.size() || !values || env->GetArrayLength(values)<5)return nullptr;
+  auto& t=tracks[index];jlong data[]={t.width,t.height,t.rate,t.channels,t.duration_us};
+  env->SetLongArrayRegion(values,0,5,data);return env->NewStringUTF(t.mime.c_str());
+}
 jlong JNICALL source(JNIEnv* env,jclass,jstring path,jobject fd,jlong offset,jlong length) {
   return guard(env,[&]()->jlong {
-    media::Input input;
-    if(path) {
-      auto count=env->GetStringLength(path);
-      if(count>32768)return 0;
-      std::u16string text(count,0);env->GetStringRegion(path,0,count,reinterpret_cast<jchar*>(text.data()));
-      if(env->ExceptionCheck() || text.find(u'\0')!=text.npos)return 0;
-      auto name=paths::utf8(std::filesystem::path(text));
-      if(auto guest=framework_path_to_guest(name))name=*guest;
-      input=media::path_input(name);
-    } else if(fd && offset>=0 && length>=0) {
-      auto cls=env->GetObjectClass(fd);
-#ifdef _WIN32
-      auto field=env->GetFieldID(cls,"handle","J");
-      auto handle=field?env->GetLongField(fd,field):-1;
-#else
-      auto field=env->GetFieldID(cls,"fd","I");
-      auto handle=field?env->GetIntField(fd,field):-1;
-#endif
-      env->DeleteLocalRef(cls);if(env->ExceptionCheck())return 0;
-      input=media::file_input(hle::libc::host::import_readonly_handle(static_cast<std::intptr_t>(handle)),offset,length);
-    }
-    auto value=std::make_shared<media::Player>();if(value->source(std::move(input)))return 0;
+    auto input=java_input(env,path,fd,offset,length);if(!input)return 0;
+    auto value=std::make_shared<media::Player>();if(value->source(std::move(*input)))return 0;
     std::lock_guard lock(mutex);if(closing)return 0;
     auto id=next++;players.emplace(id,std::move(value));return id;
+  });
+}
+jstring JNICALL player_track(JNIEnv* env,jclass,jlong id,jint index,jlongArray values) {
+  return guard(env,[&]()->jstring {auto p=player(id);return p?track_values(env,p->tracks(),index,values):nullptr;});
+}
+// android.media.MediaExtractor over the extractor AMediaExtractor uses.
+struct JavaExtractor { std::mutex mutex; media::Extractor backend; };
+std::map<jlong,std::shared_ptr<JavaExtractor>> extractors;
+std::shared_ptr<JavaExtractor> extractor(jlong id) {
+  std::lock_guard lock(mutex);auto it=extractors.find(id);return it==extractors.end()?nullptr:it->second;
+}
+jlong JNICALL extractor_open(JNIEnv* env,jclass,jstring path,jobject fd,jlong offset,jlong length) {
+  return guard(env,[&]()->jlong {
+    if(!media::Library::get()->available())return 0;
+    auto input=java_input(env,path,fd,offset,length);if(!input || !input->read_at)return 0;
+    auto value=std::make_shared<JavaExtractor>();if(value->backend.open(std::move(*input)))return 0;
+    std::lock_guard lock(mutex);if(closing)return 0;
+    auto id=next++;extractors.emplace(id,std::move(value));return id;
+  });
+}
+jstring JNICALL extractor_track(JNIEnv* env,jclass,jlong id,jint index,jlongArray values) {
+  return guard(env,[&]()->jstring {
+    auto e=extractor(id);if(!e)return nullptr;std::lock_guard lock(e->mutex);
+    return track_values(env,e->backend.tracks(),index,values);
+  });
+}
+jbyteArray JNICALL extractor_config(JNIEnv* env,jclass,jlong id,jint index) {
+  return guard(env,[&]()->jbyteArray {
+    auto e=extractor(id);if(!e)return nullptr;std::lock_guard lock(e->mutex);
+    auto& tracks=e->backend.tracks();
+    if(index<0 || std::size_t(index)>=tracks.size() || tracks[index].config.empty())return nullptr;
+    auto& config=tracks[index].config;auto array=env->NewByteArray(static_cast<jsize>(config.size()));
+    if(array)env->SetByteArrayRegion(array,0,static_cast<jsize>(config.size()),reinterpret_cast<const jbyte*>(config.data()));
+    return array;
+  });
+}
+jlong JNICALL extractor_control(JNIEnv* env,jclass,jlong id,jint operation,jlong value,jint mode) {
+  return guard(env,[&]()->jlong {
+    auto e=extractor(id);if(!e)return media::bad_state;std::lock_guard lock(e->mutex);
+    const auto& sample=e->backend.sample();
+    switch(operation) {
+      case 0:case 1:return value<0 || value>INT_MAX?media::invalid:e->backend.select(static_cast<int>(value),operation==0);
+      case 2:return e->backend.advance();
+      case 3:return e->backend.seek(value,mode);
+      case 4:return sample.time_us;
+      case 5:return sample.track;
+      case 6:return sample.flags;
+      case 7:return sample.track<0?-1:static_cast<jlong>(sample.bytes.size());
+      default:return media::invalid;
+    }
+  });
+}
+jint JNICALL extractor_read(JNIEnv* env,jclass,jlong id,jbyteArray out,jint offset) {
+  return guard(env,[&]()->jint {
+    auto e=extractor(id);if(!e || !out)return -1;std::lock_guard lock(e->mutex);
+    const auto& sample=e->backend.sample();
+    if(sample.track<0 || offset<0 || offset>env->GetArrayLength(out) ||
+       std::size_t(env->GetArrayLength(out)-offset)<sample.bytes.size())return -1;
+    env->SetByteArrayRegion(out,offset,static_cast<jsize>(sample.bytes.size()),reinterpret_cast<const jbyte*>(sample.bytes.data()));
+    return static_cast<jint>(sample.bytes.size());
+  });
+}
+void JNICALL extractor_release(JNIEnv* env,jclass,jlong id) {
+  guard(env,[&]()->int {
+    std::shared_ptr<JavaExtractor> e;
+    {std::lock_guard lock(mutex);auto it=extractors.find(id);if(it!=extractors.end()){e=it->second;extractors.erase(it);}}
+    if(e)e->backend.cancel();
+    return 0;
   });
 }
 jint JNICALL control(JNIEnv* env,jclass,jlong id,jint operation,jlong value) {
@@ -168,7 +249,9 @@ void JNICALL release(JNIEnv* env,jclass,jlong id) {
 void shutdown_media_players() {
   std::map<jlong,std::shared_ptr<media::Player>> ending;
   std::map<jlong,std::shared_ptr<media::Codec>> ending_codecs;
-  {std::lock_guard lock(mutex);closing=true;ending.swap(players);ending_codecs.swap(codecs);}
+  std::map<jlong,std::shared_ptr<JavaExtractor>> ending_extractors;
+  {std::lock_guard lock(mutex);closing=true;ending.swap(players);ending_codecs.swap(codecs);ending_extractors.swap(extractors);}
+  for(auto& [id,e]:ending_extractors)e->backend.cancel();
   for(auto& [id,p]:ending)p->release();
   media::Codec::shutdown_all();
 }
@@ -182,6 +265,7 @@ void register_media_players(JNIEnv* env) {
     {const_cast<char*>("nativeVolume"),const_cast<char*>("(JFF)V"),reinterpret_cast<void*>(volume)},
     {const_cast<char*>("nativeSurface"),const_cast<char*>("(JLandroid/view/Surface;)V"),reinterpret_cast<void*>(surface)},
     {const_cast<char*>("nativeRelease"),const_cast<char*>("(J)V"),reinterpret_cast<void*>(release)},
+    {const_cast<char*>("nativeTrack"),const_cast<char*>("(JI[J)Ljava/lang/String;"),reinterpret_cast<void*>(player_track)},
   };
   env->RegisterNatives(cls,methods,static_cast<jint>(std::size(methods)));env->DeleteLocalRef(cls);
   if(env->ExceptionCheck())return;
@@ -195,8 +279,17 @@ void register_media_players(JNIEnv* env) {
     METHOD("nativeRender","(JIZJ)I",codec_render),METHOD("nativeSurface","(JLandroid/view/Surface;)I",codec_surface),
     METHOD("nativeRelease","(J)V",codec_release)
   };
-#undef METHOD
   env->RegisterNatives(cls,codec_methods,std::size(codec_methods));env->DeleteLocalRef(cls);
+  if(env->ExceptionCheck())return;
+  cls=env->FindClass("android/media/MediaExtractor");if(!cls)return;
+  const JNINativeMethod extractor_methods[]{
+    METHOD("nativeOpen","(Ljava/lang/String;Ljava/io/FileDescriptor;JJ)J",extractor_open),
+    METHOD("nativeTrack","(JI[J)Ljava/lang/String;",extractor_track),METHOD("nativeConfig","(JI)[B",extractor_config),
+    METHOD("nativeControl","(JIJI)J",extractor_control),METHOD("nativeRead","(J[BI)I",extractor_read),
+    METHOD("nativeRelease","(J)V",extractor_release)
+  };
+  env->RegisterNatives(cls,extractor_methods,std::size(extractor_methods));env->DeleteLocalRef(cls);
+#undef METHOD
 
 }
 }

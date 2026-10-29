@@ -22,10 +22,12 @@ bool call_ti(Bus bus, const char* destination, const char* path, const char* int
 // processes share.
 // NetworkMonitor.GetConnectivity: 1 local only, 2 limited, 3 captive portal, 4 full.
 std::optional<std::uint32_t> portal_connectivity();
-// OpenURI.OpenURI and OpenURI.OpenFile (a file or directory descriptor, which
-// the portal duplicates). True once a portal accepted the request.
+// OpenURI.OpenURI, OpenURI.OpenFile (a file or directory descriptor, which the
+// portal duplicates) and OpenURI.OpenDirectory (the folder holding the file).
+// True once a portal accepted the request.
 bool portal_open_uri(const std::string& uri);
 bool portal_open_file(int fd);
+bool portal_open_directory(int fd);
 // Realtime.MakeThreadHighPriorityWithPID and its MinNiceLevel property.
 std::optional<std::int32_t> portal_min_nice();
 bool portal_thread_high_priority(std::uint64_t pid, std::uint64_t tid, std::int32_t nice);

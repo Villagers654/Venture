@@ -40,8 +40,10 @@ XrResult bounds(XrExtent2Df &extent, XrPosef &stage) {
     return r;
   XrSpaceLocation loc{XR_TYPE_SPACE_LOCATION};
   r = ::xrLocateSpace(state().stage, state().app, time_from_seconds(0), &loc);
-  if (XR_SUCCEEDED(r))
+  if (XR_SUCCEEDED(r)) {
+    hle::openxr::sanitize(loc.locationFlags, loc.pose);
     stage = loc.pose;
+  }
   return r;
 }
 } // namespace

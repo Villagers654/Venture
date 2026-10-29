@@ -80,6 +80,40 @@ public class MediaFlow {
     } catch(Throwable e){return "video codec: "+e;}
     finally {if(codec!=null)codec.release();surface.release();second.release();texture.release();replacement.release();callbackThread.quitSafely();try{callbackThread.join(1000);}catch(InterruptedException e){Thread.currentThread().interrupt();}}
   }
+  // Unreal's MediaPlayer14 reads tracks through the Java MediaExtractor and
+  // finds its video track only through MediaPlayer.getTrackInfo().
+  public static String video(String fixture) {
+    var extractor=new android.media.MediaExtractor();var player=new MediaPlayer();
+    try (FileInputStream file=new FileInputStream(fixture)) {
+      extractor.setDataSource(file.getFD(),0,file.getChannel().size());
+      if(extractor.getTrackCount()!=1)return "extractor track count "+extractor.getTrackCount();
+      var format=extractor.getTrackFormat(0);
+      if(!"video/avc".equals(format.getString("mime")) || format.getInteger("width")!=128 || format.getInteger("height")!=72)return "extractor format "+format;
+      if(format.getByteBuffer("csd-0")==null)return "extractor csd-0";
+      extractor.selectTrack(0);
+      var heap=java.nio.ByteBuffer.allocate(1<<20);var direct=java.nio.ByteBuffer.allocateDirect(1<<20);
+      int samples=0;
+      do {
+        long time=extractor.getSampleTime();
+        if(extractor.getSampleTrackIndex()!=0 || time<0)return "extractor sample track";
+        int size=extractor.readSampleData(samples%2==0?heap:direct,4);
+        var buffer=samples%2==0?heap:direct;
+        if(size<=0 || buffer.position()!=4 || buffer.remaining()!=size || size!=extractor.getSampleSize())return "extractor sample size";
+        samples++;
+      } while(extractor.advance());
+      if(samples!=12 || extractor.getSampleTime()!=-1 || extractor.readSampleData(heap,0)!=-1)return "extractor end "+samples;
+      extractor.seekTo(0,android.media.MediaExtractor.SEEK_TO_PREVIOUS_SYNC);
+      if(extractor.getSampleTime()!=0)return "extractor seek";
+      player.setDataSource(file.getFD(),0,file.getChannel().size());player.prepare();
+      var tracks=player.getTrackInfo();
+      if(tracks.length!=1 || tracks[0].getTrackType()!=MediaPlayer.TrackInfo.MEDIA_TRACK_TYPE_VIDEO ||
+         tracks[0].getFormat().getInteger("width")!=128)return "track info";
+      player.selectTrack(0);
+      if(player.getSelectedTrack(MediaPlayer.TrackInfo.MEDIA_TRACK_TYPE_VIDEO)!=0)return "selected video track";
+      return null;
+    } catch(Throwable e){return "video tracks: "+e;}
+    finally {extractor.release();player.release();}
+  }
   // Callback arrival includes JVM/codec/worker startup; this only guards hangs.
   private static final int HANG_SECONDS = 120;
   public static String run(String fixture) {

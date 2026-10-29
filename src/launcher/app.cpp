@@ -43,7 +43,7 @@ static float ui_scale(SDL_Window *window) {
   return std::max(1.f, SDL_GetWindowDisplayScale(window) / (density > 0 ? density : 1.f));
 }
 void App::fit_window() {
-  scale_ = ui_scale(window_);
+  scale_ = ui_scale(window_) * float(settings_.interface_size) / 100;
   int width = int(1380 * scale_), height = int(880 * scale_);
   int min_width = int(900 * scale_), min_height = int(620 * scale_);
   // Never larger than the screen: a compositor squeezes an oversized window, which puts the UI
@@ -108,12 +108,21 @@ App::App(Options options) : Core(std::move(options)) {
     SDL_ShowWindow(window_);
   if (options_.smoke_view == "downloads")
     page_ = 1;
-  if (options_.smoke_view == "settings")
+  if (options_.smoke_view == "settings" || options_.smoke_view == "settings-end")
     page_ = 2;
   if (options_.smoke_view == "account")
     page_ = 3;
   if (options_.smoke_view == "import")
     page_ = 4;
+  // The update dialog an installed copy shows (nothing downloads until Update now).
+  if (options_.smoke_view == "update") {
+    const std::string release = "https://github.com/Villagers654/Venture/releases/";
+    update_checked_ = true;
+    update_ = Update{"0.1.1", release + "tag/v0.1.1"};
+    update_->method = update::Method::installer;
+    update_->file = update::Asset{"Venture-windows64-setup.exe", release + "download/v0.1.1/Venture-windows64-setup.exe"};
+    update_->sums = update::Asset{"SHA256SUMS", release + "download/v0.1.1/SHA256SUMS"};
+  }
   if (!options_.smoke_import.empty())
     scan_local(options_.smoke_import);
 }
@@ -150,7 +159,10 @@ void App::on_install_queued() {
   if (options_.smoke_select.empty())
     page_ = 1;
 }
-void App::on_import_scan() { page_ = 4; }
+void App::on_import_scan() {
+  page_ = 4;
+  import_choices_.clear();  // free space changes between scans
+}
 void App::smoke_install() {
   if (options_.smoke_install.empty() || smoke_exit_ || refreshing_ || scanning_)
     return;
@@ -340,13 +352,37 @@ void App::choose_import(bool folder) {
   }
 }
 
+void App::choose_save_folder(const std::string &app_id) {
+  struct Pick {
+    App *app;
+    std::string id;
+  };
+  auto picked = [](void *data, const char *const *files, int) {
+    std::unique_ptr<Pick> pick(static_cast<Pick *>(data));
+    if (!files) {
+      log::warn("import", "The folder dialog failed: {}", SDL_GetError());
+      return;
+    }
+    if (!*files) return;  // cancelled
+    {
+      std::lock_guard lock(pick->app->import_mutex_);
+      pick->app->save_picks_.emplace_back(pick->id, paths::from_utf8(*files));
+    }
+    pick->app->wake();
+  };
+  SDL_ShowOpenFolderDialog(picked, new Pick{this, app_id}, window_, nullptr, false);
+}
+
 void App::take_import_picks() {
   std::vector<fs::path> picks;
+  std::vector<std::pair<std::string, fs::path>> save_picks;
   {
     std::lock_guard lock(import_mutex_);
     picks.swap(import_picks_);
+    save_picks.swap(save_picks_);
   }
   for (auto &p : picks) scan_local(p);
+  for (auto &[id, folder] : save_picks) action([&] { import_saves_later(id, folder); });
 }
 
 void App::report_smoke() {
@@ -442,7 +478,7 @@ int App::run() {
       if (e.type == SDL_EVENT_DROP_FILE && e.drop.data)
         scan_local(paths::from_utf8(e.drop.data));
       if (e.type == SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED) {
-        scale_ = ui_scale(window_);
+        scale_ = ui_scale(window_) * float(settings_.interface_size) / 100;
         theme();
       }
     };
@@ -491,6 +527,10 @@ int App::run() {
         !scanning_ && game(options_.smoke_select)) {
       smoke_detail_started_ = true;
       select(options_.smoke_select);
+      // The install dialog of a game that is not installed (nothing downloads offline).
+      if (options_.smoke_view == "install")
+        action([&] { request_install(*game(options_.smoke_select)); });
+      if (options_.smoke_view == "saves") save_import_target_ = options_.smoke_select;
     }
     // Ownership comes from the library refresh; without a cached library a
     // play before it finishes is refused as not owned.

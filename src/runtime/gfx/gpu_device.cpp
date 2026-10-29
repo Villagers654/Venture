@@ -450,6 +450,16 @@ const std::vector<std::string>& enabled_gpu_device_extensions() {
   return device_enabled;
 }
 bool gpu_unified_image_layouts_enabled() { return unified_image_layouts; }
+bool host_vulkan_instance_extension(std::string_view name) {
+  if (!loader()) return false;
+  auto enumerate = vk<PFN_vkEnumerateInstanceExtensionProperties>(
+      nullptr, "vkEnumerateInstanceExtensionProperties");
+  std::uint32_t count = 0;
+  if (!enumerate || enumerate(nullptr, &count, nullptr) != VK_SUCCESS) return false;
+  std::vector<VkExtensionProperties> extensions(count);
+  if (enumerate(nullptr, &count, extensions.data()) != VK_SUCCESS) return false;
+  return std::ranges::any_of(extensions, [&](const auto& e) { return name == e.extensionName; });
+}
 const AngleVulkanCallbacksV1& angle_vulkan_callbacks() {
   static const AngleVulkanCallbacksV1 callbacks{1,
                                                 sizeof(AngleVulkanCallbacksV1),

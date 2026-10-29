@@ -1,6 +1,7 @@
 #include "common/environment.h"
 #include <doctest/doctest.h>
 #include "common/paths.h"
+#include "core/address_space.h"
 #include "core/elf.h"
 #include "core/linker_runtime.h"
 #include "core/process_runtime.h"
@@ -56,35 +57,40 @@ TEST_CASE("core relocation decoders APS2 groups and RELR bitmaps") {
   const std::array<std::uint32_t, 1> bad32{3};
   CHECK_THROWS(elf::decode_relr32(bad32, [](auto) {}));
 }
+// A one-page shared object exporting `symbol` and binding "bound" to it.
+static std::filesystem::path scope_fixture(const std::filesystem::path& directory, std::string_view filename,
+                                           std::string_view symbol, bool global_group) {
+  std::array<std::byte, 4096> file{};
+  auto put = [&]<class T>(std::size_t offset, const T& value) {
+    std::memcpy(file.data() + offset, &value, sizeof(value));
+  };
+  elf::Header header{};
+  std::memcpy(header.ident, "\177ELF\2\1\1", 7);
+  header.type = 3; header.machine = 183; header.version = 1; header.ehsize = sizeof(header);
+  header.phoff = 64; header.phentsize = sizeof(elf::Phdr); header.phnum = 2;
+  put(0, header); put(64, elf::Phdr{1, 6, 0, 0, 0, 4096, 4096, 4096});
+  std::string strings(1, '\0');
+  auto shared = std::uint32_t(strings.size()); strings += symbol; strings += '\0';
+  auto bound = std::uint32_t(strings.size()); strings += "bound"; strings += '\0';
+  std::memcpy(file.data() + 0x400, strings.data(), strings.size());
+  put(0x500, std::array<elf::Sym, 3>{{{}, {shared, 0x11, 0, 1, 0x900, 8}, {bound, 0x11, 0, 1, 0x908, 8}}});
+  put(0x700, std::array<std::uint32_t, 6>{1, 3, 1, 0, 2, 0});
+  put(0x800, elf::Rela{0x908, (std::uint64_t(1) << 32) | 257, 0});
+  std::array<elf::Dyn, 10> dynamic{{{5, 0x400}, {10, strings.size()}, {6, 0x500},
+    {11, sizeof(elf::Sym)}, {4, 0x700}, {7, 0x800}, {8, sizeof(elf::Rela)},
+    {9, sizeof(elf::Rela)}, {0x6ffffffb, global_group ? 2u : 0u}, {0, 0}}};
+  put(120, elf::Phdr{2, 6, 0x200, 0x200, 0, sizeof(dynamic), sizeof(dynamic), 8});
+  put(0x200, dynamic);
+  auto path = directory / filename;
+  std::ofstream out(path, std::ios::binary);
+  out.write(reinterpret_cast<const char*>(file.data()), file.size());
+  return path;
+}
 TEST_CASE("core ELF relocation global group differs from RTLD_DEFAULT scope") {
   auto directory = std::filesystem::current_path() / "build/core-fixtures";
   std::filesystem::create_directories(directory);
   auto fixture = [&](std::string_view filename, std::string_view symbol, bool global_group) {
-    std::array<std::byte, 4096> file{};
-    auto put = [&]<class T>(std::size_t offset, const T& value) {
-      std::memcpy(file.data() + offset, &value, sizeof(value));
-    };
-    elf::Header header{};
-    std::memcpy(header.ident, "\177ELF\2\1\1", 7);
-    header.type = 3; header.machine = 183; header.version = 1; header.ehsize = sizeof(header);
-    header.phoff = 64; header.phentsize = sizeof(elf::Phdr); header.phnum = 2;
-    put(0, header); put(64, elf::Phdr{1, 6, 0, 0, 0, 4096, 4096, 4096});
-    std::string strings(1, '\0');
-    auto shared = std::uint32_t(strings.size()); strings += symbol; strings += '\0';
-    auto bound = std::uint32_t(strings.size()); strings += "bound"; strings += '\0';
-    std::memcpy(file.data() + 0x400, strings.data(), strings.size());
-    put(0x500, std::array<elf::Sym, 3>{{{}, {shared, 0x11, 0, 1, 0x900, 8}, {bound, 0x11, 0, 1, 0x908, 8}}});
-    put(0x700, std::array<std::uint32_t, 6>{1, 3, 1, 0, 2, 0});
-    put(0x800, elf::Rela{0x908, (std::uint64_t(1) << 32) | 257, 0});
-    std::array<elf::Dyn, 10> dynamic{{{5, 0x400}, {10, strings.size()}, {6, 0x500},
-      {11, sizeof(elf::Sym)}, {4, 0x700}, {7, 0x800}, {8, sizeof(elf::Rela)},
-      {9, sizeof(elf::Rela)}, {0x6ffffffb, global_group ? 2u : 0u}, {0, 0}}};
-    put(120, elf::Phdr{2, 6, 0x200, 0x200, 0, sizeof(dynamic), sizeof(dynamic), 8});
-    put(0x200, dynamic);
-    auto path = directory / filename;
-    std::ofstream out(path, std::ios::binary);
-    out.write(reinterpret_cast<const char*>(file.data()), file.size());
-    return path;
+    return scope_fixture(directory, filename, symbol, global_group);
   };
   struct RestoreInspection { ~RestoreInspection() { linker_set_inspection(false); } } restore;
   linker_set_inspection(true);
@@ -104,6 +110,37 @@ TEST_CASE("core ELF relocation global group differs from RTLD_DEFAULT scope") {
     CHECK(linker.symbol_default(symbol, consumer) == shared);
     CHECK(linker.close(consumer) == 0); CHECK(linker.close(provider) == 0);
   }
+}
+TEST_CASE("core android_dlopen_ext loads a library into the range its caller reserved") {
+  auto directory = std::filesystem::current_path() / "build/core-fixtures";
+  std::filesystem::create_directories(directory);
+  struct RestoreInspection { ~RestoreInspection() { linker_set_inspection(false); } } restore;
+  linker_set_inspection(true);
+  auto& linker = Linker::get();
+  // A game reserves a window first, then loads its library into it.
+  constexpr std::uint64_t size = 0x100000;
+  const auto window = AddressSpace::get().map(0x58000000, size, 0, kMapPrivate | kMapAnonymous | kMapFixedNoReplace,
+                                               nullptr, 0, "[game window]");
+  REQUIRE(window == 0x58000000);
+  elf::Placement inside{GuestAddr(window), size, true};
+  auto* placed = linker.open(scope_fixture(directory, "libplaced.so", "placed_symbol", false).string(), kRtldNow,
+                             nullptr, &inside);
+  INFO(linker.take_error()); REQUIRE(placed);
+  CHECK(placed->find_symbol("placed_symbol") == GuestAddr(window) + 0x900);
+  CHECK(*g2h<GuestAddr>(placed->find_symbol("bound")) == GuestAddr(window) + 0x900);
+  // Too small: a required range fails, a hint loads elsewhere.
+  elf::Placement small{GuestAddr(window) + size - 0x1000, 0x800, true};
+  CHECK_FALSE(linker.open(scope_fixture(directory, "libsmall.so", "small_symbol", false).string(), kRtldNow, nullptr,
+                          &small));
+  CHECK(linker.take_error().find("too small") != std::string::npos);
+  small.required = false;
+  auto* hinted = linker.open(scope_fixture(directory, "libhinted.so", "hinted_symbol", false).string(), kRtldNow,
+                             nullptr, &small);
+  INFO(linker.take_error()); REQUIRE(hinted);
+  const auto hinted_at = hinted->find_symbol("hinted_symbol");
+  CHECK((hinted_at < GuestAddr(window) || hinted_at >= GuestAddr(window) + size));
+  CHECK(linker.close(hinted) == 0); CHECK(linker.close(placed) == 0);
+  AddressSpace::get().unmap(GuestAddr(window), size);
 }
 TEST_CASE("core synthetic HLE backing keeps precedence, guest execution and lifetime") {
   GuestThread thread(95); thread.attach_to_current_host_thread();

@@ -50,7 +50,7 @@ struct Fonts {
 Fonts& fonts();
 void load_fonts();
 // Type scale (unscaled px).
-inline constexpr float kDisplay = 28, kTitle = 22, kHeading = 17, kBody = 15, kSmall = 13, kLabel = 12;
+inline constexpr float kDisplay = 28, kTitle = 22, kHeading = 17, kBody = 15, kSmall = 14, kLabel = 13;
 
 // --- Icons (Segoe Fluent Icons / MDL2 code points) ---------------------------
 // Returns "" when no icon font is available, so callers can always prefix.
@@ -123,6 +123,9 @@ float badge_width(std::string_view text, char32_t glyph = 0);
 // A zero `fill` uses the accent; paused progress passes a muted color.
 void progress_bar(float fraction, ImVec2 size, bool indeterminate = false, ImU32 fill = 0);
 bool search_field(const char* id, const char* hint, std::string* value, float width);
+// A chip-high pill field that submits: true on Enter or its check button.
+bool submit_field(const char* id, const char* hint, std::string* value, float width, char32_t glyph,
+                  bool enabled = true);
 // Pill showing "<prefix><current item>" that opens a menu of `items`.
 bool dropdown(const char* id, const char* prefix, const char* const* items, int count, int* current,
               float width = 0);

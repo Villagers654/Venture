@@ -30,8 +30,9 @@ struct Plan {
   std::string app_id, binary_id, package, version, version_code;
   std::vector<File> files;
   std::vector<std::string> installed_addons;
-  // False when Meta's full binary query failed and only APK/OBB metadata is
-  // known: the asset files, required ones included, are missing from files.
+  // False when Meta's full binary query failed: files hold the APK and OBB and
+  // at most each asset's id, name and size (no IAP, language or required
+  // flags), or no assets at all.
   bool assets_complete = true;
   // False for a manifest another installer wrote (the legacy CLI or an
   // import): it lacks the launcher's installedAddons record and may lack catalog
@@ -66,6 +67,9 @@ inline constexpr const char *catalog_unavailable =
 // Throws catalog_unavailable for a plan without its asset catalog.
 void require_asset_catalog(const Plan &plan);
 std::vector<Addon> group_addons(const Plan &plan);
+// Whether `catalog` may replace the installed `previous` plan: never a reduced
+// catalog over a full one, nor one that lists fewer asset files.
+bool catalog_replaces(const Plan &catalog, const Plan &previous);
 bool valid_sku(std::string_view sku);
 std::set<std::string> parse_owned_skus(const Json& rows);
 Json nodes(const Json &j);
@@ -83,12 +87,17 @@ public:
   using ReadTransport =
       std::function<http::Response(std::string_view, const http::Fields &)>;
   using ListingTransport = std::function<Json(std::string_view)>;
+  // The file name a delivery URL serves (http::delivery_file_name).
+  using NameTransport = std::function<std::string(std::string_view)>;
   explicit Store(std::string token, std::stop_token stop = {},
                  Transport transport = {}, ReadTransport read = {},
-                 ListingTransport listing = {})
+                 ListingTransport listing = {}, NameTransport names = {})
       : token_(std::move(token)), stop_(stop), transport_(std::move(transport)),
-        read_(std::move(read)), listing_(std::move(listing)) {}
+        read_(std::move(read)), listing_(std::move(listing)), names_(std::move(names)) {}
   Json query(std::string_view doc, const Json &vars = Json::object()) const;
+  // The signed-in account alone (id, alias, display name), without the
+  // library: sign-in does not depend on listing every entitlement.
+  Snapshot identity() const;
   Snapshot library() const;
   Details details(std::string_view id) const;
   Game artwork(std::string_view id) const;
@@ -96,21 +105,30 @@ public:
   // wide hero banner and the square icon.
   std::string cover(std::string_view id) const;
   Json builds(std::string_view id) const;
+  // One app's listing as this account sees it: the app alone, owned, when
+  // Meta says the account owns it (the whole-library query fails for some
+  // accounts); no games when it does not.
+  Snapshot owned_listing(std::string_view id) const;
+  // Whether this account owns the app: its listing's answer, else the library.
+  bool owns(std::string_view id) const;
   Plan owned_plan(std::string_view id) const;
   // Installed builds use their own binary's catalog, never a newer build's
   // files.
   Plan owned_plan(std::string_view id, std::string_view binary_id) const;
   std::vector<Addon> addons(const Plan &plan) const;
   std::set<std::string> owned_skus(std::string_view app_id) const;
-  std::string download_url(const File &file);
+  std::string download_url(const File &file) const;
 
 private:
   Json binary_details(std::string_view id) const;
-  std::string token_, delivery_;
+  Json fallback_assets(std::string_view id) const;
+  std::string token_;
+  mutable std::string delivery_;
   std::stop_token stop_;
   Transport transport_;
   ReadTransport read_;
   ListingTransport listing_;
+  NameTransport names_;
   Json public_item(std::string_view id) const;
   std::string app_token(std::string_view app_id) const;
   Json commerce(std::string_view edge, const http::Fields &fields,

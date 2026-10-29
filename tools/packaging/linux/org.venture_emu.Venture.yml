@@ -1,10 +1,12 @@
 # Flatpak of the baseline release layout (build_packages.sh flatpak).
 # OpenXR: the bundled loader reaches the host runtime through
 # venture-flatpak.sh; see docs/LINUX_RELEASE_BUILD.md ("Flatpak and OpenXR").
+# The GNOME runtime (freedesktop 26.08 underneath) carries WebKitGTK 6.0 for
+# Meta sign-in.
 id: org.venture_emu.Venture
-runtime: org.freedesktop.Platform
-runtime-version: '26.08'
-sdk: org.freedesktop.Sdk
+runtime: org.gnome.Platform
+runtime-version: '51'
+sdk: org.gnome.Sdk
 command: venture-flatpak.sh
 separate-locales: false
 finish-args:

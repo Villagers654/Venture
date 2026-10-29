@@ -13,6 +13,8 @@
 #include <map>
 #include <mutex>
 #include <optional>
+#include <set>
+#include <string>
 #include <vector>
 namespace venture::xr {
 namespace {
@@ -69,6 +71,11 @@ XrResult ensure(XrInstance instance) {
 unsigned mask(XrPath path) {
   return path == XR_NULL_PATH ? 3u : (path == hands[0] ? 1u : (path == hands[1] ? 2u : 0u));
 }
+// Each distinct bound source of a game menu action, once, for debug reports.
+void log_bound_source(const std::string &path) {
+  static std::set<std::string> logged;
+  if (logged.insert(path).second) log::info("facts", "Game menu action bound to {}", path);
+}
 // Query only after a successful focused sync. A zero count before the first
 // xrSyncActions is normal and must not become a cached fallback decision.
 // Unknown/error answers keep the native binding; absence must be established.
@@ -88,6 +95,10 @@ std::optional<unsigned> native_source_hands(XrSession session, XrAction action) 
   for (std::uint32_t i = 0; i < count; ++i) {
     const auto path = path_string(host_xr().instance, sources[i]);
     if (path.empty()) return {};
+    log_bound_source(path);
+    // Runtimes keep the system button for themselves (SteamVR's dashboard on
+    // Index controllers), so a menu bound there never reaches the game.
+    if (path.ends_with("/input/system/click") || path.ends_with("/input/system/touch")) continue;
     if (path.starts_with("/user/hand/left/")) available |= 1u;
     if (path.starts_with("/user/hand/right/")) available |= 2u;
   }

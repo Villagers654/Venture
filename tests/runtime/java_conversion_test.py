@@ -263,6 +263,53 @@ public class Holder {
             self.assertFalse(invalid["translation_complete"])
             self.assertTrue(any(f.get("kind") == "java.lang.IncompatibleClassChangeError" for f in invalid["failures"]))
 
+    def test_unframeable_method_throws_like_art_and_class_still_loads(self):
+        # Unreal's ProfilerAccessor merges types an older framework lacks: ART loads
+        # the class and only the method throws when it runs; HotSpot needs frames.
+        with tempfile.TemporaryDirectory(prefix="java-soft-", dir=ROOT / "build") as temp:
+            root = Path(temp)
+            (root / "Soft.java").write_text('''
+public class Soft {
+  public static int ok() { return 5; }
+  public static Object pick(boolean c) {
+    Object o;
+    try { o = c ? new MissingA() : new MissingB(); } catch (RuntimeException e) { o = null; }
+    return o;
+  }
+}
+class MissingA {} class MissingB {}
+''', encoding="utf-8")
+            (root / "Driver.java").write_text('''
+public class Driver {
+  public static void main(String[] a) {
+    if (Soft.ok() != 5) throw new AssertionError("working method");
+    try { Soft.pick(true); throw new AssertionError("no throw"); }
+    catch (NoClassDefFoundError e) { System.out.println("missing " + e.getMessage()); }
+  }
+}
+''', encoding="utf-8")
+            classes = root / "classes"
+            subprocess.run([java_tool("javac"), "-Xlint:-options", "--release", "8", "-d", str(classes),
+                            str(root / "Soft.java"), str(root / "Driver.java")], check=True)
+            partial = root / "soft.jar"
+            with zipfile.ZipFile(partial, "w") as archive:
+                archive.write(classes / "Soft.class", "Soft.class")
+            dex = root / "classes.dex"
+            subprocess.run([java_tool("java"), "-cp", str(DEPS / "dex2jar/lib/*"), "com.android.dx.command.Main",
+                            "--dex", "--min-sdk-version=26", "--output=" + str(dex), str(partial)], check=True)
+            apk = root / "soft.apk"
+            with zipfile.ZipFile(apk, "w") as archive:
+                archive.write(dex, "classes.dex")
+            dest, report = convert(apk, "com.venture.soft", root / "cache")
+            self.assertEqual([f["stage"] for f in report["failures"]], ["frames"])
+            driver = root / "driver"
+            driver.mkdir()
+            (driver / "Driver.class").write_bytes((classes / "Driver.class").read_bytes())
+            run = subprocess.run([java_tool("java"), "-cp", os.pathsep.join([java_path(dest / "app.jar"), java_path(driver)]), "Driver"],
+                                 capture_output=True, text=True, env=java_environment())
+            self.assertEqual(run.returncode, 0, run.stderr)
+            self.assertIn("missing Missing", run.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -570,9 +570,11 @@ static std::int32_t submit_frame(Mobile *mobile, const Submit *frame, const Fenc
                     XrSwapchainSubImage &out) {
       return submission.image(token, slot, rect, eye, bottom_up, frame->completion_fence, out);
     };
+    const auto translated = layers.size();
     r = translate_layer(*header, eye_offsets, copy, storage[i], layers);
     if (XR_FAILED(r)) {
-      if (venture::environment::getenv("VENTURE_TRACE_VULKAN")) {
+      {
+        // Once per process: debug reports carry the rejected layer's shape.
         static std::once_flag reported;
         std::call_once(reported, [&] {
           log::warn("vrapi", "Rejected layer type={} flags={:#x} blend={}/{} completion_fence_present={} result={}",
@@ -593,6 +595,13 @@ static std::int32_t submit_frame(Mobile *mobile, const Submit *frame, const Fenc
             }
           }
         });
+      }
+      // A layer the host cannot show is left out; the frame's other layers
+      // still display instead of the whole frame being discarded.
+      if (r == XR_ERROR_FEATURE_UNSUPPORTED) {
+        layers.resize(translated);
+        failure("SubmitFrame2 layer (skipped)", r);
+        continue;
       }
       return result(r, "SubmitFrame2 layer");
     }
