@@ -970,21 +970,37 @@ VkResult try_lazy_companion(VkDevice d, const VkImageCreateInfo& info, Companion
   return VK_SUCCESS;
 }
 std::atomic<int> compression_forced{-1};
-// VENTURE_TEXTURE_COMPRESSION=always or never overrides the GPU memory budget.
+// Decoded textures (RGBA8, 4 to 8 times their ASTC size; they filled 8-12 GB
+// GPUs in Batman: Arkham Shadow, Asgard's Wrath 2 and Resident Evil 4) are
+// stored as BC7 by default. VENTURE_TEXTURE_COMPRESSION (Settings > Runtime):
+// always (1), never (0), or auto (2): once the GPU memory in use passes
+// VENTURE_TEXTURE_COMPRESSION_THRESHOLD percent of the budget (default 50).
 int compression_mode() {
   if (auto forced = compression_forced.load(std::memory_order_relaxed); forced >= 0) return forced;
   static const int mode = [] {
     const char* value = std::getenv("VENTURE_TEXTURE_COMPRESSION");
-    if (!value) return -1;
-    if (!std::strcmp(value, "always") || !std::strcmp(value, "1")) return 1;
+    if (!value) return 1;
     if (!std::strcmp(value, "never") || !std::strcmp(value, "0")) return 0;
-    return -1;
+    if (!std::strcmp(value, "auto") || !std::strcmp(value, "2")) return 2;
+    return 1;
   }();
   return mode;
 }
-// Whether `incoming` more bytes would take device-local memory past 90% of the
-// budget the driver gives this process (VK_EXT_memory_budget). Past the budget
-// the OS moves resources to system memory and frames slow down.
+// Percent of the GPU memory budget in use past which automatic compression
+// stores new textures as BC7. Textures decoded before it keep their size: at
+// 50% a game fits about 2.5x the budget in decoded textures, at 90% 1.3x.
+VkDeviceSize compression_threshold() {
+  static const VkDeviceSize percent = [] {
+    const char* value = std::getenv("VENTURE_TEXTURE_COMPRESSION_THRESHOLD");
+    const long parsed = value ? std::strtol(value, nullptr, 10) : 0;
+    return VkDeviceSize(parsed >= 1 && parsed <= 100 ? parsed : 50);
+  }();
+  return percent;
+}
+// Whether `incoming` more bytes would take device-local memory past the
+// threshold share of the budget the driver gives this process
+// (VK_EXT_memory_budget). Past the budget the OS moves resources to system
+// memory and frames slow down.
 bool memory_pressure(VkPhysicalDevice physical, VkDeviceSize incoming) {
   static std::mutex mutex;
   static std::map<VkPhysicalDevice, bool> support;
@@ -1022,11 +1038,11 @@ bool memory_pressure(VkPhysicalDevice physical, VkDeviceSize incoming) {
   static std::atomic<VkDeviceSize> logged_gib{0};
   if (const auto gib = usage >> 30; limit && logged_gib.exchange(gib) != gib)
     log::info("vulkan", "GPU memory in use: {} of {} MiB", usage >> 20, limit >> 20);
-  if (!limit || usage + incoming <= limit / 10 * 9) return false;
+  if (!limit || usage + incoming <= limit / 100 * compression_threshold()) return false;
   static std::atomic<bool> reported{false};
   if (!reported.exchange(true))
-    log::warn("vulkan", "GPU memory is nearly full ({} of {} MiB); new textures are stored as BC7 (quarter size)",
-              usage >> 20, limit >> 20);
+    log::info("vulkan", "GPU memory {}% used ({} of {} MiB); new textures are stored as BC7 (quarter size)",
+              compression_threshold(), usage >> 20, limit >> 20);
   return true;
 }
 // BC7 storage needs a 2D image, the BC feature (enabled with the device when
@@ -1184,11 +1200,12 @@ VkResult VKAPI_CALL create_image(VkDevice d, const VkImageCreateInfo* info,
                   info->extent.width, info->extent.height, info->usage, info->flags,
                   shaped ? "host cannot store it as BC7" : "no BC7 plane for this format");
     }
-    if (shaped && compressible(physical, compressed) && (mode == 1 || memory_pressure(physical, decoded))) {
+    if (shaped && compressible(physical, compressed) &&
+        (mode == 1 || memory_pressure(physical, decoded))) {
       static std::atomic<bool> reported{false};
       if (!reported.exchange(true))
         log::info("vulkan", "Storing decoded textures as BC7 from a {}x{} texture on ({})",
-                  info->extent.width, info->extent.height, mode == 1 ? "forced" : "GPU memory budget");
+                  info->extent.width, info->extent.height, mode == 1 ? "always" : "GPU memory threshold");
       img->storage = std::move(storage);
       host = compressed;
     }

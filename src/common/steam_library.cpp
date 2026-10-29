@@ -446,6 +446,15 @@ void request_shutdown(const fs::path &root) {
 void start_client(const fs::path &root) { client_command(root, "-silent"); }
 // Implemented separately with the same bounded decoders used by the launcher.
 bool install_art(const fs::path &source, const fs::path &destination);
+// Steam keeps grid artwork as <appid><suffix> with the image's own extension;
+// the file there, if any.
+fs::path artwork_present(const fs::path &png) {
+  std::error_code ec;
+  for (auto ext : {".png", ".jpg", ".jpeg", ".webp", ".gif"})
+    if (auto file = fs::path(png).replace_extension(ext); fs::is_regular_file(file, ec))
+      return file;
+  return {};
+}
 fs::path best_art(const fs::path &cache, std::string_view id,
                   std::string_view kind);
 Result sync(const fs::path &root, const fs::path &executable,
@@ -521,11 +530,24 @@ Result sync(const fs::path &root, const fs::path &executable,
       entry.children.push_back(tags);
     }
     for (auto kind : {"portrait", "hero", "logo", "header", "icon"}) {
+      auto destination = config / "grid" / artwork_name(id, kind);
+      safe_target(config, destination);
+      // Artwork is added once. What Steam already has there, ours from an
+      // earlier sync or a custom image the user set in Steam (any image
+      // type), stays; a custom icon is the shortcut's own icon field.
+      const bool icon_kind = std::string_view(kind) == "icon";
+      if (icon_kind)
+        if (auto *icon = field(entry, "icon"); icon && !icon->value.empty() &&
+            fs::exists(paths::from_utf8(icon->value.c_str())))
+          continue;
+      if (auto existing = artwork_present(destination); !existing.empty()) {
+        if (icon_kind)
+          put(entry, "icon", paths::utf8(existing));
+        continue;
+      }
       auto source = best_art(art, g.art_id, kind);
       if (source.empty())
         continue;
-      auto destination = config / "grid" / artwork_name(id, kind);
-      safe_target(config, destination);
       artwork.push_back({source, destination, retained.size(),
                          std::string_view(kind) == "icon"});
     }

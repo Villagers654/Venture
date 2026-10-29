@@ -5,6 +5,43 @@ public final class Process {
   private static final java.util.concurrent.ConcurrentHashMap<Integer, Integer> PRIORITIES =
       new java.util.concurrent.ConcurrentHashMap<>();
   public static final int THREAD_PRIORITY_URGENT_AUDIO = -19;
+  public static final int THREAD_PRIORITY_LOWEST = 19;
+  public static final int THREAD_PRIORITY_BACKGROUND = 10;
+  public static final int THREAD_PRIORITY_FOREGROUND = -2;
+  public static final int THREAD_PRIORITY_DISPLAY = -4;
+  public static final int THREAD_PRIORITY_URGENT_DISPLAY = -8;
+  public static final int THREAD_PRIORITY_MORE_FAVORABLE = -1;
+  public static final int THREAD_PRIORITY_LESS_FAVORABLE = 1;
+  // When this process started, on the SystemClock uptime/elapsed clock (both
+  // are the same here). Sentry's launch timing reads it before the activity.
+  private static final long START_UPTIME = SystemClock.uptimeMillis()
+      - ProcessHandle.current().info().startInstant()
+          .map(start -> Math.max(0L, java.time.Duration.between(start, java.time.Instant.now()).toMillis()))
+          .orElse(0L);
+  public static long getStartUptimeMillis() {
+    return START_UPTIME;
+  }
+  public static long getStartElapsedRealtime() {
+    return START_UPTIME;
+  }
+  public static long getStartRequestedUptimeMillis() {
+    return START_UPTIME;
+  }
+  public static long getStartRequestedElapsedRealtime() {
+    return START_UPTIME;
+  }
+  public static boolean is64Bit() {
+    return true;
+  }
+  public static boolean isIsolated() {
+    return false;
+  }
+  public static boolean isApplicationUid(int uid) {
+    return uid % 100000 >= 10000 && uid % 100000 <= 19999;
+  }
+  public static String myProcessName() {
+    return android.app.Application.getProcessName();
+  }
   public static int myPid() {
     return (int) ProcessHandle.current().pid();
   }

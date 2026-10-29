@@ -1632,6 +1632,34 @@ void App::draw_settings() {
     });
   }
   divider();
+  {
+    const char* modes[] = {"Always", "Automatic", "Off"};
+    float dw = s(180);
+    setting_row("Compress textures",
+                "Stores game textures at a quarter of the GPU memory, with a small loss of detail. Automatic: "
+                "only once the GPU memory in use passes a threshold.",
+                dw, s(38), [&] {
+      if (dropdown("textures", "", modes, 3, &settings_.texture_compression, dw)) action([&] { save_settings(); });
+    });
+  }
+  if (settings_.texture_compression == 1) {
+    divider();
+    static const char* shares[] = {"25%", "50%", "75%", "90%"};
+    static constexpr int percents[] = {25, 50, 75, 90};
+    int choice = int(std::ranges::find(percents, settings_.texture_compression_threshold) - std::begin(percents));
+    if (choice == 4) choice = 1;
+    float dw = s(180);
+    setting_row("Compression threshold",
+                "GPU memory in use before new textures are compressed. Lower leaves room for larger games.", dw,
+                s(38), [&] {
+      if (dropdown("texture-threshold", "", shares, 4, &choice, dw))
+        action([this, percent = percents[choice]] {
+          settings_.texture_compression_threshold = percent;
+          save_settings();
+        });
+    });
+  }
+  divider();
   setting_row("Check for updates", "Venture tells you when a new version is out.", s(44), s(24), [&] {
     if (toggle("updates", &settings_.check_updates)) action([&] { save_settings(); });
   });

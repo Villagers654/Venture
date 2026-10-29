@@ -1316,6 +1316,13 @@ void Core::launch_game(std::string_view id, std::string_view requested,
           // The menu chord setting; automatic leaves the runtime's default.
           if (settings_.menu_button == 1) environment.push_back({"VENTURE_MENU_CHORD", "stick-clicks"});
           if (settings_.menu_button == 2) environment.push_back({"VENTURE_MENU_CHORD", "off"});
+          // Texture compression; always is the runtime's default.
+          if (settings_.texture_compression == 1) {
+            environment.push_back({"VENTURE_TEXTURE_COMPRESSION", "auto"});
+            environment.push_back({"VENTURE_TEXTURE_COMPRESSION_THRESHOLD",
+                                   std::to_string(settings_.texture_compression_threshold)});
+          }
+          if (settings_.texture_compression == 2) environment.push_back({"VENTURE_TEXTURE_COMPRESSION", "never"});
           r.process.spawn(runtime, args, r.console, console,
                           [broker, routes = std::move(routes), details, key, queue = launch_queue_](const Json &request) {
                             const auto op = str(request, "op");

@@ -79,6 +79,10 @@ struct Settings {
   // The game's menu from holding both stick clicks: 0 automatic (only when the
   // runtime has no menu binding for that hand), 1 always, 2 off (Settings > Runtime).
   int menu_button = 0;
+  // Decoded textures stored as BC7 (Settings > Runtime): 0 always, 1 once
+  // texture_compression_threshold percent of GPU memory is in use, 2 off.
+  int texture_compression = 0;
+  int texture_compression_threshold = 50;
   bool runtime_override() const;
   // `games` first, then the other library folders.
   std::vector<fs::path> roots() const;

@@ -160,6 +160,35 @@ TEST_CASE("Steam sync preserves foreign entries and removes only owned "
   CHECK(paths::read(f.target) == stable);
   CHECK(paths::read(f.config / "shortcuts.vdf.venture.bak") == backup);
 }
+TEST_CASE("Steam sync adds artwork once and keeps images set in Steam") {
+  Fixture f;
+  // A 1x1 PNG: every kind of artwork falls back to it.
+  const std::string png("\x89\x50\x4e\x47\x0d\x0a\x1a\x0a\x00\x00\x00\x0d\x49\x48\x44\x52\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\x0d\x49\x44\x41\x54\x78\x9c\x63\xf8\xcf\xc0\xf0\x1f\x00\x05\x00\x01\xff\x89\x99\x3d\x1d\x00\x00\x00\x00\x49\x45\x4e\x44\xae\x42\x60\x82", 70);
+  fs::create_directories(f.root / "art");
+  paths::atomic_write(f.root / "art" / "111111.png", png);
+  paths::atomic_write(f.root / "art" / "222222.png", png);
+  const auto exe = f.root / "venture.exe";
+  sync(f.root, exe, f.root / "art", {{"com.example.one", "One", "111111"}}, [] { return false; });
+  auto entries = member(read_vdf(paths::read(f.target)), "shortcuts").children;
+  REQUIRE(entries.size() == 1);
+  const auto value = member(entries[0], "appid").value;
+  std::uint32_t id = 0;
+  for (int i = 3; i >= 0; --i) id = id << 8 | std::uint8_t(value[std::size_t(i)]);
+  const auto grid = f.config / "grid";
+  const auto portrait = grid / (std::to_string(id) + "p.png"), hero = grid / (std::to_string(id) + "_hero.png");
+  REQUIRE(fs::exists(portrait));
+  REQUIRE(fs::exists(hero));
+  // The user sets a JPEG cover and edits the hero in Steam, then adds a game.
+  fs::remove(portrait);
+  paths::atomic_write(grid / (std::to_string(id) + "p.jpg"), "custom cover");
+  paths::atomic_write(hero, "custom hero");
+  sync(f.root, exe, f.root / "art",
+       {{"com.example.one", "One", "111111"}, {"com.example.two", "Two", "222222"}}, [] { return false; });
+  CHECK_FALSE(fs::exists(portrait));
+  CHECK(paths::read(grid / (std::to_string(id) + "p.jpg")) == "custom cover");
+  CHECK(paths::read(hero) == "custom hero");
+  CHECK(member(read_vdf(paths::read(f.target)), "shortcuts").children.size() == 2);
+}
 TEST_CASE(
     "Steam sync defers while running and never overwrites corrupt shortcuts") {
   Fixture f;

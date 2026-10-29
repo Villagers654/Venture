@@ -1,8 +1,8 @@
 #define DOCTEST_CONFIG_IMPLEMENT
 #include <doctest/doctest.h>
 #include <cstdio>
-#ifndef _WIN32
 #include <cstdlib>
+#ifndef _WIN32
 #include <filesystem>
 #include <string>
 #include <system_error>
@@ -12,6 +12,13 @@
 int main(int argc, char** argv) {
   // Unbuffered, so a crashing test's name and failed checks reach the log.
   std::setvbuf(stdout, nullptr, _IONBF, 0);
+  // Decoded textures stay RGBA8 (the runtime stores them as BC7 by default);
+  // the BC7 tests force compression themselves.
+#ifdef _WIN32
+  if (!std::getenv("VENTURE_TEXTURE_COMPRESSION")) _putenv_s("VENTURE_TEXTURE_COMPRESSION", "never");
+#else
+  setenv("VENTURE_TEXTURE_COMPRESSION", "never", 0);
+#endif
 #ifndef _WIN32
   // Fixture credentials must never reach the owner's Secret Service (DPAPI
   // blobs on Windows stay in each test's temporary directory). libsecret's file

@@ -425,6 +425,9 @@ Settings Settings::load(const fs::path &data) {
   if (const auto size = number(j, "interfaceSize"); size >= 100 && size <= 200)
     s.interface_size = int(size);
   s.menu_button = int(std::min<uint64_t>(2, number(j, "menuButton")));
+  s.texture_compression = int(std::min<uint64_t>(2, number(j, "textureCompression")));
+  if (auto percent = number(j, "textureCompressionThreshold"); percent >= 10 && percent <= 95)
+    s.texture_compression_threshold = int(percent);
   s.console = field(j, "launchWithConsole") == true;
   s.check_updates = field(j, "checkForUpdates") != false;
   s.dismissed_update = str(j, "dismissedUpdate");
@@ -453,6 +456,8 @@ void Settings::save(const fs::path &data) const {
          {"logLevel", log_level},
          {"interfaceSize", interface_size},
          {"menuButton", menu_button},
+         {"textureCompression", texture_compression},
+         {"textureCompressionThreshold", texture_compression_threshold},
          {"launchWithConsole", console},
          {"checkForUpdates", check_updates},
          {"dismissedUpdate", dismissed_update},

@@ -756,6 +756,9 @@ public final class FrameworkTest {
     long spin = System.nanoTime(); double sink = 0;
     while (System.nanoTime() - spin < 50_000_000L) sink += Math.sqrt(sink + 1);
     check(cpuBefore >= 0 && android.os.Process.getElapsedCpuTime() >= cpuBefore && sink > 0, "process CPU time is monotonic milliseconds");
+    long started = android.os.Process.getStartUptimeMillis();
+    check(started <= android.os.SystemClock.uptimeMillis() && started == android.os.Process.getStartElapsedRealtime()
+        && android.os.Process.is64Bit(), "process start time is on the uptime clock");
     // Unreal Engine 5's GameActivity reads the main thread's priority; its network monitor tags sockets.
     check(android.os.Process.getThreadPriority(0) == android.os.Process.THREAD_PRIORITY_DEFAULT, "threads start at default priority");
     android.os.Process.setThreadPriority(-4);
