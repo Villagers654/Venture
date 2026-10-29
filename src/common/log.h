@@ -3,6 +3,7 @@
 
 #include <chrono>
 #include <format>
+#include <string>
 #include <string_view>
 
 namespace venture::log {
@@ -23,6 +24,8 @@ void attach_console();
 // the file is closed or replaced and at exit.
 // Each new file starts with fresh first occurrences.
 void set_file(std::string_view path);
+// The file set_file last opened ("" for none).
+std::string file();
 // With a file set, stop mirroring warnings and errors to stderr (a command
 // line tool whose terminal output is its own; default on).
 void set_stderr(bool enabled);

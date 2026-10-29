@@ -162,6 +162,14 @@ bool start_jvm(const JvmOptions& options, std::string* error) {
       path += item;
     }
     values.push_back(path);
+    // HotSpot's fatal error report (the native stack of a crash in a driver or
+    // layer) goes beside the runtime log, where debug reports find it, instead
+    // of the working directory.
+    if (const auto log_file = log::file(); !log_file.empty()) {
+      auto stem = paths::from_utf8(log_file);
+      stem.replace_extension();
+      values.push_back("-XX:ErrorFile=" + paths::utf8(stem) + "-hs_err-%p.log");
+    }
     for (auto& option : platform::jvm_host_options()) values.push_back(std::move(option));
     values.insert(values.end(), options.extra_options.begin(), options.extra_options.end());
     const auto& device = *process_config().device_identity;

@@ -3,6 +3,7 @@
 #include <dlfcn.h>
 #include <fcntl.h>
 #include <atomic>
+#include <cstdlib>
 #include <fstream>
 #include <iterator>
 #include <openssl/evp.h>
@@ -236,7 +237,10 @@ std::string marker_root(const fs::path &file, std::string_view key) {
 void unlock_default_collection() {
   static std::atomic_flag tried = ATOMIC_FLAG_INIT;
   auto &l = libsecret();
-  if (!l.can_unlock || tried.test_and_set()) return;
+  // libsecret's file backend (SECRET_BACKEND=file: tests, sandboxes) has no
+  // collection to open; the service call would reach the desktop keyring.
+  const char *backend = std::getenv("SECRET_BACKEND");
+  if (!l.can_unlock || (backend && std::string_view(backend) != "service") || tried.test_and_set()) return;
   GError *error = nullptr;
   SecretService *service = l.service(SECRET_SERVICE_LOAD_COLLECTIONS, nullptr, &error);
   if (!service) {

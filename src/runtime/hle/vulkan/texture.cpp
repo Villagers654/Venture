@@ -1017,6 +1017,11 @@ bool memory_pressure(VkPhysicalDevice physical, VkDeviceSize incoming) {
       usage += budget.heapUsage[i];
       limit += budget.heapBudget[i];
     }
+  // Each whole GiB crossed, up or down, goes to the log: a few lines per run
+  // that show in a debug report whether GPU memory grows with each level.
+  static std::atomic<VkDeviceSize> logged_gib{0};
+  if (const auto gib = usage >> 30; limit && logged_gib.exchange(gib) != gib)
+    log::info("vulkan", "GPU memory in use: {} of {} MiB", usage >> 20, limit >> 20);
   if (!limit || usage + incoming <= limit / 10 * 9) return false;
   static std::atomic<bool> reported{false};
   if (!reported.exchange(true))

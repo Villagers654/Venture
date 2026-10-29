@@ -127,6 +127,10 @@ jobs:
             "export TMPDIR=$RUNNER_TEMP/tests VK_DRIVER_FILES=\$(ls /usr/share/vulkan/icd.d/lvp_icd*.json | head -1) &&
             export VK_ICD_FILENAMES=\$VK_DRIVER_FILES &&
             ctest --test-dir build/linux-baseline -j 4 --timeout 900 --output-on-failure"
+      # A test that crashes in native code under the JVM leaves its stack only in hs_err files.
+      - name: Crash reports
+        if: failure() && inputs.test
+        run: find build/linux-baseline -name 'hs_err_pid*.log' -exec sh -c 'echo "== $1"; sed -n "1,120p" "$1"' _ {} \;
 
       - name: Save FetchContent sources
         if: always()

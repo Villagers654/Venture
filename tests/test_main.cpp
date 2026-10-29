@@ -1,5 +1,6 @@
 #define DOCTEST_CONFIG_IMPLEMENT
 #include <doctest/doctest.h>
+#include <cstdio>
 #ifndef _WIN32
 #include <cstdlib>
 #include <filesystem>
@@ -9,6 +10,8 @@
 #endif
 
 int main(int argc, char** argv) {
+  // Unbuffered, so a crashing test's name and failed checks reach the log.
+  std::setvbuf(stdout, nullptr, _IONBF, 0);
 #ifndef _WIN32
   // Fixture credentials must never reach the owner's Secret Service (DPAPI
   // blobs on Windows stay in each test's temporary directory). libsecret's file

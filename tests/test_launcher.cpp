@@ -569,6 +569,13 @@ TEST_CASE("debug reports keep the last launch and leave out names, folders and t
       << "started from " << home << "\nW [launch] APK has unresolved dependencies. Details: "
       << paths::utf8(data / "report.json") << "\r\nfailed\n";
   std::ofstream(data / "logs" / "runtime-com.example.game-20260101-000000-1-2.dmp") << "dump bytes";
+  std::ofstream(data / "logs" / "runtime-com.example.game-hs_err-77.log")
+      << "#\n# A fatal error has been detected by the Java Runtime Environment:\n#\n"
+         "#  EXCEPTION_ACCESS_VIOLATION (0xc0000005) at pc=0x00007ffb71c15fe0\n#\n"
+         "---------------  T H R E A D  ---------------\n\n"
+         "Current thread (0x1): JavaThread \"main\"\n\nRegisters:\nRAX=0x1234\n\n"
+         "Native frames: (J=compiled Java code)\nC  [vulkan-1.dll+0x45fe0]\nC  [SomeLayer.dll+0x10]\n\n"
+         "---------------  P R O C E S S  ---------------\nDynamic libraries:\n0x1 C:\\x.dll\n";
   std::ofstream(data / "settings.json") << "{\"logLevel\": 2}";
   auto file = launcher::write_debug_report({.data = data, .version = "9.9.9", .private_text = {"secretalias"}});
   std::ifstream in(file, std::ios::binary);
@@ -579,6 +586,13 @@ TEST_CASE("debug reports keep the last launch and leave out names, folders and t
   CHECK(report.find("started from ~") != std::string::npos);
   CHECK(report.find("runtime-com.example.game-20260101-000000-1-2.dmp") != std::string::npos);
   CHECK(report.find("dump bytes") == std::string::npos);
+  // The JVM's crash report: summary and native stack, not registers or modules.
+  CHECK(report.find("=== runtime-com.example.game-hs_err-77.log") != std::string::npos);
+  CHECK(report.find("EXCEPTION_ACCESS_VIOLATION (0xc0000005)") != std::string::npos);
+  CHECK(report.find("Current thread (0x1)") != std::string::npos);
+  CHECK(report.find("C  [SomeLayer.dll+0x10]") != std::string::npos);
+  CHECK(report.find("RAX=0x1234") == std::string::npos);
+  CHECK(report.find("Dynamic libraries") == std::string::npos);
   CHECK(report.find("old game") == std::string::npos);
   CHECK(report.find("secret-account-file") == std::string::npos);
   CHECK(report.find("\"logLevel\": 2") != std::string::npos);

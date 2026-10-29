@@ -35,6 +35,7 @@ struct TerminalHandoff {
 };
 std::atomic<TerminalHandoff*> g_terminal_handoff{nullptr};
 int g_file = -1;
+std::string g_path;
 #ifdef _WIN32
 HANDLE g_native_file = INVALID_HANDLE_VALUE;
 #endif
@@ -315,6 +316,7 @@ void set_file(std::string_view path) {
   flush_file();
   if (g_file >= 0) VENTURE_LOG_CLOSE(g_file);
   g_file = -1;
+  g_path = path;
   if (!path.empty()) {
 #ifdef _WIN32
     g_file = _wopen(paths::from_utf8(path).c_str(), _O_WRONLY | _O_CREAT | _O_APPEND | _O_BINARY,
@@ -324,6 +326,11 @@ void set_file(std::string_view path) {
     g_file = ::open(paths::from_utf8(path).c_str(), O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0600);
 #endif
   }
+}
+
+std::string file() {
+  std::lock_guard lock(g_mutex);
+  return g_path;
 }
 
 void write(Level level, std::string_view tag, std::string_view message) {

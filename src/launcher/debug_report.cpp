@@ -393,7 +393,7 @@ fs::path write_debug_report(const DebugReport &request) {
     for (const auto &e : fs::directory_iterator(logs, ec)) {
       std::string name = paths::utf8(e.path().filename());
       if (!name.starts_with("runtime-") || !name.ends_with(".log") || name.ends_with(".prev.log") ||
-          name.ends_with(".console.log"))
+          name.ends_with(".console.log") || name.find("-hs_err-") != std::string::npos)
         continue;
       if (auto t = e.last_write_time(ec); !ec && t > newest) {
         newest = t;
@@ -438,6 +438,40 @@ fs::path write_debug_report(const DebugReport &request) {
     }
     if (!dumps.empty()) out += "\n=== Crash dumps on this PC (not included) ===\n" + dumps;
     const std::string base = "runtime-" + package;
+    // HotSpot's report of the newest native crash, cut to what names it (a few
+    // KiB of the budget): the summary, the crashing thread and its native
+    // stack (which driver or layer). Registers, memory and the module and
+    // environment tables are left out.
+    fs::path crash;
+    auto crash_time = fs::file_time_type::min();
+    for (const auto &e : fs::directory_iterator(logs, ec)) {
+      std::string name = paths::utf8(e.path().filename());
+      if (name.starts_with(base + "-hs_err-") && name.ends_with(".log"))
+        if (auto t = e.last_write_time(ec); !ec && t > crash_time) {
+          crash = e.path();
+          crash_time = t;
+        }
+    }
+    if (!crash.empty()) {
+      const std::string full = read_file(crash, 256 << 10);
+      std::string text;
+      bool frames = false;
+      for (size_t at = 0; at < full.size() && text.size() < (8 << 10);) {
+        size_t end = full.find('\n', at);
+        if (end == std::string::npos) end = full.size();
+        std::string_view line(full.data() + at, end - at);
+        at = end + 1;
+        if (!line.empty() && line.back() == '\r') line.remove_suffix(1);
+        if (line.starts_with("Native frames:") || line.starts_with("Java frames:")) frames = true;
+        else if (frames && line.empty()) frames = false;
+        if (frames || (line.starts_with("#") && line.size() > 2) || line.starts_with("Current thread")) {
+          text += line;
+          text += '\n';
+        }
+      }
+      out += std::format("\n=== {} (written {}) ===\n{}", paths::utf8(crash.filename()), local_time(crash_time), text);
+      if (!text.empty() && text.back() != '\n') out += '\n';
+    }
     facts_section(out, logs / (base + ".log"));
     missing_classes_section(out, logs / (base + ".log"));
     log_section(out, logs / (base + ".log"), kRuntimeLog);

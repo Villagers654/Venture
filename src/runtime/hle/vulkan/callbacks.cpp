@@ -6,9 +6,11 @@
 
 #include <array>
 #include <cstring>
+#include <format>
 #include <map>
 #include <mutex>
 #include <stdexcept>
+#include <string_view>
 
 #include "common/log.h"
 #include "core/thread.h"
@@ -118,15 +120,26 @@ void VKAPI_CALL internal_free(void* user, std::size_t size, VkInternalAllocation
 }  // namespace
 
 bool begin_terminal_allocator_bridge() {
-  if (!os_quit::requested() || os_quit::active_calls.load() || os_quit::cleanup_failed.load() ||
-      allocator_metadata_failed.load() || terminal_allocators.load()) return false;
-  if (!callback_admission.close_and_drain(std::chrono::seconds(2))) return false;
+  const auto refuse = [](std::string_view why) {
+    log::warn("vulkan", "Terminal allocator bridge not started: {}", why);
+    return false;
+  };
+  if (!os_quit::requested()) return refuse("no quit requested");
+  if (terminal_allocators.load()) return refuse("already active");
+  if (const auto calls = os_quit::active_calls.load()) return refuse(std::format("{} guest calls still active", calls));
+  if (os_quit::cleanup_failed.load()) return refuse("a guest thread's cleanup failed");
+  if (allocator_metadata_failed.load()) return refuse("allocator bookkeeping failed");
+  if (!callback_admission.close_and_drain(std::chrono::seconds(2))) return refuse("callbacks did not drain in 2 s");
   // A callback can publish failure after the initial pre-drain check.
   // Recheck once the complete callback/bookkeeping admission is drained.
-  if (os_quit::cleanup_failed.load() || allocator_metadata_failed.load()) return false;
+  if (os_quit::cleanup_failed.load()) return refuse("a guest thread's cleanup failed while draining");
+  if (allocator_metadata_failed.load()) return refuse("allocator bookkeeping failed while draining");
   std::lock_guard lock(callback_lock);
-  if (!allocation_ledger.seal(true)) { allocator_metadata_failed.store(true); return false; }
-  if (!callback_admission.activate_terminal()) return false;
+  if (!allocation_ledger.seal(true)) {
+    allocator_metadata_failed.store(true);
+    return refuse("the allocation ledger could not be sealed");
+  }
+  if (!callback_admission.activate_terminal()) return refuse("callback admission refused");
   terminal_allocators.store(true, std::memory_order_release);
   log::info("vulkan", "Terminal allocator bridge active after guest quiescence; records={}", allocators.size());
   return true;

@@ -11,6 +11,7 @@
 #include <miniz.h>
 #include <array>
 #include <cstdlib>
+#include <chrono>
 #include <cstring>
 #include <fstream>
 #include <map>
@@ -255,8 +256,12 @@ TEST_CASE("ELF32 HLE backing preserves Thumb exports, precedence and unload") {
 TEST_CASE("APK slice selection prefers arm64 and confirms extracted ELF e_machine") {
   const auto previous = process_config();
   struct Restore { ProcessConfig c; ~Restore() { process_config() = c; } } restore{previous};
-  auto install = std::filesystem::temp_directory_path() / "venture-a32-loader-slice-fixture";
+  // Unique per run, and removed whole: extraction may leave files beside the APK.
+  auto install = std::filesystem::temp_directory_path() /
+                 ("venture-a32-loader-slice-fixture-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+  std::filesystem::remove_all(install);
   std::filesystem::create_directories(install);
+  struct Cleanup { std::filesystem::path path; ~Cleanup() { std::error_code ec; std::filesystem::remove_all(path, ec); } } cleanup{install};
   auto apk = install / "slice.apk";
   elf::Header a64{}; std::memcpy(a64.ident, "\177ELF\2\1\1", 7); a64.machine = 183;
   elf::Header32 a32{}; std::memcpy(a32.ident, "\177ELF\1\1\1", 7); a32.machine = 40;
@@ -282,5 +287,4 @@ TEST_CASE("APK slice selection prefers arm64 and confirms extracted ELF e_machin
       CHECK(files[0].parent_path().filename() == process_config().abi);
     }
   }
-  std::filesystem::remove(apk); std::filesystem::remove(install / "plan.json"); std::filesystem::remove(install);
 }
