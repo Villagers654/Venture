@@ -712,3 +712,24 @@ TEST_CASE("updates pick this platform's release file and its checksum") {
   CHECK(update::expected_sum(text, "Venture-9-linux-x86_64.AppImage") == b);
   CHECK(update::expected_sum(text, "Venture-windows64.zip").empty());
 }
+
+TEST_CASE("store catalogs keep Meta's asset type and name language packs by file") {
+  auto b = binary();
+  auto &nodes = b["asset_files"]["nodes"];
+  nodes[0]["asset_file_type"] = "DEFAULT";
+  nodes[1]["asset_file_type"] = "LANGUAGE_PACK";
+  nodes[1]["file_name"] = "ko.lang";
+  nodes[2]["asset_file_type"] = "LANGUAGE_PACK";
+  nodes[2]["file_name"] = "voices_all.pak";
+  auto plan = meta::build_plan("123456", b);
+  auto file = [&](std::string_view name) { return *std::ranges::find(plan.files, name, &meta::File::name); };
+  CHECK(file("required.dat").asset_type == "default");
+  CHECK(file("required.dat").language_tag.empty());
+  // Asgard's Wrath 2 names its packs ko.lang; Meta lists no tag for them.
+  CHECK(file("ko.lang").asset_type == "language_pack");
+  CHECK(file("ko.lang").language_tag == "ko");
+  CHECK(file("voices_all.pak").asset_type == "language_pack");
+  CHECK(file("voices_all.pak").language_tag.empty());
+  auto saved = meta::parse_plan(plan.json());
+  CHECK(std::ranges::find(saved.files, "ko.lang", &meta::File::name)->language_tag == "ko");
+}

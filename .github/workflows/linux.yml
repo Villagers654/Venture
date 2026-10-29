@@ -88,7 +88,10 @@ jobs:
         with:
           path: ${{ runner.temp }}/ccache
           key: ${{ env.CCACHE_KEY }}-${{ github.run_id }}
-          restore-keys: ${{ env.CCACHE_KEY }}-
+          # Release and CI compile alike; CI's cache is the newest (main's last push).
+          restore-keys: |
+            linux-ccache-ci-
+            linux-ccache-release-
 
       - name: Bootstrap (toolchain, JDK, FFmpeg, ccache) and ANGLE in the baseline
         run: |

@@ -32,6 +32,23 @@ Error unknown_asset() {
   return {ErrorCode::not_entitled, 0,
           "Venture: asset is unknown or unavailable to this account"};
 }
+// A language pack serves its exact tag first, else any tag of its language:
+// packs named for a language ("ko") serve the system's regional tag ("ko-KR").
+std::vector<meta::File>::iterator find_language(std::vector<meta::File>& files, std::string_view tag) {
+  auto lower = [](std::string_view text, bool primary) {
+    std::string out(primary ? text.substr(0, text.find_first_of("-_")) : text);
+    for (auto& c : out) c = c == '_' ? '-' : char(std::tolower(static_cast<unsigned char>(c)));
+    return out;
+  };
+  for (bool primary : {false, true}) {
+    auto want = lower(tag, primary);
+    auto found = std::ranges::find_if(files, [&](const meta::File& f) {
+      return !f.language_tag.empty() && lower(f.language_tag, primary) == want;
+    });
+    if (found != files.end() || want.empty()) return found;
+  }
+  return files.end();
+}
 Model update(const meta::File& f, std::uint64_t done, bool complete) {
   // OVR_AssetFileDownloadUpdate.h: deprecated counters are uint32/int32;
   // *Long counters are uint64/int64, on both guest ABIs.
@@ -292,13 +309,13 @@ Result AssetService::request(std::string_view op, const RequestArgs& args,
         selected = language_;
       }
       auto tag = selected.empty() ? host_locale() : selected;
-      if (!tag.empty())
-        found = std::ranges::find(files, tag, &meta::File::language_tag);
+      if (!tag.empty()) found = find_language(files, tag);
     } else if (args.values.size() == 1) {
       if (op == "LanguageSetCurrent") {
-        if (auto tag = std::get_if<std::string>(&args.values[0]);
-            tag && !tag->empty())
-          found = std::ranges::find(files, *tag, &meta::File::language_tag);
+        auto tag = std::get_if<std::string>(&args.values[0]);
+        if (tag && !tag->empty()) found = find_language(files, *tag);
+        log::info("facts", "Game asked for language pack {}: {}", tag ? *tag : std::string("-"),
+                  found == files.end() ? std::string("none in the asset list") : found->name);
       } else if (op.ends_with("ByName")) {
         if (auto name = std::get_if<std::string>(&args.values[0]);
             name && paths::safe_name(*name))

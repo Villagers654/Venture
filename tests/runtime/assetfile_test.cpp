@@ -393,3 +393,20 @@ TEST_CASE("AssetFile returned paths publish new downloads and delete stale OBB v
   CHECK_FALSE(venture::fs::exists(f.root / "view/plan.json"));
   CHECK_FALSE(venture::fs::exists(f.root / "view/com.example.assets.apk"));
 }
+TEST_CASE("AssetFile language packs serve the system's regional tag") {
+  Fixture f;
+  f.plan.files.back().language_tag = "fr";
+  venture::paths::atomic_write(f.install / "plan.json", f.plan.json().dump());
+  venture::paths::atomic_write(f.install / "fr.bundle", "fr");
+  auto s = f.service();
+  auto set = [&](std::string tag) {
+    RequestArgs args;
+    args.values.push_back(std::move(tag));
+    return s->request("LanguageSetCurrent", args, {});
+  };
+  // A pack named for its language ("ko.lang") serves "ko-KR" and the exact tag.
+  CHECK_FALSE(set("fr-CA").error);
+  CHECK_FALSE(set("FR").error);
+  CHECK(set("de-DE").error);
+  CHECK(set("f").error);
+}

@@ -1183,8 +1183,15 @@ void Core::launch_game(std::string_view id, std::string_view requested,
   // install) is retried too, so its assets appear once Meta lists them.
   const bool no_assets = !i->plan.assets_complete &&
       std::ranges::none_of(i->plan.files, [](auto &f) { return f.kind == "asset"; });
+  // Meta gives every asset a type (default, store, language_pack); a catalog
+  // saved before Venture read it has none, so its language packs are hidden.
+  const bool untyped_assets = i->plan.assets_complete &&
+      std::ranges::any_of(i->plan.files, [](auto &f) {
+        return f.kind == "asset" && !f.id.empty() && f.asset_type.empty();
+      });
   std::string catalog_token;
-  if ((!i->plan.launcher_format || no_assets) && !i->plan.local && !choice.account_key.empty())
+  if ((!i->plan.launcher_format || no_assets || untyped_assets) && !i->plan.local &&
+      !choice.account_key.empty())
     if (auto owner = vault_.load(choice.account_key))
       catalog_token = owner->access_token;
   if ((running_.contains(game_id) && running_[game_id].process.active()) ||

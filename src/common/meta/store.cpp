@@ -300,6 +300,35 @@ std::vector<Addon> group_addons(const Plan &plan) {
   }
   return result;
 }
+namespace {
+// The store query names an asset's kind asset_file_type (DEFAULT, STORE,
+// LANGUAGE_PACK); the Platform SDK spells it default, store, language_pack.
+std::string asset_type(const Json &file) {
+  auto type = str(file, "asset_type");
+  if (!type.empty()) return type;
+  type = str(file, "asset_file_type");
+  std::transform(type.begin(), type.end(), type.begin(),
+                 [](unsigned char c) { return char(std::tolower(c)); });
+  return type == "default" || type == "store" || type == "language_pack" ? type : "";
+}
+// Meta lists no language for a language pack; its file is named for it
+// (Asgard's Wrath 2: ko.lang, zh.lang). Only a BCP-47 shaped stem counts.
+std::string language_pack_tag(std::string_view name) {
+  auto tag = std::string(name.substr(0, name.find('.')));
+  std::replace(tag.begin(), tag.end(), '_', '-');
+  std::size_t start = 0;
+  for (std::size_t part = 0; start <= tag.size(); ++part) {
+    auto end = std::min(tag.find('-', start), tag.size());
+    auto length = end - start;
+    if (!length || length > 8 || (part == 0 && (length < 2 || length > 3)) ||
+        !std::all_of(tag.begin() + start, tag.begin() + end,
+                     [&](unsigned char c) { return part ? std::isalnum(c) : std::isalpha(c); }))
+      return {};
+    start = end + 1;
+  }
+  return tag;
+}
+}  // namespace
 Plan build_plan(std::string_view app_id, const Json &b) {
   require_id(app_id);
   Plan p{std::string(app_id), str(b, "id"),           str(b, "package_name"),
@@ -327,9 +356,11 @@ Plan build_plan(std::string_view app_id, const Json &b) {
           "Meta returned a filename reserved for installation state.");
     File f{str(file, "id"), name, str(file, "uri"), kind, number(file, "size")};
     if (kind == "asset") {
-      f.asset_type = str(file, "asset_type");
+      f.asset_type = asset_type(file);
       f.metadata = str(file, "metadata");
       f.language_tag = str(field(file, "language"), "tag");
+      if (f.language_tag.empty() && f.asset_type == "language_pack")
+        f.language_tag = language_pack_tag(name);
       f.language_english_name = str(field(file, "language"), "english_name");
       f.language_native_name = str(field(file, "language"), "native_name");
       f.required = field(file, "is_required") == true;

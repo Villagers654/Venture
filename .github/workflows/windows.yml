@@ -69,7 +69,10 @@ jobs:
         with:
           path: ${{ runner.temp }}\ccache
           key: win-ccache-${{ inputs.package && 'release' || 'ci' }}-${{ github.run_id }}
-          restore-keys: win-ccache-${{ inputs.package && 'release' || 'ci' }}-
+          # Release and CI compile alike; CI's cache is the newest (main's last push).
+          restore-keys: |
+            win-ccache-ci-
+            win-ccache-release-
 
       - name: Bootstrap (toolchain, JDK, FFmpeg, ANGLE, ccache)
         run: python tools/bootstrap.py --jdk --angle --ccache
