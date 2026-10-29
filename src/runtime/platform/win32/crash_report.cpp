@@ -1,5 +1,7 @@
 #include "core/pc_trace.h"
 #include "core/api_result_trace.h"
+#include "core/signals.h"
+#include "core/thread.h"
 #include "platform/crash_report.h"
 #include "platform/memory.h"
 #include "common/log.h"
@@ -18,6 +20,7 @@ EXCEPTION_RECORD record;
 CONTEXT context;
 EXCEPTION_POINTERS exception{&record, &context};
 DWORD fault_tid;
+venture::GuestThread* fault_guest;
 volatile LONG reporting;
 std::wstring dump_path, dump_pattern, dump_directory;
 std::string dump_line;
@@ -108,6 +111,8 @@ DWORD WINAPI dump_worker(void*) {
     }
     if (walk.Rsp <= old_rsp) break;
   }
+  // A fault inside a host call a guest made: name the guest caller too.
+  venture::signals::write_host_fault_guest_frames(fault_guest);
   if (write_dump && !dump_path.empty()) {
     auto file = CreateFileW(dump_path.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr,
                             CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
@@ -137,6 +142,7 @@ LONG WINAPI host_exception(EXCEPTION_POINTERS* fault) {
   record = *fault->ExceptionRecord;
   context = *fault->ContextRecord;
   fault_tid = GetCurrentThreadId();
+  fault_guest = venture::GuestThread::current();
   // Drain the logging buffer immediately, even if dump generation later fails.
   venture::log::crash_write("", 0);
   SetEvent(requested);

@@ -175,6 +175,7 @@ protected:
   void launch_game(std::string_view, std::string_view, const LaunchDetails&,
                    std::shared_ptr<LaunchRequest> = {});
   std::string selected_, notice_, warning_, auth_status_;
+  bool library_partial_ = false;  // Meta did not confirm the whole library
   bool refreshing_ = false, scanning_ = false, signing_in_ = false,
        verifying_ = false;
   bool auth_page_loaded_ = false; // the Meta sign-in page finished loading

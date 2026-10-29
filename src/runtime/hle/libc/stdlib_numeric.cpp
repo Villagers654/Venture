@@ -24,6 +24,9 @@ auto integer(const char* text, char** end, int base)
     set_error(err::kEINVAL);
     return 0;
   }
+  // Keep a guest's invalid input in the guest fault path, rather than letting
+  // the host parser dereference it and terminate the runtime with a host AV.
+  if (!text) throw_memory_range_fault(0, false);
   auto p = text;
   while (space(*p)) ++p;
   bool neg = *p == '-';

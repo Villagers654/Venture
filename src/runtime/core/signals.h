@@ -80,6 +80,11 @@ void deliver_synchronous(GuestThread& thread, const Info& info);
 // wait; a thread running translated code reports its last saved state.
 void log_guest_threads(std::string_view reason);
 
+// Host crash reports (the logger is terminal by then): the registers and frames
+// of `thread` when host code it called faulted, such as an HLE libc call given
+// a bad pointer, so the report names the guest caller. Null does nothing.
+void write_host_fault_guest_frames(GuestThread* thread) noexcept;
+
 // Called by the run loop and by interruptible waits: runs handlers for any
 // deliverable pending signals of `thread`. Returns true if a handler ran
 // (blocking calls without SA_RESTART should then fail with EINTR).

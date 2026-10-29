@@ -1,5 +1,7 @@
 #include "core/pc_trace.h"
 #include "core/api_result_trace.h"
+#include "core/signals.h"
+#include "core/thread.h"
 #include "platform/crash_report.h"
 #include "platform/memory.h"
 #include "common/log.h"
@@ -65,6 +67,11 @@ void host_signal(int signal, siginfo_t* info, void* raw_context) {
       n = std::snprintf(line, sizeof(line), " E [host-stack]   #%d %s\n", i, where);
       venture::log::crash_write(line, n);
     }
+    // A fault inside a host call a guest made: name the guest caller too. The
+    // symbol lookup is not signal-safe, so a stuck report ends by SIGALRM.
+    alarm(10);
+    venture::signals::write_host_fault_guest_frames(venture::GuestThread::current());
+    alarm(0);
   }
   struct sigaction action{};
   action.sa_handler = SIG_DFL;

@@ -99,6 +99,9 @@ set_tests_properties(venture_tests_core_restart PROPERTIES COST 1500)
 add_test(NAME venture_tests_jit_cache_alloc_checks COMMAND venture_tests "--source-file=*jit_cache_test.cpp" --duration=true)
 set_tests_properties(venture_tests_jit_cache_alloc_checks PROPERTIES COST 40)
 list(APPEND venture_test_partitions venture_tests_jit_cache_alloc_checks)
+add_test(NAME libc_numeric_null_input COMMAND venture_tests
+  "--test-case=libc A null integer input delivers a recoverable guest SIGSEGV")
+list(APPEND venture_test_partitions libc_numeric_null_input)
 set_tests_properties(venture_tests_vulkan_fastpath PROPERTIES COST 20)
 
 if(NOT TARGET Python3::Interpreter)

@@ -466,6 +466,7 @@ void Core::switch_account(std::string_view key) {
   reload_accounts();
   downloads_->set_account(account_key_);
   warning_.clear();
+  library_partial_ = false;
   auth_status_.clear();
   if (!options_.offline)
     refresh();
@@ -488,6 +489,7 @@ void Core::sign_out_account(std::string_view key) {
     details_pending_.clear();
     detail_errors_.clear();
     warning_.clear();
+    library_partial_ = false;
     auth_status_.clear();
     downloads_->set_account({});
   }
@@ -749,6 +751,7 @@ void Core::refresh() {
             downloads_->set_account(account_key_);
           }
           warning_ = snapshot.warning;
+          library_partial_ = !snapshot.complete;
           save_library();
           log::info("library", "Refreshed {} Quest titles; complete={}",
                     snapshot.games.size(), snapshot.complete);
@@ -871,6 +874,7 @@ void Core::sign_out() {
   addons_pending_.clear();
   addon_errors_.clear();
   warning_.clear();
+  library_partial_ = false;
   auth_status_.clear();
   secrets_.clear();
   notice_ = "Signed out. Installed games remain on this PC.";
@@ -1302,6 +1306,8 @@ void Core::launch_game(std::string_view id, std::string_view requested,
           // The runtime appends to its log; start this run's log empty so
           // a failure is never explained by an earlier run.
           library::rotate_log(r.log);
+          // Java exception traces go to the console log: keep the last run's.
+          library::rotate_log(r.console);
           std::vector<std::string> args{
               "--game",       paths::utf8(install.directory),
               "--package",    install.plan.package,
@@ -1587,6 +1593,7 @@ void Core::tick() {
               if (snapshot) {
                 library::merge(games_, *snapshot, account_scope_);
                 warning_ = snapshot->warning;
+                library_partial_ = !snapshot->complete;
               } else {
                 refresh_error_ = library_error;
                 error(library_error);

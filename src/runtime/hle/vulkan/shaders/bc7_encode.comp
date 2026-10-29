@@ -2,6 +2,10 @@
 // RGBA8 texels (the decode's tight output) to BC7 mode 6 blocks: one subset,
 // RGBA 7-bit endpoints with a p-bit each, 4-bit indices. One invocation per 4x4
 // block: principal-axis endpoints, nearest indices, one least-squares refit.
+// Alpha weighs more than a color channel, and texels that are fully transparent
+// (0) or opaque (255) decode exactly: mode 6 shares each index between color and
+// alpha, so colors hidden under alpha 0 otherwise pull a cutout's alpha
+// (Batman: Arkham Shadow's combat icons showed their box).
 layout(local_size_x=8, local_size_y=8, local_size_z=1) in;
 layout(set=0, binding=0, std430) readonly buffer Source { uint words[]; } src;
 layout(set=0, binding=1, std430) writeonly buffer Destination { uint words[]; } dst;
@@ -15,32 +19,53 @@ vec4 texels[16];
 uint indices[16];
 uvec4 low, high;  // 7-bit endpoints
 uint lowP, highP;
+const vec4 weight = vec4(1.0, 1.0, 1.0, 16.0), rootWeight = vec4(1.0, 1.0, 1.0, 4.0);
+float minAlpha, maxAlpha;
 
-void quantize(vec4 v, out uvec4 q, out uint pbit) {
+// Nearest endpoint; alpha 0 needs p-bit 0 and alpha 255 p-bit 1.
+void quantize(vec4 v, int exactAlpha, out uvec4 q, out uint pbit) {
     v = clamp(v, 0.0, 255.0);
+    if (exactAlpha >= 0) v.w = float(exactAlpha);
     float best = 1e30;
     for (uint b = 0u; b < 2u; ++b) {
+        if (exactAlpha >= 0 && b != uint(exactAlpha) / 255u) continue;
         uvec4 c = uvec4(clamp(round((v - float(b)) * 0.5), 0.0, 127.0));
         vec4 d = vec4(c * 2u + b) - v;
-        float e = dot(d, d);
+        float e = dot(d * weight, d);
         if (e < best) { best = e; q = c; pbit = b; }
     }
+}
+// The lower-alpha end takes the block's alpha 0, the higher its alpha 255.
+void setEndpoints(vec4 a, vec4 b) {
+    if (a.w > b.w) { vec4 t = a; a = b; b = t; }
+    int exactA = minAlpha == 0.0 ? 0 : maxAlpha == 255.0 && a.w >= 254.5 ? 255 : -1;
+    int exactB = maxAlpha == 255.0 ? 255 : minAlpha == 0.0 && b.w <= 0.5 ? 0 : -1;
+    quantize(a, exactA, low, lowP);
+    quantize(b, exactB, high, highP);
 }
 // Nearest index per texel: the projection's rounding and its neighbours, since
 // the weights are close to, but not exactly, k * 64 / 15.
 void chooseIndices() {
     uvec4 e0 = low * 2u + lowP, e1 = high * 2u + highP;
     vec4 base = vec4(e0), axis = vec4(e1) - base;
-    float length2 = dot(axis, axis);
+    float length2 = dot(axis * weight, axis);
     for (uint i = 0u; i < 16u; ++i) {
-        float t = length2 > 0.0 ? dot(texels[i] - base, axis) / length2 : 0.0;
+        float t = length2 > 0.0 ? dot((texels[i] - base) * weight, axis) / length2 : 0.0;
         int guess = clamp(int(t * 15.0 + 0.5), 0, 15);
+        // A transparent or opaque texel takes only an index that keeps its alpha.
+        bool exact = (texels[i].w == 0.0 || texels[i].w == 255.0) && e0.w != e1.w;
+        int first = exact ? 0 : max(guess - 1, 0), last = exact ? 15 : min(guess + 1, 15);
         uint best = 0u; float bestError = 1e30;
-        for (int k = max(guess - 1, 0); k <= min(guess + 1, 15); ++k) {
-            uint w = weights[k];
-            vec4 d = vec4((e0 * (64u - w) + e1 * w + 32u) >> 6u) - texels[i];
-            float e = dot(d, d);
-            if (e < bestError) { bestError = e; best = uint(k); }
+        for (int pass = exact ? 0 : 1; pass < 2; ++pass) {
+            for (int k = first; k <= last; ++k) {
+                uint w = weights[k];
+                vec4 d = vec4((e0 * (64u - w) + e1 * w + 32u) >> 6u) - texels[i];
+                if (pass == 0 && d.w != 0.0) continue;
+                float e = dot(d * weight, d);
+                if (e < bestError) { bestError = e; best = uint(k); }
+            }
+            if (bestError < 1e30) break;
+            first = max(guess - 1, 0); last = min(guess + 1, 15);
         }
         indices[i] = best;
     }
@@ -58,16 +83,19 @@ void main() {
     uvec2 block = gl_GlobalInvocationID.xy, blocks = (uvec2(p.width, p.height) + 3u) >> 2u;
     if (block.x >= blocks.x || block.y >= blocks.y) return;
     // Texels past the edge repeat the edge, so partial blocks fit only real colors.
-    vec4 mean = vec4(0), lo = vec4(255), hi = vec4(0);
+    // The principal axis is fitted in the weighted space.
+    vec4 mean = vec4(0), lo = vec4(1e30), hi = vec4(-1e30);
     for (uint i = 0u; i < 16u; ++i) {
         uvec2 xy = min(block * 4u + uvec2(i & 3u, i >> 2u), uvec2(p.width, p.height) - 1u);
-        texels[i] = unpackUnorm4x8(src.words[xy.y * p.width + xy.x]) * 255.0;
-        mean += texels[i]; lo = min(lo, texels[i]); hi = max(hi, texels[i]);
+        texels[i] = round(unpackUnorm4x8(src.words[xy.y * p.width + xy.x]) * 255.0);
+        vec4 w = texels[i] * rootWeight;
+        mean += w; lo = min(lo, w); hi = max(hi, w);
     }
     mean *= 1.0 / 16.0;
+    minAlpha = lo.w / rootWeight.w; maxAlpha = hi.w / rootWeight.w;
     mat4 covariance = mat4(0);
     for (uint i = 0u; i < 16u; ++i) {
-        vec4 d = texels[i] - mean;
+        vec4 d = texels[i] * rootWeight - mean;
         covariance += outerProduct(d, d);
     }
     // Principal axis by power iteration, from the bounding-box diagonal.
@@ -83,12 +111,11 @@ void main() {
         axis = normalize(axis);
         tmin = 1e30; tmax = -1e30;
         for (uint i = 0u; i < 16u; ++i) {
-            float t = dot(texels[i] - mean, axis);
+            float t = dot(texels[i] * rootWeight - mean, axis);
             tmin = min(tmin, t); tmax = max(tmax, t);
         }
     }
-    quantize(mean + axis * tmin, low, lowP);
-    quantize(mean + axis * tmax, high, highP);
+    setEndpoints((mean + axis * tmin) / rootWeight, (mean + axis * tmax) / rootWeight);
     chooseIndices();
     // Least-squares endpoints for those indices.
     float aa = 0.0, ab = 0.0, bb = 0.0;
@@ -99,8 +126,7 @@ void main() {
     }
     float det = aa * bb - ab * ab;
     if (abs(det) > 1e-4) {
-        quantize((bb * ac - ab * bc) / det, low, lowP);
-        quantize((aa * bc - ab * ac) / det, high, highP);
+        setEndpoints((bb * ac - ab * bc) / det, (aa * bc - ab * ac) / det);
         chooseIndices();
     }
     // The first index's top bit is implicit zero: swap the endpoints otherwise.

@@ -43,4 +43,13 @@ public final class Environment {
   }
   public static boolean isExternalStorageEmulated() { return true; }
   public static boolean isExternalStorageRemovable() { return false; }
+  public static boolean isExternalStorageRemovable(File path) { return false; }
+  public static boolean isExternalStorageEmulated(File path) { return true; }
+  // Android 11 MANAGE_EXTERNAL_STORAGE ("All files access"): homebrew ports
+  // (Lambda1VR, Quake3Quest) check it before reading game data from shared
+  // storage, which Venture's external storage always allows.
+  public static boolean isExternalStorageManager() { return true; }
+  public static boolean isExternalStorageManager(File path) { return true; }
+  public static boolean isExternalStorageLegacy() { return true; }
+  public static boolean isExternalStorageLegacy(File path) { return true; }
 }

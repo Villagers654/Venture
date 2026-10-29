@@ -90,13 +90,20 @@ Frame cpu_frame(Cpu& cpu) {
   frame.sp = cpu.sp(); frame.pstate = cpu.pstate(); frame.registers = true;
   return frame;
 }
+// Host crash reports write guest frames after the logger turned terminal.
+bool crash_output = false;
+template <class... A> void report(std::format_string<A...> format, A&&... args) {
+  if (!crash_output) return log::error("signal", format, std::forward<A>(args)...);
+  const auto line = " E [signal] " + std::format(format, std::forward<A>(args)...) + "\n";
+  log::crash_write(line.data(), line.size());
+}
 // debuggerd's tombstone register block (libdebuggerd/tombstone.cpp print_thread_registers): four per line.
 void log_registers(const Frame& frame) {
   if (!frame.registers) return;
   std::string line;
   const auto add = [&](std::string_view name, std::uint64_t value, int digits) {
     line += std::format("  {:<4}{:0{}x}", name, value, digits);
-    if (line.size() > 4 * (6 + digits) - 1) { log::error("signal", "  {}", line); line.clear(); }
+    if (line.size() > 4 * (6 + digits) - 1) { report("  {}", line); line.clear(); }
   };
   if (frame.isa == GuestIsa::a32) {
     constexpr const char* names[] = {"r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7", "r8", "r9", "r10", "r11", "ip", "sp", "lr", "pc"};
@@ -107,7 +114,7 @@ void log_registers(const Frame& frame) {
     add("x29", frame.x[29], 16); add("lr", frame.x[30], 16); add("sp", frame.sp, 16); add("pc", frame.pc, 16);
     add("pst", frame.pstate, 16);
   }
-  if (!line.empty()) log::error("signal", "  {}", line);
+  if (!line.empty()) report("  {}", line);
 }
 // Diagnostic: VENTURE_FAULT_MEMORY="x19+0x40:0x100,sp:0x80" dumps guest memory
 // relative to a fault register (xN, sp, pc; rN on A32), 16 bytes per line.
@@ -219,8 +226,8 @@ void log_backtrace(Frame frame) {
   for (int i = 0; i < 48; ++i) {
     DlInfo symbol;
     Linker::get().try_address_info(pc, &symbol);
-    log::error("signal", "  #{:02} {:#x} {}+{:#x} ({}+{:#x})", i, pc, symbol.path, pc - symbol.base, symbol.symbol,
-               pc - (symbol.symbol_address ? symbol.symbol_address : symbol.base));
+    report("  #{:02} {:#x} {}+{:#x} ({}+{:#x})", i, pc, symbol.path, pc - symbol.base, symbol.symbol,
+           pc - (symbol.symbol_address ? symbol.symbol_address : symbol.base));
     if (frame.isa == GuestIsa::a32) {
       std::int32_t count = 0;
       auto table = Linker::get().try_find_exidx(pc, &count);
@@ -229,7 +236,7 @@ void log_backtrace(Frame frame) {
         arm[15] = arm[14]; pc = arm[15]; continue;
       }
       if (auto error = unwind_a32_frame(arm, table, count, i != 0)) {
-        log::error("signal", "  exidx unwind stopped: {}", error); break;
+        report("  exidx unwind stopped: {}", error); break;
       }
       if (!arm[15]) break;
       pc = arm[15]; continue;
@@ -701,6 +708,17 @@ void return_from_signal(GuestThread& thread, bool realtime) {
   cpu.set_fpcr(fp.fpcr); cpu.set_fpsr(fp.fpsr); cpu.clear_exclusive();
   thread.blocked_signals = frame.context.sigmask & ~unmaskable;
   thread.signal_mask_snapshot.store(thread.blocked_signals);
+}
+void write_host_fault_guest_frames(GuestThread* thread) noexcept {
+  if (!thread) return;
+  try {
+    crash_output = true;
+    report("Host fault in a call from guest tid {}; guest registers and frames:", thread->tid());
+    const auto frame = cpu_frame(thread->cpu());
+    log_registers(frame);
+    log_backtrace(frame);
+  } catch (...) {
+  }
 }
 void log_guest_threads(std::string_view reason) {
   std::map<std::int32_t, std::string> names;

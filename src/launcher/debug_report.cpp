@@ -477,6 +477,7 @@ fs::path write_debug_report(const DebugReport &request) {
     log_section(out, logs / (base + ".log"), kRuntimeLog);
     log_section(out, logs / (base + ".console.log"), kSideLog);
     log_section(out, logs / (base + ".prev.log"), kSideLog);
+    log_section(out, logs / (base + ".console.prev.log"), kSideLog);
   }
   log_section(out, logs / "launcher.log", kLauncherLog);
   // A game started from Steam or a shortcut logs its launcher separately.

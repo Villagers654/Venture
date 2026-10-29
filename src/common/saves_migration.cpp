@@ -177,6 +177,7 @@ fs::path obb_view_for(const fs::path& install, const fs::path& view, std::string
   fs::create_hard_link(install / "plan.json", probe, ec);
   if (!ec) {
     fs::remove(probe, ec);
+    if (is_link(view)) remove_tree(parent, view);  // the games folder is on this drive again
     return view;
   }
   if (fs::exists(view, ec) && !is_link(view)) {
@@ -184,7 +185,18 @@ fs::path obb_view_for(const fs::path& install, const fs::path& view, std::string
     remove_tree(parent, view);
   }
   if (const auto sidecar = obb_copy_sidecar(view); fs::exists(sidecar, ec)) remove_tree(parent, sidecar);
-  return install / ".obb" / paths::from_utf8(account);
+  const auto beside = install / ".obb" / paths::from_utf8(account);
+  // Java code also looks for expansion files under the external storage root
+  // rather than Context.getObbDir() (Google's downloader library in Unreal's
+  // GameActivity: "No OBB found"), so the usual place links to this view.
+  fs::create_directories(beside);
+  try {
+    if (is_link(view)) remove_tree(parent, view);
+    link_directory(view, beside);
+  } catch (const std::exception& e) {
+    log::info("obb", "Could not link {} to the expansion files beside the install: {}", paths::utf8(view), e.what());
+  }
+  return beside;
 }
 void publish_obb_file(const fs::path& source, const fs::path& raw_view) {
 #ifdef _WIN32

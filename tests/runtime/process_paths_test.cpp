@@ -94,7 +94,19 @@ TEST_CASE("an OBB view stays in the data folder only where it can link the insta
   paths::atomic_write(view / "main.12.com.example.game.obb", "copied");
   const auto moved = obb_view_for(linkless, view, "local");
   CHECK(moved == linkless / ".obb" / "local");
-  CHECK_FALSE(fs::exists(view));
+  // The data folder's place links to it for Java code that builds the path
+  // from the external storage root (Unreal's "No OBB found").
+  CHECK(is_link(view));
+  CHECK_FALSE(fs::exists(view / "main.12.com.example.game.obb"));
+  paths::atomic_write(linkless / "plan.json", "{}");
+  paths::atomic_write(linkless / "main.13.com.example.game.obb", "obb13");
+  const std::string moved_names[]{"main.13.com.example.game.obb"};
+  sync_obb_view(linkless, moved, moved_names);
+  CHECK(fs::exists(view / "main.13.com.example.game.obb"));
+  // Back on a drive where the files link: a plain view again, the install kept.
+  CHECK(obb_view_for(install, view, "local") == view);
+  CHECK_FALSE(is_link(view));
+  CHECK(fs::exists(moved / "main.13.com.example.game.obb"));
   const std::string names[]{"main.12.com.example.game.obb"};
   sync_obb_view(install, install / ".obb" / "local", names);
   CHECK(fs::equivalent(install / "main.12.com.example.game.obb", install / ".obb/local/main.12.com.example.game.obb"));

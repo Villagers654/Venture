@@ -540,6 +540,9 @@ TEST_CASE("production framework JNI owns real NativeWindow references") {
   REQUIRE(statfs);
   CHECK(env->CallLongMethod(statfs, env->GetMethodID(statfs_class, "getTotalBytes", "()J")) > 0);
   for (jobject ref : std::initializer_list<jobject>{statfs, files_text, reflected, statfs_class}) env->DeleteLocalRef(ref);
+  // GetStringUTFChars of null (ART aborts) returns null and logs its caller.
+  CHECK(thread.call(table[169], {jni, 0, 0}) == 0);
+  REQUIRE_FALSE(env->ExceptionCheck());
   for (jobject ref : std::initializer_list<jobject>{java_text, guest_text, path_text, file, file_class}) env->DeleteLocalRef(ref);
   auto cls = env->FindClass("android/view/Surface");
   REQUIRE(cls);

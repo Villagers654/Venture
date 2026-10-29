@@ -179,7 +179,9 @@ std::string pending_exception(JNIEnv* env) {
   env->Throw(thrown);
   return text.empty() ? "-" : text;
 }
-std::string slow_call_method(JNIEnv* env, std::string_view name, const SlowCallStart& start) {
+// The method's Java signature for diagnostics ("-" when unavailable). Leaves no
+// pending exception; the receiver gives the class of a virtual call.
+std::string describe_method(JNIEnv* env, jclass cls, jobject receiver, jmethodID id, bool is_static) {
   if (env->PushLocalFrame(8) != JNI_OK) {
     env->ExceptionClear();  // the failed push raised OutOfMemoryError
     return "-";
@@ -188,10 +190,7 @@ std::string slow_call_method(JNIEnv* env, std::string_view name, const SlowCallS
     JNIEnv* env;
     ~Frame() { env->ExceptionClear(); env->PopLocalFrame(nullptr); }
   } frame{env};
-  const bool is_static = name.starts_with("CallStatic"), nonvirtual = name.starts_with("CallNonvirtual");
-  jclass cls = is_static ? reinterpret_cast<jclass>(start.x1) : nonvirtual ? reinterpret_cast<jclass>(start.x2) : nullptr;
-  if (!is_static && !nonvirtual && start.x1) cls = env->GetObjectClass(reinterpret_cast<jobject>(start.x1));
-  const auto id = reinterpret_cast<jmethodID>(nonvirtual ? start.x3 : start.x2);
+  if (!cls && receiver) cls = env->GetObjectClass(receiver);
   if (!cls || !id || env->ExceptionCheck()) return "-";
   const auto reflected = env->ToReflectedMethod(cls, id, is_static);
   if (!reflected || env->ExceptionCheck()) return "-";
@@ -207,6 +206,28 @@ std::string slow_call_method(JNIEnv* env, std::string_view name, const SlowCallS
   try { method = utf; } catch (...) { env->ReleaseStringUTFChars(text, utf); throw; }
   env->ReleaseStringUTFChars(text, utf);
   return method;
+}
+std::string slow_call_method(JNIEnv* env, std::string_view name, const SlowCallStart& start) {
+  const bool is_static = name.starts_with("CallStatic"), nonvirtual = name.starts_with("CallNonvirtual");
+  const auto cls = is_static ? reinterpret_cast<jclass>(start.x1) : nonvirtual ? reinterpret_cast<jclass>(start.x2) : nullptr;
+  const auto receiver = is_static || nonvirtual ? nullptr : reinterpret_cast<jobject>(start.x1);
+  return describe_method(env, cls, receiver, reinterpret_cast<jmethodID>(nonvirtual ? start.x3 : start.x2), is_static);
+}
+// Diagnostics for a native caller that reads a null String, which ART would
+// abort on: the last Java method that returned null on this thread, named on
+// its first null result only.
+std::mutex null_mutex;
+std::unordered_map<jmethodID, std::string> null_methods;
+thread_local jmethodID last_null_method = nullptr;
+void note_null_result(JNIEnv* env, jclass cls, jobject receiver, jmethodID mid, bool is_static) noexcept {
+  last_null_method = mid;
+  try {
+    { std::lock_guard lock(null_mutex); if (null_methods.contains(mid)) return; }
+    auto name = describe_method(env, cls, receiver, mid, is_static);
+    std::lock_guard lock(null_mutex);
+    null_methods.emplace(mid, std::move(name));
+  } catch (...) {
+  }
 }
 // Never lets a diagnostic failure reach the guest-exception handler.
 void trace_slow_call(JNIEnv* env, hle::CallContext& ctx, std::string_view name, const SlowCallStart& start) noexcept {
@@ -284,7 +305,22 @@ void special_GetStringUTFChars(JNIEnv* env, hle::CallContext& ctx) {
   // A32 guests pass Token32 references and receive low-memory copies (jni32).
   if (ctx.cpu().isa() == GuestIsa::a32) { fixed32(env->functions->GetStringUTFChars, env, ctx); return; }
   auto string = g2h<_jstring>(ctx.x(1));
-  if (!string) { ctx.return_x(0); return; }
+  if (!string) {
+    // ART aborts here ("java_string == null"), so on a Quest the game got a
+    // String where Venture gave null: name the caller and the likely source.
+    std::string last = "none";
+    if (last_null_method) {
+      std::lock_guard lock(null_mutex);
+      if (auto it = null_methods.find(last_null_method); it != null_methods.end()) last = it->second;
+    }
+    DlInfo caller;
+    const auto lr = ctx.cpu().lr();
+    Linker::get().try_address_info(lr, &caller);
+    log::warn("jni", "GetStringUTFChars(null) from {}+{:#x} ({}); last Java method that returned null here: {}",
+              caller.path, lr - caller.base, caller.symbol, last);
+    ctx.return_x(0);
+    return;
+  }
   auto owner = static_cast<jstring>(env->NewGlobalRef(string));
   if (!owner) { ctx.return_x(0); return; }
   const auto* chars = env->GetStringUTFChars(owner, g2h<jboolean>(ctx.x(2)));
@@ -432,6 +468,8 @@ void call(JNIEnv* env, hle::CallContext& ctx, ArgumentForm form) {
     if constexpr (K == Kind::Virtual) object = env->CallObjectMethodA(receiver, mid, args.data());
     else if constexpr (K == Kind::Static) object = env->CallStaticObjectMethodA(cls, mid, args.data());
     else if constexpr (K == Kind::Nonvirtual) object = env->CallNonvirtualObjectMethodA(receiver, cls, mid, args.data());
+    if (!object && !env->ExceptionCheck())
+      note_null_result(env, K == Kind::Virtual ? nullptr : cls, receiver, mid, K == Kind::Static);
     bool is_path;
     { std::lock_guard lock(method_mutex); is_path = path_methods.contains(mid); }
     result(ctx, is_path ? guest_path_result(env, object) : object);

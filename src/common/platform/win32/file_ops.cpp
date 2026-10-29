@@ -1,7 +1,10 @@
 #include "common/file_ops.h"
 #include "common/platform/win32/native_path.h"
 #include <array>
+#include <cstring>
+#include <vector>
 #include <windows.h>
+#include <winioctl.h>
 
 #include <bcrypt.h>
 
@@ -112,6 +115,45 @@ void remove_tree(const fs::path &root, const fs::path &target) {
   if (is_link(r))
     throw std::runtime_error("Cannot remove data through a linked root.");
   erase(t);
+}
+void link_directory(const fs::path &link, const fs::path &target) {
+  const auto native = platform::native_path(link);
+  // A mount point names its target twice: as an NT path (\??\C:\... or
+  // \??\UNC\server\share) and as the DOS path shown to users.
+  const auto extended = platform::native_path(target);  // \\?\C:\... or \\?\UNC\...
+  const std::wstring substitute = L"\\??\\" + extended.substr(4),
+                     dos = extended.starts_with(L"\\\\?\\UNC\\") ? L"\\\\" + extended.substr(8) : extended.substr(4);
+  if (!CreateDirectoryW(native.c_str(), nullptr))
+    throw std::system_error(GetLastError(), std::system_category());
+  // REPARSE_DATA_BUFFER's MountPointReparseBuffer (ntifs.h): tag, data length,
+  // reserved, then substitute and print name offsets and lengths in bytes.
+  const auto sub = substitute.size() * sizeof(wchar_t), print = dos.size() * sizeof(wchar_t);
+  std::vector<std::uint8_t> buffer(16 + sub + print + 2 * sizeof(wchar_t));
+  auto put16 = [&](std::size_t at, std::size_t value) {
+    const auto v = static_cast<std::uint16_t>(value);
+    std::memcpy(buffer.data() + at, &v, 2);
+  };
+  const DWORD tag = IO_REPARSE_TAG_MOUNT_POINT;
+  std::memcpy(buffer.data(), &tag, 4);
+  put16(4, buffer.size() - 8);
+  put16(8, 0);
+  put16(10, sub);
+  put16(12, sub + sizeof(wchar_t));
+  put16(14, print);
+  std::memcpy(buffer.data() + 16, substitute.data(), sub);
+  std::memcpy(buffer.data() + 16 + sub + sizeof(wchar_t), dos.data(), print);
+  const auto handle = CreateFileW(native.c_str(), GENERIC_WRITE, 0, nullptr, OPEN_EXISTING,
+                                  FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+  DWORD returned = 0;
+  const bool ok = handle != INVALID_HANDLE_VALUE &&
+                  DeviceIoControl(handle, FSCTL_SET_REPARSE_POINT, buffer.data(), DWORD(buffer.size()), nullptr, 0,
+                                  &returned, nullptr);
+  const auto error = GetLastError();
+  if (handle != INVALID_HANDLE_VALUE) CloseHandle(handle);
+  if (!ok) {
+    RemoveDirectoryW(native.c_str());
+    throw std::system_error(error, std::system_category());
+  }
 }
 void flush_file(const fs::path &file) {
   const auto handle =

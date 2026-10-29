@@ -87,6 +87,9 @@ void remove_tree(const fs::path &root, const fs::path &target) {
     throw std::runtime_error("Cannot remove data through a linked root.");
   fs::remove_all(t); // std::filesystem does not follow POSIX symlinks.
 }
+void link_directory(const fs::path &link, const fs::path &target) {
+  fs::create_directory_symlink(fs::absolute(target).lexically_normal(), link);
+}
 void flush_file(const fs::path &file) {
   const auto fd = open(file.c_str(), O_RDWR | O_CLOEXEC);
   if (fd < 0)

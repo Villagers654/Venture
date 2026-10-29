@@ -431,6 +431,85 @@ TEST_CASE("Vulkan emulated textures under memory pressure are stored as BC7 clos
   }
 }
 
+TEST_CASE("Vulkan BC7 encode keeps transparent and opaque texels exact") {
+  // An icon: an opaque disc with a soft rim over a transparent background whose
+  // colors are arbitrary (Batman: Arkham Shadow's combat icons showed their box).
+  test::VulkanDevice gpu;
+  constexpr std::uint32_t size = 64;
+  std::vector<std::uint8_t> rgba(size * size * 4);
+  std::mt19937 random(31);
+  for (std::uint32_t y = 0; y < size; ++y)
+    for (std::uint32_t x = 0; x < size; ++x) {
+      auto i = (y * size + x) * 4;
+      const double r = std::hypot(x - 31.5, y - 31.5);
+      rgba[i] = random() & 255; rgba[i + 1] = random() & 255; rgba[i + 2] = random() & 255;
+      rgba[i + 3] = r < 20 ? 255 : r > 23 ? 0 : std::uint8_t((23 - r) / 3 * 255);
+      if (r < 20) rgba[i] = 230, rgba[i + 1] = (x * 7) & 255, rgba[i + 2] = 40;
+    }
+  test::VulkanBuffer source(gpu, rgba.size()), encoded(gpu, size * size);
+  std::memcpy(source.mapped, rgba.data(), rgba.size());
+  gpu.begin();
+  auto resources = vulkan::record_encode_bc7(gpu.device, gpu.command, source.buffer, source.size, encoded.buffer,
+                                             encoded.size, size, size);
+  gpu.barrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_HOST_BIT,
+              VK_ACCESS_HOST_READ_BIT);
+  gpu.submit();
+  const auto* bytes = static_cast<const std::uint8_t*>(encoded.mapped);
+  int transparent = 0, opaque = 0, worst = 0;
+  for (std::uint32_t by = 0; by < size / 4; ++by)
+    for (std::uint32_t bx = 0; bx < size / 4; ++bx) {
+      const auto texels = decode_bc7_mode6(bytes + (by * (size / 4) + bx) * 16);
+      for (std::uint32_t i = 0; i < 16; ++i) {
+        const auto alpha = rgba[((by * 4 + i / 4) * size + bx * 4 + i % 4) * 4 + 3], decoded = texels[i * 4 + 3];
+        if (alpha == 0 && decoded != 0) ++transparent;
+        if (alpha == 255 && decoded != 255) ++opaque;
+        worst = std::max(worst, std::abs(int(alpha) - int(decoded)));
+      }
+    }
+  CHECK(transparent == 0);
+  CHECK(opaque == 0);
+  CHECK(worst <= 24);
+}
+
+// Encodes each <name>_<w>x<h>.rgba in VENTURE_BC7_IMAGES and writes the decoded
+// blocks beside it as <name>_<w>x<h>.bc7.rgba, for checks on real textures.
+TEST_CASE("Vulkan BC7 encode of RGBA images (VENTURE_BC7_IMAGES)") {
+  const char* dir = std::getenv("VENTURE_BC7_IMAGES");
+  if (!dir) return;
+  test::VulkanDevice gpu;
+  for (const auto& entry : std::filesystem::directory_iterator(dir)) {
+    const auto name = entry.path().filename().string();
+    if (!name.ends_with(".rgba") || name.ends_with(".bc7.rgba")) continue;
+    const auto size = name.substr(name.rfind('_') + 1);
+    const std::uint32_t width = std::stoul(size), height = std::stoul(size.substr(size.find('x') + 1));
+    std::ifstream in(entry.path(), std::ios::binary);
+    std::vector<char> rgba((std::istreambuf_iterator<char>(in)), {});
+    REQUIRE(rgba.size() == std::size_t(width) * height * 4);
+    const std::uint32_t bw = (width + 3) / 4, bh = (height + 3) / 4;
+    test::VulkanBuffer source(gpu, rgba.size()), encoded(gpu, bw * bh * 16);
+    std::memcpy(source.mapped, rgba.data(), rgba.size());
+    gpu.begin();
+    auto resources = vulkan::record_encode_bc7(gpu.device, gpu.command, source.buffer, source.size, encoded.buffer,
+                                               encoded.size, width, height);
+    gpu.barrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_HOST_BIT,
+                VK_ACCESS_HOST_READ_BIT);
+    gpu.submit();
+    std::vector<char> decoded(rgba.size());
+    for (std::uint32_t by = 0; by < bh; ++by)
+      for (std::uint32_t bx = 0; bx < bw; ++bx) {
+        const auto texels = decode_bc7_mode6(static_cast<const std::uint8_t*>(encoded.mapped) + (by * bw + bx) * 16);
+        for (std::uint32_t i = 0; i < 16; ++i) {
+          const auto x = bx * 4 + i % 4, y = by * 4 + i / 4;
+          if (x < width && y < height) std::memcpy(&decoded[(y * width + x) * 4], &texels[i * 4], 4);
+        }
+      }
+    auto out = entry.path();
+    out.replace_extension(".bc7.rgba");
+    std::ofstream(out, std::ios::binary).write(decoded.data(), std::streamsize(decoded.size()));
+    REQUIRE(test::vk_call("vkResetCommandBuffer", gpu.command, 0u) == VK_SUCCESS);
+  }
+}
+
 TEST_CASE("Vulkan BC7 encode GPU time against the RGBA8 decode (VENTURE_BC7_BENCH)") {
   if (!std::getenv("VENTURE_BC7_BENCH")) return;
   test::VulkanDevice gpu;

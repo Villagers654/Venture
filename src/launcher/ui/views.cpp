@@ -555,10 +555,10 @@ void App::draw_library() {
       tooltip("Meta didn't confirm your full library, so games confirmed earlier are kept. " + warning_);
   }
   float after_title = top + s(kHeaderHeight);
+  const float sort_w = measure(fonts().semibold, kSmall + 1, "Sort by: Recently played").x + s(52);
   if (!all.empty() || !search_.empty()) {
     // Right of the title when it fits, else on its own row beneath it.
     const char* sorts[] = {"Name", "Recently played"};
-    float sort_w = measure(fonts().semibold, kSmall + 1, "Sort by: Recently played").x + s(52);
     float content_w = ImGui::GetContentRegionAvail().x;
     float title_w = measure(fonts().semibold, kDisplay, "Library").x + s(warning_.empty() ? 24 : 54);
     float fixed = s(10) + sort_w + s(10) + s(38);
@@ -584,11 +584,11 @@ void App::draw_library() {
   }
   ImGui::SetCursorPosY(after_title + s(kAfterHeader) - s(6));
 
-  // Meta could not list this account's games: one it owns can still be added
-  // by its store link, checked on that game's own listing.
+  // Meta could not list, or did not confirm, this account's games: one it owns
+  // can still be added by its store link, checked on that game's own listing.
   // --smoke-view link shows it offline for screenshots.
-  const bool add_owned_shown = (session_ && !refresh_error_.empty() && !refreshing_ && !options_.offline &&
-                                search_.empty() && !installed_only_) ||
+  const bool add_owned_shown = (session_ && (!refresh_error_.empty() || library_partial_) && !refreshing_ &&
+                                !options_.offline && search_.empty() && !installed_only_) ||
                                options_.smoke_view == "link";
   auto add_owned_field = [&](float width) {
     if (submit_field("owned-link", "Add a game by store link", &owned_link_, width, icons::add, !adding_))
@@ -606,7 +606,8 @@ void App::draw_library() {
     ImGui::SameLine(0, s(8));
     if (filter_chip(installed_label.c_str(), installed_only_)) installed_only_ = true;
     if (add_owned_shown) {
-      const float fw = std::min(s(260), row_w * 0.4f);
+      // Under the sort and refresh controls, as wide as both.
+      const float fw = std::min(sort_w + s(10) + s(38), row_w * 0.5f);
       ImGui::SameLine(row_x + row_w - fw);
       add_owned_field(fw);
     }

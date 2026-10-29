@@ -12,11 +12,43 @@
 #endif
 
 #include "hle/libc/libc_a.h"
+#include "core/signals.h"
+#include "core/signal_frame.h"
 #include "libc_a_test_support.h"
 using namespace venture;
 using namespace venture::hle::libc;
 #if defined(__x86_64__) || defined(_M_X64)
 #endif
+TEST_CASE("libc A null integer input delivers a recoverable guest SIGSEGV") {
+  test::LibcFixture f;
+  unsigned calls = 0;
+  const auto handler = hle::make_thunk("test", "numeric segv", [](hle::CallContext& ctx) {
+    ++*static_cast<unsigned*>(ctx.user());
+    const auto* info = g2h<signals::SigInfo>(ctx.x(1));
+    auto* uc = g2h<signals::UContext>(ctx.x(2));
+    CHECK(ctx.x(0) == signals::kSigSegv);
+    CHECK(info->signo == signals::kSigSegv);
+    CHECK(uc->mcontext.fault_address == 0);
+    // A signal handler can skip the faulting libc call, just as on Android.
+    uc->mcontext.pc = uc->mcontext.regs[30];
+    uc->mcontext.regs[0] = 42;
+  }, &calls);
+  signals::Action action{handler, 0, 4}, previous;
+  REQUIRE(signals::set_action(signals::kSigSegv, &action, &previous) == 0);
+  struct Restore {
+    signals::Action old;
+    ~Restore() { signals::set_action(signals::kSigSegv, &old, nullptr); }
+  } restore{previous};
+  auto* libc = Linker::get().open("libc.so", kRtldNow, nullptr);
+  for (auto name : {"atoi", "atol", "atoll", "strtol", "strtoll", "strtoimax",
+                    "strtoul", "strtoull", "strtoumax", "strtol_l", "strtoul_l"}) {
+    CAPTURE(name);
+    const auto address = libc->find_symbol(name);
+    REQUIRE(address != 0);
+    CHECK(f.thread.call(address, {0, 0, 10, 0}) == 42);
+  }
+  CHECK(calls == 11);
+}
 TEST_CASE("libc A LP64 numeric parsing, end pointers and Linux errno") {
   test::LibcFixture f;
   char* end = nullptr;

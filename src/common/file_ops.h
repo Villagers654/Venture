@@ -35,6 +35,9 @@ std::error_code move_directory(const fs::path &source, const fs::path &target);
 // Deletes links themselves, never their targets. The caller supplies the root
 // boundary.
 void remove_tree(const fs::path &root, const fs::path &target);
+// A directory link at `link` (absent) to the directory `target`: a junction on
+// Windows, which needs no privilege and may cross volumes; a symlink elsewhere.
+void link_directory(const fs::path &link, const fs::path &target);
 // Durably writes a file's data, or a directory's entries (a no-op on Windows,
 // where renames are write-through).
 void flush_file(const fs::path &file);
