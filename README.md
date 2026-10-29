@@ -85,3 +85,13 @@ It's built on other people's work, and we're grateful for it. Code from these pr
 Thank you to the Eden Emulator Project, whose Dynarmic fork Venture's JIT is built on; to merryhime and everyone who has worked on Dynarmic, which made a fast, accurate ARM JIT possible; and to the emulator projects it grew up with and borrows from, yuzu, Citra and Dolphin (Gekko). Thank you also to AXRB for pioneering Quest emulation on PC VR.
 
 Venture is not affiliated with Meta; see [DISCLAIMER.md](DISCLAIMER.md).
+
+## Star history
+
+<a href="https://www.star-history.com/?type=date&repos=Villagers654%2FVenture">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=Villagers654/Venture&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=Villagers654/Venture&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=Villagers654/Venture&type=date&legend=top-left" />
+ </picture>
+</a>
