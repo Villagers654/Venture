@@ -11,6 +11,9 @@ public:
 };
 std::string sha256(std::string_view text);
 bool auth_navigation_allowed(std::string_view url);
+// Embedded frames (security checks, captchas) may come from any plain HTTPS origin;
+// the page itself stays on Meta domains.
+bool auth_frame_allowed(std::string_view url);
 bool is_callback(std::string_view url);
 // Returns the opaque blob only after scheme, challenge and size validation.
 std::string validate_callback(std::string_view callback,

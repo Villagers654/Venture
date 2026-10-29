@@ -144,7 +144,12 @@ jobs:
       - name: Package (zip and installer)
         if: inputs.package
         run: |
-          choco install nsis -y --no-progress
+          # The Chocolatey feed has brief outages (a 503 failed the 0.1.0.2 release): retry.
+          $makensis = "C:\Program Files (x86)\NSIS\makensis.exe"
+          for ($i = 1; $i -le 5 -and -not (Test-Path $makensis); $i++) {
+            choco install nsis -y --no-progress
+            if (-not (Test-Path $makensis)) { Start-Sleep -Seconds (30 * $i) }
+          }
           python tools/packaging/windows/build_installer.py --makensis "C:\Program Files (x86)\NSIS\makensis.exe" --readobj .deps/llvm-mingw/bin/llvm-readobj.exe
       - uses: actions/upload-artifact@v4
         if: inputs.package

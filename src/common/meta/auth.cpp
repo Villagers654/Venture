@@ -1,5 +1,6 @@
 #include "common/meta/auth.h"
 #include "common/digest.h"
+#include <optional>
 #include <regex>
 
 namespace venture::meta {
@@ -13,19 +14,28 @@ bool is_callback(std::string_view u) {
                  [](unsigned char c) { return char(std::tolower(c)); });
   return s == "oculus" || s == "oculus-client";
 }
-bool auth_navigation_allowed(std::string_view url) {
+namespace {
+std::optional<http::Url> plain_https(std::string_view url) {
   try {
     auto u = http::parse_url(url);
-    if (u.scheme != "https" || !u.user.empty() || !u.password.empty() ||
-        (!u.port.empty() && u.port != "443"))
-      return false;
-    for (auto host :
-         {"meta.com", "facebook.com", "oculus.com", "instagram.com"})
-      if (http::domain(u.host, host))
-        return true;
+    if (u.scheme == "https" && u.user.empty() && u.password.empty() &&
+        (u.port.empty() || u.port == "443"))
+      return u;
   } catch (...) {
   }
+  return {};
+}
+} // namespace
+bool auth_navigation_allowed(std::string_view url) {
+  if (auto u = plain_https(url))
+    for (auto host : {"meta.com", "facebook.com", "fbsbx.com", "oculus.com",
+                      "instagram.com"})
+      if (http::domain(u->host, host))
+        return true;
   return false;
+}
+bool auth_frame_allowed(std::string_view url) {
+  return url == "about:blank" || url == "about:srcdoc" || plain_https(url).has_value();
 }
 std::string validate_callback(std::string_view url,
                               std::string_view challenge) {

@@ -19,4 +19,6 @@ __CRT_UUID_DECL(ICoreWebView2CreateCoreWebView2ControllerCompletedHandler,
 __CRT_UUID_DECL(ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler,
                 0x4e8a3389, 0xc9d8, 0x4bd2, 0xb6, 0xb5, 0x12, 0x4f, 0xee, 0x6c,
                 0xc1, 0x4d)
+__CRT_UUID_DECL(ICoreWebView2WindowCloseRequestedEventHandler, 0x5c19e9e0,
+                0x092f, 0x486b, 0xaf, 0xfa, 0xca, 0x82, 0x31, 0x91, 0x30, 0x39)
 #endif

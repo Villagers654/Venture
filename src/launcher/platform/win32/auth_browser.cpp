@@ -6,6 +6,7 @@
 #include <functional>
 #include <mutex>
 #include <thread>
+#include <vector>
 #include <windows.h>
 
 namespace venture::launcher {
@@ -48,10 +49,31 @@ template <class I, class... Args, class F> auto handler(F &&fn) {
 std::string utf8(LPCWSTR s) {
   return s ? paths::utf8(fs::path(s)) : std::string{};
 }
+// A window.open() from the sign-in page, for example Facebook login and its
+// security check. A real window keeps window.opener, so the popup can hand its
+// result back and close itself.
+struct Popup {
+  HWND window = nullptr;
+  ICoreWebView2Controller *controller = nullptr;
+  ICoreWebView2 *web = nullptr;
+  void close_view() {
+    if (controller) {
+      controller->Close();
+      controller->Release();
+      controller = nullptr;
+    }
+    if (web) {
+      web->Release();
+      web = nullptr;
+    }
+  }
+};
 struct BrowserState {
   HWND window = nullptr;
   ICoreWebView2Controller *controller = nullptr;
   ICoreWebView2 *web = nullptr;
+  ICoreWebView2Environment10 *env = nullptr;
+  std::vector<std::unique_ptr<Popup>> popups;
   std::string url;
   std::function<void(AuthBrowser::Event)> emit;
   bool done = false, callback_sent = false;
@@ -62,19 +84,24 @@ struct BrowserState {
     if (window)
       PostMessageW(window, WM_CLOSE, 0, 0);
   }
-  void navigate(std::string_view uri, bool popup = false) {
-    if (meta::is_callback(uri)) {
-      if (!callback_sent) {
-        callback_sent = true;
-        emit({AuthBrowser::Kind::callback, std::string(uri)});
-      }
-      if (window)
-        PostMessageW(window, WM_CLOSE, 0, 0);
-    } else if (popup && meta::auth_navigation_allowed(uri) && web)
-      web->Navigate(paths::from_utf8(uri).c_str());
+  void navigate(std::string_view uri) {
+    if (!meta::is_callback(uri))
+      return;
+    if (!callback_sent) {
+      callback_sent = true;
+      emit({AuthBrowser::Kind::callback, std::string(uri)});
+    }
+    if (window)
+      PostMessageW(window, WM_CLOSE, 0, 0);
   }
   void shutdown() {
     done = true;
+    for (auto &popup : popups) {
+      popup->close_view();
+      if (popup->window && IsWindow(popup->window))
+        DestroyWindow(popup->window);
+      popup->window = nullptr;
+    }
     if (controller) {
       controller->Close();
       controller->Release();
@@ -83,6 +110,10 @@ struct BrowserState {
     if (web) {
       web->Release();
       web = nullptr;
+    }
+    if (env) {
+      env->Release();
+      env = nullptr;
     }
   }
 };
@@ -110,6 +141,194 @@ LRESULT CALLBACK window_proc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
     return 0;
   }
   return DefWindowProcW(hwnd, msg, w, l);
+}
+LRESULT CALLBACK popup_proc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
+  auto *popup = reinterpret_cast<Popup *>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+  if (msg == WM_NCCREATE) {
+    popup = static_cast<Popup *>(reinterpret_cast<CREATESTRUCTW *>(l)->lpCreateParams);
+    SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(popup));
+  }
+  if (popup && msg == WM_SIZE && popup->controller) {
+    RECT r{};
+    GetClientRect(hwnd, &r);
+    popup->controller->put_Bounds(r);
+    return 0;
+  }
+  if (popup && msg == WM_CLOSE) {
+    popup->close_view();
+    popup->window = nullptr;
+    DestroyWindow(hwnd);
+    return 0;
+  }
+  return DefWindowProcW(hwnd, msg, w, l);
+}
+void open_popup(const std::shared_ptr<BrowserState> &state,
+                ICoreWebView2NewWindowRequestedEventArgs *args);
+// The same rules for the sign-in window and its popups: pages stay on Meta
+// domains, embedded frames may be any plain HTTPS origin, the callback ends
+// sign-in, and device permissions are refused.
+void attach(const std::shared_ptr<BrowserState> &state, ICoreWebView2 *web,
+            Popup *popup) {
+  ICoreWebView2Settings *settings = nullptr;
+  web->get_Settings(&settings);
+  if (settings) {
+    settings->put_AreDevToolsEnabled(FALSE);
+    settings->put_AreDefaultContextMenusEnabled(FALSE);
+    settings->put_IsStatusBarEnabled(FALSE);
+    settings->put_IsWebMessageEnabled(FALSE);
+    settings->Release();
+  }
+  EventRegistrationToken t{};
+  auto nav = handler<ICoreWebView2NavigationStartingEventHandler, ICoreWebView2 *,
+                     ICoreWebView2NavigationStartingEventArgs *>(
+      [state](ICoreWebView2 *, ICoreWebView2NavigationStartingEventArgs *args) {
+        LPWSTR raw = nullptr;
+        args->get_Uri(&raw);
+        auto uri = utf8(raw);
+        CoTaskMemFree(raw);
+        if (!meta::auth_navigation_allowed(uri))
+          args->put_Cancel(TRUE);
+        state->navigate(uri);
+        return S_OK;
+      });
+  web->add_NavigationStarting(nav, &t);
+  nav->Release();
+  auto frame = handler<ICoreWebView2NavigationStartingEventHandler, ICoreWebView2 *,
+                       ICoreWebView2NavigationStartingEventArgs *>(
+      [](ICoreWebView2 *, ICoreWebView2NavigationStartingEventArgs *args) {
+        LPWSTR raw = nullptr;
+        args->get_Uri(&raw);
+        auto uri = utf8(raw);
+        CoTaskMemFree(raw);
+        if (!meta::auth_frame_allowed(uri))
+          args->put_Cancel(TRUE);
+        return S_OK;
+      });
+  web->add_FrameNavigationStarting(frame, &t);
+  frame->Release();
+  auto window = handler<ICoreWebView2NewWindowRequestedEventHandler, ICoreWebView2 *,
+                        ICoreWebView2NewWindowRequestedEventArgs *>(
+      [state](ICoreWebView2 *, ICoreWebView2NewWindowRequestedEventArgs *args) {
+        LPWSTR raw = nullptr;
+        args->get_Uri(&raw);
+        auto uri = utf8(raw);
+        CoTaskMemFree(raw);
+        if (meta::is_callback(uri)) {
+          args->put_Handled(TRUE);
+          state->navigate(uri);
+        } else if (uri.empty() || uri == "about:blank" ||
+                   meta::auth_navigation_allowed(uri))
+          open_popup(state, args);
+        else
+          args->put_Handled(TRUE);
+        return S_OK;
+      });
+  web->add_NewWindowRequested(window, &t);
+  window->Release();
+  auto permissions =
+      handler<ICoreWebView2PermissionRequestedEventHandler, ICoreWebView2 *,
+              ICoreWebView2PermissionRequestedEventArgs *>(
+          [](ICoreWebView2 *, ICoreWebView2PermissionRequestedEventArgs *args) {
+            args->put_State(COREWEBVIEW2_PERMISSION_STATE_DENY);
+            return S_OK;
+          });
+  web->add_PermissionRequested(permissions, &t);
+  permissions->Release();
+  if (popup) {
+    auto close = handler<ICoreWebView2WindowCloseRequestedEventHandler,
+                         ICoreWebView2 *, IUnknown *>(
+        [popup](ICoreWebView2 *, IUnknown *) {
+          if (popup->window)
+            PostMessageW(popup->window, WM_CLOSE, 0, 0);
+          return S_OK;
+        });
+    web->add_WindowCloseRequested(close, &t);
+    close->Release();
+    return;
+  }
+  auto completed =
+      handler<ICoreWebView2NavigationCompletedEventHandler, ICoreWebView2 *,
+              ICoreWebView2NavigationCompletedEventArgs *>(
+          [state](ICoreWebView2 *, ICoreWebView2NavigationCompletedEventArgs *args) {
+            BOOL success = FALSE;
+            args->get_IsSuccess(&success);
+            if (success)
+              state->emit({AuthBrowser::Kind::ready, {}});
+            return S_OK;
+          });
+  web->add_NavigationCompleted(completed, &t);
+  completed->Release();
+}
+// A private-mode controller in the sign-in environment. Popups share the
+// opener's private profile, which put_NewWindow requires.
+HRESULT create_controller(ICoreWebView2Environment10 *env, HWND window,
+                          ICoreWebView2CreateCoreWebView2ControllerCompletedHandler *cb) {
+  ICoreWebView2ControllerOptions *options = nullptr;
+  auto result = env->CreateCoreWebView2ControllerOptions(&options);
+  if (SUCCEEDED(result))
+    result = options->put_IsInPrivateModeEnabled(TRUE);
+  if (SUCCEEDED(result))
+    result = env->CreateCoreWebView2ControllerWithOptions(window, options, cb);
+  if (options)
+    options->Release();
+  return result;
+}
+void open_popup(const std::shared_ptr<BrowserState> &state,
+                ICoreWebView2NewWindowRequestedEventArgs *args) {
+  ICoreWebView2Deferral *deferral = nullptr;
+  if (state->done || !state->env || FAILED(args->GetDeferral(&deferral))) {
+    args->put_Handled(TRUE);
+    return;
+  }
+  auto owned = std::make_unique<Popup>();
+  auto *popup = owned.get();
+  popup->window = CreateWindowExW(0, L"VentureMetaAuthPopup", L"Sign in to Meta - Venture",
+                                  WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 560, 760,
+                                  state->window, nullptr, GetModuleHandleW(nullptr), popup);
+  state->popups.push_back(std::move(owned));
+  args->AddRef();
+  // Without a new window the request is refused rather than opened by WebView2
+  // in an unfiltered default window.
+  auto finish = [args, deferral](ICoreWebView2 *web) {
+    if (web)
+      args->put_NewWindow(web);
+    else
+      args->put_Handled(TRUE);
+    deferral->Complete();
+    deferral->Release();
+    args->Release();
+  };
+  if (!popup->window) {
+    finish(nullptr);
+    return;
+  }
+  auto cb = handler<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler, HRESULT,
+                    ICoreWebView2Controller *>(
+      [state, popup, finish](HRESULT result, ICoreWebView2Controller *controller) {
+        if (state->done || !popup->window || FAILED(result) || !controller ||
+            FAILED(controller->get_CoreWebView2(&popup->web))) {
+          finish(nullptr);
+          if (popup->window)
+            PostMessageW(popup->window, WM_CLOSE, 0, 0);
+          return S_OK;
+        }
+        popup->controller = controller;
+        controller->AddRef();
+        attach(state, popup->web, popup);
+        RECT r{};
+        GetClientRect(popup->window, &r);
+        controller->put_Bounds(r);
+        controller->put_IsVisible(TRUE);
+        finish(popup->web);
+        ShowWindow(popup->window, SW_SHOW);
+        SetForegroundWindow(popup->window);
+        return S_OK;
+      });
+  if (FAILED(create_controller(state->env, popup->window, cb))) {
+    finish(nullptr);
+    PostMessageW(popup->window, WM_CLOSE, 0, 0);
+  }
+  cb->Release();
 }
 } // namespace
 struct AuthBrowser::Impl {
@@ -165,6 +384,10 @@ void AuthBrowser::open(std::string url, const fs::path &data) {
     wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
     wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
     RegisterClassW(&wc);
+    WNDCLASSW popup_class = wc;
+    popup_class.lpfnWndProc = popup_proc;
+    popup_class.lpszClassName = L"VentureMetaAuthPopup";
+    RegisterClassW(&popup_class);
     state->window =
         CreateWindowExW(0, wc.lpszClassName, L"Sign in to Meta - Venture",
                         WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 650,
@@ -222,92 +445,7 @@ void AuthBrowser::open(std::string url, const fs::path &data) {
                   state->fail();
                   return S_OK;
                 }
-                ICoreWebView2Settings *settings = nullptr;
-                state->web->get_Settings(&settings);
-                if (settings) {
-                  settings->put_AreDevToolsEnabled(FALSE);
-                  settings->put_AreDefaultContextMenusEnabled(FALSE);
-                  settings->put_IsStatusBarEnabled(FALSE);
-                  settings->put_IsWebMessageEnabled(FALSE);
-                  settings->put_AreDefaultScriptDialogsEnabled(FALSE);
-                  settings->Release();
-                }
-                EventRegistrationToken t{};
-                auto nav = handler<ICoreWebView2NavigationStartingEventHandler,
-                                   ICoreWebView2 *,
-                                   ICoreWebView2NavigationStartingEventArgs *>(
-                    [state](ICoreWebView2 *,
-                            ICoreWebView2NavigationStartingEventArgs *args) {
-                      LPWSTR raw = nullptr;
-                      args->get_Uri(&raw);
-                      auto uri = utf8(raw);
-                      CoTaskMemFree(raw);
-                      if (!meta::auth_navigation_allowed(uri))
-                        args->put_Cancel(TRUE);
-                      state->navigate(uri);
-                      return S_OK;
-                    });
-                state->web->add_NavigationStarting(nav, &t);
-                nav->Release();
-                auto frame =
-                    handler<ICoreWebView2NavigationStartingEventHandler,
-                            ICoreWebView2 *,
-                            ICoreWebView2NavigationStartingEventArgs *>(
-                        [](ICoreWebView2 *,
-                           ICoreWebView2NavigationStartingEventArgs *args) {
-                          LPWSTR raw = nullptr;
-                          args->get_Uri(&raw);
-                          auto uri = utf8(raw);
-                          CoTaskMemFree(raw);
-                          if (!meta::auth_navigation_allowed(uri))
-                            args->put_Cancel(TRUE);
-                          return S_OK;
-                        });
-                state->web->add_FrameNavigationStarting(frame, &t);
-                frame->Release();
-                auto popup =
-                    handler<ICoreWebView2NewWindowRequestedEventHandler,
-                            ICoreWebView2 *,
-                            ICoreWebView2NewWindowRequestedEventArgs *>(
-                        [state](
-                            ICoreWebView2 *,
-                            ICoreWebView2NewWindowRequestedEventArgs *args) {
-                          args->put_Handled(TRUE);
-                          LPWSTR raw = nullptr;
-                          args->get_Uri(&raw);
-                          auto uri = utf8(raw);
-                          CoTaskMemFree(raw);
-                          state->navigate(uri, true);
-                          return S_OK;
-                        });
-                state->web->add_NewWindowRequested(popup, &t);
-                popup->Release();
-                auto permissions =
-                    handler<ICoreWebView2PermissionRequestedEventHandler,
-                            ICoreWebView2 *,
-                            ICoreWebView2PermissionRequestedEventArgs *>(
-                        [](ICoreWebView2 *,
-                           ICoreWebView2PermissionRequestedEventArgs *args) {
-                          args->put_State(COREWEBVIEW2_PERMISSION_STATE_DENY);
-                          return S_OK;
-                        });
-                state->web->add_PermissionRequested(permissions, &t);
-                permissions->Release();
-                auto completed =
-                    handler<ICoreWebView2NavigationCompletedEventHandler,
-                            ICoreWebView2 *,
-                            ICoreWebView2NavigationCompletedEventArgs *>(
-                        [state](
-                            ICoreWebView2 *,
-                            ICoreWebView2NavigationCompletedEventArgs *args) {
-                          BOOL success = FALSE;
-                          args->get_IsSuccess(&success);
-                          if (success)
-                            state->emit({Kind::ready, {}});
-                          return S_OK;
-                        });
-                state->web->add_NavigationCompleted(completed, &t);
-                completed->Release();
+                attach(state, state->web, nullptr);
                 RECT r{};
                 GetClientRect(state->window, &r);
                 controller->put_Bounds(r);
@@ -320,22 +458,11 @@ void AuthBrowser::open(std::string url, const fs::path &data) {
           // WebView2 SDK 1.0.3537.50: Environment10/controller options isolate
           // cookies for each sign-in. Fail closed if private mode is
           // unavailable.
-          ICoreWebView2Environment10 *private_env = nullptr;
-          ICoreWebView2ControllerOptions *options = nullptr;
           auto result =
               env->QueryInterface(__uuidof(ICoreWebView2Environment10),
-                                  reinterpret_cast<void **>(&private_env));
+                                  reinterpret_cast<void **>(&state->env));
           if (SUCCEEDED(result))
-            result = private_env->CreateCoreWebView2ControllerOptions(&options);
-          if (SUCCEEDED(result))
-            result = options->put_IsInPrivateModeEnabled(TRUE);
-          if (SUCCEEDED(result))
-            result = private_env->CreateCoreWebView2ControllerWithOptions(
-                state->window, options, controller_cb);
-          if (options)
-            options->Release();
-          if (private_env)
-            private_env->Release();
+            result = create_controller(state->env, state->window, controller_cb);
           controller_cb->Release();
           if (FAILED(result))
             state->fail();

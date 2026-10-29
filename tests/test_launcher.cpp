@@ -87,6 +87,19 @@ TEST_CASE("auth navigation accepts only HTTPS Meta domain boundaries") {
                    "https://user@meta.com/", "file:///test",
                    "https://meta.com:444/", "javascript:alert(1)"})
     CHECK_FALSE(meta::auth_navigation_allowed(url));
+  CHECK(meta::auth_navigation_allowed("https://www.fbsbx.com/captcha/recaptcha/iframe/"));
+}
+TEST_CASE("auth frames accept any plain HTTPS origin, the page stays on Meta") {
+  for (auto url : {"https://www.google.com/recaptcha/api2/anchor",
+                   "https://client-api.arkoselabs.com/fc/gc/", "about:blank",
+                   "https://facebook.com/"})
+    CHECK(meta::auth_frame_allowed(url));
+  for (auto url : {"http://example.com/", "https://user@example.com/",
+                   "https://example.com:8443/", "file:///test",
+                   "javascript:alert(1)", "oculus://success?token=x",
+                   "data:text/html,x"})
+    CHECK_FALSE(meta::auth_frame_allowed(url));
+  CHECK_FALSE(meta::auth_navigation_allowed("https://www.google.com/recaptcha/"));
 }
 TEST_CASE("entitlements support nodes and edges while retaining completeness") {
   auto j = library_response(Json::array({Json{{"item", title()}}}));
