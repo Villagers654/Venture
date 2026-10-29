@@ -734,7 +734,7 @@ TEST_CASE("production framework JNI owns real NativeWindow references") {
   CHECK(env->CallIntMethod(record, env->GetMethodID(record_class, "getState", "()I")) == 1);
   env->CallVoidMethod(record, env->GetMethodID(record_class, "startRecording", "()V"));
   REQUIRE_FALSE(env->ExceptionCheck());
-  std::vector<float> input(960, .5f);
+  std::vector<float> input(1920, .5f);  // 960 stereo frames: the mixer is two-channel
   audio::Backend::get().process(audio::Direction::input, nullptr, input.data(), 960);
   auto captured = env->NewShortArray(960);
   const auto read = env->CallIntMethod(record, env->GetMethodID(record_class, "read", "([SIII)I"), captured, 0, 960, 1);
