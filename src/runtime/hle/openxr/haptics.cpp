@@ -30,7 +30,7 @@ XrResult check_emulated(XrSession handle, const XrHapticActionInfo &info) {
   const auto paths = a->second.haptic_subactions();
   if (info.subactionPath && std::find(paths.begin(), paths.end(), info.subactionPath) == paths.end())
     return XR_ERROR_PATH_UNSUPPORTED;
-  if (!state().attached_sets[handle].contains(state().objects.at(key(info.action)).parent))
+  if (!state().attached_sets[handle].contains(state().objects.at({"XrAction", key(info.action)}).parent))
     return XR_ERROR_ACTIONSET_NOT_ATTACHED;
   if (session().state != XR_SESSION_STATE_FOCUSED) return XR_SESSION_NOT_FOCUSED;
   return XR_SUCCESS;

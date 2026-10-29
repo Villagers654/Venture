@@ -21,7 +21,23 @@ using namespace venture::xr;
 struct Object {
   std::string type;
   std::uintptr_t parent;
+  std::string_view parent_type;
 };
+// OpenXR handles are unique only within their type: a runtime may give an instance and a session the
+// same value (Virtual Desktop's VDXR numbers both from 1). Type names are string literals.
+using ObjectKey = std::pair<std::string_view, std::uintptr_t>;
+template <class H> constexpr std::string_view handle_type();
+#define VENTURE_XR_HANDLE_TYPE(T) \
+  template <> constexpr std::string_view handle_type<T>() { return #T; }
+VENTURE_XR_HANDLE_TYPE(XrInstance)
+VENTURE_XR_HANDLE_TYPE(XrSession)
+VENTURE_XR_HANDLE_TYPE(XrSpace)
+VENTURE_XR_HANDLE_TYPE(XrAction)
+VENTURE_XR_HANDLE_TYPE(XrActionSet)
+VENTURE_XR_HANDLE_TYPE(XrSwapchain)
+VENTURE_XR_HANDLE_TYPE(XrHandTrackerEXT)
+VENTURE_XR_HANDLE_TYPE(XrFoveationProfileFB)
+#undef VENTURE_XR_HANDLE_TYPE
 struct AndroidSurface;
 struct Swapchain {
   XrSwapchain handle{}; // stable, guest-only identity
@@ -69,7 +85,7 @@ struct State {
   XrGraphicsBindingVulkanKHR graphics{XR_TYPE_GRAPHICS_BINDING_VULKAN_KHR};
   std::uint32_t guest_graphics_queue_index = 0;
   std::set<std::string> enabled;
-  std::unordered_map<std::uintptr_t, Object> objects;
+  std::map<ObjectKey, Object> objects;
   std::map<XrSwapchain, Swapchain> swapchains;
   std::uint64_t presentation_epoch = 0;
   std::size_t host_swapchain_limit = 0; // learned from XR_ERROR_LIMIT_REACHED, zero means unknown
@@ -117,17 +133,17 @@ struct State {
 State &state();
 template <class H> std::uintptr_t key(H h) { return reinterpret_cast<std::uintptr_t>(h); }
 template <class H> bool valid_handle(H h, std::string_view type) {
-  auto it = state().objects.find(key(h));
-  return h && it != state().objects.end() && it->second.type == type;
+  return h && state().objects.contains({type, key(h)});
 }
 template <class H, class P> void track_handle(H h, const char *type, P parent) {
-  state().objects[key(h)] = {type, key(parent)};
+  state().objects[{type, key(h)}] = {type, key(parent), parent ? handle_type<P>() : std::string_view{}};
 }
-void forget_object(std::uintptr_t);
+void forget_object(const ObjectKey&);
 // A sync or attach starts a new action state; destroying any object drops all.
 void forget_action_states(bool all = false);
-void cancel_object_haptics(std::uintptr_t);
-template <class H> void forget_handle(H h) { forget_object(key(h)); }
+void cancel_object_haptics(const ObjectKey&);
+template <class H> void forget_handle(H h) { forget_object({handle_type<H>(), key(h)}); }
+template <class H> void cancel_handle_haptics(H h) { cancel_object_haptics({handle_type<H>(), key(h)}); }
 // ignore_unenabled: skip nodes of extensions the guest did not enable (OpenXR
 // §2.9.7) for chains that are inspected locally and never forwarded raw.
 XrResult validate_chain(const void *next, bool host_only = true,

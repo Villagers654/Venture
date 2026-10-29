@@ -42,17 +42,16 @@ bool hand_tracking_required() {
   }();
   return required;
 }
-void cancel_object_haptics(std::uintptr_t value) {
-  auto object = state().objects.find(value);
-  if (object == state().objects.end()) return;
-  if (object->second.type == "XrAction") {
+void cancel_object_haptics(const ObjectKey& value) {
+  if (!state().objects.contains(value)) return;
+  if (value.first == "XrAction") {
     XrHapticActionInfo info{XR_TYPE_HAPTIC_ACTION_INFO, nullptr,
-        reinterpret_cast<XrAction>(value), XR_NULL_PATH};
+        reinterpret_cast<XrAction>(value.second), XR_NULL_PATH};
     venture::xr::cancel_sequence(session().handle, &info);
     venture::xr::clear_haptic_bindings(session().handle);
   }
   for (const auto &[child, record] : state().objects)
-    if (record.parent == value) cancel_object_haptics(child);
+    if (record.parent == value.second && record.parent_type == value.first) cancel_object_haptics(child);
 }
 std::size_t State::ActionReadHash::operator()(const ActionRead &r) const noexcept {
   std::uint64_t h = key(r.session) * 0x9e3779b97f4a7c15ull;
@@ -64,18 +63,17 @@ void forget_action_states(bool all) {
   if (all) state().action_states.clear();
   ++state().action_sync;
 }
-void forget_object(std::uintptr_t value) {
+void forget_object(const ObjectKey& value) {
   forget_action_states(true);
-  venture::xr::forget_menu_object(value);
-  std::vector<std::uintptr_t> children;
+  venture::xr::forget_menu_object(value.second);
+  std::vector<ObjectKey> children;
   for (const auto &[h, o] : state().objects)
-    if (o.parent == value)
+    if (o.parent == value.second && o.parent_type == value.first)
       children.push_back(h);
-  for (auto child : children)
+  for (const auto& child : children)
     forget_object(child);
-  auto object = state().objects.find(value);
-  if (object != state().objects.end() && object->second.type == "XrAction") {
-    auto action = reinterpret_cast<XrAction>(value);
+  if (value.first == "XrAction" && state().objects.contains(value)) {
+    auto action = reinterpret_cast<XrAction>(value.second);
     XrHapticActionInfo info{XR_TYPE_HAPTIC_ACTION_INFO, nullptr, action, XR_NULL_PATH};
     venture::xr::cancel_sequence(session().handle, &info);
     venture::xr::clear_haptic_bindings(session().handle);

@@ -2,6 +2,10 @@
 #include "launcher/ui/rich_text.h"
 #include "launcher/ui/style.h"
 #include "launcher/window_style.h"
+#include "common/environment.h"
+#include "common/http/client.h"
+#include "common/json.h"
+#include "common/log.h"
 
 #include <algorithm>
 #include <cctype>
@@ -318,6 +322,7 @@ void App::draw() {
   draw_uninstall();
   draw_cancel_download();
   draw_report();
+  draw_update();
   draw_remove_account();
   draw_steam_ask();
   ImGui::EndChild();
@@ -1537,6 +1542,10 @@ void App::draw_settings() {
   setting_row("Show runtime console", "Opens a console window with live output when a game starts.", s(44), s(24), [&] {
     if (toggle("console", &settings_.console)) action([&] { save_settings(); });
   });
+  divider();
+  setting_row("Check for updates", "Venture tells you when a new version is out.", s(44), s(24), [&] {
+    if (toggle("updates", &settings_.check_updates)) action([&] { save_settings(); });
+  });
   ImGui::Dummy({0, 0});  // the last row keeps its bottom padding
   end_card();
   gap(28);
@@ -2147,6 +2156,95 @@ void App::draw_cancel_download() {
     if (button("Cancel download", 0, Tone::danger, {bw, s(40)})) {
       if (cancel_target_) action([&] { downloads_->remove(*cancel_target_, true); });
       cancel_target_.reset();
+      ImGui::CloseCurrentPopup();
+    }
+    end_dialog();
+  }
+}
+
+namespace {
+// True when release `tag` (v1.2.3.4) is a later version than `current` (1.2.3); missing parts count as 0.
+bool newer_version(std::string_view tag, std::string_view current) {
+  auto parts = [](std::string_view text) {
+    if (text.starts_with('v')) text.remove_prefix(1);
+    std::vector<int> out;
+    for (std::size_t at = 0; at <= text.size();) {
+      const auto end = std::min(text.find('.', at), text.size());
+      int value = 0;
+      for (char c : text.substr(at, end - at)) {
+        if (c < '0' || c > '9') return std::vector<int>{};
+        value = value * 10 + (c - '0');
+      }
+      out.push_back(value);
+      at = end + 1;
+    }
+    return out;
+  };
+  auto a = parts(tag), b = parts(current);
+  if (a.empty() || b.empty()) return false;
+  a.resize(std::max(a.size(), b.size()));
+  b.resize(a.size());
+  return a > b;
+}
+}  // namespace
+
+// Once per start: Flatpak updates itself, and offline or direct launches ask no one.
+void App::check_update() {
+  if (update_checked_ || !worker_) return;
+  update_checked_ = true;
+  if (!settings_.check_updates || options_.offline || options_.launch_requested ||
+      venture::environment::getenv("FLATPAK_ID"))
+    return;
+  worker_->submit([this](std::stop_token stop) -> Worker::Completion {
+    std::string tag, url;
+    try {
+      const auto r = http::get_latest_release(stop);
+      if (r.status == 200) {
+        const auto j = Json::parse(r.body);
+        tag = j.value("tag_name", "");
+        url = j.value("html_url", "");
+      }
+    } catch (...) {
+      log::info("launcher", "Update check failed: {}", exception_text());
+    }
+    return [this, tag, url] {
+      const std::string version = tag.starts_with('v') ? tag.substr(1) : tag;
+      if (!newer_version(tag, VENTURE_VERSION) || version == settings_.dismissed_update ||
+          !url.starts_with("https://github.com/Villagers654/Venture/releases/"))
+        return;
+      log::info("launcher", "Venture {} is available", version);
+      update_ = Update{version, url};
+    };
+  });
+}
+
+void App::draw_update() {
+  check_update();
+  // Waits for any other dialog, so it never stacks on one.
+  if (update_ && !ImGui::IsPopupOpen("Update available") &&
+      !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel))
+    ImGui::OpenPopup("Update available");
+  if (begin_dialog("Update available", 460)) {
+    const std::string version = update_ ? update_->version : "";
+    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + s(404));
+    text(fonts().semibold, kTitle, color::text, std::format("Venture {} is available", version));
+    gap(6);
+    text(fonts().regular, kBody, color::text2,
+         std::format("You're on {}. See what's new and download it from the release page.", VENTURE_VERSION));
+    ImGui::PopTextWrapPos();
+    gap(24);
+    float bw = s(120);
+    ImGui::SetCursorPosX(ImGui::GetWindowContentRegionMax().x - bw * 2 - s(10));
+    if (button("Not now##update", 0, Tone::secondary, {bw, s(40)})) {
+      settings_.dismissed_update = version;
+      action([&] { save_settings(); });
+      update_.reset();
+      ImGui::CloseCurrentPopup();
+    }
+    ImGui::SameLine(0, s(10));
+    if (button("Download##update", 0, Tone::primary, {bw, s(40)})) {
+      if (update_) action([url = update_->url] { open_url(url); });
+      update_.reset();
       ImGui::CloseCurrentPopup();
     }
     end_dialog();

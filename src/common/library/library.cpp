@@ -406,6 +406,8 @@ Settings Settings::load(const fs::path &data) {
     s.adb = adb.lexically_normal();
   s.log_level = int(std::min<uint64_t>(4, number(j, "logLevel")));
   s.console = field(j, "launchWithConsole") == true;
+  s.check_updates = field(j, "checkForUpdates") != false;
+  s.dismissed_update = str(j, "dismissedUpdate");
   s.add_games_to_steam = field(j, "addGamesToSteam") != false;
   s.steam_add_new = field(j, "steamAddNew") != false;
   s.steam_ask = field(j, "steamAsk") != false;
@@ -424,6 +426,8 @@ void Settings::save(const fs::path &data) const {
          {"gamesDirectory", paths::utf8(games)},
          {"logLevel", log_level},
          {"launchWithConsole", console},
+         {"checkForUpdates", check_updates},
+         {"dismissedUpdate", dismissed_update},
          {"addGamesToSteam", add_games_to_steam},
          {"steamAddNew", steam_add_new},
          {"steamAsk", steam_ask},

@@ -123,7 +123,7 @@ def generate(registry, output, check=False):
             # An asynchronous host xrEndFrame may still reference the object.
             code.append('  venture::xr::session().finish_host_end();')
         if name in ('xrDestroyAction', 'xrDestroyActionSet'):
-            code.append(f'  cancel_object_haptics(key({params[0].findtext("name")}));')
+            code.append(f'  cancel_handle_haptics({params[0].findtext("name")});')
         if name == 'xrAttachSessionActionSets':
             code.append('  auto result = venture::xr::attach_with_menu_chord(session, attachInfo);')
         elif name == 'xrSyncActions':

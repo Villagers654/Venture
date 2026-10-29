@@ -39,6 +39,8 @@ Response get_loopback(uint16_t port, std::string_view path,
 Response post_loopback(uint16_t port, std::string_view path,
                        const Fields &fields, std::stop_token stop = {});
 std::string get_public(std::string url, std::stop_token stop = {});
+// Venture's latest published release from GitHub's API; no account data is sent.
+Response get_latest_release(std::stop_token stop = {});
 std::string get_image(std::string url, std::stop_token stop = {});
 struct RangeDecision {
   uint64_t offset, total;

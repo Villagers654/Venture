@@ -317,6 +317,10 @@ Response get_meta(std::string_view url, const Fields &headers,
     throw std::runtime_error("Refused an invalid Meta commerce URL.");
   return memory(url, nullptr, 4 * 1024 * 1024, stop, headers);
 }
+Response get_latest_release(std::stop_token stop) {
+  return memory("https://api.github.com/repos/Villagers654/Venture/releases/latest", nullptr, 1024 * 1024, stop,
+                {{"Accept", "application/vnd.github+json"}});
+}
 Response get_loopback(uint16_t port, std::string_view path,
                       const Fields &headers, std::stop_token stop) {
   if (!port || !path.starts_with('/') || path.starts_with("//") ||

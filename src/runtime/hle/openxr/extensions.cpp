@@ -144,7 +144,7 @@ XrResult xrGetRecommendedLayerResolutionMETA(XrSession handle,
   for (auto image : images) {
     if (!image) { unbounded = true; continue; }
     auto found = state().swapchains.find(image);
-    if (found == state().swapchains.end() || state().objects.at(key(image)).parent != key(handle))
+    if (found == state().swapchains.end() || state().objects.at({"XrSwapchain", key(image)}).parent != key(handle))
       return invalid(HandleField::swapchain, false, int(layer->type));
     limit_width = std::min(limit_width, found->second.info.width);
     limit_height = std::min(limit_height, found->second.info.height);

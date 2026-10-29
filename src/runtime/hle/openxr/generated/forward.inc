@@ -36,7 +36,7 @@ XrResult xrDestroyAction(XrAction action) {
   std::lock_guard lock(venture::hle::openxr::state().mutex);
   if (!valid_handle(action, "XrAction")) return XR_ERROR_HANDLE_INVALID;
   venture::xr::session().finish_host_end();
-  cancel_object_haptics(key(action));
+  cancel_handle_haptics(action);
   auto result = host_call<PFN_xrDestroyAction, "xrDestroyAction">(action);
   if (XR_SUCCEEDED(result)) forget_handle(action);
   return result;
@@ -45,7 +45,7 @@ XrResult xrDestroyActionSet(XrActionSet actionSet) {
   std::lock_guard lock(venture::hle::openxr::state().mutex);
   if (!valid_handle(actionSet, "XrActionSet")) return XR_ERROR_HANDLE_INVALID;
   venture::xr::session().finish_host_end();
-  cancel_object_haptics(key(actionSet));
+  cancel_handle_haptics(actionSet);
   auto result = host_call<PFN_xrDestroyActionSet, "xrDestroyActionSet">(actionSet);
   if (XR_SUCCEEDED(result)) forget_handle(actionSet);
   return result;

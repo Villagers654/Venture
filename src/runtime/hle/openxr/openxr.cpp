@@ -417,7 +417,7 @@ XrResult xrDestroyInstance(XrInstance instance) {
   std::vector<XrActionSet> sets;
   for (const auto &[h, o] : state().objects)
     if (o.type == "XrActionSet")
-      sets.push_back(reinterpret_cast<XrActionSet>(h));
+      sets.push_back(reinterpret_cast<XrActionSet>(h.second));
   for (auto set : sets) {
     auto r = ::xrDestroyActionSet(set);
     if (XR_FAILED(r))

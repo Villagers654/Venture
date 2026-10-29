@@ -67,6 +67,14 @@ private:
     bool copied = false;
   };
   std::optional<SharedReport> report_;
+  // A newer published release than this build, offered once per version.
+  struct Update {
+    std::string version, url;
+  };
+  std::optional<Update> update_;
+  bool update_checked_ = false;
+  void check_update();
+  void draw_update();
   // Saves a debug report about the game's last launch and uploads it.
   void share_report(std::string_view app_id);
   void upload_report();  // (again) for the report in report_

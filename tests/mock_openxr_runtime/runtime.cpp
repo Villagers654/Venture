@@ -47,6 +47,13 @@ MockXrStats stats{};
 std::uint64_t haptic_per_hand[2]{};
 std::uintptr_t next_id = 0x10000;
 template <class H> H token() {
+  // VENTURE_MOCK_TYPED_HANDLES numbers each handle type from 1, as Virtual Desktop's VDXR does:
+  // OpenXR handles are unique only within their type.
+  static const bool typed = venture::environment::getenv("VENTURE_MOCK_TYPED_HANDLES") != nullptr;
+  if (typed) {
+    static std::uintptr_t next = 0;
+    return reinterpret_cast<H>(++next);
+  }
   next_id += 16;
   return reinterpret_cast<H>(next_id);
 }

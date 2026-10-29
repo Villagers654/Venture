@@ -55,6 +55,9 @@ struct Settings {
   fs::path adb;  // Android platform-tools adb for imports; empty finds it
   int log_level = 2;
   bool console = false;
+  // The launcher asks GitHub for a newer release at start; "Not now" skips that version.
+  bool check_updates = true;
+  std::string dismissed_update;
   bool add_games_to_steam = true;
   // A newly installed game goes to Steam unless the user opts out: the
   // default, and whether installing asks (a checkbox in the GUI). Games left

@@ -60,9 +60,7 @@ struct XrForwardingFixture {
     XrInstanceCreateInfo info{XR_TYPE_INSTANCE_CREATE_INFO};
     info.applicationInfo.apiVersion = XR_MAKE_VERSION(1, 0, 0);
     auto result = venture::hle::openxr::guest::xrCreateInstance(&info, &instance);
-    if (XR_SUCCEEDED(result)) venture::hle::openxr::state().objects.emplace(
-      reinterpret_cast<std::uintptr_t>(session), venture::hle::openxr::Object{
-        "XrSession", reinterpret_cast<std::uintptr_t>(instance)});
+    if (XR_SUCCEEDED(result)) venture::hle::openxr::track_handle(session, "XrSession", instance);
     return result;
   }
   static XrResult XRAPI_CALL first(XrSession, const XrActionStateGetInfo*, XrActionStateBoolean* out) {
