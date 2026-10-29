@@ -204,7 +204,7 @@ TEST_CASE(
   CHECK_FALSE(fs::exists(f.config / "shortcuts.vdf.venture.bak"));
   fs::remove(f.target);
   int calls = 0;
-  CHECK(sync(f.root, f.root / "venture.exe", {}, {}, [&] {
+  CHECK(sync(f.root, f.root / "venture.exe", {}, {{"com.example.one", "One", ""}}, [&] {
           return ++calls >= 2;
         }).pending);
   CHECK_FALSE(fs::exists(f.target));
@@ -313,3 +313,17 @@ TEST_CASE("Steam installation scans cannot prune shortcuts when unavailable or "
 }
 #ifdef VENTURE_TEST_STEAM_ART
 #endif
+TEST_CASE("Steam sync while Steam runs asks for a restart only when its shortcuts differ") {
+  Fixture f;
+  const auto exe = f.root / "venture.exe";
+  std::vector<Game> games{{"com.example.one", "One", ""}, {"com.example.two", "Two", ""}};
+  CHECK(sync(f.root, exe, {}, games, [] { return true; }).pending);
+  CHECK_FALSE(sync(f.root, exe, {}, games, [] { return false; }).pending);
+  // A report: the banner came back at every start although Steam listed both.
+  auto running = sync(f.root, exe, {}, games, [] { return true; });
+  CHECK_FALSE(running.pending);
+  CHECK(running.games == 2);
+  CHECK(sync(f.root, exe, {}, {games[0]}, [] { return true; }).pending);
+  CHECK(sync(f.root, exe, {}, {games[0], {"com.example.two", "Renamed", ""}}, [] { return true; }).pending);
+  CHECK(sync(f.root, f.root / "moved/venture.exe", {}, games, [] { return true; }).pending);
+}

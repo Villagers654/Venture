@@ -457,13 +457,50 @@ fs::path artwork_present(const fs::path &png) {
 }
 fs::path best_art(const fs::path &cache, std::string_view id,
                   std::string_view kind);
+// While Steam runs its shortcuts cannot change. They need a restart only when
+// a game is missing or stale there, or a removed game is still listed; art
+// waits for the next sync with Steam closed.
+bool listed(const fs::path &root, const fs::path &executable,
+            const std::vector<Game> &games) {
+  try {
+    auto config = account_config(root);
+    auto target = config / "shortcuts.vdf";
+    safe_target(config, target);
+    if (!fs::exists(target))
+      return games.empty();
+    auto doc = read_vdf(paths::read(target, limit));
+    auto list = field(doc, "shortcuts");
+    std::map<std::string, Vdf *> owned;
+    if (list)
+      for (auto &e : list->children)
+        if (auto package = owned_package(e); !package.empty())
+          owned.try_emplace(package, &e);
+    std::string exe = "\"" + paths::utf8(fs::absolute(executable)) + "\"";
+    std::string start = "\"" + paths::utf8(fs::absolute(executable).parent_path()) + "\"";
+    std::set<std::string> packages;
+    for (const auto &g : games) {
+      if (!paths::safe_package(g.package) || !packages.insert(g.package).second)
+        continue;
+      auto found = owned.find(g.package);
+      if (found == owned.end() || text(*found->second, "appname") != g.name ||
+          text(*found->second, "exe") != exe || text(*found->second, "StartDir") != start)
+        return false;
+    }
+    return std::ranges::all_of(owned, [&](const auto &e) { return packages.contains(e.first); });
+  } catch (const std::exception &) {
+    return false;
+  }
+}
 Result sync(const fs::path &root, const fs::path &executable,
             const fs::path &art, const std::vector<Game> &games,
             const std::function<bool()> &probe) {
   if (root.empty())
     return {};
+  auto deferred = [&]() -> Result {
+    return {!listed(root, executable, games), games.size()};
+  };
   if (probe())
-    return {true, games.size()};
+    return deferred();
   auto config = account_config(root);
   auto target = config / "shortcuts.vdf";
   safe_target(config, target);
@@ -556,16 +593,16 @@ Result sync(const fs::path &root, const fs::path &executable,
   list->children = std::move(retained);
   auto bytes = write_vdf(doc);
   if (probe())
-    return {true, games.size()};
+    return deferred();
   for (auto &a : artwork) {
     if (probe())
-      return {true, games.size()};
+      return deferred();
     if (install_art(a.source, a.destination) && a.icon)
       put(list->children[a.index], "icon", paths::utf8(a.destination));
   }
   bytes = write_vdf(doc);
   if (probe())
-    return {true, games.size()};
+    return deferred();
   if (bytes != old) {
     if (fs::exists(target) != existed ||
         (existed && paths::read(target, limit) != old))
