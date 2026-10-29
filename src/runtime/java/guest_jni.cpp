@@ -138,6 +138,47 @@ SlowCallStart slow_call_start(hle::CallContext& ctx) {
 // Names the called method through reflection. Entered only with no pending
 // exception, so every exception raised here belongs to the diagnostic and is
 // cleared before the local frame (and its references) is released.
+// The pending exception and its first frames (and its causes'), for the
+// runtime log: ExceptionDescribe reaches only stderr, which a debug report
+// keeps for the last run alone. The exception stays pending.
+std::string pending_exception(JNIEnv* env) {
+  const auto thrown = env->ExceptionOccurred();
+  if (!thrown) return "-";
+  env->ExceptionClear();
+  std::string text;
+  if (env->PushLocalFrame(32) == JNI_OK) {
+    struct Frame {
+      JNIEnv* env;
+      ~Frame() { env->ExceptionClear(); env->PopLocalFrame(nullptr); }
+    } frame{env};
+    const auto string = [&](jobject object) -> std::string {
+      const auto cls = env->FindClass("java/lang/Object");
+      const auto to_string = cls ? env->GetMethodID(cls, "toString", "()Ljava/lang/String;") : nullptr;
+      const auto value = to_string ? static_cast<jstring>(env->CallObjectMethod(object, to_string)) : nullptr;
+      if (!value || env->ExceptionCheck()) { env->ExceptionClear(); return "?"; }
+      const auto* utf = env->GetStringUTFChars(value, nullptr);
+      if (!utf) { env->ExceptionClear(); return "?"; }
+      std::string out = utf;
+      env->ReleaseStringUTFChars(value, utf);
+      return out;
+    };
+    const auto throwable = env->FindClass("java/lang/Throwable");
+    const auto trace = throwable ? env->GetMethodID(throwable, "getStackTrace", "()[Ljava/lang/StackTraceElement;") : nullptr;
+    const auto cause = throwable ? env->GetMethodID(throwable, "getCause", "()Ljava/lang/Throwable;") : nullptr;
+    jobject current = thrown;
+    for (int depth = 0; current && trace && cause && depth < 3 && !env->ExceptionCheck(); ++depth) {
+      text += (depth ? "; caused by " : "") + string(current);
+      const auto frames = static_cast<jobjectArray>(env->CallObjectMethod(current, trace));
+      if (frames && !env->ExceptionCheck())
+        for (jsize i = 0, n = std::min<jsize>(env->GetArrayLength(frames), 6); i < n; ++i)
+          text += " | at " + string(env->GetObjectArrayElement(frames, i));
+      env->ExceptionClear();
+      current = env->CallObjectMethod(current, cause);
+    }
+  }
+  env->Throw(thrown);
+  return text.empty() ? "-" : text;
+}
 std::string slow_call_method(JNIEnv* env, std::string_view name, const SlowCallStart& start) {
   if (env->PushLocalFrame(8) != JNI_OK) {
     env->ExceptionClear();  // the failed push raised OutOfMemoryError
@@ -197,7 +238,7 @@ void guard(hle::CallContext& ctx, F&& fn) {
         name == "DeleteLocalRef" || name == "DeleteGlobalRef" || name == "DeleteWeakGlobalRef" ||
         name == "MonitorExit" || name == "PushLocalFrame" || name == "PopLocalFrame";
     if (!pending_safe && env->ExceptionCheck()) {
-      log::error("jni", "guest called {} with a pending Java exception", name);
+      log::error("jni", "guest called {} with a pending Java exception: {}", name, pending_exception(env));
       env->ExceptionDescribe();
       if (venture::environment::getenv("VENTURE_TRACE_THREADS")) signals::log_guest_threads("JNI call with a pending exception");
       signals::deliver_synchronous(ctx.thread(), {signals::kSigAbrt, 0, ctx.cpu().pc()});
@@ -524,6 +565,18 @@ void remember_process_start(JNIEnv* env, jmethodID mid, jclass cls, std::string_
   }
   if (type) env->DeleteLocalRef(type);
 }
+// Native code may pass an Android path back to JDK file/ZIP constructors and
+// StatFs. Adapt only filesystem APIs, never arbitrary String arguments.
+void remember_path_constructor(JNIEnv* env, jmethodID mid, jclass cls) {
+  for (const auto* owner : {"java/io/File", "java/io/FileInputStream", "java/io/FileOutputStream",
+                            "java/io/RandomAccessFile", "java/util/zip/ZipFile", "android/os/StatFs"}) {
+    auto type = env->FindClass(owner);
+    const bool matches = type && env->IsAssignableFrom(cls, type);
+    if (type) env->DeleteLocalRef(type);
+    else env->ExceptionClear();
+    if (matches) { std::lock_guard lock(method_mutex); path_constructors.insert(mid); break; }
+  }
+}
 void get_method(JNIEnv* env, hle::CallContext& ctx, bool is_static) {
   auto cls = reference_arg<jclass>(ctx, ctx.x(1));
   auto* name = g2h<const char>(ctx.x(2));
@@ -532,17 +585,8 @@ void get_method(JNIEnv* env, hle::CallContext& ctx, bool is_static) {
   if (mid) remember_method(mid, sig, is_static, load_redirect(env, cls, name, sig));
   if (mid && !is_static) remember_process_start(env, mid, cls, name, sig);
   if (mid && !is_static && std::string_view(name) == "<init>" &&
-      std::string_view(sig).starts_with("(Ljava/lang/String;")) {
-    // Native code may pass an Android path back to JDK file/ZIP constructors.
-    // Adapt only filesystem APIs, never arbitrary String arguments.
-    for (const auto* owner : {"java/io/File", "java/io/FileInputStream", "java/io/FileOutputStream",
-                              "java/io/RandomAccessFile", "java/util/zip/ZipFile"}) {
-      auto type = env->FindClass(owner);
-      const bool matches = type && env->IsAssignableFrom(cls, type);
-      if (type) env->DeleteLocalRef(type);
-      if (matches) { std::lock_guard lock(method_mutex); path_constructors.insert(mid); break; }
-    }
-  }
+      std::string_view(sig).starts_with("(Ljava/lang/String;"))
+    remember_path_constructor(env, mid, cls);
   if (mid && !is_static && std::string_view(sig) == "()Ljava/lang/String;") {
     const std::string_view n(name);
     const char* owner = (n == "getPath" || n == "toString" || n == "getAbsolutePath" || n == "getCanonicalPath" ||
@@ -596,6 +640,15 @@ void special_FromReflectedMethod(JNIEnv* env, hle::CallContext& ctx) {
       auto redirect = reflected_load_redirect(env, method);
       if (env->ExceptionCheck()) return;
       remember_method(mid, sig, (flags & 8) != 0, redirect);
+      // Unity's AndroidJavaObject finds constructors by reflection.
+      if (sig.starts_with("(Ljava/lang/String;")) {
+        auto constructor = env->FindClass("java/lang/reflect/Constructor");
+        auto declaring = env->GetMethodID(cls, "getDeclaringClass", "()Ljava/lang/Class;");
+        auto owner = constructor && declaring && env->IsInstanceOf(method, constructor)
+                         ? static_cast<jclass>(env->CallObjectMethod(method, declaring)) : nullptr;
+        if (owner && !env->ExceptionCheck()) remember_path_constructor(env, mid, owner);
+        env->ExceptionClear();
+      }
       if ((flags & 8) == 0 && sig == "()Ljava/lang/Process;") {
         auto declaring = env->GetMethodID(cls, "getDeclaringClass", "()Ljava/lang/Class;");
         auto get_name = env->GetMethodID(cls, "getName", "()Ljava/lang/String;");

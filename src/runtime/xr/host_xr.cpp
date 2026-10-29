@@ -151,6 +151,11 @@ HostXr initialize_host() {
 std::string host_initialization_error(std::int32_t result, const char *operation) {
   if (result == XR_ERROR_RUNTIME_UNAVAILABLE)
     return "Your configured OpenXR runtime is unavailable. Make sure your headset and its runtime service are running, then press Play again.";
+  // SteamVR answers xrCreateInstance this way while its server is stuck or
+  // still shutting down from a previous session; a restart clears it.
+  if (result == XR_ERROR_RUNTIME_FAILURE)
+    return std::string("The OpenXR runtime failed to ") + operation +
+           " (XrResult -2). Close your VR runtime (SteamVR: quit it from its window) and start it again, then press Play again.";
   return std::string("The OpenXR runtime could not ") + operation +
          " (XrResult " + std::to_string(result) + ")";
 }

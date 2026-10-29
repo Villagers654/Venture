@@ -524,6 +524,22 @@ TEST_CASE("production framework JNI owns real NativeWindow references") {
   env->ReleaseStringUTFChars(roundtrip_text, roundtrip_path);
   env->DeleteLocalRef(roundtrip_text);
   env->DeleteLocalRef(roundtrip);
+  // Unity's AndroidJavaObject finds constructors by reflection; Batman sizes
+  // its language downloads with StatFs on getExternalFilesDir's Android path.
+  std::filesystem::create_directories(config.data_dir / "files");
+  auto statfs_class = env->FindClass("android/os/StatFs");
+  REQUIRE(statfs_class);
+  auto reflected = env->ToReflectedMethod(statfs_class, env->GetMethodID(statfs_class, "<init>", "(Ljava/lang/String;)V"), JNI_FALSE);
+  REQUIRE(reflected);
+  auto statfs_ctor = thread.call(table[7], {jni, h2g(reflected)});
+  REQUIRE(statfs_ctor);
+  auto files_text = env->NewStringUTF((config.guest_data_dir() + "/files").c_str());
+  constructor_args[0].l = files_text;
+  auto statfs = g2h<_jobject>(thread.call(table[30], {jni, h2g(statfs_class), statfs_ctor, h2g(constructor_args)}));
+  REQUIRE_FALSE(env->ExceptionCheck());
+  REQUIRE(statfs);
+  CHECK(env->CallLongMethod(statfs, env->GetMethodID(statfs_class, "getTotalBytes", "()J")) > 0);
+  for (jobject ref : std::initializer_list<jobject>{statfs, files_text, reflected, statfs_class}) env->DeleteLocalRef(ref);
   for (jobject ref : std::initializer_list<jobject>{java_text, guest_text, path_text, file, file_class}) env->DeleteLocalRef(ref);
   auto cls = env->FindClass("android/view/Surface");
   REQUIRE(cls);

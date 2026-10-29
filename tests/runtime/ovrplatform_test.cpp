@@ -376,3 +376,19 @@ TEST_CASE("Platform Unity native-message unwrap preserves user and proof payload
     CHECK(arena.live == 0);
   }
 }
+
+TEST_CASE("Platform enum ToString and FromString use the SDK's names") {
+  optest::Arena arena;
+  Session session(optest::app(), std::make_shared<optest::FakeProvider>(), arena.memory());
+  // The Climb 2 names its leaderboard read with this after ovr_Leaderboard_GetEntries.
+  auto top = optest::invoke(session, "ovrLeaderboardStartAt_ToString", {0});
+  CHECK(std::string(g2h<char>(top)) == "TOP");
+  auto unknown = optest::invoke(session, "ovrLeaderboardStartAt_ToString", {99});
+  CHECK(std::string(g2h<char>(unknown)) == "UNKNOWN");
+  const char* centered = "CENTERED_ON_VIEWER";
+  CHECK(optest::invoke(session, "ovrLeaderboardStartAt_FromString", {venture::h2g(centered)}) == 1);
+  // Explicit header values, not C# declaration order.
+  const char* missing = "MISSING_PARAMETERS";
+  CHECK(static_cast<std::int32_t>(optest::invoke(session, "ovrLivestreamingStartStatus_FromString",
+                                                 {venture::h2g(missing)})) == -4);
+}

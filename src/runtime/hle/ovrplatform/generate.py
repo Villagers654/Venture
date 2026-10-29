@@ -187,7 +187,56 @@ def generate(evidence=None):
     (HERE / 'model_getters.inc').write_text(banner + ''.join(
         f'VENTURE_MODEL_GETTER("{n}", "{m}", "{f}", {k}, {o}, "{nested}")\n'
         for n, (m, f, k, o, nested) in sorted(models.items())))
-    print(f"Generated {len(requests)} requests, {len(options)} option operations, {len(getters)} message getters")
+    # Enum names for ovr<Enum>_ToString/_FromString, which the loader forwards
+    # to the platform library like any call. Values come from the pinned native
+    # headers (C# omits explicit ones, e.g. LivestreamingStartStatus); names from
+    # the C# Description strings of the pinned packages, newest first. A value
+    # with no Description takes its member name in SCREAMING_SNAKE case, the
+    # form every Description has.
+    def screaming(member):
+        return re.sub(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])", "_", member).upper()
+    labels = {}
+    for version in sorted((p["version"] for p in pins["packages"]),
+                          key=lambda v: [int(x) for x in v.split("-")[0].split(".")]):
+        for path in sorted((ROOT / ".deps" / f"ovrplatform-{version}" / "package" / "Scripts").rglob("*.cs")):
+            text = path.read_text(encoding="utf-8-sig")
+            for name, body in re.findall(r"public\s+enum\s+(\w+)\s*:\s*u?int\s*\{(.*?)\}", text, re.S):
+                found = re.findall(r'\[Description\("([^"]*)"\)\]\s*(?:\[\w+\]\s*)*(\w+)', body)
+                if found:
+                    labels["ovr" + name] = {member: label for label, member in found}
+    enum_strings = {}
+    for source in pins["inputs"]:
+        path = ROOT / ".deps" / source["path"]
+        if path.suffix != ".h":
+            continue
+        text = re.sub(r"/\*.*?\*/|//[^\n]*", "", path.read_text(encoding="utf-8-sig"), flags=re.S)
+        for body, name in re.findall(r"typedef\s+enum\s+\w*\s*\{([^}]*)\}\s*(\w+)\s*;", text, re.S):
+            if name in ("ovrMessageType", "ovrLaunchType") or f"{name}_ToString" not in text:
+                continue
+            known = labels.get(name, {})
+            values, next_value = [], 0
+            for member in filter(None, (m.strip() for m in body.split(","))):
+                member, _, value = (x.strip() for x in member.partition("="))
+                next_value = int(value, 0) if value else next_value
+                suffix = max((m for m in known if member.endswith(m)), key=len, default=None)
+                # ovrRoom_JoinPolicyNone in ovrRoomJoinPolicy is "None".
+                joined, kind = member.replace("_", ""), name.removeprefix("ovr")
+                short = suffix or (joined[3 + len(kind):] if joined[3:].startswith(kind) else member.rsplit("_", 1)[-1])
+                values.append((next_value, known[suffix] if suffix else screaming(short)))
+                next_value += 1
+            enum_strings[name] = values
+    # Enums newer than the pinned headers keep their C# order (no other source).
+    for name, known in labels.items():
+        if name not in enum_strings and name not in ("ovrMessageType", "ovrLaunchType"):
+            enum_strings[name] = list(enumerate(known.values()))
+    # The derived form matches every Description but KeyValuePairType.Int ("INTEGER").
+    mismatched = [f"{t}.{m}" for t, known in labels.items() for m, label in known.items() if screaming(m) != label]
+    assert mismatched == ["ovrKeyValuePairType.Int"], mismatched
+    (HERE / "enum_strings.inc").write_text(banner + "".join(
+        f'VENTURE_ENUM_TYPE("{t}")\n' + "".join(f'VENTURE_ENUM_STRING("{t}", {v}, "{label}")\n' for v, label in values)
+        for t, values in sorted(enum_strings.items())), newline="\n")
+    print(f"Generated {len(requests)} requests, {len(options)} option operations, {len(getters)} message getters, "
+          f"{len(enum_strings)} enum string tables")
     if not evidence:
         # Preserve the measured corpus's source columns while refreshing which
         # helpers/tables are actually registered, without requiring APKs.

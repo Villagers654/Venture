@@ -756,6 +756,20 @@ public final class FrameworkTest {
     long spin = System.nanoTime(); double sink = 0;
     while (System.nanoTime() - spin < 50_000_000L) sink += Math.sqrt(sink + 1);
     check(cpuBefore >= 0 && android.os.Process.getElapsedCpuTime() >= cpuBefore && sink > 0, "process CPU time is monotonic milliseconds");
+    var memoryHostField = RuntimeEnvironment.class.getDeclaredField("host"); memoryHostField.setAccessible(true);
+    Object memoryOldHost = memoryHostField.get(null);
+    memoryHostField.set(null, java.lang.reflect.Proxy.newProxyInstance(Host.class.getClassLoader(), new Class<?>[]{Host.class},
+        (p, method, args) -> {
+          if (method.getName().equals("processMemory")) return new long[]{4096, 1024};
+          throw new UnsupportedOperationException(method.getName());
+        }));
+    try {
+      check(android.os.Debug.getNativeHeapAllocatedSize() == 4096L * 1024 && android.os.Debug.getNativeHeapSize() == 4096L * 1024
+          && android.os.Debug.getNativeHeapFreeSize() == 0 && android.os.Debug.getPss() == 5120,
+          "native heap is the unshared resident bytes and PSS is in KiB");
+    } finally {
+      memoryHostField.set(null, memoryOldHost);
+    }
     long started = android.os.Process.getStartUptimeMillis();
     check(started <= android.os.SystemClock.uptimeMillis() && started == android.os.Process.getStartElapsedRealtime()
         && android.os.Process.is64Bit(), "process start time is on the uptime clock");

@@ -40,7 +40,9 @@ void flush();
 // Prepare before guest workers start. Terminal exit can then request a best-
 // effort report/flush without entering shared logging or stdio locks itself.
 void prepare_terminal_handoff();
-void terminal_handoff(int status, std::chrono::milliseconds budget = std::chrono::milliseconds(50)) noexcept;
+// The wait returns once the report is flushed; the budget only bounds a logger
+// another thread holds. 50 ms lost the last lines on a loaded machine.
+void terminal_handoff(int status, std::chrono::milliseconds budget = std::chrono::milliseconds(500)) noexcept;
 // Fatal host handler only: no mutex, formatting or allocation. Writes complete
 // pending lines and the supplied already formatted bytes to the file and stderr.
 void crash_write(const char* bytes, std::size_t size) noexcept;

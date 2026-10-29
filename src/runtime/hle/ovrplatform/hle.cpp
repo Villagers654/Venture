@@ -198,6 +198,44 @@ void launch_type_from_string(hle::CallContext& ctx) {
   const auto found = std::find(std::begin(launch_types), std::end(launch_types), value);
   ctx.return_x(found == std::end(launch_types) ? 0 : found - std::begin(launch_types));
 }
+// ovr<Enum>_ToString/_FromString (OVR_<Enum>.h) for every SDK enum: the
+// guest loader forwards them to the platform library, which is this one.
+struct EnumString {
+  std::string_view type;
+  std::int32_t value;
+  std::string_view text;
+};
+constexpr EnumString enum_strings[]{
+#define VENTURE_ENUM_TYPE(type)
+#define VENTURE_ENUM_STRING(type, value, text) {type, value, text},
+#include "hle/ovrplatform/enum_strings.inc"
+#undef VENTURE_ENUM_STRING
+#undef VENTURE_ENUM_TYPE
+};
+std::string_view enum_type(std::string_view function) { return function.substr(0, function.rfind('_')); }
+void enum_to_string(hle::CallContext& ctx) {
+  const auto type = enum_type(ctx.info().name);
+  const auto value = static_cast<std::int32_t>(ctx.x(0));
+  std::string_view found, unknown;
+  for (const auto& e : enum_strings)
+    if (e.type == type) {
+      if (e.value == value) found = e.text;
+      if (e.text == "UNKNOWN") unknown = e.text;
+    }
+  ctx.return_x(session(ctx).enum_string(found.empty() ? unknown : found));
+}
+void enum_from_string(hle::CallContext& ctx) {
+  const auto type = enum_type(ctx.info().name);
+  const auto value = ctx.x(0) ? text(ctx.x(0)) : std::string_view();
+  std::int32_t found = 0, unknown = 0;
+  bool matched = false;
+  for (const auto& e : enum_strings)
+    if (e.type == type) {
+      if (e.text == "UNKNOWN") unknown = e.value;
+      if (!matched && e.text == value) found = e.value, matched = true;
+    }
+  ctx.return_x(static_cast<std::uint32_t>(matched ? found : unknown));
+}
 void id_to_string(hle::CallContext& ctx) {
   // OVR_Types.h: bool (char* out, size_t length, ovrID id).
   char buffer[21];
@@ -315,6 +353,11 @@ const std::vector<Export>& table() {
 #define VENTURE_GETTER(name) {name, getter},
 #include "hle/ovrplatform/message_getters.inc"
 #undef VENTURE_GETTER
+#define VENTURE_ENUM_TYPE(type) {type "_ToString", enum_to_string}, {type "_FromString", enum_from_string},
+#define VENTURE_ENUM_STRING(type, value, text)
+#include "hle/ovrplatform/enum_strings.inc"
+#undef VENTURE_ENUM_STRING
+#undef VENTURE_ENUM_TYPE
   };
   return result;
 }

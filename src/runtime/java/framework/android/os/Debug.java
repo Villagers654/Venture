@@ -20,6 +20,29 @@ public final class Debug {
     }
     public String getMemoryStat(String name) { return getMemoryStats().get(name); }
   }
+  // Native heap in bytes (AOSP: mallinfo). The guest heap shares the process's
+  // unshared resident pages, the native bucket of getMemoryInfo; none is
+  // reported free. The Climb sizes its memory pools from these at start.
+  public static long getNativeHeapSize() {
+    return getNativeHeapAllocatedSize();
+  }
+  public static long getNativeHeapAllocatedSize() {
+    return RuntimeEnvironment.host().processMemory()[0] * 1024;
+  }
+  public static long getNativeHeapFreeSize() {
+    return 0;
+  }
+  // Total proportional set size in KiB.
+  public static long getPss() {
+    long[] residency = RuntimeEnvironment.host().processMemory();
+    return residency[0] + residency[1];
+  }
+  public static boolean waitingForDebugger() {
+    return false;
+  }
+  public static long threadCpuTimeNanos() {
+    return java.lang.management.ManagementFactory.getThreadMXBean().getCurrentThreadCpuTime();
+  }
   public static void getMemoryInfo(MemoryInfo out) {
     if (out == null) throw new NullPointerException("out");
     long[] residency = RuntimeEnvironment.host().processMemory();
