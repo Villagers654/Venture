@@ -6,6 +6,7 @@
 #include "common/http/client.h"
 #include "common/library/import.h"
 #include "common/log.h"
+#include "common/meta/native_host.h"
 #include "common/saves_migration.h"
 #include "hle/ovrplatform/broker.h"
 #include <chrono>
@@ -94,6 +95,10 @@ Core::Core(Options options)
     save_library();
   });
   adb_setting_ = settings_.adb;
+  // Lets the sideloaded extension under tools/meta-session-extension find
+  // this install; harmless and cheap to redo on every start.
+  if (options_.interactive())
+    action([&] { meta::register_native_messaging_host(); });
 }
 Core::~Core() { shutdown(); }
 void Core::start(bool refresh_library) {
@@ -814,7 +819,17 @@ void Core::select(std::string id) {
         }
       });
 }
-void Core::sign_in() {
+void Core::sign_in() { sign_in_with_cookies({}); }
+void Core::sign_in_via_browser_session() {
+  auto cookies = meta::read_browser_session_cookies(data_);
+  if (cookies.empty()) {
+    notice_ = "No Meta browser session found. Sideload the Venture browser "
+              "extension, sign in to Meta in your browser, then try again.";
+    return;
+  }
+  sign_in_with_cookies(std::move(cookies));
+}
+void Core::sign_in_with_cookies(std::vector<meta::Cookie> cookies) {
   if (options_.offline) {
     notice_ = "Sign-in needs a connection. Restart without --offline.";
     return;
@@ -832,15 +847,15 @@ void Core::sign_in() {
   addons_.clear();
   addons_pending_.clear();
   addon_errors_.clear();
-  worker_->submit([this, epoch](std::stop_token stop) -> Worker::Completion {
+  worker_->submit([this, epoch, cookies = std::move(cookies)](std::stop_token stop) -> Worker::Completion {
     try {
       auto auth = std::make_shared<meta::Auth>();
       auto url = auth->begin(stop);
-      return [this, epoch, auth, url] {
+      return [this, epoch, auth, url, cookies] {
         if (epoch != epoch_)
           return;
         auth_ = auth;
-        action([&] { browser_.open(url, data_); });
+        action([&] { browser_.open(url, data_, cookies); });
         auth_status_ = "Complete sign-in in the Meta window.";
       };
     } catch (...) {
