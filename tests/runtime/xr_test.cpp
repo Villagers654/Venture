@@ -2357,6 +2357,18 @@ TEST_CASE("XR guest lifecycle and real Vulkan swapchain through mock loader") {
   CHECK(xg::xrCreateSwapchain(session, &sci, &chain) == XR_ERROR_VALIDATION_FAILURE);
   CHECK(chain == XR_NULL_HANDLE);
   unknownImageChain.next = nullptr;
+  {
+    // The host lists no BGRA order (SteamVR on AMD lists no RGBA UNORM); a
+    // Quest takes it, and the host chain converts.
+    auto bgra = sci;
+    bgra.next = nullptr;
+    bgra.format = VK_FORMAT_B8G8R8A8_UNORM;
+    XrSwapchain other{};
+    REQUIRE(xg::xrCreateSwapchain(session, &bgra, &other) == XR_SUCCESS);
+    CHECK(xg::xrDestroySwapchain(other) == XR_SUCCESS);
+    bgra.format = VK_FORMAT_R16G16_UNORM;
+    CHECK(xg::xrCreateSwapchain(session, &bgra, &other) == XR_ERROR_SWAPCHAIN_FORMAT_UNSUPPORTED);
+  }
   XrSwapchainCreateInfoFoveationFB hint{XR_TYPE_SWAPCHAIN_CREATE_INFO_FOVEATION_FB};
   hint.flags = XR_SWAPCHAIN_CREATE_FOVEATION_FRAGMENT_DENSITY_MAP_BIT_FB;
   hint.next = &unknownImageChain;
@@ -2523,6 +2535,31 @@ TEST_CASE("XR guest lifecycle and real Vulkan swapchain through mock loader") {
     CHECK(xg::xrEndFrame(session, &end) == XR_SUCCESS);
     CHECK(ventureMockXrStats().projection == beforeProjection + 1);
     CHECK(ventureMockXrStats().equirect == previousSpheres + 2);
+    {
+      // A host without cylinders (SteamVR) draws one as strips of its arc.
+      Restore cylinderRestore{extensions, extensions.extract("XR_KHR_composition_layer_cylinder")};
+      CHECK(venture::hle::openxr::capabilities().contains("XR_KHR_composition_layer_cylinder"));
+      cylinder.radius = 2; cylinder.centralAngle = 1;
+      end.layerCount = 1; end.layers = &cylinder_layer;
+      const auto quads = ventureMockXrStats().quad, cylinders = ventureMockXrStats().cylinder;
+      REQUIRE(xg::xrWaitFrame(session, nullptr, &frame) == XR_SUCCESS);
+      REQUIRE(xg::xrBeginFrame(session, nullptr) == XR_SUCCESS);
+      end.displayTime = frame.predictedDisplayTime;
+      CHECK(xg::xrEndFrame(session, &end) == XR_SUCCESS);
+      // One radian takes eight strips that tile the image side by side.
+      CHECK(ventureMockXrStats().quad == quads + 8);
+      CHECK(ventureMockXrStats().cylinder == cylinders);
+      std::array<XrSwapchainSubImage, 9> slices{};
+      REQUIRE(ventureMockXrLastSubImages(slices.data(), 9) == 8);
+      auto x = cylinder.subImage.imageRect.offset.x;
+      for (std::size_t s = 0; s < 8; ++s) {
+        CHECK(slices[s].imageRect.offset.x == x);
+        CHECK(slices[s].imageRect.extent.height == cylinder.subImage.imageRect.extent.height);
+        x += slices[s].imageRect.extent.width;
+      }
+      CHECK(x == cylinder.subImage.imageRect.offset.x + cylinder.subImage.imageRect.extent.width);
+      end.layerCount = 2; end.layers = both;
+    }
     Restore colorRestore{extensions, extensions.extract("XR_KHR_composition_layer_color_scale_bias")};
     Restore layoutRestore{extensions, extensions.extract("XR_FB_composition_layer_image_layout")};
     auto submit = [&] {

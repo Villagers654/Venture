@@ -134,6 +134,28 @@ public final class RuntimeEnvironment {
             "/system",
             "/data/user/0/" + e.manifest.info.packageName});
   }
+  /**
+   * The host path of an Android absolute path under one of this application's mounts
+   * (/storage/emulated/0/..., /data/user/0/<pkg>/..., ...), or the path unchanged. Apps hardcode
+   * these or receive them from native code, while java.io here opens host paths.
+   */
+  public static String toHostPath(String path) {
+    if (path == null || !path.startsWith("/") || path.startsWith("//")) return path;
+    RuntimeEnvironment e = current;
+    if (e == null) return path;
+    String pkg = e.manifest.info.packageName;
+    String[] guests = {"/storage/emulated/0/Android/obb/" + pkg, "/storage/emulated/0/Android/data/" + pkg,
+        "/data/user/0/" + pkg + "/cache", "/data/data/" + pkg + "/cache", "/data/user/0/" + pkg, "/data/data/" + pkg,
+        "/sdcard/Android/obb/" + pkg, "/sdcard/Android/data/" + pkg, "/storage/emulated/0", "/sdcard"};
+    File[] hosts = {e.obb, new File(e.data, "external-data"), e.cache, e.cache, e.data, e.data,
+        e.obb, new File(e.data, "external-data"), new File(e.data, "external"), new File(e.data, "external")};
+    for (int i = 0; i < guests.length; i++) {
+      String root = guests[i];
+      if (path.startsWith(root) && (path.length() == root.length() || path.charAt(root.length()) == '/'))
+        return hosts[i].getPath() + path.substring(root.length()).replace('/', File.separatorChar);
+    }
+    return path;
+  }
   public String guestNativeLibDir() {
     return guestNativeLib;
   }

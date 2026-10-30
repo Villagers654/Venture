@@ -40,16 +40,23 @@ public class ActivityManager {
     out.lastTrimLevel = 0;
   }
   public static class MemoryInfo {
-    public long availMem, totalMem, threshold;
+    public long advertisedMem, availMem, totalMem, threshold;
     public boolean lowMemory;
   }
   public void getMemoryInfo(MemoryInfo out) {
     // Same manifest-selected Quest profile as libc sysinfo and /proc/meminfo.
     out.totalMem = Long.getLong("venture.device.memory", 8L * 1024 * 1024 * 1024);
+    out.advertisedMem = out.totalMem;
     out.availMem = out.totalMem * 3 / 4;
     // Venture's local pressure policy: the lower of 256 MiB and 5% of RAM.
     out.threshold = Math.min(256L * 1024 * 1024, out.totalMem / 20);
     out.lowMemory = out.availMem < out.threshold;
+  }
+  // No earlier process of this app recorded an exit with the system.
+  public List<ApplicationExitInfo> getHistoricalProcessExitReasons(String packageName, int pid, int maxNum) {
+    if (pid < 0) throw new IllegalArgumentException("Invalid pid: " + pid);
+    if (maxNum < 0) throw new IllegalArgumentException("Invalid maxNum: " + maxNum);
+    return List.of();
   }
   public int getMemoryClass() {
     return (int) Math.min(Integer.MAX_VALUE, Runtime.getRuntime().maxMemory() / (1024 * 1024));

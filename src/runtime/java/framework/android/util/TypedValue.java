@@ -27,6 +27,19 @@ public class TypedValue {
   public static float complexToDimension(int v, DisplayMetrics m) {
     return applyDimension(v & 15, complexToFloat(v), m);
   }
+  // AOSP: rounds half up, and a nonzero size is at least one pixel.
+  public static int complexToDimensionPixelSize(int data, DisplayMetrics metrics) {
+    float value = complexToFloat(data);
+    float f = applyDimension(data & 15, value, metrics);
+    int res = (int) (f >= 0 ? f + 0.5f : f - 0.5f);
+    if (res != 0) return res;
+    if (value == 0) return 0;
+    return value > 0 ? 1 : -1;
+  }
+  public static int complexToDimensionPixelOffset(int data, DisplayMetrics metrics) {
+    return (int) applyDimension(data & 15, complexToFloat(data), metrics);
+  }
+  public int getComplexUnit() { return data & 15; }
   public float getDimension(DisplayMetrics m) {
     return complexToDimension(data, m);
   }

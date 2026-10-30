@@ -282,11 +282,17 @@ std::string library_path(std::string_view soname) {
 // Maps `spec` at a fresh base: read-only image, RW segment, file bytes recorded.
 Image map_image(State& s, const ElfSpec& spec, std::string path, const std::function<ElfSpec(GuestAddr, const Layout&)>& finalize = {}) {
   Image image; image.path = std::move(path);
-  build_elf(spec, 0, &image.layout);  // size only
+  // Size with finalize's symbols too: they only change values, never the count,
+  // so a placeholder base sizes the same as the real one.
+  build_elf(spec, 0, &image.layout);
+  if (finalize) build_elf(finalize(0, image.layout), 0, &image.layout);
+  const auto sized = image.layout;
   image.base = AddressSpace::get().allocate(image.layout.size, kProtRead | kProtWrite, image.path);
   if (!image.base) throw std::bad_alloc();
   const auto final_spec = finalize ? finalize(image.base, image.layout) : spec;
   image.bytes = build_elf(final_spec, image.base, &image.layout);
+  if (image.layout.size != sized.size || image.layout.data != sized.data)
+    throw std::logic_error("process image: " + image.path + " layout changed after sizing");
   std::memcpy(g2h(image.base), image.bytes.data(), image.bytes.size());
   AddressSpace::get().protect(image.base, image.layout.ro_size, kProtRead);
   label_memory(image.base, image.layout.ro_size, image.path, 0);

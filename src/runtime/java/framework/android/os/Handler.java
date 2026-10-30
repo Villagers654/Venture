@@ -66,6 +66,12 @@ public class Handler {
       m.setAsynchronous(true);
     return looper.queue.enqueue(m, time);
   }
+  public final boolean sendMessageAtFrontOfQueue(Message m) {
+    return sendMessageAtTime(m, 0);
+  }
+  public final boolean sendEmptyMessageAtTime(int what, long uptimeMillis) {
+    return sendMessageAtTime(obtainMessage(what), uptimeMillis);
+  }
   public boolean sendEmptyMessage(int w) {
     return sendMessage(obtainMessage(w));
   }
@@ -77,6 +83,12 @@ public class Handler {
   }
   public boolean postDelayed(Runnable r, long d) {
     return sendMessageDelayed(Message.obtain(this, r), d);
+  }
+  public final boolean postAtFrontOfQueue(Runnable r) {
+    return sendMessageAtTime(Message.obtain(this, r), 0);
+  }
+  @Override public String toString() {
+    return "Handler (" + getClass().getName() + ") {" + Integer.toHexString(System.identityHashCode(this)) + "}";
   }
   public boolean postAtTime(Runnable r, long t) {
     return sendMessageAtTime(Message.obtain(this, r), t);

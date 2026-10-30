@@ -5,6 +5,9 @@ public final class ComponentName implements android.os.Parcelable {
     pkg = p;
     cls = c.startsWith(".") ? p + c : c;
   }
+  public ComponentName(Context c, String cls) {
+    this(c.getPackageName(), cls);
+  }
   public ComponentName(Context c, Class<?> t) {
     this(c.getPackageName(), t.getName());
   }

@@ -1,4 +1,6 @@
 package android.content;
+import android.database.DatabaseErrorHandler;
+import android.database.sqlite.SQLiteDatabase;
 import android.content.pm.*;
 import android.content.res.*;
 import android.os.*;
@@ -20,7 +22,9 @@ public class Context {
   public static final String SENSOR_SERVICE = "sensor", LAYOUT_INFLATER_SERVICE = "layout_inflater",
       UI_MODE_SERVICE = "uimode";
   public static final String MEDIA_ROUTER_SERVICE = "media_router", INPUT_SERVICE = "input";
-  public static final String USER_SERVICE = "user";
+  public static final String USER_SERVICE = "user", WIFI_SERVICE = "wifi", JOB_SCHEDULER_SERVICE = "jobscheduler",
+      STORAGE_SERVICE = "storage", ALARM_SERVICE = "alarm", NOTIFICATION_SERVICE = "notification",
+      CAPTIONING_SERVICE = "captioning", MEDIA_METRICS_SERVICE = "media_metrics", LOCALE_SERVICE = "locale";
   private static final Map<String, SharedPreferences> preferences =
       new java.util.concurrent.ConcurrentHashMap<>();
   // Dynamic receivers match process-wide, as ActivityManagerService does; each
@@ -51,7 +55,7 @@ public class Context {
         // onReceive already running may finish; no application code holds our lock.
         if (forgotten) { trace("cancel"); return; }
         trace("deliver");
-        receiver.onReceive(owner, copy);
+        receiver.ventureDeliver(owner, copy);
       });
     }
   }
@@ -119,6 +123,28 @@ public class Context {
   }
   public File getDataDir() {
     return RuntimeEnvironment.directory(RuntimeEnvironment.get().data);
+  }
+  public File getNoBackupFilesDir() {
+    return RuntimeEnvironment.directory(new File(getDataDir(), "no_backup"));
+  }
+  // AOSP ContextImpl: an absolute name is used as is, a plain name lives in databases/.
+  public File getDatabasePath(String name) {
+    if (new File(name).isAbsolute() || name.startsWith("/")) return new File(name);
+    return child(RuntimeEnvironment.directory(new File(getDataDir(), "databases")), name);
+  }
+  public SQLiteDatabase openOrCreateDatabase(String name, int mode, SQLiteDatabase.CursorFactory factory) {
+    return openOrCreateDatabase(name, mode, factory, null);
+  }
+  public SQLiteDatabase openOrCreateDatabase(String name, int mode, SQLiteDatabase.CursorFactory factory,
+                                             DatabaseErrorHandler errorHandler) {
+    return SQLiteDatabase.openOrCreateDatabase(getDatabasePath(name), factory);
+  }
+  public boolean deleteDatabase(String name) {
+    return SQLiteDatabase.deleteDatabase(getDatabasePath(name));
+  }
+  public String[] databaseList() {
+    String[] names = new File(getDataDir(), "databases").list();
+    return names != null ? names : new String[0];
   }
   public File getDir(String name, int mode) {
     return RuntimeEnvironment.directory(child(getDataDir(), "app_" + name));
@@ -218,6 +244,8 @@ public class Context {
       case LOCATION_SERVICE -> new android.location.LocationManager();
       case BLUETOOTH_SERVICE -> new android.bluetooth.BluetoothManager(this);
       case "uimode" -> new android.app.UiModeManager();
+      case CAPTIONING_SERVICE -> new android.view.accessibility.CaptioningManager(this);
+      case LOCALE_SERVICE -> new android.app.LocaleManager(this);
       case "layout_inflater" -> new android.view.LayoutInflater(this);
       case "sensor" -> new android.hardware.SensorManager();
       case WINDOW_SERVICE -> new android.view.WindowManagerImpl(this);
@@ -234,6 +262,11 @@ public class Context {
       case DISPLAY_SERVICE -> new android.hardware.display.DisplayManager();
       case INPUT_SERVICE -> android.hardware.input.InputManager.getInstance();
       case USER_SERVICE -> new android.os.UserManager();
+      case WIFI_SERVICE -> new android.net.wifi.WifiManager();
+      case JOB_SCHEDULER_SERVICE -> android.app.job.JobScheduler.ventureLocal(this);
+      case STORAGE_SERVICE -> new android.os.storage.StorageManager();
+      case ALARM_SERVICE -> new android.app.AlarmManager();
+      case NOTIFICATION_SERVICE -> new android.app.NotificationManager();
       default -> null;
     });
   }
@@ -241,6 +274,8 @@ public class Context {
   // that wrappers and components may override.
   private static final java.util.Map<Class<?>, String> SERVICE_NAMES = java.util.Map.ofEntries(
       java.util.Map.entry(android.app.ActivityManager.class, ACTIVITY_SERVICE),
+      java.util.Map.entry(android.view.accessibility.CaptioningManager.class, CAPTIONING_SERVICE),
+      java.util.Map.entry(android.app.LocaleManager.class, LOCALE_SERVICE),
       java.util.Map.entry(android.location.LocationManager.class, LOCATION_SERVICE),
       java.util.Map.entry(android.bluetooth.BluetoothManager.class, BLUETOOTH_SERVICE),
       java.util.Map.entry(android.app.UiModeManager.class, UI_MODE_SERVICE),
@@ -259,7 +294,12 @@ public class Context {
       java.util.Map.entry(BatteryManager.class, BATTERY_SERVICE),
       java.util.Map.entry(android.hardware.display.DisplayManager.class, DISPLAY_SERVICE),
       java.util.Map.entry(android.hardware.input.InputManager.class, INPUT_SERVICE),
-      java.util.Map.entry(android.os.UserManager.class, USER_SERVICE));
+      java.util.Map.entry(android.os.UserManager.class, USER_SERVICE),
+      java.util.Map.entry(android.net.wifi.WifiManager.class, WIFI_SERVICE),
+      java.util.Map.entry(android.app.job.JobScheduler.class, JOB_SCHEDULER_SERVICE),
+      java.util.Map.entry(android.os.storage.StorageManager.class, STORAGE_SERVICE),
+      java.util.Map.entry(android.app.AlarmManager.class, ALARM_SERVICE),
+      java.util.Map.entry(android.app.NotificationManager.class, NOTIFICATION_SERVICE));
   public String getSystemServiceName(Class<?> serviceClass) {
     return SERVICE_NAMES.get(serviceClass);
   }
@@ -303,7 +343,14 @@ public class Context {
   // ContextImpl.sendBroadcast: receivers registered in this process by any
   // Context whose filter matches run onReceive asynchronously on their Handler
   // (the main thread without one), given the Context that registered them.
+  // An explicit broadcast goes only to its component: the manifest receiver, which is
+  // instantiated for the delivery and given the application Context, as on Android.
   public void sendBroadcast(Intent intent) {
+    ComponentName component = intent.getComponent();
+    if (component != null) {
+      deliverToManifestReceiver(component, new Intent(intent));
+      return;
+    }
     for (var r : registrations) {
       for (var filter : r.filters) {
         if (filter.match(getContentResolver(), intent, true, "Context") < 0) continue;
@@ -311,6 +358,29 @@ public class Context {
         break; // One delivery per receiver, even when several filters match.
       }
     }
+  }
+  private void deliverToManifestReceiver(ComponentName component, Intent intent) {
+    var model = RuntimeEnvironment.get().manifest;
+    android.content.pm.ActivityInfo receiver = null;
+    if (component.getPackageName().equals(getPackageName()))
+      for (var r : model.receivers) if (r.name.equals(component.getClassName())) receiver = r;
+    if (receiver == null || !receiver.enabled) {
+      android.util.Log.w("BroadcastQueue", "Background execution not allowed: receiving " + intent + " to " + component.flattenToShortString());
+      return;
+    }
+    Context app = getApplicationContext() != null ? getApplicationContext() : this;
+    String name = receiver.name;
+    new Handler(getMainLooper()).post(() -> {
+      BroadcastReceiver instance;
+      try {
+        instance = (BroadcastReceiver) Class.forName(name, true, RuntimeEnvironment.get().loader)
+            .getDeclaredConstructor().newInstance();
+      } catch (ReflectiveOperationException e) {
+        throw new RuntimeException("Unable to instantiate receiver " + name + ": " + e, e);
+      }
+      intent.setExtrasClassLoader(RuntimeEnvironment.get().loader);
+      instance.ventureDeliver(app, intent);
+    });
   }
   public static final int RECEIVER_VISIBLE_TO_INSTANT_APPS = 0x1, RECEIVER_EXPORTED = 0x2,
       RECEIVER_NOT_EXPORTED = 0x4;
@@ -417,6 +487,41 @@ public class Context {
   }
   public void startActivity(Intent intent) {
     AppMain.startActivity(intent);
+  }
+  public void startActivity(Intent intent, android.os.Bundle options) {
+    startActivity(intent);
+  }
+  public void startActivities(Intent[] intents) {
+    for (Intent intent : intents) startActivity(intent);
+  }
+  public void startActivities(Intent[] intents, android.os.Bundle options) {
+    startActivities(intents);
+  }
+  // A local service runs in this process either way.
+  public ComponentName startForegroundService(Intent intent) {
+    return startService(intent);
+  }
+  public final int getColor(int id) {
+    return getResources().getColor(id, getTheme());
+  }
+  public String getOpPackageName() {
+    return getPackageName();
+  }
+  public String getAttributionTag() {
+    return null;
+  }
+  public Context createAttributionContext(String attributionTag) {
+    return this;
+  }
+  public boolean isRestricted() {
+    return false;
+  }
+  // One storage area: the app's credential-protected and device-protected data are the same files.
+  public Context createDeviceProtectedStorageContext() {
+    return this;
+  }
+  public boolean isDeviceProtectedStorage() {
+    return false;
   }
   public ComponentName startService(Intent intent) {
     return LocalServices.start(this, intent);

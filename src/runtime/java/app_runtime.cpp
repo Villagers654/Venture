@@ -371,6 +371,7 @@ void launch_android_app(const AppLaunchOptions& options) {
     bool menu_files_healthy = true;
     bool posted = false, interrupted = false, xr_stop_decided = false;
     startup_diagnostics::FirstFrameTrigger first_frame_probe;
+    startup_diagnostics::FrameStallTrigger frame_stall_probe;
     const auto first_frame_bound = startup_diagnostics::first_frame_timeout_seconds();
     while (!token.stop_requested()) {
       const auto now = std::chrono::steady_clock::now();
@@ -384,6 +385,9 @@ void launch_android_app(const AppLaunchOptions& options) {
         // registry/logging work or Android teardown can change the handshake.
         signals::capture_first_frame_stall();
       }
+      if (frame_stall_probe.poll(std::chrono::duration_cast<std::chrono::seconds>(now - started).count(),
+                                 startup_diagnostics::frames_submitted(), stopping || !startup_diagnostics::host_session_focused()))
+        signals::capture_frame_stall();
       if (!closing && stopping) {
         closing = true;
         host_stop = stop.requested() || timed_out;

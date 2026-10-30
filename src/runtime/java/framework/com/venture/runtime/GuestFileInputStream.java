@@ -6,7 +6,7 @@ import java.lang.ref.Cleaner;
 public final class GuestFileInputStream extends FileInputStream {
   private Cleaner.Cleanable cleanup;
   private final java.util.concurrent.atomic.AtomicBoolean closing = new java.util.concurrent.atomic.AtomicBoolean();
-  public GuestFileInputStream(String path) throws FileNotFoundException { this(new File(path)); }
+  public GuestFileInputStream(String path) throws FileNotFoundException { this(new File(GuestFiles.host(path))); }
   public GuestFileInputStream(File file) throws FileNotFoundException { this(GuestFiles.open(file)); }
   private GuestFileInputStream(GuestFiles.Snapshot snapshot) throws FileNotFoundException {
     super(snapshot.file);

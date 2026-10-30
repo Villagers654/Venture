@@ -2,6 +2,7 @@
 #include "common/environment.h"
 #include "common/http/client.h"
 #include "common/process.h"
+#include "common/saves_migration.h"
 #include "common/json.h"
 #include <algorithm>
 #include <cctype>
@@ -425,6 +426,14 @@ fs::path write_debug_report(const DebugReport &request) {
   if (!request.plan.empty()) {
     std::string text = read_file(request.plan);
     if (!text.empty()) out += std::format("\n=== Installed game (plan.json) ===\n{}\n", text);
+  }
+  if (!package.empty() && paths::safe_package(package)) {
+    // Files the player put in the mods folder replace same-named installed files.
+    std::string mods;
+    for (const auto &e : fs::directory_iterator(mods_dir(request.data, package), ec))
+      if (e.is_regular_file(ec))
+        mods += std::format("{} ({} bytes)\n", paths::utf8(e.path().filename()), e.file_size(ec));
+    if (!mods.empty()) out += "\n=== Mods folder ===\n" + mods;
   }
 
   if (!package.empty()) {

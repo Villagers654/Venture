@@ -1,8 +1,73 @@
 package android.media;
 
-/** Android API 32 codec metadata constants, independent of decoder selection. */
+/**
+ * Android API 32 codec metadata. MediaCodecList lists the host's software
+ * decoders (FFmpeg) under AOSP's c2.android names; there are no encoders.
+ */
 public final class MediaCodecInfo {
-  private MediaCodecInfo() {}
+  private final String name;
+  private final String type;
+  MediaCodecInfo(String name, String type) { this.name = name; this.type = type; }
+  public String getName() { return name; }
+  public String getCanonicalName() { return name; }
+  public boolean isAlias() { return false; }
+  public boolean isEncoder() { return false; }
+  public boolean isVendor() { return false; }
+  public boolean isSoftwareOnly() { return true; }
+  public boolean isHardwareAccelerated() { return false; }
+  public String[] getSupportedTypes() { return new String[] {type}; }
+  public CodecCapabilities getCapabilitiesForType(String mime) {
+    if (!type.equalsIgnoreCase(mime)) throw new IllegalArgumentException("codec does not support type");
+    return CodecCapabilities.forType(type);
+  }
+  private static CodecProfileLevel level(int profile, int level) {
+    var value = new CodecProfileLevel();
+    value.profile = profile;
+    value.level = level;
+    return value;
+  }
+  public static final class VideoCapabilities {
+    private static final android.util.Range<Integer> SIZES = android.util.Range.create(2, 8192),
+        RATES = android.util.Range.create(0, 960), BITRATES = android.util.Range.create(1, 200_000_000);
+    VideoCapabilities() {}
+    public android.util.Range<Integer> getBitrateRange() { return BITRATES; }
+    public android.util.Range<Integer> getSupportedWidths() { return SIZES; }
+    public android.util.Range<Integer> getSupportedHeights() { return SIZES; }
+    public android.util.Range<Integer> getSupportedFrameRates() { return RATES; }
+    public android.util.Range<Integer> getSupportedWidthsFor(int height) {
+      if (!SIZES.contains(height)) throw new IllegalArgumentException("unsupported height");
+      return SIZES;
+    }
+    public android.util.Range<Integer> getSupportedHeightsFor(int width) {
+      if (!SIZES.contains(width)) throw new IllegalArgumentException("unsupported width");
+      return SIZES;
+    }
+    public android.util.Range<Double> getSupportedFrameRatesFor(int width, int height) {
+      if (!isSizeSupported(width, height)) throw new IllegalArgumentException("unsupported size");
+      return android.util.Range.create(0.0, 960.0);
+    }
+    public int getWidthAlignment() { return 2; }
+    public int getHeightAlignment() { return 2; }
+    public boolean isSizeSupported(int width, int height) {
+      return SIZES.contains(width) && SIZES.contains(height) && width % 2 == 0 && height % 2 == 0;
+    }
+    public boolean areSizeAndRateSupported(int width, int height, double frameRate) {
+      return isSizeSupported(width, height) && frameRate >= 0 && frameRate <= 960;
+    }
+  }
+  public static final class AudioCapabilities {
+    AudioCapabilities() {}
+    public android.util.Range<Integer> getBitrateRange() { return android.util.Range.create(8000, 960_000); }
+    public int[] getSupportedSampleRates() { return new int[] {8000, 11025, 12000, 16000, 22050, 24000, 32000, 44100, 48000, 64000, 88200, 96000}; }
+    public android.util.Range<Integer>[] getSupportedSampleRateRanges() {
+      @SuppressWarnings("unchecked") var ranges = (android.util.Range<Integer>[]) new android.util.Range<?>[] {android.util.Range.create(8000, 96000)};
+      return ranges;
+    }
+    public boolean isSampleRateSupported(int rate) { return rate >= 8000 && rate <= 96000; }
+    // Venture's host decoder outputs mono or stereo PCM.
+    public int getMaxInputChannelCount() { return 2; }
+    public int getMinInputChannelCount() { return 1; }
+  }
   public static final class CodecCapabilities {
     public static final int COLOR_Format12bitRGB444 = 3;
     public static final int COLOR_Format16bitARGB1555 = 5;
@@ -68,7 +133,46 @@ public final class MediaCodecInfo {
     public static final java.lang.String FEATURE_TunneledPlayback = "tunneled-playback";
     public int[] colorFormats = new int[0];
     public CodecProfileLevel[] profileLevels = new CodecProfileLevel[0];
+    private String mime = "";
     public CodecCapabilities() {}
+    static CodecCapabilities forType(String mime) {
+      var c = new CodecCapabilities();
+      c.mime = mime;
+      if (mime.startsWith("video/")) c.colorFormats = new int[] {COLOR_FormatYUV420Flexible};
+      c.profileLevels = switch (mime) {
+        case "video/avc" -> new CodecProfileLevel[] {
+            level(CodecProfileLevel.AVCProfileConstrainedBaseline, CodecProfileLevel.AVCLevel62),
+            level(CodecProfileLevel.AVCProfileBaseline, CodecProfileLevel.AVCLevel62),
+            level(CodecProfileLevel.AVCProfileMain, CodecProfileLevel.AVCLevel62),
+            level(CodecProfileLevel.AVCProfileConstrainedHigh, CodecProfileLevel.AVCLevel62),
+            level(CodecProfileLevel.AVCProfileHigh, CodecProfileLevel.AVCLevel62)};
+        case "video/hevc" -> new CodecProfileLevel[] {
+            level(CodecProfileLevel.HEVCProfileMain, CodecProfileLevel.HEVCHighTierLevel62),
+            level(CodecProfileLevel.HEVCProfileMain10, CodecProfileLevel.HEVCHighTierLevel62)};
+        case "video/x-vnd.on2.vp9" -> new CodecProfileLevel[] {
+            level(CodecProfileLevel.VP9Profile0, CodecProfileLevel.VP9Level62),
+            level(CodecProfileLevel.VP9Profile2, CodecProfileLevel.VP9Level62)};
+        case "video/x-vnd.on2.vp8" -> new CodecProfileLevel[] {
+            level(CodecProfileLevel.VP8ProfileMain, CodecProfileLevel.VP8Level_Version0)};
+        case "audio/mp4a-latm" -> new CodecProfileLevel[] {
+            level(CodecProfileLevel.AACObjectLC, 0), level(CodecProfileLevel.AACObjectHE, 0),
+            level(CodecProfileLevel.AACObjectHE_PS, 0)};
+        default -> new CodecProfileLevel[0];
+      };
+      return c;
+    }
+    public String getMimeType() { return mime; }
+    public int getMaxSupportedInstances() { return 32; }
+    public boolean isFeatureSupported(String feature) {
+      return mime.startsWith("video/") && FEATURE_AdaptivePlayback.equals(feature);
+    }
+    public boolean isFeatureRequired(String feature) { return false; }
+    public boolean isFormatSupported(MediaFormat format) {
+      return format != null && mime.equalsIgnoreCase(format.getString(MediaFormat.KEY_MIME));
+    }
+    public VideoCapabilities getVideoCapabilities() { return mime.startsWith("video/") ? new VideoCapabilities() : null; }
+    public AudioCapabilities getAudioCapabilities() { return mime.startsWith("audio/") ? new AudioCapabilities() : null; }
+    public MediaFormat getDefaultFormat() { var format = new MediaFormat(); format.setString(MediaFormat.KEY_MIME, mime); return format; }
   }
   public static final class CodecProfileLevel {
     public static final int AACObjectELD = 39;

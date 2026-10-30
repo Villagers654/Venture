@@ -8,6 +8,15 @@ using namespace venture;
 TEST_CASE("A64 selection releases every early reservation and preserves foreign mappings") {
   constexpr GuestAddr foreign = 0x40000000, guard = 0x100000000ull;
   constexpr std::uint32_t canary = 0xabcdef12;
+  // Windows may already have placed something at either fixed address in a
+  // fresh process (ASLR); the test then has nothing to prove.
+  for (const GuestAddr address : {foreign, guard}) {
+    if (platform::reserve(address, 65536, true) != address) {
+      MESSAGE("Address ", address, " is taken before the test; skipped");
+      return;
+    }
+    platform::release(address, 65536);
+  }
   REQUIRE(platform::reserve(foreign, 65536, true) == foreign);
   REQUIRE(platform::commit(foreign, 4096, kProtRead | kProtWrite));
   *g2h<std::uint32_t>(foreign) = canary;

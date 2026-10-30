@@ -112,7 +112,7 @@ App::App(Options options) : Core(std::move(options)) {
     page_ = 2;
   if (options_.smoke_view == "account")
     page_ = 3;
-  if (options_.smoke_view == "import")
+  if (options_.smoke_view == "import" || options_.smoke_view == "import-end")
     page_ = 4;
   // The update dialog an installed copy shows (nothing downloads until Update now).
   if (options_.smoke_view == "update") {
@@ -531,6 +531,17 @@ int App::run() {
       if (options_.smoke_view == "install")
         action([&] { request_install(*game(options_.smoke_select)); });
       if (options_.smoke_view == "saves") save_import_target_ = options_.smoke_select;
+      // The other confirmations and notices, opened for screenshots (nothing is acted on).
+      const auto& v = options_.smoke_view;
+      const auto* g = game(options_.smoke_select);
+      if (v == "uninstall" && installed(g->id, false)) uninstall_target_ = *installed(g->id, false);
+      if (v == "cancel-download")
+        cancel_target_ = download::Job{.app_id = g->id, .name = g->name, .done = 1ull << 30, .total = 3ull << 30};
+      if (v == "remove-account" && !accounts_.empty()) remove_account_ = accounts_.front().key;
+      if (v == "report") report_ = SharedReport{.file = "venture-debug-report.txt", .url = "https://dpaste.com/EXAMPLE"};
+      if (v == "report-uploading") report_ = SharedReport{.file = "venture-debug-report.txt"};
+      if (v == "report-failed")
+        report_ = SharedReport{.file = "venture-debug-report.txt", .error = "The paste service did not answer."};
     }
     // Ownership comes from the library refresh; without a cached library a
     // play before it finishes is refused as not owned.

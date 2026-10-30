@@ -28,6 +28,12 @@ public final class Log {
   public static int wtf(String t, String m) {
     return println(ASSERT, t, m);
   }
+  public static int wtf(String t, Throwable e) {
+    return wtf(t, e == null ? "" : e.getMessage(), e);
+  }
+  public static int wtf(String t, String m, Throwable e) {
+    return wtf(t, m + "\n" + getStackTraceString(e));
+  }
   public static String getStackTraceString(Throwable e) {
     // As Android: no throwable (or a network-unavailable one) prints nothing.
     for (Throwable t = e; t != null; t = t.getCause())

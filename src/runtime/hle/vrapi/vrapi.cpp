@@ -1,3 +1,4 @@
+#include "common/first_frame_progress.h"
 #include "common/log.h"
 #include "core/thread.h"
 #include "core/av_telemetry.h"
@@ -93,6 +94,7 @@ XrResult pump_events() {
           state().events.push_back(e.state == XR_SESSION_STATE_FOCUSED ? 4 : 5);
         s.state = e.state;
       log::info("xr", "Host session state={}", int(e.state));
+      startup_diagnostics::note_host_session_state(int(e.state));
         // Session::begin_session/end_session reset the shared frame state, so
         // a frame waited before STOPPING cannot gate waits after READY.
         if (e.state == XR_SESSION_STATE_READY && !s.running) {

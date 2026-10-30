@@ -353,8 +353,50 @@ TEST_CASE("sign-in identity comes from the account alone, and a failing library 
       CHECK(e.status == status);
       if (status == 500) CHECK(std::string(e.what()).find("Refresh") != std::string::npos);
     }
-    CHECK(calls == (status == 500 ? 3 : 1));
+    // A 500 also tries the headset's library, which fails here too.
+    CHECK(calls == (status == 500 ? 4 : 1));
   }
+}
+
+TEST_CASE("a library Meta keeps failing is listed a page at a time from the headset's library") {
+  auto entitlement = [](std::string id, std::string package, bool restricted = false) {
+    return Json{{"node",
+                 {{"item",
+                   {{"id", id},
+                    {"display_name", "Game " + id},
+                    {"platform", "ANDROID_6DOF"},
+                    {"package_name", package},
+                    {"uninstall_restricted", restricted},
+                    {"latest_supported_binary", {{"__typename", "AndroidBinary"}, {"id", "9" + id}}}}}}}};
+  };
+  std::vector<std::string> cursors;
+  meta::Store store("fixture", {}, [&](std::string_view url, const http::Fields& fields) -> Json {
+    std::map<std::string, std::string> f(fields.begin(), fields.end());
+    if (http::parse_url(url).path == "/me") return Json{{"id", "777777"}, {"alias", "fixture"}};
+    if (f["doc_id"] == "4850747515044496") throw meta::RequestError(500, "Meta graphql failed (HTTP 500 code 1).");
+    CHECK(f["client_doc_id"] == "412097616712440770934752951129");
+    auto vars = parse_json(f["variables"]);
+    auto cursor = vars["cursorID"].is_null() ? std::string() : vars["cursorID"].get<std::string>();
+    cursors.push_back(cursor);
+    Json edges = cursor.empty() ? Json::array({entitlement("123456", "com.example.one"),
+                                               entitlement("234567", "com.oculus.shell", true)})
+                                : Json::array({entitlement("345678", "com.example.two"), entitlement("123456", "com.example.one")});
+    return Json{{"data",
+                 {{"entitlements",
+                   {{"active_android_entitlements",
+                     {{"edges", edges},
+                      {"page_info", {{"has_next_page", cursor.empty()}, {"end_cursor", cursor.empty() ? "page2" : "page3"}}}}}}}}}};
+  });
+  auto snapshot = store.library();
+  CHECK(cursors == std::vector<std::string>{"", "page2"});
+  CHECK(snapshot.complete);
+  CHECK(snapshot.account_id == "777777");
+  REQUIRE(snapshot.games.size() == 3);
+  CHECK(snapshot.games[0].id == "123456");
+  CHECK(snapshot.games[0].package == "com.example.one");
+  CHECK(snapshot.games[0].owned);
+  CHECK(snapshot.games[1].system);
+  CHECK(snapshot.games[2].id == "345678");
 }
 
 TEST_CASE("plans reject collisions with manifests and partial files") {

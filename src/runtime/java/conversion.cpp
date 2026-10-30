@@ -71,19 +71,22 @@ bool convert_apk(const ConversionOptions& options, ConvertedApk* output, std::st
     args = {paths::utf8(launcher), paths::utf8(request)};
 #endif
     int code = platform::run_process(args, {"JAVA_TOOL_OPTIONS", "_JAVA_OPTIONS", "JDK_JAVA_OPTIONS", "CLASSPATH"});
+    std::string report;
     if (std::filesystem::exists(result_file)) {
       std::ifstream input(result_file);
       nlohmann::json result;
       input >> result;
+      report = result.value("report", std::string());
       if (output) {
         output->app_jar = result.at("jar").get<std::string>();
-        output->report = result.at("report").get<std::string>();
+        output->report = report;
         output->translation_complete = (code == 0 || code == 2) && result.value("translation_complete", false);
       }
       if (!code && result.at("ready").get<bool>()) return true;
     }
-    throw std::runtime_error("APK conversion/verification failed (exit " + std::to_string(code) +
-                             "); see package cache report.json");
+    // The debug report reads the failures from the report this names.
+    throw std::runtime_error("APK conversion/verification failed (exit " + std::to_string(code) + "); " +
+                             (report.empty() ? std::string("see package cache report.json") : "Details: " + report));
   } catch (const std::exception& e) {
     // Deferred optional linkage is not a failure; the caller reports it.
     if (!output || !output->translation_complete) log::error("java", "{}", e.what());

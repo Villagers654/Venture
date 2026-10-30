@@ -3,10 +3,12 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <format>
 #include <map>
 #include <memory>
 #include <mutex>
 #include <set>
+#include <string>
 #include <vector>
 
 #include "android/native_window.h"
@@ -306,6 +308,20 @@ EGLContext guest_eglCreateContext(EGLDisplay d, EGLConfig c, EGLContext share,
     if (request.no_error) no_error_contexts.insert(result);
     gles_context_created(result, share, request.no_error);
     profile::mark("egl_context");
+  } else {
+    // The request, the config's renderable APIs and the bound API: enough to
+    // tell which one the host rejected (EGL_BAD_MATCH names none of them).
+    std::string requested;
+    for (const EGLint* p = translated.data(); p && *p != EGL_NONE; p += 2)
+      requested += std::format("{}{:#x}={:#x}", requested.empty() ? "" : " ", p[0], p[1]);
+    const EGLint error = last_error;
+    EGLint renderable = 0, config_id = 0;
+    host<PFNEGLGETCONFIGATTRIBPROC>("eglGetConfigAttrib", d, c, EGL_RENDERABLE_TYPE, &renderable);
+    host<PFNEGLGETCONFIGATTRIBPROC>("eglGetConfigAttrib", d, c, EGL_CONFIG_ID, &config_id);
+    const EGLenum api = host<PFNEGLQUERYAPIPROC>("eglQueryAPI");
+    last_error = error;  // the guest's eglGetError still reports the failure
+    log::warn("egl", "eglCreateContext failed: error {:#x}; attributes [{}]; config {} renderable {:#x}; API {:#x}",
+              error, requested, config_id, renderable, api);
   }
   return result;
 }

@@ -7,6 +7,7 @@
 #include "launcher/ui/chrome.h"
 #include <imgui.h>
 #include <atomic>
+#include <map>
 #include <memory>
 namespace venture::launcher {
 class App : public Core {
@@ -106,6 +107,18 @@ private:
   std::vector<std::pair<std::string, fs::path>> save_picks_;
   void choose_save_folder(const std::string &app_id);
   void draw_save_import();
+  std::string save_game_;  // the game picked in the Import page's save data card
+  // A game's mods folder as its page summarizes it, re-read every few seconds:
+  // files replacing an installed file, and files matching none (another version).
+  struct ModsSummary {
+    double checked = -1;
+    int active = 0, unused = 0;
+    uint64_t bytes = 0;
+    std::string name;
+  };
+  std::map<std::string, ModsSummary> mods_;
+  const ModsSummary &mods_summary(const std::string &package, const fs::path &install);
+  void draw_mods(const fs::path &install, const std::string &package, float width);
   void take_import_picks();
   void draw_import();
   void draw_import_items(ImportScan &scan, bool device, float width);
@@ -126,7 +139,7 @@ private:
   // unless installs do not ask or there is nothing to choose.
   void request_install(const meta::Game &game);
   void draw_addons(const meta::Game &game, float width);
-  void draw_owner(const meta::Game &game, bool installed);
+  void draw_owner(const meta::Game &game, bool installed, float width);
   void smoke_install();
   void smoke_import();
   // Settings' text fields applied (launcher::Core::apply_settings).

@@ -11,6 +11,7 @@
 #include "platform/low_memory.h"
 #include "common/log.h"
 #include "common/paths.h"
+#include "common/file_ops.h"
 #include "common/saves_migration.h"
 #include <nlohmann/json.hpp>
 #include <miniz.h>
@@ -127,6 +128,20 @@ void configure_game(const std::filesystem::path& install,
   config.guest_cache_dir = config.data_dir / "cache";
   config.cache_dir = base / "cache" / config.package / std::to_string(config.version_code);
   config.native_lib_dir = config.cache_dir / "lib" / config.abi;
+  // Extracted libraries and converted Java of earlier versions are only disk
+  // use once the game updated; one still in use stays until a later launch.
+  if (std::error_code ec; std::filesystem::is_directory(config.cache_dir.parent_path(), ec))
+    for (const auto& entry : std::filesystem::directory_iterator(config.cache_dir.parent_path(), ec)) {
+      const auto name = paths::utf8(entry.path().filename());
+      if (name == std::to_string(config.version_code) || name.empty() ||
+          name.find_first_not_of("0123456789") != std::string::npos)
+        continue;
+      try {
+        remove_tree(base / "cache", entry.path());
+        log::info("launch", "Removed the cache of version {}", name);
+      } catch (const std::exception&) {
+      }
+    }
   std::filesystem::create_directories(config.data_dir);
   // NativeActivity receives these paths before Java Context getters can create
   // them. Android supplies existing files directories even on the first launch.
@@ -154,7 +169,7 @@ void configure_game(const std::filesystem::path& install,
     }
     obb_names.push_back(paths::utf8(name));
   }
-  sync_obb_view(std::filesystem::absolute(install), config.obb_dir, obb_names);
+  sync_obb_view(std::filesystem::absolute(install), config.obb_dir, obb_names, mods_dir(base, config.package));
   config.properties = {{"ro.build.version.sdk", std::to_string(config.sdk_level)}, {"ro.product.cpu.abi", config.abi},
       {"ro.product.cpu.abilist", config.abi}};
 }

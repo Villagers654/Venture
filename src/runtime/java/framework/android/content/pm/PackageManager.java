@@ -77,6 +77,44 @@ public class PackageManager {
         .findFirst()
         .orElseThrow(() -> new NameNotFoundException(name.toString()));
   }
+  public static final int COMPONENT_ENABLED_STATE_DEFAULT = 0, COMPONENT_ENABLED_STATE_ENABLED = 1,
+                          COMPONENT_ENABLED_STATE_DISABLED = 2, COMPONENT_ENABLED_STATE_DISABLED_USER = 3,
+                          COMPONENT_ENABLED_STATE_DISABLED_UNTIL_USED = 4, DONT_KILL_APP = 1;
+  // Overrides made this process; DEFAULT keeps the manifest's own android:enabled.
+  private static final java.util.Map<ComponentName, Integer> componentStates = new java.util.concurrent.ConcurrentHashMap<>();
+  private static final java.util.Map<ComponentInfo, Boolean> manifestEnabled = new java.util.IdentityHashMap<>();
+  public int getComponentEnabledSetting(ComponentName name) {
+    if (!model.info.packageName.equals(name.getPackageName()) || component(name) == null)
+      throw new IllegalArgumentException("Unknown component: " + name);
+    return componentStates.getOrDefault(name, COMPONENT_ENABLED_STATE_DEFAULT);
+  }
+  public void setComponentEnabledSetting(ComponentName name, int state, int flags) {
+    ComponentInfo info = model.info.packageName.equals(name.getPackageName()) ? component(name) : null;
+    if (info == null) throw new IllegalArgumentException("Unknown component: " + name);
+    if (state < COMPONENT_ENABLED_STATE_DEFAULT || state > COMPONENT_ENABLED_STATE_DISABLED_UNTIL_USED)
+      throw new IllegalArgumentException("Invalid new component state: " + state);
+    synchronized (manifestEnabled) {
+      boolean declared = manifestEnabled.computeIfAbsent(info, i -> i.enabled);
+      info.enabled = state == COMPONENT_ENABLED_STATE_DEFAULT ? declared : state == COMPONENT_ENABLED_STATE_ENABLED;
+    }
+    if (state == COMPONENT_ENABLED_STATE_DEFAULT) componentStates.remove(name);
+    else componentStates.put(name, state);
+  }
+  private ComponentInfo component(ComponentName name) {
+    String cls = name.getClassName();
+    for (var list : java.util.List.<java.util.List<? extends ComponentInfo>>of(model.activities, model.services,
+                                                                               model.providers, model.receivers))
+      for (ComponentInfo info : list)
+        if (info.name.equals(cls)) return info;
+    return null;
+  }
+  public String[] getPackagesForUid(int uid) {
+    return uid == android.os.Process.myUid() ? new String[] {model.info.packageName} : null;
+  }
+  // Installing other packages is the launcher's job, never the game's.
+  public boolean canRequestPackageInstalls() {
+    return false;
+  }
   public Intent getLaunchIntentForPackage(String pkg) {
     return model.info.packageName.equals(pkg) ? model.launchIntent() : null;
   }
@@ -149,6 +187,8 @@ public class PackageManager {
                        "android.permission.BLUETOOTH", "android.permission.BLUETOOTH_ADMIN",
                        "android.permission.WAKE_LOCK", "android.permission.READ_EXTERNAL_STORAGE",
                        "android.permission.WRITE_EXTERNAL_STORAGE",
+                       // Normal (install-time) permissions: granted when declared.
+                       "android.permission.ACCESS_WIFI_STATE", "android.permission.CHANGE_WIFI_MULTICAST_STATE",
                        // Meta documents BODY_TRACKING as an automatically granted
                        // install-time permission. This grant does not imply XR support.
                        "com.oculus.permission.BODY_TRACKING")

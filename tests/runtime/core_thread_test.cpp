@@ -1,3 +1,4 @@
+#include "common/first_frame_progress.h"
 #include "hle/vulkan/sync_trace.h"
 #include <doctest/doctest.h>
 #ifdef __linux__
@@ -215,3 +216,14 @@ TEST_CASE("OS data writer census excludes non-file objects and catches buffered 
 
 #ifndef _WIN32
 #endif
+TEST_CASE("frame stall trigger fires once when focused frames stop advancing") {
+  startup_diagnostics::FrameStallTrigger trigger;
+  CHECK_FALSE(trigger.poll(0, 0, false));  // nothing submitted yet
+  CHECK_FALSE(trigger.poll(1, 10, false));
+  CHECK_FALSE(trigger.poll(4, 20, false));
+  CHECK_FALSE(trigger.poll(8, 20, false));  // 4 s without a frame
+  CHECK_FALSE(trigger.poll(9, 20, true));   // unfocused restarts the wait
+  CHECK_FALSE(trigger.poll(13, 20, false));
+  CHECK(trigger.poll(14, 20, false));
+  CHECK_FALSE(trigger.poll(30, 20, false));  // one-shot
+}

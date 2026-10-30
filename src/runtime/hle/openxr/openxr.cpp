@@ -4,6 +4,7 @@
 #include "xr/haptic_output.h"
 #include "xr/menu_chord.h"
 #include "xr/clock.h"
+#include "common/first_frame_progress.h"
 #include "common/log.h"
 #include "core/engine_policy.h"
 #include "core/process.h"
@@ -860,6 +861,7 @@ XrResult xrPollEvent(XrInstance instance, XrEventDataBuffer *out) {
       session().state = e->state;
       if (e->state != XR_SESSION_STATE_FOCUSED) venture::xr::cancel_sequence(e->session);
       log::info("xr", "Host session state={}", int(e->state));
+      startup_diagnostics::note_host_session_state(int(e->state));
       // Frame functions of a session pending loss return SESSION_LOST; do
       // not leave a pipelined xrWaitFrame blocked on a BeginFrame that the
       // render thread can no longer complete.
@@ -1073,45 +1075,27 @@ XrResult xrEndFrame(XrSession handle, const XrFrameEndInfo *info) {
   auto surface_result = [] { vulkan::ScopedHostWait timing("guest_end_surfaces"); return present_android_surfaces(); }();
   if (XR_FAILED(surface_result)) return surface_result;
   std::vector<XrCompositionLayerEquirectKHR> spheres;
+  std::vector<XrCompositionLayerQuad> flats;
   std::vector<InputChain> chains;
   PresentationLayers rects;
-  layers.reserve(info->layerCount);
+  // A host without cylinders gets each as vertical strips of its arc, every
+  // strip a quad on its chord; the strips share the host's spare layers.
+  constexpr std::uint32_t max_strips = 32;
+  std::uint32_t cylinders = 0, strips = 0;
+  if (!host_xr().enabled_extensions.contains("XR_KHR_composition_layer_cylinder"))
+    for (std::uint32_t i = 0; i < info->layerCount; ++i)
+      if (info->layers[i] && info->layers[i]->type == XR_TYPE_COMPOSITION_LAYER_CYLINDER_KHR) ++cylinders;
+  if (cylinders) {
+    const auto limit = host_layer_limit(handle), others = info->layerCount - cylinders;
+    strips = !limit ? max_strips : std::clamp<std::uint32_t>(limit > others ? (limit - others) / cylinders : 1, 1, max_strips);
+  }
+  layers.reserve(info->layerCount + cylinders * strips);
   spheres.reserve(info->layerCount);
-  chains.reserve(info->layerCount);
-  for (std::uint32_t i = 0; i < info->layerCount; ++i) {
-    auto layer = info->layers[i];
-    bool converted = false;
-    if (layer && valid_handle(layer->space, "XrSpace")) {
-      const StructureInfo* metadata = nullptr;
-      for (const auto& candidate : structure_metadata())
-        if (candidate.type == layer->type) { metadata = &candidate; break; }
-      if (metadata && *metadata->extension &&
-          !host_xr().enabled_extensions.contains(metadata->extension)) {
-        if (layer->type == XR_TYPE_COMPOSITION_LAYER_EQUIRECT2_KHR &&
-            host_xr().enabled_extensions.contains("XR_KHR_composition_layer_equirect")) {
-          const auto& source = *reinterpret_cast<const XrCompositionLayerEquirect2KHR*>(layer);
-          constexpr float pi = std::numbers::pi_v<float>;
-          // Full-sphere Equirect2 has exactly the original extension's unit
-          // scale/zero bias mapping. Cropped spheres need clipping/composition.
-          if (std::abs(source.centralHorizontalAngle - 2*pi) < 1e-5f &&
-              std::abs(source.upperVerticalAngle - pi/2) < 1e-5f &&
-              std::abs(source.lowerVerticalAngle + pi/2) < 1e-5f) {
-            spheres.push_back({XR_TYPE_COMPOSITION_LAYER_EQUIRECT_KHR, source.next,
-                source.layerFlags, source.space, source.eyeVisibility, source.subImage,
-                source.pose, source.radius, {1, 1}, {0, 0}});
-            layer = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&spheres.back());
-            converted = true;
-          }
-        }
-        if (!converted) {
-          static std::set<XrStructureType> reported;
-          if (reported.insert(layer->type).second)
-            log::warn("xr", "Host lacks {}; omitting layer type {} while preserving supported layers",
-                      metadata->extension, int(layer->type));
-          continue;
-        }
-      }
-    }
+  flats.reserve(cylinders * strips);
+  chains.reserve(info->layerCount + cylinders * strips);
+  std::uint32_t i = 0;
+  // Takes one host layer: copies its chain, validates it and maps its swapchains.
+  auto append = [&](const XrCompositionLayerBaseHeader* layer, bool converted) -> XrResult {
     if (layer && layer->next) {
       chains.emplace_back();
       auto result = chains.back().copy(layer, false);
@@ -1144,6 +1128,85 @@ XrResult xrEndFrame(XrSession handle, const XrFrameEndInfo *info) {
         }
     }
     layers.push_back(static_cast<const XrCompositionLayerBaseHeader*>(rects.layer(layer)));
+    return XR_SUCCESS;
+  };
+  for (; i < info->layerCount; ++i) {
+    auto layer = info->layers[i];
+    bool converted = false;
+    if (layer && valid_handle(layer->space, "XrSpace")) {
+      const StructureInfo* metadata = nullptr;
+      for (const auto& candidate : structure_metadata())
+        if (candidate.type == layer->type) { metadata = &candidate; break; }
+      if (metadata && *metadata->extension &&
+          !host_xr().enabled_extensions.contains(metadata->extension)) {
+        if (layer->type == XR_TYPE_COMPOSITION_LAYER_EQUIRECT2_KHR &&
+            host_xr().enabled_extensions.contains("XR_KHR_composition_layer_equirect")) {
+          const auto& source = *reinterpret_cast<const XrCompositionLayerEquirect2KHR*>(layer);
+          constexpr float pi = std::numbers::pi_v<float>;
+          // Full-sphere Equirect2 has exactly the original extension's unit
+          // scale/zero bias mapping. Cropped spheres need clipping/composition.
+          if (std::abs(source.centralHorizontalAngle - 2*pi) < 1e-5f &&
+              std::abs(source.upperVerticalAngle - pi/2) < 1e-5f &&
+              std::abs(source.lowerVerticalAngle + pi/2) < 1e-5f) {
+            spheres.push_back({XR_TYPE_COMPOSITION_LAYER_EQUIRECT_KHR, source.next,
+                source.layerFlags, source.space, source.eyeVisibility, source.subImage,
+                source.pose, source.radius, {1, 1}, {0, 0}});
+            layer = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&spheres.back());
+            converted = true;
+          }
+        }
+        if (layer->type == XR_TYPE_COMPOSITION_LAYER_CYLINDER_KHR) {
+          const auto& source = *reinterpret_cast<const XrCompositionLayerCylinderKHR*>(layer);
+          const float angle = source.centralAngle, radius = source.radius;
+          const auto width = source.subImage.imageRect.extent.width;
+          // A Quest always composes cylinders (UI panels, mostly), so the
+          // extension is offered everywhere. Strips of at most 7.5 degrees keep
+          // within 0.25% of the radius of the arc.
+          if (angle > 0 && angle <= 2 * std::numbers::pi_v<float> && radius > 0 && std::isfinite(radius) &&
+              source.aspectRatio > 0 && width > 0) {
+            const auto wanted = std::uint32_t(std::ceil(angle / (std::numbers::pi_v<float> / 24)));
+            const auto count = std::min({wanted, strips, std::uint32_t(width)});
+            const auto& q = source.pose.orientation;
+            for (std::uint32_t s = 0; s < count; ++s) {
+              const auto x0 = std::int32_t(std::uint64_t(width) * s / count);
+              const auto x1 = std::int32_t(std::uint64_t(width) * (s + 1) / count);
+              // The image's middle is at -Z; its left edge turns toward -X.
+              const float a0 = angle * (float(x0) / float(width) - 0.5f);
+              const float a1 = angle * (float(x1) / float(width) - 0.5f);
+              const float phi = (a0 + a1) / 2, half = (a1 - a0) / 2, depth = radius * std::cos(half);
+              // The strip's centre on its chord, rotated by the pose.
+              const XrVector3f v{depth * std::sin(phi), 0, -depth * std::cos(phi)};
+              const XrVector3f t{2 * (q.y * v.z - q.z * v.y), 2 * (q.z * v.x - q.x * v.z), 2 * (q.x * v.y - q.y * v.x)};
+              XrPosef pose = source.pose;
+              pose.position = {pose.position.x + v.x + q.w * t.x + q.y * t.z - q.z * t.y,
+                               pose.position.y + v.y + q.w * t.y + q.z * t.x - q.x * t.z,
+                               pose.position.z + v.z + q.w * t.z + q.x * t.y - q.y * t.x};
+              // The pose's orientation, then a turn of -phi about Y to face the axis.
+              const float ry = -std::sin(phi / 2), rw = std::cos(phi / 2);
+              pose.orientation = {q.x * rw - q.z * ry, q.w * ry + q.y * rw, q.z * rw + q.x * ry, q.w * rw - q.y * ry};
+              auto sub = source.subImage;
+              sub.imageRect.offset.x += x0;
+              sub.imageRect.extent.width = x1 - x0;
+              flats.push_back({XR_TYPE_COMPOSITION_LAYER_QUAD, source.next, source.layerFlags, source.space,
+                               source.eyeVisibility, sub, pose,
+                               {2 * radius * std::sin(half), radius * angle / source.aspectRatio}});
+              if (auto result = append(reinterpret_cast<const XrCompositionLayerBaseHeader*>(&flats.back()), true);
+                  XR_FAILED(result))
+                return result;
+            }
+            continue;
+          }
+        }
+        if (!converted) {
+          static std::set<XrStructureType> reported;
+          if (reported.insert(layer->type).second)
+            log::warn("xr", "Host lacks {}; omitting layer type {} while preserving supported layers",
+                      metadata->extension, int(layer->type));
+          continue;
+        }
+      }
+    }
+    if (auto result = append(layer, converted); XR_FAILED(result)) return result;
   }
   fit_layer_limit(handle, layers);
   for (auto chain : rects.submitted) {

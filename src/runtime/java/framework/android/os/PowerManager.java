@@ -61,6 +61,9 @@ public class PowerManager {
   public boolean isPowerSaveMode() {
     return false;
   }
+  public boolean isDeviceIdleMode() {
+    return false;
+  }
   public boolean isIgnoringBatteryOptimizations(String pkg) {
     return true;
   }

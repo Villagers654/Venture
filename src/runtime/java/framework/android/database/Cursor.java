@@ -4,6 +4,7 @@ import android.content.ContentResolver;
 import android.net.Uri;
 import android.os.Bundle;
 import java.io.Closeable;
+import java.util.List;
 
 /** AOSP android.database.Cursor: random read access to a query's result rows. */
 public interface Cursor extends Closeable {
@@ -45,6 +46,11 @@ public interface Cursor extends Closeable {
   void unregisterDataSetObserver(DataSetObserver observer);
   void setNotificationUri(ContentResolver cr, Uri uri);
   Uri getNotificationUri();
+  default void setNotificationUris(ContentResolver cr, List<Uri> uris) { setNotificationUri(cr, uris.get(0)); }
+  default List<Uri> getNotificationUris() {
+    Uri uri = getNotificationUri();
+    return uri == null ? null : List.of(uri);
+  }
   boolean getWantsAllOnMoveCalls();
   void setExtras(Bundle extras);
   Bundle getExtras();

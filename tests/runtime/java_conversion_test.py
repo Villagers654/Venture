@@ -262,6 +262,19 @@ public class Holder {
             self.assertFalse(invalid["ready"])
             self.assertFalse(invalid["translation_complete"])
             self.assertTrue(any(f.get("kind") == "java.lang.IncompatibleClassChangeError" for f in invalid["failures"]))
+            # The runtime's per-package cache keeps only the generation in use:
+            # each Venture update would otherwise leave another copy behind.
+            runtime_cache = root / "runtime" / "com.venture.missing" / "7" / "java"
+            (runtime_cache / ".conversion-old").mkdir(parents=True)
+            first, _ = convert(apk, "com.venture.missing", runtime_cache)
+            second, _ = convert(apk, "com.venture.missing", runtime_cache, hierarchy=[metadata])
+            self.assertNotEqual(first, second)
+            self.assertFalse(first.exists())
+            self.assertTrue((second / "app.jar").is_file())
+            self.assertFalse((runtime_cache / ".conversion-old").exists())
+            self.assertEqual([p.name for p in (runtime_cache / "linked").iterdir()], [second.parent.name])
+            # Shared caches (several packages, as the CLI allows) are left alone.
+            self.assertTrue((bad / "app.jar").is_file() and (good / "app.jar").is_file())
 
     def test_unframeable_method_throws_like_art_and_class_still_loads(self):
         # Unreal's ProfilerAccessor merges types an older framework lacks: ART loads

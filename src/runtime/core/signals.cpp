@@ -3,6 +3,7 @@
 #include "core/signals.h"
 #include "core/api_result_trace.h"
 #include "core/startup_stack.h"
+#include "common/first_frame_progress.h"
 #include "platform/runtime_child.h"
 #include "core/signal_frame.h"
 #include "core/a32_abi.h"
@@ -737,7 +738,14 @@ bool capture_first_frame_stall() {
   try_log_guest_threads_raw("no-first-frame");
   return acknowledged;
 }
-bool try_log_guest_threads_raw(std::string_view reason) {
+bool capture_frame_stall() {
+  log::error("startup-snapshot", "No frame submitted for {} s while the game has focus; capturing thread state",
+             startup_diagnostics::FrameStallTrigger::stall_seconds);
+  const auto acknowledged = platform::request_runtime_stall_dump();
+  try_log_guest_threads_raw("frame-stall", true);
+  return acknowledged;
+}
+bool try_log_guest_threads_raw(std::string_view reason, bool symbols) {
   struct Row {
     std::int32_t tid = 0;
     GuestAddr pc = 0, lr = 0, sp = 0;
@@ -763,11 +771,18 @@ bool try_log_guest_threads_raw(std::string_view reason) {
   });
   log::error("startup-snapshot", "raw guest stacks reason={} registry_available={} dropped={} state=last-saved",
              reason, acquired, dropped);
+  // Named after the registry is released; the lookup only try-locks the linker.
+  auto name = [&](GuestAddr pc) {
+    DlInfo info;
+    if (!symbols || !Linker::get().try_address_info(pc, &info) || info.path.empty()) return std::string();
+    return std::format(" {}+{:#x} ({})", info.path, pc - info.base, info.symbol);
+  };
   for (unsigned i = 0; i < count; ++i) {
     const auto& row = rows[i];
-    log::error("startup-snapshot", "guest tid={} pc={:#x} lr={:#x} sp={:#x}", row.tid, row.pc, row.lr, row.sp);
+    log::error("startup-snapshot", "guest tid={} pc={:#x}{} lr={:#x}{} sp={:#x}", row.tid, row.pc, name(row.pc),
+               row.lr, name(row.lr), row.sp);
     for (unsigned f = 0; f < row.count; ++f)
-      log::error("startup-snapshot", "guest tid={} frame={} pc={:#x}", row.tid, f, row.frames[f]);
+      log::error("startup-snapshot", "guest tid={} frame={} pc={:#x}{}", row.tid, f, row.frames[f], name(row.frames[f]));
   }
   if (!acquired) {
     const auto owner = thread_registry_owner();

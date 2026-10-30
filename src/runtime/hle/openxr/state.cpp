@@ -255,6 +255,8 @@ std::map<std::string, std::uint32_t> capabilities() {
       {"XR_FB_haptic_amplitude_envelope", 1},
       // Guest Vulkan images are copied to the host chain, which applies the flip.
       {"XR_FB_composition_layer_image_layout", 1},
+      // Drawn flat where the host has no cylinders (xrEndFrame).
+      {"XR_KHR_composition_layer_cylinder", 1},
   };
   if (xr_images())
     result["XR_KHR_opengl_es_enable"] = 10;

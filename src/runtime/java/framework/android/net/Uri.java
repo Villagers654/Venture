@@ -121,6 +121,32 @@ public final class Uri implements android.os.Parcelable, Comparable<Uri> {
     return isOpaque() ? builder.encodedOpaquePart(getEncodedSchemeSpecificPart())
         : builder.encodedAuthority(getEncodedAuthority()).encodedPath(getEncodedPath()).encodedQuery(getEncodedQuery());
   }
+  public java.util.Set<String> getQueryParameterNames() {
+    if (isOpaque()) throw new UnsupportedOperationException("This isn't a hierarchical URI.");
+    String query = getEncodedQuery();
+    if (query == null) return java.util.Set.of();
+    var names = new java.util.LinkedHashSet<String>();
+    for (String part : query.split("&")) {
+      if (part.isEmpty()) continue;
+      int equals = part.indexOf('=');
+      names.add(decode(equals < 0 ? part : part.substring(0, equals)));
+    }
+    return java.util.Collections.unmodifiableSet(names);
+  }
+  public java.util.List<String> getQueryParameters(String key) {
+    if (isOpaque()) throw new UnsupportedOperationException("This isn't a hierarchical URI.");
+    java.util.Objects.requireNonNull(key);
+    String query = getEncodedQuery();
+    if (query == null) return java.util.List.of();
+    String encodedKey = encode(key);
+    var values = new java.util.ArrayList<String>();
+    for (String part : query.split("&", -1)) {
+      int equals = part.indexOf('=');
+      if ((equals < 0 ? part : part.substring(0, equals)).equals(encodedKey))
+        values.add(equals < 0 ? "" : decode(part.substring(equals + 1)));
+    }
+    return java.util.Collections.unmodifiableList(values);
+  }
   public String getQueryParameter(String name) {
     if (isOpaque()) throw new UnsupportedOperationException("This isn't a hierarchical URI.");
     java.util.Objects.requireNonNull(name);

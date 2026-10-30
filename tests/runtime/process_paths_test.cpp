@@ -112,3 +112,26 @@ TEST_CASE("an OBB view stays in the data folder only where it can link the insta
   CHECK(fs::equivalent(install / "main.12.com.example.game.obb", install / ".obb/local/main.12.com.example.game.obb"));
   CHECK_THROWS(obb_view_for(install, view, "../escape"));
 }
+TEST_CASE("a same-named file in the mods folder replaces the installed expansion in the view") {
+  const auto root = fs::temp_directory_path() / ("venture-mods-" + random_account_key());
+  struct Cleanup { fs::path root; ~Cleanup() { remove_tree(root.parent_path(), root); } } cleanup{root};
+  const auto install = root / "games/com.example.game/12", view = root / "data/obb/com.example.game";
+  const auto mods = mods_dir(root / "data", "com.example.game");
+  CHECK(mods == root / "data/mods/com.example.game");
+  CHECK_THROWS(mods_dir(root / "data", "../escape"));
+  paths::atomic_write(install / "main.12.com.example.game.obb", "original");
+  paths::atomic_write(install / "patch.12.com.example.game.obb", "patch");
+  paths::atomic_write(mods / "main.12.com.example.game.obb", "modded main");
+  paths::atomic_write(mods / "main.11.com.example.game.obb", "another version");
+  const std::string names[]{"main.12.com.example.game.obb", "patch.12.com.example.game.obb"};
+  sync_obb_view(install, view, names, mods);
+  CHECK(paths::read(view / "main.12.com.example.game.obb") == "modded main");
+  CHECK(paths::read(view / "patch.12.com.example.game.obb") == "patch");
+  // Only installed names are replaced; the installation itself is untouched.
+  CHECK_FALSE(fs::exists(view / "main.11.com.example.game.obb"));
+  CHECK(paths::read(install / "main.12.com.example.game.obb") == "original");
+  // Removing the mod restores the original at the next launch.
+  fs::remove(mods / "main.12.com.example.game.obb");
+  sync_obb_view(install, view, names, mods);
+  CHECK(paths::read(view / "main.12.com.example.game.obb") == "original");
+}

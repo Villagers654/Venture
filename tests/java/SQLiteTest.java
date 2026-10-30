@@ -52,6 +52,26 @@ public final class SQLiteTest {
           && c.getType(1) == Cursor.FIELD_TYPE_INTEGER && c.getLong(1) == 1, "Integer and Boolean bind as integers");
     }
 
+    // ContentValues helpers (ExoPlayer's cache index and version table).
+    db.execSQL("CREATE TABLE kv(k TEXT PRIMARY KEY, v INTEGER, b BLOB)");
+    var values = new android.content.ContentValues();
+    values.put("k", "one"); values.put("v", 1); values.put("b", new byte[]{9});
+    check(db.insert("kv", null, values) > 0, "insert returns the row id");
+    expect(SQLiteConstraintException.class, () -> db.insertOrThrow("kv", null, values), "insertOrThrow throws");
+    values.put("v", 2);
+    check(db.replaceOrThrow("kv", null, values) > 0 && android.database.DatabaseUtils.queryNumEntries(db, "kv") == 1, "replace");
+    var changed = new android.content.ContentValues();
+    changed.put("v", 5);
+    check(db.update("kv", changed, "k = ?", new String[]{"one"}) == 1, "update counts rows");
+    try (Cursor c = db.query("kv", new String[]{"k", "v"}, "v > ?", new String[]{"4"}, null, null, "k")) {
+      check(c.moveToNext() && c.getString(0).equals("one") && c.getLong(1) == 5 && !c.moveToNext(), "query builds SELECT");
+    }
+    check(android.database.DatabaseUtils.longForQuery(db, "SELECT v FROM kv WHERE k = ?", new String[]{"one"}) == 5, "longForQuery");
+    expect(SQLiteDoneException.class, () -> android.database.DatabaseUtils.stringForQuery(db, "SELECT k FROM kv WHERE v = 0", null),
+        "a simple query without rows throws SQLiteDoneException");
+    check(db.delete("kv", "k = ?", new String[]{"one"}) == 1 && android.database.DatabaseUtils.queryNumEntries(db, "kv") == 0,
+        "delete counts rows");
+
     // GameAnalytics runs DDL and writes through rawQuery; AOSP executes them on the first move.
     Cursor lazy = db.rawQuery("INSERT OR REPLACE INTO t(name) VALUES(?);", new String[]{"lazy"});
     check(count(db, "t") == 2, "rawQuery compiles without executing");

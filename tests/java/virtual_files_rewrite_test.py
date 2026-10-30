@@ -16,7 +16,9 @@ with tempfile.TemporaryDirectory(prefix="venture-files-rewrite-") as directory:
     original.mkdir()
     snapshots = work / "snapshots"
     snapshots.mkdir()
-    subprocess.run([java_tool("javac"), "--release", "21", "-cp", framework, "-d", str(original),
+    asm = java_path(ROOT / ".deps/asm/asm.jar")
+    subprocess.run([java_tool("java"), "-cp", asm, str(ROOT / "tests/java/InterfaceCallFixture.java"), str(original)], check=True)
+    subprocess.run([java_tool("javac"), "--release", "21", "-cp", os.pathsep.join([framework, str(original)]), "-d", str(original),
                     str(ROOT / "tests/java/VirtualFilesFixture.java")], check=True)
     source, rewritten = work / "fixture.jar", work / "rewritten.jar"
     subprocess.run([java_tool("jar"), "--create", "--file", str(source), "-C", str(original), "."], check=True)
