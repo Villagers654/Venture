@@ -35,4 +35,26 @@ public abstract class Service extends ContextWrapper {
   public void onConfigurationChanged(android.content.res.Configuration configuration) {}
   public void onLowMemory() {}
   public void onTrimMemory(int level) {}
+  // A foreground service posts its ongoing notification; the process is never killed in the background.
+  public static final int STOP_FOREGROUND_REMOVE = 1, STOP_FOREGROUND_DETACH = 2;
+  private int foregroundId;
+  public final void startForeground(int id, Notification notification) {
+    if (id == 0) throw new IllegalArgumentException("startForeground id must not be 0");
+    if (foregroundId != 0 && foregroundId != id) stopForeground(STOP_FOREGROUND_REMOVE);
+    notification.flags |= Notification.FLAG_FOREGROUND_SERVICE;
+    ((NotificationManager) getSystemService(NOTIFICATION_SERVICE)).notify(id, notification);
+    foregroundId = id;
+  }
+  public final void startForeground(int id, Notification notification, int foregroundServiceType) {
+    startForeground(id, notification);
+  }
+  @Deprecated public final void stopForeground(boolean removeNotification) {
+    stopForeground(removeNotification ? STOP_FOREGROUND_REMOVE : STOP_FOREGROUND_DETACH);
+  }
+  public final void stopForeground(int flags) {
+    if (foregroundId != 0 && (flags & STOP_FOREGROUND_REMOVE) != 0)
+      ((NotificationManager) getSystemService(NOTIFICATION_SERVICE)).cancel(foregroundId);
+    foregroundId = 0;
+  }
+  public final int getForegroundServiceType() { return 0; }
 }

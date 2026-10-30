@@ -1,10 +1,9 @@
 package android.database.sqlite;
 
-import java.io.Closeable;
 import java.util.Arrays;
 
 /** AOSP android.database.sqlite.SQLiteProgram: a compiled statement's SQL, columns and bind arguments. */
-public abstract class SQLiteProgram implements Closeable {
+public abstract class SQLiteProgram extends SQLiteClosable {
   private static final String[] EMPTY = new String[0];
   private final SQLiteDatabase database;
   private final String sql;

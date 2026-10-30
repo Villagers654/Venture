@@ -8,6 +8,7 @@ public final class PersistableBundle extends BaseBundle implements Parcelable, C
   public PersistableBundle(PersistableBundle other) { values = new Bundle(other.values); }
   private PersistableBundle(Bundle values) { this.values = new Bundle(values); }
   public Object get(String key) { return values.get(key); }
+  void putValue(String key, Object value) { values.putValue(key, value); }
   public boolean containsKey(String key) { return values.containsKey(key); }
   public java.util.Set<String> keySet() { return values.keySet(); }
   public int size() { return values.size(); }

@@ -207,6 +207,17 @@ void uninstall(const fs::path &root, const Install &install) {
         "Installation changed. Rescan before uninstalling.");
   remove_obb_aliases(paths::data_dir(), install.plan.package, target);
   remove_tree(root, target);
+  // The runtime's extracted libraries and converted Java for this version.
+  // Saves (the account data) stay.
+  const auto cache = paths::data_dir() / "cache";
+  const auto version = cache / paths::from_utf8(install.plan.package) / paths::from_utf8(install.plan.version_code);
+  if (std::error_code ec; paths::safe_name(install.plan.package) && paths::safe_name(install.plan.version_code) &&
+      fs::is_directory(version, ec))
+    try {
+      remove_tree(cache, version);
+    } catch (const std::exception &error) {
+      log::warn("library", "Could not remove the cache of {}: {}", install.plan.package, error.what());
+    }
 }
 std::vector<std::string> owning_accounts(const std::vector<meta::Game> &games,
                                          const meta::AccountIndex &accounts,
@@ -428,6 +439,8 @@ Settings Settings::load(const fs::path &data) {
   s.texture_compression = int(std::min<uint64_t>(2, number(j, "textureCompression")));
   if (auto percent = number(j, "textureCompressionThreshold"); percent >= 10 && percent <= 95)
     s.texture_compression_threshold = int(percent);
+  if (auto jobs = number(j, "parallelDownloads"); jobs >= 1 && jobs <= 4)
+    s.parallel_downloads = int(jobs);
   s.console = field(j, "launchWithConsole") == true;
   s.check_updates = field(j, "checkForUpdates") != false;
   s.dismissed_update = str(j, "dismissedUpdate");
@@ -458,6 +471,7 @@ void Settings::save(const fs::path &data) const {
          {"menuButton", menu_button},
          {"textureCompression", texture_compression},
          {"textureCompressionThreshold", texture_compression_threshold},
+         {"parallelDownloads", parallel_downloads},
          {"launchWithConsole", console},
          {"checkForUpdates", check_updates},
          {"dismissedUpdate", dismissed_update},

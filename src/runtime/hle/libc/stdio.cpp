@@ -1084,6 +1084,10 @@ void register_stdio32_adapters() {
   A("fgetc", fgetc_fn); A("getc", fgetc_fn); A("getc_unlocked", fgetc_fn);
   A("fputc", fputc_fn); A("putc", fputc_fn); A("putc_unlocked", fputc_fn);
   A("fgets", fgets_fn); A("fputs", fputs_fn); A("ungetc", ungetc_fn);
+  A("fgetc_unlocked", fgetc_fn); A("fputc_unlocked", fputc_fn); A("fgets_unlocked", fgets_fn);
+  A("fputs_unlocked", fputs_fn); A("fwrite_unlocked", fwrite_fn); A("fflush_unlocked", fflush_fn);
+  A("feof_unlocked", feof_fn); A("ferror_unlocked", ferror_fn); A("clearerr_unlocked", clearerr_fn);
+  A("fileno_unlocked", fileno_fn);
   A("getdelim", getdelim_fn); A("getline", getline_fn);
   A("fseek", fseek_fn); A("fseeko", fseek_fn); A("fseeko64", fseek_fn);
   A("ftell", ftell_fn); A("ftello", ftell_fn); A("ftello64", ftell_fn);
@@ -1169,6 +1173,20 @@ void register_stdio(HleLibrary& lib) {
   B("puts", puts_fn);
   B("putchar", putchar_fn);
   B("getchar", getchar_fn);
+  // Bionic's *_unlocked variants: streams here lock internally, so they are the same calls
+  // (Unreal's FAndroidPlatformMemory::GetStats reads /proc/meminfo with fgets_unlocked).
+  B("fgets_unlocked", fgets_fn);
+  B("fgetc_unlocked", fgetc_fn);
+  B("fputc_unlocked", fputc_fn);
+  B("fputs_unlocked", fputs_fn);
+  B("fwrite_unlocked", fwrite_fn);
+  B("fflush_unlocked", fflush_fn);
+  B("feof_unlocked", feof_fn);
+  B("ferror_unlocked", ferror_fn);
+  B("clearerr_unlocked", clearerr_fn);
+  B("fileno_unlocked", fileno_fn);
+  B("getchar_unlocked", getchar_fn);
+  B("putchar_unlocked", putchar_fn);
   B("perror", perror_fn);
   B("popen", popen_fn);
   B("fmemopen", fmemopen_fn);

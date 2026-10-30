@@ -1,5 +1,13 @@
 package android.view;
 public interface WindowManager extends ViewManager {
+  class BadTokenException extends android.util.AndroidRuntimeException {
+    public BadTokenException() {}
+    public BadTokenException(String name) { super(name); }
+  }
+  class InvalidDisplayException extends android.util.AndroidRuntimeException {
+    public InvalidDisplayException() {}
+    public InvalidDisplayException(String name) { super(name); }
+  }
   Display getDefaultDisplay();
   WindowMetrics getCurrentWindowMetrics();
   WindowMetrics getMaximumWindowMetrics();

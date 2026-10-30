@@ -1,4 +1,5 @@
 #include "launcher/auth_browser.h"
+#include "common/log.h"
 #include "common/meta/auth.h"
 #include <atomic>
 #include <cerrno>
@@ -6,6 +7,7 @@
 #include <deque>
 #include <dlfcn.h>
 #include <fcntl.h>
+#include <format>
 #include <mutex>
 #include <spawn.h>
 #include <sys/wait.h>
@@ -418,7 +420,7 @@ void AuthBrowser::open(std::string url, const fs::path &) {
   impl_->reader = std::thread([impl = impl_.get(), fd = out[0], pid] {
     std::string buffer;
     char chunk[4096];
-    bool overflow = false;
+    bool overflow = false, reported = false;
     while (!overflow) {
       auto n = ::read(fd, chunk, sizeof chunk);
       if (n < 0 && errno == EINTR)
@@ -427,7 +429,9 @@ void AuthBrowser::open(std::string url, const fs::path &) {
         break;
       buffer.append(chunk, size_t(n));
       for (size_t end; (end = buffer.find('\n')) != buffer.npos;) {
-        impl->emit(translate(std::string_view(buffer).substr(0, end)));
+        auto event = translate(std::string_view(buffer).substr(0, end));
+        reported |= event.kind == Kind::error;
+        impl->emit(std::move(event));
         buffer.erase(0, end + 1);
       }
       overflow = buffer.size() > kMaxLine;
@@ -445,6 +449,17 @@ void AuthBrowser::open(std::string url, const fs::path &) {
     while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {
     }
     impl->pid = -1;
+    // A window the user closes exits 0 and close() ends it with SIGTERM; a
+    // helper WebKit took down (a crash, or a sandbox it cannot start) is an
+    // error, not a cancelled sign-in.
+    if (!reported && !overflow &&
+        ((WIFSIGNALED(status) && WTERMSIG(status) != SIGTERM) || (WIFEXITED(status) && WEXITSTATUS(status)))) {
+      const auto how = WIFSIGNALED(status) ? std::format("signal {}", WTERMSIG(status))
+                                           : std::format("exit code {}", WEXITSTATUS(status));
+      log::warn("auth", "The Meta sign-in window stopped with {}.", how);
+      impl->events.push_back({Kind::error, "The Meta sign-in window stopped unexpectedly (" + how +
+                                               "). Send a debug report if it happens again."});
+    }
     impl->events.push_back({Kind::closed, {}});
   });
 }

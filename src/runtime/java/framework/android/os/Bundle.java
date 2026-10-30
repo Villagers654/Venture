@@ -91,9 +91,10 @@ public class Bundle extends BaseBundle implements Parcelable, Cloneable {
   public void putFloat(String k, float v) {
     values.put(k, v);
   }
-  public float getFloat(String k) {
+  public float getFloat(String k) { return getFloat(k, 0); }
+  public float getFloat(String k, float d) {
     Object v = get(k);
-    return v instanceof Float ? (Float) v : 0;
+    return v instanceof Float ? (Float) v : d;
   }
   public void putDouble(String k, double v) {
     values.put(k, v);
@@ -117,24 +118,84 @@ public class Bundle extends BaseBundle implements Parcelable, Cloneable {
   public byte[] getByteArray(String k) {
     return (byte[]) get(k);
   }
-  public void putStringArray(String k, String[] v) {
-    values.put(k, v);
-  }
-  public String[] getStringArray(String k) {
-    return (String[]) get(k);
-  }
-  public void putIntArray(String k, int[] v) {
-    values.put(k, v);
-  }
-  public int[] getIntArray(String k) {
-    return (int[]) get(k);
-  }
   public void putParcelable(String k, Parcelable v) {
     values.put(k, v);
   }
   @SuppressWarnings("unchecked")
   public <T extends Parcelable> T getParcelable(String k) {
     return (T) get(k);
+  }
+  void putValue(String k, Object v) { values.put(k, v); }
+  public ClassLoader getClassLoader() { return com.venture.runtime.RuntimeEnvironment.get().loader; }
+  public void putByte(String k, byte v) { values.put(k, v); }
+  public void putChar(String k, char v) { values.put(k, v); }
+  public void putShort(String k, short v) { values.put(k, v); }
+  public void putCharArray(String k, char[] v) { values.put(k, v); }
+  public void putShortArray(String k, short[] v) { values.put(k, v); }
+  public void putFloatArray(String k, float[] v) { values.put(k, v); }
+  public void putCharSequenceArray(String k, CharSequence[] v) { values.put(k, v); }
+  public void putParcelableArray(String k, Parcelable[] v) { values.put(k, v); }
+  public void putIntegerArrayList(String k, ArrayList<Integer> v) { values.put(k, v); }
+  public void putStringArrayList(String k, ArrayList<String> v) { values.put(k, v); }
+  public void putCharSequenceArrayList(String k, ArrayList<CharSequence> v) { values.put(k, v); }
+  public void putParcelableArrayList(String k, ArrayList<? extends Parcelable> v) { values.put(k, v); }
+  public void putSparseParcelableArray(String k, android.util.SparseArray<? extends Parcelable> v) { values.put(k, v); }
+  public void putSize(String k, android.util.Size v) { values.put(k, v); }
+  public void putSizeF(String k, android.util.SizeF v) { values.put(k, v); }
+  public void putBinder(String k, IBinder v) { values.put(k, v); }
+  public byte getByte(String k) { return getByte(k, (byte) 0); }
+  public Byte getByte(String k, byte d) { return get(k) instanceof Byte v ? v : d; }
+  public char getChar(String k) { return getChar(k, (char) 0); }
+  public char getChar(String k, char d) { return get(k) instanceof Character v ? v : d; }
+  public short getShort(String k) { return getShort(k, (short) 0); }
+  public short getShort(String k, short d) { return get(k) instanceof Short v ? v : d; }
+  public char[] getCharArray(String k) { return get(k) instanceof char[] v ? v : null; }
+  public short[] getShortArray(String k) { return get(k) instanceof short[] v ? v : null; }
+  public float[] getFloatArray(String k) { return get(k) instanceof float[] v ? v : null; }
+  public CharSequence[] getCharSequenceArray(String k) { return get(k) instanceof CharSequence[] v ? v : null; }
+  public Parcelable[] getParcelableArray(String k) { return get(k) instanceof Parcelable[] v ? v : null; }
+  @SuppressWarnings("unchecked")
+  public <T> T[] getParcelableArray(String k, Class<T> type) {
+    Parcelable[] all = getParcelableArray(k);
+    if (all == null) return null;
+    T[] out = (T[]) java.lang.reflect.Array.newInstance(type, all.length);
+    for (int i = 0; i < all.length; i++) {
+      if (all[i] != null && !type.isInstance(all[i])) return null;
+      out[i] = type.cast(all[i]);
+    }
+    return out;
+  }
+  @SuppressWarnings("unchecked")
+  private <T> ArrayList<T> list(String k) { return get(k) instanceof ArrayList<?> v ? (ArrayList<T>) v : null; }
+  public ArrayList<Integer> getIntegerArrayList(String k) { return list(k); }
+  public ArrayList<String> getStringArrayList(String k) { return list(k); }
+  public ArrayList<CharSequence> getCharSequenceArrayList(String k) { return list(k); }
+  public <T extends Parcelable> ArrayList<T> getParcelableArrayList(String k) { return list(k); }
+  public <T> ArrayList<T> getParcelableArrayList(String k, Class<? extends T> type) {
+    ArrayList<T> all = list(k);
+    if (all != null)
+      for (T value : all)
+        if (value != null && !type.isInstance(value)) return null;
+    return all;
+  }
+  @SuppressWarnings("unchecked")
+  public <T extends Parcelable> android.util.SparseArray<T> getSparseParcelableArray(String k) {
+    return get(k) instanceof android.util.SparseArray<?> v ? (android.util.SparseArray<T>) v : null;
+  }
+  @SuppressWarnings("unchecked")
+  public <T> android.util.SparseArray<T> getSparseParcelableArray(String k, Class<? extends T> type) {
+    return get(k) instanceof android.util.SparseArray<?> v ? (android.util.SparseArray<T>) v : null;
+  }
+  public android.util.Size getSize(String k) { return get(k) instanceof android.util.Size v ? v : null; }
+  public android.util.SizeF getSizeF(String k) { return get(k) instanceof android.util.SizeF v ? v : null; }
+  public IBinder getBinder(String k) { return get(k) instanceof IBinder v ? v : null; }
+  public <T> T getParcelable(String k, Class<T> type) {
+    Object value = get(k);
+    return type.isInstance(value) ? type.cast(value) : null;
+  }
+  public <T extends java.io.Serializable> T getSerializable(String k, Class<T> type) {
+    Object value = get(k);
+    return type.isInstance(value) ? type.cast(value) : null;
   }
   public void putSerializable(String k, java.io.Serializable v) {
     values.put(k, v);

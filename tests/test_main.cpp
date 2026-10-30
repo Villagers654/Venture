@@ -2,6 +2,10 @@
 #include <doctest/doctest.h>
 #include <cstdio>
 #include <cstdlib>
+#if defined(_WIN32) && defined(VENTURE_TEST_CRASH_REPORT)
+#include <filesystem>
+#include "platform/crash_report.h"
+#endif
 #ifndef _WIN32
 #include <filesystem>
 #include <string>
@@ -12,6 +16,11 @@
 int main(int argc, char** argv) {
   // Unbuffered, so a crashing test's name and failed checks reach the log.
   std::setvbuf(stdout, nullptr, _IONBF, 0);
+#if defined(_WIN32) && defined(VENTURE_TEST_CRASH_REPORT)
+  // A crashing test logs its faulting stack and leaves a dump beside the binary.
+  venture::platform::install_crash_report(
+      (std::filesystem::absolute(argv[0]).parent_path() / "venture_tests.log").string(), "venture_tests");
+#endif
   // Decoded textures stay RGBA8 (the runtime stores them as BC7 by default);
   // the BC7 tests force compression themselves.
 #ifdef _WIN32

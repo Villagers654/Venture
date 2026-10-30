@@ -401,7 +401,10 @@ TEST_CASE("an import job installs the source's files, completes them from an own
         const auto save = from / "Android" / "files" / "save.dat";
         return std::make_unique<Headset>(
             std::move(source),
-            std::vector<import::SourceFile>{{"files/save.dat", fs::file_size(save), paths::utf8(save)}}, damaged);
+            std::vector<import::SourceFile>{{"files/save.dat", fs::file_size(save), paths::utf8(save)},
+                                            // A cache the headset dropped while it was listed.
+                                            {"files/cache.store", 4, paths::utf8(save) + ".gone"}},
+            damaged);
       }};
   download::Manager manager(d.root / "state", [] {}, services);
   manager.set_account("0123456789ab");
@@ -465,6 +468,7 @@ TEST_CASE("an import job installs the source's files, completes them from an own
   INFO("error: ", job.error);
   CHECK(job.state == download::State::complete);
   CHECK(paths::read(saves / "files" / "save.dat") == "save");
+  CHECK_FALSE(fs::exists(saves / "files" / "cache.store"));
   CHECK_FALSE(job.saves_kept);
   CHECK_FALSE(fs::exists(paths::utf8(saves) + ".import"));
   write(from / "Android" / "files" / "save.dat", "newer");
@@ -605,6 +609,41 @@ TEST_CASE("queued jobs start in list order, move, and cancel; a running job stop
   add("a");
   REQUIRE(test::wait_until([&] { return !manager.busy(); }));
   CHECK(job("a").state == download::State::complete);
+}
+
+TEST_CASE("parallel jobs run different games side by side and one game's jobs in turn") {
+  Directory d;
+  const auto games = d.root / "games";
+  std::map<std::string, std::string> specs;
+  for (std::string name : {"a", "b"}) {
+    apk(d.root / name / "game.apk", "com.example." + name, 1);
+    specs[name] = import::open_local(d.root / name / "game.apk").front()->spec();
+  }
+  std::atomic<bool> hold{true};
+  std::atomic<int> running{0}, peak{0};
+  download::Manager::Services services{
+      {}, {}, {},
+      [&](std::string_view spec, std::string_view package, std::stop_token stop) -> std::unique_ptr<import::Source> {
+        const int now = ++running;
+        for (int seen = peak; now > seen && !peak.compare_exchange_weak(seen, now);) {}
+        while (hold && !stop.stop_requested()) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        --running;
+        return import::reopen(spec, package, {}, stop);
+      }};
+  download::Manager manager(d.root / "state", [] {}, services);
+  manager.set_parallel(3);  // room for all three; the second "a" still waits
+  auto add = [&](std::string name, std::string app) {
+    manager.enqueue_import(app, name, games, "", "local", specs[name], "com.example." + name);
+  };
+  add("a", "com.example.a");
+  add("a", "com.example.a");  // the same game waits for its first job
+  add("b", "com.example.b");
+  REQUIRE(test::wait_until([&] { return running == 2; }));
+  std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  CHECK(running == 2);
+  hold = false;
+  REQUIRE(test::wait_until([&] { return !manager.busy(); }));
+  CHECK(peak == 2);
 }
 
 #ifndef _WIN32

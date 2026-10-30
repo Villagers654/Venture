@@ -148,6 +148,20 @@ public class Intent implements Parcelable {
   public String[] getStringArrayExtra(String k) { return extras.getStringArray(k); }
   public int[] getIntArrayExtra(String k) { return extras.getIntArray(k); }
   public byte[] getByteArrayExtra(String k) { return extras.getByteArray(k); }
+  public Intent putExtra(String k, Bundle v) { extras.putBundle(k, v); return this; }
+  public Intent putExtra(String k, java.io.Serializable v) { extras.putSerializable(k, v); return this; }
+  public Intent putExtra(String k, float v) { extras.putFloat(k, v); return this; }
+  public Intent putExtra(String k, double v) { extras.putDouble(k, v); return this; }
+  public Intent putExtra(String k, CharSequence v) { extras.putCharSequence(k, v); return this; }
+  public Bundle getBundleExtra(String k) { return extras.getBundle(k); }
+  public java.io.Serializable getSerializableExtra(String k) { return extras.getSerializable(k); }
+  public float getFloatExtra(String k, float d) { return extras.getFloat(k, d); }
+  public double getDoubleExtra(String k, double d) { return extras.getDouble(k, d); }
+  public CharSequence getCharSequenceExtra(String k) { return extras.getCharSequence(k); }
+  public void setExtrasClassLoader(ClassLoader loader) {}
+  public static Intent makeMainActivity(ComponentName mainActivity) {
+    return new Intent(ACTION_MAIN).setComponent(mainActivity).addCategory(CATEGORY_LAUNCHER);
+  }
   public Intent putExtras(Bundle b) {
     extras.putAll(b);
     return this;

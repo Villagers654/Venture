@@ -7,4 +7,7 @@ public class AndroidRuntimeException extends RuntimeException {
   public AndroidRuntimeException(Exception cause) {
     super(cause);
   }
+  public AndroidRuntimeException(String message, Throwable cause) {
+    super(message, cause);
+  }
 }

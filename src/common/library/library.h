@@ -83,6 +83,8 @@ struct Settings {
   // texture_compression_threshold percent of GPU memory is in use, 2 off.
   int texture_compression = 0;
   int texture_compression_threshold = 50;
+  // Games that download at once (Settings > Library); one by default.
+  int parallel_downloads = 1;
   bool runtime_override() const;
   // `games` first, then the other library folders.
   std::vector<fs::path> roots() const;

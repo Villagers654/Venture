@@ -21,6 +21,13 @@ public final class FrameworkTest {
     check(android.util.Base64.encodeToString(bytes, 0).equals("AAEC+/8=\n"), "Android Base64 DEFAULT ends in LF");
     check(android.util.Base64.encodeToString(bytes, 2 | 8 | 1).equals("AAEC-_8"), "URL-safe unpadded Base64");
     check(Arrays.equals(bytes, android.util.Base64.decode(" AAEC-_8\r\n", 8)), "Base64 accepts whitespace and omitted padding");
+    // Firebase writes its heartbeat through a Base64OutputStream it then reads back.
+    try {
+      var encoded = new java.io.ByteArrayOutputStream();
+      try (var stream = new android.util.Base64OutputStream(encoded, 2 | 8 | 1)) { stream.write(bytes); }
+      var decoded = new android.util.Base64InputStream(new java.io.ByteArrayInputStream(encoded.toByteArray()), 8).readAllBytes();
+      check(encoded.toString().equals("AAEC-_8") && Arrays.equals(bytes, decoded), "Base64 streams encode and decode");
+    } catch (java.io.IOException e) { throw new java.io.UncheckedIOException(e); }
     check(android.util.Base64.encodeToString(bytes, 1, 3, 2).equals("AQL7"), "Base64 offset/length bounds");
     check(android.util.Base64.encodeToString(new byte[57], 4).endsWith("\r\n")
         && android.util.Base64.encode(new byte[58], 4).length == 84, "Base64 wraps at 76 with final CRLF");
@@ -441,6 +448,154 @@ public final class FrameworkTest {
       thread.join(5000);
     }
   }
+  // Process-local system services: PendingIntent kinds, alarms, notifications, OBB storage.
+  private static void platformServices(android.content.Context context) throws Exception {
+    var thread = new HandlerThread("platform-services");
+    thread.start();
+    var handler = new Handler(thread.getLooper());
+    var actions = new CopyOnWriteArrayList<String>();
+    var asyncResults = new CopyOnWriteArrayList<BroadcastReceiverResult>();
+    var delivered = new CountDownLatch(2);
+    var receiver = new android.content.BroadcastReceiver() {
+      public void onReceive(android.content.Context c, android.content.Intent intent) {
+        actions.add(intent.getAction());
+        setResultCode(7);
+        var pending = goAsync();
+        asyncResults.add(new BroadcastReceiverResult(pending, pending.getResultCode()));
+        pending.finish();
+        delivered.countDown();
+      }
+    };
+    context.registerReceiver(receiver, new android.content.IntentFilter("test.ALARM"), null, handler);
+    var alarm = android.app.PendingIntent.getBroadcast(context, 3, new android.content.Intent("test.ALARM"),
+        android.app.PendingIntent.FLAG_IMMUTABLE);
+    check(alarm.isBroadcast() && !alarm.isActivity() && android.app.PendingIntent.getBroadcast(context, 3,
+        new android.content.Intent("test.ALARM"), android.app.PendingIntent.FLAG_IMMUTABLE | android.app.PendingIntent.FLAG_NO_CREATE) == alarm,
+        "broadcast PendingIntent tokens are kept by kind and filter identity");
+    check(android.app.PendingIntent.getActivity(context, 3, new android.content.Intent("test.ALARM"),
+        android.app.PendingIntent.FLAG_IMMUTABLE | android.app.PendingIntent.FLAG_NO_CREATE) == null,
+        "an activity token is distinct from a broadcast token for the same Intent");
+    alarm.send();
+    var alarms = (android.app.AlarmManager) context.getSystemService(android.content.Context.ALARM_SERVICE);
+    // The suite's main Looper has finished, so the alarm runs on this test Handler.
+    alarms.setExact(android.app.AlarmManager.ELAPSED_REALTIME_WAKEUP, SystemClock.elapsedRealtime() + 20, "send", () -> {
+      try { alarm.send(); } catch (android.app.PendingIntent.CanceledException e) { throw new AssertionError(e); }
+    }, handler);
+    check(delivered.await(2, TimeUnit.SECONDS) && actions.equals(List.of("test.ALARM", "test.ALARM")),
+        "a broadcast PendingIntent is delivered when sent and when its alarm fires");
+    check(asyncResults.size() == 2 && asyncResults.get(0).code() == 7, "goAsync hands over the pending broadcast result");
+    boolean finishedTwice = false;
+    try { asyncResults.get(0).result().finish(); } catch (IllegalStateException expected) { finishedTwice = true; }
+    check(finishedTwice, "a pending broadcast result finishes once");
+    var listenerFired = new CountDownLatch(1);
+    var replaced = new java.util.concurrent.atomic.AtomicInteger();
+    android.app.AlarmManager.OnAlarmListener listener = () -> { replaced.incrementAndGet(); listenerFired.countDown(); };
+    alarms.set(android.app.AlarmManager.ELAPSED_REALTIME, SystemClock.elapsedRealtime() + 60_000, "late", listener, handler);
+    alarms.set(android.app.AlarmManager.ELAPSED_REALTIME, SystemClock.elapsedRealtime() + 10, "soon", listener, handler);
+    check(listenerFired.await(2, TimeUnit.SECONDS) && replaced.get() == 1, "setting a listener alarm again replaces it");
+    var cancelledFired = new java.util.concurrent.atomic.AtomicBoolean();
+    android.app.AlarmManager.OnAlarmListener cancelled = () -> cancelledFired.set(true);
+    alarms.set(android.app.AlarmManager.RTC, System.currentTimeMillis() + 20, "cancel", cancelled, handler);
+    alarms.cancel(cancelled);
+    Thread.sleep(80);
+    var drained = new CountDownLatch(1);
+    handler.post(drained::countDown);
+    check(drained.await(2, TimeUnit.SECONDS) && !cancelledFired.get(), "a cancelled alarm does not fire");
+    context.unregisterReceiver(receiver);
+    thread.quitSafely();
+
+    var notifications = (android.app.NotificationManager) context.getSystemService(android.content.Context.NOTIFICATION_SERVICE);
+    var channel = new android.app.NotificationChannel("emulation", "Emulation", android.app.NotificationManager.IMPORTANCE_LOW);
+    channel.setDescription("first");
+    notifications.createNotificationChannel(channel);
+    notifications.createNotificationChannel(new android.app.NotificationChannel("emulation", "Running",
+        android.app.NotificationManager.IMPORTANCE_HIGH));
+    var stored = notifications.getNotificationChannel("emulation");
+    check(stored != null && stored.getName().equals("Running") && stored.getImportance() == android.app.NotificationManager.IMPORTANCE_LOW,
+        "recreating a channel updates its name but cannot raise its importance");
+    check(notifications.areNotificationsEnabled() && notifications.getImportance() == android.app.NotificationManager.IMPORTANCE_DEFAULT,
+        "the app's notifications are enabled");
+    var action = new android.app.Notification.Action.Builder(
+        android.graphics.drawable.Icon.createWithResource(context, 5), "Pause", alarm).build();
+    var notification = new android.app.Notification.Builder(context, "emulation").addAction(action)
+        .setProgress(10, 4, false).setGroupSummary(true).build();
+    check(notification.actions.length == 1 && notification.actions[0].icon == 5 && notification.actions[0].actionIntent == alarm
+        && notification.extras.getInt("android.progressMax") == 10
+        && (notification.flags & android.app.Notification.FLAG_GROUP_SUMMARY) != 0,
+        "a built notification carries its actions, progress and flags");
+    notifications.notify(1, notification);
+    notifications.cancel(1);
+
+    var storage = (android.os.storage.StorageManager) context.getSystemService(android.content.Context.STORAGE_SERVICE);
+    check(storage != null && !storage.isObbMounted("/sdcard/main.obb") && storage.getMountedObbPath("/sdcard/main.obb") == null,
+        "no OBB image is mounted");
+    boolean missingObb = false;
+    try { storage.mountObb(Files.createTempDirectory("obb").resolve("absent.obb").toString(), null,
+        new android.os.storage.OnObbStateChangeListener() {}); }
+    catch (IllegalArgumentException expected) { missingObb = true; }
+    check(missingObb, "mounting a missing OBB file is rejected");
+    var activities = (android.app.ActivityManager) context.getSystemService(android.content.Context.ACTIVITY_SERVICE);
+    check(activities.getHistoricalProcessExitReasons(null, 0, 0).isEmpty(), "no earlier process exits are recorded");
+    var attributes = new android.media.AudioAttributes.Builder()
+        .setLegacyStreamType(android.media.AudioManager.STREAM_ALARM).build();
+    check(attributes.getUsage() == android.media.AudioAttributes.USAGE_ALARM
+        && attributes.getVolumeControlStream() == android.media.AudioManager.STREAM_ALARM,
+        "a legacy stream type maps to its usage and volume stream");
+    check(GuestFiles.child(new java.io.File("C:\\cache"), "C:\\data\\no_backup\\work.lck").equals("\\data\\no_backup\\work.lck")
+        && GuestFiles.child(null, "C:\\data").equals("C:\\data") && GuestFiles.child("C:\\cache", "work.lck").equals("work.lck"),
+        "an absolute child joins under its parent as on Android");
+
+    var env = RuntimeEnvironment.get();
+    String pkg = env.manifest.info.packageName;
+    check(RuntimeEnvironment.toHostPath("/storage/emulated/0/Android/obb/" + pkg + "/DRM1.mp4")
+            .equals(new java.io.File(env.obb, "DRM1.mp4").getPath())
+        && RuntimeEnvironment.toHostPath("/data/user/0/" + pkg + "/cache").equals(env.cache.getPath())
+        && RuntimeEnvironment.toHostPath("/storage/emulated/0/Android/obbx")
+            .equals(new java.io.File(env.data, "external/Android/obbx").getPath())
+        && RuntimeEnvironment.toHostPath("/proc/self/status").equals("/proc/self/status")
+        && RuntimeEnvironment.toHostPath("relative/file").equals("relative/file"),
+        "Android absolute paths of the application's mounts map to host paths");
+
+    var locales = context.getSystemService(android.app.LocaleManager.class);
+    check(locales != null && locales.getApplicationLocales().isEmpty(), "apps follow the system locales by default");
+    locales.setApplicationLocales(LocaleList.forLanguageTags("es-ES"));
+    check(locales.getApplicationLocales().get(0).getLanguage().equals("es"), "an app locale selection is kept");
+    locales.setApplicationLocales(LocaleList.getEmptyLocaleList());
+
+    var flags = new android.util.SparseBooleanArray();
+    flags.put(9, true); flags.put(2, false); flags.put(5, true);
+    check(flags.size() == 3 && flags.keyAt(0) == 2 && !flags.valueAt(0) && flags.get(9) && !flags.get(7)
+        && flags.indexOfValue(true) == 1, "SparseBooleanArray keeps keys sorted");
+    var longs = new android.util.SparseLongArray();
+    longs.put(3, Long.MAX_VALUE);
+    check(longs.get(3) == Long.MAX_VALUE && longs.get(4, -1) == -1, "SparseLongArray");
+
+    var gate = new ConditionVariable();
+    check(!gate.block(1), "a closed ConditionVariable times out");
+    gate.open();
+    check(gate.block(1) && gate.block(0), "an open ConditionVariable passes");
+
+    var audio = (android.media.AudioManager) context.getSystemService(android.content.Context.AUDIO_SERVICE);
+    var changes = new CopyOnWriteArrayList<Integer>();
+    var focus = new android.media.AudioFocusRequest.Builder(android.media.AudioManager.AUDIOFOCUS_GAIN)
+        .setOnAudioFocusChangeListener(changes::add).build();
+    check(audio.requestAudioFocus(focus) == android.media.AudioManager.AUDIOFOCUS_REQUEST_GRANTED
+        && audio.abandonAudioFocusRequest(focus) == android.media.AudioManager.AUDIOFOCUS_REQUEST_GRANTED
+        && audio.generateAudioSessionId() != audio.generateAudioSessionId(), "audio focus requests and session ids");
+
+    var hevc = Arrays.stream(new android.media.MediaCodecList(android.media.MediaCodecList.ALL_CODECS).getCodecInfos())
+        .filter(info -> Arrays.asList(info.getSupportedTypes()).contains("video/hevc")).findFirst().orElseThrow();
+    var caps = hevc.getCapabilitiesForType("video/hevc");
+    check(!hevc.isEncoder() && caps.getVideoCapabilities().isSizeSupported(8192, 4096)
+        && Arrays.stream(caps.profileLevels).anyMatch(level ->
+            level.profile == android.media.MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10)
+        && caps.getAudioCapabilities() == null, "MediaCodecList lists the host HEVC decoder");
+    var format = android.media.MediaFormat.createVideoFormat("video/hevc", 8192, 4096);
+    format.setFeatureEnabled(android.media.MediaCodecInfo.CodecCapabilities.FEATURE_TunneledPlayback, false);
+    check(!format.getFeatureEnabled(android.media.MediaCodecInfo.CodecCapabilities.FEATURE_TunneledPlayback)
+        && format.getLong("durationUs", 7) == 7 && format.getFloat("frame-rate", 30f) == 30f, "MediaFormat defaults");
+  }
+  private record BroadcastReceiverResult(android.content.BroadcastReceiver.PendingResult result, int code) {}
   private static void cancelledBroadcasts() throws Exception {
     var thread = new HandlerThread("cancelled-receiver");
     thread.start();
@@ -761,12 +916,39 @@ public final class FrameworkTest {
     memoryHostField.set(null, java.lang.reflect.Proxy.newProxyInstance(Host.class.getClassLoader(), new Class<?>[]{Host.class},
         (p, method, args) -> {
           if (method.getName().equals("processMemory")) return new long[]{4096, 1024};
+          if (method.getName().equals("audioOutputProperties")) return new int[]{0, 0};  // no output device
           throw new UnsupportedOperationException(method.getName());
         }));
     try {
       check(android.os.Debug.getNativeHeapAllocatedSize() == 4096L * 1024 && android.os.Debug.getNativeHeapSize() == 4096L * 1024
           && android.os.Debug.getNativeHeapFreeSize() == 0 && android.os.Debug.getPss() == 5120,
           "native heap is the unshared resident bytes and PSS is in KiB");
+      var memoryInfo = new android.os.Debug.MemoryInfo();
+      android.os.Debug.getMemoryInfo(memoryInfo);
+      boolean allStats = true;
+      for (String summary : new String[]{"java-heap", "native-heap", "code", "stack", "graphics", "private-other", "system", "total-pss", "total-swap"})
+        allStats &= memoryInfo.getMemoryStat("summary." + summary) != null;
+      check(allStats && memoryInfo.getMemoryStat("summary.native-heap").equals("4096") && memoryInfo.getMemoryStat("summary.system").equals("1024")
+          && memoryInfo.getMemoryStat("summary.total-pss").equals("5120") && memoryInfo.getMemoryStat("summary.unknown") == null,
+          "memory info has every AOSP summary stat");
+      var audioManager = new android.media.AudioManager();
+      check("48000".equals(audioManager.getProperty(android.media.AudioManager.PROPERTY_OUTPUT_SAMPLE_RATE))
+          && "240".equals(audioManager.getProperty(android.media.AudioManager.PROPERTY_OUTPUT_FRAMES_PER_BUFFER)),
+          "audio output properties answer without an output device");
+      // Photon Voice's echo-cancelling input routes voice chat (Android 12+).
+      var voice = new android.media.AudioManager() {
+        public android.media.AudioDeviceInfo[] getDevices(int flags) {
+          return new android.media.AudioDeviceInfo[]{new android.media.AudioDeviceInfo(7, false, "speaker")};
+        }
+      };
+      voice.setMode(android.media.AudioManager.MODE_IN_COMMUNICATION);
+      voice.setMicrophoneMute(true);
+      var communication = voice.getAvailableCommunicationDevices();
+      check(voice.getMode() == android.media.AudioManager.MODE_IN_COMMUNICATION && voice.isMicrophoneMute()
+          && communication.size() == 1 && voice.setCommunicationDevice(communication.get(0))
+          && voice.getCommunicationDevice().getId() == 7
+          && !voice.setCommunicationDevice(new android.media.AudioDeviceInfo(8, false, "gone")),
+          "voice chat sets its mode and communication device");
     } finally {
       memoryHostField.set(null, memoryOldHost);
     }
@@ -788,6 +970,27 @@ public final class FrameworkTest {
     check(users != null && users.isUserUnlocked() && !users.isManagedProfile(), "the owner user is unlocked");
     check(new android.content.Context().getSystemService(android.os.PowerManager.class) != null
         && new android.content.Context().getSystemService(String.class) == null, "class service lookup follows service names");
+    var wifi = new android.content.Context().getSystemService(android.net.wifi.WifiManager.class);
+    var multicast = wifi.createMulticastLock("venture");
+    multicast.acquire(); multicast.acquire(); multicast.release();
+    boolean stillHeld = multicast.isHeld();
+    multicast.release();
+    check(wifi.isWifiEnabled() && stillHeld && !multicast.isHeld(), "Wi-Fi multicast locks are reference counted");
+    boolean encoderRejected = false, unknownRejected = false;
+    try { android.media.MediaCodec.createByCodecName("OMX.google.h264.encoder"); } catch (java.io.IOException e) { encoderRejected = true; }
+    try { android.media.MediaCodec.createByCodecName("OMX.example.unknown"); } catch (IllegalArgumentException e) { unknownRejected = true; }
+    check(encoderRejected && unknownRejected, "codecs by name decode known formats only");
+    // androidx.emoji2's startup initializer subclasses ReplacementSpan.
+    android.text.style.ReplacementSpan span = new android.text.style.ReplacementSpan() {
+      @Override public int getSize(android.graphics.Paint paint, CharSequence text, int start, int end,
+                                   android.graphics.Paint.FontMetricsInt metrics) { return 1; }
+      @Override public void draw(android.graphics.Canvas canvas, CharSequence text, int start, int end, float x,
+                                 int top, int y, int bottom, android.graphics.Paint paint) { canvas.save(); }
+    };
+    var canvas = new android.graphics.Canvas();
+    span.draw(canvas, "e", 0, 1, 0, 0, 0, 0, null);
+    check(span instanceof android.text.style.UpdateAppearance && canvas.getSaveCount() == 2,
+        "replacement spans draw on an inert canvas");
   }
   private static void disabledTelemetry() throws Exception {
     // Reflect the exact class and method contracts requested by native clients.
@@ -1952,6 +2155,7 @@ public final class FrameworkTest {
     cursors();
     broadcasts();
     cancelledBroadcasts();
+    platformServices(obbContext);
     // UE 5.4 BatteryReceiver/VolumeReceiver register with API 26 flags on the GameThread.
     var battery = obbContext.registerReceiver(null, new android.content.IntentFilter(android.content.Intent.ACTION_BATTERY_CHANGED),
         android.content.Context.RECEIVER_EXPORTED);

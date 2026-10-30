@@ -52,6 +52,11 @@ Threads& threads() { static auto* value = new Threads; return *value; }
 namespace {
 thread_local unsigned elevated_depth = 0;
 #ifdef __linux__
+// A thread keeps its raised nice until it exits or the game lowers it: each
+// raise is a RealtimeKit request, and RealtimeKit refuses a user's requests
+// past its rate and thread limits, so raising again on every stream start
+// left later audio at nice 0. -21 means none is held.
+thread_local int held_nice = -21;
 // The lowest nice the process may set without privilege (RLIMIT_NICE).
 int permitted_nice() {
   rlimit limit{};
@@ -112,25 +117,30 @@ AudioThreadPriority::AudioThreadPriority() {
   errno = 0;
   previous_nice_ = getpriority(PRIO_PROCESS, tid);
   if (errno) return;
+  if (previous_nice_ <= held_nice) {
+    niced_ = true;
+    ++elevated_depth;
+    return;
+  }
   // Android's THREAD_PRIORITY_AUDIO.
   const auto [nice, method] = raise_nice(tid, -16, previous_nice_);
   niced_ = method != nullptr;
-  if (niced_) ++elevated_depth;
-  if (!reported.exchange(true)) {
-    if (niced_)
-      log::info("audio", "Audio threads: SCHED_FIFO refused (error {}); nice {} through {}", fifo_error, nice, method);
-    else
-      log::warn("audio", "Audio threads: SCHED_FIFO refused (error {}) and no raised priority is permitted; "
-                "they run at nice {}", fifo_error, previous_nice_);
+  if (niced_) {
+    ++elevated_depth;
+    held_nice = nice;
   }
+  static std::atomic<bool> raised{false}, refused{false};
+  if (niced_ ? raised.exchange(true) : refused.exchange(true)) return;
+  if (niced_)
+    log::info("audio", "Audio threads: SCHED_FIFO refused (error {}); nice {} through {}", fifo_error, nice, method);
+  else
+    log::warn("audio", "Audio threads: SCHED_FIFO refused (error {}) and no raised priority is permitted{}; "
+              "they run at nice {}", fifo_error, raised.load() ? " for a later thread" : "", previous_nice_);
 #endif
 }
 AudioThreadPriority::~AudioThreadPriority() {
 #ifdef __linux__
-  if (niced_) {
-    setpriority(PRIO_PROCESS, static_cast<id_t>(syscall(SYS_gettid)), previous_nice_);  // lowering needs no privilege
-    --elevated_depth;
-  }
+  if (niced_) --elevated_depth;
 #endif
   if (!changed_) return;
   sched_param previous{};

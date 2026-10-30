@@ -14,10 +14,23 @@ public final class GuestFiles {
     return path.equals("/proc") || path.startsWith("/proc/") || path.equals("/sys") || path.startsWith("/sys/")
         ? path : null;
   }
+  /** Android absolute paths of the application's mounts as host paths (RuntimeEnvironment.toHostPath). */
+  public static String host(String path) { return RuntimeEnvironment.toHostPath(path); }
   public static boolean exists(File file) {
     String path = virtualPath(file);
     return path == null ? file.exists()
         : RuntimeEnvironment.host().virtualFileExists(path.getBytes(StandardCharsets.UTF_8));
+  }
+  /**
+   * Android's File(parent, child) joins even an absolute child under the parent. App paths are
+   * host paths here, and WinNTFileSystem would join a drive-qualified child as "parent\C:\...",
+   * so the child's drive is dropped and the rest joins under the parent as on Android.
+   */
+  public static String child(Object parent, String child) {
+    if (parent == null || child == null || child.length() < 3 || child.charAt(1) != ':') return child;
+    char drive = child.charAt(0), slash = child.charAt(2);
+    boolean letter = (drive >= 'A' && drive <= 'Z') || (drive >= 'a' && drive <= 'z');
+    return letter && (slash == '\\' || slash == '/') ? child.substring(2) : child;
   }
   static final class Snapshot implements Runnable {
     final File file;

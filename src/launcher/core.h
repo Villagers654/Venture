@@ -199,6 +199,7 @@ protected:
     bool busy = false;
     std::string error;
     std::vector<ImportItem> items;
+    std::string search;  // filters a long list by name or package
   };
   struct ImportMatch {
     const meta::Game *game = nullptr;

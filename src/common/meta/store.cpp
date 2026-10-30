@@ -146,8 +146,8 @@ Game card(const Json &j) {
   g.publisher = str(j, "publisher_name");
   if (g.publisher.empty())
     g.publisher = str(j, "developer_name");
-  for (auto key :
-       {"cover_landscape_image", "hero", "cover_square_image", "icon_image"}) {
+  for (auto key : {"cover_landscape_image", "hero", "medium_landscape_image",
+                   "cover_square_image", "icon_image"}) {
     g.image = str(field(j, key), "uri");
     if (!g.image.empty())
       break;
@@ -161,12 +161,15 @@ Game card(const Json &j) {
   // Quest OS components and home environments are entitlements too, but not
   // games: first-party packages the store never offers, and environments.
   auto package = str(field(j, "latest_supported_binary"), "package_name");
+  if (package.empty())
+    package = str(j, "package_name");
   if (paths::safe_package(package))
     g.package = package;
   bool first_party = package.starts_with("com.oculus.") || package.starts_with("com.meta.") ||
                      package.starts_with("com.facebook.");
   g.system = package.find(".environment.") != std::string::npos || package.starts_with("com.meta.shell.env.") ||
-             (first_party && j.contains("baseline_offer") && j["baseline_offer"].is_null());
+             (first_party && ((j.contains("baseline_offer") && j["baseline_offer"].is_null()) ||
+                              field(j, "uninstall_restricted") == true));
   return g;
 }
 Snapshot parse_library(const Json &response) {
@@ -523,7 +526,8 @@ Snapshot Store::identity() const {
 }
 Snapshot Store::library() const {
   // The whole library is one reply (the query has no paging); a one-off 5xx
-  // is retried before it counts.
+  // is retried before it counts. Meta fails it for some large libraries, so
+  // a persistent 5xx lists the headset's library instead, a page at a time.
   for (int attempt = 0;; ++attempt) {
     try {
       return parse_library(query("4850747515044496"));
@@ -531,6 +535,13 @@ Snapshot Store::library() const {
       if (error.status < 500 || error.status >= 600 || stop_.stop_requested()) throw;
       log::warn("meta", "Library query (doc 4850747515044496) attempt {} failed: {}", attempt + 1, error.what());
       if (attempt == 2 || !pause_for(stop_, std::chrono::milliseconds(500 << attempt))) {
+        if (!stop_.stop_requested()) {
+          try {
+            return headset_library();
+          } catch (const std::exception &fallback) {
+            log::warn("meta", "Headset library query failed too: {}", fallback.what());
+          }
+        }
         std::string reason = error.what();
         if (auto end = reason.find(". Try signing in again."); end != reason.npos)
           reason.resize(end);
@@ -539,6 +550,64 @@ Snapshot Store::library() const {
       }
     }
   }
+}
+// The library query a Quest itself runs: Android entitlements only, paged
+// by cursor. The variables are the headset's own; a persisted query takes
+// the variables it was built with.
+Snapshot Store::headset_library() const {
+  Json vars = {{"smallLandscapeImageSize", "180x100"},
+               {"skipFetchingRequiredUpdates", true},
+               {"coverSquareImageSize", "225x225"},
+               {"iconImageSize", "64x64"},
+               {"landscapeImageSize", "405x720"},
+               {"fetch_fallback_uris", true},
+               {"machine_id", "1"},
+               {"imageScale", 1.0},
+               {"cursorID", nullptr},
+               {"count", 100},
+               {"allFields", true},
+               {"onlyDefaultApps", false},
+               {"excludePackages", nullptr},
+               {"fetchAchievementBasedTrialInfo", false},
+               {"compatibilityFilter", "DEFAULT"}};
+  auto s = identity();
+  std::set<std::string> seen;
+  // A cursor that never advances, or a library past any real size, stops
+  // the paging; what was listed is kept as partial.
+  for (int page = 0; page < 100 && !stop_.stop_requested(); ++page) {
+    auto response = request("https://graph.oculus.com/graphql",
+                            {{"access_token", token_},
+                             {"client_doc_id", "412097616712440770934752951129"},
+                             {"variables", vars.dump()}});
+    auto &c = field(field(field(response, "data"), "entitlements"), "active_android_entitlements");
+    if (!field(c, "edges").is_array())
+      throw std::runtime_error("Meta returned an invalid list. Previous library was kept.");
+    for (auto &e : nodes(c)) {
+      auto &item = field(e, "item");
+      auto id = str(item, "id");
+      if (!item.is_object() || !digits(id, 5))
+        throw std::runtime_error("Meta returned incomplete entitlements. Previous library was kept.");
+      if (quest_app(item) && seen.insert(id).second) {
+        auto g = card(item);
+        g.owned = true;
+        s.games.push_back(std::move(g));
+      }
+    }
+    auto &info = field(c, "page_info");
+    if (field(info, "has_next_page") == false) {
+      s.complete = true;
+      break;
+    }
+    auto cursor = str(info, "end_cursor");
+    if (cursor.empty() || vars["cursorID"] == cursor)
+      break;
+    vars["cursorID"] = cursor;
+  }
+  if (!s.complete)
+    s.warning = "Meta returned a partial or unconfirmed library. Previously "
+                "confirmed titles were kept.";
+  log::info("meta", "Listed {} Quest titles from the headset library query; complete={}", s.games.size(), s.complete);
+  return s;
 }
 Json Store::binary_details(std::string_view id) const {
   require_id(id);

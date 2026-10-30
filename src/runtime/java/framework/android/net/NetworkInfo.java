@@ -18,6 +18,13 @@ public final class NetworkInfo {
   public int getType() {
     return type;
   }
+  // TelephonyManager.NETWORK_TYPE_UNKNOWN: the host's links are not cellular.
+  public int getSubtype() {
+    return 0;
+  }
+  public String getSubtypeName() {
+    return "";
+  }
   public String getTypeName() {
     return switch (type) {
       case ConnectivityManager.TYPE_WIFI -> "WIFI";

@@ -18,6 +18,11 @@ public class TelephonyManager {
   public String getSimCountryIso() {
     return "";
   }
+  public void registerTelephonyCallback(java.util.concurrent.Executor executor, TelephonyCallback callback) {
+    java.util.Objects.requireNonNull(executor);
+    java.util.Objects.requireNonNull(callback);
+  }
+  public void unregisterTelephonyCallback(TelephonyCallback callback) {}
   public void listen(PhoneStateListener l, int events) {
     if ((events & 32) != 0)
       l.onCallStateChanged(0, "");

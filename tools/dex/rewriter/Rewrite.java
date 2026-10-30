@@ -16,6 +16,15 @@ public final class Rewrite {
             default -> null;
         };
     }
+    static boolean hostPathConstructor(String owner, String desc) {
+        return switch (owner) {
+            case "java/io/File" -> desc.equals("(Ljava/lang/String;)V");
+            case "java/io/RandomAccessFile" -> desc.equals("(Ljava/lang/String;Ljava/lang/String;)V");
+            case "java/io/FileOutputStream", "java/io/FileWriter" ->
+                desc.equals("(Ljava/lang/String;)V") || desc.equals("(Ljava/lang/String;Z)V");
+            default -> false;
+        };
+    }
     static boolean load(String owner, String name, String desc) {
         return (owner.equals("java/lang/System") || owner.equals("java/lang/Runtime"))
             && (name.equals("load") || name.equals("loadLibrary")) && desc.equals("(Ljava/lang/String;)V");
@@ -68,6 +77,31 @@ public final class Rewrite {
                                     // must stay non-virtual, or GuestFiles.exists would recurse into it.
                                     rewrite("java/io/File.exists virtual filesystem query");
                                     super.visitMethodInsn(Opcodes.INVOKESTATIC, "com/venture/runtime/GuestFiles", "exists", "(Ljava/io/File;)Z", false);
+                                } else if (opcode == Opcodes.INVOKESPECIAL && cls.equals("java/io/File") && method.equals("<init>")
+                                        && (descriptor.equals("(Ljava/io/File;Ljava/lang/String;)V") || descriptor.equals("(Ljava/lang/String;Ljava/lang/String;)V"))) {
+                                    // parent, child -> parent, GuestFiles.child(parent, child)
+                                    rewrite("java/io/File.<init> child path join");
+                                    super.visitInsn(Opcodes.DUP2);
+                                    super.visitMethodInsn(Opcodes.INVOKESTATIC, "com/venture/runtime/GuestFiles", "child", "(Ljava/lang/Object;Ljava/lang/String;)Ljava/lang/String;", false);
+                                    super.visitInsn(Opcodes.SWAP);
+                                    super.visitInsn(Opcodes.POP);
+                                    if (descriptor.startsWith("(Ljava/lang/String;")) {
+                                        super.visitInsn(Opcodes.SWAP);
+                                        hostPath();
+                                        super.visitInsn(Opcodes.SWAP);
+                                    }
+                                    super.visitMethodInsn(opcode, cls, method, descriptor, itf);
+                                } else if (opcode == Opcodes.INVOKESPECIAL && method.equals("<init>") && hostPathConstructor(cls, descriptor)) {
+                                    // Android absolute paths (/storage/emulated/0/..., /data/user/0/<pkg>/...) that the
+                                    // app hardcodes or gets from native code name the application's host directories.
+                                    rewrite(cls + ".<init> guest path");
+                                    if (descriptor.equals("(Ljava/lang/String;)V")) hostPath();
+                                    else {  // path, one category-1 argument (mode, append flag)
+                                        super.visitInsn(Opcodes.SWAP);
+                                        hostPath();
+                                        super.visitInsn(Opcodes.SWAP);
+                                    }
+                                    super.visitMethodInsn(opcode, cls, method, descriptor, itf);
                                 } else if (cls.equals("java/lang/reflect/Method") && method.equals("invoke") && descriptor.equals("(Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;")) {
                                     rewrite("reflective native-load interception");
                                     super.visitMethodInsn(Opcodes.INVOKESTATIC, LOADER, "invoke", "(Ljava/lang/reflect/Method;Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;", false);
@@ -80,7 +114,21 @@ public final class Rewrite {
                                     }
                                     rewrite(cls + "." + method);
                                     super.visitMethodInsn(Opcodes.INVOKESTATIC, LOADER, method, descriptor, false);
+                                } else if ((opcode == Opcodes.INVOKESTATIC || opcode == Opcodes.INVOKESPECIAL) && !itf && isInterface(cls)) {
+                                    // DEX invoke-static/direct does not say whether the owner is an interface,
+                                    // and dex2jar emits a Methodref. The JVM requires an InterfaceMethodref
+                                    // (IncompatibleClassChangeError), e.g. D8 lambdas calling a static
+                                    // lambda$ body on an interface.
+                                    rewrite("interface method reference");
+                                    super.visitMethodInsn(opcode, cls, method, descriptor, true);
                                 } else super.visitMethodInsn(opcode, cls, method, descriptor, itf);
+                            }
+                            void hostPath() {
+                                super.visitMethodInsn(Opcodes.INVOKESTATIC, "com/venture/runtime/GuestFiles", "host", "(Ljava/lang/String;)Ljava/lang/String;", false);
+                            }
+                            boolean isInterface(String type) {
+                                Hierarchy.Info info = hierarchy.types.get(type);
+                                return info != null && info.isInterface();
                             }
                             Object constant(Object value) {
                                 if (value instanceof Handle h && (load(h.getOwner(), h.getName(), h.getDesc()) || exit(h.getOwner(), h.getName(), h.getDesc()))) {
@@ -88,6 +136,11 @@ public final class Rewrite {
                                     String d = h.getTag() == Opcodes.H_INVOKESTATIC ? h.getDesc()
                                         : "(Ljava/lang/Runtime;" + h.getDesc().substring(1);
                                     return new Handle(Opcodes.H_INVOKESTATIC, LOADER, h.getName(), d, false);
+                                }
+                                if (value instanceof Handle h && !h.isInterface() && isInterface(h.getOwner())
+                                        && (h.getTag() == Opcodes.H_INVOKESTATIC || h.getTag() == Opcodes.H_INVOKESPECIAL)) {
+                                    rewrite("interface method handle");
+                                    return new Handle(h.getTag(), h.getOwner(), h.getName(), h.getDesc(), true);
                                 }
                                 if (value instanceof ConstantDynamic c) {
                                     Object[] a = new Object[c.getBootstrapMethodArgumentCount()];

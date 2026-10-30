@@ -24,6 +24,20 @@ public final class MediaFormat {
   public long getLong(String key) { return (Long) values.get(key); }
   public void setFloat(String key, float value) { values.put(key, value); }
   public float getFloat(String key) { return (Float) values.get(key); }
+  public float getFloat(String key, float fallback) { return containsKey(key) ? getFloat(key) : fallback; }
+  public long getLong(String key, long fallback) { return containsKey(key) ? getLong(key) : fallback; }
+  public String getString(String key, String fallback) { String value = getString(key); return value != null ? value : fallback; }
+  public Number getNumber(String key) { return (Number) values.get(key); }
+  public Number getNumber(String key, Number fallback) { Number value = getNumber(key); return value != null ? value : fallback; }
+  public void removeKey(String key) { values.remove(key); }
+  public java.util.Set<String> getKeys() { return values.keySet(); }
+  // AOSP stores features as "feature-<name>" integer keys.
+  public void setFeatureEnabled(String feature, boolean enabled) { setInteger("feature-" + feature, enabled ? 1 : 0); }
+  public boolean getFeatureEnabled(String feature) {
+    Object value = values.get("feature-" + feature);
+    if (!(value instanceof Integer i)) throw new IllegalArgumentException("feature is not specified");
+    return i != 0;
+  }
   public void setString(String key, String value) { values.put(key, value); }
   public String getString(String key) { return (String) values.get(key); }
   public void setByteBuffer(String key, ByteBuffer value) { values.put(key, value); }

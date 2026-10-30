@@ -51,9 +51,15 @@ public class VirtualFilesFixture {
     try (var input = new FileInputStream(nativeFile.toString())) {
       check(new String(input.readAllBytes(), StandardCharsets.UTF_8).equals("host file"));
     }
+    // Host paths pass through the rewritten guest-path constructors unchanged.
+    try (var file = new RandomAccessFile(nativeFile.toString(), "r")) { check(file.read() == 'h'); }
+    Path written = Path.of(args[0], "written.txt");
+    try (var output = new FileOutputStream(written.toString(), false)) { output.write('w'); }
+    check(new File(written.toString()).length() == 1);
+    check(ItfCaller.call().equals("interface static"));
     try (var snapshots = Files.list(Path.of(System.getProperty("java.io.tmpdir")))) {
       check(snapshots.findAny().isEmpty());
     }
-    System.out.println("PASS rewritten virtual reads, fresh independent snapshots, host files and cleanup");
+    System.out.println("PASS rewritten virtual reads, fresh independent snapshots, host files, interface calls and cleanup");
   }
 }

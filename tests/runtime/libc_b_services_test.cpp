@@ -166,6 +166,12 @@ TEST_CASE("libc B: stdio and legacy FILE array") {
   CHECK(call("fgets", {h2g(line), sizeof(line), static_cast<GuestAddr>(f)}) ==
         static_cast<std::int64_t>(h2g(line)));
   CHECK(std::string(line) == "hello\n");
+  // Bionic's unlocked variant (Unreal reads /proc/meminfo with it).
+  CHECK(call("fgets_unlocked", {h2g(line), sizeof(line), static_cast<GuestAddr>(f)}) ==
+        static_cast<std::int64_t>(h2g(line)));
+  CHECK(std::string(line) == "world");
+  CHECK(call("ferror_unlocked", {static_cast<GuestAddr>(f)}) == 0);
+  CHECK(call("fseek", {static_cast<GuestAddr>(f), 6, 0}) == 0);
   CHECK(call("ftell", {static_cast<GuestAddr>(f)}) == 6);
   CHECK(call("ungetc", {'X', static_cast<GuestAddr>(f)}) == 'X');
   CHECK(call("fgetc", {static_cast<GuestAddr>(f)}) == 'X');

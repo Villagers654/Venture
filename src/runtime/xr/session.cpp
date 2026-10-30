@@ -1,5 +1,6 @@
 #include "core/xr_call_trace.h"
 #include "xr/menu_chord.h"
+#include "common/first_frame_progress.h"
 #include "common/startup_progress.h"
 #include "xr/dev_dump.h"
 #include "xr/session.h"
@@ -819,6 +820,7 @@ XrResult Session::end(const XrFrameEndInfo *info, std::shared_ptr<const void> ow
     ++frame_index;
     vulkan::timing_end_frame(info->displayTime, guest_swap_interval, display_timing.rate());
     if (frame_index == 1) { profile::mark("first_frame_submission"); startup_diagnostics::arm(); }
+    startup_diagnostics::note_frame_submitted();
     if (profile::enabled) {
       for (std::uint32_t i = 0; i < info->layerCount; ++i)
         if (info->layers[i]->type == XR_TYPE_COMPOSITION_LAYER_PROJECTION) {

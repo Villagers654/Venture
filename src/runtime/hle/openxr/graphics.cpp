@@ -469,7 +469,19 @@ XrResult create_swapchain(XrSession handle, const XrSwapchainCreateInfo *info, X
       log::warn("xr", "The host offers no swapchain format {}; the game's depth stays its own and is not "
                       "given to the host compositor", info->format);
   }
-  if (!format_supported && state().gles) {
+  // A host may list a depth format the GPU cannot attach (Virtual Desktop
+  // lists D24S8 on AMD): the images take the device's depth format, as the
+  // game's own images do, and the host gets that depth only if it lists it.
+  if (format_supported && !state().gles && !surface && depth_stencil_format(VkFormat(copy.format))) {
+    const auto device = vulkan::host_depth_format(state().graphics.physicalDevice, VkFormat(copy.format));
+    if (device != VkFormat(copy.format)) {
+      copy.format = device;
+      guest_only = !offered(device);
+    }
+  }
+  // A Quest offers every 8-bit RGBA order and encoding (SteamVR on AMD omits
+  // R8G8B8A8_UNORM); the host chain takes another with a converting copy.
+  if (!format_supported && (state().gles || !surface)) {
     const auto rgba8 = [](std::int64_t f) {
       return f == VK_FORMAT_R8G8B8A8_UNORM || f == VK_FORMAT_B8G8R8A8_UNORM ||
              f == VK_FORMAT_R8G8B8A8_SRGB || f == VK_FORMAT_B8G8R8A8_SRGB;

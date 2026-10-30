@@ -1,9 +1,11 @@
 #include "common/android/adb.h"
 
 #include "common/environment.h"
+#include "common/log.h"
 #include "common/process.h"
 
 #include <algorithm>
+#include <cstdio>
 #include <format>
 
 namespace venture::android::adb {
@@ -248,9 +250,30 @@ void Client::pull(const RemoteFile &file, const std::function<void(std::span<con
       &error, stop);
   if (stop.stop_requested()) throw std::runtime_error("Transfer paused.");
   if (code != 0 || received != file.size - offset) {
+    // exec-out drops the remote command's errors. Ask the headset again through
+    // the shell, which reports them, to tell a changed or unreadable file from
+    // a dropped connection.
     auto reason = first_error(error);
-    throw std::runtime_error("The headset transfer of " + file.path.substr(file.path.rfind('/') + 1) +
-                             " stopped early" + (reason.empty() ? ". Check the cable and retry." : ": " + reason));
+    std::string now;
+    if (reason.empty() && !stop.stop_requested()) {
+      try {
+        now = shell("stat -c %s " + *quoted + " && cat " + *quoted + " >/dev/null && echo readable", stop);
+      } catch (const std::exception &e) {
+        reason = e.what();
+      }
+    }
+    std::uint64_t size = 0;
+    const bool readable = now.find("readable") != std::string::npos;
+    const bool changed = readable && std::sscanf(now.c_str(), "%llu", reinterpret_cast<unsigned long long *>(&size)) == 1 &&
+        size != file.size;
+    const auto name = file.path.substr(file.path.rfind('/') + 1);
+    log::warn("adb", "Transfer of {} stopped: exit {}, {} of {} bytes from offset {}; now {} bytes, readable {}; {}",
+              file.path, code, received, file.size - offset, offset, size, readable, reason.empty() ? "no error" : reason);
+    if (changed)
+      throw std::runtime_error(name + " changed on the headset while it was copied. Close the game on the headset and retry.");
+    if (!reason.empty())
+      throw std::runtime_error("The headset could not send " + name + ": " + reason);
+    throw std::runtime_error("The headset transfer of " + name + " stopped early. Check the cable and retry.");
   }
 }
 std::optional<std::string> Client::sha256(const RemoteFile &file, std::stop_token stop) const {

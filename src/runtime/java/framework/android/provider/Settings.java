@@ -7,6 +7,8 @@ public final class Settings {
   }
   public static class System {
     public static final android.net.Uri CONTENT_URI = android.net.Uri.parse("content://settings/system");
+    public static final android.net.Uri DEFAULT_RINGTONE_URI = getUriFor("ringtone"),
+        DEFAULT_NOTIFICATION_URI = getUriFor("notification_sound"), DEFAULT_ALARM_ALERT_URI = getUriFor("alarm_alert");
     public static android.net.Uri getUriFor(String name) {
       return android.net.Uri.parse("content://settings/system/" + name);
     }
@@ -46,6 +48,7 @@ public final class Settings {
   public static class Global {
     public static final String DEVICE_NAME = "device_name";
     public static final android.net.Uri CONTENT_URI = android.net.Uri.parse("content://settings/global");
+    public static android.net.Uri getUriFor(String name) { return android.net.Uri.withAppendedPath(CONTENT_URI, name); }
     public static String getString(android.content.ContentResolver r, String key) {
       if (DEVICE_NAME.equals(key)) return android.os.Build.MODEL;
       // The VrApi runtime has no Android developer-mode services enabled.
@@ -55,6 +58,15 @@ public final class Settings {
     public static int getInt(android.content.ContentResolver r, String key, int def) {
       try {
         return Integer.parseInt(getString(r, key));
+      } catch (NumberFormatException e) {
+        return def;
+      }
+    }
+    public static float getFloat(android.content.ContentResolver r, String key, float def) {
+      String value = getString(r, key);
+      if (value == null) return def;
+      try {
+        return Float.parseFloat(value);
       } catch (NumberFormatException e) {
         return def;
       }

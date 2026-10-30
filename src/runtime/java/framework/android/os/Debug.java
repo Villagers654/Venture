@@ -12,11 +12,31 @@ public final class Debug {
   // The hosted JVM is not Dalvik. Account unshared resident host pages in the
   // native bucket and proportional shared pages in other; do not invent a
   // Dalvik heap, swap residency, or the Android kernel's detailed categories.
+  // The summary stats are AOSP's full key set (shared pages count as system);
+  // The Climb reads them at start and stops on a missing one.
   public static class MemoryInfo {
     public int dalvikPss, nativePss, otherPss;
     public int getTotalPss() { return dalvikPss + nativePss + otherPss; }
+    public int getTotalSwappedOutPss() { return 0; }
+    public int getSummaryJavaHeap() { return dalvikPss; }
+    public int getSummaryNativeHeap() { return nativePss; }
+    public int getSummaryCode() { return 0; }
+    public int getSummaryStack() { return 0; }
+    public int getSummaryGraphics() { return 0; }
+    public int getSummaryPrivateOther() { return 0; }
+    public int getSummarySystem() { return otherPss; }
+    public int getSummaryTotalPss() { return getTotalPss(); }
+    public int getSummaryTotalSwap() { return 0; }
     public Map<String, String> getMemoryStats() {
-      return Map.of("summary.total-pss", Integer.toString(getTotalPss()));
+      return Map.of("summary.java-heap", Integer.toString(getSummaryJavaHeap()),
+          "summary.native-heap", Integer.toString(getSummaryNativeHeap()),
+          "summary.code", Integer.toString(getSummaryCode()),
+          "summary.stack", Integer.toString(getSummaryStack()),
+          "summary.graphics", Integer.toString(getSummaryGraphics()),
+          "summary.private-other", Integer.toString(getSummaryPrivateOther()),
+          "summary.system", Integer.toString(getSummarySystem()),
+          "summary.total-pss", Integer.toString(getSummaryTotalPss()),
+          "summary.total-swap", Integer.toString(getSummaryTotalSwap()));
     }
     public String getMemoryStat(String name) { return getMemoryStats().get(name); }
   }

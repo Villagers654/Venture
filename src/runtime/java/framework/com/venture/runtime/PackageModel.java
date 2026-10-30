@@ -17,6 +17,8 @@ public final class PackageModel {
   private final Map<ActivityFilter, IntentFilter> matchers = new IdentityHashMap<>();
   public final List<ProviderInfo> providers = new ArrayList<>();
   public final List<ServiceInfo> services = new ArrayList<>();
+  // Manifest receivers, for their component information and enabled state.
+  public final List<ActivityInfo> receivers = new ArrayList<>();
   public record ServiceFilter(ServiceInfo service, IntentFilter filter) {}
   public final List<ServiceFilter> serviceFilters = new ArrayList<>();
   public final Set<String> permissions = new HashSet<>();
@@ -142,6 +144,16 @@ public final class PackageModel {
           }
           serviceFilters.add(new ServiceFilter(s, matcher));
         }
+      } else if (n.name.equals("receiver")) {
+        ActivityInfo r = new ActivityInfo();
+        r.name = qualified(n.text("name", ""));
+        r.packageName = info.packageName;
+        r.applicationInfo = app;
+        r.metaData = metadata(n);
+        r.processName = processName(n.text("process", app.processName));
+        r.enabled = n.integer("enabled", 1) != 0 && app.enabled;
+        r.exported = n.integer("exported", 0) != 0;
+        receivers.add(r);
       } else if (n.name.equals("provider")) {
         ProviderInfo p = new ProviderInfo();
         p.name = qualified(n.text("name", ""));

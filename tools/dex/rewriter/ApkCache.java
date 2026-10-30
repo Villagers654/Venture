@@ -8,6 +8,7 @@ import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.charset.*;
 import java.nio.file.*;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.security.MessageDigest;
 import java.security.SecureRandom;
@@ -108,7 +109,76 @@ public final class ApkCache {
         for (Path p : hierarchy) ancestry.add(absolute(p));
         String key = sha256(pkg.getBytes(StandardCharsets.UTF_8)).substring(0, 32);
         try (FileChannel lock = exclusiveFile(cache.resolve(".locks").resolve(key))) {
-            return convertLocked(apk, pkg, cache, frameworks, force, ancestry);
+            var result = convertLocked(apk, pkg, cache, frameworks, force, ancestry);
+            // The runtime's own <cache>/<package>/<version>/java holds one package
+            // only; shared CLI caches are never pruned.
+            Path version = cache.getParent(), owner = version == null ? null : version.getParent();
+            if (cache.getFileName().toString().equals("java") && owner != null
+                    && owner.getFileName().toString().equals(pkg))
+                pruneGenerations(cache, result.getKey(), result.getValue());
+            return result;
+        }
+    }
+
+    /** Each Venture update converts the APK again; earlier generations are only
+     *  disk use. Called under the package lock, so no other conversion is in
+     *  progress. A file a running JVM still holds open stays until a later launch. */
+    static void pruneGenerations(Path cache, Path current, Map<String, Object> report) {
+        Set<Path> keep = new HashSet<>();
+        keep.add(absolute(current));
+        Object raw = report.get("translation_report");
+        // Reports record extended-length paths (filesystemString).
+        String slash = String.valueOf((char) 92), prefix = slash + slash + "?" + slash, text = raw instanceof String s ? s : "";
+        if (text.startsWith(prefix + "UNC" + slash)) text = slash + slash + text.substring(prefix.length() + 4);
+        else if (text.startsWith(prefix)) text = text.substring(prefix.length());
+        if (!text.isEmpty()) keep.add(absolute(Path.of(text)).getParent());
+        try (DirectoryStream<Path> entries = Files.newDirectoryStream(cache)) {
+            for (Path entry : entries) {
+                String name = entry.getFileName().toString();
+                if (name.equals(".locks") || (name.equals("translation") && text.isEmpty())) continue;
+                if (!name.equals("linked") && !name.equals("translation")) {
+                    deleteTree(entry);  // earlier layouts and abandoned work directories
+                    continue;
+                }
+                try (DirectoryStream<Path> contexts = Files.newDirectoryStream(entry)) {
+                    for (Path context : contexts) {
+                        boolean holds = false;
+                        for (Path kept : keep) holds |= absolute(context).equals(kept.getParent());
+                        if (!holds) {
+                            deleteTree(context);
+                            continue;
+                        }
+                        try (DirectoryStream<Path> generations = Files.newDirectoryStream(context)) {
+                            for (Path generation : generations)
+                                if (Files.isDirectory(generation, LinkOption.NOFOLLOW_LINKS) && !keep.contains(absolute(generation)))
+                                    deleteTree(generation);
+                        }
+                    }
+                }
+            }
+        } catch (IOException e) {
+            // Pruning is best effort; the conversion itself succeeded.
+        }
+    }
+
+    /** Deletes what it can; never follows links (a link is removed, not its target). */
+    static void deleteTree(Path root) {
+        try {
+            Files.walkFileTree(root, new SimpleFileVisitor<>() {
+                @Override public FileVisitResult visitFile(Path file, BasicFileAttributes attributes) {
+                    try { Files.delete(file); } catch (IOException e) { /* in use */ }
+                    return FileVisitResult.CONTINUE;
+                }
+                @Override public FileVisitResult visitFileFailed(Path file, IOException e) {
+                    return FileVisitResult.CONTINUE;
+                }
+                @Override public FileVisitResult postVisitDirectory(Path directory, IOException e) {
+                    try { Files.delete(directory); } catch (IOException ignored) { /* not empty */ }
+                    return FileVisitResult.CONTINUE;
+                }
+            });
+        } catch (IOException e) {
+            // best effort
         }
     }
 
@@ -244,14 +314,8 @@ public final class ApkCache {
             // but distinguish missing linkage from lost/invalid translated code.
             // The runtime may load intact classes lazily with HotSpot -Xverify:all;
             // a deferred class still fails verification/linkage if actually reached.
-            Set<String> missingFrames = new HashSet<>();
-            for (Object o : failures) {
-                Map<?, ?> f = (Map<?, ?>) o;
-                if ("frames".equals(f.get("stage")) && str(f, "detail").contains("missing frame hierarchy:"))
-                    missingFrames.add(((String) Objects.requireNonNull(f.get("class"), "class")).replace("/", "."));
-            }
             boolean deferred = true;
-            for (Object o : failures) deferred &= deferredLinkage((Map<?, ?>) o, missingFrames);
+            for (Object o : failures) deferred &= deferredLinkage((Map<?, ?>) o);
             report.put("translation_complete", Files.exists(merged) && deferred);
         } catch (Exception e) {
             failures.add(map("stage", "pipeline", "detail", message(e)));
@@ -264,15 +328,15 @@ public final class ApkCache {
         return publish(work, context, report);
     }
 
-    static boolean deferredLinkage(Map<?, ?> f, Set<String> missingFrames) {
+    static boolean deferredLinkage(Map<?, ?> f) {
         if ("frames".equals(f.get("stage"))) return str(f, "detail").contains("missing frame hierarchy:");
         if ("hotspot".equals(f.get("stage"))) {
-            Matcher location = Pattern.compile("(?U)Location:\\s+([^\\s.]+)\\.").matcher(str(f, "detail"));
-            Object frameOwner = location.find() ? location.group(1).replace("/", ".") : f.get("class");
+            // A class that does not verify fails when it is reached, as ART
+            // fails a method when it runs; bundled SDK code a VR game never
+            // reaches must not stop the game.
             Object kind = f.get("kind");
             return "java.lang.NoClassDefFoundError".equals(kind) || "java.lang.ClassNotFoundException".equals(kind)
-                || ("java.lang.VerifyError".equals(kind) && missingFrames.contains(frameOwner)
-                    && str(f, "detail").startsWith("Expecting a stackmap frame"));
+                || "java.lang.VerifyError".equals(kind);
         }
         return false;
     }

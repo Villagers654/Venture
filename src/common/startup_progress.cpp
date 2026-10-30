@@ -17,6 +17,8 @@ const std::int64_t seconds = [] {
 }();
 Trigger trigger;
 std::atomic<bool> submitted{false};
+std::atomic<std::uint64_t> frames{0};
+std::atomic<int> host_state{0};
 std::int64_t now() {
   return std::chrono::duration_cast<std::chrono::nanoseconds>(
       std::chrono::steady_clock::now().time_since_epoch()).count();
@@ -36,6 +38,10 @@ void arm() {
   if (enabled) trigger.arm(now());
 }
 bool first_frame_submitted() { return submitted.load(std::memory_order_relaxed); }
+void note_frame_submitted() { frames.fetch_add(1, std::memory_order_relaxed); }
+std::uint64_t frames_submitted() { return frames.load(std::memory_order_relaxed); }
+void note_host_session_state(int state) { host_state.store(state, std::memory_order_relaxed); }
+bool host_session_focused() { return host_state.load(std::memory_order_relaxed) == 5; }  // XR_SESSION_STATE_FOCUSED
 std::int64_t first_frame_timeout_seconds() {
   static const auto value = [] {
     const auto* text = environment::getenv("VENTURE_FIRST_FRAME_SNAPSHOT_SECONDS");

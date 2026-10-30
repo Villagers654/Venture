@@ -120,6 +120,7 @@ public:
   std::string download_url(const File &file) const;
 
 private:
+  Snapshot headset_library() const;
   Json binary_details(std::string_view id) const;
   Json fallback_assets(std::string_view id) const;
   std::string token_;

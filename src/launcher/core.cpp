@@ -124,6 +124,7 @@ void Core::start(bool refresh_library) {
   downloads_ = std::make_unique<download::Manager>(data_, [this] { wake(); },
       std::move(services), persistent);
   downloads_->set_account(account_key_);
+  downloads_->set_parallel(unsigned(settings_.parallel_downloads));
   rescan();
   if (refresh_library && session_ && !options_.offline && !options_.launch_requested)
     refresh();
@@ -184,6 +185,7 @@ void Core::apply_settings(library::Settings next, bool announce) {
     addon_errors_.clear();
   }
   settings_ = std::move(next);
+  if (downloads_) downloads_->set_parallel(unsigned(settings_.parallel_downloads));
   {
     std::lock_guard lock(adb_mutex_);
     adb_setting_ = settings_.adb;

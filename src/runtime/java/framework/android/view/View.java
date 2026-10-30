@@ -142,7 +142,7 @@ public class View implements ViewParent {
   }
   public void requestLayout() {
     layoutRequested = true;
-    observer.dispatchOnGlobalLayout();
+    observer.dispatchTraversal();
   }
   private boolean layoutRequested;
   public void forceLayout() {
@@ -384,7 +384,7 @@ public class View implements ViewParent {
       if (!attached)
         return;
       seedMeasurement();
-      observer.dispatchOnGlobalLayout();
+      observer.dispatchTraversal();
     });
   }
   // Stand in for the traversal's measure pass over this attached subtree.

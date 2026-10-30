@@ -11,6 +11,7 @@
 #include "core/process_image.h"
 #include "common/log.h"
 #include <algorithm>
+#include <array>
 #include <cstring>
 namespace venture::hle::libc {
 namespace {
@@ -361,5 +362,21 @@ void register_loader(HleLibrary& lib) {
   B("__loader_android_get_LD_LIBRARY_PATH", ld_path);
   B("__loader_android_update_LD_LIBRARY_PATH", update_path);
 #undef B
+}
+// bionic's libdl dlopen hands its return address to the linker's
+// __loader_dlopen through a BL. Tools such as liblinkernsbypass follow the
+// first BL from &dlopen to reach the linker, so A64 dlopen has that shape.
+void shape_dlopen(HleLibrary& libdl, const HleLibrary& loader) {
+  const auto target = loader.hle_symbol("__loader_dlopen");
+  libdl.add_function("dlopen", code_stub(std::array<std::uint32_t, 10>{
+      0xa9bf7bfdu,  // stp x29, x30, [sp, #-16]!
+      0x910003fdu,  // mov x29, sp
+      0xaa1e03e2u,  // mov x2, x30
+      0x94000003u,  // bl 1f
+      0xa8c17bfdu,  // ldp x29, x30, [sp], #16
+      0xd65f03c0u,  // ret
+      0x58000050u,  // 1: ldr x16, 2f
+      0xd61f0200u,  // br x16
+      std::uint32_t(target), std::uint32_t(target >> 32)}, "dlopen"));  // 2: __loader_dlopen
 }
 }  // namespace venture::hle::libc

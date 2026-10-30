@@ -63,7 +63,7 @@ inline constexpr char32_t library = 0xE8F1, download = 0xE896, settings = 0xE713
                           globe = 0xE774, chevron_right = 0xE76C, chevron_left = 0xE76B, sort = 0xE8CB,
                           lock = 0xE72E, chevron_down = 0xE70D, chevron_up = 0xE70E, add = 0xE710, star = 0xE734,
                           star_fill = 0xE735, swap = 0xE8AB, package = 0xE7B8, cloud = 0xE753, puzzle = 0xEA86,
-                          error = 0xE783, game = 0xE7FC, people = 0xE716;
+                          error = 0xE783, game = 0xE7FC, people = 0xE716, save = 0xE74E;
 }
 
 // --- Scale & motion ---------------------------------------------------------
