@@ -320,6 +320,27 @@ std::string root(const fs::path &file, bool legacy) {
 }
 #endif
 } // namespace
+namespace secret_seal {
+void save(const fs::path &file, std::string_view context,
+          std::string_view plaintext) {
+  try {
+    seal(file, std::string(context), plaintext);
+  } catch (const std::exception &) {
+    throw std::runtime_error("Could not save the sealed local file.");
+  }
+}
+std::optional<std::string> load(const fs::path &file, std::string_view context) {
+  try {
+    return unseal(file, std::string(context));
+  } catch (const std::exception &) {
+    throw std::runtime_error("Could not unlock the sealed local file.");
+  }
+}
+void clear(const fs::path &file) {
+  remove_sealed(file);
+  fs::remove(file);
+}
+} // namespace secret_seal
 std::optional<Session> SecretStore::load() const {
   auto plain = keyring_load(file_, key_);
   if (!plain) plain = unseal(file_, slot_of(key_));
