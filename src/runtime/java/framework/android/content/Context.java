@@ -152,7 +152,7 @@ public class Context {
   private static File child(File root, String name) {
     if (name.contains("/") || name.contains("\\") || name.equals(".."))
       throw new IllegalArgumentException("Invalid private filename");
-    return new File(root, name);
+    return new File(root, RuntimeEnvironment.hostName(name));
   }
   public String getPackageCodePath() {
     return getApplicationInfo().sourceDir;

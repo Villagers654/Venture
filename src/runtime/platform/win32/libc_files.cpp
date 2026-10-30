@@ -386,7 +386,7 @@ class DiskFile final : public File {
     for (auto& entry : std::filesystem::directory_iterator(
              std::filesystem::path{native(host_path_)}, ec)) {
       Dirent d{};
-      auto n = entry.path().filename().u8string();
+      const auto n = paths::guest_name(paths::utf8(entry.path().filename()));
       if (n.size() > 255) continue;
       std::memcpy(d.name, n.data(), n.size());
       Stat s;

@@ -6,7 +6,7 @@ if(POLICY CMP0168)
   endif()
   cmake_policy(SET CMP0168 "${CMAKE_POLICY_DEFAULT_CMP0168}")
 endif()
-project(Venture VERSION 0.1.2 LANGUAGES C CXX)
+project(Venture VERSION 0.1.2.1 LANGUAGES C CXX)
 # All owned generators share this interpreter and its imported target.
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
 

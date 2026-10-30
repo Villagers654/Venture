@@ -12,6 +12,11 @@ fs::path migrate_data_dir(const fs::path &current, const fs::path &legacy);
 fs::path executable();
 std::string utf8(const fs::path &path);
 fs::path from_utf8(std::string_view text);
+// A guest (Linux) file name component as a host one: on Windows the characters NTFS
+// forbids (:*?"<>| and controls) become U+F000+c, as Cygwin, MSYS and WSL store them;
+// unchanged elsewhere. guest_name reverses it for directory listings.
+std::string host_name(std::string_view guest);
+std::string guest_name(std::string_view host);
 bool safe_name(std::string_view name);
 bool safe_package(std::string_view name);
 bool within(const fs::path &root, const fs::path &target);

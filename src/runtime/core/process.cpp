@@ -238,7 +238,13 @@ std::filesystem::path resolve_guest_path(std::string_view path) {
   for (const auto& [prefix, root] : mappings) if (!root.empty() && below(path, prefix)) {
     auto suffix = path.substr(prefix.size());
     if (!suffix.empty()) suffix.remove_prefix(1);
-    auto relative = paths::from_utf8(suffix).lexically_normal();
+    std::string escaped;
+    for (std::size_t start = 0; start <= suffix.size();) {
+      const auto end = std::min(suffix.find('/', start), suffix.size());
+      escaped += (start ? "/" : "") + paths::host_name(suffix.substr(start, end - start));
+      start = end + 1;
+    }
+    auto relative = paths::from_utf8(escaped).lexically_normal();
     if (relative.has_root_path()) return {};
     for (const auto& component : relative) if (component == "..") return {};
     return root / relative;
