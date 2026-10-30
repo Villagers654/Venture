@@ -1,3 +1,4 @@
+#include "common/paths.h"
 #include "vfs.h"
 #include "file_io_trace.h"
 #include "common/log.h"
@@ -120,9 +121,10 @@ int resolve_path(std::string_view path, int dirfd, MappedPath* out) {
   // the usual guest mount permissions and canonical containment still apply.
   const auto alias = host_path_to_guest(path);
   if (alias) path = *alias;
-  // Linux treats backslash/colon as ordinary bytes. Reject them instead of
-  // allowing Win32 separators, drive roots, or NTFS alternate data streams.
-  if (path.find_first_of("\\:") != path.npos) return -err::einval;
+  // Linux treats backslash as an ordinary byte. Reject it instead of allowing Win32
+  // separators. Colons and the other characters NTFS forbids are stored escaped
+  // (paths::host_name), so they never form drive roots or alternate data streams.
+  if (path.find('\\') != path.npos) return -err::einval;
   std::string full(path);
   if (full[0] != '/') {
     std::string base;
@@ -183,10 +185,14 @@ int resolve_path(std::string_view path, int dirfd, MappedPath* out) {
     out->root = root;
     out->host = root;
     out->readonly = ro;
-    if (p.size() > prefix.size())
-      out->host /= std::filesystem::path(
-          std::u8string(reinterpret_cast<const char8_t*>(p.data() + prefix.size() + 1),
-                        p.size() - prefix.size() - 1));
+    if (p.size() > prefix.size()) {
+      std::string_view rest(p.data() + prefix.size() + 1, p.size() - prefix.size() - 1);
+      for (std::size_t start = 0; start <= rest.size();) {
+        const auto end = std::min(rest.find('/', start), rest.size());
+        out->host /= paths::from_utf8(paths::host_name(rest.substr(start, end - start)));
+        start = end + 1;
+      }
+    }
     return true;
   };
   bool mapped = false;

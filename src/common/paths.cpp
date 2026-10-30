@@ -30,6 +30,39 @@ std::string utf8(const fs::path &p) {
 fs::path from_utf8(std::string_view s) {
   return fs::path(std::u8string(s.begin(), s.end()));
 }
+namespace {
+constexpr bool host_forbidden(unsigned char c) {
+#ifdef _WIN32
+  return (c > 0 && c < 0x20) || c == ':' || c == '*' || c == '?' || c == '"' || c == '<' || c == '>' || c == '|';
+#else
+  (void)c;
+  return false;
+#endif
+}
+} // namespace
+std::string host_name(std::string_view guest) {
+  std::string out;
+  out.reserve(guest.size());
+  for (unsigned char c : guest) {
+    if (!host_forbidden(c)) { out += char(c); continue; }
+    // U+F000+c in UTF-8 (c < 0x80).
+    out += char(0xEF); out += char(0x80 | (c >> 6)); out += char(0x80 | (c & 0x3F));
+  }
+  return out;
+}
+std::string guest_name(std::string_view host) {
+  std::string out;
+  out.reserve(host.size());
+  for (std::size_t i = 0; i < host.size(); ++i) {
+    auto b = [&](std::size_t k) { return static_cast<unsigned char>(host[k]); };
+    if (i + 2 < host.size() && b(i) == 0xEF && (b(i + 1) == 0x80 || b(i + 1) == 0x81) && (b(i + 2) & 0xC0) == 0x80) {
+      const unsigned char c = static_cast<unsigned char>(((b(i + 1) & 1) << 6) | (b(i + 2) & 0x3F));
+      if (host_forbidden(c)) { out += char(c); i += 2; continue; }
+    }
+    out += host[i];
+  }
+  return out;
+}
 bool safe_name(std::string_view s) {
   if (s.empty() || s.size() > 220 || s.back() == '.' || s.back() == ' ')
     return false;

@@ -27,10 +27,14 @@ public final class GuestFiles {
    * so the child's drive is dropped and the rest joins under the parent as on Android.
    */
   public static String child(Object parent, String child) {
-    if (parent == null || child == null || child.length() < 3 || child.charAt(1) != ':') return child;
-    char drive = child.charAt(0), slash = child.charAt(2);
-    boolean letter = (drive >= 'A' && drive <= 'Z') || (drive >= 'a' && drive <= 'z');
-    return letter && (slash == '\\' || slash == '/') ? child.substring(2) : child;
+    if (parent == null || child == null) return child;
+    if (child.length() >= 3 && child.charAt(1) == ':') {
+      char drive = child.charAt(0), slash = child.charAt(2);
+      boolean letter = (drive >= 'A' && drive <= 'Z') || (drive >= 'a' && drive <= 'z');
+      if (letter && (slash == '\\' || slash == '/')) return child.substring(2);
+    }
+    // Android names may hold characters Windows forbids (Firebase's "prefs:<id>").
+    return RuntimeEnvironment.hostName(child);
   }
   static final class Snapshot implements Runnable {
     final File file;

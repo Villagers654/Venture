@@ -449,6 +449,16 @@ TEST_CASE("cross platform filenames and path containment") {
     CHECK_FALSE(paths::safe_name(name));
   CHECK(paths::safe_name("main.12.com.example.obb"));
   CHECK(paths::safe_package("com.example.game"));
+  // Guest names with characters NTFS forbids round-trip through their host form.
+  for (const char *name : {"prefs:id.xml", "a*b?c\"d<e>f|g", "tab\tname", "plain.txt"}) {
+    CHECK(paths::guest_name(paths::host_name(name)) == name);
+#ifdef _WIN32
+    CHECK(paths::host_name(name).find_first_of(":*?\"<>|\t") == std::string::npos);
+#else
+    CHECK(paths::host_name(name) == name);
+#endif
+  }
+  CHECK(paths::guest_name("plain\xEF\x80\xBA") == "plain" + std::string(paths::host_name(":") == ":" ? "\xEF\x80\xBA" : ":"));
   Directory d;
   CHECK(paths::within(d.root, d.root / "games"));
   CHECK_FALSE(paths::within(d.root, d.root));

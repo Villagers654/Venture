@@ -152,9 +152,26 @@ public final class RuntimeEnvironment {
     for (int i = 0; i < guests.length; i++) {
       String root = guests[i];
       if (path.startsWith(root) && (path.length() == root.length() || path.charAt(root.length()) == '/'))
-        return hosts[i].getPath() + path.substring(root.length()).replace('/', File.separatorChar);
+        return hosts[i].getPath() + hostName(path.substring(root.length())).replace('/', File.separatorChar);
     }
     return path;
+  }
+  /**
+   * An Android file name (or '/'-separated relative path) as a host one: on Windows the
+   * characters NTFS forbids (:*?"<>| and controls) become U+F000+c, as Cygwin, MSYS and WSL
+   * store them, and as native code does (paths::host_name). Firebase names its preferences
+   * "com.google.firebase.common.prefs:<id>". Unchanged on other hosts.
+   */
+  public static String hostName(String name) {
+    if (name == null || File.separatorChar != '\\') return name;
+    StringBuilder out = null;
+    for (int i = 0; i < name.length(); i++) {
+      char c = name.charAt(i);
+      boolean forbidden = (c > 0 && c < 0x20) || c == ':' || c == '*' || c == '?' || c == '"' || c == '<' || c == '>' || c == '|';
+      if (forbidden && out == null) out = new StringBuilder(name.length()).append(name, 0, i);
+      if (out != null) out.append(forbidden ? (char) (0xF000 + c) : c);
+    }
+    return out == null ? name : out.toString();
   }
   public String guestNativeLibDir() {
     return guestNativeLib;

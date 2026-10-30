@@ -1940,6 +1940,11 @@ public final class FrameworkTest {
         "activity preferences persist through normal XML store");
     check(Files.exists(testRoot.resolve("activity-preferences/shared_prefs/ui.PlayerActivity.xml")),
         "activity preferences persisted to expected filename");
+    // Firebase names a preferences file with a colon, which Windows forbids in names.
+    var firebasePreferences = preferenceActivity.getSharedPreferences("com.google.firebase.common.prefs:W0RFRkFVTFRd", 0);
+    check(firebasePreferences.edit().putBoolean("collection", true).commit()
+        && preferenceActivity.getSharedPreferences("com.google.firebase.common.prefs:W0RFRkFVTFRd", 0).getBoolean("collection", false),
+        "preferences named with characters Windows forbids persist");
     var externalActivity = new android.app.Activity() {
       public String getPackageName() { return "test.game"; }
       public android.content.ComponentName getComponentName() {

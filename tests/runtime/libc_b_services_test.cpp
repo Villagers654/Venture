@@ -105,7 +105,10 @@ TEST_CASE("libc B: VFS roots and path traversal") {
   CHECK(p.host == root / "data" / "external-data" / "files" / "a");
   CHECK(resolve_path("/data/user/0/test.game/../../../../Windows/x", at_cwd, &p) == -err::enoent);
   CHECK(resolve_path("/data/user/0/test.game/.. /x", at_cwd, &p) == -err::einval);
-  CHECK(resolve_path("/data/user/0/test.game/a:stream", at_cwd, &p) == -err::einval);
+  // A colon is an ordinary Linux byte: stored escaped, never an NTFS stream or drive.
+  CHECK(resolve_path("/data/user/0/test.game/a:stream", at_cwd, &p) == 0);
+  CHECK(p.host == root / "data" / paths::from_utf8(paths::host_name("a:stream")));
+  CHECK(p.guest == "/data/user/0/test.game/a:stream");
   CHECK(resolve_path("/data/user/0/test.game/..\\outside", at_cwd, &p) == -err::einval);
   CHECK(fd_open(c.guest_apk_path().c_str(), 1) == -err::erofs);
   // Java File paths and Android paths must reach exactly the same file/rights.
@@ -150,6 +153,32 @@ TEST_CASE("libc B: descriptors share offsets but not close-on-exec flags") {
   CHECK(fd_read(dup, data, 2) == 2);
   CHECK(std::string(data, 2) == "ef");
   CHECK(FdTable::get().close(dup) == 0);
+}
+TEST_CASE("libc B: names with characters Windows forbids are created, opened and listed as written") {
+  Thread thread;
+  auto& c = process_config();
+  REQUIRE_FALSE(c.data_dir.empty());
+  // Firebase's preferences file.
+  const std::string name = "com.google.firebase.common.prefs:W0RFRkFVTFRd.xml";
+  const auto dir = c.guest_data_dir() + "/forbidden-names";
+  std::filesystem::create_directories(c.data_dir / "forbidden-names");
+  const auto path = dir + "/" + name;
+  auto fd = fd_open(path.c_str(), 2 | 0100 | 01000, 0600);
+  REQUIRE(fd >= 0);
+  REQUIRE(fd_write(fd, "prefs", 5) == 5);
+  CHECK(FdTable::get().close(fd) == 0);
+  fd = fd_open(path.c_str(), 0, 0);
+  REQUIRE(fd >= 0);
+  char data[8]{};
+  CHECK(fd_read(fd, data, 5) == 5);
+  CHECK(std::string(data, 5) == "prefs");
+  CHECK(FdTable::get().close(fd) == 0);
+  auto dfd = fd_open(dir.c_str(), 0200000, 0);
+  REQUIRE(dfd >= 0);
+  std::vector<Dirent> entries;
+  REQUIRE(FdTable::get().file(dfd)->entries(entries) == 0);
+  CHECK(std::any_of(entries.begin(), entries.end(), [&](const Dirent& e) { return name == e.name; }));
+  CHECK(FdTable::get().close(dfd) == 0);
 }
 TEST_CASE("libc B: stdio and legacy FILE array") {
   Thread thread;
