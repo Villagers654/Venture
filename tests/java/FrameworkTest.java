@@ -1693,6 +1693,20 @@ public final class FrameworkTest {
         "fragment removal detaches owner");
     fragment.setRetainInstance(false);
     check(!fragment.getRetainInstance(), "fragment retention policy can be cleared after removal");
+    var unityFragment = new android.app.Fragment();
+    var offMain = new Object[2];
+    var unityThread = new Thread(() -> {
+      offMain[0] = manager.findFragmentByTag("96489");
+      manager.beginTransaction().add(0, unityFragment, "96489").commit();
+      try { manager.beginTransaction().remove(unityFragment).commitNow(); }
+      catch (IllegalStateException e) { offMain[1] = e; }
+    });
+    unityThread.start(); unityThread.join();
+    check(offMain[0] == null && offMain[1] != null && !unityFragment.isAdded(),
+        "fragment lookup and deferred commit work off the main thread; commitNow does not");
+    check(manager.executePendingTransactions() && manager.findFragmentByTag("96489") == unityFragment,
+        "off-thread fragment commit attaches on the main thread");
+    manager.beginTransaction().remove(unityFragment).commitNow();
     Path testRoot = Path.of("build/framework-tests");
     Files.createDirectories(testRoot);
     try (var loader = new dalvik.system.PathClassLoader("", FrameworkTest.class.getClassLoader())) {

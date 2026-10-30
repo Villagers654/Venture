@@ -273,6 +273,25 @@ TEST_CASE(
   CHECK(arena.live == 0);
 }
 
+TEST_CASE("Platform voice setters and peer queries describe a device without connections") {
+  // Space Pirate Trainer DX applies connection options during startup; the
+  // guest loader aborts the process for any VoIP export it receives instead.
+  optest::Arena arena;
+  Session session(optest::app(), std::make_shared<optest::FakeProvider>(), arena.memory());
+  auto options = optest::invoke(session, "ovr_VoipOptions_Create");
+  REQUIRE(options != 0);
+  optest::invoke(session, "ovr_Voip_SetNewConnectionOptions", {options});
+  optest::invoke(session, "ovr_Voip_SetOutputSampleRate", {48000});
+  optest::invoke(session, "ovr_Voip_SetMicrophoneFilterCallback", {0x1000});
+  optest::invoke(session, "ovr_Voip_SetMicrophoneFilterCallbackWithFixedSizeBuffer", {0x1000, 480});
+  optest::invoke(session, "ovr_VoipOptions_Destroy", {options});
+  CHECK(optest::invoke(session, "ovr_Voip_GetIsConnectionUsingDtx", {42}) == 0);
+  CHECK(optest::invoke(session, "ovr_Voip_GetLocalBitrate", {42}) == 0);
+  CHECK(optest::invoke(session, "ovr_Voip_GetSyncTimestampDifference", {7}) == 0);
+  CHECK(optest::invoke(session, "ovr_PopMessage") == 0);
+  CHECK(arena.live == 0);
+}
+
 TEST_CASE(
     "Platform messages: completion FIFO, typed errors, borrowed "
     "lifetime, invalid handles") {

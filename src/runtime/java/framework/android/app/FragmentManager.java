@@ -10,49 +10,56 @@ public final class FragmentManager {
   private final List<Fragment> fragments = new ArrayList<>();
   private final ArrayDeque<Runnable> pending = new ArrayDeque<>();
   private int stage, sequence;
-  private boolean destroyed;
+  private volatile boolean destroyed;
   FragmentManager(Activity activity) { this.activity = activity; }
   private void mainThread() {
     if (Looper.myLooper() != Looper.getMainLooper()) throw new IllegalStateException("Fragment operation off main thread");
   }
   public FragmentTransaction beginTransaction() { return new FragmentTransaction(this); }
+  // AOSP allows lookups and deferred commits from any thread; Unity's
+  // UnityPermissions.requestUserPermissions issues both from UnityMain.
   public Fragment findFragmentByTag(String tag) {
-    mainThread();
-    for (int i = fragments.size() - 1; i >= 0; --i)
-      if (java.util.Objects.equals(fragments.get(i).tag, tag)) return fragments.get(i);
+    synchronized (fragments) {
+      for (int i = fragments.size() - 1; i >= 0; --i)
+        if (java.util.Objects.equals(fragments.get(i).tag, tag)) return fragments.get(i);
+    }
     return null;
   }
-  public List<Fragment> getFragments() { mainThread(); return List.copyOf(fragments); }
+  public List<Fragment> getFragments() { synchronized (fragments) { return List.copyOf(fragments); } }
   public boolean isDestroyed() { return destroyed; }
   int commit(Runnable action, boolean now) {
-    mainThread();
-    if (destroyed) throw new IllegalStateException("Activity destroyed");
-    int id = sequence++;
+    if (now) mainThread();
+    int id;
+    synchronized (pending) {
+      if (destroyed) throw new IllegalStateException("Activity destroyed");
+      id = sequence++;
+      if (!now) pending.add(action);
+    }
     if (now) action.run();
-    else {
-      pending.add(action);
-      if (!new Handler(Looper.getMainLooper()).post(this::executePendingTransactions)) {
-        pending.removeLastOccurrence(action);
-        throw new IllegalStateException("Activity queue closed");
-      }
+    else if (!new Handler(Looper.getMainLooper()).post(this::executePendingTransactions)) {
+      synchronized (pending) { pending.removeLastOccurrence(action); }
+      throw new IllegalStateException("Activity queue closed");
     }
     return id;
   }
   public boolean executePendingTransactions() {
     mainThread();
-    boolean any = !pending.isEmpty();
-    while (!pending.isEmpty()) pending.removeFirst().run();
+    boolean any = false;
+    for (Runnable action; (action = nextPending()) != null; any = true) action.run();
     return any;
   }
+  private Runnable nextPending() { synchronized (pending) { return pending.pollFirst(); } }
   void add(Fragment fragment, String tag) {
     if (fragment.manager != null) throw new IllegalStateException("Fragment already added");
     fragment.manager = this; fragment.activity = activity; fragment.tag = tag;
-    fragments.add(fragment);
+    synchronized (fragments) { fragments.add(fragment); }
     fragment.onAttach((android.content.Context) activity);
     move(fragment, stage);
   }
   void remove(Fragment fragment) {
-    if (!fragments.remove(fragment)) throw new IllegalStateException("Fragment not added");
+    synchronized (fragments) {
+      if (!fragments.remove(fragment)) throw new IllegalStateException("Fragment not added");
+    }
     move(fragment, 0);
     fragment.onDetach(); fragment.manager = null; fragment.activity = null;
   }
@@ -74,7 +81,8 @@ public final class FragmentManager {
     for (Fragment f : List.copyOf(fragments)) if (f.manager == this) move(f, target);
   }
   void destroy() {
-    mainThread(); destroyed = true; pending.clear();
+    mainThread();
+    synchronized (pending) { destroyed = true; pending.clear(); }
     for (Fragment f : List.copyOf(fragments)) remove(f);
   }
 }
