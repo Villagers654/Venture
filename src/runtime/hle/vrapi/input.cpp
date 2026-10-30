@@ -73,7 +73,12 @@ XrResult initialize_input() {
   XrPath menu_path{};
   r = ::xrStringToPath(instance, "/user/hand/left/input/menu/click", &menu_path);
   if (XR_FAILED(r)) return r;
-  const XrActionSuggestedBinding declared_menu{input.menu, menu_path};
+  // VrApi hands every game its stick clicks, so declare them too: the automatic menu
+  // chord then never assumes a VrApi game leaves both sticks free.
+  XrPath stick_path{};
+  r = ::xrStringToPath(instance, "/user/hand/left/input/thumbstick/click", &stick_path);
+  if (XR_FAILED(r)) return r;
+  const XrActionSuggestedBinding declared_menu[]{{input.menu, menu_path}, {input.menu, stick_path}};
   for (auto profile : {"/interaction_profiles/oculus/touch_controller",
                        "/interaction_profiles/valve/index_controller",
                        "/interaction_profiles/htc/vive_controller",
@@ -104,7 +109,7 @@ XrResult initialize_input() {
       // that native binding (Index, or a runtime-reserved Touch menu).
       const XrInteractionProfileSuggestedBinding declared{
           XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING, nullptr, bi.interactionProfile,
-          1, &declared_menu};
+          2, declared_menu};
       venture::xr::remember_menu_bindings(instance, bi.interactionProfile, &declared);
     }
   }

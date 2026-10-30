@@ -25,6 +25,8 @@ std::array<XrPath, 2> hands{};
 std::map<XrAction, XrActionSet> parents;
 std::map<XrPath, std::map<XrAction, unsigned>> menus;
 std::map<XrPath, std::map<XrAction, std::array<XrPath, 2>>> menu_paths;
+// Host profiles on which the game binds a stick (or trackpad) click itself.
+std::set<XrPath> stick_profiles;
 bool conflict_warned = false;
 struct Merged { bool value = false; XrTime changed = 0; std::uint64_t sync = 0; XrActionStateBoolean state{XR_TYPE_ACTION_STATE_BOOLEAN}; };
 struct Snapshot {
@@ -145,9 +147,11 @@ void remember_menu_bindings(XrInstance instance, XrPath profile, const XrInterac
   std::lock_guard lock(mutex);
   menus[profile].clear();
   menu_paths[profile].clear();
+  stick_profiles.erase(profile);
   for (std::uint32_t i = 0; i < info->countSuggestedBindings; ++i) {
     const auto& binding = info->suggestedBindings[i];
     auto path = path_string(instance, binding.binding);
+    if (path.ends_with("/input/thumbstick/click") || path.ends_with("/input/trackpad/click")) stick_profiles.insert(profile);
     for (int hand = 0; hand < 2; ++hand) {
       const std::string root = hand ? "/user/hand/right" : "/user/hand/left";
       if (path == root + "/input/menu/click") {
@@ -226,7 +230,11 @@ XrResult sync_with_menu_chord(XrSession session, const XrActionsSyncInfo* info) 
     for (int hand = 0; hand < 2; ++hand) {
       XrInteractionProfileState profile{XR_TYPE_INTERACTION_PROFILE_STATE};
       snapshot.profiles[hand] = XR_SUCCEEDED(::xrGetCurrentInteractionProfile(session, hands[hand], &profile)) ? profile.interactionProfile : XR_NULL_PATH;
-      snapshot.forced_hands[hand] = forced;
+      // Automatic also gives the chord to a game that never reads stick clicks: nothing can
+      // collide with it, and a runtime may report the menu bound to a button players don't
+      // know (SteamVR maps Touch's menu to the Steam Frame controller's View button).
+      snapshot.forced_hands[hand] = forced || (menus.contains(snapshot.profiles[hand]) &&
+                                               !stick_profiles.contains(snapshot.profiles[hand]));
     }
     snapshot.chord_hands = snapshot.forced_hands;
     snapshot.unbound_menus.clear();

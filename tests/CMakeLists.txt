@@ -786,6 +786,13 @@ add_executable(venture_xr_tests test_main.cpp  runtime/xr_test.cpp runtime/xr_vr
     "--test-case=VrApi Vulkan process exit after the game destroyed its device" --no-skip=true)
   target_link_libraries(venture_xr_tests PRIVATE venture_xr venture_mock_openxr_runtime venture_xr_capture zlibstatic doctest::doctest nlohmann_json::nlohmann_json)
   set_tests_properties(${venture_test_partitions} venture_xr_tests vrapi_vulkan_process_exit vrapi_vulkan_destroyed_device_exit PROPERTIES ENVIRONMENT "XR_RUNTIME_JSON=${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/mock_openxr_runtime.json;VENTURE_DATA_DIR=${CMAKE_CURRENT_BINARY_DIR}/xr-test-data")
+  # Real-device Vulkan tests pick their GPU through the XR runtime: use the mock, not
+  # whatever runtime (and headset driver) this machine has active.
+  foreach(test vulkan_lazy vulkan_terminal_allocator)
+    if(TEST ${test})
+      set_tests_properties(${test} PROPERTIES ENVIRONMENT "XR_RUNTIME_JSON=${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/mock_openxr_runtime.json")
+    endif()
+  endforeach()
   # A runtime that numbers each handle type from 1 (VDXR): the instance and session share a value.
   add_test(NAME xr_typed_handles COMMAND venture_xr_tests
     "--test-case=XR guest lifecycle and real Vulkan swapchain through mock loader")
