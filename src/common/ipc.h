@@ -18,6 +18,11 @@ public:
                                                 std::uintptr_t write);
   ~PipeChannel();
   Json call(const Json &request); // one outstanding RPC; thread-safe
+  // The receiving side of one call(): reads a single request, hands it to
+  // `handler`, writes back its result (or a generic error) and returns it.
+  // For a short-lived host process that answers exactly one request, e.g.
+  // the Meta session native messaging host.
+  Json accept(const Handler &handler);
   void serve(const Handler &, std::stop_token);
   void close();
   std::array<std::uintptr_t, 2> handles() const {
