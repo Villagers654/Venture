@@ -1,0 +1,20 @@
+{
+  "name": "venture-meta-session",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Companion extension that hands the user's own Meta/Oculus browser session to the Venture launcher app, over native messaging only",
+  "license": "Apache-2.0",
+  "private": true,
+  "scripts": {
+    "dev": "wxt",
+    "build": "wxt build",
+    "zip": "wxt zip",
+    "compile": "tsc --noEmit",
+    "postinstall": "wxt prepare"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.2.2",
+    "typescript": "^5.7.0",
+    "wxt": "^0.20.27"
+  }
+}
