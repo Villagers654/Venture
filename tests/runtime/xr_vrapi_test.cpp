@@ -2284,6 +2284,42 @@ TEST_CASE("A menu the host binds only to its system button still gets the stick-
   venture::xr::install_xr_images(nullptr); MockXrScript restored{}; ventureMockXrSetScript(&restored);
 }
 
+TEST_CASE("A game that never binds stick clicks gets the stick-click menu even with a native menu") {
+  // SteamVR maps Touch's menu to the Steam Frame controller's View button, so the
+  // host reports it bound; with both sticks free in the game the chord costs nothing.
+  venture::test::ScopedMenuMode automatic("");
+  venture::test::XrImageFixture images; venture::xr::install_xr_images(&images);
+  vr::abi::Init init{1, 1, 1, 42, 0, 0x10300, {1, 2, 3}};
+  REQUIRE(vg::vrapi_Initialize(&init) == 0);
+  vr::abi::Mode mode{2, 0, {1, 2, 3}, 4, 5, 6};
+  auto* mobile = vg::vrapi_EnterVrMode(&mode); REQUIRE(mobile);
+  venture::test::NativeMenuBindingOverride host_menu(vr::state().input.menu);
+  host_menu.missing = false;
+  REQUIRE(XR_SUCCEEDED(xrStringToPath(venture::xr::host_xr().instance, "/user/hand/left/input/view/click",
+                                      &host_menu.appeared_source)));
+  // Declare a game whose Touch bindings have a menu and no stick click.
+  const auto instance = venture::xr::host_xr().instance;
+  XrPath touch{}, menu{};
+  REQUIRE(XR_SUCCEEDED(xrStringToPath(instance, "/interaction_profiles/oculus/touch_controller", &touch)));
+  REQUIRE(XR_SUCCEEDED(xrStringToPath(instance, "/user/hand/left/input/menu/click", &menu)));
+  const XrActionSuggestedBinding menu_only{vr::state().input.menu, menu};
+  const XrInteractionProfileSuggestedBinding declared{XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING, nullptr, touch, 1,
+                                                      &menu_only};
+  venture::xr::remember_menu_bindings(instance, touch, &declared);
+  venture::xr::note_menu_profiles_changed(vr::session().handle);
+  MockXrScript script{}; ventureMockXrSetScript(&script);
+  REQUIRE(vr::sync_input() == XR_SUCCESS);
+  script.left.thumbstick_click = script.right.thumbstick_click = true;
+  ventureMockXrSetScript(&script); REQUIRE(vr::sync_input() == XR_SUCCESS);
+  std::this_thread::sleep_for(std::chrono::milliseconds(510));
+  REQUIRE(vg::vrapi_WaitFrame(mobile, 1) == 0);
+  vr::abi::RemoteState left{}; left.header.type = 4;
+  REQUIRE(vg::vrapi_GetCurrentInputState(mobile, 1, &left.header) == 0);
+  CHECK((left.buttons & 0x100000u) != 0);
+  vg::vrapi_LeaveVrMode(mobile); vg::vrapi_Shutdown();
+  venture::xr::install_xr_images(nullptr); MockXrScript restored{}; ventureMockXrSetScript(&restored);
+}
+
 TEST_CASE("VrApi legacy predictions share one input sample until submission") {
   venture::test::ScopedMenuMode automatic("");
   venture::test::XrImageFixture images; venture::xr::install_xr_images(&images);
