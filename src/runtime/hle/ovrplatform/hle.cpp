@@ -160,7 +160,8 @@ void microphone_mute(hle::CallContext& ctx) {
 }
 void no_voice_connection(hle::CallContext&) {
   // The device has no voice peers or transport. Accept/Start/Stop cannot
-  // create a connection or post a connection-established notification.
+  // create a connection or post a connection-established notification, so
+  // options, output rate and microphone filters for connections never apply.
 }
 void voice_status(hle::CallContext& ctx) {
   ctx.return_x(static_cast<std::uint32_t>(SystemVoipStatus::unavailable));
@@ -309,6 +310,15 @@ const std::vector<Export>& table() {
       VENTURE_EXPORT("ovr_Voip_Accept", no_voice_connection),
       VENTURE_EXPORT("ovr_Voip_Start", no_voice_connection),
       VENTURE_EXPORT("ovr_Voip_Stop", no_voice_connection),
+      // OVR_Functions_Voip.h: void setters for future connections and capture.
+      VENTURE_EXPORT("ovr_Voip_SetNewConnectionOptions", no_voice_connection),
+      VENTURE_EXPORT("ovr_Voip_SetOutputSampleRate", no_voice_connection),
+      VENTURE_EXPORT("ovr_Voip_SetMicrophoneFilterCallback", no_voice_connection),
+      VENTURE_EXPORT("ovr_Voip_SetMicrophoneFilterCallbackWithFixedSizeBuffer", no_voice_connection),
+      // Per-peer queries: no DTX, ovrVoipBitrate_Unknown and no timestamp offset.
+      VENTURE_EXPORT("ovr_Voip_GetIsConnectionUsingDtx", no_data),
+      VENTURE_EXPORT("ovr_Voip_GetLocalBitrate", no_data),
+      VENTURE_EXPORT("ovr_Voip_GetSyncTimestampDifference", no_data),
       // OVR_Functions_Voip.h: capacity in PCM elements. No rings are allocated
       // on this zero-connection device, so no samples can ever be returned.
       VENTURE_EXPORT("ovr_Voip_GetOutputBufferMaxSize", no_data),
