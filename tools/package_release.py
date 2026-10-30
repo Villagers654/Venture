@@ -37,6 +37,9 @@ ANGLE_NOTICES = ("third_party/abseil-cpp/", "third_party/astc-encoder/src/LICENS
                  "third_party/vulkan-headers/src/LICENSE.md", "third_party/vulkan_memory_allocator/LICENSE.txt", "third_party/zlib/",
                  "third_party/perfetto/LICENSE", "src/third_party/volk/")
 
+# Intentional product content: its GitHub owner may also be the build account.
+PUBLIC_PROJECT_URL = "https://github.com/McFredward/steam-link-native-passthrough"
+
 
 def copy(source, target):
     if not source.is_file():
@@ -67,14 +70,24 @@ def scan(layout, forbidden, users=(), hosts=()):
                 rb"(?<![:/\\a-zA-Z0-9])/(?:home|Users)/[^/\x00\s]+/",
                 drive + rb"[^\x00\r\n]{0,512}[/\\](?:build|src|source|_work|out|\.deps)[/\\]"]
     token = lambda value, inner: rb"(?<![a-z0-9])" + inner(re.escape(value.lower().encode())) + rb"(?![a-z0-9])"
-    patterns += [token(value, lambda v: v) for value in set(hosts) if value]
-    patterns += [token(value, lambda v: rb"(?:(?<=[/\\@])" + v + rb"|" + v + rb"(?=[/\\@]))") for value in set(users) if value]
+    identities = [token(value, lambda v: v) for value in set(hosts) if value]
+    identities += [token(value, lambda v: rb"(?:(?<=[/\\@])" + v + rb"|" + v + rb"(?=[/\\@]))") for value in set(users) if value]
+    public_origin, public_owner, _ = PUBLIC_PROJECT_URL.rsplit("/", 2)
+    public_account = re.compile(rb"(?<=" + re.escape((public_origin + "/").encode()) + rb")" +
+                                re.escape(public_owner.encode()) + rb"(?=/)", re.I)
     def check(data, name):
         lower = data.lower()
         # Decode both alignments; deleting NUL bytes would join unrelated C
         # strings and misclassify URI schemes as absolute Windows paths.
         views = [data] + [data[offset:].decode("utf-16le", errors="replace").encode("utf-8") for offset in (0, 1)]
-        if any(needle in lower for needle in needles) or any(re.search(p, view, re.I) for p in patterns for view in views):
+        # The referenced GitHub namespace is public content. GCC may emit the
+        # URL's string constructor as overlapping constant chunks, so the full
+        # URL need not remain contiguous in the image. Other origins, logins
+        # and private paths still inspect the original bytes/identity contexts.
+        identity_views = [public_account.sub(b"", view) for view in views]
+        if (any(needle in lower for needle in needles) or
+                any(re.search(p, view, re.I) for p in patterns for view in views) or
+                any(re.search(p, view, re.I) for p in identities for view in identity_views)):
             raise RuntimeError("Non-redistributable path or identity in " + name)
     for path in sorted(layout.rglob("*")):
         if not path.is_file():
@@ -298,6 +311,8 @@ def package(build, output, angle, strip, readobj):
         if not windows and name in ("libEGL.so", "libGLESv2.so") and not source.is_file():
             source = angle / "bin" / name
         copy(source, output / name)
+    if windows:
+        copy(ROOT / "data/venture-passthrough.cmd", output / "venture-passthrough.cmd")
     for name in ("LGPL-2.1.txt", "ffmpeg-8.1.3.tar.xz", "ffmpeg-8.1.3.tar.xz.asc"):
         copy(bin_dir / "LICENSES" / name, output / "licenses/ffmpeg" / name)
     copy(bin_dir / "venture-ffmpeg.json", output / "licenses/ffmpeg/venture-ffmpeg.json")

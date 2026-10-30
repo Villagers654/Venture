@@ -68,6 +68,8 @@ HostXr initialize_host() {
                                        "XR_KHR_composition_layer_equirect2",
                                        "XR_KHR_composition_layer_color_scale_bias",
                                        "XR_FB_space_warp",
+                                       "XR_FB_passthrough",
+                                       "XR_FB_triangle_mesh",
                                        "XR_EXT_local_floor",
                                        "XR_EXT_performance_settings",
                                        "XR_EXT_view_configuration_depth_range"};

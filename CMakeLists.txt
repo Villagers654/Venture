@@ -51,7 +51,7 @@ include(cmake/ProbeCache.cmake)
 include(cmake/Dependencies.cmake)
 
 add_subdirectory(src/common)
-if(VENTURE_BUILD_RUNTIME OR VENTURE_BUILD_TESTS)
+if(VENTURE_BUILD_LAUNCHER OR VENTURE_BUILD_RUNTIME OR VENTURE_BUILD_TESTS)
   add_subdirectory(src/runtime/hle/ovrplatform)
 endif()
 if(VENTURE_BUILD_RUNTIME)

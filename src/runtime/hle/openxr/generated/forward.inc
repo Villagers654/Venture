@@ -32,6 +32,17 @@ XrResult xrCreateActionSet(XrInstance instance, const XrActionSetCreateInfo* cre
   if (XR_SUCCEEDED(result)) track_handle(*actionSet, "XrActionSet", instance);
   return result;
 }
+XrResult xrCreateTriangleMeshFB(XrSession session, const XrTriangleMeshCreateInfoFB* createInfo, XrTriangleMeshFB* outTriangleMesh) {
+  std::lock_guard lock(venture::hle::openxr::state().mutex);
+  if (!enabled("XR_FB_triangle_mesh")) return XR_ERROR_FUNCTION_UNSUPPORTED;
+  if (!valid_handle(session, "XrSession")) return XR_ERROR_HANDLE_INVALID;
+  if (!createInfo) return XR_ERROR_VALIDATION_FAILURE;
+  if (!createInfo || XR_FAILED(validate_struct(createInfo, XR_TYPE_TRIANGLE_MESH_CREATE_INFO_FB))) return XR_ERROR_VALIDATION_FAILURE;
+  if (!outTriangleMesh) return XR_ERROR_VALIDATION_FAILURE;
+  auto result = host_call<PFN_xrCreateTriangleMeshFB, "xrCreateTriangleMeshFB">(session, createInfo, outTriangleMesh);
+  if (XR_SUCCEEDED(result)) track_handle(*outTriangleMesh, "XrTriangleMeshFB", session);
+  return result;
+}
 XrResult xrDestroyAction(XrAction action) {
   std::lock_guard lock(venture::hle::openxr::state().mutex);
   if (!valid_handle(action, "XrAction")) return XR_ERROR_HANDLE_INVALID;
@@ -56,6 +67,15 @@ XrResult xrDestroySpace(XrSpace space) {
   venture::xr::session().finish_host_end();
   auto result = host_call<PFN_xrDestroySpace, "xrDestroySpace">(space);
   if (XR_SUCCEEDED(result)) forget_handle(space);
+  return result;
+}
+XrResult xrDestroyTriangleMeshFB(XrTriangleMeshFB mesh) {
+  std::lock_guard lock(venture::hle::openxr::state().mutex);
+  if (!enabled("XR_FB_triangle_mesh")) return XR_ERROR_FUNCTION_UNSUPPORTED;
+  if (!valid_handle(mesh, "XrTriangleMeshFB")) return XR_ERROR_HANDLE_INVALID;
+  venture::xr::session().finish_host_end();
+  auto result = host_call<PFN_xrDestroyTriangleMeshFB, "xrDestroyTriangleMeshFB">(mesh);
+  if (XR_SUCCEEDED(result)) forget_handle(mesh);
   return result;
 }
 XrResult xrEnumerateEnvironmentBlendModes(XrInstance instance, XrSystemId systemId, XrViewConfigurationType viewConfigurationType, uint32_t environmentBlendModeCapacityInput, uint32_t* environmentBlendModeCountOutput, XrEnvironmentBlendMode* environmentBlendModes) {
@@ -246,4 +266,49 @@ XrResult xrSyncActions(XrSession session, const XrActionsSyncInfo* syncInfo) {
   forget_action_states();
   return result;
   }());
+}
+XrResult xrTriangleMeshBeginUpdateFB(XrTriangleMeshFB mesh) {
+  std::lock_guard lock(venture::hle::openxr::state().mutex);
+  if (!enabled("XR_FB_triangle_mesh")) return XR_ERROR_FUNCTION_UNSUPPORTED;
+  if (!valid_handle(mesh, "XrTriangleMeshFB")) return XR_ERROR_HANDLE_INVALID;
+  auto result = host_call<PFN_xrTriangleMeshBeginUpdateFB, "xrTriangleMeshBeginUpdateFB">(mesh);
+  return result;
+}
+XrResult xrTriangleMeshBeginVertexBufferUpdateFB(XrTriangleMeshFB mesh, uint32_t* outVertexCount) {
+  std::lock_guard lock(venture::hle::openxr::state().mutex);
+  if (!enabled("XR_FB_triangle_mesh")) return XR_ERROR_FUNCTION_UNSUPPORTED;
+  if (!valid_handle(mesh, "XrTriangleMeshFB")) return XR_ERROR_HANDLE_INVALID;
+  if (!outVertexCount) return XR_ERROR_VALIDATION_FAILURE;
+  auto result = host_call<PFN_xrTriangleMeshBeginVertexBufferUpdateFB, "xrTriangleMeshBeginVertexBufferUpdateFB">(mesh, outVertexCount);
+  return result;
+}
+XrResult xrTriangleMeshEndUpdateFB(XrTriangleMeshFB mesh, uint32_t vertexCount, uint32_t triangleCount) {
+  std::lock_guard lock(venture::hle::openxr::state().mutex);
+  if (!enabled("XR_FB_triangle_mesh")) return XR_ERROR_FUNCTION_UNSUPPORTED;
+  if (!valid_handle(mesh, "XrTriangleMeshFB")) return XR_ERROR_HANDLE_INVALID;
+  auto result = host_call<PFN_xrTriangleMeshEndUpdateFB, "xrTriangleMeshEndUpdateFB">(mesh, vertexCount, triangleCount);
+  return result;
+}
+XrResult xrTriangleMeshEndVertexBufferUpdateFB(XrTriangleMeshFB mesh) {
+  std::lock_guard lock(venture::hle::openxr::state().mutex);
+  if (!enabled("XR_FB_triangle_mesh")) return XR_ERROR_FUNCTION_UNSUPPORTED;
+  if (!valid_handle(mesh, "XrTriangleMeshFB")) return XR_ERROR_HANDLE_INVALID;
+  auto result = host_call<PFN_xrTriangleMeshEndVertexBufferUpdateFB, "xrTriangleMeshEndVertexBufferUpdateFB">(mesh);
+  return result;
+}
+XrResult xrTriangleMeshGetIndexBufferFB(XrTriangleMeshFB mesh, uint32_t** outIndexBuffer) {
+  std::lock_guard lock(venture::hle::openxr::state().mutex);
+  if (!enabled("XR_FB_triangle_mesh")) return XR_ERROR_FUNCTION_UNSUPPORTED;
+  if (!valid_handle(mesh, "XrTriangleMeshFB")) return XR_ERROR_HANDLE_INVALID;
+  if (!outIndexBuffer) return XR_ERROR_VALIDATION_FAILURE;
+  auto result = host_call<PFN_xrTriangleMeshGetIndexBufferFB, "xrTriangleMeshGetIndexBufferFB">(mesh, outIndexBuffer);
+  return result;
+}
+XrResult xrTriangleMeshGetVertexBufferFB(XrTriangleMeshFB mesh, XrVector3f** outVertexBuffer) {
+  std::lock_guard lock(venture::hle::openxr::state().mutex);
+  if (!enabled("XR_FB_triangle_mesh")) return XR_ERROR_FUNCTION_UNSUPPORTED;
+  if (!valid_handle(mesh, "XrTriangleMeshFB")) return XR_ERROR_HANDLE_INVALID;
+  if (!outVertexBuffer) return XR_ERROR_VALIDATION_FAILURE;
+  auto result = host_call<PFN_xrTriangleMeshGetVertexBufferFB, "xrTriangleMeshGetVertexBufferFB">(mesh, outVertexBuffer);
+  return result;
 }

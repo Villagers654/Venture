@@ -28,7 +28,7 @@ assert actual == files | {"release-files.json"}
 # jlink links legal notices on POSIX; the shipped layout must contain no links.
 assert not any(p.is_symlink() for p in layout.rglob("*"))
 assert "java/jdk/legal/java.logging/LICENSE" in files or os.name == "nt"
-expected = {"venture.exe", "venture-runtime.exe", "libEGL.dll", "libGLESv2.dll", "WebView2Loader.dll"} if os.name == "nt" else {"venture", "venture-runtime", "libEGL.so", "libGLESv2.so"}
+expected = {"venture.exe", "venture-runtime.exe", "venture-passthrough.cmd", "libEGL.dll", "libGLESv2.dll", "WebView2Loader.dll"} if os.name == "nt" else {"venture", "venture-runtime", "libEGL.so", "libGLESv2.so"}
 expected |= {"venture-framework.jar", "venture-java-bridge.jar", "LICENSE", "release-files.json"}
 expected |= {"avutil-60.dll", "avcodec-62.dll", "avformat-62.dll", "swscale-9.dll"} if os.name == "nt" else {
     "libavutil.so.60", "libavcodec.so.62", "libavformat.so.62", "libswscale.so.9", "libsqlite3.so.0"}

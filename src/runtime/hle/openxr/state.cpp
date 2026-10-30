@@ -1,6 +1,7 @@
 #include "core/xr_call_trace.h"
 #include "xr/menu_chord.h"
 #include "hle/openxr/state.h"
+#include "hle/openxr/passthrough.h"
 #include "xr/haptic_sequence.h"
 #include "xr/haptic_output.h"
 #include "common/log.h"
@@ -119,7 +120,11 @@ bool composition_layer(std::string_view structure) {
   std::size_t i = 0;
   for (const auto &m : member_metadata())
     if (m.structure == structure) {
-      if (m.name != header[i]) return false;
+      // XR_FB_passthrough has a documented registry erratum: flags is the
+      // common header's layerFlags member, at the same offset.
+      const std::string_view member(m.name);
+      if (member != header[i] &&
+          !(i == 2 && structure == "XrCompositionLayerPassthroughFB" && member == "flags")) return false;
       if (++i == std::size(header)) return true;
     }
   return false;
@@ -147,7 +152,8 @@ bool extends_structure(const StructureInfo &child, XrStructureType parent) {
 }
 // Extensions whose structures Venture applies itself and never forwards.
 static bool applied_locally(std::string_view extension) {
-  return extension == "XR_FB_composition_layer_image_layout";
+  return extension == "XR_FB_composition_layer_image_layout" ||
+         (extension == "XR_FB_passthrough" && local_passthrough());
 }
 XrResult validate_chain(const void *next, bool host_only, XrStructureType parent,
                         bool ignore_unenabled) {
@@ -276,7 +282,7 @@ std::map<std::string, std::uint32_t> capabilities() {
     }
     result[name] = version;
   }
-  // r4-xr/meta_extension_policy.md: no fabricated passthrough or density maps.
+  // Extensions with pointer layouts still requiring A32 adapters stay hidden.
   if (process_config().isa() == GuestIsa::a32) {
     result.erase("XR_META_recommended_layer_resolution");
     result.erase("XR_META_headset_id");
@@ -287,7 +293,11 @@ std::map<std::string, std::uint32_t> capabilities() {
     result.erase("XR_FB_haptic_amplitude_envelope");
     result.erase("XR_FB_space_warp");
   }
-  result.erase("XR_FB_passthrough");
+  if (local_passthrough()) result["XR_FB_passthrough"] = XR_FB_passthrough_SPEC_VERSION;
+  if (process_config().isa() == GuestIsa::a32) {
+    result.erase("XR_FB_passthrough");
+    result.erase("XR_FB_triangle_mesh");
+  }
   if (result.contains("XR_FB_swapchain_update_state")) {
     result["XR_FB_swapchain_update_state_vulkan"] = 1;
     result["XR_FB_swapchain_update_state_opengl_es"] = 1;

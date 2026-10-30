@@ -15,13 +15,15 @@ public:
   ~App() override;
   int run();
 
+protected:
+  void tick() override;
+
 private:
   void wake() override;
   void fit_window();  // size from the display scale, within the screen
   void on_refresh() override;
   void on_install_queued() override;
   void on_import_scan() override;
-  void tick() override;
   SDL_Window *window_ = nullptr;
   SDL_Renderer *renderer_ = nullptr;
   uint32_t wake_event_ = 0;
@@ -69,7 +71,6 @@ private:
   std::string exit_reason_;
   float scale_ = 1;
   chrome::Frame chrome_{};  // last frame's window chrome, for the hit test
-  uint64_t last_input_ = 0;
   std::optional<library::Install> uninstall_target_;
   std::optional<download::Job> cancel_target_;
   struct SharedReport {

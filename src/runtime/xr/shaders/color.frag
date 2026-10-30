@@ -20,4 +20,9 @@ void main() {
   // sRGB attachment format encodes the output. UNORM/float remain linear.
   color = vec4(dot(transform.row0.rgb,value.rgb), dot(transform.row1.rgb,value.rgb),
                dot(transform.row2.rgb,value.rgb), value.a);
+  if (transform.row0.w != 0) color.rgb *= value.a;
+  if (transform.row1.w != 0) color.a = 1;
+  // Reconstruction opacity P over the black environment: E stays unchanged,
+  // A'=1-P*(1-A) yields E + P*(1-A)*camera on the headset.
+  if (transform.row2.w != 1) color.a = 1 - transform.row2.w * (1 - color.a);
 }

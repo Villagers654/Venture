@@ -43,6 +43,13 @@ The **Import** page adds games that aren't in your Meta library:
 - **From a headset:** connect a Quest with developer mode on (USB, or Wi-Fi debugging) and choose **Scan headset**. Nothing on the headset is changed.
 - **From this computer:** choose or drop an APK, a ZIP, or a folder with the APK and its data.
 
+### Experimental mixed reality
+
+This branch includes an opt-in [Steam Link passthrough integration](docs/MIXED_REALITY.md)
+for Quest OpenXR games running on a Windows PC and displayed on Steam Frame.
+Enable **Settings → Runtime → Steam Frame passthrough**. Spirit Sling Tabletop
+has been tested on Steam Frame; other games and MR features still require validation.
+
 ### Play from Steam
 
 Turn on **Add games to Steam** in Settings. Installed games appear in Steam and SteamVR the next time Steam starts.
@@ -54,6 +61,18 @@ If a game crashes, click **Report issue** on the banner that appears. Otherwise,
 [Open an issue](https://github.com/Villagers654/Venture/issues/new/choose) with the game, what happened, how to make it happen again and the debug report link. To watch a game's output live, turn on **Show runtime console** in Settings. For help or to chat, join the [Discord](https://discord.gg/Ey9hHszvwa).
 
 ### Build (Windows)
+
+To build and install the checked-out project, run:
+
+```powershell
+.\install.cmd
+```
+
+This prepares the dependencies, builds Venture and updates the local installation.
+Later runs reuse the compiler and dependency caches. Options such as `-Jobs 4`,
+`-NoLaunch` and `-InstallDir` are forwarded to `install.ps1`.
+
+For a manual build:
 
 ```sh
 python tools/bootstrap.py --jdk --angle      # pinned toolchain, JDK and ANGLE into .deps/

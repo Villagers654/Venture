@@ -11,6 +11,7 @@
 #include "core/shutdown_trace.h"
 #include "gfx/gpu_device.h"
 #include "hle/openxr/state.h"
+#include "hle/openxr/passthrough.h"
 #include "hle/vulkan/vulkan.h"
 #include "hle/vulkan/timing.h"
 #include "platform/thread_priority.h"
@@ -538,6 +539,7 @@ XrResult xrGetSystemProperties(XrInstance instance, XrSystemId system, XrSystemP
     // unrecognized/disabled nodes and process only the first occurrence of a
     // type. Loader/API layers may prepend a replacement for an existing node.
     if (!types.insert(p->type).second) continue;
+    if (passthrough_properties(p)) continue;
     // The guest identity's headset id, never the host headset's.
     if (p->type == XR_TYPE_SYSTEM_HEADSET_ID_PROPERTIES_META && enabled("XR_META_headset_id")) {
       const auto &id = process_config().device_identity->headset_id;
@@ -692,6 +694,8 @@ XrResult xrDestroySession(XrSession handle) {
     return XR_ERROR_HANDLE_INVALID;
   for (const auto& [chain, image] : state().swapchains)
     if (image.operation_in_progress) return XR_ERROR_CALL_ORDER_INVALID;
+  auto passthrough_result = destroy_passthrough_session(handle);
+  if (XR_FAILED(passthrough_result)) return passthrough_result;
   while (!state().swapchains.empty()) {
     auto result = guest::xrDestroySwapchain(state().swapchains.begin()->first);
     if (XR_FAILED(result))
@@ -796,7 +800,9 @@ XrResult xrEndSession(XrSession handle) {
   if (!valid_handle(handle, "XrSession"))
     return XR_ERROR_HANDLE_INVALID;
   venture::xr::cancel_sequence(handle);
-  return session().end_session();
+  const auto result = session().end_session();
+  if (XR_SUCCEEDED(result)) suspend_passthrough_source();
+  return result;
 }
 XrResult xrRequestExitSession(XrSession handle) {
   std::lock_guard lock(state().mutex);
@@ -858,6 +864,8 @@ XrResult xrPollEvent(XrInstance instance, XrEventDataBuffer *out) {
     trace.state(e->state);
     if (e->session == session().handle) {
       session().state = e->state;
+      if (e->state == XR_SESSION_STATE_STOPPING || e->state == XR_SESSION_STATE_EXITING ||
+          e->state == XR_SESSION_STATE_LOSS_PENDING) suspend_passthrough_source();
       if (e->state != XR_SESSION_STATE_FOCUSED) venture::xr::cancel_sequence(e->session);
       log::info("xr", "Host session state={}", int(e->state));
       // Frame functions of a session pending loss return SESSION_LOST; do
@@ -886,6 +894,10 @@ XrResult xrWaitFrame(XrSession handle, const XrFrameWaitInfo *info, XrFrameState
         ? 0 : session().display_timing.rate();
   }
   auto result = session().wait(info, out);
+  if (result == XR_ERROR_SESSION_LOST || result == XR_ERROR_INSTANCE_LOST || result == XR_SESSION_LOSS_PENDING) {
+    std::lock_guard lock(state().mutex);
+    suspend_passthrough_source();
+  }
   if (XR_SUCCEEDED(result)) trace.frame(out->predictedDisplayTime, out->predictedDisplayPeriod, out->shouldRender);
   if (XR_SUCCEEDED(result) && (venture::environment::getenv("VENTURE_TRACE_XR") ||
        venture::environment::getenv("VENTURE_TRACE_XR_FRAMES"))) {
@@ -1033,7 +1045,7 @@ XrResult xrEndFrame(XrSession handle, const XrFrameEndInfo *info) {
   // The guest's whole call; the host runtime's share is the xr_end_frame record inside it.
   vulkan::ScopedHostWait timing("guest_end_frame");
   std::unique_lock lock(state().mutex);
-  std::lock_guard sl(session().mutex);
+  std::unique_lock sl(session().mutex);
   if (!valid_handle(handle, "XrSession"))
     return XR_ERROR_HANDLE_INVALID;
   if (XR_FAILED(validate_struct(info, XR_TYPE_FRAME_END_INFO)) ||
@@ -1072,6 +1084,26 @@ XrResult xrEndFrame(XrSession handle, const XrFrameEndInfo *info) {
   std::vector<const XrCompositionLayerBaseHeader*> layers;
   auto surface_result = [] { vulkan::ScopedHostWait timing("guest_end_surfaces"); return present_android_surfaces(); }();
   if (XR_FAILED(surface_result)) return surface_result;
+  PassthroughFrame passthrough;
+  bool handled = false;
+  auto passthrough_result = prepare_passthrough_frame(handle, *info, passthrough, handled);
+  if (XR_FAILED(passthrough_result)) return passthrough_result;
+  if (handled) {
+    // Keep this stereo cohort synchronous: a queued host End must not outlive
+    // the source permission observed for these two independent images.
+    if (passthrough.permission && !passthrough_permission_current(passthrough.permission)) {
+      const auto result = make_passthrough_frame_opaque(handle, passthrough);
+      if (XR_FAILED(result)) return result;
+    }
+    lock.unlock();
+    const auto result = session().end(&passthrough.info);
+    if (XR_FAILED(result) || result == XR_SESSION_LOSS_PENDING) {
+      sl.unlock();
+      lock.lock();
+      suspend_passthrough_source();
+    }
+    return result;
+  }
   std::vector<XrCompositionLayerEquirectKHR> spheres;
   std::vector<InputChain> chains;
   PresentationLayers rects;
@@ -1080,6 +1112,11 @@ XrResult xrEndFrame(XrSession handle, const XrFrameEndInfo *info) {
   chains.reserve(info->layerCount);
   for (std::uint32_t i = 0; i < info->layerCount; ++i) {
     auto layer = info->layers[i];
+    const bool passthrough_layer = layer && layer->type == XR_TYPE_COMPOSITION_LAYER_PASSTHROUGH_FB;
+    if (passthrough_layer) {
+      const auto result = validate_passthrough_layer(handle, layer);
+      if (XR_FAILED(result)) return result;
+    }
     bool converted = false;
     if (layer && valid_handle(layer->space, "XrSpace")) {
       const StructureInfo* metadata = nullptr;
@@ -1118,7 +1155,7 @@ XrResult xrEndFrame(XrSession handle, const XrFrameEndInfo *info) {
       if (XR_FAILED(result)) return result;
       layer = static_cast<const XrCompositionLayerBaseHeader*>(chains.back().head());
     }
-    if (!layer || !valid_handle(layer->space, "XrSpace") ||
+    if (!layer || (!passthrough_layer && !valid_handle(layer->space, "XrSpace")) ||
         XR_FAILED(converted ? validate_chain(layer->next) : validate_chain(layer))) {
       static unsigned reports = 0;
       if (reports++ < 8)

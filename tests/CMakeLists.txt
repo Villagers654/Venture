@@ -1,4 +1,5 @@
 # Source names are remapped for release builds; fixtures are executable-relative.
+add_test(NAME preview_installation COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/install_preview_test.py)
 configure_file("${CMAKE_CURRENT_SOURCE_DIR}/data/required_rule_catalog.json"
   "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/test-data/required_rule_catalog.json" COPYONLY)
 configure_file("${CMAKE_CURRENT_SOURCE_DIR}/data/steam-shortcuts.vdf"
@@ -15,6 +16,7 @@ add_executable(venture_tests
   import_test.cpp
   accounts_test.cpp
   launcher_accounts_test.cpp
+  launcher_frame_pacing_test.cpp
 
   ${PROJECT_SOURCE_DIR}/src/launcher/ui/rich_text_parse.cpp
   ${PROJECT_SOURCE_DIR}/src/launcher/debug_report.cpp

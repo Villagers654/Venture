@@ -155,7 +155,40 @@ def git_bash():
     raise RuntimeError('FFmpeg needs Git for Windows bash')
 
 
+def find_gnupg(windows=None):
+    """Use an installed pair, including Git's tools outside the normal PATH."""
+    windows = os.name == 'nt' if windows is None else windows
+    gpg, gpgv = shutil.which('gpg'), shutil.which('gpgv')
+    if gpg and gpgv:
+        return gpg, gpgv
+    candidates = [Path(tool).parent for tool in (gpg, gpgv) if tool]
+    if windows:
+        git = shutil.which('git')
+        if git:
+            candidates += [root / 'usr/bin' for root in list(Path(git).resolve().parents)[:3]]
+        for variable in ('ProgramFiles', 'ProgramFiles(x86)', 'LOCALAPPDATA'):
+            directory = os.environ.get(variable)
+            if directory:
+                candidates.append(Path(directory) / 'GnuPG/bin')
+    suffix = '.exe' if windows else ''
+    for directory in candidates:
+        pair = directory / ('gpg' + suffix), directory / ('gpgv' + suffix)
+        if all(tool.is_file() for tool in pair):
+            return tuple(str(tool) for tool in pair)
+    raise RuntimeError('GnuPG (gpg and gpgv) is required to verify the pinned FFmpeg release. '
+                       'Use a complete Git for Windows installation (including usr/bin/gpg.exe and gpgv.exe), '
+                       'or install GnuPG and make both tools available.')
+
+
+def gnupg_path(tool, path):
+    # Git's MSYS executables need /c/... paths; native GnuPG needs C:\... .
+    msys = (Path(tool).parent / 'msys-2.0.dll').is_file()
+    return shell_path(path) if os.name == 'nt' and msys else str(path)
+
+
 def build_dependency():
+    gpg, gpgv = find_gnupg()  # Diagnose prerequisites before downloading sources.
+    print('[ffmpeg] signature tools: ' + gpg + ' / ' + gpgv, flush=True)
     BASE.mkdir(parents=True, exist_ok=True)
     # Use the existing downloader inside the shared toolchain cache.
     # Reuse the already authenticated archive rather than refetching it.
@@ -179,19 +212,14 @@ def build_dependency():
         raise RuntimeError('FFmpeg archive SHA-256 mismatch')
     signature = fetch_file('signature', LOCK['url']+'.asc', LOCK['signature_sha256'], 'release.asc')
     key = fetch_file('key', LOCK['key_url'], LOCK['key_sha256'], 'release-key.asc')
-    gpg, gpgv = shutil.which('gpg'), shutil.which('gpgv')
-    if not gpg or not gpgv:
-        raise RuntimeError('GnuPG (gpg and gpgv) is required to verify the pinned FFmpeg release')
     keyring = BASE / 'keyring'; keyring.mkdir(exist_ok=True)
-    # Git's GnuPG uses MSYS paths; native POSIX uses ordinary absolute paths.
-    gp = lambda p: shell_path(p) if os.name == 'nt' else str(p)
     # gpgv verifies against only the hash-pinned public key. No user keyring,
     # trust database or gpg-agent/socket is needed in the long hash-keyed path.
     public_keyring = keyring / 'release.gpg'
-    subprocess.run([gpg, '--batch', '--yes', '--dearmor', '--output', gp(public_keyring), gp(key)],
+    subprocess.run([gpg, '--batch', '--yes', '--dearmor', '--output', gnupg_path(gpg, public_keyring), gnupg_path(gpg, key)],
                    check=True, capture_output=True)
-    verified = subprocess.run([gpgv, '--homedir', gp(keyring), '--keyring', gp(public_keyring),
-                               '--status-fd', '1', gp(signature), gp(archive)],
+    verified = subprocess.run([gpgv, '--homedir', gnupg_path(gpgv, keyring), '--keyring', gnupg_path(gpgv, public_keyring),
+                               '--status-fd', '1', gnupg_path(gpgv, signature), gnupg_path(gpgv, archive)],
                               check=True, capture_output=True, text=True)
     if '[GNUPG:] VALIDSIG '+LOCK['fingerprint']+' ' not in verified.stdout:
         raise RuntimeError('FFmpeg signature fingerprint mismatch')

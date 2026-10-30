@@ -10,6 +10,7 @@
 #include "platform/environment.h"
 #include "platform/low_memory.h"
 #include "common/log.h"
+#include "common/library/library.h"
 #include "common/paths.h"
 #include "common/saves_migration.h"
 #include <nlohmann/json.hpp>
@@ -123,6 +124,11 @@ void configure_game(const std::filesystem::path& install,
             config.device_identity->device,
             config.device_identity == &native_device_identity() ? "" : " via Horizon compatibility mode");
   auto base = paths::data_dir();
+  try {
+    config.steam_frame_passthrough = library::Settings::load(base).steam_frame_passthrough;
+  } catch (const std::exception& error) {
+    log::warn("xr-passthrough", "Could not read Steam Frame setting; passthrough disabled: {}", error.what());
+  }
   config.data_dir = account_data_dir(base, config.account_key, config.package);
   config.guest_cache_dir = config.data_dir / "cache";
   config.cache_dir = base / "cache" / config.package / std::to_string(config.version_code);

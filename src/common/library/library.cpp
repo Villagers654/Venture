@@ -428,6 +428,7 @@ Settings Settings::load(const fs::path &data) {
   s.texture_compression = int(std::min<uint64_t>(2, number(j, "textureCompression")));
   if (auto percent = number(j, "textureCompressionThreshold"); percent >= 10 && percent <= 95)
     s.texture_compression_threshold = int(percent);
+  s.steam_frame_passthrough = field(j, "steamFramePassthrough") == true;
   s.console = field(j, "launchWithConsole") == true;
   s.check_updates = field(j, "checkForUpdates") != false;
   s.dismissed_update = str(j, "dismissedUpdate");
@@ -458,6 +459,7 @@ void Settings::save(const fs::path &data) const {
          {"menuButton", menu_button},
          {"textureCompression", texture_compression},
          {"textureCompressionThreshold", texture_compression_threshold},
+         {"steamFramePassthrough", steam_frame_passthrough},
          {"launchWithConsole", console},
          {"checkForUpdates", check_updates},
          {"dismissedUpdate", dismissed_update},

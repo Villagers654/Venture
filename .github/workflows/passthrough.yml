@@ -1,0 +1,138 @@
+name: Passthrough integration
+on:
+  pull_request:
+  push:
+    branches: [feat/steam-link-passthrough]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  launcher:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install launcher build dependencies
+        run: sudo apt-get update && sudo apt-get install -y g++-13 ninja-build libssl-dev
+      - name: Configure launcher without game dependencies
+        run: >-
+          cmake -S . -B build/launcher-idle -G Ninja -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_C_COMPILER=gcc-13 -DCMAKE_CXX_COMPILER=g++-13
+          -DVENTURE_BUILD_RUNTIME=OFF -DVENTURE_BUILD_TESTS=OFF
+          -DSDL_WAYLAND=OFF -DSDL_X11=OFF -DSDL_UNIX_CONSOLE_BUILD=ON
+      - name: Build actual launcher and focused checks
+        run: cmake --build build/launcher-idle --target venture venture-cli venture_launcher_settings_tests venture_launcher_pacing_tests venture_launcher_idle_probe --parallel 2
+      - name: Test frame scheduling and real UI idle behavior
+        run: |
+          build/launcher-idle/bin/venture_launcher_pacing_tests
+          build/launcher-idle/bin/venture_launcher_settings_tests
+          python3 tests/launcher_settings_test.py build/launcher-idle/bin/venture-cli
+          python3 tests/launcher_idle_test.py build/launcher-idle/bin/venture_launcher_idle_probe
+      - name: Scan actual Linux launcher for shipping paths and identities
+        run: python3 tests/package_scan_test.py --launcher build/launcher-idle/bin/venture --strip strip
+  vulkan:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install Vulkan software test dependencies
+        run: sudo apt-get update && sudo apt-get install -y g++-13 ninja-build libvulkan-dev mesa-vulkan-drivers glslang-tools
+      - name: Configure focused fixtures
+        run: cmake -S tests/passthrough -B build/passthrough-tests -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_COMPILER=g++-13
+      - name: Build
+        run: cmake --build build/passthrough-tests --parallel 2
+      - name: Test API translation and real GPU pixels
+        run: |
+          for driver in /usr/share/vulkan/icd.d/*lvp*.json; do
+            if [ -f "$driver" ]; then export VK_DRIVER_FILES="$driver"; break; fi
+          done
+          test -n "$VK_DRIVER_FILES"
+          ctest --test-dir build/passthrough-tests --output-on-failure
+      - name: Test local preview installation
+        run: |
+          python3 tests/install_preview_test.py
+          python3 tests/preview_package_test.py
+          python3 tests/package_scan_test.py
+      - name: Test FFmpeg verifier discovery
+        run: python3 tests/ffmpeg_tools_test.py
+      - name: Check Windows installer syntax
+        shell: pwsh
+        run: |
+          $parseErrors = $null
+          $parseTokens = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            "$pwd/install.ps1", [ref]$parseTokens, [ref]$parseErrors) > $null
+          if ($parseErrors.Count) { $parseErrors | Format-List; exit 1 }
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Test framework behavior and Unity fragment permissions
+        run: |
+          python3 - <<'PY'
+          import pathlib, subprocess
+          root = pathlib.Path.cwd()
+          output = root / 'build/fragment-permissions'
+          output.mkdir(parents=True, exist_ok=True)
+          sources = sorted((root / 'src/runtime/java/framework').rglob('*.java'))
+          bridge = root / 'src/runtime/java/bridge/com/venture/runtime'
+          sources += [bridge / 'NativeMethods.java', bridge / 'MethodHooks.java']
+          sources += [root / 'tests/java' / name for name in
+                      ('FragmentPermissionsTest.java', 'FrameworkTest.java', 'RecordingHost.java', 'TestNatives.java')]
+          subprocess.run(['javac', '--release', '21', '-encoding', 'UTF-8', '-d', str(output), *map(str, sources)], check=True)
+          for test in ('FragmentPermissionsTest', 'FrameworkTest'):
+              subprocess.run(['java', '-Xverify:all', '-cp', str(output), test], check=True)
+          PY
+  windows-bootstrap:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Test verifier discovery with Git for Windows
+        shell: powershell
+        run: |
+          python tests/ffmpeg_tools_test.py
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Test in-place preview updates and legacy cleanup
+        run: |
+          python tests/install_preview_test.py
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          python tests/preview_package_test.py
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          python tests/package_scan_test.py
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Test native logging in Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          .\tests\build_helpers_test.ps1 -PythonPath (Get-Command python.exe).Source
+      - name: Prepare pinned Windows compiler
+        run: python -c "from tools import bootstrap; bootstrap.DEPS.mkdir(exist_ok=True); bootstrap.provision('llvm-mingw', bootstrap.DEPENDENCIES['llvm-mingw'])"
+      - name: Compile XR production sources with Windows libc++
+        shell: pwsh
+        run: |
+          $compiler = "$pwd/.deps/llvm-mingw/bin/clang++.exe"
+          cmake -S tests/passthrough -B build/passthrough-compile -G Ninja `
+            -DCMAKE_CXX_COMPILER="$compiler" -DVENTURE_PASSTHROUGH_COMPILE_ONLY=ON
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          cmake --build build/passthrough-compile --parallel 2
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Build Windows launcher without game dependencies
+        shell: pwsh
+        run: |
+          $compilerDir = "$pwd/.deps/llvm-mingw/bin".Replace('\', '/')
+          $env:PATH = "$compilerDir;$env:PATH"
+          cmake -S . -B build/launcher-idle -G Ninja -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_C_COMPILER="$compilerDir/clang.exe" -DCMAKE_CXX_COMPILER="$compilerDir/clang++.exe" `
+            -DCMAKE_RC_COMPILER="$compilerDir/llvm-rc.exe" `
+            -DVENTURE_BUILD_RUNTIME=OFF -DVENTURE_BUILD_TESTS=OFF
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          cmake --build build/launcher-idle --target venture venture-cli venture_launcher_settings_tests venture_launcher_pacing_tests --parallel 2
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          & ./build/launcher-idle/bin/venture_launcher_settings_tests.exe
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          python tests/launcher_settings_test.py ./build/launcher-idle/bin/venture-cli.exe
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          & ./build/launcher-idle/bin/venture_launcher_pacing_tests.exe
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Scan actual Windows launcher for shipping paths and identities
+        run: python tests/package_scan_test.py --launcher build/launcher-idle/bin/venture.exe --strip .deps/llvm-mingw/bin/llvm-strip.exe

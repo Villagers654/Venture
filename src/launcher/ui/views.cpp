@@ -1619,6 +1619,25 @@ void App::draw_settings() {
   setting_row("Runtime", "Leave empty to use the runtime that came with Venture.", field_w, s(38),
               input("##runtime", &settings_runtime_, "Included runtime"));
   divider();
+  setting_row("Steam Frame passthrough",
+              "Steam Frame only, over Steam Link. Requires Steam Link Native Passthrough. "
+              "Applies to the next game launch.", s(108), s(24), [&] {
+    if (button("Info##steam-frame", 0, Tone::secondary, {s(52), s(24)}))
+      action([] { open_url("https://github.com/McFredward/steam-link-native-passthrough"); });
+    if (ImGui::IsItemHovered())
+      tooltip("For Steam Frame only. Requires a Windows PC with NVIDIA and the PC/Frame companions. "
+              "Click to open Steam Link Native Passthrough:\n"
+              "https://github.com/McFredward/steam-link-native-passthrough");
+    ImGui::SameLine(0, s(12));
+#ifndef _WIN32
+    ImGui::BeginDisabled();
+#endif
+    if (toggle("steam-frame-passthrough", &settings_.steam_frame_passthrough)) action([&] { save_settings(); });
+#ifndef _WIN32
+    ImGui::EndDisabled();
+#endif
+  });
+  divider();
   setting_row("Show runtime console", "Opens a console window with live output when a game starts.", s(44), s(24), [&] {
     if (toggle("console", &settings_.console)) action([&] { save_settings(); });
   });

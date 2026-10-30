@@ -1,5 +1,6 @@
 #include "common/log.h"
 #include "hle/openxr/state.h"
+#include "hle/openxr/passthrough.h"
 #include "xr/clock.h"
 #include "xr/queue.h"
 #include "gfx/gpu_device.h"
@@ -80,6 +81,13 @@ XrResult xrGetRecommendedLayerResolutionMETA(XrSession handle,
       return XR_ERROR_TIME_INVALID;
   }
   const auto* layer = info->layer;
+  if (layer->type == XR_TYPE_COMPOSITION_LAYER_PASSTHROUGH_FB) {
+    result = validate_passthrough_layer(handle, layer);
+    if (XR_FAILED(result)) return result;
+    out->isValid = XR_FALSE;
+    out->recommendedImageDimensions = {0, 0};
+    return XR_SUCCESS;
+  }
   if (!valid_handle(layer->space, "XrSpace")) return invalid(HandleField::space, !layer->space, int(layer->type));
   // The layer is only inspected here. Its own type must be enabled, while its
   // next chain ignores unknown and unenabled nodes (OpenXR Â§2.9.7); OVRPlugin

@@ -83,6 +83,8 @@ struct Settings {
   // texture_compression_threshold percent of GPU memory is in use, 2 off.
   int texture_compression = 0;
   int texture_compression_threshold = 50;
+  // Steam Frame over Steam Link, applied when the next game starts.
+  bool steam_frame_passthrough = false;
   bool runtime_override() const;
   // `games` first, then the other library folders.
   std::vector<fs::path> roots() const;

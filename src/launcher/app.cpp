@@ -1,4 +1,5 @@
 #include "launcher/exit_report.h"
+#include "launcher/frame_pacing.h"
 #include "launcher/app.h"
 #include "common/library/import.h"
 #include "common/download/asset_files.h"
@@ -85,7 +86,8 @@ App::App(Options options) : Core(std::move(options)) {
   renderer_ = SDL_CreateRenderer(window_, nullptr);
   if (!renderer_)
     throw std::runtime_error("Could not create an SDL renderer.");
-  SDL_SetRenderVSync(renderer_, 1);
+  const bool vsync = SDL_SetRenderVSync(renderer_, 1);
+  log::info("launcher", "UI renderer={} vsync={}", SDL_GetRendererName(renderer_), vsync);
   style_native_window(window_, 26, 27, 30);
   if (SDL_Surface *icon = ui::icon_surface(256)) {
     SDL_SetWindowIcon(window_, icon);
@@ -401,6 +403,7 @@ void App::report_smoke() {
               {"playAttempted", smoke_played_},
               {"playRequestedUnixMs", smoke_play_requested_unix_ms_},
               {"renderer", SDL_GetRendererName(renderer_)},
+              {"renderedFrames", ImGui::GetFrameCount()},
               {"dpiScale", scale_}};
   Json exits = Json::array();
   for (auto &[id, r] : running_)
@@ -454,14 +457,16 @@ int App::run() {
   const auto previous_int = std::signal(SIGINT, request_signal_exit);
   const auto previous_term = std::signal(SIGTERM, request_signal_exit);
   auto started = SDL_GetTicks();
-  last_input_ = started;
+  FramePacing pacing(started);
+  auto last_tick = started;
   while (!quit_) {
     if (exit_signal) {
       exit_reason_ = "signal";
       smoke_exit_ = 128 + int(exit_signal);
       break;
     }
-    auto frame = SDL_GetTicks();
+    auto now = SDL_GetTicks();
+    bool work_ready = false;
     SDL_Event event{};
     auto process = [&](const SDL_Event &e) {
       ImGui_ImplSDL3_ProcessEvent(&e);
@@ -472,8 +477,11 @@ int App::run() {
           exit_reason_ = e.type == SDL_EVENT_QUIT ? "quit_event" : "window_close";
         quit_ = true;
       }
-      if (e.type >= SDL_EVENT_KEY_DOWN && e.type <= SDL_EVENT_MOUSE_WHEEL)
-        last_input_ = SDL_GetTicks();
+      if ((e.type >= SDL_EVENT_KEY_DOWN && e.type <= SDL_EVENT_MOUSE_WHEEL) ||
+          (e.type >= SDL_EVENT_WINDOW_FIRST && e.type <= SDL_EVENT_WINDOW_LAST) ||
+          e.type == SDL_EVENT_DROP_FILE || e.type == wake_event_)
+        pacing.wake(SDL_GetTicks());
+      if (e.type == wake_event_) work_ready = true;
       // A dropped APK, folder or archive opens the import page with it.
       if (e.type == SDL_EVENT_DROP_FILE && e.drop.data)
         scan_local(paths::from_utf8(e.drop.data));
@@ -482,15 +490,21 @@ int App::run() {
         theme();
       }
     };
-    int wait =
-        (frame - last_input_ > 1200 && !ImGui::IsAnyItemActive()) ? 100 : 0;
-    if (SDL_GetWindowFlags(window_) & SDL_WINDOW_MINIMIZED)
-      wait = 250;
+    auto hidden = [&] { return SDL_GetWindowFlags(window_) & (SDL_WINDOW_MINIMIZED | SDL_WINDOW_HIDDEN); };
+    const int wait = pacing.wait(now, hidden());
     if (wait && SDL_WaitEventTimeout(&event, wait))
       process(event);
     while (SDL_PollEvent(&event))
       process(event);
+    if (quit_) break;
+    now = SDL_GetTicks();
+    // A held drag needs continuous frames; mere text-field focus does not.
+    if (SDL_GetMouseFocus() == window_ && SDL_GetMouseState(nullptr, nullptr))
+      pacing.wake(now);
+    if (!options_.launch_requested && !work_ready && !pacing.ready(now, hidden()) && now - last_tick < 250)
+      continue;
     tick();
+    last_tick = SDL_GetTicks();
     if (options_.launch_requested) {
       if (!direct_started_ && !scanning_) {
         direct_started_ = true;
@@ -512,7 +526,6 @@ int App::run() {
         else if (r->second.exit) smoke_exit_ = *r->second.exit;
       }
       if (smoke_exit_) { exit_reason_ = "direct_launch_exit"; break; }
-      SDL_Delay(20);
       continue;
     }
     if (options_.smoke_details && !smoke_detail_started_ && !refreshing_ &&
@@ -554,6 +567,14 @@ int App::run() {
       smoke_auth_opened_ = true;
       sign_in();
     }
+    const bool timed_out =
+        options_.smoke_seconds &&
+        SDL_GetTicks() - started >= uint64_t(options_.smoke_seconds) * 1000;
+    // A timeout/completed smoke still draws its final screenshot. Ordinary
+    // minimized/hidden windows keep workers and game polling without drawing.
+    if (!timed_out && !smoke_exit_ && !pacing.ready(SDL_GetTicks(), hidden()))
+      continue;
+    const auto frame = SDL_GetTicks();
     ImGui_ImplSDLRenderer3_NewFrame();
     ImGui_ImplSDL3_NewFrame();
     ImGui::NewFrame();
@@ -566,9 +587,6 @@ int App::run() {
     const auto framebuffer_scale = ImGui::GetIO().DisplayFramebufferScale;
     SDL_SetRenderScale(renderer_, framebuffer_scale.x, framebuffer_scale.y);
     ImGui_ImplSDLRenderer3_RenderDrawData(ImGui::GetDrawData(), renderer_);
-    const bool timed_out =
-        options_.smoke_seconds &&
-        SDL_GetTicks() - started >= uint64_t(options_.smoke_seconds) * 1000;
     if (timed_out && !options_.smoke_install.empty() && !smoke_exit_) {
       smoke_install_error_ = "Timed out before the install finished.";
       smoke_exit_ = 1;
@@ -587,9 +605,7 @@ int App::run() {
       quit_ = true;
     }
     SDL_RenderPresent(renderer_);
-    auto elapsed = SDL_GetTicks() - frame;
-    if (elapsed < 17)
-      SDL_Delay(Uint32(17 - elapsed));
+    pacing.presented(frame);
   }
   if (exit_reason_.empty()) exit_reason_ = "launcher_quit";
   std::vector<std::optional<int>> codes;

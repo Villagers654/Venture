@@ -19,6 +19,7 @@ public final class FragmentManager {
   // AOSP allows lookups and deferred commits from any thread; Unity's
   // UnityPermissions.requestUserPermissions issues both from UnityMain.
   public Fragment findFragmentByTag(String tag) {
+    if (tag == null) return null;
     synchronized (fragments) {
       for (int i = fragments.size() - 1; i >= 0; --i)
         if (java.util.Objects.equals(fragments.get(i).tag, tag)) return fragments.get(i);
@@ -50,6 +51,7 @@ public final class FragmentManager {
   }
   private Runnable nextPending() { synchronized (pending) { return pending.pollFirst(); } }
   void add(Fragment fragment, String tag) {
+    mainThread();
     if (fragment.manager != null) throw new IllegalStateException("Fragment already added");
     fragment.manager = this; fragment.activity = activity; fragment.tag = tag;
     synchronized (fragments) { fragments.add(fragment); }
@@ -57,6 +59,7 @@ public final class FragmentManager {
     move(fragment, stage);
   }
   void remove(Fragment fragment) {
+    mainThread();
     synchronized (fragments) {
       if (!fragments.remove(fragment)) throw new IllegalStateException("Fragment not added");
     }
@@ -78,11 +81,11 @@ public final class FragmentManager {
   }
   void dispatch(int target) {
     mainThread(); stage = target;
-    for (Fragment f : List.copyOf(fragments)) if (f.manager == this) move(f, target);
+    for (Fragment f : getFragments()) if (f.manager == this) move(f, target);
   }
   void destroy() {
     mainThread();
     synchronized (pending) { destroyed = true; pending.clear(); }
-    for (Fragment f : List.copyOf(fragments)) remove(f);
+    for (Fragment f : getFragments()) remove(f);
   }
 }

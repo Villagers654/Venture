@@ -23,7 +23,7 @@ FORWARD_EXT = [
     'XR_KHR_composition_layer_color_scale_bias', 'XR_FB_composition_layer_image_layout',
     'XR_EXT_local_floor', 'XR_FB_space_warp',
     'XR_EXT_performance_settings', 'XR_EXT_view_configuration_depth_range',
-    'XR_KHR_generic_controller',
+    'XR_KHR_generic_controller', 'XR_FB_triangle_mesh',
 ]
 MANUAL_EXT = [
     'XR_KHR_vulkan_enable', 'XR_KHR_vulkan_enable2', 'XR_KHR_loader_init',
@@ -32,6 +32,7 @@ MANUAL_EXT = [
     'XR_FB_touch_controller_pro', 'XR_META_touch_controller_plus',
     'XR_KHR_locate_spaces', 'XR_FB_haptic_pcm', 'XR_FB_haptic_amplitude_envelope',
     'XR_META_recommended_layer_resolution', 'XR_META_vulkan_swapchain_create_info',
+    'XR_FB_passthrough',
 ]
 MANUAL = set('''xrGetInstanceProcAddr xrEnumerateApiLayerProperties
 xrEnumerateInstanceExtensionProperties xrCreateInstance xrDestroyInstance

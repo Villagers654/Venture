@@ -22,8 +22,9 @@ if(TARGET venture-framework)
       "${CMAKE_CURRENT_SOURCE_DIR}/MenuQuitTest.java"
       "${CMAKE_CURRENT_SOURCE_DIR}/SQLiteTest.java"
       "${CMAKE_CURRENT_SOURCE_DIR}/InstrumentationProbe.java"
+      "${CMAKE_CURRENT_SOURCE_DIR}/FragmentPermissionsTest.java"
     DEPENDS "${VENTURE_FRAMEWORK_JAR}" FrameworkTest.java AbiProfileTest.java VMStackTest.java ProcessExitTest.java ProcessCommandsTest.java
-      ColdRestartTest.java LifecycleTest.java LocalServicesTest.java PreferencesTest.java AssetReadTraceTest.java RecordingHost.java TestNatives.java GraphicsTest.java ThermalTest.java MenuQuitTest.java SQLiteTest.java InstrumentationProbe.java VERBATIM)
+      ColdRestartTest.java LifecycleTest.java LocalServicesTest.java PreferencesTest.java AssetReadTraceTest.java RecordingHost.java TestNatives.java GraphicsTest.java ThermalTest.java MenuQuitTest.java SQLiteTest.java InstrumentationProbe.java FragmentPermissionsTest.java VERBATIM)
   add_custom_target(venture_framework_tests ALL DEPENDS "${framework_test_classes}/FrameworkTest.class")
   if(WIN32)
     set(framework_classpath "${VENTURE_FRAMEWORK_JAR}\;${framework_test_classes}")
@@ -32,6 +33,8 @@ if(TARGET venture-framework)
   endif()
 
   add_test(NAME framework_java COMMAND "${VENTURE_JAVA}" -Xverify:all -cp "${framework_classpath}" FrameworkTest)
+  add_test(NAME framework_fragment_permissions COMMAND "${VENTURE_JAVA}" -Xverify:all -cp "${framework_classpath}" FragmentPermissionsTest)
+  set_tests_properties(framework_fragment_permissions PROPERTIES TIMEOUT 15)
 
   add_test(NAME framework_preferences COMMAND "${VENTURE_JAVA}" -Xverify:all -cp "${framework_classpath}" PreferencesTest)
   set_tests_properties(framework_preferences PROPERTIES TIMEOUT 30)
