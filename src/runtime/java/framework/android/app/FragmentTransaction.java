@@ -9,6 +9,9 @@ public final class FragmentTransaction {
     if (committed) throw new IllegalStateException("Already committed");
     changes.add(() -> manager.add(f, tag)); return this;
   }
+  // Headless fragments have no view; a fragment that inflates one still fails
+  // when it is attached, whichever container id was named.
+  public FragmentTransaction add(int containerViewId, Fragment f, String tag) { return add(f, tag); }
   public FragmentTransaction remove(Fragment f) {
     if (committed) throw new IllegalStateException("Already committed");
     changes.add(() -> manager.remove(f)); return this;
