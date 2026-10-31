@@ -439,6 +439,57 @@ TEST_CASE("HLE string comparisons and searches match across block boundaries") {
   CHECK(compare("strcmp", std::string(800, 'q'), std::string(800, 'q')) == 0);
   CHECK(compare("strcmp", "\xff", "a") == 1); // unsigned char comparison
   CHECK(compare("strncmp", "abc", "abd", 0) == 0);
+  // Guest strcmp: word loop for equal alignment, bytes otherwise, every offset.
+  alignas(16) char x[64], y[64];
+  for (int ox = 0; ox < 8; ++ox)
+    for (int oy = 0; oy < 8; ++oy)
+      for (int length : {0, 1, 7, 8, 9, 23, 40}) {
+        std::memset(x, 'k', sizeof x); std::memset(y, 'k', sizeof y);
+        x[ox + length] = 0; y[oy + length] = 0;
+        const auto order = [&](const char* a, const char* b) {
+          const auto r = static_cast<int>(thread.call(libc->find_symbol("strcmp"), {h2g(a), h2g(b)}));
+          return (r > 0) - (r < 0);
+        };
+        CAPTURE(ox);
+        CAPTURE(oy);
+        CAPTURE(length);
+        CHECK(order(x + ox, y + oy) == 0);
+        if (length) {
+          y[oy + length - 1] = '\x90';  // unsigned: above 'k'
+          CHECK(order(x + ox, y + oy) == -1);
+          CHECK(order(y + oy, x + ox) == 1);
+          y[oy + length - 1] = 'k';
+        }
+        y[oy + length] = 'k'; y[oy + length + 1] = 0;  // y one byte longer
+        CHECK(order(x + ox, y + oy) == -1);
+      }
+  Linker::get().close(libc);
+}
+TEST_CASE("A64 bsearch calls the guest comparator and returns bionic's element") {
+  register_all_hle_libraries();
+  GuestThread thread(82); thread.attach_to_current_host_thread();
+  auto* libc = Linker::get().open("libc.so", kRtldNow, nullptr);
+  REQUIRE(libc);
+  static int calls = 0;
+  const auto compare = hle::make_thunk("bsearch-test", "compare", [](hle::CallContext& c) {
+    ++calls;
+    const int a = *g2h<int>(c.x(0)), b = *g2h<int>(c.x(1));
+    c.return_x(static_cast<std::uint64_t>(static_cast<std::int64_t>((a > b) - (a < b))));
+  });
+  const int values[] = {1, 3, 3, 3, 5, 8, 13, 21, 34};
+  const auto find = [&](int key, std::uint64_t count) -> std::int64_t {
+    const auto r = thread.call(libc->find_symbol("bsearch"), {h2g(&key), h2g(values), count, sizeof(int), compare});
+    return r ? static_cast<std::int64_t>((r - h2g(values)) / sizeof(int)) : -1;
+  };
+  for (int i = 0; i < 9; ++i) if (values[i] != 3) CHECK(find(values[i], 9) == i);
+  CHECK(find(3, 9) == 2);  // the probe sequence's first equal element
+  CHECK(find(0, 9) == -1);
+  CHECK(find(4, 9) == -1);
+  CHECK(find(40, 9) == -1);
+  CHECK(find(1, 0) == -1);
+  calls = 0;
+  CHECK(find(34, 9) == 8);
+  CHECK(calls == 3);
   Linker::get().close(libc);
 }
 #if defined(__x86_64__) || defined(_M_X64)
@@ -447,9 +498,10 @@ TEST_CASE("A64 libm in the JIT keeps the guest MXCSR: guest rounding, FPSR flags
   GuestThread thread(81); thread.attach_to_current_host_thread();
   auto* libm = Linker::get().open("libm.so", kRtldNow, nullptr);
   REQUIRE(libm);
-  // Pure math binds to the guest-MXCSR fast call; ldexp keeps the host environment.
+  // Pure math binds to the guest-MXCSR fast call; scalbln keeps the host
+  // environment (ldexp and scalbn are guest routines).
   CHECK(hle::resolve_thunk(Linker::get().symbol(libm, "atanf"), kSvcHleCallFastGuestFp));
-  CHECK(hle::resolve_thunk(Linker::get().symbol(libm, "ldexp"), kSvcHleCallFastFp));
+  CHECK(hle::resolve_thunk(Linker::get().symbol(libm, "scalbln"), kSvcHleCallFastFp));
   // GuestThread::call restores FPSR, so a guest stub reports it: x0 = FPSR after blr x0.
   constexpr std::array<std::uint32_t, 5> probe_code{0xa9bf7bfdu, 0xd63f0000u, 0xd53b4420u, 0xa8c17bfdu, 0xd65f03c0u};
   const auto probe = hle::code_stub(probe_code, "libm FPSR probe");
@@ -560,7 +612,9 @@ TEST_CASE("HLE native memory and string accesses repair invalid guest arguments 
   CHECK(thread.call(libc->find_symbol("strcpy"), {bad, p}) == destination);
   CHECK(repair.calls == 1);
   repair = {1, p, bad, 5};
-  CHECK(thread.call(libc->find_symbol("strcmp"), {p, bad}) == 0);
+  // A64 strcmp is a guest routine whose faults are ordinary guest faults; the
+  // argument repair contract belongs to the host handler.
+  CHECK(thread.call(native_symbol("strcmp"), {p, bad}) == 0);
   CHECK(repair.calls == 1);
   CHECK(thread.call(native_symbol("memcpy"), {0, 0, 0}) == 0);
   CHECK(thread.call(native_symbol("memmove"), {destination+1, destination, 4}) == destination+1);

@@ -62,6 +62,9 @@ class XrResolverScope {
 // transfer: destruction still comes from the creator/guest.
 void adopt_instance(VkInstance instance, const VkInstanceCreateInfo& info, bool allocation_callbacks = false);
 void adopt_physical_device(VkInstance instance, VkPhysicalDevice physical);
+// The GPU of Venture's shared device as seen through another instance, or null
+// when it is absent or ambiguous there.
+VkPhysicalDevice shared_physical_device_in(VkInstance instance);
 // `shared` maps each family whose guest queue count exceeded the host's to
 // the host count: guest index i of that family is host queue i % count.
 void adopt_device(VkPhysicalDevice physical, VkDevice device, const VkDeviceCreateInfo& info,

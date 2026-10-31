@@ -83,6 +83,9 @@ struct GlContextState {
   std::string extension_string;
   std::string version_string;  // GL_VERSION with the host token
   bool extensions_ready = false, astc_fallback = false;
+  // ASTC fallback levels stored as BC7 (EXT_texture_compression_bptc) rather
+  // than RGBA8: a quarter of the GPU memory.
+  bool bc7_fallback = false;
   int major_version = 2;
   std::map<GLuint, bool> framebuffer_cache;
   std::uint64_t framebuffer_generation = 0;

@@ -2114,6 +2114,14 @@ void adopt_physical_device(VkInstance instance, VkPhysicalDevice physical) {
   std::lock_guard lock(state_lock);
   physicals[physical] = instance;
 }
+VkPhysicalDevice shared_physical_device_in(VkInstance instance) {
+  if (!instance || !gfx::gpu_device().physical_device) return VK_NULL_HANDLE;
+  std::uint32_t count = 1;
+  VkPhysicalDevice physical = VK_NULL_HANDLE;
+  // Filtered to the shared GPU; more than one match is refused there.
+  if (enumerate_physicals(instance, &count, &physical) != VK_SUCCESS || count != 1) return VK_NULL_HANDLE;
+  return physical;
+}
 std::optional<QueueBinding> queue_binding(VkQueue queue) {
   std::lock_guard lock(state_lock);
   if (auto it = queues.find(queue); it != queues.end()) return it->second;

@@ -160,6 +160,10 @@ int cxa_atexit_impl(GuestAddr f, GuestAddr arg, GuestAddr dso) {
     return -1;
   }
 }
+// ARM C++ ABI 3.3.5.3: __cxa_atexit with the object first (bionic arm only).
+int aeabi_atexit_impl(GuestAddr object, GuestAddr f, GuestAddr dso) {
+  return cxa_atexit_impl(f, object, dso);
+}
 int atexit_impl(GuestAddr f) {
   shutdown_trace::trace_destructor("atexit register", f, 0);
   std::lock_guard lock(exit_mutex);
@@ -217,6 +221,7 @@ std::string_view system_property(std::string_view name) {
 void register_misc(HleLibrary& lib) {
   if (process_config().isa() == GuestIsa::a32) {
     abi32::adapt<&cxa_atexit_impl>("__cxa_atexit");
+    abi32::adapt<&aeabi_atexit_impl>("__aeabi_atexit");
     abi32::adapt<&cxa_thread_atexit_impl>("__cxa_thread_atexit");
     abi32::adapt<&cxa_thread_atexit_impl>("__cxa_thread_atexit_impl");
     abi32::adapt<&atexit_impl>("atexit");
@@ -252,6 +257,7 @@ void register_misc(HleLibrary& lib) {
   B("setprogname", setprogname_impl);
   B("__cxa_atexit", cxa_atexit_impl);
   B("__cxa_finalize", cxa_finalize_impl);
+  if (process_config().isa() == GuestIsa::a32) B("__aeabi_atexit", aeabi_atexit_impl);
   B("atexit", atexit_impl);
   B("__cxa_thread_atexit_impl", cxa_thread_atexit_impl);
   B("__cxa_thread_atexit", cxa_thread_atexit_impl);

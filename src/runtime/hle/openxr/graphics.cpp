@@ -823,7 +823,19 @@ XrResult xrGetVulkanGraphicsDevice2KHR(XrInstance i, const XrVulkanGraphicsDevic
   // Guest instances are created by the game or by Venture, not by the host's
   // xrCreateVulkanInstanceKHR, so even enable2 games query through enable.
   auto result = venture::xr::host_graphics_device(info->systemId, info->vulkanInstance, out);
-  if (XR_SUCCEEDED(result)) vulkan::adopt_physical_device(info->vulkanInstance, *out);
+  if (XR_FAILED(result)) {
+    // The host runtime already chose the GPU for Venture's shared device. Some
+    // runtimes refuse the query for an instance the game made itself (Oculus
+    // with an AMD GPU: RUNTIME_FAILURE, Epic Roller Coasters); that GPU in the
+    // game's instance is the answer the query stands for.
+    const auto physical = vulkan::shared_physical_device_in(info->vulkanInstance);
+    log::warn("xr", "Host Vulkan graphics device query failed ({}); {}", static_cast<int>(result),
+              physical ? "using the shared device's GPU in the game's instance" : "the shared device's GPU is not in it");
+    if (!physical) return result;
+    *out = physical;
+    result = XR_SUCCESS;
+  }
+  vulkan::adopt_physical_device(info->vulkanInstance, *out);
   return result;
 }
 XrResult xrGetVulkanGraphicsDeviceKHR(XrInstance i, XrSystemId s, VkInstance vk,

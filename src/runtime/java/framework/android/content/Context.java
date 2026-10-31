@@ -12,6 +12,7 @@ public class Context {
   public Context ventureOuterContext() { return this; }
   public static final int MODE_PRIVATE = 0, MODE_MULTI_PROCESS = 4;
   public static final int BIND_AUTO_CREATE = 1;
+  public static final int CONTEXT_INCLUDE_CODE = 1, CONTEXT_IGNORE_SECURITY = 2, CONTEXT_RESTRICTED = 4;
   public static final String ACTIVITY_SERVICE = "activity", WINDOW_SERVICE = "window", AUDIO_SERVICE = "audio",
                              POWER_SERVICE = "power", INPUT_METHOD_SERVICE = "input_method",
                              VIBRATOR_SERVICE = "vibrator", VIBRATOR_MANAGER_SERVICE = "vibrator_manager",
@@ -224,6 +225,13 @@ public class Context {
         return scoped;
       }
     };
+  }
+  // The app's own package gets a context for itself; any other package is not
+  // installed, as on a Quest without it (Bogo's avatar loader asks for one).
+  public Context createPackageContext(String packageName, int flags)
+      throws android.content.pm.PackageManager.NameNotFoundException {
+    if (packageName != null && packageName.equals(getPackageName())) return ventureOuterContext();
+    throw new android.content.pm.PackageManager.NameNotFoundException(packageName);
   }
   private static final class DisplayMetricsHolder {
     final android.util.DisplayMetrics metrics = new android.util.DisplayMetrics();

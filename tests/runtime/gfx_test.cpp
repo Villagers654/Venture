@@ -707,6 +707,80 @@ TEST_CASE(
   render_thread.join();
   CHECK(call("eglGetCurrentContext") == h2g(egl.context));
 }
+namespace {
+// Reference BC7 mode 6 decode of one block (texel order row-major).
+std::array<std::uint8_t, 64> decode_bc7_mode6(const std::uint8_t* block) {
+  unsigned position = 0;
+  auto bits = [&](unsigned count) {
+    unsigned value = 0;
+    for (unsigned i = 0; i < count; ++i, ++position)
+      value |= unsigned(block[position / 8] >> (position % 8) & 1) << i;
+    return value;
+  };
+  REQUIRE(bits(7) == 64);
+  unsigned e[2][4];
+  for (int c = 0; c < 4; ++c) {
+    e[0][c] = bits(7);
+    e[1][c] = bits(7);
+  }
+  const unsigned p0 = bits(1), p1 = bits(1);
+  constexpr unsigned weights[16] = {0, 4, 9, 13, 17, 21, 26, 30, 34, 38, 43, 47, 51, 55, 60, 64};
+  std::array<std::uint8_t, 64> out{};
+  for (unsigned i = 0; i < 16; ++i) {
+    const unsigned w = weights[bits(i ? 4 : 3)];
+    for (int c = 0; c < 4; ++c) {
+      const unsigned a = e[0][c] * 2 + p0, b = e[1][c] * 2 + p1;
+      out[i * 4 + c] = std::uint8_t((a * (64 - w) + b * w + 32) >> 6);
+    }
+  }
+  return out;
+}
+}  // namespace
+TEST_CASE("gfx BC7 encode keeps gradients close and cutout alpha exact") {
+  // 6x6: partial blocks repeat the edge texels.
+  const unsigned w = 6, h = 6;
+  std::vector<std::uint8_t> rgba(w * h * 4 * 2);
+  for (unsigned layer = 0; layer < 2; ++layer)
+    for (unsigned y = 0; y < h; ++y)
+      for (unsigned x = 0; x < w; ++x) {
+        auto* t = &rgba[((layer * h + y) * w + x) * 4];
+        // Slice 0: an opaque gradient along one color line; slice 1: one color
+        // under a binary cutout. Mode 6 fits one line per block.
+        t[0] = std::uint8_t(layer ? 180 : (x + y) * 20);
+        t[1] = std::uint8_t(layer ? 40 : 200 - (x + y) * 15);
+        t[2] = 90;
+        t[3] = !layer || (x + y) % 3 ? 255 : 0;
+      }
+  auto blocks = gfx::encode_bc7(w, h, 2, rgba);
+  REQUIRE(blocks.size() == 4 * 2 * 16);
+  for (unsigned layer = 0; layer < 2; ++layer)
+    for (unsigned b = 0; b < 4; ++b) {
+      auto texels = decode_bc7_mode6(&blocks[(layer * 4 + b) * 16]);
+      for (unsigned i = 0; i < 16; ++i) {
+        const unsigned x = (b % 2) * 4 + i % 4, y = (b / 2) * 4 + i / 4;
+        if (x >= w || y >= h) continue;
+        const auto* t = &rgba[((layer * h + y) * w + x) * 4];
+        CHECK(texels[i * 4 + 3] == t[3]);
+        // Colors under alpha 0 are free; visible ones stay close.
+        if (t[3])
+          for (int c = 0; c < 3; ++c) CHECK(std::abs(int(texels[i * 4 + c]) - int(t[c])) <= 6);
+      }
+    }
+  CHECK_THROWS(gfx::encode_bc7(4, 4, 1, std::span(rgba).first(10)));
+  // The transcode matches decode-then-encode, and its cache returns the same.
+  const auto block = constant_block(37, 83, 171, 209);
+  const auto expected = gfx::encode_bc7(4, 4, 1, gfx::decode_astc(0x93B0, 4, 4, 1, block));
+  CHECK(gfx::transcode_astc_bc7(0x93B0, 4, 4, 1, block) == expected);
+  auto cache = std::filesystem::temp_directory_path() /
+               ("Venture-bc7-test-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+  CHECK(gfx::transcode_astc_bc7(0x93B0, 4, 4, 1, block, cache) == expected);
+  CHECK(gfx::transcode_astc_bc7(0x93B0, 4, 4, 1, block, cache) == expected);
+  unsigned files = 0;
+  for (const auto& entry : std::filesystem::directory_iterator(cache)) files += entry.path().extension() == ".bc7";
+  CHECK(files == 1);
+  std::error_code ec;
+  std::filesystem::remove_all(cache, ec);
+}
 TEST_CASE("gfx ASTC fallback HLE uploads subuploads storage array and PBO") {
   if (!have_angle()) return;
   EglSession egl;
@@ -730,10 +804,20 @@ TEST_CASE("gfx ASTC fallback HLE uploads subuploads storage array and PBO") {
     GLint native_format{};
     gfx::angle_function<PFNGLGETTEXLEVELPARAMETERIVPROC, "glGetTexLevelParameteriv">()(
         GL_TEXTURE_2D, 0, GL_TEXTURE_INTERNAL_FORMAT, &native_format);
-    CHECK(native_format == GL_RGBA8);
+    const std::string storage = gfx::current_gl_state()->bc7_fallback ? "BC7" : "RGBA8";
+    MESSAGE("ASTC fallback storage: " << storage);
+    CHECK(native_format == (gfx::current_gl_state()->bc7_fallback
+                                ? GL_COMPRESSED_RGBA_BPTC_UNORM_EXT
+                                : GL_RGBA8));
   }
+  // BC7 mode 6 endpoints share one p-bit across channels: opaque red is 255,1,1.
+  auto near = [](std::array<std::uint8_t, 4> a, std::array<std::uint8_t, 4> b) {
+    for (int c = 0; c < 4; ++c)
+      if (std::abs(int(a[c]) - int(b[c])) > (c == 3 ? 0 : 1)) return false;
+    return true;
+  };
   auto p = sample_texture(texture);
-  CHECK(p == std::array<std::uint8_t, 4>{255, 0, 0, 255});
+  CHECK(near(p, {255, 0, 0, 255}));
   call("glGenFramebuffers", 1, &fbo);
   call("glBindFramebuffer", GL_FRAMEBUFFER, fbo);
   call("glFramebufferTexture2D", GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
@@ -769,7 +853,7 @@ TEST_CASE("gfx ASTC fallback HLE uploads subuploads storage array and PBO") {
   call("glCompressedTexSubImage2D", GL_TEXTURE_2D, 0, 0, 0, 4, 4, 0x93B0, 16,
        green.data());
   p = sample_texture(texture);
-  CHECK(p == std::array<std::uint8_t, 4>{0, 255, 0, 255});
+  CHECK(near(p, {0, 255, 0, 255}));
   call("glCompressedTexSubImage2D", GL_TEXTURE_2D, 0, 1, 0, 3, 4, 0x93B0, 16,
        green.data());
   CHECK(call("glGetError") == GL_INVALID_OPERATION);
@@ -790,6 +874,16 @@ TEST_CASE("gfx ASTC fallback HLE uploads subuploads storage array and PBO") {
        GL_TEXTURE_INTERNAL_FORMAT, &format);
   CHECK(format == 0x93D0);
   call("glDeleteBuffers", 1, &buffer);
+  call("glDeleteTextures", 1, &texture);
+  // 6x6 footprints: a region at texel 6 is off the 4x4 grid BC7 storage uses.
+  call("glGenTextures", 1, &texture);
+  call("glBindTexture", GL_TEXTURE_2D, texture);
+  call("glTexStorage2D", GL_TEXTURE_2D, 1, 0x93B4, 12, 12);
+  for (GLint y : {0, 6})
+    for (GLint x : {0, 6})
+      call("glCompressedTexSubImage2D", GL_TEXTURE_2D, 0, x, y, 6, 6, 0x93B4, 16,
+           (x || y ? green : red).data());
+  CHECK(call("glGetError") == GL_NO_ERROR);
   call("glDeleteTextures", 1, &texture);
 }
 TEST_CASE("gfx ANGLE ETC2 EAC fallback sampled readback") {

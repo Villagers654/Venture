@@ -5,6 +5,7 @@
 #include "platform/low_memory.h"
 #include <array>
 #include <cstring>
+#include <span>
 #include <vector>
 
 namespace venture::hle::libc {
@@ -1020,6 +1021,251 @@ constexpr std::array<std::uint32_t, 191> kMemcmp32{
     0xeaffffa4, // b 0x190 <memcmp+0x190>    @ imm = #-0x170
 };
 
+// Compiled with clang -O2 --target=aarch64-linux-gnu -ffreestanding
+// -fno-builtin -fno-strict-aliasing -fno-math-errno from C: scalbn/scalbnf and
+// bsearch adapted from musl (Copyright (c) 2005-2020 Rich Felker, et al.; MIT
+// license, see LICENSES/MIT.txt), strcmp written for Venture. Each call of a
+// host handler costs a JIT exit and an FP environment switch; these run inside
+// translated code. In Batman: Arkham Shadow's level loads, UnityGfxDeviceWorker
+// spent 55% of its stalled time entering ldexp and Loading.Preload a third in
+// bsearch, whose every comparison was a host-to-guest callback, and the strcmp
+// that comparison called.
+// scalbn: musl's algorithm, word for word. Bionic's libm reports range errors
+// through FP exceptions only (math_errhandling is MATH_ERREXCEPT), never errno.
+constexpr std::array<std::uint32_t, 36> kScalbn64{
+    0x7110001f, // 0x000: cmp w0, #0x400
+    0x540001ab, // 0x004: b.lt 0x38 <g_scalbn+0x38>
+    0xd2effc08, // 0x008: mov x8, #0x7fe0000000000000
+    0x711ffc1f, // 0x00c: cmp w0, #0x7ff
+    0x9e670101, // 0x010: fmov d1, x8
+    0x1e610800, // 0x014: fmul d0, d0, d1
+    0x540002c3, // 0x018: b.lo 0x70 <g_scalbn+0x70>
+    0x9e670101, // 0x01c: fmov d1, x8
+    0x712ff41f, // 0x020: cmp w0, #0xbfd
+    0x52817fa8, // 0x024: mov w8, #0xbfd
+    0x1a883008, // 0x028: csel w8, w0, w8, lo
+    0x511ff900, // 0x02c: sub w0, w8, #0x7fe
+    0x1e610800, // 0x030: fmul d0, d0, d1
+    0x14000012, // 0x034: b 0x7c <g_scalbn+0x7c>
+    0x310ffc1f, // 0x038: cmn w0, #0x3ff
+    0x5400020c, // 0x03c: b.gt 0x7c <g_scalbn+0x7c>
+    0xd2e06c08, // 0x040: mov x8, #0x360000000000000
+    0x311f201f, // 0x044: cmn w0, #0x7c8
+    0x9e670101, // 0x048: fmov d1, x8
+    0x1e610800, // 0x04c: fmul d0, d0, d1
+    0x54000148, // 0x050: b.hi 0x78 <g_scalbn+0x78>
+    0x9e670101, // 0x054: fmov d1, x8
+    0x312e401f, // 0x058: cmn w0, #0xb90
+    0x128171e8, // 0x05c: mov w8, #-0xb90
+    0x1a888008, // 0x060: csel w8, w0, w8, hi
+    0x111e4900, // 0x064: add w0, w8, #0x792
+    0x1e610800, // 0x068: fmul d0, d0, d1
+    0x14000004, // 0x06c: b 0x7c <g_scalbn+0x7c>
+    0x510ffc00, // 0x070: sub w0, w0, #0x3ff
+    0x14000002, // 0x074: b 0x7c <g_scalbn+0x7c>
+    0x110f2400, // 0x078: add w0, w0, #0x3c9
+    0x110ffc08, // 0x07c: add w8, w0, #0x3ff
+    0xd34c2d08, // 0x080: lsl x8, x8, #52
+    0x9e670101, // 0x084: fmov d1, x8
+    0x1e610800, // 0x088: fmul d0, d0, d1
+    0xd65f03c0, // 0x08c: ret
+};
+constexpr std::array<std::uint32_t, 34> kScalbnf64{
+    0x7102001f, // 0x000: cmp w0, #0x80
+    0x5400016b, // 0x004: b.lt 0xc0 <g_scalbnf+0x30>
+    0x0f0367e1, // 0x008: movi v1.2s, #0x7f, lsl #24
+    0x7103fc1f, // 0x00c: cmp w0, #0xff
+    0x1e210800, // 0x010: fmul s0, s0, s1
+    0x540002a3, // 0x014: b.lo 0xf8 <g_scalbnf+0x68>
+    0x7105f41f, // 0x018: cmp w0, #0x17d
+    0x52802fa8, // 0x01c: mov w8, #0x17d
+    0x1e210800, // 0x020: fmul s0, s0, s1
+    0x1a883008, // 0x024: csel w8, w0, w8, lo
+    0x5103f900, // 0x028: sub w0, w8, #0xfe
+    0x14000012, // 0x02c: b 0x104 <g_scalbnf+0x74>
+    0x3101fc1f, // 0x030: cmn w0, #0x7f
+    0x5400020c, // 0x034: b.gt 0x104 <g_scalbnf+0x74>
+    0x52a19008, // 0x038: mov w8, #0xc800000
+    0x3103941f, // 0x03c: cmn w0, #0xe5
+    0x1e270101, // 0x040: fmov s1, w8
+    0x1e210800, // 0x044: fmul s0, s0, s1
+    0x54000148, // 0x048: b.hi 0x100 <g_scalbnf+0x70>
+    0x1e270101, // 0x04c: fmov s1, w8
+    0x3105281f, // 0x050: cmn w0, #0x14a
+    0x12802928, // 0x054: mov w8, #-0x14a
+    0x1a888008, // 0x058: csel w8, w0, w8, hi
+    0x11033100, // 0x05c: add w0, w8, #0xcc
+    0x1e210800, // 0x060: fmul s0, s0, s1
+    0x14000004, // 0x064: b 0x104 <g_scalbnf+0x74>
+    0x5101fc00, // 0x068: sub w0, w0, #0x7f
+    0x14000002, // 0x06c: b 0x104 <g_scalbnf+0x74>
+    0x11019800, // 0x070: add w0, w0, #0x66
+    0x52a7f008, // 0x074: mov w8, #0x3f800000
+    0x0b005d08, // 0x078: add w8, w8, w0, lsl #23
+    0x1e270101, // 0x07c: fmov s1, w8
+    0x1e210800, // 0x080: fmul s0, s0, s1
+    0xd65f03c0, // 0x084: ret
+};
+constexpr std::array<std::uint32_t, 34> kBsearch64{
+    0xa9bb7bfd, // 0x000: stp x29, x30, [sp, #-0x50]!
+    0xf9000bf9, // 0x004: str x25, [sp, #0x10]
+    0x910003fd, // 0x008: mov x29, sp
+    0xa9025ff8, // 0x00c: stp x24, x23, [sp, #0x20]
+    0xa90357f6, // 0x010: stp x22, x21, [sp, #0x30]
+    0xa9044ff4, // 0x014: stp x20, x19, [sp, #0x40]
+    0xb4000282, // 0x018: cbz x2, 0x180 <g_bsearch+0x68>
+    0xaa0403f3, // 0x01c: mov x19, x4
+    0xaa0303f4, // 0x020: mov x20, x3
+    0xaa0203f6, // 0x024: mov x22, x2
+    0xaa0103f7, // 0x028: mov x23, x1
+    0xaa0003f5, // 0x02c: mov x21, x0
+    0x14000003, // 0x030: b 0x154 <g_bsearch+0x3c>
+    0xaa1903f6, // 0x034: mov x22, x25
+    0xb4000196, // 0x038: cbz x22, 0x180 <g_bsearch+0x68>
+    0xd341fed9, // 0x03c: lsr x25, x22, #1
+    0xaa1503e0, // 0x040: mov x0, x21
+    0x9b145f38, // 0x044: madd x24, x25, x20, x23
+    0xaa1803e1, // 0x048: mov x1, x24
+    0xd63f0260, // 0x04c: blr x19
+    0x37ffff20, // 0x050: tbnz w0, #0x1f, 0x14c <g_bsearch+0x34>
+    0x340000c0, // 0x054: cbz w0, 0x184 <g_bsearch+0x6c>
+    0xaa3903e8, // 0x058: mvn x8, x25
+    0x8b140317, // 0x05c: add x23, x24, x20
+    0x8b0802d6, // 0x060: add x22, x22, x8
+    0xb5fffed6, // 0x064: cbnz x22, 0x154 <g_bsearch+0x3c>
+    0xaa1f03f8, // 0x068: mov x24, xzr
+    0xaa1803e0, // 0x06c: mov x0, x24
+    0xa9444ff4, // 0x070: ldp x20, x19, [sp, #0x40]
+    0xa94357f6, // 0x074: ldp x22, x21, [sp, #0x30]
+    0xf9400bf9, // 0x078: ldr x25, [sp, #0x10]
+    0xa9425ff8, // 0x07c: ldp x24, x23, [sp, #0x20]
+    0xa8c57bfd, // 0x080: ldp x29, x30, [sp], #0x50
+    0xd65f03c0, // 0x084: ret
+};
+constexpr std::array<std::uint32_t, 121> kStrcmp64{
+    0x4a000028, // 0x000: eor w8, w1, w0
+    0xf240091f, // 0x004: tst x8, #0x7
+    0x540001c0, // 0x008: b.eq 0x1e0 <g_strcmp+0x40>
+    0x39400008, // 0x00c: ldrb w8, [x0]
+    0x3940002b, // 0x010: ldrb w11, [x1]
+    0x340009e8, // 0x014: cbz w8, 0x2f0 <g_strcmp+0x150>
+    0x6b0b011f, // 0x018: cmp w8, w11
+    0x540009a1, // 0x01c: b.ne 0x2f0 <g_strcmp+0x150>
+    0x91000409, // 0x020: add x9, x0, #0x1
+    0x9100042a, // 0x024: add x10, x1, #0x1
+    0x38401528, // 0x028: ldrb w8, [x9], #0x1
+    0x3840154b, // 0x02c: ldrb w11, [x10], #0x1
+    0x34000908, // 0x030: cbz w8, 0x2f0 <g_strcmp+0x150>
+    0x6b0b011f, // 0x034: cmp w8, w11
+    0x54ffff80, // 0x038: b.eq 0x1c8 <g_strcmp+0x28>
+    0x14000045, // 0x03c: b 0x2f0 <g_strcmp+0x150>
+    0xf240081f, // 0x040: tst x0, #0x7
+    0x540008a0, // 0x044: b.eq 0x2f8 <g_strcmp+0x158>
+    0x39400008, // 0x048: ldrb w8, [x0]
+    0x3940002b, // 0x04c: ldrb w11, [x1]
+    0x34000808, // 0x050: cbz w8, 0x2f0 <g_strcmp+0x150>
+    0x6b0b011f, // 0x054: cmp w8, w11
+    0x540007c1, // 0x058: b.ne 0x2f0 <g_strcmp+0x150>
+    0x92400809, // 0x05c: and x9, x0, #0x7
+    0x5280010a, // 0x060: mov w10, #0x8
+    0x91000408, // 0x064: add x8, x0, #0x1
+    0xcb09014a, // 0x068: sub x10, x10, x9
+    0xf240091f, // 0x06c: tst x8, #0x7
+    0x8b0a0009, // 0x070: add x9, x0, x10
+    0x8b0a002a, // 0x074: add x10, x1, x10
+    0x54000740, // 0x078: b.eq 0x300 <g_strcmp+0x160>
+    0x39400108, // 0x07c: ldrb w8, [x8]
+    0x3940042b, // 0x080: ldrb w11, [x1, #0x1]
+    0x34000668, // 0x084: cbz w8, 0x2f0 <g_strcmp+0x150>
+    0x6b0b011f, // 0x088: cmp w8, w11
+    0x54000621, // 0x08c: b.ne 0x2f0 <g_strcmp+0x150>
+    0x91000808, // 0x090: add x8, x0, #0x2
+    0xf240091f, // 0x094: tst x8, #0x7
+    0x54000640, // 0x098: b.eq 0x300 <g_strcmp+0x160>
+    0x39400108, // 0x09c: ldrb w8, [x8]
+    0x3940082b, // 0x0a0: ldrb w11, [x1, #0x2]
+    0x34000568, // 0x0a4: cbz w8, 0x2f0 <g_strcmp+0x150>
+    0x6b0b011f, // 0x0a8: cmp w8, w11
+    0x54000521, // 0x0ac: b.ne 0x2f0 <g_strcmp+0x150>
+    0x91000c08, // 0x0b0: add x8, x0, #0x3
+    0xf240091f, // 0x0b4: tst x8, #0x7
+    0x54000540, // 0x0b8: b.eq 0x300 <g_strcmp+0x160>
+    0x39400108, // 0x0bc: ldrb w8, [x8]
+    0x39400c2b, // 0x0c0: ldrb w11, [x1, #0x3]
+    0x34000468, // 0x0c4: cbz w8, 0x2f0 <g_strcmp+0x150>
+    0x6b0b011f, // 0x0c8: cmp w8, w11
+    0x54000421, // 0x0cc: b.ne 0x2f0 <g_strcmp+0x150>
+    0x91001008, // 0x0d0: add x8, x0, #0x4
+    0xf240091f, // 0x0d4: tst x8, #0x7
+    0x54000440, // 0x0d8: b.eq 0x300 <g_strcmp+0x160>
+    0x39400108, // 0x0dc: ldrb w8, [x8]
+    0x3940102b, // 0x0e0: ldrb w11, [x1, #0x4]
+    0x34000368, // 0x0e4: cbz w8, 0x2f0 <g_strcmp+0x150>
+    0x6b0b011f, // 0x0e8: cmp w8, w11
+    0x54000321, // 0x0ec: b.ne 0x2f0 <g_strcmp+0x150>
+    0x91001408, // 0x0f0: add x8, x0, #0x5
+    0xf240091f, // 0x0f4: tst x8, #0x7
+    0x54000340, // 0x0f8: b.eq 0x300 <g_strcmp+0x160>
+    0x39400108, // 0x0fc: ldrb w8, [x8]
+    0x3940142b, // 0x100: ldrb w11, [x1, #0x5]
+    0x34000268, // 0x104: cbz w8, 0x2f0 <g_strcmp+0x150>
+    0x6b0b011f, // 0x108: cmp w8, w11
+    0x54000221, // 0x10c: b.ne 0x2f0 <g_strcmp+0x150>
+    0x91001808, // 0x110: add x8, x0, #0x6
+    0xf240091f, // 0x114: tst x8, #0x7
+    0x54000240, // 0x118: b.eq 0x300 <g_strcmp+0x160>
+    0x39400108, // 0x11c: ldrb w8, [x8]
+    0x3940182b, // 0x120: ldrb w11, [x1, #0x6]
+    0x34000168, // 0x124: cbz w8, 0x2f0 <g_strcmp+0x150>
+    0x6b0b011f, // 0x128: cmp w8, w11
+    0x54000121, // 0x12c: b.ne 0x2f0 <g_strcmp+0x150>
+    0x91001c08, // 0x130: add x8, x0, #0x7
+    0xf240091f, // 0x134: tst x8, #0x7
+    0x54000140, // 0x138: b.eq 0x300 <g_strcmp+0x160>
+    0x39400108, // 0x13c: ldrb w8, [x8]
+    0x39401c2b, // 0x140: ldrb w11, [x1, #0x7]
+    0x34000068, // 0x144: cbz w8, 0x2f0 <g_strcmp+0x150>
+    0x6b0b011f, // 0x148: cmp w8, w11
+    0x540000a0, // 0x14c: b.eq 0x300 <g_strcmp+0x160>
+    0x4b0b0100, // 0x150: sub w0, w8, w11
+    0xd65f03c0, // 0x154: ret
+    0xaa0103ea, // 0x158: mov x10, x1
+    0xaa0003e9, // 0x15c: mov x9, x0
+    0xf940012d, // 0x160: ldr x13, [x9]
+    0xf940014b, // 0x164: ldr x11, [x10]
+    0xeb0b01bf, // 0x168: cmp x13, x11
+    0x12001da8, // 0x16c: and w8, w13, #0xff
+    0x12001d6b, // 0x170: and w11, w11, #0xff
+    0x54000321, // 0x174: b.ne 0x378 <g_strcmp+0x1d8>
+    0xb200c3ec, // 0x178: mov x12, #0x101010101010101
+    0xf280200c, // 0x17c: movk x12, #0x100
+    0xcb0d018e, // 0x180: sub x14, x12, x13
+    0xaa0d01ce, // 0x184: orr x14, x14, x13
+    0xb201c3ed, // 0x188: mov x13, #-0x7f7f7f7f7f7f7f80
+    0xea2e01bf, // 0x18c: bics xzr, x13, x14
+    0x54000241, // 0x190: b.ne 0x378 <g_strcmp+0x1d8>
+    0x9100214a, // 0x194: add x10, x10, #0x8
+    0x9100212b, // 0x198: add x11, x9, #0x8
+    0xf9400168, // 0x19c: ldr x8, [x11]
+    0xf9400149, // 0x1a0: ldr x9, [x10]
+    0xaa0a03e1, // 0x1a4: mov x1, x10
+    0xaa0b03e0, // 0x1a8: mov x0, x11
+    0xeb09011f, // 0x1ac: cmp x8, x9
+    0x540000e1, // 0x1b0: b.ne 0x36c <g_strcmp+0x1cc>
+    0xcb08018a, // 0x1b4: sub x10, x12, x8
+    0x9100200b, // 0x1b8: add x11, x0, #0x8
+    0xaa08014a, // 0x1bc: orr x10, x10, x8
+    0xea2a01bf, // 0x1c0: bics xzr, x13, x10
+    0x9100202a, // 0x1c4: add x10, x1, #0x8
+    0x54fffea0, // 0x1c8: b.eq 0x33c <g_strcmp+0x19c>
+    0x12001d08, // 0x1cc: and w8, w8, #0xff
+    0x12001d2b, // 0x1d0: and w11, w9, #0xff
+    0x17ffff90, // 0x1d4: b 0x1b4 <g_strcmp+0x14>
+    0xaa0a03e1, // 0x1d8: mov x1, x10
+    0xaa0903e0, // 0x1dc: mov x0, x9
+    0x17ffff8d, // 0x1e0: b 0x1b4 <g_strcmp+0x14>
+};
+
 template<std::size_t N>
 GuestAddr bounded_routine(const std::array<std::uint32_t, N>& body, GuestAddr host, unsigned limit, bool arm) {
   std::vector<std::uint32_t> code;
@@ -1058,6 +1304,35 @@ void register_guest_strings(HleLibrary& lib) {
     code.insert(code.end(), kStrlen64.begin(), kStrlen64.end());
     // No strlen crossover was observed through 64 KiB: use the whole routine.
     lib.add_function("strlen", code_stub(code, "guest strlen"));
+    // Word-at-a-time when both strings share 8-byte alignment, else bytewise.
+    // Returns the difference of the first differing bytes, as bionic's does.
+    code = {0xd5033f5fu};
+    code.insert(code.end(), kStrcmp64.begin(), kStrcmp64.end());
+    lib.add_function("strcmp", code_stub(code, "guest strcmp"));
   }
+}
+
+// After register_stdlib: the comparator runs as an ordinary guest call.
+void register_guest_search(HleLibrary& lib) {
+  if (process_config().isa() != GuestIsa::a64) return;
+  std::vector<std::uint32_t> code{0xd5033f5fu};
+  code.insert(code.end(), kBsearch64.begin(), kBsearch64.end());
+  lib.add_function("bsearch", code_stub(code, "guest bsearch"));
+}
+
+// After register_libm. ldexp and scalbn share a signature; scalbln keeps the
+// host handler.
+void register_guest_math(HleLibrary& lib) {
+  if (process_config().isa() != GuestIsa::a64) return;
+  const auto routine = [](std::span<const std::uint32_t> body, const char* name) {
+    std::vector<std::uint32_t> code{0xd5033f5fu};
+    code.insert(code.end(), body.begin(), body.end());
+    return code_stub(code, name);
+  };
+  const auto scalbn = routine(kScalbn64, "guest scalbn"), scalbnf = routine(kScalbnf64, "guest scalbnf");
+  lib.add_function("ldexp", scalbn);
+  lib.add_function("scalbn", scalbn);
+  lib.add_function("ldexpf", scalbnf);
+  lib.add_function("scalbnf", scalbnf);
 }
 } // namespace venture::hle::libc

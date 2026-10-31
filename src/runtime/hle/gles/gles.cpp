@@ -7,6 +7,8 @@
 #include <format>
 #include <sstream>
 
+#include <vulkan/vulkan.h>
+
 #include "common/log.h"
 #include "core/signals.h"
 #include "core/thread.h"
@@ -15,6 +17,7 @@
 #include "hle/egl/egl.h"
 #include "hle/gles/gles_state.h"
 #include "gfx/a32_handles.h"
+#include "gfx/gpu_device.h"
 
 namespace venture::gfx {
 namespace {
@@ -26,6 +29,19 @@ std::map<EGLContext, std::shared_ptr<GlContextState>> states;
 std::vector<std::shared_ptr<GlCallback>> retired_callbacks;
 thread_local std::shared_ptr<GlContextState> current;
 thread_local std::set<GLenum> no_context_errors;
+// Whether the shared GPU samples ASTC itself rather than through ANGLE's
+// decode.
+bool native_astc() {
+  auto& gpu = gpu_device();
+  auto features = reinterpret_cast<PFN_vkGetPhysicalDeviceFeatures>(
+      gpu.get_instance_proc_addr
+          ? gpu.get_instance_proc_addr(gpu.instance, "vkGetPhysicalDeviceFeatures")
+          : nullptr);
+  if (!features || !gpu.physical_device) return true;
+  VkPhysicalDeviceFeatures supported{};
+  features(gpu.physical_device, &supported);
+  return supported.textureCompressionASTC_LDR;
+}
 void build_extensions(GlContextState& state) {
   const auto* raw =
       angle_function<PFNGLGETSTRINGPROC, "glGetString">()(GL_EXTENSIONS);
@@ -39,18 +55,34 @@ void build_extensions(GlContextState& state) {
   const auto* renderer = reinterpret_cast<const char*>(
       angle_function<PFNGLGETSTRINGPROC, "glGetString">()(GL_RENDERER));
   if (version && renderer) state.version_string = host_gl_version(version, renderer);
+  // ANGLE offers ASTC on every Vulkan GPU and, without native support (NVIDIA,
+  // AMD), decodes it to RGBA8 itself. Those textures overran 8 GB GPUs
+  // (Hellsweeper VR: 11.6 GB in use, GL_OUT_OF_MEMORY, black screen), so the
+  // HLE fallback takes ASTC over and stores BC7 where ANGLE has BPTC.
+  // VENTURE_TEXTURE_COMPRESSION=never (Settings > Runtime) keeps ANGLE's
+  // RGBA8; auto has no budget feed here, so it compresses like always.
+  const char* compression = std::getenv("VENTURE_TEXTURE_COMPRESSION");
+  const bool compress =
+      state.major_version >= 3 &&
+      has_extension(text, "GL_EXT_texture_compression_bptc") &&
+      !(compression && (!std::strcmp(compression, "never") ||
+                        !std::strcmp(compression, "0")));
   state.astc_fallback =
-      !has_extension(text, "GL_KHR_texture_compression_astc_ldr");
+      !has_extension(text, "GL_KHR_texture_compression_astc_ldr") ||
+      (compress && !native_astc());
+  state.bc7_fallback = state.astc_fallback && compress;
   GLint minor = 0;
   if (state.major_version >= 3)
     angle_function<PFNGLGETINTEGERVPROC, "glGetIntegerv">()(GL_MINOR_VERSION, &minor);
   std::istringstream input(text);
   for (std::string name; input >> name;)
     // ANGLE_multiview_multisample requires ES 3.1, or the ES 3.0-only
-    // ANGLE_texture_multisample entry points which we do not expose.
+    // ANGLE_texture_multisample entry points which we do not expose. The
+    // fallback offers ASTC LDR 2D only, not ANGLE's HDR/3D/decode-mode forms.
     if (gl_extension_supported(name) &&
         (name != "GL_ANGLE_multiview_multisample" ||
-         (state.major_version >= 3 && minor >= 1)))
+         (state.major_version >= 3 && minor >= 1)) &&
+        !(state.astc_fallback && name.find("_astc") != std::string::npos))
       state.extensions.push_back(std::move(name));
   if (state.astc_fallback)
     state.extensions.emplace_back("GL_KHR_texture_compression_astc_ldr");

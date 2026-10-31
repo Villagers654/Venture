@@ -538,6 +538,8 @@ void register_libm(HleLibrary& lib) {
   bind<&ldexp_impl<float>>(lib, "scalbnf");
   if (process_config().isa() == GuestIsa::a32) bind<&ldexp_impl<double>>(lib, "scalbnl");
   else bind(lib, "scalbnl", ldexp_quad);
+  extern void register_guest_math(HleLibrary&);
+  register_guest_math(lib);
   bind(lib, "nexttoward", nexttoward_impl<double>);
   bind(lib, "nexttowardf", nexttoward_impl<float>);
   bind<&isnan_impl<float>>(lib, "__isnanf");

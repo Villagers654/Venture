@@ -213,6 +213,29 @@ public class Holder {
                 response = json.loads(result.stdout.strip().splitlines()[-1])
                 self.assertEqual(filesystem_path(response["app_jar"]), dest / "app.jar")
 
+    def test_app_class_in_a_java_package_is_deferred(self):
+        # ART loads app classes in java.* packages (Stremio's libVLC ships java.awt
+        # Blu-ray classes); HotSpot refuses them, which defers them like missing linkage.
+        with tempfile.TemporaryDirectory(prefix="java-prohibited-", dir=ROOT / "build") as temp:
+            root = Path(temp)
+            source = root / "java" / "awt" / "BDArea.java"
+            source.parent.mkdir(parents=True)
+            source.write_text("package java.awt; public class BDArea {}", encoding="utf-8")
+            subprocess.run([java_tool("javac"), "-Xlint:-options", "--release", "8", "-d", str(root / "classes"), str(source)], check=True)
+            jar = root / "prohibited.jar"
+            with zipfile.ZipFile(jar, "w") as archive:
+                archive.write(root / "classes" / "java" / "awt" / "BDArea.class", "java/awt/BDArea.class")
+            dex = root / "classes.dex"
+            subprocess.run([java_tool("java"), "-cp", str(DEPS / "dex2jar/lib/*"), "com.android.dx.command.Main",
+                            "--dex", "--core-library", "--min-sdk-version=26", "--output=" + str(dex), str(jar)], check=True)
+            apk = root / "prohibited.apk"
+            with zipfile.ZipFile(apk, "w") as archive:
+                archive.write(dex, "classes.dex")
+            _, report = convert(apk, "com.venture.prohibited", root / "cache")
+            self.assertFalse(report["ready"])
+            self.assertTrue(report["translation_complete"], report["failures"])
+            self.assertTrue(any(f.get("kind") == "java.lang.SecurityException" for f in report["failures"]))
+
     def test_missing_external_class_never_publishes_ready_cache(self):
         with tempfile.TemporaryDirectory(prefix="java-missing-", dir=ROOT / "build") as temp:
             root = Path(temp)

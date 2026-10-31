@@ -1,7 +1,9 @@
 // Registered handlers use real core register state; callbacks execute ARM64 thunks.
 #include <atomic>
+#include <bit>
 #include <deque>
 #include <mutex>
+#include "core/hle_runtime.h"
 #include "core/libc_host_files.h"
 #include "core/process.h"
 #include "core/signals.h"
@@ -47,6 +49,24 @@ std::uint64_t LibcFixture::invoke(const char* name, std::initializer_list<std::u
   }
   // Decode the documented MOVZ/MOVK id in a registered HLE thunk.
   const auto* instructions = g2h<std::uint32_t>(address);
+  if ((instructions[0] & 0xffe0001fu) != 0xd2800010u) {
+    // A guest routine (guest_strings.cpp) runs in the JIT. GuestThread::call
+    // restores FPCR/FPSR, so a probe sets them from the fixture (x6, x5),
+    // calls x7 and returns the routine's FPSR in x1.
+    static const auto probe = hle::code_stub(std::array<std::uint32_t, 7>{
+        0xa9bf7bfdu, 0xd51b4406u, 0xd51b4425u, 0xd63f00e0u, 0xd53b4421u, 0xa8c17bfdu, 0xd65f03c0u}, "libc fixture probe");
+    if (args.size() > 5) throw std::invalid_argument("guest routine probe passes at most five integers");
+    std::array<std::uint64_t, 8> integers{};
+    for (i = 0; i < 5; ++i) integers[i] = cpu.x(i);
+    integers[5] = cpu.fpsr(); integers[6] = cpu.fpcr(); integers[7] = address;
+    std::array<double, 8> doubles;
+    for (int v = 0; v < 8; ++v) doubles[v] = std::bit_cast<double>(cpu.v(v).lo);
+    const auto result = thread.call(probe, GuestCallArgs{integers, doubles});
+    cpu.set_v(0, result.v0);
+    cpu.set_fpsr(static_cast<std::uint32_t>(result.x1));
+    cpu.set_x(0, result.x0);
+    return result.x0;
+  }
   const auto id = ((instructions[0] >> 5) & 0xffff) | (((instructions[1] >> 5) & 0xffff) << 16);
   const auto& info = hle::function(id);
   hle::CallContext ctx(thread, cpu, info);
