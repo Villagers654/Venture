@@ -9,7 +9,10 @@ std::uint64_t frames_submitted();
 // The host session's last XrSessionState; a game is expected to render only while focused.
 void note_host_session_state(int state);
 bool host_session_focused();
+// VENTURE_FIRST_FRAME_SNAPSHOT_SECONDS, which also requests a native dump and
+// registry owner tracking; unset, guest stacks alone are logged after 45 s.
 std::int64_t first_frame_timeout_seconds();
+bool first_frame_snapshot_configured();
 // Monitor-only, one-shot capture. An early stop also captures before teardown;
 // reaching the bound requests evidence without cancelling a slow startup.
 class FirstFrameTrigger {

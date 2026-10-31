@@ -53,7 +53,7 @@ namespace venture {
 namespace {
 thread_local GuestThread* current_thread = nullptr;
 const bool wait_unwind_counts = environment::getenv("VENTURE_WAIT_UNWIND_COUNTS") != nullptr;
-const bool registry_tracking = startup_diagnostics::enabled || startup_diagnostics::first_frame_timeout_seconds() > 0;
+const bool registry_tracking = startup_diagnostics::enabled || (startup_diagnostics::first_frame_snapshot_configured() && startup_diagnostics::first_frame_timeout_seconds() > 0);
 RegistryMutex registry_mutex{registry_tracking};
 std::map<std::int32_t, GuestThread*> live_threads;
 std::atomic<std::int32_t> next_tid{1000};

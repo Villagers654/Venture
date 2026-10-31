@@ -13,6 +13,7 @@
 #include "common/log.h"
 #include <algorithm>
 #include <chrono>
+#include <thread>
 #include <cstring>
 #include <filesystem>
 #include <map>
@@ -738,6 +739,16 @@ bool Linker::address_info(GuestAddr p, DlInfo* out) {
 bool Linker::try_address_info(GuestAddr p, DlInfo* out) {
   if (out) *out = {};
   auto& s = state(); std::unique_lock lock(s.mutex, std::try_to_lock);
+  return lock.owns_lock() && address_info(p, out);
+}
+bool Linker::try_address_info(GuestAddr p, DlInfo* out, std::chrono::milliseconds wait) {
+  if (out) *out = {};
+  auto& s = state(); std::unique_lock lock(s.mutex, std::try_to_lock);
+  for (const auto end = std::chrono::steady_clock::now() + wait;
+       !lock.owns_lock() && std::chrono::steady_clock::now() < end;) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    lock.try_lock();
+  }
   return lock.owns_lock() && address_info(p, out);
 }
 GuestAddr Linker::try_find_exidx(GuestAddr pc, std::int32_t* count) {

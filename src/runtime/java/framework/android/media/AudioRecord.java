@@ -9,6 +9,9 @@ public class AudioRecord {
       RECORDSTATE_RECORDING = 3, READ_BLOCKING = 0, READ_NON_BLOCKING = 1, SUCCESS = 0, ERROR = -1,
       ERROR_BAD_VALUE = -2, ERROR_INVALID_OPERATION = -3, ERROR_DEAD_OBJECT = -6;
   private static int nextSession = 1;
+  // Recordings in progress, reported by AudioManager.getActiveRecordingConfigurations.
+  static final java.util.Set<AudioRecord> active =
+      java.util.Collections.newSetFromMap(new java.util.concurrent.ConcurrentHashMap<>());
   private volatile long handle;
   private volatile int recordingState = RECORDSTATE_STOPPED;
   private final int source, sampleRate, channelCount, channelMask, format, capacityFrames, session;
@@ -68,22 +71,28 @@ public class AudioRecord {
     return new AudioFormat.Builder().setSampleRate(sampleRate).setChannelMask(channelMask).setEncoding(format).build();
   }
   public AudioDeviceInfo getRoutedDevice() { return null; }
+  public AudioRecordingConfiguration getActiveRecordingConfiguration() {
+    return recordingState == RECORDSTATE_RECORDING ? new AudioRecordingConfiguration(this) : null;
+  }
   public boolean setPreferredDevice(AudioDeviceInfo device) { return device == null; }
 
   public synchronized void startRecording() {
     long current = handle;
     if (current == 0 || nativeControl(current, 6) < 0) throw new IllegalStateException("AudioRecord unavailable");
     recordingState = RECORDSTATE_RECORDING;
+    active.add(this);
   }
   public synchronized void stop() {
     long current = handle;
     if (current == 0) throw new IllegalStateException("AudioRecord unavailable");
     nativeControl(current, 7);
     recordingState = RECORDSTATE_STOPPED;
+    active.remove(this);
   }
   public void release() {
     long current;
     synchronized (this) { current = handle; handle = 0; recordingState = RECORDSTATE_STOPPED; }
+    active.remove(this);
     if (current != 0) nativeControl(current, 0);
   }
 

@@ -42,10 +42,14 @@ void note_frame_submitted() { frames.fetch_add(1, std::memory_order_relaxed); }
 std::uint64_t frames_submitted() { return frames.load(std::memory_order_relaxed); }
 void note_host_session_state(int state) { host_state.store(state, std::memory_order_relaxed); }
 bool host_session_focused() { return host_state.load(std::memory_order_relaxed) == 5; }  // XR_SESSION_STATE_FOCUSED
+bool first_frame_snapshot_configured() {
+  return environment::getenv("VENTURE_FIRST_FRAME_SNAPSHOT_SECONDS") != nullptr;
+}
 std::int64_t first_frame_timeout_seconds() {
   static const auto value = [] {
     const auto* text = environment::getenv("VENTURE_FIRST_FRAME_SNAPSHOT_SECONDS");
-    if (!text) return std::int64_t{0};
+    // A startup that hangs before its first frame leaves only this in a report.
+    if (!text) return std::int64_t{45};
     std::int64_t seconds = 0;
     const std::string_view input(text);
     const auto parsed = std::from_chars(input.data(), input.data() + input.size(), seconds);

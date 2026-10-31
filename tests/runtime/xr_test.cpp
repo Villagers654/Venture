@@ -889,14 +889,15 @@ TEST_CASE("XR guest capabilities advertise implemented sampler states") {
 }
 
 TEST_CASE("XR_FB_passthrough is offered with passthrough reported unsupported") {
-  // Prey VR requires the extension at instance creation.
+  // Prey VR requires both extensions at instance creation; performance levels
+  // are hints, accepted whether or not the host has the extension.
   venture::test::XrImageFixture interop;
   venture::xr::install_xr_images(&interop);
-  const char* extensions[]{"XR_KHR_opengl_es_enable", "XR_FB_passthrough"};
+  const char* extensions[]{"XR_KHR_opengl_es_enable", "XR_FB_passthrough", "XR_EXT_performance_settings"};
   XrInstanceCreateInfo create{XR_TYPE_INSTANCE_CREATE_INFO};
   create.applicationInfo.apiVersion = XR_MAKE_VERSION(1, 0, 0);
   create.enabledExtensionNames = extensions;
-  create.enabledExtensionCount = 2;
+  create.enabledExtensionCount = 3;
   XrInstance instance{};
   REQUIRE(xg::xrCreateInstance(&create, &instance) == XR_SUCCESS);
   XrSystemGetInfo systemInfo{XR_TYPE_SYSTEM_GET_INFO, nullptr, XR_FORM_FACTOR_HEAD_MOUNTED_DISPLAY};
@@ -922,6 +923,10 @@ TEST_CASE("XR_FB_passthrough is offered with passthrough reported unsupported") 
   CHECK(xg::xrCreatePassthroughFB(session, &passthroughInfo, &handle) == XR_ERROR_FEATURE_UNSUPPORTED);
   CHECK(handle == XR_NULL_HANDLE);
   CHECK(xg::xrPassthroughStartFB(handle) == XR_ERROR_HANDLE_INVALID);
+  CHECK(xg::xrPerfSettingsSetPerformanceLevelEXT(session, XR_PERF_SETTINGS_DOMAIN_GPU_EXT,
+                                                 XR_PERF_SETTINGS_LEVEL_BOOST_EXT) == XR_SUCCESS);
+  CHECK(xg::xrPerfSettingsSetPerformanceLevelEXT(session, XR_PERF_SETTINGS_DOMAIN_GPU_EXT,
+                                                 XrPerfSettingsLevelEXT(7)) == XR_ERROR_VALIDATION_FAILURE);
   CHECK(xg::xrDestroySession(session) == XR_SUCCESS);
   CHECK(xg::xrDestroyInstance(instance) == XR_SUCCESS);
   venture::xr::install_xr_images(nullptr);

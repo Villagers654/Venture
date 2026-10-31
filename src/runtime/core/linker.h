@@ -1,6 +1,7 @@
 // ELF loading and symbol resolution with Android (bionic linker) semantics.
 #pragma once
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -120,6 +121,8 @@ class Linker {
   // Runtime diagnostics must not hold up a worker which a constructor awaits.
   // False/zero means unavailable or unknown; callers retain raw guest PCs.
   bool try_address_info(GuestAddr address, DlInfo* out);
+  // The same, waiting up to `wait` for a linker busy loading (a startup stall).
+  bool try_address_info(GuestAddr address, DlInfo* out, std::chrono::milliseconds wait);
   GuestAddr try_find_exidx(GuestAddr pc, std::int32_t* count);
   std::string take_error();                                           // dlerror
 

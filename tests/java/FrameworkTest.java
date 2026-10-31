@@ -582,6 +582,7 @@ public final class FrameworkTest {
     check(audio.requestAudioFocus(focus) == android.media.AudioManager.AUDIOFOCUS_REQUEST_GRANTED
         && audio.abandonAudioFocusRequest(focus) == android.media.AudioManager.AUDIOFOCUS_REQUEST_GRANTED
         && audio.generateAudioSessionId() != audio.generateAudioSessionId(), "audio focus requests and session ids");
+    check(audio.getActiveRecordingConfigurations().isEmpty(), "no recordings are active without an AudioRecord");
 
     var hevc = Arrays.stream(new android.media.MediaCodecList(android.media.MediaCodecList.ALL_CODECS).getCodecInfos())
         .filter(info -> Arrays.asList(info.getSupportedTypes()).contains("video/hevc")).findFirst().orElseThrow();

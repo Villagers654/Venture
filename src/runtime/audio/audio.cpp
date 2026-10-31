@@ -990,6 +990,8 @@ bool Backend::ensure_device(Direction direction) {
       const bool report = venture::environment::getenv("VENTURE_AUDIO_STATS") != nullptr;
       auto next_report = monotonic_ns() + 5'000'000'000;
       auto next_av = monotonic_ns() + 1'000'000'000;
+      auto next_underrun_check = monotonic_ns() + 10'000'000'000;
+      std::uint64_t underruns_logged = 0, missing_logged = 0;
       bool reconnect_output = false;
       std::int64_t next_reconnect = 0;
       while (!shutdown_.load()) {
@@ -1010,6 +1012,26 @@ bool Backend::ensure_device(Direction direction) {
                       s->non_silent_written.load(), s->gain_left.load(), s->gain_right.load(), s->xruns.load());
           }
           next_report = monotonic_ns() + 5'000'000'000;
+        }
+        // Output underruns (short device pulls) in every log, so a debug report
+        // shows whether crackling sound starved the device.
+        if (monotonic_ns() >= next_underrun_check) {
+          std::uint64_t underruns = 0, missing = 0;
+          {
+            std::lock_guard lock(device_lock_);
+            for (auto& slot : slots_) {
+              auto* s = slot.stream.load();
+              if (!s || s->config.direction != Direction::output) continue;
+              underruns += s->xruns.load();
+              missing += s->missing_frames.load();
+            }
+          }
+          if (underruns > underruns_logged)
+            log::info("audio", "Output underruns: {} in the last 10 s ({} frames missing); {} in total",
+                      underruns - underruns_logged, missing - missing_logged, underruns);
+          underruns_logged = underruns;
+          missing_logged = missing;
+          next_underrun_check = monotonic_ns() + 10'000'000'000;
         }
         for (auto direction : {Direction::output, Direction::input}) {
           bool lost = direction == Direction::output
@@ -1072,7 +1094,15 @@ bool Backend::ensure_device(Direction direction) {
   cfg.playback.format = cfg.capture.format = ma_format_f32;
   cfg.playback.channels = cfg.capture.channels = 2;
   cfg.sampleRate = 48000;
+#ifdef _WIN32
+  // WASAPI shared mode runs at the engine period (10 ms) whatever is asked.
   cfg.periodSizeInMilliseconds = 5;
+#else
+  // SDL on PipeWire/PulseAudio grants the period it is asked for: 5 ms periods
+  // without realtime scheduling crackled on a desktop under VR load. 10 ms
+  // matches what Windows endpoints run at.
+  cfg.periodSizeInMilliseconds = 10;
+#endif
   cfg.periods = 2;
   cfg.performanceProfile = ma_performance_profile_low_latency;
   cfg.dataCallback = data_callback;
