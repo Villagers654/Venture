@@ -1,4 +1,5 @@
 #include "launcher/auth_browser.h"
+#include "common/log.h"
 #include "common/meta/auth.h"
 #include "webview_compat.h"
 #include <atomic>
@@ -75,6 +76,7 @@ struct BrowserState {
   ICoreWebView2Environment10 *env = nullptr;
   std::vector<std::unique_ptr<Popup>> popups;
   std::string url;
+  std::vector<meta::Cookie> cookies;
   std::function<void(AuthBrowser::Event)> emit;
   bool done = false, callback_sent = false;
   void fail() {
@@ -161,6 +163,60 @@ LRESULT CALLBACK popup_proc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
     return 0;
   }
   return DefWindowProcW(hwnd, msg, w, l);
+}
+// Chrome's cookies.sameSite has no "unspecified" counterpart in WebView2;
+// treated as the least restrictive, same as a cookie with no SameSite
+// attribute.
+COREWEBVIEW2_COOKIE_SAME_SITE_KIND same_site_kind(std::string_view same_site) {
+  if (same_site == "lax")
+    return COREWEBVIEW2_COOKIE_SAME_SITE_KIND_LAX;
+  if (same_site == "strict")
+    return COREWEBVIEW2_COOKIE_SAME_SITE_KIND_STRICT;
+  return COREWEBVIEW2_COOKIE_SAME_SITE_KIND_NONE;
+}
+// Seeds this sign-in's fresh private profile with the browser session the
+// sideloaded extension last delivered, so the Meta page below recognizes the
+// account instead of asking the user to sign in again. Best-effort: sign-in
+// proceeds the normal way if any step fails. Never logs a cookie's name,
+// value or domain.
+void seed_cookies(ICoreWebView2 *web, const std::vector<meta::Cookie> &cookies) {
+  ICoreWebView2_2 *web2 = nullptr;
+  if (FAILED(web->QueryInterface(IID_ICoreWebView2_2,
+                                 reinterpret_cast<void **>(&web2))) ||
+      !web2) {
+    log::warn("meta", "Could not seed the Meta sign-in window with the "
+                      "browser session: WebView2 is too old.");
+    return;
+  }
+  ICoreWebView2CookieManager *manager = nullptr;
+  web2->get_CookieManager(&manager);
+  web2->Release();
+  if (!manager) {
+    log::warn("meta", "Could not seed the Meta sign-in window with the browser session.");
+    return;
+  }
+  unsigned seeded = 0;
+  for (auto &c : cookies) {
+    auto name = paths::from_utf8(c.name), value = paths::from_utf8(c.value),
+        domain = paths::from_utf8(c.domain),
+        path = paths::from_utf8(c.path.empty() ? "/" : c.path);
+    ICoreWebView2Cookie *cookie = nullptr;
+    if (FAILED(manager->CreateCookie(name.c_str(), value.c_str(), domain.c_str(),
+                                     path.c_str(), &cookie)) ||
+        !cookie)
+      continue;
+    cookie->put_IsSecure(c.secure);
+    cookie->put_IsHttpOnly(c.http_only);
+    cookie->put_SameSite(same_site_kind(c.same_site));
+    if (c.expiration_date > 0)
+      cookie->put_Expires(c.expiration_date);
+    if (SUCCEEDED(manager->AddOrUpdateCookie(cookie)))
+      ++seeded;
+    cookie->Release();
+  }
+  manager->Release();
+  log::info("meta", "Seeded the Meta sign-in window with {} browser session cookie(s).",
+           seeded);
 }
 void open_popup(const std::shared_ptr<BrowserState> &state,
                 ICoreWebView2NewWindowRequestedEventArgs *args);
@@ -359,7 +415,8 @@ std::optional<AuthBrowser::Event> AuthBrowser::poll() {
   impl_->events.pop_front();
   return event;
 }
-void AuthBrowser::open(std::string url, const fs::path &data) {
+void AuthBrowser::open(std::string url, const fs::path &data,
+                       std::vector<meta::Cookie> cookies) {
   close();
   if (!meta::auth_navigation_allowed(url))
     throw std::runtime_error("Sign-in URL is outside allowed Meta domains.");
@@ -368,7 +425,8 @@ void AuthBrowser::open(std::string url, const fs::path &data) {
     impl_->events.clear();
   }
   impl_->cancel = false;
-  impl_->thread = std::thread([this, url = std::move(url), data] {
+  impl_->thread = std::thread([this, url = std::move(url), data,
+                               cookies = std::move(cookies)] {
     auto emit = [this](Event e) { impl_->emit(std::move(e)); };
     if (FAILED(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED))) {
       emit({Kind::error, "Could not initialize the Windows sign-in window."});
@@ -376,6 +434,7 @@ void AuthBrowser::open(std::string url, const fs::path &data) {
     }
     auto state = std::make_shared<BrowserState>();
     state->url = url;
+    state->cookies = cookies;
     state->emit = emit;
     WNDCLASSW wc{};
     wc.lpfnWndProc = window_proc;
@@ -446,6 +505,8 @@ void AuthBrowser::open(std::string url, const fs::path &data) {
                   return S_OK;
                 }
                 attach(state, state->web, nullptr);
+                if (!state->cookies.empty())
+                  seed_cookies(state->web, state->cookies);
                 RECT r{};
                 GetClientRect(state->window, &r);
                 controller->put_Bounds(r);

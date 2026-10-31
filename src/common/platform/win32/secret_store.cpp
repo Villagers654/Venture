@@ -35,6 +35,26 @@ std::string crypt(std::string_view bytes, bool protect, std::string_view key) {
   return result;
 }
 } // namespace
+namespace secret_seal {
+void save(const fs::path &file, std::string_view context,
+          std::string_view plaintext) {
+  try {
+    paths::atomic_write(file, crypt(plaintext, true, context));
+  } catch (const std::exception &) {
+    throw std::runtime_error("Could not save the sealed local file.");
+  }
+}
+std::optional<std::string> load(const fs::path &file, std::string_view context) {
+  if (!fs::exists(file))
+    return {};
+  try {
+    return crypt(paths::read(file, 1024 * 1024), false, context);
+  } catch (const std::exception &) {
+    throw std::runtime_error("Could not unlock the sealed local file.");
+  }
+}
+void clear(const fs::path &file) { fs::remove(file); }
+} // namespace secret_seal
 SecretStore::SecretStore(fs::path directory, std::string key)
     : key_(std::move(key)) {
   if (!meta::valid_account_key(key_))

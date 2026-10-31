@@ -1,0 +1,7 @@
+node_modules/
+.output/
+.wxt/
+
+# The signing key's private half. The manifest's public "key" field (wxt.config.ts) is what
+# actually pins the extension's id; this file is never required to build or sideload it.
+keys/chrome.pem

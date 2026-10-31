@@ -1905,6 +1905,13 @@ void App::draw_account() {
     if (button(signing_in_ ? "Waiting for Meta\xE2\x80\xA6##signin" : "Sign in with Meta##signin", 0, Tone::primary,
                {s(220), s(46)}, !signing_in_))
       sign_in();
+    gap(8);
+    // For the sideloaded browser extension under tools/meta-session-extension:
+    // pre-loads the Meta sign-in window with the session it last delivered,
+    // so Meta recognizes the account without the user typing credentials.
+    if (button(signing_in_ ? "Waiting for Meta\xE2\x80\xA6##signin_browser" : "Use browser session##signin_browser",
+               0, Tone::secondary, {s(220), s(40)}, !signing_in_))
+      sign_in_via_browser_session();
   } else {
     begin_card("accounts", w, {20, 8});
     // Active account first, then the others in the order they were added.

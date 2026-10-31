@@ -376,10 +376,13 @@ AuthBrowser::Event translate(std::string_view line) {
   return {Kind::error, "Could not open the Meta sign-in window."};
 }
 } // namespace
-void AuthBrowser::open(std::string url, const fs::path &) {
+void AuthBrowser::open(std::string url, const fs::path &,
+                       std::vector<meta::Cookie> cookies) {
   close();
   if (!meta::auth_navigation_allowed(url))
     throw std::runtime_error("Sign-in URL is outside allowed Meta domains.");
+  if (!cookies.empty())
+    throw std::runtime_error("Signing in with a browser session needs Windows.");
   {
     std::lock_guard lock(impl_->mutex);
     impl_->events.clear();

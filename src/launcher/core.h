@@ -12,6 +12,7 @@
 #include "common/library/library.h"
 #include "common/library/save_import.h"
 #include "common/meta/accounts.h"
+#include "common/meta/native_host.h"
 #include "common/process.h"
 #include "common/steam_library.h"
 #include "common/android/adb.h"
@@ -229,6 +230,11 @@ protected:
   void rescan();
   void select(std::string id);
   void sign_in();
+  // Like sign_in(), but pre-loads the Meta sign-in window with the browser
+  // session the sideloaded extension (tools/meta-session-extension) last
+  // delivered, so Meta recognizes the account without the user typing
+  // credentials again. A notice explains when none is on file.
+  void sign_in_via_browser_session();
   void sign_out();
   void play(const meta::Game &game);
   // Installs or updates a game. An installed game updates where it is; a new
@@ -254,6 +260,8 @@ protected:
   // Saves settings and rescans the library folders they name.
   void apply_settings(library::Settings next, bool announce = true);
   void save_library();
+  // Shared by sign_in() (cookies empty) and sign_in_via_browser_session().
+  void sign_in_with_cookies(std::vector<meta::Cookie> cookies);
   void action(const std::function<void()> &fn);
   void error(std::string message);
   const library::Install *installed(std::string_view id,

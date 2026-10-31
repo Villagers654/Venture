@@ -1,4 +1,5 @@
 #include "launcher/app.h"
+#include "common/meta/native_host.h"
 #ifdef _WIN32
 #include <windows.h>
 
@@ -21,6 +22,10 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
     if (out && out != INVALID_HANDLE_VALUE) WriteFile(out, text.data(), DWORD(text.size()), &written, nullptr);
     return 0;
   }
+  // Chrome launches the native messaging host (this same executable) with
+  // no window; the args shape itself says so, before any GUI setup runs.
+  if (int host = venture::meta::handle_native_messaging_launch(args); host >= 0)
+    return host;
   return venture::launcher::run(venture::launcher::parse_options(args));
 }
 #else
@@ -35,6 +40,8 @@ int main(int argc, char **argv) {
   }
   if (int helper = venture::launcher::auth_browser_helper(argc, argv); helper >= 0)
     return helper;
+  if (int host = venture::meta::handle_native_messaging_launch({argv, argv + argc}); host >= 0)
+    return host;
   return venture::launcher::run(venture::launcher::parse_options({argv, argv + argc}));
 }
 #endif

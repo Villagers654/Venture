@@ -51,6 +51,18 @@ Json PipeChannel::call(const Json &request) {
   send(request);
   return receive();
 }
+Json PipeChannel::accept(const Handler &handler) {
+  std::lock_guard lock(mutex_);
+  auto request = receive();
+  Json response;
+  try {
+    response = handler(request);
+  } catch (...) {
+    response = Json{{"error", "Native messaging host failed"}};
+  }
+  send(response);
+  return response;
+}
 void PipeChannel::serve(const Handler &handler, std::stop_token stop) {
   try {
     while (!stop.stop_requested()) {

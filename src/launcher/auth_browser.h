@@ -1,7 +1,9 @@
 #pragma once
+#include "common/meta/native_host.h"
 #include "common/paths.h"
 #include <memory>
 #include <optional>
+#include <vector>
 namespace venture::launcher {
 class AuthBrowser {
 public:
@@ -12,7 +14,12 @@ public:
   };
   AuthBrowser();
   ~AuthBrowser();
-  void open(std::string url, const fs::path &data);
+  // `cookies`, if any, seed this sign-in's private browsing profile before
+  // navigating, so a browser session the user already has with Meta carries
+  // over instead of asking them to sign in again. Windows only; a non-empty
+  // `cookies` throws elsewhere.
+  void open(std::string url, const fs::path &data,
+            std::vector<meta::Cookie> cookies = {});
   void close();
   std::optional<Event> poll();
 
