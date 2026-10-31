@@ -266,9 +266,16 @@ template<class T> void check_scaling() {
         CHECK(errno == E2BIG);
         CHECK(static_cast<Bits>(f.cpu.v(0).lo) == std::bit_cast<Bits>(expected));
         CHECK(f.cpu.fpsr() == (guest_flags | 2));
-        CHECK(*error_location() == ((guest_flags & (4 | 8)) ? hle::err::kERANGE : 77));
+        // A64 ldexp and scalbn are guest routines (bionic: FP exceptions only,
+        // never errno); scalbln keeps the host handler, which sets ERANGE.
+        const bool host = std::string_view(name).starts_with("scalbln");
+        CHECK(*error_location() == ((host && (guest_flags & (4 | 8))) ? hle::err::kERANGE : 77));
       }
     }
   }
 }
+}
+TEST_CASE("libc A ldexp family matches the CRT in every rounding mode, with guest flags") {
+  check_scaling<double>();
+  check_scaling<float>();
 }

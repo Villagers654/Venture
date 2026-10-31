@@ -335,6 +335,9 @@ public final class ApkCache {
             // fails a method when it runs; bundled SDK code a VR game never
             // reaches must not stop the game.
             Object kind = f.get("kind");
+            // HotSpot refuses app classes in java.* packages, which ART loads;
+            // Stremio's libVLC bundles Blu-ray menu classes in java.awt and java.io.
+            if ("java.lang.SecurityException".equals(kind)) return str(f, "detail").startsWith("Prohibited package name:");
             return "java.lang.NoClassDefFoundError".equals(kind) || "java.lang.ClassNotFoundException".equals(kind)
                 || "java.lang.VerifyError".equals(kind);
         }

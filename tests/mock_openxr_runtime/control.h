@@ -25,6 +25,8 @@ struct MockXrScript {
   XrResult sampler_update_result = XR_SUCCESS;
   XrResult swapchain_wait_result = XR_SUCCESS;
   XrResult end_frame_result = XR_SUCCESS;
+  // Both GPU queries refuse instances the runtime did not create (Oculus with an AMD GPU).
+  bool refuse_app_vulkan_instances = false;
   bool retain_failed_end = false;
   bool depth_formats = false;
   std::uint32_t swapchain_limit = 0; // zero disables the per-session host budget

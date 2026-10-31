@@ -1840,6 +1840,15 @@ TEST_CASE("XR legacy Vulkan games get the shared GPU from their own instance") {
   std::vector<VkPhysicalDevice> devices(count);
   REQUIRE(venture::test::vk_call("vkEnumeratePhysicalDevices", vkInstance, &count, devices.data()) == VK_SUCCESS);
   CHECK(std::find(devices.begin(), devices.end(), physical) != devices.end());
+  // A host that refuses the query for game-made instances altogether gets the
+  // shared device's GPU in the game's instance (Epic Roller Coasters on Oculus).
+  MockXrScript refusing{}; refusing.refuse_app_vulkan_instances = true;
+  ventureMockXrSetScript(&refusing);
+  VkPhysicalDevice fallback{};
+  CHECK(xg::xrGetVulkanGraphicsDeviceKHR(instance, venture::xr::host_xr().system, vkInstance, &fallback) == XR_SUCCESS);
+  CHECK(fallback == physical);
+  MockXrScript restored{};
+  ventureMockXrSetScript(&restored);
   venture::test::vk_call("vkDestroyInstance", vkInstance, nullptr);
   REQUIRE(xg::xrDestroyInstance(instance) == XR_SUCCESS);
 }

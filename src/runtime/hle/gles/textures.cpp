@@ -1,5 +1,7 @@
 #include <algorithm>
+#include <cstring>
 #include <limits>
+#include <mutex>
 
 #include "common/log.h"
 #include "core/process.h"
@@ -41,10 +43,20 @@ GLuint bound_texture(GLenum target) {
   const auto binding = binding_enum(target);
   return binding ? static_cast<GLuint>(integer(binding)) : 0;
 }
+bool bc7() {
+  auto state = current_gl_state();
+  return state && state->bc7_fallback;
+}
 GLenum backing_format(GLenum f) {
   AstcFormat a{};
   astc_format(f, a);
+  if (bc7())
+    return a.srgb ? GL_COMPRESSED_SRGB_ALPHA_BPTC_UNORM_EXT
+                  : GL_COMPRESSED_RGBA_BPTC_UNORM_EXT;
   return a.srgb ? GL_SRGB8_ALPHA8 : GL_RGBA8;
+}
+std::size_t bc7_size(GLsizei w, GLsizei h, GLsizei depth) {
+  return std::size_t((w + 3) / 4) * ((h + 3) / 4) * depth * 16;
 }
 bool dimensions(GLenum target, GLint level, GLsizei w, GLsizei h,
                 GLsizei depth) {
@@ -75,10 +87,10 @@ bool dimensions(GLenum target, GLint level, GLsizei w, GLsizei h,
 }
 // Decode PBO bytes only after the buffer's producer has completed: read mapping
 // provides GL synchronization. A guest pointer is an offset when a PBO is
-// bound.
+// bound. The result is RGBA8, or BC7 blocks when `blocks`.
 std::vector<std::uint8_t> decoded(GLenum format, GLsizei w, GLsizei h,
                                   GLsizei depth, GLsizei size,
-                                  const void* data) {
+                                  const void* data, bool blocks = false) {
   GLint buffer = 0;
   if (current_gl_state()->major_version >= 3)
     buffer = integer(GL_PIXEL_UNPACK_BUFFER_BINDING);
@@ -99,11 +111,12 @@ std::vector<std::uint8_t> decoded(GLenum format, GLsizei w, GLsizei h,
   try {
     if (data && w && h && depth) {
       const auto& cache = process_config().cache_dir;
-      output = decode_astc(
-          format, w, h, depth,
-          {static_cast<const std::uint8_t*>(data),
-           static_cast<std::size_t>(size)},
-          cache.empty() ? std::filesystem::path{} : cache / "textures");
+      const std::span input{static_cast<const std::uint8_t*>(data),
+                            static_cast<std::size_t>(size)};
+      const auto directory =
+          cache.empty() ? std::filesystem::path{} : cache / "textures";
+      output = blocks ? transcode_astc_bc7(format, w, h, depth, input, directory)
+                      : decode_astc(format, w, h, depth, input, directory);
     }
   } catch (const std::bad_alloc&) {
     gl_error(GL_OUT_OF_MEMORY);
@@ -182,7 +195,8 @@ void compressed_image(GLenum target, GLint level, GLenum format, GLsizei w,
     gl_error(GL_INVALID_ENUM);
     return;
   }
-  auto pixels = decoded(format, w, h, depth, size, data);
+  const bool blocks = bc7();
+  auto pixels = decoded(format, w, h, depth, size, data, blocks);
   const bool pbo = current_gl_state()->major_version >= 3 &&
                    integer(GL_PIXEL_UNPACK_BUFFER_BINDING);
   if (size && (data || pbo) && pixels.empty()) return;
@@ -190,7 +204,18 @@ void compressed_image(GLenum target, GLint level, GLenum format, GLsizei w,
   std::lock_guard lock(state->textures->lock);
   const auto texture = bound_texture(target);
   PackedUpload packed;
-  if (three)
+  // Compressed uploads need data; without guest data the level's contents are
+  // undefined, so zero blocks serve.
+  if (blocks && pixels.empty()) pixels.resize(bc7_size(w, h, depth));
+  if (blocks && three)
+    angle_function<PFNGLCOMPRESSEDTEXIMAGE3DPROC, "glCompressedTexImage3D">()(
+        target, level, backing_format(format), w, h, depth, 0,
+        static_cast<GLsizei>(pixels.size()), pixels.data());
+  else if (blocks)
+    angle_function<PFNGLCOMPRESSEDTEXIMAGE2DPROC, "glCompressedTexImage2D">()(
+        target, level, backing_format(format), w, h, 0,
+        static_cast<GLsizei>(pixels.size()), pixels.data());
+  else if (three)
     angle_function<PFNGLTEXIMAGE3DPROC, "glTexImage3D">()(
         target, level, backing_format(format), w, h, depth, 0, GL_RGBA,
         GL_UNSIGNED_BYTE, pixels.empty() ? nullptr : pixels.data());
@@ -215,6 +240,62 @@ void image2(GLenum t, GLint l, GLenum f, GLsizei w, GLsizei h, GLint b,
 void image3(GLenum t, GLint l, GLenum f, GLsizei w, GLsizei h, GLsizei d,
             GLint b, GLsizei s, const void* p) {
   compressed_image(t, l, f, w, h, d, b, s, p, true);
+}
+// BC7 regions start on a 4x4 block and end on one or at the level's edge.
+// Regions of 5-, 6- and 10-texel ASTC footprints may not: their outer blocks
+// are encoded from the region's own edge texels, which can blur up to three
+// texels of a neighbouring region. Whole-level uploads are always exact.
+void bc7_sub(GLenum target, GLint level, GLint x, GLint y, GLint z, GLsizei w,
+             GLsizei h, GLsizei depth, GLenum format, GLsizei size,
+             const void* data, const TextureLevel& tex, bool three) {
+  const bool aligned = x % 4 == 0 && y % 4 == 0 &&
+                       (w % 4 == 0 || x + w == tex.width) &&
+                       (h % 4 == 0 || y + h == tex.height);
+  std::vector<std::uint8_t> blocks;
+  GLint bx = x, by = y;
+  GLsizei bw = w, bh = h;
+  if (aligned) {
+    blocks = decoded(format, w, h, depth, size, data, true);
+  } else if (auto pixels = decoded(format, w, h, depth, size, data);
+             !pixels.empty()) {
+    static std::once_flag once;
+    std::call_once(once, [] {
+      log::warn("gles", "ASTC sub-image off the BC7 block grid: edges of partial "
+                        "updates may blur (VENTURE_TEXTURE_COMPRESSION=never keeps RGBA8)");
+    });
+    bx = x & ~3;
+    by = y & ~3;
+    bw = std::min<GLsizei>((x + w + 3) & ~3, tex.width) - bx;
+    bh = std::min<GLsizei>((y + h + 3) & ~3, tex.height) - by;
+    try {
+      std::vector<std::uint8_t> region(std::size_t(bw) * bh * depth * 4);
+      for (GLsizei layer = 0; layer < depth; ++layer)
+        for (GLsizei row = 0; row < bh; ++row)
+          for (GLsizei column = 0; column < bw; ++column) {
+            const auto sx = std::clamp<GLint>(bx + column - x, 0, w - 1);
+            const auto sy = std::clamp<GLint>(by + row - y, 0, h - 1);
+            std::memcpy(&region[((std::size_t(layer) * bh + row) * bw + column) * 4],
+                        &pixels[((std::size_t(layer) * h + sy) * w + sx) * 4], 4);
+          }
+      blocks = encode_bc7(bw, bh, depth, region);
+    } catch (const std::bad_alloc&) {
+      gl_error(GL_OUT_OF_MEMORY);
+      return;
+    }
+  }
+  if (blocks.empty()) {
+    gl_error(GL_INVALID_VALUE);
+    return;
+  }
+  PackedUpload packed;
+  if (three)
+    angle_function<PFNGLCOMPRESSEDTEXSUBIMAGE3DPROC, "glCompressedTexSubImage3D">()(
+        target, level, bx, by, z, bw, bh, depth, backing_format(format),
+        static_cast<GLsizei>(blocks.size()), blocks.data());
+  else
+    angle_function<PFNGLCOMPRESSEDTEXSUBIMAGE2DPROC, "glCompressedTexSubImage2D">()(
+        target, level, bx, by, bw, bh, backing_format(format),
+        static_cast<GLsizei>(blocks.size()), blocks.data());
 }
 void compressed_sub(GLenum target, GLint level, GLint x, GLint y, GLint z,
                     GLsizei w, GLsizei h, GLsizei depth, GLenum format,
@@ -256,6 +337,10 @@ void compressed_sub(GLenum target, GLint level, GLint x, GLint y, GLint z,
     return;
   }
   if (!size) return;
+  if (bc7()) {
+    bc7_sub(target, level, x, y, z, w, h, depth, format, size, data, tex, three);
+    return;
+  }
   auto pixels = decoded(format, w, h, depth, size, data);
   if (pixels.empty()) {
     gl_error(GL_INVALID_VALUE);

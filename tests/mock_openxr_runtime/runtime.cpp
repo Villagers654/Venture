@@ -1125,6 +1125,7 @@ XrResult m_xrGetVulkanGraphicsDevice2KHR(XrInstance, const XrVulkanGraphicsDevic
   return graphics_device(info->vulkanInstance, out);
 }
 XrResult m_xrGetVulkanGraphicsDeviceKHR(XrInstance, XrSystemId, VkInstance v, VkPhysicalDevice *out) {
+  if (script.refuse_app_vulkan_instances && !created_instances.contains(v)) return XR_ERROR_RUNTIME_FAILURE;
   return graphics_device(v, out);  // XR_KHR_vulkan_enable: application-created instances
 }
 XrResult m_xrCreateVulkanDeviceKHR(XrInstance, const XrVulkanDeviceCreateInfoKHR *info,

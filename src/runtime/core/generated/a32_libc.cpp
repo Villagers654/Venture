@@ -4,143 +4,143 @@ namespace venture::hle::a32 {
 namespace {
 constexpr Type args_0[] = {{Kind::U32, "unsigned int", 0, 4}, {Kind::Ptr, "void *", 0, 4}, {Kind::Ptr, "void *", 0, 4}};
 constexpr Type args_1[] = {{Kind::I32, "int", 0, 4}, {Kind::Layout, "siginfo_t *", 0, 4}, {Kind::Ptr, "void *", 0, 4}};
-constexpr Type args_2[] = {{Kind::Callback, "void (*)(void *)", 0, 4}, {Kind::Ptr, "void *", 0, 4}, {Kind::Ptr, "void *", 0, 4}};
-constexpr Type args_3[] = {{Kind::Ptr, "void *", 0, 4}};
-constexpr Type args_4[] = {{Kind::Callback, "void (*)(void *)", 0, 4}, {Kind::Ptr, "void *", 0, 4}, {Kind::Ptr, "void *", 0, 4}};
+constexpr Type args_2[] = {{Kind::Ptr, "void *", 0, 4}, {Kind::Callback, "void (*)(void *)", 0, 4}, {Kind::Ptr, "void *", 0, 4}};
+constexpr Type args_3[] = {{Kind::Callback, "void (*)(void *)", 0, 4}, {Kind::Ptr, "void *", 0, 4}, {Kind::Ptr, "void *", 0, 4}};
+constexpr Type args_4[] = {{Kind::Ptr, "void *", 0, 4}};
 constexpr Type args_5[] = {{Kind::Callback, "void (*)(void *)", 0, 4}, {Kind::Ptr, "void *", 0, 4}, {Kind::Ptr, "void *", 0, 4}};
-constexpr Type args_6[] = {{Kind::Ptr, "void *", 0, 4}, {Kind::Size, "size_t", 0, 4}, {Kind::Size, "size_t", 0, 4}, {Kind::Handle, "FILE *", 0, 4}, {Kind::Size, "size_t", 0, 4}};
-constexpr Type args_7[] = {{Kind::Ptr, "const void *", 0, 4}, {Kind::Size, "size_t", 0, 4}, {Kind::Size, "size_t", 0, 4}, {Kind::Handle, "FILE *", 0, 4}, {Kind::Size, "size_t", 0, 4}};
-constexpr Type args_8[] = {{Kind::I32, "int", 0, 4}, {Kind::Ptr, "char *", 1, 4}, {Kind::Size, "size_t", 0, 4}};
-constexpr Type args_9[] = {{Kind::Callback, "void (* )(void)", 0, 4}, {Kind::Callback, "void (* )(void)", 0, 4}, {Kind::Callback, "void (* )(void)", 0, 4}, {Kind::Ptr, "void *", 0, 4}};
-constexpr Type args_10[] = {{Kind::Layout, "ARM jmp_buf", 0, 4}, {Kind::I32, "int", 0, 4}};
-constexpr Type args_12[] = {{Kind::Handle, "const prop_info *", 0, 4}, {Kind::Callback, "void (* )(void * , const char * , const char * , uint32_t)", 0, 4}, {Kind::Ptr, "void *", 0, 4}};
-constexpr Type args_13[] = {{Kind::Handle, "const prop_info *", 0, 4}, {Kind::U32, "uint32_t", 0, 4}, {Kind::Ptr, "uint32_t *", 4, 4}, {Kind::Layout, "const struct timespec *", 0, 4}};
-constexpr Type args_14[] = {{Kind::Size, "size_t", 0, 4}, {Kind::Size, "size_t", 0, 4}};
-constexpr Type args_16[] = {{Kind::I32, "int", 0, 4}, {Kind::Layout, "sighandler_t", 0, 4}};
-constexpr Type args_17[] = {{Kind::Ptr, "nl_catd", 0, 4}};
-constexpr Type args_18[] = {{Kind::Ptr, "nl_catd", 0, 4}, {Kind::I32, "int", 0, 4}, {Kind::I32, "int", 0, 4}, {Kind::Ptr, "const char *", 1, 4}};
-constexpr Type args_19[] = {{Kind::Ptr, "const char *", 1, 4}, {Kind::I32, "int", 0, 4}};
-constexpr Type args_20[] = {{Kind::Ptr, "char *", 1, 4}};
-constexpr Type args_26[] = {{Kind::I32, "int", 0, 4}, {Kind::Layout, "struct epoll_event *", 0, 4}, {Kind::I32, "int", 0, 4}, {Kind::I32, "int", 0, 4}, {Kind::Layout, "const sigset64_t *", 0, 4}};
-constexpr Type args_27[] = {{Kind::I32, "int", 0, 4}, {Kind::I32, "int", 0, 4}};
-constexpr Type args_28[] = {{Kind::I32, "int", 0, 4}, {Kind::Layout, "char *const *", 0, 4}, {Kind::Layout, "char *const *", 0, 4}};
-constexpr Type args_29[] = {{Kind::Handle, "FILE *", 0, 4}};
+constexpr Type args_6[] = {{Kind::Callback, "void (*)(void *)", 0, 4}, {Kind::Ptr, "void *", 0, 4}, {Kind::Ptr, "void *", 0, 4}};
+constexpr Type args_7[] = {{Kind::Ptr, "void *", 0, 4}, {Kind::Size, "size_t", 0, 4}, {Kind::Size, "size_t", 0, 4}, {Kind::Handle, "FILE *", 0, 4}, {Kind::Size, "size_t", 0, 4}};
+constexpr Type args_8[] = {{Kind::Ptr, "const void *", 0, 4}, {Kind::Size, "size_t", 0, 4}, {Kind::Size, "size_t", 0, 4}, {Kind::Handle, "FILE *", 0, 4}, {Kind::Size, "size_t", 0, 4}};
+constexpr Type args_9[] = {{Kind::I32, "int", 0, 4}, {Kind::Ptr, "char *", 1, 4}, {Kind::Size, "size_t", 0, 4}};
+constexpr Type args_10[] = {{Kind::Callback, "void (* )(void)", 0, 4}, {Kind::Callback, "void (* )(void)", 0, 4}, {Kind::Callback, "void (* )(void)", 0, 4}, {Kind::Ptr, "void *", 0, 4}};
+constexpr Type args_11[] = {{Kind::Layout, "ARM jmp_buf", 0, 4}, {Kind::I32, "int", 0, 4}};
+constexpr Type args_13[] = {{Kind::Handle, "const prop_info *", 0, 4}, {Kind::Callback, "void (* )(void * , const char * , const char * , uint32_t)", 0, 4}, {Kind::Ptr, "void *", 0, 4}};
+constexpr Type args_14[] = {{Kind::Handle, "const prop_info *", 0, 4}, {Kind::U32, "uint32_t", 0, 4}, {Kind::Ptr, "uint32_t *", 4, 4}, {Kind::Layout, "const struct timespec *", 0, 4}};
+constexpr Type args_15[] = {{Kind::Size, "size_t", 0, 4}, {Kind::Size, "size_t", 0, 4}};
+constexpr Type args_17[] = {{Kind::I32, "int", 0, 4}, {Kind::Layout, "sighandler_t", 0, 4}};
+constexpr Type args_18[] = {{Kind::Ptr, "nl_catd", 0, 4}};
+constexpr Type args_19[] = {{Kind::Ptr, "nl_catd", 0, 4}, {Kind::I32, "int", 0, 4}, {Kind::I32, "int", 0, 4}, {Kind::Ptr, "const char *", 1, 4}};
+constexpr Type args_20[] = {{Kind::Ptr, "const char *", 1, 4}, {Kind::I32, "int", 0, 4}};
+constexpr Type args_21[] = {{Kind::Ptr, "char *", 1, 4}};
+constexpr Type args_27[] = {{Kind::I32, "int", 0, 4}, {Kind::Layout, "struct epoll_event *", 0, 4}, {Kind::I32, "int", 0, 4}, {Kind::I32, "int", 0, 4}, {Kind::Layout, "const sigset64_t *", 0, 4}};
+constexpr Type args_28[] = {{Kind::I32, "int", 0, 4}, {Kind::I32, "int", 0, 4}};
+constexpr Type args_29[] = {{Kind::I32, "int", 0, 4}, {Kind::Layout, "char *const *", 0, 4}, {Kind::Layout, "char *const *", 0, 4}};
 constexpr Type args_30[] = {{Kind::Handle, "FILE *", 0, 4}};
-constexpr Type args_31[] = {{Kind::Handle, "FILE *", 0, 4}, {Kind::Ptr, "fpos64_t *", 8, 4}};
-constexpr Type args_32[] = {{Kind::Ptr, "char *", 1, 4}, {Kind::I32, "int", 0, 4}, {Kind::Handle, "FILE *", 0, 4}};
-constexpr Type args_33[] = {{Kind::Handle, "FILE *", 0, 4}};
-constexpr Type args_34[] = {{Kind::Ptr, "const char *", 1, 4}, {Kind::Ptr, "const char *", 1, 4}};
-constexpr Type args_35[] = {{Kind::I32, "int", 0, 4}, {Kind::Handle, "FILE *", 0, 4}};
-constexpr Type args_36[] = {{Kind::Ptr, "const char *", 1, 4}, {Kind::Handle, "FILE *", 0, 4}};
-constexpr Type args_37[] = {{Kind::Ptr, "void *", 0, 4}, {Kind::Size, "size_t", 0, 4}, {Kind::Size, "size_t", 0, 4}, {Kind::Handle, "FILE *", 0, 4}};
-constexpr Type args_38[] = {{Kind::Ptr, "const char *", 1, 4}, {Kind::Ptr, "const char *", 1, 4}, {Kind::Handle, "FILE *", 0, 4}};
-constexpr Type args_39[] = {{Kind::Handle, "FILE *", 0, 4}, {Kind::I64, "off64_t", 0, 4}, {Kind::I32, "int", 0, 4}};
-constexpr Type args_40[] = {{Kind::Handle, "FILE *", 0, 4}, {Kind::Ptr, "const fpos64_t *", 8, 4}};
-constexpr Type args_41[] = {{Kind::Handle, "FILE *", 0, 4}};
-constexpr Type args_42[] = {{Kind::Ptr, "const void *", 0, 4}, {Kind::Callback, "int (* )(void * , char * , int)", 0, 4}, {Kind::Callback, "int (* )(void * , const char * , int)", 0, 4}, {Kind::Callback, "fpos64_t (* )(void * , fpos64_t, int)", 0, 4}, {Kind::Callback, "int (* )(void * )", 0, 4}};
-constexpr Type args_43[] = {{Kind::I32, "int", 0, 4}, {Kind::Layout, "const struct timeval *", 0, 4}};
-constexpr Type args_44[] = {{Kind::I32, "int", 0, 4}, {Kind::Ptr, "const char *", 1, 4}, {Kind::Layout, "const struct timeval *", 0, 4}};
-constexpr Type args_45[] = {{Kind::Ptr, "const void *", 0, 4}, {Kind::Size, "size_t", 0, 4}, {Kind::Size, "size_t", 0, 4}, {Kind::Handle, "FILE *", 0, 4}};
-constexpr Type args_46[] = {{Kind::Ptr, "char *", 1, 4}, {Kind::Size, "size_t", 0, 4}};
-constexpr Type args_47[] = {{Kind::Ptr, "void *", 0, 4}, {Kind::Size, "size_t", 0, 4}};
-constexpr Type args_49[] = {{Kind::U32, "gid_t", 0, 4}, {Kind::Layout, "struct group *", 0, 4}, {Kind::Ptr, "char *", 1, 4}, {Kind::Size, "size_t", 0, 4}, {Kind::Layout, "struct group * *", 0, 4}};
-constexpr Type args_50[] = {{Kind::Ptr, "const char *", 1, 4}, {Kind::Layout, "struct group *", 0, 4}, {Kind::Ptr, "char *", 1, 4}, {Kind::Size, "size_t", 0, 4}, {Kind::Layout, "struct group * *", 0, 4}};
-constexpr Type args_51[] = {{Kind::Ptr, "double *", 8, 4}, {Kind::I32, "int", 0, 4}};
-constexpr Type args_52[] = {{Kind::Ptr, "char *", 1, 4}, {Kind::Size, "size_t", 0, 4}};
-constexpr Type args_56[] = {{Kind::OutPtr, "char * *", 0, 4}, {Kind::Layout, "char *const *", 0, 4}, {Kind::OutPtr, "char * *", 0, 4}};
-constexpr Type args_57[] = {{Kind::Ptr, "const char *", 1, 4}, {Kind::I32, "int", 0, 4}, {Kind::Callback, "int (* )(const char * , int)", 0, 4}, {Kind::Layout, "glob_t *", 0, 4}};
-constexpr Type args_58[] = {{Kind::Layout, "glob_t *", 0, 4}};
-constexpr Type args_59[] = {{Kind::Handle, "iconv_t", 0, 4}, {Kind::OutPtr, "char * *", 0, 4}, {Kind::OutSize, "size_t *", 0, 4}, {Kind::OutPtr, "char * *", 0, 4}, {Kind::OutSize, "size_t *", 0, 4}};
-constexpr Type args_60[] = {{Kind::Handle, "iconv_t", 0, 4}};
-constexpr Type args_61[] = {{Kind::Ptr, "const char *", 1, 4}, {Kind::Ptr, "const char *", 1, 4}};
-constexpr Type args_62[] = {{Kind::Layout, "struct if_nameindex *", 0, 4}};
-constexpr Type args_64[] = {{Kind::I32, "int", 0, 4}, {Kind::I32, "int", 0, 4}, {Kind::Off, "off_t", 0, 4}};
-constexpr Type args_65[] = {{Kind::I32, "int", 0, 4}, {Kind::I32, "int", 0, 4}, {Kind::I64, "off64_t", 0, 4}};
-constexpr Type args_66[] = {{Kind::Ptr, "const char *", 1, 4}, {Kind::Layout, "const struct timeval *", 0, 4}};
-constexpr Type args_67[] = {{Kind::I32, "int", 0, 4}, {Kind::I32, "int", 0, 4}};
-constexpr Type args_68[] = {{Kind::Ptr, "const char *", 1, 4}, {Kind::Size, "size_t", 0, 4}};
-constexpr Type args_69[] = {{Kind::Ptr, "const char *", 1, 4}, {Kind::U32, "unsigned int", 0, 4}};
-constexpr Type args_70[] = {{Kind::Ptr, "const void *", 0, 4}, {Kind::Size, "size_t", 0, 4}, {Kind::I32, "int", 0, 4}};
-constexpr Type args_71[] = {{Kind::I32, "nl_item", 0, 4}};
-constexpr Type args_72[] = {{Kind::I32, "nl_item", 0, 4}, {Kind::Handle, "locale_t", 0, 4}};
-constexpr Type args_73[] = {{Kind::Layout, "struct pollfd *", 0, 4}, {Kind::U32, "nfds_t", 0, 4}, {Kind::Layout, "const struct timespec *", 0, 4}, {Kind::Layout, "const sigset64_t *", 0, 4}};
-constexpr Type args_74[] = {{Kind::I32, "int", 0, 4}, {Kind::Layout, "const struct iovec *", 0, 4}, {Kind::I32, "int", 0, 4}, {Kind::Off, "off_t", 0, 4}};
-constexpr Type args_75[] = {{Kind::I32, "int", 0, 4}, {Kind::Layout, "const struct iovec *", 0, 4}, {Kind::I32, "int", 0, 4}, {Kind::I64, "off64_t", 0, 4}};
-constexpr Type args_76[] = {{Kind::I32, "pid_t", 0, 4}, {Kind::I32, "int", 0, 4}, {Kind::Layout, "const struct rlimit *", 0, 4}, {Kind::Layout, "struct rlimit *", 0, 4}};
-constexpr Type args_77[] = {{Kind::I32, "int", 0, 4}, {Kind::Layout, "const struct iovec *", 0, 4}, {Kind::Size, "size_t", 0, 4}, {Kind::I32, "int", 0, 4}, {Kind::U32, "unsigned int", 0, 4}};
-constexpr Type args_78[] = {{Kind::I32, "int", 0, 4}, {Kind::Layout, "fd_set *", 0, 4}, {Kind::Layout, "fd_set *", 0, 4}, {Kind::Layout, "fd_set *", 0, 4}, {Kind::Layout, "const struct timespec *", 0, 4}, {Kind::Layout, "const sigset64_t *", 0, 4}};
-constexpr Type args_79[] = {{Kind::Layout, "const pthread_attr_t *", 0, 4}, {Kind::Ptr, "int *", 4, 4}};
-constexpr Type args_80[] = {{Kind::Layout, "pthread_attr_t *", 0, 4}, {Kind::I32, "int", 0, 4}};
-constexpr Type args_81[] = {{Kind::Layout, "pthread_barrier_t *", 0, 4}};
-constexpr Type args_82[] = {{Kind::Layout, "pthread_barrier_t *", 0, 4}, {Kind::Ptr, "const pthread_barrierattr_t *", 4, 4}, {Kind::U32, "unsigned int", 0, 4}};
-constexpr Type args_83[] = {{Kind::Layout, "pthread_barrier_t *", 0, 4}};
-constexpr Type args_84[] = {{Kind::Ptr, "pthread_barrierattr_t *", 4, 4}};
-constexpr Type args_85[] = {{Kind::Ptr, "const pthread_barrierattr_t *", 4, 4}, {Kind::Ptr, "int *", 4, 4}};
-constexpr Type args_86[] = {{Kind::Ptr, "pthread_barrierattr_t *", 4, 4}};
-constexpr Type args_87[] = {{Kind::Ptr, "pthread_barrierattr_t *", 4, 4}, {Kind::I32, "int", 0, 4}};
-constexpr Type args_88[] = {{Kind::Layout, "pthread_cond_t *", 0, 4}, {Kind::Layout, "pthread_mutex_t *", 0, 4}, {Kind::I32, "clockid_t", 0, 4}, {Kind::Layout, "const struct timespec *", 0, 4}};
-constexpr Type args_89[] = {{Kind::Handle, "pthread_t", 0, 4}, {Kind::Ptr, "char *", 1, 4}, {Kind::Size, "size_t", 0, 4}};
-constexpr Type args_90[] = {{Kind::Layout, "pthread_mutex_t *", 0, 4}, {Kind::I32, "clockid_t", 0, 4}, {Kind::Layout, "const struct timespec *", 0, 4}};
-constexpr Type args_91[] = {{Kind::Layout, "pthread_mutex_t *", 0, 4}, {Kind::Layout, "const struct timespec *", 0, 4}};
-constexpr Type args_92[] = {{Kind::Layout, "const pthread_mutexattr_t *", 0, 4}, {Kind::Ptr, "int *", 4, 4}};
-constexpr Type args_93[] = {{Kind::OutLong, "pthread_mutexattr_t *", 0, 4}, {Kind::I32, "int", 0, 4}};
-constexpr Type args_94[] = {{Kind::Layout, "pthread_rwlock_t *", 0, 4}, {Kind::I32, "clockid_t", 0, 4}, {Kind::Layout, "const struct timespec *", 0, 4}};
+constexpr Type args_31[] = {{Kind::Handle, "FILE *", 0, 4}};
+constexpr Type args_32[] = {{Kind::Handle, "FILE *", 0, 4}, {Kind::Ptr, "fpos64_t *", 8, 4}};
+constexpr Type args_33[] = {{Kind::Ptr, "char *", 1, 4}, {Kind::I32, "int", 0, 4}, {Kind::Handle, "FILE *", 0, 4}};
+constexpr Type args_34[] = {{Kind::Handle, "FILE *", 0, 4}};
+constexpr Type args_35[] = {{Kind::Ptr, "const char *", 1, 4}, {Kind::Ptr, "const char *", 1, 4}};
+constexpr Type args_36[] = {{Kind::I32, "int", 0, 4}, {Kind::Handle, "FILE *", 0, 4}};
+constexpr Type args_37[] = {{Kind::Ptr, "const char *", 1, 4}, {Kind::Handle, "FILE *", 0, 4}};
+constexpr Type args_38[] = {{Kind::Ptr, "void *", 0, 4}, {Kind::Size, "size_t", 0, 4}, {Kind::Size, "size_t", 0, 4}, {Kind::Handle, "FILE *", 0, 4}};
+constexpr Type args_39[] = {{Kind::Ptr, "const char *", 1, 4}, {Kind::Ptr, "const char *", 1, 4}, {Kind::Handle, "FILE *", 0, 4}};
+constexpr Type args_40[] = {{Kind::Handle, "FILE *", 0, 4}, {Kind::I64, "off64_t", 0, 4}, {Kind::I32, "int", 0, 4}};
+constexpr Type args_41[] = {{Kind::Handle, "FILE *", 0, 4}, {Kind::Ptr, "const fpos64_t *", 8, 4}};
+constexpr Type args_42[] = {{Kind::Handle, "FILE *", 0, 4}};
+constexpr Type args_43[] = {{Kind::Ptr, "const void *", 0, 4}, {Kind::Callback, "int (* )(void * , char * , int)", 0, 4}, {Kind::Callback, "int (* )(void * , const char * , int)", 0, 4}, {Kind::Callback, "fpos64_t (* )(void * , fpos64_t, int)", 0, 4}, {Kind::Callback, "int (* )(void * )", 0, 4}};
+constexpr Type args_44[] = {{Kind::I32, "int", 0, 4}, {Kind::Layout, "const struct timeval *", 0, 4}};
+constexpr Type args_45[] = {{Kind::I32, "int", 0, 4}, {Kind::Ptr, "const char *", 1, 4}, {Kind::Layout, "const struct timeval *", 0, 4}};
+constexpr Type args_46[] = {{Kind::Ptr, "const void *", 0, 4}, {Kind::Size, "size_t", 0, 4}, {Kind::Size, "size_t", 0, 4}, {Kind::Handle, "FILE *", 0, 4}};
+constexpr Type args_47[] = {{Kind::Ptr, "char *", 1, 4}, {Kind::Size, "size_t", 0, 4}};
+constexpr Type args_48[] = {{Kind::Ptr, "void *", 0, 4}, {Kind::Size, "size_t", 0, 4}};
+constexpr Type args_50[] = {{Kind::U32, "gid_t", 0, 4}, {Kind::Layout, "struct group *", 0, 4}, {Kind::Ptr, "char *", 1, 4}, {Kind::Size, "size_t", 0, 4}, {Kind::Layout, "struct group * *", 0, 4}};
+constexpr Type args_51[] = {{Kind::Ptr, "const char *", 1, 4}, {Kind::Layout, "struct group *", 0, 4}, {Kind::Ptr, "char *", 1, 4}, {Kind::Size, "size_t", 0, 4}, {Kind::Layout, "struct group * *", 0, 4}};
+constexpr Type args_52[] = {{Kind::Ptr, "double *", 8, 4}, {Kind::I32, "int", 0, 4}};
+constexpr Type args_53[] = {{Kind::Ptr, "char *", 1, 4}, {Kind::Size, "size_t", 0, 4}};
+constexpr Type args_57[] = {{Kind::OutPtr, "char * *", 0, 4}, {Kind::Layout, "char *const *", 0, 4}, {Kind::OutPtr, "char * *", 0, 4}};
+constexpr Type args_58[] = {{Kind::Ptr, "const char *", 1, 4}, {Kind::I32, "int", 0, 4}, {Kind::Callback, "int (* )(const char * , int)", 0, 4}, {Kind::Layout, "glob_t *", 0, 4}};
+constexpr Type args_59[] = {{Kind::Layout, "glob_t *", 0, 4}};
+constexpr Type args_60[] = {{Kind::Handle, "iconv_t", 0, 4}, {Kind::OutPtr, "char * *", 0, 4}, {Kind::OutSize, "size_t *", 0, 4}, {Kind::OutPtr, "char * *", 0, 4}, {Kind::OutSize, "size_t *", 0, 4}};
+constexpr Type args_61[] = {{Kind::Handle, "iconv_t", 0, 4}};
+constexpr Type args_62[] = {{Kind::Ptr, "const char *", 1, 4}, {Kind::Ptr, "const char *", 1, 4}};
+constexpr Type args_63[] = {{Kind::Layout, "struct if_nameindex *", 0, 4}};
+constexpr Type args_65[] = {{Kind::I32, "int", 0, 4}, {Kind::I32, "int", 0, 4}, {Kind::Off, "off_t", 0, 4}};
+constexpr Type args_66[] = {{Kind::I32, "int", 0, 4}, {Kind::I32, "int", 0, 4}, {Kind::I64, "off64_t", 0, 4}};
+constexpr Type args_67[] = {{Kind::Ptr, "const char *", 1, 4}, {Kind::Layout, "const struct timeval *", 0, 4}};
+constexpr Type args_68[] = {{Kind::I32, "int", 0, 4}, {Kind::I32, "int", 0, 4}};
+constexpr Type args_69[] = {{Kind::Ptr, "const char *", 1, 4}, {Kind::Size, "size_t", 0, 4}};
+constexpr Type args_70[] = {{Kind::Ptr, "const char *", 1, 4}, {Kind::U32, "unsigned int", 0, 4}};
+constexpr Type args_71[] = {{Kind::Ptr, "const void *", 0, 4}, {Kind::Size, "size_t", 0, 4}, {Kind::I32, "int", 0, 4}};
+constexpr Type args_72[] = {{Kind::I32, "nl_item", 0, 4}};
+constexpr Type args_73[] = {{Kind::I32, "nl_item", 0, 4}, {Kind::Handle, "locale_t", 0, 4}};
+constexpr Type args_74[] = {{Kind::Layout, "struct pollfd *", 0, 4}, {Kind::U32, "nfds_t", 0, 4}, {Kind::Layout, "const struct timespec *", 0, 4}, {Kind::Layout, "const sigset64_t *", 0, 4}};
+constexpr Type args_75[] = {{Kind::I32, "int", 0, 4}, {Kind::Layout, "const struct iovec *", 0, 4}, {Kind::I32, "int", 0, 4}, {Kind::Off, "off_t", 0, 4}};
+constexpr Type args_76[] = {{Kind::I32, "int", 0, 4}, {Kind::Layout, "const struct iovec *", 0, 4}, {Kind::I32, "int", 0, 4}, {Kind::I64, "off64_t", 0, 4}};
+constexpr Type args_77[] = {{Kind::I32, "pid_t", 0, 4}, {Kind::I32, "int", 0, 4}, {Kind::Layout, "const struct rlimit *", 0, 4}, {Kind::Layout, "struct rlimit *", 0, 4}};
+constexpr Type args_78[] = {{Kind::I32, "int", 0, 4}, {Kind::Layout, "const struct iovec *", 0, 4}, {Kind::Size, "size_t", 0, 4}, {Kind::I32, "int", 0, 4}, {Kind::U32, "unsigned int", 0, 4}};
+constexpr Type args_79[] = {{Kind::I32, "int", 0, 4}, {Kind::Layout, "fd_set *", 0, 4}, {Kind::Layout, "fd_set *", 0, 4}, {Kind::Layout, "fd_set *", 0, 4}, {Kind::Layout, "const struct timespec *", 0, 4}, {Kind::Layout, "const sigset64_t *", 0, 4}};
+constexpr Type args_80[] = {{Kind::Layout, "const pthread_attr_t *", 0, 4}, {Kind::Ptr, "int *", 4, 4}};
+constexpr Type args_81[] = {{Kind::Layout, "pthread_attr_t *", 0, 4}, {Kind::I32, "int", 0, 4}};
+constexpr Type args_82[] = {{Kind::Layout, "pthread_barrier_t *", 0, 4}};
+constexpr Type args_83[] = {{Kind::Layout, "pthread_barrier_t *", 0, 4}, {Kind::Ptr, "const pthread_barrierattr_t *", 4, 4}, {Kind::U32, "unsigned int", 0, 4}};
+constexpr Type args_84[] = {{Kind::Layout, "pthread_barrier_t *", 0, 4}};
+constexpr Type args_85[] = {{Kind::Ptr, "pthread_barrierattr_t *", 4, 4}};
+constexpr Type args_86[] = {{Kind::Ptr, "const pthread_barrierattr_t *", 4, 4}, {Kind::Ptr, "int *", 4, 4}};
+constexpr Type args_87[] = {{Kind::Ptr, "pthread_barrierattr_t *", 4, 4}};
+constexpr Type args_88[] = {{Kind::Ptr, "pthread_barrierattr_t *", 4, 4}, {Kind::I32, "int", 0, 4}};
+constexpr Type args_89[] = {{Kind::Layout, "pthread_cond_t *", 0, 4}, {Kind::Layout, "pthread_mutex_t *", 0, 4}, {Kind::I32, "clockid_t", 0, 4}, {Kind::Layout, "const struct timespec *", 0, 4}};
+constexpr Type args_90[] = {{Kind::Handle, "pthread_t", 0, 4}, {Kind::Ptr, "char *", 1, 4}, {Kind::Size, "size_t", 0, 4}};
+constexpr Type args_91[] = {{Kind::Layout, "pthread_mutex_t *", 0, 4}, {Kind::I32, "clockid_t", 0, 4}, {Kind::Layout, "const struct timespec *", 0, 4}};
+constexpr Type args_92[] = {{Kind::Layout, "pthread_mutex_t *", 0, 4}, {Kind::Layout, "const struct timespec *", 0, 4}};
+constexpr Type args_93[] = {{Kind::Layout, "const pthread_mutexattr_t *", 0, 4}, {Kind::Ptr, "int *", 4, 4}};
+constexpr Type args_94[] = {{Kind::OutLong, "pthread_mutexattr_t *", 0, 4}, {Kind::I32, "int", 0, 4}};
 constexpr Type args_95[] = {{Kind::Layout, "pthread_rwlock_t *", 0, 4}, {Kind::I32, "clockid_t", 0, 4}, {Kind::Layout, "const struct timespec *", 0, 4}};
-constexpr Type args_96[] = {{Kind::Layout, "pthread_rwlock_t *", 0, 4}, {Kind::Layout, "const struct timespec *", 0, 4}};
+constexpr Type args_96[] = {{Kind::Layout, "pthread_rwlock_t *", 0, 4}, {Kind::I32, "clockid_t", 0, 4}, {Kind::Layout, "const struct timespec *", 0, 4}};
 constexpr Type args_97[] = {{Kind::Layout, "pthread_rwlock_t *", 0, 4}, {Kind::Layout, "const struct timespec *", 0, 4}};
-constexpr Type args_98[] = {{Kind::Handle, "pthread_t", 0, 4}, {Kind::I32, "int", 0, 4}};
-constexpr Type args_99[] = {{Kind::I32, "int", 0, 4}, {Kind::Layout, "const sigset64_t *", 0, 4}, {Kind::Layout, "sigset64_t *", 0, 4}};
-constexpr Type args_100[] = {{Kind::Handle, "pthread_t", 0, 4}, {Kind::I32, "int", 0, 4}, {Kind::Layout, "union sigval", 0, 4}};
-constexpr Type args_101[] = {{Kind::Layout, "pthread_spinlock_t *", 0, 4}};
-constexpr Type args_102[] = {{Kind::Layout, "pthread_spinlock_t *", 0, 4}, {Kind::I32, "int", 0, 4}};
-constexpr Type args_103[] = {{Kind::Layout, "pthread_spinlock_t *", 0, 4}};
+constexpr Type args_98[] = {{Kind::Layout, "pthread_rwlock_t *", 0, 4}, {Kind::Layout, "const struct timespec *", 0, 4}};
+constexpr Type args_99[] = {{Kind::Handle, "pthread_t", 0, 4}, {Kind::I32, "int", 0, 4}};
+constexpr Type args_100[] = {{Kind::I32, "int", 0, 4}, {Kind::Layout, "const sigset64_t *", 0, 4}, {Kind::Layout, "sigset64_t *", 0, 4}};
+constexpr Type args_101[] = {{Kind::Handle, "pthread_t", 0, 4}, {Kind::I32, "int", 0, 4}, {Kind::Layout, "union sigval", 0, 4}};
+constexpr Type args_102[] = {{Kind::Layout, "pthread_spinlock_t *", 0, 4}};
+constexpr Type args_103[] = {{Kind::Layout, "pthread_spinlock_t *", 0, 4}, {Kind::I32, "int", 0, 4}};
 constexpr Type args_104[] = {{Kind::Layout, "pthread_spinlock_t *", 0, 4}};
 constexpr Type args_105[] = {{Kind::Layout, "pthread_spinlock_t *", 0, 4}};
-constexpr Type args_106[] = {{Kind::I32, "int", 0, 4}, {Kind::Layout, "const struct iovec *", 0, 4}, {Kind::I32, "int", 0, 4}, {Kind::Off, "off_t", 0, 4}};
-constexpr Type args_107[] = {{Kind::I32, "int", 0, 4}, {Kind::Layout, "const struct iovec *", 0, 4}, {Kind::I32, "int", 0, 4}, {Kind::I64, "off64_t", 0, 4}};
-constexpr Type args_108[] = {{Kind::Ptr, "void *", 0, 4}, {Kind::Size, "size_t", 0, 4}, {Kind::Size, "size_t", 0, 4}};
-constexpr Type args_109[] = {{Kind::I32, "int", 0, 4}, {Kind::Ptr, "const char *", 1, 4}, {Kind::I32, "int", 0, 4}, {Kind::Ptr, "const char *", 1, 4}, {Kind::U32, "unsigned int", 0, 4}};
-constexpr Type args_110[] = {{Kind::I32, "int", 0, 4}, {Kind::Ptr, "const char *", 1, 4}, {Kind::Layout, "struct dirent * * *", 0, 4}, {Kind::Callback, "int (* )(const struct dirent * )", 0, 4}, {Kind::Callback, "int (* )(const struct dirent * * , const struct dirent * * )", 0, 4}};
-constexpr Type args_111[] = {{Kind::I32, "int", 0, 4}, {Kind::Ptr, "const char *", 1, 4}, {Kind::Layout, "struct dirent64 * * *", 0, 4}, {Kind::Callback, "int (* )(const struct dirent64 * )", 0, 4}, {Kind::Callback, "int (* )(const struct dirent64 * * , const struct dirent64 * * )", 0, 4}};
-constexpr Type args_112[] = {{Kind::Layout, "sem_t *", 0, 4}, {Kind::I32, "clockid_t", 0, 4}, {Kind::Layout, "const struct timespec *", 0, 4}};
-constexpr Type args_113[] = {{Kind::Layout, "sem_t *", 0, 4}, {Kind::Layout, "const struct timespec *", 0, 4}};
-constexpr Type args_114[] = {{Kind::Ptr, "const char *", 1, 4}, {Kind::Size, "size_t", 0, 4}};
-constexpr Type args_116[] = {{Kind::I32, "int", 0, 4}};
+constexpr Type args_106[] = {{Kind::Layout, "pthread_spinlock_t *", 0, 4}};
+constexpr Type args_107[] = {{Kind::I32, "int", 0, 4}, {Kind::Layout, "const struct iovec *", 0, 4}, {Kind::I32, "int", 0, 4}, {Kind::Off, "off_t", 0, 4}};
+constexpr Type args_108[] = {{Kind::I32, "int", 0, 4}, {Kind::Layout, "const struct iovec *", 0, 4}, {Kind::I32, "int", 0, 4}, {Kind::I64, "off64_t", 0, 4}};
+constexpr Type args_109[] = {{Kind::Ptr, "void *", 0, 4}, {Kind::Size, "size_t", 0, 4}, {Kind::Size, "size_t", 0, 4}};
+constexpr Type args_110[] = {{Kind::I32, "int", 0, 4}, {Kind::Ptr, "const char *", 1, 4}, {Kind::I32, "int", 0, 4}, {Kind::Ptr, "const char *", 1, 4}, {Kind::U32, "unsigned int", 0, 4}};
+constexpr Type args_111[] = {{Kind::I32, "int", 0, 4}, {Kind::Ptr, "const char *", 1, 4}, {Kind::Layout, "struct dirent * * *", 0, 4}, {Kind::Callback, "int (* )(const struct dirent * )", 0, 4}, {Kind::Callback, "int (* )(const struct dirent * * , const struct dirent * * )", 0, 4}};
+constexpr Type args_112[] = {{Kind::I32, "int", 0, 4}, {Kind::Ptr, "const char *", 1, 4}, {Kind::Layout, "struct dirent64 * * *", 0, 4}, {Kind::Callback, "int (* )(const struct dirent64 * )", 0, 4}, {Kind::Callback, "int (* )(const struct dirent64 * * , const struct dirent64 * * )", 0, 4}};
+constexpr Type args_113[] = {{Kind::Layout, "sem_t *", 0, 4}, {Kind::I32, "clockid_t", 0, 4}, {Kind::Layout, "const struct timespec *", 0, 4}};
+constexpr Type args_114[] = {{Kind::Layout, "sem_t *", 0, 4}, {Kind::Layout, "const struct timespec *", 0, 4}};
+constexpr Type args_115[] = {{Kind::Ptr, "const char *", 1, 4}, {Kind::Size, "size_t", 0, 4}};
 constexpr Type args_117[] = {{Kind::I32, "int", 0, 4}};
 constexpr Type args_118[] = {{Kind::I32, "int", 0, 4}};
-constexpr Type args_120[] = {{Kind::I32, "int", 0, 4}, {Kind::Layout, "const struct sigaction64 *", 0, 4}, {Kind::Layout, "struct sigaction64 *", 0, 4}};
-constexpr Type args_121[] = {{Kind::Layout, "sigset64_t *", 0, 4}, {Kind::I32, "int", 0, 4}};
+constexpr Type args_119[] = {{Kind::I32, "int", 0, 4}};
+constexpr Type args_121[] = {{Kind::I32, "int", 0, 4}, {Kind::Layout, "const struct sigaction64 *", 0, 4}, {Kind::Layout, "struct sigaction64 *", 0, 4}};
 constexpr Type args_122[] = {{Kind::Layout, "sigset64_t *", 0, 4}, {Kind::I32, "int", 0, 4}};
-constexpr Type args_123[] = {{Kind::Layout, "sigset64_t *", 0, 4}};
+constexpr Type args_123[] = {{Kind::Layout, "sigset64_t *", 0, 4}, {Kind::I32, "int", 0, 4}};
 constexpr Type args_124[] = {{Kind::Layout, "sigset64_t *", 0, 4}};
-constexpr Type args_125[] = {{Kind::I32, "int", 0, 4}};
+constexpr Type args_125[] = {{Kind::Layout, "sigset64_t *", 0, 4}};
 constexpr Type args_126[] = {{Kind::I32, "int", 0, 4}};
-constexpr Type args_127[] = {{Kind::Layout, "const sigset64_t *", 0, 4}, {Kind::I32, "int", 0, 4}};
-constexpr Type args_128[] = {{Kind::I32, "int", 0, 4}};
-constexpr Type args_129[] = {{Kind::Layout, "sigset64_t *", 0, 4}};
-constexpr Type args_130[] = {{Kind::I32, "int", 0, 4}, {Kind::Layout, "const sigset64_t *", 0, 4}, {Kind::Layout, "sigset64_t *", 0, 4}};
-constexpr Type args_131[] = {{Kind::I32, "int", 0, 4}};
-constexpr Type args_132[] = {{Kind::I32, "int", 0, 4}, {Kind::Layout, "sighandler_t", 0, 4}};
-constexpr Type args_133[] = {{Kind::Layout, "const sigset64_t *", 0, 4}};
-constexpr Type args_134[] = {{Kind::Layout, "const sigset64_t *", 0, 4}, {Kind::Layout, "siginfo_t *", 0, 4}, {Kind::Layout, "const struct timespec *", 0, 4}};
-constexpr Type args_135[] = {{Kind::Layout, "const sigset64_t *", 0, 4}, {Kind::Ptr, "int *", 4, 4}};
-constexpr Type args_136[] = {{Kind::Layout, "const sigset64_t *", 0, 4}, {Kind::Layout, "siginfo_t *", 0, 4}};
-constexpr Type args_137[] = {{Kind::I32, "int", 0, 4}, {Kind::Ptr, "const char *", 1, 4}, {Kind::I32, "int", 0, 4}, {Kind::U32, "unsigned int", 0, 4}, {Kind::Layout, "struct statx *", 0, 4}};
-constexpr Type args_138[] = {{Kind::Ptr, "const char *", 1, 4}, {Kind::I32, "int", 0, 4}};
-constexpr Type args_139[] = {{Kind::I32, "int", 0, 4}, {Kind::I64, "off64_t", 0, 4}, {Kind::I64, "off64_t", 0, 4}, {Kind::U32, "unsigned int", 0, 4}};
-constexpr Type args_140[] = {{Kind::I32, "int", 0, 4}};
-constexpr Type args_141[] = {{Kind::Layout, "struct tms *", 0, 4}};
-constexpr Type args_142[] = {{Kind::Layout, "struct timespec *", 0, 4}, {Kind::I32, "int", 0, 4}};
-constexpr Type args_144[] = {{Kind::U32, "wint_t", 0, 4}, {Kind::Ptr, "wctrans_t", 0, 4}};
-constexpr Type args_145[] = {{Kind::U32, "wint_t", 0, 4}, {Kind::Ptr, "wctrans_t", 0, 4}, {Kind::Handle, "locale_t", 0, 4}};
-constexpr Type args_146[] = {{Kind::Ptr, "wchar_t *", 4, 4}, {Kind::Size, "size_t", 0, 4}, {Kind::Ptr, "const wchar_t *", 4, 4}, {Kind::Layout, "const struct tm *", 0, 4}, {Kind::Handle, "locale_t", 0, 4}};
-constexpr Type args_147[] = {{Kind::Ptr, "const char *", 1, 4}};
-constexpr Type args_148[] = {{Kind::Ptr, "const char *", 1, 4}, {Kind::Handle, "locale_t", 0, 4}};
-constexpr Type args_149[] = {{Kind::Ptr, "const char *", 1, 4}};
-constexpr Type args_150[] = {{Kind::Ptr, "void *", 0, 4}, {Kind::Ptr, "const char *", 1, 4}, {Kind::Ptr, "const char *", 1, 4}};
-constexpr Type args_151[] = {{Kind::F64, "double", 0, 4}};
-constexpr Type args_152[] = {{Kind::F32, "float", 0, 4}};
-constexpr Type args_153[] = {{Kind::Unsupported, "_Complex long double", 0, 4}};
+constexpr Type args_127[] = {{Kind::I32, "int", 0, 4}};
+constexpr Type args_128[] = {{Kind::Layout, "const sigset64_t *", 0, 4}, {Kind::I32, "int", 0, 4}};
+constexpr Type args_129[] = {{Kind::I32, "int", 0, 4}};
+constexpr Type args_130[] = {{Kind::Layout, "sigset64_t *", 0, 4}};
+constexpr Type args_131[] = {{Kind::I32, "int", 0, 4}, {Kind::Layout, "const sigset64_t *", 0, 4}, {Kind::Layout, "sigset64_t *", 0, 4}};
+constexpr Type args_132[] = {{Kind::I32, "int", 0, 4}};
+constexpr Type args_133[] = {{Kind::I32, "int", 0, 4}, {Kind::Layout, "sighandler_t", 0, 4}};
+constexpr Type args_134[] = {{Kind::Layout, "const sigset64_t *", 0, 4}};
+constexpr Type args_135[] = {{Kind::Layout, "const sigset64_t *", 0, 4}, {Kind::Layout, "siginfo_t *", 0, 4}, {Kind::Layout, "const struct timespec *", 0, 4}};
+constexpr Type args_136[] = {{Kind::Layout, "const sigset64_t *", 0, 4}, {Kind::Ptr, "int *", 4, 4}};
+constexpr Type args_137[] = {{Kind::Layout, "const sigset64_t *", 0, 4}, {Kind::Layout, "siginfo_t *", 0, 4}};
+constexpr Type args_138[] = {{Kind::I32, "int", 0, 4}, {Kind::Ptr, "const char *", 1, 4}, {Kind::I32, "int", 0, 4}, {Kind::U32, "unsigned int", 0, 4}, {Kind::Layout, "struct statx *", 0, 4}};
+constexpr Type args_139[] = {{Kind::Ptr, "const char *", 1, 4}, {Kind::I32, "int", 0, 4}};
+constexpr Type args_140[] = {{Kind::I32, "int", 0, 4}, {Kind::I64, "off64_t", 0, 4}, {Kind::I64, "off64_t", 0, 4}, {Kind::U32, "unsigned int", 0, 4}};
+constexpr Type args_141[] = {{Kind::I32, "int", 0, 4}};
+constexpr Type args_142[] = {{Kind::Layout, "struct tms *", 0, 4}};
+constexpr Type args_143[] = {{Kind::Layout, "struct timespec *", 0, 4}, {Kind::I32, "int", 0, 4}};
+constexpr Type args_145[] = {{Kind::U32, "wint_t", 0, 4}, {Kind::Ptr, "wctrans_t", 0, 4}};
+constexpr Type args_146[] = {{Kind::U32, "wint_t", 0, 4}, {Kind::Ptr, "wctrans_t", 0, 4}, {Kind::Handle, "locale_t", 0, 4}};
+constexpr Type args_147[] = {{Kind::Ptr, "wchar_t *", 4, 4}, {Kind::Size, "size_t", 0, 4}, {Kind::Ptr, "const wchar_t *", 4, 4}, {Kind::Layout, "const struct tm *", 0, 4}, {Kind::Handle, "locale_t", 0, 4}};
+constexpr Type args_148[] = {{Kind::Ptr, "const char *", 1, 4}};
+constexpr Type args_149[] = {{Kind::Ptr, "const char *", 1, 4}, {Kind::Handle, "locale_t", 0, 4}};
+constexpr Type args_150[] = {{Kind::Ptr, "const char *", 1, 4}};
+constexpr Type args_151[] = {{Kind::Ptr, "void *", 0, 4}, {Kind::Ptr, "const char *", 1, 4}, {Kind::Ptr, "const char *", 1, 4}};
+constexpr Type args_152[] = {{Kind::F64, "double", 0, 4}};
+constexpr Type args_153[] = {{Kind::F32, "float", 0, 4}};
 constexpr Type args_154[] = {{Kind::Unsupported, "_Complex long double", 0, 4}};
 constexpr Type args_155[] = {{Kind::Unsupported, "_Complex long double", 0, 4}};
 constexpr Type args_156[] = {{Kind::Unsupported, "_Complex long double", 0, 4}};
@@ -149,189 +149,191 @@ constexpr Type args_158[] = {{Kind::Unsupported, "_Complex long double", 0, 4}};
 constexpr Type args_159[] = {{Kind::Unsupported, "_Complex long double", 0, 4}};
 constexpr Type args_160[] = {{Kind::Unsupported, "_Complex long double", 0, 4}};
 constexpr Type args_161[] = {{Kind::Unsupported, "_Complex long double", 0, 4}};
-constexpr Type args_162[] = {{Kind::Unsupported, "_Complex double", 0, 4}};
-constexpr Type args_163[] = {{Kind::Unsupported, "_Complex float", 0, 4}};
-constexpr Type args_164[] = {{Kind::Unsupported, "_Complex long double", 0, 4}};
-constexpr Type args_165[] = {{Kind::Unsupported, "_Complex double", 0, 4}, {Kind::Unsupported, "_Complex double", 0, 4}};
-constexpr Type args_166[] = {{Kind::Unsupported, "_Complex float", 0, 4}, {Kind::Unsupported, "_Complex float", 0, 4}};
-constexpr Type args_167[] = {{Kind::Unsupported, "_Complex long double", 0, 4}, {Kind::Unsupported, "_Complex long double", 0, 4}};
-constexpr Type args_168[] = {{Kind::Unsupported, "_Complex long double", 0, 4}};
+constexpr Type args_162[] = {{Kind::Unsupported, "_Complex long double", 0, 4}};
+constexpr Type args_163[] = {{Kind::Unsupported, "_Complex double", 0, 4}};
+constexpr Type args_164[] = {{Kind::Unsupported, "_Complex float", 0, 4}};
+constexpr Type args_165[] = {{Kind::Unsupported, "_Complex long double", 0, 4}};
+constexpr Type args_166[] = {{Kind::Unsupported, "_Complex double", 0, 4}, {Kind::Unsupported, "_Complex double", 0, 4}};
+constexpr Type args_167[] = {{Kind::Unsupported, "_Complex float", 0, 4}, {Kind::Unsupported, "_Complex float", 0, 4}};
+constexpr Type args_168[] = {{Kind::Unsupported, "_Complex long double", 0, 4}, {Kind::Unsupported, "_Complex long double", 0, 4}};
 constexpr Type args_169[] = {{Kind::Unsupported, "_Complex long double", 0, 4}};
 constexpr Type args_170[] = {{Kind::Unsupported, "_Complex long double", 0, 4}};
 constexpr Type args_171[] = {{Kind::Unsupported, "_Complex long double", 0, 4}};
+constexpr Type args_172[] = {{Kind::Unsupported, "_Complex long double", 0, 4}};
 const Descriptor descriptors[] = {
   {"libc.so", "<condition_wait_personality32>", {Kind::U32, "unsigned int", 0, 4}, args_0, false, "Arm EHABI32 personality routine ABI"},
   {"libc.so", "<debuggerd_signal_handler>", {Kind::Void, "void", 0, 4}, args_1, false, "system/core/debuggerd/handler/debuggerd_handler.cpp sa_sigaction"},
-  {"libc.so", "__cxa_atexit", {Kind::I32, "int", 0, 4}, args_2, false, "bionic C++ ABI destructor entry points"},
-  {"libc.so", "__cxa_finalize", {Kind::Void, "void", 0, 4}, args_3, false, "bionic __cxa_atexit.cpp"},
-  {"libc.so", "__cxa_thread_atexit", {Kind::I32, "int", 0, 4}, args_4, false, "bionic C++ ABI destructor entry points"},
-  {"libc.so", "__cxa_thread_atexit_impl", {Kind::I32, "int", 0, 4}, args_5, false, "bionic C++ ABI destructor entry points"},
-  {"libc.so", "__fread_chk", {Kind::U32, "unsigned int", 0, 4}, args_6, false, "NDK r30 bits/fortify/stdio.h"},
-  {"libc.so", "__fwrite_chk", {Kind::U32, "unsigned int", 0, 4}, args_7, false, "NDK r30 bits/fortify/stdio.h"},
-  {"libc.so", "__gnu_strerror_r", {Kind::Ptr, "char *", 1, 4}, args_8, false, "NDK r30 string.h __RENAME(__gnu_strerror_r)"},
-  {"libc.so", "__register_atfork", {Kind::Void, "", 0, 4}, args_9, false, "bionic/pthread_atfork.cpp"},
-  {"libc.so", "__sigsetjmp", {Kind::I32, "int", 0, 4}, args_10, false, "bionic ABI alias of sigsetjmp"},
+  {"libc.so", "__aeabi_atexit", {Kind::I32, "int", 0, 4}, args_2, false, "ARM C++ ABI 3.3.5.3 / bionic arch-arm atexit"},
+  {"libc.so", "__cxa_atexit", {Kind::I32, "int", 0, 4}, args_3, false, "bionic C++ ABI destructor entry points"},
+  {"libc.so", "__cxa_finalize", {Kind::Void, "void", 0, 4}, args_4, false, "bionic __cxa_atexit.cpp"},
+  {"libc.so", "__cxa_thread_atexit", {Kind::I32, "int", 0, 4}, args_5, false, "bionic C++ ABI destructor entry points"},
+  {"libc.so", "__cxa_thread_atexit_impl", {Kind::I32, "int", 0, 4}, args_6, false, "bionic C++ ABI destructor entry points"},
+  {"libc.so", "__fread_chk", {Kind::U32, "unsigned int", 0, 4}, args_7, false, "NDK r30 bits/fortify/stdio.h"},
+  {"libc.so", "__fwrite_chk", {Kind::U32, "unsigned int", 0, 4}, args_8, false, "NDK r30 bits/fortify/stdio.h"},
+  {"libc.so", "__gnu_strerror_r", {Kind::Ptr, "char *", 1, 4}, args_9, false, "NDK r30 string.h __RENAME(__gnu_strerror_r)"},
+  {"libc.so", "__register_atfork", {Kind::Void, "", 0, 4}, args_10, false, "bionic/pthread_atfork.cpp"},
+  {"libc.so", "__sigsetjmp", {Kind::I32, "int", 0, 4}, args_11, false, "bionic ABI alias of sigsetjmp"},
   {"libc.so", "__stack_chk_fail", {Kind::Void, "void", 0, 4}, {}, false, "bionic __stack_chk_fail.cpp"},
-  {"libc.so", "__system_property_read_callback", {Kind::Void, "void", 0, 4}, args_12, false, "NDK r30 system_properties.h"},
-  {"libc.so", "__system_property_wait", {Kind::U8, "bool", 0, 4}, args_13, false, "NDK r30 system_properties.h"},
-  {"libc.so", "aligned_alloc", {Kind::Ptr, "void *", 0, 4}, args_14, false, "NDK r30 stdlib.h"},
+  {"libc.so", "__system_property_read_callback", {Kind::Void, "void", 0, 4}, args_13, false, "NDK r30 system_properties.h"},
+  {"libc.so", "__system_property_wait", {Kind::U8, "bool", 0, 4}, args_14, false, "NDK r30 system_properties.h"},
+  {"libc.so", "aligned_alloc", {Kind::Ptr, "void *", 0, 4}, args_15, false, "NDK r30 stdlib.h"},
   {"libc.so", "android_get_application_target_sdk_version", {Kind::I32, "int", 0, 4}, {}, false, "NDK r30 api-level.h"},
-  {"libc.so", "bsd_signal", {Kind::Layout, "sighandler_t", 0, 4}, args_16, false, "bionic ABI alias of signal"},
-  {"libc.so", "catclose", {Kind::I32, "int", 0, 4}, args_17, false, "NDK r30 nl_types.h"},
-  {"libc.so", "catgets", {Kind::Ptr, "char *", 1, 4}, args_18, false, "NDK r30 nl_types.h"},
-  {"libc.so", "catopen", {Kind::Ptr, "nl_catd", 0, 4}, args_19, false, "NDK r30 nl_types.h"},
-  {"libc.so", "ctermid", {Kind::Ptr, "char *", 1, 4}, args_20, false, "NDK r30 stdio.h"},
+  {"libc.so", "bsd_signal", {Kind::Layout, "sighandler_t", 0, 4}, args_17, false, "bionic ABI alias of signal"},
+  {"libc.so", "catclose", {Kind::I32, "int", 0, 4}, args_18, false, "NDK r30 nl_types.h"},
+  {"libc.so", "catgets", {Kind::Ptr, "char *", 1, 4}, args_19, false, "NDK r30 nl_types.h"},
+  {"libc.so", "catopen", {Kind::Ptr, "nl_catd", 0, 4}, args_20, false, "NDK r30 nl_types.h"},
+  {"libc.so", "ctermid", {Kind::Ptr, "char *", 1, 4}, args_21, false, "NDK r30 stdio.h"},
   {"libc.so", "endgrent", {Kind::Void, "void", 0, 4}, {}, false, "NDK r30 grp.h"},
   {"libc.so", "endhostent", {Kind::Void, "void", 0, 4}, {}, false, "NDK r30 netdb.h"},
   {"libc.so", "endnetent", {Kind::Void, "void", 0, 4}, {}, false, "NDK r30 netdb.h"},
   {"libc.so", "endprotoent", {Kind::Void, "void", 0, 4}, {}, false, "NDK r30 netdb.h"},
   {"libc.so", "endpwent", {Kind::Void, "void", 0, 4}, {}, false, "NDK r30 pwd.h"},
-  {"libc.so", "epoll_pwait64", {Kind::I32, "int", 0, 4}, args_26, false, "NDK r30 epoll.h"},
-  {"libc.so", "fcntl64", {Kind::I32, "int", 0, 4}, args_27, true, "bionic ABI alias of fcntl"},
-  {"libc.so", "fexecve", {Kind::I32, "int", 0, 4}, args_28, false, "NDK r30 unistd.h"},
-  {"libc.so", "fflush_unlocked", {Kind::I32, "int", 0, 4}, args_29, false, "NDK r30 stdio.h"},
-  {"libc.so", "fgetc_unlocked", {Kind::I32, "int", 0, 4}, args_30, false, "NDK r30 stdio.h"},
-  {"libc.so", "fgetpos64", {Kind::I32, "int", 0, 4}, args_31, false, "NDK r30 stdio.h"},
-  {"libc.so", "fgets_unlocked", {Kind::Ptr, "char *", 1, 4}, args_32, false, "NDK r30 stdio.h"},
-  {"libc.so", "fileno_unlocked", {Kind::I32, "int", 0, 4}, args_33, false, "NDK r30 stdio.h"},
-  {"libc.so", "fopen64", {Kind::Handle, "FILE *", 0, 4}, args_34, false, "NDK r30 stdio.h"},
-  {"libc.so", "fputc_unlocked", {Kind::I32, "int", 0, 4}, args_35, false, "NDK r30 stdio.h"},
-  {"libc.so", "fputs_unlocked", {Kind::I32, "int", 0, 4}, args_36, false, "NDK r30 stdio.h"},
-  {"libc.so", "fread_unlocked", {Kind::Size, "size_t", 0, 4}, args_37, false, "NDK r30 stdio.h"},
-  {"libc.so", "freopen64", {Kind::Handle, "FILE *", 0, 4}, args_38, false, "NDK r30 stdio.h"},
-  {"libc.so", "fseeko64", {Kind::I32, "int", 0, 4}, args_39, false, "NDK r30 stdio.h"},
-  {"libc.so", "fsetpos64", {Kind::I32, "int", 0, 4}, args_40, false, "NDK r30 stdio.h"},
-  {"libc.so", "ftello64", {Kind::I64, "off64_t", 0, 4}, args_41, false, "NDK r30 stdio.h"},
-  {"libc.so", "funopen64", {Kind::Handle, "FILE *", 0, 4}, args_42, false, "NDK r30 stdio.h"},
-  {"libc.so", "futimes", {Kind::I32, "int", 0, 4}, args_43, false, "NDK r30 time.h"},
-  {"libc.so", "futimesat", {Kind::I32, "int", 0, 4}, args_44, false, "NDK r30 time.h"},
-  {"libc.so", "fwrite_unlocked", {Kind::Size, "size_t", 0, 4}, args_45, false, "NDK r30 stdio.h"},
-  {"libc.so", "getdomainname", {Kind::I32, "int", 0, 4}, args_46, false, "NDK r30 unistd.h"},
-  {"libc.so", "getentropy", {Kind::I32, "int", 0, 4}, args_47, false, "NDK r30 getentropy.h"},
+  {"libc.so", "epoll_pwait64", {Kind::I32, "int", 0, 4}, args_27, false, "NDK r30 epoll.h"},
+  {"libc.so", "fcntl64", {Kind::I32, "int", 0, 4}, args_28, true, "bionic ABI alias of fcntl"},
+  {"libc.so", "fexecve", {Kind::I32, "int", 0, 4}, args_29, false, "NDK r30 unistd.h"},
+  {"libc.so", "fflush_unlocked", {Kind::I32, "int", 0, 4}, args_30, false, "NDK r30 stdio.h"},
+  {"libc.so", "fgetc_unlocked", {Kind::I32, "int", 0, 4}, args_31, false, "NDK r30 stdio.h"},
+  {"libc.so", "fgetpos64", {Kind::I32, "int", 0, 4}, args_32, false, "NDK r30 stdio.h"},
+  {"libc.so", "fgets_unlocked", {Kind::Ptr, "char *", 1, 4}, args_33, false, "NDK r30 stdio.h"},
+  {"libc.so", "fileno_unlocked", {Kind::I32, "int", 0, 4}, args_34, false, "NDK r30 stdio.h"},
+  {"libc.so", "fopen64", {Kind::Handle, "FILE *", 0, 4}, args_35, false, "NDK r30 stdio.h"},
+  {"libc.so", "fputc_unlocked", {Kind::I32, "int", 0, 4}, args_36, false, "NDK r30 stdio.h"},
+  {"libc.so", "fputs_unlocked", {Kind::I32, "int", 0, 4}, args_37, false, "NDK r30 stdio.h"},
+  {"libc.so", "fread_unlocked", {Kind::Size, "size_t", 0, 4}, args_38, false, "NDK r30 stdio.h"},
+  {"libc.so", "freopen64", {Kind::Handle, "FILE *", 0, 4}, args_39, false, "NDK r30 stdio.h"},
+  {"libc.so", "fseeko64", {Kind::I32, "int", 0, 4}, args_40, false, "NDK r30 stdio.h"},
+  {"libc.so", "fsetpos64", {Kind::I32, "int", 0, 4}, args_41, false, "NDK r30 stdio.h"},
+  {"libc.so", "ftello64", {Kind::I64, "off64_t", 0, 4}, args_42, false, "NDK r30 stdio.h"},
+  {"libc.so", "funopen64", {Kind::Handle, "FILE *", 0, 4}, args_43, false, "NDK r30 stdio.h"},
+  {"libc.so", "futimes", {Kind::I32, "int", 0, 4}, args_44, false, "NDK r30 time.h"},
+  {"libc.so", "futimesat", {Kind::I32, "int", 0, 4}, args_45, false, "NDK r30 time.h"},
+  {"libc.so", "fwrite_unlocked", {Kind::Size, "size_t", 0, 4}, args_46, false, "NDK r30 stdio.h"},
+  {"libc.so", "getdomainname", {Kind::I32, "int", 0, 4}, args_47, false, "NDK r30 unistd.h"},
+  {"libc.so", "getentropy", {Kind::I32, "int", 0, 4}, args_48, false, "NDK r30 getentropy.h"},
   {"libc.so", "getgrent", {Kind::Layout, "struct group *", 0, 4}, {}, false, "NDK r30 grp.h"},
-  {"libc.so", "getgrgid_r", {Kind::I32, "int", 0, 4}, args_49, false, "NDK r30 grp.h"},
-  {"libc.so", "getgrnam_r", {Kind::I32, "int", 0, 4}, args_50, false, "NDK r30 grp.h"},
-  {"libc.so", "getloadavg", {Kind::I32, "int", 0, 4}, args_51, false, "NDK r30 stdlib.h"},
-  {"libc.so", "getlogin_r", {Kind::I32, "int", 0, 4}, args_52, false, "NDK r30 unistd.h"},
+  {"libc.so", "getgrgid_r", {Kind::I32, "int", 0, 4}, args_50, false, "NDK r30 grp.h"},
+  {"libc.so", "getgrnam_r", {Kind::I32, "int", 0, 4}, args_51, false, "NDK r30 grp.h"},
+  {"libc.so", "getloadavg", {Kind::I32, "int", 0, 4}, args_52, false, "NDK r30 stdlib.h"},
+  {"libc.so", "getlogin_r", {Kind::I32, "int", 0, 4}, args_53, false, "NDK r30 unistd.h"},
   {"libc.so", "getnetent", {Kind::Layout, "struct netent *", 0, 4}, {}, false, "NDK r30 netdb.h"},
   {"libc.so", "getprotoent", {Kind::Layout, "struct protoent *", 0, 4}, {}, false, "NDK r30 netdb.h"},
   {"libc.so", "getpwent", {Kind::Layout, "struct passwd *", 0, 4}, {}, false, "NDK r30 pwd.h"},
-  {"libc.so", "getsubopt", {Kind::I32, "int", 0, 4}, args_56, false, "NDK r30 stdlib.h"},
-  {"libc.so", "glob", {Kind::I32, "int", 0, 4}, args_57, false, "NDK r30 glob.h"},
-  {"libc.so", "globfree", {Kind::Void, "void", 0, 4}, args_58, false, "NDK r30 glob.h"},
-  {"libc.so", "iconv", {Kind::Size, "size_t", 0, 4}, args_59, false, "NDK r30 iconv.h"},
-  {"libc.so", "iconv_close", {Kind::I32, "int", 0, 4}, args_60, false, "NDK r30 iconv.h"},
-  {"libc.so", "iconv_open", {Kind::Handle, "iconv_t", 0, 4}, args_61, false, "NDK r30 iconv.h"},
-  {"libc.so", "if_freenameindex", {Kind::Void, "void", 0, 4}, args_62, false, "NDK r30 if.h"},
+  {"libc.so", "getsubopt", {Kind::I32, "int", 0, 4}, args_57, false, "NDK r30 stdlib.h"},
+  {"libc.so", "glob", {Kind::I32, "int", 0, 4}, args_58, false, "NDK r30 glob.h"},
+  {"libc.so", "globfree", {Kind::Void, "void", 0, 4}, args_59, false, "NDK r30 glob.h"},
+  {"libc.so", "iconv", {Kind::Size, "size_t", 0, 4}, args_60, false, "NDK r30 iconv.h"},
+  {"libc.so", "iconv_close", {Kind::I32, "int", 0, 4}, args_61, false, "NDK r30 iconv.h"},
+  {"libc.so", "iconv_open", {Kind::Handle, "iconv_t", 0, 4}, args_62, false, "NDK r30 iconv.h"},
+  {"libc.so", "if_freenameindex", {Kind::Void, "void", 0, 4}, args_63, false, "NDK r30 if.h"},
   {"libc.so", "if_nameindex", {Kind::Layout, "struct if_nameindex *", 0, 4}, {}, false, "NDK r30 if.h"},
-  {"libc.so", "lockf", {Kind::I32, "int", 0, 4}, args_64, false, "NDK r30 lockf.h"},
-  {"libc.so", "lockf64", {Kind::I32, "int", 0, 4}, args_65, false, "NDK r30 lockf.h"},
-  {"libc.so", "lutimes", {Kind::I32, "int", 0, 4}, args_66, false, "NDK r30 time.h"},
-  {"libc.so", "mallopt", {Kind::I32, "int", 0, 4}, args_67, false, "NDK r30 malloc.h"},
-  {"libc.so", "mblen", {Kind::I32, "int", 0, 4}, args_68, false, "NDK r30 stdlib.h"},
-  {"libc.so", "memfd_create", {Kind::I32, "int", 0, 4}, args_69, false, "NDK r30 mman.h"},
-  {"libc.so", "mlock2", {Kind::I32, "int", 0, 4}, args_70, false, "NDK r30 mman.h"},
-  {"libc.so", "nl_langinfo", {Kind::Ptr, "char *", 1, 4}, args_71, false, "NDK r30 langinfo.h"},
-  {"libc.so", "nl_langinfo_l", {Kind::Ptr, "char *", 1, 4}, args_72, false, "NDK r30 langinfo.h"},
-  {"libc.so", "ppoll64", {Kind::I32, "int", 0, 4}, args_73, false, "NDK r30 poll.h"},
-  {"libc.so", "preadv", {Kind::SSize, "ssize_t", 0, 4}, args_74, false, "NDK r30 uio.h"},
-  {"libc.so", "preadv64", {Kind::SSize, "ssize_t", 0, 4}, args_75, false, "NDK r30 uio.h"},
-  {"libc.so", "prlimit", {Kind::I32, "int", 0, 4}, args_76, false, "NDK r30 resource.h"},
-  {"libc.so", "process_madvise", {Kind::SSize, "ssize_t", 0, 4}, args_77, false, "NDK r30 mman.h"},
-  {"libc.so", "pselect64", {Kind::I32, "int", 0, 4}, args_78, false, "NDK r30 select.h"},
-  {"libc.so", "pthread_attr_getinheritsched", {Kind::I32, "int", 0, 4}, args_79, false, "NDK r30 pthread.h"},
-  {"libc.so", "pthread_attr_setinheritsched", {Kind::I32, "int", 0, 4}, args_80, false, "NDK r30 pthread.h"},
-  {"libc.so", "pthread_barrier_destroy", {Kind::I32, "int", 0, 4}, args_81, false, "NDK r30 pthread.h"},
-  {"libc.so", "pthread_barrier_init", {Kind::I32, "int", 0, 4}, args_82, false, "NDK r30 pthread.h"},
-  {"libc.so", "pthread_barrier_wait", {Kind::I32, "int", 0, 4}, args_83, false, "NDK r30 pthread.h"},
-  {"libc.so", "pthread_barrierattr_destroy", {Kind::I32, "int", 0, 4}, args_84, false, "NDK r30 pthread.h"},
-  {"libc.so", "pthread_barrierattr_getpshared", {Kind::I32, "int", 0, 4}, args_85, false, "NDK r30 pthread.h"},
-  {"libc.so", "pthread_barrierattr_init", {Kind::I32, "int", 0, 4}, args_86, false, "NDK r30 pthread.h"},
-  {"libc.so", "pthread_barrierattr_setpshared", {Kind::I32, "int", 0, 4}, args_87, false, "NDK r30 pthread.h"},
-  {"libc.so", "pthread_cond_clockwait", {Kind::I32, "int", 0, 4}, args_88, false, "NDK r30 pthread.h"},
-  {"libc.so", "pthread_getname_np", {Kind::I32, "int", 0, 4}, args_89, false, "NDK r30 pthread.h"},
-  {"libc.so", "pthread_mutex_clocklock", {Kind::I32, "int", 0, 4}, args_90, false, "NDK r30 pthread.h"},
-  {"libc.so", "pthread_mutex_timedlock_monotonic_np", {Kind::I32, "int", 0, 4}, args_91, false, "NDK r30 pthread.h"},
-  {"libc.so", "pthread_mutexattr_getprotocol", {Kind::I32, "int", 0, 4}, args_92, false, "NDK r30 pthread.h"},
-  {"libc.so", "pthread_mutexattr_setprotocol", {Kind::I32, "int", 0, 4}, args_93, false, "NDK r30 pthread.h"},
-  {"libc.so", "pthread_rwlock_clockrdlock", {Kind::I32, "int", 0, 4}, args_94, false, "NDK r30 pthread.h"},
-  {"libc.so", "pthread_rwlock_clockwrlock", {Kind::I32, "int", 0, 4}, args_95, false, "NDK r30 pthread.h"},
-  {"libc.so", "pthread_rwlock_timedrdlock_monotonic_np", {Kind::I32, "int", 0, 4}, args_96, false, "NDK r30 pthread.h"},
-  {"libc.so", "pthread_rwlock_timedwrlock_monotonic_np", {Kind::I32, "int", 0, 4}, args_97, false, "NDK r30 pthread.h"},
-  {"libc.so", "pthread_setschedprio", {Kind::I32, "int", 0, 4}, args_98, false, "NDK r30 pthread.h"},
-  {"libc.so", "pthread_sigmask64", {Kind::I32, "int", 0, 4}, args_99, false, "NDK r30 signal.h"},
-  {"libc.so", "pthread_sigqueue", {Kind::I32, "int", 0, 4}, args_100, false, "NDK r30 signal.h"},
-  {"libc.so", "pthread_spin_destroy", {Kind::I32, "int", 0, 4}, args_101, false, "NDK r30 pthread.h"},
-  {"libc.so", "pthread_spin_init", {Kind::I32, "int", 0, 4}, args_102, false, "NDK r30 pthread.h"},
-  {"libc.so", "pthread_spin_lock", {Kind::I32, "int", 0, 4}, args_103, false, "NDK r30 pthread.h"},
-  {"libc.so", "pthread_spin_trylock", {Kind::I32, "int", 0, 4}, args_104, false, "NDK r30 pthread.h"},
-  {"libc.so", "pthread_spin_unlock", {Kind::I32, "int", 0, 4}, args_105, false, "NDK r30 pthread.h"},
-  {"libc.so", "pwritev", {Kind::SSize, "ssize_t", 0, 4}, args_106, false, "NDK r30 uio.h"},
-  {"libc.so", "pwritev64", {Kind::SSize, "ssize_t", 0, 4}, args_107, false, "NDK r30 uio.h"},
-  {"libc.so", "reallocarray", {Kind::Ptr, "void *", 0, 4}, args_108, false, "NDK r30 malloc.h"},
-  {"libc.so", "renameat2", {Kind::I32, "int", 0, 4}, args_109, false, "NDK r30 stdio.h"},
-  {"libc.so", "scandirat", {Kind::I32, "int", 0, 4}, args_110, false, "NDK r30 dirent.h"},
-  {"libc.so", "scandirat64", {Kind::I32, "int", 0, 4}, args_111, false, "NDK r30 dirent.h"},
-  {"libc.so", "sem_clockwait", {Kind::I32, "int", 0, 4}, args_112, false, "NDK r30 semaphore.h"},
-  {"libc.so", "sem_timedwait_monotonic_np", {Kind::I32, "int", 0, 4}, args_113, false, "NDK r30 semaphore.h"},
-  {"libc.so", "setdomainname", {Kind::I32, "int", 0, 4}, args_114, false, "NDK r30 unistd.h"},
+  {"libc.so", "lockf", {Kind::I32, "int", 0, 4}, args_65, false, "NDK r30 lockf.h"},
+  {"libc.so", "lockf64", {Kind::I32, "int", 0, 4}, args_66, false, "NDK r30 lockf.h"},
+  {"libc.so", "lutimes", {Kind::I32, "int", 0, 4}, args_67, false, "NDK r30 time.h"},
+  {"libc.so", "mallopt", {Kind::I32, "int", 0, 4}, args_68, false, "NDK r30 malloc.h"},
+  {"libc.so", "mblen", {Kind::I32, "int", 0, 4}, args_69, false, "NDK r30 stdlib.h"},
+  {"libc.so", "memfd_create", {Kind::I32, "int", 0, 4}, args_70, false, "NDK r30 mman.h"},
+  {"libc.so", "mlock2", {Kind::I32, "int", 0, 4}, args_71, false, "NDK r30 mman.h"},
+  {"libc.so", "nl_langinfo", {Kind::Ptr, "char *", 1, 4}, args_72, false, "NDK r30 langinfo.h"},
+  {"libc.so", "nl_langinfo_l", {Kind::Ptr, "char *", 1, 4}, args_73, false, "NDK r30 langinfo.h"},
+  {"libc.so", "ppoll64", {Kind::I32, "int", 0, 4}, args_74, false, "NDK r30 poll.h"},
+  {"libc.so", "preadv", {Kind::SSize, "ssize_t", 0, 4}, args_75, false, "NDK r30 uio.h"},
+  {"libc.so", "preadv64", {Kind::SSize, "ssize_t", 0, 4}, args_76, false, "NDK r30 uio.h"},
+  {"libc.so", "prlimit", {Kind::I32, "int", 0, 4}, args_77, false, "NDK r30 resource.h"},
+  {"libc.so", "process_madvise", {Kind::SSize, "ssize_t", 0, 4}, args_78, false, "NDK r30 mman.h"},
+  {"libc.so", "pselect64", {Kind::I32, "int", 0, 4}, args_79, false, "NDK r30 select.h"},
+  {"libc.so", "pthread_attr_getinheritsched", {Kind::I32, "int", 0, 4}, args_80, false, "NDK r30 pthread.h"},
+  {"libc.so", "pthread_attr_setinheritsched", {Kind::I32, "int", 0, 4}, args_81, false, "NDK r30 pthread.h"},
+  {"libc.so", "pthread_barrier_destroy", {Kind::I32, "int", 0, 4}, args_82, false, "NDK r30 pthread.h"},
+  {"libc.so", "pthread_barrier_init", {Kind::I32, "int", 0, 4}, args_83, false, "NDK r30 pthread.h"},
+  {"libc.so", "pthread_barrier_wait", {Kind::I32, "int", 0, 4}, args_84, false, "NDK r30 pthread.h"},
+  {"libc.so", "pthread_barrierattr_destroy", {Kind::I32, "int", 0, 4}, args_85, false, "NDK r30 pthread.h"},
+  {"libc.so", "pthread_barrierattr_getpshared", {Kind::I32, "int", 0, 4}, args_86, false, "NDK r30 pthread.h"},
+  {"libc.so", "pthread_barrierattr_init", {Kind::I32, "int", 0, 4}, args_87, false, "NDK r30 pthread.h"},
+  {"libc.so", "pthread_barrierattr_setpshared", {Kind::I32, "int", 0, 4}, args_88, false, "NDK r30 pthread.h"},
+  {"libc.so", "pthread_cond_clockwait", {Kind::I32, "int", 0, 4}, args_89, false, "NDK r30 pthread.h"},
+  {"libc.so", "pthread_getname_np", {Kind::I32, "int", 0, 4}, args_90, false, "NDK r30 pthread.h"},
+  {"libc.so", "pthread_mutex_clocklock", {Kind::I32, "int", 0, 4}, args_91, false, "NDK r30 pthread.h"},
+  {"libc.so", "pthread_mutex_timedlock_monotonic_np", {Kind::I32, "int", 0, 4}, args_92, false, "NDK r30 pthread.h"},
+  {"libc.so", "pthread_mutexattr_getprotocol", {Kind::I32, "int", 0, 4}, args_93, false, "NDK r30 pthread.h"},
+  {"libc.so", "pthread_mutexattr_setprotocol", {Kind::I32, "int", 0, 4}, args_94, false, "NDK r30 pthread.h"},
+  {"libc.so", "pthread_rwlock_clockrdlock", {Kind::I32, "int", 0, 4}, args_95, false, "NDK r30 pthread.h"},
+  {"libc.so", "pthread_rwlock_clockwrlock", {Kind::I32, "int", 0, 4}, args_96, false, "NDK r30 pthread.h"},
+  {"libc.so", "pthread_rwlock_timedrdlock_monotonic_np", {Kind::I32, "int", 0, 4}, args_97, false, "NDK r30 pthread.h"},
+  {"libc.so", "pthread_rwlock_timedwrlock_monotonic_np", {Kind::I32, "int", 0, 4}, args_98, false, "NDK r30 pthread.h"},
+  {"libc.so", "pthread_setschedprio", {Kind::I32, "int", 0, 4}, args_99, false, "NDK r30 pthread.h"},
+  {"libc.so", "pthread_sigmask64", {Kind::I32, "int", 0, 4}, args_100, false, "NDK r30 signal.h"},
+  {"libc.so", "pthread_sigqueue", {Kind::I32, "int", 0, 4}, args_101, false, "NDK r30 signal.h"},
+  {"libc.so", "pthread_spin_destroy", {Kind::I32, "int", 0, 4}, args_102, false, "NDK r30 pthread.h"},
+  {"libc.so", "pthread_spin_init", {Kind::I32, "int", 0, 4}, args_103, false, "NDK r30 pthread.h"},
+  {"libc.so", "pthread_spin_lock", {Kind::I32, "int", 0, 4}, args_104, false, "NDK r30 pthread.h"},
+  {"libc.so", "pthread_spin_trylock", {Kind::I32, "int", 0, 4}, args_105, false, "NDK r30 pthread.h"},
+  {"libc.so", "pthread_spin_unlock", {Kind::I32, "int", 0, 4}, args_106, false, "NDK r30 pthread.h"},
+  {"libc.so", "pwritev", {Kind::SSize, "ssize_t", 0, 4}, args_107, false, "NDK r30 uio.h"},
+  {"libc.so", "pwritev64", {Kind::SSize, "ssize_t", 0, 4}, args_108, false, "NDK r30 uio.h"},
+  {"libc.so", "reallocarray", {Kind::Ptr, "void *", 0, 4}, args_109, false, "NDK r30 malloc.h"},
+  {"libc.so", "renameat2", {Kind::I32, "int", 0, 4}, args_110, false, "NDK r30 stdio.h"},
+  {"libc.so", "scandirat", {Kind::I32, "int", 0, 4}, args_111, false, "NDK r30 dirent.h"},
+  {"libc.so", "scandirat64", {Kind::I32, "int", 0, 4}, args_112, false, "NDK r30 dirent.h"},
+  {"libc.so", "sem_clockwait", {Kind::I32, "int", 0, 4}, args_113, false, "NDK r30 semaphore.h"},
+  {"libc.so", "sem_timedwait_monotonic_np", {Kind::I32, "int", 0, 4}, args_114, false, "NDK r30 semaphore.h"},
+  {"libc.so", "setdomainname", {Kind::I32, "int", 0, 4}, args_115, false, "NDK r30 unistd.h"},
   {"libc.so", "setgrent", {Kind::Void, "void", 0, 4}, {}, false, "NDK r30 grp.h"},
-  {"libc.so", "sethostent", {Kind::Void, "void", 0, 4}, args_116, false, "NDK r30 netdb.h"},
-  {"libc.so", "setnetent", {Kind::Void, "void", 0, 4}, args_117, false, "NDK r30 netdb.h"},
-  {"libc.so", "setprotoent", {Kind::Void, "void", 0, 4}, args_118, false, "NDK r30 netdb.h"},
+  {"libc.so", "sethostent", {Kind::Void, "void", 0, 4}, args_117, false, "NDK r30 netdb.h"},
+  {"libc.so", "setnetent", {Kind::Void, "void", 0, 4}, args_118, false, "NDK r30 netdb.h"},
+  {"libc.so", "setprotoent", {Kind::Void, "void", 0, 4}, args_119, false, "NDK r30 netdb.h"},
   {"libc.so", "setpwent", {Kind::Void, "void", 0, 4}, {}, false, "NDK r30 pwd.h"},
-  {"libc.so", "sigaction64", {Kind::I32, "int", 0, 4}, args_120, false, "NDK r30 signal.h"},
-  {"libc.so", "sigaddset64", {Kind::I32, "int", 0, 4}, args_121, false, "NDK r30 signal.h"},
-  {"libc.so", "sigdelset64", {Kind::I32, "int", 0, 4}, args_122, false, "NDK r30 signal.h"},
-  {"libc.so", "sigemptyset64", {Kind::I32, "int", 0, 4}, args_123, false, "NDK r30 signal.h"},
-  {"libc.so", "sigfillset64", {Kind::I32, "int", 0, 4}, args_124, false, "NDK r30 signal.h"},
-  {"libc.so", "sighold", {Kind::I32, "int", 0, 4}, args_125, false, "NDK r30 signal.h"},
-  {"libc.so", "sigignore", {Kind::I32, "int", 0, 4}, args_126, false, "NDK r30 signal.h"},
-  {"libc.so", "sigismember64", {Kind::I32, "int", 0, 4}, args_127, false, "NDK r30 signal.h"},
-  {"libc.so", "sigpause", {Kind::I32, "int", 0, 4}, args_128, false, "NDK r30 signal.h"},
-  {"libc.so", "sigpending64", {Kind::I32, "int", 0, 4}, args_129, false, "NDK r30 signal.h"},
-  {"libc.so", "sigprocmask64", {Kind::I32, "int", 0, 4}, args_130, false, "NDK r30 signal.h"},
-  {"libc.so", "sigrelse", {Kind::I32, "int", 0, 4}, args_131, false, "NDK r30 signal.h"},
-  {"libc.so", "sigset", {Kind::Layout, "sighandler_t", 0, 4}, args_132, false, "NDK r30 signal.h"},
-  {"libc.so", "sigsuspend64", {Kind::I32, "int", 0, 4}, args_133, false, "NDK r30 signal.h"},
-  {"libc.so", "sigtimedwait64", {Kind::I32, "int", 0, 4}, args_134, false, "NDK r30 signal.h"},
-  {"libc.so", "sigwait64", {Kind::I32, "int", 0, 4}, args_135, false, "NDK r30 signal.h"},
-  {"libc.so", "sigwaitinfo64", {Kind::I32, "int", 0, 4}, args_136, false, "NDK r30 signal.h"},
-  {"libc.so", "statx", {Kind::I32, "int", 0, 4}, args_137, false, "NDK r30 stat.h"},
-  {"libc.so", "strchrnul", {Kind::Ptr, "char *", 1, 4}, args_138, false, "NDK r30 string.h"},
-  {"libc.so", "sync_file_range", {Kind::I32, "int", 0, 4}, args_139, false, "NDK r30 fcntl.h"},
-  {"libc.so", "syncfs", {Kind::I32, "int", 0, 4}, args_140, false, "NDK r30 unistd.h"},
-  {"libc.so", "times", {Kind::Long, "clock_t", 0, 4}, args_141, false, "NDK r30 times.h"},
-  {"libc.so", "timespec_get", {Kind::I32, "int", 0, 4}, args_142, false, "NDK r30 time.h"},
+  {"libc.so", "sigaction64", {Kind::I32, "int", 0, 4}, args_121, false, "NDK r30 signal.h"},
+  {"libc.so", "sigaddset64", {Kind::I32, "int", 0, 4}, args_122, false, "NDK r30 signal.h"},
+  {"libc.so", "sigdelset64", {Kind::I32, "int", 0, 4}, args_123, false, "NDK r30 signal.h"},
+  {"libc.so", "sigemptyset64", {Kind::I32, "int", 0, 4}, args_124, false, "NDK r30 signal.h"},
+  {"libc.so", "sigfillset64", {Kind::I32, "int", 0, 4}, args_125, false, "NDK r30 signal.h"},
+  {"libc.so", "sighold", {Kind::I32, "int", 0, 4}, args_126, false, "NDK r30 signal.h"},
+  {"libc.so", "sigignore", {Kind::I32, "int", 0, 4}, args_127, false, "NDK r30 signal.h"},
+  {"libc.so", "sigismember64", {Kind::I32, "int", 0, 4}, args_128, false, "NDK r30 signal.h"},
+  {"libc.so", "sigpause", {Kind::I32, "int", 0, 4}, args_129, false, "NDK r30 signal.h"},
+  {"libc.so", "sigpending64", {Kind::I32, "int", 0, 4}, args_130, false, "NDK r30 signal.h"},
+  {"libc.so", "sigprocmask64", {Kind::I32, "int", 0, 4}, args_131, false, "NDK r30 signal.h"},
+  {"libc.so", "sigrelse", {Kind::I32, "int", 0, 4}, args_132, false, "NDK r30 signal.h"},
+  {"libc.so", "sigset", {Kind::Layout, "sighandler_t", 0, 4}, args_133, false, "NDK r30 signal.h"},
+  {"libc.so", "sigsuspend64", {Kind::I32, "int", 0, 4}, args_134, false, "NDK r30 signal.h"},
+  {"libc.so", "sigtimedwait64", {Kind::I32, "int", 0, 4}, args_135, false, "NDK r30 signal.h"},
+  {"libc.so", "sigwait64", {Kind::I32, "int", 0, 4}, args_136, false, "NDK r30 signal.h"},
+  {"libc.so", "sigwaitinfo64", {Kind::I32, "int", 0, 4}, args_137, false, "NDK r30 signal.h"},
+  {"libc.so", "statx", {Kind::I32, "int", 0, 4}, args_138, false, "NDK r30 stat.h"},
+  {"libc.so", "strchrnul", {Kind::Ptr, "char *", 1, 4}, args_139, false, "NDK r30 string.h"},
+  {"libc.so", "sync_file_range", {Kind::I32, "int", 0, 4}, args_140, false, "NDK r30 fcntl.h"},
+  {"libc.so", "syncfs", {Kind::I32, "int", 0, 4}, args_141, false, "NDK r30 unistd.h"},
+  {"libc.so", "times", {Kind::Long, "clock_t", 0, 4}, args_142, false, "NDK r30 times.h"},
+  {"libc.so", "timespec_get", {Kind::I32, "int", 0, 4}, args_143, false, "NDK r30 time.h"},
   {"libc.so", "tmpfile64", {Kind::Handle, "FILE *", 0, 4}, {}, false, "NDK r30 stdio.h"},
-  {"libc.so", "towctrans", {Kind::U32, "wint_t", 0, 4}, args_144, false, "NDK r30 wctype.h"},
-  {"libc.so", "towctrans_l", {Kind::U32, "wint_t", 0, 4}, args_145, false, "NDK r30 wctype.h"},
-  {"libc.so", "wcsftime_l", {Kind::Size, "size_t", 0, 4}, args_146, false, "NDK r30 wchar.h"},
-  {"libc.so", "wctrans", {Kind::Ptr, "wctrans_t", 0, 4}, args_147, false, "NDK r30 wctype.h"},
-  {"libc.so", "wctrans_l", {Kind::Ptr, "wctrans_t", 0, 4}, args_148, false, "NDK r30 wctype.h"},
-  {"libdl.so", "android_get_exported_namespace", {Kind::Ptr, "android_namespace_t *", 0, 4}, args_149, false, "bionic linker exported-namespace API (private dlfcn extension)"},
-  {"libdl.so", "dlvsym", {Kind::Ptr, "void *", 0, 4}, args_150, false, "NDK r30 dlfcn.h"},
-  {"libm.so", "__isfinite", {Kind::I32, "int", 0, 4}, args_151, false, "bionic libm.map.txt alias of finite"},
-  {"libm.so", "__isfinitef", {Kind::I32, "int", 0, 4}, args_152, false, "bionic libm.map.txt alias of finitef"},
-  {"libm.so", "cacoshl", {Kind::Unsupported, "_Complex long double", 0, 4}, args_153, false, "NDK r30 complex.h"},
-  {"libm.so", "cacosl", {Kind::Unsupported, "_Complex long double", 0, 4}, args_154, false, "NDK r30 complex.h"},
-  {"libm.so", "casinhl", {Kind::Unsupported, "_Complex long double", 0, 4}, args_155, false, "NDK r30 complex.h"},
-  {"libm.so", "casinl", {Kind::Unsupported, "_Complex long double", 0, 4}, args_156, false, "NDK r30 complex.h"},
-  {"libm.so", "catanhl", {Kind::Unsupported, "_Complex long double", 0, 4}, args_157, false, "NDK r30 complex.h"},
-  {"libm.so", "catanl", {Kind::Unsupported, "_Complex long double", 0, 4}, args_158, false, "NDK r30 complex.h"},
-  {"libm.so", "ccoshl", {Kind::Unsupported, "_Complex long double", 0, 4}, args_159, false, "NDK r30 complex.h"},
-  {"libm.so", "ccosl", {Kind::Unsupported, "_Complex long double", 0, 4}, args_160, false, "NDK r30 complex.h"},
-  {"libm.so", "cexpl", {Kind::Unsupported, "_Complex long double", 0, 4}, args_161, false, "NDK r30 complex.h"},
-  {"libm.so", "clog", {Kind::Unsupported, "_Complex double", 0, 4}, args_162, false, "NDK r30 complex.h"},
-  {"libm.so", "clogf", {Kind::Unsupported, "_Complex float", 0, 4}, args_163, false, "NDK r30 complex.h"},
-  {"libm.so", "clogl", {Kind::Unsupported, "_Complex long double", 0, 4}, args_164, false, "NDK r30 complex.h"},
-  {"libm.so", "cpow", {Kind::Unsupported, "_Complex double", 0, 4}, args_165, false, "NDK r30 complex.h"},
-  {"libm.so", "cpowf", {Kind::Unsupported, "_Complex float", 0, 4}, args_166, false, "NDK r30 complex.h"},
-  {"libm.so", "cpowl", {Kind::Unsupported, "_Complex long double", 0, 4}, args_167, false, "NDK r30 complex.h"},
-  {"libm.so", "csinhl", {Kind::Unsupported, "_Complex long double", 0, 4}, args_168, false, "NDK r30 complex.h"},
-  {"libm.so", "csinl", {Kind::Unsupported, "_Complex long double", 0, 4}, args_169, false, "NDK r30 complex.h"},
-  {"libm.so", "ctanhl", {Kind::Unsupported, "_Complex long double", 0, 4}, args_170, false, "NDK r30 complex.h"},
-  {"libm.so", "ctanl", {Kind::Unsupported, "_Complex long double", 0, 4}, args_171, false, "NDK r30 complex.h"},
+  {"libc.so", "towctrans", {Kind::U32, "wint_t", 0, 4}, args_145, false, "NDK r30 wctype.h"},
+  {"libc.so", "towctrans_l", {Kind::U32, "wint_t", 0, 4}, args_146, false, "NDK r30 wctype.h"},
+  {"libc.so", "wcsftime_l", {Kind::Size, "size_t", 0, 4}, args_147, false, "NDK r30 wchar.h"},
+  {"libc.so", "wctrans", {Kind::Ptr, "wctrans_t", 0, 4}, args_148, false, "NDK r30 wctype.h"},
+  {"libc.so", "wctrans_l", {Kind::Ptr, "wctrans_t", 0, 4}, args_149, false, "NDK r30 wctype.h"},
+  {"libdl.so", "android_get_exported_namespace", {Kind::Ptr, "android_namespace_t *", 0, 4}, args_150, false, "bionic linker exported-namespace API (private dlfcn extension)"},
+  {"libdl.so", "dlvsym", {Kind::Ptr, "void *", 0, 4}, args_151, false, "NDK r30 dlfcn.h"},
+  {"libm.so", "__isfinite", {Kind::I32, "int", 0, 4}, args_152, false, "bionic libm.map.txt alias of finite"},
+  {"libm.so", "__isfinitef", {Kind::I32, "int", 0, 4}, args_153, false, "bionic libm.map.txt alias of finitef"},
+  {"libm.so", "cacoshl", {Kind::Unsupported, "_Complex long double", 0, 4}, args_154, false, "NDK r30 complex.h"},
+  {"libm.so", "cacosl", {Kind::Unsupported, "_Complex long double", 0, 4}, args_155, false, "NDK r30 complex.h"},
+  {"libm.so", "casinhl", {Kind::Unsupported, "_Complex long double", 0, 4}, args_156, false, "NDK r30 complex.h"},
+  {"libm.so", "casinl", {Kind::Unsupported, "_Complex long double", 0, 4}, args_157, false, "NDK r30 complex.h"},
+  {"libm.so", "catanhl", {Kind::Unsupported, "_Complex long double", 0, 4}, args_158, false, "NDK r30 complex.h"},
+  {"libm.so", "catanl", {Kind::Unsupported, "_Complex long double", 0, 4}, args_159, false, "NDK r30 complex.h"},
+  {"libm.so", "ccoshl", {Kind::Unsupported, "_Complex long double", 0, 4}, args_160, false, "NDK r30 complex.h"},
+  {"libm.so", "ccosl", {Kind::Unsupported, "_Complex long double", 0, 4}, args_161, false, "NDK r30 complex.h"},
+  {"libm.so", "cexpl", {Kind::Unsupported, "_Complex long double", 0, 4}, args_162, false, "NDK r30 complex.h"},
+  {"libm.so", "clog", {Kind::Unsupported, "_Complex double", 0, 4}, args_163, false, "NDK r30 complex.h"},
+  {"libm.so", "clogf", {Kind::Unsupported, "_Complex float", 0, 4}, args_164, false, "NDK r30 complex.h"},
+  {"libm.so", "clogl", {Kind::Unsupported, "_Complex long double", 0, 4}, args_165, false, "NDK r30 complex.h"},
+  {"libm.so", "cpow", {Kind::Unsupported, "_Complex double", 0, 4}, args_166, false, "NDK r30 complex.h"},
+  {"libm.so", "cpowf", {Kind::Unsupported, "_Complex float", 0, 4}, args_167, false, "NDK r30 complex.h"},
+  {"libm.so", "cpowl", {Kind::Unsupported, "_Complex long double", 0, 4}, args_168, false, "NDK r30 complex.h"},
+  {"libm.so", "csinhl", {Kind::Unsupported, "_Complex long double", 0, 4}, args_169, false, "NDK r30 complex.h"},
+  {"libm.so", "csinl", {Kind::Unsupported, "_Complex long double", 0, 4}, args_170, false, "NDK r30 complex.h"},
+  {"libm.so", "ctanhl", {Kind::Unsupported, "_Complex long double", 0, 4}, args_171, false, "NDK r30 complex.h"},
+  {"libm.so", "ctanl", {Kind::Unsupported, "_Complex long double", 0, 4}, args_172, false, "NDK r30 complex.h"},
 };
 }
 std::span<const Descriptor> libc_descriptors() { return descriptors; }

@@ -208,6 +208,9 @@ def main():
         # bionic libc/bionic/__cxa_atexit.cpp, __cxa_thread_atexit_impl.cpp.
         for name in ('__cxa_atexit', '__cxa_thread_atexit', '__cxa_thread_atexit_impl'):
             rows.append(dict(library='libc.so', symbol=name, result=classify('int', {}), arguments=[classify(t, {}) for t in ('void (*)(void *)', 'void *', 'void *')], source='bionic C++ ABI destructor entry points'))
+        # ARM C++ ABI 3.3.5.3: __aeabi_atexit(object, destroyer, dso) is
+        # __cxa_atexit with the first two arguments swapped (bionic arch-arm).
+        rows.append(dict(library='libc.so', symbol='__aeabi_atexit', result=classify('int', {}), arguments=[classify(t, {}) for t in ('void *', 'void (*)(void *)', 'void *')], source='ARM C++ ABI 3.3.5.3 / bionic arch-arm atexit'))
         rows.append(dict(library='libc.so', symbol='__cxa_finalize', result=classify('void', {}), arguments=[classify('void *', {})], source='bionic __cxa_atexit.cpp'))
         rows.append(dict(by_name['libc.so', 'strerror_r'], symbol='__gnu_strerror_r', result=classify('char *', {}), source='NDK r30 string.h __RENAME(__gnu_strerror_r)'))
         rows.append(dict(library='libc.so', symbol='__stack_chk_fail', result=classify('void', {}), arguments=[], source='bionic __stack_chk_fail.cpp'))

@@ -286,6 +286,14 @@ int setpriority_fn(int which, int who, int value) {
     log::info("libc", "setpriority tid={} nice {} -> {} result={}", target, old, value, result);
   return result ? failure(-result) : 0;
 }
+// bionic nice(): the calling thread's nice value moved by incr, then read back
+// (CRYENGINE lowers its worker priority this way, The Climb).
+int nice_fn(int incr) {
+  int old = 0;
+  if (const auto found = platform::get_thread_priority(priority_tid(0), &old)) return failure(-found);
+  if (setpriority_fn(0, 0, std::clamp(old + incr, -20, 19)) < 0) return -1;
+  return getpriority_fn(0, 0);
+}
 // bionic pwd.h LP64 includes pw_gecos between gid and dir.
 struct Passwd {
   GuestAddr name, password;
@@ -505,6 +513,7 @@ void register_process(HleLibrary& lib) {
   B("personality", personality_fn);
   B("getpriority", getpriority_fn);
   B("setpriority", setpriority_fn);
+  B("nice", nice_fn);
   B("getpwuid", getpwuid_fn);
   B("getpwuid_r", getpwuid_r_fn);
   B("getpwnam_r", getpwnam_r_fn);

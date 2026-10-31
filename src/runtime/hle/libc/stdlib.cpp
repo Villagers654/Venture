@@ -378,5 +378,7 @@ void register_stdlib(HleLibrary& lib) {
   else
     B(getauxval);
 #undef B
+  extern void register_guest_search(HleLibrary&);
+  register_guest_search(lib);
 }
 }  // namespace venture::hle::libc

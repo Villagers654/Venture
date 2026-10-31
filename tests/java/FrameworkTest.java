@@ -1284,6 +1284,16 @@ public final class FrameworkTest {
       packageManager.getPermissionInfo("com.example.permission.NONE", 0);
       check(false, "an undefined permission is not found");
     } catch (android.content.pm.PackageManager.NameNotFoundException expected) {}
+    // Bogo's avatar loader asks for another package's context; only the app's own exists.
+    var packaged = new android.content.Context() {
+      @Override public String getPackageName() { return "test.packaged"; }
+    };
+    check(packaged.createPackageContext("test.packaged", 0).getPackageName().equals("test.packaged"),
+        "the app's own package context is the app");
+    try {
+      packaged.createPackageContext("com.example.absent", 0);
+      check(false, "another package's context is not found");
+    } catch (android.content.pm.PackageManager.NameNotFoundException expected) {}
     // Bugsnag reads the background restriction while starting (Supernatural).
     check(!new android.app.ActivityManager().isBackgroundRestricted() && !android.app.ActivityManager.isUserAMonkey(),
         "an app is not background-restricted or monkey-driven");
