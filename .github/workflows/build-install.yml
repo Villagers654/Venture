@@ -1,0 +1,29 @@
+name: Windows build and install scripts
+on:
+  pull_request:
+  push:
+    branches: [feat/windows-build-install, test/steam-frame-passthrough]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  scripts:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Parse the actual entry script in Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $errors = $null
+          $tokens = $null
+          [System.Management.Automation.Language.Parser]::ParseFile("$pwd/install.ps1", [ref]$tokens, [ref]$errors) > $null
+          if ($errors.Count) { $errors | Format-List; exit 1 }
+      - name: Exercise real native output and transcript logging
+        shell: powershell
+        run: .\tests\build_helpers_test.ps1 -PythonPath (Get-Command python.exe).Source
+      - name: Exercise verified install, repair and bounded cleanup on the real filesystem
+        shell: powershell
+        run: .\tests\build_install_test.ps1

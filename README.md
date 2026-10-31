@@ -59,6 +59,10 @@ If a game crashes, click **Report issue** on the banner that appears. Otherwise,
 
 ### Build (Windows)
 
+Run `install.cmd` to build the checkout, install a verified local copy and launch it.
+See [local build/install options](docs/LOCAL_BUILD.md) for prerequisites, logs,
+incremental builds and optional test execution. The manual build steps are:
+
 ```sh
 python tools/bootstrap.py --jdk --angle      # pinned toolchain, JDK and ANGLE into .deps/
 .deps/cmake/bin/cmake --preset windows-release
