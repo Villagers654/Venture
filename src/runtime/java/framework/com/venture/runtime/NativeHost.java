@@ -23,6 +23,8 @@ public final class NativeHost implements Host {
   public static native long prepareLooper();
   public static native void pollLooper(long handle, int timeoutMillis);
   public static native void wakeLooper(long handle);
+  // Guest address of the Avatar SDK 1 driver's function lookup (com.oculus.avatar.loader.EntryPoint).
+  public static native long avatarDriver();
   public native int guestTid();
   public native void beginProcessExit();
   public native void endProcessExit();

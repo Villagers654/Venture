@@ -5,6 +5,7 @@
 #include "core/thread_runtime.h"
 #include "core/wait.h"
 #include "cpu/state.h"
+#include "hle/ovravatar/driver.h"
 #include "platform/memory.h"
 #include <dynarmic/interface/A64/a64.h>
 #include <dynarmic/interface/exclusive_monitor.h>
@@ -168,6 +169,19 @@ TEST_CASE("core CPU SVC and nested HLE callback preserve full context") {
   CHECK(thread.cpu().fpcr() == 0x400000);
   CHECK(thread.cpu().fpsr() == 1);
   CHECK(thread.cpu().sp() == before_sp);
+}
+TEST_CASE("Avatar SDK 1 driver lookup answers ovrAvatar functions with zero") {
+  // First Steps' loader resolves every driver function through the lookup and
+  // exits the game if one is missing.
+  GuestThread thread(22); thread.attach_to_current_host_thread();
+  const auto lookup = hle::ovravatar::driver_lookup();
+  REQUIRE(lookup);
+  const std::string create = "ovrAvatar_Create", other = "vkCreateDevice";
+  const auto function = thread.call(lookup, {h2g(create.c_str())});
+  CHECK(function != 0);
+  CHECK(thread.call(lookup, {h2g(other.c_str())}) == 0);
+  CHECK(thread.call(lookup, {0}) == 0);
+  CHECK(thread.call(function, {0x1234, 5}) == 0);
 }
 TEST_CASE("core CPU precise read/write/execute faults and undefined instruction") {
   auto cpu = cpu_backend().create_cpu();
