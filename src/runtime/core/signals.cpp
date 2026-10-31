@@ -20,6 +20,7 @@
 #include "platform/memory.h"
 #include "common/log.h"
 #include <array>
+#include <chrono>
 #include <bit>
 #include <cerrno>
 #include <limits>
@@ -756,6 +757,10 @@ void log_guest_threads(std::string_view reason) {
   });
 }
 bool capture_first_frame_stall() {
+  if (!startup_diagnostics::first_frame_snapshot_configured()) {
+    log::warn("startup-snapshot", "No first frame; logging guest thread state");
+    return try_log_guest_threads_raw("no-first-frame", true);
+  }
   const auto acknowledged = platform::request_runtime_stall_dump();
   try_log_guest_threads_raw("no-first-frame");
   return acknowledged;
@@ -793,10 +798,16 @@ bool try_log_guest_threads_raw(std::string_view reason, bool symbols) {
   });
   log::error("startup-snapshot", "raw guest stacks reason={} registry_available={} dropped={} state=last-saved",
              reason, acquired, dropped);
-  // Named after the registry is released; the lookup only try-locks the linker.
+  // Named after the registry is released. A linker busy loading (common in a
+  // startup stall) gets a short wait once; it is not waited for again.
+  auto linker_wait = std::chrono::milliseconds(250);
   auto name = [&](GuestAddr pc) {
     DlInfo info;
-    if (!symbols || !Linker::get().try_address_info(pc, &info) || info.path.empty()) return std::string();
+    if (!symbols) return std::string();
+    const auto start = std::chrono::steady_clock::now();
+    const bool found = Linker::get().try_address_info(pc, &info, linker_wait);
+    if (!found && std::chrono::steady_clock::now() - start >= linker_wait) linker_wait = {};
+    if (!found || info.path.empty()) return std::string();
     return std::format(" {}+{:#x} ({})", info.path, pc - info.base, info.symbol);
   };
   for (unsigned i = 0; i < count; ++i) {

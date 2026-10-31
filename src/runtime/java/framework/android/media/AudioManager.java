@@ -105,6 +105,19 @@ public class AudioManager {
           "AudioManager", "Device inventory failed: " + failure.getClass().getSimpleName());
     }
   }
+  public java.util.List<AudioRecordingConfiguration> getActiveRecordingConfigurations() {
+    var list = new java.util.ArrayList<AudioRecordingConfiguration>();
+    for (AudioRecord record : AudioRecord.active)
+      list.add(new AudioRecordingConfiguration(record));
+    return list;
+  }
+  public abstract static class AudioRecordingCallback {
+    public void onRecordingConfigChanged(java.util.List<AudioRecordingConfiguration> configs) {}
+  }
+  public void registerAudioRecordingCallback(AudioRecordingCallback cb, android.os.Handler handler) {
+    java.util.Objects.requireNonNull(cb);
+  }
+  public void unregisterAudioRecordingCallback(AudioRecordingCallback cb) {}
   public AudioDeviceInfo[] getDevices(int flags) {
     if ((flags & ~GET_DEVICES_ALL) != 0)
       throw new IllegalArgumentException("Audio device flags");

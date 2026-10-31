@@ -292,6 +292,10 @@ std::map<std::string, std::uint32_t> capabilities() {
   // Offered without passthrough itself (extensions.cpp): Quest apps may require
   // the extension, and its system property reports passthrough unsupported.
   result["XR_FB_passthrough"] = 4;
+  // Every Quest has it; on a host without it the level hints are accepted and
+  // ignored as the extension permits (extensions.cpp), so Prey VR starts.
+  if (!result.contains("XR_EXT_performance_settings"))
+    result["XR_EXT_performance_settings"] = 4;
   if (result.contains("XR_FB_swapchain_update_state")) {
     result["XR_FB_swapchain_update_state_vulkan"] = 1;
     result["XR_FB_swapchain_update_state_opengl_es"] = 1;

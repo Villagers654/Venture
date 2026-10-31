@@ -380,9 +380,11 @@ void launch_android_app(const AppLaunchOptions& options) {
           std::chrono::duration<double>(now - started).count() >= options.run_seconds;
       const bool stopping = stop.requested() || timed_out || guest_process_exit_status() >= 0;
       if (first_frame_probe.poll(std::chrono::duration_cast<std::chrono::seconds>(now - started).count(),
-                                 first_frame_bound, startup_diagnostics::first_frame_submitted(), stopping)) {
+                                 first_frame_bound, startup_diagnostics::first_frame_submitted(), stopping) &&
+          (startup_diagnostics::first_frame_snapshot_configured() || guest_process_exit_status() < 0)) {
         // The independent supervisor captures native stacks before any guest
         // registry/logging work or Android teardown can change the handshake.
+        // A process that already exited logged its own fatal state.
         signals::capture_first_frame_stall();
       }
       if (frame_stall_probe.poll(std::chrono::duration_cast<std::chrono::seconds>(now - started).count(),

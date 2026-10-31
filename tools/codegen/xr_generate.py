@@ -44,7 +44,7 @@ xrReleaseSwapchainImage xrSuggestInteractionProfileBindings
 xrGetCurrentInteractionProfile xrInitializeLoaderKHR xrCreateHandTrackerEXT
 xrDestroyHandTrackerEXT xrLocateHandJointsEXT xrGetHandMeshFB xrLocateSpaces
 xrGetDeviceSampleRateFB xrEnumerateBoundSourcesForAction xrApplyHapticFeedback xrStopHapticFeedback
-xrCreateActionSpace xrLocateSpace'''.split())
+xrCreateActionSpace xrLocateSpace xrPerfSettingsSetPerformanceLevelEXT'''.split())
 
 # Action states change only in xrSyncActions, so reads between syncs reuse the
 # host answer (state.cpp stored_action_state).

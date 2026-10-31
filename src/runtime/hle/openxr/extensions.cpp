@@ -371,6 +371,21 @@ static XrResult passthrough_unsupported(XrSession handle, const void *info, cons
     return XR_ERROR_VALIDATION_FAILURE;
   return XR_ERROR_FEATURE_UNSUPPORTED;
 }
+XrResult xrPerfSettingsSetPerformanceLevelEXT(XrSession session, XrPerfSettingsDomainEXT domain,
+                                              XrPerfSettingsLevelEXT level) {
+  std::lock_guard lock(state().mutex);
+  if (!enabled("XR_EXT_performance_settings"))
+    return XR_ERROR_FUNCTION_UNSUPPORTED;
+  if (!valid_handle(session, "XrSession"))
+    return XR_ERROR_HANDLE_INVALID;
+  if ((domain != XR_PERF_SETTINGS_DOMAIN_CPU_EXT && domain != XR_PERF_SETTINGS_DOMAIN_GPU_EXT) ||
+      (level != XR_PERF_SETTINGS_LEVEL_POWER_SAVINGS_EXT && level != XR_PERF_SETTINGS_LEVEL_SUSTAINED_LOW_EXT &&
+       level != XR_PERF_SETTINGS_LEVEL_SUSTAINED_HIGH_EXT && level != XR_PERF_SETTINGS_LEVEL_BOOST_EXT))
+    return XR_ERROR_VALIDATION_FAILURE;
+  if (!host_xr().enabled_extensions.contains("XR_EXT_performance_settings"))
+    return XR_SUCCESS;
+  return host_call<PFN_xrPerfSettingsSetPerformanceLevelEXT, "xrPerfSettingsSetPerformanceLevelEXT">(session, domain, level);
+}
 XrResult xrCreatePassthroughFB(XrSession session, const XrPassthroughCreateInfoFB *info, XrPassthroughFB *out) {
   if (out) *out = XR_NULL_HANDLE;
   return passthrough_unsupported(session, info, out);

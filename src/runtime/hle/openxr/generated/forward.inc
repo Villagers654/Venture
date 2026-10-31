@@ -190,13 +190,6 @@ XrResult xrPathToString(XrInstance instance, XrPath path, uint32_t bufferCapacit
   auto result = host_call<PFN_xrPathToString, "xrPathToString">(instance, path, bufferCapacityInput, bufferCountOutput, buffer);
   return result;
 }
-XrResult xrPerfSettingsSetPerformanceLevelEXT(XrSession session, XrPerfSettingsDomainEXT domain, XrPerfSettingsLevelEXT level) {
-  std::lock_guard lock(venture::hle::openxr::state().mutex);
-  if (!enabled("XR_EXT_performance_settings")) return XR_ERROR_FUNCTION_UNSUPPORTED;
-  if (!valid_handle(session, "XrSession")) return XR_ERROR_HANDLE_INVALID;
-  auto result = host_call<PFN_xrPerfSettingsSetPerformanceLevelEXT, "xrPerfSettingsSetPerformanceLevelEXT">(session, domain, level);
-  return result;
-}
 XrResult xrQueryPerformanceMetricsCounterMETA(XrSession session, XrPath counterPath, XrPerformanceMetricsCounterMETA* counter) {
   std::lock_guard lock(venture::hle::openxr::state().mutex);
   if (!enabled("XR_META_performance_metrics")) return XR_ERROR_FUNCTION_UNSUPPORTED;
