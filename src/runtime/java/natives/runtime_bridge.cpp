@@ -24,6 +24,7 @@
 #include "core/pipeline_stats.h"
 #include "core/address_space.h"
 #include "core/linker.h"
+#include "hle/ovravatar/driver.h"
 #include "core/thread.h"
 #include "core/thread_runtime.h"
 #include "hle/libc/libc_parts.h"
@@ -132,6 +133,8 @@ void JNICALL poll_looper(JNIEnv* env, jclass, jlong handle, jint timeout) {
     looper->poll(timeout, nullptr, nullptr, nullptr);
   });
 }
+// Avatar SDK 1 driver for com.oculus.avatar.loader.EntryPoint.
+jlong JNICALL avatar_driver(JNIEnv*, jclass) { return static_cast<jlong>(hle::ovravatar::driver_lookup()); }
 void JNICALL wake_looper(JNIEnv* env, jclass, jlong handle) {
   guarded(env, [&] {
     auto looper = android::pin_looper(g2h<android::Looper>(handle));
@@ -303,6 +306,7 @@ void register_loopers(JNIEnv* env) {
       {const_cast<char*>("prepareLooper"), const_cast<char*>("()J"), reinterpret_cast<void*>(prepare_looper)},
       {const_cast<char*>("pollLooper"), const_cast<char*>("(JI)V"), reinterpret_cast<void*>(poll_looper)},
       {const_cast<char*>("wakeLooper"), const_cast<char*>("(J)V"), reinterpret_cast<void*>(wake_looper)},
+      {const_cast<char*>("avatarDriver"), const_cast<char*>("()J"), reinterpret_cast<void*>(avatar_driver)},
   };
   if (env->RegisterNatives(cls, methods, static_cast<jint>(std::size(methods))) == JNI_OK) {
     auto available = env->GetStaticFieldID(cls, "nativeLoopersAvailable", "Z");

@@ -226,11 +226,16 @@ public class Context {
       }
     };
   }
-  // The app's own package gets a context for itself; any other package is not
-  // installed, as on a Quest without it (Bogo's avatar loader asks for one).
+  // The app's own package gets a context for itself. Horizon's context is where
+  // Avatar SDK 1 loaders find com.oculus.avatar.loader.EntryPoint (First Steps,
+  // Bogo); any other package is not installed, as on a Quest without it.
   public Context createPackageContext(String packageName, int flags)
       throws android.content.pm.PackageManager.NameNotFoundException {
     if (packageName != null && packageName.equals(getPackageName())) return ventureOuterContext();
+    if ("com.oculus.horizon".equals(packageName))
+      return new ContextWrapper(ventureOuterContext()) {
+        @Override public String getPackageName() { return packageName; }
+      };
     throw new android.content.pm.PackageManager.NameNotFoundException(packageName);
   }
   private static final class DisplayMetricsHolder {

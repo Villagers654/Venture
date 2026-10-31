@@ -583,6 +583,12 @@ public final class FrameworkTest {
         && audio.abandonAudioFocusRequest(focus) == android.media.AudioManager.AUDIOFOCUS_REQUEST_GRANTED
         && audio.generateAudioSessionId() != audio.generateAudioSessionId(), "audio focus requests and session ids");
     check(audio.getActiveRecordingConfigurations().isEmpty(), "no recordings are active without an AudioRecord");
+    var horizon = context.createPackageContext("com.oculus.horizon", 0);
+    check(horizon.getPackageName().equals("com.oculus.horizon")
+        && Class.forName("com.oculus.avatar.loader.EntryPoint", true, horizon.getClassLoader())
+               .getMethod("loadGeneric", android.content.Context.class, android.content.Context.class,
+                          int.class, int.class, int.class, int.class, int.class).getReturnType() == long.class,
+        "Avatar SDK 1 loaders find Horizon's EntryPoint");
 
     var hevc = Arrays.stream(new android.media.MediaCodecList(android.media.MediaCodecList.ALL_CODECS).getCodecInfos())
         .filter(info -> Arrays.asList(info.getSupportedTypes()).contains("video/hevc")).findFirst().orElseThrow();

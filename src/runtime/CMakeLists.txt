@@ -134,6 +134,7 @@ add_library(venture_android STATIC
   hle/libmediandk/image_reader.cpp
   hle/libmediandk/media.cpp
   hle/libcamera2ndk/camera.cpp
+  hle/ovravatar/driver.cpp
 )
 target_include_directories(venture_android PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(venture_android PUBLIC venture_common venture_runtime PRIVATE venture_hle venture_java zlibstatic)
