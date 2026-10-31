@@ -10,6 +10,7 @@
 #pragma once
 
 #include <cstdint>
+#include <exception>
 #include <string_view>
 
 #include "core/guest.h"
@@ -84,6 +85,14 @@ void log_guest_threads(std::string_view reason);
 // of `thread` when host code it called faulted, such as an HLE libc call given
 // a bad pointer, so the report names the guest caller. Null does nothing.
 void write_host_fault_guest_frames(GuestThread* thread) noexcept;
+
+// A host exception unwinding out of a guest call restores the caller's
+// registers. The innermost call notes them first (once per exception object),
+// so a thread that dies of the exception can still say where it was.
+void note_unwinding_guest_call(GuestThread& thread) noexcept;
+// Logs a guest thread stopped by a host exception: the error, and the guest
+// registers and frames noted for that exception.
+void log_guest_thread_failure(GuestThread& thread, std::string_view name, const std::exception_ptr& failure) noexcept;
 
 // Called by the run loop and by interruptible waits: runs handlers for any
 // deliverable pending signals of `thread`. Returns true if a handler ran

@@ -5,6 +5,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <span>
 
 #include "core/guest.h"
 
@@ -58,6 +59,12 @@ int allocate_hardware_buffer(const HardwareBufferDesc& desc, GuestAddr* out);
 struct GpuAllocator {
   std::function<bool(const HardwareBufferDesc&)> supported;
   std::function<std::shared_ptr<const GpuPayload>(const HardwareBufferDesc&)> allocate;
+  // Fills an RGBA8 buffer's single layer with top-down RGBA pixels and
+  // returns once the copy is complete on the GPU.
+  std::function<bool(const GpuPayload&, std::span<const std::uint8_t>)> write;
 };
 void set_gpu_allocator(GpuAllocator allocator);
+// Producer side of an image queue (AImageReader): fills a buffer of format
+// R8G8B8A8_UNORM or R8G8B8X8_UNORM with width x height x 4 bytes of pixels.
+bool write_hardware_buffer(GuestAddr handle, std::span<const std::uint8_t> rgba);
 }  // namespace venture::android

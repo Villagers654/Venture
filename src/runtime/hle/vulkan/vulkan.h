@@ -114,5 +114,8 @@ void release_os_device_resources(VkDevice);
 // makes the host driver retain its allocations without bound. Host threads
 // and embedded fixtures only report.
 void end_app_after_device_loss();
+// Logs the device-local memory in use against the driver's budget (frame
+// stall captures: GPU memory past the budget stalls frames).
+void log_gpu_memory();
 
 }  // namespace venture::vulkan

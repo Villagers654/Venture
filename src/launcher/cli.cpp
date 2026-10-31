@@ -727,7 +727,7 @@ int Cli::import_saves_cmd(const Args &args) {
   auto task = import_saves(g.id, from ? paths::from_utf8(*from) : fs::path{}, args.value("--serial").value_or(""));
   auto n = task(std::stop_token{});
   if (json_)
-    return print({{"id", g.id}, {"files", n.files}, {"bytes", n.bytes}, {"backup", paths::utf8(n.backup)}}), 0;
+    return print({{"id", g.id}, {"files", n.files}, {"skipped", n.skipped}, {"bytes", n.bytes}, {"backup", paths::utf8(n.backup)}}), 0;
   std::cout << std::format("Imported {} save files ({}) of {}.\n", n.files, bytes(n.bytes), g.name);
   if (!n.backup.empty()) std::cout << "The save data it replaced is in " << paths::utf8(n.backup) << "\n";
   return 0;

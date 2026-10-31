@@ -3,6 +3,7 @@
 #include "android/hardware_buffer.h"
 
 #include <climits>
+#include <cstring>
 
 #include "android/handles.h"
 #include "common/log.h"
@@ -81,6 +82,19 @@ int allocate_hardware_buffer(const HardwareBufferDesc& d, GuestAddr* out) {
   }
   *out = h2g(b);
   return 0;
+}
+bool write_hardware_buffer(GuestAddr handle, std::span<const std::uint8_t> rgba) {
+  auto b = buffers.get(handle);
+  if (!b || (b->desc.format != 1 && b->desc.format != 2) || b->desc.layers != 1 ||
+      rgba.size() != std::size_t(b->desc.width) * b->desc.height * 4)
+    return false;
+  if (b->gpu) {
+    auto gpu = allocator();
+    return gpu.write && gpu.write(*b->gpu, rgba);
+  }
+  if (!b->memory) return false;
+  std::memcpy(g2h(b->memory), rgba.data(), rgba.size());  // CPU buffers are tightly packed (stride == width)
+  return true;
 }
 void set_gpu_allocator(GpuAllocator value) {
   std::lock_guard lock(allocator_mutex);

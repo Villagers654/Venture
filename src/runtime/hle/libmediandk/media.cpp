@@ -16,6 +16,7 @@
 #include <vector>
 
 namespace venture::hle {
+void register_image_reader(HleLibrary& lib);  // image_reader.cpp
 namespace {
 using namespace android_hle;
 // AOSP frameworks/av/media/ndk/include/media/NdkMediaError.h.
@@ -288,22 +289,8 @@ void null_result(CallContext& ctx) { ctx.return_x(0); }
 void dispose_absent(CallContext& ctx) {
   if (ctx.x(0)) log::warn("media", "{}: invalid media object", ctx.info().name);
 }
-int no_image_reader(std::int32_t, std::int32_t, std::int32_t, std::uint64_t, std::int32_t, GuestAddr* out) {
-  if (!out) return invalid_parameter;
-  *out = 0;
-  log::warn("media", "AImageReader_newWithUsage: no producer/consumer image queue backend");
-  return unsupported;
-}
-int no_image_reader_old(std::int32_t w, std::int32_t h, std::int32_t fmt, std::int32_t max, GuestAddr* out) {
-  return no_image_reader(w, h, fmt, 3, max, out);
-}
 int no_object_out(void*, GuestAddr* out) {
   if (out) *out = 0;
-  return invalid_object;
-}
-int no_image_async(void*, GuestAddr* out, int* fence) {
-  if (out) *out = 0;
-  if (fence) *fence = -1;
   return invalid_object;
 }
 void add_handler(HleLibrary& lib, const char* name, Handler handler) {
@@ -374,15 +361,9 @@ void register_libmediandk() {
   API("AMediaDataSource_setReadAt", source_set<&DataSource::read>);
   API("AMediaDataSource_setGetSize", source_set<&DataSource::size>);
   API("AMediaDataSource_setClose", source_set<&DataSource::close>);
-  API("AImageReader_newWithUsage", no_image_reader);
-  API("AImageReader_new", no_image_reader_old);
-  API("AImageReader_getWindow", no_object_out);
   API("AMediaCodec_createInputSurface", no_object_out);
-  API("AImageReader_acquireLatestImage", no_object_out);
-  API("AImageReader_acquireNextImage", no_object_out);
-  API("AImageReader_acquireLatestImageAsync", no_image_async);
-  API("AImage_getHardwareBuffer", no_object_out);
 #undef API
+  register_image_reader(lib);
   for (auto name : {"AMediaCodec_createEncoderByType",
                     "AMediaCodec_createCodecByName", "AMediaMuxer_new", "AMediaCrypto_new"})
     add_handler(lib, name, unavailable);
@@ -391,22 +372,12 @@ void register_libmediandk() {
                     "AMediaMuxer_delete",
                     "AMediaMuxer_start",
                     "AMediaMuxer_stop",
-                    "AMediaMuxer_writeSampleData",
-                    "AImageReader_setBufferRemovedListener",
-                    "AImageReader_setImageListener",
-                    "AImage_getFormat",
-                    "AImage_getHeight",
-                    "AImage_getWidth",
-                    "AImage_getNumberOfPlanes",
-                    "AImage_getPlaneData",
-                    "AImage_getPlanePixelStride",
-                    "AImage_getPlaneRowStride",
-                    "AImage_getTimestamp"})
+                    "AMediaMuxer_writeSampleData"})
     add_handler(lib, name, bad_object);
   for (auto name : {"AMediaCrypto_isCryptoSchemeSupported",
                     "AMediaCrypto_requiresSecureDecoderComponent"})
     add_handler(lib, name, null_result);
-  for (auto name : {"AImageReader_delete", "AImage_delete", "AImage_deleteAsync", "AMediaCrypto_delete"})
+  for (auto name : {"AMediaCrypto_delete"})
     add_handler(lib, name, dispose_absent);
 
   // Android API 32 exported MediaFormat key ABI (including pointer indirection).

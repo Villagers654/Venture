@@ -721,6 +721,28 @@ void write_host_fault_guest_frames(GuestThread* thread) noexcept {
   } catch (...) {
   }
 }
+namespace {
+struct UnwindingCall { std::exception_ptr exception; Frame frame; };
+thread_local UnwindingCall unwinding_call;
+}
+void note_unwinding_guest_call(GuestThread& thread) noexcept {
+  auto exception = std::current_exception();
+  if (!exception || exception == unwinding_call.exception) return;
+  unwinding_call = {std::move(exception), cpu_frame(thread.cpu())};
+}
+void log_guest_thread_failure(GuestThread& thread, std::string_view name, const std::exception_ptr& failure) noexcept {
+  try {
+    std::string what = "unknown exception";
+    try { std::rethrow_exception(failure); }
+    catch (const std::exception& e) { what = e.what(); }
+    catch (...) {}
+    log::error("thread", "guest tid {} \"{}\" stopped by a runtime error: {}", thread.tid(), name, what);
+    if (!failure || failure != unwinding_call.exception) return;
+    log_registers(unwinding_call.frame);
+    log_backtrace(unwinding_call.frame);
+  } catch (...) {
+  }
+}
 void log_guest_threads(std::string_view reason) {
   std::map<std::int32_t, std::string> names;
   for (auto& [tid, name] : threads::list()) names[tid] = name;

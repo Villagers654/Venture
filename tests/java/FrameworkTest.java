@@ -1274,6 +1274,23 @@ public final class FrameworkTest {
         "declared install-time body permission is granted only to its package");
     check(trackingPermissions.checkPermission("com.oculus.permission.EYE_TRACKING", "test.intent") == -1,
         "body install-time grant does not grant dangerous eye permission");
+    // Unity reads each requested permission's protection level (Dread Halls).
+    check(packageManager.getPermissionInfo("android.permission.RECORD_AUDIO", 128).getProtection()
+            == android.content.pm.PermissionInfo.PROTECTION_DANGEROUS
+        && packageManager.getPermissionInfo("android.permission.INTERNET", 0).getProtection()
+            == android.content.pm.PermissionInfo.PROTECTION_NORMAL,
+        "platform permissions report Android's protection levels");
+    try {
+      packageManager.getPermissionInfo("com.example.permission.NONE", 0);
+      check(false, "an undefined permission is not found");
+    } catch (android.content.pm.PackageManager.NameNotFoundException expected) {}
+    // Firebase's executors build and install StrictMode thread policies (Pickleball One).
+    var policy = new android.os.StrictMode.ThreadPolicy.Builder().detectAll().detectResourceMismatches()
+        .detectUnbufferedIo().penaltyLog().build();
+    var previous = android.os.StrictMode.getThreadPolicy();
+    android.os.StrictMode.setThreadPolicy(policy);
+    check(android.os.StrictMode.getThreadPolicy() == policy, "StrictMode keeps the thread policy it is given");
+    android.os.StrictMode.setThreadPolicy(previous);
     check(!trackingPermissions.hasSystemFeature("com.oculus.software.body_tracking"),
         "body permission grant does not fabricate tracking hardware");
     var vulkanVersion = new java.util.concurrent.atomic.AtomicInteger();

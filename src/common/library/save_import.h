@@ -25,6 +25,7 @@ struct Found {
 std::optional<Found> find_local(const fs::path &picked, std::string_view package);
 struct Imported {
   std::size_t files = 0;
+  std::size_t skipped = 0;  // headset files it would not send (each logged)
   std::uint64_t bytes = 0;
   fs::path backup;  // the replaced data; empty when nothing was replaced
 };

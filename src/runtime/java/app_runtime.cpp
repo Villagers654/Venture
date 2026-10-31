@@ -386,8 +386,10 @@ void launch_android_app(const AppLaunchOptions& options) {
         signals::capture_first_frame_stall();
       }
       if (frame_stall_probe.poll(std::chrono::duration_cast<std::chrono::seconds>(now - started).count(),
-                                 startup_diagnostics::frames_submitted(), stopping || !startup_diagnostics::host_session_focused()))
+                                 startup_diagnostics::frames_submitted(), stopping || !startup_diagnostics::host_session_focused())) {
         signals::capture_frame_stall();
+        vulkan::log_gpu_memory();
+      }
       if (!closing && stopping) {
         closing = true;
         host_stop = stop.requested() || timed_out;

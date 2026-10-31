@@ -23,22 +23,27 @@ class FirstFrameTrigger {
     return true;
   }
 };
-// One-shot capture when submitted frames stop advancing mid-game (a freeze):
-// the game is still running but its render loop has not produced a frame for
-// `stall_seconds`. A paused (unfocused) or quitting game is excluded by
-// `stopping`, which also restarts the wait.
+// Capture when submitted frames stop advancing mid-game (a freeze): the game
+// is still running but its render loop has not produced a frame for
+// `stall_seconds`. Once per stall: frames advancing again re-arm it, so a
+// freeze after a long loading stall is still captured, up to `max_captures`
+// per run. A paused (unfocused) or quitting game is excluded by `stopping`,
+// which also restarts the wait.
 class FrameStallTrigger {
-  bool done_ = false;
+  bool fired_ = false;
+  int captures_ = 0;
   std::uint64_t frames_ = 0;
   std::int64_t since_ = 0;
  public:
   static constexpr std::int64_t stall_seconds = 5;
+  static constexpr int max_captures = 4;
   bool poll(std::int64_t now_seconds, std::uint64_t frames, bool stopping) {
     if (stopping) since_ = now_seconds;
-    if (done_ || stopping || !frames) return false;
-    if (frames != frames_) { frames_ = frames; since_ = now_seconds; return false; }
-    if (now_seconds - since_ < stall_seconds) return false;
-    done_ = true;
+    if (stopping || !frames) return false;
+    if (frames != frames_) { frames_ = frames; since_ = now_seconds; fired_ = false; return false; }
+    if (fired_ || captures_ >= max_captures || now_seconds - since_ < stall_seconds) return false;
+    fired_ = true;
+    ++captures_;
     return true;
   }
 };

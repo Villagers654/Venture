@@ -20,6 +20,7 @@
 
 #include "chain.h"
 #include "common/log.h"
+#include "gfx/gpu_device.h"
 #include "gfx/pipeline_trace.h"
 #include "gfx/queue_sync.h"
 #include "gfx/vulkan_memory.h"
@@ -997,11 +998,14 @@ VkDeviceSize compression_threshold() {
   }();
   return percent;
 }
-// Whether `incoming` more bytes would take device-local memory past the
-// threshold share of the budget the driver gives this process
-// (VK_EXT_memory_budget). Past the budget the OS moves resources to system
-// memory and frames slow down.
-bool memory_pressure(VkPhysicalDevice physical, VkDeviceSize incoming) {
+// Device-local memory this process uses and the budget the driver gives it
+// (VK_EXT_memory_budget); zero limit when the host cannot say. Past the budget
+// the OS moves resources to system memory and frames slow down.
+struct GpuMemory {
+  VkDeviceSize usage = 0, limit = 0;
+};
+std::atomic<VkPhysicalDevice> last_physical{nullptr};
+GpuMemory gpu_memory(VkPhysicalDevice physical) {
   static std::mutex mutex;
   static std::map<VkPhysicalDevice, bool> support;
   bool supported;
@@ -1023,21 +1027,38 @@ bool memory_pressure(VkPhysicalDevice physical, VkDeviceSize incoming) {
     supported = it->second;
   }
   auto query = phys<PFN_vkGetPhysicalDeviceMemoryProperties2>(physical, "vkGetPhysicalDeviceMemoryProperties2");
-  if (!supported || !query) return false;
+  if (!supported || !query) return {};
   VkPhysicalDeviceMemoryBudgetPropertiesEXT budget{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_BUDGET_PROPERTIES_EXT};
   VkPhysicalDeviceMemoryProperties2 memory{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_PROPERTIES_2, &budget};
   query(physical, &memory);
-  VkDeviceSize usage = 0, limit = 0;
+  GpuMemory m;
   for (std::uint32_t i = 0; i < memory.memoryProperties.memoryHeapCount; ++i)
     if (memory.memoryProperties.memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) {
-      usage += budget.heapUsage[i];
-      limit += budget.heapBudget[i];
+      m.usage += budget.heapUsage[i];
+      m.limit += budget.heapBudget[i];
     }
+  last_physical.store(physical, std::memory_order_relaxed);
   // Each whole GiB crossed, up or down, goes to the log: a few lines per run
   // that show in a debug report whether GPU memory grows with each level.
   static std::atomic<VkDeviceSize> logged_gib{0};
-  if (const auto gib = usage >> 30; limit && logged_gib.exchange(gib) != gib)
-    log::info("vulkan", "GPU memory in use: {} of {} MiB", usage >> 20, limit >> 20);
+  if (const auto gib = m.usage >> 30; m.limit && logged_gib.exchange(gib) != gib)
+    log::info("vulkan", "GPU memory in use: {} of {} MiB", m.usage >> 20, m.limit >> 20);
+  return m;
+}
+// Samples GPU memory at most once a second as images are created, so its log
+// lines appear whatever the compression mode.
+void watch_gpu_memory(VkPhysicalDevice physical) {
+  static std::atomic<std::int64_t> next{0};
+  const auto now = std::chrono::duration_cast<std::chrono::seconds>(
+      std::chrono::steady_clock::now().time_since_epoch()).count();
+  auto due = next.load(std::memory_order_relaxed);
+  if (now < due || !next.compare_exchange_strong(due, now + 1, std::memory_order_relaxed)) return;
+  gpu_memory(physical);
+}
+// Whether `incoming` more bytes would take device-local memory past the
+// threshold share of the budget.
+bool memory_pressure(VkPhysicalDevice physical, VkDeviceSize incoming) {
+  const auto [usage, limit] = gpu_memory(physical);
   if (!limit || usage + incoming <= limit / 100 * compression_threshold()) return false;
   static std::atomic<bool> reported{false};
   if (!reported.exchange(true))
@@ -1151,6 +1172,7 @@ VkResult VKAPI_CALL create_image(VkDevice d, const VkImageCreateInfo* info,
   const auto physical = device_physical(d);
   if (!info || !out) return VK_ERROR_INITIALIZATION_FAILED;
   if (!supported_sample_count(physical, *info)) return VK_ERROR_VALIDATION_FAILED;
+  watch_gpu_memory(physical);
   if (!emulated(physical, info->format)) {
     const auto guest_depth = take_guest_depth_format(info->format);
     auto result = create(d, info, alloc, out);
@@ -3307,5 +3329,13 @@ PFN_vkVoidFunction texture_proc(std::string_view name) {
   FN(vkGetPhysicalDeviceFeatures2, features2);
 #undef FN
   return nullptr;
+}
+void log_gpu_memory() {
+  // GLES titles create no guest images; their frames come from the shared device.
+  auto physical = last_physical.load(std::memory_order_relaxed);
+  if (!physical) physical = gfx::gpu_device().physical_device;
+  if (!physical) return;
+  if (const auto [usage, limit] = gpu_memory(physical); limit)
+    log::info("vulkan", "GPU memory in use now: {} of {} MiB", usage >> 20, limit >> 20);
 }
 }  // namespace venture::vulkan

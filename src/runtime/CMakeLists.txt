@@ -131,6 +131,7 @@ add_library(venture_android STATIC
   hle/libandroid/choreographer.cpp
   hle/libandroid/services.cpp
   hle/libandroid/hardware_buffer.cpp
+  hle/libmediandk/image_reader.cpp
   hle/libmediandk/media.cpp
   hle/libcamera2ndk/camera.cpp
 )

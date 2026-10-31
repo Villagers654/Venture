@@ -503,3 +503,61 @@ TEST_CASE("native-window frame notification unlocks before callback and preserve
   {std::lock_guard lock(window->lock);window->frame_available={};}
   android::release(window);
 }
+TEST_CASE("AImageReader queues window frames as CPU images in RGBA and YUV_420_888") {
+  GuestAddr reader=0;
+  CHECK(call("AImageReader_new",{4,2,0x100,2,h2g(&reader)})==-10002);CHECK(reader==0);  // JPEG
+  REQUIRE(call("AImageReader_new",{4,2,1,2,h2g(&reader)})==0);REQUIRE(reader);
+  std::int32_t value=0;REQUIRE(call("AImageReader_getMaxImages",{reader,h2g(&value)})==0);CHECK(value==2);
+  GuestAddr window=0;REQUIRE(call("AImageReader_getWindow",{reader,h2g(&window)})==0);
+  auto* native=android::native_window_from_guest(window);REQUIRE(native);
+  GuestAddr image=0;CHECK(call("AImageReader_acquireNextImage",{reader,h2g(&image)})==-30001);
+  std::vector<std::uint8_t> pixels(4*2*4);
+  for(std::uint8_t frame=1;frame<=3;++frame) {
+    std::fill(pixels.begin(),pixels.end(),frame);
+    REQUIRE(android::publish_window_rgba(native,pixels,4,2,false,frame*1000)==0);
+  }
+  // Two frames fit the queue; the latest drops the rest.
+  REQUIRE(call("AImageReader_acquireLatestImage",{reader,h2g(&image)})==0);REQUIRE(image);
+  std::int64_t time=0;REQUIRE(call("AImage_getTimestamp",{image,h2g(&time)})==0);CHECK(time==3000);
+  REQUIRE(call("AImage_getNumberOfPlanes",{image,h2g(&value)})==0);CHECK(value==1);
+  REQUIRE(call("AImage_getPlaneRowStride",{image,0,h2g(&value)})==0);CHECK(value==16);
+  GuestAddr data=0;std::int32_t length=0;
+  REQUIRE(call("AImage_getPlaneData",{image,0,h2g(&data),h2g(&length)})==0);
+  REQUIRE(length==32);CHECK(g2h<std::uint8_t>(data)[31]==3);
+  GuestAddr none=0;CHECK(call("AImageReader_acquireNextImage",{reader,h2g(&none)})==-30001);
+  for(int n=0;n<2;++n)REQUIRE(android::publish_window_rgba(native,pixels,4,2)==0);
+  GuestAddr second=0,third=0;
+  REQUIRE(call("AImageReader_acquireNextImage",{reader,h2g(&second)})==0);
+  CHECK(call("AImageReader_acquireNextImage",{reader,h2g(&third)})==-30002);  // maxImages acquired
+  call("AImage_delete",{image});
+  REQUIRE(call("AImageReader_acquireNextImage",{reader,h2g(&third)})==0);
+  call("AImage_delete",{second});call("AImage_delete",{third});
+  call("AImageReader_delete",{reader});
+  CHECK(call("AImageReader_getWindow",{reader,h2g(&window)})==-10003);
+
+  REQUIRE(call("AImageReader_new",{2,2,0x23,1,h2g(&reader)})==0);
+  REQUIRE(call("AImageReader_getWindow",{reader,h2g(&window)})==0);
+  pixels.assign(2*2*4,0);
+  for(int n=0;n<4;++n){pixels[n*4]=255;pixels[n*4+3]=255;}  // red
+  REQUIRE(android::publish_window_rgba(android::native_window_from_guest(window),pixels,2,2)==0);
+  REQUIRE(call("AImageReader_acquireNextImage",{reader,h2g(&image)})==0);
+  REQUIRE(call("AImage_getNumberOfPlanes",{image,h2g(&value)})==0);CHECK(value==3);
+  REQUIRE(call("AImage_getPlaneData",{image,0,h2g(&data),h2g(&length)})==0);CHECK(length==4);
+  CHECK(g2h<std::uint8_t>(data)[0]==82);  // BT.601 limited-range red
+  REQUIRE(call("AImage_getPlaneData",{image,2,h2g(&data),h2g(&length)})==0);CHECK(length==1);
+  CHECK(g2h<std::uint8_t>(data)[0]==240);
+  call("AImage_delete",{image});call("AImageReader_delete",{reader});
+}
+TEST_CASE("AImageReader announces frames to its listener on its own thread") {
+  GuestAddr reader=0;REQUIRE(call("AImageReader_new",{2,2,1,2,h2g(&reader)})==0);
+  std::atomic<int> calls{0};std::atomic<GuestAddr> seen{0};
+  auto callback=test::android_callback([&](const GuestCallArgs& args){
+    calls+=int(args.integers[0]);seen=args.integers[1];return GuestCallResult{};});
+  GuestAddr listener[2]{7,callback};
+  REQUIRE(call("AImageReader_setImageListener",{reader,h2g(listener)})==0);
+  GuestAddr window=0;REQUIRE(call("AImageReader_getWindow",{reader,h2g(&window)})==0);
+  std::vector<std::uint8_t> pixels(2*2*4,9);
+  REQUIRE(android::publish_window_rgba(android::native_window_from_guest(window),pixels,2,2)==0);
+  REQUIRE(test::wait_until([&]{return calls.load()==7;}));CHECK(seen==reader);
+  call("AImageReader_delete",{reader});test::android_remove_callback(callback);
+}
