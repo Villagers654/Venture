@@ -15,7 +15,7 @@ public:
   // object's reusable commands/descriptors and destruction.
   ColorImages(const XrGraphicsBindingVulkanKHR &, PFN_vkGetInstanceProcAddr,
               const XrSwapchainCreateInfo &,
-              std::span<const XrSwapchainImageVulkanKHR>, bool binding_queue_ordered = false);
+              std::span<const XrSwapchainImageVulkanKHR>, bool binding_queue_ordered = false, bool passthrough_alpha = false);
   ~ColorImages();
   XrResult convert(std::uint32_t index, const ColorMatrix &,
                    bool external_queue_held = false, Alpha alpha = Alpha::preserve, float camera_opacity = 1);

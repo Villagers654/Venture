@@ -17,5 +17,6 @@ SteamLinkSource::SteamLinkSource() : impl_(std::make_unique<Impl>()) {}
 SteamLinkSource::~SteamLinkSource() = default;
 void SteamLinkSource::request(bool) {}
 std::uint64_t SteamLinkSource::permission() const { return 0; }
+bool SteamLinkSource::withdrawn() const { return true; }
 #endif
 } // namespace venture::xr

@@ -18,15 +18,24 @@ FetchContent_Declare(openxr_headers
   URL_HASH SHA256=1681e0f6c9633c73117c2fc376d1fe71cbd6fdd2aeb896ed5854ff022aa82eaa
   SOURCE_SUBDIR venture-headers-only)
 FetchContent_MakeAvailable(nlohmann_json openxr_headers)
+# Same Vulkan pin as src/runtime/gfx/Dependencies.cmake. This target uses
+# the production header boundary/defines, including libc++ on Windows.
+FetchContent_Declare(venture_vulkan_headers
+  URL https://github.com/KhronosGroup/Vulkan-Headers/archive/c46850864f4661461b0f6cb9922c058ffea4915e.tar.gz
+  URL_HASH SHA256=539ff8eaa4abf22fddbd98225c68a0c5ddb940075a4048c8b7f5d04449070a4e
+  SOURCE_SUBDIR venture-headers-only)
+FetchContent_MakeAvailable(venture_vulkan_headers)
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+set(generated "${CMAKE_CURRENT_BINARY_DIR}/generated")
+add_custom_command(OUTPUT "${generated}/vk_plain_members.inc" "${generated}/vk_plain_borrow.inc"
+  COMMAND ${CMAKE_COMMAND} -E make_directory "${generated}"
+  COMMAND Python3::Interpreter "${venture_root}/tools/codegen/vk_generate.py"
+    --registry "${venture_vulkan_headers_SOURCE_DIR}/registry/vk.xml" --out "${generated}"
+  DEPENDS "${venture_root}/tools/codegen/vk_generate.py" VERBATIM)
 if(VENTURE_PASSTHROUGH_COMPILE_ONLY)
-  # Same Vulkan pin as src/runtime/gfx/Dependencies.cmake. This target uses
-  # the production header boundary/defines, including libc++ on Windows.
-  FetchContent_Declare(venture_vulkan_headers
-    URL https://github.com/KhronosGroup/Vulkan-Headers/archive/c46850864f4661461b0f6cb9922c058ffea4915e.tar.gz
-    URL_HASH SHA256=539ff8eaa4abf22fddbd98225c68a0c5ddb940075a4048c8b7f5d04449070a4e
-    SOURCE_SUBDIR venture-headers-only)
-  FetchContent_MakeAvailable(venture_vulkan_headers)
   add_library(venture_passthrough_compile_check OBJECT
+    "${generated}/vk_plain_members.inc" "${generated}/vk_plain_borrow.inc"
+    ${venture_root}/src/runtime/hle/openxr/graphics.cpp
     ${venture_root}/src/runtime/hle/openxr/passthrough.cpp
     ${venture_root}/src/runtime/hle/openxr/passthrough_images.cpp
     ${venture_root}/src/runtime/hle/openxr/state.cpp
@@ -38,7 +47,7 @@ if(VENTURE_PASSTHROUGH_COMPILE_ONLY)
     ${venture_root}/src/runtime/xr/guest_images.cpp)
   target_include_directories(venture_passthrough_compile_check PRIVATE
     "${venture_root}/src" "${venture_root}/src/runtime"
-    "${openxr_headers_SOURCE_DIR}/include" "${venture_vulkan_headers_SOURCE_DIR}/include")
+    "${openxr_headers_SOURCE_DIR}/include" "${venture_vulkan_headers_SOURCE_DIR}/include" "${generated}")
   target_link_libraries(venture_passthrough_compile_check PRIVATE nlohmann_json::nlohmann_json)
   target_compile_definitions(venture_passthrough_compile_check PRIVATE VK_NO_PROTOTYPES)
   if(WIN32)
@@ -55,15 +64,18 @@ FetchContent_MakeAvailable(doctest)
 find_package(Vulkan REQUIRED COMPONENTS glslangValidator)
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 set(generated "${CMAKE_CURRENT_BINARY_DIR}/generated")
-foreach(shader IN ITEMS vert frag ms_frag)
+foreach(shader IN ITEMS vert frag ms_frag passthrough_frag passthrough_ms_frag)
   if(shader STREQUAL "vert")
     set(source "${venture_root}/src/runtime/xr/shaders/color.vert")
   else()
     set(source "${venture_root}/src/runtime/xr/shaders/color.frag")
   endif()
   set(defines)
-  if(shader STREQUAL "ms_frag")
+  if(shader MATCHES "(^|_)ms_frag$")
     set(defines -DMULTISAMPLE=1)
+  endif()
+  if(shader MATCHES "^passthrough_")
+    list(APPEND defines -DPASSTHROUGH_ALPHA=1)
   endif()
   add_custom_command(OUTPUT "${generated}/color_${shader}.inc"
     COMMAND ${CMAKE_COMMAND} -E make_directory "${generated}"
@@ -83,7 +95,7 @@ add_executable(venture_passthrough_tests
   ${venture_root}/src/runtime/xr/color_space.cpp
   ${venture_root}/src/runtime/xr/guest_images.cpp)
 target_include_directories(venture_passthrough_tests PRIVATE
-  "${venture_root}/src" "${venture_root}/src/runtime" "${openxr_headers_SOURCE_DIR}/include" "${generated}")
+  "${venture_root}/src" "${venture_root}/src/runtime" "${openxr_headers_SOURCE_DIR}/include" "${venture_vulkan_headers_SOURCE_DIR}/include" "${generated}")
 target_link_libraries(venture_passthrough_tests PRIVATE doctest::doctest nlohmann_json::nlohmann_json Vulkan::Vulkan)
 if(NOT WIN32)
   target_compile_definitions(venture_passthrough_tests PRIVATE DOCTEST_CONFIG_NO_POSIX_SIGNALS)
@@ -96,3 +108,34 @@ enable_testing()
 add_test(NAME passthrough COMMAND venture_passthrough_tests)
 add_test(NAME xr_codegen COMMAND Python3::Interpreter "${venture_root}/tools/codegen/xr_generate.py"
   --registry "${openxr_headers_SOURCE_DIR}/specification/registry/xr.xml" --check)
+
+# Exercise the real public guest frame entry points and Session implementation.
+# Only the external host/transport and unrelated platform services are scripted.
+add_executable(venture_passthrough_lifecycle_tests
+  lifecycle.cpp lifecycle_host.cpp support.cpp ../test_main.cpp ${generated_sources}
+  "${generated}/vk_plain_members.inc" "${generated}/vk_plain_borrow.inc"
+  ${venture_root}/src/common/environment.cpp
+  ${venture_root}/src/runtime/hle/openxr/openxr.cpp
+  ${venture_root}/src/runtime/hle/openxr/graphics.cpp
+  ${venture_root}/src/runtime/hle/openxr/passthrough.cpp
+  ${venture_root}/src/runtime/hle/openxr/passthrough_images.cpp
+  ${venture_root}/src/runtime/hle/openxr/state.cpp
+  ${venture_root}/src/runtime/xr/session.cpp
+  ${venture_root}/src/runtime/xr/color_images.cpp
+  ${venture_root}/src/runtime/xr/color_space.cpp
+  ${venture_root}/src/runtime/xr/guest_images.cpp)
+target_include_directories(venture_passthrough_lifecycle_tests PRIVATE
+  "${venture_root}/src" "${venture_root}/src/runtime" "${openxr_headers_SOURCE_DIR}/include" "${venture_vulkan_headers_SOURCE_DIR}/include" "${generated}")
+target_link_libraries(venture_passthrough_lifecycle_tests PRIVATE doctest::doctest nlohmann_json::nlohmann_json Vulkan::Vulkan)
+target_compile_definitions(venture_passthrough_lifecycle_tests PRIVATE VENTURE_PASSTHROUGH_REAL_SESSION=1)
+if(NOT WIN32)
+  target_compile_definitions(venture_passthrough_lifecycle_tests PRIVATE DOCTEST_CONFIG_NO_POSIX_SIGNALS)
+endif()
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+  target_compile_options(venture_passthrough_lifecycle_tests PRIVATE -ffunction-sections -fdata-sections)
+  target_link_options(venture_passthrough_lifecycle_tests PRIVATE -Wl,--gc-sections)
+endif()
+add_test(NAME passthrough_production_lifecycle COMMAND venture_passthrough_lifecycle_tests)
+
+add_test(NAME passthrough_ordinary_shader_unchanged COMMAND Python3::Interpreter
+  "${CMAKE_CURRENT_LIST_DIR}/shader_variant_test.py" "$<TARGET_FILE:Vulkan::glslangValidator>" "${generated}")

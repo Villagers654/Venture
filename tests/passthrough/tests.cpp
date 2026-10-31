@@ -40,7 +40,7 @@ struct Frame {
   XrResult prepare(PassthroughFrame& out) {
     bool handled = false;
     auto result = prepare_passthrough_frame(target, info, out, handled);
-    if (XR_SUCCEEDED(result)) CHECK(handled);
+    if (XR_SUCCEEDED(result)) CHECK(handled == (info.layers[0]->type == XR_TYPE_COMPOSITION_LAYER_PASSTHROUGH_FB));
     return result;
   }
 };
@@ -335,4 +335,49 @@ TEST_CASE("Passthrough preserves submitted rects with image flips and GLES origi
   frame.scene.next = nullptr;
   REQUIRE(frame.prepare(output) == XR_SUCCESS);
   CHECK(output.views[0].subImage.imageRect.offset.y == 3);
+}
+
+TEST_CASE("Unknown and disabled passthrough next structures are ignored") {
+  Fixture fixture;
+  XrBaseInStructure unknown{XrStructureType(0x7ffffffe), nullptr};
+  XrCompositionLayerColorScaleBiasKHR disabled{XR_TYPE_COMPOSITION_LAYER_COLOR_SCALE_BIAS_KHR};
+  disabled.next = &unknown;
+  XrPassthroughCreateInfoFB create{XR_TYPE_PASSTHROUGH_CREATE_INFO_FB, &disabled, XR_PASSTHROUGH_IS_RUNNING_AT_CREATION_BIT_FB};
+  REQUIRE(guest::xrCreatePassthroughFB(target, &create, &fixture.feature) == XR_SUCCESS);
+  XrPassthroughLayerCreateInfoFB layer{XR_TYPE_PASSTHROUGH_LAYER_CREATE_INFO_FB, &disabled, fixture.feature,
+      XR_PASSTHROUGH_IS_RUNNING_AT_CREATION_BIT_FB, XR_PASSTHROUGH_LAYER_PURPOSE_RECONSTRUCTION_FB};
+  REQUIRE(guest::xrCreatePassthroughLayerFB(target, &layer, &fixture.layer) == XR_SUCCESS);
+  XrPassthroughStyleFB style{XR_TYPE_PASSTHROUGH_STYLE_FB, &disabled, 1, {0,0,0,0}};
+  CHECK(guest::xrPassthroughLayerSetStyleFB(fixture.layer, &style) == XR_SUCCESS);
+  XrPassthroughColorMapMonoToRgbaFB unsupported{XR_TYPE_PASSTHROUGH_COLOR_MAP_MONO_TO_RGBA_FB};
+  style.next = &unsupported;
+  CHECK(guest::xrPassthroughLayerSetStyleFB(fixture.layer, &style) == XR_ERROR_FEATURE_UNSUPPORTED);
+  unknown.next = &unknown; style.next = &unknown;
+  CHECK(guest::xrPassthroughLayerSetStyleFB(fixture.layer, &style) == XR_ERROR_VALIDATION_FAILURE);
+}
+TEST_CASE("MR eyes fit host maximum and map cropped rectangles after flipping") {
+  Fixture fixture; fixture.create(); const auto chain = fixture.chain();
+  fill(chain, {{{1,0,0,.25f},{0,1,0,.75f}}});
+  maximum_width = maximum_height = 2; grant = true;
+  Frame frame(fixture, chain); PassthroughFrame output;
+  for (auto& view : frame.views) view.subImage.imageRect = {{1,1},{2,2}};
+  REQUIRE(frame.prepare(output) == XR_SUCCESS);
+  REQUIRE(frame.prepare(output) == XR_SUCCESS);
+  for (const auto& view : output.views) {
+    CHECK(view.subImage.imageRect.offset.x == 1); CHECK(view.subImage.imageRect.offset.y == 1);
+    CHECK(view.subImage.imageRect.extent.width == 1); CHECK(view.subImage.imageRect.extent.height == 1);
+  }
+  CHECK(pixel(output.views[0].subImage.swapchain)[0] == 255);
+  CHECK(pixel(output.views[1].subImage.swapchain)[1] == 255);
+}
+TEST_CASE("Ordinary VR leaves the MR eye path while withdrawal is pending and after retirement") {
+  Fixture fixture; fixture.create(); const auto chain = fixture.chain();
+  fill(chain, {{{1,0,0,0},{0,1,0,.5f}}}); grant = true;
+  Frame frame(fixture, chain); PassthroughFrame mr;
+  REQUIRE(frame.prepare(mr) == XR_SUCCESS); REQUIRE(frame.prepare(mr) == XR_SUCCESS);
+  frame.layers[0] = frame.layers[1]; frame.info.layerCount = 1;
+  withdrawal_complete = false; PassthroughFrame handoff;
+  REQUIRE(frame.prepare(handoff) == XR_SUCCESS); CHECK(handoff.force_opaque); CHECK_FALSE(requested);
+  withdrawal_complete = true; PassthroughFrame vr;
+  REQUIRE(frame.prepare(vr) == XR_SUCCESS); CHECK_FALSE(vr.force_opaque);
 }

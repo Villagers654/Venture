@@ -51,6 +51,13 @@ Turn on **Add games to Steam** in Settings. Installed games appear in Steam and 
 
 Mods that replace a game's expansion file (OBB), such as RE4 VR Definitive Edition, go in the game's mods folder: open the game in your library and choose **Open folder** next to **Mods**, then put the mod's file there under the same name as the installed file (for example `main.203.com.Armature.VR4.obb`). It is used from the next launch; your installation is not changed, and deleting the file goes back to the original.
 
+### Steam Frame mixed reality
+
+Quest OpenXR reconstruction passthrough can be enabled in **Settings → Runtime →
+Steam Frame passthrough**. This integration is **Steam Frame only** and requires
+[Steam Link Native Passthrough](https://github.com/McFredward/steam-link-native-passthrough).
+See [supported configuration and limitations](docs/MIXED_REALITY.md).
+
 ### Something wrong?
 
 If a game crashes, click **Report issue** on the banner that appears. Otherwise, use **Upload debug report** in Settings. Either way, Venture collects the launcher and game logs from your last launch into one debug report, uploads it as an unlisted paste that expires after 90 days, and gives you a link to copy. If the upload fails, attach the report file instead (**Show file**).

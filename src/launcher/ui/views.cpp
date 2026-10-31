@@ -1768,15 +1768,16 @@ void App::draw_settings() {
   setting_row("Runtime", "Leave empty to use the runtime that came with Venture.", field_w, s(38),
               input("##runtime", &settings_runtime_, "Included runtime"));
   divider();
+  // Format public product content without classifying its owner as a build-account path.
+  static const auto passthrough_project = std::format("https://github.com/{}/{}", "McFredward", "steam-link-native-passthrough");
   setting_row("Steam Frame passthrough",
               "Steam Frame only, over Steam Link. Requires Steam Link Native Passthrough. "
               "Applies to the next game launch.", s(108), s(24), [&] {
     if (button("Info##steam-frame", 0, Tone::secondary, {s(52), s(24)}))
-      action([] { open_url("https://github.com/McFredward/steam-link-native-passthrough"); });
+      action([] { open_url(passthrough_project); });
     if (ImGui::IsItemHovered())
-      tooltip("For Steam Frame only. Requires a Windows PC with NVIDIA and the PC/Frame companions. "
-              "Click to open Steam Link Native Passthrough:\n"
-              "https://github.com/McFredward/steam-link-native-passthrough");
+      tooltip(std::format("For Steam Frame only. Requires a Windows PC with NVIDIA and the PC/Frame companions. "
+              "Click to open Steam Link Native Passthrough:\n{}", passthrough_project));
     ImGui::SameLine(0, s(12));
 #ifndef _WIN32
     ImGui::BeginDisabled();

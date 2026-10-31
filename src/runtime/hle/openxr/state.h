@@ -54,7 +54,7 @@ struct Swapchain {
   XrColorSpaceFB host_color = XR_COLOR_SPACE_UNMANAGED_FB;
   // A layer this frame asked for XR_COMPOSITION_LAYER_IMAGE_LAYOUT_VERTICAL_FLIP_BIT_FB;
   // the host copy reverses rows and layer rects mirror (map_subimage).
-  bool flip_rows = false, host_flip = false;
+  bool flip_rows = false, host_flip = false, host_opaque = false;
   bool rect_clipped = false; // logged once (map_subimage)
   std::int32_t released_index = -1;
   std::uint32_t next_index = 0, host_index = 0;
@@ -68,7 +68,7 @@ struct Swapchain {
   bool guest_only = false;
   std::unique_ptr<vulkan::FullRateImage> full_rate_resource;
   std::vector<std::uint32_t> textures;
-  std::unique_ptr<ColorImages> color_images;
+  std::unique_ptr<ColorImages> color_images, opaque_images;
   // OpenXR permits multiple outstanding acquisitions. Wait and release apply
   // to the oldest acquired image, independently of the returned image index.
   std::deque<std::uint32_t> acquired;
@@ -188,9 +188,9 @@ XrResult refresh_rate(XrSession, float *);
 VkFormat gl_to_vk(std::int64_t);
 std::int64_t vk_to_gl(std::int64_t);
 XrResult present_android_surfaces();
-XrResult prepare_swapchains(const std::set<XrSwapchain>& submitted);
+XrResult prepare_swapchains(const std::set<XrSwapchain>& submitted, bool force_opaque = false);
 XrResult destroy_host_swapchain(Swapchain&);
-XrResult convert_color_image(Swapchain&, std::uint32_t index, XrColorSpaceFB, bool external_queue_held = false);
+XrResult convert_color_image(Swapchain&, std::uint32_t index, XrColorSpaceFB, bool external_queue_held = false, bool force_opaque = false);
 namespace guest {
 XrResult create_action_for_host(XrActionSet, const XrActionCreateInfo*, XrAction*);
 XrResult create_swapchain(XrSession, const XrSwapchainCreateInfo*, XrSwapchain*, bool surface);

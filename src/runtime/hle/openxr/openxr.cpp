@@ -13,6 +13,7 @@
 #include "core/shutdown_trace.h"
 #include "gfx/gpu_device.h"
 #include "hle/openxr/state.h"
+#include "xr/presentation.h"
 #include "hle/openxr/passthrough.h"
 #include "hle/vulkan/vulkan.h"
 #include "hle/vulkan/timing.h"
@@ -248,16 +249,7 @@ class PresentationLayers {
     const auto& guest = it->second.info;
     const auto& host = it->second.host_info;
     if (host.width && host.height && (host.width != guest.width || host.height != guest.height)) {
-      const auto edge = [](std::int64_t value, std::uint32_t from, std::uint32_t to) {
-        return std::int32_t((value * to + from / 2) / from);
-      };
-      auto& rect = sub.imageRect;
-      const auto x0 = edge(rect.offset.x, guest.width, host.width);
-      const auto y0 = edge(rect.offset.y, guest.height, host.height);
-      const auto x1 = edge(std::int64_t(rect.offset.x) + rect.extent.width, guest.width, host.width);
-      const auto y1 = edge(std::int64_t(rect.offset.y) + rect.extent.height, guest.height, host.height);
-      rect.offset = {x0, y0};
-      rect.extent = {std::max(1, x1 - x0), std::max(1, y1 - y0)};
+      sub.imageRect = map_presentation_rect(sub.imageRect, {guest.width, guest.height}, {host.width, host.height});
     }
     return true;
   }
@@ -805,7 +797,9 @@ XrResult xrBeginSession(XrSession handle, const XrSessionBeginInfo *info) {
     return XR_ERROR_HANDLE_INVALID;
   if (XR_FAILED(validate_struct(info, XR_TYPE_SESSION_BEGIN_INFO)))
     return XR_ERROR_VALIDATION_FAILURE;
-  return session().begin_session(info);
+  const auto result = session().begin_session(info);
+  if (XR_SUCCEEDED(result) && result != XR_SESSION_LOSS_PENDING) session().passthrough_suspended = false;
+  return result;
 }
 XrResult xrEndSession(XrSession handle) {
   std::lock_guard lock(state().mutex);
@@ -1114,7 +1108,9 @@ XrResult xrEndFrame(XrSession handle, const XrFrameEndInfo *info) {
     if (XR_FAILED(result) || result == XR_SESSION_LOSS_PENDING) {
       sl.unlock();
       lock.lock();
-      suspend_passthrough_source();
+      if (result == XR_SESSION_LOSS_PENDING || result == XR_ERROR_SESSION_LOST || result == XR_ERROR_INSTANCE_LOST)
+        suspend_passthrough_source();
+      else withdraw_passthrough_source();
     }
     return result;
   }
@@ -1274,7 +1270,7 @@ XrResult xrEndFrame(XrSession handle, const XrFrameEndInfo *info) {
       previous = counts;
     }
   }
-  const auto prepared = [&] { vulkan::ScopedHostWait timing("guest_end_prepare"); return prepare_swapchains(rects.submitted); }();
+  const auto prepared = [&] { vulkan::ScopedHostWait timing("guest_end_prepare"); return prepare_swapchains(rects.submitted, passthrough.force_opaque); }();
   if (prepared != XR_SUCCESS && prepared != XR_SESSION_LOSS_PENDING) return prepared;
   PresentationLayers mapped(true);
   for (auto& layer : layers)

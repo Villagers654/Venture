@@ -21,6 +21,17 @@ bool native() {
   return process_config().isa() == GuestIsa::a64 && host_xr().enabled_extensions.contains("XR_FB_passthrough");
 }
 void withdraw() { if (source) source->request(false); }
+XrResult validate_passthrough_info(const void* pointer, XrStructureType type) {
+  const auto* root = static_cast<const XrBaseInStructure*>(pointer);
+  if (!root || root->type != type) return XR_ERROR_VALIDATION_FAILURE;
+  const auto result = validate_chain(root->next, native(), type, true);
+  if (XR_FAILED(result) || native()) return result;
+  for (auto* node = root->next; node; node = node->next)
+    for (const auto& metadata : structure_metadata())
+      if (metadata.type == node->type && (!*metadata.extension || enabled(metadata.extension)))
+        return XR_ERROR_FEATURE_UNSUPPORTED;
+  return XR_SUCCESS;
+}
 template<class H> bool belongs(H object, XrSession target) {
   const auto it = state().objects.find({handle_type<H>(), key(object)});
   return it != state().objects.end() && it->second.parent == key(target) && it->second.parent_type == "XrSession";
@@ -32,7 +43,8 @@ bool valid_layer(XrPassthroughLayerFB layer) {
 }
 } // namespace
 bool local_passthrough() { return !native() && steam_link_passthrough_configured(); }
-void suspend_passthrough_source() { withdraw(); }
+void withdraw_passthrough_source() { withdraw(); }
+void suspend_passthrough_source() { session().passthrough_suspended = true; withdraw(); }
 bool passthrough_properties(XrBaseOutStructure* property) {
   if (!local_passthrough() || !enabled("XR_FB_passthrough")) return false;
   if (property->type == XR_TYPE_SYSTEM_PASSTHROUGH_PROPERTIES_FB) {
@@ -102,16 +114,9 @@ XrResult prepare_passthrough_frame(XrSession target, const XrFrameEndInfo& info,
   }
   if (!room) {
     withdraw();
-    // On MR -> VR transitions, keep the current ordinary projection opaque
-    // while the peer observes pipe EOF. No old alpha can extend camera intent.
-    if (source && scene && info.layerCount == 1) {
-      handled = true;
-      out.info = info; out.guest_projection = scene;
-      const auto result = make_passthrough_frame_opaque(target, out);
-      if (XR_FAILED(result)) return result;
-      out.layer = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&out.projection);
-      out.info.layers = &out.layer;
-    }
+    // Keep the ordinary path (depth, MSAA, formats and async ownership) intact.
+    // Only force color alpha while the worker is still closing the old lease.
+    out.force_opaque = source && !source->withdrawn();
     return XR_SUCCESS;
   }
   if (!session().running) return fail(XR_ERROR_SESSION_NOT_RUNNING);
@@ -121,7 +126,7 @@ XrResult prepare_passthrough_frame(XrSession target, const XrFrameEndInfo& info,
   const auto& layer = *layers.at(room->layerHandle);
   const auto& feature = *features.at(layer.feature);
   // Paused passthrough retains ordinary opaque VR; no source declaration.
-  const bool active = feature.running && layer.running;
+  const bool active = feature.running && layer.running && !session().passthrough_suspended;
   handled = true;
   out.info = info;
   out.info.layerCount = 0; out.info.layers = nullptr;
@@ -148,7 +153,7 @@ XrResult prepare_passthrough_frame(XrSession target, const XrFrameEndInfo& info,
   return result;
 }
 XrResult destroy_passthrough_session(XrSession target) {
-  withdraw();
+  suspend_passthrough_source();
   source.reset();
   session().finish_host_end();
   const auto images_result = destroy_passthrough_images();
@@ -177,10 +182,11 @@ XrResult xrCreatePassthroughFB(XrSession target, const XrPassthroughCreateInfoFB
   if (!valid_handle(target, "XrSession")) return XR_ERROR_HANDLE_INVALID;
   if (!out) return XR_ERROR_VALIDATION_FAILURE;
   *out = XR_NULL_HANDLE;
-  if (XR_FAILED(validate_struct(info, XR_TYPE_PASSTHROUGH_CREATE_INFO_FB))) return XR_ERROR_VALIDATION_FAILURE;
+  const auto validation = validate_passthrough_info(info, XR_TYPE_PASSTHROUGH_CREATE_INFO_FB);
+  if (XR_FAILED(validation)) return validation;
   for (const auto& [handle, feature] : features)
     if (feature->session == target) return XR_ERROR_FEATURE_ALREADY_CREATED_PASSTHROUGH_FB;
-  if (!native() && (!local_passthrough() || info->next ||
+  if (!native() && (!local_passthrough() ||
                    (info->flags & ~XR_PASSTHROUGH_IS_RUNNING_AT_CREATION_BIT_FB))) return XR_ERROR_FEATURE_UNSUPPORTED;
   auto record = std::make_unique<Feature>(target, bool(info->flags & XR_PASSTHROUGH_IS_RUNNING_AT_CREATION_BIT_FB));
   XrResult result = XR_SUCCESS;
@@ -228,12 +234,13 @@ XrResult xrCreatePassthroughLayerFB(XrSession target, const XrPassthroughLayerCr
   if (!valid_handle(target, "XrSession")) return XR_ERROR_HANDLE_INVALID;
   if (!out) return XR_ERROR_VALIDATION_FAILURE;
   *out = XR_NULL_HANDLE;
-  if (XR_FAILED(validate_struct(info, XR_TYPE_PASSTHROUGH_LAYER_CREATE_INFO_FB))) return XR_ERROR_VALIDATION_FAILURE;
+  const auto validation = validate_passthrough_info(info, XR_TYPE_PASSTHROUGH_LAYER_CREATE_INFO_FB);
+  if (XR_FAILED(validation)) return validation;
   if (!local_passthrough() && !native()) return XR_ERROR_FEATURE_UNSUPPORTED;
   if (std::none_of(features.begin(), features.end(), [&](const auto& entry) { return entry.second->session == target; }))
     return XR_ERROR_FEATURE_REQUIRED_PASSTHROUGH_FB;
   if (!features.contains(info->passthrough) || !belongs(info->passthrough, target)) return XR_ERROR_HANDLE_INVALID;
-  if (!native() && (info->next || (info->flags & ~XR_PASSTHROUGH_IS_RUNNING_AT_CREATION_BIT_FB) ||
+  if (!native() && ((info->flags & ~XR_PASSTHROUGH_IS_RUNNING_AT_CREATION_BIT_FB) ||
       info->purpose != XR_PASSTHROUGH_LAYER_PURPOSE_RECONSTRUCTION_FB)) return XR_ERROR_FEATURE_UNSUPPORTED;
   if (layers.size() >= 64) return XR_ERROR_LIMIT_REACHED;
   auto record = std::make_unique<Layer>(target, info->passthrough,
@@ -278,14 +285,15 @@ XrResult xrPassthroughLayerSetStyleFB(XrPassthroughLayerFB handle, const XrPasst
   std::lock_guard lock(state().mutex);
   if (!enabled("XR_FB_passthrough")) return XR_ERROR_FUNCTION_UNSUPPORTED;
   if (!valid_layer(handle)) return XR_ERROR_HANDLE_INVALID;
-  if (XR_FAILED(validate_struct(style, XR_TYPE_PASSTHROUGH_STYLE_FB))) return XR_ERROR_VALIDATION_FAILURE;
+  const auto validation = validate_passthrough_info(style, XR_TYPE_PASSTHROUGH_STYLE_FB);
+  if (XR_FAILED(validation)) return validation;
   if (!std::isfinite(style->textureOpacityFactor) || style->textureOpacityFactor < 0 || style->textureOpacityFactor > 1 ||
       !std::isfinite(style->edgeColor.r) || !std::isfinite(style->edgeColor.g) ||
       !std::isfinite(style->edgeColor.b) || !std::isfinite(style->edgeColor.a)) return XR_ERROR_VALIDATION_FAILURE;
   if (native()) return host_call<PFN_xrPassthroughLayerSetStyleFB, "xrPassthroughLayerSetStyleFB">(handle, style);
   // The receiver owns camera composition. Do not claim camera styling that
   // cannot be represented by its ordinary-RGBA profile.
-  if (style->next || style->edgeColor.a != 0) return XR_ERROR_FEATURE_UNSUPPORTED;
+  if (style->edgeColor.a != 0) return XR_ERROR_FEATURE_UNSUPPORTED;
   layers.at(handle)->opacity = style->textureOpacityFactor;
   return XR_SUCCESS;
 }

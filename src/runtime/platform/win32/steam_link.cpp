@@ -77,7 +77,7 @@ bool matches_process(HANDLE process, const std::vector<std::filesystem::path>& p
 struct SteamLinkSource::Impl {
   // Odd intent epochs request a lease; even epochs withdraw it. Epoch matching
   // prevents a late read from publishing after opt-out or a new session.
-  std::atomic<std::uint64_t> intent{0}, granted_epoch{0}, lease{0};
+  std::atomic<std::uint64_t> intent{0}, granted_epoch{0}, lease{0}, retired_epoch{0};
   std::atomic<bool> stopping{false};
   Handle changed{CreateEventW(nullptr, FALSE, FALSE, nullptr)};
   std::thread worker;
@@ -197,7 +197,10 @@ struct SteamLinkSource::Impl {
         } catch (...) { revoke(); }
       }
       revoke();
-      WaitForSingleObject(changed.value, 1000);
+      // observe() and its pipe/process handles have returned before retirement.
+      const auto settled = intent.load(std::memory_order_acquire);
+      if (!(settled & 1)) retired_epoch.store(settled, std::memory_order_release);
+      WaitForSingleObject(changed.value, (settled & 1) ? 1000 : INFINITE);
     }
     revoke();
   }
@@ -206,4 +209,9 @@ SteamLinkSource::SteamLinkSource() : impl_(std::make_unique<Impl>()) {}
 SteamLinkSource::~SteamLinkSource() = default;
 void SteamLinkSource::request(bool active) { impl_->request(active); }
 std::uint64_t SteamLinkSource::permission() const { return impl_->permission(); }
+bool SteamLinkSource::withdrawn() const {
+  const auto epoch = impl_->intent.load(std::memory_order_acquire);
+  return !(epoch & 1) && impl_->retired_epoch.load(std::memory_order_acquire) == epoch &&
+         impl_->intent.load(std::memory_order_acquire) == epoch;
+}
 } // namespace venture::xr

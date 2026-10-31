@@ -11,6 +11,8 @@ class SteamLinkSource {
   ~SteamLinkSource();
   void request(bool active);
   std::uint64_t permission() const;
+  // True only after the worker closed every pipe for the current withdrawal.
+  bool withdrawn() const;
  private:
   struct Impl;
   std::unique_ptr<Impl> impl_;

@@ -1,6 +1,7 @@
 #include "hle/openxr/passthrough.h"
 #include "hle/openxr/state.h"
 #include "xr/queue.h"
+#include "xr/presentation.h"
 #include "xr/dev_dump.h"
 #include "common/log.h"
 
@@ -12,6 +13,7 @@ struct Eye {
   std::vector<XrSwapchainImageVulkanKHR> images;
   std::unique_ptr<ColorImages> color;
   std::int64_t source_format = 0;
+  VkExtent2D source_extent{};
   XrResult destroy() {
     color.reset(); // Retire GPU commands before destroying their target images.
     if (!handle) return XR_SUCCESS;
@@ -32,13 +34,20 @@ struct Eye {
         format != VK_FORMAT_B8G8R8A8_UNORM && format != VK_FORMAT_B8G8R8A8_SRGB)
       return XR_ERROR_SWAPCHAIN_FORMAT_UNSUPPORTED;
     if (chain.info.sampleCount != 1 || chain.info.faceCount != 1) return XR_ERROR_FEATURE_UNSUPPORTED;
-    if (handle && color && info.width == chain.info.width && info.height == chain.info.height && source_format == chain.info.format)
+    if (handle && color && source_extent.width == chain.info.width && source_extent.height == chain.info.height && source_format == chain.info.format)
       return XR_SUCCESS;
     session().finish_host_end();
     auto result = destroy();
     if (XR_FAILED(result)) return result;
     info = chain.info;
     source_format = chain.info.format;
+    source_extent = {chain.info.width, chain.info.height};
+    XrSystemProperties properties{XR_TYPE_SYSTEM_PROPERTIES};
+    if (XR_SUCCEEDED(::xrGetSystemProperties(host_xr().instance, host_xr().system, &properties))) {
+      const auto size = fit_presentation_extent(source_extent, properties.graphicsProperties.maxSwapchainImageWidth,
+                                                properties.graphicsProperties.maxSwapchainImageHeight);
+      info.width = size.width; info.height = size.height;
+    }
     info.next = nullptr; info.createFlags = 0;
     info.arraySize = info.faceCount = info.mipCount = info.sampleCount = 1;
     info.usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT | XR_SWAPCHAIN_USAGE_TRANSFER_DST_BIT |
@@ -57,7 +66,7 @@ struct Eye {
     result = ::xrEnumerateSwapchainImages(handle, count, &count,
         reinterpret_cast<XrSwapchainImageBaseHeader*>(images.data()));
     if (XR_FAILED(result)) return result;
-    color = std::make_unique<ColorImages>(state().graphics, gfx::gpu_device().get_instance_proc_addr, info, images);
+    color = std::make_unique<ColorImages>(state().graphics, gfx::gpu_device().get_instance_proc_addr, info, images, false, true);
     return result;
   }
 };
@@ -142,7 +151,7 @@ XrResult prepare_passthrough_images(XrSession target, const XrCompositionLayerPr
     if (index >= eye.images.size()) { eye.destroy(); return XR_ERROR_RUNTIME_FAILURE; }
     const bool flip = image_flip(projection);
     result = chain.backing->copy(std::uint32_t(chain.released_index), eye.images[index].image,
-        VkFormat(eye.info.format), {}, flip, std::int32_t(projection.views[i].subImage.imageArrayIndex));
+        VkFormat(eye.info.format), {eye.info.width, eye.info.height}, flip, std::int32_t(projection.views[i].subImage.imageArrayIndex));
     const auto alpha = !(projection.layerFlags & XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT)
         ? ColorImages::Alpha::opaque
         : (projection.layerFlags & XR_COMPOSITION_LAYER_UNPREMULTIPLIED_ALPHA_BIT)
@@ -164,6 +173,8 @@ XrResult prepare_passthrough_images(XrSession target, const XrCompositionLayerPr
     output.views[i].subImage.imageArrayIndex = 0;
     if (chain.textures.empty() == flip) output.views[i].subImage.imageRect.offset.y = std::int32_t(chain.info.height) -
         output.views[i].subImage.imageRect.offset.y - output.views[i].subImage.imageRect.extent.height;
+    output.views[i].subImage.imageRect = map_presentation_rect(output.views[i].subImage.imageRect,
+        {chain.info.width, chain.info.height}, {eye.info.width, eye.info.height});
   }
   return XR_SUCCESS;
 }

@@ -73,9 +73,11 @@ std::uint64_t host_procedure_generation() { return 1; }
 void cancel_sequence(XrSession, const XrHapticActionInfo*) {}
 void clear_haptic_bindings(XrSession) {}
 void forget_menu_object(std::uintptr_t) {}
+#ifndef VENTURE_PASSTHROUGH_REAL_SESSION
 Session& session() { static Session value; return value; }
 void Session::finish_host_end() {}
 XrImages* xr_images() { return nullptr; }
+#endif
 bool steam_link_passthrough_configured() { return test::passthrough::configured && process_config().steam_frame_passthrough && process_config().isa() == GuestIsa::a64; }
 struct SteamLinkSource::Impl { std::uint64_t lease = 0; };
 SteamLinkSource::SteamLinkSource() : impl_(std::make_unique<Impl>()) {}
@@ -87,6 +89,7 @@ void SteamLinkSource::request(bool active) {
   if (!active || !grant) impl_->lease = 0;
   else if (!impl_->lease) { static std::uint64_t serial = 0; impl_->lease = ++serial; }
 }
+bool SteamLinkSource::withdrawn() const { return !test::passthrough::requested && test::passthrough::withdrawal_complete; }
 std::uint64_t SteamLinkSource::permission() const { return test::passthrough::requested && test::passthrough::grant ? impl_->lease : 0; }
 }
 } // namespace venture
@@ -125,6 +128,11 @@ XrResult XRAPI_CALL resolve(XrInstance, const char* name, PFN_xrVoidFunction* ou
   return *out ? XR_SUCCESS : XR_ERROR_FUNCTION_UNSUPPORTED;
 }
 }
+XrResult XRAPI_CALL xrGetSystemProperties(XrInstance, XrSystemId, XrSystemProperties* properties) {
+  properties->graphicsProperties.maxSwapchainImageWidth = venture::test::passthrough::maximum_width;
+  properties->graphicsProperties.maxSwapchainImageHeight = venture::test::passthrough::maximum_height;
+  return XR_SUCCESS;
+}
 XrResult XRAPI_CALL xrEnumerateSwapchainImages(XrSwapchain handle, std::uint32_t capacity, std::uint32_t* count, XrSwapchainImageBaseHeader* out) {
   const auto images = host_chains.at(handle).backing->images(); *count = std::uint32_t(images.size());
   if (!capacity) return XR_SUCCESS;
@@ -132,6 +140,7 @@ XrResult XRAPI_CALL xrEnumerateSwapchainImages(XrSwapchain handle, std::uint32_t
   std::copy(images.begin(), images.end(), reinterpret_cast<XrSwapchainImageVulkanKHR*>(out)); return XR_SUCCESS;
 }
 XrResult XRAPI_CALL xrAcquireSwapchainImage(XrSwapchain handle, const XrSwapchainImageAcquireInfo*, std::uint32_t* index) {
+  ++venture::test::passthrough::host_acquires;
   auto& chain = host_chains.at(handle); CHECK_FALSE(chain.acquired); chain.acquired = true; chain.waited = false;
   *index = chain.next++ % chain.backing->images().size(); chain.released = *index; return XR_SUCCESS;
 }
@@ -143,9 +152,11 @@ XrResult dev_create_swapchain(XrSession, const XrSwapchainCreateInfo* info, XrSw
   auto backing = std::make_unique<GuestImages>(hle::openxr::state().graphics, vkGetInstanceProcAddr, *info);
   *out = reinterpret_cast<XrSwapchain>(backing.get()); host_chains[*out].backing = std::move(backing); return XR_SUCCESS;
 }
+#ifndef VENTURE_PASSTHROUGH_REAL_SESSION
 XrResult create_host_swapchain(XrSession target, XrSwapchainCreateInfo& info, XrSwapchain* out) {
   return dev_create_swapchain(target, &info, out);
 }
+#endif
 XrResult dev_destroy_swapchain(XrSwapchain handle) { host_chains.erase(handle); return XR_SUCCESS; }
 XrResult dev_release_swapchain(XrSwapchain handle, const XrSwapchainImageReleaseInfo*, VkImage) {
   auto& chain = host_chains.at(handle); CHECK(chain.acquired); CHECK(chain.waited); chain.acquired = false; return XR_SUCCESS;
@@ -154,7 +165,7 @@ XrResult dev_release_swapchain(XrSwapchain handle, const XrSwapchainImageRelease
 namespace venture::test::passthrough {
 using namespace hle::openxr;
 Fixture::Fixture() {
-  configured = true; requested = grant = false; requests = native_creates = native_destroys = 0; native_result = XR_SUCCESS;
+  configured = withdrawal_complete = true; maximum_width = maximum_height = 0; requested = grant = false; requests = native_creates = native_destroys = host_acquires = 0; native_result = XR_SUCCESS;
   process_config().abi = "arm64-v8a";
   process_config().steam_frame_passthrough = true;
   state().enabled = {"XR_FB_passthrough", "XR_FB_composition_layer_image_layout"};
@@ -162,12 +173,16 @@ Fixture::Fixture() {
   auto& gpu = gfx::gpu_device();
   state().graphics = {XR_TYPE_GRAPHICS_BINDING_VULKAN_KHR, nullptr, gpu.instance, gpu.physical_device, gpu.device, gpu.queue_family, 0};
   xr::session().queue = gpu.queue;
+  xr::session().passthrough_suspended = false;
   xr::session().running = true; xr::session().phase = xr::Session::Phase::begun;
   xr::host_xr().enabled_extensions.clear(); xr::host_xr().available_extensions.clear();
   xr::host_xr().get_instance_proc_addr = reinterpret_cast<void*>(resolve);
 }
 Fixture::~Fixture() {
   CHECK(destroy_passthrough_session(target) == XR_SUCCESS);
+#ifdef VENTURE_PASSTHROUGH_REAL_SESSION
+  for (auto& [handle, chain] : state().swapchains) CHECK(destroy_host_swapchain(chain) == XR_SUCCESS);
+#endif
   state().swapchains.clear(); state().objects.clear(); state().enabled.clear();
   CHECK(host_chains.empty());
 }
@@ -182,16 +197,18 @@ void Fixture::create(bool native) {
       XR_PASSTHROUGH_IS_RUNNING_AT_CREATION_BIT_FB, XR_PASSTHROUGH_LAYER_PURPOSE_RECONSTRUCTION_FB};
   REQUIRE(guest::xrCreatePassthroughLayerFB(target, &li, &layer) == XR_SUCCESS);
 }
-XrSwapchain Fixture::chain(std::uint32_t layers, VkFormat format) {
+XrSwapchain Fixture::chain(std::uint32_t layers, VkFormat format, std::uint32_t samples) {
+  const auto usage = XR_SWAPCHAIN_USAGE_SAMPLED_BIT | (format == VK_FORMAT_D32_SFLOAT ?
+      XR_SWAPCHAIN_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT : XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT);
   auto backing = std::make_unique<xr::GuestImages>(state().graphics, vkGetInstanceProcAddr,
       XrSwapchainCreateInfo{XR_TYPE_SWAPCHAIN_CREATE_INFO, nullptr, 0,
-        XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT | XR_SWAPCHAIN_USAGE_SAMPLED_BIT,
-        format, 1, 4, 4, 1, layers, 1});
+        usage,
+        format, samples, 4, 4, 1, layers, 1});
   auto handle = reinterpret_cast<XrSwapchain>(backing.get());
   auto& chain = state().swapchains[handle];
   chain.info = {XR_TYPE_SWAPCHAIN_CREATE_INFO, nullptr, 0,
-      XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT | XR_SWAPCHAIN_USAGE_SAMPLED_BIT,
-      format, 1, 4, 4, 1, layers, 1};
+      usage,
+      format, samples, 4, 4, 1, layers, 1};
   chain.images.assign(backing->images().begin(), backing->images().end());
   chain.backing = std::move(backing); chain.released_index = 0; chain.release_serial = 1;
   track_handle(handle, "XrSwapchain", target); return handle;
