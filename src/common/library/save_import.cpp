@@ -86,7 +86,7 @@ Imported publish(const Target &t, Imported n, std::string_view package) {
     fs::rename(entry.path(), current);
   }
   fs::remove_all(t.staging);
-  log::info("saves", "Imported {} save files ({} bytes) of {}{}", n.files, n.bytes, package,
+  log::info("saves", "Imported {} save files ({} bytes, {} skipped) of {}{}", n.files, n.bytes, n.skipped, package,
             n.backup.empty() ? std::string() : "; the replaced data is in " + paths::utf8(n.backup));
   return n;
 }
@@ -149,14 +149,28 @@ Imported import_headset(const fs::path &data, std::string_view key, std::string_
       if (!paths::within(t.staging, path)) throw std::runtime_error("A save's path escapes the game's storage.");
       fs::create_directories(path.parent_path());
       std::ofstream out(path, std::ios::binary | std::ios::trunc);
-      source->read(file, [&](std::span<const std::uint8_t> bytes) {
-        out.write(reinterpret_cast<const char *>(bytes.data()), std::streamsize(bytes.size()));
-      }, stop);
+      try {
+        source->read(file, [&](std::span<const std::uint8_t> bytes) {
+          out.write(reinterpret_cast<const char *>(bytes.data()), std::streamsize(bytes.size()));
+        }, stop);
+      } catch (const std::exception &error) {
+        if (stop.stop_requested()) throw;
+        // Shared storage also holds SDK caches the headset will not let adb read
+        // (Asgard's Wrath 2: Facebook's .fbns/MqttFizzCache.store), as in game imports.
+        out.close();
+        std::error_code ec;
+        fs::remove(path, ec);
+        ++n.skipped;
+        log::warn("saves", "Skipped {} of {}: {}", file.name, package, error.what());
+        continue;
+      }
       out.close();
       if (!out || fs::file_size(path) != file.size)
         throw std::runtime_error("Copying " + file.name + " from the headset failed.");
       count(n, path);
     }
+    if (!n.files && n.skipped)
+      throw std::runtime_error("The headset would not send any of this game's save files (see the log).");
   });
 }
 

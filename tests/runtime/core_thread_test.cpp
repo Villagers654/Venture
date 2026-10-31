@@ -216,7 +216,7 @@ TEST_CASE("OS data writer census excludes non-file objects and catches buffered 
 
 #ifndef _WIN32
 #endif
-TEST_CASE("frame stall trigger fires once when focused frames stop advancing") {
+TEST_CASE("frame stall trigger fires once per stall when focused frames stop advancing") {
   startup_diagnostics::FrameStallTrigger trigger;
   CHECK_FALSE(trigger.poll(0, 0, false));  // nothing submitted yet
   CHECK_FALSE(trigger.poll(1, 10, false));
@@ -225,5 +225,15 @@ TEST_CASE("frame stall trigger fires once when focused frames stop advancing") {
   CHECK_FALSE(trigger.poll(9, 20, true));   // unfocused restarts the wait
   CHECK_FALSE(trigger.poll(13, 20, false));
   CHECK(trigger.poll(14, 20, false));
-  CHECK_FALSE(trigger.poll(30, 20, false));  // one-shot
+  CHECK_FALSE(trigger.poll(30, 20, false));  // once per stall
+  // Frames resuming re-arm it: a freeze after a loading stall is captured too.
+  CHECK_FALSE(trigger.poll(31, 25, false));
+  CHECK(trigger.poll(36, 25, false));
+  // At most max_captures per run.
+  for (std::uint64_t f = 30; f < 60; f += 5) {
+    CHECK_FALSE(trigger.poll(std::int64_t(f * 10), f, false));
+    trigger.poll(std::int64_t(f * 10 + 6), f, false);
+  }
+  CHECK_FALSE(trigger.poll(1000, 99, false));
+  CHECK_FALSE(trigger.poll(1006, 99, false));
 }

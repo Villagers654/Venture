@@ -265,7 +265,7 @@ GuestCallResult GuestThread::call32(GuestAddr fn, const GuestCallArgs& args) {
     GuestCallResult result{cpu_->x(0), cpu_->x(1), {}, GuestIsa::a32};
     saved.restore(*cpu_); --call_depth_; return result;
   } catch (const GuestCallReturned&) { --call_depth_; throw; }
-  catch (...) { saved.restore(*cpu_); --call_depth_; throw; }
+  catch (...) { signals::note_unwinding_guest_call(*this); saved.restore(*cpu_); --call_depth_; throw; }
 }
 GuestCallResult GuestThread::call64(GuestAddr fn, const GuestCallArgs& args) {
   os_quit::Call executing(&os_call_depth);
@@ -300,7 +300,7 @@ GuestCallResult GuestThread::call64(GuestAddr fn, const GuestCallArgs& args) {
     // A guest longjmp has already restored an outer guest context. Preserve it while
     // unwinding intermediate HLE callbacks and host->guest calls.
     --call_depth_; throw;
-  } catch (...) { saved.restore(*cpu_); --call_depth_; throw; }
+  } catch (...) { signals::note_unwinding_guest_call(*this); saved.restore(*cpu_); --call_depth_; throw; }
 }
 void GuestThread::run_until_return(int depth) {
   // Guest FP status lives in the CPU. Keep the surrounding host environment
@@ -491,7 +491,15 @@ std::shared_ptr<GuestThread> create_guest_thread(GuestAddr start, GuestAddr argu
         if (os_quit::requested()) log::info("thread", "OS quit stopped guest thread {}", control->guest.tid());
         else log::info("thread", "guest requested process exit {}", e.status);
       }
-      catch (...) { control->failure = std::current_exception(); }
+      catch (...) {
+        // Android aborts the process on an uncaught native exception. A thread
+        // that silently disappears instead leaves the game frozen (RE4's game thread).
+        control->failure = std::current_exception();
+        std::string name;
+        { RegistryLock lock(registry_mutex); name = resources.at(&control->guest).name; }
+        signals::log_guest_thread_failure(control->guest, name, control->failure);
+        try { exit_guest_process(128 + signals::kSigAbrt); } catch (const ProcessExit&) {}
+      }
     }
     if (attached) {
       try { finish_guest_thread(control->guest); }

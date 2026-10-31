@@ -87,7 +87,7 @@ target_sources(venture_tests PRIVATE runtime/loader_lifecycle_test.cpp)
 # Every source partition runs once; supervisor deadlines overlap in isolated roots.
 set(venture_test_partitions venture_tests)
 set(venture_test_split_filters)
-foreach(source core_restart jit_cache vulkan vulkan_texture vulkan_fastpath)
+foreach(source core_restart core_thread_failure jit_cache vulkan vulkan_texture vulkan_fastpath)
   set(filter "*${source}_test.cpp")
   add_test(NAME venture_tests_${source} COMMAND venture_tests "--source-file=${filter}" --duration=true)
   list(APPEND venture_test_partitions venture_tests_${source})

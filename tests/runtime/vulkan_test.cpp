@@ -1054,6 +1054,29 @@ TEST_CASE("Vulkan Android hardware buffers share GPU payloads through allocation
   CHECK(texel[3] == 255);
   call("vkUnmapMemory", device, readback_memory);
 
+  // A producer write (AImageReader) is read through a guest import.
+  std::vector<std::uint8_t> pixels(16 * 16 * 4);
+  for (std::size_t n = 0; n < pixels.size(); ++n) pixels[n] = std::uint8_t(n * 7);
+  CHECK_FALSE(android::write_hardware_buffer(other, std::span(pixels).first(16)));
+  REQUIRE(android::write_hardware_buffer(other, pixels));
+  VkImage produced = make_image(VK_FORMAT_R8G8B8A8_UNORM, usage, nullptr);
+  VkDeviceMemory produced_memory = import(produced, other);
+  VkCommandBuffer second_command{};
+  REQUIRE(call("vkAllocateCommandBuffers", device, &ci, &second_command) == VK_SUCCESS);
+  command = second_command;
+  REQUIRE(call("vkBeginCommandBuffer", command, &begin) == VK_SUCCESS);
+  barrier(produced, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_QUEUE_FAMILY_FOREIGN_EXT, family,
+          0, VK_ACCESS_TRANSFER_READ_BIT);
+  call("vkCmdCopyImageToBuffer", command, produced, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, readback, 1u, &region);
+  REQUIRE(call("vkEndCommandBuffer", command) == VK_SUCCESS);
+  REQUIRE(call("vkQueueSubmit", queue, 1u, &submit, VK_NULL_HANDLE) == VK_SUCCESS);
+  REQUIRE(call("vkQueueWaitIdle", queue) == VK_SUCCESS);
+  REQUIRE(call("vkMapMemory", device, readback_memory, VkDeviceSize{0}, VK_WHOLE_SIZE, 0u, &mapped) == VK_SUCCESS);
+  CHECK(std::memcmp(mapped, pixels.data(), pixels.size()) == 0);
+  call("vkUnmapMemory", device, readback_memory);
+  call("vkDestroyImage", device, produced, nullptr);
+  call("vkFreeMemory", device, produced_memory, nullptr);
+
   // Export: the memory's AHB is one object, referenced once per query.
   VkImage exported_image = make_image(VK_FORMAT_R8G8B8A8_UNORM, usage, nullptr);
   call("vkGetImageMemoryRequirements", device, exported_image, &requirements);

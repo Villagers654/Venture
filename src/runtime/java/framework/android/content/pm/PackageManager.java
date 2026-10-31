@@ -196,6 +196,27 @@ public class PackageManager {
         ? 0
         : -1;
   }
+  // Android 12L's runtime ("dangerous") platform permissions; other platform permissions
+  // are install-time. Unity reads each requested permission's level to pick what to request.
+  private static final java.util.Set<String> DANGEROUS = java.util.Set.of(
+      "READ_CALENDAR", "WRITE_CALENDAR", "CAMERA", "READ_CONTACTS", "WRITE_CONTACTS", "GET_ACCOUNTS",
+      "ACCESS_FINE_LOCATION", "ACCESS_COARSE_LOCATION", "ACCESS_BACKGROUND_LOCATION", "RECORD_AUDIO",
+      "READ_PHONE_STATE", "READ_PHONE_NUMBERS", "CALL_PHONE", "ANSWER_PHONE_CALLS", "READ_CALL_LOG",
+      "WRITE_CALL_LOG", "ADD_VOICEMAIL", "USE_SIP", "PROCESS_OUTGOING_CALLS", "ACCEPT_HANDOVER", "BODY_SENSORS",
+      "ACTIVITY_RECOGNITION", "SEND_SMS", "RECEIVE_SMS", "READ_SMS", "RECEIVE_WAP_PUSH", "RECEIVE_MMS",
+      "READ_EXTERNAL_STORAGE", "WRITE_EXTERNAL_STORAGE", "ACCESS_MEDIA_LOCATION", "BLUETOOTH_SCAN",
+      "BLUETOOTH_CONNECT", "BLUETOOTH_ADVERTISE", "UWB_RANGING");
+  public PermissionInfo getPermissionInfo(String permission, int flags) throws NameNotFoundException {
+    final String platform = "android.permission.";
+    if (permission == null || !permission.startsWith(platform) || permission.length() == platform.length())
+      throw new NameNotFoundException(permission);
+    var info = new PermissionInfo();
+    info.name = permission;
+    info.packageName = "android";
+    info.protectionLevel = DANGEROUS.contains(permission.substring(platform.length()))
+        ? PermissionInfo.PROTECTION_DANGEROUS : PermissionInfo.PROTECTION_NORMAL;
+    return info;
+  }
   public CharSequence getApplicationLabel(ApplicationInfo info) {
     return info.nonLocalizedLabel != null ? info.nonLocalizedLabel : info.packageName;
   }

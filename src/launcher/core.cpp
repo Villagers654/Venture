@@ -1086,7 +1086,10 @@ void Core::import_saves_later(std::string_view app_id, const fs::path &folder) {
     bool imported = false;
     try {
       auto n = task(stop);
-      message = std::format("Imported {} save file{}.{}", n.files, n.files == 1 ? "" : "s",
+      message = std::format("Imported {} save file{}.{}{}", n.files, n.files == 1 ? "" : "s",
+                            n.skipped ? std::format(" {} the headset would not send {} skipped (see the log).", n.skipped,
+                                                    n.skipped == 1 ? "file" : "files")
+                                      : "",
                             n.backup.empty() ? "" : " The save data it replaced is kept in a backup.");
       imported = true;
     } catch (...) {

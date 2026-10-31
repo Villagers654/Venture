@@ -9,6 +9,7 @@
 #include "common/library/import.h"
 #include "common/library/library.h"
 #include "common/process.h"
+#include "common/library/save_import.h"
 #include "common/saves_migration.h"
 
 #include <doctest/doctest.h>
@@ -690,5 +691,28 @@ TEST_CASE("an adb client lists a headset's apps and pulls files through exec-out
   CHECK(rest == "end");
   CHECK_THROWS(client.pull({"/data/app/x/base.apk", 9}, [](auto) {}, {}, 5));
   CHECK(client.sha256({"/data/app/x/base.apk", 9}) == std::string(63, '0') + "7");
+}
+TEST_CASE("a headset save import skips a file the headset will not send") {
+  Directory d;
+  // Asgard's Wrath 2 keeps Facebook's MQTT cache beside its saves; adb may not read it.
+  const auto adb = d.root / "adb";
+  write(adb,
+        "#!/bin/sh\n"
+        "[ \"$1\" = -s ] && shift 2\n"
+        "case \"$1\" in\n"
+        "shell) case \"$2\" in\n"
+        "  pm\\ list*) printf 'package:com.example.game versionCode:12\\n' ;;\n"
+        "  stat\\ -c\\ %s*) echo 'cat: MqttFizzCache.store: Permission denied' >&2; exit 1 ;;\n"
+        "  *) printf '@com.example.game\\n9 /data/app/x/base.apk\\n'\n"
+        "     printf '4 /sdcard/Android/data/com.example.game/files/save.dat\\n'\n"
+        "     printf '6 /sdcard/Android/data/com.example.game/files/.fbns/MqttFizzCache.store\\n' ;;\n"
+        "  esac ;;\n"
+        "exec-out) case \"$2\" in *save.dat*) printf 'save' ;; *) exit 1 ;; esac ;;\n"
+        "esac\n");
+  fs::permissions(adb, fs::perms::owner_all);
+  const auto n = saves::import_headset(d.root / "data", "local", "com.example.game",
+                                       android::adb::Client(adb, "SERIAL1"));
+  CHECK(n.files == 1);
+  CHECK(n.skipped == 1);
 }
 #endif

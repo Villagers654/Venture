@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <bit>
+#include <cstring>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -345,6 +346,127 @@ std::shared_ptr<const android::GpuPayload> allocate_buffer(const android::Hardwa
   result->memory_type = *type;
   result->image = *image_info;
   return result;
+}
+
+// Producer writes (AImageReader frames) go through the allocator device's
+// own queue: an image bound to an import of the payload receives a staged
+// copy, then is released to external queues in GENERAL layout for the guest.
+bool write_buffer(const android::GpuPayload& target, std::span<const std::uint8_t> rgba) {
+  auto* p = dynamic_cast<const Payload*>(&target);
+  auto* a = allocator_device();
+  if (!p || !a || p->image.format != VK_FORMAT_R8G8B8A8_UNORM || p->image.arrayLayers != 1 ||
+      !(p->image.usage & VK_IMAGE_USAGE_TRANSFER_DST_BIT) ||
+      rgba.size() != std::size_t(p->image.extent.width) * p->image.extent.height * 4)
+    return false;
+  static std::mutex queue_mutex;  // the allocator device's single queue
+  std::lock_guard lock(queue_mutex);
+  auto fn = [a](const char* name) { return a->gdpa(a->device, name); };
+  auto& gpu = gfx::gpu_device();
+  const auto device = a->device;
+  VkImage image{};
+  VkDeviceMemory memory{}, staging_memory{};
+  VkBuffer staging{};
+  VkCommandPool pool{};
+  VkFence fence{};
+  bool done = false;
+  [&] {
+    VkExternalMemoryImageCreateInfo external{VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO, nullptr,
+                                             VkExternalMemoryHandleTypeFlags(memory_handle_type())};
+    auto info = p->image;
+    info.pNext = &external;
+    if (reinterpret_cast<PFN_vkCreateImage>(fn("vkCreateImage"))(device, &info, nullptr, &image) != VK_SUCCESS) return;
+    auto import = import_memory_handle(*p->handle);
+    if (!import) return;
+    VkMemoryDedicatedAllocateInfo dedicated{VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO, nullptr, image};
+    import->pNext = reinterpret_cast<const VkBaseInStructure*>(&dedicated);
+    VkMemoryAllocateInfo allocation{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, import.get(), p->size, p->memory_type};
+    auto allocate = reinterpret_cast<PFN_vkAllocateMemory>(fn("vkAllocateMemory"));
+    if (allocate(device, &allocation, nullptr, &memory) != VK_SUCCESS) return;
+    memory_handle_imported(*import);
+    if (reinterpret_cast<PFN_vkBindImageMemory>(fn("vkBindImageMemory"))(device, image, memory, 0) != VK_SUCCESS)
+      return;
+    VkBufferCreateInfo buffer_info{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+    buffer_info.size = rgba.size();
+    buffer_info.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+    if (reinterpret_cast<PFN_vkCreateBuffer>(fn("vkCreateBuffer"))(device, &buffer_info, nullptr, &staging) !=
+        VK_SUCCESS)
+      return;
+    VkMemoryRequirements requirements{};
+    reinterpret_cast<PFN_vkGetBufferMemoryRequirements>(fn("vkGetBufferMemoryRequirements"))(device, staging,
+                                                                                              &requirements);
+    VkPhysicalDeviceMemoryProperties properties{};
+    physical_fn<PFN_vkGetPhysicalDeviceMemoryProperties>(gpu.physical_device, "vkGetPhysicalDeviceMemoryProperties")(
+        gpu.physical_device, &properties);
+    constexpr VkMemoryPropertyFlags host =
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+    std::optional<std::uint32_t> type;
+    for (std::uint32_t i = 0; i < properties.memoryTypeCount && !type; ++i)
+      if ((requirements.memoryTypeBits & (1u << i)) && (properties.memoryTypes[i].propertyFlags & host) == host)
+        type = i;
+    if (!type) return;
+    VkMemoryAllocateInfo staging_allocation{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, nullptr, requirements.size, *type};
+    if (allocate(device, &staging_allocation, nullptr, &staging_memory) != VK_SUCCESS) return;
+    if (reinterpret_cast<PFN_vkBindBufferMemory>(fn("vkBindBufferMemory"))(device, staging, staging_memory, 0) !=
+        VK_SUCCESS)
+      return;
+    void* mapped = nullptr;
+    if (reinterpret_cast<PFN_vkMapMemory>(fn("vkMapMemory"))(device, staging_memory, 0, VK_WHOLE_SIZE, 0, &mapped) !=
+        VK_SUCCESS)
+      return;
+    std::memcpy(mapped, rgba.data(), rgba.size());
+    reinterpret_cast<PFN_vkUnmapMemory>(fn("vkUnmapMemory"))(device, staging_memory);
+    VkCommandPoolCreateInfo pool_info{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO, nullptr,
+                                      VK_COMMAND_POOL_CREATE_TRANSIENT_BIT, gpu.queue_family};
+    if (reinterpret_cast<PFN_vkCreateCommandPool>(fn("vkCreateCommandPool"))(device, &pool_info, nullptr, &pool) !=
+        VK_SUCCESS)
+      return;
+    VkCommandBufferAllocateInfo command_info{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO, nullptr, pool,
+                                             VK_COMMAND_BUFFER_LEVEL_PRIMARY, 1};
+    VkCommandBuffer commands{};
+    if (reinterpret_cast<PFN_vkAllocateCommandBuffers>(fn("vkAllocateCommandBuffers"))(device, &command_info,
+                                                                                        &commands) != VK_SUCCESS)
+      return;
+    VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO, nullptr,
+                                   VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT};
+    reinterpret_cast<PFN_vkBeginCommandBuffer>(fn("vkBeginCommandBuffer"))(commands, &begin);
+    auto barrier = reinterpret_cast<PFN_vkCmdPipelineBarrier>(fn("vkCmdPipelineBarrier"));
+    VkImageMemoryBarrier to_copy{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER, nullptr, 0, VK_ACCESS_TRANSFER_WRITE_BIT,
+                                 VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                 VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, image,
+                                 {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}};
+    barrier(commands, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1,
+            &to_copy);
+    VkBufferImageCopy region{};
+    region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    region.imageExtent = p->image.extent;
+    reinterpret_cast<PFN_vkCmdCopyBufferToImage>(fn("vkCmdCopyBufferToImage"))(
+        commands, staging, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+    VkImageMemoryBarrier release{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER, nullptr, VK_ACCESS_TRANSFER_WRITE_BIT, 0,
+                                 VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL, gpu.queue_family,
+                                 VK_QUEUE_FAMILY_EXTERNAL, image, {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}};
+    barrier(commands, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 0, nullptr,
+            1, &release);
+    if (reinterpret_cast<PFN_vkEndCommandBuffer>(fn("vkEndCommandBuffer"))(commands) != VK_SUCCESS) return;
+    VkFenceCreateInfo fence_info{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+    if (reinterpret_cast<PFN_vkCreateFence>(fn("vkCreateFence"))(device, &fence_info, nullptr, &fence) != VK_SUCCESS)
+      return;
+    VkQueue queue{};
+    reinterpret_cast<PFN_vkGetDeviceQueue>(fn("vkGetDeviceQueue"))(device, gpu.queue_family, 0, &queue);
+    VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+    submit.commandBufferCount = 1;
+    submit.pCommandBuffers = &commands;
+    if (reinterpret_cast<PFN_vkQueueSubmit>(fn("vkQueueSubmit"))(queue, 1, &submit, fence) != VK_SUCCESS) return;
+    done = reinterpret_cast<PFN_vkWaitForFences>(fn("vkWaitForFences"))(device, 1, &fence, VK_TRUE, UINT64_MAX) ==
+           VK_SUCCESS;
+  }();
+  if (fence) reinterpret_cast<PFN_vkDestroyFence>(fn("vkDestroyFence"))(device, fence, nullptr);
+  if (pool) reinterpret_cast<PFN_vkDestroyCommandPool>(fn("vkDestroyCommandPool"))(device, pool, nullptr);
+  if (staging) reinterpret_cast<PFN_vkDestroyBuffer>(fn("vkDestroyBuffer"))(device, staging, nullptr);
+  auto free = reinterpret_cast<PFN_vkFreeMemory>(fn("vkFreeMemory"));
+  if (staging_memory) free(device, staging_memory, nullptr);
+  if (image) reinterpret_cast<PFN_vkDestroyImage>(fn("vkDestroyImage"))(device, image, nullptr);
+  if (memory) free(device, memory, nullptr);
+  return done;
 }
 
 VkResult VKAPI_CALL image_properties2(VkPhysicalDevice p, const VkPhysicalDeviceImageFormatInfo2* info,
@@ -735,7 +857,7 @@ void release_hardware_buffer_device(VkDevice device) {
 }
 void register_hardware_buffer_allocator() {
   android::set_gpu_allocator({[](const android::HardwareBufferDesc& d) { return buffer_image(d).has_value(); },
-                              allocate_buffer});
+                              allocate_buffer, write_buffer});
 }
 PFN_vkVoidFunction hardware_buffer_proc(std::string_view name) {
 #define FN(vk, fn) \
