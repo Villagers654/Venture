@@ -547,11 +547,11 @@ ColorImages::ColorImages(const XrGraphicsBindingVulkanKHR &binding,
 }
 ColorImages::~ColorImages() = default;
 XrResult ColorImages::convert(std::uint32_t index, const ColorMatrix &matrix,
-                              bool external_queue_held) {
+                              bool external_queue_held, Alpha alpha, float camera_opacity) {
   if (index >= impl_->images.size()) return XR_ERROR_RUNTIME_FAILURE;
-  return convert_from(impl_->images[index].target, index, matrix, external_queue_held);
+  return convert_from(impl_->images[index].target, index, matrix, external_queue_held, alpha, camera_opacity);
 }
-XrResult ColorImages::convert_from(VkImage input, std::uint32_t index, const ColorMatrix &matrix, bool external_queue_held) {
+XrResult ColorImages::convert_from(VkImage input, std::uint32_t index, const ColorMatrix &matrix, bool external_queue_held, Alpha alpha, float camera_opacity) {
   auto &s = *impl_;
   if (s.failed || index >= s.images.size())
     return XR_ERROR_RUNTIME_FAILURE;
@@ -595,6 +595,9 @@ XrResult ColorImages::convert_from(VkImage input, std::uint32_t index, const Col
     for (unsigned r = 0; r < 3; ++r)
       for (unsigned c = 0; c < 3; ++c)
         rows[r * 4 + c] = float(matrix[r * 3 + c]);
+    rows[3] = alpha == Alpha::premultiply ? 1.0f : 0.0f;
+    rows[7] = alpha == Alpha::opaque ? 1.0f : 0.0f;
+    rows[11] = camera_opacity;
     for (std::size_t i = 0; i < image.subresources.size(); ++i) {
       const auto mip = std::uint32_t(i) % s.info.mipCount;
       const auto width = std::max(1u, s.info.width >> mip),

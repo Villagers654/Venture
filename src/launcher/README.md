@@ -227,3 +227,17 @@ live plan, public artwork, and delivery-token exchange without fetching APKs.
 game headlessly through the Install action (owner selection, download job and
 plan.json), waits for the download and the rescan, writes an `install` section in
 the report and exits 0 when the install is complete. `--smoke-seconds` bounds it.
+
+## Steam Frame passthrough setting
+
+**Settings → Runtime → Steam Frame passthrough** is an explicit, default-off
+preference (`steamFramePassthrough` in `settings.json`). Its adjacent Info button
+states Steam Frame only and links [Steam Link Native Passthrough](https://github.com/McFredward/steam-link-native-passthrough).
+The checkbox is disabled outside Windows; the project information remains accessible.
+
+The runtime reads the saved value once in `configure_game`, before XR initialization,
+so normal UI and Steam/direct launches use the same preference. A running game
+does not change modes when the launcher setting changes. No environment variable
+selects this backend. The compatibility CMD only opens the normal launcher.
+The optional CLI key `steam-frame-passthrough on|off` edits that same saved preference.
+See [mixed reality](../../docs/MIXED_REALITY.md) for required companions and limits.

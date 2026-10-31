@@ -78,7 +78,7 @@ Settings
   settings set KEY VALUE         games-folder PATH | runtime PATH|default |
                                  adb PATH|auto | log-level trace|debug|info|warn|error |
                                  console on|off | add-to-steam on|off |
-                                 add-new-to-steam on|off
+                                 add-new-to-steam on|off | steam-frame-passthrough on|off
 
 GAME is a name (or a unique part of it), an app id or a package name.
 ACCOUNT is a name, alias, account key or the number `accounts` shows.
@@ -1080,6 +1080,8 @@ int Cli::settings_cmd(const Args &args) {
       if (it == std::end(kLevels))
         throw UsageError("log-level takes trace, debug, info, warn or error.");
       next.log_level = int(it - std::begin(kLevels));
+    } else if (key == "steam-frame-passthrough") {
+      next.steam_frame_passthrough = on_off(value);
     } else if (key == "console")
       next.console = on_off(value);
     else if (key == "add-to-steam")
@@ -1097,6 +1099,7 @@ int Cli::settings_cmd(const Args &args) {
            {"runtime", settings_.runtime_override() ? paths::utf8(settings_.runtime) : "default"},
            {"adb", settings_.adb.empty() ? "auto" : paths::utf8(settings_.adb)},
            {"log-level", std::string(kLevels[std::clamp(settings_.log_level, 0, 4)])},
+           {"steam-frame-passthrough", settings_.steam_frame_passthrough},
            {"console", settings_.console},
            {"add-to-steam", settings_.add_games_to_steam},
            {"add-new-to-steam", settings_.steam_add_new}};

@@ -9,6 +9,7 @@ namespace venture::xr {
 // the XR images and serializes this object. CPU waits hold no queue lock.
 class ColorImages {
 public:
+  enum class Alpha { preserve, premultiply, opaque };
   // Queue-ordered mode is only for native XR images whose producer/reuse is
   // synchronized with the session's binding VkQueue. Fences still guard this
   // object's reusable commands/descriptors and destruction.
@@ -17,10 +18,11 @@ public:
               std::span<const XrSwapchainImageVulkanKHR>, bool binding_queue_ordered = false);
   ~ColorImages();
   XrResult convert(std::uint32_t index, const ColorMatrix &,
-                   bool external_queue_held = false);
+                   bool external_queue_held = false, Alpha alpha = Alpha::preserve, float camera_opacity = 1);
   XrResult restore(std::uint32_t index);
   // Copy and convert into a separate presentation image; never write source.
-  XrResult convert_from(VkImage source, std::uint32_t index, const ColorMatrix &, bool external_queue_held = false);
+  XrResult convert_from(VkImage source, std::uint32_t index, const ColorMatrix &, bool external_queue_held = false,
+                        Alpha alpha = Alpha::preserve, float camera_opacity = 1);
 
 private:
   struct Impl;

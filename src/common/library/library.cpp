@@ -561,6 +561,7 @@ Settings Settings::load(const fs::path &data) {
         return std::isalnum(c) || c == '-';
       }))
     s.game_language = tag;
+  s.steam_frame_passthrough = field(j, "steamFramePassthrough") == true;
   s.console = field(j, "launchWithConsole") == true;
   s.check_updates = field(j, "checkForUpdates") != false;
   s.dismissed_update = str(j, "dismissedUpdate");
@@ -593,6 +594,7 @@ void Settings::save(const fs::path &data) const {
          {"textureCompressionThreshold", texture_compression_threshold},
          {"parallelDownloads", parallel_downloads},
          {"gameLanguage", game_language},
+         {"steamFramePassthrough", steam_frame_passthrough},
          {"launchWithConsole", console},
          {"checkForUpdates", check_updates},
          {"dismissedUpdate", dismissed_update},

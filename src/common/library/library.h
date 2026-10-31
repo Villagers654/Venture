@@ -107,6 +107,8 @@ struct Settings {
   // The language games see as the system language, a BCP-47 tag such as
   // "en-US" (Settings > Runtime); empty follows the host's language.
   std::string game_language;
+  // Steam Frame over Steam Link, applied when the next game starts.
+  bool steam_frame_passthrough = false;
   bool runtime_override() const;
   // `games` first, then the other library folders.
   std::vector<fs::path> roots() const;
