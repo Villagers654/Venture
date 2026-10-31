@@ -278,7 +278,7 @@ std::map<std::string, std::uint32_t> capabilities() {
     }
     result[name] = version;
   }
-  // r4-xr/meta_extension_policy.md: no fabricated passthrough or density maps.
+  // r4-xr/meta_extension_policy.md: no fabricated passthrough images or density maps.
   if (process_config().isa() == GuestIsa::a32) {
     result.erase("XR_META_recommended_layer_resolution");
     result.erase("XR_META_headset_id");
@@ -289,7 +289,9 @@ std::map<std::string, std::uint32_t> capabilities() {
     result.erase("XR_FB_haptic_amplitude_envelope");
     result.erase("XR_FB_space_warp");
   }
-  result.erase("XR_FB_passthrough");
+  // Offered without passthrough itself (extensions.cpp): Quest apps may require
+  // the extension, and its system property reports passthrough unsupported.
+  result["XR_FB_passthrough"] = 4;
   if (result.contains("XR_FB_swapchain_update_state")) {
     result["XR_FB_swapchain_update_state_vulkan"] = 1;
     result["XR_FB_swapchain_update_state_opengl_es"] = 1;

@@ -888,6 +888,45 @@ TEST_CASE("XR guest capabilities advertise implemented sampler states") {
   CHECK(capabilities.contains("XR_FB_swapchain_update_state"));
 }
 
+TEST_CASE("XR_FB_passthrough is offered with passthrough reported unsupported") {
+  // Prey VR requires the extension at instance creation.
+  venture::test::XrImageFixture interop;
+  venture::xr::install_xr_images(&interop);
+  const char* extensions[]{"XR_KHR_opengl_es_enable", "XR_FB_passthrough"};
+  XrInstanceCreateInfo create{XR_TYPE_INSTANCE_CREATE_INFO};
+  create.applicationInfo.apiVersion = XR_MAKE_VERSION(1, 0, 0);
+  create.enabledExtensionNames = extensions;
+  create.enabledExtensionCount = 2;
+  XrInstance instance{};
+  REQUIRE(xg::xrCreateInstance(&create, &instance) == XR_SUCCESS);
+  XrSystemGetInfo systemInfo{XR_TYPE_SYSTEM_GET_INFO, nullptr, XR_FORM_FACTOR_HEAD_MOUNTED_DISPLAY};
+  XrSystemId system{};
+  REQUIRE(xg::xrGetSystem(instance, &systemInfo, &system) == XR_SUCCESS);
+  XrSystemPassthroughProperties2FB properties2{XR_TYPE_SYSTEM_PASSTHROUGH_PROPERTIES2_FB};
+  properties2.capabilities = XR_PASSTHROUGH_CAPABILITY_BIT_FB;
+  XrSystemPassthroughPropertiesFB passthrough{XR_TYPE_SYSTEM_PASSTHROUGH_PROPERTIES_FB, &properties2, XR_TRUE};
+  XrSystemProperties properties{XR_TYPE_SYSTEM_PROPERTIES, &passthrough};
+  REQUIRE(xg::xrGetSystemProperties(instance, system, &properties) == XR_SUCCESS);
+  CHECK(passthrough.supportsPassthrough == XR_FALSE);
+  CHECK(properties2.capabilities == 0);
+  CHECK(passthrough.next == &properties2);
+  xg::GlesBinding binding{XR_TYPE_GRAPHICS_BINDING_OPENGL_ES_ANDROID_KHR, nullptr, 1, 2, 3};
+  XrSessionCreateInfo sessionInfo{XR_TYPE_SESSION_CREATE_INFO, &binding, 0, system};
+  XrSession session{};
+  REQUIRE(xg::xrCreateSession(instance, &sessionInfo, &session) == XR_SUCCESS);
+  PFN_xrVoidFunction proc{};
+  REQUIRE(xg::xrGetInstanceProcAddr(instance, "xrCreatePassthroughFB", &proc) == XR_SUCCESS);
+  CHECK(proc != nullptr);
+  XrPassthroughCreateInfoFB passthroughInfo{XR_TYPE_PASSTHROUGH_CREATE_INFO_FB};
+  XrPassthroughFB handle{reinterpret_cast<XrPassthroughFB>(1)};
+  CHECK(xg::xrCreatePassthroughFB(session, &passthroughInfo, &handle) == XR_ERROR_FEATURE_UNSUPPORTED);
+  CHECK(handle == XR_NULL_HANDLE);
+  CHECK(xg::xrPassthroughStartFB(handle) == XR_ERROR_HANDLE_INVALID);
+  CHECK(xg::xrDestroySession(session) == XR_SUCCESS);
+  CHECK(xg::xrDestroyInstance(instance) == XR_SUCCESS);
+  venture::xr::install_xr_images(nullptr);
+}
+
 TEST_CASE("XR foveation hints preserve full-rate GLES stereo submission") {
   venture::test::XrImageFixture interop;
   venture::xr::install_xr_images(&interop);

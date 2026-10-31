@@ -699,8 +699,9 @@ bool dropdown(const char* id, const char* prefix, const char* const* items, int 
   bool open = ImGui::IsPopupOpen("##menu");
   ImDrawList* dl = ImGui::GetWindowDrawList();
   dl->AddRectFilled(p, {p.x + size.x, p.y + size.y}, field_bg(std::max(in.hover, open ? 1.f : 0.f)), size.y * 0.5f);
-  draw_text(dl, font, kSmall + 1, {std::round(p.x + s(15)), text_y(font, kSmall + 1, p.y, size.y)}, color::text,
-            shown);
+  // Centered in the field; a long label stops short of the chevron.
+  const float text_x = std::max(p.x + s(15), std::min(p.x + (size.x - ts.x) * 0.5f, p.x + size.x - chev_w - s(15) - ts.x));
+  draw_text(dl, font, kSmall + 1, {std::round(text_x), text_y(font, kSmall + 1, p.y, size.y)}, color::text, shown);
   if (*chev) draw_glyph(dl, icons::chevron_down, kLabel, {p.x + size.x - s(20), p.y + size.y * 0.5f}, color::text2);
   if (in.clicked) ImGui::OpenPopup("##menu");
   bool changed = false;

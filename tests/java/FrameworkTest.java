@@ -1284,6 +1284,13 @@ public final class FrameworkTest {
       packageManager.getPermissionInfo("com.example.permission.NONE", 0);
       check(false, "an undefined permission is not found");
     } catch (android.content.pm.PackageManager.NameNotFoundException expected) {}
+    // Bugsnag reads the background restriction while starting (Supernatural).
+    check(!new android.app.ActivityManager().isBackgroundRestricted() && !android.app.ActivityManager.isUserAMonkey(),
+        "an app is not background-restricted or monkey-driven");
+    // GMS DynamiteModule looks up the Play services provider (Pickleball One); Quest has none.
+    check(packageManager.resolveContentProvider("com.google.android.gms.chimera", 0) == null
+        && packageManager.resolveContentProvider(null, 0) == null,
+        "an authority no package provides resolves to null");
     // Firebase's executors build and install StrictMode thread policies (Pickleball One).
     var policy = new android.os.StrictMode.ThreadPolicy.Builder().detectAll().detectResourceMismatches()
         .detectUnbufferedIo().penaltyLog().build();

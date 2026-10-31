@@ -89,7 +89,8 @@ void* executable_stub(std::span<const std::byte> bytes) {
     throw failed("FlushInstructionCache(JNI stub)");
   return memory;
 }
-int run_process(const std::vector<std::string>& args, const std::vector<std::string>& unset_environment) {
+int run_process(const std::vector<std::string>& args, const std::vector<std::string>& unset_environment,
+                const std::filesystem::path* output) {
   if (args.empty()) throw std::invalid_argument("empty process arguments");
   std::wstring command;
   for (const auto& arg : args) {
@@ -119,12 +120,41 @@ int run_process(const std::vector<std::string>& args, const std::vector<std::str
     if (environment.empty()) environment.push_back(L'\0');
     environment.push_back(L'\0');
   }
-  STARTUPINFOW startup{};
-  startup.cb = sizeof(startup);
+  STARTUPINFOEXW startup{};
+  startup.StartupInfo.cb = sizeof(startup);
+  // The output file is the only handle the child inherits.
+  HANDLE file = INVALID_HANDLE_VALUE;
+  std::vector<std::byte> attributes;
+  if (output) {
+    SECURITY_ATTRIBUTES inherit{sizeof(inherit), nullptr, TRUE};
+    file = CreateFileW(output->c_str(), GENERIC_WRITE, FILE_SHARE_READ, &inherit, CREATE_ALWAYS,
+                       FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE) throw failed("CreateFile(converter output)");
+    SIZE_T size = 0;
+    InitializeProcThreadAttributeList(nullptr, 1, 0, &size);
+    attributes.resize(size);
+    startup.lpAttributeList = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(attributes.data());
+    if (!InitializeProcThreadAttributeList(startup.lpAttributeList, 1, 0, &size) ||
+        !UpdateProcThreadAttribute(startup.lpAttributeList, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, &file,
+                                   sizeof(file), nullptr, nullptr)) {
+      auto error = failed("UpdateProcThreadAttribute(converter output)");
+      CloseHandle(file);
+      throw error;
+    }
+    startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+    startup.StartupInfo.hStdOutput = startup.StartupInfo.hStdError = file;
+  }
   PROCESS_INFORMATION process{};
-  if (!CreateProcessW(nullptr, command.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT,
-                      environment.empty() ? nullptr : environment.data(), nullptr, &startup, &process))
-    throw failed("CreateProcess(converter)");
+  const BOOL created = CreateProcessW(nullptr, command.data(), nullptr, nullptr, output != nullptr,
+                                      CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT,
+                                      environment.empty() ? nullptr : environment.data(), nullptr,
+                                      &startup.StartupInfo, &process);
+  auto error = created ? std::runtime_error("") : failed("CreateProcess(converter)");
+  if (output) {
+    DeleteProcThreadAttributeList(startup.lpAttributeList);
+    CloseHandle(file);
+  }
+  if (!created) throw error;
   CloseHandle(process.hThread);
   DWORD code = 0;
   if (WaitForSingleObject(process.hProcess, INFINITE) != WAIT_OBJECT_0 ||

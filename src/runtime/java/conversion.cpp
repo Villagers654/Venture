@@ -38,6 +38,7 @@ bool convert_apk(const ConversionOptions& options, ConvertedApk* output, std::st
       ~Cleanup() {
         std::error_code ec;
         std::filesystem::remove(file, ec);
+        std::filesystem::remove(dir / "output.txt", ec);
         std::filesystem::remove(dir / "request.json", ec);
         std::filesystem::remove(dir, ec);
       }
@@ -70,7 +71,9 @@ bool convert_apk(const ConversionOptions& options, ConvertedApk* output, std::st
     }
     args = {paths::utf8(launcher), paths::utf8(request)};
 #endif
-    int code = platform::run_process(args, {"JAVA_TOOL_OPTIONS", "_JAVA_OPTIONS", "JDK_JAVA_OPTIONS", "CLASSPATH"});
+    const auto output_file = directory / "output.txt";
+    int code = platform::run_process(args, {"JAVA_TOOL_OPTIONS", "_JAVA_OPTIONS", "JDK_JAVA_OPTIONS", "CLASSPATH"},
+                                     &output_file);
     std::string report;
     if (std::filesystem::exists(result_file)) {
       std::ifstream input(result_file);
@@ -84,9 +87,17 @@ bool convert_apk(const ConversionOptions& options, ConvertedApk* output, std::st
       }
       if (!code && result.at("ready").get<bool>()) return true;
     }
-    // The debug report reads the failures from the report this names.
-    throw std::runtime_error("APK conversion/verification failed (exit " + std::to_string(code) + "); " +
-                             (report.empty() ? std::string("see package cache report.json") : "Details: " + report));
+    // The debug report reads the failures from the report this names. Without
+    // one, the converter stopped early and its own output says why.
+    if (report.empty()) {
+      std::ifstream input(output_file, std::ios::binary);
+      std::string text{std::istreambuf_iterator<char>(input), {}};
+      if (text.size() > 4096) text = "..." + text.substr(text.size() - 4096);
+      while (!text.empty() && (text.back() == '\n' || text.back() == '\r')) text.pop_back();
+      throw std::runtime_error("APK conversion/verification failed (exit " + std::to_string(code) + "); converter output: " +
+                               (text.empty() ? std::string("(none)") : text));
+    }
+    throw std::runtime_error("APK conversion/verification failed (exit " + std::to_string(code) + "); Details: " + report);
   } catch (const std::exception& e) {
     // Deferred optional linkage is not a failure; the caller reports it.
     if (!output || !output->translation_complete) log::error("java", "{}", e.what());

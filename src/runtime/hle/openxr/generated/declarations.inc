@@ -9,8 +9,11 @@ XrResult xrCreateAction(XrActionSet actionSet, const XrActionCreateInfo* createI
 XrResult xrCreateActionSet(XrInstance instance, const XrActionSetCreateInfo* createInfo, XrActionSet* actionSet);
 XrResult xrCreateActionSpace(XrSession session, const XrActionSpaceCreateInfo* createInfo, XrSpace* space);
 XrResult xrCreateFoveationProfileFB(XrSession session, const XrFoveationProfileCreateInfoFB* createInfo, XrFoveationProfileFB* profile);
+XrResult xrCreateGeometryInstanceFB(XrSession session, const XrGeometryInstanceCreateInfoFB* createInfo, XrGeometryInstanceFB* outGeometryInstance);
 XrResult xrCreateHandTrackerEXT(XrSession session, const XrHandTrackerCreateInfoEXT* createInfo, XrHandTrackerEXT* handTracker);
 XrResult xrCreateInstance(const XrInstanceCreateInfo* createInfo, XrInstance* instance);
+XrResult xrCreatePassthroughFB(XrSession session, const XrPassthroughCreateInfoFB* createInfo, XrPassthroughFB* outPassthrough);
+XrResult xrCreatePassthroughLayerFB(XrSession session, const XrPassthroughLayerCreateInfoFB* createInfo, XrPassthroughLayerFB* outLayer);
 XrResult xrCreateReferenceSpace(XrSession session, const XrReferenceSpaceCreateInfo* createInfo, XrSpace* space);
 XrResult xrCreateSession(XrInstance instance, const XrSessionCreateInfo* createInfo, XrSession* session);
 XrResult xrCreateSwapchain(XrSession session, const XrSwapchainCreateInfo* createInfo, XrSwapchain* swapchain);
@@ -19,8 +22,11 @@ XrResult xrCreateVulkanInstanceKHR(XrInstance instance, const XrVulkanInstanceCr
 XrResult xrDestroyAction(XrAction action);
 XrResult xrDestroyActionSet(XrActionSet actionSet);
 XrResult xrDestroyFoveationProfileFB(XrFoveationProfileFB profile);
+XrResult xrDestroyGeometryInstanceFB(XrGeometryInstanceFB instance);
 XrResult xrDestroyHandTrackerEXT(XrHandTrackerEXT handTracker);
 XrResult xrDestroyInstance(XrInstance instance);
+XrResult xrDestroyPassthroughFB(XrPassthroughFB passthrough);
+XrResult xrDestroyPassthroughLayerFB(XrPassthroughLayerFB layer);
 XrResult xrDestroySession(XrSession session);
 XrResult xrDestroySpace(XrSpace space);
 XrResult xrDestroySwapchain(XrSwapchain swapchain);
@@ -38,6 +44,7 @@ XrResult xrEnumerateSwapchainFormats(XrSession session, uint32_t formatCapacityI
 XrResult xrEnumerateSwapchainImages(XrSwapchain swapchain, uint32_t imageCapacityInput, uint32_t* imageCountOutput, XrSwapchainImageBaseHeader* images);
 XrResult xrEnumerateViewConfigurationViews(XrInstance instance, XrSystemId systemId, XrViewConfigurationType viewConfigurationType, uint32_t viewCapacityInput, uint32_t* viewCountOutput, XrViewConfigurationView* views);
 XrResult xrEnumerateViewConfigurations(XrInstance instance, XrSystemId systemId, uint32_t viewConfigurationTypeCapacityInput, uint32_t* viewConfigurationTypeCountOutput, XrViewConfigurationType* viewConfigurationTypes);
+XrResult xrGeometryInstanceSetTransformFB(XrGeometryInstanceFB instance, const XrGeometryInstanceTransformFB* transformation);
 XrResult xrGetActionStateBoolean(XrSession session, const XrActionStateGetInfo* getInfo, XrActionStateBoolean* state);
 XrResult xrGetActionStateFloat(XrSession session, const XrActionStateGetInfo* getInfo, XrActionStateFloat* state);
 XrResult xrGetActionStatePose(XrSession session, const XrActionStateGetInfo* getInfo, XrActionStatePose* state);
@@ -68,6 +75,11 @@ XrResult xrLocateSpace(XrSpace space, XrSpace baseSpace, XrTime time, XrSpaceLoc
 XrResult xrLocateSpaces(XrSession session, const XrSpacesLocateInfo* locateInfo, XrSpaceLocations* spaceLocations);
 XrResult xrLocateSpacesKHR(XrSession session, const XrSpacesLocateInfo* locateInfo, XrSpaceLocations* spaceLocations);
 XrResult xrLocateViews(XrSession session, const XrViewLocateInfo* viewLocateInfo, XrViewState* viewState, uint32_t viewCapacityInput, uint32_t* viewCountOutput, XrView* views);
+XrResult xrPassthroughLayerPauseFB(XrPassthroughLayerFB layer);
+XrResult xrPassthroughLayerResumeFB(XrPassthroughLayerFB layer);
+XrResult xrPassthroughLayerSetStyleFB(XrPassthroughLayerFB layer, const XrPassthroughStyleFB* style);
+XrResult xrPassthroughPauseFB(XrPassthroughFB passthrough);
+XrResult xrPassthroughStartFB(XrPassthroughFB passthrough);
 XrResult xrPathToString(XrInstance instance, XrPath path, uint32_t bufferCapacityInput, uint32_t* bufferCountOutput, char* buffer);
 XrResult xrPerfSettingsSetPerformanceLevelEXT(XrSession session, XrPerfSettingsDomainEXT domain, XrPerfSettingsLevelEXT level);
 XrResult xrPollEvent(XrInstance instance, XrEventDataBuffer* eventData);

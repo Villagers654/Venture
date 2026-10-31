@@ -59,6 +59,14 @@ public class PackageManager {
         .findFirst()
         .orElseThrow(() -> new NameNotFoundException(name.toString()));
   }
+  // The app's own provider for an authority (authorities are ';'-separated), or
+  // null as for any other package: Quest has no Google Play services provider.
+  public ProviderInfo resolveContentProvider(String authority, int flags) {
+    if (authority == null) return null;
+    for (ProviderInfo p : model.providers)
+      if (p.authority != null && java.util.Arrays.asList(p.authority.split(";")).contains(authority)) return p;
+    return null;
+  }
   private void check(String pkg) throws NameNotFoundException {
     if (!model.info.packageName.equals(pkg))
       throw new NameNotFoundException(pkg);

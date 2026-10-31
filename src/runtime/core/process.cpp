@@ -189,16 +189,21 @@ std::vector<std::filesystem::path> extract_native_libraries() {
     if (basename.empty() || basename.find_first_of("/\\:") != std::string_view::npos || basename == "..") throw std::runtime_error("unsafe APK library path");
     auto path = paths::io_path(config.native_lib_dir / paths::from_utf8(basename));
     files.push_back(path);
-    // Android's installer copies every lib/<abi>/*.so; a member that is not an
-    // ELF (a loader's config file, e.g. libfrda.config.so) is data for the
-    // libraries that read it. Only ELF members must match the slice.
-    auto wrong_slice = [&](const std::filesystem::path& file) {
+    // Android's installer copies every lib/<abi>/*.so without inspecting it: a
+    // non-ELF member (a loader's config file, e.g. libfrda.config.so) is data,
+    // and an ELF for another machine (Hellsweeper VR's desktop libsteam_api.so)
+    // only fails if the game dlopens it. Such members are kept and noted.
+    auto note_wrong_slice = [&](const std::filesystem::path& file) {
       std::ifstream in(file, std::ios::binary);
       char magic[4]{};
-      return in.read(magic, 4) && !std::memcmp(magic, "\177ELF", 4) && elf::detect_isa(file) != config.isa();
+      if (!in.read(magic, 4) || std::memcmp(magic, "\177ELF", 4)) return;
+      try {
+        if (elf::detect_isa(file) == config.isa()) return;
+      } catch (const std::exception&) {}
+      log::warn("apk", "{} is not a library for this slice; kept as on Android, where loading it fails", member);
     };
     if (std::filesystem::is_regular_file(path) && std::filesystem::file_size(path) == stat.m_uncomp_size && file_crc(path) == stat.m_crc32) {
-      if (wrong_slice(path)) throw std::runtime_error("APK slice disagrees with ELF e_machine: " + std::string(member));
+      note_wrong_slice(path);
       continue;
     }
     auto temporary = path; temporary += ".extracting";
@@ -206,10 +211,7 @@ std::vector<std::filesystem::path> extract_native_libraries() {
     if (!mz_zip_reader_extract_to_file(&zip, i, paths::utf8(temporary).c_str(), 0)) {
       std::filesystem::remove(temporary); throw std::runtime_error("APK extraction or CRC validation failed: " + std::string(member));
     }
-    if (wrong_slice(temporary)) {
-      std::filesystem::remove(temporary);
-      throw std::runtime_error("APK slice disagrees with ELF e_machine: " + std::string(member));
-    }
+    note_wrong_slice(temporary);
     std::filesystem::remove(path);
     std::filesystem::rename(temporary, path);
   }

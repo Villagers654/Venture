@@ -114,6 +114,9 @@ App::App(Options options) : Core(std::move(options)) {
     page_ = 3;
   if (options_.smoke_view == "import" || options_.smoke_view == "import-end")
     page_ = 4;
+  // The dialog Report issue / Upload debug report shows; nothing is saved or uploaded.
+  if (options_.smoke_view == "report")
+    report_ = SharedReport{{}, "https://dpaste.com/EXAMPLE00", {}};
   // The update dialog an installed copy shows (nothing downloads until Update now).
   if (options_.smoke_view == "update") {
     const std::string release = "https://github.com/Villagers654/Venture/releases/";

@@ -1,6 +1,7 @@
 #include "platform/java_host.h"
 
 #include <dlfcn.h>
+#include <fcntl.h>
 #include <spawn.h>
 #include <sys/mman.h>
 #include <sys/wait.h>
@@ -48,7 +49,8 @@ void* executable_stub(std::span<const std::byte> bytes) {
   __builtin___clear_cache(static_cast<char*>(memory), static_cast<char*>(memory) + bytes.size());
   return memory;
 }
-int run_process(const std::vector<std::string>& args, const std::vector<std::string>& unset_environment) {
+int run_process(const std::vector<std::string>& args, const std::vector<std::string>& unset_environment,
+                const std::filesystem::path* output) {
   if (args.empty()) throw std::invalid_argument("empty process arguments");
   std::vector<char*> argv;
   for (const auto& arg : args) argv.push_back(const_cast<char*>(arg.c_str()));
@@ -63,8 +65,15 @@ int run_process(const std::vector<std::string>& args, const std::vector<std::str
     if (!removed) envp.push_back(*entry);
   }
   envp.push_back(nullptr);
+  posix_spawn_file_actions_t actions;
+  posix_spawn_file_actions_init(&actions);
+  if (output) {
+    posix_spawn_file_actions_addopen(&actions, 1, output->c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
+    posix_spawn_file_actions_adddup2(&actions, 1, 2);
+  }
   pid_t pid;
-  int error = posix_spawnp(&pid, argv[0], nullptr, nullptr, argv.data(), envp.data());
+  int error = posix_spawnp(&pid, argv[0], &actions, nullptr, argv.data(), envp.data());
+  posix_spawn_file_actions_destroy(&actions);
   if (error) throw std::system_error(error, std::generic_category(), "posix_spawn(converter)");
   int status;
   while (waitpid(pid, &status, 0) < 0)

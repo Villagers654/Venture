@@ -550,6 +550,14 @@ XrResult xrGetSystemProperties(XrInstance instance, XrSystemId system, XrSystemP
       reinterpret_cast<XrSystemColorSpacePropertiesFB *>(p)->colorSpace = XR_COLOR_SPACE_REC709_FB;
       continue;
     }
+    if (p->type == XR_TYPE_SYSTEM_PASSTHROUGH_PROPERTIES_FB && enabled("XR_FB_passthrough")) {
+      reinterpret_cast<XrSystemPassthroughPropertiesFB *>(p)->supportsPassthrough = XR_FALSE;
+      continue;
+    }
+    if (p->type == XR_TYPE_SYSTEM_PASSTHROUGH_PROPERTIES2_FB && enabled("XR_FB_passthrough")) {
+      reinterpret_cast<XrSystemPassthroughProperties2FB *>(p)->capabilities = 0;
+      continue;
+    }
     if (p->type == XR_TYPE_SYSTEM_SPACE_WARP_PROPERTIES_FB && enabled("XR_FB_space_warp") &&
         full_rate_composition() && !host_xr().enabled_extensions.contains("XR_FB_space_warp")) {
       XrViewConfigurationView views[2]{{XR_TYPE_VIEW_CONFIGURATION_VIEW}, {XR_TYPE_VIEW_CONFIGURATION_VIEW}};
