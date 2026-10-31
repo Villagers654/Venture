@@ -280,11 +280,10 @@ TEST_CASE("APK slice selection prefers arm64 and confirms extracted ELF e_machin
     CHECK(process_config().isa() == expected);
     CHECK(process_config().guest_native_lib_dir() == (scenario == 0 ? "/data/app/org.venture.nativeslices/lib/arm64" : "/data/app/org.venture.nativeslices/lib/arm"));
     CHECK(process_config().properties.at("ro.product.cpu.abi") == process_config().abi);
-    if (scenario == 2) CHECK_THROWS_WITH(extract_native_libraries(), "APK slice disagrees with ELF e_machine: lib/armeabi-v7a/libslice.so");
-    else {
-      auto files = extract_native_libraries(); REQUIRE(files.size() == 1);
-      CHECK(elf::detect_isa(files[0]) == expected);
-      CHECK(files[0].parent_path().filename() == process_config().abi);
-    }
+    // A library for another machine is kept, as Android's installer does;
+    // only a dlopen of it would fail.
+    auto files = extract_native_libraries(); REQUIRE(files.size() == 1);
+    CHECK(elf::detect_isa(files[0]) == (scenario == 2 ? GuestIsa::a64 : expected));
+    CHECK(files[0].parent_path().filename() == process_config().abi);
   }
 }

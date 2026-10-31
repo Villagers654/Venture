@@ -36,6 +36,10 @@ XrResult XRAPI_CALL dispatch_xrCreateFoveationProfileFB(XrSession session, const
   std::lock_guard lock(mutex);
   return XR_ERROR_FUNCTION_UNSUPPORTED;
 }
+XrResult XRAPI_CALL dispatch_xrCreateGeometryInstanceFB(XrSession session, const XrGeometryInstanceCreateInfoFB* createInfo, XrGeometryInstanceFB* outGeometryInstance) {
+  std::lock_guard lock(mutex);
+  return XR_ERROR_FUNCTION_UNSUPPORTED;
+}
 XrResult XRAPI_CALL dispatch_xrCreateHandTrackerEXT(XrSession session, const XrHandTrackerCreateInfoEXT* createInfo, XrHandTrackerEXT* handTracker) {
   std::lock_guard lock(mutex);
   return m_xrCreateHandTrackerEXT(session, createInfo, handTracker);
@@ -43,6 +47,14 @@ XrResult XRAPI_CALL dispatch_xrCreateHandTrackerEXT(XrSession session, const XrH
 XrResult XRAPI_CALL dispatch_xrCreateInstance(const XrInstanceCreateInfo* createInfo, XrInstance* instance) {
   std::lock_guard lock(mutex);
   return m_xrCreateInstance(createInfo, instance);
+}
+XrResult XRAPI_CALL dispatch_xrCreatePassthroughFB(XrSession session, const XrPassthroughCreateInfoFB* createInfo, XrPassthroughFB* outPassthrough) {
+  std::lock_guard lock(mutex);
+  return XR_ERROR_FUNCTION_UNSUPPORTED;
+}
+XrResult XRAPI_CALL dispatch_xrCreatePassthroughLayerFB(XrSession session, const XrPassthroughLayerCreateInfoFB* createInfo, XrPassthroughLayerFB* outLayer) {
+  std::lock_guard lock(mutex);
+  return XR_ERROR_FUNCTION_UNSUPPORTED;
 }
 XrResult XRAPI_CALL dispatch_xrCreateReferenceSpace(XrSession session, const XrReferenceSpaceCreateInfo* createInfo, XrSpace* space) {
   std::lock_guard lock(mutex);
@@ -76,6 +88,10 @@ XrResult XRAPI_CALL dispatch_xrDestroyFoveationProfileFB(XrFoveationProfileFB pr
   std::lock_guard lock(mutex);
   return XR_ERROR_FUNCTION_UNSUPPORTED;
 }
+XrResult XRAPI_CALL dispatch_xrDestroyGeometryInstanceFB(XrGeometryInstanceFB instance) {
+  std::lock_guard lock(mutex);
+  return XR_ERROR_FUNCTION_UNSUPPORTED;
+}
 XrResult XRAPI_CALL dispatch_xrDestroyHandTrackerEXT(XrHandTrackerEXT handTracker) {
   std::lock_guard lock(mutex);
   return m_xrDestroyHandTrackerEXT(handTracker);
@@ -83,6 +99,14 @@ XrResult XRAPI_CALL dispatch_xrDestroyHandTrackerEXT(XrHandTrackerEXT handTracke
 XrResult XRAPI_CALL dispatch_xrDestroyInstance(XrInstance instance) {
   std::lock_guard lock(mutex);
   return m_xrDestroyInstance(instance);
+}
+XrResult XRAPI_CALL dispatch_xrDestroyPassthroughFB(XrPassthroughFB passthrough) {
+  std::lock_guard lock(mutex);
+  return XR_ERROR_FUNCTION_UNSUPPORTED;
+}
+XrResult XRAPI_CALL dispatch_xrDestroyPassthroughLayerFB(XrPassthroughLayerFB layer) {
+  std::lock_guard lock(mutex);
+  return XR_ERROR_FUNCTION_UNSUPPORTED;
 }
 XrResult XRAPI_CALL dispatch_xrDestroySession(XrSession session) {
   std::lock_guard lock(mutex);
@@ -150,6 +174,10 @@ XrResult XRAPI_CALL dispatch_xrEnumerateViewConfigurationViews(XrInstance instan
 XrResult XRAPI_CALL dispatch_xrEnumerateViewConfigurations(XrInstance instance, XrSystemId systemId, uint32_t viewConfigurationTypeCapacityInput, uint32_t* viewConfigurationTypeCountOutput, XrViewConfigurationType* viewConfigurationTypes) {
   std::lock_guard lock(mutex);
   return m_xrEnumerateViewConfigurations(instance, systemId, viewConfigurationTypeCapacityInput, viewConfigurationTypeCountOutput, viewConfigurationTypes);
+}
+XrResult XRAPI_CALL dispatch_xrGeometryInstanceSetTransformFB(XrGeometryInstanceFB instance, const XrGeometryInstanceTransformFB* transformation) {
+  std::lock_guard lock(mutex);
+  return XR_ERROR_FUNCTION_UNSUPPORTED;
 }
 XrResult XRAPI_CALL dispatch_xrGetActionStateBoolean(XrSession session, const XrActionStateGetInfo* getInfo, XrActionStateBoolean* state) {
   std::lock_guard lock(mutex);
@@ -271,6 +299,26 @@ XrResult XRAPI_CALL dispatch_xrLocateViews(XrSession session, const XrViewLocate
   std::lock_guard lock(mutex);
   return m_xrLocateViews(session, viewLocateInfo, viewState, viewCapacityInput, viewCountOutput, views);
 }
+XrResult XRAPI_CALL dispatch_xrPassthroughLayerPauseFB(XrPassthroughLayerFB layer) {
+  std::lock_guard lock(mutex);
+  return XR_ERROR_FUNCTION_UNSUPPORTED;
+}
+XrResult XRAPI_CALL dispatch_xrPassthroughLayerResumeFB(XrPassthroughLayerFB layer) {
+  std::lock_guard lock(mutex);
+  return XR_ERROR_FUNCTION_UNSUPPORTED;
+}
+XrResult XRAPI_CALL dispatch_xrPassthroughLayerSetStyleFB(XrPassthroughLayerFB layer, const XrPassthroughStyleFB* style) {
+  std::lock_guard lock(mutex);
+  return XR_ERROR_FUNCTION_UNSUPPORTED;
+}
+XrResult XRAPI_CALL dispatch_xrPassthroughPauseFB(XrPassthroughFB passthrough) {
+  std::lock_guard lock(mutex);
+  return XR_ERROR_FUNCTION_UNSUPPORTED;
+}
+XrResult XRAPI_CALL dispatch_xrPassthroughStartFB(XrPassthroughFB passthrough) {
+  std::lock_guard lock(mutex);
+  return XR_ERROR_FUNCTION_UNSUPPORTED;
+}
 XrResult XRAPI_CALL dispatch_xrPathToString(XrInstance instance, XrPath path, uint32_t bufferCapacityInput, uint32_t* bufferCountOutput, char* buffer) {
   std::lock_guard lock(mutex);
   return m_xrPathToString(instance, path, bufferCapacityInput, bufferCountOutput, buffer);
@@ -353,8 +401,11 @@ const Entry dispatch[]{
   {"xrCreateActionSet", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrCreateActionSet)},
   {"xrCreateActionSpace", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrCreateActionSpace)},
   {"xrCreateFoveationProfileFB", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrCreateFoveationProfileFB)},
+  {"xrCreateGeometryInstanceFB", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrCreateGeometryInstanceFB)},
   {"xrCreateHandTrackerEXT", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrCreateHandTrackerEXT)},
   {"xrCreateInstance", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrCreateInstance)},
+  {"xrCreatePassthroughFB", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrCreatePassthroughFB)},
+  {"xrCreatePassthroughLayerFB", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrCreatePassthroughLayerFB)},
   {"xrCreateReferenceSpace", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrCreateReferenceSpace)},
   {"xrCreateSession", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrCreateSession)},
   {"xrCreateSwapchain", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrCreateSwapchain)},
@@ -363,8 +414,11 @@ const Entry dispatch[]{
   {"xrDestroyAction", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrDestroyAction)},
   {"xrDestroyActionSet", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrDestroyActionSet)},
   {"xrDestroyFoveationProfileFB", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrDestroyFoveationProfileFB)},
+  {"xrDestroyGeometryInstanceFB", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrDestroyGeometryInstanceFB)},
   {"xrDestroyHandTrackerEXT", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrDestroyHandTrackerEXT)},
   {"xrDestroyInstance", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrDestroyInstance)},
+  {"xrDestroyPassthroughFB", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrDestroyPassthroughFB)},
+  {"xrDestroyPassthroughLayerFB", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrDestroyPassthroughLayerFB)},
   {"xrDestroySession", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrDestroySession)},
   {"xrDestroySpace", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrDestroySpace)},
   {"xrDestroySwapchain", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrDestroySwapchain)},
@@ -382,6 +436,7 @@ const Entry dispatch[]{
   {"xrEnumerateSwapchainImages", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrEnumerateSwapchainImages)},
   {"xrEnumerateViewConfigurationViews", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrEnumerateViewConfigurationViews)},
   {"xrEnumerateViewConfigurations", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrEnumerateViewConfigurations)},
+  {"xrGeometryInstanceSetTransformFB", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrGeometryInstanceSetTransformFB)},
   {"xrGetActionStateBoolean", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrGetActionStateBoolean)},
   {"xrGetActionStateFloat", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrGetActionStateFloat)},
   {"xrGetActionStatePose", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrGetActionStatePose)},
@@ -412,6 +467,11 @@ const Entry dispatch[]{
   {"xrLocateSpaces", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrLocateSpaces)},
   {"xrLocateSpacesKHR", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrLocateSpacesKHR)},
   {"xrLocateViews", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrLocateViews)},
+  {"xrPassthroughLayerPauseFB", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrPassthroughLayerPauseFB)},
+  {"xrPassthroughLayerResumeFB", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrPassthroughLayerResumeFB)},
+  {"xrPassthroughLayerSetStyleFB", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrPassthroughLayerSetStyleFB)},
+  {"xrPassthroughPauseFB", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrPassthroughPauseFB)},
+  {"xrPassthroughStartFB", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrPassthroughStartFB)},
   {"xrPathToString", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrPathToString)},
   {"xrPerfSettingsSetPerformanceLevelEXT", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrPerfSettingsSetPerformanceLevelEXT)},
   {"xrPollEvent", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrPollEvent)},

@@ -179,6 +179,22 @@ TEST_CASE("core thread creation, join, exit unwind and TLS surplus") {
 #ifdef __linux__
 #endif
 
+TEST_CASE("a guest call made while the guest runs on its own coroutine stack uses that stack") {
+  // RE4 decompresses on a UE4 ctx::continuation stack; zlib calls back into the guest there.
+  GuestThread thread(93); thread.attach_to_current_host_thread();
+  const auto fiber = platform::reserve(0, 65536, false);
+  REQUIRE(fiber != 0);
+  REQUIRE(platform::commit(fiber, 65536, kProtRead | kProtWrite));
+  const std::array code{0xf94003e0u, 0xd65f03c0u};  // ldr x0, [sp]; ret
+  auto ninth = hle::code_stub(code, "ninth argument");
+  auto& cpu = thread.cpu();
+  const auto original_sp = cpu.sp();
+  cpu.set_sp(fiber + 32768);
+  CHECK(thread.call(ninth, {1, 2, 3, 4, 5, 6, 7, 8, 99}) == 99);
+  CHECK(cpu.sp() == fiber + 32768);
+  cpu.set_sp(original_sp);
+  platform::release(fiber, 65536);
+}
 TEST_CASE("OS data writer census excludes non-file objects and catches buffered handles") {
   const auto root = std::filesystem::temp_directory_path() /
       ("venture-writer-census-" + std::to_string(monotonic_ns()));

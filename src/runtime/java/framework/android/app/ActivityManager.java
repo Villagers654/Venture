@@ -77,4 +77,10 @@ public class ActivityManager {
     getMemoryInfo(memory);
     return memory.totalMem <= 2L * 1024 * 1024 * 1024;
   }
+  // Bugsnag reads these while starting (Supernatural); a Quest app is never
+  // background-restricted, monkey-driven or under a test harness.
+  public boolean isBackgroundRestricted() { return false; }
+  public static boolean isUserAMonkey() { return false; }
+  public static boolean isRunningInTestHarness() { return false; }
+  public static boolean isRunningInUserTestHarness() { return false; }
 }

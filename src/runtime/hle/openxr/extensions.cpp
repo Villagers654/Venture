@@ -358,6 +358,47 @@ XrResult xrDestroyFoveationProfileFB(XrFoveationProfileFB profile) {
   forget_handle(profile);
   return XR_SUCCESS;
 }
+// XR_FB_passthrough on a host without passthrough: the system reports
+// supportsPassthrough false and creation fails as the extension specifies, so a
+// title that requires the extension (Prey VR) starts and runs without it.
+static XrResult passthrough_unsupported(XrSession handle, const void *info, const void *out) {
+  std::lock_guard lock(state().mutex);
+  if (!valid_handle(handle, "XrSession"))
+    return XR_ERROR_HANDLE_INVALID;
+  if (!enabled("XR_FB_passthrough"))
+    return XR_ERROR_FUNCTION_UNSUPPORTED;
+  if (!info || !out)
+    return XR_ERROR_VALIDATION_FAILURE;
+  return XR_ERROR_FEATURE_UNSUPPORTED;
+}
+XrResult xrCreatePassthroughFB(XrSession session, const XrPassthroughCreateInfoFB *info, XrPassthroughFB *out) {
+  if (out) *out = XR_NULL_HANDLE;
+  return passthrough_unsupported(session, info, out);
+}
+XrResult xrCreatePassthroughLayerFB(XrSession session, const XrPassthroughLayerCreateInfoFB *info,
+                                    XrPassthroughLayerFB *out) {
+  if (out) *out = XR_NULL_HANDLE;
+  return passthrough_unsupported(session, info, out);
+}
+XrResult xrCreateGeometryInstanceFB(XrSession session, const XrGeometryInstanceCreateInfoFB *info,
+                                    XrGeometryInstanceFB *out) {
+  if (out) *out = XR_NULL_HANDLE;
+  return passthrough_unsupported(session, info, out);
+}
+// No passthrough object is ever created, so every other handle is invalid.
+XrResult xrDestroyPassthroughFB(XrPassthroughFB) { return XR_ERROR_HANDLE_INVALID; }
+XrResult xrPassthroughStartFB(XrPassthroughFB) { return XR_ERROR_HANDLE_INVALID; }
+XrResult xrPassthroughPauseFB(XrPassthroughFB) { return XR_ERROR_HANDLE_INVALID; }
+XrResult xrDestroyPassthroughLayerFB(XrPassthroughLayerFB) { return XR_ERROR_HANDLE_INVALID; }
+XrResult xrPassthroughLayerPauseFB(XrPassthroughLayerFB) { return XR_ERROR_HANDLE_INVALID; }
+XrResult xrPassthroughLayerResumeFB(XrPassthroughLayerFB) { return XR_ERROR_HANDLE_INVALID; }
+XrResult xrPassthroughLayerSetStyleFB(XrPassthroughLayerFB, const XrPassthroughStyleFB *) {
+  return XR_ERROR_HANDLE_INVALID;
+}
+XrResult xrDestroyGeometryInstanceFB(XrGeometryInstanceFB) { return XR_ERROR_HANDLE_INVALID; }
+XrResult xrGeometryInstanceSetTransformFB(XrGeometryInstanceFB, const XrGeometryInstanceTransformFB *) {
+  return XR_ERROR_HANDLE_INVALID;
+}
 XrResult xrUpdateSwapchainFB(XrSwapchain handle, const XrSwapchainStateBaseHeaderFB *header) {
   std::lock_guard lock(state().mutex);
   auto it = state().swapchains.find(handle);

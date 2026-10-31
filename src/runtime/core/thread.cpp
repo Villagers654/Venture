@@ -240,6 +240,15 @@ void GuestThread::detach_from_current_host_thread() {
 GuestCallResult GuestThread::call(GuestAddr fn, const GuestCallArgs& args) {
   return (this->*call_impl_)(fn, args);
 }
+// A callback into a guest running on a stack the app made itself (a coroutine or
+// fiber stack, e.g. UE4 ctx::continuation in RE4) keeps using that stack, as on
+// Android, when the words it pushes are writable guest memory.
+static void app_stack_bounds(GuestAddr sp, std::uint64_t bytes, GuestAddr& base, std::uint64_t& size) {
+  const auto need = bytes + 16;
+  if (sp < need || !platform::memory_accessible(sp - need, need, true)) return;
+  base = sp - need;
+  size = need;
+}
 GuestCallResult GuestThread::call32(GuestAddr fn, const GuestCallArgs& args) {
   os_quit::Call executing(&os_call_depth);
   if (os_quit::requested()) throw ProcessExit(0);
@@ -258,6 +267,8 @@ GuestCallResult GuestThread::call32(GuestAddr fn, const GuestCallArgs& args) {
           cpu_->sp() <= alternate.base + alternate.size) {
         call_stack_base = alternate.base;
         call_stack_size = alternate.size;
+      } else {
+        app_stack_bounds(cpu_->sp(), 4 * args.integers.size() + 4 * args.stack.size(), call_stack_base, call_stack_size);
       }
     }
     prepare_guest_call32(*cpu_, fn, args, call_stack_base, call_stack_size, hle::call_return_trampoline(call_depth_));
@@ -281,9 +292,13 @@ GuestCallResult GuestThread::call64(GuestAddr fn, const GuestCallArgs& args) {
     if (!args.stack.empty() && (int_stack || fp_stack))
       throw std::invalid_argument("explicit guest stack requires register-only argument spans");
     auto slots = args.stack.empty() ? int_stack + fp_stack : args.stack.size();
-    if (slots > stack_size / 8) throw std::runtime_error("guest call stack overflow");
+    auto call_stack_base = stack_base;
+    auto call_stack_size = stack_size;
+    if (cpu_->sp() < stack_base || cpu_->sp() > stack_base + stack_size)
+      app_stack_bounds(cpu_->sp(), 8 * slots, call_stack_base, call_stack_size);
+    if (slots > call_stack_size / 8) throw std::runtime_error("guest call stack overflow");
     auto sp = align_down(cpu_->sp() - 8 * slots, 16);
-    if (sp < stack_base || sp > stack_base + stack_size) throw std::runtime_error("guest call stack overflow");
+    if (sp < call_stack_base || sp > call_stack_base + call_stack_size) throw std::runtime_error("guest call stack overflow");
     cpu_->set_sp(sp);
     auto* overflow = g2h<std::uint64_t>(sp);
     for (auto word : args.stack) *overflow++ = word;
