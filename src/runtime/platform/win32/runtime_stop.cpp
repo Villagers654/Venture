@@ -8,9 +8,11 @@
 namespace venture::platform {
 namespace {
 std::atomic<bool> stopped{false};
+std::atomic<DWORD> stop_event{0};
 BOOL WINAPI control(DWORD event) {
   if (event == CTRL_C_EVENT || event == CTRL_BREAK_EVENT || event == CTRL_CLOSE_EVENT ||
       event == CTRL_LOGOFF_EVENT || event == CTRL_SHUTDOWN_EVENT) {
+    stop_event.store(event);
     stopped.store(true);
     return TRUE;
   }
@@ -52,6 +54,22 @@ bool RuntimeStop::requested() const {
          (impl_->event && WaitForSingleObject(impl_->event, 0) == WAIT_OBJECT_0) ||
          WaitForSingleObject(impl_->local_event, 0) == WAIT_OBJECT_0 ||
          (impl_->parent && WaitForSingleObject(impl_->parent, 0) == WAIT_OBJECT_0);
+}
+const char* RuntimeStop::reason() const {
+  if (stopped.load()) {
+    switch (stop_event.load()) {
+      case CTRL_C_EVENT: return "console Ctrl+C";
+      case CTRL_BREAK_EVENT: return "console Ctrl+Break";
+      case CTRL_CLOSE_EVENT: return "console window closed";
+      case CTRL_LOGOFF_EVENT: return "user logoff";
+      default: return "system shutdown";
+    }
+  }
+  if (impl_->parent_gone) return "launcher process was already gone at start";
+  if (impl_->event && WaitForSingleObject(impl_->event, 0) == WAIT_OBJECT_0) return "supervisor stop event";
+  if (WaitForSingleObject(impl_->local_event, 0) == WAIT_OBJECT_0) return "launcher stop request";
+  if (impl_->parent && WaitForSingleObject(impl_->parent, 0) == WAIT_OBJECT_0) return "launcher process exited";
+  return "none";
 }
 bool request_runtime_stop(std::uint32_t pid) {
   const auto name = "Local\\Venture.Stop." + std::to_string(pid);

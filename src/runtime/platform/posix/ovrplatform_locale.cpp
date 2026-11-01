@@ -1,10 +1,12 @@
 #include <algorithm>
 #include <cstdlib>
 
+#include "common/environment.h"
 #include "hle/ovrplatform/provider.h"
 
 namespace venture::ovrplatform {
 std::string host_locale() {
+  if (const char* tag = environment::getenv("VENTURE_LOCALE"); tag && *tag) return tag;  // Settings > Game language
   const char* value = nullptr;
   for (auto key : {"LC_ALL", "LC_MESSAGES", "LANG"}) {
     value = std::getenv(key);

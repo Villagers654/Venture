@@ -1193,3 +1193,42 @@ TEST_CASE("A64 asynchronous signal interrupts a linked forward chain and returns
   CHECK(signals::set_action(10, &previous, nullptr) == 0);
   AddressSpace::get().free(code);
 }
+TEST_CASE("A64 qsort and qsort_r sort in place with guest comparators") {
+  register_all_hle_libraries();
+  GuestThread thread(83); thread.attach_to_current_host_thread();
+  auto* libc = Linker::get().open("libc.so", kRtldNow, nullptr);
+  REQUIRE(libc);
+  // Signed comparison of the first int32 of each element; x2 (qsort_r's
+  // argument) adds a bias that must not change the order.
+  constexpr std::array compare_code{0xB9400008u, 0xB9400029u, 0x0B020108u, 0x0B020129u, 0x6B09011Fu,
+                                    0x1A9FD7EAu, 0x1A9FA7EBu, 0x4B0B0140u, 0xD65F03C0u};
+  const auto compare = hle::code_stub(compare_code, "qsort test compare");
+  const auto qsort = libc->find_symbol("qsort"), qsort_r = libc->find_symbol("qsort_r");
+  std::uint32_t seed = 1;
+  for (std::uint64_t size : {4ull, 3ull + 4, 8ull, 12ull, 24ull})
+    for (std::uint64_t n : {0ull, 1ull, 2ull, 13ull, 100ull, 5000ull})
+      for (int shape = 0; shape < 4; ++shape)
+        for (bool with_arg : {false, true}) {
+          INFO("size ", size, " n ", n, " shape ", shape, " arg ", with_arg);
+          const auto mem = thread.call(libc->find_symbol("malloc"), {n * size + 8});
+          auto* bytes = g2h<unsigned char>(mem) + (size % 4 ? 1 : 0);
+          std::vector<std::vector<unsigned char>> expected;
+          for (std::uint64_t i = 0; i < n; ++i) {
+            seed = seed * 1664525u + 1013904223u;
+            std::int32_t key = shape == 0 ? std::int32_t(seed >> 8) : shape == 1 ? std::int32_t(i)
+                             : shape == 2 ? -std::int32_t(i) : std::int32_t(seed % 3);
+            std::memcpy(bytes + i * size, &key, 4);
+            for (std::uint64_t b = 4; b < size; ++b) bytes[i * size + b] = static_cast<unsigned char>(seed >> b);
+            expected.emplace_back(bytes + i * size, bytes + (i + 1) * size);
+          }
+          if (with_arg) thread.call(qsort_r, {h2g(bytes), n, size, compare, 1000});
+          else thread.call(qsort, {h2g(bytes), n, size, compare});
+          auto key = [&](std::uint64_t i) { std::int32_t k; std::memcpy(&k, bytes + i * size, 4); return k; };
+          for (std::uint64_t i = 1; i < n; ++i) CHECK(key(i - 1) <= key(i));
+          std::vector<std::vector<unsigned char>> actual;
+          for (std::uint64_t i = 0; i < n; ++i) actual.emplace_back(bytes + i * size, bytes + (i + 1) * size);
+          std::sort(expected.begin(), expected.end()); std::sort(actual.begin(), actual.end());
+          CHECK(actual == expected);  // a permutation of whole elements
+        }
+  Linker::get().close(libc);
+}

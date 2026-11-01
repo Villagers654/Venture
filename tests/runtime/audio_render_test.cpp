@@ -165,9 +165,11 @@ TEST_CASE("audio render: fixed AAudio callback blocks adapt to a smaller writabl
   struct Close { GuestAddr handle; ~Close() { aa("AAudioStream_close", {handle}); } } close{handle};
   CHECK(callbacks == 0);
   CHECK(aa("AAudioStream_getFramesPerDataCallback", {handle}) == 960);
-  REQUIRE(aa("AAudioStream_getFramesPerBurst", {handle}) == 240);
+  // The burst follows the device period: 5 ms on Windows, 10 ms on Linux.
+  const auto burst = unsigned(aa("AAudioStream_getFramesPerBurst", {handle}));
+  REQUIRE((burst == 240 || burst == 480));
   CHECK(aa("AAudioStream_getBufferCapacityInFrames", {handle}) == 1920);
-  REQUIRE(aa("AAudioStream_setBufferSizeInFrames", {handle, 0}) == 240);
+  REQUIRE(aa("AAudioStream_setBufferSizeInFrames", {handle, 0}) == burst);
   REQUIRE(aa("AAudioStream_requestStart", {handle}) == 0);
   auto await = [&](std::int64_t written) {
     const auto end = std::chrono::steady_clock::now() + venture::test::hang_timeout;
@@ -178,11 +180,11 @@ TEST_CASE("audio render: fixed AAudio callback blocks adapt to a smaller writabl
                                    " state=", aa("AAudioStream_getState", {handle}));
     return actual >= written;
   };
-  std::array<float, 480> output;
-  for (unsigned chunk = 1; chunk <= 4; ++chunk) {
-    REQUIRE(await(chunk * 240));
+  std::vector<float> output(burst * 2);
+  for (unsigned chunk = 1; chunk <= 960 / burst; ++chunk) {
+    REQUIRE(await(chunk * burst));
     CHECK(callbacks == 1); // retain the remainder, do not call the guest again
-    audio::Backend::get().process(audio::Direction::output, output.data(), nullptr, 240);
+    audio::Backend::get().process(audio::Direction::output, output.data(), nullptr, burst);
     CHECK(std::all_of(output.begin(), output.end(), [](float v) { return v == 0.25f; }));
   }
   CHECK(callback_frames == 960);

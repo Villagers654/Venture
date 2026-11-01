@@ -13,6 +13,11 @@ void pre_reserve_low_memory() noexcept;
 // Reserve the wrap guard without changing any existing host mapping. If false,
 // A32 must use checked memory callbacks instead of identity fastmem.
 bool reserve_low_memory_guard() noexcept;
+// A32 identity fastmem computes host = guest (32 bits) and accesses at most 16
+// bytes, so only an access starting in the last guest page reaches past 4 GiB.
+// Safe when the wrap guard is ours or the last page is our own no-access
+// reservation (the guest never maps it). Otherwise use checked callbacks.
+bool a32_identity_fastmem_safe() noexcept;
 // Before guest memory initialization: A64 selection returns only our early
 // reservations to the host. Foreign mappings, including the guard, are retained.
 void release_pre_reserved_low_memory();

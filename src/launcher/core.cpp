@@ -1303,6 +1303,7 @@ void Core::launch_game(std::string_view id, std::string_view requested,
           }
           auto &r = running_[app_id];
           r.quitting = false;
+          r.started = std::chrono::steady_clock::now();
           r.log = data_ / "logs" / ("runtime-" + install.plan.package + ".log");
           // The runtime writes its log itself; its stdio goes to a separate
           // file so lines are not written twice into one.
@@ -1334,6 +1335,7 @@ void Core::launch_game(std::string_view id, std::string_view requested,
           // The menu chord setting; automatic leaves the runtime's default.
           if (settings_.menu_button == 1) environment.push_back({"VENTURE_MENU_CHORD", "stick-clicks"});
           if (settings_.menu_button == 2) environment.push_back({"VENTURE_MENU_CHORD", "off"});
+          if (!settings_.game_language.empty()) environment.push_back({"VENTURE_LOCALE", settings_.game_language});
           // Texture compression; always is the runtime's default.
           if (settings_.texture_compression == 1) {
             environment.push_back({"VENTURE_TEXTURE_COMPRESSION", "auto"});

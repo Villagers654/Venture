@@ -532,8 +532,10 @@ TEST_CASE("library folders are saved, and the install dialog's ask setting "
   auto other = (d.root / "other").lexically_normal();
   settings.libraries = {other, settings.games};
   settings.install_ask = false;
+  settings.game_language = "zh-Hans-CN";
   settings.save(d.root);
   auto loaded = library::Settings::load(d.root);
+  CHECK(loaded.game_language == "zh-Hans-CN");
   CHECK(loaded.libraries == std::vector<fs::path>{other});
   CHECK(loaded.roots() == std::vector<fs::path>{settings.games, other});
   CHECK_FALSE(loaded.install_ask);
@@ -763,8 +765,14 @@ TEST_CASE("a game that asked Meta for its user without a sign-in is recognised f
   CHECK_FALSE(library::needed_meta_sign_in(dir / "missing.log"));
   const auto missing_line = std::string("  1.0 1 W [vfs] Missing expansion file: the game looked for "
                                         "patch.42.com.example.game.obb, which this install does not have\n");
-  CHECK(library::missing_expansion(write("obb.log", missing_line)) == "patch.42.com.example.game.obb");
-  CHECK(library::missing_expansion(write("obb-played.log", missing_line +
+  const auto unity_error = std::string("  2.0 1 E [Unity] Unable to load GUID for '/storage/emulated/0/Android/obb/"
+                                       "com.example.game/patch.42.com.example.game.obb'\n");
+  CHECK(library::missing_expansion(write("obb.log", missing_line + unity_error)) == "patch.42.com.example.game.obb");
+  CHECK(library::missing_expansion(write("obb-error-first.log", unity_error + missing_line)) ==
+        "patch.42.com.example.game.obb");
+  // A probe for an optional file the game never complains about is not the cause.
+  CHECK(library::missing_expansion(write("obb-probe.log", missing_line)).empty());
+  CHECK(library::missing_expansion(write("obb-played.log", missing_line + unity_error +
       "  9.0 1 I [xr] Frames submitted=5400 xrEndFrame_errors=0 submission_fps=72.00 runtime_period_hz=72.00\n")).empty());
   const auto refused = std::string("  100.0 1 W [ovrplatform] ovr_DeviceApplicationIntegrity_GetIntegrityToken "
                                    "request=6 type=0x3271abda error=-20000\n");

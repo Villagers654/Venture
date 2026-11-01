@@ -74,7 +74,7 @@ class A32Cpu final : public Cpu, private Dynarmic::A32::UserCallbacks {
     config.arch_version = Dynarmic::A32::ArchVersion::v7;
     // Wide host loads near UINT32_MAX must not reach a host-owned allocation
     // above 4 GiB. Dynarmic's callbacks check the complete guest range instead.
-    if (backend.enable_fastmem && platform::reserve_low_memory_guard()) {
+    if (backend.enable_fastmem && platform::a32_identity_fastmem_safe()) {
       config.fastmem_pointer = 0;
       config.fastmem_exclusive_access = true;
       // Exclusive loads as plain MOVs; VENTURE_JIT_LOCKED_EXCLUSIVE_LOADS=1 restores LOCK XADD.
@@ -497,8 +497,9 @@ std::unique_ptr<CpuBackend> make_a32_backend(A32BackendConfig config) {
 CpuBackend& a32_cpu_backend() {
   static auto* backend = [] {
     A32BackendConfig config{kGuestCpuSlots, memory_query.load()};
-    log::info("cpu", "A32 memory uses {}", platform::reserve_low_memory_guard()
-        ? "identity fastmem with a reserved wrap guard" : "checked callbacks (wrap guard unavailable)");
+    log::info("cpu", "A32 memory uses {}", !platform::a32_identity_fastmem_safe() ? "checked callbacks (wrap guard unavailable)"
+        : platform::reserve_low_memory_guard() ? "identity fastmem with a reserved wrap guard"
+        : "identity fastmem with a reserved last guest page");
     if (const auto* value = venture::environment::getenv("VENTURE_A32_MONITOR_SLOTS")) {
       const auto* end = value + std::strlen(value);
       auto result = std::from_chars(value, end, config.monitor_slots);

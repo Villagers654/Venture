@@ -23,4 +23,7 @@ bool set_runtime_manifest_for_process(const std::string &path) {
   if (success) environment::refresh();
   return success;
 }
+void disable_unused_vulkan_layers_for_process() {
+  if (setenv("DISABLE_VK_LAYER_VALVE_steam_fossilize_1", "1", 1) == 0) environment::refresh();
+}
 } // namespace venture::xr

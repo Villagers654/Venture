@@ -65,5 +65,10 @@ bool RuntimeStop::requested() const {
   if (impl_->reparent_check) return static_cast<std::uint32_t>(getppid()) != impl_->parent;
   return kill(static_cast<pid_t>(impl_->parent), 0) != 0 && errno == ESRCH;
 }
+const char* RuntimeStop::reason() const {
+  if (stopped) return "SIGINT or SIGTERM";
+  if (impl_->parent_gone) return "launcher process was already gone at start";
+  return requested() ? "launcher process exited" : "none";
+}
 bool request_runtime_stop(std::uint32_t pid) { return kill(static_cast<pid_t>(pid), SIGTERM) == 0; }
 }

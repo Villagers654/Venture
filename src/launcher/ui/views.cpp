@@ -1027,8 +1027,9 @@ void App::draw_game_page() {
       } else if (running) {
         // Quits as the headset's menu would: the game gets its Android lifecycle and saves first.
         auto& r = running_[g.id];
+        const bool armed = std::chrono::steady_clock::now() - r.started >= std::chrono::seconds(3);
         if (button(r.quitting ? "Quitting...##play" : "Quit game##play", r.quitting ? 0 : icons::cancel,
-                   Tone::secondary, cta, !r.quitting))
+                   Tone::secondary, cta, !r.quitting && armed))
           r.quitting = r.process.request_stop();
       } else if (button("Play##play", icons::play, Tone::primary, cta)) {
         action([&] { play(g); });
@@ -1778,6 +1779,28 @@ void App::draw_settings() {
                 "Hold both sticks in for half a second to open the game's menu. Automatic: only for a controller whose VR runtime gives the game no menu button.",
                 dw, s(38), [&] {
       if (dropdown("menu", "", modes, 3, &settings_.menu_button, dw)) action([&] { save_settings(); });
+    });
+  }
+  divider();
+  {
+    static const char* names[] = {"System language", "English (US)", "English (UK)", "German", "French",
+                                  "Spanish", "Italian", "Portuguese (Brazil)", "Dutch", "Polish", "Russian",
+                                  "Swedish", "Turkish", "Japanese", "Korean", "Chinese (Simplified)",
+                                  "Chinese (Traditional)"};
+    static const char* tags[] = {"", "en-US", "en-GB", "de-DE", "fr-FR", "es-ES", "it-IT", "pt-BR", "nl-NL",
+                                 "pl-PL", "ru-RU", "sv-SE", "tr-TR", "ja-JP", "ko-KR", "zh-Hans-CN", "zh-Hant-TW"};
+    constexpr int count = int(std::size(tags));
+    int choice = int(std::ranges::find(tags, settings_.game_language) - std::begin(tags));
+    if (choice == count) choice = 0;
+    float dw = s(180);
+    setting_row("Game language",
+                "The language games see as the system language. Most games also have their own language "
+                "option; this one is for games that only follow the system.",
+                dw, s(38), [&] {
+      if (dropdown("language", "", names, count, &choice, dw)) {
+        settings_.game_language = tags[choice];
+        action([&] { save_settings(); });
+      }
     });
   }
   divider();

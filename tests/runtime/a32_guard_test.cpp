@@ -33,7 +33,7 @@ bool reserve_foreign_guard(GuestAddr guard) {
 }
 }
 
-TEST_CASE("A32 occupied wrap guard preserves host memory and checks wide accesses") {
+TEST_CASE("A32 occupied wrap guard preserves host memory and keeps fastmem through the last page") {
   constexpr GuestAddr guard = 0x100000000ull;
   constexpr std::uint64_t canary = 0x123456789abcdef0;
   // This executable deliberately omits the runtime's early arena reservation.
@@ -45,11 +45,17 @@ TEST_CASE("A32 occupied wrap guard preserves host memory and checks wide accesse
   auto& as = AddressSpace::get();
   REQUIRE_NOTHROW(as.initialize(GuestIsa::a32));
   CHECK_FALSE(platform::reserve_low_memory_guard());
+  // The arena still reserved the last guest page, which the guest can never
+  // map (arm64 compat TASK_SIZE_32), so identity fastmem remains safe.
+  CHECK(platform::a32_identity_fastmem_safe());
   CHECK_FALSE(as.is_guest_accessible(guard, 1, false));
   CHECK(platform::memory_accessible(guard, 65536, true));
   CHECK(*g2h<std::uint64_t>(guard) == canary);
-  REQUIRE(as.map(guard - 4096, 4096, kProtRead | kProtWrite,
-      kMapPrivate | kMapAnonymous | kMapFixedNoReplace, nullptr, 0, "[guard test]") == guard - 4096);
+  CHECK(as.map(guard - 4096, 4096, kProtRead | kProtWrite,
+      kMapPrivate | kMapAnonymous | kMapFixedNoReplace, nullptr, 0, "[guard test]") < 0);
+  constexpr GuestAddr page = guard - 8192;
+  REQUIRE(as.map(page, 4096, kProtRead | kProtWrite,
+      kMapPrivate | kMapAnonymous | kMapFixedNoReplace, nullptr, 0, "[guard test]") == page);
   auto code = as.allocate(4096, kProtRead | kProtWrite | kProtExec, "[guard test code]");
   REQUIRE(code != 0);
   // ARMv7: ldrd r0,r1,[r2]; svc #0x5151; strd r0,r1,[r2]; svc.
@@ -63,7 +69,7 @@ TEST_CASE("A32 occupied wrap guard preserves host memory and checks wide accesse
   std::memcpy(g2h(code), words.data(), sizeof(words));
   auto backend = make_a32_backend({1, low32::query});
   auto cpu = backend->create_cpu();
-  constexpr GuestAddr inside = guard - 16, crossing = guard - 4;
+  constexpr GuestAddr inside = page + 4096 - 16;
   *g2h<std::uint64_t>(inside) = canary;
   cpu->set_x(2, inside); cpu->set_pc(code);
   REQUIRE(cpu->run() == CpuExit::Svc);
@@ -74,15 +80,17 @@ TEST_CASE("A32 occupied wrap guard preserves host memory and checks wide accesse
   cpu->set_x(0, inside); cpu->set_x(1, 3); cpu->set_pc(code + 16);
   REQUIRE(cpu->run() == CpuExit::Svc);
   CHECK(*g2h<std::uint64_t>(inside) == 45);
-  for (bool write : {false, true}) {
-    *g2h<std::uint32_t>(crossing) = 0xdeadbeef;
-    cpu->set_x(2, crossing); cpu->set_pc(code + (write ? 8 : 0));
-    REQUIRE(cpu->run() == CpuExit::MemoryFault);
-    CHECK(cpu->fault().address == crossing);
-    CHECK(cpu->fault().write == write);
-    CHECK(*g2h<std::uint32_t>(crossing) == 0xdeadbeef);
-    CHECK(*g2h<std::uint64_t>(guard) == canary);
-  }
+  // An access that would extend past 4 GiB starts in the reserved last page
+  // and faults there; one crossing into that page faults as well.
+  for (GuestAddr crossing : {guard - 4, page + 4096 - 4})
+    for (bool write : {false, true}) {
+      cpu->set_x(0, 1); cpu->set_x(1, 2);
+      cpu->set_x(2, crossing); cpu->set_pc(code + (write ? 8 : 0));
+      REQUIRE(cpu->run() == CpuExit::MemoryFault);
+      CHECK(cpu->fault().write == write);
+      CHECK(*g2h<std::uint64_t>(guard) == canary);
+    }
+  CHECK(*g2h<std::uint64_t>(inside) == 45);
   // The host mapping remains writable even after CPUs have run and faulted.
   *g2h<std::uint64_t>(guard) = 7;
   CHECK(*g2h<std::uint64_t>(guard) == 7);
