@@ -152,9 +152,15 @@ Optional Google task/asset-pack callback signatures are declaration-only contrac
 checked against play-services-tasks 18.1.0 and asset-delivery 2.3.0 and the public
 [Tasks API](https://developers.google.com/android/reference/com/google/android/gms/tasks/Task)
 and [asset-pack listener API](https://developer.android.com/reference/com/google/android/play/core/assetpacks/AssetPackStateUpdateListener).
-The APK's own classes take precedence for these namespaces. No Google task producer,
-asset-pack manager, or Google service is supplied. Service declarations can be
-queried from the APK manifest; Context still rejects unsupported service startup.
+`androidx.lifecycle.LifecycleObserver` is the same kind of contract: an empty marker,
+as in lifecycle-common, so HotSpot can verify SDK classes (Sentry 6) that hand an
+observer to Lifecycle behind a probe for androidx.lifecycle; ART leaves that check to
+execution. The APK's own classes take precedence for these namespaces. No Google task
+producer, asset-pack manager, Google service or androidx lifecycle runtime is supplied.
+FileObserver keeps the inotify event values but delivers no events: host directory
+notifications cannot report CLOSE_WRITE, opens, accesses or paired moves. Service
+declarations can be queried from the APK manifest; Context still rejects unsupported
+service startup.
 
 Full menus, widgets/drawables, accessibility, media codecs, WebView, Android
 network services and input producers remain gaps. Current real-game lifecycle
