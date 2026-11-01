@@ -196,3 +196,118 @@ function Get-VentureCMakeValue([string]$Cache, [string]$Name) {
     }
     throw "Missing CMake configuration value: $Name"
 }
+
+# ProgramW6432 also selects the native x64 directory from a 32-bit shell.
+function Get-VentureInstallConfiguration([string]$SourceRoot, [string]$InstallDir) {
+    $directoryName = 'Venture'
+    $shortcutName = 'Venture'
+    $profile = Join-Path $SourceRoot '.venture-install.json'
+    if (Test-Path -LiteralPath $profile -PathType Leaf) {
+        $configuration = Get-Content -LiteralPath $profile -Raw | ConvertFrom-Json
+        $directoryName = [string]$configuration.installDirectoryName
+        $shortcutName = [string]$configuration.shortcutName
+        if ($directoryName -notmatch '^[A-Za-z0-9][A-Za-z0-9 ._-]{0,63}$' -or
+            $shortcutName -notmatch '^[A-Za-z0-9][A-Za-z0-9 ._-]{0,63}$') { throw 'Invalid local-install profile names.' }
+    }
+    if ([string]::IsNullOrWhiteSpace($InstallDir)) {
+        $programFiles = [Environment]::GetEnvironmentVariable('ProgramW6432')
+        if (-not $programFiles) { $programFiles = [Environment]::GetFolderPath('ProgramFiles') }
+        if (-not $programFiles) { throw 'The Windows Program Files directory could not be found.' }
+        $InstallDir = Join-Path $programFiles $directoryName
+    }
+    return [pscustomobject]@{ InstallDir = [IO.Path]::GetFullPath($InstallDir).TrimEnd([char[]]'\/'); ShortcutName = $shortcutName }
+}
+
+function Test-VentureInstallWritable([string]$InstallDir) {
+    Assert-NoVentureReparsePoint $InstallDir
+    $parent = [IO.Path]::GetFullPath($InstallDir)
+    while (-not [IO.Directory]::Exists($parent)) {
+        $parent = [IO.Path]::GetDirectoryName($parent)
+        if (-not $parent) { throw 'The installation drive does not exist.' }
+    }
+    $temporary = Join-Path $parent ('venture-access-' + [Guid]::NewGuid().ToString('N') + '.tmp')
+    $probe = $null
+    try {
+        $probe = [IO.FileStream]::new($temporary, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write,
+            [IO.FileShare]::None, 1, [IO.FileOptions]::DeleteOnClose)
+        return $true
+    } catch [UnauthorizedAccessException] { return $false }
+    catch [Security.SecurityException] { return $false }
+    finally { if ($null -ne $probe) { $probe.Dispose() } }
+}
+
+# Start-Process joins ArgumentList with spaces. Quote literal -File arguments;
+# never interpret a checkout path as a PowerShell command or expression.
+function Join-VentureProcessArguments([string[]]$Arguments) {
+    return (($Arguments | ForEach-Object {
+        if ($_ -match '["\r\n\x00]') { throw 'Invalid installer process argument.' }
+        '"' + [Regex]::Replace($_, '(\\+)$', '$1$1') + '"'
+    }) -join ' ')
+}
+
+function Install-VenturePackage([string]$Layout, [string]$InstallDir, [string]$Revision,
+                                [string]$WorkerScript, [string]$LogPath) {
+    if (Test-VentureInstallWritable $InstallDir) { return Install-VentureLayout $Layout $InstallDir $Revision }
+    Write-Host "Windows administrator approval is required to install into $InstallDir."
+    $windowsShell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    if (-not [Environment]::Is64BitProcess) {
+        $windowsShell = Join-Path $env:SystemRoot 'Sysnative\WindowsPowerShell\v1.0\powershell.exe'
+    }
+    $arguments = Join-VentureProcessArguments @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
+        $WorkerScript, '-Layout', $Layout, '-InstallDir', $InstallDir, '-Revision', $Revision, '-LogPath', $LogPath)
+    try {
+        $child = Start-Process -FilePath $windowsShell -Verb RunAs -ArgumentList $arguments -Wait -PassThru -ErrorAction Stop
+    } catch { throw "Administrator installation could not start or was cancelled: $($_.Exception.Message)" }
+    finally {
+        if (Test-Path -LiteralPath $LogPath -PathType Leaf) {
+            Get-Content -LiteralPath $LogPath | ForEach-Object { Write-Host $_ }
+        }
+    }
+    if ($child.ExitCode -ne 0) { throw "Administrator installation failed (exit $($child.ExitCode)). See $LogPath" }
+    $receipt = Get-Content -LiteralPath (Get-VentureManagedPath $InstallDir '.venture-local-install.json') -Raw | ConvertFrom-Json
+    if ($receipt.owner -ne 'venture-local-build' -or $receipt.status -ne 'ready' -or $receipt.revision -ne $Revision) {
+        throw 'The administrator installation did not publish the expected successful receipt.'
+    }
+    return (Get-VentureManagedPath $InstallDir 'venture.exe')
+}
+
+# Remove only unchanged, manifest-listed files from an owned former install.
+# User files and installations without our ownership receipt are preserved.
+function Remove-VentureLegacyInstall([string]$LegacyDir, [string]$InstallDir) {
+    $LegacyDir = [IO.Path]::GetFullPath($LegacyDir).TrimEnd([char[]]'\/')
+    $InstallDir = [IO.Path]::GetFullPath($InstallDir).TrimEnd([char[]]'\/')
+    if ($LegacyDir -eq $InstallDir -or -not (Test-Path -LiteralPath $LegacyDir -PathType Container)) { return $false }
+    $installedReceipt = Get-VentureManagedPath $InstallDir '.venture-local-install.json'
+    if (-not (Test-Path -LiteralPath $installedReceipt -PathType Leaf)) { return $false }
+    $installedState = Get-Content -LiteralPath $installedReceipt -Raw | ConvertFrom-Json
+    if ($installedState.owner -ne 'venture-local-build' -or $installedState.status -ne 'ready') { return $false }
+    $receiptPath = Get-VentureManagedPath $LegacyDir '.venture-local-install.json'
+    if (-not (Test-Path -LiteralPath $receiptPath -PathType Leaf) -or
+        (Get-Content -LiteralPath $receiptPath -Raw | ConvertFrom-Json).owner -ne 'venture-local-build') { return $false }
+    $files = Get-VentureManifest $LegacyDir
+    foreach ($name in $files.Keys) {
+        $path = Get-VentureManagedPath $LegacyDir $name
+        if (Test-Path -LiteralPath $path) {
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf) -or
+                (Get-Item -LiteralPath $path).Length -ne $files[$name].Bytes -or
+                (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -ne $files[$name].Sha256) {
+                Write-Host "Keeping previous installation with changed files: $LegacyDir"
+                return $false
+            }
+        }
+    }
+    foreach ($name in $files.Keys) {
+        $path = Get-VentureManagedPath $LegacyDir $name
+        if (Test-Path -LiteralPath $path -PathType Leaf) { Remove-Item -LiteralPath $path -Force }
+        $parent = [IO.Path]::GetDirectoryName($path)
+        while ($parent -ne $LegacyDir -and (Test-Path -LiteralPath $parent -PathType Container) -and
+               @(Get-ChildItem -LiteralPath $parent -Force).Count -eq 0) {
+            Remove-Item -LiteralPath $parent -Force
+            $parent = [IO.Path]::GetDirectoryName($parent)
+        }
+    }
+    Remove-Item -LiteralPath (Get-VentureManagedPath $LegacyDir 'release-files.json'), $receiptPath -Force
+    if (@(Get-ChildItem -LiteralPath $LegacyDir -Force).Count -eq 0) { Remove-Item -LiteralPath $LegacyDir -Force }
+    Write-Host "Removed previous managed installation files: $LegacyDir"
+    return $true
+}

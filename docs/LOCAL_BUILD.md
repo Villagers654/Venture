@@ -9,8 +9,17 @@ Requires Windows x64 and Git for Windows. From a cloned checkout run:
 The script uses Venture's pinned bootstrap and `windows-release` preset, builds
 both production executables, and invokes the ordinary release packager. It is
 independent of passthrough, preview-packaging helpers and game-specific Java
-fixtures. It installs into `%LOCALAPPDATA%\Venture-Local`, creates a desktop
-shortcut and launches Venture. Repeated runs update that same directory.
+fixtures. It installs into the native Windows Program Files directory, normally
+`C:\Program Files\Venture`, creates a **Venture** desktop shortcut and launches
+Venture. Repeated runs update that same directory.
+
+Downloads, compilation and caches stay in the calling user's account. When the
+installation directory needs administrator rights, the final file installation
+opens a Windows UAC prompt. Accept it to complete installation. The original
+unelevated process creates the shortcut and launches Venture. A cancelled prompt
+or failed worker fails installation; its output is included in the build log and
+in the adjacent `*-build.log.install.log` transcript. There is no need to run the
+whole build as administrator.
 
 Missing Python 3.13+ is installed per user with winget. A fresh FFmpeg build needs
 native GnuPG; when missing, winget installs `GnuPG.GnuPG`, which can request a
@@ -28,7 +37,7 @@ Optional arguments:
 
 ```powershell
 .\install.cmd -Jobs 4 -NoLaunch
-.\install.cmd -InstallDir D:\Apps\Venture-Local
+.\install.cmd -InstallDir D:\Apps\Venture
 .\install.cmd -RunTests
 ```
 
@@ -48,9 +57,17 @@ An optional checkout-local `.venture-install.json` can select different default
 installation and shortcut names without changing the build or runtime:
 
 ```json
-{"installDirectoryName":"Venture-Local","shortcutName":"Venture Local"}
+{"installDirectoryName":"Venture","shortcutName":"Venture"}
 ```
 
-The script accepts only simple directory/shortcut names in this profile.
+The profile directory name is relative to Program Files. The script accepts
+only simple directory/shortcut names in this profile.
 `-InstallDir` still overrides the destination. The profile is optional and is
 not required for an ordinary checkout.
+
+After a successful installation, unchanged files managed by earlier local builds
+in `%LOCALAPPDATA%\Venture-Local` and `%LOCALAPPDATA%\Venture-Passthrough` are
+removed. Ownership receipts and every listed file hash are checked first. User
+files, modified installations and unowned directories are retained. Old shortcuts
+are removed only if they still point to those successfully cleaned installations.
+User settings, saves and incremental build caches retain their existing locations.

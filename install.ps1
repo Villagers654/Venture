@@ -129,21 +129,12 @@ except (OSError, ValueError, KeyError, RuntimeError): sys.exit(1)
     if (Test-Path -LiteralPath $package) { throw 'The fresh package path unexpectedly exists.' }
     Invoke-BuildStep 'Create the ordinary verified release layout' $python @('tools/package_release.py',
         '--build', 'build/windows-release', '--output', $package, '--angle', $angle, '--strip', $strip, '--readobj', $readobj)
-    $directoryName = 'Venture-Local'
-    $shortcutName = 'Venture Local'
-    $profile = Join-Path $sourceRoot '.venture-install.json'
-    if (Test-Path -LiteralPath $profile -PathType Leaf) {
-        $configuration = Get-Content -LiteralPath $profile -Raw | ConvertFrom-Json
-        $directoryName = [string]$configuration.installDirectoryName
-        $shortcutName = [string]$configuration.shortcutName
-        if ($directoryName -notmatch '^[A-Za-z0-9][A-Za-z0-9 ._-]{0,63}$' -or
-            $shortcutName -notmatch '^[A-Za-z0-9][A-Za-z0-9 ._-]{0,63}$') { throw 'Invalid local-install profile names.' }
-    }
-    if ([string]::IsNullOrWhiteSpace($InstallDir)) {
-        $InstallDir = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) $directoryName
-    }
+    $configuration = Get-VentureInstallConfiguration $sourceRoot $InstallDir
+    $InstallDir = $configuration.InstallDir
+    $shortcutName = $configuration.ShortcutName
     Assert-VentureStopped
-    $starter = Install-VentureLayout $package $InstallDir $revision
+    $starter = Install-VenturePackage $package $InstallDir $revision `
+        (Join-Path $sourceRoot 'tools\windows\install_layout.ps1') ($logPath + '.install.log')
     $desktop = [Environment]::GetFolderPath('DesktopDirectory')
     if ($desktop -and (Test-Path -LiteralPath $desktop)) {
         $shell = New-Object -ComObject WScript.Shell
@@ -152,6 +143,21 @@ except (OSError, ValueError, KeyError, RuntimeError): sys.exit(1)
         $shortcut.WorkingDirectory = $InstallDir
         $shortcut.IconLocation = $starter + ',0'
         $shortcut.Save()
+    }
+    foreach ($legacyName in @('Venture-Local', 'Venture-Passthrough')) {
+        $legacyDir = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) $legacyName
+        try {
+            if (Remove-VentureLegacyInstall $legacyDir $InstallDir) {
+                $legacyShortcut = if ($legacyName -eq 'Venture-Local') { 'Venture Local' } else { 'Venture Passthrough' }
+                if ($desktop -and $legacyShortcut -ne $shortcutName) {
+                    $link = Join-Path $desktop ($legacyShortcut + '.lnk')
+                    if (Test-Path -LiteralPath $link -PathType Leaf) {
+                        $legacyLink = $shell.CreateShortcut($link)
+                        if ($legacyLink.TargetPath -eq (Join-Path $legacyDir 'venture.exe')) { Remove-Item -LiteralPath $link -Force }
+                    }
+                }
+            }
+        } catch { Write-Host "Previous local installation was retained: $($_.Exception.Message)" -ForegroundColor Yellow }
     }
     Write-Host "Installed: $InstallDir" -ForegroundColor Green
     if (-not $NoLaunch) { Start-Process -FilePath $starter -WorkingDirectory $InstallDir }

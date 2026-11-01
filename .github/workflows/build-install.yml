@@ -27,3 +27,6 @@ jobs:
       - name: Exercise verified install, repair and bounded cleanup on the real filesystem
         shell: powershell
         run: .\tests\build_install_test.ps1
+      - name: Exercise Program Files defaults and the real install worker
+        shell: powershell
+        run: .\tests\build_install_privileges_test.ps1
