@@ -39,6 +39,8 @@ struct MockXrScript {
   XrPosef left_hand{{0, 0, 0, 1}, {-0.25f, 1.25f, -0.35f}};
   XrPosef right_hand{{0, 0, 0, 1}, {0.25f, 1.25f, -0.35f}};
   std::optional<std::array<XrPosef, 26>> left_hand_joints, right_hand_joints;
+  // Both eyes' view angles (left/right/up/down); unset uses scene_signature.h's host_fov.
+  std::optional<std::array<float, 4>> view_fov;
 };
 struct MockXrStats {
   std::uint32_t waits, begins, ends, copies, acquired, released, bindings, live_images;

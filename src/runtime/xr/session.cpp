@@ -872,7 +872,7 @@ XrResult Session::end(const XrFrameEndInfo *info, std::shared_ptr<const void> ow
         XrView views[2]{{XR_TYPE_VIEW}, {XR_TYPE_VIEW}};
         std::uint32_t count = 0;
         constexpr double degrees = 57.29577951308232;
-        if (XR_SUCCEEDED(xrLocateViews(handle, &locate, &view_state, 2, &count, views)) && count == 2)
+        if (XR_SUCCEEDED(xrLocateViews(handle, &locate, &view_state, 2, &count, views)) && count == 2) {
           log::info("facts", "Host eye FOV (left/right/up/down degrees): left eye {:.1f}/{:.1f}/{:.1f}/{:.1f}, "
                     "right eye {:.1f}/{:.1f}/{:.1f}/{:.1f}; eye separation {:.1f} mm",
                     views[0].fov.angleLeft * degrees, views[0].fov.angleRight * degrees,
@@ -882,6 +882,9 @@ XrResult Session::end(const XrFrameEndInfo *info, std::shared_ptr<const void> ow
                     std::hypot(views[1].pose.position.x - views[0].pose.position.x,
                                views[1].pose.position.y - views[0].pose.position.y,
                                views[1].pose.position.z - views[0].pose.position.z) * 1000);
+          // For the next launch's pre-session field-of-view queries (VrApi).
+          remember_eye_fov({views[0].fov, views[1].fov});
+        }
         xrDestroySpace(view_space);
       }
     }
