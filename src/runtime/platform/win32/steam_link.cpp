@@ -95,6 +95,8 @@ struct SteamLinkSource::Impl {
       log::warn("xr-passthrough", "Steam Link source permission lost; ordinary VR until reconnection");
   }
   void request(bool active) {
+    // No worker exists if event creation failed; keep the source quiescent.
+    if (!changed) return;
     auto previous = intent.load();
     while (bool(previous & 1) != active) {
       if (intent.compare_exchange_weak(previous, previous + 1)) { SetEvent(changed.value); break; }
