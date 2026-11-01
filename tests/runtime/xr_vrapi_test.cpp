@@ -19,6 +19,7 @@
 #include "gfx/queue_sync.h"
 #include "gfx/gpu_device.h"
 #include "xr/vulkan_extensions.h"
+#include "xr/display_memory.h"
 #include "xr_images_fixture.h"
 #include "xr_refresh_host.h"
 #include <algorithm>
@@ -1101,8 +1102,17 @@ TEST_CASE(
   REQUIRE(vg::vrapi_Initialize(&init) == 0);
   CHECK(vg::vrapi_GetSystemPropertyInt(nullptr, 12) == 256); // legacy Quest headset family
   CHECK(vg::vrapi_GetSystemPropertyInt(nullptr, 129) == 1); // sRGB layer bridge
-  CHECK(vg::vrapi_GetSystemPropertyFloat(nullptr, 7) == doctest::Approx(90));
-  CHECK(vg::vrapi_GetSystemPropertyFloat(nullptr, 8) == doctest::Approx(90));
+  // Before a session: the symmetric frustum covering the last session's host
+  // view (another test's), or a nominal 90 degrees when none was remembered.
+  const auto remembered = venture::xr::remembered_eye_fov();
+  const auto half = [&](float a, float b) {
+    return remembered ? std::max(std::abs(a), std::abs(b)) : 0.78539816f;
+  };
+  const auto &seen = remembered ? (*remembered)[0] : XrFovf{};
+  CHECK(vg::vrapi_GetSystemPropertyFloat(nullptr, 7) ==
+        doctest::Approx(2 * half(seen.angleLeft, seen.angleRight) * 57.2957795f));
+  CHECK(vg::vrapi_GetSystemPropertyFloat(nullptr, 8) ==
+        doctest::Approx(2 * half(seen.angleUp, seen.angleDown) * 57.2957795f));
   CHECK(vg::vrapi_GetSystemStatusInt(nullptr, 0) == 1); // attached before VR entry
   auto *ring = vg::vrapi_CreateTextureSwapChain3(0, 0x8058, 64, 64, 1, 3);
   REQUIRE(ring);
@@ -2114,6 +2124,41 @@ TEST_CASE("VrApi legacy tracking transforms preserve repeated floor and eye sele
   vg::vrapi_LeaveVrMode(mobile);
   vg::vrapi_Shutdown();
   venture::xr::install_xr_images(nullptr);
+}
+TEST_CASE("VrApi eye projections are symmetric frusta covering an asymmetric host view") {
+  // Quest 3 through VirtualDesktopXR: -54/40/44/-55 degrees for both eyes here.
+  MockXrScript asymmetric{};
+  asymmetric.view_fov = std::array{-0.9425f, 0.6981f, 0.7679f, -0.9599f};
+  ventureMockXrSetScript(&asymmetric);
+  venture::test::XrImageFixture images;
+  venture::xr::install_xr_images(&images);
+  vr::abi::Init init{1, 1, 1, 42, 0, 0x10300, {1, 2, 3}};
+  REQUIRE(vg::vrapi_Initialize(&init) == 0);
+  vr::abi::Mode mode{2, 0, {1, 2, 3}, 4, 5, 6};
+  auto *mobile = vg::vrapi_EnterVrMode(&mode);
+  REQUIRE(mobile);
+  const auto tracking = vg::vrapi_GetPredictedTracking2(mobile, vg::vrapi_GetPredictedDisplayTime(mobile, 0));
+  for (const auto &eye : tracking.eye) {
+    CHECK(eye.projection.m[0][2] == doctest::Approx(0));
+    CHECK(eye.projection.m[1][2] == doctest::Approx(0));
+    CHECK(eye.projection.m[0][0] == doctest::Approx(1 / std::tan(0.9425f)));
+    CHECK(eye.projection.m[1][1] == doctest::Approx(1 / std::tan(0.9599f)));
+  }
+  CHECK(vg::vrapi_GetSystemPropertyFloat(nullptr, 7) == doctest::Approx(2 * 0.9425f * 57.2957795f));
+  CHECK(vg::vrapi_GetSystemPropertyFloat(nullptr, 8) == doctest::Approx(2 * 0.9599f * 57.2957795f));
+  // The first frame remembers the host's view: the next launch reports the same
+  // fields of view before its session (CryEngine reads them before EnterVrMode).
+  vr::abi::Submit frame{0, 1, 1, 0, 0, 0, nullptr};
+  REQUIRE(vg::vrapi_SubmitFrame2(mobile, &frame) == 0);
+  vg::vrapi_LeaveVrMode(mobile);
+  vg::vrapi_Shutdown();
+  REQUIRE(vg::vrapi_Initialize(&init) == 0);
+  CHECK(vg::vrapi_GetSystemPropertyFloat(nullptr, 7) == doctest::Approx(2 * 0.9425f * 57.2957795f));
+  CHECK(vg::vrapi_GetSystemPropertyFloat(nullptr, 8) == doctest::Approx(2 * 0.9599f * 57.2957795f));
+  vg::vrapi_Shutdown();
+  venture::xr::install_xr_images(nullptr);
+  MockXrScript restored{};
+  ventureMockXrSetScript(&restored);
 }
 TEST_CASE("VrApi analytic layers use real host swapchains and final-frame state") {
   venture::test::XrImageFixture images;
