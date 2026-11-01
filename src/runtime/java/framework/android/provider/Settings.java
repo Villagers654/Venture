@@ -15,6 +15,10 @@ public final class Settings {
     public static int getInt(android.content.ContentResolver r, String name, int fallback) {
       return name.equals("accelerometer_rotation") ? 0 : fallback;
     }
+    // font_scale and the other float settings keep Android's defaults: the caller's.
+    public static float getFloat(android.content.ContentResolver r, String name, float fallback) {
+      return fallback;
+    }
     public static int getInt(android.content.ContentResolver r, String name)
         throws SettingNotFoundException {
       int n = getInt(r, name, Integer.MIN_VALUE);

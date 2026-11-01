@@ -10,4 +10,7 @@ public class AccessibilityEvent extends AccessibilityRecord {
     return eventType;
   }
   public void recycle() {}
+  private int contentChangeTypes;
+  public void setContentChangeTypes(int types) { contentChangeTypes = types; }
+  public int getContentChangeTypes() { return contentChangeTypes; }
 }

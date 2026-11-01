@@ -33,7 +33,7 @@ add_library(venture_xr_capture STATIC capture.cpp)
 target_include_directories(venture_xr_capture PUBLIC ${PROJECT_SOURCE_DIR}/src/runtime)
 target_link_libraries(venture_xr_capture PUBLIC Vulkan::Headers OpenXR::headers PRIVATE zlibstatic)
 
-add_library(venture_xr STATIC color_space.cpp color_images.cpp guest_images.cpp dev_dump.cpp session.cpp clock.cpp menu_chord.cpp bindings.cpp hands.cpp angle_images.cpp haptic_output.cpp haptic_sequence.cpp
+add_library(venture_xr STATIC color_space.cpp color_images.cpp guest_images.cpp dev_dump.cpp session.cpp clock.cpp reference_spaces.cpp menu_chord.cpp bindings.cpp hands.cpp angle_images.cpp haptic_output.cpp haptic_sequence.cpp
   ../hle/openxr/state.cpp ../hle/openxr/openxr.cpp ../hle/openxr/graphics.cpp
   ../hle/openxr/extensions.cpp ../hle/openxr/actions.cpp ../hle/openxr/register.cpp ../hle/openxr/hands.cpp
   ../hle/openxr/spaces.cpp ../hle/openxr/haptics.cpp

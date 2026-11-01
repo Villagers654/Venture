@@ -48,7 +48,15 @@ std::string runtime_failure(std::string_view log_tail, int exit_code);
 // Whether a run's log shows the game asking Meta for its signed-in user or
 // entitlement and getting "not signed in" (no account, or an expired one).
 // Games such as Beat Saber then quit on their own, often with exit code 0.
+// A failed platform initialization counts when the game then quit before
+// rendering more than a few frames.
 bool needed_meta_sign_in(const fs::path &log);
+// The expansion file (.obb) a run looked for and its install lacks, when the
+// game then never rendered past its first frames; empty otherwise.
+std::string missing_expansion(const fs::path &log);
+// A run whose game asked for Meta device attestation (an integrity token only
+// a real headset can produce), was refused, and closed within a minute.
+bool needed_device_attestation(const fs::path &log);
 // Before a launch: moves the previous run's log to <stem>.prev.log (replacing
 // an older one), so the runtime, which appends, starts a log of this run only.
 void rotate_log(const fs::path &log);

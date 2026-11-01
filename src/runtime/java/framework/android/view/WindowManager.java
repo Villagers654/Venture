@@ -19,6 +19,8 @@ public interface WindowManager extends ViewManager {
         LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES = 1, LAYOUT_IN_DISPLAY_CUTOUT_MODE_NEVER = 2,
         LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS = 3;
     public int flags, format = 1, type, gravity, softInputMode, layoutInDisplayCutoutMode;
+    public int x, y;
+    public float alpha = 1, dimAmount, horizontalMargin, verticalMargin;
     public float screenBrightness = -1;
     public float preferredRefreshRate;
     public int preferredDisplayModeId;

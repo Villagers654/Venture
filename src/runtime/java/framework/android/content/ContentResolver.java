@@ -32,4 +32,12 @@ public class ContentResolver {
           && (w.uri.equals(uri) || w.descendants && uri.toString().startsWith(w.uri + "/")))
         w.observer.dispatchChange(w.observer == source, uri);
   }
+  /** Provider queries; null when no provider serves the authority, as on Android. */
+  public android.database.Cursor query(android.net.Uri uri, String[] projection, String selection,
+      String[] selectionArgs, String sortOrder) {
+    java.util.Objects.requireNonNull(uri);
+    if (!"content".equals(uri.getScheme()) || uri.getAuthority() == null) return null;
+    var provider = com.venture.runtime.RuntimeEnvironment.get().contentProviders.get(uri.getAuthority());
+    return provider == null ? null : provider.query(uri, projection, selection, selectionArgs, sortOrder);
+  }
 }

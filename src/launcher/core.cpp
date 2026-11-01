@@ -1634,10 +1634,21 @@ void Core::tick() {
         game_locks_.erase(id);
         log::info("runtime", "Quest application {} exited with code {}.", id,
                   *r.exit);
-        if (library::needed_meta_sign_in(r.log)) {
+        if (auto obb = library::missing_expansion(r.log); !obb.empty()) {
+          auto entry = game(id);
+          r.failure = std::format("Its install lacks the expansion file {}. Import the game again together with "
+                                  "that file (it is in Android/obb/{} on the headset).", obb,
+                                  entry && !entry->package.empty() ? entry->package : "<package>");
+          error(std::format("{} closed: {}", entry ? entry->name : id, r.failure));
+        } else if (library::needed_meta_sign_in(r.log)) {
           auto entry = game(id);
           r.failure = "It needs a Meta account. Use Sign in at the bottom left with the account that owns it, then "
                       "start it again.";
+          error(std::format("{} closed: {}", entry ? entry->name : id, r.failure));
+        } else if (library::needed_device_attestation(r.log)) {
+          auto entry = game(id);
+          r.failure = "It requires Meta device attestation, which only a real Quest headset can provide, so it "
+                      "cannot run in Venture.";
           error(std::format("{} closed: {}", entry ? entry->name : id, r.failure));
         } else if (*r.exit != 0) {
           // A runtime that failed before opening its log still wrote stderr.

@@ -4,4 +4,6 @@ public class EditorInfo {
   public CharSequence actionLabel, hintText, label;
   public String privateImeOptions, packageName;
   public android.os.Bundle extras;
+  public int initialCapsMode, fieldId;
+  public String fieldName;
 }

@@ -244,11 +244,14 @@ int rw_init(Rwlock* r, const std::uint64_t*) {
   return 0;
 }
 int rw_destroy(Rwlock* r) { return atom(r->state).load() ? err::ebusy : 0; }
-// Pairs with the seq_cst waiters increment in rw_acquire: either the releaser
-// sees the waiter or the waiter's futex compare sees the new sequence.
+// The caller's seq_cst state change, then this waiters load, pairs with
+// rw_acquire's seq_cst waiters increment, then its state recheck: either the
+// releaser sees the waiter and advances the sequence the waiter compares, or
+// the waiter sees the new state and retries. Uncontended releases write nothing.
 void rw_release(Rwlock* r) {
+  if (!atom(r->waiters).load()) return;
   atom(r->sequence).fetch_add(1);
-  if (atom(r->waiters).load()) futex_wake(h2g(&r->sequence), INT_MAX, sync_census::WakeSource::rwlock);
+  futex_wake(h2g(&r->sequence), INT_MAX, sync_census::WakeSource::rwlock);
 }
 int rw_acquire(Rwlock* r, bool writer, bool attempt, std::int64_t end = -1) {
   if (writer) atom(r->writers).fetch_add(1);
@@ -276,6 +279,10 @@ int rw_acquire(Rwlock* r, bool writer, bool attempt, std::int64_t end = -1) {
     if (attempt) return finish(err::ebusy);
     if (value == UINT_MAX && atom(r->owner).load() == tid()) return finish(err::edeadlk);
     atom(r->waiters).fetch_add(1);
+    if (atom(r->state).load() != value) {
+      atom(r->waiters).fetch_sub(1);
+      continue;
+    }
     const int waited = wait(r->sequence, seq, end);
     atom(r->waiters).fetch_sub(1);
     if (waited == -err::etimedout) return finish(err::etimedout);
@@ -297,11 +304,11 @@ int rw_unlock(Rwlock* r) {
   if (value == UINT_MAX) {
     if (atom(r->owner).load() != tid()) return err::eperm;
     atom(r->owner).store(0);
-    atom(r->state).store(0, std::memory_order_release);
+    atom(r->state).store(0);  // seq_cst: see rw_release
   } else {
     do {
       if (!value) return err::eperm;
-    } while (!atom(r->state).compare_exchange_weak(value, value - 1, std::memory_order_release));
+    } while (!atom(r->state).compare_exchange_weak(value, value - 1));
   }
   rw_release(r);
   return 0;

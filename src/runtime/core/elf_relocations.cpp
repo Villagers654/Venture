@@ -83,7 +83,8 @@ std::span<const ArmRelocation> arm_relocation_table() {
   static constexpr ArmRelocation table[]{
       {0, "NONE", ArmRelocation::none}, {2, "ABS32", ArmRelocation::absolute},
       {21, "GLOB_DAT", ArmRelocation::absolute}, {22, "JUMP_SLOT", ArmRelocation::absolute},
-      {23, "RELATIVE", ArmRelocation::relative}};
+      {17, "TLS_DTPMOD32", ArmRelocation::tls_module}, {18, "TLS_DTPOFF32", ArmRelocation::tls_offset},
+      {19, "TLS_TPOFF32", ArmRelocation::tls_tp_offset}, {23, "RELATIVE", ArmRelocation::relative}};
   return table;
 }
 std::string relocation_name32(std::uint32_t type) {

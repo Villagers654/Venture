@@ -94,7 +94,12 @@ void init_display() {
   // policy selects mobile GPUs. Permit that implementation on desktop too,
   // retaining ANGLE's Vulkan depth/stencil resolve capability checks.
   // EGL_ANGLE_feature_control uses a null-terminated array of feature names.
-  static const char* feature_overrides[]{"allowMultisampledRenderToTextureEmulation", nullptr};
+  // Every Quest offers GLES 3.2. ANGLE caps a GPU missing any one of 3.2's
+  // extensions at 3.1 and refuses 3.2 contexts outright; games then crash on
+  // the null context (Simpsons Hit & Run, Pinball FX on AMD, issue 22). A 3.2
+  // context instead lacks only that extension, which few games use.
+  static const char* feature_overrides[]{"allowMultisampledRenderToTextureEmulation",
+                                         "exposeES32ForTesting", nullptr};
   // warmUpPipelineCacheAtLink builds placeholder pipelines after every link,
   // and saving a program binary waits for them. Engines that save each
   // program (UE4's binary cache) then serialize that work on their render

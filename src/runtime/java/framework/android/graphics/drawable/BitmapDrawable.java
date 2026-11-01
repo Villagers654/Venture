@@ -13,4 +13,7 @@ public class BitmapDrawable extends Drawable {
   public int getIntrinsicHeight() {
     return bitmap.getHeight();
   }
+  private int gravity = 119;
+  public void setGravity(int gravity) { this.gravity = gravity; }
+  public int getGravity() { return gravity; }
 }

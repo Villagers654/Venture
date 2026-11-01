@@ -90,9 +90,11 @@ DWORD WINAPI dump_worker(void*) {
                          record.ExceptionCode, where, fault_tid);
   venture::log::crash_write(line, n);
   // Walk the original exception context, not the helper's own stack. Leaf
-  // return addresses are read through the OS to stop cleanly at bad stacks.
+  // return addresses are read through the OS to stop cleanly at bad stacks. A
+  // call through a null pointer faults at 0 with the caller's return address
+  // on top of the stack, so the first frame is unwound even when Rip is 0.
   auto walk = context;
-  for (unsigned i = 0; i < 16 && walk.Rip; ++i) {
+  for (unsigned i = 0; i < 16 && (walk.Rip || i == 0); ++i) {
     location(reinterpret_cast<void*>(walk.Rip), where, sizeof(where));
     n = std::snprintf(line, sizeof(line), " E [host-stack]   #%u %s\n", i, where);
     venture::log::crash_write(line, n);

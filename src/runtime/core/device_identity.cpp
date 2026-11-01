@@ -20,7 +20,8 @@ constexpr std::array devices{
     DeviceIdentity{"quest", "monterey", "Quest", "monterey", "Oculus Quest", 259, "Adreno (TM) 540",
                    {0x4c, 0xa2, 0xf7, 0x94, 0xaf, 0x6a, 0x46, 0x9d, 0xbb, 0xe5, 0x1f, 0x7f, 0xce, 0xef, 0x7b, 0xad}},
     DeviceIdentity{"quest2", "hollywood", "Quest 2", "hollywood", "Oculus Quest2", 320, "Adreno (TM) 650",
-                   {0x30, 0x64, 0xf2, 0x39, 0x15, 0xed, 0x47, 0x22, 0xa6, 0x59, 0x5e, 0xa1, 0xec, 0xd8, 0x99, 0xc2}},
+                   {0x30, 0x64, 0xf2, 0x39, 0x15, 0xed, 0x47, 0x22, 0xa6, 0x59, 0x5e, 0xa1, 0xec, 0xd8, 0x99, 0xc2},
+                   "delmar"},
     DeviceIdentity{"questpro", "cambria", "Quest Pro", "seacliff", "Meta Quest Pro", -1, "Adreno (TM) 650",
                    {0xb5, 0x84, 0x43, 0xc9, 0xdf, 0x86, 0x40, 0xcd, 0x89, 0x18, 0x2a, 0x27, 0x8e, 0x18, 0xab, 0x71}},
     DeviceIdentity{"quest3", "eureka", "Quest 3", "eureka", "Oculus Quest 3", -1, "Adreno (TM) 740",
@@ -33,7 +34,8 @@ const DeviceIdentity& select_device_identity(std::string_view supported) {
     while (!rest.empty()) {
       auto end = rest.find('|');
       auto name = rest.substr(0, end);
-      if (name == device.manifest_name || name == device.legacy_name)
+      if (name == device.manifest_name || name == device.legacy_name ||
+          (!device.early_name.empty() && name == device.early_name))
         return true;
       if (end == rest.npos) break;
       rest.remove_prefix(end + 1);

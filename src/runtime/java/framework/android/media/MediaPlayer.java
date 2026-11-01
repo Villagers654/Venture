@@ -258,4 +258,31 @@ public class MediaPlayer {
   public interface OnPreparedListener { void onPrepared(MediaPlayer player); }
   public interface OnSeekCompleteListener { void onSeekComplete(MediaPlayer player); }
   public interface OnVideoSizeChangedListener { void onVideoSizeChanged(MediaPlayer player, int width, int height); }
+  private static final java.util.concurrent.atomic.AtomicInteger sessions = new java.util.concurrent.atomic.AtomicInteger(1);
+  private final int audioSession = sessions.getAndIncrement();
+  private AudioAttributes attributes;
+  private int streamType = AudioManager.STREAM_MUSIC;
+  private java.io.FileInputStream copiedSource;
+  public int getAudioSessionId() { return audioSession; }
+  public void setAudioSessionId(int sessionId) { live(); }
+  public synchronized void setAudioAttributes(AudioAttributes attributes) {
+    if (attributes == null) throw new IllegalArgumentException("Cannot set AudioAttributes to null");
+    this.attributes = attributes;
+  }
+  public synchronized void setAudioStreamType(int streamType) { this.streamType = streamType; }
+  // The screen stays on while a VR application runs.
+  public void setScreenOnWhilePlaying(boolean screenOn) {}
+  public void setWakeMode(android.content.Context context, int mode) {}
+  /** The host decoder reads files: a callback source is copied to a temporary file first. */
+  public synchronized void setDataSource(MediaDataSource source) throws java.io.IOException {
+    var stream = MediaDataSourceCopy.open(java.util.Objects.requireNonNull(source));
+    try {
+      setDataSource(stream.getFD());
+    } catch (java.io.IOException | RuntimeException failure) {
+      stream.close();
+      throw failure;
+    }
+    if (copiedSource != null) copiedSource.close();
+    copiedSource = stream;
+  }
 }

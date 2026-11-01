@@ -116,6 +116,8 @@ bool system_library(std::string_view name) {
       "libEGL.so", "libGLESv1_CM.so", "libGLESv2.so", "libGLESv3.so", "libvulkan.so", "libOpenSLES.so", "libaaudio.so",
       "libmediandk.so", "libjnigraphics.so", "libstdc++.so", "libnativewindow.so", "libsync.so", "libbinder_ndk.so",
       "libcamera2ndk.so", "libneuralnetworks.so", "libGLESv3_adreno.so", "libvrapi.so", "libopenxr_loader.so"};
+  // ARM32 has no Vulkan translation: dlopen fails as on a GLES-only device.
+  if (name == "libvulkan.so" && process_config().isa() == GuestIsa::a32) return false;
   return names.contains(name);
 }
 std::filesystem::path library_file(State& s, std::string_view name, std::string_view base) {
@@ -360,11 +362,12 @@ void relocate_a64(State& s, elf::Image& image, const std::vector<Library*>& grou
 Definition resolve_arm_import(State& s, elf::Image& image, const std::vector<Library*>& group,
                               const elf::Sym& symbol, std::string_view name, std::string_view version) {
   Definition def;
+  // A TLS symbol's value is its offset in the defining module's block.
   if (symbol.shndx && ((symbol.info >> 4) == 0 || (symbol.other & 3) == 2 || (symbol.other & 3) == 3))
-    def = {image.owner, &symbol, symbol.shndx == 0xfff1 ? symbol.value : image.load_bias + symbol.value};
+    def = {image.owner, &symbol, (symbol.info & 15) == 6 || symbol.shndx == 0xfff1 ? symbol.value : image.load_bias + symbol.value};
   else def = resolve(s, &image, group, name, version, false, true);
-  if (def.symbol && ((def.symbol->info & 15) == 10 || (def.symbol->info & 15) == 6))
-    throw std::runtime_error("ARM32 IFUNC/native TLS symbol is not implemented: " + std::string(name));
+  if (def.symbol && (def.symbol->info & 15) == 10)
+    throw std::runtime_error("ARM32 IFUNC symbol is not implemented: " + std::string(name));
   // OBJECT imports require actual data storage, even if a provider mistakenly
   // registers that spelling as callable.
   if (def.library && (symbol.info & 15) == 1) {
@@ -419,10 +422,22 @@ void relocate_a32(State& s, elf::Image& image, const std::vector<Library*>& grou
     ++image.report.relocations[op->name];
     if (op->operation == elf::ArmRelocation::none) return;
     auto p = image.address(r.offset, 4);
-    auto base = op->operation == elf::ArmRelocation::relative ? image.load_bias : definition(r.info >> 32).address;
+    std::uint64_t base;
+    if (op->operation == elf::ArmRelocation::relative) base = image.load_bias;
+    else if (op->operation == elf::ArmRelocation::absolute) base = definition(r.info >> 32).address;
+    else {
+      // Local-dynamic TLS names the null symbol: the module is this image.
+      // An unresolved weak TLS import yields module 0 and offset 0.
+      const auto index = static_cast<std::size_t>(r.info >> 32);
+      const auto def = definition(index);
+      const Library* owner = index ? def.library : image.owner;
+      base = op->operation == elf::ArmRelocation::tls_module ? (owner ? owner->tls_module_id : 0)
+           : op->operation == elf::ArmRelocation::tls_offset ? def.address
+           : def.address + (owner ? owner->tls_offset : 0);
+    }
     // AAELF32 arithmetic is modulo 2^32. S retains the Thumb bit; GOT/PLT
     // addends were normalized to zero by the REL reader.
-    const auto value = static_cast<std::uint32_t>(base + r.addend);
+    const auto value = static_cast<std::uint32_t>(base + (op->operation == elf::ArmRelocation::tls_module ? 0 : r.addend));
     std::memcpy(g2h(p), &value, 4);
   });
   for (std::size_t i = 1; i < image.symbols().size(); ++i) {

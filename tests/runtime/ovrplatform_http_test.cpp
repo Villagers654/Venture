@@ -459,6 +459,18 @@ TEST_CASE(
         std::string::npos);
 }
 
+TEST_CASE("Platform initialization never asks Meta about entitlement; only the game's own request does") {
+  Server server;
+  auto store = std::make_shared<optest::FakeStore>();
+  auto provider = owned_library_provider(optest::app(), store, loopback_http_transport(server.port));
+  REQUIRE_FALSE(provider->prepare());
+  CHECK(server.requests().empty());
+  server.push(library().dump());
+  CHECK_FALSE(provider->entitlement({}).error);
+  REQUIRE(server.requests().size() == 1);
+  CHECK(server.requests().front().find("4850747515044496") != std::string::npos);
+}
+
 TEST_CASE("Platform entitlement asks the app's store listing when Meta fails the whole library") {
   Server server;
   auto store = std::make_shared<optest::FakeStore>();

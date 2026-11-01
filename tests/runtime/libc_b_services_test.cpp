@@ -1,4 +1,5 @@
 #include "libc_b/test.h"
+#include "common/log.h"
 #include "common/paths.h"
 #include "core/signals.h"
 #include "core/syscall.h"
@@ -121,6 +122,23 @@ TEST_CASE("libc B: VFS roots and path traversal") {
   CHECK(p.guest == c.guest_external_files_dir() + "/save");
   CHECK(resolve_path((c.data_dir.parent_path() / "outside").string(), at_cwd, &p) < 0);
   CHECK(fd_open(c.apk.string().c_str(), 1) == -err::erofs);
+  // An expansion file the install lacks is named once, for the launcher.
+  const auto previous_log = log::file();
+  const auto log_path = root / "missing-obb.log";
+  std::filesystem::remove(log_path);
+  log::set_file(paths::utf8(log_path));
+  CHECK(resolve_path("/sdcard/Android/obb/test.game/patch.7.test.game.obb", at_cwd, &p) == 0);
+  CHECK(resolve_path("/storage/emulated/0/Android/obb/test.game/patch.7.test.game.obb", at_cwd, &p) == 0);
+  CHECK(resolve_path("/sdcard/Android/obb/test.game/main.8.test.game.obb", at_cwd, &p) == 0);
+  log::flush();
+  log::set_file(previous_log);
+  std::ifstream in(log_path);
+  const std::string text((std::istreambuf_iterator<char>(in)), {});
+  const std::string_view marker = "Missing expansion file: the game looked for patch.7.test.game.obb,";
+  const auto first = text.find(marker);
+  CHECK(first != std::string::npos);
+  CHECK(text.find(marker, first + 1) == std::string::npos);
+  CHECK(text.find("looked for main.8.test.game.obb,") != std::string::npos);
 }
 TEST_CASE("libc B: descriptors share offsets but not close-on-exec flags") {
   Thread thread;

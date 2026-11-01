@@ -4,7 +4,8 @@ public final class EGL14 {
   public static final int EGL_DEFAULT_DISPLAY = 0, EGL_FALSE = 0, EGL_TRUE = 1,
       EGL_NONE = 0x3038, EGL_SUCCESS = 0x3000, EGL_WIDTH = 0x3057, EGL_HEIGHT = 0x3056,
       EGL_SURFACE_TYPE = 0x3033, EGL_PBUFFER_BIT = 1, EGL_RENDERABLE_TYPE = 0x3040,
-      EGL_OPENGL_ES2_BIT = 4, EGL_CONTEXT_CLIENT_VERSION = 0x3098;
+      EGL_OPENGL_ES2_BIT = 4, EGL_CONTEXT_CLIENT_VERSION = 0x3098, EGL_DRAW = 0x3059, EGL_READ = 0x305a,
+      EGL_VENDOR = 0x3053, EGL_VERSION = 0x3054, EGL_EXTENSIONS = 0x3055, EGL_CLIENT_APIS = 0x308d;
   public static final EGLDisplay EGL_NO_DISPLAY = new EGLDisplay(0);
   public static final EGLContext EGL_NO_CONTEXT = new EGLContext(0);
   public static final EGLSurface EGL_NO_SURFACE = new EGLSurface(0);
@@ -75,6 +76,32 @@ public final class EGL14 {
   }
   public static boolean eglTerminate(EGLDisplay display) { return terminate(handle(display)); }
   public static native int eglGetError();
+  // The calling thread's current objects, as the game's own EGL made them current.
+  public static EGLDisplay eglGetCurrentDisplay() {
+    long h = currentDisplay();
+    return h == 0 ? EGL_NO_DISPLAY : new EGLDisplay(h);
+  }
+  public static EGLContext eglGetCurrentContext() {
+    long h = currentContext();
+    return h == 0 ? EGL_NO_CONTEXT : new EGLContext(h);
+  }
+  public static EGLSurface eglGetCurrentSurface(int readdraw) {
+    long h = currentSurface(readdraw);
+    return h == 0 ? EGL_NO_SURFACE : new EGLSurface(h);
+  }
+  public static boolean eglQueryContext(EGLDisplay display, EGLContext context, int attribute, int[] value, int offset) {
+    output(value, offset);
+    int[] result = new int[1];
+    boolean ok = queryContext(handle(display), handle(context), attribute, result);
+    if (ok) value[offset] = result[0];
+    return ok;
+  }
+  public static String eglQueryString(EGLDisplay display, int name) { return queryString(handle(display), name); }
+  private static native long currentDisplay();
+  private static native long currentContext();
+  private static native long currentSurface(int readdraw);
+  private static native boolean queryContext(long display, long context, int attribute, int[] value);
+  private static native String queryString(long display, int name);
   private static native long getDisplay(int id);
   private static native boolean initialize(long display, int[] version);
   private static native boolean chooseConfig(long display, int[] attrs, long[] configs, int[] count);

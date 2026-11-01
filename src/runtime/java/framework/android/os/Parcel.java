@@ -109,4 +109,10 @@ public final class Parcel {
   public byte[] marshall() {
     throw new UnsupportedOperationException("Cross-process parcels are unavailable");
   }
+  public void writeMap(java.util.Map map) { put(map == null ? null : new java.util.HashMap<>(map)); }
+  @SuppressWarnings({"rawtypes", "unchecked"})
+  public java.util.HashMap readHashMap(ClassLoader loader) {
+    Object value = get();
+    return value == null ? null : new java.util.HashMap((java.util.Map) value);
+  }
 }

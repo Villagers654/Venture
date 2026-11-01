@@ -603,6 +603,21 @@ TEST_CASE("debug reports keep the last launch and leave out names, folders and t
   CHECK(text.find(token) == std::string::npos);
   CHECK(text.find("access_token=<removed> done") != std::string::npos);
   CHECK(launcher::redact("OculusAccountIDProvider ready\n", {}) == "OculusAccountIDProvider ready\n");
+#ifndef _WIN32
+  {
+    // rpm-ostree: HOME=/home/<user> while resolved paths read /var/home/<user>.
+    const auto base = fs::temp_directory_path() / ("venture-home-" + std::to_string(current_process_id()));
+    fs::remove_all(base);
+    fs::create_directories(base / "var" / "home" / "pat");
+    fs::create_directory_symlink(base / "var" / "home", base / "home");
+    const auto real = fs::canonical(base / "var" / "home" / "pat").string();
+    setenv("HOME", (base / "home" / "pat").c_str(), 1);
+    const auto redacted = launcher::redact("runtime -> " + real + "/.local/share/x\n", {});
+    setenv("HOME", home.c_str(), 1);
+    fs::remove_all(base);
+    CHECK(redacted == "runtime -> ~/.local/share/x\n");
+  }
+#endif
 
   auto data = fs::temp_directory_path() / ("venture-report-test-" + std::to_string(current_process_id()));
   fs::remove_all(data);
@@ -648,7 +663,7 @@ TEST_CASE("debug reports keep the last launch and leave out names, folders and t
   CHECK(report.find("old game") == std::string::npos);
   CHECK(report.find("secret-account-file") == std::string::npos);
   CHECK(report.find("\"logLevel\": 2") != std::string::npos);
-  CHECK(report.find("=== Missing Android classes (2 needed by 3 app classes) ===\n"
+  CHECK(report.find("=== Missing Android classes and members (2 needed by 3 app classes) ===\n"
                     "android/media/audiofx/AudioEffect (2; e.g. com.example.Main)\n") != std::string::npos);
   in.close();
 
@@ -739,7 +754,26 @@ TEST_CASE("a game that asked Meta for its user without a sign-in is recognised f
   CHECK_FALSE(library::needed_meta_sign_in(write("other.log",
       "  2.0 1 W [ovrplatform] ovr_User_GetLoggedInUser request=1 type=0x436f345d error=-20003\n"
       "  3.0 1 W [ovrplatform] ovr_Leaderboard_Get request=4 type=0x1 error=-20001\n")));
+  CHECK(library::needed_meta_sign_in(write("init.log",
+      "  1.0 1 W [ovrplatform] initialization failed error=-20001\n"
+      "  2.0 1 I [xr] Frames submitted=1 xrEndFrame_errors=0 submission_fps=0.00 runtime_period_hz=72.00\n")));
+  CHECK_FALSE(library::needed_meta_sign_in(write("init-played.log",
+      "  1.0 1 W [ovrplatform] initialization failed error=-20001\n"
+      "  9.0 1 I [xr] Frames submitted=5400 xrEndFrame_errors=0 submission_fps=72.00 runtime_period_hz=72.00\n")));
   CHECK_FALSE(library::needed_meta_sign_in(dir / "missing.log"));
+  const auto missing_line = std::string("  1.0 1 W [vfs] Missing expansion file: the game looked for "
+                                        "patch.42.com.example.game.obb, which this install does not have\n");
+  CHECK(library::missing_expansion(write("obb.log", missing_line)) == "patch.42.com.example.game.obb");
+  CHECK(library::missing_expansion(write("obb-played.log", missing_line +
+      "  9.0 1 I [xr] Frames submitted=5400 xrEndFrame_errors=0 submission_fps=72.00 runtime_period_hz=72.00\n")).empty());
+  const auto refused = std::string("  100.0 1 W [ovrplatform] ovr_DeviceApplicationIntegrity_GetIntegrityToken "
+                                   "request=6 type=0x3271abda error=-20000\n");
+  CHECK(library::needed_device_attestation(write("attest.log", refused +
+      "Unity stack line\n  111.0 1 I [launch] Terminal guest process exit status=0\n")));
+  CHECK_FALSE(library::needed_device_attestation(write("attest-played.log", refused +
+      "  900.0 1 I [launch] Terminal guest process exit status=0\n")));
+  CHECK_FALSE(library::needed_device_attestation(write("attest-none.log",
+      "  1.0 1 I [launch] Process started\n")));
   fs::remove_all(dir);
 }
 

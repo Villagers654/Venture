@@ -9,7 +9,9 @@ using abi32::Timespec;
 // bionic libc/include/bits/pthread_types.h (NDK r30 ARM): mutex/cond/attrs
 // are one word, pthread_attr_t is 24 bytes and rwlock is 40 bytes.
 struct Attr { std::uint32_t flags, stack, size, guard; std::int32_t policy, priority; };
-struct Rwlock { std::uint32_t state, sequence, owner, reserved[7]; };
+// waiters counts threads between registering and leaving a sequence wait, so
+// uncontended releases skip the sequence and futex. Zero in PTHREAD_RWLOCK_INITIALIZER.
+struct Rwlock { std::uint32_t state, sequence, owner, waiters, reserved[6]; };
 static_assert(sizeof(Attr) == 24 && sizeof(Rwlock) == 40);
 auto atom(std::uint32_t& value) { return std::atomic_ref(value); }
 int wait(std::uint32_t& word, std::uint32_t value, std::int64_t end = -1) {
@@ -141,7 +143,12 @@ int rw_acquire(Rwlock* r, bool writer, bool attempt, std::int64_t end = -1) {
     }
     if (attempt) return err::ebusy;
     if (value == UINT_MAX && atom(r->owner).load() == owner()) return err::edeadlk;
-    if (wait(r->sequence, seq, end) == -err::etimedout) return err::etimedout;
+    // Pairs with rw_unlock (threads.cpp rw_release): seq_cst increment, then recheck.
+    atom(r->waiters).fetch_add(1);
+    if (atom(r->state).load() != value) { atom(r->waiters).fetch_sub(1); continue; }
+    const int waited = wait(r->sequence, seq, end);
+    atom(r->waiters).fetch_sub(1);
+    if (waited == -err::etimedout) return err::etimedout;
   }
 }
 int rw_read(Rwlock* r) { return rw_acquire(r, false, false); }
@@ -158,10 +165,11 @@ int rw_unlock(Rwlock* r) {
   auto value = atom(r->state).load();
   if (value == UINT_MAX) {
     if (atom(r->owner).load() != owner()) return err::eperm;
-    atom(r->owner).store(0); atom(r->state).store(0, std::memory_order_release);
+    atom(r->owner).store(0); atom(r->state).store(0);
   } else do { if (!value) return err::eperm; }
-    while (!atom(r->state).compare_exchange_weak(value, value - 1, std::memory_order_release));
-  atom(r->sequence).fetch_add(1, std::memory_order_release); futex_wake(h2g(&r->sequence), INT_MAX, sync_census::WakeSource::rwlock); return 0;
+    while (!atom(r->state).compare_exchange_weak(value, value - 1));
+  if (!atom(r->waiters).load()) return 0;
+  atom(r->sequence).fetch_add(1); futex_wake(h2g(&r->sequence), INT_MAX, sync_census::WakeSource::rwlock); return 0;
 }
 int attr_init(Attr* a) { *a = {0, 0, 1024 * 1024, 4096, 0, 0}; return 0; }
 int attr_destroy(Attr*) { return 0; }

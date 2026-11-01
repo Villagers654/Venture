@@ -39,4 +39,8 @@ public class Paint {
   public static class FontMetricsInt {
     public int top, ascent, descent, bottom, leading;
   }
+  private float strokeWidth;
+  public void setStrokeWidth(float width) { strokeWidth = width; }
+  public float getStrokeWidth() { return strokeWidth; }
+  public void setARGB(int a, int r, int g, int b) { setColor((a << 24) | (r << 16) | (g << 8) | b); }
 }

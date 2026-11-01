@@ -31,6 +31,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include "hle/registry.h"
 #include "hle/libandroid/libandroid.h"
 #include "hle/ovrplatform/hle.h"
@@ -459,8 +460,26 @@ int main(int argc, char** argv) {
     venture::linker_set_inspection(inspect);
     if (inspect && venture::process_config().isa() == venture::GuestIsa::a32) venture::hle::a32::install_import_coverage_hook();
     if (inspect) {
-      for (const auto& path : libraries) if (!venture::Linker::get().open(venture::paths::utf8(path.filename()), venture::kRtldNow | venture::kRtldGlobal, nullptr))
-        throw std::runtime_error(venture::Linker::get().take_error());
+      for (const auto& path : libraries) {
+        // APKs also ship members under lib/<abi>/*.so that the game never
+        // loads: data (a Frida gadget's JSON config) or another machine's ELF
+        // (Hellsweeper VR's desktop libsteam_api.so). Inspection skips them.
+        char magic[4]{};
+        std::ifstream(path, std::ios::binary).read(magic, sizeof(magic));
+        bool loadable = std::memcmp(magic, "\177ELF", sizeof(magic)) == 0;
+        try {
+          loadable = loadable && venture::elf::detect_isa(path) == venture::process_config().isa();
+        } catch (const std::exception&) {
+          loadable = false;
+        }
+        if (!loadable) {
+          venture::log::warn("launch", "Inspection skips {}: not a library for this slice",
+                             venture::paths::utf8(path.filename()));
+          continue;
+        }
+        if (!venture::Linker::get().open(venture::paths::utf8(path.filename()), venture::kRtldNow | venture::kRtldGlobal, nullptr))
+          throw std::runtime_error(venture::Linker::get().take_error());
+      }
       venture::write_inspection_report(venture::process_config().cache_dir / "inspect.json");
       return 0;
     }

@@ -765,17 +765,18 @@ bool capture_first_frame_stall() {
   try_log_guest_threads_raw("no-first-frame");
   return acknowledged;
 }
-bool capture_frame_stall() {
-  log::error("startup-snapshot", "No frame submitted for {} s while the game has focus; capturing thread state",
-             startup_diagnostics::FrameStallTrigger::stall_seconds);
-  const auto acknowledged = platform::request_runtime_stall_dump();
-  try_log_guest_threads_raw("frame-stall", true);
+bool capture_frame_stall(std::int64_t seconds, bool native_dump) {
+  log::error("startup-snapshot", "No frame submitted for {} s while the game has focus; capturing thread state{}",
+             seconds, native_dump ? " and a native dump" : "");
+  const auto acknowledged = native_dump && platform::request_runtime_stall_dump();
+  try_log_guest_threads_raw(native_dump ? "frame-freeze" : "frame-stall", true);
   return acknowledged;
 }
 bool try_log_guest_threads_raw(std::string_view reason, bool symbols) {
   struct Row {
     std::int32_t tid = 0;
     GuestAddr pc = 0, lr = 0, sp = 0;
+    std::uint32_t host_call = 0;
     std::array<GuestAddr, 32> frames{};
     unsigned count = 0;
   };
@@ -786,6 +787,7 @@ bool try_log_guest_threads_raw(std::string_view reason, bool symbols) {
     auto& row = rows[count++];
     auto& cpu = thread.cpu();
     row.tid = thread.tid(); row.pc = cpu.pc(); row.lr = cpu.lr(); row.sp = cpu.sp();
+    row.host_call = thread.host_call.load(std::memory_order_relaxed);
     if (cpu.isa() != GuestIsa::a64) return;
     auto fp = cpu.frame_pointer();
     while (fp && !(fp & 15) && row.count < row.frames.size()) {
@@ -807,13 +809,21 @@ bool try_log_guest_threads_raw(std::string_view reason, bool symbols) {
     const auto start = std::chrono::steady_clock::now();
     const bool found = Linker::get().try_address_info(pc, &info, linker_wait);
     if (!found && std::chrono::steady_clock::now() - start >= linker_wait) linker_wait = {};
-    if (!found || info.path.empty()) return std::string();
+    if (!found || info.path.empty()) {
+      const auto* hle = hle::function_at(pc);
+      return hle ? std::format(" (host call {}!{})", hle->library, hle->name) : std::string();
+    }
     return std::format(" {}+{:#x} ({})", info.path, pc - info.base, info.symbol);
   };
   for (unsigned i = 0; i < count; ++i) {
     const auto& row = rows[i];
-    log::error("startup-snapshot", "guest tid={} pc={:#x}{} lr={:#x}{} sp={:#x}", row.tid, row.pc, name(row.pc),
-               row.lr, name(row.lr), row.sp);
+    std::string host;
+    if (row.host_call) {
+      const auto& f = hle::function(row.host_call - 1);
+      host = std::format(" in host call {}!{}", f.library, f.name);
+    }
+    log::error("startup-snapshot", "guest tid={} pc={:#x}{} lr={:#x}{} sp={:#x}{}", row.tid, row.pc, name(row.pc),
+               row.lr, name(row.lr), row.sp, host);
     for (unsigned f = 0; f < row.count; ++f)
       log::error("startup-snapshot", "guest tid={} frame={} pc={:#x}{}", row.tid, f, row.frames[f], name(row.frames[f]));
   }

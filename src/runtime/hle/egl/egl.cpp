@@ -48,6 +48,16 @@ void fail(EGLint error, const char* operation) {
   last_error = error;
   log::debug("egl", "{} failed: EGL 0x{:x}", operation, error);
 }
+// EGL 1.5 3.1: eglGetError reports the most recent call on the thread, so each
+// guest entry starts at EGL_SUCCESS. A stale error made Unity blame a successful
+// eglGetConfigAttrib for an earlier failure (BAD_MATCH, issue 22).
+template <auto F> struct Entry;
+template <class R, class... A, R (*F)(A...)> struct Entry<F> {
+  static R call(A... args) {
+    last_error = EGL_SUCCESS;
+    return F(args...);
+  }
+};
 template <class T, class... A>
 auto host(const char* name, A... args) {
   auto fn = angle_function<T>(name);
@@ -771,6 +781,7 @@ template<auto F> hle::Handler egl_adapter32() {
     // same application lifetime constraint as on native EGL.
     std::unique_lock lock(state_lock, std::defer_lock);
     if (ctx.info().name != "eglClientWaitSync" && ctx.info().name != "eglClientWaitSyncKHR") lock.lock();
+    if (ctx.info().name != "eglGetError") last_error = EGL_SUCCESS;
     a32::invoke(F, ctx);
   };
 }
@@ -814,7 +825,8 @@ const EglHostApi& egl_host_api() {
   static const EglHostApi api{guest_eglGetDisplay, guest_eglInitialize,
     guest_eglChooseConfig, guest_eglCreatePbufferSurface, guest_eglCreateContext,
     guest_eglMakeCurrent, guest_eglDestroySurface, guest_eglDestroyContext,
-    guest_eglTerminate, guest_eglGetError};
+    guest_eglTerminate, guest_eglGetError, guest_eglGetCurrentDisplay, guest_eglGetCurrentContext,
+    guest_eglGetCurrentSurface, guest_eglQueryContext, guest_eglQueryString};
   return api;
 }
 }  // namespace venture::gfx

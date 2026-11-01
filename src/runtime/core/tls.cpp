@@ -1,4 +1,5 @@
 #include "core/tls.h"
+#include "core/a32_abi.h"
 #include "core/address_space.h"
 #include "core/hle_runtime.h"
 #include "core/thread.h"
@@ -115,10 +116,19 @@ GuestAddr descriptor_resolver() {
   return p;
 }
 GuestAddr get_addr_thunk() {
-  static auto p = hle::make_thunk("libc.so", "__tls_get_addr", [](hle::CallContext& ctx) {
-    auto* index = g2h<const std::uint64_t>(ctx.x(0));
-    ctx.return_x(get_addr(ctx.thread(), index[0], index[1]));
-  });
+  static auto p = [] {
+    if (process_config().isa() == GuestIsa::a32)
+      // bionic tls_index on ARM: two 32-bit words, module and offset.
+      hle::a32::register_adapter("libc.so", "__tls_get_addr", [](hle::CallContext& ctx) {
+        std::uint32_t index[2];
+        std::memcpy(index, g2h(static_cast<std::uint32_t>(ctx.x(0))), sizeof(index));
+        ctx.return_x(get_addr(ctx.thread(), index[0], index[1]));
+      });
+    return hle::make_thunk("libc.so", "__tls_get_addr", [](hle::CallContext& ctx) {
+      auto* index = g2h<const std::uint64_t>(ctx.x(0));
+      ctx.return_x(get_addr(ctx.thread(), index[0], index[1]));
+    });
+  }();
   return p;
 }
 GuestAddr weak_descriptor_resolver() {

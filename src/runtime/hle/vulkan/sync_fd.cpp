@@ -81,6 +81,52 @@ std::atomic<std::uint64_t> import_signals{0};
 std::mutex imports_lock;
 std::set<std::pair<VkDevice, VkSemaphore>> imported;
 std::atomic<std::size_t> imported_count{0};  // lets submissions skip the lock
+// Fences of the host signals that temporary imports submit, by semaphore. The
+// guest sees an already-signaled payload and may destroy the semaphore or its
+// device at once; the host destroy must wait for the signal still in flight
+// (VUID-vkDestroySemaphore-semaphore-05149, VUID-vkDestroyDevice-device-05137).
+struct PendingSignal {
+  VkDevice device;
+  VkSemaphore semaphore;
+  VkFence fence;
+};
+std::mutex signals_lock;
+std::vector<PendingSignal> pending_signals;
+// A fence for the next import signal: a completed signal's, reset, else a new one.
+VkFence signal_fence(VkDevice d) {
+  {
+    std::lock_guard lock(signals_lock);
+    for (auto it = pending_signals.begin(); it != pending_signals.end(); ++it) {
+      if (it->device != d || device_fn<PFN_vkGetFenceStatus>(d, "vkGetFenceStatus")(d, it->fence) != VK_SUCCESS) continue;
+      const VkFence fence = it->fence;
+      pending_signals.erase(it);
+      if (device_fn<PFN_vkResetFences>(d, "vkResetFences")(d, 1, &fence) == VK_SUCCESS) return fence;
+      device_fn<PFN_vkDestroyFence>(d, "vkDestroyFence")(d, fence, nullptr);
+      break;
+    }
+  }
+  VkFenceCreateInfo info{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+  VkFence fence{};
+  if (device_fn<PFN_vkCreateFence>(d, "vkCreateFence")(d, &info, nullptr, &fence) != VK_SUCCESS) return VK_NULL_HANDLE;
+  return fence;
+}
+// Waits for and releases the import signals of the device matching `match`.
+template <class Match>
+void retire_signals(VkDevice d, Match match) {
+  std::vector<VkFence> fences;
+  {
+    std::lock_guard lock(signals_lock);
+    std::erase_if(pending_signals, [&](const PendingSignal& p) {
+      if (p.device != d || !match(p)) return false;
+      fences.push_back(p.fence);
+      return true;
+    });
+  }
+  for (const VkFence fence : fences) {
+    wait_fence(d, fence, "sync_fd import signal");
+    device_fn<PFN_vkDestroyFence>(d, "vkDestroyFence")(d, fence, nullptr);
+  }
+}
 // Waits consume the imported payloads of these semaphores.
 template <class Each>
 void consumed(VkDevice device, Each each) {
@@ -198,7 +244,14 @@ VkResult VKAPI_CALL import_semaphore_fd(VkDevice d, const VkImportSemaphoreFdInf
     VkSubmitInfo signal{VK_STRUCTURE_TYPE_SUBMIT_INFO};
     signal.signalSemaphoreCount = 1;
     signal.pSignalSemaphores = &info->semaphore;
-    r = submit(d, &signal, VK_NULL_HANDLE);
+    const VkFence fence = signal_fence(d);
+    r = submit(d, &signal, fence);
+    if (fence && r == VK_SUCCESS) {
+      std::lock_guard lock(signals_lock);
+      pending_signals.push_back({d, info->semaphore, fence});
+    } else if (fence) {
+      device_fn<PFN_vkDestroyFence>(d, "vkDestroyFence")(d, fence, nullptr);
+    }
     if (r == VK_SUCCESS) {
       ++import_signals;
       std::lock_guard lock(imports_lock);
@@ -263,6 +316,7 @@ VkResult VKAPI_CALL bind_sparse(VkQueue queue, std::uint32_t count, const VkBind
 // wait may still reference the semaphore after the guest's own batches have
 // completed (VUID-vkDestroySemaphore-semaphore-05149): retire those first. The
 // guest's batches signaling it are done, so the waits are already satisfied.
+// Import signals may still be in flight; they complete without guest work.
 void VKAPI_CALL destroy_semaphore(VkDevice d, VkSemaphore semaphore, const VkAllocationCallbacks* allocator) {
   consumed(d, [&](auto erase) { erase(semaphore); });
   std::vector<std::shared_ptr<SyncFile>> live;
@@ -276,6 +330,7 @@ void VKAPI_CALL destroy_semaphore(VkDevice d, VkSemaphore semaphore, const VkAll
     }
   }
   for (auto& file : live) file->retire();
+  if (semaphore) retire_signals(d, [&](const PendingSignal& p) { return p.semaphore == semaphore; });
   next_fn<PFN_vkDestroySemaphore, "vkDestroySemaphore">(d)(d, semaphore, allocator);
 }
 bool timeline(const void* next) {
@@ -360,6 +415,7 @@ void release_sync_fd_device(VkDevice device) {
   // Applications complete device work before vkDestroyDevice; descriptors that
   // outlive the device remain valid, already-signaled sync files.
   for (auto& file : live) file->retire();
+  retire_signals(device, [](const PendingSignal&) { return true; });
 }
 SyncFdState sync_fd_state(VkDevice device) {
   std::lock_guard lock(files_lock);

@@ -12,19 +12,62 @@ import org.objectweb.asm.*;
 final class Hierarchy {
     record Info(String parent, List<String> interfaces, boolean isInterface) {}
     final Map<String,Info> types = new HashMap<>();
-    void add(byte[] bytes) {
+    // Declared "name descriptor" members of framework and platform classes, for member checks.
+    final Map<String,Set<String>> members = new HashMap<>();
+    void add(byte[] bytes) { add(bytes, false); }
+    void add(byte[] bytes, boolean framework) {
         ClassReader r = new ClassReader(bytes);
         types.putIfAbsent(r.getClassName(), new Info(r.getSuperName(), Arrays.asList(r.getInterfaces()), (r.getAccess() & Opcodes.ACC_INTERFACE) != 0));
+        if (!framework || members.containsKey(r.getClassName())) return;
+        Set<String> declared = new HashSet<>();
+        r.accept(new ClassVisitor(Opcodes.ASM9) {
+            @Override public FieldVisitor visitField(int access, String name, String desc, String signature, Object value) {
+                declared.add(name + " " + desc); return null;
+            }
+            @Override public MethodVisitor visitMethod(int access, String name, String desc, String signature, String[] exceptions) {
+                declared.add(name + desc); return null;
+            }
+        }, ClassReader.SKIP_CODE | ClassReader.SKIP_DEBUG | ClassReader.SKIP_FRAMES);
+        members.put(r.getClassName(), declared);
     }
-    void jar(String path) throws IOException {
+    void jar(String path) throws IOException { jar(path, false); }
+    void jar(String path, boolean framework) throws IOException {
         if (path.isEmpty()) return;
         try (JarFile jar = new JarFile(path)) {
             var entries = jar.entries();
             while (entries.hasMoreElements()) {
                 var e = entries.nextElement();
-                if (e.getName().endsWith(".class") && !e.getName().startsWith("META-INF/")) add(jar.getInputStream(e).readAllBytes());
+                if (e.getName().endsWith(".class") && !e.getName().startsWith("META-INF/")) add(jar.getInputStream(e).readAllBytes(), framework);
             }
         }
+    }
+    private Set<String> declared(String name) {
+        Set<String> known = members.get(name);
+        if (known != null) return known;
+        try (InputStream in = ClassLoader.getPlatformClassLoader().getResourceAsStream(name + ".class")) {
+            if (in == null) return null;
+            add(in.readAllBytes(), true); return members.get(name);
+        } catch (IOException e) { throw new UncheckedIOException(e); }
+    }
+    /** Whether a framework class can resolve a member reference (JVMS 5.4.3.3-4: class chain, then superinterfaces).
+     *  Methods are "name(desc)ret", fields "name desc". Null when the owner is not a framework class. */
+    Boolean resolves(String owner, String member) {
+        if (!members.containsKey(owner)) return null;
+        // Signature-polymorphic and array members never reach framework classes.
+        Deque<String> pending = new ArrayDeque<>(List.of(owner));
+        Set<String> seen = new HashSet<>();
+        while (!pending.isEmpty()) {
+            String type = pending.poll();
+            if (!seen.add(type)) continue;
+            Set<String> declared = declared(type);
+            if (declared == null) return true;  // Unknown ancestry: the class census reports it.
+            if (declared.contains(member)) return true;
+            Info i = types.get(type);
+            if (i == null) return true;
+            if (i.parent() != null) pending.add(i.parent());
+            pending.addAll(i.interfaces());
+        }
+        return false;
     }
     void metadata(String path) throws IOException {
         if (path.isEmpty()) return;

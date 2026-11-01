@@ -56,6 +56,8 @@ public final class LifecycleTest {
       SurfaceView view = new SurfaceView(this);
       view.layout(3, 4, 10, 20);
       checkVisibleFrame(view); // Detached fallback uses display size, not child bounds.
+      // Unity sets TRANSLUCENT before the surface exists (Ninja Legends); Android resolves it to RGBA_8888.
+      view.getHolder().setFormat(-3);
       view.getHolder().addCallback(this);
       setContentView(view);
     }

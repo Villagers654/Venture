@@ -25,5 +25,7 @@ with tempfile.TemporaryDirectory(prefix="venture-files-rewrite-") as directory:
     tool_path = os.pathsep.join([java_path(build_tools()), str(ROOT / ".deps/asm/*")])
     subprocess.run([java_tool("java"), "-cp", tool_path, "com.venture.dex.Rewrite", str(source),
                     str(rewritten), str(work / "census.tsv"), framework], check=True)
+    missing = [line.split("\t") for line in (work / "census.tsv").read_text().splitlines() if line.startswith("M\t")]
+    assert missing == [["M", "MemberCaller", "android/widget/Button.ventureAbsentMember()V", "java.lang.NoSuchMethodError"]], missing
     subprocess.run([java_tool("java"), "-Xverify:all", "-Djava.io.tmpdir=" + str(snapshots),
                     "-cp", os.pathsep.join([framework, str(rewritten)]), "VirtualFilesFixture", str(work)], check=True)

@@ -1,5 +1,6 @@
 #include "common/environment.h"
 #include <doctest/doctest.h>
+#include "common/log.h"
 #include "common/paths.h"
 #include "core/address_space.h"
 #include "core/elf.h"
@@ -371,14 +372,15 @@ TEST_CASE("core APK extraction supports long native cache and source paths") {
     REQUIRE(mz_zip_writer_add_mem(&zip, member.c_str(), header.data(), header.size(), MZ_BEST_COMPRESSION));
     // A non-ELF member (a loader's config) is copied as data, as Android does.
     const auto config_member = "lib/" + config.abi + "/libfixture.config.so";
-    REQUIRE(mz_zip_writer_add_mem(&zip, config_member.c_str(), "{}", 2, MZ_BEST_COMPRESSION));
+    const std::string gadget_config = R"({"interaction": {"type": "script", "path": "libscript.so"}})";
+    REQUIRE(mz_zip_writer_add_mem(&zip, config_member.c_str(), gadget_config.data(), gadget_config.size(), MZ_BEST_COMPRESSION));
     void* archive = nullptr; std::size_t bytes = 0;
     REQUIRE(mz_zip_writer_finalize_heap_archive(&zip, &archive, &bytes));
     std::unique_ptr<void, decltype(&mz_free)> storage(archive, mz_free);
     mz_zip_writer_end(&zip);
     paths::atomic_write(paths::io_path(config.apk), std::string_view(static_cast<const char*>(archive), bytes));
     auto all = extract_native_libraries(); REQUIRE(all.size() == 2);
-    CHECK(paths::read(all[0]) == "{}");
+    CHECK(paths::read(all[0]) == gadget_config);
     std::vector files{all[1]};
     CHECK(paths::read(files[0]) == std::string(reinterpret_cast<const char*>(header.data()), header.size()));
     // A valid-size but corrupted cached file must still be repaired at length.
@@ -386,6 +388,14 @@ TEST_CASE("core APK extraction supports long native cache and source paths") {
     paths::atomic_write(files[0], std::string_view(reinterpret_cast<const char*>(corrupted.data()), corrupted.size()));
     CHECK(extract_native_libraries() == all);
     CHECK(paths::read(files[0]) == std::string(reinterpret_cast<const char*>(header.data()), header.size()));
+    // A cached launch still names the gadget configuration in its log.
+    const auto previous_log = log::file();
+    const auto log_path = root / "gadget.log";
+    fs::remove(log_path);
+    log::set_file(paths::utf8(log_path));
     CHECK(extract_native_libraries() == all);
+    log::flush();
+    log::set_file(previous_log);
+    CHECK(paths::read(log_path).find(config_member + " is a Frida gadget configuration") != std::string::npos);
   }
 }

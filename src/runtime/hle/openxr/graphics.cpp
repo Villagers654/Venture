@@ -363,6 +363,12 @@ XrResult xrEnumerateSwapchainFormats(XrSession handle, std::uint32_t capacity, s
     gl = formats;
     for (auto depth : {VK_FORMAT_D24_UNORM_S8_UINT, VK_FORMAT_X8_D24_UNORM_PACK32})
       if (substituted_depth(depth, formats) != VK_FORMAT_UNDEFINED) gl.push_back(depth);
+    // A Quest lists depth chains whatever the host offers, and create_swapchain
+    // keeps an unoffered depth chain the guest's own. Unity checks this list and
+    // ends the session ("Failed to create swapchain") when its depth format is
+    // missing: Epic Roller Coasters on a host listing no depth (SteamVR on AMD).
+    for (auto depth : {VK_FORMAT_D16_UNORM, VK_FORMAT_D24_UNORM_S8_UINT, VK_FORMAT_D32_SFLOAT})
+      if (std::find(gl.begin(), gl.end(), depth) == gl.end()) gl.push_back(depth);
   }
   *count = static_cast<std::uint32_t>(gl.size());
   if (!capacity)

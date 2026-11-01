@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <cstring>
 #include <stdexcept>
+#include <string>
 
 namespace venture::gfx {
 namespace {
@@ -356,9 +357,11 @@ void create_direct() {
   ci.pApplicationInfo = &app;
   VkInstance instance{};
   auto r = create_instance(&ci, nullptr, &instance);
-  if (r != VK_SUCCESS)
+  if (r != VK_SUCCESS) {
+    if (auto message = missing_vulkan_surface_support(); !message.empty()) throw std::runtime_error(message);
     throw std::runtime_error("Vulkan instance creation failed: " +
                              std::to_string(r));
+  }
   VkPhysicalDevice p{};
   if (select_device(instance, &p) != VK_SUCCESS)
     throw std::runtime_error("No Vulkan physical device");
@@ -459,6 +462,19 @@ bool host_vulkan_instance_extension(std::string_view name) {
   std::vector<VkExtensionProperties> extensions(count);
   if (enumerate(nullptr, &count, extensions.data()) != VK_SUCCESS) return false;
   return std::ranges::any_of(extensions, [&](const auto& e) { return name == e.extensionName; });
+}
+std::string missing_vulkan_surface_support() {
+#ifdef _WIN32
+  // Every Windows GPU driver with Vulkan provides both; the loader lists neither
+  // when no driver manifest it finds loads (a damaged or partial driver install).
+  std::string missing;
+  for (auto name : {"VK_KHR_surface", "VK_KHR_win32_surface"})
+    if (!host_vulkan_instance_extension(name)) missing += std::string(missing.empty() ? "" : ", ") + name;
+  if (!missing.empty())
+    return "Your graphics driver's Vulkan support is not working (Vulkan lists no " + missing +
+           "). Reinstall the latest driver for your GPU, then press Play again.";
+#endif
+  return {};
 }
 const AngleVulkanCallbacksV1& angle_vulkan_callbacks() {
   static const AngleVulkanCallbacksV1 callbacks{1,

@@ -150,6 +150,17 @@ TEST_CASE("core CPU register pressure preserves GPR and SIMD values across spill
     }
   }
 }
+TEST_CASE("core HLE stall diagnostics name the function whose thunk holds a pc") {
+  auto thunk = hle::make_thunk("libtest.so", "blocking_wait", [](hle::CallContext&) {});
+  for (GuestAddr offset = 0; offset < 16; offset += 4) {
+    const auto* info = hle::function_at(thunk + offset);
+    REQUIRE(info);
+    CHECK(info->library == "libtest.so");
+    CHECK(info->name == "blocking_wait");
+  }
+  CHECK(hle::function_at(0x1000) == nullptr);
+}
+
 TEST_CASE("core CPU SVC and nested HLE callback preserve full context") {
   GuestThread thread(21); thread.attach_to_current_host_thread();
   Code add{0x8b010000, 0xd65f03c0};

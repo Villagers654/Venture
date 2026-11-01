@@ -127,6 +127,9 @@ class GuestThread {
   std::unique_ptr<shutdown_trace::MutexWatchRecords<4096>> mutex_watch_records;
   std::unique_ptr<shutdown_trace::WatchRecords<shutdown_trace::WordTransitionEvent, 1024>> word_watch_records;
   std::atomic<unsigned> os_call_depth{0};
+  // HLE function id + 1 while its handler runs, else 0: stall snapshots name a
+  // blocking host call. Relaxed, owner-written; observers only report it.
+  std::atomic<std::uint32_t> host_call{0};
   void request_shutdown_sample();
 
   explicit GuestThread(std::int32_t tid);

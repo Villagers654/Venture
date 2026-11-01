@@ -104,4 +104,16 @@ public final class MediaExtractor {
     return (int)size;
   }
   public synchronized void release() { if (peer != 0) nativeRelease(peer); peer = 0; tracks = 0; }
+  private java.io.FileInputStream copiedSource;
+  public void setDataSource(MediaDataSource source) throws java.io.IOException {
+    var stream = MediaDataSourceCopy.open(java.util.Objects.requireNonNull(source));
+    try {
+      setDataSource(stream.getFD());
+    } catch (java.io.IOException | RuntimeException failure) {
+      stream.close();
+      throw failure;
+    }
+    if (copiedSource != null) copiedSource.close();
+    copiedSource = stream;
+  }
 }

@@ -12,6 +12,12 @@ public abstract class Task<T> {
   public abstract <X extends Throwable> T getResult(Class<X> exceptionType) throws X;
   public abstract Exception getException();
   public abstract Task<T> addOnFailureListener(OnFailureListener listener);
+  /** Called once the task completes, successfully or not. */
+  public Task<T> addOnCompleteListener(OnCompleteListener<T> listener) {
+    addOnSuccessListener(result -> listener.onComplete(this));
+    addOnFailureListener(failure -> listener.onComplete(this));
+    return this;
+  }
   public abstract Task<T> addOnFailureListener(
       android.app.Activity activity, OnFailureListener listener);
   public abstract Task<T> addOnFailureListener(

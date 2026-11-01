@@ -17,4 +17,11 @@ public class AccessibilityRecord {
   public java.util.List<CharSequence> getText() {
     return text;
   }
+  private boolean enabled = true;
+  private android.view.View source;
+  private int virtualId = -1;
+  public void setEnabled(boolean value) { enabled = value; }
+  public boolean isEnabled() { return enabled; }
+  public void setSource(android.view.View value) { setSource(value, -1); }
+  public void setSource(android.view.View value, int id) { source = value; virtualId = id; }
 }

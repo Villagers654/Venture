@@ -27,8 +27,10 @@ class FirstFrameTrigger {
   }
 };
 // Capture when submitted frames stop advancing mid-game (a freeze): the game
-// is still running but its render loop has not produced a frame for
-// `stall_seconds`. Once per stall: frames advancing again re-arm it, so a
+// is still running but its render loop has not produced a frame for the
+// trigger's seconds (stall_seconds for logged stacks; dump_stall_seconds for a
+// native dump, which suspends the process while it is written and so must not
+// lengthen a loading stall that ends by itself). Once per stall: frames advancing again re-arm it, so a
 // freeze after a long loading stall is still captured, up to `max_captures`
 // per run. A paused (unfocused) or quitting game is excluded by `stopping`,
 // which also restarts the wait.
@@ -37,14 +39,18 @@ class FrameStallTrigger {
   int captures_ = 0;
   std::uint64_t frames_ = 0;
   std::int64_t since_ = 0;
+  std::int64_t seconds_;
  public:
   static constexpr std::int64_t stall_seconds = 5;
+  static constexpr std::int64_t dump_stall_seconds = 30;
   static constexpr int max_captures = 4;
+  explicit FrameStallTrigger(std::int64_t seconds = stall_seconds) : seconds_(seconds) {}
+  std::int64_t seconds() const { return seconds_; }
   bool poll(std::int64_t now_seconds, std::uint64_t frames, bool stopping) {
     if (stopping) since_ = now_seconds;
     if (stopping || !frames) return false;
     if (frames != frames_) { frames_ = frames; since_ = now_seconds; fired_ = false; return false; }
-    if (fired_ || captures_ >= max_captures || now_seconds - since_ < stall_seconds) return false;
+    if (fired_ || captures_ >= max_captures || now_seconds - since_ < seconds_) return false;
     fired_ = true;
     ++captures_;
     return true;

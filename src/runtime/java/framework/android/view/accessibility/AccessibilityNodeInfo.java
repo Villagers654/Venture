@@ -33,6 +33,10 @@ public class AccessibilityNodeInfo implements Parcelable {
     source = value;
     virtualId = id;
   }
+  private final java.util.List<Object> children = new java.util.ArrayList<>();
+  public void addChild(View child) { addChild(child, -1); }
+  public void addChild(View root, int virtualDescendantId) { children.add(java.util.List.of(root, virtualDescendantId)); }
+  public int getChildCount() { return children.size(); }
   public void setParent(View value) {
     setParent(value, -1);
   }

@@ -27,4 +27,5 @@ public class TelephonyManager {
     if ((events & 32) != 0)
       l.onCallStateChanged(0, "");
   }
+  public String getNetworkOperatorName() { return ""; }
 }

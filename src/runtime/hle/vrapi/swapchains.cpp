@@ -367,15 +367,20 @@ TextureSwapChain *vrapi_CreateTextureSwapChain3(std::int32_t type, std::int64_t 
                      count,  0,     1};
   return vrapi_CreateTextureSwapChain4(&ci);
 }
-TextureSwapChain *vrapi_CreateTextureSwapChain(std::int32_t type, std::int32_t format,
-                                               std::int32_t width, std::int32_t height,
-                                               std::int32_t levels, bool buffered) {
+// VrApi 1.0 to 1.1 creators take ovrTextureFormat (VRAPI_TEXTURE_FORMAT_*), not GL formats.
+TextureSwapChain *vrapi_CreateTextureSwapChain2(std::int32_t type, std::int32_t format,
+                                                std::int32_t width, std::int32_t height,
+                                                std::int32_t levels, std::int32_t count) {
   constexpr std::int64_t formats[]{0,      0x8d62, 0x8057, 0x8056, 0x8058, 0x8c43,
                                    0x881a, 0x81a5, 0x81a6, 0x88f0, 0x822c};
   if (format < 0 || std::size_t(format) >= std::size(formats))
     return nullptr;
-  return vrapi_CreateTextureSwapChain3(type, formats[format], width, height, levels,
-                                       buffered ? 3 : 1);
+  return vrapi_CreateTextureSwapChain3(type, formats[format], width, height, levels, count);
+}
+TextureSwapChain *vrapi_CreateTextureSwapChain(std::int32_t type, std::int32_t format,
+                                               std::int32_t width, std::int32_t height,
+                                               std::int32_t levels, bool buffered) {
+  return vrapi_CreateTextureSwapChain2(type, format, width, height, levels, buffered ? 3 : 1);
 }
 void vrapi_DestroyTextureSwapChain(TextureSwapChain *token) {
   std::lock_guard lock(state().mutex);

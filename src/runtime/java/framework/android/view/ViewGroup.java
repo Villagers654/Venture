@@ -114,4 +114,14 @@ public class ViewGroup extends View implements ViewManager {
     super.onWindowFocusChanged(focused);
     for (View v : List.copyOf(children)) v.onWindowFocusChanged(focused);
   }
+  // No accessibility service is connected; AOSP returns false without a parent to send through.
+  public boolean requestSendAccessibilityEvent(View child, android.view.accessibility.AccessibilityEvent event) { return false; }
+  @Override public View findFocus() {
+    if (isFocused()) return this;
+    for (int i = 0; i < getChildCount(); ++i) {
+      View found = getChildAt(i).findFocus();
+      if (found != null) return found;
+    }
+    return null;
+  }
 }

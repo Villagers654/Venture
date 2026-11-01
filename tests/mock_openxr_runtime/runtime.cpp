@@ -2190,10 +2190,12 @@ XrPosef world_pose(XrSpace space) {
       pose = source.ends_with("/aim/pose") ? c.aim : c.grip;
     }
   } else if (s.type == XR_REFERENCE_SPACE_TYPE_VIEW) pose = script.head;
-  else if (s.type == XR_REFERENCE_SPACE_TYPE_LOCAL) pose = local_origin;
-  else if (s.type == XR_REFERENCE_SPACE_TYPE_LOCAL_FLOOR) {
+  else if (s.type == XR_REFERENCE_SPACE_TYPE_LOCAL || s.type == XR_REFERENCE_SPACE_TYPE_LOCAL_FLOOR) {
+    // VENTURE_MOCK_UPSIDE_DOWN_LOCAL: SteamVR without a room setup puts both
+    // at the STAGE origin turned upside down (half a turn about Z).
+    if (venture::environment::getenv("VENTURE_MOCK_UPSIDE_DOWN_LOCAL")) return venture::xr::compose({{0, 0, 1, 0}, {0, 0, 0}}, s.offset);
     pose = local_origin;
-    pose.position.y = 0;
+    if (s.type == XR_REFERENCE_SPACE_TYPE_LOCAL_FLOOR) pose.position.y = 0;
   }
   return venture::xr::compose(pose, s.offset);
 }

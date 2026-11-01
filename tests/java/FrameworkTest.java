@@ -1951,6 +1951,27 @@ public final class FrameworkTest {
     check(manager.executePendingTransactions() && manager.findFragmentByTag("96489") == unityFragment,
         "off-thread fragment commit attaches on the main thread");
     manager.beginTransaction().remove(unityFragment).commitNow();
+    var containerFragment = new android.app.Fragment();
+    manager.beginTransaction().add(0x01020002, containerFragment).addToBackStack(null).commitNow();
+    check(containerFragment.isAdded() && containerFragment.getTag() == null,
+        "fragment added by container id without a tag (Unity 2021 permission fragment)");
+    manager.beginTransaction().remove(containerFragment).commitNow();
+    check(new android.view.KeyEvent(0, 0, 0, 4, 0, 0).isSystem() && !new android.view.KeyEvent(0, 29).isSystem()
+        && new android.view.KeyEvent(0, 29).hasNoModifiers(), "KeyEvent system keys and modifiers (UnityPlayer key path)");
+    var controller = new android.widget.MediaController(activity);
+    controller.show();
+    check(controller.isShowing(), "MediaController constructs and keeps state (Unity video player)");
+    activity.getWindow().setLayout(640, 480);
+    check(activity.getWindow().getAttributes().width == 640 && activity.getWindow().getAttributes().height == 480,
+        "Window.setLayout sets the window size attributes");
+    var scaled = android.graphics.Bitmap.createScaledBitmap(android.graphics.Bitmap.createBitmap(4, 4,
+        android.graphics.Bitmap.Config.ARGB_8888), 2, 3, true);
+    check(scaled.getWidth() == 2 && scaled.getHeight() == 3, "Bitmap.createScaledBitmap");
+    var back = new java.util.ArrayList<String>();
+    var dispatcher = (android.window.BackDispatcher) activity.getOnBackInvokedDispatcher();
+    dispatcher.registerOnBackInvokedCallback(0, () -> back.add("low"));
+    dispatcher.registerOnBackInvokedCallback(1000000, () -> back.add("overlay"));
+    check(dispatcher.dispatch() && back.equals(List.of("overlay")), "OnBackInvokedDispatcher calls the top priority callback");
     Path testRoot = Path.of("build/framework-tests");
     Files.createDirectories(testRoot);
     try (var loader = new dalvik.system.PathClassLoader("", FrameworkTest.class.getClassLoader())) {

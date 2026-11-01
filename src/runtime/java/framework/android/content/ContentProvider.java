@@ -10,4 +10,8 @@ public abstract class ContentProvider {
     context = c;
     onCreate();
   }
+  public android.database.Cursor query(android.net.Uri uri, String[] projection, String selection,
+      String[] selectionArgs, String sortOrder) {
+    return null;
+  }
 }

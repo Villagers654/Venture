@@ -82,6 +82,7 @@ void register_libraries() {
     VENTURE_VRAPI(vrapi_SubmitFrame);
     VENTURE_VRAPI(vrapi_SubmitFrame2);
     VENTURE_VRAPI(vrapi_CreateTextureSwapChain);
+    VENTURE_VRAPI(vrapi_CreateTextureSwapChain2);
     VENTURE_VRAPI(vrapi_CreateTextureSwapChain3);
     VENTURE_VRAPI(vrapi_CreateTextureSwapChain4);
     VENTURE_VRAPI(vrapi_DestroyTextureSwapChain);

@@ -54,6 +54,10 @@ public class Dialog implements android.content.DialogInterface {
   public boolean isShowing() {
     return showing;
   }
+  public boolean dispatchTouchEvent(android.view.MotionEvent event) { return onTouchEvent(event); }
+  protected void onStart() {}
+  protected void onStop() {}
+  public android.window.OnBackInvokedDispatcher getOnBackInvokedDispatcher() { return window.getOnBackInvokedDispatcher(); }
   public void show() {
     throw new UnsupportedOperationException("Host dialog presentation unavailable: " + title);
   }

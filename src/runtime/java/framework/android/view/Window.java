@@ -181,4 +181,14 @@ public class Window {
   public SurfaceHolder.Callback2 surfaceCallback() {
     return surfaceCallback;
   }
+  public void setLayout(int width, int height) {
+    attrs.width = width;
+    attrs.height = height;
+  }
+  public void setGravity(int gravity) { attrs.gravity = gravity; }
+  public WindowManager getWindowManager() {
+    return (WindowManager) surfaceContext.getSystemService(android.content.Context.WINDOW_SERVICE);
+  }
+  private final android.window.BackDispatcher backDispatcher = new android.window.BackDispatcher();
+  public android.window.OnBackInvokedDispatcher getOnBackInvokedDispatcher() { return backDispatcher; }
 }

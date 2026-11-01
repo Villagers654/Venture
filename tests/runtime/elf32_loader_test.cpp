@@ -147,7 +147,7 @@ TEST_CASE("ELF32 ARM relocation addends, four-byte writes, versions and exidx") 
 TEST_CASE("ELF32 rejects unsupported dynamic relocations and mixed ISA") {
   Inspection inspect;
   Linker::get().register_hle_library(std::make_shared<HleLibrary>("liba32-fixture-hle.so"));
-  for (auto type : {3u, 42u, 17u, 160u}) {
+  for (auto type : {3u, 42u, 13u, 160u}) {
     Fixture f("liba32-rejected.so"); f.put(0xc00, elf::Rel32{0x900, type}); f.write();
     CHECK(Linker::get().open(f.path.string(), kRtldNow, nullptr) == nullptr);
     CHECK(Linker::get().take_error().find(elf::relocation_name32(type)) != std::string::npos);
@@ -159,6 +159,30 @@ TEST_CASE("ELF32 rejects unsupported dynamic relocations and mixed ISA") {
   CHECK(elf::detect_isa(f.path) == GuestIsa::a32);
   f.data[4] = std::byte{2};
   CHECK_THROWS(elf::detect_isa(std::span(f.data).first(20)));
+}
+TEST_CASE("ELF32 PT_TLS registers a module and resolves local TLS relocations") {
+  Inspection inspect;
+  Linker::get().register_hle_library(std::make_shared<HleLibrary>("liba32-fixture-hle.so"));
+  Fixture f("liba32-tls.so");
+  auto header = *reinterpret_cast<const elf::Header32*>(f.data.data());
+  header.phnum = 5; f.put(0, header);
+  f.put(52 + 96, elf::Phdr32{7, 0xd80, 0xd80, 0, 4, 8, 4, 4});
+  // lld pads GNU_RELRO's file size to the page end, past the end of the file.
+  f.put(52 + 128, elf::Phdr32{0x6474e552, 0xf00, 0xf00, 0, 0x400, 0x400, 4, 1});
+  // Local-dynamic and initial-exec forms name the null symbol; REL addends are in place.
+  f.put(0xc00, std::array<elf::Rel32, 3>{{{0x900, 17}, {0x908, 18}, {0x910, 19}}});
+  f.put(0x900, std::uint32_t{0x55}); f.put(0x908, std::uint32_t{4}); f.put(0x910, std::uint32_t{4});
+  for (auto& d : f.dynamic) if (d.tag == 18) d.value = 3 * sizeof(elf::Rel32);
+  f.write();
+  auto* lib = Linker::get().open(f.path.string(), kRtldNow, nullptr);
+  REQUIRE(lib != nullptr);
+  auto* image = lib->mapped_image();
+  CHECK(image->tls_module_id != 0);
+  CHECK(*g2h<std::uint32_t>(image->load_bias + 0x900) == image->tls_module_id);
+  CHECK(*g2h<std::uint32_t>(image->load_bias + 0x908) == 4);
+  CHECK(*g2h<std::uint32_t>(image->load_bias + 0x910) == static_cast<std::uint32_t>(image->tls_offset + 4));
+  CHECK(image->report.relocations.at("TLS_DTPMOD32") == 1);
+  CHECK(Linker::get().close(lib) == 0);
 }
 TEST_CASE("ELF32 HLE backing preserves Thumb exports, precedence and unload") {
   Inspection inspect;

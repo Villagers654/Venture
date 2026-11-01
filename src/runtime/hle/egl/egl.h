@@ -19,6 +19,11 @@ struct EglHostApi {
   PFNEGLDESTROYCONTEXTPROC destroy_context;
   PFNEGLTERMINATEPROC terminate;
   PFNEGLGETERRORPROC get_error;
+  PFNEGLGETCURRENTDISPLAYPROC get_current_display;
+  PFNEGLGETCURRENTCONTEXTPROC get_current_context;
+  PFNEGLGETCURRENTSURFACEPROC get_current_surface;
+  PFNEGLQUERYCONTEXTPROC query_context;
+  PFNEGLQUERYSTRINGPROC query_string;
 };
 const EglHostApi& egl_host_api();
 const GLubyte* gles_host_string(GLenum name);

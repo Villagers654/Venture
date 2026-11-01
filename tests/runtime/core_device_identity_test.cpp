@@ -53,6 +53,8 @@ TEST_CASE("Horizon compatibility selects the newest supported model no newer tha
   CHECK(select_device_identity("quest3s|quest2").model == "Quest 2");
   CHECK(select_device_identity("future|quest30|notquestpro").model == "Quest");
   CHECK(select_device_identity("quest").gpu_renderer == "Adreno (TM) 540");
+  // The Climb 2 lists "quest|delmar": delmar is the Quest 2.
+  CHECK(select_device_identity("quest|delmar").model == "Quest 2");
   CHECK(select_device_identity("quest2").gpu_renderer == "Adreno (TM) 650");
   CHECK(select_device_identity("cambria").gpu_renderer == "Adreno (TM) 650");
   CHECK(venture::native_device_identity().gpu_renderer == "Adreno (TM) 740");

@@ -4,6 +4,7 @@
 #include "xr/haptic_output.h"
 #include "xr/menu_chord.h"
 #include "xr/clock.h"
+#include "xr/reference_spaces.h"
 #include "common/first_frame_progress.h"
 #include "common/log.h"
 #include "core/engine_policy.h"
@@ -781,6 +782,7 @@ XrResult xrCreateReferenceSpace(XrSession handle, const XrReferenceSpaceCreateIn
     else
       native = emulated_local_floor(handle, native);
   }
+  native = venture::xr::upright_reference_space(handle, native);
   auto result = ::xrCreateReferenceSpace(handle, &native, out);
   if (XR_SUCCEEDED(result)) track_handle(*out, "XrSpace", handle);
   const auto& p = info->poseInReferenceSpace;

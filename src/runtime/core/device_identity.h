@@ -15,6 +15,8 @@ struct DeviceIdentity {
   // XR_META_headset_id XrUuidEXT bytes; OVRPlugin classifies the headset by them
   // and falls back to a systemName table that predates Quest 3.
   std::array<std::uint8_t, 16> headset_id;
+  // A supportedDevices value Meta's early documentation used for the model.
+  std::string_view early_name{};
 };
 const DeviceIdentity& native_device_identity();
 const DeviceIdentity& select_device_identity(std::string_view supported_devices);

@@ -68,4 +68,38 @@ public final class Bitmap {
     return new Bitmap(new java.awt.image.BufferedImage(
         width, height, java.awt.image.BufferedImage.TYPE_INT_ARGB));
   }
+  private int density = 160;
+  public void setDensity(int density) { this.density = density; }
+  public int getDensity() { return density; }
+  public static Bitmap createScaledBitmap(Bitmap src, int width, int height, boolean filter) {
+    if (width <= 0 || height <= 0) throw new IllegalArgumentException("width and height must be > 0");
+    var scaled = new java.awt.image.BufferedImage(width, height, java.awt.image.BufferedImage.TYPE_INT_ARGB);
+    var g = scaled.createGraphics();
+    try {
+      g.setRenderingHint(java.awt.RenderingHints.KEY_INTERPOLATION, filter
+          ? java.awt.RenderingHints.VALUE_INTERPOLATION_BILINEAR : java.awt.RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR);
+      g.drawImage(src.image, 0, 0, width, height, null);
+    } finally {
+      g.dispose();
+    }
+    var result = new Bitmap(scaled);
+    result.density = src.density;
+    return result;
+  }
+  // ARGB_8888 pixels in Android's memory order: R, G, B, A bytes, premultiplied.
+  public void copyPixelsToBuffer(java.nio.Buffer dst) {
+    if (recycled) throw new IllegalStateException("Bitmap recycled");
+    int w = getWidth(), h = getHeight();
+    if (!(dst instanceof java.nio.ByteBuffer bytes)) throw new RuntimeException("unsupported Buffer subclass");
+    if (bytes.remaining() < w * h * 4) throw new RuntimeException("Buffer not large enough for pixels");
+    int[] row = new int[w];
+    for (int y = 0; y < h; ++y) {
+      image.getRGB(0, y, w, 1, row, 0, w);
+      for (int p : row) {
+        int a = p >>> 24;
+        bytes.put((byte) (((p >> 16) & 255) * a / 255)).put((byte) (((p >> 8) & 255) * a / 255))
+            .put((byte) ((p & 255) * a / 255)).put((byte) a);
+      }
+    }
+  }
 }

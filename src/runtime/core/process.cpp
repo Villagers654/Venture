@@ -196,7 +196,18 @@ std::vector<std::filesystem::path> extract_native_libraries() {
     auto note_wrong_slice = [&](const std::filesystem::path& file) {
       std::ifstream in(file, std::ios::binary);
       char magic[4]{};
-      if (!in.read(magic, 4) || std::memcmp(magic, "\177ELF", 4)) return;
+      if (!in.read(magic, 4)) return;
+      if (std::memcmp(magic, "\177ELF", 4)) {
+        // Named on every launch, not only at extraction, so any run's log shows it.
+        in.seekg(0);
+        std::string text(4096, '\0');
+        in.read(text.data(), std::streamsize(text.size()));
+        text.resize(std::size_t(in.gcount()));
+        const auto first = text.find_first_not_of(" \t\r\n");
+        if (first != std::string::npos && text[first] == '{' && text.find("\"interaction\"") != std::string::npos)
+          log::info("apk", "{} is a Frida gadget configuration", member);
+        return;
+      }
       try {
         if (elf::detect_isa(file) == config.isa()) return;
       } catch (const std::exception&) {}

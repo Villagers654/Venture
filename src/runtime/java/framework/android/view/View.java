@@ -676,4 +676,26 @@ public class View implements ViewParent {
     // input work override this callback; arbitrary posted tasks are not input.
     com.venture.runtime.RuntimeEnvironment.trace("View.cancelPendingInputEvents");
   }
+  public View findFocus() { return focus ? this : null; }
+  public int getScrollX() { return 0; }
+  public int getScrollY() { return 0; }
+  public boolean hasWindowFocus() {
+    var context = getContext();
+    return context instanceof android.app.Activity a && a.hasWindowFocus();
+  }
+  public boolean getGlobalVisibleRect(android.graphics.Rect r) {
+    int[] at = new int[2];
+    getLocationInWindow(at);
+    r.set(at[0], at[1], at[0] + getWidth(), at[1] + getHeight());
+    return getWidth() > 0 && getHeight() > 0;
+  }
+  protected void onLayout(boolean changed, int left, int top, int right, int bottom) {}
+  public void draw(android.graphics.Canvas canvas) { onDraw(canvas); }
+  protected void onDraw(android.graphics.Canvas canvas) {}
+  private OnHoverListener hoverListener;
+  public void setOnHoverListener(OnHoverListener l) { hoverListener = l; }
+  public interface OnHoverListener { boolean onHover(View v, MotionEvent event); }
+  private ViewOutlineProvider outlineProvider = ViewOutlineProvider.BACKGROUND;
+  public void setOutlineProvider(ViewOutlineProvider provider) { outlineProvider = provider; }
+  public ViewOutlineProvider getOutlineProvider() { return outlineProvider; }
 }
