@@ -1369,7 +1369,9 @@ XrResult m_xrLocateViews(XrSession, const XrViewLocateInfo *info, XrViewState *s
   auto head = venture::xr::compose(venture::xr::inverse(world_pose(info->space)), script.head);
   for (int eye = 0; eye < 2; ++eye) {
     views[eye].pose = venture::xr::compose(head, {{0, 0, 0, 1}, {eye ? 0.032f : -0.032f, 0, 0}});
-    views[eye].fov = {mock::host_fov[0], mock::host_fov[1], mock::host_fov[2], mock::host_fov[3]};
+    const auto f = script.view_fov.value_or(
+        std::array{mock::host_fov[0], mock::host_fov[1], mock::host_fov[2], mock::host_fov[3]});
+    views[eye].fov = {f[0], f[1], f[2], f[3]};
   }
   state->viewStateFlags = script.active ? 15 : 0;
   return enumerate(cap, count, out, views);

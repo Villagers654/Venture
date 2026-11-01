@@ -2071,6 +2071,33 @@ TEST_CASE("VrApi legacy tracking transforms preserve repeated floor and eye sele
   vg::vrapi_Shutdown();
   venture::xr::install_xr_images(nullptr);
 }
+TEST_CASE("VrApi eye projections are symmetric frusta covering an asymmetric host view") {
+  // Quest 3 through VirtualDesktopXR: -54/40/44/-55 degrees for both eyes here.
+  MockXrScript asymmetric{};
+  asymmetric.view_fov = std::array{-0.9425f, 0.6981f, 0.7679f, -0.9599f};
+  ventureMockXrSetScript(&asymmetric);
+  venture::test::XrImageFixture images;
+  venture::xr::install_xr_images(&images);
+  vr::abi::Init init{1, 1, 1, 42, 0, 0x10300, {1, 2, 3}};
+  REQUIRE(vg::vrapi_Initialize(&init) == 0);
+  vr::abi::Mode mode{2, 0, {1, 2, 3}, 4, 5, 6};
+  auto *mobile = vg::vrapi_EnterVrMode(&mode);
+  REQUIRE(mobile);
+  const auto tracking = vg::vrapi_GetPredictedTracking2(mobile, vg::vrapi_GetPredictedDisplayTime(mobile, 0));
+  for (const auto &eye : tracking.eye) {
+    CHECK(eye.projection.m[0][2] == doctest::Approx(0));
+    CHECK(eye.projection.m[1][2] == doctest::Approx(0));
+    CHECK(eye.projection.m[0][0] == doctest::Approx(1 / std::tan(0.9425f)));
+    CHECK(eye.projection.m[1][1] == doctest::Approx(1 / std::tan(0.9599f)));
+  }
+  CHECK(vg::vrapi_GetSystemPropertyFloat(nullptr, 7) == doctest::Approx(2 * 0.9425f * 57.2957795f));
+  CHECK(vg::vrapi_GetSystemPropertyFloat(nullptr, 8) == doctest::Approx(2 * 0.9599f * 57.2957795f));
+  vg::vrapi_LeaveVrMode(mobile);
+  vg::vrapi_Shutdown();
+  venture::xr::install_xr_images(nullptr);
+  MockXrScript restored{};
+  ventureMockXrSetScript(&restored);
+}
 TEST_CASE("VrApi analytic layers use real host swapchains and final-frame state") {
   venture::test::XrImageFixture images;
   venture::xr::install_xr_images(&images);
