@@ -291,15 +291,26 @@ def download(name: str, spec: dict, destination: Path) -> None:
     cached = DOWNLOAD_CACHE / spec["url"].rsplit("/", 1)[-1]
     if not cached.exists():
         print(f"[{name}] downloading {spec['url']}", flush=True)
-        with tempfile.NamedTemporaryFile(dir=DOWNLOAD_CACHE, delete=False) as out:
-            temporary = Path(out.name)
-            try:
-                with urllib.request.urlopen(spec["url"], timeout=600) as response:
-                    shutil.copyfileobj(response, out)
-            except BaseException:
-                out.close()
-                temporary.unlink(missing_ok=True)
-                raise
+        # Hosted CI connections get reset mid-transfer (WinError 10054 on the
+        # FFmpeg archive); retry transient network errors a few times.
+        for attempt in range(1, 5):
+            with tempfile.NamedTemporaryFile(dir=DOWNLOAD_CACHE, delete=False) as out:
+                temporary = Path(out.name)
+                try:
+                    with urllib.request.urlopen(spec["url"], timeout=600) as response:
+                        shutil.copyfileobj(response, out)
+                    break
+                except OSError as error:
+                    out.close()
+                    temporary.unlink(missing_ok=True)
+                    if attempt == 4:
+                        raise
+                    print(f"[{name}] download failed ({error}); retrying", flush=True)
+                except BaseException:
+                    out.close()
+                    temporary.unlink(missing_ok=True)
+                    raise
+            time.sleep(5 * attempt)
         if hashlib.sha256(temporary.read_bytes()).hexdigest() != spec["sha256"]:
             temporary.unlink()
             raise ValueError(f"[{name}] downloaded SHA-256 mismatch")

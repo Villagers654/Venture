@@ -3,6 +3,7 @@
 #include "common/saves_migration.h"
 #include "common/file_ops.h"
 #include <algorithm>
+#include <cctype>
 #include <cstdlib>
 #include <fstream>
 #include <set>
@@ -381,18 +382,29 @@ bool needed_device_attestation(const fs::path &log) {
 std::string missing_expansion(const fs::path &log) {
   std::ifstream in(log, std::ios::binary);
   std::string name;
+  std::vector<std::string> errors;
   unsigned long long frames = 0;
   constexpr std::string_view marker = "[vfs] Missing expansion file: the game looked for ";
   for (std::string line; std::getline(in, line);) {
-    if (auto at = line.find(marker); at != std::string::npos && name.empty()) {
-      name = line.substr(at + marker.size());
-      name = name.substr(0, name.find(','));
+    if (auto at = line.find(marker); at != std::string::npos) {
+      if (name.empty()) {
+        name = line.substr(at + marker.size());
+        name = name.substr(0, name.find(','));
+      }
+    } else if (line.find(" E [") != std::string::npos && line.find(".obb") != std::string::npos &&
+               errors.size() < 64) {
+      errors.push_back(line);
     }
     frames = frames_submitted(line, frames);
   }
-  // Games probe for optional patch files too; only a game that never got
-  // past its first frames was stopped by the missing one.
-  return frames < 10 ? name : std::string{};
+  const bool failed = !name.empty() && std::ranges::any_of(errors, [&](const std::string &e) {
+    return e.find(name) != std::string::npos;
+  });
+  // Games probe for optional patch files too (Unity looks for one at every
+  // start: Batman: Arkham Shadow ships none). Only a game that reported an
+  // error about the file and never got past its first frames was stopped by
+  // it (Iron Man VR: "Unable to load GUID for '.../patch...obb'").
+  return failed && frames < 10 ? name : std::string{};
 }
 std::string runtime_failure(std::string_view tail, int code) {
   std::string_view last, last_runtime, dump;
@@ -493,6 +505,10 @@ Settings Settings::load(const fs::path &data) {
     s.texture_compression_threshold = int(percent);
   if (auto jobs = number(j, "parallelDownloads"); jobs >= 1 && jobs <= 4)
     s.parallel_downloads = int(jobs);
+  if (auto tag = str(j, "gameLanguage"); tag.size() <= 16 && std::ranges::all_of(tag, [](unsigned char c) {
+        return std::isalnum(c) || c == '-';
+      }))
+    s.game_language = tag;
   s.console = field(j, "launchWithConsole") == true;
   s.check_updates = field(j, "checkForUpdates") != false;
   s.dismissed_update = str(j, "dismissedUpdate");
@@ -524,6 +540,7 @@ void Settings::save(const fs::path &data) const {
          {"textureCompression", texture_compression},
          {"textureCompressionThreshold", texture_compression_threshold},
          {"parallelDownloads", parallel_downloads},
+         {"gameLanguage", game_language},
          {"launchWithConsole", console},
          {"checkForUpdates", check_updates},
          {"dismissedUpdate", dismissed_update},

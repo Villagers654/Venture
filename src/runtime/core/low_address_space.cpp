@@ -17,6 +17,9 @@
 namespace venture::low32 {
 namespace {
 constexpr GuestAddr limit = 0x100000000ull;
+// arm64's compat TASK_SIZE_32: the last page is never guest memory, so identity
+// fastmem stays safe without the wrap guard (a32_identity_fastmem_safe).
+constexpr GuestAddr task_size = limit - 4096;
 struct Backing {
   std::uint64_t size;
   bool file = false;
@@ -41,7 +44,7 @@ State& state() {
   static auto* s = new State;
   return *s;
 }
-bool valid(GuestAddr p, std::uint64_t n) { return n && p >= 65536 && p < limit && n <= limit - p; }
+bool valid(GuestAddr p, std::uint64_t n) { return n && p >= 65536 && p < task_size && n <= task_size - p; }
 bool owned(const State& s, GuestAddr p, std::uint64_t n) {
   if (!valid(p, n)) return false;
   for (auto r : s.arena)

@@ -13,7 +13,7 @@ public class Configuration {
                        navigation = 1, navigationHidden = 2;
   public int densityDpi = 320, screenWidthDp = 960, screenHeightDp = 540,
              smallestScreenWidthDp = 540;
-  public Locale locale = Locale.US;
+  public Locale locale = Locale.getDefault();
   public Configuration() {}
   public Configuration(Configuration c) {
     setTo(c);

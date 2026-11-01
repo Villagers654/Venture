@@ -302,8 +302,22 @@ void launch_android_app(const AppLaunchOptions& options) {
                      std::to_string(xr::display_timing_state().period.load())}};
   if (process_config().embedded_java_scripts)
     jvm.agent_path = paths::utf8(support.agent);
+  // Settings > Game language. Engines read the language from Java's default
+  // locale, which otherwise follows the host's (Asgard's Wrath 2 has no menu
+  // option for it).
+  if (const char* tag = environment::getenv("VENTURE_LOCALE"); tag && *tag) {
+    std::string_view rest(tag);
+    for (int part = 0; !rest.empty(); ++part) {
+      const auto end = std::min(rest.find('-'), rest.size());
+      const auto subtag = rest.substr(0, end);
+      rest = end == rest.size() ? std::string_view{} : rest.substr(end + 1);
+      const char* key = part == 0 ? "user.language" : subtag.size() == 4 ? "user.script" : "user.country";
+      jvm.extra_options.push_back(std::format("-D{}={}", key, subtag));
+    }
+  }
   if (!start_jvm(jvm, &error)) throw std::runtime_error(error);
   xr::set_application_identity(apk_label(), process_config().package, process_config().version_code);
+  xr::disable_unused_vulkan_layers_for_process();
   log::info("launch", "Initializing host OpenXR");
   auto& xr = xr::host_xr();
   if (!xr.available) throw std::runtime_error(xr.error);
@@ -410,8 +424,9 @@ void launch_android_app(const AppLaunchOptions& options) {
         hle::write_census();
         if (venture::environment::getenv("VENTURE_TRACE_THREADS") && guest_process_exit_status() < 0)
           signals::log_guest_threads(timed_out ? "run time elapsed" : "stop requested");
-        log::info("launch", "Shutdown requested; posting Android lifecycle teardown (host_quit={} backstop_ms={})",
-                  host_stop.load(), bound.count());
+        log::info("launch", "Shutdown requested; posting Android lifecycle teardown (host_quit={} backstop_ms={} reason={})",
+                  host_stop.load(), bound.count(),
+                  timed_out ? "run time elapsed" : stop.requested() ? stop.reason() : "game exited");
         shutdown_trace::phase("request");
         shutdown_trace::begin();
       }

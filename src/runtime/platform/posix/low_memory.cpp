@@ -71,6 +71,14 @@ bool reserve_low_memory_guard() noexcept {
   }
   return guarded;
 }
+bool a32_identity_fastmem_safe() noexcept {
+  if (reserve_low_memory_guard()) return true;
+  std::lock_guard lock(reservation_mutex);
+  if (!reservation_attempted || reservation_error) return false;
+  return std::any_of(reservations.begin(), reservations.end(), [](LowRange r) {
+    return r.start <= limit - 4096 && r.start + r.size == limit;
+  });
+}
 void pre_reserve_low_memory() noexcept {
   std::lock_guard lock(reservation_mutex);
   if (reservation_attempted) return;
@@ -97,7 +105,10 @@ std::vector<LowRange> reserve_low_memory() {
   pre_reserve_low_memory();
   if (reservation_error) std::rethrow_exception(reservation_error);
   if (!reserve_low_memory_guard())
-    log::warn("memory", "A32 wrap guard occupied; using checked memory callbacks (identity fastmem disabled)");
+    log::warn("memory", "A32 wrap guard occupied; {}", std::any_of(reservations.begin(), reservations.end(),
+              [](LowRange r) { return r.start <= limit - 4096 && r.start + r.size == limit; })
+              ? "the reserved last guest page keeps identity fastmem safe"
+              : "using checked memory callbacks (identity fastmem disabled)");
   return reservations;
 }
 bool split_placeholder(GuestAddr, std::uint64_t) { return true; }

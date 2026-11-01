@@ -93,6 +93,9 @@ struct Settings {
   int texture_compression_threshold = 50;
   // Games that download at once (Settings > Library); one by default.
   int parallel_downloads = 1;
+  // The language games see as the system language, a BCP-47 tag such as
+  // "en-US" (Settings > Runtime); empty follows the host's language.
+  std::string game_language;
   bool runtime_override() const;
   // `games` first, then the other library folders.
   std::vector<fs::path> roots() const;

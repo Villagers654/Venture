@@ -284,8 +284,10 @@ TEST_CASE("audio: OpenSL object callback registration permits Wwise engine initi
                {queue, h2g(samples.data()), sizeof(samples)}) == 0);
   REQUIRE(call(table<sl::PlayTable>(play).SetPlayState, {play, 3}) == 0);
   REQUIRE(until([&] { return completed.load() == 1; }));
+  // With 10 ms device periods (Linux) the whole buffer fits the stream's two
+  // bursts, so it completes before the device has mixed it.
+  REQUIRE(until([&] { return audio::Backend::get().mixer_stats().non_silent_samples > before.non_silent_samples; }));
   const auto after = audio::Backend::get().mixer_stats();
-  CHECK(after.non_silent_samples > before.non_silent_samples);
   CHECK(after.peak >= 0.25f);
   CHECK(object_events.load() == 0); // synchronous Realize has no async event
   CHECK(call(registration, {sls.player, 0, 0}) == 0);

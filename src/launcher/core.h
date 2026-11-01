@@ -18,6 +18,7 @@
 #include "launcher/auth_browser.h"
 #include "launcher/options.h"
 #include "launcher/worker.h"
+#include <chrono>
 #include <atomic>
 #include <deque>
 #include <future>
@@ -136,6 +137,9 @@ protected:
     std::optional<int> exit;
     std::string failure; // shown for a non-zero exit, or why a game closed itself
     bool quitting = false; // Quit game was pressed; the game is saving and closing
+    // Quit game takes the Play button's place; it ignores clicks for a moment
+    // after the start so a double click on Play does not quit the game.
+    std::chrono::steady_clock::time_point started{};
   };
   std::map<std::string, Running> running_;
   std::set<std::string> launch_pending_;

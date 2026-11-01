@@ -11,6 +11,8 @@ class RuntimeStop {
   explicit RuntimeStop(std::uint32_t parent_pid);
   ~RuntimeStop();
   bool requested() const;
+  // Which source requested teardown, for the log; "none" if none did.
+  const char* reason() const;
  private:
   struct Impl;
   std::unique_ptr<Impl> impl_;
