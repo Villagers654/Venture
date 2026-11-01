@@ -12,6 +12,19 @@ public final class FrameworkTest {
     if (!ok)
       throw new AssertionError(message);
   }
+  /** A class file for an empty public interface, as an APK's converted copy declares it. */
+  private static byte[] emptyInterface(String internalName) throws java.io.IOException {
+    var bytes = new java.io.ByteArrayOutputStream();
+    var out = new java.io.DataOutputStream(bytes);
+    out.writeInt(0xCAFEBABE); out.writeShort(0); out.writeShort(52);
+    out.writeShort(5); // constant pool entries 1-4
+    out.writeByte(7); out.writeShort(2); out.writeByte(1); out.writeUTF(internalName);
+    out.writeByte(7); out.writeShort(4); out.writeByte(1); out.writeUTF("java/lang/Object");
+    out.writeShort(0x0601); // public interface abstract
+    out.writeShort(1); out.writeShort(3);
+    out.writeShort(0); out.writeShort(0); out.writeShort(0); out.writeShort(0); // interfaces, fields, methods, attributes
+    return bytes.toByteArray();
+  }
   public static class OptionalParameter {}
   public static class NativeStartupActivity extends android.app.NativeActivity {
     public void createOnly() { super.onCreate(null); }
@@ -2166,6 +2179,7 @@ public final class FrameworkTest {
           }
           if (method.getName().equals("guestTid")) return 1;
           if (method.getName().equals("setThreadPriority")) return null;
+          if (method.getName().equals("bindClass")) return null;
           throw new UnsupportedOperationException(method.getName());
         });
     RuntimeEnvironment.configure(new String[]{"test.game", obbRoot.resolve("base.apk").toString(),
@@ -2231,6 +2245,43 @@ public final class FrameworkTest {
     try { android.os.VibrationEffect.createOneShot(20, 0); } catch (IllegalArgumentException expected) { zeroAmplitude = true; }
     try { android.os.VibrationEffect.createOneShot(0, 255); } catch (IllegalArgumentException expected) { zeroDuration = true; }
     check(effect.getDuration() == 20 && zeroAmplitude && zeroDuration, "one-shot vibration effects validate like AOSP");
+    // Sentry 6 watches its outbox for CLOSE_WRITE while it initializes.
+    var outbox = obbRoot.resolve("outbox").toFile();
+    var fileEvents = new ArrayList<Integer>();
+    var fileObserver = new android.os.FileObserver(outbox.getPath()) {
+      public void onEvent(int event, String path) { fileEvents.add(event); }
+    };
+    fileObserver.startWatching();
+    fileObserver.stopWatching();
+    fileObserver.stopWatching();
+    check(android.os.FileObserver.ALL_EVENTS == 0xfff && android.os.FileObserver.CLOSE_WRITE == 8
+        && fileEvents.isEmpty() && providerWarnings.remove("No host file events; not watching [" + outbox + "]"),
+        "FileObserver keeps inotify event values and warns that the host reports no events");
+    // Sentry passes its watcher to Lifecycle.addObserver behind a Class.forName probe.
+    check(androidx.lifecycle.LifecycleObserver.class.isInterface()
+        && androidx.lifecycle.LifecycleObserver.class.getDeclaredMethods().length == 0,
+        "androidx LifecycleObserver contract is an empty marker interface");
+    for (String lifecycleRuntime : List.of("androidx.lifecycle.DefaultLifecycleObserver",
+        "androidx.lifecycle.ProcessLifecycleOwner")) {
+      boolean absent = false;
+      try { Class.forName(lifecycleRuntime); } catch (ClassNotFoundException e) { absent = true; }
+      check(absent, "lifecycle contract does not advertise a lifecycle runtime: " + lifecycleRuntime);
+    }
+    try (var loader = new dalvik.system.PathClassLoader("", FrameworkTest.class.getClassLoader())) {
+      check(loader.loadClass("androidx/lifecycle/LifecycleObserver") == androidx.lifecycle.LifecycleObserver.class,
+          "an APK without androidx.lifecycle links against the contract");
+    }
+    Path lifecycleJar = obbRoot.resolve("lifecycle.jar");
+    try (var jar = new java.util.jar.JarOutputStream(Files.newOutputStream(lifecycleJar))) {
+      jar.putNextEntry(new java.util.zip.ZipEntry("androidx/lifecycle/LifecycleObserver.class"));
+      jar.write(emptyInterface("androidx/lifecycle/LifecycleObserver"));
+    }
+    try (var loader = new dalvik.system.PathClassLoader(lifecycleJar.toString(), FrameworkTest.class.getClassLoader())) {
+      var own = loader.loadClass("androidx.lifecycle.LifecycleObserver");
+      check(own.getClassLoader() == loader && own != androidx.lifecycle.LifecycleObserver.class
+          && loader.getResource("androidx/lifecycle/LifecycleObserver.class").getProtocol().equals("jar"),
+          "the APK's own androidx.lifecycle takes precedence over the contract");
+    }
     var layout = new android.view.WindowManager.LayoutParams();
     check(layout.preferredDisplayModeId == 0 && layout.preferredRefreshRate == 0, "no preferred display mode by default");
     android.os.BaseBundle base = new Bundle();  // bytecode names BaseBundle as the accessor owner
