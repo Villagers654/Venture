@@ -137,10 +137,19 @@ function Install-VentureLayout([string]$Layout, [string]$InstallDir, [string]$Re
     foreach ($name in $files.Keys) {
         $destination = Get-VentureManagedPath $InstallDir $name
         New-Item -ItemType Directory -Force -Path ([IO.Path]::GetDirectoryName($destination)) | Out-Null
-        Copy-Item -LiteralPath (Get-VentureManagedPath $Layout $name) -Destination $destination -Force
-        if ((Get-Item -LiteralPath $destination).Length -ne $files[$name].Bytes -or
-            (Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash -ne $files[$name].Sha256) {
-            throw "Installed file verification failed: $name"
+        # Stage one file in the same directory; failed copies cannot truncate
+        # an existing executable. No complete backup/version copy is retained.
+        $temporary = Join-Path ([IO.Path]::GetDirectoryName($destination)) ('venture-copy-' + [Guid]::NewGuid().ToString('N') + '.tmp')
+        try {
+            Copy-Item -LiteralPath (Get-VentureManagedPath $Layout $name) -Destination $temporary -Force
+            if ((Get-Item -LiteralPath $temporary).Length -ne $files[$name].Bytes -or
+                (Get-FileHash -LiteralPath $temporary -Algorithm SHA256).Hash -ne $files[$name].Sha256) {
+                throw "Installed file verification failed: $name"
+            }
+            if (Test-Path -LiteralPath $destination -PathType Leaf) { [IO.File]::Replace($temporary, $destination, [NullString]::Value) }
+            else { [IO.File]::Move($temporary, $destination) }
+        } finally {
+            if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary -Force }
         }
     }
     if ($null -ne $previous) {

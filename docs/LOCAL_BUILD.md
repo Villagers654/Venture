@@ -36,7 +36,9 @@ Optional arguments:
 Without it the script builds the application only. Close Venture and its game
 before updating. Source package hashes are checked before installation, copied
 files are verified, and only files from the previous release manifest are
-removed. Other files are retained. An interrupted copy is marked `updating` and
+removed. Other files are retained. Each file is staged and verified before atomic
+replacement, so a failed write cannot truncate the existing file. At most one
+file is duplicated temporarily. An interrupted update is marked `updating` and
 can be repaired by rerunning the script; no successful installation or launch
 is reported until verification completes. This is an in-place updater and does
 not retain rollback versions.

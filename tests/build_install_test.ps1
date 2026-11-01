@@ -38,6 +38,20 @@ try {
     $state = Get-Content -LiteralPath (Join-Path $destination '.venture-local-install.json') -Raw | ConvertFrom-Json
     Check ($state.status -eq 'ready' -and $state.revision -eq 'revision-b') 'Wrong successful install receipt.'
     Check (-not (Test-Path (Join-Path $destination 'versions'))) 'An unnecessary versions directory was created.'
+    $partial = Layout 'partial' 'replacement'
+    function Copy-Item {
+        param([string]$LiteralPath, [string]$Destination, [switch]$Force)
+        if ([IO.Path]::GetFileName($LiteralPath) -eq 'venture.exe') {
+            [IO.File]::WriteAllText($Destination, 'interrupted write')
+            throw 'Injected copy failure after a partial write'
+        }
+        Microsoft.PowerShell.Management\Copy-Item @PSBoundParameters
+    }
+    try { Refuses { Install-VentureLayout $partial $destination 'failed-copy' } }
+    finally { Remove-Item Function:Copy-Item }
+    Check ((Get-Content -LiteralPath $starter -Raw) -eq 'after:venture.exe') 'Failed copy truncated the installed executable.'
+    Check (@(Get-ChildItem -LiteralPath $destination -Filter 'venture-copy-*' -Recurse -Force).Count -eq 0) 'Failed copy leaked a temporary file.'
+    $null = Install-VentureLayout $new $destination 'revision-b'
     $bad = Layout 'bad' 'tampered'
     Add-Content -LiteralPath (Join-Path $bad 'venture.exe') -Value 'changed after manifest'
     Refuses { Install-VentureLayout $bad $destination 'bad-hash' }
