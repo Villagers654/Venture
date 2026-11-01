@@ -96,8 +96,35 @@ function Get-VentureTreeFiles([string]$Root) {
     }
 }
 
+# Publish a staged file on the same filesystem without truncating its live copy.
+function Move-VentureInstallFile([string]$Temporary, [string]$Destination) {
+    if (Test-Path -LiteralPath $Destination -PathType Leaf) { [IO.File]::Replace($Temporary, $Destination, [NullString]::Value) }
+    else { [IO.File]::Move($Temporary, $Destination) }
+}
+
 function Write-VentureInstallState([string]$Path, [object]$Value) {
-    [IO.File]::WriteAllText($Path, (($Value | ConvertTo-Json -Depth 6) + "`n"), [Text.UTF8Encoding]::new($false))
+    $temporary = Join-Path ([IO.Path]::GetDirectoryName($Path)) ('venture-copy-' + [Guid]::NewGuid().ToString('N') + '.tmp')
+    try {
+        [IO.File]::WriteAllText($temporary, (($Value | ConvertTo-Json -Depth 6) + "`n"), [Text.UTF8Encoding]::new($false))
+        Move-VentureInstallFile $temporary $Path
+    } finally {
+        if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary -Force }
+    }
+}
+
+function Copy-VentureInstallFile([string]$Source, [string]$Destination, [long]$Bytes, [string]$Sha256) {
+    # Stage one file at a time; no complete backup/version copy is retained.
+    $temporary = Join-Path ([IO.Path]::GetDirectoryName($Destination)) ('venture-copy-' + [Guid]::NewGuid().ToString('N') + '.tmp')
+    try {
+        Copy-Item -LiteralPath $Source -Destination $temporary -Force
+        if ((Get-Item -LiteralPath $temporary).Length -ne $Bytes -or
+            (Get-FileHash -LiteralPath $temporary -Algorithm SHA256).Hash -ne $Sha256) {
+            throw "Installed file verification failed: $Destination"
+        }
+        Move-VentureInstallFile $temporary $Destination
+    } finally {
+        if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary -Force }
+    }
 }
 
 function Install-VentureLayout([string]$Layout, [string]$InstallDir, [string]$Revision) {
@@ -137,20 +164,7 @@ function Install-VentureLayout([string]$Layout, [string]$InstallDir, [string]$Re
     foreach ($name in $files.Keys) {
         $destination = Get-VentureManagedPath $InstallDir $name
         New-Item -ItemType Directory -Force -Path ([IO.Path]::GetDirectoryName($destination)) | Out-Null
-        # Stage one file in the same directory; failed copies cannot truncate
-        # an existing executable. No complete backup/version copy is retained.
-        $temporary = Join-Path ([IO.Path]::GetDirectoryName($destination)) ('venture-copy-' + [Guid]::NewGuid().ToString('N') + '.tmp')
-        try {
-            Copy-Item -LiteralPath (Get-VentureManagedPath $Layout $name) -Destination $temporary -Force
-            if ((Get-Item -LiteralPath $temporary).Length -ne $files[$name].Bytes -or
-                (Get-FileHash -LiteralPath $temporary -Algorithm SHA256).Hash -ne $files[$name].Sha256) {
-                throw "Installed file verification failed: $name"
-            }
-            if (Test-Path -LiteralPath $destination -PathType Leaf) { [IO.File]::Replace($temporary, $destination, [NullString]::Value) }
-            else { [IO.File]::Move($temporary, $destination) }
-        } finally {
-            if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary -Force }
-        }
+        Copy-VentureInstallFile (Get-VentureManagedPath $Layout $name) $destination $files[$name].Bytes $files[$name].Sha256
     }
     if ($null -ne $previous) {
         foreach ($name in $previous.Keys) {
@@ -160,7 +174,8 @@ function Install-VentureLayout([string]$Layout, [string]$InstallDir, [string]$Re
             }
         }
     }
-    Copy-Item -LiteralPath (Join-Path $Layout 'release-files.json') -Destination $manifestPath -Force
+    $sourceManifest = Get-VentureManagedPath $Layout 'release-files.json'
+    Copy-VentureInstallFile $sourceManifest $manifestPath (Get-Item -LiteralPath $sourceManifest).Length (Get-FileHash -LiteralPath $sourceManifest -Algorithm SHA256).Hash
     Write-VentureInstallState $statePath @{ owner = 'venture-local-build'; status = 'ready'; revision = $Revision }
     return (Join-Path $InstallDir 'venture.exe')
 }

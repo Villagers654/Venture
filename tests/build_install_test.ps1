@@ -52,6 +52,31 @@ try {
     Check ((Get-Content -LiteralPath $starter -Raw) -eq 'after:venture.exe') 'Failed copy truncated the installed executable.'
     Check (@(Get-ChildItem -LiteralPath $destination -Filter 'venture-copy-*' -Recurse -Force).Count -eq 0) 'Failed copy leaked a temporary file.'
     $null = Install-VentureLayout $new $destination 'revision-b'
+    $beforeManifest = Get-Content -LiteralPath (Join-Path $destination 'release-files.json') -Raw
+    function Copy-Item {
+        param([string]$LiteralPath, [string]$Destination, [switch]$Force)
+        if ([IO.Path]::GetFileName($LiteralPath) -eq 'release-files.json') {
+            [IO.File]::WriteAllText($Destination, '{"files":')
+            throw 'Injected manifest copy failure after a partial write'
+        }
+        Microsoft.PowerShell.Management\Copy-Item @PSBoundParameters
+    }
+    try { Refuses { Install-VentureLayout $partial $destination 'failed-manifest' } }
+    finally { Remove-Item Function:Copy-Item }
+    Check ((Get-Content -LiteralPath (Join-Path $destination 'release-files.json') -Raw) -eq $beforeManifest) 'Failed copy truncated the installed manifest and prevents repair.'
+    Check (@(Get-ChildItem -LiteralPath $destination -Filter 'venture-copy-*' -Recurse -Force).Count -eq 0) 'Manifest failure leaked a temporary file.'
+    $null = Install-VentureLayout $new $destination 'repaired-manifest'
+    $receiptPath = Join-Path $destination '.venture-local-install.json'
+    $beforeReceipt = Get-Content -LiteralPath $receiptPath -Raw
+    $publish = ${function:Move-VentureInstallFile}
+    function Move-VentureInstallFile([string]$Temporary, [string]$Destination) {
+        if ($Destination -eq $receiptPath) { throw 'Injected receipt publication failure' }
+        & $publish $Temporary $Destination
+    }
+    try { Refuses { Install-VentureLayout $partial $destination 'failed-receipt' } }
+    finally { Set-Item Function:Move-VentureInstallFile $publish }
+    Check ((Get-Content -LiteralPath $receiptPath -Raw) -eq $beforeReceipt) 'Failed receipt publication changed the existing state.'
+    Check (@(Get-ChildItem -LiteralPath $destination -Filter 'venture-copy-*' -Recurse -Force).Count -eq 0) 'Receipt failure leaked a temporary file.'
     $bad = Layout 'bad' 'tampered'
     Add-Content -LiteralPath (Join-Path $bad 'venture.exe') -Value 'changed after manifest'
     Refuses { Install-VentureLayout $bad $destination 'bad-hash' }
@@ -95,7 +120,7 @@ try {
     $cache = Join-Path $fixture 'CMakeCache.txt'
     [IO.File]::WriteAllText($cache, 'VENTURE_ANGLE_ROOT:PATH=C:/path with spaces/angle')
     Check ((Get-VentureCMakeValue $cache 'VENTURE_ANGLE_ROOT') -eq 'C:/path with spaces/angle') 'CMake path with spaces was changed.'
-    Write-Host 'PASS verified in-place install, stale cleanup, user-file retention, failed-copy recovery, traversal/junction refusal and owned package cleanup'
+    Write-Host 'PASS verified in-place install, stale cleanup, user-file retention, failed-copy/manifest/receipt recovery, traversal/junction refusal and owned package cleanup'
 } finally {
     Remove-Item -LiteralPath $fixture -Recurse -Force
 }
