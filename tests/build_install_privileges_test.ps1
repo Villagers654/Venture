@@ -33,46 +33,6 @@ try {
     Check ((Join-VentureProcessArguments @('C:\Program Files\Venture', 'C:\tail\')) -eq '"C:\Program Files\Venture" "C:\tail\\"') 'Paths with spaces or trailing backslashes are not quoted correctly.'
     Refuses { Join-VentureProcessArguments @('unexpected"quote') }
 
-    $legacy = Join-Path $fixture 'previous'
-    $null = Install-VentureLayout $source $legacy 'old'
-    [IO.File]::WriteAllText((Join-Path $legacy 'my-notes.txt'), 'user file')
-    Write-VentureInstallState (Join-Path $destination '.venture-local-install.json') @{owner = 'venture-local-build'; status = 'updating'}
-    Check (-not (Remove-VentureLegacyInstall $legacy $destination)) 'Legacy files were removed before the new install completed.'
-    $null = Install-VentureLayout $source $destination 'ready'
-    Check (Remove-VentureLegacyInstall $legacy $destination) 'Owned old installation was not cleaned up.'
-    Check (-not (Test-Path -LiteralPath (Join-Path $legacy 'venture.exe'))) 'An old executable was retained.'
-    Check ((Get-Content -LiteralPath (Join-Path $legacy 'my-notes.txt') -Raw) -eq 'user file') 'Legacy cleanup removed a user file.'
-    Check (-not (Remove-VentureLegacyInstall $destination ($destination + [IO.Path]::DirectorySeparatorChar))) 'Cleanup accepted the current installation as a legacy path.'
-    Check (Test-Path -LiteralPath $starter) 'Cleanup removed the current executable.'
-    $modified = Join-Path $fixture 'modified'
-    $null = Install-VentureLayout $source $modified 'old'
-    [IO.File]::WriteAllText((Join-Path $modified 'venture.exe'), 'user modification')
-    Check (-not (Remove-VentureLegacyInstall $modified $destination)) 'Modified legacy files were removed.'
-    Check (Test-Path -LiteralPath (Join-Path $modified 'venture-runtime.exe')) 'Legacy cleanup deleted files before validating the whole manifest.'
-    $unowned = Layout 'unowned'
-    Check (-not (Remove-VentureLegacyInstall $unowned $destination)) 'An unowned installation was removed.'
-
-    $emptyLegacy = Join-Path $fixture 'empty-legacy'
-    $null = Install-VentureLayout $source $emptyLegacy 'old'
-    Check (Remove-VentureLegacyInstall $emptyLegacy $destination) 'Unchanged legacy layout was retained.'
-    Check (-not (Test-Path -LiteralPath $emptyLegacy)) 'Empty legacy directory was retained.'
-    $linked = Join-Path $fixture 'linked-legacy'
-    $null = Install-VentureLayout $source $linked 'old'
-    $outside = Layout 'outside'
-    Remove-Item -LiteralPath (Join-Path $linked 'venture.exe') -Force
-    # A directory junction/symlink is sufficient to exercise path refusal on
-    # every Windows runner without enabling developer-mode file symlinks.
-    $nested = Join-Path $linked 'redirect'
-    $directoryLinkType = if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) { 'Junction' } else { 'SymbolicLink' }
-    New-Item -ItemType $directoryLinkType -Path $nested -Target $outside | Out-Null
-    $manifest = Get-Content -LiteralPath (Join-Path $linked 'release-files.json') -Raw | ConvertFrom-Json
-    $manifest.files | Add-Member -NotePropertyName 'redirect/venture.exe' -NotePropertyValue @{bytes = 0; sha256 = ('0' * 64)}
-    Write-VentureInstallState (Join-Path $linked 'release-files.json') $manifest
-    Refuses { Remove-VentureLegacyInstall $linked $destination }
-    Check ((Get-Content -LiteralPath (Join-Path $outside 'venture.exe') -Raw) -eq 'fixture:venture.exe') 'Legacy cleanup followed a junction.'
-    if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) { [IO.Directory]::Delete($nested) }
-    else { Remove-Item -LiteralPath $nested -Force }
-
     if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) {
         $nativeProgramFiles = [Environment]::GetEnvironmentVariable('ProgramW6432')
         if (-not $nativeProgramFiles) { $nativeProgramFiles = [Environment]::GetFolderPath('ProgramFiles') }
@@ -123,7 +83,7 @@ try {
         }
         Check ((Get-Content -LiteralPath $starter -Raw) -eq 'fixture:venture.exe') 'Cancelled elevation changed the installation.'
     }
-    Write-Host 'PASS Program Files defaults, explicit paths, literal worker arguments, elevation routing/failure and owned legacy cleanup'
+    Write-Host 'PASS Program Files defaults, explicit paths, literal worker arguments, elevation routing and failure handling'
 } finally {
     Remove-Item -LiteralPath $fixture -Recurse -Force
 }

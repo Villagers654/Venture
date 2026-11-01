@@ -7,9 +7,8 @@ Requires Windows x64 and Git for Windows. From a cloned checkout run:
 ```
 
 The script uses Venture's pinned bootstrap and `windows-release` preset, builds
-both production executables, and invokes the ordinary release packager. It is
-independent of passthrough, preview-packaging helpers and game-specific Java
-fixtures. It installs into the native Windows Program Files directory, normally
+both production executables, and invokes the ordinary release packager. It
+installs into the native Windows Program Files directory, normally
 `C:\Program Files\Venture`, creates a **Venture** desktop shortcut and launches
 Venture. Repeated runs update that same directory.
 
@@ -64,10 +63,3 @@ The profile directory name is relative to Program Files. The script accepts
 only simple directory/shortcut names in this profile.
 `-InstallDir` still overrides the destination. The profile is optional and is
 not required for an ordinary checkout.
-
-After a successful installation, unchanged files managed by earlier local builds
-in `%LOCALAPPDATA%\Venture-Local` and `%LOCALAPPDATA%\Venture-Passthrough` are
-removed. Ownership receipts and every listed file hash are checked first. User
-files, modified installations and unowned directories are retained. Old shortcuts
-are removed only if they still point to those successfully cleaned installations.
-User settings, saves and incremental build caches retain their existing locations.

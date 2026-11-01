@@ -2,7 +2,7 @@ name: Windows build and install scripts
 on:
   pull_request:
   push:
-    branches: [feat/windows-build-install, test/steam-frame-passthrough]
+    branches: [feat/windows-build-install, 'test/**']
   workflow_dispatch:
 permissions:
   contents: read

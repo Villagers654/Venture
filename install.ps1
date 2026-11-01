@@ -144,21 +144,6 @@ except (OSError, ValueError, KeyError, RuntimeError): sys.exit(1)
         $shortcut.IconLocation = $starter + ',0'
         $shortcut.Save()
     }
-    foreach ($legacyName in @('Venture-Local', 'Venture-Passthrough')) {
-        $legacyDir = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) $legacyName
-        try {
-            if (Remove-VentureLegacyInstall $legacyDir $InstallDir) {
-                $legacyShortcut = if ($legacyName -eq 'Venture-Local') { 'Venture Local' } else { 'Venture Passthrough' }
-                if ($desktop -and $legacyShortcut -ne $shortcutName) {
-                    $link = Join-Path $desktop ($legacyShortcut + '.lnk')
-                    if (Test-Path -LiteralPath $link -PathType Leaf) {
-                        $legacyLink = $shell.CreateShortcut($link)
-                        if ($legacyLink.TargetPath -eq (Join-Path $legacyDir 'venture.exe')) { Remove-Item -LiteralPath $link -Force }
-                    }
-                }
-            }
-        } catch { Write-Host "Previous local installation was retained: $($_.Exception.Message)" -ForegroundColor Yellow }
-    }
     Write-Host "Installed: $InstallDir" -ForegroundColor Green
     if (-not $NoLaunch) { Start-Process -FilePath $starter -WorkingDirectory $InstallDir }
     Write-Host "Build log: $logPath"
