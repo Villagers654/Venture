@@ -44,16 +44,17 @@ struct Registry {
   ~Registry(){SetEnvironmentVariableW(L"LOCALAPPDATA",original.empty()?nullptr:original.c_str());std::error_code ignored;fs::remove_all(root,ignored);}
 };
 struct Server {
-  Handle ready,connected;Process process;
+  Handle ready,connected,resume;Process process;
   Server(const Registry& registry,const char* mode):
     ready(CreateEventW(nullptr,TRUE,FALSE,nullptr)),connected(CreateEventW(nullptr,TRUE,FALSE,nullptr)) {
     // Named events are only test synchronization; the production pipe remains PID-bound.
     const auto key="Local\\VentureSbn1."+std::to_string(GetCurrentProcessId())+"."+std::to_string(GetTickCount64());
-    const auto first=key+".ready",second=key+".connected";
+    const auto first=key+".ready",second=key+".connected",third=key+".resume";
     CloseHandle(ready.value);ready.value=CreateEventA(nullptr,TRUE,FALSE,first.c_str());
     CloseHandle(connected.value);connected.value=CreateEventA(nullptr,TRUE,FALSE,second.c_str());
-    require(ready.value&&connected.value,"Cannot create fixture events");
-    const std::string suffix=std::string(" ")+mode+" "+first+" "+second;
+    resume.value=CreateEventA(nullptr,TRUE,FALSE,third.c_str());
+    require(ready.value&&connected.value&&resume.value,"Cannot create fixture events");
+    const std::string suffix=std::string(" ")+mode+" "+first+" "+second+" "+third;
     auto command=L"\""+registry.image.wstring()+L"\""+std::wstring(suffix.begin(),suffix.end());
     STARTUPINFOW startup{};startup.cb=sizeof(startup);PROCESS_INFORMATION child{};
     require(CreateProcessW(registry.image.c_str(),command.data(),nullptr,nullptr,FALSE,CREATE_NO_WINDOW,nullptr,nullptr,&startup,&child),"Cannot start owned server fixture");
@@ -102,6 +103,7 @@ int main(int argc,char** argv) {
     Server server(registry,"reconnect");SteamLinkSource source;source.request(true);
     await([&]{return source.permission()!=0;},"No first connection");const auto old=source.permission();
     await([&]{return source.permission()==0;},"Disconnect did not revoke lease");
+    SetEvent(server.resume.value);
     await([&]{return source.permission()!=0&&source.permission()!=old;},"Reconnect reused stale permission");withdraw(source);
     std::cout<<"PASS reconnect with a fresh lease\n";
   }

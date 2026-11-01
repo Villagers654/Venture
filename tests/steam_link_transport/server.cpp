@@ -16,11 +16,12 @@ bool write_all(HANDLE pipe, const void* bytes, DWORD length) {
   return true;
 }
 int main(int argc,char** argv) {
-  if(argc!=4)return 2;
+  if(argc!=5)return 2;
   const std::string mode=argv[1];
   HANDLE ready=OpenEventA(EVENT_MODIFY_STATE,FALSE,argv[2]);
   HANDLE connected=OpenEventA(EVENT_MODIFY_STATE,FALSE,argv[3]);
-  if(!ready||!connected)return 3;
+  HANDLE resume=OpenEventA(SYNCHRONIZE,FALSE,argv[4]);
+  if(!ready||!connected||!resume)return 3;
   const auto name=L"\\\\.\\pipe\\SFNP.StreamBridge.V1."+std::to_wstring(GetCurrentProcessId());
   unsigned connections=0;
   for(;;) {
@@ -49,5 +50,6 @@ int main(int argc,char** argv) {
       else { unsigned char stop{};DWORD count{};ReadFile(pipe,&stop,1,&count,nullptr); }
     }
     DisconnectNamedPipe(pipe);CloseHandle(pipe);
+    if(mode=="reconnect"&&connections==1)WaitForSingleObject(resume,5000);
   }
 }
