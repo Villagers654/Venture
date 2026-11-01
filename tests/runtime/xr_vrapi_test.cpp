@@ -433,6 +433,50 @@ TEST_CASE("VrApi projection FOV covers only each eye's texture rect") {
   }
 }
 
+TEST_CASE("VrApi head-locked projections become one head-locked quad per eye") {
+  // The Climb 2's loading layer: FIXED_TO_VIEW, alpha-blended, the central 60%
+  // of a 90-degree frustum, here shifted left to make it asymmetric.
+  vr::abi::Projection projection{};
+  projection.header = {1, 6, {1, 1, 1, 1}, 2, 5, 0};
+  projection.head.pose = {{0, .38268343f, 0, .92387953f}, {.5f, 1.6f, -2}};
+  XrView eyes[2]{{XR_TYPE_VIEW}, {XR_TYPE_VIEW}};
+  for (int eye = 0; eye < 2; ++eye) {
+    eyes[eye].pose = {{0, 0, 0, 1}, {eye ? .031f : -.031f, 0, 0}};
+    auto &t = projection.textures[eye];
+    t.tan_angles.m[0][0] = t.tan_angles.m[1][1] = .5f;
+    t.tan_angles.m[0][2] = t.tan_angles.m[1][2] = -.5f;
+    t.tan_angles.m[2][2] = -1;
+    t.rect = {.1f, .2f, .6f, .6f};
+  }
+  auto image = [](vr::abi::TextureSwapChain *, int, vr::abi::Rect, int eye, bool,
+                  XrSwapchainSubImage &out) {
+    out.imageArrayIndex = std::uint32_t(eye);
+    return XR_SUCCESS;
+  };
+  vr::LayerStorage storage;
+  std::vector<const XrCompositionLayerBaseHeader *> layers;
+  REQUIRE(vr::translate_layer(projection.header, eyes, image, storage, layers) == XR_SUCCESS);
+  REQUIRE(layers.size() == 2);
+  for (int eye = 0; eye < 2; ++eye) {
+    CAPTURE(eye);
+    const auto &quad = storage.quad[eye];
+    CHECK(layers[eye] == reinterpret_cast<const XrCompositionLayerBaseHeader *>(&quad));
+    CHECK(quad.space == vr::state().view);
+    CHECK(quad.layerFlags == (XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT |
+                              XR_COMPOSITION_LAYER_UNPREMULTIPLIED_ALPHA_BIT));
+    CHECK(quad.eyeVisibility == (eye ? XR_EYE_VISIBILITY_RIGHT : XR_EYE_VISIBILITY_LEFT));
+    CHECK(quad.subImage.imageArrayIndex == std::uint32_t(eye));
+    // Tangents -.8..+.4 by -.6..+.6, one metre ahead of the eye; the guest's
+    // predicted head pose does not move a head-locked plane.
+    CHECK(quad.size.width == doctest::Approx(1.2f));
+    CHECK(quad.size.height == doctest::Approx(1.2f));
+    CHECK(quad.pose.position.x == doctest::Approx(eyes[eye].pose.position.x - .2f));
+    CHECK(quad.pose.position.y == doctest::Approx(0).epsilon(1e-5));
+    CHECK(quad.pose.position.z == doctest::Approx(-1));
+    CHECK(quad.pose.orientation.w == doctest::Approx(1));
+  }
+}
+
 // VrApi_Helpers.h ovrMatrix4f_TanAngleMatrixFromUnitSquare for a square of
 // half-extent `half`, `distance` metres ahead and yawed by `yaw`, evaluated
 // from the inverse model-view the helper computes.
