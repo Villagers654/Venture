@@ -20,15 +20,24 @@ public class BaseDexClassLoader extends java.net.URLClassLoader {
         })
         .toArray(java.net.URL[] ::new);
   }
-  // Optional SDK contracts exist only to link callback signatures retained by
-  // Unity. Prefer the APK's own SDK implementation whenever it ships one.
+  // Optional SDK contracts exist only to link signatures retained by Unity
+  // callbacks and by SDKs that probe for androidx.lifecycle. Prefer the APK's
+  // own SDK implementation whenever it ships one.
+  private static final String[] APK_FIRST = {
+    "com.google.android.gms.tasks.", "com.google.android.play.core.tasks.",
+    "com.google.android.play.core.assetpacks.", "com.google.android.play.core.listener.",
+    "androidx.lifecycle.",
+  };
+  private static boolean apkFirst(String binaryName) {
+    for (String prefix : APK_FIRST)
+      if (binaryName.startsWith(prefix))
+        return true;
+    return false;
+  }
   @Override
   protected Class<?> loadClass(String name, boolean resolve) throws ClassNotFoundException {
     name = binaryName(name);
-    if (!name.startsWith("com.google.android.gms.tasks.")
-        && !name.startsWith("com.google.android.play.core.tasks.")
-        && !name.startsWith("com.google.android.play.core.assetpacks.")
-        && !name.startsWith("com.google.android.play.core.listener."))
+    if (!apkFirst(name))
       return super.loadClass(name, resolve);
     synchronized (getClassLoadingLock(name)) {
       Class<?> cls = findLoadedClass(name);
@@ -46,10 +55,7 @@ public class BaseDexClassLoader extends java.net.URLClassLoader {
   }
   @Override
   public java.net.URL getResource(String name) {
-    if (name.startsWith("com/google/android/gms/tasks/")
-        || name.startsWith("com/google/android/play/core/tasks/")
-        || name.startsWith("com/google/android/play/core/assetpacks/")
-        || name.startsWith("com/google/android/play/core/listener/")) {
+    if (apkFirst(name.replace('/', '.'))) {
       java.net.URL own = findResource(name);
       if (own != null)
         return own;
