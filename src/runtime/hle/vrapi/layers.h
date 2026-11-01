@@ -13,6 +13,8 @@ struct LayerStorage {
                                     {XR_TYPE_COMPOSITION_LAYER_CUBE_KHR}};
   XrCompositionLayerEquirectKHR equirect[2]{{XR_TYPE_COMPOSITION_LAYER_EQUIRECT_KHR},
                                             {XR_TYPE_COMPOSITION_LAYER_EQUIRECT_KHR}};
+  XrCompositionLayerQuad quad[2]{{XR_TYPE_COMPOSITION_LAYER_QUAD},
+                                 {XR_TYPE_COMPOSITION_LAYER_QUAD}};
   XrCompositionLayerQuad icon{XR_TYPE_COMPOSITION_LAYER_QUAD};
   XrCompositionLayerColorScaleBiasKHR color{XR_TYPE_COMPOSITION_LAYER_COLOR_SCALE_BIAS_KHR};
 };
