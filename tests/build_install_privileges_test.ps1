@@ -70,7 +70,8 @@ try {
     Write-VentureInstallState (Join-Path $linked 'release-files.json') $manifest
     Refuses { Remove-VentureLegacyInstall $linked $destination }
     Check ((Get-Content -LiteralPath (Join-Path $outside 'venture.exe') -Raw) -eq 'fixture:venture.exe') 'Legacy cleanup followed a junction.'
-    Remove-Item -LiteralPath $nested -Force
+    if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) { [IO.Directory]::Delete($nested) }
+    else { Remove-Item -LiteralPath $nested -Force }
 
     if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) {
         $nativeProgramFiles = [Environment]::GetEnvironmentVariable('ProgramW6432')
