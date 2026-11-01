@@ -102,6 +102,41 @@ VkFormat storage_image_format(std::uint32_t spirv_format) {
       VK_FORMAT_R64_UINT, VK_FORMAT_R64_SINT};
   return spirv_format < std::size(formats) ? formats[spirv_format] : VK_FORMAT_UNDEFINED;
 }
+// Quest games mark shader math RelaxedPrecision (HLSL min16float, GLSL
+// mediump). The Quest 3's Adreno 740 evaluates it in fp16 in fragment and
+// compute shaders but at full precision in vertex, tessellation and geometry
+// shaders; NVIDIA 617.42 evaluates it in fp16 in every stage. In a vertex
+// shader that moves geometry: The Climb 2's min16float dual-quaternion
+// skinning lands vertices up to ~3 mm off, differently each frame, and the
+// hands' skin twitches while rigid attachments hold still. Fragment and
+// compute shaders keep the decoration, as on the Quest 3.
+std::vector<std::uint32_t> full_precision_vertex_stages(std::span<const std::uint32_t> code) {
+  if (code.size() < 5 || code[0] != 0x07230203) return {};
+  auto relaxed = [&](std::size_t i, std::uint32_t op, std::uint32_t n) {
+    return (op == 71 && n == 3 && code[i + 2] == 0) ||  // OpDecorate %id RelaxedPrecision
+           (op == 72 && n == 4 && code[i + 3] == 0);    // OpMemberDecorate %type member RelaxedPrecision
+  };
+  bool entry = false, decorated = false;
+  for (std::size_t i = 5; i < code.size();) {
+    const std::uint32_t op = code[i] & 0xffff, n = code[i] >> 16;
+    if (!n || i + n > code.size()) return {};
+    if (op == 15 && n >= 2) {  // OpEntryPoint ExecutionModel
+      if (code[i + 1] > 3) return {};  // only Vertex, TessellationControl/Evaluation, Geometry
+      entry = true;
+    }
+    decorated = decorated || relaxed(i, op, n);
+    i += n;
+  }
+  if (!entry || !decorated) return {};
+  std::vector<std::uint32_t> out(code.begin(), code.begin() + 5);
+  out.reserve(code.size());
+  for (std::size_t i = 5; i < code.size();) {
+    const std::uint32_t op = code[i] & 0xffff, n = code[i] >> 16;
+    if (!relaxed(i, op, n)) out.insert(out.end(), code.begin() + i, code.begin() + i + n);
+    i += n;
+  }
+  return out;
+}
 std::vector<std::uint32_t> formatless_storage_images(std::span<const std::uint32_t> code,
                                                      std::span<const std::uint32_t> keep) {
   if (code.size() < 5 || code[0] != 0x07230203) return {};
@@ -191,6 +226,10 @@ VkResult VKAPI_CALL create_shader(VkDevice d,
     if (zero_init) {
       code = initialize_shader_locals(input);
       if (!code.empty()) input = code;
+    }
+    if (auto full = full_precision_vertex_stages(input); !full.empty()) {
+      code = std::move(full);
+      input = code;
     }
     if (const auto keep = formatless_keep(d)) {
       if (auto formatless = formatless_storage_images(input, *keep); !formatless.empty()) {
