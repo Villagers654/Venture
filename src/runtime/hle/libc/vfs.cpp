@@ -7,6 +7,8 @@
 #include <algorithm>
 #include <cstring>
 #include <cstdlib>
+#include <mutex>
+#include <set>
 #include <thread>
 
 namespace venture::hle::libc {
@@ -15,6 +17,20 @@ std::mutex cwd_mutex;
 std::string current_directory = "/";
 bool below(std::string_view p, std::string_view root) {
   return p == root || (p.starts_with(root) && p.size() > root.size() && p[root.size()] == '/');
+}
+// A game that asks for an expansion file its install lacks (an import made
+// without its patch OBB) often waits forever with no frame. Name the file once
+// so the launcher can say what is missing.
+void note_missing_expansion(const std::filesystem::path& host, std::string_view guest) {
+  if (!guest.ends_with(".obb")) return;
+  std::error_code ec;
+  if (std::filesystem::exists(host, ec) || ec) return;
+  static std::mutex mutex;
+  static std::set<std::string, std::less<>> reported;
+  std::lock_guard lock(mutex);
+  const auto name = guest.substr(guest.rfind('/') + 1);
+  if (!reported.emplace(name).second) return;
+  log::warn("vfs", "Missing expansion file: the game looked for {}, which this install does not have", name);
 }
 bool contained(const std::filesystem::path& root, const std::filesystem::path& p) {
   auto a = root.begin(), b = p.begin();
@@ -211,8 +227,12 @@ int resolve_path(std::string_view path, int dirfd, MappedPath* out) {
              map("/data/data/" + c.package, c.data_dir, false);
   for (auto prefix : {"/sdcard", "/storage/emulated/0", "/storage/self/primary", "/mnt/sdcard"}) {
     if (mapped) break;
-    mapped = map(std::string(prefix) + "/Android/obb/" + c.package, c.obb_dir, true) ||
-             map(std::string(prefix) + "/Android/data/" + c.package, c.data_dir / "external-data",
+    if (map(std::string(prefix) + "/Android/obb/" + c.package, c.obb_dir, true)) {
+      note_missing_expansion(out->host, p);
+      mapped = true;
+      break;
+    }
+    mapped = map(std::string(prefix) + "/Android/data/" + c.package, c.data_dir / "external-data",
                  false) ||
              map(prefix, c.data_dir / "external", false);
   }

@@ -14,6 +14,7 @@
 __attribute__((noinline)) void host_fault(std::uintptr_t address) {
   *reinterpret_cast<volatile unsigned*>(address) = 42;
 }
+__attribute__((noinline)) void null_call(void (*volatile function)()) { function(); }
 int translated_fault(int) {
   venture::signals::log_guest_threads("frame-chain crash fixture");
   host_fault(0);
@@ -76,6 +77,7 @@ int main(int argc, char** argv) {
     thread.call(thunk, {0});
     return 6;
   }
+  if (mode == "null-call") null_call(nullptr);
   host_fault(std::strtoull(argv[3], nullptr, 0));
   return 5;
 }

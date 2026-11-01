@@ -2709,7 +2709,8 @@ void App::draw_report() {
                   "Logs and system details from this PC, without your name, folders or account details.");
     else if (failed)
       dialog_text("Couldn't upload the debug report",
-                  report_->error + " Attach the saved file to a GitHub issue or post it in our Discord instead.");
+                  std::format("{} The report is saved as {}: attach it to a GitHub issue or post it in our Discord "
+                              "instead.", report_->error, paths::utf8(report_->file.filename())));
     else
       dialog_text("Debug report uploaded",
                   "Put this link in a GitHub issue or our Discord with what happened. It stays readable for 90 days.");

@@ -59,4 +59,5 @@ public class Canvas {
   public void drawText(String text, float x, float y, Paint paint) {}
   public void drawText(CharSequence text, int start, int end, float x, float y, Paint paint) {}
   public void drawText(char[] text, int index, int count, float x, float y, Paint paint) {}
+  public void drawLine(float startX, float startY, float stopX, float stopY, Paint paint) {}
 }

@@ -16,6 +16,7 @@ public final class Build {
                                SUPPORTED_32_BIT_ABIS = CPU_ABI.equals("armeabi-v7a") ? new String[] {CPU_ABI} : new String[] {};
   public static class VERSION {
     public static int SDK_INT = 32;
+    public static final int PREVIEW_SDK_INT = 0;
     public static String SDK = "32", RELEASE = "12", CODENAME = "REL", INCREMENTAL = "1";
   }
   public static class VERSION_CODES {

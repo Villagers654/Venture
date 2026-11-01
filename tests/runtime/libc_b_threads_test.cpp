@@ -146,6 +146,35 @@ TEST_CASE("libc B: rwlock exclusion semaphores and reusable barriers") {
   for (auto& t : workers) t.join();
   CHECK(serial == 100);
 }
+TEST_CASE("libc B: contended rwlock readers and writers exclude each other and never miss a wakeup") {
+  // Uncontended unlocks skip the wake; a waiter that registers while a holder
+  // releases must still see the release, or this test hangs.
+  Thread parent;
+  alignas(8) std::uint32_t rw[14]{};
+  std::atomic<int> readers = 0, writers = 0, violations = 0;
+  std::vector<std::thread> workers;
+  for (int i = 0; i < 6; ++i)
+    workers.emplace_back([&, i] {
+      Thread t(1050 + i);
+      const bool writer = i < 2;
+      for (int n = 0; n < 3000; ++n) {
+        REQUIRE(call(writer ? "pthread_rwlock_wrlock" : "pthread_rwlock_rdlock", {h2g(rw)}) == 0);
+        if (writer) {
+          if (writers.fetch_add(1) != 0 || readers.load() != 0) ++violations;
+          writers.fetch_sub(1);
+        } else {
+          readers.fetch_add(1);
+          if (writers.load() != 0) ++violations;
+          readers.fetch_sub(1);
+        }
+        REQUIRE(call("pthread_rwlock_unlock", {h2g(rw)}) == 0);
+      }
+    });
+  for (auto& t : workers) t.join();
+  CHECK(violations == 0);
+  CHECK(rw[0] == 0);
+  CHECK(rw[4] == 0);  // waiters
+}
 TEST_CASE("libc B: pthread keys are per guest thread and reuse clears live threads") {
   Thread parent;
   int key;

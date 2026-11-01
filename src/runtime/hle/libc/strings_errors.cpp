@@ -400,6 +400,20 @@ void register_string_errors(HleLibrary& lib) {
   if (process_config().isa() == GuestIsa::a32) {
     bind<&error_string32>(lib, "strerror");
     bind<&strsignal32>(lib, "strsignal");
+    // LP32 bionic exports sys_siglist and sys_signame (libc/bionic/sys_siglist.c,
+    // sys_signame.c): NSIG (65) pointers, set for signals 1-31 and null elsewhere.
+    // Mono's libmonosgen imports sys_signame; without it the library fails to load.
+    static const char* const signames[] = {"HUP", "INT", "QUIT", "ILL", "TRAP", "ABRT", "BUS", "FPE", "KILL", "USR1",
+                                           "SEGV", "USR2", "PIPE", "ALRM", "TERM", "STKFLT", "CHLD", "CONT", "STOP",
+                                           "TSTP", "TTIN", "TTOU", "URG", "XCPU", "XFSZ", "VTALRM", "PROF", "WINCH",
+                                           "IO", "PWR", "SYS"};
+    std::uint32_t siglist[65]{}, signame[65]{};
+    for (int n = 1; n <= 31; ++n) {
+      siglist[n] = static_cast<std::uint32_t>(h2g(low_string(strsignal_impl(n))));
+      signame[n] = static_cast<std::uint32_t>(h2g(low_string(signames[n - 1])));
+    }
+    lib.add_data("sys_siglist", low_data(std::as_bytes(std::span(siglist)), 4));
+    lib.add_data("sys_signame", low_data(std::as_bytes(std::span(signame)), 4));
   } else {
     bind<&error_string>(lib, "strerror");
     bind<&strsignal_impl>(lib, "strsignal");

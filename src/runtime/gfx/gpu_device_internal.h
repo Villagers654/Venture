@@ -15,6 +15,9 @@ const std::vector<std::string>& enabled_gpu_device_extensions();
 bool gpu_unified_image_layouts_enabled();
 // Whether the host Vulkan loader offers an instance extension.
 bool host_vulkan_instance_extension(std::string_view name);
+// A user-facing explanation when the host Vulkan loader lacks the window-surface
+// extensions ANGLE requires (no usable GPU driver registered), else empty.
+std::string missing_vulkan_surface_support();
 // Internal initialization state; does not recurse into ANGLE.
 GpuDevice& gpu_device_state();
 // Flat stock ANGLE path: borrow the exact device and queue. Never used with XR.

@@ -83,4 +83,7 @@ public class ActivityManager {
   public static boolean isUserAMonkey() { return false; }
   public static boolean isRunningInTestHarness() { return false; }
   public static boolean isRunningInUserTestHarness() { return false; }
+  public void setProcessStateSummary(byte[] state) {
+    if (state != null && state.length > 128) throw new IllegalArgumentException("State summary over 128 bytes");
+  }
 }

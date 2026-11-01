@@ -22,4 +22,8 @@ public abstract class AdapterView<T extends Adapter> extends android.view.ViewGr
   public interface OnItemClickListener {
     void onItemClick(AdapterView<?> parent, android.view.View view, int position, long id);
   }
+  public Object getItemAtPosition(int position) {
+    T adapter = getAdapter();
+    return adapter == null || position < 0 ? null : adapter.getItem(position);
+  }
 }

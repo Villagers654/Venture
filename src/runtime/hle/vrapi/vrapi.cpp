@@ -9,6 +9,7 @@
 #include "hle/vrapi/vulkan_images.h"
 #include "core/process.h"
 #include "xr/clock.h"
+#include "xr/reference_spaces.h"
 #include "xr/haptic_output.h"
 #include "xr/menu_chord.h"
 #include <algorithm>
@@ -251,6 +252,7 @@ XrResult set_app_space(XrPosef offset) {
   info.referenceSpaceType =
       v.tracking_space == 0 ? XR_REFERENCE_SPACE_TYPE_LOCAL : XR_REFERENCE_SPACE_TYPE_STAGE;
   info.poseInReferenceSpace = offset;
+  info = venture::xr::upright_reference_space(session().handle, info);
   XrSpace replacement{};
   auto r = ::xrCreateReferenceSpace(session().handle, &info, &replacement);
   if (XR_SUCCEEDED(r)) {
@@ -408,6 +410,7 @@ Mobile *vrapi_EnterVrMode(const Mode *mode) {
     XrReferenceSpaceCreateInfo ci{XR_TYPE_REFERENCE_SPACE_CREATE_INFO};
     ci.referenceSpaceType = type;
     ci.poseInReferenceSpace.orientation.w = 1;
+    ci = venture::xr::upright_reference_space(session().handle, ci);
     return ::xrCreateReferenceSpace(session().handle, &ci, &out);
   };
   if (XR_FAILED(create(XR_REFERENCE_SPACE_TYPE_LOCAL, v.local)) ||

@@ -252,4 +252,11 @@ TEST_CASE("frame stall trigger fires once per stall when focused frames stop adv
   }
   CHECK_FALSE(trigger.poll(1000, 99, false));
   CHECK_FALSE(trigger.poll(1006, 99, false));
+  // The native-dump trigger waits for a stall no load is expected to reach.
+  startup_diagnostics::FrameStallTrigger freeze{startup_diagnostics::FrameStallTrigger::dump_stall_seconds};
+  CHECK_FALSE(freeze.poll(0, 10, false));
+  CHECK_FALSE(freeze.poll(13, 10, false));  // a 13 s loading stall
+  CHECK_FALSE(freeze.poll(14, 11, false));
+  CHECK_FALSE(freeze.poll(43, 11, false));
+  CHECK(freeze.poll(44, 11, false));
 }

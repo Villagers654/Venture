@@ -101,4 +101,23 @@ public class BaseInputConnection implements InputConnection {
   public static void removeComposingSpans(android.text.Spannable text) {
     text.removeSpan(COMPOSING);
   }
+  public boolean commitCompletion(CompletionInfo text) { return false; }
+  public boolean commitCorrection(CorrectionInfo correctionInfo) { return false; }
+  public ExtractedText getExtractedText(ExtractedTextRequest request, int flags) { return null; }
+  public boolean setImeConsumesInput(boolean imeConsumesInput) { return false; }
+  // AOSP: code points before and after the selection, never splitting a surrogate pair.
+  public boolean deleteSurroundingTextInCodePoints(int before, int after) {
+    var text = getEditable();
+    if (text == null) return false;
+    int start = android.text.Selection.getSelectionStart(text), end = android.text.Selection.getSelectionEnd(text);
+    if (start < 0 || end < 0) return false;
+    if (start > end) { int t = start; start = end; end = t; }
+    String s = text.toString();
+    int from = start, to = end;
+    for (int i = 0; i < before && from > 0; ++i) from = s.offsetByCodePoints(from, -1);
+    for (int i = 0; i < after && to < s.length(); ++i) to = s.offsetByCodePoints(to, 1);
+    return deleteSurroundingText(start - from, to - end);
+  }
+  public static int getComposingSpanStart(android.text.Spannable text) { return -1; }
+  public static int getComposingSpanEnd(android.text.Spannable text) { return -1; }
 }

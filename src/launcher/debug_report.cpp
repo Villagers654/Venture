@@ -60,14 +60,23 @@ std::string local_time(fs::file_time_type t) {
 #ifdef _WIN32
 std::string narrow(const std::wstring &s) { return paths::utf8(fs::path(s)); }
 
-std::wstring reg_string(HKEY root, const wchar_t *key, const wchar_t *value) {
+// A string value; for REG_MULTI_SZ (multi = true) its first string.
+std::wstring reg_string(HKEY root, const wchar_t *key, const wchar_t *value, bool multi = false) {
+  const DWORD types = multi ? RRF_RT_REG_SZ | RRF_RT_REG_MULTI_SZ : RRF_RT_REG_SZ;
   DWORD size = 0;
-  if (RegGetValueW(root, key, value, RRF_RT_REG_SZ, nullptr, nullptr, &size) != ERROR_SUCCESS || size < 2)
+  if (RegGetValueW(root, key, value, types, nullptr, nullptr, &size) != ERROR_SUCCESS || size < 2)
     return {};
   std::wstring out(size / 2, L'\0');
-  if (RegGetValueW(root, key, value, RRF_RT_REG_SZ, nullptr, out.data(), &size) != ERROR_SUCCESS) return {};
+  if (RegGetValueW(root, key, value, types, nullptr, out.data(), &size) != ERROR_SUCCESS) return {};
   out.resize(wcsnlen(out.c_str(), out.size()));
   return out;
+}
+
+// A Vulkan driver manifest path, flagged when the file is gone (the loader
+// then skips that driver without a message).
+std::string manifest(const std::string &path) {
+  std::error_code ec;
+  return fs::exists(paths::from_utf8(path), ec) ? path : path + " (file missing)";
 }
 
 std::optional<DWORD> reg_dword(HKEY root, const wchar_t *key, const wchar_t *value) {
@@ -126,9 +135,13 @@ void system_section(std::string &out) {
   for (const auto &sub : reg_subkeys(HKEY_LOCAL_MACHINE, display.c_str())) {
     std::wstring key = display + L"\\" + sub;
     std::string name = narrow(reg_string(HKEY_LOCAL_MACHINE, key.c_str(), L"DriverDesc"));
-    if (!name.empty())
-      out += std::format("GPU: {}, driver {}\n", name,
-                         narrow(reg_string(HKEY_LOCAL_MACHINE, key.c_str(), L"DriverVersion")));
+    if (name.empty()) continue;
+    out += std::format("GPU: {}, driver {}\n", name,
+                       narrow(reg_string(HKEY_LOCAL_MACHINE, key.c_str(), L"DriverVersion")));
+    // The Vulkan loader finds each adapter's driver here. With none usable it has
+    // no window-surface support and ANGLE cannot start (no VK_KHR_surface).
+    std::string vulkan = narrow(reg_string(HKEY_LOCAL_MACHINE, key.c_str(), L"VulkanDriverName", true));
+    if (!vulkan.empty()) out += std::format("  Vulkan driver: {}\n", manifest(vulkan));
   }
 }
 
@@ -141,6 +154,8 @@ void xr_section(std::string &out) {
       out += std::format("OpenXR runtime ({}): {}{}\n", label, name, value ? " (disabled)" : "");
     for (const auto &[name, value] : reg_values(root, L"SOFTWARE\\Khronos\\OpenXR\\1\\ApiLayers\\Implicit"))
       out += std::format("OpenXR implicit layer ({}): {}{}\n", label, name, value ? " (disabled)" : "");
+    for (const auto &[name, value] : reg_values(root, L"SOFTWARE\\Khronos\\Vulkan\\Drivers"))
+      out += std::format("Vulkan driver ({}): {}{}\n", label, manifest(name), value ? " (disabled)" : "");
     for (const auto &[name, value] : reg_values(root, L"SOFTWARE\\Khronos\\Vulkan\\ImplicitLayers"))
       out += std::format("Vulkan implicit layer ({}): {}{}\n", label, name, value ? " (disabled)" : "");
   }
@@ -256,7 +271,7 @@ void facts_section(std::string &out, const fs::path &file) {
   if (!facts.empty()) out += "\n=== Session facts ===\n" + facts;
 }
 
-// The Android framework classes the game's Java needs and Venture lacks, from
+// The Android framework classes and members the game's Java needs and Venture lacks, from
 // the conversion report the runtime log names ("Details: .../report.json"):
 // each missing class with how many of the app's classes need it.
 void missing_classes_section(std::string &out, const fs::path &log) {
@@ -287,7 +302,7 @@ void missing_classes_section(std::string &out, const fs::path &log) {
   if (missing.empty()) return;
   std::vector<std::pair<std::string, std::pair<int, std::string>>> sorted(missing.begin(), missing.end());
   std::ranges::stable_sort(sorted, [](auto &a, auto &b) { return a.second.first > b.second.first; });
-  out += std::format("\n=== Missing Android classes ({} needed by {} app classes) ===\n", sorted.size(),
+  out += std::format("\n=== Missing Android classes and members ({} needed by {} app classes) ===\n", sorted.size(),
                      failures.size());
   for (std::size_t i = 0; i < sorted.size() && i < 80; ++i)
     out += std::format("{} ({}; e.g. {})\n", sorted[i].first, sorted[i].second.first, sorted[i].second.second);
@@ -329,6 +344,14 @@ std::string redact(std::string text, const std::vector<std::string> &private_tex
     std::string escaped;  // as JSON writes it
     for (char c : std::string(home)) escaped += c == '\\' ? std::string("\\\\") : std::string(1, c);
     names.push_back({escaped, "~", false});
+    // Resolved paths name the real home (rpm-ostree: /var/home/<user> behind
+    // /home); it is replaced whole, before the shorter HOME it ends with.
+    std::error_code ec;
+    if (auto real = paths::utf8(fs::canonical(paths::from_utf8(home), ec)); !ec && real != home) {
+      names.push_back({real, "~", false});
+      std::ranges::replace(real, '\\', '/');
+      names.push_back({real, "~", false});
+    }
   }
   // Short names would also match ordinary words.
   if (user && std::strlen(user) >= 3) names.push_back({user, "<user>", true});

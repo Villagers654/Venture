@@ -84,9 +84,10 @@ public class SurfaceView extends View {
       setFixedSize(getWidth(), getHeight());
     }
     public void setFormat(int f) {
-      if (f != 1 && f != -1 && f != 4)
+      // OPAQUE (-1), TRANSPARENT (-2) and TRANSLUCENT (-3) resolve to RGBA_8888, as on Android.
+      if (f != 1 && f != 4 && (f > -1 || f < -3))
         throw new UnsupportedOperationException("Surface format " + f);
-      int resolved = f == -1 ? 1 : f;
+      int resolved = f < 0 ? 1 : f;
       if (resolved == format)
         return;
       boolean live = surface != null;

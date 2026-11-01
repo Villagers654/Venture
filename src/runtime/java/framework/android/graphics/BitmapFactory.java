@@ -44,4 +44,11 @@ public final class BitmapFactory {
       return null;
     }
   }
+  public static Bitmap decodeResource(android.content.res.Resources r, int id, Options options) {
+    try (var in = r.openRawResource(id)) {
+      return decodeStream(in, null, options);
+    } catch (java.io.IOException e) {
+      return null;
+    }
+  }
 }

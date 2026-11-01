@@ -23,5 +23,22 @@ public class InterfaceCallFixture {
     call.visitInsn(Opcodes.ARETURN); call.visitMaxs(0, 0); call.visitEnd();
     caller.visitEnd();
     Files.write(out.resolve("ItfCaller.class"), caller.toByteArray());
+    // Framework member references: one missing method, one inherited method, one field.
+    // The rewriter's census reports only the missing one (an "M" row).
+    var members = new ClassWriter(ClassWriter.COMPUTE_MAXS);
+    members.visit(Opcodes.V1_8, Opcodes.ACC_PUBLIC, "MemberCaller", null, "java/lang/Object", null);
+    var use = members.visitMethod(Opcodes.ACC_PUBLIC | Opcodes.ACC_STATIC, "use", "(Landroid/widget/Button;Landroid/view/WindowManager$LayoutParams;)V", null, null);
+    use.visitCode();
+    use.visitVarInsn(Opcodes.ALOAD, 0);
+    use.visitMethodInsn(Opcodes.INVOKEVIRTUAL, "android/widget/Button", "ventureAbsentMember", "()V", false);
+    use.visitVarInsn(Opcodes.ALOAD, 0);
+    use.visitMethodInsn(Opcodes.INVOKEVIRTUAL, "android/widget/Button", "getScrollX", "()I", false);
+    use.visitInsn(Opcodes.POP);
+    use.visitVarInsn(Opcodes.ALOAD, 1);
+    use.visitFieldInsn(Opcodes.GETFIELD, "android/view/WindowManager$LayoutParams", "x", "I");
+    use.visitInsn(Opcodes.POP);
+    use.visitInsn(Opcodes.RETURN); use.visitMaxs(0, 0); use.visitEnd();
+    members.visitEnd();
+    Files.write(out.resolve("MemberCaller.class"), members.toByteArray());
   }
 }

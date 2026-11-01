@@ -269,6 +269,23 @@ const FunctionInfo* resolve_thunk(GuestAddr entry, std::uint32_t svc) {
   if (!std::equal(words.begin(), words.end(), actual.begin())) return nullptr;
   return &info;
 }
+const FunctionInfo* function_at(GuestAddr pc) {
+  // Thunks are 16-byte aligned and at most 7 instructions, so pc lies in the
+  // stub that starts at its 16-byte boundary or the one before.
+  for (const auto entry : {pc & ~GuestAddr(15), (pc & ~GuestAddr(15)) - 16}) {
+    std::array<std::uint32_t, 2> words{};
+    if (!platform::read_memory(entry, words.data(), sizeof(words))) continue;
+    const bool arm = process_config().isa() == GuestIsa::a32;
+    const auto immediate = [arm](std::uint32_t word) {
+      return arm ? ((word >> 4) & 0xf000u) | (word & 0xfffu) : (word >> 5) & 0xffffu;
+    };
+    const auto id = immediate(words[0]) | (immediate(words[1]) << 16);
+    if (!id || id >= capacity) continue;
+    const auto* found = registry().functions[id].load(std::memory_order_acquire);
+    if (found && found->thunk == entry && pc - entry < 7 * sizeof(std::uint32_t)) return found;
+  }
+  return nullptr;
+}
 std::vector<FunctionInfo> registered_functions() {
   auto& r = registry(); std::lock_guard lock(r.mutex); std::vector<FunctionInfo> result;
   for (FunctionId id = 1; id < r.next; ++id) result.push_back(*r.functions[id].load(std::memory_order_acquire));
@@ -328,6 +345,11 @@ void invoke_handler(GuestThread& thread, FunctionId id, const FunctionInfo& f, R
   CallContext ctx(thread, thread.cpu(), f, registers);
   startup_diagnostics::HleScope startup_scope(thread, thread.cpu(), id);
   shutdown_trace::HleScope shutdown_call(thread, id);
+  struct HostCall {
+    std::atomic<std::uint32_t>& slot; std::uint32_t previous;
+    ~HostCall() { slot.store(previous, std::memory_order_relaxed); }
+  } host_call{thread.host_call, thread.host_call.load(std::memory_order_relaxed)};
+  thread.host_call.store(id + 1, std::memory_order_relaxed);
   static std::atomic<unsigned> gl_events{0};
   if (trace_gl && (f.name == "glViewport" || f.name == "glScissor" ||
                    f.name == "glBindFramebuffer" || f.name.starts_with("glFramebufferTexture") ||

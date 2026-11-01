@@ -1237,6 +1237,66 @@ TEST_CASE("XR GLES subimage rects reach the host in the bridged image's row orde
   venture::xr::install_xr_images(nullptr);
 }
 
+TEST_CASE("XR gives games upright LOCAL and LOCAL_FLOOR spaces when the host's are upside down") {
+  // SteamVR without a room setup returned both turned upside down against
+  // STAGE; Batman: Arkham Shadow's camera became NaN and the view stayed black.
+  struct UpsideDown {
+    UpsideDown() { set("1"); }
+    ~UpsideDown() { set(""); }
+    static void set(const char* value) {
+#ifdef _WIN32
+      _putenv_s("VENTURE_MOCK_UPSIDE_DOWN_LOCAL", value);
+#else
+      if (*value) setenv("VENTURE_MOCK_UPSIDE_DOWN_LOCAL", value, 1); else unsetenv("VENTURE_MOCK_UPSIDE_DOWN_LOCAL");
+#endif
+      venture::environment::refresh();
+      ventureMockXrRefreshEnvironment();
+    }
+  } upside_down;
+  venture::test::XrImageFixture interop;
+  venture::xr::install_xr_images(&interop);
+  const char* extensions[]{"XR_KHR_opengl_es_enable"};
+  XrInstanceCreateInfo create{XR_TYPE_INSTANCE_CREATE_INFO};
+  create.applicationInfo.apiVersion = XR_MAKE_VERSION(1, 0, 0);
+  create.enabledExtensionNames = extensions;
+  create.enabledExtensionCount = 1;
+  XrInstance instance{};
+  REQUIRE(xg::xrCreateInstance(&create, &instance) == XR_SUCCESS);
+  xg::GlesBinding binding{XR_TYPE_GRAPHICS_BINDING_OPENGL_ES_ANDROID_KHR, nullptr, 1, 2, 3};
+  XrSessionCreateInfo session_info{XR_TYPE_SESSION_CREATE_INFO, &binding, 0, 1};
+  XrSession session{};
+  REQUIRE(xg::xrCreateSession(instance, &session_info, &session) == XR_SUCCESS);
+  auto space = [&](XrReferenceSpaceType type, XrPosef pose = {{0, 0, 0, 1}, {0, 0, 0}}) {
+    XrReferenceSpaceCreateInfo info{XR_TYPE_REFERENCE_SPACE_CREATE_INFO, nullptr, type, pose};
+    XrSpace out{};
+    REQUIRE(xg::xrCreateReferenceSpace(session, &info, &out) == XR_SUCCESS);
+    return out;
+  };
+  const auto view = space(XR_REFERENCE_SPACE_TYPE_VIEW), local = space(XR_REFERENCE_SPACE_TYPE_LOCAL),
+             floor = space(XR_REFERENCE_SPACE_TYPE_LOCAL_FLOOR),
+             // OVRPlugin's legacy floor-level space maps to LOCAL_FLOOR too.
+             legacy_floor = space(XrReferenceSpaceType(1000043001)),
+             raised = space(XR_REFERENCE_SPACE_TYPE_LOCAL, {{0, 0, 0, 1}, {0, 0.5f, 0}});
+  XrTime now{};
+  std::int64_t monotonic{};
+  REQUIRE(venture::xr::clock_sample(&now, &monotonic) == XR_SUCCESS);
+  auto head_in = [&](XrSpace base) {
+    XrSpaceLocation location{XR_TYPE_SPACE_LOCATION};
+    REQUIRE(xg::xrLocateSpace(view, base, now, &location) == XR_SUCCESS);
+    return location.pose;
+  };
+  for (const auto base : {local, floor, legacy_floor, raised})
+    CHECK(venture::xr::rotate(head_in(base).orientation, {0, 1, 0}).y > 0.99f);
+  // LOCAL starts at the head, LOCAL_FLOOR on the floor below it.
+  CHECK(std::abs(head_in(local).position.y) < 1e-3f);
+  CHECK(std::abs(head_in(floor).position.y - 1.6f) < 1e-3f);
+  CHECK(std::abs(head_in(legacy_floor).position.y - 1.6f) < 1e-3f);
+  CHECK(std::abs(head_in(raised).position.y + 0.5f) < 1e-3f);
+  CHECK(xg::xrDestroySession(session) == XR_SUCCESS);
+  CHECK(xg::xrDestroyInstance(instance) == XR_SUCCESS);
+  venture::xr::install_xr_images(nullptr);
+}
+
 TEST_CASE("XR leaves out the smallest layers when the host takes fewer than the game submits") {
   // SteamVR on Linux refused every frame (XR_ERROR_LAYER_LIMIT_EXCEEDED) once
   // AC Nexus showed more panels than it takes; the game froze.
@@ -1852,6 +1912,17 @@ TEST_CASE("XR legacy Vulkan games get the shared GPU from their own instance") {
   VkPhysicalDevice fallback{};
   CHECK(xg::xrGetVulkanGraphicsDeviceKHR(instance, venture::xr::host_xr().system, vkInstance, &fallback) == XR_SUCCESS);
   CHECK(fallback == physical);
+  // Its session on a device of that GPU is accepted too (Batman: Arkham Shadow
+  // aborted when xrCreateSession failed on Oculus with an AMD GPU).
+  {
+    venture::test::VulkanDevice gpu;
+    XrGraphicsBindingVulkanKHR binding{XR_TYPE_GRAPHICS_BINDING_VULKAN_KHR, nullptr,
+        gpu.instance, gpu.physical, gpu.device, gpu.family, 0};
+    XrSessionCreateInfo si{XR_TYPE_SESSION_CREATE_INFO, &binding, 0, venture::xr::host_xr().system};
+    XrSession session{};
+    CHECK(xg::xrCreateSession(instance, &si, &session) == XR_SUCCESS);
+    if (session) CHECK(xg::xrDestroySession(session) == XR_SUCCESS);
+  }
   MockXrScript restored{};
   ventureMockXrSetScript(&restored);
   venture::test::vk_call("vkDestroyInstance", vkInstance, nullptr);
@@ -3465,10 +3536,10 @@ static std::uint32_t space_warp_frame(bool negotiated, bool validate_full_rate =
   // Desktop runtimes list the motion-vector format with or without depth (HITMAN
   // ends with an invalid image when its motion chain is refused).
   CHECK(std::ranges::count(formats, VK_FORMAT_R16G16B16A16_SFLOAT) == 1);
-  if (negotiated) {
-    // Vulkan guests always see Quest's D24S8 (backed by D32S8 where the GPU attaches no D24).
-    CHECK(std::ranges::count(formats, VK_FORMAT_D24_UNORM_S8_UINT) == 1);
-  }
+  // Vulkan guests always see Quest's depth formats, whatever the host lists (the
+  // mock lists none here without space warp); unoffered chains stay the guest's.
+  for (auto depth : {VK_FORMAT_D16_UNORM, VK_FORMAT_D24_UNORM_S8_UINT, VK_FORMAT_D32_SFLOAT})
+    CHECK(std::ranges::count(formats, depth) == 1);
   auto swapchain = [&](std::int64_t format, XrSwapchainUsageFlags usage, std::uint32_t size) {
     XrSwapchainCreateInfo info{XR_TYPE_SWAPCHAIN_CREATE_INFO, nullptr, 0, usage, format, 1, size, size, 1, 2, 1};
     XrSwapchain chain{};

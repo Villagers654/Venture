@@ -365,4 +365,8 @@ public class Activity extends ContextWrapper implements KeyEvent.Callback, Windo
     if (AppMain.QUIT_DIAGNOSTICS) AppMain.quitLog("Activity surface detach returned activity=" + getClass().getName());
     if (getApplicationInfo().targetSdkVersion >= 11 && AppMain.drainQueuedWork()) AppMain.quitStage(this, 2);
   }
+  public void finishAffinity() { finish(); }
+  public boolean hasWindowFocus() { return windowFocused; }
+  public android.view.View getCurrentFocus() { return getWindow().getDecorView().findFocus(); }
+  public android.window.OnBackInvokedDispatcher getOnBackInvokedDispatcher() { return getWindow().getOnBackInvokedDispatcher(); }
 }

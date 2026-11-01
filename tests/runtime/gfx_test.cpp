@@ -664,6 +664,11 @@ TEST_CASE(
   CHECK(call("eglDestroyContext", egl.display, 0x1234) == EGL_FALSE);
   CHECK(call("eglGetError") == EGL_BAD_CONTEXT);
   CHECK(call("eglGetError") == EGL_SUCCESS);
+  // A successful call clears an earlier, unread failure (EGL 1.5 3.1).
+  CHECK(call("eglDestroyContext", egl.display, 0x1234) == EGL_FALSE);
+  EGLint red{};
+  CHECK(call("eglGetConfigAttrib", egl.display, egl.config, EGL_RED_SIZE, &red) == EGL_TRUE);
+  CHECK(call("eglGetError") == EGL_SUCCESS);
   CHECK(call("eglCreateImageKHR", egl.display, egl.context,
              EGL_NATIVE_BUFFER_ANDROID, 0, 0) == 0);
   CHECK(call("eglGetError") == EGL_BAD_PARAMETER);

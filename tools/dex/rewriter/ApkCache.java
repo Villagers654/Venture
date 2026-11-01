@@ -279,6 +279,7 @@ public final class ApkCache {
                         case "E" -> failures.add(map("stage", "converter-method", "class", at(row, 1), "method", at(row, 2), "detail", at(row, 3)));
                         case "R" -> ++rewrites;
                         case "F" -> failures.add(map("stage", "frames", "class", at(row, 1), "method", at(row, 2), "detail", at(row, 3)));
+                        case "M" -> failures.add(map("stage", "framework-member", "class", at(row, 1), "kind", at(row, 3), "detail", at(row, 2)));
                         default -> { }
                     }
                 }
@@ -329,6 +330,8 @@ public final class ApkCache {
     }
 
     static boolean deferredLinkage(Map<?, ?> f) {
+        // A missing framework method or field fails only the call that reaches it, as on ART.
+        if ("framework-member".equals(f.get("stage"))) return true;
         if ("frames".equals(f.get("stage"))) return str(f, "detail").contains("missing frame hierarchy:");
         if ("hotspot".equals(f.get("stage"))) {
             // A class that does not verify fails when it is reached, as ART

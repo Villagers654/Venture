@@ -26,6 +26,8 @@ void vrapi_SubmitFrame(Mobile *, const LegacyFrame *);
 TextureSwapChain *vrapi_CreateTextureSwapChain4(const SwapChainCreate *);
 TextureSwapChain *vrapi_CreateTextureSwapChain3(std::int32_t, std::int64_t, std::int32_t,
                                                 std::int32_t, std::int32_t, std::int32_t);
+TextureSwapChain *vrapi_CreateTextureSwapChain2(std::int32_t, std::int32_t, std::int32_t,
+                                                std::int32_t, std::int32_t, std::int32_t);
 TextureSwapChain *vrapi_CreateTextureSwapChain(std::int32_t, std::int32_t, std::int32_t,
                                                std::int32_t, std::int32_t, bool);
 void vrapi_DestroyTextureSwapChain(TextureSwapChain *);

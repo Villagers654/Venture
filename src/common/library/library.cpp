@@ -3,6 +3,7 @@
 #include "common/saves_migration.h"
 #include "common/file_ops.h"
 #include <algorithm>
+#include <cstdlib>
 #include <fstream>
 #include <set>
 namespace venture::library {
@@ -334,13 +335,64 @@ void uninstall_addon(const fs::path &root, const Install &install,
   for (auto &path : files)
     fs::remove(path);
 }
+namespace {
+// The last "[xr] Frames submitted=" count in a run's log, 0 when absent.
+unsigned long long frames_submitted(std::string_view line, unsigned long long frames) {
+  constexpr std::string_view submitted = "[xr] Frames submitted=";
+  if (auto at = line.find(submitted); at != std::string_view::npos)
+    return std::strtoull(line.data() + at + submitted.size(), nullptr, 10);
+  return frames;
+}
+}  // namespace
 bool needed_meta_sign_in(const fs::path &log) {
   std::ifstream in(log, std::ios::binary);
-  for (std::string line; std::getline(in, line);)
+  bool init_failed = false;
+  unsigned long long frames = 0;
+  for (std::string line; std::getline(in, line);) {
     if (line.find("[ovrplatform] ovr_User_GetLoggedInUser request=") != std::string::npos ||
         line.find("[ovrplatform] ovr_Entitlement_GetIsViewerEntitled request=") != std::string::npos)
       if (line.find(" error=-20001") != std::string::npos) return true;
-  return false;
+    if (line.find("[ovrplatform] initialization failed error=-20001") != std::string::npos) init_failed = true;
+    frames = frames_submitted(line, frames);
+  }
+  // A failed platform initialization alone is not fatal: many games play on
+  // without it. One that quits before rendering past its first frames (Pinball
+  // FX, Deadpool VR) needed the account.
+  return init_failed && frames < 10;
+}
+bool needed_device_attestation(const fs::path &log) {
+  std::ifstream in(log, std::ios::binary);
+  double failed = -1, last = 0;
+  for (std::string line; std::getline(in, line);) {
+    // log::write lines start with "<seconds>.<ms>"; continuation lines do not.
+    char *end = nullptr;
+    const double at = std::strtod(line.c_str(), &end);
+    if (end == line.c_str() || at <= 0) continue;
+    last = at;
+    if (line.find("[ovrplatform] ovr_DeviceApplicationIntegrity_GetIntegrityToken request=") != std::string::npos &&
+        line.find(" error=") != std::string::npos)
+      failed = at;
+  }
+  // Games that only report the token keep playing; one that closes soon after
+  // the refusal (VirZOOM FLY shows "Integrity Token could not be retrieved")
+  // was stopped by it.
+  return failed >= 0 && last - failed < 60;
+}
+std::string missing_expansion(const fs::path &log) {
+  std::ifstream in(log, std::ios::binary);
+  std::string name;
+  unsigned long long frames = 0;
+  constexpr std::string_view marker = "[vfs] Missing expansion file: the game looked for ";
+  for (std::string line; std::getline(in, line);) {
+    if (auto at = line.find(marker); at != std::string::npos && name.empty()) {
+      name = line.substr(at + marker.size());
+      name = name.substr(0, name.find(','));
+    }
+    frames = frames_submitted(line, frames);
+  }
+  // Games probe for optional patch files too; only a game that never got
+  // past its first frames was stopped by the missing one.
+  return frames < 10 ? name : std::string{};
 }
 std::string runtime_failure(std::string_view tail, int code) {
   std::string_view last, last_runtime, dump;

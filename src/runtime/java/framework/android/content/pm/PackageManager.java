@@ -130,6 +130,25 @@ public class PackageManager {
   public java.util.List<ResolveInfo> queryIntentActivities(Intent intent, int flags) {
     return new java.util.ArrayList<>(model.resolveActivities(intent, flags));
   }
+  public java.util.List<ResolveInfo> queryIntentActivities(Intent intent, ResolveInfoFlags flags) {
+    return queryIntentActivities(intent, (int) flags.getValue());
+  }
+  public java.util.List<ResolveInfo> queryIntentServices(Intent intent, int flags) {
+    return new java.util.ArrayList<>(model.resolveServices(intent, flags));
+  }
+  /** Receivers registered in the manifest are not modelled; no broadcast reaches them. */
+  public java.util.List<ResolveInfo> queryBroadcastReceivers(Intent intent, int flags) {
+    return new java.util.ArrayList<>();
+  }
+  public ResolveInfo resolveService(Intent intent, ResolveInfoFlags flags) {
+    return resolveService(intent, (int) flags.getValue());
+  }
+  public static final class ResolveInfoFlags {
+    private final long value;
+    private ResolveInfoFlags(long value) { this.value = value; }
+    public static ResolveInfoFlags of(long value) { return new ResolveInfoFlags(value); }
+    public long getValue() { return value; }
+  }
   /** Installed packages visible to the app: with package visibility (API 30), its own. */
   public java.util.List<PackageInfo> getInstalledPackages(int flags) {
     try {

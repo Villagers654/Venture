@@ -48,7 +48,8 @@ struct SymbolVersion { std::string name, provider; bool hidden = false; };
 struct ArmRelocation {
   std::uint32_t type;
   const char* name;
-  enum Operation { none, absolute, relative } operation;
+  // tls_*: R_ARM_TLS_DTPMOD32 (module id), DTPOFF32 (S + A), TPOFF32 (S + A + static offset).
+  enum Operation { none, absolute, relative, tls_module, tls_offset, tls_tp_offset } operation;
 };
 std::span<const ArmRelocation> arm_relocation_table();
 struct Import {

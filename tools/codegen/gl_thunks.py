@@ -116,7 +116,8 @@ def generate(gl_path, egl_path, output, a32_output=None):
         lines.append(spelling(c.find('proto')) + ' guest_' + name + '(' + ', '.join(spelling(p) for p in c.findall('param')) + ');')
     lines += ['#else']
     for name in EGL_COMMANDS:
-        lines.append(f'add_graphics_function(library, "{name}", wrap<&guest_{name}>());')
+        entry = f'&guest_{name}' if name == 'eglGetError' else f'&Entry<&guest_{name}>::call'
+        lines.append(f'add_graphics_function(library, "{name}", wrap<{entry}>());')
     lines += ['#endif']
     (output/'egl_dispatch.inc').write_text('\n'.join(lines)+'\n')
     overrides = {'eglChooseConfig': 'choose_config32', 'eglGetConfigs': 'get_configs32',

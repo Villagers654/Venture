@@ -12,6 +12,9 @@ bool dispatch_registered_in_jit(GuestThread& thread, const FunctionInfo& info, R
 // Translation-only lookup. Exact registered instruction bytes are required;
 // modified thunks and entry into their bodies use ordinary SVC dispatch.
 const FunctionInfo* resolve_thunk(GuestAddr entry, std::uint32_t svc);
+// Diagnostics: the registered function whose thunk contains pc (a thread
+// blocked in a host call reports a pc inside it), or null.
+const FunctionInfo* function_at(GuestAddr pc);
 void deliver_memory_fault(GuestThread& thread, FunctionId id, const MemoryFault& fault);
 GuestAddr missing_symbol(std::string_view library, std::string_view name);
 GuestAddr call_return_trampoline(std::uint32_t depth);

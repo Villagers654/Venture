@@ -180,6 +180,10 @@ int munmap_fn(GuestAddr p, std::uint64_t n) { return result(AddressSpace::get().
 std::uint32_t mmap32(GuestAddr p, std::uint64_t n, int prot, int flags, int fd, std::int64_t off) {
   return static_cast<std::uint32_t>(mmap_fn(p, n, prot, flags, fd, off));
 }
+// ARM mmap2 takes the offset in 4 KiB pages, reaching past 4 GiB.
+std::uint32_t mmap2_32(GuestAddr p, std::uint64_t n, int prot, int flags, int fd, std::uint64_t pages) {
+  return mmap32(p, n, prot, flags, fd, static_cast<std::int64_t>(pages << 12));
+}
 int mprotect_fn(GuestAddr p, std::uint64_t n, int prot) {
   return result(AddressSpace::get().protect(p, n, prot));
 }
@@ -292,6 +296,8 @@ void register_memory_map(HleLibrary& lib) {
   if (process_config().isa() == GuestIsa::a32) {
     abi32::adapt<&sbrk32>("sbrk");
     abi32::adapt<&mmap32>("mmap"); abi32::adapt<&mmap32>("mmap64");
+    abi32::adapt<&mmap2_32>("__mmap2");
+    VENTURE_LIBC_BIND(lib, "__mmap2", mmap_fn);
   }
 #define B(n, f) VENTURE_LIBC_BIND(lib, n, f)
   B("brk", brk_fn);

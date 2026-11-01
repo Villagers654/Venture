@@ -38,6 +38,12 @@ public class AlertDialog extends Dialog {
       dialog.setCancelable(b);
       return this;
     }
+    // A list dialog presents nothing here (Dialog.show reports that); its items are kept.
+    private CharSequence[] items;
+    public Builder setItems(CharSequence[] items, android.content.DialogInterface.OnClickListener listener) {
+      this.items = items;
+      return this;
+    }
     public Builder setOnCancelListener(android.content.DialogInterface.OnCancelListener listener) {
       dialog.setOnCancelListener(listener);
       return this;

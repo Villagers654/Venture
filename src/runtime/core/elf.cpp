@@ -176,7 +176,10 @@ Image::Image(const std::filesystem::path& file, std::string guest_path, const Pl
       ph = {p.type, p.flags, p.offset, p.vaddr, p.paddr, p.filesz, p.memsz, p.align};
     } else ph = read_file<Phdr>(input, header.phoff + i * phsize);
     const auto limit = isa_ == GuestIsa::a32 ? 1ull << 32 : 1ull << 46;
-    if (ph.offset > file_size || ph.filesz > file_size - ph.offset ||
+    // Only PT_LOAD is read from the file, and only its range is checked, as in
+    // bionic's ElfReader: lld pads GNU_RELRO's file size to the page end, past
+    // the end of a file whose last segment is smaller (Meta's ARM32 OVRPlugin).
+    if ((ph.type == pt_load && (ph.offset > file_size || ph.filesz > file_size - ph.offset)) ||
         ((ph.type == pt_load || ph.type == pt_tls) && ph.filesz > ph.memsz) ||
         ph.vaddr > limit || ph.memsz > limit - ph.vaddr ||
         (ph.align && (ph.align & (ph.align - 1)))) throw std::runtime_error("invalid ELF program segment");
@@ -231,7 +234,6 @@ Image::Image(const std::filesystem::path& file, std::string guest_path, const Pl
     }
     parse_dynamic();
     for (const auto& ph : headers) if (ph.type == pt_tls && ph.memsz) {
-      if (isa_ == GuestIsa::a32) throw std::runtime_error("ARM32 native ELF TLS is not implemented");
       auto module = tls::add_module({g2h<const std::byte>(address(ph.vaddr, ph.filesz)), static_cast<std::size_t>(ph.filesz)}, ph.memsz, ph.align, ph.align ? ph.vaddr % ph.align : 0);
       tls_module_id = module.id; tls_offset = module.offset;
     }

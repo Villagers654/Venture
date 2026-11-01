@@ -1270,6 +1270,30 @@ TEST_CASE("Vulkan emulated compressed LINEAR images are created and lay out thei
   test::vk_call("vkDestroyImage", gpu.device, image, nullptr);
 }
 
+TEST_CASE("Vulkan emulated compressed images accept input-attachment usage") {
+  struct ForceEmulation {
+    ForceEmulation() { vulkan::force_texture_emulation(true); }
+    ~ForceEmulation() { vulkan::force_texture_emulation(false); }
+  } force;
+  test::VulkanDevice gpu;
+  // The Climb (CryEngine) creates its ETC2 textures with input-attachment
+  // usage and mutable format, and crashes when creation fails.
+  VkImageCreateInfo ci{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+  ci.flags = VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT;
+  ci.imageType = VK_IMAGE_TYPE_2D;
+  ci.format = VK_FORMAT_ETC2_R8G8B8A8_SRGB_BLOCK;
+  ci.extent = {32, 32, 1};
+  ci.mipLevels = 4;
+  ci.arrayLayers = 1;
+  ci.samples = VK_SAMPLE_COUNT_1_BIT;
+  ci.tiling = VK_IMAGE_TILING_OPTIMAL;
+  ci.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+             VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT;
+  VkImage image{};
+  REQUIRE(test::vk_call("vkCreateImage", gpu.device, &ci, nullptr, &image) == VK_SUCCESS);
+  test::vk_call("vkDestroyImage", gpu.device, image, nullptr);
+}
+
 TEST_SUITE_END();
 
 namespace {

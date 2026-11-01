@@ -63,6 +63,12 @@ for mode in ("native-host", "native-source", "native-host-compare"):
     assert (code & 0xFFFFFFFF if os.name == "nt" else code) == expected, (code, text)
     assert "Host exception" in text and "E [host-stack]   #0 " in text, text
 if os.name == 'nt':
+    # A call through a null pointer faults at 0; the caller's frame is still named.
+    code, text = run('null-call', 0)
+    assert code & 0xFFFFFFFF == 0xC0000005, (code, text)
+    assert 'E [host-stack]   #0 unknown+0x0' in text, text
+    assert re.search(r'E \[host-stack\]   #1 venture_crash_report_child\.exe\+0x', text), text
+if os.name == 'nt':
     for mode in ('jit64', 'jit32'):
         code, text = run(mode, 0)
         assert code & 0xFFFFFFFF == 0xC0000005, (code, text)

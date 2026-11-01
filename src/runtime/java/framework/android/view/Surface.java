@@ -51,4 +51,16 @@ public class Surface implements AutoCloseable {
   public void close() {
     release();
   }
+  // Software canvases draw into nothing: there is no Android view compositor, as Canvas notes.
+  private android.graphics.Canvas locked;
+  public synchronized android.graphics.Canvas lockCanvas(android.graphics.Rect dirty) {
+    if (nativeHandle == 0) throw new IllegalArgumentException("Surface has been released");
+    if (locked != null) throw new IllegalArgumentException("Surface was already locked");
+    return locked = new android.graphics.Canvas();
+  }
+  public android.graphics.Canvas lockHardwareCanvas() { return lockCanvas(null); }
+  public synchronized void unlockCanvasAndPost(android.graphics.Canvas canvas) {
+    if (canvas != locked) throw new IllegalArgumentException("canvas object must be the same instance that was previously returned by lockCanvas");
+    locked = null;
+  }
 }

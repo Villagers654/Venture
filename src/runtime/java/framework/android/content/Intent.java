@@ -166,6 +166,10 @@ public class Intent implements Parcelable {
     extras.putAll(b);
     return this;
   }
+  public Intent putExtras(Intent src) {
+    extras.putAll(src.extras);
+    return this;
+  }
   public Bundle getExtras() {
     return new Bundle(extras);
   }

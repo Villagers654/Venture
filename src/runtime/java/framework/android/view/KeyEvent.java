@@ -19,6 +19,9 @@ public class KeyEvent extends InputEvent {
   public KeyEvent(long down, long event, int action, int code, int repeat) {
     this(down, event, action, code, repeat, 0, -1, 0, 0, 0x101);
   }
+  public KeyEvent(long down, long event, int action, int code, int repeat, int meta) {
+    this(down, event, action, code, repeat, meta, -1, 0, 0, 0x101);
+  }
   public KeyEvent(long down, long event, int action, int code, int repeat, int meta,
       int device, int scan, int flags, int source) {
     this.downTime = down; this.eventTime = event; this.action = action; this.code = code;
@@ -60,5 +63,16 @@ public class KeyEvent extends InputEvent {
     boolean onKeyLongPress(int code, KeyEvent event);
     boolean onKeyUp(int code, KeyEvent event);
     boolean onKeyMultiple(int code, int count, KeyEvent event);
+  }
+  public boolean hasNoModifiers() { return getModifiers() == 0; }
+  public boolean hasModifiers(int modifiers) { return getModifiers() == (normalizeMetaState(modifiers) & 0x770ff); }
+  // AOSP KeyEvent.isSystemKey: keys the platform handles before applications.
+  public final boolean isSystem() { return isSystemKey(code); }
+  public static boolean isSystemKey(int code) {
+    return switch (code) {
+      case 1, 2, 3, 4, 5, 6, 24, 25, 26, 27, 79, 80, 82, 84, 85, 86, 87, 88, 89, 90, 91, 126, 127, 130, 164,
+          220, 221, 222, 280, 281, 282, 283 -> true;
+      default -> false;
+    };
   }
 }

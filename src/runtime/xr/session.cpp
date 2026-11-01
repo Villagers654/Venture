@@ -15,8 +15,10 @@
 #include "xr/queue.h"
 #include "gfx/queue_sync.h"
 #include "hle/vulkan/timing.h"
+#include "hle/vulkan/vulkan.h"
 #include "xr/xr_images.h"
 #include "xr/clock.h"
+#include "xr/reference_spaces.h"
 #include "xr/haptic_output.h"
 #include <algorithm>
 #include <string>
@@ -147,9 +149,12 @@ XrResult Session::create(SessionOwner requested, const XrGraphicsBindingVulkanKH
     // Guest Vulkan may own its VkDevice (gpu_device.h contract). Validate
     // runtime selection in that VkInstance's handle namespace, not by comparing
     // VkPhysicalDevice pointers belonging to different Vulkan instances.
+    // A host that refuses the query for a game-made instance (Oculus with an
+    // AMD GPU) already chose the shared device's GPU, as the game was told.
     VkPhysicalDevice selected{};
-    auto r = host_graphics_device(h.system, b.instance, &selected);
-    if (XR_FAILED(r) || selected != b.physicalDevice)
+    if (XR_FAILED(host_graphics_device(h.system, b.instance, &selected)))
+      selected = vulkan::shared_physical_device_in(b.instance);
+    if (!selected || selected != b.physicalDevice)
       return XR_ERROR_GRAPHICS_DEVICE_INVALID;
   }
   XrGraphicsRequirementsVulkanKHR requirements{XR_TYPE_GRAPHICS_REQUIREMENTS_VULKAN_KHR};
@@ -283,6 +288,7 @@ XrResult Session::destroy(SessionOwner requested) {
   if (XR_SUCCEEDED(result)) {
     log::info("xr", "Session ended: submitted={} xrEndFrame_errors={}", frame_index, end_errors);
     clear_haptic_bindings(handle);
+    forget_reference_spaces(handle);
     dev_dump_end();
     handle = XR_NULL_HANDLE;
     owner = SessionOwner::none;

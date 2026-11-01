@@ -861,8 +861,12 @@ void decode_mip(VkCommandBuffer cmd, const std::shared_ptr<Image>& img, std::uin
   restore_compute(cmd);
 }
 
-constexpr VkImageUsageFlags emulated_usage =
-    VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+// A compressed image cannot be a framebuffer attachment, yet Quest drivers
+// create one that names input-attachment usage (The Climb's ETC2 textures). The
+// usage can never take effect, so the host image leaves it out.
+constexpr VkImageUsageFlags unusable_usage = VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT;
+constexpr VkImageUsageFlags emulated_usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
+                                             VK_IMAGE_USAGE_TRANSFER_DST_BIT | unusable_usage;
 constexpr VkImageCreateFlags emulated_flags = VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT |
                                               VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT |
                                               VK_IMAGE_CREATE_2D_ARRAY_COMPATIBLE_BIT;
@@ -892,7 +896,7 @@ bool host_image_info(const VkImageCreateInfo& guest, TextureStorage& storage, Vk
   host.pNext = nullptr;  // A host format list is only a hint; MUTABLE alone permits the views.
   host.format = storage.planes[0].format;
   host.tiling = VK_IMAGE_TILING_OPTIMAL;
-  host.usage |= VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+  host.usage = (host.usage & ~unusable_usage) | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
   host.flags &= ~VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT;
   if (!storage.planes[0].view_formats.empty()) host.flags |= VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT;
   return true;

@@ -372,6 +372,7 @@ void launch_android_app(const AppLaunchOptions& options) {
     bool posted = false, interrupted = false, xr_stop_decided = false;
     startup_diagnostics::FirstFrameTrigger first_frame_probe;
     startup_diagnostics::FrameStallTrigger frame_stall_probe;
+    startup_diagnostics::FrameStallTrigger frame_freeze_probe{startup_diagnostics::FrameStallTrigger::dump_stall_seconds};
     const auto first_frame_bound = startup_diagnostics::first_frame_timeout_seconds();
     while (!token.stop_requested()) {
       const auto now = std::chrono::steady_clock::now();
@@ -387,11 +388,14 @@ void launch_android_app(const AppLaunchOptions& options) {
         // A process that already exited logged its own fatal state.
         signals::capture_first_frame_stall();
       }
-      if (frame_stall_probe.poll(std::chrono::duration_cast<std::chrono::seconds>(now - started).count(),
-                                 startup_diagnostics::frames_submitted(), stopping || !startup_diagnostics::host_session_focused())) {
-        signals::capture_frame_stall();
+      const auto stall_now = std::chrono::duration_cast<std::chrono::seconds>(now - started).count();
+      const bool stall_excluded = stopping || !startup_diagnostics::host_session_focused();
+      if (frame_stall_probe.poll(stall_now, startup_diagnostics::frames_submitted(), stall_excluded)) {
+        signals::capture_frame_stall(frame_stall_probe.seconds(), false);
         vulkan::log_gpu_memory();
       }
+      if (frame_freeze_probe.poll(stall_now, startup_diagnostics::frames_submitted(), stall_excluded))
+        signals::capture_frame_stall(frame_freeze_probe.seconds(), true);
       if (!closing && stopping) {
         closing = true;
         host_stop = stop.requested() || timed_out;

@@ -36,7 +36,7 @@ public final class Rewrite {
     public static void main(String[] args) throws Exception {
         long started = System.nanoTime();
         Hierarchy hierarchy = new Hierarchy();
-        for (String p : args[3].split(java.util.regex.Pattern.quote(File.pathSeparator))) hierarchy.jar(p);
+        for (String p : args[3].split(java.util.regex.Pattern.quote(File.pathSeparator))) hierarchy.jar(p, true);
         hierarchy.jar(args[0]);
         if (args.length > 4)
             for (String p : args[4].split(java.util.regex.Pattern.quote(File.pathSeparator))) hierarchy.metadata(p);
@@ -60,6 +60,17 @@ public final class Rewrite {
                         return new MethodVisitor(Opcodes.ASM9, super.visitMethod(access, name, desc, signature, exceptions)) {
                             final Map<String, Integer> pendingStreams = new HashMap<>();
                             void rewrite(String target) { census.println("R\t" + owner + "\t" + name + desc + "\t" + target); }
+                            // A framework member the app references but Venture's framework lacks fails with
+                            // NoSuchMethodError/NoSuchFieldError when reached; list each one once per class.
+                            final Set<String> reported = new HashSet<>();
+                            void member(String cls, String member, String kind) {
+                                if (cls.startsWith("[") || !Boolean.FALSE.equals(hierarchy.resolves(cls, member))) return;
+                                if (reported.add(cls + "." + member)) census.println("M\t" + owner + "\t" + cls + "." + member + "\t" + kind);
+                            }
+                            @Override public void visitFieldInsn(int opcode, String cls, String field, String descriptor) {
+                                member(cls, field + " " + descriptor, "java.lang.NoSuchFieldError");
+                                super.visitFieldInsn(opcode, cls, field, descriptor);
+                            }
                             @Override public void visitTypeInsn(int opcode, String type) {
                                 String stream = readStream(type);
                                 if (opcode == Opcodes.NEW && stream != null) {
@@ -68,6 +79,7 @@ public final class Rewrite {
                                 } else super.visitTypeInsn(opcode, type);
                             }
                             @Override public void visitMethodInsn(int opcode, String cls, String method, String descriptor, boolean itf) {
+                                member(cls, method + descriptor, "java.lang.NoSuchMethodError");
                                 if (method.equals("<init>") && pendingStreams.getOrDefault(cls, 0) > 0) {
                                     pendingStreams.merge(cls, -1, Integer::sum);
                                     rewrite(cls + ".<init> virtual filesystem read");

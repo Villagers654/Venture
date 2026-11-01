@@ -115,6 +115,55 @@ int property_foreach(CallContext& c, GuestAddr callback, GuestAddr cookie) {
   return 0;
 }
 std::uint32_t property_serial(const Property* p) { return p->serial; }
+// ARM32 cannot hold host Property pointers: a prop_info is a low 4-byte cell per
+// property, in properties() order, and names and values are low copies.
+struct Property32 { const Property* host; std::uint32_t name, value; };
+const std::vector<Property32>& properties32(GuestAddr* base = nullptr) {
+  static GuestAddr cells = 0;
+  static const auto all = [] {
+    std::vector<Property32> result;
+    for (const auto& [_, p] : properties())
+      result.push_back({&p, static_cast<std::uint32_t>(h2g(low_string(p.name))),
+                        static_cast<std::uint32_t>(h2g(low_string(p.value)))});
+    std::vector<std::byte> zero(std::max<std::size_t>(1, result.size()) * 4);
+    cells = low_data(zero, 4);
+    return result;
+  }();
+  if (base) *base = cells;
+  return all;
+}
+const Property32* property32(std::uint32_t token) {
+  GuestAddr base;
+  auto& all = properties32(&base);
+  auto index = (static_cast<GuestAddr>(token) - base) / 4;
+  if (token < base || index >= all.size() || (token - base) % 4) return nullptr;
+  return &all[index];
+}
+std::uint32_t property_token32(const Property* p) {
+  GuestAddr base;
+  auto& all = properties32(&base);
+  for (std::size_t i = 0; i < all.size(); ++i)
+    if (all[i].host == p) return static_cast<std::uint32_t>(base + 4 * i);
+  return 0;
+}
+std::uint32_t property_find32(const char* name) { return property_token32(property_find(name)); }
+int property_read32(std::uint32_t token, char* name, char* value) {
+  auto p = property32(token);
+  return p ? property_read(p->host, name, value) : -1;
+}
+void property_callback32(CallContext& c, std::uint32_t token, GuestAddr callback, GuestAddr cookie) {
+  if (auto p = property32(token)) c.thread().call(callback, {cookie, p->name, p->value, p->host->serial});
+}
+int property_foreach32(CallContext& c, GuestAddr callback, GuestAddr cookie) {
+  GuestAddr base;
+  auto& all = properties32(&base);
+  for (std::size_t i = 0; i < all.size(); ++i) c.thread().call(callback, {base + 4 * i, cookie});
+  return 0;
+}
+std::uint32_t property_serial32(std::uint32_t token) {
+  auto p = property32(token);
+  return p ? p->host->serial : 0;
+}
 int api_level() {
   auto p = property_find("ro.build.version.sdk");
   return p ? static_cast<int>(parse_signed(p->value.c_str(), nullptr, 10)) : process_config().sdk_level;
@@ -226,6 +275,11 @@ void register_misc(HleLibrary& lib) {
     abi32::adapt<&cxa_thread_atexit_impl>("__cxa_thread_atexit_impl");
     abi32::adapt<&atexit_impl>("atexit");
     abi32::adapt<&register_atfork_impl>("__register_atfork");
+    abi32::adapt<&property_find32>("__system_property_find");
+    abi32::adapt<&property_read32>("__system_property_read");
+    abi32::adapt<&property_callback32>("__system_property_read_callback");
+    abi32::adapt<&property_foreach32>("__system_property_foreach");
+    abi32::adapt<&property_serial32>("__system_property_serial");
   }
   extern void register_options(HleLibrary&);
   register_options(lib);

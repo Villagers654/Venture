@@ -2345,7 +2345,9 @@ std::shared_ptr<HleLibrary> create_library() {
   return library;
 }
 void register_library() {
-  Linker::get().register_hle_library(create_library());
+  // Vulkan structures are translated for LP64 only. A 32-bit process sees a
+  // device without Vulkan, as ARM32 GLES-only phones were, so engines take GLES.
+  if (process_config().isa() == GuestIsa::a64) Linker::get().register_hle_library(create_library());
   register_hardware_buffer_allocator();
 }
 hle::Handler command_handler(std::string_view name) {

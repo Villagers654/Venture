@@ -75,6 +75,15 @@ public class TextView extends android.view.View {
   public void setTextColor(int c) {
     color = c;
   }
+  public int getCurrentTextColor() { return color; }
+  private int highlightColor = 0x6633b5e5;
+  private boolean cursorVisible = true, textSelectable;
+  public void setHighlightColor(int color) { highlightColor = color; }
+  public int getHighlightColor() { return highlightColor; }
+  public void setCursorVisible(boolean visible) { cursorVisible = visible; }
+  public boolean isCursorVisible() { return cursorVisible; }
+  public void setTextIsSelectable(boolean selectable) { textSelectable = selectable; }
+  public boolean isTextSelectable() { return textSelectable; }
   public void setGravity(int g) {
     gravity = g;
   }

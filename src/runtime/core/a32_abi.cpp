@@ -211,6 +211,71 @@ const Descriptor* descriptor(std::string_view library, std::string_view symbol) 
         {"libventure_java_bridge.so", "VentureJavaRemoveHook", {Kind::I32, "jvmtiError"}, remove, false, "Venture hosted-Java bridge ABI"}};
     for (const auto& entry : hooks) if (entry.symbol == symbol) return &entry;
   }
+  // bionic libc/arch-arm/syscalls/__mmap2.S: the raw ARM mmap2 syscall stub,
+  // offset in 4 KiB pages. Exported, and imported directly by Unity's Mono.
+  if (library == "libc.so" && symbol == "__mmap2") {
+    static constexpr Type arguments[]{{Kind::Ptr, "void *"}, {Kind::Size, "size_t"}, {Kind::I32, "int"},
+                                      {Kind::I32, "int"}, {Kind::I32, "int"}, {Kind::Size, "size_t"}};
+    static constexpr Descriptor mmap2{"libc.so", "__mmap2", {Kind::Ptr, "void *"}, arguments, false, "bionic __mmap2.S"};
+    return &mmap2;
+  }
+  // ELF general/local-dynamic TLS: void* __tls_get_addr(tls_index*), with
+  // bionic's ARM tls_index of two 32-bit words. Exported by libc, no header.
+  if (library == "libc.so" && symbol == "__tls_get_addr") {
+    static constexpr Type index[]{{Kind::Layout, "tls_index *"}};
+    static constexpr Descriptor tls{"libc.so", "__tls_get_addr", {Kind::Ptr, "void *"}, index, false, "bionic elf_tls.h"};
+    return &tls;
+  }
+  // Bionic FORTIFY entry points (bits/fortify/*.h). Clang emits them for
+  // -D_FORTIFY_SOURCE builds (Unity's Mono and il2cpp); the NDK headers only
+  // declare them behind __BIONIC_FORTIFY, so the generator never sees them.
+  if (library == "libc.so" && symbol.starts_with("__")) {
+    static constexpr Type ptr{Kind::Ptr, "void *"}, cptr{Kind::Ptr, "const void *"}, str{Kind::Ptr, "char *", 1},
+        cstr{Kind::Ptr, "const char *", 1}, size{Kind::Size, "size_t"}, ssize{Kind::SSize, "ssize_t"},
+        i32{Kind::I32, "int"}, off{Kind::Off, "off_t"}, off64{Kind::I64, "off64_t"}, mode{Kind::U16, "mode_t"},
+        va{Kind::VaList, "va_list"};
+    static constexpr Type mem[]{ptr, cptr, size, size}, set[]{ptr, i32, size, size}, chr[]{cptr, i32, size, size},
+        len[]{cstr, size}, copy[]{str, cstr, size}, ncopy[]{str, cstr, size, size}, ncopy2[]{str, cstr, size, size, size},
+        find[]{cstr, i32, size}, sn[]{str, size, i32, size, cstr}, vsn[]{str, size, i32, size, cstr, va},
+        sp[]{str, i32, size, cstr}, vsp[]{str, i32, size, cstr, va}, open[]{cstr, i32}, openat[]{i32, cstr, i32},
+        rd[]{i32, ptr, size, size}, wr[]{i32, cptr, size, size}, prd[]{i32, ptr, size, off, size},
+        prd64[]{i32, ptr, size, off64, size}, pwr[]{i32, cptr, size, off, size}, pwr64[]{i32, cptr, size, off64, size},
+        um[]{mode};
+    static constexpr std::string_view source = "bionic bits/fortify";
+    static constexpr Descriptor fortify[]{
+        {"libc.so", "__memchr_chk", ptr, chr, false, source},
+        {"libc.so", "__memcpy_chk", ptr, mem, false, source},
+        {"libc.so", "__memmove_chk", ptr, mem, false, source},
+        {"libc.so", "__memrchr_chk", ptr, chr, false, source},
+        {"libc.so", "__memset_chk", ptr, set, false, source},
+        {"libc.so", "__open_2", i32, open, false, source},
+        {"libc.so", "__openat_2", i32, openat, false, source},
+        {"libc.so", "__pread64_chk", ssize, prd64, false, source},
+        {"libc.so", "__pread_chk", ssize, prd, false, source},
+        {"libc.so", "__pwrite64_chk", ssize, pwr64, false, source},
+        {"libc.so", "__pwrite_chk", ssize, pwr, false, source},
+        {"libc.so", "__read_chk", ssize, rd, false, source},
+        {"libc.so", "__snprintf_chk", i32, sn, true, source},
+        {"libc.so", "__sprintf_chk", i32, sp, true, source},
+        {"libc.so", "__stpcpy_chk", str, copy, false, source},
+        {"libc.so", "__stpncpy_chk", str, ncopy, false, source},
+        {"libc.so", "__stpncpy_chk2", str, ncopy2, false, source},
+        {"libc.so", "__strcat_chk", str, copy, false, source},
+        {"libc.so", "__strchr_chk", str, find, false, source},
+        {"libc.so", "__strcpy_chk", str, copy, false, source},
+        {"libc.so", "__strlcat_chk", size, ncopy, false, source},
+        {"libc.so", "__strlcpy_chk", size, ncopy, false, source},
+        {"libc.so", "__strlen_chk", size, len, false, source},
+        {"libc.so", "__strncat_chk", str, ncopy, false, source},
+        {"libc.so", "__strncpy_chk", str, ncopy, false, source},
+        {"libc.so", "__strncpy_chk2", str, ncopy2, false, source},
+        {"libc.so", "__strrchr_chk", str, find, false, source},
+        {"libc.so", "__umask_chk", mode, um, false, source},
+        {"libc.so", "__vsnprintf_chk", i32, vsn, false, source},
+        {"libc.so", "__vsprintf_chk", i32, vsp, false, source},
+        {"libc.so", "__write_chk", ssize, wr, false, source}};
+    for (const auto& entry : fortify) if (entry.symbol == symbol) return &entry;
+  }
   for (auto table : {ndk_descriptors(), libc_descriptors(), graphics_descriptors(), vendor_descriptors()}) {
     auto key = std::pair(library, symbol);
     auto it = std::lower_bound(table.begin(), table.end(), key, [](const Descriptor& d, auto k) {

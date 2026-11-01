@@ -21,4 +21,9 @@ public class InputMethodManager {
   public void restartInput(android.view.View view) {
     android.util.Log.w("InputMethodManager", "Host IME unavailable");
   }
+  public InputMethodSubtype getCurrentInputMethodSubtype() { return new InputMethodSubtype(); }
+  public void updateSelection(android.view.View view, int selStart, int selEnd, int candidatesStart, int candidatesEnd) {}
+  public void dispatchKeyEventFromInputMethod(android.view.View view, android.view.KeyEvent event) {
+    if (view != null) view.dispatchKeyEvent(event);
+  }
 }
