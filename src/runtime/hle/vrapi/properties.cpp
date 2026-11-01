@@ -6,6 +6,7 @@
 #include "common/log.h"
 #include "hle/vulkan/vulkan.h"
 #include "xr/vulkan_extensions.h"
+#include "xr/display_memory.h"
 #include "platform/thread_priority.h"
 #include <algorithm>
 #include <utility>
@@ -126,8 +127,16 @@ float vrapi_GetSystemPropertyFloat(const Java *, std::int32_t property) {
                57.2957795f;
     }
     // SUGGESTED_EYE_FOV_DEGREES is queried to construct cameras before
-    // EnterVrMode. Recommend a nominal 90-degree camera until a live OpenXR
-    // session provides projection data; zero creates a degenerate camera.
+    // EnterVrMode (CryEngine's mobile plugin keeps it for the game camera).
+    // Report the symmetric frustum covering this host's view as a session will;
+    // the last session remembers it. Without one, a nominal 90 degrees: zero
+    // creates a degenerate camera.
+    if (const auto fov = venture::xr::remembered_eye_fov()) {
+      const auto &f = (*fov)[0];
+      const float half = property == 7 ? std::max(std::abs(f.angleLeft), std::abs(f.angleRight))
+                                       : std::max(std::abs(f.angleUp), std::abs(f.angleDown));
+      return 2 * half * 57.2957795f;
+    }
     return 90.f;
   }
   failure("GetSystemPropertyFloat unavailable property", property);
