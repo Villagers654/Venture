@@ -214,6 +214,25 @@ XrResult translate_layer(const LayerHeader &header, const XrView *eyes, LayerIma
       if (XR_FAILED(r))
         return r;
     }
+    if ((header.flags & 4) && !constant) {
+      // A head-locked projection is a plane fixed in front of each eye: submit
+      // it as one head-locked quad per eye, with the same rays and image.
+      // Virtual Desktop 1.34 shows the whole frame as a head-locked panel of
+      // about 90 degrees when any projection layer is in VIEW space (The
+      // Climb 2's loading layer stays in the frame after loading).
+      for (int eye = 0; eye < 2; ++eye) {
+        const auto &view = dst.views[eye];
+        const float l = std::tan(view.fov.angleLeft), r = std::tan(view.fov.angleRight);
+        const float u = std::tan(view.fov.angleUp), d = std::tan(view.fov.angleDown);
+        auto &quad = dst.quad[eye];
+        quad.pose = compose(view.pose, {{0, 0, 0, 1}, {(l + r) / 2, (u + d) / 2, -1}});
+        quad.size = {r - l, u - d};
+        quad.subImage = view.subImage;
+        quad.eyeVisibility = eye ? XR_EYE_VISIBILITY_RIGHT : XR_EYE_VISIBILITY_LEFT;
+        append(quad);
+      }
+      return XR_SUCCESS;
+    }
     dst.projection.viewCount = 2;
     dst.projection.views = dst.views;
     append(dst.projection);
