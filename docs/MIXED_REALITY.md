@@ -39,7 +39,9 @@ closed. During MR-to-VR withdrawal, normal presentation temporarily forces color
 alpha opaque through an MR-only shader variant. It retains depth chains, arrays,
 MSAA, ordinary formats and asynchronous host ownership. After retirement the
 additional alpha conversion stops. No worker wait/join is added to the frame path.
-The unused worker sleeps until the next request.
+The unused worker sleeps until the next request. Paused guest passthrough layers
+may remain in the submitted list: they are validated and omitted locally while
+other layers use ordinary VR presentation. Resuming restores the MR route.
 
 STOPPING, EXITING and LOSS_PENDING latch suspension for that session run. A final
 already-begun frame cannot request cameras again. Only a successful new guest
@@ -65,10 +67,12 @@ links production `openxr.cpp`, `graphics.cpp` and `xr/session.cpp`. Its external
 OpenXR host, transport grant and unrelated platform services are controlled test
 ports; guest frame/session functions and async ownership are not replaced.
 Cases include STOPPING → final EndFrame → EndSession → restart, MR exit,
-retirement, normal float/MSAA images, depth chains and async host submission.
+retirement, feature/layer pause and resume, normal float/MSAA images, depth
+chains and async host submission both after MR exit and with paused layers.
 Shader tests compare ordinary VR SPIR-V with the retained upstream shader using
 the same compiler. Pixel tests cover stereo slices, alpha, emission, opacity,
-host limits, cropping and invalid/unenabled chains. Registry regeneration is
+host limits, cropping (including one-pixel edge crops after downscaling), and
+invalid/unenabled chains. Registry regeneration is
 checked against the pinned SDK.
 
 On Windows, `tests/steam_link_transport` links the actual production named-pipe
@@ -85,8 +89,9 @@ identifiers; the feature changes no global scanner exceptions.
 
 ## Hardware status and scope
 
-Spirit Sling Tabletop MR was confirmed on Steam Frame in the earlier integration.
-That result predates these lifecycle/transport and branch-split changes. Automated
+The minimal test branch containing only passthrough plus the independent build
+scripts passed the user's Steam Frame hardware test before this rebase to Venture
+0.1.4 and the pause/crop fixes. Those latest changes still need a headset test. Automated
 checks do not replace a fresh headset test of startup, both eyes, MR/VR toggles,
 headset sleep, session restart, overlays and companion disconnect/reconnect.
 

@@ -38,9 +38,10 @@ struct Frame {
     info.layerCount = chain ? 2 : 1; info.layers = layers.data();
   }
   XrResult prepare(PassthroughFrame& out) {
+    out = PassthroughFrame{};
     bool handled = false;
     auto result = prepare_passthrough_frame(target, info, out, handled);
-    if (XR_SUCCEEDED(result)) CHECK(handled == (info.layers[0]->type == XR_TYPE_COMPOSITION_LAYER_PASSTHROUGH_FB));
+    if (XR_SUCCEEDED(result)) CHECK(handled == (info.layers[0]->type == XR_TYPE_COMPOSITION_LAYER_PASSTHROUGH_FB && !out.omit_paused_layers));
     return result;
   }
 };
@@ -296,10 +297,10 @@ TEST_CASE("Passthrough missing or withdrawn permission submits opaque current ey
   CHECK(pixel(output.views[1].subImage.swapchain)[3] == 255);
   CHECK(guest::xrPassthroughLayerPauseFB(fixture.layer) == XR_SUCCESS);
   REQUIRE(frame.prepare(output) == XR_SUCCESS); CHECK_FALSE(requested);
-  CHECK(pixel(output.views[0].subImage.swapchain)[3] == 255);
+  CHECK(output.omit_paused_layers); CHECK(output.permission == 0);
   frame.layers[0] = frame.layers[1]; frame.info.layerCount = 1;
   REQUIRE(frame.prepare(output) == XR_SUCCESS); CHECK_FALSE(requested);
-  CHECK(pixel(output.views[0].subImage.swapchain)[3] == 255);
+  CHECK_FALSE(output.omit_paused_layers); CHECK(output.permission == 0);
 }
 TEST_CASE("Passthrough rejects unproved eyes and unsupported composition before granting a source") {
   Fixture fixture; fixture.create(); auto chain = fixture.chain();
@@ -380,4 +381,17 @@ TEST_CASE("Ordinary VR leaves the MR eye path while withdrawal is pending and af
   REQUIRE(frame.prepare(handoff) == XR_SUCCESS); CHECK(handoff.force_opaque); CHECK_FALSE(requested);
   withdrawal_complete = true; PassthroughFrame vr;
   REQUIRE(frame.prepare(vr) == XR_SUCCESS); CHECK_FALSE(vr.force_opaque);
+}
+
+TEST_CASE("MR downscaling keeps a one-pixel edge crop within the host image") {
+  Fixture fixture; fixture.create(); const auto chain = fixture.chain();
+  fill(chain, {{{1,0,0,.25f},{0,1,0,.75f}}});
+  maximum_width = maximum_height = 1; grant = true;
+  Frame frame(fixture, chain); PassthroughFrame output;
+  for (auto& view : frame.views) view.subImage.imageRect = {{3,3},{1,1}};
+  REQUIRE(frame.prepare(output) == XR_SUCCESS);
+  for (const auto& view : output.views) {
+    CHECK(view.subImage.imageRect.offset.x == 0); CHECK(view.subImage.imageRect.offset.y == 0);
+    CHECK(view.subImage.imageRect.extent.width == 1); CHECK(view.subImage.imageRect.extent.height == 1);
+  }
 }

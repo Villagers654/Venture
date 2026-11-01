@@ -90,6 +90,7 @@ TEST_CASE("Production VR after MR accepts non-RGBA8 and multisampled projections
 }
 
 TEST_CASE("Production ordinary VR after MR retains its depth chain and async host ownership") {
+  for (const bool paused : {false, true}) {
   Run run;const auto color=run.chain();fill(color,{{{1,0,0,.5f},{0,1,0,.5f}}});grant=true;
   Submission submit(run,color);REQUIRE(submit.submit(run)==XR_SUCCESS);
   const auto depth=run.chain(2,VK_FORMAT_D32_SFLOAT);
@@ -100,10 +101,39 @@ TEST_CASE("Production ordinary VR after MR retains its depth chain and async hos
     depths[i]={XR_TYPE_COMPOSITION_LAYER_DEPTH_INFO_KHR,nullptr,{depth,{{0,0},{4,4}},i},0,1,.1f,100.f};
     submit.views[i].next=&depths[i];
   }
-  submit.vr();run.poll(XR_SESSION_STATE_FOCUSED);submit.info.displayTime=run.frame();
+  if (paused) REQUIRE(xg::xrPassthroughLayerPauseFB(run.layer)==XR_SUCCESS);
+  else submit.vr();
+  run.poll(XR_SESSION_STATE_FOCUSED);submit.info.displayTime=run.frame();
   auto& session=xr::session();session.lead.enabled=true;session.lead.async=true;session.lead.lead_ns=1'000'000;
   REQUIRE(xg::xrEndFrame(target,&submit.info)==XR_SUCCESS);
   CHECK(session.lead.async_ends==1);session.finish_host_end();
   CHECK(host::last_frame().depth);
   CHECK(host::last_frame().views[0].subImage.swapchain==hle::openxr::state().swapchains.at(color).host_handle);
+  }
+}
+
+TEST_CASE("Production paused passthrough layers retain ordinary formats without MR eye copies") {
+  for (const bool pause_feature : {false, true}) {
+    for (const auto format : {VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_R8G8B8A8_UNORM}) {
+      Run run; const auto chain = run.chain();
+      fill(chain, {{{1,0,0,.5f},{0,1,0,.5f}}}); grant = true;
+      Submission submit(run, chain); REQUIRE(submit.submit(run) == XR_SUCCESS);
+      REQUIRE((pause_feature ? xg::xrPassthroughPauseFB(run.feature) :
+                               xg::xrPassthroughLayerPauseFB(run.layer)) == XR_SUCCESS);
+      const auto ordinary = run.chain(2, format, format == VK_FORMAT_R8G8B8A8_UNORM ? 4 : 1);
+      fill(ordinary, {{{1,0,0,.5f},{0,1,0,.5f}}});
+      for (auto& view : submit.views) view.subImage.swapchain = ordinary;
+      // A paused layer may remain in the guest's list; it must not reach the host.
+      withdrawal_complete = false; REQUIRE(submit.submit(run) == XR_SUCCESS);
+      CHECK_FALSE(requested);
+      withdrawal_complete = true; REQUIRE(submit.submit(run) == XR_SUCCESS);
+      CHECK(host::last_frame().views[0].subImage.swapchain == hle::openxr::state().swapchains.at(ordinary).host_handle);
+      const auto copies = host_acquires;
+      REQUIRE(submit.submit(run) == XR_SUCCESS); CHECK(host_acquires == copies);
+      for (auto& view : submit.views) view.subImage.swapchain = chain;
+      REQUIRE((pause_feature ? xg::xrPassthroughStartFB(run.feature) :
+                               xg::xrPassthroughLayerResumeFB(run.layer)) == XR_SUCCESS);
+      REQUIRE(submit.submit(run) == XR_SUCCESS); CHECK(requested);
+    }
+  }
 }

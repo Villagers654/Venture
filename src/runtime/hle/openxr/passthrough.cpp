@@ -92,12 +92,20 @@ XrResult prepare_passthrough_frame(XrSession target, const XrFrameEndInfo& info,
   };
   const XrCompositionLayerPassthroughFB* room = nullptr;
   const XrCompositionLayerProjection* scene = nullptr;
+  std::uint32_t paused_layers = 0;
   for (std::uint32_t i = 0; i < info.layerCount; ++i) {
     const auto* header = info.layers[i];
     if (!header) return fail(XR_ERROR_LAYER_INVALID);
     if (header->type == XR_TYPE_COMPOSITION_LAYER_PASSTHROUGH_FB) {
       const auto result = validate_passthrough_layer(target, header);
       if (XR_FAILED(result)) return fail(result);
+      const auto* submitted = reinterpret_cast<const XrCompositionLayerPassthroughFB*>(header);
+      const auto& record = *layers.at(submitted->layerHandle);
+      if (!record.running || !features.at(record.feature)->running) {
+        ++paused_layers;
+        out.omit_paused_layers = true;
+        continue;
+      }
       if (room || scene) return fail(XR_ERROR_FEATURE_UNSUPPORTED); // reconstruction underlay only
       room = reinterpret_cast<const XrCompositionLayerPassthroughFB*>(header);
       for (auto* node = static_cast<const XrBaseInStructure*>(room->next); node; node = node->next)
@@ -121,12 +129,10 @@ XrResult prepare_passthrough_frame(XrSession target, const XrFrameEndInfo& info,
   }
   if (!session().running) return fail(XR_ERROR_SESSION_NOT_RUNNING);
   if (session().phase != Session::Phase::begun) return fail(XR_ERROR_CALL_ORDER_INVALID);
-  if (info.layerCount != (scene ? 2u : 1u)) return fail(XR_ERROR_FEATURE_UNSUPPORTED);
+  if (info.layerCount - paused_layers != (scene ? 2u : 1u)) return fail(XR_ERROR_FEATURE_UNSUPPORTED);
   if (info.environmentBlendMode != XR_ENVIRONMENT_BLEND_MODE_OPAQUE) return fail(XR_ERROR_ENVIRONMENT_BLEND_MODE_UNSUPPORTED);
   const auto& layer = *layers.at(room->layerHandle);
-  const auto& feature = *features.at(layer.feature);
-  // Paused passthrough retains ordinary opaque VR; no source declaration.
-  const bool active = feature.running && layer.running && !session().passthrough_suspended;
+  const bool active = !session().passthrough_suspended;
   handled = true;
   out.info = info;
   out.info.layerCount = 0; out.info.layers = nullptr;

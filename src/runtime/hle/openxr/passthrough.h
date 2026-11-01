@@ -16,6 +16,7 @@ struct PassthroughFrame {
   std::array<XrCompositionLayerProjectionView, 2> views;
   const XrCompositionLayerBaseHeader* layer{};
   std::uint64_t permission = 0;
+  bool omit_paused_layers = false; // local paused layers have no host representation
   bool force_opaque = false; // normal presentation while pipe withdrawal is pending
   const XrCompositionLayerProjection* guest_projection = nullptr;
 };
