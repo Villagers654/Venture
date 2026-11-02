@@ -6,7 +6,8 @@ namespace venture::xr {
 // setup returns them upside down against STAGE (the head's up axis is -Y,
 // Batman: Arkham Shadow's camera turned NaN). Such a host's LOCAL becomes STAGE
 // at the head (yaw only) as measured on first use, LOCAL_FLOOR the floor below
-// it. Other types and upright hosts are returned unchanged.
+// it. A host LOCAL on the floor (SteamVR on WMR) also becomes STAGE at the head.
+// Other types and hosts are returned unchanged.
 XrReferenceSpaceCreateInfo upright_reference_space(XrSession, XrReferenceSpaceCreateInfo);
 void forget_reference_spaces(XrSession);
 // The yaw-only, upright part of an orientation (its forward axis kept).

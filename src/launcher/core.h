@@ -224,7 +224,8 @@ protected:
   void scan_local(fs::path picked);
   // New games go to `root` (default: the games folder); one already installed
   // stays in its library folder.
-  void start_import(bool device, const fs::path &root = {});
+  // steam: whether new games go to Steam; unset takes the default for new games.
+  void start_import(bool device, const fs::path &root = {}, std::optional<bool> steam = {});
   ImportMatch import_match(const ImportItem &item) const;
   fs::path adb_path() const;
   void refresh();

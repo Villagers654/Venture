@@ -38,18 +38,25 @@ std::optional<XrPosef> measure(XrSession session, XrReferenceSpaceType type) {
              view = create(session, XR_REFERENCE_SPACE_TYPE_VIEW);
   std::optional<XrPosef> origin;
   XrPosef where{}, head{};
+  constexpr auto placed = XR_SPACE_LOCATION_ORIENTATION_VALID_BIT | XR_SPACE_LOCATION_POSITION_VALID_BIT;
   // A space the host cannot place against STAGE is left as it is.
-  if (locate(space, stage, now, XR_SPACE_LOCATION_ORIENTATION_VALID_BIT | XR_SPACE_LOCATION_POSITION_VALID_BIT, where)) {
+  if (locate(space, stage, now, placed, where)) {
     const auto up = rotate(where.orientation, {0, 1, 0});
+    const bool tracked = locate(view, stage, now, placed, head);
     if (up.y < 0.99f) {
       // Head position and heading when tracked, else the host origin's place.
-      origin = locate(view, stage, now, XR_SPACE_LOCATION_ORIENTATION_VALID_BIT | XR_SPACE_LOCATION_POSITION_VALID_BIT, head)
-                   ? XrPosef{yaw_only(head.orientation), head.position}
-                   : XrPosef{{0, 0, 0, 1}, where.position};
+      origin = tracked ? XrPosef{yaw_only(head.orientation), head.position} : XrPosef{{0, 0, 0, 1}, where.position};
       if (type == XR_REFERENCE_SPACE_TYPE_LOCAL_FLOOR) origin->position.y = 0;
       log::warn("xr", "Host reference space {} is not upright (up [{:+.2f},{:+.2f},{:+.2f}] in STAGE); the game gets "
                 "STAGE at [{:.2f},{:.2f},{:.2f}] instead", int(type), up.x, up.y, up.z, origin->position.x,
                 origin->position.y, origin->position.z);
+    } else if (type == XR_REFERENCE_SPACE_TYPE_LOCAL && tracked && head.position.y - where.position.y > 0.5f) {
+      // LOCAL starts at the head on a Quest. SteamVR on a WMR headset puts it on the floor, at
+      // STAGE's origin, and Batman: Arkham Shadow's camera turned NaN.
+      origin = XrPosef{yaw_only(head.orientation), head.position};
+      log::warn("xr", "Host LOCAL space is {:.2f} m below the head; the game gets STAGE at [{:.2f},{:.2f},{:.2f}] "
+                "instead", head.position.y - where.position.y, origin->position.x, origin->position.y,
+                origin->position.z);
     }
   }
   for (auto s : {space, stage, view})

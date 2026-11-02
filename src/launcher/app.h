@@ -33,10 +33,13 @@ private:
   // The install dialog: where the game goes (free bytes there), Steam, and "don't ask again".
   std::vector<std::pair<launcher::InstallLocation, uint64_t>> install_choices_;
   int install_choice_ = 0;
-  // Where imported games go, listed when the Import page opens or rescans.
+  // The import dialog, as for installs: the scan it imports (true: the headset),
+  // where new games go, Steam, and "don't ask again".
+  std::optional<bool> import_ask_;
   std::vector<std::pair<launcher::InstallLocation, uint64_t>> import_choices_;
   int import_choice_ = 0;
   bool install_steam_ = true, install_remember_ = false;
+  bool import_steam_ = true, import_remember_ = false;
   std::string direct_app_;
   bool direct_started_ = false;
   std::string backdrop_; // game whose ambient art tints the game page
@@ -135,6 +138,8 @@ private:
   void draw_report();
   void draw_remove_account();
   void draw_install_ask();
+  void draw_import_ask();
+  void request_import(bool device);
   // The Install button: a new game asks where it goes and about Steam first,
   // unless installs do not ask or there is nothing to choose.
   void request_install(const meta::Game &game);

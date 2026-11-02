@@ -292,6 +292,40 @@ TEST_CASE("audio: OpenSL object callback registration permits Wwise engine initi
   CHECK(object_events.load() == 0); // synchronous Realize has no async event
   CHECK(call(registration, {sls.player, 0, 0}) == 0);
 }
+TEST_CASE("audio: OpenSL buffer queues keep calling back with odd device-period buffers") {
+  // Oboe's OpenSL output enqueues two device-burst buffers and refills from the
+  // completion callback; a 561-frame burst (an 8-channel virtual endpoint) is
+  // larger than half the stream's ring.
+  setup();
+  SlSession sls(0, 0);
+  sl::QueueLocator locator{0x800007bd, 2};
+  sl::Pcm pcm{2, 2, 48000000, 16, 16, 3, 2};
+  sl::OutputMixLocator mix{4, 0, sls.mix};
+  sl::Data source{h2g(&locator), h2g(&pcm)}, sink{h2g(&mix), 0};
+  REQUIRE(call(table<sl::EngineTable>(sls.engine_itf).CreateAudioPlayer,
+               {sls.engine_itf, h2g(&sls.player), h2g(&source), h2g(&sink), 0, 0, 0}) == 0);
+  realize(sls.player);
+  auto play = get(sls.player, "SL_IID_PLAY");
+  auto queue = get(sls.player, "SL_IID_ANDROIDSIMPLEBUFFERQUEUE");
+  static std::array<std::array<std::int16_t, 561 * 2>, 2> buffers;
+  std::atomic<int> completed{0};
+  auto queue_cb = add_callback([&](auto) {
+    auto& buffer = buffers[std::size_t(completed.fetch_add(1)) % 2];
+    call(table<sl::BufferQueueTable>(queue).Enqueue, {queue, h2g(buffer.data()), sizeof(buffer)});
+    return 0;
+  });
+  REQUIRE(call(table<sl::BufferQueueTable>(queue).RegisterCallback, {queue, queue_cb, 0}) == 0);
+  // OpenSL moves between any two play states; Oboe pauses a stream it never started.
+  CHECK(call(table<sl::PlayTable>(play).SetPlayState, {play, 2}) == 0);
+  for (auto& buffer : buffers)
+    REQUIRE(call(table<sl::BufferQueueTable>(queue).Enqueue, {queue, h2g(buffer.data()), sizeof(buffer)}) == 0);
+  REQUIRE(call(table<sl::PlayTable>(play).SetPlayState, {play, 3}) == 0);
+  // 100 buffers are 1.17 s of audio: completions must follow the device clock.
+  CHECK(until([&] { return completed.load() >= 100; }));
+  CHECK(call(table<sl::PlayTable>(play).SetPlayState, {play, 2}) == 0);
+  CHECK(call(table<sl::PlayTable>(play).SetPlayState, {play, 1}) == 0);
+  CHECK(call(table<sl::PlayTable>(play).SetPlayState, {play, 2}) == 0);
+}
 TEST_CASE(
     "audio: AAudio error callback follows actual miniaudio stop notification "
     "and allows reopen") {

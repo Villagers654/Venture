@@ -178,7 +178,7 @@ Core::ImportMatch Core::import_match(const ImportItem &item) const {
   return m;
 }
 
-void Core::start_import(bool device, const fs::path &root) {
+void Core::start_import(bool device, const fs::path &root, std::optional<bool> steam) {
   auto &scan = device ? import_device_ : import_local_;
   std::vector<std::string> accounts;
   size_t queued = 0;
@@ -199,7 +199,8 @@ void Core::start_import(bool device, const fs::path &root) {
     if (!key.empty()) session = vault_.load(key);
     if (!session) key = "local";
     auto target = root.empty() ? settings_.games : root.lexically_normal();
-    if (const auto *current = installed_package(item.package)) target = root_of(*current);
+    const auto *current = installed_package(item.package);
+    if (current) target = root_of(*current);
     if (!target.is_absolute()) throw std::runtime_error("Choose an absolute folder to import to.");
     if (!std::ranges::contains(settings_.roots(), target)) {
       fs::create_directories(target);
@@ -210,6 +211,9 @@ void Core::start_import(bool device, const fs::path &root) {
     downloads_->enqueue_import(id, match.game ? match.game->name : item.label.empty() ? item.package : item.label,
                                target,
                                session ? session->access_token : std::string{}, key, item.spec, item.package);
+    // A new game takes the Steam choice, as an install does.
+    if (!current && settings_.add_games_to_steam && steam_sync_allowed_)
+      set_in_steam(id, steam.value_or(settings_.steam_add_new));
     accounts.push_back(key);
     item.selected = false;
     ++queued;
