@@ -436,8 +436,8 @@ TEST_CASE("VrApi projection FOV covers only each eye's texture rect") {
 
 TEST_CASE("VrApi projection sends each eye only the part of its frustum inside the host view") {
   // Quest 3 over Link: host eyes -54..+40 / -40..+54 by +44..-55 degrees. The
-  // guest renders the symmetric frustum vrapi.cpp reports, +-54 by +-55
-  // (VrApi_Helpers.h TanAngleMatrixFromProjection), in GLES and in Vulkan rows.
+  // guest renders the symmetric frustum SUGGESTED_EYE_FOV describes, +-54 by
+  // +-55 (VrApi_Helpers.h TanAngleMatrixFromProjection), in GLES and in Vulkan rows.
   constexpr float degree = std::numbers::pi_v<float> / 180;
   const XrFovf host[2]{{-54 * degree, 40 * degree, 44 * degree, -55 * degree},
                        {-40 * degree, 54 * degree, 44 * degree, -55 * degree}};
@@ -2276,7 +2276,7 @@ TEST_CASE("VrApi legacy tracking transforms preserve repeated floor and eye sele
   vg::vrapi_Shutdown();
   venture::xr::install_xr_images(nullptr);
 }
-TEST_CASE("VrApi eye projections are symmetric frusta covering an asymmetric host view") {
+TEST_CASE("VrApi eye projections are the host's asymmetric frusta; the suggested fov covers them") {
   // Quest 3 through VirtualDesktopXR: -54/40/44/-55 degrees for both eyes here.
   MockXrScript asymmetric{};
   asymmetric.view_fov = std::array{-0.9425f, 0.6981f, 0.7679f, -0.9599f};
@@ -2289,12 +2289,14 @@ TEST_CASE("VrApi eye projections are symmetric frusta covering an asymmetric hos
   auto *mobile = vg::vrapi_EnterVrMode(&mode);
   REQUIRE(mobile);
   const auto tracking = vg::vrapi_GetPredictedTracking2(mobile, vg::vrapi_GetPredictedDisplayTime(mobile, 0));
+  // The terms VrApi gives a left eye on a Quest 3 itself (VrProbe, Horizon OS 209).
   for (const auto &eye : tracking.eye) {
-    CHECK(eye.projection.m[0][2] == doctest::Approx(0));
-    CHECK(eye.projection.m[1][2] == doctest::Approx(0));
-    CHECK(eye.projection.m[0][0] == doctest::Approx(1 / std::tan(0.9425f)));
-    CHECK(eye.projection.m[1][1] == doctest::Approx(1 / std::tan(0.9599f)));
+    CHECK(eye.projection.m[0][0] == doctest::Approx(0.902738).epsilon(1e-4));
+    CHECK(eye.projection.m[0][2] == doctest::Approx(-0.242513).epsilon(1e-3));
+    CHECK(eye.projection.m[1][1] == doctest::Approx(0.835479).epsilon(1e-4));
+    CHECK(eye.projection.m[1][2] == doctest::Approx(-0.193187).epsilon(1e-3));
   }
+  // SUGGESTED_EYE_FOV_DEGREES_X/Y: the symmetric frustum covering it, 108 x 110.
   CHECK(vg::vrapi_GetSystemPropertyFloat(nullptr, 7) == doctest::Approx(2 * 0.9425f * 57.2957795f));
   CHECK(vg::vrapi_GetSystemPropertyFloat(nullptr, 8) == doctest::Approx(2 * 0.9599f * 57.2957795f));
   // The first frame remembers the host's view: the next launch reports the same

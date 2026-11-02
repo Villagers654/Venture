@@ -85,9 +85,10 @@ XrResult fov(const Matrix &m, const Rect &rect, XrFovf &out, XrQuaternionf &orie
 }
 // The Meta PC runtime over Link (OpenXR runtime "Oculus" 1.208, Quest 3)
 // shows a projection view's image rect across the display's own field of
-// view, whatever fov the view sends. The symmetric frustum vrapi.cpp reports
-// (-54..+54 degrees for a -54..+40 eye) then reached each eye stretched and
-// about 15 degrees off, outwards: a cross-eyed world. Narrow the rect to the
+// view, whatever fov the view sends. A wider frustum, such as the symmetric one
+// SUGGESTED_EYE_FOV describes (-54..+54 degrees for a -54..+40 eye), then
+// reached each eye stretched and about 15 degrees off, outwards: a cross-eyed
+// world. Narrow the rect to the
 // part inside the host's view; fov() then gives that part's frustum, the same
 // rays on every runtime. A side where the guest frustum is the narrower keeps
 // its edge, and the result is false: no projection view shows such a frustum
