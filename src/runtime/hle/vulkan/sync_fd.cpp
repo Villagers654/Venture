@@ -267,11 +267,19 @@ VkResult VKAPI_CALL get_fence_fd(VkDevice d, const VkFenceGetFdInfoKHR* info, in
   *out = -1;
   if (info->handleType != fence_sync) return VK_ERROR_INVALID_EXTERNAL_HANDLE;
   // The fence is signaled or has a pending signal operation
-  // (VUID-VkFenceGetFdInfoKHR-handleType-01454). Once it has signaled,
-  // vkGetFenceFdKHR may return -1; export then resets it (copy transference).
+  // (VUID-VkFenceGetFdInfoKHR-handleType-01454); export resets it (copy
+  // transference). The payload always comes back as a descriptor, here a
+  // signaled sync file. -1 is valid for a signaled payload, but Unity's AImage
+  // release treats it as a failed export and then waits without a timeout on
+  // the fence this export just reset.
   auto r = wait_fence(d, info->fence, "get_fence_fd");
   if (r != VK_SUCCESS) return r;
-  return device_fn<PFN_vkResetFences>(d, "vkResetFences")(d, 1, &info->fence);
+  r = device_fn<PFN_vkResetFences>(d, "vkResetFences")(d, 1, &info->fence);
+  if (r != VK_SUCCESS) return r;
+  const int fd = FdTable::get().insert(std::make_shared<SyncFile>(d, VK_NULL_HANDLE), 0, true);
+  if (fd < 0) return VK_ERROR_TOO_MANY_OBJECTS;
+  *out = fd;
+  return VK_SUCCESS;
 }
 VkResult VKAPI_CALL import_fence_fd(VkDevice d, const VkImportFenceFdInfoKHR* info) {
   if (!info || info->handleType != fence_sync) return VK_ERROR_INVALID_EXTERNAL_HANDLE;

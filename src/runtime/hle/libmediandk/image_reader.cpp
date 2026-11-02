@@ -11,6 +11,7 @@
 #include "android/hardware_buffer.h"
 #include "android/native_window.h"
 #include "core/address_space.h"
+#include "hle/libc/vfs.h"
 
 #include <algorithm>
 #include <condition_variable>
@@ -239,7 +240,10 @@ void image_delete(Image* p) {
   if (i->slot != SIZE_MAX) i->reader->slots[i->slot].busy = false;
 }
 void image_delete_async(Image* p, int fence) {
-  (void)fence;  // the guest's release fence; readers do not reuse a buffer before AImage_delete
+  // The image takes the release fence (AOSP AImageReader::releaseImageLocked
+  // wraps it in a Fence that closes it). Closing a sync file waits for its
+  // payload, so the buffer returns to the pool once the guest's reads are done.
+  if (fence >= 0) libc::FdTable::get().close(fence);
   image_delete(p);
 }
 int image_width(Image* p, std::int32_t* out) {

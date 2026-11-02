@@ -807,13 +807,26 @@ TEST_CASE("Vulkan SYNC_FD semaphores and fences exchange Android sync files") {
   REQUIRE(call("vkWaitForFences", device, 1u, &consumed, VK_TRUE, 5000000000ull) == VK_SUCCESS);
   call("vkDestroyFence", device, consumed, nullptr);
 
-  // Fence export: a signaled payload may be -1, and export resets the fence.
+  // Fence export resets the fence and returns a signaled sync file, never -1:
+  // Unity's AImage release treats -1 as a failed export and then waits without
+  // a timeout on the fence the export reset (Bad Inmate's video froze rendering).
   VkFenceGetFdInfoKHR getFence{VK_STRUCTURE_TYPE_FENCE_GET_FD_INFO_KHR, nullptr, fence,
                                VK_EXTERNAL_FENCE_HANDLE_TYPE_SYNC_FD_BIT};
-  int fenceFd = 0;
+  int fenceFd = -1;
   REQUIRE(call("vkGetFenceFdKHR", device, &getFence, &fenceFd) == VK_SUCCESS);
-  CHECK(fenceFd == -1);
+  REQUIRE(fenceFd >= 0);
+  REQUIRE(table.file(fenceFd));
+  CHECK(table.file(fenceFd)->ready(hle::libc::poll_in) == hle::libc::poll_in);
   CHECK(static_cast<std::int32_t>(call("vkGetFenceStatus", device, fence)) == VK_NOT_READY);
+  // The exported file imports like any sync file and is consumed by the import.
+  REQUIRE(call("vkResetFences", device, 1u, &imported) == VK_SUCCESS);
+  VkImportFenceFdInfoKHR importExported{VK_STRUCTURE_TYPE_IMPORT_FENCE_FD_INFO_KHR};
+  importExported.fence = imported; importExported.flags = VK_FENCE_IMPORT_TEMPORARY_BIT;
+  importExported.handleType = VK_EXTERNAL_FENCE_HANDLE_TYPE_SYNC_FD_BIT; importExported.fd = fenceFd;
+  REQUIRE(call("vkImportFenceFdKHR", device, &importExported) == VK_SUCCESS);
+  CHECK_FALSE(table.file(fenceFd));
+  CHECK(call("vkGetFenceStatus", device, imported) == VK_SUCCESS);
+  REQUIRE(call("vkResetFences", device, 1u, &imported) == VK_SUCCESS);
   VkImportFenceFdInfoKHR importFence{VK_STRUCTURE_TYPE_IMPORT_FENCE_FD_INFO_KHR};
   importFence.fence = imported; importFence.flags = VK_FENCE_IMPORT_TEMPORARY_BIT;
   importFence.handleType = VK_EXTERNAL_FENCE_HANDLE_TYPE_SYNC_FD_BIT; importFence.fd = keep;
