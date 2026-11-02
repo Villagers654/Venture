@@ -25,6 +25,10 @@ public final class NativeLoader {
       throw new UnsatisfiedLinkError("Invalid guest library name: " + name);
     RuntimeEnvironment.host().loadLibrary("lib" + name + ".so", loader);
   }
+  /** Bionic's System.mapLibraryName: "lib" + name + ".so" on every Android ABI. */
+  public static String mapLibraryName(String name) {
+    return "lib" + Objects.requireNonNull(name) + ".so";
+  }
   public static void load(String path) {
     path(path, callerLoader());
   }

@@ -29,6 +29,10 @@ public final class Rewrite {
         return (owner.equals("java/lang/System") || owner.equals("java/lang/Runtime"))
             && (name.equals("load") || name.equals("loadLibrary")) && desc.equals("(Ljava/lang/String;)V");
     }
+    static boolean mapLibraryName(String owner, String name, String desc) {
+        return owner.equals("java/lang/System") && name.equals("mapLibraryName")
+            && desc.equals("(Ljava/lang/String;)Ljava/lang/String;");
+    }
     static boolean exit(String owner, String name, String desc) {
         return (owner.equals("java/lang/System") || owner.equals("java/lang/Runtime"))
             && name.equals("exit") && desc.equals("(I)V");
@@ -117,6 +121,11 @@ public final class Rewrite {
                                 } else if (cls.equals("java/lang/reflect/Method") && method.equals("invoke") && descriptor.equals("(Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;")) {
                                     rewrite("reflective native-load interception");
                                     super.visitMethodInsn(Opcodes.INVOKESTATIC, LOADER, "invoke", "(Ljava/lang/reflect/Method;Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;", false);
+                                } else if (opcode == Opcodes.INVOKESTATIC && mapLibraryName(cls, method, descriptor)) {
+                                    // Android's "lib<name>.so", not the host's "<name>.dll" (Roblox opens its
+                                    // nativeLibraryDir copy by that name to prewarm it).
+                                    rewrite(cls + "." + method);
+                                    super.visitMethodInsn(Opcodes.INVOKESTATIC, LOADER, method, descriptor, false);
                                 } else if (load(cls, method, descriptor) || exit(cls, method, descriptor)) {
                                     // Runtime calls still evaluate and null-check their receiver.
                                     if (opcode != Opcodes.INVOKESTATIC) {

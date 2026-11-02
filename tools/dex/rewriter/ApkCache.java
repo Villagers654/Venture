@@ -316,7 +316,8 @@ public final class ApkCache {
             // The runtime may load intact classes lazily with HotSpot -Xverify:all;
             // a deferred class still fails verification/linkage if actually reached.
             boolean deferred = true;
-            for (Object o : failures) deferred &= deferredLinkage((Map<?, ?>) o);
+            Set<String> frameworkClasses = classNames(framework);
+            for (Object o : failures) deferred &= deferredLinkage((Map<?, ?>) o, frameworkClasses);
             report.put("translation_complete", Files.exists(merged) && deferred);
         } catch (Exception e) {
             failures.add(map("stage", "pipeline", "detail", message(e)));
@@ -329,7 +330,21 @@ public final class ApkCache {
         return publish(work, context, report);
     }
 
-    static boolean deferredLinkage(Map<?, ?> f) {
+    static final Pattern INACCESSIBLE_SUPER = Pattern.compile("cannot access its (?:abstract )?super(?:class|interface) (\\S+)");
+
+    static Set<String> classNames(List<Path> jars) throws IOException {
+        Set<String> names = new HashSet<>();
+        for (Path jar : jars)
+            try (ZipFile zip = new ZipFile(jar.toFile())) {
+                for (var entries = zip.entries(); entries.hasMoreElements(); ) {
+                    String name = entries.nextElement().getName();
+                    if (name.endsWith(".class")) names.add(name.substring(0, name.length() - 6));
+                }
+            }
+        return names;
+    }
+
+    static boolean deferredLinkage(Map<?, ?> f, Set<String> frameworkClasses) {
         // A missing framework method or field fails only the call that reaches it, as on ART.
         if ("framework-member".equals(f.get("stage"))) return true;
         if ("frames".equals(f.get("stage"))) return str(f, "detail").contains("missing frame hierarchy:");
@@ -341,6 +356,13 @@ public final class ApkCache {
             // HotSpot refuses app classes in java.* packages, which ART loads;
             // Stremio's libVLC bundles Blu-ray menu classes in java.awt and java.io.
             if ("java.lang.SecurityException".equals(kind)) return str(f, "detail").startsWith("Prohibited package name:");
+            // ART links a class when it is first used and fails it then. An app class that cannot
+            // access another app class (Alcove's media-compat classes extend a package-private
+            // Stub in another package) is the app's own; an inaccessible framework class is ours.
+            if ("java.lang.IllegalAccessError".equals(kind)) {
+                Matcher m = INACCESSIBLE_SUPER.matcher(str(f, "detail"));
+                return m.find() && !frameworkClasses.contains(m.group(1).replace('.', '/'));
+            }
             return "java.lang.NoClassDefFoundError".equals(kind) || "java.lang.ClassNotFoundException".equals(kind)
                 || "java.lang.VerifyError".equals(kind);
         }

@@ -6,6 +6,15 @@ import java.util.concurrent.*;
 
 /** JDK-only behavioral tests. No installed game, native library, JIT or JUnit. */
 public final class FrameworkTest {
+  // Self-signed EC certificate for the trust extension checks.
+  private static final String TEST_CERT =
+      "MIIBRTCB7KADAgECAgkA73fWBktecHswCgYIKoZIzj0EAwMwFjEUMBIGA1UEAxML"
+      + "ZXhhbXBsZS5jb20wIBcNMjYxMTAxMTk1NDIxWhgPMjEyNjEwMDgxOTU0MjFaMBYx"
+      + "FDASBgNVBAMTC2V4YW1wbGUuY29tMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE"
+      + "OOjZtND/6H/DBFY3YczLAVPhTIkO0p4kqW1tdf2iwXzEnJBmnQf9Dal0k+vTBoRN"
+      + "TPpEQNA2WiEgwnsy6MjGA6MhMB8wHQYDVR0OBBYEFN3B5aHBVDkk1SENofWjpoRq"
+      + "Wym9MAoGCCqGSM49BAMDA0gAMEUCIBVQsk3YnGyLIbflRLbEYjIjgBun8Q5QThHU"
+      + "Hzmc+i3pAiEA1kpEXFh0CpxPhvnkdp8bFlk1dZdMs0GSLQRKAlL8uFU=";
   private static int checks;
   private static void check(boolean ok, String message) {
     checks++;
@@ -2249,6 +2258,34 @@ public final class FrameworkTest {
     check(bothExported, "receivers cannot be both exported and not exported");
     check(System.getProperty("http.proxyHost") != null || (android.net.Proxy.getHost(obbContext) == null
         && android.net.Proxy.getPort(obbContext) == -1), "no configured proxy reads as null and -1");
+    // OkHttp's Android 10+ chain cleaner (Roblox) checks trust through the extensions.
+    var rejecting = new javax.net.ssl.X509TrustManager() {
+      public void checkClientTrusted(java.security.cert.X509Certificate[] c, String a) {}
+      public void checkServerTrusted(java.security.cert.X509Certificate[] c, String a)
+          throws java.security.cert.CertificateException {
+        throw new java.security.cert.CertificateException("untrusted");
+      }
+      public java.security.cert.X509Certificate[] getAcceptedIssuers() { return new java.security.cert.X509Certificate[0]; }
+    };
+    var extensions = new android.net.http.X509TrustManagerExtensions(rejecting);
+    boolean rejected = false;
+    try {
+      var leaf = (java.security.cert.X509Certificate) java.security.cert.CertificateFactory.getInstance("X.509")
+          .generateCertificate(new java.io.ByteArrayInputStream(java.util.Base64.getMimeDecoder().decode(TEST_CERT)));
+      extensions.checkServerTrusted(new java.security.cert.X509Certificate[] {leaf}, "RSA", "example.com");
+    } catch (java.security.cert.CertificateException expected) { rejected = "untrusted".equals(expected.getMessage()); }
+    check(rejected, "trust extensions defer to the platform trust manager");
+    var accepting = new javax.net.ssl.X509TrustManager() {
+      public void checkClientTrusted(java.security.cert.X509Certificate[] c, String a) {}
+      public void checkServerTrusted(java.security.cert.X509Certificate[] c, String a) {}
+      public java.security.cert.X509Certificate[] getAcceptedIssuers() { return new java.security.cert.X509Certificate[0]; }
+    };
+    var anchor = (java.security.cert.X509Certificate) java.security.cert.CertificateFactory.getInstance("X.509")
+        .generateCertificate(new java.io.ByteArrayInputStream(java.util.Base64.getMimeDecoder().decode(TEST_CERT)));
+    var trusted = new android.net.http.X509TrustManagerExtensions(accepting)
+        .checkServerTrusted(new java.security.cert.X509Certificate[] {anchor, anchor}, "EC", "example.com");
+    check(trusted.equals(java.util.List.of(anchor)), "a trusted chain ends at its self-signed anchor");
+    check(!extensions.isUserAddedCertificate(null), "no user-added certificates");
     // UE 5.4 AndroidThunkJava_SetNativeDisplayRefreshRate hints the rate on its surface.
     var surface = new android.view.Surface(4, 4);
     surface.setFrameRate(72f, android.view.Surface.FRAME_RATE_COMPATIBILITY_DEFAULT);

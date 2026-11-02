@@ -1111,14 +1111,42 @@ bool Backend::ensure_device(Direction direction) {
   // pDeviceID == nullptr follows the system default. miniaudio 0.11.23's
   // WASAPI autoStreamRouting reroutes on endpoint/default changes; SDL's
   // default devices move with the PipeWire/PulseAudio/ALSA default.
-  if (ma_device_init(&context_, &cfg, &device) != MA_SUCCESS) { device_errors_.fetch_add(1); return false; }
-  (direction == Direction::output ? lost_output_ : lost_input_).store(false);
-  if ((!null_ || start_null_) && ma_device_start(&device) != MA_SUCCESS) {
+  const char* kind_name = direction == Direction::output ? "output" : "capture";
+  auto open = [&]() -> ma_result {
+    if (auto result = ma_device_init(&context_, &cfg, &device); result != MA_SUCCESS) return result;
+    (direction == Direction::output ? lost_output_ : lost_input_).store(false);
+    if (null_ && !start_null_) return MA_SUCCESS;
+    const auto result = ma_device_start(&device);
+    if (result != MA_SUCCESS) {
+      auto& suppressed = suppressed_stops_[std::size_t(direction)];
+      suppressed.store(true);
+      ma_device_uninit(&device);
+      suppressed.store(false);
+    }
+    return result;
+  };
+#ifdef _WIN32
+  // Open the endpoint at its own mix rate and resample in miniaudio. Windows'
+  // converter (AUTOCONVERTPCM) rules out low-latency shared mode and, on 96 and
+  // 192 kHz endpoints, gave 561-frame periods from a 23 ms buffer (Meta XR
+  // Audio restarted its output every 1-2 s) or failed to open at all (Dolby
+  // Atmos): Batman had no sound until the endpoint was set to 48 kHz.
+  cfg.wasapi.noAutoConvertSRC = true;
+  cfg.resampling.linear.lpfOrder = MA_MAX_FILTER_ORDER;
+#endif
+  auto result = open();
+#ifdef _WIN32
+  if (result != MA_SUCCESS && context_.backend == ma_backend_wasapi) {
     device_errors_.fetch_add(1);
-    auto& suppressed = suppressed_stops_[std::size_t(direction)];
-    suppressed.store(true);
-    ma_device_uninit(&device);
-    suppressed.store(false);
+    log::warn("audio", "Audio {} device did not open at its mix rate ({}); trying Windows sample rate conversion",
+              kind_name, ma_result_description(result));
+    cfg.wasapi.noAutoConvertSRC = false;
+    result = open();
+  }
+#endif
+  if (result != MA_SUCCESS) {
+    device_errors_.fetch_add(1);
+    log::error("audio", "Audio {} device did not open: {}", kind_name, ma_result_description(result));
     return false;
   }
   ready = true;

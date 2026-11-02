@@ -93,6 +93,7 @@ interface DefaultMethod { default int value() { return 41; } }
     Method nativeMethod=ConversionFixture.class.getDeclaredMethod("nativeInstance",int.class,float.class,String.class);
     if (!Modifier.isNative(nativeMethod.getModifiers())) throw new AssertionError("native flag lost");
     if (!reflect(String.class.getMethod("length"), "abc", new Object[0]).equals(3)) throw new AssertionError("reflection rewrite");
+    if (!System.mapLibraryName("main").equals("libmain.so")) throw new AssertionError("Android library name");
   }
 }
 ''', encoding="utf-8")
@@ -235,6 +236,33 @@ public class Holder {
             self.assertFalse(report["ready"])
             self.assertTrue(report["translation_complete"], report["failures"])
             self.assertTrue(any(f.get("kind") == "java.lang.SecurityException" for f in report["failures"]))
+
+    def test_app_class_extending_inaccessible_app_class_is_deferred(self):
+        # As on ART, an app class whose app superclass it cannot access fails only when it is reached.
+        with tempfile.TemporaryDirectory(prefix="java-access-", dir=ROOT / "build") as temp:
+            root = Path(temp)
+            (root / "a").mkdir()
+            (root / "b").mkdir()
+            (root / "a/Base.java").write_text("package a; public abstract class Base {}", encoding="utf-8")
+            (root / "b/Sub.java").write_text("package b; public class Sub extends a.Base {}", encoding="utf-8")
+            javac = [java_tool("javac"), "-Xlint:-options", "--release", "8", "-d", str(root)]
+            subprocess.run(javac + [str(root / "a/Base.java"), str(root / "b/Sub.java")], check=True)
+            (root / "a/Base.java").write_text("package a; abstract class Base {}", encoding="utf-8")
+            subprocess.run(javac + [str(root / "a/Base.java")], check=True)
+            classes = root / "classes.jar"
+            with zipfile.ZipFile(classes, "w") as archive:
+                for name in ("a/Base.class", "b/Sub.class"):
+                    archive.write(root / name, name)
+            dex = root / "classes.dex"
+            subprocess.run([java_tool("java"), "-cp", str(DEPS / "dex2jar/lib/*"), "com.android.dx.command.Main",
+                            "--dex", "--min-sdk-version=26", "--output=" + str(dex), str(classes)], check=True)
+            apk = root / "access.apk"
+            with zipfile.ZipFile(apk, "w") as archive:
+                archive.write(dex, "classes.dex")
+            _, report = convert(apk, "com.venture.access", root / "cache")
+            self.assertFalse(report["ready"])
+            self.assertTrue(report["translation_complete"], report["failures"])
+            self.assertTrue(any(f.get("kind") == "java.lang.IllegalAccessError" for f in report["failures"]))
 
     def test_missing_external_class_never_publishes_ready_cache(self):
         with tempfile.TemporaryDirectory(prefix="java-missing-", dir=ROOT / "build") as temp:

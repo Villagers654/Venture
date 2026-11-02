@@ -195,7 +195,42 @@ XrResult translate_layer(const LayerHeader &header, const XrView *eyes, LayerIma
   // row. Analytic layers keep that API convention, in their content and their
   // placement alike; projection layers follow their own tan-angle matrix.
   const bool api_bottom_up = state().init.graphics_api != vulkan_api;
-  if (header.type == 1) {
+  // The plane a view's rays reach through its frustum, one metre ahead: the
+  // same rays and image, shown to that eye only.
+  auto eye_quad = [&](int eye) {
+    const auto &view = dst.views[eye];
+    const float l = std::tan(view.fov.angleLeft), r = std::tan(view.fov.angleRight);
+    const float u = std::tan(view.fov.angleUp), d = std::tan(view.fov.angleDown);
+    auto &quad = dst.quad[eye];
+    quad.pose = compose(view.pose, {{0, 0, 0, 1}, {(l + r) / 2, (u + d) / 2, -1}});
+    quad.size = {r - l, u - d};
+    quad.subImage = view.subImage;
+    quad.eyeVisibility = eye ? XR_EYE_VISIBILITY_RIGHT : XR_EYE_VISIBILITY_LEFT;
+    append(quad);
+  };
+  if (header.type == 17) {
+    // OVRPlugin's quad (UE4 stereo layers: Moss, The Walking Dead menus) uses
+    // the cylinder layout with TanAngleMatrixFromUnitSquare matrices, the
+    // projection layer's ray homography. Each eye sees the rays its matrix maps.
+    auto &src = reinterpret_cast<const Cylinder &>(header);
+    for (int eye = 0; eye < 2; ++eye) {
+      auto &t = src.textures[eye];
+      const auto &tm = t.texture_matrix.m;
+      if (!texture_transform(t.texture_matrix) || tm[0][0] != 1 || tm[1][1] != 1 || tm[0][2] != 0 || tm[1][2] != 0)
+        return XR_ERROR_FEATURE_UNSUPPORTED;
+      auto &view = dst.views[eye];
+      XrQuaternionf orientation{0, 0, 0, 1};
+      bool bottom_up = api_bottom_up;
+      auto r = fov(t.tan_angles, t.rect, view.fov, orientation, bottom_up);
+      if (XR_FAILED(r))
+        return r;
+      view.pose = compose(compose(head(src.head), eyes[eye].pose), {orientation, {0, 0, 0}});
+      r = image(t.chain, t.index, t.rect, eye, bottom_up, view.subImage);
+      if (XR_FAILED(r))
+        return r;
+      eye_quad(eye);
+    }
+  } else if (header.type == 1) {
     auto &src = reinterpret_cast<const Projection &>(header);
     int constant = 0;
     for (int eye = 0; eye < 2; ++eye) {
@@ -220,17 +255,7 @@ XrResult translate_layer(const LayerHeader &header, const XrView *eyes, LayerIma
       // Virtual Desktop 1.34 shows the whole frame as a head-locked panel of
       // about 90 degrees when any projection layer is in VIEW space (The
       // Climb 2's loading layer stays in the frame after loading).
-      for (int eye = 0; eye < 2; ++eye) {
-        const auto &view = dst.views[eye];
-        const float l = std::tan(view.fov.angleLeft), r = std::tan(view.fov.angleRight);
-        const float u = std::tan(view.fov.angleUp), d = std::tan(view.fov.angleDown);
-        auto &quad = dst.quad[eye];
-        quad.pose = compose(view.pose, {{0, 0, 0, 1}, {(l + r) / 2, (u + d) / 2, -1}});
-        quad.size = {r - l, u - d};
-        quad.subImage = view.subImage;
-        quad.eyeVisibility = eye ? XR_EYE_VISIBILITY_RIGHT : XR_EYE_VISIBILITY_LEFT;
-        append(quad);
-      }
+      for (int eye = 0; eye < 2; ++eye) eye_quad(eye);
       return XR_SUCCESS;
     }
     dst.projection.viewCount = 2;

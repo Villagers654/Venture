@@ -518,7 +518,9 @@ Result set_play(GuestAddr self, std::uint32_t state) {
   else if (state == 3)
     status = o->stream->start();
   else if (state == 2 && o->kind == Kind::player)
-    status = o->stream->pause();
+    // OpenSL moves between any two play states: pausing a stopped player
+    // (Oboe's close) keeps it stopped on the host.
+    status = o->play_state == 3 ? o->stream->pause() : 0;
   else
     status = o->stream->stop();
   if (status)

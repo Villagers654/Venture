@@ -153,8 +153,10 @@ void empty_state(char32_t glyph, std::string_view headline, std::string_view sub
   text(fonts().regular, kBody, color::text2, sub, false);
 }
 
+float g_row_end = -1;  // window y just below the last setting_row()
+
 // Settings-style row inside a card: a one-line title left, centred on the
-// control right-aligned. The description shows when the title is hovered.
+// control right-aligned.
 template <class Control>
 void setting_row(std::string_view title_text, std::string_view description, float control_w, float control_h,
                  Control control) {
@@ -167,15 +169,13 @@ void setting_row(std::string_view title_text, std::string_view description, floa
   float row_h = std::max({ts.y, control_h, s(38)});  // every row the same height
   draw_text(ImGui::GetWindowDrawList(), fonts().regular, kBody,
             {std::round(screen.x), text_y(fonts().regular, kBody, screen.y + pad, row_h)}, color::text, title);
-  if (!description.empty() && ImGui::IsWindowHovered() &&
-      ImGui::IsMouseHoveringRect({screen.x, screen.y}, {screen.x + left, screen.y + pad * 2 + row_h}))
-    tooltip(description);
   ImGui::SetCursorPos({start.x + avail - control_w, start.y + pad + (row_h - control_h) * 0.5f});
   ImGui::BeginGroup();
   control();
   ImGui::EndGroup();
   ImGui::SetCursorPos({start.x, start.y + pad + row_h + pad - spacing});
   ImGui::Dummy({0, 0});
+  g_row_end = ImGui::GetCursorPosY();
 }
 
 // Store descriptions, parsed once per text.
@@ -224,7 +224,7 @@ struct DialogButton {
 // the buttons at the right, the main one last. Returns the button clicked, or -1.
 int dialog_footer(std::initializer_list<DialogButton> buttons, const std::function<void(float)>& extra = {}) {
   const float h = s(38);
-  gap(22);
+  if (ImGui::GetCursorPosY() != g_row_end) gap(22);  // a setting row brings its own padding
   const float y = ImGui::GetCursorScreenPos().y, x = ImGui::GetWindowPos().x;
   hline(ImGui::GetWindowDrawList(), x, x + ImGui::GetWindowWidth(), y);
   ImGui::SetCursorScreenPos({ImGui::GetCursorScreenPos().x, y + s(20)});
@@ -375,6 +375,7 @@ void App::draw() {
   draw_update();
   draw_remove_account();
   draw_install_ask();
+  draw_import_ask();
   ImGui::EndChild();
   ImGui::End();
   draw_toast();
@@ -624,7 +625,7 @@ void App::draw_library() {
       ImGui::Dummy({s(38), s(38)});
       ImGui::SetCursorScreenPos({p.x + s(10), p.y + s(10)});
       spinner(9, color::text2);
-    } else if (icon_button("refresh", icons::refresh, "Refresh library", 38, session_ && !options_.offline, true)) {
+    } else if (icon_button("refresh", icons::refresh, nullptr, 38, session_ && !options_.offline, true)) {
       refresh();
     }
   }
@@ -639,7 +640,6 @@ void App::draw_library() {
   auto add_owned_field = [&](float width) {
     if (submit_field("owned-link", "Add a game by store link", &owned_link_, width, icons::add, !adding_))
       add_owned();
-    if (ImGui::IsItemHovered()) tooltip("Meta could not list all your games. Paste the store link of one you own.");
   };
 
   // Filter chips, and the store-link field at the row's end.
@@ -784,7 +784,6 @@ void App::draw_library() {
         gdl->AddCircleFilled(c, cr + (over ? s(1.5f) : 0), color::alpha(over ? IM_COL32_WHITE : color::selected, t), 40);
         draw_glyph(gdl, can_play ? icons::play : icons::download, kBody, {c.x + (can_play ? s(1) : 0), c.y},
                    color::alpha(color::on_selected, t));
-        if (over) tooltip(can_play ? "Play" : "Install");
         if (clicked && over) {
           clicked = false;
           if (can_play)
@@ -1012,13 +1011,13 @@ void App::draw_game_page() {
     auto draw_tools = [&] {
       if (!tools) return;
       ImGui::SameLine(0, s(6));
-      if (icon_button("folder", icons::folder, "Show files", 46, true, true))
+      if (icon_button("folder", icons::folder, nullptr, 46, true, true))
         action([&] { open_folder(partial->directory); });
       ImGui::SameLine(0, s(6));
       more = ImGui::GetCursorScreenPos();
       // --smoke-view menu opens it once for screenshots.
       static bool smoke_menu = options_.smoke_view == "menu";
-      if (icon_button("more", icons::more, "More", 46, true, true) || std::exchange(smoke_menu, false))
+      if (icon_button("more", icons::more, nullptr, 46, true, true) || std::exchange(smoke_menu, false))
         ImGui::OpenPopup("game-menu");
     };
     if (local) {
@@ -1046,7 +1045,7 @@ void App::draw_game_page() {
       if (button("Pause download##download", icons::pause, Tone::secondary, {inner - s(52), s(46)}))
         downloads_->cancel(g.id);
       ImGui::SameLine(0, s(6));
-      if (icon_button("show-downloads", icons::download, "Show in Downloads", 46, true, true)) page_ = 1;
+      if (icon_button("show-downloads", icons::download, nullptr, 46, true, true)) page_ = 1;
     } else {
       // Downloads belong to the active account, so installing a game that only
       // another account owns switches to that account first.
@@ -1444,7 +1443,7 @@ void App::draw_addons(const meta::Game& g, float width) {
     spinner(8, color::text3);
   } else {
     ImGui::SetCursorPos({right - s(36), top});
-    if (icon_button("refresh-addons", icons::refresh, "Check add-ons again", 36, session_ && !options_.offline, true)) {
+    if (icon_button("refresh-addons", icons::refresh, nullptr, 36, session_ && !options_.offline, true)) {
       if (!details_.contains(g.id)) {
         select(g.id);
       } else {
@@ -1495,7 +1494,6 @@ void App::draw_addons(const meta::Game& g, float width) {
     float ctrl_w = s(200);
     ImDrawList* dl = ImGui::GetWindowDrawList();
     ImGui::InvisibleButton("##row", {std::max(s(40), w - ctrl_w), h});
-    if (ImGui::IsItemHovered() && !a.description.empty()) tooltip(a.description);
     float cy = std::round(p.y + s(32));
     draw_text(dl, sf, kBody, {std::round(p.x), text_y(sf, kBody, cy - s(10))}, a.owned ? color::text : color::text2,
               ellipsize(sf, kBody, a.name, w - ctrl_w - s(16)));
@@ -1516,7 +1514,7 @@ void App::draw_addons(const meta::Game& g, float width) {
     float cx = p.x + w;
     if (a.installed) {
       ImGui::SetCursorScreenPos({cx - s(36), cy - s(18)});
-      if (icon_button("remove", icons::trash, running ? "Close the game to remove add-ons" : "Remove add-on files", 36,
+      if (icon_button("remove", icons::trash, running ? "Close the game to remove add-ons" : nullptr, 36,
                       !running && !downloads_->busy()))
         action([&] { uninstall_addon(g.id, a.sku); });
       float bw = badge_width("Installed", icons::check);
@@ -1636,23 +1634,23 @@ void App::draw_downloads() {
     float by = p.y + (h - s(36)) * 0.5f;
     ImGui::SetCursorScreenPos({right - s(36), by});
     if (j.state == download::State::complete) {
-      if (icon_button("clear", icons::cancel, "Clear from list", 36))
+      if (icon_button("clear", icons::cancel, nullptr, 36))
         action([&] { downloads_->remove(j, false); });
       draw_glyph(dl, icons::check, kBody + 2, {right - s(58), p.y + h * 0.5f}, color::positive);
     } else {
-      if (icon_button("cancel", icons::cancel, "Cancel download", 36)) cancel_target_ = j;
+      if (icon_button("cancel", icons::cancel, nullptr, 36)) cancel_target_ = j;
       ImGui::SetCursorScreenPos({right - s(76), by});
       if (active) {
-        if (icon_button("pause", icons::pause, "Pause  \xC2\xB7  keeps downloaded files", 36, true, true))
+        if (icon_button("pause", icons::pause, nullptr, 36, true, true))
           downloads_->cancel(j.app_id);
-      } else if (icon_button("resume", icons::resume, "Resume", 36, session_ && !options_.offline, true)) {
+      } else if (icon_button("resume", icons::resume, nullptr, 36, session_ && !options_.offline, true)) {
         action([&] { downloads_->resume(j, session_->access_token); });
       }
       ImGui::SetCursorScreenPos({right - s(116), by});
-      if (icon_button("later", icons::chevron_down, "Move down", 36, index + 1 < jobs.size()))
+      if (icon_button("later", icons::chevron_down, nullptr, 36, index + 1 < jobs.size()))
         downloads_->move(j, 1);
       ImGui::SetCursorScreenPos({right - s(156), by});
-      if (icon_button("sooner", icons::chevron_up, "Move up", 36, index > 0)) downloads_->move(j, -1);
+      if (icon_button("sooner", icons::chevron_up, nullptr, 36, index > 0)) downloads_->move(j, -1);
     }
     if (index + 1 < jobs.size()) hline(dl, p.x, right, p.y + h);
     ImGui::SetCursorScreenPos({p.x, p.y + h + s(1)});
@@ -1951,7 +1949,7 @@ void App::draw_account() {
       float x = p.x + row_w, cy = p.y + row_h * 0.5f;
       x -= s(36);
       ImGui::SetCursorScreenPos({x, cy - s(18)});
-      if (icon_button("more", icons::more, "More", 36)) ImGui::OpenPopup("account-menu");
+      if (icon_button("more", icons::more, nullptr, 36)) ImGui::OpenPopup("account-menu");
       if (begin_menu("account-menu")) {
         if (active && menu_item("Refresh library", icons::refresh, false, !refreshing_ && !options_.offline)) refresh();
         if (usable && !a.primary && accounts_.size() > 1 && menu_item("Open at startup", icons::star))
@@ -2090,8 +2088,8 @@ void App::draw_import_items(ImportScan& scan, bool device, float width) {
   ImDrawList* dl = ImGui::GetWindowDrawList();
   size_t ready = 0;
   uint64_t ready_bytes = 0;
-  // A headset can hold many games: a search narrows the list. Hidden picks stay picked.
-  if (scan.items.size() > 6 || !scan.search.empty()) {
+  // A headset can hold many games: a search narrows its list, and long folder lists. Hidden picks stay picked.
+  if ((device && !scan.items.empty()) || scan.items.size() > 6 || !scan.search.empty()) {
     gap(6);
     search_field(device ? "import-search##device" : "import-search##local", "Search games", &scan.search,
                  std::min(s(320), width));
@@ -2155,7 +2153,6 @@ void App::draw_import_items(ImportScan& scan, bool device, float width) {
     if (item.skipped) detail += std::format("  \xC2\xB7  {} skipped", item.skipped);
     draw_text(dl, fonts().regular, kSmall, {x, text_y(fonts().regular, kSmall, mid + s(11))}, color::text2,
               ellipsize(fonts().regular, kSmall, detail, text_right - x));
-    if (!device && ImGui::IsMouseHoveringRect({x, p.y}, {text_right, p.y + h})) tooltip(item.location);
     ImGui::SetCursorScreenPos({right - bw, mid - s(12)});
     badge(match.status, badge_fg, color::alpha(badge_fg, 0.14f));
     ImGui::SetCursorScreenPos({p.x, p.y + h});
@@ -2165,55 +2162,32 @@ void App::draw_import_items(ImportScan& scan, bool device, float width) {
   if (scan.items.empty()) return;
   divider();
   gap(14);
+  // What is picked, and the Import button; where the games go is asked next.
   float bw = s(190);
-  ImVec2 row = ImGui::GetCursorPos();
-  float after = ImGui::GetCursorPosY();
-  // Where new games go, as when installing: each library folder, or a new one
-  // on another drive. Games already installed stay where they are.
-  if (import_choices_.empty())
-    for (auto& location : launcher::install_locations(settings_, launcher::local_volumes()))
-      import_choices_.emplace_back(location, launcher::free_space(location.folder));
-  bool fits = true;
-  if (import_choices_.size() > 1) {
-    std::vector<std::string> labels;
-    for (auto& [location, free] : import_choices_) {
-      const bool shared = std::ranges::count_if(import_choices_, [&](auto& other) {
-                            return other.first.drive == location.drive;
-                          }) > 1;
-      const auto drive = shared ? location.drive + "  \xC2\xB7  " + paths::utf8(location.folder.filename())
-                                : location.drive;
-      labels.push_back(free ? std::format("{}  \xC2\xB7  {} free", drive, bytes(free)) : drive);
-    }
-    std::vector<const char*> items;
-    for (auto& label : labels) items.push_back(label.c_str());
-    import_choice_ = std::clamp(import_choice_, 0, int(items.size()) - 1);
-    const float dw = std::min(s(320), width - bw - s(12));
-    ImGui::SetCursorPos({row.x, row.y + (s(40) - ImGui::GetFrameHeight()) * 0.5f});
-    dropdown(device ? "import-to##device" : "import-to##local", "", items.data(), int(items.size()), &import_choice_,
-             dw);
-    const auto free = import_choices_[import_choice_].second;
-    fits = !free || free > ready_bytes;
-    if (ImGui::IsItemHovered()) tooltip("Install to " + paths::utf8(import_choices_[import_choice_].first.folder));
-    after = std::max(after, ImGui::GetCursorPosY());
-  }
-  ImGui::SetCursorPos({row.x + width - bw, row.y});
+  ImVec2 row = ImGui::GetCursorScreenPos();
+  if (ready)
+    draw_text(dl, fonts().regular, kSmall, {row.x, text_y(fonts().regular, kSmall, row.y, s(40))}, color::text2,
+              std::format("{} selected{}", ready == 1 ? std::string("1 game") : std::format("{} games", ready),
+                          ready_bytes ? "  \xC2\xB7  " + bytes(ready_bytes) : std::string()));
+  ImGui::SetCursorScreenPos({row.x + width - bw, row.y});
   std::string label = ready == 0   ? std::string("Import")
                       : ready == 1 ? std::string("Import 1 game")
                                    : std::format("Import {} games", ready);
   label += device ? "##device" : "##local";
-  const auto folder = import_choices_.size() > 1 ? import_choices_[import_choice_].first.folder : fs::path{};
-  if (button(label.c_str(), icons::download, Tone::primary, {bw, s(40)}, ready > 0 && fits))
-    action([&, folder] { start_import(device, folder); });
-  ImGui::SetCursorPosY(std::max(after, row.y + s(40)));
-  if (!fits) {
-    gap(6);
-    text(fonts().regular, kSmall, color::danger,
-         std::format("Not enough space on that drive: the selected games need {}.", bytes(ready_bytes)));
-  }
+  if (button(label.c_str(), icons::download, Tone::primary, {bw, s(40)}, ready > 0))
+    action([&, device] { request_import(device); });
+  ImGui::SetCursorScreenPos({row.x, row.y + s(40)});
+  ImGui::Dummy({width, 0});
   gap(4);
 }
 
 void App::draw_import() {
+  // --smoke-view import-ask: the dialog the Import button opens, for the scanned games.
+  static bool smoke_ask = options_.smoke_view == "import-ask";
+  if (smoke_ask && !import_local_.busy && !import_local_.items.empty() && !refreshing_ && !scanning_) {
+    smoke_ask = false;
+    request_import(false);
+  }
   page_title("Import");
   gap(kAfterHeader);
   float w = std::min(ImGui::GetContentRegionAvail().x, s(kPageWidth));
@@ -2310,9 +2284,6 @@ void App::draw_import() {
     constexpr auto label = "A game's APK with its data";
     draw_text(ImGui::GetWindowDrawList(), fonts().regular, kBody,
               {std::round(at.x), text_y(fonts().regular, kBody, at.y, s(kControlH))}, color::text, label);
-    if (ImGui::IsMouseHoveringRect(at, {at.x + measure(fonts().regular, kBody, label).x, at.y + s(kControlH)}))
-      tooltip("A folder that holds the APK and its <package> data folder, the APK itself, or a ZIP archive of them. "
-              "You can also drop them on this window.");
     float after = start.y;
     ImGui::SetCursorPos({start.x + inner - fw - aw - s(10), start.y});
     if (button("Choose folder", icons::folder, Tone::secondary, {fw, s(kControlH)})) choose_import(true);
@@ -2368,12 +2339,12 @@ void App::draw_import() {
       if (button("From a folder##saves-page", icons::folder, Tone::secondary, {fw, s(kControlH)}, !running))
         choose_save_folder(save_game_);
       if (ImGui::IsItemHovered())
-        tooltip(std::string("A copy of the game's Android/data folder on this PC. ") + replaces);
+        tooltip(replaces);
       ImGui::SameLine(0, s(10));
       if (button("From headset##saves-page", icons::download, Tone::primary, {hw, s(kControlH)}, !running))
         action([id = save_game_, this] { import_saves_later(id, {}); });
       if (ImGui::IsItemHovered())
-        tooltip(std::string("A Quest connected over USB with developer mode on. ") + replaces);
+        tooltip(replaces);
       ImGui::SetCursorPos({row.x, row.y + s(kControlH)});
       ImGui::Dummy({inner, 0});
     }
@@ -2381,6 +2352,140 @@ void App::draw_import() {
   end_card();
   gap(30);
   if (options_.smoke_view == "import-end") ImGui::SetScrollHereY(1.0f);
+}
+
+void App::request_import(bool device) {
+  const bool steam = settings_.add_games_to_steam && (steam_sync_allowed_ || options_.smoke_view == "import-ask");
+  import_choices_.clear();  // free space changes between imports
+  for (auto& location : launcher::install_locations(settings_, launcher::local_volumes()))
+    import_choices_.emplace_back(location, launcher::free_space(location.folder));
+  if (!settings_.install_ask || (!steam && import_choices_.size() < 2)) return start_import(device);
+  import_choice_ = 0;
+  import_steam_ = settings_.steam_add_new;
+  import_remember_ = false;
+  import_ask_ = device;
+}
+
+void App::draw_import_ask() {
+  if (import_ask_ && !ImGui::IsPopupOpen("Import games")) ImGui::OpenPopup("Import games");
+  ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {s(10), 0});
+  if (begin_dialog("Import games", 480)) {
+    const bool device = import_ask_.value_or(false);
+    auto& scan = device ? import_device_ : import_local_;
+    const float w = s(424);
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    // The picked games: new ones need space, installed ones update in place.
+    std::vector<std::pair<const ImportItem*, ImportMatch>> picked;
+    uint64_t new_bytes = 0, total = 0;
+    size_t updates = 0;
+    for (const auto& item : scan.items) {
+      if (!item.selected) continue;
+      auto match = import_match(item);
+      if (!match.importable) continue;
+      if (installed_package(item.package)) ++updates;
+      else new_bytes += item.bytes;
+      total += item.bytes;
+      picked.emplace_back(&item, match);
+    }
+
+    // One game: its cover and name, as when installing. Several: how many.
+    {
+      const ImVec2 at = ImGui::GetCursorScreenPos();
+      const float tw = std::round(s(96)), th = std::round(s(54)), x = at.x + tw + s(14);
+      const auto* game = picked.size() == 1 ? picked.front().second.game : nullptr;
+      if (game) {
+        art(game->id, {tw, th}, s(8));
+      } else {
+        dl->AddRectFilled(at, {at.x + tw, at.y + th}, color::surface_hi, s(8));
+        draw_glyph(dl, picked.size() == 1 ? icons::package : icons::game, kHeading,
+                   {at.x + tw * 0.5f, at.y + th * 0.5f}, color::text3);
+      }
+      std::string name = std::format("{} games", picked.size());
+      if (picked.size() == 1) {
+        const auto& item = *picked.front().first;
+        name = game ? game->name : item.label.empty() ? item.package : item.label;
+      }
+      draw_text(dl, fonts().semibold, kHeading, {x, text_y(fonts().semibold, kHeading, at.y + th * 0.5f - s(20), s(22))},
+                color::text, ellipsize(fonts().semibold, kHeading, name, at.x + w - x));
+      draw_text(dl, fonts().regular, kSmall, {x, text_y(fonts().regular, kSmall, at.y + th * 0.5f + s(2), s(18))},
+                color::text2, bytes(total));
+      ImGui::SetCursorScreenPos({at.x, at.y + th});
+      ImGui::Dummy({w, 0});
+    }
+    gap(14);
+
+    // Where new games go (each library folder, or a new one on another drive) and Steam.
+    bool fits = true;
+    const bool any_new = updates < picked.size();
+    if (import_choices_.size() > 1 && any_new) {
+      std::vector<std::string> labels;
+      for (auto& [location, free] : import_choices_) {
+        // Two folders on one drive are told apart by their names.
+        const bool shared = std::ranges::count_if(import_choices_, [&](auto& other) {
+                              return other.first.drive == location.drive;
+                            }) > 1;
+        const auto drive = shared ? location.drive + "  \xC2\xB7  " + paths::utf8(location.folder.filename())
+                                  : location.drive;
+        labels.push_back(free ? std::format("{}  \xC2\xB7  {} free", drive, bytes(free)) : drive);
+      }
+      std::vector<const char*> items;
+      for (auto& label : labels) items.push_back(label.c_str());
+      import_choice_ = std::clamp(import_choice_, 0, int(items.size()) - 1);
+      const auto& [location, free] = import_choices_[import_choice_];
+      fits = !free || free > new_bytes;
+      const float dw = w - s(130);
+      divider();
+      setting_row("Install to", "", dw, s(38), [&] {
+        dropdown("import-to", "", items.data(), int(items.size()), &import_choice_, dw);
+      });
+      if (!fits)
+        text(fonts().regular, kSmall, color::danger,
+             std::format("Not enough space: the new games need {}.", bytes(new_bytes)), false);
+    }
+    const bool steam = settings_.add_games_to_steam && (steam_sync_allowed_ || options_.smoke_view == "import-ask");
+    if (steam && any_new) {
+      divider();
+      setting_row("Add to Steam", "Appears in your Steam library and launches in SteamVR.", s(44), s(24),
+                  [&] { toggle("import-steam", &import_steam_); });
+    }
+    if (updates) {
+      gap(10);
+      text(fonts().regular, kSmall, color::text3,
+           updates == 1 && picked.size() == 1 ? std::string("The installed game updates where it is.")
+           : updates == picked.size()          ? std::string("The installed games update where they are.")
+           : updates == 1                      ? std::string("1 installed game updates where it is.")
+                                               : std::format("{} installed games update where they are.", updates),
+           false);
+    }
+
+    const int clicked = dialog_footer({{"Cancel"}, {"Import", Tone::primary, fits && !picked.empty(), icons::download}},
+                                      [&](float h) {
+      const ImVec2 row = ImGui::GetCursorScreenPos();
+      ImGui::SetCursorScreenPos({row.x, row.y + (h - s(16)) * 0.5f});
+      checkbox("import-remember", "Don't ask again", &import_remember_, {}, true);
+    });
+    if (clicked == 1) {
+      const auto folder = import_choices_.size() > 1 ? import_choices_[import_choice_].first.folder : fs::path{};
+      action([&, device, folder, add = import_steam_, remember = import_remember_, steam] {
+        if (remember) {
+          // The chosen drive becomes the games folder; the old one stays a library folder.
+          auto next = settings_;
+          next.install_ask = false;
+          next.steam_add_new = add;
+          if (!folder.empty()) next.games = folder;
+          apply_settings(std::move(next), false);
+          settings_games_ = paths::utf8(settings_.games);
+        }
+        start_import(device, folder, steam ? std::optional<bool>(add) : std::nullopt);
+      });
+    }
+    if (clicked >= 0) {
+      import_ask_.reset();
+      ImGui::CloseCurrentPopup();
+    }
+    end_dialog();
+  }
+  ImGui::PopStyleVar();
 }
 
 void App::request_install(const meta::Game& g) {
@@ -2446,7 +2551,6 @@ void App::draw_install_ask() {
       setting_row("Install to", "", dw,
                   s(38), [&] {
                     dropdown("install-to", "", items.data(), int(items.size()), &install_choice_, dw);
-                    if (ImGui::IsItemHovered()) tooltip(paths::utf8(location.folder));
                   });
       if (!fits) text(fonts().regular, kSmall, color::danger, std::format("Not enough space: the game needs {}.", bytes(size)), false);
     }
@@ -2461,7 +2565,6 @@ void App::draw_install_ask() {
       const ImVec2 row = ImGui::GetCursorScreenPos();
       ImGui::SetCursorScreenPos({row.x, row.y + (h - s(16)) * 0.5f});
       checkbox("install-remember", "Don't ask again", &install_remember_, {}, true);
-      if (ImGui::IsItemHovered()) tooltip("Later installs use these choices. Change them any time in Settings.");
     });
     if (clicked == 1) {
       const auto folder = install_choices_.empty() ? settings_.games : install_choices_[install_choice_].first.folder;

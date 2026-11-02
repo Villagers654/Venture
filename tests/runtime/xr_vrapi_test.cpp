@@ -498,6 +498,53 @@ static vr::abi::Matrix unit_square(float yaw, float distance, float half) {
   return m;
 }
 
+TEST_CASE("VrApi OVRPlugin quads (type 17) show each eye's unit-square rays") {
+  // UE4 stereo layers through OVRPlugin's VrApi compositor (Moss, The Walking
+  // Dead menus): the cylinder layout with unit-square tan-angle matrices.
+  vr::abi::Cylinder layer{};
+  layer.header = {17, 0, {1, 1, 1, 1}, 2, 5, 0};
+  layer.head.pose = {{0, .38268343f, 0, .92387953f}, {.5f, 1.6f, -2}};
+  XrView eyes[2]{{XR_TYPE_VIEW}, {XR_TYPE_VIEW}};
+  for (int eye = 0; eye < 2; ++eye) {
+    eyes[eye].pose = {{0, 0, 0, 1}, {eye ? .031f : -.031f, 0, 0}};
+    auto &t = layer.textures[eye];
+    t.tan_angles = unit_square(0, 2, .5f);
+    t.rect = {0, 0, 1, 1};
+    for (int i = 0; i < 4; ++i) t.texture_matrix.m[i][i] = 1;
+  }
+  auto image = [](vr::abi::TextureSwapChain *, int, vr::abi::Rect, int eye, bool,
+                  XrSwapchainSubImage &out) {
+    out.imageArrayIndex = std::uint32_t(eye);
+    return XR_SUCCESS;
+  };
+  vr::LayerStorage storage;
+  std::vector<const XrCompositionLayerBaseHeader *> layers;
+  REQUIRE(vr::translate_layer(layer.header, eyes, image, storage, layers) == XR_SUCCESS);
+  REQUIRE(layers.size() == 2);
+  for (int eye = 0; eye < 2; ++eye) {
+    CAPTURE(eye);
+    const auto &quad = storage.quad[eye];
+    CHECK(layers[eye] == reinterpret_cast<const XrCompositionLayerBaseHeader *>(&quad));
+    CHECK(quad.space == vr::state().app);
+    CHECK(quad.eyeVisibility == (eye ? XR_EYE_VISIBILITY_RIGHT : XR_EYE_VISIBILITY_LEFT));
+    CHECK(quad.subImage.imageArrayIndex == std::uint32_t(eye));
+    // A metre-wide square two metres ahead spans tangents -.25..+.25: a half
+    // metre square one metre ahead of the eye, along the guest's head pose.
+    CHECK(quad.size.width == doctest::Approx(.5f));
+    CHECK(quad.size.height == doctest::Approx(.5f));
+    const XrPosef head{{0, .38268343f, 0, .92387953f}, {.5f, 1.6f, -2}};
+    const auto expected = venture::xr::compose(venture::xr::compose(head, eyes[eye].pose), {{0, 0, 0, 1}, {0, 0, -1}});
+    CHECK(quad.pose.position.x == doctest::Approx(expected.position.x));
+    CHECK(quad.pose.position.y == doctest::Approx(expected.position.y));
+    CHECK(quad.pose.position.z == doctest::Approx(expected.position.z));
+    CHECK(std::abs(quad.pose.orientation.y) == doctest::Approx(.38268343f));
+  }
+  // Texture transforms other than identity are left out, not misplaced.
+  layer.textures[1].texture_matrix.m[0][0] = .5f;
+  layers.clear();
+  CHECK(vr::translate_layer(layer.header, eyes, image, storage, layers) == XR_ERROR_FEATURE_UNSUPPORTED);
+}
+
 TEST_CASE("VrApi projection rows follow each layer's vertical sign in GLES and Vulkan") {
   auto &api = vr::state().init.graphics_api;
   const auto saved = api;
