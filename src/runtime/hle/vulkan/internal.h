@@ -132,6 +132,10 @@ enum class Layer { dispatch, breadcrumbs, render_check, render_area, multiview, 
 PFN_vkVoidFunction shader_proc(std::string_view name);
 // Empty means no change. Explicit initializers and nonnumeric types stay intact.
 std::vector<std::uint32_t> initialize_shader_locals(std::span<const std::uint32_t> code);
+// Drops RelaxedPrecision decorations from a module whose entry points are all
+// vertex-pipeline stages (vertex, tessellation, geometry), which a Quest evaluates
+// at full precision. Empty means no change.
+std::vector<std::uint32_t> full_precision_vertex_stages(std::span<const std::uint32_t> code);
 // Declares storage images Format Unknown (adding the WithoutFormat capabilities)
 // so loads and stores follow the bound view format, as Adreno does. A type whose
 // rewrite would duplicate another declaration keeps its format. Empty: no change.

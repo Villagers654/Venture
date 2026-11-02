@@ -132,6 +132,42 @@ TEST_CASE("Vulkan uninitialized loop counters execute a bounded compute loop") {
   test::vk_call("vkDestroyShaderModule", gpu.device, shader, nullptr);
 }
 
+TEST_CASE("Vulkan vertex-pipeline stages drop RelaxedPrecision, fragment and compute keep it") {
+  auto module = [](std::uint32_t model) {
+    return std::vector<std::uint32_t>{
+        0x07230203, 0x00010000, 0, 8, 0,
+        0x00020011, 1,                               // OpCapability Shader
+        0x0003000e, 0, 1,                            // OpMemoryModel Logical GLSL450
+        0x0005000f, model, 3, 0x6e69616d, 0,         // OpEntryPoint <model> %3 "main"
+        0x00030047, 4, 0,                            // OpDecorate %4 RelaxedPrecision
+        0x00040047, 5, 30, 0,                        // OpDecorate %5 Location 0
+        0x00040048, 6, 1, 0,                         // OpMemberDecorate %6 1 RelaxedPrecision
+        0x00050048, 6, 0, 35, 0};                    // OpMemberDecorate %6 0 Offset 0
+  };
+  const auto vertex = module(0);
+  const auto out = vulkan::full_precision_vertex_stages(vertex);
+  const std::vector<std::uint32_t> expected{
+      0x07230203, 0x00010000, 0, 8, 0,
+      0x00020011, 1,
+      0x0003000e, 0, 1,
+      0x0005000f, 0, 3, 0x6e69616d, 0,
+      0x00040047, 5, 30, 0,
+      0x00050048, 6, 0, 35, 0};
+  CHECK(out == expected);
+  CHECK(vulkan::full_precision_vertex_stages(out).empty());          // nothing left to drop
+  CHECK(vulkan::full_precision_vertex_stages(module(4)).empty());    // Fragment keeps it
+  CHECK(vulkan::full_precision_vertex_stages(module(5)).empty());    // GLCompute keeps it
+  CHECK(vulkan::full_precision_vertex_stages(module(3)) == [&] {     // Geometry drops it
+    auto e = expected;
+    e[11] = 3;
+    return e;
+  }());
+  auto no_entry = vertex;
+  no_entry.erase(no_entry.begin() + 10, no_entry.begin() + 15);
+  CHECK(vulkan::full_precision_vertex_stages(no_entry).empty());
+  CHECK(vulkan::full_precision_vertex_stages({}).empty());
+}
+
 TEST_CASE("Vulkan storage images follow the view format without invalid duplicate types") {
   const std::vector<std::uint32_t> code{
       0x07230203, 0x00010000, 0, 8, 0,
