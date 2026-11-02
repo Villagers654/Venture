@@ -530,6 +530,15 @@ void Manager::run(std::stop_token shutdown) {
                       : store.owned_plan(e->job.app_id, e->job.binary_id);
       if (!e->job.sku.empty() || !e->job.asset_id.empty())
         meta::require_asset_catalog(plan);
+      // An imported APK of this build stays installed; only what the install
+      // lacks is fetched, and the manifest written below keeps it.
+      if (const auto installed =
+              paths::game_dir(e->job.root, plan.package, plan.version_code);
+          paths::within(installed, installed / "plan.json") &&
+          fs::is_regular_file(installed / "plan.json"))
+        library::keep_installed_apk(
+            plan, meta::parse_plan(paths::read_json(installed / "plan.json")),
+            installed);
       std::vector<meta::File> selected;
       if (!e->job.sku.empty() &&
           !store.owned_skus(e->job.app_id).contains(e->job.sku))

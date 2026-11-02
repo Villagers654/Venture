@@ -373,6 +373,65 @@ TEST_CASE("DLC fallback catalogs never replace an installed catalog or count as 
   REQUIRE(installs.size() == 1);
   CHECK(installs[0].complete);
 }
+// An import keeps its own APK of the store's build (import::plan), possibly a
+// modified one. Upgrading its manifest to the full catalog must not put the
+// store's APK size back, and resuming fetches only what the install lacks.
+TEST_CASE("an imported APK survives a catalog refresh and a resumed download") {
+  Directory directory;
+  seed(directory.root);
+  auto dir = paths::game_dir(directory.root, "com.example.dlc", "12");
+  const std::string imported_hash(64, 'a');
+  auto plan = meta::parse_plan(paths::read_json(dir / "plan.json"));
+  for (auto &f : plan.files)
+    if (f.kind == "apk") {
+      f.size = 7;
+      f.sha256 = imported_hash;
+    }
+  paths::atomic_write(dir / "plan.json", plan.json().dump());
+  paths::atomic_write(dir / "com.example.dlc.apk", "modded!");
+  fs::remove(dir / "required.dat");  // a required asset the import lacked
+
+  auto apk_entry = [&] {
+    auto p = meta::parse_plan(paths::read_json(dir / "plan.json"));
+    return *std::ranges::find(p.files, std::string("apk"), &meta::File::kind);
+  };
+  auto full = meta::Store("fixture", {}, queries()).owned_plan("123456", "456789");
+  library::refresh_catalog(directory.root, full);
+  CHECK(apk_entry().size == 7);
+  CHECK(apk_entry().sha256 == imported_hash);
+  auto installs = library::scan(directory.root);
+  REQUIRE(installs.size() == 1);
+  CHECK_FALSE(installs[0].complete);  // only required.dat is missing
+
+  std::vector<std::string> fetched;
+  download::Manager manager(
+      directory.root / "state", [] {},
+      {queries(), {},
+       [&](std::string, const fs::path &path, uint64_t size, std::stop_token,
+           const http::Progress &progress) {
+         if (!fs::is_regular_file(path) || fs::file_size(path) != size) {
+           fetched.push_back(paths::utf8(path.filename()));
+           paths::atomic_write(path, std::string(size, 'X'));
+         }
+         progress(size, size);
+       }});
+  manager.set_account("0123456789ab");
+  manager.enqueue("123456", "Game", directory.root, "fixture");
+  wait_job(manager);
+  REQUIRE(manager.snapshot()[0].state == download::State::complete);
+  CHECK(fetched == std::vector<std::string>{"required.dat"});
+  CHECK(paths::read(dir / "com.example.dlc.apk") == "modded!");
+  CHECK(apk_entry().size == 7);
+  installs = library::scan(directory.root);
+  REQUIRE(installs.size() == 1);
+  CHECK(installs[0].complete);
+
+  // An APK that no longer has the recorded size is not the import's: the
+  // store's build replaces it.
+  paths::atomic_write(dir / "com.example.dlc.apk", "cut");
+  library::refresh_catalog(directory.root, full);
+  CHECK(apk_entry().size == 4);
+}
 // Meta fails the whole-library query (HTTP 500 every time) for accounts with
 // very many games; each app's listing still says whether the account owns it.
 TEST_CASE("ownership comes from the app's own listing when Meta cannot list the library") {

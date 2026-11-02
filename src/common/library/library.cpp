@@ -279,6 +279,7 @@ void refresh_catalog(const fs::path &root, const meta::Plan &catalog) {
   if (!meta::catalog_replaces(catalog, previous))
     throw std::runtime_error(meta::catalog_unavailable);
   auto plan = catalog;
+  keep_installed_apk(plan, previous, dir);
   // An import's own data files (no Meta id) and recorded hashes stay.
   for (auto &f : previous.files) {
     auto same = std::ranges::find(plan.files, f.name, &meta::File::name);
@@ -297,6 +298,26 @@ void refresh_catalog(const fs::path &root, const meta::Plan &catalog) {
   std::erase_if(plan.installed_addons,
                 [&](auto &sku) { return !addon_installed(candidate, sku); });
   paths::atomic_write(dir / "plan.json", plan.json().dump(2));
+}
+void keep_installed_apk(meta::Plan &plan, const meta::Plan &installed,
+                        const fs::path &directory) {
+  if (plan.app_id != installed.app_id || plan.binary_id != installed.binary_id)
+    return;
+  auto old = std::ranges::find(installed.files, std::string("apk"), &meta::File::kind);
+  if (old == installed.files.end() || !old->size)
+    return;
+  auto apk = std::ranges::find_if(plan.files, [&](const meta::File &f) {
+    return f.kind == "apk" && f.name == old->name;
+  });
+  if (apk == plan.files.end() || apk->size == old->size)
+    return;
+  auto path = directory / paths::from_utf8(old->name);
+  std::error_code ec;
+  if (!paths::within(directory, path) || !fs::is_regular_file(path, ec) ||
+      fs::file_size(path, ec) != old->size || ec)
+    return;
+  apk->size = old->size;
+  apk->sha256 = old->sha256;
 }
 void uninstall_addon(const fs::path &root, const Install &install,
                      std::string_view sku) {
