@@ -434,7 +434,7 @@ TEST_CASE("VrApi projection FOV covers only each eye's texture rect") {
   }
 }
 
-TEST_CASE("VrApi projection sends each eye only the part of a symmetric frustum inside the host view") {
+TEST_CASE("VrApi projection sends each eye only the part of its frustum inside the host view") {
   // Quest 3 over Link: host eyes -54..+40 / -40..+54 by +44..-55 degrees. The
   // guest renders the symmetric frustum vrapi.cpp reports, +-54 by +-55
   // (VrApi_Helpers.h TanAngleMatrixFromProjection), in GLES and in Vulkan rows.
@@ -492,23 +492,37 @@ TEST_CASE("VrApi projection sends each eye only the part of a symmetric frustum 
       CHECK(rects[eye].height == doctest::Approx(top));
     }
   }
-  // A guest frustum inside the host's view on every side keeps its whole rect.
+  // The Climb 2's credits: +-45 degrees, narrower than the host's view on some
+  // sides. The part inside the host's view becomes one quad per eye, 10 m
+  // ahead, which the Meta runtime cannot stretch over the display.
   for (auto &t : projection.textures) {
-    t.tan_angles = tan_angles(30 * degree, 30 * degree, false);
+    t.tan_angles = tan_angles(45 * degree, 45 * degree, false);
     t.rect = {0, 0, 1, 1};
   }
   rects.clear();
   vr::LayerStorage storage;
   std::vector<const XrCompositionLayerBaseHeader *> layers;
   REQUIRE(vr::translate_layer(projection.header, eyes, image, storage, layers) == XR_SUCCESS);
+  REQUIRE(layers.size() == 2);
   for (int eye = 0; eye < 2; ++eye) {
     CAPTURE(eye);
-    CHECK(rects[eye].x == 0);
-    CHECK(rects[eye].y == 0);
-    CHECK(rects[eye].width == 1);
-    CHECK(rects[eye].height == 1);
-    CHECK(storage.views[eye].fov.angleLeft == doctest::Approx(-30 * degree));
-    CHECK(storage.views[eye].fov.angleUp == doctest::Approx(30 * degree));
+    const float l = std::max(-1.f, std::tan(host[eye].angleLeft));
+    const float r = std::min(1.f, std::tan(host[eye].angleRight));
+    const float u = std::min(1.f, std::tan(host[eye].angleUp));
+    const float d = std::max(-1.f, std::tan(host[eye].angleDown));
+    CHECK(rects[eye].x == doctest::Approx((l + 1) / 2));
+    CHECK(rects[eye].width == doctest::Approx((r - l) / 2));
+    CHECK(rects[eye].y == doctest::Approx((d + 1) / 2));
+    CHECK(rects[eye].height == doctest::Approx((u - d) / 2));
+    const auto &quad = storage.quad[eye];
+    CHECK(layers[eye] == reinterpret_cast<const XrCompositionLayerBaseHeader *>(&quad));
+    CHECK(quad.space == vr::state().app);
+    CHECK(quad.eyeVisibility == (eye ? XR_EYE_VISIBILITY_RIGHT : XR_EYE_VISIBILITY_LEFT));
+    CHECK(quad.size.width == doctest::Approx((r - l) * 10));
+    CHECK(quad.size.height == doctest::Approx((u - d) * 10));
+    CHECK(quad.pose.position.x == doctest::Approx(eyes[eye].pose.position.x + (l + r) / 2 * 10));
+    CHECK(quad.pose.position.y == doctest::Approx((u + d) / 2 * 10));
+    CHECK(quad.pose.position.z == doctest::Approx(-10));
   }
 }
 
@@ -1120,6 +1134,12 @@ TEST_CASE("VrApi constant projective layers copy their texel across both eye fru
 }
 
 TEST_CASE("VrApi inverse alpha layers invert alpha through color scale and bias") {
+  // The host's view is the layer's 45 degrees: one projection layer, uncut.
+  const float quarter = std::numbers::pi_v<float> / 4;
+  MockXrScript script{};
+  script.view_fov = std::array{-quarter, quarter, quarter, -quarter};
+  ventureMockXrSetScript(&script);
+  struct RestoreScript { ~RestoreScript() { MockXrScript defaults{}; ventureMockXrSetScript(&defaults); } } restore;
   venture::test::XrImageFixture images;
   venture::xr::install_xr_images(&images);
   vr::abi::Init init{1, 1, 1, 52, 0, 0x10300, {1, 2, 3}};
@@ -1143,7 +1163,7 @@ TEST_CASE("VrApi inverse alpha layers invert alpha through color scale and bias"
     texture.tan_angles.m[0][2] = texture.tan_angles.m[1][2] = -.5f;
     texture.tan_angles.m[2][2] = -1;
     eyes[eye].pose.orientation.w = 1;
-    eyes[eye].fov = {-.8f, .8f, .8f, -.8f};
+    eyes[eye].fov = {-quarter, quarter, quarter, -quarter};
   }
   vr::LayerStorage storage;
   std::vector<const XrCompositionLayerBaseHeader *> layers;
@@ -2139,6 +2159,12 @@ TEST_CASE("VrApi cylinder sub-rects sit where the full layer shows their rows") 
   api = saved;
 }
 TEST_CASE("VrApi flipped texture rects stay inside odd-height images") {
+  // The host's view is the layer's: 45 degrees each side, from level down.
+  const float quarter = std::numbers::pi_v<float> / 4;
+  MockXrScript script{};
+  script.view_fov = std::array{-quarter, quarter, 0.f, -quarter};
+  ventureMockXrSetScript(&script);
+  struct RestoreScript { ~RestoreScript() { MockXrScript defaults{}; ventureMockXrSetScript(&defaults); } } restore;
   VrApiFrames vr_frames;
   auto *ring = vg::vrapi_CreateTextureSwapChain3(0, 0x8058, 32, 33, 1, 1);
   REQUIRE(ring);
