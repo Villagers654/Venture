@@ -38,6 +38,38 @@ public final class FrameworkTest {
   public static class NativeStartupActivity extends android.app.NativeActivity {
     public void createOnly() { super.onCreate(null); }
   }
+  // AndroidX BuildCompat initializes SdkExtensions on every API 30+ device
+  // (OnBackPressedDispatcher, so every ComponentActivity); a missing class
+  // failed the activity's constructor (HyperVR's Bad Inmate).
+  private static void sdkExtensions() throws Exception {
+    var hostField = RuntimeEnvironment.class.getDeclaredField("host"); hostField.setAccessible(true);
+    Object oldHost = hostField.get(null);
+    hostField.set(null, java.lang.reflect.Proxy.newProxyInstance(Host.class.getClassLoader(), new Class<?>[]{Host.class}, (p, method, args) -> {
+      if (!method.getName().equals("systemProperty")) throw new UnsupportedOperationException();
+      String value = switch ((String) args[0]) {
+        case "build.version.extensions.r" -> "3";
+        case "build.version.extensions.s" -> "x";
+        default -> "";
+      };
+      return value.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+    }));
+    try {
+      check(android.os.ext.SdkExtensions.getExtensionVersion(Build.VERSION_CODES.R) == 3, "R extension level comes from its property");
+      check(android.os.ext.SdkExtensions.getExtensionVersion(Build.VERSION_CODES.S) == 0, "malformed S extension property reads as 0");
+      check(android.os.ext.SdkExtensions.getExtensionVersion(Build.VERSION_CODES.TIRAMISU) == 0
+          && android.os.ext.SdkExtensions.getExtensionVersion(1000000) == 0, "12L reports no T or AD_SERVICES extensions");
+      boolean rejected = false;
+      try { android.os.ext.SdkExtensions.getExtensionVersion(Build.VERSION_CODES.Q); } catch (IllegalArgumentException expected) { rejected = true; }
+      check(rejected, "pre-R SDKs have no extensions");
+      var all = android.os.ext.SdkExtensions.getAllExtensionVersions();
+      check(all.equals(Map.of(Build.VERSION_CODES.R, 3, Build.VERSION_CODES.S, 0)), "all extension levels list R and S");
+      boolean immutable = false;
+      try { all.put(Build.VERSION_CODES.TIRAMISU, 1); } catch (UnsupportedOperationException expected) { immutable = true; }
+      check(immutable, "extension level map is unmodifiable");
+    } finally {
+      hostField.set(null, oldHost);
+    }
+  }
   private static void censusValues() {
     byte[] bytes = {0, 1, 2, (byte) 251, (byte) 255};
     check(android.util.Base64.encodeToString(bytes, 0).equals("AAEC+/8=\n"), "Android Base64 DEFAULT ends in LF");
@@ -1118,6 +1150,7 @@ public final class FrameworkTest {
     styledEditor.setOnClickListener(view -> {});
     check(styledEditor.isClickable(), "installing a click listener sets the Android clickable flag");
     censusValues();
+    sdkExtensions();
     intentMatching();
     manifestResolutionRegressions();
     lenientUris();
