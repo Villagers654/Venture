@@ -1020,7 +1020,9 @@ void App::draw_game_page() {
       if (icon_button("more", icons::more, nullptr, 46, true, true) || std::exchange(smoke_menu, false))
         ImGui::OpenPopup("game-menu");
     };
-    if (local) {
+    // A running game always offers Quit, even when its install no longer counts as
+    // complete (files changed or a catalog refresh listed new ones).
+    if (local || running) {
       if (launch_choice(g.id, play_key(g.id)).status == library::LaunchStatus::reconnect) {
         if (button("Reconnect to play##play", 0, Tone::primary, cta)) page_ = 3;
       } else if (running) {
