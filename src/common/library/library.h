@@ -23,6 +23,13 @@ bool addon_installed(const Install &install, std::string_view sku);
 // Upgrade old manifests from a fresh, same-build Meta catalog. Presence comes
 // from size-checked files on disk; this never asserts account ownership.
 void refresh_catalog(const fs::path &root, const meta::Plan &catalog);
+// A same-build Meta plan names the store's APK, but an import may have
+// installed another APK of that build (a modified one). While the APK in
+// `directory` still has the size the installed manifest records, `plan` keeps
+// that size and hash, so a catalog refresh or a resumed download neither marks
+// the install incomplete nor replaces the APK.
+void keep_installed_apk(meta::Plan &plan, const meta::Plan &installed,
+                        const fs::path &directory);
 void uninstall_addon(const fs::path &root, const Install &install,
                      std::string_view sku);
 std::vector<std::string> owning_accounts(const std::vector<meta::Game> &games,
