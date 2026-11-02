@@ -434,6 +434,84 @@ TEST_CASE("VrApi projection FOV covers only each eye's texture rect") {
   }
 }
 
+TEST_CASE("VrApi projection sends each eye only the part of a symmetric frustum inside the host view") {
+  // Quest 3 over Link: host eyes -54..+40 / -40..+54 by +44..-55 degrees. The
+  // guest renders the symmetric frustum vrapi.cpp reports, +-54 by +-55
+  // (VrApi_Helpers.h TanAngleMatrixFromProjection), in GLES and in Vulkan rows.
+  constexpr float degree = std::numbers::pi_v<float> / 180;
+  const XrFovf host[2]{{-54 * degree, 40 * degree, 44 * degree, -55 * degree},
+                       {-40 * degree, 54 * degree, 44 * degree, -55 * degree}};
+  XrView eyes[2]{{XR_TYPE_VIEW}, {XR_TYPE_VIEW}};
+  for (int eye = 0; eye < 2; ++eye) {
+    eyes[eye].pose = {{0, 0, 0, 1}, {eye ? .031f : -.031f, 0, 0}};
+    eyes[eye].fov = host[eye];
+  }
+  auto tan_angles = [](float h, float v, bool vulkan) {
+    vr::abi::Matrix m{};
+    m.m[0][0] = .5f / std::tan(h);  // .5 * P[0][0] of a symmetric projection
+    m.m[0][2] = -.5f;
+    m.m[1][1] = (vulkan ? -.5f : .5f) / std::tan(v);
+    m.m[1][2] = -.5f;
+    m.m[2][2] = -1;
+    return m;
+  };
+  std::vector<vr::abi::Rect> rects;
+  auto image = [&](vr::abi::TextureSwapChain *, int, vr::abi::Rect rect, int, bool, XrSwapchainSubImage &) {
+    rects.push_back(rect);
+    return XR_SUCCESS;
+  };
+  vr::abi::Projection projection{};
+  projection.header = {1, 0, {1, 1, 1, 1}, 1, 0, 0};
+  projection.head.pose.orientation.w = 1;
+  const float h54 = std::tan(54 * degree), h40 = std::tan(40 * degree);
+  const float v55 = std::tan(55 * degree), v44 = std::tan(44 * degree);
+  const float inner = (h40 + h54) / (2 * h54), top = (v44 + v55) / (2 * v55);
+  for (bool vulkan : {false, true}) {
+    CAPTURE(vulkan);
+    for (auto &t : projection.textures) {
+      t.tan_angles = tan_angles(54 * degree, 55 * degree, vulkan);
+      t.rect = {0, 0, 1, 1};
+    }
+    rects.clear();
+    vr::LayerStorage storage;
+    std::vector<const XrCompositionLayerBaseHeader *> layers;
+    REQUIRE(vr::translate_layer(projection.header, eyes, image, storage, layers) == XR_SUCCESS);
+    REQUIRE(rects.size() == 2);
+    for (int eye = 0; eye < 2; ++eye) {
+      CAPTURE(eye);
+      const auto &fov = storage.views[eye].fov;
+      CHECK(fov.angleLeft == doctest::Approx(host[eye].angleLeft).epsilon(1e-5));
+      CHECK(fov.angleRight == doctest::Approx(host[eye].angleRight).epsilon(1e-5));
+      CHECK(fov.angleUp == doctest::Approx(host[eye].angleUp).epsilon(1e-5));
+      CHECK(fov.angleDown == doctest::Approx(host[eye].angleDown).epsilon(1e-5));
+      // The left eye loses the right of the image, the right eye its left;
+      // both lose the top, which is T = 1 in GLES rows and T = 0 in Vulkan's.
+      CHECK(rects[eye].x == doctest::Approx(eye ? 1 - inner : 0));
+      CHECK(rects[eye].width == doctest::Approx(inner));
+      CHECK(rects[eye].y == doctest::Approx(vulkan ? 1 - top : 0));
+      CHECK(rects[eye].height == doctest::Approx(top));
+    }
+  }
+  // A guest frustum inside the host's view on every side keeps its whole rect.
+  for (auto &t : projection.textures) {
+    t.tan_angles = tan_angles(30 * degree, 30 * degree, false);
+    t.rect = {0, 0, 1, 1};
+  }
+  rects.clear();
+  vr::LayerStorage storage;
+  std::vector<const XrCompositionLayerBaseHeader *> layers;
+  REQUIRE(vr::translate_layer(projection.header, eyes, image, storage, layers) == XR_SUCCESS);
+  for (int eye = 0; eye < 2; ++eye) {
+    CAPTURE(eye);
+    CHECK(rects[eye].x == 0);
+    CHECK(rects[eye].y == 0);
+    CHECK(rects[eye].width == 1);
+    CHECK(rects[eye].height == 1);
+    CHECK(storage.views[eye].fov.angleLeft == doctest::Approx(-30 * degree));
+    CHECK(storage.views[eye].fov.angleUp == doctest::Approx(30 * degree));
+  }
+}
+
 TEST_CASE("VrApi head-locked projections become one head-locked quad per eye") {
   // The Climb 2's loading layer: FIXED_TO_VIEW, alpha-blended, the central 60%
   // of a 90-degree frustum, here shifted left to make it asymmetric.

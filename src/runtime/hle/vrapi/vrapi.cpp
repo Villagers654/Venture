@@ -288,7 +288,8 @@ Matrix view_matrix(XrPosef p) {
 // symmetric frustum: CryEngine's mobile plugin (The Climb 2) does, and its eyes
 // do not converge with a host's asymmetric one (Quest 3 over Virtual Desktop:
 // -54/+40 degrees). Report the symmetric frustum covering the host's; projection
-// layers return the matching tan-angle matrix, so the host still gets every ray.
+// layers return the matching tan-angle matrix, so the host still gets every ray
+// (layers.cpp fit_host_view sends each eye only the rays inside its view).
 XrFovf symmetric(XrFovf f) {
   const float h = std::max(std::abs(f.angleLeft), std::abs(f.angleRight));
   const float v = std::max(std::abs(f.angleUp), std::abs(f.angleDown));

@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <limits>
 #include <numbers>
+#include <utility>
 
 namespace venture::hle::vrapi {
 namespace {
@@ -81,6 +82,38 @@ XrResult fov(const Matrix &m, const Rect &rect, XrFovf &out, XrQuaternionf &orie
          std::max(y0, y1), std::min(y0, y1)};
   bottom_up = sy > 0;
   return XR_SUCCESS;
+}
+// The Meta PC runtime over Link (OpenXR runtime "Oculus" 1.208, Quest 3)
+// shows a projection view's image rect across the display's own field of
+// view, whatever fov the view sends. The symmetric frustum vrapi.cpp reports
+// (-54..+54 degrees for a -54..+40 eye) then reached each eye stretched and
+// about 15 degrees off, outwards: a cross-eyed world. Narrow the rect to the
+// part inside the host's view; fov() then gives that part's frustum, the same
+// rays on every runtime. A side where the guest frustum is the narrower keeps
+// its edge. A rotated plane's tangents are not the eye's: leave it whole.
+void fit_host_view(Rect &rect, const XrFovf &guest, bool bottom_up, XrQuaternionf orientation,
+                   const XrFovf &host) {
+  if (!(host.angleLeft < host.angleRight && host.angleDown < host.angleUp) ||
+      1 - std::abs(orientation.w) > 1e-6f)
+    return;
+  const float l = std::tan(guest.angleLeft), r = std::tan(guest.angleRight);
+  const float u = std::tan(guest.angleUp), d = std::tan(guest.angleDown);
+  // S/Q and T/Q are affine in a ray's tangents (fov()).
+  auto part = [](float host_tan, float low, float high) {
+    return std::clamp((host_tan - low) / (high - low), 0.f, 1.f);
+  };
+  const float s0 = part(std::tan(host.angleLeft), l, r), s1 = part(std::tan(host.angleRight), l, r);
+  // bottom_up: T grows upwards, from the frustum's bottom edge.
+  float t0 = part(std::tan(host.angleDown), d, u), t1 = part(std::tan(host.angleUp), d, u);
+  if (!bottom_up) {
+    t0 = 1 - t0;
+    t1 = 1 - t1;
+    std::swap(t0, t1);
+  }
+  if (s1 <= s0 || t1 <= t0)
+    return;
+  rect = {rect.x + s0 * rect.width, rect.y + t0 * rect.height, (s1 - s0) * rect.width,
+          (t1 - t0) * rect.height};
 }
 XrQuaternionf quaternion(const float (&r)[3][3]) {
   XrQuaternionf q{};
@@ -238,14 +271,19 @@ XrResult translate_layer(const LayerHeader &header, const XrView *eyes, LayerIma
       auto &view = dst.views[eye];
       XrQuaternionf orientation{0, 0, 0, 1};
       bool bottom_up = api_bottom_up;
-      auto r = fov(t.tan_angles, t.rect, view.fov, orientation, bottom_up);
+      Rect rect = t.rect;
+      auto r = fov(t.tan_angles, rect, view.fov, orientation, bottom_up);
       if (XR_FAILED(r)) {
         if (!constant_projection(t, header.flags)) return r;
         view.fov = eyes[eye].fov;
         ++constant;
+      } else {
+        fit_host_view(rect, view.fov, bottom_up, orientation, eyes[eye].fov);
+        r = fov(t.tan_angles, rect, view.fov, orientation, bottom_up);
+        if (XR_FAILED(r)) return r;
       }
       view.pose = compose(compose(head(src.head), eyes[eye].pose), {orientation, {0, 0, 0}});
-      r = image(t.chain, t.index, t.rect, eye, bottom_up, view.subImage);
+      r = image(t.chain, t.index, rect, eye, bottom_up, view.subImage);
       if (XR_FAILED(r))
         return r;
     }
