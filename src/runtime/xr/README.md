@@ -94,8 +94,9 @@ session's real space warp state, so titles render every frame at the host rate.
   `XR_FB_passthrough` compatibility declaration: without a usable backend its
   properties report unsupported and creation fails. A64 passthrough is available through a
   real host extension or the experimental Steam Link reconstruction backend
-  selected in **Settings → Runtime → Steam Frame passthrough**. `configure_game`
-  snapshots that saved default-off preference before XR initialization; no file
+  selected in **Settings → Runtime → Passthrough (mixed reality)**. `configure_game`
+  captures `VENTURE_PASSTHROUGH=1` before XR initialization (unset or `0` disables
+  both backends); no file
   I/O or environment lookup occurs in the frame-time selector. See
   [mixed reality](../../../docs/MIXED_REALITY.md) for its supported
   layouts, test evidence and hardware validation status. There are no fabricated

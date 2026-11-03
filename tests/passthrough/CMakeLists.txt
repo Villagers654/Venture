@@ -105,6 +105,11 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
   target_link_options(venture_passthrough_tests PRIVATE -Wl,--gc-sections)
 endif()
 enable_testing()
+add_executable(venture_passthrough_selection_tests backend_selection.cpp
+  ${venture_root}/src/runtime/xr/steam_link.cpp)
+target_include_directories(venture_passthrough_selection_tests PRIVATE
+  "${venture_root}/src" "${venture_root}/src/runtime")
+add_test(NAME passthrough_backend_selection COMMAND venture_passthrough_selection_tests)
 add_test(NAME passthrough COMMAND venture_passthrough_tests)
 add_test(NAME xr_codegen COMMAND Python3::Interpreter "${venture_root}/tools/codegen/xr_generate.py"
   --registry "${openxr_headers_SOURCE_DIR}/specification/registry/xr.xml" --check)

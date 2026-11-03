@@ -228,16 +228,20 @@ game headlessly through the Install action (owner selection, download job and
 plan.json), waits for the download and the rescan, writes an `install` section in
 the report and exits 0 when the install is complete. `--smoke-seconds` bounds it.
 
-## Steam Frame passthrough setting
+## Passthrough setting
 
-**Settings → Runtime → Steam Frame passthrough** is an explicit, default-off
-preference (`steamFramePassthrough` in `settings.json`). Its adjacent Info button
-states Steam Frame only and links [Steam Link Native Passthrough](https://github.com/McFredward/steam-link-native-passthrough).
-The checkbox is disabled outside Windows; the project information remains accessible.
+**Settings → Runtime → Passthrough (mixed reality)** is an explicit, default-off
+preference (`passthrough` in `settings.json`). It gates both native host
+`XR_FB_passthrough` forwarding and the Steam Frame over Steam Link backend.
+The old `steamFramePassthrough` preference is accepted when the new key is absent;
+saving writes the new key. The Info button describes the Steam Frame companion
+requirements and links [Steam Link Native Passthrough](https://github.com/McFredward/steam-link-native-passthrough).
 
-The runtime reads the saved value once in `configure_game`, before XR initialization,
-so normal UI and Steam/direct launches use the same preference. A running game
-does not change modes when the launcher setting changes. No environment variable
-selects this backend. The compatibility CMD only opens the normal launcher.
-The optional CLI key `steam-frame-passthrough on|off` edits that same saved preference.
+For each game launch, including Steam shortcuts, `core.cpp` passes
+`VENTURE_PASSTHROUGH=1` or `0` to the child, overriding inherited values.
+`configure_game` captures that value before XR initialization without reading
+launcher settings. A running game keeps its launch-time choice. Direct runtime
+invocation defaults off unless `VENTURE_PASSTHROUGH=1` is supplied explicitly.
+The CLI key `passthrough on|off` edits the saved preference; the old
+`steam-frame-passthrough` spelling remains an alias.
 See [mixed reality](../../docs/MIXED_REALITY.md) for required companions and limits.

@@ -5,7 +5,7 @@
 namespace venture::xr {
 bool steam_link_passthrough_configured() {
 #ifdef _WIN32
-  return process_config().steam_frame_passthrough && process_config().isa() == GuestIsa::a64 &&
+  return process_config().passthrough && process_config().isa() == GuestIsa::a64 &&
          host_xr().runtime_name.find("SteamVR") != std::string::npos;
 #else
   return false;

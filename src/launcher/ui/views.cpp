@@ -1770,22 +1770,16 @@ void App::draw_settings() {
   divider();
   // Format public product content without classifying its owner as a build-account path.
   static const auto passthrough_project = std::format("https://github.com/{}/{}", "McFredward", "steam-link-native-passthrough");
-  setting_row("Steam Frame passthrough",
-              "Steam Frame only, over Steam Link. Requires Steam Link Native Passthrough. "
+  setting_row("Passthrough (mixed reality)",
+              "Lets supported games show your surroundings when your VR runtime supports it. "
               "Applies to the next game launch.", s(108), s(24), [&] {
     if (button("Info##steam-frame", 0, Tone::secondary, {s(52), s(24)}))
       action([] { open_url(passthrough_project); });
     if (ImGui::IsItemHovered())
-      tooltip(std::format("For Steam Frame only. Requires a Windows PC with NVIDIA and the PC/Frame companions. "
+      tooltip(std::format("Steam Frame over Steam Link requires a Windows PC with NVIDIA and the PC/Frame companions. "
               "Click to open Steam Link Native Passthrough:\n{}", passthrough_project));
     ImGui::SameLine(0, s(12));
-#ifndef _WIN32
-    ImGui::BeginDisabled();
-#endif
-    if (toggle("steam-frame-passthrough", &settings_.steam_frame_passthrough)) action([&] { save_settings(); });
-#ifndef _WIN32
-    ImGui::EndDisabled();
-#endif
+    if (toggle("passthrough", &settings_.passthrough)) action([&] { save_settings(); });
   });
   divider();
   setting_row("Show runtime console", "Opens a console window with live output when a game starts.", s(44), s(24), [&] {

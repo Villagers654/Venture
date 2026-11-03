@@ -79,9 +79,7 @@ add_executable(venture_launcher_settings_tests EXCLUDE_FROM_ALL
   ${PROJECT_SOURCE_DIR}/tests/test_main.cpp
   ${PROJECT_SOURCE_DIR}/tests/launcher_settings_test.cpp)
 target_link_libraries(venture_launcher_settings_tests PRIVATE venture_common doctest::doctest)
-if(WIN32)
-  target_sources(venture_launcher_settings_tests PRIVATE
-    ${PROJECT_SOURCE_DIR}/src/runtime/xr/steam_link.cpp
-    ${PROJECT_SOURCE_DIR}/src/runtime/core/device_identity.cpp)
-  target_include_directories(venture_launcher_settings_tests PRIVATE ${PROJECT_SOURCE_DIR}/src/runtime)
-endif()
+add_executable(venture_passthrough_launch_probe EXCLUDE_FROM_ALL
+  ${PROJECT_SOURCE_DIR}/tests/passthrough/launch_probe.cpp)
+target_link_libraries(venture_passthrough_launch_probe PRIVATE venture_common)
+add_dependencies(venture_launcher_settings_tests venture_passthrough_launch_probe)

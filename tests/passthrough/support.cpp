@@ -78,7 +78,7 @@ Session& session() { static Session value; return value; }
 void Session::finish_host_end() {}
 XrImages* xr_images() { return nullptr; }
 #endif
-bool steam_link_passthrough_configured() { return test::passthrough::configured && process_config().steam_frame_passthrough && process_config().isa() == GuestIsa::a64; }
+bool steam_link_passthrough_configured() { return test::passthrough::configured && process_config().passthrough && process_config().isa() == GuestIsa::a64; }
 struct SteamLinkSource::Impl { std::uint64_t lease = 0; };
 SteamLinkSource::SteamLinkSource() : impl_(std::make_unique<Impl>()) {}
 SteamLinkSource::~SteamLinkSource() { test::passthrough::requested = false; }
@@ -131,6 +131,13 @@ XrResult XRAPI_CALL resolve(XrInstance, const char* name, PFN_xrVoidFunction* ou
 XrResult XRAPI_CALL xrGetSystemProperties(XrInstance, XrSystemId, XrSystemProperties* properties) {
   properties->graphicsProperties.maxSwapchainImageWidth = venture::test::passthrough::maximum_width;
   properties->graphicsProperties.maxSwapchainImageHeight = venture::test::passthrough::maximum_height;
+  for (auto* node = static_cast<XrBaseOutStructure*>(properties->next); node; node = node->next) {
+    if (node->type == XR_TYPE_SYSTEM_PASSTHROUGH_PROPERTIES_FB)
+      reinterpret_cast<XrSystemPassthroughPropertiesFB*>(node)->supportsPassthrough = XR_TRUE;
+    if (node->type == XR_TYPE_SYSTEM_PASSTHROUGH_PROPERTIES2_FB)
+      reinterpret_cast<XrSystemPassthroughProperties2FB*>(node)->capabilities =
+          XR_PASSTHROUGH_CAPABILITY_BIT_FB | XR_PASSTHROUGH_CAPABILITY_COLOR_BIT_FB;
+  }
   return XR_SUCCESS;
 }
 XrResult XRAPI_CALL xrEnumerateSwapchainImages(XrSwapchain handle, std::uint32_t capacity, std::uint32_t* count, XrSwapchainImageBaseHeader* out) {
@@ -167,7 +174,7 @@ using namespace hle::openxr;
 Fixture::Fixture() {
   configured = withdrawal_complete = true; maximum_width = maximum_height = 0; requested = grant = false; requests = native_creates = native_destroys = host_acquires = 0; native_result = XR_SUCCESS;
   process_config().abi = "arm64-v8a";
-  process_config().steam_frame_passthrough = true;
+  process_config().passthrough = true;
   state().enabled = {"XR_FB_passthrough", "XR_FB_composition_layer_image_layout"};
   track_handle(target, "XrSession", reinterpret_cast<XrInstance>(1)); track_handle(space, "XrSpace", target);
   auto& gpu = gfx::gpu_device();

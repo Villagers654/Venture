@@ -78,6 +78,7 @@ VkResult flush_queue_submissions(VkDevice, std::uint32_t, std::uint32_t) { retur
 }
 namespace xr {
 void remember_display_period(std::int64_t) {}
+void remember_eye_fov(const std::array<XrFovf, 2>&) {}
 void dev_dump_frame(const XrFrameEndInfo*, XrResult) {}
 void note_menu_profiles_changed(XrSession) {}
 XrResult time_to_monotonic(XrTime value, std::int64_t* out) { *out=value;return XR_SUCCESS; }
@@ -91,6 +92,14 @@ XrResult XRAPI_CALL xrLocateSpace(XrSpace, XrSpace, XrTime, XrSpaceLocation*) { 
 XrResult XRAPI_CALL xrLocateViews(XrSession, const XrViewLocateInfo*, XrViewState*, std::uint32_t, std::uint32_t*, XrView*) { return XR_ERROR_FUNCTION_UNSUPPORTED; }
 XrResult XRAPI_CALL xrEnumerateEnvironmentBlendModes(XrInstance, XrSystemId, XrViewConfigurationType, std::uint32_t capacity, std::uint32_t* count, XrEnvironmentBlendMode* out) {
   *count=1;if(capacity)out[0]=XR_ENVIRONMENT_BLEND_MODE_OPAQUE;return XR_SUCCESS;
+}
+XrResult XRAPI_CALL xrEnumerateViewConfigurationViews(XrInstance, XrSystemId, XrViewConfigurationType,
+    std::uint32_t capacity, std::uint32_t* count, XrViewConfigurationView* out) {
+  *count = 2;
+  if (!capacity) return XR_SUCCESS;
+  if (capacity < 2) return XR_ERROR_SIZE_INSUFFICIENT;
+  for (unsigned i = 0; i < 2; ++i) out[i].maxImageRectWidth = out[i].maxImageRectHeight = 4096;
+  return XR_SUCCESS;
 }
 
 XrResult XRAPI_CALL xrCreateSwapchain(XrSession target, const XrSwapchainCreateInfo* info, XrSwapchain* out) {

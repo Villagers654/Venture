@@ -24,5 +24,13 @@ foreach(target IN ITEMS venture_pipe_fixture venture_steam_link_transport_tests)
 endforeach()
 target_link_libraries(venture_steam_link_transport_tests PRIVATE nlohmann_json::nlohmann_json bcrypt)
 enable_testing()
+add_executable(venture_passthrough_selection_tests ../passthrough/backend_selection.cpp
+  "${venture_root}/src/runtime/xr/steam_link.cpp")
+target_include_directories(venture_passthrough_selection_tests PRIVATE
+  "${venture_root}/src" "${venture_root}/src/runtime")
+if(MINGW)
+  target_link_options(venture_passthrough_selection_tests PRIVATE -static)
+endif()
+add_test(NAME passthrough_backend_selection COMMAND venture_passthrough_selection_tests)
 add_test(NAME steam_link_real_windows_transport COMMAND venture_steam_link_transport_tests "$<TARGET_FILE:venture_pipe_fixture>")
 set_tests_properties(steam_link_real_windows_transport PROPERTIES TIMEOUT 90)

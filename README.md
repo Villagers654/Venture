@@ -53,10 +53,12 @@ Mods that replace a game's expansion file (OBB), such as RE4 VR Definitive Editi
 
 ### Steam Frame mixed reality
 
-Quest OpenXR reconstruction passthrough can be enabled in **Settings → Runtime →
-Steam Frame passthrough**. This integration is **Steam Frame only** and requires
-[Steam Link Native Passthrough](https://github.com/McFredward/steam-link-native-passthrough).
-See [supported configuration and limitations](docs/MIXED_REALITY.md).
+A64 Quest OpenXR passthrough can be enabled in **Settings → Runtime →
+Passthrough (mixed reality)** (off by default). A host runtime that exposes
+`XR_FB_passthrough` uses native forwarding. The **Steam Frame over Steam Link**
+backend requires [Steam Link Native Passthrough](https://github.com/McFredward/steam-link-native-passthrough)
+and Windows x64, NVIDIA, HEVC and SteamVR. See [mixed reality](docs/MIXED_REALITY.md)
+for setup, supported layouts and hardware test status.
 
 ### Something wrong?
 

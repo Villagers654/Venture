@@ -18,7 +18,8 @@ std::map<XrPassthroughLayerFB, std::unique_ptr<Layer>> layers;
 std::map<XrGeometryInstanceFB, Geometry> geometries;
 std::unique_ptr<SteamLinkSource> source;
 bool native() {
-  return process_config().isa() == GuestIsa::a64 && host_xr().enabled_extensions.contains("XR_FB_passthrough");
+  return process_config().passthrough && process_config().isa() == GuestIsa::a64 &&
+         host_xr().enabled_extensions.contains("XR_FB_passthrough");
 }
 void withdraw() { if (source) source->request(false); }
 XrResult validate_passthrough_info(const void* pointer, XrStructureType type) {
@@ -46,14 +47,15 @@ bool local_passthrough() { return !native() && steam_link_passthrough_configured
 void withdraw_passthrough_source() { withdraw(); }
 void suspend_passthrough_source() { session().passthrough_suspended = true; withdraw(); }
 bool passthrough_properties(XrBaseOutStructure* property) {
-  if (!local_passthrough() || !enabled("XR_FB_passthrough")) return false;
+  if (!enabled("XR_FB_passthrough") || native()) return false;
+  const bool supported = local_passthrough();
   if (property->type == XR_TYPE_SYSTEM_PASSTHROUGH_PROPERTIES_FB) {
-    reinterpret_cast<XrSystemPassthroughPropertiesFB*>(property)->supportsPassthrough = XR_TRUE;
+    reinterpret_cast<XrSystemPassthroughPropertiesFB*>(property)->supportsPassthrough = supported ? XR_TRUE : XR_FALSE;
     return true;
   }
   if (property->type == XR_TYPE_SYSTEM_PASSTHROUGH_PROPERTIES2_FB) {
     reinterpret_cast<XrSystemPassthroughProperties2FB*>(property)->capabilities =
-        XR_PASSTHROUGH_CAPABILITY_BIT_FB | XR_PASSTHROUGH_CAPABILITY_COLOR_BIT_FB;
+        supported ? XR_PASSTHROUGH_CAPABILITY_BIT_FB | XR_PASSTHROUGH_CAPABILITY_COLOR_BIT_FB : 0;
     return true;
   }
   return false;

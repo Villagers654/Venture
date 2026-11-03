@@ -95,18 +95,33 @@ TEST_CASE("Passthrough keeps the upstream compatibility declaration without a us
   fixture.create(true);
   CHECK(capabilities().contains("XR_FB_passthrough"));
 }
-TEST_CASE("Saved Steam Frame opt-out retains unsupported upstream API compatibility") {
+TEST_CASE("Passthrough opt-out blocks native and local creation and properties") {
   Fixture fixture;
   REQUIRE(capabilities().contains("XR_FB_passthrough"));
-  process_config().steam_frame_passthrough = false;
-  CHECK(capabilities().contains("XR_FB_passthrough"));
-  XrPassthroughCreateInfoFB create{XR_TYPE_PASSTHROUGH_CREATE_INFO_FB};
-  XrPassthroughFB feature{};
-  CHECK(guest::xrCreatePassthroughFB(target, &create, &feature) == XR_ERROR_FEATURE_UNSUPPORTED);
-  CHECK_FALSE(requested);
-  // A native host capability remains independent of this Steam Frame option.
+  process_config().passthrough = false;
+  for (const bool native : {false, true}) {
+    if (native) xr::host_xr().enabled_extensions.insert("XR_FB_passthrough");
+    CHECK(capabilities().contains("XR_FB_passthrough"));
+    CHECK_FALSE(local_passthrough());
+    XrSystemPassthroughProperties2FB newer{XR_TYPE_SYSTEM_PASSTHROUGH_PROPERTIES2_FB, nullptr, ~XrPassthroughCapabilityFlagsFB(0)};
+    XrSystemPassthroughPropertiesFB older{XR_TYPE_SYSTEM_PASSTHROUGH_PROPERTIES_FB, &newer, XR_TRUE};
+    CHECK(passthrough_properties(reinterpret_cast<XrBaseOutStructure*>(&older)));
+    CHECK(passthrough_properties(reinterpret_cast<XrBaseOutStructure*>(&newer)));
+    CHECK(older.supportsPassthrough == XR_FALSE); CHECK(older.next == &newer);
+    CHECK(newer.capabilities == 0);
+    XrPassthroughCreateInfoFB create{XR_TYPE_PASSTHROUGH_CREATE_INFO_FB};
+    XrPassthroughFB feature{};
+    CHECK(guest::xrCreatePassthroughFB(target, &create, &feature) == XR_ERROR_FEATURE_UNSUPPORTED);
+    XrPassthroughLayerCreateInfoFB layer_create{XR_TYPE_PASSTHROUGH_LAYER_CREATE_INFO_FB};
+    XrPassthroughLayerFB layer{};
+    CHECK(guest::xrCreatePassthroughLayerFB(target, &layer_create, &layer) == XR_ERROR_FEATURE_UNSUPPORTED);
+    CHECK(native_creates == 0); CHECK_FALSE(requested);
+  }
+  process_config().passthrough = true;
   fixture.create(true);
-  CHECK(capabilities().contains("XR_FB_passthrough"));
+  XrSystemPassthroughPropertiesFB older{XR_TYPE_SYSTEM_PASSTHROUGH_PROPERTIES_FB};
+  CHECK_FALSE(passthrough_properties(reinterpret_cast<XrBaseOutStructure*>(&older))); // host fills it
+  CHECK(native_creates == 1);
 }
 TEST_CASE("Passthrough lifecycle validates handles and refuses unimplemented camera effects") {
   Fixture fixture; fixture.create();

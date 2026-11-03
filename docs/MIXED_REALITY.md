@@ -1,20 +1,38 @@
-# Steam Frame passthrough via Steam Link
+# Passthrough (mixed reality)
 
-This integration supports A64 Quest OpenXR reconstruction passthrough on a
-Windows x64 PC, streamed over Steam Link to **Steam Frame only**. Install the
-separate PC/Frame companions from
-[Steam Link Native Passthrough](https://github.com/McFredward/steam-link-native-passthrough).
-The supported companion configuration uses NVIDIA, HEVC and SteamVR. The Frame
-supplies its camera image locally; camera video never enters Venture.
+Enable **Settings → Runtime → Passthrough (mixed reality)**. The preference
+defaults to off, gates both backends, and applies to the next game launch,
+including Steam launches. Existing `steamFramePassthrough` settings migrate to
+`passthrough`; an explicit new value takes precedence.
 
-Enable **Settings → Runtime → Steam Frame passthrough**. The saved preference
-defaults to off and applies to the next game launch, including Steam launches.
-The adjacent Info button names the Steam Frame restriction and opens the
-companion project. No environment variable enables or disables this setting.
-Native A64 `XR_FB_passthrough` is forwarded when the host supports it, independently
-of the Steam Frame option. The upstream compatibility declaration also remains
-available without a usable backend: properties report unsupported and creation
-fails, allowing extension-requiring games to run in ordinary VR.
+The launcher passes `VENTURE_PASSTHROUGH=1` or `0` on every launch, overriding
+inherited values. The runtime captures it once in `configure_game` before XR
+initialization and does not read the launcher's settings file. Direct runtime
+launches default off; only the exact value `1` opts in.
+
+## Backends
+
+- **Native OpenXR:** A64 `XR_FB_passthrough` calls and layers are forwarded when
+  the setting is on and the host actually exposes the extension. This refers to
+  a host-provided API, not color replacement. Meta documents
+  [Passthrough over Link](https://developers.meta.com/horizon/documentation/native/android/mobile-passthrough-over-link/)
+  as a developer feature with separate runtime toggles and a developer account.
+  Its presence does not establish that every Quest Link setup supports it.
+  Virtual Desktop's public VDXR extension table currently does not list
+  `XR_FB_passthrough`; its color-key feature alone does not provide this API.
+  Native runtime/headset behavior still needs hardware testing.
+- **Steam Frame over Steam Link:** Reconstruction passthrough on Windows x64,
+  with NVIDIA, HEVC and SteamVR, requires separate PC/Frame companions from
+  [Steam Link Native Passthrough](https://github.com/McFredward/steam-link-native-passthrough).
+  This backend supports **Steam Frame only**. The Frame supplies its camera
+  image locally; camera video never enters Venture. The setting's Info button
+  opens the companion project and describes these requirements.
+
+The upstream `XR_FB_passthrough` compatibility declaration remains available
+when the setting is off or no backend is usable: both property structures report
+unsupported and creation fails, allowing extension-requiring games to run in VR.
+Native support is never inferred just from a runtime's product name. The local
+Steam Link backend retains its SteamVR runtime-name check.
 
 ## Rendering and lifecycle
 
@@ -69,6 +87,8 @@ ports; guest frame/session functions and async ownership are not replaced.
 Cases include STOPPING → final EndFrame → EndSession → restart, MR exit,
 retirement, feature/layer pause and resume, normal float/MSAA images, depth
 chains and async host submission both after MR exit and with paused layers.
+Property tests exercise the production `xrGetSystemProperties` and creation entry
+points against a host that reports passthrough support, with the option off/on.
 Shader tests compare ordinary VR SPIR-V with the retained upstream shader using
 the same compiler. Pixel tests cover stereo slices, alpha, emission, opacity,
 host limits, cropping (including one-pixel edge crops after downscaling), and
@@ -82,7 +102,10 @@ remain enabled. Tests cover complete/fragmented/malformed replies, wrong nonce
 and PID, pending-I/O cancellation/destruction, late replies, server death,
 reconnect and fresh lease generations. No installed SteamVR registry is modified.
 
-The feature workflow also tests actual launcher settings and runs the unchanged
+The feature workflow is limited to relevant source/build/test paths on PRs and
+feature-branch pushes. It tests actual launcher settings and real `play` launches
+against a child probe, including contradictory inherited environment values, and
+runs the unchanged
 shipping scanner on the built Windows/Linux launchers with `McFredward` as a
 build identity. The public project link is formatted from plain product
 identifiers; the feature changes no global scanner exceptions.
@@ -91,7 +114,8 @@ identifiers; the feature changes no global scanner exceptions.
 
 The minimal test branch containing only passthrough plus the independent build
 scripts passed the user's Steam Frame hardware test before this rebase to Venture
-0.1.4 and the pause/crop fixes. Those latest changes still need a headset test. Automated
+current upstream main (`ae3ed1f`) and the follow-up fixes. This revision still
+needs a headset test. Automated
 checks do not replace a fresh headset test of startup, both eyes, MR/VR toggles,
 headset sleep, session restart, overlays and companion disconnect/reconnect.
 

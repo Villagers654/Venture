@@ -1,8 +1,42 @@
 name: Passthrough integration
 on:
   pull_request:
+    paths:
+      - '.github/workflows/passthrough.yml'
+      - 'CMakeLists.txt'
+      - 'cmake/**'
+      - 'src/common/environment.*'
+      - 'src/common/library/**'
+      - 'src/launcher/**'
+      - 'src/runtime/core/process.*'
+      - 'src/runtime/hle/openxr/**'
+      - 'src/runtime/platform/win32/steam_link.cpp'
+      - 'src/runtime/xr/**'
+      - 'tests/launcher_settings_test.*'
+      - 'tests/passthrough/**'
+      - 'tests/steam_link_transport/**'
+      - 'tools/codegen/xr_generate.py'
+      - 'tools/codegen/vk_*.py'
+      - 'tools/package_release.py'
   push:
     branches: [feat/steam-link-passthrough, test/steam-frame-passthrough]
+    paths:
+      - '.github/workflows/passthrough.yml'
+      - 'CMakeLists.txt'
+      - 'cmake/**'
+      - 'src/common/environment.*'
+      - 'src/common/library/**'
+      - 'src/launcher/**'
+      - 'src/runtime/core/process.*'
+      - 'src/runtime/hle/openxr/**'
+      - 'src/runtime/platform/win32/steam_link.cpp'
+      - 'src/runtime/xr/**'
+      - 'tests/launcher_settings_test.*'
+      - 'tests/passthrough/**'
+      - 'tests/steam_link_transport/**'
+      - 'tools/codegen/xr_generate.py'
+      - 'tools/codegen/vk_*.py'
+      - 'tools/package_release.py'
   workflow_dispatch:
 permissions:
   contents: read
@@ -33,7 +67,7 @@ jobs:
         run: |
           cmake -S . -B build/launcher-settings -G Ninja -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_C_COMPILER=gcc-13 -DCMAKE_CXX_COMPILER=g++-13 \
-            -DVENTURE_BUILD_RUNTIME=OFF -DVENTURE_BUILD_TESTS=OFF \
+            -DVENTURE_BUILD_RUNTIME=OFF -DVENTURE_BUILD_TESTS=ON \
             -DSDL_WAYLAND=OFF -DSDL_X11=OFF -DSDL_UNIX_CONSOLE_BUILD=ON
           cmake --build build/launcher-settings --target venture venture-cli venture_launcher_settings_tests --parallel 2
           build/launcher-settings/bin/venture_launcher_settings_tests
@@ -73,7 +107,7 @@ jobs:
         run: |
           $compilerDir = "$pwd/.deps/llvm-mingw/bin".Replace('\', '/')
           $env:PATH = "$compilerDir;$env:PATH"
-          cmake -S . -B build/launcher-settings -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER="$compilerDir/clang.exe" -DCMAKE_CXX_COMPILER="$compilerDir/clang++.exe" -DCMAKE_RC_COMPILER="$compilerDir/llvm-rc.exe" -DVENTURE_BUILD_RUNTIME=OFF -DVENTURE_BUILD_TESTS=OFF
+          cmake -S . -B build/launcher-settings -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER="$compilerDir/clang.exe" -DCMAKE_CXX_COMPILER="$compilerDir/clang++.exe" -DCMAKE_RC_COMPILER="$compilerDir/llvm-rc.exe" -DVENTURE_BUILD_RUNTIME=OFF -DVENTURE_BUILD_TESTS=ON
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           cmake --build build/launcher-settings --target venture venture-cli venture_launcher_settings_tests --parallel 2
           if ($LASTEXITCODE) { exit $LASTEXITCODE }

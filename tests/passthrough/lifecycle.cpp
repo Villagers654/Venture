@@ -2,6 +2,7 @@
 #include "lifecycle_host.h"
 #include "hle/openxr/openxr.h"
 #include "hle/openxr/passthrough.h"
+#include "core/process.h"
 #include <doctest/doctest.h>
 using namespace venture;
 using namespace venture::test::passthrough;
@@ -52,6 +53,26 @@ struct Submission {
   XrResult submit(Run& run) { info.displayTime=run.frame();return xg::xrEndFrame(target,&info); }
   void vr() {info.layerCount=1;info.layers=layers.data()+1;}
 };
+}
+TEST_CASE("Production system properties suppress native support when passthrough is off") {
+  Fixture fixture;
+  const auto instance = reinterpret_cast<XrInstance>(1);
+  hle::openxr::track_handle(instance, "XrInstance", XrInstance(XR_NULL_HANDLE));
+  xr::host_xr().enabled_extensions.insert("XR_FB_passthrough");
+  for (const bool opt_in : {false, true}) {
+    process_config().passthrough = opt_in;
+    XrSystemPassthroughProperties2FB newer{XR_TYPE_SYSTEM_PASSTHROUGH_PROPERTIES2_FB};
+    XrSystemPassthroughPropertiesFB older{XR_TYPE_SYSTEM_PASSTHROUGH_PROPERTIES_FB, &newer, XR_FALSE};
+    XrSystemProperties properties{XR_TYPE_SYSTEM_PROPERTIES, &older};
+    REQUIRE(xg::xrGetSystemProperties(instance, 1, &properties) == XR_SUCCESS);
+    CHECK(older.supportsPassthrough == (opt_in ? XR_TRUE : XR_FALSE));
+    CHECK(newer.capabilities == (opt_in ? XR_PASSTHROUGH_CAPABILITY_BIT_FB | XR_PASSTHROUGH_CAPABILITY_COLOR_BIT_FB : 0));
+    CHECK(properties.next == &older); CHECK(older.next == &newer);
+    XrPassthroughCreateInfoFB create{XR_TYPE_PASSTHROUGH_CREATE_INFO_FB};
+    XrPassthroughFB feature{};
+    CHECK(xg::xrCreatePassthroughFB(target, &create, &feature) == (opt_in ? XR_SUCCESS : XR_ERROR_FEATURE_UNSUPPORTED));
+    CHECK(native_creates == (opt_in ? 1 : 0));
+  }
 }
 TEST_CASE("Production STOPPING final xrEndFrame never reacquires cameras until a successful restart") {
   Run run;auto chain=run.chain();fill(chain,{{{1,0,0,.25f},{0,1,0,.75f}}});grant=true;

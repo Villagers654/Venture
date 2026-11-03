@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 #include "common/paths.h"
+#include "common/environment.h"
 #include "core/elf.h"
 #include "core/a32_coverage.h"
 #include "core/linker_runtime.h"
@@ -15,6 +16,7 @@
 #include <cstring>
 #include <fstream>
 #include <map>
+#include <optional>
 #include <set>
 
 using namespace venture;
@@ -299,7 +301,30 @@ TEST_CASE("APK slice selection prefers arm64 and confirms extracted ELF e_machin
     REQUIRE(mz_zip_writer_finalize_archive(&zip)); REQUIRE(mz_zip_writer_end(&zip));
     { std::ofstream plan(install / "plan.json");
       plan << "{\"package\":\"org.venture.nativeslices\",\"versionCode\":1,\"files\":[{\"kind\":\"apk\",\"name\":\"slice.apk\"}]}"; }
-    configure_game(install);
+    // The runtime gets a per-launch environment snapshot, never launcher JSON.
+    const auto* inherited = std::getenv("VENTURE_PASSTHROUGH");
+    const std::optional<std::string> previous_opt_in = inherited ? std::optional<std::string>(inherited) : std::nullopt;
+    const auto set_opt_in = [](const char* value) {
+#ifdef _WIN32
+      _putenv_s("VENTURE_PASSTHROUGH", value ? value : "");
+#else
+      if (value) setenv("VENTURE_PASSTHROUGH", value, 1); else unsetenv("VENTURE_PASSTHROUGH");
+#endif
+      environment::refresh();
+    };
+    struct RestoreOptIn {
+      decltype(set_opt_in)& set;
+      const std::optional<std::string>& previous;
+      ~RestoreOptIn() { set(previous ? previous->c_str() : nullptr); }
+    } restore_opt_in{set_opt_in, previous_opt_in};
+    for (const auto* value : {static_cast<const char*>(nullptr), "0", "true", " 1", "1"}) {
+      set_opt_in(value);
+      configure_game(install);
+      CHECK(process_config().passthrough == (value && std::string_view(value) == "1"));
+      // Changing the environment cannot change an already configured game.
+      set_opt_in(value && std::string_view(value) == "1" ? "0" : "1");
+      CHECK(process_config().passthrough == (value && std::string_view(value) == "1"));
+    }
     const auto expected = scenario == 0 ? GuestIsa::a64 : GuestIsa::a32;
     CHECK(process_config().isa() == expected);
     CHECK(process_config().guest_native_lib_dir() == (scenario == 0 ? "/data/app/org.venture.nativeslices/lib/arm64" : "/data/app/org.venture.nativeslices/lib/arm"));
