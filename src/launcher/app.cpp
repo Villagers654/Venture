@@ -110,6 +110,10 @@ App::App(Options options) : Core(std::move(options)) {
     page_ = 1;
   if (options_.smoke_view == "settings" || options_.smoke_view == "settings-end")
     page_ = 2;
+  if (options_.smoke_view == "passthrough-info") {
+    page_ = 2;
+    passthrough_info_requested_ = true;
+  }
   if (options_.smoke_view == "account")
     page_ = 3;
   if (options_.smoke_view == "import" || options_.smoke_view == "import-end")

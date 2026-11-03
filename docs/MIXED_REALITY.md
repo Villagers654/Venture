@@ -20,13 +20,18 @@ launches default off; only the exact value `1` opts in.
   Its presence does not establish that every Quest Link setup supports it.
   Virtual Desktop's public VDXR extension table currently does not list
   `XR_FB_passthrough`; its color-key feature alone does not provide this API.
-  Native runtime/headset behavior still needs hardware testing.
+  Native passthrough was tested on a Meta Quest 3 over Air Link, with the visual
+  issue described under hardware status below. Wired USB Link and native Virtual
+  Desktop passthrough were not tested.
 - **Steam Frame over Steam Link:** Reconstruction passthrough on Windows x64,
   with NVIDIA, HEVC and SteamVR, requires separate PC/Frame companions from
   [Steam Link Native Passthrough](https://github.com/McFredward/steam-link-native-passthrough).
   This backend supports **Steam Frame only**. The Frame supplies its camera
-  image locally; camera video never enters Venture. The setting's Info button
-  opens the companion project and describes these requirements.
+  image locally; camera video never enters Venture.
+
+The setting's Info button opens a dialog with separate Quest Link / Air Link and
+Steam Frame setup cards. Each card explains its requirements and links to the
+corresponding setup guide or companion project.
 
 The upstream `XR_FB_passthrough` compatibility declaration remains available
 when the setting is off or no backend is usable: both property structures report
@@ -114,10 +119,23 @@ identifiers; the feature changes no global scanner exceptions.
 
 The minimal test branch containing only passthrough plus the independent build
 scripts passed the user's Steam Frame hardware test before this rebase to Venture
-current upstream main (`ae3ed1f`) and the follow-up fixes. This revision still
-needs a headset test. Automated
-checks do not replace a fresh headset test of startup, both eyes, MR/VR toggles,
-headset sleep, session restart, overlays and companion disconnect/reconnect.
+current upstream main (`ae3ed1f`) and the follow-up fixes. That Frame test did not
+show displaced black silhouettes. The latest rebase and follow-up fixes have not
+had a fresh Frame hardware run.
+
+The native path was subsequently tested on a Meta Quest 3 over Air Link with
+Oculus runtime 1.208.0. Passthrough initialized and displayed successfully; the
+logs report no `xrEndFrame` errors through the last reported count of 4,200
+frames, with submission settling at approximately 72 FPS. A visual defect remains:
+displaced black silhouettes appear beside game elements and Air Link's own menu
+elements displayed over passthrough. The displacement persists while stationary,
+increases with viewing distance, and was not resolved by disabling Sliced Encoding.
+
+These observations suggest a shared Meta/Air Link composition or mask-projection
+issue, but the cause is unconfirmed and an interaction with Venture's submitted
+layers has not been ruled out. Successful API calls do not establish correct
+visual composition. Wired USB Link and native Virtual Desktop passthrough were
+not tested.
 
 Launcher pacing, Unity compatibility fixes, preview migration, FFmpeg discovery
 and scanner policy are separate PR branches. They are not required source changes

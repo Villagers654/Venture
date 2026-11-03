@@ -213,7 +213,7 @@ For repeatable live verification (no game downloads), run:
 ```powershell
 build/windows-release/bin/venture.exe --smoke-seconds 30 --smoke-report out/smoke.json
 # Optional: --smoke-details, --smoke-play, --smoke-auth,
-#           --smoke-view settings|account|downloads
+#           --smoke-view settings|passthrough-info|account|downloads
 .deps/cmake/bin/cmake --build --preset windows-release --target venture_launcher_live_check
 build/windows-release/bin/venture_launcher_live_check.exe --read-only-meta
 ```
@@ -234,8 +234,10 @@ the report and exits 0 when the install is complete. `--smoke-seconds` bounds it
 preference (`passthrough` in `settings.json`). It gates both native host
 `XR_FB_passthrough` forwarding and the Steam Frame over Steam Link backend.
 The old `steamFramePassthrough` preference is accepted when the new key is absent;
-saving writes the new key. The Info button describes the Steam Frame companion
-requirements and links [Steam Link Native Passthrough](https://github.com/McFredward/steam-link-native-passthrough).
+saving writes the new key. The Info button opens an in-app dialog with separate
+Quest Link / Air Link and Steam Frame cards. It explains the Meta developer
+requirements and the Frame companion setup, with links to Meta's setup guide and
+[Steam Link Native Passthrough](https://github.com/McFredward/steam-link-native-passthrough).
 
 For each game launch, including Steam shortcuts, `core.cpp` passes
 `VENTURE_PASSTHROUGH=1` or `0` to the child, overriding inherited values.

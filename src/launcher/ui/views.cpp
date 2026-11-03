@@ -372,6 +372,7 @@ void App::draw() {
   draw_save_import();
   draw_cancel_download();
   draw_report();
+  draw_passthrough_info();
   draw_update();
   draw_remove_account();
   draw_install_ask();
@@ -1768,16 +1769,13 @@ void App::draw_settings() {
   setting_row("Runtime", "Leave empty to use the runtime that came with Venture.", field_w, s(38),
               input("##runtime", &settings_runtime_, "Included runtime"));
   divider();
-  // Format public product content without classifying its owner as a build-account path.
-  static const auto passthrough_project = std::format("https://github.com/{}/{}", "McFredward", "steam-link-native-passthrough");
   setting_row("Passthrough (mixed reality)",
               "Lets supported games show your surroundings when your VR runtime supports it. "
               "Applies to the next game launch.", s(108), s(24), [&] {
-    if (button("Info##steam-frame", 0, Tone::secondary, {s(52), s(24)}))
-      action([] { open_url(passthrough_project); });
+    if (button("Info##passthrough", 0, Tone::secondary, {s(52), s(24)}))
+      passthrough_info_requested_ = true;
     if (ImGui::IsItemHovered())
-      tooltip(std::format("Steam Frame over Steam Link requires a Windows PC with NVIDIA and the PC/Frame companions. "
-              "Click to open Steam Link Native Passthrough:\n{}", passthrough_project));
+      tooltip("Setup requirements for Quest Link and Steam Frame.");
     ImGui::SameLine(0, s(12));
     if (toggle("passthrough", &settings_.passthrough)) action([&] { save_settings(); });
   });
@@ -1910,6 +1908,63 @@ void App::draw_settings() {
   gap(30);
   // --smoke-view settings-end shows the bottom for screenshots.
   if (options_.smoke_view == "settings-end") ImGui::SetScrollHereY(1.0f);
+}
+
+void App::draw_passthrough_info() {
+  if (passthrough_info_requested_) {
+    ImGui::OpenPopup("Passthrough info");
+    passthrough_info_requested_ = false;
+  }
+  const auto* viewport = ImGui::GetMainViewport();
+  const float width = std::min(660.f, (viewport->WorkSize.x - s(32)) / ui::scale());
+  ImGui::SetNextWindowPos(viewport->GetWorkCenter(), ImGuiCond_Always, {0.5f, 0.5f});
+  ImGui::SetNextWindowSizeConstraints({s(width), 0}, {s(width), viewport->WorkSize.y - s(32)});
+  if (begin_dialog("Passthrough info", width)) {
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {s(10), s(4)});
+    g_dialog_w = ImGui::GetContentRegionAvail().x;
+    dialog_text("Passthrough (mixed reality)",
+                "See your surroundings in supported games. Both paths run your game on the PC. "
+                "Changes apply to the next game launch.");
+    gap(16);
+
+    constexpr std::string_view quest =
+        "Use Meta as your OpenXR runtime. Requires a Meta developer account and "
+        "Passthrough over Link enabled in the PC app's developer settings.";
+    constexpr std::string_view frame =
+        "Requires Windows x64, NVIDIA graphics, HEVC, SteamVR and both PC/Frame companions. "
+        "The Frame adds its camera view locally.";
+    const bool columns = g_dialog_w >= s(480);
+    const float card_w = columns ? (g_dialog_w - s(12)) * 0.5f : g_dialog_w;
+    const float body_h = std::max(measure(fonts().regular, kBody, quest, card_w - s(36)).y,
+                                  measure(fonts().regular, kBody, frame, card_w - s(36)).y);
+    auto setup_card = [&](const char* id, std::string_view label, std::string_view title,
+                          std::string_view message, const char* link, std::string_view url) {
+      begin_card(id, card_w, {18, 16}, color::bg);
+      text(fonts().semibold, kLabel, color::accent_text, label);
+      gap(2);
+      text(fonts().semibold, kHeading, color::text, title);
+      gap(6);
+      const float body_y = ImGui::GetCursorPosY();
+      text(fonts().regular, kBody, color::text2, message);
+      if (columns) ImGui::SetCursorPosY(body_y + body_h + ImGui::GetStyle().ItemSpacing.y);
+      gap(10);
+      if (button(link, icons::globe, Tone::secondary, {0, s(34)}))
+        action([url = std::string(url)] { open_url(url); });
+      end_card();
+    };
+    setup_card("passthrough-quest", "NATIVE PASSTHROUGH", "Quest Link / Air Link", quest, "Setup guide",
+               "https://developers.meta.com/horizon/documentation/native/android/mobile-passthrough-over-link/");
+    if (columns) ImGui::SameLine(0, s(12));
+    else gap(12);
+    // Format public product content without classifying its owner as a build-account path.
+    static const auto project = std::format("https://github.com/{}/{}", "McFredward", "steam-link-native-passthrough");
+    setup_card("passthrough-frame", "STEAM LINK COMPANIONS", "Steam Frame", frame, "Setup & companions", project);
+
+    if (dialog_footer({{"Done", Tone::primary}}) == 0 || ImGui::IsKeyPressed(ImGuiKey_Escape))
+      ImGui::CloseCurrentPopup();
+    ImGui::PopStyleVar();
+    end_dialog();
+  }
 }
 
 // ---------------------------------------------------------------------------
