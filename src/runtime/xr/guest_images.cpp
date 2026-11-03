@@ -316,8 +316,13 @@ XrResult GuestImages::drain() {
   return XR_SUCCESS;
 }
 XrResult GuestImages::copy(std::uint32_t index, VkImage target,
-                           VkFormat format, VkExtent2D extent, bool flip_rows) {
+                           VkFormat format, VkExtent2D extent, bool flip_rows, std::int32_t source_layer) {
   auto &s = *impl_;
+  const auto layer_count = s.info.arraySize * s.info.faceCount;
+  if (source_layer < -1 || (source_layer >= 0 && std::uint32_t(source_layer) >= layer_count))
+    return XR_ERROR_INDEX_OUT_OF_RANGE;
+  const auto copied_layers = source_layer < 0 ? layer_count : 1u;
+  const auto first_layer = source_layer < 0 ? 0u : std::uint32_t(source_layer);
   const bool scaled = extent.width && extent.height &&
                       (extent.width != s.info.width || extent.height != s.info.height);
   std::lock_guard slot_lock(s.mutex);
@@ -346,7 +351,7 @@ XrResult GuestImages::copy(std::uint32_t index, VkImage target,
     // The host chain has a single level (see prepare_swapchains); copy the base.
     constexpr std::uint32_t host_mips = 1;
     auto barrier = [&](VkImage image, VkImageLayout before,
-                       VkImageLayout after, std::uint32_t levels) {
+                       VkImageLayout after, std::uint32_t levels, std::uint32_t count) {
       VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
       b.image = image;
       b.oldLayout = before;
@@ -357,15 +362,14 @@ XrResult GuestImages::copy(std::uint32_t index, VkImage target,
               ? 0
               : VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
       b.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
-      b.subresourceRange = {s.aspects, 0, levels, 0,
-                            s.info.arraySize * s.info.faceCount};
+      b.subresourceRange = {s.aspects, 0, levels, 0, count};
       s.fn<PFN_vkCmdPipelineBarrier>("vkCmdPipelineBarrier")(
           slot.command, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
           VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr, 0, nullptr, 1, &b);
     };
-    barrier(slot.image, s.layout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, s.info.mipCount);
+    barrier(slot.image, s.layout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, s.info.mipCount, layer_count);
     barrier(target, VK_IMAGE_LAYOUT_UNDEFINED,
-            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, host_mips);
+            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, host_mips, copied_layers);
     if (format == VkFormat(s.info.format) && !scaled && !flip_rows) {
       for (const auto aspect :
            {VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_ASPECT_DEPTH_BIT,
@@ -374,9 +378,8 @@ XrResult GuestImages::copy(std::uint32_t index, VkImage target,
           continue;
         for (std::uint32_t mip = 0; mip < host_mips; ++mip) {
           VkImageCopy copy{};
-          copy.srcSubresource =
-              copy.dstSubresource = {VkImageAspectFlags(aspect), mip, 0,
-                                     s.info.arraySize * s.info.faceCount};
+          copy.srcSubresource = {VkImageAspectFlags(aspect), mip, first_layer, copied_layers};
+          copy.dstSubresource = {VkImageAspectFlags(aspect), mip, 0, copied_layers};
           copy.extent = {std::max(1u, s.info.width >> mip),
                          std::max(1u, s.info.height >> mip), 1};
           s.fn<PFN_vkCmdCopyImage>("vkCmdCopyImage")(
@@ -412,9 +415,8 @@ XrResult GuestImages::copy(std::uint32_t index, VkImage target,
               : VK_FILTER_NEAREST;
       for (std::uint32_t mip = 0; mip < host_mips; ++mip) {
         VkImageBlit blit{};
-        blit.srcSubresource =
-            blit.dstSubresource = {s.aspects, mip, 0,
-                                   s.info.arraySize * s.info.faceCount};
+        blit.srcSubresource = {s.aspects, mip, first_layer, copied_layers};
+        blit.dstSubresource = {s.aspects, mip, 0, copied_layers};
         blit.srcOffsets[1] = {int(std::max(1u, s.info.width >> mip)),
                               int(std::max(1u, s.info.height >> mip)), 1};
         blit.dstOffsets[1] =
@@ -428,8 +430,8 @@ XrResult GuestImages::copy(std::uint32_t index, VkImage target,
             target, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, filter);
       }
     }
-    barrier(slot.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, s.layout, s.info.mipCount);
-    barrier(target, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, s.layout, host_mips);
+    barrier(slot.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, s.layout, s.info.mipCount, layer_count);
+    barrier(target, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, s.layout, host_mips, copied_layers);
     if (s.queries)
       s.fn<PFN_vkCmdWriteTimestamp>("vkCmdWriteTimestamp")(
           slot.command, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, s.queries,

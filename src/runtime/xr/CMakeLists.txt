@@ -33,18 +33,20 @@ add_library(venture_xr_capture STATIC capture.cpp)
 target_include_directories(venture_xr_capture PUBLIC ${PROJECT_SOURCE_DIR}/src/runtime)
 target_link_libraries(venture_xr_capture PUBLIC Vulkan::Headers OpenXR::headers PRIVATE zlibstatic)
 
-add_library(venture_xr STATIC color_space.cpp color_images.cpp guest_images.cpp dev_dump.cpp session.cpp clock.cpp reference_spaces.cpp menu_chord.cpp bindings.cpp hands.cpp angle_images.cpp haptic_output.cpp haptic_sequence.cpp
+add_library(venture_xr STATIC steam_link.cpp color_space.cpp color_images.cpp guest_images.cpp dev_dump.cpp session.cpp clock.cpp reference_spaces.cpp menu_chord.cpp bindings.cpp hands.cpp angle_images.cpp haptic_output.cpp haptic_sequence.cpp
   ../hle/openxr/state.cpp ../hle/openxr/openxr.cpp ../hle/openxr/graphics.cpp
   ../hle/openxr/extensions.cpp ../hle/openxr/actions.cpp ../hle/openxr/register.cpp ../hle/openxr/hands.cpp
   ../hle/openxr/spaces.cpp ../hle/openxr/haptics.cpp
   ../hle/openxr/android_surface.cpp
+  ../hle/openxr/passthrough.cpp ../hle/openxr/passthrough_images.cpp
   ../hle/vrapi/vrapi.cpp ../hle/vrapi/swapchains.cpp ../hle/vrapi/input.cpp
   ../hle/vrapi/layers.cpp ../hle/vrapi/a32.cpp
   ../hle/vrapi/haptics.cpp
   ../hle/vrapi/vulkan_images.cpp
   ../hle/vrapi/properties.cpp ../hle/vrapi/integration.cpp ../hle/vrapi/register.cpp)
 if(WIN32)
-  target_sources(venture_xr PRIVATE ../platform/win32/xr_clock.cpp)
+  target_sources(venture_xr PRIVATE ../platform/win32/xr_clock.cpp ../platform/win32/steam_link.cpp)
+  target_link_libraries(venture_xr PRIVATE bcrypt)
 else()
   target_sources(venture_xr PRIVATE ../platform/posix/xr_clock.cpp)
 endif()
@@ -67,17 +69,20 @@ if(NOT TARGET Python3::Interpreter)
   find_package(Python3 REQUIRED COMPONENTS Interpreter)
 endif()
 set(color_generated ${CMAKE_CURRENT_BINARY_DIR}/generated)
-foreach(color_shader IN ITEMS vert frag ms_frag)
+foreach(color_shader IN ITEMS vert frag ms_frag passthrough_frag passthrough_ms_frag)
   if(color_shader STREQUAL "vert")
     set(color_source shaders/color.vert)
     set(color_defines)
   else()
     set(color_source shaders/color.frag)
-    if(color_shader STREQUAL "ms_frag")
+    if(color_shader MATCHES "(^|_)ms_frag$")
       set(color_defines -DMULTISAMPLE=1)
     else()
       set(color_defines)
     endif()
+  endif()
+  if(color_shader MATCHES "^passthrough_")
+    list(APPEND color_defines -DPASSTHROUGH_ALPHA=1)
   endif()
   add_custom_command(OUTPUT ${color_generated}/color_${color_shader}.inc
     COMMAND ${CMAKE_COMMAND} -E make_directory ${color_generated}

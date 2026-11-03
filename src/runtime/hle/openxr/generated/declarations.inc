@@ -17,6 +17,7 @@ XrResult xrCreatePassthroughLayerFB(XrSession session, const XrPassthroughLayerC
 XrResult xrCreateReferenceSpace(XrSession session, const XrReferenceSpaceCreateInfo* createInfo, XrSpace* space);
 XrResult xrCreateSession(XrInstance instance, const XrSessionCreateInfo* createInfo, XrSession* session);
 XrResult xrCreateSwapchain(XrSession session, const XrSwapchainCreateInfo* createInfo, XrSwapchain* swapchain);
+XrResult xrCreateTriangleMeshFB(XrSession session, const XrTriangleMeshCreateInfoFB* createInfo, XrTriangleMeshFB* outTriangleMesh);
 XrResult xrCreateVulkanDeviceKHR(XrInstance instance, const XrVulkanDeviceCreateInfoKHR* createInfo, VkDevice* vulkanDevice, VkResult* vulkanResult);
 XrResult xrCreateVulkanInstanceKHR(XrInstance instance, const XrVulkanInstanceCreateInfoKHR* createInfo, VkInstance* vulkanInstance, VkResult* vulkanResult);
 XrResult xrDestroyAction(XrAction action);
@@ -30,6 +31,7 @@ XrResult xrDestroyPassthroughLayerFB(XrPassthroughLayerFB layer);
 XrResult xrDestroySession(XrSession session);
 XrResult xrDestroySpace(XrSpace space);
 XrResult xrDestroySwapchain(XrSwapchain swapchain);
+XrResult xrDestroyTriangleMeshFB(XrTriangleMeshFB mesh);
 XrResult xrEndFrame(XrSession session, const XrFrameEndInfo* frameEndInfo);
 XrResult xrEndSession(XrSession session);
 XrResult xrEnumerateApiLayerProperties(uint32_t propertyCapacityInput, uint32_t* propertyCountOutput, XrApiLayerProperties* properties);
@@ -95,6 +97,12 @@ XrResult xrStringToPath(XrInstance instance, const char* pathString, XrPath* pat
 XrResult xrStructureTypeToString(XrInstance instance, XrStructureType value, char buffer[XR_MAX_STRUCTURE_NAME_SIZE]);
 XrResult xrSuggestInteractionProfileBindings(XrInstance instance, const XrInteractionProfileSuggestedBinding* suggestedBindings);
 XrResult xrSyncActions(XrSession session, const XrActionsSyncInfo* syncInfo);
+XrResult xrTriangleMeshBeginUpdateFB(XrTriangleMeshFB mesh);
+XrResult xrTriangleMeshBeginVertexBufferUpdateFB(XrTriangleMeshFB mesh, uint32_t* outVertexCount);
+XrResult xrTriangleMeshEndUpdateFB(XrTriangleMeshFB mesh, uint32_t vertexCount, uint32_t triangleCount);
+XrResult xrTriangleMeshEndVertexBufferUpdateFB(XrTriangleMeshFB mesh);
+XrResult xrTriangleMeshGetIndexBufferFB(XrTriangleMeshFB mesh, uint32_t** outIndexBuffer);
+XrResult xrTriangleMeshGetVertexBufferFB(XrTriangleMeshFB mesh, XrVector3f** outVertexBuffer);
 XrResult xrUpdateSwapchainFB(XrSwapchain swapchain, const XrSwapchainStateBaseHeaderFB* state);
 XrResult xrWaitFrame(XrSession session, const XrFrameWaitInfo* frameWaitInfo, XrFrameState* frameState);
 XrResult xrWaitSwapchainImage(XrSwapchain swapchain, const XrSwapchainImageWaitInfo* waitInfo);

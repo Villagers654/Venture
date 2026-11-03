@@ -1,0 +1,95 @@
+name: Passthrough integration
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/passthrough.yml'
+      - 'src/runtime/hle/openxr/passthrough.*'
+      - 'src/runtime/hle/openxr/passthrough_images.cpp'
+      - 'src/runtime/platform/win32/steam_link.cpp'
+      - 'src/runtime/xr/host_xr.cpp'
+      - 'src/runtime/xr/steam_link.*'
+      - 'tests/runtime/passthrough_config_test.cpp'
+      - 'tests/passthrough/**'
+      - 'tests/steam_link_transport/**'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  lifecycle:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install software Vulkan test dependencies
+        run: sudo apt-get update && sudo apt-get install -y g++-13 ninja-build libvulkan-dev mesa-vulkan-drivers glslang-tools
+      - name: Build production frame/session fixtures and pixel tests
+        run: |
+          cmake -S tests/passthrough -B build/passthrough-tests -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_COMPILER=g++-13
+          cmake --build build/passthrough-tests --parallel 2
+      - name: Run lifecycle, shader and stereo pixel regression tests
+        run: |
+          for driver in /usr/share/vulkan/icd.d/*lvp*.json; do
+            if [ -f "$driver" ]; then export VK_DRIVER_FILES="$driver"; break; fi
+          done
+          test -n "$VK_DRIVER_FILES"
+          ctest --test-dir build/passthrough-tests --output-on-failure
+  launcher:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - run: sudo apt-get update && sudo apt-get install -y g++-13 ninja-build libssl-dev
+      - name: Build actual launcher and saved-setting checks
+        run: |
+          cmake -S . -B build/launcher-settings -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER=gcc-13 -DCMAKE_CXX_COMPILER=g++-13 \
+            -DVENTURE_BUILD_RUNTIME=OFF -DVENTURE_BUILD_TESTS=ON \
+            -DSDL_WAYLAND=OFF -DSDL_X11=OFF -DSDL_UNIX_CONSOLE_BUILD=ON
+          cmake --build build/launcher-settings --target venture venture-cli venture_launcher_settings_tests --parallel 2
+          build/launcher-settings/bin/venture_launcher_settings_tests
+          python3 tests/launcher_settings_test.py build/launcher-settings/bin/venture-cli
+          python3 tests/passthrough/check_launcher_package.py build/launcher-settings/bin/venture strip
+  windows:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Provision the pinned production compiler only
+        run: python -c "from tools import bootstrap; bootstrap.DEPS.mkdir(exist_ok=True); bootstrap.provision('llvm-mingw', bootstrap.DEPENDENCIES['llvm-mingw'])"
+      - name: Compile the changed production XR code with Windows libc++
+        shell: pwsh
+        run: |
+          $compilerDir = "$pwd/.deps/llvm-mingw/bin".Replace('\', '/')
+          $env:PATH = "$compilerDir;$env:PATH"
+          cmake -S tests/passthrough -B build/xr-compile -G Ninja -DCMAKE_CXX_COMPILER="$compilerDir/clang++.exe" -DVENTURE_PASSTHROUGH_COMPILE_ONLY=ON
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          cmake --build build/xr-compile --parallel 2
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          ctest --test-dir build/xr-compile --output-on-failure
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Test the real Windows pipe transport, cancellation and reconnect
+        shell: pwsh
+        run: |
+          $compilerDir = "$pwd/.deps/llvm-mingw/bin".Replace('\', '/')
+          $env:PATH = "$compilerDir;$env:PATH"
+          cmake -S tests/steam_link_transport -B build/transport -G Ninja -DCMAKE_CXX_COMPILER="$compilerDir/clang++.exe"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          cmake --build build/transport --parallel 2
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          ctest --test-dir build/transport --output-on-failure
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Test actual Windows settings and unchanged shipping scanner
+        shell: pwsh
+        run: |
+          $compilerDir = "$pwd/.deps/llvm-mingw/bin".Replace('\', '/')
+          $env:PATH = "$compilerDir;$env:PATH"
+          cmake -S . -B build/launcher-settings -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER="$compilerDir/clang.exe" -DCMAKE_CXX_COMPILER="$compilerDir/clang++.exe" -DCMAKE_RC_COMPILER="$compilerDir/llvm-rc.exe" -DVENTURE_BUILD_RUNTIME=OFF -DVENTURE_BUILD_TESTS=ON
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          cmake --build build/launcher-settings --target venture venture-cli venture_launcher_settings_tests --parallel 2
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          & ./build/launcher-settings/bin/venture_launcher_settings_tests.exe
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          python tests/launcher_settings_test.py ./build/launcher-settings/bin/venture-cli.exe
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          python tests/passthrough/check_launcher_package.py ./build/launcher-settings/bin/venture.exe "$compilerDir/llvm-strip.exe"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }

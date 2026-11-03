@@ -20,6 +20,12 @@ namespace fragment {
 namespace multisample {
 #include "color_ms_frag.inc"
 }
+namespace passthrough_fragment {
+#include "color_passthrough_frag.inc"
+}
+namespace passthrough_multisample {
+#include "color_passthrough_ms_frag.inc"
+}
 namespace {
 void check(VkResult r, const char *operation) {
   if (r != VK_SUCCESS)
@@ -42,7 +48,7 @@ struct ColorImages::Impl {
   double timestamp_period = 0;
   unsigned timestamp_bits = 0;
   bool failed = false;
-  bool binding_queue_ordered = false;
+  bool binding_queue_ordered = false, passthrough_alpha = false;
   struct Subresource {
     VkImageView source{}, target{};
     VkFramebuffer framebuffer{};
@@ -206,10 +212,13 @@ struct ColorImages::Impl {
     };
     try {
       shader(vertex::decode_shader, modules[0]);
-      shader(info.sampleCount > 1
-                 ? std::span<const std::uint32_t>(multisample::decode_shader)
-                 : std::span<const std::uint32_t>(fragment::decode_shader),
-             modules[1]);
+      const auto single = passthrough_alpha
+          ? std::span<const std::uint32_t>(passthrough_fragment::decode_shader)
+          : std::span<const std::uint32_t>(fragment::decode_shader);
+      const auto multi = passthrough_alpha
+          ? std::span<const std::uint32_t>(passthrough_multisample::decode_shader)
+          : std::span<const std::uint32_t>(multisample::decode_shader);
+      shader(info.sampleCount > 1 ? multi : single, modules[1]);
       std::array<VkPipelineShaderStageCreateInfo, 2> stages{};
       for (unsigned i = 0; i < 2; ++i) {
         stages[i] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
@@ -532,12 +541,13 @@ ColorImages::ColorImages(const XrGraphicsBindingVulkanKHR &binding,
                          PFN_vkGetInstanceProcAddr get,
                          const XrSwapchainCreateInfo &info,
                          std::span<const XrSwapchainImageVulkanKHR> images,
-                         bool binding_queue_ordered)
+                         bool binding_queue_ordered, bool passthrough_alpha)
     : impl_(std::make_unique<Impl>()) {
   impl_->binding = binding;
   impl_->get = get;
   impl_->info = info;
   impl_->binding_queue_ordered = binding_queue_ordered;
+  impl_->passthrough_alpha = passthrough_alpha;
   impl_->info.next = nullptr;
   impl_->fn<PFN_vkGetDeviceQueue>("vkGetDeviceQueue")(
       binding.device, binding.queueFamilyIndex, binding.queueIndex,
@@ -547,11 +557,11 @@ ColorImages::ColorImages(const XrGraphicsBindingVulkanKHR &binding,
 }
 ColorImages::~ColorImages() = default;
 XrResult ColorImages::convert(std::uint32_t index, const ColorMatrix &matrix,
-                              bool external_queue_held) {
+                              bool external_queue_held, Alpha alpha, float camera_opacity) {
   if (index >= impl_->images.size()) return XR_ERROR_RUNTIME_FAILURE;
-  return convert_from(impl_->images[index].target, index, matrix, external_queue_held);
+  return convert_from(impl_->images[index].target, index, matrix, external_queue_held, alpha, camera_opacity);
 }
-XrResult ColorImages::convert_from(VkImage input, std::uint32_t index, const ColorMatrix &matrix, bool external_queue_held) {
+XrResult ColorImages::convert_from(VkImage input, std::uint32_t index, const ColorMatrix &matrix, bool external_queue_held, Alpha alpha, float camera_opacity) {
   auto &s = *impl_;
   if (s.failed || index >= s.images.size())
     return XR_ERROR_RUNTIME_FAILURE;
@@ -595,6 +605,11 @@ XrResult ColorImages::convert_from(VkImage input, std::uint32_t index, const Col
     for (unsigned r = 0; r < 3; ++r)
       for (unsigned c = 0; c < 3; ++c)
         rows[r * 4 + c] = float(matrix[r * 3 + c]);
+    if (s.passthrough_alpha) {
+      rows[3] = alpha == Alpha::premultiply ? 1.0f : 0.0f;
+      rows[7] = alpha == Alpha::opaque ? 1.0f : 0.0f;
+      rows[11] = camera_opacity;
+    }
     for (std::size_t i = 0; i < image.subresources.size(); ++i) {
       const auto mip = std::uint32_t(i) % s.info.mipCount;
       const auto width = std::max(1u, s.info.width >> mip),

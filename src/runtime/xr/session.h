@@ -28,6 +28,7 @@ struct Session {
   XrSessionState state = XR_SESSION_STATE_UNKNOWN;
   XrViewConfigurationType view_configuration = XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO;
   bool running = false;
+  bool passthrough_suspended = true; // cleared only by successful guest xrBeginSession
   bool uses_shared_gpu = true;
   VkQueue queue = nullptr;  // native queue supplied by the graphics binding
   enum class Phase { idle, waited, begun } phase = Phase::idle;

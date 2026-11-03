@@ -125,6 +125,8 @@ void configure_game(const std::filesystem::path& install,
             config.device_identity->device,
             config.device_identity == &native_device_identity() ? "" : " via Horizon compatibility mode");
   auto base = paths::data_dir();
+  const auto* passthrough = environment::getenv("VENTURE_PASSTHROUGH");
+  config.passthrough = passthrough && std::string_view(passthrough) == "1";
   config.data_dir = account_data_dir(base, config.account_key, config.package);
   config.guest_cache_dir = config.data_dir / "cache";
   config.cache_dir = base / "cache" / config.package / std::to_string(config.version_code);

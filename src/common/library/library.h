@@ -107,6 +107,8 @@ struct Settings {
   // The language games see as the system language, a BCP-47 tag such as
   // "en-US" (Settings > Runtime); empty follows the host's language.
   std::string game_language;
+  // Mixed reality through a native host extension or Steam Link, next launch.
+  bool passthrough = false;
   bool runtime_override() const;
   // `games` first, then the other library folders.
   std::vector<fs::path> roots() const;
