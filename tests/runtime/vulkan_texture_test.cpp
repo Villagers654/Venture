@@ -1294,6 +1294,85 @@ TEST_CASE("Vulkan emulated compressed images accept input-attachment usage") {
   test::vk_call("vkDestroyImage", gpu.device, image, nullptr);
 }
 
+TEST_CASE("Vulkan views of emulated images created before the guest binds memory") {
+  for (int compression : {0, 1}) {
+    CAPTURE(compression);
+    struct Force {
+      explicit Force(int mode) { vulkan::force_texture_emulation(true); vulkan::force_texture_compression(mode); }
+      ~Force() { vulkan::force_texture_compression(-1); vulkan::force_texture_emulation(false); }
+    } force(compression);
+    test::VulkanDevice gpu;
+    VkImageCreateInfo ci{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+    ci.flags = VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT;
+    ci.imageType = VK_IMAGE_TYPE_2D;
+    ci.format = VK_FORMAT_ETC2_R8G8B8A8_SRGB_BLOCK;
+    ci.extent = {32, 32, 1};
+    ci.mipLevels = 4;
+    ci.arrayLayers = 1;
+    ci.samples = VK_SAMPLE_COUNT_1_BIT;
+    ci.tiling = VK_IMAGE_TILING_OPTIMAL;
+    ci.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT;
+    VkImage image{};
+    REQUIRE(test::vk_call("vkCreateImage", gpu.device, &ci, nullptr, &image) == VK_SUCCESS);
+    VkImageViewCreateInfo vi{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+    vi.image = image;
+    vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    vi.format = ci.format;
+    vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 4, 0, 1};
+    VkImageView view{};
+    REQUIRE(test::vk_call("vkCreateImageView", gpu.device, &vi, nullptr, &view) == VK_SUCCESS);
+    VkMemoryRequirements req{};
+    test::vk_call("vkGetImageMemoryRequirements", gpu.device, image, &req);
+    VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+    ai.allocationSize = req.size;
+    ai.memoryTypeIndex = gpu.memory_type(req.memoryTypeBits, 0);
+    VkDeviceMemory memory{};
+    REQUIRE(test::vk_call("vkAllocateMemory", gpu.device, &ai, nullptr, &memory) == VK_SUCCESS);
+    CHECK(test::vk_call("vkBindImageMemory", gpu.device, image, memory, 0ull) == VK_SUCCESS);
+    test::vk_call("vkDestroyImageView", gpu.device, view, nullptr);
+    test::vk_call("vkDestroyImage", gpu.device, image, nullptr);
+    test::vk_call("vkFreeMemory", gpu.device, memory, nullptr);
+  }
+}
+
+TEST_CASE("Vulkan views of emulated input-attachment images, decoded and as BC7") {
+  for (int compression : {0, 1}) {
+    CAPTURE(compression);
+    struct Force {
+      explicit Force(int mode) { vulkan::force_texture_emulation(true); vulkan::force_texture_compression(mode); }
+      ~Force() { vulkan::force_texture_compression(-1); vulkan::force_texture_emulation(false); }
+    } force(compression);
+    test::VulkanDevice gpu;
+    // The Climb then views each texture as its own and its sRGB/UNORM sibling
+    // format, and the driver crashed in vkCreateImageView.
+    for (auto format : {VK_FORMAT_ETC2_R8G8B8A8_SRGB_BLOCK, VK_FORMAT_ETC2_R8G8B8A8_UNORM_BLOCK,
+                        VK_FORMAT_ETC2_R8G8B8_SRGB_BLOCK, VK_FORMAT_ASTC_4x4_SRGB_BLOCK}) {
+      CAPTURE(int(format));
+      test::VulkanImage texture(gpu, format, 32, 32, 4, 1, VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT, nullptr, 1,
+                                VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT);
+      const auto info = vulkan::texture_format(format);
+      const VkFormat sibling = info.decoded == VK_FORMAT_R8G8B8A8_SRGB ? VkFormat(format - 1) : VkFormat(format + 1);
+      for (auto view_format : {format, sibling})
+        for (VkImageUsageFlags usage : {VkImageUsageFlags(0), VkImageUsageFlags(VK_IMAGE_USAGE_SAMPLED_BIT),
+                                        VkImageUsageFlags(VK_IMAGE_USAGE_SAMPLED_BIT |
+                                                          VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT)}) {
+          CAPTURE(int(view_format));
+          CAPTURE(usage);
+          VkImageViewUsageCreateInfo view_usage{VK_STRUCTURE_TYPE_IMAGE_VIEW_USAGE_CREATE_INFO, nullptr, usage};
+          VkImageViewCreateInfo vi{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+          vi.pNext = usage ? &view_usage : nullptr;
+          vi.image = texture.image;
+          vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
+          vi.format = view_format;
+          vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 4, 0, 1};
+          VkImageView view{};
+          REQUIRE(test::vk_call("vkCreateImageView", gpu.device, &vi, nullptr, &view) == VK_SUCCESS);
+          test::vk_call("vkDestroyImageView", gpu.device, view, nullptr);
+        }
+    }
+  }
+}
+
 TEST_SUITE_END();
 
 namespace {

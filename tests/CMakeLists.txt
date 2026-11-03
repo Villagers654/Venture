@@ -797,6 +797,12 @@ add_executable(venture_xr_tests test_main.cpp  runtime/xr_test.cpp runtime/xr_vr
   add_test(NAME xr_typed_handles COMMAND venture_xr_tests
     "--test-case=XR guest lifecycle and real Vulkan swapchain through mock loader")
   set_tests_properties(xr_typed_handles PROPERTIES ENVIRONMENT "XR_RUNTIME_JSON=${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/mock_openxr_runtime.json;VENTURE_DATA_DIR=${CMAKE_CURRENT_BINARY_DIR}/xr-typed-handles-data;VENTURE_MOCK_TYPED_HANDLES=1")
+  # A runtime that lists legacy XR_KHR_vulkan_enable requirements and does not add them to the
+  # enable2 shared device (the Oculus PC runtime). One name every Vulkan lacks, so it is skipped.
+  add_test(NAME xr_vulkan_legacy_requirements COMMAND venture_xr_tests
+    "--test-case=XR shared Vulkan device enables the runtime's legacy enable requirements")
+  set_tests_properties(xr_vulkan_legacy_requirements PROPERTIES ENVIRONMENT
+    "XR_RUNTIME_JSON=${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/mock_openxr_runtime.json;VENTURE_DATA_DIR=${CMAKE_CURRENT_BINARY_DIR}/xr-legacy-requirements-data;VENTURE_MOCK_VULKAN_INSTANCE_EXTENSIONS=VK_KHR_external_fence_capabilities VK_KHR_external_semaphore_capabilities VK_KHR_external_memory_capabilities VK_VENTURE_absent_instance;VENTURE_MOCK_VULKAN_DEVICE_EXTENSIONS=VK_KHR_external_fence VK_KHR_external_fence_win32 VK_KHR_external_fence_fd VK_KHR_external_semaphore_win32 VK_KHR_win32_keyed_mutex VK_KHR_external_memory_win32 VK_VENTURE_absent_device")
   # A runtime that leaves untracked velocities undefined (NaN): the guest must see zeros.
   add_test(NAME xr_no_velocity COMMAND venture_xr_tests
     "--test-case=XR guest lifecycle and real Vulkan swapchain through mock loader")

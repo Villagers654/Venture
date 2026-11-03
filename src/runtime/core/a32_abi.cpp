@@ -198,6 +198,29 @@ const Descriptor* descriptor(std::string_view library, std::string_view symbol) 
     static constexpr Descriptor version{"libvrapi.so", "vrapi_GetVersionString", {Kind::Ptr, "const char *", 1, 4}, {}, false, "VrApi.h"};
     return &version;
   }
+  // VrApi.h (1.1x): ovrPosef vrapi_GetTrackingTransform(ovrMobile *, ovrTrackingTransform)
+  // and void vrapi_SetTrackingTransform(ovrMobile *, ovrPosef). First Contact's
+  // OVRPlugin does not import them; Unity 2017/2018's OVRPlugin 1.x does.
+  if (library == "libvrapi.so" && symbol.ends_with("TrackingTransform")) {
+    static constexpr Type get_args[]{{Kind::Handle, "ovrMobile", 0, 4}, {Kind::I32, "ovrTrackingTransform", 0, 4}};
+    static constexpr Type set_args[]{{Kind::Handle, "ovrMobile", 0, 4}, {Kind::Composite, "ovrPosef", 28, 4}};
+    static constexpr Descriptor transforms[]{
+        {"libvrapi.so", "vrapi_GetTrackingTransform", {Kind::Composite, "ovrPosef", 28, 4}, get_args, false, "VrApi.h"},
+        {"libvrapi.so", "vrapi_SetTrackingTransform", {Kind::Void, "", 0, 4}, set_args, false, "VrApi.h"}};
+    for (const auto& entry : transforms) if (entry.symbol == symbol) return &entry;
+  }
+  // The Unity plugin's Internal init wrappers have no pinned declaration; the
+  // public wrappers tail-call them with the same app ID and JNI context.
+  if (library == "libovrplatformloader.so" && symbol.starts_with("ovr_UnityInitWrapperInternal")) {
+    static constexpr Type android[]{{Kind::Ptr, "const char *", 1, 4}, {Kind::Handle, "jobject", 0, 4},
+                                    {Kind::Layout, "JNIEnv *", 0, 4}};
+    static constexpr Descriptor inits[]{
+        {"libovrplatformloader.so", "ovr_UnityInitWrapperInternal", {Kind::U8, "bool", 0, 4}, android, false,
+         "Oculus Platform Unity plugin"},
+        {"libovrplatformloader.so", "ovr_UnityInitWrapperInternalAsynchronous", {Kind::U64, "ovrRequest", 0, 4},
+         android, false, "Oculus Platform Unity plugin"}};
+    for (const auto& entry : inits) if (entry.symbol == symbol) return &entry;
+  }
   // The NDK generator groups standalone jni.h exports with JNIEnv methods.
   // ART exports the same invocation ABI; never infer it from a host signature.
   if (library == "libart.so" && symbol == "JNI_GetCreatedJavaVMs")

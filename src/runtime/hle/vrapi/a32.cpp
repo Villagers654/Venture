@@ -414,6 +414,15 @@ void point(CallContext &ctx) {
   ctx.return_x(
       guest::test_point(m, v, g2h<bool>(inside), g2h<abi::Boundary>(boundary)));
 }
+// AAPCS32 (softfp) passes the 28-byte ovrPosef by value in r1-r3 and the stack.
+void set_tracking_transform(CallContext &ctx) {
+  a32::ArgCursor32 c(ctx.cpu());
+  auto m = resolve<abi::Mobile>(c.word());
+  abi::Pose pose;
+  static_assert(sizeof(pose) == 28);
+  c.composite(std::as_writable_bytes(std::span(&pose, 1)));
+  guest::set_tracking_transform(m, &pose);
+}
 void vulkan_extensions(CallContext &ctx) {
   // This packet implements GLES swapchains only. Do not expose host Vulkan
   // extension requirements as if vrapi_CreateSystemVulkan were implemented.
@@ -435,6 +444,7 @@ void register_a32_adapters() {
   FORWARD(vrapi_GetPredictedTracking);
   FORWARD(vrapi_GetPredictedDisplayTime);
   FORWARD(vrapi_LocateTrackingSpace);
+  FORWARD(vrapi_GetTrackingTransform);
   FORWARD(vrapi_GetSystemPropertyInt);
   FORWARD(vrapi_GetSystemPropertyFloat);
   FORWARD(vrapi_GetSystemPropertyFloatArray);
@@ -459,6 +469,7 @@ void register_a32_adapters() {
   FORWARD(vrapi_GetTextureSwapChainHandle);
   FORWARD(vrapi_SetTextureSwapChainHandle);
 #undef FORWARD
+  add("vrapi_SetTrackingTransform", guarded<set_tracking_transform>);
   add("vrapi_Initialize", guarded<initialize>);
   add("vrapi_EnterVrMode", guarded<enter>);
   add("vrapi_LeaveVrMode",

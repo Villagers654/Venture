@@ -151,10 +151,8 @@ public class AudioManager {
     if (PROPERTY_OUTPUT_SAMPLE_RATE.equals(key)) index = 0;
     else if (PROPERTY_OUTPUT_FRAMES_PER_BUFFER.equals(key)) index = 1;
     else return null;
-    int value = com.venture.runtime.RuntimeEnvironment.host().audioOutputProperties()[index];
-    // Android always answers both: without an open output device, report the
-    // mixer's own 48 kHz and its 5 ms period.
-    return Integer.toString(value > 0 ? value : index == 0 ? 48000 : 240);
+    // Android always answers both, even without an open output device.
+    return Integer.toString(AudioSystem.primaryOutput(index));
   }
   public boolean isBluetoothScoOn() {
     return false;

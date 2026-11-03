@@ -1,4 +1,5 @@
 #include "common/download/manager.h"
+#include "common/file_ops.h"
 #include "common/library/library.h"
 #include "http_loopback.h"
 #include <atomic>
@@ -102,6 +103,56 @@ void seed(const fs::path &root) {
   paths::atomic_write(dir / "required.dat", "ok");
 }
 } // namespace
+
+TEST_CASE("a game in a library folder reached through a link uninstalls; a linked game folder does not") {
+  Directory directory;
+  const auto data = directory.root / "data", real = directory.root / "real", link = directory.root.parent_path() / (directory.root.filename().string() + "-link");
+  struct DataDir {
+    std::string previous;
+    bool had = std::getenv("VENTURE_DATA_DIR") != nullptr;
+    void set(const std::string &value) {
+#ifdef _WIN32
+      _putenv_s("VENTURE_DATA_DIR", value.c_str());
+#else
+      setenv("VENTURE_DATA_DIR", value.c_str(), 1);
+#endif
+    }
+    explicit DataDir(const fs::path &value) {
+      if (had) previous = std::getenv("VENTURE_DATA_DIR");
+      set(paths::utf8(value));
+    }
+    ~DataDir() {
+      if (had) set(previous);
+#ifdef _WIN32
+      else _putenv_s("VENTURE_DATA_DIR", "");
+#else
+      else unsetenv("VENTURE_DATA_DIR");
+#endif
+    }
+  } env(data);
+  fs::create_directories(real);
+  link_directory(link, real);
+  seed(link);
+  auto installs = library::scan(link);
+  REQUIRE(installs.size() == 1);
+  library::uninstall(link, installs[0]);
+  CHECK_FALSE(fs::exists(real / "com.example.dlc" / "12"));
+
+  // A game folder that is itself a link is not an installation, so it is
+  // never removed through.
+  const auto elsewhere = directory.root / "elsewhere";
+  seed(elsewhere);
+  fs::remove(real / "com.example.dlc");
+  link_directory(real / "com.example.dlc", elsewhere / "com.example.dlc");
+  CHECK(library::scan(real).empty());
+  auto moved = library::scan(elsewhere);
+  REQUIRE(moved.size() == 1);
+  moved[0].directory = real / "com.example.dlc" / "12";
+  CHECK_THROWS(library::uninstall(real, moved[0]));
+  CHECK(fs::exists(elsewhere / "com.example.dlc" / "12" / "plan.json"));
+  fs::remove(real / "com.example.dlc");
+  fs::remove(link);
+}
 
 TEST_CASE("DLC ownership is durable, unexpired, complete and fail closed") {
   test::Server server;

@@ -1486,7 +1486,11 @@ VkResult VKAPI_CALL create_view(VkDevice d, const VkImageViewCreateInfo* info,
         link->pNext = next->pNext;
         continue;
       }
-      has_usage |= next->sType == VK_STRUCTURE_TYPE_IMAGE_VIEW_USAGE_CREATE_INFO;
+      if (next->sType == VK_STRUCTURE_TYPE_IMAGE_VIEW_USAGE_CREATE_INFO) {
+        // The host image has no input-attachment usage for a view to name.
+        has_usage = true;
+        reinterpret_cast<VkImageViewUsageCreateInfo*>(next)->usage &= ~unusable_usage;
+      }
       if (next->sType != VK_STRUCTURE_TYPE_IMAGE_VIEW_USAGE_CREATE_INFO &&
           next->sType != VK_STRUCTURE_TYPE_IMAGE_VIEW_MIN_LOD_CREATE_INFO_EXT && unsupported < 0)
         unsupported = int(next->sType);
@@ -1511,7 +1515,7 @@ VkResult VKAPI_CALL create_view(VkDevice d, const VkImageViewCreateInfo* info,
       // sampling view must not inherit that unsupported usage bit.
       VkImageViewUsageCreateInfo usage{VK_STRUCTURE_TYPE_IMAGE_VIEW_USAGE_CREATE_INFO};
       if (!has_usage) {
-        usage.usage = img->info.usage;
+        usage.usage = img->info.usage & ~unusable_usage;
         usage.pNext = copy.pNext;
         copy.pNext = &usage;
       }

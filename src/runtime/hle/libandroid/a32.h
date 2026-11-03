@@ -16,19 +16,22 @@ inline bool supported(std::string_view name) {
          name.starts_with("AInputQueue_") || name.starts_with("AInputEvent_") ||
          name.starts_with("AKeyEvent_") || name.starts_with("AMotionEvent_") ||
          name.starts_with("ANativeWindow_") || name.starts_with("AChoreographer") ||
+         name.starts_with("ASensor") ||
          name == "ANativeActivity_setWindowFormat" || name == "ANativeActivity_setWindowFlags";
 }
 inline bool supported(a32::Type type) {
   if (type.kind == a32::Kind::Layout)
     return type.tag == "JNIEnv *" || type.tag == "ANativeActivity *" ||
-           type.tag == "ANativeWindow_Buffer *" || type.tag == "ARect *" || type.tag == "AInputEvent **";
+           type.tag == "ANativeWindow_Buffer *" || type.tag == "ARect *" || type.tag == "AInputEvent **" ||
+           type.tag == "ASensorEvent *";
   if (type.kind == a32::Kind::Handle) {
     auto tag = type.tag;
     if (tag.starts_with("const ")) tag.remove_prefix(6);
     return tag == "AAsset *" || tag == "AAssetDir *" || tag == "AAssetManager *" ||
            tag == "AConfiguration *" || tag == "ALooper *" || tag == "AInputQueue *" ||
            tag == "AInputEvent *" || tag == "ANativeWindow *" || tag == "AChoreographer *" ||
-           tag == "AChoreographerFrameCallbackData *" || tag == "jobject";
+           tag == "AChoreographerFrameCallbackData *" || tag == "jobject" || tag == "ASensorManager *" ||
+           tag == "ASensorEventQueue *" || tag == "ASensor *" || tag == "ASensorList *";
   }
   if (type.kind == a32::Kind::Callback)
     return type.tag == "ALooper_callbackFunc" || type.tag.starts_with("AChoreographer_");
@@ -57,7 +60,9 @@ struct Frame {
     else {
       auto type = ctx.info().a32->arguments[index++];
       auto bits = cursor.next(type);
-      if (type.kind == a32::Kind::Handle && type.tag != "AAssetManager *") {
+      // ASensorList * is an out parameter (ASensorList is const ASensor *const *).
+      const bool sensor_list = type.tag == "ASensorList *";
+      if (type.kind == a32::Kind::Handle && type.tag != "AAssetManager *" && !sensor_list) {
         if (type.tag == "jobject")
           bits = h2g(java::jni32::object(static_cast<std::uint32_t>(bits)));
         else if (bits) {
@@ -66,7 +71,7 @@ struct Frame {
         }
       }
       if constexpr (std::is_pointer_v<T>) {
-        if (bits && (a32::is_out(type.kind) || type.tag == "AInputEvent **")) {
+        if (bits && (a32::is_out(type.kind) || type.tag == "AInputEvent **" || sensor_list)) {
           a32::check_out(bits);
           auto& out = outputs.at(output_count++);
           out.guest = bits;

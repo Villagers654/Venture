@@ -19,6 +19,7 @@
 #include <array>
 #include <cstdlib>
 #include <cstring>
+#include <format>
 #include <fstream>
 #include <iostream>
 #include <optional>
@@ -165,7 +166,9 @@ void configure_game(const std::filesystem::path& install,
       throw std::runtime_error("Expansion/asset filename in plan must be a valid basename");
     const auto source = std::filesystem::absolute(install / name);
     if (!std::filesystem::is_regular_file(source)) {
-      if (kind == "obb") throw std::runtime_error("OBB from plan is absent");
+      if (kind == "obb")
+        throw std::runtime_error(std::format("The install lacks the expansion file {} that its plan requires",
+                                             paths::utf8(name)));
     }
     obb_names.push_back(paths::utf8(name));
   }

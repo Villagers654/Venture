@@ -10,6 +10,26 @@ public class WifiManager {
   public MulticastLock createMulticastLock(String tag) { return new MulticastLock(tag); }
   public WifiLock createWifiLock(int mode, String tag) { return new WifiLock(tag); }
   public WifiLock createWifiLock(String tag) { return new WifiLock(tag); }
+  // Associated while the host's active route is Wi-Fi; a wired or offline
+  // host reads as an Android device whose Wi-Fi is on but not connected.
+  public WifiInfo getConnectionInfo() {
+    return new WifiInfo(com.venture.runtime.RuntimeEnvironment.host().activeNetworkType()
+                        == android.net.ConnectivityManager.TYPE_WIFI);
+  }
+  public boolean startScan() { return false; }  // throttled for apps since API 28
+  public boolean is5GHzBandSupported() { return true; }
+  // AOSP WifiManager.calculateSignalLevel(int, int): linear between -100 and -55 dBm.
+  public static int calculateSignalLevel(int rssi, int numLevels) {
+    if (rssi <= -100) return 0;
+    if (rssi >= -55) return numLevels - 1;
+    return (int) ((float) (rssi + 100) * (numLevels - 1) / 45);
+  }
+  // API 30 levels 0..4 from the framework's default 2.4 GHz RSSI thresholds.
+  public int calculateSignalLevel(int rssi) {
+    return rssi >= -55 ? 4 : rssi >= -66 ? 3 : rssi >= -77 ? 2 : rssi >= -88 ? 1 : 0;
+  }
+  public int getMaxSignalLevel() { return 4; }
+  public static int compareSignalLevel(int rssiA, int rssiB) { return rssiA - rssiB; }
   // AOSP's reference-counted holds: each acquire needs a release unless counting is off.
   public static class MulticastLock {
     private final String tag;

@@ -1182,9 +1182,23 @@ void Core::launch_game(std::string_view id, std::string_view requested,
     throw std::runtime_error("Reconnect that account before playing, or choose another.");
   const std::string game_id(id);
   auto i = installed(game_id);
-  if (!i)
+  if (!i) {
+    // Name an expansion file the plan requires and the install lacks, rather
+    // than leaving the game to fail on it later without saying which.
+    if (auto partial = installed(game_id, false)) {
+      auto missing = library::missing_expansions(*partial);
+      if (!missing.empty() && partial->plan.local)
+        throw std::runtime_error(std::format(
+            "Its install lacks the expansion file {}. Import the game again together with that file (it is in "
+            "Android/obb/{} on the headset).", missing.front(), partial->plan.package));
+      if (!missing.empty())
+        throw std::runtime_error(std::format(
+            "This game is not completely installed: its expansion file {} is missing. Resume its download first.",
+            missing.front()));
+    }
     throw std::runtime_error(
         "This game is not completely installed. Resume its download first.");
+  }
   // A manifest another installer wrote (the legacy CLI) lacks the launcher's
   // catalog record. With an account, Play upgrades it from Meta's same-build
   // catalog before the runtime reads it, as selecting the game would.

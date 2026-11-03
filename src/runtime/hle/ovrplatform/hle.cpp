@@ -501,10 +501,30 @@ void platform32(hle::CallContext& ctx) {
     hle::a32::fail(ctx, e.error);
   }
 }
+// platform32 decodes requests, options, the init entries and key/value pairs
+// from their descriptors. Every other handler reads ctx.x(n) as word n, which
+// only holds when each argument is one 32-bit word and the result is a scalar.
+bool word_signature(hle::Handler fn, const hle::a32::Descriptor& d) {
+  using hle::a32::Kind;
+  if (fn == request || fn == option || fn == key_value_string || fn == async_init || fn == async_options ||
+      fn == sync_options || fn == http_failed)
+    return true;
+  if (d.result.kind == Kind::Composite || d.variadic) return false;
+  return std::all_of(d.arguments.begin(), d.arguments.end(), [](const hle::a32::Type& t) {
+    switch (t.kind) {
+      case Kind::I8: case Kind::U8: case Kind::I16: case Kind::U16: case Kind::I32: case Kind::U32:
+      case Kind::Ptr: case Kind::Size: case Kind::SSize: case Kind::Long: case Kind::ULong:
+      case Kind::Handle: case Kind::Callback: case Kind::Layout:
+        return true;
+      default:
+        return false;
+    }
+  });
+}
 }  // namespace
 void register_a32_adapters() {
   for (const auto& e : exports())
-    if (hle::a32::descriptor("libovrplatformloader.so", e.name))
+    if (auto d = hle::a32::descriptor("libovrplatformloader.so", e.name); d && word_signature(e.handler, *d))
       hle::a32::register_adapter("libovrplatformloader.so", e.name, platform32);
 }
 }  // namespace venture::ovrplatform

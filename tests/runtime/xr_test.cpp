@@ -13,6 +13,7 @@ using EGLenum = unsigned int;
 #include "core/wait.h"
 #include "core/process.h"
 #include "gfx/gpu_device.h"
+#include "gfx/gpu_device_internal.h"
 #include "hle/openxr/openxr.h"
 #include "hle/openxr/state.h"
 #include "xr/bindings.h"
@@ -29,6 +30,7 @@ using EGLenum = unsigned int;
 #include "hle/vulkan/internal.h"
 #include "hle/vulkan/chain.h"
 #include <cstring>
+#include <sstream>
 #include <future>
 #include <limits>
 #include <numbers>
@@ -4002,4 +4004,49 @@ TEST_CASE("XR startup preserves host render requests and discarded-frame semanti
   CHECK(xg::xrEndSession(session) == XR_SUCCESS);
   CHECK(xg::xrDestroySession(session) == XR_SUCCESS);
   CHECK(xg::xrDestroyInstance(instance) == XR_SUCCESS);
+}
+// The shared device is created through XR_KHR_vulkan_enable2. The Oculus PC
+// runtime does not add its own extensions there and later called through a null
+// Vulkan entry point in host xrDestroySwapchain (Job Simulator, Beat Saber on
+// Meta Link). The mock behaves the same; Venture must enable the runtime's
+// legacy enable lists itself, minus names this Vulkan does not list. Run as its
+// own process (xr_vulkan_legacy_requirements), before anything creates the device.
+TEST_CASE("XR shared Vulkan device enables the runtime's legacy enable requirements") {
+  const char* device_list = venture::environment::getenv("VENTURE_MOCK_VULKAN_DEVICE_EXTENSIONS");
+  const char* instance_list = venture::environment::getenv("VENTURE_MOCK_VULKAN_INSTANCE_EXTENSIONS");
+  if (!device_list || !instance_list) {
+    MESSAGE("runs only as xr_vulkan_legacy_requirements");
+    return;
+  }
+  auto& gpu = venture::gfx::gpu_device();
+  REQUIRE(gpu.device);
+  auto get = gpu.get_instance_proc_addr;
+  auto enumerate_device = reinterpret_cast<PFN_vkEnumerateDeviceExtensionProperties>(
+      get(gpu.instance, "vkEnumerateDeviceExtensionProperties"));
+  auto enumerate_instance = reinterpret_cast<PFN_vkEnumerateInstanceExtensionProperties>(
+      get(nullptr, "vkEnumerateInstanceExtensionProperties"));
+  REQUIRE(enumerate_device);
+  REQUIRE(enumerate_instance);
+  std::uint32_t count = 0;
+  REQUIRE(enumerate_device(gpu.physical_device, nullptr, &count, nullptr) == VK_SUCCESS);
+  std::vector<VkExtensionProperties> device_available(count);
+  REQUIRE(enumerate_device(gpu.physical_device, nullptr, &count, device_available.data()) == VK_SUCCESS);
+  REQUIRE(enumerate_instance(nullptr, &count, nullptr) == VK_SUCCESS);
+  std::vector<VkExtensionProperties> instance_available(count);
+  REQUIRE(enumerate_instance(nullptr, &count, instance_available.data()) == VK_SUCCESS);
+  auto check = [](const char* list, const std::vector<VkExtensionProperties>& available,
+                  const std::vector<std::string>& enabled) {
+    std::size_t supported = 0;
+    std::istringstream stream(list);
+    for (std::string name; stream >> name;) {
+      const bool offered = std::ranges::any_of(available, [&](const auto& e) { return name == e.extensionName; });
+      const bool on = std::ranges::find(enabled, name) != enabled.end();
+      INFO(name);
+      CHECK(on == offered);
+      supported += offered;
+    }
+    return supported;
+  };
+  CHECK(check(device_list, device_available, venture::gfx::enabled_gpu_device_extensions()) > 0);
+  CHECK(check(instance_list, instance_available, venture::gfx::enabled_gpu_instance_extensions()) > 0);
 }

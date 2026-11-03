@@ -95,6 +95,12 @@ public final class SQLiteDatabase extends SQLiteClosable {
     }
   }
   public void setVersion(int version) { execSQL("PRAGMA user_version = " + version); }
+  public static final int MAX_SQL_CACHE_SIZE = 100;
+  /** Android's prepared-statement cache bound; SQLite here prepares each statement on use. */
+  public void setMaxSqlCacheSize(int cacheSize) {
+    if (cacheSize > MAX_SQL_CACHE_SIZE || cacheSize < 0)
+      throw new IllegalStateException("expected value between 0 and " + MAX_SQL_CACHE_SIZE);
+  }
   /** AOSP refuses write-ahead logging for read-only and in-memory databases. */
   public boolean enableWriteAheadLogging() {
     if (isReadOnly() || MEMORY_DB_PATH.equals(path)) return false;

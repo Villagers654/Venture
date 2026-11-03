@@ -20,6 +20,13 @@ constexpr GuestAddr limit = 0x100000000ull;
 // arm64's compat TASK_SIZE_32: the last page is never guest memory, so identity
 // fastmem stays safe without the wrap guard (a32_identity_fastmem_safe).
 constexpr GuestAddr task_size = limit - 4096;
+// arm64 mmap_base() for a compat task: the stack gap is the 8 MiB stack rlimit
+// clamped up to MIN_GAP (128 MiB), so unhinted mappings start below
+// 0xf7fff000 and the top 128 MiB is never handed out. Engines rely on that
+// headroom: Boehm GC's GC_install_counts steps a block in 4 MiB strides with
+// a 32-bit pointer, which wraps forever for a block in the topmost 4 MiB
+// (Unity 2017/2018 IL2CPP games spun before their first frame).
+constexpr GuestAddr mmap_base = task_size - (128ull << 20);
 struct Backing {
   std::uint64_t size;
   bool file = false;
@@ -157,8 +164,8 @@ GuestAddr choose(State& s, std::uint64_t n, std::uint64_t alignment, bool fresh 
     if (auto next = s.regions.lower_bound(begin); next != s.regions.end())
       end = std::min(end, next->second.gap_start());
     if (grow_down) begin += kStackGuardGap;
-    // Keep the kuser region available for the CPU packet even before it maps it.
-    end = std::min(end, GuestAddr{0xffff0000});
+    // Also keeps the kuser region (0xffff0000) free for the CPU packet.
+    end = std::min(end, mmap_base);
     if (end <= begin || n > end - begin) return 0;
     auto p = small ? align_down(end - n, alignment) : align_up(begin, alignment);
     if (p < begin || p > end || n > end - p) return 0;

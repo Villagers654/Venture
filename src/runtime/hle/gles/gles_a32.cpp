@@ -29,6 +29,18 @@ void varyings(GLuint program, GLsizei count, const std::uint32_t* input, GLenum 
   auto strings = strings32(count, input);
   angle_function<PFNGLTRANSFORMFEEDBACKVARYINGSPROC, "glTransformFeedbackVaryings">()(program, count, strings.data(), mode);
 }
+void uniform_indices(GLuint program, GLsizei count, const std::uint32_t* input, GLuint* indices) {
+  if (count < 0) { gl_error(GL_INVALID_VALUE); return; }
+  if (count && !input) { gl_error(GL_INVALID_VALUE); return; }
+  auto strings = strings32(count, input);
+  angle_function<PFNGLGETUNIFORMINDICESPROC, "glGetUniformIndices">()(program, count, strings.data(), indices);
+}
+GLuint shader_program(GLenum type, GLsizei count, const std::uint32_t* input) {
+  if (count < 0) { gl_error(GL_INVALID_VALUE); return 0; }
+  if (count && !input) { gl_error(GL_INVALID_VALUE); return 0; }
+  auto strings = strings32(count, input);
+  return angle_function<PFNGLCREATESHADERPROGRAMVPROC, "glCreateShaderProgramv">()(type, count, strings.data());
+}
 void vertex_pointer(GLuint index, GLenum name, std::uint32_t* out) {
   if (!out) return;
   void* pointer = nullptr;
@@ -87,6 +99,9 @@ void register_gles32_adapters() {
 #define ADAPT(name, fn) hle::a32::register_adapter(library, name, a32::wrap<&fn>())
     ADAPT("glShaderSource", shader_source);
     ADAPT("glTransformFeedbackVaryings", varyings);
+    ADAPT("glGetUniformIndices", uniform_indices);
+    ADAPT("glCreateShaderProgramv", shader_program);
+    ADAPT("glCreateShaderProgramvEXT", shader_program);
     ADAPT("glGetVertexAttribPointerv", vertex_pointer);
     ADAPT("glMapBufferRange", map_buffer);
     ADAPT("glMapBufferRangeEXT", map_buffer);

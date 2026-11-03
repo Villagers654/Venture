@@ -115,7 +115,10 @@ bool system_library(std::string_view name) {
   static const std::set<std::string_view> names{"libc.so", "libm.so", "libdl.so", "liblog.so", "libz.so", "libandroid.so",
       "libEGL.so", "libGLESv1_CM.so", "libGLESv2.so", "libGLESv3.so", "libvulkan.so", "libOpenSLES.so", "libaaudio.so",
       "libmediandk.so", "libjnigraphics.so", "libstdc++.so", "libnativewindow.so", "libsync.so", "libbinder_ndk.so",
-      "libcamera2ndk.so", "libneuralnetworks.so", "libGLESv3_adreno.so", "libvrapi.so", "libopenxr_loader.so"};
+      "libcamera2ndk.so", "libneuralnetworks.so", "libGLESv3_adreno.so", "libvrapi.so", "libopenxr_loader.so",
+      // Further public NDK libraries (public.libraries.txt): an app may list one in DT_NEEDED
+      // without importing anything from it (Roblox's libroblox.so and libOpenMAXAL.so).
+      "libOpenMAXAL.so", "libamidi.so", "libicu.so"};
   // ARM32 has no Vulkan translation: dlopen fails as on a GLES-only device.
   if (name == "libvulkan.so" && process_config().isa() == GuestIsa::a32) return false;
   return names.contains(name);

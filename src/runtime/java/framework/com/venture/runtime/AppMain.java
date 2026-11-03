@@ -151,6 +151,11 @@ public final class AppMain {
             .newInstance();
     env.application.ventureAttach(new Context());
     for (var provider : env.manifest.providers) {
+      // ActivityThread installs only this process's enabled providers (and multiprocess ones);
+      // a provider declared for another process, such as an SDK's ":isolate", starts there.
+      if (!provider.enabled || !provider.multiprocess
+          && !java.util.Objects.equals(provider.processName, env.manifest.info.applicationInfo.processName))
+        continue;
       var instance = (ContentProvider) env.loader.loadClass(provider.name)
                          .getDeclaredConstructor()
                          .newInstance();

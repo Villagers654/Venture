@@ -52,6 +52,17 @@ public class PackageManager {
     }
     return model.info;
   }
+  public static final int VERSION_CODE_HIGHEST = -1;
+  // The OpenXR loader's JNI wrappers (as bundled by Pico's plugin) resolve both
+  // overloads before any call; a missing one left a pending NoSuchMethodError
+  // where a Quest fails the runtime lookup cleanly.
+  public PackageInfo getPackageInfo(VersionedPackage pkg, int flags) throws NameNotFoundException {
+    PackageInfo info = getPackageInfo(pkg.getPackageName(), flags);
+    long version = pkg.getLongVersionCode();
+    if (version != VERSION_CODE_HIGHEST && version != info.getLongVersionCode())
+      throw new NameNotFoundException(pkg.toString());
+    return info;
+  }
   public ProviderInfo getProviderInfo(ComponentName name, int flags) throws NameNotFoundException {
     check(name.getPackageName());
     return model.providers.stream()

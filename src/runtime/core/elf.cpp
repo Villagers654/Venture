@@ -457,8 +457,10 @@ void Image::protect_segments() {
       pages[p] |= protection(ph.flags);
   for (const auto& ph : headers) if (ph.type == pt_relro && ph.memsz)
     // bionic/linker/linker_phdr.cpp protects every page touched by PT_GNU_RELRO.
+    // A RELRO padded past the last PT_LOAD page never reaches a neighbouring
+    // mapping (the test fixture's page above used to be another image's).
     for (auto p = align_down(load_bias + ph.vaddr, 4096); p < align_up(load_bias + ph.vaddr + ph.memsz, 4096); p += 4096)
-      pages[p] = kProtRead;
+      if (auto page = pages.find(p); page != pages.end()) page->second = kProtRead;
   for (auto it = pages.begin(); it != pages.end();) {
     auto start = it->first, end = start + 4096; auto prot = it->second; ++it;
     while (it != pages.end() && it->first == end && it->second == prot) { end += 4096; ++it; }

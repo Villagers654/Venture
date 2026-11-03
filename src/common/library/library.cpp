@@ -187,7 +187,11 @@ void save(const fs::path &file, const std::vector<meta::Game> &games) {
       Json{{"version", 1}, {"savedAt", paths::timestamp()}, {"games", rows}}
           .dump(2));
 }
-void uninstall(const fs::path &root, const Install &install) {
+void uninstall(const fs::path &library, const Install &install) {
+  // A library folder reached through a link (a games folder moved to another
+  // drive with a junction) is removed from at its real location; links below
+  // it are still refused.
+  const auto root = fs::weakly_canonical(library);
   auto target =
       paths::game_dir(root, install.plan.package, install.plan.version_code);
   if (fs::weakly_canonical(target) != fs::weakly_canonical(install.directory) ||
@@ -366,21 +370,48 @@ unsigned long long frames_submitted(std::string_view line, unsigned long long fr
   return frames;
 }
 }  // namespace
+std::vector<std::string> missing_expansions(const Install &install) {
+  std::vector<std::string> missing;
+  for (const auto &f : install.plan.files) {
+    if (!f.base() || f.kind != "obb") continue;
+    const auto target = install.directory / paths::from_utf8(f.name);
+    // Only a file that is not there; an unreadable one is not called missing.
+    std::error_code ec;
+    if (paths::within(install.directory, target) && fs::status(target, ec).type() == fs::file_type::not_found)
+      missing.push_back(f.name);
+  }
+  return missing;
+}
 bool needed_meta_sign_in(const fs::path &log) {
   std::ifstream in(log, std::ios::binary);
-  bool init_failed = false;
+  bool init_failed = false, crashed_on_reply = false;
   unsigned long long frames = 0;
+  double last = 0, refused = -1;
   for (std::string line; std::getline(in, line);) {
+    // log::write lines start with "<seconds>.<ms>"; continuation lines do not.
+    char *end = nullptr;
+    if (const double at = std::strtod(line.c_str(), &end); end != line.c_str() && at > 0) last = at;
     if (line.find("[ovrplatform] ovr_User_GetLoggedInUser request=") != std::string::npos ||
         line.find("[ovrplatform] ovr_Entitlement_GetIsViewerEntitled request=") != std::string::npos)
       if (line.find(" error=-20001") != std::string::npos) return true;
-    if (line.find("[ovrplatform] initialization failed error=-20001") != std::string::npos) init_failed = true;
+    // Synchronous initialization logs its own line; the asynchronous one
+    // completes as an ordinary request.
+    if (line.find("[ovrplatform] initialization failed error=-20001") != std::string::npos ||
+        (line.find("[ovrplatform] ovr_PlatformInitializeAndroidAsynchronous request=") != std::string::npos &&
+         line.find(" error=-20001") != std::string::npos))
+      init_failed = true;
+    if (line.find("[ovrplatform] ") != std::string::npos && line.find(" request=") != std::string::npos &&
+        line.find(" error=") != std::string::npos)
+      refused = last;
+    if (line.find("[libc] Fatal signal ") != std::string::npos && refused >= 0 && last - refused < 10)
+      crashed_on_reply = true;
     frames = frames_submitted(line, frames);
   }
   // A failed platform initialization alone is not fatal: many games play on
   // without it. One that quits before rendering past its first frames (Pinball
-  // FX, Deadpool VR) needed the account.
-  return init_failed && frames < 10;
+  // FX, Deadpool VR), or that crashes handling the failed reply of a later
+  // platform request (a null user in an IAP callback), needed the account.
+  return init_failed && (frames < 10 || crashed_on_reply);
 }
 bool needed_device_attestation(const fs::path &log) {
   std::ifstream in(log, std::ios::binary);

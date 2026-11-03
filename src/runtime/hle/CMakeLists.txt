@@ -8,6 +8,11 @@ FetchContent_Declare(mimalloc
   URL_HASH SHA256=083ea3a867ce85d0f552b2333f3629c10f86e29edfdaa944c35e3e0051375b99
   SYSTEM)
 FetchContent_MakeAvailable(mimalloc)
+# Every thread that allocates owns at least one segment of address space. The
+# A32 guest heap is a 1 GiB arena under 4 GiB, so mimalloc's 64-bit 32 MiB
+# segments capped an A32 game at about 32 allocating threads. 4 MiB is
+# mimalloc's own choice for 32-bit address spaces.
+target_compile_definitions(mimalloc-static PRIVATE MI_SEGMENT_SHIFT=22)
 # zlib comes from cmake/Dependencies.cmake.
 target_compile_definitions(zlibstatic PUBLIC _FILE_OFFSET_BITS=64 _LARGEFILE64_SOURCE=1)
 if(WIN32)

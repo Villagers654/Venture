@@ -38,6 +38,11 @@ public class Intent implements Parcelable {
   public Intent(Context c, Class<?> cls) {
     component = new ComponentName(c, cls);
   }
+  public Intent(String a, Uri u, Context c, Class<?> cls) {
+    this(c, cls);
+    action = a;
+    data = u;
+  }
   public Intent(Intent i) {
     action = i.action;
     pkg = i.pkg;
