@@ -283,17 +283,12 @@ Matrix view_matrix(XrPosef p) {
   m.m[3][3] = 1;
   return m;
 }
-// VrApi describes the eye field of view as one angle per axis
-// (SUGGESTED_EYE_FOV_DEGREES_X/Y), and games may build their cameras for a
-// symmetric frustum: CryEngine's mobile plugin (The Climb 2) does, and its eyes
-// do not converge with a host's asymmetric one (Quest 3 over Virtual Desktop:
-// -54/+40 degrees). Report the symmetric frustum covering the host's; projection
-// layers return the matching tan-angle matrix, so the host still gets every ray.
-XrFovf symmetric(XrFovf f) {
-  const float h = std::max(std::abs(f.angleLeft), std::abs(f.angleRight));
-  const float v = std::max(std::abs(f.angleUp), std::abs(f.angleDown));
-  return {-h, h, v, -v};
-}
+// Eye projections are the host view's own frustum, asymmetric on a Quest 3
+// (-54/+40 by +44/-55 degrees for the left eye), as VrApi reports them on the
+// device itself, natively and in Quest 2 compatibility mode. Only
+// SUGGESTED_EYE_FOV_DEGREES_X/Y describe the symmetric frustum covering it
+// (properties.cpp). A game that renders the tracking projection then fills
+// exactly the host's view at the host's recommended size.
 Matrix projection_matrix(XrFovf f) {
   float l = std::tan(f.angleLeft), r = std::tan(f.angleRight), u = std::tan(f.angleUp),
         d = std::tan(f.angleDown);
@@ -342,7 +337,7 @@ Tracking tracking_at(XrTime time, XrSpace target) {
       hle::openxr::sanitize_views(vs, count, views);
       for (int eye = 0; eye < 2; ++eye) {
         out.eye[eye].view = view_matrix(views[eye].pose);
-        out.eye[eye].projection = projection_matrix(symmetric(views[eye].fov));
+        out.eye[eye].projection = projection_matrix(views[eye].fov);
       }
     }
   }

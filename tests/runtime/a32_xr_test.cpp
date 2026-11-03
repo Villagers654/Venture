@@ -174,6 +174,12 @@ TEST_CASE("A32 VrApi 1.21 wire layouts, sret, Token32 and frame submission") {
   // legitimately be skipped by the existing haptic scheduler.
   std::memset(c.memory.at<void>(1600), 0, samples.size());
   CHECK(ventureMockXrAwaitHaptics(pulses + 1, 2000));
+  // The host's view is the layer's 45 degrees: one projection layer, uncut.
+  constexpr float quarter = 0.78539816f;
+  MockXrScript view{};
+  view.view_fov = std::array{-quarter, quarter, quarter, -quarter};
+  ventureMockXrSetScript(&view);
+  struct RestoreScript { ~RestoreScript() { MockXrScript defaults{}; ventureMockXrSetScript(&defaults); } } restore;
   vr::abi32::Projection layer{};
   layer.header = {1, 2, {1, 1, 1, 1}, 1, 0, 0};
   layer.head = t.head;

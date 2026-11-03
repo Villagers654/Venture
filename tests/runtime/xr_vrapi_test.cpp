@@ -434,6 +434,98 @@ TEST_CASE("VrApi projection FOV covers only each eye's texture rect") {
   }
 }
 
+TEST_CASE("VrApi projection sends each eye only the part of its frustum inside the host view") {
+  // Quest 3 over Link: host eyes -54..+40 / -40..+54 by +44..-55 degrees. The
+  // guest renders the symmetric frustum SUGGESTED_EYE_FOV describes, +-54 by
+  // +-55 (VrApi_Helpers.h TanAngleMatrixFromProjection), in GLES and in Vulkan rows.
+  constexpr float degree = std::numbers::pi_v<float> / 180;
+  const XrFovf host[2]{{-54 * degree, 40 * degree, 44 * degree, -55 * degree},
+                       {-40 * degree, 54 * degree, 44 * degree, -55 * degree}};
+  XrView eyes[2]{{XR_TYPE_VIEW}, {XR_TYPE_VIEW}};
+  for (int eye = 0; eye < 2; ++eye) {
+    eyes[eye].pose = {{0, 0, 0, 1}, {eye ? .031f : -.031f, 0, 0}};
+    eyes[eye].fov = host[eye];
+  }
+  auto tan_angles = [](float h, float v, bool vulkan) {
+    vr::abi::Matrix m{};
+    m.m[0][0] = .5f / std::tan(h);  // .5 * P[0][0] of a symmetric projection
+    m.m[0][2] = -.5f;
+    m.m[1][1] = (vulkan ? -.5f : .5f) / std::tan(v);
+    m.m[1][2] = -.5f;
+    m.m[2][2] = -1;
+    return m;
+  };
+  std::vector<vr::abi::Rect> rects;
+  auto image = [&](vr::abi::TextureSwapChain *, int, vr::abi::Rect rect, int, bool, XrSwapchainSubImage &) {
+    rects.push_back(rect);
+    return XR_SUCCESS;
+  };
+  vr::abi::Projection projection{};
+  projection.header = {1, 0, {1, 1, 1, 1}, 1, 0, 0};
+  projection.head.pose.orientation.w = 1;
+  const float h54 = std::tan(54 * degree), h40 = std::tan(40 * degree);
+  const float v55 = std::tan(55 * degree), v44 = std::tan(44 * degree);
+  const float inner = (h40 + h54) / (2 * h54), top = (v44 + v55) / (2 * v55);
+  for (bool vulkan : {false, true}) {
+    CAPTURE(vulkan);
+    for (auto &t : projection.textures) {
+      t.tan_angles = tan_angles(54 * degree, 55 * degree, vulkan);
+      t.rect = {0, 0, 1, 1};
+    }
+    rects.clear();
+    vr::LayerStorage storage;
+    std::vector<const XrCompositionLayerBaseHeader *> layers;
+    REQUIRE(vr::translate_layer(projection.header, eyes, image, storage, layers) == XR_SUCCESS);
+    REQUIRE(rects.size() == 2);
+    for (int eye = 0; eye < 2; ++eye) {
+      CAPTURE(eye);
+      const auto &fov = storage.views[eye].fov;
+      CHECK(fov.angleLeft == doctest::Approx(host[eye].angleLeft).epsilon(1e-5));
+      CHECK(fov.angleRight == doctest::Approx(host[eye].angleRight).epsilon(1e-5));
+      CHECK(fov.angleUp == doctest::Approx(host[eye].angleUp).epsilon(1e-5));
+      CHECK(fov.angleDown == doctest::Approx(host[eye].angleDown).epsilon(1e-5));
+      // The left eye loses the right of the image, the right eye its left;
+      // both lose the top, which is T = 1 in GLES rows and T = 0 in Vulkan's.
+      CHECK(rects[eye].x == doctest::Approx(eye ? 1 - inner : 0));
+      CHECK(rects[eye].width == doctest::Approx(inner));
+      CHECK(rects[eye].y == doctest::Approx(vulkan ? 1 - top : 0));
+      CHECK(rects[eye].height == doctest::Approx(top));
+    }
+  }
+  // The Climb 2's credits: +-45 degrees, narrower than the host's view on some
+  // sides. The part inside the host's view becomes one quad per eye, 10 m
+  // ahead, which the Meta runtime cannot stretch over the display.
+  for (auto &t : projection.textures) {
+    t.tan_angles = tan_angles(45 * degree, 45 * degree, false);
+    t.rect = {0, 0, 1, 1};
+  }
+  rects.clear();
+  vr::LayerStorage storage;
+  std::vector<const XrCompositionLayerBaseHeader *> layers;
+  REQUIRE(vr::translate_layer(projection.header, eyes, image, storage, layers) == XR_SUCCESS);
+  REQUIRE(layers.size() == 2);
+  for (int eye = 0; eye < 2; ++eye) {
+    CAPTURE(eye);
+    const float l = std::max(-1.f, std::tan(host[eye].angleLeft));
+    const float r = std::min(1.f, std::tan(host[eye].angleRight));
+    const float u = std::min(1.f, std::tan(host[eye].angleUp));
+    const float d = std::max(-1.f, std::tan(host[eye].angleDown));
+    CHECK(rects[eye].x == doctest::Approx((l + 1) / 2));
+    CHECK(rects[eye].width == doctest::Approx((r - l) / 2));
+    CHECK(rects[eye].y == doctest::Approx((d + 1) / 2));
+    CHECK(rects[eye].height == doctest::Approx((u - d) / 2));
+    const auto &quad = storage.quad[eye];
+    CHECK(layers[eye] == reinterpret_cast<const XrCompositionLayerBaseHeader *>(&quad));
+    CHECK(quad.space == vr::state().app);
+    CHECK(quad.eyeVisibility == (eye ? XR_EYE_VISIBILITY_RIGHT : XR_EYE_VISIBILITY_LEFT));
+    CHECK(quad.size.width == doctest::Approx((r - l) * 10));
+    CHECK(quad.size.height == doctest::Approx((u - d) * 10));
+    CHECK(quad.pose.position.x == doctest::Approx(eyes[eye].pose.position.x + (l + r) / 2 * 10));
+    CHECK(quad.pose.position.y == doctest::Approx((u + d) / 2 * 10));
+    CHECK(quad.pose.position.z == doctest::Approx(-10));
+  }
+}
+
 TEST_CASE("VrApi head-locked projections become one head-locked quad per eye") {
   // The Climb 2's loading layer: FIXED_TO_VIEW, alpha-blended, the central 60%
   // of a 90-degree frustum, here shifted left to make it asymmetric.
@@ -1042,6 +1134,12 @@ TEST_CASE("VrApi constant projective layers copy their texel across both eye fru
 }
 
 TEST_CASE("VrApi inverse alpha layers invert alpha through color scale and bias") {
+  // The host's view is the layer's 45 degrees: one projection layer, uncut.
+  const float quarter = std::numbers::pi_v<float> / 4;
+  MockXrScript script{};
+  script.view_fov = std::array{-quarter, quarter, quarter, -quarter};
+  ventureMockXrSetScript(&script);
+  struct RestoreScript { ~RestoreScript() { MockXrScript defaults{}; ventureMockXrSetScript(&defaults); } } restore;
   venture::test::XrImageFixture images;
   venture::xr::install_xr_images(&images);
   vr::abi::Init init{1, 1, 1, 52, 0, 0x10300, {1, 2, 3}};
@@ -1065,7 +1163,7 @@ TEST_CASE("VrApi inverse alpha layers invert alpha through color scale and bias"
     texture.tan_angles.m[0][2] = texture.tan_angles.m[1][2] = -.5f;
     texture.tan_angles.m[2][2] = -1;
     eyes[eye].pose.orientation.w = 1;
-    eyes[eye].fov = {-.8f, .8f, .8f, -.8f};
+    eyes[eye].fov = {-quarter, quarter, quarter, -quarter};
   }
   vr::LayerStorage storage;
   std::vector<const XrCompositionLayerBaseHeader *> layers;
@@ -2061,6 +2159,12 @@ TEST_CASE("VrApi cylinder sub-rects sit where the full layer shows their rows") 
   api = saved;
 }
 TEST_CASE("VrApi flipped texture rects stay inside odd-height images") {
+  // The host's view is the layer's: 45 degrees each side, from level down.
+  const float quarter = std::numbers::pi_v<float> / 4;
+  MockXrScript script{};
+  script.view_fov = std::array{-quarter, quarter, 0.f, -quarter};
+  ventureMockXrSetScript(&script);
+  struct RestoreScript { ~RestoreScript() { MockXrScript defaults{}; ventureMockXrSetScript(&defaults); } } restore;
   VrApiFrames vr_frames;
   auto *ring = vg::vrapi_CreateTextureSwapChain3(0, 0x8058, 32, 33, 1, 1);
   REQUIRE(ring);
@@ -2172,7 +2276,7 @@ TEST_CASE("VrApi legacy tracking transforms preserve repeated floor and eye sele
   vg::vrapi_Shutdown();
   venture::xr::install_xr_images(nullptr);
 }
-TEST_CASE("VrApi eye projections are symmetric frusta covering an asymmetric host view") {
+TEST_CASE("VrApi eye projections are the host's asymmetric frusta; the suggested fov covers them") {
   // Quest 3 through VirtualDesktopXR: -54/40/44/-55 degrees for both eyes here.
   MockXrScript asymmetric{};
   asymmetric.view_fov = std::array{-0.9425f, 0.6981f, 0.7679f, -0.9599f};
@@ -2185,12 +2289,14 @@ TEST_CASE("VrApi eye projections are symmetric frusta covering an asymmetric hos
   auto *mobile = vg::vrapi_EnterVrMode(&mode);
   REQUIRE(mobile);
   const auto tracking = vg::vrapi_GetPredictedTracking2(mobile, vg::vrapi_GetPredictedDisplayTime(mobile, 0));
+  // The terms VrApi gives a left eye on a Quest 3 itself (VrProbe, Horizon OS 209).
   for (const auto &eye : tracking.eye) {
-    CHECK(eye.projection.m[0][2] == doctest::Approx(0));
-    CHECK(eye.projection.m[1][2] == doctest::Approx(0));
-    CHECK(eye.projection.m[0][0] == doctest::Approx(1 / std::tan(0.9425f)));
-    CHECK(eye.projection.m[1][1] == doctest::Approx(1 / std::tan(0.9599f)));
+    CHECK(eye.projection.m[0][0] == doctest::Approx(0.902738).epsilon(1e-4));
+    CHECK(eye.projection.m[0][2] == doctest::Approx(-0.242513).epsilon(1e-3));
+    CHECK(eye.projection.m[1][1] == doctest::Approx(0.835479).epsilon(1e-4));
+    CHECK(eye.projection.m[1][2] == doctest::Approx(-0.193187).epsilon(1e-3));
   }
+  // SUGGESTED_EYE_FOV_DEGREES_X/Y: the symmetric frustum covering it, 108 x 110.
   CHECK(vg::vrapi_GetSystemPropertyFloat(nullptr, 7) == doctest::Approx(2 * 0.9425f * 57.2957795f));
   CHECK(vg::vrapi_GetSystemPropertyFloat(nullptr, 8) == doctest::Approx(2 * 0.9599f * 57.2957795f));
   // The first frame remembers the host's view: the next launch reports the same

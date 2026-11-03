@@ -122,9 +122,12 @@ float vrapi_GetSystemPropertyFloat(const Java *, std::int32_t property) {
     if (state().mobile) {
       auto tracking = vrapi_GetPredictedTracking2(state().mobile, 0);
       auto &p = tracking.eye[0].projection;
-      if (p.m[0][0] > 0 && p.m[1][1] > 0)
-        return (property == 7 ? 2 * std::atan(1 / p.m[0][0]) : 2 * std::atan(1 / p.m[1][1])) *
-               57.2957795f;
+      // The symmetric frustum covering the eye's projection: a Quest 3 reports
+      // 108 x 110 degrees for its -54/+40 by +44/-55 eye. A side's tangent is
+      // (offset -+ 1) / scale, so the wider side is (1 + |offset|) / scale.
+      const float scale = property == 7 ? p.m[0][0] : p.m[1][1];
+      const float offset = property == 7 ? p.m[0][2] : p.m[1][2];
+      if (scale > 0) return 2 * std::atan((1 + std::abs(offset)) / scale) * 57.2957795f;
     }
     // SUGGESTED_EYE_FOV_DEGREES is queried to construct cameras before
     // EnterVrMode (CryEngine's mobile plugin keeps it for the game camera).
