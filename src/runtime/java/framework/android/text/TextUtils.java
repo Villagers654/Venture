@@ -29,4 +29,22 @@ public final class TextUtils {
       dest.setSpan(span, st - start + destOffset, en - start + destOffset, source.getSpanFlags(span));
     }
   }
+  /** View.LAYOUT_DIRECTION_RTL for a right-to-left script, else LTR; null and ROOT are LTR. */
+  public static int getLayoutDirectionFromLocale(java.util.Locale locale) {
+    if (locale == null || locale.equals(java.util.Locale.ROOT)) return android.util.LayoutDirection.LTR;
+    String script = locale.getScript();
+    if (script.isEmpty()) {
+      script = switch (locale.getLanguage()) {
+        case "ar", "fa", "ur", "ps", "sd", "ug", "ckb" -> "Arab";
+        case "he", "iw", "yi", "ji" -> "Hebr";
+        case "dv" -> "Thaa";
+        case "syr" -> "Syrc";
+        default -> "";
+      };
+    }
+    return switch (script) {
+      case "Arab", "Hebr", "Thaa", "Syrc", "Nkoo", "Adlm", "Rohg", "Mand", "Samr" -> android.util.LayoutDirection.RTL;
+      default -> android.util.LayoutDirection.LTR;
+    };
+  }
 }

@@ -4,6 +4,9 @@ public class Configuration {
   public static final int ORIENTATION_UNDEFINED = 0, ORIENTATION_PORTRAIT = 1,
                           ORIENTATION_LANDSCAPE = 2, UI_MODE_NIGHT_NO = 0x10,
                           UI_MODE_NIGHT_YES = 0x20, UI_MODE_NIGHT_MASK = 0x30;
+  public static final int SCREENLAYOUT_LAYOUTDIR_MASK = 0xC0, SCREENLAYOUT_LAYOUTDIR_SHIFT = 6,
+                          SCREENLAYOUT_LAYOUTDIR_UNDEFINED = 0, SCREENLAYOUT_LAYOUTDIR_LTR = 0x40,
+                          SCREENLAYOUT_LAYOUTDIR_RTL = 0x80;
   public float fontScale = 1;
   // SDR, non-wide-gamut display (AOSP Configuration COLOR_MODE_* fields).
   public int colorMode = 0x5;
@@ -14,7 +17,9 @@ public class Configuration {
   public int densityDpi = 320, screenWidthDp = 960, screenHeightDp = 540,
              smallestScreenWidthDp = 540;
   public Locale locale = Locale.getDefault();
-  public Configuration() {}
+  public Configuration() {
+    setLayoutDirection(locale);
+  }
   public Configuration(Configuration c) {
     setTo(c);
   }
@@ -38,6 +43,7 @@ public class Configuration {
     screenHeightDp = c.screenHeightDp;
     smallestScreenWidthDp = c.smallestScreenWidthDp;
     locale = c.locale;
+    localeList = c.localeList;
   }
   public int updateFrom(Configuration c) {
     int changed = 0;
@@ -55,6 +61,11 @@ public class Configuration {
     if (c.locale != null && !c.locale.equals(locale)) {
       locale = c.locale;
       changed |= 4;
+    }
+    int direction = c.screenLayout & SCREENLAYOUT_LAYOUTDIR_MASK;
+    if (direction != SCREENLAYOUT_LAYOUTDIR_UNDEFINED && direction != (screenLayout & SCREENLAYOUT_LAYOUTDIR_MASK)) {
+      screenLayout = (screenLayout & ~SCREENLAYOUT_LAYOUTDIR_MASK) | direction;
+      changed |= 0x2000;
     }
     if (c.orientation != 0 && orientation != c.orientation) {
       orientation = c.orientation;
@@ -99,11 +110,26 @@ public class Configuration {
   }
   public void setLocale(Locale value) {
     locale = value;
+    setLayoutDirection(value);
   }
+  /** Stores the locale's direction in screenLayout's layout-direction bits, as Android does. */
+  public void setLayoutDirection(Locale value) {
+    int direction = 1 + android.text.TextUtils.getLayoutDirectionFromLocale(value);
+    screenLayout = (screenLayout & ~SCREENLAYOUT_LAYOUTDIR_MASK) | (direction << SCREENLAYOUT_LAYOUTDIR_SHIFT);
+  }
+  private android.os.LocaleList localeList;
   public android.os.LocaleList getLocales() {
-    return new android.os.LocaleList(locale);
+    // A list set through setLocales stays while the primary locale still matches it.
+    if (localeList != null && (localeList.isEmpty() ? locale == null : localeList.get(0).equals(locale)))
+      return localeList;
+    return locale == null ? new android.os.LocaleList() : new android.os.LocaleList(locale);
+  }
+  public void setLocales(android.os.LocaleList locales) {
+    localeList = locales == null ? new android.os.LocaleList() : locales;
+    setLocale(localeList.isEmpty() ? null : localeList.get(0));
   }
   public int getLayoutDirection() {
-    return java.util.Set.of("ar", "fa", "he", "ur").contains(locale.getLanguage()) ? 1 : 0;
+    return (screenLayout & SCREENLAYOUT_LAYOUTDIR_MASK) == SCREENLAYOUT_LAYOUTDIR_RTL
+        ? android.util.LayoutDirection.RTL : android.util.LayoutDirection.LTR;
   }
 }

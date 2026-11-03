@@ -15,6 +15,7 @@ public final class FrameworkTest {
       + "TPpEQNA2WiEgwnsy6MjGA6MhMB8wHQYDVR0OBBYEFN3B5aHBVDkk1SENofWjpoRq"
       + "Wym9MAoGCCqGSM49BAMDA0gAMEUCIBVQsk3YnGyLIbflRLbEYjIjgBun8Q5QThHU"
       + "Hzmc+i3pAiEA1kpEXFh0CpxPhvnkdp8bFlk1dZdMs0GSLQRKAlL8uFU=";
+  public static final class ServiceRunnable implements Runnable { public void run() {} }
   private static int checks;
   private static void check(boolean ok, String message) {
     checks++;
@@ -996,6 +997,10 @@ public final class FrameworkTest {
       check("48000".equals(audioManager.getProperty(android.media.AudioManager.PROPERTY_OUTPUT_SAMPLE_RATE))
           && "240".equals(audioManager.getProperty(android.media.AudioManager.PROPERTY_OUTPUT_FRAMES_PER_BUFFER)),
           "audio output properties answer without an output device");
+      // FMOD Ex's OpenSL output reflects on the hidden class (Beat Saber demo: output init error 60).
+      check(android.media.AudioSystem.getPrimaryOutputSamplingRate() == 48000
+          && android.media.AudioSystem.getPrimaryOutputFrameCount() == 240,
+          "AudioSystem reports the primary output's rate and period");
       // Photon Voice's echo-cancelling input routes voice chat (Android 12+).
       var voice = new android.media.AudioManager() {
         public android.media.AudioDeviceInfo[] getDevices(int flags) {
@@ -1037,6 +1042,12 @@ public final class FrameworkTest {
     boolean stillHeld = multicast.isHeld();
     multicast.release();
     check(wifi.isWifiEnabled() && stillHeld && !multicast.isHeld(), "Wi-Fi multicast locks are reference counted");
+    // ByteBrew reads the carrier during Les Mills Bodycombat's entry load (NoSuchMethodError stopped it).
+    var phone = (android.telephony.TelephonyManager) new android.content.Context().getSystemService(android.content.Context.TELEPHONY_SERVICE);
+    check(phone.getSimOperatorName().isEmpty() && phone.getSimOperator().isEmpty()
+        && phone.getSimState() == android.telephony.TelephonyManager.SIM_STATE_UNKNOWN && phone.getDeviceId() == null
+        && phone.getSubscriptionId() == -1 && phone.getActiveModemCount() == 0 && !phone.isNetworkRoaming(),
+        "telephony answers as a device without a phone service");
     boolean encoderRejected = false, unknownRejected = false;
     try { android.media.MediaCodec.createByCodecName("OMX.google.h264.encoder"); } catch (java.io.IOException e) { encoderRejected = true; }
     try { android.media.MediaCodec.createByCodecName("OMX.example.unknown"); } catch (IllegalArgumentException e) { unknownRejected = true; }
@@ -1052,6 +1063,27 @@ public final class FrameworkTest {
     span.draw(canvas, "e", 0, 1, 0, 0, 0, 0, null);
     check(span instanceof android.text.style.UpdateAppearance && canvas.getSaveCount() == 2,
         "replacement spans draw on an inert canvas");
+  }
+  private static void textToSpeech() throws Exception {
+    // Unreal's GameActivity implements OnInitListener; with no engine every request fails (Espire 2).
+    int[] heard = {1};
+    var tts = new android.speech.tts.TextToSpeech(new android.content.Context(), status -> heard[0] = status);
+    check(heard[0] == android.speech.tts.TextToSpeech.ERROR && tts.speak("hi", android.speech.tts.TextToSpeech.QUEUE_FLUSH, null, "id") == android.speech.tts.TextToSpeech.ERROR
+        && tts.setLanguage(java.util.Locale.US) == android.speech.tts.TextToSpeech.LANG_NOT_SUPPORTED
+        && !tts.isSpeaking() && tts.getEngines().isEmpty(), "TextToSpeech without an engine refuses requests");
+    tts.shutdown();
+  }
+  private static void androidCAStore() throws Exception {
+    // Unity's TLS enumerates the system roots like this and crashes when it fails (Alcove).
+    com.venture.runtime.AndroidCAStore.install();
+    var store = java.security.KeyStore.getInstance("AndroidCAStore");
+    store.load(null);
+    var aliases = java.util.Collections.list(store.aliases());
+    check(aliases.size() > 50 && aliases.stream().allMatch(a -> a.matches("system:[0-9a-f]{8}\\.\\d+")),
+        "AndroidCAStore lists the system roots under system: aliases");
+    var cert = (java.security.cert.X509Certificate) store.getCertificate(aliases.get(0));
+    check(store.isCertificateEntry(aliases.get(0)) && cert.getEncoded().length > 0
+        && aliases.get(0).equals(store.getCertificateAlias(cert)), "AndroidCAStore entries are trusted certificates");
   }
   private static void disabledTelemetry() throws Exception {
     // Reflect the exact class and method contracts requested by native clients.
@@ -1085,6 +1117,8 @@ public final class FrameworkTest {
     check(AppMain.quitProgress() == 0 && AppMain.quitNativeCount() == 0,
         "default lifecycle has no menu termination admission state before a quit");
     disabledTelemetry();
+    androidCAStore();
+    textToSpeech();
     var power = new PowerManager();
     check(Float.isNaN(power.getThermalHeadroom(0)) && Float.isNaN(power.getThermalHeadroom(60)),
         "unavailable thermal prediction is NaN");
@@ -1242,6 +1276,19 @@ public final class FrameworkTest {
       networkType.set(9);
       check(connectivity.getActiveNetworkInfo().getTypeName().equals("ETHERNET"),
           "network changes are reflected by subsequent queries");
+      // Cognitive3D reads the Wi-Fi signal every tick (Les Mills Bodycombat: NoSuchMethodError getConnectionInfo).
+      var wifiManager = new android.net.wifi.WifiManager();
+      var wired = wifiManager.getConnectionInfo();
+      networkType.set(1);
+      var radio = wifiManager.getConnectionInfo();
+      check(wired.getSupplicantState() == android.net.wifi.SupplicantState.DISCONNECTED
+          && wired.getRssi() == android.net.wifi.WifiInfo.INVALID_RSSI && wired.getBSSID() == null
+          && radio.getSupplicantState() == android.net.wifi.SupplicantState.COMPLETED
+          && android.net.wifi.WifiManager.calculateSignalLevel(radio.getRssi(), 5) == 4
+          && wifiManager.calculateSignalLevel(radio.getRssi()) == wifiManager.getMaxSignalLevel()
+          && radio.getSSID().equals("<unknown ssid>") && radio.getMacAddress().equals("02:00:00:00:00:00"),
+          "Wi-Fi connection info follows the host route with Android's redacted identifiers");
+      networkType.set(9);
       networkType.set(-2);
       check(connectivity.getActiveNetworkInfo() == null && !connectivity.getNetworkInfo(1).isConnected(),
           "disconnection is reflected without reporting an active network");
@@ -1346,6 +1393,28 @@ public final class FrameworkTest {
       packageManager.getPermissionInfo("com.example.permission.NONE", 0);
       check(false, "an undefined permission is not found");
     } catch (android.content.pm.PackageManager.NameNotFoundException expected) {}
+    // The OpenXR loader's JNI wrappers bundled by Pico's plugin (Cities: VR, issue 78)
+    // resolve both getPackageInfo overloads up front, then fail the Pico runtime
+    // package lookup with NameNotFoundException as on a Quest.
+    check(android.content.pm.PackageManager.class.getMethod("getPackageInfo",
+              android.content.pm.VersionedPackage.class, int.class).getReturnType()
+            == android.content.pm.PackageInfo.class,
+        "getPackageInfo(VersionedPackage, int) exists");
+    check(packageManager.getPackageInfo(new android.content.pm.VersionedPackage("test.intent",
+              android.content.pm.PackageManager.VERSION_CODE_HIGHEST), 0).packageName.equals("test.intent"),
+        "the app's own versioned package resolves at any version");
+    try {
+      packageManager.getPackageInfo(new android.content.pm.VersionedPackage("com.pico.xr.openxr_runtime",
+          android.content.pm.PackageManager.VERSION_CODE_HIGHEST), 0);
+      check(false, "an absent versioned package is not found");
+    } catch (android.content.pm.PackageManager.NameNotFoundException expected) {}
+    var parcel = android.os.Parcel.obtain();
+    new android.content.ComponentName("test.intent", ".Main").writeToParcel(parcel, 0);
+    parcel.setDataPosition(0);
+    check(new android.content.ComponentName(parcel).getClassName().equals("test.intent.Main")
+            && android.content.Intent.class.getConstructor(String.class, android.net.Uri.class,
+                   android.content.Context.class, Class.class) != null,
+        "every ComponentName and Intent constructor the loader's wrappers resolve exists");
     // Bogo's avatar loader asks for another package's context; only the app's own exists.
     var packaged = new android.content.Context() {
       @Override public String getPackageName() { return "test.packaged"; }
@@ -2248,6 +2317,9 @@ public final class FrameworkTest {
     RuntimeEnvironment.configure(new String[]{"test.game", obbRoot.resolve("base.apk").toString(),
         obbRoot.resolve("data").toString(), obbRoot.resolve("cache").toString(), obbView.toString(),
         obbRoot.resolve("lib").toString(), "32", obbRoot.resolve("app.jar").toString()}, obbHost);
+    // This fixture's base.apk is not a zip, so the loader serves no APK Java resources.
+    check(providerWarnings.remove("APK Java resources are unavailable (ZipException)"),
+        "an unreadable APK leaves Java resources unavailable with a warning");
     var obbContext = new android.content.Context();
     var nativeInfo = new android.content.pm.ActivityInfo();
     nativeInfo.name = NativeStartupActivity.class.getName();
@@ -2319,6 +2391,80 @@ public final class FrameworkTest {
         .checkServerTrusted(new java.security.cert.X509Certificate[] {anchor, anchor}, "EC", "example.com");
     check(trusted.equals(java.util.List.of(anchor)), "a trusted chain ends at its self-signed anchor");
     check(!extensions.isUserAddedCertificate(null), "no user-added certificates");
+    // OkHttp's Android 10+ platform guards each call with android.util.CloseGuard (Roblox).
+    var guard = new android.util.CloseGuard();
+    guard.open("close");
+    guard.warnIfOpen();
+    guard.close();
+    boolean namedCloser = false;
+    try { guard.open(null); } catch (NullPointerException expected) { namedCloser = true; }
+    check(namedCloser, "a close guard needs its close method's name");
+    // Content providers route their URIs through UriMatcher (Roblox's configuration provider).
+    var matcher = new android.content.UriMatcher(android.content.UriMatcher.NO_MATCH);
+    matcher.addURI("com.example.provider", "items", 1);
+    matcher.addURI("com.example.provider", "/items/#", 2);
+    matcher.addURI("com.example.provider", "items/special", 4);
+    matcher.addURI("com.example.provider", "items/*/detail", 3);
+    matcher.addURI("com.example.provider", null, 5);
+    check(matcher.match(android.net.Uri.parse("content://com.example.provider/items")) == 1, "exact path matches");
+    check(matcher.match(android.net.Uri.parse("content://com.example.provider/items/42")) == 2, "# matches digits");
+    check(matcher.match(android.net.Uri.parse("content://com.example.provider/items/special")) == 4,
+        "a non-numeric segment skips # for an earlier exact child");
+    check(matcher.match(android.net.Uri.parse("content://com.example.provider/items/a/detail")) == 3, "* matches text");
+    check(matcher.match(android.net.Uri.parse("content://com.example.provider")) == 5, "a bare authority matches");
+    check(matcher.match(android.net.Uri.parse("content://com.example.provider/other")) == -1, "unknown paths miss");
+    check(matcher.match(android.net.Uri.parse("content://other.provider/items")) == -1, "unknown authorities miss");
+    boolean negative = false;
+    try { matcher.addURI("a", "b", -2); } catch (IllegalArgumentException expected) { negative = true; }
+    check(negative, "codes must not be negative");
+    // A provider reports this process's package as its caller (Roblox's configuration provider).
+    var callerProvider = new android.content.ContentProvider() {
+      public boolean onCreate() { return true; }
+      public String getType(android.net.Uri uri) { return null; }
+    };
+    check(callerProvider.getCallingPackage() == null, "a detached provider has no caller");
+    check(new android.content.pm.ProviderInfo().grantUriPermissions == false, "providers grant no URI permissions by default");
+    check(android.net.ssl.SSLSockets.isSupportedSocket(
+        (javax.net.ssl.SSLSocket) javax.net.ssl.SSLSocketFactory.getDefault().createSocket()), "platform TLS sockets are supported");
+    // ServiceLoader reads META-INF/services from the APK itself (Roblox's coroutine Main dispatcher).
+    var resourceApk = java.nio.file.Files.createTempFile("resources", ".apk");
+    try (var zip = new java.util.zip.ZipOutputStream(java.nio.file.Files.newOutputStream(resourceApk))) {
+      zip.putNextEntry(new java.util.zip.ZipEntry("META-INF/services/java.lang.Runnable"));
+      zip.write("FrameworkTest$ServiceRunnable\n".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+      zip.putNextEntry(new java.util.zip.ZipEntry("okhttp3/publicsuffixes.gz"));
+      zip.write(new byte[] {1, 2, 3});
+    }
+    var resourceLoader = new dalvik.system.PathClassLoader("", FrameworkTest.class.getClassLoader());
+    resourceLoader.ventureResourceApk(resourceApk.toFile());
+    try (var in = resourceLoader.getResourceAsStream("okhttp3/publicsuffixes.gz")) {
+      check(in != null && java.util.Arrays.equals(in.readAllBytes(), new byte[] {1, 2, 3}), "APK entries read as Java resources");
+    }
+    check(resourceLoader.getResource("classes9.dex") == null && resourceLoader.getResource("okhttp3/") == null,
+        "absent entries and directories are no resources");
+    var services = java.util.ServiceLoader.load(Runnable.class, resourceLoader).stream().toList();
+    check(services.size() == 1 && services.get(0).type() == ServiceRunnable.class, "ServiceLoader finds APK service files");
+    // Unity's AppUI GameActivity reads the locale's layout direction in onCreate (UG).
+    check(android.text.TextUtils.getLayoutDirectionFromLocale(java.util.Locale.US) == android.util.LayoutDirection.LTR,
+        "English lays out left to right");
+    check(android.text.TextUtils.getLayoutDirectionFromLocale(java.util.Locale.forLanguageTag("ar-EG"))
+        == android.util.LayoutDirection.RTL, "Arabic lays out right to left");
+    check(android.text.TextUtils.getLayoutDirectionFromLocale(java.util.Locale.forLanguageTag("iw")) == 1
+        && android.text.TextUtils.getLayoutDirectionFromLocale(java.util.Locale.forLanguageTag("az-Arab")) == 1
+        && android.text.TextUtils.getLayoutDirectionFromLocale(java.util.Locale.forLanguageTag("az-Latn")) == 0,
+        "the script decides the direction");
+    check(android.text.TextUtils.getLayoutDirectionFromLocale(null) == 0
+        && android.text.TextUtils.getLayoutDirectionFromLocale(java.util.Locale.ROOT) == 0, "no locale is LTR");
+    // Roblox's activity sets its configuration's direction from the locale in attachBaseContext.
+    var directed = new android.content.res.Configuration();
+    directed.setLayoutDirection(java.util.Locale.forLanguageTag("he-IL"));
+    check(directed.getLayoutDirection() == android.util.LayoutDirection.RTL, "a Hebrew configuration lays out RTL");
+    directed.setLocale(java.util.Locale.US);
+    check(directed.getLayoutDirection() == android.util.LayoutDirection.LTR, "setLocale also sets the direction");
+    var ordered = new android.os.LocaleList(java.util.Locale.forLanguageTag("ar"), java.util.Locale.US);
+    directed.setLocales(ordered);
+    check(directed.getLocales() == ordered && directed.locale.getLanguage().equals("ar")
+        && directed.getLayoutDirection() == android.util.LayoutDirection.RTL, "setLocales keeps the list and its primary locale");
+    check(android.nfc.NfcAdapter.getDefaultAdapter(null) == null, "a Quest has no NFC adapter");
     // UE 5.4 AndroidThunkJava_SetNativeDisplayRefreshRate hints the rate on its surface.
     var surface = new android.view.Surface(4, 4);
     surface.setFrameRate(72f, android.view.Surface.FRAME_RATE_COMPATIBILITY_DEFAULT);

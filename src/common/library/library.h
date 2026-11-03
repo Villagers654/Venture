@@ -56,8 +56,12 @@ std::string runtime_failure(std::string_view log_tail, int exit_code);
 // entitlement and getting "not signed in" (no account, or an expired one).
 // Games such as Beat Saber then quit on their own, often with exit code 0.
 // A failed platform initialization counts when the game then quit before
-// rendering more than a few frames.
+// rendering more than a few frames, or crashed right after a later platform
+// request failed.
 bool needed_meta_sign_in(const fs::path &log);
+// The expansion files (.obb) an install's plan requires that are absent from
+// its directory. Files only probed for (an optional patch OBB) are not listed.
+std::vector<std::string> missing_expansions(const Install &install);
 // The expansion file (.obb) a run looked for and its install lacks, when the
 // game then never rendered past its first frames; empty otherwise.
 std::string missing_expansion(const fs::path &log);

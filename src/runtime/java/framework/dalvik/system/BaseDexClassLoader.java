@@ -80,6 +80,57 @@ public class BaseDexClassLoader extends java.net.URLClassLoader {
     // which accepts both dotted names and names already containing JNI slashes.
     return name.replace('/', '.');
   }
+  // ART's DexPathList element for an APK serves every zip entry as a Java resource
+  // (META-INF/services for ServiceLoader, OkHttp's publicsuffixes.gz). The converted
+  // class jar holds only classes, so resources come from the APK itself.
+  private java.util.zip.ZipFile resourceApk;
+  private String resourceBase;
+  private java.net.URLStreamHandler resourceHandler;
+  public final synchronized void ventureResourceApk(java.io.File apk) throws java.io.IOException {
+    if (resourceApk != null) throw new IllegalStateException("APK resources already attached");
+    var zip = new java.util.zip.ZipFile(apk);
+    resourceBase = "jar:" + apk.toURI() + "!/";
+    resourceHandler = new java.net.URLStreamHandler() {
+      @Override protected java.net.URLConnection openConnection(java.net.URL url) {
+        String entryName = url.toString().substring(resourceBase.length());
+        return new java.net.URLConnection(url) {
+          @Override public void connect() {}
+          @Override public java.io.InputStream getInputStream() throws java.io.IOException {
+            var entry = zip.getEntry(entryName);
+            if (entry == null) throw new java.io.FileNotFoundException(entryName);
+            return zip.getInputStream(entry);
+          }
+          @Override public long getContentLengthLong() {
+            var entry = zip.getEntry(entryName);
+            return entry == null ? -1 : entry.getSize();
+          }
+        };
+      }
+    };
+    resourceApk = zip;
+  }
+  private synchronized java.net.URL apkResource(String name) {
+    if (resourceApk == null || name.isEmpty() || name.startsWith("/")) return null;
+    var entry = resourceApk.getEntry(name);
+    if (entry == null || entry.isDirectory()) return null;
+    try {
+      return new java.net.URL(null, resourceBase + name, resourceHandler);
+    } catch (java.net.MalformedURLException invalid) {
+      return null;
+    }
+  }
+  @Override
+  public java.net.URL findResource(String name) {
+    java.net.URL own = super.findResource(name);
+    return own != null ? own : apkResource(name);
+  }
+  @Override
+  public java.util.Enumeration<java.net.URL> findResources(String name) throws java.io.IOException {
+    var found = java.util.Collections.list(super.findResources(name));
+    java.net.URL apk = apkResource(name);
+    if (apk != null) found.add(apk);
+    return java.util.Collections.enumeration(found);
+  }
   public String findLibrary(String name) {
     if (name.contains("/") || name.contains("\\"))
       throw new IllegalArgumentException("Not a library name");

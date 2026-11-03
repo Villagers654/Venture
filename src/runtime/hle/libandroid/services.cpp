@@ -14,8 +14,16 @@
 namespace venture::hle::android_hle {
 namespace {
 using namespace venture::android;
-int sensor_manager_token;
-void* sensor_manager() { return &sensor_manager_token; }
+// One process-wide manager, published once so ILP32 games receive a token.
+void* sensor_manager() {
+  static void* const manager = [] {
+    auto owner = std::make_shared<int>(0);
+    handles32::publish(owner, "ASensorManager");
+    static const std::shared_ptr<int> keep = owner;
+    return static_cast<void*>(keep.get());
+  }();
+  return manager;
+}
 void* sensor_manager_package(const char*) { return sensor_manager(); }
 bool valid_sensor_manager(void* p) { return p == sensor_manager(); }
 int sensor_list(void* p, GuestAddr* list) {
@@ -25,7 +33,7 @@ int sensor_list(void* p, GuestAddr* list) {
 }
 void* default_sensor(void*, int) { return nullptr; }
 struct SensorQueue {};
-Handles<SensorQueue> sensor_queues;
+Handles<SensorQueue> sensor_queues{"ASensorEventQueue"};
 SensorQueue* sensor_queue(void* manager, Looper* looper, int, GuestAddr, GuestAddr) {
   if (!valid_sensor_manager(manager) || !pin_looper(looper)) return nullptr;
   return sensor_queues.create();

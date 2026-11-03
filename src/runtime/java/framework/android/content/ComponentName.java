@@ -11,6 +11,12 @@ public final class ComponentName implements android.os.Parcelable {
   public ComponentName(Context c, Class<?> t) {
     this(c.getPackageName(), t.getName());
   }
+  // Reads what writeToParcel wrote. JNI wrappers (the OpenXR loader's) resolve
+  // every constructor before using any.
+  public ComponentName(android.os.Parcel in) {
+    pkg = java.util.Objects.requireNonNull(in.readString(), "package name is null");
+    cls = java.util.Objects.requireNonNull(in.readString(), "class name is null");
+  }
   public String getPackageName() {
     return pkg;
   }

@@ -129,7 +129,7 @@ public class MediaPlayer {
       if (mime == null) break;
       int type = mime.startsWith("video/") ? TrackInfo.MEDIA_TRACK_TYPE_VIDEO
           : mime.startsWith("audio/") ? TrackInfo.MEDIA_TRACK_TYPE_AUDIO : TrackInfo.MEDIA_TRACK_TYPE_UNKNOWN;
-      list.add(new TrackInfo(type, MediaExtractor.format(mime, values)));
+      list.add(new TrackInfo(type, MediaFormat.createSubtitleFormat(mime, "und")));
     }
     return list.toArray(new TrackInfo[0]);
   }
@@ -159,8 +159,12 @@ public class MediaPlayer {
     private final MediaFormat format;
     TrackInfo(int type, MediaFormat format) { this.type = type; this.format = format; }
     public int getTrackType() { return type; }
-    public String getLanguage() { return "und"; }
-    public MediaFormat getFormat() { return format; }
+    public String getLanguage() { return format.getString(MediaFormat.KEY_LANGUAGE, "und"); }
+    // As AOSP: only text tracks expose a format (mime and language). Unreal's
+    // GetVideoTracks reads audio/video details elsewhere when this is null.
+    public MediaFormat getFormat() {
+      return type == MEDIA_TRACK_TYPE_TIMEDTEXT || type == MEDIA_TRACK_TYPE_SUBTITLE ? format : null;
+    }
     public String toString() { return "TrackInfo{type=" + type + ", format=" + format + "}"; }
   }
   public synchronized void prepare() throws java.io.IOException {

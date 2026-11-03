@@ -178,7 +178,11 @@ int replace_file_placeholder(int fd, GuestAddr p, std::uint64_t n, std::uint64_t
   if (!section) return GetLastError() == ERROR_ACCESS_DENIED ? -err::kEACCES : -err::kENOMEM;
   // memoryapi.h: MEM_REPLACE_PLACEHOLDER removes the 64 KiB base/offset
   // restriction; both must match the placeholder and be page aligned.
-  auto view = MapViewOfFile3(section, GetCurrentProcess(), g2h(p), off, n, MEM_REPLACE_PLACEHOLDER,
+  // Linux maps the final partial page with a zero-filled tail. A view past
+  // the section's end fails (ERROR_ACCESS_DENIED); a byte length bounded by
+  // EOF is rounded up to the page, which Windows zero-fills the same way.
+  const auto backed = std::min(n, static_cast<std::uint64_t>(size.QuadPart) - off);
+  auto view = MapViewOfFile3(section, GetCurrentProcess(), g2h(p), off, backed, MEM_REPLACE_PLACEHOLDER,
                              PAGE_READONLY, nullptr, 0);
   CloseHandle(section);
   if (view != g2h(p)) return -err::kENOMEM;

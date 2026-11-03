@@ -741,6 +741,23 @@ TEST_CASE("save data imports find the game's folder and replace what they bring,
   fs::remove_all(root);
 }
 
+TEST_CASE("an install names only the expansion files its plan requires and lacks") {
+  auto dir = fs::temp_directory_path() / ("venture-obb-plan-test-" + std::to_string(current_process_id()));
+  fs::create_directories(dir);
+  library::Install install;
+  install.directory = dir;
+  install.plan.package = "com.example.game";
+  install.plan.files = {{{}, "game.apk", {}, "apk"},
+                        {{}, "main.7.com.example.game.obb", {}, "obb"},
+                        {{}, "dlc.obb", {}, "obb", 0, true, "dlc-sku"}};
+  std::ofstream(dir / "game.apk") << "apk";
+  // The patch OBB Unity probes for is not in the plan, so it is never named.
+  CHECK(library::missing_expansions(install) == std::vector<std::string>{"main.7.com.example.game.obb"});
+  std::ofstream(dir / "main.7.com.example.game.obb") << "obb";
+  CHECK(library::missing_expansions(install).empty());
+  fs::remove_all(dir);
+}
+
 TEST_CASE("a game that asked Meta for its user without a sign-in is recognised from its log") {
   auto dir = fs::temp_directory_path() / ("venture-signin-test-" + std::to_string(current_process_id()));
   fs::create_directories(dir);
@@ -762,6 +779,19 @@ TEST_CASE("a game that asked Meta for its user without a sign-in is recognised f
   CHECK_FALSE(library::needed_meta_sign_in(write("init-played.log",
       "  1.0 1 W [ovrplatform] initialization failed error=-20001\n"
       "  9.0 1 I [xr] Frames submitted=5400 xrEndFrame_errors=0 submission_fps=72.00 runtime_period_hz=72.00\n")));
+  CHECK(library::needed_meta_sign_in(write("init-async.log",
+      "  1.0 1 W [ovrplatform] ovr_PlatformInitializeAndroidAsynchronous request=1 type=0x1ad307b4 error=-20001\n"
+      "  2.0 1 I [xr] Frames submitted=1 xrEndFrame_errors=0 submission_fps=0.00 runtime_period_hz=72.00\n"
+      "  3.0 1 I [launch] Terminal guest process exit status=0\n")));
+  const auto played = std::string("  1.0 1 W [ovrplatform] initialization failed error=-20001\n"
+      "  60.0 1 I [xr] Frames submitted=4300 xrEndFrame_errors=0 submission_fps=72.00 runtime_period_hz=72.00\n"
+      "  61.0 1 W [ovrplatform] ovr_IAP_GetProductsBySKU request=1 type=0x7e9acaf5 error=-20007\n");
+  CHECK(library::needed_meta_sign_in(write("init-callback-crash.log", played +
+      "  61.2 1003 E [libc] Fatal signal 11 (SIGSEGV), code 1 (SEGV_MAPERR), fault addr 0x148 in tid 1003\n"
+      "  61.3 1 I [launch] Terminal guest process exit status=139\n")));
+  CHECK_FALSE(library::needed_meta_sign_in(write("init-later-crash.log", played +
+      "  900.0 1 I [xr] Frames submitted=60000 xrEndFrame_errors=0 submission_fps=72.00 runtime_period_hz=72.00\n"
+      "  901.0 1003 E [libc] Fatal signal 11 (SIGSEGV), code 1 (SEGV_MAPERR), fault addr 0x0 in tid 1003\n")));
   CHECK_FALSE(library::needed_meta_sign_in(dir / "missing.log"));
   const auto missing_line = std::string("  1.0 1 W [vfs] Missing expansion file: the game looked for "
                                         "patch.42.com.example.game.obb, which this install does not have\n");

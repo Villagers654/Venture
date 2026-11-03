@@ -145,6 +145,17 @@ TEST_CASE("A32 small mappings take the highest free gap and large ones the lowes
   CHECK(as.allocate(2 << 20, 3, "[low again]") == big);
   for (auto p : {a, b, big, next}) as.free(p);
 }
+TEST_CASE("A32 unhinted mappings stay below the compat mmap base") {
+  // Linux arm64 starts compat mmap 128 MiB under TASK_SIZE_32. Boehm GC's
+  // GC_install_counts walks blocks in 4 MiB strides with a 32-bit pointer and
+  // never terminates for a block in the top 4 MiB (Ghost Giant, Beat Saber demo).
+  auto& as = AddressSpace::get();
+  auto small = as.allocate(4096, 3, "[top small]"), stack = as.allocate(64 << 10, 3, "[top stack]");
+  REQUIRE(small); REQUIRE(stack);
+  CHECK(small + 4096 <= 0xfffff000ull - (128ull << 20));
+  CHECK(stack + (64 << 10) <= 0xfffff000ull - (128ull << 20));
+  as.free(small); as.free(stack);
+}
 TEST_CASE("A32 freed holes merge with free neighbours and reuse restores the first placement") {
   auto& as = AddressSpace::get();
   constexpr std::uint64_t page = 4096;
@@ -378,6 +389,30 @@ TEST_CASE("A32 libc guest-visible allocations and data exports stay low") {
   REQUIRE(zero);
   CHECK(*g2h<char>(zero + 332) == 0);
   invoke(*lib, "free", {zero});
+}
+TEST_CASE("A32 heap serves a Unity-sized thread count at once") {
+  // Every allocating thread owns at least one mimalloc segment of the 1 GiB
+  // arena; with 32 MiB segments the 33rd live thread failed a 16 KiB malloc
+  // (Beat Saber demo's FMOD mixer recursed on Unity's out-of-memory report).
+  constexpr int threads = 96;
+  std::atomic<int> holding{0}, failures{0};
+  std::atomic<bool> release{false};
+  std::vector<std::thread> workers;
+  for (int t = 0; t < threads; ++t)
+    workers.emplace_back([&] {
+      auto* small = guest_heap::allocate(64);
+      auto* medium = guest_heap::allocate(16408, 16);
+      if (!small || !medium) failures.fetch_add(1);
+      holding.fetch_add(1);
+      while (!release.load()) std::this_thread::yield();
+      guest_heap::deallocate(small);
+      guest_heap::deallocate(medium);
+      guest_heap::release_thread();
+    });
+  while (holding.load() < threads) std::this_thread::yield();
+  CHECK(failures.load() == 0);
+  release.store(true);
+  for (auto& worker : workers) worker.join();
 }
 TEST_CASE("A32 exclusive heaps allocate, align, realloc and free across threads") {
   auto& as = AddressSpace::get();

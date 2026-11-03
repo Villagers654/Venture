@@ -191,4 +191,17 @@ public class Window {
   }
   private final android.window.BackDispatcher backDispatcher = new android.window.BackDispatcher();
   public android.window.OnBackInvokedDispatcher getOnBackInvokedDispatcher() { return backDispatcher; }
+  // A Quest window has no system bars to draw; the colors are kept for apps that read them back.
+  private int statusBarColor, navigationBarColor, navigationBarDividerColor;
+  private boolean statusBarContrastEnforced, navigationBarContrastEnforced = true;
+  public void setStatusBarColor(int color) { statusBarColor = color; }
+  public int getStatusBarColor() { return statusBarColor; }
+  public void setNavigationBarColor(int color) { navigationBarColor = color; }
+  public int getNavigationBarColor() { return navigationBarColor; }
+  public void setNavigationBarDividerColor(int color) { navigationBarDividerColor = color; }
+  public int getNavigationBarDividerColor() { return navigationBarDividerColor; }
+  public void setStatusBarContrastEnforced(boolean enforced) { statusBarContrastEnforced = enforced; }
+  public boolean isStatusBarContrastEnforced() { return statusBarContrastEnforced; }
+  public void setNavigationBarContrastEnforced(boolean enforced) { navigationBarContrastEnforced = enforced; }
+  public boolean isNavigationBarContrastEnforced() { return navigationBarContrastEnforced; }
 }

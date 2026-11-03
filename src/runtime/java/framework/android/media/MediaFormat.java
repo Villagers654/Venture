@@ -6,11 +6,16 @@ import java.util.Map;
 public final class MediaFormat {
   public static final String KEY_MIME = "mime", KEY_WIDTH = "width", KEY_HEIGHT = "height",
       KEY_SAMPLE_RATE = "sample-rate", KEY_CHANNEL_COUNT = "channel-count", KEY_BIT_RATE = "bitrate",
-      KEY_FRAME_RATE = "frame-rate", KEY_DURATION = "durationUs", KEY_MAX_INPUT_SIZE = "max-input-size";
+      KEY_FRAME_RATE = "frame-rate", KEY_DURATION = "durationUs", KEY_MAX_INPUT_SIZE = "max-input-size",
+      KEY_LANGUAGE = "language";
   private final Map<String, Object> values = new HashMap<>();
   public static MediaFormat createVideoFormat(String mime, int width, int height) {
     MediaFormat value = new MediaFormat(); value.setString(KEY_MIME, mime);
     value.setInteger(KEY_WIDTH, width); value.setInteger(KEY_HEIGHT, height); return value;
+  }
+  public static MediaFormat createSubtitleFormat(String mime, String language) {
+    MediaFormat value = new MediaFormat(); value.setString(KEY_MIME, mime);
+    value.setString(KEY_LANGUAGE, language); return value;
   }
   public static MediaFormat createAudioFormat(String mime, int rate, int channels) {
     MediaFormat value = new MediaFormat(); value.setString(KEY_MIME, mime);

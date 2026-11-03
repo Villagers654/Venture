@@ -107,7 +107,7 @@ public class MediaFlow {
       player.setDataSource(file.getFD(),0,file.getChannel().size());player.prepare();
       var tracks=player.getTrackInfo();
       if(tracks.length!=1 || tracks[0].getTrackType()!=MediaPlayer.TrackInfo.MEDIA_TRACK_TYPE_VIDEO ||
-         tracks[0].getFormat().getInteger("width")!=128)return "track info";
+         tracks[0].getFormat()!=null || !"und".equals(tracks[0].getLanguage()))return "track info";
       player.selectTrack(0);
       if(player.getSelectedTrack(MediaPlayer.TrackInfo.MEDIA_TRACK_TYPE_VIDEO)!=0)return "selected video track";
       return null;

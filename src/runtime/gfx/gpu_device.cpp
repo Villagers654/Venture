@@ -6,6 +6,7 @@
 #include "gfx/queue_probe.h"
 #include "platform/gfx_library.h"
 #include "xr/host_xr.h"
+#include "xr/vulkan_extensions.h"
 #define XR_USE_GRAPHICS_API_VULKAN
 #include <openxr/openxr.h>
 #include <openxr/openxr_platform.h>
@@ -54,6 +55,34 @@ std::vector<const char*> union_names(std::uint32_t count,
     if (std::ranges::none_of(result, [&](const char* p) { return s == p; }))
       result.push_back(s.c_str());
   return result;
+}
+// XR_KHR_vulkan_enable2 says the runtime adds its own requirements inside
+// xrCreateVulkanInstanceKHR/xrCreateVulkanDeviceKHR. The Oculus PC runtime
+// relies on the legacy lists instead (Meta: a device without the
+// xrGetVulkanDeviceExtensionsKHR extensions faults inside LibOVRRT): GLES
+// titles on the shared device crashed with a host call through null in
+// xrDestroySwapchain (Job Simulator, Beat Saber; issue 46). Guest Vulkan
+// devices already merge these lists (hle/vulkan native_xr_extensions); the
+// shared device does the same, keeping only names this Vulkan lists, so a
+// runtime that does add them, or lists an absent one, changes nothing.
+void add_legacy_xr_requirements(bool device, std::vector<const char*>& names,
+                                std::vector<std::string>& storage,
+                                const std::vector<VkExtensionProperties>& available) {
+  auto& host = xr::host_xr();
+  if (!host.enabled_extensions.contains("XR_KHR_vulkan_enable")) return;
+  std::vector<std::string> required;
+  if (XR_FAILED(xr::vulkan_extension_requirements(host.instance, host.system, device, required))) return;
+  storage.reserve(required.size());
+  for (auto& name : required) {
+    if (std::ranges::any_of(names, [&](const char* n) { return name == n; })) continue;
+    if (std::ranges::none_of(available, [&](const auto& e) { return name == e.extensionName; })) {
+      log::warn("gfx", "Host XR runtime requires Vulkan {} extension {}, which this Vulkan driver does not list",
+                device ? "device" : "instance", name);
+      continue;
+    }
+    storage.push_back(std::move(name));
+  }
+  for (const auto& name : storage) names.push_back(name.c_str());
 }
 void remember(std::vector<std::string>& to, std::uint32_t count,
               const char* const* names) {
@@ -122,6 +151,7 @@ VkResult create_instance(const VkInstanceCreateInfo* requested,
   auto ci = *requested;
   auto names = union_names(ci.enabledExtensionCount, ci.ppEnabledExtensionNames,
                            instance_requirements);
+  std::vector<std::string> legacy;
   ci.enabledExtensionCount = static_cast<std::uint32_t>(names.size());
   ci.ppEnabledExtensionNames = names.data();
   VkApplicationInfo app =
@@ -151,6 +181,19 @@ VkResult create_instance(const VkInstanceCreateInfo* requested,
       if ((app.apiVersion & ~0xfffu) >
           to_vk(requirements.maxApiVersionSupported))
         return VK_ERROR_INCOMPATIBLE_DRIVER;
+      std::vector<VkExtensionProperties> available;
+      if (auto enumerate = vk<PFN_vkEnumerateInstanceExtensionProperties>(
+              nullptr, "vkEnumerateInstanceExtensionProperties")) {
+        std::uint32_t count = 0;
+        if (enumerate(nullptr, &count, nullptr) == VK_SUCCESS) {
+          available.resize(count);
+          if (enumerate(nullptr, &count, available.data()) != VK_SUCCESS) available.clear();
+          available.resize(std::min<std::size_t>(count, available.size()));
+        }
+      }
+      add_legacy_xr_requirements(false, names, legacy, available);
+      ci.enabledExtensionCount = static_cast<std::uint32_t>(names.size());
+      ci.ppEnabledExtensionNames = names.data();
       XrVulkanInstanceCreateInfoKHR info{
           XR_TYPE_VULKAN_INSTANCE_CREATE_INFO_KHR};
       info.systemId = host.system;
@@ -230,15 +273,19 @@ VkResult create_device(VkPhysicalDevice physical,
                            device_requirements);
   auto enumerate = vk<PFN_vkEnumerateDeviceExtensionProperties>(gpu.instance, "vkEnumerateDeviceExtensionProperties");
   std::uint32_t extension_count = 0;
+  std::vector<VkExtensionProperties> extensions;
   if (enumerate(physical, nullptr, &extension_count, nullptr) == VK_SUCCESS) {
-    std::vector<VkExtensionProperties> extensions(extension_count);
-    if (enumerate(physical, nullptr, &extension_count, extensions.data()) == VK_SUCCESS &&
-        std::ranges::any_of(extensions, [](const auto& e) {
+    extensions.resize(extension_count);
+    if (enumerate(physical, nullptr, &extension_count, extensions.data()) != VK_SUCCESS) extensions.clear();
+    extensions.resize(std::min<std::size_t>(extension_count, extensions.size()));
+    if (std::ranges::any_of(extensions, [](const auto& e) {
           return std::strcmp(e.extensionName, VK_EXT_PIPELINE_CREATION_FEEDBACK_EXTENSION_NAME) == 0;
         }) && std::ranges::none_of(names, [](const char* n) {
           return std::strcmp(n, VK_EXT_PIPELINE_CREATION_FEEDBACK_EXTENSION_NAME) == 0;
         })) names.push_back(VK_EXT_PIPELINE_CREATION_FEEDBACK_EXTENSION_NAME);
   }
+  std::vector<std::string> legacy;
+  if (xr::host_xr().available) add_legacy_xr_requirements(true, names, legacy, extensions);
   ci.enabledExtensionCount = static_cast<std::uint32_t>(names.size());
   ci.ppEnabledExtensionNames = names.data();
   VkResult result = VK_ERROR_INITIALIZATION_FAILED;

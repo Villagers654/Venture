@@ -161,6 +161,16 @@ public final class PackageModel {
         p.applicationInfo = app;
         p.authority = n.text("authorities", "");
         p.metaData = metadata(n);
+        p.processName = processName(n.text("process", app.processName));
+        p.enabled = n.integer("enabled", 1) != 0 && app.enabled;
+        // targetSdk 17+ default; androidx FileProvider rejects an exported provider.
+        p.exported = n.integer("exported", 0) != 0;
+        p.grantUriPermissions = n.integer("grantUriPermissions", 0) != 0;
+        p.multiprocess = n.integer("multiprocess", 0) != 0;
+        p.isSyncable = n.integer("syncable", 0) != 0;
+        String permission = n.text("permission", null);
+        p.readPermission = n.text("readPermission", permission);
+        p.writePermission = n.text("writePermission", permission);
         p.initOrder = n.integer("initOrder", 0);
         providers.add(p);
       }

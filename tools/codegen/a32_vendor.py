@@ -115,13 +115,27 @@ def main():
         if t in enum_types:
             return dict(kind='I32', tag=t) # public Platform enum
         return classify(t, aliases)
-    for (lib, name) in wanted:
+    # Every Platform export Venture implements gets its pinned signature, not
+    # only First Contact's imports: Unity titles enter through other exports
+    # (the Unity init wrappers, message and error getters).
+    platform = ROOT / 'src/runtime/hle/ovrplatform'
+    exported = set()
+    for path in [*platform.glob('*.cpp'), *platform.glob('*.inc')]:
+        text = path.read_text(encoding='utf-8')
+        exported.update(re.findall(r'VENTURE_(?:EXPORT|REQUEST|OPTION|MODEL_GETTER|GETTER)\("(ovr\w+)"', text))
+        for enum in re.findall(r'VENTURE_ENUM_TYPE\("(\w+)"\)', text):
+            exported.update((enum + '_ToString', enum + '_FromString'))
+    wanted |= {('libovrplatformloader.so', name) for name in exported}
+    for (lib, name) in sorted(wanted):
         if lib != 'libovrplatformloader.so' or name not in signatures: continue
         result, args, source, managed = signatures[name]
         types = []
         for arg in args.split(',') if args and args != 'void' else []:
             # Remove argument identifier, retaining trailing * and array markers.
             t = re.sub(r'\s*\b\w+\s*$', '', arg.strip())
+            # Some declarations leave the parameter unnamed (ovr_FreeMessage).
+            if not t or arg.split()[-1] in ('int', 'long', 'short', 'char', 'float', 'double'):
+                t = arg.strip()
             types.append(platform_type(t, managed))
         rows[(lib, name)] = dict(library=lib, symbol=name, result=platform_type(result, managed), arguments=types, source='Pinned Oculus Platform SDK ' + source)
     # OVR_Types.h declares helpers without PUBLIC_FUNCTION. CAPI.cs declares

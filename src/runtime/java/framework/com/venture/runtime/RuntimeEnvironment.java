@@ -63,11 +63,18 @@ public final class RuntimeEnvironment {
     // to load, and its NativeActivity comes from the framework.
     loader = new dalvik.system.PathClassLoader(args[7].equals(args[1]) ? "" : args[7],
         guestNativeLibDir(), RuntimeEnvironment.class.getClassLoader());
+    if (apk.isFile()) try {
+      ((dalvik.system.BaseDexClassLoader) loader).ventureResourceApk(apk);
+    } catch (java.io.IOException unreadable) {
+      android.util.Log.w("RuntimeEnvironment", "APK Java resources are unavailable ("
+          + unreadable.getClass().getSimpleName() + ")");
+    }
   }
   public static synchronized void configure(String[] args, Host bridge) {
     if (current != null)
       throw new IllegalStateException("One application per runtime");
     host = Objects.requireNonNull(bridge);
+    AndroidCAStore.install();
     current = new RuntimeEnvironment(args);
   }
   public static void configure(String[] args) {

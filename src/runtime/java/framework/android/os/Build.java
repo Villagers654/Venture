@@ -1,6 +1,8 @@
 package android.os;
 public final class Build {
   public static final String UNKNOWN = "unknown", SOC_MODEL = UNKNOWN, SOC_MANUFACTURER = UNKNOWN;
+  // Android 12 hardware SKUs: "unknown" when the device sets no ro.boot.hardware.sku.
+  public static final String SKU = UNKNOWN, ODM_SKU = UNKNOWN;
   // The native launch-time identity is installed before this class initializes.
   // These are not compile-time constants: callers must observe the selected APK profile.
   public static final String MANUFACTURER = "Oculus",
