@@ -25,6 +25,7 @@ Compatibility results are listed separately for Windows and Linux. Results can v
 | [Moss](https://www.meta.com/experiences/1654565391314903/) | Meta Quest Store; 1.0.3.151047 | ✅ | ✅ | No | — |
 | [Moss: Book II](https://www.meta.com/experiences/4395292760584049/) | Meta Quest Store; 1.0.3.149619 | ✅ | ✅ | No | — |
 | [North Star](https://www.meta.com/experiences/28679538058299918/) | Meta Quest Store; 1.0.1 | ✅ | ✅ | Yes | — |
+| [Pickleball One](https://www.meta.com/experiences/5276176159145627/) | Meta Quest Store; 2.17.21 | ✅ | Untested | Yes | — |
 | [Puzzling Places](https://www.meta.com/experiences/3931148300302917/) | Meta Quest Store; 2.14 | ✅ | ✅ | No | — |
 | [Resident Evil 4](https://www.meta.com/experiences/2637179839719680/) | Meta Quest Store; 2.3 | ✅ | ✅ | Yes | — |
 | [The Climb 2](https://www.meta.com/experiences/2617233878395214/) | Meta Quest Store; 2.2 | ✅ | ✅ | Yes | — |
@@ -48,4 +49,4 @@ Use **Upload debug report** in Venture's Settings, or **Report issue** on the ba
 
 It collects the launcher and game logs from your last launch into one debug report, then uploads it as an unlisted paste and gives you a link. Attach that link when opening a [compatibility report](https://github.com/Villagers654/Venture/issues).
 
-Last updated: October 28, 2026.
+Last updated: November 3, 2026.
