@@ -598,7 +598,8 @@ TEST_CASE("queued jobs start in list order, move, and cancel; a running job stop
   CHECK(order() == "c");
   REQUIRE(test::wait_until([&] { return !manager.busy(); }));
   CHECK(job("c").state == download::State::complete);
-  CHECK(manager.discarded() == 2);
+  // The stopped job leaves the queue before its partial files are discarded.
+  CHECK(test::wait_until([&] { return manager.discarded() == 2; }));
   // Cancelling a finished job clears it and keeps the installed game.
   manager.remove(job("c"), true);
   CHECK(order().empty());
