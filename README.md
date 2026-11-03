@@ -51,7 +51,7 @@ Turn on **Add games to Steam** in Settings. Installed games appear in Steam and 
 
 Mods that replace a game's expansion file (OBB), such as RE4 VR Definitive Edition, go in the game's mods folder: open the game in your library and choose **Open folder** next to **Mods**, then put the mod's file there under the same name as the installed file (for example `main.203.com.Armature.VR4.obb`). It is used from the next launch; your installation is not changed, and deleting the file goes back to the original.
 
-### Steam Frame mixed reality
+### Mixed reality (passthrough)
 
 A64 Quest OpenXR passthrough can be enabled in **Settings → Runtime →
 Passthrough (mixed reality)** (off by default). A host runtime that exposes

@@ -26,6 +26,36 @@ FetchContent_Declare(venture_vulkan_headers
   SOURCE_SUBDIR venture-headers-only)
 FetchContent_MakeAvailable(venture_vulkan_headers)
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
+find_package(Threads REQUIRED)
+enable_testing()
+# Capture the exact extension list passed by the production host initializer.
+add_executable(venture_passthrough_host_tests host_extensions.cpp
+  ${venture_root}/src/runtime/xr/host_xr.cpp
+  ${venture_root}/src/common/environment.cpp)
+target_include_directories(venture_passthrough_host_tests PRIVATE
+  "${venture_root}/src" "${venture_root}/src/runtime"
+  "${openxr_headers_SOURCE_DIR}/include" "${venture_vulkan_headers_SOURCE_DIR}/include")
+target_link_libraries(venture_passthrough_host_tests PRIVATE Threads::Threads)
+if(WIN32)
+  target_compile_definitions(venture_passthrough_host_tests PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+endif()
+add_test(NAME passthrough_host_default_off COMMAND ${CMAKE_COMMAND} -E env --unset=VENTURE_PASSTHROUGH
+  $<TARGET_FILE:venture_passthrough_host_tests> 0 both)
+function(add_host_extension_test name value expected)
+  add_test(NAME "passthrough_host_${name}" COMMAND ${CMAKE_COMMAND} -E env "VENTURE_PASSTHROUGH=${value}"
+    $<TARGET_FILE:venture_passthrough_host_tests> ${expected} both)
+endfunction()
+add_host_extension_test(empty "" 0)
+add_host_extension_test(off "0" 0)
+add_host_extension_test(word "true" 0)
+add_host_extension_test(leading_space " 1" 0)
+add_host_extension_test(trailing_space "1 " 0)
+add_host_extension_test(leading_zero "01" 0)
+add_host_extension_test(on "1" 1)
+foreach(profile IN ITEMS none passthrough mesh)
+  add_test(NAME "passthrough_host_available_${profile}" COMMAND ${CMAKE_COMMAND} -E env VENTURE_PASSTHROUGH=1
+    $<TARGET_FILE:venture_passthrough_host_tests> 1 ${profile})
+endforeach()
 set(generated "${CMAKE_CURRENT_BINARY_DIR}/generated")
 add_custom_command(OUTPUT "${generated}/vk_plain_members.inc" "${generated}/vk_plain_borrow.inc"
   COMMAND ${CMAKE_COMMAND} -E make_directory "${generated}"
@@ -104,7 +134,6 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
   target_compile_options(venture_passthrough_tests PRIVATE -ffunction-sections -fdata-sections)
   target_link_options(venture_passthrough_tests PRIVATE -Wl,--gc-sections)
 endif()
-enable_testing()
 add_executable(venture_passthrough_selection_tests backend_selection.cpp
   ${venture_root}/src/runtime/xr/steam_link.cpp)
 target_include_directories(venture_passthrough_selection_tests PRIVATE

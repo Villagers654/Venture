@@ -495,6 +495,11 @@ if(TARGET venture_runtime)
 endif()
 
 if(TARGET venture_runtime AND TARGET venture_java)
+  # Per-launch passthrough configuration is independent of ELF32 inspection.
+  add_executable(venture_passthrough_config_tests test_main.cpp runtime/passthrough_config_test.cpp)
+  target_link_libraries(venture_passthrough_config_tests PRIVATE venture_runtime venture_java venture_hle miniz doctest::doctest)
+  add_test(NAME passthrough_configuration COMMAND venture_passthrough_config_tests)
+
   # ELF32 inspection has its own process with the production low arena.
   add_executable(venture_a32_loader_tests test_main.cpp runtime/elf32_loader_test.cpp runtime/loader_lifecycle_test.cpp)
   target_compile_definitions(venture_a32_loader_tests PRIVATE VENTURE_TEST_LOADER_A32)

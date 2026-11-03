@@ -13,7 +13,9 @@ launches default off; only the exact value `1` opts in.
 ## Backends
 
 - **Native OpenXR:** A64 `XR_FB_passthrough` calls and layers are forwarded when
-  the setting is on and the host actually exposes the extension. This refers to
+  the setting is on and the host actually exposes the extension. The host instance
+  requests `XR_FB_passthrough` and `XR_FB_triangle_mesh` only when the launch
+  environment contains exactly `VENTURE_PASSTHROUGH=1`. This refers to
   a host-provided API, not color replacement. Meta documents
   [Passthrough over Link](https://developers.meta.com/horizon/documentation/native/android/mobile-passthrough-over-link/)
   as a developer feature with separate runtime toggles and a developer account.
@@ -94,6 +96,11 @@ retirement, feature/layer pause and resume, normal float/MSAA images, depth
 chains and async host submission both after MR exit and with paused layers.
 Property tests exercise the production `xrGetSystemProperties` and creation entry
 points against a host that reports passthrough support, with the option off/on.
+Host-initialization tests capture the actual `xrCreateInstance` extension list
+with the option unset, disabled, invalid or enabled, and with different host
+extension availability. The separate `passthrough_configuration` test exercises
+production `configure_game`, strict environment parsing, contradictory launcher
+settings and the stable per-launch snapshot independently of ELF32 loading.
 Shader tests compare ordinary VR SPIR-V with the retained upstream shader using
 the same compiler. Pixel tests cover stereo slices, alpha, emission, opacity,
 host limits, cropping (including one-pixel edge crops after downscaling), and
@@ -107,8 +114,10 @@ remain enabled. Tests cover complete/fragmented/malformed replies, wrong nonce
 and PID, pending-I/O cancellation/destruction, late replies, server death,
 reconnect and fresh lease generations. No installed SteamVR registry is modified.
 
-The feature workflow is limited to relevant source/build/test paths on PRs and
-feature-branch pushes. It tests actual launcher settings and real `play` launches
+The feature workflow runs on PRs touching the listed passthrough implementation
+and test files, or by manual dispatch. It has no push trigger and does not match
+the root CMake file or entire launcher, XR or build-system directories. It tests
+actual launcher settings and real `play` launches
 against a child probe, including contradictory inherited environment values, and
 runs the unchanged
 shipping scanner on the built Windows/Linux launchers with `McFredward` as a

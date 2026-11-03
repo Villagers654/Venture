@@ -3,40 +3,14 @@ on:
   pull_request:
     paths:
       - '.github/workflows/passthrough.yml'
-      - 'CMakeLists.txt'
-      - 'cmake/**'
-      - 'src/common/environment.*'
-      - 'src/common/library/**'
-      - 'src/launcher/**'
-      - 'src/runtime/core/process.*'
-      - 'src/runtime/hle/openxr/**'
+      - 'src/runtime/hle/openxr/passthrough.*'
+      - 'src/runtime/hle/openxr/passthrough_images.cpp'
       - 'src/runtime/platform/win32/steam_link.cpp'
-      - 'src/runtime/xr/**'
-      - 'tests/launcher_settings_test.*'
+      - 'src/runtime/xr/host_xr.cpp'
+      - 'src/runtime/xr/steam_link.*'
+      - 'tests/runtime/passthrough_config_test.cpp'
       - 'tests/passthrough/**'
       - 'tests/steam_link_transport/**'
-      - 'tools/codegen/xr_generate.py'
-      - 'tools/codegen/vk_*.py'
-      - 'tools/package_release.py'
-  push:
-    branches: [feat/steam-link-passthrough, test/steam-frame-passthrough]
-    paths:
-      - '.github/workflows/passthrough.yml'
-      - 'CMakeLists.txt'
-      - 'cmake/**'
-      - 'src/common/environment.*'
-      - 'src/common/library/**'
-      - 'src/launcher/**'
-      - 'src/runtime/core/process.*'
-      - 'src/runtime/hle/openxr/**'
-      - 'src/runtime/platform/win32/steam_link.cpp'
-      - 'src/runtime/xr/**'
-      - 'tests/launcher_settings_test.*'
-      - 'tests/passthrough/**'
-      - 'tests/steam_link_transport/**'
-      - 'tools/codegen/xr_generate.py'
-      - 'tools/codegen/vk_*.py'
-      - 'tools/package_release.py'
   workflow_dispatch:
 permissions:
   contents: read
@@ -90,6 +64,8 @@ jobs:
           cmake -S tests/passthrough -B build/xr-compile -G Ninja -DCMAKE_CXX_COMPILER="$compilerDir/clang++.exe" -DVENTURE_PASSTHROUGH_COMPILE_ONLY=ON
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           cmake --build build/xr-compile --parallel 2
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          ctest --test-dir build/xr-compile --output-on-failure
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Test the real Windows pipe transport, cancellation and reconnect
         shell: pwsh
