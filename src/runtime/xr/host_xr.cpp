@@ -1,6 +1,7 @@
 #include "xr/application_identity.h"
 #include "xr/host_xr.h"
 #include "xr/display_memory.h"
+#include "common/environment.h"
 
 #include <algorithm>
 #include <atomic>
@@ -41,7 +42,7 @@ HostXr initialize_host() {
     }
     // r4-xr/report.md: SDK strings are not a guest capability list. This is
     // only the host side; guest enumeration is filtered independently.
-    const std::set<std::string> usable{"XR_KHR_vulkan_enable",
+    std::set<std::string> usable{"XR_KHR_vulkan_enable",
                                        "XR_KHR_vulkan_enable2",
                                        "XR_KHR_win32_convert_performance_counter_time",
                                        "XR_KHR_convert_timespec_time",
@@ -71,6 +72,11 @@ HostXr initialize_host() {
                                        "XR_EXT_local_floor",
                                        "XR_EXT_performance_settings",
                                        "XR_EXT_view_configuration_depth_range"};
+    if (const auto* passthrough = environment::getenv("VENTURE_PASSTHROUGH");
+        passthrough && std::string_view(passthrough) == "1") {
+      usable.insert("XR_FB_passthrough");
+      usable.insert("XR_FB_triangle_mesh");
+    }
     for (const auto &e : extensions) {
       h.available_extensions.emplace(e.extensionName, e.extensionVersion);
       if (usable.contains(e.extensionName))

@@ -55,6 +55,7 @@ private:
   std::map<int, SDL_Texture *> discord_logos_;
   SDL_Texture *discord_logo(int pixels);
   bool installed_only_ = false, quit_ = false;
+  bool passthrough_info_requested_ = false;
   bool smoke_played_ = false, smoke_auth_opened_ = false, smoke_reported_ = false;
   bool smoke_detail_started_ = false;
   uint64_t smoke_play_requested_unix_ms_ = 0;
@@ -132,6 +133,7 @@ private:
   void download_progress(const download::Job& job, float width);
   void draw_downloads();
   void draw_settings();
+  void draw_passthrough_info();
   void draw_account();
   void draw_uninstall();
   void draw_cancel_download();

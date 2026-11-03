@@ -73,3 +73,13 @@ endif()
 if(MINGW)
   target_link_options(venture-cli PRIVATE -municode)
 endif()
+
+# Settings persistence checks need no game runtime or headset.
+add_executable(venture_launcher_settings_tests EXCLUDE_FROM_ALL
+  ${PROJECT_SOURCE_DIR}/tests/test_main.cpp
+  ${PROJECT_SOURCE_DIR}/tests/launcher_settings_test.cpp)
+target_link_libraries(venture_launcher_settings_tests PRIVATE venture_common doctest::doctest)
+add_executable(venture_passthrough_launch_probe EXCLUDE_FROM_ALL
+  ${PROJECT_SOURCE_DIR}/tests/passthrough/launch_probe.cpp)
+target_link_libraries(venture_passthrough_launch_probe PRIVATE venture_common)
+add_dependencies(venture_launcher_settings_tests venture_passthrough_launch_probe)

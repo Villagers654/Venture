@@ -1346,6 +1346,8 @@ void Core::launch_game(std::string_view id, std::string_view requested,
           // VENTURE_LOG_LEVEL: the launcher's log level, 0 (trace) to 4 (error).
           Environment environment{
               {"VENTURE_LOG_LEVEL", std::to_string(settings_.log_level)}};
+          // Always override inherited opt-ins, including when the setting is off.
+          environment.push_back({"VENTURE_PASSTHROUGH", settings_.passthrough ? "1" : "0"});
           // The menu chord setting; automatic leaves the runtime's default.
           if (settings_.menu_button == 1) environment.push_back({"VENTURE_MENU_CHORD", "stick-clicks"});
           if (settings_.menu_button == 2) environment.push_back({"VENTURE_MENU_CHORD", "off"});

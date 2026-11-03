@@ -213,7 +213,7 @@ For repeatable live verification (no game downloads), run:
 ```powershell
 build/windows-release/bin/venture.exe --smoke-seconds 30 --smoke-report out/smoke.json
 # Optional: --smoke-details, --smoke-play, --smoke-auth,
-#           --smoke-view settings|account|downloads
+#           --smoke-view settings|passthrough-info|account|downloads
 .deps/cmake/bin/cmake --build --preset windows-release --target venture_launcher_live_check
 build/windows-release/bin/venture_launcher_live_check.exe --read-only-meta
 ```
@@ -227,3 +227,23 @@ live plan, public artwork, and delivery-token exchange without fetching APKs.
 game headlessly through the Install action (owner selection, download job and
 plan.json), waits for the download and the rescan, writes an `install` section in
 the report and exits 0 when the install is complete. `--smoke-seconds` bounds it.
+
+## Passthrough setting
+
+**Settings → Runtime → Passthrough (mixed reality)** is an explicit, default-off
+preference (`passthrough` in `settings.json`). It gates both native host
+`XR_FB_passthrough` forwarding and the Steam Frame over Steam Link backend.
+The old `steamFramePassthrough` preference is accepted when the new key is absent;
+saving writes the new key. The Info button opens an in-app dialog with separate
+Quest Link / Air Link and Steam Frame cards. It explains the Meta developer
+requirements and the Frame companion setup, with links to Meta's setup guide and
+[Steam Link Native Passthrough](https://github.com/McFredward/steam-link-native-passthrough).
+
+For each game launch, including Steam shortcuts, `core.cpp` passes
+`VENTURE_PASSTHROUGH=1` or `0` to the child, overriding inherited values.
+`configure_game` captures that value before XR initialization without reading
+launcher settings. A running game keeps its launch-time choice. Direct runtime
+invocation defaults off unless `VENTURE_PASSTHROUGH=1` is supplied explicitly.
+The CLI key `passthrough on|off` edits the saved preference; the old
+`steam-frame-passthrough` spelling remains an alias.
+See [mixed reality](../../docs/MIXED_REALITY.md) for required companions and limits.

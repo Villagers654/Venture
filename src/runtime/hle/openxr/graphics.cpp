@@ -5,6 +5,7 @@
 #include "hle/vulkan/internal.h"
 #include "hle/vulkan/chain.h"
 #include "hle/openxr/state.h"
+#include "xr/presentation.h"
 #include "xr/queue.h"
 #include "xr/vulkan_extensions.h"
 #include "hle/vulkan/timing.h"
@@ -137,25 +138,27 @@ std::int64_t vk_to_gl(std::int64_t format) {
   return 0;
 }
 XrResult convert_color_image(Swapchain& r, std::uint32_t index, XrColorSpaceFB space,
-                             bool external_queue_held) {
-  if (!enabled("XR_FB_color_space") ||
-      host_xr().enabled_extensions.contains("XR_FB_color_space") ||
-      space == XR_COLOR_SPACE_REC709_FB || space == XR_COLOR_SPACE_UNMANAGED_FB ||
-      !(r.info.usageFlags & XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT)) return XR_SUCCESS;
-  if (!r.color_images)
-    r.color_images = std::make_unique<ColorImages>(state().graphics,
-        gfx::gpu_device().get_instance_proc_addr, r.host_info, r.host_images);
-  const auto matrix = color_matrix(space, XR_COLOR_SPACE_REC709_FB);
-  // Snapshot to a Venture-owned VkImage, then render back into the acquired
-  // host image. No extra XR swapchain: every submitted layer keeps its own
-  // released image, including static images and simultaneously visible quads.
-  return r.color_images->convert(index, matrix, external_queue_held);
+                             bool external_queue_held, bool force_opaque) {
+  const bool color_emulated = enabled("XR_FB_color_space") &&
+      !host_xr().enabled_extensions.contains("XR_FB_color_space") &&
+      space != XR_COLOR_SPACE_REC709_FB && space != XR_COLOR_SPACE_UNMANAGED_FB &&
+      (r.info.usageFlags & XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT);
+  if ((!color_emulated && !force_opaque) || !(r.host_info.usageFlags & XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT))
+    return XR_SUCCESS;
+  auto& images = force_opaque ? r.opaque_images : r.color_images;
+  if (!images) images = std::make_unique<ColorImages>(state().graphics,
+      gfx::gpu_device().get_instance_proc_addr, r.host_info, r.host_images, false, force_opaque);
+  const auto matrix = color_matrix(color_emulated ? space : XR_COLOR_SPACE_REC709_FB, XR_COLOR_SPACE_REC709_FB);
+  return images->convert(index, matrix, external_queue_held,
+      force_opaque ? ColorImages::Alpha::opaque : ColorImages::Alpha::preserve);
 }
+
 XrResult destroy_host_swapchain(Swapchain& r) {
   if (!r.host_handle) return XR_SUCCESS;
   const auto drained = r.backing->drain();
   if (drained != XR_SUCCESS) return drained;
   r.color_images.reset();
+  r.opaque_images.reset();
   HostQueueLock queue(session().uses_shared_gpu);
   if (!queue) return XR_ERROR_RUNTIME_FAILURE;
   const auto result = venture::xr::dev_destroy_swapchain(r.host_handle);
@@ -168,7 +171,7 @@ XrResult destroy_host_swapchain(Swapchain& r) {
   }
   return result;
 }
-XrResult prepare_swapchains(const std::set<XrSwapchain>& submitted) {
+XrResult prepare_swapchains(const std::set<XrSwapchain>& submitted, bool force_opaque) {
   auto& s = state();
   XrResult qualified = XR_SUCCESS;
   const auto live_hosts = [&] {
@@ -211,11 +214,11 @@ XrResult prepare_swapchains(const std::set<XrSwapchain>& submitted) {
     if (XR_SUCCEEDED(::xrGetSystemProperties(host_xr().instance, host_xr().system, &properties)) &&
         properties.graphicsProperties.maxSwapchainImageWidth && properties.graphicsProperties.maxSwapchainImageHeight) {
       const auto& limits = properties.graphicsProperties;
-      const double scale = std::min({1.0, double(limits.maxSwapchainImageWidth) / r.info.width,
-                                     double(limits.maxSwapchainImageHeight) / r.info.height});
-      if (scale < 1.0) {
-        r.host_info.width = std::max(1u, std::uint32_t(r.info.width * scale));
-        r.host_info.height = std::max(1u, std::uint32_t(r.info.height * scale));
+      const auto size = fit_presentation_extent({r.info.width, r.info.height},
+          limits.maxSwapchainImageWidth, limits.maxSwapchainImageHeight);
+      if (size.width != r.info.width || size.height != r.info.height) {
+        r.host_info.width = size.width;
+        r.host_info.height = size.height;
         log::info("xr", "guest swapchain {}x{} exceeds the host maximum {}x{}; presenting through {}x{}",
                   r.info.width, r.info.height, limits.maxSwapchainImageWidth,
                   limits.maxSwapchainImageHeight, r.host_info.width, r.host_info.height);
@@ -265,7 +268,8 @@ XrResult prepare_swapchains(const std::set<XrSwapchain>& submitted) {
   for (auto handle : submitted) {
     auto& r = s.swapchains.at(handle);
     r.last_submitted = s.presentation_epoch;
-    if (r.host_serial == r.release_serial && r.host_color == s.color_space && r.host_flip == r.flip_rows) continue;
+    const bool opaque = force_opaque && (r.host_info.usageFlags & XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT);
+    if (r.host_serial == r.release_serial && r.host_color == s.color_space && r.host_flip == r.flip_rows && r.host_opaque == opaque) continue;
     std::uint32_t target{};
     {
       HostQueueLock queue(session().uses_shared_gpu);
@@ -284,7 +288,7 @@ XrResult prepare_swapchains(const std::set<XrSwapchain>& submitted) {
     if (result == XR_SESSION_LOSS_PENDING) qualified = result;
     result = r.backing->copy(std::uint32_t(r.released_index), r.host_images.at(target).image, VkFormat(r.host_info.format),
                              {r.host_info.width, r.host_info.height}, r.flip_rows);
-    if (XR_SUCCEEDED(result)) result = convert_color_image(r, target, s.color_space);
+    if (XR_SUCCEEDED(result)) result = convert_color_image(r, target, s.color_space, false, opaque);
     // Always balance an acquisition after a copy/conversion failure. The
     // serial is advanced only after a successful release; retries upload again.
     {
@@ -299,6 +303,7 @@ XrResult prepare_swapchains(const std::set<XrSwapchain>& submitted) {
     r.host_serial = r.release_serial;
     r.host_color = s.color_space;
     r.host_flip = r.flip_rows;
+    r.host_opaque = opaque;
   }
   return qualified;
 }
