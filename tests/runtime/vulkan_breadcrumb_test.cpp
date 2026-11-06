@@ -232,7 +232,8 @@ TEST_CASE("a stopped queue's breadcrumb report names its last completed dispatch
     std::this_thread::sleep_for(std::chrono::milliseconds(25));
     vulkan::report_breadcrumbs(gpu.device);
     for (const auto& line : log_file.lines()) {
-      if (line.find("last completed") != line.npos) { last = marker_after(line, " marker="); last_line = line; }
+      // A report's next marker line follows its last completed line; an older report's must not survive.
+      if (line.find("last completed") != line.npos) { last = marker_after(line, " marker="); last_line = line; next = 0; next_line.clear(); }
       if (line.find("next marker=") != line.npos) { next = marker_after(line, "next marker="); next_line = line; }
     }
   }
