@@ -728,6 +728,7 @@ Settings Settings::load(const fs::path &data) {
   s.steam_add_new = field(j, "steamAddNew") != false;
   // Before install locations, the install dialog only asked about Steam.
   s.install_ask = field(j, j.contains("installAsk") ? "installAsk" : "steamAsk") != false;
+  s.lookup_imports_online = field(j, "lookupImportsOnline") != false;
   if (const auto &folders = field(j, "libraryFolders"); folders.is_array())
     for (const auto &folder : folders)
       if (auto path = folder.is_string() ? paths::from_utf8(folder.get<std::string>()) : fs::path();
@@ -773,6 +774,7 @@ void Settings::save(const fs::path &data) const {
          {"addGamesToSteam", add_games_to_steam},
          {"steamAddNew", steam_add_new},
          {"installAsk", install_ask},
+         {"lookupImportsOnline", lookup_imports_online},
          {"steamSkip", steam_skip}};
   {
     Json games = Json::object();

@@ -82,6 +82,34 @@ bool covered(const State& s, GuestAddr begin, GuestAddr end) {
   }
   return begin >= end;
 }
+// The A64 guest heap arena (guest_heap::select64) is reserved outside this map
+// and mimalloc owns its commit and host protection. Android allows mprotect of
+// page-aligned malloc memory (hook libraries make trampoline pages executable
+// that way), so a protected heap range gets a region here that records the
+// guest's protection for the JIT and /proc/self/maps only. Host protection and
+// commit stay mimalloc's: a read-only page would fault mimalloc's own free-list
+// write when the block is freed, and free runs inside the JIT, where the
+// address space cannot change. Writes to such a page therefore do not fault.
+constexpr std::uint32_t kHeapProt = kProtRead | kProtWrite;
+constexpr std::string_view kHeapName = "[anon:libc_malloc]";
+bool in_heap(GuestAddr p, std::uint64_t n) {
+  const auto [begin, end] = guest_heap::arena64();
+  return begin && p >= begin && p < end && n <= end - p;
+}
+bool heap_region(const MemoryRegion& r) { return in_heap(r.start, r.size); }
+// Adds heap regions for the parts of [begin, end) no region covers yet.
+void track_heap(State& s, GuestAddr begin, GuestAddr end) {
+  auto it = s.regions.upper_bound(begin);
+  if (it != s.regions.begin() && std::prev(it)->first + std::prev(it)->second.size > begin)
+    begin = std::prev(it)->first + std::prev(it)->second.size;
+  while (begin < end) {
+    const auto stop = it != s.regions.end() ? std::min(end, it->first) : end;
+    if (begin < stop) s.regions.emplace(begin, MemoryRegion{begin, stop - begin, kHeapProt, std::string(kHeapName)});
+    if (it == s.regions.end() || it->first >= end) break;
+    begin = it->first + it->second.size;
+    ++it;
+  }
+}
 bool reserve_range(State& s, GuestAddr p, std::uint64_t n) {
   const auto gran = platform::reservation_granularity();
   auto begin = align_down(p, gran), end = align_up(p + n, gran);
@@ -179,7 +207,7 @@ void erase(State& s, GuestAddr p, std::uint64_t n) {
     if (r.prot & kProtExec) cpu_backend().invalidate(r.start, r.size, InvalidationCause::unmap);
     auto view = s.shared_views.upper_bound(r.start);
     const bool shared = view != s.shared_views.begin() && r.start < std::prev(view)->first + std::prev(view)->second.size;
-    if (!shared) platform::decommit(r.start, r.size);
+    if (!shared && !heap_region(r)) platform::decommit(r.start, r.size);
   }
   for (auto it = s.shared_views.lower_bound(p); it != s.shared_views.end() && it->first < p+n;) {
     platform::unmap_shared_file(it->second.mapping);
@@ -333,7 +361,10 @@ std::int64_t AddressSpace::protect(GuestAddr p, std::uint64_t size, std::uint32_
   if (!valid_range(p, size)) return -err::kEINVAL;
   size = align_up(size, kGuestPageSize);
   auto& s = state(); profile::TimedLock lock(s.mutex);
-  if (!covered(s, p, p + size)) return -err::kENOMEM;
+  if (!covered(s, p, p + size)) {
+    if (!in_heap(p, size)) return -err::kENOMEM;
+    track_heap(s, p, p + size);
+  }
   split(s, p); split(s, p + size);
   std::int64_t result = 0;
   std::vector<std::pair<GuestAddr, std::uint64_t>> stale;
@@ -343,7 +374,7 @@ std::int64_t AddressSpace::protect(GuestAddr p, std::uint64_t size, std::uint32_
     // Commit also handles untouched PROT_NONE reservations, and never discards existing bytes.
     auto view = s.shared_views.upper_bound(r.start);
     const bool shared = view != s.shared_views.begin() && r.start < std::prev(view)->first + std::prev(view)->second.size;
-    if ((!shared && !platform::commit(r.start, r.size, prot)) || !platform::protect(r.start, r.size, prot)) {
+    if (!heap_region(r) && ((!shared && !platform::commit(r.start, r.size, prot)) || !platform::protect(r.start, r.size, prot))) {
       alloc_failure::report(alloc_failure::Kind::guest_mmap, std::format("guest mprotect {}", r.name), r.size);
       result = -err::kENOMEM; break;
     }
@@ -351,6 +382,9 @@ std::int64_t AddressSpace::protect(GuestAddr p, std::uint64_t size, std::uint32_
     changed |= r.prot != prot;
     r.prot = prot;
   }
+  // A heap range back at malloc's protection needs no region.
+  for (auto it = s.regions.lower_bound(p); it != s.regions.end() && it->first < p + size;)
+    it = heap_region(it->second) && it->second.prot == kHeapProt ? s.regions.erase(it) : std::next(it);
   // One republish for the whole range, before translations of it are dropped;
   // none when no permission changed (splits alone are invisible to readers).
   if (changed) publish(s, p, p + size);
@@ -375,6 +409,7 @@ std::int64_t AddressSpace::advise(GuestAddr p, std::uint64_t size, int advice) {
   for (auto it = s.regions.lower_bound(p); it != s.regions.end() && it->first < p + size; ++it) {
     auto& r = it->second;
     if (r.prot & kProtExec) cpu_backend().invalidate(r.start, r.size, InvalidationCause::advise);
+    if (heap_region(r)) continue;  // mimalloc owns these pages' commit
     if (!platform::decommit(r.start, r.size) || (r.prot && !platform::commit(r.start, r.size, r.prot))) return -err::kENOMEM;
   }
   return 0;

@@ -44,6 +44,9 @@ if(TARGET venture_i18n)
   target_link_libraries(venture_tests PRIVATE venture_i18n)
 endif()
 if(VENTURE_BUILD_LAUNCHER)
+  # Store links of imported APKs, with the shipped package -> app id pairs.
+  target_sources(venture_tests PRIVATE store_link_test.cpp ${PROJECT_SOURCE_DIR}/src/launcher/store_link.cpp)
+  target_include_directories(venture_tests PRIVATE ${PROJECT_BINARY_DIR}/src/launcher/generated)
   target_compile_definitions(venture_tests PRIVATE VENTURE_TEST_STEAM_ART)
   foreach(format png webp)
     configure_file("${CMAKE_CURRENT_SOURCE_DIR}/data/steam-art.${format}"
@@ -120,7 +123,7 @@ target_sources(venture_tests PRIVATE runtime/loader_lifecycle_test.cpp)
 # Every source partition runs once; supervisor deadlines overlap in isolated roots.
 set(venture_test_partitions venture_tests)
 set(venture_test_split_filters)
-foreach(source core_restart core_thread_failure jit_cache vulkan vulkan_texture vulkan_fastpath)
+foreach(source core_restart core_thread_failure core_heap_exec jit_cache vulkan vulkan_texture vulkan_fastpath)
   set(filter "*${source}_test.cpp")
   add_test(NAME venture_tests_${source} COMMAND venture_tests "--source-file=${filter}" --duration=true)
   list(APPEND venture_test_partitions venture_tests_${source})

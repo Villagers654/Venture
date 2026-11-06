@@ -38,6 +38,7 @@ private:
   void on_refresh() override;
   void on_install_queued() override;
   void on_import_scan() override;
+  void on_art_changed(std::string_view id) override;
   void tick() override;
   SDL_Window *window_ = nullptr;
   SDL_Renderer *renderer_ = nullptr;
@@ -162,6 +163,9 @@ private:
   std::vector<std::pair<std::string, fs::path>> save_picks_;
   void choose_save_folder(const std::string &app_id);
   void draw_save_import();
+  // Link to store page...: the import whose dialog is open and the pasted link.
+  std::string store_link_target_, store_link_text_;
+  void draw_store_link();
   std::string save_game_;  // the game picked in the Import page's save data card
   // A game's mods folder as its page summarizes it, re-read every few seconds:
   // files replacing an installed file, and files matching none (another version).

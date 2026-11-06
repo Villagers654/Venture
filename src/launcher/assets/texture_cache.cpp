@@ -281,14 +281,35 @@ void TextureCache::load_full(const std::string &id) {
     }
   });
 }
-void TextureCache::request(const meta::Game &game, bool allow_network) {
-  // A Meta app id, or an import's package whose cover came from its APK.
-  const bool store = digits(game.id, 5);
-  if ((!store && !paths::safe_package(game.id)) || covers_.contains(game.id) ||
+void TextureCache::drain() {
+  for (auto *t : retired_)
+    SDL_DestroyTexture(t);
+  retired_.clear();
+  worker_.drain();
+}
+void TextureCache::forget(std::string_view id) {
+  const std::string key(id);
+  if (auto c = covers_.find(key); c != covers_.end()) {
+    std::ranges::copy(c->second.levels, std::back_inserter(retired_));
+    if (c->second.full)
+      retired_.push_back(c->second.full);
+    covers_.erase(c);
+  }
+  if (auto a = ambient_.find(key); a != ambient_.end()) {
+    retired_.push_back(a->second);
+    ambient_.erase(a);
+  }
+  requested_.erase(key);
+}
+void TextureCache::request(const meta::Game &game, bool allow_network, std::string_view store_id) {
+  // A Meta app id, or an import's package whose cover came from its APK or,
+  // linked to its store listing, from the store.
+  const std::string source = digits(game.id, 5) ? game.id : digits(store_id, 5) ? std::string(store_id) : std::string();
+  if ((!digits(game.id, 5) && !paths::safe_package(game.id)) || covers_.contains(game.id) ||
       !requested_.insert(game.id).second)
     return;
-  allow_network = allow_network && store;
-  worker_.submit([this, game, allow_network](std::stop_token stop) -> Worker::Completion {
+  allow_network = allow_network && !source.empty();
+  worker_.submit([this, game, source, allow_network](std::stop_token stop) -> Worker::Completion {
     try {
       auto file = directory_ / (game.id + ".image");
       auto no_cover = directory_ / (game.id + ".nocover");
@@ -305,7 +326,7 @@ void TextureCache::request(const meta::Game &game, bool allow_network) {
       bool recent_miss = !ec && fs::file_time_type::clock::now() - checked < std::chrono::hours(24 * 7);
       if ((bytes.empty() || wide) && allow_network && !recent_miss) {
         try {
-          auto uri = meta::Store({}, stop).cover(game.id);
+          auto uri = meta::Store({}, stop).cover(source);
           std::string fresh = uri.empty() ? std::string() : http::get_image(uri, stop);
           int fw = 0, fh = 0;
           if (!fresh.empty() && info(fresh, fw, fh) && !banner(fw, fh)) {
@@ -327,7 +348,7 @@ void TextureCache::request(const meta::Game &game, bool allow_network) {
           return {};
         auto uri = game.image;
         if (uri.empty())
-          uri = meta::Store({}, stop).artwork(game.id).image;
+          uri = meta::Store({}, stop).artwork(source).image;
         if (uri.empty())
           return {};
         bytes = http::get_image(uri, stop);

@@ -156,6 +156,18 @@ std::filesystem::path library_file(State& s, std::string_view name, std::string_
   }
   return {};
 }
+// The path dladdr, dl_iterate_phdr and /proc/self/maps report. A library in the
+// APK's lib directory has that directory's guest path however it was named. One
+// dlopened by path from anywhere else (a mod in app or external storage) keeps
+// the path it was opened by, as on Android: mod loaders check the directory of
+// a mod's dladdr result before calling into it.
+std::string guest_library_path(std::string_view name, const std::filesystem::path& file, std::string_view base) {
+  const auto& config = process_config();
+  std::error_code error;
+  if (name.starts_with('/') && !std::filesystem::equivalent(file.parent_path(), config.native_lib_dir, error))
+    return std::string(name);
+  return config.guest_native_lib_dir() + "/" + std::string(base);
+}
 bool backing_exports(State& s, HleLibrary* slot, std::string_view name, std::string_view version) {
   if (slot->mapped_image() || slot->hle_symbol(name)) return false;
   auto [file, added_file] = s.backing_files.try_emplace(slot);
@@ -200,7 +212,7 @@ std::shared_ptr<Library> load(State& s, std::string_view name, int flags, bool b
   auto path = library_file(s, name, base);
   if (backing) if (auto* slot = dynamic_cast<HleLibrary*>(lib.get()); slot && s.backing_files.contains(slot)) path = s.backing_files.at(slot);
   if (!path.empty()) {
-    auto guest = process_config().guest_native_lib_dir() + "/" + base;
+    auto guest = guest_library_path(name, path, base);
     auto image = std::make_shared<elf::Image>(path, guest, placement);
     if (image->isa() != process_config().isa()) throw std::runtime_error("ELF ISA differs from selected process ABI: " + base);
     image->global |= (flags & kRtldGlobal) != 0;

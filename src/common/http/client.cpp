@@ -392,6 +392,12 @@ Response get_latest_release(std::stop_token stop) {
   return memory("https://api.github.com/repos/Villagers654/Venture/releases/latest", nullptr, 1024 * 1024, stop,
                 {{"Accept", "application/vnd.github+json"}});
 }
+Response get_oculusdb_package(std::string_view package, std::stop_token stop) {
+  if (!paths::safe_package(package))
+    throw std::runtime_error("Invalid package name.");
+  return memory("https://oculusdb.rui2015.me/api/v1/packagename/" + encode(package), nullptr, 1024 * 1024, stop,
+                {{"Accept", "application/json"}});
+}
 Response get_loopback(uint16_t port, std::string_view path,
                       const Fields &headers, std::stop_token stop) {
   if (!port || !path.starts_with('/') || path.starts_with("//") ||

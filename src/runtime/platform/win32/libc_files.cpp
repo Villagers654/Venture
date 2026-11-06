@@ -246,27 +246,23 @@ int change_times(HANDLE h, const Timespec* times) {
   return SetFileTime(h, nullptr, pointers[0], pointers[1]) ? 0 : error();
 }
 int change_mode(HANDLE h, std::uint32_t mode) {
-  // Win32 FILE_ATTRIBUTE_READONLY affects files, not directories (Microsoft
-  // File Attribute Constants). It cannot express owner/group-specific access,
-  // execute permission or set-id bits. Reject those rather than claim success.
+  // Android app storage is single-uid, so only the owner bits decide access.
+  // Win32 FILE_ATTRIBUTE_READONLY holds the owner-write bit of a file; on a
+  // directory it does not block writes (Microsoft File Attribute Constants).
+  // Execute, group/other and set-id bits have no Win32 attribute: they are
+  // accepted and dropped, so fill() reports 0666/0444 files and 0777 dirs.
   static std::mutex mutation_mutex;
   std::lock_guard lock(mutation_mutex);
   FILE_BASIC_INFO info{};
-  int r = 0;
-  if (!GetFileInformationByHandleEx(h, FileBasicInfo, &info, sizeof(info)))
-    r = error();
-  else if (info.FileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
-    if (mode != 0777) r = -err::enotsup;
-  } else if (mode != 0666 && mode != 0444)
-    r = -err::enotsup;
-  else {
-    auto attrs = info.FileAttributes & ~(FILE_ATTRIBUTE_READONLY | FILE_ATTRIBUTE_NORMAL);
-    if (mode == 0444) attrs |= FILE_ATTRIBUTE_READONLY;
-    info = {}; // zero timestamps leave them unchanged
-    info.FileAttributes = attrs ? attrs : FILE_ATTRIBUTE_NORMAL;
-    if (!SetFileInformationByHandle(h, FileBasicInfo, &info, sizeof(info))) r = error();
-  }
-  return r;
+  if (!GetFileInformationByHandleEx(h, FileBasicInfo, &info, sizeof(info))) return error();
+  if (info.FileAttributes & FILE_ATTRIBUTE_DIRECTORY) return 0;
+  const bool readonly = !(mode & 0200);
+  if (readonly == bool(info.FileAttributes & FILE_ATTRIBUTE_READONLY)) return 0;
+  auto attrs = info.FileAttributes & ~(FILE_ATTRIBUTE_READONLY | FILE_ATTRIBUTE_NORMAL);
+  if (readonly) attrs |= FILE_ATTRIBUTE_READONLY;
+  info = {}; // zero timestamps leave them unchanged
+  info.FileAttributes = attrs ? attrs : FILE_ATTRIBUTE_NORMAL;
+  return SetFileInformationByHandle(h, FileBasicInfo, &info, sizeof(info)) ? 0 : error();
 }
 class DiskFile final : public File {
  public:

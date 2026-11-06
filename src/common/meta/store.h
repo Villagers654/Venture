@@ -43,6 +43,14 @@ struct Plan {
   // when known; otherwise plan.json leaves it empty and app_id holds the
   // package as the launcher's key.
   bool local = false;
+  // A local import's link to the Meta store listing it is (plan.json
+  // "storeAppId"), found by package or set by the user, when app_id is the
+  // package. The install stays keyed by app_id; the link only names the
+  // listing its name, description, publisher and art come from. Set by the
+  // user's "Remove store link", store_link_removed stops looking it up again
+  // ("storeLinkRemoved").
+  std::string store_app_id;
+  bool store_link_removed = false;
   // A version installed beside the game's other versions (pinned): it keeps
   // its build, never updates, and has its own folder, saves and caches.
   bool pinned = false;

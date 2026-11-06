@@ -76,6 +76,7 @@ msgid ""
 "                                 adb PATH|auto | log-level trace|debug|info|warn|error |\n"
 "                                 console on|off | add-to-steam on|off |\n"
 "                                 add-new-to-steam on|off | passthrough on|off |\n"
+"                                 lookup-imports-online on|off |\n"
 "                                 language auto|en|CODE |\n"
 "                                 color-key off|RRGGBB |\n"
 "                                 mirror cropped|full|off | mirror-eye left|right |\n"
@@ -87,187 +88,245 @@ msgid ""
 "game's own exit code.\n"
 msgstr ""
 
-#: src/launcher/cli.cpp:148
+#: src/launcher/cli.cpp:149
 #, python-brace-format
 msgid "{0} needs a value."
 msgstr ""
 
-#: src/launcher/cli.cpp:153
+#: src/launcher/cli.cpp:154
 #, python-brace-format
 msgid "Unknown option {0}."
 msgstr ""
 
-#: src/launcher/cli.cpp:1371
+#: src/launcher/cli.cpp:1375
 #, python-brace-format
 msgid "Unknown command \"{0}\"."
 msgstr ""
 
-#: src/launcher/cli.cpp:1401
-#: src/launcher/cli.cpp:1434
+#: src/launcher/cli.cpp:1405
+#: src/launcher/cli.cpp:1438
 msgid "error: "
 msgstr ""
 
-#: src/launcher/cli.cpp:1434
+#: src/launcher/cli.cpp:1438
 msgid "See: venture-cli --help"
 msgstr ""
 
+#: src/launcher/core.cpp:627
+msgid "Only imported games can be linked to a store page."
+msgstr ""
+
+#: src/launcher/core.cpp:632
+msgid "Paste the game's Meta store link, like meta.com/experiences/1234567890123456, or its ID."
+msgstr ""
+
+#: src/launcher/core.cpp:636
+msgid "Store pages can't be checked in offline mode."
+msgstr ""
+
 #. Sidebar pages.
-#: src/launcher/ui/views.cpp:560
-#: src/launcher/ui/views.cpp:1776
+#: src/launcher/ui/views.cpp:566
+#: src/launcher/ui/views.cpp:1795
 msgid "Library"
 msgstr ""
 
-#: src/launcher/ui/views.cpp:561
+#: src/launcher/ui/views.cpp:567
 msgid "Downloads"
 msgstr ""
 
-#: src/launcher/ui/views.cpp:562
+#: src/launcher/ui/views.cpp:568
 msgid "Import"
 msgstr ""
 
-#: src/launcher/ui/views.cpp:563
+#: src/launcher/ui/views.cpp:569
 msgid "Controls"
 msgstr ""
 
-#: src/launcher/ui/views.cpp:564
-#: src/launcher/ui/views.cpp:1734
+#: src/launcher/ui/views.cpp:570
+#: src/launcher/ui/views.cpp:1753
 msgid "Settings"
 msgstr ""
 
-#: src/launcher/ui/views.cpp:614
+#: src/launcher/ui/views.cpp:620
 msgid "Sign in"
 msgstr ""
 
 #. Under the account name at the bottom of the sidebar.
-#: src/launcher/ui/views.cpp:618
+#: src/launcher/ui/views.cpp:624
 msgid "Connect your Meta account"
 msgstr ""
 
-#: src/launcher/ui/views.cpp:619
+#: src/launcher/ui/views.cpp:625
 msgid "Offline"
 msgstr ""
 
-#: src/launcher/ui/views.cpp:620
+#: src/launcher/ui/views.cpp:626
 #, python-brace-format
 msgid "{0} account"
 msgid_plural "{0} accounts"
 msgstr[0] ""
 msgstr[1] ""
 
-#: src/launcher/ui/views.cpp:621
+#: src/launcher/ui/views.cpp:627
 msgid "Meta account"
 msgstr ""
 
-#: src/launcher/ui/views.cpp:1752
+#: src/launcher/ui/views.cpp:1183
+msgid "Link to store page…"
+msgstr ""
+
+#: src/launcher/ui/views.cpp:1188
+msgid "Remove store link"
+msgstr ""
+
+#: src/launcher/ui/views.cpp:1771
 msgid "Appearance"
 msgstr ""
 
-#: src/launcher/ui/views.cpp:1760
+#: src/launcher/ui/views.cpp:1779
 msgid "Interface size"
 msgstr ""
 
-#: src/launcher/ui/views.cpp:1833
-#: src/launcher/ui/views.cpp:2362
+#: src/launcher/ui/views.cpp:1838
+msgid "Look up imported games online"
+msgstr ""
+
+#: src/launcher/ui/views.cpp:1849
+msgid "Finds an imported game's store page on OculusDB. Only its package name is sent."
+msgstr ""
+
+#: src/launcher/ui/views.cpp:1868
+#: src/launcher/ui/views.cpp:2397
 msgid "Display"
 msgstr ""
 
-#: src/launcher/ui/views.cpp:1840
-#: src/launcher/ui/views.cpp:2367
+#: src/launcher/ui/views.cpp:1875
+#: src/launcher/ui/views.cpp:2402
 msgid "Runtime"
 msgstr ""
 
 #. Choices for "Compress textures".
-#: src/launcher/ui/views.cpp:1945
-#: src/launcher/ui/views.cpp:2387
+#: src/launcher/ui/views.cpp:1980
+#: src/launcher/ui/views.cpp:2422
 msgid "Always"
 msgstr ""
 
 #. Choices for "Compress textures".
-#: src/launcher/ui/views.cpp:1945
-#: src/launcher/ui/views.cpp:2062
-#: src/launcher/ui/views.cpp:2387
+#: src/launcher/ui/views.cpp:1980
+#: src/launcher/ui/views.cpp:2097
+#: src/launcher/ui/views.cpp:2422
 msgid "Automatic"
 msgstr ""
 
 #. Choices for "Compress textures".
 #. Choices for "Audio on PC too".
-#: src/launcher/ui/views.cpp:1945
-#: src/launcher/ui/views.cpp:2342
-#: src/launcher/ui/views.cpp:2387
+#: src/launcher/ui/views.cpp:1980
+#: src/launcher/ui/views.cpp:2377
+#: src/launcher/ui/views.cpp:2422
 msgid "Off"
 msgstr ""
 
 #. Settings row: store game textures compressed, in less GPU memory.
-#: src/launcher/ui/views.cpp:1948
-#: src/launcher/ui/views.cpp:2388
+#: src/launcher/ui/views.cpp:1983
+#: src/launcher/ui/views.cpp:2423
 msgid "Compress textures"
 msgstr ""
 
 #. Settings row: GPU memory in use before new textures are compressed.
-#: src/launcher/ui/views.cpp:1974
-#: src/launcher/ui/views.cpp:2415
+#: src/launcher/ui/views.cpp:2009
+#: src/launcher/ui/views.cpp:2450
 msgid "Compression threshold"
 msgstr ""
 
-#: src/launcher/ui/views.cpp:1999
+#: src/launcher/ui/views.cpp:2034
 msgid "Troubleshooting"
 msgstr ""
 
-#: src/launcher/ui/views.cpp:2030
+#: src/launcher/ui/views.cpp:2065
 msgid "About"
 msgstr ""
 
-#: src/launcher/ui/views.cpp:2070
+#: src/launcher/ui/views.cpp:2105
 msgid "Language"
 msgstr ""
 
 #. Settings row: also play the game's sound on the PC's speakers or headphones.
-#: src/launcher/ui/views.cpp:2334
+#: src/launcher/ui/views.cpp:2369
 msgid "Audio on PC too"
 msgstr ""
 
 #. Choices for "Audio on PC too".
-#: src/launcher/ui/views.cpp:2342
+#: src/launcher/ui/views.cpp:2377
 msgid "On"
 msgstr ""
 
-#: src/launcher/ui/views.cpp:2345
-#: src/launcher/ui/views.cpp:2387
-#: src/launcher/ui/views.cpp:2412
+#: src/launcher/ui/views.cpp:2380
+#: src/launcher/ui/views.cpp:2422
+#: src/launcher/ui/views.cpp:2447
 msgid "Use global setting"
 msgstr ""
 
-#: src/launcher/ui/views.cpp:3251
+#: src/launcher/ui/views.cpp:3294
 #, python-brace-format
 msgid "Uninstall {0}?"
 msgstr ""
 
-#: src/launcher/ui/views.cpp:3251
+#: src/launcher/ui/views.cpp:3294
 msgid "Uninstall this game?"
 msgstr ""
 
-#: src/launcher/ui/views.cpp:3252
+#: src/launcher/ui/views.cpp:3295
 msgid "Its files are removed from this PC. Saves are kept, and you can install it again from your library."
 msgstr ""
 
-#: src/launcher/ui/views.cpp:3253
-#: src/launcher/ui/views.cpp:3275
+#: src/launcher/ui/views.cpp:3296
+#: src/launcher/ui/views.cpp:3318
+#: src/launcher/ui/views.cpp:3396
+#: src/launcher/ui/views.cpp:3397
 msgid "Cancel"
 msgstr ""
 
-#: src/launcher/ui/views.cpp:3253
+#: src/launcher/ui/views.cpp:3296
 msgid "Uninstall"
 msgstr ""
 
 #. Warning when Compress textures changes from Always to Automatic or Off.
-#: src/launcher/ui/views.cpp:3271
+#: src/launcher/ui/views.cpp:3314
 msgid "Disable texture compression?"
 msgstr ""
 
-#: src/launcher/ui/views.cpp:3272
+#: src/launcher/ui/views.cpp:3315
 msgid "This can increase video memory use by up to 4 times. It isn't recommended on GPUs with less than 20 GB of video memory."
 msgstr ""
 
-#: src/launcher/ui/views.cpp:3275
+#: src/launcher/ui/views.cpp:3318
 msgid "Change anyway"
+msgstr ""
+
+#: src/launcher/ui/views.cpp:3370
+msgid "Link to store page"
+msgstr ""
+
+#. {0} is an Android package name such as com.studio.game.
+#: src/launcher/ui/views.cpp:3372
+#, python-brace-format
+msgid "Paste the game's Meta store link or its ID. Its name, description and art then come from the store. The store page must be for {0}."
+msgstr ""
+
+#: src/launcher/ui/views.cpp:3383
+msgid "Checking the store page…"
+msgstr ""
+
+#. {0} is a game's store name, {1} and {2} Android package names.
+#: src/launcher/ui/views.cpp:3389
+#, python-brace-format
+msgid "This store page is for {0} ({1}), not {2}. Link it anyway only for a modified build or another edition of the same game."
+msgstr ""
+
+#: src/launcher/ui/views.cpp:3396
+msgid "Link anyway"
+msgstr ""
+
+#: src/launcher/ui/views.cpp:3397
+msgid "Link"
 msgstr ""

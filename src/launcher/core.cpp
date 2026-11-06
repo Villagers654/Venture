@@ -2,6 +2,7 @@
 #include "launcher/debug_report.h"
 #include "launcher/i18n/i18n.h"
 #include "launcher/sign_in_link.h"
+#include "launcher/store_link.h"
 #include "common/android/manifest.h"
 #include "common/download/asset_files.h"
 #include "common/file_ops.h"
@@ -385,16 +386,17 @@ void Core::fill_metadata() {
   std::vector<std::pair<std::string, std::string>> wanted; // app id, token
   std::map<std::string, std::string> tokens;               // account key -> token
   for (const auto &i : installs_) {
-    const auto &id = i.plan.app_id;
+    // The install's own app id, or an import's store link. Meta has no
+    // listing for an import it does not know (keyed by package, unlinked).
+    const auto id = store_id_of(i);
+    if (id.empty())
+      continue;
     const auto *g = game(id);
     if ((g && !g->description.empty() && !g->publisher.empty()) ||
         metadata_tried_.contains(id))
       continue;
     metadata_tried_.insert(id);
     std::string token;
-    // Meta has no listing for an import it does not know (keyed by package).
-    if (!digits(id, 5))
-      continue;
     for (const auto &key : game_owners(id)) {
       if (!tokens.contains(key))
         try {
@@ -455,6 +457,260 @@ void Core::fill_metadata() {
       fill_metadata(); // games that appeared meanwhile
     };
   });
+}
+std::string Core::store_id_of(std::string_view id) const {
+  if (const auto app = meta::base_app(id); digits(app, 5))
+    return std::string(app);
+  for (const auto &i : installs_)
+    if (i.id() == id)
+      return i.plan.store_app_id;
+  return {};
+}
+namespace {
+// Packages whose store link lookup found nothing, with the launcher version
+// that looked: the next version tries again.
+fs::path store_links_tried(const fs::path &data) { return data / "cache" / "store-links.json"; }
+Json read_store_links_tried(const fs::path &data) {
+  try {
+    if (fs::exists(store_links_tried(data)))
+      if (auto j = paths::read_json(store_links_tried(data)); j.is_object())
+        return j;
+  } catch (...) {
+  }
+  return Json::object();
+}
+// A download or import that will write this game's plan.json.
+bool plan_busy(const std::vector<download::Job> &jobs, std::string_view id) {
+  auto job = download::base_job(jobs, id);
+  return job && (job->state == download::State::downloading || job->state == download::State::queued ||
+                 job->state == download::State::checking);
+}
+} // namespace
+void Core::resolve_store_links() {
+  if (options_.offline || options_.launch_requested || store_link_busy_ || scanning_ || !worker_)
+    return;
+  const Json tried = read_store_links_tried(data_);
+  const auto jobs = downloads_ ? downloads_->snapshot() : std::vector<download::Job>{};
+  std::vector<std::pair<std::string, std::string>> wanted; // package, library app id
+  std::vector<std::tuple<std::string, std::string, bool>> copies; // package, link, removed
+  std::set<std::string> packages;
+  for (const auto &i : installs_) {
+    if (!i.plan.local || digits(i.plan.app_id, 5) || !i.complete || plan_busy(jobs, i.id()) ||
+        !packages.insert(i.plan.package).second)
+      continue;
+    const auto &package = i.plan.package;
+    // Another version of this import may already be linked (or unlinked by
+    // the user): a new version imported beside it takes the same choice.
+    const library::Install *chosen = nullptr;
+    bool all = true;
+    for (const auto &other : installs_)
+      if (other.plan.local && other.plan.package == package && !digits(other.plan.app_id, 5)) {
+        if (!other.plan.store_app_id.empty() || other.plan.store_link_removed)
+          chosen = chosen ? chosen : &other;
+        else
+          all = false;
+      }
+    if (chosen) {
+      if (!all && store_link_tried_.insert(package).second)
+        copies.emplace_back(package, chosen->plan.store_app_id, chosen->plan.store_link_removed);
+      continue;
+    }
+    if (store_link_tried_.contains(package) || str(tried, package) == VENTURE_VERSION)
+      continue;
+    store_link_tried_.insert(package);
+    // a: a signed-in account's library (or a listing already fetched) names
+    // the package.
+    std::string library;
+    for (const auto &g : games_)
+      if (g.package == package && !g.system && digits(g.id, 5)) {
+        library = g.id;
+        if (g.owned)
+          break;
+      }
+    wanted.emplace_back(package, library);
+  }
+  // Background work: a link that cannot be written now is logged and tried
+  // again after the next scan, never shown as an error.
+  auto write_later = [this](const std::string &package, const std::string &id, bool removed) {
+    try {
+      write_store_link(package, id, removed);
+    } catch (...) {
+      log::warn("library", "Could not save the store link of the import {}: {}", package, exception_text());
+      store_link_tried_.erase(package);
+    }
+  };
+  for (const auto &[package, id, removed] : copies)
+    write_later(package, id, removed);
+  if (wanted.empty())
+    return;
+  store_link_busy_ = true;
+  const bool online = settings_.lookup_imports_online;
+  worker_->submit([this, wanted, online](std::stop_token stop) -> Worker::Completion {
+    std::vector<std::pair<std::string, store_link::Resolved>> results;
+    for (const auto &[package, library] : wanted) {
+      if (stop.stop_requested())
+        break;
+      store_link::Lookups lookups;
+      lookups.library = library;
+      lookups.known = store_link::known_id;
+      // c: only the package name is sent.
+      if (online)
+        lookups.online = [&stop](std::string_view p) {
+          auto r = http::get_oculusdb_package(p, stop);
+          if (r.status == 404)
+            return std::string();
+          if (r.status != 200)
+            throw std::runtime_error("OculusDB answered HTTP " + std::to_string(r.status) + ".");
+          return store_link::oculusdb_id(r.body, p);
+        };
+      // d: the public listing, without an account token.
+      lookups.listing_package = [&stop](std::string_view id) { return meta::Store({}, stop).artwork(id).package; };
+      results.emplace_back(package, store_link::resolve(package, lookups));
+    }
+    return [this, results] {
+      store_link_busy_ = false;
+      bool linked = false;
+      action([&] {
+        Json tried = read_store_links_tried(data_);
+        bool record = false;
+        for (const auto &[package, r] : results) {
+          if (!r.id.empty()) {
+            log::info("library", "Linked the import {} to store application {} ({}).", package, r.id, r.source);
+            try {
+              write_store_link(package, r.id, false);
+            } catch (...) {
+              log::warn("library", "Could not save the store link of the import {}: {}", package, exception_text());
+              store_link_tried_.erase(package);
+            }
+            linked = true;
+          } else if (r.final) {
+            log::info("library", "No store listing found for the import {}.", package);
+            tried[package] = VENTURE_VERSION;
+            record = true;
+          } else {
+            log::warn("library", "Could not look up the store listing of the import {}; trying again next start.",
+                      package);
+          }
+        }
+        if (record) {
+          fs::create_directories(store_links_tried(data_).parent_path());
+          paths::atomic_write(store_links_tried(data_), tried.dump(2));
+        }
+      });
+      if (!linked)
+        resolve_store_links(); // imports that appeared meanwhile (a link rescans, which does this)
+    };
+  });
+}
+void Core::write_store_link(const std::string &package, const std::string &store_id, bool removed) {
+  if (!paths::safe_package(package) || (!store_id.empty() && !digits(store_id, 5)))
+    throw std::runtime_error("Invalid store link.");
+  const auto jobs = downloads_ ? downloads_->snapshot() : std::vector<download::Job>{};
+  bool changed = false;
+  for (auto &i : installs_) {
+    if (!i.plan.local || i.plan.package != package || digits(i.plan.app_id, 5))
+      continue;
+    if (plan_busy(jobs, i.id()))
+      throw std::runtime_error("Wait for this game's download to finish.");
+    const auto file = i.directory / "plan.json";
+    auto plan = meta::parse_plan(paths::read_json(file));
+    plan.store_app_id = store_id;
+    plan.store_link_removed = store_id.empty() && removed;
+    paths::atomic_write(file, plan.json().dump(2));
+    i.plan.store_app_id = plan.store_app_id;
+    i.plan.store_link_removed = plan.store_link_removed;
+    changed = true;
+  }
+  if (!changed)
+    return;
+  // The APK's own art gives way to the listing's, and comes back (from the
+  // APK, on the rescan) when the link goes.
+  std::error_code ec;
+  for (const char *suffix : {".image", "_icon.image", "_hero.image", ".nocover", ".noicon"})
+    fs::remove(data_ / "cache/art" / paths::from_utf8(package + suffix), ec);
+  on_art_changed(package);
+  if (!store_id.empty())
+    metadata_tried_.erase(store_id);
+  rescan();
+}
+void Core::check_store_link(std::string target, std::string_view text) {
+  using namespace i18n::markers;
+  store_link_check_ = {};
+  store_link_check_.target = target;
+  const auto *install = installed(target, false);
+  if (!install || !install->plan.local || digits(install->plan.app_id, 5)) {
+    store_link_check_.error = tr("Only imported games can be linked to a store page.");
+    return;
+  }
+  auto id = store_link::id_from_link(text);
+  if (id.empty()) {
+    store_link_check_.error = tr("Paste the game's Meta store link, like meta.com/experiences/1234567890123456, or its ID.");
+    return;
+  }
+  if (options_.offline) {
+    store_link_check_.error = tr("Store pages can't be checked in offline mode.");
+    return;
+  }
+  store_link_check_.id = id;
+  store_link_check_.busy = true;
+  const auto package = install->plan.package;
+  worker_->submit([this, target, id, package](std::stop_token stop) -> Worker::Completion {
+    meta::Game listing;
+    std::string failure;
+    try {
+      listing = meta::Store({}, stop).artwork(id);
+    } catch (...) {
+      failure = exception_text();
+    }
+    return [this, target, id, package, listing, failure] {
+      if (store_link_check_.target != target || store_link_check_.id != id)
+        return; // the dialog moved on
+      store_link_check_.busy = false;
+      if (!failure.empty()) {
+        store_link_check_.error = failure;
+        return;
+      }
+      store_link_check_.name = listing.name;
+      store_link_check_.listing_package = listing.package;
+      // The listing is known now: its name shows without another fetch.
+      if (!listing.name.empty() && std::ranges::find(games_, listing.id, &meta::Game::id) == games_.end()) {
+        auto g = listing;
+        g.owned = false;
+        g.ownership_account.clear();
+        g.image.clear();
+        games_.push_back(std::move(g));
+        action([&] { save_library(); });
+      }
+      if (!store_link::listing_matches(listing.package, package)) {
+        store_link_check_.mismatch = true;
+        return;
+      }
+      try {
+        write_store_link(package, id, false);
+        store_link_check_.done = true;
+      } catch (...) {
+        store_link_check_.error = exception_text();
+      }
+    };
+  });
+}
+void Core::link_store_anyway() {
+  auto &c = store_link_check_;
+  const auto *install = installed(c.target, false);
+  if (!c.mismatch || c.id.empty() || !install)
+    return;
+  try {
+    write_store_link(install->plan.package, c.id, false);
+    c.done = true;
+  } catch (...) {
+    c.error = exception_text();
+  }
+}
+void Core::remove_store_link(std::string_view target) {
+  const auto *install = installed(target, false);
+  if (!install || install->plan.store_app_id.empty())
+    return;
+  write_store_link(install->plan.package, {}, true);
 }
 std::vector<std::string> Core::game_owners(std::string_view app_id) const {
   // A pinned version belongs to whoever owns the game.
@@ -581,6 +837,14 @@ std::vector<meta::Game> Core::visible_games() const {
         out.push_back(std::move(g));
         continue;
       }
+      // An import keyed by its package shows its store link's listing.
+      if (old == games_.end() && !i.plan.store_app_id.empty())
+        if (auto linked = std::ranges::find(games_, i.plan.store_app_id, &meta::Game::id); linked != games_.end()) {
+          out.push_back(*linked);
+          out.back().id = i.id();
+          out.back().owned = false;
+          continue;
+        }
       if (old != games_.end()) {
         out.push_back(*old);
         out.back().owned = false;
@@ -607,8 +871,12 @@ std::vector<meta::Game> Core::visible_games() const {
   return out;
 }
 void Core::rescan() {
-  if (scanning_)
+  // A change made while a scan runs (a store link written) may be missed by
+  // it: scan again once it ends.
+  if (scanning_) {
+    rescan_again_ = true;
     return;
+  }
   scanning_ = true;
   steam_scan_reliable_ = false;
   ++steam_generation_;
@@ -619,6 +887,7 @@ void Core::rescan() {
       // The games folder first, so a game found in two folders is the one there.
       bool reliable = true;
       std::vector<library::Install> result;
+      std::vector<std::string> fresh_art;  // covers written now, which the GUI loads again
       for (const auto &root : roots) {
         // Another library folder may be on a drive that is not connected now;
         // its games are missing from this scan, which then is not reliable.
@@ -638,17 +907,28 @@ void Core::rescan() {
           install.label = std::move(shown.label);
           auto save = [&](std::string_view suffix, const std::vector<std::uint8_t> &image) {
             auto file = art / paths::from_utf8(install.plan.app_id + std::string(suffix) + ".image");
-            if (!image.empty() && paths::safe_package(install.plan.app_id) && !fs::exists(file))
+            if (!image.empty() && paths::safe_package(install.plan.app_id) && !fs::exists(file)) {
               paths::atomic_write(file, std::string_view(reinterpret_cast<const char *>(image.data()), image.size()));
+              fresh_art.push_back(install.plan.app_id);
+            }
           };
-          save("", shown.banner.empty() ? shown.icon : shown.banner);
-          save("_icon", shown.icon);
+          // A store link's listing brings the store's art instead.
+          if (install.plan.store_app_id.empty()) {
+            save("", shown.banner.empty() ? shown.icon : shown.banner);
+            save("_icon", shown.icon);
+          }
         } catch (const std::exception &e) {
           log::warn("library", "Could not read how {} presents itself: {}", install.plan.package, e.what());
         }
       }
-      return [this, result = std::move(result), roots, reliable] {
+      return [this, result = std::move(result), roots, reliable, fresh_art] {
         scanning_ = false;
+        for (const auto &id : fresh_art)
+          on_art_changed(id);
+        if (std::exchange(rescan_again_, false)) {
+          rescan();
+          return;
+        }
         if (roots == settings_.roots()) {
           std::erase_if(addons_, [&](auto &entry) {
             auto previous = installed(entry.first, false);
@@ -669,6 +949,7 @@ void Core::rescan() {
             refresh_addons(selected_);
           backfill_identity();
           fill_metadata();
+          resolve_store_links();
         } else
           rescan();
       };
@@ -686,15 +967,7 @@ void Core::add_owned() {
     return;
   // meta.com/experiences/<id>, oculus.com/experiences/quest/<id>, or the id:
   // the last run of digits long enough to be an app id.
-  std::string id;
-  for (std::size_t i = 0; i < owned_link_.size();) {
-    auto end = i;
-    while (end < owned_link_.size() && owned_link_[end] >= '0' && owned_link_[end] <= '9')
-      ++end;
-    if (end - i >= 5)
-      id = owned_link_.substr(i, end - i);
-    i = std::max(end, i + 1);
-  }
+  std::string id = store_link::id_from_link(owned_link_);
   if (id.empty()) {
     error("Paste the game's Meta store link, like meta.com/experiences/1234567890123456.");
     return;
@@ -1576,27 +1849,34 @@ void Core::sync_steam() {
   const auto generation = steam_generation_.load();
   std::vector<steam_library::Game> titles;
   std::set<std::string> packages;
+  std::map<std::string, std::string> icon_sources;  // art id -> the store listing its icon comes from
   for (const auto& i : installs_) {
     // A pinned version launches as <package>@<folder> and is named with its version.
     const auto target = i.plan.pinned ? i.plan.package + "@" + i.plan.folder() : i.plan.package;
     if (!i.complete || settings_.steam_skip.contains(i.id()) || !packages.insert(target).second) continue;
     auto g = game(i.plan.app_id);
+    // An import keyed by its package takes its store link's name and icon.
+    const auto store = store_id_of(i);
+    if (!g && !store.empty()) g = game(store);
     auto name = g ? g->name : i.label.empty() ? i.plan.package : i.label;
     if (i.plan.pinned) name += " (" + i.plan.version + ")";
+    if (store != i.plan.app_id) icon_sources[i.plan.app_id] = store;
     titles.push_back({target, std::move(name), i.plan.app_id});
   }
   auto art = data_ / "cache/art";
   auto roots = settings_.roots();
   const bool online = !options_.offline;
-  worker_->submit([this, titles, art, roots, generation, online](std::stop_token stop) -> Worker::Completion {
+  worker_->submit([this, titles, art, roots, generation, online, icon_sources](std::stop_token stop) -> Worker::Completion {
     try {
       // Steam's library sidebar wants the square app icon; fetch each listing's once.
       for (const auto &title : titles) {
-        if (!online || !digits(title.art_id, 5) || stop.stop_requested()) continue;
-        auto icon = art / (title.art_id + "_icon.image"), none = art / (title.art_id + ".noicon");
+        auto source = icon_sources.contains(title.art_id) ? icon_sources.at(title.art_id) : title.art_id;
+        if (!online || !digits(source, 5) || stop.stop_requested()) continue;
+        auto icon = art / paths::from_utf8(title.art_id + "_icon.image"),
+             none = art / paths::from_utf8(title.art_id + ".noicon");
         if (fs::exists(icon) || fs::exists(none)) continue;
         try {
-          auto uri = meta::Store({}, stop).artwork(title.art_id).icon;
+          auto uri = meta::Store({}, stop).artwork(source).icon;
           if (uri.empty()) paths::atomic_write(none, "");
           else paths::atomic_write(icon, http::get_image(uri, stop));
         } catch (const std::exception &e) {
