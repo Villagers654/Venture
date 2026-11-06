@@ -4379,7 +4379,8 @@ void App::draw_controls_editor(ControlsEdit& e, const ControlsEdit* base, float 
       ImGui::SetCursorScreenPos({rows_x, ry});
       ImGui::SetNextItemAllowOverlap();
       ImGui::InvisibleButton("##row", {rows_w, row_h});
-      if (ImGui::IsItemHovered()) controls_hover_ = hand * kQuestCount + q;
+      // The row's dropdown sits on top of it: pointing at the dropdown lights the row too.
+      if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenOverlappedByItem)) controls_hover_ = hand * kQuestCount + q;
       const bool lit_row_self = lit_row == hand * kQuestCount + q;
       const bool lit = lit_row_self;
       const bool dim = lit_row >= 0 && !lit;
