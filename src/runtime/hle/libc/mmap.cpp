@@ -132,6 +132,8 @@ GuestAddr mmap_impl(GuestAddr hint, std::uint64_t size, int prot, int flags, int
       return UINT64_MAX;
     }
     if (flags & kMapShared) {
+      if (prot & kProtWrite)
+        if (int r = file->prepare_write()) { result(r); return UINT64_MAX; }
       const int host_fd = file->duplicate_host_fd();
       if (host_fd < 0) { result(host_fd); return UINT64_MAX; }
       auto mapped = AddressSpace::get().map_shared_file(host_fd, size, prot, flags, offset, file->path);

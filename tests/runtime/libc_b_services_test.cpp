@@ -1,6 +1,7 @@
 #include "libc_b/test.h"
 #include "common/log.h"
 #include "common/paths.h"
+#include "common/saves_migration.h"
 #include "core/signals.h"
 #include "core/syscall.h"
 #include "core/address_space.h"
@@ -109,7 +110,51 @@ TEST_CASE("libc B: VFS roots and path traversal") {
     CHECK(paths::read(root / "obb" / "Freedom.acf0123") == "acf");
     std::filesystem::remove(root / "obb" / "Freedom.acf0123");
   }
-  CHECK(fd_open("/sdcard/Android/obb/test.game/main.obb", 1 | 0100, 0600) == -err::erofs);
+  {
+    // The game may open its expansion files for writing, as on Android, while
+    // Venture's entry is a hard link into the install: reading leaves the link,
+    // the first write gives the game its own copy and the install stays intact.
+    const auto install = root / "install";
+    std::filesystem::create_directories(install);
+    std::filesystem::remove(install / "main.obb");
+    std::filesystem::remove(root / "obb" / "main.obb");
+    std::filesystem::remove(root / "obb.copies.json");
+    paths::atomic_write(install / "main.obb", "orig");
+    sync_obb_view(install, root / "obb", std::vector<std::string>{"main.obb"});
+    REQUIRE(std::filesystem::equivalent(install / "main.obb", root / "obb" / "main.obb"));
+    const char* guest = "/sdcard/Android/obb/test.game/main.obb";
+    CHECK(fd_open(guest, 2 | 0100 | 0200, 0600) == -err::eexist);
+    auto fd = static_cast<int>(fd_open(guest, 2, 0));
+    REQUIRE(fd >= 0);
+    char buffer[8]{};
+    CHECK(fd_read(fd, buffer, 2) == 2);
+    CHECK(FdTable::get().close(fd) == 0);
+    CHECK(std::filesystem::equivalent(install / "main.obb", root / "obb" / "main.obb"));
+    fd = static_cast<int>(fd_open(guest, 2, 0));
+    REQUIRE(fd >= 0);
+    CHECK(fd_read(fd, buffer, 1) == 1);
+    CHECK(fd_write(fd, "NE", 2) == 2);  // at the shared offset, after the read
+    CHECK(fd_pread(fd, buffer, 4, 0) == 4);
+    CHECK(std::string(buffer, 4) == "oNEg");
+    CHECK(FdTable::get().close(fd) == 0);
+    CHECK(paths::read(install / "main.obb") == "orig");
+    CHECK(paths::read(root / "obb" / "main.obb") == "oNEg");
+    // The next launch keeps the game's copy while the installed file is unchanged...
+    sync_obb_view(install, root / "obb", std::vector<std::string>{"main.obb"});
+    CHECK(paths::read(root / "obb" / "main.obb") == "oNEg");
+    // ...and an updated install replaces it.
+    std::filesystem::remove(install / "main.obb");
+    paths::atomic_write(install / "main.obb", "update");
+    sync_obb_view(install, root / "obb", std::vector<std::string>{"main.obb"});
+    CHECK(std::filesystem::equivalent(install / "main.obb", root / "obb" / "main.obb"));
+    // Truncating also writes only the game's copy.
+    fd = static_cast<int>(fd_open(guest, 1 | 01000, 0));
+    REQUIRE(fd >= 0);
+    CHECK(FdTable::get().close(fd) == 0);
+    CHECK(paths::read(install / "main.obb") == "update");
+    CHECK(std::filesystem::file_size(root / "obb" / "main.obb") == 0);
+    std::filesystem::remove(root / "obb" / "main.obb");
+  }
   for (const char* tail : {"Android/obb/test.game/main.obb", "Android/data/test.game/files/a", "Download/a"}) {
     MappedPath alias, canonical;
     REQUIRE(resolve_path(std::string("/sdcard/") + tail, at_cwd, &alias) == 0);

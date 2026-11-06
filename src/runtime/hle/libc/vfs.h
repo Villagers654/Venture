@@ -86,6 +86,8 @@ struct MappedPath {
   std::filesystem::path host, root;
   bool readonly = false;
   int device = 0;
+  // Set for a published expansion/asset entry in Android/obb/<package>: its name.
+  std::string expansion;
 };
 // VENTURE_TRACE_VFS, read once: a per-read environment lookup costs more than the read.
 inline bool trace_vfs() {
@@ -131,6 +133,9 @@ class File {
     return 0;
   }
   virtual int truncate(std::int64_t) { return -err::einval; }
+  // Called before a writable shared mapping: a file that defers becoming
+  // writable (an expansion entry) does so here.
+  virtual int prepare_write() { return 0; }
   virtual int sync() { return -err::einval; }
   virtual int set_times(const Timespec*) { return -err::enotsup; }
   virtual int chmod(std::uint32_t) { return -err::enotsup; }
