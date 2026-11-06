@@ -8,6 +8,8 @@
 #include "hle/vrapi/state.h"
 #include "hle/vrapi/vulkan_images.h"
 #include "xr/queue.h"
+#include "xr/desktop_mirror.h"
+#include "xr/display_override.h"
 #include "hle/vulkan/timing.h"
 #include "core/wait.h"
 #include <algorithm>
@@ -214,6 +216,10 @@ struct Submission {
   ~Submission() { if (batched) finish(); }
   std::map<std::tuple<TextureSwapChain *, int, bool>, XrSwapchain> copied;
   const FenceMap *fences = nullptr;
+  // The desktop mirror shows the first projection layer's chosen eye.
+  bool mirror_layer = false, mirrored = false;
+  int mirror_eye = 0;
+  XrFovf mirror_fov{};
   XrResult image(TextureSwapChain *token, int slot, Rect rect, int eye, bool bottom_up,
                  std::uint64_t fence, XrSwapchainSubImage &out) {
     // VrApi 1/2 are default/loader sentinel values, never heap objects. These
@@ -243,6 +249,19 @@ struct Submission {
     auto &h = ring.host[chain];
     const auto k = std::make_tuple(token, slot, bottom_up);
     const auto fence_key = std::make_pair(token, slot);
+    out.swapchain = h.handle;
+    out.imageArrayIndex = ring.desc.layers > 1 ? eye : 0;
+    // VrApi texture rects count rows from memory row 0; reversed rows move it.
+    const float top = bottom_up ? 1 - rect.y - rect.height : rect.y;
+    // Round both edges, so the span stays inside the image and keeps a pixel.
+    auto span = [](float begin, float size, std::uint32_t pixels) {
+      const long first = std::clamp(std::lround(begin * float(pixels)), 0L, long(pixels) - 1);
+      const long last = std::clamp(std::lround((begin + size) * float(pixels)), first + 1, long(pixels));
+      return std::pair{int(first), int(last - first)};
+    };
+    const auto [x, width] = span(rect.x, rect.width, ring.desc.width);
+    const auto [y, height] = span(top, rect.height, ring.desc.height);
+    out.imageRect = {{x, y}, {width, height}};
     if (!copied.contains(k)) {
       std::uint32_t acquired = 0;
       XrSwapchainImageAcquireInfo ai{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
@@ -277,6 +296,14 @@ struct Submission {
       } else
         r = xr_images()->copy_to_image(ring.textures[slot], h.images[acquired].image, copy_desc,
                                        fence, bottom_up);
+      // Before the image goes back to the runtime; a batched copy is not submitted yet.
+      if (XR_SUCCEEDED(r) && mirror_layer && eye == mirror_eye && !mirrored && !batched && ring.desc.samples == 1 &&
+          venture::xr::mirror_ready()) {
+        mirrored = true;
+        venture::xr::MirrorSource source{h.images[acquired].image, h.format, out.imageArrayIndex, out.imageRect};
+        venture::xr::mirror_axis(mirror_fov, source.axis_x, source.axis_y);
+        venture::xr::mirror_capture(session().binding, session().uses_shared_gpu, source);
+      }
       XrSwapchainImageReleaseInfo ri{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
       XrResult released;
       if (batched) {
@@ -293,19 +320,6 @@ struct Submission {
         return released;
       copied[k] = h.handle;
     }
-    out.swapchain = h.handle;
-    out.imageArrayIndex = ring.desc.layers > 1 ? eye : 0;
-    // VrApi texture rects count rows from memory row 0; reversed rows move it.
-    const float top = bottom_up ? 1 - rect.y - rect.height : rect.y;
-    // Round both edges, so the span stays inside the image and keeps a pixel.
-    auto span = [](float begin, float size, std::uint32_t pixels) {
-      const long first = std::clamp(std::lround(begin * float(pixels)), 0L, long(pixels) - 1);
-      const long last = std::clamp(std::lround((begin + size) * float(pixels)), first + 1, long(pixels));
-      return std::pair{int(first), int(last - first)};
-    };
-    const auto [x, width] = span(rect.x, rect.width, ring.desc.width);
-    const auto [y, height] = span(top, rect.height, ring.desc.height);
-    out.imageRect = {{x, y}, {width, height}};
     return XR_SUCCESS;
   }
 };
@@ -576,7 +590,10 @@ static std::int32_t submit_frame(Mobile *mobile, const Submit *frame, const Fenc
       return submission.image(token, slot, rect, eye, bottom_up, frame->completion_fence, out);
     };
     const auto translated = layers.size();
-    r = translate_layer(*header, eye_offsets, copy, storage[i], layers);
+    submission.mirror_layer = header->type == 1;
+    submission.mirror_eye = venture::xr::mirror_mode() == venture::xr::MirrorMode::off ? 0 : int(venture::xr::mirror_eye());
+    submission.mirror_fov = eye_offsets[submission.mirror_eye].fov;
+    r = translate_layer(*header, eye_offsets, copy, storage[i], layers, submission.mirror_eye);
     if (XR_FAILED(r)) {
       {
         // Once per process: debug reports carry the rejected layer's shape.

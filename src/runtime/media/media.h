@@ -17,7 +17,10 @@ namespace venture::audio { class Stream; }
 namespace venture::media {
 inline constexpr int unsupported = -10002, invalid = -10004, bad_state = -10005;
 // Android MediaCodecInfo.CodecCapabilities color-format identifiers.
-inline constexpr int color_surface=0x7f000789, color_rgba=0x7f00a000;
+inline constexpr int color_surface=0x7f000789, color_rgba=0x7f00a000, color_nv12=21;
+// ByteBuffer video is NV12 (COLOR_FormatYUV420SemiPlanar), as a Quest decoder
+// outputs it: luma then interleaved CbCr, stride and slice height rounded to even.
+inline constexpr int nv12_extent(int size) { return (size+1)&~1; }
 struct Input {
   std::int64_t length = 0;
   std::function<std::int64_t(void*, std::uint64_t, std::int64_t)> read_at;
@@ -46,7 +49,7 @@ struct Pcm {
   std::int64_t time_us = 0;
 };
 struct VideoFrame {
-  std::vector<std::uint8_t> rgba;
+  std::vector<std::uint8_t> rgba;  // NV12 bytes when decoded with nv12=true
   int width = 0, height = 0;
   std::int64_t time_us = 0;
 };
@@ -91,7 +94,7 @@ class Decoder {
   // 2 means a picture older than discard_before_us was decoded but not
   // converted. Reference pictures are retained by FFmpeg as usual.
   int receive(VideoFrame* output,std::int64_t discard_before_us=std::numeric_limits<std::int64_t>::min(),
-              int output_width=0,int output_height=0);
+              int output_width=0,int output_height=0,bool nv12=false);
   std::int64_t video_conversion_us() const;
   void flush();
  private:

@@ -13,6 +13,7 @@ namespace venture::platform {
 void lower_background_thread_priority() {
   SetThreadPriority(GetCurrentThread(), THREAD_MODE_BACKGROUND_BEGIN);
 }
+void lower_worker_thread_priority() { SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL); }
 namespace {
 struct Entry { HANDLE handle; bool scoped_audio = false; std::atomic<bool> audio{false}; std::atomic<int> nice{0}; int fifo = 0; Entry* previous = nullptr; std::unique_ptr<AudioThreadPriority> priority; };
 struct Threads { std::mutex mutex; std::map<std::int32_t, std::unique_ptr<Entry>> handles; };

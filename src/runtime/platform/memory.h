@@ -2,6 +2,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <string>
 #include "core/guest.h"
 
 namespace venture::platform {
@@ -44,6 +45,8 @@ bool native_compare(GuestAddr a, GuestAddr b, std::size_t, int& result, NativeMe
 // Windows commit (private or mapped view) in a range; nullopt on hosts without this
 // accounting concept, or when the range cannot be queried. Diagnostics/tests.
 std::optional<std::uint64_t> committed_bytes(GuestAddr address, std::uint64_t size);
+// The first host mapping in a range, for diagnostics; empty when the range is free.
+std::string first_mapping(GuestAddr address, std::uint64_t size);
 struct FileMapping { GuestAddr base = 0, address = 0; std::uint64_t size = 0; };
 int map_shared_file(int host_fd, std::uint64_t offset, std::uint64_t size, std::uint32_t prot, FileMapping& out);
 void unmap_shared_file(const FileMapping& mapping);

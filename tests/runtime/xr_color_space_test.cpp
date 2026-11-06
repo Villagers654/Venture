@@ -260,11 +260,9 @@ struct ColorHost {
   bool previous_enabled =
       venture::xr::host_xr().enabled_extensions.contains("XR_FB_color_space");
   inline static PFN_xrGetInstanceProcAddr fallback{};
-  inline static unsigned sets = 0, enumerations = 0;
   static XrResult XRAPI_CALL enumerate(XrSession, std::uint32_t capacity,
                                        std::uint32_t *count,
                                        XrColorSpaceFB *values) {
-    ++enumerations;
     *count = 2;
     if (capacity < 2)
       return capacity ? XR_ERROR_SIZE_INSUFFICIENT : XR_SUCCESS;
@@ -273,7 +271,6 @@ struct ColorHost {
     return XR_SUCCESS;
   }
   static XrResult XRAPI_CALL set(XrSession, XrColorSpaceFB space) {
-    ++sets;
     return space == XR_COLOR_SPACE_REC709_FB || space == XR_COLOR_SPACE_P3_FB
                ? XR_SUCCESS
                : XR_ERROR_COLOR_SPACE_UNSUPPORTED_FB;
@@ -290,7 +287,6 @@ struct ColorHost {
   }
   ColorHost() {
     fallback = reinterpret_cast<PFN_xrGetInstanceProcAddr>(previous);
-    sets = enumerations = 0;
     venture::xr::host_xr().enabled_extensions.insert("XR_FB_color_space");
     venture::xr::host_xr().get_instance_proc_addr =
         reinterpret_cast<void *>(get);

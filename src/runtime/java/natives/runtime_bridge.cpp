@@ -253,7 +253,7 @@ void JNICALL restart_process_with_intent(JNIEnv* env, jobject, jbyteArray payloa
   guarded(env, [&] {
     if (!payload) throw std::invalid_argument("Missing launch intent");
     const auto size = env->GetArrayLength(payload);
-    if (size > platform::runtime_launch_payload_limit) throw std::length_error("Launch intent too large");
+    if (static_cast<std::size_t>(size) > platform::runtime_launch_payload_limit) throw std::length_error("Launch intent too large");
     std::string bytes(static_cast<std::size_t>(size), '\0');
     env->GetByteArrayRegion(payload, 0, size, reinterpret_cast<jbyte*>(bytes.data()));
     if (!env->ExceptionCheck()) {

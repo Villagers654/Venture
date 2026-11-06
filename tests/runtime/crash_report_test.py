@@ -63,6 +63,14 @@ for mode in ("native-host", "native-source", "native-host-compare"):
     assert (code & 0xFFFFFFFF if os.name == "nt" else code) == expected, (code, text)
     assert "Host exception" in text and "E [host-stack]   #0 " in text, text
 if os.name == 'nt':
+    # A fault under the heap lock: the in-process dump stalls on that lock,
+    # yet the worker ends with the exception code after the dump bound instead
+    # of hanging in ExitProcess.
+    began = time.monotonic()
+    code, text = run('heap-locked', 0)
+    assert code & 0xFFFFFFFF == 0xC0000005, (code, text)
+    assert 'Host exception' in text and time.monotonic() - began < 40, (time.monotonic() - began, text)
+if os.name == 'nt':
     # A call through a null pointer faults at 0; the caller's frame is still named.
     code, text = run('null-call', 0)
     assert code & 0xFFFFFFFF == 0xC0000005, (code, text)

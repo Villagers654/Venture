@@ -85,6 +85,15 @@ void log_guest_threads(std::string_view reason);
 // of `thread` when host code it called faulted, such as an HLE libc call given
 // a bad pointer, so the report names the guest caller. Null does nothing.
 void write_host_fault_guest_frames(GuestThread* thread) noexcept;
+// Logs `reason` and the registers and frames of the guest call `thread` is
+// making (the caller of the HLE function running on it). Null logs `reason`.
+void log_guest_call_frames(GuestThread* thread, std::string_view reason) noexcept;
+// A guest call that passed a value the runtime refuses (free of an address no
+// guest heap allocation owns): logs `reason`, the caller's registers and
+// frames, and the memory around each register-addressed word that holds
+// `value`, which is usually the field the value was loaded from. Without a
+// guest thread only `reason` is logged.
+void log_rejected_guest_call(GuestThread* thread, std::string_view reason, std::uint64_t value) noexcept;
 
 // A host exception unwinding out of a guest call restores the caller's
 // registers. The innermost call notes them first (once per exception object),

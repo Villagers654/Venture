@@ -1,0 +1,131 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+#include "launcher/debug_report.h"
+#include "launcher/diagnosis.h"
+#include "common/process.h"
+#include "common/library/library.h"
+#include <doctest/doctest.h>
+#include <chrono>
+#include <format>
+#include <fstream>
+
+using namespace venture;
+using namespace venture::launcher;
+
+TEST_CASE("debug report: known causes, most specific first") {
+  CHECK_FALSE(diagnose("all fine\n").has_value());
+  auto xr = diagnose("  1.0 1 E [runtime] Your configured OpenXR runtime is unavailable. Make sure ...\n");
+  REQUIRE(xr);
+  CHECK(xr->cause.find("No OpenXR runtime") != std::string::npos);
+  // A crash after the game could not read its account: the account is the cause.
+  auto vault = diagnose("W [ovrplatform] Meta session load failed stage=vault-session\nE [libc] Fatal signal 11\n");
+  REQUIRE(vault);
+  CHECK(vault->cause.find("Meta sign-in") != std::string::npos);
+  auto lost = diagnose("E [vulkan-fault] Native Vulkan device lost on guest tid 7; ending the app\n");
+  REQUIRE(lost);
+  CHECK(lost->cause.find("graphics device") != std::string::npos);
+  auto reset = diagnose("kernel: amdgpu 0000:03:00.0: amdgpu: GPU reset begin!\n");
+  REQUIRE(reset);
+  CHECK(reset->cause.find("reset the GPU") != std::string::npos);
+  auto trap = diagnose("E [hle] unimplemented libandroid.so!AFoo\nE [libc] Fatal signal 11\n");
+  REQUIRE(trap);
+  CHECK(trap->cause.find("Android function") != std::string::npos);
+  // A crash after the VR session was not created: the session is the cause.
+  auto session = diagnose("E [xr] The VR session could not be created: Oculus refused it (XR_ERROR_GRAPHICS_DEVICE_"
+                          "INVALID)\nE [libc] Fatal signal 6\n");
+  REQUIRE(session);
+  CHECK(session->cause.find("VR session") != std::string::npos);
+  CHECK(diagnose("The Venture launcher needs a Wayland session, and no Wayland display was reachable")->cause.find(
+            "Wayland") != std::string::npos);
+  CHECK(error_line("Something FAILED here"));
+  CHECK(error_line("connection timed out"));
+  CHECK_FALSE(error_line("errorless profile, xidle"));
+  CHECK(noisy_line("Failed to parse bindings for ViveController"));
+}
+
+TEST_CASE("debug report: a failed run, its times, cause and next steps come first") {
+  const auto data = fs::temp_directory_path() / ("venture-report-run-" + std::to_string(current_process_id()));
+  fs::remove_all(data);
+  fs::create_directories(data / "logs");
+  const auto start = std::chrono::floor<std::chrono::seconds>(std::chrono::system_clock::now()) - std::chrono::minutes(2);
+  std::ofstream(data / "logs" / "runtime-com.example.game.log", std::ios::binary)
+      << std::format("  1.000 1 I [launch] Process started at {:%FT%TZ}\n"
+                     "  1.100 2 I [launch] Process started at {:%FT%TZ}\n"
+                     "  2.000 2 W [ovrplatform] Meta session load failed stage=vault-session\n"
+                     "  3.000 2 E [libc] Fatal signal 11 (SIGSEGV), code 1 in tid 2\n"
+                     "  3.100 1 I [launch] Exit code: 139\n",
+                     start, start + std::chrono::seconds(1));
+  auto file = write_debug_report({.data = data, .version = "9.9.9", .package = "com.example.game",
+                                  .game = "Example", .private_text = {"PrivateAlias"}});
+  std::ifstream in(file, std::ios::binary);
+  std::string text{std::istreambuf_iterator<char>(in), {}};
+  CHECK(text.find("Game: Example (com.example.game)") != std::string::npos);
+  CHECK(text.find("Last run: ") != std::string::npos);
+  CHECK(text.find("start estimated") == std::string::npos);
+  CHECK(text.find("Result: The runtime stopped unexpectedly (exit code 139).") != std::string::npos);
+  CHECK(text.find("=== Likely cause ===\nThe game could not read your Meta sign-in.") != std::string::npos);
+  CHECK(text.find("=== Next steps ===\n- Make sure your desktop keyring") != std::string::npos);
+  CHECK(text.find("=== Errors logged during the last run") != std::string::npos);
+  // The summary comes before the system details.
+  CHECK(text.find("=== Likely cause ===") < text.find("=== System ==="));
+  in.close();
+
+  // A run stopped from Venture is not a failure.
+  std::ofstream(data / "logs" / "runtime-com.example.game.log", std::ios::binary)
+      << std::format("  1.000 1 I [launch] Process started at {:%FT%TZ}\n  9.000 1 I [launch] Exit code: 0 (stop "
+                     "requested)\n",
+                     start);
+  file = write_debug_report({.data = data, .version = "9.9.9", .package = "com.example.game"});
+  in.open(file, std::ios::binary);
+  text.assign(std::istreambuf_iterator<char>(in), {});
+  CHECK(text.find("Result: stopped from Venture (exit code 0)") != std::string::npos);
+  CHECK(text.find("The last run did not fail.") != std::string::npos);
+  in.close();
+  fs::remove_all(data);
+}
+
+TEST_CASE("debug report: the game's overrides, effective settings and launch environment") {
+  const auto data = fs::temp_directory_path() / ("venture-report-settings-" + std::to_string(current_process_id()));
+  fs::remove_all(data);
+  fs::create_directories(data / "logs");
+  std::ofstream(data / "settings.json")
+      << R"({"textureCompression": 1, "keepTranslatedCode": false, "vulkanLayers": ["VK_LAYER_reshade*"],
+             "display": {"mirror": "full"},
+             "gameDisplay": {"1234": {"resolution": "quest3", "pcAudio": "on"},
+                             "5678": {"textureCompression": "auto", "textureCompressionThreshold": 70}},
+             "controls": {"games": {"1234": {}}}})";
+  auto report = [&](std::string app_id) {
+    auto file = write_debug_report({.data = data, .version = "9.9.9", .package = "com.example.game",
+                                    .app_id = std::move(app_id)});
+    std::ifstream in(file, std::ios::binary);
+    return std::string{std::istreambuf_iterator<char>(in), {}};
+  };
+  auto text = report("1234");
+  CHECK(text.find("=== Settings for this game ===") != std::string::npos);
+  CHECK(text.find("Game overrides:\n  resolution: 1680x1760\n  PC audio: on\n  controls: ") != std::string::npos);
+  CHECK(text.find("  resolution: Quest 3 (1680x1760) (game override)") != std::string::npos);
+  CHECK(text.find("  frame rate: the host runtime's rate (global default)") != std::string::npos);
+  CHECK(text.find("  mirror: full (global setting), eye left (global default)") != std::string::npos);
+  CHECK(text.find("  PC audio: on (game override)") != std::string::npos);
+  CHECK(text.find("  texture compression: Automatic (global setting), threshold 50% (global default)") !=
+        std::string::npos);
+  CHECK(text.find("  controls: the game's own") != std::string::npos);
+  CHECK(text.find("  keep translated code: off (global setting)") != std::string::npos);
+  CHECK(text.find("  overlay blocking: on, except the kept layers VK_LAYER_reshade* (global setting)") !=
+        std::string::npos);
+  // The environment is the one the launch builds.
+  for (const auto &[key, value] : library::launch_environment(library::Settings::load(data), "1234"))
+    CHECK(text.find(std::format("  {}={}\n", key, value)) != std::string::npos);
+  CHECK(text.find("  VENTURE_JIT_PTC=0\n") != std::string::npos);
+  CHECK(text.find("  VENTURE_TEXTURE_COMPRESSION=auto\n") != std::string::npos);
+
+  text = report("5678");
+  CHECK(text.find("Game overrides:\n  texture compression: auto\n  texture compression threshold: 70%\n") !=
+        std::string::npos);
+  CHECK(text.find("  texture compression: Automatic (game override), threshold 70% (game override)") !=
+        std::string::npos);
+  CHECK(text.find("  controls: the global controls") != std::string::npos);
+
+  text = report("");
+  CHECK(text.find("Game overrides: (game not identified; the global settings apply)") != std::string::npos);
+  fs::remove_all(data);
+}

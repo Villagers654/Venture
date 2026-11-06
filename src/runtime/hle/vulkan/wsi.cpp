@@ -304,7 +304,10 @@ VkResult create_image(VkDevice device, const VkSwapchainCreateInfoKHR& info, Ima
   if (type == memory.memoryTypeCount) return VK_ERROR_OUT_OF_DEVICE_MEMORY;
   VkMemoryAllocateInfo allocate{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, nullptr, requirements.size, type};
   r = device_fn<PFN_vkAllocateMemory>(device, "vkAllocateMemory")(device, &allocate, nullptr, &out.memory);
-  if (r != VK_SUCCESS) return r;
+  if (r != VK_SUCCESS) {
+    if (out_of_memory_result(r)) report_gpu_memory_failure(device, "swapchain image", requirements.size, type);
+    return r;
+  }
   r = device_fn<PFN_vkBindImageMemory>(device, "vkBindImageMemory")(device, out.image, out.memory, 0);
   if (r != VK_SUCCESS) return r;
   VkSemaphoreCreateInfo semaphore{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};

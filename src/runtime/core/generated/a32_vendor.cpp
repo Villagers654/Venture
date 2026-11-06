@@ -557,369 +557,379 @@ constexpr Type args_594[] = {{Kind::Handle, "ovrMessageHandle", 0, 4}};
 constexpr Type args_595[] = {{Kind::Handle, "ovrMessageHandle", 0, 4}};
 constexpr Type args_596[] = {{Kind::Handle, "ovrMessageHandle", 0, 4}};
 constexpr Type args_597[] = {{Kind::Handle, "ovrMicrophoneAvailabilityStateHandle", 0, 4}};
-constexpr Type args_599[] = {{Kind::Handle, "ovrMultiplayerErrorOptionsHandle", 0, 4}};
-constexpr Type args_600[] = {{Kind::Handle, "ovrMultiplayerErrorOptionsHandle", 0, 4}, {Kind::I32, "ovrMultiplayerErrorErrorKey", 0, 4}};
-constexpr Type args_601[] = {{Kind::Handle, "ovrNetSyncConnectionHandle", 0, 4}};
-constexpr Type args_602[] = {{Kind::Handle, "ovrNetSyncConnectionHandle", 0, 4}};
-constexpr Type args_603[] = {{Kind::Handle, "ovrNetSyncConnectionHandle", 0, 4}};
-constexpr Type args_604[] = {{Kind::Handle, "ovrNetSyncConnectionHandle", 0, 4}};
-constexpr Type args_605[] = {{Kind::Handle, "ovrNetSyncConnectionHandle", 0, 4}};
-constexpr Type args_607[] = {{Kind::Handle, "ovrNetSyncOptionsHandle", 0, 4}};
-constexpr Type args_608[] = {{Kind::Handle, "ovrNetSyncOptionsHandle", 0, 4}, {Kind::Ptr, "char *", 1, 4}};
-constexpr Type args_609[] = {{Kind::Handle, "ovrNetSyncOptionsHandle", 0, 4}, {Kind::I32, "ovrNetSyncVoipStreamMode", 0, 4}};
-constexpr Type args_610[] = {{Kind::Handle, "ovrNetSyncOptionsHandle", 0, 4}, {Kind::Ptr, "char *", 1, 4}};
-constexpr Type args_611[] = {{Kind::Handle, "ovrNetSyncSessionArrayHandle", 0, 4}, {Kind::Size, "size_t", 0, 4}};
-constexpr Type args_612[] = {{Kind::Handle, "ovrNetSyncSessionArrayHandle", 0, 4}};
-constexpr Type args_613[] = {{Kind::Handle, "ovrNetSyncSessionHandle", 0, 4}};
-constexpr Type args_614[] = {{Kind::Handle, "ovrNetSyncSessionHandle", 0, 4}};
-constexpr Type args_615[] = {{Kind::Handle, "ovrNetSyncSessionHandle", 0, 4}};
-constexpr Type args_616[] = {{Kind::Handle, "ovrNetSyncSessionHandle", 0, 4}};
-constexpr Type args_617[] = {{Kind::Handle, "ovrNetSyncSessionHandle", 0, 4}};
-constexpr Type args_618[] = {{Kind::Handle, "ovrNetSyncSessionsChangedNotificationHandle", 0, 4}};
-constexpr Type args_619[] = {{Kind::Handle, "ovrNetSyncSessionsChangedNotificationHandle", 0, 4}};
-constexpr Type args_620[] = {{Kind::Handle, "ovrNetSyncSetSessionPropertyResultHandle", 0, 4}};
-constexpr Type args_621[] = {{Kind::Handle, "IntPtr", 0, 4}};
-constexpr Type args_622[] = {{Kind::I64, "int64_t", 0, 4}};
-constexpr Type args_623[] = {{Kind::I64, "int64_t", 0, 4}, {Kind::Unsupported, "float[]", 0, 4}, {Kind::Size, "size_t", 0, 4}};
-constexpr Type args_624[] = {{Kind::I64, "int64_t", 0, 4}, {Kind::Unsupported, "Int16[]", 0, 4}, {Kind::Size, "size_t", 0, 4}};
-constexpr Type args_625[] = {{Kind::I64, "int64_t", 0, 4}, {Kind::Unsupported, "float[]", 0, 4}, {Kind::Size, "size_t", 0, 4}};
-constexpr Type args_626[] = {{Kind::I64, "int64_t", 0, 4}, {Kind::Unsupported, "Int16[]", 0, 4}, {Kind::Size, "size_t", 0, 4}};
-constexpr Type args_627[] = {{Kind::I64, "int64_t", 0, 4}, {Kind::U64, "uint64_t", 0, 4}, {Kind::Unsupported, "ref ovrNetSyncVec3", 0, 4}};
-constexpr Type args_628[] = {{Kind::I64, "int64_t", 0, 4}, {Kind::U64, "uint64_t", 0, 4}, {Kind::Unsupported, "float[]", 0, 4}, {Kind::Size, "size_t", 0, 4}};
-constexpr Type args_629[] = {{Kind::I64, "int64_t", 0, 4}, {Kind::U64, "uint64_t", 0, 4}, {Kind::Unsupported, "Int16[]", 0, 4}, {Kind::Size, "size_t", 0, 4}};
-constexpr Type args_630[] = {{Kind::I64, "int64_t", 0, 4}};
-constexpr Type args_631[] = {{Kind::I64, "int64_t", 0, 4}, {Kind::U64, "uint64_t", 0, 4}, {Kind::Unsupported, "ref float", 0, 4}};
-constexpr Type args_632[] = {{Kind::I64, "int64_t", 0, 4}};
-constexpr Type args_634[] = {{Kind::I64, "int64_t", 0, 4}, {Kind::Unsupported, "float[]", 0, 4}, {Kind::Unsupported, "float[]", 0, 4}, {Kind::Size, "size_t", 0, 4}};
-constexpr Type args_635[] = {{Kind::I64, "int64_t", 0, 4}, {Kind::Handle, "IntPtr", 0, 4}, {Kind::Unsupported, "float[]", 0, 4}, {Kind::Unsupported, "float[]", 0, 4}, {Kind::Size, "size_t", 0, 4}};
-constexpr Type args_636[] = {{Kind::I64, "int64_t", 0, 4}, {Kind::Handle, "IntPtr", 0, 4}, {Kind::Handle, "IntPtr", 0, 4}, {Kind::U8, "bool", 0, 4}};
-constexpr Type args_637[] = {{Kind::I64, "int64_t", 0, 4}, {Kind::Handle, "IntPtr", 0, 4}};
-constexpr Type args_638[] = {{Kind::I64, "int64_t", 0, 4}, {Kind::Unsupported, "string[]", 0, 4}, {Kind::Size, "size_t", 0, 4}};
-constexpr Type args_639[] = {{Kind::I64, "int64_t", 0, 4}, {Kind::Unsupported, "NetSyncVoipMicSource", 0, 4}};
-constexpr Type args_640[] = {{Kind::I64, "int64_t", 0, 4}, {Kind::U64, "uint64_t", 0, 4}, {Kind::U8, "bool", 0, 4}};
-constexpr Type args_641[] = {{Kind::I64, "int64_t", 0, 4}, {Kind::Unsupported, "string[]", 0, 4}, {Kind::Size, "size_t", 0, 4}};
-constexpr Type args_642[] = {{Kind::I64, "int64_t", 0, 4}, {Kind::U64, "uint64_t", 0, 4}, {Kind::Unsupported, "NetSyncVoipStreamMode", 0, 4}};
-constexpr Type args_643[] = {{Kind::U64, "ovrID", 0, 4}};
-constexpr Type args_644[] = {{Kind::U64, "ovrID", 0, 4}};
-constexpr Type args_645[] = {{Kind::U64, "ovrID", 0, 4}};
-constexpr Type args_646[] = {{Kind::U64, "ovrID", 0, 4}};
-constexpr Type args_647[] = {{Kind::U64, "ovrID", 0, 4}};
-constexpr Type args_649[] = {{Kind::U64, "ovrID", 0, 4}, {Kind::Size, "size_t", 0, 4}, {Kind::Ptr, "void *", 0, 4}, {Kind::I32, "ovrSendPolicy", 0, 4}};
-constexpr Type args_650[] = {{Kind::Size, "size_t", 0, 4}, {Kind::Ptr, "void *", 0, 4}, {Kind::I32, "ovrSendPolicy", 0, 4}};
-constexpr Type args_651[] = {{Kind::Handle, "ovrNetworkingPeerHandle", 0, 4}};
-constexpr Type args_652[] = {{Kind::Handle, "ovrNetworkingPeerHandle", 0, 4}};
-constexpr Type args_653[] = {{Kind::Handle, "ovrRoomInviteNotificationArrayHandle", 0, 4}};
+constexpr Type args_599[] = {{Kind::Handle, "ovrMicrophoneHandle", 0, 4}};
+constexpr Type args_600[] = {{Kind::Handle, "ovrMicrophoneHandle", 0, 4}};
+constexpr Type args_601[] = {{Kind::Handle, "ovrMicrophoneHandle", 0, 4}};
+constexpr Type args_602[] = {{Kind::Handle, "ovrMicrophoneHandle", 0, 4}, {Kind::Layout, "int16_t *", 0, 4}, {Kind::Size, "size_t", 0, 4}};
+constexpr Type args_603[] = {{Kind::Handle, "ovrMicrophoneHandle", 0, 4}, {Kind::Ptr, "float *", 4, 4}, {Kind::Size, "size_t", 0, 4}};
+constexpr Type args_604[] = {{Kind::Handle, "ovrMicrophoneHandle", 0, 4}, {Kind::Ptr, "float *", 4, 4}, {Kind::Size, "size_t", 0, 4}};
+constexpr Type args_605[] = {{Kind::Handle, "ovrMicrophoneHandle", 0, 4}, {Kind::Size, "size_t", 0, 4}};
+constexpr Type args_606[] = {{Kind::Handle, "ovrMicrophoneHandle", 0, 4}, {Kind::Callback, "MicrophoneDataAvailableCallback", 0, 4}, {Kind::Ptr, "void *", 0, 4}};
+constexpr Type args_607[] = {{Kind::Handle, "ovrMicrophoneHandle", 0, 4}};
+constexpr Type args_608[] = {{Kind::Handle, "ovrMicrophoneHandle", 0, 4}};
+constexpr Type args_610[] = {{Kind::Handle, "ovrMultiplayerErrorOptionsHandle", 0, 4}};
+constexpr Type args_611[] = {{Kind::Handle, "ovrMultiplayerErrorOptionsHandle", 0, 4}, {Kind::I32, "ovrMultiplayerErrorErrorKey", 0, 4}};
+constexpr Type args_612[] = {{Kind::Handle, "ovrNetSyncConnectionHandle", 0, 4}};
+constexpr Type args_613[] = {{Kind::Handle, "ovrNetSyncConnectionHandle", 0, 4}};
+constexpr Type args_614[] = {{Kind::Handle, "ovrNetSyncConnectionHandle", 0, 4}};
+constexpr Type args_615[] = {{Kind::Handle, "ovrNetSyncConnectionHandle", 0, 4}};
+constexpr Type args_616[] = {{Kind::Handle, "ovrNetSyncConnectionHandle", 0, 4}};
+constexpr Type args_618[] = {{Kind::Handle, "ovrNetSyncOptionsHandle", 0, 4}};
+constexpr Type args_619[] = {{Kind::Handle, "ovrNetSyncOptionsHandle", 0, 4}, {Kind::Ptr, "char *", 1, 4}};
+constexpr Type args_620[] = {{Kind::Handle, "ovrNetSyncOptionsHandle", 0, 4}, {Kind::I32, "ovrNetSyncVoipStreamMode", 0, 4}};
+constexpr Type args_621[] = {{Kind::Handle, "ovrNetSyncOptionsHandle", 0, 4}, {Kind::Ptr, "char *", 1, 4}};
+constexpr Type args_622[] = {{Kind::Handle, "ovrNetSyncSessionArrayHandle", 0, 4}, {Kind::Size, "size_t", 0, 4}};
+constexpr Type args_623[] = {{Kind::Handle, "ovrNetSyncSessionArrayHandle", 0, 4}};
+constexpr Type args_624[] = {{Kind::Handle, "ovrNetSyncSessionHandle", 0, 4}};
+constexpr Type args_625[] = {{Kind::Handle, "ovrNetSyncSessionHandle", 0, 4}};
+constexpr Type args_626[] = {{Kind::Handle, "ovrNetSyncSessionHandle", 0, 4}};
+constexpr Type args_627[] = {{Kind::Handle, "ovrNetSyncSessionHandle", 0, 4}};
+constexpr Type args_628[] = {{Kind::Handle, "ovrNetSyncSessionHandle", 0, 4}};
+constexpr Type args_629[] = {{Kind::Handle, "ovrNetSyncSessionsChangedNotificationHandle", 0, 4}};
+constexpr Type args_630[] = {{Kind::Handle, "ovrNetSyncSessionsChangedNotificationHandle", 0, 4}};
+constexpr Type args_631[] = {{Kind::Handle, "ovrNetSyncSetSessionPropertyResultHandle", 0, 4}};
+constexpr Type args_632[] = {{Kind::Handle, "IntPtr", 0, 4}};
+constexpr Type args_633[] = {{Kind::I64, "int64_t", 0, 4}};
+constexpr Type args_634[] = {{Kind::I64, "int64_t", 0, 4}, {Kind::Unsupported, "float[]", 0, 4}, {Kind::Size, "size_t", 0, 4}};
+constexpr Type args_635[] = {{Kind::I64, "int64_t", 0, 4}, {Kind::Unsupported, "Int16[]", 0, 4}, {Kind::Size, "size_t", 0, 4}};
+constexpr Type args_636[] = {{Kind::I64, "int64_t", 0, 4}, {Kind::Unsupported, "float[]", 0, 4}, {Kind::Size, "size_t", 0, 4}};
+constexpr Type args_637[] = {{Kind::I64, "int64_t", 0, 4}, {Kind::Unsupported, "Int16[]", 0, 4}, {Kind::Size, "size_t", 0, 4}};
+constexpr Type args_638[] = {{Kind::I64, "int64_t", 0, 4}, {Kind::U64, "uint64_t", 0, 4}, {Kind::Unsupported, "ref ovrNetSyncVec3", 0, 4}};
+constexpr Type args_639[] = {{Kind::I64, "int64_t", 0, 4}, {Kind::U64, "uint64_t", 0, 4}, {Kind::Unsupported, "float[]", 0, 4}, {Kind::Size, "size_t", 0, 4}};
+constexpr Type args_640[] = {{Kind::I64, "int64_t", 0, 4}, {Kind::U64, "uint64_t", 0, 4}, {Kind::Unsupported, "Int16[]", 0, 4}, {Kind::Size, "size_t", 0, 4}};
+constexpr Type args_641[] = {{Kind::I64, "int64_t", 0, 4}};
+constexpr Type args_642[] = {{Kind::I64, "int64_t", 0, 4}, {Kind::U64, "uint64_t", 0, 4}, {Kind::Unsupported, "ref float", 0, 4}};
+constexpr Type args_643[] = {{Kind::I64, "int64_t", 0, 4}};
+constexpr Type args_645[] = {{Kind::I64, "int64_t", 0, 4}, {Kind::Unsupported, "float[]", 0, 4}, {Kind::Unsupported, "float[]", 0, 4}, {Kind::Size, "size_t", 0, 4}};
+constexpr Type args_646[] = {{Kind::I64, "int64_t", 0, 4}, {Kind::Handle, "IntPtr", 0, 4}, {Kind::Unsupported, "float[]", 0, 4}, {Kind::Unsupported, "float[]", 0, 4}, {Kind::Size, "size_t", 0, 4}};
+constexpr Type args_647[] = {{Kind::I64, "int64_t", 0, 4}, {Kind::Handle, "IntPtr", 0, 4}, {Kind::Handle, "IntPtr", 0, 4}, {Kind::U8, "bool", 0, 4}};
+constexpr Type args_648[] = {{Kind::I64, "int64_t", 0, 4}, {Kind::Handle, "IntPtr", 0, 4}};
+constexpr Type args_649[] = {{Kind::I64, "int64_t", 0, 4}, {Kind::Unsupported, "string[]", 0, 4}, {Kind::Size, "size_t", 0, 4}};
+constexpr Type args_650[] = {{Kind::I64, "int64_t", 0, 4}, {Kind::Unsupported, "NetSyncVoipMicSource", 0, 4}};
+constexpr Type args_651[] = {{Kind::I64, "int64_t", 0, 4}, {Kind::U64, "uint64_t", 0, 4}, {Kind::U8, "bool", 0, 4}};
+constexpr Type args_652[] = {{Kind::I64, "int64_t", 0, 4}, {Kind::Unsupported, "string[]", 0, 4}, {Kind::Size, "size_t", 0, 4}};
+constexpr Type args_653[] = {{Kind::I64, "int64_t", 0, 4}, {Kind::U64, "uint64_t", 0, 4}, {Kind::Unsupported, "NetSyncVoipStreamMode", 0, 4}};
+constexpr Type args_654[] = {{Kind::U64, "ovrID", 0, 4}};
 constexpr Type args_655[] = {{Kind::U64, "ovrID", 0, 4}};
-constexpr Type args_656[] = {{Kind::Handle, "ovrOrgScopedIDHandle", 0, 4}};
-constexpr Type args_657[] = {{Kind::Handle, "ovrPacketHandle", 0, 4}};
-constexpr Type args_658[] = {{Kind::Handle, "ovrPacketHandle", 0, 4}};
-constexpr Type args_659[] = {{Kind::Handle, "ovrPacketHandle", 0, 4}};
-constexpr Type args_660[] = {{Kind::Handle, "ovrPacketHandle", 0, 4}};
-constexpr Type args_661[] = {{Kind::Handle, "ovrPacketHandle", 0, 4}};
-constexpr Type args_662[] = {{Kind::Handle, "ovrPartyIDHandle", 0, 4}};
-constexpr Type args_663[] = {{Kind::Handle, "ovrPartyUpdateNotificationHandle", 0, 4}};
-constexpr Type args_664[] = {{Kind::Handle, "ovrPartyUpdateNotificationHandle", 0, 4}};
-constexpr Type args_665[] = {{Kind::Handle, "ovrPartyUpdateNotificationHandle", 0, 4}};
-constexpr Type args_666[] = {{Kind::Handle, "ovrPartyUpdateNotificationHandle", 0, 4}};
-constexpr Type args_667[] = {{Kind::Handle, "ovrPartyUpdateNotificationHandle", 0, 4}};
-constexpr Type args_668[] = {{Kind::Handle, "ovrPartyUpdateNotificationHandle", 0, 4}};
-constexpr Type args_669[] = {{Kind::Handle, "ovrPartyUpdateNotificationHandle", 0, 4}};
-constexpr Type args_671[] = {{Kind::U64, "uint64_t", 0, 4}, {Kind::U64, "uint64_t", 0, 4}};
-constexpr Type args_672[] = {{Kind::U64, "uint64_t", 0, 4}};
-constexpr Type args_674[] = {{Kind::U64, "uint64_t", 0, 4}};
-constexpr Type args_675[] = {{Kind::Handle, "ovrPartyHandle", 0, 4}};
-constexpr Type args_676[] = {{Kind::Handle, "ovrPartyHandle", 0, 4}};
-constexpr Type args_677[] = {{Kind::Handle, "ovrPartyHandle", 0, 4}};
-constexpr Type args_678[] = {{Kind::Handle, "ovrPartyHandle", 0, 4}};
-constexpr Type args_679[] = {{Kind::Handle, "ovrPartyHandle", 0, 4}};
-constexpr Type args_680[] = {{Kind::U64, "uint64_t", 0, 4}, {Kind::U64, "uint64_t", 0, 4}};
-constexpr Type args_681[] = {{Kind::U64, "uint64_t", 0, 4}};
-constexpr Type args_682[] = {{Kind::U64, "uint64_t", 0, 4}};
-constexpr Type args_683[] = {{Kind::Handle, "ovrPidArrayHandle", 0, 4}, {Kind::Size, "size_t", 0, 4}};
-constexpr Type args_684[] = {{Kind::Handle, "ovrPidArrayHandle", 0, 4}};
-constexpr Type args_685[] = {{Kind::Handle, "ovrPidHandle", 0, 4}};
-constexpr Type args_686[] = {{Kind::Handle, "ovrPingResultHandle", 0, 4}};
-constexpr Type args_687[] = {{Kind::Handle, "ovrPingResultHandle", 0, 4}};
-constexpr Type args_688[] = {{Kind::Handle, "ovrPingResultHandle", 0, 4}};
-constexpr Type args_689[] = {{Kind::Ptr, "char*", 1, 4}, {Kind::Handle, "jobject", 0, 4}, {Kind::Layout, "JNIEnv *", 0, 4}};
-constexpr Type args_690[] = {{Kind::Ptr, "char*", 1, 4}, {Kind::Handle, "jobject", 0, 4}, {Kind::Layout, "JNIEnv *", 0, 4}};
-constexpr Type args_691[] = {{Kind::Handle, "ovrPlatformInitializeHandle", 0, 4}};
-constexpr Type args_692[] = {{Kind::Layout, "ovrOculusInitParams *", 0, 4}};
-constexpr Type args_694[] = {{Kind::Handle, "IntPtr", 0, 4}};
-constexpr Type args_695[] = {{Kind::Handle, "IntPtr", 0, 4}};
-constexpr Type args_696[] = {{Kind::Handle, "IntPtr", 0, 4}};
-constexpr Type args_697[] = {{Kind::Handle, "ovrProductArrayHandle", 0, 4}, {Kind::Size, "size_t", 0, 4}};
-constexpr Type args_698[] = {{Kind::Handle, "ovrProductArrayHandle", 0, 4}};
-constexpr Type args_699[] = {{Kind::Handle, "ovrProductArrayHandle", 0, 4}};
-constexpr Type args_700[] = {{Kind::Handle, "ovrProductArrayHandle", 0, 4}};
-constexpr Type args_701[] = {{Kind::Handle, "ovrProductHandle", 0, 4}};
-constexpr Type args_702[] = {{Kind::Handle, "ovrProductHandle", 0, 4}};
-constexpr Type args_703[] = {{Kind::Handle, "ovrProductHandle", 0, 4}};
-constexpr Type args_704[] = {{Kind::Handle, "IntPtr", 0, 4}};
-constexpr Type args_705[] = {{Kind::Handle, "ovrProductHandle", 0, 4}};
-constexpr Type args_706[] = {{Kind::Handle, "ovrPurchaseArrayHandle", 0, 4}, {Kind::Size, "size_t", 0, 4}};
-constexpr Type args_707[] = {{Kind::Handle, "ovrPurchaseArrayHandle", 0, 4}};
-constexpr Type args_708[] = {{Kind::Handle, "ovrPurchaseArrayHandle", 0, 4}};
-constexpr Type args_709[] = {{Kind::Handle, "ovrPurchaseArrayHandle", 0, 4}};
-constexpr Type args_710[] = {{Kind::Handle, "IntPtr", 0, 4}};
-constexpr Type args_711[] = {{Kind::Handle, "ovrPurchaseHandle", 0, 4}};
-constexpr Type args_712[] = {{Kind::Handle, "ovrPurchaseHandle", 0, 4}};
-constexpr Type args_713[] = {{Kind::Handle, "ovrPurchaseHandle", 0, 4}};
-constexpr Type args_714[] = {{Kind::Handle, "ovrPurchaseHandle", 0, 4}};
+constexpr Type args_656[] = {{Kind::U64, "ovrID", 0, 4}};
+constexpr Type args_657[] = {{Kind::U64, "ovrID", 0, 4}};
+constexpr Type args_658[] = {{Kind::U64, "ovrID", 0, 4}};
+constexpr Type args_660[] = {{Kind::U64, "ovrID", 0, 4}, {Kind::Size, "size_t", 0, 4}, {Kind::Ptr, "void *", 0, 4}, {Kind::I32, "ovrSendPolicy", 0, 4}};
+constexpr Type args_661[] = {{Kind::Size, "size_t", 0, 4}, {Kind::Ptr, "void *", 0, 4}, {Kind::I32, "ovrSendPolicy", 0, 4}};
+constexpr Type args_662[] = {{Kind::Handle, "ovrNetworkingPeerHandle", 0, 4}};
+constexpr Type args_663[] = {{Kind::Handle, "ovrNetworkingPeerHandle", 0, 4}};
+constexpr Type args_664[] = {{Kind::Handle, "ovrRoomInviteNotificationArrayHandle", 0, 4}};
+constexpr Type args_666[] = {{Kind::U64, "ovrID", 0, 4}};
+constexpr Type args_667[] = {{Kind::Handle, "ovrOrgScopedIDHandle", 0, 4}};
+constexpr Type args_668[] = {{Kind::Handle, "ovrPacketHandle", 0, 4}};
+constexpr Type args_669[] = {{Kind::Handle, "ovrPacketHandle", 0, 4}};
+constexpr Type args_670[] = {{Kind::Handle, "ovrPacketHandle", 0, 4}};
+constexpr Type args_671[] = {{Kind::Handle, "ovrPacketHandle", 0, 4}};
+constexpr Type args_672[] = {{Kind::Handle, "ovrPacketHandle", 0, 4}};
+constexpr Type args_673[] = {{Kind::Handle, "ovrPartyIDHandle", 0, 4}};
+constexpr Type args_674[] = {{Kind::Handle, "ovrPartyUpdateNotificationHandle", 0, 4}};
+constexpr Type args_675[] = {{Kind::Handle, "ovrPartyUpdateNotificationHandle", 0, 4}};
+constexpr Type args_676[] = {{Kind::Handle, "ovrPartyUpdateNotificationHandle", 0, 4}};
+constexpr Type args_677[] = {{Kind::Handle, "ovrPartyUpdateNotificationHandle", 0, 4}};
+constexpr Type args_678[] = {{Kind::Handle, "ovrPartyUpdateNotificationHandle", 0, 4}};
+constexpr Type args_679[] = {{Kind::Handle, "ovrPartyUpdateNotificationHandle", 0, 4}};
+constexpr Type args_680[] = {{Kind::Handle, "ovrPartyUpdateNotificationHandle", 0, 4}};
+constexpr Type args_682[] = {{Kind::U64, "uint64_t", 0, 4}, {Kind::U64, "uint64_t", 0, 4}};
+constexpr Type args_683[] = {{Kind::U64, "uint64_t", 0, 4}};
+constexpr Type args_685[] = {{Kind::U64, "uint64_t", 0, 4}};
+constexpr Type args_686[] = {{Kind::Handle, "ovrPartyHandle", 0, 4}};
+constexpr Type args_687[] = {{Kind::Handle, "ovrPartyHandle", 0, 4}};
+constexpr Type args_688[] = {{Kind::Handle, "ovrPartyHandle", 0, 4}};
+constexpr Type args_689[] = {{Kind::Handle, "ovrPartyHandle", 0, 4}};
+constexpr Type args_690[] = {{Kind::Handle, "ovrPartyHandle", 0, 4}};
+constexpr Type args_691[] = {{Kind::U64, "uint64_t", 0, 4}, {Kind::U64, "uint64_t", 0, 4}};
+constexpr Type args_692[] = {{Kind::U64, "uint64_t", 0, 4}};
+constexpr Type args_693[] = {{Kind::U64, "uint64_t", 0, 4}};
+constexpr Type args_694[] = {{Kind::Handle, "ovrPidArrayHandle", 0, 4}, {Kind::Size, "size_t", 0, 4}};
+constexpr Type args_695[] = {{Kind::Handle, "ovrPidArrayHandle", 0, 4}};
+constexpr Type args_696[] = {{Kind::Handle, "ovrPidHandle", 0, 4}};
+constexpr Type args_697[] = {{Kind::Handle, "ovrPingResultHandle", 0, 4}};
+constexpr Type args_698[] = {{Kind::Handle, "ovrPingResultHandle", 0, 4}};
+constexpr Type args_699[] = {{Kind::Handle, "ovrPingResultHandle", 0, 4}};
+constexpr Type args_700[] = {{Kind::Ptr, "char*", 1, 4}, {Kind::Handle, "jobject", 0, 4}, {Kind::Layout, "JNIEnv *", 0, 4}};
+constexpr Type args_701[] = {{Kind::Ptr, "char*", 1, 4}, {Kind::Handle, "jobject", 0, 4}, {Kind::Layout, "JNIEnv *", 0, 4}};
+constexpr Type args_702[] = {{Kind::Handle, "ovrPlatformInitializeHandle", 0, 4}};
+constexpr Type args_703[] = {{Kind::Layout, "ovrOculusInitParams *", 0, 4}};
+constexpr Type args_705[] = {{Kind::Handle, "IntPtr", 0, 4}};
+constexpr Type args_706[] = {{Kind::Handle, "IntPtr", 0, 4}};
+constexpr Type args_707[] = {{Kind::Handle, "IntPtr", 0, 4}};
+constexpr Type args_708[] = {{Kind::Handle, "ovrProductArrayHandle", 0, 4}, {Kind::Size, "size_t", 0, 4}};
+constexpr Type args_709[] = {{Kind::Handle, "ovrProductArrayHandle", 0, 4}};
+constexpr Type args_710[] = {{Kind::Handle, "ovrProductArrayHandle", 0, 4}};
+constexpr Type args_711[] = {{Kind::Handle, "ovrProductArrayHandle", 0, 4}};
+constexpr Type args_712[] = {{Kind::Handle, "ovrProductHandle", 0, 4}};
+constexpr Type args_713[] = {{Kind::Handle, "ovrProductHandle", 0, 4}};
+constexpr Type args_714[] = {{Kind::Handle, "ovrProductHandle", 0, 4}};
 constexpr Type args_715[] = {{Kind::Handle, "IntPtr", 0, 4}};
-constexpr Type args_716[] = {{Kind::Handle, "ovrPurchaseHandle", 0, 4}};
-constexpr Type args_717[] = {{Kind::Handle, "ovrRejoinDialogResultHandle", 0, 4}};
-constexpr Type args_718[] = {{Kind::Handle, "ovrRichPresenceOptionsHandle", 0, 4}};
-constexpr Type args_720[] = {{Kind::Handle, "ovrRichPresenceOptionsHandle", 0, 4}};
-constexpr Type args_721[] = {{Kind::Handle, "ovrRichPresenceOptionsHandle", 0, 4}, {Kind::Ptr, "char *", 1, 4}};
-constexpr Type args_722[] = {{Kind::Handle, "ovrRichPresenceOptionsHandle", 0, 4}, {Kind::Ptr, "char*", 1, 4}, {Kind::Ptr, "char*", 1, 4}};
-constexpr Type args_723[] = {{Kind::Handle, "ovrRichPresenceOptionsHandle", 0, 4}, {Kind::U32, "unsigned int", 0, 4}};
-constexpr Type args_724[] = {{Kind::Handle, "ovrRichPresenceOptionsHandle", 0, 4}, {Kind::Ptr, "char *", 1, 4}};
-constexpr Type args_725[] = {{Kind::Handle, "ovrRichPresenceOptionsHandle", 0, 4}, {Kind::U64, "unsigned long long", 0, 4}};
-constexpr Type args_726[] = {{Kind::Handle, "ovrRichPresenceOptionsHandle", 0, 4}, {Kind::I32, "ovrRichPresenceExtraContext", 0, 4}};
-constexpr Type args_727[] = {{Kind::Handle, "ovrRichPresenceOptionsHandle", 0, 4}, {Kind::Ptr, "char *", 1, 4}};
-constexpr Type args_728[] = {{Kind::Handle, "ovrRichPresenceOptionsHandle", 0, 4}, {Kind::U8, "bool", 0, 4}};
-constexpr Type args_729[] = {{Kind::Handle, "ovrRichPresenceOptionsHandle", 0, 4}, {Kind::U8, "bool", 0, 4}};
-constexpr Type args_730[] = {{Kind::Handle, "ovrRichPresenceOptionsHandle", 0, 4}, {Kind::Ptr, "char *", 1, 4}};
-constexpr Type args_731[] = {{Kind::Handle, "ovrRichPresenceOptionsHandle", 0, 4}, {Kind::Ptr, "char *", 1, 4}};
+constexpr Type args_716[] = {{Kind::Handle, "ovrProductHandle", 0, 4}};
+constexpr Type args_717[] = {{Kind::Handle, "ovrPurchaseArrayHandle", 0, 4}, {Kind::Size, "size_t", 0, 4}};
+constexpr Type args_718[] = {{Kind::Handle, "ovrPurchaseArrayHandle", 0, 4}};
+constexpr Type args_719[] = {{Kind::Handle, "ovrPurchaseArrayHandle", 0, 4}};
+constexpr Type args_720[] = {{Kind::Handle, "ovrPurchaseArrayHandle", 0, 4}};
+constexpr Type args_721[] = {{Kind::Handle, "IntPtr", 0, 4}};
+constexpr Type args_722[] = {{Kind::Handle, "ovrPurchaseHandle", 0, 4}};
+constexpr Type args_723[] = {{Kind::Handle, "ovrPurchaseHandle", 0, 4}};
+constexpr Type args_724[] = {{Kind::Handle, "ovrPurchaseHandle", 0, 4}};
+constexpr Type args_725[] = {{Kind::Handle, "ovrPurchaseHandle", 0, 4}};
+constexpr Type args_726[] = {{Kind::Handle, "IntPtr", 0, 4}};
+constexpr Type args_727[] = {{Kind::Handle, "ovrPurchaseHandle", 0, 4}};
+constexpr Type args_728[] = {{Kind::Handle, "ovrRejoinDialogResultHandle", 0, 4}};
+constexpr Type args_729[] = {{Kind::Handle, "ovrRichPresenceOptionsHandle", 0, 4}};
+constexpr Type args_731[] = {{Kind::Handle, "ovrRichPresenceOptionsHandle", 0, 4}};
 constexpr Type args_732[] = {{Kind::Handle, "ovrRichPresenceOptionsHandle", 0, 4}, {Kind::Ptr, "char *", 1, 4}};
-constexpr Type args_733[] = {{Kind::Handle, "ovrRichPresenceOptionsHandle", 0, 4}, {Kind::U32, "unsigned int", 0, 4}};
-constexpr Type args_734[] = {{Kind::Handle, "ovrRichPresenceOptionsHandle", 0, 4}, {Kind::U64, "unsigned long long", 0, 4}};
-constexpr Type args_737[] = {{Kind::Handle, "ovrDestinationArrayHandle", 0, 4}};
-constexpr Type args_738[] = {{Kind::Handle, "ovrRichPresenceOptionsHandle", 0, 4}};
-constexpr Type args_739[] = {{Kind::Handle, "IntPtr", 0, 4}};
-constexpr Type args_740[] = {{Kind::U8, "bool", 0, 4}};
-constexpr Type args_741[] = {{Kind::Handle, "IntPtr", 0, 4}};
-constexpr Type args_742[] = {{Kind::Handle, "IntPtr", 0, 4}};
-constexpr Type args_743[] = {{Kind::Handle, "ovrRoomArrayHandle", 0, 4}, {Kind::Size, "size_t", 0, 4}};
-constexpr Type args_744[] = {{Kind::Handle, "ovrRoomArrayHandle", 0, 4}};
-constexpr Type args_745[] = {{Kind::Handle, "ovrRoomArrayHandle", 0, 4}};
-constexpr Type args_746[] = {{Kind::Handle, "ovrRoomArrayHandle", 0, 4}};
-constexpr Type args_747[] = {{Kind::Handle, "ovrRoomInviteNotificationArrayHandle", 0, 4}, {Kind::Size, "size_t", 0, 4}};
-constexpr Type args_748[] = {{Kind::Handle, "ovrRoomInviteNotificationArrayHandle", 0, 4}};
-constexpr Type args_749[] = {{Kind::Handle, "ovrRoomInviteNotificationArrayHandle", 0, 4}};
-constexpr Type args_750[] = {{Kind::Handle, "ovrRoomInviteNotificationArrayHandle", 0, 4}};
-constexpr Type args_751[] = {{Kind::Handle, "ovrRoomInviteNotificationHandle", 0, 4}};
-constexpr Type args_752[] = {{Kind::Handle, "ovrRoomInviteNotificationHandle", 0, 4}};
-constexpr Type args_753[] = {{Kind::Handle, "ovrRoomInviteNotificationHandle", 0, 4}};
-constexpr Type args_754[] = {{Kind::Handle, "ovrRoomInviteNotificationHandle", 0, 4}};
-constexpr Type args_755[] = {{Kind::Handle, "ovrRoomOptionsHandle", 0, 4}};
-constexpr Type args_757[] = {{Kind::Handle, "ovrRoomOptionsHandle", 0, 4}};
-constexpr Type args_758[] = {{Kind::Handle, "ovrRoomOptionsHandle", 0, 4}, {Kind::Ptr, "char*", 1, 4}, {Kind::Ptr, "char*", 1, 4}};
-constexpr Type args_759[] = {{Kind::Handle, "ovrRoomOptionsHandle", 0, 4}, {Kind::U8, "bool", 0, 4}};
-constexpr Type args_760[] = {{Kind::Handle, "ovrRoomOptionsHandle", 0, 4}, {Kind::U32, "unsigned int", 0, 4}};
-constexpr Type args_761[] = {{Kind::Handle, "ovrRoomOptionsHandle", 0, 4}, {Kind::I32, "ovrUserOrdering", 0, 4}};
-constexpr Type args_762[] = {{Kind::Handle, "ovrRoomOptionsHandle", 0, 4}, {Kind::I32, "ovrTimeWindow", 0, 4}};
-constexpr Type args_763[] = {{Kind::Handle, "ovrRoomOptionsHandle", 0, 4}, {Kind::U64, "ovrID", 0, 4}};
-constexpr Type args_764[] = {{Kind::Handle, "ovrRoomOptionsHandle", 0, 4}, {Kind::U8, "bool", 0, 4}};
-constexpr Type args_765[] = {{Kind::I32, "ovrRoomJoinPolicy", 0, 4}, {Kind::U32, "unsigned int", 0, 4}, {Kind::U8, "bool", 0, 4}};
-constexpr Type args_766[] = {{Kind::I32, "ovrRoomJoinPolicy", 0, 4}, {Kind::U32, "unsigned int", 0, 4}, {Kind::Handle, "ovrRoomOptionsHandle", 0, 4}};
-constexpr Type args_767[] = {{Kind::U64, "ovrID", 0, 4}};
-constexpr Type args_768[] = {{Kind::Handle, "ovrRoomHandle", 0, 4}};
-constexpr Type args_770[] = {{Kind::U64, "ovrID", 0, 4}};
-constexpr Type args_771[] = {{Kind::Handle, "ovrRoomHandle", 0, 4}};
-constexpr Type args_772[] = {{Kind::Handle, "ovrRoomHandle", 0, 4}};
-constexpr Type args_773[] = {{Kind::Handle, "ovrRoomHandle", 0, 4}};
-constexpr Type args_775[] = {{Kind::Handle, "ovrRoomOptionsHandle", 0, 4}};
-constexpr Type args_776[] = {{Kind::Handle, "ovrRoomHandle", 0, 4}};
-constexpr Type args_777[] = {{Kind::Handle, "ovrRoomHandle", 0, 4}};
-constexpr Type args_778[] = {{Kind::Handle, "ovrRoomHandle", 0, 4}};
+constexpr Type args_733[] = {{Kind::Handle, "ovrRichPresenceOptionsHandle", 0, 4}, {Kind::Ptr, "char*", 1, 4}, {Kind::Ptr, "char*", 1, 4}};
+constexpr Type args_734[] = {{Kind::Handle, "ovrRichPresenceOptionsHandle", 0, 4}, {Kind::U32, "unsigned int", 0, 4}};
+constexpr Type args_735[] = {{Kind::Handle, "ovrRichPresenceOptionsHandle", 0, 4}, {Kind::Ptr, "char *", 1, 4}};
+constexpr Type args_736[] = {{Kind::Handle, "ovrRichPresenceOptionsHandle", 0, 4}, {Kind::U64, "unsigned long long", 0, 4}};
+constexpr Type args_737[] = {{Kind::Handle, "ovrRichPresenceOptionsHandle", 0, 4}, {Kind::I32, "ovrRichPresenceExtraContext", 0, 4}};
+constexpr Type args_738[] = {{Kind::Handle, "ovrRichPresenceOptionsHandle", 0, 4}, {Kind::Ptr, "char *", 1, 4}};
+constexpr Type args_739[] = {{Kind::Handle, "ovrRichPresenceOptionsHandle", 0, 4}, {Kind::U8, "bool", 0, 4}};
+constexpr Type args_740[] = {{Kind::Handle, "ovrRichPresenceOptionsHandle", 0, 4}, {Kind::U8, "bool", 0, 4}};
+constexpr Type args_741[] = {{Kind::Handle, "ovrRichPresenceOptionsHandle", 0, 4}, {Kind::Ptr, "char *", 1, 4}};
+constexpr Type args_742[] = {{Kind::Handle, "ovrRichPresenceOptionsHandle", 0, 4}, {Kind::Ptr, "char *", 1, 4}};
+constexpr Type args_743[] = {{Kind::Handle, "ovrRichPresenceOptionsHandle", 0, 4}, {Kind::Ptr, "char *", 1, 4}};
+constexpr Type args_744[] = {{Kind::Handle, "ovrRichPresenceOptionsHandle", 0, 4}, {Kind::U32, "unsigned int", 0, 4}};
+constexpr Type args_745[] = {{Kind::Handle, "ovrRichPresenceOptionsHandle", 0, 4}, {Kind::U64, "unsigned long long", 0, 4}};
+constexpr Type args_748[] = {{Kind::Handle, "ovrDestinationArrayHandle", 0, 4}};
+constexpr Type args_749[] = {{Kind::Handle, "ovrRichPresenceOptionsHandle", 0, 4}};
+constexpr Type args_750[] = {{Kind::Handle, "IntPtr", 0, 4}};
+constexpr Type args_751[] = {{Kind::U8, "bool", 0, 4}};
+constexpr Type args_752[] = {{Kind::Handle, "IntPtr", 0, 4}};
+constexpr Type args_753[] = {{Kind::Handle, "IntPtr", 0, 4}};
+constexpr Type args_754[] = {{Kind::Handle, "ovrRoomArrayHandle", 0, 4}, {Kind::Size, "size_t", 0, 4}};
+constexpr Type args_755[] = {{Kind::Handle, "ovrRoomArrayHandle", 0, 4}};
+constexpr Type args_756[] = {{Kind::Handle, "ovrRoomArrayHandle", 0, 4}};
+constexpr Type args_757[] = {{Kind::Handle, "ovrRoomArrayHandle", 0, 4}};
+constexpr Type args_758[] = {{Kind::Handle, "ovrRoomInviteNotificationArrayHandle", 0, 4}, {Kind::Size, "size_t", 0, 4}};
+constexpr Type args_759[] = {{Kind::Handle, "ovrRoomInviteNotificationArrayHandle", 0, 4}};
+constexpr Type args_760[] = {{Kind::Handle, "ovrRoomInviteNotificationArrayHandle", 0, 4}};
+constexpr Type args_761[] = {{Kind::Handle, "ovrRoomInviteNotificationArrayHandle", 0, 4}};
+constexpr Type args_762[] = {{Kind::Handle, "ovrRoomInviteNotificationHandle", 0, 4}};
+constexpr Type args_763[] = {{Kind::Handle, "ovrRoomInviteNotificationHandle", 0, 4}};
+constexpr Type args_764[] = {{Kind::Handle, "ovrRoomInviteNotificationHandle", 0, 4}};
+constexpr Type args_765[] = {{Kind::Handle, "ovrRoomInviteNotificationHandle", 0, 4}};
+constexpr Type args_766[] = {{Kind::Handle, "ovrRoomOptionsHandle", 0, 4}};
+constexpr Type args_768[] = {{Kind::Handle, "ovrRoomOptionsHandle", 0, 4}};
+constexpr Type args_769[] = {{Kind::Handle, "ovrRoomOptionsHandle", 0, 4}, {Kind::Ptr, "char*", 1, 4}, {Kind::Ptr, "char*", 1, 4}};
+constexpr Type args_770[] = {{Kind::Handle, "ovrRoomOptionsHandle", 0, 4}, {Kind::U8, "bool", 0, 4}};
+constexpr Type args_771[] = {{Kind::Handle, "ovrRoomOptionsHandle", 0, 4}, {Kind::U32, "unsigned int", 0, 4}};
+constexpr Type args_772[] = {{Kind::Handle, "ovrRoomOptionsHandle", 0, 4}, {Kind::I32, "ovrUserOrdering", 0, 4}};
+constexpr Type args_773[] = {{Kind::Handle, "ovrRoomOptionsHandle", 0, 4}, {Kind::I32, "ovrTimeWindow", 0, 4}};
+constexpr Type args_774[] = {{Kind::Handle, "ovrRoomOptionsHandle", 0, 4}, {Kind::U64, "ovrID", 0, 4}};
+constexpr Type args_775[] = {{Kind::Handle, "ovrRoomOptionsHandle", 0, 4}, {Kind::U8, "bool", 0, 4}};
+constexpr Type args_776[] = {{Kind::I32, "ovrRoomJoinPolicy", 0, 4}, {Kind::U32, "unsigned int", 0, 4}, {Kind::U8, "bool", 0, 4}};
+constexpr Type args_777[] = {{Kind::I32, "ovrRoomJoinPolicy", 0, 4}, {Kind::U32, "unsigned int", 0, 4}, {Kind::Handle, "ovrRoomOptionsHandle", 0, 4}};
+constexpr Type args_778[] = {{Kind::U64, "ovrID", 0, 4}};
 constexpr Type args_779[] = {{Kind::Handle, "ovrRoomHandle", 0, 4}};
-constexpr Type args_780[] = {{Kind::Handle, "ovrRoomHandle", 0, 4}};
-constexpr Type args_781[] = {{Kind::Handle, "ovrRoomHandle", 0, 4}};
+constexpr Type args_781[] = {{Kind::U64, "ovrID", 0, 4}};
+constexpr Type args_782[] = {{Kind::Handle, "ovrRoomHandle", 0, 4}};
 constexpr Type args_783[] = {{Kind::Handle, "ovrRoomHandle", 0, 4}};
-constexpr Type args_784[] = {{Kind::Handle, "ovrRoomArrayHandle", 0, 4}};
-constexpr Type args_785[] = {{Kind::Handle, "ovrRoomHandle", 0, 4}};
-constexpr Type args_786[] = {{Kind::Handle, "ovrRoomHandle", 0, 4}};
+constexpr Type args_784[] = {{Kind::Handle, "ovrRoomHandle", 0, 4}};
+constexpr Type args_786[] = {{Kind::Handle, "ovrRoomOptionsHandle", 0, 4}};
 constexpr Type args_787[] = {{Kind::Handle, "ovrRoomHandle", 0, 4}};
 constexpr Type args_788[] = {{Kind::Handle, "ovrRoomHandle", 0, 4}};
 constexpr Type args_789[] = {{Kind::Handle, "ovrRoomHandle", 0, 4}};
-constexpr Type args_790[] = {{Kind::U64, "ovrID", 0, 4}, {Kind::Ptr, "char *", 1, 4}};
-constexpr Type args_791[] = {{Kind::U64, "ovrID", 0, 4}, {Kind::U8, "bool", 0, 4}};
-constexpr Type args_792[] = {{Kind::U64, "ovrID", 0, 4}, {Kind::Handle, "ovrRoomOptionsHandle", 0, 4}};
-constexpr Type args_793[] = {{Kind::U64, "ovrID", 0, 4}, {Kind::U64, "ovrID", 0, 4}, {Kind::I32, "int", 0, 4}};
-constexpr Type args_794[] = {{Kind::U64, "ovrID", 0, 4}};
-constexpr Type args_795[] = {{Kind::U64, "ovrID", 0, 4}};
-constexpr Type args_796[] = {{Kind::U64, "ovrID", 0, 4}, {Kind::Ptr, "char *", 1, 4}};
-constexpr Type args_797[] = {{Kind::U64, "ovrID", 0, 4}, {Kind::Layout, "ovrKeyValuePair *", 0, 4}, {Kind::U32, "unsigned int", 0, 4}};
-constexpr Type args_798[] = {{Kind::U64, "ovrID", 0, 4}, {Kind::I32, "ovrRoomMembershipLockStatus", 0, 4}};
-constexpr Type args_799[] = {{Kind::U64, "ovrID", 0, 4}, {Kind::U64, "ovrID", 0, 4}};
-constexpr Type args_800[] = {{Kind::U64, "ovrID", 0, 4}, {Kind::I32, "ovrRoomJoinPolicy", 0, 4}};
-constexpr Type args_801[] = {{Kind::Handle, "ovrRosterOptionsHandle", 0, 4}, {Kind::U64, "ovrID", 0, 4}};
-constexpr Type args_802[] = {{Kind::Handle, "ovrRosterOptionsHandle", 0, 4}};
-constexpr Type args_804[] = {{Kind::Handle, "ovrRosterOptionsHandle", 0, 4}};
-constexpr Type args_805[] = {{Kind::Handle, "ovrSdkAccountArrayHandle", 0, 4}, {Kind::Size, "size_t", 0, 4}};
-constexpr Type args_806[] = {{Kind::Handle, "ovrSdkAccountArrayHandle", 0, 4}};
-constexpr Type args_807[] = {{Kind::Handle, "ovrSdkAccountHandle", 0, 4}};
-constexpr Type args_808[] = {{Kind::Handle, "ovrSdkAccountHandle", 0, 4}};
-constexpr Type args_809[] = {{Kind::Handle, "ovrSendInvitesResultHandle", 0, 4}};
-constexpr Type args_810[] = {{Kind::Ptr, "char *", 1, 4}};
-constexpr Type args_811[] = {{Kind::Handle, "ovrShareMediaResultHandle", 0, 4}};
-constexpr Type args_812[] = {{Kind::Handle, "ovrSupplementaryMetricHandle", 0, 4}};
-constexpr Type args_813[] = {{Kind::Handle, "ovrSupplementaryMetricHandle", 0, 4}};
-constexpr Type args_814[] = {{Kind::Handle, "ovrTeamArrayHandle", 0, 4}, {Kind::Size, "size_t", 0, 4}};
-constexpr Type args_815[] = {{Kind::Handle, "ovrTeamArrayHandle", 0, 4}};
-constexpr Type args_816[] = {{Kind::Handle, "ovrTeamHandle", 0, 4}};
-constexpr Type args_817[] = {{Kind::Handle, "ovrTeamHandle", 0, 4}};
-constexpr Type args_818[] = {{Kind::Handle, "ovrTeamHandle", 0, 4}};
-constexpr Type args_819[] = {{Kind::Handle, "ovrTeamHandle", 0, 4}};
-constexpr Type args_820[] = {{Kind::Handle, "IntPtr", 0, 4}, {Kind::Size, "size_t", 0, 4}};
-constexpr Type args_821[] = {{Kind::Handle, "IntPtr", 0, 4}};
-constexpr Type args_822[] = {{Kind::Handle, "IntPtr", 0, 4}};
-constexpr Type args_823[] = {{Kind::Handle, "IntPtr", 0, 4}};
-constexpr Type args_824[] = {{Kind::Handle, "IntPtr", 0, 4}};
-constexpr Type args_825[] = {{Kind::Handle, "IntPtr", 0, 4}};
-constexpr Type args_826[] = {{Kind::Handle, "IntPtr", 0, 4}};
-constexpr Type args_827[] = {{Kind::Handle, "IntPtr", 0, 4}};
-constexpr Type args_828[] = {{Kind::Handle, "IntPtr", 0, 4}};
-constexpr Type args_829[] = {{Kind::Handle, "IntPtr", 0, 4}};
-constexpr Type args_830[] = {{Kind::Handle, "IntPtr", 0, 4}};
-constexpr Type args_831[] = {{Kind::Handle, "IntPtr", 0, 4}};
+constexpr Type args_790[] = {{Kind::Handle, "ovrRoomHandle", 0, 4}};
+constexpr Type args_791[] = {{Kind::Handle, "ovrRoomHandle", 0, 4}};
+constexpr Type args_792[] = {{Kind::Handle, "ovrRoomHandle", 0, 4}};
+constexpr Type args_794[] = {{Kind::Handle, "ovrRoomHandle", 0, 4}};
+constexpr Type args_795[] = {{Kind::Handle, "ovrRoomArrayHandle", 0, 4}};
+constexpr Type args_796[] = {{Kind::Handle, "ovrRoomHandle", 0, 4}};
+constexpr Type args_797[] = {{Kind::Handle, "ovrRoomHandle", 0, 4}};
+constexpr Type args_798[] = {{Kind::Handle, "ovrRoomHandle", 0, 4}};
+constexpr Type args_799[] = {{Kind::Handle, "ovrRoomHandle", 0, 4}};
+constexpr Type args_800[] = {{Kind::Handle, "ovrRoomHandle", 0, 4}};
+constexpr Type args_801[] = {{Kind::U64, "ovrID", 0, 4}, {Kind::Ptr, "char *", 1, 4}};
+constexpr Type args_802[] = {{Kind::U64, "ovrID", 0, 4}, {Kind::U8, "bool", 0, 4}};
+constexpr Type args_803[] = {{Kind::U64, "ovrID", 0, 4}, {Kind::Handle, "ovrRoomOptionsHandle", 0, 4}};
+constexpr Type args_804[] = {{Kind::U64, "ovrID", 0, 4}, {Kind::U64, "ovrID", 0, 4}, {Kind::I32, "int", 0, 4}};
+constexpr Type args_805[] = {{Kind::U64, "ovrID", 0, 4}};
+constexpr Type args_806[] = {{Kind::U64, "ovrID", 0, 4}};
+constexpr Type args_807[] = {{Kind::U64, "ovrID", 0, 4}, {Kind::Ptr, "char *", 1, 4}};
+constexpr Type args_808[] = {{Kind::U64, "ovrID", 0, 4}, {Kind::Layout, "ovrKeyValuePair *", 0, 4}, {Kind::U32, "unsigned int", 0, 4}};
+constexpr Type args_809[] = {{Kind::U64, "ovrID", 0, 4}, {Kind::I32, "ovrRoomMembershipLockStatus", 0, 4}};
+constexpr Type args_810[] = {{Kind::U64, "ovrID", 0, 4}, {Kind::U64, "ovrID", 0, 4}};
+constexpr Type args_811[] = {{Kind::U64, "ovrID", 0, 4}, {Kind::I32, "ovrRoomJoinPolicy", 0, 4}};
+constexpr Type args_812[] = {{Kind::Handle, "ovrRosterOptionsHandle", 0, 4}, {Kind::U64, "ovrID", 0, 4}};
+constexpr Type args_813[] = {{Kind::Handle, "ovrRosterOptionsHandle", 0, 4}};
+constexpr Type args_815[] = {{Kind::Handle, "ovrRosterOptionsHandle", 0, 4}};
+constexpr Type args_816[] = {{Kind::Handle, "ovrSdkAccountArrayHandle", 0, 4}, {Kind::Size, "size_t", 0, 4}};
+constexpr Type args_817[] = {{Kind::Handle, "ovrSdkAccountArrayHandle", 0, 4}};
+constexpr Type args_818[] = {{Kind::Handle, "ovrSdkAccountHandle", 0, 4}};
+constexpr Type args_819[] = {{Kind::Handle, "ovrSdkAccountHandle", 0, 4}};
+constexpr Type args_820[] = {{Kind::Handle, "ovrSendInvitesResultHandle", 0, 4}};
+constexpr Type args_821[] = {{Kind::Ptr, "char *", 1, 4}};
+constexpr Type args_822[] = {{Kind::Handle, "ovrShareMediaResultHandle", 0, 4}};
+constexpr Type args_823[] = {{Kind::Handle, "ovrSupplementaryMetricHandle", 0, 4}};
+constexpr Type args_824[] = {{Kind::Handle, "ovrSupplementaryMetricHandle", 0, 4}};
+constexpr Type args_825[] = {{Kind::Handle, "ovrTeamArrayHandle", 0, 4}, {Kind::Size, "size_t", 0, 4}};
+constexpr Type args_826[] = {{Kind::Handle, "ovrTeamArrayHandle", 0, 4}};
+constexpr Type args_827[] = {{Kind::Handle, "ovrTeamHandle", 0, 4}};
+constexpr Type args_828[] = {{Kind::Handle, "ovrTeamHandle", 0, 4}};
+constexpr Type args_829[] = {{Kind::Handle, "ovrTeamHandle", 0, 4}};
+constexpr Type args_830[] = {{Kind::Handle, "ovrTeamHandle", 0, 4}};
+constexpr Type args_831[] = {{Kind::Handle, "IntPtr", 0, 4}, {Kind::Size, "size_t", 0, 4}};
 constexpr Type args_832[] = {{Kind::Handle, "IntPtr", 0, 4}};
-constexpr Type args_833[] = {{Kind::Ptr, "const char *", 1, 4}};
-constexpr Type args_834[] = {{Kind::Ptr, "const char *", 1, 4}};
-constexpr Type args_835[] = {{Kind::Ptr, "const char *", 1, 4}, {Kind::Handle, "IntPtr", 0, 4}};
+constexpr Type args_833[] = {{Kind::Handle, "IntPtr", 0, 4}};
+constexpr Type args_834[] = {{Kind::Handle, "IntPtr", 0, 4}};
+constexpr Type args_835[] = {{Kind::Handle, "IntPtr", 0, 4}};
 constexpr Type args_836[] = {{Kind::Handle, "IntPtr", 0, 4}};
-constexpr Type args_838[] = {{Kind::Unsupported, "AppAgeCategory", 0, 4}};
-constexpr Type args_839[] = {{Kind::Handle, "ovrUserAndRoomArrayHandle", 0, 4}, {Kind::Size, "size_t", 0, 4}};
-constexpr Type args_840[] = {{Kind::Handle, "ovrUserAndRoomArrayHandle", 0, 4}};
-constexpr Type args_841[] = {{Kind::Handle, "ovrUserAndRoomArrayHandle", 0, 4}};
-constexpr Type args_842[] = {{Kind::Handle, "ovrUserAndRoomArrayHandle", 0, 4}};
-constexpr Type args_843[] = {{Kind::Handle, "ovrUserAndRoomHandle", 0, 4}};
-constexpr Type args_844[] = {{Kind::Handle, "ovrUserAndRoomHandle", 0, 4}};
-constexpr Type args_845[] = {{Kind::Handle, "ovrUserArrayHandle", 0, 4}, {Kind::Size, "size_t", 0, 4}};
-constexpr Type args_846[] = {{Kind::Handle, "ovrUserArrayHandle", 0, 4}};
-constexpr Type args_847[] = {{Kind::Handle, "ovrUserArrayHandle", 0, 4}};
-constexpr Type args_848[] = {{Kind::Handle, "ovrUserArrayHandle", 0, 4}};
-constexpr Type args_849[] = {{Kind::Handle, "ovrUserCapabilityArrayHandle", 0, 4}, {Kind::Size, "size_t", 0, 4}};
-constexpr Type args_850[] = {{Kind::Handle, "ovrUserCapabilityArrayHandle", 0, 4}};
-constexpr Type args_851[] = {{Kind::Handle, "ovrUserCapabilityArrayHandle", 0, 4}};
-constexpr Type args_852[] = {{Kind::Handle, "ovrUserCapabilityArrayHandle", 0, 4}};
-constexpr Type args_853[] = {{Kind::Handle, "ovrUserCapabilityHandle", 0, 4}};
-constexpr Type args_854[] = {{Kind::Handle, "ovrUserCapabilityHandle", 0, 4}};
-constexpr Type args_855[] = {{Kind::Handle, "ovrUserCapabilityHandle", 0, 4}};
-constexpr Type args_856[] = {{Kind::Handle, "ovrUserCapabilityHandle", 0, 4}};
-constexpr Type args_857[] = {{Kind::Handle, "ovrUserDataStoreUpdateResponseHandle", 0, 4}};
-constexpr Type args_858[] = {{Kind::U64, "ovrID", 0, 4}, {Kind::Ptr, "char *", 1, 4}};
-constexpr Type args_859[] = {{Kind::U64, "ovrID", 0, 4}};
-constexpr Type args_860[] = {{Kind::U64, "ovrID", 0, 4}, {Kind::Ptr, "char *", 1, 4}};
-constexpr Type args_861[] = {{Kind::U64, "ovrID", 0, 4}, {Kind::Ptr, "char *", 1, 4}, {Kind::Ptr, "char *", 1, 4}};
-constexpr Type args_862[] = {{Kind::U64, "ovrID", 0, 4}, {Kind::Ptr, "char *", 1, 4}};
-constexpr Type args_863[] = {{Kind::U64, "ovrID", 0, 4}};
-constexpr Type args_864[] = {{Kind::U64, "ovrID", 0, 4}, {Kind::Ptr, "char *", 1, 4}};
-constexpr Type args_865[] = {{Kind::U64, "ovrID", 0, 4}, {Kind::Ptr, "char *", 1, 4}, {Kind::Ptr, "char *", 1, 4}};
-constexpr Type args_866[] = {{Kind::Handle, "ovrUserOptionsHandle", 0, 4}, {Kind::I32, "ovrServiceProvider", 0, 4}};
-constexpr Type args_867[] = {{Kind::Handle, "ovrUserOptionsHandle", 0, 4}};
-constexpr Type args_869[] = {{Kind::Handle, "ovrUserOptionsHandle", 0, 4}};
-constexpr Type args_870[] = {{Kind::Handle, "ovrUserOptionsHandle", 0, 4}, {Kind::U32, "unsigned int", 0, 4}};
-constexpr Type args_871[] = {{Kind::Handle, "ovrUserOptionsHandle", 0, 4}, {Kind::I32, "ovrTimeWindow", 0, 4}};
-constexpr Type args_872[] = {{Kind::Handle, "ovrUserProofHandle", 0, 4}};
-constexpr Type args_873[] = {{Kind::Handle, "ovrUserReportIDHandle", 0, 4}};
-constexpr Type args_874[] = {{Kind::Handle, "ovrUserReportIDHandle", 0, 4}};
-constexpr Type args_875[] = {{Kind::Handle, "IntPtr", 0, 4}};
-constexpr Type args_876[] = {{Kind::U64, "ovrID", 0, 4}};
-constexpr Type args_879[] = {{Kind::Handle, "ovrUserHandle", 0, 4}};
-constexpr Type args_880[] = {{Kind::Handle, "ovrUserHandle", 0, 4}};
-constexpr Type args_881[] = {{Kind::Handle, "ovrUserHandle", 0, 4}};
-constexpr Type args_882[] = {{Kind::Handle, "ovrUserHandle", 0, 4}};
-constexpr Type args_883[] = {{Kind::Handle, "IntPtr", 0, 4}};
-constexpr Type args_888[] = {{Kind::Handle, "ovrUserOptionsHandle", 0, 4}};
-constexpr Type args_889[] = {{Kind::Handle, "IntPtr", 0, 4}};
-constexpr Type args_890[] = {{Kind::Handle, "ovrUserAndRoomArrayHandle", 0, 4}};
-constexpr Type args_891[] = {{Kind::Handle, "ovrUserArrayHandle", 0, 4}};
-constexpr Type args_892[] = {{Kind::Handle, "ovrUserCapabilityArrayHandle", 0, 4}};
+constexpr Type args_837[] = {{Kind::Handle, "IntPtr", 0, 4}};
+constexpr Type args_838[] = {{Kind::Handle, "IntPtr", 0, 4}};
+constexpr Type args_839[] = {{Kind::Handle, "IntPtr", 0, 4}};
+constexpr Type args_840[] = {{Kind::Handle, "IntPtr", 0, 4}};
+constexpr Type args_841[] = {{Kind::Handle, "IntPtr", 0, 4}};
+constexpr Type args_842[] = {{Kind::Handle, "IntPtr", 0, 4}};
+constexpr Type args_843[] = {{Kind::Handle, "IntPtr", 0, 4}};
+constexpr Type args_844[] = {{Kind::Ptr, "const char *", 1, 4}};
+constexpr Type args_845[] = {{Kind::Ptr, "const char *", 1, 4}};
+constexpr Type args_846[] = {{Kind::Ptr, "const char *", 1, 4}, {Kind::Handle, "IntPtr", 0, 4}};
+constexpr Type args_847[] = {{Kind::Handle, "IntPtr", 0, 4}};
+constexpr Type args_849[] = {{Kind::Unsupported, "AppAgeCategory", 0, 4}};
+constexpr Type args_850[] = {{Kind::Handle, "ovrUserAndRoomArrayHandle", 0, 4}, {Kind::Size, "size_t", 0, 4}};
+constexpr Type args_851[] = {{Kind::Handle, "ovrUserAndRoomArrayHandle", 0, 4}};
+constexpr Type args_852[] = {{Kind::Handle, "ovrUserAndRoomArrayHandle", 0, 4}};
+constexpr Type args_853[] = {{Kind::Handle, "ovrUserAndRoomArrayHandle", 0, 4}};
+constexpr Type args_854[] = {{Kind::Handle, "ovrUserAndRoomHandle", 0, 4}};
+constexpr Type args_855[] = {{Kind::Handle, "ovrUserAndRoomHandle", 0, 4}};
+constexpr Type args_856[] = {{Kind::Handle, "ovrUserArrayHandle", 0, 4}, {Kind::Size, "size_t", 0, 4}};
+constexpr Type args_857[] = {{Kind::Handle, "ovrUserArrayHandle", 0, 4}};
+constexpr Type args_858[] = {{Kind::Handle, "ovrUserArrayHandle", 0, 4}};
+constexpr Type args_859[] = {{Kind::Handle, "ovrUserArrayHandle", 0, 4}};
+constexpr Type args_860[] = {{Kind::Handle, "ovrUserCapabilityArrayHandle", 0, 4}, {Kind::Size, "size_t", 0, 4}};
+constexpr Type args_861[] = {{Kind::Handle, "ovrUserCapabilityArrayHandle", 0, 4}};
+constexpr Type args_862[] = {{Kind::Handle, "ovrUserCapabilityArrayHandle", 0, 4}};
+constexpr Type args_863[] = {{Kind::Handle, "ovrUserCapabilityArrayHandle", 0, 4}};
+constexpr Type args_864[] = {{Kind::Handle, "ovrUserCapabilityHandle", 0, 4}};
+constexpr Type args_865[] = {{Kind::Handle, "ovrUserCapabilityHandle", 0, 4}};
+constexpr Type args_866[] = {{Kind::Handle, "ovrUserCapabilityHandle", 0, 4}};
+constexpr Type args_867[] = {{Kind::Handle, "ovrUserCapabilityHandle", 0, 4}};
+constexpr Type args_868[] = {{Kind::Handle, "ovrUserDataStoreUpdateResponseHandle", 0, 4}};
+constexpr Type args_869[] = {{Kind::U64, "ovrID", 0, 4}, {Kind::Ptr, "char *", 1, 4}};
+constexpr Type args_870[] = {{Kind::U64, "ovrID", 0, 4}};
+constexpr Type args_871[] = {{Kind::U64, "ovrID", 0, 4}, {Kind::Ptr, "char *", 1, 4}};
+constexpr Type args_872[] = {{Kind::U64, "ovrID", 0, 4}, {Kind::Ptr, "char *", 1, 4}, {Kind::Ptr, "char *", 1, 4}};
+constexpr Type args_873[] = {{Kind::U64, "ovrID", 0, 4}, {Kind::Ptr, "char *", 1, 4}};
+constexpr Type args_874[] = {{Kind::U64, "ovrID", 0, 4}};
+constexpr Type args_875[] = {{Kind::U64, "ovrID", 0, 4}, {Kind::Ptr, "char *", 1, 4}};
+constexpr Type args_876[] = {{Kind::U64, "ovrID", 0, 4}, {Kind::Ptr, "char *", 1, 4}, {Kind::Ptr, "char *", 1, 4}};
+constexpr Type args_877[] = {{Kind::Handle, "ovrUserOptionsHandle", 0, 4}, {Kind::I32, "ovrServiceProvider", 0, 4}};
+constexpr Type args_878[] = {{Kind::Handle, "ovrUserOptionsHandle", 0, 4}};
+constexpr Type args_880[] = {{Kind::Handle, "ovrUserOptionsHandle", 0, 4}};
+constexpr Type args_881[] = {{Kind::Handle, "ovrUserOptionsHandle", 0, 4}, {Kind::U32, "unsigned int", 0, 4}};
+constexpr Type args_882[] = {{Kind::Handle, "ovrUserOptionsHandle", 0, 4}, {Kind::I32, "ovrTimeWindow", 0, 4}};
+constexpr Type args_883[] = {{Kind::Handle, "ovrUserProofHandle", 0, 4}};
+constexpr Type args_884[] = {{Kind::Handle, "ovrUserReportIDHandle", 0, 4}};
+constexpr Type args_885[] = {{Kind::Handle, "ovrUserReportIDHandle", 0, 4}};
+constexpr Type args_886[] = {{Kind::Handle, "IntPtr", 0, 4}};
+constexpr Type args_887[] = {{Kind::U64, "ovrID", 0, 4}};
+constexpr Type args_890[] = {{Kind::Handle, "ovrUserHandle", 0, 4}};
+constexpr Type args_891[] = {{Kind::Handle, "ovrUserHandle", 0, 4}};
+constexpr Type args_892[] = {{Kind::Handle, "ovrUserHandle", 0, 4}};
 constexpr Type args_893[] = {{Kind::Handle, "ovrUserHandle", 0, 4}};
-constexpr Type args_894[] = {{Kind::U64, "ovrID", 0, 4}};
-constexpr Type args_895[] = {{Kind::Handle, "ovrUserHandle", 0, 4}};
-constexpr Type args_896[] = {{Kind::Handle, "ovrUserHandle", 0, 4}};
-constexpr Type args_897[] = {{Kind::Handle, "ovrUserHandle", 0, 4}};
-constexpr Type args_898[] = {{Kind::Handle, "ovrUserHandle", 0, 4}};
-constexpr Type args_899[] = {{Kind::Handle, "ovrUserHandle", 0, 4}};
-constexpr Type args_900[] = {{Kind::Handle, "ovrUserHandle", 0, 4}};
-constexpr Type args_902[] = {{Kind::Handle, "ovrUserHandle", 0, 4}};
-constexpr Type args_905[] = {{Kind::U64, "uint64_t", 0, 4}};
-constexpr Type args_906[] = {{Kind::U64, "ovrID", 0, 4}};
-constexpr Type args_907[] = {{Kind::U64, "uint64_t", 0, 4}};
-constexpr Type args_908[] = {{Kind::U64, "uint64_t", 0, 4}, {Kind::Handle, "IntPtr", 0, 4}};
-constexpr Type args_909[] = {{Kind::U64, "uint64_t", 0, 4}};
-constexpr Type args_914[] = {{Kind::U64, "uint64_t", 0, 4}, {Kind::Handle, "IntPtr", 0, 4}};
-constexpr Type args_915[] = {{Kind::U64, "uint64_t", 0, 4}, {Kind::Handle, "IntPtr", 0, 4}, {Kind::Handle, "IntPtr", 0, 4}};
-constexpr Type args_916[] = {{Kind::Handle, "IntPtr", 0, 4}, {Kind::Unsupported, "UInt64[]", 0, 4}, {Kind::I32, "int", 0, 4}};
-constexpr Type args_918[] = {{Kind::Handle, "ovrVoipOptionsHandle", 0, 4}};
-constexpr Type args_919[] = {{Kind::Handle, "ovrVoipOptionsHandle", 0, 4}, {Kind::I32, "ovrVoipBitrate", 0, 4}};
-constexpr Type args_920[] = {{Kind::Handle, "ovrVoipOptionsHandle", 0, 4}, {Kind::I32, "ovrVoipDtxState", 0, 4}};
-constexpr Type args_921[] = {{Kind::U64, "ovrID", 0, 4}};
-constexpr Type args_922[] = {{Kind::U64, "ovrID", 0, 4}};
-constexpr Type args_923[] = {{Kind::U64, "ovrID", 0, 4}};
-constexpr Type args_926[] = {{Kind::U64, "ovrID", 0, 4}, {Kind::Layout, "int16_t *", 0, 4}, {Kind::Size, "size_t", 0, 4}};
-constexpr Type args_927[] = {{Kind::U64, "ovrID", 0, 4}, {Kind::Ptr, "float *", 4, 4}, {Kind::Size, "size_t", 0, 4}};
-constexpr Type args_928[] = {{Kind::U64, "ovrID", 0, 4}};
-constexpr Type args_929[] = {{Kind::U64, "ovrID", 0, 4}, {Kind::Layout, "int16_t *", 0, 4}, {Kind::Size, "size_t", 0, 4}, {Kind::Layout, "uint32_t *", 0, 4}};
-constexpr Type args_930[] = {{Kind::U64, "ovrID", 0, 4}, {Kind::Ptr, "float *", 4, 4}, {Kind::Size, "size_t", 0, 4}, {Kind::Layout, "uint32_t *", 0, 4}};
-constexpr Type args_931[] = {{Kind::U64, "ovrID", 0, 4}};
+constexpr Type args_894[] = {{Kind::Handle, "IntPtr", 0, 4}};
+constexpr Type args_899[] = {{Kind::Handle, "ovrUserOptionsHandle", 0, 4}};
+constexpr Type args_900[] = {{Kind::Handle, "IntPtr", 0, 4}};
+constexpr Type args_901[] = {{Kind::Handle, "ovrUserAndRoomArrayHandle", 0, 4}};
+constexpr Type args_902[] = {{Kind::Handle, "ovrUserArrayHandle", 0, 4}};
+constexpr Type args_903[] = {{Kind::Handle, "ovrUserCapabilityArrayHandle", 0, 4}};
+constexpr Type args_904[] = {{Kind::Handle, "ovrUserHandle", 0, 4}};
+constexpr Type args_905[] = {{Kind::U64, "ovrID", 0, 4}};
+constexpr Type args_906[] = {{Kind::Handle, "ovrUserHandle", 0, 4}};
+constexpr Type args_907[] = {{Kind::Handle, "ovrUserHandle", 0, 4}};
+constexpr Type args_908[] = {{Kind::Handle, "ovrUserHandle", 0, 4}};
+constexpr Type args_909[] = {{Kind::Handle, "ovrUserHandle", 0, 4}};
+constexpr Type args_910[] = {{Kind::Handle, "ovrUserHandle", 0, 4}};
+constexpr Type args_911[] = {{Kind::Handle, "ovrUserHandle", 0, 4}};
+constexpr Type args_913[] = {{Kind::Handle, "ovrUserHandle", 0, 4}};
+constexpr Type args_916[] = {{Kind::U64, "uint64_t", 0, 4}};
+constexpr Type args_917[] = {{Kind::U64, "ovrID", 0, 4}};
+constexpr Type args_918[] = {{Kind::U64, "uint64_t", 0, 4}};
+constexpr Type args_919[] = {{Kind::U64, "uint64_t", 0, 4}, {Kind::Handle, "IntPtr", 0, 4}};
+constexpr Type args_920[] = {{Kind::U64, "uint64_t", 0, 4}};
+constexpr Type args_925[] = {{Kind::U64, "uint64_t", 0, 4}, {Kind::Handle, "IntPtr", 0, 4}};
+constexpr Type args_926[] = {{Kind::U64, "uint64_t", 0, 4}, {Kind::Handle, "IntPtr", 0, 4}, {Kind::Handle, "IntPtr", 0, 4}};
+constexpr Type args_927[] = {{Kind::Handle, "IntPtr", 0, 4}, {Kind::Unsupported, "UInt64[]", 0, 4}, {Kind::I32, "int", 0, 4}};
+constexpr Type args_929[] = {{Kind::Handle, "ovrVoipOptionsHandle", 0, 4}};
+constexpr Type args_930[] = {{Kind::Handle, "ovrVoipOptionsHandle", 0, 4}, {Kind::I32, "ovrVoipBitrate", 0, 4}};
+constexpr Type args_931[] = {{Kind::Handle, "ovrVoipOptionsHandle", 0, 4}, {Kind::I32, "ovrVoipDtxState", 0, 4}};
 constexpr Type args_932[] = {{Kind::U64, "ovrID", 0, 4}};
-constexpr Type args_933[] = {{Kind::Unsupported, "uint32_t", 0, 4}, {Kind::Unsupported, "uint32_t", 0, 4}};
-constexpr Type args_935[] = {{Kind::Unsupported, "UInt64[]", 0, 4}};
-constexpr Type args_936[] = {{Kind::Callback, "VoipFilterCallback", 0, 4}};
-constexpr Type args_937[] = {{Kind::Callback, "FilterCallback", 0, 4}, {Kind::Size, "size_t", 0, 4}};
-constexpr Type args_938[] = {{Kind::I32, "ovrVoipMuteState", 0, 4}};
-constexpr Type args_939[] = {{Kind::Handle, "ovrVoipOptionsHandle", 0, 4}};
-constexpr Type args_940[] = {{Kind::I32, "ovrVoipSampleRate", 0, 4}};
-constexpr Type args_941[] = {{Kind::U8, "bool", 0, 4}};
+constexpr Type args_933[] = {{Kind::U64, "ovrID", 0, 4}};
+constexpr Type args_934[] = {{Kind::U64, "ovrID", 0, 4}};
+constexpr Type args_937[] = {{Kind::U64, "ovrID", 0, 4}, {Kind::Layout, "int16_t *", 0, 4}, {Kind::Size, "size_t", 0, 4}};
+constexpr Type args_938[] = {{Kind::U64, "ovrID", 0, 4}, {Kind::Ptr, "float *", 4, 4}, {Kind::Size, "size_t", 0, 4}};
+constexpr Type args_939[] = {{Kind::U64, "ovrID", 0, 4}};
+constexpr Type args_940[] = {{Kind::U64, "ovrID", 0, 4}, {Kind::Layout, "int16_t *", 0, 4}, {Kind::Size, "size_t", 0, 4}, {Kind::Layout, "uint32_t *", 0, 4}};
+constexpr Type args_941[] = {{Kind::U64, "ovrID", 0, 4}, {Kind::Ptr, "float *", 4, 4}, {Kind::Size, "size_t", 0, 4}, {Kind::Layout, "uint32_t *", 0, 4}};
 constexpr Type args_942[] = {{Kind::U64, "ovrID", 0, 4}};
 constexpr Type args_943[] = {{Kind::U64, "ovrID", 0, 4}};
-constexpr Type args_944[] = {{Kind::I32, "", 0, 4}, {Kind::I32, "", 0, 4}};
-constexpr Type args_945[] = {{Kind::Layout, "ovrSystemCreateInfoVulkan", 0, 4}};
-constexpr Type args_946[] = {{Kind::I32, "", 0, 4}, {Kind::I32, "", 0, 4}, {Kind::I32, "", 0, 4}, {Kind::I32, "", 0, 4}, {Kind::I32, "", 0, 4}, {Kind::U8, "", 0, 4}};
-constexpr Type args_947[] = {{Kind::Handle, "ovrTextureSwapChain", 0, 4}};
-constexpr Type args_948[] = {{Kind::Layout, "ovrModeParms", 0, 4}};
-constexpr Type args_949[] = {{Kind::Handle, "ovrMobile", 0, 4}, {Kind::U32, "", 0, 4}, {Kind::Layout, "ovrInputCapabilityHeader", 0, 4}};
-constexpr Type args_950[] = {{Kind::Handle, "ovrMobile", 0, 4}, {Kind::U32, "", 0, 4}, {Kind::Ptr, "", 0, 4}, {Kind::Layout, "ovrVector3f", 0, 4}};
-constexpr Type args_951[] = {{Kind::Handle, "ovrMobile", 0, 4}, {Kind::Layout, "ovrPosef", 0, 4}, {Kind::Layout, "ovrVector3f", 0, 4}};
-constexpr Type args_952[] = {{Kind::Handle, "ovrMobile", 0, 4}, {Kind::I32, "", 0, 4}, {Kind::Layout, "ovrBoundaryTriggerResult", 0, 4}};
-constexpr Type args_953[] = {{Kind::Handle, "ovrMobile", 0, 4}, {Kind::Ptr, "", 0, 4}};
-constexpr Type args_954[] = {{Kind::Handle, "ovrMobile", 0, 4}, {Kind::U32, "", 0, 4}, {Kind::Layout, "ovrInputStateHeader", 0, 4}};
-constexpr Type args_955[] = {{Kind::Ptr, "", 0, 4}, {Kind::Ptr, "", 0, 4}};
-constexpr Type args_956[] = {{Kind::Handle, "ovrMobile", 0, 4}, {Kind::Layout, "ovrInputCapabilityHeader", 0, 4}};
-constexpr Type args_957[] = {{Kind::Handle, "ovrMobile", 0, 4}, {Kind::U32, "", 0, 4}, {Kind::F64, "", 0, 4}, {Kind::Layout, "ovrTracking", 0, 8}};
-constexpr Type args_958[] = {{Kind::Ptr, "", 0, 4}, {Kind::Ptr, "", 0, 4}};
-constexpr Type args_959[] = {{Kind::Handle, "ovrMobile", 0, 4}, {Kind::I64, "", 0, 4}};
-constexpr Type args_960[] = {{Kind::Handle, "ovrMobile", 0, 4}, {Kind::F64, "", 0, 4}};
-constexpr Type args_961[] = {{Kind::Handle, "ovrMobile", 0, 4}, {Kind::F64, "", 0, 4}};
-constexpr Type args_962[] = {{Kind::Layout, "ovrJava", 0, 4}, {Kind::I32, "", 0, 4}, {Kind::Ptr, "", 0, 4}};
-constexpr Type args_963[] = {{Kind::Layout, "ovrJava", 0, 4}, {Kind::I32, "", 0, 4}};
-constexpr Type args_964[] = {{Kind::Layout, "ovrJava", 0, 4}, {Kind::I32, "", 0, 4}, {Kind::Ptr, "", 0, 4}, {Kind::I32, "", 0, 4}};
-constexpr Type args_965[] = {{Kind::Layout, "ovrJava", 0, 4}, {Kind::I32, "", 0, 4}};
-constexpr Type args_966[] = {{Kind::Layout, "ovrJava", 0, 4}, {Kind::I32, "", 0, 4}};
-constexpr Type args_967[] = {{Kind::Layout, "ovrJava", 0, 4}, {Kind::I32, "", 0, 4}};
-constexpr Type args_968[] = {{Kind::Handle, "ovrTextureSwapChain", 0, 4}};
-constexpr Type args_969[] = {{Kind::Handle, "ovrTextureSwapChain", 0, 4}, {Kind::I32, "", 0, 4}, {Kind::Layout, "VkImage", 0, 4}};
-constexpr Type args_970[] = {{Kind::Handle, "ovrTextureSwapChain", 0, 4}, {Kind::I32, "", 0, 4}};
-constexpr Type args_971[] = {{Kind::Handle, "ovrTextureSwapChain", 0, 4}};
-constexpr Type args_973[] = {{Kind::Layout, "ovrInitParms", 0, 4}};
-constexpr Type args_974[] = {{Kind::Handle, "ovrMobile", 0, 4}};
-constexpr Type args_975[] = {{Kind::Handle, "ovrMobile", 0, 4}, {Kind::I32, "", 0, 4}};
-constexpr Type args_976[] = {{Kind::Handle, "ovrMobile", 0, 4}};
-constexpr Type args_977[] = {{Kind::Handle, "ovrMobile", 0, 4}, {Kind::U8, "", 0, 4}};
-constexpr Type args_978[] = {{Kind::Handle, "ovrMobile", 0, 4}, {Kind::I32, "", 0, 4}, {Kind::I32, "", 0, 4}};
-constexpr Type args_979[] = {{Kind::Handle, "ovrMobile", 0, 4}, {Kind::F32, "", 0, 4}};
-constexpr Type args_980[] = {{Kind::Handle, "ovrMobile", 0, 4}, {Kind::I32, "", 0, 4}};
-constexpr Type args_981[] = {{Kind::Handle, "ovrMobile", 0, 4}, {Kind::U32, "", 0, 4}, {Kind::Layout, "ovrHapticBuffer", 0, 4}};
-constexpr Type args_982[] = {{Kind::Handle, "ovrMobile", 0, 4}, {Kind::U32, "", 0, 4}, {Kind::F32, "", 0, 4}};
-constexpr Type args_983[] = {{Kind::Handle, "ovrMobile", 0, 4}, {Kind::I32, "", 0, 4}, {Kind::U32, "", 0, 4}};
-constexpr Type args_984[] = {{Kind::Layout, "ovrJava", 0, 4}, {Kind::I32, "", 0, 4}, {Kind::F32, "", 0, 4}};
-constexpr Type args_985[] = {{Kind::Layout, "ovrJava", 0, 4}, {Kind::I32, "", 0, 4}, {Kind::I32, "", 0, 4}};
-constexpr Type args_986[] = {{Kind::Handle, "ovrMobile", 0, 4}, {Kind::U8, "", 0, 4}};
-constexpr Type args_987[] = {{Kind::Handle, "ovrTextureSwapChain", 0, 4}, {Kind::I32, "", 0, 4}, {Kind::U32, "", 0, 4}};
-constexpr Type args_988[] = {{Kind::Handle, "ovrMobile", 0, 4}, {Kind::I32, "", 0, 4}};
-constexpr Type args_989[] = {{Kind::Layout, "ovrJava", 0, 4}, {Kind::I32, "", 0, 4}};
-constexpr Type args_991[] = {{Kind::Handle, "ovrMobile", 0, 4}, {Kind::Layout, "ovrFrameParms", 0, 4}};
-constexpr Type args_992[] = {{Kind::Handle, "ovrMobile", 0, 4}, {Kind::Layout, "ovrSubmitFrameDescription2", 0, 4}};
-constexpr Type args_993[] = {{Kind::Handle, "ovrMobile", 0, 4}, {Kind::Composite, "ovrVector3f", 12, 4}, {Kind::Ptr, "", 0, 4}, {Kind::Layout, "ovrBoundaryTestResult", 0, 4}};
-constexpr Type args_994[] = {{Kind::U32, "", 0, 4}, {Kind::Ptr, "", 0, 4}, {Kind::Ptr, "", 0, 4}, {Kind::I32, "", 0, 4}};
-constexpr Type args_995[] = {{Kind::U32, "", 0, 4}};
-constexpr Type args_996[] = {{Kind::Layout, "Init28", 0, 4}};
-constexpr Type args_997[] = {{Kind::U32, "", 0, 4}, {Kind::I32, "", 0, 4}};
+constexpr Type args_944[] = {{Kind::Unsupported, "uint32_t", 0, 4}, {Kind::Unsupported, "uint32_t", 0, 4}};
+constexpr Type args_946[] = {{Kind::Unsupported, "UInt64[]", 0, 4}};
+constexpr Type args_947[] = {{Kind::Callback, "VoipFilterCallback", 0, 4}};
+constexpr Type args_948[] = {{Kind::Callback, "FilterCallback", 0, 4}, {Kind::Size, "size_t", 0, 4}};
+constexpr Type args_949[] = {{Kind::I32, "ovrVoipMuteState", 0, 4}};
+constexpr Type args_950[] = {{Kind::Handle, "ovrVoipOptionsHandle", 0, 4}};
+constexpr Type args_951[] = {{Kind::I32, "ovrVoipSampleRate", 0, 4}};
+constexpr Type args_952[] = {{Kind::U8, "bool", 0, 4}};
+constexpr Type args_953[] = {{Kind::U64, "ovrID", 0, 4}};
+constexpr Type args_954[] = {{Kind::U64, "ovrID", 0, 4}};
+constexpr Type args_955[] = {{Kind::I32, "", 0, 4}, {Kind::I32, "", 0, 4}};
+constexpr Type args_956[] = {{Kind::Layout, "ovrSystemCreateInfoVulkan", 0, 4}};
+constexpr Type args_957[] = {{Kind::I32, "", 0, 4}, {Kind::I32, "", 0, 4}, {Kind::I32, "", 0, 4}, {Kind::I32, "", 0, 4}, {Kind::I32, "", 0, 4}, {Kind::U8, "", 0, 4}};
+constexpr Type args_958[] = {{Kind::Handle, "ovrTextureSwapChain", 0, 4}};
+constexpr Type args_959[] = {{Kind::Layout, "ovrModeParms", 0, 4}};
+constexpr Type args_960[] = {{Kind::Handle, "ovrMobile", 0, 4}, {Kind::U32, "", 0, 4}, {Kind::Layout, "ovrInputCapabilityHeader", 0, 4}};
+constexpr Type args_961[] = {{Kind::Handle, "ovrMobile", 0, 4}, {Kind::U32, "", 0, 4}, {Kind::Ptr, "", 0, 4}, {Kind::Layout, "ovrVector3f", 0, 4}};
+constexpr Type args_962[] = {{Kind::Handle, "ovrMobile", 0, 4}, {Kind::Layout, "ovrPosef", 0, 4}, {Kind::Layout, "ovrVector3f", 0, 4}};
+constexpr Type args_963[] = {{Kind::Handle, "ovrMobile", 0, 4}, {Kind::I32, "", 0, 4}, {Kind::Layout, "ovrBoundaryTriggerResult", 0, 4}};
+constexpr Type args_964[] = {{Kind::Handle, "ovrMobile", 0, 4}, {Kind::Ptr, "", 0, 4}};
+constexpr Type args_965[] = {{Kind::Handle, "ovrMobile", 0, 4}, {Kind::U32, "", 0, 4}, {Kind::Layout, "ovrInputStateHeader", 0, 4}};
+constexpr Type args_966[] = {{Kind::Ptr, "", 0, 4}, {Kind::Ptr, "", 0, 4}};
+constexpr Type args_967[] = {{Kind::Handle, "ovrMobile", 0, 4}, {Kind::Layout, "ovrInputCapabilityHeader", 0, 4}};
+constexpr Type args_968[] = {{Kind::Handle, "ovrMobile", 0, 4}, {Kind::U32, "", 0, 4}, {Kind::F64, "", 0, 4}, {Kind::Layout, "ovrTracking", 0, 8}};
+constexpr Type args_969[] = {{Kind::Ptr, "", 0, 4}, {Kind::Ptr, "", 0, 4}};
+constexpr Type args_970[] = {{Kind::Handle, "ovrMobile", 0, 4}, {Kind::I64, "", 0, 4}};
+constexpr Type args_971[] = {{Kind::Handle, "ovrMobile", 0, 4}, {Kind::F64, "", 0, 4}};
+constexpr Type args_972[] = {{Kind::Handle, "ovrMobile", 0, 4}, {Kind::F64, "", 0, 4}};
+constexpr Type args_973[] = {{Kind::Layout, "ovrJava", 0, 4}, {Kind::I32, "", 0, 4}, {Kind::Ptr, "", 0, 4}};
+constexpr Type args_974[] = {{Kind::Layout, "ovrJava", 0, 4}, {Kind::I32, "", 0, 4}};
+constexpr Type args_975[] = {{Kind::Layout, "ovrJava", 0, 4}, {Kind::I32, "", 0, 4}, {Kind::Ptr, "", 0, 4}, {Kind::I32, "", 0, 4}};
+constexpr Type args_976[] = {{Kind::Layout, "ovrJava", 0, 4}, {Kind::I32, "", 0, 4}};
+constexpr Type args_977[] = {{Kind::Layout, "ovrJava", 0, 4}, {Kind::I32, "", 0, 4}};
+constexpr Type args_978[] = {{Kind::Layout, "ovrJava", 0, 4}, {Kind::I32, "", 0, 4}};
+constexpr Type args_979[] = {{Kind::Handle, "ovrTextureSwapChain", 0, 4}};
+constexpr Type args_980[] = {{Kind::Handle, "ovrTextureSwapChain", 0, 4}, {Kind::I32, "", 0, 4}, {Kind::Layout, "VkImage", 0, 4}};
+constexpr Type args_981[] = {{Kind::Handle, "ovrTextureSwapChain", 0, 4}, {Kind::I32, "", 0, 4}};
+constexpr Type args_982[] = {{Kind::Handle, "ovrTextureSwapChain", 0, 4}};
+constexpr Type args_984[] = {{Kind::Layout, "ovrInitParms", 0, 4}};
+constexpr Type args_985[] = {{Kind::Handle, "ovrMobile", 0, 4}};
+constexpr Type args_986[] = {{Kind::Handle, "ovrMobile", 0, 4}, {Kind::I32, "", 0, 4}};
+constexpr Type args_987[] = {{Kind::Handle, "ovrMobile", 0, 4}};
+constexpr Type args_988[] = {{Kind::Handle, "ovrMobile", 0, 4}, {Kind::U8, "", 0, 4}};
+constexpr Type args_989[] = {{Kind::Handle, "ovrMobile", 0, 4}, {Kind::I32, "", 0, 4}, {Kind::I32, "", 0, 4}};
+constexpr Type args_990[] = {{Kind::Handle, "ovrMobile", 0, 4}, {Kind::F32, "", 0, 4}};
+constexpr Type args_991[] = {{Kind::Handle, "ovrMobile", 0, 4}, {Kind::I32, "", 0, 4}};
+constexpr Type args_992[] = {{Kind::Handle, "ovrMobile", 0, 4}, {Kind::U32, "", 0, 4}, {Kind::Layout, "ovrHapticBuffer", 0, 4}};
+constexpr Type args_993[] = {{Kind::Handle, "ovrMobile", 0, 4}, {Kind::U32, "", 0, 4}, {Kind::F32, "", 0, 4}};
+constexpr Type args_994[] = {{Kind::Handle, "ovrMobile", 0, 4}, {Kind::I32, "", 0, 4}, {Kind::U32, "", 0, 4}};
+constexpr Type args_995[] = {{Kind::Layout, "ovrJava", 0, 4}, {Kind::I32, "", 0, 4}, {Kind::F32, "", 0, 4}};
+constexpr Type args_996[] = {{Kind::Layout, "ovrJava", 0, 4}, {Kind::I32, "", 0, 4}, {Kind::I32, "", 0, 4}};
+constexpr Type args_997[] = {{Kind::Handle, "ovrMobile", 0, 4}, {Kind::U8, "", 0, 4}};
+constexpr Type args_998[] = {{Kind::Handle, "ovrTextureSwapChain", 0, 4}, {Kind::I32, "", 0, 4}, {Kind::U32, "", 0, 4}};
+constexpr Type args_999[] = {{Kind::Handle, "ovrMobile", 0, 4}, {Kind::I32, "", 0, 4}};
+constexpr Type args_1000[] = {{Kind::Layout, "ovrJava", 0, 4}, {Kind::I32, "", 0, 4}};
+constexpr Type args_1002[] = {{Kind::Handle, "ovrMobile", 0, 4}, {Kind::Layout, "ovrFrameParms", 0, 4}};
+constexpr Type args_1003[] = {{Kind::Handle, "ovrMobile", 0, 4}, {Kind::Layout, "ovrSubmitFrameDescription2", 0, 4}};
+constexpr Type args_1004[] = {{Kind::Handle, "ovrMobile", 0, 4}, {Kind::Composite, "ovrVector3f", 12, 4}, {Kind::Ptr, "", 0, 4}, {Kind::Layout, "ovrBoundaryTestResult", 0, 4}};
+constexpr Type args_1005[] = {{Kind::U32, "", 0, 4}, {Kind::Ptr, "", 0, 4}, {Kind::Ptr, "", 0, 4}, {Kind::I32, "", 0, 4}};
+constexpr Type args_1006[] = {{Kind::U32, "", 0, 4}};
+constexpr Type args_1007[] = {{Kind::Layout, "Init28", 0, 4}};
+constexpr Type args_1008[] = {{Kind::U32, "", 0, 4}, {Kind::I32, "", 0, 4}};
 const Descriptor descriptors[] = {
   {"libovrplatformloader.so", "ovrID_FromString", {Kind::U8, "", 0, 4}, args_0, false, "Pinned Oculus Platform SDK OVR_Types.h"},
   {"libovrplatformloader.so", "ovrKeyValuePair_makeString", {Kind::Composite, "ovrKeyValuePair", 24, 8}, args_1, false, "Pinned Oculus Platform SDK OVR_Types.h"},
@@ -1519,406 +1529,417 @@ const Descriptor descriptors[] = {
   {"libovrplatformloader.so", "ovr_Message_GetUserReportID", {Kind::Handle, "ovrUserReportIDHandle", 0, 4}, args_595, false, "Pinned Oculus Platform SDK OVR_Message.h"},
   {"libovrplatformloader.so", "ovr_Message_IsError", {Kind::U8, "bool", 0, 4}, args_596, false, "Pinned Oculus Platform SDK OVR_Message.h"},
   {"libovrplatformloader.so", "ovr_MicrophoneAvailabilityState_GetMicrophoneAvailable", {Kind::U8, "bool", 0, 4}, args_597, false, "Pinned Oculus Platform SDK OVR_MicrophoneAvailabilityState.h"},
+  {"libovrplatformloader.so", "ovr_Microphone_Create", {Kind::Handle, "ovrMicrophoneHandle", 0, 4}, {}, false, "Pinned Oculus Platform SDK OVR_Voip_LowLevel.h"},
+  {"libovrplatformloader.so", "ovr_Microphone_Destroy", {Kind::Void, "void", 0, 4}, args_599, false, "Pinned Oculus Platform SDK OVR_Voip_LowLevel.h"},
+  {"libovrplatformloader.so", "ovr_Microphone_GetNumSamplesAvailable", {Kind::Size, "size_t", 0, 4}, args_600, false, "Pinned Oculus Platform SDK OVR_Microphone.h"},
+  {"libovrplatformloader.so", "ovr_Microphone_GetOutputBufferMaxSize", {Kind::Size, "size_t", 0, 4}, args_601, false, "Pinned Oculus Platform SDK OVR_Microphone.h"},
+  {"libovrplatformloader.so", "ovr_Microphone_GetPCM", {Kind::Size, "size_t", 0, 4}, args_602, false, "Pinned Oculus Platform SDK OVR_Microphone.h"},
+  {"libovrplatformloader.so", "ovr_Microphone_GetPCMFloat", {Kind::Size, "size_t", 0, 4}, args_603, false, "Pinned Oculus Platform SDK OVR_Microphone.h"},
+  {"libovrplatformloader.so", "ovr_Microphone_ReadData", {Kind::Size, "size_t", 0, 4}, args_604, false, "Pinned Oculus Platform SDK OVR_Microphone.h"},
+  {"libovrplatformloader.so", "ovr_Microphone_SetAcceptableRecordingDelayHint", {Kind::Void, "void", 0, 4}, args_605, false, "Pinned Oculus Platform SDK OVR_Microphone.h"},
+  {"libovrplatformloader.so", "ovr_Microphone_SetAudioDataAvailableCallback", {Kind::Void, "void", 0, 4}, args_606, false, "Pinned Oculus Platform SDK OVR_Microphone.h"},
+  {"libovrplatformloader.so", "ovr_Microphone_Start", {Kind::Void, "void", 0, 4}, args_607, false, "Pinned Oculus Platform SDK OVR_Microphone.h"},
+  {"libovrplatformloader.so", "ovr_Microphone_Stop", {Kind::Void, "void", 0, 4}, args_608, false, "Pinned Oculus Platform SDK OVR_Microphone.h"},
   {"libovrplatformloader.so", "ovr_MultiplayerErrorOptions_Create", {Kind::Handle, "ovrMultiplayerErrorOptionsHandle", 0, 4}, {}, false, "Pinned Oculus Platform SDK OVR_MultiplayerErrorOptions.h"},
-  {"libovrplatformloader.so", "ovr_MultiplayerErrorOptions_Destroy", {Kind::Void, "void", 0, 4}, args_599, false, "Pinned Oculus Platform SDK OVR_MultiplayerErrorOptions.h"},
-  {"libovrplatformloader.so", "ovr_MultiplayerErrorOptions_SetErrorKey", {Kind::Void, "void", 0, 4}, args_600, false, "Pinned Oculus Platform SDK OVR_MultiplayerErrorOptions.h"},
-  {"libovrplatformloader.so", "ovr_NetSyncConnection_GetConnectionId", {Kind::I64, "long long", 0, 4}, args_601, false, "Pinned Oculus Platform SDK OVR_NetSyncConnection.h"},
-  {"libovrplatformloader.so", "ovr_NetSyncConnection_GetDisconnectReason", {Kind::I32, "ovrNetSyncDisconnectReason", 0, 4}, args_602, false, "Pinned Oculus Platform SDK OVR_NetSyncConnection.h"},
-  {"libovrplatformloader.so", "ovr_NetSyncConnection_GetSessionId", {Kind::U64, "ovrID", 0, 4}, args_603, false, "Pinned Oculus Platform SDK OVR_NetSyncConnection.h"},
-  {"libovrplatformloader.so", "ovr_NetSyncConnection_GetStatus", {Kind::I32, "ovrNetSyncConnectionStatus", 0, 4}, args_604, false, "Pinned Oculus Platform SDK OVR_NetSyncConnection.h"},
-  {"libovrplatformloader.so", "ovr_NetSyncConnection_GetZoneId", {Kind::Ptr, "char *", 1, 4}, args_605, false, "Pinned Oculus Platform SDK OVR_NetSyncConnection.h"},
+  {"libovrplatformloader.so", "ovr_MultiplayerErrorOptions_Destroy", {Kind::Void, "void", 0, 4}, args_610, false, "Pinned Oculus Platform SDK OVR_MultiplayerErrorOptions.h"},
+  {"libovrplatformloader.so", "ovr_MultiplayerErrorOptions_SetErrorKey", {Kind::Void, "void", 0, 4}, args_611, false, "Pinned Oculus Platform SDK OVR_MultiplayerErrorOptions.h"},
+  {"libovrplatformloader.so", "ovr_NetSyncConnection_GetConnectionId", {Kind::I64, "long long", 0, 4}, args_612, false, "Pinned Oculus Platform SDK OVR_NetSyncConnection.h"},
+  {"libovrplatformloader.so", "ovr_NetSyncConnection_GetDisconnectReason", {Kind::I32, "ovrNetSyncDisconnectReason", 0, 4}, args_613, false, "Pinned Oculus Platform SDK OVR_NetSyncConnection.h"},
+  {"libovrplatformloader.so", "ovr_NetSyncConnection_GetSessionId", {Kind::U64, "ovrID", 0, 4}, args_614, false, "Pinned Oculus Platform SDK OVR_NetSyncConnection.h"},
+  {"libovrplatformloader.so", "ovr_NetSyncConnection_GetStatus", {Kind::I32, "ovrNetSyncConnectionStatus", 0, 4}, args_615, false, "Pinned Oculus Platform SDK OVR_NetSyncConnection.h"},
+  {"libovrplatformloader.so", "ovr_NetSyncConnection_GetZoneId", {Kind::Ptr, "char *", 1, 4}, args_616, false, "Pinned Oculus Platform SDK OVR_NetSyncConnection.h"},
   {"libovrplatformloader.so", "ovr_NetSyncOptions_Create", {Kind::Handle, "ovrNetSyncOptionsHandle", 0, 4}, {}, false, "Pinned Oculus Platform SDK OVR_NetSyncOptions.h"},
-  {"libovrplatformloader.so", "ovr_NetSyncOptions_Destroy", {Kind::Void, "void", 0, 4}, args_607, false, "Pinned Oculus Platform SDK OVR_NetSyncOptions.h"},
-  {"libovrplatformloader.so", "ovr_NetSyncOptions_SetVoipGroup", {Kind::Void, "void", 0, 4}, args_608, false, "Pinned Oculus Platform SDK OVR_NetSyncOptions.h"},
-  {"libovrplatformloader.so", "ovr_NetSyncOptions_SetVoipStreamDefault", {Kind::Void, "void", 0, 4}, args_609, false, "Pinned Oculus Platform SDK OVR_NetSyncOptions.h"},
-  {"libovrplatformloader.so", "ovr_NetSyncOptions_SetZoneId", {Kind::Void, "void", 0, 4}, args_610, false, "Pinned Oculus Platform SDK OVR_NetSyncOptions.h"},
-  {"libovrplatformloader.so", "ovr_NetSyncSessionArray_GetElement", {Kind::Handle, "ovrNetSyncSessionHandle", 0, 4}, args_611, false, "Pinned Oculus Platform SDK OVR_NetSyncSessionArray.h"},
-  {"libovrplatformloader.so", "ovr_NetSyncSessionArray_GetSize", {Kind::Size, "size_t", 0, 4}, args_612, false, "Pinned Oculus Platform SDK OVR_NetSyncSessionArray.h"},
-  {"libovrplatformloader.so", "ovr_NetSyncSession_GetConnectionId", {Kind::I64, "long long", 0, 4}, args_613, false, "Pinned Oculus Platform SDK OVR_NetSyncSession.h"},
-  {"libovrplatformloader.so", "ovr_NetSyncSession_GetMuted", {Kind::U8, "bool", 0, 4}, args_614, false, "Pinned Oculus Platform SDK OVR_NetSyncSession.h"},
-  {"libovrplatformloader.so", "ovr_NetSyncSession_GetSessionId", {Kind::U64, "ovrID", 0, 4}, args_615, false, "Pinned Oculus Platform SDK OVR_NetSyncSession.h"},
-  {"libovrplatformloader.so", "ovr_NetSyncSession_GetUserId", {Kind::U64, "ovrID", 0, 4}, args_616, false, "Pinned Oculus Platform SDK OVR_NetSyncSession.h"},
-  {"libovrplatformloader.so", "ovr_NetSyncSession_GetVoipGroup", {Kind::Ptr, "char *", 1, 4}, args_617, false, "Pinned Oculus Platform SDK OVR_NetSyncSession.h"},
-  {"libovrplatformloader.so", "ovr_NetSyncSessionsChangedNotification_GetConnectionId", {Kind::I64, "long long", 0, 4}, args_618, false, "Pinned Oculus Platform SDK OVR_NetSyncSessionsChangedNotification.h"},
-  {"libovrplatformloader.so", "ovr_NetSyncSessionsChangedNotification_GetSessions", {Kind::Handle, "ovrNetSyncSessionArrayHandle", 0, 4}, args_619, false, "Pinned Oculus Platform SDK OVR_NetSyncSessionsChangedNotification.h"},
-  {"libovrplatformloader.so", "ovr_NetSyncSetSessionPropertyResult_GetSession", {Kind::Handle, "ovrNetSyncSessionHandle", 0, 4}, args_620, false, "Pinned Oculus Platform SDK OVR_NetSyncSetSessionPropertyResult.h"},
-  {"libovrplatformloader.so", "ovr_NetSync_Connect", {Kind::U64, "uint64_t", 0, 4}, args_621, false, "Pinned Oculus Platform SDK CAPI.cs"},
-  {"libovrplatformloader.so", "ovr_NetSync_Disconnect", {Kind::U64, "uint64_t", 0, 4}, args_622, false, "Pinned Oculus Platform SDK CAPI.cs"},
-  {"libovrplatformloader.so", "ovr_NetSync_GetAmbisonicFloatPCM", {Kind::Size, "size_t", 0, 4}, args_623, false, "Pinned Oculus Platform SDK CAPI.cs"},
-  {"libovrplatformloader.so", "ovr_NetSync_GetAmbisonicInt16PCM", {Kind::Size, "size_t", 0, 4}, args_624, false, "Pinned Oculus Platform SDK CAPI.cs"},
-  {"libovrplatformloader.so", "ovr_NetSync_GetAmbisonicInterleavedFloatPCM", {Kind::Size, "size_t", 0, 4}, args_625, false, "Pinned Oculus Platform SDK CAPI.cs"},
-  {"libovrplatformloader.so", "ovr_NetSync_GetAmbisonicInterleavedInt16PCM", {Kind::Size, "size_t", 0, 4}, args_626, false, "Pinned Oculus Platform SDK CAPI.cs"},
-  {"libovrplatformloader.so", "ovr_NetSync_GetListenerPosition", {Kind::U8, "bool", 0, 4}, args_627, false, "Pinned Oculus Platform SDK CAPI.cs"},
-  {"libovrplatformloader.so", "ovr_NetSync_GetMonostreamFloatPCM", {Kind::Size, "size_t", 0, 4}, args_628, false, "Pinned Oculus Platform SDK CAPI.cs"},
-  {"libovrplatformloader.so", "ovr_NetSync_GetMonostreamInt16PCM", {Kind::Size, "size_t", 0, 4}, args_629, false, "Pinned Oculus Platform SDK CAPI.cs"},
-  {"libovrplatformloader.so", "ovr_NetSync_GetSessions", {Kind::U64, "uint64_t", 0, 4}, args_630, false, "Pinned Oculus Platform SDK CAPI.cs"},
-  {"libovrplatformloader.so", "ovr_NetSync_GetVoipAmplitude", {Kind::U8, "bool", 0, 4}, args_631, false, "Pinned Oculus Platform SDK CAPI.cs"},
-  {"libovrplatformloader.so", "ovr_NetSync_GetVoipAttenuation", {Kind::U64, "uint64_t", 0, 4}, args_632, false, "Pinned Oculus Platform SDK CAPI.cs"},
+  {"libovrplatformloader.so", "ovr_NetSyncOptions_Destroy", {Kind::Void, "void", 0, 4}, args_618, false, "Pinned Oculus Platform SDK OVR_NetSyncOptions.h"},
+  {"libovrplatformloader.so", "ovr_NetSyncOptions_SetVoipGroup", {Kind::Void, "void", 0, 4}, args_619, false, "Pinned Oculus Platform SDK OVR_NetSyncOptions.h"},
+  {"libovrplatformloader.so", "ovr_NetSyncOptions_SetVoipStreamDefault", {Kind::Void, "void", 0, 4}, args_620, false, "Pinned Oculus Platform SDK OVR_NetSyncOptions.h"},
+  {"libovrplatformloader.so", "ovr_NetSyncOptions_SetZoneId", {Kind::Void, "void", 0, 4}, args_621, false, "Pinned Oculus Platform SDK OVR_NetSyncOptions.h"},
+  {"libovrplatformloader.so", "ovr_NetSyncSessionArray_GetElement", {Kind::Handle, "ovrNetSyncSessionHandle", 0, 4}, args_622, false, "Pinned Oculus Platform SDK OVR_NetSyncSessionArray.h"},
+  {"libovrplatformloader.so", "ovr_NetSyncSessionArray_GetSize", {Kind::Size, "size_t", 0, 4}, args_623, false, "Pinned Oculus Platform SDK OVR_NetSyncSessionArray.h"},
+  {"libovrplatformloader.so", "ovr_NetSyncSession_GetConnectionId", {Kind::I64, "long long", 0, 4}, args_624, false, "Pinned Oculus Platform SDK OVR_NetSyncSession.h"},
+  {"libovrplatformloader.so", "ovr_NetSyncSession_GetMuted", {Kind::U8, "bool", 0, 4}, args_625, false, "Pinned Oculus Platform SDK OVR_NetSyncSession.h"},
+  {"libovrplatformloader.so", "ovr_NetSyncSession_GetSessionId", {Kind::U64, "ovrID", 0, 4}, args_626, false, "Pinned Oculus Platform SDK OVR_NetSyncSession.h"},
+  {"libovrplatformloader.so", "ovr_NetSyncSession_GetUserId", {Kind::U64, "ovrID", 0, 4}, args_627, false, "Pinned Oculus Platform SDK OVR_NetSyncSession.h"},
+  {"libovrplatformloader.so", "ovr_NetSyncSession_GetVoipGroup", {Kind::Ptr, "char *", 1, 4}, args_628, false, "Pinned Oculus Platform SDK OVR_NetSyncSession.h"},
+  {"libovrplatformloader.so", "ovr_NetSyncSessionsChangedNotification_GetConnectionId", {Kind::I64, "long long", 0, 4}, args_629, false, "Pinned Oculus Platform SDK OVR_NetSyncSessionsChangedNotification.h"},
+  {"libovrplatformloader.so", "ovr_NetSyncSessionsChangedNotification_GetSessions", {Kind::Handle, "ovrNetSyncSessionArrayHandle", 0, 4}, args_630, false, "Pinned Oculus Platform SDK OVR_NetSyncSessionsChangedNotification.h"},
+  {"libovrplatformloader.so", "ovr_NetSyncSetSessionPropertyResult_GetSession", {Kind::Handle, "ovrNetSyncSessionHandle", 0, 4}, args_631, false, "Pinned Oculus Platform SDK OVR_NetSyncSetSessionPropertyResult.h"},
+  {"libovrplatformloader.so", "ovr_NetSync_Connect", {Kind::U64, "uint64_t", 0, 4}, args_632, false, "Pinned Oculus Platform SDK CAPI.cs"},
+  {"libovrplatformloader.so", "ovr_NetSync_Disconnect", {Kind::U64, "uint64_t", 0, 4}, args_633, false, "Pinned Oculus Platform SDK CAPI.cs"},
+  {"libovrplatformloader.so", "ovr_NetSync_GetAmbisonicFloatPCM", {Kind::Size, "size_t", 0, 4}, args_634, false, "Pinned Oculus Platform SDK CAPI.cs"},
+  {"libovrplatformloader.so", "ovr_NetSync_GetAmbisonicInt16PCM", {Kind::Size, "size_t", 0, 4}, args_635, false, "Pinned Oculus Platform SDK CAPI.cs"},
+  {"libovrplatformloader.so", "ovr_NetSync_GetAmbisonicInterleavedFloatPCM", {Kind::Size, "size_t", 0, 4}, args_636, false, "Pinned Oculus Platform SDK CAPI.cs"},
+  {"libovrplatformloader.so", "ovr_NetSync_GetAmbisonicInterleavedInt16PCM", {Kind::Size, "size_t", 0, 4}, args_637, false, "Pinned Oculus Platform SDK CAPI.cs"},
+  {"libovrplatformloader.so", "ovr_NetSync_GetListenerPosition", {Kind::U8, "bool", 0, 4}, args_638, false, "Pinned Oculus Platform SDK CAPI.cs"},
+  {"libovrplatformloader.so", "ovr_NetSync_GetMonostreamFloatPCM", {Kind::Size, "size_t", 0, 4}, args_639, false, "Pinned Oculus Platform SDK CAPI.cs"},
+  {"libovrplatformloader.so", "ovr_NetSync_GetMonostreamInt16PCM", {Kind::Size, "size_t", 0, 4}, args_640, false, "Pinned Oculus Platform SDK CAPI.cs"},
+  {"libovrplatformloader.so", "ovr_NetSync_GetSessions", {Kind::U64, "uint64_t", 0, 4}, args_641, false, "Pinned Oculus Platform SDK CAPI.cs"},
+  {"libovrplatformloader.so", "ovr_NetSync_GetVoipAmplitude", {Kind::U8, "bool", 0, 4}, args_642, false, "Pinned Oculus Platform SDK CAPI.cs"},
+  {"libovrplatformloader.so", "ovr_NetSync_GetVoipAttenuation", {Kind::U64, "uint64_t", 0, 4}, args_643, false, "Pinned Oculus Platform SDK CAPI.cs"},
   {"libovrplatformloader.so", "ovr_NetSync_GetVoipAttenuationDefault", {Kind::U64, "uint64_t", 0, 4}, {}, false, "Pinned Oculus Platform SDK CAPI.cs"},
-  {"libovrplatformloader.so", "ovr_NetSync_SetVoipAttenuation", {Kind::U64, "uint64_t", 0, 4}, args_634, false, "Pinned Oculus Platform SDK CAPI.cs"},
-  {"libovrplatformloader.so", "ovr_NetSync_SetVoipAttenuationModel", {Kind::U64, "uint64_t", 0, 4}, args_635, false, "Pinned Oculus Platform SDK CAPI.cs"},
-  {"libovrplatformloader.so", "ovr_NetSync_SetVoipChannelCfg", {Kind::U64, "uint64_t", 0, 4}, args_636, false, "Pinned Oculus Platform SDK CAPI.cs"},
-  {"libovrplatformloader.so", "ovr_NetSync_SetVoipGroup", {Kind::U64, "uint64_t", 0, 4}, args_637, false, "Pinned Oculus Platform SDK CAPI.cs"},
-  {"libovrplatformloader.so", "ovr_NetSync_SetVoipListentoChannels", {Kind::U64, "uint64_t", 0, 4}, args_638, false, "Pinned Oculus Platform SDK CAPI.cs"},
-  {"libovrplatformloader.so", "ovr_NetSync_SetVoipMicSource", {Kind::U64, "uint64_t", 0, 4}, args_639, false, "Pinned Oculus Platform SDK CAPI.cs"},
-  {"libovrplatformloader.so", "ovr_NetSync_SetVoipSessionMuted", {Kind::U64, "uint64_t", 0, 4}, args_640, false, "Pinned Oculus Platform SDK CAPI.cs"},
-  {"libovrplatformloader.so", "ovr_NetSync_SetVoipSpeaktoChannels", {Kind::U64, "uint64_t", 0, 4}, args_641, false, "Pinned Oculus Platform SDK CAPI.cs"},
-  {"libovrplatformloader.so", "ovr_NetSync_SetVoipStreamMode", {Kind::U64, "uint64_t", 0, 4}, args_642, false, "Pinned Oculus Platform SDK CAPI.cs"},
-  {"libovrplatformloader.so", "ovr_Net_Accept", {Kind::Void, "void", 0, 4}, args_643, false, "Pinned Oculus Platform SDK OVR_Functions_Networking.h"},
-  {"libovrplatformloader.so", "ovr_Net_Close", {Kind::Void, "void", 0, 4}, args_644, false, "Pinned Oculus Platform SDK OVR_Functions_Networking.h"},
-  {"libovrplatformloader.so", "ovr_Net_Connect", {Kind::Void, "void", 0, 4}, args_645, false, "Pinned Oculus Platform SDK OVR_Functions_Networking.h"},
-  {"libovrplatformloader.so", "ovr_Net_IsConnected", {Kind::U8, "bool", 0, 4}, args_646, false, "Pinned Oculus Platform SDK OVR_Functions_Networking.h"},
-  {"libovrplatformloader.so", "ovr_Net_Ping", {Kind::U64, "ovrRequest", 0, 4}, args_647, false, "Pinned Oculus Platform SDK OVR_Functions_Networking.h"},
+  {"libovrplatformloader.so", "ovr_NetSync_SetVoipAttenuation", {Kind::U64, "uint64_t", 0, 4}, args_645, false, "Pinned Oculus Platform SDK CAPI.cs"},
+  {"libovrplatformloader.so", "ovr_NetSync_SetVoipAttenuationModel", {Kind::U64, "uint64_t", 0, 4}, args_646, false, "Pinned Oculus Platform SDK CAPI.cs"},
+  {"libovrplatformloader.so", "ovr_NetSync_SetVoipChannelCfg", {Kind::U64, "uint64_t", 0, 4}, args_647, false, "Pinned Oculus Platform SDK CAPI.cs"},
+  {"libovrplatformloader.so", "ovr_NetSync_SetVoipGroup", {Kind::U64, "uint64_t", 0, 4}, args_648, false, "Pinned Oculus Platform SDK CAPI.cs"},
+  {"libovrplatformloader.so", "ovr_NetSync_SetVoipListentoChannels", {Kind::U64, "uint64_t", 0, 4}, args_649, false, "Pinned Oculus Platform SDK CAPI.cs"},
+  {"libovrplatformloader.so", "ovr_NetSync_SetVoipMicSource", {Kind::U64, "uint64_t", 0, 4}, args_650, false, "Pinned Oculus Platform SDK CAPI.cs"},
+  {"libovrplatformloader.so", "ovr_NetSync_SetVoipSessionMuted", {Kind::U64, "uint64_t", 0, 4}, args_651, false, "Pinned Oculus Platform SDK CAPI.cs"},
+  {"libovrplatformloader.so", "ovr_NetSync_SetVoipSpeaktoChannels", {Kind::U64, "uint64_t", 0, 4}, args_652, false, "Pinned Oculus Platform SDK CAPI.cs"},
+  {"libovrplatformloader.so", "ovr_NetSync_SetVoipStreamMode", {Kind::U64, "uint64_t", 0, 4}, args_653, false, "Pinned Oculus Platform SDK CAPI.cs"},
+  {"libovrplatformloader.so", "ovr_Net_Accept", {Kind::Void, "void", 0, 4}, args_654, false, "Pinned Oculus Platform SDK OVR_Functions_Networking.h"},
+  {"libovrplatformloader.so", "ovr_Net_Close", {Kind::Void, "void", 0, 4}, args_655, false, "Pinned Oculus Platform SDK OVR_Functions_Networking.h"},
+  {"libovrplatformloader.so", "ovr_Net_Connect", {Kind::Void, "void", 0, 4}, args_656, false, "Pinned Oculus Platform SDK OVR_Functions_Networking.h"},
+  {"libovrplatformloader.so", "ovr_Net_IsConnected", {Kind::U8, "bool", 0, 4}, args_657, false, "Pinned Oculus Platform SDK OVR_Functions_Networking.h"},
+  {"libovrplatformloader.so", "ovr_Net_Ping", {Kind::U64, "ovrRequest", 0, 4}, args_658, false, "Pinned Oculus Platform SDK OVR_Functions_Networking.h"},
   {"libovrplatformloader.so", "ovr_Net_ReadPacket", {Kind::Handle, "ovrPacketHandle", 0, 4}, {}, false, "Pinned Oculus Platform SDK OVR_Functions_Networking.h"},
-  {"libovrplatformloader.so", "ovr_Net_SendPacket", {Kind::U8, "bool", 0, 4}, args_649, false, "Pinned Oculus Platform SDK OVR_Functions_Networking.h"},
-  {"libovrplatformloader.so", "ovr_Net_SendPacketToCurrentRoom", {Kind::U8, "bool", 0, 4}, args_650, false, "Pinned Oculus Platform SDK OVR_Functions_Networking.h"},
-  {"libovrplatformloader.so", "ovr_NetworkingPeer_GetID", {Kind::U64, "ovrID", 0, 4}, args_651, false, "Pinned Oculus Platform SDK OVR_NetworkingPeer.h"},
-  {"libovrplatformloader.so", "ovr_NetworkingPeer_GetState", {Kind::I32, "ovrPeerConnectionState", 0, 4}, args_652, false, "Pinned Oculus Platform SDK OVR_NetworkingPeer.h"},
-  {"libovrplatformloader.so", "ovr_Notification_GetNextRoomInviteNotificationArrayPage", {Kind::U64, "ovrRequest", 0, 4}, args_653, false, "Pinned Oculus Platform SDK OVR_Requests_Notification.h"},
+  {"libovrplatformloader.so", "ovr_Net_SendPacket", {Kind::U8, "bool", 0, 4}, args_660, false, "Pinned Oculus Platform SDK OVR_Functions_Networking.h"},
+  {"libovrplatformloader.so", "ovr_Net_SendPacketToCurrentRoom", {Kind::U8, "bool", 0, 4}, args_661, false, "Pinned Oculus Platform SDK OVR_Functions_Networking.h"},
+  {"libovrplatformloader.so", "ovr_NetworkingPeer_GetID", {Kind::U64, "ovrID", 0, 4}, args_662, false, "Pinned Oculus Platform SDK OVR_NetworkingPeer.h"},
+  {"libovrplatformloader.so", "ovr_NetworkingPeer_GetState", {Kind::I32, "ovrPeerConnectionState", 0, 4}, args_663, false, "Pinned Oculus Platform SDK OVR_NetworkingPeer.h"},
+  {"libovrplatformloader.so", "ovr_Notification_GetNextRoomInviteNotificationArrayPage", {Kind::U64, "ovrRequest", 0, 4}, args_664, false, "Pinned Oculus Platform SDK OVR_Requests_Notification.h"},
   {"libovrplatformloader.so", "ovr_Notification_GetRoomInvites", {Kind::U64, "ovrRequest", 0, 4}, {}, false, "Pinned Oculus Platform SDK OVR_Requests_Notification.h"},
-  {"libovrplatformloader.so", "ovr_Notification_MarkAsRead", {Kind::U64, "ovrRequest", 0, 4}, args_655, false, "Pinned Oculus Platform SDK OVR_Requests_Notification.h"},
-  {"libovrplatformloader.so", "ovr_OrgScopedID_GetID", {Kind::U64, "ovrID", 0, 4}, args_656, false, "Pinned Oculus Platform SDK OVR_OrgScopedID.h"},
-  {"libovrplatformloader.so", "ovr_Packet_Free", {Kind::Void, "void", 0, 4}, args_657, false, "Pinned Oculus Platform SDK OVR_Packet.h"},
-  {"libovrplatformloader.so", "ovr_Packet_GetBytes", {Kind::Ptr, "void *", 0, 4}, args_658, false, "Pinned Oculus Platform SDK OVR_Packet.h"},
-  {"libovrplatformloader.so", "ovr_Packet_GetSendPolicy", {Kind::I32, "ovrSendPolicy", 0, 4}, args_659, false, "Pinned Oculus Platform SDK OVR_Packet.h"},
-  {"libovrplatformloader.so", "ovr_Packet_GetSenderID", {Kind::U64, "ovrID", 0, 4}, args_660, false, "Pinned Oculus Platform SDK OVR_Packet.h"},
-  {"libovrplatformloader.so", "ovr_Packet_GetSize", {Kind::Size, "size_t", 0, 4}, args_661, false, "Pinned Oculus Platform SDK OVR_Packet.h"},
-  {"libovrplatformloader.so", "ovr_PartyID_GetID", {Kind::U64, "ovrID", 0, 4}, args_662, false, "Pinned Oculus Platform SDK OVR_PartyID.h"},
-  {"libovrplatformloader.so", "ovr_PartyUpdateNotification_GetAction", {Kind::I32, "ovrPartyUpdateAction", 0, 4}, args_663, false, "Pinned Oculus Platform SDK OVR_PartyUpdateNotification.h"},
-  {"libovrplatformloader.so", "ovr_PartyUpdateNotification_GetPartyId", {Kind::U64, "ovrID", 0, 4}, args_664, false, "Pinned Oculus Platform SDK OVR_PartyUpdateNotification.h"},
-  {"libovrplatformloader.so", "ovr_PartyUpdateNotification_GetSenderId", {Kind::U64, "ovrID", 0, 4}, args_665, false, "Pinned Oculus Platform SDK OVR_PartyUpdateNotification.h"},
-  {"libovrplatformloader.so", "ovr_PartyUpdateNotification_GetUpdateTimestamp", {Kind::Ptr, "char *", 1, 4}, args_666, false, "Pinned Oculus Platform SDK OVR_PartyUpdateNotification.h"},
-  {"libovrplatformloader.so", "ovr_PartyUpdateNotification_GetUserAlias", {Kind::Ptr, "char *", 1, 4}, args_667, false, "Pinned Oculus Platform SDK OVR_PartyUpdateNotification.h"},
-  {"libovrplatformloader.so", "ovr_PartyUpdateNotification_GetUserId", {Kind::U64, "ovrID", 0, 4}, args_668, false, "Pinned Oculus Platform SDK OVR_PartyUpdateNotification.h"},
-  {"libovrplatformloader.so", "ovr_PartyUpdateNotification_GetUserName", {Kind::Ptr, "char *", 1, 4}, args_669, false, "Pinned Oculus Platform SDK OVR_PartyUpdateNotification.h"},
+  {"libovrplatformloader.so", "ovr_Notification_MarkAsRead", {Kind::U64, "ovrRequest", 0, 4}, args_666, false, "Pinned Oculus Platform SDK OVR_Requests_Notification.h"},
+  {"libovrplatformloader.so", "ovr_OrgScopedID_GetID", {Kind::U64, "ovrID", 0, 4}, args_667, false, "Pinned Oculus Platform SDK OVR_OrgScopedID.h"},
+  {"libovrplatformloader.so", "ovr_Packet_Free", {Kind::Void, "void", 0, 4}, args_668, false, "Pinned Oculus Platform SDK OVR_Packet.h"},
+  {"libovrplatformloader.so", "ovr_Packet_GetBytes", {Kind::Ptr, "void *", 0, 4}, args_669, false, "Pinned Oculus Platform SDK OVR_Packet.h"},
+  {"libovrplatformloader.so", "ovr_Packet_GetSendPolicy", {Kind::I32, "ovrSendPolicy", 0, 4}, args_670, false, "Pinned Oculus Platform SDK OVR_Packet.h"},
+  {"libovrplatformloader.so", "ovr_Packet_GetSenderID", {Kind::U64, "ovrID", 0, 4}, args_671, false, "Pinned Oculus Platform SDK OVR_Packet.h"},
+  {"libovrplatformloader.so", "ovr_Packet_GetSize", {Kind::Size, "size_t", 0, 4}, args_672, false, "Pinned Oculus Platform SDK OVR_Packet.h"},
+  {"libovrplatformloader.so", "ovr_PartyID_GetID", {Kind::U64, "ovrID", 0, 4}, args_673, false, "Pinned Oculus Platform SDK OVR_PartyID.h"},
+  {"libovrplatformloader.so", "ovr_PartyUpdateNotification_GetAction", {Kind::I32, "ovrPartyUpdateAction", 0, 4}, args_674, false, "Pinned Oculus Platform SDK OVR_PartyUpdateNotification.h"},
+  {"libovrplatformloader.so", "ovr_PartyUpdateNotification_GetPartyId", {Kind::U64, "ovrID", 0, 4}, args_675, false, "Pinned Oculus Platform SDK OVR_PartyUpdateNotification.h"},
+  {"libovrplatformloader.so", "ovr_PartyUpdateNotification_GetSenderId", {Kind::U64, "ovrID", 0, 4}, args_676, false, "Pinned Oculus Platform SDK OVR_PartyUpdateNotification.h"},
+  {"libovrplatformloader.so", "ovr_PartyUpdateNotification_GetUpdateTimestamp", {Kind::Ptr, "char *", 1, 4}, args_677, false, "Pinned Oculus Platform SDK OVR_PartyUpdateNotification.h"},
+  {"libovrplatformloader.so", "ovr_PartyUpdateNotification_GetUserAlias", {Kind::Ptr, "char *", 1, 4}, args_678, false, "Pinned Oculus Platform SDK OVR_PartyUpdateNotification.h"},
+  {"libovrplatformloader.so", "ovr_PartyUpdateNotification_GetUserId", {Kind::U64, "ovrID", 0, 4}, args_679, false, "Pinned Oculus Platform SDK OVR_PartyUpdateNotification.h"},
+  {"libovrplatformloader.so", "ovr_PartyUpdateNotification_GetUserName", {Kind::Ptr, "char *", 1, 4}, args_680, false, "Pinned Oculus Platform SDK OVR_PartyUpdateNotification.h"},
   {"libovrplatformloader.so", "ovr_Party_Create", {Kind::U64, "uint64_t", 0, 4}, {}, false, "Pinned Oculus Platform SDK CAPI.cs"},
-  {"libovrplatformloader.so", "ovr_Party_GatherInApplication", {Kind::U64, "uint64_t", 0, 4}, args_671, false, "Pinned Oculus Platform SDK CAPI.cs"},
-  {"libovrplatformloader.so", "ovr_Party_Get", {Kind::U64, "uint64_t", 0, 4}, args_672, false, "Pinned Oculus Platform SDK CAPI.cs"},
+  {"libovrplatformloader.so", "ovr_Party_GatherInApplication", {Kind::U64, "uint64_t", 0, 4}, args_682, false, "Pinned Oculus Platform SDK CAPI.cs"},
+  {"libovrplatformloader.so", "ovr_Party_Get", {Kind::U64, "uint64_t", 0, 4}, args_683, false, "Pinned Oculus Platform SDK CAPI.cs"},
   {"libovrplatformloader.so", "ovr_Party_GetCurrent", {Kind::U64, "ovrRequest", 0, 4}, {}, false, "Pinned Oculus Platform SDK OVR_Requests_Party.h"},
-  {"libovrplatformloader.so", "ovr_Party_GetCurrentForUser", {Kind::U64, "uint64_t", 0, 4}, args_674, false, "Pinned Oculus Platform SDK CAPI.cs"},
-  {"libovrplatformloader.so", "ovr_Party_GetID", {Kind::U64, "ovrID", 0, 4}, args_675, false, "Pinned Oculus Platform SDK OVR_Party.h"},
-  {"libovrplatformloader.so", "ovr_Party_GetInvitedUsers", {Kind::Handle, "ovrUserArrayHandle", 0, 4}, args_676, false, "Pinned Oculus Platform SDK OVR_Party.h"},
-  {"libovrplatformloader.so", "ovr_Party_GetLeader", {Kind::Handle, "ovrUserHandle", 0, 4}, args_677, false, "Pinned Oculus Platform SDK OVR_Party.h"},
-  {"libovrplatformloader.so", "ovr_Party_GetRoom", {Kind::Handle, "ovrRoomHandle", 0, 4}, args_678, false, "Pinned Oculus Platform SDK OVR_Party.h"},
-  {"libovrplatformloader.so", "ovr_Party_GetUsers", {Kind::Handle, "ovrUserArrayHandle", 0, 4}, args_679, false, "Pinned Oculus Platform SDK OVR_Party.h"},
-  {"libovrplatformloader.so", "ovr_Party_Invite", {Kind::U64, "uint64_t", 0, 4}, args_680, false, "Pinned Oculus Platform SDK CAPI.cs"},
-  {"libovrplatformloader.so", "ovr_Party_Join", {Kind::U64, "uint64_t", 0, 4}, args_681, false, "Pinned Oculus Platform SDK CAPI.cs"},
-  {"libovrplatformloader.so", "ovr_Party_Leave", {Kind::U64, "uint64_t", 0, 4}, args_682, false, "Pinned Oculus Platform SDK CAPI.cs"},
-  {"libovrplatformloader.so", "ovr_PidArray_GetElement", {Kind::Handle, "ovrPidHandle", 0, 4}, args_683, false, "Pinned Oculus Platform SDK OVR_PidArray.h"},
-  {"libovrplatformloader.so", "ovr_PidArray_GetSize", {Kind::Size, "size_t", 0, 4}, args_684, false, "Pinned Oculus Platform SDK OVR_PidArray.h"},
-  {"libovrplatformloader.so", "ovr_Pid_GetId", {Kind::Ptr, "char *", 1, 4}, args_685, false, "Pinned Oculus Platform SDK OVR_Pid.h"},
-  {"libovrplatformloader.so", "ovr_PingResult_GetID", {Kind::U64, "ovrID", 0, 4}, args_686, false, "Pinned Oculus Platform SDK OVR_PingResult.h"},
-  {"libovrplatformloader.so", "ovr_PingResult_GetPingTimeUsec", {Kind::U64, "unsigned long long", 0, 4}, args_687, false, "Pinned Oculus Platform SDK OVR_PingResult.h"},
-  {"libovrplatformloader.so", "ovr_PingResult_IsTimeout", {Kind::U8, "bool", 0, 4}, args_688, false, "Pinned Oculus Platform SDK OVR_PingResult.h"},
-  {"libovrplatformloader.so", "ovr_PlatformInitializeAndroid", {Kind::I32, "ovrPlatformInitializeResult", 0, 4}, args_689, false, "Pinned Oculus Platform SDK OVR_Platform.h"},
-  {"libovrplatformloader.so", "ovr_PlatformInitializeAndroidAsynchronous", {Kind::U64, "ovrRequest", 0, 4}, args_690, false, "Pinned Oculus Platform SDK OVR_Platform.h"},
-  {"libovrplatformloader.so", "ovr_PlatformInitialize_GetResult", {Kind::I32, "ovrPlatformInitializeResult", 0, 4}, args_691, false, "Pinned Oculus Platform SDK OVR_PlatformInitialize.h"},
-  {"libovrplatformloader.so", "ovr_Platform_InitializeStandaloneOculus", {Kind::U64, "ovrRequest", 0, 4}, args_692, false, "Pinned Oculus Platform SDK OVR_Platform.h"},
+  {"libovrplatformloader.so", "ovr_Party_GetCurrentForUser", {Kind::U64, "uint64_t", 0, 4}, args_685, false, "Pinned Oculus Platform SDK CAPI.cs"},
+  {"libovrplatformloader.so", "ovr_Party_GetID", {Kind::U64, "ovrID", 0, 4}, args_686, false, "Pinned Oculus Platform SDK OVR_Party.h"},
+  {"libovrplatformloader.so", "ovr_Party_GetInvitedUsers", {Kind::Handle, "ovrUserArrayHandle", 0, 4}, args_687, false, "Pinned Oculus Platform SDK OVR_Party.h"},
+  {"libovrplatformloader.so", "ovr_Party_GetLeader", {Kind::Handle, "ovrUserHandle", 0, 4}, args_688, false, "Pinned Oculus Platform SDK OVR_Party.h"},
+  {"libovrplatformloader.so", "ovr_Party_GetRoom", {Kind::Handle, "ovrRoomHandle", 0, 4}, args_689, false, "Pinned Oculus Platform SDK OVR_Party.h"},
+  {"libovrplatformloader.so", "ovr_Party_GetUsers", {Kind::Handle, "ovrUserArrayHandle", 0, 4}, args_690, false, "Pinned Oculus Platform SDK OVR_Party.h"},
+  {"libovrplatformloader.so", "ovr_Party_Invite", {Kind::U64, "uint64_t", 0, 4}, args_691, false, "Pinned Oculus Platform SDK CAPI.cs"},
+  {"libovrplatformloader.so", "ovr_Party_Join", {Kind::U64, "uint64_t", 0, 4}, args_692, false, "Pinned Oculus Platform SDK CAPI.cs"},
+  {"libovrplatformloader.so", "ovr_Party_Leave", {Kind::U64, "uint64_t", 0, 4}, args_693, false, "Pinned Oculus Platform SDK CAPI.cs"},
+  {"libovrplatformloader.so", "ovr_PidArray_GetElement", {Kind::Handle, "ovrPidHandle", 0, 4}, args_694, false, "Pinned Oculus Platform SDK OVR_PidArray.h"},
+  {"libovrplatformloader.so", "ovr_PidArray_GetSize", {Kind::Size, "size_t", 0, 4}, args_695, false, "Pinned Oculus Platform SDK OVR_PidArray.h"},
+  {"libovrplatformloader.so", "ovr_Pid_GetId", {Kind::Ptr, "char *", 1, 4}, args_696, false, "Pinned Oculus Platform SDK OVR_Pid.h"},
+  {"libovrplatformloader.so", "ovr_PingResult_GetID", {Kind::U64, "ovrID", 0, 4}, args_697, false, "Pinned Oculus Platform SDK OVR_PingResult.h"},
+  {"libovrplatformloader.so", "ovr_PingResult_GetPingTimeUsec", {Kind::U64, "unsigned long long", 0, 4}, args_698, false, "Pinned Oculus Platform SDK OVR_PingResult.h"},
+  {"libovrplatformloader.so", "ovr_PingResult_IsTimeout", {Kind::U8, "bool", 0, 4}, args_699, false, "Pinned Oculus Platform SDK OVR_PingResult.h"},
+  {"libovrplatformloader.so", "ovr_PlatformInitializeAndroid", {Kind::I32, "ovrPlatformInitializeResult", 0, 4}, args_700, false, "Pinned Oculus Platform SDK OVR_Platform.h"},
+  {"libovrplatformloader.so", "ovr_PlatformInitializeAndroidAsynchronous", {Kind::U64, "ovrRequest", 0, 4}, args_701, false, "Pinned Oculus Platform SDK OVR_Platform.h"},
+  {"libovrplatformloader.so", "ovr_PlatformInitialize_GetResult", {Kind::I32, "ovrPlatformInitializeResult", 0, 4}, args_702, false, "Pinned Oculus Platform SDK OVR_PlatformInitialize.h"},
+  {"libovrplatformloader.so", "ovr_Platform_InitializeStandaloneOculus", {Kind::U64, "ovrRequest", 0, 4}, args_703, false, "Pinned Oculus Platform SDK OVR_Platform.h"},
   {"libovrplatformloader.so", "ovr_PopMessage", {Kind::Handle, "ovrMessageHandle", 0, 4}, {}, false, "Pinned Oculus Platform SDK OVR_Platform.h"},
-  {"libovrplatformloader.so", "ovr_Price_GetAmountInHundredths", {Kind::U32, "unsigned int", 0, 4}, args_694, false, "Pinned Oculus Platform SDK CAPI.cs"},
-  {"libovrplatformloader.so", "ovr_Price_GetCurrency", {Kind::Handle, "IntPtr", 0, 4}, args_695, false, "Pinned Oculus Platform SDK CAPI.cs"},
-  {"libovrplatformloader.so", "ovr_Price_GetFormatted", {Kind::Handle, "IntPtr", 0, 4}, args_696, false, "Pinned Oculus Platform SDK CAPI.cs"},
-  {"libovrplatformloader.so", "ovr_ProductArray_GetElement", {Kind::Handle, "ovrProductHandle", 0, 4}, args_697, false, "Pinned Oculus Platform SDK OVR_ProductArray.h"},
-  {"libovrplatformloader.so", "ovr_ProductArray_GetNextUrl", {Kind::Ptr, "char *", 1, 4}, args_698, false, "Pinned Oculus Platform SDK OVR_ProductArray.h"},
-  {"libovrplatformloader.so", "ovr_ProductArray_GetSize", {Kind::Size, "size_t", 0, 4}, args_699, false, "Pinned Oculus Platform SDK OVR_ProductArray.h"},
-  {"libovrplatformloader.so", "ovr_ProductArray_HasNextPage", {Kind::U8, "bool", 0, 4}, args_700, false, "Pinned Oculus Platform SDK OVR_ProductArray.h"},
-  {"libovrplatformloader.so", "ovr_Product_GetDescription", {Kind::Ptr, "char *", 1, 4}, args_701, false, "Pinned Oculus Platform SDK OVR_Product.h"},
-  {"libovrplatformloader.so", "ovr_Product_GetFormattedPrice", {Kind::Ptr, "char *", 1, 4}, args_702, false, "Pinned Oculus Platform SDK OVR_Product.h"},
-  {"libovrplatformloader.so", "ovr_Product_GetName", {Kind::Ptr, "char *", 1, 4}, args_703, false, "Pinned Oculus Platform SDK OVR_Product.h"},
-  {"libovrplatformloader.so", "ovr_Product_GetPrice", {Kind::Handle, "IntPtr", 0, 4}, args_704, false, "Pinned Oculus Platform SDK CAPI.cs"},
-  {"libovrplatformloader.so", "ovr_Product_GetSKU", {Kind::Ptr, "char *", 1, 4}, args_705, false, "Pinned Oculus Platform SDK OVR_Product.h"},
-  {"libovrplatformloader.so", "ovr_PurchaseArray_GetElement", {Kind::Handle, "ovrPurchaseHandle", 0, 4}, args_706, false, "Pinned Oculus Platform SDK OVR_PurchaseArray.h"},
-  {"libovrplatformloader.so", "ovr_PurchaseArray_GetNextUrl", {Kind::Ptr, "char *", 1, 4}, args_707, false, "Pinned Oculus Platform SDK OVR_PurchaseArray.h"},
-  {"libovrplatformloader.so", "ovr_PurchaseArray_GetSize", {Kind::Size, "size_t", 0, 4}, args_708, false, "Pinned Oculus Platform SDK OVR_PurchaseArray.h"},
-  {"libovrplatformloader.so", "ovr_PurchaseArray_HasNextPage", {Kind::U8, "bool", 0, 4}, args_709, false, "Pinned Oculus Platform SDK OVR_PurchaseArray.h"},
-  {"libovrplatformloader.so", "ovr_Purchase_GetDeveloperPayload", {Kind::Handle, "IntPtr", 0, 4}, args_710, false, "Pinned Oculus Platform SDK CAPI.cs"},
-  {"libovrplatformloader.so", "ovr_Purchase_GetExpirationTime", {Kind::U64, "unsigned long long", 0, 4}, args_711, false, "Pinned Oculus Platform SDK OVR_Purchase.h"},
-  {"libovrplatformloader.so", "ovr_Purchase_GetGrantTime", {Kind::U64, "unsigned long long", 0, 4}, args_712, false, "Pinned Oculus Platform SDK OVR_Purchase.h"},
-  {"libovrplatformloader.so", "ovr_Purchase_GetPurchaseID", {Kind::U64, "ovrID", 0, 4}, args_713, false, "Pinned Oculus Platform SDK OVR_Purchase.h"},
-  {"libovrplatformloader.so", "ovr_Purchase_GetPurchaseStrID", {Kind::Ptr, "char *", 1, 4}, args_714, false, "Pinned Oculus Platform SDK OVR_Purchase.h"},
-  {"libovrplatformloader.so", "ovr_Purchase_GetReportingId", {Kind::Handle, "IntPtr", 0, 4}, args_715, false, "Pinned Oculus Platform SDK CAPI.cs"},
-  {"libovrplatformloader.so", "ovr_Purchase_GetSKU", {Kind::Ptr, "char *", 1, 4}, args_716, false, "Pinned Oculus Platform SDK OVR_Purchase.h"},
-  {"libovrplatformloader.so", "ovr_RejoinDialogResult_GetRejoinSelected", {Kind::U8, "bool", 0, 4}, args_717, false, "Pinned Oculus Platform SDK OVR_RejoinDialogResult.h"},
-  {"libovrplatformloader.so", "ovr_RichPresenceOptions_ClearArgs", {Kind::Void, "void", 0, 4}, args_718, false, "Pinned Oculus Platform SDK OVR_RichPresenceOptions.h"},
+  {"libovrplatformloader.so", "ovr_Price_GetAmountInHundredths", {Kind::U32, "unsigned int", 0, 4}, args_705, false, "Pinned Oculus Platform SDK CAPI.cs"},
+  {"libovrplatformloader.so", "ovr_Price_GetCurrency", {Kind::Handle, "IntPtr", 0, 4}, args_706, false, "Pinned Oculus Platform SDK CAPI.cs"},
+  {"libovrplatformloader.so", "ovr_Price_GetFormatted", {Kind::Handle, "IntPtr", 0, 4}, args_707, false, "Pinned Oculus Platform SDK CAPI.cs"},
+  {"libovrplatformloader.so", "ovr_ProductArray_GetElement", {Kind::Handle, "ovrProductHandle", 0, 4}, args_708, false, "Pinned Oculus Platform SDK OVR_ProductArray.h"},
+  {"libovrplatformloader.so", "ovr_ProductArray_GetNextUrl", {Kind::Ptr, "char *", 1, 4}, args_709, false, "Pinned Oculus Platform SDK OVR_ProductArray.h"},
+  {"libovrplatformloader.so", "ovr_ProductArray_GetSize", {Kind::Size, "size_t", 0, 4}, args_710, false, "Pinned Oculus Platform SDK OVR_ProductArray.h"},
+  {"libovrplatformloader.so", "ovr_ProductArray_HasNextPage", {Kind::U8, "bool", 0, 4}, args_711, false, "Pinned Oculus Platform SDK OVR_ProductArray.h"},
+  {"libovrplatformloader.so", "ovr_Product_GetDescription", {Kind::Ptr, "char *", 1, 4}, args_712, false, "Pinned Oculus Platform SDK OVR_Product.h"},
+  {"libovrplatformloader.so", "ovr_Product_GetFormattedPrice", {Kind::Ptr, "char *", 1, 4}, args_713, false, "Pinned Oculus Platform SDK OVR_Product.h"},
+  {"libovrplatformloader.so", "ovr_Product_GetName", {Kind::Ptr, "char *", 1, 4}, args_714, false, "Pinned Oculus Platform SDK OVR_Product.h"},
+  {"libovrplatformloader.so", "ovr_Product_GetPrice", {Kind::Handle, "IntPtr", 0, 4}, args_715, false, "Pinned Oculus Platform SDK CAPI.cs"},
+  {"libovrplatformloader.so", "ovr_Product_GetSKU", {Kind::Ptr, "char *", 1, 4}, args_716, false, "Pinned Oculus Platform SDK OVR_Product.h"},
+  {"libovrplatformloader.so", "ovr_PurchaseArray_GetElement", {Kind::Handle, "ovrPurchaseHandle", 0, 4}, args_717, false, "Pinned Oculus Platform SDK OVR_PurchaseArray.h"},
+  {"libovrplatformloader.so", "ovr_PurchaseArray_GetNextUrl", {Kind::Ptr, "char *", 1, 4}, args_718, false, "Pinned Oculus Platform SDK OVR_PurchaseArray.h"},
+  {"libovrplatformloader.so", "ovr_PurchaseArray_GetSize", {Kind::Size, "size_t", 0, 4}, args_719, false, "Pinned Oculus Platform SDK OVR_PurchaseArray.h"},
+  {"libovrplatformloader.so", "ovr_PurchaseArray_HasNextPage", {Kind::U8, "bool", 0, 4}, args_720, false, "Pinned Oculus Platform SDK OVR_PurchaseArray.h"},
+  {"libovrplatformloader.so", "ovr_Purchase_GetDeveloperPayload", {Kind::Handle, "IntPtr", 0, 4}, args_721, false, "Pinned Oculus Platform SDK CAPI.cs"},
+  {"libovrplatformloader.so", "ovr_Purchase_GetExpirationTime", {Kind::U64, "unsigned long long", 0, 4}, args_722, false, "Pinned Oculus Platform SDK OVR_Purchase.h"},
+  {"libovrplatformloader.so", "ovr_Purchase_GetGrantTime", {Kind::U64, "unsigned long long", 0, 4}, args_723, false, "Pinned Oculus Platform SDK OVR_Purchase.h"},
+  {"libovrplatformloader.so", "ovr_Purchase_GetPurchaseID", {Kind::U64, "ovrID", 0, 4}, args_724, false, "Pinned Oculus Platform SDK OVR_Purchase.h"},
+  {"libovrplatformloader.so", "ovr_Purchase_GetPurchaseStrID", {Kind::Ptr, "char *", 1, 4}, args_725, false, "Pinned Oculus Platform SDK OVR_Purchase.h"},
+  {"libovrplatformloader.so", "ovr_Purchase_GetReportingId", {Kind::Handle, "IntPtr", 0, 4}, args_726, false, "Pinned Oculus Platform SDK CAPI.cs"},
+  {"libovrplatformloader.so", "ovr_Purchase_GetSKU", {Kind::Ptr, "char *", 1, 4}, args_727, false, "Pinned Oculus Platform SDK OVR_Purchase.h"},
+  {"libovrplatformloader.so", "ovr_RejoinDialogResult_GetRejoinSelected", {Kind::U8, "bool", 0, 4}, args_728, false, "Pinned Oculus Platform SDK OVR_RejoinDialogResult.h"},
+  {"libovrplatformloader.so", "ovr_RichPresenceOptions_ClearArgs", {Kind::Void, "void", 0, 4}, args_729, false, "Pinned Oculus Platform SDK OVR_RichPresenceOptions.h"},
   {"libovrplatformloader.so", "ovr_RichPresenceOptions_Create", {Kind::Handle, "ovrRichPresenceOptionsHandle", 0, 4}, {}, false, "Pinned Oculus Platform SDK OVR_RichPresenceOptions.h"},
-  {"libovrplatformloader.so", "ovr_RichPresenceOptions_Destroy", {Kind::Void, "void", 0, 4}, args_720, false, "Pinned Oculus Platform SDK OVR_RichPresenceOptions.h"},
-  {"libovrplatformloader.so", "ovr_RichPresenceOptions_SetApiName", {Kind::Void, "void", 0, 4}, args_721, false, "Pinned Oculus Platform SDK OVR_RichPresenceOptions.h"},
-  {"libovrplatformloader.so", "ovr_RichPresenceOptions_SetArgsString", {Kind::Void, "void", 0, 4}, args_722, false, "Pinned Oculus Platform SDK OVR_RichPresenceOptions.h"},
-  {"libovrplatformloader.so", "ovr_RichPresenceOptions_SetCurrentCapacity", {Kind::Void, "void", 0, 4}, args_723, false, "Pinned Oculus Platform SDK OVR_RichPresenceOptions.h"},
-  {"libovrplatformloader.so", "ovr_RichPresenceOptions_SetDeeplinkMessageOverride", {Kind::Void, "void", 0, 4}, args_724, false, "Pinned Oculus Platform SDK OVR_RichPresenceOptions.h"},
-  {"libovrplatformloader.so", "ovr_RichPresenceOptions_SetEndTime", {Kind::Void, "void", 0, 4}, args_725, false, "Pinned Oculus Platform SDK OVR_RichPresenceOptions.h"},
-  {"libovrplatformloader.so", "ovr_RichPresenceOptions_SetExtraContext", {Kind::Void, "void", 0, 4}, args_726, false, "Pinned Oculus Platform SDK OVR_RichPresenceOptions.h"},
-  {"libovrplatformloader.so", "ovr_RichPresenceOptions_SetInstanceId", {Kind::Void, "void", 0, 4}, args_727, false, "Pinned Oculus Platform SDK OVR_RichPresenceOptions.h"},
-  {"libovrplatformloader.so", "ovr_RichPresenceOptions_SetIsIdle", {Kind::Void, "void", 0, 4}, args_728, false, "Pinned Oculus Platform SDK OVR_RichPresenceOptions.h"},
-  {"libovrplatformloader.so", "ovr_RichPresenceOptions_SetIsJoinable", {Kind::Void, "void", 0, 4}, args_729, false, "Pinned Oculus Platform SDK OVR_RichPresenceOptions.h"},
-  {"libovrplatformloader.so", "ovr_RichPresenceOptions_SetJoinableId", {Kind::Void, "void", 0, 4}, args_730, false, "Pinned Oculus Platform SDK OVR_RichPresenceOptions.h"},
-  {"libovrplatformloader.so", "ovr_RichPresenceOptions_SetLobbySessionId", {Kind::Void, "void", 0, 4}, args_731, false, "Pinned Oculus Platform SDK OVR_RichPresenceOptions.h"},
-  {"libovrplatformloader.so", "ovr_RichPresenceOptions_SetMatchSessionId", {Kind::Void, "void", 0, 4}, args_732, false, "Pinned Oculus Platform SDK OVR_RichPresenceOptions.h"},
-  {"libovrplatformloader.so", "ovr_RichPresenceOptions_SetMaxCapacity", {Kind::Void, "void", 0, 4}, args_733, false, "Pinned Oculus Platform SDK OVR_RichPresenceOptions.h"},
-  {"libovrplatformloader.so", "ovr_RichPresenceOptions_SetStartTime", {Kind::Void, "void", 0, 4}, args_734, false, "Pinned Oculus Platform SDK OVR_RichPresenceOptions.h"},
+  {"libovrplatformloader.so", "ovr_RichPresenceOptions_Destroy", {Kind::Void, "void", 0, 4}, args_731, false, "Pinned Oculus Platform SDK OVR_RichPresenceOptions.h"},
+  {"libovrplatformloader.so", "ovr_RichPresenceOptions_SetApiName", {Kind::Void, "void", 0, 4}, args_732, false, "Pinned Oculus Platform SDK OVR_RichPresenceOptions.h"},
+  {"libovrplatformloader.so", "ovr_RichPresenceOptions_SetArgsString", {Kind::Void, "void", 0, 4}, args_733, false, "Pinned Oculus Platform SDK OVR_RichPresenceOptions.h"},
+  {"libovrplatformloader.so", "ovr_RichPresenceOptions_SetCurrentCapacity", {Kind::Void, "void", 0, 4}, args_734, false, "Pinned Oculus Platform SDK OVR_RichPresenceOptions.h"},
+  {"libovrplatformloader.so", "ovr_RichPresenceOptions_SetDeeplinkMessageOverride", {Kind::Void, "void", 0, 4}, args_735, false, "Pinned Oculus Platform SDK OVR_RichPresenceOptions.h"},
+  {"libovrplatformloader.so", "ovr_RichPresenceOptions_SetEndTime", {Kind::Void, "void", 0, 4}, args_736, false, "Pinned Oculus Platform SDK OVR_RichPresenceOptions.h"},
+  {"libovrplatformloader.so", "ovr_RichPresenceOptions_SetExtraContext", {Kind::Void, "void", 0, 4}, args_737, false, "Pinned Oculus Platform SDK OVR_RichPresenceOptions.h"},
+  {"libovrplatformloader.so", "ovr_RichPresenceOptions_SetInstanceId", {Kind::Void, "void", 0, 4}, args_738, false, "Pinned Oculus Platform SDK OVR_RichPresenceOptions.h"},
+  {"libovrplatformloader.so", "ovr_RichPresenceOptions_SetIsIdle", {Kind::Void, "void", 0, 4}, args_739, false, "Pinned Oculus Platform SDK OVR_RichPresenceOptions.h"},
+  {"libovrplatformloader.so", "ovr_RichPresenceOptions_SetIsJoinable", {Kind::Void, "void", 0, 4}, args_740, false, "Pinned Oculus Platform SDK OVR_RichPresenceOptions.h"},
+  {"libovrplatformloader.so", "ovr_RichPresenceOptions_SetJoinableId", {Kind::Void, "void", 0, 4}, args_741, false, "Pinned Oculus Platform SDK OVR_RichPresenceOptions.h"},
+  {"libovrplatformloader.so", "ovr_RichPresenceOptions_SetLobbySessionId", {Kind::Void, "void", 0, 4}, args_742, false, "Pinned Oculus Platform SDK OVR_RichPresenceOptions.h"},
+  {"libovrplatformloader.so", "ovr_RichPresenceOptions_SetMatchSessionId", {Kind::Void, "void", 0, 4}, args_743, false, "Pinned Oculus Platform SDK OVR_RichPresenceOptions.h"},
+  {"libovrplatformloader.so", "ovr_RichPresenceOptions_SetMaxCapacity", {Kind::Void, "void", 0, 4}, args_744, false, "Pinned Oculus Platform SDK OVR_RichPresenceOptions.h"},
+  {"libovrplatformloader.so", "ovr_RichPresenceOptions_SetStartTime", {Kind::Void, "void", 0, 4}, args_745, false, "Pinned Oculus Platform SDK OVR_RichPresenceOptions.h"},
   {"libovrplatformloader.so", "ovr_RichPresence_Clear", {Kind::U64, "ovrRequest", 0, 4}, {}, false, "Pinned Oculus Platform SDK OVR_Requests_RichPresence.h"},
   {"libovrplatformloader.so", "ovr_RichPresence_GetDestinations", {Kind::U64, "ovrRequest", 0, 4}, {}, false, "Pinned Oculus Platform SDK OVR_Requests_RichPresence.h"},
-  {"libovrplatformloader.so", "ovr_RichPresence_GetNextDestinationArrayPage", {Kind::U64, "ovrRequest", 0, 4}, args_737, false, "Pinned Oculus Platform SDK OVR_Requests_RichPresence.h"},
-  {"libovrplatformloader.so", "ovr_RichPresence_Set", {Kind::U64, "ovrRequest", 0, 4}, args_738, false, "Pinned Oculus Platform SDK OVR_Requests_RichPresence.h"},
-  {"libovrplatformloader.so", "ovr_RichPresence_SetDestination", {Kind::U64, "uint64_t", 0, 4}, args_739, false, "Pinned Oculus Platform SDK CAPI.cs"},
-  {"libovrplatformloader.so", "ovr_RichPresence_SetIsJoinable", {Kind::U64, "uint64_t", 0, 4}, args_740, false, "Pinned Oculus Platform SDK CAPI.cs"},
-  {"libovrplatformloader.so", "ovr_RichPresence_SetLobbySession", {Kind::U64, "uint64_t", 0, 4}, args_741, false, "Pinned Oculus Platform SDK CAPI.cs"},
-  {"libovrplatformloader.so", "ovr_RichPresence_SetMatchSession", {Kind::U64, "uint64_t", 0, 4}, args_742, false, "Pinned Oculus Platform SDK CAPI.cs"},
-  {"libovrplatformloader.so", "ovr_RoomArray_GetElement", {Kind::Handle, "ovrRoomHandle", 0, 4}, args_743, false, "Pinned Oculus Platform SDK OVR_RoomArray.h"},
-  {"libovrplatformloader.so", "ovr_RoomArray_GetNextUrl", {Kind::Ptr, "char *", 1, 4}, args_744, false, "Pinned Oculus Platform SDK OVR_RoomArray.h"},
-  {"libovrplatformloader.so", "ovr_RoomArray_GetSize", {Kind::Size, "size_t", 0, 4}, args_745, false, "Pinned Oculus Platform SDK OVR_RoomArray.h"},
-  {"libovrplatformloader.so", "ovr_RoomArray_HasNextPage", {Kind::U8, "bool", 0, 4}, args_746, false, "Pinned Oculus Platform SDK OVR_RoomArray.h"},
-  {"libovrplatformloader.so", "ovr_RoomInviteNotificationArray_GetElement", {Kind::Handle, "ovrRoomInviteNotificationHandle", 0, 4}, args_747, false, "Pinned Oculus Platform SDK OVR_RoomInviteNotificationArray.h"},
-  {"libovrplatformloader.so", "ovr_RoomInviteNotificationArray_GetNextUrl", {Kind::Ptr, "char *", 1, 4}, args_748, false, "Pinned Oculus Platform SDK OVR_RoomInviteNotificationArray.h"},
-  {"libovrplatformloader.so", "ovr_RoomInviteNotificationArray_GetSize", {Kind::Size, "size_t", 0, 4}, args_749, false, "Pinned Oculus Platform SDK OVR_RoomInviteNotificationArray.h"},
-  {"libovrplatformloader.so", "ovr_RoomInviteNotificationArray_HasNextPage", {Kind::U8, "bool", 0, 4}, args_750, false, "Pinned Oculus Platform SDK OVR_RoomInviteNotificationArray.h"},
-  {"libovrplatformloader.so", "ovr_RoomInviteNotification_GetID", {Kind::U64, "ovrID", 0, 4}, args_751, false, "Pinned Oculus Platform SDK OVR_RoomInviteNotification.h"},
-  {"libovrplatformloader.so", "ovr_RoomInviteNotification_GetRoomID", {Kind::U64, "ovrID", 0, 4}, args_752, false, "Pinned Oculus Platform SDK OVR_RoomInviteNotification.h"},
-  {"libovrplatformloader.so", "ovr_RoomInviteNotification_GetSenderID", {Kind::U64, "ovrID", 0, 4}, args_753, false, "Pinned Oculus Platform SDK OVR_RoomInviteNotification.h"},
-  {"libovrplatformloader.so", "ovr_RoomInviteNotification_GetSentTime", {Kind::U64, "unsigned long long", 0, 4}, args_754, false, "Pinned Oculus Platform SDK OVR_RoomInviteNotification.h"},
-  {"libovrplatformloader.so", "ovr_RoomOptions_ClearDataStore", {Kind::Void, "void", 0, 4}, args_755, false, "Pinned Oculus Platform SDK OVR_RoomOptions.h"},
+  {"libovrplatformloader.so", "ovr_RichPresence_GetNextDestinationArrayPage", {Kind::U64, "ovrRequest", 0, 4}, args_748, false, "Pinned Oculus Platform SDK OVR_Requests_RichPresence.h"},
+  {"libovrplatformloader.so", "ovr_RichPresence_Set", {Kind::U64, "ovrRequest", 0, 4}, args_749, false, "Pinned Oculus Platform SDK OVR_Requests_RichPresence.h"},
+  {"libovrplatformloader.so", "ovr_RichPresence_SetDestination", {Kind::U64, "uint64_t", 0, 4}, args_750, false, "Pinned Oculus Platform SDK CAPI.cs"},
+  {"libovrplatformloader.so", "ovr_RichPresence_SetIsJoinable", {Kind::U64, "uint64_t", 0, 4}, args_751, false, "Pinned Oculus Platform SDK CAPI.cs"},
+  {"libovrplatformloader.so", "ovr_RichPresence_SetLobbySession", {Kind::U64, "uint64_t", 0, 4}, args_752, false, "Pinned Oculus Platform SDK CAPI.cs"},
+  {"libovrplatformloader.so", "ovr_RichPresence_SetMatchSession", {Kind::U64, "uint64_t", 0, 4}, args_753, false, "Pinned Oculus Platform SDK CAPI.cs"},
+  {"libovrplatformloader.so", "ovr_RoomArray_GetElement", {Kind::Handle, "ovrRoomHandle", 0, 4}, args_754, false, "Pinned Oculus Platform SDK OVR_RoomArray.h"},
+  {"libovrplatformloader.so", "ovr_RoomArray_GetNextUrl", {Kind::Ptr, "char *", 1, 4}, args_755, false, "Pinned Oculus Platform SDK OVR_RoomArray.h"},
+  {"libovrplatformloader.so", "ovr_RoomArray_GetSize", {Kind::Size, "size_t", 0, 4}, args_756, false, "Pinned Oculus Platform SDK OVR_RoomArray.h"},
+  {"libovrplatformloader.so", "ovr_RoomArray_HasNextPage", {Kind::U8, "bool", 0, 4}, args_757, false, "Pinned Oculus Platform SDK OVR_RoomArray.h"},
+  {"libovrplatformloader.so", "ovr_RoomInviteNotificationArray_GetElement", {Kind::Handle, "ovrRoomInviteNotificationHandle", 0, 4}, args_758, false, "Pinned Oculus Platform SDK OVR_RoomInviteNotificationArray.h"},
+  {"libovrplatformloader.so", "ovr_RoomInviteNotificationArray_GetNextUrl", {Kind::Ptr, "char *", 1, 4}, args_759, false, "Pinned Oculus Platform SDK OVR_RoomInviteNotificationArray.h"},
+  {"libovrplatformloader.so", "ovr_RoomInviteNotificationArray_GetSize", {Kind::Size, "size_t", 0, 4}, args_760, false, "Pinned Oculus Platform SDK OVR_RoomInviteNotificationArray.h"},
+  {"libovrplatformloader.so", "ovr_RoomInviteNotificationArray_HasNextPage", {Kind::U8, "bool", 0, 4}, args_761, false, "Pinned Oculus Platform SDK OVR_RoomInviteNotificationArray.h"},
+  {"libovrplatformloader.so", "ovr_RoomInviteNotification_GetID", {Kind::U64, "ovrID", 0, 4}, args_762, false, "Pinned Oculus Platform SDK OVR_RoomInviteNotification.h"},
+  {"libovrplatformloader.so", "ovr_RoomInviteNotification_GetRoomID", {Kind::U64, "ovrID", 0, 4}, args_763, false, "Pinned Oculus Platform SDK OVR_RoomInviteNotification.h"},
+  {"libovrplatformloader.so", "ovr_RoomInviteNotification_GetSenderID", {Kind::U64, "ovrID", 0, 4}, args_764, false, "Pinned Oculus Platform SDK OVR_RoomInviteNotification.h"},
+  {"libovrplatformloader.so", "ovr_RoomInviteNotification_GetSentTime", {Kind::U64, "unsigned long long", 0, 4}, args_765, false, "Pinned Oculus Platform SDK OVR_RoomInviteNotification.h"},
+  {"libovrplatformloader.so", "ovr_RoomOptions_ClearDataStore", {Kind::Void, "void", 0, 4}, args_766, false, "Pinned Oculus Platform SDK OVR_RoomOptions.h"},
   {"libovrplatformloader.so", "ovr_RoomOptions_Create", {Kind::Handle, "ovrRoomOptionsHandle", 0, 4}, {}, false, "Pinned Oculus Platform SDK OVR_RoomOptions.h"},
-  {"libovrplatformloader.so", "ovr_RoomOptions_Destroy", {Kind::Void, "void", 0, 4}, args_757, false, "Pinned Oculus Platform SDK OVR_RoomOptions.h"},
-  {"libovrplatformloader.so", "ovr_RoomOptions_SetDataStoreString", {Kind::Void, "void", 0, 4}, args_758, false, "Pinned Oculus Platform SDK OVR_RoomOptions.h"},
-  {"libovrplatformloader.so", "ovr_RoomOptions_SetExcludeRecentlyMet", {Kind::Void, "void", 0, 4}, args_759, false, "Pinned Oculus Platform SDK OVR_RoomOptions.h"},
-  {"libovrplatformloader.so", "ovr_RoomOptions_SetMaxUserResults", {Kind::Void, "void", 0, 4}, args_760, false, "Pinned Oculus Platform SDK OVR_RoomOptions.h"},
-  {"libovrplatformloader.so", "ovr_RoomOptions_SetOrdering", {Kind::Void, "void", 0, 4}, args_761, false, "Pinned Oculus Platform SDK OVR_RoomOptions.h"},
-  {"libovrplatformloader.so", "ovr_RoomOptions_SetRecentlyMetTimeWindow", {Kind::Void, "void", 0, 4}, args_762, false, "Pinned Oculus Platform SDK OVR_RoomOptions.h"},
-  {"libovrplatformloader.so", "ovr_RoomOptions_SetRoomId", {Kind::Void, "void", 0, 4}, args_763, false, "Pinned Oculus Platform SDK OVR_RoomOptions.h"},
-  {"libovrplatformloader.so", "ovr_RoomOptions_SetTurnOffUpdates", {Kind::Void, "void", 0, 4}, args_764, false, "Pinned Oculus Platform SDK OVR_RoomOptions.h"},
-  {"libovrplatformloader.so", "ovr_Room_CreateAndJoinPrivate", {Kind::U64, "ovrRequest", 0, 4}, args_765, false, "Pinned Oculus Platform SDK OVR_Requests_Room.h"},
-  {"libovrplatformloader.so", "ovr_Room_CreateAndJoinPrivate2", {Kind::U64, "ovrRequest", 0, 4}, args_766, false, "Pinned Oculus Platform SDK OVR_Requests_Room.h"},
-  {"libovrplatformloader.so", "ovr_Room_Get", {Kind::U64, "ovrRequest", 0, 4}, args_767, false, "Pinned Oculus Platform SDK OVR_Requests_Room.h"},
-  {"libovrplatformloader.so", "ovr_Room_GetApplicationID", {Kind::U64, "ovrID", 0, 4}, args_768, false, "Pinned Oculus Platform SDK OVR_Room.h"},
+  {"libovrplatformloader.so", "ovr_RoomOptions_Destroy", {Kind::Void, "void", 0, 4}, args_768, false, "Pinned Oculus Platform SDK OVR_RoomOptions.h"},
+  {"libovrplatformloader.so", "ovr_RoomOptions_SetDataStoreString", {Kind::Void, "void", 0, 4}, args_769, false, "Pinned Oculus Platform SDK OVR_RoomOptions.h"},
+  {"libovrplatformloader.so", "ovr_RoomOptions_SetExcludeRecentlyMet", {Kind::Void, "void", 0, 4}, args_770, false, "Pinned Oculus Platform SDK OVR_RoomOptions.h"},
+  {"libovrplatformloader.so", "ovr_RoomOptions_SetMaxUserResults", {Kind::Void, "void", 0, 4}, args_771, false, "Pinned Oculus Platform SDK OVR_RoomOptions.h"},
+  {"libovrplatformloader.so", "ovr_RoomOptions_SetOrdering", {Kind::Void, "void", 0, 4}, args_772, false, "Pinned Oculus Platform SDK OVR_RoomOptions.h"},
+  {"libovrplatformloader.so", "ovr_RoomOptions_SetRecentlyMetTimeWindow", {Kind::Void, "void", 0, 4}, args_773, false, "Pinned Oculus Platform SDK OVR_RoomOptions.h"},
+  {"libovrplatformloader.so", "ovr_RoomOptions_SetRoomId", {Kind::Void, "void", 0, 4}, args_774, false, "Pinned Oculus Platform SDK OVR_RoomOptions.h"},
+  {"libovrplatformloader.so", "ovr_RoomOptions_SetTurnOffUpdates", {Kind::Void, "void", 0, 4}, args_775, false, "Pinned Oculus Platform SDK OVR_RoomOptions.h"},
+  {"libovrplatformloader.so", "ovr_Room_CreateAndJoinPrivate", {Kind::U64, "ovrRequest", 0, 4}, args_776, false, "Pinned Oculus Platform SDK OVR_Requests_Room.h"},
+  {"libovrplatformloader.so", "ovr_Room_CreateAndJoinPrivate2", {Kind::U64, "ovrRequest", 0, 4}, args_777, false, "Pinned Oculus Platform SDK OVR_Requests_Room.h"},
+  {"libovrplatformloader.so", "ovr_Room_Get", {Kind::U64, "ovrRequest", 0, 4}, args_778, false, "Pinned Oculus Platform SDK OVR_Requests_Room.h"},
+  {"libovrplatformloader.so", "ovr_Room_GetApplicationID", {Kind::U64, "ovrID", 0, 4}, args_779, false, "Pinned Oculus Platform SDK OVR_Room.h"},
   {"libovrplatformloader.so", "ovr_Room_GetCurrent", {Kind::U64, "ovrRequest", 0, 4}, {}, false, "Pinned Oculus Platform SDK OVR_Requests_Room.h"},
-  {"libovrplatformloader.so", "ovr_Room_GetCurrentForUser", {Kind::U64, "ovrRequest", 0, 4}, args_770, false, "Pinned Oculus Platform SDK OVR_Requests_Room.h"},
-  {"libovrplatformloader.so", "ovr_Room_GetDataStore", {Kind::Handle, "ovrDataStoreHandle", 0, 4}, args_771, false, "Pinned Oculus Platform SDK OVR_Room.h"},
-  {"libovrplatformloader.so", "ovr_Room_GetDescription", {Kind::Ptr, "char *", 1, 4}, args_772, false, "Pinned Oculus Platform SDK OVR_Room.h"},
-  {"libovrplatformloader.so", "ovr_Room_GetID", {Kind::U64, "ovrID", 0, 4}, args_773, false, "Pinned Oculus Platform SDK OVR_Room.h"},
+  {"libovrplatformloader.so", "ovr_Room_GetCurrentForUser", {Kind::U64, "ovrRequest", 0, 4}, args_781, false, "Pinned Oculus Platform SDK OVR_Requests_Room.h"},
+  {"libovrplatformloader.so", "ovr_Room_GetDataStore", {Kind::Handle, "ovrDataStoreHandle", 0, 4}, args_782, false, "Pinned Oculus Platform SDK OVR_Room.h"},
+  {"libovrplatformloader.so", "ovr_Room_GetDescription", {Kind::Ptr, "char *", 1, 4}, args_783, false, "Pinned Oculus Platform SDK OVR_Room.h"},
+  {"libovrplatformloader.so", "ovr_Room_GetID", {Kind::U64, "ovrID", 0, 4}, args_784, false, "Pinned Oculus Platform SDK OVR_Room.h"},
   {"libovrplatformloader.so", "ovr_Room_GetInvitableUsers", {Kind::U64, "ovrRequest", 0, 4}, {}, false, "Pinned Oculus Platform SDK OVR_Requests_Room.h"},
-  {"libovrplatformloader.so", "ovr_Room_GetInvitableUsers2", {Kind::U64, "ovrRequest", 0, 4}, args_775, false, "Pinned Oculus Platform SDK OVR_Requests_Room.h"},
-  {"libovrplatformloader.so", "ovr_Room_GetInvitedUsers", {Kind::Handle, "ovrUserArrayHandle", 0, 4}, args_776, false, "Pinned Oculus Platform SDK OVR_Room.h"},
-  {"libovrplatformloader.so", "ovr_Room_GetIsMembershipLocked", {Kind::U8, "bool", 0, 4}, args_777, false, "Pinned Oculus Platform SDK OVR_Room.h"},
-  {"libovrplatformloader.so", "ovr_Room_GetJoinPolicy", {Kind::I32, "ovrRoomJoinPolicy", 0, 4}, args_778, false, "Pinned Oculus Platform SDK OVR_Room.h"},
-  {"libovrplatformloader.so", "ovr_Room_GetJoinability", {Kind::I32, "ovrRoomJoinability", 0, 4}, args_779, false, "Pinned Oculus Platform SDK OVR_Room.h"},
-  {"libovrplatformloader.so", "ovr_Room_GetMatchedUsers", {Kind::Handle, "ovrMatchmakingEnqueuedUserArrayHandle", 0, 4}, args_780, false, "Pinned Oculus Platform SDK OVR_Room.h"},
-  {"libovrplatformloader.so", "ovr_Room_GetMaxUsers", {Kind::U32, "unsigned int", 0, 4}, args_781, false, "Pinned Oculus Platform SDK OVR_Room.h"},
+  {"libovrplatformloader.so", "ovr_Room_GetInvitableUsers2", {Kind::U64, "ovrRequest", 0, 4}, args_786, false, "Pinned Oculus Platform SDK OVR_Requests_Room.h"},
+  {"libovrplatformloader.so", "ovr_Room_GetInvitedUsers", {Kind::Handle, "ovrUserArrayHandle", 0, 4}, args_787, false, "Pinned Oculus Platform SDK OVR_Room.h"},
+  {"libovrplatformloader.so", "ovr_Room_GetIsMembershipLocked", {Kind::U8, "bool", 0, 4}, args_788, false, "Pinned Oculus Platform SDK OVR_Room.h"},
+  {"libovrplatformloader.so", "ovr_Room_GetJoinPolicy", {Kind::I32, "ovrRoomJoinPolicy", 0, 4}, args_789, false, "Pinned Oculus Platform SDK OVR_Room.h"},
+  {"libovrplatformloader.so", "ovr_Room_GetJoinability", {Kind::I32, "ovrRoomJoinability", 0, 4}, args_790, false, "Pinned Oculus Platform SDK OVR_Room.h"},
+  {"libovrplatformloader.so", "ovr_Room_GetMatchedUsers", {Kind::Handle, "ovrMatchmakingEnqueuedUserArrayHandle", 0, 4}, args_791, false, "Pinned Oculus Platform SDK OVR_Room.h"},
+  {"libovrplatformloader.so", "ovr_Room_GetMaxUsers", {Kind::U32, "unsigned int", 0, 4}, args_792, false, "Pinned Oculus Platform SDK OVR_Room.h"},
   {"libovrplatformloader.so", "ovr_Room_GetModeratedRooms", {Kind::U64, "ovrRequest", 0, 4}, {}, false, "Pinned Oculus Platform SDK OVR_Requests_Room.h"},
-  {"libovrplatformloader.so", "ovr_Room_GetName", {Kind::Ptr, "char *", 1, 4}, args_783, false, "Pinned Oculus Platform SDK OVR_Room.h"},
-  {"libovrplatformloader.so", "ovr_Room_GetNextRoomArrayPage", {Kind::U64, "ovrRequest", 0, 4}, args_784, false, "Pinned Oculus Platform SDK OVR_Requests_Room.h"},
-  {"libovrplatformloader.so", "ovr_Room_GetOwner", {Kind::Handle, "ovrUserHandle", 0, 4}, args_785, false, "Pinned Oculus Platform SDK OVR_Room.h"},
-  {"libovrplatformloader.so", "ovr_Room_GetTeams", {Kind::Handle, "ovrTeamArrayHandle", 0, 4}, args_786, false, "Pinned Oculus Platform SDK OVR_Room.h"},
-  {"libovrplatformloader.so", "ovr_Room_GetType", {Kind::I32, "ovrRoomType", 0, 4}, args_787, false, "Pinned Oculus Platform SDK OVR_Room.h"},
-  {"libovrplatformloader.so", "ovr_Room_GetUsers", {Kind::Handle, "ovrUserArrayHandle", 0, 4}, args_788, false, "Pinned Oculus Platform SDK OVR_Room.h"},
-  {"libovrplatformloader.so", "ovr_Room_GetVersion", {Kind::U32, "unsigned int", 0, 4}, args_789, false, "Pinned Oculus Platform SDK OVR_Room.h"},
-  {"libovrplatformloader.so", "ovr_Room_InviteUser", {Kind::U64, "ovrRequest", 0, 4}, args_790, false, "Pinned Oculus Platform SDK OVR_Requests_Room.h"},
-  {"libovrplatformloader.so", "ovr_Room_Join", {Kind::U64, "ovrRequest", 0, 4}, args_791, false, "Pinned Oculus Platform SDK OVR_Requests_Room.h"},
-  {"libovrplatformloader.so", "ovr_Room_Join2", {Kind::U64, "ovrRequest", 0, 4}, args_792, false, "Pinned Oculus Platform SDK OVR_Requests_Room.h"},
-  {"libovrplatformloader.so", "ovr_Room_KickUser", {Kind::U64, "ovrRequest", 0, 4}, args_793, false, "Pinned Oculus Platform SDK OVR_Requests_Room.h"},
-  {"libovrplatformloader.so", "ovr_Room_LaunchInvitableUserFlow", {Kind::U64, "ovrRequest", 0, 4}, args_794, false, "Pinned Oculus Platform SDK OVR_Requests_Room.h"},
-  {"libovrplatformloader.so", "ovr_Room_Leave", {Kind::U64, "ovrRequest", 0, 4}, args_795, false, "Pinned Oculus Platform SDK OVR_Requests_Room.h"},
-  {"libovrplatformloader.so", "ovr_Room_SetDescription", {Kind::U64, "ovrRequest", 0, 4}, args_796, false, "Pinned Oculus Platform SDK OVR_Requests_Room.h"},
-  {"libovrplatformloader.so", "ovr_Room_UpdateDataStore", {Kind::U64, "ovrRequest", 0, 4}, args_797, false, "Pinned Oculus Platform SDK OVR_Requests_Room.h"},
-  {"libovrplatformloader.so", "ovr_Room_UpdateMembershipLockStatus", {Kind::U64, "ovrRequest", 0, 4}, args_798, false, "Pinned Oculus Platform SDK OVR_Requests_Room.h"},
-  {"libovrplatformloader.so", "ovr_Room_UpdateOwner", {Kind::U64, "ovrRequest", 0, 4}, args_799, false, "Pinned Oculus Platform SDK OVR_Requests_Room.h"},
-  {"libovrplatformloader.so", "ovr_Room_UpdatePrivateRoomJoinPolicy", {Kind::U64, "ovrRequest", 0, 4}, args_800, false, "Pinned Oculus Platform SDK OVR_Requests_Room.h"},
-  {"libovrplatformloader.so", "ovr_RosterOptions_AddSuggestedUser", {Kind::Void, "void", 0, 4}, args_801, false, "Pinned Oculus Platform SDK OVR_RosterOptions.h"},
-  {"libovrplatformloader.so", "ovr_RosterOptions_ClearSuggestedUsers", {Kind::Void, "void", 0, 4}, args_802, false, "Pinned Oculus Platform SDK OVR_RosterOptions.h"},
+  {"libovrplatformloader.so", "ovr_Room_GetName", {Kind::Ptr, "char *", 1, 4}, args_794, false, "Pinned Oculus Platform SDK OVR_Room.h"},
+  {"libovrplatformloader.so", "ovr_Room_GetNextRoomArrayPage", {Kind::U64, "ovrRequest", 0, 4}, args_795, false, "Pinned Oculus Platform SDK OVR_Requests_Room.h"},
+  {"libovrplatformloader.so", "ovr_Room_GetOwner", {Kind::Handle, "ovrUserHandle", 0, 4}, args_796, false, "Pinned Oculus Platform SDK OVR_Room.h"},
+  {"libovrplatformloader.so", "ovr_Room_GetTeams", {Kind::Handle, "ovrTeamArrayHandle", 0, 4}, args_797, false, "Pinned Oculus Platform SDK OVR_Room.h"},
+  {"libovrplatformloader.so", "ovr_Room_GetType", {Kind::I32, "ovrRoomType", 0, 4}, args_798, false, "Pinned Oculus Platform SDK OVR_Room.h"},
+  {"libovrplatformloader.so", "ovr_Room_GetUsers", {Kind::Handle, "ovrUserArrayHandle", 0, 4}, args_799, false, "Pinned Oculus Platform SDK OVR_Room.h"},
+  {"libovrplatformloader.so", "ovr_Room_GetVersion", {Kind::U32, "unsigned int", 0, 4}, args_800, false, "Pinned Oculus Platform SDK OVR_Room.h"},
+  {"libovrplatformloader.so", "ovr_Room_InviteUser", {Kind::U64, "ovrRequest", 0, 4}, args_801, false, "Pinned Oculus Platform SDK OVR_Requests_Room.h"},
+  {"libovrplatformloader.so", "ovr_Room_Join", {Kind::U64, "ovrRequest", 0, 4}, args_802, false, "Pinned Oculus Platform SDK OVR_Requests_Room.h"},
+  {"libovrplatformloader.so", "ovr_Room_Join2", {Kind::U64, "ovrRequest", 0, 4}, args_803, false, "Pinned Oculus Platform SDK OVR_Requests_Room.h"},
+  {"libovrplatformloader.so", "ovr_Room_KickUser", {Kind::U64, "ovrRequest", 0, 4}, args_804, false, "Pinned Oculus Platform SDK OVR_Requests_Room.h"},
+  {"libovrplatformloader.so", "ovr_Room_LaunchInvitableUserFlow", {Kind::U64, "ovrRequest", 0, 4}, args_805, false, "Pinned Oculus Platform SDK OVR_Requests_Room.h"},
+  {"libovrplatformloader.so", "ovr_Room_Leave", {Kind::U64, "ovrRequest", 0, 4}, args_806, false, "Pinned Oculus Platform SDK OVR_Requests_Room.h"},
+  {"libovrplatformloader.so", "ovr_Room_SetDescription", {Kind::U64, "ovrRequest", 0, 4}, args_807, false, "Pinned Oculus Platform SDK OVR_Requests_Room.h"},
+  {"libovrplatformloader.so", "ovr_Room_UpdateDataStore", {Kind::U64, "ovrRequest", 0, 4}, args_808, false, "Pinned Oculus Platform SDK OVR_Requests_Room.h"},
+  {"libovrplatformloader.so", "ovr_Room_UpdateMembershipLockStatus", {Kind::U64, "ovrRequest", 0, 4}, args_809, false, "Pinned Oculus Platform SDK OVR_Requests_Room.h"},
+  {"libovrplatformloader.so", "ovr_Room_UpdateOwner", {Kind::U64, "ovrRequest", 0, 4}, args_810, false, "Pinned Oculus Platform SDK OVR_Requests_Room.h"},
+  {"libovrplatformloader.so", "ovr_Room_UpdatePrivateRoomJoinPolicy", {Kind::U64, "ovrRequest", 0, 4}, args_811, false, "Pinned Oculus Platform SDK OVR_Requests_Room.h"},
+  {"libovrplatformloader.so", "ovr_RosterOptions_AddSuggestedUser", {Kind::Void, "void", 0, 4}, args_812, false, "Pinned Oculus Platform SDK OVR_RosterOptions.h"},
+  {"libovrplatformloader.so", "ovr_RosterOptions_ClearSuggestedUsers", {Kind::Void, "void", 0, 4}, args_813, false, "Pinned Oculus Platform SDK OVR_RosterOptions.h"},
   {"libovrplatformloader.so", "ovr_RosterOptions_Create", {Kind::Handle, "ovrRosterOptionsHandle", 0, 4}, {}, false, "Pinned Oculus Platform SDK OVR_RosterOptions.h"},
-  {"libovrplatformloader.so", "ovr_RosterOptions_Destroy", {Kind::Void, "void", 0, 4}, args_804, false, "Pinned Oculus Platform SDK OVR_RosterOptions.h"},
-  {"libovrplatformloader.so", "ovr_SdkAccountArray_GetElement", {Kind::Handle, "ovrSdkAccountHandle", 0, 4}, args_805, false, "Pinned Oculus Platform SDK OVR_SdkAccountArray.h"},
-  {"libovrplatformloader.so", "ovr_SdkAccountArray_GetSize", {Kind::Size, "size_t", 0, 4}, args_806, false, "Pinned Oculus Platform SDK OVR_SdkAccountArray.h"},
-  {"libovrplatformloader.so", "ovr_SdkAccount_GetAccountType", {Kind::I32, "ovrSdkAccountType", 0, 4}, args_807, false, "Pinned Oculus Platform SDK OVR_SdkAccount.h"},
-  {"libovrplatformloader.so", "ovr_SdkAccount_GetUserId", {Kind::U64, "ovrID", 0, 4}, args_808, false, "Pinned Oculus Platform SDK OVR_SdkAccount.h"},
-  {"libovrplatformloader.so", "ovr_SendInvitesResult_GetInvites", {Kind::Handle, "ovrApplicationInviteArrayHandle", 0, 4}, args_809, false, "Pinned Oculus Platform SDK OVR_SendInvitesResult.h"},
-  {"libovrplatformloader.so", "ovr_SetDeveloperAccessToken", {Kind::Void, "void", 0, 4}, args_810, false, "Pinned Oculus Platform SDK OVR_Platform.h"},
-  {"libovrplatformloader.so", "ovr_ShareMediaResult_GetStatus", {Kind::I32, "ovrShareMediaStatus", 0, 4}, args_811, false, "Pinned Oculus Platform SDK OVR_ShareMediaResult.h"},
-  {"libovrplatformloader.so", "ovr_SupplementaryMetric_GetID", {Kind::U64, "ovrID", 0, 4}, args_812, false, "Pinned Oculus Platform SDK OVR_SupplementaryMetric.h"},
-  {"libovrplatformloader.so", "ovr_SupplementaryMetric_GetMetric", {Kind::I64, "long long", 0, 4}, args_813, false, "Pinned Oculus Platform SDK OVR_SupplementaryMetric.h"},
-  {"libovrplatformloader.so", "ovr_TeamArray_GetElement", {Kind::Handle, "ovrTeamHandle", 0, 4}, args_814, false, "Pinned Oculus Platform SDK OVR_TeamArray.h"},
-  {"libovrplatformloader.so", "ovr_TeamArray_GetSize", {Kind::Size, "size_t", 0, 4}, args_815, false, "Pinned Oculus Platform SDK OVR_TeamArray.h"},
-  {"libovrplatformloader.so", "ovr_Team_GetAssignedUsers", {Kind::Handle, "ovrUserArrayHandle", 0, 4}, args_816, false, "Pinned Oculus Platform SDK OVR_Team.h"},
-  {"libovrplatformloader.so", "ovr_Team_GetMaxUsers", {Kind::I32, "int", 0, 4}, args_817, false, "Pinned Oculus Platform SDK OVR_Team.h"},
-  {"libovrplatformloader.so", "ovr_Team_GetMinUsers", {Kind::I32, "int", 0, 4}, args_818, false, "Pinned Oculus Platform SDK OVR_Team.h"},
-  {"libovrplatformloader.so", "ovr_Team_GetName", {Kind::Ptr, "char *", 1, 4}, args_819, false, "Pinned Oculus Platform SDK OVR_Team.h"},
-  {"libovrplatformloader.so", "ovr_TestUserAppAccessArray_GetElement", {Kind::Handle, "IntPtr", 0, 4}, args_820, false, "Pinned Oculus Platform SDK CAPI.cs"},
-  {"libovrplatformloader.so", "ovr_TestUserAppAccessArray_GetSize", {Kind::Size, "size_t", 0, 4}, args_821, false, "Pinned Oculus Platform SDK CAPI.cs"},
-  {"libovrplatformloader.so", "ovr_TestUserAppAccess_GetAccessToken", {Kind::Handle, "IntPtr", 0, 4}, args_822, false, "Pinned Oculus Platform SDK CAPI.cs"},
-  {"libovrplatformloader.so", "ovr_TestUserAppAccess_GetAppId", {Kind::U64, "uint64_t", 0, 4}, args_823, false, "Pinned Oculus Platform SDK CAPI.cs"},
-  {"libovrplatformloader.so", "ovr_TestUserAppAccess_GetUserId", {Kind::U64, "uint64_t", 0, 4}, args_824, false, "Pinned Oculus Platform SDK CAPI.cs"},
-  {"libovrplatformloader.so", "ovr_TestUser_GetAccessToken", {Kind::Handle, "IntPtr", 0, 4}, args_825, false, "Pinned Oculus Platform SDK CAPI.cs"},
-  {"libovrplatformloader.so", "ovr_TestUser_GetAppAccessArray", {Kind::Handle, "IntPtr", 0, 4}, args_826, false, "Pinned Oculus Platform SDK CAPI.cs"},
-  {"libovrplatformloader.so", "ovr_TestUser_GetFbAppAccessArray", {Kind::Handle, "IntPtr", 0, 4}, args_827, false, "Pinned Oculus Platform SDK CAPI.cs"},
-  {"libovrplatformloader.so", "ovr_TestUser_GetFriendAccessToken", {Kind::Handle, "IntPtr", 0, 4}, args_828, false, "Pinned Oculus Platform SDK CAPI.cs"},
-  {"libovrplatformloader.so", "ovr_TestUser_GetFriendAppAccessArray", {Kind::Handle, "IntPtr", 0, 4}, args_829, false, "Pinned Oculus Platform SDK CAPI.cs"},
-  {"libovrplatformloader.so", "ovr_TestUser_GetUserAlias", {Kind::Handle, "IntPtr", 0, 4}, args_830, false, "Pinned Oculus Platform SDK CAPI.cs"},
-  {"libovrplatformloader.so", "ovr_TestUser_GetUserFbid", {Kind::U64, "uint64_t", 0, 4}, args_831, false, "Pinned Oculus Platform SDK CAPI.cs"},
-  {"libovrplatformloader.so", "ovr_TestUser_GetUserId", {Kind::U64, "uint64_t", 0, 4}, args_832, false, "Pinned Oculus Platform SDK CAPI.cs"},
-  {"libovrplatformloader.so", "ovr_UnityInitWrapper", {Kind::U8, "bool", 0, 4}, args_833, false, "Pinned Oculus Platform SDK CAPI.cs"},
-  {"libovrplatformloader.so", "ovr_UnityInitWrapperAsynchronous", {Kind::U64, "uint64_t", 0, 4}, args_834, false, "Pinned Oculus Platform SDK CAPI.cs"},
-  {"libovrplatformloader.so", "ovr_UnityInitWrapperStandalone", {Kind::U8, "bool", 0, 4}, args_835, false, "Pinned Oculus Platform SDK CAPI.cs"},
-  {"libovrplatformloader.so", "ovr_UserAccountAgeCategory_GetAgeCategory", {Kind::Unsupported, "AccountAgeCategory", 0, 4}, args_836, false, "Pinned Oculus Platform SDK CAPI.cs"},
+  {"libovrplatformloader.so", "ovr_RosterOptions_Destroy", {Kind::Void, "void", 0, 4}, args_815, false, "Pinned Oculus Platform SDK OVR_RosterOptions.h"},
+  {"libovrplatformloader.so", "ovr_SdkAccountArray_GetElement", {Kind::Handle, "ovrSdkAccountHandle", 0, 4}, args_816, false, "Pinned Oculus Platform SDK OVR_SdkAccountArray.h"},
+  {"libovrplatformloader.so", "ovr_SdkAccountArray_GetSize", {Kind::Size, "size_t", 0, 4}, args_817, false, "Pinned Oculus Platform SDK OVR_SdkAccountArray.h"},
+  {"libovrplatformloader.so", "ovr_SdkAccount_GetAccountType", {Kind::I32, "ovrSdkAccountType", 0, 4}, args_818, false, "Pinned Oculus Platform SDK OVR_SdkAccount.h"},
+  {"libovrplatformloader.so", "ovr_SdkAccount_GetUserId", {Kind::U64, "ovrID", 0, 4}, args_819, false, "Pinned Oculus Platform SDK OVR_SdkAccount.h"},
+  {"libovrplatformloader.so", "ovr_SendInvitesResult_GetInvites", {Kind::Handle, "ovrApplicationInviteArrayHandle", 0, 4}, args_820, false, "Pinned Oculus Platform SDK OVR_SendInvitesResult.h"},
+  {"libovrplatformloader.so", "ovr_SetDeveloperAccessToken", {Kind::Void, "void", 0, 4}, args_821, false, "Pinned Oculus Platform SDK OVR_Platform.h"},
+  {"libovrplatformloader.so", "ovr_ShareMediaResult_GetStatus", {Kind::I32, "ovrShareMediaStatus", 0, 4}, args_822, false, "Pinned Oculus Platform SDK OVR_ShareMediaResult.h"},
+  {"libovrplatformloader.so", "ovr_SupplementaryMetric_GetID", {Kind::U64, "ovrID", 0, 4}, args_823, false, "Pinned Oculus Platform SDK OVR_SupplementaryMetric.h"},
+  {"libovrplatformloader.so", "ovr_SupplementaryMetric_GetMetric", {Kind::I64, "long long", 0, 4}, args_824, false, "Pinned Oculus Platform SDK OVR_SupplementaryMetric.h"},
+  {"libovrplatformloader.so", "ovr_TeamArray_GetElement", {Kind::Handle, "ovrTeamHandle", 0, 4}, args_825, false, "Pinned Oculus Platform SDK OVR_TeamArray.h"},
+  {"libovrplatformloader.so", "ovr_TeamArray_GetSize", {Kind::Size, "size_t", 0, 4}, args_826, false, "Pinned Oculus Platform SDK OVR_TeamArray.h"},
+  {"libovrplatformloader.so", "ovr_Team_GetAssignedUsers", {Kind::Handle, "ovrUserArrayHandle", 0, 4}, args_827, false, "Pinned Oculus Platform SDK OVR_Team.h"},
+  {"libovrplatformloader.so", "ovr_Team_GetMaxUsers", {Kind::I32, "int", 0, 4}, args_828, false, "Pinned Oculus Platform SDK OVR_Team.h"},
+  {"libovrplatformloader.so", "ovr_Team_GetMinUsers", {Kind::I32, "int", 0, 4}, args_829, false, "Pinned Oculus Platform SDK OVR_Team.h"},
+  {"libovrplatformloader.so", "ovr_Team_GetName", {Kind::Ptr, "char *", 1, 4}, args_830, false, "Pinned Oculus Platform SDK OVR_Team.h"},
+  {"libovrplatformloader.so", "ovr_TestUserAppAccessArray_GetElement", {Kind::Handle, "IntPtr", 0, 4}, args_831, false, "Pinned Oculus Platform SDK CAPI.cs"},
+  {"libovrplatformloader.so", "ovr_TestUserAppAccessArray_GetSize", {Kind::Size, "size_t", 0, 4}, args_832, false, "Pinned Oculus Platform SDK CAPI.cs"},
+  {"libovrplatformloader.so", "ovr_TestUserAppAccess_GetAccessToken", {Kind::Handle, "IntPtr", 0, 4}, args_833, false, "Pinned Oculus Platform SDK CAPI.cs"},
+  {"libovrplatformloader.so", "ovr_TestUserAppAccess_GetAppId", {Kind::U64, "uint64_t", 0, 4}, args_834, false, "Pinned Oculus Platform SDK CAPI.cs"},
+  {"libovrplatformloader.so", "ovr_TestUserAppAccess_GetUserId", {Kind::U64, "uint64_t", 0, 4}, args_835, false, "Pinned Oculus Platform SDK CAPI.cs"},
+  {"libovrplatformloader.so", "ovr_TestUser_GetAccessToken", {Kind::Handle, "IntPtr", 0, 4}, args_836, false, "Pinned Oculus Platform SDK CAPI.cs"},
+  {"libovrplatformloader.so", "ovr_TestUser_GetAppAccessArray", {Kind::Handle, "IntPtr", 0, 4}, args_837, false, "Pinned Oculus Platform SDK CAPI.cs"},
+  {"libovrplatformloader.so", "ovr_TestUser_GetFbAppAccessArray", {Kind::Handle, "IntPtr", 0, 4}, args_838, false, "Pinned Oculus Platform SDK CAPI.cs"},
+  {"libovrplatformloader.so", "ovr_TestUser_GetFriendAccessToken", {Kind::Handle, "IntPtr", 0, 4}, args_839, false, "Pinned Oculus Platform SDK CAPI.cs"},
+  {"libovrplatformloader.so", "ovr_TestUser_GetFriendAppAccessArray", {Kind::Handle, "IntPtr", 0, 4}, args_840, false, "Pinned Oculus Platform SDK CAPI.cs"},
+  {"libovrplatformloader.so", "ovr_TestUser_GetUserAlias", {Kind::Handle, "IntPtr", 0, 4}, args_841, false, "Pinned Oculus Platform SDK CAPI.cs"},
+  {"libovrplatformloader.so", "ovr_TestUser_GetUserFbid", {Kind::U64, "uint64_t", 0, 4}, args_842, false, "Pinned Oculus Platform SDK CAPI.cs"},
+  {"libovrplatformloader.so", "ovr_TestUser_GetUserId", {Kind::U64, "uint64_t", 0, 4}, args_843, false, "Pinned Oculus Platform SDK CAPI.cs"},
+  {"libovrplatformloader.so", "ovr_UnityInitWrapper", {Kind::U8, "bool", 0, 4}, args_844, false, "Pinned Oculus Platform SDK CAPI.cs"},
+  {"libovrplatformloader.so", "ovr_UnityInitWrapperAsynchronous", {Kind::U64, "uint64_t", 0, 4}, args_845, false, "Pinned Oculus Platform SDK CAPI.cs"},
+  {"libovrplatformloader.so", "ovr_UnityInitWrapperStandalone", {Kind::U8, "bool", 0, 4}, args_846, false, "Pinned Oculus Platform SDK CAPI.cs"},
+  {"libovrplatformloader.so", "ovr_UserAccountAgeCategory_GetAgeCategory", {Kind::Unsupported, "AccountAgeCategory", 0, 4}, args_847, false, "Pinned Oculus Platform SDK CAPI.cs"},
   {"libovrplatformloader.so", "ovr_UserAgeCategory_Get", {Kind::U64, "uint64_t", 0, 4}, {}, false, "Pinned Oculus Platform SDK CAPI.cs"},
-  {"libovrplatformloader.so", "ovr_UserAgeCategory_Report", {Kind::U64, "uint64_t", 0, 4}, args_838, false, "Pinned Oculus Platform SDK CAPI.cs"},
-  {"libovrplatformloader.so", "ovr_UserAndRoomArray_GetElement", {Kind::Handle, "ovrUserAndRoomHandle", 0, 4}, args_839, false, "Pinned Oculus Platform SDK OVR_UserAndRoomArray.h"},
-  {"libovrplatformloader.so", "ovr_UserAndRoomArray_GetNextUrl", {Kind::Ptr, "char *", 1, 4}, args_840, false, "Pinned Oculus Platform SDK OVR_UserAndRoomArray.h"},
-  {"libovrplatformloader.so", "ovr_UserAndRoomArray_GetSize", {Kind::Size, "size_t", 0, 4}, args_841, false, "Pinned Oculus Platform SDK OVR_UserAndRoomArray.h"},
-  {"libovrplatformloader.so", "ovr_UserAndRoomArray_HasNextPage", {Kind::U8, "bool", 0, 4}, args_842, false, "Pinned Oculus Platform SDK OVR_UserAndRoomArray.h"},
-  {"libovrplatformloader.so", "ovr_UserAndRoom_GetRoom", {Kind::Handle, "ovrRoomHandle", 0, 4}, args_843, false, "Pinned Oculus Platform SDK OVR_UserAndRoom.h"},
-  {"libovrplatformloader.so", "ovr_UserAndRoom_GetUser", {Kind::Handle, "ovrUserHandle", 0, 4}, args_844, false, "Pinned Oculus Platform SDK OVR_UserAndRoom.h"},
-  {"libovrplatformloader.so", "ovr_UserArray_GetElement", {Kind::Handle, "ovrUserHandle", 0, 4}, args_845, false, "Pinned Oculus Platform SDK OVR_UserArray.h"},
-  {"libovrplatformloader.so", "ovr_UserArray_GetNextUrl", {Kind::Ptr, "char *", 1, 4}, args_846, false, "Pinned Oculus Platform SDK OVR_UserArray.h"},
-  {"libovrplatformloader.so", "ovr_UserArray_GetSize", {Kind::Size, "size_t", 0, 4}, args_847, false, "Pinned Oculus Platform SDK OVR_UserArray.h"},
-  {"libovrplatformloader.so", "ovr_UserArray_HasNextPage", {Kind::U8, "bool", 0, 4}, args_848, false, "Pinned Oculus Platform SDK OVR_UserArray.h"},
-  {"libovrplatformloader.so", "ovr_UserCapabilityArray_GetElement", {Kind::Handle, "ovrUserCapabilityHandle", 0, 4}, args_849, false, "Pinned Oculus Platform SDK OVR_UserCapabilityArray.h"},
-  {"libovrplatformloader.so", "ovr_UserCapabilityArray_GetNextUrl", {Kind::Ptr, "char *", 1, 4}, args_850, false, "Pinned Oculus Platform SDK OVR_UserCapabilityArray.h"},
-  {"libovrplatformloader.so", "ovr_UserCapabilityArray_GetSize", {Kind::Size, "size_t", 0, 4}, args_851, false, "Pinned Oculus Platform SDK OVR_UserCapabilityArray.h"},
-  {"libovrplatformloader.so", "ovr_UserCapabilityArray_HasNextPage", {Kind::U8, "bool", 0, 4}, args_852, false, "Pinned Oculus Platform SDK OVR_UserCapabilityArray.h"},
-  {"libovrplatformloader.so", "ovr_UserCapability_GetDescription", {Kind::Ptr, "char *", 1, 4}, args_853, false, "Pinned Oculus Platform SDK OVR_UserCapability.h"},
-  {"libovrplatformloader.so", "ovr_UserCapability_GetIsEnabled", {Kind::U8, "bool", 0, 4}, args_854, false, "Pinned Oculus Platform SDK OVR_UserCapability.h"},
-  {"libovrplatformloader.so", "ovr_UserCapability_GetName", {Kind::Ptr, "char *", 1, 4}, args_855, false, "Pinned Oculus Platform SDK OVR_UserCapability.h"},
-  {"libovrplatformloader.so", "ovr_UserCapability_GetReasonCode", {Kind::Ptr, "char *", 1, 4}, args_856, false, "Pinned Oculus Platform SDK OVR_UserCapability.h"},
-  {"libovrplatformloader.so", "ovr_UserDataStoreUpdateResponse_GetSuccess", {Kind::U8, "bool", 0, 4}, args_857, false, "Pinned Oculus Platform SDK OVR_UserDataStoreUpdateResponse.h"},
-  {"libovrplatformloader.so", "ovr_UserDataStore_PrivateDeleteEntryByKey", {Kind::U64, "ovrRequest", 0, 4}, args_858, false, "Pinned Oculus Platform SDK OVR_Requests_UserDataStore.h"},
-  {"libovrplatformloader.so", "ovr_UserDataStore_PrivateGetEntries", {Kind::U64, "ovrRequest", 0, 4}, args_859, false, "Pinned Oculus Platform SDK OVR_Requests_UserDataStore.h"},
-  {"libovrplatformloader.so", "ovr_UserDataStore_PrivateGetEntryByKey", {Kind::U64, "ovrRequest", 0, 4}, args_860, false, "Pinned Oculus Platform SDK OVR_Requests_UserDataStore.h"},
-  {"libovrplatformloader.so", "ovr_UserDataStore_PrivateWriteEntry", {Kind::U64, "ovrRequest", 0, 4}, args_861, false, "Pinned Oculus Platform SDK OVR_Requests_UserDataStore.h"},
-  {"libovrplatformloader.so", "ovr_UserDataStore_PublicDeleteEntryByKey", {Kind::U64, "ovrRequest", 0, 4}, args_862, false, "Pinned Oculus Platform SDK OVR_Requests_UserDataStore.h"},
-  {"libovrplatformloader.so", "ovr_UserDataStore_PublicGetEntries", {Kind::U64, "ovrRequest", 0, 4}, args_863, false, "Pinned Oculus Platform SDK OVR_Requests_UserDataStore.h"},
-  {"libovrplatformloader.so", "ovr_UserDataStore_PublicGetEntryByKey", {Kind::U64, "ovrRequest", 0, 4}, args_864, false, "Pinned Oculus Platform SDK OVR_Requests_UserDataStore.h"},
-  {"libovrplatformloader.so", "ovr_UserDataStore_PublicWriteEntry", {Kind::U64, "ovrRequest", 0, 4}, args_865, false, "Pinned Oculus Platform SDK OVR_Requests_UserDataStore.h"},
-  {"libovrplatformloader.so", "ovr_UserOptions_AddServiceProvider", {Kind::Void, "void", 0, 4}, args_866, false, "Pinned Oculus Platform SDK OVR_UserOptions.h"},
-  {"libovrplatformloader.so", "ovr_UserOptions_ClearServiceProviders", {Kind::Void, "void", 0, 4}, args_867, false, "Pinned Oculus Platform SDK OVR_UserOptions.h"},
+  {"libovrplatformloader.so", "ovr_UserAgeCategory_Report", {Kind::U64, "uint64_t", 0, 4}, args_849, false, "Pinned Oculus Platform SDK CAPI.cs"},
+  {"libovrplatformloader.so", "ovr_UserAndRoomArray_GetElement", {Kind::Handle, "ovrUserAndRoomHandle", 0, 4}, args_850, false, "Pinned Oculus Platform SDK OVR_UserAndRoomArray.h"},
+  {"libovrplatformloader.so", "ovr_UserAndRoomArray_GetNextUrl", {Kind::Ptr, "char *", 1, 4}, args_851, false, "Pinned Oculus Platform SDK OVR_UserAndRoomArray.h"},
+  {"libovrplatformloader.so", "ovr_UserAndRoomArray_GetSize", {Kind::Size, "size_t", 0, 4}, args_852, false, "Pinned Oculus Platform SDK OVR_UserAndRoomArray.h"},
+  {"libovrplatformloader.so", "ovr_UserAndRoomArray_HasNextPage", {Kind::U8, "bool", 0, 4}, args_853, false, "Pinned Oculus Platform SDK OVR_UserAndRoomArray.h"},
+  {"libovrplatformloader.so", "ovr_UserAndRoom_GetRoom", {Kind::Handle, "ovrRoomHandle", 0, 4}, args_854, false, "Pinned Oculus Platform SDK OVR_UserAndRoom.h"},
+  {"libovrplatformloader.so", "ovr_UserAndRoom_GetUser", {Kind::Handle, "ovrUserHandle", 0, 4}, args_855, false, "Pinned Oculus Platform SDK OVR_UserAndRoom.h"},
+  {"libovrplatformloader.so", "ovr_UserArray_GetElement", {Kind::Handle, "ovrUserHandle", 0, 4}, args_856, false, "Pinned Oculus Platform SDK OVR_UserArray.h"},
+  {"libovrplatformloader.so", "ovr_UserArray_GetNextUrl", {Kind::Ptr, "char *", 1, 4}, args_857, false, "Pinned Oculus Platform SDK OVR_UserArray.h"},
+  {"libovrplatformloader.so", "ovr_UserArray_GetSize", {Kind::Size, "size_t", 0, 4}, args_858, false, "Pinned Oculus Platform SDK OVR_UserArray.h"},
+  {"libovrplatformloader.so", "ovr_UserArray_HasNextPage", {Kind::U8, "bool", 0, 4}, args_859, false, "Pinned Oculus Platform SDK OVR_UserArray.h"},
+  {"libovrplatformloader.so", "ovr_UserCapabilityArray_GetElement", {Kind::Handle, "ovrUserCapabilityHandle", 0, 4}, args_860, false, "Pinned Oculus Platform SDK OVR_UserCapabilityArray.h"},
+  {"libovrplatformloader.so", "ovr_UserCapabilityArray_GetNextUrl", {Kind::Ptr, "char *", 1, 4}, args_861, false, "Pinned Oculus Platform SDK OVR_UserCapabilityArray.h"},
+  {"libovrplatformloader.so", "ovr_UserCapabilityArray_GetSize", {Kind::Size, "size_t", 0, 4}, args_862, false, "Pinned Oculus Platform SDK OVR_UserCapabilityArray.h"},
+  {"libovrplatformloader.so", "ovr_UserCapabilityArray_HasNextPage", {Kind::U8, "bool", 0, 4}, args_863, false, "Pinned Oculus Platform SDK OVR_UserCapabilityArray.h"},
+  {"libovrplatformloader.so", "ovr_UserCapability_GetDescription", {Kind::Ptr, "char *", 1, 4}, args_864, false, "Pinned Oculus Platform SDK OVR_UserCapability.h"},
+  {"libovrplatformloader.so", "ovr_UserCapability_GetIsEnabled", {Kind::U8, "bool", 0, 4}, args_865, false, "Pinned Oculus Platform SDK OVR_UserCapability.h"},
+  {"libovrplatformloader.so", "ovr_UserCapability_GetName", {Kind::Ptr, "char *", 1, 4}, args_866, false, "Pinned Oculus Platform SDK OVR_UserCapability.h"},
+  {"libovrplatformloader.so", "ovr_UserCapability_GetReasonCode", {Kind::Ptr, "char *", 1, 4}, args_867, false, "Pinned Oculus Platform SDK OVR_UserCapability.h"},
+  {"libovrplatformloader.so", "ovr_UserDataStoreUpdateResponse_GetSuccess", {Kind::U8, "bool", 0, 4}, args_868, false, "Pinned Oculus Platform SDK OVR_UserDataStoreUpdateResponse.h"},
+  {"libovrplatformloader.so", "ovr_UserDataStore_PrivateDeleteEntryByKey", {Kind::U64, "ovrRequest", 0, 4}, args_869, false, "Pinned Oculus Platform SDK OVR_Requests_UserDataStore.h"},
+  {"libovrplatformloader.so", "ovr_UserDataStore_PrivateGetEntries", {Kind::U64, "ovrRequest", 0, 4}, args_870, false, "Pinned Oculus Platform SDK OVR_Requests_UserDataStore.h"},
+  {"libovrplatformloader.so", "ovr_UserDataStore_PrivateGetEntryByKey", {Kind::U64, "ovrRequest", 0, 4}, args_871, false, "Pinned Oculus Platform SDK OVR_Requests_UserDataStore.h"},
+  {"libovrplatformloader.so", "ovr_UserDataStore_PrivateWriteEntry", {Kind::U64, "ovrRequest", 0, 4}, args_872, false, "Pinned Oculus Platform SDK OVR_Requests_UserDataStore.h"},
+  {"libovrplatformloader.so", "ovr_UserDataStore_PublicDeleteEntryByKey", {Kind::U64, "ovrRequest", 0, 4}, args_873, false, "Pinned Oculus Platform SDK OVR_Requests_UserDataStore.h"},
+  {"libovrplatformloader.so", "ovr_UserDataStore_PublicGetEntries", {Kind::U64, "ovrRequest", 0, 4}, args_874, false, "Pinned Oculus Platform SDK OVR_Requests_UserDataStore.h"},
+  {"libovrplatformloader.so", "ovr_UserDataStore_PublicGetEntryByKey", {Kind::U64, "ovrRequest", 0, 4}, args_875, false, "Pinned Oculus Platform SDK OVR_Requests_UserDataStore.h"},
+  {"libovrplatformloader.so", "ovr_UserDataStore_PublicWriteEntry", {Kind::U64, "ovrRequest", 0, 4}, args_876, false, "Pinned Oculus Platform SDK OVR_Requests_UserDataStore.h"},
+  {"libovrplatformloader.so", "ovr_UserOptions_AddServiceProvider", {Kind::Void, "void", 0, 4}, args_877, false, "Pinned Oculus Platform SDK OVR_UserOptions.h"},
+  {"libovrplatformloader.so", "ovr_UserOptions_ClearServiceProviders", {Kind::Void, "void", 0, 4}, args_878, false, "Pinned Oculus Platform SDK OVR_UserOptions.h"},
   {"libovrplatformloader.so", "ovr_UserOptions_Create", {Kind::Handle, "ovrUserOptionsHandle", 0, 4}, {}, false, "Pinned Oculus Platform SDK OVR_UserOptions.h"},
-  {"libovrplatformloader.so", "ovr_UserOptions_Destroy", {Kind::Void, "void", 0, 4}, args_869, false, "Pinned Oculus Platform SDK OVR_UserOptions.h"},
-  {"libovrplatformloader.so", "ovr_UserOptions_SetMaxUsers", {Kind::Void, "void", 0, 4}, args_870, false, "Pinned Oculus Platform SDK OVR_UserOptions.h"},
-  {"libovrplatformloader.so", "ovr_UserOptions_SetTimeWindow", {Kind::Void, "void", 0, 4}, args_871, false, "Pinned Oculus Platform SDK OVR_UserOptions.h"},
-  {"libovrplatformloader.so", "ovr_UserProof_GetNonce", {Kind::Ptr, "char *", 1, 4}, args_872, false, "Pinned Oculus Platform SDK OVR_UserProof.h"},
-  {"libovrplatformloader.so", "ovr_UserReportID_GetDidCancel", {Kind::U8, "bool", 0, 4}, args_873, false, "Pinned Oculus Platform SDK OVR_UserReportID.h"},
-  {"libovrplatformloader.so", "ovr_UserReportID_GetID", {Kind::U64, "ovrID", 0, 4}, args_874, false, "Pinned Oculus Platform SDK OVR_UserReportID.h"},
-  {"libovrplatformloader.so", "ovr_User_CancelRecordingForReportFlow", {Kind::U64, "uint64_t", 0, 4}, args_875, false, "Pinned Oculus Platform SDK CAPI.cs"},
-  {"libovrplatformloader.so", "ovr_User_Get", {Kind::U64, "ovrRequest", 0, 4}, args_876, false, "Pinned Oculus Platform SDK OVR_Requests_User.h"},
+  {"libovrplatformloader.so", "ovr_UserOptions_Destroy", {Kind::Void, "void", 0, 4}, args_880, false, "Pinned Oculus Platform SDK OVR_UserOptions.h"},
+  {"libovrplatformloader.so", "ovr_UserOptions_SetMaxUsers", {Kind::Void, "void", 0, 4}, args_881, false, "Pinned Oculus Platform SDK OVR_UserOptions.h"},
+  {"libovrplatformloader.so", "ovr_UserOptions_SetTimeWindow", {Kind::Void, "void", 0, 4}, args_882, false, "Pinned Oculus Platform SDK OVR_UserOptions.h"},
+  {"libovrplatformloader.so", "ovr_UserProof_GetNonce", {Kind::Ptr, "char *", 1, 4}, args_883, false, "Pinned Oculus Platform SDK OVR_UserProof.h"},
+  {"libovrplatformloader.so", "ovr_UserReportID_GetDidCancel", {Kind::U8, "bool", 0, 4}, args_884, false, "Pinned Oculus Platform SDK OVR_UserReportID.h"},
+  {"libovrplatformloader.so", "ovr_UserReportID_GetID", {Kind::U64, "ovrID", 0, 4}, args_885, false, "Pinned Oculus Platform SDK OVR_UserReportID.h"},
+  {"libovrplatformloader.so", "ovr_User_CancelRecordingForReportFlow", {Kind::U64, "uint64_t", 0, 4}, args_886, false, "Pinned Oculus Platform SDK CAPI.cs"},
+  {"libovrplatformloader.so", "ovr_User_Get", {Kind::U64, "ovrRequest", 0, 4}, args_887, false, "Pinned Oculus Platform SDK OVR_Requests_User.h"},
   {"libovrplatformloader.so", "ovr_User_GetAccessToken", {Kind::U64, "ovrRequest", 0, 4}, {}, false, "Pinned Oculus Platform SDK OVR_Requests_User.h"},
   {"libovrplatformloader.so", "ovr_User_GetBlockedUsers", {Kind::U64, "uint64_t", 0, 4}, {}, false, "Pinned Oculus Platform SDK CAPI.cs"},
-  {"libovrplatformloader.so", "ovr_User_GetDisplayName", {Kind::Ptr, "char *", 1, 4}, args_879, false, "Pinned Oculus Platform SDK OVR_User.h"},
-  {"libovrplatformloader.so", "ovr_User_GetID", {Kind::U64, "ovrID", 0, 4}, args_880, false, "Pinned Oculus Platform SDK OVR_User.h"},
-  {"libovrplatformloader.so", "ovr_User_GetImageUrl", {Kind::Ptr, "char *", 1, 4}, args_881, false, "Pinned Oculus Platform SDK OVR_User.h"},
-  {"libovrplatformloader.so", "ovr_User_GetInviteToken", {Kind::Ptr, "char *", 1, 4}, args_882, false, "Pinned Oculus Platform SDK OVR_User.h"},
-  {"libovrplatformloader.so", "ovr_User_GetLinkedAccounts", {Kind::U64, "uint64_t", 0, 4}, args_883, false, "Pinned Oculus Platform SDK CAPI.cs"},
+  {"libovrplatformloader.so", "ovr_User_GetDisplayName", {Kind::Ptr, "char *", 1, 4}, args_890, false, "Pinned Oculus Platform SDK OVR_User.h"},
+  {"libovrplatformloader.so", "ovr_User_GetID", {Kind::U64, "ovrID", 0, 4}, args_891, false, "Pinned Oculus Platform SDK OVR_User.h"},
+  {"libovrplatformloader.so", "ovr_User_GetImageUrl", {Kind::Ptr, "char *", 1, 4}, args_892, false, "Pinned Oculus Platform SDK OVR_User.h"},
+  {"libovrplatformloader.so", "ovr_User_GetInviteToken", {Kind::Ptr, "char *", 1, 4}, args_893, false, "Pinned Oculus Platform SDK OVR_User.h"},
+  {"libovrplatformloader.so", "ovr_User_GetLinkedAccounts", {Kind::U64, "uint64_t", 0, 4}, args_894, false, "Pinned Oculus Platform SDK CAPI.cs"},
   {"libovrplatformloader.so", "ovr_User_GetLoggedInUser", {Kind::U64, "ovrRequest", 0, 4}, {}, false, "Pinned Oculus Platform SDK OVR_Requests_User.h"},
   {"libovrplatformloader.so", "ovr_User_GetLoggedInUserFriends", {Kind::U64, "ovrRequest", 0, 4}, {}, false, "Pinned Oculus Platform SDK OVR_Requests_User.h"},
   {"libovrplatformloader.so", "ovr_User_GetLoggedInUserFriendsAndRooms", {Kind::U64, "ovrRequest", 0, 4}, {}, false, "Pinned Oculus Platform SDK OVR_Requests_User.h"},
   {"libovrplatformloader.so", "ovr_User_GetLoggedInUserManagedInfo", {Kind::U64, "uint64_t", 0, 4}, {}, false, "Pinned Oculus Platform SDK CAPI.cs"},
-  {"libovrplatformloader.so", "ovr_User_GetLoggedInUserRecentlyMetUsersAndRooms", {Kind::U64, "ovrRequest", 0, 4}, args_888, false, "Pinned Oculus Platform SDK OVR_Requests_User.h"},
-  {"libovrplatformloader.so", "ovr_User_GetManagedInfo", {Kind::Handle, "IntPtr", 0, 4}, args_889, false, "Pinned Oculus Platform SDK CAPI.cs"},
-  {"libovrplatformloader.so", "ovr_User_GetNextUserAndRoomArrayPage", {Kind::U64, "ovrRequest", 0, 4}, args_890, false, "Pinned Oculus Platform SDK OVR_Requests_User.h"},
-  {"libovrplatformloader.so", "ovr_User_GetNextUserArrayPage", {Kind::U64, "ovrRequest", 0, 4}, args_891, false, "Pinned Oculus Platform SDK OVR_Requests_User.h"},
-  {"libovrplatformloader.so", "ovr_User_GetNextUserCapabilityArrayPage", {Kind::U64, "ovrRequest", 0, 4}, args_892, false, "Pinned Oculus Platform SDK OVR_Requests_User.h"},
-  {"libovrplatformloader.so", "ovr_User_GetOculusID", {Kind::Ptr, "char *", 1, 4}, args_893, false, "Pinned Oculus Platform SDK OVR_User.h"},
-  {"libovrplatformloader.so", "ovr_User_GetOrgScopedID", {Kind::U64, "ovrRequest", 0, 4}, args_894, false, "Pinned Oculus Platform SDK OVR_Requests_User.h"},
-  {"libovrplatformloader.so", "ovr_User_GetPresence", {Kind::Ptr, "char *", 1, 4}, args_895, false, "Pinned Oculus Platform SDK OVR_User.h"},
-  {"libovrplatformloader.so", "ovr_User_GetPresenceDeeplinkMessage", {Kind::Ptr, "char *", 1, 4}, args_896, false, "Pinned Oculus Platform SDK OVR_User.h"},
-  {"libovrplatformloader.so", "ovr_User_GetPresenceDestinationApiName", {Kind::Ptr, "char *", 1, 4}, args_897, false, "Pinned Oculus Platform SDK OVR_User.h"},
-  {"libovrplatformloader.so", "ovr_User_GetPresenceLobbySessionId", {Kind::Ptr, "char *", 1, 4}, args_898, false, "Pinned Oculus Platform SDK OVR_User.h"},
-  {"libovrplatformloader.so", "ovr_User_GetPresenceMatchSessionId", {Kind::Ptr, "char *", 1, 4}, args_899, false, "Pinned Oculus Platform SDK OVR_User.h"},
-  {"libovrplatformloader.so", "ovr_User_GetPresenceStatus", {Kind::I32, "ovrUserPresenceStatus", 0, 4}, args_900, false, "Pinned Oculus Platform SDK OVR_User.h"},
+  {"libovrplatformloader.so", "ovr_User_GetLoggedInUserRecentlyMetUsersAndRooms", {Kind::U64, "ovrRequest", 0, 4}, args_899, false, "Pinned Oculus Platform SDK OVR_Requests_User.h"},
+  {"libovrplatformloader.so", "ovr_User_GetManagedInfo", {Kind::Handle, "IntPtr", 0, 4}, args_900, false, "Pinned Oculus Platform SDK CAPI.cs"},
+  {"libovrplatformloader.so", "ovr_User_GetNextUserAndRoomArrayPage", {Kind::U64, "ovrRequest", 0, 4}, args_901, false, "Pinned Oculus Platform SDK OVR_Requests_User.h"},
+  {"libovrplatformloader.so", "ovr_User_GetNextUserArrayPage", {Kind::U64, "ovrRequest", 0, 4}, args_902, false, "Pinned Oculus Platform SDK OVR_Requests_User.h"},
+  {"libovrplatformloader.so", "ovr_User_GetNextUserCapabilityArrayPage", {Kind::U64, "ovrRequest", 0, 4}, args_903, false, "Pinned Oculus Platform SDK OVR_Requests_User.h"},
+  {"libovrplatformloader.so", "ovr_User_GetOculusID", {Kind::Ptr, "char *", 1, 4}, args_904, false, "Pinned Oculus Platform SDK OVR_User.h"},
+  {"libovrplatformloader.so", "ovr_User_GetOrgScopedID", {Kind::U64, "ovrRequest", 0, 4}, args_905, false, "Pinned Oculus Platform SDK OVR_Requests_User.h"},
+  {"libovrplatformloader.so", "ovr_User_GetPresence", {Kind::Ptr, "char *", 1, 4}, args_906, false, "Pinned Oculus Platform SDK OVR_User.h"},
+  {"libovrplatformloader.so", "ovr_User_GetPresenceDeeplinkMessage", {Kind::Ptr, "char *", 1, 4}, args_907, false, "Pinned Oculus Platform SDK OVR_User.h"},
+  {"libovrplatformloader.so", "ovr_User_GetPresenceDestinationApiName", {Kind::Ptr, "char *", 1, 4}, args_908, false, "Pinned Oculus Platform SDK OVR_User.h"},
+  {"libovrplatformloader.so", "ovr_User_GetPresenceLobbySessionId", {Kind::Ptr, "char *", 1, 4}, args_909, false, "Pinned Oculus Platform SDK OVR_User.h"},
+  {"libovrplatformloader.so", "ovr_User_GetPresenceMatchSessionId", {Kind::Ptr, "char *", 1, 4}, args_910, false, "Pinned Oculus Platform SDK OVR_User.h"},
+  {"libovrplatformloader.so", "ovr_User_GetPresenceStatus", {Kind::I32, "ovrUserPresenceStatus", 0, 4}, args_911, false, "Pinned Oculus Platform SDK OVR_User.h"},
   {"libovrplatformloader.so", "ovr_User_GetSdkAccounts", {Kind::U64, "ovrRequest", 0, 4}, {}, false, "Pinned Oculus Platform SDK OVR_Requests_User.h"},
-  {"libovrplatformloader.so", "ovr_User_GetSmallImageUrl", {Kind::Ptr, "char *", 1, 4}, args_902, false, "Pinned Oculus Platform SDK OVR_User.h"},
+  {"libovrplatformloader.so", "ovr_User_GetSmallImageUrl", {Kind::Ptr, "char *", 1, 4}, args_913, false, "Pinned Oculus Platform SDK OVR_User.h"},
   {"libovrplatformloader.so", "ovr_User_GetUserCapabilities", {Kind::U64, "uint64_t", 0, 4}, {}, false, "Pinned Oculus Platform SDK CAPI.cs"},
   {"libovrplatformloader.so", "ovr_User_GetUserProof", {Kind::U64, "ovrRequest", 0, 4}, {}, false, "Pinned Oculus Platform SDK OVR_Requests_User.h"},
-  {"libovrplatformloader.so", "ovr_User_LaunchBlockFlow", {Kind::U64, "uint64_t", 0, 4}, args_905, false, "Pinned Oculus Platform SDK CAPI.cs"},
-  {"libovrplatformloader.so", "ovr_User_LaunchFriendRequestFlow", {Kind::U64, "ovrRequest", 0, 4}, args_906, false, "Pinned Oculus Platform SDK OVR_Requests_User.h"},
-  {"libovrplatformloader.so", "ovr_User_LaunchReportFlow", {Kind::U64, "uint64_t", 0, 4}, args_907, false, "Pinned Oculus Platform SDK CAPI.cs"},
-  {"libovrplatformloader.so", "ovr_User_LaunchReportFlow2", {Kind::U64, "uint64_t", 0, 4}, args_908, false, "Pinned Oculus Platform SDK CAPI.cs"},
-  {"libovrplatformloader.so", "ovr_User_LaunchUnblockFlow", {Kind::U64, "uint64_t", 0, 4}, args_909, false, "Pinned Oculus Platform SDK CAPI.cs"},
+  {"libovrplatformloader.so", "ovr_User_LaunchBlockFlow", {Kind::U64, "uint64_t", 0, 4}, args_916, false, "Pinned Oculus Platform SDK CAPI.cs"},
+  {"libovrplatformloader.so", "ovr_User_LaunchFriendRequestFlow", {Kind::U64, "ovrRequest", 0, 4}, args_917, false, "Pinned Oculus Platform SDK OVR_Requests_User.h"},
+  {"libovrplatformloader.so", "ovr_User_LaunchReportFlow", {Kind::U64, "uint64_t", 0, 4}, args_918, false, "Pinned Oculus Platform SDK CAPI.cs"},
+  {"libovrplatformloader.so", "ovr_User_LaunchReportFlow2", {Kind::U64, "uint64_t", 0, 4}, args_919, false, "Pinned Oculus Platform SDK CAPI.cs"},
+  {"libovrplatformloader.so", "ovr_User_LaunchUnblockFlow", {Kind::U64, "uint64_t", 0, 4}, args_920, false, "Pinned Oculus Platform SDK CAPI.cs"},
   {"libovrplatformloader.so", "ovr_User_NewEntitledTestUser", {Kind::U64, "uint64_t", 0, 4}, {}, false, "Pinned Oculus Platform SDK CAPI.cs"},
   {"libovrplatformloader.so", "ovr_User_NewTestUser", {Kind::U64, "uint64_t", 0, 4}, {}, false, "Pinned Oculus Platform SDK CAPI.cs"},
   {"libovrplatformloader.so", "ovr_User_NewTestUserFriends", {Kind::U64, "uint64_t", 0, 4}, {}, false, "Pinned Oculus Platform SDK CAPI.cs"},
   {"libovrplatformloader.so", "ovr_User_StartRecordingForReportFlow", {Kind::U64, "uint64_t", 0, 4}, {}, false, "Pinned Oculus Platform SDK CAPI.cs"},
-  {"libovrplatformloader.so", "ovr_User_StopRecordingAndLaunchReportFlow", {Kind::U64, "uint64_t", 0, 4}, args_914, false, "Pinned Oculus Platform SDK CAPI.cs"},
-  {"libovrplatformloader.so", "ovr_User_StopRecordingAndLaunchReportFlow2", {Kind::U64, "uint64_t", 0, 4}, args_915, false, "Pinned Oculus Platform SDK CAPI.cs"},
-  {"libovrplatformloader.so", "ovr_User_TestUserCreateDeviceManifest", {Kind::U64, "uint64_t", 0, 4}, args_916, false, "Pinned Oculus Platform SDK CAPI.cs"},
+  {"libovrplatformloader.so", "ovr_User_StopRecordingAndLaunchReportFlow", {Kind::U64, "uint64_t", 0, 4}, args_925, false, "Pinned Oculus Platform SDK CAPI.cs"},
+  {"libovrplatformloader.so", "ovr_User_StopRecordingAndLaunchReportFlow2", {Kind::U64, "uint64_t", 0, 4}, args_926, false, "Pinned Oculus Platform SDK CAPI.cs"},
+  {"libovrplatformloader.so", "ovr_User_TestUserCreateDeviceManifest", {Kind::U64, "uint64_t", 0, 4}, args_927, false, "Pinned Oculus Platform SDK CAPI.cs"},
   {"libovrplatformloader.so", "ovr_VoipOptions_Create", {Kind::Handle, "ovrVoipOptionsHandle", 0, 4}, {}, false, "Pinned Oculus Platform SDK OVR_VoipOptions.h"},
-  {"libovrplatformloader.so", "ovr_VoipOptions_Destroy", {Kind::Void, "void", 0, 4}, args_918, false, "Pinned Oculus Platform SDK OVR_VoipOptions.h"},
-  {"libovrplatformloader.so", "ovr_VoipOptions_SetBitrateForNewConnections", {Kind::Void, "void", 0, 4}, args_919, false, "Pinned Oculus Platform SDK OVR_VoipOptions.h"},
-  {"libovrplatformloader.so", "ovr_VoipOptions_SetCreateNewConnectionUseDtx", {Kind::Void, "void", 0, 4}, args_920, false, "Pinned Oculus Platform SDK OVR_VoipOptions.h"},
-  {"libovrplatformloader.so", "ovr_Voip_Accept", {Kind::Void, "void", 0, 4}, args_921, false, "Pinned Oculus Platform SDK OVR_Functions_Voip.h"},
-  {"libovrplatformloader.so", "ovr_Voip_GetIsConnectionUsingDtx", {Kind::I32, "ovrVoipDtxState", 0, 4}, args_922, false, "Pinned Oculus Platform SDK OVR_Functions_Voip.h"},
-  {"libovrplatformloader.so", "ovr_Voip_GetLocalBitrate", {Kind::I32, "ovrVoipBitrate", 0, 4}, args_923, false, "Pinned Oculus Platform SDK OVR_Functions_Voip.h"},
+  {"libovrplatformloader.so", "ovr_VoipOptions_Destroy", {Kind::Void, "void", 0, 4}, args_929, false, "Pinned Oculus Platform SDK OVR_VoipOptions.h"},
+  {"libovrplatformloader.so", "ovr_VoipOptions_SetBitrateForNewConnections", {Kind::Void, "void", 0, 4}, args_930, false, "Pinned Oculus Platform SDK OVR_VoipOptions.h"},
+  {"libovrplatformloader.so", "ovr_VoipOptions_SetCreateNewConnectionUseDtx", {Kind::Void, "void", 0, 4}, args_931, false, "Pinned Oculus Platform SDK OVR_VoipOptions.h"},
+  {"libovrplatformloader.so", "ovr_Voip_Accept", {Kind::Void, "void", 0, 4}, args_932, false, "Pinned Oculus Platform SDK OVR_Functions_Voip.h"},
+  {"libovrplatformloader.so", "ovr_Voip_GetIsConnectionUsingDtx", {Kind::I32, "ovrVoipDtxState", 0, 4}, args_933, false, "Pinned Oculus Platform SDK OVR_Functions_Voip.h"},
+  {"libovrplatformloader.so", "ovr_Voip_GetLocalBitrate", {Kind::I32, "ovrVoipBitrate", 0, 4}, args_934, false, "Pinned Oculus Platform SDK OVR_Functions_Voip.h"},
   {"libovrplatformloader.so", "ovr_Voip_GetMicrophoneAvailability", {Kind::U64, "ovrRequest", 0, 4}, {}, false, "Pinned Oculus Platform SDK OVR_Requests_Voip.h"},
   {"libovrplatformloader.so", "ovr_Voip_GetOutputBufferMaxSize", {Kind::Size, "size_t", 0, 4}, {}, false, "Pinned Oculus Platform SDK OVR_Functions_Voip.h"},
-  {"libovrplatformloader.so", "ovr_Voip_GetPCM", {Kind::Size, "size_t", 0, 4}, args_926, false, "Pinned Oculus Platform SDK OVR_Functions_Voip.h"},
-  {"libovrplatformloader.so", "ovr_Voip_GetPCMFloat", {Kind::Size, "size_t", 0, 4}, args_927, false, "Pinned Oculus Platform SDK OVR_Functions_Voip.h"},
-  {"libovrplatformloader.so", "ovr_Voip_GetPCMSize", {Kind::Size, "size_t", 0, 4}, args_928, false, "Pinned Oculus Platform SDK OVR_Functions_Voip.h"},
-  {"libovrplatformloader.so", "ovr_Voip_GetPCMWithTimestamp", {Kind::Size, "size_t", 0, 4}, args_929, false, "Pinned Oculus Platform SDK OVR_Functions_Voip.h"},
-  {"libovrplatformloader.so", "ovr_Voip_GetPCMWithTimestampFloat", {Kind::Size, "size_t", 0, 4}, args_930, false, "Pinned Oculus Platform SDK OVR_Functions_Voip.h"},
-  {"libovrplatformloader.so", "ovr_Voip_GetRemoteBitrate", {Kind::I32, "ovrVoipBitrate", 0, 4}, args_931, false, "Pinned Oculus Platform SDK OVR_Functions_Voip.h"},
-  {"libovrplatformloader.so", "ovr_Voip_GetSyncTimestamp", {Kind::Unsupported, "uint32_t", 0, 4}, args_932, false, "Pinned Oculus Platform SDK OVR_Functions_Voip.h"},
-  {"libovrplatformloader.so", "ovr_Voip_GetSyncTimestampDifference", {Kind::I64, "long long", 0, 4}, args_933, false, "Pinned Oculus Platform SDK OVR_Functions_Voip.h"},
+  {"libovrplatformloader.so", "ovr_Voip_GetPCM", {Kind::Size, "size_t", 0, 4}, args_937, false, "Pinned Oculus Platform SDK OVR_Functions_Voip.h"},
+  {"libovrplatformloader.so", "ovr_Voip_GetPCMFloat", {Kind::Size, "size_t", 0, 4}, args_938, false, "Pinned Oculus Platform SDK OVR_Functions_Voip.h"},
+  {"libovrplatformloader.so", "ovr_Voip_GetPCMSize", {Kind::Size, "size_t", 0, 4}, args_939, false, "Pinned Oculus Platform SDK OVR_Functions_Voip.h"},
+  {"libovrplatformloader.so", "ovr_Voip_GetPCMWithTimestamp", {Kind::Size, "size_t", 0, 4}, args_940, false, "Pinned Oculus Platform SDK OVR_Functions_Voip.h"},
+  {"libovrplatformloader.so", "ovr_Voip_GetPCMWithTimestampFloat", {Kind::Size, "size_t", 0, 4}, args_941, false, "Pinned Oculus Platform SDK OVR_Functions_Voip.h"},
+  {"libovrplatformloader.so", "ovr_Voip_GetRemoteBitrate", {Kind::I32, "ovrVoipBitrate", 0, 4}, args_942, false, "Pinned Oculus Platform SDK OVR_Functions_Voip.h"},
+  {"libovrplatformloader.so", "ovr_Voip_GetSyncTimestamp", {Kind::Unsupported, "uint32_t", 0, 4}, args_943, false, "Pinned Oculus Platform SDK OVR_Functions_Voip.h"},
+  {"libovrplatformloader.so", "ovr_Voip_GetSyncTimestampDifference", {Kind::I64, "long long", 0, 4}, args_944, false, "Pinned Oculus Platform SDK OVR_Functions_Voip.h"},
   {"libovrplatformloader.so", "ovr_Voip_GetSystemVoipStatus", {Kind::I32, "ovrSystemVoipStatus", 0, 4}, {}, false, "Pinned Oculus Platform SDK OVR_Functions_Voip.h"},
-  {"libovrplatformloader.so", "ovr_Voip_ReportAppVoipSessions", {Kind::U64, "uint64_t", 0, 4}, args_935, false, "Pinned Oculus Platform SDK CAPI.cs"},
-  {"libovrplatformloader.so", "ovr_Voip_SetMicrophoneFilterCallback", {Kind::Void, "void", 0, 4}, args_936, false, "Pinned Oculus Platform SDK OVR_Functions_Voip.h"},
-  {"libovrplatformloader.so", "ovr_Voip_SetMicrophoneFilterCallbackWithFixedSizeBuffer", {Kind::Void, "void", 0, 4}, args_937, false, "Pinned Oculus Platform SDK CAPI.cs"},
-  {"libovrplatformloader.so", "ovr_Voip_SetMicrophoneMuted", {Kind::Void, "void", 0, 4}, args_938, false, "Pinned Oculus Platform SDK OVR_Functions_Voip.h"},
-  {"libovrplatformloader.so", "ovr_Voip_SetNewConnectionOptions", {Kind::Void, "void", 0, 4}, args_939, false, "Pinned Oculus Platform SDK OVR_Functions_Voip.h"},
-  {"libovrplatformloader.so", "ovr_Voip_SetOutputSampleRate", {Kind::Void, "void", 0, 4}, args_940, false, "Pinned Oculus Platform SDK OVR_Functions_Voip.h"},
-  {"libovrplatformloader.so", "ovr_Voip_SetSystemVoipSuppressed", {Kind::U64, "ovrRequest", 0, 4}, args_941, false, "Pinned Oculus Platform SDK OVR_Requests_Voip.h"},
-  {"libovrplatformloader.so", "ovr_Voip_Start", {Kind::Void, "void", 0, 4}, args_942, false, "Pinned Oculus Platform SDK OVR_Functions_Voip.h"},
-  {"libovrplatformloader.so", "ovr_Voip_Stop", {Kind::Void, "void", 0, 4}, args_943, false, "Pinned Oculus Platform SDK OVR_Functions_Voip.h"},
-  {"libvrapi.so", "vrapi_CreateAndroidSurfaceSwapChain", {Kind::Handle, "ovrTextureSwapChain", 0, 4}, args_944, false, "VrApi 1.21 API / First Contact OVRPlugin"},
-  {"libvrapi.so", "vrapi_CreateSystemVulkan", {Kind::I32, "", 0, 4}, args_945, false, "VrApi 1.21 API / First Contact OVRPlugin"},
-  {"libvrapi.so", "vrapi_CreateTextureSwapChain", {Kind::Handle, "ovrTextureSwapChain", 0, 4}, args_946, false, "VrApi 1.21 API / First Contact OVRPlugin"},
-  {"libvrapi.so", "vrapi_DestroyTextureSwapChain", {Kind::Void, "", 0, 4}, args_947, false, "VrApi 1.21 API / First Contact OVRPlugin"},
-  {"libvrapi.so", "vrapi_EnterVrMode", {Kind::Handle, "ovrMobile", 0, 4}, args_948, false, "VrApi 1.21 API / First Contact OVRPlugin"},
-  {"libvrapi.so", "vrapi_EnumerateInputDevices", {Kind::I32, "", 0, 4}, args_949, false, "VrApi 1.21 API / First Contact OVRPlugin"},
-  {"libvrapi.so", "vrapi_GetBoundaryGeometry", {Kind::I32, "", 0, 4}, args_950, false, "VrApi 1.21 API / First Contact OVRPlugin"},
-  {"libvrapi.so", "vrapi_GetBoundaryOrientedBoundingBox", {Kind::I32, "", 0, 4}, args_951, false, "VrApi 1.21 API / First Contact OVRPlugin"},
-  {"libvrapi.so", "vrapi_GetBoundaryTriggerState", {Kind::I32, "", 0, 4}, args_952, false, "VrApi 1.21 API / First Contact OVRPlugin"},
-  {"libvrapi.so", "vrapi_GetBoundaryVisible", {Kind::I32, "", 0, 4}, args_953, false, "VrApi 1.21 API / First Contact OVRPlugin"},
-  {"libvrapi.so", "vrapi_GetCurrentInputState", {Kind::I32, "", 0, 4}, args_954, false, "VrApi 1.21 API / First Contact OVRPlugin"},
-  {"libvrapi.so", "vrapi_GetDeviceExtensionsVulkan", {Kind::I32, "", 0, 4}, args_955, false, "VrApi 1.21 API / First Contact OVRPlugin"},
-  {"libvrapi.so", "vrapi_GetInputDeviceCapabilities", {Kind::I32, "", 0, 4}, args_956, false, "VrApi 1.21 API / First Contact OVRPlugin"},
-  {"libvrapi.so", "vrapi_GetInputTrackingState", {Kind::I32, "", 0, 4}, args_957, false, "VrApi 1.21 API / First Contact OVRPlugin"},
-  {"libvrapi.so", "vrapi_GetInstanceExtensionsVulkan", {Kind::I32, "", 0, 4}, args_958, false, "VrApi 1.21 API / First Contact OVRPlugin"},
-  {"libvrapi.so", "vrapi_GetPredictedDisplayTime", {Kind::F64, "", 0, 4}, args_959, false, "VrApi 1.21 API / First Contact OVRPlugin"},
-  {"libvrapi.so", "vrapi_GetPredictedTracking", {Kind::Composite, "ovrTracking", 104, 8}, args_960, false, "VrApi 1.21 API / First Contact OVRPlugin"},
-  {"libvrapi.so", "vrapi_GetPredictedTracking2", {Kind::Composite, "ovrTracking2", 360, 8}, args_961, false, "VrApi 1.21 API / First Contact OVRPlugin"},
-  {"libvrapi.so", "vrapi_GetPropertyInt", {Kind::U8, "", 0, 4}, args_962, false, "VrApi 1.21 API / First Contact OVRPlugin"},
-  {"libvrapi.so", "vrapi_GetSystemPropertyFloat", {Kind::F32, "", 0, 4}, args_963, false, "VrApi 1.21 API / First Contact OVRPlugin"},
-  {"libvrapi.so", "vrapi_GetSystemPropertyFloatArray", {Kind::I32, "", 0, 4}, args_964, false, "VrApi 1.21 API / First Contact OVRPlugin"},
-  {"libvrapi.so", "vrapi_GetSystemPropertyInt", {Kind::I32, "", 0, 4}, args_965, false, "VrApi 1.21 API / First Contact OVRPlugin"},
-  {"libvrapi.so", "vrapi_GetSystemStatusFloat", {Kind::F32, "", 0, 4}, args_966, false, "VrApi 1.21 API / First Contact OVRPlugin"},
-  {"libvrapi.so", "vrapi_GetSystemStatusInt", {Kind::I32, "", 0, 4}, args_967, false, "VrApi 1.21 API / First Contact OVRPlugin"},
-  {"libvrapi.so", "vrapi_GetTextureSwapChainAndroidSurface", {Kind::Handle, "jobject", 0, 4}, args_968, false, "VrApi 1.21 API / First Contact OVRPlugin"},
-  {"libvrapi.so", "vrapi_GetTextureSwapChainBufferVulkan", {Kind::I32, "", 0, 4}, args_969, false, "VrApi 1.21 API / First Contact OVRPlugin"},
-  {"libvrapi.so", "vrapi_GetTextureSwapChainHandle", {Kind::U32, "", 0, 4}, args_970, false, "VrApi 1.21 API / First Contact OVRPlugin"},
-  {"libvrapi.so", "vrapi_GetTextureSwapChainLength", {Kind::I32, "", 0, 4}, args_971, false, "VrApi 1.21 API / First Contact OVRPlugin"},
+  {"libovrplatformloader.so", "ovr_Voip_ReportAppVoipSessions", {Kind::U64, "uint64_t", 0, 4}, args_946, false, "Pinned Oculus Platform SDK CAPI.cs"},
+  {"libovrplatformloader.so", "ovr_Voip_SetMicrophoneFilterCallback", {Kind::Void, "void", 0, 4}, args_947, false, "Pinned Oculus Platform SDK OVR_Functions_Voip.h"},
+  {"libovrplatformloader.so", "ovr_Voip_SetMicrophoneFilterCallbackWithFixedSizeBuffer", {Kind::Void, "void", 0, 4}, args_948, false, "Pinned Oculus Platform SDK CAPI.cs"},
+  {"libovrplatformloader.so", "ovr_Voip_SetMicrophoneMuted", {Kind::Void, "void", 0, 4}, args_949, false, "Pinned Oculus Platform SDK OVR_Functions_Voip.h"},
+  {"libovrplatformloader.so", "ovr_Voip_SetNewConnectionOptions", {Kind::Void, "void", 0, 4}, args_950, false, "Pinned Oculus Platform SDK OVR_Functions_Voip.h"},
+  {"libovrplatformloader.so", "ovr_Voip_SetOutputSampleRate", {Kind::Void, "void", 0, 4}, args_951, false, "Pinned Oculus Platform SDK OVR_Functions_Voip.h"},
+  {"libovrplatformloader.so", "ovr_Voip_SetSystemVoipSuppressed", {Kind::U64, "ovrRequest", 0, 4}, args_952, false, "Pinned Oculus Platform SDK OVR_Requests_Voip.h"},
+  {"libovrplatformloader.so", "ovr_Voip_Start", {Kind::Void, "void", 0, 4}, args_953, false, "Pinned Oculus Platform SDK OVR_Functions_Voip.h"},
+  {"libovrplatformloader.so", "ovr_Voip_Stop", {Kind::Void, "void", 0, 4}, args_954, false, "Pinned Oculus Platform SDK OVR_Functions_Voip.h"},
+  {"libvrapi.so", "vrapi_CreateAndroidSurfaceSwapChain", {Kind::Handle, "ovrTextureSwapChain", 0, 4}, args_955, false, "VrApi 1.21 API / First Contact OVRPlugin"},
+  {"libvrapi.so", "vrapi_CreateSystemVulkan", {Kind::I32, "", 0, 4}, args_956, false, "VrApi 1.21 API / First Contact OVRPlugin"},
+  {"libvrapi.so", "vrapi_CreateTextureSwapChain", {Kind::Handle, "ovrTextureSwapChain", 0, 4}, args_957, false, "VrApi 1.21 API / First Contact OVRPlugin"},
+  {"libvrapi.so", "vrapi_DestroyTextureSwapChain", {Kind::Void, "", 0, 4}, args_958, false, "VrApi 1.21 API / First Contact OVRPlugin"},
+  {"libvrapi.so", "vrapi_EnterVrMode", {Kind::Handle, "ovrMobile", 0, 4}, args_959, false, "VrApi 1.21 API / First Contact OVRPlugin"},
+  {"libvrapi.so", "vrapi_EnumerateInputDevices", {Kind::I32, "", 0, 4}, args_960, false, "VrApi 1.21 API / First Contact OVRPlugin"},
+  {"libvrapi.so", "vrapi_GetBoundaryGeometry", {Kind::I32, "", 0, 4}, args_961, false, "VrApi 1.21 API / First Contact OVRPlugin"},
+  {"libvrapi.so", "vrapi_GetBoundaryOrientedBoundingBox", {Kind::I32, "", 0, 4}, args_962, false, "VrApi 1.21 API / First Contact OVRPlugin"},
+  {"libvrapi.so", "vrapi_GetBoundaryTriggerState", {Kind::I32, "", 0, 4}, args_963, false, "VrApi 1.21 API / First Contact OVRPlugin"},
+  {"libvrapi.so", "vrapi_GetBoundaryVisible", {Kind::I32, "", 0, 4}, args_964, false, "VrApi 1.21 API / First Contact OVRPlugin"},
+  {"libvrapi.so", "vrapi_GetCurrentInputState", {Kind::I32, "", 0, 4}, args_965, false, "VrApi 1.21 API / First Contact OVRPlugin"},
+  {"libvrapi.so", "vrapi_GetDeviceExtensionsVulkan", {Kind::I32, "", 0, 4}, args_966, false, "VrApi 1.21 API / First Contact OVRPlugin"},
+  {"libvrapi.so", "vrapi_GetInputDeviceCapabilities", {Kind::I32, "", 0, 4}, args_967, false, "VrApi 1.21 API / First Contact OVRPlugin"},
+  {"libvrapi.so", "vrapi_GetInputTrackingState", {Kind::I32, "", 0, 4}, args_968, false, "VrApi 1.21 API / First Contact OVRPlugin"},
+  {"libvrapi.so", "vrapi_GetInstanceExtensionsVulkan", {Kind::I32, "", 0, 4}, args_969, false, "VrApi 1.21 API / First Contact OVRPlugin"},
+  {"libvrapi.so", "vrapi_GetPredictedDisplayTime", {Kind::F64, "", 0, 4}, args_970, false, "VrApi 1.21 API / First Contact OVRPlugin"},
+  {"libvrapi.so", "vrapi_GetPredictedTracking", {Kind::Composite, "ovrTracking", 104, 8}, args_971, false, "VrApi 1.21 API / First Contact OVRPlugin"},
+  {"libvrapi.so", "vrapi_GetPredictedTracking2", {Kind::Composite, "ovrTracking2", 360, 8}, args_972, false, "VrApi 1.21 API / First Contact OVRPlugin"},
+  {"libvrapi.so", "vrapi_GetPropertyInt", {Kind::U8, "", 0, 4}, args_973, false, "VrApi 1.21 API / First Contact OVRPlugin"},
+  {"libvrapi.so", "vrapi_GetSystemPropertyFloat", {Kind::F32, "", 0, 4}, args_974, false, "VrApi 1.21 API / First Contact OVRPlugin"},
+  {"libvrapi.so", "vrapi_GetSystemPropertyFloatArray", {Kind::I32, "", 0, 4}, args_975, false, "VrApi 1.21 API / First Contact OVRPlugin"},
+  {"libvrapi.so", "vrapi_GetSystemPropertyInt", {Kind::I32, "", 0, 4}, args_976, false, "VrApi 1.21 API / First Contact OVRPlugin"},
+  {"libvrapi.so", "vrapi_GetSystemStatusFloat", {Kind::F32, "", 0, 4}, args_977, false, "VrApi 1.21 API / First Contact OVRPlugin"},
+  {"libvrapi.so", "vrapi_GetSystemStatusInt", {Kind::I32, "", 0, 4}, args_978, false, "VrApi 1.21 API / First Contact OVRPlugin"},
+  {"libvrapi.so", "vrapi_GetTextureSwapChainAndroidSurface", {Kind::Handle, "jobject", 0, 4}, args_979, false, "VrApi 1.21 API / First Contact OVRPlugin"},
+  {"libvrapi.so", "vrapi_GetTextureSwapChainBufferVulkan", {Kind::I32, "", 0, 4}, args_980, false, "VrApi 1.21 API / First Contact OVRPlugin"},
+  {"libvrapi.so", "vrapi_GetTextureSwapChainHandle", {Kind::U32, "", 0, 4}, args_981, false, "VrApi 1.21 API / First Contact OVRPlugin"},
+  {"libvrapi.so", "vrapi_GetTextureSwapChainLength", {Kind::I32, "", 0, 4}, args_982, false, "VrApi 1.21 API / First Contact OVRPlugin"},
   {"libvrapi.so", "vrapi_GetTimeInSeconds", {Kind::F64, "", 0, 4}, {}, false, "VrApi 1.21 API / First Contact OVRPlugin"},
-  {"libvrapi.so", "vrapi_Initialize", {Kind::I32, "", 0, 4}, args_973, false, "VrApi 1.21 API / First Contact OVRPlugin"},
-  {"libvrapi.so", "vrapi_LeaveVrMode", {Kind::Void, "", 0, 4}, args_974, false, "VrApi 1.21 API / First Contact OVRPlugin"},
-  {"libvrapi.so", "vrapi_LocateTrackingSpace", {Kind::Composite, "ovrPosef", 28, 4}, args_975, false, "VrApi 1.21 API / First Contact OVRPlugin"},
-  {"libvrapi.so", "vrapi_RecenterPose", {Kind::Void, "", 0, 4}, args_976, false, "VrApi 1.21 API / First Contact OVRPlugin"},
-  {"libvrapi.so", "vrapi_RequestBoundaryVisible", {Kind::I32, "", 0, 4}, args_977, false, "VrApi 1.21 API / First Contact OVRPlugin"},
-  {"libvrapi.so", "vrapi_SetClockLevels", {Kind::I32, "", 0, 4}, args_978, false, "VrApi 1.21 API / First Contact OVRPlugin"},
-  {"libvrapi.so", "vrapi_SetDisplayRefreshRate", {Kind::I32, "", 0, 4}, args_979, false, "VrApi 1.21 API / First Contact OVRPlugin"},
-  {"libvrapi.so", "vrapi_SetExtraLatencyMode", {Kind::I32, "", 0, 4}, args_980, false, "VrApi 1.21 API / First Contact OVRPlugin"},
-  {"libvrapi.so", "vrapi_SetHapticVibrationBuffer", {Kind::I32, "", 0, 4}, args_981, false, "VrApi 1.21 API / First Contact OVRPlugin"},
-  {"libvrapi.so", "vrapi_SetHapticVibrationSimple", {Kind::I32, "", 0, 4}, args_982, false, "VrApi 1.21 API / First Contact OVRPlugin"},
-  {"libvrapi.so", "vrapi_SetPerfThread", {Kind::I32, "", 0, 4}, args_983, false, "VrApi 1.21 API / First Contact OVRPlugin"},
-  {"libvrapi.so", "vrapi_SetPropertyFloat", {Kind::Void, "", 0, 4}, args_984, false, "VrApi 1.21 API / First Contact OVRPlugin"},
-  {"libvrapi.so", "vrapi_SetPropertyInt", {Kind::Void, "", 0, 4}, args_985, false, "VrApi 1.21 API / First Contact OVRPlugin"},
-  {"libvrapi.so", "vrapi_SetRemoteEmulation", {Kind::I32, "", 0, 4}, args_986, false, "VrApi 1.21 API / First Contact OVRPlugin"},
-  {"libvrapi.so", "vrapi_SetTextureSwapChainHandle", {Kind::Void, "", 0, 4}, args_987, false, "VrApi 1.21 API / First Contact OVRPlugin"},
-  {"libvrapi.so", "vrapi_SetTrackingSpace", {Kind::I32, "", 0, 4}, args_988, false, "VrApi 1.21 API / First Contact OVRPlugin"},
-  {"libvrapi.so", "vrapi_ShowSystemUI", {Kind::U8, "", 0, 4}, args_989, false, "VrApi 1.21 API / First Contact OVRPlugin"},
+  {"libvrapi.so", "vrapi_Initialize", {Kind::I32, "", 0, 4}, args_984, false, "VrApi 1.21 API / First Contact OVRPlugin"},
+  {"libvrapi.so", "vrapi_LeaveVrMode", {Kind::Void, "", 0, 4}, args_985, false, "VrApi 1.21 API / First Contact OVRPlugin"},
+  {"libvrapi.so", "vrapi_LocateTrackingSpace", {Kind::Composite, "ovrPosef", 28, 4}, args_986, false, "VrApi 1.21 API / First Contact OVRPlugin"},
+  {"libvrapi.so", "vrapi_RecenterPose", {Kind::Void, "", 0, 4}, args_987, false, "VrApi 1.21 API / First Contact OVRPlugin"},
+  {"libvrapi.so", "vrapi_RequestBoundaryVisible", {Kind::I32, "", 0, 4}, args_988, false, "VrApi 1.21 API / First Contact OVRPlugin"},
+  {"libvrapi.so", "vrapi_SetClockLevels", {Kind::I32, "", 0, 4}, args_989, false, "VrApi 1.21 API / First Contact OVRPlugin"},
+  {"libvrapi.so", "vrapi_SetDisplayRefreshRate", {Kind::I32, "", 0, 4}, args_990, false, "VrApi 1.21 API / First Contact OVRPlugin"},
+  {"libvrapi.so", "vrapi_SetExtraLatencyMode", {Kind::I32, "", 0, 4}, args_991, false, "VrApi 1.21 API / First Contact OVRPlugin"},
+  {"libvrapi.so", "vrapi_SetHapticVibrationBuffer", {Kind::I32, "", 0, 4}, args_992, false, "VrApi 1.21 API / First Contact OVRPlugin"},
+  {"libvrapi.so", "vrapi_SetHapticVibrationSimple", {Kind::I32, "", 0, 4}, args_993, false, "VrApi 1.21 API / First Contact OVRPlugin"},
+  {"libvrapi.so", "vrapi_SetPerfThread", {Kind::I32, "", 0, 4}, args_994, false, "VrApi 1.21 API / First Contact OVRPlugin"},
+  {"libvrapi.so", "vrapi_SetPropertyFloat", {Kind::Void, "", 0, 4}, args_995, false, "VrApi 1.21 API / First Contact OVRPlugin"},
+  {"libvrapi.so", "vrapi_SetPropertyInt", {Kind::Void, "", 0, 4}, args_996, false, "VrApi 1.21 API / First Contact OVRPlugin"},
+  {"libvrapi.so", "vrapi_SetRemoteEmulation", {Kind::I32, "", 0, 4}, args_997, false, "VrApi 1.21 API / First Contact OVRPlugin"},
+  {"libvrapi.so", "vrapi_SetTextureSwapChainHandle", {Kind::Void, "", 0, 4}, args_998, false, "VrApi 1.21 API / First Contact OVRPlugin"},
+  {"libvrapi.so", "vrapi_SetTrackingSpace", {Kind::I32, "", 0, 4}, args_999, false, "VrApi 1.21 API / First Contact OVRPlugin"},
+  {"libvrapi.so", "vrapi_ShowSystemUI", {Kind::U8, "", 0, 4}, args_1000, false, "VrApi 1.21 API / First Contact OVRPlugin"},
   {"libvrapi.so", "vrapi_Shutdown", {Kind::Void, "", 0, 4}, {}, false, "VrApi 1.21 API / First Contact OVRPlugin"},
-  {"libvrapi.so", "vrapi_SubmitFrame", {Kind::Void, "", 0, 4}, args_991, false, "VrApi 1.21 API / First Contact OVRPlugin"},
-  {"libvrapi.so", "vrapi_SubmitFrame2", {Kind::I32, "", 0, 4}, args_992, false, "VrApi 1.21 API / First Contact OVRPlugin"},
-  {"libvrapi.so", "vrapi_TestPointIsInBoundary", {Kind::I32, "", 0, 4}, args_993, false, "VrApi 1.21 API / First Contact OVRPlugin"},
-  {"libvrintegrationloader.so", "vrintegration_AutoThreadScheduling", {Kind::I32, "", 0, 4}, args_994, false, "VrApi 1.21 API / First Contact OVRPlugin"},
-  {"libvrintegrationloader.so", "vrintegration_ClearState", {Kind::I32, "", 0, 4}, args_995, false, "VrApi 1.21 API / First Contact OVRPlugin"},
-  {"libvrintegrationloader.so", "vrintegration_Initialize", {Kind::I32, "", 0, 4}, args_996, false, "VrApi 1.21 API / First Contact OVRPlugin"},
-  {"libvrintegrationloader.so", "vrintegration_SetThreadPerformance", {Kind::I32, "", 0, 4}, args_997, false, "VrApi 1.21 API / First Contact OVRPlugin"},
+  {"libvrapi.so", "vrapi_SubmitFrame", {Kind::Void, "", 0, 4}, args_1002, false, "VrApi 1.21 API / First Contact OVRPlugin"},
+  {"libvrapi.so", "vrapi_SubmitFrame2", {Kind::I32, "", 0, 4}, args_1003, false, "VrApi 1.21 API / First Contact OVRPlugin"},
+  {"libvrapi.so", "vrapi_TestPointIsInBoundary", {Kind::I32, "", 0, 4}, args_1004, false, "VrApi 1.21 API / First Contact OVRPlugin"},
+  {"libvrintegrationloader.so", "vrintegration_AutoThreadScheduling", {Kind::I32, "", 0, 4}, args_1005, false, "VrApi 1.21 API / First Contact OVRPlugin"},
+  {"libvrintegrationloader.so", "vrintegration_ClearState", {Kind::I32, "", 0, 4}, args_1006, false, "VrApi 1.21 API / First Contact OVRPlugin"},
+  {"libvrintegrationloader.so", "vrintegration_Initialize", {Kind::I32, "", 0, 4}, args_1007, false, "VrApi 1.21 API / First Contact OVRPlugin"},
+  {"libvrintegrationloader.so", "vrintegration_SetThreadPerformance", {Kind::I32, "", 0, 4}, args_1008, false, "VrApi 1.21 API / First Contact OVRPlugin"},
   {"libvrintegrationloader.so", "vrintegration_Shutdown", {Kind::Void, "", 0, 4}, {}, false, "VrApi 1.21 API / First Contact OVRPlugin"},
 };
 }

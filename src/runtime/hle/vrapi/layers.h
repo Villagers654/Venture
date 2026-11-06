@@ -22,6 +22,8 @@ struct LayerStorage {
 // memory row 0 at the bottom of the displayed image (see XrImages).
 using LayerImage =
     std::function<XrResult(TextureSwapChain *, int, Rect, int, bool, XrSwapchainSubImage &)>;
+// A projection layer asks for `first_eye`'s image first: when both eyes share
+// one texture, that request copies it (the desktop mirror's eye goes first).
 XrResult translate_layer(const LayerHeader &, const XrView *eyes, LayerImage, LayerStorage &,
-                         std::vector<const XrCompositionLayerBaseHeader *> &);
+                         std::vector<const XrCompositionLayerBaseHeader *> &, int first_eye = 0);
 } // namespace venture::hle::vrapi

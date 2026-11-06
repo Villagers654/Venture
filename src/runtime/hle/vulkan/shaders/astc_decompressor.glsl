@@ -46,7 +46,7 @@
 //   1. Make sure we cover all the cases where we should return the error color? See section C.2.24
 //      Illegal Encodings for the full list.
 //   2. Add support for 3D slices.
-//   3. HDR support? Probably not worth it.
+//   3. HDR endpoint modes and void extents are ported from Arm astcenc.
 
 #include "astc_lookup_tables.glsl"
 
@@ -56,6 +56,7 @@ const uvec4 kErrorColor = uvec4(65535, 0, 65535, 65535);  // beautiful magenta, 
 
 uvec4 astcBlock;       // Full ASTC block data
 uvec2 blockSize;       // Size of the ASTC block
+bool astcHdr;          // HDR profile (SFLOAT formats): astcDecodeTexel returns FP16 bits.
 bool decodeError;      // True if there's an error in the block.
 bool voidExtent;       // True if void-extent block (all pixels are the same color)
 bool dualPlane;        // True for dual plane blocks (a block with 2 sets of weights)
@@ -77,15 +78,16 @@ uint getEncodingSize(uint numVals, uvec3 encoding) {
 }
 
 // This function sets all the global variables above
-void astcDecoderInitialize(uvec4 blockData, uvec2 blockSize_) {
+void astcDecoderInitialize(uvec4 blockData, uvec2 blockSize_, bool hdr) {
     astcBlock = blockData;
     blockSize = blockSize_;
+    astcHdr = hdr;
     decodeError = false;
 
     voidExtent = (astcBlock[3] & 0x1FF) == 0x1FC;
     if (voidExtent) {
-        // 2D LDR void extent: HDR flag is forbidden, reserved bits are 11.
-        decodeError = (astcBlock[3] & 0xe00u) != 0xc00u;
+        // 2D void extent: reserved bits are 11; the FP16 flag needs the HDR profile.
+        decodeError = (astcBlock[3] & (hdr ? 0xc00u : 0xe00u)) != 0xc00u;
         return;
     }
 
@@ -474,7 +476,7 @@ void bitTransferSigned(inout ivec4 a, inout ivec4 b) {
 // vA: even-numbered values in the spec (ie: v0, v2, v4 and v6)
 // vB: odd-numbered values in the spec (ie: v1, v3, v5 and v7)
 // mode: the CEM (color endpoint mode)
-// Note: HDR modes are not supported.
+// HDR modes are decoded by decodeHdrEndpoints.
 void decodeEndpoints(ivec4 vA, ivec4 vB, uint mode, out uvec4 ep0, out uvec4 ep1) {
     switch (mode) {
         case 0:  // LDR luminance only, direct
@@ -546,6 +548,216 @@ void decodeEndpoints(ivec4 vA, ivec4 vB, uint mode, out uvec4 ep0, out uvec4 ep1
     }
 }
 
+// HDR endpoint unpacking, ported from Arm astcenc Source/astcenc_color_unquantize.cpp.
+// Results are 16-bit: 12-bit LNS values shifted left by 4; 0x7800 is LNS 1.0.
+void hdrRgboUnpack(int v0, int v1, int v2, int v3, out uvec4 ep0, out uvec4 ep1) {
+    int modeval = ((v0 & 0xC0) >> 6) | (((v1 & 0x80) >> 7) << 2) | (((v2 & 0x80) >> 7) << 3);
+    int majcomp, mode;
+    if ((modeval & 0xC) != 0xC) {
+        majcomp = modeval >> 2;
+        mode = modeval & 3;
+    } else if (modeval != 0xF) {
+        majcomp = modeval & 3;
+        mode = 4;
+    } else {
+        majcomp = 0;
+        mode = 5;
+    }
+    int red = v0 & 0x3F, green = v1 & 0x1F, blue = v2 & 0x1F, scale = v3 & 0x1F;
+    int bit0 = (v1 >> 6) & 1, bit1 = (v1 >> 5) & 1, bit2 = (v2 >> 6) & 1, bit3 = (v2 >> 5) & 1;
+    int bit4 = (v3 >> 7) & 1, bit5 = (v3 >> 6) & 1, bit6 = (v3 >> 5) & 1;
+    int ohcomp = 1 << mode;
+    if ((ohcomp & 0x30) != 0) green |= bit0 << 6;
+    if ((ohcomp & 0x3A) != 0) green |= bit1 << 5;
+    if ((ohcomp & 0x30) != 0) blue |= bit2 << 6;
+    if ((ohcomp & 0x3A) != 0) blue |= bit3 << 5;
+    if ((ohcomp & 0x3D) != 0) scale |= bit6 << 5;
+    if ((ohcomp & 0x2D) != 0) scale |= bit5 << 6;
+    if ((ohcomp & 0x04) != 0) scale |= bit4 << 7;
+    if ((ohcomp & 0x3B) != 0) red |= bit4 << 6;
+    if ((ohcomp & 0x04) != 0) red |= bit3 << 6;
+    if ((ohcomp & 0x10) != 0) red |= bit5 << 7;
+    if ((ohcomp & 0x0F) != 0) red |= bit2 << 7;
+    if ((ohcomp & 0x05) != 0) red |= bit1 << 8;
+    if ((ohcomp & 0x0A) != 0) red |= bit0 << 8;
+    if ((ohcomp & 0x05) != 0) red |= bit0 << 9;
+    if ((ohcomp & 0x02) != 0) red |= bit6 << 9;
+    if ((ohcomp & 0x01) != 0) red |= bit3 << 10;
+    if ((ohcomp & 0x02) != 0) red |= bit5 << 10;
+    const int shamts[6] = int[6](1, 1, 2, 3, 4, 5);
+    int shamt = shamts[mode];
+    red <<= shamt;
+    green <<= shamt;
+    blue <<= shamt;
+    scale <<= shamt;
+    // Modes 0 to 4 store green and blue as differences from red.
+    if (mode != 5) {
+        green = red - green;
+        blue = red - blue;
+    }
+    ivec3 c1 = ivec3(red, green, blue);
+    if (majcomp == 1) c1 = c1.grb;
+    else if (majcomp == 2) c1 = c1.bgr;
+    ivec3 c0 = max(c1 - scale, 0);
+    c1 = max(c1, 0);
+    ep0 = uvec4(uvec3(c0) << 4, 0x7800u);
+    ep1 = uvec4(uvec3(c1) << 4, 0x7800u);
+}
+
+void hdrRgbUnpack(int v0, int v1, int v2, int v3, int v4, int v5, out uvec4 ep0, out uvec4 ep1) {
+    int modeval = ((v1 & 0x80) >> 7) | (((v2 & 0x80) >> 7) << 1) | (((v3 & 0x80) >> 7) << 2);
+    int majcomp = ((v4 & 0x80) >> 7) | (((v5 & 0x80) >> 7) << 1);
+    if (majcomp == 3) {
+        ep0 = uvec4(v0 << 8, v2 << 8, (v4 & 0x7F) << 9, 0x7800);
+        ep1 = uvec4(v1 << 8, v3 << 8, (v5 & 0x7F) << 9, 0x7800);
+        return;
+    }
+    int a = v0 | ((v1 & 0x40) << 2);
+    int b0 = v2 & 0x3f, b1 = v3 & 0x3f, c = v1 & 0x3f, d0 = v4 & 0x7f, d1 = v5 & 0x7f;
+    const int dbitsTable[8] = int[8](7, 6, 7, 6, 5, 6, 5, 6);
+    int dbits = dbitsTable[modeval];
+    int bit0 = (v2 >> 6) & 1, bit1 = (v3 >> 6) & 1, bit2 = (v4 >> 6) & 1;
+    int bit3 = (v5 >> 6) & 1, bit4 = (v4 >> 5) & 1, bit5 = (v5 >> 5) & 1;
+    int ohmod = 1 << modeval;
+    if ((ohmod & 0xA4) != 0) a |= bit0 << 9;
+    if ((ohmod & 0x8) != 0) a |= bit2 << 9;
+    if ((ohmod & 0x50) != 0) a |= bit4 << 9;
+    if ((ohmod & 0x50) != 0) a |= bit5 << 10;
+    if ((ohmod & 0xA0) != 0) a |= bit1 << 10;
+    if ((ohmod & 0xC0) != 0) a |= bit2 << 11;
+    if ((ohmod & 0x4) != 0) c |= bit1 << 6;
+    if ((ohmod & 0xE8) != 0) c |= bit3 << 6;
+    if ((ohmod & 0x20) != 0) c |= bit2 << 7;
+    if ((ohmod & 0x5B) != 0) {
+        b0 |= bit0 << 6;
+        b1 |= bit1 << 6;
+    }
+    if ((ohmod & 0x12) != 0) {
+        b0 |= bit2 << 7;
+        b1 |= bit3 << 7;
+    }
+    if ((ohmod & 0xAF) != 0) {
+        d0 |= bit4 << 5;
+        d1 |= bit5 << 5;
+    }
+    if ((ohmod & 0x5) != 0) {
+        d0 |= bit2 << 6;
+        d1 |= bit3 << 6;
+    }
+    // Signed extraction sign-extends d0 and d1.
+    d0 = bitfieldExtract(d0, 0, dbits);
+    d1 = bitfieldExtract(d1, 0, dbits);
+    int shamt = (modeval >> 1) ^ 3;
+    a <<= shamt;
+    b0 <<= shamt;
+    b1 <<= shamt;
+    c <<= shamt;
+    d0 <<= shamt;
+    d1 <<= shamt;
+    ivec3 e0 = clamp(ivec3(a - c, a - b0 - c - d0, a - b1 - c - d1), 0, 4095);
+    ivec3 e1 = clamp(ivec3(a, a - b0, a - b1), 0, 4095);
+    if (majcomp == 1) {
+        e0 = e0.grb;
+        e1 = e1.grb;
+    } else if (majcomp == 2) {
+        e0 = e0.bgr;
+        e1 = e1.bgr;
+    }
+    ep0 = uvec4(uvec3(e0) << 4, 0x7800u);
+    ep1 = uvec4(uvec3(e1) << 4, 0x7800u);
+}
+
+void hdrAlphaUnpack(int v6, int v7, out uint a0, out uint a1) {
+    int selector = ((v6 >> 7) & 1) | ((v7 >> 6) & 2);
+    v6 &= 0x7F;
+    v7 &= 0x7F;
+    if (selector == 3) {
+        v6 <<= 5;
+        v7 <<= 5;
+    } else {
+        v6 |= (v7 << (selector + 1)) & 0x780;
+        v7 &= 0x3f >> selector;
+        v7 ^= 32 >> selector;
+        v7 -= 32 >> selector;
+        v6 <<= 4 - selector;
+        v7 <<= 4 - selector;
+        v7 = clamp(v7 + v6, 0, 0xFFF);
+    }
+    a0 = uint(v6) << 4;
+    a1 = uint(v7) << 4;
+}
+
+// vA, vB as for decodeEndpoints; lns marks the channels holding LNS values.
+void decodeHdrEndpoints(ivec4 vA, ivec4 vB, uint mode, out uvec4 ep0, out uvec4 ep1, out bvec4 lns) {
+    lns = bvec4(true);
+    switch (mode) {
+        case 2u: {  // HDR luminance, large range
+            int y0, y1;
+            if (vB.x >= vA.x) {
+                y0 = vA.x << 4;
+                y1 = vB.x << 4;
+            } else {
+                y0 = (vB.x << 4) + 8;
+                y1 = (vA.x << 4) - 8;
+            }
+            ep0 = uvec4(uvec3(y0 << 4), 0x7800u);
+            ep1 = uvec4(uvec3(y1 << 4), 0x7800u);
+            return;
+        }
+        case 3u: {  // HDR luminance, small range
+            int y0, y1;
+            if ((vA.x & 0x80) != 0) {
+                y0 = ((vB.x & 0xE0) << 4) | ((vA.x & 0x7F) << 2);
+                y1 = (vB.x & 0x1F) << 2;
+            } else {
+                y0 = ((vB.x & 0xF0) << 4) | ((vA.x & 0x7F) << 1);
+                y1 = (vB.x & 0xF) << 1;
+            }
+            y1 = min(y1 + y0, 0xFFF);
+            ep0 = uvec4(uvec3(y0 << 4), 0x7800u);
+            ep1 = uvec4(uvec3(y1 << 4), 0x7800u);
+            return;
+        }
+        case 7u:  // HDR RGB, base + scale
+            hdrRgboUnpack(vA.x, vB.x, vA.y, vB.y, ep0, ep1);
+            return;
+        case 11u:  // HDR RGB, direct
+            hdrRgbUnpack(vA.x, vB.x, vA.y, vB.y, vA.z, vB.z, ep0, ep1);
+            return;
+        case 14u:  // HDR RGB, direct, plus LDR alpha
+            hdrRgbUnpack(vA.x, vB.x, vA.y, vB.y, vA.z, vB.z, ep0, ep1);
+            ep0.a = uint(vA.w);
+            ep1.a = uint(vB.w);
+            lns.a = false;
+            return;
+        default:  // 15: HDR RGBA, direct
+            hdrRgbUnpack(vA.x, vB.x, vA.y, vB.y, vA.z, vB.z, ep0, ep1);
+            hdrAlphaUnpack(vA.w, vB.w, ep0.a, ep1.a);
+            return;
+    }
+}
+
+// ASTC's required float16 decode truncates UNORM16, rather than rounding a
+// normalized float to nearest half. Arm astcenc unorm16_to_sf16 is the oracle.
+uint unorm16ToHalf(uint value) {
+    if (value == 65535u) return 0x3c00u;
+    if (value < 4u) return value << 8u;
+    uint lz = 15u - uint(findMSB(value));
+    uint normalized = value << lz;
+    return ((14u - lz) << 10u) | ((normalized >> 5u) & 0x3ffu);
+}
+
+uvec4 unorm16ToHalf4(uvec4 c) {
+    return uvec4(unorm16ToHalf(c.x), unorm16ToHalf(c.y), unorm16ToHalf(c.z), unorm16ToHalf(c.w));
+}
+
+// Arm astcenc lns_to_sf16.
+uint lnsToHalf(uint value) {
+    uint mc = value & 0x7ffu;
+    uint mt = mc < 512u ? mc * 3u : mc < 1536u ? mc * 4u - 512u : mc * 5u - 2048u;
+    return min(((value >> 11u) << 10u) | (mt >> 3u), 0x7bffu);
+}
+
 uint decode1Endpoint(uvec4 data, uint startOffset, uint index, uvec3 encoding) {
     uint numBits = encoding.z;
 
@@ -579,15 +791,24 @@ uvec4 buildBitmask(uint bits) {
     return mix(mask, uvec4(0xffffffffu), greaterThanEqual(uvec4(bits), uvec4(128, 96, 64, 32)));
 }
 
-// Main function to decode the texel at a given position in the block
+// Main function to decode the texel at a given position in the block. LDR
+// profile: 16-bit values. HDR profile: FP16 bits, all-ones NaN for errors.
 uvec4 astcDecodeTexel(const uvec2 posInBlock, bool srgb) {
+    const uvec4 errorColor = astcHdr ? uvec4(0xffffu) : kErrorColor;
     if (decodeError) {
-        return kErrorColor;
+        return errorColor;
     }
 
     if (voidExtent) {
-        return uvec4(bitfieldExtract(astcBlock[1], 0, 16), bitfieldExtract(astcBlock[1], 16, 16),
-                     bitfieldExtract(astcBlock[0], 0, 16), bitfieldExtract(astcBlock[0], 16, 16));
+        // An extent must be all ones or have low < high on both axes.
+        const uint lowS = extractBits(astcBlock, 12, 13), highS = extractBits(astcBlock, 25, 13);
+        const uint lowT = extractBits(astcBlock, 38, 13), highT = extractBits(astcBlock, 51, 13);
+        if ((lowS >= highS || lowT >= highT) && (lowS & highS & lowT & highT) != 0x1FFFu) {
+            return errorColor;
+        }
+        uvec4 color = uvec4(bitfieldExtract(astcBlock[1], 0, 16), bitfieldExtract(astcBlock[1], 16, 16),
+                            bitfieldExtract(astcBlock[0], 0, 16), bitfieldExtract(astcBlock[0], 16, 16));
+        return !astcHdr || (astcBlock[3] & 0x200u) != 0u ? color : unorm16ToHalf4(color);
     }
 
     const uvec4 weightData = bitfieldReverse(astcBlock.wzyx) & buildBitmask(weightDataSize);
@@ -600,13 +821,14 @@ uvec4 astcDecodeTexel(const uvec2 posInBlock, bool srgb) {
     uint baseEndpointIndex = 0;
     uint cem = decodeCEM(partitionIndex, startOfExtraCem, totalEndpoints, baseEndpointIndex);
 
-    if (cem == 2u || cem == 3u || cem == 7u || cem == 11u || cem == 14u || cem == 15u) {
+    const bool hdrEndpoints = cem == 2u || cem == 3u || cem == 7u || cem == 11u || cem == 14u || cem == 15u;
+    if (hdrEndpoints && !astcHdr) {
         return kErrorColor; // HDR endpoints in an LDR image are the error color.
     }
 
     // Per spec, we must return the error color if we require more than 18 color endpoints
     if (totalEndpoints > 18) {
-        return kErrorColor;
+        return errorColor;
     }
 
     const uint endpointsStart = (numPartitions == 1) ? 17 : 29;
@@ -617,7 +839,7 @@ uvec4 astcDecodeTexel(const uvec2 posInBlock, bool srgb) {
     uint actualEndpointBits;
     const uvec3 endpointEncoding =
         getEndpointEncoding(availableEndpointBits, totalEndpoints, actualEndpointBits);
-    if (all(equal(endpointEncoding, uvec3(0))) || availableEndpointBits > 128u) return kErrorColor;
+    if (all(equal(endpointEncoding, uvec3(0))) || availableEndpointBits > 128u) return errorColor;
     // TODO(gregschlom): Do we need this: if (endpointEncoding == uvec3(0)) return kErrorColor;
 
     // Number of endpoints pairs in this partition. (Between 1 and 4)
@@ -636,7 +858,9 @@ uvec4 astcDecodeTexel(const uvec2 posInBlock, bool srgb) {
     }
 
     uvec4 ep0, ep1;
-    decodeEndpoints(vA, vB, cem, ep0, ep1);
+    bvec4 lns = bvec4(false);
+    if (hdrEndpoints) decodeHdrEndpoints(vA, vB, cem, ep0, ep1, lns);
+    else decodeEndpoints(vA, vB, cem, ep0, ep1);
 
     uvec4 weightsPerChannel = uvec4(weights[0]);
     if (dualPlane) {
@@ -647,7 +871,14 @@ uvec4 astcDecodeTexel(const uvec2 posInBlock, bool srgb) {
     // Khronos Data Format ASTC Weight Application: interpolate expanded 16-bit
     // endpoints. sRGB uses (endpoint << 8) | 0x80, then takes the high byte.
     // Linear uses bit replication and decodes UNORM16 to FP16 (handled by caller).
-    ep0 = srgb ? ((ep0 << 8) | 0x80u) : ep0 * 257u;
-    ep1 = srgb ? ((ep1 << 8) | 0x80u) : ep1 * 257u;
-    return (ep0 * (64u - weightsPerChannel) + ep1 * weightsPerChannel + 32u) >> 6;
+    // HDR endpoints are already 16-bit LNS values.
+    const uvec4 scale = mix(uvec4(257u), uvec4(1u), lns);
+    ep0 = srgb ? ((ep0 << 8) | 0x80u) : ep0 * scale;
+    ep1 = srgb ? ((ep1 << 8) | 0x80u) : ep1 * scale;
+    const uvec4 color = (ep0 * (64u - weightsPerChannel) + ep1 * weightsPerChannel + 32u) >> 6;
+    if (!astcHdr) return color;
+    return uvec4(lns.x ? lnsToHalf(color.x) : unorm16ToHalf(color.x),
+                 lns.y ? lnsToHalf(color.y) : unorm16ToHalf(color.y),
+                 lns.z ? lnsToHalf(color.z) : unorm16ToHalf(color.z),
+                 lns.w ? lnsToHalf(color.w) : unorm16ToHalf(color.w));
 }

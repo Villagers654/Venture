@@ -322,7 +322,7 @@ private:
         ASSERT(entries <= capacity);
         const size_t required = (size_t(entries) * sizeof(RUNTIME_FUNCTION) + page_size - 1) / page_size * page_size;
         if (required > committed) {
-            if (!VirtualAlloc(rfuncs.get(), required, MEM_COMMIT, PAGE_READWRITE)) throw std::bad_alloc{};
+            if (!VirtualAlloc(rfuncs.get(), required, MEM_COMMIT, PAGE_READWRITE)) throw Xbyak::Error(Xbyak::ERR_CANT_ALLOC);
             committed = required;
         }
     }
@@ -330,7 +330,7 @@ private:
     void RegisterTable() {
         const auto base = reinterpret_cast<ULONG_PTR>(code.getCode());
         if (add_table(&table.handle, rfuncs.get(), count, capacity, base, base + code.GetTotalCodeSize()) < 0)
-            throw std::bad_alloc{};
+            throw Xbyak::Error(Xbyak::ERR_CANT_ALLOC);  // Venture: refused like a code page
     }
 
     void AddFrame(const void* begin, const void* end, const ABIPrologue& prologue, bool inherits_run_frame) {

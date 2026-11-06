@@ -2,8 +2,10 @@
 
 #include <jni.h>
 
+#include <algorithm>
 #include <array>
 #include <exception>
+#include <string>
 
 #include "android/package_assets.h"
 #include "common/log.h"
@@ -16,6 +18,29 @@ namespace {
 std::string path_utf8(const std::filesystem::path& path) {
   auto text = path.u8string();
   return {reinterpret_cast<const char*>(text.data()), text.size()};
+}
+// Throwable.toString() ("java.lang.X: message") on one line, bounded; empty
+// when it cannot be read.
+std::string throwable_text(JNIEnv* env, jthrowable throwable) {
+  if (!throwable) return {};
+  std::string text;
+  auto cls = env->FindClass("java/lang/Object");
+  auto to_string = cls ? env->GetMethodID(cls, "toString", "()Ljava/lang/String;") : nullptr;
+  auto value = to_string ? static_cast<jstring>(env->CallObjectMethod(throwable, to_string)) : nullptr;
+  if (env->ExceptionCheck()) { env->ExceptionClear(); value = nullptr; }
+  if (value) {
+    if (const char* chars = env->GetStringUTFChars(value, nullptr)) {
+      text = chars;
+      env->ReleaseStringUTFChars(value, chars);
+    }
+    env->DeleteLocalRef(value);
+  }
+  if (cls) env->DeleteLocalRef(cls);
+  env->DeleteLocalRef(throwable);
+  std::ranges::replace(text, '\n', ' ');
+  std::ranges::replace(text, '\r', ' ');
+  if (text.size() > 400) text = text.substr(0, 400) + "...";
+  return text;
 }
 }  // namespace
 
@@ -94,9 +119,12 @@ bool run_app_main(const std::string& converted_jar, std::string* error) {
       }
     }
     bool failed = env->ExceptionCheck();
+    std::string uncaught;
     if (failed) {
+      auto throwable = env->ExceptionOccurred();
       env->ExceptionDescribe();
       env->ExceptionClear();
+      uncaught = throwable_text(env, throwable);
     }
     if (!failed) {
       auto main = env->FindClass("com/venture/runtime/AppMain");
@@ -105,10 +133,10 @@ bool run_app_main(const std::string& converted_jar, std::string* error) {
       if (env->ExceptionCheck()) { env->ExceptionDescribe(); env->ExceptionClear(); failed = true; }
     }
     env->PopLocalFrame(nullptr);
-    return failed
-               ? fail(
-                     "Java application launch failed; see Java exception trace")
-               : true;
+    if (!failed) return true;
+    return fail(uncaught.empty()
+                    ? std::string("Java application launch failed; see Java exception trace")
+                    : "The game's Android main thread stopped on an uncaught " + uncaught);
   } catch (const std::exception& exception) {
     return fail(exception.what());
   }

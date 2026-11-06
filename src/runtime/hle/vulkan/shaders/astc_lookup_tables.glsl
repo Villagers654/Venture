@@ -28,8 +28,7 @@ const uvec3 kColorEncodings[] = {
     {0, 1, 1},  // 9
     {0, 0, 3},  // 7
     {1, 0, 1},  // 5
-    {0, 0, 2},  // 3
-    {0, 0, 1},  // 1
+    // Fewer than 6 endpoint levels is an illegal encoding (as in Arm astcenc).
 };
 
 // Lookup table to decode a pack of 5 trits (encoded with 8 bits)

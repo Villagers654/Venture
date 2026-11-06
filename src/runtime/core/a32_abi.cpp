@@ -299,7 +299,7 @@ const Descriptor* descriptor(std::string_view library, std::string_view symbol) 
         {"libc.so", "__write_chk", ssize, wr, false, source}};
     for (const auto& entry : fortify) if (entry.symbol == symbol) return &entry;
   }
-  for (auto table : {ndk_descriptors(), libc_descriptors(), graphics_descriptors(), vendor_descriptors()}) {
+  for (auto table : {ndk_descriptors(), libc_descriptors(), graphics_descriptors(), vendor_descriptors(), media_descriptors()}) {
     auto key = std::pair(library, symbol);
     auto it = std::lower_bound(table.begin(), table.end(), key, [](const Descriptor& d, auto k) {
       return std::pair(d.library, d.symbol) < k;
@@ -354,6 +354,11 @@ void prepare(FunctionInfo& info) {
   info.handler = selected;
   if (!row.compatible) info.execution = Execution::RunLoop; // diagnostic delivers a guest signal
   r.rows.insert_or_assign(key, std::move(row));
+}
+bool callable(std::string_view library, std::string_view symbol) {
+  auto& r = registry(); std::lock_guard lock(r.mutex);
+  auto it = r.rows.find(std::pair(std::string(library), std::string(symbol)));
+  return it == r.rows.end() || it->second.compatible;
 }
 std::vector<Coverage> coverage() {
   auto& r = registry(); std::lock_guard lock(r.mutex); std::vector<Coverage> rows;

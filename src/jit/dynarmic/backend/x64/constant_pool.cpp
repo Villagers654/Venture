@@ -26,6 +26,10 @@ ConstantPool::ConstantPool(BlockOfCode& code, size_t size)
 }
 
 Xbyak::Address ConstantPool::GetConstant(BlockOfCode& code, const Xbyak::AddressFrame& frame, u64 lower, u64 upper) {
+    return frame[code.rip + GetConstantPointer(code, lower, upper)];
+}
+
+const void* ConstantPool::GetConstantPointer(BlockOfCode& code, u64 lower, u64 upper) {
     const auto constant = ConstantT(lower, upper);
     auto it = constant_info.find(constant);
     if (it == constant_info.end()) {
@@ -36,7 +40,7 @@ Xbyak::Address ConstantPool::GetConstant(BlockOfCode& code, const Xbyak::Address
         it = constant_info.insert({constant, &target_constant}).first;
         ++insertion_point;
     }
-    return frame[code.rip + it->second];
+    return it->second;
 }
 
 }  // namespace Dynarmic::Backend::X64

@@ -1,0 +1,9 @@
+{
+  "domain": "venture",
+  "project": "Venture",
+  "bugs": "https://github.com/Villagers654/Venture/issues",
+  "sources": ["src/launcher"],
+  "exclude": ["src/launcher/i18n"],
+  "extensions": [".cpp", ".h"],
+  "min_completion": 0.25
+}

@@ -8,6 +8,7 @@
 #include "common/paths.h"
 #include <windows.h>
 #include <dbghelp.h>
+#include <psapi.h>
 #include <cstdio>
 #include <filesystem>
 #include <string>
@@ -15,7 +16,7 @@
 namespace venture::platform {
 namespace {
 decltype(&MiniDumpWriteDump) write_dump;
-HANDLE requested, completed;
+HANDLE requested, completed, ready;
 EXCEPTION_RECORD record;
 CONTEXT context;
 EXCEPTION_POINTERS exception{&record, &context};
@@ -32,7 +33,11 @@ void location(void* address, char* output, std::size_t size) {
   std::uintptr_t base = 0;
   if (VirtualQuery(address, &memory, sizeof(memory)) && memory.Type == MEM_IMAGE) {
     base = reinterpret_cast<std::uintptr_t>(memory.AllocationBase);
-    if (GetModuleFileNameW(static_cast<HMODULE>(memory.AllocationBase), path, 1024)) {
+    // The mapped file's name comes from the kernel. GetModuleFileNameW takes the
+    // loader lock, which a thread starting or ending at the fault can hold
+    // while it waits for the heap lock the faulting thread holds; the report
+    // then never got its first line.
+    if (K32GetMappedFileNameW(GetCurrentProcess(), memory.AllocationBase, path, 1024)) {
       auto* leaf = wcsrchr(path, L'\\');
       WideCharToMultiByte(CP_UTF8, 0, leaf ? leaf + 1 : path, -1, name, sizeof(name), nullptr, nullptr);
     }
@@ -81,10 +86,15 @@ void prune_dumps() {
 }
 
 DWORD WINAPI dump_worker(void*) {
+  // Run the report's lazy first-use paths now (the CRT's per-thread data for
+  // snprintf, the module name query), while the heap is free.
+  char where[3200], line[3500];
+  location(reinterpret_cast<void*>(&dump_worker), where, sizeof(where));
+  std::snprintf(line, sizeof(line), " E [runtime] Host exception 0x%08lx at %s (thread %lu)\n", 0ul, where, 0ul);
+  SetEvent(ready);
   WaitForSingleObject(requested, INFINITE);
   venture::api_result_trace::crash_flush();
   venture::pc_trace::flush();
-  char where[3200], line[3500];
   location(record.ExceptionAddress, where, sizeof(where));
   auto n = std::snprintf(line, sizeof(line), " E [runtime] Host exception 0x%08lx at %s (thread %lu)\n",
                          record.ExceptionCode, where, fault_tid);
@@ -149,7 +159,13 @@ LONG WINAPI host_exception(EXCEPTION_POINTERS* fault) {
   venture::log::crash_write("", 0);
   SetEvent(requested);
   WaitForSingleObject(completed, 30000);
-  // Suppress the system error dialog without changing the original exit status.
+  // End here with the exception code as the exit status, which also keeps the
+  // system error dialog away. Returning EXCEPTION_EXECUTE_HANDLER ends the
+  // process through ExitProcess, whose DLL detach waits for the loader and
+  // heap locks a faulting thread can hold: a heap corruption caught inside
+  // RtlFreeHeap hung the worker for minutes (its in-process minidump stalled
+  // on the same heap lock, leaving an empty file).
+  TerminateProcess(GetCurrentProcess(), record.ExceptionCode);
   return EXCEPTION_EXECUTE_HANDLER;
 }
 }
@@ -187,9 +203,16 @@ void install_crash_report(std::string_view log_path, std::string_view package) {
   if (dbghelp) write_dump = reinterpret_cast<decltype(write_dump)>(GetProcAddress(dbghelp, "MiniDumpWriteDump"));
   requested = CreateEventW(nullptr, FALSE, FALSE, nullptr);
   completed = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-  if (!requested || !completed) throw std::runtime_error("Cannot create crash report events");
+  ready = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+  if (!requested || !completed || !ready) throw std::runtime_error("Cannot create crash report events");
   auto worker = CreateThread(nullptr, 0, dump_worker, nullptr, 0, nullptr);
   if (!worker) throw std::runtime_error("Cannot create crash report thread");
+  // The worker must be past its start before a fault can need it. A thread
+  // still starting waits for the loader lock, which another thread starting
+  // at the same time (the log flusher) can hold while it waits for the heap
+  // lock a faulting thread holds: the report then never began and the process
+  // ended silently after the 30 s bound.
+  WaitForSingleObject(ready, INFINITE);
   CloseHandle(worker);
   SetUnhandledExceptionFilter(host_exception);
   installed = true;

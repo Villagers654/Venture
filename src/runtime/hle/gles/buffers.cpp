@@ -178,8 +178,11 @@ namespace {
 // KHR_no_error: in a guest no-error context errors are undefined behaviour,
 // and engines built for no-error drivers write through the map pointer
 // unconditionally (Unity clears a pooled buffer that was never allocated,
-// with 0 bound). ANGLE keeps validating, so a map it rejects for a reason
-// other than OUT_OF_MEMORY returns guest storage that unmap discards.
+// with 0 bound). ANGLE keeps validating, so a map it rejects returns guest
+// storage that unmap discards. That includes OUT_OF_MEMORY, which glGetError
+// still reports: such an engine writes through a null map unconditionally
+// (a Beat Saber report crashed in a 160-byte memcpy to null right after
+// GL_OUT_OF_MEMORY), and a write that lands nowhere is the only safe outcome.
 void* no_error_map(GLenum target, std::int64_t length, void* result) {
   auto state = current_gl_state();
   if (!state || !state->no_error) return result;
@@ -189,7 +192,7 @@ void* no_error_map(GLenum target, std::int64_t length, void* result) {
     return result;
   }
   preserve_gl_errors();
-  if (state->errors.contains(GL_OUT_OF_MEMORY) || length <= 0) return nullptr;
+  if (length <= 0) return nullptr;
   try {
     auto& storage = discarded[target];
     if (!storage) storage = std::make_unique<GuestStorage>();
@@ -413,7 +416,7 @@ void buffer_data(GLenum target, std::int64_t size, const void *input, GLenum usa
   // NULL data has undefined contents. Choose an explicit initial value for
   // previously mirrored small stores, so OES maps preserve unwritten bytes without
   // asking ANGLE to copy the device-local allocation back to a staging map.
-  if (name && !input && size > 0 && size <= spare_shadow_limit &&
+  if (name && !input && size > 0 && std::uint64_t(size) <= spare_shadow_limit &&
       !buffers->data[name].gpu_writable && !buffers->data[name].contents.empty() &&
       std::uint64_t(size) <= buffers->mirror_limit - buffers->mirrored_bytes +
           buffers->data[name].contents.capacity()) {

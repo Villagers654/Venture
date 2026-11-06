@@ -20,6 +20,7 @@
 
 #include "chain.h"
 #include "common/log.h"
+#include "core/alloc_failure.h"
 #include "gfx/gpu_device.h"
 #include "gfx/pipeline_trace.h"
 #include "gfx/queue_sync.h"
@@ -28,6 +29,7 @@
 #include "external.h"
 #include "timing.h"
 #include "platform/thread_priority.h"
+#include "core/memory_pressure.h"
 
 namespace venture::vulkan {
 namespace {
@@ -66,11 +68,23 @@ template <class F>
 F phys(VkPhysicalDevice physical, const char* name) {
   return reinterpret_cast<F>(raw_physical_proc(physical, name));
 }
-struct TextureFailure : std::runtime_error {
-  VkResult result;
+struct TextureFailure : LayerFailure {
   explicit TextureFailure(VkResult result)
-      : std::runtime_error("Vulkan texture operation failed: " + std::to_string(result)), result(result) {}
+      : LayerFailure(result, "Vulkan texture operation failed: " + std::to_string(result)) {}
 };
+// One skipped texture operation, said once per second at most: the texture
+// keeps its earlier contents (blank when it had none) and the game goes on.
+void skipped_texture(std::string_view what, VkResult result) {
+  static std::atomic<std::int64_t> next{0};
+  static std::atomic<std::uint64_t> skipped{0};
+  ++skipped;
+  const auto now = std::chrono::duration_cast<std::chrono::seconds>(
+      std::chrono::steady_clock::now().time_since_epoch()).count();
+  auto due = next.load(std::memory_order_relaxed);
+  if (now < due || !next.compare_exchange_strong(due, now + 1, std::memory_order_relaxed)) return;
+  log::warn("vulkan", "Out of memory ({}): skipped {}; {} texture operations skipped so far, the game continues",
+            int(result), what, skipped.load());
+}
 void checked(VkResult result) {
   if (result != VK_SUCCESS) throw TextureFailure(result);
 }
@@ -108,21 +122,21 @@ bool supported_sample_count(VkPhysicalDevice physical, const VkImageCreateInfo& 
 struct Buffer {
   VkDevice device{};
   VkBuffer buffer{};
+  // A range of a pooled block (texture_memory.h), shared with other private buffers.
   VkDeviceMemory memory{};
+  VkDeviceSize offset{};
   VkDeviceSize size{};
   VkDeviceSize allocation_size{};
   VkMemoryPropertyFlags properties{};
   void* mapped{};
-  PFN_vkUnmapMemory unmap{};
+  std::shared_ptr<void> allocation;
   // Forced guest exit can leave these owners alive until static destruction,
   // after the HLE dispatch registry is gone. Resolve cleanup while the device
   // is registered; normal vkDestroyDevice releases all texture owners first.
   PFN_vkDestroyBuffer destroy_buffer{};
-  PFN_vkFreeMemory free_memory{};
   ~Buffer() {
-    if (mapped) unmap(device, memory);
     if (buffer) destroy_buffer(device, buffer, nullptr);
-    if (memory) free_memory(device, memory, nullptr);
+    allocation.reset();
   }
 };
 // Memory for the layer's private texture resources: the lowest-index allowed
@@ -140,13 +154,25 @@ VkResult allocate(VkDevice device, const VkMemoryRequirements& req, VkDeviceMemo
   ai.allocationSize = req.size;
   ai.memoryTypeIndex = type;
   const auto allocate_memory = vk<PFN_vkAllocateMemory>(device, "vkAllocateMemory");
-  auto result = allocate_memory(device, &ai, nullptr, out);
-  if (result != VK_ERROR_OUT_OF_DEVICE_MEMORY) return result;
-  // VRAM is full (an 8 GB card in a large level): keep the game running from system memory.
+  // A refused allocation is retried once after Venture's spare memory is given
+  // back, then in system memory (VRAM full: an 8 GB card in a large level).
+  const auto attempt = [&] {
+    auto result = allocate_memory(device, &ai, nullptr, out);
+    if (out_of_memory_result(result)) {
+      alloc_failure::relieve();
+      result = allocate_memory(device, &ai, nullptr, out);
+    }
+    if (result == VK_SUCCESS) note_device_memory(1);
+    else if (out_of_memory_result(result))
+      report_gpu_memory_failure(device, "texture companion memory", ai.allocationSize, ai.memoryTypeIndex);
+    return result;
+  };
+  auto result = attempt();
+  if (!out_of_memory_result(result)) return result;
   const auto spill = gfx::spill_memory_type(memory, req.memoryTypeBits);
   if (spill == memory.memoryTypeCount || spill == type) return result;
   ai.memoryTypeIndex = spill;
-  result = allocate_memory(device, &ai, nullptr, out);
+  result = attempt();
   static std::atomic<bool> reported{false};
   if (result == VK_SUCCESS && !reported.exchange(true))
     log::warn("vulkan", "GPU memory is full; decoded textures now also use system memory (slower)");
@@ -158,8 +184,6 @@ VkResult make_buffer(VkDevice device, VkDeviceSize size, const VkImageCreateInfo
   b->device = device;
   b->size = size;
   b->destroy_buffer = vk<PFN_vkDestroyBuffer>(device, "vkDestroyBuffer");
-  b->free_memory = vk<PFN_vkFreeMemory>(device, "vkFreeMemory");
-  b->unmap = vk<PFN_vkUnmapMemory>(device, "vkUnmapMemory");
   VkBufferCreateInfo ci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
   ci.size = size;
   ci.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
@@ -169,11 +193,23 @@ VkResult make_buffer(VkDevice device, VkDeviceSize size, const VkImageCreateInfo
     ci.queueFamilyIndexCount = image_info->queueFamilyIndexCount;
     ci.pQueueFamilyIndices = image_info->pQueueFamilyIndices;
   }
-  if (auto r = vk<PFN_vkCreateBuffer>(device, "vkCreateBuffer")(device, &ci, nullptr, &b->buffer); r != VK_SUCCESS)
+  if (auto r = vk<PFN_vkCreateBuffer>(device, "vkCreateBuffer")(device, &ci, nullptr, &b->buffer); r != VK_SUCCESS) {
+    if (out_of_memory_result(r)) report_gpu_memory_failure(device, "texture buffer object", size, ~0u);
     return r;
+  }
   VkMemoryRequirements req{};
   vk<PFN_vkGetBufferMemoryRequirements>(device, "vkGetBufferMemoryRequirements")(device, b->buffer, &req);
   b->allocation_size = req.size;
+  const auto place = [&](std::uint32_t type, bool map) {
+    PrivateBufferMemory placed;
+    const auto result = bind_private_buffer(device, b->buffer, type, map, placed);
+    if (result != VK_SUCCESS) return result;
+    b->memory = placed.memory;
+    b->offset = placed.offset;
+    b->mapped = placed.mapped;
+    b->allocation = std::move(placed.allocation);
+    return VK_SUCCESS;
+  };
   if (cpu_written) {
     VkPhysicalDeviceMemoryProperties properties{};
     phys<PFN_vkGetPhysicalDeviceMemoryProperties>(device_physical(device), "vkGetPhysicalDeviceMemoryProperties")(
@@ -193,34 +229,32 @@ VkResult make_buffer(VkDevice device, VkDeviceSize size, const VkImageCreateInfo
             (flags & (VK_MEMORY_PROPERTY_DEVICE_COHERENT_BIT_AMD | VK_MEMORY_PROPERTY_PROTECTED_BIT |
                       VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT)) || (flags & wanted) != wanted) continue;
         tried |= 1u << i;
-        VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
-        ai.allocationSize = req.size; ai.memoryTypeIndex = i;
-        VkDeviceMemory memory{};
-        result = vk<PFN_vkAllocateMemory>(device, "vkAllocateMemory")(device, &ai, nullptr, &memory);
+        result = place(i, mapped);
         if (result == VK_ERROR_DEVICE_LOST) return result;
         if (result != VK_SUCCESS) continue;
-        b->memory = memory;
-        if (mapped) {
-          void* pointer{};
-          result = vk<PFN_vkMapMemory>(device, "vkMapMemory")(
-              device, b->memory, 0, VK_WHOLE_SIZE, 0, &pointer);
-          if (result != VK_SUCCESS) {
-            b->free_memory(device, b->memory, nullptr); b->memory = {};
-            if (result == VK_ERROR_DEVICE_LOST) return result;
-            continue;
-          }
-          b->mapped = pointer;
-        }
         b->properties = flags;
         break;
       }
       if (result == VK_SUCCESS) break;
     }
     if (result != VK_SUCCESS) return result;
-  } else if (auto r = allocate(device, req, &b->memory); r != VK_SUCCESS) return r;
-  if (auto r = vk<PFN_vkBindBufferMemory>(device, "vkBindBufferMemory")(device, b->buffer, b->memory, 0);
-      r != VK_SUCCESS)
-    return r;
+  } else {
+    VkPhysicalDeviceMemoryProperties memory{};
+    const auto physical = device_physical(device);
+    phys<PFN_vkGetPhysicalDeviceMemoryProperties>(physical, "vkGetPhysicalDeviceMemoryProperties")(physical, &memory);
+    // As allocate(): GPU-only memory, then system memory once VRAM is full.
+    const auto type = gfx::gpu_only_memory_type(memory, req.memoryTypeBits);
+    if (type == memory.memoryTypeCount) return VK_ERROR_OUT_OF_DEVICE_MEMORY;
+    auto result = place(type, false);
+    const auto spill = gfx::spill_memory_type(memory, req.memoryTypeBits);
+    if (result == VK_ERROR_OUT_OF_DEVICE_MEMORY && spill != memory.memoryTypeCount && spill != type) {
+      result = place(spill, false);
+      static std::atomic<bool> reported{false};
+      if (result == VK_SUCCESS && !reported.exchange(true))
+        log::warn("vulkan", "GPU memory is full; decoded textures now also use system memory (slower)");
+    }
+    if (result != VK_SUCCESS) return result;
+  }
   out = std::move(b);
   return VK_SUCCESS;
 }
@@ -228,6 +262,17 @@ VkResult make_buffer(VkDevice device, VkDeviceSize size, const VkImageCreateInfo
 std::shared_ptr<Buffer> buffer(VkDevice device, VkDeviceSize size) {
   std::shared_ptr<Buffer> b;
   checked(make_buffer(device, size, nullptr, b));
+  return b;
+}
+// Scratch a command can do without: empty, and the operation skipped, out of memory.
+std::shared_ptr<Buffer> optional_buffer(VkDevice device, VkDeviceSize size, std::string_view what) {
+  std::shared_ptr<Buffer> b;
+  const auto result = make_buffer(device, size, nullptr, b);
+  if (out_of_memory_result(result)) {
+    skipped_texture(what, result);
+    return {};
+  }
+  checked(result);
   return b;
 }
 struct Pipeline {
@@ -263,7 +308,10 @@ struct Companion {
   ~Companion() {
     for (auto view : storage_views) if (view) destroy_view(device, view, nullptr);
     if (image) destroy_image(device, image, nullptr);
-    if (memory) free_memory(device, memory, nullptr);
+    if (memory) {
+      free_memory(device, memory, nullptr);
+      note_device_memory(-1);
+    }
   }
 };
 struct TextureProducer {
@@ -535,10 +583,7 @@ std::shared_ptr<Buffer> source_buffer(const std::shared_ptr<Image>& img, VkComma
       if (result == VK_SUCCESS) {
         std::memcpy(staging->mapped, retained->bytes.get(), std::size_t(img->source_size));
         if (!(staging->properties & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) {
-          VkMappedMemoryRange range{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE};
-          range.memory = staging->memory; range.size = VK_WHOLE_SIZE;
-          result = vk<PFN_vkFlushMappedMemoryRanges>(img->device, "vkFlushMappedMemoryRanges")(
-              img->device, 1, &range);
+          result = flush_private_buffer(staging->allocation);
         }
       }
       if (result != VK_SUCCESS && result != VK_ERROR_DEVICE_LOST) {
@@ -547,10 +592,17 @@ std::shared_ptr<Buffer> source_buffer(const std::shared_ptr<Image>& img, VkComma
       }
       if (result != VK_SUCCESS) {
         if (!cmd) throw TextureFailure(result); // Result-returning view creation handles this directly.
+        // Retained exact bytes survive; no dependent command is recorded. Out
+        // of memory, a later use restores them again: this one is skipped,
+        // instead of vkEndCommandBuffer failing the guest's whole frame.
+        if (out_of_memory_result(result)) {
+          skipped_texture("restoring a texture's compressed source", result);
+          return {};
+        }
         lock.lock();
         auto& error = command_state[cmd].recording_error;
         if (error == VK_SUCCESS) error = result;
-        return {}; // Retained exact bytes survive; no dependent command is recorded.
+        return {};
       }
       lock.lock();
       img->shadow = staging;
@@ -783,11 +835,19 @@ void decode_mip(VkCommandBuffer cmd, const std::shared_ptr<Image>& img, std::uin
   const auto& planes = img->storage.planes;
   // BC7 planes decode to RGBA8 scratch (texels), then encode into their own (blocks).
   std::vector<std::shared_ptr<Buffer>> decoded, texels(planes.size());
-  for (std::size_t i = 0; i < planes.size(); ++i) {
-    decoded.push_back(i && img->companions[i - 1]->lazy ? nullptr :
-        decoded_buffer(d, cmd, i, plane_bytes(planes[i], extent.width, extent.height)));
-    if (bc7_format(planes[i].format))
-      texels[i] = decoded_buffer(d, cmd, planes.size() + i, VkDeviceSize(extent.width) * extent.height * 4);
+  try {
+    for (std::size_t i = 0; i < planes.size(); ++i) {
+      decoded.push_back(i && img->companions[i - 1]->lazy ? nullptr :
+          decoded_buffer(d, cmd, i, plane_bytes(planes[i], extent.width, extent.height)));
+      if (bc7_format(planes[i].format))
+        texels[i] = decoded_buffer(d, cmd, planes.size() + i, VkDeviceSize(extent.width) * extent.height * 4);
+    }
+  } catch (const TextureFailure& failure) {
+    // Scratch was refused even after the spare memory was given back and in
+    // system memory: this mip keeps its earlier contents, nothing is recorded.
+    if (!out_of_memory_result(failure.result)) throw;
+    skipped_texture(std::format("decoding a {}x{} texture mip", extent.width, extent.height), failure.result);
+    return;
   }
   // This execution dependency also finishes the previous decode's transfer
   // reads before a new dispatch writes reused output scratch. Each plane has
@@ -836,6 +896,13 @@ void decode_mip(VkCommandBuffer cmd, const std::shared_ptr<Image>& img, std::uin
       std::lock_guard lock(texture_lock);
       command_state[cmd].resources.push_back(std::move(resources));
     }
+  } catch (const TextureFailure& failure) {
+    restore_compute(cmd);
+    if (!out_of_memory_result(failure.result)) throw;
+    // A decode's descriptor pool was refused: the planes already dispatched
+    // write scratch that is never copied, and the image keeps its contents.
+    skipped_texture(std::format("decoding a {}x{} texture mip", extent.width, extent.height), failure.result);
+    return;
   } catch (...) {
     restore_compute(cmd);
     throw;
@@ -904,11 +971,10 @@ bool host_image_info(const VkImageCreateInfo& guest, TextureStorage& storage, Vk
 
 VkResult write_activation(const std::shared_ptr<Buffer>& buffer, std::uint32_t value) {
   void* address{};
-  auto r = vk<PFN_vkMapMemory>(buffer->device, "vkMapMemory")(
-      buffer->device, buffer->memory, 0, sizeof(value), 0, &address);
+  auto r = map_private_buffer(buffer->allocation, &address);
   if (r != VK_SUCCESS) return r;
-  std::memcpy(address, &value, sizeof(value));
-  vk<PFN_vkUnmapMemory>(buffer->device, "vkUnmapMemory")(buffer->device, buffer->memory);
+  std::memcpy(address, &value, sizeof(value));  // unmapped CPU-written buffers are HOST_COHERENT
+  unmap_private_buffer(buffer->allocation);
   return VK_SUCCESS;
 }
 VkResult try_lazy_companion(VkDevice d, const VkImageCreateInfo& info, Companion& companion, bool& created) {
@@ -1002,6 +1068,90 @@ VkDeviceSize compression_threshold() {
   }();
   return percent;
 }
+bool memory_budget_supported(VkPhysicalDevice physical);
+std::atomic<std::int64_t> live_memory{0};
+// Venture's idle decode scratch (scratch_pools), released before a refused
+// allocation is retried. Recorded commands keep the scratch they use.
+std::uint64_t release_idle_scratch() {
+  std::vector<std::shared_ptr<Buffer>> released;
+  std::uint64_t bytes = 0;
+  {
+    std::unique_lock lock(texture_lock, std::try_to_lock);
+    // A thread holding texture_lock may wait on this one; skip rather than deadlock.
+    if (!lock.owns_lock()) return 0;
+    for (auto& [key, idle] : scratch_pools) {
+      for (auto& b : idle) {
+        bytes += b->allocation_size;
+        released.push_back(std::move(b));
+      }
+      idle.clear();
+    }
+    for (auto& [device, budget] : scratch_budgets) budget = {};
+  }
+  return bytes;
+}
+}  // namespace
+
+void note_device_memory(std::int64_t delta) { live_memory.fetch_add(delta, std::memory_order_relaxed); }
+std::uint64_t live_device_memory() { return std::uint64_t(std::max<std::int64_t>(0, live_memory.load())); }
+void report_gpu_memory_failure(VkDevice device, std::string_view what, VkDeviceSize size, std::uint32_t memory_type) {
+  try {
+    alloc_failure::Gpu gpu;
+    const auto physical = device_physical(device);
+    VkPhysicalDeviceMemoryBudgetPropertiesEXT budget{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_BUDGET_PROPERTIES_EXT};
+    VkPhysicalDeviceMemoryProperties2 memory{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_PROPERTIES_2};
+    const bool budgeted = physical && memory_budget_supported(physical);
+    if (budgeted) memory.pNext = &budget;
+    auto query2 = physical ? phys<PFN_vkGetPhysicalDeviceMemoryProperties2>(physical,
+        "vkGetPhysicalDeviceMemoryProperties2") : nullptr;
+    if (query2) query2(physical, &memory);
+    else if (physical)
+      phys<PFN_vkGetPhysicalDeviceMemoryProperties>(physical, "vkGetPhysicalDeviceMemoryProperties")(
+          physical, &memory.memoryProperties);
+    const auto& m = memory.memoryProperties;
+    if (physical && memory_type < m.memoryTypeCount) {
+      const auto heap = m.memoryTypes[memory_type].heapIndex;
+      gpu.known = true;
+      gpu.type = memory_type;
+      gpu.type_flags = m.memoryTypes[memory_type].propertyFlags;
+      gpu.heap = heap;
+      gpu.heap_flags = m.memoryHeaps[heap].flags;
+      gpu.heap_size = m.memoryHeaps[heap].size;
+      if (budgeted && query2) {
+        gpu.heap_usage = budget.heapUsage[heap];
+        gpu.heap_budget = budget.heapBudget[heap];
+      }
+      VkPhysicalDeviceProperties props{};
+      phys<PFN_vkGetPhysicalDeviceProperties>(physical, "vkGetPhysicalDeviceProperties")(physical, &props);
+      gpu.max_allocations = props.limits.maxMemoryAllocationCount;
+      gpu.allocations = live_device_memory();
+    }
+    alloc_failure::report(gpu.known ? alloc_failure::Kind::gpu_memory : alloc_failure::Kind::gpu_object, what,
+                          size, gpu.known ? &gpu : nullptr);
+  } catch (...) {
+    // Diagnostics must never turn a refused allocation into a worse failure.
+  }
+}
+namespace {
+bool memory_budget_supported(VkPhysicalDevice physical) {
+  static std::mutex mutex;
+  static std::map<VkPhysicalDevice, bool> support;
+  std::lock_guard lock(mutex);
+  auto [it, inserted] = support.try_emplace(physical, false);
+  if (inserted) {
+    auto enumerate = phys<PFN_vkEnumerateDeviceExtensionProperties>(physical,
+        "vkEnumerateDeviceExtensionProperties");
+    std::uint32_t count = 0;
+    if (enumerate && enumerate(physical, nullptr, &count, nullptr) == VK_SUCCESS) {
+      std::vector<VkExtensionProperties> extensions(count);
+      if (enumerate(physical, nullptr, &count, extensions.data()) == VK_SUCCESS)
+        it->second = std::ranges::any_of(extensions, [](const auto& e) {
+          return std::string_view(e.extensionName) == VK_EXT_MEMORY_BUDGET_EXTENSION_NAME;
+        });
+    }
+  }
+  return it->second;
+}
 // Device-local memory this process uses and the budget the driver gives it
 // (VK_EXT_memory_budget); zero limit when the host cannot say. Past the budget
 // the OS moves resources to system memory and frames slow down.
@@ -1010,26 +1160,7 @@ struct GpuMemory {
 };
 std::atomic<VkPhysicalDevice> last_physical{nullptr};
 GpuMemory gpu_memory(VkPhysicalDevice physical) {
-  static std::mutex mutex;
-  static std::map<VkPhysicalDevice, bool> support;
-  bool supported;
-  {
-    std::lock_guard lock(mutex);
-    auto [it, inserted] = support.try_emplace(physical, false);
-    if (inserted) {
-      auto enumerate = phys<PFN_vkEnumerateDeviceExtensionProperties>(physical,
-          "vkEnumerateDeviceExtensionProperties");
-      std::uint32_t count = 0;
-      if (enumerate && enumerate(physical, nullptr, &count, nullptr) == VK_SUCCESS) {
-        std::vector<VkExtensionProperties> extensions(count);
-        if (enumerate(physical, nullptr, &count, extensions.data()) == VK_SUCCESS)
-          it->second = std::ranges::any_of(extensions, [](const auto& e) {
-            return std::string_view(e.extensionName) == VK_EXT_MEMORY_BUDGET_EXTENSION_NAME;
-          });
-      }
-    }
-    supported = it->second;
-  }
+  const bool supported = memory_budget_supported(physical);
   auto query = phys<PFN_vkGetPhysicalDeviceMemoryProperties2>(physical, "vkGetPhysicalDeviceMemoryProperties2");
   if (!supported || !query) return {};
   VkPhysicalDeviceMemoryBudgetPropertiesEXT budget{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_BUDGET_PROPERTIES_EXT};
@@ -1041,7 +1172,25 @@ GpuMemory gpu_memory(VkPhysicalDevice physical) {
       m.usage += budget.heapUsage[i];
       m.limit += budget.heapBudget[i];
     }
-  last_physical.store(physical, std::memory_order_relaxed);
+  // VENTURE_DEBUG_GPU_HEAP_MB: Venture's own decisions see a card this small
+  // (the harness's --gpu-heap-cap imitates an 8 GB card on a bigger one).
+  static const VkDeviceSize heap_cap = [] {
+    const char* value = std::getenv("VENTURE_DEBUG_GPU_HEAP_MB");
+    const long long mb = value ? std::strtoll(value, nullptr, 10) : 0;
+    return mb > 0 ? VkDeviceSize(mb) << 20 : VkDeviceSize(0);
+  }();
+  if (heap_cap && m.limit > heap_cap) m.limit = heap_cap;
+  if (!last_physical.exchange(physical, std::memory_order_relaxed)) {
+    // Once a device answers, the headroom monitor samples it every second.
+    memory_pressure::set_gpu_probe([](std::uint64_t& usage, std::uint64_t& budget) {
+      const auto physical = last_physical.load(std::memory_order_relaxed);
+      if (!physical) return false;
+      const auto [used, limit] = gpu_memory(physical);
+      usage = used;
+      budget = limit;
+      return limit != 0;
+    });
+  }
   // Each whole GiB crossed, up or down, goes to the log: a few lines per run
   // that show in a debug report whether GPU memory grows with each level.
   static std::atomic<VkDeviceSize> logged_gib{0};
@@ -1062,6 +1211,22 @@ void watch_gpu_memory(VkPhysicalDevice physical) {
 // Whether `incoming` more bytes would take device-local memory past the
 // threshold share of the budget.
 bool memory_pressure(VkPhysicalDevice physical, VkDeviceSize incoming) {
+  // Once a texture allocation was refused, smaller storage is the fallback
+  // whatever the budget reads (a commit limit leaves VRAM looking free).
+  if (texture_memory_refused()) {
+    static std::atomic<bool> reported{false};
+    if (!reported.exchange(true))
+      log::info("vulkan", "A texture allocation was refused; new textures are stored as BC7 (quarter size)");
+    return true;
+  }
+  // Little allocatable memory left on the host (commit on Windows) or GPU memory
+  // near its budget: compress from now on, whatever the threshold says.
+  if (venture::memory_pressure::level() != venture::memory_pressure::Level::normal) {
+    static std::atomic<bool> reported{false};
+    if (!reported.exchange(true))
+      log::info("vulkan", "Memory pressure: new textures are stored as BC7 (quarter size)");
+    return true;
+  }
   const auto [usage, limit] = gpu_memory(physical);
   if (!limit || usage + incoming <= limit / 100 * compression_threshold()) return false;
   static std::atomic<bool> reported{false};
@@ -1445,6 +1610,10 @@ VkResult VKAPI_CALL allocate_guest_memory(VkDevice d, const VkMemoryAllocateInfo
     } else link = next;
   }
   const auto result = vk<PFN_vkAllocateMemory>(d, "vkAllocateMemory")(d, &copy, alloc, out);
+  if (result == VK_SUCCESS) note_device_memory(1);
+  // The guest receives the error as the API defines; the log says why.
+  else if (out_of_memory_result(result))
+    report_gpu_memory_failure(d, "the game's vkAllocateMemory", info->allocationSize, info->memoryTypeIndex);
   if (result == VK_SUCCESS && census::enabled()) {
     VkPhysicalDeviceMemoryProperties props{};
     const auto physical = device_physical(d);
@@ -1466,6 +1635,7 @@ void VKAPI_CALL free_guest_memory(VkDevice d, VkDeviceMemory memory, const VkAll
       s.memories.erase(it);
     }
   }
+  if (memory) note_device_memory(-1);
   vk<PFN_vkFreeMemory>(d, "vkFreeMemory")(d, memory, alloc);
 }
 VkResult VKAPI_CALL create_view(VkDevice d, const VkImageViewCreateInfo* info,
@@ -1685,7 +1855,8 @@ void copy_buffer_depth(VkCommandBuffer cmd, VkBuffer source, VkImage dest, VkIma
     }
     const auto region = depth_region(r);
     if (!region.words) continue;
-    auto words = buffer(d, VkDeviceSize(region.words) * 4);
+    auto words = optional_buffer(d, VkDeviceSize(region.words) * 4, "a depth upload");
+    if (!words) continue;
     vk<PFN_vkCmdCopyBuffer>(d, "vkCmdCopyBuffer")(cmd, source, words->buffer, std::uint32_t(region.rows.size()),
                                                   region.rows.data());
     convert_depth(cmd, words, region.words, false);
@@ -1706,7 +1877,8 @@ void copy_depth_buffer(VkCommandBuffer cmd, VkImage source, VkImageLayout layout
     }
     auto region = depth_region(r);
     if (!region.words) continue;
-    auto words = buffer(d, VkDeviceSize(region.words) * 4);
+    auto words = optional_buffer(d, VkDeviceSize(region.words) * 4, "a depth readback");
+    if (!words) continue;
     r.bufferOffset = 0;
     r.bufferRowLength = r.bufferImageHeight = 0;
     copy(cmd, source, layout, words->buffer, 1, &r);
@@ -2092,6 +2264,12 @@ VkResult VKAPI_CALL begin(VkCommandBuffer cmd, const VkCommandBufferBeginInfo* i
   if (r == VK_SUCCESS) {
     release_texture_commands(cmd);
     release_render_commands(cmd);
+    if (const auto bindings = command_null_vertex_bindings(cmd)) {
+      static constexpr std::array<VkBuffer, max_null_vertex_bindings> buffers{};
+      static constexpr std::array<VkDeviceSize, max_null_vertex_bindings> offsets{};
+      vk<PFN_vkCmdBindVertexBuffers>(command_device(cmd), "vkCmdBindVertexBuffers")(
+          cmd, 0, bindings, buffers.data(), offsets.data());
+    }
     // Without SIMULTANEOUS_USE only one execution can be pending. Reusing
     // outputs across distinct decodes must not introduce cross-execution
     // aliasing when the same command buffer runs on multiple queues.
@@ -2120,7 +2298,10 @@ VkResult VKAPI_CALL reset(VkCommandBuffer cmd, VkCommandBufferResetFlags flags) 
   return r;
 }
 void VKAPI_CALL bind_pipeline(VkCommandBuffer cmd, VkPipelineBindPoint point, VkPipeline p) {
-  auto f = vk<PFN_vkCmdBindPipeline>(command_device(cmd), "vkCmdBindPipeline");
+  // The guest's pipeline may be a background-created proxy that only the
+  // pipeline layer below resolves.
+  auto f = reinterpret_cast<PFN_vkCmdBindPipeline>(cached_layer_proc<Layer::texture, "vkCmdBindPipeline">());
+  if (!f) f = vk<PFN_vkCmdBindPipeline>(command_device(cmd), "vkCmdBindPipeline");
   f(cmd, point, p);
   if (point == VK_PIPELINE_BIND_POINT_COMPUTE) {
     std::lock_guard lock(texture_lock);
@@ -2519,6 +2700,11 @@ void VKAPI_CALL features2(VkPhysicalDevice p, VkPhysicalDeviceFeatures2* out) {
       reinterpret_cast<VkPhysicalDeviceVulkan14Features*>(next)->hostImageCopy = VK_FALSE;
     if (next->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_HOST_IMAGE_COPY_FEATURES)
       reinterpret_cast<VkPhysicalDeviceHostImageCopyFeatures*>(next)->hostImageCopy = VK_FALSE;
+    if (next->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES)
+      reinterpret_cast<VkPhysicalDeviceVulkan13Features*>(next)->textureCompressionASTC_HDR = guest_astc_hdr(p);
+    if (next->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TEXTURE_COMPRESSION_ASTC_HDR_FEATURES)
+      reinterpret_cast<VkPhysicalDeviceTextureCompressionASTCHDRFeatures*>(next)->textureCompressionASTC_HDR =
+          guest_astc_hdr(p);
     if (next->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_DENSITY_MAP_FEATURES_EXT && emulated_density_maps(p)) {
       auto& density = *reinterpret_cast<VkPhysicalDeviceFragmentDensityMapFeaturesEXT*>(next);
       density.fragmentDensityMap = VK_TRUE;
@@ -2952,8 +3138,10 @@ std::shared_ptr<DecodeResources> record_encode_bc7(VkDevice d, VkCommandBuffer c
 std::shared_ptr<DecodeResources> record_decode_image(VkDevice d, VkCommandBuffer cmd, VkBuffer source,
     VkDeviceSize source_size, VkImageView destination, VkBuffer activation, const DecodeRegion& region,
     bool volume, std::uint32_t slice) {
-  if (region.format.compressed < VK_FORMAT_ASTC_4x4_UNORM_BLOCK ||
-      region.format.compressed > VK_FORMAT_ASTC_12x12_SRGB_BLOCK)
+  if ((region.format.compressed < VK_FORMAT_ASTC_4x4_UNORM_BLOCK ||
+       region.format.compressed > VK_FORMAT_ASTC_12x12_SRGB_BLOCK) &&
+      (region.format.compressed < VK_FORMAT_ASTC_4x4_SFLOAT_BLOCK ||
+       region.format.compressed > VK_FORMAT_ASTC_12x12_SFLOAT_BLOCK))
     throw std::runtime_error("direct image decode requires ASTC");
   auto resources = std::make_shared<DecodeResources>();
   const bool srgb = region.format.decoded == VK_FORMAT_R8G8B8A8_SRGB;
@@ -3036,9 +3224,14 @@ SparseImageBindings sparse_image_bindings(const VkImageCreateInfo& image,
 }
 
 TextureFormat texture_format(VkFormat format) {
+  constexpr std::uint32_t sizes[][2] = {{4, 4}, {5, 4},  {5, 5},  {6, 5},  {6, 6},   {8, 5},   {8, 6},
+                                        {8, 8}, {10, 5}, {10, 6}, {10, 8}, {10, 10}, {12, 10}, {12, 12}};
+  // ASTC HDR decodes to FP16 (shaders/decode.comp), in the footprint order of the LDR pairs.
+  if (format >= VK_FORMAT_ASTC_4x4_SFLOAT_BLOCK && format <= VK_FORMAT_ASTC_12x12_SFLOAT_BLOCK) {
+    auto index = static_cast<unsigned>(format - VK_FORMAT_ASTC_4x4_SFLOAT_BLOCK);
+    return {format, VK_FORMAT_R16G16B16A16_SFLOAT, sizes[index][0], sizes[index][1], 16, 8u};
+  }
   if (format >= VK_FORMAT_ASTC_4x4_UNORM_BLOCK && format <= VK_FORMAT_ASTC_12x12_SRGB_BLOCK) {
-    constexpr std::uint32_t sizes[][2] = {{4, 4}, {5, 4},  {5, 5},  {6, 5},  {6, 6},   {8, 5},   {8, 6},
-                                          {8, 8}, {10, 5}, {10, 6}, {10, 8}, {10, 10}, {12, 10}, {12, 12}};
     auto index = static_cast<unsigned>(format - VK_FORMAT_ASTC_4x4_UNORM_BLOCK);
     bool srgb = index & 1;
     return {format,
@@ -3063,6 +3256,14 @@ TextureStorage texture_storage(VkFormat format, bool mutable_format, std::span<c
                                bool compressed) {
   const auto base = texture_format(format);
   if (!base) return {};
+  if (format >= VK_FORMAT_ASTC_4x4_SFLOAT_BLOCK) {
+    // Views as the same-footprint UNORM or SRGB format would need an LDR plane too.
+    if (mutable_format && std::ranges::any_of(view_formats, [&](VkFormat view) { return view != format; }))
+      return {};
+    TextureStorage storage;
+    storage.planes = {{base.decoded, {}, {format}, format, base.texel_bytes}};
+    return storage;
+  }
   // Each decoded compatibility class is a pair of adjacent enums from
   // VK_FORMAT_ETC2_R8G8B8_UNORM_BLOCK (147, odd) to VK_FORMAT_ASTC_12x12_SRGB_BLOCK
   // (184): the odd UNORM member, then its SRGB (ETC2, ASTC) or SNORM (EAC) partner.
@@ -3142,6 +3343,34 @@ void texture_extensions(VkPhysicalDevice physical, std::vector<VkExtensionProper
     std::erase_if(extensions, [](const auto& extension) {
       return std::string_view(extension.extensionName) == VK_EXT_ASTC_DECODE_MODE_EXTENSION_NAME;
     });
+  // Without ASTC HDR, Unity decodes HDR textures on the CPU, then re-encodes them
+  // to RGB9E5 on its render thread, stalling level loads (Batman: Arkham Shadow).
+  if (!host_astc_hdr(physical) && guest_astc_hdr(physical)) {
+    VkExtensionProperties hdr{};
+    std::strcpy(hdr.extensionName, VK_EXT_TEXTURE_COMPRESSION_ASTC_HDR_EXTENSION_NAME);
+    hdr.specVersion = VK_EXT_TEXTURE_COMPRESSION_ASTC_HDR_SPEC_VERSION;
+    extensions.push_back(hdr);
+  }
+}
+bool guest_astc_hdr(VkPhysicalDevice physical) {
+  for (int f = VK_FORMAT_ASTC_4x4_SFLOAT_BLOCK; f <= VK_FORMAT_ASTC_12x12_SFLOAT_BLOCK; ++f) {
+    VkFormatProperties props{};
+    format_properties(physical, static_cast<VkFormat>(f), &props);
+    if (!(props.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT)) return false;
+  }
+  return true;
+}
+bool host_astc_hdr(VkPhysicalDevice physical) { return !emulated(physical, VK_FORMAT_ASTC_4x4_SFLOAT_BLOCK); }
+void host_astc_hdr_features(VkPhysicalDevice physical, const void* chain) {
+  if (host_astc_hdr(physical)) return;
+  for (auto* next = const_cast<VkBaseOutStructure*>(static_cast<const VkBaseOutStructure*>(chain)); next;
+       next = next->pNext) {
+    if (next->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES)
+      reinterpret_cast<VkPhysicalDeviceVulkan13Features*>(next)->textureCompressionASTC_HDR = VK_FALSE;
+    if (next->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TEXTURE_COMPRESSION_ASTC_HDR_FEATURES)
+      reinterpret_cast<VkPhysicalDeviceTextureCompressionASTCHDRFeatures*>(next)->textureCompressionASTC_HDR =
+          VK_FALSE;
+  }
 }
 void guest_texture_features(VkPhysicalDevice physical, VkPhysicalDeviceFeatures& out) {
   auto supported = [&](int first, int last) {
@@ -3274,6 +3503,7 @@ void release_texture_device(VkDevice device) {
 }
 void prepare_texture_device(VkDevice device) {
   register_pipeline_exit();
+  alloc_failure::add_relief(release_idle_scratch);
   std::lock_guard lock(texture_lock);
   auto [it, inserted] = pipelines.try_emplace(device);
   if (!inserted) return;

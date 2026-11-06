@@ -112,12 +112,12 @@ public:
   std::vector<std::uint64_t> producer_syncs;
   bool last_bottom_up = false;
   std::vector<std::pair<VkImage, bool>> destinations;
-  std::array<std::uint8_t, 4> read_pixel(std::int32_t x=0,std::int32_t y=0) {
+  // A host-visible buffer of `size` bytes for transfers in either direction.
+  std::pair<VkBuffer, VkDeviceMemory> host_buffer(VkDeviceSize size) {
     auto &gpu = gpu_;
-    std::lock_guard queue(gpu.queue_lock);
     VkBufferCreateInfo ci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
-    ci.size = 4;
-    ci.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    ci.size = size;
+    ci.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
     VkBuffer buffer{};
     REQUIRE(vk<PFN_vkCreateBuffer>("vkCreateBuffer")(gpu.device, &ci, nullptr, &buffer) ==
             VK_SUCCESS);
@@ -142,28 +142,138 @@ public:
             VK_SUCCESS);
     REQUIRE(vk<PFN_vkBindBufferMemory>("vkBindBufferMemory")(gpu.device, buffer, memory, 0) ==
             VK_SUCCESS);
+    return {buffer, memory};
+  }
+  void free_buffer(std::pair<VkBuffer, VkDeviceMemory> buffer) {
+    vk<PFN_vkDestroyBuffer>("vkDestroyBuffer")(gpu_.device, buffer.first, nullptr);
+    vk<PFN_vkFreeMemory>("vkFreeMemory")(gpu_.device, buffer.second, nullptr);
+  }
+  // Reads one texel of `image` (by default the last copy destination), which
+  // is in the color attachment layout, as after a host copy.
+  std::array<std::uint8_t, 4> read_pixel(std::int32_t x = 0, std::int32_t y = 0,
+                                         std::uint32_t layer = 0, VkImage image = VK_NULL_HANDLE) {
+    auto &gpu = gpu_;
+    if (!image) image = last_destination;
+    std::lock_guard queue(gpu.queue_lock);
+    auto [buffer, memory] = host_buffer(4);
     commands([&](VkCommandBuffer cmd) {
-      barrier(cmd, last_destination, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-              VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, 1);
+      barrier(cmd, image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+              VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, layer + 1);
       VkBufferImageCopy copy{};
-      copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+      copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, layer, 1};
       copy.imageOffset = {x,y,0};
       copy.imageExtent = {1, 1, 1};
       vk<PFN_vkCmdCopyImageToBuffer>("vkCmdCopyImageToBuffer")(
-          cmd, last_destination, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, buffer, 1, &copy);
-      barrier(cmd, last_destination, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-              VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, 1);
+          cmd, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, buffer, 1, &copy);
+      barrier(cmd, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+              VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, layer + 1);
     });
     void *mapped{};
     REQUIRE(vk<PFN_vkMapMemory>("vkMapMemory")(gpu.device, memory, 0, 4, 0, &mapped) == VK_SUCCESS);
     std::array<std::uint8_t, 4> pixel{};
     std::memcpy(pixel.data(), mapped, 4);
     vk<PFN_vkUnmapMemory>("vkUnmapMemory")(gpu.device, memory);
-    vk<PFN_vkDestroyBuffer>("vkDestroyBuffer")(gpu.device, buffer, nullptr);
-    vk<PFN_vkFreeMemory>("vkFreeMemory")(gpu.device, memory, nullptr);
+    free_buffer({buffer, memory});
     return pixel;
   }
+  // Writes every texel of a ring texture: texel(layer, x, y), y in GLES rows
+  // (row 0 is the bottom and is stored first, as ANGLE stores it).
+  void paint(std::uint32_t name,
+             const std::function<std::array<std::uint8_t, 4>(std::uint32_t, std::uint32_t, std::uint32_t)> &texel) {
+    auto &gpu = gpu_;
+    auto &ring = images.at(name);
+    const auto &d = ring.desc;
+    const VkDeviceSize size = VkDeviceSize(d.width) * d.height * d.layers * 4;
+    std::lock_guard queue(gpu.queue_lock);
+    auto [buffer, memory] = host_buffer(size);
+    void *mapped{};
+    REQUIRE(vk<PFN_vkMapMemory>("vkMapMemory")(gpu.device, memory, 0, size, 0, &mapped) == VK_SUCCESS);
+    auto *out = static_cast<std::uint8_t *>(mapped);
+    for (std::uint32_t layer = 0; layer < d.layers; ++layer)
+      for (std::uint32_t y = 0; y < d.height; ++y)
+        for (std::uint32_t x = 0; x < d.width; ++x) {
+          const auto value = texel(layer, x, y);
+          std::memcpy(out + ((std::size_t(layer) * d.height + y) * d.width + x) * 4, value.data(), 4);
+        }
+    vk<PFN_vkUnmapMemory>("vkUnmapMemory")(gpu.device, memory);
+    commands([&](VkCommandBuffer cmd) {
+      barrier(cmd, ring.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+              d.layers);
+      VkBufferImageCopy copy{};
+      copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, d.layers};
+      copy.imageExtent = {d.width, d.height, 1};
+      vk<PFN_vkCmdCopyBufferToImage>("vkCmdCopyBufferToImage")(
+          cmd, buffer, ring.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+      barrier(cmd, ring.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+              d.layers);
+    });
+    free_buffer({buffer, memory});
+  }
+  std::size_t ring_textures() const { return images.size(); }
+  // Optional provider staging (xr::XrImages::create_staging): one 2D image per
+  // layer, filled by stage() from the ring texture's layers.
+  bool staging = false;
+  XrResult staging_result = XR_SUCCESS;
+  unsigned stages = 0;
+  std::map<const xr::StagedImage *, std::vector<Image>> staged_images;
+  XrResult create_staging(const xr::ImageDesc &desc, std::span<const std::uint32_t> names,
+                          std::span<xr::StagedImage> out) override {
+    CHECK_FALSE(host_queue_locked);
+    if (!staging) return XR_ERROR_FEATURE_UNSUPPORTED;
+    if (XR_FAILED(staging_result)) return staging_result;
+    REQUIRE(names.size() == out.size());
+    for (auto &slot : out) {
+      auto &list = staged_images[&slot];
+      for (std::uint32_t layer = 0; layer < desc.layers; ++layer) {
+        auto single = desc;
+        single.layers = single.mip_count = single.face_count = 1;
+        list.push_back(make_image(single, false));
+        slot.layers.push_back(list.back().image);
+      }
+      slot.layouts.assign(desc.layers, VK_IMAGE_LAYOUT_UNDEFINED);
+      slot.idle_layout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+      slot.staged = false;
+    }
+    return XR_SUCCESS;
+  }
+  XrResult stage(std::uint32_t name, xr::StagedImage &slot, const xr::ImageDesc &desc) override {
+    CHECK_FALSE(host_queue_locked);
+    auto it = images.find(name);
+    if (it == images.end() || !staged_images.contains(&slot) || slot.layers.size() != desc.layers)
+      return XR_ERROR_HANDLE_INVALID;
+    std::lock_guard queue(gpu_.queue_lock);
+    commands([&](VkCommandBuffer cmd) {
+      for (std::uint32_t layer = 0; layer < desc.layers; ++layer) {
+        barrier(cmd, slot.layers[layer], slot.layouts[layer], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1);
+        VkImageCopy copy{};
+        copy.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, layer, 1};
+        copy.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        copy.extent = {desc.width, desc.height, 1};
+        vk<PFN_vkCmdCopyImage>("vkCmdCopyImage")(cmd, it->second.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                                 slot.layers[layer], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
+                                                 &copy);
+        barrier(cmd, slot.layers[layer], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, 1);
+        slot.layouts[layer] = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+      }
+    });
+    slot.staged = true;
+    ++stages;
+    return XR_SUCCESS;
+  }
+  void destroy_staging(std::span<xr::StagedImage> slots) override {
+    CHECK_FALSE(host_queue_locked);
+    for (auto &slot : slots) {
+      auto it = staged_images.find(&slot);
+      if (it == staged_images.end()) continue;
+      for (auto &image : it->second) free_image(image);
+      staged_images.erase(it);
+      slot = {};
+    }
+  }
   ~XrImageFixture() override {
+    for (auto &[slot, list] : staged_images)
+      for (auto &image : list) free_image(image);
     std::vector<std::uint32_t> remaining;
     for (auto &[id, image] : images)
       remaining.push_back(id);
@@ -171,50 +281,58 @@ public:
     if (pool)
       vk<PFN_vkDestroyCommandPool>("vkDestroyCommandPool")(gpu_.device, pool, nullptr);
   }
+  Image make_image(const xr::ImageDesc &desc, bool clear) {
+    auto &gpu = gpu_;
+    VkImageCreateInfo ci{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+    ci.imageType = VK_IMAGE_TYPE_2D;
+    ci.format = desc.vk_format;
+    ci.extent = {desc.width, desc.height, 1};
+    ci.mipLevels = desc.mip_count;
+    ci.arrayLayers = desc.layers * desc.face_count;
+    ci.samples = VK_SAMPLE_COUNT_1_BIT;
+    ci.tiling = VK_IMAGE_TILING_OPTIMAL;
+    ci.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
+               VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    if (desc.face_count == 6)
+      ci.flags = VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
+    Image image{{}, {}, desc};
+    REQUIRE(vk<PFN_vkCreateImage>("vkCreateImage")(gpu.device, &ci, nullptr, &image.image) ==
+            VK_SUCCESS);
+    VkMemoryRequirements requirements;
+    vk<PFN_vkGetImageMemoryRequirements>("vkGetImageMemoryRequirements")(gpu.device, image.image,
+                                                                         &requirements);
+    VkPhysicalDeviceMemoryProperties properties;
+    vk<PFN_vkGetPhysicalDeviceMemoryProperties>("vkGetPhysicalDeviceMemoryProperties")(
+        gpu.physical_device, &properties);
+    std::uint32_t type = 0;
+    while (!(requirements.memoryTypeBits & (1u << type)))
+      ++type;
+    VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, nullptr, requirements.size,
+                            type};
+    REQUIRE(vk<PFN_vkAllocateMemory>("vkAllocateMemory")(gpu.device, &ai, nullptr,
+                                                         &image.memory) == VK_SUCCESS);
+    REQUIRE(vk<PFN_vkBindImageMemory>("vkBindImageMemory")(gpu.device, image.image, image.memory,
+                                                           0) == VK_SUCCESS);
+    if (clear) commands([&](VkCommandBuffer cmd) {
+      barrier(cmd, image.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+              ci.arrayLayers);
+      VkClearColorValue color{{0.25f, 0.5f, 0.75f, 1}};
+      VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, ci.arrayLayers};
+      vk<PFN_vkCmdClearColorImage>("vkCmdClearColorImage")(
+          cmd, image.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &color, 1, &range);
+      barrier(cmd, image.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+              VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, ci.arrayLayers);
+    });
+    return image;
+  }
+  void free_image(const Image &image) {
+    vk<PFN_vkDestroyImage>("vkDestroyImage")(gpu_.device, image.image, nullptr);
+    vk<PFN_vkFreeMemory>("vkFreeMemory")(gpu_.device, image.memory, nullptr);
+  }
   XrResult create_ring(const xr::ImageDesc &desc, std::span<std::uint32_t> names) override {
     CHECK_FALSE(host_queue_locked);
-    auto &gpu = gpu_;
     for (auto &name : names) {
-      VkImageCreateInfo ci{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
-      ci.imageType = VK_IMAGE_TYPE_2D;
-      ci.format = desc.vk_format;
-      ci.extent = {desc.width, desc.height, 1};
-      ci.mipLevels = desc.mip_count;
-      ci.arrayLayers = desc.layers * desc.face_count;
-      ci.samples = VK_SAMPLE_COUNT_1_BIT;
-      ci.tiling = VK_IMAGE_TILING_OPTIMAL;
-      ci.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
-                 VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-      if (desc.face_count == 6)
-        ci.flags = VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
-      Image image{{}, {}, desc};
-      REQUIRE(vk<PFN_vkCreateImage>("vkCreateImage")(gpu.device, &ci, nullptr, &image.image) ==
-              VK_SUCCESS);
-      VkMemoryRequirements requirements;
-      vk<PFN_vkGetImageMemoryRequirements>("vkGetImageMemoryRequirements")(gpu.device, image.image,
-                                                                           &requirements);
-      VkPhysicalDeviceMemoryProperties properties;
-      vk<PFN_vkGetPhysicalDeviceMemoryProperties>("vkGetPhysicalDeviceMemoryProperties")(
-          gpu.physical_device, &properties);
-      std::uint32_t type = 0;
-      while (!(requirements.memoryTypeBits & (1u << type)))
-        ++type;
-      VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, nullptr, requirements.size,
-                              type};
-      REQUIRE(vk<PFN_vkAllocateMemory>("vkAllocateMemory")(gpu.device, &ai, nullptr,
-                                                           &image.memory) == VK_SUCCESS);
-      REQUIRE(vk<PFN_vkBindImageMemory>("vkBindImageMemory")(gpu.device, image.image, image.memory,
-                                                             0) == VK_SUCCESS);
-      commands([&](VkCommandBuffer cmd) {
-        barrier(cmd, image.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                ci.arrayLayers);
-        VkClearColorValue color{{0.25f, 0.5f, 0.75f, 1}};
-        VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, ci.arrayLayers};
-        vk<PFN_vkCmdClearColorImage>("vkCmdClearColorImage")(
-            cmd, image.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &color, 1, &range);
-        barrier(cmd, image.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, ci.arrayLayers);
-      });
+      auto image = make_image(desc, true);
       name = next++;
       images[name] = image;
     }
@@ -222,13 +340,11 @@ public:
   }
   void destroy_ring(std::span<const std::uint32_t> names) override {
     CHECK_FALSE(host_queue_locked);
-    auto &gpu = gpu_;
     for (auto name : names) {
       auto it = images.find(name);
       if (it == images.end())
         continue;
-      vk<PFN_vkDestroyImage>("vkDestroyImage")(gpu.device, it->second.image, nullptr);
-      vk<PFN_vkFreeMemory>("vkFreeMemory")(gpu.device, it->second.memory, nullptr);
+      free_image(it->second);
       images.erase(it);
     }
   }

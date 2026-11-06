@@ -29,7 +29,7 @@ struct Eye {
   }
   XrResult prepare(XrSession target, const Swapchain& chain) {
     const auto format = VkFormat(chain.info.format);
-    // SBN1 profile 1 is SDR RGBA. Never declare float/HDR or alpha-less data.
+    // The external source profile (SBN1 profile 1) is SDR RGBA. Never declare float/HDR or alpha-less data.
     if (format != VK_FORMAT_R8G8B8A8_UNORM && format != VK_FORMAT_R8G8B8A8_SRGB &&
         format != VK_FORMAT_B8G8R8A8_UNORM && format != VK_FORMAT_B8G8R8A8_SRGB)
       return XR_ERROR_SWAPCHAIN_FORMAT_UNSUPPORTED;

@@ -12,6 +12,7 @@
 #include "android/native_window.h"
 #include "core/address_space.h"
 #include "hle/libc/vfs.h"
+#include "media/yuv.h"
 
 #include <algorithm>
 #include <condition_variable>
@@ -101,7 +102,15 @@ void start_notifier(const std::shared_ptr<Reader>& reader) {
         fn = r.listener;
         context = r.context;
       }
-      GuestThread::adopt_current().call(fn, {context, h2g(&r)});
+      // A32 listeners receive the reader's token, as every other A32 entry point.
+      // A reader deleted meanwhile has retired its token: it has no listener left.
+      GuestAddr reader = h2g(&r);
+      try {
+        reader = android::handles32::encode(reader, "AImageReader");
+      } catch (const std::invalid_argument&) {
+        return;
+      }
+      GuestThread::adopt_current().call(fn, {context, reader});
     }
   });
 }
@@ -329,9 +338,9 @@ int image_row_stride(Image* p, int plane, std::int32_t* out) {
 bool fill_planes(Image& i) {
   if (i.planes) return true;
   const auto& f = *i.frame;
-  const std::size_t w = f.width, h = f.height, cw = (w + 1) / 2, ch = (h + 1) / 2;
+  const std::size_t w = f.width, h = f.height;
   const bool yuv = i.reader->format == format_yuv420;
-  const std::uint64_t size = yuv ? w * h + 2 * cw * ch : w * h * 4;
+  const std::uint64_t size = yuv ? media::yuv420_size(w, h) : w * h * 4;
   const auto address = AddressSpace::get().allocate(size, kProtRead | kProtWrite, "[aimage-planes]");
   if (!address) return false;
   auto* out = g2h<std::uint8_t>(address);
@@ -340,30 +349,7 @@ bool fill_planes(Image& i) {
     if (i.reader->format == format_rgbx)
       for (std::size_t n = 3; n < size; n += 4) out[n] = 0xff;
   } else {
-    auto* u = out + w * h;
-    auto* v = u + cw * ch;
-    auto at = [&](std::size_t x, std::size_t y) { return f.rgba.data() + (y * w + x) * 4; };
-    for (std::size_t y = 0; y < h; ++y)
-      for (std::size_t x = 0; x < w; ++x) {
-        const auto* c = at(x, y);
-        out[y * w + x] = std::uint8_t((66 * c[0] + 129 * c[1] + 25 * c[2] + 128) / 256 + 16);
-      }
-    for (std::size_t y = 0; y < ch; ++y)
-      for (std::size_t x = 0; x < cw; ++x) {
-        int r = 0, g = 0, b = 0, n = 0;
-        for (std::size_t dy = 0; dy < 2 && 2 * y + dy < h; ++dy)
-          for (std::size_t dx = 0; dx < 2 && 2 * x + dx < w; ++dx, ++n) {
-            const auto* c = at(2 * x + dx, 2 * y + dy);
-            r += c[0];
-            g += c[1];
-            b += c[2];
-          }
-        r /= n;
-        g /= n;
-        b /= n;
-        u[y * cw + x] = std::uint8_t((-38 * r - 74 * g + 112 * b + 128) / 256 + 128);
-        v[y * cw + x] = std::uint8_t((112 * r - 94 * g - 18 * b + 128) / 256 + 128);
-      }
+    media::rgba_to_yuv420(f.rgba.data(), w, h, out);
   }
   i.planes = address;
   i.planes_size = size;

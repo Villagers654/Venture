@@ -197,7 +197,7 @@ bool texture_transform(const Matrix &m) {
 } // namespace
 XrResult translate_layer(const LayerHeader &header, const XrView *eyes, LayerImage image,
                          LayerStorage &dst,
-                         std::vector<const XrCompositionLayerBaseHeader *> &layers) {
+                         std::vector<const XrCompositionLayerBaseHeader *> &layers, int first_eye) {
   constexpr std::uint32_t supported_flags = 2 | 4 | 16 | 256 | (1u << 19);
   if (header.flags & ~supported_flags || header.reserved)
     return XR_ERROR_FEATURE_UNSUPPORTED;
@@ -274,7 +274,8 @@ XrResult translate_layer(const LayerHeader &header, const XrView *eyes, LayerIma
     auto &src = reinterpret_cast<const Projection &>(header);
     int constant = 0;
     bool spans = true;
-    for (int eye = 0; eye < 2; ++eye) {
+    for (int i = 0; i < 2; ++i) {
+      const int eye = first_eye == 1 ? 1 - i : i;
       auto &t = src.textures[eye];
       auto &view = dst.views[eye];
       XrQuaternionf orientation{0, 0, 0, 1};

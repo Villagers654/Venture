@@ -1,5 +1,6 @@
 #include "libc_b/test.h"
 #include "core/thread_runtime.h"
+#include "platform/profile.h"
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -107,3 +108,43 @@ TEST_CASE("libc B: readiness epoll one-shot dispatches once and MOD wakes the ne
   CHECK(FdTable::get().close(ep) == 0);
   CHECK(FdTable::get().close(fds[0]) == 0); CHECK(FdTable::get().close(fds[1]) == 0);
 }
+#ifdef __linux__
+// A pending host signal fails a zero-timeout host poll with EINTR. select() on
+// an idle socket must still report it not ready: AC Nexus' Wwise audio thread
+// select()s its idle blocking listener every frame, and a POLLERR there sent it
+// into an accept() that never returned while the sampling profiler ran.
+TEST_CASE("libc B: readiness of an idle host socket ignores host signals") {
+  Thread thread;
+  if (!platform::profile_supported()) return;
+  const auto fd = static_cast<int>(call("socket", {2, 1, 0}));
+  REQUIRE(fd >= 0);
+  struct Address {
+    std::uint16_t family, port;
+    std::uint32_t ip;
+    std::uint8_t zero[8];
+  } address{2, 0, 0x0100007f, {}};
+  REQUIRE(call("bind", {unsigned(fd), h2g(&address), 16}) == 0);
+  REQUIRE(call("listen", {unsigned(fd), 1}) == 0);
+  const auto target = platform::profile_current_thread();
+  std::atomic<bool> stop = false;
+  std::atomic<unsigned> samples = 0;
+  std::thread sampler([&] {
+    while (!stop.load()) {
+      platform::ProfileSample sample;
+      if (platform::profile_sample(target, nullptr, nullptr, sample)) ++samples;
+    }
+  });
+  unsigned ready = 0;
+  for (unsigned i = 0; i < 20'000 && samples.load() < 2'000; ++i) {
+    std::array<std::uint64_t, 16> set{};
+    set[fd / 64] = 1ull << (fd % 64);
+    Timeval timeout{};
+    ready += call("select", {unsigned(fd + 1), h2g(set.data()), 0, 0, h2g(&timeout)}) != 0;
+  }
+  stop = true;
+  sampler.join();
+  CHECK(samples.load() > 0);
+  CHECK(ready == 0);
+  CHECK(FdTable::get().close(fd) == 0);
+}
+#endif

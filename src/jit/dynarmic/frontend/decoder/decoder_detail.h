@@ -124,7 +124,10 @@ struct detail {
     }
 };
 
-#define DYNARMIC_DECODER_GET_MATCHER(MatcherT, fn, name, bitstring) Decoder::detail::detail<MatcherT<V>>::GetMaskAndExpect(bitstring)
+// The constexpr variable forces compile-time evaluation: under clang GetMaskAndExpect is only constexpr,
+// and the A32 VFP/ASIMD/Thumb decoders, which test every pattern in turn, ran its bit loop for each
+// pattern of each translated instruction (First Contact: ~3.5 s of a warm launch).
+#define DYNARMIC_DECODER_GET_MATCHER(MatcherT, fn, name, bitstring) ([] { constexpr auto mask_and_expect_ = Decoder::detail::detail<MatcherT<V>>::GetMaskAndExpect(bitstring); return mask_and_expect_; }())
 
 #define DYNARMIC_DECODER_GET_MATCHER_FUNCTION(MatcherT, fn, name, bitstring) Decoder::detail::detail<MatcherT<V>>::template GetMatcherFunction<bitstring, V>(visitor, instruction, &V::fn)
 

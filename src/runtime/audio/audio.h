@@ -10,10 +10,12 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 #include <utility>
 
+#include "audio/output_mirror.h"
 #include "core/guest.h"
 
 namespace venture {
@@ -35,6 +37,9 @@ inline constexpr std::int32_t refill_quantum(std::int32_t rate) {
 inline constexpr std::int32_t default_output_id = 1, default_input_id = 2;
 struct DeviceInfo { Direction direction; std::string name; };
 std::vector<DeviceInfo> default_devices();
+// Whether a WASAPI endpoint ID ("{0.0.0.00000000}.{guid}") is the endpoint an
+// XR runtime named: the same ID, or the endpoint GUID alone, case-insensitive.
+bool wasapi_endpoint_matches(std::string_view endpoint_id, std::string_view named);
 // AudioDeviceInfo.getId() for a default endpoint.
 inline std::int32_t device_id(const DeviceInfo& device) {
   return device.direction == Direction::input ? default_input_id : default_output_id;
@@ -96,6 +101,10 @@ struct Config {
   const char* api = "native";
   // Android AudioTrack/OpenSL tracks belong to the logical default mixer.
   bool follow_default_output = false;
+  // Legacy AudioRecord and OpenSL recorders follow the default input across a
+  // lost microphone, as Android restores their routes; AAudio input reports
+  // DISCONNECTED instead.
+  bool follow_default_input = false;
   // Streaming AudioTrack drains only frames written before stop; later writes
   // prefill the next play and writes while inactive never wait for consumption.
   bool stop_at_written_position = false;
@@ -234,6 +243,34 @@ class Backend {
     float peak = 0;
   };
   MixerStats mixer_stats() const;
+  // The host endpoints the XR runtime names for the headset, as native PC VR
+  // apps play and record on them (Meta: VRC.PC.Audio.1). source(direction)
+  // answers the runtime's current endpoint (Windows: a WASAPI endpoint ID or
+  // its GUID), empty for none; `runtime` names it in the log, and with no
+  // source says why there is none. Devices open on the named endpoint while it
+  // is active, otherwise on the system default (never changed). Open devices
+  // follow the runtime's answer: rechecked every 2 s and on endpoint changes.
+  using HeadsetSource = std::function<std::string(Direction)>;
+  void set_headset_endpoints(std::string runtime, HeadsetSource source);
+  void request_route_check();  // recheck now (endpoint notifications, tests)
+  struct Route {
+    bool open = false, headset = false;  // headset: on the endpoint the runtime names
+    std::string named, device;           // runtime's answer; endpoint opened
+  };
+  Route route(Direction direction);
+  // The PC output (VENTURE_PC_AUDIO=on): while the game plays on the headset
+  // endpoint and the system default output is another endpoint, the same mix
+  // also plays there, on its own clock (OutputMirror). The headset path never
+  // waits for it; a PC output that fails is logged once and dropped for the
+  // process. Never the microphone. Read from the environment at startup;
+  // tests set it.
+  void set_pc_output(bool enabled);
+  struct PcOutput {
+    PcOutputPlan plan = PcOutputPlan::off;
+    bool open = false;
+  };
+  PcOutput pc_output();
+  OutputMirror& output_mirror() { return mirror_; }
 
  private:
   friend class Stream;
@@ -247,6 +284,11 @@ class Backend {
   std::array<Slot, 64> slots_{};
   std::mutex device_lock_;
   ma_context context_{};
+  // A host without a usable microphone records silence, as a muted Quest
+  // microphone: Quest titles never meet a failing recorder, and FMOD's
+  // AudioRecord thread (Unity Microphone) spins on one without sleeping.
+  ma_context silent_context_{};
+  bool silent_context_ready_ = false;
   ma_device playback_{}, capture_{};
   bool context_ready_ = false, playback_ready_ = false, capture_ready_ = false,
        null_ = false, start_null_ = true;
@@ -284,6 +326,41 @@ class Backend {
                        std::uint32_t delivered, std::uint32_t queue_before);
   void drain_underruns();
   bool ensure_device(Direction direction);
+  // device_lock_ held: the runtime's endpoint for direction, matched against
+  // the backend's active endpoints into id; false for the system default.
+  // answered: named already holds the runtime's answer.
+  bool headset_endpoint(Direction direction, std::string& named, std::string& reason, ma_device_id& id,
+                        std::string& name, bool answered = false);
+  std::string headset_answer(Direction direction, std::string& runtime, bool& sourced);
+  // endpoints_changed: match the answer again even when it is unchanged.
+  void check_routes(bool endpoints_changed);
+  std::mutex headset_lock_;
+  std::string headset_runtime_;
+  HeadsetSource headset_source_;
+  bool watching_endpoints_ = false;
+  std::atomic<bool> route_check_{false};
+  struct OpenRoute {
+    Route route;
+    ma_device_id id{};
+    std::string logged;  // last decision logged
+    bool failed = false;  // the runtime's endpoint did not open
+    std::string failed_named;
+    ma_device_id failed_id{};
+  };
+  std::array<OpenRoute, 2> routes_{};  // device_lock_
+  // The PC output, device_lock_ held.
+  ma_device pc_{};
+  bool pc_ready_ = false, pc_enabled_ = false, pc_dropped_ = false;
+  PcOutputPlan pc_plan_ = PcOutputPlan::off;
+  std::string pc_logged_;
+  std::atomic<bool> pc_lost_{false}, pc_suppressed_{false};
+  OutputMirror mirror_;
+  void update_pc_output();
+  void open_pc_output();
+  void close_pc_output();
+  void drop_pc_output(std::string_view why);
+  int default_output_is_headset();  // 1, 0, or -1 unknown
+  static void pc_callback(ma_device*, void*, const void*, ma_uint32);
   static void data_callback(ma_device*, void*, const void*, ma_uint32);
   static void notification_callback(const ma_device_notification*);
 };

@@ -2,7 +2,7 @@
 if(NOT TARGET Python3::Interpreter)
   find_package(Python3 REQUIRED COMPONENTS Interpreter)
 endif()
-target_sources(venture_tests PRIVATE runtime/vulkan_test.cpp runtime/vulkan_shader_test.cpp runtime/vulkan_subpass_sync_test.cpp runtime/vulkan_callbacks_test_support.cpp)
+target_sources(venture_tests PRIVATE runtime/vulkan_test.cpp runtime/vulkan_shader_test.cpp runtime/vulkan_subpass_sync_test.cpp runtime/vulkan_breadcrumb_test.cpp runtime/vulkan_callbacks_test_support.cpp)
 target_sources(venture_tests PRIVATE runtime/deferred_queues_test.cpp runtime/vulkan_fastpath_test.cpp)
 
 target_link_libraries(venture_tests PRIVATE venture_vulkan)

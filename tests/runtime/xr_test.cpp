@@ -3,6 +3,7 @@
 
 using EGLenum = unsigned int;
 #include "common/environment.h"
+#include "common/log.h"
 #include <cmath>
 #include <cstdlib>
 #include <algorithm>
@@ -18,7 +19,12 @@ using EGLenum = unsigned int;
 #include "hle/openxr/state.h"
 #include "xr/bindings.h"
 #include "xr/clock.h"
+#include "xr/frame_hitches.h"
 #include "xr/session.h"
+#include "xr/display_override.h"
+#include "xr/desktop_mirror.h"
+#include "common/library/display.h"
+#include "common/paths.h"
 #include "xr/hands.h"
 #include "xr/host_xr.h"
 #include "xr/math.h"
@@ -29,7 +35,11 @@ using EGLenum = unsigned int;
 #include "vulkan_test_support.h"
 #include "hle/vulkan/internal.h"
 #include "hle/vulkan/chain.h"
+#include <chrono>
 #include <cstring>
+#include <filesystem>
+#include <format>
+#include <fstream>
 #include <sstream>
 #include <future>
 #include <limits>
@@ -356,8 +366,9 @@ TEST_CASE("Registry controller mappings preserve haptic outputs on either hand")
       CHECK(venture::xr::touch_binding(source, profile) == std::string(source));
   CHECK(venture::xr::touch_binding("/user/hand/left/input/thumbstick/x",
       "/interaction_profiles/htc/vive_controller") == "/user/hand/left/input/trackpad/x");
-  CHECK_FALSE(venture::xr::touch_binding("/user/hand/left/input/x/click",
-      "/interaction_profiles/htc/vive_controller"));
+  // The Vive wand's face buttons are its trackpad halves.
+  CHECK(venture::xr::touch_binding("/user/hand/left/input/x/click",
+      "/interaction_profiles/htc/vive_controller") == "/user/hand/left/input/trackpad/dpad_down");
 }
 
 TEST_CASE("XR PCM and envelope haptics bind both hands, append, replace and stop") {
@@ -572,6 +583,45 @@ TEST_CASE("XR PCM and envelope haptics bind both hands, append, replace and stop
   CHECK(xg::xrDestroySession(session) == XR_SUCCESS);
   CHECK(xg::xrDestroyInstance(instance) == XR_SUCCESS);
   venture::xr::install_xr_images(nullptr);
+}
+
+// Host audio plays and records on the endpoints the runtime names for the headset
+// (Meta PC runtime: XR_OCULUS_audio_device_guid), following its current answer.
+TEST_CASE("XR host names the headset audio endpoints the runtime reports") {
+  const auto set = [](const char* name, const char* value) {
+#ifdef _WIN32
+    _putenv_s(name, value);
+#else
+    if (*value) setenv(name, value, 1); else unsetenv(name);
+#endif
+    venture::environment::refresh();
+    ventureMockXrRefreshEnvironment();
+  };
+  struct Clear {
+    decltype(set)& clear;
+    ~Clear() { clear("VENTURE_MOCK_AUDIO_OUTPUT_DEVICE", ""); clear("VENTURE_MOCK_AUDIO_INPUT_DEVICE", ""); }
+  } restore{set};
+  auto& host = venture::xr::host_xr();
+#ifdef _WIN32
+  REQUIRE(host.enabled_extensions.contains("XR_OCULUS_audio_device_guid"));
+  CHECK(venture::xr::headset_audio_endpoint(false).empty());
+  set("VENTURE_MOCK_AUDIO_OUTPUT_DEVICE", "{0.0.0.00000000}.{8d2c4c1e-6b1f-4f39-9c1a-2e4a6d7b9f01}");
+  set("VENTURE_MOCK_AUDIO_INPUT_DEVICE", "{0.0.1.00000000}.{5a7e0f9b-2c3d-4e5f-8a9b-0c1d2e3f4a5b}");
+  CHECK(venture::xr::headset_audio_endpoint(false) == "{0.0.0.00000000}.{8d2c4c1e-6b1f-4f39-9c1a-2e4a6d7b9f01}");
+  CHECK(venture::xr::headset_audio_endpoint(true) == "{0.0.1.00000000}.{5a7e0f9b-2c3d-4e5f-8a9b-0c1d2e3f4a5b}");
+  // A changed answer is reported on the next query.
+  set("VENTURE_MOCK_AUDIO_OUTPUT_DEVICE", "{0.0.0.00000000}.{11111111-2222-3333-4444-555555555555}");
+  CHECK(venture::xr::headset_audio_endpoint(false) == "{0.0.0.00000000}.{11111111-2222-3333-4444-555555555555}");
+  // A runtime without the extension names nothing.
+  auto offered = host.enabled_extensions.extract("XR_OCULUS_audio_device_guid");
+  CHECK(venture::xr::headset_audio_endpoint(false).empty());
+  host.enabled_extensions.insert(std::move(offered));
+#else
+  // Linux runtimes expose no standard headset endpoint; the default is used.
+  CHECK_FALSE(host.enabled_extensions.contains("XR_OCULUS_audio_device_guid"));
+  set("VENTURE_MOCK_AUDIO_OUTPUT_DEVICE", "headset");
+  CHECK(venture::xr::headset_audio_endpoint(false).empty());
+#endif
 }
 
 // A host offering XR_FB_haptic_pcm that answers a device sample rate of 0 (Monado, for
@@ -1239,6 +1289,140 @@ TEST_CASE("XR GLES subimage rects reach the host in the bridged image's row orde
   venture::xr::install_xr_images(nullptr);
 }
 
+TEST_CASE("XR GLES swapchains upload staged layers and fail creation, not release, out of memory") {
+  // A Beat Saber report (Linux NVIDIA, PSVR2) resized its eye chain to
+  // 4998x5094x2; the bridge's per-release allocation failed with
+  // GL_OUT_OF_MEMORY, xrReleaseSwapchainImage returned RUNTIME_FAILURE and
+  // Unity crashed. A GLES chain now allocates everything at creation, and its
+  // provider staging is the slot storage (no private image per slot).
+  venture::test::XrImageFixture interop;
+  interop.staging = true;
+  venture::xr::install_xr_images(&interop);
+  const char* extensions[]{"XR_KHR_opengl_es_enable"};
+  XrInstanceCreateInfo create{XR_TYPE_INSTANCE_CREATE_INFO};
+  create.applicationInfo.apiVersion = XR_MAKE_VERSION(1, 0, 0);
+  create.enabledExtensionNames = extensions;
+  create.enabledExtensionCount = 1;
+  XrInstance instance{};
+  REQUIRE(xg::xrCreateInstance(&create, &instance) == XR_SUCCESS);
+  xg::GlesBinding binding{XR_TYPE_GRAPHICS_BINDING_OPENGL_ES_ANDROID_KHR, nullptr, 1, 2, 3};
+  XrSessionCreateInfo session_info{XR_TYPE_SESSION_CREATE_INFO, &binding, 0, 1};
+  XrSession session{};
+  REQUIRE(xg::xrCreateSession(instance, &session_info, &session) == XR_SUCCESS);
+  XrReferenceSpaceCreateInfo space_info{XR_TYPE_REFERENCE_SPACE_CREATE_INFO, nullptr,
+      XR_REFERENCE_SPACE_TYPE_LOCAL, {{0, 0, 0, 1}, {0, 0, 0}}};
+  XrSpace space{};
+  REQUIRE(xg::xrCreateReferenceSpace(session, &space_info, &space) == XR_SUCCESS);
+  XrSwapchainCreateInfo info{XR_TYPE_SWAPCHAIN_CREATE_INFO};
+  info.format = 0x8058;  // GL_RGBA8
+  info.width = 8;
+  info.height = 4;
+  info.arraySize = 2;
+  info.sampleCount = info.mipCount = info.faceCount = 1;
+  info.usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT;
+  auto& chains = venture::hle::openxr::state().swapchains;
+  const auto existing = chains.size();
+  // Out of memory while staging: creation fails, and nothing stays behind.
+  interop.staging_result = XR_ERROR_OUT_OF_MEMORY;
+  XrSwapchain failed{};
+  CHECK(xg::xrCreateSwapchain(session, &info, &failed) == XR_ERROR_OUT_OF_MEMORY);
+  CHECK(failed == XR_NULL_HANDLE);
+  CHECK(chains.size() == existing);
+  CHECK(interop.ring_textures() == 0);
+  CHECK(interop.staged_images.empty());
+  interop.staging_result = XR_SUCCESS;
+  XrSwapchain eyes{};
+  REQUIRE(xg::xrCreateSwapchain(session, &info, &eyes) == XR_SUCCESS);
+  {
+    auto& record = chains.at(eyes);
+    CHECK(record.backing->private_bytes() == 0);
+    CHECK(record.backing->staged().size() == record.textures.size());
+    CHECK(interop.staged_images.size() == record.textures.size());
+  }
+  auto poll = [&] {
+    XrEventDataBuffer event{XR_TYPE_EVENT_DATA_BUFFER};
+    while (xg::xrPollEvent(instance, &event) == XR_SUCCESS) event = {XR_TYPE_EVENT_DATA_BUFFER};
+  };
+  poll();
+  XrSessionBeginInfo begin{XR_TYPE_SESSION_BEGIN_INFO, nullptr, XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO};
+  REQUIRE(xg::xrBeginSession(session, &begin) == XR_SUCCESS);
+  poll();
+  XrCompositionLayerProjectionView views[2]{{XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW},
+                                           {XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW}};
+  for (std::uint32_t eye = 0; eye < 2; ++eye) {
+    views[eye].pose.orientation.w = 1;
+    views[eye].fov = {-0.5f, 0.5f, 0.5f, -0.5f};
+    views[eye].subImage = {eyes, {{0, 0}, {8, 4}}, eye};
+  }
+  XrCompositionLayerProjection projection{XR_TYPE_COMPOSITION_LAYER_PROJECTION, nullptr, 0, space, 2, views};
+  const auto* layer = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&projection);
+  for (std::uint32_t frame = 0; frame < 4; ++frame) {
+    CAPTURE(frame);
+    XrFrameState timing{XR_TYPE_FRAME_STATE};
+    REQUIRE(xg::xrWaitFrame(session, nullptr, &timing) == XR_SUCCESS);
+    REQUIRE(xg::xrBeginFrame(session, nullptr) == XR_SUCCESS);
+    std::uint32_t index{};
+    REQUIRE(xg::xrAcquireSwapchainImage(eyes, nullptr, &index) == XR_SUCCESS);
+    XrSwapchainImageWaitInfo wait{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO, nullptr, XR_INFINITE_DURATION};
+    REQUIRE(xg::xrWaitSwapchainImage(eyes, &wait) == XR_SUCCESS);
+    // GLES rows: row 0 is the bottom. Each eye and frame is distinct.
+    const std::uint8_t shade = frame % 2 ? 255 : 0;
+    interop.paint(chains.at(eyes).textures[index], [&](std::uint32_t eye, std::uint32_t, std::uint32_t y) {
+      return std::array<std::uint8_t, 4>{std::uint8_t(eye == 0 ? 255 : 0), std::uint8_t(y == 0 ? 255 : 0),
+                                         std::uint8_t(eye == 1 ? 255 : shade), 255};
+    });
+    REQUIRE(xg::xrReleaseSwapchainImage(eyes, nullptr) == XR_SUCCESS);
+    CHECK(interop.stages == frame + 1);
+    CHECK(interop.copies == 0);
+    XrFrameEndInfo end{XR_TYPE_FRAME_END_INFO, nullptr, timing.predictedDisplayTime,
+                       XR_ENVIRONMENT_BLEND_MODE_OPAQUE, 1, &layer};
+    REQUIRE(xg::xrEndFrame(session, &end) == XR_SUCCESS);
+    // The host image is top-down: the GLES bottom row is its last row.
+    const auto& record = chains.at(eyes);
+    const auto host = record.host_images.at(record.host_index).image;
+    for (std::uint32_t eye = 0; eye < 2; ++eye)
+      for (std::int32_t y = 0; y < 4; ++y) {
+        CAPTURE(eye);
+        CAPTURE(y);
+        const auto pixel = interop.read_pixel(5, y, eye, host);
+        CHECK(pixel[0] == (eye == 0 ? 255 : 0));
+        CHECK(pixel[1] == (y == 3 ? 255 : 0));
+        CHECK(pixel[2] == (eye == 1 ? 255 : shade));
+        CHECK(pixel[3] == 255);
+      }
+    XrSwapchainSubImage sub[2]{};
+    REQUIRE(ventureMockXrLastSubImages(sub, 2) == 2);
+    CHECK(sub[1].imageArrayIndex == 1);
+    CHECK(sub[1].imageRect.offset.y == 0);
+    CHECK(sub[1].imageRect.extent.height == 4);
+  }
+  // A provider without staging keeps private slot images and the bridge copy.
+  interop.staging = false;
+  XrSwapchain plain{};
+  REQUIRE(xg::xrCreateSwapchain(session, &info, &plain) == XR_SUCCESS);
+  CHECK(chains.at(plain).backing->private_bytes() > 0);
+  CHECK(interop.staged_images.size() == chains.at(eyes).textures.size());
+  {
+    std::uint32_t index{};
+    REQUIRE(xg::xrAcquireSwapchainImage(plain, nullptr, &index) == XR_SUCCESS);
+    XrSwapchainImageWaitInfo wait{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO, nullptr, XR_INFINITE_DURATION};
+    REQUIRE(xg::xrWaitSwapchainImage(plain, &wait) == XR_SUCCESS);
+    REQUIRE(xg::xrReleaseSwapchainImage(plain, nullptr) == XR_SUCCESS);
+    CHECK(interop.copies == 1);
+  }
+  REQUIRE(xg::xrRequestExitSession(session) == XR_SUCCESS);
+  poll();
+  CHECK(xg::xrEndSession(session) == XR_SUCCESS);
+  CHECK(xg::xrDestroySpace(space) == XR_SUCCESS);
+  CHECK(xg::xrDestroySwapchain(plain) == XR_SUCCESS);
+  CHECK(xg::xrDestroySwapchain(eyes) == XR_SUCCESS);
+  CHECK(interop.staged_images.empty());
+  CHECK(interop.ring_textures() == 0);
+  CHECK(xg::xrDestroySession(session) == XR_SUCCESS);
+  CHECK(xg::xrDestroyInstance(instance) == XR_SUCCESS);
+  venture::xr::install_xr_images(nullptr);
+}
+
 TEST_CASE("XR gives games upright LOCAL and LOCAL_FLOOR spaces when the host's are upside down") {
   // SteamVR without a room setup returned both turned upside down against
   // STAGE; Batman: Arkham Shadow's camera became NaN and the view stayed black.
@@ -1485,7 +1669,7 @@ TEST_CASE("XR paced waits survive session restart, guest interruption and sessio
   thread->exit_requested = true;
   thread->interrupt();
   REQUIRE(settle(parked));
-  CHECK_THROWS_AS(parked.get(), venture::ThreadExit);
+  CHECK_THROWS_AS(static_cast<void>(parked.get()), venture::ThreadExit);
   REQUIRE(xg::xrBeginFrame(session, nullptr) == XR_SUCCESS);
   end.displayTime = first.predictedDisplayTime;
   REQUIRE(xg::xrEndFrame(session, &end) == XR_SUCCESS);
@@ -1924,6 +2108,22 @@ TEST_CASE("XR legacy Vulkan games get the shared GPU from their own instance") {
     XrSession session{};
     CHECK(xg::xrCreateSession(instance, &si, &session) == XR_SUCCESS);
     if (session) CHECK(xg::xrDestroySession(session) == XR_SUCCESS);
+    // A device on another GPU is refused, and the log names why for the
+    // launcher, which reports it instead of the game's later crash.
+    const auto previous = venture::log::file();
+    const auto log_path = std::filesystem::temp_directory_path() /
+        std::format("venture-xr-session-failed-{}", std::chrono::steady_clock::now().time_since_epoch().count());
+    venture::log::set_file(log_path.string());
+    binding.physicalDevice = physical;  // a handle of the game's other instance
+    CHECK(xg::xrCreateSession(instance, &si, &session) == XR_ERROR_GRAPHICS_DEVICE_INVALID);
+    venture::log::set_file(previous);
+    std::ifstream input(log_path, std::ios::binary);
+    const std::string text{std::istreambuf_iterator<char>(input), {}};
+    input.close();
+    std::error_code ignored;
+    std::filesystem::remove(log_path, ignored);
+    CHECK(text.find(" E [xr] The VR session could not be created: the game's Vulkan device is not on the GPU ") !=
+          std::string::npos);
   }
   MockXrScript restored{};
   ventureMockXrSetScript(&restored);
@@ -1967,11 +2167,16 @@ TEST_CASE("XR enable2 creates tracked guest Vulkan objects with feature chains")
   float priority = 1;
   VkDeviceQueueCreateInfo queue{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};
   queue.queueFamilyIndex = family; queue.queueCount = 1; queue.pQueuePriorities = &priority;
-  VkPhysicalDeviceFeatures2 features{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
+  // ASTC HDR is requested as on Quest; hosts without it decode to FP16.
+  VkPhysicalDeviceTextureCompressionASTCHDRFeatures hdr{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TEXTURE_COMPRESSION_ASTC_HDR_FEATURES};
+  hdr.textureCompressionASTC_HDR = VK_TRUE;
+  VkPhysicalDeviceFeatures2 features{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, &hdr};
   features.features.textureCompressionASTC_LDR = VK_TRUE;
   features.features.textureCompressionETC2 = VK_TRUE;
+  const char* hdr_extension = VK_EXT_TEXTURE_COMPRESSION_ASTC_HDR_EXTENSION_NAME;
   VkDeviceCreateInfo dci{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO, &features};
   dci.queueCreateInfoCount = 1; dci.pQueueCreateInfos = &queue;
+  dci.enabledExtensionCount = 1; dci.ppEnabledExtensionNames = &hdr_extension;
   XrVulkanDeviceCreateInfoKHR deviceInfo{XR_TYPE_VULKAN_DEVICE_CREATE_INFO_KHR};
   deviceInfo.systemId = ici.systemId; deviceInfo.pfnGetInstanceProcAddr = ici.pfnGetInstanceProcAddr;
   deviceInfo.vulkanPhysicalDevice = physical; deviceInfo.vulkanCreateInfo = &dci;
@@ -2009,6 +2214,94 @@ TEST_CASE("XR enable2 creates tracked guest Vulkan objects with feature chains")
   venture::test::vk_call("vkGetDeviceQueue", device, family, 0u, &actualQueue);
   CHECK(actualQueue != VK_NULL_HANDLE);
   venture::test::vk_call("vkDestroyDevice", device, nullptr);
+  venture::test::vk_call("vkDestroyInstance", vkInstance, nullptr);
+  CHECK(xg::xrDestroyInstance(instance) == XR_SUCCESS);
+}
+TEST_CASE("XR enable2 creates the device itself when the host refuses the GPU it was not asked about") {
+  const char *extension = "XR_KHR_vulkan_enable2";
+  XrInstanceCreateInfo create{XR_TYPE_INSTANCE_CREATE_INFO};
+  create.applicationInfo.apiVersion = XR_MAKE_VERSION(1, 0, 0);
+  create.enabledExtensionCount = 1;
+  create.enabledExtensionNames = &extension;
+  XrInstance instance{};
+  REQUIRE(xg::xrCreateInstance(&create, &instance) == XR_SUCCESS);
+  VkApplicationInfo app{VK_STRUCTURE_TYPE_APPLICATION_INFO};
+  app.apiVersion = VK_API_VERSION_1_2;
+  VkInstanceCreateInfo vci{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
+  vci.pApplicationInfo = &app;
+  XrVulkanInstanceCreateInfoKHR ici{XR_TYPE_VULKAN_INSTANCE_CREATE_INFO_KHR};
+  ici.systemId = venture::xr::host_xr().system;
+  ici.pfnGetInstanceProcAddr = reinterpret_cast<PFN_vkGetInstanceProcAddr>(
+      venture::vulkan::instance_proc(nullptr, "vkGetInstanceProcAddr"));
+  ici.vulkanCreateInfo = &vci;
+  VkInstance vkInstance{};
+  VkResult result = VK_ERROR_UNKNOWN;
+  REQUIRE(xg::xrCreateVulkanInstanceKHR(instance, &ici, &vkInstance, &result) == XR_SUCCESS);
+  REQUIRE(result == VK_SUCCESS);
+  // Oculus on an AMD + NVIDIA laptop refuses the GPU query for the game's
+  // instance, then refuses device creation without calling vkCreateDevice
+  // (Kaiju Battle Simulator, issue 92).
+  MockXrScript refusing{};
+  refusing.refused_vulkan_instance = vkInstance;
+  refusing.refuse_vulkan_devices = true;
+  ventureMockXrSetScript(&refusing);
+  XrVulkanGraphicsDeviceGetInfoKHR get{XR_TYPE_VULKAN_GRAPHICS_DEVICE_GET_INFO_KHR};
+  get.systemId = ici.systemId; get.vulkanInstance = vkInstance;
+  VkPhysicalDevice physical{};
+  REQUIRE(xg::xrGetVulkanGraphicsDevice2KHR(instance, &get, &physical) == XR_SUCCESS);
+  CHECK(physical == venture::vulkan::shared_physical_device_in(vkInstance));
+  std::uint32_t count = 0;
+  venture::test::vk_call("vkGetPhysicalDeviceQueueFamilyProperties", physical, &count, nullptr);
+  std::vector<VkQueueFamilyProperties> families(count);
+  venture::test::vk_call("vkGetPhysicalDeviceQueueFamilyProperties", physical, &count, families.data());
+  std::uint32_t family = 0;
+  while (family < count && !(families[family].queueFlags & VK_QUEUE_GRAPHICS_BIT)) ++family;
+  REQUIRE(family < count);
+  float priority = 1;
+  VkDeviceQueueCreateInfo queue{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};
+  queue.queueFamilyIndex = family; queue.queueCount = 1; queue.pQueuePriorities = &priority;
+  VkDeviceCreateInfo dci{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
+  dci.queueCreateInfoCount = 1; dci.pQueueCreateInfos = &queue;
+  // The game's resolver may be hooked (a plugin wrapping vkCreateDevice); the
+  // device is still created through it.
+  struct Hook { venture::GuestAddr real{}, wrapper{}; unsigned resolves{}, creates{}; } hook;
+  hook.real = venture::vulkan::instance_proc(vkInstance, "vkCreateDevice");
+  hook.wrapper = venture::hle::make_thunk("xr-test", "hooked vkCreateDevice", [](venture::hle::CallContext& ctx) {
+    auto& hook = *static_cast<Hook*>(ctx.user());
+    ++hook.creates;
+    ctx.return_x(venture::GuestThread::adopt_current().call(hook.real, {ctx.x(0), ctx.x(1), ctx.x(2), ctx.x(3)}));
+  }, &hook);
+  auto resolve = venture::hle::make_thunk("xr-test", "hooked resolver", [](venture::hle::CallContext& ctx) {
+    auto& hook = *static_cast<Hook*>(ctx.user());
+    CHECK(std::strcmp(venture::g2h<const char>(ctx.x(1)), "vkCreateDevice") == 0);
+    ++hook.resolves;
+    ctx.return_x(hook.wrapper);
+  }, &hook);
+  XrVulkanDeviceCreateInfoKHR deviceInfo{XR_TYPE_VULKAN_DEVICE_CREATE_INFO_KHR};
+  deviceInfo.systemId = ici.systemId;
+  deviceInfo.pfnGetInstanceProcAddr = reinterpret_cast<PFN_vkGetInstanceProcAddr>(resolve);
+  deviceInfo.vulkanPhysicalDevice = physical; deviceInfo.vulkanCreateInfo = &dci;
+  VkDevice device{};
+  result = VK_ERROR_UNKNOWN;
+  CHECK(xg::xrCreateVulkanDeviceKHR(instance, &deviceInfo, &device, &result) == XR_SUCCESS);
+  CHECK(result == VK_SUCCESS);
+  CHECK(hook.resolves == 1);
+  CHECK(hook.creates == 1);
+  REQUIRE(device != VK_NULL_HANDLE);
+  CHECK(venture::vulkan::device_instance(device) == vkInstance);
+  CHECK(venture::vulkan::device_physical(device) == physical);
+  venture::test::vk_call("vkDestroyDevice", device, nullptr);
+  // A GPU the host named itself keeps the host's answer: its refusal stands.
+  MockXrScript answering{};
+  answering.refuse_vulkan_devices = true;
+  ventureMockXrSetScript(&answering);
+  REQUIRE(xg::xrGetVulkanGraphicsDevice2KHR(instance, &get, &physical) == XR_SUCCESS);
+  VkDevice refused{};
+  CHECK(xg::xrCreateVulkanDeviceKHR(instance, &deviceInfo, &refused, &result) == XR_ERROR_HANDLE_INVALID);
+  CHECK(refused == VK_NULL_HANDLE);
+  CHECK(hook.creates == 1);
+  MockXrScript restored{};
+  ventureMockXrSetScript(&restored);
   venture::test::vk_call("vkDestroyInstance", vkInstance, nullptr);
   CHECK(xg::xrDestroyInstance(instance) == XR_SUCCESS);
 }
@@ -2652,15 +2945,24 @@ TEST_CASE("XR guest lifecycle and real Vulkan swapchain through mock loader") {
     projection.space = space; projection.viewCount = 2; projection.views = views;
     const XrCompositionLayerBaseHeader* both[]{
         reinterpret_cast<const XrCompositionLayerBaseHeader*>(&projection), layer};
-    sphere.centralHorizontalAngle = 1; // Needs clipping; explicitly omitted.
+    sphere.centralHorizontalAngle = 1; // Needs clipping: drawn into a projection layer of its own.
     end.layerCount = 2; end.layers = both;
     const auto beforeProjection = ventureMockXrStats().projection;
     REQUIRE(xg::xrWaitFrame(session, nullptr, &frame) == XR_SUCCESS);
     REQUIRE(xg::xrBeginFrame(session, nullptr) == XR_SUCCESS);
     end.displayTime = frame.predictedDisplayTime;
     CHECK(xg::xrEndFrame(session, &end) == XR_SUCCESS);
-    CHECK(ventureMockXrStats().projection == beforeProjection + 1);
+    CHECK(ventureMockXrStats().projection == beforeProjection + 2);
     CHECK(ventureMockXrStats().equirect == previousSpheres + 2);
+    {
+      // The drawn layer is one array chain of the host's, an eye per layer.
+      std::array<XrSwapchainSubImage, 8> drawn{};
+      REQUIRE(ventureMockXrLastSubImages(drawn.data(), 8) == 4);
+      CHECK(drawn[2].swapchain != chain);
+      CHECK(drawn[2].swapchain == drawn[3].swapchain);
+      CHECK(drawn[2].imageArrayIndex == 0);
+      CHECK(drawn[3].imageArrayIndex == 1);
+    }
     {
       // A host without cylinders (SteamVR) draws one as strips of its arc.
       Restore cylinderRestore{extensions, extensions.extract("XR_KHR_composition_layer_cylinder")};
@@ -2701,25 +3003,25 @@ TEST_CASE("XR guest lifecycle and real Vulkan swapchain through mock loader") {
     CHECK(submit() == XR_SUCCESS);
     CHECK(projection.next == &color);
     CHECK(color.colorScale.r == 0.5f);
-    CHECK(ventureMockXrStats().projection == beforeProjection + 2);
+    CHECK(ventureMockXrStats().projection == beforeProjection + 4);
     XrCompositionLayerImageLayoutFB layout{XR_TYPE_COMPOSITION_LAYER_IMAGE_LAYOUT_FB};
     layout.flags = XR_COMPOSITION_LAYER_IMAGE_LAYOUT_VERTICAL_FLIP_BIT_FB;
     projection.next = &layout;
     CHECK(submit() == XR_SUCCESS);
     CHECK(projection.next == &layout);
-    CHECK(ventureMockXrStats().projection == beforeProjection + 3);
+    CHECK(ventureMockXrStats().projection == beforeProjection + 6);
     color.next = &layout;
     projection.next = &color;
     CHECK(submit() == XR_SUCCESS);
     CHECK(projection.next == &color);
     CHECK(color.next == &layout);
-    CHECK(ventureMockXrStats().projection == beforeProjection + 4);
+    CHECK(ventureMockXrStats().projection == beforeProjection + 8);
     const XrCompositionLayerBaseHeader* twinProjections[]{
         reinterpret_cast<const XrCompositionLayerBaseHeader*>(&projection),
         reinterpret_cast<const XrCompositionLayerBaseHeader*>(&projection)};
     end.layers = twinProjections;
     CHECK(submit() == XR_SUCCESS);
-    CHECK(ventureMockXrStats().projection == beforeProjection + 6);
+    CHECK(ventureMockXrStats().projection == beforeProjection + 10);
     // Job Simulator's OVRPlugin 1.88 also attaches this to its loading quads.
     // Multiple copied layers must remain valid and preserve the guest chain.
     XrCompositionLayerQuad quad{XR_TYPE_COMPOSITION_LAYER_QUAD};
@@ -2740,12 +3042,38 @@ TEST_CASE("XR guest lifecycle and real Vulkan swapchain through mock loader") {
     CHECK(layout.next == nullptr);
     CHECK(layout.flags == XR_COMPOSITION_LAYER_IMAGE_LAYOUT_VERTICAL_FLIP_BIT_FB);
     CHECK(ventureMockXrStats().quad == beforeQuads + 2);
-    CHECK(ventureMockXrStats().projection == beforeProjection + 7);
+    CHECK(ventureMockXrStats().projection == beforeProjection + 11);
     // Even ignored nodes must form a finite, acyclic chain.
     layout.next = &layout;
     CHECK(submit() == XR_ERROR_VALIDATION_FAILURE);
     layout.next = nullptr;
     CHECK(xg::xrEndFrame(session, &end) == XR_SUCCESS);
+    {
+      // Without either equirect extension (VDXR), a run of equirect layers is
+      // drawn into one projection layer at its place (AC Nexus's menu backdrop).
+      Restore v1Restore{extensions, extensions.extract("XR_KHR_composition_layer_equirect")};
+      CHECK(venture::hle::openxr::capabilities().contains("XR_KHR_composition_layer_equirect"));
+      CHECK(venture::hle::openxr::capabilities().contains("XR_KHR_composition_layer_equirect2"));
+      sphere.centralHorizontalAngle = 2*std::numbers::pi_v<float>;
+      sphere.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
+      const XrCompositionLayerBaseHeader* stack[]{
+          reinterpret_cast<const XrCompositionLayerBaseHeader*>(&projection), layer, layer};
+      end.layerCount = 3; end.layers = stack;
+      const auto projections = ventureMockXrStats().projection, spheres = ventureMockXrStats().equirect;
+      CHECK(submit() == XR_SUCCESS);
+      CHECK(ventureMockXrStats().projection == projections + 2);
+      CHECK(ventureMockXrStats().equirect == spheres);
+      std::array<XrSwapchainSubImage, 8> drawn{};
+      REQUIRE(ventureMockXrLastSubImages(drawn.data(), 8) == 4);
+      CHECK(drawn[2].swapchain != chain);
+      CHECK(drawn[3].imageArrayIndex == 1);
+      // The next frame reuses the host chain.
+      CHECK(submit() == XR_SUCCESS);
+      std::array<XrSwapchainSubImage, 8> again{};
+      REQUIRE(ventureMockXrLastSubImages(again.data(), 8) == 4);
+      CHECK(again[2].swapchain == drawn[2].swapchain);
+      sphere.layerFlags = 0;
+    }
     end.layerCount = 2;
     end.layers = both;
   }
@@ -4049,4 +4377,360 @@ TEST_CASE("XR shared Vulkan device enables the runtime's legacy enable requireme
   };
   CHECK(check(device_list, device_available, venture::gfx::enabled_gpu_device_extensions()) > 0);
   CHECK(check(instance_list, instance_available, venture::gfx::enabled_gpu_instance_extensions()) > 0);
+}
+
+namespace {
+// The launcher's Display settings as the runtime receives them; empty restores the default.
+struct DisplaySettingsEnv {
+  DisplaySettingsEnv(const char* resolution, const char* rate) { set(resolution, rate); }
+  ~DisplaySettingsEnv() { set("", ""); }
+  static void set(const char* resolution, const char* rate) {
+#ifdef _WIN32
+    _putenv_s("VENTURE_RESOLUTION", resolution);
+    _putenv_s("VENTURE_FRAME_RATE", rate);
+#else
+    if (*resolution) setenv("VENTURE_RESOLUTION", resolution, 1); else unsetenv("VENTURE_RESOLUTION");
+    if (*rate) setenv("VENTURE_FRAME_RATE", rate, 1); else unsetenv("VENTURE_FRAME_RATE");
+#endif
+    venture::environment::refresh();
+  }
+};
+}  // namespace
+
+TEST_CASE("desktop mirror settings and crop axis") {
+  using venture::xr::MirrorMode;
+  CHECK(venture::xr::parse_mirror_mode("cropped") == MirrorMode::cropped);
+  CHECK(venture::xr::parse_mirror_mode("full") == MirrorMode::full);
+  CHECK(venture::xr::parse_mirror_mode("off") == MirrorMode::off);
+  CHECK(venture::xr::parse_mirror_mode("") == MirrorMode::off);
+  CHECK(venture::xr::parse_mirror_mode("1") == MirrorMode::off);
+  float x = 0, y = 0;
+  // A Quest 3 left eye looks further outward than inward: its axis sits right of centre.
+  venture::xr::mirror_axis({-0.907f, 0.716f, 0.873f, -0.873f}, x, y);
+  CHECK(x == doctest::Approx(1.28 / (1.28 + 0.87)).epsilon(0.01));
+  CHECK(y == doctest::Approx(0.5));
+  venture::xr::mirror_axis({}, x, y);
+  CHECK(x == 0.5f);
+  CHECK(y == 0.5f);
+  // The right eye mirrors it: its axis sits left of centre.
+  venture::xr::mirror_axis({-0.716f, 0.907f, 0.873f, -0.873f}, x, y);
+  CHECK(x == doctest::Approx(0.87 / (1.28 + 0.87)).epsilon(0.01));
+}
+TEST_CASE("the desktop mirror shows the chosen eye of the first projection layer") {
+  CHECK(venture::xr::parse_mirror_eye("left") == 0);
+  CHECK(venture::xr::parse_mirror_eye("right") == 1);
+  CHECK(venture::xr::parse_mirror_eye("") == 0);
+  CHECK(venture::xr::parse_mirror_eye("both") == 0);
+  CHECK(venture::xr::mirror_view(2, 1) == 1);
+  CHECK(venture::xr::mirror_view(1, 1) == 0);  // a mono projection's only view
+  const auto left_chain = reinterpret_cast<XrSwapchain>(std::uintptr_t{0x10});
+  const auto right_chain = reinterpret_cast<XrSwapchain>(std::uintptr_t{0x20});
+  XrCompositionLayerProjectionView views[2]{{XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW},
+                                            {XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW}};
+  views[0].subImage = {left_chain, {{0, 0}, {1680, 1760}}, 0};
+  views[0].fov = {-0.907f, 0.716f, 0.873f, -0.873f};
+  views[1].subImage = {right_chain, {{0, 0}, {1680, 1760}}, 1};
+  views[1].fov = {-0.716f, 0.907f, 0.873f, -0.873f};
+  XrCompositionLayerQuad quad{XR_TYPE_COMPOSITION_LAYER_QUAD};
+  XrCompositionLayerProjection projection{XR_TYPE_COMPOSITION_LAYER_PROJECTION};
+  projection.viewCount = 2;
+  projection.views = views;
+  XrCompositionLayerProjection later = projection;
+  later.views = nullptr;
+  const XrCompositionLayerBaseHeader* layers[] = {
+      reinterpret_cast<const XrCompositionLayerBaseHeader*>(&quad),
+      reinterpret_cast<const XrCompositionLayerBaseHeader*>(&projection),
+      reinterpret_cast<const XrCompositionLayerBaseHeader*>(&later)};
+  namespace hx = venture::hle::openxr;
+  const auto left = hx::mirror_eye(layers, 0), right = hx::mirror_eye(layers, 1);
+  REQUIRE(left);
+  REQUIRE(right);
+  CHECK(left->sub.swapchain == left_chain);
+  CHECK(left->fov.angleLeft == -0.907f);
+  CHECK(right->sub.swapchain == right_chain);
+  CHECK(right->sub.imageArrayIndex == 1);
+  // The crop centres on the mirrored eye's own axis.
+  CHECK(right->fov.angleLeft == -0.716f);
+  CHECK(right->fov.angleRight == 0.907f);
+  projection.viewCount = 1;
+  CHECK(hx::mirror_eye(layers, 1)->sub.swapchain == left_chain);
+  CHECK_FALSE(hx::mirror_eye(std::span(layers, 1), 0));
+}
+TEST_CASE("the desktop mirror gets a low-priority queue of its own beside the game's") {
+  using venture::xr::MirrorQueueRequest;
+  const float one = 1.0f;
+  VkDeviceQueueCreateInfo graphics{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};
+  graphics.queueFamilyIndex = 0;
+  graphics.queueCount = 1;
+  graphics.pQueuePriorities = &one;
+  VkDeviceCreateInfo info{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
+  info.queueCreateInfoCount = 1;
+  info.pQueueCreateInfos = &graphics;
+  const auto device = reinterpret_cast<VkDevice>(std::uintptr_t{0x1000});
+  // A graphics family with queues to spare (NVIDIA): the next queue there.
+  {
+    const VkQueueFamilyProperties families[] = {{VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT, 16}};
+    auto copy = info;
+    MirrorQueueRequest request;
+    request.add(families, copy);
+    REQUIRE(copy.queueCreateInfoCount == 1);
+    CHECK(copy.pQueueCreateInfos[0].queueCount == 2);
+    CHECK(copy.pQueueCreateInfos[0].pQueuePriorities[0] == 1.0f);
+    CHECK(copy.pQueueCreateInfos[0].pQueuePriorities[1] == 0.0f);
+    request.created(device);
+    CHECK(venture::xr::mirror_queue(device) == std::pair{0u, 1u});
+  }
+  // One graphics queue (RADV): a compute family's queue.
+  {
+    const VkQueueFamilyProperties families[] = {{VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT, 1},
+                                                {VK_QUEUE_COMPUTE_BIT, 4}, {VK_QUEUE_TRANSFER_BIT, 2}};
+    auto copy = info;
+    MirrorQueueRequest request;
+    request.add(families, copy);
+    REQUIRE(copy.queueCreateInfoCount == 2);
+    CHECK(copy.pQueueCreateInfos[0].queueCount == 1);
+    CHECK(copy.pQueueCreateInfos[1].queueFamilyIndex == 1);
+    CHECK(copy.pQueueCreateInfos[1].queueCount == 1);
+    CHECK(copy.pQueueCreateInfos[1].pQueuePriorities[0] == 0.0f);
+    request.created(device);
+    CHECK(venture::xr::mirror_queue(device) == std::pair{1u, 0u});
+  }
+  // Nothing to spare: the device is created as asked and has no mirror.
+  {
+    const VkQueueFamilyProperties families[] = {{VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT, 1},
+                                                {VK_QUEUE_TRANSFER_BIT, 2}};
+    auto copy = info;
+    MirrorQueueRequest request;
+    request.add(families, copy);
+    CHECK(copy.pQueueCreateInfos == &graphics);
+    request.created(device);
+    CHECK_FALSE(venture::xr::mirror_queue(device));
+  }
+  venture::xr::forget_mirror_queue(device);
+}
+TEST_CASE("XR display overrides parse the launcher's settings, clamp sizes and pick only listed rates") {
+  using venture::xr::parse_display_override;
+  auto o = parse_display_override("1680x1760", "90");
+  CHECK(o.width == 1680);
+  CHECK(o.height == 1760);
+  CHECK(o.rate == doctest::Approx(90));
+  o = parse_display_override("150%", "runtime");
+  CHECK(o.pixel_scale == doctest::Approx(1.5));
+  CHECK(o.rate == 0);
+  for (const char* bad : {"", "runtime", "x", "15x1760", "1680x", "1680x99999", "5%", "500%", "abc%", "1680x1760x2"})
+    CHECK_FALSE(parse_display_override(bad, "").resizes());
+  for (const char* bad : {"", "runtime", "quest3", "10", "5000", "90hz", "nan"})
+    CHECK(parse_display_override("", bad).rate == 0);
+
+  // Recommended 2000x2400, at most 2000x2400.
+  XrViewConfigurationView host{XR_TYPE_VIEW_CONFIGURATION_VIEW, nullptr, 2000, 2000, 2400, 2400, 1, 1};
+  // A percent scales the pixel count: each side by its square root.
+  auto size = venture::xr::override_view_size(parse_display_override("50%", ""), host);
+  CHECK(size.width == 1414);
+  CHECK(size.height == 1697);
+  // Clamped to the maximum, keeping the aspect ratio.
+  size = venture::xr::override_view_size(parse_display_override("200%", ""), host);
+  CHECK(size.width == 2000);
+  CHECK(size.height == 2400);
+  size = venture::xr::override_view_size(parse_display_override("4000x2000", ""), host);
+  CHECK(size.width == 2000);
+  CHECK(size.height == 1000);
+  size = venture::xr::override_view_size(parse_display_override("1680x1760", ""), host);
+  CHECK(size.width == 1680);
+  CHECK(size.height == 1760);
+
+  const float rates[]{72, 90, 120.0001f};
+  CHECK(venture::xr::supported_override_rate(120, rates, 3) == doctest::Approx(120.0001f));
+  CHECK(venture::xr::supported_override_rate(90, rates, 3) == doctest::Approx(90));
+  CHECK_FALSE(venture::xr::supported_override_rate(144, rates, 3));
+  CHECK_FALSE(venture::xr::supported_override_rate(0, rates, 3));
+  CHECK_FALSE(venture::xr::supported_override_rate(90, nullptr, 0));
+}
+
+TEST_CASE("XR display overrides resize the views a game sees and record the host's display") {
+  venture::test::XrImageFixture interop;
+  venture::xr::install_xr_images(&interop);
+  // The host connection recorded the mock's views for the launcher.
+  REQUIRE(venture::xr::host_xr().instance);
+  const auto recorded = venture::library::load_host_display(venture::paths::data_dir());
+  REQUIRE(recorded);
+  CHECK(recorded->width == 1024);
+  CHECK(recorded->height == 1024);
+  CHECK(recorded->max_width == 4096);
+  CHECK(recorded->max_height == 4096);
+
+  const char* extensions[]{"XR_KHR_opengl_es_enable"};
+  XrInstanceCreateInfo create{XR_TYPE_INSTANCE_CREATE_INFO};
+  create.applicationInfo.apiVersion = XR_MAKE_VERSION(1, 0, 0);
+  create.enabledExtensionNames = extensions;
+  create.enabledExtensionCount = 1;
+  XrInstance instance{};
+  REQUIRE(xg::xrCreateInstance(&create, &instance) == XR_SUCCESS);
+  auto views = [&] {
+    std::array<XrViewConfigurationView, 2> out{};
+    out.fill({XR_TYPE_VIEW_CONFIGURATION_VIEW});
+    std::uint32_t count = 0;
+    const auto type = XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO;
+    REQUIRE(xg::xrEnumerateViewConfigurationViews(instance, venture::xr::host_xr().system, type, 0, &count,
+                                                  nullptr) == XR_SUCCESS);
+    REQUIRE(count == 2);
+    REQUIRE(xg::xrEnumerateViewConfigurationViews(instance, venture::xr::host_xr().system, type, 2, &count,
+                                                  out.data()) == XR_SUCCESS);
+    CHECK(out[0].recommendedImageRectWidth == out[1].recommendedImageRectWidth);
+    CHECK(out[0].maxImageRectWidth == 4096);
+    return std::pair{out[0].recommendedImageRectWidth, out[0].recommendedImageRectHeight};
+  };
+  CHECK(views() == std::pair{1024u, 1024u});
+  {
+    DisplaySettingsEnv env("150%", "");
+    CHECK(views() == std::pair{1254u, 1254u});
+  }
+  {
+    DisplaySettingsEnv env("1680x1760", "");
+    CHECK(views() == std::pair{1680u, 1760u});
+  }
+  {
+    DisplaySettingsEnv env("8192x4096", "");
+    CHECK(views() == std::pair{4096u, 2048u});
+  }
+  {
+    DisplaySettingsEnv env("not-a-size", "");
+    CHECK(views() == std::pair{1024u, 1024u});
+  }
+  CHECK(views() == std::pair{1024u, 1024u});
+  CHECK(xg::xrDestroyInstance(instance) == XR_SUCCESS);
+  venture::xr::install_xr_images(nullptr);
+}
+
+TEST_CASE("XR frame rate setting switches to a listed host rate, keeps the host's otherwise and caps hosts without rates") {
+  venture::test::XrImageFixture interop;
+  venture::xr::install_xr_images(&interop);
+  const char* extensions[]{"XR_KHR_opengl_es_enable"};
+  XrInstanceCreateInfo create{XR_TYPE_INSTANCE_CREATE_INFO};
+  create.applicationInfo.apiVersion = XR_MAKE_VERSION(1, 0, 0);
+  create.enabledExtensionNames = extensions;
+  create.enabledExtensionCount = 1;
+  XrInstance instance{};
+  REQUIRE(xg::xrCreateInstance(&create, &instance) == XR_SUCCESS);
+  xg::GlesBinding binding{XR_TYPE_GRAPHICS_BINDING_OPENGL_ES_ANDROID_KHR, nullptr, 1, 2, 3};
+  XrSessionCreateInfo session_info{XR_TYPE_SESSION_CREATE_INFO, &binding, 0, 1};
+  XrSession session{};
+  REQUIRE(xg::xrCreateSession(instance, &session_info, &session) == XR_SUCCESS);
+  auto poll = [&](XrSessionState wanted) {
+    bool seen = false;
+    XrEventDataBuffer event{XR_TYPE_EVENT_DATA_BUFFER};
+    while (xg::xrPollEvent(instance, &event) == XR_SUCCESS) {
+      if (event.type == XR_TYPE_EVENT_DATA_SESSION_STATE_CHANGED &&
+          reinterpret_cast<XrEventDataSessionStateChanged &>(event).state == wanted)
+        seen = true;
+      event = {XR_TYPE_EVENT_DATA_BUFFER};
+    }
+    return seen;
+  };
+  REQUIRE(poll(XR_SESSION_STATE_READY));
+  XrSessionBeginInfo begin{XR_TYPE_SESSION_BEGIN_INFO, nullptr, XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO};
+  XrFrameEndInfo end{XR_TYPE_FRAME_END_INFO, nullptr, 0, XR_ENVIRONMENT_BLEND_MODE_OPAQUE, 0, nullptr};
+  // Runs `frames` frames; returns the last frame state and the mean display interval.
+  auto run = [&](int frames) {
+    XrFrameState frame{XR_TYPE_FRAME_STATE};
+    XrTime first = 0;
+    for (int i = 0; i < frames; ++i) {
+      REQUIRE(xg::xrWaitFrame(session, nullptr, &frame) == XR_SUCCESS);
+      if (!i) first = frame.predictedDisplayTime;
+      REQUIRE(xg::xrBeginFrame(session, nullptr) == XR_SUCCESS);
+      end.displayTime = frame.predictedDisplayTime;
+      REQUIRE(xg::xrEndFrame(session, &end) == XR_SUCCESS);
+    }
+    return std::pair{frame, frames > 1 ? double(frame.predictedDisplayTime - first) / (frames - 1) : 0.0};
+  };
+  // Stops and begins the session again so the setting applies.
+  auto restart = [&] {
+    ventureMockXrRestartSession();
+    REQUIRE(poll(XR_SESSION_STATE_STOPPING));
+    REQUIRE(xg::xrEndSession(session) == XR_SUCCESS);
+    REQUIRE(poll(XR_SESSION_STATE_READY));
+    REQUIRE(xg::xrBeginSession(session, &begin) == XR_SUCCESS);
+  };
+  REQUIRE(xg::xrBeginSession(session, &begin) == XR_SUCCESS);
+  run(2);
+  {
+    // A host listing 72/90/144 Hz (at 144): a listed rate is requested once.
+    RefreshHost host;
+    DisplaySettingsEnv env("", "90");
+    restart();
+    CHECK(RefreshHost::requests == 1);
+    CHECK(venture::xr::session().cap.period_ns == 0);
+    run(2);
+    // Its own rate needs no request; an unlisted one keeps it and the session runs on.
+    DisplaySettingsEnv::set("", "144");
+    restart();
+    CHECK(RefreshHost::requests == 1);
+    DisplaySettingsEnv::set("", "100");
+    restart();
+    CHECK(RefreshHost::requests == 1);
+    CHECK(venture::xr::session().cap.period_ns == 0);
+    run(3);
+    const auto recorded = venture::library::load_host_display(venture::paths::data_dir());
+    REQUIRE(recorded);
+    CHECK(recorded->rate == doctest::Approx(144));
+    CHECK(recorded->rates == std::vector<double>{72, 90, 144});
+  }
+  {
+    // A host without refresh rates (the mock, 90 Hz) paces the game to the setting.
+    DisplaySettingsEnv env("", "45");
+    restart();
+    CHECK(venture::xr::session().cap.period_ns == 22'222'222);
+    run(4);  // past the mock's prediction from before the restart
+    const auto [frame, interval] = run(5);
+    CHECK(frame.predictedDisplayPeriod == 22'222'222);
+    CHECK(interval >= 18e6);
+    // Above the host's rate there is nothing to cap: the host's period stays.
+    DisplaySettingsEnv::set("", "240");
+    restart();
+    CHECK(run(2).first.predictedDisplayPeriod == 11'111'111);
+  }
+  restart();
+  CHECK(venture::xr::session().cap.period_ns == 0);
+  const auto [frame, interval] = run(4);
+  CHECK(frame.predictedDisplayPeriod == 11'111'111);
+  CHECK(interval < 18e6);
+  venture::xr::session().display_timing.reset();
+  CHECK(xg::xrDestroySession(session) == XR_SUCCESS);
+  CHECK(xg::xrDestroyInstance(instance) == XR_SUCCESS);
+  venture::xr::install_xr_images(nullptr);
+}
+
+TEST_CASE("Frame hitches separate one stall from scattered misses per report window") {
+  constexpr std::int64_t period = 8'333'333;  // 120 Hz
+  venture::xr::FrameHitches hitches;
+  std::int64_t now = 1'000'000'000;
+  hitches.submitted(now, period);  // the first frame has no interval
+  CHECK(hitches.worst_ns == 0);
+  for (int i = 0; i < 10; ++i) hitches.submitted(now += period, period);
+  CHECK(hitches.long_frames == 0);
+  CHECK(hitches.worst_ns == period);
+  // A frame 1.4 periods apart still makes its display; two periods miss one.
+  hitches.submitted(now += period * 14 / 10, period);
+  CHECK(hitches.long_frames == 0);
+  hitches.submitted(now += 2 * period, period);
+  CHECK(hitches.long_frames == 1);
+  CHECK(hitches.excess_ns == period);
+  // A 150 ms stall dominates the window.
+  hitches.submitted(now += 150'000'000, period);
+  CHECK(hitches.long_frames == 2);
+  CHECK(hitches.worst_ns == 150'000'000);
+  CHECK(hitches.excess_ns == 150'000'000);
+  // The next window starts clean but keeps the last submission, so the gap
+  // across the boundary counts in the window it ends in.
+  hitches.next_window();
+  CHECK(hitches.worst_ns == 0);
+  CHECK(hitches.long_frames == 0);
+  hitches.submitted(now += 3 * period, period);
+  CHECK(hitches.long_frames == 1);
+  CHECK(hitches.worst_ns == 3 * period);
+  // A new session has no previous frame: its first submission is no hitch.
+  hitches.restart();
+  hitches.submitted(now += 5'000'000'000, period);
+  CHECK(hitches.worst_ns == 0);
+  CHECK(hitches.long_frames == 0);
 }

@@ -1,0 +1,218 @@
+{
+ "width": 518,
+ "height": 720,
+ "nodes": {
+  "Light": [
+   -14332.6,
+   2268.6
+  ],
+  "Camera": [
+   -10235.4,
+   36912.9
+  ],
+  "Node": [
+   261.1,
+   367.0
+  ],
+  "BASE_SURFACE": [
+   153.4,
+   474.9
+  ],
+  "Object_0": [
+   153.4,
+   474.9
+  ],
+  "GRASP": [
+   147.1,
+   481.2
+  ],
+  "xr_standard_squeeze_pressed_max": [
+   168.3,
+   465.0
+  ],
+  "xr_standard_squeeze_pressed_min": [
+   168.3,
+   465.0
+  ],
+  "xr_standard_squeeze_pressed_value": [
+   147.1,
+   481.2
+  ],
+  "Object_4": [
+   147.1,
+   481.2
+  ],
+  "HOME": [
+   89.1,
+   394.9
+  ],
+  "PRESSED.001": [
+   90.6,
+   396.1
+  ],
+  "UNPRESSED.001": [
+   89.1,
+   394.9
+  ],
+  "VALUE.001": [
+   89.1,
+   394.9
+  ],
+  "Object_9": [
+   89.1,
+   394.9
+  ],
+  "MENU": [
+   76.8,
+   369.4
+  ],
+  "PRESSED.002": [
+   78.3,
+   370.6
+  ],
+  "UNPRESSED.002": [
+   76.8,
+   369.4
+  ],
+  "VALUE.002": [
+   76.8,
+   369.4
+  ],
+  "Object_14": [
+   76.8,
+   369.4
+  ],
+  "POINTING_POSE": [
+   290.7,
+   206.7
+  ],
+  "SELECT": [
+   229.2,
+   323.6
+  ],
+  "xr_standard_trigger_pressed_max": [
+   210.3,
+   302.4
+  ],
+  "xr_standard_trigger_pressed_min": [
+   210.3,
+   302.4
+  ],
+  "xr_standard_trigger_pressed_value": [
+   229.2,
+   323.6
+  ],
+  "Object_20": [
+   229.2,
+   323.6
+  ],
+  "THUMBSTICK_PRESS": [
+   131.5,
+   323.9
+  ],
+  "xr_standard_thumbstick_pressed_max": [
+   156.6,
+   343.1
+  ],
+  "xr_standard_thumbstick_pressed_min": [
+   154.6,
+   341.5
+  ],
+  "xr_standard_thumbstick_pressed_value": [
+   131.5,
+   323.9
+  ],
+  "THUMBSTICK_X": [
+   131.5,
+   323.9
+  ],
+  "xr_standard_thumbstick_xaxis_pressed_max": [
+   154.6,
+   341.5
+  ],
+  "xr_standard_thumbstick_xaxis_pressed_min": [
+   154.6,
+   341.5
+  ],
+  "xr_standard_thumbstick_xaxis_pressed_value": [
+   131.5,
+   323.9
+  ],
+  "THUMBSTICK_Y": [
+   131.5,
+   323.9
+  ],
+  "xr_standard_thumbstick_yaxis_pressed_max": [
+   154.6,
+   341.5
+  ],
+  "xr_standard_thumbstick_yaxis_pressed_min": [
+   154.6,
+   341.5
+  ],
+  "xr_standard_thumbstick_yaxis_pressed_value": [
+   131.5,
+   323.9
+  ],
+  "Object_29": [
+   131.5,
+   323.9
+  ],
+  "TRACKING_MESH": [
+   290.7,
+   206.7
+  ],
+  "Node.001": [
+   290.7,
+   206.7
+  ],
+  "Node.002": [
+   290.7,
+   206.7
+  ],
+  "Object_36": [
+   290.7,
+   206.7
+  ],
+  "X": [
+   123.9,
+   389.2
+  ],
+  "x_button_pressed_max": [
+   125.4,
+   390.4
+  ],
+  "x_button_pressed_min": [
+   123.9,
+   389.2
+  ],
+  "x_button_pressed_value": [
+   123.9,
+   389.2
+  ],
+  "Object_42": [
+   123.9,
+   389.2
+  ],
+  "Y": [
+   170.4,
+   352.6
+  ],
+  "y_button_pressed_max": [
+   171.9,
+   353.8
+  ],
+  "y_button_pressed_min": [
+   170.4,
+   352.6
+  ],
+  "y_button_pressed_value": [
+   170.4,
+   352.6
+  ],
+  "Object_47": [
+   170.4,
+   352.6
+  ]
+ }
+}

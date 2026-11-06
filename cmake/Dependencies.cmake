@@ -69,26 +69,25 @@ FetchContent_Declare(curl
   SYSTEM)
 FetchContent_MakeAvailable(curl)
 
-# SDL3 serves the launcher everywhere and the runtime's audio outside Windows.
-if(VENTURE_BUILD_LAUNCHER OR NOT WIN32)
-  set(SDL_SHARED OFF CACHE BOOL "" FORCE)
-  set(SDL_STATIC ON CACHE BOOL "" FORCE)
-  set(SDL_TEST_LIBRARY OFF CACHE BOOL "" FORCE)
-  set(SDL_TESTS OFF CACHE BOOL "" FORCE)
-  set(SDL_EXAMPLES OFF CACHE BOOL "" FORCE)
-  set(SDL_INSTALL OFF CACHE BOOL "" FORCE)
-  # Wayland only on Linux: no X11 video backend (Xlib, xcb, XCursor, XInput,
-  # XRandR...) is compiled in or loaded at run time. No libdecor either: its
-  # cairo/GTK plugins load libX11 and libxcb; the launcher draws its own
-  # window chrome instead (launcher/ui/chrome.h).
-  set(SDL_X11 OFF CACHE BOOL "" FORCE)
-  set(SDL_WAYLAND_LIBDECOR OFF CACHE BOOL "" FORCE)
-  FetchContent_Declare(SDL3
-    URL https://github.com/libsdl-org/SDL/archive/7f3ae3d57459e59943a4ecfefc8f6277ec6bf540.tar.gz # release-3.2.28
-    URL_HASH SHA256=7a8347c770b90b33daac2352858ca03f9c9a2ccc8ce711054870361d1a6b32e5
-    SYSTEM)
-  FetchContent_MakeAvailable(SDL3)
-endif()
+# SDL3 serves the launcher, the runtime's desktop mirror window and, outside
+# Windows, the runtime's audio.
+set(SDL_SHARED OFF CACHE BOOL "" FORCE)
+set(SDL_STATIC ON CACHE BOOL "" FORCE)
+set(SDL_TEST_LIBRARY OFF CACHE BOOL "" FORCE)
+set(SDL_TESTS OFF CACHE BOOL "" FORCE)
+set(SDL_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(SDL_INSTALL OFF CACHE BOOL "" FORCE)
+# Wayland only on Linux: no X11 video backend (Xlib, xcb, XCursor, XInput,
+# XRandR...) is compiled in or loaded at run time. No libdecor either: its
+# cairo/GTK plugins load libX11 and libxcb; the launcher draws its own
+# window chrome instead (launcher/ui/chrome.h).
+set(SDL_X11 OFF CACHE BOOL "" FORCE)
+set(SDL_WAYLAND_LIBDECOR OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(SDL3
+  URL https://github.com/libsdl-org/SDL/archive/7f3ae3d57459e59943a4ecfefc8f6277ec6bf540.tar.gz # release-3.2.28
+  URL_HASH SHA256=7a8347c770b90b33daac2352858ca03f9c9a2ccc8ce711054870361d1a6b32e5
+  SYSTEM)
+FetchContent_MakeAvailable(SDL3)
 
 if(VENTURE_BUILD_LAUNCHER)
   FetchContent_Declare(stb
@@ -202,6 +201,19 @@ set(BUILD_SHARED_LIBS OFF)
 set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
 FetchContent_MakeAvailable(miniz)
+
+# LZ4 1.10.0 (BSD-2-Clause, lib/LICENSE) compresses the JIT's portable block cache
+# records (cpu/portable_cache.cpp). Only lib/lz4.c is built.
+FetchContent_Declare(lz4
+  URL https://github.com/lz4/lz4/archive/refs/tags/v1.10.0.tar.gz
+  URL_HASH SHA256=537512904744b35e232912055ccf8ec66d768639ff3abe5788d90d792ec5f48b
+  SOURCE_SUBDIR venture-no-upstream-targets
+  SYSTEM)
+FetchContent_MakeAvailable(lz4)
+if(NOT TARGET venture_lz4)
+  add_library(venture_lz4 STATIC "${lz4_SOURCE_DIR}/lib/lz4.c")
+  target_include_directories(venture_lz4 SYSTEM PUBLIC "${lz4_SOURCE_DIR}/lib")
+endif()
 
 # miniaudio 0.11.23, MIT-0 / public domain. SOURCE_SUBDIR avoids its example
 # targets; Venture builds one statically linked, device-only implementation.

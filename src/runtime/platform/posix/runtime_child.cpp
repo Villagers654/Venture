@@ -138,7 +138,7 @@ RuntimeChildResult run_runtime_child(const std::filesystem::path& executable,
 RuntimeChildResult run_runtime_child(const std::filesystem::path& executable,
     const std::vector<std::string>& arguments, const std::vector<std::uintptr_t>& inherited,
     const std::function<bool()>& stop, std::string_view launch_payload, bool acknowledged_teardown,
-    const std::filesystem::path& diagnostic_run_directory) {
+    const std::filesystem::path& /*diagnostic_run_directory: startup dumps are Windows only*/) {
   if (launch_payload.size() > runtime_launch_payload_limit) throw std::length_error("Launch intent too large");
   int pipe_fds[2];
   if (pipe(pipe_fds)) throw std::system_error(errno, std::generic_category(), "create restart pipe");
@@ -245,6 +245,7 @@ RuntimeChildResult run_runtime_child(const std::filesystem::path& executable,
       RuntimeChildResult failed{124, false};
       failed.supervisor_stopped = true;
       failed.exit_wait = grace.exit_wait; failed.exit_wait_tid = grace.exit_wait_tid;
+      failed.worker_pid = static_cast<unsigned long>(child);
       return failed;
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
@@ -268,6 +269,8 @@ RuntimeChildResult run_runtime_child(const std::filesystem::path& executable,
   RuntimeChildResult result{WIFEXITED(status) ? WEXITSTATUS(status) : 128 + WTERMSIG(status), restart,
       restart ? packet.substr(1, static_cast<std::size_t>(count - 1)) : std::string{}};
   result.os_termination = grace.os_termination;
+  result.exit_wait = grace.exit_wait; result.exit_wait_tid = grace.exit_wait_tid;
+  result.worker_pid = static_cast<unsigned long>(child);
   return result;
 }
 }

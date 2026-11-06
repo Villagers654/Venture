@@ -28,6 +28,7 @@ bool vr_running();
 void request_shutdown(const fs::path &root);
 void start_client(const fs::path &root);
 struct Game {
+  // `package` is what the shortcut launches (paths::safe_launch_target).
   std::string package, name, art_id;
 };
 struct Result {

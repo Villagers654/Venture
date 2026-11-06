@@ -7,12 +7,14 @@
 #include "xr/guest_images.h"
 #include "hle/vulkan/full_rate_image.h"
 #include <array>
+#include <optional>
 #include <atomic>
 #include <deque>
 #include <map>
 #include <memory>
 #include <mutex>
 #include <set>
+#include <span>
 #include <unordered_map>
 #include <vector>
 
@@ -54,7 +56,9 @@ struct Swapchain {
   XrColorSpaceFB host_color = XR_COLOR_SPACE_UNMANAGED_FB;
   // A layer this frame asked for XR_COMPOSITION_LAYER_IMAGE_LAYOUT_VERTICAL_FLIP_BIT_FB;
   // the host copy reverses rows and layer rects mirror (map_subimage).
-  bool flip_rows = false, host_flip = false, host_opaque = false;
+  bool flip_rows = false, host_flip = false, host_opaque = false, host_premultiplied = false;
+  float host_underlay = 1; // reconstruction opacity carried by the host copy's alpha (1: none)
+  std::optional<std::array<float, 3>> host_key; // color key passthrough drawn into the host copy
   bool rect_clipped = false; // logged once (map_subimage)
   std::int32_t released_index = -1;
   std::uint32_t next_index = 0, host_index = 0;
@@ -68,7 +72,8 @@ struct Swapchain {
   bool guest_only = false;
   std::unique_ptr<vulkan::FullRateImage> full_rate_resource;
   std::vector<std::uint32_t> textures;
-  std::unique_ptr<ColorImages> color_images, opaque_images;
+  // alpha_images: the passthrough-alpha shader (opaque withdrawal, underlay opacity).
+  std::unique_ptr<ColorImages> color_images, alpha_images;
   // OpenXR permits multiple outstanding acquisitions. Wait and release apply
   // to the oldest acquired image, independently of the returned image index.
   std::deque<std::uint32_t> acquired;
@@ -95,6 +100,9 @@ struct State {
   GuestAddr vm = 0, context = 0;
   XrGraphicsBindingVulkanKHR graphics{XR_TYPE_GRAPHICS_BINDING_VULKAN_KHR};
   std::uint32_t guest_graphics_queue_index = 0;
+  // GPUs Venture named for a game's VkInstance after the host refused that
+  // query (xrGetVulkanGraphicsDevice2KHR), with their instance.
+  std::map<VkPhysicalDevice, VkInstance> vouched_vulkan_gpus;
   std::set<std::string> enabled;
   std::map<ObjectKey, Object> objects;
   std::map<XrSwapchain, Swapchain> swapchains;
@@ -188,9 +196,32 @@ XrResult refresh_rate(XrSession, float *);
 VkFormat gl_to_vk(std::int64_t);
 std::int64_t vk_to_gl(std::int64_t);
 XrResult present_android_surfaces();
-XrResult prepare_swapchains(const std::set<XrSwapchain>& submitted, bool force_opaque = false);
+// The lowest layer over a see-through host's world, for a reconstruction
+// opacity below 1: its host copies get A' = 1 - opacity * (1 - A), straight
+// colour premultiplied by A when the host layer's unpremultiplied flag was dropped.
+struct UnderlayAlpha {
+  std::set<XrSwapchain> swapchains;
+  float opacity = 1;
+  bool premultiply = false;
+  // Color key passthrough: the host copy is opaque, the key where coverage is low.
+  std::optional<std::array<float, 3>> key;
+};
+
+// The desktop mirror's eye (xr/desktop_mirror.h): a projection layer's view,
+// as the guest submitted it.
+struct MirrorEye {
+  XrSwapchainSubImage sub{};
+  XrFovf fov{};
+};
+// The first projection layer's view `eye` (0 left, 1 right; a mono projection's
+// only view), if a layer is one.
+std::optional<MirrorEye> mirror_eye(std::span<const XrCompositionLayerBaseHeader* const> layers, std::uint32_t eye);
+XrResult prepare_swapchains(const std::set<XrSwapchain>& submitted, bool force_opaque = false,
+                            const UnderlayAlpha* underlay = nullptr, const MirrorEye* mirror = nullptr);
 XrResult destroy_host_swapchain(Swapchain&);
-XrResult convert_color_image(Swapchain&, std::uint32_t index, XrColorSpaceFB, bool external_queue_held = false, bool force_opaque = false);
+XrResult convert_color_image(Swapchain&, std::uint32_t index, XrColorSpaceFB, bool external_queue_held = false,
+                             bool force_opaque = false, float underlay_opacity = 1, bool premultiply = false,
+                             const std::array<float, 3>* key = nullptr);
 namespace guest {
 XrResult create_action_for_host(XrActionSet, const XrActionCreateInfo*, XrAction*);
 XrResult create_swapchain(XrSession, const XrSwapchainCreateInfo*, XrSwapchain*, bool surface);

@@ -27,7 +27,9 @@ namespace venture::log {
 namespace {
 using Clock = std::chrono::steady_clock;
 std::atomic<Level> g_level{Level::info};
-std::mutex g_mutex;
+// Never destroyed: the detached flusher and other threads may still log
+// during static destruction.
+std::mutex &g_mutex = *new std::mutex;
 struct TerminalHandoff {
   std::atomic<int> requested{-1};
   std::promise<void> completed;
@@ -199,7 +201,33 @@ struct ExitFlush {
     flush_repeats();
     flush_file();
   }
-} g_exit_flush; // Destroyed before g_file and g_mutex.
+} g_exit_flush; // Destroyed before g_file.
+// Buffered lines reach the file within the flush interval even when nothing is
+// logged after them. Flushing only on the next line kept a stalled process's
+// last lines in memory: its log ended up to an interval before the stall, so a
+// hang read as one at an earlier step (issue 23's runs "stopped" at HotSpot's
+// start).
+void start_flusher() {
+  static std::once_flag started;
+  std::call_once(started, [] {
+    std::thread([] {
+      for (;;) {
+        std::chrono::milliseconds wait;
+        {
+          std::lock_guard lock(g_mutex);
+          const auto clock = Clock::now();
+          if (g_file >= 0 && g_pending_size.load(std::memory_order_acquire) &&
+              !g_crashing.load(std::memory_order_acquire) && clock - g_flushed >= g_flush_interval) {
+            flush_file();
+            g_flushed = clock;
+          }
+          wait = std::clamp(g_flush_interval, std::chrono::milliseconds(1), std::chrono::milliseconds(250));
+        }
+        std::this_thread::sleep_for(wait);
+      }
+    }).detach();
+  });
+}
 // Games log the Meta access tokens they are handed (FRL... user tokens and
 // OC|app|secret app tokens); no log line keeps one.
 bool token_char(char c) {
@@ -325,6 +353,7 @@ void set_file(std::string_view path) {
 #else
     g_file = ::open(paths::from_utf8(path).c_str(), O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0600);
 #endif
+    if (g_file >= 0) start_flusher();
   }
 }
 

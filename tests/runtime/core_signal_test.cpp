@@ -26,6 +26,7 @@
 #include <format>
 #include <fstream>
 #include <iterator>
+#include <random>
 #include <string>
 #include <vector>
 #include "common/environment.h"
@@ -490,6 +491,63 @@ TEST_CASE("A64 bsearch calls the guest comparator and returns bionic's element")
   calls = 0;
   CHECK(find(34, 9) == 8);
   CHECK(calls == 3);
+  Linker::get().close(libc);
+}
+TEST_CASE("A64 qsort and qsort_r sort in place with the guest comparator") {
+  register_all_hle_libraries();
+  GuestThread thread(83); thread.attach_to_current_host_thread();
+  auto* libc = Linker::get().open("libc.so", kRtldNow, nullptr);
+  REQUIRE(libc);
+  // Arguments must be elements of [base, end) at a multiple of the size; ctx is checked by qsort_r.
+  static std::uint64_t base = 0, end = 0, size = 0, ctx = 0, calls = 0;
+  static bool stray = false;
+  const auto compare = hle::make_thunk("qsort-test", "compare", [](hle::CallContext& c) {
+    ++calls;
+    for (const auto p : {c.x(0), c.x(1)})
+      if (p < base || p >= end || (p - base) % size) stray = true;
+    if (ctx && c.x(2) != ctx) stray = true;
+    const int a = *g2h<int>(c.x(0)), b = *g2h<int>(c.x(1));
+    c.return_x(static_cast<std::uint64_t>(static_cast<std::int64_t>((a > b) - (a < b))));
+  });
+  std::mt19937 random(5);
+  for (const std::size_t record : {sizeof(int), 4 * sizeof(int)})
+    for (const std::size_t count : {0, 1, 2, 6, 7, 8, 40, 41, 300, 5000})
+      for (int pattern = 0; pattern < 4; ++pattern) {
+        std::vector<int> data(count * record / sizeof(int));
+        for (std::size_t i = 0; i < data.size(); ++i) data[i] = static_cast<int>(random());
+        for (std::size_t i = 0; i < count; ++i) {
+          const int key[] = {static_cast<int>(random() % 1000), static_cast<int>(i), static_cast<int>(count - i), 7};
+          data[i * record / sizeof(int)] = pattern == 0 ? key[0] : key[pattern] % (pattern == 3 ? 3 : 1 << 30);
+        }
+        auto expected = data;
+        base = data.empty() ? 0 : h2g(data.data()); end = base + count * record; size = record; stray = false; calls = 0;
+        CAPTURE(record);
+        CAPTURE(count);
+        CAPTURE(pattern);
+        if (record == sizeof(int)) {
+          ctx = 0;
+          thread.call(libc->find_symbol("qsort"), {base, count, record, compare});
+          std::sort(expected.begin(), expected.end());
+          CHECK(data == expected);
+        } else {
+          ctx = 0x5eed;
+          thread.call(libc->find_symbol("qsort_r"), {base, count, record, compare, ctx});
+          // Each record moves whole: keys ascend and the multiset of records is unchanged.
+          using Record = std::array<int, 4>;
+          const auto as_records = [](const std::vector<int>& v) {
+            std::vector<Record> r(v.size() / 4);
+            std::memcpy(r.data(), v.data(), v.size() * sizeof(int));
+            return r;
+          };
+          auto got = as_records(data), want = as_records(expected);
+          CHECK(std::is_sorted(got.begin(), got.end(), [](const Record& a, const Record& b) { return a[0] < b[0]; }));
+          std::sort(got.begin(), got.end());
+          std::sort(want.begin(), want.end());
+          CHECK(got == want);
+        }
+        CHECK_FALSE(stray);
+        if (count > 1) CHECK(calls < 3 * count * (std::bit_width(count) + 2));
+      }
   Linker::get().close(libc);
 }
 #if defined(__x86_64__) || defined(_M_X64)

@@ -20,8 +20,15 @@ std::string guest_name(std::string_view host);
 bool safe_name(std::string_view name);
 bool safe_package(std::string_view name);
 bool within(const fs::path &root, const fs::path &target);
+// An installation's folder name under its package folder: a version code, or
+// "<version code>-<binary id>" for a version pinned beside the others
+// (meta::Plan::folder).
+bool version_folder(std::string_view name);
+// What --launch names (and a Steam shortcut launches): a package, or
+// "<package>@<version folder>" for a version pinned beside the game's own.
+bool safe_launch_target(std::string_view target);
 // Reject symlinks/junctions escaping the selected root before
-// installing/removing.
+// installing/removing. `version` is a version_folder name.
 fs::path game_dir(const fs::path &root, std::string_view package,
                   std::string_view version);
 // Path for standard-library/native file I/O: extended namespace on Windows,

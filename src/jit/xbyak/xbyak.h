@@ -1640,6 +1640,24 @@ inline RegExp operator-(const RegExp& e, size_t disp)
 void *const AutoGrow = (void*)1; //-V566
 void *const DontSetProtectRWE = (void*)2; //-V566
 
+// Venture: observes every encoded reference whose bytes depend on where the
+// code or its target lives, so emitted code can be moved and re-bound.
+struct RelocationObserver {
+	virtual ~RelocationObserver() {}
+	// `size` displacement bytes at code offset `site` reference the absolute address `target`.
+	virtual void onAbsolute(size_t site, int size, const uint8_t *target) = 0;
+	// `size` displacement bytes at `site` reference the code offset `target` (a label).
+	virtual void onLabel(size_t site, int size, size_t target) = 0;
+	// `size` bytes at `site` hold the absolute address of the code offset `target`.
+	virtual void onLabelAddress(size_t site, int size, size_t target) = 0;
+	// [rip + disp] without a target: its meaning depends on the code's position.
+	virtual void onRipDisplacement(size_t site) = 0;
+	// True when a register immediate is an address to re-bind; it is then
+	// encoded as a full 64-bit immediate at `site` and reported by onImm64.
+	virtual bool isAddress(uint64_t value) = 0;
+	virtual void onImm64(size_t site, uint64_t value) = 0;
+};
+
 class CodeArray {
 	enum Type {
 		USER_BUF = 1, // use userPtr(non alignment, non protect)
@@ -1677,6 +1695,9 @@ protected:
 	uint8_t *writableTop_; // where bytes are stored; differs from top_ only for dual-mapped buffers
 	size_t size_;
 	bool isCalledCalcJmpAddress_;
+public:
+	RelocationObserver *relocObserver_ = 0; // Venture
+protected:
 
 	bool useProtect() const { return alloc_->useProtect(); }
 	/*
@@ -2125,6 +2146,10 @@ class LabelManager {
 				base_->save(offset, disp, jmp->jmpSize, jmp->mode);
 			} else {
 				base_->rewrite(offset, disp, jmp->jmpSize);
+				if (base_->relocObserver_) {
+					if (jmp->mode == inner::Labs) base_->relocObserver_->onLabelAddress(offset, jmp->jmpSize, addrOffset);
+					else if (jmp->mode != inner::LaddTop) base_->relocObserver_->onLabel(offset, jmp->jmpSize, addrOffset);
+				}
 			}
 			undefList.erase(itr);
 		}
@@ -2766,7 +2791,9 @@ private:
 		if (isAutoGrow() && size_ + 16 >= maxSize_) growMemory(); /* avoid splitting code of jmp */
 		size_t offset = 0;
 		if (labelMgr_.getOffset(&offset, label)) { /* label exists */
+			const size_t before = size_;
 			makeJmp(inner::VerifyInInt32(offset - size_), type, shortCode, longCode, longPref);
+			if (relocObserver_) { const int n = size_ - before == 2 ? 1 : 4; relocObserver_->onLabel(size_ - n, n, offset); }
 		} else {
 			int jmpSize = 0;
 			if (isNEAR(type)) {
@@ -2792,7 +2819,9 @@ private:
 			dd(0);
 			save(size_ - 4, size_t(addr) - size_, 4, inner::Labs);
 		} else {
+			const size_t before = size_;
 			makeJmp(inner::VerifyInInt32(reinterpret_cast<const uint8_t*>(addr) - getCurr()), type, shortCode, longCode, longPref);
+			if (relocObserver_) { const int n = size_ - before == 2 ? 1 : 4; relocObserver_->onAbsolute(size_ - n, n, reinterpret_cast<const uint8_t*>(addr)); }
 		}
 
 	}
@@ -2819,6 +2848,10 @@ private:
 				putL_inner(*addr.getLabel(), true, addr.getDisp() - addr.immSize, 4);
 			} else {
 				size_t disp = addr.getDisp();
+				if (relocObserver_) {
+					if (addr.getMode() == inner::M_ripAddr) relocObserver_->onAbsolute(size_, 4, reinterpret_cast<const uint8_t*>(disp));
+					else relocObserver_->onRipDisplacement(size_);
+				}
 				if (addr.getMode() == inner::M_ripAddr) {
 					if (isAutoGrow()) XBYAK_THROW(ERR_INVALID_RIP_IN_AUTO_GROW)
 					// compute the relative offset to the pointer address
@@ -3079,11 +3112,13 @@ private:
 		if (labelMgr_.getOffset(&offset, label)) {
 			if (relative) {
 				db(inner::VerifyInInt32(offset + disp - size_ - jmpSize), jmpSize);
+				if (relocObserver_) relocObserver_->onLabel(size_ - jmpSize, jmpSize, offset);
 			} else if (isAutoGrow()) {
 				db(uint64_t(0), jmpSize);
 				save(size_ - jmpSize, offset, jmpSize, inner::LaddTop);
 			} else {
 				db(size_t(top_) + offset, jmpSize);
+				if (relocObserver_) relocObserver_->onLabelAddress(size_ - jmpSize, jmpSize, offset);
 			}
 			return;
 		}
@@ -3604,6 +3639,14 @@ public:
 	void mov(const Operand& op, uint64_t imm)
 	{
 		if (op.isREG()) {
+			if (relocObserver_ && op.isBit(64) && relocObserver_->isAddress(imm)) {
+				// MOV r64, imm64 regardless of the value, so a re-bound address fits.
+				rex(op.getReg());
+				db(0xB8 | (op.getIdx() & 7));
+				relocObserver_->onImm64(size_, imm);
+				db(imm, 8);
+				return;
+			}
 			const int size = mov_imm(op.getReg(), imm);
 			db(imm, size);
 		} else if (op.isMEM()) {

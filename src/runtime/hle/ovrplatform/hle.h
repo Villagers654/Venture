@@ -20,6 +20,8 @@ std::unique_ptr<Session> make_runtime_session(const AppIdentity&,
 std::unique_ptr<Session> make_runtime_session(
     const AppIdentity&, const std::filesystem::path&,
     std::shared_ptr<PipeChannel>);
-std::shared_ptr<HleLibrary> make_library(Session&);
-void register_library(Session&);
+// extra: exports implemented outside venture_ovrplatform (the microphone, on
+// venture_audio), A32 included.
+std::shared_ptr<HleLibrary> make_library(Session&, std::span<const Export> extra = {});
+void register_library(Session&, std::span<const Export> extra = {});
 }  // namespace venture::ovrplatform

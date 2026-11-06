@@ -501,8 +501,12 @@ TEST_CASE("Platform entitlement asks the app's store listing when Meta fails the
   auto library_attempts = 0;
   for (int i = 0; i < 5; ++i) server.push("{}", 500);
   server.push(Json{{"data", {{"item", item}, {"viewer", {{"user", {{"id", user}}}}}}}}.dump());
+  const auto start = std::chrono::steady_clock::now();
   auto result = provider->entitlement({});
   CHECK(result.error.code == expected);
+  // A report: the store listing waited out the failed library query's 4 s
+  // backoff (0.25+0.5+1+2 s of retries, then 4 s more) before it was asked.
+  CHECK(std::chrono::steady_clock::now() - start < std::chrono::milliseconds(7000));
   for (auto& request : server.requests())
     library_attempts += request.find("4850747515044496") != std::string::npos;
   CHECK(library_attempts >= 1);

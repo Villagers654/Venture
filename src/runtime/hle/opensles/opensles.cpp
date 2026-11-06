@@ -461,6 +461,7 @@ Result create_audio(GuestAddr self, GuestAddr* out, const abi::Data* source,
     auto o = make_object(kind, engine->address);
     audio::Config c;
     c.direction = capture ? audio::Direction::input : audio::Direction::output;
+    c.follow_default_input = capture;
     auto locator_type=*g2h<std::uint32_t>(source->locator);
     if(!capture && (locator_type==1 || locator_type==0x800007bc)) {
       if(!source->format || *g2h<std::uint32_t>(source->format)!=1)return unsupported;
@@ -722,13 +723,15 @@ Result set_config(GuestAddr self, const char* key, const void* data,
   }
   std::uint32_t value;
   std::memcpy(&value, data, 4);
+  // AOSP accepts GENERIC through UNPROCESSED and rejects NONE. A preset picks
+  // the device's capture processing; as on an Android device without voice
+  // effects (AudioRecord VOICE_COMMUNICATION here too), host capture keeps
+  // the OS's own processing. Voice chat asks for VOICE_COMMUNICATION, and a
+  // failed SetConfiguration leaves it without a microphone.
   if ((target == &o->performance && value > 3) ||
-      (target == &o->stream_type && value > 5))
+      (target == &o->stream_type && value > 5) ||
+      (target == &o->recording_preset && (value < 1 || value > 5)))
     return invalid;
-  // Host capture supplies unprocessed PCM. Voice processing presets require
-  // a real DSP implementation; do not silently promise echo cancellation.
-  if (target == &o->recording_preset && value != 1 && value != 5)
-    return unsupported;
   *target = value;
   return ok;
 }

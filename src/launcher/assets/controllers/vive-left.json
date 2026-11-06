@@ -1,0 +1,154 @@
+{
+ "width": 499,
+ "height": 720,
+ "nodes": {
+  "Light": [
+   -6488.1,
+   4406.5
+  ],
+  "Camera": [
+   -6479.0,
+   33716.9
+  ],
+  "htc_vive_none": [
+   228.4,
+   369.5
+  ],
+  "controller": [
+   228.4,
+   369.5
+  ],
+  "menu_pressed_max": [
+   175.7,
+   232.7
+  ],
+  "menu_pressed_min": [
+   174.4,
+   232.6
+  ],
+  "menu_pressed_value": [
+   179.7,
+   234.2
+  ],
+  "menu_button": [
+   179.7,
+   234.2
+  ],
+  "xr_standard_squeeze_pressed_max": [
+   114.8,
+   406.7
+  ],
+  "xr_standard_squeeze_pressed_min": [
+   114.0,
+   404.7
+  ],
+  "xr_standard_squeeze_pressed_mirror_max": [
+   184.6,
+   469.1
+  ],
+  "xr_standard_squeeze_pressed_mirror_min": [
+   187.3,
+   470.6
+  ],
+  "xr_standard_squeeze_pressed_mirror_value": [
+   181.1,
+   466.4
+  ],
+  "right_squeeze": [
+   181.1,
+   466.4
+  ],
+  "xr_standard_squeeze_pressed_value": [
+   115.1,
+   407.1
+  ],
+  "left_squeeze": [
+   115.1,
+   407.1
+  ],
+  "xr_standard_touchpad_pressed_max": [
+   149.7,
+   321.9
+  ],
+  "xr_standard_touchpad_pressed_min": [
+   144.0,
+   322.4
+  ],
+  "xr_standard_touchpad_pressed_value": [
+   154.9,
+   320.5
+  ],
+  "touchpad": [
+   154.9,
+   320.5
+  ],
+  "xr_standard_touchpad_xaxis_touched_max": [
+   180.8,
+   355.5
+  ],
+  "xr_standard_touchpad_xaxis_touched_min": [
+   107.0,
+   289.2
+  ],
+  "xr_standard_touchpad_xaxis_touched_value": [
+   143.8,
+   322.5
+  ],
+  "xr_standard_touchpad_yaxis_touched_max": [
+   126.8,
+   379.2
+  ],
+  "xr_standard_touchpad_yaxis_touched_min": [
+   161.3,
+   265.0
+  ],
+  "xr_standard_touchpad_yaxis_touched_value": [
+   143.9,
+   322.4
+  ],
+  "xr_standard_touchpad_axes_touched_value": [
+   143.7,
+   322.5
+  ],
+  "xr_standard_touchpad_xaxis_pressed_max": [
+   144.0,
+   322.4
+  ],
+  "xr_standard_touchpad_xaxis_pressed_min": [
+   144.0,
+   322.4
+  ],
+  "xr_standard_touchpad_xaxis_pressed_value": [
+   144.0,
+   322.4
+  ],
+  "xr_standard_touchpad_yaxis_pressed_max": [
+   144.0,
+   322.4
+  ],
+  "xr_standard_touchpad_yaxis_pressed_min": [
+   144.0,
+   322.4
+  ],
+  "xr_standard_touchpad_yaxis_pressed_value": [
+   144.0,
+   322.4
+  ],
+  "xr_standard_trigger_pressed_max": [
+   215.6,
+   305.5
+  ],
+  "xr_standard_trigger_pressed_min": [
+   215.6,
+   305.5
+  ],
+  "xr_standard_trigger_pressed_value": [
+   229.8,
+   322.6
+  ],
+  "trigger": [
+   229.8,
+   322.6
+  ]
+ }
+}

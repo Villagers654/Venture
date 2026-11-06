@@ -198,6 +198,7 @@ void barrier(VkCommandBuffer command, VkImage image, VkImageLayout from,
       VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr, 0, nullptr, 1, &b);
 }
 }  // namespace
+VkImageLayout xr_released_layout(std::uint32_t gl_layout) { return vk_layout(GLenum(gl_layout)); }
 struct XrImageBridge::Impl {
   std::mutex lock;
   XrImageDescription description{};
@@ -267,7 +268,7 @@ bool XrImageBridge::gpu_ownership() const { return impl_->gpu_ownership; }
 std::unique_ptr<XrImageBridge> XrImageBridge::create(
     const XrImageDescription& desc, std::string* error) {
   if (!desc.width || !desc.height || !desc.layers || !desc.mip_count ||
-      desc.mip_count > std::bit_width(std::max(desc.width, desc.height)) || desc.images.empty() ||
+      desc.mip_count > std::uint32_t(std::bit_width(std::max(desc.width, desc.height))) || desc.images.empty() ||
       !gl_format(desc.format) || desc.samples != VK_SAMPLE_COUNT_1_BIT ||
       !(desc.usage & VK_IMAGE_USAGE_TRANSFER_DST_BIT) ||
       (desc.external_subresources && desc.source_texture)) {

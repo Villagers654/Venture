@@ -146,6 +146,16 @@ bool in_network_wait(jvmtiEnv* ti, jthread thread, jint state) {
     return (c == "Ljava/net/Inet4AddressImpl;" || c == "Ljava/net/Inet6AddressImpl;") && m == "lookupAllHostAddr";
   });
 }
+// A read-only runtime query (a game polling Debug.getMemoryInfo from a timer):
+// its native neither runs guest code nor writes data, and the thread stops
+// on its return to Java.
+bool in_host_query(jvmtiEnv* ti, jthread thread, jint state) {
+  return top_native_is(ti, thread, state, [](std::string_view c, std::string_view m) {
+    constexpr std::string_view queries[] = {"processMemory", "debuggerConnected", "systemProperty", "isMusicActive",
+                                            "audioOutputProperties", "audioDevices"};
+    return c == "Lcom/venture/runtime/NativeHost;" && std::ranges::find(queries, m) != std::end(queries);
+  });
+}
 // "<name> state=0x.. top=<class>.<method>" for failure reports.
 std::string describe(jvmtiEnv* ti, jthread thread, jint state) {
   std::string out = "?";
@@ -197,7 +207,8 @@ bool ExecutionFreeze::application_quiet(std::string* error, bool* saving) {
       const auto result = p.ti->GetThreadState(threads[i], &state);
       if (result != JVMTI_ERROR_NONE && result != JVMTI_ERROR_THREAD_NOT_ALIVE) quiet = false, unknown = true;
       if (result == JVMTI_ERROR_NONE && (state & JVMTI_THREAD_STATE_RUNNABLE) &&
-          !in_application_native(p.ti, env, threads[i], state) && !in_network_wait(p.ti, threads[i], state)) {
+          !in_application_native(p.ti, env, threads[i], state) && !in_network_wait(p.ti, threads[i], state) &&
+          !in_host_query(p.ti, threads[i], state)) {
         bool application = false;
         std::string name = "?";
         jvmtiThreadInfo info{};
@@ -335,7 +346,8 @@ bool ExecutionFreeze::freeze(std::string* error) {
           if (app_thread && !java_left && (state & JVMTI_THREAD_STATE_IN_NATIVE) &&
               !(state & (JVMTI_THREAD_STATE_WAITING | JVMTI_THREAD_STATE_SLEEPING |
                          JVMTI_THREAD_STATE_BLOCKED_ON_MONITOR_ENTER)) &&
-              !in_application_native(p.ti, env, threads[i], state) && !in_network_wait(p.ti, threads[i], state)) {
+              !in_application_native(p.ti, env, threads[i], state) && !in_network_wait(p.ti, threads[i], state) &&
+              !in_host_query(p.ti, threads[i], state)) {
             complete = false;
             if (blocker.empty()) blocker = describe(p.ti, threads[i], state);
           }

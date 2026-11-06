@@ -32,6 +32,19 @@ void note_missing_expansion(const std::filesystem::path& host, std::string_view 
   if (!reported.emplace(name).second) return;
   log::warn("vfs", "Missing expansion file: the game looked for {}, which this install does not have", name);
 }
+// Android gives an app read/write access to its own Android/obb/<package>
+// directory: games keep downloaded or unpacked data beside their expansion
+// files (CRIWARE titles open their ACF/ACB/AWB banks there). Only the files
+// Venture publishes there (the install's own OBB and asset files, often hard
+// links into the games folder) stay read-only. The comparison ignores case:
+// NTFS opens those names in any case.
+bool published_expansion(std::string_view rest) {
+  const auto name = rest.substr(0, rest.find('/'));
+  const auto lower = [](char c) { return c >= 'A' && c <= 'Z' ? char(c - 'A' + 'a') : c; };
+  return std::ranges::any_of(process_config().expansion_files, [&](const std::string& file) {
+    return std::ranges::equal(file, name, {}, lower, lower);
+  });
+}
 bool contained(const std::filesystem::path& root, const std::filesystem::path& p) {
   auto a = root.begin(), b = p.begin();
   for (; a != root.end(); ++a, ++b)
@@ -227,7 +240,9 @@ int resolve_path(std::string_view path, int dirfd, MappedPath* out) {
              map("/data/data/" + c.package, c.data_dir, false);
   for (auto prefix : {"/sdcard", "/storage/emulated/0", "/storage/self/primary", "/mnt/sdcard"}) {
     if (mapped) break;
-    if (map(std::string(prefix) + "/Android/obb/" + c.package, c.obb_dir, true)) {
+    const auto obb = std::string(prefix) + "/Android/obb/" + c.package;
+    if (map(obb, c.obb_dir, false)) {
+      out->readonly = p.size() > obb.size() && published_expansion(std::string_view(p).substr(obb.size() + 1));
       note_missing_expansion(out->host, p);
       mapped = true;
       break;
@@ -240,7 +255,7 @@ int resolve_path(std::string_view path, int dirfd, MappedPath* out) {
     mapped = map("/data", c.data_dir / "volumes/data", true) ||
              map("/system", c.data_dir / "volumes/system", true);
   if (!mapped) return -err::enoent;
-  if (host::unredirected_path(out->root, out->host)) return 0;
+  if (int error = 0; host::unredirected_path(out->root, out->host, &error)) return error;
   std::error_code ec;
   auto root = std::filesystem::weakly_canonical(out->root, ec);
   if (ec) return -err::eacces;

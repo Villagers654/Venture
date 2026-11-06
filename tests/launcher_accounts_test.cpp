@@ -18,9 +18,6 @@ struct Directory {
     }
   }
 };
-Session fixture(std::string id = "777777") {
-  return {"fixture-secret-" + id, id, "Fixture alias", {}, "test"};
-}
 } // namespace
 TEST_CASE("LaunchOtherApp stays bound to its originating account after account switching") {
   meta::AccountIndex idx;
@@ -35,6 +32,12 @@ TEST_CASE("LaunchOtherApp stays bound to its originating account after account s
 }
 
 #ifdef _WIN32
+namespace {
+Session fixture(std::string id = "777777") {
+  return {"fixture-secret-" + id, id, "Fixture alias", {}, "test"};
+}
+} // namespace
+
 TEST_CASE("downloads migrate to the primary and filter and cancel by account") {
   Directory d;
   meta::AccountVault vault(d.root);

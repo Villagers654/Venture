@@ -202,6 +202,13 @@ class CurlTransport final : public HttpTransport {
       if (e.shape == HttpShape::graph_query) fields.emplace_back("app_version", "0");
     }
     const bool retry = r.retry_reads && (e.read_only || e.method == HttpMethod::get);
+    // Backoff is per query: Meta can fail one GraphQL document for an account
+    // on every try (the whole-library query, HTTP 500 code 1) while it answers
+    // others, and the entitlement fallback must not wait out the failed
+    // query's backoff (4 s before the store listing was asked, at each launch).
+    std::string key = r.endpoint;
+    for (const auto& [name, value] : fields)
+      if (name == "doc_id") key += "#" + value;
     HttpResponse response;
     // Five attempts back off 0.25+0.5+1+2 s: a Quest app quits when its entitlement read
     // fails, and Meta's edge has dropped reads for ~2 s at a time (Batman, AC Nexus).
@@ -210,7 +217,7 @@ class CurlTransport final : public HttpTransport {
       Clock::time_point until;
       {
         std::lock_guard lock(mutex_);
-        until = backoff_[r.endpoint].until;
+        until = backoff_[key].until;
       }
       if (!pause_until(until, stop)) return {0, {}, failure(ErrorCode::cancelled)};
       response = perform(url, fields, r.bearer, e.method,
@@ -224,7 +231,7 @@ class CurlTransport final : public HttpTransport {
         break;
       {
         std::lock_guard lock(mutex_);
-        auto& b = backoff_[r.endpoint];
+        auto& b = backoff_[key];
         b.failures = std::min(b.failures + 1, 5u);
         b.until = Clock::now() + std::chrono::milliseconds(250 * (1u << (b.failures - 1)));
       }
@@ -232,7 +239,7 @@ class CurlTransport final : public HttpTransport {
     }
     if (!transient(response.status)) {
       std::lock_guard lock(mutex_);
-      backoff_.erase(r.endpoint);
+      backoff_.erase(key);
     }
     if (retry && attempt == 5u)
       log::warn("ovrplatform", "HTTP read endpoint={} failed after {} attempts status={}", r.endpoint,

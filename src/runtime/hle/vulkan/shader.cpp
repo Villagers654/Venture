@@ -1,6 +1,7 @@
 #include "common/environment.h"
 #include <algorithm>
 #include <cstdlib>
+#include <format>
 #include <limits>
 #include <iterator>
 #include <map>
@@ -11,6 +12,8 @@
 
 #include "internal.h"
 #include "common/log.h"
+#include "core/pipeline_stats.h"
+#include "core/wait.h"
 
 namespace venture::vulkan {
 // SPIR-V OpVariable without an initializer has undefined contents. Select zero
@@ -103,31 +106,32 @@ VkFormat storage_image_format(std::uint32_t spirv_format) {
   return spirv_format < std::size(formats) ? formats[spirv_format] : VK_FORMAT_UNDEFINED;
 }
 // Quest games mark shader math RelaxedPrecision (HLSL min16float, GLSL
-// mediump). The Quest 3's Adreno 740 evaluates it in fp16 in fragment and
-// compute shaders but at full precision in vertex, tessellation and geometry
-// shaders; NVIDIA 617.42 evaluates it in fp16 in every stage. In a vertex
-// shader that moves geometry: The Climb 2's min16float dual-quaternion
-// skinning lands vertices up to ~3 mm off, differently each frame, and the
-// hands' skin twitches while rigid attachments hold still. Fragment and
-// compute shaders keep the decoration, as on the Quest 3.
-std::vector<std::uint32_t> full_precision_vertex_stages(std::span<const std::uint32_t> code) {
+// mediump). The decoration only permits lower precision, so full precision is
+// always conformant, and the host GPU's fp16 differs from the Quest's:
+// - Vertex pipeline: the Quest 3's Adreno 740 evaluates it at full precision,
+//   NVIDIA 617.42 in fp16. The Climb 2's min16float dual-quaternion skinning
+//   lands vertices up to ~3 mm off, differently each frame, and the hands' skin
+//   twitches while rigid attachments hold still.
+// - Fragment: both GPUs use fp16, but not identically. On NVIDIA 621 Iron Man
+//   VR's distant ocean (Camouflaj water shader, Malibu evening overlook)
+//   renders black, which a Quest does not; at full precision it renders as on
+//   the Quest (issue 88).
+// Every stage therefore runs at full precision. Ampere and later NVIDIA GPUs
+// execute fp16 shader math at the fp32 rate, so little speed is given up.
+std::vector<std::uint32_t> full_precision_shaders(std::span<const std::uint32_t> code) {
   if (code.size() < 5 || code[0] != 0x07230203) return {};
   auto relaxed = [&](std::size_t i, std::uint32_t op, std::uint32_t n) {
     return (op == 71 && n == 3 && code[i + 2] == 0) ||  // OpDecorate %id RelaxedPrecision
            (op == 72 && n == 4 && code[i + 3] == 0);    // OpMemberDecorate %type member RelaxedPrecision
   };
-  bool entry = false, decorated = false;
+  bool decorated = false;
   for (std::size_t i = 5; i < code.size();) {
     const std::uint32_t op = code[i] & 0xffff, n = code[i] >> 16;
     if (!n || i + n > code.size()) return {};
-    if (op == 15 && n >= 2) {  // OpEntryPoint ExecutionModel
-      if (code[i + 1] > 3) return {};  // only Vertex, TessellationControl/Evaluation, Geometry
-      entry = true;
-    }
     decorated = decorated || relaxed(i, op, n);
     i += n;
   }
-  if (!entry || !decorated) return {};
+  if (!decorated) return {};
   std::vector<std::uint32_t> out(code.begin(), code.begin() + 5);
   out.reserve(code.size());
   for (std::size_t i = 5; i < code.size();) {
@@ -218,6 +222,24 @@ VkResult VKAPI_CALL create_shader(VkDevice d,
     next = reinterpret_cast<PFN_vkCreateShaderModule>(
         raw_device_proc(d, "vkCreateShaderModule"));
   if (!info->pCode || info->codeSize % 4) return next(d, info, allocator, out);
+  // The module's handle and a hash of the guest's code let a trace count
+  // the distinct shaders behind the pipelines that use them.
+  struct Traced {
+    const VkShaderModuleCreateInfo* info;
+    VkShaderModule* out;
+    std::int64_t start = venture::profile::compile_trace_enabled() ? venture::monotonic_ns() : 0;
+    ~Traced() {
+      if (!start) return;
+      const auto wall = static_cast<std::uint64_t>(venture::monotonic_ns() - start);
+      std::uint64_t hash = 14695981039346656037ull;
+      const auto* bytes = reinterpret_cast<const unsigned char*>(info->pCode);
+      for (std::size_t i = 0; i < info->codeSize; ++i) hash = (hash ^ bytes[i]) * 1099511628211ull;
+      try {
+        venture::profile::trace_compile("vk_shader_module", start, wall, 1, 0,
+            std::format("\"module\":{},\"hash\":{}", out ? reinterpret_cast<std::uint64_t>(*out) : 0, hash));
+      } catch (...) {}
+    }
+  } traced{info, out};
   auto disabled = venture::environment::getenv("VENTURE_VULKAN_ZERO_INIT_LOCALS");
   const bool zero_init = !disabled || std::string_view(disabled) != "0";
   try {
@@ -227,7 +249,7 @@ VkResult VKAPI_CALL create_shader(VkDevice d,
       code = initialize_shader_locals(input);
       if (!code.empty()) input = code;
     }
-    if (auto full = full_precision_vertex_stages(input); !full.empty()) {
+    if (auto full = full_precision_shaders(input); !full.empty()) {
       code = std::move(full);
       input = code;
     }

@@ -372,7 +372,8 @@ void A64EmitX64::GenFastmemFallbacks() {
 
 void A64EmitX64::FoldMemoryAddresses(A64EmitContext& ctx) const {
     // Identity fastmem (register cache) addresses memory with the guest address
-    // itself, so an immediate offset can be the memory operand's displacement.
+    // itself, so an immediate offset can be the memory operand's displacement and
+    // a register offset its index.
     // Ordered accesses test the full address for alignment and keep the add.
     if (!conf.HasOptimization(OptimizationFlag::AddressFolding) || !conf.enable_register_cache) {
         return;
@@ -403,10 +404,33 @@ void A64EmitX64::FoldMemoryAddresses(A64EmitContext& ctx) const {
         }
         IR::Inst* const add = address.GetInst();
         if (add->GetOpcode() != IR::Opcode::Add64 || add->UseCount() != 1 || add->GetArg(0).IsImmediate() ||
-            !add->GetArg(1).IsImmediate() || !add->GetArg(2).IsImmediate() || add->GetArg(2).GetU1() ||
+            !add->GetArg(2).IsImmediate() || add->GetArg(2).GetU1() ||
             add->GetAssociatedPseudoOperation(IR::Opcode::GetCarryFromOp) ||
             add->GetAssociatedPseudoOperation(IR::Opcode::GetOverflowFromOp) ||
             add->GetAssociatedPseudoOperation(IR::Opcode::GetNZCVFromOp)) {
+            continue;
+        }
+        if (!add->GetArg(1).IsImmediate()) {
+            // A single-use left shift by 1-3 of either operand is the scaled index.
+            size_t index_arg = 1;
+            u8 shift = 0;
+            for (const size_t k : {size_t(1), size_t(0)}) {
+                if (add->GetArg(k).IsImmediate())
+                    continue;
+                IR::Inst* const lsl = add->GetArg(k).GetInst();
+                if (lsl->GetOpcode() == IR::Opcode::LogicalShiftLeft64 && lsl->UseCount() == 1 &&
+                    lsl->GetArg(1).IsImmediate() && lsl->GetArg(1).GetU8() >= 1 && lsl->GetArg(1).GetU8() <= 3 &&
+                    !lsl->GetAssociatedPseudoOperation(IR::Opcode::GetCarryFromOp)) {
+                    index_arg = k;
+                    shift = lsl->GetArg(1).GetU8();
+                    break;
+                }
+            }
+            if (add->GetArg(1).GetInst() == add->GetArg(0).GetInst())
+                continue;
+            ctx.indexed_addresses.push_back({add, &inst, index_arg, shift});
+            if (shift)
+                ctx.scaled_indices.push_back(add->GetArg(index_arg).GetInst());
             continue;
         }
         // The fault path also applies -displacement, so exclude INT32_MIN.
@@ -790,7 +814,7 @@ void A64EmitX64::EmitAtomicMemory(A64EmitContext& ctx, IR::Inst* inst) {
             code.L(*abort);
             code.call(stub);
             for (const void* site : sites) {
-                fastmem_patch_info.emplace(
+                EmplaceFastmemPatch(
                     std::bit_cast<u64>(site),
                     FastmemPatchInfo{
                         std::bit_cast<u64>(code.getCurr()),
@@ -900,6 +924,7 @@ void A64EmitX64::RecordColdState(A64EmitContext& ctx, IR::Inst* inst) {
     } else {
         store.location = ctx.reg_alloc.ArgumentLocation(value);
         ASSERT(store.location);
+        store.remat = ctx.reg_alloc.SpillRematerialization(*store.location);
     }
     ctx.cold_state[inst->GetArg(0).GetInst()].push_back(store);
 }
@@ -966,6 +991,16 @@ void A64EmitX64::EmitColdStateStores(A64EmitContext& ctx, IR::Inst* access) {
                 continue;
             }
             const auto at = state(store);
+            if (store.remat) {
+                // Venture: never stored; its JitState slot, which no exit path writes, holds it.
+                ASSERT(store.opcode == Op::A64ColdSetX || store.opcode == Op::A64ColdSetSP || store.opcode == Op::A64ColdSetW);
+                if (store.remat->word || store.opcode == Op::A64ColdSetW)
+                    code.mov(eax, dword[code.ABI_JIT_PTR + store.remat->offset]);  // a W write zero-extends
+                else
+                    code.mov(rax, qword[code.ABI_JIT_PTR + store.remat->offset]);
+                code.mov(qword[at], rax);
+                continue;
+            }
             switch (store.opcode) {
             case Op::A64ColdSetX:
             case Op::A64ColdSetSP:

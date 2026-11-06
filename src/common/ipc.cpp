@@ -22,6 +22,9 @@ std::shared_ptr<PipeChannel> PipeChannel::inherited(std::uintptr_t read,
   return std::shared_ptr<PipeChannel>(new PipeChannel(read, write));
 }
 void PipeChannel::send(const Json &value) {
+  // A closed channel's handles are 0, which on POSIX is stdin: never use it.
+  if (!write_.load())
+    throw std::runtime_error("Credential channel is closed.");
   auto bytes = value.dump();
   if (bytes.empty() || bytes.size() > 1024 * 1024)
     throw std::runtime_error("Credential channel message exceeds its limit.");
@@ -32,6 +35,8 @@ void PipeChannel::send(const Json &value) {
   platform::write_pipe(write_.load(), bytes.data(), bytes.size());
 }
 Json PipeChannel::receive() {
+  if (!read_.load())
+    throw std::runtime_error("Credential channel is closed.");
   std::array<unsigned char, 4> length{};
   platform::read_pipe(read_.load(), length.data(), length.size());
   std::uint32_t size = 0;

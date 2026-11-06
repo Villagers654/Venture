@@ -79,7 +79,16 @@ These are the only adaptations:
    flags otherwise produces illegal final+abstract combinations in Bait/Gorilla.
    Nesting visibility and staticness remain in InnerClasses; JVM-inapplicable
    header flags are removed as required by JVMS 4.1/4.7.6.
-5. ASM computes StackMapTable frames from real app/framework/JDK class metadata.
+5. ART lets `invoke-direct` initialize a new-instance of C with a constructor of any
+   superclass S; R8 uses this when it inlines (and removes) a constructor of C that only
+   forwards to `super(...)`. The JVM requires C's own `<init>`, and dex2jar silently
+   allocates S instead (UnityPlayer) or fails verification ("Call to wrong <init> method",
+   Open Brush). `ConvertSuperInit` finds these calls with a register dataflow over all DEX
+   files before translation and retargets each one to a public synthetic constructor of C
+   (and of any class between C and S) that only calls `S.<init>`, which is what ART ran.
+   A descriptor already declared by C gets the first argument once more. Calls whose
+   receiver is unknown or whose chain leaves the APK are logged and left unchanged.
+6. ASM computes StackMapTable frames from real app/framework/JDK class metadata.
    dex2jar 2.4 emits Java 8 class versions for DEX >= 037 without those frames.
    Class versions are not downgraded, and unresolved Android ancestry fails the
    gate. If framing a class fails, its unframed diagnostic output is retained

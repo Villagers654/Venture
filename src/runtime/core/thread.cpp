@@ -30,6 +30,7 @@
 #include "core/wait.h"
 #include "cpu/state.h"
 #include "cpu/block_list.h"
+#include "cpu/pretranslate.h"
 #include "core/guest_call32.h"
 #include "common/log.h"
 #include "common/environment.h"
@@ -254,7 +255,6 @@ GuestCallResult GuestThread::call32(GuestAddr fn, const GuestCallArgs& args) {
   if (os_quit::requested()) throw ProcessExit(0);
   if (current_thread != this || !cpu_) throw std::runtime_error("guest call on wrong host thread");
   if (!fn) throw std::runtime_error("null guest call");
-  if (!call_depth_ && JitBlockList::enabled()) cpu_->prepare_call(fn);
   CpuState32 saved(*cpu_);
   ++call_depth_;
   try {
@@ -283,7 +283,6 @@ GuestCallResult GuestThread::call64(GuestAddr fn, const GuestCallArgs& args) {
   if (os_quit::requested()) throw ProcessExit(0);
   if (current_thread != this || !cpu_) throw std::runtime_error("guest call on wrong host thread");
   if (!fn) throw std::runtime_error("null guest call");
-  if (!call_depth_ && JitBlockList::enabled()) cpu_->prepare_call(fn);
   CpuState saved(*cpu_);
   ++call_depth_;
   try {
@@ -614,6 +613,14 @@ void interrupt_guest_process_after_grace() {
   record_guest_process_failure(124);
   exit_guest_process(guest_process_exit_status());
 }
+[[noreturn]] void end_app_after_main_thread_failure(std::string_view reason) {
+  // Kaiju Battle Simulator's engine thread waited for an answer to a dialog the
+  // dead main thread never delivered, and the drain of guest threads waited on
+  // it forever.
+  log::error("runtime", "{}", reason);
+  record_guest_process_failure(1);
+  exit_guest_process(1);
+}
 namespace { void (*exit_capture_flush)() = nullptr; }
 void set_guest_exit_capture_flush(void (*flush)()) { exit_capture_flush = flush; }
 void flush_guest_process_files(int status) {
@@ -628,6 +635,7 @@ void flush_guest_process_files(int status) {
   api_result_trace::flush();
   pc_trace::flush();
   xr_call_trace::flush();
+  pretranslate::stop();
   profile::stop();
   if (profile::invalidation_tracing) profile::report_invalidation_at_exit();
   platform::notify_runtime_exit_wait(platform::RuntimeExitWait::audio_capture_flush, status);
@@ -733,7 +741,9 @@ int set_name(GuestAddr handle, const char* name) {
   if (std::char_traits<char>::length(name) > 15) return -err::kERANGE;
   RegistryLock lock(registry_mutex);
   for (auto& [thread, r] : resources) if (handle && thread->pthread_self == handle) {
-    r.name = name; frame_cpu::name(thread->tid(), name); profile::set_thread_name(thread->tid(), name); return 0;
+    r.name = name; frame_cpu::name(thread->tid(), name); profile::set_thread_name(thread->tid(), name);
+    if (thread == current_thread && thread->has_cpu()) thread->cpu().set_thread_name(name); // Owner only.
+    return 0;
   }
   return -err::kESRCH;
 }

@@ -98,10 +98,10 @@ class Callbacks final : public Dynarmic::A64::UserCallbacks, public Dynarmic::A3
   }
   std::optional<std::uint32_t> MemoryReadCode(std::uint64_t pc) override { return Fetch(pc); }
   std::optional<std::uint32_t> MemoryReadCode(std::uint32_t pc) override { return Fetch(pc); }
-  std::uint64_t MemoryRead(std::uint64_t p, std::size_t n) override { throw std::runtime_error("unexpected data read"); }
-  std::uint64_t MemoryRead(std::uint32_t p, std::size_t n) override { throw std::runtime_error("unexpected data read"); }
-  void MemoryWrite(std::uint64_t p, std::uint64_t v, std::size_t n) override { throw std::runtime_error("unexpected data write"); }
-  void MemoryWrite(std::uint32_t p, std::uint64_t v, std::size_t n) override { throw std::runtime_error("unexpected data write"); }
+  std::uint64_t MemoryRead(std::uint64_t, std::size_t) override { throw std::runtime_error("unexpected data read"); }
+  std::uint64_t MemoryRead(std::uint32_t, std::size_t) override { throw std::runtime_error("unexpected data read"); }
+  void MemoryWrite(std::uint64_t, std::uint64_t, std::size_t) override { throw std::runtime_error("unexpected data write"); }
+  void MemoryWrite(std::uint32_t, std::uint64_t, std::size_t) override { throw std::runtime_error("unexpected data write"); }
   Dynarmic::A64::Vector MemoryRead128(std::uint64_t) override { throw std::runtime_error("unexpected read128"); }
   void MemoryWrite128(std::uint64_t, Dynarmic::A64::Vector) override { throw std::runtime_error("unexpected write128"); }
   std::uint64_t MemoryAtomic(std::uint64_t, std::size_t, Dynarmic::A64::AtomicOp, std::uint64_t, std::uint64_t) override { throw std::runtime_error("unexpected atomic"); }

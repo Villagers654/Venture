@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "tools/dex"))
 from convert_apk import build_tools, java_path, java_tool
 
-framework = sys.argv[1]
+framework, bridge = sys.argv[1], sys.argv[2]
 with tempfile.TemporaryDirectory(prefix="venture-files-rewrite-") as directory:
     work = Path(directory)
     original = work / "classes"
@@ -27,5 +27,11 @@ with tempfile.TemporaryDirectory(prefix="venture-files-rewrite-") as directory:
                     str(rewritten), str(work / "census.tsv"), framework], check=True)
     missing = [line.split("\t") for line in (work / "census.tsv").read_text().splitlines() if line.startswith("M\t")]
     assert missing == [["M", "MemberCaller", "android/widget/Button.ventureAbsentMember()V", "java.lang.NoSuchMethodError"]], missing
+    direct = [line for line in (work / "census.tsv").read_text().splitlines()
+              if line.startswith("R\tVirtualFilesFixture\t") and "ByteBuffer.allocateDirect" in line]
+    assert len(direct) == 2, direct
+    arrays = [line for line in (work / "census.tsv").read_text().splitlines()
+              if line.startswith("R\tVirtualFilesFixture\t") and "direct buffer contents" in line]
+    assert len(arrays) == 4, arrays
     subprocess.run([java_tool("java"), "-Xverify:all", "-Djava.io.tmpdir=" + str(snapshots),
-                    "-cp", os.pathsep.join([framework, str(rewritten)]), "VirtualFilesFixture", str(work)], check=True)
+                    "-cp", os.pathsep.join([framework, bridge, str(rewritten)]), "VirtualFilesFixture", str(work)], check=True)

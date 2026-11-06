@@ -75,6 +75,27 @@ bool native_fill(GuestAddr d, int v, std::size_t n, NativeMemoryFault& f) {
 bool native_compare(GuestAddr a, GuestAddr b, std::size_t n, int& result, NativeMemoryFault& f) {
   return native_fixed<NativeMemoryOp::compare>(a, b, n, 0, &result, f);
 }
+std::string first_mapping(GuestAddr address, std::uint64_t size) {
+  for (GuestAddr p = address; p < address + size;) {
+    MEMORY_BASIC_INFORMATION m{};
+    if (!VirtualQuery(g2h(p), &m, sizeof(m))) return "unqueryable";
+    if (m.State != MEM_FREE) {
+      wchar_t name[MAX_PATH]{};
+      std::string file;
+      if (m.Type != MEM_PRIVATE && GetMappedFileNameW(GetCurrentProcess(), m.BaseAddress, name, MAX_PATH)) {
+        for (const wchar_t* c = name; *c; ++c) file += *c < 128 ? char(*c) : '?';
+      }
+      char text[160];
+      std::snprintf(text, sizeof(text), "%s %s at %#llx (allocation %#llx), %#llx bytes",
+                    m.Type == MEM_IMAGE ? "image" : m.Type == MEM_MAPPED ? "mapped" : "private",
+                    m.State == MEM_COMMIT ? "committed" : "reserved", static_cast<unsigned long long>(h2g(m.BaseAddress)),
+                    static_cast<unsigned long long>(h2g(m.AllocationBase)), static_cast<unsigned long long>(m.RegionSize));
+      return file.empty() ? text : std::string(text) + " " + file;
+    }
+    p = h2g(m.BaseAddress) + m.RegionSize;
+  }
+  return {};
+}
 std::optional<std::uint64_t> committed_bytes(GuestAddr address, std::uint64_t size) {
   if (address + size < address) return std::nullopt;
   const auto end = address + size;
@@ -102,6 +123,47 @@ bool process_resident_memory(ProcessResidentMemory& out) {
   counters.cb = sizeof(counters);
   if (!K32GetProcessMemoryInfo(GetCurrentProcess(), &counters, sizeof(counters))) return false;
   out = {counters.WorkingSetSize / 1024, counters.PeakWorkingSetSize / 1024};
+  return true;
+}
+bool memory_headroom(MemoryHeadroom& out) {
+  // ullAvailPageFile: the system's remaining commit; ullTotalPageFile: its limit.
+  MEMORYSTATUSEX status{};
+  status.dwLength = sizeof(status);
+  if (!GlobalMemoryStatusEx(&status) || !status.ullTotalPageFile) return false;
+  MemoryHeadroom result{status.ullAvailPageFile, status.ullTotalPageFile};
+  // GlobalMemoryStatusEx does not see a job's commit limit: a job-wide limit
+  // (the harness's --commit-cap) or a per-process one fails allocations first.
+  JOBOBJECT_EXTENDED_LIMIT_INFORMATION job{};
+  if (QueryInformationJobObject(nullptr, JobObjectExtendedLimitInformation, &job, sizeof(job), nullptr)) {
+    const auto tighter = [&](std::uint64_t limit, std::uint64_t used) {
+      const auto left = limit > used ? limit - used : 0;
+      if (left < result.available || (left == result.available && limit < result.limit)) result = {left, limit};
+    };
+    const auto flags = job.BasicLimitInformation.LimitFlags;
+    JOBOBJECT_LIMIT_VIOLATION_INFORMATION usage{};
+    if ((flags & JOB_OBJECT_LIMIT_JOB_MEMORY) &&
+        QueryInformationJobObject(nullptr, JobObjectLimitViolationInformation, &usage, sizeof(usage), nullptr))
+      tighter(job.JobMemoryLimit, usage.JobMemory);
+    PROCESS_MEMORY_COUNTERS_EX counters{};
+    counters.cb = sizeof(counters);
+    if ((flags & JOB_OBJECT_LIMIT_PROCESS_MEMORY) &&
+        K32GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&counters), sizeof(counters)))
+      tighter(job.ProcessMemoryLimit, counters.PrivateUsage);
+  }
+  out = result;
+  return true;
+}
+bool commit_charge(CommitCharge& out) {
+  PERFORMANCE_INFORMATION system{};
+  system.cb = sizeof(system);
+  PROCESS_MEMORY_COUNTERS_EX counters{};
+  counters.cb = sizeof(counters);
+  if (!K32GetPerformanceInfo(&system, sizeof(system)) ||
+      !K32GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&counters),
+                               sizeof(counters)))
+    return false;
+  out = {std::uint64_t(system.CommitTotal) * system.PageSize, std::uint64_t(system.CommitLimit) * system.PageSize,
+         counters.PrivateUsage, true};
   return true;
 }
 bool process_memory(ProcessMemory& out) {

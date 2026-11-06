@@ -19,6 +19,7 @@
 #include "dynarmic/backend/block_range_information.h"
 #include "dynarmic/backend/x64/a64_jitstate.h"
 #include "dynarmic/backend/x64/emit_x64.h"
+#include "dynarmic/backend/x64/portable_block.h"
 #include "dynarmic/backend/x64/reg_alloc.h"
 #include "dynarmic/frontend/A64/a64_location_descriptor.h"
 #include "dynarmic/interface/A64/a64.h"
@@ -47,6 +48,8 @@ struct A64EmitContext final : public EmitContext {
         size_t index;
         std::optional<HostLoc> location;  // nullopt: immediate
         u64 immediate;
+        // Venture: a spilled value that was never stored is read from JitState here.
+        std::optional<NextUseTable::Remat> remat = std::nullopt;
     };
     ::Common::unordered_map<const IR::Inst*, boost::container::small_vector<ColdStateStore, 4>> cold_state;
     bool emitting_deferred = false;
@@ -75,6 +78,14 @@ public:
     size_t profile_prefix_size = 0;
 
     void InvalidateCacheRanges(const boost::icl::interval_set<u64>& ranges);
+
+    // Venture: portable blocks (portable_block.h)
+    bool PortableBlocksEnabled() const { return portable_enabled; }
+    void ReserveBlocks(size_t count);
+    /// Installs a portable block captured by a compatible JIT; nullopt when it
+    /// cannot be installed here (the caller compiles instead).
+    std::optional<BlockDescriptor> InstallPortableBlock(const PortableBlock& block);
+    void HashGuestCode(PortableCodeHash& hash, u64 begin, u64 end);
 
 //protected:
     struct FastDispatchEntry {
@@ -139,13 +150,14 @@ public:
     };
     std::optional<DoNotFastmemMarker> ShouldFastmem(A64EmitContext& ctx, IR::Inst* inst) const;
     void EmitFastmemFallback(A64EmitContext& ctx, IR::Inst* inst, Xbyak::Label& abort, Xbyak::Label& end, Xbyak::Reg64 vaddr,
-                             std::optional<s32> folded, void (*wrapped_fn)(), const void* location, DoNotFastmemMarker marker);
+                             std::optional<s32> folded, std::optional<FoldedIndex> index, void (*wrapped_fn)(), const void* location, DoNotFastmemMarker marker);
     void FoldMemoryAddresses(A64EmitContext& ctx) const;
     void FoldScaledIndices(A64EmitContext& ctx) const;
     FakeCall FastmemCallback(u64 rip);
 
     // nzcv_exit_liveness
-    std::optional<u64> NZCVOverwriteEnd(u64 pc) const;
+    void MarkRematerializableGets(IR::Block& block);
+    bool NZCVDeadAt(u64 pc, size_t& budget, size_t depth, std::vector<boost::icl::discrete_interval<u64>>& ranges) const;
     IR::Inst* PrepareHostFlagsExit(A64EmitContext& ctx);
     void EmitExitNZCV();
 
@@ -219,9 +231,18 @@ public:
     std::optional<FastDispatchTable> dispatch_sites;
     size_t next_dispatch_site = 0;
     ::Common::unordered_map<u64, FastmemPatchInfo> fastmem_patch_info;
+    void EmplaceFastmemPatch(u64 location, const FastmemPatchInfo& info) {
+        fastmem_patch_info.emplace(location, info);
+        if (active_capture)
+            RecordFastmemSite(location, info.resume_rip, info.callback, info.marker, info.recompile);
+    }
     ::Common::unordered_map<std::tuple<bool, size_t, int, int>, void (*)()> read_fallbacks;
     ::Common::unordered_map<std::tuple<bool, size_t, int, int>, void (*)()> write_fallbacks;
     ::Common::unordered_map<std::tuple<bool, size_t, int, int>, void (*)()> exclusive_write_fallbacks;
+    // Venture: fallback entry addresses -> packed (kind, key), sorted, for ClassifyAddress;
+    // rebuilt when the maps (which only grow) change size.
+    std::vector<std::pair<u64, u64>> fallback_index;
+    size_t fallback_index_entries = 0;
     ::Common::unordered_set<DoNotFastmemMarker> do_not_fastmem;
     boost::container::stable_vector<Xbyak::Label> shared_labels;
     const void* terminal_handler_pop_rsb_hint = nullptr;
@@ -235,6 +256,22 @@ public:
     void (*memory_read_128)() = nullptr;
     void (*memory_write_128)() = nullptr;
     void (*memory_exclusive_write_128)() = nullptr;
+
+    // Venture: portable blocks
+    bool portable_enabled = false;
+    PortableCapture capture;
+    std::array<const void*, size_t(PortableSymbol::Count)> portable_symbols{};
+    std::array<u64, size_t(PortableObject::Count)> portable_objects{};
+    ::Common::unordered_map<u64, IR::LocationDescriptor> unlinked_exits;
+    // InstallPortableBlock scratch, kept to avoid allocating per block.
+    std::vector<u64> install_modules, install_svc;
+    std::vector<std::pair<u64, u64>> install_slots;
+    void InitPortableBlocks();
+    void BeginCapture();
+    void FinishCapture(const IR::LocationDescriptor& descriptor, CodePtr entrypoint, size_t size, size_t cold_begin, size_t cold_end,
+                       const std::vector<std::pair<u64, u64>>& ranges);
+    std::optional<PortableRef> ClassifyAddress(u64 address, size_t hot_begin, size_t hot_end, size_t cold_begin, size_t cold_end,
+                                               PortableBlock& block);
 };
 
 }  // namespace Dynarmic::Backend::X64

@@ -268,6 +268,8 @@ public class Activity extends ContextWrapper implements KeyEvent.Callback, Windo
     return false;
   }
   public void requestPermissions(String[] permissions, int request) {
+    // The Quest permission dialog's answer, before the results are read back.
+    com.venture.runtime.RuntimePermissions.request(getPackageName(), permissions);
     int[] results =
         java.util.Arrays.stream(permissions).mapToInt(this::checkSelfPermission).toArray();
     new Handler(getMainLooper())

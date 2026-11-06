@@ -6,6 +6,7 @@
 #include "fake_cpu32.h"
 #include "hle/opensles/abi.h"
 #include "hle/opensles/opensles.h"
+#include "hle/ovrplatform/microphone.h"
 #include "hle/aaudio/aaudio.h"
 #include "hle/vrapi/abi32.h"
 #include "hle/vrapi/integration.h"
@@ -351,7 +352,7 @@ TEST_CASE(
                     },
                     [](GuestAddr p) { AddressSpace::get().free(p); }};
   op::Session session(op::test::app(), provider, memory);
-  auto lib = op::make_library(session);
+  auto lib = op::make_library(session, op::microphone_exports());
   Calls c;
   auto app = op::test::app().app_id;
   std::memcpy(c.memory.at<void>(64), app.c_str(), app.size() + 1);
@@ -395,6 +396,42 @@ TEST_CASE(
   CHECK(c.call("libovrplatformloader.so", "ovr_User_GetID",
                CallBuilder32{}.value(user)) == 0);
   c.words("libovrplatformloader.so", "ovr_Log_NewEvent", {0, 0, 0});
+  // Platform SDK microphone (issue 89): 32-bit entry points resolve to adapters
+  // and record the default input instead of the guest loader's unloaded platform.
+  for (const auto& e : op::microphone_exports())
+    CHECK_MESSAGE(adapted("libovrplatformloader.so", e.name), e.name);
+  (void)audio::Backend::get().use_null_device();  // paced silence; no-op if already chosen
+  auto mic = c.words("libovrplatformloader.so", "ovr_Microphone_Create");
+  REQUIRE(mic);
+  CHECK(c.words("libovrplatformloader.so", "ovr_Microphone_GetOutputBufferMaxSize", {mic}) == 24000);
+  test::LowMemory32 mic_code(false, true);
+  // ARM: ldr r1,[r0]; add r1,r1,#1; str r1,[r0]; bx lr (counts calls in *user).
+  const std::uint32_t mic_callback[]{0xe5901000, 0xe2811001, 0xe5801000, 0xe12fff1e};
+  std::memcpy(mic_code.at<void>(), mic_callback, sizeof(mic_callback));
+  auto mic_calls = c.put(1024, 0u);
+  c.words("libovrplatformloader.so", "ovr_Microphone_SetAudioDataAvailableCallback",
+          {mic, mic_code.address, mic_calls});
+  c.words("libovrplatformloader.so", "ovr_Microphone_SetAcceptableRecordingDelayHint", {mic, 20});
+  c.words("libovrplatformloader.so", "ovr_Microphone_Start", {mic});
+  auto mic_end = std::chrono::steady_clock::now() + venture::test::hang_timeout;
+  while (c.words("libovrplatformloader.so", "ovr_Microphone_GetNumSamplesAvailable", {mic}) < 480 &&
+         std::chrono::steady_clock::now() < mic_end)
+    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+  std::fill_n(c.memory.at<float>(2048), 480, 9.0f);
+  CHECK(c.words("libovrplatformloader.so", "ovr_Microphone_GetPCMFloat", {mic, c.memory.address + 2048, 480}) == 480);
+  CHECK(*c.memory.at<float>(2048 + 4 * 479) == 0.0f);  // the null device records silence
+  while (c.words("libovrplatformloader.so", "ovr_Microphone_GetNumSamplesAvailable", {mic}) < 240 &&
+         std::chrono::steady_clock::now() < mic_end)
+    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+  std::fill_n(c.memory.at<std::int16_t>(4096), 240, std::int16_t(77));
+  CHECK(c.words("libovrplatformloader.so", "ovr_Microphone_GetPCM", {mic, c.memory.address + 4096, 240}) == 240);
+  CHECK(*c.memory.at<std::int16_t>(4096 + 2 * 239) == 0);
+  while (*g2h<std::uint32_t>(mic_calls) == 0 && std::chrono::steady_clock::now() < mic_end)
+    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+  c.words("libovrplatformloader.so", "ovr_Microphone_Stop", {mic});
+  c.words("libovrplatformloader.so", "ovr_Microphone_Destroy", {mic});  // joins the callback worker
+  CHECK(*g2h<std::uint32_t>(mic_calls) >= 1);
+  CHECK(c.words("libovrplatformloader.so", "ovr_Microphone_ReadData", {mic, c.memory.address + 2048, 480}) == 0);
   const char id_text[] = "18364758544493064720"; // fedcba9876543210
   auto string = c.put(256, id_text);
   auto output = c.put(320, std::uint64_t(0));

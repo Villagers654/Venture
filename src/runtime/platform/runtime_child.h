@@ -35,6 +35,9 @@ struct RuntimeChildResult {
   // platform supervisor knows whether it actually stopped the worker.
   bool supervisor_stopped = false;
   bool os_termination = false;
+  // The worker's process id, for the reports it leaves behind (HotSpot's
+  // fatal error report is named after it).
+  unsigned long worker_pid = 0;
   // Only a successful explicit restart continues the supervisor. A stop or
   // elapsed run bound must never turn a child crash/quit timeout into success.
   std::optional<int> completion_status(bool stopping) const {

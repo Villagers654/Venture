@@ -81,6 +81,54 @@ public class MediaFlow {
     finally {if(codec!=null)codec.release();surface.release();second.release();texture.release();replacement.release();callbackThread.quitSafely();try{callbackThread.join(1000);}catch(InterruptedException e){Thread.currentThread().interrupt();}}
   }
   // Unreal's MediaPlayer14 reads tracks through the Java MediaExtractor and
+  // A decoder without a Surface serves each output buffer as a YUV_420_888 Image
+  // (CRIWARE Mana reads its movie frames this way), invalid once released.
+  public static String image(byte[] config, byte[][] packets, long[] times) {
+    android.media.MediaCodec codec=null;
+    try {
+      codec=android.media.MediaCodec.createDecoderByType("video/avc");
+      var format=android.media.MediaFormat.createVideoFormat("video/avc",128,72);
+      format.setInteger("color-format",android.media.MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible);
+      format.setByteBuffer("csd-0",java.nio.ByteBuffer.wrap(config));codec.configure(format,null,null,0);codec.start();
+      if(codec.getInputImage(0)!=null)return "input image";
+      var info=new android.media.MediaCodec.BufferInfo();int input=0,frames=0,low=255,high=0;boolean queuedEos=false,eos=false;
+      long deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(5);
+      while(!eos && System.nanoTime()<deadline) {
+        int index=queuedEos?-1:codec.dequeueInputBuffer(1000);
+        if(index>=0) {
+          var buffer=codec.getInputBuffer(index);buffer.clear();
+          if(input<packets.length){buffer.put(packets[input]);codec.queueInputBuffer(index,0,packets[input].length,times[input],0);input++;}
+          else {codec.queueInputBuffer(index,0,0,1000000,4);queuedEos=true;}
+        }
+        index=codec.dequeueOutputBuffer(info,1000);
+        if(index<0)continue;
+        eos=(info.flags&4)!=0;
+        if(!eos) {
+          frames++;
+          var image=codec.getOutputImage(index);
+          if(image==null)return "no output image";
+          if(image.getFormat()!=android.graphics.ImageFormat.YUV_420_888 || image.getWidth()!=128 || image.getHeight()!=72)return "image format";
+          if(image.getTimestamp()!=info.presentationTimeUs*1000)return "image timestamp";
+          var crop=image.getCropRect();if(crop.left!=0 || crop.top!=0 || crop.right!=128 || crop.bottom!=72)return "image crop";
+          var planes=image.getPlanes();if(planes.length!=3)return "plane count";
+          int[] rows={128,64,64},sizes={128*72,64*36,64*36};
+          for(int p=0;p<3;++p)
+            if(planes[p].getPixelStride()!=1 || planes[p].getRowStride()!=rows[p] || planes[p].getBuffer().remaining()!=sizes[p])return "plane "+p;
+          var luma=planes[0].getBuffer();
+          for(int n=0;n<luma.remaining();++n){int value=luma.get(n)&0xff;low=Math.min(low,value);high=Math.max(high,value);}
+          codec.releaseOutputBuffer(index,false);
+          try{image.getPlanes();return "image valid after release";}catch(IllegalStateException expected){}
+        } else codec.releaseOutputBuffer(index,false);
+      }
+      if(!eos || frames!=12)return "image EOS/frame count";
+      // The Y plane is the decoder's own luma (NV12 output, as on Quest), so values
+      // outside 16..235 in the stream reach it unchanged; require a real picture.
+      if(high-low<32)return "luma range "+low+".."+high;
+      codec.stop();codec.release();codec=null;
+      return null;
+    } catch(Throwable e){return "image codec: "+e;}
+    finally {if(codec!=null)codec.release();}
+  }
   // finds its video track only through MediaPlayer.getTrackInfo().
   public static String video(String fixture) {
     var extractor=new android.media.MediaExtractor();var player=new MediaPlayer();

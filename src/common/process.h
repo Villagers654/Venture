@@ -54,4 +54,10 @@ void open_url(const std::string &url);
 // AppImage); throws if it could not be started.
 void start_detached(const fs::path &executable, const std::vector<std::string> &args);
 std::string tail_log(const fs::path &file, size_t limit = 16 * 1024);
+// The cause HotSpot records in its fatal error report (-XX:ErrorFile), in the
+// words Venture's own crash reporter uses: "Host exception 0xc0000005 at
+// vulkan-1.dll+0x486d0 (Java thread UnityMain)" for a native crash on a Java
+// thread, "Java runtime fatal error: <reason>" otherwise; empty when `report`
+// is not one.
+std::string hotspot_fatal_summary(std::string_view report);
 } // namespace venture

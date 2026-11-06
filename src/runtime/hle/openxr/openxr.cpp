@@ -5,6 +5,8 @@
 #include "xr/menu_chord.h"
 #include "xr/clock.h"
 #include "xr/reference_spaces.h"
+#include "xr/display_override.h"
+#include "xr/desktop_mirror.h"
 #include "common/first_frame_progress.h"
 #include "common/log.h"
 #include "core/engine_policy.h"
@@ -15,17 +17,20 @@
 #include "hle/openxr/state.h"
 #include "xr/presentation.h"
 #include "hle/openxr/passthrough.h"
+#include "hle/openxr/sphere_layers.h"
 #include "hle/vulkan/vulkan.h"
 #include "hle/vulkan/timing.h"
 #include "platform/thread_priority.h"
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <cstring>
 #include <deque>
 #include <format>
 #include <map>
 #include <mutex>
 #include <numbers>
+#include <optional>
 
 namespace venture::hle::openxr {
 namespace {
@@ -299,6 +304,10 @@ class OwnedFrameEnd {
       }
       return out;
     }();
+    // Host-only layer (passthrough.cpp), outside the guest registry tables.
+    static const Layout passthrough_htc{sizeof(XrCompositionLayerPassthroughHTC),
+        {Pointer{offsetof(XrCompositionLayerPassthroughHTC, next), 0, true}}};
+    if (type == XR_TYPE_COMPOSITION_LAYER_PASSTHROUGH_HTC) return &passthrough_htc;
     auto it = table.find(type);
     return it == table.end() ? nullptr : &it->second;
   }
@@ -509,6 +518,19 @@ XrResult xrGetSystem(XrInstance instance, const XrSystemGetInfo *info, XrSystemI
   *out = host_xr().system;
   return static_cast<XrResult>(host_xr().system_result);
 }
+// The host's views, at the size the Display settings choose (display_override.h).
+XrResult xrEnumerateViewConfigurationViews(XrInstance instance, XrSystemId system, XrViewConfigurationType type,
+                                           std::uint32_t capacity, std::uint32_t *count, XrViewConfigurationView *views) {
+  std::lock_guard lock(state().mutex);
+  if (!valid_handle(instance, "XrInstance")) return XR_ERROR_HANDLE_INVALID;
+  if (!count) return XR_ERROR_VALIDATION_FAILURE;
+  auto result = host_call<PFN_xrEnumerateViewConfigurationViews, "xrEnumerateViewConfigurationViews">(
+      instance, system, type, capacity, count, views);
+  if (XR_SUCCEEDED(result) && capacity && views &&
+      (type == XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO || type == XR_VIEW_CONFIGURATION_TYPE_PRIMARY_MONO))
+    xr::apply_display_override(views, std::min(capacity, *count));
+  return result;
+}
 XrResult xrGetSystemProperties(XrInstance instance, XrSystemId system, XrSystemProperties *out) {
   std::lock_guard lock(state().mutex);
   if (!valid_handle(instance, "XrInstance"))
@@ -553,6 +575,7 @@ XrResult xrGetSystemProperties(XrInstance instance, XrSystemId system, XrSystemP
           XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO, 2, &count, views);
       if (XR_FAILED(result)) return result;
       if (count != 2) return XR_ERROR_FEATURE_UNSUPPORTED;
+      xr::apply_display_override(views, count);
       auto& properties = *reinterpret_cast<XrSystemSpaceWarpPropertiesFB*>(p);
       // Recommendations do not constrain application swapchain sizes. Native
       // full-rate composition does not extrapolate motion, so avoid inducing
@@ -690,6 +713,7 @@ XrResult xrDestroySession(XrSession handle) {
     if (image.operation_in_progress) return XR_ERROR_CALL_ORDER_INVALID;
   auto passthrough_result = destroy_passthrough_session(handle);
   if (XR_FAILED(passthrough_result)) return passthrough_result;
+  if (auto spheres = destroy_sphere_layers(); XR_FAILED(spheres)) return spheres;
   while (!state().swapchains.empty()) {
     auto result = guest::xrDestroySwapchain(state().swapchains.begin()->first);
     if (XR_FAILED(result))
@@ -1105,6 +1129,7 @@ XrResult xrEndFrame(XrSession handle, const XrFrameEndInfo *info) {
     return result;
   }
   std::vector<XrCompositionLayerEquirectKHR> spheres;
+  SphereLayers drawn_spheres;
   std::vector<XrCompositionLayerQuad> flats;
   std::vector<InputChain> chains;
   PresentationLayers rects;
@@ -1123,7 +1148,13 @@ XrResult xrEndFrame(XrSession handle, const XrFrameEndInfo *info) {
   spheres.reserve(info->layerCount);
   flats.reserve(cylinders * strips);
   chains.reserve(info->layerCount + cylinders * strips);
-  std::uint32_t i = 0;
+  std::uint32_t i = passthrough.first_layer;
+  // Guest passthrough layers in their backend's form, and the lowest
+  // remaining layer's swapchains when it carries a reconstruction opacity.
+  PassthroughLayerStorage passthrough_storage;
+  std::deque<std::vector<std::byte>> premultiplied;
+  UnderlayAlpha underlay{.opacity = passthrough.underlay_opacity, .key = passthrough.key};
+  bool underlay_pending = passthrough.underlay_opacity < 1 || passthrough.key;
   // Takes one host layer: copies its chain, validates it and maps its swapchains.
   auto append = [&](const XrCompositionLayerBaseHeader* layer, bool converted) -> XrResult {
     const bool passthrough_layer = layer && layer->type == XR_TYPE_COMPOSITION_LAYER_PASSTHROUGH_FB;
@@ -1162,15 +1193,59 @@ XrResult xrEndFrame(XrSession handle, const XrFrameEndInfo *info) {
           return XR_ERROR_VALIDATION_FAILURE;
         }
     }
-    layers.push_back(static_cast<const XrCompositionLayerBaseHeader*>(rects.layer(layer)));
+    const auto* mapped = static_cast<const XrCompositionLayerBaseHeader*>(rects.layer(layer));
+    if (std::exchange(underlay_pending, false) && (mapped->layerFlags & XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT)) {
+      // The first layer over the world: its host copy carries the opacity in its
+      // alpha (A' = 1 - P(1 - A)). Straight colour is premultiplied by A there,
+      // so the host must not multiply it again.
+      underlay.swapchains = rects.submitted;
+      // A color key copy is opaque: the host must not blend it with anything.
+      if (underlay.key) {
+        for (const auto& info : structure_metadata())
+          if (info.type == mapped->type) {
+            auto& copy = premultiplied.emplace_back(info.size);
+            std::memcpy(copy.data(), mapped, info.size);
+            reinterpret_cast<XrCompositionLayerBaseHeader*>(copy.data())->layerFlags &=
+                ~XrCompositionLayerFlags(XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT |
+                                         XR_COMPOSITION_LAYER_UNPREMULTIPLIED_ALPHA_BIT);
+            underlay.premultiply = mapped->layerFlags & XR_COMPOSITION_LAYER_UNPREMULTIPLIED_ALPHA_BIT;
+            mapped = reinterpret_cast<const XrCompositionLayerBaseHeader*>(copy.data());
+            break;
+          }
+      } else if (mapped->layerFlags & XR_COMPOSITION_LAYER_UNPREMULTIPLIED_ALPHA_BIT) {
+        for (const auto& info : structure_metadata())
+          if (info.type == mapped->type) {
+            auto& copy = premultiplied.emplace_back(info.size);
+            std::memcpy(copy.data(), mapped, info.size);
+            reinterpret_cast<XrCompositionLayerBaseHeader*>(copy.data())->layerFlags &= ~XR_COMPOSITION_LAYER_UNPREMULTIPLIED_ALPHA_BIT;
+            mapped = reinterpret_cast<const XrCompositionLayerBaseHeader*>(copy.data());
+            underlay.premultiply = true;
+            break;
+          }
+      }
+    }
+    layers.push_back(mapped);
     return XR_SUCCESS;
   };
   for (; i < info->layerCount; ++i) {
     auto layer = info->layers[i];
-    // prepare_passthrough_frame validated these local handles. With no active
-    // reconstruction layer, leave all other layers on ordinary presentation.
-    if (passthrough.omit_paused_layers && layer && layer->type == XR_TYPE_COMPOSITION_LAYER_PASSTHROUGH_FB)
+    // Each backend gives a guest passthrough layer its form at this place:
+    // forwarded, a host layer, guest-form layers (camera planes), or nothing
+    // (paused, or shown through the blend mode); the other layers stay on
+    // ordinary presentation.
+    if (layer && layer->type == XR_TYPE_COMPOSITION_LAYER_PASSTHROUGH_FB) {
+      if (auto result = validate_passthrough_layer(handle, layer); XR_FAILED(result)) return result;
+      PassthroughLayerForm form;
+      if (auto result = passthrough_layer_form(handle, layer, passthrough_storage, form); XR_FAILED(result)) return result;
+      if (form.forward) {
+        if (auto result = append(form.forward, false); XR_FAILED(result)) return result;
+      } else if (form.host) {
+        layers.push_back(form.host);
+      }
+      for (const auto* plane : form.guest)
+        if (auto result = append(plane, false); XR_FAILED(result)) return result;
       continue;
+    }
     bool converted = false;
     if (layer && valid_handle(layer->space, "XrSpace")) {
       const StructureInfo* metadata = nullptr;
@@ -1236,6 +1311,10 @@ XrResult xrEndFrame(XrSession handle, const XrFrameEndInfo *info) {
             continue;
           }
         }
+        if (!converted && sphere_layer_type(layer->type)) {
+          if (auto result = drawn_spheres.add(layer, layers); XR_FAILED(result)) return result;
+          continue;
+        }
         if (!converted) {
           static std::set<XrStructureType> reported;
           if (reported.insert(layer->type).second)
@@ -1264,14 +1343,24 @@ XrResult xrEndFrame(XrSession handle, const XrFrameEndInfo *info) {
       previous = counts;
     }
   }
-  const auto prepared = [&] { vulkan::ScopedHostWait timing("guest_end_prepare"); return prepare_swapchains(rects.submitted, passthrough.force_opaque); }();
+  // The desktop mirror shows the first projection layer's chosen eye.
+  std::optional<MirrorEye> mirror;
+  if (venture::xr::mirror_ready()) mirror = mirror_eye(layers, venture::xr::mirror_eye());
+  const auto prepared = [&] {
+    vulkan::ScopedHostWait timing("guest_end_prepare");
+    return prepare_swapchains(rects.submitted, passthrough.force_opaque,
+                              underlay.swapchains.empty() ? nullptr : &underlay, mirror ? &*mirror : nullptr);
+  }();
   if (prepared != XR_SUCCESS && prepared != XR_SESSION_LOSS_PENDING) return prepared;
+  const auto drawn = drawn_spheres.present(handle, info->displayTime, layers);
+  if (XR_FAILED(drawn)) return drawn;
   PresentationLayers mapped(true);
   for (auto& layer : layers)
     layer = static_cast<const XrCompositionLayerBaseHeader*>(mapped.chain(layer));
   auto host_info = *info;
   host_info.layerCount = static_cast<std::uint32_t>(layers.size());
   host_info.layers = layers.data();
+  if (passthrough.blend_mode != XR_ENVIRONMENT_BLEND_MODE_OPAQUE) host_info.environmentBlendMode = passthrough.blend_mode;
   // The host submission can block for the compositor. Session::end needs only
   // the session mutex and the host queue lock; holding the state lock across it
   // stalled other threads' OpenXR calls (Batman main thread: 5% of samples in

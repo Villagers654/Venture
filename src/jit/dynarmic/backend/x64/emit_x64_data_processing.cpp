@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: 0BSD
  */
 
+#include <bit>
 #include <cstddef>
 #include <type_traits>
 
@@ -57,8 +58,15 @@ void EmitX64::EmitPack2x64To1x128(EmitContext& ctx, IR::Inst* inst) {
 // Venture: an extending move writes a fresh register when its source stays
 // live or is a register-cache register, instead of copying it first.
 template<typename Op>
-static void EmitExtend(BlockOfCode& code, EmitContext& ctx, IR::Inst* inst, Op op) {
+static void EmitExtend(BlockOfCode& code, EmitContext& ctx, IR::Inst* inst, Op op, std::initializer_list<IR::Opcode> zero_extended_reads = {}) {
     auto args = ctx.reg_alloc.GetArgumentInfo(inst);
+    // Venture: an 8- or 16-bit memory read leaves its GPR zero-extended on every path
+    // (MOVZX, XOR then locked XADD, ZeroExtendFrom after callbacks and fallbacks).
+    if (!args[0].IsImmediate() && args[0].IsInGpr(ctx.reg_alloc) &&
+        std::find(zero_extended_reads.begin(), zero_extended_reads.end(), inst->GetArg(0).GetInst()->GetOpcode()) != zero_extended_reads.end()) {
+        ctx.reg_alloc.DefineValue(code, inst, args[0]);
+        return;
+    }
     if (!args[0].IsImmediate() && !ctx.reg_alloc.IsLastUse(args[0])) {
         const Xbyak::Reg64 source = ctx.reg_alloc.UseGpr(code, args[0]);
         const Xbyak::Reg64 result = ctx.reg_alloc.ScratchGpr(code);
@@ -421,11 +429,12 @@ void EmitX64::EmitLogicalShiftLeft32(EmitContext& ctx, IR::Inst* inst) {
             ctx.reg_alloc.DefineValue(code, inst, result);
         } else if (code.HasHostFeature(HostFeature::BMI2)) {
             const Xbyak::Reg32 shift = ctx.reg_alloc.UseGpr(code, shift_arg).cvt32();
-            const Xbyak::Reg32 operand = ctx.reg_alloc.UseGpr(code, operand_arg).cvt32();
+            OpArg operand = ctx.reg_alloc.UseOpArg(code, operand_arg);
+            operand.setBit(32);
             const Xbyak::Reg32 result = ctx.reg_alloc.ScratchGpr(code).cvt32();
             const Xbyak::Reg32 zero = ctx.reg_alloc.ScratchGpr(code).cvt32();
 
-            code.shlx(result, operand, shift);
+            code.shlx(result, *operand, shift);
             code.xor_(zero, zero);
             code.cmp(shift.cvt8(), 32);
             code.cmovnb(result, zero);
@@ -508,11 +517,12 @@ void EmitX64::EmitLogicalShiftLeft64(EmitContext& ctx, IR::Inst* inst) {
         ctx.reg_alloc.DefineValue(code, inst, result);
     } else if (code.HasHostFeature(HostFeature::BMI2)) {
         const Xbyak::Reg64 shift = ctx.reg_alloc.UseGpr(code, shift_arg);
-        const Xbyak::Reg64 operand = ctx.reg_alloc.UseGpr(code, operand_arg);
+        OpArg operand = ctx.reg_alloc.UseOpArg(code, operand_arg);
+        operand.setBit(64);
         const Xbyak::Reg64 result = ctx.reg_alloc.ScratchGpr(code);
         const Xbyak::Reg64 zero = ctx.reg_alloc.ScratchGpr(code);
 
-        code.shlx(result, operand, shift);
+        code.shlx(result, *operand, shift);
         code.xor_(zero.cvt32(), zero.cvt32());
         code.cmp(shift.cvt8(), 64);
         code.cmovnb(result, zero);
@@ -557,11 +567,12 @@ void EmitX64::EmitLogicalShiftRight32(EmitContext& ctx, IR::Inst* inst) {
             ctx.reg_alloc.DefineValue(code, inst, result);
         } else if (code.HasHostFeature(HostFeature::BMI2)) {
             const Xbyak::Reg32 shift = ctx.reg_alloc.UseGpr(code, shift_arg).cvt32();
-            const Xbyak::Reg32 operand = ctx.reg_alloc.UseGpr(code, operand_arg).cvt32();
+            OpArg operand = ctx.reg_alloc.UseOpArg(code, operand_arg);
+            operand.setBit(32);
             const Xbyak::Reg32 result = ctx.reg_alloc.ScratchGpr(code).cvt32();
             const Xbyak::Reg32 zero = ctx.reg_alloc.ScratchGpr(code).cvt32();
 
-            code.shrx(result, operand, shift);
+            code.shrx(result, *operand, shift);
             code.xor_(zero, zero);
             code.cmp(shift.cvt8(), 32);
             code.cmovnb(result, zero);
@@ -642,11 +653,12 @@ void EmitX64::EmitLogicalShiftRight64(EmitContext& ctx, IR::Inst* inst) {
         ctx.reg_alloc.DefineValue(code, inst, result);
     } else if (code.HasHostFeature(HostFeature::BMI2)) {
         const Xbyak::Reg64 shift = ctx.reg_alloc.UseGpr(code, shift_arg);
-        const Xbyak::Reg64 operand = ctx.reg_alloc.UseGpr(code, operand_arg);
+        OpArg operand = ctx.reg_alloc.UseOpArg(code, operand_arg);
+        operand.setBit(64);
         const Xbyak::Reg64 result = ctx.reg_alloc.ScratchGpr(code);
         const Xbyak::Reg64 zero = ctx.reg_alloc.ScratchGpr(code);
 
-        code.shrx(result, operand, shift);
+        code.shrx(result, *operand, shift);
         code.xor_(zero.cvt32(), zero.cvt32());
         code.cmp(shift.cvt8(), 64);
         code.cmovnb(result, zero);
@@ -687,7 +699,8 @@ void EmitX64::EmitArithmeticShiftRight32(EmitContext& ctx, IR::Inst* inst) {
             ctx.reg_alloc.DefineValue(code, inst, result);
         } else if (code.HasHostFeature(HostFeature::BMI2)) {
             const Xbyak::Reg32 shift = ctx.reg_alloc.UseScratchGpr(code, shift_arg).cvt32();
-            const Xbyak::Reg32 operand = ctx.reg_alloc.UseGpr(code, operand_arg).cvt32();
+            OpArg operand = ctx.reg_alloc.UseOpArg(code, operand_arg);
+            operand.setBit(32);
             const Xbyak::Reg32 result = ctx.reg_alloc.ScratchGpr(code).cvt32();
             const Xbyak::Reg32 const31 = ctx.reg_alloc.ScratchGpr(code).cvt32();
 
@@ -698,7 +711,7 @@ void EmitX64::EmitArithmeticShiftRight32(EmitContext& ctx, IR::Inst* inst) {
             code.mov(const31, 31);
             code.cmp(shift.cvt8(), 31);
             code.cmovnb(shift, const31);
-            code.sarx(result, operand, shift);
+            code.sarx(result, *operand, shift);
 
             ctx.reg_alloc.DefineValue(code, inst, result);
         } else {
@@ -770,14 +783,15 @@ void EmitX64::EmitArithmeticShiftRight64(EmitContext& ctx, IR::Inst* inst) {
         ctx.reg_alloc.DefineValue(code, inst, result);
     } else if (code.HasHostFeature(HostFeature::BMI2)) {
         const Xbyak::Reg64 shift = ctx.reg_alloc.UseScratchGpr(code, shift_arg);
-        const Xbyak::Reg64 operand = ctx.reg_alloc.UseGpr(code, operand_arg);
+        OpArg operand = ctx.reg_alloc.UseOpArg(code, operand_arg);
+        operand.setBit(64);
         const Xbyak::Reg64 result = ctx.reg_alloc.ScratchGpr(code);
         const Xbyak::Reg64 const63 = ctx.reg_alloc.ScratchGpr(code);
 
         code.mov(const63.cvt32(), 63);
         code.cmp(shift.cvt8(), 63);
         code.cmovnb(shift, const63);
-        code.sarx(result, operand, shift);
+        code.sarx(result, *operand, shift);
 
         ctx.reg_alloc.DefineValue(code, inst, result);
     } else {
@@ -809,10 +823,11 @@ void EmitX64::EmitBitRotateRight32(EmitContext& ctx, IR::Inst* inst) {
     if (!carry_inst) {
         if (shift_arg.IsImmediate() && code.HasHostFeature(HostFeature::BMI2)) {
             const u8 shift = shift_arg.GetImmediateU8();
-            const Xbyak::Reg32 operand = ctx.reg_alloc.UseGpr(code, operand_arg).cvt32();
+            OpArg operand = ctx.reg_alloc.UseOpArg(code, operand_arg);
+            operand.setBit(32);
             const Xbyak::Reg32 result = ctx.reg_alloc.ScratchGpr(code).cvt32();
 
-            code.rorx(result, operand, shift);
+            code.rorx(result, *operand, shift);
 
             ctx.reg_alloc.DefineValue(code, inst, result);
         } else if (shift_arg.IsImmediate()) {
@@ -878,10 +893,11 @@ void EmitX64::EmitBitRotateRight64(EmitContext& ctx, IR::Inst* inst) {
 
     if (shift_arg.IsImmediate() && code.HasHostFeature(HostFeature::BMI2)) {
         const u8 shift = shift_arg.GetImmediateU8();
-        const Xbyak::Reg64 operand = ctx.reg_alloc.UseGpr(code, operand_arg);
+        OpArg operand = ctx.reg_alloc.UseOpArg(code, operand_arg);
+        operand.setBit(64);
         const Xbyak::Reg64 result = ctx.reg_alloc.ScratchGpr(code);
 
-        code.rorx(result, operand, shift);
+        code.rorx(result, *operand, shift);
 
         ctx.reg_alloc.DefineValue(code, inst, result);
     } else if (shift_arg.IsImmediate()) {
@@ -940,10 +956,11 @@ static void EmitMaskedShift32(BlockOfCode& code, EmitContext& ctx, IR::Inst* ins
     if constexpr (!std::is_same_v<BMI2FT, std::nullptr_t>) {
         if (code.HasHostFeature(HostFeature::BMI2)) {
             const Xbyak::Reg32 result = ctx.reg_alloc.ScratchGpr(code).cvt32();
-            const Xbyak::Reg32 operand = ctx.reg_alloc.UseGpr(code, operand_arg).cvt32();
+            OpArg operand = ctx.reg_alloc.UseOpArg(code, operand_arg);
+            operand.setBit(32);
             const Xbyak::Reg32 shift = ctx.reg_alloc.UseGpr(code, shift_arg).cvt32();
 
-            (code.*bmi2_shift)(result, operand, shift);
+            (code.*bmi2_shift)(result, *operand, shift);
 
             ctx.reg_alloc.DefineValue(code, inst, result);
             return;
@@ -977,10 +994,11 @@ static void EmitMaskedShift64(BlockOfCode& code, EmitContext& ctx, IR::Inst* ins
     if constexpr (!std::is_same_v<BMI2FT, std::nullptr_t>) {
         if (code.HasHostFeature(HostFeature::BMI2)) {
             const Xbyak::Reg64 result = ctx.reg_alloc.ScratchGpr(code);
-            const Xbyak::Reg64 operand = ctx.reg_alloc.UseGpr(code, operand_arg);
+            OpArg operand = ctx.reg_alloc.UseOpArg(code, operand_arg);
+            operand.setBit(64);
             const Xbyak::Reg64 shift = ctx.reg_alloc.UseGpr(code, shift_arg);
 
-            (code.*bmi2_shift)(result, operand, shift);
+            (code.*bmi2_shift)(result, *operand, shift);
 
             ctx.reg_alloc.DefineValue(code, inst, result);
             return;
@@ -1150,6 +1168,20 @@ static void EmitAdd(BlockOfCode& code, EmitContext& ctx, IR::Inst* inst, size_t 
             code.bt(carry.cvt32(), 0);
             code.adc(result, op_arg);
         }
+    } else if (args[1].IsImmediate() && bitsize == 64 && args[1].FitsInImmediateS32()) {
+        // Venture: x64 sign-extends a 32-bit immediate to the 64-bit operation, as the IR value is.
+        const s32 op_arg = args[1].GetImmediateS32();
+        if (carry_in.IsImmediate()) {
+            if (carry_in.GetImmediateU1()) {
+                code.stc();
+                code.adc(result, op_arg);
+            } else {
+                code.add(result, op_arg);
+            }
+        } else {
+            code.bt(carry.cvt32(), 0);
+            code.adc(result, op_arg);
+        }
     } else {
         OpArg op_arg = ctx.reg_alloc.UseOpArg(code, args[1]);
         op_arg.setBit(bitsize);
@@ -1229,6 +1261,8 @@ static void EmitSub(BlockOfCode& code, EmitContext& ctx, IR::Inst* inst, int bit
         if (args[1].IsImmediate() && args[1].GetType() == IR::Type::U32) {
             const u32 op_arg = args[1].GetImmediateU32();
             code.cmp(result, op_arg);
+        } else if (args[1].IsImmediate() && bitsize == 64 && args[1].FitsInImmediateS32()) {
+            code.cmp(result, s32(args[1].GetImmediateS32()));  // Venture: sign-extended, as the IR value is
         } else {
             OpArg op_arg = ctx.reg_alloc.UseOpArg(code, args[1]);
             op_arg.setBit(bitsize);
@@ -1236,6 +1270,21 @@ static void EmitSub(BlockOfCode& code, EmitContext& ctx, IR::Inst* inst, int bit
         }
     } else if (args[1].IsImmediate() && args[1].GetType() == IR::Type::U32) {
         const u32 op_arg = args[1].GetImmediateU32();
+        if (carry_in.IsImmediate()) {
+            if (carry_in.GetImmediateU1()) {
+                code.sub(result, op_arg);
+            } else {
+                code.add(result, ~op_arg);
+                invert_output_carry = false;
+            }
+        } else {
+            code.bt(carry.cvt32(), 0);
+            code.adc(result, ~op_arg);
+            invert_output_carry = false;
+        }
+    } else if (args[1].IsImmediate() && bitsize == 64 && args[1].FitsInImmediateS32()) {
+        // Venture: as above; the complement of a sign-extended immediate is sign-extended too.
+        const s32 op_arg = args[1].GetImmediateS32();
         if (carry_in.IsImmediate()) {
             if (carry_in.GetImmediateU1()) {
                 code.sub(result, op_arg);
@@ -1511,6 +1560,14 @@ void EmitX64::EmitAnd64(EmitContext& ctx, IR::Inst* inst) {
         const u32 op_arg = u32(args[1].GetImmediateS32());
 
         code.and_(result, op_arg);
+    } else if (args[1].IsImmediate() && !inst->HasAssociatedPseudoOperation() && std::popcount(~args[1].GetImmediateU64()) == 1) {
+        // Venture: a mask clearing one bit is BTR, without a register for the immediate.
+        code.btr(result, u8(std::countr_zero(~args[1].GetImmediateU64())));
+    } else if (args[1].IsImmediate() && !inst->HasAssociatedPseudoOperation() && std::has_single_bit(args[1].GetImmediateU64() + 1)) {
+        // Venture: a low mask of 33 to 63 bits shifts the rest out and back.
+        const int clear = std::countl_zero(args[1].GetImmediateU64());
+        code.shl(result, clear);
+        code.shr(result, clear);
     } else {
         OpArg op_arg = ctx.reg_alloc.UseOpArg(code, args[1]);
         op_arg.setBit(64);
@@ -1617,6 +1674,9 @@ void EmitX64::EmitEor64(EmitContext& ctx, IR::Inst* inst) {
         const u32 op_arg = u32(args[1].GetImmediateS32());
 
         code.xor_(result, op_arg);
+    } else if (args[1].IsImmediate() && !inst->HasAssociatedPseudoOperation() && std::has_single_bit(args[1].GetImmediateU64())) {
+        // Venture: one bit above bit 30 is BTC, without a register for the immediate.
+        code.btc(result, u8(std::countr_zero(args[1].GetImmediateU64())));
     } else {
         OpArg op_arg = ctx.reg_alloc.UseOpArg(code, args[1]);
         op_arg.setBit(64);
@@ -1657,6 +1717,9 @@ void EmitX64::EmitOr64(EmitContext& ctx, IR::Inst* inst) {
         const u32 op_arg = u32(args[1].GetImmediateS32());
 
         code.or_(result, op_arg);
+    } else if (args[1].IsImmediate() && !inst->HasAssociatedPseudoOperation() && std::has_single_bit(args[1].GetImmediateU64())) {
+        // Venture: one bit above bit 30 is BTS, without a register for the immediate.
+        code.bts(result, u8(std::countr_zero(args[1].GetImmediateU64())));
     } else {
         OpArg op_arg = ctx.reg_alloc.UseOpArg(code, args[1]);
         op_arg.setBit(64);
@@ -1716,11 +1779,13 @@ void EmitX64::EmitSignExtendWordToLong(EmitContext& ctx, IR::Inst* inst) {
 }
 
 void EmitX64::EmitZeroExtendByteToWord(EmitContext& ctx, IR::Inst* inst) {
-    EmitExtend(code, ctx, inst, [&](Xbyak::Reg64 result, Xbyak::Reg64 source) { code.movzx(result.cvt32(), source.cvt8()); });
+    EmitExtend(code, ctx, inst, [&](Xbyak::Reg64 result, Xbyak::Reg64 source) { code.movzx(result.cvt32(), source.cvt8()); },
+               {IR::Opcode::A64ReadMemory8, IR::Opcode::A32ReadMemory8});
 }
 
 void EmitX64::EmitZeroExtendHalfToWord(EmitContext& ctx, IR::Inst* inst) {
-    EmitExtend(code, ctx, inst, [&](Xbyak::Reg64 result, Xbyak::Reg64 source) { code.movzx(result.cvt32(), source.cvt16()); });
+    EmitExtend(code, ctx, inst, [&](Xbyak::Reg64 result, Xbyak::Reg64 source) { code.movzx(result.cvt32(), source.cvt16()); },
+               {IR::Opcode::A64ReadMemory16, IR::Opcode::A32ReadMemory16});
 }
 
 void EmitX64::EmitZeroExtendByteToLong(EmitContext& ctx, IR::Inst* inst) {
@@ -1794,8 +1859,12 @@ void EmitX64::EmitZeroExtendWordToLong(EmitContext& ctx, IR::Inst* inst) {
             return;
         }
     }
+    const bool copied = !args[0].IsImmediate() && !args[0].IsInGpr(ctx.reg_alloc);
     const Xbyak::Reg64 result = ctx.reg_alloc.UseScratchGpr(code, args[0]);
-    code.mov(result.cvt32(), result.cvt32());  // x64 zeros upper 32 bits on a 32-bit move
+    // Venture: a word copied into a GPR from a spill slot, its JitState slot or an XMM
+    // register arrives by a 32-bit MOV or MOVD, which already cleared bits 32-63.
+    if (!copied)
+        code.mov(result.cvt32(), result.cvt32());  // x64 zeros upper 32 bits on a 32-bit move
     ctx.reg_alloc.DefineValue(code, inst, result);
 }
 

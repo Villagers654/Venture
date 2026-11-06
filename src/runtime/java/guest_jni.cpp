@@ -733,6 +733,38 @@ void special_UnregisterNatives(JNIEnv* env, hle::CallContext& ctx) {
   result(ctx, unregister_natives(env, reference_arg<jclass>(ctx, ctx.x(1))));
 }
 
+// ART ignores, with a warning, DeleteGlobalRef and DeleteWeakGlobalRef of
+// anything that is not such a reference (JavaVMExt::DeleteGlobalRef); HotSpot
+// writes through it. Attack on Titan VR deleted an invalid global reference
+// while Unity shut down (HotSpot faulted writing 0x238 in UnityPlayer.nativeDone),
+// so only references the guest made reach HotSpot's delete.
+std::mutex global_mutex;
+std::unordered_set<jobject> guest_globals;
+template <int Slot>
+void global_reference(JNIEnv* env, hle::CallContext& ctx) {
+  constexpr bool weak = Slot == 226 || Slot == 227;
+  const auto object = g2h<_jobject>(ctx.x(1));
+  if constexpr (Slot == 21 || Slot == 226) {
+    const auto made = weak ? env->NewWeakGlobalRef(object) : env->NewGlobalRef(object);
+    if (made) {
+      std::lock_guard lock(global_mutex);
+      guest_globals.insert(made);
+    }
+    result(ctx, made);
+  } else {
+    if (!object) return;
+    std::lock_guard lock(global_mutex);
+    if (!guest_globals.erase(object)) {
+      static std::atomic<int> reports{0};
+      if (reports.fetch_add(1, std::memory_order_relaxed) < 8)
+        log::warn("jni", "guest called {} on {:#x}, which is not a reference it holds; ignored as on Android",
+                  weak ? "DeleteWeakGlobalRef" : "DeleteGlobalRef", ctx.x(1));
+      return;
+    }
+    if constexpr (weak) env->DeleteWeakGlobalRef(object);
+    else env->DeleteGlobalRef(object);
+  }
+}
 // JNI FatalError terminates the guest process. Calling HotSpot's implementation
 // would abort the host before the core could report the guest call stack.
 [[noreturn]] void guest_fatal(hle::CallContext& c) {
@@ -744,6 +776,8 @@ void special_UnregisterNatives(JNIEnv* env, hle::CallContext& ctx) {
 #define JNI_FIXED(Slot, Name) \
   {Slot, #Name, hle::a32::bind_dynamic<std::remove_pointer_t<decltype(JNINativeInterface_::Name)>>([](hle::CallContext& c) { \
     if constexpr (Slot == 18) guest_fatal(c); \
+    else if constexpr (Slot == 21 || Slot == 22 || Slot == 226 || Slot == 227) \
+      guard(c, [&](JNIEnv* e) { global_reference<Slot>(e, c); }); \
     else guard(c, [&](JNIEnv* e) { fixed(e->functions->Name, e, c); }); }, \
     [](hle::CallContext& c) { guard(c, [&](JNIEnv* e) { fixed32(e->functions->Name, e, c); }); })},
 #define JNI_SPECIAL(Slot, Name) \

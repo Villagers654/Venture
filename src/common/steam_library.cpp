@@ -153,7 +153,7 @@ std::string owned_package(Vdf &entry) {
   if (!ours || !options.starts_with("--launch "))
     return {};
   auto package = options.substr(9);
-  return paths::safe_package(package) ? package : "";
+  return paths::safe_launch_target(package) ? package : "";
 }
 // Small bounded text KeyValues reader; no credentials or profile names are
 // logged.
@@ -479,7 +479,7 @@ bool listed(const fs::path &root, const fs::path &executable,
     std::string start = "\"" + paths::utf8(fs::absolute(executable).parent_path()) + "\"";
     std::set<std::string> packages;
     for (const auto &g : games) {
-      if (!paths::safe_package(g.package) || !packages.insert(g.package).second)
+      if (!paths::safe_launch_target(g.package) || !packages.insert(g.package).second)
         continue;
       auto found = owned.find(g.package);
       if (found == owned.end() || text(*found->second, "appname") != g.name ||
@@ -541,7 +541,7 @@ Result sync(const fs::path &root, const fs::path &executable,
   };
   std::vector<Art> artwork;
   for (const auto &g : games) {
-    if (!paths::safe_package(g.package) || !packages.insert(g.package).second)
+    if (!paths::safe_launch_target(g.package) || !packages.insert(g.package).second)
       continue;
     Vdf entry = prior.contains(g.package) ? prior.at(g.package) : Vdf{};
     auto id = number(field(entry, "appid"));

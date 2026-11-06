@@ -16,6 +16,15 @@ std::int64_t saved = 0;
 std::optional<std::array<XrFovf, 2>> saved_fov;
 fs::path file() { return paths::data_dir() / "host-displays.json"; }
 fs::path fov_file() { return paths::data_dir() / "host-eye-fov.json"; }
+fs::path latest_file() { return paths::data_dir() / "host-display.json"; }
+Json latest;  // host-display.json as this process last wrote it
+void write_latest() {
+  try {
+    paths::atomic_write(latest_file(), latest.dump(2) + "\n");
+  } catch (const std::exception& e) {
+    log::warn("xr", "Cannot record the host display: {}", e.what());
+  }
+}
 // Each eye as [left, right, up, down] radians.
 std::optional<std::array<XrFovf, 2>> read_fov(const Json &entry) {
   if (!entry.is_array() || entry.size() != 2) return std::nullopt;
@@ -73,6 +82,29 @@ void remember_display_period(std::int64_t period) {
     log::warn("xr", "Cannot remember the host display rate: {}", e.what());
     saved = period;  // One warning per value, not one per frame.
   }
+}
+
+void remember_host_views(std::string_view runtime, std::string_view system, std::uint32_t recommended_width,
+                         std::uint32_t recommended_height, std::uint32_t max_width, std::uint32_t max_height) {
+  std::lock_guard lock(mutex);
+  latest = {{"runtime", std::string(runtime)},
+            {"system", std::string(system)},
+            {"recommended", {recommended_width, recommended_height}},
+            {"max", {max_width, max_height}}};
+  write_latest();
+}
+
+void remember_host_rates(float current, const std::vector<float> &rates) {
+  std::lock_guard lock(mutex);
+  if (!latest.is_object()) return;  // no host views recorded in this process
+  Json listed = Json::array();
+  for (auto r : rates)
+    if (std::isfinite(r) && r > 0) listed.push_back(std::round(r * 100) / 100);
+  const double now = std::isfinite(current) && current > 0 ? std::round(current * 100) / 100 : 0;
+  if (field(latest, "rate") == Json(now) && field(latest, "rates") == listed) return;
+  latest["rate"] = now;
+  latest["rates"] = std::move(listed);
+  write_latest();
 }
 
 std::optional<std::array<XrFovf, 2>> remembered_eye_fov() {

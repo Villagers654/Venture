@@ -5,6 +5,7 @@
 #include "xr/api.h"
 #include "xr/sampler.h"
 #include <span>
+#include <vector>
 
 namespace venture::xr {
 struct ImageDesc {
@@ -17,9 +18,37 @@ struct ImageDesc {
   // texture. Zero preserves the source count; the guest storage is unchanged.
   std::uint32_t host_mip_count = 0;
 };
+// Provider storage that holds one OpenXR GLES slot's released contents for
+// host presentation, in place of a private Vulkan image plus a bridge copy.
+// One single-level 2D Vulkan image per array layer, base level only, rows in
+// GLES order (row 0 is the bottom). `layouts` is each image's current Vulkan
+// layout: the provider sets it when it hands the images to Vulkan (stage), and
+// the Vulkan reader updates it after use; the provider reacquires with it.
+struct StagedImage {
+  std::vector<VkImage> layers;
+  std::vector<VkImageLayout> layouts;
+  // The layout a Vulkan reader leaves the images in (the provider's choice).
+  VkImageLayout idle_layout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+  bool staged = false;  // holds a released image, owned by Vulkan
+};
 class XrImages {
 public:
   virtual ~XrImages() = default;
+  // Optional staging (see StagedImage), allocated when the swapchain is
+  // created so that no release allocates. Called on the render thread with the
+  // ring's share group current. FEATURE_UNSUPPORTED keeps private images and
+  // copy_to_image; OUT_OF_MEMORY fails swapchain creation.
+  virtual XrResult create_staging(const ImageDesc &, std::span<const std::uint32_t>,
+                                  std::span<StagedImage>) {
+    return XR_ERROR_FEATURE_UNSUPPORTED;
+  }
+  // Copies the guest texture's base level into `slot` and hands it to Vulkan.
+  // The caller guarantees no Vulkan work still reads `slot`.
+  virtual XrResult stage(std::uint32_t, StagedImage &, const ImageDesc &) {
+    return XR_ERROR_FEATURE_UNSUPPORTED;
+  }
+  // After every Vulkan reader of the slots has completed.
+  virtual void destroy_staging(std::span<StagedImage>) {}
   // Persistent guest GL names, independent of OpenXR's acquire order. Called
   // on the render thread with the shared GPU queue lock held.
   virtual XrResult create_ring(const ImageDesc &, std::span<std::uint32_t> textures) = 0;

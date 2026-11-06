@@ -6,7 +6,7 @@ if(POLICY CMP0168)
   endif()
   cmake_policy(SET CMP0168 "${CMAKE_POLICY_DEFAULT_CMP0168}")
 endif()
-project(Venture VERSION 0.1.4.3 LANGUAGES C CXX)
+project(Venture VERSION 0.2.0 LANGUAGES C CXX)
 # All owned generators share this interpreter and its imported target.
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
 
@@ -69,3 +69,35 @@ if(VENTURE_BUILD_ANGLE_SMOKE)
 endif()
 
 include(cmake/ReleaseLayout.cmake)
+
+# Warnings for Venture's own code (src, tests, tools). Applied per target once
+# configuration is done, so dependencies fetched from inside those directories,
+# and the JIT (src/jit, Dynarmic and xbyak), keep their own flags.
+function(venture_enable_warnings directory)
+  cmake_path(RELATIVE_PATH directory BASE_DIRECTORY "${PROJECT_SOURCE_DIR}" OUTPUT_VARIABLE relative)
+  if(NOT relative MATCHES "^(src|tests|tools)(/|$)" OR relative MATCHES "^src/jit(/|$)")
+    return()
+  endif()
+  get_property(targets DIRECTORY "${directory}" PROPERTY BUILDSYSTEM_TARGETS)
+  foreach(target IN LISTS targets)
+    get_target_property(type ${target} TYPE)
+    if(type MATCHES "^(STATIC_LIBRARY|SHARED_LIBRARY|MODULE_LIBRARY|OBJECT_LIBRARY|EXECUTABLE)$")
+      # -Wmissing-field-initializers is off: OpenXR, Vulkan and Win32 structs are
+      # written {XR_TYPE_...} / {.sType = ...} on purpose, the rest zero-filled.
+      target_compile_options(${target} PRIVATE "$<$<COMPILE_LANGUAGE:C,CXX>:-Wall;-Wextra;-Wno-missing-field-initializers>")
+    endif()
+  endforeach()
+  get_property(children DIRECTORY "${directory}" PROPERTY SUBDIRECTORIES)
+  foreach(child IN LISTS children)
+    venture_enable_warnings("${child}")
+  endforeach()
+endfunction()
+function(venture_enable_project_warnings)
+  get_property(children DIRECTORY "${PROJECT_SOURCE_DIR}" PROPERTY SUBDIRECTORIES)
+  foreach(child IN LISTS children)
+    venture_enable_warnings("${child}")
+  endforeach()
+endfunction()
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+  cmake_language(DEFER DIRECTORY "${PROJECT_SOURCE_DIR}" CALL venture_enable_project_warnings)
+endif()

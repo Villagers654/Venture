@@ -1,11 +1,14 @@
 #include "launcher/core.h"
 #include "launcher/debug_report.h"
+#include "launcher/i18n/i18n.h"
+#include "launcher/sign_in_link.h"
 #include "common/android/manifest.h"
 #include "common/download/asset_files.h"
 #include "common/file_ops.h"
 #include "common/http/client.h"
 #include "common/library/import.h"
 #include "common/log.h"
+#include "common/process.h"
 #include "common/saves_migration.h"
 #include "hle/ovrplatform/broker.h"
 #include <chrono>
@@ -50,6 +53,8 @@ Core::Core(Options options)
     log::info("steam", "Steam sync disabled: redirected data profile has no Steam root override.");
   action([&] { settings_ = library::Settings::load(data_); });
   log::set_level(static_cast<log::Level>(settings_.log_level));
+  i18n::set_language(options_.language.empty() ? settings_.interface_language : options_.language);
+  log::info("launcher", "Interface language: {}", i18n::language());
   action([&] {
     auto migration = vault_.migrate_v1(
         options_.offline ? std::function<Session(Session)>{}
@@ -100,6 +105,13 @@ void Core::start(bool refresh_library) {
   if (started_)
     return;
   started_ = true;
+  // A sign-in that never ended (a crash) still holds the oculus:// handler.
+  if (!options_.cli && !options_.automation)
+    try {
+      sign_in_link::restore(data_);
+    } catch (const std::exception &e) {
+      log::warn("auth", "The previous oculus:// handler could not be put back: {}", e.what());
+    }
   worker_ = std::make_unique<Worker>([this] { wake(); });
   import_worker_ = std::make_unique<Worker>([this] { wake(); });
   download::Manager::Services services;
@@ -151,6 +163,11 @@ void Core::shutdown() {
   }
   ++epoch_;
   browser_.close();
+  if (link_handler_ == 1)
+    try {
+      sign_in_link::restore(data_);
+    } catch (...) {
+    }
   running_.clear();  // Join IPC handlers before destroying the download manager.
   downloads_.reset();
   queue_lock_.reset();
@@ -169,6 +186,9 @@ void Core::uninstall(const library::Install &install) {
     throw std::runtime_error("Close this game before uninstalling it.");
   }
   library::uninstall(root_of(install), install);
+  // A pinned version's Steam choice goes with it.
+  if (install.plan.pinned && settings_.steam_skip.erase(install.id()))
+    settings_.save(data_);
   rescan();
 }
 void Core::apply_settings(library::Settings next, bool announce) {
@@ -437,7 +457,8 @@ void Core::fill_metadata() {
   });
 }
 std::vector<std::string> Core::game_owners(std::string_view app_id) const {
-  return library::owning_accounts(games_, account_index_, app_id);
+  // A pinned version belongs to whoever owns the game.
+  return library::owning_accounts(games_, account_index_, meta::base_app(app_id));
 }
 library::LaunchChoice Core::launch_choice(std::string_view app_id,
                                          std::string_view account) const {
@@ -524,7 +545,7 @@ Json Core::save_migration_status() const {
 const library::Install *Core::installed(std::string_view id,
                                        bool complete) const {
   for (auto &i : installs_)
-    if (i.plan.app_id == id && (!complete || i.complete))
+    if (i.id() == id && (!complete || i.complete))
       return &i;
   return nullptr;
 }
@@ -546,9 +567,20 @@ std::vector<meta::Game> Core::visible_games() const {
       out.push_back(g);
     }
   for (auto &i : installs_)
-    if (seen.insert(i.plan.app_id).second) {
+    if (seen.insert(i.id()).second) {
       auto old = std::ranges::find_if(
           games_, [&](auto &g) { return g.id == i.plan.app_id; });
+      // A pinned version: its game's listing, named with its version.
+      if (i.plan.pinned) {
+        meta::Game g;
+        if (old != games_.end())
+          g = *old;
+        g.owned = false;
+        g.id = i.id();
+        g.name = (g.name.empty() ? i.plan.package : g.name) + " (" + i.plan.version + ")";
+        out.push_back(std::move(g));
+        continue;
+      }
       if (old != games_.end()) {
         out.push_back(*old);
         out.back().owned = false;
@@ -621,7 +653,7 @@ void Core::rescan() {
           std::erase_if(addons_, [&](auto &entry) {
             auto previous = installed(entry.first, false);
             auto next = std::ranges::find_if(result, [&](auto &install) {
-              return install.plan.app_id == entry.first;
+              return install.id() == entry.first;
             });
             return (previous != nullptr) != (next != result.end()) ||
                    (previous && next != result.end() &&
@@ -777,6 +809,9 @@ void Core::refresh() {
 }
 void Core::select(std::string id) {
   selected_ = std::move(id);
+  // A pinned version keeps its build: it has no store details or updates.
+  if (!meta::version_binary(selected_).empty())
+    return;
   if (details_.contains(selected_) && !addons_.contains(selected_))
     refresh_addons(selected_);
   if (!session_ || options_.offline || details_.contains(selected_) ||
@@ -842,8 +877,12 @@ void Core::sign_in() {
         if (epoch != epoch_)
           return;
         auth_ = auth;
-        action([&] { browser_.open(url, data_); });
-        auth_status_ = "Complete sign-in in the Meta window.";
+        auth_url_ = url;
+        auth_manual_ = false;
+        auth_paste_error_.clear();
+        if (auth_window_)
+          action([&] { browser_.open(url, data_); });
+        auth_status_ = auth_window_ ? "Complete sign-in in the Meta window." : "Waiting for the sign-in address.";
       };
     } catch (...) {
       auto e = exception_text();
@@ -901,6 +940,88 @@ void Core::install(const meta::Game &g, const fs::path &root) {
   if (!current && settings_.add_games_to_steam && !options_.launch_requested)
     set_in_steam(g.id, settings_.steam_add_new);
   on_install_queued();
+}
+void Core::request_builds(const std::string &id) {
+  if (!session_ || options_.offline || !digits(id, 5) || builds_pending_.contains(id))
+    return;
+  builds_pending_.insert(id);
+  builds_error_.erase(id);
+  // The owner's account lists them, as it downloads them.
+  std::string token = session_->access_token;
+  if (const auto owner = owner_for(id); !owner.empty() && owner != account_key_)
+    if (auto stored = vault_.load(owner))
+      token = stored->access_token;
+  auto epoch = epoch_;
+  worker_->submit([this, token, epoch, id](std::stop_token stop) -> Worker::Completion {
+    std::vector<meta::Build> list;
+    std::string failure;
+    try {
+      list = meta::Store(token, stop).all_builds(id);
+    } catch (...) {
+      failure = exception_text();
+    }
+    return [this, epoch, id, list = std::move(list), failure] {
+      builds_pending_.erase(id);
+      if (epoch != epoch_)
+        return;
+      if (failure.empty())
+        builds_[id] = list;
+      else
+        builds_error_[id] = failure;
+    };
+  });
+}
+const library::Install *Core::installed_build(std::string_view app_id, std::string_view binary_id) const {
+  // The game's own install (not an older folder an update left behind) or a
+  // pinned version.
+  const auto *own = installed(app_id, false);
+  for (const auto &i : installs_)
+    if (!i.plan.local && i.plan.app_id == app_id && i.plan.binary_id == binary_id && (i.plan.pinned || &i == own))
+      return &i;
+  return nullptr;
+}
+size_t Core::install_versions(const meta::Game &g, const std::vector<meta::Build> &chosen, const fs::path &root) {
+  if (options_.offline)
+    throw std::runtime_error("Downloads are unavailable in offline mode.");
+  if (!digits(g.id, 5))
+    throw std::runtime_error("Only games from the Meta store have other versions.");
+  const auto game_copy = g;
+  const auto owner = owner_for(game_copy.id);
+  if (!owner.empty() && owner != account_key_) {
+    auto other = account(owner);
+    if (!other || !other->signed_in || other->needs_reauth)
+      throw std::runtime_error("Reconnect the owning account before installing.");
+    switch_account(owner);
+  }
+  if (!session_)
+    throw std::runtime_error("Sign in to install this game.");
+  auto target = root.empty() ? settings_.games : root.lexically_normal();
+  if (!target.is_absolute())
+    throw std::runtime_error("Choose an absolute folder to install to.");
+  if (!std::ranges::contains(settings_.roots(), target)) {
+    fs::create_directories(target);
+    auto next = settings_;
+    next.libraries.push_back(target);
+    apply_settings(std::move(next), false);
+  }
+  size_t queued = 0;
+  bool steam_changed = false;
+  for (const auto &b : chosen) {
+    // Versions already here (the game's own install or a pinned one) stay as
+    // they are, settings and all; a pinned one's paused download resumes.
+    if (auto i = installed_build(game_copy.id, b.binary_id); i && (i->complete || !i->plan.pinned))
+      continue;
+    // A pinned version stays out of Steam until its menu adds it.
+    steam_changed |= settings_.steam_skip.insert(meta::version_id(game_copy.id, b.binary_id)).second;
+    downloads_->enqueue_version(game_copy.id, b.binary_id, game_copy.name + " (" + b.version + ")", target,
+                                session_->access_token, account_key_);
+    ++queued;
+  }
+  if (steam_changed)
+    settings_.save(data_);
+  if (queued)
+    on_install_queued();
+  return queued;
 }
 void Core::set_in_steam(std::string_view app_id, bool in) {
   const std::string id(app_id);
@@ -1046,6 +1167,7 @@ void Core::uninstall_addon(std::string_view app, std::string_view sku) {
 Core::SaveImport Core::import_saves(std::string_view app_id, const fs::path &folder, std::string serial) {
   auto current = installed(app_id, false);
   if (!current) throw std::runtime_error("Install this game before importing its save data.");
+  if (current->plan.pinned) throw std::runtime_error("Save data imports go to the game's own install.");
   const auto package = current->plan.package;
   auto running = running_.find(std::string(app_id));
   if (running != running_.end() && !running->second.exit)
@@ -1218,8 +1340,16 @@ void Core::launch_game(std::string_view id, std::string_view requested,
     if (auto owner = vault_.load(choice.account_key))
       catalog_token = owner->access_token;
   if ((running_.contains(game_id) && running_[game_id].process.active()) ||
-      !launch_pending_.insert(game_id).second)
+      launch_pending_.contains(game_id))
     throw std::runtime_error("This game is already running or starting.");
+  // Versions of one game share its package, as on a headset: one at a time.
+  for (const auto &other : launch_pending_)
+    if (auto o = installed(other, false); o && o->plan.package == i->plan.package)
+      throw std::runtime_error("Another version of this game is starting.");
+  for (const auto &[other, r] : running_)
+    if (auto o = installed(other, false); o && other != game_id && r.process.active() && o->plan.package == i->plan.package)
+      throw std::runtime_error("Another version of this game is running. Quit it first.");
+  launch_pending_.insert(game_id);
   const auto install = *i;
   try {
     game_locks_[game_id] = std::make_unique<FileLock>(
@@ -1258,6 +1388,7 @@ void Core::launch_game(std::string_view id, std::string_view requested,
           auto fresh =
               meta::Store(catalog_token, stop)
                   .owned_plan(install.plan.app_id, install.plan.binary_id);
+          fresh.pinned = install.plan.pinned;  // the same folder
           if (meta::catalog_replaces(fresh, install.plan) &&
               (fresh.assets_complete || fresh.files.size() > install.plan.files.size()))
             catalog = std::move(fresh);
@@ -1301,7 +1432,7 @@ void Core::launch_game(std::string_view id, std::string_view requested,
                 "Account changed while the game was starting. Try again.");
           if (catalog) {
             if (!std::ranges::contains(settings_.roots(), root) ||
-                paths::game_dir(root, catalog->package, catalog->version_code) !=
+                paths::game_dir(root, catalog->package, catalog->folder()) !=
                     install.directory)
               throw std::runtime_error(
                   "The library folders changed while the game was starting. Try "
@@ -1343,22 +1474,11 @@ void Core::launch_game(std::string_view id, std::string_view requested,
               {"asset.", download::asset_launcher_handler(
                              *downloads_, data_, root,
                              install.directory, key)}};
-          // VENTURE_LOG_LEVEL: the launcher's log level, 0 (trace) to 4 (error).
-          Environment environment{
-              {"VENTURE_LOG_LEVEL", std::to_string(settings_.log_level)}};
-          // Always override inherited opt-ins, including when the setting is off.
-          environment.push_back({"VENTURE_PASSTHROUGH", settings_.passthrough ? "1" : "0"});
-          // The menu chord setting; automatic leaves the runtime's default.
-          if (settings_.menu_button == 1) environment.push_back({"VENTURE_MENU_CHORD", "stick-clicks"});
-          if (settings_.menu_button == 2) environment.push_back({"VENTURE_MENU_CHORD", "off"});
-          if (!settings_.game_language.empty()) environment.push_back({"VENTURE_LOCALE", settings_.game_language});
-          // Texture compression; always is the runtime's default.
-          if (settings_.texture_compression == 1) {
-            environment.push_back({"VENTURE_TEXTURE_COMPRESSION", "auto"});
-            environment.push_back({"VENTURE_TEXTURE_COMPRESSION_THRESHOLD",
-                                   std::to_string(settings_.texture_compression_threshold)});
-          }
-          if (settings_.texture_compression == 2) environment.push_back({"VENTURE_TEXTURE_COMPRESSION", "never"});
+          // The settings this game launches with (debug reports list them too),
+          // and where the runtime reports the controller it sees for the Controls
+          // page. Smoke and automation runs open no mirror window.
+          Environment environment = library::launch_environment(settings_, app_id, options_.automation);
+          environment.push_back({"VENTURE_CONTROLLER_REPORT", paths::utf8(data_ / "controllers.json")});
           r.process.spawn(runtime, args, r.console, console,
                           [broker, routes = std::move(routes), details, key, queue = launch_queue_](const Json &request) {
                             const auto op = str(request, "op");
@@ -1377,7 +1497,7 @@ void Core::launch_game(std::string_view id, std::string_view requested,
           r.tail.clear();
           r.failure.clear();
           notice_.clear();
-          if (auto entry = game(app_id)) {
+          if (auto entry = game(meta::base_app(app_id))) {
             entry->recent = uint64_t(std::chrono::system_clock::to_time_t(
                 std::chrono::system_clock::now()));
             save_library();
@@ -1407,10 +1527,12 @@ fs::path Core::save_debug_report(std::string_view app_id, std::string_view versi
   DebugReport request{.data = data_, .version = std::string(version)};
   // A game no longer installed falls back to the most recent launch.
   for (const auto &install : installs_)
-    if (!app_id.empty() && install.plan.app_id == app_id) {
+    if (!app_id.empty() && install.id() == app_id) {
       request.package = install.plan.package;
+      request.app_id = std::string(app_id);
       request.plan = install.directory / "plan.json";
-      if (auto g = std::ranges::find(games_, app_id, &meta::Game::id); g != games_.end()) request.game = g->name;
+      if (auto g = std::ranges::find(games_, install.plan.app_id, &meta::Game::id); g != games_.end())
+        request.game = g->name + (install.plan.pinned ? " (" + install.plan.version + ")" : "");
     }
   for (const auto &account : account_index_.accounts)
     request.private_text.insert(request.private_text.end(), {account.key, account.account_id});
@@ -1438,23 +1560,30 @@ void Core::sync_steam() {
   if (scanning_) return;  // the scan in flight syncs when it finishes
   if (!steam_scan_reliable_) {
     steam_pending_ = false;
-    log::warn("steam", "Steam sync skipped: installation scan is not authoritative.");
+    if (!steam_unreliable_reported_)
+      log::warn("steam", "Steam sync waits for a complete installation scan; shortcuts stay as they are.");
+    steam_unreliable_reported_ = true;
     if (steam_restart_ && !steam_library::running()) { // Steam closed for a restart; bring it back regardless.
       steam_restart_ = false;
       action([&] { steam_library::start_client(steam_library::discover_root()); });
     }
     return;
   }
+  steam_unreliable_reported_ = false;
   if (options_.launch_requested || steam_busy_) return;
   if (!settings_.add_games_to_steam) { steam_pending_ = false; return; }
   steam_busy_ = true;
   const auto generation = steam_generation_.load();
   std::vector<steam_library::Game> titles;
   std::set<std::string> packages;
-  for (const auto& i : installs_) if (i.complete && !settings_.steam_skip.contains(i.plan.app_id) &&
-                                     packages.insert(i.plan.package).second) {
+  for (const auto& i : installs_) {
+    // A pinned version launches as <package>@<folder> and is named with its version.
+    const auto target = i.plan.pinned ? i.plan.package + "@" + i.plan.folder() : i.plan.package;
+    if (!i.complete || settings_.steam_skip.contains(i.id()) || !packages.insert(target).second) continue;
     auto g = game(i.plan.app_id);
-    titles.push_back({i.plan.package, g ? g->name : i.label.empty() ? i.plan.package : i.label, i.plan.app_id});
+    auto name = g ? g->name : i.label.empty() ? i.plan.package : i.label;
+    if (i.plan.pinned) name += " (" + i.plan.version + ")";
+    titles.push_back({target, std::move(name), i.plan.app_id});
   }
   auto art = data_ / "cache/art";
   auto roots = settings_.roots();
@@ -1520,6 +1649,99 @@ void Core::restart_steam() {
     steam_restart_ = true; // Start only after the observed close and safe sync.
   });
 }
+void Core::complete_sign_in(std::string callback) {
+  if (!auth_ || !signing_in_ || verifying_)
+    return;
+  verifying_ = true;
+  auth_status_ = "Verifying your Quest account...";
+  auto auth = auth_;
+  auto epoch = epoch_;
+  worker_->submit([this, auth, callback,
+                   epoch](std::stop_token stop) -> Worker::Completion {
+    try {
+      auto session = auth->complete(callback, stop);
+      meta::Store store(session.access_token, stop);
+      auto who = store.identity();
+      session.account_id = who.account_id;
+      session.alias = who.alias;
+      session.display_name = who.display_name;
+      // The account is saved even when its library cannot be listed yet;
+      // Refresh lists it later.
+      std::optional<meta::Snapshot> snapshot;
+      std::string library_error;
+      try {
+        snapshot = store.library();
+      } catch (...) {
+        library_error = exception_text();
+        log::warn("library", "Signed in, but the library could not be listed: {}", library_error);
+      }
+      return [this, session, snapshot, library_error, epoch] {
+        if (epoch != epoch_)
+          return;
+        action([&] {
+          if (!digits(session.account_id))
+            throw std::runtime_error(
+                "Meta did not return a numeric account identity. Sign-in "
+                "was not saved.");
+          const bool first = vault_.index().accounts.empty();
+          account_key_ = vault_.upsert(session);
+          session_ = session;
+          account_scope_ = session.account_id;
+          reload_accounts();
+          downloads_->set_account(account_key_);
+          downloads_->adopt_legacy(account_index_.primary);
+          auto migrated =
+              migrate_saves(data_, account_index_.primary, first);
+          if (migrated.moved && first)
+            notice_ =
+                "Existing local saves were attached to your first account.";
+          if (snapshot) {
+            library::merge(games_, *snapshot, account_scope_);
+            warning_ = snapshot->warning;
+            library_partial_ = !snapshot->complete;
+          } else {
+            refresh_error_ = library_error;
+            error(library_error);
+          }
+          save_library();
+        });
+        signing_in_ = verifying_ = false;
+        auth_.reset();
+        auth_status_.clear();
+      };
+    } catch (...) {
+      auto e = exception_text();
+      return [this, epoch, e] {
+        if (epoch == epoch_) {
+          signing_in_ = verifying_ = false;
+          auth_.reset();
+          auth_status_.clear();
+          error(e);
+        }
+      };
+    }
+  });
+}
+void Core::cancel_sign_in() {
+  ++epoch_;
+  browser_.close();
+  auth_.reset();
+  signing_in_ = verifying_ = false;
+  auth_status_ = "Sign-in cancelled.";
+}
+void Core::paste_sign_in(std::string_view text) {
+  if (!auth_ || !signing_in_ || verifying_)
+    return;
+  auto callback = meta::find_callback(text);
+  if (callback.empty())
+    auth_paste_error_ = "That has no oculus:// address. Copy the whole console message or the address itself.";
+  else if (!auth_->accepts(callback))
+    auth_paste_error_ = "That address is from an earlier sign-in. Copy the one Meta gave for this sign-in.";
+  else {
+    auth_paste_error_.clear();
+    complete_sign_in(std::move(callback));
+  }
+}
 void Core::tick() {
   worker_->drain();
   import_worker_->drain();
@@ -1556,9 +1778,24 @@ void Core::tick() {
       log::info("auth", "Meta sign-in page loaded.");
     }
     if (event->kind == AuthBrowser::Kind::error) {
-      signing_in_ = false;
-      auth_status_.clear();
-      error(event->value);
+      log::warn("auth", "Meta's sign-in window could not open: {}", event->value);
+      if (signing_in_ && auth_ && !verifying_) {
+        // The sign-in still works in any browser: open it in the default one
+        // (no WebKitGTK or WebView2 here) and keep waiting for its address.
+        auth_manual_ = true;
+        auth_status_ = "Meta's sign-in window could not open. Sign in manually below.";
+        if (!options_.cli && !options_.automation)
+          try {
+            open_url(auth_url_);
+            auth_status_ = "Meta's sign-in opened in your browser. Sign in there; the steps are below.";
+          } catch (const std::exception &e) {
+            log::warn("auth", "The sign-in link could not open in a browser: {}", e.what());
+          }
+      } else {
+        signing_in_ = false;
+        auth_status_.clear();
+        error(event->value);
+      }
     }
     if (event->kind == AuthBrowser::Kind::closed && signing_in_ &&
         !verifying_) {
@@ -1567,83 +1804,45 @@ void Core::tick() {
       auth_.reset();
       auth_status_ = "Sign-in cancelled.";
     }
-    if (event->kind == AuthBrowser::Kind::callback && auth_ && signing_in_ &&
-        !verifying_) {
-      verifying_ = true;
-      auth_status_ = "Verifying your Quest account...";
-      auto auth = auth_;
-      auto callback = std::move(event->value);
-      auto epoch = epoch_;
-      worker_->submit([this, auth, callback,
-                       epoch](std::stop_token stop) -> Worker::Completion {
-        try {
-          auto session = auth->complete(callback, stop);
-          meta::Store store(session.access_token, stop);
-          auto who = store.identity();
-          session.account_id = who.account_id;
-          session.alias = who.alias;
-          session.display_name = who.display_name;
-          // The account is saved even when its library cannot be listed yet;
-          // Refresh lists it later.
-          std::optional<meta::Snapshot> snapshot;
-          std::string library_error;
-          try {
-            snapshot = store.library();
-          } catch (...) {
-            library_error = exception_text();
-            log::warn("library", "Signed in, but the library could not be listed: {}", library_error);
-          }
-          return [this, session, snapshot, library_error, epoch] {
-            if (epoch != epoch_)
-              return;
-            action([&] {
-              if (!digits(session.account_id))
-                throw std::runtime_error(
-                    "Meta did not return a numeric account identity. Sign-in "
-                    "was not saved.");
-              const bool first = vault_.index().accounts.empty();
-              account_key_ = vault_.upsert(session);
-              session_ = session;
-              account_scope_ = session.account_id;
-              reload_accounts();
-              downloads_->set_account(account_key_);
-              downloads_->adopt_legacy(account_index_.primary);
-              auto migrated =
-                  migrate_saves(data_, account_index_.primary, first);
-              if (migrated.moved && first)
-                notice_ =
-                    "Existing local saves were attached to your first account.";
-              if (snapshot) {
-                library::merge(games_, *snapshot, account_scope_);
-                warning_ = snapshot->warning;
-                library_partial_ = !snapshot->complete;
-              } else {
-                refresh_error_ = library_error;
-                error(library_error);
-              }
-              save_library();
-            });
-            signing_in_ = verifying_ = false;
-            auth_.reset();
-            auth_status_.clear();
-          };
-        } catch (...) {
-          auto e = exception_text();
-          return [this, epoch, e] {
-            if (epoch == epoch_) {
-              signing_in_ = verifying_ = false;
-              auth_.reset();
-              auth_status_.clear();
-              error(e);
-            }
-          };
+    if (event->kind == AuthBrowser::Kind::callback)
+      complete_sign_in(std::move(event->value));
+  }
+  // Only for a window: the command line keeps asking for the address.
+  if (!options_.cli && !options_.automation) {
+    const bool wanted = signing_in_ && auth_manual_;
+    if (wanted && link_handler_ == 0) {
+      link_handler_ = -1;
+      try {
+        if (sign_in_link::take_over(data_)) {
+          link_handler_ = 1;
+          log::info("auth", "Venture opens oculus:// links until this sign-in ends.");
         }
-      });
+      } catch (const std::exception &e) {
+        log::warn("auth", "Venture could not open oculus:// links: {}", e.what());
+      }
+    } else if (!wanted && link_handler_ != 0) {
+      if (link_handler_ == 1)
+        try {
+          sign_in_link::restore(data_);
+        } catch (const std::exception &e) {
+          log::warn("auth", "The previous oculus:// handler could not be put back: {}", e.what());
+        }
+      link_handler_ = 0;
+      auth_paste_open_ = false;
     }
   }
   auto now = now_ms();
   if (now - last_poll_ > 400) {
     last_poll_ = now;
+    if (link_handler_ == 1 && !verifying_)
+      try {
+        if (auto address = sign_in_link::receive(data_); !address.empty()) {
+          log::info("auth", "The browser handed back Meta's sign-in address.");
+          paste_sign_in(address);
+        }
+      } catch (const std::exception &e) {
+        log::warn("auth", "The browser's sign-in address could not be read: {}", e.what());
+      }
     for (auto &[id, r] : running_) {
       auto previous = r.exit;
       r.exit = r.process.poll();
@@ -1667,6 +1866,10 @@ void Core::tick() {
           auto entry = game(id);
           r.failure = "It requires Meta device attestation, which only a real Quest headset can provide, so it "
                       "cannot run in Venture.";
+          error(std::format("{} closed: {}", entry ? entry->name : id, r.failure));
+        } else if (auto dialog = library::game_dialog(r.log); !dialog.empty()) {
+          auto entry = game(id);
+          r.failure = std::format("It showed the message \"{}\" and then quit.", dialog);
           error(std::format("{} closed: {}", entry ? entry->name : id, r.failure));
         } else if (*r.exit != 0) {
           // A runtime that failed before opening its log still wrote stderr.

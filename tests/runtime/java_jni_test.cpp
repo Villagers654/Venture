@@ -97,6 +97,37 @@ TEST_CASE("HotSpot JNI tables, all invocation families and native trampolines") 
   auto* env = host_env();
   REQUIRE(env);
   {
+    // Android ignores DeleteGlobalRef of anything that is not a global reference
+    // the app holds; HotSpot writes through it (Attack on Titan VR at quit).
+    test::FakeCpu cpu;
+    auto local = env->NewStringUTF("guest global");
+    REQUIRE(local);
+    cpu.xs[1] = h2g(local);
+    invoke("NewGlobalRef", cpu);
+    const auto global = cpu.xs[0];
+    REQUIRE(global);
+    CHECK(env->GetObjectRefType(g2h<_jobject>(global)) == JNIGlobalRefType);
+    cpu.xs[1] = 0x23a;
+    invoke("DeleteGlobalRef", cpu);
+    cpu.xs[1] = h2g(local);
+    invoke("DeleteGlobalRef", cpu);
+    CHECK(env->GetObjectRefType(local) == JNILocalRefType);
+    cpu.xs[1] = global;
+    invoke("DeleteGlobalRef", cpu);
+    // A second delete must not reach HotSpot (checked JNI would abort on it).
+    cpu.xs[1] = global;
+    invoke("DeleteGlobalRef", cpu);
+    cpu.xs[1] = h2g(local);
+    invoke("NewWeakGlobalRef", cpu);
+    const auto weak = cpu.xs[0];
+    REQUIRE(weak);
+    CHECK(env->GetObjectRefType(g2h<_jobject>(weak)) == JNIWeakGlobalRefType);
+    cpu.xs[1] = weak;
+    invoke("DeleteWeakGlobalRef", cpu);
+    invoke("DeleteWeakGlobalRef", cpu);
+    env->DeleteLocalRef(local);
+  }
+  {
     auto* library = Linker::get().open("libventure_java_bridge.so", kRtldNow, nullptr);
     REQUIRE(library);
     const auto install = library->find_symbol("VentureJavaInstallHook");

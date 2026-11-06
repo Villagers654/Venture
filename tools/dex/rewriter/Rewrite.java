@@ -126,6 +126,18 @@ public final class Rewrite {
                                     // nativeLibraryDir copy by that name to prewarm it).
                                     rewrite(cls + "." + method);
                                     super.visitMethodInsn(Opcodes.INVOKESTATIC, LOADER, method, descriptor, false);
+                                } else if (opcode == Opcodes.INVOKESTATIC && cls.equals("java/nio/ByteBuffer") && method.equals("allocateDirect")
+                                        && descriptor.equals("(I)Ljava/nio/ByteBuffer;")) {
+                                    // Native code reaches direct buffers by address; a 32-bit guest needs storage it can address.
+                                    rewrite("java/nio/ByteBuffer.allocateDirect guest-addressable storage");
+                                    super.visitMethodInsn(opcode, "com/venture/runtime/DirectBuffers", method, descriptor, false);
+                                } else if (opcode == Opcodes.INVOKEVIRTUAL && cls.equals("java/nio/ByteBuffer")
+                                        && ((method.equals("array") && descriptor.equals("()[B"))
+                                            || (method.equals("arrayOffset") && descriptor.equals("()I")))) {
+                                    // ART direct buffers are array-backed (Unity's UnityWebRequest writes array()).
+                                    rewrite("java/nio/ByteBuffer." + method + " direct buffer contents");
+                                    super.visitMethodInsn(Opcodes.INVOKESTATIC, "com/venture/runtime/DirectBuffers", method,
+                                            "(Ljava/nio/ByteBuffer;)" + descriptor.substring(2), false);
                                 } else if (load(cls, method, descriptor) || exit(cls, method, descriptor)) {
                                     // Runtime calls still evaluate and null-check their receiver.
                                     if (opcode != Opcodes.INVOKESTATIC) {

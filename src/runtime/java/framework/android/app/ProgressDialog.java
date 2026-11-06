@@ -1,6 +1,6 @@
 package android.app;
 
-/** Progress state; presentation retains Dialog's explicit unsupported failure. */
+/** Progress state; like every Dialog it is reported shown but not presented. */
 public class ProgressDialog extends AlertDialog {
   public static final int STYLE_SPINNER = 0, STYLE_HORIZONTAL = 1;
   private int progress, secondaryProgress, max = 100, style = STYLE_SPINNER;

@@ -1,0 +1,142 @@
+{
+ "width": 520,
+ "height": 720,
+ "nodes": {
+  "Light": [
+   -15683.3,
+   2414.3
+  ],
+  "Camera": [
+   -11165.1,
+   40618.9
+  ],
+  "htc_vive_cosmos_left": [
+   205.2,
+   387.3
+  ],
+  "bumper_pressed_max": [
+   425.1,
+   214.9
+  ],
+  "bumper_pressed_min": [
+   438.2,
+   208.8
+  ],
+  "bumper_pressed_value": [
+   443.3,
+   223.6
+  ],
+  "bumper": [
+   443.3,
+   223.6
+  ],
+  "controller": [
+   202.3,
+   387.3
+  ],
+  "x_button_pressed_max": [
+   311.3,
+   306.1
+  ],
+  "x_button_pressed_min": [
+   307.9,
+   303.7
+  ],
+  "x_button_pressed_value": [
+   313.7,
+   304.8
+  ],
+  "x_button": [
+   313.7,
+   304.8
+  ],
+  "xr_standard_squeeze_pressed_max": [
+   355.9,
+   421.1
+  ],
+  "xr_standard_squeeze_pressed_min": [
+   364.6,
+   423.3
+  ],
+  "xr_standard_squeeze_pressed_value": [
+   355.4,
+   417.5
+  ],
+  "squeeze": [
+   355.4,
+   417.5
+  ],
+  "xr_standard_thumbstick_pressed_max": [
+   349.4,
+   233.4
+  ],
+  "xr_standard_thumbstick_pressed_min": [
+   347.8,
+   232.0
+  ],
+  "xr_standard_thumbstick_pressed_value": [
+   323.1,
+   213.4
+  ],
+  "xr_standard_thumbstick_xaxis_pressed_max": [
+   347.8,
+   232.0
+  ],
+  "xr_standard_thumbstick_xaxis_pressed_min": [
+   347.8,
+   232.0
+  ],
+  "xr_standard_thumbstick_xaxis_pressed_value": [
+   323.1,
+   213.4
+  ],
+  "xr_standard_thumbstick_yaxis_pressed_max": [
+   347.8,
+   232.0
+  ],
+  "xr_standard_thumbstick_yaxis_pressed_min": [
+   347.8,
+   232.0
+  ],
+  "xr_standard_thumbstick_yaxis_pressed_value": [
+   323.1,
+   213.4
+  ],
+  "thumbstick": [
+   323.1,
+   213.4
+  ],
+  "xr_standard_trigger_pressed_max": [
+   449.6,
+   258.6
+  ],
+  "xr_standard_trigger_pressed_min": [
+   449.6,
+   258.6
+  ],
+  "xr_standard_trigger_pressed_value": [
+   466.2,
+   273.4
+  ],
+  "trigger": [
+   466.2,
+   273.4
+  ],
+  "y_button_pressed_max": [
+   363.5,
+   251.6
+  ],
+  "y_button_pressed_min": [
+   360.6,
+   248.8
+  ],
+  "y_button_pressed_value": [
+   366.1,
+   252.3
+  ],
+  "y_button": [
+   366.1,
+   252.3
+  ]
+ }
+}

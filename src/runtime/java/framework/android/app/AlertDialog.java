@@ -12,9 +12,38 @@ public class AlertDialog extends Dialog {
   }
   public android.widget.Button getButton(int which) { return buttons.get(which); }
   public void setMessage(CharSequence value) { message = value; }
+  @Override String summary() {
+    var title = title() == null ? "" : title().toString();
+    var text = message == null ? "" : message.toString();
+    var both = title.isEmpty() ? text : text.isEmpty() ? title : title + ": " + text;
+    return both.isEmpty() ? "(untitled)" : both.replace('\n', ' ');
+  }
+  // Nobody can see or press this dialog, and games may wait for its answer
+  // (Unity's "Continue"/"Abort" graphics warning blocks its engine thread).
+  // Venture answers once show() has returned, as a click arrives on a Quest:
+  // the negative button, which declines (Abort, Cancel, No), else the neutral
+  // one (Later), else the positive one (OK). A dialog without buttons only
+  // shows information and stays up.
   @Override public void show() {
-    android.util.Log.e("AlertDialog", String.valueOf(message));
+    if (isShowing()) return;
     super.show();
+    android.widget.Button answer = null;
+    for (int which : new int[] {BUTTON_NEGATIVE, BUTTON_NEUTRAL, BUTTON_POSITIVE})
+      if (answer == null) answer = buttons.get(which);
+    var labels = new StringBuilder();
+    for (int which : new int[] {BUTTON_POSITIVE, BUTTON_NEUTRAL, BUTTON_NEGATIVE}) {
+      var button = buttons.get(which);
+      if (button != null) labels.append(labels.length() == 0 ? "" : ", ").append(button.getText());
+    }
+    if (answer == null) {
+      android.util.Log.i("dialog", "No buttons; the dialog stays shown");
+      return;
+    }
+    android.util.Log.w("dialog", "Buttons: " + labels + "; Venture answers \"" + answer.getText() + "\"");
+    final var chosen = answer;
+    var looper = android.os.Looper.myLooper() != null ? android.os.Looper.myLooper() : android.os.Looper.getMainLooper();
+    if (looper == null) { chosen.performClick(); return; }
+    new android.os.Handler(looper).post(() -> { if (isShowing()) chosen.performClick(); });
   }
   public AlertDialog(android.content.Context c) {
     super(c);

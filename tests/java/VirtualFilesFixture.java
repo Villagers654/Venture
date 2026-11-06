@@ -57,6 +57,17 @@ public class VirtualFilesFixture {
     try (var output = new FileOutputStream(written.toString(), false)) { output.write('w'); }
     check(new File(written.toString()).length() == 1);
     check(ItfCaller.call().equals("interface static"));
+    // Rewritten to DirectBuffers; without its natives (an A64 process) HotSpot allocates.
+    var direct = java.nio.ByteBuffer.allocateDirect(8);
+    check(direct.isDirect() && direct.capacity() == 8 && direct.order() == java.nio.ByteOrder.BIG_ENDIAN && direct.getLong(0) == 0);
+    try { java.nio.ByteBuffer.allocateDirect(-1); throw new AssertionError("negative direct capacity"); }
+    catch (IllegalArgumentException expected) {}
+    // Android direct buffers are array-backed; the rewritten array() returns the contents.
+    direct.put(0, (byte) 7).put(7, (byte) 9);
+    byte[] contents = direct.array();
+    check(contents.length == 8 && contents[0] == 7 && contents[7] == 9 && direct.arrayOffset() == 0);
+    var heap = java.nio.ByteBuffer.allocate(4);
+    check(heap.array().length == 4 && heap.slice(1, 2).arrayOffset() == 1);
     try (var snapshots = Files.list(Path.of(System.getProperty("java.io.tmpdir")))) {
       check(snapshots.findAny().isEmpty());
     }

@@ -2,6 +2,7 @@
 #include <cstdint>
 #include <exception>
 #include <functional>
+#include <string_view>
 #include <vector>
 #include "core/thread.h"
 #include "core/registry_lock.h"
@@ -45,6 +46,12 @@ void interrupt_guest_process_after_grace();
 // Host quit exhausted its backstop. Dedicated workers terminate without guest
 // pthread/TLS/allocator teardown; embedded users retain exception control.
 [[noreturn]] void end_guest_process_after_grace();
+// The app's Android main thread ended on an uncaught exception. Android kills
+// such a process at once; other guest and Java threads (an engine thread
+// waiting for that main thread) must not hold it open. Logs the reason as the
+// "[runtime]" error the launcher shows, then exits with status 1 (terminal in
+// app workers; embedded users get ProcessExit).
+[[noreturn]] void end_app_after_main_thread_failure(std::string_view reason);
 // -1 while running, otherwise the effective process outcome (including failure).
 // Lets a Java main-loop owner observe exit() from a native worker.
 int guest_process_exit_status();

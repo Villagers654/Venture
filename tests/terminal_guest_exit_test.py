@@ -17,6 +17,14 @@ for args, expected in ((["device-lost"], 1), (["device-lost-host"], 37)):
     assert f"Terminal guest process exit status={expected};" in child.stderr, child.stderr
     assert ("ending the app as a fatal error" in child.stderr) == (expected == 1), child.stderr
 print("PASS device loss: fatal on a guest thread, report-only on a host thread")
+# A dead Android main thread ends the app at once with the reason the launcher shows.
+child = subprocess.run([sys.argv[1], "main-thread-failure"], capture_output=True, text=True, timeout=HANG_SECONDS)
+assert child.returncode == 1, child
+assert "unrelated cleanup entered" not in child.stderr, child.stderr
+assert "Terminal guest process exit status=1;" in child.stderr, child.stderr
+assert (" E [runtime] The game's Android main thread stopped on an uncaught java.lang.IllegalStateException: test"
+        in child.stderr), child.stderr
+print("PASS main thread failure: terminal status 1 with the runtime reason, no drain of other threads")
 child = subprocess.Popen([sys.argv[1], "blocked-logger"], stdin=subprocess.PIPE,
                          stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 reader = ThreadPoolExecutor(1)

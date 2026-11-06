@@ -7,6 +7,8 @@
 #include <memory>
 #include <mutex>
 #include <set>
+#include <span>
+#include <type_traits>
 #include <vector>
 
 #include "common/log.h"
@@ -16,6 +18,7 @@
 #include "core/wait.h"
 #include "timing.h"
 #include "chain.h"
+#include "sync_trace.h"
 
 namespace venture::vulkan {
 namespace {
@@ -127,6 +130,31 @@ void retire_signals(VkDevice d, Match match) {
     device_fn<PFN_vkDestroyFence>(d, "vkDestroyFence")(d, fence, nullptr);
   }
 }
+// Binary semaphores ever waited on, and never-waited ones holding a signal
+// (filter_binary_signals). Waiting is permanent: such a semaphore keeps every
+// later signal.
+std::mutex binary_lock;
+std::set<std::pair<VkDevice, VkSemaphore>> waited_binary, signaled_binary;
+// Requires binary_lock.
+void note_wait(VkDevice d, VkSemaphore s) {
+  if (!s) return;
+  waited_binary.insert({d, s});
+  signaled_binary.erase({d, s});
+}
+// Requires binary_lock. False when the signal would repeat an unwaited one.
+bool note_signal(VkDevice d, VkSemaphore s) {
+  if (!s || waited_binary.contains({d, s})) return true;
+  return signaled_binary.insert({d, s}).second;
+}
+void forget_binary(VkDevice d, VkSemaphore s) {
+  std::lock_guard lock(binary_lock);
+  waited_binary.erase({d, s});
+  signaled_binary.erase({d, s});
+}
+void note_waits(VkDevice d, std::uint32_t count, const VkSemaphore* waits) {
+  std::lock_guard lock(binary_lock);
+  for (std::uint32_t i = 0; i < count; ++i) note_wait(d, waits[i]);
+}
 // Waits consume the imported payloads of these semaphores.
 template <class Each>
 void consumed(VkDevice device, Each each) {
@@ -191,6 +219,7 @@ VkResult VKAPI_CALL get_semaphore_fd(VkDevice d, const VkSemaphoreGetFdInfoKHR* 
     return f ? f(d, info, out) : VK_ERROR_INVALID_EXTERNAL_HANDLE;
   }
   *out = -1;
+  note_waits(d, 1, &info->semaphore);
   // Copy transference: exporting has the side effects of a semaphore wait
   // (Vulkan "Importing Semaphore Payloads"). The wait signals the file's fence.
   // It runs on the internal queue, which may differ from the queue that
@@ -209,6 +238,8 @@ VkResult VKAPI_CALL get_semaphore_fd(VkDevice d, const VkSemaphoreGetFdInfoKHR* 
     device_fn<PFN_vkDestroyFence>(d, "vkDestroyFence")(d, fence, nullptr);
     return r;
   }
+  if (environment::getenv("VENTURE_VULKAN_SYNC_TRACE"))
+    sync_trace::write("get_semaphore_fd semaphore=0x{:x}", sync_trace::handle(info->semaphore));
   consumed(d, [&](auto erase) { erase(info->semaphore); });
   // From here the submitted fence is owned (and retired) by the file.
   auto file = std::make_shared<SyncFile>(d, fence);
@@ -237,6 +268,9 @@ VkResult VKAPI_CALL import_semaphore_fd(VkDevice d, const VkImportSemaphoreFdInf
     std::lock_guard lock(imports_lock);
     pending = imported.contains({d, info->semaphore});
   }
+  if (environment::getenv("VENTURE_VULKAN_SYNC_TRACE"))
+    sync_trace::write("import_semaphore_fd semaphore=0x{:x} fd={} pending_import={}",
+        sync_trace::handle(info->semaphore), info->fd, pending);
   // The payload has signaled. The binary semaphore has no pending operation
   // (VUID-vkImportSemaphoreFdKHR-semaphore-01142); signal it for its next wait.
   VkResult r = VK_SUCCESS;
@@ -302,6 +336,7 @@ VkResult VKAPI_CALL import_fence_fd(VkDevice d, const VkImportFenceFdInfoKHR* in
 VkResult VKAPI_CALL queue_present(VkQueue queue, const VkPresentInfoKHR* info) {
   auto binding = queue_binding(queue);
   if (!binding) return VK_ERROR_DEVICE_LOST;
+  if (info) note_waits(binding->device, info->waitSemaphoreCount, info->pWaitSemaphores);
   auto r = next_fn<PFN_vkQueuePresentKHR, "vkQueuePresentKHR">(binding->device)(queue, info);
   if (r != VK_ERROR_OUT_OF_HOST_MEMORY && r != VK_ERROR_OUT_OF_DEVICE_MEMORY && r != VK_ERROR_DEVICE_LOST)
     consumed(binding->device, [&](auto erase) {
@@ -327,6 +362,7 @@ VkResult VKAPI_CALL bind_sparse(VkQueue queue, std::uint32_t count, const VkBind
 // Import signals may still be in flight; they complete without guest work.
 void VKAPI_CALL destroy_semaphore(VkDevice d, VkSemaphore semaphore, const VkAllocationCallbacks* allocator) {
   consumed(d, [&](auto erase) { erase(semaphore); });
+  if (semaphore) forget_binary(d, semaphore);
   std::vector<std::shared_ptr<SyncFile>> live;
   if (semaphore) {
     std::lock_guard lock(files_lock);
@@ -394,19 +430,110 @@ VkResult sync_fd_chain(VkBaseOutStructure* p) {
   return VK_SUCCESS;
 }
 void sync_fd_submitted(VkQueue queue, std::uint32_t count, const VkSubmitInfo* submits) {
+  // Venture's own submissions that execute guest waits (presentation) are waits too.
+  if (auto binding = queue_binding(queue))
+    for (std::uint32_t i = 0; i < count; ++i)
+      note_waits(binding->device, submits[i].waitSemaphoreCount, submits[i].pWaitSemaphores);
   queue_consumed(queue, [&](auto erase) {
     for (std::uint32_t i = 0; i < count; ++i)
       for (std::uint32_t w = 0; w < submits[i].waitSemaphoreCount; ++w) erase(submits[i].pWaitSemaphores[w]);
   });
 }
 void sync_fd_submitted(VkQueue queue, std::uint32_t count, const VkSubmitInfo2* submits) {
+  if (auto binding = queue_binding(queue)) {
+    std::lock_guard lock(binary_lock);
+    for (std::uint32_t i = 0; i < count; ++i)
+      for (std::uint32_t w = 0; w < submits[i].waitSemaphoreInfoCount; ++w)
+        note_wait(binding->device, submits[i].pWaitSemaphoreInfos[w].semaphore);
+  }
   queue_consumed(queue, [&](auto erase) {
     for (std::uint32_t i = 0; i < count; ++i)
       for (std::uint32_t w = 0; w < submits[i].waitSemaphoreInfoCount; ++w)
         erase(submits[i].pWaitSemaphoreInfos[w].semaphore);
   });
 }
+namespace {
+template <class Submit, class Signal, class Keep>
+const Submit* filter_signals(VkQueue queue, std::uint32_t count, const Submit* submits,
+                             std::vector<Submit>& copies, std::vector<std::vector<Signal>>& kept,
+                             Keep keep) {
+  if (!count || !submits) return submits;
+  auto binding = queue_binding(queue);
+  if (!binding) return submits;
+  const auto d = binding->device;
+  std::lock_guard lock(binary_lock);
+  std::vector<bool> filtered;
+  for (std::uint32_t i = 0; i < count; ++i) {
+    const auto& batch = submits[i];
+    std::span<const Signal> signals;
+    if constexpr (std::is_same_v<Submit, VkSubmitInfo>) {
+      for (std::uint32_t w = 0; w < batch.waitSemaphoreCount; ++w) note_wait(d, batch.pWaitSemaphores[w]);
+      signals = {batch.pSignalSemaphores, batch.signalSemaphoreCount};
+    } else {
+      for (std::uint32_t w = 0; w < batch.waitSemaphoreInfoCount; ++w)
+        note_wait(d, batch.pWaitSemaphoreInfos[w].semaphore);
+      signals = {batch.pSignalSemaphoreInfos, batch.signalSemaphoreInfoCount};
+    }
+    for (std::size_t s = 0; s < signals.size(); ++s) {
+      if (keep(d, batch, signals[s])) {
+        if (!copies.empty()) kept[i].push_back(signals[s]);
+        continue;
+      }
+      if (copies.empty()) {
+        copies.assign(submits, submits + count);
+        kept.resize(count);
+        filtered.assign(count, false);
+      }
+      if (!filtered[i]) kept[i].assign(signals.begin(), signals.begin() + s);
+      filtered[i] = true;
+    }
+  }
+  if (copies.empty()) return submits;
+  for (std::uint32_t i = 0; i < count; ++i) {
+    if (!filtered[i]) continue;
+    const auto n = static_cast<std::uint32_t>(kept[i].size());
+    const auto* data = n ? kept[i].data() : nullptr;
+    if constexpr (std::is_same_v<Submit, VkSubmitInfo>) {
+      copies[i].signalSemaphoreCount = n; copies[i].pSignalSemaphores = data;
+    } else {
+      copies[i].signalSemaphoreInfoCount = n; copies[i].pSignalSemaphoreInfos = data;
+    }
+  }
+  return copies.data();
+}
+}  // namespace
+
+const VkSubmitInfo* filter_binary_signals(VkQueue queue, std::uint32_t count, const VkSubmitInfo* submits,
+                                          BinarySignalStorage& storage) {
+  return filter_signals(queue, count, submits, storage.submits, storage.signals,
+      [](VkDevice d, const VkSubmitInfo& batch, VkSemaphore semaphore) {
+        // Batches carrying timeline values keep their signals: they may name
+        // timeline semaphores, and their value arrays parallel the signals.
+        for (auto* p = static_cast<const VkBaseInStructure*>(batch.pNext); p; p = p->pNext)
+          if (p->sType == VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO) return true;
+        return note_signal(d, semaphore);
+      });
+}
+const VkSubmitInfo2* filter_binary_signals(VkQueue queue, std::uint32_t count, const VkSubmitInfo2* submits,
+                                           BinarySignalStorage& storage) {
+  return filter_signals(queue, count, submits, storage.submits2, storage.signals2,
+      [](VkDevice d, const VkSubmitInfo2&, const VkSemaphoreSubmitInfo& signal) {
+        // A nonzero value may signal a timeline semaphore; binary ones ignore it.
+        return signal.value != 0 || note_signal(d, signal.semaphore);
+      });
+}
+void note_binary_waits(VkQueue queue, std::uint32_t count, const VkBindSparseInfo* binds) {
+  auto binding = queue_binding(queue);
+  if (!binding || !binds) return;
+  for (std::uint32_t i = 0; i < count; ++i)
+    note_waits(binding->device, binds[i].waitSemaphoreCount, binds[i].pWaitSemaphores);
+}
 void release_sync_fd_device(VkDevice device) {
+  {
+    std::lock_guard lock(binary_lock);
+    std::erase_if(waited_binary, [&](const auto& entry) { return entry.first == device; });
+    std::erase_if(signaled_binary, [&](const auto& entry) { return entry.first == device; });
+  }
   {
     std::lock_guard lock(imports_lock);
     std::erase_if(imported, [&](const auto& entry) { return entry.first == device; });

@@ -2,9 +2,12 @@
 #pragma once
 
 #include <cstdint>
+#include <array>
+#include <optional>
 #include <filesystem>
 #include <map>
 #include <string>
+#include <vector>
 #include "core/device_identity.h"
 #include "core/guest.h"
 
@@ -24,6 +27,9 @@ struct ProcessConfig {
   // Host locations.
   std::filesystem::path apk;           // downloaded base APK
   std::filesystem::path obb_dir;       // directory containing main.*.obb / patch.*.obb
+  // The install's expansion and asset files Venture publishes in obb_dir: read-only to the
+  // game, which may create its own files beside them as on Android.
+  std::vector<std::string> expansion_files;
   std::filesystem::path data_dir;      // per-game persistent storage root
   std::filesystem::path cache_dir;     // per-game cache root (extracted libs, translated code)
   std::filesystem::path native_lib_dir;  // extracted lib/<abi>/ directory
@@ -50,8 +56,11 @@ struct ProcessConfig {
   bool platform_leaderboard_writes = true; // per-launch opt-out, owner-authorized by default
   bool embedded_java_scripts = false; // tooling agent needed only for prepared Java loaders
   bool has_code = true; // classes.dex present; a native-only APK (hasCode="false") has none
-  // VENTURE_PASSTHROUGH, captured once before guest/XR initialization.
-  bool passthrough = false;
+  // VENTURE_PASSTHROUGH (on unless "0"), captured once before guest/XR initialization.
+  bool passthrough = true;
+  // VENTURE_PASSTHROUGH_KEY: the user's color key (sRGB), the only way the
+  // color key passthrough backend is chosen.
+  std::optional<std::array<std::uint8_t, 3>> passthrough_key;
 };
 
 ProcessConfig& process_config();

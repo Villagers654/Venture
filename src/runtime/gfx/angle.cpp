@@ -1,6 +1,7 @@
 #include "common/environment.h"
 #include "gfx/angle.h"
 
+#include <atomic>
 #include <cstdlib>
 #include <functional>
 #include <mutex>
@@ -11,6 +12,8 @@
 #include <vector>
 
 #include "common/log.h"
+#include "core/os_quit.h"
+#include "core/thread_runtime.h"
 #include "gfx/angle_callbacks.h"
 #include "gfx/blob_cache.h"
 #include "gfx/gpu_device_internal.h"
@@ -200,7 +203,29 @@ void init_display() {
             shared);
   install_blob_cache(display);
 }
+std::atomic<bool> context_lost{false};
+std::atomic<unsigned> out_of_memory_reports{0};
 }  // namespace
+void note_angle_gl_failure(GLenum error, std::string_view where) {
+  if (error == GL_OUT_OF_MEMORY) {
+    // The game may keep retrying the allocation; the first reports identify it.
+    if (out_of_memory_reports.fetch_add(1, std::memory_order_relaxed) < 8)
+      log::error("gfx", "ANGLE: GL_OUT_OF_MEMORY ({})", where);
+    return;
+  }
+  if (error != GL_CONTEXT_LOST || context_lost.exchange(true)) return;
+  // As vulkan::end_app_after_device_loss for the guest's own Vulkan devices.
+  // ANGLE loses every context with the Vulkan device and never recovers it:
+  // Bait! with 8x MSAA at PCVR sizes submitted no frame after the loss and
+  // then hung until OS quit failed (124). OS quit already accepts a loss.
+  if (os_quit::requested() || !terminal_guest_process_exit()) {
+    log::error("gfx", "ANGLE: GL_CONTEXT_LOST ({}); the GPU device was lost", where);
+    return;
+  }
+  log::error("gfx", "ANGLE: GL_CONTEXT_LOST ({}); the GPU device was lost, ending the app as a fatal error", where);
+  record_guest_process_failure(1);
+  exit_guest_process(1);
+}
 bool configure_angle(const std::filesystem::path& directory) {
   std::lock_guard lock(config_lock);
   if (started) return false;

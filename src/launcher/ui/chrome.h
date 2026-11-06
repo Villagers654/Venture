@@ -3,7 +3,8 @@
 
 namespace venture::launcher::chrome {
 // The launcher's own window chrome where the platform does not frame the
-// window (window_style.h: client_side_decorations). Window coordinates.
+// window (window_style.h: client_side_decorations). In pixels, ImGui's
+// coordinates; App converts the hit test's window coordinates.
 struct Frame {
   int width = 0, height = 0;
   bool maximized = false;

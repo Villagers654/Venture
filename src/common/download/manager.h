@@ -23,10 +23,15 @@ struct Job {
   bool importing = false;
   // The import brought saves, but this computer's saves for the game were kept.
   bool saves_kept = false;
+  // A version installed beside the game's own install: build binary_id into
+  // its own folder, never updated (meta::Plan::pinned). One job per version;
+  // an asset job of a pinned version is pinned too.
+  bool pinned = false;
   std::uint64_t generation = 1;
 };
-// The base-game job of an app (no add-on SKU or single asset) in a snapshot.
-std::optional<Job> base_job(const std::vector<Job> &jobs, std::string_view app);
+// The base-game job of a library id (no add-on SKU or single asset) in a
+// snapshot: an app's own install, or a pinned version's (meta::version_id).
+std::optional<Job> base_job(const std::vector<Job> &jobs, std::string_view id);
 class Manager {
 public:
   struct Services {
@@ -49,11 +54,15 @@ public:
                std::string token);
   void enqueue(std::string app, std::string name, fs::path root,
                std::string token, std::string account);
+  // Build `binary` of `app`, pinned beside the game's other versions.
+  void enqueue_version(std::string app, std::string binary, std::string name,
+                       fs::path root, std::string token, std::string account);
   void enqueue_addon(std::string app, std::string name, fs::path root,
                      std::string binary_id, std::string sku, std::string token);
+  // `pinned`: into the pinned version of that build, not the game's own install.
   void enqueue_asset(std::string app, fs::path root, std::string binary_id,
                      std::string id, std::string filename, std::string token,
-                     std::string account);
+                     std::string account, bool pinned = false);
   // Installs `app` from an import source for `account` ("local" for none, with
   // no token); see common/library/import.h. `app` is Meta's id for it, or the
   // package when Meta's is unknown.
@@ -67,7 +76,9 @@ public:
   void uninstall_addon(std::string_view app, const fs::path &root,
                        std::string_view binary_id, std::string_view sku);
   bool refresh_catalog(const fs::path &root, const meta::Plan &catalog);
-  void cancel(std::string_view app);
+  // Pauses the downloads of a library id: an app's own (with its add-ons and
+  // assets), or one pinned version's.
+  void cancel(std::string_view id);
   // Drops a job from the queue, stopping it first. With `discard`, the files
   // of a base game or import that never finished installing are deleted too.
   void remove(const Job &job, bool discard);
@@ -111,7 +122,7 @@ private:
                    std::string token, std::string account, std::string binary,
                    std::string sku, std::string asset_id = {},
                    std::string asset_name = {}, std::string source = {},
-                   std::string package = {});
+                   std::string package = {}, bool pinned = false);
   std::string active_key() const;
   void run(std::stop_token stop);
   // An import job's files; returns the bytes written.

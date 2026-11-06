@@ -2,7 +2,10 @@
 // launcher::Core, the same implementation the launcher window uses, so an
 // install, import or launch here is exactly the one the window performs.
 #include "common/log.h"
+#include "common/environment.h"
+#include "common/search.h"
 #include "launcher/core.h"
+#include "launcher/i18n/i18n.h"
 #include "launcher/ui/rich_text.h"
 
 #include <algorithm>
@@ -30,7 +33,13 @@ namespace {
 volatile std::sig_atomic_t interrupted = 0;
 void on_interrupt(int) { interrupted = 1; }
 
-constexpr const char *kUsage = R"(Venture command line
+using namespace i18n::markers;
+
+const char *usage() {
+  // i18n: The whole --help text. Keep commands, options and the words in capitals
+  // (GAME, ACCOUNT, FOLDER...) in English and keep the descriptions in one column;
+  // lines are best under 80 characters.
+  return tr(R"(Venture command line
 
 Usage: venture-cli [--json] [--offline] <command> [arguments]
 
@@ -39,12 +48,22 @@ Library
   library [--installed] [--search TEXT]
                                  Games your accounts own and games installed here
   info GAME                      Store details, installation and add-ons
-  install GAME [--as ACCOUNT] [--to FOLDER]
+  install GAME [--as ACCOUNT] [--to FOLDER] [--build VERSION|all]
                                  Download and install (or update) a game; a new
-                                 one goes to FOLDER instead of the games folder
+                                 one goes to FOLDER instead of the games folder.
+                                 --build installs that version (or every one)
+                                 beside the others, each its own library entry
+                                 with its own saves, never updated
+  builds GAME [--as ACCOUNT]     Every version you can install, with its version
+                                 code, binary id and release channels
   uninstall GAME [--yes]         Remove a game's files; saves are kept
   play GAME [--as ACCOUNT|local] Launch a game and wait for it to exit
   logs GAME [--lines N]          The end of a game's last runtime log
+  report [GAME] [--upload]       Write a debug report about a game's last run
+                                 (the most recent one by default): what happened,
+                                 its likely cause, the system setup and the logs,
+                                 with personal details removed; --upload also
+                                 shares it as a link (dpaste.com, 90 days)
 
 Add-ons
   addons GAME [--as ACCOUNT]     List a game's add-ons (as the owning account)
@@ -67,7 +86,9 @@ Import
 
 Accounts
   accounts                       Signed-in Meta accounts
-  accounts sign-in               Add an account (opens Meta's sign-in window)
+  accounts sign-in [--manual]    Add an account (opens Meta's sign-in window);
+                                 --manual prints Meta's link for any browser and
+                                 reads back the oculus:// address it ends on
   accounts use ACCOUNT           Make an account active
   accounts primary ACCOUNT       Mark the primary account
   accounts sign-out ACCOUNT      Sign out; its games and saves stay
@@ -78,13 +99,18 @@ Settings
   settings set KEY VALUE         games-folder PATH | runtime PATH|default |
                                  adb PATH|auto | log-level trace|debug|info|warn|error |
                                  console on|off | add-to-steam on|off |
-                                 add-new-to-steam on|off | passthrough on|off
+                                 add-new-to-steam on|off | passthrough on|off |
+                                 language auto|en|CODE |
+                                 color-key off|RRGGBB |
+                                 mirror cropped|full|off | mirror-eye left|right |
+                                 pc-audio on|off
 
 GAME is a name (or a unique part of it), an app id or a package name.
 ACCOUNT is a name, alias, account key or the number `accounts` shows.
 Exit codes: 0 success, 1 failure, 2 usage, 130 interrupted; play returns the
 game's own exit code.
-)";
+)");
+}
 
 struct UsageError : std::runtime_error {
   using std::runtime_error::runtime_error;
@@ -108,21 +134,23 @@ struct Args {
 };
 
 Args parse(const std::vector<std::string> &argv) {
-  static const std::set<std::string> with_value{"--as", "--to", "--search", "--serial", "--lines", "--only", "--from"};
+  static const std::set<std::string> with_value{"--as",   "--to",   "--search", "--serial",
+                                                "--lines", "--only", "--from",   "--build", "--language"};
   static const std::set<std::string> known{"--json",   "--offline", "--yes",          "-y",
                                            "--all",    "--installed", "--delete-saves", "--headset",
-                                           "--help",   "-h",        "--version"};
+                                           "--help",   "-h",        "--version",      "--manual",
+                                           "--upload"};
   Args out;
   for (size_t i = 1; i < argv.size(); ++i) {
     const auto &a = argv[i];
     if (with_value.contains(a)) {
       if (i + 1 >= argv.size())
-        throw UsageError(std::format("{} needs a value.", a));
+        throw UsageError(trf("{0} needs a value.", a));
       out.values[a] = argv[++i];
     } else if (known.contains(a)) {
       out.flags.insert(a == "-y" ? "--yes" : a == "-h" ? "--help" : a);
     } else if (a.starts_with("--")) {
-      throw UsageError(std::format("Unknown option {}.", a));
+      throw UsageError(trf("Unknown option {0}.", a));
     } else {
       out.words.push_back(a);
     }
@@ -395,6 +423,15 @@ private:
                        pick([&](auto &g) { return lower(g.name).find(q) != std::string::npos; })}) {
       if (found.size() == 1)
         return found.front();
+      // A game's own entry wins over its pinned versions ("Game (1.2)").
+      if (found.size() > 1) {
+        std::vector<meta::Game> own;
+        for (auto &g : found)
+          if (meta::version_binary(g.id).empty())
+            own.push_back(g);
+        if (own.size() == 1)
+          return own.front();
+      }
       if (found.size() > 1) {
         std::string names;
         for (size_t i = 0; i < found.size() && i < 8; ++i)
@@ -463,6 +500,9 @@ private:
       for (auto &a : accounts_)
         if (a.key != account_key_)
           std::ranges::move(downloads_->snapshot(a.key), std::back_inserter(jobs));
+      // The game's own download, or a pinned version's (its library id).
+      if (sku.empty())
+        return download::base_job(jobs, id);
       for (auto &j : jobs)
         if (j.app_id == id && j.sku == sku && j.asset_id.empty())
           return j;
@@ -519,9 +559,23 @@ private:
   int library_list(const Args &);
   int info(const Args &);
   int install_game(const Args &);
+  int install_builds(const Args &, const meta::Game &g, const std::string &which);
+  int list_builds(const Args &);
+  // Every published build of a game, listed with its owner's account.
+  std::vector<meta::Build> owner_builds(const meta::Game &g) {
+    std::vector<meta::Build> list;
+    as_owner(g, [&] {
+      if (!session_)
+        throw std::runtime_error("Sign in to list this game's versions.");
+      list = meta::Store(session_->access_token).all_builds(g.id);
+      return 0;
+    });
+    return list;
+  }
   int uninstall_game(const Args &);
   int play_game(const Args &);
   int logs(const Args &);
+  int report(const Args &);
   int addons_cmd(const Args &);
   int addons_owned(const Args &, const meta::Game &, const std::string &sub);
   int downloads_cmd(const Args &);
@@ -574,10 +628,9 @@ int Cli::library_list(const Args &args) {
   wait_library();
   auto games = visible_games();
   const bool only_installed = args.flag("--installed");
-  const auto search = lower(args.value("--search").value_or(""));
+  const auto query = args.value("--search").value_or("");
   std::erase_if(games, [&](auto &g) {
-    return (only_installed && !installed(g.id, false)) ||
-           (!search.empty() && lower(g.name).find(search) == std::string::npos);
+    return (only_installed && !installed(g.id, false)) || !search::matches(query, g.name);
   });
   std::ranges::sort(games, [](auto &a, auto &b) { return lower(a.name) < lower(b.name); });
   if (json_) {
@@ -587,7 +640,7 @@ int Cli::library_list(const Args &args) {
     return print(out), 0;
   }
   if (games.empty()) {
-    std::cout << (only_installed || !search.empty() ? "No games match.\n" : "No games yet.\n");
+    std::cout << (only_installed || !query.empty() ? "No games match.\n" : "No games yet.\n");
     return 0;
   }
   std::vector<std::vector<std::string>> rows;
@@ -658,6 +711,8 @@ int Cli::install_game(const Args &args) {
   if (game_owners(g.id).empty())
     throw std::runtime_error(std::format("No signed-in account owns {}.", g.name));
   pick_owner(args, g);
+  if (auto which = args.value("--build"))
+    return install_builds(args, g, *which);
   if (installed(g.id)) {
     wait_details(g.id);
     if (!update_available(g.id)) {
@@ -699,6 +754,107 @@ int Cli::install_game(const Args &args) {
     return print(game_json(g)), 0;
   std::cout << std::format("Installed {} (version {}, {}).\n", g.name, done->plan.version, bytes(done->bytes));
   return 0;
+}
+
+int Cli::list_builds(const Args &args) {
+  need_online();
+  wait_library();
+  auto g = resolve_game(args.word(1, "game"));
+  if (!meta::version_binary(g.id).empty())
+    g = resolve_game(std::string(meta::base_app(g.id)));
+  if (game_owners(g.id).empty())
+    throw std::runtime_error(std::format("No signed-in account owns {}.", g.name));
+  pick_owner(args, g);
+  const auto list = owner_builds(g);
+  auto status = [&](const meta::Build &b) {
+    std::string out = b.live ? "latest" : "";
+    if (auto i = installed_build(g.id, b.binary_id))
+      out += std::string(out.empty() ? "" : ", ") + (i->plan.pinned ? "installed beside" : "installed");
+    return out;
+  };
+  if (json_) {
+    Json out = Json::array();
+    for (auto &b : list)
+      out.push_back({{"version", b.version}, {"versionCode", b.version_code}, {"binaryId", b.binary_id},
+                     {"channels", b.channels}, {"latest", b.live},
+                     {"installed", installed_build(g.id, b.binary_id) != nullptr}});
+    return print(out), 0;
+  }
+  std::vector<std::vector<std::string>> rows;
+  for (auto &b : list) {
+    std::string channels;
+    for (auto &c : b.channels)
+      channels += (channels.empty() ? "" : ", ") + c;
+    rows.push_back({b.version, b.version_code, b.binary_id, channels.empty() ? "-" : channels, status(b)});
+  }
+  table({"Version", "Code", "Binary ID", "Channels", "Status"}, rows);
+  std::cout << std::format("\n{} versions of {}\n", list.size(), g.name);
+  return 0;
+}
+
+int Cli::install_builds(const Args &args, const meta::Game &game_entry, const std::string &which) {
+  const auto g = game_entry;
+  if (!meta::version_binary(g.id).empty())
+    throw UsageError(std::format("{} is a version installed beside the game; name the game itself.", g.name));
+  const auto list = owner_builds(g);
+  std::vector<meta::Build> chosen;
+  if (which == "all")
+    chosen = list;
+  else {
+    for (auto &b : list)
+      if (b.binary_id == which || b.version == which)
+        chosen.push_back(b);
+    if (chosen.empty())
+      throw std::runtime_error(std::format("{} has no version {}. See: venture-cli builds \"{}\"", g.name, which, g.name));
+    if (chosen.size() > 1)
+      throw std::runtime_error(std::format("{} has {} builds of version {}; give the binary id (venture-cli builds).",
+                                           g.name, chosen.size(), which));
+  }
+  if (which == "all" && !confirm(args, std::format("Install all {} versions of {}?", chosen.size(), g.name)))
+    return 1;
+  const auto home = account_key_;
+  auto restore = [&] {
+    if (!home.empty() && account_key_ != home)
+      action([&] { switch_account(home); });
+  };
+  size_t queued = 0;
+  std::vector<std::string> failed;
+  try {
+    auto entry = game(g.id);
+    if (!entry)
+      throw std::runtime_error(std::format("{} is not in the Meta library.", g.name));
+    const auto to = args.value("--to");
+    queued = install_versions(*entry, chosen, to ? fs::absolute(paths::from_utf8(*to)).lexically_normal() : fs::path{});
+    if (!json_ && queued < chosen.size())
+      std::cout << std::format("{} of {} versions are installed already.\n", chosen.size() - queued, chosen.size());
+    for (auto &b : chosen) {
+      if (!download::base_job(downloads_->snapshot(), meta::version_id(g.id, b.binary_id)))
+        continue;  // installed already, nothing queued
+      // One version failing does not stop the others.
+      try {
+        follow(meta::version_id(g.id, b.binary_id), "", "Downloading");
+      } catch (const Interrupted &) {
+        throw;
+      } catch (const std::exception &e) {
+        failed.push_back(std::format("{}: {}", b.label(), e.what()));
+      }
+    }
+    wait_scan();
+    rescan();
+    wait_scan();
+  } catch (...) {
+    restore();
+    throw;
+  }
+  restore();
+  if (json_)
+    return print(Json{{"queued", queued}, {"failed", failed}}), failed.empty() ? 0 : 1;
+  if (queued)
+    std::cout << std::format("Installed {} of {} versions of {}.\n", queued - std::min(queued, failed.size()), queued,
+                             g.name);
+  for (auto &f : failed)
+    std::cerr << "  " << f << "\n";
+  return failed.empty() ? 0 : 1;
 }
 
 int Cli::uninstall_game(const Args &args) {
@@ -801,6 +957,43 @@ int Cli::logs(const Args &args) {
   std::cout << "# " << paths::utf8(file) << "\n";
   for (auto &l : lines)
     std::cout << l << "\n";
+  return 0;
+}
+
+int Cli::report(const Args &args) {
+  wait_scan();
+  std::string app_id;
+  if (args.words.size() > 1)
+    app_id = resolve_game(args.word(1, "game")).id;
+  const auto file = save_debug_report(app_id, VENTURE_VERSION);
+  std::string url, error;
+  if (args.flag("--upload")) {
+    bool done = false;
+    share_debug_report(file, [&](std::string u, std::string e) {
+      url = std::move(u);
+      error = std::move(e);
+      done = true;
+    });
+    wait([&] { return done; });
+  }
+  if (json_) {
+    Json out{{"report", paths::utf8(file)}};
+    if (!url.empty())
+      out["url"] = url;
+    if (!error.empty())
+      out["error"] = error;
+    print(out);
+  } else {
+    // The summary: everything before the system details.
+    std::ifstream in(file, std::ios::binary);
+    for (std::string line; std::getline(in, line) && line != "=== System ===";)
+      std::cout << line << "\n";
+    std::cout << "Full report: " << paths::utf8(file) << "\n";
+    if (!url.empty())
+      std::cout << "Link to share: " << url << "\n";
+  }
+  if (!error.empty())
+    throw std::runtime_error("The report could not be uploaded: " + error);
   return 0;
 }
 
@@ -1011,16 +1204,36 @@ int Cli::accounts_cmd(const Args &args) {
     if (options_.offline)
       throw std::runtime_error("Sign-in needs a connection. Run without --offline.");
     notice_.clear();
+    const bool manual = args.flag("--manual");
+    auth_window_ = !manual;
     add_account();
     std::string shown;
-    if (!json_)
+    auto status = [&] {
+      if (!json_ && auth_status_ != shown && !auth_status_.empty())
+        std::cout << auth_status_ << "\n" << std::flush;
+      shown = auth_status_;
+    };
+    if (!json_ && !manual)
       std::cout << "Complete sign-in in the Meta window.\n" << std::flush;
-    wait([&] { return !signing_in_; },
-         [&] {
-           if (!json_ && auth_status_ != shown && !auth_status_.empty())
-             std::cout << auth_status_ << "\n" << std::flush;
-           shown = auth_status_;
-         });
+    // Manually, or when the window could not open: the link out, the address back.
+    wait([&] { return !signing_in_ || (!auth_url_.empty() && (manual || auth_manual_)); }, status);
+    if (signing_in_ && !verifying_) {
+      std::cerr << "1. Open this link in any browser and sign in to Meta:\n\n" << auth_url_ << "\n\n"
+                << "2. Paste the oculus:// address that Meta's Continue button tries to open\n"
+                << "   (in Firefox, press Ctrl+Shift+K before Continue and paste the message it shows):\n"
+                << std::flush;
+      std::string line;
+      while (signing_in_ && !verifying_ && std::getline(std::cin, line)) {
+        paste_sign_in(line);
+        if (!verifying_ && !auth_paste_error_.empty())
+          std::cerr << auth_paste_error_ << "\n" << std::flush;
+      }
+      if (signing_in_ && !verifying_) {  // input ended
+        cancel_sign_in();
+        throw std::runtime_error("Sign-in did not finish.");
+      }
+    }
+    wait([&] { return !signing_in_; }, status);
     if (!notice_.empty())
       throw std::runtime_error(notice_);
     if (!session_ || auth_status_ == "Sign-in cancelled.")
@@ -1082,12 +1295,31 @@ int Cli::settings_cmd(const Args &args) {
       next.log_level = int(it - std::begin(kLevels));
     } else if (key == "passthrough" || key == "steam-frame-passthrough") {
       next.passthrough = on_off(value);
+    } else if (key == "color-key") {
+      if (lower(value) == "off") next.color_key = false;
+      else if (environment::parse_color_key(value)) {
+        next.color_key = true;
+        next.key_color = value.starts_with('#') ? value.substr(1) : value;
+      } else throw UsageError("color-key takes off or a color as six hex digits (RRGGBB), such as FF00FF.");
     } else if (key == "console")
       next.console = on_off(value);
     else if (key == "add-to-steam")
       next.add_games_to_steam = on_off(value);
     else if (key == "add-new-to-steam")
       next.steam_add_new = on_off(value);
+    else if (key == "language")
+      next.interface_language = value == "auto" ? "" : value;
+    else if (key == "mirror") {
+      if (value != "cropped" && value != "full" && value != "off")
+        throw UsageError("mirror takes cropped, full or off.");
+      next.display.mirror = value;
+    } else if (key == "mirror-eye") {
+      if (value != "left" && value != "right")
+        throw UsageError("mirror-eye takes left or right.");
+      next.display.mirror_eye = value;
+    } else if (key == "pc-audio") {
+      next.display.pc_audio = on_off(value) ? "on" : "off";
+    }
     else
       throw UsageError(std::format("Unknown setting \"{}\".", key));
     apply_settings(std::move(next), false);
@@ -1100,9 +1332,14 @@ int Cli::settings_cmd(const Args &args) {
            {"adb", settings_.adb.empty() ? "auto" : paths::utf8(settings_.adb)},
            {"log-level", std::string(kLevels[std::clamp(settings_.log_level, 0, 4)])},
            {"passthrough", settings_.passthrough},
+           {"color-key", settings_.color_key ? settings_.key_color : "off"},
            {"console", settings_.console},
            {"add-to-steam", settings_.add_games_to_steam},
-           {"add-new-to-steam", settings_.steam_add_new}};
+           {"add-new-to-steam", settings_.steam_add_new},
+           {"language", settings_.interface_language.empty() ? "auto" : settings_.interface_language},
+           {"mirror", library::mirror_environment(settings_.display)},
+           {"mirror-eye", library::mirror_eye_environment(settings_.display)},
+           {"pc-audio", library::pc_audio_environment(settings_.display)}};
   Json folders = Json::array();
   for (const auto &folder : settings_.libraries)
     folders.push_back(paths::utf8(folder));
@@ -1120,30 +1357,48 @@ int Cli::run(const Args &args) {
   if (cmd == "library") return library_list(args);
   if (cmd == "info") return info(args);
   if (cmd == "install") return install_game(args);
+  if (cmd == "builds") return list_builds(args);
   if (cmd == "uninstall") return uninstall_game(args);
   if (cmd == "play") return play_game(args);
   if (cmd == "logs") return logs(args);
+  if (cmd == "report") return report(args);
   if (cmd == "addons") return addons_cmd(args);
   if (cmd == "downloads") return downloads_cmd(args);
   if (cmd == "import") return import_cmd(args);
   if (cmd == "import-saves") return import_saves_cmd(args);
   if (cmd == "accounts") return accounts_cmd(args);
   if (cmd == "settings") return settings_cmd(args);
-  throw UsageError(std::format("Unknown command \"{}\".", cmd));
+  throw UsageError(trf("Unknown command \"{0}\".", cmd));
 }
 
 // Commands that read Meta's library start its refresh with the core.
 bool needs_library(std::string_view cmd) {
-  return cmd == "library" || cmd == "info" || cmd == "install" || cmd == "addons" || cmd == "import";
+  return cmd == "library" || cmd == "info" || cmd == "install" || cmd == "addons" || cmd == "import" ||
+         cmd == "builds";
 }
 } // namespace
 
+// The interface language: --language, else the saved setting, else the system's.
+static void choose_language(const std::vector<std::string> &argv) {
+  std::string language;
+  for (size_t i = 1; i + 1 < argv.size(); ++i)
+    if (argv[i] == "--language") language = argv[i + 1];
+  if (language.empty()) {
+    try {
+      language = library::Settings::load(paths::data_dir()).interface_language;
+    } catch (...) {
+    }
+  }
+  i18n::set_language(language);
+}
+
 int run_cli(const std::vector<std::string> &argv) {
+  choose_language(argv);
   Args args;
   try {
     args = parse(argv);
   } catch (const UsageError &e) {
-    std::cerr << "error: " << e.what() << "\n\n" << kUsage;
+    std::cerr << tr("error: ") << e.what() << "\n\n" << usage();
     return 2;
   }
   if (args.flag("--version")) {
@@ -1151,13 +1406,14 @@ int run_cli(const std::vector<std::string> &argv) {
     return 0;
   }
   if (args.flag("--help") || args.words.empty() || args.words.front() == "help") {
-    std::cout << kUsage;
+    std::cout << usage();
     return args.words.empty() && !args.flag("--help") ? 2 : 0;
   }
   Options options;
   options.cli = true;
   options.automation = true;
   options.offline = args.flag("--offline");
+  options.language = args.value("--language").value_or("");
   const auto &cmd = args.words.front();
   // Play is the launcher's direct launch: no library refresh, and the window's
   // download queue and catalog stay untouched.
@@ -1175,7 +1431,7 @@ int run_cli(const std::vector<std::string> &argv) {
     cli.start(needs_library(cmd));
     return cli.run(args);
   } catch (const UsageError &e) {
-    std::cerr << "error: " << e.what() << "\nSee: venture-cli --help\n";
+    std::cerr << tr("error: ") << e.what() << "\n" << tr("See: venture-cli --help") << "\n";
     return 2;
   } catch (const Interrupted &) {
     std::cerr << "\nInterrupted. Queued downloads continue the next time Venture opens.\n";

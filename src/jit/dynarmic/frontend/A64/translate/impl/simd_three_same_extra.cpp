@@ -65,8 +65,12 @@ bool TranslatorVisitor::FCMLA_vec(bool Q, Imm<2> size, Vec Vm, Imm<2> rot, Vec V
 
     const size_t esize = 8U << size.ZeroExtend();
 
-    // TODO: Currently we don't support half-precision floating point
-    ASSERT(esize != 16);
+    // Venture: the half-precision variant is not implemented, and guests do not use it:
+    // AT_HWCAP offers neither FPHP nor FCMA. Background translation reaches code the guest
+    // may never run, so it is UNDEFINED here instead of stopping the process.
+    if (esize == 16) {
+        return UnallocatedEncoding();
+    }
 
     const size_t datasize = Q ? 128 : 64;
     const size_t num_elements = datasize / esize;
@@ -134,8 +138,12 @@ bool TranslatorVisitor::FCADD_vec(bool Q, Imm<2> size, Vec Vm, Imm<1> rot, Vec V
 
     const size_t esize = 8U << size.ZeroExtend();
 
-    // TODO: Currently we don't support half-precision floating point
-    ASSERT(esize != 16);
+    // Venture: the half-precision variant is not implemented, and guests do not use it:
+    // AT_HWCAP offers neither FPHP nor FCMA. Background translation reaches code the guest
+    // may never run, so it is UNDEFINED here instead of stopping the process.
+    if (esize == 16) {
+        return UnallocatedEncoding();
+    }
 
     const size_t datasize = Q ? 128 : 64;
     const size_t num_elements = datasize / esize;

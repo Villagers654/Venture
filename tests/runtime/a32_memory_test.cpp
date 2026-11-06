@@ -262,6 +262,41 @@ TEST_CASE("Region snapshot partial publishes match full publishes") {
     }
   }
 }
+TEST_CASE("Region snapshots are reclaimed while readers never pause") {
+  // Translation threads check executability per fetched instruction, so the
+  // reader count may never reach zero; replaced snapshots must still be freed,
+  // and readers must keep seeing a whole snapshot (old or new) meanwhile.
+  constexpr GuestAddr page = 4096;
+  std::map<GuestAddr, MemoryRegion> regions;
+  for (GuestAddr i = 0; i < 256; ++i) regions.emplace(i * 2 * page, MemoryRegion{i * 2 * page, page, 5, "", 0});
+  RegionSnapshot snapshot;
+  snapshot.publish(regions);
+  std::atomic<bool> stop{false};
+  std::atomic<unsigned> wrong{0};
+  std::vector<std::thread> readers;
+  for (int t = 0; t < 4; ++t)
+    readers.emplace_back([&, t] {
+      std::mt19937 random(t);
+      while (!stop.load()) {
+        // Region 0 never changes; odd pages are always gaps.
+        if (!snapshot.permitted(0, 1, kProtExec)) wrong.fetch_add(1);
+        if (snapshot.permitted((1 + 2 * (random() % 255)) * page, 1, kProtRead)) wrong.fetch_add(1);
+      }
+    });
+  std::size_t most = 0;
+  for (int step = 0; step < 4000; ++step) {
+    const GuestAddr at = (2 + 2 * (step % 254)) * page;
+    regions[at].prot = step % 2 ? 5 : 1;
+    snapshot.publish(regions, at, at + page);
+    most = std::max(most, snapshot.retired());
+  }
+  stop.store(true);
+  for (auto& r : readers) r.join();
+  CHECK(wrong.load() == 0);
+  // Every publish ends grace periods unless a reader stays descheduled; the old
+  // single counter kept nearly all 4000 replaced copies here.
+  CHECK(most < 64);
+}
 TEST_CASE("A32 private files preserve bytes and reject writable shared") {
   AddressSpace::FileReader reader = [](auto off, void* out, auto n) {
     for (std::uint64_t i = 0; i < n; ++i) static_cast<unsigned char*>(out)[i] = (off + i) % 251;

@@ -2,6 +2,7 @@
 #include "java/natives/path_bridge.h"
 #include "java/internal.h"
 #include "media/media.h"
+#include "media/yuv.h"
 #include "hle/libc/vfs.h"
 #include "android/native_window.h"
 #include "java/natives/surface_bridge.h"
@@ -72,6 +73,24 @@ jobject JNICALL codec_buffer(JNIEnv* env,jclass,jlong id,jboolean input,jint ind
     auto c=codec(id);if(!c)return nullptr;
     if(input){auto b=c->input_buffer(index,false);return b.empty()?nullptr:env->NewDirectByteBuffer(b.data(),b.size());}
     auto b=c->output_buffer(index);return b.empty()?nullptr:env->NewDirectByteBuffer(const_cast<std::byte*>(b.data()),b.size());
+  });
+}
+// MediaCodec.getOutputImage: the owned output frame (NV12 for ByteBuffer video,
+// RGBA where a codec still outputs it) as YUV_420_888 planes in the image's
+// direct buffer.
+jint JNICALL codec_image(JNIEnv* env,jclass,jlong id,jint index,jobject target) {
+  return guard(env,[&]()->jint {
+    auto c=codec(id);if(!c)return media::bad_state;if(!target)return media::invalid;
+    auto track=c->format();const bool nv12=track.color_format==media::color_nv12;
+    if(!media::video_mime(track.mime) || (!nv12 && track.color_format!=media::color_rgba))return media::unsupported;
+    auto frame=c->output_buffer(index);const std::size_t w=track.width,h=track.height;
+    const std::size_t pitch=media::nv12_extent(int(w)),rows=media::nv12_extent(int(h));
+    if(frame.size()<(nv12?pitch*rows*3/2:w*h*4))return media::bad_state;
+    auto* out=static_cast<std::uint8_t*>(env->GetDirectBufferAddress(target));
+    if(!out || env->GetDirectBufferCapacity(target)<jlong(media::yuv420_size(w,h)))return media::invalid;
+    auto* in=reinterpret_cast<const std::uint8_t*>(frame.data());
+    if(nv12)media::nv12_to_yuv420(in,pitch,rows,w,h,out);else media::rgba_to_yuv420(in,w,h,out);
+    return 0;
   });
 }
 jint JNICALL codec_queue(JNIEnv* env,jclass,jlong id,jint index,jint offset,jint size,jlong pts,jint flags) {
@@ -275,6 +294,7 @@ void register_media_players(JNIEnv* env) {
     METHOD("nativeCreate","(Ljava/lang/String;)J",codec_create),
     METHOD("nativeConfigure","(JLjava/lang/String;IIII[BLandroid/view/Surface;)I",codec_configure),
     METHOD("nativeControl","(JIJ)J",codec_control),METHOD("nativeBuffer","(JZI)Ljava/nio/ByteBuffer;",codec_buffer),
+    METHOD("nativeImage","(JILjava/nio/ByteBuffer;)I",codec_image),
     METHOD("nativeQueue","(JIIIJI)I",codec_queue),METHOD("nativeOutput","(JJ[J)I",codec_output),
     METHOD("nativeRender","(JIZJ)I",codec_render),METHOD("nativeSurface","(JLandroid/view/Surface;)I",codec_surface),
     METHOD("nativeRelease","(J)V",codec_release)

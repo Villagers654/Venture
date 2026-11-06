@@ -42,6 +42,11 @@ struct HostXr {
 // instance and system). Thread-safe.
 HostXr &host_xr();
 bool shutdown_host_xr(); // host-only, after sessions/devices have been retired
+// XR_OCULUS_audio_device_guid (Windows): the WASAPI endpoint the runtime plays
+// the headset's audio on (input: records its microphone from), in UTF-8; empty
+// when the runtime does not offer it or names none, and after shutdown.
+// Thread-safe; call after host_xr() has initialized.
+std::string headset_audio_endpoint(bool input);
 // Optional host-runtime diagnostic flush before terminal process exit. Does
 // not initialize XR or end the session; unsupported runtimes are unchanged.
 void finish_runtime_diagnostics() noexcept;
@@ -57,6 +62,8 @@ std::string host_initialization_error(std::int32_t result, const char *operation
 // zero queries once. Returns false once host_xr() has initialized.
 bool set_application_identity(std::string_view label, std::string_view package, std::int64_t version);
 bool set_system_wait(std::chrono::milliseconds limit);
+// The configured application name (the game's label), for window titles.
+std::string application_name();
 // Calls `get_system` until it returns something other than
 // XR_ERROR_FORM_FACTOR_UNAVAILABLE or `limit` has elapsed; returns the last result.
 std::int32_t wait_for_system(const std::function<std::int32_t()> &get_system,

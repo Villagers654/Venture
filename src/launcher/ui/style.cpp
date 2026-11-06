@@ -1,11 +1,14 @@
 #include "launcher/ui/style.h"
 #include "launcher/system_fonts.h"
+#include "launcher/icon_font.h"
 #include "common/paths.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
+#include <memory>
 #include <imgui_freetype.h>
 #include <imgui_internal.h>
 #include <imgui_stdlib.h>
@@ -42,6 +45,7 @@ std::string encode(char32_t cp) {
   return out;
 }
 
+#ifdef _WIN32
 std::string first_existing(std::initializer_list<const char*> candidates) {
   for (const char* path : candidates) {
     std::error_code ec;
@@ -50,11 +54,12 @@ std::string first_existing(std::initializer_list<const char*> candidates) {
   return {};
 }
 
-#ifdef _WIN32
 constexpr const char* kFontDir = "C:/Windows/Fonts/";
 #endif
 
 std::vector<std::string> g_fallbacks;  // merged after each base font: symbols, emoji
+// No system icon font: the embedded one (Lucide icons at Segoe's code points).
+constexpr const char* kEmbeddedIcons = "<embedded>";
 
 ImFont* add_font(const std::string& path, const std::string& icon_path) {
   auto& io = ImGui::GetIO();
@@ -68,7 +73,12 @@ ImFont* add_font(const std::string& path, const std::string& icon_path) {
     merge.MergeMode = true;
     merge.PixelSnapH = true;
     merge.FontLoaderFlags = ImGuiFreeTypeLoaderFlags_LightHinting;
-    io.Fonts->AddFontFromFileTTF(icon_path.c_str(), kBody, &merge);
+    if (icon_path == kEmbeddedIcons) {
+      merge.FontDataOwnedByAtlas = false;
+      io.Fonts->AddFontFromMemoryTTF(const_cast<unsigned char*>(kIconFont), int(sizeof kIconFont), kBody, &merge);
+    } else {
+      io.Fonts->AddFontFromFileTTF(icon_path.c_str(), kBody, &merge);
+    }
   }
   for (const std::string& fallback : g_fallbacks) {
     ImFontConfig merge;
@@ -116,7 +126,7 @@ void load_fonts() {
   // Symbols and color emoji only when those families are installed.
   for (const char* fallback : {"Noto Sans Symbols 2", "Noto Color Emoji"})
     if (std::string path = system_font(fallback, true); !path.empty()) g_fallbacks.push_back(path);
-  std::string icons;  // no system icon font on Linux yet; controls fall back to text only
+  std::string icons = kEmbeddedIcons;
   std::string regular = system_font("Inter,Noto Sans,sans-serif:style=Regular");
   std::string semilight = regular;
   std::string semibold = system_font("Inter,Noto Sans,sans-serif:weight=semibold");
@@ -133,6 +143,7 @@ void load_fonts() {
     }
   }
 #endif
+  if (icons.empty()) icons = kEmbeddedIcons;
   g_fonts.regular = add_font(regular, icons);
   if (!g_fonts.regular) {
     g_fonts.regular = io.Fonts->AddFontDefault();
@@ -148,6 +159,57 @@ void load_fonts() {
   if (!g_fonts.italic) g_fonts.italic = g_fonts.regular;
   g_fonts.icons = !icons.empty();
   io.FontDefault = g_fonts.regular;
+}
+
+// Han, kana and hangul come from a system font merged into every UI font the
+// first time a Chinese, Japanese or Korean interface is shown (the base fonts
+// cover Latin, Greek and Cyrillic). Glyphs rasterize on demand, so only the
+// font file's memory is spent, once.
+void load_script_fonts(std::string_view language) {
+  std::string code(language);
+  std::ranges::transform(code, code.begin(), [](unsigned char c) { return char(std::tolower(c)); });
+  std::string lang = code.substr(0, code.find_first_of("_-"));
+  std::string key = lang == "zh"                 ? (code.find("hant") != std::string::npos ? "zh_hant" : "zh_hans")
+                    : lang == "ja" || lang == "ko" ? lang
+                                                   : "";
+  static std::vector<std::string> loaded;
+  static std::vector<std::unique_ptr<std::vector<char>>> files;  // the atlas reads them in place
+  if (key.empty() || std::ranges::find(loaded, key) != loaded.end()) return;
+  loaded.push_back(key);
+#ifdef _WIN32
+  std::string path = key == "zh_hans" ? first_existing({"C:/Windows/Fonts/msyh.ttc", "C:/Windows/Fonts/simsun.ttc"})
+                     : key == "zh_hant" ? first_existing({"C:/Windows/Fonts/msjh.ttc", "C:/Windows/Fonts/mingliu.ttc"})
+                     : key == "ja" ? first_existing({"C:/Windows/Fonts/YuGothM.ttc", "C:/Windows/Fonts/meiryo.ttc",
+                                                     "C:/Windows/Fonts/msgothic.ttc"})
+                                   : first_existing({"C:/Windows/Fonts/malgun.ttf"});
+#else
+  std::string path = system_font(key == "zh_hans"   ? "sans-serif:lang=zh-cn"
+                                 : key == "zh_hant" ? "sans-serif:lang=zh-tw"
+                                 : key == "ja"      ? "sans-serif:lang=ja"
+                                                    : "sans-serif:lang=ko");
+#endif
+  if (path.empty()) return;
+  auto data = std::make_unique<std::vector<char>>();
+  if (FILE* f = std::fopen(path.c_str(), "rb")) {
+    char buffer[65536];
+    for (size_t n; (n = std::fread(buffer, 1, sizeof buffer, f)) > 0;) data->insert(data->end(), buffer, buffer + n);
+    std::fclose(f);
+  }
+  if (data->empty()) return;
+  std::vector<ImFont*> targets;
+  for (ImFont* font : {g_fonts.regular, g_fonts.semilight, g_fonts.semibold, g_fonts.bold, g_fonts.italic})
+    if (font && std::ranges::find(targets, font) == targets.end()) targets.push_back(font);
+  for (ImFont* font : targets) {
+    ImFontConfig merge;
+    merge.MergeMode = true;
+    merge.DstFont = font;
+    merge.FontData = data->data();
+    merge.FontDataSize = int(data->size());
+    merge.FontDataOwnedByAtlas = false;
+    merge.FontLoaderFlags = ImGuiFreeTypeLoaderFlags_LightHinting;
+    ImGui::GetIO().Fonts->AddFont(&merge);
+  }
+  files.push_back(std::move(data));
 }
 
 const char* icon(char32_t code_point) {
@@ -617,8 +679,9 @@ bool submit_field(const char* id, const char* hint, std::string* value, float wi
   dl->AddRectFilled(p, {p.x + width, p.y + height}, field_bg(std::max(t, h * 0.6f)), height * 0.5f);
   if (t > 0.01f)
     dl->AddRect(p, {p.x + width, p.y + height}, color::alpha(color::selected, 0.55f * t), height * 0.5f, 0, s(1.5f));
-  draw_glyph(dl, glyph, kSmall, {p.x + s(20), p.y + height * 0.5f}, color::text2);
-  const float left = s(36), right = s(36);
+  // Without an icon font the text starts where the glyph would be.
+  if (g_fonts.icons) draw_glyph(dl, glyph, kSmall, {p.x + s(20), p.y + height * 0.5f}, color::text2);
+  const float left = g_fonts.icons ? s(36) : s(16), right = s(36);
   ImGui::SetCursorScreenPos({p.x + left, p.y});
   ImGui::PushStyleColor(ImGuiCol_FrameBg, IM_COL32(0, 0, 0, 0));
   ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, IM_COL32(0, 0, 0, 0));
@@ -641,6 +704,21 @@ bool submit_field(const char* id, const char* hint, std::string* value, float wi
   return submit && enabled && !value->empty();
 }
 
+float menu_height(int rows) { return rows * s(38) + std::max(0, rows - 1) * s(2) + s(12); }
+
+void place_menu(ImVec2 at, float control_h, float menu_h, float pivot_x) {
+  const ImGuiViewport* vp = ImGui::GetMainViewport();
+  const float gap = s(6), margin = s(12);
+  const float below = vp->WorkPos.y + vp->WorkSize.y - margin - (at.y + control_h + gap);
+  const float above = at.y - gap - (vp->WorkPos.y + margin);
+  const bool up = menu_h > below && above > below;
+  if (up)
+    ImGui::SetNextWindowPos({at.x, at.y - gap}, ImGuiCond_Always, {pivot_x, 1});
+  else
+    ImGui::SetNextWindowPos({at.x, at.y + control_h + gap}, ImGuiCond_Always, {pivot_x, 0});
+  ImGui::SetNextWindowSizeConstraints({0, 0}, {FLT_MAX, std::max(s(80), up ? above : below)});
+}
+
 bool begin_menu(const char* id) {
   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {s(6), s(6)});
   ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {0, s(2)});
@@ -660,7 +738,7 @@ void end_menu() {
   ImGui::PopStyleVar(3);
 }
 
-bool menu_item(const char* label, char32_t glyph, bool danger, bool enabled, ImTextureID image) {
+bool menu_item(const char* label, char32_t glyph, bool danger, bool enabled, ImTextureID image, bool dim) {
   std::string_view shown = visible_label(label);
   ImGui::PushID(label);
   float w = std::max(s(220), measure(g_fonts.regular, kBody, shown).x + s(64));
@@ -669,7 +747,7 @@ bool menu_item(const char* label, char32_t glyph, bool danger, bool enabled, ImT
   auto in = interact("##item", {w, s(38)}, enabled);
   ImDrawList* dl = ImGui::GetWindowDrawList();
   if (in.hover > 0.01f) dl->AddRectFilled(p, {p.x + w, p.y + s(38)}, color::alpha(color::surface_top, in.hover), s(8));
-  ImU32 fg = !enabled ? color::text3 : danger ? color::danger : color::text;
+  ImU32 fg = !enabled || dim ? color::text3 : danger ? color::danger : color::text;
   float x = p.x + s(12);
   if (image) {
     float h = std::round(s(8));
@@ -686,31 +764,49 @@ bool menu_item(const char* label, char32_t glyph, bool danger, bool enabled, ImT
   return in.clicked;
 }
 
-bool dropdown(const char* id, const char* prefix, const char* const* items, int count, int* current, float width) {
+float dropdown_chevron_width() {
+  const char* chev = icon(icons::chevron_down);
+  return *chev ? measure(g_fonts.regular, kLabel, chev).x + s(8) : 0;
+}
+
+float dropdown_width(const char* prefix, const char* const* items, int count) {
+  float widest = 0;
+  for (int i = 0; i < count; ++i)
+    widest = std::max(widest, measure(g_fonts.semibold, kSmall + 1, std::string(prefix) + items[i]).x);
+  return widest + dropdown_chevron_width() + s(30);
+}
+
+bool dropdown(const char* id, const char* prefix, const char* const* items, int count, int* current, float width,
+              const bool* dim, bool right) {
   ImGui::PushID(id);
   std::string shown = std::string(prefix) + items[*current];
   ImFont* font = g_fonts.semibold;
   ImVec2 ts = measure(font, kSmall + 1, shown);
-  const char* chev = icon(icons::chevron_down);
-  float chev_w = *chev ? measure(g_fonts.regular, kLabel, chev).x + s(8) : 0;
+  const float chev_w = dropdown_chevron_width();
   ImVec2 size{width > 0 ? width : ts.x + chev_w + s(30), s(38)};
+  // A label wider than a fixed field keeps its side padding: ellipsized, never past the pill.
+  if (const float room = size.x - chev_w - s(30); ts.x > room) {
+    shown = ellipsize(font, kSmall + 1, shown, room);
+    ts = measure(font, kSmall + 1, shown);
+  }
   ImVec2 p = ImGui::GetCursorScreenPos();
   auto in = interact("##dropdown", size);
   bool open = ImGui::IsPopupOpen("##menu");
   ImDrawList* dl = ImGui::GetWindowDrawList();
   dl->AddRectFilled(p, {p.x + size.x, p.y + size.y}, field_bg(std::max(in.hover, open ? 1.f : 0.f)), size.y * 0.5f);
-  // Centered in the field; a long label stops short of the chevron.
-  const float text_x = std::max(p.x + s(15), std::min(p.x + (size.x - ts.x) * 0.5f, p.x + size.x - chev_w - s(15) - ts.x));
+  // Centered in the field (or beside the chevron); a long label stops short of the chevron.
+  const float end_x = p.x + size.x - chev_w - s(15) - ts.x;
+  const float text_x = std::max(p.x + s(15), right ? end_x : std::min(p.x + (size.x - ts.x) * 0.5f, end_x));
   draw_text(dl, font, kSmall + 1, {std::round(text_x), text_y(font, kSmall + 1, p.y, size.y)}, color::text, shown);
-  if (*chev) draw_glyph(dl, icons::chevron_down, kLabel, {p.x + size.x - s(20), p.y + size.y * 0.5f}, color::text2);
+  if (chev_w > 0) draw_glyph(dl, icons::chevron_down, kLabel, {p.x + size.x - s(20), p.y + size.y * 0.5f}, color::text2);
   if (in.clicked) ImGui::OpenPopup("##menu");
   bool changed = false;
-  ImGui::SetNextWindowPos({p.x, p.y + size.y + s(6)});
+  place_menu(p, size.y, menu_height(count));
   if (begin_menu("##menu")) {
     for (int i = 0; i < count; ++i) {
       ImGui::PushID(i);
       ImVec2 row = ImGui::GetCursorScreenPos();
-      if (menu_item(items[i])) {
+      if (menu_item(items[i], 0, false, true, {}, dim && dim[i])) {
         changed = *current != i;
         *current = i;
       }

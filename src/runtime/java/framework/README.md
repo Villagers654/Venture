@@ -143,7 +143,8 @@ streaming remains available to the NDK. Classloaders consume converted jars;
 they do not interpret DEX or provide a complete DexPathList implementation.
 Adapters retain/filter their data and publish results on the creating Looper.
 Text watchers observe both direct Editable mutations and TextView replacement.
-Dialogs retain content/button callbacks but presentation remains unsupported.
+Dialogs are not presented: show() reports them shown and logs their text, and an
+AlertDialog with buttons is answered on its Looper (negative, else neutral, else positive).
 Audio device callbacks poll the native default-route inventory and deliver actual
 add/remove changes on the requested Looper; they do not invent physical devices.
 Insets retain typed values and visibility as immutable snapshots.

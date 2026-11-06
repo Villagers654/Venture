@@ -1,6 +1,7 @@
 #pragma once
 #include <cstdint>
 #include <filesystem>
+#include <memory>
 #include <span>
 #include <vector>
 namespace venture::gfx {
@@ -29,4 +30,20 @@ std::vector<std::uint8_t> transcode_astc_bc7(
     std::uint32_t format, std::uint32_t width, std::uint32_t height,
     std::uint32_t layers, std::span<const std::uint8_t> blocks,
     const std::filesystem::path& cache_directory = {});
+// Waits until every texture stored so far is in its cache directory's pack file.
+void flush_texture_caches();
+// transcode_astc_bc7 (or decode_astc) of a copied ASTC image on a background
+// thread, so the caller need not wait for it.
+struct TextureJob;
+std::shared_ptr<TextureJob> start_astc_job(
+    std::uint32_t format, std::uint32_t width, std::uint32_t height,
+    std::uint32_t layers, std::vector<std::uint8_t> blocks,
+    std::filesystem::path cache_directory, bool bc7);
+bool astc_job_done(const TextureJob& job) noexcept;
+// A job not started yet never runs.
+void cancel_astc_job(TextureJob& job) noexcept;
+// The output, waiting for it (or producing it here when no thread has started
+// the job). Empty after a decoder failure, which is logged.
+const std::vector<std::uint8_t>& finish_astc_job(TextureJob& job);
+std::size_t astc_job_bytes(const TextureJob& job) noexcept;
 }  // namespace venture::gfx

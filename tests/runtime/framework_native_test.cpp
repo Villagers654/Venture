@@ -38,7 +38,6 @@ int monitors = 0;
 std::vector<jbyte> array;
 std::map<venture::GuestAddr, std::unique_ptr<venture::android::NativeWindow>> windows;
 std::string loaded_name;
-void* loaded_loader = nullptr;
 int network_type = -2;
 bool network_failure = false;
 bool internet_connected = false;
@@ -165,9 +164,8 @@ void throw_thread_death(JNIEnv* target) noexcept {
   target->DeleteLocalRef(cls);
 }
 void add_framework_natives(NativeRegistrar registrar) { registrar(&env); }
-bool load_guest_library(const std::string& name, void* loader, std::string*) {
+bool load_guest_library(const std::string& name, void*, std::string*) {
   loaded_name = name;
-  loaded_loader = loader;
   return true;
 }
 }  // namespace venture::java

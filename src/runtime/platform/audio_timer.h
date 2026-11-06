@@ -12,6 +12,8 @@ class AudioTimer {
   void wait(std::chrono::nanoseconds interval);
 
  private:
-  void* timer_ = nullptr;
+#ifdef _WIN32
+  void* timer_ = nullptr;  // a high-resolution waitable timer
+#endif
 };
 }

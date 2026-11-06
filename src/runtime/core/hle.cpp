@@ -209,7 +209,8 @@ FunctionId add(Registry& r, std::string_view library, std::string_view name, Han
   auto id = r.next;
   if (census_enabled) (void)census();
   const auto svc = svc_for(execution);
-  const bool condition_wait = library == "libc.so" && name.starts_with("pthread_cond_") && name.find("wait") != std::string_view::npos;
+  const bool condition_wait = library == "libc.so" && name.starts_with("pthread_cond_") &&
+      (name.find("wait") != std::string_view::npos || name == "pthread_cond_timeout_np");
   auto code = guest_stub(process_config().isa(), GuestStub::hle_call, id, svc);
   if (condition_wait) {
     // A real frame keeps this cleanup distinct from the caller's catch frame.

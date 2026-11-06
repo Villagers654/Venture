@@ -20,7 +20,13 @@ bool valid_source(std::string_view source) {
 bool same(const Job &a, const Job &b) {
   return a.app_id == b.app_id && a.account == b.account &&
          a.binary_id == b.binary_id && a.sku == b.sku &&
-         a.asset_name == b.asset_name;
+         a.asset_name == b.asset_name && a.pinned == b.pinned;
+}
+// Whether a job belongs to a library id (meta::version_id for a pinned version).
+bool for_id(const Job &job, std::string_view id) {
+  const auto binary = meta::version_binary(id);
+  return job.app_id == meta::base_app(id) && job.pinned == !binary.empty() &&
+         (binary.empty() || job.binary_id == binary);
 }
 } // namespace
 const char *label(State s) {
@@ -40,9 +46,9 @@ const char *label(State s) {
   }
   return "";
 }
-std::optional<Job> base_job(const std::vector<Job> &jobs, std::string_view app) {
+std::optional<Job> base_job(const std::vector<Job> &jobs, std::string_view id) {
   for (const auto &job : jobs)
-    if (job.app_id == app && job.sku.empty() && job.asset_id.empty())
+    if (for_id(job, id) && job.sku.empty() && job.asset_id.empty())
       return job;
   return std::nullopt;
 }
@@ -72,8 +78,12 @@ Manager::Manager(fs::path data, std::function<void()> wake, Services services, b
         e->job.asset_name = str(j, "assetName");
         e->job.source = str(j, "source");
         e->job.package = str(j, "package");
+        e->job.pinned = field(j, "pinned") == true;
         if (!e->job.source.empty() && (!valid_source(e->job.source) ||
                                        !paths::safe_package(e->job.package)))
+          continue;
+        if (e->job.pinned && (!digits(e->job.binary_id) || !e->job.sku.empty() ||
+                              !e->job.source.empty()))
           continue;
         e->job.account =
             number(saved, "version") == 1 ? index.primary : str(j, "account");
@@ -125,7 +135,8 @@ void Manager::save_locked() {
                    {"assetId", e->job.asset_id},
                    {"assetName", e->job.asset_name},
                    {"source", e->job.source},
-                   {"package", e->job.package}});
+                   {"package", e->job.package},
+                   {"pinned", e->job.pinned}});
   try {
     paths::atomic_write(file_, Json{{"version", 2}, {"jobs", j}}.dump(2));
   } catch (...) {
@@ -144,6 +155,15 @@ void Manager::enqueue(std::string app, std::string name, fs::path root,
   enqueue_job(std::move(app), std::move(name), std::move(root),
               std::move(token), std::move(account), {}, {});
 }
+void Manager::enqueue_version(std::string app, std::string binary,
+                              std::string name, fs::path root,
+                              std::string token, std::string account) {
+  if (!digits(binary))
+    throw std::runtime_error("Invalid version to download.");
+  enqueue_job(std::move(app), std::move(name), std::move(root),
+              std::move(token), std::move(account), std::move(binary), {}, {},
+              {}, {}, {}, true);
+}
 void Manager::enqueue_addon(std::string app, std::string name, fs::path root,
                             std::string binary, std::string sku,
                             std::string token) {
@@ -158,13 +178,14 @@ std::string Manager::active_key() const {
 }
 void Manager::enqueue_asset(std::string app, fs::path root, std::string binary,
                             std::string id, std::string filename,
-                            std::string token, std::string account) {
+                            std::string token, std::string account,
+                            bool pinned) {
   if (!digits(binary) || !digits(id) || !paths::safe_name(filename))
     throw std::runtime_error("Invalid asset download.");
   auto display = filename;
   enqueue_job(std::move(app), std::move(display), std::move(root),
               std::move(token), std::move(account), std::move(binary), {},
-              std::move(id), std::move(filename));
+              std::move(id), std::move(filename), {}, {}, pinned);
 }
 void Manager::enqueue_import(std::string app, std::string name, fs::path root,
                              std::string token, std::string account,
@@ -217,7 +238,8 @@ void Manager::enqueue_job(std::string app, std::string name, fs::path root,
                           std::string token, std::string account,
                           std::string binary, std::string sku,
                           std::string asset_id, std::string asset_name,
-                          std::string source, std::string package) {
+                          std::string source, std::string package,
+                          bool pinned) {
   // Imports need no account ("local") or sign-in: Meta only supplies the
   // files a source lacks, when an account owns the game.
   const bool import = !source.empty();
@@ -231,7 +253,7 @@ void Manager::enqueue_job(std::string app, std::string name, fs::path root,
   for (auto &e : jobs_)
     if (e->job.app_id == app && e->job.account == account &&
         e->job.binary_id == binary && e->job.sku == sku &&
-        e->job.asset_name == asset_name) {
+        e->job.asset_name == asset_name && e->job.pinned == pinned) {
       if (e->removed)
         throw std::runtime_error(
             "The cancelled download is still stopping. Try again shortly.");
@@ -267,6 +289,7 @@ void Manager::enqueue_job(std::string app, std::string name, fs::path root,
   e->job.asset_name = std::move(asset_name);
   e->job.source = std::move(source);
   e->job.package = std::move(package);
+  e->job.pinned = pinned;
   e->job.generation = next_generation_++;
   e->job.state = State::queued;
   e->token = std::move(token);
@@ -308,10 +331,12 @@ bool Manager::refresh_catalog(const fs::path &root, const meta::Plan &catalog) {
   library::refresh_catalog(root, catalog);
   return true;
 }
-void Manager::cancel(std::string_view app) {
+void Manager::cancel(std::string_view id) {
   std::lock_guard lock(mutex_);
   for (auto &e : jobs_)
-    if (e->job.app_id == app && visible(e->job)) {
+    if ((meta::version_binary(id).empty() ? e->job.app_id == id && !e->job.pinned
+                                          : for_id(e->job, id)) &&
+        visible(e->job)) {
       e->cancel.request_stop();
       if (e->job.state == State::queued) {
         e->job.state = State::paused;
@@ -361,9 +386,13 @@ void Manager::release(const std::shared_ptr<Entry> &e) {
 void Manager::discard_files(const Job &job) {
   if (job.sku.empty() && job.asset_id.empty())
     try {
+      // A pinned version's partial install, or else the game's own (never a
+      // pinned version's).
       for (auto &i : library::scan(job.root))
-        if (!i.complete && (i.plan.app_id == job.app_id ||
-                            (!job.package.empty() && i.plan.package == job.package)))
+        if (!i.complete && i.plan.pinned == job.pinned &&
+            (job.pinned ? i.plan.app_id == job.app_id && i.plan.binary_id == job.binary_id
+                        : i.plan.app_id == job.app_id ||
+                              (!job.package.empty() && i.plan.package == job.package)))
           library::uninstall(job.root, i);
     } catch (const std::exception &error) {
       log::warn("downloads", "Could not delete the partial files of {}: {}",
@@ -400,7 +429,10 @@ void Manager::resume(const Job &job, std::string token) {
                    job.source, job.package);
   else if (!job.asset_id.empty())
     enqueue_asset(job.app_id, job.root, job.binary_id, job.asset_id,
-                  job.asset_name, std::move(token), active_key());
+                  job.asset_name, std::move(token), active_key(), job.pinned);
+  else if (job.pinned)
+    enqueue_version(job.app_id, job.binary_id, job.name, job.root,
+                    std::move(token), active_key());
   else if (job.sku.empty())
     enqueue(job.app_id, job.name, job.root, std::move(token));
   else
@@ -530,10 +562,13 @@ void Manager::run(std::stop_token shutdown) {
                       : store.owned_plan(e->job.app_id, e->job.binary_id);
       if (!e->job.sku.empty() || !e->job.asset_id.empty())
         meta::require_asset_catalog(plan);
+      // A pinned version (and its assets) has its own folder.
+      plan.pinned = e->job.pinned;
+      const bool version_base = e->job.pinned && e->job.sku.empty() && e->job.asset_id.empty();
       // An imported APK of this build stays installed; only what the install
       // lacks is fetched, and the manifest written below keeps it.
       if (const auto installed =
-              paths::game_dir(e->job.root, plan.package, plan.version_code);
+              paths::game_dir(e->job.root, plan.package, plan.folder());
           paths::within(installed, installed / "plan.json") &&
           fs::is_regular_file(installed / "plan.json"))
         library::keep_installed_apk(
@@ -562,8 +597,8 @@ void Manager::run(std::stop_token shutdown) {
       }
       if (stop.stop_requested())
         throw std::runtime_error("Transfer paused.");
-      auto dir = paths::game_dir(e->job.root, plan.package, plan.version_code);
-      if (!e->job.binary_id.empty() && !fs::exists(dir / "plan.json"))
+      auto dir = paths::game_dir(e->job.root, plan.package, plan.folder());
+      if (!version_base && !e->job.binary_id.empty() && !fs::exists(dir / "plan.json"))
         throw std::runtime_error("Install the base game before its add-ons.");
       fs::create_directories(dir);
       if (!paths::within(dir, dir / "plan.json") ||

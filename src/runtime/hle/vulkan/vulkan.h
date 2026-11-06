@@ -12,6 +12,7 @@
 #include <mutex>
 #include <optional>
 #include <span>
+#include <string>
 #include <string_view>
 
 #include "core/hle.h"
@@ -47,10 +48,13 @@ class XrResolverScope {
   XrResolverScope& operator=(const XrResolverScope&) = delete;
   static bool active();
   static PFN_vkVoidFunction VKAPI_CALL proc(VkInstance instance, const char* name);
+  // Whether the runtime called the application's vkCreateDevice in this scope.
+  bool device_created() const { return device_calls_ != 0; }
  private:
   static thread_local XrResolverScope* current_;
   XrResolverScope* previous_;
   GuestAddr resolver_, instance_create_ = 0, device_create_ = 0;
+  unsigned device_calls_ = 0;
   static VkResult VKAPI_CALL create_instance_callback(const VkInstanceCreateInfo*,
       const VkAllocationCallbacks*, VkInstance*);
   static VkResult VKAPI_CALL create_device_callback(VkPhysicalDevice, const VkDeviceCreateInfo*,
@@ -65,6 +69,8 @@ void adopt_physical_device(VkInstance instance, VkPhysicalDevice physical);
 // The GPU of Venture's shared device as seen through another instance, or null
 // when it is absent or ambiguous there.
 VkPhysicalDevice shared_physical_device_in(VkInstance instance);
+// The driver's name for a GPU, for diagnostics.
+std::string physical_device_name(VkPhysicalDevice physical);
 // `shared` maps each family whose guest queue count exceeded the host's to
 // the host count: guest index i of that family is host queue i % count.
 void adopt_device(VkPhysicalDevice physical, VkDevice device, const VkDeviceCreateInfo& info,

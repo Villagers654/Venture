@@ -1,4 +1,5 @@
 #include "launcher/window_style.h"
+#include "launcher/desktop_id.h"
 
 #include <SDL3/SDL.h>
 
@@ -13,6 +14,9 @@ void prefer_native_video_driver() {
   // OpenGL through EGL from GLVND's libOpenGL, not libGL.so.1, which is GLX
   // (an X11 API) and loads libGLX and libX11.
   SDL_SetHint(SDL_HINT_OPENGL_LIBRARY, "libOpenGL.so.0");
+  // The Wayland app_id: the desktop file's name, so docks and task bars show
+  // its icon (SDL would use the executable's name, "venture").
+  SDL_SetAppMetadataProperty(SDL_PROP_APP_METADATA_IDENTIFIER_STRING, kDesktopId);
 }
 bool client_side_decorations() { return true; }
 const char* video_unavailable_message() {

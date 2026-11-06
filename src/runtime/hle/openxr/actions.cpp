@@ -64,12 +64,8 @@ XrResult xrSuggestInteractionProfileBindings(XrInstance instance,
     if (XR_SUCCEEDED(result)) venture::xr::remember_menu_bindings(instance, info->interactionProfile, info);
     return result;
   }
-  std::vector<std::string> targets{"/interaction_profiles/oculus/touch_controller",
-                                   "/interaction_profiles/valve/index_controller",
-                       "/interaction_profiles/htc/vive_controller",
-                                   "/interaction_profiles/khr/simple_controller"};
-  if (host_xr().enabled_extensions.contains("XR_KHR_generic_controller"))
-    targets.emplace_back("/interaction_profiles/khr/generic_controller");
+  // Every controller the host defines, each under the player's controls.
+  const auto targets = venture::xr::touch_targets();
   XrResult first = XR_ERROR_PATH_UNSUPPORTED;
   bool accepted = false;
   for (auto &target : targets) {
@@ -85,15 +81,13 @@ XrResult xrSuggestInteractionProfileBindings(XrInstance instance,
         sources[{binding.action, binding.binding}] = info->suggestedBindings[i].binding;
       }
     }
-    if (bindings.empty() && !venture::xr::menu_chord_forced() &&
-        !(declares_menu && venture::xr::menu_chord_enabled()))
+    // A game that binds only its menu still gets it where Venture makes one.
+    if (bindings.empty() && !venture::xr::menu_chord_forced() && !declares_menu)
       continue;
     XrInteractionProfileSuggestedBinding copy{XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING};
     if (XR_FAILED(::xrStringToPath(instance, target.c_str(), &copy.interactionProfile)))
       continue;
-    copy.countSuggestedBindings = static_cast<std::uint32_t>(bindings.size());
-    copy.suggestedBindings = bindings.data();
-    auto result = venture::xr::suggest_with_menu_chord(instance, &copy);
+    auto result = venture::xr::suggest_translated(instance, copy.interactionProfile, bindings);
     log::debug("xr", "Bindings {} -> {}: {}", profile, target, int(result));
     if (target == targets.front())
       first = result;
@@ -119,7 +113,8 @@ XrResult xrEnumerateBoundSourcesForAction(XrSession handle,
     return XR_ERROR_VALIDATION_FAILURE;
   if (!valid_handle(info->action, "XrAction"))
     return XR_ERROR_HANDLE_INVALID;
-  if (venture::xr::menu_chord_enabled()) {
+  // The game sees its own Touch paths, and its menu bound where Venture makes one.
+  {
     std::uint32_t size = 0;
     auto result = ::xrEnumerateBoundSourcesForAction(handle, info, 0, &size, nullptr);
     if (XR_FAILED(result)) return result;
@@ -139,14 +134,6 @@ XrResult xrEnumerateBoundSourcesForAction(XrSession handle,
     if (capacity) std::copy(sources.begin(), sources.end(), out);
     return XR_SUCCESS;
   }
-  auto r = ::xrEnumerateBoundSourcesForAction(handle, info, capacity, count, out);
-  if (r == XR_SUCCESS && capacity)
-    for (std::uint32_t i = 0; i < *count; ++i) {
-      auto it = state().guest_sources.find({info->action, out[i]});
-      if (it != state().guest_sources.end())
-        out[i] = it->second;
-    }
-  return r;
 }
 XrResult xrGetCurrentInteractionProfile(XrSession handle, XrPath path,
                                         XrInteractionProfileState *out) {

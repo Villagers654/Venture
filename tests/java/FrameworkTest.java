@@ -1001,6 +1001,12 @@ public final class FrameworkTest {
       check(android.media.AudioSystem.getPrimaryOutputSamplingRate() == 48000
           && android.media.AudioSystem.getPrimaryOutputFrameCount() == 240,
           "AudioSystem reports the primary output's rate and period");
+      // Meta XR Audio's EPS (Batman 1.0) opens its output at the device's last listed
+      // rate and refused 192000: whatever the host endpoint runs at, the guest sees Quest's.
+      var speakerRates = new android.media.AudioDeviceInfo(1, false, "speaker").getSampleRates();
+      var micRates = new android.media.AudioDeviceInfo(2, true, "mic").getSampleRates();
+      check(java.util.Arrays.equals(speakerRates, new int[]{48000}) && micRates[micRates.length - 1] == 48000,
+          "audio devices list Quest's rates, never a host endpoint's 96 or 192 kHz");
       // Photon Voice's echo-cancelling input routes voice chat (Android 12+).
       var voice = new android.media.AudioManager() {
         public android.media.AudioDeviceInfo[] getDevices(int flags) {
@@ -1085,6 +1091,28 @@ public final class FrameworkTest {
     check(store.isCertificateEntry(aliases.get(0)) && cert.getEncoded().length > 0
         && aliases.get(0).equals(store.getCertificateAlias(cert)), "AndroidCAStore entries are trusted certificates");
   }
+  private static void questTlsClient() throws Exception {
+    // Runs before any other TLS use: JSSE reads its disabled list once. A Quest's Conscrypt
+    // still offers TLS 1.0/1.1 and static RSA suites; a server limited to them answered
+    // HotSpot with handshake_failure (Ghost Giant, issue 58).
+    check(com.venture.runtime.TlsPolicy.questClient(
+        "SSLv3, TLSv1, TLSv1.1, RC4, 3DES_EDE_CBC, anon, NULL, ECDH, TLS_RSA_*, rsa_pkcs1_sha1 usage\n    HandshakeSignature, ecdsa_sha1 usage HandshakeSignature")
+        .equals("SSLv3, RC4, 3DES_EDE_CBC, anon, NULL, ECDH, ecdsa_sha1 usage HandshakeSignature"),
+        "the Quest TLS client policy lifts only what Conscrypt still offers");
+    com.venture.runtime.TlsPolicy.install();
+    var context = javax.net.ssl.SSLContext.getInstance("TLS");
+    context.init(null, null, null);
+    var socket = (javax.net.ssl.SSLSocket) context.getSocketFactory().createSocket();
+    var protocols = java.util.List.of(socket.getEnabledProtocols());
+    var suites = java.util.List.of(socket.getEnabledCipherSuites());
+    socket.close();
+    check(protocols.containsAll(java.util.List.of("TLSv1.3", "TLSv1.2", "TLSv1.1", "TLSv1"))
+        && !protocols.contains("SSLv3"), "game TLS sockets enable the Quest client protocols");
+    check(suites.containsAll(java.util.List.of("TLS_RSA_WITH_AES_128_GCM_SHA256", "TLS_RSA_WITH_AES_256_GCM_SHA384",
+            "TLS_RSA_WITH_AES_128_CBC_SHA", "TLS_RSA_WITH_AES_256_CBC_SHA", "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256"))
+        && suites.stream().noneMatch(s -> s.contains("3DES") || s.contains("RC4") || s.contains("_anon_") || s.contains("NULL")),
+        "game TLS sockets offer Conscrypt's RSA suites and still refuse broken ciphers");
+  }
   private static void disabledTelemetry() throws Exception {
     // Reflect the exact class and method contracts requested by native clients.
     var loggerClass = Class.forName("com.oculus.os.UnifiedTelemetryLogger");
@@ -1116,6 +1144,7 @@ public final class FrameworkTest {
         "menu termination is on and quit diagnostics are off in the default fixture");
     check(AppMain.quitProgress() == 0 && AppMain.quitNativeCount() == 0,
         "default lifecycle has no menu termination admission state before a quit");
+    questTlsClient();
     disabledTelemetry();
     androidCAStore();
     textToSpeech();
@@ -1389,6 +1418,34 @@ public final class FrameworkTest {
         && packageManager.getPermissionInfo("android.permission.INTERNET", 0).getProtection()
             == android.content.pm.PermissionInfo.PROTECTION_NORMAL,
         "platform permissions report Android's protection levels");
+    // RECORD_AUDIO follows a Quest's permission dialog (issue 89): denied until the app asks,
+    // then granted, and only when declared. Quest apps get no camera.
+    var micManifest = manifestNode("manifest", "package", "test.mic");
+    micManifest.children.add(manifestNode("uses-permission", "name", "android.permission.RECORD_AUDIO"));
+    micManifest.children.add(manifestNode("uses-permission", "name", "android.permission.CAMERA"));
+    micManifest.children.add(manifestNode("application"));
+    var micModel = new PackageModel(micManifest);
+    micModel.info.applicationInfo.targetSdkVersion = 32;
+    var micPackages = new android.content.pm.PackageManager(micModel);
+    check(micPackages.checkPermission("android.permission.RECORD_AUDIO", "test.mic") == -1,
+        "a declared microphone permission is denied before the app requests it");
+    com.venture.runtime.RuntimePermissions.request(micModel, new String[] {
+        "android.permission.RECORD_AUDIO", "android.permission.CAMERA", null});
+    check(micPackages.checkPermission("android.permission.RECORD_AUDIO", "test.mic") == 0
+        && micPackages.checkPermission("android.permission.RECORD_AUDIO", "other.package") == -1
+        && micPackages.checkPermission("android.permission.CAMERA", "test.mic") == -1,
+        "the permission dialog grants the microphone, not the camera");
+    var undeclaredMic = new PackageModel(manifest);
+    undeclaredMic.info.applicationInfo.targetSdkVersion = 32;
+    com.venture.runtime.RuntimePermissions.request(undeclaredMic, new String[] {"android.permission.RECORD_AUDIO"});
+    check(new android.content.pm.PackageManager(undeclaredMic).checkPermission("android.permission.RECORD_AUDIO", "test.intent") == -1,
+        "an undeclared microphone permission cannot be granted");
+    var legacyMic = new PackageModel(micManifest);
+    legacyMic.info.applicationInfo.targetSdkVersion = 22;
+    check(new android.content.pm.PackageManager(legacyMic).checkPermission("android.permission.RECORD_AUDIO", "test.mic") == 0,
+        "an API 22 app holds its declared microphone permission from install");
+    check(packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_MICROPHONE),
+        "a Quest reports a microphone");
     try {
       packageManager.getPermissionInfo("com.example.permission.NONE", 0);
       check(false, "an undefined permission is not found");
@@ -1923,11 +1980,67 @@ public final class FrameworkTest {
     callbackDialog.setOnShowListener(onShow);
     callbackDialog.setOnShowListener(null);
     callbackDialog.setOnShowListener(onShow);
-    boolean presentationUnavailable = false;
-    try { callbackDialog.show(); }
-    catch (UnsupportedOperationException expected) { presentationUnavailable = true; }
-    check(presentationUnavailable && shown.isEmpty() && !callbackDialog.isShowing(),
-        "unsupported dialog presentation does not fabricate a show callback");
+    var dialogHostField = RuntimeEnvironment.class.getDeclaredField("host");
+    dialogHostField.setAccessible(true);
+    Object dialogPreviousHost = dialogHostField.get(null);
+    var dialogLog = new CopyOnWriteArrayList<String>();
+    dialogHostField.set(null, java.lang.reflect.Proxy.newProxyInstance(Host.class.getClassLoader(),
+        new Class<?>[]{Host.class}, (proxy, method, values) -> {
+          if (method.getName().equals("log")) { dialogLog.add(values[1] + ": " + values[2]); return null; }
+          try { return method.invoke(dialogPreviousHost, values); }
+          catch (java.lang.reflect.InvocationTargetException e) { throw e.getCause(); }
+        }));
+    try {
+    callbackDialog.setTitle("Custom");
+    callbackDialog.show();
+    callbackDialog.show();
+    check(shown.equals(List.of(callbackDialog)) && callbackDialog.isShowing(),
+        "an unpresented dialog is shown as far as the game can tell, once");
+    check(dialogLog.equals(List.of("dialog: Shown without presentation: Custom")), "an unpresented dialog is logged: " + dialogLog);
+    callbackDialog.dismiss();
+    // Nobody can press an unpresented dialog. Games may wait for its answer
+    // (Unity's graphics warning blocks its engine thread on Continue/Abort):
+    // Venture answers after show() returns, on its Looper, declining first.
+    var dialogThread = new HandlerThread("dialog-answers");
+    dialogThread.start();
+    var answers = new LinkedBlockingQueue<String>();
+    var choice = new android.app.AlertDialog.Builder(context).setTitle("Warning")
+        .setMessage("Your device does not match the hardware requirements of this application.")
+        .setPositiveButton("Continue", (d, which) -> answers.add("choice " + which))
+        .setNegativeButton("Abort", (d, which) -> answers.add("choice " + which)).create();
+    var later = new android.app.AlertDialog.Builder(context).setMessage("Update available")
+        .setPositiveButton("Update", (d, which) -> answers.add("later " + which))
+        .setNeutralButton("Later", (d, which) -> answers.add("later " + which)).create();
+    var single = new android.app.AlertDialog.Builder(context).setTitle("Failure to initialize!")
+        .setPositiveButton("OK", (d, which) -> answers.add("single " + which)).create();
+    var progress = new android.app.ProgressDialog(context);
+    progress.setMessage("Loading");
+    var answeredLater = new CopyOnWriteArrayList<Boolean>();
+    new Handler(dialogThread.getLooper()).post(() -> {
+      choice.show();
+      answeredLater.add(answers.isEmpty() && choice.isShowing());
+      later.show();
+      single.show();
+      progress.show();
+    });
+    var answered = new ArrayList<String>();
+    for (int i = 0; i < 3; ++i) answered.add(answers.poll(2, TimeUnit.SECONDS));
+    var drained = new CountDownLatch(1);
+    new Handler(dialogThread.getLooper()).post(drained::countDown);
+    check(drained.await(2, TimeUnit.SECONDS), "dialog Looper drains");
+    check(answeredLater.equals(List.of(true)), "a dialog is answered only after show() returns");
+    check(answered.equals(List.of("choice -2", "later -3", "single -1")),
+        "unpresented dialogs answer negative, else neutral, else positive: " + answered);
+    check(!choice.isShowing() && !later.isShowing() && !single.isShowing() && progress.isShowing(),
+        "answered dialogs are dismissed; one without buttons stays shown");
+    check(dialogLog.contains("dialog: Shown without presentation: Warning: Your device does not match the hardware "
+        + "requirements of this application.")
+        && dialogLog.contains("dialog: Buttons: Continue, Abort; Venture answers \"Abort\"")
+        && dialogLog.contains("dialog: Shown without presentation: Loading")
+        && dialogLog.contains("dialog: No buttons; the dialog stays shown"),
+        "dialog text, buttons and answer are logged: " + dialogLog);
+    dialogThread.quitSafely();
+    } finally { dialogHostField.set(null, dialogPreviousHost); }
     callbackDialog.getWindow().getDecorView().layout(0, 0, 200, 100);
     var outsideTouch = android.view.MotionEvent.obtain(0, 0, android.view.MotionEvent.ACTION_OUTSIDE, 0, 0, 0);
     callbackDialog.setCanceledOnTouchOutside(false);
@@ -2290,6 +2403,7 @@ public final class FrameworkTest {
     Files.writeString(obbView.resolve("main.1.test.game.obb"), "expansion");
     var providerWarnings = new ArrayList<String>();
     var shaderCache = new String[1];
+    var guestEnvironment = new java.util.HashMap<String, String>();
     var libraryLoads = new ArrayList<String>();
     var libraryLoaders = new ArrayList<ClassLoader>();
     var nativeCreates = new int[1];
@@ -2297,6 +2411,11 @@ public final class FrameworkTest {
         new Class<?>[]{Host.class}, (proxy, method, values) -> {
           if (method.getName().equals("loadLibrary")) { libraryLoads.add((String) values[0]); libraryLoaders.add((ClassLoader) values[1]); return null; }
           if (method.getName().equals("setupShadersDiskCache")) { shaderCache[0] = (String) values[0]; return null; }
+          if (method.getName().equals("setEnvironment")) {
+            guestEnvironment.put(new String((byte[]) values[0], java.nio.charset.StandardCharsets.UTF_8),
+                new String((byte[]) values[1], java.nio.charset.StandardCharsets.UTF_8));
+            return 0;
+          }
           if (method.getName().equals("readAsset"))
             return "AndroidManifest.xml".equals(values[0]) ? obbManifest() : null;
           if (method.getName().equals("log")) { providerWarnings.add((String) values[2]); return null; }
@@ -2342,9 +2461,15 @@ public final class FrameworkTest {
         && RuntimeEnvironment.toGuestPath(codeCache.toString()).equals("/data/user/0/test.game/code_cache"),
         "code cache directory is data/code_cache");
     android.app.ActivityThread.ventureAttach();
+    var jvmTmpdir = System.getProperty("java.io.tmpdir");
     android.app.ActivityThread.currentActivityThread().ventureBindApplication(obbContext);
     check(new java.io.File(codeCache, "com.android.opengl.shaders_cache").getAbsolutePath().equals(shaderCache[0]),
         "binding the application names the EGL shader cache file");
+    // AOSP handleBindApplication: temporary files go to the cache directory (Mono reads TMPDIR).
+    check("/data/user/0/test.game/cache".equals(guestEnvironment.get("TMPDIR"))
+        && obbContext.getCacheDir().getAbsolutePath().equals(System.getProperty("java.io.tmpdir")),
+        "binding the application points TMPDIR and java.io.tmpdir at the cache directory");
+    System.setProperty("java.io.tmpdir", jvmTmpdir);
     censusWidgets(obbContext);
     valueAnimators();
     cursors();
@@ -2599,6 +2724,28 @@ public final class FrameworkTest {
       bluetoothApp.targetSdkVersion = savedBluetoothTarget; Build.VERSION.SDK_INT = savedPlatformSdk;
       bluetoothPermissions.clear(); bluetoothPermissions.addAll(savedBluetoothPermissions);
     }
+    // The hosted app's microphone request (issue 89): Activity.requestPermissions answers as
+    // the Quest dialog's Allow, and the grant outlives the process beside the user's ANDROID_ID key.
+    var micApp = obbContext.getApplicationInfo();
+    int savedMicTarget = micApp.targetSdkVersion;
+    var micPermissions = RuntimeEnvironment.get().manifest.permissions;
+    try {
+      micApp.targetSdkVersion = 32;
+      micPermissions.add("android.permission.RECORD_AUDIO");
+      check(obbContext.checkSelfPermission("android.permission.RECORD_AUDIO") == -1,
+          "the hosted app has no microphone before it asks");
+      new android.app.Activity().requestPermissions(new String[] {"android.permission.RECORD_AUDIO"}, 7);
+      check(obbContext.checkSelfPermission("android.permission.RECORD_AUDIO") == 0,
+          "the hosted app's microphone request is granted");
+      check(Files.readAllLines(obbRoot.resolve("runtime-permissions/test.game.txt"))
+              .equals(List.of("android.permission.RECORD_AUDIO")),
+          "the microphone grant is stored for later launches");
+      check(providerWarnings.remove("Granted android.permission.RECORD_AUDIO to test.game"),
+          "the microphone grant is logged");
+    } finally {
+      micApp.targetSdkVersion = savedMicTarget;
+      micPermissions.remove("android.permission.RECORD_AUDIO");
+    }
     boolean invalidBluetoothProfile = false;
     try { bluetooth.getConnectedDevices(android.bluetooth.BluetoothProfile.A2DP); }
     catch (IllegalArgumentException expected) { invalidBluetoothProfile = true; }
@@ -2805,9 +2952,21 @@ public final class FrameworkTest {
     info.packageName = env.manifest.info.packageName;
     env.manifest.activities.add(info);
     var handler = new Handler(Looper.getMainLooper());
+    // The permission dialog's answer reaches onRequestPermissionsResult on the main Looper (issue 89).
+    env.manifest.info.applicationInfo.targetSdkVersion = 32;
+    env.manifest.permissions.addAll(List.of("android.permission.RECORD_AUDIO", "android.permission.CAMERA"));
+    var permissionResults = new java.util.concurrent.atomic.AtomicReference<String>();
+    new android.app.Activity() {
+      @Override public void onRequestPermissionsResult(int request, String[] permissions, int[] results) {
+        permissionResults.set(request + " " + Arrays.toString(permissions) + " " + Arrays.toString(results));
+      }
+    }.requestPermissions(new String[] {"android.permission.RECORD_AUDIO", "android.permission.CAMERA"}, 42);
+    check(permissionResults.get() == null, "permission results arrive later, on the main Looper");
     AppMain.startActivity(new android.content.Intent().setComponent(
         new android.content.ComponentName(info.packageName, info.name)));
     handler.post(() -> {
+      check(("42 [android.permission.RECORD_AUDIO, android.permission.CAMERA] [0, -1]").equals(permissionResults.get()),
+          "the microphone request reports granted and the camera denied: " + permissionResults.get());
       check(HostQuitActivity.instance != null, "host quit activity launched");
       check(AppMain.requestTaskRemoval(), "menu quit task removal posted to main Looper");
       handler.post(() -> {

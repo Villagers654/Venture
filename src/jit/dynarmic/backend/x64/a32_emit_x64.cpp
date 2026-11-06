@@ -235,6 +235,7 @@ finish_this_inst:
 
 void A32EmitX64::ClearCache() {
     EmitX64::ClearCache();
+    shared_labels.clear();  // Venture: left over only by an emission that threw
     profile_internal_links.clear();
     block_ranges.ClearCache();
     ClearFastDispatchTable();

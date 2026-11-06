@@ -32,16 +32,6 @@ layout(push_constant) uniform Params {
     uint outputModeOrLayer;
 } p;
 
-// ASTC's required float16 decode truncates UNORM16, rather than rounding a
-// normalized float to nearest half. Arm astcenc unorm16_to_sf16 is the oracle.
-uint unorm16ToHalf(uint value) {
-    if (value == 65535u) return 0x3c00u;
-    if (value < 4u) return value << 8u;
-    uint lz = 15u - uint(findMSB(value));
-    uint normalized = value << lz;
-    return ((14u - lz) << 10u) | ((normalized >> 5u) & 0x3ffu);
-}
-
 void main() {
 #ifdef IMAGE_OUTPUT
     if (activation.enabled == 0u) return;
@@ -57,10 +47,12 @@ void main() {
     uvec4 bits = uvec4(src.words[address], src.words[address+1u], 0, 0);
     if (blockWords == 4u) bits.zw = uvec2(src.words[address+2u], src.words[address+3u]);
     if (astc) {
-        bool srgb = (p.format & 1u) == 0u;
-        astcDecoderInitialize(bits.wzyx, uvec2(p.blockWidth, p.blockHeight));
+        // VK_FORMAT_ASTC_4x4_SFLOAT_BLOCK and the other HDR formats start at 1000066000.
+        bool hdr = p.format >= 1000066000u;
+        bool srgb = !hdr && (p.format & 1u) == 0u;
+        astcDecoderInitialize(bits.wzyx, uvec2(p.blockWidth, p.blockHeight), hdr);
         uvec4 color = astcDecodeTexel(local, srgb);
-        bool floatOutput = (p.outputModeOrLayer & 0x80000000u) != 0u;
+        bool floatOutput = hdr || (p.outputModeOrLayer & 0x80000000u) != 0u;
 #ifdef IMAGE_FLOAT
         floatOutput = true;
 #endif
@@ -72,8 +64,7 @@ void main() {
             dst.words[pixel] = color.x | (color.y << 8u) | (color.z << 16u) | (color.w << 24u);
 #endif
         } else {
-            uvec4 halfColor = uvec4(unorm16ToHalf(color.x), unorm16ToHalf(color.y),
-                                    unorm16ToHalf(color.z), unorm16ToHalf(color.w));
+            uvec4 halfColor = hdr ? color : unorm16ToHalf4(color);
 #ifdef IMAGE_OUTPUT
             imageStore(dst, ivec3(xy, p.outputModeOrLayer),
                 vec4(unpackHalf2x16(halfColor.x | (halfColor.y << 16u)),

@@ -98,11 +98,15 @@ public class MediaPlayer {
       synchronized (this) {
         if (released || token != generation || !prepared || error) return;
         if (nativeQuery(peer, 4) != 0) { error = true; postError(token, MEDIA_ERROR_UNSUPPORTED); return; }
+        // Playing before completed: the player marks itself completed before its stream
+        // stops, so a stream seen stopped here is always seen completed too. In the other
+        // order, an end between the two reads stopped the poll with no completion.
+        boolean playing = nativeQuery(peer, 2) != 0;
         if (nativeQuery(peer, 3) != 0 && !looping) {
           if (!completionPosted) { completionPosted = true; if (completionListener != null) completionListener.onCompletion(this); }
           return;
         }
-        if (nativeQuery(peer, 2) != 0) monitor(token);
+        if (playing) monitor(token);
       }
     }, 20);
   }

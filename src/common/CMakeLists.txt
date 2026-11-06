@@ -1,4 +1,5 @@
 add_library(venture_common STATIC
+  controls.cpp
   digest.cpp
   environment.cpp
   log.cpp
@@ -8,6 +9,7 @@ add_library(venture_common STATIC
   steam.cpp
   steam_library.cpp
   steam_art.cpp
+  search.cpp
   ipc.cpp
   launch_details.cpp
   startup_progress.cpp
@@ -17,6 +19,7 @@ add_library(venture_common STATIC
   meta/store.cpp
   meta/commerce.cpp
   library/library.cpp
+  library/display.cpp
   library/import.cpp
   library/save_import.cpp
   android/adb.cpp

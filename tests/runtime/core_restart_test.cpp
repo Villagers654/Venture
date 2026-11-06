@@ -102,6 +102,10 @@ TEST_CASE("App worker restart uses a private channel and fresh processes") {
   auto normal = run_runtime_child(VENTURE_RESTART_CHILD, {"exit"}, {}, [] { return false; });
   CHECK(normal.status == 85);
   CHECK_FALSE(normal.restart);
+  // A plain exit reports no Venture exit stage, so the supervisor can tell it
+  // from its own exits and find the worker's HotSpot report by process id.
+  CHECK(normal.exit_wait == RuntimeExitWait::none);
+  CHECK(normal.worker_pid != 0);
   auto restart = run_runtime_child(VENTURE_RESTART_CHILD, {"restart"}, {}, [] { return false; });
   CHECK(restart.status == 0);
   CHECK(restart.restart);

@@ -132,7 +132,7 @@ TEST_CASE("Vulkan uninitialized loop counters execute a bounded compute loop") {
   test::vk_call("vkDestroyShaderModule", gpu.device, shader, nullptr);
 }
 
-TEST_CASE("Vulkan vertex-pipeline stages drop RelaxedPrecision, fragment and compute keep it") {
+TEST_CASE("Vulkan shaders of every stage drop RelaxedPrecision") {
   auto module = [](std::uint32_t model) {
     return std::vector<std::uint32_t>{
         0x07230203, 0x00010000, 0, 8, 0,
@@ -145,7 +145,7 @@ TEST_CASE("Vulkan vertex-pipeline stages drop RelaxedPrecision, fragment and com
         0x00050048, 6, 0, 35, 0};                    // OpMemberDecorate %6 0 Offset 0
   };
   const auto vertex = module(0);
-  const auto out = vulkan::full_precision_vertex_stages(vertex);
+  const auto out = vulkan::full_precision_shaders(vertex);
   const std::vector<std::uint32_t> expected{
       0x07230203, 0x00010000, 0, 8, 0,
       0x00020011, 1,
@@ -154,18 +154,16 @@ TEST_CASE("Vulkan vertex-pipeline stages drop RelaxedPrecision, fragment and com
       0x00040047, 5, 30, 0,
       0x00050048, 6, 0, 35, 0};
   CHECK(out == expected);
-  CHECK(vulkan::full_precision_vertex_stages(out).empty());          // nothing left to drop
-  CHECK(vulkan::full_precision_vertex_stages(module(4)).empty());    // Fragment keeps it
-  CHECK(vulkan::full_precision_vertex_stages(module(5)).empty());    // GLCompute keeps it
-  CHECK(vulkan::full_precision_vertex_stages(module(3)) == [&] {     // Geometry drops it
+  CHECK(vulkan::full_precision_shaders(out).empty());          // nothing left to drop
+  for (const std::uint32_t model : {1u, 2u, 3u, 4u, 5u}) {  // tessellation, geometry, fragment, compute
     auto e = expected;
-    e[11] = 3;
-    return e;
-  }());
-  auto no_entry = vertex;
-  no_entry.erase(no_entry.begin() + 10, no_entry.begin() + 15);
-  CHECK(vulkan::full_precision_vertex_stages(no_entry).empty());
-  CHECK(vulkan::full_precision_vertex_stages({}).empty());
+    e[11] = model;
+    CHECK(vulkan::full_precision_shaders(module(model)) == e);
+  }
+  auto bad = vertex;
+  bad[5] = 0;  // zero word count
+  CHECK(vulkan::full_precision_shaders(bad).empty());
+  CHECK(vulkan::full_precision_shaders({}).empty());
 }
 
 TEST_CASE("Vulkan storage images follow the view format without invalid duplicate types") {

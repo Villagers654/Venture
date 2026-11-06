@@ -29,6 +29,13 @@ bool proc_directory(std::string_view p, std::vector<Dirent>* out) {
     names = {{"0", 4}};
   else if (p == "/data/user/0" || p == "/data/data" || p == "/data/app")
     names = {{process_config().package, 4}};
+  // The APK's directory: Mono's FileStream checks that the parent of
+  // Application.dataPath exists before opening base.apk.
+  else if (p == "/data/app/" + process_config().package)
+    names = {{"base.apk", 8}, {"lib", 4}};
+  else if (const auto& lib = process_config().guest_native_lib_dir();
+           p == std::string_view(lib).substr(0, lib.rfind('/')))
+    names = {{lib.substr(lib.rfind('/') + 1), 4}};
   else if (p == "/proc")
     names = {{"self", 4}, {"cpuinfo", 8}, {"meminfo", 8}, {"stat", 8}};
   else if (p == "/proc/self")

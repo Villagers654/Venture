@@ -114,9 +114,18 @@ bool within(const fs::path &root, const fs::path &target) {
   }
   return ti != t.end();
 }
+bool version_folder(std::string_view name) {
+  const auto dash = name.find('-');
+  return dash == name.npos ? digits(name) : digits(name.substr(0, dash)) && digits(name.substr(dash + 1));
+}
+bool safe_launch_target(std::string_view target) {
+  const auto at = target.find('@');
+  return at == target.npos ? safe_package(target)
+                           : safe_package(target.substr(0, at)) && version_folder(target.substr(at + 1));
+}
 fs::path game_dir(const fs::path &root, std::string_view package,
                   std::string_view version) {
-  if (!safe_package(package) || !digits(version))
+  if (!safe_package(package) || !version_folder(version))
     throw std::runtime_error("Invalid game installation path.");
   auto p = root / from_utf8(package) / from_utf8(version);
   if (!within(root, p))

@@ -19,12 +19,21 @@ public final class Convert {
         if (args.length == 0 || args.length % 3 != 0) throw new IllegalArgumentException("expected DEX/JAR/errors triples");
         // Multidex shares one JVM and its warmed translator, without keeping
         // all DEX ASTs alive together or racing dex2jar's shared transformers.
-        for (int i = 0; i < args.length; i += 3) convert(Arrays.copyOfRange(args, i, i + 3));
+        long started = System.nanoTime();
+        List<Path> dexes = new ArrayList<>();
+        for (int i = 0; i < args.length; i += 3) dexes.add(Path.of(args[i]));
+        ConvertSuperInit superInit = ConvertSuperInit.plan(dexes);
+        System.out.printf(Locale.ROOT, "superclass constructor calls retargeted=%d synthetic constructors=%d unresolved=%d%n",
+            superInit.retargeted, superInit.synthetics.values().stream().mapToInt(List::size).sum(), superInit.unresolved.size());
+        for (String u : superInit.unresolved) System.out.println("superclass constructor call left as is\t" + u);
+        System.out.printf(Locale.ROOT, "phases superinit=%.6f%n", (System.nanoTime()-started)/1e9);
+        for (int i = 0; i < args.length; i += 3) convert(Arrays.copyOfRange(args, i, i + 3), superInit);
     }
-    private static void convert(String[] args) throws Exception {
+    private static void convert(String[] args, ConvertSuperInit superInit) throws Exception {
         long started = System.nanoTime();
         DexFileNode dex = new DexFileNode();
         new DexFileReader(Path.of(args[0])).accept(dex, DexFileReader.KEEP_ALL_METHODS);
+        superInit.apply(dex);
         long parsed = System.nanoTime();
         long[] writing = {0};
         Map<String,Integer> flags = new HashMap<>();

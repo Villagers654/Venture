@@ -7,6 +7,8 @@
 #include "platform/gfx_library.h"
 #include "xr/host_xr.h"
 #include "xr/vulkan_extensions.h"
+#include "xr/vulkan_layers.h"
+#include "xr/display_override.h"
 #define XR_USE_GRAPHICS_API_VULKAN
 #include <openxr/openxr.h>
 #include <openxr/openxr_platform.h>
@@ -151,6 +153,11 @@ VkResult create_instance(const VkInstanceCreateInfo* requested,
   auto ci = *requested;
   auto names = union_names(ci.enabledExtensionCount, ci.ppEnabledExtensionNames,
                            instance_requirements);
+  // The desktop mirror window presents from this device (xr/desktop_mirror.h).
+  if (const auto& mirror = xr::mirror_instance_extensions();
+      !mirror.empty() && std::ranges::all_of(mirror, [](const char* n) { return host_vulkan_instance_extension(n); }))
+    for (const char* name : mirror)
+      if (std::ranges::none_of(names, [&](const char* n) { return std::strcmp(n, name) == 0; })) names.push_back(name);
   std::vector<std::string> legacy;
   ci.enabledExtensionCount = static_cast<std::uint32_t>(names.size());
   ci.ppEnabledExtensionNames = names.data();
@@ -284,10 +291,27 @@ VkResult create_device(VkPhysicalDevice physical,
           return std::strcmp(n, VK_EXT_PIPELINE_CREATION_FEEDBACK_EXTENSION_NAME) == 0;
         })) names.push_back(VK_EXT_PIPELINE_CREATION_FEEDBACK_EXTENSION_NAME);
   }
+  if (const char* swapchain = xr::mirror_device_extension();
+      std::ranges::find(instance_enabled, "VK_KHR_surface") != instance_enabled.end() &&
+      std::ranges::any_of(extensions, [&](const auto& e) { return std::strcmp(e.extensionName, swapchain) == 0; }) &&
+      std::ranges::none_of(names, [&](const char* n) { return std::strcmp(n, swapchain) == 0; }))
+    names.push_back(swapchain);
   std::vector<std::string> legacy;
   if (xr::host_xr().available) add_legacy_xr_requirements(true, names, legacy, extensions);
   ci.enabledExtensionCount = static_cast<std::uint32_t>(names.size());
   ci.ppEnabledExtensionNames = names.data();
+  // The desktop mirror presents on a queue of its own (xr/desktop_mirror.h).
+  xr::MirrorQueueRequest mirror_queue;
+  if (xr::mirror_mode() != xr::MirrorMode::off &&
+      std::ranges::any_of(names, [](const char* n) { return std::strcmp(n, xr::mirror_device_extension()) == 0; })) {
+    auto get_families = vk<PFN_vkGetPhysicalDeviceQueueFamilyProperties>(gpu.instance, "vkGetPhysicalDeviceQueueFamilyProperties");
+    std::uint32_t family_count = 0;
+    get_families(physical, &family_count, nullptr);
+    std::vector<VkQueueFamilyProperties> families(family_count);
+    get_families(physical, &family_count, families.data());
+    families.resize(family_count);
+    mirror_queue.add(families, ci);
+  }
   VkResult result = VK_ERROR_INITIALIZATION_FAILED;
   try {
     auto& host = xr::host_xr();
@@ -311,7 +335,10 @@ VkResult create_device(VkPhysicalDevice physical,
     log::error("gfx", "{}", e.what());
     return VK_ERROR_INITIALIZATION_FAILED;
   }
-  if (result == VK_SUCCESS) gpu.device = *out;
+  if (result == VK_SUCCESS) {
+    gpu.device = *out;
+    mirror_queue.created(*out);
+  }
   return result;
 }
 void device_ready(VkDevice device, std::uint32_t family, std::uint32_t index) {
@@ -480,6 +507,7 @@ GpuDevice& gpu_device() {
     if (!gpu.queue)
       throw std::runtime_error("Graphics device has no reported queue");
     register_queue_probe();
+    xr::log_loaded_vulkan_layers();
   });
   return gpu;
 }

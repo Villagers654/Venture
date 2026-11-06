@@ -66,6 +66,41 @@ class AngleImages final : public XrImages {
   }
   std::map<Key, ImageDesc> owned;
   std::map<VkImage, Destination> targets;
+  // Exported per-layer staging of OpenXR GLES slots (create_staging).
+  struct Staging {
+    const gfx::TextureGroup *group = nullptr;
+    std::vector<GLuint> textures;
+    std::vector<EGLImageKHR> siblings;
+  };
+  std::map<const StagedImage *, Staging> staging;
+  using ExportImage = EGLBoolean (*)(EGLDisplay, EGLImageKHR, void *, void *);
+  using TransferTextures = void (*)(GLuint, const GLuint *, GLenum *);
+  using AcquireTextures = void (*)(GLuint, const GLuint *, const GLenum *);
+  // Drains GL errors raised by Venture's own calls; returns the first.
+  static GLenum own_gl_error() {
+    auto get = gfx::angle_function<PFNGLGETERRORPROC>("glGetError");
+    GLenum first = GL_NO_ERROR;
+    for (GLenum e; (e = get()) != GL_NO_ERROR;) {
+      gfx::note_angle_gl_error(e, "XR image handoff");
+      if (first == GL_NO_ERROR) first = e;
+    }
+    return first;
+  }
+  static PFNGLCOPYIMAGESUBDATAPROC copy_image() {
+    auto copy = reinterpret_cast<PFNGLCOPYIMAGESUBDATAPROC>(gfx::angle_proc("glCopyImageSubDataEXT"));
+    return copy ? copy : reinterpret_cast<PFNGLCOPYIMAGESUBDATAPROC>(gfx::angle_proc("glCopyImageSubData"));
+  }
+  // EXT_external_objects layout of a Vulkan layout, for glAcquireTexturesANGLE.
+  static GLenum gl_layout(VkImageLayout layout) {
+    switch (layout) {
+      case VK_IMAGE_LAYOUT_GENERAL: return GL_LAYOUT_GENERAL_EXT;
+      case VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL: return GL_LAYOUT_COLOR_ATTACHMENT_EXT;
+      case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL: return GL_LAYOUT_SHADER_READ_ONLY_EXT;
+      case VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL: return GL_LAYOUT_TRANSFER_SRC_EXT;
+      case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL: return GL_LAYOUT_TRANSFER_DST_EXT;
+      default: return GL_NONE;
+    }
+  }
   static auto group() {
     auto context = gfx::current_gl_state();
     return context ? context->textures : std::shared_ptr<gfx::TextureGroup>{};
@@ -167,7 +202,7 @@ public:
     if (!current || !gfx::angle_shared_device())
       return XR_ERROR_GRAPHICS_DEVICE_INVALID;
     if (!d.width || !d.height || !d.layers || !d.mip_count ||
-        d.mip_count > std::bit_width(std::max(d.width, d.height)))
+        d.mip_count > std::uint32_t(std::bit_width(std::max(d.width, d.height))))
       return XR_ERROR_VALIDATION_FAILURE;
     if (d.samples != 1 || d.face_count != 1 ||
         (d.gl_format != GL_RGBA8 && d.gl_format != GL_SRGB8_ALPHA8 && d.gl_format != GL_RGBA16F &&
@@ -191,9 +226,156 @@ public:
       owned[{current.get(), name}] = d;
     }
     bind(type, GLuint(previous));
-    if (!gfx::capture_gl_errors())
-      return error("Allocating XR texture ring failed");
+    // Venture's own allocation errors stay out of the guest's GL error state.
+    if (const auto failed = own_gl_error()) {
+      log::warn("xr-angle", "Allocating the {}x{}x{} XR texture ring failed: GL error {:#x}", d.width,
+                d.height, d.layers, failed);
+      return failed == GL_OUT_OF_MEMORY ? XR_ERROR_OUT_OF_MEMORY : XR_ERROR_RUNTIME_FAILURE;
+    }
     return XR_SUCCESS;
+  }
+  XrResult create_staging(const ImageDesc &d, std::span<const std::uint32_t> names,
+                          std::span<StagedImage> out) override {
+    auto current = group();
+    if (!current || !gfx::angle_shared_device())
+      return XR_ERROR_GRAPHICS_DEVICE_INVALID;
+    if (names.size() != out.size()) return XR_ERROR_VALIDATION_FAILURE;
+    for (auto name : names)
+      if (!owns_texture(name, d)) return XR_ERROR_GRAPHICS_DEVICE_INVALID;
+    const auto *text = gfx::angle_function<PFNGLGETSTRINGPROC>("glGetString")(GL_EXTENSIONS);
+    if (!text || !gfx::has_extension(reinterpret_cast<const char *>(text), "GL_ANGLE_vulkan_image") ||
+        !gfx::angle_proc("eglExportVkImageANGLE") || !copy_image())
+      return XR_ERROR_FEATURE_UNSUPPORTED;
+    gfx::preserve_gl_errors();
+    GLint previous = 0;
+    gfx::angle_function<PFNGLGETINTEGERVPROC>("glGetIntegerv")(GL_TEXTURE_BINDING_2D, &previous);
+    auto bind = gfx::angle_function<PFNGLBINDTEXTUREPROC>("glBindTexture");
+    const auto context = gfx::angle_function<PFNEGLGETCURRENTCONTEXTPROC>("eglGetCurrentContext")();
+    XrResult result = XR_SUCCESS;
+    for (auto &slot : out) {
+      if (XR_FAILED(result)) break;
+      auto &record = staging[&slot];
+      record.group = current.get();
+      record.textures.resize(d.layers);
+      gfx::angle_function<PFNGLGENTEXTURESPROC>("glGenTextures")(GLsizei(d.layers), record.textures.data());
+      for (auto texture : record.textures) {
+        bind(GL_TEXTURE_2D, texture);
+        gfx::angle_function<PFNGLTEXSTORAGE2DPROC>("glTexStorage2D")(GL_TEXTURE_2D, 1, GLenum(d.gl_format),
+                                                                     d.width, d.height);
+        if (const auto failed = own_gl_error()) {
+          log::warn("xr-angle", "XR staging {}x{} failed: GL error {:#x}", d.width, d.height, failed);
+          result = failed == GL_OUT_OF_MEMORY ? XR_ERROR_OUT_OF_MEMORY : XR_ERROR_RUNTIME_FAILURE;
+          break;
+        }
+        const EGLint attributes[]{EGL_GL_TEXTURE_LEVEL_KHR, 0, EGL_IMAGE_PRESERVED_KHR, EGL_TRUE, EGL_NONE};
+        auto sibling = gfx::angle_function<PFNEGLCREATEIMAGEKHRPROC>("eglCreateImageKHR")(
+            gfx::angle_display(), context, EGL_GL_TEXTURE_2D_KHR,
+            reinterpret_cast<EGLClientBuffer>(std::uintptr_t(texture)), attributes);
+        if (!sibling) {
+          // ANGLE allocates the image here; EGL_BAD_ALLOC is a full device.
+          const auto egl = gfx::angle_function<PFNEGLGETERRORPROC>("eglGetError")();
+          own_gl_error();
+          log::warn("xr-angle", "XR staging {}x{} EGLImage failed: EGL error {:#x}", d.width, d.height, egl);
+          result = egl == EGL_BAD_ALLOC ? XR_ERROR_OUT_OF_MEMORY : XR_ERROR_RUNTIME_FAILURE;
+          break;
+        }
+        record.siblings.push_back(sibling);
+        VkImage image{};
+        VkImageCreateInfo info{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+        if (!gfx::angle_function<ExportImage>("eglExportVkImageANGLE")(gfx::angle_display(), sibling, &image, &info) ||
+            !image || info.format != d.vk_format || info.arrayLayers != 1 || info.mipLevels != 1 ||
+            info.samples != VK_SAMPLE_COUNT_1_BIT || info.extent.width != d.width ||
+            info.extent.height != d.height || !(info.usage & VK_IMAGE_USAGE_TRANSFER_SRC_BIT)) {
+          log::warn("xr-angle", "XR staging export is incompatible; using private images");
+          result = XR_ERROR_FEATURE_UNSUPPORTED;
+          break;
+        }
+        slot.layers.push_back(image);
+      }
+      slot.layouts.assign(slot.layers.size(), VK_IMAGE_LAYOUT_UNDEFINED);
+      slot.idle_layout = gfx::angle_uses_general_layout() ? VK_IMAGE_LAYOUT_GENERAL
+                                                          : VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+      slot.staged = false;
+    }
+    bind(GL_TEXTURE_2D, GLuint(previous));
+    own_gl_error();
+    if (XR_FAILED(result)) destroy_staging(out);
+    return result;
+  }
+  XrResult stage(std::uint32_t name, StagedImage &slot, const ImageDesc &d) override {
+    if (vulkan::timing_enabled())
+      for (const auto& sample : gfx::end_gl_render_timing(vulkan::timing_frame()))
+        vulkan::timing_gles_render(sample.frame, sample.begin_ns, sample.end_ns, sample.valid);
+    const auto start = vulkan::timing_enabled() ? monotonic_ns() : 0;
+    std::unique_lock queue(gfx::gpu_device().queue_lock);
+    auto current = group();
+    auto it = staging.find(&slot);
+    if (!current || it == staging.end() || it->second.group != current.get() || !owns_texture(name, d) ||
+        it->second.textures.size() != d.layers || slot.layers.size() != d.layers)
+      return XR_ERROR_GRAPHICS_DEVICE_INVALID;
+    auto &textures = it->second.textures;
+    gfx::preserve_gl_errors();
+    try {
+      std::vector<GLenum> layouts(textures.size());
+      if (slot.staged) {
+        for (std::size_t layer = 0; layer < layouts.size(); ++layer) layouts[layer] = gl_layout(slot.layouts[layer]);
+        gfx::angle_function<AcquireTextures>("glAcquireTexturesANGLE")(GLuint(textures.size()), textures.data(),
+                                                                       layouts.data());
+        slot.staged = false;
+      }
+      // The base level, all layers; host presentation has one level.
+      for (std::uint32_t layer = 0; layer < d.layers; ++layer)
+        copy_image()(name, target(d), 0, 0, 0, d.layers > 1 ? GLint(layer) : 0, textures[layer], GL_TEXTURE_2D,
+                     0, 0, 0, 0, GLsizei(d.width), GLsizei(d.height), 1);
+      gfx::angle_function<TransferTextures>("glReleaseTexturesANGLE")(GLuint(textures.size()), textures.data(),
+                                                                      layouts.data());
+      for (std::size_t layer = 0; layer < layouts.size(); ++layer)
+        slot.layouts[layer] = gfx::xr_released_layout(layouts[layer]);
+      slot.staged = true;
+    } catch (const std::exception &e) {
+      own_gl_error();
+      return error(e.what());
+    }
+    if (const auto failed = own_gl_error()) {
+      log::warn("xr-angle", "Staging the guest XR texture failed: GL error {:#x}", failed);
+      return XR_ERROR_RUNTIME_FAILURE;
+    }
+    if (start) {
+      vulkan::XrCopySample sample{"gles-stage", vulkan::timing_frame(), monotonic_ns() - start, 0, 0, 0, 0, 0, 0};
+      vulkan::timing_xr_copy(sample);
+    }
+    return XR_SUCCESS;
+  }
+  void destroy_staging(std::span<StagedImage> slots) override {
+    auto current = group();
+    for (auto &slot : slots) {
+      auto it = staging.find(&slot);
+      if (it == staging.end()) continue;
+      auto &record = it->second;
+      if (!current || record.group != current.get()) {
+        error("Destroying XR staging requires its GLES share group current");
+        continue;
+      }
+      // Deleting a texture Vulkan still owns needs it back first, as a bridge does.
+      if (slot.staged && record.textures.size() == slot.layouts.size()) {
+        std::vector<GLenum> layouts(slot.layouts.size());
+        for (std::size_t layer = 0; layer < layouts.size(); ++layer)
+          layouts[layer] = gl_layout(slot.layouts[layer]);
+        try {
+          gfx::angle_function<AcquireTextures>("glAcquireTexturesANGLE")(GLuint(record.textures.size()),
+                                                                         record.textures.data(), layouts.data());
+        } catch (const std::exception &e) {
+          error(e.what());
+        }
+      }
+      for (auto sibling : record.siblings)
+        gfx::angle_function<PFNEGLDESTROYIMAGEKHRPROC>("eglDestroyImageKHR")(gfx::angle_display(), sibling);
+      gfx::angle_function<PFNGLDELETETEXTURESPROC>("glDeleteTextures")(GLsizei(record.textures.size()),
+                                                                       record.textures.data());
+      staging.erase(it);
+      slot = {};
+    }
+    own_gl_error();
   }
   void destroy_ring(std::span<const std::uint32_t> names) override {
     auto current = group();

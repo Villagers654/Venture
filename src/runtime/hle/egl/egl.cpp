@@ -654,6 +654,9 @@ EGLint guest_eglWaitSyncKHR(EGLDisplay d, EGLSyncKHR s, EGLint flags) {
 }
 EGLImageKHR guest_eglCreateImageKHR(EGLDisplay d, EGLContext c, EGLenum target,
                                     EGLClientBuffer buffer, const EGLint* a) {
+  // The image aliases the texture's contents: its pending ASTC uploads first.
+  if (target == EGL_GL_TEXTURE_2D_KHR)
+    gfx::settle_texture_uploads(static_cast<GLuint>(reinterpret_cast<std::uintptr_t>(buffer)));
   std::lock_guard lock(state_lock);
   if (!valid_display(d)) return EGL_NO_IMAGE_KHR;
   // Android native buffers are not host EGLClientBuffers. Until AHardwareBuffer

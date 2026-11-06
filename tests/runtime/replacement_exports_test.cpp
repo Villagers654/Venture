@@ -435,6 +435,47 @@ TEST_CASE("replacement exports finalization and adopted lookup preserve one lock
   CHECK(linker.close(initialized) == 0); CHECK(linker.close(slot.get()) == 0);
 }
 
+TEST_CASE("replacement exports serve a renamed copy of a slot's API from the slot") {
+  // An SDK bundled again under a vendor's file name is recognized by what it
+  // exports; a library exporting only part of that API is mapped as usual.
+  const auto dir = review_directory("identity");
+  GuestThread thread(98); thread.attach_to_current_host_thread();
+  auto& linker = Linker::get();
+  auto slot = std::make_shared<HleLibrary>("libidentity-sdk.so");
+  slot->add_function("identity_init", hle::make_thunk(slot->soname(), "identity_init",
+      [](hle::CallContext& c) { c.return_x(305); }));
+  slot->set_identity({"identity_init", "identity_pop"});
+  linker.register_hle_library(slot);
+  ReplacementFixture copy; copy.function("identity_init", 101); copy.function("identity_pop", 102);
+  copy.function("identity_extra", 103); copy.write(dir / "libvendor_custom.so");
+  ReplacementFixture partial; partial.function("identity_init", 104); partial.write(dir / "libidentity-partial.so");
+  ReplacementFixture caller; caller.needed("libvendor_custom.so"); caller.import("identity_init");
+  caller.write(dir / "libidentity-caller.so");
+  unsigned images = 0; linker.for_each_image([&](const Library&) { ++images; });
+  auto* root = linker.open((dir / "libidentity-caller.so").string(), kRtldNow, nullptr);
+  INFO(linker.take_error());
+  REQUIRE(root);
+  auto* served = linker.open("libvendor_custom.so", kRtldNow | kRtldNoLoad, nullptr);
+  CHECK(served == slot.get());
+  CHECK_FALSE(slot->mapped_image());
+  const auto thunk = slot->hle_symbol("identity_init");
+  REQUIRE(thunk);
+  auto* image = root->mapped_image(); REQUIRE(image);
+  const auto bound = process_config().isa() == GuestIsa::a32
+      ? GuestAddr(*g2h<std::uint32_t>(image->load_bias + 0x900))
+      : *g2h<GuestAddr>(image->load_bias + 0x900);
+  CHECK(bound == thunk);
+  unsigned after = 0; linker.for_each_image([&](const Library&) { ++after; });
+  CHECK(after == images + 1);  // The caller only; the copy is never mapped.
+  auto* partial_lib = linker.open((dir / "libidentity-partial.so").string(), kRtldNow, nullptr);
+  REQUIRE(partial_lib);
+  CHECK(partial_lib != slot.get());
+  CHECK(partial_lib->mapped_image());
+  CHECK(linker.close(partial_lib) == 0);
+  CHECK(linker.close(served) == 0);
+  CHECK(linker.close(root) == 0);
+}
+
 TEST_CASE("linker never resolves a bare library name against the host working directory") {
   // Linux packages keep host libEGL.so/libGLESv2.so beside the binary, which
   // is the working directory of Steam shortcuts.

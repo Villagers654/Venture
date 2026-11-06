@@ -282,6 +282,12 @@ struct UserConfig {
     ///       in unusual behavior.
     bool always_little_endian = false;
 
+    /// Venture: called when the OS refused code-cache memory (a commit of
+    /// `requested` bytes, 0 when another allocation failed) with `committed`
+    /// of `cache_size` bytes committed, before the cache is cleared and the
+    /// compile retried. Diagnostics only; must not throw or reenter the Jit.
+    std::function<void(std::size_t requested, std::size_t committed, std::size_t cache_size)> code_allocation_failed;
+
     /// Internal use only
     bool very_verbose_debugging_output = false;
     // Callback address bit zero carries Thumb mode; code PC itself stays even.

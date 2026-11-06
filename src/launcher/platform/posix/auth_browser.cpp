@@ -1,4 +1,5 @@
 #include "launcher/auth_browser.h"
+#include "launcher/desktop_id.h"
 #include "common/log.h"
 #include "common/meta/auth.h"
 #include <atomic>
@@ -57,6 +58,7 @@ struct Web {
   void (*allowed_backends)(const char *) = nullptr;
   void *(*window_new4)() = nullptr;
   void *(*window_new3)(int) = nullptr;
+  void (*set_prgname)(const char *) = nullptr;
   void (*set_title)(void *, const char *) = nullptr;
   void (*set_default_size)(void *, int, int) = nullptr;
   void (*set_child)(void *, void *) = nullptr;     // GTK 4
@@ -83,6 +85,16 @@ struct Web {
   void (*object_set)(void *, const char *, ...) = nullptr;
   void *(*screen_default)() = nullptr;          // GTK 3
   double (*screen_resolution)(void *) = nullptr; // GTK 3
+  // Content filters: block a page load before its request is sent.
+  void *(*bytes_new)(const void *, size_t) = nullptr;
+  void (*bytes_unref)(void *) = nullptr;
+  void (*error_free)(void *) = nullptr;
+  const char *(*user_cache_dir)() = nullptr;
+  void *(*filter_store_new)(const char *) = nullptr;
+  void (*filter_store_save)(void *, const char *, void *, void *, Fn, void *) = nullptr;
+  void *(*filter_store_save_finish)(void *, void *, void **) = nullptr;
+  void *(*content_manager)(void *) = nullptr;
+  void (*add_filter)(void *, void *) = nullptr;
 };
 template <class T> bool bind(void *lib, T &out, const char *name) {
   out = reinterpret_cast<T>(dlsym(lib, name));
@@ -103,6 +115,7 @@ bool load(Web &w) {
             bind(lib, w.loop_new, "g_main_loop_new") &&
             bind(lib, w.loop_run, "g_main_loop_run") &&
             bind(lib, w.loop_quit, "g_main_loop_quit") &&
+            bind(lib, w.set_prgname, "g_set_prgname") &&
             bind(lib, w.set_title, "gtk_window_set_title") &&
             bind(lib, w.set_default_size, "gtk_window_set_default_size") &&
             bind(lib, w.view_type, "webkit_web_view_get_type") &&
@@ -119,7 +132,15 @@ bool load(Web &w) {
             bind(lib, w.permission_deny, "webkit_permission_request_deny") &&
             bind(lib, w.settings_default, "gtk_settings_get_default") &&
             bind(lib, w.object_get, "g_object_get") &&
-            bind(lib, w.object_set, "g_object_set");
+            bind(lib, w.object_set, "g_object_set") &&
+            bind(lib, w.bytes_new, "g_bytes_new") && bind(lib, w.bytes_unref, "g_bytes_unref") &&
+            bind(lib, w.error_free, "g_error_free") &&
+            bind(lib, w.user_cache_dir, "g_get_user_cache_dir") &&
+            bind(lib, w.filter_store_new, "webkit_user_content_filter_store_new") &&
+            bind(lib, w.filter_store_save, "webkit_user_content_filter_store_save") &&
+            bind(lib, w.filter_store_save_finish, "webkit_user_content_filter_store_save_finish") &&
+            bind(lib, w.content_manager, "webkit_web_view_get_user_content_manager") &&
+            bind(lib, w.add_filter, "webkit_user_content_manager_add_filter");
   if (w.api == 6)
     return ok && bind(lib, w.init4, "gtk_init_check") &&
            bind(lib, w.window_new4, "gtk_window_new") &&
@@ -166,6 +187,7 @@ void ensure_font_dpi(Web &w) {
 struct Helper {
   Web web;
   void *loop = nullptr, *view = nullptr;
+  std::string url;
   bool callback_sent = false, load_failed = false;
   void send(std::string_view line) {
     write_all(kEventFd, std::string(line) + "\n");
@@ -178,7 +200,8 @@ constexpr int kLoadStarted = 0, kLoadRedirected = 1, kLoadCommitted = 2, kLoadFi
 
 // Pages stay on Meta domains; embedded frames (security checks, captchas) may
 // be any plain HTTPS origin. WebKit asks one policy for every frame, so the page
-// rule is applied to each view's own load below.
+// rule is enforced by the content filter below, before any request is sent,
+// and again on each view's own load.
 int on_decide_policy(void *, void *decision, int type, void *) {
   auto &h = *g_helper;
   if (type != kNavigationAction && type != kNewWindowAction)
@@ -287,6 +310,37 @@ void *on_create(void *view, void *, void *) {
   connect(popup, "ready-to-show", on_popup_ready);
   return popup;
 }
+// Every page (top-frame document) is blocked unless it is on a Meta domain, as
+// auth_navigation_allowed() decides; embedded frames are left to the policy
+// above. Popups share the view's user content manager.
+constexpr std::string_view kPageFilter = R"([
+  {"trigger": {"url-filter": ".*", "resource-type": ["document"], "load-context": ["top-frame"]},
+   "action": {"type": "block"}},
+  {"trigger": {"url-filter": "^https://([a-z0-9-]+\\.)*meta\\.com(:443)?/", "load-context": ["top-frame"]},
+   "action": {"type": "ignore-previous-rules"}},
+  {"trigger": {"url-filter": "^https://([a-z0-9-]+\\.)*facebook\\.com(:443)?/", "load-context": ["top-frame"]},
+   "action": {"type": "ignore-previous-rules"}},
+  {"trigger": {"url-filter": "^https://([a-z0-9-]+\\.)*fbsbx\\.com(:443)?/", "load-context": ["top-frame"]},
+   "action": {"type": "ignore-previous-rules"}},
+  {"trigger": {"url-filter": "^https://([a-z0-9-]+\\.)*oculus\\.com(:443)?/", "load-context": ["top-frame"]},
+   "action": {"type": "ignore-previous-rules"}},
+  {"trigger": {"url-filter": "^https://([a-z0-9-]+\\.)*instagram\\.com(:443)?/", "load-context": ["top-frame"]},
+   "action": {"type": "ignore-previous-rules"}}
+])";
+void on_filter_saved(void *store, void *result, void *) {
+  auto &h = *g_helper;
+  void *error = nullptr;
+  void *filter = h.web.filter_store_save_finish(store, result, &error);
+  if (!filter) {
+    // Without it nothing outside Meta may load at all.
+    if (error) h.web.error_free(error);
+    h.send("error filter");
+    h.web.loop_quit(h.loop);
+    return;
+  }
+  h.web.add_filter(h.web.content_manager(h.view), filter);
+  h.web.load_uri(h.view, h.url.c_str());
+}
 void on_crashed(void *, int, void *) {
   g_helper->send("error crashed");
   g_helper->web.loop_quit(g_helper->loop);
@@ -330,6 +384,7 @@ int helper_main() {
   // Wayland only: without a Wayland display GTK fails to initialise rather
   // than opening an X11 connection.
   w.allowed_backends("wayland");
+  w.set_prgname(kDesktopId);  // the Wayland app_id: the launcher's icon, not a generic one
   if (w.api == 6 ? !w.init4() : !w.init3(nullptr, nullptr))
     return helper.send("error display"), 1;
   // Before any web view exists: WebKit reads the DPI when its context starts.
@@ -348,7 +403,13 @@ int helper_main() {
   connect(helper.view, "web-process-terminated", on_crashed);
   connect(window, "destroy", on_destroy);
   show(window, helper.view);
-  w.load_uri(helper.view, url.c_str());
+  // The sign-in page loads once the page filter is in place.
+  helper.url = url;
+  const std::string store = std::string(w.user_cache_dir()) + "/venture/webkit-filters";
+  void *bytes = w.bytes_new(kPageFilter.data(), kPageFilter.size());
+  w.filter_store_save(w.filter_store_new(store.c_str()), "venture-sign-in-pages", bytes, nullptr,
+                      reinterpret_cast<Fn>(on_filter_saved), nullptr);
+  w.bytes_unref(bytes);
   w.loop_run(helper.loop);
   // Skip GTK/WebKit teardown; WebKit's subprocesses exit with this one.
   _exit(0);
@@ -409,6 +470,9 @@ AuthBrowser::Event translate(std::string_view line) {
   if (line == "error webkit")
     return {Kind::error, "Meta sign-in needs WebKitGTK. Install webkitgtk-6.0 "
                          "(or webkit2gtk-4.1) from your distribution."};
+  if (line == "error filter")
+    return {Kind::error, "This WebKitGTK is too old to keep the sign-in window on Meta's pages. "
+                         "Update webkitgtk-6.0 (or webkit2gtk-4.1)."};
   if (line == "error crashed")
     return {Kind::error, "The Meta sign-in page stopped unexpectedly. Try again."};
   return {Kind::error, "Could not open the Meta sign-in window."};

@@ -9,7 +9,7 @@
 #include "hle/ovrplatform/progression.h"
 
 namespace venture::ovrplatform {
-void register_a32_adapters();
+void register_a32_adapters(std::span<const Export> extra);
 std::unique_ptr<Session> make_runtime_session(const AppIdentity& app) {
   return make_runtime_session(app, {}, {});
 }
@@ -54,20 +54,29 @@ std::unique_ptr<Session> make_runtime_session(
   register_progression_handlers(*session, policy);
   return session;
 }
-std::shared_ptr<HleLibrary> make_library(Session& session) {
-  if (process_config().isa() == GuestIsa::a32) register_a32_adapters();
+std::shared_ptr<HleLibrary> make_library(Session& session, std::span<const Export> extra) {
+  const bool a32 = process_config().isa() == GuestIsa::a32;
+  if (a32) register_a32_adapters(extra);
   auto library = std::make_shared<HleLibrary>(
       "libovrplatformloader.so",
       std::vector<std::string>{"ovrplatformloader", "ovrplatformloader.so",
                                "libovrplatformloader", "ovrplatform",
                                "libovrplatform.so"});
+  // Meta's loader under any file name (Tomahawk's libovr_custom.so in Wizherd)
+  // is the same C API; mapped, it fails to find the Quest platform driver.
+  library->set_identity({"ovr_PlatformInitializeAndroid", "ovr_PopMessage",
+                         "ovr_FreeMessage", "ovr_Message_GetType"});
   for (const auto& entry : exports())
     library->add_function(entry.name,
                           hle::make_thunk(library->soname(), entry.name,
                                           entry.handler, &session));
+  for (const auto& entry : extra)
+      library->add_function(entry.name,
+                            hle::make_thunk(library->soname(), entry.name,
+                                            entry.handler, &session));
   return library;
 }
-void register_library(Session& session) {
-  Linker::get().register_hle_library(make_library(session));
+void register_library(Session& session, std::span<const Export> extra) {
+  Linker::get().register_hle_library(make_library(session, extra));
 }
 }  // namespace venture::ovrplatform

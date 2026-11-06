@@ -79,10 +79,8 @@ XrResult initialize_input() {
   r = ::xrStringToPath(instance, "/user/hand/left/input/thumbstick/click", &stick_path);
   if (XR_FAILED(r)) return r;
   const XrActionSuggestedBinding declared_menu[]{{input.menu, menu_path}, {input.menu, stick_path}};
-  for (auto profile : {"/interaction_profiles/oculus/touch_controller",
-                       "/interaction_profiles/valve/index_controller",
-                       "/interaction_profiles/htc/vive_controller",
-                       "/interaction_profiles/khr/simple_controller"}) {
+  // Every controller the host defines, each under the player's controls.
+  for (const auto& profile : venture::xr::touch_targets()) {
     std::vector<XrActionSuggestedBinding> bindings;
     for (auto &spec : specs)
       for (int hand = 0; hand < 2; ++hand) {
@@ -98,10 +96,8 @@ XrResult initialize_input() {
           bindings.push_back({*spec.handle, path});
       }
     XrInteractionProfileSuggestedBinding bi{XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING};
-    ::xrStringToPath(instance, profile, &bi.interactionProfile);
-    bi.countSuggestedBindings = std::uint32_t(bindings.size());
-    bi.suggestedBindings = bindings.data();
-    auto suggested = venture::xr::suggest_with_menu_chord(instance, &bi);
+    ::xrStringToPath(instance, profile.c_str(), &bi.interactionProfile);
+    auto suggested = venture::xr::suggest_translated(instance, bi.interactionProfile, std::move(bindings));
     if (XR_FAILED(suggested))
       failure("controller bindings", suggested);
     else {

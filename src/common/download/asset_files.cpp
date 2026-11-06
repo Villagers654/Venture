@@ -32,12 +32,12 @@ PipeChannel::Handler asset_launcher_handler(Manager& manager, fs::path data,
                                            std::string account) {
   auto launch = meta::parse_plan(paths::read_json(install / "plan.json"));
   if (fs::weakly_canonical(
-          paths::game_dir(root, launch.package, launch.version_code)) !=
+          paths::game_dir(root, launch.package, launch.folder())) !=
       fs::weakly_canonical(install))
     throw std::runtime_error("Invalid asset installation.");
   return [&manager, data = std::move(data), root = std::move(root),
           install = std::move(install), account = std::move(account),
-          app = launch.app_id, binary = launch.binary_id](
+          app = launch.app_id, binary = launch.binary_id, pinned = launch.pinned](
              const Json& request) -> Json {
     try {
       auto op = str(request, "op"), id = str(request, "id"),
@@ -60,7 +60,7 @@ PipeChannel::Handler asset_launcher_handler(Manager& manager, fs::path data,
         auto session = meta::AccountVault(data).load(account);
         if (!session) return {{"ok", false}};
         manager.enqueue_asset(app, root, binary, id, name,
-                              session->access_token, account);
+                              session->access_token, account, pinned);
       } else if (op == "asset.cancel") {
         return {{"ok", true},
                 {"success", manager.cancel_asset(app, binary, name, account)}};
@@ -70,7 +70,7 @@ PipeChannel::Handler asset_launcher_handler(Manager& manager, fs::path data,
       } else if (op != "asset.status")
         return {{"ok", false}};
       for (auto& job : manager.snapshot(account))
-        if (job.app_id == app && job.binary_id == binary &&
+        if (job.app_id == app && job.binary_id == binary && job.pinned == pinned &&
             job.asset_id == id && job.asset_name == name)
           return {{"ok", true},
                   {"state", static_cast<int>(job.state)},

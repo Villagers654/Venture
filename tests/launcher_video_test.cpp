@@ -70,6 +70,9 @@ TEST_CASE("launcher requests Wayland only and never falls back to X11") {
   venture::launcher::prefer_native_video_driver();
   CHECK(std::string(SDL_GetHint(SDL_HINT_VIDEO_DRIVER)) == "wayland");
   CHECK(std::string(SDL_GetHint(SDL_HINT_OPENGL_LIBRARY)) == "libOpenGL.so.0");  // EGL, never GLX
+  // The Wayland app_id is the desktop file's name, so docks show the launcher's icon.
+  CHECK(std::string(SDL_GetAppMetadataProperty(SDL_PROP_APP_METADATA_IDENTIFIER_STRING)) ==
+        "org.venture_emu.Venture");
 
   const auto runtime = fs::temp_directory_path() / ("venture-wayland-" + std::to_string(getpid()));
   fs::create_directories(runtime);

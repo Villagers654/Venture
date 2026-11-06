@@ -146,7 +146,7 @@ protected:
   // Cross-process game lock also covers a Steam launch beside an open UI.
   std::map<std::string, std::unique_ptr<FileLock>> game_locks_;
   bool steam_pending_ = false, steam_busy_ = false, steam_restart_ = false;
-  bool steam_sync_allowed_ = false, steam_scan_reliable_ = false;
+  bool steam_sync_allowed_ = false, steam_scan_reliable_ = false, steam_unreliable_reported_ = false;
   size_t steam_games_ = 0;
   uint64_t steam_poll_ = 0;
   std::atomic<uint64_t> steam_generation_{0};
@@ -183,6 +183,20 @@ protected:
   bool refreshing_ = false, scanning_ = false, signing_in_ = false,
        verifying_ = false;
   bool auth_page_loaded_ = false; // the Meta sign-in page finished loading
+  // Manual sign-in: Meta's sign-in link to open in any browser, and whether that
+  // section is open (by itself when the sign-in window could not open).
+  std::string auth_url_, auth_paste_, auth_paste_error_;
+  bool auth_manual_ = false;
+  bool auth_window_ = true;  // open Meta's sign-in window (the CLI's --manual doesn't)
+  // Venture as the oculus:// handler while a manual sign-in waits (sign_in_link.h):
+  // 1 while it is, -1 when it could not be, so the address is pasted instead.
+  int link_handler_ = 0;
+  bool auth_paste_open_ = false;  // the paste field, shown anyway
+  void cancel_sign_in();
+  // Finishes the waiting sign-in with Meta's oculus:// address.
+  void complete_sign_in(std::string callback);
+  // The same with an address pasted by the user (or a console message holding one).
+  void paste_sign_in(std::string_view text);
   std::string refresh_error_;     // last library refresh
   std::set<std::string> saves_kept_notified_;  // imports told their saves were kept
   std::string owned_link_;        // store link of a game to add when Meta cannot list the library
@@ -242,6 +256,19 @@ protected:
   // The Install button: downloads belong to the active account, so a game
   // that only another signed-in account owns switches to that account first.
   void install_for_owner(const meta::Game &game, const fs::path &root = {});
+  // Every published build of a game (meta::Store::all_builds), fetched on
+  // request with its owner's account.
+  std::map<std::string, std::vector<meta::Build>> builds_;
+  std::map<std::string, std::string> builds_error_;
+  std::set<std::string> builds_pending_;
+  void request_builds(const std::string &id);
+  // Installs the chosen builds of a game, each pinned beside its other
+  // versions (in `root`, else the games folder) as the owning account, as
+  // install_for_owner does. Builds already installed are left alone; returns
+  // how many were queued.
+  size_t install_versions(const meta::Game &game, const std::vector<meta::Build> &chosen, const fs::path &root = {});
+  // The installation of exactly this build of a game: its own or a pinned one.
+  const library::Install *installed_build(std::string_view app_id, std::string_view binary_id) const;
   // The library folder an installed game is in.
   static fs::path root_of(const library::Install &install) {
     return install.directory.parent_path().parent_path();

@@ -263,6 +263,9 @@ std::map<std::string, std::uint32_t> capabilities() {
       {"XR_FB_composition_layer_image_layout", 1},
       // Drawn flat where the host has no cylinders (xrEndFrame).
       {"XR_KHR_composition_layer_cylinder", 1},
+      // Drawn into a projection layer where the host has none (sphere_layers.h).
+      {"XR_KHR_composition_layer_equirect", 3},
+      {"XR_KHR_composition_layer_equirect2", 1},
   };
   if (xr_images())
     result["XR_KHR_opengl_es_enable"] = 10;
@@ -298,6 +301,8 @@ std::map<std::string, std::uint32_t> capabilities() {
   // Keep the upstream compatibility declaration even without a backend:
   // required-extension games can query unsupported properties and run in VR.
   result["XR_FB_passthrough"] = XR_FB_passthrough_SPEC_VERSION;
+  // A host-side target for guest XR_FB_passthrough (passthrough.cpp); Quest has no HTC extension.
+  result.erase("XR_HTC_passthrough");
   if (process_config().isa() == GuestIsa::a32)
     result.erase("XR_FB_triangle_mesh");
   // Hosts without performance hints accept and ignore them (extensions.cpp).

@@ -143,7 +143,10 @@ void deferred_release(VkDevice d, std::function<void()> release_resource) {
 }
 void VKAPI_CALL free_memory(VkDevice d, VkDeviceMemory memory, const VkAllocationCallbacks* alloc) {
   if (!memory) return;
-  deferred_release(d, [=] { host<PFN_vkFreeMemory>(d, "vkFreeMemory")(d, memory, alloc); });
+  deferred_release(d, [=] {
+    host<PFN_vkFreeMemory>(d, "vkFreeMemory")(d, memory, alloc);
+    note_device_memory(-1);
+  });
 }
 }  // namespace
 

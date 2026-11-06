@@ -893,6 +893,10 @@ struct TranslatorVisitor final {
     bool asimd_VABDL(bool U, bool D, size_t sz, size_t Vn, size_t Vd, bool N, bool M, size_t Vm);
     bool asimd_VMLAL(bool U, bool D, size_t sz, size_t Vn, size_t Vd, bool op, bool N, bool M, size_t Vm);
     bool asimd_VMULL(bool U, bool D, size_t sz, size_t Vn, size_t Vd, bool P, bool N, bool M, size_t Vm);
+    bool asimd_VADDHN(bool D, size_t sz, size_t Vn, size_t Vd, bool N, bool M, size_t Vm);
+    bool asimd_VRADDHN(bool D, size_t sz, size_t Vn, size_t Vd, bool N, bool M, size_t Vm);
+    bool asimd_VSUBHN(bool D, size_t sz, size_t Vn, size_t Vd, bool N, bool M, size_t Vm);
+    bool asimd_VRSUBHN(bool D, size_t sz, size_t Vn, size_t Vd, bool N, bool M, size_t Vm);
 
     // Advanced SIMD two registers and a scalar
     bool asimd_VMLA_scalar(bool Q, bool D, size_t sz, size_t Vn, size_t Vd, bool op, bool F, bool N, bool M, size_t Vm);

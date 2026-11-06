@@ -122,11 +122,12 @@ TEST_CASE("NDK extractor flags and MediaCodec buffers carry AAC to caller owned 
       auto index=call("AMediaCodec_dequeueOutputBuffer",{codec,h2g(&info),100000});
       if(index==-2)continue;if(index==-1)break;REQUIRE(index==0);
       std::uint64_t size=0;auto buffer=call("AMediaCodec_getOutputBuffer",{codec,0,h2g(&size)});
-      REQUIRE(size==static_cast<std::uint64_t>(info.size));
+      // As on Android, the size is the buffer's capacity and an EOS output still has one.
+      REQUIRE(buffer);REQUIRE(size>=static_cast<std::uint64_t>(info.size));
       if(info.size) {
-        REQUIRE(buffer);auto pcm=g2h<std::int16_t>(buffer);
-        for(std::size_t i=0;i<size/2;++i)peak=std::max(peak,std::abs(pcm[i]/32768.0f));
-        decoded+=size;
+        auto pcm=g2h<std::int16_t>(buffer);
+        for(std::size_t i=0;i<std::size_t(info.size)/2;++i)peak=std::max(peak,std::abs(pcm[i]/32768.0f));
+        decoded+=info.size;
       }
       eos|=(info.flags&4)!=0;
       REQUIRE(call("AMediaCodec_releaseOutputBuffer",{codec,0,0})==0);
@@ -157,6 +158,105 @@ TEST_CASE("NDK extractor flags and MediaCodec buffers carry AAC to caller owned 
   REQUIRE(call("AMediaExtractor_delete",{extractor})==0);
   CHECK(call("AMediaExtractor_getSampleFlags",{extractor})==0);
   hle::libc::FdTable::get().close(fd);
+}
+TEST_CASE("NDK extractor reads an AMediaDataSource through its guest callbacks") {
+  // Unity's AndroidVideoMedia reads clips inside asset bundles through
+  // AMediaExtractor_setDataSourceCustom (Batman: Arkham Shadow cutscenes).
+  std::ifstream fixture(VENTURE_MEDIA_FIXTURE,std::ios::binary);
+  std::vector<char> bytes((std::istreambuf_iterator<char>(fixture)),{});REQUIRE(bytes.size()>1000);
+  struct Source {std::vector<char>* bytes;std::int64_t size;} known{&bytes,std::int64_t(bytes.size())},unknown{&bytes,-1};
+  std::atomic<int> reads{0},closes{0};std::atomic<std::uint64_t> largest{0};std::atomic<GuestAddr> closed{0};
+  auto read_at=test::android_callback([&](const GuestCallArgs& a){
+    auto& s=*g2h<Source>(a.integers[0]);auto off=std::int64_t(a.integers[1]);auto size=a.integers[3];
+    ++reads;largest=std::max<std::uint64_t>(largest,size);
+    if(off<0 || off>std::int64_t(s.bytes->size()))return GuestCallResult{std::uint64_t(-1)};
+    auto n=std::min<std::uint64_t>(size,s.bytes->size()-off);
+    n=std::min<std::uint64_t>(n,4093);  // short reads are legal
+    std::memcpy(g2h(a.integers[2]),s.bytes->data()+off,n);return GuestCallResult{n};});
+  auto get_size=test::android_callback([](const GuestCallArgs& a){return GuestCallResult{std::uint64_t(g2h<Source>(a.integers[0])->size)};});
+  auto close=test::android_callback([&](const GuestCallArgs& a){++closes;closed=a.integers[0];return GuestCallResult{};});
+  auto open=[&](Source& s,bool with_read=true) {
+    auto source=static_cast<GuestAddr>(call("AMediaDataSource_new"));REQUIRE(source);
+    call("AMediaDataSource_setUserdata",{source,h2g(&s)});
+    if(with_read)call("AMediaDataSource_setReadAt",{source,read_at});
+    call("AMediaDataSource_setGetSize",{source,get_size});
+    call("AMediaDataSource_setClose",{source,close});
+    auto extractor=static_cast<GuestAddr>(call("AMediaExtractor_new"));REQUIRE(extractor);
+    auto status=call("AMediaExtractor_setDataSourceCustom",{extractor,source});
+    call("AMediaDataSource_delete",{source});  // the extractor keeps its own copy of the callbacks
+    return std::pair{extractor,status};
+  };
+  for(auto* s:{&known,&unknown}) {
+    reads=0;closes=0;largest=0;
+    auto [extractor,status]=open(*s);REQUIRE(status==0);
+    CHECK(reads>0);CHECK(largest<=65536);CHECK(closes==0);
+    REQUIRE(call("AMediaExtractor_getTrackCount",{extractor})==1);
+    REQUIRE(call("AMediaExtractor_selectTrack",{extractor,0})==0);
+    std::vector<std::byte> sample(65536);int samples=0;
+    do {
+      REQUIRE(call("AMediaExtractor_readSampleData",{extractor,h2g(sample.data()),sample.size()})>0);++samples;
+    } while(call("AMediaExtractor_advance",{extractor}));
+    CHECK(samples>=10);
+    REQUIRE(call("AMediaExtractor_seekTo",{extractor,100000,0})==0);
+    CHECK(call("AMediaExtractor_getSampleTime",{extractor})<=100000);
+    REQUIRE(call("AMediaExtractor_delete",{extractor})==0);
+    CHECK(closes==1);CHECK(closed==h2g(s));  // released with the extractor, as AOSP NuMediaExtractor
+  }
+  {
+    // Unity's AndroidVideoMedia flow on an H.264 + AAC clip read only through the
+    // callbacks (Syberia VR's cinema cutscene): both tracks, interleaved samples,
+    // and the AAC track decoded by AMediaCodec into PCM.
+    std::ifstream av_file(VENTURE_AV_FIXTURE,std::ios::binary);
+    std::vector<char> av((std::istreambuf_iterator<char>(av_file)),{});REQUIRE(av.size()>1000);
+    Source clip{&av,std::int64_t(av.size())};reads=0;closes=0;
+    auto [extractor,status]=open(clip);REQUIRE(status==0);CHECK(reads>0);
+    REQUIRE(call("AMediaExtractor_getTrackCount",{extractor})==2);
+    std::string mimes[2];GuestAddr formats[2]{};
+    for(int t=0;t<2;++t) {
+      formats[t]=static_cast<GuestAddr>(call("AMediaExtractor_getTrackFormat",{extractor,std::uint64_t(t)}));REQUIRE(formats[t]);
+      const char* mime=nullptr;const char* key="mime";
+      REQUIRE(call("AMediaFormat_getString",{formats[t],h2g(key),h2g(&mime)})==1);mimes[t]=mime;
+      REQUIRE(call("AMediaExtractor_selectTrack",{extractor,std::uint64_t(t)})==0);
+    }
+    CHECK(mimes[0]=="video/avc");CHECK(mimes[1]=="audio/mp4a-latm");
+    const char* aac="audio/mp4a-latm";
+    auto codec=static_cast<GuestAddr>(call("AMediaCodec_createDecoderByType",{h2g(aac)}));REQUIRE(codec);
+    REQUIRE(call("AMediaCodec_configure",{codec,formats[1],0,0,0})==0);REQUIRE(call("AMediaCodec_start",{codec})==0);
+    struct Info {std::int32_t offset,size;std::int64_t time;std::uint32_t flags;} info{};
+    std::size_t decoded=0;int per_track[2]{};
+    auto drain=[&] {
+      for(int count=0;count<8;++count) {
+        auto index=call("AMediaCodec_dequeueOutputBuffer",{codec,h2g(&info),20000});
+        if(index==-2)continue;if(index<0)break;
+        decoded+=info.size;REQUIRE(call("AMediaCodec_releaseOutputBuffer",{codec,std::uint64_t(index),0})==0);
+      }
+    };
+    do {
+      auto track=call("AMediaExtractor_getSampleTrackIndex",{extractor});REQUIRE((track==0 || track==1));++per_track[track];
+      if(track!=1)continue;
+      auto index=call("AMediaCodec_dequeueInputBuffer",{codec,100000});REQUIRE(index>=0);
+      std::uint64_t capacity=0;auto buffer=call("AMediaCodec_getInputBuffer",{codec,std::uint64_t(index),h2g(&capacity)});REQUIRE(buffer);
+      auto size=call("AMediaExtractor_readSampleData",{extractor,std::uint64_t(buffer),capacity});REQUIRE(size>0);
+      auto time=call("AMediaExtractor_getSampleTime",{extractor});
+      REQUIRE(call("AMediaCodec_queueInputBuffer",{codec,std::uint64_t(index),0,std::uint64_t(size),std::uint64_t(time),0})==0);
+      drain();
+    } while(call("AMediaExtractor_advance",{extractor}));
+    drain();
+    CHECK(per_track[0]>=10);CHECK(per_track[1]>=10);CHECK(decoded>0);
+    REQUIRE(call("AMediaCodec_delete",{codec})==0);
+    for(auto f:formats)call("AMediaFormat_delete",{f});
+    REQUIRE(call("AMediaExtractor_delete",{extractor})==0);CHECK(closes==1);
+  }
+  // No readAt is an invalid parameter; a source that fails to open stays the caller's to close.
+  closes=0;auto [no_read,status]=open(known,false);CHECK(status==media::invalid);
+  call("AMediaExtractor_delete",{no_read});
+  std::vector<char> junk(4096,'x');Source bad{&junk,4096};
+  auto [rejected,rejected_status]=open(bad);CHECK(rejected_status==media::unsupported);
+  call("AMediaExtractor_delete",{rejected});CHECK(closes==0);
+  auto extractor=static_cast<GuestAddr>(call("AMediaExtractor_new"));
+  CHECK(call("AMediaExtractor_setDataSourceCustom",{extractor,0})==media::invalid);
+  call("AMediaExtractor_delete",{extractor});
+  for(auto cb:{read_at,get_size,close})test::android_remove_callback(cb);
 }
 TEST_CASE("audio player prepares seeks loops drains PCM and releases bounded worker") {
   REQUIRE(manual_audio_device());
@@ -385,6 +485,57 @@ TEST_CASE("bounded video codec owns buffers across flush EOS surface change and 
   // Destruction with an outstanding input buffer joins the worker.
 }
 
+TEST_CASE("ByteBuffer video codecs output NV12 as a Quest decoder does") {
+  // Unity's Vulkan AndroidVideoMedia reads ByteBuffer frames and converts only
+  // YUV formats; it rejected the RGBA format (Batman: Arkham Shadow videos).
+  media::Extractor extractor;REQUIRE(extractor.open(video_input())==0);REQUIRE(extractor.select(0)==0);
+  media::Codec codec;REQUIRE(codec.configure(extractor.tracks()[0])==0);REQUIRE(codec.start()==0);
+  CHECK(codec.format().color_format==media::color_nv12);
+  media::Codec::Info info;std::int64_t owned=-1;
+  auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(3);
+  while(owned<0 && std::chrono::steady_clock::now()<deadline) {
+    if(extractor.sample().track>=0 && codec.input(1000)==0) {
+      auto buffer=codec.input_buffer(0);auto packet=extractor.sample();
+      std::copy(packet.bytes.begin(),packet.bytes.end(),buffer.begin());
+      REQUIRE(codec.queue(0,0,packet.bytes.size(),packet.time_us,0)==0);extractor.advance();
+    }
+    owned=codec.output(&info,1000);
+    if(owned==-2)owned=-1;
+  }
+  REQUIRE(owned==0);REQUIRE(info.size==128*72*3/2);
+  auto nv12=codec.output_buffer(0);REQUIRE(nv12.size()==128*72*3/2);
+  // The same picture decoded to RGBA gives the BT.601 luma of each pixel.
+  media::Extractor again;REQUIRE(again.open(video_input())==0);REQUIRE(again.select(0)==0);
+  media::Decoder decoder;REQUIRE(decoder.configure(again.tracks()[0])==0);
+  media::VideoFrame rgba;int status=0;
+  for(int i=0;i<64 && status!=1;++i) {
+    if(again.sample().track>=0){REQUIRE(decoder.send(&again.sample())==0);again.advance();}else if(i==63)decoder.send(nullptr);
+    status=decoder.receive(&rgba);
+  }
+  REQUIRE(status==1);REQUIRE(rgba.time_us==info.time);
+  for(auto [x,y]:{std::pair{8,8},{64,36},{120,64}}) {
+    auto p=rgba.rgba.data()+(y*128+x)*4;
+    auto luma=16+(66*p[0]+129*p[1]+25*p[2]+128)/256;
+    CHECK(std::abs(int(std::to_integer<std::uint8_t>(nv12[y*128+x]))-luma)<=8);
+  }
+  REQUIRE(codec.release(0,false)==0);
+  // The EOS output carries no picture but still has a full-size buffer, as on
+  // Android: Unity converts it without checking the pointer.
+  bool sent_eos=false,got_eos=false;deadline=std::chrono::steady_clock::now()+std::chrono::seconds(5);
+  while(!got_eos && std::chrono::steady_clock::now()<deadline) {
+    if(!sent_eos && codec.input(1000)==0) {
+      auto& packet=extractor.sample();auto buffer=codec.input_buffer(0);
+      if(packet.track>=0){std::copy(packet.bytes.begin(),packet.bytes.end(),buffer.begin());
+        REQUIRE(codec.queue(0,0,packet.bytes.size(),packet.time_us,0)==0);extractor.advance();}
+      else{REQUIRE(codec.queue(0,0,0,1000000,4)==0);sent_eos=true;}
+    }
+    auto index=codec.output(&info,1000);if(index!=0)continue;
+    got_eos=(info.flags&4)!=0;
+    if(got_eos){CHECK(info.size==0);CHECK(codec.output_buffer(0).size()==128*72*3/2);}
+    REQUIRE(codec.release(0,false)==0);
+  }
+  CHECK(got_eos);
+}
 TEST_CASE("codec release wakes blocked dequeues retained by concurrent API calls") {
   media::Extractor extractor;REQUIRE(extractor.open(video_input())==0);
   auto codec=std::make_shared<media::Codec>();REQUIRE(codec->configure(extractor.tracks()[0])==0);

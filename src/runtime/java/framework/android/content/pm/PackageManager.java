@@ -4,6 +4,7 @@ import com.venture.runtime.*;
 public class PackageManager {
   public static final String FEATURE_BLUETOOTH = "android.hardware.bluetooth";
   public static final String FEATURE_BLUETOOTH_LE = "android.hardware.bluetooth_le";
+  public static final String FEATURE_MICROPHONE = "android.hardware.microphone";
   public static final String FEATURE_AUDIO_LOW_LATENCY = "android.hardware.audio.low_latency";
   public static final int GET_ACTIVITIES = 1, GET_INTENT_FILTERS = 32, GET_META_DATA = 128, GET_SIGNATURES = 64,
                           GET_SIGNING_CERTIFICATES = 0x08000000, PERMISSION_GRANTED = 0,
@@ -183,7 +184,7 @@ public class PackageManager {
   // XR supplies these features; optional Quest sensors are not exposed by Java.
   private static final java.util.Set<String> FEATURES =
       java.util.Set.of("android.hardware.vr.headtracking", "android.hardware.vr.high_performance",
-          "android.software.vr.mode", FEATURE_BLUETOOTH, FEATURE_BLUETOOTH_LE);
+          "android.software.vr.mode", FEATURE_BLUETOOTH, FEATURE_BLUETOOTH_LE, FEATURE_MICROPHONE);
   public FeatureInfo[] getSystemAvailableFeatures() {
     var features = new java.util.ArrayList<FeatureInfo>();
     FEATURES.stream()
@@ -219,8 +220,10 @@ public class PackageManager {
     return false;
   }
   public int checkPermission(String permission, String pkg) {
-    return model.info.packageName.equals(pkg) && model.permissions.contains(permission)
-            && java.util.Set
+    if (!model.info.packageName.equals(pkg) || !model.permissions.contains(permission)) return -1;
+    // Runtime permissions the Quest permission dialog grants (RECORD_AUDIO).
+    if (com.venture.runtime.RuntimePermissions.granted(model, permission)) return 0;
+    return java.util.Set
                    .of("android.permission.INTERNET", "android.permission.ACCESS_NETWORK_STATE",
                        "android.permission.BLUETOOTH", "android.permission.BLUETOOTH_ADMIN",
                        "android.permission.WAKE_LOCK", "android.permission.READ_EXTERNAL_STORAGE",

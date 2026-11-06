@@ -73,6 +73,12 @@ public:
     void EnsureMemoryCommitted();
     // Commit code-space pages outside the append window (constant pool slots).
     void CommitCodeSpace(const void* begin, size_t size);
+    // Venture: the size of the last commit the OS refused, and the bytes of
+    // the hot and cold regions committed so far (diagnostics).
+    size_t FailedCommitSize() const { return failed_commit_size; }
+    size_t CommittedSize() const;
+    // Tests: refuse the next `count` code-window commits as the OS would.
+    static void FailCommitsForTesting(int count);
 
     /// Runs emulated code from code_ptr.
     HaltReason RunCode(void* jit_state, CodePtr code_ptr) const;
@@ -152,6 +158,18 @@ public:
     }
 
     Xbyak::Address Const(const Xbyak::AddressFrame& frame, u64 lower, u64 upper = 0);
+    /// Venture: portable blocks re-bind constant references to this JIT's pool.
+    const void* ConstPointer(u64 lower, u64 upper) { return constant_pool.GetConstantPointer(*this, lower, upper); }
+    std::pair<const u8*, const u8*> ConstantPoolRange() const { return constant_pool.Range(); }
+    /// Venture: the cold region's insertion point (offset) at any time.
+    size_t ColdInsertionOffset() const { return in_cold ? size_ : cold_size; }
+    /// Venture: the thunk arena's offsets [begin, end) (0, 0 without one).
+    std::pair<size_t, size_t> ThunkArenaRange() const { return {arena_begin, arena_end}; }
+    /// Venture: appends prepared machine code at the insertion point.
+    void AppendBytes(std::span<const u8> bytes);
+    /// Venture: an observer of the native unwind frames registered while it is set,
+    /// outside the thunk arena.
+    std::function<void(const void*, const void*, const ABIPrologue&, bool)> unwind_observer;
 
     template<size_t esize>
     Xbyak::Address BConst(const Xbyak::AddressFrame& frame, u64 value) {
@@ -164,6 +182,10 @@ public:
 
     const void* GetReturnFromRunCodeAddress() const {
         return return_from_run_code[0];
+    }
+
+    const void* GetReturnFromRunCodeVariant(size_t index) const {
+        return return_from_run_code[index];
     }
 
     const void* GetForceReturnFromRunCodeAddress() const {
@@ -263,6 +285,7 @@ private:
     size_t committed_size = 0;
 #endif
     bool writing = false;
+    size_t failed_commit_size = 0;
     size_t flush_begin = 0, flush_end = 0;
     // Cold region: its insertion point while hot code is emitted, the hot one
     // while cold code is, its commit watermark and its part written since EnableWriting.
@@ -274,6 +297,8 @@ private:
     size_t arena_begin = 0, arena_end = 0, arena_size = 0, arena_committed = 0, arena_saved_size = 0;
     size_t arena_flush_begin = 0, arena_flush_end = 0;
     bool in_arena = false, arena_saved_cold = false;
+    // A capture's observer, which never sees thunk code (it is shared, not part of the block).
+    Xbyak::RelocationObserver* arena_saved_observer = nullptr;
     void BeginThunkArena();
     void EndThunkArena();
     bool prelude_complete = false;

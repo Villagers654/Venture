@@ -4,20 +4,20 @@ configure_file(java/hosted_java_source.h.in "${CMAKE_CURRENT_BINARY_DIR}/generat
 
 add_library(venture_runtime STATIC
   platform/runtime_diagnostic_directory.cpp
-  core/low_address_space.cpp core/guest_storage.cpp core/guest_heap.cpp core/tls32.cpp
+  core/low_address_space.cpp core/guest_storage.cpp core/guest_heap.cpp core/alloc_failure.cpp core/tls32.cpp
   core/address_space.cpp core/hle.cpp core/hle_unwind.cpp core/a32_abi.cpp core/a32_call.cpp core/a32_coverage.cpp
-  core/generated/a32_ndk.cpp core/generated/a32_graphics.cpp core/generated/a32_vendor.cpp
+  core/generated/a32_ndk.cpp core/generated/a32_graphics.cpp core/generated/a32_vendor.cpp core/generated/a32_media.cpp
   core/generated/a32_libc.cpp
   core/thread.cpp core/tls.cpp
   core/dev_game_control.cpp core/dev_il2cpp.cpp core/engine_policy.cpp core/engine_defaults.cpp
-  core/profile.cpp core/frame_cpu.cpp core/startup_diagnostics.cpp
+  core/profile.cpp core/memory_pressure.cpp core/frame_cpu.cpp core/startup_diagnostics.cpp
   core/pipeline_stats.cpp core/invalidation_stats.cpp core/av_telemetry.cpp
   core/wait.cpp core/readiness.cpp core/sync_census.cpp core/diagnostic_trace.cpp core/signals.cpp core/syscall.cpp core/a32_unwind.cpp core/shutdown_trace.cpp
   core/elf.cpp core/elf_relocations.cpp core/linker.cpp core/process_image.cpp core/process.cpp core/device_identity.cpp core/java_script_loader.cpp
-  cpu/dynarmic_backend.cpp cpu/dynarmic_a32_backend.cpp cpu/block_list.cpp cpu/stubs.cpp cpu/kuser.cpp)
+  cpu/dynarmic_backend.cpp cpu/dynarmic_a32_backend.cpp cpu/block_list.cpp cpu/portable_cache.cpp cpu/pretranslate.cpp cpu/stubs.cpp cpu/kuser.cpp)
 target_include_directories(venture_runtime PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_include_directories(venture_runtime PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
-target_link_libraries(venture_runtime PUBLIC venture_common PRIVATE dynarmic miniz merry::mcl fmt::fmt)
+target_link_libraries(venture_runtime PUBLIC venture_common PRIVATE dynarmic miniz venture_lz4 merry::mcl fmt::fmt)
 target_include_directories(venture_runtime SYSTEM PRIVATE "${Boost_INCLUDE_DIR}")
 target_compile_options(venture_runtime PRIVATE -Wall -Wextra)
 target_compile_definitions(venture_runtime PRIVATE

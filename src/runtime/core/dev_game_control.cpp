@@ -46,6 +46,7 @@ Json parse_commands(std::string_view text) {
       throw std::invalid_argument("commands require unique nonempty string id and string op");
     auto at = c.value("after_first_frame_s", 0.0);
     if (!std::isfinite(at) || at < 0) throw std::invalid_argument("invalid after_first_frame_s");
+    if (c.contains("chain") && !c["chain"].is_boolean()) throw std::invalid_argument("chain must be a boolean");
     if (c.contains("args") && (!c["args"].is_array() || c["args"].size() > 32))
       throw std::invalid_argument("args must be an array of at most 32 values");
   }
@@ -142,7 +143,10 @@ void boundary(GuestThread& thread, std::string_view function, bool completed) {
         state->failed = id; emit({{"id", id}, {"ok", false}, {"error", e.what()}});
         break;
       }
-      break; // One operation per frame boundary, bounded introspection work.
+      // One operation per frame boundary, bounded introspection work. "chain"
+      // runs the next one in the same frame: per-frame Unity state such as
+      // RenderTexture.active (set, then ReadPixels) does not survive a frame.
+      if (!command.value("chain", false)) break;
     }
     if (root.value("sealed", false)) {
       bool complete = true;

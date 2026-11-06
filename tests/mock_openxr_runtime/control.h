@@ -16,6 +16,13 @@ struct MockXrController {
   bool primary = false, secondary = false, menu = false, thumbstick_click = false;
   bool trigger_touch = false, primary_touch = false, secondary_touch = false,
        thumbstick_touch = false, thumbrest_touch = false, active = true;
+  // Inputs by component path ("/input/trackpad/dpad_up", "/input/view/click") for
+  // controllers whose inputs have no field above; they win over the fields.
+  struct Raw {
+    char path[40];
+    float value;
+  };
+  std::array<Raw, 6> raw{};
 };
 struct MockXrScript {
   XrPosef head{{0, 0, 0, 1}, {0, 1.6f, 0}};
@@ -27,6 +34,11 @@ struct MockXrScript {
   XrResult end_frame_result = XR_SUCCESS;
   // Both GPU queries refuse instances the runtime did not create (Oculus with an AMD GPU).
   bool refuse_app_vulkan_instances = false;
+  // Both GPU queries refuse this instance, even one from xrCreateVulkanInstanceKHR,
+  // and xrCreateVulkanDeviceKHR fails without calling vkCreateDevice (Oculus on an
+  // AMD + NVIDIA laptop: RUNTIME_FAILURE, then HANDLE_INVALID; issue 92).
+  VkInstance refused_vulkan_instance = VK_NULL_HANDLE;
+  bool refuse_vulkan_devices = false;
   bool retain_failed_end = false;
   bool depth_formats = false;
   std::uint32_t swapchain_limit = 0; // zero disables the per-session host budget
@@ -48,9 +60,17 @@ struct MockXrStats {
   std::uint32_t live_swapchains, peak_swapchains, swapchain_limit_rejections;
   std::uint32_t space_warp;  // projection views carrying XrCompositionLayerSpaceWarpInfoFB
   std::uint32_t projection_depth;  // projection views carrying native KHR depth
+  // VENTURE_MOCK_PASSTHROUGH: the last frame's passthrough layers, environment
+  // blend mode and HTC passthrough alpha; live host passthrough objects.
+  std::uint32_t passthrough_fb, passthrough_htc, blend_mode;
+  float passthrough_htc_alpha;
+  std::uint32_t live_passthrough;
 };
 extern "C" VENTURE_MOCK_EXPORT void ventureMockXrRefreshEnvironment();
 extern "C" VENTURE_MOCK_EXPORT void ventureMockXrSetScript(const MockXrScript *);
+// The interaction profile the mock reports for both hands (null: the input timeline's).
+// The next xrPollEvent reports the change.
+extern "C" VENTURE_MOCK_EXPORT void ventureMockXrSetProfile(const char *profile);
 extern "C" VENTURE_MOCK_EXPORT MockXrStats ventureMockXrStats();
 extern "C" VENTURE_MOCK_EXPORT XrTime ventureMockXrLastDisplayTime();
 // Hold a host frame wait before it returns a prediction; queries may proceed.

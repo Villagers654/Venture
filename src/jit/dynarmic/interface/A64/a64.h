@@ -130,6 +130,13 @@ public:
     // Owner-thread only, outside Run/Step. Compile without executing guest code.
     // Returns false while executing or when warming would pressure the cache.
     bool Precompile(std::uint64_t location_descriptor);
+    // Owner-thread only, inside a host call made by guest code (the guest is waiting).
+    // Never clears or invalidates the cache; false while a halt is pending, when the
+    // cache is short of space. Installs only blocks the portable block source holds.
+    bool PrecompileIdle(std::uint64_t location_descriptor);
+    /// Owner-thread only: sizes the block tables for `count` more blocks, so that
+    /// installing them later never rehashes the tables on a busy frame.
+    void ReserveBlocks(std::size_t count);
     /// Lock-free identity observation; never reads live architectural registers.
     std::uint32_t GetProfileCookie() const;
 

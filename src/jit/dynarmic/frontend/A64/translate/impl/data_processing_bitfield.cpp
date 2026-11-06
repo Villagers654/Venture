@@ -63,9 +63,23 @@ bool TranslatorVisitor::BFM(bool sf, bool N, Imm<6> immr, Imm<6> imms, Reg Rn, R
     const auto dst = X(datasize, Rd);
     const auto src = X(datasize, Rn);
 
-    const auto bot = ir.Or(ir.And(dst, I(datasize, ~masks->wmask)), ir.And(ir.RotateRight(src, ir.Imm8(R)), I(datasize, masks->wmask)));
-
-    X(datasize, Rd, ir.Or(ir.And(dst, I(datasize, ~masks->tmask)), ir.And(bot, I(datasize, masks->tmask))));
+    // Venture: one masked insert. BFXIL (imms >= immr) copies source bits immr..imms
+    // to the bottom; BFI copies the bottom imms + 1 bits to bit datasize - immr. A
+    // shift brings the field into place, so no rotate or second masking round.
+    const u8 S = imms.ZeroExtend<u8>();
+    const bool extract = S >= R;
+    const size_t width = extract ? S - R + 1 : S + 1;
+    const size_t lsb = extract ? 0 : datasize - R;
+    const u64 field = (width == 64 ? ~u64(0) : (u64(1) << width) - 1) << lsb;
+    const u64 keep = ~field & (datasize == 64 ? ~u64(0) : u64(0xffffffff));
+    IR::U32U64 moved = src;
+    if (extract && R != 0)
+        moved = ir.LogicalShiftRight(src, ir.Imm8(R));
+    else if (!extract)
+        moved = ir.LogicalShiftLeft(src, ir.Imm8(u8(lsb)));
+    // A field that reaches the top bit needs no mask: the shift cleared everything else.
+    const bool shifted_clean = (extract && R != 0 && R + width == datasize) || (!extract && lsb + width == datasize);
+    X(datasize, Rd, ir.Or(ir.And(dst, I(datasize, keep)), shifted_clean ? moved : ir.And(moved, I(datasize, field))));
     return true;
 }
 

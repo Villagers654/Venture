@@ -14,6 +14,7 @@
 #include "platform/memory.h"
 #include <cstring>
 #include <atomic>
+#include <chrono>
 #include <thread>
 #include <vector>
 #include <bit>
@@ -41,6 +42,7 @@ const hle::FunctionInfo& function(const char* name) {
     if (f.thunk == thunk) {
       // Snapshots are values; fetch the stable registry entry via its ARM thunk id.
       auto* code = g2h<std::uint32_t>(thunk);
+      if (code[0] == 0xe92d4010u) ++code; // condition waits open a real frame (push {r4, lr})
       auto id = (code[0] & 0xfff) | ((code[0] >> 4) & 0xf000) |
                 ((code[1] & 0xfff) << 16) | ((code[1] & 0xf0000) << 12);
       return hle::function(id);
@@ -298,6 +300,26 @@ TEST_CASE("A32 pthread wire sizes, static types and live owner indices") {
   CHECK(call("pthread_rwlock_unlock", {p}) == 0);
   CHECK(call("pthread_rwlock_unlock", {p}) == 0);
   CHECK(words[10] == 0xdeadbeef);
+}
+TEST_CASE("A32 LP32-only relative condition waits time out and reacquire the mutex") {
+  test::LowMemory32 memory;
+  auto base = h2g32(memory.at<void>());
+  auto* words = memory.at<std::uint32_t>();
+  const auto mutex = base, cond = base + 4, timeout = base + 8;
+  words[0] = 0; words[1] = 0; words[2] = 0; words[3] = 2000000; words[4] = 0xdeadbeef;
+  REQUIRE(call("pthread_mutex_lock", {mutex}) == 0);
+  auto start = std::chrono::steady_clock::now();
+  CHECK(call("pthread_cond_timedwait_relative_np", {cond, mutex, timeout}) == err::kETIMEDOUT);
+  CHECK(std::chrono::steady_clock::now() - start >= std::chrono::milliseconds(2));
+  CHECK((words[0] >> 16) == GuestThread::current()->mutex_owner_index());
+  words[3] = 1000000000;
+  CHECK(call("pthread_cond_timedwait_relative_np", {cond, mutex, timeout}) == err::kEINVAL);
+  start = std::chrono::steady_clock::now();
+  CHECK(call("pthread_cond_timeout_np", {cond, mutex, 2}) == err::kETIMEDOUT);
+  CHECK(std::chrono::steady_clock::now() - start >= std::chrono::milliseconds(2));
+  CHECK((words[0] >> 16) == GuestThread::current()->mutex_owner_index());
+  CHECK(call("pthread_mutex_unlock", {mutex}) == 0);
+  CHECK(words[0] == 0); CHECK(words[4] == 0xdeadbeef);
 }
 TEST_CASE("A32 syscall and SVC use ARM numbers, wire pointers and Linux error conventions") {
   library();

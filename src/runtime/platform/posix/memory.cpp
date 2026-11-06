@@ -7,7 +7,9 @@
 #include <sys/syscall.h>
 #include <sys/uio.h>
 #include <unistd.h>
+#include <algorithm>
 #include <atomic>
+#include <optional>
 #include <cstring>
 #include <cstdio>
 #include <fstream>
@@ -15,6 +17,22 @@
 #include <sstream>
 
 namespace venture::platform {
+std::string first_mapping(GuestAddr address, std::uint64_t size) {
+  std::FILE* maps = std::fopen("/proc/self/maps", "r");
+  if (!maps) return "unqueryable";
+  char line[512];
+  std::string found;
+  while (std::fgets(line, sizeof(line), maps)) {
+    unsigned long long begin = 0, end = 0;
+    if (std::sscanf(line, "%llx-%llx", &begin, &end) == 2 && begin < address + size && end > address) {
+      found = line;
+      if (!found.empty() && found.back() == '\n') found.pop_back();
+      break;
+    }
+  }
+  std::fclose(maps);
+  return found;
+}
 std::optional<std::uint64_t> committed_bytes(GuestAddr, std::uint64_t) {
   // Linux anonymous mappings use overcommit; resident pages are not commit.
   return std::nullopt;
@@ -67,6 +85,73 @@ bool process_memory(ProcessMemory& out) {
   }
   if (!found) return false;
   out = {private_kib, pss > private_kib ? pss - private_kib : 0};
+  return true;
+}
+namespace {
+std::optional<std::uint64_t> read_number(const char* path) {
+  std::ifstream input(path);
+  std::string text;
+  if (!(input >> text) || text == "max") return std::nullopt;
+  try { return std::stoull(text); } catch (...) { return std::nullopt; }
+}
+}  // namespace
+bool memory_headroom(MemoryHeadroom& out) {
+  std::ifstream input("/proc/meminfo");
+  std::uint64_t total = 0, available = 0, commit_limit = 0, committed = 0;
+  unsigned found = 0;
+  for (std::string line; std::getline(input, line);) {
+    std::istringstream fields(line);
+    std::string key;
+    std::uint64_t kib;
+    if (!(fields >> key >> kib)) continue;
+    if (key == "MemTotal:") { total = kib << 10; found |= 1; }
+    else if (key == "MemAvailable:") { available = kib << 10; found |= 2; }
+    else if (key == "CommitLimit:") { commit_limit = kib << 10; found |= 4; }
+    else if (key == "Committed_AS:") { committed = kib << 10; found |= 8; }
+  }
+  if ((found & 3) != 3 || !total) return false;
+  MemoryHeadroom result{available, total};
+  // vm.overcommit_memory=2 refuses allocations past CommitLimit, as Windows does.
+  if (read_number("/proc/sys/vm/overcommit_memory") == 2u && (found & 12) == 12)
+    result = {commit_limit > committed ? commit_limit - committed : 0, commit_limit};
+  // cgroup v2 limit of this process (systemd scopes, containers): the OOM killer acts there first.
+  std::ifstream cgroup("/proc/self/cgroup");
+  for (std::string line; std::getline(cgroup, line);) {
+    if (line.rfind("0::", 0) != 0) continue;
+    const auto base = "/sys/fs/cgroup" + line.substr(3);
+    const auto max = read_number((base + "/memory.max").c_str());
+    const auto current = read_number((base + "/memory.current").c_str());
+    if (max && current && *max < result.limit) result = {*max > *current ? std::min(result.available, *max - *current) : 0, *max};
+  }
+  out = result;
+  return true;
+}
+bool commit_charge(CommitCharge& out) {
+  // Linux Documentation/filesystems/proc.rst (meminfo) and mm/overcommit-accounting.rst.
+  std::ifstream meminfo("/proc/meminfo");
+  CommitCharge result;
+  unsigned found = 0;
+  for (std::string line; std::getline(meminfo, line);) {
+    std::istringstream fields(line);
+    std::string key;
+    std::uint64_t value;
+    if (!(fields >> key >> value)) continue;
+    if (key == "CommitLimit:") { result.system_limit = value * 1024; found |= 1; }
+    if (key == "Committed_AS:") { result.system_used = value * 1024; found |= 2; }
+  }
+  if (found != 3) return false;
+  int mode = 0;
+  std::ifstream("/proc/sys/vm/overcommit_memory") >> mode;
+  result.enforced = mode == 2;
+  std::ifstream status("/proc/self/status");
+  for (std::string line; std::getline(status, line);) {
+    std::istringstream fields(line);
+    std::string key;
+    std::uint64_t value;
+    if (!(fields >> key >> value)) continue;
+    if (key == "RssAnon:" || key == "VmSwap:") result.process += value * 1024;
+  }
+  out = result;
   return true;
 }
 bool process_resident_memory(ProcessResidentMemory& out) {

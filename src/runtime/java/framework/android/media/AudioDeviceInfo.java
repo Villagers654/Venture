@@ -28,7 +28,11 @@ public final class AudioDeviceInfo {
   public int[] getChannelMasks() { return input ? new int[]{16, 12} : new int[]{4, 12}; }
   public int[] getChannelIndexMasks() { return new int[]{1, 3}; }
   public int[] getEncodings() { return new int[]{2, 3, 4, 21, 22}; }
+  // Quest's device profiles: the speaker runs at 48 kHz only, the microphone up
+  // to 48 kHz; Venture's 48 kHz mixer resamples to whatever the host endpoint
+  // runs at. Engines open their output at the last (highest) listed rate: Meta
+  // XR Audio's EPS before Batman 1.4 refused 192000 and the game had no sound.
   public int[] getSampleRates() {
-    return new int[]{8000, 11025, 16000, 22050, 24000, 32000, 44100, 48000, 88200, 96000, 176400, 192000};
+    return input ? new int[]{8000, 11025, 16000, 22050, 24000, 32000, 44100, 48000} : new int[]{48000};
   }
 }

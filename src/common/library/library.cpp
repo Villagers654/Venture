@@ -1,17 +1,37 @@
 #include "common/library/library.h"
+#include "common/environment.h"
 #include "common/log.h"
 #include "common/saves_migration.h"
 #include "common/file_ops.h"
 #include <algorithm>
 #include <cctype>
 #include <cstdlib>
+#include <deque>
 #include <fstream>
+#include <mutex>
 #include <set>
+#include <utility>
 namespace venture::library {
 std::vector<Install> scan(const fs::path &root, bool* authoritative) {
   if (authoritative) *authoritative = false;
   std::vector<Install> result;
-  if (!fs::exists(root) || (authoritative && !fs::is_directory(root)))
+  std::error_code missing;
+  if (!fs::exists(root, missing) && !missing) {
+    // A folder that is simply gone holds no games, so its scan is complete. A
+    // folder on a drive that is not connected (its parent is gone too, or it
+    // is the drive itself) may still hold games: that scan is not.
+    if (authoritative) {
+      const auto parent = root.parent_path();
+      std::error_code ec;
+      *authoritative = root.has_relative_path() && parent != root &&
+                       fs::is_directory(parent, ec);
+      if (!*authoritative)
+        log::warn("library", "Library folder {} is not reachable; its games keep their Steam shortcuts.",
+                  paths::utf8(root));
+    }
+    return result;
+  }
+  if (missing || (authoritative && !fs::is_directory(root)))
     return result;
   bool reliable = true;
   const auto options = authoritative ? fs::directory_options::none :
@@ -36,13 +56,25 @@ std::vector<Install> scan(const fs::path &root, bool* authoritative) {
       continue;
     for (auto &version : entries(package.path())) {
       if (!version.is_directory() ||
-          !digits(paths::utf8(version.path().filename())) ||
+          !paths::version_folder(paths::utf8(version.path().filename())) ||
           !paths::within(root, version.path()))
         continue;
+      // A version folder without a manifest is not an installation: what an
+      // interrupted first download or an uninstall that could not remove
+      // every file leaves behind. It neither lists a game nor makes the scan
+      // incomplete; a manifest that exists but cannot be read does.
+      if (std::error_code ec; !fs::exists(version.path() / "plan.json", ec) && !ec) {
+        static std::mutex mutex;
+        static std::set<fs::path> reported;
+        if (std::lock_guard lock(mutex); reported.insert(version.path()).second)
+          log::info("library", "{} has no installation manifest; it is not an installation.",
+                    paths::utf8(version.path()));
+        continue;
+      }
       try {
         auto p =
             meta::parse_plan(paths::read_json(version.path() / "plan.json"));
-        if (paths::game_dir(root, p.package, p.version_code) != version.path()) {
+        if (paths::game_dir(root, p.package, p.folder()) != version.path()) {
           log::warn("library", "{} holds a plan for {} version {}.", paths::utf8(version.path()), p.package,
                     p.version_code);
           reliable = false;
@@ -193,7 +225,7 @@ void uninstall(const fs::path &library, const Install &install) {
   // it are still refused.
   const auto root = fs::weakly_canonical(library);
   auto target =
-      paths::game_dir(root, install.plan.package, install.plan.version_code);
+      paths::game_dir(root, install.plan.package, install.plan.folder());
   if (fs::weakly_canonical(target) != fs::weakly_canonical(install.directory) ||
       !paths::within(root, target))
     throw std::runtime_error(
@@ -211,13 +243,19 @@ void uninstall(const fs::path &library, const Install &install) {
       manifest.binary_id != install.plan.binary_id)
     throw std::runtime_error(
         "Installation changed. Rescan before uninstalling.");
-  remove_obb_aliases(paths::data_dir(), install.plan.package, target);
+  remove_obb_aliases(paths::data_dir(), install.plan.package, target,
+                     install.plan.pinned ? install.plan.folder() : std::string());
+  // The manifest goes last: an uninstall that cannot remove a file (the game
+  // or a scanner still holds it) leaves an incomplete installation the
+  // library still lists and can uninstall again, not anonymous leftovers.
+  for (const auto &entry : fs::directory_iterator(target))
+    if (entry.path().filename() != "plan.json") remove_tree(root, entry.path());
   remove_tree(root, target);
   // The runtime's extracted libraries and converted Java for this version.
   // Saves (the account data) stay.
   const auto cache = paths::data_dir() / "cache";
-  const auto version = cache / paths::from_utf8(install.plan.package) / paths::from_utf8(install.plan.version_code);
-  if (std::error_code ec; paths::safe_name(install.plan.package) && paths::safe_name(install.plan.version_code) &&
+  const auto version = cache / paths::from_utf8(install.plan.package) / paths::from_utf8(install.plan.folder());
+  if (std::error_code ec; paths::safe_name(install.plan.package) && paths::safe_name(install.plan.folder()) &&
       fs::is_directory(version, ec))
     try {
       remove_tree(cache, version);
@@ -271,7 +309,7 @@ bool addon_installed(const Install &install, std::string_view sku) {
   return found;
 }
 void refresh_catalog(const fs::path &root, const meta::Plan &catalog) {
-  auto dir = paths::game_dir(root, catalog.package, catalog.version_code);
+  auto dir = paths::game_dir(root, catalog.package, catalog.folder());
   if (!paths::within(dir, dir / "plan.json") ||
       !paths::within(dir, dir / "plan.json.tmp"))
     throw std::runtime_error("Unsafe installation manifest path.");
@@ -283,6 +321,7 @@ void refresh_catalog(const fs::path &root, const meta::Plan &catalog) {
   if (!meta::catalog_replaces(catalog, previous))
     throw std::runtime_error(meta::catalog_unavailable);
   auto plan = catalog;
+  plan.pinned = previous.pinned;
   keep_installed_apk(plan, previous, dir);
   // An import's own data files (no Meta id) and recorded hashes stay.
   for (auto &f : previous.files) {
@@ -326,7 +365,7 @@ void keep_installed_apk(meta::Plan &plan, const meta::Plan &installed,
 void uninstall_addon(const fs::path &root, const Install &install,
                      std::string_view sku) {
   auto target =
-      paths::game_dir(root, install.plan.package, install.plan.version_code);
+      paths::game_dir(root, install.plan.package, install.plan.folder());
   if (fs::weakly_canonical(target) != fs::weakly_canonical(install.directory))
     throw std::runtime_error("Installation path changed. Rescan first.");
   if (!paths::within(target, target / "plan.json") ||
@@ -386,11 +425,20 @@ bool needed_meta_sign_in(const fs::path &log) {
   std::ifstream in(log, std::ios::binary);
   bool init_failed = false, crashed_on_reply = false;
   unsigned long long frames = 0;
-  double last = 0, refused = -1;
+  double last = 0, refused = -1, first_poll = -1;
+  // The newest log lines, true for each one that is an unanswered user poll.
+  std::deque<bool> recent;
   for (std::string line; std::getline(in, line);) {
     // log::write lines start with "<seconds>.<ms>"; continuation lines do not.
     char *end = nullptr;
-    if (const double at = std::strtod(line.c_str(), &end); end != line.c_str() && at > 0) last = at;
+    if (const double at = std::strtod(line.c_str(), &end); end != line.c_str() && at > 0) {
+      last = at;
+      const bool poll = line.find("[ovrplatform] ovr_GetLoggedInUserID ") != std::string::npos &&
+                        line.find(" identity_returned=false") != std::string::npos;
+      if (poll && first_poll < 0) first_poll = at;
+      recent.push_back(poll);
+      if (recent.size() > 200) recent.pop_front();
+    }
     if (line.find("[ovrplatform] ovr_User_GetLoggedInUser request=") != std::string::npos ||
         line.find("[ovrplatform] ovr_Entitlement_GetIsViewerEntitled request=") != std::string::npos)
       if (line.find(" error=-20001") != std::string::npos) return true;
@@ -411,7 +459,11 @@ bool needed_meta_sign_in(const fs::path &log) {
   // without it. One that quits before rendering past its first frames (Pinball
   // FX, Deadpool VR), or that crashes handling the failed reply of a later
   // platform request (a null user in an IAP callback), needed the account.
-  return init_failed && (frames < 10 || crashed_on_reply);
+  // So did one that rendered on but spent its last lines doing nothing except
+  // asking for the user (Pinball FX shows black and polls ~45 times a second).
+  const auto polls = std::count(recent.begin(), recent.end(), true);
+  const bool waiting_for_user = recent.size() == 200 && polls >= 180 && last - first_poll >= 30;
+  return init_failed && (frames < 10 || crashed_on_reply || waiting_for_user);
 }
 bool needed_device_attestation(const fs::path &log) {
   std::ifstream in(log, std::ios::binary);
@@ -430,6 +482,29 @@ bool needed_device_attestation(const fs::path &log) {
   // the refusal (VirZOOM FLY shows "Integrity Token could not be retrieved")
   // was stopped by it.
   return failed >= 0 && last - failed < 60;
+}
+std::string game_dialog(const fs::path &log) {
+  std::ifstream in(log, std::ios::binary);
+  // Logged by the framework's android.app.Dialog.show().
+  constexpr std::string_view marker = " [dialog] Shown without presentation: ";
+  std::string text;
+  double shown = -1, last = 0;
+  unsigned long long frames = 0, frames_at_dialog = 0;
+  for (std::string line; std::getline(in, line);) {
+    // log::write lines start with "<seconds>.<ms>"; continuation lines do not.
+    char *end = nullptr;
+    const double at = std::strtod(line.c_str(), &end);
+    if (end == line.c_str() || at <= 0) continue;
+    last = at;
+    frames = frames_submitted(line, frames);
+    if (const auto found = line.find(marker); found != std::string::npos) {
+      text = line.substr(found + marker.size());
+      while (!text.empty() && (text.back() == '\r' || text.back() == ' ')) text.pop_back();
+      shown = at;
+      frames_at_dialog = frames;
+    }
+  }
+  return shown >= 0 && last - shown < 60 && frames - frames_at_dialog < 10 ? text : std::string{};
 }
 std::string missing_expansion(const fs::path &log) {
   std::ifstream in(log, std::ios::binary);
@@ -459,7 +534,16 @@ std::string missing_expansion(const fs::path &log) {
   return failed && frames < 10 ? name : std::string{};
 }
 std::string runtime_failure(std::string_view tail, int code) {
-  std::string_view last, last_runtime, dump;
+  // fatal: the last fatal signal; cause: the trap that raised it (an import
+  // with no implementation, or an A32 call without an ABI adapter), if any.
+  std::string_view last, last_runtime, dump, fatal, cause, trap, guest_fault, guest_cause, session, stall_seconds;
+  // A frame-stall snapshot with no frame after it: the game was hung when it
+  // was closed (by the user or the quit backstop). Its thread rows are
+  // diagnostics, not an error, and must not be quoted as the reason.
+  bool stalled = false;
+  // An exit status 128+N is signal N. A guest crash handler (Unity's) that
+  // re-raises leaves no libc line; Venture's fault summary still names it.
+  const auto fault_marker = code > 128 && code < 160 ? std::format(" signal {} ", code - 128) : std::string{};
   while (!tail.empty()) {
     auto end = tail.find('\n');
     auto line = tail.substr(0, end);
@@ -467,6 +551,12 @@ std::string runtime_failure(std::string_view tail, int code) {
     constexpr std::string_view dump_marker = " I [runtime] Crash dump: ";
     if (auto at = line.find(dump_marker); at != line.npos)
       dump = line.substr(at + dump_marker.size());
+    // A session created after a failed one supersedes the failure.
+    if (line.find(" I [xr] Host xrCreateSession result=0") != line.npos) session = {};
+    if (line.find("[xr] Frames submitted=") != line.npos) {
+      stalled = false;  // frames resumed after a stall (a long level load)
+      stall_seconds = {};
+    }
     // log::write: "<seconds>.<ms> <thread> <level> [<tag>] <message>"
     auto marker = line.find(" E [");
     if (marker == line.npos)
@@ -479,21 +569,64 @@ std::string runtime_failure(std::string_view tail, int code) {
       message.remove_suffix(1);
     if (message.empty())
       continue;
+    const auto tag = line.substr(marker + 4, close - marker - 4);
+    if (tag == "startup-snapshot") {
+      stalled = true;
+      constexpr std::string_view no_frame = "No frame submitted for ";
+      if (message.starts_with(no_frame)) {
+        auto seconds = message.substr(no_frame.size());
+        stall_seconds = seconds.substr(0, seconds.find(' '));
+      }
+      continue;
+    }
     last = message;
-    if (line.substr(marker + 4, close - marker - 4) == "runtime")
+    if (tag == "runtime")
       last_runtime = message;
+    if ((tag == "a32-abi" && message.starts_with("unsupported ")) ||
+        (tag == "hle" && message.starts_with("unimplemented ")))
+      trap = message;
+    if (tag == "signal" && !fault_marker.empty() && message.starts_with("guest tid ") &&
+        message.find(fault_marker) != message.npos) {
+      guest_fault = message;
+      // Only a trap raises SIGSYS; any other signal is not caused by one.
+      guest_cause = code == 128 + 31 ? std::exchange(trap, {}) : std::string_view{};
+    }
+    if (tag == "xr" && message.starts_with("The VR session could not be created: "))
+      session = message;
+    if (tag == "libc" && message.starts_with("Fatal signal ")) {
+      fatal = message;
+      cause = std::exchange(trap, {});
+    }
   }
   // main() reports a failed launch as "[runtime] <reason>".
   if (!last_runtime.empty())
     return std::string(last_runtime) + (dump.empty() ? "" : std::format(" Crash dump: {}", dump));
+  const auto exit_code = code < 0 || code > 255
+      ? std::format("0x{:08X}", static_cast<std::uint32_t>(code)) : std::to_string(code);
+  // A game without its VR session crashes on the invalid handle later
+  // (OVRPlugin aborts in ovrp_SetupLayer); the failed session is the cause.
+  if (!session.empty())
+    return std::format("{}. The game stopped after that (exit code {}).", session, exit_code) +
+        (dump.empty() ? "" : std::format(" Crash dump: {}", dump));
+  // A hung game that was closed did not crash: say so instead of quoting an
+  // unrelated error line. A fatal signal still outranks the stall.
+  if (stalled && fatal.empty() && guest_fault.empty())
+    return std::format("The game stopped responding{} and was closed (exit code {}).",
+                       stall_seconds.empty() ? "" : std::format(" (no new frame for {} s)", stall_seconds),
+                       exit_code) +
+           (dump.empty() ? "" : std::format(" Crash dump: {}", dump));
   // Anything else (a crash) gets the exit code; the last error line is context
   // only, because some subsystems log recoverable errors.
-  auto message =
-      code < 0 || code > 255
-          ? std::format("The runtime stopped unexpectedly (exit code 0x{:08X}).",
-                        static_cast<std::uint32_t>(code))
-          : std::format("The runtime stopped unexpectedly (exit code {}).", code);
-  if (!last.empty())
+  auto message = std::format("The runtime stopped unexpectedly (exit code {}).", exit_code);
+  // A fatal signal outranks error lines around it: a game's own non-fatal
+  // errors (a failed HTTPS request) are often logged last, even after it.
+  if (!fatal.empty())
+    message += cause.empty() ? std::format(" Last error: {}", fatal)
+                             : std::format(" Last error: {} ({})", cause, fatal);
+  else if (!guest_fault.empty())
+    message += guest_cause.empty() ? std::format(" Last error: {}", guest_fault)
+                                   : std::format(" Last error: {} ({})", guest_cause, guest_fault);
+  else if (!last.empty())
     message += std::format(" Last error: {}", last);
   if (!dump.empty()) message += std::format(" Crash dump: {}", dump);
   return message;
@@ -533,6 +666,13 @@ Settings Settings::defaults(const fs::path &data) {
           paths::executable().parent_path() / "venture-runtime", {}, 2, false};
 #endif
 }
+bool Settings::texture_compression_warns(std::string_view before, std::string_view after) const {
+  return !texture_compression_warned && before == "always" && after != "always";
+}
+const controls::Config& Settings::controls_for(std::string_view app_id) const {
+  const auto it = game_controls.find(std::string(app_id));
+  return it == game_controls.end() ? controls : it->second;
+}
 Settings Settings::load(const fs::path &data) {
   auto s = defaults(data);
   if (!fs::exists(data / "settings.json"))
@@ -551,18 +691,36 @@ Settings Settings::load(const fs::path &data) {
   s.log_level = int(std::min<uint64_t>(4, number(j, "logLevel")));
   if (const auto size = number(j, "interfaceSize"); size >= 100 && size <= 200)
     s.interface_size = int(size);
-  s.menu_button = int(std::min<uint64_t>(2, number(j, "menuButton")));
+  if (const auto& controls = field(j, "controls"); controls.is_object()) {
+    if (const auto& global = field(controls, "global"); global.is_object()) s.controls = controls::decode(global.dump());
+    if (const auto& games = field(controls, "games"); games.is_object())
+      for (const auto& [id, config] : games.items())
+        if (config.is_object() && id.size() <= 64) s.game_controls[id] = controls::decode(config.dump());
+  } else {
+    // Before the Controls page: Settings > Runtime "Menu from both stick clicks".
+    s.controls = controls::migrate_menu_button(int(std::min<uint64_t>(2, number(j, "menuButton"))));
+  }
   s.texture_compression = int(std::min<uint64_t>(2, number(j, "textureCompression")));
   if (auto percent = number(j, "textureCompressionThreshold"); percent >= 10 && percent <= 95)
     s.texture_compression_threshold = int(percent);
+  s.texture_compression_warned = field(j, "textureCompressionWarned") == true;
   if (auto jobs = number(j, "parallelDownloads"); jobs >= 1 && jobs <= 4)
     s.parallel_downloads = int(jobs);
+  s.keep_translated_code = field(j, "keepTranslatedCode") != false;
   if (auto tag = str(j, "gameLanguage"); tag.size() <= 16 && std::ranges::all_of(tag, [](unsigned char c) {
         return std::isalnum(c) || c == '-';
       }))
     s.game_language = tag;
-  // Preserve the old Steam Frame opt-in; the renamed key takes precedence.
-  s.passthrough = field(j, j.contains("passthrough") ? "passthrough" : "steamFramePassthrough") == true;
+  if (auto code = str(j, "interfaceLanguage"); code.size() <= 16 && std::ranges::all_of(code, [](unsigned char c) {
+        return std::isalnum(c) || c == '_' || c == '-';
+      }))
+    s.interface_language = code;
+  // On unless turned off. The earlier opt-in keys ("passthrough",
+  // "steamFramePassthrough") only recorded a default-off state and are ignored.
+  s.passthrough = field(j, "mixedReality") != false;
+  s.color_key = field(j, "passthroughColorKey") == true;
+  if (const auto color = str(j, "passthroughKeyColor"); environment::parse_color_key(color))
+    s.key_color = color.starts_with('#') ? color.substr(1) : color;
   s.console = field(j, "launchWithConsole") == true;
   s.check_updates = field(j, "checkForUpdates") != false;
   s.dismissed_update = str(j, "dismissedUpdate");
@@ -575,6 +733,15 @@ Settings Settings::load(const fs::path &data) {
       if (auto path = folder.is_string() ? paths::from_utf8(folder.get<std::string>()) : fs::path();
           path.is_absolute() && path.lexically_normal() != s.games)
         s.libraries.push_back(path.lexically_normal());
+  s.display = display_from_json(field(j, "display"), false);
+  if (const auto &games_display = field(j, "gameDisplay"); games_display.is_object())
+    for (const auto &[id, value] : games_display.items())
+      if (auto d = display_from_json(value, true); d != game_display_defaults()) s.game_display[id] = d;
+  if (const auto &layers = field(j, "vulkanLayers"); layers.is_array())
+    for (const auto &layer : layers)
+      if (layer.is_string() && !layer.get<std::string>().empty() &&
+          layer.get<std::string>().find_first_of(",;") == std::string::npos)
+        s.vulkan_layers.push_back(layer.get<std::string>());
   if (const auto &skip = field(j, "steamSkip"); skip.is_array())
     for (const auto &id : skip)
       if (id.is_string())
@@ -590,12 +757,16 @@ void Settings::save(const fs::path &data) const {
          {"gamesDirectory", paths::utf8(games)},
          {"logLevel", log_level},
          {"interfaceSize", interface_size},
-         {"menuButton", menu_button},
          {"textureCompression", texture_compression},
          {"textureCompressionThreshold", texture_compression_threshold},
+         {"textureCompressionWarned", texture_compression_warned},
          {"parallelDownloads", parallel_downloads},
+         {"keepTranslatedCode", keep_translated_code},
          {"gameLanguage", game_language},
-         {"passthrough", passthrough},
+         {"interfaceLanguage", interface_language},
+         {"mixedReality", passthrough},
+         {"passthroughColorKey", color_key},
+         {"passthroughKeyColor", key_color},
          {"launchWithConsole", console},
          {"checkForUpdates", check_updates},
          {"dismissedUpdate", dismissed_update},
@@ -603,6 +774,17 @@ void Settings::save(const fs::path &data) const {
          {"steamAddNew", steam_add_new},
          {"installAsk", install_ask},
          {"steamSkip", steam_skip}};
+  {
+    Json games = Json::object();
+    for (const auto& [id, config] : game_controls) games[id] = Json::parse(controls::encode(config));
+    j["controls"] = Json{{"global", Json::parse(controls::encode(controls))}, {"games", std::move(games)}};
+  }
+  j["display"] = display_to_json(display);
+  Json games_display = Json::object();
+  for (const auto &[id, d] : game_display)
+    if (d != game_display_defaults()) games_display[id] = display_to_json(d);
+  if (!games_display.empty()) j["gameDisplay"] = std::move(games_display);
+  if (!vulkan_layers.empty()) j["vulkanLayers"] = vulkan_layers;
   if (!libraries.empty()) {
     Json folders = Json::array();
     for (const auto &folder : libraries)
@@ -618,5 +800,45 @@ void Settings::save(const fs::path &data) const {
     j["adbExecutable"] = paths::utf8(adb);
   }
   paths::atomic_write(data / "settings.json", j.dump(2));
+}
+std::vector<std::pair<std::string, std::string>> launch_environment(const Settings &s, std::string_view app_id,
+                                                                    bool automation) {
+  // VENTURE_LOG_LEVEL: the launcher's log level, 0 (trace) to 4 (error).
+  std::vector<std::pair<std::string, std::string>> environment{{"VENTURE_LOG_LEVEL", std::to_string(s.log_level)}};
+  // Always set, so an inherited value never overrides the setting.
+  environment.push_back({"VENTURE_PASSTHROUGH", s.passthrough ? "1" : "0"});
+  // The player's controls (the game's own when it has them).
+  environment.push_back({"VENTURE_CONTROLS", controls::encode(s.controls_for(app_id))});
+  // The color key passthrough color, only when the user chose it; empty otherwise.
+  environment.push_back({"VENTURE_PASSTHROUGH_KEY", s.passthrough && s.color_key ? s.key_color : ""});
+  if (!s.game_language.empty()) environment.push_back({"VENTURE_LOCALE", s.game_language});
+  // Implicit Vulkan layers the player keeps; the runtime leaves out the rest.
+  if (!s.vulkan_layers.empty()) {
+    std::string layers;
+    for (const auto &layer : s.vulkan_layers) layers += (layers.empty() ? "" : ",") + layer;
+    environment.push_back({"VENTURE_VULKAN_LAYERS", layers});
+  }
+  const auto own = s.game_display.find(std::string(app_id));
+  const auto *game = own == s.game_display.end() ? nullptr : &own->second;
+  // Texture compression, this game's over the global one; always is the
+  // runtime's default and sets nothing.
+  const auto [mode, threshold] =
+      texture_compression_environment(s.texture_compression, s.texture_compression_threshold, game);
+  if (mode != "always") environment.push_back({"VENTURE_TEXTURE_COMPRESSION", mode});
+  if (threshold) environment.push_back({"VENTURE_TEXTURE_COMPRESSION_THRESHOLD", std::to_string(threshold)});
+  // Keep translated code; on is the runtime's default.
+  if (!s.keep_translated_code) {
+    environment.push_back({"VENTURE_JIT_PTC", "0"});
+    environment.push_back({"VENTURE_JIT_PRETRANSLATE", "0"});
+  }
+  // Display settings, this game's over the global ones; "runtime" overrides inherited values too.
+  const auto display = effective_display(s.display, game);
+  environment.push_back({"VENTURE_RESOLUTION", resolution_environment(display)});
+  environment.push_back({"VENTURE_FRAME_RATE", frame_rate_environment(display)});
+  environment.push_back({"VENTURE_MIRROR", automation ? "off" : mirror_environment(display)});
+  environment.push_back({"VENTURE_MIRROR_EYE", mirror_eye_environment(display)});
+  // The game's audio on the PC too; off by default.
+  environment.push_back({"VENTURE_PC_AUDIO", pc_audio_environment(display)});
+  return environment;
 }
 } // namespace venture::library

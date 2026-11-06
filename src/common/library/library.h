@@ -1,6 +1,8 @@
 #pragma once
+#include "common/controls.h"
 #include "common/meta/store.h"
 #include "common/meta/accounts.h"
+#include "common/library/display.h"
 #include <set>
 namespace venture::library {
 struct Install {
@@ -9,9 +11,16 @@ struct Install {
   bool complete = false;
   uint64_t bytes = 0;
   std::string label;  // an imported app's own name (its APK label), when Meta has no listing
+  // Its library id: the app id, or for a version pinned beside the game's own
+  // install meta::version_id. Launches, Steam and settings use it.
+  std::string id() const {
+    return plan.pinned ? meta::version_id(plan.app_id, plan.binary_id) : plan.app_id;
+  }
 };
-// When requested, authoritative is false for missing roots, unreadable entries
-// or skipped manifests. Such a scan must never drive removal of shortcuts.
+// When requested, authoritative is false for a root on a drive that is not
+// connected, unreadable entries or manifests that exist but cannot be read.
+// Such a scan must never drive removal of shortcuts. A root that is gone from
+// a present parent and a version folder without plan.json hold no games.
 std::vector<Install> scan(const fs::path &root, bool* authoritative = nullptr);
 // Only the current account may reconcile its own previously confirmed titles.
 void merge(std::vector<meta::Game> &games, const meta::Snapshot &snapshot,
@@ -50,7 +59,9 @@ LaunchChoice launch_choice(const meta::AccountIndex &accounts,
                            std::string_view requested = {});
 // What the launcher shows for a runtime that exited with `exit_code`: the
 // "[runtime]" error line main() writes for a failed launch, found in the tail
-// of the runtime log, else the exit code with the last error line as context.
+// of the runtime log; that the game stopped responding and was closed when a
+// frame-stall snapshot with no frame after it ends the log and no fatal signal
+// follows; else the exit code with the last error line as context.
 std::string runtime_failure(std::string_view log_tail, int exit_code);
 // Whether a run's log shows the game asking Meta for its signed-in user or
 // entitlement and getting "not signed in" (no account, or an expired one).
@@ -68,6 +79,11 @@ std::string missing_expansion(const fs::path &log);
 // A run whose game asked for Meta device attestation (an integrity token only
 // a real headset can produce), was refused, and closed within a minute.
 bool needed_device_attestation(const fs::path &log);
+// The text ("<title>: <message>") of a dialog the game showed, which Venture
+// cannot present and answers itself, when the game then closed within a minute
+// without rendering more than a few frames after it (Unity's "Your device does
+// not match the hardware requirements" warning); empty otherwise.
+std::string game_dialog(const fs::path &log);
 // Before a launch: moves the previous run's log to <stem>.prev.log (replacing
 // an older one), so the runtime, which appends, starts a log of this run only.
 void rotate_log(const fs::path &log);
@@ -95,20 +111,51 @@ struct Settings {
   std::vector<fs::path> libraries;
   // Last, as defaults() initializes positionally. Launcher interface size in percent of the display's scale (Settings > Appearance).
   int interface_size = 100;
-  // The game's menu from holding both stick clicks: 0 automatic (only when the
-  // runtime has no menu binding for that hand), 1 always, 2 off (Settings > Runtime).
-  int menu_button = 0;
   // Decoded textures stored as BC7 (Settings > Runtime): 0 always, 1 once
   // texture_compression_threshold percent of GPU memory is in use, 2 off.
   int texture_compression = 0;
   int texture_compression_threshold = 50;
+  // The warning before turning compression down from Always was answered with
+  // "Change anyway": it is not shown again, globally or for any game.
+  bool texture_compression_warned = false;
+  // Translated game code and pipelines kept between launches (Settings > Runtime).
+  bool keep_translated_code = true;
   // Games that download at once (Settings > Library); one by default.
   int parallel_downloads = 1;
   // The language games see as the system language, a BCP-47 tag such as
   // "en-US" (Settings > Runtime); empty follows the host's language.
   std::string game_language;
-  // Mixed reality through a native host extension or Steam Link, next launch.
-  bool passthrough = false;
+  // The launcher's own language (Settings > Appearance): a translation's code
+  // such as "fr" or "pt_BR", "en", or empty to follow the system.
+  std::string interface_language;
+  // Mixed reality (passthrough) where the host runtime or headset can show the
+  // real world; on by default, an opt-out. Applies from the next launch.
+  bool passthrough = true;
+  // Implicit Vulkan layers (overlays, capture, post-processing) kept in game
+  // processes, by layer name or loader glob ("VK_LAYER_reshade*"); the runtime
+  // leaves the other third-party hooks out of its Vulkan instance (driver and
+  // system layers stay, xr/vulkan_layers.h).
+  std::vector<std::string> vulkan_layers;
+  // Controls (the Controls page): the player's choices per controller, and the
+  // games (by app id) that have their own. Settings > Runtime's former "Menu from
+  // both stick clicks" (menuButton) is migrated into them once.
+  controls::Config controls;
+  std::map<std::string, controls::Config> game_controls;
+  // The choices a game launches with: its own, else the player's.
+  const controls::Config& controls_for(std::string_view app_id) const;
+  // Whether a texture compression change, from one effective mode to another
+  // (texture_compression_modes ids), warns first: from Always to Automatic or
+  // Off, until the warning has been acknowledged.
+  bool texture_compression_warns(std::string_view before, std::string_view after) const;
+  // Passthrough by color key (Settings > Runtime, opt-in): the game's
+  // see-through regions are drawn in key_color (RRGGBB, sRGB) for a tool that
+  // keys that color (Virtual Desktop, ALVR...). Never chosen automatically.
+  bool color_key = false;
+  std::string key_color = "FF00FF";
+  // Resolution and frame rate for every game (Settings > Display) and a game's
+  // own, by app id (its Settings tab); a game's empty choices follow the global ones.
+  DisplaySettings display;
+  std::map<std::string, DisplaySettings> game_display;
   bool runtime_override() const;
   // `games` first, then the other library folders.
   std::vector<fs::path> roots() const;
@@ -116,4 +163,11 @@ struct Settings {
   static Settings load(const fs::path &data);
   void save(const fs::path &data) const;
 };
+// The environment a launch of `app_id` takes from the settings, the game's own
+// choices over the global ones: VENTURE_LOG_LEVEL, passthrough, controls,
+// locale, kept Vulkan layers, texture compression, translated code and display.
+// The launcher passes it to the runtime and the debug report lists it, so the
+// report shows what the launch used. `automation` (smoke runs) opens no mirror.
+std::vector<std::pair<std::string, std::string>> launch_environment(const Settings &s, std::string_view app_id,
+                                                                    bool automation = false);
 } // namespace venture::library

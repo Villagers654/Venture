@@ -5,10 +5,35 @@
 #include <atomic>
 #include <mutex>
 #include <array>
+#include <stdexcept>
+#include <string>
+#include <string_view>
 
 #include "vulkan.h"
 
 namespace venture::vulkan {
+// A layer's own Vulkan operation failed with `result`. The dispatch boundary
+// returns that result from a command that has one; a command without one is
+// skipped with a warning when the result is out of memory (a texture left
+// blank instead of a fatal signal), and fails as before otherwise.
+struct LayerFailure : std::runtime_error {
+  VkResult result;
+  LayerFailure(VkResult result, const std::string& what) : std::runtime_error(what), result(result) {}
+};
+inline bool out_of_memory_result(VkResult result) {
+  return result == VK_ERROR_OUT_OF_HOST_MEMORY || result == VK_ERROR_OUT_OF_DEVICE_MEMORY ||
+         result == VK_ERROR_OUT_OF_POOL_MEMORY || result == VK_ERROR_FRAGMENTED_POOL ||
+         result == VK_ERROR_FRAGMENTATION;
+}
+// Host allocation failures (texture.cpp): one line naming the likely limit
+// (core/alloc_failure.h) with the memory type, its heap, the memory budget,
+// the live allocation count and commit. memory_type past the device's type
+// count reports no type (an object, not memory).
+void report_gpu_memory_failure(VkDevice device, std::string_view what, VkDeviceSize size, std::uint32_t memory_type);
+// The process's live vkAllocateMemory count as far as Venture sees it: the
+// guest's allocations and the layers' own (texture pools, companions).
+void note_device_memory(std::int64_t delta);
+std::uint64_t live_device_memory();
 // Optional per-thread call census plus cumulative lifetime invalidations.
 // Timing samples turn the cumulative values into aligned per-frame deltas.
 struct ForwardingCallSample {
@@ -52,6 +77,14 @@ void address_log_instance_extensions(std::vector<const char*>& names, const std:
 void address_log_attach(VkInstance instance);
 void address_log_detach(VkInstance instance);
 bool address_log_device(const std::vector<VkExtensionProperties>& host);
+// At a device fault: logs the live or recently unbound range holding the page
+// of `address`, or that none did. Nothing when the diagnostic is off.
+void address_log_describe(std::uint64_t address, std::uint64_t precision);
+// The lines address_log_describe logs; tests feed bindings with address_log_note.
+std::vector<std::string> address_log_matches(std::uint64_t address, std::uint64_t precision);
+void address_log_note(bool bind, std::uint64_t base, std::uint64_t size, int type, std::uint64_t handle,
+                      unsigned flags = 0);
+void address_log_reset();
 
 // Android surfaces and swapchains without a host surface (wsi.cpp).
 // Emulated extensions are never enabled on the host; host WSI ones stay hidden.
@@ -86,6 +119,25 @@ void release_sync_fd_device(VkDevice device);
 // Guest semaphore waits in successful queue submissions.
 void sync_fd_submitted(VkQueue queue, std::uint32_t count, const VkSubmitInfo* submits);
 void sync_fd_submitted(VkQueue queue, std::uint32_t count, const VkSubmitInfo2* submits);
+// A binary semaphore the guest signals again while an earlier signal is still
+// unwaited (Unity signals per-batch semaphores it never waits on, which Quest
+// tolerates) breaks VUID-vkQueueSubmit-pSignalSemaphores-00067 and made the
+// shared-queue dispatcher refuse the whole batch. Until a semaphore is first
+// waited on, its repeated signals are dropped from the batches: it stays
+// signaled. Waits are noted in every waiting command (submit, sparse binding,
+// presentation, SYNC_FD export), so a semaphore that was ever waited on keeps
+// every signal. Returns `submits` or a filtered copy in `storage`.
+struct BinarySignalStorage {
+  std::vector<VkSubmitInfo> submits;
+  std::vector<VkSubmitInfo2> submits2;
+  std::vector<std::vector<VkSemaphore>> signals;
+  std::vector<std::vector<VkSemaphoreSubmitInfo>> signals2;
+};
+const VkSubmitInfo* filter_binary_signals(VkQueue queue, std::uint32_t count, const VkSubmitInfo* submits,
+                                          BinarySignalStorage& storage);
+const VkSubmitInfo2* filter_binary_signals(VkQueue queue, std::uint32_t count, const VkSubmitInfo2* submits,
+                                           BinarySignalStorage& storage);
+void note_binary_waits(VkQueue queue, std::uint32_t count, const VkBindSparseInfo* binds);
 // Tests: records kept for the device's semaphore exports, and host signals
 // issued by SYNC_FD semaphore imports (all devices).
 struct SyncFdState {
@@ -125,6 +177,11 @@ inline constexpr VkExtent2D emulated_density_texel_min{8, 8}, emulated_density_t
 std::uint32_t device_api_version(VkDevice device);
 VkInstance device_instance(VkDevice device);
 bool command_supports_compute(VkCommandBuffer command);
+// Vertex bindings a guest graphics command buffer starts with bound to VK_NULL_HANDLE
+// (nullDescriptor), so a binding the guest never binds reads zero as on Quest; 0 when
+// the device lacks nullDescriptor or the buffer's pool has no graphics.
+inline constexpr std::uint32_t max_null_vertex_bindings = 32;
+std::uint32_t command_null_vertex_bindings(VkCommandBuffer command);
 // The pass-through layers between the guest's dispatch and the host, top first.
 // A layer forwards a command it intercepts to the next layer below it that also
 // intercepts it, else to the host, so every layer sees every call it hooks.
@@ -132,10 +189,9 @@ enum class Layer { dispatch, breadcrumbs, render_check, render_area, multiview, 
 PFN_vkVoidFunction shader_proc(std::string_view name);
 // Empty means no change. Explicit initializers and nonnumeric types stay intact.
 std::vector<std::uint32_t> initialize_shader_locals(std::span<const std::uint32_t> code);
-// Drops RelaxedPrecision decorations from a module whose entry points are all
-// vertex-pipeline stages (vertex, tessellation, geometry), which a Quest evaluates
-// at full precision. Empty means no change.
-std::vector<std::uint32_t> full_precision_vertex_stages(std::span<const std::uint32_t> code);
+// Drops every RelaxedPrecision decoration, so all stages run at full precision
+// (see shader.cpp). Empty means no change.
+std::vector<std::uint32_t> full_precision_shaders(std::span<const std::uint32_t> code);
 // Declares storage images Format Unknown (adding the WithoutFormat capabilities)
 // so loads and stores follow the bound view format, as Adreno does. A type whose
 // rewrite would duplicate another declaration keeps its format. Empty: no change.
@@ -151,7 +207,11 @@ bool storage_format_rewrite_enabled();
 void set_storage_without_format(VkDevice device, bool enabled, std::vector<std::uint32_t> keep = {});
 bool breadcrumbs_enabled();
 PFN_vkVoidFunction breadcrumb_proc(std::string_view name);
-void prepare_breadcrumb_device(VkDevice device, bool checkpoints);
+// buffer_marker: VK_AMD_buffer_marker is enabled on the device (per-draw markers).
+void prepare_breadcrumb_device(VkDevice device, bool checkpoints, bool buffer_marker);
+// Guest submissions, in order, for the per-queue marker readout.
+void note_breadcrumb_submits(VkQueue queue, std::uint32_t count, const VkSubmitInfo* submits);
+void note_breadcrumb_submits(VkQueue queue, std::uint32_t count, const VkSubmitInfo2* submits);
 void release_breadcrumb_device(VkDevice device);
 void report_breadcrumbs(VkDevice device, VkQueue queue = VK_NULL_HANDLE);
 // The first layer below `self` that intercepts `name`, or nullptr for the host.
@@ -234,6 +294,11 @@ void trim_texture_pool(VkDevice device, VkCommandPool pool);
 void texture_extensions(VkPhysicalDevice physical, std::vector<VkExtensionProperties>& extensions);
 void guest_texture_features(VkPhysicalDevice physical, VkPhysicalDeviceFeatures& features);
 VkResult host_texture_features(VkPhysicalDevice physical, VkPhysicalDeviceFeatures& requested);
+// VK_EXT_texture_compression_astc_hdr, reported like a Quest's Adreno and decoded
+// to FP16 where the host lacks it; host_astc_hdr clears the guest's request.
+bool guest_astc_hdr(VkPhysicalDevice physical);
+bool host_astc_hdr(VkPhysicalDevice physical);
+void host_astc_hdr_features(VkPhysicalDevice physical, const void* chain);
 // Tests: decode compressed formats even where the host samples them natively
 // (SwiftShader has ASTC and ETC2), so suites exercise the emulated path.
 void force_texture_emulation(bool forced);

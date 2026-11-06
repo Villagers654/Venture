@@ -9,12 +9,13 @@
 
 namespace venture {
 fs::path account_data_dir(const fs::path &data, std::string_view key,
-                          std::string_view package) {
+                          std::string_view package, std::string_view pin) {
   if ((key != "local" && !meta::valid_account_key(key)) ||
-      !paths::safe_package(package))
+      !paths::safe_package(package) || (!pin.empty() && !paths::version_folder(pin)))
     throw std::runtime_error("Invalid account save path.");
   auto root = data / "data/users";
-  auto path = root / paths::from_utf8(key) / paths::from_utf8(package);
+  const auto name = pin.empty() ? std::string(package) : std::string(package) + "@" + std::string(pin);
+  auto path = root / paths::from_utf8(key) / paths::from_utf8(name);
   if (!paths::within(root, path) || is_link(root.parent_path()) ||
       is_link(root) || is_link(path.parent_path()) || is_link(path))
     throw std::runtime_error(
@@ -94,6 +95,11 @@ namespace {
 fs::path obb_copy_sidecar(const fs::path& view) {
   return view.parent_path() / (view.filename().string() + ".copies.json");
 }
+// The names the last sync published in a view: once the plan drops one, its
+// view entry goes too, while files the game created there stay.
+fs::path obb_published_sidecar(const fs::path& view) {
+  return view.parent_path() / (view.filename().string() + ".published.json");
+}
 Json identity_record(const FileIdentity& id) {
   return Json::array({id.volume, id.file, id.size, id.write_seconds, id.write_nanoseconds});
 }
@@ -161,12 +167,22 @@ void sync_obb_view(const fs::path& install, const fs::path& raw_view,
   FileLock lock(view.parent_path() / (view.filename().string() + ".lock"));
   if (is_link(view)) throw std::runtime_error("Linked OBB view directory");
   fs::create_directories(view);
-  // Remove unknown and no-longer-installed entries, including plain copies
-  // left by backups. This directory is exclusively a view, never save storage.
+  // The game owns this directory as on Android (Android/obb/<package> is
+  // writable to its app) and may keep its own files here: CRIWARE titles unpack
+  // their sound banks beside the OBB. Remove only expansion and asset entries
+  // no longer installed: names published before and every other .obb, which
+  // also retires views older than the record. Current names are republished
+  // below, replacing plain copies a backup left.
+  const auto record = obb_published_sidecar(view);
+  Json published = Json::array();
+  if (fs::exists(record) && !is_link(record)) {
+    published = Json::parse(paths::read(record), nullptr, false);
+    if (!published.is_array()) published = Json::array();
+  }
   for (const auto& entry : fs::directory_iterator(view)) {
     const auto name = paths::utf8(entry.path().filename());
-    if (std::ranges::find(names, name) == names.end() ||
-        !fs::is_regular_file(install / entry.path().filename()))
+    if (std::ranges::find(names, name) != names.end()) continue;
+    if (entry.path().extension() == ".obb" || std::ranges::find(published, Json(name)) != published.end())
       remove_tree(view, entry.path());
   }
   for (const auto& name : names) {
@@ -181,6 +197,8 @@ void sync_obb_view(const fs::path& install, const fs::path& raw_view,
     }
     publish_obb_file_locked(source, view);
   }
+  const Json current(std::vector<std::string>(names.begin(), names.end()));
+  if (current != published) paths::atomic_write(record, current.dump());
 }
 fs::path obb_view_for(const fs::path& install, const fs::path& view, std::string_view account) {
   if (account != "local" && !meta::valid_account_key(account))
@@ -199,7 +217,8 @@ fs::path obb_view_for(const fs::path& install, const fs::path& view, std::string
     log::info("obb", "Games folder is on another drive; removing the copied view at {}", paths::utf8(view));
     remove_tree(parent, view);
   }
-  if (const auto sidecar = obb_copy_sidecar(view); fs::exists(sidecar, ec)) remove_tree(parent, sidecar);
+  for (const auto& sidecar : {obb_copy_sidecar(view), obb_published_sidecar(view)})
+    if (fs::exists(sidecar, ec)) remove_tree(parent, sidecar);
   const auto beside = install / ".obb" / paths::from_utf8(account);
   // Java code also looks for expansion files under the external storage root
   // rather than Context.getObbDir() (Google's downloader library in Unreal's
@@ -238,7 +257,7 @@ void remove_cached_obb_aliases(const fs::path& data, std::string_view package) {
     }
 }
 void remove_obb_aliases(const fs::path &data, std::string_view package,
-                        const fs::path &install) {
+                        const fs::path &install, std::string_view pin) {
   remove_cached_obb_aliases(data, package);
   auto users = data / "data/users";
   if (!fs::exists(users) || is_link(users))
@@ -248,10 +267,11 @@ void remove_obb_aliases(const fs::path &data, std::string_view package,
     if ((key != "local" && !meta::valid_account_key(key)) ||
         is_link(account.path()) || !account.is_directory())
       continue;
-    auto root = account_data_dir(data, key, package);
+    auto root = account_data_dir(data, key, package, pin);
     const auto view = root / "external/Android/obb" / paths::from_utf8(package);
     if (fs::exists(view) && paths::within(root, view)) remove_tree(root, view);
-    if (paths::within(root, obb_copy_sidecar(view))) remove_tree(root, obb_copy_sidecar(view));
+    for (const auto& sidecar : {obb_copy_sidecar(view), obb_published_sidecar(view)})
+      if (paths::within(root, sidecar)) remove_tree(root, sidecar);
     // Legacy Java OBB aliases are under external-data/files (some engines open
     // them there).
     for (auto aliases :

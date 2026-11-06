@@ -4,6 +4,7 @@
 #include "cpu/block_list.h"
 #include <utility>
 #include "core/address_space.h"
+#include "core/alloc_failure.h"
 #include "core/hle_runtime.h"
 #include "core/wait.h"
 #include "core/profile.h"
@@ -62,13 +63,14 @@ class A32Cpu final : public Cpu, private Dynarmic::A32::UserCallbacks {
  public:
   A32Cpu(A32Backend& backend, std::size_t slot) : backend_(backend), slot_(slot) {
     if (profile::enabled) Dynarmic::SetCodeRegistrationCallback(profile::register_translation);
-    if (profile::compile_timing_enabled || JitBlockList::enabled()) Dynarmic::SetCompileTimingCallback(JitBlockList::compilation);
+    if (profile::compile_timing_enabled) Dynarmic::SetCompileTimingCallback(JitBlockList::compilation);
     Dynarmic::A32::UserConfig config{};
     // Diagnostics: VENTURE_JIT_DISABLED_HOST_FEATURES=<mask> hides host ISA extensions
     // (dynarmic HostFeature bits, e.g. 0xfe0 for every AVX-512 subset) from the emitter.
     if (const auto* mask = environment::getenv("VENTURE_JIT_DISABLED_HOST_FEATURES"))
       config.disabled_host_features = static_cast<std::uint32_t>(std::strtoul(mask, nullptr, 0));
     config.callbacks = this;
+    config.code_allocation_failed = alloc_failure::jit_code_refused;
     config.processor_id = slot;
     config.global_monitor = &backend.monitor;
     config.arch_version = Dynarmic::A32::ArchVersion::v7;
@@ -154,7 +156,6 @@ class A32Cpu final : public Cpu, private Dynarmic::A32::UserCallbacks {
     cache_end_ = cache_begin_ + jit_->CodeCacheSize();
   }
   ~A32Cpu() override {
-    JitBlockList::retire(std::move(block_list_));
     std::lock_guard lock(backend_.mutex);
     backend_.monitor.ClearProcessor(slot_);
     backend_.cpus[slot_] = nullptr;
@@ -162,8 +163,6 @@ class A32Cpu final : public Cpu, private Dynarmic::A32::UserCallbacks {
   CpuExit run() override { return execute(false); }
   CpuExit step() override { return execute(true); }
   CpuExit execute(bool single_step) {
-    std::optional<JitBlockList::Scope> recording;
-    if (hints_) recording.emplace(&block_list_);
     if (external_halt_.exchange(false)) { jit_->ClearHalt(HaltReason::UserDefined2); return CpuExit::HaltRequested; }
     for (;;) {
       invalidations_->enter([&](GuestAddr p, std::uint64_t n) { jit_->InvalidateCacheRange(static_cast<VAddr>(p), n); });
@@ -185,21 +184,7 @@ class A32Cpu final : public Cpu, private Dynarmic::A32::UserCallbacks {
     }
   }
   void request_halt() override { external_halt_.store(true); jit_->HaltExecution(HaltReason::UserDefined2); }
-  JitBlockList detach_jit_hints() noexcept override { return std::exchange(block_list_, JitBlockList{}); }
-  void prepare_call(GuestAddr entry) override {
-    if (!hints_ || block_list_.prepared() || jit_->IsExecuting() || external_halt_.load()) return;
-    // Hold the gate only while compiling: the hint snapshot may wait on files,
-    // and an invalidating thread must not wait on that.
-    bool entered = false;
-    try {
-      block_list_.prepare(entry, true, [&](std::uint64_t descriptor) {
-        if (!entered) { invalidations_->enter([&](GuestAddr p, std::uint64_t n) { jit_->InvalidateCacheRange(static_cast<VAddr>(p), n); }); entered = true; }
-        return !external_halt_.load() && jit_->Precompile(descriptor);
-      });
-    }
-    catch (...) { if (entered) acknowledge_stop(); throw; }
-    if (entered) acknowledge_stop();
-  }
+
   std::pair<std::shared_ptr<InvalidationGate>, std::uint64_t> queue_invalidation(GuestAddr p, std::uint64_t n) {
     return {invalidations_, invalidations_->queue(p, n, [&] { jit_->HaltExecution(HaltReason::UserDefined3); })};
   }
@@ -272,8 +257,6 @@ class A32Cpu final : public Cpu, private Dynarmic::A32::UserCallbacks {
   std::uint32_t compiling_mode_{};
   std::shared_ptr<InvalidationGate> invalidations_ = std::make_shared<InvalidationGate>();
   std::atomic<bool> external_halt_{false};
-  JitBlockList block_list_;
-  const bool hints_ = JitBlockList::enabled(); // Read once per CPU, not per run.
   void acknowledge_stop() { invalidations_->leave(); }
   bool accessible(VAddr p, std::size_t n, std::uint32_t prot) const {
     return n <= (1ull << 32) - p && backend_.query(p, n, prot);

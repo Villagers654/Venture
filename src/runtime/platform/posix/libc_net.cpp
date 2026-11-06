@@ -300,8 +300,14 @@ class Socket final : public SocketFile {
                : 0;
   }
   short ready(short e) override {
+    // A zero-timeout poll still fails with EINTR when a host signal (the
+    // profiler's sampling signal, a process-directed SIGCHLD) is pending.
+    // That is no socket condition: reported as POLLERR, select() marked an
+    // idle listener readable and the game's blocking accept() never returned.
     pollfd p{fd_, e, 0};
-    int r = ::poll(&p, 1, 0);
+    int r;
+    do r = ::poll(&p, 1, 0);
+    while (r < 0 && errno == EINTR);
     return r < 0 ? poll_err : p.revents;
   }
   std::int64_t available() override {
