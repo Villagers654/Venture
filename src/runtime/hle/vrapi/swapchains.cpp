@@ -4,6 +4,7 @@
 #include "core/wait.h"
 #include "gfx/gpu_device.h"
 #include "hle/openxr/state.h"
+#include "hle/vrapi/drawn_layers.h"
 #include "hle/vrapi/layers.h"
 #include "hle/vrapi/state.h"
 #include "hle/vrapi/vulkan_images.h"
@@ -27,6 +28,7 @@ XrResult destroy_host_chains() {
   std::unique_lock queue(gfx::gpu_device().queue_lock, std::defer_lock);
   if (state().init.graphics_api != vulkan_api) queue.lock();
   auto guest_queue = vulkan_submission_lock();
+  if (auto drawn = destroy_drawn_layers(); XR_FAILED(drawn)) return drawn;
   for (auto &[token, ring] : state().rings)
     for (auto &h : ring->host) {
       std::vector<VkImage> images;
@@ -155,6 +157,7 @@ XrResult apply_host_sampler(HostChain &h, const TextureSamplerState &s) {
   if (XR_SUCCEEDED(r)) h.sampler_current = true;
   return r;
 }
+// `chain` is an index from Ring::host_chain.
 XrResult ensure_host_chain(Ring &ring, std::size_t chain) {
   HostQueueLock host_queue(session().uses_shared_gpu);
   if (!host_queue)
@@ -164,6 +167,7 @@ XrResult ensure_host_chain(Ring &ring, std::size_t chain) {
     return apply_host_sampler(h, ring.sampler);
   XrSwapchainCreateInfo ci{XR_TYPE_SWAPCHAIN_CREATE_INFO};
   ci.usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT | XR_SWAPCHAIN_USAGE_TRANSFER_DST_BIT;
+  if (chain & 2) ci.usageFlags |= XR_SWAPCHAIN_USAGE_SAMPLED_BIT;  // drawn layers sample it
   ci.width = ring.desc.width;
   ci.height = ring.desc.height;
   ci.sampleCount = 1;
@@ -199,10 +203,19 @@ struct Submission {
   bool batched = xr_images()->begin_handoff_batch();
   struct Release { XrSwapchain chain; VkImage image; };
   std::vector<Release> releases;
-  XrResult finish() {
-    if (!batched) return XR_SUCCESS;
-    batched = false;
-    auto result = xr_images()->end_handoff_batch();
+  // `before_release` runs once the copies are submitted, while the images
+  // they filled are still held (drawn layers sample them).
+  XrResult finish(const std::function<XrResult()> &before_release = {}) {
+    XrResult result = XR_SUCCESS;
+    if (batched) {
+      batched = false;
+      result = xr_images()->end_handoff_batch();
+    }
+    if (before_release) {
+      const auto drawn = before_release();
+      if (XR_SUCCEEDED(result) && XR_FAILED(drawn)) result = drawn;
+    }
+    if (releases.empty()) return result;
     HostQueueLock queue(session().uses_shared_gpu);
     if (!queue) return XR_ERROR_RUNTIME_FAILURE;
     XrSwapchainImageReleaseInfo info{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
@@ -213,13 +226,87 @@ struct Submission {
     releases.clear();
     return result;
   }
-  ~Submission() { if (batched) finish(); }
+  ~Submission() { if (batched || !releases.empty()) finish(); }
   std::map<std::tuple<TextureSwapChain *, int, bool>, XrSwapchain> copied;
+  std::map<std::pair<TextureSwapChain *, int>, DrawnLayers::Source> sampled;
   const FenceMap *fences = nullptr;
   // The desktop mirror shows the first projection layer's chosen eye.
   bool mirror_layer = false, mirrored = false;
   int mirror_eye = 0;
   XrFovf mirror_fov{};
+  // Acquires and waits one of `h`'s images (the result), then copies the
+  // slot into it (`copied`; the image is held either way).
+  XrResult fill(Ring &ring, HostChain &h, TextureSwapChain *token, int slot, bool bottom_up, std::uint64_t fence,
+                std::uint32_t &acquired, XrResult &copied) {
+    XrResult r;
+    XrSwapchainImageAcquireInfo ai{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
+    {
+      HostQueueLock host_queue(session().uses_shared_gpu);
+      if (!host_queue)
+        return XR_ERROR_RUNTIME_FAILURE;
+      r = ::xrAcquireSwapchainImage(h.handle, &ai, &acquired);
+    }
+    if (XR_FAILED(r))
+      return r;
+    XrSwapchainImageWaitInfo wi{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO, nullptr, XR_INFINITE_DURATION};
+    const auto wait_start = vulkan::timing_enabled() ? monotonic_ns() : 0;
+    r = ::xrWaitSwapchainImage(h.handle, &wi);
+    if (wait_start) vulkan::timing_host_wait("xr_image", monotonic_ns() - wait_start);
+    if (XR_FAILED(r))
+      return r;
+    if (acquired >= h.images.size())
+      return XR_ERROR_RUNTIME_FAILURE;
+    auto copy_desc = ring.desc;
+    copy_desc.host_mip_count = 1;
+    if (h.format != ring.desc.vk_format) copy_desc.host_format = h.format;
+    const auto fence_key = std::make_pair(token, slot);
+    if (fences && fences->contains(fence_key)) {
+      // Consume all producers, then transfer this slot only once.
+      for (auto completion : fences->at(fence_key)) {
+        r = xr_images()->wait_producer_sync(completion);
+        if (XR_FAILED(r)) break;
+      }
+      if (XR_SUCCEEDED(r))
+        r = xr_images()->copy_to_image(ring.textures[slot], h.images[acquired].image,
+                                       copy_desc, 0, bottom_up);
+    } else
+      r = xr_images()->copy_to_image(ring.textures[slot], h.images[acquired].image, copy_desc,
+                                     fence, bottom_up);
+    copied = r;
+    return XR_SUCCESS;
+  }
+  // A drawn layer's source: the slot in memory row order, in a sampled host
+  // image held until finish().
+  XrResult source(TextureSwapChain *token, int slot, std::uint64_t fence, DrawnLayers::Source &out) {
+    if (reinterpret_cast<std::uintptr_t>(token) <= 2) return XR_ERROR_FEATURE_UNSUPPORTED;
+    auto it = state().rings.find(token);
+    if (it == state().rings.end())
+      return XR_ERROR_HANDLE_INVALID;
+    auto &ring = *it->second;
+    if (slot < 0 || std::size_t(slot) >= ring.textures.size())
+      return XR_ERROR_INDEX_OUT_OF_RANGE;
+    if (ring.desc.samples != 1) return XR_ERROR_FEATURE_UNSUPPORTED;
+    if (auto held = sampled.find({token, slot}); held != sampled.end()) {
+      out = held->second;
+      return XR_SUCCESS;
+    }
+    const auto chain = Ring::host_chain(slot, false, true);
+    auto r = ensure_host_chain(ring, chain);
+    if (XR_FAILED(r))
+      return r;
+    auto &h = ring.host[chain];
+    std::uint32_t acquired = 0;
+    XrResult copied_result = XR_SUCCESS;
+    r = fill(ring, h, token, slot, false, fence, acquired, copied_result);
+    if (XR_FAILED(r)) return r;
+    r = copied_result;
+    // Released in finish(), after drawing.
+    releases.push_back({h.handle, h.images[acquired].image});
+    if (XR_FAILED(r)) return r;
+    out = {h.images[acquired].image, h.format, ring.desc.layers * ring.desc.face_count};
+    sampled[{token, slot}] = out;
+    return XR_SUCCESS;
+  }
   XrResult image(TextureSwapChain *token, int slot, Rect rect, int eye, bool bottom_up,
                  std::uint64_t fence, XrSwapchainSubImage &out) {
     // VrApi 1/2 are default/loader sentinel values, never heap objects. These
@@ -248,7 +335,6 @@ struct Submission {
       return r;
     auto &h = ring.host[chain];
     const auto k = std::make_tuple(token, slot, bottom_up);
-    const auto fence_key = std::make_pair(token, slot);
     out.swapchain = h.handle;
     out.imageArrayIndex = ring.desc.layers > 1 ? eye : 0;
     // VrApi texture rects count rows from memory row 0; reversed rows move it.
@@ -264,38 +350,10 @@ struct Submission {
     out.imageRect = {{x, y}, {width, height}};
     if (!copied.contains(k)) {
       std::uint32_t acquired = 0;
-      XrSwapchainImageAcquireInfo ai{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
-      {
-        HostQueueLock host_queue(session().uses_shared_gpu);
-        if (!host_queue)
-          return XR_ERROR_RUNTIME_FAILURE;
-        r = ::xrAcquireSwapchainImage(h.handle, &ai, &acquired);
-      }
-      if (XR_FAILED(r))
-        return r;
-      XrSwapchainImageWaitInfo wi{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO, nullptr, XR_INFINITE_DURATION};
-      const auto wait_start = vulkan::timing_enabled() ? monotonic_ns() : 0;
-      r = ::xrWaitSwapchainImage(h.handle, &wi);
-      if (wait_start) vulkan::timing_host_wait("xr_image", monotonic_ns() - wait_start);
-      if (XR_FAILED(r))
-        return r;
-      if (acquired >= h.images.size())
-        return XR_ERROR_RUNTIME_FAILURE;
-      auto copy_desc = ring.desc;
-      copy_desc.host_mip_count = 1;
-      if (h.format != ring.desc.vk_format) copy_desc.host_format = h.format;
-      if (fences && fences->contains(fence_key)) {
-        // Consume all producers, then transfer this slot only once.
-        for (auto completion : fences->at(fence_key)) {
-          r = xr_images()->wait_producer_sync(completion);
-          if (XR_FAILED(r)) break;
-        }
-        if (XR_SUCCEEDED(r))
-          r = xr_images()->copy_to_image(ring.textures[slot], h.images[acquired].image,
-                                         copy_desc, 0, bottom_up);
-      } else
-        r = xr_images()->copy_to_image(ring.textures[slot], h.images[acquired].image, copy_desc,
-                                       fence, bottom_up);
+      XrResult copied_result = XR_SUCCESS;
+      r = fill(ring, h, token, slot, bottom_up, fence, acquired, copied_result);
+      if (XR_FAILED(r)) return r;
+      r = copied_result;
       // Before the image goes back to the runtime; a batched copy is not submitted yet.
       if (XR_SUCCEEDED(r) && mirror_layer && eye == mirror_eye && !mirrored && !batched && ring.desc.samples == 1 &&
           venture::xr::mirror_ready()) {
@@ -355,7 +413,7 @@ TextureSwapChain *vrapi_CreateTextureSwapChain4(const SwapChainCreate *ci) {
                 std::uint32_t(ci->faces)};
   ring->textures.resize(ci->count);
   ring->owned.assign(ci->count, true);
-  ring->host.resize(2 * std::size_t(ci->count));
+  ring->host.resize(4 * std::size_t(ci->count));  // Ring::host_chain
   std::unique_lock queue(gfx::gpu_device().queue_lock, std::defer_lock);
   if (state().init.graphics_api != vulkan_api) queue.lock();
   auto r = xr_images()->create_ring(ring->desc, ring->textures);
@@ -411,6 +469,7 @@ void vrapi_DestroyTextureSwapChain(TextureSwapChain *token) {
       std::vector<VkImage> images;
       for (auto image : h.images)
         images.push_back(image.image);
+      forget_drawn_sources(images);
       auto released = xr_images()->release_images(images);
       if (XR_FAILED(released)) {
         failure("DestroyTextureSwapChain bridge", released);
@@ -572,6 +631,7 @@ static std::int32_t submit_frame(Mobile *mobile, const Submit *frame, const Fenc
   submission.fences = fences;
   std::vector<LayerStorage> storage(frame->layer_count);
   std::vector<const XrCompositionLayerBaseHeader *> layers;
+  DrawnLayers drawn;
   XrViewLocateInfo locate{XR_TYPE_VIEW_LOCATE_INFO, nullptr,
                           XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO,
                           session().frame.predictedDisplayTime, state().view};
@@ -593,29 +653,16 @@ static std::int32_t submit_frame(Mobile *mobile, const Submit *frame, const Fenc
     submission.mirror_layer = header->type == 1;
     submission.mirror_eye = venture::xr::mirror_mode() == venture::xr::MirrorMode::off ? 0 : int(venture::xr::mirror_eye());
     submission.mirror_fov = eye_offsets[submission.mirror_eye].fov;
-    r = translate_layer(*header, eye_offsets, copy, storage[i], layers, submission.mirror_eye);
+    r = translate_layer(*header, eye_offsets, copy, storage[i], layers, submission.mirror_eye, &drawn);
     if (XR_FAILED(r)) {
       {
         // Once per process: debug reports carry the rejected layer's shape.
         static std::once_flag reported;
         std::call_once(reported, [&] {
-          log::warn("vrapi", "Rejected layer type={} flags={:#x} blend={}/{} completion_fence_present={} result={}",
+          log::warn("vrapi", "Rejected layer type={} flags={:#x} blend={}/{} completion_fence_present={} result={} reason={}",
                     header->type, header->flags, header->src_blend, header->dst_blend,
-                    frame->completion_fence != 0, int(r));
-          if (header->type == 1) {
-            const auto &projection = reinterpret_cast<const Projection &>(*header);
-            for (int eye = 0; eye < 2; ++eye) {
-              const auto &texture = projection.textures[eye];
-              const auto &m = texture.tan_angles.m;
-              const auto ring = state().rings.find(texture.chain);
-              if (ring == state().rings.end()) continue;
-              const auto &d = ring->second->desc;
-              log::warn("vrapi", "Rejected projection eye={} {}x{} levels={} matrix=[{},{},{},{};{},{},{},{};{},{},{},{}]",
-                  eye, d.width, d.height, d.mip_count,
-                  m[0][0], m[0][1], m[0][2], m[0][3], m[1][0], m[1][1], m[1][2], m[1][3],
-                  m[2][0], m[2][1], m[2][2], m[2][3]);
-            }
-          }
+                    frame->completion_fence != 0, int(r), storage[i].reason ? storage[i].reason : "none");
+          log_layer_shape(*header);
         });
       }
       // A layer the host cannot show is left out; the frame's other layers
@@ -628,7 +675,13 @@ static std::int32_t submit_frame(Mobile *mobile, const Submit *frame, const Fenc
       return result(r, "SubmitFrame2 layer");
     }
   }
-  r = submission.finish();
+  if (!drawn.empty()) {
+    r = drawn.gather([&](TextureSwapChain *token, int slot, DrawnLayers::Source &out) {
+      return submission.source(token, slot, frame->completion_fence, out);
+    }, layers);
+    if (XR_FAILED(r)) return result(r, "SubmitFrame2 drawn layer");
+  }
+  r = submission.finish([&] { return drawn.present(layers); });
   if (XR_FAILED(r)) return result(r, "SubmitFrame2 handoff batch");
   XrFrameEndInfo end{XR_TYPE_FRAME_END_INFO};
   // Legacy VrApi predicts before rendering; the native wait occurs here in

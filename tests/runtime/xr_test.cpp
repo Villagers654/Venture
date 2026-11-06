@@ -1423,6 +1423,133 @@ TEST_CASE("XR GLES swapchains upload staged layers and fail creation, not releas
   venture::xr::install_xr_images(nullptr);
 }
 
+TEST_CASE("XR draws guest cylinders a host cannot compose at their true arc, honoring the FB vertical flip") {
+  // SteamVR has no XR_KHR_composition_layer_cylinder. A guest cylinder is
+  // drawn into a projection layer: read its pixels back in both eyes. With
+  // provider staging, Venture's own copy turns the GLES rows top-down (the
+  // fixture's copy_to_image does not reverse rows as the ANGLE bridge does).
+  venture::test::XrImageFixture interop;
+  interop.staging = true;
+  venture::xr::install_xr_images(&interop);
+  struct Restore {
+    std::set<std::string>& extensions = venture::xr::host_xr().enabled_extensions;
+    std::set<std::string>::node_type node = extensions.extract("XR_KHR_composition_layer_cylinder");
+    ~Restore() {
+      if (node) extensions.insert(std::move(node));
+      MockXrScript defaults{};
+      ventureMockXrSetScript(&defaults);
+      venture::xr::install_xr_images(nullptr);
+    }
+  } restore;
+  MockXrScript script{};
+  const float quarter = std::numbers::pi_v<float> / 4;
+  script.view_fov = std::array{-quarter, quarter, quarter, -quarter};
+  ventureMockXrSetScript(&script);
+  const char* extensions[]{"XR_KHR_opengl_es_enable", "XR_KHR_composition_layer_cylinder",
+                           "XR_FB_composition_layer_image_layout"};
+  XrInstanceCreateInfo create{XR_TYPE_INSTANCE_CREATE_INFO};
+  create.applicationInfo.apiVersion = XR_MAKE_VERSION(1, 0, 0);
+  create.enabledExtensionNames = extensions;
+  create.enabledExtensionCount = 3;
+  XrInstance instance{};
+  REQUIRE(xg::xrCreateInstance(&create, &instance) == XR_SUCCESS);
+  xg::GlesBinding binding{XR_TYPE_GRAPHICS_BINDING_OPENGL_ES_ANDROID_KHR, nullptr, 1, 2, 3};
+  XrSessionCreateInfo session_info{XR_TYPE_SESSION_CREATE_INFO, &binding, 0, 1};
+  XrSession session{};
+  REQUIRE(xg::xrCreateSession(instance, &session_info, &session) == XR_SUCCESS);
+  XrReferenceSpaceCreateInfo space_info{XR_TYPE_REFERENCE_SPACE_CREATE_INFO, nullptr,
+      XR_REFERENCE_SPACE_TYPE_VIEW, {{0, 0, 0, 1}, {0, 0, 0}}};
+  XrSpace space{};
+  REQUIRE(xg::xrCreateReferenceSpace(session, &space_info, &space) == XR_SUCCESS);
+  XrSwapchainCreateInfo info{XR_TYPE_SWAPCHAIN_CREATE_INFO};
+  info.format = 0x8058;  // GL_RGBA8
+  info.width = info.height = 16;
+  info.arraySize = info.sampleCount = info.mipCount = info.faceCount = 1;
+  info.usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT | XR_SWAPCHAIN_USAGE_SAMPLED_BIT;
+  XrSwapchain panel{};
+  REQUIRE(xg::xrCreateSwapchain(session, &info, &panel) == XR_SUCCESS);
+  auto& chains = venture::hle::openxr::state().swapchains;
+  auto poll = [&] {
+    XrEventDataBuffer event{XR_TYPE_EVENT_DATA_BUFFER};
+    while (xg::xrPollEvent(instance, &event) == XR_SUCCESS) event = {XR_TYPE_EVENT_DATA_BUFFER};
+  };
+  poll();
+  XrSessionBeginInfo begin{XR_TYPE_SESSION_BEGIN_INFO, nullptr, XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO};
+  REQUIRE(xg::xrBeginSession(session, &begin) == XR_SUCCESS);
+  poll();
+  // A quarter turn of a radius 2 cylinder around the eyes, pi high: as seen,
+  // red top left, green top right, blue bottom left, white bottom right.
+  XrCompositionLayerCylinderKHR cylinder{XR_TYPE_COMPOSITION_LAYER_CYLINDER_KHR};
+  cylinder.space = space;
+  cylinder.pose.orientation.w = 1;
+  cylinder.subImage = {panel, {{0, 0}, {16, 16}}, 0};
+  cylinder.radius = 2;
+  cylinder.centralAngle = std::numbers::pi_v<float> / 2;
+  cylinder.aspectRatio = 1;
+  const auto* layer = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&cylinder);
+  using Pixel = std::array<std::uint8_t, 4>;
+  const Pixel red{255, 0, 0, 255}, green{0, 255, 0, 255}, blue{0, 0, 255, 255}, white{255, 255, 255, 255},
+      clear{0, 0, 0, 0};
+  auto submit = [&] {
+    XrFrameState timing{XR_TYPE_FRAME_STATE};
+    REQUIRE(xg::xrWaitFrame(session, nullptr, &timing) == XR_SUCCESS);
+    REQUIRE(xg::xrBeginFrame(session, nullptr) == XR_SUCCESS);
+    std::uint32_t index{};
+    REQUIRE(xg::xrAcquireSwapchainImage(panel, nullptr, &index) == XR_SUCCESS);
+    XrSwapchainImageWaitInfo wait{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO, nullptr, XR_INFINITE_DURATION};
+    REQUIRE(xg::xrWaitSwapchainImage(panel, &wait) == XR_SUCCESS);
+    // GLES rows: row 0 is the bottom.
+    interop.paint(chains.at(panel).textures[index], [&](std::uint32_t, std::uint32_t x, std::uint32_t y) {
+      return y >= 8 ? (x < 8 ? red : green) : (x < 8 ? blue : white);
+    });
+    REQUIRE(xg::xrReleaseSwapchainImage(panel, nullptr) == XR_SUCCESS);
+    const auto cylinders = ventureMockXrStats().cylinder;
+    XrFrameEndInfo end{XR_TYPE_FRAME_END_INFO, nullptr, timing.predictedDisplayTime,
+                       XR_ENVIRONMENT_BLEND_MODE_OPAQUE, 1, &layer};
+    REQUIRE(xg::xrEndFrame(session, &end) == XR_SUCCESS);
+    CHECK(ventureMockXrStats().cylinder == cylinders);
+  };
+  // The drawn projection layer's texel for an eye at view tangents (x, y).
+  auto pixel = [&](std::uint32_t eye, float x, float y) {
+    std::array<XrSwapchainSubImage, 2> drawn{};
+    REQUIRE(ventureMockXrLastSubImages(drawn.data(), 2) == 2);
+    CHECK(drawn[0].swapchain != panel);
+    const auto image = reinterpret_cast<VkImage>(ventureMockXrReleasedImage(drawn[eye].swapchain));
+    REQUIRE(image);
+    const auto size = drawn[eye].imageRect.extent;
+    const auto px = std::int32_t((x + 1) / 2 * float(size.width)), py = std::int32_t((1 - y) / 2 * float(size.height));
+    return interop.read_pixel(px, py, std::uint32_t(drawn[eye].imageArrayIndex), image);
+  };
+  submit();
+  for (std::uint32_t eye = 0; eye < 2; ++eye) {
+    CAPTURE(eye);
+    CHECK(pixel(eye, -0.3f, 0.2f) == red);
+    CHECK(pixel(eye, 0.3f, 0.2f) == green);
+    CHECK(pixel(eye, -0.3f, -0.2f) == blue);
+    CHECK(pixel(eye, 0.3f, -0.2f) == white);
+    // 1.57 high above the eyes ends at a tangent of 0.78; flat strips would
+    // end at the chord, not at the arc.
+    CHECK(pixel(eye, 0, 0.9f) == clear);
+    CHECK(pixel(eye, 0, 0.7f) != clear);
+    CHECK(pixel(eye, 0.9f, 0.7f) != clear);  // near the arc's edge, still on it
+  }
+  // XR_FB_composition_layer_image_layout: the image is upside down.
+  XrCompositionLayerImageLayoutFB flip{XR_TYPE_COMPOSITION_LAYER_IMAGE_LAYOUT_FB};
+  flip.flags = XR_COMPOSITION_LAYER_IMAGE_LAYOUT_VERTICAL_FLIP_BIT_FB;
+  cylinder.next = &flip;
+  submit();
+  CHECK(pixel(0, -0.3f, 0.2f) == blue);
+  CHECK(pixel(0, 0.3f, -0.2f) == green);
+  cylinder.next = nullptr;
+  REQUIRE(xg::xrRequestExitSession(session) == XR_SUCCESS);
+  poll();
+  CHECK(xg::xrEndSession(session) == XR_SUCCESS);
+  CHECK(xg::xrDestroySpace(space) == XR_SUCCESS);
+  CHECK(xg::xrDestroySwapchain(panel) == XR_SUCCESS);
+  CHECK(xg::xrDestroySession(session) == XR_SUCCESS);
+  CHECK(xg::xrDestroyInstance(instance) == XR_SUCCESS);
+}
+
 TEST_CASE("XR gives games upright LOCAL and LOCAL_FLOOR spaces when the host's are upside down") {
   // SteamVR without a room setup returned both turned upside down against
   // STAGE; Batman: Arkham Shadow's camera became NaN and the view stayed black.
@@ -2964,28 +3091,26 @@ TEST_CASE("XR guest lifecycle and real Vulkan swapchain through mock loader") {
       CHECK(drawn[3].imageArrayIndex == 1);
     }
     {
-      // A host without cylinders (SteamVR) draws one as strips of its arc.
+      // A host without cylinders (SteamVR) gets one drawn into a projection
+      // layer at its true arc (xr/sphere_images.h), not as flat strips.
       Restore cylinderRestore{extensions, extensions.extract("XR_KHR_composition_layer_cylinder")};
       CHECK(venture::hle::openxr::capabilities().contains("XR_KHR_composition_layer_cylinder"));
       cylinder.radius = 2; cylinder.centralAngle = 1;
       end.layerCount = 1; end.layers = &cylinder_layer;
       const auto quads = ventureMockXrStats().quad, cylinders = ventureMockXrStats().cylinder;
+      const auto projections = ventureMockXrStats().projection;
       REQUIRE(xg::xrWaitFrame(session, nullptr, &frame) == XR_SUCCESS);
       REQUIRE(xg::xrBeginFrame(session, nullptr) == XR_SUCCESS);
       end.displayTime = frame.predictedDisplayTime;
       CHECK(xg::xrEndFrame(session, &end) == XR_SUCCESS);
-      // One radian takes eight strips that tile the image side by side.
-      CHECK(ventureMockXrStats().quad == quads + 8);
+      CHECK(ventureMockXrStats().quad == quads);
       CHECK(ventureMockXrStats().cylinder == cylinders);
-      std::array<XrSwapchainSubImage, 9> slices{};
-      REQUIRE(ventureMockXrLastSubImages(slices.data(), 9) == 8);
-      auto x = cylinder.subImage.imageRect.offset.x;
-      for (std::size_t s = 0; s < 8; ++s) {
-        CHECK(slices[s].imageRect.offset.x == x);
-        CHECK(slices[s].imageRect.extent.height == cylinder.subImage.imageRect.extent.height);
-        x += slices[s].imageRect.extent.width;
-      }
-      CHECK(x == cylinder.subImage.imageRect.offset.x + cylinder.subImage.imageRect.extent.width);
+      CHECK(ventureMockXrStats().projection == projections + 1);
+      std::array<XrSwapchainSubImage, 4> drawn{};
+      REQUIRE(ventureMockXrLastSubImages(drawn.data(), 4) == 2);
+      CHECK(drawn[0].swapchain != chain);
+      CHECK(drawn[0].swapchain == drawn[1].swapchain);
+      CHECK(drawn[1].imageArrayIndex == 1);
       end.layerCount = 2; end.layers = both;
     }
     Restore colorRestore{extensions, extensions.extract("XR_KHR_composition_layer_color_scale_bias")};
@@ -3003,25 +3128,25 @@ TEST_CASE("XR guest lifecycle and real Vulkan swapchain through mock loader") {
     CHECK(submit() == XR_SUCCESS);
     CHECK(projection.next == &color);
     CHECK(color.colorScale.r == 0.5f);
-    CHECK(ventureMockXrStats().projection == beforeProjection + 4);
+    CHECK(ventureMockXrStats().projection == beforeProjection + 5);
     XrCompositionLayerImageLayoutFB layout{XR_TYPE_COMPOSITION_LAYER_IMAGE_LAYOUT_FB};
     layout.flags = XR_COMPOSITION_LAYER_IMAGE_LAYOUT_VERTICAL_FLIP_BIT_FB;
     projection.next = &layout;
     CHECK(submit() == XR_SUCCESS);
     CHECK(projection.next == &layout);
-    CHECK(ventureMockXrStats().projection == beforeProjection + 6);
+    CHECK(ventureMockXrStats().projection == beforeProjection + 7);
     color.next = &layout;
     projection.next = &color;
     CHECK(submit() == XR_SUCCESS);
     CHECK(projection.next == &color);
     CHECK(color.next == &layout);
-    CHECK(ventureMockXrStats().projection == beforeProjection + 8);
+    CHECK(ventureMockXrStats().projection == beforeProjection + 9);
     const XrCompositionLayerBaseHeader* twinProjections[]{
         reinterpret_cast<const XrCompositionLayerBaseHeader*>(&projection),
         reinterpret_cast<const XrCompositionLayerBaseHeader*>(&projection)};
     end.layers = twinProjections;
     CHECK(submit() == XR_SUCCESS);
-    CHECK(ventureMockXrStats().projection == beforeProjection + 10);
+    CHECK(ventureMockXrStats().projection == beforeProjection + 11);
     // Job Simulator's OVRPlugin 1.88 also attaches this to its loading quads.
     // Multiple copied layers must remain valid and preserve the guest chain.
     XrCompositionLayerQuad quad{XR_TYPE_COMPOSITION_LAYER_QUAD};
@@ -3042,7 +3167,7 @@ TEST_CASE("XR guest lifecycle and real Vulkan swapchain through mock loader") {
     CHECK(layout.next == nullptr);
     CHECK(layout.flags == XR_COMPOSITION_LAYER_IMAGE_LAYOUT_VERTICAL_FLIP_BIT_FB);
     CHECK(ventureMockXrStats().quad == beforeQuads + 2);
-    CHECK(ventureMockXrStats().projection == beforeProjection + 11);
+    CHECK(ventureMockXrStats().projection == beforeProjection + 12);
     // Even ignored nodes must form a finite, acyclic chain.
     layout.next = &layout;
     CHECK(submit() == XR_ERROR_VALIDATION_FAILURE);

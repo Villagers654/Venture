@@ -183,13 +183,14 @@ public:
     auto &gpu = gpu_;
     auto &ring = images.at(name);
     const auto &d = ring.desc;
-    const VkDeviceSize size = VkDeviceSize(d.width) * d.height * d.layers * 4;
+    const auto layers = d.layers * d.face_count;  // a cube's faces are layers too
+    const VkDeviceSize size = VkDeviceSize(d.width) * d.height * layers * 4;
     std::lock_guard queue(gpu.queue_lock);
     auto [buffer, memory] = host_buffer(size);
     void *mapped{};
     REQUIRE(vk<PFN_vkMapMemory>("vkMapMemory")(gpu.device, memory, 0, size, 0, &mapped) == VK_SUCCESS);
     auto *out = static_cast<std::uint8_t *>(mapped);
-    for (std::uint32_t layer = 0; layer < d.layers; ++layer)
+    for (std::uint32_t layer = 0; layer < layers; ++layer)
       for (std::uint32_t y = 0; y < d.height; ++y)
         for (std::uint32_t x = 0; x < d.width; ++x) {
           const auto value = texel(layer, x, y);
@@ -198,14 +199,14 @@ public:
     vk<PFN_vkUnmapMemory>("vkUnmapMemory")(gpu.device, memory);
     commands([&](VkCommandBuffer cmd) {
       barrier(cmd, ring.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-              d.layers);
+              layers);
       VkBufferImageCopy copy{};
-      copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, d.layers};
+      copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, layers};
       copy.imageExtent = {d.width, d.height, 1};
       vk<PFN_vkCmdCopyBufferToImage>("vkCmdCopyBufferToImage")(
           cmd, buffer, ring.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
       barrier(cmd, ring.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-              d.layers);
+              layers);
     });
     free_buffer({buffer, memory});
   }

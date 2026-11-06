@@ -18,25 +18,6 @@ struct Global {
   ~Global() { curl_global_cleanup(); }
 };
 void init() { static Global global; }
-#ifndef _WIN32
-const std::string &system_ca_bundle() {
-  static const std::string bundle = [] {
-    std::vector<std::string> candidates;
-    if (auto *env = std::getenv("SSL_CERT_FILE"); env && *env)
-      candidates.emplace_back(env);
-    for (auto *path : {"/etc/ssl/certs/ca-certificates.crt", // Debian, Ubuntu, Arch, Flatpak
-                       "/etc/pki/tls/certs/ca-bundle.crt",   // Fedora, RHEL
-                       "/etc/ssl/ca-bundle.pem",             // openSUSE
-                       "/etc/pki/tls/cacert.pem", "/etc/ssl/cert.pem"})
-      candidates.emplace_back(path);
-    std::error_code ec;
-    for (auto &path : candidates)
-      if (fs::is_regular_file(path, ec))
-        return path;
-    return std::string();
-  }();
-  return bundle;
-}
 // Let's Encrypt's Root YR cross-signed by ISRG Root X1 (letsencrypt.org/certs/
 // gen-y/root-yr-by-x1.pem, SHA-256 07:26:39:D0:...:07:CF:76). Hosts such as
 // dpaste.com serve chains ending at Root YR, which distribution CA bundles
@@ -77,6 +58,65 @@ constexpr char root_yr_by_x1[] =
     "M71DMi+y1+TRSJVClEMwvA4yL++7q9XZx5r5wBRWB4kQTKH5qyoZnDw7iiuh1lID\n"
     "yDFx8r7i9vIJU5HS3moZLkYWAOilMaV9N56A9Bgb6dNcHkvg3NoaYA==\n"
     "-----END CERTIFICATE-----\n";
+#ifdef _WIN32
+// ISRG Root X1 (letsencrypt.org/certs/isrgrootx1.pem). Windows verifies
+// against its own store, fetching roots it lacks and checking revocation over
+// plain HTTP; some networks block that. A verification failure is retried once
+// with only Let's Encrypt's roots (X1 and Root YR through X1), so hosts such as
+// dpaste.com whose chain ends at the newer Root YR still verify there; any
+// other issuer still fails.
+constexpr char isrg_root_x1[] =
+    "-----BEGIN CERTIFICATE-----\n"
+    "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\n"
+    "-----END CERTIFICATE-----\n";
+#endif
+#ifndef _WIN32
+const std::string &system_ca_bundle() {
+  static const std::string bundle = [] {
+    std::vector<std::string> candidates;
+    if (auto *env = std::getenv("SSL_CERT_FILE"); env && *env)
+      candidates.emplace_back(env);
+    for (auto *path : {"/etc/ssl/certs/ca-certificates.crt", // Debian, Ubuntu, Arch, Flatpak
+                       "/etc/pki/tls/certs/ca-bundle.crt",   // Fedora, RHEL
+                       "/etc/ssl/ca-bundle.pem",             // openSUSE
+                       "/etc/pki/tls/cacert.pem", "/etc/ssl/cert.pem"})
+      candidates.emplace_back(path);
+    std::error_code ec;
+    for (auto &path : candidates)
+      if (fs::is_regular_file(path, ec))
+        return path;
+    return std::string();
+  }();
+  return bundle;
+}
 const std::string &system_ca_blob() {
   static const std::string blob = [] {
     std::ifstream in(system_ca_bundle(), std::ios::binary);
@@ -98,7 +138,10 @@ void use_system_ca(void *curl) {
     curl_easy_setopt(static_cast<CURL *>(curl), CURLOPT_CAINFO_BLOB, &data);
   }
 #else
-  (void)curl;
+  // Schannel fails the handshake when the certificate's revocation servers
+  // cannot be reached (a blocked or filtered network); a certificate that is
+  // known revoked is still refused.
+  curl_easy_setopt(static_cast<CURL *>(curl), CURLOPT_SSL_OPTIONS, long(CURLSSLOPT_REVOKE_BEST_EFFORT));
 #endif
 }
 namespace {
@@ -255,6 +298,16 @@ Response memory(std::string_view url, const Fields *fields, size_t limit,
   }
   curl_easy_setopt(h.get(), CURLOPT_HTTPHEADER, raw_headers);
   auto code = curl_easy_perform(h.get());
+#ifdef _WIN32
+  if (code == CURLE_PEER_FAILED_VERIFICATION && !loopback) {
+    static const std::string roots = std::string(isrg_root_x1) + root_yr_by_x1;
+    curl_blob data{const_cast<char *>(roots.data()), roots.size(), CURL_BLOB_NOCOPY};
+    curl_easy_setopt(h.get(), CURLOPT_CAINFO_BLOB, &data);
+    r.body.clear();
+    r.headers.clear();
+    code = curl_easy_perform(h.get());
+  }
+#endif
   curl_easy_getinfo(h.get(), CURLINFO_RESPONSE_CODE, &r.status);
   check(code, stop);
   return r;

@@ -1,5 +1,10 @@
 #include "hle/vrapi/layers.h"
+#include "common/log.h"
 #include <algorithm>
+#include <format>
+#include <mutex>
+#include <set>
+#include <string>
 #include <limits>
 #include <numbers>
 #include <utility>
@@ -195,12 +200,14 @@ bool texture_transform(const Matrix &m) {
   return m.m[0][0] > 0 && m.m[1][1] > 0;
 }
 } // namespace
-XrResult translate_layer(const LayerHeader &header, const XrView *eyes, LayerImage image,
-                         LayerStorage &dst,
-                         std::vector<const XrCompositionLayerBaseHeader *> &layers, int first_eye) {
-  constexpr std::uint32_t supported_flags = 2 | 4 | 16 | 256 | (1u << 19);
-  if (header.flags & ~supported_flags || header.reserved)
+// The host layers that show this layer exactly, or an error with dst.reason.
+static XrResult translate_native(const LayerHeader &header, const XrView *eyes, LayerImage image,
+                          LayerStorage &dst,
+                          std::vector<const XrCompositionLayerBaseHeader *> &layers, int first_eye) {
+  auto unsupported = [&](const char *reason) {
+    dst.reason = reason;
     return XR_ERROR_FEATURE_UNSUPPORTED;
+  };
   XrCompositionLayerFlags flags = 0;
   // VrApi_Types.h ovrFrameLayerBlend: 1 ONE, 2 SRC_ALPHA, 5 ONE_MINUS_SRC_ALPHA.
   // ONE_MINUS_SRC_ALPHA/SRC_ALPHA (RE4's fades) is source-alpha blending with
@@ -212,12 +219,12 @@ XrResult translate_layer(const LayerHeader &header, const XrView *eyes, LayerIma
     flags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT |
             XR_COMPOSITION_LAYER_UNPREMULTIPLIED_ALPHA_BIT;
   else if (header.src_blend != 1 || header.dst_blend != 0)
-    return XR_ERROR_FEATURE_UNSUPPORTED;
+    return unsupported("blend factors without a host layer form");
   const bool has_color = inverse_alpha || header.color_scale.x != 1 || header.color_scale.y != 1 ||
                          header.color_scale.z != 1 || header.color_scale.w != 1;
   if (has_color &&
       !host_xr().enabled_extensions.contains("XR_KHR_composition_layer_color_scale_bias"))
-    return XR_ERROR_FEATURE_UNSUPPORTED;
+    return unsupported("color scale without XR_KHR_composition_layer_color_scale_bias");
   dst.color.colorScale = {header.color_scale.x, header.color_scale.y, header.color_scale.z,
                           inverse_alpha ? -header.color_scale.w : header.color_scale.w};
   dst.color.colorBias = {0, 0, 0, inverse_alpha ? 1.f : 0.f};
@@ -257,13 +264,13 @@ XrResult translate_layer(const LayerHeader &header, const XrView *eyes, LayerIma
       auto &t = src.textures[eye];
       const auto &tm = t.texture_matrix.m;
       if (!texture_transform(t.texture_matrix) || tm[0][0] != 1 || tm[1][1] != 1 || tm[0][2] != 0 || tm[1][2] != 0)
-        return XR_ERROR_FEATURE_UNSUPPORTED;
+        return unsupported("quad texture matrix other than identity");
       auto &view = dst.views[eye];
       XrQuaternionf orientation{0, 0, 0, 1};
       bool bottom_up = api_bottom_up;
       auto r = fov(t.tan_angles, t.rect, view.fov, orientation, bottom_up);
       if (XR_FAILED(r))
-        return r;
+        return dst.reason = "quad tan-angle matrix is not an off-axis frustum", r;
       view.pose = compose(compose(head(src.head), eyes[eye].pose), {orientation, {0, 0, 0}});
       r = image(t.chain, t.index, t.rect, eye, bottom_up, view.subImage);
       if (XR_FAILED(r))
@@ -283,7 +290,8 @@ XrResult translate_layer(const LayerHeader &header, const XrView *eyes, LayerIma
       Rect rect = t.rect;
       auto r = fov(t.tan_angles, rect, view.fov, orientation, bottom_up);
       if (XR_FAILED(r)) {
-        if (!constant_projection(t, header.flags)) return r;
+        if (!constant_projection(t, header.flags))
+          return dst.reason = "projection tan-angle matrix is not an off-axis frustum", r;
         view.fov = eyes[eye].fov;
         ++constant;
       } else {
@@ -325,19 +333,19 @@ XrResult translate_layer(const LayerHeader &header, const XrView *eyes, LayerIma
     }
   } else if (header.type == 3) { // VRAPI_LAYER_TYPE_CYLINDER2
     if (!host_xr().enabled_extensions.contains("XR_KHR_composition_layer_cylinder"))
-      return XR_ERROR_FEATURE_UNSUPPORTED;
+      return unsupported("host lacks XR_KHR_composition_layer_cylinder");
     auto &src = reinterpret_cast<const Cylinder &>(header);
     for (int eye = 0; eye < 2; ++eye) {
       auto &t = src.textures[eye];
       auto &layer = dst.cylinder[eye];
       XrVector3f scale{};
       if (!texture_transform(t.texture_matrix))
-        return XR_ERROR_FEATURE_UNSUPPORTED;
+        return unsupported("cylinder texture matrix is not a positive scale and offset");
       auto r = layer_pose(t.tan_angles, head(src.head), layer.pose, scale);
       if (XR_FAILED(r))
-        return r;
+        return dst.reason = "cylinder matrix is not a rotation, translation and scale", r;
       if (!close(scale.x, scale.z))
-        return XR_ERROR_FEATURE_UNSUPPORTED;
+        return unsupported("elliptical cylinder (x and z radii differ)");
       // VrApi's canonical cylinder spans pi radians and +/-30 degrees high.
       float sx = t.texture_matrix.m[0][0], sy = t.texture_matrix.m[1][1];
       float yaw = -pi * ((t.rect.x + t.rect.width / 2 - t.texture_matrix.m[0][2]) / sx - .5f);
@@ -350,7 +358,7 @@ XrResult translate_layer(const LayerHeader &header, const XrView *eyes, LayerIma
       layer.centralAngle = pi * t.rect.width / sx;
       float height = 2 * std::tan(pi / 6) * scale.y * t.rect.height / sy;
       if (layer.centralAngle <= 0 || layer.centralAngle > 2 * pi || height <= 0)
-        return XR_ERROR_VALIDATION_FAILURE;
+        return dst.reason = "cylinder arc outside (0, 2 pi] or no height", XR_ERROR_VALIDATION_FAILURE;
       layer.aspectRatio = layer.radius * layer.centralAngle / height;
       layer.eyeVisibility = eye ? XR_EYE_VISIBILITY_RIGHT : XR_EYE_VISIBILITY_LEFT;
       r = image(t.chain, t.index, t.rect, eye, api_bottom_up, layer.subImage);
@@ -360,17 +368,17 @@ XrResult translate_layer(const LayerHeader &header, const XrView *eyes, LayerIma
     }
   } else if (header.type == 4) { // VRAPI_LAYER_TYPE_CUBE2
     if (!host_xr().enabled_extensions.contains("XR_KHR_composition_layer_cube"))
-      return XR_ERROR_FEATURE_UNSUPPORTED;
+      return unsupported("host lacks XR_KHR_composition_layer_cube");
     auto &src = reinterpret_cast<const Cube &>(header);
     if (src.offset.x || src.offset.y || src.offset.z)
-      return XR_ERROR_FEATURE_UNSUPPORTED;
+      return unsupported("cube offset");
     XrPosef p{};
     XrVector3f scale{};
     auto r = layer_pose(src.tan_angles, head(src.head), p, scale);
     if (XR_FAILED(r))
-      return r;
+      return dst.reason = "cube matrix is not a rotation, translation and scale", r;
     if (!close(scale.x, scale.y) || !close(scale.x, scale.z))
-      return XR_ERROR_FEATURE_UNSUPPORTED;
+      return unsupported("cube matrix scales its axes differently");
     for (int eye = 0; eye < 2; ++eye) {
       auto &t = src.textures[eye];
       auto &layer = dst.cube[eye];
@@ -389,20 +397,20 @@ XrResult translate_layer(const LayerHeader &header, const XrView *eyes, LayerIma
     }
   } else if (header.type == 5) { // VRAPI_LAYER_TYPE_EQUIRECT2
     if (!host_xr().enabled_extensions.contains("XR_KHR_composition_layer_equirect"))
-      return XR_ERROR_FEATURE_UNSUPPORTED;
+      return unsupported("host lacks XR_KHR_composition_layer_equirect");
     auto &src = reinterpret_cast<const Equirect &>(header);
     XrPosef p{};
     XrVector3f scale{};
     auto r = layer_pose(src.tan_angles, head(src.head), p, scale);
     if (XR_FAILED(r))
-      return r;
+      return dst.reason = "equirect matrix is not a rotation, translation and scale", r;
     if (!close(scale.x, scale.y) || !close(scale.x, scale.z))
-      return XR_ERROR_FEATURE_UNSUPPORTED;
+      return unsupported("equirect matrix scales its axes differently");
     for (int eye = 0; eye < 2; ++eye) {
       auto &t = src.textures[eye];
       auto &layer = dst.equirect[eye];
       if (!texture_transform(t.texture_matrix) || t.rect.width <= 0 || t.rect.height <= 0)
-        return XR_ERROR_FEATURE_UNSUPPORTED;
+        return unsupported("equirect texture matrix is not a positive scale and offset");
       layer.pose = p;
       layer.radius = 0;
       layer.eyeVisibility = eye ? XR_EYE_VISIBILITY_RIGHT : XR_EYE_VISIBILITY_LEFT;
@@ -430,7 +438,218 @@ XrResult translate_layer(const LayerHeader &header, const XrView *eyes, LayerIma
     append(dst.icon);
     dst.icon.space = state().view;
   } else
+    return unsupported("unknown layer type");
+  return XR_SUCCESS;
+}
+// The layer drawn into a projection layer (drawn_layers.h), from the same
+// fields VrApi's compositor reads.
+static XrResult draw_layer(const LayerHeader &header, const XrView *eyes, LayerStorage &dst, DrawnLayers &drawn,
+                    std::vector<const XrCompositionLayerBaseHeader *> &layers) {
+  auto factor = [](std::uint32_t f) { return f == 0 || f == 1 || f == 2 || f == 5; };
+  if (!factor(header.src_blend) || !factor(header.dst_blend)) {
+    dst.reason = "unknown blend factor";
     return XR_ERROR_FEATURE_UNSUPPORTED;
+  }
+  const bool head_locked = header.flags & 4;
+  const XrPosef identity{{0, 0, 0, 1}, {0, 0, 0}};
+  // GLES rows go bottom up: T = 0 (memory row 0) is a shape's bottom there,
+  // its top in Vulkan (see the native cylinder above).
+  const float up = state().init.graphics_api != vulkan_api ? 1.f : -1.f;
+  DrawnLayer layer;
+  layer.space = head_locked ? state().view : state().app;
+  auto finite = [](const Matrix &m) {
+    for (const auto &row : m.m)
+      for (float v : row)
+        if (!std::isfinite(v)) return false;
+    return true;
+  };
+  // Common to every eye: the ring slot, the sampled rect and the blend.
+  auto prepare = [&](int eye, TextureSwapChain *chain, int slot, const Rect &rect, const Matrix &tan_angles,
+                     XrPosef frame, venture::xr::LayerShape shape) -> XrResult {
+    if (reinterpret_cast<std::uintptr_t>(chain) <= 2) {
+      dst.reason = "built-in texture swapchain";
+      return XR_ERROR_FEATURE_UNSUPPORTED;
+    }
+    const auto ring = state().rings.find(chain);
+    if (ring == state().rings.end()) return XR_ERROR_HANDLE_INVALID;
+    if (slot < 0 || std::size_t(slot) >= ring->second->textures.size()) return XR_ERROR_INDEX_OUT_OF_RANGE;
+    if (!finite(tan_angles)) return XR_ERROR_VALIDATION_FAILURE;
+    {
+      // A singular matrix collapses the layer to a line or point: invalid,
+      // not something to draw (its 3x3 against its row lengths).
+      const auto &m = tan_angles.m;
+      const float det = m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) -
+                        m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0]) +
+                        m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
+      float size = 1;
+      for (int i = 0; i < 3; ++i) size *= std::sqrt(m[i][0] * m[i][0] + m[i][1] * m[i][1] + m[i][2] * m[i][2]);
+      if (!(std::abs(det) > 1e-5f * size)) return XR_ERROR_VALIDATION_FAILURE;
+    }
+    if (!std::isfinite(rect.x) || !std::isfinite(rect.y) || !std::isfinite(rect.width) ||
+        !std::isfinite(rect.height) || rect.x < 0 || rect.y < 0 || rect.width <= 0 || rect.height <= 0 ||
+        rect.x + rect.width > 1.00001f || rect.y + rect.height > 1.00001f)
+      return XR_ERROR_SWAPCHAIN_RECT_INVALID;
+    auto &e = layer.eyes[eye];
+    e.chain = chain;
+    e.slot = slot;
+    auto &p = e.placement;
+    p.shape = shape;
+    p.frame = frame;
+    for (int i = 0; i < 4; ++i)
+      for (int j = 0; j < 4; ++j) p.local[i][j] = tan_angles.m[i][j];
+    p.map[0][0] = 1, p.map[1][1] = 1;
+    p.clip[0] = rect.x, p.clip[1] = rect.y, p.clip[2] = rect.x + rect.width, p.clip[3] = rect.y + rect.height;
+    const auto &desc = ring->second->desc;
+    p.source_layer = desc.layers > 1 ? std::uint32_t(eye) * desc.face_count : 0;
+    p.source_factor = header.src_blend;
+    p.destination_factor = header.dst_blend;
+    p.scale = {header.color_scale.x, header.color_scale.y, header.color_scale.z, header.color_scale.w};
+    return XR_SUCCESS;
+  };
+  // The texture matrix after the shape's canonical (S, T) = (s0 + sa a, t0 + tb b).
+  auto texture = [](venture::xr::LayerPlacement &p, const Matrix &tm, float sa, float s0, float tb, float t0) {
+    for (int i = 0; i < 2; ++i) {
+      p.map[i][0] = tm.m[i][0] * sa;
+      p.map[i][1] = tm.m[i][1] * tb;
+      p.map[i][2] = tm.m[i][0] * s0 + tm.m[i][1] * t0 + tm.m[i][2];
+    }
+  };
+  auto affine_texture = [&](const Matrix &tm) {
+    // (S, T, 1) rows; a projective texture matrix has no 2D form.
+    return finite(tm) && tm.m[2][0] == 0 && tm.m[2][1] == 0 && tm.m[2][2] == 1;
+  };
+  XrResult r = XR_SUCCESS;
+  if (header.type == 1 || header.type == 17) {
+    // Planes: each eye's tan-angle matrix maps its rays in the render eye's
+    // frame (the head pose and that eye's offset) to (S, T, Q).
+    const auto head = head_locked ? identity : pose(reinterpret_cast<const Projection &>(header).head.pose);
+    for (int eye = 0; eye < 2 && XR_SUCCEEDED(r); ++eye) {
+      const auto frame = compose(head, eyes[eye].pose);
+      if (header.type == 1) {
+        const auto &t = reinterpret_cast<const Projection &>(header).textures[eye];
+        r = prepare(eye, t.chain, t.index, t.rect, t.tan_angles, frame, venture::xr::LayerShape::plane);
+      } else {
+        const auto &t = reinterpret_cast<const Cylinder &>(header).textures[eye];
+        if (!affine_texture(t.texture_matrix)) return XR_ERROR_VALIDATION_FAILURE;
+        r = prepare(eye, t.chain, t.index, t.rect, t.tan_angles, frame, venture::xr::LayerShape::plane);
+        if (XR_SUCCEEDED(r)) texture(layer.eyes[eye].placement, t.texture_matrix, 1, 0, 1, 0);
+      }
+    }
+  } else if (header.type == 3) {
+    // The canonical cylinder: radius 1 about +Y, pi radians from S = 0 (left)
+    // to 1, tan(30 degrees) above and below the horizon.
+    const auto &src = reinterpret_cast<const Cylinder &>(header);
+    const auto head = head_locked ? identity : pose(src.head.pose);
+    for (int eye = 0; eye < 2 && XR_SUCCEEDED(r); ++eye) {
+      const auto &t = src.textures[eye];
+      if (!affine_texture(t.texture_matrix)) return XR_ERROR_VALIDATION_FAILURE;
+      r = prepare(eye, t.chain, t.index, t.rect, t.tan_angles, head, venture::xr::LayerShape::cylinder);
+      if (XR_SUCCEEDED(r))
+        texture(layer.eyes[eye].placement, t.texture_matrix, 1 / pi, 0.5f, up / (2 * std::tan(pi / 6)), 0.5f);
+    }
+  } else if (header.type == 5) {
+    // An equirect at infinity: longitude from S = 0 to 1, latitude bottom to top.
+    const auto &src = reinterpret_cast<const Equirect &>(header);
+    const auto head = head_locked ? identity : pose(src.head.pose);
+    for (int eye = 0; eye < 2 && XR_SUCCEEDED(r); ++eye) {
+      const auto &t = src.textures[eye];
+      if (!affine_texture(t.texture_matrix)) return XR_ERROR_VALIDATION_FAILURE;
+      r = prepare(eye, t.chain, t.index, t.rect, src.tan_angles, head, venture::xr::LayerShape::far_sphere);
+      if (XR_SUCCEEDED(r)) texture(layer.eyes[eye].placement, t.texture_matrix, 1 / (2 * pi), 0.5f, up / pi, 0.5f);
+    }
+  } else if (header.type == 4) {
+    const auto &src = reinterpret_cast<const Cube &>(header);
+    if (src.offset.x || src.offset.y || src.offset.z) {
+      dst.reason = "cube offset";
+      return XR_ERROR_FEATURE_UNSUPPORTED;
+    }
+    const auto head = head_locked ? identity : pose(src.head.pose);
+    for (int eye = 0; eye < 2 && XR_SUCCEEDED(r); ++eye) {
+      const auto &t = src.textures[eye];
+      const auto ring = state().rings.find(t.chain);
+      if (ring != state().rings.end() && ring->second->desc.face_count != 6) return XR_ERROR_LAYER_INVALID;
+      r = prepare(eye, t.chain, t.index, {0, 0, 1, 1}, src.tan_angles, head, venture::xr::LayerShape::cube);
+    }
+  } else {
+    return XR_ERROR_FEATURE_UNSUPPORTED;  // keeps the native reason
+  }
+  if (XR_FAILED(r)) return r;
+  drawn.add(layer, layers);
+  return XR_SUCCESS;
+}
+void log_layer_shape(const LayerHeader &header) {
+  auto matrix = [](const Matrix &m) {
+    return std::format("[{},{},{},{};{},{},{},{};{},{},{},{};{},{},{},{}]", m.m[0][0], m.m[0][1], m.m[0][2],
+                       m.m[0][3], m.m[1][0], m.m[1][1], m.m[1][2], m.m[1][3], m.m[2][0], m.m[2][1], m.m[2][2],
+                       m.m[2][3], m.m[3][0], m.m[3][1], m.m[3][2], m.m[3][3]);
+  };
+  auto ring = [](TextureSwapChain *chain) {
+    const auto it = state().rings.find(chain);
+    if (it == state().rings.end()) return std::string("none");
+    const auto &d = it->second->desc;
+    return std::format("{}x{} layers={} faces={} levels={}", d.width, d.height, d.layers, d.face_count, d.mip_count);
+  };
+  if (header.type == 1) {
+    const auto &src = reinterpret_cast<const Projection &>(header);
+    for (int eye = 0; eye < 2; ++eye) {
+      const auto &t = src.textures[eye];
+      log::warn("vrapi", "Layer eye={} ring={} rect=[{},{},{},{}] matrix={}", eye, ring(t.chain), t.rect.x, t.rect.y,
+                t.rect.width, t.rect.height, matrix(t.tan_angles));
+    }
+  } else if (header.type == 3 || header.type == 17) {
+    const auto &src = reinterpret_cast<const Cylinder &>(header);
+    for (int eye = 0; eye < 2; ++eye) {
+      const auto &t = src.textures[eye];
+      log::warn("vrapi", "Layer eye={} ring={} rect=[{},{},{},{}] matrix={} texture={}", eye, ring(t.chain), t.rect.x,
+                t.rect.y, t.rect.width, t.rect.height, matrix(t.tan_angles), matrix(t.texture_matrix));
+    }
+  } else if (header.type == 4) {
+    const auto &src = reinterpret_cast<const Cube &>(header);
+    log::warn("vrapi", "Layer ring={} matrix={} offset=[{},{},{}]", ring(src.textures[0].chain),
+              matrix(src.tan_angles), src.offset.x, src.offset.y, src.offset.z);
+  } else if (header.type == 5) {
+    const auto &src = reinterpret_cast<const Equirect &>(header);
+    for (int eye = 0; eye < 2; ++eye) {
+      const auto &t = src.textures[eye];
+      log::warn("vrapi", "Layer eye={} ring={} rect=[{},{},{},{}] matrix={} texture={}", eye, ring(t.chain), t.rect.x,
+                t.rect.y, t.rect.width, t.rect.height, matrix(src.tan_angles), matrix(t.texture_matrix));
+    }
+  }
+}
+XrResult translate_layer(const LayerHeader &header, const XrView *eyes, LayerImage image, LayerStorage &dst,
+                         std::vector<const XrCompositionLayerBaseHeader *> &layers, int first_eye,
+                         DrawnLayers *drawn) {
+  dst.reason = nullptr;
+  // Flags other than those below change nothing VrApi's compositor shows on a
+  // PC host (chromatic aberration correction, sRGB framebuffer and filter
+  // hints); keep the layer rather than lose it over one.
+  constexpr std::uint32_t known_flags = 2 | 4 | 16 | 256 | (1u << 19);
+  if (header.flags & ~known_flags || header.reserved) {
+    static std::once_flag reported;
+    std::call_once(reported, [&] {
+      log::warn("vrapi", "Layer type={} flags={:#x} reserved={:#x}: unknown bits ignored", header.type, header.flags,
+                header.reserved);
+    });
+  }
+  const auto before = layers.size();
+  const auto r = translate_native(header, eyes, image, dst, layers, first_eye);
+  if (XR_SUCCEEDED(r) || !drawn || (r != XR_ERROR_FEATURE_UNSUPPORTED && r != XR_ERROR_VALIDATION_FAILURE))
+    return r;
+  // No host layer shows it exactly: draw it at its geometry instead.
+  layers.resize(before);
+  const char *reason = dst.reason;
+  const auto d = draw_layer(header, eyes, dst, *drawn, layers);
+  if (XR_FAILED(d)) {
+    layers.resize(before);
+    if (!dst.reason) dst.reason = reason;
+    return d == XR_ERROR_FEATURE_UNSUPPORTED || d == XR_ERROR_VALIDATION_FAILURE ? r : d;
+  }
+  static std::set<std::pair<std::uint32_t, std::string>> reported;
+  if (reported.emplace(header.type, reason ? reason : "").second) {
+    log::info("vrapi", "Layer type={} blend={}/{} drawn into a projection layer: {}", header.type, header.src_blend,
+              header.dst_blend, reason ? reason : "no exact host layer");
+    log_layer_shape(header);
+  }
   return XR_SUCCESS;
 }
 } // namespace venture::hle::vrapi
