@@ -41,6 +41,9 @@ Response post_loopback(uint16_t port, std::string_view path,
 std::string get_public(std::string url, std::stop_token stop = {});
 // Venture's latest published release from GitHub's API; no account data is sent.
 Response get_latest_release(std::stop_token stop = {});
+// OculusDB's public package lookup (oculusdb.rui2015.me): only the package
+// name is sent, with no account data.
+Response get_oculusdb_package(std::string_view package, std::stop_token stop = {});
 std::string get_image(std::string url, std::stop_token stop = {});
 // The file name a Meta delivery URL serves (its Content-Disposition), read
 // with a one-byte range request; empty when the server names none.

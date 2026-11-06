@@ -896,6 +896,11 @@ uint64_t Manager::run_import(Entry &e, meta::Store *store, std::stop_token stop)
               catalog_addons.end() &&
           library::addon_installed({previous, dir, false, 0}, sku))
         plan.installed_addons.push_back(sku);
+    // A resumed local import keeps the store link set meanwhile.
+    if (plan.local && previous.local) {
+      plan.store_app_id = previous.store_app_id;
+      plan.store_link_removed = previous.store_link_removed;
+    }
     // Hashes of files an interrupted import already wrote.
     for (auto &f : plan.files)
       for (auto &old : previous.files)

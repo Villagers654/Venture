@@ -70,6 +70,39 @@ its progress, pause, resume and free-space check; an interrupted import
 resumes from the same source, continuing a partly copied file where it
 stopped. Split APKs are listed as skipped.
 
+### Store links
+
+An import that no signed-in account owns is keyed by its package name, and
+Meta does not know that key. To show its store name, description, publisher
+and art anyway, Venture links it to the store listing it is: `"storeAppId"`
+in its `plan.json`. The install keeps its key; Steam shortcuts,
+`downloads.json`, `settings.json`, the art cache (`cache/art/<package>*`)
+and saves stay keyed by the package, and only the listing's text and art
+come from the linked app. After a library scan, each import without a link
+is looked up once, in the background:
+
+1. the signed-in accounts' libraries, by package name;
+2. the package → app ID pairs Venture ships (`data/compatibility.json`,
+   compiled in);
+3. the public [OculusDB](https://oculusdb.rui2015.me) lookup
+   (`/api/v1/packagename/<package>`, only the package name is sent), unless
+   Settings → Library → **Look up imported games online** is off
+   (`lookupImportsOnline` in `settings.json`, `venture-cli settings set
+   lookup-imports-online off`).
+
+Candidates from 2 and 3 are accepted only when the public meta.com listing
+(no account token) names the same package. A package that finds nothing is
+recorded in `cache/store-links.json` and looked up again only by the next
+Venture version (or when the online lookup is turned back on); a failed
+lookup is retried at the next start. A new version imported beside a linked
+one takes the same link.
+
+An import's ⋯ menu has **Link to store page…**: paste a meta.com store link
+or the bare app ID. A listing for another package (a modified build, another
+edition) asks first and can be linked anyway. **Remove store link** clears
+it and stops the automatic lookup for that game (`"storeLinkRemoved"`). The
+APK's own label and art come back.
+
 **Import save data** in an installed game's menu (`venture-cli import-saves
 GAME --from FOLDER | --headset`) brings in saves alone, for the account the
 game plays as: from a headset, its `/sdcard/Android/data/<package>/` (a
@@ -244,6 +277,7 @@ For repeatable live verification (no game downloads), run:
 build/windows-release/bin/venture.exe --smoke-seconds 30 --smoke-report out/smoke.json
 # Optional: --smoke-details, --smoke-play, --smoke-auth,
 #           --smoke-view settings|account|downloads|controls-shared
+#           --smoke-view store-link|store-link-mismatch (an import's Link to store page dialog)
 #           --language fr (interface language for this run)
 .deps/cmake/bin/cmake --build --preset windows-release --target venture_launcher_live_check
 build/windows-release/bin/venture_launcher_live_check.exe --read-only-meta

@@ -90,6 +90,8 @@ protected:
   virtual void on_install_queued() {}
   // A local import scan started (the GUI shows Import).
   virtual void on_import_scan() {}
+  // A game's cached art changed on disk (a store link was set or removed).
+  virtual void on_art_changed(std::string_view /*id*/) {}
 
   Options options_;
   fs::path data_;
@@ -112,6 +114,37 @@ protected:
   void fill_metadata();
   std::set<std::string> metadata_tried_;
   bool metadata_busy_ = false;
+  // Store links (launcher/store_link.h): the Meta listing of a local import
+  // keyed by its package. store_id_of gives the listing a library id names:
+  // the app id itself, an import's link, or empty without a listing.
+  std::string store_id_of(std::string_view id) const;
+  static std::string store_id_of(const library::Install &install) {
+    return digits(install.plan.app_id, 5) ? install.plan.app_id : install.plan.store_app_id;
+  }
+  // Links each local import without one, once (in the background, after a
+  // scan): signed-in libraries, the shipped pairs, then the online lookup when
+  // the setting allows, each candidate checked against the public listing.
+  // Packages that found none are not tried again until the next version
+  // (cache/store-links.json).
+  void resolve_store_links();
+  std::set<std::string> store_link_tried_;
+  bool store_link_busy_ = false;
+  // Writes (or with an empty id removes) the store link of every local import
+  // of `package`; `removed` stops resolve_store_links for it. Rescans after.
+  void write_store_link(const std::string &package, const std::string &store_id, bool removed);
+  // The manual link (a game page's "Link to store page..."): the pasted link or
+  // id is checked against its public listing; a listing for another package
+  // waits for link_store_anyway().
+  struct StoreLinkCheck {
+    std::string target;   // library id of the import
+    std::string id;       // the store app id checked
+    std::string name, listing_package, error;
+    bool busy = false, mismatch = false, done = false;
+  };
+  StoreLinkCheck store_link_check_;
+  void check_store_link(std::string target, std::string_view text);
+  void link_store_anyway();
+  void remove_store_link(std::string_view target);
   library::Settings settings_;
   std::unique_ptr<Worker> worker_;
   std::unique_ptr<download::Manager> downloads_;
@@ -180,6 +213,7 @@ protected:
                    std::shared_ptr<LaunchRequest> = {});
   std::string selected_, notice_, warning_, auth_status_;
   bool library_partial_ = false;  // Meta did not confirm the whole library
+  bool rescan_again_ = false;  // rescan() was asked for while a scan ran
   bool refreshing_ = false, scanning_ = false, signing_in_ = false,
        verifying_ = false;
   bool auth_page_loaded_ = false; // the Meta sign-in page finished loading

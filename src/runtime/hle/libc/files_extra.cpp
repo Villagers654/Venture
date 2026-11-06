@@ -7,6 +7,26 @@
 #include "common/log.h"
 namespace venture::hle::libc {
 void register_files_memory(HleLibrary&);
+// bionic fchmodat(): AT_SYMLINK_NOFOLLOW (0x100) changes the link itself, which
+// Linux cannot do, so a symlink answers EOPNOTSUPP and anything else is changed.
+int chmod_at(int dirfd, const char* p, std::uint32_t mode, int flags) {
+  if (flags & ~0x100) return failure(err::einval);
+  if (!p) return failure(err::efault);
+  MappedPath path;
+  int r = resolve_path(p, dirfd, &path);
+  if (r) return result(r);
+  if (path.readonly || path.device) return failure(err::erofs);
+  if (flags & 0x100) {
+    Stat s;
+    r = path_stat(path, &s, false);
+    if (r) return result(r);
+    if ((s.mode & 0170000) == 0120000) return failure(err::enotsup);
+  }
+  r = host::chmod(path.host, mode & 07777u);
+  if (r == -err::enotsup)
+    log::warn("libc", "chmod: host cannot represent mode {:#o} for {}", mode & 07777u, path.guest);
+  return result(r);
+}
 namespace {
 // bionic libc/include/sys/stat.h: mode_t is uint32_t on Android.
 int fchmod_fn(int fd, std::uint32_t mode) {
@@ -17,17 +37,7 @@ int fchmod_fn(int fd, std::uint32_t mode) {
     log::warn("libc", "fchmod: host cannot represent mode {:#o} for fd {}", mode & 07777u, fd);
   return result(r);
 }
-int chmod_fn(const char* p, std::uint32_t mode) {
-  if (!p) return failure(err::efault);
-  MappedPath path;
-  int r = resolve_path(p, at_cwd, &path);
-  if (r) return result(r);
-  if (path.readonly || path.device) return failure(err::erofs);
-  r = host::chmod(path.host, mode & 07777u);
-  if (r == -err::enotsup)
-    log::warn("libc", "chmod: host cannot represent mode {:#o} for {}", mode & 07777u, path.guest);
-  return result(r);
-}
+int chmod_fn(const char* p, std::uint32_t mode) { return chmod_at(at_cwd, p, mode, 0); }
 struct Statfs {
   std::int64_t type, bsize;
   std::uint64_t blocks, bfree, bavail, files, ffree;

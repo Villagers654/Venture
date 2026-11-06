@@ -228,6 +228,7 @@ void App::wake() {
   SDL_PushEvent(&e);
 }
 void App::on_refresh() { textures_->retry(); }
+void App::on_art_changed(std::string_view id) { textures_->forget(id); }
 void App::on_install_queued() {
   // A smoke that opens a game page keeps it so the page's progress is visible.
   if (options_.smoke_select.empty())
@@ -440,7 +441,7 @@ void App::tick() {
   take_import_picks();
   textures_->drain();
   for (auto &g : visible_games())
-    textures_->request(g, !options_.offline);
+    textures_->request(g, !options_.offline, store_id_of(g.id));
 }
 void App::choose_import(bool folder) {
   // Portal (or zenity) dialogs answer on another thread; picks queue up for

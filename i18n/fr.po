@@ -198,3 +198,44 @@ msgstr "Annuler"
 #: src/launcher/ui/views.cpp:3055
 msgid "Uninstall"
 msgstr "Désinstaller"
+
+msgid "Only imported games can be linked to a store page."
+msgstr "Seuls les jeux importés peuvent être liés à une page de la boutique."
+
+msgid "Paste the game's Meta store link, like meta.com/experiences/1234567890123456, or its ID."
+msgstr "Colle le lien du jeu sur la boutique Meta, comme meta.com/experiences/1234567890123456, ou son identifiant."
+
+msgid "Store pages can't be checked in offline mode."
+msgstr "Les pages de la boutique ne peuvent pas être vérifiées hors ligne."
+
+msgid "Link to store page…"
+msgstr "Lier à une page de la boutique…"
+
+msgid "Remove store link"
+msgstr "Retirer le lien vers la boutique"
+
+msgid "Look up imported games online"
+msgstr "Rechercher les jeux importés en ligne"
+
+msgid "Finds an imported game's store page on OculusDB. Only its package name is sent."
+msgstr "Trouve la page de la boutique d'un jeu importé sur OculusDB. Seul le nom de son paquet est envoyé."
+
+msgid "Link to store page"
+msgstr "Lier à une page de la boutique"
+
+#, python-brace-format
+msgid "Paste the game's Meta store link or its ID. Its name, description and art then come from the store. The store page must be for {0}."
+msgstr "Colle le lien du jeu sur la boutique Meta ou son identifiant. Son nom, sa description et ses images viendront alors de la boutique. La page doit être celle de {0}."
+
+msgid "Checking the store page…"
+msgstr "Vérification de la page de la boutique…"
+
+#, python-brace-format
+msgid "This store page is for {0} ({1}), not {2}. Link it anyway only for a modified build or another edition of the same game."
+msgstr "Cette page de la boutique est celle de {0} ({1}), pas de {2}. Ne la lie quand même que pour une version modifiée ou une autre édition du même jeu."
+
+msgid "Link anyway"
+msgstr "Lier quand même"
+
+msgid "Link"
+msgstr "Lier"

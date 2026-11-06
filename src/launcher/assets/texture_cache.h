@@ -11,7 +11,11 @@ public:
   TextureCache(SDL_Renderer *renderer, fs::path data,
                std::function<void()> wake);
   ~TextureCache();
-  void request(const meta::Game &game, bool allow_network = true);
+  // `store_id` names the store listing of an import keyed by its package (a
+  // store link): its cover is fetched from there and cached under game.id.
+  void request(const meta::Game &game, bool allow_network = true, std::string_view store_id = {});
+  // Drops a game's cover so the next request loads it again (its art changed).
+  void forget(std::string_view id);
   // The cover to draw `width` pixels wide: the smallest prepared size at least
   // that wide, so linear filtering never shrinks it more than twofold. Views
   // wider than the prepared sizes load the full-resolution cover on demand.
@@ -19,7 +23,7 @@ public:
   // Heavily blurred, low-resolution version of the cover for ambient
   // backdrops (stretched with linear filtering it reads as a soft blur).
   SDL_Texture *ambient(std::string_view id) const;
-  void drain() { worker_.drain(); }
+  void drain();
   size_t size() const { return covers_.size(); }
   void retry() { requested_.clear(); }
 
@@ -37,6 +41,7 @@ private:
   std::map<std::string, Cover> covers_;
   std::map<std::string, SDL_Texture *> ambient_;
   std::set<std::string> requested_;
+  std::vector<SDL_Texture *> retired_;  // forgotten; destroyed after the frame that drew them
   int frame_ = 0;
   Worker worker_;
 };

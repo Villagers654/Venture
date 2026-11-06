@@ -100,6 +100,7 @@ Settings
                                  adb PATH|auto | log-level trace|debug|info|warn|error |
                                  console on|off | add-to-steam on|off |
                                  add-new-to-steam on|off | passthrough on|off |
+                                 lookup-imports-online on|off |
                                  language auto|en|CODE |
                                  color-key off|RRGGBB |
                                  mirror cropped|full|off | mirror-eye left|right |
@@ -1307,6 +1308,8 @@ int Cli::settings_cmd(const Args &args) {
       next.add_games_to_steam = on_off(value);
     else if (key == "add-new-to-steam")
       next.steam_add_new = on_off(value);
+    else if (key == "lookup-imports-online")
+      next.lookup_imports_online = on_off(value);
     else if (key == "language")
       next.interface_language = value == "auto" ? "" : value;
     else if (key == "mirror") {
@@ -1336,6 +1339,7 @@ int Cli::settings_cmd(const Args &args) {
            {"console", settings_.console},
            {"add-to-steam", settings_.add_games_to_steam},
            {"add-new-to-steam", settings_.steam_add_new},
+           {"lookup-imports-online", settings_.lookup_imports_online},
            {"language", settings_.interface_language.empty() ? "auto" : settings_.interface_language},
            {"mirror", library::mirror_environment(settings_.display)},
            {"mirror-eye", library::mirror_eye_environment(settings_.display)},
@@ -1347,7 +1351,7 @@ int Cli::settings_cmd(const Args &args) {
   if (json_)
     return print(out), 0;
   for (auto &[k, v] : out.items())
-    std::cout << std::format("{:<17}{}\n", k, v.is_string() ? v.get<std::string>() : v.is_boolean() ? (v.get<bool>() ? "on" : "off") : v.dump());
+    std::cout << std::format("{:<23}{}\n", k, v.is_string() ? v.get<std::string>() : v.is_boolean() ? (v.get<bool>() ? "on" : "off") : v.dump());
   return 0;
 }
 

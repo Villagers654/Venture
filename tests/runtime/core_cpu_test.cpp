@@ -1,6 +1,8 @@
 #include <doctest/doctest.h>
 #include "common/environment.h"
 #include "core/address_space.h"
+#include "core/error.h"
+#include "core/guest_heap.h"
 #include "core/hle_runtime.h"
 #include "core/thread_runtime.h"
 #include "core/wait.h"

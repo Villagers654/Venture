@@ -552,6 +552,21 @@ TEST_CASE("library folders are saved, and the install dialog's ask setting "
   paths::atomic_write(d.root / "settings.json", json.dump());
   CHECK(library::Settings::load(d.root).install_ask);
 }
+TEST_CASE("looking up imported games online is on by default, and turning it off is saved") {
+  Directory d;
+  auto settings = library::Settings::defaults(d.root);
+  CHECK(settings.lookup_imports_online);
+  settings.save(d.root);
+  CHECK(library::Settings::load(d.root).lookup_imports_online);
+  settings.lookup_imports_online = false;
+  settings.save(d.root);
+  CHECK_FALSE(library::Settings::load(d.root).lookup_imports_online);
+  // Settings from before the option look up.
+  auto json = paths::read_json(d.root / "settings.json");
+  json.erase("lookupImportsOnline");
+  paths::atomic_write(d.root / "settings.json", json.dump());
+  CHECK(library::Settings::load(d.root).lookup_imports_online);
+}
 TEST_CASE("display settings save globally and per game, migrate unknown values and "
           "give the runtime its environment") {
   Directory d;

@@ -106,6 +106,10 @@ struct Settings {
   // Starting a new game's install asks where it goes and whether it goes to
   // Steam (a dialog in the GUI); off installs to `games` with the defaults.
   bool install_ask = true;
+  // Imported games no signed-in account owns are linked to their store listing
+  // by package name; this also asks OculusDB (Settings > Library, on by
+  // default; only the package name is sent).
+  bool lookup_imports_online = true;
   // Other folders that hold games: earlier games folders and ones picked when
   // installing. All are scanned; new downloads go to `games` unless one is picked.
   std::vector<fs::path> libraries;

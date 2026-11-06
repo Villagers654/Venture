@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <cstring>
 namespace venture::hle::libc {
+int chmod_at(int dirfd, const char* p, std::uint32_t mode, int flags);
 namespace {
 class MemoryFd final : public File {
  public:
@@ -169,18 +170,13 @@ std::int64_t pathconf_fn(const char* p, int name) {
       return failure(err::einval);
   }
 }
-int fchmodat_fn(int fd, const char* p, std::uint32_t, int flags) {
-  if (flags & ~0x100) return failure(err::einval);
-  Stat s;
-  return result(path_stat(p, &s, fd, !(flags & 0x100)));
-}
 }  // namespace
 void register_files_memory(HleLibrary& lib) {
 #define B(n, f) VENTURE_LIBC_BIND(lib, n, f)
   B("memfd_create", memfd_fn);
   B("flock", flock_fn);
   B("pathconf", pathconf_fn);
-  B("fchmodat", fchmodat_fn);
+  B("fchmodat", chmod_at);
 #undef B
 }
 }  // namespace venture::hle::libc

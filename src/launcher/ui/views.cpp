@@ -1,5 +1,6 @@
 #include "launcher/app.h"
 #include "launcher/assets/controller_art.h"
+#include "launcher/store_link.h"
 #include "launcher/i18n/i18n.h"
 #include "launcher/ui/rich_text.h"
 #include "launcher/ui/style.h"
@@ -410,6 +411,7 @@ void App::draw() {
   draw_uninstall();
   draw_texture_warning();
   draw_save_import();
+  draw_store_link();
   draw_cancel_download();
   draw_report();
   draw_update();
@@ -1175,6 +1177,19 @@ void App::draw_game_page() {
         if (tools && menu_item("Show game data", icons::folder, false, true)) open_data(true);
         // Save imports go to the game's own install.
         if (tools && !pinned && menu_item("Import save data", icons::save, false, !running)) save_import_target_ = g.id;
+        // An import no signed-in account owns, keyed by its package: the store
+        // listing it is names it and brings its art (found by package, or here).
+        if (tools && !pinned && partial->plan.local && !digits(partial->plan.app_id, 5)) {
+          if (partial->plan.store_app_id.empty()) {
+            if (menu_item(tr("Link to store page\xE2\x80\xA6"), icons::globe, false, !options_.offline)) {
+              store_link_target_ = g.id;
+              store_link_text_.clear();
+              store_link_check_ = {};
+            }
+          } else if (menu_item(tr("Remove store link"), 0, false, true)) {
+            action([&] { remove_store_link(g.id); });
+          }
+        }
         if (tools && menu_item("Uninstall", icons::trash, true, !running && !downloads_->busy()))
           uninstall_target_ = *partial;
         end_menu();
@@ -1818,6 +1833,26 @@ void App::draw_settings() {
   setting_row("Ask when installing", "Installing a new game asks which drive it goes to and whether it goes to Steam.",
               s(44), s(24), [&] {
                 if (toggle("install-ask", &settings_.install_ask)) action([&] { save_settings(); });
+              });
+  divider();
+  // The info button's tooltip is the row's one-line description.
+  setting_row(tr("Look up imported games online"),
+              "Finds the store page of an imported game no account owns on OculusDB. Only its package name is sent.",
+              s(44), s(24), [&] {
+                if (toggle("lookup-imports", &settings_.lookup_imports_online))
+                  action([&] {
+                    // Turned on: imports that found nothing are looked up again.
+                    if (settings_.lookup_imports_online) {
+                      store_link_tried_.clear();
+                      std::error_code ec;
+                      fs::remove(data_ / "cache" / "store-links.json", ec);
+                    }
+                    save_settings();
+                  });
+              }, [&] {
+                icon_button("lookup-imports-help", icons::info,
+                            tr("Finds an imported game's store page on OculusDB. Only its package name is sent."),
+                            kHelpIcon);
               });
   if (steam_pending_ && settings_.add_games_to_steam) {
     divider();
@@ -3316,6 +3351,73 @@ void App::draw_save_import() {
     if (clicked == 2) action([id = save_import_target_, this] { import_saves_later(id, {}); });
     if (clicked >= 0) {
       save_import_target_.clear();
+      ImGui::CloseCurrentPopup();
+    }
+    end_dialog();
+  }
+}
+
+void App::draw_store_link() {
+  // --smoke-view store-link opens the dialog for the first linkable import, for screenshots.
+  // store-link-mismatch shows it answering with a listing for another package.
+  static bool smoke = options_.smoke_view == "store-link" || options_.smoke_view == "store-link-mismatch";
+  if (smoke && store_link_target_.empty())
+    for (const auto& i : installs_)
+      if (i.plan.local && !digits(i.plan.app_id, 5)) {
+        store_link_target_ = i.id();
+        smoke = false;
+        if (options_.smoke_view == "store-link-mismatch") {
+          store_link_text_ = "https://www.meta.com/experiences/1234567890123456/";
+          store_link_check_ = {.target = i.id(), .id = "1234567890123456", .name = "Example Game",
+                               .listing_package = "com.example.other", .mismatch = true};
+        }
+        break;
+      }
+  if (!store_link_target_.empty() && !ImGui::IsPopupOpen("Link to store page")) ImGui::OpenPopup("Link to store page");
+  if (begin_dialog("Link to store page", 500)) {
+    auto& c = store_link_check_;
+    const auto* install = installed(store_link_target_, false);
+    const std::string package = install ? install->plan.package : std::string();
+    dialog_text(tr("Link to store page"),
+                // i18n: {0} is an Android package name such as com.studio.game.
+                trf("Paste the game's Meta store link or its ID. Its name, description and art then come from the "
+                    "store. The store page must be for {0}.",
+                    package));
+    gap(16);
+    const bool checking = c.busy && c.target == store_link_target_;
+    set_on_card(true);  // the dialog is a surface like a card: the field takes the card fill
+    bool submit = submit_field("store-link", "meta.com/experiences/\xE2\x80\xA6", &store_link_text_, g_dialog_w,
+                               icons::globe, !checking);
+    set_on_card(false);
+    if (c.target == store_link_target_ && (!c.error.empty() || c.mismatch || checking)) {
+      gap(10);
+      ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + g_dialog_w);
+      if (checking)
+        text(fonts().regular, kSmall, color::text3, tr("Checking the store page\xE2\x80\xA6"));
+      else if (!c.error.empty())
+        text(fonts().regular, kSmall, color::danger, c.error);
+      else
+        text(fonts().regular, kSmall, color::warning,
+             // i18n: {0} is a game's store name, {1} and {2} Android package names.
+             trf("This store page is for {0} ({1}), not {2}. Link it anyway only for a modified build or another "
+                 "edition of the same game.",
+                 c.name.empty() ? c.id : c.name, c.listing_package.empty() ? std::string("?") : c.listing_package,
+                 package));
+      ImGui::PopTextWrapPos();
+    }
+    // Link anyway links the page that was checked, until the field names another.
+    const bool mismatch = c.mismatch && c.target == store_link_target_ && !checking &&
+                          store_link::id_from_link(store_link_text_) == c.id;
+    int clicked = mismatch ? dialog_footer({{tr("Cancel")}, {tr("Link anyway"), Tone::primary}})
+                           : dialog_footer({{tr("Cancel")}, {tr("Link"), Tone::primary, !checking && !store_link_text_.empty()}});
+    if (ImGui::IsKeyPressed(ImGuiKey_Escape)) clicked = 0;
+    if (clicked == 1 && mismatch)
+      link_store_anyway();
+    else if ((clicked == 1 || submit) && !checking)
+      check_store_link(store_link_target_, store_link_text_);
+    if (clicked == 0 || !install || (c.done && c.target == store_link_target_)) {
+      store_link_target_.clear();
+      store_link_check_ = {};
       ImGui::CloseCurrentPopup();
     }
     end_dialog();

@@ -262,6 +262,10 @@ Json Plan::json() const {
     plan["assetCatalog"] = "unavailable";
   if (local)
     plan["source"] = "import";
+  if (local && digits(store_app_id, 5) && store_app_id != app_id)
+    plan["storeAppId"] = store_app_id;
+  else if (local && store_link_removed)
+    plan["storeLinkRemoved"] = true;
   if (pinned)
     plan["pinned"] = true;
   return plan;
@@ -487,6 +491,13 @@ Plan parse_plan(const Json &j) {
   p.assets_complete = !j.contains("assetCatalog");
   p.launcher_format = j.contains("installedAddons");
   p.pinned = !p.local && field(j, "pinned") == true;
+  // A link that is not an app id is ignored: the plan stays valid unlinked.
+  if (p.local && !digits(p.app_id, 5)) {
+    if (auto link = str(j, "storeAppId"); digits(link, 5))
+      p.store_app_id = std::move(link);
+    else
+      p.store_link_removed = field(j, "storeLinkRemoved") == true;
+  }
   std::set<std::string> names;
   bool apk = false;
   // The original meta_cli.py saved only required, ungated base assets, but
