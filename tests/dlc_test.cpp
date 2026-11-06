@@ -4,6 +4,9 @@
 #include "http_loopback.h"
 #include <atomic>
 #include <doctest/doctest.h>
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 #include "async_wait.h"
 
@@ -153,6 +156,36 @@ TEST_CASE("a game in a library folder reached through a link uninstalls; a linke
   fs::remove(real / "com.example.dlc");
   fs::remove(link);
 }
+
+#ifdef _WIN32
+TEST_CASE("an uninstall that cannot remove a file keeps the manifest, so the game stays listed and uninstalls later") {
+  Directory directory;
+  const auto data = directory.root / "data", games = directory.root / "games";
+  const bool had = std::getenv("VENTURE_DATA_DIR") != nullptr;
+  const std::string previous = had ? std::getenv("VENTURE_DATA_DIR") : "";
+  _putenv_s("VENTURE_DATA_DIR", paths::utf8(data).c_str());
+  seed(games);
+  const auto dir = games / "com.example.dlc" / "12";
+  // A file after plan.json in directory order, held by another process
+  // (the game, a scanner) without delete sharing.
+  auto held = CreateFileW((dir / "required.dat").c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
+                          OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+  REQUIRE(held != INVALID_HANDLE_VALUE);
+  auto installs = library::scan(games);
+  REQUIRE(installs.size() == 1);
+  CHECK_THROWS(library::uninstall(games, installs[0]));
+  CloseHandle(held);
+  CHECK(fs::exists(dir / "plan.json"));
+  bool reliable = false;
+  installs = library::scan(games, &reliable);
+  CHECK(reliable);
+  REQUIRE(installs.size() == 1);
+  CHECK_FALSE(installs[0].complete);
+  library::uninstall(games, installs[0]);
+  CHECK_FALSE(fs::exists(dir));
+  _putenv_s("VENTURE_DATA_DIR", previous.c_str());
+}
+#endif
 
 TEST_CASE("DLC ownership is durable, unexpired, complete and fail closed") {
   test::Server server;

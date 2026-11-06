@@ -28,11 +28,14 @@ public final class MediaCodec {
   private volatile long outputPts;
   private final String mime;
   private String name;
+  private CodecImage outputImage;
+  private ByteBuffer imageBuffer;
   private static native long nativeCreate(String mime);
   private static native int nativeConfigure(long peer, String mime, int width, int height,
       int rate, int channels, byte[] config, android.view.Surface surface);
   private static native long nativeControl(long peer,int operation,long value);
   private static native ByteBuffer nativeBuffer(long peer,boolean input,int index);
+  private static native int nativeImage(long peer,int index,ByteBuffer target);
   private static native int nativeQueue(long peer,int index,int offset,int size,long pts,int flags);
   private static native int nativeOutput(long peer,long timeout,long[] info);
   private static native int nativeRender(long peer,int index,boolean render,long at);
@@ -87,19 +90,19 @@ public final class MediaCodec {
       workerLock.notifyAll();
     }
   }
-  public void stop(){synchronized(workerLock){running=false;flushed=false;synchronized(this){live();check(nativeControl(peer,1,0));}}}
+  public void stop(){synchronized(workerLock){running=false;flushed=false;synchronized(this){live();dropImage();check(nativeControl(peer,1,0));}}}
   public void flush(){
     synchronized(workerLock){
-      synchronized(this){live();check(nativeControl(peer,2,0));}
+      synchronized(this){live();dropImage();check(nativeControl(peer,2,0));}
       // AOSP: a flushed codec in asynchronous mode resumes on start().
       if(callback!=null){running=false;flushed=true;}
     }
   }
   public void reset(){
     stopWorker();
-    synchronized(this){live();nativeRelease(peer);peer=0;peer=nativeCreate(mime);if(peer==0)throw new IllegalStateException("Codec reset failed");format=null;}
+    synchronized(this){live();dropImage();nativeRelease(peer);peer=0;peer=nativeCreate(mime);if(peer==0)throw new IllegalStateException("Codec reset failed");format=null;}
   }
-  public void release(){stopWorker();synchronized(this){if(peer!=0)nativeRelease(peer);peer=0;format=null;}}
+  public void release(){stopWorker();synchronized(this){dropImage();if(peer!=0)nativeRelease(peer);peer=0;format=null;}}
   private void stopWorker(){
     Thread thread;
     synchronized(workerLock){workerStop=true;running=false;flushed=false;callback=null;thread=worker;worker=null;workerLock.notifyAll();}
@@ -144,11 +147,53 @@ public final class MediaCodec {
   public int dequeueOutputBuffer(BufferInfo info,long timeoutUs){long id;synchronized(this){live();id=peer;}long[] values=new long[4];int result=nativeOutput(id,timeoutUs,values);if(result<-3)check(result);if(result>=0){info.set((int)values[0],(int)values[1],values[2],(int)values[3]);outputPts=values[2];}return result;}
   public synchronized ByteBuffer getInputBuffer(int index){live();var value=nativeBuffer(peer,true,index);return value==null?null:value.order(ByteOrder.nativeOrder());}
   public synchronized ByteBuffer getOutputBuffer(int index){live();var value=nativeBuffer(peer,false,index);return value==null?null:value.order(ByteOrder.nativeOrder());}
+  // AOSP returns null when a buffer cannot be served as an Image (input, surface or audio output).
+  public Image getInputImage(int index){live();return null;}
+  public synchronized Image getOutputImage(int index){
+    live();if(!mime.startsWith("video/"))return null;
+    int width=(int)nativeControl(peer,4,0),height=(int)nativeControl(peer,5,0);
+    if(width<=0 || height<=0)return null;
+    int size=width*height+2*((width+1)/2)*((height+1)/2);
+    dropImage();
+    if(imageBuffer==null || imageBuffer.capacity()!=size)imageBuffer=ByteBuffer.allocateDirect(size);
+    if(nativeImage(peer,index,imageBuffer)!=0)return null;
+    return outputImage=new CodecImage(imageBuffer,width,height,outputPts*1000);
+  }
+  private void dropImage(){if(outputImage!=null)outputImage.close();outputImage=null;}
+  // One output frame as YUV_420_888 (the AImageReader layout): a full Y plane, then quarter-size
+  // U and V planes. Valid until its output buffer is released; the next image reuses the buffer.
+  private static final class CodecImage extends Image {
+    private final int width,height;
+    private long timestamp;
+    private Plane[] planes;
+    CodecImage(ByteBuffer data,int width,int height,long timestamp){
+      this.width=width;this.height=height;this.timestamp=timestamp;
+      int luma=width*height,chromaWidth=(width+1)/2,chroma=chromaWidth*((height+1)/2);
+      planes=new Plane[]{plane(data,0,luma,width),plane(data,luma,chroma,chromaWidth),plane(data,luma+chroma,chroma,chromaWidth)};
+    }
+    private static Plane plane(ByteBuffer data,int offset,int length,int rowStride){
+      var view=data.duplicate();view.clear();view.position(offset).limit(offset+length);
+      var buffer=view.slice();
+      return new Plane(){
+        @Override public int getRowStride(){return rowStride;}
+        @Override public int getPixelStride(){return 1;}
+        @Override public ByteBuffer getBuffer(){return buffer;}
+      };
+    }
+    @Override void throwISEIfImageIsInvalid(){if(planes==null)throw new IllegalStateException("Image is already closed");}
+    @Override public int getFormat(){throwISEIfImageIsInvalid();return android.graphics.ImageFormat.YUV_420_888;}
+    @Override public int getWidth(){throwISEIfImageIsInvalid();return width;}
+    @Override public int getHeight(){throwISEIfImageIsInvalid();return height;}
+    @Override public long getTimestamp(){throwISEIfImageIsInvalid();return timestamp;}
+    @Override public void setTimestamp(long timestamp){throwISEIfImageIsInvalid();this.timestamp=timestamp;}
+    @Override public Plane[] getPlanes(){throwISEIfImageIsInvalid();return planes.clone();}
+    @Override public void close(){planes=null;}
+  }
   public ByteBuffer[] getInputBuffers(){return new ByteBuffer[]{getInputBuffer(0)};}
   public ByteBuffer[] getOutputBuffers(){return new ByteBuffer[]{getOutputBuffer(0)};}
   public synchronized void queueInputBuffer(int index,int offset,int size,long pts,int flags){live();if(offset<0 || size<0)throw new IllegalArgumentException();check(nativeQueue(peer,index,offset,size,pts,flags));}
-  public synchronized void releaseOutputBuffer(int index,boolean render){live();check(nativeRender(peer,index,render,0));if(render)frameRendered();}
-  public synchronized void releaseOutputBuffer(int index,long renderTimestampNs){live();check(nativeRender(peer,index,true,renderTimestampNs));frameRendered();}
+  public synchronized void releaseOutputBuffer(int index,boolean render){live();dropImage();check(nativeRender(peer,index,render,0));if(render)frameRendered();}
+  public synchronized void releaseOutputBuffer(int index,long renderTimestampNs){live();dropImage();check(nativeRender(peer,index,true,renderTimestampNs));frameRendered();}
   private void frameRendered(){
     var listener=frameListener;var handler=frameHandler;
     if(listener==null)return;
@@ -181,7 +226,7 @@ public final class MediaCodec {
     if(mime.startsWith("video/")) {
       int width=(int)nativeControl(peer,4,0),height=(int)nativeControl(peer,5,0);
       var output=MediaFormat.createVideoFormat("video/raw",width,height);
-      output.setInteger("color-format",(int)nativeControl(peer,6,0));output.setInteger("stride",width);output.setInteger("slice-height",height);
+      output.setInteger("color-format",(int)nativeControl(peer,6,0));output.setInteger("stride",(width+1)&~1);output.setInteger("slice-height",(height+1)&~1);
       output.setInteger("crop-left",0);output.setInteger("crop-top",0);output.setInteger("crop-right",width-1);output.setInteger("crop-bottom",height-1);return output;
     }
     var output=MediaFormat.createAudioFormat("audio/raw",format.getInteger("sample-rate"),format.getInteger("channel-count"));output.setInteger("pcm-encoding",2);return output;

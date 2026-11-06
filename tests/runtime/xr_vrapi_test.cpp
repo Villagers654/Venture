@@ -397,6 +397,36 @@ TEST_CASE("VrApi projection preserves asymmetric frusta with Vulkan inverted Y")
   CHECK(vr::translate_layer(projection.header, eyes, image, vk, layers) == XR_ERROR_VALIDATION_FAILURE);
 }
 
+TEST_CASE("VrApi projection asks first for the desktop mirror's eye") {
+  vr::abi::Projection projection{};
+  projection.header = {1, 0, {1, 1, 1, 1}, 1, 0, 0};
+  projection.head.pose.orientation.w = 1;
+  for (auto &texture : projection.textures) {
+    texture.tan_angles.m[0][0] = texture.tan_angles.m[1][1] = 0.5f;
+    texture.tan_angles.m[0][2] = texture.tan_angles.m[1][2] = -0.5f;
+    texture.tan_angles.m[2][2] = -1;
+    texture.rect = {0, 0, 1, 1};
+  }
+  XrView eyes[2]{{XR_TYPE_VIEW}, {XR_TYPE_VIEW}};
+  for (auto &eye : eyes) eye.pose.orientation.w = 1;
+  std::vector<int> order;
+  auto image = [&](vr::abi::TextureSwapChain *, int, vr::abi::Rect, int eye, bool, XrSwapchainSubImage &out) {
+    order.push_back(eye);
+    out.imageArrayIndex = std::uint32_t(eye);
+    return XR_SUCCESS;
+  };
+  for (int first : {0, 1}) {
+    vr::LayerStorage storage;
+    std::vector<const XrCompositionLayerBaseHeader *> layers;
+    order.clear();
+    REQUIRE(vr::translate_layer(projection.header, eyes, image, storage, layers, first) == XR_SUCCESS);
+    CHECK(order == std::vector<int>{first, 1 - first});
+    // Each view keeps its own eye whichever goes first.
+    CHECK(storage.views[0].subImage.imageArrayIndex == 0);
+    CHECK(storage.views[1].subImage.imageArrayIndex == 1);
+  }
+}
+
 TEST_CASE("VrApi projection FOV covers only each eye's texture rect") {
   vr::abi::Projection projection{};
   projection.header = {1, 0, {1, 1, 1, 1}, 1, 0, 0};
@@ -2416,7 +2446,17 @@ TEST_CASE("host XR identity uses game label and preserves UTF-8 boundaries") {
   CHECK(std::string(small) == "ab");
 }
 
+namespace {
+// A controller whose own left menu button is its automatic menu (Touch's is both
+// stick clicks), for the native-menu fallback.
+struct MenuButtonController {
+  MenuButtonController() { ventureMockXrSetProfile("/interaction_profiles/hp/mixed_reality_controller"); }
+  ~MenuButtonController() { ventureMockXrSetProfile(nullptr); }
+};
+}  // namespace
+
 TEST_CASE("VrApi prediction followed by frame wait preserves the input snapshot") {
+  MenuButtonController controller;
   venture::test::ScopedMenuMode automatic("");
   venture::test::XrImageFixture images; venture::xr::install_xr_images(&images);
   vr::abi::Init init{1, 1, 1, 42, 0, 0x10300, {1, 2, 3}};
@@ -2428,8 +2468,7 @@ TEST_CASE("VrApi prediction followed by frame wait preserves the input snapshot"
   MockXrScript script{}; ventureMockXrSetScript(&script);
   REQUIRE(vr::sync_input() == XR_SUCCESS);
   script.left.thumbstick_click = script.right.thumbstick_click = true; ventureMockXrSetScript(&script);
-  REQUIRE(vr::sync_input() == XR_SUCCESS); // Start the hold before this frame is sampled.
-  std::this_thread::sleep_for(std::chrono::milliseconds(510));
+  REQUIRE(vr::sync_input() == XR_SUCCESS); // Press the chord before this frame is sampled.
   REQUIRE(vg::vrapi_GetPredictedDisplayTime(mobile, 3) > 0);
   REQUIRE(vg::vrapi_WaitFrame(mobile, 3) == 0);
   vr::abi::RemoteState left{}, right{}; left.header.type = right.header.type = 4;
@@ -2477,7 +2516,6 @@ TEST_CASE("VrApi future predictions preserve a waited input snapshot") {
   REQUIRE(vr::sync_input() == XR_SUCCESS);
   script.left.thumbstick_click = script.right.thumbstick_click = true;
   ventureMockXrSetScript(&script); REQUIRE(vr::sync_input() == XR_SUCCESS);
-  std::this_thread::sleep_for(std::chrono::milliseconds(510));
   REQUIRE(vg::vrapi_WaitFrame(mobile, 1) == 0);
   const auto time1 = vg::vrapi_GetPredictedDisplayTime(mobile, 1);
   CHECK(vg::vrapi_GetPredictedDisplayTime(mobile, 2) > time1);
@@ -2502,6 +2540,7 @@ TEST_CASE("VrApi future predictions preserve a waited input snapshot") {
 TEST_CASE("A menu the host binds only to its system button still gets the stick-click menu") {
   // SteamVR with Index controllers reports the game's menu on the system
   // button, which opens SteamVR's dashboard and never reaches the game.
+  MenuButtonController controller;
   venture::test::ScopedMenuMode automatic("");
   venture::test::XrImageFixture images; venture::xr::install_xr_images(&images);
   vr::abi::Init init{1, 1, 1, 42, 0, 0x10300, {1, 2, 3}};
@@ -2516,7 +2555,6 @@ TEST_CASE("A menu the host binds only to its system button still gets the stick-
   REQUIRE(vr::sync_input() == XR_SUCCESS);
   script.left.thumbstick_click = script.right.thumbstick_click = true;
   ventureMockXrSetScript(&script); REQUIRE(vr::sync_input() == XR_SUCCESS);
-  std::this_thread::sleep_for(std::chrono::milliseconds(510));
   REQUIRE(vg::vrapi_WaitFrame(mobile, 1) == 0);
   vr::abi::RemoteState left{}; left.header.type = 4;
   REQUIRE(vg::vrapi_GetCurrentInputState(mobile, 1, &left.header) == 0);
@@ -2553,7 +2591,6 @@ TEST_CASE("A game that never binds stick clicks gets the stick-click menu even w
   REQUIRE(vr::sync_input() == XR_SUCCESS);
   script.left.thumbstick_click = script.right.thumbstick_click = true;
   ventureMockXrSetScript(&script); REQUIRE(vr::sync_input() == XR_SUCCESS);
-  std::this_thread::sleep_for(std::chrono::milliseconds(510));
   REQUIRE(vg::vrapi_WaitFrame(mobile, 1) == 0);
   vr::abi::RemoteState left{}; left.header.type = 4;
   REQUIRE(vg::vrapi_GetCurrentInputState(mobile, 1, &left.header) == 0);
@@ -2574,7 +2611,6 @@ TEST_CASE("VrApi legacy predictions share one input sample until submission") {
   REQUIRE(vr::sync_input() == XR_SUCCESS);
   script.left.thumbstick_click = script.right.thumbstick_click = true;
   ventureMockXrSetScript(&script); REQUIRE(vr::sync_input() == XR_SUCCESS);
-  std::this_thread::sleep_for(std::chrono::milliseconds(510));
   const auto prediction = vg::vrapi_GetPredictedDisplayTime(mobile, 100);
   REQUIRE(prediction > 0);
   CHECK(vg::vrapi_GetPredictedDisplayTime(mobile, 101) > prediction);

@@ -20,9 +20,6 @@ struct Directory {
     }
   }
 };
-Session fixture(std::string id = "777777") {
-  return {"fixture-secret-" + id, id, "Fixture alias", {}, "test"};
-}
 } // namespace
 TEST_CASE("account keys reject reserved names and traversal") {
   CHECK(meta::valid_account_key("012345abcdef"));
@@ -32,6 +29,12 @@ TEST_CASE("account keys reject reserved names and traversal") {
 }
 
 #ifdef _WIN32
+namespace {
+Session fixture(std::string id = "777777") {
+  return {"fixture-secret-" + id, id, "Fixture alias", {}, "test"};
+}
+} // namespace
+
 TEST_CASE("Venture reads legacy DPAPI v1 and v2 after data directory migration") {
   Directory d;
   const auto old = d.root / "legacy", current = d.root / "current";

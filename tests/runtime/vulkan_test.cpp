@@ -15,6 +15,7 @@
 #include <future>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include "common/log.h"
 #include "common/json.h"
 #include <string_view>
@@ -36,6 +37,7 @@
 #include "platform/profile.h"
 #include "vulkan_callbacks_test_support.h"
 #include "vulkan_test_support.h"
+#include "android_test_support.h"
 #include "hle/libc/vfs.h"
 
 #include "../async_wait.h"
@@ -179,6 +181,18 @@ TEST_CASE("Vulkan queries preserve unknown nodes and fill known feature and prop
   CHECK(unknown.pNext == original.pNext);
   CHECK(unknown.payload == original.payload);
   CHECK(features.features.textureCompressionASTC_LDR == VK_TRUE);
+  // ASTC HDR is reported as on Quest, natively or decoded to FP16.
+  VkPhysicalDeviceTextureCompressionASTCHDRFeatures hdr{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TEXTURE_COMPRESSION_ASTC_HDR_FEATURES};
+  features.pNext = &hdr;
+  call("vkGetPhysicalDeviceFeatures2", gpu.physical, &features);
+  CHECK(hdr.textureCompressionASTC_HDR == VK_TRUE);
+  std::uint32_t extension_count = 0;
+  call("vkEnumerateDeviceExtensionProperties", gpu.physical, nullptr, &extension_count, nullptr);
+  std::vector<VkExtensionProperties> extensions(extension_count);
+  call("vkEnumerateDeviceExtensionProperties", gpu.physical, nullptr, &extension_count, extensions.data());
+  CHECK(std::ranges::count_if(extensions, [](const auto& e) {
+          return std::string_view(e.extensionName) == VK_EXT_TEXTURE_COMPRESSION_ASTC_HDR_EXTENSION_NAME;
+        }) == 1);
 
   VkPhysicalDeviceIDProperties id{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES};
   unknown.pNext = &id;
@@ -280,7 +294,6 @@ struct ScissorHooks {
   static inline std::string_view fail_proc;
   static inline VkResult image_failure = VK_ERROR_OUT_OF_DEVICE_MEMORY;
   static inline unsigned fail_call{}, calls{}, images_created{}, views_created{}, memory_allocated{};
-  static inline unsigned images_destroyed{}, views_destroyed{}, memory_freed{};
   static bool fail(std::string_view proc) { return proc == fail_proc && ++calls == fail_call; }
   static VkResult VKAPI_CALL on_create_image(VkDevice d, const VkImageCreateInfo* info,
                                               const VkAllocationCallbacks* alloc, VkImage* out) {
@@ -309,15 +322,12 @@ struct ScissorHooks {
     return result;
   }
   static void VKAPI_CALL on_destroy_image(VkDevice d, VkImage image, const VkAllocationCallbacks* alloc) {
-    if (image) ++images_destroyed;
     reinterpret_cast<PFN_vkDestroyImage>(gdpa(d, "vkDestroyImage"))(d, image, alloc);
   }
   static void VKAPI_CALL on_destroy_view(VkDevice d, VkImageView view, const VkAllocationCallbacks* alloc) {
-    if (view) ++views_destroyed;
     reinterpret_cast<PFN_vkDestroyImageView>(gdpa(d, "vkDestroyImageView"))(d, view, alloc);
   }
   static void VKAPI_CALL on_free_memory(VkDevice d, VkDeviceMemory memory, const VkAllocationCallbacks* alloc) {
-    if (memory) ++memory_freed;
     reinterpret_cast<PFN_vkFreeMemory>(gdpa(d, "vkFreeMemory"))(d, memory, alloc);
   }
   static void VKAPI_CALL on_set_scissor(VkCommandBuffer cmd, std::uint32_t first, std::uint32_t count,
@@ -391,7 +401,6 @@ struct ScissorHooks {
     fail_proc = {};
     image_failure = VK_ERROR_OUT_OF_DEVICE_MEMORY;
     fail_call = calls = images_created = views_created = memory_allocated = 0;
-    images_destroyed = views_destroyed = memory_freed = 0;
     forwarded.clear();
     areas.clear();
     framebuffers.clear();
@@ -496,6 +505,100 @@ TEST_CASE("Vulkan clamps dynamic scissors to the open render pass instance's ren
       CAPTURE(i);
       CHECK(same(ScissorHooks::forwarded[i], expected[i]));
     }
+  }
+  REQUIRE(test::vk_call("vkResetCommandBuffer", gpu.command, 0u) == VK_SUCCESS);
+  test::vk_call("vkDestroyFramebuffer", gpu.device, framebuffer, nullptr);
+  test::vk_call("vkDestroyRenderPass", gpu.device, pass, nullptr);
+  test::vk_call("vkDestroyImageView", gpu.device, view, nullptr);
+  test::vk_call("vkDestroyImage", gpu.device, image, nullptr);
+  test::vk_call("vkFreeMemory", gpu.device, memory, nullptr);
+}
+
+TEST_CASE("Vulkan gives the attachments a guest framebuffer leaves out placeholders") {
+  // Unity skips an attachment whose image it lacks ("Missing Vulkan framebuffer
+  // attachment image?") and passes fewer views than its render pass has; NVIDIA
+  // faulted beginning the pass (Attack on Titan VR). The view it passed keeps
+  // its slot by format and its size; the missing one becomes a placeholder of
+  // that size, so the view still renders.
+  test::VulkanDevice gpu;
+  VkImageCreateInfo ci{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+  ci.imageType = VK_IMAGE_TYPE_2D;
+  ci.format = VK_FORMAT_R8G8B8A8_UNORM;
+  ci.extent = {16, 16, 1};
+  ci.mipLevels = ci.arrayLayers = 1;
+  ci.samples = VK_SAMPLE_COUNT_1_BIT;
+  ci.tiling = VK_IMAGE_TILING_OPTIMAL;
+  ci.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+  VkImage image{};
+  REQUIRE(test::vk_call("vkCreateImage", gpu.device, &ci, nullptr, &image) == VK_SUCCESS);
+  VkMemoryRequirements req{};
+  test::vk_call("vkGetImageMemoryRequirements", gpu.device, image, &req);
+  VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+  ai.allocationSize = req.size;
+  ai.memoryTypeIndex = gpu.memory_type(req.memoryTypeBits, 0);
+  VkDeviceMemory memory{};
+  REQUIRE(test::vk_call("vkAllocateMemory", gpu.device, &ai, nullptr, &memory) == VK_SUCCESS);
+  REQUIRE(test::vk_call("vkBindImageMemory", gpu.device, image, memory, 0ull) == VK_SUCCESS);
+  VkImageViewCreateInfo vi{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+  vi.image = image;
+  vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
+  vi.format = ci.format;
+  vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+  VkImageView view{};
+  REQUIRE(test::vk_call("vkCreateImageView", gpu.device, &vi, nullptr, &view) == VK_SUCCESS);
+  VkAttachmentDescription attachments[2]{};
+  attachments[0].format = VK_FORMAT_R16G16B16A16_SFLOAT;  // the transient target Unity lacks
+  attachments[1].format = ci.format;
+  for (auto& a : attachments) {
+    a.samples = VK_SAMPLE_COUNT_1_BIT;
+    a.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    a.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    a.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    a.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    a.finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+  }
+  VkAttachmentReference colors[2]{{0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL},
+                                  {1, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL}};
+  VkSubpassDescription subpass{};
+  subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+  subpass.colorAttachmentCount = 2;
+  subpass.pColorAttachments = colors;
+  VkRenderPassCreateInfo rpi{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};
+  rpi.attachmentCount = 2;
+  rpi.pAttachments = attachments;
+  rpi.subpassCount = 1;
+  rpi.pSubpasses = &subpass;
+  VkRenderPass pass{};
+  REQUIRE(test::vk_call("vkCreateRenderPass", gpu.device, &rpi, nullptr, &pass) == VK_SUCCESS);
+  VkFramebuffer framebuffer{};
+  gpu.begin();
+  {
+    ScissorHooks hooks;
+    VkFramebufferCreateInfo fi{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
+    fi.renderPass = pass;
+    fi.attachmentCount = 1;
+    fi.pAttachments = &view;
+    fi.width = fi.height = 16;
+    fi.layers = 1;
+    REQUIRE(test::vk_call("vkCreateFramebuffer", gpu.device, &fi, nullptr, &framebuffer) == VK_SUCCESS);
+    REQUIRE(ScissorHooks::framebuffers.size() == 1);
+    CHECK(ScissorHooks::framebuffers[0].width == 16);
+    CHECK(ScissorHooks::framebuffers[0].height == 16);
+    REQUIRE(ScissorHooks::attachments[0].size() == 2);
+    CHECK(ScissorHooks::attachments[0][0] != VK_NULL_HANDLE);
+    CHECK(ScissorHooks::attachments[0][0] != view);
+    CHECK(ScissorHooks::attachments[0][1] == view);
+    VkClearValue clear[2]{};
+    VkRenderPassBeginInfo bi{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
+    bi.renderPass = pass;
+    bi.framebuffer = framebuffer;
+    bi.renderArea = {{0, 0}, {16, 16}};
+    bi.clearValueCount = 2;
+    bi.pClearValues = clear;
+    test::vk_call("vkCmdBeginRenderPass", gpu.command, &bi, VK_SUBPASS_CONTENTS_INLINE);
+    test::vk_call("vkCmdEndRenderPass", gpu.command);
+    REQUIRE(ScissorHooks::areas.size() == 1);
+    CHECK(same(ScissorHooks::areas[0], {{0, 0}, {16, 16}}));
   }
   REQUIRE(test::vk_call("vkResetCommandBuffer", gpu.command, 0u) == VK_SUCCESS);
   test::vk_call("vkDestroyFramebuffer", gpu.device, framebuffer, nullptr);
@@ -1164,6 +1267,217 @@ TEST_CASE("Vulkan Android hardware buffers share GPU payloads through allocation
   call("vkDestroyDevice", device, nullptr);
 }
 
+// Unity's Vulkan VideoPlayer (AndroidVideoMedia): MediaCodec decodes into an
+// AImageReader's window (PRIVATE, GPU_SAMPLED_IMAGE, three images); the render
+// thread acquires the latest image, imports its AHardwareBuffer once per buffer,
+// samples it, and releases the previous image by submitting an empty batch with
+// a fence and exporting that fence's SYNC_FD for AImage_deleteAsync. A failed
+// export or -1 sends Unity to vkWaitForFences without a timeout on the fence the
+// export reset: Syberia VR and Bad Inmate froze at their intro videos.
+TEST_CASE("Unity's Vulkan video player cycles AImageReader frames through AHB imports and fence releases") {
+  test::VulkanDevice gpu;
+  vulkan::register_hardware_buffer_allocator();
+  if (!vulkan::hardware_buffers_supported()) {
+    MESSAGE("Host lacks external memory handles; hardware validation required");
+    return;
+  }
+  auto media = [](const char* name, std::initializer_list<std::uint64_t> args) {
+    return static_cast<std::int32_t>(test::android_call("libmediandk.so", name, args).x0);
+  };
+  constexpr std::uint32_t width = 64, height = 36;
+  constexpr std::int32_t private_format = 0x22, max_images = 3, frames = 10;
+  GuestAddr reader = 0;
+  REQUIRE(media("AImageReader_newWithUsage",
+                {width, height, private_format, android::ahb::gpu_sampled_image, max_images, h2g(&reader)}) == 0);
+  std::atomic<int> announced{0};
+  auto callback = test::android_callback([&](const GuestCallArgs&) {
+    ++announced;
+    return GuestCallResult{};
+  });
+  GuestAddr listener[2]{0, callback};
+  REQUIRE(media("AImageReader_setImageListener", {reader, h2g(listener)}) == 0);
+  GuestAddr window_address = 0;
+  REQUIRE(media("AImageReader_getWindow", {reader, h2g(&window_address)}) == 0);
+  auto* window = android::native_window_from_guest(window_address);
+  REQUIRE(window);
+
+  std::uint32_t count = 0;
+  call("vkGetPhysicalDeviceQueueFamilyProperties", gpu.physical, &count, nullptr);
+  std::vector<VkQueueFamilyProperties> families(count);
+  call("vkGetPhysicalDeviceQueueFamilyProperties", gpu.physical, &count, families.data());
+  std::uint32_t family = 0;
+  while (!(families[family].queueFlags & VK_QUEUE_GRAPHICS_BIT)) ++family;
+  float priority = 1;
+  VkDeviceQueueCreateInfo qi{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};
+  qi.queueFamilyIndex = family;
+  qi.queueCount = 1;
+  qi.pQueuePriorities = &priority;
+  const char* names[]{"VK_ANDROID_external_memory_android_hardware_buffer", "VK_EXT_queue_family_foreign",
+                      "VK_KHR_external_fence_fd"};
+  VkDeviceCreateInfo di{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
+  di.queueCreateInfoCount = 1;
+  di.pQueueCreateInfos = &qi;
+  di.enabledExtensionCount = 3;
+  di.ppEnabledExtensionNames = names;
+  VkDevice device{};
+  REQUIRE(call("vkCreateDevice", gpu.physical, &di, nullptr, &device) == VK_SUCCESS);
+  VkQueue queue{};
+  call("vkGetDeviceQueue", device, family, 0u, &queue);
+
+  VkBufferCreateInfo bi{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+  bi.size = width * height * 4;
+  bi.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+  VkBuffer readback{};
+  REQUIRE(call("vkCreateBuffer", device, &bi, nullptr, &readback) == VK_SUCCESS);
+  VkMemoryRequirements requirements{};
+  call("vkGetBufferMemoryRequirements", device, readback, &requirements);
+  VkPhysicalDeviceMemoryProperties memory_properties{};
+  call("vkGetPhysicalDeviceMemoryProperties", gpu.physical, &memory_properties);
+  std::uint32_t host_type = 0;
+  while (!((requirements.memoryTypeBits >> host_type) & 1) ||
+         !(memory_properties.memoryTypes[host_type].propertyFlags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT))
+    ++host_type;
+  VkMemoryAllocateInfo host_allocation{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, nullptr, requirements.size, host_type};
+  VkDeviceMemory readback_memory{};
+  REQUIRE(call("vkAllocateMemory", device, &host_allocation, nullptr, &readback_memory) == VK_SUCCESS);
+  REQUIRE(call("vkBindBufferMemory", device, readback, readback_memory, VkDeviceSize{0}) == VK_SUCCESS);
+  VkCommandPoolCreateInfo pi{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO, nullptr,
+                             VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT, family};
+  VkCommandPool pool{};
+  REQUIRE(call("vkCreateCommandPool", device, &pi, nullptr, &pool) == VK_SUCCESS);
+  VkCommandBufferAllocateInfo ci{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO, nullptr, pool,
+                                 VK_COMMAND_BUFFER_LEVEL_PRIMARY, 1};
+  VkCommandBuffer command{};
+  REQUIRE(call("vkAllocateCommandBuffers", device, &ci, &command) == VK_SUCCESS);
+  VkFenceCreateInfo fence_info{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+  VkFence frame_fence{};
+  REQUIRE(call("vkCreateFence", device, &fence_info, nullptr, &frame_fence) == VK_SUCCESS);
+  VkExportFenceCreateInfo export_fence{VK_STRUCTURE_TYPE_EXPORT_FENCE_CREATE_INFO, nullptr,
+                                       VK_EXTERNAL_FENCE_HANDLE_TYPE_SYNC_FD_BIT};
+  fence_info.pNext = &export_fence;
+  VkFence release_fence{};
+  REQUIRE(call("vkCreateFence", device, &fence_info, nullptr, &release_fence) == VK_SUCCESS);
+
+  // Imports cached per AHardwareBuffer, as Unity's video texture cache keeps them.
+  struct Import {
+    VkImage image{};
+    VkDeviceMemory memory{};
+  };
+  std::map<GuestAddr, Import> imports;
+  auto& table = hle::libc::FdTable::get();
+  const VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+  GuestAddr previous = 0;
+  for (int frame = 0; frame < frames; ++frame) {
+    CAPTURE(frame);
+    // The codec's surface sink publishes each decoded picture to the window.
+    std::vector<std::uint8_t> pixels(width * height * 4);
+    for (std::size_t n = 0; n < pixels.size(); ++n) pixels[n] = std::uint8_t(n * 3 + frame * 29);
+    REQUIRE(android::publish_window_rgba(window, pixels, width, height, false, frame * 33'333'333ll) == 0);
+    REQUIRE(test::wait_until([&] { return announced.load() > frame; }));
+
+    GuestAddr image = 0;
+    REQUIRE(media("AImageReader_acquireLatestImage", {reader, h2g(&image)}) == 0);
+    GuestAddr buffer = 0;
+    REQUIRE(media("AImage_getHardwareBuffer", {image, h2g(&buffer)}) == 0);
+    REQUIRE(buffer);
+    auto& imported = imports[buffer];
+    if (!imported.image) {
+      VkAndroidHardwareBufferFormatPropertiesANDROID format{
+          VK_STRUCTURE_TYPE_ANDROID_HARDWARE_BUFFER_FORMAT_PROPERTIES_ANDROID};
+      VkAndroidHardwareBufferPropertiesANDROID properties{VK_STRUCTURE_TYPE_ANDROID_HARDWARE_BUFFER_PROPERTIES_ANDROID,
+                                                          &format};
+      REQUIRE(call("vkGetAndroidHardwareBufferPropertiesANDROID", device, g2h<AHardwareBuffer>(buffer), &properties) ==
+              VK_SUCCESS);
+      REQUIRE(format.format == VK_FORMAT_R8G8B8A8_UNORM);
+      VkExternalMemoryImageCreateInfo external{VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO, nullptr,
+                                               VK_EXTERNAL_MEMORY_HANDLE_TYPE_ANDROID_HARDWARE_BUFFER_BIT_ANDROID};
+      VkImageCreateInfo image_info{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO, &external};
+      image_info.imageType = VK_IMAGE_TYPE_2D;
+      image_info.format = format.format;
+      image_info.extent = {width, height, 1};
+      image_info.mipLevels = image_info.arrayLayers = 1;
+      image_info.samples = VK_SAMPLE_COUNT_1_BIT;
+      image_info.tiling = VK_IMAGE_TILING_OPTIMAL;
+      image_info.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+      REQUIRE(call("vkCreateImage", device, &image_info, nullptr, &imported.image) == VK_SUCCESS);
+      VkMemoryDedicatedAllocateInfo dedicated{VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO, nullptr,
+                                              imported.image};
+      VkImportAndroidHardwareBufferInfoANDROID import_info{
+          VK_STRUCTURE_TYPE_IMPORT_ANDROID_HARDWARE_BUFFER_INFO_ANDROID, &dedicated, g2h<AHardwareBuffer>(buffer)};
+      VkMemoryAllocateInfo allocation{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, &import_info, properties.allocationSize,
+                                      static_cast<std::uint32_t>(std::countr_zero(properties.memoryTypeBits))};
+      REQUIRE(call("vkAllocateMemory", device, &allocation, nullptr, &imported.memory) == VK_SUCCESS);
+      REQUIRE(call("vkBindImageMemory", device, imported.image, imported.memory, VkDeviceSize{0}) == VK_SUCCESS);
+    }
+
+    // The frame's reads acquire the image from the foreign producer and return it.
+    REQUIRE(call("vkResetCommandBuffer", command, 0u) == VK_SUCCESS);
+    VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO, nullptr,
+                                   VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT};
+    REQUIRE(call("vkBeginCommandBuffer", command, &begin) == VK_SUCCESS);
+    VkImageMemoryBarrier acquire{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER, nullptr, 0, VK_ACCESS_TRANSFER_READ_BIT,
+                                 VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                 VK_QUEUE_FAMILY_FOREIGN_EXT, family, imported.image, range};
+    call("vkCmdPipelineBarrier", command, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0u, 0u,
+         nullptr, 0u, nullptr, 1u, &acquire);
+    VkBufferImageCopy region{};
+    region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    region.imageExtent = {width, height, 1};
+    call("vkCmdCopyImageToBuffer", command, imported.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, readback, 1u,
+         &region);
+    VkImageMemoryBarrier give_back{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER, nullptr, VK_ACCESS_TRANSFER_READ_BIT, 0,
+                                   VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL, family,
+                                   VK_QUEUE_FAMILY_FOREIGN_EXT, imported.image, range};
+    call("vkCmdPipelineBarrier", command, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0u,
+         0u, nullptr, 0u, nullptr, 1u, &give_back);
+    REQUIRE(call("vkEndCommandBuffer", command) == VK_SUCCESS);
+    VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+    submit.commandBufferCount = 1;
+    submit.pCommandBuffers = &command;
+    REQUIRE(call("vkResetFences", device, 1u, &frame_fence) == VK_SUCCESS);
+    REQUIRE(call("vkQueueSubmit", queue, 1u, &submit, frame_fence) == VK_SUCCESS);
+
+    // Unity's release of the previous image: reset, empty batch with the fence,
+    // SYNC_FD export for AImage_deleteAsync.
+    if (previous) {
+      REQUIRE(call("vkResetFences", device, 1u, &release_fence) == VK_SUCCESS);
+      VkSubmitInfo empty{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+      REQUIRE(call("vkQueueSubmit", queue, 1u, &empty, release_fence) == VK_SUCCESS);
+      VkFenceGetFdInfoKHR get{VK_STRUCTURE_TYPE_FENCE_GET_FD_INFO_KHR, nullptr, release_fence,
+                              VK_EXTERNAL_FENCE_HANDLE_TYPE_SYNC_FD_BIT};
+      int fd = -1;
+      REQUIRE(call("vkGetFenceFdKHR", device, &get, &fd) == VK_SUCCESS);
+      REQUIRE(fd >= 0);  // -1 would leave Unity waiting forever on release_fence
+      REQUIRE(table.file(fd));
+      media("AImage_deleteAsync", {previous, std::uint64_t(fd)});
+      CHECK_FALSE(table.file(fd));  // the image took the release fence
+    }
+    previous = image;
+
+    REQUIRE(call("vkWaitForFences", device, 1u, &frame_fence, VK_TRUE, 5'000'000'000ull) == VK_SUCCESS);
+    void* mapped = nullptr;
+    REQUIRE(call("vkMapMemory", device, readback_memory, VkDeviceSize{0}, VK_WHOLE_SIZE, 0u, &mapped) == VK_SUCCESS);
+    CHECK(std::memcmp(mapped, pixels.data(), pixels.size()) == 0);
+    call("vkUnmapMemory", device, readback_memory);
+  }
+  media("AImage_delete", {previous});
+  // Two images in flight at a time: the pool holds two buffers, both imported once.
+  CHECK(imports.size() == 2);
+
+  media("AImageReader_delete", {reader});
+  test::android_remove_callback(callback);
+  for (auto& [buffer, imported] : imports) {
+    call("vkDestroyImage", device, imported.image, nullptr);
+    call("vkFreeMemory", device, imported.memory, nullptr);
+  }
+  call("vkDestroyFence", device, frame_fence, nullptr);
+  call("vkDestroyFence", device, release_fence, nullptr);
+  call("vkDestroyCommandPool", device, pool, nullptr);
+  call("vkDestroyBuffer", device, readback, nullptr);
+  call("vkFreeMemory", device, readback_memory, nullptr);
+  call("vkDestroyDevice", device, nullptr);
+}
+
 TEST_CASE("Vulkan Android surfaces retain windows and follow buffer geometry") {
   std::uint32_t count = 0;
   REQUIRE(call("vkEnumerateInstanceExtensionProperties", nullptr, &count, nullptr) == VK_SUCCESS);
@@ -1406,6 +1720,103 @@ TEST_CASE("Vulkan preserves guest core robustness and null descriptor enablement
   CHECK(robust.pNext == nullptr);
 }
 
+TEST_CASE("Vulkan enables null descriptors so unbound vertex bindings read zero") {
+  test::VulkanDevice resources;
+  // Ask the host directly whether it supports nullDescriptor.
+  auto& host = gfx::gpu_device();
+  auto enumerate = reinterpret_cast<PFN_vkEnumerateDeviceExtensionProperties>(
+      host.get_instance_proc_addr(host.instance, "vkEnumerateDeviceExtensionProperties"));
+  auto query = reinterpret_cast<PFN_vkGetPhysicalDeviceFeatures2>(
+      host.get_instance_proc_addr(host.instance, "vkGetPhysicalDeviceFeatures2"));
+  std::uint32_t count = 0;
+  enumerate(host.physical_device, nullptr, &count, nullptr);
+  std::vector<VkExtensionProperties> extensions(count);
+  enumerate(host.physical_device, nullptr, &count, extensions.data());
+  const bool listed = std::ranges::any_of(extensions, [](const auto& e) {
+    return std::string_view(e.extensionName) == VK_EXT_ROBUSTNESS_2_EXTENSION_NAME ||
+           std::string_view(e.extensionName) == VK_KHR_ROBUSTNESS_2_EXTENSION_NAME;
+  });
+  VkPhysicalDeviceRobustness2FeaturesEXT host_robust{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ROBUSTNESS_2_FEATURES_EXT};
+  VkPhysicalDeviceFeatures2 host_features{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, &host_robust};
+  if (listed && query) query(host.physical_device, &host_features);
+  INFO("host nullDescriptor ", bool(host_robust.nullDescriptor));
+  auto& gpu = gfx::gpu_device();
+  static PFN_vkGetInstanceProcAddr original;
+  original = gpu.get_instance_proc_addr;
+  static bool null_descriptor, extension, other_robustness;
+  null_descriptor = extension = other_robustness = false;
+  struct Restore {
+    gfx::GpuDevice& gpu;
+    ~Restore() { gpu.get_instance_proc_addr = original; }
+  } restore{gpu};
+  gpu.get_instance_proc_addr = +[](VkInstance i, const char* name) -> PFN_vkVoidFunction {
+    if (std::string_view(name) == "vkCreateDevice")
+      return reinterpret_cast<PFN_vkVoidFunction>(+[](VkPhysicalDevice, const VkDeviceCreateInfo* info,
+          const VkAllocationCallbacks*, VkDevice*) -> VkResult {
+        for (auto* next = static_cast<const VkBaseInStructure*>(info->pNext); next; next = next->pNext)
+          if (next->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ROBUSTNESS_2_FEATURES_EXT) {
+            const auto& robust = *reinterpret_cast<const VkPhysicalDeviceRobustness2FeaturesEXT*>(next);
+            null_descriptor = robust.nullDescriptor;
+            other_robustness = robust.robustBufferAccess2 || robust.robustImageAccess2;
+          }
+        for (std::uint32_t e = 0; e < info->enabledExtensionCount; ++e)
+          extension |= std::string_view(info->ppEnabledExtensionNames[e]) == VK_EXT_ROBUSTNESS_2_EXTENSION_NAME ||
+                       std::string_view(info->ppEnabledExtensionNames[e]) == VK_KHR_ROBUSTNESS_2_EXTENSION_NAME;
+        return VK_ERROR_INITIALIZATION_FAILED;
+      });
+    return original(i, name);
+  };
+  float priority = 1;
+  VkDeviceQueueCreateInfo queue{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};
+  queue.queueFamilyIndex = resources.family; queue.queueCount = 1; queue.pQueuePriorities = &priority;
+  VkDeviceCreateInfo info{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
+  info.queueCreateInfoCount = 1; info.pQueueCreateInfos = &queue;
+  VkDevice device{};
+  CHECK(call("vkCreateDevice", resources.physical, &info, nullptr, &device) == VK_ERROR_INITIALIZATION_FAILED);
+  // Only nullDescriptor: the robustness features that cost performance stay off.
+  CHECK(null_descriptor == bool(host_robust.nullDescriptor));
+  CHECK(extension == bool(host_robust.nullDescriptor));
+  CHECK_FALSE(other_robustness);
+}
+
+TEST_CASE("Vulkan calls on a device a failed vkCreateDevice left behind never reach the loader") {
+  // AC Nexus went on after the host driver refused its device (VK_ERROR_INITIALIZATION_FAILED)
+  // and called vkGetDeviceQueue; the loader aborted the process on the invalid device.
+  test::VulkanDevice resources;
+  auto& gpu = gfx::gpu_device();
+  static PFN_vkGetInstanceProcAddr original;
+  original = gpu.get_instance_proc_addr;
+  struct Restore {
+    gfx::GpuDevice& gpu;
+    ~Restore() { gpu.get_instance_proc_addr = original; }
+  } restore{gpu};
+  gpu.get_instance_proc_addr = +[](VkInstance i, const char* name) -> PFN_vkVoidFunction {
+    if (std::string_view(name) == "vkCreateDevice")
+      return reinterpret_cast<PFN_vkVoidFunction>(+[](VkPhysicalDevice, const VkDeviceCreateInfo*,
+          const VkAllocationCallbacks*, VkDevice*) -> VkResult { return VK_ERROR_INITIALIZATION_FAILED; });
+    return original(i, name);
+  };
+  float priority = 1;
+  VkDeviceQueueCreateInfo queue_ci{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};
+  queue_ci.queueFamilyIndex = resources.family; queue_ci.queueCount = 1; queue_ci.pQueuePriorities = &priority;
+  VkDeviceCreateInfo info{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
+  info.queueCreateInfoCount = 1; info.pQueueCreateInfos = &queue_ci;
+  VkDevice device{};
+  REQUIRE(call("vkCreateDevice", resources.physical, &info, nullptr, &device) == VK_ERROR_INITIALIZATION_FAILED);
+  for (auto stale : {device, VkDevice{}, reinterpret_cast<VkDevice>(std::uintptr_t{0x1234560})}) {
+    VkQueue queue{};
+    call("vkGetDeviceQueue", stale, resources.family, 0u, &queue);
+    CHECK_FALSE(queue);
+    CHECK(call("vkDeviceWaitIdle", stale) == static_cast<std::uint64_t>(VK_ERROR_DEVICE_LOST));
+    CHECK(call("vkGetDeviceProcAddr", stale, "vkQueueSubmit") == 0);
+  }
+  call("vkDestroyDevice", VkDevice{}, nullptr);  // a valid no-op
+  // The real device still works.
+  VkQueue queue{};
+  call("vkGetDeviceQueue", resources.device, resources.family, 0u, &queue);
+  CHECK(queue);
+}
+
 TEST_CASE("Vulkan swapchains are emulated without a host surface") {
   test::VulkanDevice gpu(false, true);
   auto* window = android::create_native_window(40, 30);
@@ -1608,4 +2019,94 @@ TEST_CASE("Vulkan guest memory frees wait for the work submitted before them") {
   CHECK(range_released);
   call("vkDestroyEvent", gpu.device, event, nullptr);
   call("vkDestroyBuffer", gpu.device, buffer, nullptr);
+}
+TEST_CASE("Vulkan device fault addresses are matched to live, unbound or no reported GPU ranges") {
+  vulkan::address_log_reset();
+  auto contains = [](const std::vector<std::string>& lines, std::string_view text) {
+    return std::ranges::any_of(lines, [&](const auto& line) { return line.find(text) != std::string::npos; });
+  };
+  CHECK(contains(vulkan::address_log_matches(0x1000, 0x1000), "no GPU address bindings were reported"));
+  vulkan::address_log_note(true, 0x10000, 0x4000, VK_OBJECT_TYPE_BUFFER, 0xb1);
+  vulkan::address_log_note(true, 0x20000, 0x1000, VK_OBJECT_TYPE_IMAGE, 0x11);
+  vulkan::address_log_note(true, 0x30000, 0x2000, VK_OBJECT_TYPE_DESCRIPTOR_POOL, 0xd1,
+                           VK_DEVICE_ADDRESS_BINDING_INTERNAL_OBJECT_BIT_EXT);
+  vulkan::address_log_note(false, 0x30000, 0x2000, VK_OBJECT_TYPE_DESCRIPTOR_POOL, 0xd1,
+                           VK_DEVICE_ADDRESS_BINDING_INTERNAL_OBJECT_BIT_EXT);
+  // A page-precision report inside the buffer names it; the fault's page start
+  // may lie below the range when the range starts mid-page.
+  auto lines = vulkan::address_log_matches(0x12345, 0x1000);
+  REQUIRE(lines.size() == 1);
+  CHECK(lines[0].find("live range type=9 handle=0xb1") != std::string::npos);
+  CHECK(contains(vulkan::address_log_matches(0x20ff0, 0x1000), "handle=0x11"));
+  // Freed while in flight: the unbound range is named.
+  lines = vulkan::address_log_matches(0x31000, 0x1000);
+  REQUIRE(lines.size() == 1);
+  CHECK(lines[0].find("unbound range type=22 handle=0xd1") != std::string::npos);
+  CHECK(lines[0].find("internal") != std::string::npos);
+  // A poison-looking address no range ever held, with its neighbours.
+  lines = vulkan::address_log_matches(0xbeefdeadb000, 0x1000);
+  CHECK(contains(lines, "lies in no range"));
+  CHECK(contains(lines, "nearest live range below: type=10 handle=0x11"));
+  CHECK_FALSE(contains(lines, "nearest live range above"));
+  vulkan::address_log_reset();
+}
+TEST_CASE("Vulkan repeated signals of a never-waited binary semaphore are dropped until its first wait") {
+  test::VulkanDevice gpu;
+  std::uint32_t count = 0;
+  call("vkGetPhysicalDeviceQueueFamilyProperties", gpu.physical, &count, nullptr);
+  std::vector<VkQueueFamilyProperties> families(count);
+  call("vkGetPhysicalDeviceQueueFamilyProperties", gpu.physical, &count, families.data());
+  std::uint32_t family = 0;
+  while (!(families[family].queueFlags & VK_QUEUE_GRAPHICS_BIT)) ++family;
+  float priority = 1;
+  VkDeviceQueueCreateInfo qi{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};
+  qi.queueFamilyIndex = family; qi.queueCount = 1; qi.pQueuePriorities = &priority;
+  VkDeviceCreateInfo di{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
+  di.queueCreateInfoCount = 1; di.pQueueCreateInfos = &qi;
+  VkDevice device{};
+  REQUIRE(call("vkCreateDevice", gpu.physical, &di, nullptr, &device) == VK_SUCCESS);
+  VkQueue queue{};
+  call("vkGetDeviceQueue", device, family, 0u, &queue);
+  VkSemaphoreCreateInfo si{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
+  VkSemaphore a{}, b{};
+  REQUIRE(call("vkCreateSemaphore", device, &si, nullptr, &a) == VK_SUCCESS);
+  REQUIRE(call("vkCreateSemaphore", device, &si, nullptr, &b) == VK_SUCCESS);
+
+  VkSubmitInfo signal{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+  signal.signalSemaphoreCount = 1; signal.pSignalSemaphores = &a;
+  vulkan::BinarySignalStorage first, second, both, waited, again;
+  CHECK(vulkan::filter_binary_signals(queue, 1, &signal, first) == &signal);  // first signal kept
+  const auto* repeated = vulkan::filter_binary_signals(queue, 1, &signal, second);
+  REQUIRE(repeated != &signal);
+  CHECK(repeated->signalSemaphoreCount == 0);  // a still holds the first signal
+  VkSemaphore pair[]{a, b};
+  signal.signalSemaphoreCount = 2; signal.pSignalSemaphores = pair;
+  const auto* mixed = vulkan::filter_binary_signals(queue, 1, &signal, both);
+  REQUIRE(mixed->signalSemaphoreCount == 1);
+  CHECK(mixed->pSignalSemaphores[0] == b);  // b's first signal survives
+
+  // After its first wait, a keeps every signal.
+  VkPipelineStageFlags stage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+  VkSubmitInfo cycle{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+  cycle.waitSemaphoreCount = 1; cycle.pWaitSemaphores = &a; cycle.pWaitDstStageMask = &stage;
+  cycle.signalSemaphoreCount = 1; cycle.pSignalSemaphores = &a;
+  CHECK(vulkan::filter_binary_signals(queue, 1, &cycle, waited) == &cycle);
+  signal.signalSemaphoreCount = 1; signal.pSignalSemaphores = &a;
+  CHECK(vulkan::filter_binary_signals(queue, 1, &signal, again) == &signal);
+
+  // Submit2: a nonzero value may name a timeline semaphore and is kept.
+  VkSemaphoreSubmitInfo info2{VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
+  info2.semaphore = b; info2.value = 7;
+  VkSubmitInfo2 signal2{VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
+  signal2.signalSemaphoreInfoCount = 1; signal2.pSignalSemaphoreInfos = &info2;
+  vulkan::BinarySignalStorage valued, binary;
+  CHECK(vulkan::filter_binary_signals(queue, 1, &signal2, valued) == &signal2);
+  info2.value = 0;
+  const auto* dropped = vulkan::filter_binary_signals(queue, 1, &signal2, binary);
+  REQUIRE(dropped != &signal2);
+  CHECK(dropped->signalSemaphoreInfoCount == 0);
+
+  call("vkDestroySemaphore", device, b, nullptr);
+  call("vkDestroySemaphore", device, a, nullptr);
+  call("vkDestroyDevice", device, nullptr);
 }

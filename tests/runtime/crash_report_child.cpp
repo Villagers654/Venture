@@ -7,6 +7,9 @@
 #include "core/address_space.h"
 #include "core/signals.h"
 #include "core/thread.h"
+#ifdef _WIN32
+#include <windows.h>
+#endif
 #include <cstdlib>
 #include <fstream>
 #include <string>
@@ -14,7 +17,10 @@
 __attribute__((noinline)) void host_fault(std::uintptr_t address) {
   *reinterpret_cast<volatile unsigned*>(address) = 42;
 }
-__attribute__((noinline)) void null_call(void (*volatile function)()) { function(); }
+__attribute__((noinline)) void null_call(void (*function)()) {
+  void (*volatile target)() = function;  // the compiler cannot drop the call
+  target();
+}
 int translated_fault(int) {
   venture::signals::log_guest_threads("frame-chain crash fixture");
   host_fault(0);
@@ -78,6 +84,11 @@ int main(int argc, char** argv) {
     return 6;
   }
   if (mode == "null-call") null_call(nullptr);
+#ifdef _WIN32
+  // A fault while the process heap lock is held (heap corruption caught in
+  // RtlFreeHeap): the dump cannot finish, and the process must still end.
+  if (mode == "heap-locked") HeapLock(GetProcessHeap());
+#endif
   host_fault(std::strtoull(argv[3], nullptr, 0));
   return 5;
 }

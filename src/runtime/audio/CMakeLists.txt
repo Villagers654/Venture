@@ -1,9 +1,11 @@
 add_library(venture_audio STATIC
   miniaudio_impl.c
   audio.cpp
+  output_mirror.cpp
   ../media/media.cpp
   ../hle/aaudio/aaudio.cpp
   ../hle/opensles/opensles.cpp
+  ../hle/ovrplatform/microphone.cpp
 )
 target_include_directories(venture_audio PUBLIC ${PROJECT_SOURCE_DIR}/src/runtime)
 target_include_directories(venture_audio SYSTEM PUBLIC ${miniaudio_SOURCE_DIR})

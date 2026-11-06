@@ -45,6 +45,7 @@ public class Fragment {
   public void requestPermissions(String[] permissions, int request) {
     if (activity == null) throw new IllegalStateException("Fragment not attached");
     String[] names = permissions.clone();
+    com.venture.runtime.RuntimePermissions.request(activity.getPackageName(), names);
     int[] results = java.util.Arrays.stream(names).mapToInt(activity::checkSelfPermission).toArray();
     new Handler(activity.getMainLooper()).post(() -> {
       if (manager != null) onRequestPermissionsResult(request, names, results);

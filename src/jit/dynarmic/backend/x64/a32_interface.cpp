@@ -236,6 +236,23 @@ private:
     }
 
     [[gnu::noinline]] A32EmitX64::BlockDescriptor CompileBlock(IR::LocationDescriptor descriptor) {
+        // Venture: a refused commit of code pages or unwind entries evicts all
+        // translated code, whose pages stay committed, and compiles once more
+        // (as the A64 front end; same dispatcher-only contexts as the evacuation).
+        try {
+            return CompileBlockOnce(descriptor);
+        } catch (const Xbyak::Error& error) {
+            if (int(error) != Xbyak::ERR_CANT_ALLOC)
+                throw;
+        }
+        if (conf.code_allocation_failed)
+            conf.code_allocation_failed(block_of_code.FailedCommitSize(), block_of_code.CommittedSize(), conf.code_cache_size);
+        invalidate_entire_cache = true;
+        PerformRequestedCacheInvalidation(HaltReason::CacheInvalidation);
+        return CompileBlockOnce(descriptor);
+    }
+
+    A32EmitX64::BlockDescriptor CompileBlockOnce(IR::LocationDescriptor descriptor) {
         // Keep the compiler's host FP environment off the cached lookup path.
         const unsigned saved_mxcsr = _mm_getcsr();
         SCOPE_EXIT { _mm_setcsr(saved_mxcsr); };

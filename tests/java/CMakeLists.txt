@@ -41,7 +41,10 @@ if(TARGET venture-framework)
   endif()
 
   add_test(NAME framework_virtual_files COMMAND "${Python3_EXECUTABLE}"
-    "${CMAKE_CURRENT_SOURCE_DIR}/virtual_files_rewrite_test.py" "${VENTURE_FRAMEWORK_JAR}")
+    "${CMAKE_CURRENT_SOURCE_DIR}/virtual_files_rewrite_test.py" "${VENTURE_FRAMEWORK_JAR}" "${VENTURE_JAVA_BRIDGE_JAR}")
+  # R8's superclass-constructor calls on a new-instance (Open Brush, Unity's UnityPlayer).
+  add_test(NAME dex_super_init COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/super_init_test.py")
+  set_tests_properties(dex_super_init PROPERTIES TIMEOUT 120)
 
   # Several JVM fixtures take ~16 s even on an idle host. Assertions in the
   # fixtures test behavior; this bound only catches a stalled suite.

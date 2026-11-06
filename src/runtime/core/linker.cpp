@@ -10,6 +10,7 @@
 #include "core/thread_runtime.h"
 #include "core/tls.h"
 #include "core/address_space.h"
+#include "core/a32_abi.h"
 #include "common/log.h"
 #include <algorithm>
 #include <chrono>
@@ -27,14 +28,19 @@ struct HleLibrary::Impl {
   mutable std::mutex mutex;
   std::unordered_map<std::string, GuestAddr> symbols;
   std::set<std::string, std::less<>> functions;
+  std::set<std::string, std::less<>> absent;  // A32 exports bound to the ABI trap
+  mutable std::set<std::string, std::less<>> reported;
   std::shared_ptr<elf::Image> backing;
 };
 HleLibrary::HleLibrary(std::string soname, std::vector<std::string> aliases) : impl_(std::make_shared<Impl>()), aliases_(std::move(aliases)) {
   soname_ = std::move(soname); path_ = process_config().guest_system_lib_dir() + "/" + soname_; hle_ = true;
 }
 void HleLibrary::add_function(std::string_view name, GuestAddr thunk) {
+  // The thunk's A32 binding was selected when it was registered (a32::prepare).
+  const bool absent = process_config().isa() == GuestIsa::a32 && !hle::a32::callable(soname_, name);
   std::lock_guard lock(impl_->mutex);
   impl_->symbols[std::string(name)] = thunk; impl_->functions.emplace(name);
+  if (absent) impl_->absent.emplace(name); else if (auto it = impl_->absent.find(name); it != impl_->absent.end()) impl_->absent.erase(it);
 }
 void HleLibrary::add_data(std::string_view name, GuestAddr address) {
   if (process_config().isa() == GuestIsa::a32 && address >= (1ull << 32)) {
@@ -43,6 +49,7 @@ void HleLibrary::add_data(std::string_view name, GuestAddr address) {
   }
   std::lock_guard lock(impl_->mutex); impl_->symbols[std::string(name)] = address;
   impl_->functions.erase(std::string(name));
+  if (auto it = impl_->absent.find(name); it != impl_->absent.end()) impl_->absent.erase(it);
 }
 bool HleLibrary::is_function(std::string_view name) const {
   std::lock_guard lock(impl_->mutex); return impl_->functions.contains(name);
@@ -57,6 +64,19 @@ GuestAddr HleLibrary::hle_symbol(std::string_view name) const {
   std::lock_guard lock(impl_->mutex);
   auto it = impl_->symbols.find(std::string(name));
   return it != impl_->symbols.end() ? it->second : 0;
+}
+GuestAddr HleLibrary::callable_symbol(std::string_view name) const {
+  std::lock_guard lock(impl_->mutex);
+  auto it = impl_->symbols.find(std::string(name));
+  if (it == impl_->symbols.end()) return 0;
+  if (!impl_->absent.empty())
+    if (auto absent = impl_->absent.find(name); absent != impl_->absent.end()) {
+      // Once per export: a caller that uses the null anyway faults right after.
+      if (impl_->reported.insert(*absent).second)
+        log::warn("linker", "{}!{} has no A32 adapter; dlsym and weak imports see it as absent", soname_, name);
+      return 0;
+    }
+  return it->second;
 }
 GuestAddr HleLibrary::find_symbol(std::string_view name, std::string_view version) const {
   std::lock_guard lock(linker_lifecycle_mutex());
@@ -149,6 +169,22 @@ bool backing_exports(State& s, HleLibrary* slot, std::string_view name, std::str
   }
   return it->second.contains(std::string(name));
 }
+// A registered slot whose identity exports this image defines: the same API
+// bundled again under another file name. Mapping that copy would run the real
+// implementation, which then fails without the device services behind it.
+std::shared_ptr<Library> identified_slot(State& s, const elf::Image& image) {
+  for (const auto& lib : s.libraries) {
+    auto* slot = dynamic_cast<HleLibrary*>(lib.get());
+    if (!slot || slot->identity().empty()) continue;
+    if (std::all_of(slot->identity().begin(), slot->identity().end(),
+                    [&](const std::string& name) { return image.lookup(name) != nullptr; }))
+      return lib;
+  }
+  return {};
+}
+// No file or provider under that name: an ordinary dlopen result when the
+// requested library itself is absent (apps probe optional plugins).
+struct LibraryNotFound : std::runtime_error { using std::runtime_error::runtime_error; };
 std::shared_ptr<Library> load(State& s, std::string_view name, int flags, bool backing = false,
                               const elf::Placement* placement = nullptr) {
   auto key = std::string(name);
@@ -170,7 +206,14 @@ std::shared_ptr<Library> load(State& s, std::string_view name, int flags, bool b
     image->global |= (flags & kRtldGlobal) != 0;
     image->nodelete |= (flags & kRtldNoDelete) != 0;
     if (auto* hle = dynamic_cast<HleLibrary*>(lib.get())) hle->set_backing(std::move(image));
-    else lib = std::move(image);
+    else if (auto slot = identified_slot(s, *image)) {
+      log::info("linker", "Serving {} as {}: it exports that library's identifying API", base, slot->soname());
+      image.reset();
+      auto* hle = static_cast<HleLibrary*>(slot.get());
+      if (!s.backing_files.contains(hle)) s.backing_files[hle] = path;
+      s.names[key] = slot; s.names[base] = slot;
+      return slot;
+    } else lib = std::move(image);
   } else if (lib) {
     return lib;
   } else if (system_library(base) || key.starts_with(process_config().guest_system_lib_dir() + "/")) {
@@ -178,7 +221,7 @@ std::shared_ptr<Library> load(State& s, std::string_view name, int flags, bool b
     auto hle = std::make_shared<HleLibrary>(base);
     if (base == "libc.so") hle->add_function("__tls_get_addr", tls::get_addr_thunk());
     lib = std::move(hle);
-  } else throw std::runtime_error("library not found: " + key);
+  } else throw LibraryNotFound("library not found: " + key);
   if (!registered) s.libraries.push_back(lib);
   if (auto* image = lib->mapped_image(); image && image->isa() == GuestIsa::a32) {
     auto it = std::lower_bound(s.exidx_images.begin(), s.exidx_images.end(), image->map_start,
@@ -204,10 +247,12 @@ Library* canonical_caller(State& s, Library* caller) {
   return nullptr;
 }
 struct Definition { Library* library{}; const elf::Sym* symbol{}; GuestAddr address{}; };
-Definition lookup_one(Library* lib, std::string_view name, std::string_view version) {
+// hide_absent: dlsym and weak imports do not see A32 exports without an ABI
+// adapter (HleLibrary::callable_symbol); strong imports bind their trap.
+Definition lookup_one(Library* lib, std::string_view name, std::string_view version, bool hide_absent = true) {
   if (auto* hle = dynamic_cast<HleLibrary*>(lib)) {
     // Registered APIs override the backing, including its own relocations.
-    if (auto address = hle->hle_symbol(name)) return {lib, nullptr, address};
+    if (auto address = hide_absent ? hle->callable_symbol(name) : hle->hle_symbol(name)) return {lib, nullptr, address};
     if (!hle->mapped_image()) return {};
   }
   if (auto* image = lib->mapped_image()) {
@@ -221,9 +266,9 @@ Definition lookup_one(Library* lib, std::string_view name, std::string_view vers
 }
 Definition resolve(State& s, elf::Image* requester, const std::vector<Library*>& local,
                    std::string_view name, std::string_view version, bool skip_self = false,
-                   bool relocation = false) {
+                   bool relocation = false, bool hide_absent = true) {
   if (requester && requester->symbolic && !skip_self) {
-    auto d = lookup_one(requester->owner, name, version); if (d.library) return d;
+    auto d = lookup_one(requester->owner, name, version, hide_absent); if (d.library) return d;
   }
   // The host executable substitutes for app_process: its startup HLE APIs
   // must not disappear merely because their slots have no guest ELF flags.
@@ -232,20 +277,20 @@ Definition resolve(State& s, elf::Image* requester, const std::vector<Library*>&
     if (it == s.names.end()) continue;
     auto* lib = it->second.get();
     if (skip_self && requester && lib == requester->owner) continue;
-    auto d = lookup_one(lib, name, version); if (d.library) return d;
+    auto d = lookup_one(lib, name, version, hide_absent); if (d.library) return d;
   }
   for (auto* lib : s.globals) {
     if (skip_self && requester && lib == requester->owner) continue;
     // Registered APIs belong to the stable HLE slot, not to an optional APK
     // backing image. Guest backing exports still obey bionic's ELF global group.
     if (auto* hle = dynamic_cast<HleLibrary*>(lib))
-      if (auto address = hle->hle_symbol(name)) return {lib, nullptr, address};
+      if (auto address = hide_absent ? hle->callable_symbol(name) : hle->hle_symbol(name)) return {lib, nullptr, address};
     if (auto* image = lib->mapped_image(); relocation && (!image || !(image->dynamic(0x6ffffffb) & 2))) continue;
-    auto d = lookup_one(lib, name, version); if (d.library) return d;
+    auto d = lookup_one(lib, name, version, hide_absent); if (d.library) return d;
   }
   for (auto* lib : local) {
     if (skip_self && requester && lib == requester->owner) continue;
-    auto d = lookup_one(lib, name, version); if (d.library) return d;
+    auto d = lookup_one(lib, name, version, hide_absent); if (d.library) return d;
   }
   return {};
 }
@@ -368,7 +413,9 @@ Definition resolve_arm_import(State& s, elf::Image& image, const std::vector<Lib
   // A TLS symbol's value is its offset in the defining module's block.
   if (symbol.shndx && ((symbol.info >> 4) == 0 || (symbol.other & 3) == 2 || (symbol.other & 3) == 3))
     def = {image.owner, &symbol, (symbol.info & 15) == 6 || symbol.shndx == 0xfff1 ? symbol.value : image.load_bias + symbol.value};
-  else def = resolve(s, &image, group, name, version, false, true);
+  // A strong import of an A32 export without an adapter binds its ABI trap,
+  // as A64 binds an unimplemented import's stub; a weak one stays null.
+  else def = resolve(s, &image, group, name, version, false, true, (symbol.info >> 4) == 2);
   if (def.symbol && (def.symbol->info & 15) == 10)
     throw std::runtime_error("ARM32 IFUNC symbol is not implemented: " + std::string(name));
   // OBJECT imports require actual data storage, even if a provider mistakenly
@@ -602,7 +649,11 @@ Library* Linker::open_impl(std::string_view name, int flags, bool backing, const
   } catch (const ProcessExit&) { throw; }
   catch (const ThreadExit&) { throw; }
   catch (const std::exception& e) {
-    last_error = e.what(); log::error("linker", "{}", last_error);
+    last_error = e.what();
+    // An absent requested library is an expected probe result (bionic logs
+    // nothing); a missing dependency of a library that exists stays an error.
+    if (!root && dynamic_cast<const LibraryNotFound*>(&e)) log::warn("linker", "{}", last_error);
+    else log::error("linker", "{}", last_error);
     // Roll back every newly introduced object after a failed load; retain previously live images.
     std::set<Library*> removed;
     for (std::size_t i = initial_count; i < s.libraries.size(); ++i) removed.insert(s.libraries[i].get());
@@ -765,7 +816,7 @@ bool Linker::try_address_info(GuestAddr p, DlInfo* out, std::chrono::millisecond
   for (const auto end = std::chrono::steady_clock::now() + wait;
        !lock.owns_lock() && std::chrono::steady_clock::now() < end;) {
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    lock.try_lock();
+    if (lock.try_lock()) break;
   }
   return lock.owns_lock() && address_info(p, out);
 }

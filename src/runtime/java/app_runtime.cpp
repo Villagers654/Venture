@@ -36,6 +36,7 @@
 #include "core/lifecycle_grace.h"
 #include "xr/host_xr.h"
 #include "xr/native.h"
+#include "xr/vulkan_layers.h"
 #include "xr/session.h"
 #include "android/choreographer.h"
 #include "audio/audio.h"
@@ -317,10 +318,18 @@ void launch_android_app(const AppLaunchOptions& options) {
   }
   if (!start_jvm(jvm, &error)) throw std::runtime_error(error);
   xr::set_application_identity(apk_label(), process_config().package, process_config().version_code);
-  xr::disable_unused_vulkan_layers_for_process();
+  xr::configure_vulkan_layers_for_process();
   log::info("launch", "Initializing host OpenXR");
   auto& xr = xr::host_xr();
   if (!xr.available) throw std::runtime_error(xr.error);
+  // Games play and record on the headset's endpoint when the runtime names
+  // one, as native PC VR apps do; otherwise on the system default.
+  if (xr.enabled_extensions.contains("XR_OCULUS_audio_device_guid"))
+    audio::Backend::get().set_headset_endpoints(
+        xr.runtime_name + " (XR_OCULUS_audio_device_guid)",
+        [](audio::Direction direction) { return xr::headset_audio_endpoint(direction == audio::Direction::input); });
+  else
+    audio::Backend::get().set_headset_endpoints(xr.runtime_name + " names no headset endpoint (no XR_OCULUS_audio_device_guid)", nullptr);
   auto class_path = options.class_path;
   if (class_path.empty() && !process_config().has_code) {
     // As on Android, the class loader's path is the APK itself. With no code the
@@ -380,7 +389,7 @@ void launch_android_app(const AppLaunchOptions& options) {
     std::optional<std::chrono::steady_clock::time_point> destroy_delivered, save_began;
     std::optional<QuitQuietness> quietness;
     // A file save is the only remaining work (see save_quit_bound).
-    bool saving = false, save_announced = false, recency_logged = false;
+    bool saving = false, save_announced = false, recency_logged = false, startup_write_logged = false;
     QuitProgress menu_progress;
     bool menu_files_healthy = true;
     bool posted = false, interrupted = false, xr_stop_decided = false;
@@ -519,11 +528,32 @@ void launch_android_app(const AppLaunchOptions& options) {
         }
         expired = settled || (since >= destroy_settle_bound && !waiting);
       }
+      if (expired && os_quit::enabled && host_stop && files && !destroy_delivered &&
+          startup_quit(sample(), startup_diagnostics::first_frame_submitted(), guest_process_exit_status() > 0,
+                       grace.within_save_bound(clock)) == StartupQuit::wait) {
+        if (!startup_write_logged) {
+          startup_write_logged = true;
+          log::info("launch", "Quit before the first frame waits for a guest file write to finish (bound {} s)",
+                    save_quit_bound.count());
+        }
+        expired = false;
+      }
       if (closing && !interrupted && expired) {
         if (os_quit::enabled && host_stop && files) {
           if (execution) require_recorded_outcome(*execution);
           const auto bound_sample = sample();
           if (const char* unsettled = quit_admission(bound_sample, *quietness, clock)) {
+            // A quit while the game is still starting (see startup_quit): The
+            // Climb 2's native glue waits in onPause while CryEngine
+            // initializes, as does Reach's (UE5) while its engine starts.
+            if (startup_quit(bound_sample, startup_diagnostics::first_frame_submitted(),
+                             guest_process_exit_status() > 0, grace.within_save_bound(clock)) == StartupQuit::end) {
+              log::warn("launch", "Quit before the first frame; the lifecycle still waits on game startup ({}: {}, "
+                        "stages {:#x} of 0xf); ending the process as a Quest ends a removed task",
+                        unsettled, bound_sample.threads_quiet ? "threads quiet" : menu_quiet_error, menu_progress.stages);
+              shutdown_trace::snapshot("startup-quit");
+              exit_guest_process(0);
+            }
             if (!bound_sample.threads_quiet) {
               if (save_began)
                 log::error("launch", "Quit file save still running after {} ms",
@@ -570,10 +600,11 @@ void launch_android_app(const AppLaunchOptions& options) {
     const auto status = guest_process_exit_status();
     exit_guest_process(status < 0 ? 0 : status);
   }
+  // Android kills a process whose main thread died; nothing else holds it open.
+  if (!launched) end_app_after_main_thread_failure(error);
   shutdown_trace::phase("native-activities-destroy");
   destroy_native_activities();
   shutdown_trace::phase("native-activities-destroyed");
-  if (!launched) throw std::runtime_error(error);
   const auto status = guest_process_exit_status();
   // An exit the host did not request, before any XR frame, leaves the launcher
   // nothing to show: report it and never return success for it.

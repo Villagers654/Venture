@@ -1,6 +1,10 @@
 #include "common/environment.h"
-// Optional GPU progress markers. Transfers stay outside render passes; native
-// checkpoints, when exposed, also identify individual draws inside a pass.
+// Optional GPU progress markers. With VK_AMD_buffer_marker every draw, dispatch
+// and render pass boundary writes its marker at bottom of pipe, without
+// barriers. Elsewhere transfers mark boundaries outside render passes, and
+// native checkpoints, when exposed, also identify individual draws inside a pass.
+// Markers go to one slot per recorded command buffer, read per queue in
+// submission order (breadcrumb_streams.h).
 // VENTURE_VULKAN_BREADCRUMB_DIR additionally saves SPIR-V and a bounded record-time
 // snapshot of mapped descriptors. No GPU readbacks or cache flushes are added.
 #include <algorithm>
@@ -11,21 +15,29 @@
 #include <filesystem>
 #include <fstream>
 #include <map>
+#include <span>
 #include <mutex>
 #include <string>
 #include <unordered_map>
 
+#include "breadcrumb_streams.h"
 #include "common/log.h"
 #include "internal.h"
+#include "vulkan.h"
 
 namespace venture::vulkan {
 namespace {
-constexpr std::uint32_t slots = 4096;
+// Marker slots, one per recorded command buffer, reused round robin.
+constexpr std::uint32_t slots = 16384;
+// Records kept for the report: a few frames of per-draw markers.
+constexpr std::size_t kept_records = 32768;
 struct Device {
   VkBuffer buffer{};
   VkDeviceMemory memory{};
   std::uint32_t* mapped{};
-  bool checkpoints{};
+  bool checkpoints{}, coherent{true};
+  PFN_vkCmdWriteBufferMarkerAMD buffer_marker{};
+  std::uint32_t next_slot{};
 };
 struct Image {
   VkFormat format{};
@@ -52,6 +64,9 @@ struct State {
   std::map<VkPipelineBindPoint, Binding> bindings;
   std::vector<unsigned char> push_constants;
   bool in_pass{}, suspended{}, will_suspend{};
+  bool has_slot{}, simultaneous{}, marked{};
+  std::uint32_t slot{};
+  std::vector<std::uint32_t> secondary_slots;
 };
 std::recursive_mutex mutex;
 std::map<VkDevice, Device> devices;
@@ -84,10 +99,13 @@ std::map<VkDescriptorSet, VkDescriptorPool> descriptor_pools;
 std::map<VkCommandBuffer, State> commands;
 struct Record {
   VkDevice device{};
+  std::uint64_t command{};
   std::string text;
   std::map<std::string, std::vector<unsigned char>> bytes;
 };
 std::map<std::uint32_t, Record> records;
+breadcrumb::Streams streams;
+std::map<std::uint64_t, std::pair<VkDevice, VkQueue>> stream_queues;
 std::uint32_t serial{};
 std::size_t retained_bytes{};
 std::filesystem::path capture_directory() {
@@ -207,6 +225,16 @@ Record snapshot(const char* action, VkCommandBuffer cmd, State& state) {
   record.text = std::move(s);
   return record;
 }
+// Requires mutex. A slot is cleared only while no execution can write it: at
+// recording, and at a submission of a command buffer that is not pending.
+void clear_slots(VkDevice d, const Device& device, std::span<const std::uint32_t> cleared) {
+  if (!device.mapped || cleared.empty()) return;
+  for (auto slot : cleared) device.mapped[slot] = 0;
+  if (!device.coherent) {
+    VkMappedMemoryRange range{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE, nullptr, device.memory, 0, VK_WHOLE_SIZE};
+    vk<PFN_vkFlushMappedMemoryRanges>(d, "vkFlushMappedMemoryRanges")(d, 1, &range);
+  }
+}
 void mark(VkCommandBuffer cmd, const char* action) {
   std::lock_guard lock(mutex);
   auto d = command_device(cmd);
@@ -218,8 +246,9 @@ void mark(VkCommandBuffer cmd, const char* action) {
   const auto id = ++serial;
   if (!id) return;
   records[id] = snapshot(action, cmd, state);
+  records[id].command = h2g(cmd);
   for (auto& [name, bytes] : records[id].bytes) retained_bytes += bytes.size();
-  while (records.size() > slots || retained_bytes > 64 * 1024 * 1024) {
+  while (records.size() > kept_records || retained_bytes > 64 * 1024 * 1024) {
     for (auto& [name, bytes] : records.begin()->second.bytes)
       retained_bytes -= bytes.size();
     records.erase(records.begin());
@@ -227,14 +256,23 @@ void mark(VkCommandBuffer cmd, const char* action) {
   if (it->second.checkpoints)
     vk<PFN_vkCmdSetCheckpointNV>(d, "vkCmdSetCheckpointNV")(
         cmd, reinterpret_cast<const void*>(std::uintptr_t(id)));
-  if (state.in_pass || !it->second.mapped) return;
+  if (!it->second.mapped || !state.has_slot) return;
+  const VkDeviceSize offset = state.slot * 4ull;
+  if (it->second.buffer_marker) {
+    // Written once all earlier commands complete, in or outside a pass, with
+    // no added synchronization; the write itself reaches host memory.
+    it->second.buffer_marker(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, it->second.buffer, offset, id);
+    state.marked = true;
+    return;
+  }
+  if (state.in_pass) return;
   // Serialize the preceding work before the marker, and expose its write to
   // coherent host memory. vkCmdFillBuffer is never emitted inside a pass.
   vk<PFN_vkCmdPipelineBarrier>(d, "vkCmdPipelineBarrier")(
       cmd, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
       0, 0, nullptr, 0, nullptr, 0, nullptr);
-  vk<PFN_vkCmdFillBuffer>(d, "vkCmdFillBuffer")(cmd, it->second.buffer,
-                                                (id % slots) * 4ull, 4, id);
+  vk<PFN_vkCmdFillBuffer>(d, "vkCmdFillBuffer")(cmd, it->second.buffer, offset, 4, id);
+  state.marked = true;
   VkMemoryBarrier barrier{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
   barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
   barrier.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
@@ -247,12 +285,28 @@ VkResult VKAPI_CALL begin(VkCommandBuffer c,
   auto r = next<PFN_vkBeginCommandBuffer, "vkBeginCommandBuffer">(command_device(c))(c, i);
   if (r == VK_SUCCESS) {
     std::lock_guard lock(mutex);
-    commands[c] = {};
-    commands[c].device = command_device(c);
-    commands[c].in_pass =
-        i->flags & VK_COMMAND_BUFFER_USAGE_RENDER_PASS_CONTINUE_BIT;
+    auto& state = commands[c];
+    state = {};
+    state.device = command_device(c);
+    state.in_pass = i->flags & VK_COMMAND_BUFFER_USAGE_RENDER_PASS_CONTINUE_BIT;
+    state.simultaneous = i->flags & VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT;
+    if (auto it = devices.find(state.device); it != devices.end() && it->second.mapped) {
+      state.has_slot = true;
+      state.slot = it->second.next_slot++ % slots;
+      clear_slots(state.device, it->second, {&state.slot, 1});
+    }
   }
   return r;
+}
+void VKAPI_CALL execute_commands(VkCommandBuffer c, std::uint32_t n, const VkCommandBuffer* secondaries) {
+  next<PFN_vkCmdExecuteCommands, "vkCmdExecuteCommands">(command_device(c))(c, n, secondaries);
+  std::lock_guard lock(mutex);
+  auto& primary = commands[c];
+  for (std::uint32_t i = 0; i < n; ++i)
+    if (auto s = commands.find(secondaries[i]); s != commands.end() && s->second.has_slot) {
+      primary.secondary_slots.push_back(s->second.slot);
+      primary.marked |= s->second.marked;
+    }
 }
 void VKAPI_CALL bind_pipeline(VkCommandBuffer c, VkPipelineBindPoint p,
                               VkPipeline pipeline) {
@@ -751,13 +805,20 @@ void release_breadcrumb_device(VkDevice d) {
     for (auto& [name, bytes] : p.second.bytes) retained_bytes -= bytes.size();
     return true;
   });
+  streams.forget([&](std::uint64_t queue) {
+    auto q = stream_queues.find(queue);
+    return q != stream_queues.end() && q->second.first == d;
+  });
+  std::erase_if(stream_queues, [&](auto& p) { return p.second.first == d; });
 }
-void prepare_breadcrumb_device(VkDevice d, bool checkpoints) {
+void prepare_breadcrumb_device(VkDevice d, bool checkpoints, bool buffer_marker) {
   std::lock_guard lock(mutex);
   auto& state = devices[d];
   prepared_devices.store(true, std::memory_order_relaxed);
   invalidate_layer_procedures();
   state.checkpoints = checkpoints;
+  if (buffer_marker)
+    state.buffer_marker = vk<PFN_vkCmdWriteBufferMarkerAMD>(d, "vkCmdWriteBufferMarkerAMD");
   VkBufferCreateInfo b{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
   b.size = slots * 4;
   b.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
@@ -771,19 +832,11 @@ void prepare_breadcrumb_device(VkDevice d, bool checkpoints) {
   reinterpret_cast<PFN_vkGetPhysicalDeviceMemoryProperties>(raw_physical_proc(
       device_physical(d), "vkGetPhysicalDeviceMemoryProperties"))(
       device_physical(d), &props);
+  const auto chosen = breadcrumb::marker_memory_type(props, req.memoryTypeBits);
   VkMemoryAllocateInfo a{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
   a.allocationSize = req.size;
-  a.memoryTypeIndex = props.memoryTypeCount;
-  for (std::uint32_t i = 0; i < props.memoryTypeCount; ++i)
-    if ((req.memoryTypeBits & (1u << i)) &&
-        (props.memoryTypes[i].propertyFlags &
-         (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-          VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) ==
-            (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-             VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) {
-      a.memoryTypeIndex = i;
-      break;
-    }
+  a.memoryTypeIndex = chosen.type;
+  state.coherent = chosen.coherent;
   if (a.memoryTypeIndex == props.memoryTypeCount ||
       vk<PFN_vkAllocateMemory>(d, "vkAllocateMemory")(
           d, &a, nullptr, &state.memory) != VK_SUCCESS)
@@ -793,12 +846,53 @@ void prepare_breadcrumb_device(VkDevice d, bool checkpoints) {
     return;
   if (vk<PFN_vkMapMemory>(d, "vkMapMemory")(
           d, state.memory, 0, VK_WHOLE_SIZE, 0,
-          reinterpret_cast<void**>(&state.mapped)) != VK_SUCCESS)
+          reinterpret_cast<void**>(&state.mapped)) != VK_SUCCESS) {
+    state.mapped = nullptr;
     return;
+  }
   std::fill_n(state.mapped, slots, 0);
+  if (!state.coherent) {
+    VkMappedMemoryRange range{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE, nullptr, state.memory, 0, VK_WHOLE_SIZE};
+    vk<PFN_vkFlushMappedMemoryRanges>(d, "vkFlushMappedMemoryRanges")(d, 1, &range);
+  }
   log::info("vulkan-breadcrumb",
-            "enabled native_draw_checkpoints={} portable_boundary_markers=true",
-            checkpoints);
+            "enabled native_draw_checkpoints={} draw_buffer_markers={} portable_boundary_markers={} "
+            "memory_type={} memory_flags={:#x}",
+            checkpoints, state.buffer_marker != nullptr, state.buffer_marker == nullptr, a.memoryTypeIndex,
+            props.memoryTypes[a.memoryTypeIndex].propertyFlags);
+}
+namespace {
+// Requires mutex.
+void note_submitted(VkQueue queue, VkCommandBuffer c) {
+  {
+    auto state = commands.find(c);
+    if (state == commands.end() || !state->second.has_slot) return;
+    auto device = devices.find(state->second.device);
+    if (device == devices.end()) return;
+    breadcrumb::Submission s{h2g(c), {state->second.slot}, state->second.marked};
+    s.slots.insert(s.slots.end(), state->second.secondary_slots.begin(), state->second.secondary_slots.end());
+    // Not pending, so its previous execution has completed. A simultaneous-use
+    // buffer may still be running one, whose marker is kept.
+    if (!state->second.simultaneous) clear_slots(device->first, device->second, s.slots);
+    const auto key = reinterpret_cast<std::uint64_t>(queue);
+    stream_queues[key] = {device->first, queue};
+    streams.submitted(key, std::move(s));
+  }
+}
+}  // namespace
+void note_breadcrumb_submits(VkQueue queue, std::uint32_t count, const VkSubmitInfo* submits) {
+  if (!prepared_devices.load(std::memory_order_relaxed)) return;
+  std::lock_guard lock(mutex);
+  for (std::uint32_t i = 0; i < count; ++i)
+    for (std::uint32_t j = 0; j < submits[i].commandBufferCount; ++j)
+      note_submitted(queue, submits[i].pCommandBuffers[j]);
+}
+void note_breadcrumb_submits(VkQueue queue, std::uint32_t count, const VkSubmitInfo2* submits) {
+  if (!prepared_devices.load(std::memory_order_relaxed)) return;
+  std::lock_guard lock(mutex);
+  for (std::uint32_t i = 0; i < count; ++i)
+    for (std::uint32_t j = 0; j < submits[i].commandBufferInfoCount; ++j)
+      note_submitted(queue, submits[i].pCommandBufferInfos[j].commandBuffer);
 }
 void report_breadcrumbs(VkDevice d, VkQueue queue) {
   std::lock_guard lock(mutex);
@@ -815,18 +909,42 @@ void report_breadcrumbs(VkDevice d, VkQueue queue) {
     }
     write_capture("records.txt", listing.data(), listing.size());
   }
-  std::uint32_t last{};
-  if (it->second.mapped)
-    for (std::uint32_t i = 0; i < slots; ++i)
-      last = std::max(last, it->second.mapped[i]);
   auto describe = [&](std::uint32_t id) {
     auto r = records.find(id);
     return r != records.end() ? r->second.text
                               : std::string("record unavailable");
   };
-  log::warn("vulkan-breadcrumb",
-            "last completed portable boundary marker={} {}", last,
-            describe(last));
+  const auto& device = it->second;
+  if (device.mapped) {
+    if (!device.coherent) {
+      // Best effort: a lost device may refuse; the bytes are read anyway.
+      VkMappedMemoryRange range{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE, nullptr, device.memory, 0, VK_WHOLE_SIZE};
+      vk<PFN_vkInvalidateMappedMemoryRanges>(d, "vkInvalidateMappedMemoryRanges")(d, 1, &range);
+    }
+    const char* kind = device.buffer_marker ? "draw" : "portable boundary";
+    for (const auto& p : streams.progress([&](std::uint32_t slot) { return device.mapped[slot]; })) {
+      const auto bound = stream_queues.find(p.queue);
+      if (bound == stream_queues.end() || bound->second.first != d) continue;
+      const auto q = bound->second.second;
+      const auto binding = queue_binding(q);
+      const auto name = std::format("queue={:#x} family={} index={}", h2g(q),
+                                    binding ? int(binding->family) : -1, binding ? int(binding->index) : -1);
+      if (!p.marker) {
+        log::warn("vulkan-breadcrumb", "{}: no completed {} marker in its last {} submitted command buffers",
+                  name, kind, p.later);
+        continue;
+      }
+      log::warn("vulkan-breadcrumb", "{}: last completed {} marker={} {}; {} later command buffers on this queue "
+                "completed none", name, kind, p.marker, describe(p.marker), p.later);
+      // The next marker recorded in that command buffer had not completed:
+      // the work before it was running or had not started.
+      for (auto r = records.upper_bound(p.marker); r != records.end(); ++r)
+        if (r->second.command == p.command) {
+          log::warn("vulkan-breadcrumb", "{}: next marker={} not completed {}", name, r->first, r->second.text);
+          break;
+        }
+    }
+  }
   if (it->second.checkpoints) {
     auto get =
         vk<PFN_vkGetQueueCheckpointDataNV>(d, "vkGetQueueCheckpointDataNV");
@@ -854,6 +972,7 @@ PFN_vkVoidFunction breadcrumb_proc(std::string_view name) {
 #define FN(n, f) \
   if (name == #n) return reinterpret_cast<PFN_vkVoidFunction>(f)
   FN(vkBeginCommandBuffer, begin);
+  FN(vkCmdExecuteCommands, execute_commands);
   FN(vkCmdBindPipeline, bind_pipeline);
   FN(vkCmdBindDescriptorSets, bind_sets);
   FN(vkCmdPushConstants, push_constants);

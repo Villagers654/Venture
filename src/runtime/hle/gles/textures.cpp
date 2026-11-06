@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <chrono>
 #include <cstring>
 #include <limits>
 #include <mutex>
@@ -7,6 +8,7 @@
 #include "core/process.h"
 #include "gfx/texture_decode.h"
 #include "hle/gles/gles_state.h"
+#include "core/memory_pressure.h"
 
 namespace venture::gfx {
 namespace {
@@ -85,50 +87,63 @@ bool dimensions(GLenum target, GLint level, GLsizei w, GLsizei h,
   }
   return true;
 }
-// Decode PBO bytes only after the buffer's producer has completed: read mapping
-// provides GL synchronization. A guest pointer is an offset when a PBO is
-// bound. The result is RGBA8, or BC7 blocks when `blocks`.
-std::vector<std::uint8_t> decoded(GLenum format, GLsizei w, GLsizei h,
-                                  GLsizei depth, GLsizei size,
-                                  const void* data, bool blocks = false) {
+// Calls use(input) with the guest's ASTC bytes. A guest pointer is an offset
+// when a PBO is bound; its bytes are read only after the buffer's producer has
+// completed: read mapping provides GL synchronization. False on failure, with
+// the guest's GL error set.
+template <class Use>
+bool with_input(GLsizei size, const void* data, Use&& use) {
   GLint buffer = 0;
   if (current_gl_state()->major_version >= 3)
     buffer = integer(GL_PIXEL_UNPACK_BUFFER_BINDING);
   void* mapped = nullptr;
   if (buffer) {
-    if (size <= 0) return {};
+    if (size <= 0) return false;
     mapped = angle_function<PFNGLMAPBUFFERRANGEPROC, "glMapBufferRange">()(
         GL_PIXEL_UNPACK_BUFFER,
         static_cast<GLintptr>(reinterpret_cast<std::uintptr_t>(data)), size,
         GL_MAP_READ_BIT);
     if (!mapped) {
       capture_gl_errors();
-      return {};
+      return false;
     }
     data = mapped;
   }
-  std::vector<std::uint8_t> output;
+  bool ok = true;
   try {
-    if (data && w && h && depth) {
-      const auto& cache = process_config().cache_dir;
-      const std::span input{static_cast<const std::uint8_t*>(data),
-                            static_cast<std::size_t>(size)};
-      const auto directory =
-          cache.empty() ? std::filesystem::path{} : cache / "textures";
-      output = blocks ? transcode_astc_bc7(format, w, h, depth, input, directory)
-                      : decode_astc(format, w, h, depth, input, directory);
-    }
+    if (data)
+      use(std::span{static_cast<const std::uint8_t*>(data),
+                    static_cast<std::size_t>(size)});
   } catch (const std::bad_alloc&) {
     gl_error(GL_OUT_OF_MEMORY);
+    ok = false;
   } catch (const std::exception& e) {
     log::error("gles", "ASTC decode failed: {}", e.what());
     gl_error(GL_INVALID_VALUE);
+    ok = false;
   }
   if (mapped && !angle_function<PFNGLUNMAPBUFFERPROC, "glUnmapBuffer">()(
                     GL_PIXEL_UNPACK_BUFFER)) {
     gl_error(GL_INVALID_OPERATION);
-    output.clear();
+    ok = false;
   }
+  return ok;
+}
+std::filesystem::path texture_cache() {
+  const auto& cache = process_config().cache_dir;
+  return cache.empty() ? std::filesystem::path{} : cache / "textures";
+}
+// The result is RGBA8, or BC7 blocks when `blocks`.
+std::vector<std::uint8_t> decoded(GLenum format, GLsizei w, GLsizei h,
+                                  GLsizei depth, GLsizei size,
+                                  const void* data, bool blocks = false) {
+  std::vector<std::uint8_t> output;
+  if (!with_input(size, data, [&](std::span<const std::uint8_t> input) {
+        if (w && h && depth)
+          output = blocks ? transcode_astc_bc7(format, w, h, depth, input, texture_cache())
+                          : decode_astc(format, w, h, depth, input, texture_cache());
+      }))
+    output.clear();
   return output;
 }
 struct PackedUpload {
@@ -158,6 +173,169 @@ struct PackedUpload {
           GL_PIXEL_UNPACK_BUFFER, buffer);
   }
 };
+std::uint64_t now_ns() {
+  return std::uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(
+      std::chrono::steady_clock::now().time_since_epoch()).count());
+}
+int unit_slot(GLenum target) {
+  switch (target) {
+    case GL_TEXTURE_2D: return 0;
+    case GL_TEXTURE_CUBE_MAP: return 1;
+    case GL_TEXTURE_2D_ARRAY: return 2;
+    case GL_TEXTURE_CUBE_MAP_ARRAY: return 3;
+    default: return -1;
+  }
+}
+GLenum bind_target(GLenum target) {
+  return target >= GL_TEXTURE_CUBE_MAP_POSITIVE_X && target <= GL_TEXTURE_CUBE_MAP_NEGATIVE_Z
+             ? GL_TEXTURE_CUBE_MAP : target;
+}
+// Decoded data waiting for upload is bounded; past this the oldest upload waits.
+// Under memory pressure (core/memory_pressure.h) the bound is an eighth.
+constexpr std::size_t kPendingLimit = std::size_t(512) << 20;
+std::size_t pending_limit() {
+  return memory_pressure::level() == memory_pressure::Level::normal ? kPendingLimit : kPendingLimit / 8;
+}
+void forget(TextureGroup& group, const PendingUpload& upload) {
+  if (auto it = group.pending_textures.find(upload.texture); it != group.pending_textures.end() && !--it->second)
+    group.pending_textures.erase(it);
+  group.pending_bytes -= std::min(group.pending_bytes, astc_job_bytes(*upload.job));
+  group.pending_count.fetch_sub(1, std::memory_order_relaxed);
+}
+// The GL upload of a pending ASTC upload, in the current context (any context
+// of the share group), waiting for its decode if needed. Errors here are not
+// the guest's: its call already succeeded.
+void upload_now(PendingUpload& upload) {
+  const auto& data = finish_astc_job(*upload.job);
+  if (data.empty()) return;  // decode failure, logged
+  preserve_gl_errors();
+  const GLenum target = bind_target(upload.target);
+  const auto previous = bound_texture(upload.target);
+  auto bind = angle_function<PFNGLBINDTEXTUREPROC, "glBindTexture">();
+  bind(target, upload.texture);
+  {
+    PackedUpload packed;
+    const auto size = static_cast<GLsizei>(data.size());
+    if (upload.blocks && upload.three)
+      angle_function<PFNGLCOMPRESSEDTEXSUBIMAGE3DPROC, "glCompressedTexSubImage3D">()(
+          upload.target, upload.level, upload.x, upload.y, upload.z, upload.width, upload.height, upload.depth,
+          upload.upload_format, size, data.data());
+    else if (upload.blocks)
+      angle_function<PFNGLCOMPRESSEDTEXSUBIMAGE2DPROC, "glCompressedTexSubImage2D">()(
+          upload.target, upload.level, upload.x, upload.y, upload.width, upload.height, upload.upload_format, size,
+          data.data());
+    else if (upload.three)
+      angle_function<PFNGLTEXSUBIMAGE3DPROC, "glTexSubImage3D">()(
+          upload.target, upload.level, upload.x, upload.y, upload.z, upload.width, upload.height, upload.depth,
+          GL_RGBA, GL_UNSIGNED_BYTE, data.data());
+    else
+      angle_function<PFNGLTEXSUBIMAGE2DPROC, "glTexSubImage2D">()(
+          upload.target, upload.level, upload.x, upload.y, upload.width, upload.height, upload.upload_format,
+          GL_UNSIGNED_BYTE, data.data());
+  }
+  bind(target, previous);
+  auto get = angle_function<PFNGLGETERRORPROC, "glGetError">();
+  for (GLenum error; (error = get()) != GL_NO_ERROR;)
+    log::warn("gles", "Deferred ASTC upload of texture {} level {} failed: GL error 0x{:x}", upload.texture,
+              upload.level, error);
+}
+// Uploads, in call order, the pending uploads `select` picks. Uploads of one
+// texture keep their order: select must pick all of a texture's or none.
+template <class Select>
+void upload_pending(TextureGroup& group, Select&& select) {
+  for (auto it = group.pending.begin(); it != group.pending.end();) {
+    if (!select(*it)) {
+      ++it;
+      continue;
+    }
+    auto upload = std::move(*it);
+    it = group.pending.erase(it);
+    forget(group, upload);
+    upload_now(upload);
+  }
+}
+// Before the guest uses a texture in any other way. Caller holds the lock.
+void settle_texture(GLuint texture) {
+  auto state = current_gl_state();
+  if (!state) return;
+  auto& group = *state->textures;
+  if (!group.pending_textures.contains(texture)) return;
+  upload_pending(group, [&](const PendingUpload& u) { return u.texture == texture; });
+}
+void settle_target(GLenum target) {
+  auto state = current_gl_state();
+  if (!state || !state->textures->pending_count.load(std::memory_order_relaxed)) return;
+  std::lock_guard lock(state->textures->lock);
+  settle_texture(bound_texture(target));
+}
+// Before a draw or dispatch that `samples`: textures bound in this context may
+// be sampled, so their uploads complete now. Then uploads whose decode is done are applied
+// while the render thread has time (about 1 ms in each 10 ms), so memory and
+// later waits stay small. Caller holds the lock.
+void settle_for_draw(GlContextState& state, bool samples) {
+  auto& group = *state.textures;
+  std::vector<GLuint> bound;
+  if (samples)
+    for (const auto& unit : state.texture_units)
+      for (const auto texture : unit)
+        if (texture && group.pending_textures.contains(texture)) bound.push_back(texture);
+  if (!bound.empty())
+    upload_pending(group, [&](const PendingUpload& u) { return std::ranges::find(bound, u.texture) != bound.end(); });
+  thread_local std::uint64_t window = 0, spent = 0;
+  if (const auto now = now_ns(); now - window > 10000000) window = now, spent = 0;
+  std::vector<GLuint> blocked;
+  for (auto it = group.pending.begin(); it != group.pending.end() && spent < 1000000;) {
+    if (std::ranges::find(blocked, it->texture) != blocked.end() || !astc_job_done(*it->job)) {
+      blocked.push_back(it->texture);
+      ++it;
+      continue;
+    }
+    const auto begin = now_ns();
+    auto upload = std::move(*it);
+    it = group.pending.erase(it);
+    forget(group, upload);
+    upload_now(upload);
+    spent += now_ns() - begin;
+  }
+}
+// Copies the ASTC data and starts its decode; the GL upload happens later.
+void queue_upload(GlContextState& state, GLuint texture, GLenum target, GLint level, GLint x, GLint y, GLint z,
+                  GLsizei w, GLsizei h, GLsizei depth, GLenum format, GLsizei size, const void* data, bool three,
+                  bool blocks) {
+  std::vector<std::uint8_t> input;
+  if (!with_input(size, data, [&](std::span<const std::uint8_t> bytes) { input.assign(bytes.begin(), bytes.end()); }))
+    return;
+  if (input.empty()) {
+    gl_error(GL_INVALID_VALUE);
+    return;
+  }
+  AstcFormat a{};
+  astc_format(format, a);
+  PendingUpload upload;
+  upload.texture = texture;
+  upload.target = target;
+  upload.upload_format = blocks ? backing_format(format)
+                                : (state.major_version < 3 && a.srgb ? GL_SRGB_ALPHA_EXT : GL_RGBA);
+  upload.level = level;
+  upload.x = x;
+  upload.y = y;
+  upload.z = z;
+  upload.width = w;
+  upload.height = h;
+  upload.depth = depth;
+  upload.three = three;
+  upload.blocks = blocks;
+  upload.job = start_astc_job(format, w, h, depth, std::move(input), texture_cache(), blocks);
+  auto& group = *state.textures;
+  group.pending_bytes += astc_job_bytes(*upload.job);
+  ++group.pending_textures[texture];
+  group.pending.push_back(std::move(upload));
+  group.pending_count.fetch_add(1, std::memory_order_relaxed);
+  while (group.pending_bytes > pending_limit() && !group.pending.empty()) {
+    const auto oldest = group.pending.front().texture;
+    upload_pending(group, [&](const PendingUpload& u) { return u.texture == oldest; });
+  }
+}
 void erase_level(GLenum target, GLint level) {
   if (auto state = current_gl_state()) {
     std::lock_guard lock(state->textures->lock);
@@ -169,6 +347,7 @@ void compressed_image(GLenum target, GLint level, GLenum format, GLsizei w,
                       GLsizei h, GLsizei depth, GLint border, GLsizei size,
                       const void* data, bool three) {
   if (!materialize_buffer_maps()) return;
+  settle_target(target);
   if (!fallback(format)) {
     preserve_gl_errors();
     if (three)
@@ -302,6 +481,7 @@ void compressed_sub(GLenum target, GLint level, GLint x, GLint y, GLint z,
                     GLsizei size, const void* data, bool three) {
   if (!materialize_buffer_maps()) return;
   if (!fallback(format)) {
+    settle_target(target);
     if (three)
       angle_function<PFNGLCOMPRESSEDTEXSUBIMAGE3DPROC, "glCompressedTexSubImage3D">()(target, level, x, y, z, w, h, depth,
                                        format, size, data);
@@ -314,8 +494,8 @@ void compressed_sub(GLenum target, GLint level, GLint x, GLint y, GLint z,
   if (!dimensions(target, level, w, h, depth)) return;
   auto state = current_gl_state();
   std::lock_guard lock(state->textures->lock);
-  auto it =
-      state->textures->levels.find({bound_texture(target), target, level});
+  const auto texture = bound_texture(target);
+  auto it = state->textures->levels.find({texture, target, level});
   if (it == state->textures->levels.end() || it->second.format != format) {
     gl_error(GL_INVALID_OPERATION);
     return;
@@ -337,25 +517,16 @@ void compressed_sub(GLenum target, GLint level, GLint x, GLint y, GLint z,
     return;
   }
   if (!size) return;
-  if (bc7()) {
-    bc7_sub(target, level, x, y, z, w, h, depth, format, size, data, tex, three);
+  // Whole blocks decode and upload in the background; the BC7 re-encode of a
+  // region off its 4x4 grid needs the decoded pixels here.
+  const bool blocks = bc7();
+  if (!blocks || (x % 4 == 0 && y % 4 == 0 && (w % 4 == 0 || x + w == tex.width) &&
+                  (h % 4 == 0 || y + h == tex.height))) {
+    queue_upload(*state, texture, target, level, x, y, z, w, h, depth, format, size, data, three, blocks);
     return;
   }
-  auto pixels = decoded(format, w, h, depth, size, data);
-  if (pixels.empty()) {
-    gl_error(GL_INVALID_VALUE);
-    return;
-  }
-  PackedUpload packed;
-  if (three)
-    angle_function<PFNGLTEXSUBIMAGE3DPROC, "glTexSubImage3D">()(
-        target, level, x, y, z, w, h, depth, GL_RGBA, GL_UNSIGNED_BYTE,
-        pixels.data());
-  else
-    angle_function<PFNGLTEXSUBIMAGE2DPROC, "glTexSubImage2D">()(
-        target, level, x, y, w, h,
-        state->major_version < 3 && a.srgb ? GL_SRGB_ALPHA_EXT : GL_RGBA,
-        GL_UNSIGNED_BYTE, pixels.data());
+  settle_texture(texture);
+  bc7_sub(target, level, x, y, z, w, h, depth, format, size, data, tex, three);
 }
 void sub2(GLenum t, GLint l, GLint x, GLint y, GLsizei w, GLsizei h, GLenum f,
           GLsizei s, const void* p) {
@@ -367,6 +538,7 @@ void sub3(GLenum t, GLint l, GLint x, GLint y, GLint z, GLsizei w, GLsizei h,
 }
 void storage(GLenum target, GLsizei levels, GLenum format, GLsizei w, GLsizei h,
              GLsizei depth, bool three) {
+  settle_target(target);
   const bool replace = fallback(format);
   preserve_gl_errors();
   if (replace && !dimensions(target, 0, w, h, depth)) return;
@@ -439,16 +611,33 @@ void delete_textures(GLsizei n, const GLuint* ids) {
     if (auto state = current_gl_state()) {
       std::lock_guard lock(state->textures->lock);
       ++state->textures->generation;
-      for (GLsizei i = 0; i < n; ++i)
+      for (GLsizei i = 0; i < n; ++i) {
         std::erase_if(state->textures->levels, [&](const auto& p) {
           return std::get<0>(p.first) == ids[i];
         });
+        if (!ids[i]) continue;
+        for (auto& unit : state->texture_units)
+          for (auto& texture : unit)
+            if (texture == ids[i]) texture = 0;
+        auto& group = *state->textures;
+        if (!group.pending_textures.contains(ids[i])) continue;
+        for (auto it = group.pending.begin(); it != group.pending.end();) {
+          if (it->texture != ids[i]) {
+            ++it;
+            continue;
+          }
+          cancel_astc_job(*it->job);
+          forget(group, *it);
+          it = group.pending.erase(it);
+        }
+      }
     }
   delete_buffer_textures(n, ids);
 }
 void tex_image2(GLenum t, GLint l, GLint f, GLsizei w, GLsizei h, GLint b,
                 GLenum format, GLenum type, const void* p) {
   if (!materialize_buffer_maps()) return;
+  settle_target(t);
   preserve_gl_errors();
   angle_function<PFNGLTEXIMAGE2DPROC, "glTexImage2D">()(t, l, f, w, h, b, format,
                                                       type, p);
@@ -457,6 +646,7 @@ void tex_image2(GLenum t, GLint l, GLint f, GLsizei w, GLsizei h, GLint b,
 void tex_image3(GLenum t, GLint l, GLint f, GLsizei w, GLsizei h, GLsizei d,
                 GLint b, GLenum format, GLenum type, const void* p) {
   if (!materialize_buffer_maps()) return;
+  settle_target(t);
   preserve_gl_errors();
   angle_function<PFNGLTEXIMAGE3DPROC, "glTexImage3D">()(t, l, f, w, h, d, b,
                                                       format, type, p);
@@ -509,6 +699,7 @@ void copy_sub3(GLenum t, GLint l, GLint x, GLint y, GLint z, GLint sx, GLint sy,
 }
 void copy_image2(GLenum t, GLint l, GLenum internal, GLint x, GLint y,
                  GLsizei w, GLsizei h, GLint border) {
+  settle_target(t);
   preserve_gl_errors();
   angle_function<PFNGLCOPYTEXIMAGE2DPROC, "glCopyTexImage2D">()(t, l, internal, x,
                                                               y, w, h, border);
@@ -570,8 +761,19 @@ void internal_format(GLenum target, GLenum format, GLenum pname, GLsizei size,
     if (pname == GL_NUM_SAMPLE_COUNTS && size && values) *values = 0;
     return;
   }
-  angle_function<PFNGLGETINTERNALFORMATIVPROC, "glGetInternalformativ">()(
-      target, format, pname, size, values);
+  auto query = angle_function<PFNGLGETINTERNALFORMATIVPROC, "glGetInternalformativ">();
+  if ((pname == GL_NUM_SAMPLE_COUNTS || pname == GL_SAMPLES) && size > 0 && values) {
+    // Sample counts in descending order, limited to guest_max_samples().
+    GLint count = 0;
+    query(target, format, GL_NUM_SAMPLE_COUNTS, 1, &count);
+    std::vector<GLint> samples(std::max(count, 0));
+    if (count > 0) query(target, format, GL_SAMPLES, count, samples.data());
+    std::erase_if(samples, [limit = guest_max_samples()](GLint s) { return s > limit; });
+    if (pname == GL_NUM_SAMPLE_COUNTS) *values = static_cast<GLint>(samples.size());
+    else std::copy_n(samples.begin(), std::min<std::size_t>(samples.size(), size), values);
+    return;  // an invalid target or format raised ANGLE's error in the count query
+  }
+  query(target, format, pname, size, values);
 }
 void generate_mipmap(GLenum target) {
   auto state = current_gl_state();
@@ -588,7 +790,68 @@ void generate_mipmap(GLenum target) {
   }
   angle_function<PFNGLGENERATEMIPMAPPROC, "glGenerateMipmap">()(target);
 }
+void active_texture(GLenum unit) {
+  angle_function<PFNGLACTIVETEXTUREPROC, "glActiveTexture">()(unit);
+  auto* state = current_gl_dispatch_state();
+  if (!state) return;
+  // An invalid unit leaves the active one unchanged.
+  if (state->texture_unit_count < 0) state->texture_unit_count = integer(GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS);
+  if (unit >= GL_TEXTURE0 && unit - GL_TEXTURE0 < GLuint(state->texture_unit_count))
+    state->active_texture_unit = unit - GL_TEXTURE0;
+}
+void bind_texture(GLenum target, GLuint texture) {
+  angle_function<PFNGLBINDTEXTUREPROC, "glBindTexture">()(target, texture);
+  const int slot = unit_slot(target);
+  auto* state = current_gl_dispatch_state();
+  if (slot < 0 || !state) return;
+  auto& units = state->texture_units;
+  if (units.size() <= state->active_texture_unit) units.resize(state->active_texture_unit + 1);
+  units[state->active_texture_unit][slot] = texture;
+}
+void settle_names(std::initializer_list<GLuint> names) {
+  auto state = current_gl_state();
+  if (!state || !state->textures->pending_count.load(std::memory_order_relaxed)) return;
+  std::lock_guard lock(state->textures->lock);
+  for (auto name : names) settle_texture(name);
+}
+void copy_image_sub_data(GLuint src, GLenum src_target, GLint src_level, GLint sx, GLint sy, GLint sz, GLuint dst,
+                         GLenum dst_target, GLint dst_level, GLint dx, GLint dy, GLint dz, GLsizei w, GLsizei h,
+                         GLsizei d) {
+  settle_names({src, dst});
+  angle_function<PFNGLCOPYIMAGESUBDATAPROC, "glCopyImageSubData">()(src, src_target, src_level, sx, sy, sz, dst,
+                                                                    dst_target, dst_level, dx, dy, dz, w, h, d);
+}
+void copy_image_sub_data_ext(GLuint src, GLenum src_target, GLint src_level, GLint sx, GLint sy, GLint sz,
+                             GLuint dst, GLenum dst_target, GLint dst_level, GLint dx, GLint dy, GLint dz,
+                             GLsizei w, GLsizei h, GLsizei d) {
+  settle_names({src, dst});
+  angle_function<PFNGLCOPYIMAGESUBDATAPROC, "glCopyImageSubDataEXT">()(src, src_target, src_level, sx, sy, sz,
+                                                                       dst, dst_target, dst_level, dx, dy, dz, w,
+                                                                       h, d);
+}
+void copy_image_sub_data_oes(GLuint src, GLenum src_target, GLint src_level, GLint sx, GLint sy, GLint sz,
+                             GLuint dst, GLenum dst_target, GLint dst_level, GLint dx, GLint dy, GLint dz,
+                             GLsizei w, GLsizei h, GLsizei d) {
+  settle_names({src, dst});
+  angle_function<PFNGLCOPYIMAGESUBDATAPROC, "glCopyImageSubDataOES">()(src, src_target, src_level, sx, sy, sz,
+                                                                       dst, dst_target, dst_level, dx, dy, dz, w,
+                                                                       h, d);
+}
+using TextureViewProc = void (*)(GLuint, GLenum, GLuint, GLenum, GLuint, GLuint, GLuint, GLuint);
+void texture_view_ext(GLuint texture, GLenum target, GLuint original, GLenum format, GLuint min_level,
+                      GLuint levels, GLuint min_layer, GLuint layers) {
+  settle_names({original});
+  angle_function<TextureViewProc, "glTextureViewEXT">()(texture, target, original, format, min_level, levels,
+                                                        min_layer, layers);
+}
+void texture_view_oes(GLuint texture, GLenum target, GLuint original, GLenum format, GLuint min_level,
+                      GLuint levels, GLuint min_layer, GLuint layers) {
+  settle_names({original});
+  angle_function<TextureViewProc, "glTextureViewOES">()(texture, target, original, format, min_level, levels,
+                                                        min_layer, layers);
+}
 }  // namespace
+void settle_texture_uploads(GLuint texture) { settle_names({texture}); }
 bool try_gl_draw_dispatch(hle::CallContext& ctx) {
   auto* state = current_gl_dispatch_state();
   std::unique_lock<std::recursive_mutex> buffers_lock, textures_lock;
@@ -613,8 +876,17 @@ bool validate_gl_call(GlCheck check) {
     if (auto state = current_gl_state()) state->framebuffer_cache.clear();
     return true;
   }
-  const bool draw = check == GlCheck::draw, read = check == GlCheck::read,
+  const bool draw = check == GlCheck::draw || check == GlCheck::clear, read = check == GlCheck::read,
              blit = check == GlCheck::blit;
+  if (check == GlCheck::buffers || draw) {
+    // Compute dispatches and draws sample the textures bound in this context;
+    // clears sample none.
+    auto* dispatch = current_gl_dispatch_state();
+    if (dispatch && dispatch->textures->pending_count.load(std::memory_order_relaxed)) {
+      std::lock_guard lock(dispatch->textures->lock);
+      settle_for_draw(*dispatch, check != GlCheck::clear);
+    }
+  }
   if (!draw && !read && !blit) return true;
   auto state = current_gl_state();
   if (!state || !state->astc_fallback) {
@@ -674,6 +946,13 @@ hle::Handler texture_gl_handler(std::string_view name) {
   if (name == "glCheckFramebufferStatus") return wrap<&framebuffer_status>();
   if (name == "glGetInternalformativ") return wrap<&internal_format>();
   if (name == "glGenerateMipmap") return wrap<&generate_mipmap>();
+  if (name == "glActiveTexture") return wrap<&active_texture>();
+  if (name == "glBindTexture") return wrap<&bind_texture>();
+  if (name == "glCopyImageSubData") return wrap<&copy_image_sub_data>();
+  if (name == "glCopyImageSubDataEXT") return wrap<&copy_image_sub_data_ext>();
+  if (name == "glCopyImageSubDataOES") return wrap<&copy_image_sub_data_oes>();
+  if (name == "glTextureViewEXT") return wrap<&texture_view_ext>();
+  if (name == "glTextureViewOES") return wrap<&texture_view_oes>();
   return nullptr;
 }
 }  // namespace venture::gfx

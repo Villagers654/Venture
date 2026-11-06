@@ -1,6 +1,7 @@
 #pragma once
 #include "xr/api.h"
 #include "xr/display_timing.h"
+#include "xr/frame_hitches.h"
 #include <chrono>
 #include <condition_variable>
 #include <memory>
@@ -31,6 +32,7 @@ struct Session {
   bool passthrough_suspended = true; // cleared only by successful guest xrBeginSession
   bool uses_shared_gpu = true;
   VkQueue queue = nullptr;  // native queue supplied by the graphics binding
+  XrGraphicsBindingVulkanKHR binding{XR_TYPE_GRAPHICS_BINDING_VULKAN_KHR};  // the host session's (next is null)
   enum class Phase { idle, waited, begun } phase = Phase::idle;
   XrFrameState frame{XR_TYPE_FRAME_STATE};
   XrFrameState pending_frame{XR_TYPE_FRAME_STATE};
@@ -45,6 +47,7 @@ struct Session {
   bool profile_eye_seen = false;
   std::uint64_t end_errors = 0, last_report_frame = 0;
   std::chrono::steady_clock::time_point last_report_time{};
+  FrameHitches hitches;  // per periodic report window
   // The first submission's display time and clock, for the display clock rate.
   struct ClockSample { XrTime display = 0; std::int64_t ns = 0; };
   ClockSample clock_first, clock_last;
@@ -97,6 +100,24 @@ struct Session {
     bool async = false;
     std::uint64_t async_ends = 0;
   } lead;
+
+  // Frame rate setting (display_override.h) on a host that sets its own
+  // refresh rate: each frame aims at the display time `period_ns` after the
+  // last one, and the host wait starts just early enough to return it. The
+  // guest sees the capped rate.
+  struct FrameCap {
+    std::int64_t period_ns = 0;       // zero: uncapped
+    std::int64_t target_ns = 0;       // display time the next frame aims at
+    std::int64_t latency_ns = 0;      // host display time - host wait return
+    std::int64_t host_period_ns = 0;  // the host's own period
+  } cap;
+  bool host_rate_recorded = false;  // host-display.json has this session's rate
+  // After a host xrBeginSession: switches a host with XR_FB_display_refresh_rate
+  // to the frame rate setting when it lists it, or sets up the cap otherwise.
+  void apply_frame_rate_setting();
+  // A frame the host returned: records its rate, advances the cap target and
+  // gives the guest the capped period.
+  void observe_capped_frame(XrFrameState &);
 
   void observe_display_period(std::int64_t, DisplayTiming::Source);
   void observe_host_event(const XrEventDataBuffer&);

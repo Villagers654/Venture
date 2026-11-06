@@ -32,11 +32,11 @@ XrResult XRAPI_CALL dispatch_xrCreateActionSpace(XrSession session, const XrActi
   std::lock_guard lock(mutex);
   return m_xrCreateActionSpace(session, createInfo, space);
 }
-XrResult XRAPI_CALL dispatch_xrCreateFoveationProfileFB(XrSession session, const XrFoveationProfileCreateInfoFB* createInfo, XrFoveationProfileFB* profile) {
+XrResult XRAPI_CALL dispatch_xrCreateFoveationProfileFB(XrSession /*session*/, const XrFoveationProfileCreateInfoFB* /*createInfo*/, XrFoveationProfileFB* /*profile*/) {
   std::lock_guard lock(mutex);
   return XR_ERROR_FUNCTION_UNSUPPORTED;
 }
-XrResult XRAPI_CALL dispatch_xrCreateGeometryInstanceFB(XrSession session, const XrGeometryInstanceCreateInfoFB* createInfo, XrGeometryInstanceFB* outGeometryInstance) {
+XrResult XRAPI_CALL dispatch_xrCreateGeometryInstanceFB(XrSession /*session*/, const XrGeometryInstanceCreateInfoFB* /*createInfo*/, XrGeometryInstanceFB* /*outGeometryInstance*/) {
   std::lock_guard lock(mutex);
   return XR_ERROR_FUNCTION_UNSUPPORTED;
 }
@@ -50,11 +50,11 @@ XrResult XRAPI_CALL dispatch_xrCreateInstance(const XrInstanceCreateInfo* create
 }
 XrResult XRAPI_CALL dispatch_xrCreatePassthroughFB(XrSession session, const XrPassthroughCreateInfoFB* createInfo, XrPassthroughFB* outPassthrough) {
   std::lock_guard lock(mutex);
-  return XR_ERROR_FUNCTION_UNSUPPORTED;
+  return m_xrCreatePassthroughFB(session, createInfo, outPassthrough);
 }
 XrResult XRAPI_CALL dispatch_xrCreatePassthroughLayerFB(XrSession session, const XrPassthroughLayerCreateInfoFB* createInfo, XrPassthroughLayerFB* outLayer) {
   std::lock_guard lock(mutex);
-  return XR_ERROR_FUNCTION_UNSUPPORTED;
+  return m_xrCreatePassthroughLayerFB(session, createInfo, outLayer);
 }
 XrResult XRAPI_CALL dispatch_xrCreateReferenceSpace(XrSession session, const XrReferenceSpaceCreateInfo* createInfo, XrSpace* space) {
   std::lock_guard lock(mutex);
@@ -68,7 +68,7 @@ XrResult XRAPI_CALL dispatch_xrCreateSwapchain(XrSession session, const XrSwapch
   std::lock_guard lock(mutex);
   return m_xrCreateSwapchain(session, createInfo, swapchain);
 }
-XrResult XRAPI_CALL dispatch_xrCreateTriangleMeshFB(XrSession session, const XrTriangleMeshCreateInfoFB* createInfo, XrTriangleMeshFB* outTriangleMesh) {
+XrResult XRAPI_CALL dispatch_xrCreateTriangleMeshFB(XrSession /*session*/, const XrTriangleMeshCreateInfoFB* /*createInfo*/, XrTriangleMeshFB* /*outTriangleMesh*/) {
   std::lock_guard lock(mutex);
   return XR_ERROR_FUNCTION_UNSUPPORTED;
 }
@@ -88,11 +88,11 @@ XrResult XRAPI_CALL dispatch_xrDestroyActionSet(XrActionSet actionSet) {
   std::lock_guard lock(mutex);
   return m_xrDestroyActionSet(actionSet);
 }
-XrResult XRAPI_CALL dispatch_xrDestroyFoveationProfileFB(XrFoveationProfileFB profile) {
+XrResult XRAPI_CALL dispatch_xrDestroyFoveationProfileFB(XrFoveationProfileFB /*profile*/) {
   std::lock_guard lock(mutex);
   return XR_ERROR_FUNCTION_UNSUPPORTED;
 }
-XrResult XRAPI_CALL dispatch_xrDestroyGeometryInstanceFB(XrGeometryInstanceFB instance) {
+XrResult XRAPI_CALL dispatch_xrDestroyGeometryInstanceFB(XrGeometryInstanceFB /*instance*/) {
   std::lock_guard lock(mutex);
   return XR_ERROR_FUNCTION_UNSUPPORTED;
 }
@@ -106,11 +106,11 @@ XrResult XRAPI_CALL dispatch_xrDestroyInstance(XrInstance instance) {
 }
 XrResult XRAPI_CALL dispatch_xrDestroyPassthroughFB(XrPassthroughFB passthrough) {
   std::lock_guard lock(mutex);
-  return XR_ERROR_FUNCTION_UNSUPPORTED;
+  return m_xrDestroyPassthroughFB(passthrough);
 }
 XrResult XRAPI_CALL dispatch_xrDestroyPassthroughLayerFB(XrPassthroughLayerFB layer) {
   std::lock_guard lock(mutex);
-  return XR_ERROR_FUNCTION_UNSUPPORTED;
+  return m_xrDestroyPassthroughLayerFB(layer);
 }
 XrResult XRAPI_CALL dispatch_xrDestroySession(XrSession session) {
   std::lock_guard lock(mutex);
@@ -124,7 +124,7 @@ XrResult XRAPI_CALL dispatch_xrDestroySwapchain(XrSwapchain swapchain) {
   std::lock_guard lock(mutex);
   return m_xrDestroySwapchain(swapchain);
 }
-XrResult XRAPI_CALL dispatch_xrDestroyTriangleMeshFB(XrTriangleMeshFB mesh) {
+XrResult XRAPI_CALL dispatch_xrDestroyTriangleMeshFB(XrTriangleMeshFB /*mesh*/) {
   std::lock_guard lock(mutex);
   return XR_ERROR_FUNCTION_UNSUPPORTED;
 }
@@ -135,7 +135,7 @@ XrResult XRAPI_CALL dispatch_xrEndSession(XrSession session) {
   std::lock_guard lock(mutex);
   return m_xrEndSession(session);
 }
-XrResult XRAPI_CALL dispatch_xrEnumerateApiLayerProperties(uint32_t propertyCapacityInput, uint32_t* propertyCountOutput, XrApiLayerProperties* properties) {
+XrResult XRAPI_CALL dispatch_xrEnumerateApiLayerProperties(uint32_t /*propertyCapacityInput*/, uint32_t* /*propertyCountOutput*/, XrApiLayerProperties* /*properties*/) {
   std::lock_guard lock(mutex);
   return XR_ERROR_FUNCTION_UNSUPPORTED;
 }
@@ -143,11 +143,11 @@ XrResult XRAPI_CALL dispatch_xrEnumerateBoundSourcesForAction(XrSession session,
   std::lock_guard lock(mutex);
   return m_xrEnumerateBoundSourcesForAction(session, enumerateInfo, sourceCapacityInput, sourceCountOutput, sources);
 }
-XrResult XRAPI_CALL dispatch_xrEnumerateColorSpacesFB(XrSession session, uint32_t colorSpaceCapacityInput, uint32_t* colorSpaceCountOutput, XrColorSpaceFB* colorSpaces) {
+XrResult XRAPI_CALL dispatch_xrEnumerateColorSpacesFB(XrSession /*session*/, uint32_t /*colorSpaceCapacityInput*/, uint32_t* /*colorSpaceCountOutput*/, XrColorSpaceFB* /*colorSpaces*/) {
   std::lock_guard lock(mutex);
   return XR_ERROR_FUNCTION_UNSUPPORTED;
 }
-XrResult XRAPI_CALL dispatch_xrEnumerateDisplayRefreshRatesFB(XrSession session, uint32_t displayRefreshRateCapacityInput, uint32_t* displayRefreshRateCountOutput, float* displayRefreshRates) {
+XrResult XRAPI_CALL dispatch_xrEnumerateDisplayRefreshRatesFB(XrSession /*session*/, uint32_t /*displayRefreshRateCapacityInput*/, uint32_t* /*displayRefreshRateCountOutput*/, float* /*displayRefreshRates*/) {
   std::lock_guard lock(mutex);
   return XR_ERROR_FUNCTION_UNSUPPORTED;
 }
@@ -159,7 +159,7 @@ XrResult XRAPI_CALL dispatch_xrEnumerateInstanceExtensionProperties(const char* 
   std::lock_guard lock(mutex);
   return m_xrEnumerateInstanceExtensionProperties(layerName, propertyCapacityInput, propertyCountOutput, properties);
 }
-XrResult XRAPI_CALL dispatch_xrEnumeratePerformanceMetricsCounterPathsMETA(XrInstance instance, uint32_t counterPathCapacityInput, uint32_t* counterPathCountOutput, XrPath* counterPaths) {
+XrResult XRAPI_CALL dispatch_xrEnumeratePerformanceMetricsCounterPathsMETA(XrInstance /*instance*/, uint32_t /*counterPathCapacityInput*/, uint32_t* /*counterPathCountOutput*/, XrPath* /*counterPaths*/) {
   std::lock_guard lock(mutex);
   return XR_ERROR_FUNCTION_UNSUPPORTED;
 }
@@ -183,7 +183,7 @@ XrResult XRAPI_CALL dispatch_xrEnumerateViewConfigurations(XrInstance instance, 
   std::lock_guard lock(mutex);
   return m_xrEnumerateViewConfigurations(instance, systemId, viewConfigurationTypeCapacityInput, viewConfigurationTypeCountOutput, viewConfigurationTypes);
 }
-XrResult XRAPI_CALL dispatch_xrGeometryInstanceSetTransformFB(XrGeometryInstanceFB instance, const XrGeometryInstanceTransformFB* transformation) {
+XrResult XRAPI_CALL dispatch_xrGeometryInstanceSetTransformFB(XrGeometryInstanceFB /*instance*/, const XrGeometryInstanceTransformFB* /*transformation*/) {
   std::lock_guard lock(mutex);
   return XR_ERROR_FUNCTION_UNSUPPORTED;
 }
@@ -211,15 +211,15 @@ XrResult XRAPI_CALL dispatch_xrGetDeviceSampleRateFB(XrSession session, const Xr
   std::lock_guard lock(mutex);
   return m_xrGetDeviceSampleRateFB(session, hapticActionInfo, deviceSampleRate);
 }
-XrResult XRAPI_CALL dispatch_xrGetDisplayRefreshRateFB(XrSession session, float* displayRefreshRate) {
+XrResult XRAPI_CALL dispatch_xrGetDisplayRefreshRateFB(XrSession /*session*/, float* /*displayRefreshRate*/) {
   std::lock_guard lock(mutex);
   return XR_ERROR_FUNCTION_UNSUPPORTED;
 }
-XrResult XRAPI_CALL dispatch_xrGetHandMeshFB(XrHandTrackerEXT handTracker, XrHandTrackingMeshFB* mesh) {
+XrResult XRAPI_CALL dispatch_xrGetHandMeshFB(XrHandTrackerEXT /*handTracker*/, XrHandTrackingMeshFB* /*mesh*/) {
   std::lock_guard lock(mutex);
   return XR_ERROR_FUNCTION_UNSUPPORTED;
 }
-XrResult XRAPI_CALL dispatch_xrGetInputSourceLocalizedName(XrSession session, const XrInputSourceLocalizedNameGetInfo* getInfo, uint32_t bufferCapacityInput, uint32_t* bufferCountOutput, char* buffer) {
+XrResult XRAPI_CALL dispatch_xrGetInputSourceLocalizedName(XrSession /*session*/, const XrInputSourceLocalizedNameGetInfo* /*getInfo*/, uint32_t /*bufferCapacityInput*/, uint32_t* /*bufferCountOutput*/, char* /*buffer*/) {
   std::lock_guard lock(mutex);
   return XR_ERROR_FUNCTION_UNSUPPORTED;
 }
@@ -231,11 +231,11 @@ XrResult XRAPI_CALL dispatch_xrGetInstanceProperties(XrInstance instance, XrInst
   std::lock_guard lock(mutex);
   return m_xrGetInstanceProperties(instance, instanceProperties);
 }
-XrResult XRAPI_CALL dispatch_xrGetPerformanceMetricsStateMETA(XrSession session, XrPerformanceMetricsStateMETA* state) {
+XrResult XRAPI_CALL dispatch_xrGetPerformanceMetricsStateMETA(XrSession /*session*/, XrPerformanceMetricsStateMETA* /*state*/) {
   std::lock_guard lock(mutex);
   return XR_ERROR_FUNCTION_UNSUPPORTED;
 }
-XrResult XRAPI_CALL dispatch_xrGetRecommendedLayerResolutionMETA(XrSession session, const XrRecommendedLayerResolutionGetInfoMETA* info, XrRecommendedLayerResolutionMETA* resolution) {
+XrResult XRAPI_CALL dispatch_xrGetRecommendedLayerResolutionMETA(XrSession /*session*/, const XrRecommendedLayerResolutionGetInfoMETA* /*info*/, XrRecommendedLayerResolutionMETA* /*resolution*/) {
   std::lock_guard lock(mutex);
   return XR_ERROR_FUNCTION_UNSUPPORTED;
 }
@@ -283,7 +283,7 @@ XrResult XRAPI_CALL dispatch_xrGetVulkanInstanceExtensionsKHR(XrInstance instanc
   std::lock_guard lock(mutex);
   return m_xrGetVulkanInstanceExtensionsKHR(instance, systemId, bufferCapacityInput, bufferCountOutput, buffer);
 }
-XrResult XRAPI_CALL dispatch_xrInitializeLoaderKHR(const XrLoaderInitInfoBaseHeaderKHR* loaderInitInfo) {
+XrResult XRAPI_CALL dispatch_xrInitializeLoaderKHR(const XrLoaderInitInfoBaseHeaderKHR* /*loaderInitInfo*/) {
   std::lock_guard lock(mutex);
   return XR_ERROR_FUNCTION_UNSUPPORTED;
 }
@@ -295,11 +295,11 @@ XrResult XRAPI_CALL dispatch_xrLocateSpace(XrSpace space, XrSpace baseSpace, XrT
   std::lock_guard lock(mutex);
   return m_xrLocateSpace(space, baseSpace, time, location);
 }
-XrResult XRAPI_CALL dispatch_xrLocateSpaces(XrSession session, const XrSpacesLocateInfo* locateInfo, XrSpaceLocations* spaceLocations) {
+XrResult XRAPI_CALL dispatch_xrLocateSpaces(XrSession /*session*/, const XrSpacesLocateInfo* /*locateInfo*/, XrSpaceLocations* /*spaceLocations*/) {
   std::lock_guard lock(mutex);
   return XR_ERROR_FUNCTION_UNSUPPORTED;
 }
-XrResult XRAPI_CALL dispatch_xrLocateSpacesKHR(XrSession session, const XrSpacesLocateInfo* locateInfo, XrSpaceLocations* spaceLocations) {
+XrResult XRAPI_CALL dispatch_xrLocateSpacesKHR(XrSession /*session*/, const XrSpacesLocateInfo* /*locateInfo*/, XrSpaceLocations* /*spaceLocations*/) {
   std::lock_guard lock(mutex);
   return XR_ERROR_FUNCTION_UNSUPPORTED;
 }
@@ -309,29 +309,29 @@ XrResult XRAPI_CALL dispatch_xrLocateViews(XrSession session, const XrViewLocate
 }
 XrResult XRAPI_CALL dispatch_xrPassthroughLayerPauseFB(XrPassthroughLayerFB layer) {
   std::lock_guard lock(mutex);
-  return XR_ERROR_FUNCTION_UNSUPPORTED;
+  return m_xrPassthroughLayerPauseFB(layer);
 }
 XrResult XRAPI_CALL dispatch_xrPassthroughLayerResumeFB(XrPassthroughLayerFB layer) {
   std::lock_guard lock(mutex);
-  return XR_ERROR_FUNCTION_UNSUPPORTED;
+  return m_xrPassthroughLayerResumeFB(layer);
 }
 XrResult XRAPI_CALL dispatch_xrPassthroughLayerSetStyleFB(XrPassthroughLayerFB layer, const XrPassthroughStyleFB* style) {
   std::lock_guard lock(mutex);
-  return XR_ERROR_FUNCTION_UNSUPPORTED;
+  return m_xrPassthroughLayerSetStyleFB(layer, style);
 }
 XrResult XRAPI_CALL dispatch_xrPassthroughPauseFB(XrPassthroughFB passthrough) {
   std::lock_guard lock(mutex);
-  return XR_ERROR_FUNCTION_UNSUPPORTED;
+  return m_xrPassthroughPauseFB(passthrough);
 }
 XrResult XRAPI_CALL dispatch_xrPassthroughStartFB(XrPassthroughFB passthrough) {
   std::lock_guard lock(mutex);
-  return XR_ERROR_FUNCTION_UNSUPPORTED;
+  return m_xrPassthroughStartFB(passthrough);
 }
 XrResult XRAPI_CALL dispatch_xrPathToString(XrInstance instance, XrPath path, uint32_t bufferCapacityInput, uint32_t* bufferCountOutput, char* buffer) {
   std::lock_guard lock(mutex);
   return m_xrPathToString(instance, path, bufferCapacityInput, bufferCountOutput, buffer);
 }
-XrResult XRAPI_CALL dispatch_xrPerfSettingsSetPerformanceLevelEXT(XrSession session, XrPerfSettingsDomainEXT domain, XrPerfSettingsLevelEXT level) {
+XrResult XRAPI_CALL dispatch_xrPerfSettingsSetPerformanceLevelEXT(XrSession /*session*/, XrPerfSettingsDomainEXT /*domain*/, XrPerfSettingsLevelEXT /*level*/) {
   std::lock_guard lock(mutex);
   return XR_ERROR_FUNCTION_UNSUPPORTED;
 }
@@ -339,7 +339,7 @@ XrResult XRAPI_CALL dispatch_xrPollEvent(XrInstance instance, XrEventDataBuffer*
   std::lock_guard lock(mutex);
   return m_xrPollEvent(instance, eventData);
 }
-XrResult XRAPI_CALL dispatch_xrQueryPerformanceMetricsCounterMETA(XrSession session, XrPath counterPath, XrPerformanceMetricsCounterMETA* counter) {
+XrResult XRAPI_CALL dispatch_xrQueryPerformanceMetricsCounterMETA(XrSession /*session*/, XrPath /*counterPath*/, XrPerformanceMetricsCounterMETA* /*counter*/) {
   std::lock_guard lock(mutex);
   return XR_ERROR_FUNCTION_UNSUPPORTED;
 }
@@ -347,7 +347,7 @@ XrResult XRAPI_CALL dispatch_xrReleaseSwapchainImage(XrSwapchain swapchain, cons
   std::lock_guard lock(mutex);
   return m_xrReleaseSwapchainImage(swapchain, releaseInfo);
 }
-XrResult XRAPI_CALL dispatch_xrRequestDisplayRefreshRateFB(XrSession session, float displayRefreshRate) {
+XrResult XRAPI_CALL dispatch_xrRequestDisplayRefreshRateFB(XrSession /*session*/, float /*displayRefreshRate*/) {
   std::lock_guard lock(mutex);
   return XR_ERROR_FUNCTION_UNSUPPORTED;
 }
@@ -359,11 +359,11 @@ XrResult XRAPI_CALL dispatch_xrResultToString(XrInstance instance, XrResult valu
   std::lock_guard lock(mutex);
   return m_xrResultToString(instance, value, buffer);
 }
-XrResult XRAPI_CALL dispatch_xrSetColorSpaceFB(XrSession session, const XrColorSpaceFB colorSpace) {
+XrResult XRAPI_CALL dispatch_xrSetColorSpaceFB(XrSession /*session*/, const XrColorSpaceFB /*colorSpace*/) {
   std::lock_guard lock(mutex);
   return XR_ERROR_FUNCTION_UNSUPPORTED;
 }
-XrResult XRAPI_CALL dispatch_xrSetPerformanceMetricsStateMETA(XrSession session, const XrPerformanceMetricsStateMETA* state) {
+XrResult XRAPI_CALL dispatch_xrSetPerformanceMetricsStateMETA(XrSession /*session*/, const XrPerformanceMetricsStateMETA* /*state*/) {
   std::lock_guard lock(mutex);
   return XR_ERROR_FUNCTION_UNSUPPORTED;
 }
@@ -387,27 +387,27 @@ XrResult XRAPI_CALL dispatch_xrSyncActions(XrSession session, const XrActionsSyn
   std::lock_guard lock(mutex);
   return m_xrSyncActions(session, syncInfo);
 }
-XrResult XRAPI_CALL dispatch_xrTriangleMeshBeginUpdateFB(XrTriangleMeshFB mesh) {
+XrResult XRAPI_CALL dispatch_xrTriangleMeshBeginUpdateFB(XrTriangleMeshFB /*mesh*/) {
   std::lock_guard lock(mutex);
   return XR_ERROR_FUNCTION_UNSUPPORTED;
 }
-XrResult XRAPI_CALL dispatch_xrTriangleMeshBeginVertexBufferUpdateFB(XrTriangleMeshFB mesh, uint32_t* outVertexCount) {
+XrResult XRAPI_CALL dispatch_xrTriangleMeshBeginVertexBufferUpdateFB(XrTriangleMeshFB /*mesh*/, uint32_t* /*outVertexCount*/) {
   std::lock_guard lock(mutex);
   return XR_ERROR_FUNCTION_UNSUPPORTED;
 }
-XrResult XRAPI_CALL dispatch_xrTriangleMeshEndUpdateFB(XrTriangleMeshFB mesh, uint32_t vertexCount, uint32_t triangleCount) {
+XrResult XRAPI_CALL dispatch_xrTriangleMeshEndUpdateFB(XrTriangleMeshFB /*mesh*/, uint32_t /*vertexCount*/, uint32_t /*triangleCount*/) {
   std::lock_guard lock(mutex);
   return XR_ERROR_FUNCTION_UNSUPPORTED;
 }
-XrResult XRAPI_CALL dispatch_xrTriangleMeshEndVertexBufferUpdateFB(XrTriangleMeshFB mesh) {
+XrResult XRAPI_CALL dispatch_xrTriangleMeshEndVertexBufferUpdateFB(XrTriangleMeshFB /*mesh*/) {
   std::lock_guard lock(mutex);
   return XR_ERROR_FUNCTION_UNSUPPORTED;
 }
-XrResult XRAPI_CALL dispatch_xrTriangleMeshGetIndexBufferFB(XrTriangleMeshFB mesh, uint32_t** outIndexBuffer) {
+XrResult XRAPI_CALL dispatch_xrTriangleMeshGetIndexBufferFB(XrTriangleMeshFB /*mesh*/, uint32_t** /*outIndexBuffer*/) {
   std::lock_guard lock(mutex);
   return XR_ERROR_FUNCTION_UNSUPPORTED;
 }
-XrResult XRAPI_CALL dispatch_xrTriangleMeshGetVertexBufferFB(XrTriangleMeshFB mesh, XrVector3f** outVertexBuffer) {
+XrResult XRAPI_CALL dispatch_xrTriangleMeshGetVertexBufferFB(XrTriangleMeshFB /*mesh*/, XrVector3f** /*outVertexBuffer*/) {
   std::lock_guard lock(mutex);
   return XR_ERROR_FUNCTION_UNSUPPORTED;
 }

@@ -4,18 +4,24 @@
 #include <string_view>
 #include <vector>
 namespace venture::xr {
-// Holding both stick clicks for 0.5 s presses the game's menu and keeps it pressed until a click
-// releases, so menu holds (height calibration, hold-to-skip) work. On by default for a hand
-// whose actual native menu binding is absent after a focused sync. VENTURE_MENU_CHORD=off disables it and
-// VENTURE_MENU_CHORD=stick-clicks enables it on every profile. Ordinary game clicks are preserved.
+// The game's menu from inputs the game does not bind there: the player's
+// controls (common/controls.h) choose one button, a held button or two buttons
+// held together, and by default a controller without a menu button gets both
+// stick clicks pressed together (no hold). Automatic also adds that stick-click
+// chord for a hand whose actual native menu binding is absent after a focused sync.
+// VENTURE_MENU_CHORD=off disables that fallback and VENTURE_MENU_CHORD=stick-clicks
+// enables it on every automatic profile. Ordinary game clicks are preserved.
+// The menu presses once the sources are held for `threshold` (0: on the sync
+// that sees them all down) and stays pressed until one releases, so menu holds
+// (height calibration, hold-to-skip) work.
 struct MenuChord {
-  static constexpr std::int64_t threshold = 500'000'000;
+  std::int64_t threshold = 0;
   std::int64_t since = -1;
   bool release_needed = false;
   bool update(std::int64_t now, bool left, bool right, bool active) {
     if (!active || (since >= 0 && now < since)) { since = -1; release_needed = true; return false; }
     if (!left || !right) {
-      // Releasing one click ends the press; both must release before the chord rearms.
+      // Releasing one source ends the press; both must release before it rearms.
       if (since >= 0 && now - since >= threshold) release_needed = true;
       since = -1;
       if (!left && !right) release_needed = false;

@@ -54,8 +54,9 @@ template<class F, class... A> std::string describe(A... args) {
     s += std::format(" fence=0x{:x} batches={}", handle(std::get<3>(a)), count);
     for (std::uint32_t i = 0; submits && i < std::min(count, 64u); ++i) {
       const auto& b = submits[i];
-      s += std::format(" batch={} waits=[{}] signals=[{}]", i,
-          list(b.waitSemaphoreCount, b.pWaitSemaphores), list(b.signalSemaphoreCount, b.pSignalSemaphores));
+      s += std::format(" batch={} waits=[{}] signals=[{}] cmds=[{}]", i,
+          list(b.waitSemaphoreCount, b.pWaitSemaphores), list(b.signalSemaphoreCount, b.pSignalSemaphores),
+          list(b.commandBufferCount, b.pCommandBuffers));
       auto* p = static_cast<const VkBaseInStructure*>(b.pNext);
       unsigned nodes = 0;
       for (; p && nodes++ < 64; p = p->pNext)
@@ -72,6 +73,8 @@ template<class F, class... A> std::string describe(A... args) {
     s += std::format(" fence=0x{:x} batches={}", handle(std::get<3>(a)), count);
     for (std::uint32_t i = 0; submits && i < std::min(count, 64u); ++i) {
       const auto& b = submits[i]; s += std::format(" batch={}", i);
+      for (std::uint32_t j = 0; j < std::min(b.commandBufferInfoCount, 64u); ++j)
+        s += std::format(" cmd=0x{:x}", handle(b.pCommandBufferInfos[j].commandBuffer));
       for (std::uint32_t j = 0; j < std::min(b.waitSemaphoreInfoCount, 64u); ++j)
         s += std::format(" wait=0x{:x}:{}", handle(b.pWaitSemaphoreInfos[j].semaphore), b.pWaitSemaphoreInfos[j].value);
       for (std::uint32_t j = 0; j < std::min(b.signalSemaphoreInfoCount, 64u); ++j)

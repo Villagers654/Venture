@@ -12,6 +12,7 @@
 #include <unordered_set>
 #include <utility>
 
+#include "common/environment.h"
 #include "common/log.h"
 
 namespace venture::vulkan {
@@ -136,7 +137,13 @@ VkFormat host_depth_format(VkPhysicalDevice physical, VkFormat format) {
                                          attaches(VK_FORMAT_X8_D24_UNORM_PACK32)}).first;
   }
   const auto& a = it->second;
-  const bool forced = depth_alias_forced.load(std::memory_order_relaxed);
+  // VENTURE_VULKAN_DEPTH_ALIAS=1 (diagnostic): take the substitution a GPU
+  // without D24 attachments needs (AMD, RADV) on one that has them.
+  static const bool requested = [] {
+    const char* value = venture::environment::getenv("VENTURE_VULKAN_DEPTH_ALIAS");
+    return value && std::string_view(value) == "1";
+  }();
+  const bool forced = requested || depth_alias_forced.load(std::memory_order_relaxed);
   if (format == VK_FORMAT_D24_UNORM_S8_UINT) return a.d24s8_native && !forced ? format : a.d24s8;
   return a.x8d24_native && !forced ? format : a.x8d24;
 }

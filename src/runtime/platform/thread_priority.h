@@ -43,6 +43,9 @@ const char* thread_cycles_method();
 void apply_pending_thread_priority();
 // For a dedicated background worker only; its lowered priority lasts until exit.
 void lower_background_thread_priority();
+// For a worker whose output is usually not awaited yet: below normal, so game
+// threads run first, without background mode's I/O and memory priority.
+void lower_worker_thread_priority();
 int set_audio_thread_priority(std::int32_t tid, int fifo_priority);
 int get_audio_thread_scheduler(std::int32_t tid, int* policy, int* priority);
 // Retain the native thread identity while its guest thread is attached.

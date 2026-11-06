@@ -1,22 +1,33 @@
 #include "launcher/debug_report.h"
+#include "launcher/diagnosis.h"
 #include "common/environment.h"
 #include "common/http/client.h"
+#include "common/library/library.h"
 #include "common/process.h"
 #include "common/saves_migration.h"
+#include "common/steam_library.h"
 #include "common/json.h"
 #include <algorithm>
 #include <cctype>
 #include <chrono>
+#include <condition_variable>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
 #include <format>
 #include <fstream>
+#include <functional>
 #include <map>
+#include <mutex>
+#include <optional>
+#include <ranges>
 #include <regex>
+#include <set>
 #include <thread>
 #ifdef _WIN32
 #include <windows.h>
+#include <tlhelp32.h>
 #else
 #include <sys/utsname.h>
 #include <unistd.h>
@@ -25,7 +36,7 @@ extern char **environ;
 
 namespace venture::launcher {
 namespace {
-// Each log keeps its end, where a failure is. The logs share a budget that
+// Each log keeps its end, where a failure is, and a long one its start. The logs share a budget that
 // keeps the whole report under the paste service's 1 MB limit, most important
 // first; redaction changes the size by a little at most.
 constexpr size_t kRuntimeLog = 448 << 10, kSideLog = 128 << 10, kLauncherLog = 128 << 10;
@@ -161,6 +172,9 @@ void xr_section(std::string &out) {
   }
 }
 #else
+std::string gpu_names();
+std::string vr_inputs();
+void xr_services(std::string &out);
 std::string first_line_with(const fs::path &file, std::string_view prefix) {
   std::ifstream in(file);
   for (std::string line; std::getline(in, line);)
@@ -174,26 +188,34 @@ void system_section(std::string &out) {
   utsname u{};
   uname(&u);
   out += std::format("OS: {} (kernel {} {})\n", os, u.release, u.machine);
-  if (const char *session = std::getenv("XDG_SESSION_TYPE")) out += std::format("Session: {}\n", session);
+  const char *desktop = std::getenv("XDG_CURRENT_DESKTOP"), *session = std::getenv("XDG_SESSION_TYPE");
+  out += std::format("Desktop: {} ({})\n", desktop ? desktop : "unknown", session ? session : "unknown session");
   std::string cpu = first_line_with("/proc/cpuinfo", "model name\t: ");
   out += std::format("CPU: {} ({} threads)\n", cpu, std::thread::hardware_concurrency());
   long pages = sysconf(_SC_PHYS_PAGES), avail = sysconf(_SC_AVPHYS_PAGES), size = sysconf(_SC_PAGE_SIZE);
   out += std::format("RAM: {:.1f} GiB, {:.1f} GiB free\n", double(pages) * size / 1073741824.0,
                      double(avail) * size / 1073741824.0);
-  std::error_code ec;
-  for (const auto &card : fs::directory_iterator("/sys/class/drm", ec)) {
-    auto name = card.path().filename().string();
-    if (!name.starts_with("card") || name.find('-') != std::string::npos) continue;
-    auto device = card.path() / "device";
-    std::string vendor = read_file(device / "vendor"), id = read_file(device / "device");
-    auto driver = fs::read_symlink(device / "driver", ec).filename().string();
-    std::erase(vendor, '\n');
-    std::erase(id, '\n');
-    out += std::format("GPU: {}:{}, driver {}\n", vendor, id, driver);
+  // Names and kernel drivers from lspci, else the PCI ids sysfs gives.
+  if (auto gpus = gpu_names(); !gpus.empty()) {
+    out += gpus;
+  } else {
+    std::error_code ec;
+    for (const auto &card : fs::directory_iterator("/sys/class/drm", ec)) {
+      auto name = card.path().filename().string();
+      if (!name.starts_with("card") || name.find('-') != std::string::npos) continue;
+      auto device = card.path() / "device";
+      std::string vendor = read_file(device / "vendor"), id = read_file(device / "device");
+      auto driver = fs::read_symlink(device / "driver", ec).filename().string();
+      std::erase(vendor, '\n');
+      std::erase(id, '\n');
+      out += std::format("GPU: {}:{}, driver {}\n", vendor, id, driver);
+    }
   }
+  out += std::format("VR input devices: {}\n", vr_inputs());
 }
 
 void xr_section(std::string &out) {
+  xr_services(out);
   std::vector<fs::path> config;
   if (const char *c = std::getenv("XDG_CONFIG_HOME"); c && *c) config.emplace_back(c);
   else if (const char *h = std::getenv("HOME")) config.push_back(fs::path(h) / ".config");
@@ -230,9 +252,16 @@ void environment_section(std::string &out) {
   for (char **p = environ; *p; ++p) lines.emplace_back(*p);
 #endif
   std::ranges::sort(lines);
+  // Venture's own, the XR and graphics stacks', and the overlays and GPU
+  // selections known to break VR games ("NAME=" matches one variable).
+  static constexpr std::string_view wanted[] = {
+      "VENTURE_", "XR_", "VK_", "OXR_", "STEAMVR_", "PRESSURE_VESSEL_", "VR_OVERRIDE=", "VR_PATHREG_OVERRIDE=",
+      "LD_PRELOAD=", "DRI_PRIME=", "MESA_VK_DEVICE_SELECT=", "__NV_PRIME_RENDER_OFFLOAD=",
+      "__GLX_VENDOR_LIBRARY_NAME=", "AMD_VULKAN_ICD=", "MANGOHUD", "DISABLE_MANGOHUD=", "ENABLE_VKBASALT=",
+      "OBS_VKCAPTURE=", "XDG_CURRENT_DESKTOP=", "XDG_SESSION_TYPE=", "WAYLAND_DISPLAY=", "DISPLAY="};
   bool any = false;
   for (const auto &line : lines)
-    for (std::string_view prefix : {"VENTURE_", "XR_", "VK_", "OXR_", "STEAMVR_", "PRESSURE_VESSEL_"})
+    for (std::string_view prefix : wanted)
       if (line.size() > prefix.size() &&
           std::equal(prefix.begin(), prefix.end(), line.begin(),
                      [](char a, char b) { return a == std::toupper(static_cast<unsigned char>(b)); })) {
@@ -241,6 +270,129 @@ void environment_section(std::string &out) {
         break;
       }
   if (!any) out += "(none set)\n";
+}
+
+// The settings a launch of `app_id` uses (settings.json alone does not say
+// which apply): the game's own overrides, each effective value and where it
+// comes from, and the environment the launch passes, which
+// library::launch_environment builds for the launch itself. Variables a launch
+// leaves unset are the runtime's defaults unless the launcher inherited them.
+void settings_section(std::string &out, const fs::path &data, const std::string &app_id) {
+  library::Settings s;
+  try {
+    s = library::Settings::load(data);
+  } catch (const std::exception &e) {
+    out += std::format("settings.json could not be read ({}); the launch used the defaults.\n", e.what());
+    s = library::Settings::defaults(data);
+  }
+  const auto environment = library::launch_environment(s, app_id);
+  // A variable's value in the launch: set by it, else inherited by the runtime.
+  auto variable = [&](std::string_view name) -> std::pair<std::string, const char *> {
+    for (const auto &[key, value] : environment)
+      if (key == name) return {value, "set"};
+    if (const char *inherited = std::getenv(std::string(name).c_str())) return {inherited, "inherited"};
+    return {"", nullptr};
+  };
+  const auto own_display = s.game_display.find(app_id);
+  const library::DisplaySettings *game = own_display == s.game_display.end() ? nullptr : &own_display->second;
+  const bool own_controls = s.game_controls.contains(app_id);
+  const auto global = library::global_display_defaults();
+  const auto defaults = library::Settings::defaults(data);
+  auto source = [](bool by_game, bool global_default) {
+    return by_game ? "game override" : global_default ? "global default" : "global setting";
+  };
+
+  out += "Game overrides:";
+  if (app_id.empty()) out += " (game not identified; the global settings apply)\n";
+  else {
+    std::string lines;
+    if (game) {
+      if (!game->resolution.empty())
+        lines += std::format("  resolution: {}\n", library::resolution_environment(*game));
+      if (!game->rate.empty()) lines += std::format("  frame rate: {}\n", library::frame_rate_environment(*game));
+      if (!game->mirror.empty()) lines += std::format("  mirror: {}\n", game->mirror);
+      if (!game->mirror_eye.empty()) lines += std::format("  mirror eye: {}\n", game->mirror_eye);
+      if (!game->pc_audio.empty()) lines += std::format("  PC audio: {}\n", game->pc_audio);
+      if (!game->texture_compression.empty())
+        lines += std::format("  texture compression: {}\n", game->texture_compression);
+      if (game->texture_compression_threshold)
+        lines += std::format("  texture compression threshold: {}%\n", game->texture_compression_threshold);
+    }
+    if (own_controls) lines += std::format("  controls: {}\n", controls::encode(s.game_controls.at(app_id)));
+    out += lines.empty() ? " none (the game follows the global settings)\n" : "\n" + lines;
+  }
+
+  out += "Effective settings:\n";
+  const auto display = library::effective_display(s.display, game);
+  {
+    const auto value = library::resolution_environment(display);
+    std::string text = value == "runtime" ? "the host runtime's recommended size" : value;
+    for (const auto &preset : library::headset_presets)
+      if (display.resolution == preset.id) text = std::format("{} ({})", preset.name, value);
+    if (display.resolution == "percent") text = value + " of the host runtime's pixel count";
+    out += std::format("  resolution: {} ({})\n", text,
+                       source(game && !game->resolution.empty(), s.display.resolution == global.resolution));
+  }
+  {
+    const auto value = library::frame_rate_environment(display);
+    out += std::format("  frame rate: {} ({})\n", value == "runtime" ? "the host runtime's rate" : value + " Hz",
+                       source(game && !game->rate.empty(), s.display.rate == global.rate));
+  }
+  out += std::format("  mirror: {} ({}), eye {} ({})\n", library::mirror_environment(display),
+                     source(game && !game->mirror.empty(), s.display.mirror == global.mirror),
+                     library::mirror_eye_environment(display),
+                     source(game && !game->mirror_eye.empty(), s.display.mirror_eye == global.mirror_eye));
+  out += std::format("  PC audio: {} ({})\n", library::pc_audio_environment(display),
+                     source(game && !game->pc_audio.empty(), s.display.pc_audio == global.pc_audio));
+  {
+    // As the runtime reads them (texture.cpp): unset is always, a threshold
+    // outside 1-100 is 50%.
+    const auto [mode, mode_from] = variable("VENTURE_TEXTURE_COMPRESSION");
+    const auto [threshold, threshold_from] = variable("VENTURE_TEXTURE_COMPRESSION_THRESHOLD");
+    const bool by_game = game && !game->texture_compression.empty();
+    const char *name = mode == "never" || mode == "0" ? "Off" : mode == "auto" || mode == "2" ? "Automatic" : "Always";
+    const char *from = mode_from && std::string_view(mode_from) == "inherited"
+                           ? "VENTURE_TEXTURE_COMPRESSION in the launcher's environment"
+                           : source(by_game, s.texture_compression == defaults.texture_compression);
+    out += std::format("  texture compression: {} ({})", name, from);
+    if (std::string_view(name) == "Automatic") {
+      const long parsed = threshold.empty() ? 0 : std::strtol(threshold.c_str(), nullptr, 10);
+      const char *threshold_source =
+          threshold_from && std::string_view(threshold_from) == "inherited"
+              ? "VENTURE_TEXTURE_COMPRESSION_THRESHOLD in the launcher's environment"
+              : source(by_game && game->texture_compression_threshold,
+                       s.texture_compression_threshold == defaults.texture_compression_threshold);
+      out += std::format(", threshold {}% ({})", parsed >= 1 && parsed <= 100 ? parsed : 50, threshold_source);
+    }
+    out += '\n';
+  }
+  out += std::format("  controls: {}\n", own_controls ? "the game's own" : "the global controls");
+  out += std::format("  mixed reality (passthrough): {} ({})\n", s.passthrough ? "on" : "off",
+                     source(false, s.passthrough == defaults.passthrough));
+  if (s.passthrough && s.color_key) out += std::format("  passthrough color key: #{}\n", s.key_color);
+  out += std::format("  game language: {}\n", s.game_language.empty() ? "the system's" : s.game_language);
+  out += std::format("  log level: {} ({})\n", s.log_level, source(false, s.log_level == defaults.log_level));
+
+  out += "Runtime toggles:\n";
+  {
+    // The runtime keeps translated code unless VENTURE_JIT_PTC is 0.
+    const auto [ptc, from] = variable("VENTURE_JIT_PTC");
+    const bool kept = ptc != "0";
+    out += std::format("  keep translated code: {} ({})\n", kept ? "on" : "off",
+                       from && std::string_view(from) == "inherited"
+                           ? "VENTURE_JIT_PTC in the launcher's environment"
+                           : source(false, s.keep_translated_code == defaults.keep_translated_code));
+  }
+  if (s.vulkan_layers.empty())
+    out += "  overlay blocking: on, every third-party implicit Vulkan layer is left out (global default)\n";
+  else {
+    std::string kept;
+    for (const auto &layer : s.vulkan_layers) kept += (kept.empty() ? "" : ", ") + layer;
+    out += std::format("  overlay blocking: on, except the kept layers {} (global setting)\n", kept);
+  }
+
+  out += "Launch environment from these settings:\n";
+  for (const auto &[key, value] : environment) out += std::format("  {}={}\n", key, value);
 }
 
 void log_section(std::string &out, const fs::path &file, size_t limit) {
@@ -254,8 +406,19 @@ void log_section(std::string &out, const fs::path &file, size_t limit) {
   }
   limit = std::min(limit, kReportBudget - out.size() - header);
   out += std::format("\n=== {} ({} KiB, written {}{}) ===\n", paths::utf8(file.filename()), (size + 1023) / 1024,
-                     local_time(fs::last_write_time(file, ec)), size > limit ? ", end only" : "");
-  std::string text = tail_log(file, limit);
+                     local_time(fs::last_write_time(file, ec)), size > limit ? ", start and end" : "");
+  std::string text;
+  if (size > limit) {
+    // The start holds the session's setup (device, swapchains, layers), which a
+    // game's log spam can push out of a plain tail.
+    text = read_file(file, limit / 4);
+    text.resize(text.rfind('\n') + 1);
+    std::string end = tail_log(file, limit - text.size());
+    out += text + std::format("... {} KiB left out ...\n", (size - text.size() - end.size() + 1023) / 1024);
+    text = std::move(end);
+  } else {
+    text = tail_log(file, limit);
+  }
   out += text;
   if (!text.empty() && text.back() != '\n') out += '\n';
 }
@@ -318,6 +481,388 @@ void prune(const fs::path &dir) {
   std::ranges::sort(reports, std::greater{}, [](const auto &e) { return e.last_write_time(); });
   for (size_t i = kKeptReports; i < reports.size(); ++i) fs::remove(reports[i].path(), ec);
 }
+
+using Clock = std::chrono::system_clock;
+std::optional<Clock::time_point> modified(const fs::path &file) {
+  std::error_code ec;
+  auto t = fs::last_write_time(file, ec);
+  if (ec) return std::nullopt;
+  return Clock::now() + std::chrono::duration_cast<Clock::duration>(t - fs::file_time_type::clock::now());
+}
+std::string duration_text(Clock::duration d) {
+  auto seconds = std::chrono::duration_cast<std::chrono::seconds>(d).count();
+  if (seconds < 60) return std::format("{}s", seconds);
+  if (seconds < 3600) return std::format("{}m {}s", seconds / 60, seconds % 60);
+  return std::format("{}h {}m", seconds / 3600, seconds / 60 % 60);
+}
+std::string one_line(std::string_view text, size_t limit = 600) {
+  std::string out(text.substr(0, std::min(text.size(), limit)));
+  while (!out.empty() && (out.back() == '\r' || out.back() == '\n' || out.back() == ' ')) out.pop_back();
+  size_t start = out.find_first_not_of(' ');
+  return start == std::string::npos ? std::string() : out.substr(start);
+}
+std::vector<std::string> lines_of(std::string_view text) {
+  std::vector<std::string> out;
+  for (size_t at = 0; at < text.size();) {
+    size_t end = text.find('\n', at);
+    if (end == std::string::npos) end = text.size();
+    out.emplace_back(text.substr(at, end - at));
+    at = end + 1;
+  }
+  return out;
+}
+
+// What the runtime log says about the run: the runtime logs its wall-clock
+// start ("Process started at <UTC>") and its exit code.
+struct Run {
+  std::optional<Clock::time_point> started, ended;
+  std::string result;
+  bool failed = false;
+};
+Run read_run(const fs::path &log, const fs::path &console) {
+  Run run;
+  const std::string text = tail_log(log, 4 << 20);
+  run.ended = modified(log);
+  if (auto c = modified(console); c && (!run.ended || *c > *run.ended)) run.ended = c;
+  std::optional<int> exit;
+  bool stopped = false, runtime_error = false;
+  for (const auto &line : lines_of(text)) {
+    // The supervisor's start comes first; its worker logs its own after it.
+    constexpr std::string_view starting = "] Process started at ";
+    if (auto at = line.find(starting); at != std::string::npos && !run.started) {
+      int y, mo, d, h, mi, sec;
+      if (std::sscanf(line.c_str() + at + starting.size(), "%4d-%2d-%2dT%2d:%2d:%2dZ", &y, &mo, &d, &h, &mi, &sec) ==
+          6)
+        run.started = std::chrono::sys_days(std::chrono::year(y) / mo / d) + std::chrono::hours(h) +
+                      std::chrono::minutes(mi) + std::chrono::seconds(sec);
+    }
+    if (auto at = line.find("] Exit code: "); at != std::string::npos) {
+      exit = std::atoi(line.c_str() + at + 13);
+      stopped = line.find("(stop requested)") != std::string::npos;
+    }
+    // Before this Venture logged its exit code: a guest's own exit.
+    constexpr std::string_view terminal = "] Terminal guest process exit status=";
+    if (auto at = line.find(terminal); at != std::string::npos && !exit)
+      exit = std::atoi(line.c_str() + at + terminal.size());
+    if (line.find(" E [runtime] ") != std::string::npos) runtime_error = true;
+  }
+  if (auto obb = library::missing_expansion(log); !obb.empty()) {
+    run.result = std::format("closed: its install lacks the expansion file {}", obb);
+    run.failed = true;
+  } else if (library::needed_meta_sign_in(log)) {
+    run.result = "closed: it needs a signed-in Meta account that owns it";
+    run.failed = true;
+  } else if (library::needed_device_attestation(log)) {
+    run.result = "closed: it requires Meta device attestation, which only a real Quest can provide";
+    run.failed = true;
+  } else if (auto dialog = library::game_dialog(log); !dialog.empty() && !stopped) {
+    run.result = std::format("closed after showing the message \"{}\"", dialog);
+    run.failed = true;
+  } else if (stopped) {
+    run.result = std::format("stopped from Venture (exit code {})", *exit);
+  } else if (exit && *exit == 0) {
+    run.result = "the game exited normally (exit code 0)";
+  } else if (exit || runtime_error) {
+    // A runtime that failed before opening its log still wrote its console.
+    const std::string tail = text.empty() ? tail_log(console) : text;
+    run.result = (exit ? "" : "did not start: ") + library::runtime_failure(tail, exit.value_or(1));
+    run.failed = true;
+  } else {
+    run.result = "no exit recorded (still running, or Venture was closed while it ran)";
+  }
+  return run;
+}
+
+// The span system logs are matched against: the run, with a little margin.
+struct Window {
+  Clock::time_point from, to;
+  bool contains(Clock::time_point t) const { return t >= from && t <= to; }
+};
+
+#ifndef _WIN32
+fs::path which(std::string_view name) {
+  const char *path = std::getenv("PATH");
+  for (auto dir : std::views::split(std::string_view(path ? path : "/usr/bin:/bin"), ':')) {
+    fs::path candidate = fs::path(std::string(dir.begin(), dir.end())) / name;
+    if (access(candidate.c_str(), X_OK) == 0) return candidate;
+  }
+  return {};
+}
+#else
+fs::path which(std::wstring_view name) {
+  wchar_t dir[MAX_PATH];
+  UINT n = GetSystemDirectoryW(dir, MAX_PATH);
+  if (!n || n >= MAX_PATH) return {};
+  return fs::path(std::wstring(dir, n)) / name;
+}
+#endif
+// A tool's standard output, or nothing when it is missing, fails to start or
+// takes longer than `timeout`.
+std::string capture(const fs::path &program, const std::vector<std::string> &args,
+                    std::chrono::seconds timeout = std::chrono::seconds(5)) {
+  if (program.empty()) return {};
+  std::string out;
+  std::stop_source stop;
+  std::jthread timer([&](std::stop_token done) {
+    std::mutex m;
+    std::unique_lock lock(m);
+    std::condition_variable_any().wait_for(lock, done, timeout, [] { return false; });
+    stop.request_stop();
+  });
+  try {
+    run_tool(program, args, [&](std::string_view chunk) {
+      if (out.size() < (1 << 20)) out += chunk;
+    }, nullptr, stop.get_token());
+  } catch (...) {
+  }
+  return out;
+}
+
+// Error lines from a log's end (the last `keep`), else its last lines when
+// `tail` is set.
+std::vector<std::string> log_errors(const fs::path &file, size_t keep, bool tail) {
+  std::vector<std::string> errors, last;
+  for (const auto &line : lines_of(tail_log(file, 512 << 10))) {
+    auto text = one_line(line);
+    if (text.empty() || noisy_line(text)) continue;
+    if (error_line(text)) errors.push_back(text);
+    last.push_back(text);
+  }
+  auto &chosen = errors.empty() && tail ? last : errors;
+  if (chosen.size() > keep) chosen.erase(chosen.begin(), chosen.end() - std::ptrdiff_t(keep));
+  return chosen;
+}
+// The newest files in `directory` written during the run whose names pass `wanted`.
+std::vector<fs::path> files_in_window(const fs::path &directory, const Window &window, size_t keep,
+                                      const std::function<bool(const fs::path &)> &wanted) {
+  std::vector<std::pair<Clock::time_point, fs::path>> found;
+  std::error_code ec;
+  for (const auto &e : fs::directory_iterator(directory, ec))
+    if (e.is_regular_file(ec) && wanted(e.path()))
+      if (auto t = modified(e.path()); t && window.contains(*t)) found.emplace_back(*t, e.path());
+  std::ranges::sort(found, std::greater{});
+  std::vector<fs::path> out;
+  for (size_t i = 0; i < found.size() && i < keep; ++i) out.push_back(found[i].second);
+  return out;
+}
+std::string lower_name(const fs::path &p) {
+  auto n = paths::utf8(p.filename());
+  std::ranges::transform(n, n.begin(), [](unsigned char c) { return char(std::tolower(c)); });
+  return n;
+}
+
+// Programs that matter to a VR launch: Venture, VR runtimes and compositors, Steam.
+bool relevant_process(std::string name) {
+  std::ranges::transform(name, name.begin(), [](unsigned char c) { return char(std::tolower(c)); });
+  for (auto key : {"venture", "openxr", "wivrn", "monado", "steamvr", "vrserver", "vrcompositor", "vrmonitor",
+                   "vrstartup", "vrdashboard", "gamescope", "envision", "alvr", "ovrserver", "virtualdesktop",
+                   "oculusclient", "pimax", "pressure-vessel"})
+    if (name.find(key) != std::string::npos) return true;
+  return false;
+}
+#ifdef _WIN32
+void processes_section(std::string &out) {
+  std::vector<std::string> found;
+  if (HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0); snapshot != INVALID_HANDLE_VALUE) {
+    PROCESSENTRY32W entry{};
+    entry.dwSize = sizeof entry;
+    for (bool more = Process32FirstW(snapshot, &entry); more && found.size() < 30;
+         more = Process32NextW(snapshot, &entry))
+      if (auto name = narrow(entry.szExeFile); relevant_process(name) && entry.th32ProcessID != GetCurrentProcessId())
+        found.push_back(std::format("{} {}", entry.th32ProcessID, name));
+    CloseHandle(snapshot);
+  }
+  out += "\n=== VR processes running now ===\n";
+  for (const auto &p : found) out += p + "\n";
+  if (found.empty()) out += "(none)\n";
+}
+// Windows' own record of the run: application crashes (Application Error,
+// Windows Error Reporting) of Venture and the VR runtime, and display driver
+// resets. wevtutil's text is the system code page; anything else is dropped.
+void windows_events(std::string &out, std::string &evidence, const Window &window) {
+  auto utc = [](Clock::time_point t) { return std::format("{:%FT%T}Z", std::chrono::floor<std::chrono::seconds>(t)); };
+  const auto when = std::format("TimeCreated[@SystemTime>='{}' and @SystemTime<='{}']", utc(window.from), utc(window.to));
+  static const std::regex relevant(R"((venture|vrserver|vrcompositor|vrmonitor|vrdashboard|openxr|wivrn|vulkan|nvoglv|amdvlk|igvk))",
+                                   std::regex::icase);
+  struct Query {
+    const char *log;
+    std::string filter;
+    bool all;  // every event of the filter, not only those naming a relevant program
+  };
+  const Query queries[] = {
+      {"Application", std::format("*[System[(Level=1 or Level=2) and {}]]", when), false},
+      {"System",
+       std::format("*[System[Provider[@Name='Display' or @Name='nvlddmkm' or @Name='amdkmdag' or @Name='amdwddmg' "
+                   "or @Name='igfx'] and (Level=1 or Level=2 or Level=3) and {}]]",
+                   when),
+       true}};
+  std::vector<std::string> found;
+  for (const auto &query : queries) {
+    const auto text = capture(which(L"wevtutil.exe"),
+                              {"qe", query.log, "/q:" + query.filter, "/f:text", "/c:100", "/rd:true"});
+    // Blocks of "Event[n]:" followed by indented "Name: value" lines and a description.
+    for (size_t at = text.find("Event["); at != std::string::npos;) {
+      size_t next = text.find("Event[", at + 6);
+      std::string block = text.substr(at, next == std::string::npos ? std::string::npos : next - at);
+      at = next;
+      if (!query.all && !std::regex_search(block, relevant)) continue;
+      std::string date, source, description;
+      bool in_description = false;
+      for (const auto &raw : lines_of(block)) {
+        auto line = one_line(raw, 300);
+        if (line.starts_with("Date: ")) date = line.substr(6);
+        else if (line.starts_with("Source: ")) source = line.substr(8);
+        else if (line.starts_with("Description:")) in_description = true;
+        else if (in_description && !line.empty() && description.size() < 400) description += (description.empty() ? "" : " ") + line;
+      }
+      std::string entry = std::format("{} {}: {}", date, source, description);
+      std::erase_if(entry, [](char c) { return static_cast<unsigned char>(c) >= 0x80; });
+      found.push_back(std::move(entry));
+      if (found.size() >= 12) break;
+    }
+  }
+  if (found.empty()) return;
+  out += "Windows event log:\n";
+  for (const auto &f : found) out += "  " + f + "\n", evidence += f + "\n";
+}
+#else
+void processes_section(std::string &out) {
+  std::vector<std::string> found;
+  std::error_code ec;
+  for (const auto &e : fs::directory_iterator("/proc", ec)) {
+    auto pid = e.path().filename().string();
+    if (pid.empty() || !std::ranges::all_of(pid, [](unsigned char c) { return std::isdigit(c); })) continue;
+    std::string name = read_file(e.path() / "comm", 256);
+    std::erase(name, '\n');
+    if (relevant_process(name) && pid != std::to_string(getpid())) found.push_back(pid + " " + name);
+    if (found.size() >= 30) break;
+  }
+  out += "\n=== VR processes running now ===\n";
+  for (const auto &p : found) out += p + "\n";
+  if (found.empty()) out += "(none)\n";
+}
+// GPU names and their kernel drivers, from lspci when it is installed.
+std::string gpu_names() {
+  std::string out;
+  auto lines = lines_of(capture(which("lspci"), {"-nnk"}, std::chrono::seconds(3)));
+  for (size_t i = 0; i < lines.size(); ++i) {
+    const auto &line = lines[i];
+    if (line.find("VGA compatible controller") == std::string::npos && line.find("3D controller") == std::string::npos &&
+        line.find("Display controller") == std::string::npos)
+      continue;
+    std::string driver;
+    for (size_t j = i + 1; j < lines.size() && !lines[j].empty() && std::isspace(static_cast<unsigned char>(lines[j][0])); ++j)
+      if (auto at = lines[j].find("Kernel driver in use: "); at != std::string::npos) driver = lines[j].substr(at + 22);
+    // "03:00.0 VGA compatible controller [0300]: AMD ... [1002:7480]"
+    auto name = line.substr(line.find(": ") == std::string::npos ? 0 : line.find(": ") + 2);
+    out += std::format("GPU: {}{}\n", name, driver.empty() ? "" : ", driver " + driver);
+  }
+  return out;
+}
+// Headsets and controllers the kernel sees.
+std::string vr_inputs() {
+  std::ifstream in("/proc/bus/input/devices");
+  std::set<std::string> names;
+  // "touch" as a word: Meta's Touch controllers, not touchpads or touchscreens.
+  static const std::regex vr(R"((controller|gamepad|sense|oculus|rift|vive|index|quest|vr2|psvr|knuckles|\btouch\b|tracker|lighthouse|watchman|pico|bigscreen))",
+                             std::regex::icase);
+  for (std::string line; std::getline(in, line);)
+    if (line.starts_with("N: Name=")) {
+      auto name = line.substr(8);
+      std::erase(name, '"');
+      if (std::regex_search(name, vr)) names.insert(name);
+    }
+  std::string out;
+  for (const auto &n : names) out += (out.empty() ? "" : ", ") + n;
+  return out.empty() ? "none detected" : out;
+}
+// The user services and Flatpak installs of the common Linux VR runtimes.
+void xr_services(std::string &out) {
+  const auto systemctl = which("systemctl");
+  for (auto service : {"monado.service", "wivrn.service", "wivrn-server.service"}) {
+    auto load = one_line(capture(systemctl, {"--user", "show", service, "-p", "LoadState", "--value"}, std::chrono::seconds(2)));
+    if (load != "loaded") continue;
+    auto state = one_line(capture(systemctl, {"--user", "is-active", service}, std::chrono::seconds(2)));
+    out += std::format("{}: {}\n", service, state.empty() ? "unknown" : state);
+  }
+  std::error_code ec;
+  if (const char *home = std::getenv("HOME"))
+    for (auto app : {"io.github.wivrn.wivrn", "org.monado.Monado", "org.gabmus.envision"})
+      if (fs::is_directory(fs::path(home) / ".var/app" / app, ec)) out += std::format("Flatpak app data: {}\n", app);
+}
+#endif
+
+void evidence_from(std::string &out, std::string_view label, const fs::path &file,
+                   const std::vector<std::string> &lines) {
+  if (lines.empty()) return;
+  out += std::format("{}{}{}:\n", label, label.empty() ? "" : " ", paths::utf8(file));
+  for (const auto &line : lines) out += "  " + line + "\n";
+}
+
+// The errors in every other log written during the run: SteamVR's, the Linux
+// VR runtimes', the system journal and crash records, Windows' event log.
+// Returns the evidence text for the likely-cause rules.
+std::string evidence_section(std::string &out, const Window &window, [[maybe_unused]] bool failed) {
+  std::string evidence;
+  auto add = [&](std::string_view label, const fs::path &file, std::vector<std::string> lines) {
+    for (const auto &l : lines) evidence += l + "\n";
+    evidence_from(out, label, file, lines);
+  };
+  // SteamVR's logs (vrserver, vrcompositor, vrclient_*, vrmonitor...).
+  if (auto steam = steam_library::discover_root(); !steam.empty()) {
+    static const std::regex steam_log(R"(^(vr|openxr|vulkan|console|stderr|connection))", std::regex::icase);
+    for (const auto &file : files_in_window(steam / "logs", window, 6, [&](const fs::path &p) {
+           auto n = lower_name(p);
+           return (n.ends_with(".txt") || n.ends_with(".log")) && std::regex_search(n, steam_log);
+         }))
+      add("SteamVR", file, log_errors(file, 5, false));
+  }
+#ifdef _WIN32
+  windows_events(out, evidence, window);
+#else
+  if (const char *home = std::getenv("HOME")) {
+    const fs::path h(home);
+    const char *cache = std::getenv("XDG_CACHE_HOME");
+    std::vector<fs::path> runtime_logs{(cache && *cache ? fs::path(cache) : h / ".cache") / "envision/logs",
+                                       h / ".local/state/wivrn/wivrn-dashboard",
+                                       h / ".var/app/io.github.wivrn.wivrn/.local/state/wivrn/wivrn-dashboard",
+                                       h / ".var/app/org.gabmus.envision/cache/envision/logs"};
+    for (const auto &dir : runtime_logs)
+      for (const auto &file : files_in_window(dir, window, 2, [](const fs::path &) { return true; })) add("VR runtime", file, log_errors(file, 10, failed));
+  }
+  // The system journal for the run: the user's services, the kernel (GPU
+  // resets, out of memory) and crashed programs.
+  const auto journalctl = which("journalctl");
+  const auto since = local_time(window.from), until = local_time(window.to);
+  auto journal = [&](std::string_view title, std::vector<std::string> args) {
+    std::vector<std::string> found;
+    for (const auto &line : lines_of(capture(journalctl, args)))
+      if (auto text = one_line(line); error_line(text) && !noisy_line(text)) found.push_back(text);
+    if (found.size() > 10) found.erase(found.begin(), found.end() - 10);
+    if (found.empty()) return;
+    out += std::format("{}:\n", title);
+    for (const auto &f : found) out += "  " + f + "\n", evidence += f + "\n";
+  };
+  journal("User journal", {"--user", "--since=" + since, "--until=" + until, "--no-pager", "-o", "short-iso", "-n",
+                           "300", "--grep=(venture|openxr|wivrn|monado|envision|steamvr|vrserver|vrcompositor|"
+                           "vulkan|pipewire|xdg-desktop-portal|secret|keyring)"});
+  journal("Kernel", {"-k", "--since=" + since, "--until=" + until, "--no-pager", "-o", "short-iso", "-n", "400",
+                     "--grep=(amdgpu|nouveau|nvidia|nvrm|i915|xe |drm|gpu|vulkan|xid|oom)"});
+  std::vector<std::string> dumps;
+  static const std::regex relevant(R"((venture|steam|openxr|wivrn|monado|envision|vrserver|vrcompositor))",
+                                   std::regex::icase);
+  for (const auto &line : lines_of(capture(which("coredumpctl"), {"--since=" + since, "--until=" + until,
+                                                                  "--no-pager", "--no-legend", "list"})))
+    if (line.find("steamwebhelper") == std::string::npos && std::regex_search(line, relevant))
+      dumps.push_back(one_line(line));
+  if (dumps.size() > 6) dumps.erase(dumps.begin(), dumps.end() - 6);
+  if (!dumps.empty()) {
+    out += "Crashed programs (coredumpctl):\n";
+    for (const auto &d : dumps) out += "  " + d + "\n", evidence += "coredump " + d + "\n";
+  }
+#endif
+  return evidence;
+}
 } // namespace
 
 std::string redact(std::string text, const std::vector<std::string> &private_text) {
@@ -352,10 +897,29 @@ std::string redact(std::string text, const std::vector<std::string> &private_tex
       std::ranges::replace(real, '\\', '/');
       names.push_back({real, "~", false});
     }
+#ifndef _WIN32
+    // A path recorded by another process (the host, outside a container)
+    // may name the resolved home even where this one cannot resolve it.
+    if (std::string_view(home).starts_with("/home/")) names.push_back({"/var" + std::string(home), "~", false});
+#endif
   }
   // Short names would also match ordinary words.
   if (user && std::strlen(user) >= 3) names.push_back({user, "<user>", true});
-  if (host && std::strlen(host) >= 3) names.push_back({host, "<computer>", true});
+  // A computer named after its distribution (bazzite, fedora) would also
+  // hide the OS line; that name says nothing about the person.
+  bool distribution_name = false;
+#ifndef _WIN32
+  if (host) {
+    std::string low_host(host), os;
+    for (char &c : low_host) c = char(std::tolower(static_cast<unsigned char>(c)));
+    std::ifstream release("/etc/os-release");
+    for (std::string line; std::getline(release, line);)
+      if (line.starts_with("ID=") || line.starts_with("NAME=") || line.starts_with("PRETTY_NAME=")) os += line + " ";
+    for (char &c : os) c = char(std::tolower(static_cast<unsigned char>(c)));
+    distribution_name = !low_host.empty() && os.find(low_host) != std::string::npos;
+  }
+#endif
+  if (host && std::strlen(host) >= 3 && !distribution_name) names.push_back({host, "<computer>", true});
   for (const auto &p : private_text)
     if (p.size() >= 3) names.push_back({p, "<account>", true});
   std::ranges::sort(names, std::greater{}, [](const auto &n) { return n.text.size(); });
@@ -434,13 +998,58 @@ fs::path write_debug_report(const DebugReport &request) {
   else if (request.game.empty()) out += std::format("Game: {}\n", package);
   else out += std::format("Game: {} ({})\n", request.game, package);
 
+  // What happened, then why: the summary a reader needs first.
+  const std::string base = "runtime-" + package;
+  const fs::path runtime_log = logs / (base + ".log"), console_log = logs / (base + ".console.log");
+  std::optional<Run> run;
+  std::optional<Window> window;
+  if (!package.empty() && fs::exists(runtime_log, ec)) {
+    run = read_run(runtime_log, console_log);
+    const auto end = run->ended.value_or(now);
+    auto start = run->started;
+    // A log from before the runtime recorded its start: the previous run ended before this one began.
+    if (!start) start = modified(logs / (base + ".prev.log"));
+    if (!start || *start > end || end - *start > std::chrono::hours(6)) start = end - std::chrono::hours(1);
+    window = Window{*start - std::chrono::seconds(5), end + std::chrono::seconds(5)};
+    out += std::format("Last run: {} to {} ({}{})\n", local_time(*start), local_time(end),
+                       run->started ? "" : "start estimated, ", duration_text(end - *start));
+    out += std::format("Result: {}\n", run->result);
+  }
+  // Gathered before the summary is written, which they inform.
+  std::string evidence_text, evidence;
+  if (window) evidence = evidence_section(evidence_text, *window, run->failed);
+  std::vector<std::string> steps;
+  out += "\n=== Likely cause ===\n";
+  if (!run) {
+    out += package.empty() ? "No game has been started with this Venture yet.\n"
+                           : std::format("{} has no run to report yet.\n", request.game.empty() ? package : request.game);
+    steps.push_back("Start the game that has the problem, then send a new report.");
+  } else if (!run->failed) {
+    out += "The last run did not fail. If the problem happened in an earlier run, start the game again, "
+           "reproduce it, then send a new report.\n";
+  } else if (auto d = diagnose(tail_log(runtime_log, 512 << 10) + "\n" + tail_log(console_log, 128 << 10) + "\n" +
+                               tail_log(logs / "launcher.log", 64 << 10) + "\n" + evidence)) {
+    out += d->cause + "\n";
+    steps.push_back(d->advice);
+  } else {
+    out += "No known failure signature: the errors below are the closest leads.\n";
+    steps.push_back("Send this report with an issue.");
+  }
+  if (!steps.empty()) {
+    out += "\n=== Next steps ===\n";
+    for (const auto &s : steps) out += "- " + s + "\n";
+  }
+
   out += "\n=== System ===\n";
   system_section(out);
   out += "\n=== VR runtime ===\n";
   xr_section(out);
+  processes_section(out);
   out += "\n=== Environment ===\n";
   environment_section(out);
-  for (const char *name : {"settings.json", "host-displays.json"}) {
+  out += "\n=== Settings for this game ===\n";
+  settings_section(out, request.data, request.app_id);
+  for (const char *name : {"settings.json", "host-displays.json", "passthrough.json"}) {
     std::string text = read_file(request.data / name);
     if (text.empty()) continue;
     out += std::format("\n=== {} ===\n{}", name, text);
@@ -469,7 +1078,6 @@ fs::path write_debug_report(const DebugReport &request) {
         dumps += std::format("{} ({} KiB)\n", name, (e.file_size(ec) + 1023) / 1024);
     }
     if (!dumps.empty()) out += "\n=== Crash dumps on this PC (not included) ===\n" + dumps;
-    const std::string base = "runtime-" + package;
     // HotSpot's report of the newest native crash, cut to what names it (a few
     // KiB of the budget): the summary, the crashing thread and its native
     // stack (which driver or layer). Registers, memory and the module and
@@ -506,6 +1114,11 @@ fs::path write_debug_report(const DebugReport &request) {
     }
     facts_section(out, logs / (base + ".log"));
     missing_classes_section(out, logs / (base + ".log"));
+    if (window) {
+      out += std::format("\n=== Errors logged during the last run ({} to {}) ===\n", local_time(window->from),
+                         local_time(window->to));
+      out += evidence_text.empty() ? "No other log written during the run reports an error.\n" : evidence_text;
+    }
     log_section(out, logs / (base + ".log"), kRuntimeLog);
     log_section(out, logs / (base + ".console.log"), kSideLog);
     log_section(out, logs / (base + ".prev.log"), kSideLog);

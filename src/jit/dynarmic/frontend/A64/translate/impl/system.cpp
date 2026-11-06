@@ -118,7 +118,10 @@ bool TranslatorVisitor::MSR_reg(Imm<1> o0, Imm<3> op1, Imm<4> CRn, Imm<4> CRm, I
     default:
         break;
     }
-    UNREACHABLE();
+    // Venture: any other register is not accessible at EL0 here, so the instruction is
+    // UNDEFINED (the guest sees SIGILL when it runs it). Translating it must not stop
+    // the process: background translation reaches code the guest may never execute.
+    return UnallocatedEncoding();
 }
 
 bool TranslatorVisitor::MRS(Imm<1> o0, Imm<3> op1, Imm<4> CRn, Imm<4> CRm, Imm<3> op2, Reg Rt) {
@@ -158,7 +161,9 @@ bool TranslatorVisitor::MRS(Imm<1> o0, Imm<3> op1, Imm<4> CRn, Imm<4> CRm, Imm<3
         X(64, Rt, ir.GetTPIDRRO());
         return true;
     }
-    UNREACHABLE();
+    // Venture: as MSR. ID registers (MRS emulation) are not offered: AT_HWCAP has no
+    // HWCAP_CPUID, so guests that read them check for it first.
+    return UnallocatedEncoding();
 }
 
 }  // namespace Dynarmic::A64

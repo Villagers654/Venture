@@ -4,6 +4,7 @@
 #include "lifecycle_host.h"
 #include "core/wait.h"
 #include "xr/clock.h"
+#include "xr/desktop_mirror.h"
 #include "xr/dev_dump.h"
 #include <deque>
 #include <cstring>
@@ -27,8 +28,14 @@ XrResult XRAPI_CALL xrWaitFrame(XrSession, const XrFrameWaitInfo*, XrFrameState*
 XrResult XRAPI_CALL xrBeginFrame(XrSession, const XrFrameBeginInfo*) { return XR_SUCCESS; }
 XrResult XRAPI_CALL xrEndFrame(XrSession, const XrFrameEndInfo* info) {
   std::lock_guard lock(host::mutex); host::last = {}; host::last.layers = info->layerCount;
+  host::last.blend_mode = info->environmentBlendMode;
+  for (std::uint32_t i = 0; i < info->layerCount; ++i) host::last.types.push_back(info->layers[i]->type);
+  for (std::uint32_t i = 0; i < info->layerCount; ++i)
+    if (info->layers[i]->type == XR_TYPE_COMPOSITION_LAYER_QUAD)
+      host::last.quads.push_back(*reinterpret_cast<const XrCompositionLayerQuad*>(info->layers[i]));
   for (std::uint32_t i=0;i<info->layerCount;++i) if (info->layers[i]->type==XR_TYPE_COMPOSITION_LAYER_PROJECTION) {
     const auto* p=reinterpret_cast<const XrCompositionLayerProjection*>(info->layers[i]);
+    host::last.projection_flags=p->layerFlags;
     for (std::uint32_t j=0;j<std::min(p->viewCount,2u);++j) {
       host::last.views[j]=p->views[j]; host::last.views[j].next=nullptr;
       for (auto* n=static_cast<const XrBaseInStructure*>(p->views[j].next);n;n=n->next)
@@ -73,32 +80,42 @@ void note_host_session_state(int) {}
 namespace vulkan {
 ScopedHostWait::ScopedHostWait(const char*) {}
 ScopedHostWait::~ScopedHostWait() {}
+// Guest image bookkeeping belongs to Venture's Vulkan layer, not this fixture.
+void note_image(VkImage, const VkImageCreateInfo&) {}
+void forget_image(VkImage) {}
+VkFormat host_depth_format(VkPhysicalDevice, VkFormat format) { return format; }
 void timing_end_frame(std::int64_t, std::uint32_t, float) {}
 VkResult flush_queue_submissions(VkDevice, std::uint32_t, std::uint32_t) { return VK_SUCCESS; }
 }
 namespace xr {
 void remember_display_period(std::int64_t) {}
 void remember_eye_fov(const std::array<XrFovf, 2>&) {}
+void remember_host_rates(float, const std::vector<float>&) {}
 void dev_dump_frame(const XrFrameEndInfo*, XrResult) {}
 void note_menu_profiles_changed(XrSession) {}
+// No desktop mirror window in the fixture.
+bool mirror_ready() { return false; }
+void mirror_axis(const XrFovf&, float& x, float& y) { x = y = 0; }
+void mirror_capture(const XrGraphicsBindingVulkanKHR&, bool, const MirrorSource&) {}
 XrResult time_to_monotonic(XrTime value, std::int64_t* out) { *out=value;return XR_SUCCESS; }
+XrResult clock_sample(XrTime* time, std::int64_t* monotonic) { *time = *monotonic = venture::monotonic_ns(); return XR_SUCCESS; }
 }
 namespace hle::openxr { XrResult present_android_surfaces() { return XR_SUCCESS; } }
 }
 XrResult XRAPI_CALL xrPathToString(XrInstance, XrPath, std::uint32_t, std::uint32_t*, char*) { return XR_ERROR_PATH_INVALID; }
-XrResult XRAPI_CALL xrCreateReferenceSpace(XrSession, const XrReferenceSpaceCreateInfo*, XrSpace*) { return XR_ERROR_REFERENCE_SPACE_UNSUPPORTED; }
-XrResult XRAPI_CALL xrDestroySpace(XrSpace) { return XR_SUCCESS; }
-XrResult XRAPI_CALL xrLocateSpace(XrSpace, XrSpace, XrTime, XrSpaceLocation*) { return XR_ERROR_FUNCTION_UNSUPPORTED; }
-XrResult XRAPI_CALL xrLocateViews(XrSession, const XrViewLocateInfo*, XrViewState*, std::uint32_t, std::uint32_t*, XrView*) { return XR_ERROR_FUNCTION_UNSUPPORTED; }
-XrResult XRAPI_CALL xrEnumerateEnvironmentBlendModes(XrInstance, XrSystemId, XrViewConfigurationType, std::uint32_t capacity, std::uint32_t* count, XrEnvironmentBlendMode* out) {
-  *count=1;if(capacity)out[0]=XR_ENVIRONMENT_BLEND_MODE_OPAQUE;return XR_SUCCESS;
+// The head 1.5 m above LOCAL's origin, looking along -Z.
+XrResult XRAPI_CALL xrLocateSpace(XrSpace, XrSpace, XrTime, XrSpaceLocation* location) {
+  location->locationFlags = XR_SPACE_LOCATION_ORIENTATION_VALID_BIT | XR_SPACE_LOCATION_POSITION_VALID_BIT;
+  location->pose = {{0, 0, 0, 1}, {0, 1.5f, 0}};
+  return XR_SUCCESS;
 }
+XrResult XRAPI_CALL xrLocateViews(XrSession, const XrViewLocateInfo*, XrViewState*, std::uint32_t, std::uint32_t*, XrView*) { return XR_ERROR_FUNCTION_UNSUPPORTED; }
 XrResult XRAPI_CALL xrEnumerateViewConfigurationViews(XrInstance, XrSystemId, XrViewConfigurationType,
     std::uint32_t capacity, std::uint32_t* count, XrViewConfigurationView* out) {
   *count = 2;
   if (!capacity) return XR_SUCCESS;
   if (capacity < 2) return XR_ERROR_SIZE_INSUFFICIENT;
-  for (unsigned i = 0; i < 2; ++i) out[i].maxImageRectWidth = out[i].maxImageRectHeight = 4096;
+  for (unsigned i = 0; i < 2; ++i) { out[i].maxImageRectWidth = out[i].maxImageRectHeight = 4096; out[i].maxSwapchainSampleCount = 4; }
   return XR_SUCCESS;
 }
 
@@ -106,7 +123,7 @@ XrResult XRAPI_CALL xrCreateSwapchain(XrSession target, const XrSwapchainCreateI
   return venture::xr::dev_create_swapchain(target,info,out);
 }
 XrResult XRAPI_CALL xrEnumerateSwapchainFormats(XrSession, std::uint32_t capacity, std::uint32_t* count, std::int64_t* out) {
-  const std::int64_t formats[]{VK_FORMAT_R8G8B8A8_UNORM,VK_FORMAT_B8G8R8A8_UNORM,VK_FORMAT_R16G16B16A16_SFLOAT};
-  *count=3;if(capacity&&capacity<3)return XR_ERROR_SIZE_INSUFFICIENT;
+  const std::int64_t formats[]{VK_FORMAT_R8G8B8A8_UNORM,VK_FORMAT_B8G8R8A8_UNORM,VK_FORMAT_R16G16B16A16_SFLOAT,VK_FORMAT_R8G8B8A8_SRGB};
+  *count=4;if(capacity&&capacity<4)return XR_ERROR_SIZE_INSUFFICIENT;
   if(capacity)std::copy(std::begin(formats),std::end(formats),out);return XR_SUCCESS;
 }

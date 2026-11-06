@@ -31,6 +31,19 @@ public final class ActivityThread {
   // directory of the device-protected storage context (one storage here).
   public void ventureBindApplication(Context appContext) {
     setupGraphicsSupport(appContext);
+    // AOSP handleBindApplication (Android 10+): the cache directory is the usable
+    // directory for temporary files, as java.io.tmpdir and the TMPDIR environment
+    // variable. Without TMPDIR, Mono's Path.GetTempPath is an unwritable default.
+    final File cacheDir = appContext.getCacheDir();
+    if (cacheDir != null) {
+      System.setProperty("java.io.tmpdir", cacheDir.getAbsolutePath());
+      try {
+        android.system.Os.setenv("TMPDIR",
+            com.venture.runtime.RuntimeEnvironment.toGuestPath(cacheDir.getAbsolutePath()), true);
+      } catch (android.system.ErrnoException ex) {
+        android.util.Log.w("ActivityThread", "Unable to initialize \"TMPDIR\"", ex);
+      }
+    }
   }
   private void setupGraphicsSupport(Context context) {
     final File codeCacheDir = context.getCodeCacheDir();

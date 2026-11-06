@@ -5,6 +5,7 @@ never migrate the owner's data; they keep using the existing root/cache until th
 """
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -25,6 +26,22 @@ LEGACY_POLICY_ENV = {
 # Default runtime of the platform's release build, relative to the checkout.
 RUNTIME = ("build/windows-release/bin/venture-runtime.exe" if os.name == "nt"
            else "build/linux-release/bin/venture-runtime")
+
+
+# Recorded routes press the Quest controller's left menu button for the game's menu
+# ("menu": true). Venture's default menu on Touch is both stick clicks (SteamVR keeps
+# that button), so a replay puts the menu back on it, as a player can in Controls.
+ROUTE_CONTROLS = json.dumps({
+    profile: {"menu": {"mode": "button", "first": "/user/hand/left/input/menu/click", "holdMs": 500}}
+    for profile in ("/interaction_profiles/oculus/touch_controller",
+                    "/interaction_profiles/meta/touch_controller_plus",
+                    "/interaction_profiles/facebook/touch_controller_pro")})
+
+
+def route_controls(env: dict[str, str]) -> dict[str, str]:
+    """Give a replay of a recorded route its menu button unless controls are set explicitly."""
+    env.setdefault("VENTURE_CONTROLS", ROUTE_CONTROLS)
+    return env
 
 
 POLICY_ENV = ("VENTURE_GPU_POLICY_ADMITTED", "VENTURE_GPU_DEADLINE", "VENTURE_STOP_EVENT", "VENTURE_GPU_PRIORITY",
@@ -53,12 +70,30 @@ def policy_path(root: Path) -> Path:
     return local
 
 
+def session_bus_environment(env: Mapping[str, str], runtime_dir: Path | None = None) -> dict[str, str]:
+    """Give a POSIX run the user's D-Bus session bus, as a desktop launch has.
+
+    SSH, cron and distrobox shells often lack DBUS_SESSION_BUS_ADDRESS and
+    XDG_RUNTIME_DIR. The runtime then cannot reach the Secret Service, finds no
+    Meta session (stage=vault-session) and games fail their entitlement check.
+    """
+    result = dict(env)
+    if os.name == "nt" or result.get("DBUS_SESSION_BUS_ADDRESS"):
+        return result
+    run = Path(result.get("XDG_RUNTIME_DIR") or runtime_dir or f"/run/user/{os.getuid()}")
+    if (run / "bus").is_socket():
+        result.setdefault("XDG_RUNTIME_DIR", str(run))
+        result["DBUS_SESSION_BUS_ADDRESS"] = f"unix:path={run / 'bus'}"
+    return result
+
+
 def isolated_environment(env: Mapping[str, str], prefixes: tuple[str, ...]) -> dict[str, str]:
     """Drop workload tuning flags but keep the outer policy's admission, deadline, stop event and lane.
 
     The rebrand moved those policy names under the VENTURE_ prefix that run tools strip.
     """
-    return {k: v for k, v in env.items() if k in POLICY_ENV or not k.startswith(prefixes)}
+    return session_bus_environment(
+        {k: v for k, v in env.items() if k in POLICY_ENV or not k.startswith(prefixes)})
 
 
 def policy_value(env: Mapping[str, str], key: str, default=None):

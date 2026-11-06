@@ -43,10 +43,37 @@ struct Plan {
   // when known; otherwise plan.json leaves it empty and app_id holds the
   // package as the launcher's key.
   bool local = false;
+  // A version installed beside the game's other versions (pinned): it keeps
+  // its build, never updates, and has its own folder, saves and caches.
+  bool pinned = false;
+  // The installation's folder under <library>/<package>: the version code,
+  // or "<version code>-<binary id>" for a pinned version, so a pinned build
+  // never shares a folder with the game's own (updating) install.
+  std::string folder() const;
   uint64_t size() const; // Required, ungated base-game bytes; files includes
                          // the full catalog.
   Json json() const;     // Intentionally excludes URIs and credentials.
 };
+// The library id of a pinned version ("<app id>@<binary id>"); the app id of
+// a library id (the id itself for anything else); the binary id of a pinned
+// version's library id (empty for anything else).
+std::string version_id(std::string_view app_id, std::string_view binary_id);
+std::string_view base_app(std::string_view id);
+std::string_view version_binary(std::string_view id);
+// A build in an app's version history.
+struct Build {
+  std::string binary_id, version, version_code;
+  // The release channels it was published to (LIVE, BETA, ...).
+  std::vector<std::string> channels;
+  // The build Meta installs on a Quest 3 today (latest_supported_binary).
+  bool live = false;
+  // "1.19.14291 (119014291)"
+  std::string label() const;
+};
+// The published Quest builds of an app-history response, newest first.
+// Builds on no release channel are internal uploads the CDN refuses. The live
+// build is marked, and added when the history lacks it.
+std::vector<Build> release_builds(const Json &history, const Json &live = {});
 // Android's [main|patch].<version>.<package>.obb expansion file name.
 bool expansion_name(std::string_view name, std::string_view package);
 struct Addon {
@@ -105,6 +132,8 @@ public:
   // wide hero banner and the square icon.
   std::string cover(std::string_view id) const;
   Json builds(std::string_view id) const;
+  // Every published build of an owned app (release_builds), newest first.
+  std::vector<Build> all_builds(std::string_view id) const;
   // One app's listing as this account sees it: the app alone, owned, when
   // Meta says the account owns it (the whole-library query fails for some
   // accounts); no games when it does not.

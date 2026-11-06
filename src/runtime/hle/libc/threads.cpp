@@ -24,7 +24,7 @@
 #include <cstdio>
 
 namespace venture::hle::libc {
-void register_threads32_adapters();
+void register_threads32_adapters(HleLibrary& lib);
 bool try_mutex32(CallContext&, bool unlock);
 namespace {
 // Sizes and static type bits: bionic bits/pthread_types.h, pthread_mutex.cpp.
@@ -312,6 +312,32 @@ int rw_unlock(Rwlock* r) {
   }
   rw_release(r);
   return 0;
+}
+// In-JIT rwlock calls. An uncontended lock is one CAS and an unlock never
+// blocks (its futex wake completes in the JIT, as FUTEX_WAKE does), so neither
+// should leave the JIT for the run loop. A lock that would wait, or fail,
+// declines without changing anything and the run-loop handler takes over.
+enum class RwFast { read, write, unlock, try_read, try_write };
+template<RwFast op> bool try_rw(CallContext& ctx) {
+  if (ctx.cpu().isa() == GuestIsa::a32) return false;
+  auto* r = static_cast<Rwlock*>(g2h(ctx.x(0)));
+  if (!r) return false;
+  int result = 0;
+  if constexpr (op == RwFast::read) {
+    auto value = atom(r->state).load(std::memory_order_relaxed);
+    if (value >= UINT_MAX - 1 ||
+        !atom(r->state).compare_exchange_strong(value, value + 1, std::memory_order_acquire)) return false;
+  } else if constexpr (op == RwFast::write) {
+    std::uint32_t expected = 0;
+    if (!atom(r->state).compare_exchange_strong(expected, UINT_MAX, std::memory_order_acquire)) return false;
+    atom(r->owner).store(tid());
+  } else if constexpr (op == RwFast::unlock) {
+    result = rw_unlock(r);
+  } else {
+    result = rw_acquire(r, op == RwFast::try_write, true);
+  }
+  ctx.return_x(static_cast<std::uint64_t>(result));
+  return true;
 }
 int spin_init(std::uint64_t* s, int) {
   *s = 0;
@@ -888,7 +914,7 @@ void run_key_destructors(GuestThread& thread) {
 void register_threads(HleLibrary& lib) {
   set_guest_thread_exit_handler(run_key_destructors);
   if (process_config().isa() == GuestIsa::a32) {
-    register_threads32_adapters();
+    register_threads32_adapters(lib);
     // cpu_set_t differs in word size, but these implementations treat its
     // caller-sized storage as bytes. No LP64 layout conversion is needed.
     abi32::adapt<&getaffinity>("sched_getaffinity");
@@ -961,11 +987,11 @@ void register_threads(HleLibrary& lib) {
   B("pthread_cond_broadcast", cond_broadcast);
   B("pthread_rwlock_init", rw_init);
   B("pthread_rwlock_destroy", rw_destroy);
-  B("pthread_rwlock_rdlock", rw_read);
-  B("pthread_rwlock_wrlock", rw_write);
-  B("pthread_rwlock_tryrdlock", rw_tryread);
-  B("pthread_rwlock_trywrlock", rw_trywrite);
-  B("pthread_rwlock_unlock", rw_unlock);
+  add(lib, "pthread_rwlock_rdlock", wrap<&rw_read>(), Execution::InJit, try_rw<RwFast::read>);
+  add(lib, "pthread_rwlock_wrlock", wrap<&rw_write>(), Execution::InJit, try_rw<RwFast::write>);
+  add(lib, "pthread_rwlock_tryrdlock", wrap<&rw_tryread>(), Execution::InJit, try_rw<RwFast::try_read>);
+  add(lib, "pthread_rwlock_trywrlock", wrap<&rw_trywrite>(), Execution::InJit, try_rw<RwFast::try_write>);
+  add(lib, "pthread_rwlock_unlock", wrap<&rw_unlock>(), Execution::InJit, try_rw<RwFast::unlock>);
   B("pthread_rwlock_timedrdlock", rw_timedread);
   B("pthread_rwlock_timedwrlock", rw_timedwrite);
   B("pthread_spin_init", spin_init);

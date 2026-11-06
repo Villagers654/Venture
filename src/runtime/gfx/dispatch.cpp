@@ -54,7 +54,7 @@ hle::Execution graphics_execution(std::string_view name, GuestIsa isa, GlCheck c
   if (buffer_gl_handler(name)) return hle::Execution::RunLoop;
   // Draw validation can use its existing framebuffer cache while holding only
   // uncontended share-group locks. Mapping/materialization still falls back.
-  if (check == GlCheck::draw) return hle::Execution::InJitFp;
+  if (check == GlCheck::draw || check == GlCheck::clear) return hle::Execution::InJitFp;
   if (check != GlCheck::none) return hle::Execution::RunLoop;
   if (name == "glFinish" || name.starts_with("glClientWaitSync") ||
       name.starts_with("glWaitSync") || name.starts_with("glReadPixels") ||
@@ -80,7 +80,7 @@ void add_graphics_function(HleLibrary& library, std::string_view name,
     }
     auto execution = unavailable32.contains(name) ? hle::Execution::RunLoop :
         graphics_execution(name, process_config().isa(), check);
-    const auto conditional = check == GlCheck::draw ? try_draw :
+    const auto conditional = check == GlCheck::draw || check == GlCheck::clear ? try_draw :
         name.starts_with("egl") ? try_egl :
         name.starts_with("glGetQueryObject") ? try_query : try_graphics;
     it->second = hle::make_thunk(library.soname(), name, handler, host, execution,

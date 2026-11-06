@@ -100,13 +100,6 @@ XrResult xrEnumerateReferenceSpaces(XrSession session, uint32_t spaceCapacityInp
   auto result = host_call<PFN_xrEnumerateReferenceSpaces, "xrEnumerateReferenceSpaces">(session, spaceCapacityInput, spaceCountOutput, spaces);
   return result;
 }
-XrResult xrEnumerateViewConfigurationViews(XrInstance instance, XrSystemId systemId, XrViewConfigurationType viewConfigurationType, uint32_t viewCapacityInput, uint32_t* viewCountOutput, XrViewConfigurationView* views) {
-  std::lock_guard lock(venture::hle::openxr::state().mutex);
-  if (!valid_handle(instance, "XrInstance")) return XR_ERROR_HANDLE_INVALID;
-  if (!viewCountOutput) return XR_ERROR_VALIDATION_FAILURE;
-  auto result = host_call<PFN_xrEnumerateViewConfigurationViews, "xrEnumerateViewConfigurationViews">(instance, systemId, viewConfigurationType, viewCapacityInput, viewCountOutput, views);
-  return result;
-}
 XrResult xrEnumerateViewConfigurations(XrInstance instance, XrSystemId systemId, uint32_t viewConfigurationTypeCapacityInput, uint32_t* viewConfigurationTypeCountOutput, XrViewConfigurationType* viewConfigurationTypes) {
   std::lock_guard lock(venture::hle::openxr::state().mutex);
   if (!valid_handle(instance, "XrInstance")) return XR_ERROR_HANDLE_INVALID;

@@ -54,4 +54,15 @@ bool terminate_for_os_quit();
 // hold ANGLE's nonrecursive lock while calling GL entry points.
 bool lock_angle_queue();
 void unlock_angle_queue();
+// A GL error that Venture read back from ANGLE (glGetError). Out of memory goes
+// to the log. Context loss, which ANGLE reports for every context once the
+// Vulkan device is lost, ends the app as a fatal error with a logged reason,
+// since nothing the game can do recovers it (it would otherwise hang until OS
+// quit times out). During OS quit, and in embedded fixtures, it is only logged.
+// Inline compare only; nothing runs for other errors.
+void note_angle_gl_failure(GLenum error, std::string_view where);
+inline void note_angle_gl_error(GLenum error, std::string_view where) {
+  if (error == GL_OUT_OF_MEMORY || error == GL_CONTEXT_LOST) [[unlikely]]
+    note_angle_gl_failure(error, where);
+}
 }  // namespace venture::gfx

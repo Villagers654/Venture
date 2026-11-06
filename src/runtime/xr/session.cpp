@@ -5,6 +5,7 @@
 #include "xr/dev_dump.h"
 #include "xr/session.h"
 #include "xr/display_memory.h"
+#include "xr/display_override.h"
 #include "common/log.h"
 #include "common/environment.h"
 #include "core/profile.h"
@@ -25,11 +26,13 @@
 #include <string_view>
 #include <atomic>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <array>
 #include <limits>
 #include <optional>
 #include <vector>
+#include <format>
 
 namespace venture::xr {
 namespace {
@@ -86,7 +89,8 @@ void Session::observe_display_period(std::int64_t value, DisplayTiming::Source s
                        display_timing.source == DisplayTiming::Source::remembered;
   display_timing.observe(value, source);
   if (display_timing.period.load() != previous || (unknown && display_timing.source != DisplayTiming::Source::unknown)) {
-    remember_display_period(display_timing.period.load());
+    // A capped period is Venture's, not the host's.
+    if (!cap.period_ns) remember_display_period(display_timing.period.load());
     if (auto observer = display_observer.load()) observer(display_timing.period.load());
   }
 }
@@ -125,6 +129,20 @@ XrResult Session::request_exit(SessionOwner expected) {
   return result;
 }
 
+namespace {
+// A game cannot play without its session, and most crash later on the invalid
+// handle (OVRPlugin aborts in ovrp_SetupLayer). The launcher reports this line
+// instead of that crash (library::runtime_failure), unless a later session is
+// created.
+XrResult session_failed(XrResult result, std::string_view reason) {
+  char name[XR_MAX_RESULT_STRING_SIZE]{};
+  const auto& h = host_xr();
+  if (!h.instance || XR_FAILED(::xrResultToString(h.instance, result, name)) || !name[0])
+    std::snprintf(name, sizeof(name), "XrResult %d", int(result));
+  log::error("xr", "The VR session could not be created: {} ({})", reason, name);
+  return result;
+}
+}  // namespace
 XrResult Session::create(SessionOwner requested, const XrGraphicsBindingVulkanKHR *binding) {
   if (handle)
     return XR_ERROR_LIMIT_REACHED;
@@ -144,7 +162,7 @@ XrResult Session::create(SessionOwner requested, const XrGraphicsBindingVulkanKH
   }
   b.next = nullptr;
   if (!b.device || !b.instance || !b.physicalDevice)
-    return XR_ERROR_GRAPHICS_DEVICE_INVALID;
+    return session_failed(XR_ERROR_GRAPHICS_DEVICE_INVALID, "the game gave no Vulkan device");
   if (binding) {
     // Guest Vulkan may own its VkDevice (gpu_device.h contract). Validate
     // runtime selection in that VkInstance's handle namespace, not by comparing
@@ -155,21 +173,25 @@ XrResult Session::create(SessionOwner requested, const XrGraphicsBindingVulkanKH
     if (XR_FAILED(host_graphics_device(h.system, b.instance, &selected)))
       selected = vulkan::shared_physical_device_in(b.instance);
     if (!selected || selected != b.physicalDevice)
-      return XR_ERROR_GRAPHICS_DEVICE_INVALID;
+      return session_failed(XR_ERROR_GRAPHICS_DEVICE_INVALID,
+          std::format("the game's Vulkan device is not on the GPU {} renders with", h.runtime_name));
   }
   XrGraphicsRequirementsVulkanKHR requirements{XR_TYPE_GRAPHICS_REQUIREMENTS_VULKAN_KHR};
   auto result = host_call<PFN_xrGetVulkanGraphicsRequirements2KHR, "xrGetVulkanGraphicsRequirements2KHR">(h.instance, h.system, &requirements);
   if (XR_FAILED(result))
-    return result;
+    return session_failed(result, std::format("{} did not report its Vulkan requirements", h.runtime_name));
   XrSessionCreateInfo info{XR_TYPE_SESSION_CREATE_INFO};
   info.systemId = h.system;
   info.next = &b;
   result = xrCreateSession(h.instance, &info, &handle);
   log::info("xr", "Host xrCreateSession result={}", int(result));
+  if (XR_FAILED(result)) session_failed(result, std::format("{} refused it", h.runtime_name));
   if (XR_SUCCEEDED(result)) {
     dev_dump_bind(b);
+    this->binding = b;
     frame_index = end_errors = last_report_frame = 0;
     last_report_time = {};
+    hitches.restart();
     owner = requested;
     host_stop_requested = guest_exit_requested = false;
     auto get_queue = reinterpret_cast<PFN_vkGetDeviceQueue>(
@@ -320,6 +342,7 @@ void Session::reset_frames() {
   // running; xrEndSession abandons any waited or begun frame. A host wait
   // still in flight retires itself against run_generation.
   ++run_generation;
+  hitches.restart();
   phase = Phase::idle;
   pending_wait = false;
   render_thread = {};
@@ -470,8 +493,73 @@ XrResult Session::begin_session(const XrSessionBeginInfo *info) {
     running = true;
     view_configuration = info->primaryViewConfigurationType;
     reset_frames();
+    apply_frame_rate_setting();
   }
   return result;
+}
+void Session::apply_frame_rate_setting() {
+  cap = {};
+  host_rate_recorded = false;
+  const auto& h = host_xr();
+  const auto setting = display_override();
+  if (!h.enabled_extensions.contains("XR_FB_display_refresh_rate")) {
+    if (setting.rate > 0) {
+      cap.period_ns = std::llround(1e9 / setting.rate);
+      log::info("xr", "Frame rate setting: {} sets the headset's refresh rate itself; the game runs at up to {} fps",
+                h.runtime_name, setting.rate);
+    }
+    return;
+  }
+  // The host lists its rates: record them, and switch to the setting when listed.
+  // A refused or unlisted rate keeps the host's own; the session is unaffected.
+  float current = 0;
+  if (XR_FAILED((host_call<PFN_xrGetDisplayRefreshRateFB, "xrGetDisplayRefreshRateFB">(handle, &current)))) current = 0;
+  std::vector<float> rates;
+  std::uint32_t count = 0;
+  if (XR_SUCCEEDED((host_call<PFN_xrEnumerateDisplayRefreshRatesFB, "xrEnumerateDisplayRefreshRatesFB">(
+          handle, 0, &count, nullptr))) && count && count <= 64) {
+    rates.resize(count);
+    if (XR_FAILED((host_call<PFN_xrEnumerateDisplayRefreshRatesFB, "xrEnumerateDisplayRefreshRatesFB">(
+            handle, count, &count, rates.data()))))
+      rates.clear();
+    rates.resize(std::min<std::size_t>(count, rates.size()));
+  }
+  remember_host_rates(current, rates);
+  host_rate_recorded = current > 0;
+  if (!(setting.rate > 0)) return;
+  std::string listed;
+  for (auto r : rates) listed += std::format("{}{:g}", listed.empty() ? "" : ", ", r);
+  const auto supported = supported_override_rate(setting.rate, rates.data(), std::uint32_t(rates.size()));
+  if (!supported) {
+    log::warn("xr", "Frame rate setting: {} Hz is not among {}'s rates ({}); keeping its {:g} Hz", setting.rate,
+              h.runtime_name, listed, current);
+    return;
+  }
+  if (std::abs(*supported - current) < 0.01f) return;
+  const auto requested =
+      host_call<PFN_xrRequestDisplayRefreshRateFB, "xrRequestDisplayRefreshRateFB">(handle, *supported);
+  if (XR_SUCCEEDED(requested))
+    log::info("xr", "Frame rate setting: {} switches the headset from {:g} to {:g} Hz", h.runtime_name, current,
+              *supported);
+  else
+    log::warn("xr", "Frame rate setting: {} refused {:g} Hz (result {}); keeping its {:g} Hz", h.runtime_name,
+              *supported, int(requested), current);
+}
+void Session::observe_capped_frame(XrFrameState& out) {
+  const auto period = out.predictedDisplayPeriod;
+  if (!host_rate_recorded && period > 0) {
+    host_rate_recorded = true;
+    remember_host_rates(float(1e9 / double(period)), {});
+  }
+  if (!cap.period_ns || period <= 0) return;
+  std::int64_t display;
+  if (XR_FAILED(time_to_monotonic(out.predictedDisplayTime, &display))) return;
+  cap.host_period_ns = period;
+  cap.latency_ns = std::max<std::int64_t>(0, display - monotonic_ns());
+  // Frames keep the target timeline; a late or stale frame restarts it.
+  const bool on_time = cap.target_ns && display <= cap.target_ns + period / 2 && display >= cap.target_ns - cap.period_ns;
+  cap.target_ns = (on_time ? cap.target_ns : display) + cap.period_ns;
+  out.predictedDisplayPeriod = std::max(period, cap.period_ns);
 }
 XrResult Session::end_session() {
   if (!handle) return XR_ERROR_HANDLE_INVALID;
@@ -576,6 +664,25 @@ XrResult Session::wait(const XrFrameWaitInfo *info, XrFrameState *out) {
     }
     return XR_SUCCESS;
   }
+  // A capped frame starts its host wait so that it returns the frame
+  // displayed nearest the cap's target (FrameCap).
+  if (cap.period_ns && cap.target_ns && !proxied) {
+    const auto start = cap.target_ns - cap.latency_ns - cap.host_period_ns / 2;
+    while (monotonic_ns() < start && running && handle && XR_SUCCEEDED(lost) && generation == run_generation) {
+      lock.unlock();
+      if (thread) {
+        const auto epoch = std::atomic_ref(frame_epoch).load(std::memory_order_acquire);
+        futex_wait(*thread, h2g(&frame_epoch), epoch, start);
+      } else {
+        std::this_thread::sleep_for(std::chrono::nanoseconds(std::max<std::int64_t>(0, start - monotonic_ns())));
+      }
+      lock.lock();
+    }
+    if (!handle || XR_FAILED(lost) || !running || generation != run_generation) {
+      wait_in_progress = false;
+      return !handle ? XR_ERROR_HANDLE_INVALID : XR_FAILED(lost) ? lost : XR_ERROR_SESSION_NOT_RUNNING;
+    }
+  }
   // A simulation thread may wait for frame N+1 while the render thread ends N.
   // No API-state or GPU queue lock may be held across the runtime's pacing wait.
   lock.unlock();
@@ -616,6 +723,7 @@ XrResult Session::wait(const XrFrameWaitInfo *info, XrFrameState *out) {
         log::info("xr-frame", "host_wait state={} host_render={} guest_render={} period={}",
             int(state), bool(host_should_render), bool(out->shouldRender), out->predictedDisplayPeriod);
     }
+    observe_capped_frame(*out);
     pending_frame = *out;
     pending_frame.next = nullptr;
     pending_wait = true;
@@ -824,6 +932,7 @@ XrResult Session::end(const XrFrameEndInfo *info, std::shared_ptr<const void> ow
   if (XR_SUCCEEDED(result) && lead_active() && !async) request_host_wait();
   if (XR_SUCCEEDED(result)) {
     ++frame_index;
+    hitches.submitted(monotonic_ns(), display_timing.period.load());
     vulkan::timing_end_frame(info->displayTime, guest_swap_interval, display_timing.rate());
     if (frame_index == 1) { profile::mark("first_frame_submission"); startup_diagnostics::arm(); }
     startup_diagnostics::note_frame_submitted();
@@ -894,8 +1003,14 @@ XrResult Session::end(const XrFrameEndInfo *info, std::shared_ptr<const void> ow
                                ? std::chrono::duration<double>(now - last_report_time).count()
                                : 0.;
       const auto rate = seconds > 0 ? (frame_index - last_report_frame) / seconds : 0.;
-      log::info("xr", "Frames submitted={} xrEndFrame_errors={} submission_fps={:.2f} runtime_period_hz={:.2f}",
-                frame_index, end_errors, rate, display_timing.rate());
+      // worst_frame_ms: the longest gap between two submissions in the window;
+      // long_frames: gaps over 1.5 display periods, long_excess_ms their time
+      // beyond one period (a stall versus scattered misses in stutter reports).
+      log::info("xr", "Frames submitted={} xrEndFrame_errors={} submission_fps={:.2f} runtime_period_hz={:.2f} "
+                "worst_frame_ms={:.1f} long_frames={} long_excess_ms={:.0f}",
+                frame_index, end_errors, rate, display_timing.rate(), hitches.worst_ns / 1e6,
+                hitches.long_frames, hitches.excess_ns / 1e6);
+      hitches.next_window();
       if (lead.enabled)
         log::info("xr", "Frame lead={:.2f}ms led={} missed_displays={} window={:.2f}ms chain={:.2f}ms "
                   "mispredicted={} max_misprediction={:.2f}ms async_ends={}",

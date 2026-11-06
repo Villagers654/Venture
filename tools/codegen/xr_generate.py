@@ -44,7 +44,7 @@ xrReleaseSwapchainImage xrSuggestInteractionProfileBindings
 xrGetCurrentInteractionProfile xrInitializeLoaderKHR xrCreateHandTrackerEXT
 xrDestroyHandTrackerEXT xrLocateHandJointsEXT xrGetHandMeshFB xrLocateSpaces
 xrGetDeviceSampleRateFB xrEnumerateBoundSourcesForAction xrApplyHapticFeedback xrStopHapticFeedback
-xrCreateActionSpace xrLocateSpace xrPerfSettingsSetPerformanceLevelEXT'''.split())
+xrCreateActionSpace xrLocateSpace xrPerfSettingsSetPerformanceLevelEXT xrEnumerateViewConfigurationViews'''.split())
 
 # Action states change only in xrSyncActions, so reads between syncs reuse the
 # host answer (state.cpp stored_action_state).
@@ -181,8 +181,10 @@ def generate(registry, output, check=False):
             cmd = commands[name]
             if cmd.get('alias'): cmd = commands[cmd.get('alias')]
             params = cmd.findall('param')
-            sig = ', '.join(text(p) for p in params)
             args = ', '.join(p.findtext('name') for p in params)
+            # An unsupported stub uses no parameter; keep each name as a comment.
+            unnamed = lambda p: '{0}/*{1}*/{2}'.format(*text(p).rpartition(p.findtext('name')))
+            sig = ', '.join(text(p) if name in implemented else unnamed(p) for p in params)
             lines.append(f'XrResult XRAPI_CALL dispatch_{name}({sig}) {{')
             # WaitFrame releases its state lock while pacing a real-time mock, and
             # a gated EndFrame (ventureMockXrGateEnd) while it is held.

@@ -1,4 +1,5 @@
 #include "libc_b/test.h"
+#include <algorithm>
 #include <array>
 #include <fstream>
 #include <thread>
@@ -41,6 +42,24 @@ TEST_CASE("Android external storage parents support recursive directory creation
   CHECK(call("close", {std::uint64_t(fd)}) == 0);
   CHECK(call("unlink", {h2g(profile.c_str())}) == 0);
   CHECK(call("rmdir", {h2g(directory.c_str())}) == 0);
+}
+
+TEST_CASE("The APK's directory and its lib parent are directories") {
+  // Mono's FileStream checks Directory.Exists on the parent of base.apk before opening it.
+  Thread thread;
+  const auto& lib = process_config().guest_native_lib_dir();
+  const auto app = "/data/app/" + process_config().package;
+  for (const auto& dir : {app, lib.substr(0, lib.rfind('/'))}) {
+    Stat stat{};
+    REQUIRE(path_stat(dir.c_str(), &stat) == 0);
+    CHECK((stat.mode & 0170000) == 0040000);
+  }
+  const auto fd = fd_open(app.c_str(), 0200000, 0);
+  REQUIRE(fd >= 0);
+  std::vector<Dirent> entries;
+  REQUIRE(FdTable::get().file(fd)->entries(entries) == 0);
+  CHECK(std::any_of(entries.begin(), entries.end(), [](const Dirent& d) { return std::string_view(d.name) == "base.apk"; }));
+  CHECK(call("close", {std::uint64_t(fd)}) == 0);
 }
 
 TEST_CASE("guest completed file writes are visible before close and completion markers") {

@@ -7,6 +7,7 @@
 #include "hle/vulkan/vulkan.h"
 #include "xr/vulkan_extensions.h"
 #include "xr/display_memory.h"
+#include "xr/display_override.h"
 #include "platform/thread_priority.h"
 #include <algorithm>
 #include <utility>
@@ -24,6 +25,8 @@ XrViewConfigurationView view() {
                                                     XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO, 2,
                                                     &count, out)))
     return {XR_TYPE_VIEW_CONFIGURATION_VIEW};
+  // Suggested eye texture sizes follow the Display settings (display_override.h).
+  xr::apply_display_override(out, count);
   return out[0];
 }
 std::vector<float> rates() {

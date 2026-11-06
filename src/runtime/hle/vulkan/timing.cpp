@@ -3,6 +3,7 @@
 #include "common/json.h"
 #include <chrono>
 #include "common/environment.h"
+#include "common/paths.h"
 #include "timing.h"
 #include "timing_writer.h"
 #include "internal.h"
@@ -150,7 +151,7 @@ struct Output {
   };
   using Writer = TimingWriter<Record, 8192, Sink, Finish>;
   std::unique_ptr<Writer> worker;
-  Output() : path(std::filesystem::u8path(venture::environment::getenv("VENTURE_VULKAN_GPU_TIMING"))),
+  Output() : path(venture::paths::from_utf8(venture::environment::getenv("VENTURE_VULKAN_GPU_TIMING"))),
       synchronous([] { auto* p = venture::environment::getenv("VENTURE_TIMING_WRITER"); return p && std::string_view(p) == "sync"; }()) {
     if (!synchronous) worker = std::make_unique<Writer>([this](const Record& r) { return write(r); }, Finish{this});
   }

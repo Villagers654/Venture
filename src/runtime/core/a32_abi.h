@@ -28,6 +28,10 @@ struct Coverage {
   std::string reason;
 };
 std::vector<Coverage> coverage();
+// False only for a registered export whose A32 binding is the diagnostic trap.
+// Such an export is absent to dlsym and weak imports, as an unimplemented
+// function is on A64; strong imports still bind its trap.
+bool callable(std::string_view library, std::string_view symbol);
 // Explicit exclusions, with a reviewed reason per symbol; never a library wildcard.
 std::string_view a64_only_reason(std::string_view library, std::string_view symbol);
 // Explicit Phase-2 adapters still require a descriptor. The caller owns ABI,

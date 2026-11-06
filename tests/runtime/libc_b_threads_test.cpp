@@ -177,7 +177,7 @@ TEST_CASE("libc B: contended rwlock readers and writers exclude each other and n
 }
 TEST_CASE("libc B: pthread keys are per guest thread and reuse clears live threads") {
   Thread parent;
-  int key;
+  int key = 0;
   REQUIRE(call("pthread_key_create", {h2g(&key), 0}) == 0);
   REQUIRE(call("pthread_setspecific", {static_cast<unsigned>(key), 0x1234}) == 0);
   std::barrier phases(2);

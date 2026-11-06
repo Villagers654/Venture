@@ -75,27 +75,58 @@ std::optional<s32> FoldedDisplacement(const EmitContext& ctx, const IR::Inst* in
     if (address.IsImmediate() || !ctx.IsFoldedAddress(address.GetInst())) return std::nullopt;
     return static_cast<s32>(address.GetInst()->GetArg(1).GetImmediateAsU64());
 }
+// Venture: the index register and scale of an access addressed as [base + index*scale],
+// the register locked for the access; nullopt for other accesses. Base and index in
+// one register (aliased values) get the address in a scratch register instead, as
+// an unfolded access.
+std::optional<FoldedIndex> UseFoldedIndex(BlockOfCode& code, EmitContext& ctx, const IR::Inst* inst, Xbyak::Reg64& vaddr) {
+    const IR::Value address = inst->GetArg(1);
+    if (address.IsImmediate()) return std::nullopt;
+    const auto* indexed = ctx.FindIndexedAddress(address.GetInst());
+    if (!indexed) return std::nullopt;
+    auto argument = ctx.reg_alloc.GetArgument(indexed->add->GetArg(indexed->index_arg));
+    const FoldedIndex index{ctx.reg_alloc.UseGpr(code, argument), 1 << indexed->shift};
+    if (index.reg.getIdx() != vaddr.getIdx()) return index;
+    const Xbyak::Reg64 full = ctx.reg_alloc.ScratchGpr(code);
+    code.lea(full, code.ptr[vaddr + index.reg * index.scale]);
+    vaddr = full;
+    return std::nullopt;
+}
 }  // namespace
 
 void AxxEmitX64::EmitFastmemFallback(AxxEmitContext& ctx, IR::Inst* inst, Xbyak::Label& abort, Xbyak::Label& end, Xbyak::Reg64 vaddr,
-                                     std::optional<s32> folded, void (*wrapped_fn)(), const void* location, DoNotFastmemMarker marker) {
+                                     std::optional<s32> folded, std::optional<FoldedIndex> index, void (*wrapped_fn)(), const void* location, DoNotFastmemMarker marker) {
     // A folded access holds only the base in vaddr. The fallback reads the full
-    // address from vaddr, so add the displacement around it and restore the base
-    // before any abort exit. The fault entry tail-jumps, keeping the fake call's frame.
+    // address from vaddr, so add the displacement or index around it and restore
+    // the base before any abort exit (the fallback preserves the index register;
+    // a scaled index is negated around the LEA that subtracts it).
+    // The fault entry tail-jumps, keeping the fake call's frame.
+    const auto to_full = [&] {
+        if (folded) code.lea(vaddr, code.ptr[vaddr + *folded]);
+        else if (index) code.lea(vaddr, code.ptr[vaddr + index->reg * index->scale]);
+    };
     code.L(abort);
-    if (folded) code.lea(vaddr, code.ptr[vaddr + *folded]);
+    to_full();
     code.call(wrapped_fn);
     const auto resume = std::bit_cast<u64>(code.getCurr());
-    if (folded) code.lea(vaddr, code.ptr[vaddr - *folded]);
+    if (folded) {
+        code.lea(vaddr, code.ptr[vaddr - *folded]);
+    } else if (index && index->scale == 1) {
+        code.sub(vaddr, index->reg);
+    } else if (index) {
+        code.neg(index->reg);
+        code.lea(vaddr, code.ptr[vaddr + index->reg * index->scale]);
+        code.neg(index->reg);
+    }
     EmitCheckMemoryAbort(ctx, inst, &end);
     code.jmp(end, code.T_NEAR);
     auto entry = std::bit_cast<u64>(wrapped_fn);
-    if (folded) {
+    if (folded || index) {
         entry = std::bit_cast<u64>(code.getCurr());
-        code.lea(vaddr, code.ptr[vaddr + *folded]);
+        to_full();
         code.jmp(reinterpret_cast<const void*>(wrapped_fn));
     }
-    fastmem_patch_info.emplace(std::bit_cast<u64>(location), FastmemPatchInfo{resume, entry, marker, conf.recompile_on_fastmem_failure});
+    EmplaceFastmemPatch(std::bit_cast<u64>(location), FastmemPatchInfo{resume, entry, marker, conf.recompile_on_fastmem_failure});
 }
 
 template<std::size_t bitsize, auto callback>
@@ -132,7 +163,8 @@ void AxxEmitX64::EmitMemoryRead(AxxEmitContext& ctx, IR::Inst* inst) {
     }
 
     const auto folded = FoldedDisplacement(ctx, inst);
-    const Xbyak::Reg64 vaddr = ctx.reg_alloc.UseGpr(code, args[1]);
+    Xbyak::Reg64 vaddr = ctx.reg_alloc.UseGpr(code, args[1]);
+    const auto index = UseFoldedIndex(code, ctx, inst, vaddr);
     // Venture: an FP load reads straight into an XMM register (MOVD/MOVQ zero the upper lanes).
     const bool to_xmm = (bitsize == 32 || bitsize == 64) && fastmem_marker && !ordered && xmm_read_fallbacks && LoadFeedsXmm(ctx, inst);
     const int value_idx = bitsize == 128 || to_xmm ? ctx.reg_alloc.ScratchXmm(code).getIdx() : ctx.reg_alloc.ScratchGpr(code).getIdx();
@@ -162,7 +194,7 @@ void AxxEmitX64::EmitMemoryRead(AxxEmitContext& ctx, IR::Inst* inst) {
                     code.L(*misaligned);
                     const auto locked_location = EmitReadMemoryMov<bitsize>(code, value_idx, address, ordered, true);
                     if (fastmem_marker) {
-                        fastmem_patch_info.emplace(std::bit_cast<u64>(locked_location), FastmemPatchInfo{
+                        EmplaceFastmemPatch(std::bit_cast<u64>(locked_location), FastmemPatchInfo{
                             std::bit_cast<u64>(code.getCurr()), std::bit_cast<u64>(wrapped_fn),
                             *fastmem_marker, conf.recompile_on_fastmem_failure});
                     }
@@ -181,10 +213,10 @@ void AxxEmitX64::EmitMemoryRead(AxxEmitContext& ctx, IR::Inst* inst) {
         bool require_abort_handling = false;
         const auto src_ptr = EmitFastmemVAddr(code, ctx, *abort, vaddr, require_abort_handling);
 
-        const auto location = emit_read(folded ? src_ptr + *folded : src_ptr);
+        const auto location = emit_read(folded ? src_ptr + *folded : index ? src_ptr + index->reg * index->scale : src_ptr);
 
         ctx.deferred_emits.emplace_back([=, this, &ctx] {
-            EmitFastmemFallback(ctx, inst, *abort, *end, vaddr, folded, wrapped_fn, location, *fastmem_marker);
+            EmitFastmemFallback(ctx, inst, *abort, *end, vaddr, folded, index, wrapped_fn, location, *fastmem_marker);
         });
     } else {
         // Use page table
@@ -249,6 +281,7 @@ void AxxEmitX64::EmitMemoryWrite(AxxEmitContext& ctx, IR::Inst* inst) {
 
     auto folded = FoldedDisplacement(ctx, inst);
     Xbyak::Reg64 vaddr = ctx.reg_alloc.UseGpr(code, args[1]);
+    auto index = UseFoldedIndex(code, ctx, inst, vaddr);
     const int value_idx = bitsize == 128
                             ? ctx.reg_alloc.UseXmm(code, args[2]).getIdx()
                             : (ordered ? ctx.reg_alloc.UseScratchGpr(code, args[2]).getIdx() : ctx.reg_alloc.UseGpr(code, args[2]).getIdx());
@@ -260,6 +293,12 @@ void AxxEmitX64::EmitMemoryWrite(AxxEmitContext& ctx, IR::Inst* inst) {
         vaddr = address;
         folded.reset();
     }
+    if (index && bitsize != 128 && value_idx == vaddr.getIdx()) {
+        const Xbyak::Reg64 address = ctx.reg_alloc.ScratchGpr(code);
+        code.lea(address, code.ptr[vaddr + index->reg * index->scale]);
+        vaddr = address;
+        index.reset();
+    }
     const auto wrapped_fn = FastmemFallback(FallbackKind::Write, FallbackKey(ordered, bitsize, vaddr.getIdx(), value_idx));
 
     SharedLabel abort = ctx.GenSharedLabel(), end = ctx.GenSharedLabel();
@@ -269,10 +308,10 @@ void AxxEmitX64::EmitMemoryWrite(AxxEmitContext& ctx, IR::Inst* inst) {
         bool require_abort_handling = false;
         const auto dest_ptr = EmitFastmemVAddr(code, ctx, *abort, vaddr, require_abort_handling);
 
-        const auto location = EmitWriteMemoryMov<bitsize>(code, folded ? dest_ptr + *folded : dest_ptr, value_idx, ordered);
+        const auto location = EmitWriteMemoryMov<bitsize>(code, folded ? dest_ptr + *folded : index ? dest_ptr + index->reg * index->scale : dest_ptr, value_idx, ordered);
 
         ctx.deferred_emits.emplace_back([=, this, &ctx] {
-            EmitFastmemFallback(ctx, inst, *abort, *end, vaddr, folded, wrapped_fn, location, *fastmem_marker);
+            EmitFastmemFallback(ctx, inst, *abort, *end, vaddr, folded, index, wrapped_fn, location, *fastmem_marker);
         });
     } else {
         // Use page table
@@ -452,7 +491,7 @@ void AxxEmitX64::EmitExclusiveReadMemoryInline(AxxEmitContext& ctx, IR::Inst* in
                                   ? EmitAtomicLoad128(code, value_idx, src_ptr)
                                   : EmitReadMemoryMov<bitsize>(code, value_idx, src_ptr, ordered, !conf.plain_exclusive_loads);
 
-        fastmem_patch_info.emplace(
+        EmplaceFastmemPatch(
             std::bit_cast<u64>(location),
             FastmemPatchInfo{
                 std::bit_cast<u64>(code.getCurr()),
@@ -678,7 +717,7 @@ void AxxEmitX64::EmitExclusiveWriteMemoryInline(AxxEmitContext& ctx, IR::Inst* i
             code.L(*abort);
             code.call(wrapped_fn);
 
-            fastmem_patch_info.emplace(
+            EmplaceFastmemPatch(
                 std::bit_cast<u64>(location),
                 FastmemPatchInfo{
                     std::bit_cast<u64>(code.getCurr()),

@@ -1,11 +1,17 @@
 #include <mimalloc.h>
 
 #include <atomic>
+#include <bit>
+#include <format>
 #include <limits>
+#include <string>
 
 #include "common/log.h"
+#include "core/address_space.h"
 #include "core/guest_heap.h"
 #include "core/process.h"
+#include "core/signals.h"
+#include "core/thread.h"
 #include "hle/libc/libc_a.h"
 namespace venture::hle::libc {
 namespace {
@@ -17,13 +23,35 @@ void* record(void* p) {
     set_error(err::kENOMEM);
   return p;
 }
+// A pointer no guest heap allocation owns never reaches mimalloc, which would
+// read a segment header from the pointer's segment-aligned base and fault in
+// the host (North Star on Linux: Unity freed 0x20000000000, the guest arena's
+// first page). The call is reported with its guest caller and skipped, as for
+// a double free.
+bool owned(const char* call, const void* p) {
+  if (guest_heap::owns(p)) return true;
+  static std::atomic<std::uint32_t> rejected{0};
+  const auto count = rejected.fetch_add(1, std::memory_order_relaxed) + 1;
+  if (count <= 8 || std::has_single_bit(count)) {
+    std::string region = "unmapped";
+    if (MemoryRegion r; AddressSpace::get().find(h2g(p), &r))
+      region = std::format("in {} {:#x}+{:#x}", r.name.empty() ? "[anon]" : r.name, r.start, h2g(p) - r.start);
+    signals::log_rejected_guest_call(
+        GuestThread::current(),
+        std::format("{}({:#x}) of memory no guest heap allocation owns ({}); ignored, {} so far", call, h2g(p), region,
+                    count),
+        h2g(p));
+  }
+  return false;
+}
 }  // namespace
 void* allocate(std::uint64_t size) { return record(guest_heap::allocator.aligned(size, 16)); }
 void deallocate(void* p) {
-  if (p) allocated_bytes.fetch_sub(mi_usable_size(p), std::memory_order_relaxed);
+  if (!p || !owned("free", p)) return;
+  allocated_bytes.fetch_sub(mi_usable_size(p), std::memory_order_relaxed);
   guest_heap::allocator.free(p);
 }
-std::uint64_t usable_size(const void* p) { return p ? mi_usable_size(p) : 0; }
+std::uint64_t usable_size(const void* p) { return p && owned("malloc_usable_size", p) ? mi_usable_size(p) : 0; }
 void* allocate_aligned(std::uint64_t alignment, std::uint64_t size) {
   if (!alignment || (alignment & (alignment - 1))) {
     set_error(err::kEINVAL);
@@ -37,7 +65,11 @@ void* reallocate(void* p, std::uint64_t size) {
     deallocate(p);
     return nullptr;
   }
-  auto old = usable_size(p);
+  if (!owned("realloc", p)) {
+    set_error(err::kENOMEM);
+    return nullptr;
+  }
+  auto old = mi_usable_size(p);
   auto out = guest_heap::allocator.realloc_aligned(p, size, 16);
   if (!out) {
     set_error(err::kENOMEM);

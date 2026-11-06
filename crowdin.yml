@@ -1,0 +1,33 @@
+# Crowdin: Venture's interface text.
+#
+# The source is the gettext catalog i18n/venture.pot, written by
+# tools/i18n_extract.py; translations come back as i18n/<code>.po. English is
+# the source language and has no file.
+#
+# No credentials live here: Crowdin's GitHub integration reads this file as is,
+# and the Crowdin CLI takes the project and token from the environment.
+project_id_env: CROWDIN_PROJECT_ID
+api_token_env: CROWDIN_PERSONAL_TOKEN
+
+base_path: "."
+preserve_hierarchy: true
+
+files:
+  - source: /i18n/venture.pot
+    # A language's file is its two-letter code (fr.po, de.po); languages with
+    # regional or script variants that would share a code are mapped to the
+    # locale names Venture resolves (pt_BR, zh_Hans...). The keys are Crowdin's
+    # language codes.
+    translation: /i18n/%two_letters_code%.po
+    languages_mapping:
+      two_letters_code:
+        pt-BR: pt_BR
+        pt-PT: pt
+        zh-CN: zh_Hans
+        zh-TW: zh_Hant
+        es-ES: es
+        es-419: es_419
+        es-MX: es_MX
+        en-GB: en_GB
+        sr-CS: sr_Latn
+        sv-SE: sv

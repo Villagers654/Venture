@@ -48,8 +48,10 @@ def gl_check(name):
     if name.startswith('glFramebuffer') or name == 'glDeleteFramebuffers':
         return 'framebuffer_change'
     if ((name.startswith('glDraw') and name not in ('glDrawBuffers', 'glDrawBuffersEXT'))
-            or name.startswith('glMultiDraw') or name == 'glClear' or name.startswith('glClearBuffer')):
+            or name.startswith('glMultiDraw')):
         return 'draw'
+    if name == 'glClear' or name.startswith('glClearBuffer'):
+        return 'clear'
     if name in ('glReadPixels', 'glReadnPixels', 'glReadnPixelsEXT', 'glReadnPixelsKHR'):
         return 'read'
     if name == 'glBlitFramebuffer':

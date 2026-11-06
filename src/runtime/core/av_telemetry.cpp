@@ -1,4 +1,5 @@
 #include "common/environment.h"
+#include "common/paths.h"
 #include "core/av_telemetry.h"
 #include "core/wait.h"
 #include "platform/profile.h"
@@ -25,7 +26,7 @@ struct Writer {
   std::atomic<unsigned> worker_tid{0};
   Writer() {
     if (auto p = venture::environment::getenv("VENTURE_AV_TELEMETRY"); p && *p) {
-      path = std::filesystem::u8path(p);
+      path = venture::paths::from_utf8(p);
       worker = std::thread([this] { run(); });
     }
   }

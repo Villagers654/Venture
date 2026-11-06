@@ -47,6 +47,9 @@ struct GuestImages::Impl {
   };
   std::vector<Slot> slots;
   std::vector<XrSwapchainImageVulkanKHR> exposed;
+  bool staged_mode = false;
+  std::vector<StagedImage> staged;
+  std::uint64_t bytes = 0;
   template <class T> T fn(const char *name) const {
     return reinterpret_cast<T>(get(binding.instance, name));
   }
@@ -120,13 +123,14 @@ struct GuestImages::Impl {
 };
 GuestImages::GuestImages(const XrGraphicsBindingVulkanKHR &binding,
                          PFN_vkGetInstanceProcAddr get,
-                         const XrSwapchainCreateInfo &info)
+                         const XrSwapchainCreateInfo &info, bool staged)
     : impl_(std::make_unique<Impl>()) {
   auto &s = *impl_;
   s.binding = binding;
   s.get = get;
   s.info = info;
   s.info.next = nullptr;
+  s.staged_mode = staged;
   switch (VkFormat(info.format)) {
   case VK_FORMAT_D16_UNORM:
   case VK_FORMAT_X8_D24_UNORM_PACK32:
@@ -159,6 +163,7 @@ GuestImages::GuestImages(const XrGraphicsBindingVulkanKHR &binding,
   const auto count =
       info.createFlags & XR_SWAPCHAIN_CREATE_STATIC_IMAGE_BIT ? 1u : 3u;
   s.slots.resize(count);
+  if (staged) s.staged.resize(count);
   if (vulkan::timing_enabled()) {
     std::uint32_t n{};
     auto families = s.fn<PFN_vkGetPhysicalDeviceQueueFamilyProperties>(
@@ -228,6 +233,22 @@ GuestImages::GuestImages(const XrGraphicsBindingVulkanKHR &binding,
         ci.arrayLayers > supported.maxArrayLayers ||
         !(supported.sampleCounts & ci.samples))
       throw XR_ERROR_SWAPCHAIN_FORMAT_UNSUPPORTED;
+    VkCommandBufferAllocateInfo ca{
+        VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO, nullptr, s.pool,
+        VK_COMMAND_BUFFER_LEVEL_PRIMARY, 1};
+    checked(s.fn<PFN_vkAllocateCommandBuffers>("vkAllocateCommandBuffers")(
+                binding.device, &ca, &slot.command),
+            "Guest copy commands");
+    VkFenceCreateInfo fc{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+    checked(s.fn<PFN_vkCreateFence>("vkCreateFence")(binding.device, &fc,
+                                                     nullptr, &slot.fence),
+            "Guest copy fence");
+    if (staged) {
+      // The provider's staging holds the released contents; nothing to
+      // allocate or initialize here.
+      s.exposed.push_back({XR_TYPE_SWAPCHAIN_IMAGE_VULKAN_KHR, nullptr, VK_NULL_HANDLE});
+      continue;
+    }
     checked(s.fn<PFN_vkCreateImage>("vkCreateImage")(binding.device, &ci,
                                                      nullptr, &slot.image),
             "Guest swapchain image");
@@ -247,19 +268,10 @@ GuestImages::GuestImages(const XrGraphicsBindingVulkanKHR &binding,
     checked(s.fn<PFN_vkAllocateMemory>("vkAllocateMemory")(
                 binding.device, &ai, nullptr, &slot.memory),
             "Guest image memory");
+    s.bytes += requirements.size;
     checked(s.fn<PFN_vkBindImageMemory>("vkBindImageMemory")(
                 binding.device, slot.image, slot.memory, 0),
             "Guest image binding");
-    VkCommandBufferAllocateInfo ca{
-        VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO, nullptr, s.pool,
-        VK_COMMAND_BUFFER_LEVEL_PRIMARY, 1};
-    checked(s.fn<PFN_vkAllocateCommandBuffers>("vkAllocateCommandBuffers")(
-                binding.device, &ca, &slot.command),
-            "Guest copy commands");
-    VkFenceCreateInfo fc{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
-    checked(s.fn<PFN_vkCreateFence>("vkCreateFence")(binding.device, &fc,
-                                                     nullptr, &slot.fence),
-            "Guest copy fence");
     VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
     checked(s.fn<PFN_vkBeginCommandBuffer>("vkBeginCommandBuffer")(slot.command,
                                                                    &begin),
@@ -300,6 +312,8 @@ GuestImages::~GuestImages() = default;
 std::span<const XrSwapchainImageVulkanKHR> GuestImages::images() const {
   return impl_->exposed;
 }
+std::span<StagedImage> GuestImages::staged() { return impl_->staged; }
+std::uint64_t GuestImages::private_bytes() const { return impl_->bytes; }
 XrResult GuestImages::wait(std::uint32_t index, XrDuration timeout) {
   std::lock_guard lock(impl_->mutex);
   if (index >= impl_->slots.size())
@@ -367,6 +381,53 @@ XrResult GuestImages::copy(std::uint32_t index, VkImage target,
           slot.command, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
           VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr, 0, nullptr, 1, &b);
     };
+    const auto blittable = [&] {
+      VkFormatProperties source_properties{}, target_properties{};
+      const auto properties = s.fn<PFN_vkGetPhysicalDeviceFormatProperties>(
+          "vkGetPhysicalDeviceFormatProperties");
+      properties(s.binding.physicalDevice, VkFormat(s.info.format), &source_properties);
+      properties(s.binding.physicalDevice, format, &target_properties);
+      return (source_properties.optimalTilingFeatures & VK_FORMAT_FEATURE_BLIT_SRC_BIT) &&
+             (target_properties.optimalTilingFeatures & VK_FORMAT_FEATURE_BLIT_DST_BIT);
+    };
+    if (s.staged_mode) {
+      // Provider staging: one 2D image per layer, GLES rows (row 0 at the
+      // bottom). One blit per layer turns them top-down, scales and converts.
+      auto &staged = s.staged[index];
+      if (!staged.staged || staged.layers.size() != layer_count ||
+          staged.layouts.size() != layer_count || s.info.sampleCount != 1 ||
+          s.aspects != VK_IMAGE_ASPECT_COLOR_BIT)
+        return XR_ERROR_RUNTIME_FAILURE;
+      if (!blittable())
+        return XR_ERROR_SWAPCHAIN_FORMAT_UNSUPPORTED;
+      VkFormatProperties source_properties{};
+      s.fn<PFN_vkGetPhysicalDeviceFormatProperties>("vkGetPhysicalDeviceFormatProperties")(
+          s.binding.physicalDevice, VkFormat(s.info.format), &source_properties);
+      const auto filter = scaled && (source_properties.optimalTilingFeatures &
+                                     VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT)
+                              ? VK_FILTER_LINEAR : VK_FILTER_NEAREST;
+      barrier(target, VK_IMAGE_LAYOUT_UNDEFINED,
+              VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, host_mips, copied_layers);
+      for (std::uint32_t layer = 0; layer < copied_layers; ++layer) {
+        const auto source = staged.layers[first_layer + layer];
+        barrier(source, staged.layouts[first_layer + layer],
+                VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, 1, 1);
+        VkImageBlit blit{};
+        blit.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, layer, 1};
+        blit.srcOffsets[1] = {int(s.info.width), int(s.info.height), 1};
+        blit.dstOffsets[1] = scaled ? VkOffset3D{int(extent.width), int(extent.height), 1}
+                                    : blit.srcOffsets[1];
+        if (!flip_rows)
+          std::swap(blit.srcOffsets[0].y, blit.srcOffsets[1].y);
+        s.fn<PFN_vkCmdBlitImage>("vkCmdBlitImage")(
+            slot.command, source, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, target,
+            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, filter);
+        if (staged.idle_layout != VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL)
+          barrier(source, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, staged.idle_layout, 1, 1);
+      }
+      barrier(target, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, s.layout, host_mips, copied_layers);
+    } else {
     barrier(slot.image, s.layout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, s.info.mipCount, layer_count);
     barrier(target, VK_IMAGE_LAYOUT_UNDEFINED,
             VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, host_mips, copied_layers);
@@ -394,17 +455,11 @@ XrResult GuestImages::copy(std::uint32_t index, VkImage target,
       if (s.info.sampleCount != 1 ||
           (s.aspects != VK_IMAGE_ASPECT_COLOR_BIT && format != VkFormat(s.info.format)))
         return XR_ERROR_SWAPCHAIN_FORMAT_UNSUPPORTED;
-      VkFormatProperties source_properties{}, target_properties{};
-      const auto properties = s.fn<PFN_vkGetPhysicalDeviceFormatProperties>(
-          "vkGetPhysicalDeviceFormatProperties");
-      properties(s.binding.physicalDevice, VkFormat(s.info.format),
-                 &source_properties);
-      properties(s.binding.physicalDevice, format, &target_properties);
-      if (!(source_properties.optimalTilingFeatures &
-            VK_FORMAT_FEATURE_BLIT_SRC_BIT) ||
-          !(target_properties.optimalTilingFeatures &
-            VK_FORMAT_FEATURE_BLIT_DST_BIT))
+      if (!blittable())
         return XR_ERROR_SWAPCHAIN_FORMAT_UNSUPPORTED;
+      VkFormatProperties source_properties{};
+      s.fn<PFN_vkGetPhysicalDeviceFormatProperties>("vkGetPhysicalDeviceFormatProperties")(
+          s.binding.physicalDevice, VkFormat(s.info.format), &source_properties);
       // Downscaling filters linearly where the format allows it; a 1:1
       // conversion stays exact.
       const auto filter =
@@ -432,6 +487,7 @@ XrResult GuestImages::copy(std::uint32_t index, VkImage target,
     }
     barrier(slot.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, s.layout, s.info.mipCount, layer_count);
     barrier(target, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, s.layout, host_mips, copied_layers);
+    }
     if (s.queries)
       s.fn<PFN_vkCmdWriteTimestamp>("vkCmdWriteTimestamp")(
           slot.command, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, s.queries,
@@ -451,6 +507,9 @@ XrResult GuestImages::copy(std::uint32_t index, VkImage target,
                                                      slot.fence),
             "Guest copy submit");
     slot.pending = true;
+    if (s.staged_mode)
+      for (std::uint32_t layer = 0; layer < copied_layers; ++layer)
+        s.staged[index].layouts[first_layer + layer] = s.staged[index].idle_layout;
     if (s.queries) {
       slot.timed = true;
       slot.sample = {"openxr-guest-handoff",

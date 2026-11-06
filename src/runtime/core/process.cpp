@@ -125,15 +125,27 @@ void configure_game(const std::filesystem::path& install,
             config.device_identity->device,
             config.device_identity == &native_device_identity() ? "" : " via Horizon compatibility mode");
   auto base = paths::data_dir();
-  const auto* passthrough = environment::getenv("VENTURE_PASSTHROUGH");
-  config.passthrough = passthrough && std::string_view(passthrough) == "1";
-  config.data_dir = account_data_dir(base, config.account_key, config.package);
+  config.passthrough = environment::passthrough_enabled();
+  config.passthrough_key = environment::passthrough_color_key();
+  // A version pinned beside the game's own install (meta::Plan::pinned) keeps
+  // its own app data, saves and caches, named by its folder
+  // ("<version code>-<binary id>"), so it never reads or downgrades the
+  // current save and the two never evict each other's translated code.
+  std::string pin;
+  if (plan.contains("pinned") && plan["pinned"] == true) {
+    pin = paths::utf8((std::filesystem::absolute(install) / "plan.json").lexically_normal().parent_path().filename());
+    const auto& binary = plan.contains("binaryId") ? plan["binaryId"] : nlohmann::json();
+    if (!binary.is_string() || pin != std::to_string(config.version_code) + "-" + binary.get<std::string>())
+      throw std::runtime_error("pinned version's folder does not match its plan");
+  }
+  config.data_dir = account_data_dir(base, config.account_key, config.package, pin);
   config.guest_cache_dir = config.data_dir / "cache";
-  config.cache_dir = base / "cache" / config.package / std::to_string(config.version_code);
+  config.cache_dir = base / "cache" / config.package / (pin.empty() ? std::to_string(config.version_code) : pin);
   config.native_lib_dir = config.cache_dir / "lib" / config.abi;
   // Extracted libraries and converted Java of earlier versions are only disk
   // use once the game updated; one still in use stays until a later launch.
-  if (std::error_code ec; std::filesystem::is_directory(config.cache_dir.parent_path(), ec))
+  // Pinned versions' caches ("<code>-<binary>") are theirs and stay.
+  if (std::error_code ec; pin.empty() && std::filesystem::is_directory(config.cache_dir.parent_path(), ec))
     for (const auto& entry : std::filesystem::directory_iterator(config.cache_dir.parent_path(), ec)) {
       const auto name = paths::utf8(entry.path().filename());
       if (name == std::to_string(config.version_code) || name.empty() ||
@@ -175,6 +187,7 @@ void configure_game(const std::filesystem::path& install,
     obb_names.push_back(paths::utf8(name));
   }
   sync_obb_view(std::filesystem::absolute(install), config.obb_dir, obb_names, mods_dir(base, config.package));
+  config.expansion_files = std::move(obb_names);
   config.properties = {{"ro.build.version.sdk", std::to_string(config.sdk_level)}, {"ro.product.cpu.abi", config.abi},
       {"ro.product.cpu.abilist", config.abi}};
 }

@@ -74,6 +74,7 @@ public final class RuntimeEnvironment {
     if (current != null)
       throw new IllegalStateException("One application per runtime");
     host = Objects.requireNonNull(bridge);
+    TlsPolicy.install();
     AndroidCAStore.install();
     current = new RuntimeEnvironment(args);
   }

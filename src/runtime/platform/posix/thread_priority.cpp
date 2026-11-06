@@ -24,6 +24,11 @@ void lower_background_thread_priority() {
   setpriority(PRIO_PROCESS, static_cast<id_t>(syscall(SYS_gettid)), 10);
 #endif
 }
+void lower_worker_thread_priority() {
+#ifdef __linux__
+  setpriority(PRIO_PROCESS, static_cast<id_t>(syscall(SYS_gettid)), 5);
+#endif
+}
 // The per-thread scheduler clock already counts nanoseconds, so frame CPU
 // samples are exact times rather than calibrated cycle estimates.
 std::int64_t thread_cpu_cycles(const ProfileThread& thread) {

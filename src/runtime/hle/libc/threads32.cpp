@@ -1,6 +1,7 @@
 #include "vfs.h"
 #include "abi32.h"
 #include "core/thread_api.h"
+#include <algorithm>
 #include <climits>
 
 namespace venture::hle::libc {
@@ -99,9 +100,8 @@ int cond_wake(std::uint32_t* c, int count) {
 }
 int cond_signal(std::uint32_t* c) { return cond_wake(c, 1); }
 int cond_broadcast(std::uint32_t* c) { return cond_wake(c, INT_MAX); }
-int cond_clock(std::uint32_t* c, std::uint32_t* m, int clock, const Timespec* t) {
-  std::int64_t end = -1;
-  if (t) { auto r = deadline32(t, clock, &end); if (r) return r; }
+// end is an absolute monotonic deadline in ns; negative waits without one.
+int cond_until(std::uint32_t* c, std::uint32_t* m, std::int64_t end) {
   auto seq = atom(*c).load(std::memory_order_acquire);
   auto r = mutex_unlock(m); if (r) return r;
   // Suspend/GC handlers must acknowledge without first acquiring this mutex.
@@ -118,6 +118,25 @@ int cond_clock(std::uint32_t* c, std::uint32_t* m, int clock, const Timespec* t)
   r = futex_wait(thread, h2g(c), seq, end);
   auto locked = cleanup.pending ? mutex_acquire(m, -1, false) : 0;
   return locked ? locked : r == -err::etimedout ? err::etimedout : 0;
+}
+int cond_clock(std::uint32_t* c, std::uint32_t* m, int clock, const Timespec* t) {
+  std::int64_t end = -1;
+  if (t) { auto r = deadline32(t, clock, &end); if (r) return r; }
+  return cond_until(c, m, end);
+}
+std::int64_t after_ns(std::int64_t delay) {
+  auto now = monotonic_ns();
+  return delay > INT64_MAX - now ? INT64_MAX : now + std::max<std::int64_t>(0, delay);
+}
+// LP32 bionic pthread_cond.cpp: a relative timeout (null waits forever) and a
+// millisecond timeout, both measured on the monotonic clock.
+int cond_relative(std::uint32_t* c, std::uint32_t* m, const Timespec* t) {
+  if (!t) return cond_until(c, m, -1);
+  if (t->nsec < 0 || t->nsec >= 1000000000) return err::einval;
+  return cond_until(c, m, after_ns(std::int64_t(t->sec) * 1000000000 + t->nsec));
+}
+int cond_timeout_ms(std::uint32_t* c, std::uint32_t* m, unsigned ms) {
+  return cond_until(c, m, after_ns(std::int64_t(ms) * 1000000));
 }
 int cond_wait(std::uint32_t* c, std::uint32_t* m) { return cond_clock(c, m, 0, nullptr); }
 int cond_timed(std::uint32_t* c, std::uint32_t* m, const Timespec* t) {
@@ -300,7 +319,7 @@ bool try_mutex32(CallContext& ctx, bool unlock) {
   ctx.return_x(0);
   return true;
 }
-void register_threads32_adapters() {
+void register_threads32_adapters(HleLibrary& lib) {
 #define A(n, f) abi32::adapt<&f>(n)
   A("pthread_create", create); A("pthread_getattr_np", getattr);
   A("pthread_mutex_init", mutex_init); A("pthread_mutex_destroy", mutex_destroy);
@@ -308,6 +327,7 @@ void register_threads32_adapters() {
   A("pthread_mutex_timedlock", mutex_timed); A("pthread_mutex_clocklock", mutex_clock);
   A("pthread_cond_init", cond_init); A("pthread_cond_destroy", cond_destroy); A("pthread_cond_wait", cond_wait);
   A("pthread_cond_timedwait", cond_timed); A("pthread_cond_timedwait_monotonic_np", cond_monotonic);
+  A("pthread_cond_timedwait_relative_np", cond_relative); A("pthread_cond_timeout_np", cond_timeout_ms);
   A("pthread_cond_clockwait", cond_clock); A("pthread_cond_signal", cond_signal); A("pthread_cond_broadcast", cond_broadcast);
   A("pthread_rwlock_init", rw_init); A("pthread_rwlock_destroy", rw_destroy); A("pthread_rwlock_unlock", rw_unlock);
   A("pthread_rwlock_rdlock", rw_read); A("pthread_rwlock_wrlock", rw_write); A("pthread_rwlock_tryrdlock", rw_tryread);
@@ -330,5 +350,8 @@ void register_threads32_adapters() {
   A("pthread_condattr_setclock", cond_clock_set);
   A("pthread_rwlockattr_init", small_init); A("pthread_rwlockattr_destroy", small_destroy);
 #undef A
+  // Exported by 32-bit bionic only (after their adapters); Unity 2018 job queues wait with the relative form.
+  VENTURE_LIBC_BIND(lib, "pthread_cond_timedwait_relative_np", cond_relative);
+  VENTURE_LIBC_BIND(lib, "pthread_cond_timeout_np", cond_timeout_ms);
 }
 }

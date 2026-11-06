@@ -61,7 +61,7 @@ if(VENTURE_BUILD_TESTS)
     tests/A32/test_coprocessor.cpp tests/A32/test_svc.cpp
     tests/A64/a64.cpp tests/A64/fibonacci.cpp tests/A64/fp_min_max.cpp
     tests/A64/misaligned_page_table.cpp tests/A64/test_invalidation.cpp
-    tests/A64/real_world.cpp tests/native/preserve_xmm.cpp)
+    tests/A64/real_world.cpp tests/A64/portable_blocks.cpp tests/A64/translate_any.cpp tests/A64/code_allocation.cpp tests/native/preserve_xmm.cpp)
   target_link_libraries(venture_dynarmic_tests PRIVATE dynarmic Catch2::Catch2WithMain merry::oaknut merry::mcl)
   if(WIN32)
     target_link_options(venture_dynarmic_tests PRIVATE -municode)

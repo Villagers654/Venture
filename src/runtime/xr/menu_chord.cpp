@@ -2,6 +2,8 @@
 #include "xr/menu_chord.h"
 #include "xr/haptic_output.h"
 #include "xr/bindings.h"
+#include "common/controls.h"
+#include <algorithm>
 #include "xr/host_xr.h"
 #include "xr/clock.h"
 #include "core/wait.h"
@@ -20,8 +22,18 @@ namespace venture::xr {
 namespace {
 std::recursive_mutex mutex;
 XrActionSet chord_set{};
-XrAction clicks{};
+// The menu's host inputs: the first and second button (or the left and right
+// stick click of the automatic chord).
+std::array<XrAction, 2> sources{};
 std::array<XrPath, 2> hands{};
+// How each host profile reaches the game's menu (absent: automatic with the
+// stick-click fallback, as for a profile Venture does not remap).
+struct Plan {
+  bool synthesized = false, off = false, automatic = true;
+  unsigned count = 2;
+  std::int64_t hold = std::int64_t(controls::kChordHoldMs) * 1'000'000;
+};
+std::map<XrPath, Plan> plans;
 std::map<XrAction, XrActionSet> parents;
 std::map<XrPath, std::map<XrAction, unsigned>> menus;
 std::map<XrPath, std::map<XrAction, std::array<XrPath, 2>>> menu_paths;
@@ -38,6 +50,8 @@ struct Snapshot {
   std::array<XrPath, 2> profiles{};
   std::array<bool, 2> forced_hands{};
   std::array<bool, 2> chord_hands{};
+  bool synthesized = false;  // the current profile's menu comes from its sources
+  unsigned source_count = 2;
   std::map<XrAction, unsigned> unbound_menus;
   std::map<XrActionSet, unsigned> active_sets;
   std::map<std::pair<XrAction, XrPath>, Merged> states;
@@ -59,13 +73,13 @@ XrResult ensure(XrInstance instance) {
     result = ::xrStringToPath(instance, hand ? "/user/hand/right" : "/user/hand/left", &hands[hand]);
     if (XR_FAILED(result)) break;
   }
-  if (XR_SUCCEEDED(result)) {
+  for (int i = 0; i < 2 && XR_SUCCEEDED(result); ++i) {
     XrActionCreateInfo ai{XR_TYPE_ACTION_CREATE_INFO};
-    std::strcpy(ai.actionName, "stick_clicks");
-    std::strcpy(ai.localizedActionName, "Menu chord stick clicks");
+    std::strcpy(ai.actionName, i ? "menu_second" : "menu_first");
+    std::strcpy(ai.localizedActionName, i ? "Menu second button" : "Menu button");
     ai.actionType = XR_ACTION_TYPE_BOOLEAN_INPUT;
     ai.countSubactionPaths = 2; ai.subactionPaths = hands.data();
-    result = ::xrCreateAction(chord_set, &ai, &clicks);
+    result = ::xrCreateAction(chord_set, &ai, &sources[i]);
   }
   if (XR_FAILED(result)) { ::xrDestroyActionSet(chord_set); chord_set = {}; }
   return result;
@@ -107,6 +121,7 @@ std::optional<unsigned> native_source_hands(XrSession session, XrAction action) 
   return available;
 }
 unsigned fallback_hands(const Snapshot &snapshot, XrAction action) {
+  if (snapshot.synthesized) return 3u;
   auto found = snapshot.unbound_menus.find(action);
   unsigned allowed = found == snapshot.unbound_menus.end() ? 0 : found->second;
   for (int hand = 0; hand < 2; ++hand)
@@ -114,6 +129,7 @@ unsigned fallback_hands(const Snapshot &snapshot, XrAction action) {
   return allowed;
 }
 enum class Mode : int { off, automatic, forced };
+const char* hands_root(int hand) { return hand ? "/user/hand/right" : "/user/hand/left"; }
 Mode mode() {
   static std::atomic<std::uint64_t> configured_generation{0};
   static std::atomic<int> configured{int(Mode::automatic)};
@@ -137,13 +153,11 @@ constexpr std::uint64_t profile_refresh_syncs = 128;
 bool menu_chord_enabled() { return mode() != Mode::off; }
 bool menu_chord_forced() { return mode() == Mode::forced; }
 void note_menu_profiles_changed(XrSession session) {
-  if (!menu_chord_enabled()) return;
   std::lock_guard lock(mutex);
   auto it = sessions.find(session);
   if (it != sessions.end()) it->second.profiles_stale = true;
 }
 void remember_menu_bindings(XrInstance instance, XrPath profile, const XrInteractionProfileSuggestedBinding* info) {
-  if (!menu_chord_enabled()) return;
   std::lock_guard lock(mutex);
   menus[profile].clear();
   menu_paths[profile].clear();
@@ -159,32 +173,48 @@ void remember_menu_bindings(XrInstance instance, XrPath profile, const XrInterac
         menu_paths[profile][binding.action][hand] = binding.binding;
       }
     }
-    if (!conflict_warned && (path.ends_with("/input/thumbstick/click") || path.ends_with("/input/trackpad/click"))) {
-      conflict_warned = true;
-      log::warn("xr", "Optional menu chord overlaps game stick clicks; ordinary clicks remain visible to the game");
-    }
   }
 }
 namespace {
 XrResult suggest(XrInstance instance, const XrInteractionProfileSuggestedBinding* info) {
-  if (!menu_chord_enabled()) return ::xrSuggestInteractionProfileBindings(instance, info);
   std::lock_guard lock(mutex);
   auto result = ensure(instance); if (XR_FAILED(result)) return result;
   std::vector<XrActionSuggestedBinding> bindings;
   if (info->countSuggestedBindings) bindings.assign(info->suggestedBindings, info->suggestedBindings + info->countSuggestedBindings);
-  auto profile = path_string(instance, info->interactionProfile);
-  for (const auto& binding : bindings) {
-    auto path = path_string(instance, binding.binding);
-    if (!conflict_warned && (path.ends_with("/input/thumbstick/click") || path.ends_with("/input/trackpad/click"))) {
-      conflict_warned = true;
-      log::warn("xr", "Optional menu chord overlaps game stick clicks; ordinary clicks remain visible to the game");
-    }
+  const auto profile = path_string(instance, info->interactionProfile);
+  const auto* known = controls::find_profile(profile);
+  const auto resolved = resolved_controls(profile);
+  Plan plan;
+  std::array<std::string, 2> inputs;
+  if (resolved && known && resolved->menu.kind == controls::Menu::Kind::synthesized) {
+    plan.synthesized = true;
+    plan.automatic = resolved->menu.automatic;
+    plan.count = static_cast<unsigned>(std::min<std::size_t>(2, resolved->menu.sources.size()));
+    plan.hold = resolved->menu.hold_ns;
+    for (unsigned i = 0; i < plan.count; ++i) inputs[i] = controls::bindable(resolved->menu.sources[i], *known, host_dpad());
+  } else if (resolved && !resolved->menu.automatic) {
+    // The player's menu button (bound as the game's own) or no menu: no fallback.
+    plan.automatic = false;
+    plan.off = resolved->menu.kind == controls::Menu::Kind::off;
+  } else if (menu_chord_enabled()) {
+    for (int hand = 0; hand < 2; ++hand)
+      inputs[hand] = touch_binding(std::string(hands_root(hand)) + "/input/thumbstick/click", profile).value_or("");
   }
-  for (int hand = 0; hand < 2; ++hand) {
-    auto source = touch_binding(std::string(hand ? "/user/hand/right" : "/user/hand/left") + "/input/thumbstick/click", profile);
+  for (unsigned i = 0; i < 2; ++i) {
     XrPath path{};
-    if (source && XR_SUCCEEDED(::xrStringToPath(instance, source->c_str(), &path))) bindings.push_back({clicks, path});
+    if (!inputs[i].empty() && XR_SUCCEEDED(::xrStringToPath(instance, inputs[i].c_str(), &path)))
+      bindings.push_back({sources[i], path});
   }
+  plans[info->interactionProfile] = plan;
+  if (!conflict_warned && plan.automatic && menu_chord_enabled())
+    for (std::uint32_t i = 0; i < info->countSuggestedBindings; ++i) {
+      const auto path = path_string(instance, info->suggestedBindings[i].binding);
+      if (path.ends_with("/input/thumbstick/click") || path.ends_with("/input/trackpad/click")) {
+        conflict_warned = true;
+        log::warn("xr", "Optional menu chord overlaps game stick clicks; ordinary clicks remain visible to the game");
+        break;
+      }
+    }
   auto copy = *info;
   copy.countSuggestedBindings = static_cast<std::uint32_t>(bindings.size()); copy.suggestedBindings = bindings.data();
   return ::xrSuggestInteractionProfileBindings(instance, &copy);
@@ -196,7 +226,6 @@ XrResult suggest_with_menu_chord(XrInstance instance, const XrInteractionProfile
   return result;
 }
 XrResult attach_with_menu_chord(XrSession session, const XrSessionActionSetsAttachInfo* info) {
-  if (!menu_chord_enabled()) return host_call<PFN_xrAttachSessionActionSets, "xrAttachSessionActionSets">(session, info);
   if (info->countActionSets && !info->actionSets) return XR_ERROR_VALIDATION_FAILURE;
   std::lock_guard lock(mutex);
   auto result = ensure(host_xr().instance); if (XR_FAILED(result)) return result;
@@ -209,7 +238,6 @@ XrResult attach_with_menu_chord(XrSession session, const XrSessionActionSetsAtta
   return result;
 }
 XrResult sync_with_menu_chord(XrSession session, const XrActionsSyncInfo* info) {
-  if (!menu_chord_enabled()) return host_call<PFN_xrSyncActions, "xrSyncActions">(session, info);
   if (info->countActiveActionSets && !info->activeActionSets) return XR_ERROR_VALIDATION_FAILURE;
   std::lock_guard lock(mutex);
   auto& snapshot = sessions[session];
@@ -230,15 +258,28 @@ XrResult sync_with_menu_chord(XrSession session, const XrActionsSyncInfo* info) 
     for (int hand = 0; hand < 2; ++hand) {
       XrInteractionProfileState profile{XR_TYPE_INTERACTION_PROFILE_STATE};
       snapshot.profiles[hand] = XR_SUCCEEDED(::xrGetCurrentInteractionProfile(session, hands[hand], &profile)) ? profile.interactionProfile : XR_NULL_PATH;
+    }
+    report_controllers(host_xr().instance, snapshot.profiles[0], snapshot.profiles[1]);
+    // The menu is a left-hand Quest input: the left controller's profile decides.
+    const auto current = snapshot.profiles[0] ? snapshot.profiles[0] : snapshot.profiles[1];
+    const auto plan_it = plans.find(current);
+    const Plan plan = plan_it == plans.end() ? Plan{} : plan_it->second;
+    if (snapshot.synthesized != plan.synthesized || snapshot.chord.threshold != plan.hold) snapshot.chord = {};
+    snapshot.synthesized = plan.synthesized;
+    snapshot.chord.threshold = plan.hold;
+    snapshot.source_count = plan.count;
+    const bool fallback = plan.automatic && !plan.synthesized && menu_chord_enabled();
+    for (int hand = 0; hand < 2; ++hand) {
       // Automatic also gives the chord to a game that never reads stick clicks: nothing can
       // collide with it, and a runtime may report the menu bound to a button players don't
       // know (SteamVR maps Touch's menu to the Steam Frame controller's View button).
-      snapshot.forced_hands[hand] = forced || (menus.contains(snapshot.profiles[hand]) &&
-                                               !stick_profiles.contains(snapshot.profiles[hand]));
+      snapshot.forced_hands[hand] = fallback && (forced || (menus.contains(snapshot.profiles[hand]) &&
+                                                            !stick_profiles.contains(snapshot.profiles[hand])));
     }
     snapshot.chord_hands = snapshot.forced_hands;
     snapshot.unbound_menus.clear();
     for (const auto &[action, parent] : parents) {
+      if (!fallback) break;
       unsigned requested = 0;
       for (int hand = 0; hand < 2; ++hand) {
         const auto bindings = menus.find(snapshot.profiles[hand]);
@@ -257,11 +298,13 @@ XrResult sync_with_menu_chord(XrSession session, const XrActionsSyncInfo* info) 
     }
   }
   XrActionStateBoolean values[2]{{XR_TYPE_ACTION_STATE_BOOLEAN}, {XR_TYPE_ACTION_STATE_BOOLEAN}};
-  const bool chord = snapshot.chord_hands[0] || snapshot.chord_hands[1];
-  for (int hand = 0; hand < 2 && XR_SUCCEEDED(result) && chord; ++hand) {
-    XrActionStateGetInfo gi{XR_TYPE_ACTION_STATE_GET_INFO, nullptr, clicks, hands[hand]};
-    if (XR_FAILED(::xrGetActionStateBoolean(session, &gi, &values[hand]))) values[hand].isActive = false;
+  const bool chord = snapshot.synthesized || snapshot.chord_hands[0] || snapshot.chord_hands[1];
+  const unsigned count = snapshot.synthesized ? std::max(1u, snapshot.source_count) : 2u;
+  for (unsigned i = 0; i < count && XR_SUCCEEDED(result) && chord; ++i) {
+    XrActionStateGetInfo gi{XR_TYPE_ACTION_STATE_GET_INFO, nullptr, sources[i], XR_NULL_PATH};
+    if (XR_FAILED(::xrGetActionStateBoolean(session, &gi, &values[i]))) values[i].isActive = false;
   }
+  if (count == 1) values[1] = values[0];
   const auto now = venture::monotonic_ns();
   snapshot.active = result == XR_SUCCESS && chord && values[0].isActive && values[1].isActive;
   snapshot.pulse = snapshot.chord.update(now, values[0].currentState, values[1].currentState, snapshot.active);
@@ -283,7 +326,6 @@ XrResult sync_with_menu_chord(XrSession session, const XrActionsSyncInfo* info) 
   return result;
 }
 void register_menu_action(XrActionSet set, XrAction action) {
-  if (!menu_chord_enabled()) return;
   std::lock_guard lock(mutex); parents[action] = set;
 }
 void forget_menu_object(std::uintptr_t object) {
@@ -300,12 +342,11 @@ void forget_menu_object(std::uintptr_t object) {
 }
 void reset_menu_session(XrSession session) { std::lock_guard lock(mutex); sessions.erase(session); }
 bool menu_chord_pulse(XrSession session) {
-  if (!menu_chord_enabled()) return false;
   std::lock_guard lock(mutex); auto it = sessions.find(session);
-  return it != sessions.end() && it->second.active && it->second.pulse && it->second.chord_hands[0];
+  return it != sessions.end() && it->second.active && it->second.pulse &&
+         (it->second.synthesized || it->second.chord_hands[0]);
 }
 void menu_action_state(XrSession session, const XrActionStateGetInfo* info, XrActionStateBoolean* value) {
-  if (!menu_chord_enabled()) return;
   std::lock_guard lock(mutex);
   auto it = sessions.find(session); auto parent = parents.find(info->action);
   if (it == sessions.end() || parent == parents.end()) return;
@@ -342,23 +383,22 @@ void menu_action_state(XrSession session, const XrActionStateGetInfo* info, XrAc
   value->lastChangeTime = merged.state.lastChangeTime;
 }
 std::vector<XrPath> menu_bound_sources(XrSession session, XrAction action) {
-  std::vector<XrPath> sources;
-  if (!menu_chord_enabled()) return sources;
+  std::vector<XrPath> found;
   std::lock_guard lock(mutex);
-  if (!clicks || !sessions.contains(session) || !sessions[session].attached) return sources;
+  if (!sources[0] || !sessions.contains(session) || !sessions[session].attached) return found;
   const auto allowed = fallback_hands(sessions[session], action);
-  XrBoundSourcesForActionEnumerateInfo bound{XR_TYPE_BOUND_SOURCES_FOR_ACTION_ENUMERATE_INFO, nullptr, clicks};
+  XrBoundSourcesForActionEnumerateInfo bound{XR_TYPE_BOUND_SOURCES_FOR_ACTION_ENUMERATE_INFO, nullptr, sources[0]};
   std::uint32_t count = 0;
-  if (XR_FAILED(::xrEnumerateBoundSourcesForAction(session, &bound, 0, &count, nullptr)) || !count) return sources;
+  if (XR_FAILED(::xrEnumerateBoundSourcesForAction(session, &bound, 0, &count, nullptr)) || !count) return found;
   for (int hand = 0; hand < 2; ++hand) {
     XrInteractionProfileState profile{XR_TYPE_INTERACTION_PROFILE_STATE};
     if (!(allowed & (1u << hand)) || XR_FAILED(::xrGetCurrentInteractionProfile(session, hands[hand], &profile))) continue;
     auto p = menu_paths.find(profile.interactionProfile);
     if (p == menu_paths.end()) continue;
     auto a = p->second.find(action);
-    if (a != p->second.end() && a->second[hand]) sources.push_back(a->second[hand]);
+    if (a != p->second.end() && a->second[hand]) found.push_back(a->second[hand]);
   }
-  return sources;
+  return found;
 }
 
 } // namespace venture::xr

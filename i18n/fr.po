@@ -1,0 +1,200 @@
+# French translation of Venture's interface.
+# Made on Crowdin; seeded from RiftLift's French text.
+msgid ""
+msgstr ""
+"Project-Id-Version: Venture\n"
+"Language: fr\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=(n > 1);\n"
+
+#. The whole --help text. Keep commands, options and the words in capitals (GAME, ACCOUNT, FOLDER...) in English and keep the descriptions in one column; lines are best under 80 characters.
+#: src/launcher/cli.cpp:40
+msgid ""
+"Venture command line\n"
+"\n"
+"Usage: venture-cli [--json] [--offline] <command> [arguments]\n"
+"\n"
+"Library\n"
+"  status                         Accounts, games folder, installs and downloads\n"
+"  library [--installed] [--search TEXT]\n"
+"                                 Games your accounts own and games installed here\n"
+"  info GAME                      Store details, installation and add-ons\n"
+"  install GAME [--as ACCOUNT] [--to FOLDER] [--build VERSION|all]\n"
+"                                 Download and install (or update) a game; a new\n"
+"                                 one goes to FOLDER instead of the games folder.\n"
+"                                 --build installs that version (or every one)\n"
+"                                 beside the others, each its own library entry\n"
+"                                 with its own saves, never updated\n"
+"  builds GAME [--as ACCOUNT]     Every version you can install, with its version\n"
+"                                 code, binary id and release channels\n"
+"  uninstall GAME [--yes]         Remove a game's files; saves are kept\n"
+"  play GAME [--as ACCOUNT|local] Launch a game and wait for it to exit\n"
+"  logs GAME [--lines N]          The end of a game's last runtime log\n"
+"\n"
+"Add-ons\n"
+"  addons GAME [--as ACCOUNT]     List a game's add-ons (as the owning account)\n"
+"  addons install GAME SKU|--all  Install owned add-ons\n"
+"  addons remove GAME SKU         Remove an installed add-on\n"
+"\n"
+"Downloads\n"
+"  downloads                      The download and import queue\n"
+"  downloads cancel GAME          Cancel a game's download\n"
+"  downloads resume GAME          Resume a paused or failed download\n"
+"\n"
+"Import\n"
+"  import PATH [--to FOLDER] [--yes]\n"
+"                                 Import an APK, a folder or an archive\n"
+"  import --headset [--serial SERIAL] [--only PKG,...] [--to FOLDER] [--yes]\n"
+"                                 Import games from a Quest connected over adb\n"
+"  import-saves GAME --from FOLDER | --headset [--serial SERIAL]\n"
+"                                 Import an installed game's save data (the save\n"
+"                                 data it replaces is kept in a backup)\n"
+"\n"
+"Accounts\n"
+"  accounts                       Signed-in Meta accounts\n"
+"  accounts sign-in               Add an account (opens Meta's sign-in window)\n"
+"  accounts use ACCOUNT           Make an account active\n"
+"  accounts primary ACCOUNT       Mark the primary account\n"
+"  accounts sign-out ACCOUNT      Sign out; its games and saves stay\n"
+"  accounts remove ACCOUNT [--delete-saves] [--yes]\n"
+"\n"
+"Settings\n"
+"  settings                       Show settings\n"
+"  settings set KEY VALUE         games-folder PATH | runtime PATH|default |\n"
+"                                 adb PATH|auto | log-level trace|debug|info|warn|error |\n"
+"                                 console on|off | add-to-steam on|off |\n"
+"                                 add-new-to-steam on|off | passthrough on|off |\n"
+"                                 language auto|en|CODE\n"
+"\n"
+"GAME is a name (or a unique part of it), an app id or a package name.\n"
+"ACCOUNT is a name, alias, account key or the number `accounts` shows.\n"
+"Exit codes: 0 success, 1 failure, 2 usage, 130 interrupted; play returns the\n"
+"game's own exit code.\n"
+msgstr ""
+
+#: src/launcher/cli.cpp:135
+#, python-brace-format
+msgid "{0} needs a value."
+msgstr ""
+
+#: src/launcher/cli.cpp:140
+#, python-brace-format
+msgid "Unknown option {0}."
+msgstr ""
+
+#: src/launcher/cli.cpp:1279
+#, python-brace-format
+msgid "Unknown command \"{0}\"."
+msgstr ""
+
+#: src/launcher/cli.cpp:1309
+#: src/launcher/cli.cpp:1342
+msgid "error: "
+msgstr ""
+
+#: src/launcher/cli.cpp:1342
+msgid "See: venture-cli --help"
+msgstr ""
+
+#. Sidebar pages.
+#: src/launcher/ui/views.cpp:533
+#: src/launcher/ui/views.cpp:1769
+msgid "Library"
+msgstr "Bibliothèque"
+
+#: src/launcher/ui/views.cpp:534
+msgid "Downloads"
+msgstr "Téléchargements"
+
+#: src/launcher/ui/views.cpp:535
+msgid "Import"
+msgstr ""
+
+#: src/launcher/ui/views.cpp:536
+msgid "Controls"
+msgstr ""
+
+#: src/launcher/ui/views.cpp:537
+#: src/launcher/ui/views.cpp:1727
+msgid "Settings"
+msgstr "Paramètres"
+
+#: src/launcher/ui/views.cpp:587
+msgid "Sign in"
+msgstr "Se connecter"
+
+#. Under the account name at the bottom of the sidebar.
+#: src/launcher/ui/views.cpp:591
+msgid "Connect your Meta account"
+msgstr "Connecte ton compte Meta"
+
+#: src/launcher/ui/views.cpp:592
+msgid "Offline"
+msgstr "Hors ligne"
+
+#: src/launcher/ui/views.cpp:593
+#, python-brace-format
+msgid "{0} account"
+msgid_plural "{0} accounts"
+msgstr[0] "{0} compte"
+msgstr[1] "{0} comptes"
+
+#: src/launcher/ui/views.cpp:594
+msgid "Meta account"
+msgstr "Compte Meta"
+
+#: src/launcher/ui/views.cpp:1745
+msgid "Appearance"
+msgstr "Apparence"
+
+#: src/launcher/ui/views.cpp:1753
+msgid "Interface size"
+msgstr "Taille de l'interface"
+
+#: src/launcher/ui/views.cpp:1826
+#: src/launcher/ui/views.cpp:2267
+msgid "Display"
+msgstr ""
+
+#: src/launcher/ui/views.cpp:1833
+msgid "Runtime"
+msgstr "Runtime"
+
+#: src/launcher/ui/views.cpp:1917
+msgid "Troubleshooting"
+msgstr "Dépannage"
+
+#: src/launcher/ui/views.cpp:1948
+msgid "About"
+msgstr "À propos"
+
+#: src/launcher/ui/views.cpp:1980
+msgid "Automatic"
+msgstr ""
+
+#: src/launcher/ui/views.cpp:1988
+msgid "Language"
+msgstr "Langue"
+
+#: src/launcher/ui/views.cpp:3053
+#, python-brace-format
+msgid "Uninstall {0}?"
+msgstr "Désinstaller {0} ?"
+
+#: src/launcher/ui/views.cpp:3053
+msgid "Uninstall this game?"
+msgstr "Désinstaller ce jeu ?"
+
+#: src/launcher/ui/views.cpp:3054
+msgid "Its files are removed from this PC. Saves are kept, and you can install it again from your library."
+msgstr ""
+
+#: src/launcher/ui/views.cpp:3055
+msgid "Cancel"
+msgstr "Annuler"
+
+#: src/launcher/ui/views.cpp:3055
+msgid "Uninstall"
+msgstr "Désinstaller"

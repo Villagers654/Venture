@@ -1,24 +1,33 @@
 #include "launcher/app.h"
+#include "launcher/assets/controller_art.h"
+#include "launcher/i18n/i18n.h"
 #include "launcher/ui/rich_text.h"
 #include "launcher/ui/style.h"
 #include "launcher/window_style.h"
+#include "common/controls.h"
 #include "common/environment.h"
 #include "common/http/client.h"
 #include "common/json.h"
 #include "common/log.h"
 #include "common/saves_migration.h"
+#include "common/search.h"
 
 #include <algorithm>
 #include <functional>
 #include <cctype>
 #include <cstdlib>
 #include <cmath>
+#include <charconv>
 #include <format>
+#include <memory>
+#include <imgui_internal.h>
 #include <imgui_stdlib.h>
+#include <type_traits>
 #include <unordered_map>
 
 namespace venture::launcher {
 using namespace ui;
+using namespace i18n::markers;
 namespace {
 
 std::string bytes(uint64_t n) {
@@ -87,7 +96,10 @@ void avatar(ImDrawList* dl, ImVec2 c, float r, const AccountView* a, bool ring, 
 
 // Every page opens with a header row of this height; the title and any
 // controls beside it share its center line.
-constexpr float kHeaderHeight = 40, kAfterHeader = 22;
+constexpr float kHeaderHeight = 40, kAfterHeader = 22, kChipHeight = 34;  // filter_chip's height
+// How far controls beside a page title stay from the content's right edge:
+// clear of the window buttons the launcher draws itself (46 px each, three).
+float header_right_inset() { return client_side_decorations() ? 3 * 46 - 36 + 12 : 0; }
 // List pages (downloads, settings, accounts) share one column width.
 constexpr float kPageWidth = 860;
 // Buttons and dropdowns in rows share one size: as wide as a settings
@@ -132,7 +144,23 @@ bool generated_alias(std::string_view alias) {
   return std::ranges::all_of(alias.substr(5), [](char ch) { return ch >= '0' && ch <= '9'; });
 }
 
-// Centered empty state: glyph, headline, one line of guidance.
+// A text link at the cursor, flush with the text beside it.
+bool link(const char* id_label, ImU32 col = color::text) {
+  std::string_view label = id_label;
+  label = label.substr(0, label.find("##"));
+  ImFont* f = fonts().semibold;
+  ImVec2 size = measure(f, kSmall, label);
+  ImVec2 p = ImGui::GetCursorScreenPos();
+  bool clicked = ImGui::InvisibleButton(id_label, size);
+  bool hov = ImGui::IsItemHovered();
+  if (hov) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+  ImDrawList* dl = ImGui::GetWindowDrawList();
+  draw_text(dl, f, kSmall, p, hov ? color::text : col, label);
+  if (hov) hline(dl, p.x, p.x + size.x, p.y + size.y - s(1), color::text);
+  return clicked;
+}
+
+// Centered empty state: glyph, headline, and a line of guidance when there is one.
 void empty_state(char32_t glyph, std::string_view headline, std::string_view sub) {
   float w = ImGui::GetContentRegionAvail().x;
   ImVec2 p = ImGui::GetCursorScreenPos();
@@ -148,18 +176,22 @@ void empty_state(char32_t glyph, std::string_view headline, std::string_view sub
     text(fonts().semibold, kTitle, color::text, headline, false);
     gap(2);
   }
+  if (sub.empty()) return;
   ImVec2 ss = measure(fonts().regular, kBody, sub);
   ImGui::SetCursorPosX(ImGui::GetCursorPosX() + std::max(0.f, (w - ss.x) * 0.5f));
   text(fonts().regular, kBody, color::text2, sub, false);
 }
 
 float g_row_end = -1;  // window y just below the last setting_row()
+constexpr float kHelpIcon = 24;  // a setting's help icon button
 
 // Settings-style row inside a card: a one-line title left, centred on the
-// control right-aligned.
-template <class Control>
-void setting_row(std::string_view title_text, std::string_view description, float control_w, float control_h,
-                 Control control) {
+// control right-aligned. `after_title` (a small icon button) sits right after
+// the title. The description documents the row at its call site; rows are one
+// line, so it is not drawn.
+template <class Control, class AfterTitle = std::nullptr_t>
+void setting_row(std::string_view title_text, std::string_view /*description*/, float control_w, float control_h,
+                 Control control, AfterTitle after_title = nullptr) {
   float avail = ImGui::GetContentRegionAvail().x;
   float left = std::max(s(120), avail - control_w - s(24));
   float pad = s(12), spacing = ImGui::GetStyle().ItemSpacing.y;
@@ -169,6 +201,10 @@ void setting_row(std::string_view title_text, std::string_view description, floa
   float row_h = std::max({ts.y, control_h, s(38)});  // every row the same height
   draw_text(ImGui::GetWindowDrawList(), fonts().regular, kBody,
             {std::round(screen.x), text_y(fonts().regular, kBody, screen.y + pad, row_h)}, color::text, title);
+  if constexpr (!std::is_same_v<AfterTitle, std::nullptr_t>) {
+    ImGui::SetCursorPos({start.x + ts.x + s(6), start.y + pad + (row_h - s(kHelpIcon)) * 0.5f});
+    after_title();
+  }
   ImGui::SetCursorPos({start.x + avail - control_w, start.y + pad + (row_h - control_h) * 0.5f});
   ImGui::BeginGroup();
   control();
@@ -259,6 +295,7 @@ void App::theme() {
 }
 
 void App::art(std::string_view id, ImVec2 size, float rounding, float zoom, ImDrawFlags corners) {
+  id = meta::base_app(id);  // a pinned version shows its game's artwork
   ImVec2 p = ImGui::GetCursorScreenPos();
   p = {std::round(p.x), std::round(p.y)};
   ImVec2 q{std::round(p.x + size.x), std::round(p.y + size.y)};
@@ -313,6 +350,7 @@ void App::art(std::string_view id, ImVec2 size, float rounding, float zoom, ImDr
 }
 
 void App::draw_backdrop(std::string_view id, ImVec2 a, ImVec2 b, float strength) {
+  id = meta::base_app(id);
   ImDrawList* dl = ImGui::GetWindowDrawList();
   if (SDL_Texture* ambient = textures_->ambient(id)) {
     ImU32 tint = color::alpha(IM_COL32_WHITE, strength);
@@ -367,12 +405,13 @@ void App::draw() {
       case 2: draw_settings(); break;
       case 3: draw_account(); break;
       case 4: draw_import(); break;
+      case 5: draw_controls(); break;
     }
   draw_uninstall();
+  draw_texture_warning();
   draw_save_import();
   draw_cancel_download();
   draw_report();
-  draw_passthrough_info();
   draw_update();
   draw_remove_account();
   draw_install_ask();
@@ -436,9 +475,8 @@ void App::draw_chrome() {
     }
   }
   ImGui::End();
-  int width = 0, height = 0;
-  SDL_GetWindowSize(window_, &width, &height);
-  chrome_ = {width, height, maximized, s(40), s(6),
+  const ImVec2 size = ImGui::GetIO().DisplaySize;  // pixels, like the hit test's points
+  chrome_ = {int(size.x), int(size.y), maximized, s(40), s(6),
              {origin.x - vp->Pos.x, origin.y - vp->Pos.y, 3 * button.x, button.y}, ImGui::IsAnyItemHovered()};
 }
 
@@ -461,16 +499,21 @@ void App::draw_toast() {
   float sidebar = s(248);
   ImVec2 pos{vp->WorkPos.x + sidebar + (vp->WorkSize.x - sidebar - size.x) * 0.5f,
              vp->WorkPos.y + vp->WorkSize.y - size.y - s(28) + (1 - shown) * s(16)};
-  ImGui::SetNextWindowPos(pos);
-  ImGui::SetNextWindowSize(size);
+  // The window also holds the shadow around the toast: drawn past a window
+  // the size of the toast, the shadow was cut off at its edges and only showed
+  // as dark square corners behind the rounded ones.
+  const ImVec2 lo{s(16), s(8)}, hi{s(16), s(24)};
+  ImGui::SetNextWindowPos({pos.x - lo.x, pos.y - lo.y});
+  ImGui::SetNextWindowSize({size.x + lo.x + hi.x, size.y + lo.y + hi.y});
   ImGui::SetNextWindowBgAlpha(0);
   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {0, 0});
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0);
   ImGui::Begin("##toast", nullptr,
                ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
                    ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav);
-  ImGui::PopStyleVar();
+  ImGui::PopStyleVar(2);
   ImDrawList* dl = ImGui::GetWindowDrawList();
-  ImVec2 p = ImGui::GetWindowPos();
+  ImVec2 p{ImGui::GetWindowPos().x + lo.x, ImGui::GetWindowPos().y + lo.y};
   ImVec2 q{p.x + size.x, p.y + size.y};
   soft_shadow(dl, p, q, s(12), s(16), 0.6f * shown);
   dl->AddRectFilled(p, q, color::alpha(color::surface_top, shown), s(12));
@@ -478,7 +521,7 @@ void App::draw_toast() {
             last, max_w - s(84));
   ImGui::SetCursorScreenPos({q.x - s(46), p.y + (size.y - s(32)) * 0.5f});
   if (icon_button("dismiss-toast", icons::cancel, nullptr, 32)) notice_.clear();
-  bool hovered = ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows);
+  bool hovered = ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows) && ImGui::IsMouseHoveringRect(p, q);
   ImGui::End();
   if (hovered) toast_since_ = now;
   if (!toast_.empty() && now - toast_since_ > 7.0) notice_.clear();
@@ -518,10 +561,12 @@ void App::draw_sidebar() {
     char32_t glyph;
     int page;
   };
-  const Nav nav[] = {{"Library", icons::library, 0},
-                     {"Downloads", icons::download, 1},
-                     {"Import", icons::package, 4},
-                     {"Settings", icons::settings, 2}};
+  // i18n: Sidebar pages.
+  const Nav nav[] = {{tr("Library"), icons::library, 0},
+                     {tr("Downloads"), icons::download, 1},
+                     {tr("Import"), icons::package, 4},
+                     {tr("Controls"), icons::game, 5},
+                     {tr("Settings"), icons::settings, 2}};
   for (const auto& item : nav) {
     ImGui::PushID(item.page);
     ImVec2 p = ImGui::GetCursorScreenPos();
@@ -571,13 +616,14 @@ void App::draw_sidebar() {
     const AccountView* shown = current ? current : session_ ? &fallback : nullptr;
     avatar(dl, c, s(17), shown, false, kSmall);
     float tx = p.x + s(56);
-    std::string name = shown ? account_name(*shown) : "Sign in";
+    std::string name = shown ? account_name(*shown) : tr("Sign in");
     draw_text(dl, fonts().semibold, kSmall + 1, {std::round(tx), text_y(fonts().semibold, kSmall + 1, c.y - s(9))},
               color::text, ellipsize(fonts().semibold, kSmall + 1, name, w - s(64)));
-    std::string state = !session_          ? "Connect your Meta account"
-                        : options_.offline ? "Offline"
-                        : accounts_.size() > 1 ? std::format("{} accounts", accounts_.size())
-                                               : "Meta account";
+    // i18n: Under the account name at the bottom of the sidebar.
+    std::string state = !session_          ? tr("Connect your Meta account")
+                        : options_.offline ? tr("Offline")
+                        : accounts_.size() > 1 ? trn("{0} account", "{0} accounts", accounts_.size())
+                                               : tr("Meta account");
     draw_text(dl, fonts().regular, kSmall - 0.5f, {std::round(tx), text_y(fonts().regular, kSmall - 0.5f, c.y + s(9))},
               color::text2, ellipsize(fonts().regular, kSmall - 0.5f, state, w - s(64)));
   }
@@ -590,7 +636,7 @@ void App::draw_library() {
   auto all = visible_games();
   auto jobs = downloads_->snapshot();
 
-  // Header: title left; search, sort and refresh right.
+  // Header: title left; search, sort and refresh at the end of the filter row.
   float top = ImGui::GetCursorPosY();
   page_title("Library");
   if (!warning_.empty()) {
@@ -605,66 +651,55 @@ void App::draw_library() {
   float after_title = top + s(kHeaderHeight);
   const float sort_w = measure(fonts().semibold, kSmall + 1, "Sort by: Recently played").x + s(52);
   if (!all.empty() || !search_.empty()) {
-    // Right of the title when it fits, else on its own row beneath it.
+    // At the end of the filter chips' row, centred on them and clear of the
+    // window buttons; on its own row under the title when the window is narrow.
     const char* sorts[] = {"Name", "Recently played"};
     float content_w = ImGui::GetContentRegionAvail().x;
     float title_w = measure(fonts().semibold, kDisplay, "Library").x + s(warning_.empty() ? 24 : 54);
-    float fixed = s(10) + sort_w + s(10) + s(38);
-    bool beside = content_w - title_w - fixed >= s(200);
-    float search_w = std::min(s(260), (beside ? content_w - title_w : content_w) - fixed);
+    const bool can_refresh = refreshing_ || (session_ && !options_.offline);
+    float fixed = s(10) + sort_w + (can_refresh ? s(10) + s(38) : 0);
+    const bool chips = !all.empty();
+    const float chips_w = chips ? s(240) : title_w;
+    bool beside = content_w - chips_w - fixed >= s(200);
+    float search_w = std::min(s(260), (beside ? content_w - chips_w : content_w) - fixed);
     float toolbar_w = search_w + fixed;
-    float x = ImGui::GetWindowContentRegionMax().x - toolbar_w;
-    float y = beside ? top + s(kHeaderHeight - 38) * 0.5f : after_title + s(10);
+    if (beside && !chips) search_w = std::max(s(120), search_w - s(header_right_inset())), toolbar_w = search_w + fixed;
+    float x = ImGui::GetWindowContentRegionMax().x - toolbar_w - (beside && !chips ? s(header_right_inset()) : 0);
+    float y = !beside ? after_title + s(10)
+              : chips ? after_title + s(kAfterHeader - 6) + (s(kChipHeight) - s(38)) * 0.5f
+                      : top + s(kHeaderHeight - 38) * 0.5f;
     if (!beside) after_title = y + s(38);
     ImGui::SetCursorPos({beside ? x : ImGui::GetWindowContentRegionMin().x, y});
     search_field("search", "Search", &search_, search_w);
     ImGui::SameLine(0, s(10));
     dropdown("sort", "Sort by: ", sorts, 2, &sort_, sort_w);
-    ImGui::SameLine(0, s(10));
-    if (refreshing_) {
-      ImVec2 p = ImGui::GetCursorScreenPos();
-      ImGui::Dummy({s(38), s(38)});
-      ImGui::SetCursorScreenPos({p.x + s(10), p.y + s(10)});
-      spinner(9, color::text2);
-    } else if (icon_button("refresh", icons::refresh, nullptr, 38, session_ && !options_.offline, true)) {
-      refresh();
+    if (can_refresh) {
+      ImGui::SameLine(0, s(10));
+      if (refreshing_) {
+        ImVec2 p = ImGui::GetCursorScreenPos();
+        ImGui::Dummy({s(38), s(38)});
+        ImGui::SetCursorScreenPos({p.x + s(10), p.y + s(10)});
+        spinner(9, color::text2);
+      } else if (icon_button("refresh", icons::refresh, nullptr, 38, true, true)) {
+        refresh();
+      }
     }
   }
   ImGui::SetCursorPosY(after_title + s(kAfterHeader) - s(6));
 
-  // Meta could not list, or did not confirm, this account's games: one it owns
-  // can still be added by its store link, checked on that game's own listing.
-  // --smoke-view link shows it offline for screenshots.
-  const bool add_owned_shown = (session_ && (!refresh_error_.empty() || library_partial_) && !refreshing_ &&
-                                !options_.offline && search_.empty() && !installed_only_) ||
-                               options_.smoke_view == "link";
-  auto add_owned_field = [&](float width) {
-    if (submit_field("owned-link", "Add a game by store link", &owned_link_, width, icons::add, !adding_))
-      add_owned();
-  };
-
-  // Filter chips, and the store-link field at the row's end.
+  // Filter chips.
   if (!all.empty()) {
     auto installed_count = std::ranges::count_if(all, [&](auto& g) { return installed(g.id) != nullptr; });
     std::string all_label = std::format("All  {}##all", all.size());
     std::string installed_label = std::format("Installed  {}##installed", installed_count);
-    const float row_x = ImGui::GetCursorPosX(), row_w = ImGui::GetContentRegionAvail().x;
     if (filter_chip(all_label.c_str(), !installed_only_)) installed_only_ = false;
     ImGui::SameLine(0, s(8));
     if (filter_chip(installed_label.c_str(), installed_only_)) installed_only_ = true;
-    if (add_owned_shown) {
-      // Under the sort and refresh controls, as wide as both.
-      const float fw = std::min(sort_w + s(10) + s(38), row_w * 0.5f);
-      ImGui::SameLine(row_x + row_w - fw);
-      add_owned_field(fw);
-    }
     gap(18);
   }
 
-  auto query = lowercase(search_);
   std::erase_if(all, [&](auto& g) {
-    return (!query.empty() && lowercase(g.name).find(query) == std::string::npos) ||
-           (installed_only_ && !installed(g.id));
+    return !search::matches(search_, g.name) || (installed_only_ && !installed(g.id));
   });
   std::sort(all.begin(), all.end(), [&](auto& a, auto& b) {
     if (sort_ && a.recent != b.recent) return a.recent > b.recent;
@@ -693,28 +728,20 @@ void App::draw_library() {
   if (all.empty()) {
     gap(80);
     if (refreshing_)
-      empty_state(icons::library, "Finding your games\xE2\x80\xA6", "Reading your Meta library.");
+      empty_state(icons::library, "Finding your games\xE2\x80\xA6", "");
     else if (!search_.empty())
-      empty_state(icons::search, "No results", "Try a different name, or clear the search.");
+      empty_state(icons::search, "No results", "");
     else if (installed_only_)
-      empty_state(icons::download, "Nothing installed yet", "Install a game from your library to play it here.");
+      empty_state(icons::download, "Nothing installed yet", "");
     else if (!session_)
-      empty_state(icons::library, "", "Sign in with the Meta account that owns your Quest games.");
+      empty_state(icons::library, "No games yet", "Sign in, or import a game.");
     else
-      empty_state(icons::library, "No games yet",
-                  refresh_error_.empty() ? "Games you own on Meta Quest will appear here."
-                                         : refresh_error_);
+      empty_state(icons::library, "No games yet", refresh_error_);
     if (session_ && !refreshing_ && search_.empty() && !installed_only_ && !options_.offline) {
       gap(22);
       float bw = s(200);
       ImGui::SetCursorPosX((ImGui::GetContentRegionAvail().x - bw) * 0.5f + ImGui::GetCursorPosX());
       if (button("Refresh library", 0, Tone::primary, {bw, s(44)})) refresh();
-      if (add_owned_shown) {
-        gap(16);
-        const float fw = s(260);
-        ImGui::SetCursorPosX((ImGui::GetContentRegionAvail().x - fw) * 0.5f + ImGui::GetCursorPosX());
-        add_owned_field(fw);
-      }
     }
     if (!session_ && !refreshing_ && search_.empty()) {
       gap(22);
@@ -1008,12 +1035,18 @@ void App::draw_game_page() {
     bool active_owns = std::ranges::find(owners, account_key_) != owners.end();
     // Files and the overflow menu sit beside the primary button (not mid-download).
     bool tools = partial && !downloading;
-    ImVec2 cta{inner - (tools ? s(52) * 2 : 0), s(46)}, more{};
+    // A version pinned beside the game's own install keeps its build.
+    const bool pinned = !meta::version_binary(g.id).empty();
+    // Any version of a store game can be installed beside the others.
+    const bool versions = digits(g.id, 5) && !owners.empty() && !downloading;
+    ImVec2 cta{inner - (tools ? s(52) * 2 : versions ? s(52) : 0), s(46)}, more{};
     auto draw_tools = [&] {
-      if (!tools) return;
-      ImGui::SameLine(0, s(6));
-      if (icon_button("folder", icons::folder, nullptr, 46, true, true))
-        action([&] { open_folder(partial->directory); });
+      if (!tools && !versions) return;
+      if (tools) {
+        ImGui::SameLine(0, s(6));
+        if (icon_button("folder", icons::folder, nullptr, 46, true, true))
+          action([&] { open_folder(partial->directory); });
+      }
       ImGui::SameLine(0, s(6));
       more = ImGui::GetCursorScreenPos();
       // --smoke-view menu opens it once for screenshots.
@@ -1109,29 +1142,41 @@ void App::draw_game_page() {
     }
     if (!stacked && ImGui::GetCursorScreenPos().y < bottom)
       ImGui::Dummy({0, bottom - ImGui::GetCursorScreenPos().y - ImGui::GetStyle().ItemSpacing.y});
-    if (tools) {
+    if (tools || versions) {
       ImGui::SetNextWindowPos({more.x + s(46), more.y + s(52)}, ImGuiCond_Appearing, {1, 0});
       if (begin_menu("game-menu")) {
-        if (menu_item("Check for updates", icons::refresh, false, session_ && !options_.offline)) {
+        if (tools && !pinned && menu_item("Check for updates", icons::refresh, false, session_ && !options_.offline)) {
           details_.erase(g.id);
           select(g.id);
         }
-        if (steam_sync_allowed_ && settings_.add_games_to_steam) {
+        if (versions && menu_item(partial ? "Install another version\xE2\x80\xA6" : "Install a version\xE2\x80\xA6",
+                                  icons::download, false, session_ && !options_.offline))
+          action([&] { request_versions(g); });
+        if (tools && steam_sync_allowed_ && settings_.add_games_to_steam) {
           bool in = in_steam(g.id);
           if (menu_item(in ? "Remove from Steam" : "Add to Steam", 0, false, true))
             action([&] { set_in_steam(g.id, !in); });
         }
-        // The game's files on its shared storage (Android/data/<package>), where
-        // homebrew ports look for the game data the player provides.
-        if (menu_item("Show game data", icons::folder, false, true))
-          action([&] {
+        // The game's data for the account it plays as: its private storage, where
+        // saves live, and its shared storage (Android/data/<package>, in
+        // external-data), where homebrew ports look for the game data the player
+        // provides.
+        auto open_data = [&](bool shared) {
+          action([&, shared] {
             const auto key = launch_choice(g.id, play_key(g.id)).account_key;
-            auto folder = account_data_dir(data_, key.empty() ? "local" : key, partial->plan.package) / "external-data";
+            auto folder = account_data_dir(data_, key.empty() ? "local" : key, partial->plan.package,
+                                           partial->plan.pinned ? partial->plan.folder() : std::string());
+            if (shared) folder /= "external-data";
             fs::create_directories(folder);
             open_folder(folder);
           });
-        if (menu_item("Import save data", icons::save, false, !running)) save_import_target_ = g.id;
-        if (menu_item("Uninstall", icons::trash, true, !running && !downloads_->busy())) uninstall_target_ = *partial;
+        };
+        if (tools && menu_item("Show save data", icons::folder, false, true)) open_data(false);
+        if (tools && menu_item("Show game data", icons::folder, false, true)) open_data(true);
+        // Save imports go to the game's own install.
+        if (tools && !pinned && menu_item("Import save data", icons::save, false, !running)) save_import_target_ = g.id;
+        if (tools && menu_item("Uninstall", icons::trash, true, !running && !downloads_->busy()))
+          uninstall_target_ = *partial;
         end_menu();
       }
     }
@@ -1200,20 +1245,45 @@ void App::draw_game_page() {
 
   // Tabs: About, and Add-ons when the game has any.
   bool checking_addons = addons_pending_.contains(g.id) || details_pending_.contains(g.id);
-  auto addon_list = addons(g.id);
+  // Add-ons belong to the game's own install, not a pinned version.
+  auto addon_list = meta::version_binary(g.id).empty() ? addons(g.id) : std::vector<meta::Addon>{};
   bool has_addons = !addon_list.empty() || checking_addons;
   std::string addon_tab = addon_list.empty() ? std::string("Add-ons") : std::format("Add-ons  {}", addon_list.size());
-  const char* tab_items[] = {"About", addon_tab.c_str()};
-  if (!has_addons) game_tab_ = 0;
-  if (has_addons) {
-    tabs("game-tabs", tab_items, 2, &game_tab_, avail);
+  // About, Add-ons when the game has any, and once it is installed Controls and
+  // its own Settings, which override Settings for it.
+  const bool has_settings = partial != nullptr;
+  std::vector<const char*> tab_items{"About"};
+  if (has_addons) tab_items.push_back(addon_tab.c_str());
+  if (has_settings) {
+    tab_items.push_back("Controls");
+    tab_items.push_back("Settings");
+  }
+  // --smoke-view game-controls* and game-settings* keep those tabs open for
+  // screenshots (by name: the Add-ons tab can come and go while it is checked).
+  const char* smoke_tab = options_.smoke_view.starts_with("game-controls")   ? "Controls"
+                          : options_.smoke_view.starts_with("game-settings") ? "Settings"
+                                                                             : nullptr;
+  if (smoke_tab && has_settings) {
+    static bool scrolled = false;
+    if (!std::exchange(scrolled, true)) ImGui::SetScrollHereY(0.0f);
+    for (int i = 0; i < int(tab_items.size()); ++i)
+      if (std::string_view(tab_items[size_t(i)]) == smoke_tab) game_tab_ = i;
+  }
+  if (game_tab_ >= int(tab_items.size())) game_tab_ = 0;
+  if (tab_items.size() > 1) {
+    tabs("game-tabs", tab_items.data(), int(tab_items.size()), &game_tab_, avail);
     gap(20);
   } else {
     text(fonts().semibold, kTitle, color::text, "About", false);
     gap(8);
   }
   float body_w = std::min(ImGui::GetContentRegionAvail().x, avail);
-  if (game_tab_ == 1 && has_addons)
+  const std::string_view tab = tab_items[game_tab_];
+  if (tab == "Controls")
+    draw_game_controls(g, std::min(body_w, s(1180)));
+  else if (tab == "Settings")
+    draw_game_settings(g, std::min(body_w, s(kPageWidth)));
+  else if (game_tab_ == 1 && has_addons)
     draw_addons(g, std::min(body_w, s(980)));
   else
     draw_about(g, body_w);
@@ -1377,7 +1447,7 @@ void App::draw_owner(const meta::Game& g, bool installed, float w) {
       draw_glyph(dl, icons::chevron_down, kLabel, {p.x + (w + content) * 0.5f - s(6), p.y + h * 0.5f}, color::text2);
   });
   if (clicked) ImGui::OpenPopup("owner-picker");
-  ImGui::SetNextWindowPos({p.x + w, p.y + h + s(6)}, ImGuiCond_Always, {1, 0});  ImGui::SetNextWindowPos({p.x, p.y + h + s(6)});
+  place_menu(p, h, int(owners.size()) * s(52) + s(12));
   if (begin_menu("owner-picker")) {
     for (const auto& k : owners) {
       const AccountView* o = account(k);
@@ -1584,7 +1654,7 @@ void App::draw_downloads() {
     const float block = storage->GetFloat(id, s(260)), top = ImGui::GetCursorPosY();
     ImGui::SetCursorPosY(top + std::max(0.f, (ImGui::GetContentRegionAvail().y - block) * 0.5f - s(kHeaderHeight)));
     const float start = ImGui::GetCursorPosY();
-    empty_state(icons::download, "No downloads", "Games you install will show up here.");
+    empty_state(icons::download, "No downloads", "");
     gap(22);
     float bw = row_button_w("Go to library");
     ImGui::SetCursorPosX((ImGui::GetContentRegionAvail().x - bw) * 0.5f + ImGui::GetCursorPosX());
@@ -1661,15 +1731,12 @@ void App::draw_downloads() {
     ImGui::PopID();
   }
   end_card();
-  gap(12);
-  text(fonts().regular, kSmall, color::text3,
-       "Queued downloads start in list order. Paused and interrupted downloads resume where they left off.", false);
 }
 
 // ---------------------------------------------------------------------------
 // Changes apply as they are made; text fields save when editing ends.
 void App::draw_settings() {
-  page_title("Settings");
+  page_title(tr("Settings"));
   gap(kAfterHeader);
   float w = std::min(ImGui::GetContentRegionAvail().x, s(kPageWidth));
   auto input = [&](const char* id, std::string* value, const char* hint) {
@@ -1687,7 +1754,7 @@ void App::draw_settings() {
   };
   float field_w = std::min(s(380), w * 0.48f);
 
-  heading("Appearance");
+  heading(tr("Appearance"));
   begin_card("appearance", w, {22, 2});
   {
     static const char* sizes[] = {"100%", "115%", "130%", "150%"};
@@ -1695,7 +1762,7 @@ void App::draw_settings() {
     int choice = int(std::ranges::find(percents, settings_.interface_size) - std::begin(percents));
     if (choice == 4) choice = 0;
     float dw = s(180);
-    setting_row("Interface size", "Makes text and everything else in Venture larger.", dw, s(38), [&] {
+    setting_row(tr("Interface size"), "Makes text and everything else in Venture larger.", dw, s(38), [&] {
       if (dropdown("interface-size", "", sizes, 4, &choice, dw))
         action([this, size = percents[choice]] {
           settings_.interface_size = size;
@@ -1705,11 +1772,13 @@ void App::draw_settings() {
         });
     });
   }
+  divider();
+  draw_language_row();
   ImGui::Dummy({0, 0});  // the last row keeps its bottom padding
   end_card();
   gap(20);
 
-  heading("Library");
+  heading(tr("Library"));
   begin_card("library", w, {22, 2});
   setting_row("Games folder", "New downloads go here. Games already installed stay where they are.", field_w,
               s(38), input("##games", &settings_games_, ""));
@@ -1764,35 +1833,95 @@ void App::draw_settings() {
   end_card();
   gap(20);
 
-  heading("Runtime");
+  // --smoke-view display* scrolls the Display card into view for screenshots.
+  if (options_.smoke_view.starts_with("display")) ImGui::SetScrollHereY(0.0f);
+  heading(tr("Display"));
+  begin_card("display", w, {22, 2});
+  draw_display_rows(settings_.display, false, "global");
+  ImGui::Dummy({0, 0});  // the last row keeps its bottom padding
+  end_card();
+  gap(20);
+
+  heading(tr("Runtime"));
+  // --smoke-view settings-runtime(-texture-warning) shows the Runtime card at the top for screenshots.
+  if (options_.smoke_view.starts_with("settings-runtime")) ImGui::SetScrollHereY(0.0f);
   begin_card("runtime", w, {22, 2});
   setting_row("Runtime", "Leave empty to use the runtime that came with Venture.", field_w, s(38),
               input("##runtime", &settings_runtime_, "Included runtime"));
   divider();
-  setting_row("Passthrough (mixed reality)",
-              "Lets supported games show your surroundings when your VR runtime supports it. "
-              "Applies to the next game launch.", s(108), s(24), [&] {
-    if (button("Info##passthrough", 0, Tone::secondary, {s(52), s(24)}))
-      passthrough_info_requested_ = true;
-    if (ImGui::IsItemHovered())
-      tooltip("Setup requirements for Quest Link and Steam Frame.");
-    ImGui::SameLine(0, s(12));
-    if (toggle("passthrough", &settings_.passthrough)) action([&] { save_settings(); });
-  });
+  {
+    // Automatic picks what the VR runtime or headset offers; Color key is the
+    // user's choice for a streaming tool that keys a color (never automatic).
+    const char* modes[] = {"Automatic", "Color key", "Off"};
+    int mode = !settings_.passthrough ? 2 : settings_.color_key ? 1 : 0;
+    float dw = s(180);
+    setting_row("Passthrough (mixed reality)", "", dw, s(38), [&] {
+      if (dropdown("passthrough", "", modes, 3, &mode, dw))
+        action([this, mode] {
+          settings_.passthrough = mode != 2;
+          settings_.color_key = mode == 1;
+          save_settings();
+        });
+    }, [&] {
+      if (icon_button("passthrough-help", icons::info, "Mixed reality setups (opens the Venture wiki)", kHelpIcon))
+        action([] { open_url("https://github.com/Villagers654/Venture/wiki/Mixed-Reality"); });
+    });
+    if (settings_.passthrough && settings_.color_key) {
+      divider();
+      // The common defaults of keying tools, magenta first (rare in games).
+      static const char* names[] = {"Magenta", "Green", "Blue", "Black", "Custom"};
+      static const char* hexes[] = {"FF00FF", "00FF00", "0000FF", "000000"};
+      const auto upper = [](std::string text) {
+        for (auto& c : text) c = char(std::toupper(static_cast<unsigned char>(c)));
+        return text;
+      };
+      int preset = 4;
+      for (int i = 0; i < 4; ++i)
+        if (upper(settings_.key_color) == hexes[i]) preset = i;
+      if (key_custom_) preset = 4;
+      const bool custom = preset == 4;
+      const float sw = s(38), hw = s(120), gapw = s(10);
+      const float cw = sw + gapw + (custom ? hw + gapw : 0) + dw;
+      setting_row("Key color", "", cw, s(38), [&] {
+        const auto rgb = environment::parse_color_key(settings_.key_color).value_or(std::array<std::uint8_t, 3>{255, 0, 255});
+        const ImVec2 at = ImGui::GetCursorScreenPos();
+        auto* draw = ImGui::GetWindowDrawList();
+        draw->AddRectFilled(at, {at.x + sw, at.y + sw}, IM_COL32(rgb[0], rgb[1], rgb[2], 255), s(10));
+        draw->AddRect(at, {at.x + sw, at.y + sw}, color::stroke_hi, s(10));
+        ImGui::Dummy({sw, sw});
+        ImGui::SameLine(0, gapw);
+        if (custom) {
+          ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {s(14), text_y(ImGui::GetFont(), kBody, 0, s(38))});
+          ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, s(10));
+          ImGui::PushStyleColor(ImGuiCol_FrameBg, color::surface_hi);
+          ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, color::surface_top);
+          ImGui::SetNextItemWidth(hw);
+          ImGui::InputTextWithHint("##key-hex", "RRGGBB", &settings_key_hex_, ImGuiInputTextFlags_CharsHexadecimal);
+          if (ImGui::IsItemDeactivatedAfterEdit()) {
+            if (environment::parse_color_key(settings_key_hex_))
+              action([this, hex = upper(settings_key_hex_)] { settings_.key_color = hex; save_settings(); });
+            else
+              settings_key_hex_ = settings_.key_color;
+          }
+          ImGui::PopStyleColor(2);
+          ImGui::PopStyleVar(2);
+          ImGui::SameLine(0, gapw);
+        }
+        int choice = preset;
+        if (dropdown("key-color", "", names, 5, &choice, dw))
+          action([this, choice] {
+            key_custom_ = choice == 4;
+            if (choice < 4) settings_.key_color = hexes[choice];
+            settings_key_hex_ = settings_.key_color;
+            save_settings();
+          });
+      });
+    }
+  }
   divider();
   setting_row("Show runtime console", "Opens a console window with live output when a game starts.", s(44), s(24), [&] {
     if (toggle("console", &settings_.console)) action([&] { save_settings(); });
   });
-  divider();
-  {
-    const char* modes[] = {"Automatic", "Always", "Off"};
-    float dw = s(180);
-    setting_row("Menu from both stick clicks",
-                "Hold both sticks in for half a second to open the game's menu. Automatic: only for a controller whose VR runtime gives the game no menu button.",
-                dw, s(38), [&] {
-      if (dropdown("menu", "", modes, 3, &settings_.menu_button, dw)) action([&] { save_settings(); });
-    });
-  }
   divider();
   {
     static const char* names[] = {"System language", "English (US)", "English (UK)", "German", "French",
@@ -1817,13 +1946,26 @@ void App::draw_settings() {
   }
   divider();
   {
-    const char* modes[] = {"Always", "Automatic", "Off"};
+    // i18n: Choices for "Compress textures".
+    const char* modes[] = {tr("Always"), tr("Automatic"), tr("Off")};
     float dw = s(180);
-    setting_row("Compress textures",
+    // i18n: Settings row: store game textures compressed, in less GPU memory.
+    setting_row(tr("Compress textures"),
                 "Stores game textures at a quarter of the GPU memory, with a small loss of detail. Automatic: "
                 "only once the GPU memory in use passes a threshold.",
                 dw, s(38), [&] {
-      if (dropdown("textures", "", modes, 3, &settings_.texture_compression, dw)) action([&] { save_settings(); });
+      int mode = settings_.texture_compression;
+      if (dropdown("textures", "", modes, 3, &mode, dw)) {
+        auto apply = [this, mode] {
+          settings_.texture_compression = mode;
+          save_settings();
+        };
+        // Down from Always asks first.
+        if (settings_.texture_compression_warns(library::texture_compression_modes[settings_.texture_compression],
+                                                library::texture_compression_modes[mode]))
+          texture_warning_ = apply;
+        else action(apply);
+      }
     });
   }
   if (settings_.texture_compression == 1) {
@@ -1833,7 +1975,8 @@ void App::draw_settings() {
     int choice = int(std::ranges::find(percents, settings_.texture_compression_threshold) - std::begin(percents));
     if (choice == 4) choice = 1;
     float dw = s(180);
-    setting_row("Compression threshold",
+    // i18n: Settings row: GPU memory in use before new textures are compressed.
+    setting_row(tr("Compression threshold"),
                 "GPU memory in use before new textures are compressed. Lower leaves room for larger games.", dw,
                 s(38), [&] {
       if (dropdown("texture-threshold", "", shares, 4, &choice, dw))
@@ -1844,6 +1987,13 @@ void App::draw_settings() {
     });
   }
   divider();
+  setting_row("Keep translated code",
+              "Saves the game code Venture translates, so later launches start sooner and load new areas without "
+              "stutter. Uses up to about 1 GB of disk per game.",
+              s(44), s(24), [&] {
+    if (toggle("translated-code", &settings_.keep_translated_code)) action([&] { save_settings(); });
+  });
+  divider();
   setting_row("Check for updates", "Venture tells you when a new version is out.", s(44), s(24), [&] {
     if (toggle("updates", &settings_.check_updates)) action([&] { save_settings(); });
   });
@@ -1851,7 +2001,7 @@ void App::draw_settings() {
   end_card();
   gap(20);
 
-  heading("Troubleshooting");
+  heading(tr("Troubleshooting"));
   begin_card("diagnostics", w, {22, 2});
   {
     const char* levels[] = {"Trace", "Debug", "Info", "Warnings", "Errors"};
@@ -1882,7 +2032,7 @@ void App::draw_settings() {
   end_card();
   gap(20);
 
-  heading("About");
+  heading(tr("About"));
   begin_card("about", w, {22, 18});
   {
     ImVec2 p = ImGui::GetCursorScreenPos();
@@ -1910,90 +2060,446 @@ void App::draw_settings() {
   if (options_.smoke_view == "settings-end") ImGui::SetScrollHereY(1.0f);
 }
 
-void App::draw_passthrough_info() {
-  if (passthrough_info_requested_) {
-    ImGui::OpenPopup("Passthrough info");
-    passthrough_info_requested_ = false;
+// Settings > Appearance > Language: Automatic (the system's language), English
+// and each compiled-in translation by its own name. Applies at once.
+void App::draw_language_row() {
+  std::vector<std::string_view> codes{"", "en"};
+  std::vector<const char*> names{tr("Automatic"), "English"};
+  for (const auto& language : i18n::languages()) {
+    codes.push_back(language.code);
+    names.push_back(language.name.data());
   }
-  const auto* viewport = ImGui::GetMainViewport();
-  const float width = std::min(660.f, (viewport->WorkSize.x - s(32)) / ui::scale());
-  ImGui::SetNextWindowPos(viewport->GetWorkCenter(), ImGuiCond_Always, {0.5f, 0.5f});
-  ImGui::SetNextWindowSizeConstraints({s(width), 0}, {s(width), viewport->WorkSize.y - s(32)});
-  if (begin_dialog("Passthrough info", width)) {
-    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {s(10), s(4)});
-    g_dialog_w = ImGui::GetContentRegionAvail().x;
-    dialog_text("Passthrough (mixed reality)",
-                "See your surroundings in supported games. Both paths run your game on the PC. "
-                "Changes apply to the next game launch.");
-    gap(16);
+  int choice = int(std::ranges::find(codes, settings_.interface_language) - codes.begin());
+  if (choice == int(codes.size())) choice = 0;
+  float dw = s(180);
+  setting_row(tr("Language"), {}, dw, s(38), [&] {
+    if (dropdown("interface-language", "", names.data(), int(names.size()), &choice, dw))
+      action([this, code = std::string(codes[choice])] {
+        settings_.interface_language = code;
+        i18n::set_language(code);
+        save_settings();
+      });
+  });
+}
 
-    constexpr std::string_view quest =
-        "Use Meta as your OpenXR runtime. Requires a Meta developer account and "
-        "Passthrough over Link enabled in the PC app's developer settings.";
-    constexpr std::string_view frame =
-        "Requires Windows x64, NVIDIA graphics, HEVC, SteamVR and both PC/Frame companions. "
-        "The Frame adds its camera view locally.";
-    const bool columns = g_dialog_w >= s(480);
-    const float card_w = columns ? (g_dialog_w - s(12)) * 0.5f : g_dialog_w;
-    const float body_h = std::max(measure(fonts().regular, kBody, quest, card_w - s(36)).y,
-                                  measure(fonts().regular, kBody, frame, card_w - s(36)).y);
-    auto setup_card = [&](const char* id, std::string_view label, std::string_view title,
-                          std::string_view message, const char* link, std::string_view url) {
-      begin_card(id, card_w, {18, 16}, color::bg);
-      text(fonts().semibold, kLabel, color::accent_text, label);
-      gap(2);
-      text(fonts().semibold, kHeading, color::text, title);
-      gap(6);
-      const float body_y = ImGui::GetCursorPosY();
-      text(fonts().regular, kBody, color::text2, message);
-      if (columns) ImGui::SetCursorPosY(body_y + body_h + ImGui::GetStyle().ItemSpacing.y);
-      gap(10);
-      if (button(link, icons::globe, Tone::secondary, {0, s(34)}))
-        action([url = std::string(url)] { open_url(url); });
-      end_card();
-    };
-    setup_card("passthrough-quest", "NATIVE PASSTHROUGH", "Quest Link / Air Link", quest, "Setup guide",
-               "https://developers.meta.com/horizon/documentation/native/android/mobile-passthrough-over-link/");
-    if (columns) ImGui::SameLine(0, s(12));
-    else gap(12);
-    // Format public product content without classifying its owner as a build-account path.
-    static const auto project = std::format("https://github.com/{}/{}", "McFredward", "steam-link-native-passthrough");
-    setup_card("passthrough-frame", "STEAM LINK COMPANIONS", "Steam Frame", frame, "Setup & companions", project);
+// ---------------------------------------------------------------------------
+// Display overrides: resolution and frame rate, in Settings for every game and
+// in each game's Settings tab, where "Use global setting" follows Settings.
+namespace {
+// Display settings (library/display.h): the dropdowns list the choices in this
+// order, a game's after "Use global setting".
+std::vector<std::string> resolution_ids() {
+  std::vector<std::string> ids{"runtime"};
+  for (const auto& p : library::headset_presets) ids.emplace_back(p.id);
+  ids.emplace_back("percent");
+  ids.emplace_back("custom");
+  return ids;
+}
+std::vector<std::string> resolution_names() {
+  std::vector<std::string> names{"Runtime default"};
+  for (const auto& p : library::headset_presets) names.emplace_back(p.name);
+  names.emplace_back("Percent of runtime");
+  names.emplace_back("Custom size");
+  return names;
+}
+std::vector<std::string> rate_ids() {
+  std::vector<std::string> ids{"runtime"};
+  for (int hz : library::frame_rates) ids.push_back(std::to_string(hz));
+  ids.emplace_back("custom");
+  return ids;
+}
+std::vector<std::string> rate_names() {
+  std::vector<std::string> names{"Runtime default"};
+  for (int hz : library::frame_rates) names.push_back(std::format("{} Hz", hz));
+  names.emplace_back("Custom");
+  return names;
+}
+// A whole-number field drawn as a pill like the dropdowns, its value centered
+// in both directions; `suffix` (such as "Hz") follows the value inside the
+// pill. Returns true when an edit within [low, high] is committed to `value`.
+bool number_field(const char* id, int* value, int low, int high, float width, std::string_view suffix = {}) {
+  static std::unordered_map<ImGuiID, std::string> buffers;
+  const ImGuiID key = ImGui::GetID(id);
+  auto& text = buffers[key];
+  if (ImGui::GetActiveID() != key) text = *value ? std::to_string(*value) : std::string();
+  ImFont* font = fonts().semibold;
+  constexpr float size = kSmall + 1;
+  const ImVec2 p = ImGui::GetCursorScreenPos();
+  const float h = s(38);
+  const bool hot = ImGui::IsMouseHoveringRect(p, {p.x + width, p.y + h}) || ImGui::GetActiveID() == key;
+  ImDrawList* dl = ImGui::GetWindowDrawList();
+  dl->AddRectFilled(p, {p.x + width, p.y + h}, color::mix(color::surface_hi, color::surface_top, hot ? 1.f : 0.f),
+                    h * 0.5f);
+  const float tw = measure(font, size, text).x;
+  const float sw = suffix.empty() ? 0 : measure(fonts().regular, size, suffix).x + s(5);
+  const float left = std::max(s(8), (width - tw - sw) * 0.5f);
+  if (!suffix.empty())
+    draw_text(dl, fonts().regular, size, {std::round(p.x + left + tw + s(5)), p.y + text_y(fonts().regular, size, 0, h)},
+              color::text2, suffix);
+  ImGui::PushFont(font, size);
+  ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {left, text_y(font, size, 0, h)});
+  ImGui::PushStyleColor(ImGuiCol_FrameBg, IM_COL32(0, 0, 0, 0));
+  ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, IM_COL32(0, 0, 0, 0));
+  ImGui::PushStyleColor(ImGuiCol_FrameBgActive, IM_COL32(0, 0, 0, 0));
+  ImGui::SetNextItemWidth(width - sw);
+  ImGui::InputText(id, &text, ImGuiInputTextFlags_CharsDecimal);
+  const bool committed = ImGui::IsItemDeactivatedAfterEdit();
+  ImGui::PopStyleColor(3);
+  ImGui::PopStyleVar();
+  ImGui::PopFont();
+  ImGui::SetCursorScreenPos(p);
+  ImGui::Dummy({width, h});
+  if (!committed) return false;
+  int parsed = 0;
+  const auto [end, ec] = std::from_chars(text.data(), text.data() + text.size(), parsed);
+  if (ec != std::errc{} || end != text.data() + text.size() || parsed < low || parsed > high) return false;
+  *value = parsed;
+  return true;
+}
+}  // namespace
 
-    if (dialog_footer({{"Done", Tone::primary}}) == 0 || ImGui::IsKeyPressed(ImGuiKey_Escape))
-      ImGui::CloseCurrentPopup();
-    ImGui::PopStyleVar();
-    end_dialog();
+const library::HostDisplay* App::host_display() {
+  // The runtime rewrites the file while a game starts; a glance every 2 s is plenty.
+  const double now = ImGui::GetTime();
+  if (now - host_display_checked_ >= 2) {
+    host_display_checked_ = now;
+    std::error_code ec;
+    const auto file = data_ / "host-display.json";
+    const auto time = fs::last_write_time(file, ec);
+    if (ec) host_display_.reset();
+    else if (time != host_display_time_ || !host_display_) host_display_ = library::load_host_display(data_);
+    host_display_time_ = ec ? fs::file_time_type{} : time;
+  }
+  return host_display_ ? &*host_display_ : nullptr;
+}
+
+void App::draw_display_rows(library::DisplaySettings& d, bool per_game, const char* id) {
+  ImGui::PushID(id);
+  const float dw = s(kControlW);
+  const auto* host = host_display();
+  // A game's dropdowns lead with "Use global setting" (an empty choice).
+  auto res_ids = resolution_ids(), res_names = resolution_names(), hz_ids = rate_ids(), hz_names = rate_names();
+  if (per_game) {
+    res_ids.insert(res_ids.begin(), "");
+    res_names.insert(res_names.begin(), "Use global setting");
+    hz_ids.insert(hz_ids.begin(), "");
+    hz_names.insert(hz_names.begin(), "Use global setting");
+  }
+  auto pointers = [](const std::vector<std::string>& v) {
+    std::vector<const char*> out;
+    for (const auto& item : v) out.push_back(item.c_str());
+    return out;
+  };
+  const auto res_items = pointers(res_names), hz_items = pointers(hz_names);
+  auto index = [](const std::vector<std::string>& ids, const std::string& value) {
+    return int(std::ranges::find(ids, value) - ids.begin()) % int(ids.size());
+  };
+  // A host that lists its refresh rates switches only to those; the others are dimmed.
+  std::unique_ptr<bool[]> dim(new bool[hz_ids.size()]{});
+  if (host && !host->rates.empty())
+    for (std::size_t i = 0; i < hz_ids.size(); ++i) {
+      int hz = 0;
+      if (std::from_chars(hz_ids[i].data(), hz_ids[i].data() + hz_ids[i].size(), hz).ec == std::errc{} && hz)
+        dim[i] = std::ranges::none_of(host->rates, [&](double r) { return std::abs(r - hz) < 0.5; });
+    }
+  bool changed = false;
+  // --smoke-view display-menu / game-settings-menu / display-rates opens a list once.
+  static bool smoke_menu = options_.smoke_view == "display-menu" || options_.smoke_view == "game-settings-menu";
+  static bool smoke_rates = options_.smoke_view == "display-rates";
+  setting_row("Resolution per eye", "", dw, s(38), [&] {
+    if (std::exchange(smoke_menu, false)) {
+      ImGui::PushID("resolution");
+      ImGui::OpenPopup("##menu");
+      ImGui::PopID();
+    }
+    int choice = index(res_ids, d.resolution);
+    if (dropdown("resolution", "", res_items.data(), int(res_items.size()), &choice, dw)) {
+      d.resolution = res_ids[choice];
+      if (std::ranges::find(library::resolution_percents, d.percent) == std::end(library::resolution_percents))
+        d.percent = library::DisplaySettings{}.percent;
+      // A new custom size starts at the runtime's size, or Quest 3's.
+      if (d.resolution == "custom" && !d.width) {
+        d.width = host ? host->width : library::headset_presets[0].width;
+        d.height = host ? host->height : library::headset_presets[0].height;
+      }
+      changed = true;
+    }
+  });
+  if (d.resolution == "percent") {
+    divider();
+    std::vector<std::string> names;
+    for (int p : library::resolution_percents) names.push_back(std::format("{}%", p));
+    const auto items = pointers(names);
+    int choice = int(std::ranges::find(library::resolution_percents, d.percent) - std::begin(library::resolution_percents));
+    if (choice >= int(items.size())) choice = 0;
+    // The size this gives on the runtime of the last game launch, in gray left of the percent.
+    std::string result;
+    if (host) {
+      const auto [w, h] = library::percent_size(*host, library::resolution_percents[choice]);
+      result = std::format("{} x {}", w, h);
+    }
+    const float rw = result.empty() ? 0 : measure(fonts().regular, kSmall + 1, result).x + s(16);
+    setting_row("Percent of runtime size", "", dw + rw, s(38), [&] {
+      const ImVec2 p = ImGui::GetCursorScreenPos();
+      if (!result.empty())
+        draw_text(ImGui::GetWindowDrawList(), fonts().regular, kSmall + 1,
+                  {std::round(p.x), p.y + text_y(fonts().regular, kSmall + 1, 0, s(38))}, color::text3, result);
+      ImGui::SetCursorScreenPos({p.x + rw, p.y});
+      if (dropdown("percent", "", items.data(), int(items.size()), &choice, dw)) {
+        d.percent = library::resolution_percents[choice];
+        changed = true;
+      }
+    });
+  }
+  if (d.resolution == "custom") {
+    divider();
+    const float fw = (dw - s(28)) * 0.5f;
+    setting_row("Size per eye", "", dw, s(38), [&] {
+      changed |= number_field("##width", &d.width, library::min_custom_side, library::max_custom_side, fw);
+      ImGui::SameLine(0, 0);
+      ImVec2 p = ImGui::GetCursorScreenPos();
+      const ImVec2 xs = measure(fonts().regular, kBody, "x");
+      draw_text(ImGui::GetWindowDrawList(), fonts().regular, kBody,
+                {std::round(p.x + (s(28) - xs.x) * 0.5f), text_y(fonts().regular, kBody, p.y, s(38))},
+                color::text2, "x");
+      ImGui::Dummy({s(28), s(38)});
+      ImGui::SameLine(0, 0);
+      changed |= number_field("##height", &d.height, library::min_custom_side, library::max_custom_side, fw);
+    });
+  }
+  divider();
+  setting_row("Frame rate", "", dw, s(38), [&] {
+    if (std::exchange(smoke_rates, false)) {
+      ImGui::PushID("rate");
+      ImGui::OpenPopup("##menu");
+      ImGui::PopID();
+    }
+    int choice = index(hz_ids, d.rate);
+    if (dropdown("rate", "", hz_items.data(), int(hz_items.size()), &choice, dw, dim.get())) {
+      d.rate = hz_ids[choice];
+      changed = true;
+    }
+  });
+  if (d.rate == "custom") {
+    divider();
+    setting_row("Custom frame rate", "", dw, s(38), [&] {
+      changed |= number_field("##custom-rate", &d.custom_rate, library::min_custom_rate, library::max_custom_rate, dw, "Hz");
+    });
+  }
+  divider();
+  // --smoke-view display-mirror opens the mirror list once.
+  static bool smoke_mirror = options_.smoke_view == "display-mirror";
+  setting_row("Desktop mirror", "", dw, s(38), [&] {
+    if (std::exchange(smoke_mirror, false)) {
+      ImGui::PushID("mirror");
+      ImGui::OpenPopup("##menu");
+      ImGui::PopID();
+    }
+    std::vector<std::string> ids{"cropped", "full", "off"}, names{"Cropped", "Whole eye", "Off"};
+    if (per_game) {
+      ids.insert(ids.begin(), "");
+      names.insert(names.begin(), "Use global setting");
+    }
+    const auto items = pointers(names);
+    int choice = index(ids, d.mirror);
+    if (dropdown("mirror", "", items.data(), int(items.size()), &choice, dw)) {
+      d.mirror = ids[choice];
+      changed = true;
+    }
+  });
+  // The eye row, while the mirror (this game's, or the global one it follows) is on.
+  // --smoke-view display-mirror-eye opens its list once.
+  static bool smoke_eye = options_.smoke_view == "display-mirror-eye";
+  if ((per_game && d.mirror.empty() ? settings_.display.mirror : d.mirror) != "off") {
+    divider();
+    setting_row("Mirror eye", "", dw, s(38), [&] {
+      if (std::exchange(smoke_eye, false)) {
+        ImGui::PushID("mirror-eye");
+        ImGui::OpenPopup("##menu");
+        ImGui::PopID();
+      }
+      std::vector<std::string> ids{"left", "right"}, names{"Left", "Right"};
+      if (per_game) {
+        ids.insert(ids.begin(), "");
+        names.insert(names.begin(), "Use global setting");
+      }
+      const auto items = pointers(names);
+      int choice = index(ids, d.mirror_eye);
+      if (dropdown("mirror-eye", "", items.data(), int(items.size()), &choice, dw)) {
+        d.mirror_eye = ids[choice];
+        changed = true;
+      }
+    });
+  }
+  divider();
+  // The game's sound also on the PC's own output, beside the headset (off by
+  // default). --smoke-view display-pc-audio opens its list once.
+  static bool smoke_pc_audio = options_.smoke_view == "display-pc-audio";
+  // i18n: Settings row: also play the game's sound on the PC's speakers or headphones.
+  setting_row(tr("Audio on PC too"), "", dw, s(38), [&] {
+    if (std::exchange(smoke_pc_audio, false)) {
+      ImGui::PushID("pc-audio");
+      ImGui::OpenPopup("##menu");
+      ImGui::PopID();
+    }
+    std::vector<std::string> ids{"off", "on"};
+    // i18n: Choices for "Audio on PC too".
+    std::vector<std::string> names{tr("Off"), tr("On")};
+    if (per_game) {
+      ids.insert(ids.begin(), "");
+      names.insert(names.begin(), tr("Use global setting"));
+    }
+    const auto items = pointers(names);
+    int choice = index(ids, d.pc_audio);
+    if (dropdown("pc-audio", "", items.data(), int(items.size()), &choice, dw)) {
+      d.pc_audio = ids[choice];
+      changed = true;
+    }
+  });
+  ImGui::PopID();
+  if (changed) action([this] { save_settings(); });
+}
+
+void App::draw_game_settings(const meta::Game& g, float width) {
+  // A game without its own entry shows "Use global setting"; an entry back at
+  // that is dropped when settings are saved.
+  auto it = settings_.game_display.try_emplace(g.id, library::game_display_defaults()).first;
+  heading(tr("Display"));
+  begin_card("game-display", width, {22, 2});
+  draw_display_rows(it->second, true, "game");
+  ImGui::Dummy({0, 0});  // the last row keeps its bottom padding
+  end_card();
+  heading(tr("Runtime"));
+  begin_card("game-runtime", width, {22, 2});
+  draw_game_runtime_rows(g.id);
+  ImGui::Dummy({0, 0});
+  end_card();
+  if (options_.smoke_view == "game-settings-override-end") ImGui::SetScrollHereY(1.0f);
+}
+
+void App::draw_game_runtime_rows(const std::string& id) {
+  ImGui::PushID("game-runtime");
+  // Looked up by id: saving drops an entry back at "Use global setting".
+  auto entry = [this, id]() -> library::DisplaySettings& {
+    return settings_.game_display.try_emplace(id, library::game_display_defaults()).first->second;
+  };
+  auto& d = entry();
+  const float dw = s(kControlW);
+  bool changed = false;
+  // The global row's choices after "Use global setting" (an empty choice).
+  std::vector<std::string> ids{""};
+  ids.insert(ids.end(), std::begin(library::texture_compression_modes), std::end(library::texture_compression_modes));
+  const char* modes[] = {tr("Use global setting"), tr("Always"), tr("Automatic"), tr("Off")};
+  setting_row(tr("Compress textures"), "", dw, s(38), [&] {
+    int choice = int(std::ranges::find(ids, d.texture_compression) - ids.begin()) % int(ids.size());
+    if (dropdown("textures", "", modes, int(std::size(modes)), &choice, dw)) {
+      auto apply = [this, entry, next = ids[choice]] {
+        auto& game = entry();
+        game.texture_compression = next;
+        // A threshold belongs to the game's own Automatic only.
+        if (next != "auto") game.texture_compression_threshold = 0;
+        save_settings();
+      };
+      // A change that takes the game's effective setting down from Always asks first.
+      auto effective = [&](const std::string& mode) {
+        return mode.empty() ? library::texture_compression_environment(settings_.texture_compression, 0, nullptr).first
+                            : mode;
+      };
+      if (settings_.texture_compression_warns(effective(d.texture_compression), effective(ids[choice])))
+        texture_warning_ = apply;
+      else action(apply);
+    }
+  });
+  // The game's own Automatic takes its own threshold or follows the global one.
+  if (d.texture_compression == "auto") {
+    divider();
+    static constexpr int percents[] = {0, 25, 50, 75, 90};
+    const char* shares[] = {tr("Use global setting"), "25%", "50%", "75%", "90%"};
+    int choice = int(std::ranges::find(percents, d.texture_compression_threshold) - std::begin(percents));
+    if (choice == int(std::size(percents))) choice = 0;
+    setting_row(tr("Compression threshold"), "", dw, s(38), [&] {
+      if (dropdown("texture-threshold", "", shares, int(std::size(shares)), &choice, dw)) {
+        d.texture_compression_threshold = percents[choice];
+        changed = true;
+      }
+    });
+  }
+  ImGui::PopID();
+  if (changed) action([this] { save_settings(); });
+}
+
+// Signing in from any browser: Meta's link to open there. Its Continue button
+// opens an oculus:// address, which comes back by itself while Venture opens
+// those links, and is pasted back otherwise.
+void App::manual_sign_in() {
+  ImFont* rf = fonts().regular;
+  ImFont* sf = fonts().semibold;
+  gap(6);
+  if (!auth_manual_) {
+    gap(4);
+    if (link("Sign in manually##manual", color::text2)) auth_manual_ = true;
+    return;
+  }
+  const float w = ImGui::GetContentRegionAvail().x;
+  const bool paste = link_handler_ != 1 || auth_paste_open_;
+  text(sf, kSmall, color::text, paste ? "1. Open this link in any browser and sign in to Meta."
+                                      : "Open this link in any browser and sign in to Meta. When it asks, let it open Venture.");
+  gap(8);
+  const float copy_w = button_width("Copy link"), open_w = button_width("Open");
+  ImVec2 p = ImGui::GetCursorScreenPos();
+  const float field_w = w - copy_w - open_w - s(20), h = s(34);
+  ImDrawList* dl = ImGui::GetWindowDrawList();
+  dl->AddRectFilled(p, {p.x + field_w, p.y + h}, color::surface_hi, h * 0.5f);
+  draw_text(dl, rf, kSmall, {p.x + s(16), text_y(rf, kSmall, p.y, h)}, color::text2,
+            ellipsize(rf, kSmall, auth_url_, field_w - s(32)));
+  ImGui::Dummy({field_w, h});
+  ImGui::SameLine(0, s(10));
+  ImGui::SetCursorScreenPos({p.x + field_w + s(10), p.y - (s(40) - h) * 0.5f});
+  if (button("Open##manual-open", 0, Tone::secondary, {open_w, s(40)})) {
+    try {
+      open_url(auth_url_);
+    } catch (const std::exception &) {
+      auth_paste_error_ = "No browser opened. Copy the link instead.";
+    }
+  }
+  ImGui::SetCursorScreenPos({p.x + field_w + open_w + s(20), p.y - (s(40) - h) * 0.5f});
+  if (button("Copy link##manual-copy", 0, Tone::secondary, {copy_w, s(40)})) {
+    ImGui::SetClipboardText(auth_url_.c_str());
+    auth_paste_error_ = "Link copied.";
+  }
+  ImGui::SetCursorScreenPos({p.x, p.y + h});
+  if (!paste) {
+    gap(12);
+    if (link("Paste the address instead##manual-paste-open", color::text2)) auth_paste_open_ = true;
+  } else {
+    gap(14);
+    text(sf, kSmall, color::text, "2. Paste the oculus:// address that Meta's Continue button tries to open.");
+    ImGui::SetCursorPosY(ImGui::GetCursorPosY() - s(5));  // the hint belongs to step 2
+    text(rf, kSmall, color::text2, "In Firefox, press Ctrl+Shift+K before Continue, then copy the message it shows.");
+    gap(2);
+    if (submit_field("manual-paste", "oculus://\xE2\x80\xA6", &auth_paste_, w, icons::lock)) {
+      paste_sign_in(auth_paste_);
+      if (verifying_) auth_paste_.clear();
+    }
+    gap(8);
+  }
+  if (!auth_paste_error_.empty()) {
+    text(rf, kSmall, auth_paste_error_ == "Link copied." ? color::text2 : color::warning, auth_paste_error_);
+    gap(4);
   }
 }
 
 // ---------------------------------------------------------------------------
 void App::draw_account() {
   page_title("Accounts");
-  ImGui::SetCursorPosY(ImGui::GetCursorPosY() - ImGui::GetStyle().ItemSpacing.y + s(2));
-  text(fonts().regular, kBody, color::text2, "Each Meta account keeps its own library, downloads and saves on this PC.",
-       false);
   gap(kAfterHeader);
   float w = std::min(ImGui::GetContentRegionAvail().x, s(kPageWidth));
   ImFont* rf = fonts().regular;
   ImFont* sf = fonts().semibold;
   if (accounts_.empty()) {
     begin_card("connect", w, {28, 28});
-    if (SDL_Texture* mark = logo(int(std::ceil(s(48))))) {
-      ImVec2 p = ImGui::GetCursorScreenPos();
-      draw_image(ImGui::GetWindowDrawList(), ImTextureID(reinterpret_cast<uintptr_t>(mark)), p,
-                                           {p.x + s(48), p.y + s(48)});
-      ImGui::Dummy({s(48), s(48)});
-      gap(14);
-    }
     text(sf, kTitle, color::text, "Connect your Meta account", false);
-    gap(4);
-    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + w - s(56));
-    text(rf, kBody, color::text2,
-         "Sign in with the account that owns your Quest games. Venture shows your library and downloads the games "
-         "you own \xE2\x80\x94 nothing else.");
-    ImGui::PopTextWrapPos();
-    gap(22);
+    gap(8);
     if (button(signing_in_ ? "Waiting for Meta\xE2\x80\xA6##signin" : "Sign in with Meta##signin", 0, Tone::primary,
                {s(220), s(46)}, !signing_in_))
       sign_in();
@@ -2096,38 +2602,27 @@ void App::draw_account() {
     }
   }
   if (signing_in_ || !auth_status_.empty()) {
-    gap(10);
-    ImGui::BeginGroup();
+    gap(4);
+    // Spinner, status and Cancel share one line, centred on the text.
+    ImVec2 row = ImGui::GetCursorScreenPos();
+    const float line = measure(rf, kSmall, "Ag").y;
+    float x = row.x;
     if (signing_in_) {
+      ImGui::SetCursorScreenPos({x, row.y + (line - s(14)) * 0.5f});
       spinner(7, color::text2);
-      ImGui::SameLine(0, s(10));
+      x += s(14) + s(10);
     }
+    ImGui::SetCursorScreenPos({x, row.y});
     text(rf, kSmall, color::text2, auth_status_, false);
     if (signing_in_) {
-      ImGui::SameLine(0, s(14));
-      if (button("Cancel##signin-cancel", 0, Tone::ghost, {0, s(30)})) {
-        ++epoch_;
-        browser_.close();
-        auth_.reset();
-        signing_in_ = verifying_ = false;
-        auth_status_ = "Sign-in cancelled.";
-      }
+      ImGui::SetCursorScreenPos({x + measure(rf, kSmall, auth_status_).x + s(14), row.y});
+      if (link("Cancel##signin-cancel", color::text2)) cancel_sign_in();
     }
-    ImGui::EndGroup();
+    ImGui::SetCursorScreenPos({row.x, row.y + line});
+    ImGui::Dummy({0, 0});
+    if (signing_in_ && !verifying_ && !auth_url_.empty()) manual_sign_in();
   }
   end_card();
-  gap(18);
-  ImGui::BeginGroup();
-  ImVec2 p = ImGui::GetCursorScreenPos();
-  draw_glyph(ImGui::GetWindowDrawList(), icons::lock, kSmall, {p.x + s(8), cap_center(fonts().regular, kSmall, p.y)},
-             color::text3);
-  ImGui::SetCursorScreenPos({p.x + s(26), p.y});
-  ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + w - s(26));
-  text(rf, kSmall, color::text3,
-       std::string("Sign-ins are ") + SecretStore::protection() +
-           " and only used to talk to Meta.");
-  ImGui::PopTextWrapPos();
-  ImGui::EndGroup();
 }
 
 void App::draw_remove_account() {
@@ -2166,18 +2661,15 @@ void App::draw_import_items(ImportScan& scan, bool device, float width) {
                  std::min(s(320), width));
     gap(10);
   }
-  const auto query = lowercase(scan.search);
   for (size_t index = 0; index < scan.items.size(); ++index) {
     auto& item = scan.items[index];
     auto match = import_match(item);
     if (!match.importable) item.selected = false;
     ready += item.selected;
     if (item.selected && !installed_package(item.package)) ready_bytes += item.bytes;
-    if (!query.empty()) {
-      const auto name = match.game ? match.game->name : item.label;
-      if (lowercase(name).find(query) == std::string::npos && lowercase(item.package).find(query) == std::string::npos)
-        continue;
-    }
+    if (!search::matches(scan.search, match.game ? match.game->name : item.label) &&
+        !search::matches(scan.search, item.package))
+      continue;
     ImGui::PushID(int(index));
     divider();
     ImVec2 p = ImGui::GetCursorScreenPos();
@@ -2383,6 +2875,29 @@ void App::draw_import() {
   end_card();
   gap(20);
 
+  // A game the account owns that its library did not list, checked on the
+  // game's own store listing. --smoke-view import-link shows it offline.
+  if ((session_ && !options_.offline) || options_.smoke_view == "import-link") {
+    heading("From your Meta account");
+    begin_card("import-owned", w, {22, 18});
+    {
+      float inner = ImGui::GetContentRegionAvail().x;
+      const float fw = std::min(s(420), inner * 0.6f);
+      ImVec2 start = ImGui::GetCursorPos();
+      const ImVec2 at = ImGui::GetCursorScreenPos();
+      draw_text(ImGui::GetWindowDrawList(), fonts().regular, kBody,
+                {std::round(at.x), text_y(fonts().regular, kBody, at.y, s(kControlH))}, color::text,
+                ellipsize(fonts().regular, kBody, "A game you own, by its store link", inner - fw - s(16)));
+      ImGui::SetCursorPos({start.x + inner - fw, start.y + (s(kControlH) - s(34)) * 0.5f});  // submit_field is 34 tall
+      if (submit_field("owned-link", "meta.com/experiences/\xE2\x80\xA6", &owned_link_, fw, icons::add, !adding_))
+        add_owned();
+      ImGui::SetCursorPos({start.x, start.y + s(kControlH)});
+      ImGui::Dummy({inner, 0});
+    }
+    end_card();
+    gap(20);
+  }
+
   // Saves for an installed game, from a headset or a copy of its Android/data folder.
   heading("Save data");
   begin_card("import-saves", w, {22, 18});
@@ -2507,7 +3022,7 @@ void App::draw_import_ask() {
       const float dw = w - s(130);
       divider();
       setting_row("Install to", "", dw, s(38), [&] {
-        dropdown("import-to", "", items.data(), int(items.size()), &import_choice_, dw);
+        dialog_dropdown("import-to", items.data(), int(items.size()), &import_choice_, dw);
       });
       if (!fits)
         text(fonts().regular, kSmall, color::danger,
@@ -2560,6 +3075,14 @@ void App::draw_import_ask() {
 }
 
 void App::request_install(const meta::Game& g) {
+  // A pinned version's download resumes into its own folder.
+  if (const auto binary = meta::version_binary(g.id); !binary.empty()) {
+    const auto* i = installed(g.id, false);
+    const auto* base = game(meta::base_app(g.id));
+    if (!i || !base) throw std::runtime_error("This game is no longer in your library.");
+    install_versions(*base, {meta::Build{std::string(binary), i->plan.version, i->plan.version_code}}, root_of(*i));
+    return;
+  }
   const bool steam = settings_.add_games_to_steam && (steam_sync_allowed_ || options_.smoke_view == "install");
   if (installed(g.id, false) || !settings_.install_ask) return install_for_owner(g);
   install_choices_.clear();
@@ -2569,6 +3092,17 @@ void App::request_install(const meta::Game& g) {
   install_choice_ = 0;
   install_steam_ = in_steam(g.id) && settings_.steam_add_new;
   install_remember_ = false;
+  install_versions_ = false;
+  install_ask_ = {g.id, g.name};
+}
+void App::request_versions(const meta::Game& g) {
+  request_builds(g.id);
+  install_choices_.clear();
+  for (auto& location : launcher::install_locations(settings_, launcher::local_volumes()))
+    install_choices_.emplace_back(location, launcher::free_space(location.folder));
+  install_choice_ = 0;
+  version_choice_ = -1;
+  install_versions_ = true;
   install_ask_ = {g.id, g.name};
 }
 
@@ -2581,7 +3115,8 @@ void App::draw_install_ask() {
     const float w = s(424);
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const auto detail = details_.find(id);
-    const uint64_t size = detail != details_.end() ? detail->second.size : 0;
+    // Another version's size is unknown until it downloads.
+    const uint64_t size = detail != details_.end() && !install_versions_ ? detail->second.size : 0;
 
     // The game: a small cover beside its name and download size.
     {
@@ -2598,6 +3133,44 @@ void App::draw_install_ask() {
       ImGui::Dummy({w, 0});
     }
     gap(14);
+
+    // Which version (each one Meta published, newest first), or all of them.
+    const auto versions = builds_.find(id);
+    const bool versions_ready = !install_versions_ || versions != builds_.end();
+    if (install_versions_) {
+      const float dw = w - s(130);
+      divider();
+      setting_row("Version", "", dw, s(38), [&] {
+        if (versions != builds_.end()) {
+          const auto& list = versions->second;
+          std::vector<std::string> labels;
+          for (auto& b : list) {
+            // Builds that share a version name are told apart by their version codes.
+            std::string label = std::ranges::count(list, b.version, &meta::Build::version) > 1 ? b.label() : b.version;
+            if (b.live) label += "  \xC2\xB7  latest";
+            else if (!b.channels.empty() && b.channels.front() != "LIVE") label += "  \xC2\xB7  " + lowercase(b.channels.front());
+            if (installed_build(id, b.binary_id)) label += "  \xC2\xB7  installed";
+            labels.push_back(std::move(label));
+          }
+          labels.push_back(std::format("All versions ({})", list.size()));
+          std::vector<const char*> items;
+          for (auto& label : labels) items.push_back(label.c_str());
+          // It starts on the latest build.
+          if (version_choice_ < 0) {
+            const auto live = std::ranges::find_if(list, &meta::Build::live);
+            version_choice_ = live == list.end() ? 0 : int(live - list.begin());
+          }
+          version_choice_ = std::clamp(version_choice_, 0, int(items.size()) - 1);
+          dialog_dropdown("version", items.data(), int(items.size()), &version_choice_, dw);
+        } else if (auto e = builds_error_.find(id); e != builds_error_.end()) {
+          text(fonts().regular, kSmall, color::danger, e->second, false);
+        } else {
+          const ImVec2 at = ImGui::GetCursorScreenPos();
+          ImGui::SetCursorScreenPos({at.x + dw - s(18), at.y + s(12)});
+          spinner(7, color::text2);
+        }
+      });
+    }
 
     // Where it goes (each library folder, or a new one on another drive) and Steam.
     bool fits = true;
@@ -2621,23 +3194,40 @@ void App::draw_install_ask() {
       divider();
       setting_row("Install to", "", dw,
                   s(38), [&] {
-                    dropdown("install-to", "", items.data(), int(items.size()), &install_choice_, dw);
+                    dialog_dropdown("install-to", items.data(), int(items.size()), &install_choice_, dw);
                   });
       if (!fits) text(fonts().regular, kSmall, color::danger, std::format("Not enough space: the game needs {}.", bytes(size)), false);
     }
-    if (settings_.add_games_to_steam && (steam_sync_allowed_ || options_.smoke_view == "install")) {
+    if (!install_versions_ && settings_.add_games_to_steam && (steam_sync_allowed_ || options_.smoke_view == "install")) {
       divider();
       setting_row("Add to Steam", "Appears in your Steam library and launches in SteamVR.", s(44), s(24),
                   [&] { toggle("steam-add", &install_steam_); });
     }
 
     // A quiet "don't ask again" at the left of the buttons.
-    const int clicked = dialog_footer({{"Cancel"}, {"Install", Tone::primary, fits, icons::download}}, [&](float h) {
+    const int clicked = dialog_footer({{"Cancel"}, {"Install", Tone::primary, fits && versions_ready, icons::download}},
+                                      [&](float h) {
+      if (install_versions_) return;
       const ImVec2 row = ImGui::GetCursorScreenPos();
       ImGui::SetCursorScreenPos({row.x, row.y + (h - s(16)) * 0.5f});
       checkbox("install-remember", "Don't ask again", &install_remember_, {}, true);
     });
-    if (clicked == 1) {
+    if (clicked == 1 && install_versions_ && versions != builds_.end()) {
+      const auto folder = install_choices_.empty() ? settings_.games : install_choices_[install_choice_].first.folder;
+      const auto& list = versions->second;
+      std::vector<meta::Build> chosen;
+      if (version_choice_ >= int(list.size())) chosen = list;
+      else chosen.push_back(list[size_t(version_choice_)]);
+      action([&, id, folder, chosen] {
+        const auto* g = game(id);
+        if (!g) throw std::runtime_error("This game is no longer in your library.");
+        const auto copy = *g;
+        const auto queued = install_versions(copy, chosen, folder);
+        if (queued > 1) notice_ = std::format("{} versions are downloading.", queued);
+        else if (queued) notice_ = "The version is downloading.";
+        else notice_ = chosen.size() == 1 ? "That version is installed already." : "Every version is installed already.";
+      });
+    } else if (clicked == 1) {
       const auto folder = install_choices_.empty() ? settings_.games : install_choices_[install_choice_].first.folder;
       action([&, id, folder, add = install_steam_, remember = install_remember_] {
         const auto* g = game(id);
@@ -2669,15 +3259,44 @@ void App::draw_uninstall() {
   if (uninstall_target_ && !ImGui::IsPopupOpen("Uninstall game?")) ImGui::OpenPopup("Uninstall game?");
   if (begin_dialog("Uninstall game?", 460)) {
     const meta::Game* g = uninstall_target_ ? game(uninstall_target_->plan.app_id) : nullptr;
-    dialog_text(g ? "Uninstall " + g->name + "?" : std::string("Uninstall this game?"),
-                "Its files are removed from this PC. Saves are kept, and you can install it again from your library.");
-    const int clicked = dialog_footer({{"Cancel"}, {"Uninstall", Tone::danger}});
+    const std::string version =
+        g && uninstall_target_->plan.pinned ? " (" + uninstall_target_->plan.version + ")" : std::string();
+    dialog_text(g ? trf("Uninstall {0}?", g->name + version) : std::string(tr("Uninstall this game?")),
+                tr("Its files are removed from this PC. Saves are kept, and you can install it again from your library."));
+    const int clicked = dialog_footer({{tr("Cancel")}, {tr("Uninstall"), Tone::danger}});
     if (clicked == 1 && uninstall_target_) {
       action([&] { uninstall(*uninstall_target_); });
       selected_.clear();
     }
     if (clicked >= 0) {
       uninstall_target_.reset();
+      ImGui::CloseCurrentPopup();
+    }
+    end_dialog();
+  }
+}
+
+void App::draw_texture_warning() {
+  if (texture_warning_ && !ImGui::IsPopupOpen("Disable texture compression?"))
+    ImGui::OpenPopup("Disable texture compression?");
+  if (begin_dialog("Disable texture compression?", 460)) {
+    // i18n: Warning when Compress textures changes from Always to Automatic or Off.
+    dialog_text(tr("Disable texture compression?"),
+                tr("This can increase video memory use by up to 4 times. It isn't recommended on GPUs with less than "
+                   "20 GB of video memory."));
+    // Cancel is the default (the main button, last), and Enter and Escape choose it.
+    int clicked = dialog_footer({{tr("Change anyway")}, {tr("Cancel"), Tone::primary}});
+    if (clicked < 0 && (ImGui::IsKeyPressed(ImGuiKey_Enter) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter) ||
+                        ImGui::IsKeyPressed(ImGuiKey_Escape)))
+      clicked = 1;
+    // Change anyway: the change, and the warning is not shown again (saved with it).
+    if (clicked == 0 && texture_warning_)
+      action([this, apply = texture_warning_] {
+        settings_.texture_compression_warned = true;
+        apply();
+      });
+    if (clicked >= 0) {
+      texture_warning_ = nullptr;
       ImGui::CloseCurrentPopup();
     }
     end_dialog();
@@ -2946,6 +3565,1039 @@ void App::draw_report() {
       }
     }
     end_dialog();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Controls (MOCKUP). Which host controller input each Quest input reaches, for
+// the controller the VR runtime reported; both controllers side by side.
+namespace {
+using controls::kProfiles;
+using controls::kQuestCount;
+using controls::MenuMode;
+using controls::Quest;
+
+std::string_view host_path(const controls::Profile& p, int choice) {
+  return choice > 0 && choice <= int(p.inputs.size()) ? p.inputs[choice - 1].path : std::string_view{};
+}
+int host_index(const controls::Profile& p, std::string_view path) {
+  for (size_t i = 0; i < p.inputs.size(); ++i)
+    if (p.inputs[i].path == path) return int(i) + 1;
+  return 0;
+}
+void reset_controls(ControlsEdit& e, int profile) {
+  const auto& p = kProfiles[profile];
+  const int n = int(p.inputs.size());
+  e.profile = profile;
+  for (int hand = 0; hand < 2; ++hand)
+    for (int q = 0; q < kQuestCount; ++q) e.host[hand][q] = host_index(p, p.defaults[hand][q]);
+  e.menu_mode = int(MenuMode::automatic);
+  // One button and hold start on the automatic input; two buttons on both stick clicks.
+  const int stick_click = std::max(1, host_index(p, "/input/thumbstick/click"));
+  e.menu_input = p.menu_path.empty() ? stick_click : std::max(1, host_index(p, p.menu_path));
+  e.menu_first = stick_click;
+  e.menu_second = n + stick_click;
+  e.menu_hold_ms = controls::kHoldMs;
+  e.menu_chord_ms = controls::kChordHoldMs;
+  e.initialized = true;
+}
+
+// A hand-prefixed choice (1..2n, left first) from a hand-qualified host path, or 0.
+int choice_index(const controls::Profile& p, std::string_view path) {
+  for (int hand = 0; hand < 2; ++hand) {
+    const auto root = controls::hand_root(hand);
+    if (path.starts_with(root)) {
+      const int i = host_index(p, path.substr(root.size()));
+      return i ? hand * int(p.inputs.size()) + i : 0;
+    }
+  }
+  return 0;
+}
+std::string choice_path(const controls::Profile& p, int index) {
+  const int n = int(p.inputs.size());
+  const int i = std::clamp(index, 1, 2 * n) - 1;
+  return std::string(controls::hand_root(i / n)) + std::string(p.inputs[size_t(i % n)].path);
+}
+// The editor on `config`'s choices for one controller (the defaults where it has none).
+void open_controls(ControlsEdit& e, int profile, const controls::Config& config) {
+  const bool custom = e.custom;
+  reset_controls(e, profile);
+  e.custom = custom;
+  const auto& p = kProfiles[profile];
+  const auto it = config.find(p.path);
+  if (it == config.end()) return;
+  const auto& c = it->second;
+  for (int hand = 0; hand < 2; ++hand)
+    for (int q = 0; q < kQuestCount; ++q)
+      if (const auto& row = c.rows[size_t(hand)][size_t(q)]; row && q != int(Quest::menu)) {
+        const int i = row->empty() ? 0 : host_index(p, *row);
+        if (row->empty() || i) e.host[size_t(hand)][size_t(q)] = i;
+      }
+  const int first = choice_index(p, c.menu.first), second = choice_index(p, c.menu.second);
+  if (first) e.menu_input = e.menu_first = first;
+  if (second) e.menu_second = second;
+  // Each mode keeps its own time; the other starts at its default.
+  if (c.menu.mode == MenuMode::chord) e.menu_chord_ms = c.menu.hold_ms;
+  else if (c.menu.mode == MenuMode::hold) e.menu_hold_ms = c.menu.hold_ms;
+  const bool usable = c.menu.mode == MenuMode::chord ? first && second
+                      : c.menu.mode == MenuMode::button || c.menu.mode == MenuMode::hold ? first != 0
+                                                                                          : true;
+  e.menu_mode = int(usable ? c.menu.mode : MenuMode::automatic);
+}
+// The editor's choices as saved: only what differs from the defaults.
+controls::Choice edit_choice(const ControlsEdit& e) {
+  const auto& p = kProfiles[e.profile];
+  controls::Choice c;
+  for (int hand = 0; hand < 2; ++hand)
+    for (int q = 0; q < kQuestCount; ++q) {
+      if (q == int(Quest::menu)) continue;
+      const auto path = host_path(p, e.host[size_t(hand)][size_t(q)]);
+      if (path != p.defaults[size_t(hand)][size_t(q)]) c.rows[size_t(hand)][size_t(q)] = std::string(path);
+    }
+  switch (MenuMode(e.menu_mode)) {
+    case MenuMode::automatic: break;
+    case MenuMode::off: c.menu.mode = MenuMode::off; break;
+    case MenuMode::button: c.menu = {MenuMode::button, choice_path(p, e.menu_input), {}, controls::kHoldMs}; break;
+    case MenuMode::hold: c.menu = {MenuMode::hold, choice_path(p, e.menu_input), {}, e.menu_hold_ms}; break;
+    case MenuMode::chord:
+      c.menu = {MenuMode::chord, choice_path(p, e.menu_first), choice_path(p, e.menu_second), e.menu_chord_ms};
+      break;
+  }
+  return c;
+}
+// Writes the editor's choices into `config`; true when that changed it.
+bool store_controls(const ControlsEdit& e, controls::Config& config) {
+  const auto choice = edit_choice(e);
+  const std::string key(kProfiles[e.profile].path);
+  const auto it = config.find(key);
+  if (choice == controls::Choice{}) {
+    if (it == config.end()) return false;
+    config.erase(it);
+    return true;
+  }
+  if (it != config.end() && it->second == choice) return false;
+  config[key] = choice;
+  return true;
+}
+int profile_index(std::string_view path) {
+  for (int i = 0; i < int(std::size(kProfiles)); ++i)
+    if (kProfiles[i].path == path) return i;
+  return -1;
+}
+
+// A hand-prefixed menu choice (1..2n): its hand, input and label.
+struct Choice {
+  int hand = 0;
+  const controls::HostInput* input = nullptr;
+};
+Choice menu_choice(const controls::Profile& p, int index) {
+  const int n = int(p.inputs.size());
+  const int i = std::clamp(index, 1, 2 * n) - 1;
+  return {i / n, &p.inputs[size_t(i % n)]};
+}
+// Inputs that work as a button: clicks, presses, touches and trackpad halves.
+bool is_button(const controls::HostInput& in) {
+  return !in.reserved && (in.path.ends_with("/click") || in.path.ends_with("/force") || in.path.ends_with("/touch") ||
+                          in.path.find("/dpad_") != std::string_view::npos);
+}
+bool is_button(const Choice& c) { return is_button(*c.input) && controls::on_hand(*c.input, c.hand); }
+std::string choice_label(const Choice& c) { return std::format("{} {}", c.hand ? "Right" : "Left", c.input->label); }
+// "L stick", "R B": a choice short enough for two to share the menu pill.
+std::string short_label(const Choice& c) {
+  std::string l(c.input->label);
+  if (l == "Thumbstick click") l = "stick";
+  else if (l.starts_with("Thumbstick")) l = "stick" + l.substr(10);
+  else if (l.starts_with("Trackpad ")) l = "pad " + l.substr(9);
+  return std::format("{} {}", c.hand ? "R" : "L", l);
+}
+// The menu row's short line for a held button, and for two buttons; no hold reads as a plain press.
+
+// The game's menu as the menu row resolves it: the pill's text and the host
+// inputs it uses per hand.
+struct MenuInput {
+  std::string label;
+  std::vector<std::pair<int, std::string_view>> at;  // hand, host input
+};
+MenuInput resolved_menu(const ControlsEdit& e) {
+  const auto& p = kProfiles[e.profile];
+  switch (MenuMode(e.menu_mode)) {
+    case MenuMode::automatic:
+      if (p.menu_path.empty())
+        return {"Both stick clicks", {{0, "/input/thumbstick/click"}, {1, "/input/thumbstick/click"}}};
+      return {std::string(p.menu_label), {{0, p.menu_path}}};
+    case MenuMode::button: {
+      const auto c = menu_choice(p, e.menu_input);
+      return {choice_label(c), {{c.hand, c.input->path}}};
+    }
+    case MenuMode::hold: {
+      const auto c = menu_choice(p, e.menu_input);
+      return {choice_label(c), {{c.hand, c.input->path}}};
+    }
+    case MenuMode::chord: {
+      const auto a = menu_choice(p, e.menu_first), b = menu_choice(p, e.menu_second);
+      std::string label;
+      if (a.input == b.input && a.hand != b.hand) {
+        std::string l(a.input->label);
+        for (auto& ch : l) ch = char(std::tolower(static_cast<unsigned char>(ch)));
+        if (l.starts_with("thumbstick")) l.erase(0, 5);  // "stick click"
+        label = std::format("Both {}{}", l, l.ends_with('s') ? "" : "s");
+      } else {
+        label = std::format("{} + {}", short_label(a), short_label(b));  // "L stick + R B"
+      }
+      return {label, {{a.hand, a.input->path}, {b.hand, b.input->path}}};
+    }
+    case MenuMode::off: return {"Off", {}};
+  }
+  return {};
+}
+
+// Case-insensitive: every word of `query` is in the profile's name or aliases.
+bool profile_matches(const controls::Profile& p, std::string_view query) {
+  auto lower = [](std::string_view s) {
+    std::string out(s);
+    for (auto& ch : out) ch = char(std::tolower(static_cast<unsigned char>(ch)));
+    return out;
+  };
+  const std::string hay = lower(p.name) + " " + lower(p.aliases);
+  std::string q = lower(query);
+  for (size_t at = 0; at < q.size();) {
+    size_t end = q.find(' ', at);
+    if (end == q.npos) end = q.size();
+    if (end > at && hay.find(q.substr(at, end - at)) == std::string::npos) return false;
+    at = end + 1;
+  }
+  return true;
+}
+
+// A small pill tag such as "Connected".
+float tag_width(std::string_view t) { return measure(fonts().semibold, kLabel - 1, t).x + s(16); }
+void draw_tag(ImDrawList* dl, ImVec2 at, float h, std::string_view t, ImU32 tone) {
+  const float w = tag_width(t);
+  dl->AddRectFilled(at, {at.x + w, at.y + h}, color::alpha(tone, 0.16f), h * 0.5f);
+  draw_text(dl, fonts().semibold, kLabel - 1, {std::round(at.x + s(8)), text_y(fonts().semibold, kLabel - 1, at.y, h)},
+            tone, t);
+}
+
+// One joined control of choices: the chosen one filled, like a selected chip.
+bool segmented(const char* id, const char* const* items, int count, int* current, float width) {
+  ImGui::PushID(id);
+  const float h = s(32), pad = s(3);
+  const ImVec2 p = ImGui::GetCursorScreenPos();
+  ImDrawList* dl = ImGui::GetWindowDrawList();
+  dl->AddRectFilled(p, {p.x + width, p.y + h}, color::surface_hi, h * 0.5f);
+  const float seg = (width - 2 * pad) / float(count);
+  bool changed = false;
+  for (int i = 0; i < count; ++i) {
+    const ImVec2 a{p.x + pad + seg * float(i), p.y + pad}, b{a.x + seg, p.y + h - pad};
+    ImGui::SetCursorScreenPos(a);
+    ImGui::PushID(i);
+    ImGui::InvisibleButton("##seg", {seg, b.y - a.y});
+    ImGui::PopID();
+    const bool on = *current == i, hot = ImGui::IsItemHovered();
+    if (ImGui::IsItemClicked() && !on) *current = i, changed = true;
+    if (on) dl->AddRectFilled(a, b, color::selected, (b.y - a.y) * 0.5f);
+    else if (hot) dl->AddRectFilled(a, b, color::surface_top, (b.y - a.y) * 0.5f);
+    const ImVec2 ts = measure(fonts().semibold, kSmall, items[i]);
+    draw_text(dl, fonts().semibold, kSmall, {std::round(a.x + (seg - ts.x) * 0.5f), text_y(fonts().semibold, kSmall, a.y, b.y - a.y)},
+              on ? color::on_selected : color::text2, items[i]);
+  }
+  ImGui::SetCursorScreenPos(p);
+  ImGui::Dummy({width, h});
+  ImGui::PopID();
+  return changed;
+}
+
+// A small caption between groups of menu rows.
+void menu_section(std::string_view t) {
+  gap(4);
+  const ImVec2 p = ImGui::GetCursorScreenPos();
+  draw_text(ImGui::GetWindowDrawList(), fonts().semibold, kLabel - 1, {p.x + s(12), p.y}, color::text3, t);
+  ImGui::Dummy({0, s(18)});
+}
+}  // namespace
+
+// The controller shown: a pill that opens a searchable list of every supported
+// controller, where Connected (the runtime reports it now) and Last used are tagged.
+void App::draw_controller_picker(ControlsEdit& e, float width, const controls::Config& config) {
+  ImGui::PushID("picker");
+  const ImVec2 p = ImGui::GetCursorScreenPos();
+  const ImVec2 size{width, s(38)};
+  ImGui::InvisibleButton("##pill", size);
+  const bool hovered = ImGui::IsItemHovered(), open = ImGui::IsPopupOpen("##list");
+  if (ImGui::IsItemClicked()) {
+    controls_search_.clear();
+    ImGui::OpenPopup("##list");
+  }
+  if (options_.smoke_view == "controls-search") {
+    static int frames = 0;
+    if (frames++ == 2) {
+      controls_search_ = "vive";
+      ImGui::OpenPopup("##list");
+    }
+  }
+  ImDrawList* dl = ImGui::GetWindowDrawList();
+  dl->AddRectFilled(p, {p.x + size.x, p.y + size.y}, hovered || open ? color::surface_top : color::surface_hi,
+                    size.y * 0.5f);
+  auto tag_of = [&](int i) -> std::pair<std::string_view, ImU32> {
+    if (i == controls_connected_) return {"Connected", color::positive};
+    if (i == controls_last_used_) return {"Last used", color::text2};
+    return {{}, 0};
+  };
+  // The pill names the controller only; Connected and Last used show in the list.
+  const auto name = ellipsize(fonts().semibold, kSmall + 1, kProfiles[e.profile].name, width - s(56));
+  draw_text(dl, fonts().semibold, kSmall + 1, {std::round(p.x + s(16)), text_y(fonts().semibold, kSmall + 1, p.y, size.y)},
+            color::text, name);
+  draw_glyph(dl, icons::chevron_down, kLabel, {p.x + size.x - s(20), p.y + size.y * 0.5f}, color::text2);
+
+  const float list_w = std::max(width, s(320));
+  ImGui::SetNextWindowPos({p.x + width - list_w, p.y + size.y + s(6)});
+  ImGui::SetNextWindowSize({list_w, 0});
+  if (begin_menu("##list")) {
+    if (ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere(0);
+    ImGui::PushStyleColor(ImGuiCol_NavCursor, IM_COL32(0, 0, 0, 0));
+    search_field("search", "Search controllers", &controls_search_, list_w - s(12));
+    ImGui::PopStyleColor();
+    gap(4);
+    int shown = 0, matches = 0;
+    for (const auto& profile : kProfiles) matches += profile_matches(profile, controls_search_);
+    ImGui::BeginChild("##rows", {0, std::min(s(40) * float(std::max(matches, 1)), s(360))}, 0,
+                      ImGuiWindowFlags_NoBackground);
+    for (int i = 0; i < int(std::size(kProfiles)); ++i) {
+      if (!profile_matches(kProfiles[i], controls_search_)) continue;
+      ++shown;
+      ImGui::PushID(i);
+      const ImVec2 row = ImGui::GetCursorScreenPos();
+      const float row_w = ImGui::GetContentRegionAvail().x;
+      if (menu_item(kProfiles[i].name.data()) && i != e.profile) open_controls(e, i, config);
+      ImDrawList* ml = ImGui::GetWindowDrawList();
+      float right = row.x + row_w - s(12);
+      if (i == e.profile) {
+        draw_glyph(ml, icons::check, kSmall, {right - s(6), row.y + s(19)}, color::accent_text);
+        right -= s(24);
+      }
+      if (const auto [t, c] = tag_of(i); !t.empty()) draw_tag(ml, {right - tag_width(t), row.y + s(9)}, s(20), t, c);
+      ImGui::PopID();
+    }
+    if (!shown) {
+      gap(8);
+      ImGui::Indent(s(12));
+      text(fonts().regular, kSmall, color::text3, "No controller matches.", false);
+      ImGui::Unindent(s(12));
+      gap(8);
+    }
+    ImGui::EndChild();
+    end_menu();
+  }
+  ImGui::PopID();
+}
+
+// The controller the runtime reported (the runtime writes <data>/controllers.json
+// when a game's controller changes): Connected while that game runs, else Last used.
+void App::read_controller_report() {
+  const double now = ImGui::GetTime();
+  if (now < controls_report_check_) return;
+  controls_report_check_ = now + 1.0;
+  if (options_.smoke_view.starts_with("controls") || options_.smoke_view.starts_with("game-controls")) {
+    // Screenshots: as if an Index were connected and Touch Plus used before.
+    controls_connected_ = options_.smoke_view == "controls-touch" ? -1 : 0;
+    controls_last_used_ = 2;
+    return;
+  }
+  std::error_code ec;
+  const auto file = data_ / "controllers.json";
+  const auto stamp = fs::last_write_time(file, ec);
+  if (!ec && stamp != controls_report_stamp_) {
+    controls_report_stamp_ = stamp;
+    const Json report = Json::parse(paths::read(file, 1 << 14), nullptr, false);
+    const auto left = report.is_object() ? str(report, "left") : std::string();
+    const int index = profile_index(left.empty() && report.is_object() ? str(report, "right") : left);
+    if (index >= 0) {
+      controls_reported_ = index;
+      controls_reported_at_ = report.is_object() ? std::int64_t(number(report, "time")) : 0;
+    }
+  }
+  // Connected: a game that is running now reported it.
+  bool live = false;
+  const auto wall = std::chrono::system_clock::now();
+  for (const auto& [id, run] : running_) {
+    if (!run.process.active()) continue;
+    const auto started = wall - (std::chrono::steady_clock::now() - run.started);
+    const auto since = std::chrono::duration_cast<std::chrono::seconds>(started.time_since_epoch()).count();
+    if (controls_reported_at_ + 2 >= since) live = true;
+  }
+  controls_connected_ = live ? controls_reported_ : -1;
+  controls_last_used_ = live ? -1 : controls_reported_;
+}
+
+void App::draw_controls() {
+  read_controller_report();
+  if (!controls_.initialized) {
+    // The page opens on the connected controller, else the last one used, else Touch.
+    int profile = controls_connected_ >= 0 ? controls_connected_ : controls_last_used_ >= 0 ? controls_last_used_ : 1;
+    for (int i = 0; i < int(std::size(kProfiles)); ++i) {
+      const auto v = options_.smoke_view;
+      if ((v == "controls" && i == 0) ||
+          (v == "controls-frame" && kProfiles[i].name == "Steam Frame") ||
+          (v == "controls-psvr2" && kProfiles[i].name == "PlayStation VR2 Sense") ||
+          (v == "controls-vive" && kProfiles[i].name == "HTC Vive wand") ||
+          (v == "controls-wmr" && kProfiles[i].name == "Windows Mixed Reality") ||
+          (v.starts_with("controls-pico") && kProfiles[i].name == "Pico 4") ||
+          (v == "controls-turned-cosmos" && kProfiles[i].name == "HTC Vive Cosmos") ||
+          (v.starts_with("controls-turned-index") && kProfiles[i].name == "Valve Index") ||
+          (v.starts_with("controls-turned-touch") && kProfiles[i].name == "Meta Quest Touch Plus") ||
+          (v.starts_with("controls-turned-psvr2") && kProfiles[i].name == "PlayStation VR2 Sense") ||
+          (v == "controls-generic" && kProfiles[i].name == "Generic controller"))
+        profile = i;
+    }
+    open_controls(controls_, profile, settings_.controls);
+  }
+  const float w = std::min(ImGui::GetContentRegionAvail().x, s(1180));
+  const float top = ImGui::GetCursorPosY();
+  page_title("Controls");
+  const float bw = button_width("Reset to defaults");
+  const float hw = std::min(w, ImGui::GetContentRegionAvail().x - s(header_right_inset()));
+  const float pw = std::clamp(hw - bw - s(10) - measure(fonts().semibold, kDisplay, "Controls").x - s(24), s(180), s(300));
+  ImGui::SetCursorPos({ImGui::GetCursorStartPos().x + hw - pw - bw - s(10), top + s(kHeaderHeight - 38) * 0.5f});
+  draw_controller_picker(controls_, pw, settings_.controls);
+  ImGui::SetCursorPos({ImGui::GetCursorStartPos().x + hw - bw, top + s(kHeaderHeight - 38) * 0.5f});
+  if (button("Reset to defaults##controls", 0, Tone::secondary, {bw, s(38)})) reset_controls(controls_, controls_.profile);
+  ImGui::SetCursorPosY(top + s(kHeaderHeight));
+  gap(kAfterHeader);
+  draw_controls_editor(controls_, nullptr, w, nullptr);
+  // Saved as they change; the next launch passes them to the runtime.
+  if (options_.smoke_view.empty() && store_controls(controls_, settings_.controls)) action([&] { settings_.save(data_); });
+}
+
+// A game's Controls tab: the player's controls, or the game's own.
+void App::draw_game_controls(const meta::Game& g, float w) {
+  read_controller_report();
+  if (!controls_.initialized) {
+    const int profile = controls_connected_ >= 0 ? controls_connected_ : controls_last_used_ >= 0 ? controls_last_used_ : 1;
+    open_controls(controls_, options_.smoke_view.starts_with("game-controls") ? 0 : profile, settings_.controls);
+  }
+  if (!game_controls_.initialized || controls_game_ != g.id) {
+    controls_game_ = g.id;
+    const auto own = settings_.game_controls.find(g.id);
+    game_controls_.custom = own != settings_.game_controls.end();
+    open_controls(game_controls_, controls_.profile, game_controls_.custom ? own->second : settings_.controls);
+    if (options_.smoke_view.starts_with("game-controls")) {
+      // Screenshots: this game's own choices, with two conflicts to show.
+      game_controls_.custom = true;
+      game_controls_.menu_mode = int(controls::MenuMode::chord);
+      game_controls_.host[0][int(controls::Quest::secondary)] = game_controls_.host[0][int(controls::Quest::primary)];
+    }
+  }
+  const bool was_custom = game_controls_.custom;
+  draw_controls_editor(game_controls_.custom ? game_controls_ : controls_, &controls_, w, &g);
+  if (!options_.smoke_view.empty()) return;
+  bool changed = false;
+  if (game_controls_.custom && !was_custom) {
+    // The game's own controls start as a copy of the player's.
+    settings_.game_controls[g.id] = settings_.controls;
+    open_controls(game_controls_, controls_.profile, settings_.game_controls[g.id]);
+    changed = true;
+  } else if (!game_controls_.custom && was_custom) {
+    changed = settings_.game_controls.erase(g.id) > 0;
+  }
+  if (game_controls_.custom) changed |= store_controls(game_controls_, settings_.game_controls[g.id]);
+  else changed |= store_controls(controls_, settings_.controls);
+  if (changed) action([&] { settings_.save(data_); });
+}
+
+// The picture of profile `p` for one hand: the user's installed render model,
+// else Venture's bundled picture, else the generic controller.
+const art::Image* App::controller_image(const controls::Profile& p, int hand) {
+  const char* side = hand ? "right" : "left";
+  bool pending = false;
+  if (const art::Image* image =
+          art::installed_controller(p.render_model, side, data_ / "cache/controllers", [this] { wake(); }, &pending))
+    return image;
+  if (const art::Image* image = p.art.empty() ? nullptr : art::controller(p.art, side)) return image;
+  return art::controller("generic", side);
+}
+
+void App::draw_controls_editor(ControlsEdit& e, const ControlsEdit* base, float w, const meta::Game* game) {
+  const auto& p = kProfiles[e.profile];
+  const int n_inputs = int(p.inputs.size());
+  const bool locked = base && !e.custom;  // a game without its own controls shows the defaults
+  const int hover = std::exchange(controls_hover_, -1);  // the row under the pointer last frame
+  const int active = std::exchange(controls_active_, -1);  // the row being changed last frame
+  // Turned models stand back up when the page opens again or shows another controller.
+  const int frame = ImGui::GetFrameCount();
+  if (controller_turns_frame_ < frame - 1 || controller_turns_profile_ != e.profile) controller_turns_.clear();
+  controller_turns_frame_ = frame;
+  controller_turns_profile_ = e.profile;
+  // A row being changed or pointed at lights its callouts; the others step back.
+  const int lit_row = active >= 0 ? active : hover;
+  const bool panel_open = std::exchange(controls_menu_panel_, false);  // the menu popover, last frame
+  const auto menu = resolved_menu(e);
+  const auto mode = MenuMode(e.menu_mode);
+  auto quest_label = [](int hand, int q) {
+    if (q == int(Quest::menu)) return std::string_view{"Menu"};
+    return hand ? controls::kQuestInputs[q].right : controls::kQuestInputs[q].left;
+  };
+  // Rows that reach the same host input on one hand conflict. A held menu and a
+  // two-button menu share on purpose: a press of one button still reaches the
+  // game, only the hold or the pair opens the menu.
+  auto reaches = [&](int hand, int q, std::string_view path) {
+    if (path.empty()) return false;
+    if (q != int(Quest::menu)) return host_path(p, e.host[hand][q]) == path;
+    return std::ranges::any_of(menu.at, [&](const auto& m) { return m.first == hand && m.second == path; });
+  };
+  std::array<std::array<int, kQuestCount>, 2> twin{};  // the other Quest row + 1
+  for (int hand = 0; hand < 2; ++hand)
+    for (int a = 0; a < kQuestCount; ++a)
+      for (int b = 0; b < kQuestCount; ++b) {
+        if (a == b || twin[hand][a]) continue;
+        const bool menu_combo = mode == MenuMode::hold || menu.at.size() > 1;
+        if (menu_combo && (a == int(Quest::menu) || b == int(Quest::menu))) continue;
+        std::vector<std::string_view> paths;
+        if (a == int(Quest::menu)) {
+          for (const auto& [h, path] : menu.at)
+            if (h == hand) paths.push_back(path);
+        } else {
+          paths.push_back(host_path(p, e.host[hand][a]));
+        }
+        for (auto path : paths)
+          if (reaches(hand, b, path)) twin[hand][a] = b + 1;
+      }
+
+  // Geometry: rows | picture | picture | rows, or one controller per card when
+  // the window is too narrow for both.
+  const float pad = s(22);
+  const float inner = w - 2 * pad;
+  const float row_h = s(50), head_h = s(28), mid = s(4), gutter = s(30), lw = s(92), mark_w = s(14);
+  const float half_wide = (inner - mid) * 0.5f;
+  const float dw = std::clamp(half_wide * 0.32f, s(146), s(190));
+  const float rows_w = lw + dw + mark_w + s(8);
+  const bool stacked = half_wide - rows_w - gutter < s(150);
+  const float half = stacked ? inner : half_wide;
+  const float rows_h = head_h + row_h * 8;  // both sides as tall as the longer list
+  const std::array<const art::Image*, 2> images{controller_image(p, 0), controller_image(p, 1)};
+  // One scale for the pair, so the two controllers read as a matched pair.
+  const float pic_room = std::min(half - rows_w - gutter, s(460));
+  float pic_scale = 1e9f;
+  for (const auto* image : images)
+    if (image)
+      pic_scale = std::min({pic_scale, (rows_h - head_h * 0.5f) / float(image->height), pic_room / float(image->width)});
+
+  // The per-game line: own controls, the controller shown, and reset.
+  auto toolbar = [&] {
+    if (!game) return;
+    const ImVec2 row = ImGui::GetCursorPos();
+    ImGui::SetCursorPos({row.x, row.y + (s(38) - s(24)) * 0.5f});
+    toggle("game-controls-custom", &game_controls_.custom);
+    const ImVec2 t0 = ImGui::GetItemRectMin(), t1 = ImGui::GetItemRectMax();
+    draw_text(ImGui::GetWindowDrawList(), fonts().regular, kBody,
+              {t1.x + s(12), text_y(fonts().regular, kBody, t0.y, t1.y - t0.y)}, color::text,
+              "Custom controls for this game");
+    const float bw = button_width("Reset to my defaults");
+    const float right = row.x + inner;
+    // The picker and reset share the line when they fit beside the toggle, else take the next.
+    const float label_end = t1.x - ImGui::GetWindowPos().x + ImGui::GetScrollX() + s(12) +
+                            measure(fonts().regular, kBody, "Custom controls for this game").x + s(24);
+    const bool wrap = right - bw - s(10) - s(220) < label_end;
+    const float line = wrap ? row.y + s(38) + s(12) : row.y;
+    const float pw = std::clamp(right - bw - s(10) - (wrap ? row.x : label_end), s(180), s(300));
+    ImGui::SetCursorPos({right - pw - bw - s(10), line});
+    draw_controller_picker(game_controls_.custom ? game_controls_ : controls_, pw,
+                           game_controls_.custom && game ? settings_.game_controls[game->id] : settings_.controls);
+    ImGui::SetCursorPos({right - bw, line});
+    if (button("Reset to my defaults", 0, Tone::secondary, {bw, s(38)}, game_controls_.custom) && game) {
+      // The game's own controls become the player's again (all controllers).
+      settings_.game_controls[game->id] = settings_.controls;
+      open_controls(game_controls_, game_controls_.profile, settings_.controls);
+      if (options_.smoke_view.empty()) action([&] { settings_.save(data_); });
+    }
+    ImGui::SetCursorPos({row.x, line + s(38)});
+    gap(14);
+    divider();
+    gap(18);
+  };
+
+  // Notes under each controller: a warning (a real conflict) or information.
+  struct Note {
+    std::string text;
+    bool warning = true;
+  };
+  std::array<std::vector<Note>, 2> notes;
+  // One controller: its caption, picture, rows and callouts. Returns its height.
+  auto draw_hand = [&](int hand, ImVec2 at) {
+    ImGui::PushID(hand);
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const art::Image* image = images[hand];
+    // The input component a host path names ("/input/b/click" -> "b").
+    auto component = [](std::string_view path) {
+      auto key = path.substr(7);
+      return key.substr(0, key.find('/'));
+    };
+    // Trackpad halves point at that half of the trackpad.
+    auto half_dy = [&](std::string_view path) {
+      return (path.ends_with("/dpad_up") ? -0.03f : path.ends_with("/dpad_down") ? 0.03f : 0.f) * float(image->height);
+    };
+    // Where the unturned picture shows an input (rows keep this order while it turns).
+    auto spot_of = [&](std::string_view path) -> std::optional<ImVec2> {
+      if (!image || !path.starts_with("/input/")) return std::nullopt;
+      const auto key = component(path);
+      for (const auto& sp : image->spots)
+        if (key == sp.input) return ImVec2{sp.x, sp.y + half_dy(path)};
+      return std::nullopt;
+    };
+    struct Row {
+      int q;
+      std::vector<std::string_view> paths;  // the menu can take two buttons
+      std::optional<ImVec2> spot;
+    };
+    std::vector<Row> rows;
+    for (int q = 0; q < kQuestCount; ++q) {
+      if (q == int(Quest::menu) ? hand != 0 : quest_label(hand, q).empty()) continue;
+      std::vector<std::string_view> paths;
+      if (q == int(Quest::menu)) {
+        for (const auto& [h, mp] : menu.at)
+          if (h == hand) paths.push_back(mp);
+      } else if (auto path = host_path(p, e.host[hand][q]); !path.empty()) {
+        paths.push_back(path);
+      }
+      std::optional<ImVec2> spot;
+      for (auto path : paths)
+        if (auto sp = spot_of(path); sp && (!spot || sp->y < spot->y)) spot = sp;
+      rows.push_back({q, std::move(paths), spot});
+    }
+    // Top to bottom as their inputs sit on the picture, so no callouts cross;
+    // rows without a spot follow.
+    std::ranges::stable_sort(rows, {}, [](const Row& r) { return r.spot ? r.spot->y : 1e9f; });
+
+    const float x0 = at.x + (stacked ? 0 : hand * (half + mid));
+    const float rows_x = hand ? x0 + half - rows_w : x0;
+    const float k = image ? pic_scale : 0;
+    const float pic_w = image ? float(image->width) * k : 0, pic_h = image ? float(image->height) * k : 0;
+    // The pictures meet in the middle; both hands share one center line.
+    const float room_x = hand ? x0 : x0 + rows_w + gutter;
+    const float pic_x = hand ? room_x + std::max(0.f, (pic_room - pic_w)) * (stacked ? 0.5f : 0.2f)
+                             : room_x + pic_room - pic_w - std::max(0.f, (pic_room - pic_w)) * (stacked ? 0.5f : 0.2f);
+    const float pic_y = at.y + head_h + (rows_h - head_h - pic_h) * 0.5f;
+    // The player turns a controller by dragging it; a double click stands it back
+    // up. The turn lasts while the page shows this controller, per hand.
+    const bool can_turn = image && art::turnable(*image);
+    const ImVec2 room0{room_x, at.y + head_h}, room1{room_x + pic_room, at.y + rows_h};
+    art::Turn turn;
+    std::shared_ptr<const art::Shot> shot;
+    if (can_turn) {
+      art::prepare_turn(*image, [this] { wake(); });
+      ImGui::SetCursorScreenPos(room0);
+      ImGui::SetNextItemAllowOverlap();
+      ImGui::InvisibleButton("##turn", {room1.x - room0.x, room1.y - room0.y});
+      auto& stored = controller_turns_[image];
+      const bool dragging = ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Left, 1.f);
+      if (dragging) {
+        const ImVec2 d = ImGui::GetIO().MouseDelta;
+        if (d.x != 0 || d.y != 0) stored.drag(d.x / s(1) * 0.5f, d.y / s(1) * 0.5f);
+        ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
+      } else if (ImGui::IsItemHovered()) {
+        ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+      }
+      if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) stored = {};
+      // Screenshots: the left one turned toward the page, or ("-back") around to its far side.
+      if (options_.smoke_view.starts_with("controls-turned") && hand == 0 && stored.identity())
+        stored.drag(options_.smoke_view.ends_with("-back") ? 160.f : -70.f, 15.f);
+      turn = stored;
+      // The quick drawing while dragging, the smooth one when it rests; unturned,
+      // the picture itself shows and the drawing only tells which inputs it hides.
+      shot = art::turned(*image, turn, turn.identity() ? 0.5f : k, !dragging && !turn.identity(), [this] { wake(); });
+    }
+    const bool show_shot = shot && !turn.identity() && shot->width > 0;
+    // Where an input is now, and whether the model hides it.
+    // The drawing the page shows (a turned one, even a step behind the drag) or,
+    // unturned, one of the still's own view: its depth decides what hides what.
+    const bool shot_matches = shot && (show_shot || shot->turn == turn);
+    struct Live {
+      ImVec2 at;
+      bool hidden = false;
+      const art::Anchor* anchor = nullptr;  // with shot_matches: for covered_spans
+    };
+    auto live_of = [&](std::string_view path) -> std::optional<Live> {
+      if (!image || !path.starts_with("/input/")) return std::nullopt;
+      const auto key = component(path);
+      const art::Anchor* anchor = nullptr;
+      if (shot)
+        for (const auto& a : shot->anchors)
+          if (a.input == key) anchor = &a;
+      const bool hidden = anchor && anchor->hidden && shot_matches;
+      const art::Anchor* depth = shot_matches ? anchor : nullptr;
+      if (show_shot) {
+        if (!anchor) return std::nullopt;
+        return Live{{anchor->x, anchor->y + half_dy(path)}, hidden, depth};
+      }
+      if (auto sp = spot_of(path)) return Live{*sp, hidden, depth};
+      return std::nullopt;
+    };
+    if (image) {
+      // A soft light behind the picture keeps black controllers apart from the card.
+      const ImVec2 c{pic_x + pic_w * 0.5f, pic_y + pic_h * 0.5f};
+      for (int ring = 16; ring >= 1; --ring)
+        dl->AddCircleFilled(c, std::max(pic_w, pic_h) * 0.034f * float(ring), color::alpha(IM_COL32_WHITE, 0.0045f), 64);
+    }
+    if (SDL_Texture* texture = show_shot ? turned_texture(image, shot) : nullptr) {
+      // A turned model may reach past the picture: it stays on its side of the card.
+      const float out = stacked ? 0 : gutter * 0.5f;  // toward its rows, never the other controller
+      dl->PushClipRect({room0.x - (hand ? 0 : out), room0.y - head_h}, {room1.x + (hand ? out : 0), room1.y}, true);
+      draw_image(dl, ImTextureID(reinterpret_cast<uintptr_t>(texture)), {pic_x + shot->x0 * k, pic_y + shot->y0 * k},
+                 {pic_x + shot->x1 * k, pic_y + shot->y1 * k});
+      dl->PopClipRect();
+    } else if (SDL_Texture* still = controller_texture(image)) {
+      draw_image(dl, ImTextureID(reinterpret_cast<uintptr_t>(still)), {pic_x, pic_y}, {pic_x + pic_w, pic_y + pic_h});
+    }
+    draw_text(dl, fonts().semibold, kHeading,
+              {std::round(hand ? rows_x + rows_w - measure(fonts().semibold, kHeading, "Right").x : rows_x),
+               text_y(fonts().semibold, kHeading, at.y, s(24))},
+              color::text, hand ? "Right" : "Left");
+
+    // While the menu is being changed or pointed at, ring the buttons it uses
+    // (on the right controller too, where its row has no callout).
+    if (panel_open || lit_row == int(Quest::menu))
+      for (const auto& [h, path] : menu.at)
+        if (h == hand)
+          if (auto live = live_of(path)) {
+            const ImVec2 c{pic_x + live->at.x * k, pic_y + live->at.y * k};
+            dl->AddCircleFilled(c, s(13), color::alpha(color::positive, live->hidden ? 0.12f : 0.25f), 32);
+            dl->AddCircle(c, s(13), color::alpha(color::positive, live->hidden ? 0.5f : 1.f), 32, s(2.5f));
+          }
+    // Row columns, mirrored on the right: [label][input][mark] | [mark][input][label].
+    const float label_x = hand ? rows_x + rows_w - lw : rows_x;
+    const float drop_x = hand ? rows_x + mark_w + s(8) : rows_x + lw;
+    const float mark_x = hand ? rows_x + mark_w * 0.5f : rows_x + rows_w - mark_w * 0.5f;
+    const float edge = hand ? pic_x + pic_w + s(6) : pic_x - s(6);  // where callouts leave the picture
+    const float dw_in = dw - s(8);
+    for (size_t i = 0; i < rows.size(); ++i) {
+      const int q = rows[i].q;
+      ImGui::PushID(q);
+      const float ry = at.y + head_h + row_h * float(i);
+      const float cy = ry + row_h * 0.5f;
+      if (i) hline(dl, rows_x, rows_x + rows_w, ry, color::alpha(color::stroke, 0.6f));
+      ImGui::SetCursorScreenPos({rows_x, ry});
+      ImGui::SetNextItemAllowOverlap();
+      ImGui::InvisibleButton("##row", {rows_w, row_h});
+      if (ImGui::IsItemHovered()) controls_hover_ = hand * kQuestCount + q;
+      const bool lit_row_self = lit_row == hand * kQuestCount + q;
+      const bool lit = lit_row_self;
+      const bool dim = lit_row >= 0 && !lit;
+      const ImU32 lit_tone = color::accent;
+      const bool is_menu = q == int(Quest::menu);
+      const bool lost = !is_menu && e.host[hand][q] == 0;
+      // A missing thumbrest only changes a hand pose; it is not worth a warning.
+      const bool quiet = lost && !twin[hand][q] && q == int(Quest::thumbrest);
+      const bool warn = twin[hand][q] || (lost && !quiet);
+      const ImU32 tone = warn ? color::warning : is_menu ? color::positive : color::accent_text;
+      // The callout: across from the input at its height to the picture's edge,
+      // then to the row. Rows follow their spots' order, so lines never cross.
+      // A changing row glows. Where the model stands in front of an input (by the
+      // drawing's depth, live while it turns), its line goes on as faint dashes
+      // from the silhouette in; an input the model hides gets an open dot.
+      for (auto path : rows[i].paths) {
+        const auto live = live_of(path);
+        if (!live) continue;
+        // Only the changing row's own lines glow. Another row's line to a button
+        // the menu also uses stays as it is: it shows that row's binding, not the
+        // menu's; the menu's buttons get their ring instead.
+        const bool glow = lit_row_self;
+        const bool faint = lit_row >= 0 && !glow;
+        const ImVec2 a{pic_x + live->at.x * k, pic_y + live->at.y * k};
+        const float rest = faint ? 0.28f : 0.6f;
+        const ImU32 line = glow ? lit_tone : color::alpha(color::text2, live->hidden ? rest * 0.6f : rest);
+        const float t = glow ? s(2.4f) : std::max(1.f, s(1.2f));
+        const float end_x = mark_x + (hand ? -s(5) : s(5));
+        const float bend = hand ? std::max(edge, a.x) : std::min(edge, a.x);
+        const float foot = end_x + (hand ? -s(10) : s(10));
+        const ImVec2 pts[4] = {a, {bend, a.y}, {foot, cy}, {end_x, cy}};
+        const ImU32 behind = glow ? color::alpha(lit_tone, 0.45f) : color::alpha(color::text2, rest * 0.45f);
+        auto lerp = [](ImVec2 p, ImVec2 q, float u) { return ImVec2{p.x + (q.x - p.x) * u, p.y + (q.y - p.y) * u}; };
+        auto dashed = [&](ImVec2 from, ImVec2 to) {
+          const float len = std::hypot(to.x - from.x, to.y - from.y), dash = s(3), space = s(4);
+          for (float d0 = 0; d0 < len; d0 += dash + space)
+            dl->AddLine(lerp(from, to, d0 / len), lerp(from, to, std::min(len, d0 + dash) / len), behind, t);
+        };
+        for (int seg = 0; seg < 3; ++seg) {
+          const ImVec2 from = pts[seg], to = pts[seg + 1];
+          // The spans the model covers, from the drawing's depth; without a drawing
+          // of this view, a hidden input's line is covered as far as the picture.
+          std::vector<std::pair<float, float>> covered;
+          if (live->anchor)
+            covered = art::covered_spans(*shot, *live->anchor, (from.x - pic_x) / k, (from.y - pic_y) / k,
+                                         (to.x - pic_x) / k, (to.y - pic_y) / k);
+          else if (live->hidden && seg < 2)
+            covered = {{0.f, 1.f}};
+          float u = 0;
+          for (auto [c0, c1] : covered) {
+            if (c0 > u) {
+              if (glow) dl->AddLine(lerp(from, to, u), lerp(from, to, c0), color::alpha(lit_tone, 0.22f), t * 3.2f);
+              dl->AddLine(lerp(from, to, u), lerp(from, to, c0), line, t);
+            }
+            dashed(lerp(from, to, c0), lerp(from, to, c1));
+            u = c1;
+          }
+          if (u < 1) {
+            if (glow) dl->AddLine(lerp(from, to, u), to, color::alpha(lit_tone, 0.22f), t * 3.2f);
+            dl->AddLine(lerp(from, to, u), to, line, t);
+          }
+        }
+        if (glow) dl->AddCircleFilled(a, s(10), color::alpha(lit_tone, live->hidden ? 0.14f : 0.28f), 24);
+        dl->AddCircleFilled(a, s(5.5f), color::alpha(color::bg, live->hidden ? 0.6f : 0.9f), 20);
+        if (live->hidden)
+          dl->AddCircle(a, s(3.5f), glow ? lit_tone : color::alpha(IM_COL32_WHITE, faint ? 0.4f : 0.7f), 20, s(1.4f));
+        else
+          dl->AddCircleFilled(a, glow ? s(4.5f) : s(3.5f), glow ? lit_tone : color::alpha(IM_COL32_WHITE, faint ? 0.55f : 1.f), 20);
+      }
+      if (lit) dl->AddCircleFilled({mark_x, cy}, s(9), color::alpha(lit_tone, 0.25f), 20);
+      dl->AddCircleFilled({mark_x, cy}, s(5), lit ? lit_tone : warn || is_menu ? tone : color::alpha(color::text2, dim ? 0.45f : 0.8f), 16);
+
+      // The Quest input, and under it a warning only; the pill says the rest.
+      std::string sub = is_menu         ? std::string()
+                        : twin[hand][q] ? std::format("Shared with {}", quest_label(hand, twin[hand][q] - 1))
+                        : lost && !quiet ? std::string("No button for it here")
+                                         : std::string();
+      auto place = [&](ImFont* font, float size, std::string_view t, float y, ImU32 col) {
+        const float x = hand ? label_x + lw - measure(font, size, t).x : label_x;
+        draw_text(dl, font, size, {std::round(x), y}, col, t);
+      };
+      const auto label = quest_label(hand, q);
+      place(fonts().semibold, kBody, label, sub.empty() ? text_y(fonts().semibold, kBody, ry, row_h) : ry + s(7),
+            color::text);
+      if (!sub.empty()) place(fonts().regular, kLabel, sub, ry + s(28), color::warning);
+
+      ImGui::SetCursorScreenPos({drop_x, ry + (row_h - s(38)) * 0.5f});
+      if (is_menu) {
+        // The menu row's own list holds every way to open the menu.
+        const ImVec2 f = ImGui::GetCursorScreenPos();
+        ImGui::InvisibleButton("##menu-pill", {dw_in, s(38)});
+        const bool open = ImGui::IsPopupOpen("##menu-list");
+        const bool pill_hover = ImGui::IsItemHovered();
+        if (open || panel_open || ImGui::IsItemFocused()) controls_active_ = hand * kQuestCount + q;
+        if (ImGui::IsItemClicked()) ImGui::OpenPopup("##menu-list");
+        if (pill_hover && !open) tooltip(menu.label);
+        if ((options_.smoke_view == "controls-menu" || options_.smoke_view == "controls-pico-menu") && !base) {
+          static int frames = 0;
+          if (frames++ == 3) ImGui::OpenPopup("##menu-list");
+        }
+        if (options_.smoke_view == "controls-hold" && !base) {
+          static int frames = 0;
+          if (frames++ == 3) {
+            e.menu_mode = int(MenuMode::hold);
+            e.menu_input = host_index(p, "/input/b/click");
+            e.menu_hold_ms = 1000;
+            controls_menu_detail_ = 1;
+          }
+        }
+        // --smoke-view controls-shared: the menu on the left stick click alone,
+        // which Stick click also uses, for the shared-button note.
+        if (options_.smoke_view == "controls-shared" && !base) {
+          static int frames = 0;
+          if (frames++ == 3) {
+            e.menu_mode = int(MenuMode::button);
+            e.menu_input = host_index(p, "/input/thumbstick/click");
+          }
+        }
+        if (options_.smoke_view.starts_with("controls-chord") && !base) {
+          static int frames = 0;
+          if (frames++ == 3) {
+            e.menu_mode = int(MenuMode::chord);
+            e.menu_first = host_index(p, "/input/thumbstick/click");
+            e.menu_second = n_inputs + host_index(p, "/input/b/click");
+            if (options_.smoke_view == "controls-chord") controls_menu_detail_ = 2;
+          }
+        }
+        const bool automatic = mode == MenuMode::automatic;
+        const ImU32 bg = automatic ? color::alpha(color::positive, pill_hover || open ? 0.22f : 0.14f)
+                                   : (pill_hover || open ? color::surface_top : color::surface_hi);
+        dl->AddRectFilled(f, {f.x + dw_in, f.y + s(38)}, bg, s(19));
+        const auto shown = ellipsize(fonts().semibold, kSmall + 1, menu.label, dw_in - s(46));
+        const ImVec2 ls = measure(fonts().semibold, kSmall + 1, shown);
+        draw_text(dl, fonts().semibold, kSmall + 1,
+                  {std::round(f.x + std::max(s(15), (dw_in - ls.x) * 0.5f - s(6))),
+                   text_y(fonts().semibold, kSmall + 1, f.y, s(38))},
+                  automatic ? color::positive : mode == MenuMode::off ? color::text3 : color::text, shown);
+        draw_glyph(dl, icons::chevron_down, kLabel, {f.x + dw_in - s(20), f.y + s(19)},
+                   automatic ? color::positive : color::text2);
+        if (!locked) {
+          // The list: Automatic, single buttons, hold, two buttons, off.
+          ImGui::SetNextWindowPos({f.x, f.y + s(44)});
+          ImGui::SetNextWindowSize({std::max(dw_in, s(300)), 0});
+          if (begin_menu("##menu-list")) {
+            auto item = [&](const std::string& t, bool checked) {
+              const ImVec2 r = ImGui::GetCursorScreenPos();
+              const bool hit = menu_item(t.c_str());
+              if (checked)
+                draw_glyph(ImGui::GetWindowDrawList(), icons::check, kSmall,
+                           {r.x + ImGui::GetContentRegionAvail().x - s(18), r.y + s(19)}, color::accent_text);
+              return hit;
+            };
+            ControlsEdit automatic_edit = e;
+            automatic_edit.menu_mode = int(MenuMode::automatic);
+            if (item(std::format("Automatic ({})##auto", resolved_menu(automatic_edit).label), automatic))
+              e.menu_mode = int(MenuMode::automatic);
+            menu_section("ONE BUTTON");
+            ImGui::BeginChild("##buttons", {0, std::min(s(40) * float(2 * n_inputs), s(240))}, 0,
+                              ImGuiWindowFlags_NoBackground);
+            for (int c = 1; c <= 2 * n_inputs; ++c) {
+              const auto choice = menu_choice(p, c);
+              if (!is_button(choice)) continue;
+              ImGui::PushID(c);
+              if (item(choice_label(choice), mode == MenuMode::button && e.menu_input == c)) {
+                e.menu_mode = int(MenuMode::button);
+                e.menu_input = c;
+              }
+              ImGui::PopID();
+            }
+            ImGui::EndChild();
+            menu_section("MORE");
+            if (item("Hold a button...##hold", mode == MenuMode::hold)) {
+              e.menu_mode = int(MenuMode::hold);
+              controls_menu_detail_ = 1;
+            }
+            if (item("Press two buttons together...##chord", mode == MenuMode::chord)) {
+              e.menu_mode = int(MenuMode::chord);
+              controls_menu_detail_ = 2;
+            }
+            if (item("Off##off", mode == MenuMode::off)) e.menu_mode = int(MenuMode::off);
+            end_menu();
+          }
+          // The compact picker for hold and two buttons.
+          if (controls_menu_detail_) {
+            ImGui::OpenPopup("##menu-detail");
+            controls_menu_kind_ = controls_menu_detail_;
+            controls_menu_detail_ = 0;
+          }
+          // A popover under the Menu pill: the button (or the pair) and the hold
+          // time, applied as they change; a click outside closes it.
+          // Under the pill, from its left edge into the gutter: the row labels stay visible.
+          ImGui::SetNextWindowPos({f.x, f.y + s(44)});
+          ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {s(14), s(12)});
+          ImGui::PushStyleVar(ImGuiStyleVar_PopupRounding, s(12));
+          ImGui::PushStyleVar(ImGuiStyleVar_PopupBorderSize, s(1));
+          ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {s(8), 0});
+          ImGui::PushStyleColor(ImGuiCol_PopupBg, color::surface);
+          ImGui::PushStyleColor(ImGuiCol_Border, color::stroke_hi);
+          if (ImGui::BeginPopup("##menu-detail")) {
+            controls_menu_panel_ = true;
+            const bool two = controls_menu_kind_ == 2;
+            std::vector<std::string> names;
+            std::vector<int> ids;
+            for (int c = 1; c <= 2 * n_inputs; ++c)
+              if (is_button(menu_choice(p, c))) names.push_back(choice_label(menu_choice(p, c))), ids.push_back(c);
+            std::vector<const char*> items;
+            for (auto& nm : names) items.push_back(nm.c_str());
+            // As wide as the longest button name needs, within reason and the window;
+            // a name still too long is ellipsized inside its pill.
+            const ImGuiViewport* vp = ImGui::GetMainViewport();
+            const float room = vp->WorkPos.x + vp->WorkSize.x - f.x - s(14) * 2 - s(16);
+            const float fw = std::max(dw_in + s(12), std::min({dropdown_width("", items.data(), int(items.size())),
+                                                               s(320), room}));
+            text(fonts().semibold, kSmall, color::text, two ? "Press two buttons together" : "Hold a button", false);
+            gap(8);
+            auto pick = [&](const char* id, int* value) {
+              int at_i = int(std::ranges::find(ids, *value) - ids.begin());
+              if (at_i >= int(ids.size())) at_i = 0;
+              if (dropdown(id, "", items.data(), int(items.size()), &at_i, fw)) *value = ids[size_t(at_i)];
+            };
+            if (two) {
+              pick("first", &e.menu_first);
+              // The pair reads as one unit: [first] + [second].
+              const ImVec2 at_plus = ImGui::GetCursorScreenPos();
+              const float ph = s(24);
+              draw_glyph(ImGui::GetWindowDrawList(), icons::add, kBody, {at_plus.x + fw * 0.5f, at_plus.y + ph * 0.5f},
+                         color::text);
+              ImGui::Dummy({fw, ph});
+              pick("second", &e.menu_second);
+            } else {
+              pick("button", &e.menu_input);
+            }
+            gap(10);
+            text(fonts().regular, kLabel, color::text3, two ? "Hold both for" : "Hold for", false);
+            gap(4);
+            // Two buttons may open at once ("None"); a held button needs a hold (0 is just one button).
+            static constexpr int kChordHolds[] = {0, 500, 1000, 2000};
+            static const char* kChordHoldNames[] = {"None", "0.5 s", "1 s", "2 s"};
+            const int* holds = two ? kChordHolds : kChordHolds + 1;
+            const char** hold_names = two ? kChordHoldNames : kChordHoldNames + 1;
+            const int count = two ? 4 : 3;
+            int& ms = two ? e.menu_chord_ms : e.menu_hold_ms;
+            int hold = int(std::find(holds, holds + count, ms) - holds);
+            if (segmented("hold", hold_names, count, &hold, fw)) ms = holds[std::min(hold, count - 1)];
+            ImGui::EndPopup();
+          }
+          ImGui::PopStyleColor(2);
+          ImGui::PopStyleVar(4);
+        }
+        if (twin[hand][q])
+          notes[hand].push_back({std::format("Menu and {} share a button; {} sees those presses too.",
+                                             quest_label(hand, twin[hand][q] - 1),
+                                             game ? std::string(game->name) : std::string("the game"))});
+        if (mode == MenuMode::off) notes[hand].push_back({"Games get no menu button.", false});
+      } else {
+        // The inputs this row can take on this hand: a stick only on a stick or pad.
+        std::vector<std::string> names{"Not assigned"};
+        std::vector<int> ids{0};
+        for (int i = 0; i < n_inputs; ++i) {
+          const auto& in = p.inputs[size_t(i)];
+          if (!controls::on_hand(in, hand) || controls::is_axes(in.path) != (q == int(Quest::stick))) continue;
+          names.emplace_back(in.reserved ? "System (kept by the runtime)" : in.label);
+          ids.push_back(i + 1);
+        }
+        std::vector<const char*> items;
+        for (auto& nm : names) items.push_back(nm.c_str());
+        int pick = int(std::ranges::find(ids, e.host[hand][q]) - ids.begin());
+        if (pick >= int(ids.size())) pick = 0;
+        ImGui::BeginDisabled(locked);
+        if (dropdown("host", "", items.data(), int(items.size()), &pick, dw_in) &&
+            (pick == 0 || !p.inputs[size_t(ids[size_t(pick)] - 1)].reserved))
+          e.host[hand][q] = ids[size_t(pick)];
+        ImGui::PushID("host");
+        const bool list_open = ImGui::IsPopupOpen("##menu");
+        ImGui::PopID();
+        if (list_open || ImGui::IsItemFocused()) controls_active_ = hand * kQuestCount + q;
+        if (options_.smoke_view == "controls-edit" && hand == 0 && q == int(Quest::secondary))
+          controls_active_ = hand * kQuestCount + q;
+        ImGui::EndDisabled();
+      }
+      ImGui::PopID();
+    }
+    ImGui::PopID();
+    return std::max(rows_h, pic_y + pic_h - at.y);
+  };
+  auto draw_notes = [&](int hand, float x, float y) {
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    for (size_t i = 0; i < notes[hand].size(); ++i) {
+      // Icon and text share one 20 px line, both centred on it.
+      const float top = y + s(22) * float(i);
+      const auto& note = notes[hand][i];
+      draw_glyph(dl, note.warning ? icons::warning : icons::info, kSmall, {x + s(8), top + s(10)},
+                 note.warning ? color::warning : color::text2);
+      draw_text(dl, fonts().regular, kSmall, {x + s(24), text_y(fonts().regular, kSmall, top, s(20))}, color::text,
+                note.text);
+    }
+    return notes[hand].empty() ? 0.f : s(12) + s(22) * float(notes[hand].size());
+  };
+
+  if (!stacked) {
+    begin_card("controllers", w, {22, 20});
+    toolbar();
+    const ImVec2 at = ImGui::GetCursorScreenPos();
+    const float h = std::max(draw_hand(0, at), draw_hand(1, at));
+    const float nh = std::max(draw_notes(0, at.x, at.y + h + s(8)), draw_notes(1, at.x + half + mid, at.y + h + s(8)));
+    ImGui::SetCursorScreenPos(at);
+    ImGui::Dummy({inner, h + nh});
+    end_card();
+  } else {
+    for (int hand = 0; hand < 2; ++hand) {
+      if (hand) gap(16);
+      begin_card(hand ? "controller-right" : "controller-left", w, {22, 20});
+      if (!hand) toolbar();
+      const ImVec2 at = ImGui::GetCursorScreenPos();
+      const float h = draw_hand(hand, at);
+      const float nh = draw_notes(hand, at.x, at.y + h + s(8));
+      ImGui::SetCursorScreenPos(at);
+      ImGui::Dummy({inner, h + nh});
+      end_card();
+    }
   }
 }
 

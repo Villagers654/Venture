@@ -135,3 +135,31 @@ TEST_CASE("a same-named file in the mods folder replaces the installed expansion
   sync_obb_view(install, view, names, mods);
   CHECK(paths::read(view / "main.12.com.example.game.obb") == "original");
 }
+TEST_CASE("files a game creates in its OBB directory stay while uninstalled expansion files go") {
+  const auto root = fs::temp_directory_path() / ("venture-obb-own-" + random_account_key());
+  struct Cleanup { fs::path root; ~Cleanup() { remove_tree(root.parent_path(), root); } } cleanup{root};
+  const auto install = root / "games/com.example.game/12", view = root / "data/obb/com.example.game";
+  paths::atomic_write(install / "main.12.com.example.game.obb", "obb");
+  paths::atomic_write(install / "voices.pak", "asset");
+  const std::string names[]{"main.12.com.example.game.obb", "voices.pak"};
+  sync_obb_view(install, view, names);
+  // As on Android, the app writes its own data beside the OBB (CRIWARE's
+  // unpacked ACF/ACB banks); a backup's stale expansion of another version goes.
+  paths::atomic_write(view / "Freedom.acf0123", "bank");
+  paths::atomic_write(view / "cache/CommonSE.acb", "bank");
+  paths::atomic_write(view / "main.11.com.example.game.obb", "old version");
+  sync_obb_view(install, view, names);
+  CHECK(paths::read(view / "Freedom.acf0123") == "bank");
+  CHECK(paths::read(view / "cache/CommonSE.acb") == "bank");
+  CHECK_FALSE(fs::exists(view / "main.11.com.example.game.obb"));
+  CHECK(fs::exists(view / "voices.pak"));
+  // An update drops the asset and moves to a new expansion; the game's files stay.
+  fs::remove(install / "main.12.com.example.game.obb");
+  paths::atomic_write(install / "main.13.com.example.game.obb", "obb13");
+  const std::string updated[]{"main.13.com.example.game.obb"};
+  sync_obb_view(install, view, updated);
+  CHECK_FALSE(fs::exists(view / "voices.pak"));
+  CHECK_FALSE(fs::exists(view / "main.12.com.example.game.obb"));
+  CHECK(paths::read(view / "main.13.com.example.game.obb") == "obb13");
+  CHECK(paths::read(view / "Freedom.acf0123") == "bank");
+}

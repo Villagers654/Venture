@@ -123,7 +123,7 @@ TEST_CASE("libc A strtold binary128 exact rounding and Q0 return") {
   for (double d : {0., -0., 1., -1., 0.1, 1e300, 1e-300, std::numeric_limits<double>::denorm_min()})
     CHECK(std::bit_cast<std::uint64_t>(quad_to_double(double_to_quad(d))) == std::bit_cast<std::uint64_t>(d));
   std::uint32_t text[] = {'1', '2', '.', '5', 'x', 0};
-  std::uint32_t* tail;
+  std::uint32_t* tail = nullptr;
   f.invoke("wcstod", {h2g(text), h2g(&tail)});
   CHECK(f.real() == 12.5);
   CHECK(tail == text + 4);

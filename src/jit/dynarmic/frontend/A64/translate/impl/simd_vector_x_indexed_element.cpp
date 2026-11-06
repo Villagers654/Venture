@@ -222,8 +222,12 @@ bool TranslatorVisitor::FCMLA_elt(bool Q, Imm<2> size, Imm<1> L, Imm<1> M, Imm<4
 
     const size_t esize = 8U << size.ZeroExtend();
 
-    // TODO: We don't support the half-precision floating point variant yet.
-    ASSERT(esize != 16);
+    // Venture: the half-precision variant is not implemented, and guests do not use it:
+    // AT_HWCAP offers neither FPHP nor FCMA. Background translation reaches code the guest
+    // may never run, so it is UNDEFINED here instead of stopping the process.
+    if (esize == 16) {
+        return UnallocatedEncoding();
+    }
 
     const size_t index = [=] {
         if (size == 0b01) {

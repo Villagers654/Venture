@@ -3,8 +3,12 @@
 #include <ws2tcpip.h>
 #include <iphlpapi.h>
 #include <windows.h>
+#include "common/log.h"
 #include <algorithm>
 #include <cstring>
+#include <mutex>
+#include <set>
+#include <string>
 
 namespace venture::hle::libc::host {
 namespace {
@@ -99,7 +103,7 @@ int address_out(const sockaddr* in, int length, void* out, std::uint32_t* size) 
   if (!out) return 0;
   if (!size) return -err::efault;
   sockaddr_storage copy{};
-  if (length < 0 || length > sizeof(copy)) return -err::einval;
+  if (length < 0 || length > int(sizeof(copy))) return -err::einval;
   std::memcpy(&copy, in, length);
   copy.ss_family = in->sa_family == AF_INET6 ? 10 : in->sa_family;
   std::memcpy(out, &copy, std::min<std::uint32_t>(*size, length));
@@ -181,6 +185,47 @@ class SocketReadiness : public std::enable_shared_from_this<SocketReadiness> {
   }
   ~SocketReadiness() { close(); }
 };
+// Windows Firewall asks whether to allow a program the first time it accepts
+// inbound traffic on a non-loopback address (TCP listen, UDP bind), once per
+// executable path; on a locked desktop nobody answers and each prompt host keeps
+// a GPU context. Each such endpoint a guest opens is logged once per process,
+// to see which games do it and whether mapping them to loopback is safe.
+void note_inbound(SOCKET socket, const char* call) noexcept {
+  try {
+    sockaddr_storage a{};
+    int length = sizeof(a);
+    if (getsockname(socket, reinterpret_cast<sockaddr*>(&a), &length)) return;
+    int type = 0, type_length = sizeof(type);
+    getsockopt(socket, SOL_SOCKET, SO_TYPE, reinterpret_cast<char*>(&type), &type_length);
+    char text[INET6_ADDRSTRLEN]{};
+    unsigned port = 0;
+    if (a.ss_family == AF_INET) {
+      const auto& v4 = reinterpret_cast<const sockaddr_in&>(a);
+      if ((ntohl(v4.sin_addr.s_addr) >> 24) == 127) return;
+      inet_ntop(AF_INET, &v4.sin_addr, text, sizeof(text));
+      port = ntohs(v4.sin_port);
+    } else if (a.ss_family == AF_INET6) {
+      const auto& v6 = reinterpret_cast<const sockaddr_in6&>(a);
+      if (IN6_IS_ADDR_LOOPBACK(&v6.sin6_addr) || (IN6_IS_ADDR_V4MAPPED(&v6.sin6_addr) && v6.sin6_addr.s6_addr[12] == 127))
+        return;
+      inet_ntop(AF_INET6, &v6.sin6_addr, text, sizeof(text));
+      port = ntohs(v6.sin6_port);
+    } else {
+      return;
+    }
+    const char* protocol = type == SOCK_DGRAM ? "UDP" : type == SOCK_STREAM ? "TCP" : "socket";
+    auto key = std::string(protocol) + ' ' + text + ' ' + std::to_string(port);
+    static std::mutex mutex;
+    static std::set<std::string> seen;
+    {
+      std::lock_guard lock(mutex);
+      if (seen.size() >= 32 || !seen.insert(key).second) return;
+    }
+    log::warn("net", "Guest {} accepts inbound {} on {} port {} (not loopback): Windows Firewall asks once per "
+              "runtime path whether to allow it", call, protocol, text, port);
+  } catch (...) {
+  }
+}
 class Socket final : public SocketFile {
  public:
   explicit Socket(SOCKET s) : s_(s) {
@@ -209,7 +254,13 @@ class Socket final : public SocketFile {
     sockaddr_storage a{};
     int len;
     int r = address_in(p, n, a, len);
-    return r ? r : (::bind(s_, reinterpret_cast<sockaddr*>(&a), len) ? error() : 0);
+    if (r) return r;
+    if (::bind(s_, reinterpret_cast<sockaddr*>(&a), len)) return error();
+    // A UDP socket receives once bound; a TCP one only once it listens.
+    int type = 0, type_length = sizeof(type);
+    if (!getsockopt(s_, SOL_SOCKET, SO_TYPE, reinterpret_cast<char*>(&type), &type_length) && type == SOCK_DGRAM)
+      note_inbound(s_, "bind");
+    return 0;
   }
   int connect(const void* p, std::uint32_t n) override {
     sockaddr_storage a{};
@@ -220,7 +271,11 @@ class Socket final : public SocketFile {
     r = error();
     return r == -err::eagain ? -err::einprogress : r;
   }
-  int listen(int backlog) override { return ::listen(s_, backlog) ? error() : 0; }
+  int listen(int backlog) override {
+    if (::listen(s_, backlog)) return error();
+    note_inbound(s_, "listen");
+    return 0;
+  }
   std::shared_ptr<SocketFile> accept(void* p, std::uint32_t* size, int* e) override {
     sockaddr_storage a{};
     int n = sizeof(a);

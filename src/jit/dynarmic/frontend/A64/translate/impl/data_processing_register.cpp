@@ -85,11 +85,10 @@ bool TranslatorVisitor::REV(bool sf, bool opc_0, Reg Rn, Reg Rd) {
 }
 
 bool TranslatorVisitor::REV32_int(Reg Rn, Reg Rd) {
+    // Venture: each word byte-reversed in place is the doubleword byte-reversed, its
+    // words swapped (BSWAP and RORX instead of splitting, two BSWAPs and packing).
     const IR::U64 operand = ir.GetX(Rn);
-    const IR::U32 lo = ir.ByteReverseWord(ir.LeastSignificantWord(operand));
-    const IR::U32 hi = ir.ByteReverseWord(ir.MostSignificantWord(operand).result);
-    const IR::U64 result = ir.Pack2x32To1x64(lo, hi);
-    X(64, Rd, result);
+    X(64, Rd, ir.RotateRight(ir.ByteReverseDual(operand), ir.Imm8(32)));
     return true;
 }
 

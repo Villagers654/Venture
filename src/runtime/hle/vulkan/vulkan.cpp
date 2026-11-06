@@ -3,10 +3,13 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdlib>
 #include <cstring>
 #include <future>
 #include <thread>
 #include <exception>
+#include <format>
+#include <functional>
 #include <map>
 #include <mutex>
 #include <optional>
@@ -26,8 +29,10 @@
 #include "core/os_quit.h"
 #include "core/process.h"
 #include "core/signals.h"
+#include "core/startup_stack.h"
 #include "core/thread.h"
 #include "core/thread_runtime.h"
+#include "core/wait.h"
 #include "gfx/gpu_device.h"
 #include "gfx/pipeline_trace.h"
 #include "gfx/queue_sync.h"
@@ -38,7 +43,9 @@
 #include "sync_trace.h"
 #include "serialized_queues.h"
 #include "deferred_queue_submissions.h"
+#include "deferred_recording.h"
 #include "xr/vulkan_extensions.h"
+#include "xr/display_override.h"
 
 namespace venture::vulkan {
 std::optional<std::pair<std::uint32_t, std::uint32_t>> private_texture_queue(
@@ -175,6 +182,8 @@ struct Instance {
 struct Device {
   bool density_maps = false;
   bool fault_enabled = false, fault_reported = false;
+  // Vertex bindings a guest graphics command buffer starts with bound to VK_NULL_HANDLE.
+  std::uint32_t null_vertex_bindings = 0;
   bool guest_callbacks = false;
   VkInstance instance{};
   VkPhysicalDevice physical{};
@@ -188,6 +197,26 @@ std::recursive_mutex state_lock;
 std::map<VkInstance, Instance> instances;
 std::map<VkPhysicalDevice, VkInstance> physicals;
 std::map<VkDevice, Device> devices;
+// Bumped (under state_lock) whenever a device leaves `devices`, so a thread's
+// cached "this guest VkDevice exists" answer is never reused past its destroy.
+std::atomic<std::uint64_t> device_registry_epoch{1};
+// The last host vkCreateDevice failure for a guest device (0: none).
+std::atomic<int> guest_device_create_failure{0};
+// Whether a guest VkDevice handle names a device Venture created for the guest.
+// Every guest device is adopted into `devices` (create_device); anything else,
+// such as the handle a failed vkCreateDevice left behind, must never reach the
+// Vulkan loader, which aborts the process (0xC0000409) on an invalid device.
+bool known_guest_device(GuestAddr handle) {
+  thread_local GuestAddr known{};
+  thread_local std::uint64_t known_epoch{};
+  const auto epoch = device_registry_epoch.load(std::memory_order_acquire);
+  if (handle && handle == known && epoch == known_epoch) return true;
+  std::lock_guard lock(state_lock);
+  if (!handle || !devices.contains(g2h<VkDevice_T>(handle))) return false;
+  known = handle;
+  known_epoch = epoch;
+  return true;
+}
 std::map<VkQueue, QueueBinding> queues;
 struct QueueFacade {
   VkQueue native;
@@ -229,6 +258,7 @@ std::map<VkCommandBuffer, VkCommandPool> command_pools;
 // The inverse of command_pools: a pool reset finds its buffers without a scan.
 std::map<VkCommandPool, std::set<VkCommandBuffer>> pool_commands;
 std::map<VkCommandPool, VkQueueFlags> pool_flags;
+std::map<VkCommandPool, std::uint32_t> pool_null_vertex_bindings;
 std::map<VkCommandPool, std::pair<VkDevice, bool>> pool_callbacks;
 std::map<std::string, GuestAddr, std::less<>> thunks;
 PFN_vkGetInstanceProcAddr loader() { return gfx::gpu_device().get_instance_proc_addr; }
@@ -333,7 +363,8 @@ struct ResultObservation {
 };
 thread_local ResultObservation* ResultObservation::current = nullptr;
 PFN_vkVoidFunction observed_host_proc(Scope scope, GuestAddr handle, const char* name);
-void report_device_fault(Scope scope, GuestAddr handle) {
+void report_device_fault_info(VkDevice device);
+void report_device_fault(Scope scope, GuestAddr handle, const char* name) {
   VkDevice device{};
   {
     std::lock_guard lock(state_lock);
@@ -346,6 +377,15 @@ void report_device_fault(Scope scope, GuestAddr handle) {
     it->second.fault_reported = true;
   }
   report_breadcrumbs(device, scope == Scope::queue ? native_queue(g2h<VkQueue_T>(handle)) : VK_NULL_HANDLE);
+  report_device_fault_info(device);
+  // The loss is reported asynchronously to the call that observed it, but
+  // that call's guest frames, and every guest thread's, show which engine
+  // thread submitted or waited and what it was doing.
+  auto* thread = GuestThread::current();
+  signals::log_guest_call_frames(thread, std::format("{} returned VK_ERROR_DEVICE_LOST", name));
+  signals::try_log_guest_threads_raw("vulkan-device-lost", true);
+}
+void report_device_fault_info(VkDevice device) {
   { std::lock_guard lock(state_lock); if (!devices.at(device).fault_enabled) return; }
   auto query = reinterpret_cast<PFN_vkGetDeviceFaultInfoEXT>(
       host_proc(Scope::device, h2g(device), "vkGetDeviceFaultInfoEXT"));
@@ -373,6 +413,15 @@ void report_device_fault(Scope scope, GuestAddr handle) {
     const auto& a = addresses[i];
     log::warn("vulkan-fault", "kind={} address={:#x} precision={:#x}", int(a.addressType),
               a.reportedAddress, a.addressPrecision);
+    // 0xdeadbeef filling both halves of a 64-bit word reads as GPU address
+    // 0xbeefdeadbeef (48 bits): the GPU took its address from memory holding
+    // that fill, such as a descriptor or pointer that was never written.
+    constexpr std::uint64_t fill = 0xbeefdeadbeefull;
+    if (a.reportedAddress + a.addressPrecision >= fill && a.reportedAddress < fill + (std::uint64_t(1) << 24))
+      log::warn("vulkan-fault", "address {:#x} is {:#x} past 0xbeefdeadbeef, the 48-bit address of a 0xdeadbeef fill "
+                "pattern: the GPU likely used an address read from memory holding that fill, not one of the "
+                "device's ranges", a.reportedAddress, a.reportedAddress >= fill ? a.reportedAddress - fill : 0);
+    address_log_describe(a.reportedAddress, a.addressPrecision);
   }
   for (std::size_t i = 0; i < std::min<std::size_t>(counts.vendorInfoCount, vendors.size()); ++i) {
     const auto& v = vendors[i];
@@ -404,7 +453,7 @@ VkResult driver_result(const char* name, Scope scope, GuestAddr handle, A... arg
   }
   if (result == VK_ERROR_DEVICE_LOST) {
     try {
-      report_device_fault(scope, handle);
+      report_device_fault(scope, handle, name);
     } catch (const std::exception& e) {
       // Diagnostics must preserve the native failure even if allocating their
       // output arrays fails on an already distressed machine.
@@ -450,6 +499,11 @@ struct Signature<R(VKAPI_PTR*)(A...)> {
 };
 template <std::size_t I, class F>
 using Argument = std::tuple_element_t<I, typename Signature<F>::Args>;
+VkCommandPool command_pool_of(deferred::Key command_buffer) {
+  std::lock_guard lock(state_lock);
+  const auto it = command_pools.find(g2h<VkCommandBuffer_T>(command_buffer));
+  return it == command_pools.end() ? VK_NULL_HANDLE : it->second;
+}
 
 class Invocation {
  public:
@@ -572,6 +626,8 @@ class Invocation {
     constexpr auto name = Name.value;
     slot_ = Slot;
     if (fast_ && (error_ != VK_SUCCESS || !fast_function_)) return false;
+    // Calls a deferred recording takes or flushes run at the outer boundary.
+    if (fast_ && deferred::needs_slow_path<Name, F>(handle, args...)) return false;
     const auto phase = fast_ ? api_result_trace::Phase::vulkan_fast :
         pending_.active && pending_.slot == Slot && pending_.handle == handle ?
         api_result_trace::Phase::vulkan_delivery : api_result_trace::Phase::vulkan_slow;
@@ -614,18 +670,26 @@ class Invocation {
       if (pending.exception) {
         try { std::rethrow_exception(pending.exception); }
         catch (const std::bad_alloc&) { pending.result = VK_ERROR_OUT_OF_HOST_MEMORY; }
+        catch (const LayerFailure& e) { log::error("vulkan", "{}: {}", name, e.what()); pending.result = e.result; }
         catch (const std::exception& e) { log::error("vulkan", "{}: {}", name, e.what()); }
       }
       if (pending.native) {
         observation_.native_result = pending.result;
         observation_.native_function = name;
         if (pending.result == VK_ERROR_DEVICE_LOST) {
-          try { report_device_fault(scope, handle); }
+          try { report_device_fault(scope, handle, name); }
           catch (const std::exception& e) { log::warn("vulkan-fault", "Device fault query unavailable: {}", e.what()); }
           end_app_after_device_loss();
         }
       }
       fail<R>(name, pending.result, trace);
+      return true;
+    }
+    // The fast path needs a cached dispatch table, which only a known device has.
+    // vkDestroyDevice(VK_NULL_HANDLE) is a valid no-op.
+    if (scope == Scope::device && !(handle == 0 && std::string_view(name) == "vkDestroyDevice") &&
+        !known_guest_device(handle)) {
+      unknown_device<R>(name, handle, trace);
       return true;
     }
     try {
@@ -637,6 +701,7 @@ class Invocation {
         fail<R>(name, error_ != VK_SUCCESS ? error_ : VK_ERROR_EXTENSION_NOT_PRESENT, trace);
         return true;
       }
+      if (deferred::intercept<Name>(handle, command_pool_of, reinterpret_cast<F>(fp), args...)) return true;
       std::shared_ptr<std::recursive_mutex> queue_mutex;
       std::unique_lock<std::recursive_mutex> queue_lock;
       std::optional<gfx::DeviceQueueLock> device_lock;
@@ -660,6 +725,9 @@ class Invocation {
       }
     } catch (const std::bad_alloc&) {
       fail<R>(name, VK_ERROR_OUT_OF_HOST_MEMORY, trace);
+    } catch (const LayerFailure& e) {
+      log::error("vulkan", "{}: {}", name, e.what());
+      fail<R>(name, e.result, trace);
     } catch (const std::exception& e) {
       log::error("vulkan", "{}: {}", name, e.what());
       fail<R>(name, VK_ERROR_INITIALIZATION_FAILED, trace);
@@ -668,8 +736,47 @@ class Invocation {
   }
 
  private:
+  // A guest call on a VkDevice that does not exist (a game that goes on after its
+  // vkCreateDevice failed: AC Nexus called vkGetDeviceQueue after the host driver
+  // returned VK_ERROR_INITIALIZATION_FAILED, and the loader aborted the process).
+  // The app ends with an error the launcher shows; embedded fixtures, and an app
+  // already quitting, get a failed call that never reaches the driver.
+  template <class R, class Observer>
+  void unknown_device(const char* name, GuestAddr handle, Observer& trace) {
+    log::error("vulkan", "{} called on VkDevice {:#x}, which no vkCreateDevice created", name, handle);
+    if (auto* thread = GuestThread::current(); thread && terminal_guest_process_exit() && !os_quit::requested()) {
+      const int failure = guest_device_create_failure.load(std::memory_order_relaxed);
+      if (failure)
+        log::error("runtime", "The GPU driver could not create the game's Vulkan device (vkCreateDevice returned {}{}), "
+                   "so the game cannot render and was closed. Low GPU memory or too many apps using the GPU cause "
+                   "this: close other games and GPU-heavy apps, then try again.", failure,
+                   failure == VK_ERROR_INITIALIZATION_FAILED ? ", VK_ERROR_INITIALIZATION_FAILED" :
+                   failure == VK_ERROR_OUT_OF_DEVICE_MEMORY ? ", VK_ERROR_OUT_OF_DEVICE_MEMORY" : "");
+      else
+        log::error("runtime", "The game used a Vulkan device that does not exist ({}) and was closed.", name);
+      record_guest_process_failure(1);
+      exit_guest_process(1);
+    }
+    if constexpr (std::is_same_v<R, VkResult>) {
+      observation_.report(name, VK_ERROR_DEVICE_LOST);
+      ctx_.return_x(static_cast<std::uint64_t>(VK_ERROR_DEVICE_LOST));
+      trace.finish(VK_ERROR_DEVICE_LOST);
+    } else if constexpr (!std::is_void_v<R>) {
+      ctx_.return_x(0);
+    }
+  }
   template <class R, class Observer>
   void fail(const char* name, VkResult error, Observer& trace) {
+    if constexpr (std::is_void_v<R>) {
+      // The guest cannot see a failed internal allocation of a command without
+      // a result (RE4's texture uploads on an 8 GB card ended the game with
+      // SIGSYS): the command is left out and the game keeps running.
+      if (out_of_memory_result(error)) {
+        log::warn("vulkan", "{} skipped: out of memory ({}); the game continues without it", name,
+                  static_cast<int>(error));
+        return;
+      }
+    }
     if constexpr (std::is_same_v<R, VkResult>) observation_.report(name, error);
     else log::error("vulkan", "{} rejected ({})", name, static_cast<int>(error));
     if constexpr (std::is_same_v<R, VkResult>) {
@@ -872,6 +979,15 @@ VkResult create_instance_impl(const VkInstanceCreateInfo* info, const VkAllocati
   if (!native_xr_extensions(false, xr, required)) return VK_ERROR_INITIALIZATION_FAILED;
   for (const auto& name : required)
     if (std::ranges::find(names, std::string_view(name)) == names.end()) names.push_back(name.c_str());
+  // The desktop mirror window presents from the game's own device
+  // (xr/desktop_mirror.h); the guest still sees only emulated WSI.
+  const auto& mirror = venture::xr::mirror_instance_extensions();
+  const bool mirror_capable = !mirror.empty() && std::ranges::all_of(mirror, [](std::string_view name) {
+    return std::ranges::any_of(native_instance_extensions(), [&](const auto& e) { return name == e.extensionName; });
+  });
+  if (mirror_capable)
+    for (const char* name : mirror)
+      if (std::ranges::find(names, std::string_view(name)) == names.end()) names.push_back(name);
   auto copy = *info;
   // Host diagnostics also work for Vulkan 1.0 guests. Checkpoints require
   // properties2 even when verbose tracing is off. Keep the
@@ -892,6 +1008,7 @@ VkResult create_instance_impl(const VkInstanceCreateInfo* info, const VkAllocati
   if (!f) return VK_ERROR_INITIALIZATION_FAILED;
   auto r = f(&copy, alloc, out);
   if (r == VK_SUCCESS) {
+    if (mirror_capable) venture::xr::note_mirror_capable(*out);
     address_log_attach(*out);
     adopt_instance(*out, *info, alloc != nullptr);
     std::lock_guard lock(state_lock);
@@ -1020,6 +1137,8 @@ VkResult create_device_impl(VkPhysicalDevice physical, const VkDeviceCreateInfo*
     if (emulated_wsi_extension(guest)) continue;  // wsi.cpp, without the host
     if (std::string_view(guest) == VK_EXT_FRAGMENT_DENSITY_MAP_EXTENSION_NAME && emulated_density_maps(physical))
       continue;
+    if (std::string_view(guest) == VK_EXT_TEXTURE_COMPRESSION_ASTC_HDR_EXTENSION_NAME && !host_astc_hdr(physical))
+      continue;  // Decoded to FP16 (texture.cpp).
     auto* name = hardware_buffer_extension(guest) ? hardware_buffer_host_extension(guest)
                                                   : external_host_extension(guest);
     if (!name) continue;
@@ -1037,6 +1156,16 @@ VkResult create_device_impl(VkPhysicalDevice physical, const VkDeviceCreateInfo*
         return std::string_view(e.extensionName) == VK_EXT_PIPELINE_CREATION_FEEDBACK_EXTENSION_NAME;
       }) && unique_names.insert(VK_EXT_PIPELINE_CREATION_FEEDBACK_EXTENSION_NAME).second)
     names.push_back(VK_EXT_PIPELINE_CREATION_FEEDBACK_EXTENSION_NAME);
+  // The desktop mirror's swapchain (xr/desktop_mirror.h), on a mirror-capable instance.
+  const char* mirror_swapchain = venture::xr::mirror_device_extension();
+  const bool mirror_capable = !venture::xr::mirror_instance_extensions().empty() &&
+      venture::xr::mirror_capable([&] {
+        std::lock_guard lock(state_lock);
+        const auto it = physicals.find(physical);
+        return it != physicals.end() ? static_cast<const void*>(it->second) : nullptr;
+      }()) &&
+      std::ranges::any_of(host_extensions, [&](const auto& e) { return std::string_view(e.extensionName) == mirror_swapchain; });
+  if (mirror_capable && unique_names.insert(mirror_swapchain).second) names.push_back(mirror_swapchain);
   copy.enabledExtensionCount = static_cast<std::uint32_t>(names.size());
   copy.ppEnabledExtensionNames = names.data();
   VkPhysicalDeviceFeatures features{};
@@ -1049,6 +1178,7 @@ VkResult create_device_impl(VkPhysicalDevice physical, const VkDeviceCreateInfo*
   Chain chain;
   copy.pNext = chain.translate(info->pNext);
   if (chain.result() != VK_SUCCESS) return chain.result();
+  host_astc_hdr_features(physical, copy.pNext);
   if (emulated_density_maps(physical))
     for (auto** link = reinterpret_cast<VkBaseOutStructure**>(const_cast<void**>(&copy.pNext)); *link;) {
       if ((*link)->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_DENSITY_MAP_FEATURES_EXT)
@@ -1104,6 +1234,17 @@ VkResult create_device_impl(VkPhysicalDevice physical, const VkDeviceCreateInfo*
   family_query(physical, &family_count, nullptr);
   std::vector<VkQueueFamilyProperties> families(family_count);
   family_query(physical, &family_count, families.data());
+  // VENTURE_VULKAN_GRAPHICS_QUEUES=<n> (diagnostic): use at most n queues of
+  // each graphics family, as on AMD and RADV (one), so their shared-queue and
+  // private texture queue placement can be reproduced on other GPUs.
+  static const std::uint32_t graphics_queue_limit = [] {
+    const char* value = venture::environment::getenv("VENTURE_VULKAN_GRAPHICS_QUEUES");
+    const long n = value ? std::strtol(value, nullptr, 10) : 0;
+    return n > 0 ? static_cast<std::uint32_t>(n) : 0u;
+  }();
+  if (graphics_queue_limit)
+    for (auto& family : families)
+      if (family.queueFlags & VK_QUEUE_GRAPHICS_BIT) family.queueCount = std::min(family.queueCount, graphics_queue_limit);
   // Quest's Adreno offers three graphics queues and titles request them
   // without checking (HITMAN: 3 on family 0); RADV offers one. Create what the
   // host has; the extra guest queues share those host queues, whose
@@ -1333,6 +1474,44 @@ VkResult create_device_impl(VkPhysicalDevice physical, const VkDeviceCreateInfo*
         bool(enabled.robustBufferAccess), bool(robust2.robustBufferAccess2),
         bool(image_robust.robustImageAccess), bool(robust2.robustImageAccess2));
   }
+  // Unbound vertex bindings read zero, as on Quest. Without this, AMD's Windows
+  // driver fetches a binding the guest never bound through a 0xdeadbeef-poisoned
+  // descriptor and loses the device (issue 91/23). nullDescriptor costs nothing;
+  // the texture layer binds VK_NULL_HANDLE to each vertex binding when a guest
+  // graphics command buffer begins. VENTURE_VULKAN_NULL_DESCRIPTORS=0 opts out.
+  VkPhysicalDeviceRobustness2FeaturesEXT null_robust{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ROBUSTNESS_2_FEATURES_EXT};
+  std::uint32_t null_vertex_bindings = 0;
+  const auto* null_setting = venture::environment::getenv("VENTURE_VULKAN_NULL_DESCRIPTORS");
+  if (query_features && !(null_setting && std::string_view(null_setting) == "0")) {
+    auto has_extension = [&](const char* name) {
+      return std::ranges::any_of(host_extensions, [&](const auto& e) { return std::string_view(e.extensionName) == name; });
+    };
+    const char* robust_extension = has_extension(VK_EXT_ROBUSTNESS_2_EXTENSION_NAME) ? VK_EXT_ROBUSTNESS_2_EXTENSION_NAME
+        : has_extension(VK_KHR_ROBUSTNESS_2_EXTENSION_NAME) ? VK_KHR_ROBUSTNESS_2_EXTENSION_NAME : nullptr;
+    VkPhysicalDeviceRobustness2FeaturesEXT supported{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ROBUSTNESS_2_FEATURES_EXT};
+    if (robust_extension) {
+      VkPhysicalDeviceFeatures2 query{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, &supported};
+      query_features(physical, &query);
+    }
+    if (supported.nullDescriptor) {
+      VkPhysicalDeviceRobustness2FeaturesEXT* existing{};
+      for (auto* next = const_cast<VkBaseOutStructure*>(static_cast<const VkBaseOutStructure*>(copy.pNext)); next;
+           next = next->pNext)
+        if (next->sType == null_robust.sType) existing = reinterpret_cast<VkPhysicalDeviceRobustness2FeaturesEXT*>(next);
+      if (existing) existing->nullDescriptor = VK_TRUE;
+      else {
+        null_robust.nullDescriptor = VK_TRUE;
+        null_robust.pNext = const_cast<void*>(copy.pNext);
+        copy.pNext = &null_robust;
+      }
+      if (!unique_names.contains(VK_EXT_ROBUSTNESS_2_EXTENSION_NAME) &&
+          !unique_names.contains(VK_KHR_ROBUSTNESS_2_EXTENSION_NAME) && unique_names.insert(robust_extension).second)
+        names.push_back(robust_extension);
+      VkPhysicalDeviceProperties properties{};
+      host<PFN_vkGetPhysicalDeviceProperties>(physical, "vkGetPhysicalDeviceProperties")(physical, &properties);
+      null_vertex_bindings = std::min(properties.limits.maxVertexInputBindings, max_null_vertex_bindings);
+    }
+  }
   if (fault_enabled) {
     fault.deviceFaultVendorBinary = VK_FALSE;
     VkPhysicalDeviceFaultFeaturesEXT* existing{};
@@ -1360,6 +1539,12 @@ VkResult create_device_impl(VkPhysicalDevice physical, const VkDeviceCreateInfo*
   });
   if (checkpoints && unique_names.insert(VK_NV_DEVICE_DIAGNOSTIC_CHECKPOINTS_EXTENSION_NAME).second)
     names.push_back(VK_NV_DEVICE_DIAGNOSTIC_CHECKPOINTS_EXTENSION_NAME);
+  // Per-draw markers that need no barriers, wherever the driver offers them.
+  const bool buffer_marker = breadcrumbs_enabled() && std::ranges::any_of(host_extensions, [](const auto& e) {
+    return std::string_view(e.extensionName) == VK_AMD_BUFFER_MARKER_EXTENSION_NAME;
+  });
+  if (buffer_marker && unique_names.insert(VK_AMD_BUFFER_MARKER_EXTENSION_NAME).second)
+    names.push_back(VK_AMD_BUFFER_MARKER_EXTENSION_NAME);
   copy.enabledExtensionCount = static_cast<std::uint32_t>(names.size());
   copy.ppEnabledExtensionNames = names.data();
   const bool trace = venture::environment::getenv("VENTURE_TRACE_VULKAN") != nullptr;
@@ -1373,9 +1558,13 @@ VkResult create_device_impl(VkPhysicalDevice physical, const VkDeviceCreateInfo*
                 copy.pQueueCreateInfos[i].queueCount, copy.pQueueCreateInfos[i].flags);
     log::info("vulkan-device", "Host allocator {}", alloc != nullptr);
   }
+  // The desktop mirror presents on a queue of its own, which the guest never sees.
+  venture::xr::MirrorQueueRequest mirror_queue;
+  if (mirror_capable) mirror_queue.add(families, copy);
   auto r = f(physical, &copy, alloc, out);
   if (trace) log::info("vulkan-device", "Host vkCreateDevice returned {}", int(r));
   if (r != VK_SUCCESS) {
+    guest_device_create_failure.store(int(r), std::memory_order_relaxed);
     log::error("vulkan", "vkCreateDevice returned {}", int(r));
     for (std::uint32_t i = 0; i < copy.enabledExtensionCount; ++i)
       log::error("vulkan", "Requested device extension: {}", copy.ppEnabledExtensionNames[i]);
@@ -1383,8 +1572,16 @@ VkResult create_device_impl(VkPhysicalDevice physical, const VkDeviceCreateInfo*
       log::error("vulkan", "Requested device feature structure: {}", int(next->sType));
   }
   if (r == VK_SUCCESS) {
+    if (mirror_capable) {
+      venture::xr::note_mirror_capable(*out);
+      mirror_queue.created(*out);
+    }
     try {
       adopt_device(physical, *out, *info, alloc != nullptr, shared_queues);
+      {
+        std::lock_guard lock(state_lock);
+        devices[*out].null_vertex_bindings = null_vertex_bindings;
+      }
       install_queue_facades(*out, *info, shared_queues);
     } catch (...) {
       const auto created = *out;
@@ -1394,6 +1591,7 @@ VkResult create_device_impl(VkPhysicalDevice physical, const VkDeviceCreateInfo*
         std::erase_if(queues, [&](const auto& q) { return q.second.device == created; });
         std::erase_if(children, [&](const auto& child) { return child.second == created; });
         devices.erase(created);
+        device_registry_epoch.fetch_add(1, std::memory_order_release);
         invalidate_layer_procedures();
       }
       gfx::forget_device_queues(created);
@@ -1430,11 +1628,12 @@ VkResult create_device_impl(VkPhysicalDevice physical, const VkDeviceCreateInfo*
     const bool feedback = unique_names.contains(VK_EXT_PIPELINE_CREATION_FEEDBACK_EXTENSION_NAME) ||
         (properties.apiVersion >= VK_API_VERSION_1_3 && version >= VK_API_VERSION_1_3);
     auto gdpa = reinterpret_cast<PFN_vkGetDeviceProcAddr>(loader()(device_instance(*out), "vkGetDeviceProcAddr"));
-    gfx::register_pipeline_device(*out, gdpa, feedback, profile::PipelineSource::guest);
+    gfx::register_pipeline_device(*out, gdpa, feedback, profile::PipelineSource::guest,
+                                  gfx::async_pipeline_extensions_allowed(unique_names));
     if (trace) log::info("vulkan-device", "Guest device queue configured");
     prepare_texture_device(*out);
     if (trace) log::info("vulkan-device", "Guest device textures prepared");
-    if (breadcrumbs_enabled()) prepare_breadcrumb_device(*out, checkpoints);
+    if (breadcrumbs_enabled()) prepare_breadcrumb_device(*out, checkpoints, buffer_marker);
     log::info("vulkan", "Guest device: {} (vendor=0x{:04x}, device=0x{:04x})",
               properties.deviceName, properties.vendorID, properties.deviceID);
   }
@@ -1471,10 +1670,12 @@ void VKAPI_CALL destroy_device(VkDevice device, const VkAllocationCallbacks* all
   gfx::forget_device_queues(device);
   std::lock_guard lock(state_lock);
   devices.erase(device);
+  device_registry_epoch.fetch_add(1, std::memory_order_release);
   set_storage_without_format(device, false);
   std::erase_if(pool_callbacks, [&](const auto& pool) {
     if (pool.second.first != device) return false;
     pool_flags.erase(pool.first);
+    pool_null_vertex_bindings.erase(pool.first);
     return true;
   });
   invalidate_layer_procedures();
@@ -1526,8 +1727,13 @@ void VKAPI_CALL get_queue2(VkDevice device, const VkDeviceQueueInfo2* guest, VkQ
   if (out && *out) gfx::register_queue(device, *out);
 }
 VkResult VKAPI_CALL queue_submit(VkQueue queue, std::uint32_t count, const VkSubmitInfo* submits, VkFence fence) {
+  BinarySignalStorage filtered;
+  submits = filter_binary_signals(queue, count, submits, filtered);
   if (auto facade = queue_facade(queue))
     return facade->deferred->submit(facade->deferred_index, count, submits, fence);
+  // Facade work is noted when the dispatcher submits it here to its native
+  // queue, in that queue's execution order.
+  note_breadcrumb_submits(queue, count, submits);
   deferred_free_submitting(queue);
   auto r = texture_submit(queue, count, submits, fence, host<PFN_vkQueueSubmit>(queue, "vkQueueSubmit"));
   if (r == VK_SUCCESS) sync_fd_submitted(queue, count, submits);
@@ -1535,8 +1741,11 @@ VkResult VKAPI_CALL queue_submit(VkQueue queue, std::uint32_t count, const VkSub
   return r;
 }
 VkResult VKAPI_CALL queue_submit2(VkQueue queue, std::uint32_t count, const VkSubmitInfo2* submits, VkFence fence) {
+  BinarySignalStorage filtered;
+  submits = filter_binary_signals(queue, count, submits, filtered);
   if (auto facade = queue_facade(queue))
     return facade->deferred->submit2(facade->deferred_index, count, submits, fence);
+  note_breadcrumb_submits(queue, count, submits);
   auto fn = host<PFN_vkQueueSubmit2>(queue, "vkQueueSubmit2");
   if (!fn) fn = host<PFN_vkQueueSubmit2>(queue, "vkQueueSubmit2KHR");
   if (!fn) return VK_ERROR_EXTENSION_NOT_PRESENT;
@@ -1555,6 +1764,7 @@ VkResult VKAPI_CALL queue_wait_idle(VkQueue queue) {
 }
 VkResult VKAPI_CALL queue_bind_sparse(VkQueue queue, std::uint32_t count,
     const VkBindSparseInfo* binds, VkFence fence) {
+  note_binary_waits(queue, count, binds);
   if (auto facade = queue_facade(queue))
     return facade->deferred->submit_sparse(facade->deferred_index, count, binds, fence, queue_bind_sparse);
   texture_queue_uncertain(queue);
@@ -1678,6 +1888,9 @@ VkResult VKAPI_CALL create_pool(VkDevice device, const VkCommandPoolCreateInfo* 
   query(physical, &count, families.data());
   std::lock_guard lock(state_lock);
   pool_flags[*out] = families.at(info->queueFamilyIndex).queueFlags;
+  if (auto it = devices.find(device); it != devices.end() && it->second.null_vertex_bindings &&
+      (pool_flags[*out] & VK_QUEUE_GRAPHICS_BIT))
+    pool_null_vertex_bindings[*out] = it->second.null_vertex_bindings;
   pool_callbacks[*out] = {device, alloc != nullptr};
   lifetime_events[2].fetch_add(1, std::memory_order_relaxed);
   invalidate_layer_procedures();
@@ -1729,6 +1942,7 @@ void VKAPI_CALL destroy_pool(VkDevice device, VkCommandPool pool, const VkAlloca
   {
     std::lock_guard lock(state_lock);
     pool_flags.erase(pool);
+    pool_null_vertex_bindings.erase(pool);
     pool_callbacks.erase(pool);
     if (auto owner = pool_commands.find(pool); owner != pool_commands.end()) {
       for (auto command : owner->second) {
@@ -1987,6 +2201,9 @@ constexpr std::pair<Layer, std::string_view> jit_layer_functions[] = {
     {Layer::render_area, "vkCmdBindPipeline"}, {Layer::render_area, "vkCmdSetScissor"},
     {Layer::texture, "vkCmdBindPipeline"},     {Layer::texture, "vkCmdBindDescriptorSets"},
     {Layer::texture, "vkCmdPushConstants"},    {Layer::texture, "vkUpdateDescriptorSets"},
+    // Binding a background-created pipeline that is not ready creates it or
+    // waits for its worker: CPU work the game's own creation call did before.
+    {Layer::pipeline, "vkCmdBindPipeline"},
 };
 PFN_vkVoidFunction next_proc(Layer self, std::string_view name) {
   for (const auto& [layer, proc] : layer_chain)
@@ -2121,6 +2338,11 @@ VkPhysicalDevice shared_physical_device_in(VkInstance instance) {
   // Filtered to the shared GPU; more than one match is refused there.
   if (enumerate_physicals(instance, &count, &physical) != VK_SUCCESS || count != 1) return VK_NULL_HANDLE;
   return physical;
+}
+std::string physical_device_name(VkPhysicalDevice physical) {
+  VkPhysicalDeviceProperties properties{};
+  host<PFN_vkGetPhysicalDeviceProperties>(physical, "vkGetPhysicalDeviceProperties")(physical, &properties);
+  return properties.deviceName;
 }
 std::optional<QueueBinding> queue_binding(VkQueue queue) {
   std::lock_guard lock(state_lock);
@@ -2492,6 +2714,13 @@ std::uint32_t device_api_version(VkDevice device) {
   if (it == devices.end()) throw std::runtime_error("untracked Vulkan device");
   return it->second.version;
 }
+std::uint32_t command_null_vertex_bindings(VkCommandBuffer command) {
+  std::lock_guard lock(state_lock);
+  auto it = command_pools.find(command);
+  if (it == command_pools.end()) return 0;
+  auto bindings = pool_null_vertex_bindings.find(it->second);
+  return bindings == pool_null_vertex_bindings.end() ? 0 : bindings->second;
+}
 bool command_supports_compute(VkCommandBuffer command) {
   std::lock_guard lock(state_lock);
   auto it = command_pools.find(command);
@@ -2589,6 +2818,7 @@ VkResult VKAPI_CALL XrResolverScope::create_instance_callback(const VkInstanceCr
 VkResult VKAPI_CALL XrResolverScope::create_device_callback(VkPhysicalDevice physical,
     const VkDeviceCreateInfo* info, const VkAllocationCallbacks* alloc, VkDevice* out) {
   if (!current_ || !current_->device_create_) return VK_ERROR_INITIALIZATION_FAILED;
+  ++current_->device_calls_;
   try {
     return static_cast<VkResult>(GuestThread::adopt_current().call(
         current_->device_create_, {h2g(physical), h2g(info), h2g(alloc), h2g(out)}));

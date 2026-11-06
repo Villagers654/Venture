@@ -197,7 +197,7 @@ Image::Image(const std::filesystem::path& file, std::string guest_path, const Pl
   else if (placement && placement->required)
     throw std::runtime_error("android_dlopen_ext: the reserved address space is too small for " + soname_);
   else
-    map_start = AddressSpace::get().allocate(map_size, kProtNone, path_, alignment);
+    map_start = AddressSpace::get().allocate_preferred(AddressSpace::get().library_slot(soname_, map_size, alignment), map_size, kProtNone, path_, alignment);
   if (!map_start) throw std::bad_alloc();
   load_bias = map_start + (low % alignment) - low;
   try {

@@ -153,11 +153,23 @@ public:
     std::optional<u32> Position(const IR::Inst* inst) const noexcept;
     /// The first use of the value at or after the position, or no_use.
     u32 NextUse(const IR::Inst* value, u32 position) const noexcept;
+    /// Venture: the value is also used by user (an instruction that reads it in another's place).
+    void AddUse(const IR::Inst* value, const IR::Inst* user) noexcept;
+    /// Venture: a value that memory holds until the emitter says otherwise (a guest register
+    /// read): spilling it stores nothing and reloads read that memory.
+    struct Remat {
+        u32 offset;  // from ABI_JIT_PTR
+        bool word;   // a 32-bit value, reloaded zero-extended
+    };
+    void SetRematerializable(const IR::Inst* inst, Remat source) noexcept;
+    std::optional<Remat> Rematerializable(const IR::Inst* inst) const noexcept;
 private:
     // Instructions by position; each instruction carries its own position (Inst::emit_position), so lookups need no
     // hash map. An instruction is in the table only if insts[its position] is itself.
     std::vector<const IR::Inst*> insts;
     std::vector<boost::container::small_vector<u32, 4>> uses;
+    // By position: 0 for none, else the offset plus one, bit 31 set for words.
+    std::vector<u32> remat;
 };
 
 class RegAlloc final {
@@ -179,6 +191,9 @@ public:
     }
 
     ArgumentInfo GetArgumentInfo(const IR::Inst* inst) noexcept;
+    /// Venture: one value as an argument of the current instruction (as GetArgumentInfo
+    /// does for each of an instruction's own arguments).
+    Argument GetArgument(const IR::Value& value) noexcept;
     void RegisterPseudoOperation(const IR::Inst* inst) noexcept;
     inline bool IsValueLive(const IR::Inst* inst) const noexcept {
         return !!ValueLocation(inst);
@@ -221,9 +236,16 @@ public:
         arg.allocated = true;
         return HostLocToXmm(UseImpl(code, arg.value, xmm_order));
     }
+    /// A spilled value is read from its memory (Venture), any other from a GPR.
     inline OpArg UseOpArg(BlockOfCode& code, Argument& arg) noexcept {
+        if (const auto address = UseSpilled(code, arg))
+            return *address;
         return UseGpr(code, arg);
     }
+    /// Venture: the memory holding a spilled GPR value (its spill slot, or the
+    /// JitState slot it rematerializes from), read-locked for this instruction;
+    /// nullopt when the value is not spilled.
+    std::optional<Xbyak::Address> UseSpilled(BlockOfCode& code, Argument& arg) noexcept;
     inline void Use(BlockOfCode& code, Argument& arg, const HostLoc host_loc) noexcept {
         ASSERT(!arg.allocated);
         arg.allocated = true;
@@ -269,6 +291,12 @@ public:
         const std::optional<Argument::copyable_reference> arg2 = {},
         const std::optional<Argument::copyable_reference> arg3 = {}
     ) noexcept;
+
+    /// Venture: the memory a spilled value is reloaded from instead of its stack slot, if any.
+    std::optional<NextUseTable::Remat> SpillRematerialization(HostLoc loc) const noexcept;
+    /// Venture: call before the emitted code writes the memory at offset: values spilled
+    /// from it are copied to their stack slots, and later spills of its values store.
+    void EndRematerialization(BlockOfCode& code, u32 offset) noexcept;
 
     // TODO: Values in host flags
     void AllocStackSpace(BlockOfCode& code, const size_t stack_space) noexcept;
@@ -347,6 +375,10 @@ private:
 #endif
     const NextUseTable* next_uses = nullptr;
     u32 current_position = 0;
+    // Spill slots holding a rematerializable value, which was not stored (as NextUseTable::remat).
+    std::array<u32, SpillCount> spill_remat{};
+    // Offsets the block has written since: their values are no longer rematerializable.
+    boost::container::small_vector<u32, 8> remat_ended;
     std::optional<HostLoc> result_hint;
 };
 

@@ -3,6 +3,8 @@
 #include "core/diagnostic_trace.h"
 #include "common/environment.h"
 #include "core/thread_runtime.h"
+#include "core/thread.h"
+#include "cpu/cpu.h"
 #include "core/signals.h"
 #include "core/error.h"
 #include "core/profile.h"
@@ -110,6 +112,8 @@ struct Bucket {
   }
 };
 std::array<Bucket, 256> buckets;
+// A waiting guest thread installs its JIT hints (cpu/block_list.h) before it parks.
+const bool idle_work = [] { const auto* e = environment::getenv("VENTURE_JIT_PRETRANSLATE"); return !e || std::string_view(e) != "0"; }();
 Bucket& bucket(GuestAddr p) {
   // Fold every address byte into the key. Using only the low word bits puts
   // equal-offset futexes on every guest page into one locked waiter list.
@@ -158,6 +162,18 @@ int wait(GuestThread& thread, GuestAddr address, std::uint32_t expected, std::in
   if (w.event) w.event->timing.enqueue_ns = monotonic_ns();
   shutdown_trace::FutexScope wait_trace(thread, address, expected, sleeping);
   auto ready = [&] { return w.woken.load() || thread.interrupted.load() || thread.interrupt_epoch.load() != epoch; };
+  std::int64_t idled_ns = 0;
+  if (idle_work && thread.has_cpu() && GuestThread::current() == &thread) {
+    // Registered, so a wake still selects this waiter while it works unlocked.
+    // Cpu::idle is noexcept: the waiter must leave the bucket on every path.
+    constexpr std::int64_t margin = 1'500'000;
+    if (const auto now = monotonic_ns(); deadline < 0 || deadline - now > 2 * margin) {
+      lock.unlock();
+      thread.cpu().idle([&] { return ready() || (deadline >= 0 && monotonic_ns() > deadline - margin); });
+      lock.lock();
+      idled_ns = monotonic_ns() - now;
+    }
+  }
   const auto wait_begin = spin_ns > 0 && !sleeping ? monotonic_ns() : 0;
   if (wait_begin && spin_credit > 0 && (deadline < 0 || deadline > wait_begin)) {
     // The bucket keeps the waiter registered, so a wake still selects it; the
@@ -195,7 +211,7 @@ int wait(GuestThread& thread, GuestAddr address, std::uint32_t expected, std::in
   b.remove(w);
   lock.unlock();
   if (wait_begin)
-    spin_credit = w.woken.load() && monotonic_ns() - wait_begin <= spin_ns ? std::min(spin_credit + 2, 16)
+    spin_credit = w.woken.load() && monotonic_ns() - wait_begin + idled_ns <= spin_ns ? std::min(spin_credit + 2, 16)
                                                                             : std::max(spin_credit - 1, 0);
   if (w.woken.load()) return 0;
   if (wait_error && wait_error != -err::kETIMEDOUT) return wait_error;

@@ -16,6 +16,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <doctest/doctest.h>
+#include <format>
 #include <fstream>
 #include <thread>
 
@@ -533,9 +534,11 @@ TEST_CASE("library folders are saved, and the install dialog's ask setting "
   settings.libraries = {other, settings.games};
   settings.install_ask = false;
   settings.game_language = "zh-Hans-CN";
+  settings.interface_language = "pt_BR";
   settings.save(d.root);
   auto loaded = library::Settings::load(d.root);
   CHECK(loaded.game_language == "zh-Hans-CN");
+  CHECK(loaded.interface_language == "pt_BR");
   CHECK(loaded.libraries == std::vector<fs::path>{other});
   CHECK(loaded.roots() == std::vector<fs::path>{settings.games, other});
   CHECK_FALSE(loaded.install_ask);
@@ -548,6 +551,289 @@ TEST_CASE("library folders are saved, and the install dialog's ask setting "
   json.erase("steamAsk");
   paths::atomic_write(d.root / "settings.json", json.dump());
   CHECK(library::Settings::load(d.root).install_ask);
+}
+TEST_CASE("display settings save globally and per game, migrate unknown values and "
+          "give the runtime its environment") {
+  Directory d;
+  auto settings = library::Settings::defaults(d.root);
+  CHECK(settings.display == library::global_display_defaults());
+  CHECK(library::resolution_environment(settings.display) == "runtime");
+  CHECK(library::frame_rate_environment(settings.display) == "runtime");
+  settings.display.resolution = "percent";
+  settings.display.percent = 150;
+  settings.display.rate = "120";
+  auto game = library::game_display_defaults();
+  game.resolution = "custom";
+  game.width = 2064;
+  game.height = 2208;
+  settings.game_display["1"] = game;
+  settings.game_display["2"] = library::game_display_defaults();  // all "Use global setting"
+  settings.save(d.root);
+  auto json = paths::read_json(d.root / "settings.json");
+  CHECK(json["gameDisplay"].size() == 1);
+  auto loaded = library::Settings::load(d.root);
+  CHECK(loaded.display == settings.display);
+  REQUIRE(loaded.game_display.contains("1"));
+  CHECK(loaded.game_display["1"] == game);
+  CHECK_FALSE(loaded.game_display.contains("2"));
+
+  // A game's choice replaces the global one per setting; "Use global setting" keeps it.
+  auto effective = library::effective_display(loaded.display, &loaded.game_display["1"]);
+  CHECK(library::resolution_environment(effective) == "2064x2208");
+  CHECK(library::frame_rate_environment(effective) == "120");
+  CHECK(library::resolution_environment(library::effective_display(loaded.display, nullptr)) == "150%");
+  game = library::game_display_defaults();
+  game.resolution = "quest3";
+  game.rate = "custom";
+  game.custom_rate = 100;
+  effective = library::effective_display(loaded.display, &game);
+  CHECK(library::resolution_environment(effective) == "1680x1760");
+  CHECK(library::frame_rate_environment(effective) == "100");
+
+  // Values from older builds or edited by hand fall back to the default:
+  // the mockup's "Quest 3" frame rate, unknown presets, a custom size without one.
+  json["display"] = {{"resolution", "quest9"}, {"frameRate", "quest3"}, {"percent", 1234}};
+  json["gameDisplay"] = {{"1", {{"resolution", "custom"}, {"frameRate", "quest3"}}},
+                         {"2", {{"resolution", "go"}, {"frameRate", "72"}}}};
+  paths::atomic_write(d.root / "settings.json", json.dump());
+  loaded = library::Settings::load(d.root);
+  CHECK(loaded.display == library::global_display_defaults());
+  CHECK_FALSE(loaded.game_display.contains("1"));
+  REQUIRE(loaded.game_display.contains("2"));
+  CHECK(library::resolution_environment(loaded.game_display["2"]) == "1024x1024");
+  CHECK(library::frame_rate_environment(loaded.game_display["2"]) == "72");
+}
+TEST_CASE("the desktop mirror is on by default, opt out globally or per game") {
+  Directory d;
+  auto settings = library::Settings::defaults(d.root);
+  CHECK(settings.display.mirror == "cropped");
+  CHECK(library::mirror_environment(settings.display) == "cropped");
+  settings.display.mirror = "full";
+  auto off = library::game_display_defaults();
+  off.mirror = "off";
+  settings.game_display["1"] = off;
+  settings.game_display["2"] = library::game_display_defaults();
+  settings.save(d.root);
+  auto loaded = library::Settings::load(d.root);
+  CHECK(library::mirror_environment(loaded.display) == "full");
+  CHECK(library::mirror_environment(library::effective_display(loaded.display, &loaded.game_display["1"])) == "off");
+  CHECK_FALSE(loaded.game_display.contains("2"));
+  CHECK(library::mirror_environment(library::effective_display(loaded.display, nullptr)) == "full");
+  // Settings from before the mirror, and unknown values, keep the default.
+  auto json = paths::read_json(d.root / "settings.json");
+  json["display"] = {{"resolution", "runtime"}, {"mirror", "both"}};
+  json["gameDisplay"] = {{"1", {{"resolution", "go"}}}};
+  paths::atomic_write(d.root / "settings.json", json.dump());
+  loaded = library::Settings::load(d.root);
+  CHECK(loaded.display.mirror == "cropped");
+  CHECK(loaded.game_display["1"].mirror.empty());
+}
+TEST_CASE("the desktop mirror shows the left eye by default, the right globally or per game") {
+  Directory d;
+  auto settings = library::Settings::defaults(d.root);
+  CHECK(settings.display.mirror_eye == "left");
+  CHECK(library::mirror_eye_environment(settings.display) == "left");
+  CHECK(library::game_display_defaults().mirror_eye.empty());
+  settings.display.mirror_eye = "right";
+  auto left = library::game_display_defaults();
+  left.mirror_eye = "left";
+  settings.game_display["1"] = left;
+  settings.game_display["2"] = library::game_display_defaults();
+  settings.save(d.root);
+  auto json = paths::read_json(d.root / "settings.json");
+  CHECK(json["display"]["mirrorEye"] == "right");
+  auto loaded = library::Settings::load(d.root);
+  CHECK(loaded.display.mirror_eye == "right");
+  CHECK(library::mirror_eye_environment(library::effective_display(loaded.display, nullptr)) == "right");
+  CHECK(library::mirror_eye_environment(library::effective_display(loaded.display, &loaded.game_display["1"])) == "left");
+  CHECK_FALSE(loaded.game_display.contains("2"));
+  // A game following the global eye but with its own mirror mode.
+  auto full = library::game_display_defaults();
+  full.mirror = "full";
+  CHECK(library::mirror_eye_environment(library::effective_display(loaded.display, &full)) == "right");
+  // Settings from before the eye choice, and unknown values, keep the default.
+  json["display"] = {{"mirror", "full"}, {"mirrorEye", "both"}};
+  json["gameDisplay"] = {{"1", {{"mirror", "off"}}}};
+  paths::atomic_write(d.root / "settings.json", json.dump());
+  loaded = library::Settings::load(d.root);
+  CHECK(loaded.display.mirror == "full");
+  CHECK(loaded.display.mirror_eye == "left");
+  REQUIRE(loaded.game_display.contains("1"));
+  CHECK(loaded.game_display["1"].mirror_eye.empty());
+}
+TEST_CASE("the game's audio on the PC is off by default, on globally or per game") {
+  Directory d;
+  auto settings = library::Settings::defaults(d.root);
+  CHECK(settings.display.pc_audio == "off");
+  CHECK(library::pc_audio_environment(settings.display) == "off");
+  CHECK(library::game_display_defaults().pc_audio.empty());
+  settings.display.pc_audio = "on";
+  auto off = library::game_display_defaults();
+  off.pc_audio = "off";
+  settings.game_display["1"] = off;
+  settings.game_display["2"] = library::game_display_defaults();
+  settings.save(d.root);
+  auto json = paths::read_json(d.root / "settings.json");
+  CHECK(json["display"]["pcAudio"] == "on");
+  CHECK(json["gameDisplay"]["1"]["pcAudio"] == "off");
+  auto loaded = library::Settings::load(d.root);
+  CHECK(loaded.display.pc_audio == "on");
+  CHECK(library::pc_audio_environment(library::effective_display(loaded.display, nullptr)) == "on");
+  CHECK(library::pc_audio_environment(library::effective_display(loaded.display, &loaded.game_display["1"])) == "off");
+  CHECK_FALSE(loaded.game_display.contains("2"));
+  // A game following the global choice but with its own mirror.
+  auto full = library::game_display_defaults();
+  full.mirror = "full";
+  CHECK(library::pc_audio_environment(library::effective_display(loaded.display, &full)) == "on");
+  // Globally off, one game on.
+  loaded.display.pc_audio = "off";
+  auto on = library::game_display_defaults();
+  on.pc_audio = "on";
+  CHECK(library::pc_audio_environment(library::effective_display(loaded.display, &on)) == "on");
+  // Settings from before the choice, and unknown values, load as off.
+  json["display"] = {{"mirror", "full"}, {"mirrorEye", "right"}};
+  json["gameDisplay"] = {{"1", {{"mirror", "off"}}}, {"3", {{"pcAudio", "loud"}, {"mirror", "full"}}}};
+  paths::atomic_write(d.root / "settings.json", json.dump());
+  loaded = library::Settings::load(d.root);
+  CHECK(loaded.display.pc_audio == "off");
+  CHECK(loaded.display.mirror_eye == "right");
+  REQUIRE(loaded.game_display.contains("1"));
+  CHECK(loaded.game_display["1"].pc_audio.empty());
+  REQUIRE(loaded.game_display.contains("3"));
+  CHECK(loaded.game_display["3"].pc_audio.empty());
+  CHECK(library::pc_audio_environment(library::effective_display(loaded.display, &loaded.game_display["3"])) == "off");
+  json["display"] = {{"pcAudio", true}};
+  paths::atomic_write(d.root / "settings.json", json.dump());
+  CHECK(library::Settings::load(d.root).display.pc_audio == "off");
+}
+TEST_CASE("a game's texture compression follows the global one unless it picks its own") {
+  Directory d;
+  auto settings = library::Settings::defaults(d.root);
+  using Choice = std::pair<std::string, int>;
+  auto launched = [](const library::Settings& s, const std::string& id) {
+    const auto own = s.game_display.find(id);
+    return library::texture_compression_environment(s.texture_compression, s.texture_compression_threshold,
+                                                    own == s.game_display.end() ? nullptr : &own->second);
+  };
+  CHECK(settings.texture_compression == 0);
+  CHECK(launched(settings, "1") == Choice{"always", 0});
+  CHECK(library::game_display_defaults().texture_compression.empty());
+  CHECK(library::game_display_defaults().texture_compression_threshold == 0);
+  settings.texture_compression = 2;
+  auto own_auto = library::game_display_defaults();
+  own_auto.texture_compression = "auto";
+  own_auto.texture_compression_threshold = 75;
+  auto global_threshold = library::game_display_defaults();
+  global_threshold.texture_compression = "auto";
+  auto always = library::game_display_defaults();
+  always.texture_compression = "always";
+  settings.game_display["1"] = own_auto;
+  settings.game_display["2"] = global_threshold;
+  settings.game_display["3"] = always;
+  settings.game_display["4"] = library::game_display_defaults();
+  settings.save(d.root);
+  auto json = paths::read_json(d.root / "settings.json");
+  CHECK(json["textureCompression"] == 2);
+  CHECK_FALSE(json["display"].contains("textureCompression"));
+  CHECK(json["gameDisplay"]["1"]["textureCompression"] == "auto");
+  CHECK(json["gameDisplay"]["1"]["textureCompressionThreshold"] == 75);
+  CHECK_FALSE(json["gameDisplay"]["2"].contains("textureCompressionThreshold"));
+  auto loaded = library::Settings::load(d.root);
+  CHECK(loaded.game_display["1"] == own_auto);
+  CHECK(loaded.game_display["2"] == global_threshold);
+  CHECK(loaded.game_display["3"] == always);
+  CHECK_FALSE(loaded.game_display.contains("4"));
+  CHECK(launched(loaded, "1") == Choice{"auto", 75});
+  CHECK(launched(loaded, "2") == Choice{"auto", 50});
+  CHECK(launched(loaded, "3") == Choice{"always", 0});
+  CHECK(launched(loaded, "4") == Choice{"never", 0});
+  // A global Automatic gives its threshold to games following it.
+  loaded.texture_compression = 1;
+  loaded.texture_compression_threshold = 25;
+  CHECK(launched(loaded, "4") == Choice{"auto", 25});
+  CHECK(launched(loaded, "2") == Choice{"auto", 25});
+  // A game's threshold counts only with its own Automatic.
+  auto never = library::game_display_defaults();
+  never.texture_compression = "never";
+  never.texture_compression_threshold = 90;
+  loaded.game_display["5"] = never;
+  CHECK(launched(loaded, "5") == Choice{"never", 0});
+  // Settings from before the choice, and unknown values, follow the global setting.
+  json = paths::read_json(d.root / "settings.json");
+  json["display"] = {{"mirror", "full"}, {"textureCompression", "never"}};
+  json["gameDisplay"] = {{"1", {{"mirror", "off"}}},
+                         {"3", {{"textureCompression", "sometimes"}, {"textureCompressionThreshold", 99}, {"mirror", "full"}}},
+                         {"6", {{"textureCompression", 2}, {"textureCompressionThreshold", 5}}}};
+  paths::atomic_write(d.root / "settings.json", json.dump());
+  loaded = library::Settings::load(d.root);
+  CHECK(loaded.texture_compression == 2);
+  CHECK(loaded.display.texture_compression.empty());
+  CHECK(loaded.display.mirror == "full");
+  REQUIRE(loaded.game_display.contains("1"));
+  CHECK(loaded.game_display["1"].texture_compression.empty());
+  REQUIRE(loaded.game_display.contains("3"));
+  CHECK(loaded.game_display["3"].texture_compression.empty());
+  CHECK(loaded.game_display["3"].texture_compression_threshold == 0);
+  CHECK_FALSE(loaded.game_display.contains("6"));
+  CHECK(launched(loaded, "3") == Choice{"never", 0});
+}
+TEST_CASE("turning texture compression down from Always warns until the warning is acknowledged") {
+  Directory d;
+  auto settings = library::Settings::defaults(d.root);
+  CHECK_FALSE(settings.texture_compression_warned);
+  CHECK(settings.texture_compression_warns("always", "auto"));
+  CHECK(settings.texture_compression_warns("always", "never"));
+  CHECK_FALSE(settings.texture_compression_warns("always", "always"));
+  CHECK_FALSE(settings.texture_compression_warns("auto", "never"));
+  CHECK_FALSE(settings.texture_compression_warns("never", "always"));
+  // Not saved until acknowledged.
+  settings.save(d.root);
+  CHECK(paths::read_json(d.root / "settings.json")["textureCompressionWarned"] == false);
+  // "Change anyway" sets it; it survives a reload and covers every change.
+  settings.texture_compression_warned = true;
+  settings.save(d.root);
+  auto json = paths::read_json(d.root / "settings.json");
+  CHECK(json["textureCompressionWarned"] == true);
+  auto loaded = library::Settings::load(d.root);
+  CHECK(loaded.texture_compression_warned);
+  CHECK_FALSE(loaded.texture_compression_warns("always", "auto"));
+  CHECK_FALSE(loaded.texture_compression_warns("always", "never"));
+  // Settings from before the warning, and other values, load as not acknowledged.
+  json.erase("textureCompressionWarned");
+  paths::atomic_write(d.root / "settings.json", json.dump());
+  loaded = library::Settings::load(d.root);
+  CHECK_FALSE(loaded.texture_compression_warned);
+  CHECK(loaded.texture_compression_warns("always", "never"));
+  json["textureCompressionWarned"] = "yes";
+  paths::atomic_write(d.root / "settings.json", json.dump());
+  CHECK_FALSE(library::Settings::load(d.root).texture_compression_warned);
+}
+TEST_CASE("the runtime's recorded host display gives the percent size, clamped to its maximum") {
+  Directory d;
+  CHECK_FALSE(library::load_host_display(d.root));
+  paths::atomic_write(d.root / "host-display.json",
+                      R"({"runtime":"SteamVR/OpenXR","system":"Quest 3","recommended":[2016,2112],)"
+                      R"("max":[4032,4224],"rate":90,"rates":[72,80,90,120]})");
+  const auto host = library::load_host_display(d.root);
+  REQUIRE(host);
+  CHECK(host->runtime == "SteamVR/OpenXR");
+  CHECK(host->width == 2016);
+  CHECK(host->max_height == 4224);
+  CHECK(host->rate == doctest::Approx(90));
+  CHECK(host->rates == std::vector<double>{72, 80, 90, 120});
+  // Each side by the square root of the pixel-count percent.
+  CHECK(library::percent_size(*host, 100) == std::pair{2016, 2112});
+  CHECK(library::percent_size(*host, 50) == std::pair{1426, 1493});
+  CHECK(library::percent_size(*host, 400) == std::pair{4032, 4224});
+  auto small = *host;
+  small.max_width = 2400;
+  small.max_height = 0;  // unknown: only the width limits
+  CHECK(library::percent_size(small, 200) == std::pair{2400, 2514});
+  CHECK(library::fit_eye_size(8, 8, 0, 0) == std::pair{library::min_custom_side, library::min_custom_side});
+  paths::atomic_write(d.root / "host-display.json", R"({"recommended":[0,10]})");
+  CHECK_FALSE(library::load_host_display(d.root));
+  paths::atomic_write(d.root / "host-display.json", "not json");
+  CHECK_FALSE(library::load_host_display(d.root));
 }
 TEST_CASE("install locations list library folders first, then a new folder on "
           "each other drive") {
@@ -684,6 +970,9 @@ TEST_CASE("debug reports keep the last launch and leave out names, folders and t
   report.assign(std::istreambuf_iterator<char>(in), {});
   CHECK(report.find("last line of runtime-com.example.game.log") != std::string::npos);
   CHECK(report.find("last line of launcher.log") != std::string::npos);
+  // Their starts too, where the session's setup is.
+  CHECK(report.find("I [facts] Host runtime: Fixture XR in launcher.log") != std::string::npos);
+  CHECK(report.find(" KiB left out ...\n") != std::string::npos);
   // The runtime's facts survive the cut at the log's start.
   CHECK(report.find("=== Session facts ===\n     1.000  42 I [facts] Host runtime: Fixture XR in "
                     "runtime-com.example.game.log") != std::string::npos);
@@ -792,6 +1081,18 @@ TEST_CASE("a game that asked Meta for its user without a sign-in is recognised f
   CHECK_FALSE(library::needed_meta_sign_in(write("init-later-crash.log", played +
       "  900.0 1 I [xr] Frames submitted=60000 xrEndFrame_errors=0 submission_fps=72.00 runtime_period_hz=72.00\n"
       "  901.0 1003 E [libc] Fatal signal 11 (SIGSEGV), code 1 (SEGV_MAPERR), fault addr 0x0 in tid 1003\n")));
+  // Renders on, but ends polling for a user it never gets (Pinball FX, #94).
+  std::string polling = "  1.0 1 W [ovrplatform] initialization failed error=-20001\n"
+      "  20.0 1 I [xr] Frames submitted=2100 xrEndFrame_errors=0 submission_fps=89.71 runtime_period_hz=90.00\n";
+  for (int i = 0; i < 250; ++i)
+    polling += std::format("  {:.2f} 1 I [ovrplatform] ovr_GetLoggedInUserID caller=0x7f001234 "
+                           "identity_returned=false\n", 30.0 + i * 0.2);
+  CHECK(library::needed_meta_sign_in(write("init-polling.log", polling)));
+  std::string playing = polling;
+  for (int i = 0; i < 60; ++i)
+    playing += std::format("  {:.1f} 1 I [xr] Frames submitted={} xrEndFrame_errors=0 submission_fps=90.00 "
+                           "runtime_period_hz=90.00\n", 90.0 + i, 8000 + i * 90);
+  CHECK_FALSE(library::needed_meta_sign_in(write("init-polling-then-played.log", playing)));
   CHECK_FALSE(library::needed_meta_sign_in(dir / "missing.log"));
   const auto missing_line = std::string("  1.0 1 W [vfs] Missing expansion file: the game looked for "
                                         "patch.42.com.example.game.obb, which this install does not have\n");
@@ -812,7 +1113,138 @@ TEST_CASE("a game that asked Meta for its user without a sign-in is recognised f
       "  900.0 1 I [launch] Terminal guest process exit status=0\n")));
   CHECK_FALSE(library::needed_device_attestation(write("attest-none.log",
       "  1.0 1 I [launch] Process started\n")));
+  // Issue 92: Unity's graphics warning, answered by Venture, then the game quit.
+  const auto dialog = std::string("  15989.612 79632 W [dialog] Shown without presentation: Warning: Your device does "
+                                  "not match the hardware requirements of this application.\n"
+                                  "  15989.613 79632 W [dialog] Buttons: Continue, Abort; Venture answers \"Abort\"\n");
+  CHECK(library::game_dialog(write("dialog.log", "  15985.0 1 I [launch] Process started\n" + dialog +
+        "  15990.0 1 I [launch] Terminal guest process exit status=1\n")) ==
+        "Warning: Your device does not match the hardware requirements of this application.");
+  // A game that played on after a dialog, or showed none, was not closed by one.
+  CHECK(library::game_dialog(write("dialog-played.log", dialog +
+        "  15999.0 1 I [xr] Frames submitted=720 xrEndFrame_errors=0 submission_fps=72.00 runtime_period_hz=72.00\n"
+        "  16000.0 1 I [launch] Terminal guest process exit status=0\n")).empty());
+  CHECK(library::game_dialog(write("dialog-late.log", dialog +
+        "  16100.0 1 I [launch] Terminal guest process exit status=0\n")).empty());
+  CHECK(library::game_dialog(write("dialog-none.log", "  1.0 1 I [launch] Process started\n")).empty());
   fs::remove_all(dir);
+}
+
+TEST_CASE("a runtime that ends on a fatal signal reports the signal and its trap, not a later error line") {
+  // Issue 58: Unity's non-fatal HTTPS error was logged after the crash that ended the run.
+  const std::string ssl = "  5.9 1 E [Unity] javax.net.ssl.SSLHandshakeException: (handshake_failure) Received fatal alert\n";
+  const std::string trap = "  8.5 2 E [a32-abi] unsupported libmediandk.so!AMediaExtractor_new() -> unknown; "
+                           "descriptor missing; adapter required\n";
+  const std::string signal = "  8.5 2 E [libc] Fatal signal 31 (SIGSYS), code 1 (SYS_SECCOMP) in tid 1013, pid 1000 (game)\n"
+                             "  8.5 2 E [signal]     r0  f7fa7540  r1  04772de0\n";
+  auto failure = library::runtime_failure(ssl + trap + signal + ssl, 159);
+  CHECK(failure == "The runtime stopped unexpectedly (exit code 159). Last error: unsupported "
+                   "libmediandk.so!AMediaExtractor_new() -> unknown; descriptor missing; adapter required "
+                   "(Fatal signal 31 (SIGSYS), code 1 (SYS_SECCOMP) in tid 1013, pid 1000 (game))");
+  CHECK(library::runtime_failure(ssl + "  9.0 2 E [hle] unimplemented libfoo.so!bar called from x+0x1 (y+0x1)\n" +
+                                     signal, 159).find("Last error: unimplemented libfoo.so!bar") != std::string::npos);
+  // A plain crash names its signal; a trap logged before an earlier, handled signal is not the cause.
+  const std::string segv = "  9.0 3 E [libc] Fatal signal 11 (SIGSEGV), code 1 (SEGV_MAPERR), fault addr 0x0 in tid 1003\n";
+  CHECK(library::runtime_failure(ssl + segv + ssl, 139) ==
+        "The runtime stopped unexpectedly (exit code 139). Last error: Fatal signal 11 (SIGSEGV), code 1 "
+        "(SEGV_MAPERR), fault addr 0x0 in tid 1003");
+  CHECK(library::runtime_failure(trap + signal + segv, 139).ends_with("Last error: Fatal signal 11 (SIGSEGV), code 1 "
+                                                                       "(SEGV_MAPERR), fault addr 0x0 in tid 1003"));
+  // A guest crash handler that re-raises logs no libc line: the guest fault summary for the exit's signal names it.
+  const std::string unity = "  7.0 1 E [signal] guest tid 1000 signal 11 code 1 at PC 0x0, fault 0x0\n"
+                            "  7.0 1 E [CRASH] Cause: null pointer dereference\n"
+                            "  7.1 1 E [signal]   exidx unwind stopped: EXIDX_CANTUNWIND\n";
+  CHECK(library::runtime_failure(ssl + unity, 139).ends_with("Last error: guest tid 1000 signal 11 code 1 at PC 0x0, fault 0x0"));
+  CHECK(library::runtime_failure(ssl + unity, 1).ends_with("exidx unwind stopped: EXIDX_CANTUNWIND"));
+  // A re-raised SIGSYS keeps the unimplemented import that raised it; other signals do not take a trap as cause.
+  const std::string missing = "  6.0 1 E [hle] unimplemented libfoo.so!bar called from x+0x1 (y+0x1)\n";
+  const std::string sys = "  6.1 1 E [signal] guest tid 1000 signal 31 code 1 at PC 0x1618, fault 0x1614, "
+                          "terminated by the default action\n";
+  CHECK(library::runtime_failure(missing + sys + ssl, 159).ends_with(
+      "Last error: unimplemented libfoo.so!bar called from x+0x1 (y+0x1) (guest tid 1000 signal 31 code 1 at PC "
+      "0x1618, fault 0x1614, terminated by the default action)"));
+  CHECK(library::runtime_failure(missing + unity, 139).ends_with("Last error: guest tid 1000 signal 11 code 1 at PC 0x0, fault 0x0"));
+  // Without a fatal signal the last error line stays the context.
+  CHECK(library::runtime_failure(ssl, 1).ends_with("Last error: javax.net.ssl.SSLHandshakeException: "
+                                                   "(handshake_failure) Received fatal alert"));
+  // A game whose VR session was not created crashes later on the invalid
+  // handle (Batman: Arkham Shadow aborted in OVRPlugin); the session is the cause.
+  const std::string session = "  9.2 1 E [xr] The VR session could not be created: Oculus refused it "
+                              "(XR_ERROR_GRAPHICS_DEVICE_INVALID)\n";
+  const std::string abort = "  9.9 1 E [libc] Fatal signal 6 (SIGABRT), code -1 (SI_QUEUE) in tid 1001\n";
+  CHECK(library::runtime_failure(session + ssl + abort, 134) ==
+        "The VR session could not be created: Oculus refused it (XR_ERROR_GRAPHICS_DEVICE_INVALID). "
+        "The game stopped after that (exit code 134).");
+  CHECK(library::runtime_failure(session, -1073741819).ends_with("(exit code 0xC0000005)."));
+  // A session created after the failure supersedes it.
+  CHECK(library::runtime_failure(session + "  9.5 1 I [xr] Host xrCreateSession result=0\n" + abort, 134) ==
+        "The runtime stopped unexpectedly (exit code 134). Last error: Fatal signal 6 (SIGABRT), code -1 "
+        "(SI_QUEUE) in tid 1001");
+}
+
+TEST_CASE("a game closed while hung reports that it stopped responding, not a stall snapshot line") {
+  // A user report (Max Mustard, 0.1.4.2): the game froze, the user closed it, and the
+  // launcher quoted the stall snapshot's last thread row as "Last error".
+  const std::string frames = "  667.3 1 I [xr] Frames submitted=2100 xrEndFrame_errors=0 submission_fps=83.36 "
+                             "runtime_period_hz=90.00\n";
+  const std::string header = "  672.8 9 E [startup-snapshot] No frame submitted for 5 s while the game has focus; "
+                             "capturing thread state\n";
+  const std::string rows = "  672.8 9 E [startup-snapshot] raw guest stacks reason=frame-stall registry_available=true "
+                           "dropped=0 state=last-saved\n"
+                           "  672.8 9 E [startup-snapshot] guest tid=1035 pc=0x7ef43b6a27d8 (host call "
+                           "libvulkan.so!vkWaitForFences) lr=0x7ef43d16038c sp=0x7ef4fc900a00\n"
+                           "  672.8 9 E [startup-snapshot] guest tid=1055 pc=0x0 lr=0x0 sp=0x7ef52fc8c000\n";
+  const std::string freeze = "  697.8 9 E [startup-snapshot] No frame submitted for 30 s while the game has focus; "
+                             "capturing thread state and a native dump\n";
+  const std::string unity = "  697.8 9 E [Unity] A scripted object has a different serialization layout when loading.\n";
+  const std::string quit = "  15672.8 9 I [launch] Shutdown requested; posting Android lifecycle teardown\n"
+                           "  15683.2 9 W [launch] Stopping app worker after shutdown request or teardown grace expired\n";
+  CHECK(library::runtime_failure(frames + unity + header + rows + quit, 124) ==
+        "The game stopped responding (no new frame for 5 s) and was closed (exit code 124).");
+  CHECK(library::runtime_failure(frames + header + rows + unity + freeze + rows, -1) ==
+        "The game stopped responding (no new frame for 30 s) and was closed (exit code 0xFFFFFFFF).");
+  // The snapshot can be longer than the log tail the launcher reads: its rows alone still mean a hang.
+  CHECK(library::runtime_failure(rows, 124) == "The game stopped responding and was closed (exit code 124).");
+  // Frames after a stall (a long level load): the run did not end hung, and snapshot rows are never the error.
+  CHECK(library::runtime_failure(header + rows + frames + unity, 1) ==
+        "The runtime stopped unexpectedly (exit code 1). Last error: A scripted object has a different "
+        "serialization layout when loading.");
+  CHECK(library::runtime_failure(header + rows + frames, 1) == "The runtime stopped unexpectedly (exit code 1).");
+  // A crash outranks the stall.
+  const std::string segv = "  700.0 3 E [libc] Fatal signal 11 (SIGSEGV), code 1 (SEGV_MAPERR), fault addr 0x0 in tid 1003\n";
+  CHECK(library::runtime_failure(header + rows + segv, 139).ends_with("Last error: Fatal signal 11 (SIGSEGV), code 1 "
+                                                                       "(SEGV_MAPERR), fault addr 0x0 in tid 1003"));
+}
+
+TEST_CASE("a HotSpot fatal error report names the native crash like Venture's crash reporter") {
+  // AC Nexus on AMD: a crash in the Vulkan loader on Unity's Java render thread
+  // went to HotSpot's handler, which exits 1; the launcher showed a missing
+  // library logged earlier as the reason.
+  const std::string windows =
+      "#\n# A fatal error has been detected by the Java Runtime Environment:\n#\n"
+      "#  EXCEPTION_ACCESS_VIOLATION (0xc0000005) at pc=0x00007ff890c486d0, pid=16840, tid=32948\r\n#\n"
+      "# JRE version: OpenJDK Runtime Environment Temurin-21.0.12.1+1 (21.0.12.1+1)\n"
+      "# Problematic frame:\n# C  [vulkan-1.dll+0x486d0]\n#\n"
+      "---------------  T H R E A D  ---------------\n\n"
+      "Current thread (0x00000264a1392dc0):  JavaThread \"UnityMain\"        [_thread_in_native, id=32948]\n";
+  CHECK(venture::hotspot_fatal_summary(windows) ==
+        "Host exception 0xc0000005 at vulkan-1.dll+0x486d0 (Java thread UnityMain)");
+  const std::string linux_report =
+      "# A fatal error has been detected by the Java Runtime Environment:\n"
+      "#  SIGSEGV (0xb) at pc=0x00007f3c2a3b4000, pid=4242, tid=4250\n"
+      "# Problematic frame:\n# C  [libvulkan.so.1+0x2a3b4]  vkQueueSubmit+0x14\n"
+      "Current thread (0x00007f3c00001000):  VMThread \"VM Thread\" [stack: 0x1,0x2] [id=4250]\n";
+  CHECK(venture::hotspot_fatal_summary(linux_report) ==
+        "Host exception 0xb at libvulkan.so.1+0x2a3b4 (vkQueueSubmit+0x14) (VMThread \"VM Thread\")");
+  CHECK(venture::hotspot_fatal_summary(
+            "# A fatal error has been detected by the Java Runtime Environment:\n"
+            "#  Internal Error (g1PageBasedVirtualSpace.cpp:42), pid=1, tid=2\n") ==
+        "Java runtime fatal error: Internal Error (g1PageBasedVirtualSpace.cpp:42), pid=1, tid=2");
+  CHECK(venture::hotspot_fatal_summary(
+            "#\n# There is insufficient memory for the Java Runtime Environment to continue.\n"
+            "# Native memory allocation (mmap) failed to map 65536 bytes.\n") ==
+        "Java runtime fatal error: There is insufficient memory for the Java Runtime Environment to continue.");
+  CHECK(venture::hotspot_fatal_summary("  1.0 1 E [linker] library not found: libMemoryPolling.so\n").empty());
 }
 
 TEST_CASE("updates pick this platform's release file and its checksum") {

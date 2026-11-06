@@ -57,7 +57,8 @@ hle::Handler wrap() {
 }
 // How a generated GL command interacts with ASTC fallback framebuffer checks,
 // chosen per command by gl_thunks.py so other commands pay nothing per call.
-enum class GlCheck : std::uint8_t { none, framebuffer_change, draw, read, blit, buffers };
+// A clear is a draw that samples no texture.
+enum class GlCheck : std::uint8_t { none, framebuffer_change, draw, read, blit, buffers, clear };
 bool validate_gl_call(GlCheck check);
 template <class Signature, GlCheck Check = GlCheck::none>
 hle::Handler dynamic_thunk() {

@@ -19,6 +19,7 @@
 #include <vector>
 
 #include "common/container/unordered_map.h"
+#include <boost/unordered/unordered_node_map.hpp>
 #include "common/container/unordered_set.h"
 #include <boost/container/stable_vector.hpp>
 #include <boost/container/small_vector.hpp>
@@ -44,6 +45,7 @@ namespace Dynarmic::Backend::X64 {
 
 class A64EmitX64;
 class BlockOfCode;
+class PortableCapture;
 
 using A64FullVectorWidth = std::integral_constant<size_t, 128>;
 
@@ -57,6 +59,12 @@ template<typename T>
 using HalfVectorArray = std::array<T, A64FullVectorWidth::value / mcl::bitsizeof<T> / 2>;
 
 using SharedLabel = Xbyak::Label*;
+/// Venture: the index of an access addressed as [base + reg*scale].
+struct FoldedIndex {
+    Xbyak::Reg64 reg;
+    int scale;
+};
+
 struct EmitContext {
     EmitContext(RegAlloc& reg_alloc, IR::Block& block, boost::container::stable_vector<Xbyak::Label>& shared_labels);
     virtual ~EmitContext();
@@ -71,6 +79,22 @@ struct EmitContext {
     /// access: the add is not emitted and the access uses [base + imm32].
     [[nodiscard]] inline bool IsFoldedAddress(const IR::Inst* inst) const noexcept {
         return std::find(folded_addresses.begin(), folded_addresses.end(), inst) != folded_addresses.end();
+    }
+    /// Venture: Add64(base, index) addresses whose only user is an identity-fastmem
+    /// access: the add aliases base and the access uses [base + index*scale] (an
+    /// index that is a LogicalShiftLeft64 by 1-3 is a scaled index, aliased like IsScaledIndex).
+    struct IndexedAddress {
+        const IR::Inst* add;
+        const IR::Inst* access;
+        size_t index_arg;  // the add's index operand
+        u8 shift;          // log2 of the scale
+    };
+    [[nodiscard]] inline const IndexedAddress* FindIndexedAddress(const IR::Inst* add) const noexcept {
+        const auto it = std::find_if(indexed_addresses.begin(), indexed_addresses.end(), [&](const auto& p) { return p.add == add; });
+        return it == indexed_addresses.end() ? nullptr : &*it;
+    }
+    [[nodiscard]] inline bool IsIndexedAddress(const IR::Inst* inst) const noexcept {
+        return FindIndexedAddress(inst) != nullptr;
     }
     /// Venture: a lane 1-3 VectorGetElement32 that left its source vector in
     /// place (its value aliases the source); its only user reads the lane.
@@ -88,6 +112,7 @@ struct EmitContext {
     /// emitted after the block in the hot region, never in the cold region.
     std::vector<std::function<void()>> framed_deferred_emits;
     boost::container::small_vector<const IR::Inst*, 16> folded_addresses;
+    boost::container::small_vector<IndexedAddress, 16> indexed_addresses;
     boost::container::small_vector<const IR::Inst*, 8> lane_aliases;
     boost::container::small_vector<const IR::Inst*, 8> scaled_indices;
     /// Set by the A64 emit loop for the ConditionalSelectFlags* being emitted
@@ -272,7 +297,14 @@ public:
         return !fallback_request || (fallback_request->kind == kind && fallback_request->key == FallbackKey(key));
     }
     ::Common::unordered_map<IR::LocationDescriptor, BlockDescriptor> block_descriptors;
-    ::Common::unordered_map<IR::LocationDescriptor, PatchInformation> patch_information;
+    // Venture: nodes, not a flat table. A JIT's link targets reach hundreds of thousands
+    // (one ~200-byte entry each), and growing a flat table moved them all within one
+    // compile: tens of milliseconds on the guest thread.
+    boost::unordered_node_map<IR::LocationDescriptor, PatchInformation, std::hash<IR::LocationDescriptor>> patch_information;
+    /// Venture: set while a block is emitted for capture as a portable block.
+    PortableCapture* active_capture = nullptr;
+    void RecordLinkSite(u8 type, const IR::LocationDescriptor& target);
+    void RecordFastmemSite(u64 location, u64 resume, u64 callback, const std::tuple<IR::LocationDescriptor, unsigned>& marker, bool recompile);
 
     // We need materialized protected members
     friend class A64EmitX64;

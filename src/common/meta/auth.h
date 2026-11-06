@@ -15,6 +15,9 @@ bool auth_navigation_allowed(std::string_view url);
 // the page itself stays on Meta domains.
 bool auth_frame_allowed(std::string_view url);
 bool is_callback(std::string_view url);
+// The oculus:// address in pasted text, such as a whole browser console message
+// ("Prevented navigation to “oculus://…”"); empty when there is none.
+std::string find_callback(std::string_view text);
 // Returns the opaque blob only after scheme, challenge and size validation.
 std::string validate_callback(std::string_view callback,
                               std::string_view challenge);
@@ -24,6 +27,8 @@ class Auth {
 public:
   std::string begin(std::stop_token stop = {});
   Session complete(std::string_view callback, std::stop_token stop = {});
+  // Whether callback answers this sign-in (not an earlier one), before Meta is asked.
+  bool accepts(std::string_view callback) const;
 
 private:
   std::string challenge_;

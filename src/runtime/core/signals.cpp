@@ -105,7 +105,7 @@ void log_registers(const Frame& frame) {
   std::string line;
   const auto add = [&](std::string_view name, std::uint64_t value, int digits) {
     line += std::format("  {:<4}{:0{}x}", name, value, digits);
-    if (line.size() > 4 * (6 + digits) - 1) { report("  {}", line); line.clear(); }
+    if (line.size() > std::size_t(4 * (6 + digits) - 1)) { report("  {}", line); line.clear(); }
   };
   if (frame.isa == GuestIsa::a32) {
     constexpr const char* names[] = {"r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7", "r8", "r9", "r10", "r11", "ip", "sp", "lr", "pc"};
@@ -228,8 +228,14 @@ void log_backtrace(Frame frame) {
   for (int i = 0; i < 48; ++i) {
     DlInfo symbol;
     Linker::get().try_address_info(pc, &symbol);
-    report("  #{:02} {:#x} {}+{:#x} ({}+{:#x})", i, pc, symbol.path, pc - symbol.base, symbol.symbol,
-           pc - (symbol.symbol_address ? symbol.symbol_address : symbol.base));
+    // A fault inside a host implementation stops at its thunk, which no ELF
+    // describes: name the host call (strncpy reading a null source, issue 78).
+    const auto* host = symbol.path.empty() ? hle::function_at(pc) : nullptr;
+    if (host)
+      report("  #{:02} {:#x} host call {}!{}", i, pc, host->library, host->name);
+    else
+      report("  #{:02} {:#x} {}+{:#x} ({}+{:#x})", i, pc, symbol.path, pc - symbol.base, symbol.symbol,
+             pc - (symbol.symbol_address ? symbol.symbol_address : symbol.base));
     if (frame.isa == GuestIsa::a32) {
       std::int32_t count = 0;
       auto table = Linker::get().try_find_exidx(pc, &count);
@@ -250,8 +256,14 @@ void log_backtrace(Frame frame) {
   }
 }
 void fault_summary(GuestThread& thread, const Info& info, std::string_view outcome = {}) {
-  log::error("signal", "guest tid {} signal {} code {} at PC {:#x}, fault {:#x}{}",
-             thread.tid(), info.signo, info.code, thread.cpu().pc(), info.fault_address, outcome);
+  // A SIGSYS raised by a host call's thunk (an import with no implementation)
+  // names it, so the one line a report keeps says which function is missing.
+  std::string host;
+  if (info.signo == kSigSys)
+    if (const auto* call = hle::function_at(info.fault_address ? info.fault_address : thread.cpu().pc()))
+      host = std::format(" in host call {}!{}", call->library, call->name);
+  log::error("signal", "guest tid {} signal {} code {} at PC {:#x}, fault {:#x}{}{}",
+             thread.tid(), info.signo, info.code, thread.cpu().pc(), info.fault_address, host, outcome);
 }
 void trace_fault(GuestThread& thread, const Info& info) {
   pc_trace::freeze();
@@ -719,6 +731,42 @@ void write_host_fault_guest_frames(GuestThread* thread) noexcept {
     const auto frame = cpu_frame(thread->cpu());
     log_registers(frame);
     log_backtrace(frame);
+  } catch (...) {
+  }
+}
+void log_guest_call_frames(GuestThread* thread, std::string_view reason) noexcept {
+  try {
+    if (!thread || !thread->has_cpu()) return report("host call: {}", reason);
+    const auto frame = cpu_frame(thread->cpu());
+    report("guest tid {}: {}; guest registers and frames:", thread->tid(), reason);
+    log_registers(frame);
+    log_backtrace(frame);
+  } catch (...) {
+  }
+}
+void log_rejected_guest_call(GuestThread* thread, std::string_view reason, std::uint64_t value) noexcept {
+  try {
+    if (!thread || !thread->has_cpu()) return report("host call: {}", reason);
+    const auto frame = cpu_frame(thread->cpu());
+    report("guest tid {}: {}; guest registers and frames:", thread->tid(), reason);
+    log_registers(frame);
+    log_backtrace(frame);
+    if (frame.isa == GuestIsa::a64) {
+      // Callee-saved registers often still address the object the value came
+      // from; its neighbourhood tells a stale or overwritten field apart.
+      for (unsigned i = 0; i < 31; ++i) {
+        const auto at = frame.x[i] & 0x00ff'ffff'ffff'fff8ull;
+        std::uint64_t word = 0;
+        if (at < 0x40 || !platform::read_memory(at, &word, sizeof(word)) || word != value) continue;
+        report("  x{} {:#x} holds {:#x}; memory {:#x}..{:#x}:", i, frame.x[i], value, at - 0x40, at + 0x40);
+        for (auto row = at - 0x40; row < at + 0x40; row += 16) {
+          std::array<std::uint64_t, 2> words{};
+          if (!platform::read_memory(row, words.data(), sizeof(words))) { report("    {:016x} unreadable", row); continue; }
+          report("    {:016x} {:016x} {:016x}", row, words[0], words[1]);
+        }
+      }
+    }
+    log_fault_memory(frame);
   } catch (...) {
   }
 }

@@ -3,7 +3,10 @@
 // come from the production sources listed in CMakeLists.txt.
 #include "support.h"
 #include "hle/openxr/passthrough.h"
-#include "xr/steam_link.h"
+#include "hle/openxr/passthrough_report.h"
+#include "xr/passthrough_source.h"
+#include "xr/tracked_camera.h"
+#include "xr/clock.h"
 #include "xr/dev_dump.h"
 #include "xr/queue.h"
 #include "hle/vulkan/timing.h"
@@ -14,6 +17,29 @@
 #include <doctest/doctest.h>
 #include <chrono>
 #include <cstdio>
+#include <cstring>
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <dlfcn.h>
+#endif
+
+namespace {
+PFN_vkGetInstanceProcAddr load_vulkan() {
+#ifdef _WIN32
+  auto* library = LoadLibraryW(L"vulkan-1.dll");
+  return library ? reinterpret_cast<PFN_vkGetInstanceProcAddr>(
+      reinterpret_cast<void*>(GetProcAddress(library, "vkGetInstanceProcAddr"))) : nullptr;
+#else
+  auto* library = dlopen("libvulkan.so.1", RTLD_NOW | RTLD_LOCAL);
+  return library ? reinterpret_cast<PFN_vkGetInstanceProcAddr>(dlsym(library, "vkGetInstanceProcAddr")) : nullptr;
+#endif
+}
+}
+PFN_vkGetInstanceProcAddr vkGetInstanceProcAddr = load_vulkan();
+#define VENTURE_PASSTHROUGH_DEFINE(name) PFN_##name name = nullptr;
+VENTURE_PASSTHROUGH_VULKAN(VENTURE_PASSTHROUGH_DEFINE)
+#undef VENTURE_PASSTHROUGH_DEFINE
 
 namespace venture {
 const DeviceIdentity& native_device_identity() { static const DeviceIdentity identity{}; return identity; }
@@ -41,11 +67,16 @@ namespace gfx {
 GpuDevice& gpu_device() {
   static GpuDevice gpu;
   static const bool initialized = [&] {
+    if (!vkGetInstanceProcAddr) throw std::runtime_error("No Vulkan loader for passthrough tests");
+    vkCreateInstance = reinterpret_cast<PFN_vkCreateInstance>(vkGetInstanceProcAddr(nullptr, "vkCreateInstance"));
     gpu.get_instance_proc_addr = vkGetInstanceProcAddr;
     VkApplicationInfo application{VK_STRUCTURE_TYPE_APPLICATION_INFO};
     application.apiVersion = VK_API_VERSION_1_1;
     VkInstanceCreateInfo instance{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO}; instance.pApplicationInfo = &application;
     if (vkCreateInstance(&instance, nullptr, &gpu.instance) != VK_SUCCESS) throw std::runtime_error("No Vulkan driver for passthrough tests");
+#define VENTURE_PASSTHROUGH_LOAD(name) name = reinterpret_cast<PFN_##name>(vkGetInstanceProcAddr(gpu.instance, #name));
+    VENTURE_PASSTHROUGH_VULKAN(VENTURE_PASSTHROUGH_LOAD)
+#undef VENTURE_PASSTHROUGH_LOAD
     std::uint32_t count{}; vkEnumeratePhysicalDevices(gpu.instance, &count, nullptr);
     if (!count) throw std::runtime_error("No Vulkan GPU for passthrough tests");
     std::vector<VkPhysicalDevice> physical(count); vkEnumeratePhysicalDevices(gpu.instance, &count, physical.data());
@@ -78,20 +109,67 @@ Session& session() { static Session value; return value; }
 void Session::finish_host_end() {}
 XrImages* xr_images() { return nullptr; }
 #endif
-bool steam_link_passthrough_configured() { return test::passthrough::configured && process_config().passthrough && process_config().isa() == GuestIsa::a64; }
-struct SteamLinkSource::Impl { std::uint64_t lease = 0; };
-SteamLinkSource::SteamLinkSource() : impl_(std::make_unique<Impl>()) {}
-SteamLinkSource::~SteamLinkSource() { test::passthrough::requested = false; }
-void SteamLinkSource::request(bool active) {
+bool passthrough_source_answers(unsigned) { return test::passthrough::configured; }
+struct PassthroughSource::Impl { std::uint64_t lease = 0; };
+PassthroughSource::PassthroughSource() : impl_(std::make_unique<Impl>()) {}
+PassthroughSource::~PassthroughSource() { test::passthrough::requested = false; }
+void PassthroughSource::request(bool active) {
   using namespace test::passthrough;
   if (active != requested) ++requests;
   requested = active;
   if (!active || !grant) impl_->lease = 0;
   else if (!impl_->lease) { static std::uint64_t serial = 0; impl_->lease = ++serial; }
 }
-bool SteamLinkSource::withdrawn() const { return !test::passthrough::requested && test::passthrough::withdrawal_complete; }
-std::uint64_t SteamLinkSource::permission() const { return test::passthrough::requested && test::passthrough::grant ? impl_->lease : 0; }
+bool PassthroughSource::withdrawn() const { return !test::passthrough::requested && test::passthrough::withdrawal_complete; }
+std::uint64_t PassthroughSource::permission() const { return test::passthrough::requested && test::passthrough::grant ? impl_->lease : 0; }
+// A stereo camera with a vertical 4x4 frame: left camera on top (red), right
+// below (green); 2 px focal length, principal point at each half's centre.
+class FakeCamera final : public TrackedCamera {
+ public:
+  std::vector<TrackedCameraView> regions;
+  FakeCamera() {
+    regions = {{0, 0, 4, 2, 2, 2, 2, 1, {{0, 0, 0, 1}, {-0.03f, 0, 0}}},
+               {0, 2, 4, 2, 2, 2, 2, 1, {{0, 0, 0, 1}, {0.03f, 0, 0}}}};
+  }
+  const std::vector<TrackedCameraView>& views() const override { return regions; }
+  std::uint32_t frame_width() const override { return 4; }
+  std::uint32_t frame_height() const override { return 4; }
+  bool latest(TrackedCameraFrame& frame) override {
+    if (frame.sequence == 1) return false;
+    frame.width = frame.height = 4;
+    frame.sequence = 1;
+    frame.head_valid = true;
+    frame.head = {{0, 0, 0, 1}, {0, 0, 0}};
+    frame.rgba.assign(64, 0);
+    for (unsigned i = 0; i < 16; ++i) {
+      frame.rgba[i * 4 + (i < 8 ? 0 : 1)] = 255;
+      frame.rgba[i * 4 + 3] = 255;
+    }
+    return true;
+  }
+  bool head_now(XrPosef& pose) override { pose = {{0, 0, 0, 1}, {0, 0, 0}}; return true; }
+  std::uint64_t stalled_ms() const override { return test::passthrough::camera_stalled ? 5000 : 0; }
+};
+bool tracked_camera_present() { return test::passthrough::camera_present; }
+std::unique_ptr<TrackedCamera> open_tracked_camera(unsigned) {
+  ++test::passthrough::camera_opens;
+  if (!test::passthrough::camera_streams) return nullptr;
+  return std::make_unique<FakeCamera>();
 }
+#ifndef VENTURE_PASSTHROUGH_REAL_SESSION
+XrResult clock_sample(XrTime* time, std::int64_t* monotonic) { *time = 1; *monotonic = 1; return XR_SUCCESS; }
+#endif
+}
+namespace hle::openxr {
+void save_passthrough_report(Json report) { test::passthrough::last_report = std::move(report); }
+}
+#ifndef VENTURE_PASSTHROUGH_REAL_SESSION
+// The camera's internal swapchain needs the production graphics.cpp (lifecycle fixture).
+namespace hle::openxr::guest {
+XrResult create_swapchain(XrSession, const XrSwapchainCreateInfo*, XrSwapchain*, bool) { return XR_ERROR_FEATURE_UNSUPPORTED; }
+XrResult xrDestroySwapchain(XrSwapchain) { return XR_SUCCESS; }
+}
+#endif
 } // namespace venture
 
 namespace {
@@ -112,6 +190,12 @@ XrResult XRAPI_CALL destroy_layer(XrPassthroughLayerFB) { ++venture::test::passt
 XrResult XRAPI_CALL feature_state(XrPassthroughFB) { return venture::test::passthrough::native_result; }
 XrResult XRAPI_CALL layer_state(XrPassthroughLayerFB) { return venture::test::passthrough::native_result; }
 XrResult XRAPI_CALL style(XrPassthroughLayerFB, const XrPassthroughStyleFB*) { return XR_SUCCESS; }
+XrResult XRAPI_CALL create_htc(XrSession, const XrPassthroughCreateInfoHTC* info, XrPassthroughHTC* out) {
+  CHECK(info->form == XR_PASSTHROUGH_FORM_PLANAR_HTC);
+  *out = reinterpret_cast<XrPassthroughHTC>(std::uintptr_t(0x600 + ++venture::test::passthrough::htc_creates));
+  return XR_SUCCESS;
+}
+XrResult XRAPI_CALL destroy_htc(XrPassthroughHTC) { ++venture::test::passthrough::htc_destroys; return XR_SUCCESS; }
 XrResult XRAPI_CALL resolve(XrInstance, const char* name, PFN_xrVoidFunction* out) {
   *out = nullptr;
 #define ENTRY(n, f) if (std::strcmp(name, n) == 0) *out = reinterpret_cast<PFN_xrVoidFunction>(f)
@@ -124,6 +208,8 @@ XrResult XRAPI_CALL resolve(XrInstance, const char* name, PFN_xrVoidFunction* ou
   ENTRY("xrPassthroughLayerPauseFB", layer_state);
   ENTRY("xrPassthroughLayerResumeFB", layer_state);
   ENTRY("xrPassthroughLayerSetStyleFB", style);
+  ENTRY("xrCreatePassthroughHTC", create_htc);
+  ENTRY("xrDestroyPassthroughHTC", destroy_htc);
 #undef ENTRY
   return *out ? XR_SUCCESS : XR_ERROR_FUNCTION_UNSUPPORTED;
 }
@@ -133,13 +219,42 @@ XrResult XRAPI_CALL xrGetSystemProperties(XrInstance, XrSystemId, XrSystemProper
   properties->graphicsProperties.maxSwapchainImageHeight = venture::test::passthrough::maximum_height;
   for (auto* node = static_cast<XrBaseOutStructure*>(properties->next); node; node = node->next) {
     if (node->type == XR_TYPE_SYSTEM_PASSTHROUGH_PROPERTIES_FB)
-      reinterpret_cast<XrSystemPassthroughPropertiesFB*>(node)->supportsPassthrough = XR_TRUE;
+      reinterpret_cast<XrSystemPassthroughPropertiesFB*>(node)->supportsPassthrough =
+          venture::test::passthrough::host_fb_supported ? XR_TRUE : XR_FALSE;
     if (node->type == XR_TYPE_SYSTEM_PASSTHROUGH_PROPERTIES2_FB)
-      reinterpret_cast<XrSystemPassthroughProperties2FB*>(node)->capabilities =
-          XR_PASSTHROUGH_CAPABILITY_BIT_FB | XR_PASSTHROUGH_CAPABILITY_COLOR_BIT_FB;
+      reinterpret_cast<XrSystemPassthroughProperties2FB*>(node)->capabilities = venture::test::passthrough::host_fb_supported ?
+          XR_PASSTHROUGH_CAPABILITY_BIT_FB | XR_PASSTHROUGH_CAPABILITY_COLOR_BIT_FB : 0;
   }
   return XR_SUCCESS;
 }
+XrResult XRAPI_CALL xrEnumerateEnvironmentBlendModes(XrInstance, XrSystemId, XrViewConfigurationType,
+    std::uint32_t capacity, std::uint32_t* count, XrEnvironmentBlendMode* out) {
+  std::vector<XrEnvironmentBlendMode> modes{XR_ENVIRONMENT_BLEND_MODE_OPAQUE};
+  modes.insert(modes.end(), venture::test::passthrough::blend_modes.begin(), venture::test::passthrough::blend_modes.end());
+  *count = std::uint32_t(modes.size());
+  if (!capacity) return XR_SUCCESS;
+  if (capacity < *count) return XR_ERROR_SIZE_INSUFFICIENT;
+  std::copy(modes.begin(), modes.end(), out);
+  return XR_SUCCESS;
+}
+XrResult XRAPI_CALL xrCreateReferenceSpace(XrSession, const XrReferenceSpaceCreateInfo* info, XrSpace* out) {
+  if (!venture::test::passthrough::view_spaces || (info->referenceSpaceType != XR_REFERENCE_SPACE_TYPE_VIEW &&
+                                                   info->referenceSpaceType != XR_REFERENCE_SPACE_TYPE_LOCAL))
+    return XR_ERROR_REFERENCE_SPACE_UNSUPPORTED;
+  *out = reinterpret_cast<XrSpace>(std::uintptr_t(0x700 + ++venture::test::passthrough::spaces));
+  return XR_SUCCESS;
+}
+XrResult XRAPI_CALL xrDestroySpace(XrSpace space) {
+  if (reinterpret_cast<std::uintptr_t>(space) > 0x700) --venture::test::passthrough::spaces;
+  return XR_SUCCESS;
+}
+#ifndef VENTURE_PASSTHROUGH_REAL_SESSION
+XrResult XRAPI_CALL xrLocateSpace(XrSpace, XrSpace, XrTime, XrSpaceLocation* location) {
+  location->locationFlags = XR_SPACE_LOCATION_ORIENTATION_VALID_BIT | XR_SPACE_LOCATION_POSITION_VALID_BIT;
+  location->pose = {{0, 0, 0, 1}, {0, 1.5f, 0}};
+  return XR_SUCCESS;
+}
+#endif
 XrResult XRAPI_CALL xrEnumerateSwapchainImages(XrSwapchain handle, std::uint32_t capacity, std::uint32_t* count, XrSwapchainImageBaseHeader* out) {
   const auto images = host_chains.at(handle).backing->images(); *count = std::uint32_t(images.size());
   if (!capacity) return XR_SUCCESS;
@@ -172,9 +287,13 @@ XrResult dev_release_swapchain(XrSwapchain handle, const XrSwapchainImageRelease
 namespace venture::test::passthrough {
 using namespace hle::openxr;
 Fixture::Fixture() {
-  configured = withdrawal_complete = true; maximum_width = maximum_height = 0; requested = grant = false; requests = native_creates = native_destroys = host_acquires = 0; native_result = XR_SUCCESS;
+  configured = withdrawal_complete = host_fb_supported = true; view_spaces = false; blend_modes.clear();
+  htc_creates = htc_destroys = spaces = 0;
+  camera_present = camera_stalled = false; camera_streams = true; camera_opens = 0; last_report = {};
+  maximum_width = maximum_height = 0; requested = grant = false; requests = native_creates = native_destroys = host_acquires = 0; native_result = XR_SUCCESS;
   process_config().abi = "arm64-v8a";
   process_config().passthrough = true;
+  process_config().passthrough_key.reset();
   state().enabled = {"XR_FB_passthrough", "XR_FB_composition_layer_image_layout"};
   track_handle(target, "XrSession", reinterpret_cast<XrInstance>(1)); track_handle(space, "XrSpace", target);
   auto& gpu = gfx::gpu_device();
@@ -184,6 +303,7 @@ Fixture::Fixture() {
   xr::session().running = true; xr::session().phase = xr::Session::Phase::begun;
   xr::host_xr().enabled_extensions.clear(); xr::host_xr().available_extensions.clear();
   xr::host_xr().get_instance_proc_addr = reinterpret_cast<void*>(resolve);
+  reset_passthrough_probe();
 }
 Fixture::~Fixture() {
   CHECK(destroy_passthrough_session(target) == XR_SUCCESS);
@@ -251,6 +371,41 @@ void fill(XrSwapchain handle, std::array<std::array<float, 4>, 2> colors) {
     }
     barrier(command, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, chain.info.arraySize);
   });
+}
+void fill_rows(XrSwapchain handle, std::array<std::array<unsigned char, 4>, 4> rows) {
+  auto& gpu = gfx::gpu_device();
+  auto& chain = state().swapchains.at(handle); REQUIRE(chain.backing->wait(chain.released_index) == XR_SUCCESS);
+  const auto layers = chain.info.arraySize;
+  const VkDeviceSize size = 64ull * layers;
+  VkBufferCreateInfo ci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO}; ci.size = size; ci.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+  VkBuffer buffer{}; REQUIRE(vkCreateBuffer(gpu.device, &ci, nullptr, &buffer) == VK_SUCCESS);
+  VkMemoryRequirements requirements{}; vkGetBufferMemoryRequirements(gpu.device, buffer, &requirements);
+  VkPhysicalDeviceMemoryProperties properties{}; vkGetPhysicalDeviceMemoryProperties(gpu.physical_device, &properties);
+  std::uint32_t type = 0;
+  constexpr auto flags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+  while (type < properties.memoryTypeCount && (!(requirements.memoryTypeBits & (1u << type)) ||
+         (properties.memoryTypes[type].propertyFlags & flags) != flags)) ++type;
+  REQUIRE(type < properties.memoryTypeCount);
+  VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, nullptr, requirements.size, type};
+  VkDeviceMemory memory{}; REQUIRE(vkAllocateMemory(gpu.device, &ai, nullptr, &memory) == VK_SUCCESS);
+  REQUIRE(vkBindBufferMemory(gpu.device, buffer, memory, 0) == VK_SUCCESS);
+  void* mapped{}; REQUIRE(vkMapMemory(gpu.device, memory, 0, size, 0, &mapped) == VK_SUCCESS);
+  auto* bytes = static_cast<unsigned char*>(mapped);
+  for (std::uint32_t layer = 0; layer < layers; ++layer)
+    for (unsigned row = 0; row < 4; ++row)
+      for (unsigned x = 0; x < 4; ++x) std::memcpy(bytes + layer * 64 + row * 16 + x * 4, rows[row].data(), 4);
+  vkUnmapMemory(gpu.device, memory);
+  commands([&](VkCommandBuffer command) {
+    const auto image = chain.images[chain.released_index].image;
+    barrier(command, image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, layers);
+    for (std::uint32_t layer = 0; layer < layers; ++layer) {
+      VkBufferImageCopy copy{}; copy.bufferOffset = 64ull * layer;
+      copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, layer, 1}; copy.imageExtent = {4, 4, 1};
+      vkCmdCopyBufferToImage(command, buffer, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+    }
+    barrier(command, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, layers);
+  });
+  vkDestroyBuffer(gpu.device, buffer, nullptr); vkFreeMemory(gpu.device, memory, nullptr);
 }
 std::array<unsigned char, 4> pixel(XrSwapchain handle, std::uint32_t layer, std::uint32_t row) {
   auto& gpu = gfx::gpu_device();

@@ -262,7 +262,65 @@ Json Plan::json() const {
     plan["assetCatalog"] = "unavailable";
   if (local)
     plan["source"] = "import";
+  if (pinned)
+    plan["pinned"] = true;
   return plan;
+}
+std::string Plan::folder() const {
+  return pinned ? version_code + "-" + binary_id : version_code;
+}
+std::string version_id(std::string_view app_id, std::string_view binary_id) {
+  return std::string(app_id) + "@" + std::string(binary_id);
+}
+std::string_view base_app(std::string_view id) { return id.substr(0, id.find('@')); }
+std::string_view version_binary(std::string_view id) {
+  const auto at = id.find('@');
+  return at == id.npos ? std::string_view{} : id.substr(at + 1);
+}
+std::string Build::label() const {
+  return version + " (" + (version_code.empty() ? "0" : version_code) + ")";
+}
+std::vector<Build> release_builds(const Json &history, const Json &live) {
+  const auto &application = field(field(history, "data"), "node");
+  if (!application.is_object())
+    throw std::runtime_error("Meta returned no version history for that game.");
+  Json candidates = Json::array();
+  for (auto key : {"primary_binaries", "binaries"}) {
+    if (field(application, key).is_null())
+      continue;
+    candidates = nodes(application[key]);
+    if (!candidates.empty())
+      break;
+  }
+  std::vector<Build> out;
+  auto add = [&](const Json &binary, bool published_only) {
+    if (!android_build(binary))
+      return;
+    Build b{str(binary, "id"), str(binary, "version"), str(binary, "version_code")};
+    if (b.version_code.empty())
+      b.version_code = std::to_string(build_revision(binary));
+    if (const auto &channels = field(binary, "binary_release_channels"); !channels.is_null())
+      for (const auto &channel : nodes(channels))
+        if (auto name = str(channel, "channel_name"); !name.empty())
+          b.channels.push_back(std::move(name));
+    if (!digits(b.binary_id) || !digits(b.version_code) || (published_only && b.channels.empty()) ||
+        std::ranges::find(out, b.binary_id, &Build::binary_id) != out.end())
+      return;
+    if (b.version.empty())
+      b.version = "unknown";
+    out.push_back(std::move(b));
+  };
+  for (const auto &binary : candidates)
+    add(binary, true);
+  if (const auto id = str(live, "id"); digits(id)) {
+    if (std::ranges::find(out, id, &Build::binary_id) == out.end())
+      add(live, false);
+    if (auto found = std::ranges::find(out, id, &Build::binary_id); found != out.end())
+      found->live = true;
+  }
+  // Newest version first; ties keep the response's order (newest uploads first).
+  std::ranges::stable_sort(out, std::greater<>{}, [](const Build &b) { return number(Json(b.version_code)); });
+  return out;
 }
 void require_asset_catalog(const Plan &plan) {
   if (!plan.assets_complete)
@@ -428,6 +486,7 @@ Plan parse_plan(const Json &j) {
     throw std::runtime_error("Invalid installation plan.");
   p.assets_complete = !j.contains("assetCatalog");
   p.launcher_format = j.contains("installedAddons");
+  p.pinned = !p.local && field(j, "pinned") == true;
   std::set<std::string> names;
   bool apk = false;
   // The original meta_cli.py saved only required, ungated base assets, but
@@ -843,6 +902,18 @@ Json Store::builds(std::string_view id) const {
   for (const auto &[revision, candidate] : versions)
     menu.push_back(candidate);
   return menu;
+}
+std::vector<Build> Store::all_builds(std::string_view id) const {
+  require_id(id);
+  // The headset release marks the build a plain install gets; the history
+  // lists every build ever uploaded.
+  const auto release = query("6549406941839522", {{"hmdType", "EUREKA"}, {"itemId", id}});
+  const auto &item = field(field(release, "data"), "item");
+  if (str(item, "id") != id || !quest_app(item))
+    throw std::runtime_error("Meta has no Quest game with that id.");
+  const auto &live = field(item, "latest_supported_binary");
+  return release_builds(query("2885322071572384", {{"applicationID", id}}),
+                        android_build(live) ? live : Json{});
 }
 Snapshot Store::owned_listing(std::string_view id) const {
   require_id(id);

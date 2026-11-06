@@ -10,10 +10,15 @@ add_library(venture_imgui STATIC
 target_include_directories(venture_imgui SYSTEM PUBLIC ${imgui_SOURCE_DIR} ${imgui_SOURCE_DIR}/backends ${imgui_SOURCE_DIR}/misc/cpp ${imgui_SOURCE_DIR}/misc/freetype)
 target_link_libraries(venture_imgui PUBLIC SDL3::SDL3-static freetype)
 target_compile_definitions(venture_imgui PUBLIC IMGUI_ENABLE_FREETYPE IMGUI_USE_WCHAR32)
+# Interface translations: i18n/*.po compiled in at build time (cmake/I18n.cmake).
+include(${PROJECT_SOURCE_DIR}/cmake/I18n.cmake)
+i18n_add_library(venture_i18n SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/i18n)
 # The launcher without its window (core.h): the GUI and venture-cli share it.
-add_library(venture_launcher_core STATIC core.cpp debug_report.cpp drives.cpp import.cpp updater.cpp ui/rich_text_parse.cpp)
-target_link_libraries(venture_launcher_core PUBLIC venture_common venture_ovrplatform)
-add_executable(venture WIN32 main.cpp app.cpp ui/style.cpp ui/views.cpp ui/chrome.cpp ui/logo.cpp ui/rich_text.cpp assets/texture_cache.cpp)
+add_library(venture_launcher_core STATIC core.cpp debug_report.cpp diagnosis.cpp drives.cpp import.cpp sign_in_link.cpp updater.cpp ui/rich_text_parse.cpp)
+target_link_libraries(venture_launcher_core PUBLIC venture_common venture_ovrplatform venture_i18n)
+add_executable(venture WIN32 main.cpp app.cpp ui/style.cpp ui/views.cpp ui/chrome.cpp ui/logo.cpp ui/rich_text.cpp assets/texture_cache.cpp
+  assets/controller_art.cpp
+  assets/render_model.cpp)
 # The logos ship inside the executable; assets/venture.svg, assets/steam.svg and
 # assets/discord.svg are their only sources.
 file(READ ${CMAKE_CURRENT_SOURCE_DIR}/assets/venture.svg VENTURE_LOGO_SVG)
@@ -27,6 +32,14 @@ inline constexpr char kVentureLogoSvg[] = R\"svg(${VENTURE_LOGO_SVG})svg\";
 inline constexpr char kSteamLogoSvg[] = R\"svg(${STEAM_LOGO_SVG})svg\";
 inline constexpr char kDiscordLogoSvg[] = R\"svg(${DISCORD_LOGO_SVG})svg\";
 " @ONLY)
+# The icon font for systems without Segoe's (tools/make_icon_font.py builds it).
+file(READ ${CMAKE_CURRENT_SOURCE_DIR}/assets/venture-icons.ttf ICON_FONT_HEX HEX)
+string(REGEX REPLACE "([0-9a-f][0-9a-f])" "0x\\1," ICON_FONT_BYTES "${ICON_FONT_HEX}")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/assets/venture-icons.ttf)
+file(CONFIGURE OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/generated/launcher/icon_font.h
+  CONTENT "#pragma once
+inline constexpr unsigned char kIconFont[] = {${ICON_FONT_BYTES}};
+" @ONLY)
 target_include_directories(venture PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/generated)
 target_compile_definitions(venture PRIVATE VENTURE_VERSION="${PROJECT_VERSION}")
 target_link_libraries(venture PRIVATE venture_launcher_core venture_imgui webpdecoder)
@@ -36,7 +49,7 @@ if(WIN32)
   target_include_directories(venture_launcher_core PRIVATE platform/win32)
   target_include_directories(venture_launcher_core SYSTEM PRIVATE ${webview2_SOURCE_DIR}/build/native/include)
   target_compile_options(venture_launcher_core PRIVATE -fms-extensions)
-  target_link_libraries(venture_launcher_core PUBLIC ole32 user32)
+  target_link_libraries(venture_launcher_core PUBLIC ole32 user32 advapi32)
   target_sources(venture PRIVATE platform/win32/window_style.cpp)
   target_include_directories(venture PRIVATE platform/win32)
   target_compile_options(venture PRIVATE -fms-extensions)
@@ -73,13 +86,3 @@ endif()
 if(MINGW)
   target_link_options(venture-cli PRIVATE -municode)
 endif()
-
-# Settings persistence checks need no game runtime or headset.
-add_executable(venture_launcher_settings_tests EXCLUDE_FROM_ALL
-  ${PROJECT_SOURCE_DIR}/tests/test_main.cpp
-  ${PROJECT_SOURCE_DIR}/tests/launcher_settings_test.cpp)
-target_link_libraries(venture_launcher_settings_tests PRIVATE venture_common doctest::doctest)
-add_executable(venture_passthrough_launch_probe EXCLUDE_FROM_ALL
-  ${PROJECT_SOURCE_DIR}/tests/passthrough/launch_probe.cpp)
-target_link_libraries(venture_passthrough_launch_probe PRIVATE venture_common)
-add_dependencies(venture_launcher_settings_tests venture_passthrough_launch_probe)

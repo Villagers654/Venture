@@ -118,10 +118,15 @@ class Cpu {
   // Must be lock-free, allocation-free and noexcept. PC is the last PC spilled
   // by the JIT dispatcher, not necessarily the current linked block's PC.
   virtual CpuProfileSnapshot profile_snapshot(std::uintptr_t) const noexcept { return {}; }
-  // Optional owner-thread load-time warming, before the first outer guest call.
-  virtual void prepare_call(GuestAddr) {}
+  // Owner thread: the guest named this thread.
+  virtual void set_thread_name(std::string_view name) { (void)name; }
+  // Optional owner-thread work while guest code waits in a host call, until stop() is true.
+  virtual void idle(const std::function<bool()>& stop) noexcept { (void)stop; }
   // Move only hint data while protected; persistence must run after thread locks.
   virtual JitBlockList detach_jit_hints() noexcept { return {}; }
+  // Owner thread of a CPU that never runs guest code (cpu/pretranslate.cpp):
+  // translates the block into the portable block cache. False when it did not.
+  virtual bool pretranslate(std::uint64_t descriptor) noexcept { (void)descriptor; return false; }
  protected:
   // Exceptions must never unwind through generated machine code. The SVC
   // callback records them; the thread loop rethrows after leaving Run.

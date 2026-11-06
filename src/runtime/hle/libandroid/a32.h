@@ -9,9 +9,12 @@
 #include "common/log.h"
 
 namespace venture::hle::android_hle::abi32 {
-// Wire kinds come from the NDK r30 clang descriptors. Only this packet's
-// implemented families opt in; an unknown layout still gets the ABI trap.
+// Wire kinds come from the NDK r30 clang descriptors (libmediandk: the pinned
+// media/ndk declarations of tools/codegen/a32_media.py). Only implemented
+// families opt in; an unknown layout still gets the ABI trap. AHardwareBuffer
+// has no A32 adapters, so neither has the image accessor that returns one.
 inline bool supported(std::string_view name) {
+  if (name.starts_with("AMedia") || name.starts_with("AImage")) return name != "AImage_getHardwareBuffer";
   return name.starts_with("AAsset") || name.starts_with("AConfiguration_") || name.starts_with("ALooper_") ||
          name.starts_with("AInputQueue_") || name.starts_with("AInputEvent_") ||
          name.starts_with("AKeyEvent_") || name.starts_with("AMotionEvent_") ||
@@ -23,7 +26,9 @@ inline bool supported(a32::Type type) {
   if (type.kind == a32::Kind::Layout)
     return type.tag == "JNIEnv *" || type.tag == "ANativeActivity *" ||
            type.tag == "ANativeWindow_Buffer *" || type.tag == "ARect *" || type.tag == "AInputEvent **" ||
-           type.tag == "ASensorEvent *";
+           type.tag == "ASensorEvent *" || type.tag == "AMediaCodecBufferInfo *" || type.tag == "AImageCropRect *" ||
+           type.tag == "AImageReader_ImageListener *" || type.tag == "AImageReader_BufferRemovedListener *" ||
+           type.tag == "AImageReader **" || type.tag == "AImage **" || type.tag == "ANativeWindow **";
   if (type.kind == a32::Kind::Handle) {
     auto tag = type.tag;
     if (tag.starts_with("const ")) tag.remove_prefix(6);
@@ -31,11 +36,26 @@ inline bool supported(a32::Type type) {
            tag == "AConfiguration *" || tag == "ALooper *" || tag == "AInputQueue *" ||
            tag == "AInputEvent *" || tag == "ANativeWindow *" || tag == "AChoreographer *" ||
            tag == "AChoreographerFrameCallbackData *" || tag == "jobject" || tag == "ASensorManager *" ||
-           tag == "ASensorEventQueue *" || tag == "ASensor *" || tag == "ASensorList *";
+           tag == "ASensorEventQueue *" || tag == "ASensor *" || tag == "ASensorList *" ||
+           tag == "AMediaFormat *" || tag == "AMediaExtractor *" || tag == "AMediaCodec *" ||
+           tag == "AMediaDataSource *" || tag == "AMediaCrypto *" || tag == "AImageReader *" || tag == "AImage *";
   }
   if (type.kind == a32::Kind::Callback)
-    return type.tag == "ALooper_callbackFunc" || type.tag.starts_with("AChoreographer_");
+    return type.tag == "ALooper_callbackFunc" || type.tag.starts_with("AChoreographer_") ||
+           type.tag.starts_with("AMediaDataSource");
   return !a32::needs_adapter(type);
+}
+// Out parameters that receive one opaque handle: written as that handle's token.
+inline std::string_view out_handle(std::string_view tag) {
+  if (tag == "AInputEvent **" || tag == "AImageReader **" || tag == "AImage **" || tag == "ANativeWindow **")
+    return tag.substr(0, tag.size() - 3);
+  return {};
+}
+// ILP32 records whose layout equals the host's: AMediaCodecBufferInfo (int32
+// offset, size; int64 presentationTimeUs at 8; uint32 flags; 24 bytes on AAPCS32
+// and AAPCS64) and AImageCropRect (four int32). The guest record is used in place.
+inline std::size_t shared_layout(std::string_view tag) {
+  return tag == "AMediaCodecBufferInfo *" ? 24 : tag == "AImageCropRect *" ? 16 : 0;
 }
 struct Frame {
   CallContext& ctx;
@@ -52,6 +72,8 @@ struct Frame {
   unsigned output_count = 0;
   android::WindowBuffer window{};
   GuestAddr window_out = 0;
+  // AImageReader_ImageListener / _BufferRemovedListener: {void* context; callback}.
+  std::array<GuestAddr, 2> listener{};
   explicit Frame(CallContext& c) : ctx(c), cursor(c.cpu()) {}
   template <class T>
   T read() {
@@ -71,7 +93,7 @@ struct Frame {
         }
       }
       if constexpr (std::is_pointer_v<T>) {
-        if (bits && (a32::is_out(type.kind) || type.tag == "AInputEvent **" || sensor_list)) {
+        if (bits && (a32::is_out(type.kind) || !out_handle(type.tag).empty() || sensor_list)) {
           a32::check_out(bits);
           auto& out = outputs.at(output_count++);
           out.guest = bits;
@@ -81,6 +103,16 @@ struct Frame {
         if (bits && type.tag == "ANativeWindow_Buffer *") {
           window_out = bits;
           return reinterpret_cast<T>(&window);
+        }
+        if (bits && (type.tag == "AImageReader_ImageListener *" || type.tag == "AImageReader_BufferRemovedListener *")) {
+          std::array<std::uint32_t, 2> words{};
+          a32::read_bytes(bits, words.data(), sizeof(words));
+          listener = {words[0], words[1]};
+          return reinterpret_cast<T>(listener.data());
+        }
+        if (auto size = shared_layout(type.tag); bits && size) {
+          a32::check_out(bits);
+          a32::check_out(bits + size - 4);
         }
         return reinterpret_cast<T>(static_cast<std::uintptr_t>(bits));
       } else if constexpr (std::is_same_v<T, float>)
@@ -104,9 +136,9 @@ struct Frame {
     std::array<std::uint32_t, 8> words{};
     for (unsigned i = 0; i < output_count; ++i) {
       const auto& out = outputs[i];
-      words[i] = out.type.tag == "AInputEvent **"
-                     ? static_cast<std::uint32_t>(android::handles32::encode(out.value, "AInputEvent"))
-                     : a32::narrow_out(out.type, out.value);
+      const auto handle = out_handle(out.type.tag);
+      words[i] = !handle.empty() ? static_cast<std::uint32_t>(android::handles32::encode(out.value, handle))
+                                 : a32::narrow_out(out.type, out.value);
       a32::check_out(out.guest);
     }
     for (unsigned i = 0; i < output_count; ++i) a32::write_bytes(outputs[i].guest, &words[i], 4);
@@ -146,7 +178,8 @@ void invoke(R (*fn)(A...), CallContext& ctx) {
     } else {
       auto result = std::apply(fn, args);
       bool success = true;
-      if constexpr (std::is_integral_v<R> && std::is_signed_v<R>) success = result >= 0;
+      if constexpr (std::is_same_v<R, bool>) success = result;  // NdkMediaFormat getters leave outputs alone
+      else if constexpr (std::is_integral_v<R> && std::is_signed_v<R>) success = result >= 0;
       frame.finish(success);
       frame.result(result);
     }
@@ -160,7 +193,9 @@ void invoke(R (*fn)(A...), CallContext& ctx) {
 }
 template <auto F>
 void install(std::string_view library, std::string_view name) {
-  if (process_config().isa() != GuestIsa::a32 || library != "libandroid.so" || !supported(name)) return;
+  if (process_config().isa() != GuestIsa::a32 || (library != "libandroid.so" && library != "libmediandk.so") ||
+      !supported(name))
+    return;
   auto* d = a32::descriptor(library, name);
   if (!d || !supported(d->result)) return;
   for (auto type : d->arguments)

@@ -5,7 +5,10 @@
 #include "hle/vulkan/internal.h"
 #include "hle/vulkan/chain.h"
 #include "hle/openxr/state.h"
+#include "hle/openxr/sphere_layers.h"
 #include "xr/presentation.h"
+#include "xr/desktop_mirror.h"
+#include "xr/display_override.h"
 #include "xr/queue.h"
 #include "xr/vulkan_extensions.h"
 #include "hle/vulkan/timing.h"
@@ -108,7 +111,42 @@ void note_images(const Swapchain& r) {
   for (const auto& image : r.images) vulkan::note_image(image.image, ci);
 }
 void forget_images(const Swapchain& r) {
-  for (const auto& image : r.images) vulkan::forget_image(image.image);
+  for (const auto& image : r.images)
+    if (image.image) vulkan::forget_image(image.image);
+}
+bool staged(const Swapchain& r) { return r.backing && !r.backing->staged().empty(); }
+// The slot storage of a GLES chain: the provider's staging, or private images
+// for providers without it (and the opt-in bridge experiments, which need them).
+XrResult create_gles_storage(Swapchain& record) {
+  const auto plain = [] {
+    for (const char* name : {"VENTURE_XR_DIRECT_TEXTURES", "VENTURE_XR_GPU_OWNERSHIP", "VENTURE_XR_BATCH_HANDOFF"})
+      if (const char* value = venture::environment::getenv(name); value && std::string_view(value) == "1")
+        return true;
+    return false;
+  }();
+  record.textures.resize(record.images.size());
+  // On failure the caller destroys the ring; a failed staging allocation
+  // releases its own partial storage.
+  auto result = xr_images()->create_ring(record.desc, record.textures);
+  if (XR_FAILED(result)) return result;
+  if (!plain) {
+    result = xr_images()->create_staging(record.desc, record.textures, record.backing->staged());
+    if (XR_SUCCEEDED(result)) return result;
+    if (result != XR_ERROR_FEATURE_UNSUPPORTED) return result;
+  }
+  // Private images replace the unused staged slots.
+  try {
+    record.backing = std::make_unique<GuestImages>(state().graphics,
+        gfx::gpu_device().get_instance_proc_addr, record.info);
+  } catch (XrResult failure) {
+    return failure;
+  } catch (const std::exception& error) {
+    log::error("xr", "Guest swapchain allocation failed: {}", error.what());
+    return XR_ERROR_OUT_OF_MEMORY;
+  }
+  const auto images = record.backing->images();
+  record.images.assign(images.begin(), images.end());
+  return XR_SUCCESS;
 }
 }
 VkFormat gl_to_vk(std::int64_t format) {
@@ -138,19 +176,23 @@ std::int64_t vk_to_gl(std::int64_t format) {
   return 0;
 }
 XrResult convert_color_image(Swapchain& r, std::uint32_t index, XrColorSpaceFB space,
-                             bool external_queue_held, bool force_opaque) {
+                             bool external_queue_held, bool force_opaque, float underlay_opacity, bool premultiply,
+                             const std::array<float, 3>* key) {
   const bool color_emulated = enabled("XR_FB_color_space") &&
       !host_xr().enabled_extensions.contains("XR_FB_color_space") &&
       space != XR_COLOR_SPACE_REC709_FB && space != XR_COLOR_SPACE_UNMANAGED_FB &&
       (r.info.usageFlags & XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT);
-  if ((!color_emulated && !force_opaque) || !(r.host_info.usageFlags & XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT))
+  const bool alpha = force_opaque || underlay_opacity != 1 || key;
+  if ((!color_emulated && !alpha) || !(r.host_info.usageFlags & XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT))
     return XR_SUCCESS;
-  auto& images = force_opaque ? r.opaque_images : r.color_images;
+  auto& images = alpha ? r.alpha_images : r.color_images;
   if (!images) images = std::make_unique<ColorImages>(state().graphics,
-      gfx::gpu_device().get_instance_proc_addr, r.host_info, r.host_images, false, force_opaque);
+      gfx::gpu_device().get_instance_proc_addr, r.host_info, r.host_images, false, alpha);
   const auto matrix = color_matrix(color_emulated ? space : XR_COLOR_SPACE_REC709_FB, XR_COLOR_SPACE_REC709_FB);
-  return images->convert(index, matrix, external_queue_held,
-      force_opaque ? ColorImages::Alpha::opaque : ColorImages::Alpha::preserve);
+  const auto mode = force_opaque ? ColorImages::Alpha::opaque
+                  : premultiply ? ColorImages::Alpha::premultiply : ColorImages::Alpha::preserve;
+  return images->convert(index, matrix, external_queue_held, mode, force_opaque ? 1 : underlay_opacity,
+                         force_opaque ? nullptr : key);
 }
 
 XrResult destroy_host_swapchain(Swapchain& r) {
@@ -158,7 +200,7 @@ XrResult destroy_host_swapchain(Swapchain& r) {
   const auto drained = r.backing->drain();
   if (drained != XR_SUCCESS) return drained;
   r.color_images.reset();
-  r.opaque_images.reset();
+  r.alpha_images.reset();
   HostQueueLock queue(session().uses_shared_gpu);
   if (!queue) return XR_ERROR_RUNTIME_FAILURE;
   const auto result = venture::xr::dev_destroy_swapchain(r.host_handle);
@@ -171,7 +213,32 @@ XrResult destroy_host_swapchain(Swapchain& r) {
   }
   return result;
 }
-XrResult prepare_swapchains(const std::set<XrSwapchain>& submitted, bool force_opaque) {
+namespace {
+// A guest subimage rect in the host image, as PresentationLayers maps it for
+// the host: clipped to the guest chain, rows flipped like the copy, scaled to
+// a smaller host chain. Row 0 is the top the host displays.
+XrRect2Di host_image_rect(const Swapchain& r, XrRect2Di rect) {
+  const auto gw = std::int64_t(r.info.width), gh = std::int64_t(r.info.height);
+  const auto x0 = std::clamp<std::int64_t>(rect.offset.x, 0, gw - 1), y0 = std::clamp<std::int64_t>(rect.offset.y, 0, gh - 1);
+  const auto x1 = std::clamp<std::int64_t>(std::int64_t(rect.offset.x) + rect.extent.width, x0 + 1, gw);
+  const auto y1 = std::clamp<std::int64_t>(std::int64_t(rect.offset.y) + rect.extent.height, y0 + 1, gh);
+  rect = {{std::int32_t(x0), std::int32_t(y0)}, {std::int32_t(x1 - x0), std::int32_t(y1 - y0)}};
+  if (r.textures.empty() == r.flip_rows) rect.offset.y = std::int32_t(gh - y1);
+  return map_presentation_rect(rect, {r.info.width, r.info.height}, {r.host_info.width, r.host_info.height});
+}
+}  // namespace
+std::optional<MirrorEye> mirror_eye(std::span<const XrCompositionLayerBaseHeader* const> layers, std::uint32_t eye) {
+  for (auto* layer : layers)
+    if (layer && layer->type == XR_TYPE_COMPOSITION_LAYER_PROJECTION) {
+      const auto& projection = *reinterpret_cast<const XrCompositionLayerProjection*>(layer);
+      if (!projection.viewCount || !projection.views) return std::nullopt;
+      const auto& view = projection.views[venture::xr::mirror_view(projection.viewCount, eye)];
+      return MirrorEye{view.subImage, view.fov};
+    }
+  return std::nullopt;
+}
+XrResult prepare_swapchains(const std::set<XrSwapchain>& submitted, bool force_opaque, const UnderlayAlpha* underlay,
+                            const MirrorEye* mirror) {
   auto& s = state();
   XrResult qualified = XR_SUCCESS;
   const auto live_hosts = [&] {
@@ -268,8 +335,15 @@ XrResult prepare_swapchains(const std::set<XrSwapchain>& submitted, bool force_o
   for (auto handle : submitted) {
     auto& r = s.swapchains.at(handle);
     r.last_submitted = s.presentation_epoch;
-    const bool opaque = force_opaque && (r.host_info.usageFlags & XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT);
-    if (r.host_serial == r.release_serial && r.host_color == s.color_space && r.host_flip == r.flip_rows && r.host_opaque == opaque) continue;
+    const bool color = r.host_info.usageFlags & XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT;
+    const bool opaque = force_opaque && color;
+    const bool lowest = !opaque && color && underlay && underlay->swapchains.contains(handle);
+    const float opacity = lowest ? underlay->opacity : 1;
+    const bool premultiply = lowest && underlay->premultiply;
+    const auto key = lowest ? underlay->key : std::nullopt;
+    if (r.host_serial == r.release_serial && r.host_color == s.color_space && r.host_flip == r.flip_rows &&
+        r.host_opaque == opaque && r.host_underlay == opacity && r.host_premultiplied == premultiply &&
+        r.host_key == key) continue;
     std::uint32_t target{};
     {
       HostQueueLock queue(session().uses_shared_gpu);
@@ -288,7 +362,18 @@ XrResult prepare_swapchains(const std::set<XrSwapchain>& submitted, bool force_o
     if (result == XR_SESSION_LOSS_PENDING) qualified = result;
     result = r.backing->copy(std::uint32_t(r.released_index), r.host_images.at(target).image, VkFormat(r.host_info.format),
                              {r.host_info.width, r.host_info.height}, r.flip_rows);
-    if (XR_SUCCEEDED(result)) result = convert_color_image(r, target, s.color_space, false, opaque);
+    if (XR_SUCCEEDED(result))
+      result = convert_color_image(r, target, s.color_space, false, opaque, opacity, premultiply, key ? &*key : nullptr);
+    // The desktop mirror blits the eye exactly as the headset gets it, before
+    // the image goes back to the runtime.
+    if (XR_SUCCEEDED(result) && mirror && handle == mirror->sub.swapchain && r.info.sampleCount == 1 &&
+        (r.host_info.usageFlags & XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT) &&
+        mirror->sub.imageArrayIndex < r.host_info.arraySize) {
+      venture::xr::MirrorSource source{r.host_images.at(target).image, VkFormat(r.host_info.format),
+                                       mirror->sub.imageArrayIndex, host_image_rect(r, mirror->sub.imageRect)};
+      venture::xr::mirror_axis(mirror->fov, source.axis_x, source.axis_y);
+      venture::xr::mirror_capture(session().binding, session().uses_shared_gpu, source);
+    }
     // Always balance an acquisition after a copy/conversion failure. The
     // serial is advanced only after a successful release; retries upload again.
     {
@@ -304,6 +389,9 @@ XrResult prepare_swapchains(const std::set<XrSwapchain>& submitted, bool force_o
     r.host_color = s.color_space;
     r.host_flip = r.flip_rows;
     r.host_opaque = opaque;
+    r.host_underlay = opacity;
+    r.host_premultiplied = premultiply;
+    r.host_key = key;
   }
   return qualified;
 }
@@ -535,9 +623,11 @@ XrResult create_swapchain(XrSession handle, const XrSwapchainCreateInfo *info, X
     return XR_ERROR_FEATURE_UNSUPPORTED;
   if (copy.createFlags & ~XR_SWAPCHAIN_CREATE_STATIC_IMAGE_BIT)
     return XR_ERROR_VALIDATION_FAILURE;
+  const bool gles_ring = state().gles && !surface;
   try {
+    // A GLES chain's slots start without private images (create_gles_storage).
     record.backing = std::make_unique<GuestImages>(state().graphics,
-        gfx::gpu_device().get_instance_proc_addr, copy);
+        gfx::gpu_device().get_instance_proc_addr, copy, gles_ring);
     const auto images = record.backing->images();
     record.images.assign(images.begin(), images.end());
     record.identity = std::make_unique<std::uint64_t>(0);
@@ -549,9 +639,10 @@ XrResult create_swapchain(XrSession handle, const XrSwapchainCreateInfo *info, X
     return XR_ERROR_OUT_OF_MEMORY;
   }
   XrResult result = XR_SUCCESS;
-  if (state().gles && !surface) {
-    record.textures.resize(record.images.size());
-    result = xr_images()->create_ring(record.desc, record.textures);
+  if (gles_ring) {
+    // Everything a GLES chain needs is allocated here, so a device out of
+    // memory fails creation (OUT_OF_MEMORY), never a later release.
+    result = create_gles_storage(record);
     if (XR_SUCCEEDED(result) && enabled("XR_FB_swapchain_update_state"))
       result = xr_images()->update_sampler(record.textures, record.desc, record.sampler_gles);
   } else if (!surface) {
@@ -559,9 +650,16 @@ XrResult create_swapchain(XrSession handle, const XrSwapchainCreateInfo *info, X
   }
   if (XR_FAILED(result)) {
     forget_images(record);
+    if (staged(record)) xr_images()->destroy_staging(record.backing->staged());
     if (!record.textures.empty()) xr_images()->destroy_ring(record.textures);
+    log::warn("xr", "Guest swapchain {}x{} arrays={} format={} not created: result={}", record.info.width,
+              record.info.height, record.info.arraySize, info->format, int(result));
     return result;
   }
+  if (gles_ring && venture::environment::getenv("VENTURE_XR_SWAPCHAIN_STATS"))
+    log::info("xr-budget", "gles chain {}x{} arrays={} slots={} staged={} private_bytes={}", record.info.width,
+              record.info.height, record.info.arraySize, record.images.size(), staged(record),
+              record.backing->private_bytes());
   *out = record.handle;
   if (venture::environment::getenv("VENTURE_TRACE_XR") ||
        venture::environment::getenv("VENTURE_TRACE_XR_FRAMES"))
@@ -600,7 +698,7 @@ XrResult xrDestroySwapchain(XrSwapchain handle) {
   session().finish_host_end();
   std::unique_lock queue(gfx::gpu_device().queue_lock, std::defer_lock);
   if (session().uses_shared_gpu) queue.lock();
-  if (!it->second.textures.empty()) {
+  if (!it->second.textures.empty() && !staged(it->second)) {
     std::vector<VkImage> images;
     for (auto image : it->second.images)
       images.push_back(image.image);
@@ -609,8 +707,12 @@ XrResult xrDestroySwapchain(XrSwapchain handle) {
       return released;
   }
   auto result = destroy_host_swapchain(it->second);
+  if (XR_SUCCEEDED(result)) result = forget_sphere_source(handle);
+  // Staging is freed only after every Vulkan copy that reads it completed.
+  if (XR_SUCCEEDED(result) && staged(it->second)) result = it->second.backing->drain();
   if (XR_SUCCEEDED(result)) {
     forget_images(it->second);
+    if (staged(it->second)) xr_images()->destroy_staging(it->second.backing->staged());
     if (!it->second.textures.empty())
       xr_images()->destroy_ring(it->second.textures);
     state().swapchains.erase(it);
@@ -767,8 +869,14 @@ XrResult xrReleaseSwapchainImage(XrSwapchain handle, const XrSwapchainImageRelea
       return XR_ERROR_RUNTIME_FAILURE;
     // Guest OpenXR GLES swapchains are framebuffers: always bottom-up rows.
     lock.unlock();
-    auto result = xr_images()->copy_to_image(r.textures[index], r.images[index].image, r.desc, 0,
-                                             true);
+    // ANGLE may take staging back only once no Vulkan copy still reads it.
+    // xrWaitSwapchainImage normally waited that copy already; the operation
+    // pin keeps uploads of this chain out until the release returns.
+    auto result = staged(r) ? r.backing->wait(index) : XR_SUCCESS;
+    if (XR_SUCCEEDED(result))
+      result = staged(r)
+          ? xr_images()->stage(r.textures[index], r.backing->staged()[index], r.desc)
+          : xr_images()->copy_to_image(r.textures[index], r.images[index].image, r.desc, 0, true);
     lock.lock();
     if (XR_FAILED(result))
       return result;
@@ -841,10 +949,21 @@ XrResult xrGetVulkanGraphicsDevice2KHR(XrInstance i, const XrVulkanGraphicsDevic
     // game's instance is the answer the query stands for.
     const auto physical = vulkan::shared_physical_device_in(info->vulkanInstance);
     log::warn("xr", "Host Vulkan graphics device query failed ({}); {}", static_cast<int>(result),
-              physical ? "using the shared device's GPU in the game's instance" : "the shared device's GPU is not in it");
-    if (!physical) return result;
+              physical ? std::format("using the shared device's GPU ({}) in the game's instance",
+                                     vulkan::physical_device_name(physical))
+                       : std::string("the shared device's GPU is not in it"));
+    if (!physical) {
+      // Engines stop here (Unity's OpenXR plugin aborts); the launcher names
+      // this line instead of that abort (library::runtime_failure).
+      log::error("xr", "The VR session could not be created: {} did not name the game's Vulkan GPU (XrResult {})",
+                 venture::xr::host_xr().runtime_name, static_cast<int>(result));
+      return result;
+    }
     *out = physical;
+    state().vouched_vulkan_gpus[physical] = info->vulkanInstance;
     result = XR_SUCCESS;
+  } else {
+    state().vouched_vulkan_gpus.erase(*out);
   }
   vulkan::adopt_physical_device(info->vulkanInstance, *out);
   return result;
@@ -935,6 +1054,23 @@ XrResult xrCreateVulkanDeviceKHR(XrInstance i, const XrVulkanDeviceCreateInfoKHR
   *vk_result = VK_ERROR_INITIALIZATION_FAILED;
   auto result = host_call<PFN_xrCreateVulkanDeviceKHR, "xrCreateVulkanDeviceKHR">(i, &copy, out,
                                                        vk_result);
+  const auto vouched = state().vouched_vulkan_gpus.find(info->vulkanPhysicalDevice);
+  if (XR_FAILED(result) && !resolver.device_created() && vouched != state().vouched_vulkan_gpus.end()) {
+    // The host refused the GPU query for this game's instance, so Venture
+    // named the GPU (xrGetVulkanGraphicsDevice2KHR), and the host then refuses
+    // to create a device on it without having called vkCreateDevice (Oculus
+    // on an AMD + NVIDIA laptop: XR_ERROR_HANDLE_INVALID, Kaiju Battle
+    // Simulator). Create it as the runtime would: through the game's resolver,
+    // with the runtime's device extensions added. XR_KHR_vulkan_enable games
+    // make that same device themselves, and sessions accept it on that GPU.
+    log::warn("xr", "Host xrCreateVulkanDeviceKHR refused the game's GPU ({}); creating the device through the "
+              "game's resolver with the runtime's extensions", int(result));
+    const auto create = reinterpret_cast<PFN_vkCreateDevice>(
+        vulkan::XrResolverScope::proc(vouched->second, "vkCreateDevice"));
+    *vk_result = create ? create(info->vulkanPhysicalDevice, &vk, info->vulkanAllocator, out)
+                        : VK_ERROR_INITIALIZATION_FAILED;
+    result = *vk_result == VK_SUCCESS ? XR_SUCCESS : XR_ERROR_RUNTIME_FAILURE;
+  }
   if (XR_FAILED(result) || *vk_result != VK_SUCCESS)
     log::error("xr", "Vulkan device creation failed: XrResult={} VkResult={}", int(result),
                int(*vk_result));

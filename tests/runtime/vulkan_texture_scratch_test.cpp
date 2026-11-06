@@ -22,7 +22,6 @@ std::map<VkImage, VkDeviceSize> images;
 std::vector<VkBuffer> copies;
 unsigned created_buffers = 0, transfer_compute_dependencies = 0;
 bool lazy_mock = false;
-unsigned dispatches = 0, sparse_binds = 0;
 std::map<VkDeviceMemory, std::vector<std::byte>> memory;
 std::vector<VkDeviceSize> allocation_sizes;
 
@@ -73,7 +72,6 @@ void VKAPI_CALL sparse_requirements(VkDevice, VkImage, unsigned* count, VkSparse
 void VKAPI_CALL sparse_formats(VkPhysicalDevice, VkFormat, VkImageType, VkSampleCountFlagBits,
     VkImageUsageFlags, VkImageTiling, unsigned* count, VkSparseImageFormatProperties*) { *count = 1; }
 VkResult VKAPI_CALL bind_sparse(VkQueue, unsigned count, const VkBindSparseInfo* infos, VkFence) {
-  ++sparse_binds;
   for (unsigned i = 0; i < count; ++i) for (unsigned j = 0; j < infos[i].imageBindCount; ++j)
     for (unsigned k = 0; k < infos[i].pImageBinds[j].bindCount; ++k)
       CHECK(memory.contains(infos[i].pImageBinds[j].pBinds[k].memory));
@@ -111,7 +109,6 @@ void VKAPI_CALL bind_sets(VkCommandBuffer, VkPipelineBindPoint, VkPipelineLayout
                           const VkDescriptorSet*, unsigned, const unsigned*) {}
 void VKAPI_CALL push(VkCommandBuffer, VkPipelineLayout, VkShaderStageFlags, unsigned, unsigned, const void*) {}
 void VKAPI_CALL dispatch(VkCommandBuffer, unsigned, unsigned, unsigned) {
-  ++dispatches;
   if (!lazy_mock) CHECK(transfer_compute_dependencies == copies.size() / 2 + 1);
 }
 void VKAPI_CALL copy_buffer(VkCommandBuffer, VkBuffer source, VkBuffer dest, unsigned count,

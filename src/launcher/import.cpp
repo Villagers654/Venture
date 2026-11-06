@@ -154,7 +154,7 @@ Core::ImportMatch Core::import_match(const ImportItem &item) const {
   // package names.
   const library::Install *installed = nullptr;
   for (const auto &i : installs_)
-    if (i.plan.package == item.package) {
+    if (i.plan.package == item.package && !i.plan.pinned) {  // a pinned version keeps its build
       installed = &i;
       if (!m.game)
         for (const auto &g : games_)

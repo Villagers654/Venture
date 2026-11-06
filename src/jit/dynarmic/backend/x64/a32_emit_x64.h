@@ -100,7 +100,7 @@ public:
     };
     std::optional<DoNotFastmemMarker> ShouldFastmem(A32EmitContext& ctx, IR::Inst* inst) const;
     void EmitFastmemFallback(A32EmitContext& ctx, IR::Inst* inst, Xbyak::Label& abort, Xbyak::Label& end, Xbyak::Reg64 vaddr,
-                             std::optional<s32> folded, void (*wrapped_fn)(), const void* location, DoNotFastmemMarker marker);
+                             std::optional<s32> folded, std::optional<FoldedIndex> index, void (*wrapped_fn)(), const void* location, DoNotFastmemMarker marker);
     FakeCall FastmemCallback(u64 rip);
 
     // Memory access helpers
@@ -139,6 +139,7 @@ public:
     BlockRangeInformation<u32> block_ranges;
     std::array<FastDispatchEntry, fast_dispatch_table_size> fast_dispatch_table;
     ::Common::unordered_map<u64, FastmemPatchInfo> fastmem_patch_info;
+    void EmplaceFastmemPatch(u64 location, const FastmemPatchInfo& info) { fastmem_patch_info.emplace(location, info); }
     ::Common::unordered_map<std::tuple<bool, size_t, int, int>, void (*)()> read_fallbacks;
     ::Common::unordered_map<std::tuple<bool, size_t, int, int>, void (*)()> write_fallbacks;
     ::Common::unordered_map<std::tuple<bool, size_t, int, int>, void (*)()> exclusive_write_fallbacks;

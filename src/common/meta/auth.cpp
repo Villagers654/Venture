@@ -1,5 +1,6 @@
 #include "common/meta/auth.h"
 #include "common/digest.h"
+#include <algorithm>
 #include <optional>
 #include <regex>
 
@@ -13,6 +14,22 @@ bool is_callback(std::string_view u) {
   std::transform(s.begin(), s.end(), s.begin(),
                  [](unsigned char c) { return char(std::tolower(c)); });
   return s == "oculus" || s == "oculus-client";
+}
+std::string find_callback(std::string_view text) {
+  std::string lower(text);
+  std::ranges::transform(lower, lower.begin(), [](unsigned char c) { return char(std::tolower(c)); });
+  auto start = std::min(lower.find("oculus://"), lower.find("oculus-client://"));
+  if (start == std::string::npos)
+    return {};
+  // The address is plain ASCII up to whitespace, a quote or a bracket.
+  auto end = start;
+  while (end < text.size()) {
+    auto c = static_cast<unsigned char>(text[end]);
+    if (c <= ' ' || c >= 0x80 || c == '"' || c == '\'' || c == '<' || c == '>' || c == '`')
+      break;
+    ++end;
+  }
+  return std::string(text.substr(start, end - start));
 }
 namespace {
 std::optional<http::Url> plain_https(std::string_view url) {
@@ -117,6 +134,14 @@ std::string Auth::begin(std::stop_token stop) {
                      {"source_app_id", "512466987071624"},
                      {"native_sso_etoken", etoken},
                      {"utm_source", "venture"}});
+}
+bool Auth::accepts(std::string_view callback) const {
+  try {
+    validate_callback(callback, challenge_);
+    return true;
+  } catch (const std::exception &) {
+    return false;
+  }
 }
 Session Auth::complete(std::string_view callback, std::stop_token stop) {
   if (std::chrono::steady_clock::now() > expires_)

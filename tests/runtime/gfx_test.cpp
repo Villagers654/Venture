@@ -14,6 +14,7 @@
 
 #include "android/native_window.h"
 #include "core/thread.h"
+#include "core/thread_runtime.h"
 #include "core/hle_runtime.h"
 #include "core/process.h"
 #include "core/pipeline_stats.h"
@@ -449,6 +450,16 @@ TEST_CASE("gfx ANGLE binary cache identity and UE4 stereo framebuffer replay") {
   call("glUseProgram", 0);
   call("glDeleteProgram", program);
 }
+TEST_CASE("gfx ANGLE out of memory and context loss are logged; embedded fixtures keep running") {
+  // A dedicated worker ends with status 1 on context loss (device lost); an
+  // embedded fixture only logs, so both calls must return here.
+  REQUIRE_FALSE(venture::terminal_guest_process_exit());
+  gfx::note_angle_gl_error(GL_INVALID_OPERATION, "test");
+  gfx::note_angle_gl_error(GL_OUT_OF_MEMORY, "test");
+  gfx::note_angle_gl_error(GL_CONTEXT_LOST, "test");
+  gfx::note_angle_gl_error(GL_CONTEXT_LOST, "test");
+  if (!std::getenv("VENTURE_GLES_MAX_SAMPLES")) CHECK(gfx::guest_max_samples() == 4);
+}
 TEST_CASE("gfx ASTC every LDR footprint and sRGB decode plus cache integrity") {
   const auto block = constant_block(37, 83, 171, 209);
   for (std::uint32_t base : {0x93B0u, 0x93D0u})
@@ -484,46 +495,40 @@ TEST_CASE("gfx ASTC every LDR footprint and sRGB decode plus cache integrity") {
        std::to_string(
            std::chrono::steady_clock::now().time_since_epoch().count()));
   std::filesystem::create_directories(cache);
+  // One-file-per-mip entries of earlier builds are removed.
+  { std::ofstream old(cache / "old.rgba", std::ios::binary); old << "old"; }
   auto first = gfx::decode_astc(0x93B0, 4, 4, 1, block, cache);
   CHECK(gfx::decode_astc(0x93B0, 4, 4, 1, block, cache) == first);
-  for (const auto& entry : std::filesystem::directory_iterator(cache))
-    if (entry.path().extension() == ".rgba") {
-      std::ofstream corrupt(entry.path(), std::ios::binary | std::ios::trunc);
-      corrupt << "corrupt";
-    }
+  gfx::flush_texture_caches();
+  CHECK(!std::filesystem::exists(cache / "old.rgba"));
+  const auto pack = cache / "textures.vtx";
+  REQUIRE(std::filesystem::exists(pack));
+  const auto packed_size = std::filesystem::file_size(pack);
+  CHECK(packed_size > first.size());
   CHECK(gfx::decode_astc(0x93B0, 4, 4, 1, block, cache) == first);
-  // Real copied-data roots plus the content key/temp suffix can exceed MAX_PATH.
-  const auto long_cache = cache / std::string(80, 'a') / std::string(80, 'b');
-  CHECK(gfx::decode_astc(0x93B0, 4, 4, 1, block, long_cache) == first);
-  std::filesystem::path published;
-  unsigned entries = 0;
-  for (const auto& entry : std::filesystem::directory_iterator(paths::io_path(long_cache))) {
-    CHECK(entry.path().extension() == ".rgba");
-    published = entry.path();
-    ++entries;
+  gfx::flush_texture_caches();
+  // A hit appends nothing.
+  CHECK(std::filesystem::file_size(pack) == packed_size);
+  {
+    // A corrupt record decodes again and is stored again.
+    std::fstream corrupt(pack, std::ios::binary | std::ios::in | std::ios::out);
+    corrupt.seekp(static_cast<std::streamoff>(packed_size - 4));
+    corrupt.write("bad!", 4);
   }
-  REQUIRE(entries == 1);
-  REQUIRE(published.native().size() > 260);
-  CHECK(std::filesystem::file_size(published) == first.size() + 64);
-  const auto stamp = std::filesystem::file_time_type::clock::now() - std::chrono::hours(24);
-  std::filesystem::last_write_time(published, stamp);
-  const auto saved_stamp = std::filesystem::last_write_time(published);
+  CHECK(gfx::decode_astc(0x93B0, 4, 4, 1, block, cache) == first);
+  gfx::flush_texture_caches();
+  CHECK(std::filesystem::file_size(pack) > packed_size);
+  // A directory beyond MAX_PATH still decodes (it may only read its pack).
+  const auto long_cache = cache / std::string(80, 'a') / std::string(80, 'b') / std::string(80, 'c');
+  REQUIRE((long_cache / "textures.vtx").native().size() > 260);
   CHECK(gfx::decode_astc(0x93B0, 4, 4, 1, block, long_cache) == first);
-  // A cache hit reads the old file; decoding and republishing changes its stamp.
-  CHECK(std::filesystem::last_write_time(published) == saved_stamp);
+  gfx::flush_texture_caches();
+  CHECK(gfx::decode_astc(0x93B0, 4, 4, 1, block, long_cache) == first);
   // A cache directory that is a file must not prevent decoding.
   auto unavailable = cache / "unavailable";
   { std::ofstream out(unavailable); out << "file"; }
   CHECK(gfx::decode_astc(0x93B0, 4, 4, 1, block, unavailable) == first);
-  // Publication over a directory fails, but decoded pixels remain usable.
-  for (const auto& entry : std::filesystem::directory_iterator(cache)) {
-    if (entry.path().extension() != ".rgba") continue;
-    std::filesystem::remove(entry.path());
-    std::filesystem::create_directory(entry.path());
-  }
-  CHECK(gfx::decode_astc(0x93B0, 4, 4, 1, block, cache) == first);
-  for (const auto& entry : std::filesystem::directory_iterator(cache))
-    CHECK(entry.path().extension() != ".tmp");
+  gfx::flush_texture_caches();
   // This directory is exclusively created by the test, below
   // temp_directory_path.
   std::filesystem::remove_all(cache);
@@ -780,9 +785,8 @@ TEST_CASE("gfx BC7 encode keeps gradients close and cutout alpha exact") {
                ("Venture-bc7-test-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
   CHECK(gfx::transcode_astc_bc7(0x93B0, 4, 4, 1, block, cache) == expected);
   CHECK(gfx::transcode_astc_bc7(0x93B0, 4, 4, 1, block, cache) == expected);
-  unsigned files = 0;
-  for (const auto& entry : std::filesystem::directory_iterator(cache)) files += entry.path().extension() == ".bc7";
-  CHECK(files == 1);
+  gfx::flush_texture_caches();
+  CHECK(std::filesystem::exists(cache / "textures.vtx"));
   std::error_code ec;
   std::filesystem::remove_all(cache, ec);
 }
@@ -890,6 +894,74 @@ TEST_CASE("gfx ASTC fallback HLE uploads subuploads storage array and PBO") {
            (x || y ? green : red).data());
   CHECK(call("glGetError") == GL_NO_ERROR);
   call("glDeleteTextures", 1, &texture);
+}
+TEST_CASE("gfx ASTC fallback uploads decoded in the background reach every later use") {
+  if (!have_angle()) return;
+  EglSession egl;
+  if (!gfx::current_gl_state()->astc_fallback) return;
+  const auto red = constant_block(255, 0, 0), green = constant_block(0, 255, 0), blue = constant_block(0, 0, 255);
+  auto near = [](std::array<std::uint8_t, 4> a, std::array<std::uint8_t, 4> b) {
+    for (int c = 0; c < 4; ++c)
+      if (std::abs(int(a[c]) - int(b[c])) > (c == 3 ? 0 : 1)) return false;
+    return true;
+  };
+  auto& group = *gfx::current_gl_state()->textures;
+  // Uploads wait for a draw and apply in call order.
+  GLuint a{};
+  call("glGenTextures", 1, &a);
+  call("glBindTexture", GL_TEXTURE_2D, a);
+  call("glTexStorage2D", GL_TEXTURE_2D, 1, 0x93B0, 4, 4);
+  call("glCompressedTexSubImage2D", GL_TEXTURE_2D, 0, 0, 0, 4, 4, 0x93B0, 16, red.data());
+  call("glCompressedTexSubImage2D", GL_TEXTURE_2D, 0, 0, 0, 4, 4, 0x93B0, 16, green.data());
+  CHECK(call("glGetError") == GL_NO_ERROR);
+  CHECK(group.pending_count.load() == 2);
+  CHECK(near(sample_texture(a), {0, 255, 0, 255}));
+  CHECK(group.pending_count.load() == 0);
+  // An upload made in a shared context is applied before this context samples it.
+  const EGLint shared_attributes[] = {EGL_CONTEXT_CLIENT_VERSION, 3, EGL_NONE};
+  auto shared = g2h(call("eglCreateContext", egl.display, egl.config, egl.context, shared_attributes));
+  REQUIRE(shared);
+  REQUIRE(call("eglMakeCurrent", egl.display, egl.surface, egl.surface, shared) == EGL_TRUE);
+  call("glBindTexture", GL_TEXTURE_2D, a);
+  call("glCompressedTexSubImage2D", GL_TEXTURE_2D, 0, 0, 0, 4, 4, 0x93B0, 16, blue.data());
+  REQUIRE(call("eglMakeCurrent", egl.display, egl.surface, egl.surface, egl.context) == EGL_TRUE);
+  CHECK(near(sample_texture(a), {0, 0, 255, 255}));
+  CHECK(call("eglDestroyContext", egl.display, shared) == EGL_TRUE);
+  // A deleted texture's pending upload never reaches a texture reusing its name.
+  GLuint b{};
+  call("glGenTextures", 1, &b);
+  call("glBindTexture", GL_TEXTURE_2D, b);
+  call("glTexStorage2D", GL_TEXTURE_2D, 1, 0x93B0, 4, 4);
+  call("glCompressedTexSubImage2D", GL_TEXTURE_2D, 0, 0, 0, 4, 4, 0x93B0, 16, red.data());
+  call("glDeleteTextures", 1, &b);
+  CHECK(group.pending_count.load() == 0);
+  call("glGenTextures", 1, &b);
+  call("glBindTexture", GL_TEXTURE_2D, b);
+  call("glTexStorage2D", GL_TEXTURE_2D, 1, 0x93B0, 4, 4);
+  call("glCompressedTexSubImage2D", GL_TEXTURE_2D, 0, 0, 0, 4, 4, 0x93B0, 16, green.data());
+  CHECK(near(sample_texture(b), {0, 255, 0, 255}));
+  call("glDeleteTextures", 1, &b);
+  // A new image of the level replaces the contents of earlier pending uploads.
+  GLuint c{};
+  call("glGenTextures", 1, &c);
+  call("glBindTexture", GL_TEXTURE_2D, c);
+  call("glCompressedTexImage2D", GL_TEXTURE_2D, 0, 0x93B0, 4, 4, 0, 16, red.data());
+  call("glCompressedTexSubImage2D", GL_TEXTURE_2D, 0, 0, 0, 4, 4, 0x93B0, 16, green.data());
+  call("glCompressedTexImage2D", GL_TEXTURE_2D, 0, 0x93B0, 4, 4, 0, 16, blue.data());
+  CHECK(call("glGetError") == GL_NO_ERROR);
+  CHECK(near(sample_texture(c), {0, 0, 255, 255}));
+  // A texture bound on another unit is applied before a draw too.
+  call("glBindTexture", GL_TEXTURE_2D, a);
+  call("glCompressedTexSubImage2D", GL_TEXTURE_2D, 0, 0, 0, 4, 4, 0x93B0, 16, red.data());
+  call("glActiveTexture", GL_TEXTURE1);
+  call("glBindTexture", GL_TEXTURE_2D, a);
+  call("glActiveTexture", GL_TEXTURE0);
+  call("glBindTexture", GL_TEXTURE_2D, c);
+  call("glDrawArrays", GL_TRIANGLES, 0, 3);  // no program: an error, after the uploads
+  call("glGetError");
+  CHECK(group.pending_count.load() == 0);
+  call("glDeleteTextures", 1, &a);
+  call("glDeleteTextures", 1, &c);
 }
 TEST_CASE("gfx ANGLE ETC2 EAC fallback sampled readback") {
   if (!have_angle()) return;
@@ -1004,7 +1076,10 @@ struct CopyTarget {
     REQUIRE(vkfn<PFN_vkCreateFence>("vkCreateFence")(d, &fc, nullptr, &fence) ==
             VK_SUCCESS);
   }
-  std::vector<std::uint8_t> read(std::uint64_t* before_read_ns = nullptr) {
+  // Reads `source` (by default the target image) from `layout`, restoring it.
+  std::vector<std::uint8_t> read(std::uint64_t* before_read_ns = nullptr, VkImage source = VK_NULL_HANDLE,
+                                 VkImageLayout layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL) {
+    if (!source) source = image;
     auto& gpu = gfx::gpu_device();
     VkQueryPool query{};
     if (before_read_ns) {
@@ -1026,10 +1101,10 @@ struct CopyTarget {
     VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
     b.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
     b.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-    b.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    b.oldLayout = layout;
     b.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
     b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    b.image = image;
+    b.image = source;
     b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, levels, 0, layers};
     auto barrier = vkfn<PFN_vkCmdPipelineBarrier>("vkCmdPipelineBarrier");
     barrier(command, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
@@ -1044,7 +1119,7 @@ struct CopyTarget {
       offset += VkDeviceSize(copy.imageExtent.width) * copy.imageExtent.height * 4 * layers;
     }
     vkfn<PFN_vkCmdCopyImageToBuffer>("vkCmdCopyImageToBuffer")(
-        command, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, buffer, levels, copies.data());
+        command, source, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, buffer, levels, copies.data());
     b.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
     b.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
     std::swap(b.oldLayout, b.newLayout);
@@ -1361,6 +1436,102 @@ TEST_CASE("gfx multiview eye layers survive MSAA resolve and XR orientation conv
   for (auto shader : shaders) call("glDeleteShader", shader);
 }
 
+TEST_CASE("gfx XR staging exports every GLES ring layer for Vulkan and hands it back") {
+  // OpenXR GLES chains stage the ring into per-layer exported images that the
+  // host copy reads directly (a Beat Saber report ran out of VRAM with four
+  // copies per eye chain). Everything is allocated at creation.
+  if (!have_angle()) return;
+  EglSession egl;
+  REQUIRE(xr::install_angle_xr_images());
+  auto* provider = xr::xr_images();
+  xr::ImageDesc description{GL_RGBA8, VK_FORMAT_R8G8B8A8_UNORM, 4, 4, 2, 1, 1, 1};
+  GLuint texture{};
+  REQUIRE(provider->create_ring(description, {&texture, 1}) == XR_SUCCESS);
+  xr::StagedImage slot;
+  const std::array<std::uint32_t, 1> names{texture};
+  REQUIRE(provider->create_staging(description, names, {&slot, 1}) == XR_SUCCESS);
+  REQUIRE(slot.layers.size() == 2);
+  CHECK(slot.layouts.size() == 2);
+  CHECK_FALSE(slot.staged);
+  CHECK(slot.layers[0] != slot.layers[1]);
+  // A texture of another owner is refused, not staged.
+  GLuint foreign{};
+  call("glGenTextures", 1, &foreign);
+  call("glBindTexture", GL_TEXTURE_2D_ARRAY, foreign);
+  call("glTexStorage3D", GL_TEXTURE_2D_ARRAY, 1, GL_RGBA8, 4, 4, 2);
+  CHECK(XR_FAILED(provider->stage(foreign, slot, description)));
+  call("glDeleteTextures", 1, &foreign);
+  GLuint fbo{};
+  call("glGenFramebuffers", 1, &fbo);
+  call("glBindFramebuffer", GL_FRAMEBUFFER, fbo);
+  for (int frame = 0; frame < 3; ++frame) {
+    CAPTURE(frame);
+    for (GLint layer = 0; layer < 2; ++layer) {
+      call("glFramebufferTextureLayer", GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, texture, 0, layer);
+      REQUIRE(call("glCheckFramebufferStatus", GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE);
+      call("glClearColor", layer == 0 ? 1.0f : 0.0f, layer == 1 ? 1.0f : 0.0f, float(frame % 2), 1.0f);
+      call("glClear", GL_COLOR_BUFFER_BIT);
+      // GL row 3, the top of a GLES framebuffer.
+      call("glEnable", GL_SCISSOR_TEST);
+      call("glScissor", 0, 3, 4, 1);
+      call("glClearColor", 0.0f, 0.0f, 1.0f, 1.0f);
+      call("glClear", GL_COLOR_BUFFER_BIT);
+      call("glDisable", GL_SCISSOR_TEST);
+    }
+    REQUIRE(provider->stage(texture, slot, description) == XR_SUCCESS);
+    CHECK(slot.staged);
+    for (std::uint32_t layer = 0; layer < 2; ++layer) {
+      CAPTURE(layer);
+      CopyTarget target(1);
+      auto bytes = target.read(nullptr, slot.layers[layer], slot.layouts[layer]);
+      // Staging keeps GLES rows: GL row y is image row y.
+      for (std::size_t p = 0; p < 64; p += 4) {
+        const bool top = p >= 48;
+        CHECK(bytes[p] == (!top && layer == 0 ? 255 : 0));
+        CHECK(bytes[p + 1] == (!top && layer == 1 ? 255 : 0));
+        CHECK(bytes[p + 2] == (top ? 255 : (frame % 2) * 255));
+        CHECK(bytes[p + 3] == 255);
+      }
+    }
+  }
+  call("glBindFramebuffer", GL_FRAMEBUFFER, 0);
+  call("glDeleteFramebuffers", 1, &fbo);
+  provider->destroy_staging({&slot, 1});
+  CHECK(slot.layers.empty());
+  CHECK_FALSE(slot.staged);
+  provider->destroy_ring({&texture, 1});
+  // Venture's own GL work leaves the guest's error state untouched.
+  CHECK(call("glGetError") == GL_NO_ERROR);
+}
+
+TEST_CASE("gfx guest sample limits match Quest's 4x MSAA") {
+  if (!have_angle()) return;
+  EglSession egl(3, false);
+  for (GLenum name : {GL_MAX_SAMPLES, GL_MAX_COLOR_TEXTURE_SAMPLES, GL_MAX_DEPTH_TEXTURE_SAMPLES,
+                      GL_MAX_INTEGER_SAMPLES}) {
+    GLint value = -1;
+    call("glGetIntegerv", name, &value);
+    CHECK(value >= 1);
+    CHECK(value <= 4);
+    std::int64_t wide = -1;
+    call("glGetInteger64v", name, &wide);
+    CHECK(wide == value);
+  }
+  GLint max = 0;
+  call("glGetIntegerv", GL_MAX_SAMPLES, &max);
+  CHECK(max == 4);  // every PC GPU ANGLE runs on offers 4x
+  GLint count = -1;
+  call("glGetInternalformativ", GL_RENDERBUFFER, GL_RGBA8, GL_NUM_SAMPLE_COUNTS, 1, &count);
+  REQUIRE(count >= 1);
+  std::array<GLint, 8> samples{};
+  samples.fill(-1);
+  call("glGetInternalformativ", GL_RENDERBUFFER, GL_RGBA8, GL_SAMPLES, GLsizei(samples.size()), samples.data());
+  CHECK(samples[0] == 4);
+  for (GLint i = 0; i < count; ++i) CHECK(samples[i] <= 4);
+  CHECK(samples[count] == -1);
+  CHECK(call("glGetError") == GL_NO_ERROR);
+}
+
 TEST_CASE("gfx guest no-error contexts follow KHR_no_error over validated ANGLE") {
   if (!have_angle()) return;
   EglSession egl(3, true);
@@ -1379,6 +1550,16 @@ TEST_CASE("gfx guest no-error contexts follow KHR_no_error over validated ANGLE"
   REQUIRE(scratch);
   std::memset(scratch, 0, 4096);
   CHECK(call("glUnmapBuffer", GL_COPY_WRITE_BUFFER) == GL_TRUE);
+  CHECK(call("glGetError") == GL_NO_ERROR);
+  // Also with GL_OUT_OF_MEMORY pending: a Beat Saber report crashed in a
+  // memcpy to the null map that followed one. The error is still reported.
+  gfx::gl_error(GL_OUT_OF_MEMORY);
+  scratch = g2h<std::uint8_t>(call("glMapBufferRange", GL_COPY_WRITE_BUFFER, 0, 160,
+                                   GL_MAP_WRITE_BIT | GL_MAP_INVALIDATE_RANGE_BIT));
+  REQUIRE(scratch);
+  std::memset(scratch, 0, 160);
+  CHECK(call("glUnmapBuffer", GL_COPY_WRITE_BUFFER) == GL_TRUE);
+  CHECK(call("glGetError") == GL_OUT_OF_MEMORY);
   CHECK(call("glGetError") == GL_NO_ERROR);
   // Real maps are untouched, also after a discarded map left on the target.
   GLuint buffer{};
@@ -1446,7 +1627,3 @@ TEST_CASE("gfx guest no-error contexts follow KHR_no_error over validated ANGLE"
 
 TEST_SUITE_END();
 
-namespace {
-std::atomic<unsigned> stable_proc_resolutions{0};
-
-}

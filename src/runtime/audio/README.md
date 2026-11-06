@@ -9,7 +9,10 @@ The backend also drains these workers on process teardown. The integrated runtim
 One miniaudio 0.11.23 output device mixes up to 64 total output/capture streams;
 capture shares a separate default input device, released when its last stream
 stops/closes. Both use 48 kHz stereo float host buffers. Guest PCM (mono/stereo,
-8–192 kHz) is converted with preallocated miniaudio converters. Guest callback
+8–192 kHz) is converted with preallocated miniaudio converters. What the guest
+sees of the hardware is always Quest's: 48 kHz output (AudioManager properties,
+AudioDeviceInfo rates, AAudio hardware getters), whatever rate the host endpoint
+runs at; the mixer resamples to it. Guest callback
 workers use `GuestThread::adopt_current()` and guest-owned callback buffers.
 The device thread never enters the JIT, allocates, locks a mutex, wakes a futex,
 or destroys a stream. It uses bounded slots, SPSC rings and quiescent removal.
@@ -19,6 +22,33 @@ Host periods request 5 ms × 2. By default the guest output worker queues two
 host endpoint and JIT scheduling. Larger requested callback blocks/buffers
 increase latency. A 1 ms worker poll performs futex wakeups away from the host
 device thread. Blocking guest I/O and state waits use the core futex primitive.
+
+When the host XR runtime names the headset's audio endpoints, output and
+capture open on them, as native PC VR apps do (Meta's VRC.PC.Audio.1): on
+Windows the runtime's XR_OCULUS_audio_device_guid answer (a WASAPI endpoint ID
+or its GUID) is matched against the active endpoints. The answer is rechecked
+every 2 s and on endpoint notifications; a changed or newly active endpoint
+reopens the device with guest streams still attached. A runtime without the
+extension (SteamVR, which switches the Windows default itself; VDXR; Linux
+runtimes, which expose no standard sink name), an answer naming no active
+endpoint, or one that fails to open leaves the system default. The choice and
+its reason are logged as a `facts` line.
+
+With VENTURE_PC_AUDIO=on (the launcher's "Audio on PC too" setting, off by
+default, globally or per game), the headset mix also plays on the system
+default output while the game plays on the headset endpoint and the default is
+another endpoint (Windows: compared by WASAPI endpoint ID; SDL: by the device
+the default resolves to). When the headset endpoint is the default, or the game
+plays on the default anyway (SteamVR, Linux runtimes today), it plays once.
+The headset device callback copies each finished block into a lock-free SPSC
+queue (`output_mirror.h`) and returns; a second device on the system default
+pulls it on its own clock through a 4-point resampler whose ratio (within
++-0.5 %) a fill-level controller sets to hold the queue at
+2 x (both periods) + 10 ms, absorbing clock drift. A starved queue plays
+silence and refills; one that overflowed restarts from fresh samples. The PC
+device failing to open, start or keep running is logged once and dropped for
+the process; the headset path never waits for it. The microphone is never
+mirrored. Decisions are `facts` lines.
 
 WASAPI automatically reroutes streams following the system default, using
 miniaudio's default endpoint routing. PulseAudio (including PipeWire's Pulse

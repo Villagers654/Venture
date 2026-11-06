@@ -102,4 +102,25 @@ void refresh() {
   std::lock_guard lock(shared.mutex);
   capture(shared);
 }
+bool passthrough_enabled() {
+  const auto* value = getenv("VENTURE_PASSTHROUGH");
+  return !value || std::string_view(value) != "0";
+}
+std::optional<std::array<std::uint8_t, 3>> parse_color_key(std::string_view text) {
+  if (!text.empty() && text.front() == '#') text.remove_prefix(1);
+  if (text.size() != 6) return std::nullopt;
+  std::array<std::uint8_t, 3> rgb{};
+  for (std::size_t i = 0; i < 6; ++i) {
+    const char c = text[i];
+    const int digit = c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10
+                    : c >= 'A' && c <= 'F' ? c - 'A' + 10 : -1;
+    if (digit < 0) return std::nullopt;
+    rgb[i / 2] = std::uint8_t(rgb[i / 2] * 16 + digit);
+  }
+  return rgb;
+}
+std::optional<std::array<std::uint8_t, 3>> passthrough_color_key() {
+  const auto* value = getenv("VENTURE_PASSTHROUGH_KEY");
+  return value ? parse_color_key(value) : std::nullopt;
+}
 } // namespace venture::environment

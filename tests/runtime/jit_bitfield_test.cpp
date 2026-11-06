@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Every SBFM and UBFM encoding (32- and 64-bit, all immr/imms) and every valid
-// 64-bit AND (immediate) against the architecture's DecodeBitMasks/ROR model,
+// Every SBFM, UBFM and BFM encoding (32- and 64-bit, all immr/imms) and every valid
+// 64-bit AND, ORR and EOR (immediate) against the architecture's DecodeBitMasks/ROR model,
 // over edge and patterned inputs. The JIT translates the bitfield moves as
 // shift-and-mask (LSL, LSR, ASR, UBFX, SBFX, UBFIZ, SBFIZ, UXT*, SXT*) and
 // emits low-word AND masks as 32-bit operations, so each form is checked with
@@ -60,6 +60,13 @@ std::uint64_t bitfield(bool sign, unsigned size, unsigned immr, unsigned imms, s
   if (!sign) return bot & m.tmask;
   const std::uint64_t top = (src >> imms) & 1 ? ones(size) : 0;
   return ((top & ~m.tmask) | (bot & m.tmask)) & ones(size);
+}
+
+// BFM from the Arm ARM: the destination keeps the bits outside the field.
+std::uint64_t bitfield_insert(unsigned size, unsigned immr, unsigned imms, std::uint64_t dst, std::uint64_t src) {
+  const auto m = *decode_bit_masks(size == 64, imms, immr, false, size);
+  const std::uint64_t bot = (dst & ~m.wmask) | (ror(src, immr, size) & m.wmask);
+  return ((dst & ~m.tmask) | (bot & m.tmask)) & ones(size);
 }
 
 class Cpu final : private A64::UserCallbacks {
@@ -156,18 +163,43 @@ int main(int argc, char** argv) {
           }
         }
       }
-      // AND x2, x0, #imm and AND x0, x0, #imm for every valid 64-bit logical immediate.
+      // BFM (BFI, BFXIL) into a fresh destination, in place, into a varied destination, source live.
+      for (const unsigned size : {32u, 64u}) {
+        const std::uint32_t sf = size == 64 ? 1u : 0u;
+        for (unsigned immr = 0; immr < size; ++immr) for (unsigned imms = 0; imms < size; ++imms) {
+          const std::uint32_t op = sf << 31 | 1u << 29 | 0x26u << 23 | sf << 22 | immr << 16 | imms << 10;
+          const std::string name = std::string("BFM") + (size == 64 ? " x" : " w") +
+                                   " immr=" + std::to_string(immr) + " imms=" + std::to_string(imms);
+          // bfm x2, x0; bfm x5, x5; bfm x6, x0; add x4, x0, x2; svc.
+          cpu.load({op | 0u << 5 | 2u, op | 5u << 5 | 5u, op | 0u << 5 | 6u, 0x8b020004u, svc});
+          for (const auto x : inputs) {
+            cpu.run(x, ~x);
+            const auto reg2 = bitfield_insert(size, immr, imms, 0x5a5a5a5a00000002 & ones(size), x & ones(size));
+            const auto reg5 = bitfield_insert(size, immr, imms, 0x5a5a5a5a00000005 & ones(size), 0x5a5a5a5a00000005 & ones(size));
+            const auto reg6 = bitfield_insert(size, immr, imms, ~x & ones(size), x & ones(size));
+            require(cpu.jit->GetRegister(2) == reg2, name + " x=" + hex(x) + " got " + hex(cpu.jit->GetRegister(2)) + " want " + hex(reg2));
+            require(cpu.jit->GetRegister(5) == reg5, name + " in place");
+            require(cpu.jit->GetRegister(6) == reg6, name + " varied destination x=" + hex(x));
+            require(cpu.jit->GetRegister(4) == x + reg2, name + " live source x=" + hex(x));
+            ++cases;
+          }
+        }
+      }
+      // AND, ORR and EOR x2, x0, #imm and in place for every valid 64-bit logical immediate
+      // (single-bit and wide low masks are BTR/BTS/BTC and shift pairs).
+      for (const std::uint32_t opc : {0u, 1u, 2u})
       for (unsigned n = 0; n < 2; ++n) for (unsigned immr = 0; immr < 64; ++immr) for (unsigned imms = 0; imms < 64; ++imms) {
         const auto masks = decode_bit_masks(n, imms, immr, true, 64);
         if (!masks) continue;
-        const std::uint32_t op = 0x92000000u | n << 22 | immr << 16 | imms << 10;
+        const std::uint32_t op = 0x92000000u | opc << 29 | n << 22 | immr << 16 | imms << 10;
+        const std::string name = std::string(opc == 0 ? "AND" : opc == 1 ? "ORR" : "EOR") + " #" + hex(masks->wmask);
         cpu.load({op | 2u, op, 0x8b080004u, svc});
         for (const auto x : inputs) {
           cpu.run(x);
-          const auto expected = x & masks->wmask;
-          require(cpu.jit->GetRegister(2) == expected, "AND #" + hex(masks->wmask) + " x=" + hex(x));
-          require(cpu.jit->GetRegister(0) == expected, "AND in place #" + hex(masks->wmask) + " x=" + hex(x));
-          require(cpu.jit->GetRegister(4) == expected + x, "AND live #" + hex(masks->wmask) + " x=" + hex(x));
+          const auto expected = opc == 0 ? x & masks->wmask : opc == 1 ? x | masks->wmask : x ^ masks->wmask;
+          require(cpu.jit->GetRegister(2) == expected, name + " x=" + hex(x));
+          require(cpu.jit->GetRegister(0) == expected, name + " in place x=" + hex(x));
+          require(cpu.jit->GetRegister(4) == expected + x, name + " live x=" + hex(x));
           ++cases;
         }
       }

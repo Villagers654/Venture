@@ -62,8 +62,16 @@ class HleLibrary final : public Library {
   void add_data(std::string_view name, GuestAddr address);
   GuestAddr find_symbol(std::string_view name, std::string_view version = {}) const override;
   const std::vector<std::string>& aliases() const { return aliases_; }
+  // Exports that identify an ELF under any other file name as a copy of this
+  // library (an SDK bundled again under a vendor's name). The linker serves
+  // such a copy from this slot instead of mapping it. Set before loading.
+  void set_identity(std::vector<std::string> exports) { identity_ = std::move(exports); }
+  const std::vector<std::string>& identity() const { return identity_; }
   bool is_function(std::string_view name) const;
   GuestAddr hle_symbol(std::string_view name) const;
+  // As hle_symbol, but 0 for an A32 export without an ABI adapter: absent to
+  // dlsym and weak imports, like a function Venture does not implement on A64.
+  GuestAddr callable_symbol(std::string_view name) const;
   GuestIsa isa() const override;
   elf::Image* mapped_image() const override;
   std::shared_ptr<elf::Image> backing() const;
@@ -75,6 +83,7 @@ class HleLibrary final : public Library {
   struct Impl;
   std::shared_ptr<Impl> impl_;
   std::vector<std::string> aliases_;
+  std::vector<std::string> identity_;
 };
 
 enum DlopenFlags : int {

@@ -1,0 +1,118 @@
+{
+ "width": 467,
+ "height": 720,
+ "nodes": {
+  "RootNode": [
+   231.0,
+   358.9
+  ],
+  "generic_trigger_grip_thumbstick_R": [
+   231.0,
+   358.9
+  ],
+  "Body": [
+   237.8,
+   367.3
+  ],
+  "Plate": [
+   260.9,
+   167.9
+  ],
+  "POINTING_POSE": [
+   60.4,
+   -39.3
+  ],
+  "xr_standard_trigger": [
+   89.9,
+   96.1
+  ],
+  "xr_standard_trigger_pressed_min": [
+   123.7,
+   56.2
+  ],
+  "xr_standard_trigger_pressed_max": [
+   123.7,
+   56.2
+  ],
+  "xr_standard_trigger_pressed_value": [
+   89.9,
+   96.1
+  ],
+  "trigger": [
+   89.9,
+   96.1
+  ],
+  "xr_standard_thumbstick": [
+   308.4,
+   224.4
+  ],
+  "xr_standard_thumbstick_pressed_min": [
+   253.4,
+   246.6
+  ],
+  "xr_standard_thumbstick_pressed_max": [
+   250.9,
+   247.5
+  ],
+  "xr_standard_thumbstick_pressed_value": [
+   308.4,
+   224.4
+  ],
+  "THUMBSTICK_X": [
+   308.4,
+   224.4
+  ],
+  "xr_standard_thumbstick_xaxis_pressed_min": [
+   253.4,
+   246.6
+  ],
+  "xr_standard_thumbstick_xaxis_pressed_max": [
+   253.4,
+   246.6
+  ],
+  "xr_standard_thumbstick_xaxis_pressed_value": [
+   308.4,
+   224.4
+  ],
+  "THUMBSTICK_Y": [
+   308.4,
+   224.4
+  ],
+  "xr_standard_thumbstick_yaxis_pressed_min": [
+   253.4,
+   246.6
+  ],
+  "xr_standard_thumbstick_yaxis_pressed_max": [
+   253.4,
+   246.6
+  ],
+  "xr_standard_thumbstick_yaxis_pressed_value": [
+   308.4,
+   224.4
+  ],
+  "ThumpStick": [
+   308.4,
+   224.4
+  ],
+  "xr_standard_squeeze": [
+   286.7,
+   414.3
+  ],
+  "xr_standard_squeeze_pressed_min": [
+   270.8,
+   410.8
+  ],
+  "xr_standard_squeeze_pressed_max": [
+   273.5,
+   407.5
+  ],
+  "xr_standard_squeeze_pressed_value": [
+   286.7,
+   414.3
+  ],
+  "Grab_Button": [
+   286.7,
+   414.3
+  ]
+ }
+}

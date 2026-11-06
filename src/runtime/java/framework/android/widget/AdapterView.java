@@ -5,6 +5,12 @@ public abstract class AdapterView<T extends Adapter> extends android.view.ViewGr
   public AdapterView(android.content.Context c) {
     super(c);
   }
+  public AdapterView(android.content.Context c, android.util.AttributeSet a) {
+    super(c, a);
+  }
+  public AdapterView(android.content.Context c, android.util.AttributeSet a, int style) {
+    super(c, a, style);
+  }
   public abstract T getAdapter();
   public abstract void setAdapter(T adapter);
   public abstract android.view.View getSelectedView();

@@ -59,6 +59,17 @@ int main(int argc, char** argv) {
     if (mode == "device-lost") return 99;
     exit_guest_process(37);
   }
+  if (mode == "main-thread-failure") {
+    // Issue 92: an engine thread waits forever for an answer the dead Android
+    // main thread never delivers; the process still ends at once, as Android's.
+    set_terminal_guest_process_exit(true);
+    std::thread([] { std::this_thread::sleep_for(std::chrono::hours(1)); }).detach();
+    struct UnrelatedCleanup {
+      ~UnrelatedCleanup() { log::error("test", "unrelated cleanup entered"); }
+    } cleanup;
+    end_app_after_main_thread_failure("The game's Android main thread stopped on an uncaught "
+                                      "java.lang.IllegalStateException: test");
+  }
   if (retain) {
     try { exit_guest_process(23); } catch (const ProcessExit&) {}
   }

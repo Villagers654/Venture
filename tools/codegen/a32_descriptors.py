@@ -213,6 +213,12 @@ def main():
         rows.append(dict(library='libc.so', symbol='__aeabi_atexit', result=classify('int', {}), arguments=[classify(t, {}) for t in ('void *', 'void (*)(void *)', 'void *')], source='ARM C++ ABI 3.3.5.3 / bionic arch-arm atexit'))
         rows.append(dict(library='libc.so', symbol='__cxa_finalize', result=classify('void', {}), arguments=[classify('void *', {})], source='bionic __cxa_atexit.cpp'))
         rows.append(dict(by_name['libc.so', 'strerror_r'], symbol='__gnu_strerror_r', result=classify('char *', {}), source='NDK r30 string.h __RENAME(__gnu_strerror_r)'))
+        # LP32-only bionic entry points removed from the NDK headers but still
+        # exported by 32-bit libc.so (libc.map.txt arm, pthread_cond.cpp).
+        cond = by_name['libc.so', 'pthread_cond_timedwait']
+        rows.append(dict(cond, symbol='pthread_cond_timedwait_relative_np', source='bionic pthread_cond.cpp (LP32 libc.map.txt)'))
+        rows.append(dict(cond, symbol='pthread_cond_timeout_np', arguments=cond['arguments'][:2] + [classify('unsigned int', {})],
+                         source='bionic pthread_cond.cpp (LP32 libc.map.txt)'))
         rows.append(dict(library='libc.so', symbol='__stack_chk_fail', result=classify('void', {}), arguments=[], source='bionic __stack_chk_fail.cpp'))
         # The linker's crash handler is reachable only as the sa_sigaction that
         # debuggerd_init() installs; guest crash reporters call it when chaining.

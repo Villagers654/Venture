@@ -14,6 +14,8 @@ venture-cli status
 venture-cli library --installed
 venture-cli info "beat saber"
 venture-cli install v-speedway        # downloads as the owning account
+venture-cli builds bait               # every version Meta published
+venture-cli install bait --build 1.16.4.285927-release   # beside the current one
 venture-cli play v-speedway           # waits for the game; returns its exit code
 venture-cli addons install moss --all
 venture-cli import D:\apks\game.apk --yes
@@ -77,6 +79,34 @@ the game's private storage (`shared_prefs/`, `databases/`...). Each top-level
 folder the import brings replaces the current one, which first moves to
 `data/save-backups/<account>/<package>/<time>/` in the data folder. The game
 must be closed, and cannot start until the import finishes.
+
+## Versions
+
+**Install a version…** (**Install another version…** once installed) in a
+store game's menu lists every build Meta published to a release channel
+(LIVE, BETA, ...), newest first, the one a Quest 3 gets today marked latest,
+and **All versions**. `venture-cli builds GAME` lists them and `venture-cli
+install GAME --build VERSION|BINARY_ID|all` installs them. Builds Meta never
+published are internal uploads its CDN refuses and are not listed.
+
+Each chosen build installs beside the game's own install as a pinned version,
+its own library entry named with its version (`Game (1.2)`):
+
+- Files in `<library>/<package>/<versionCode>-<binaryId>/` with
+  `"pinned": true` in `plan.json`; the game's own install stays in
+  `<package>/<versionCode>/` and keeps updating there.
+- Its own app data and saves, `data/users/<account>/<package>@<versionCode>-<binaryId>/`,
+  so an older build never reads or downgrades the current save (on a headset
+  only one version is installed and a downgrade reuses that data). Its own
+  caches, `cache/<package>/<versionCode>-<binaryId>/`, which launches of other
+  versions leave alone.
+- Never updated; no add-ons; save imports go to the game's own install.
+- Out of Steam until its menu's **Add to Steam**; the shortcut is named
+  `Game (1.2)` and launches `--launch <package>@<versionCode>-<binaryId>`.
+- One version of a game runs at a time, as they share its package.
+
+Uninstalling a pinned version removes its files, OBB view and caches; its
+saves stay, as a game's do.
 
 ## Steam library
 
@@ -213,7 +243,8 @@ For repeatable live verification (no game downloads), run:
 ```powershell
 build/windows-release/bin/venture.exe --smoke-seconds 30 --smoke-report out/smoke.json
 # Optional: --smoke-details, --smoke-play, --smoke-auth,
-#           --smoke-view settings|passthrough-info|account|downloads
+#           --smoke-view settings|account|downloads|controls-shared
+#           --language fr (interface language for this run)
 .deps/cmake/bin/cmake --build --preset windows-release --target venture_launcher_live_check
 build/windows-release/bin/venture_launcher_live_check.exe --read-only-meta
 ```
@@ -230,20 +261,26 @@ the report and exits 0 when the install is complete. `--smoke-seconds` bounds it
 
 ## Passthrough setting
 
-**Settings → Runtime → Passthrough (mixed reality)** is an explicit, default-off
-preference (`passthrough` in `settings.json`). It gates both native host
-`XR_FB_passthrough` forwarding and the Steam Frame over Steam Link backend.
-The old `steamFramePassthrough` preference is accepted when the new key is absent;
-saving writes the new key. The Info button opens an in-app dialog with separate
-Quest Link / Air Link and Steam Frame cards. It explains the Meta developer
-requirements and the Frame companion setup, with links to Meta's setup guide and
-[Steam Link Native Passthrough](https://github.com/McFredward/steam-link-native-passthrough).
+**Settings → Runtime → Passthrough (mixed reality)** is a dropdown: Automatic
+(the default, `mixedReality` true in `settings.json`), Color key, or Off (every
+game stays in VR). With Automatic the runtime picks the backend from what the
+host offers (native or HTC passthrough, a see-through blend mode, the headset's
+cameras through SteamVR, or the temporary Steam Link passthrough companion
+transport) and records its
+choice in `passthrough.json` in the data directory (the debug report includes
+it). Color key (`passthroughColorKey`) is only ever the user's choice: a
+**Key color** row appears (a swatch, presets Magenta, Green, Blue, Black, and
+Custom with an `RRGGBB` field; `passthroughKeyColor`, default `FF00FF`). The
+earlier opt-in keys `passthrough` and `steamFramePassthrough` only recorded the
+old default-off state and are ignored.
 
 For each game launch, including Steam shortcuts, `core.cpp` passes
-`VENTURE_PASSTHROUGH=1` or `0` to the child, overriding inherited values.
+`VENTURE_PASSTHROUGH=1` or `0` and `VENTURE_PASSTHROUGH_KEY` (the key color, or
+empty) to the child, overriding inherited values.
 `configure_game` captures that value before XR initialization without reading
 launcher settings. A running game keeps its launch-time choice. Direct runtime
-invocation defaults off unless `VENTURE_PASSTHROUGH=1` is supplied explicitly.
-The CLI key `passthrough on|off` edits the saved preference; the old
+invocation is on unless `VENTURE_PASSTHROUGH=0`.
+The CLI keys `passthrough on|off` and `color-key off|RRGGBB` edit the saved
+setting; the old
 `steam-frame-passthrough` spelling remains an alias.
-See [mixed reality](../../docs/MIXED_REALITY.md) for required companions and limits.
+The info button next to the setting opens the [Mixed Reality](https://github.com/Villagers654/Venture/wiki/Mixed-Reality) wiki page.

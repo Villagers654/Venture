@@ -1,0 +1,134 @@
+{
+ "width": 485,
+ "height": 720,
+ "nodes": {
+  "htc_vive_focus_3_right": [
+   277.4,
+   341.8
+  ],
+  "a_button_pressed_max": [
+   194.3,
+   270.6
+  ],
+  "a_button_pressed_min": [
+   199.9,
+   267.4
+  ],
+  "a_button_pressed_value": [
+   201.6,
+   265.8
+  ],
+  "a_button_mesh": [
+   201.6,
+   265.8
+  ],
+  "b_button_pressed_max": [
+   154.5,
+   239.2
+  ],
+  "b_button_pressed_min": [
+   160.4,
+   235.7
+  ],
+  "b_button_pressed_value": [
+   162.3,
+   234.3
+  ],
+  "b_button_mesh": [
+   162.3,
+   234.3
+  ],
+  "controller": [
+   277.4,
+   341.8
+  ],
+  "HomeButton_pressed_max": [
+   231.0,
+   245.9
+  ],
+  "HomeButton_pressed_min": [
+   231.0,
+   245.9
+  ],
+  "HomeButton_pressed_value": [
+   229.4,
+   246.5
+  ],
+  "HomeButton_mesh": [
+   229.4,
+   246.5
+  ],
+  "xr_standard_squeeze_pressed_max": [
+   187.7,
+   382.9
+  ],
+  "xr_standard_squeeze_pressed_min": [
+   185.3,
+   384.9
+  ],
+  "xr_standard_squeeze_pressed_value": [
+   185.0,
+   384.7
+  ],
+  "squeeze_mesh": [
+   185.0,
+   384.7
+  ],
+  "xr_standard_thumbstick_pressed_max": [
+   184.3,
+   188.4
+  ],
+  "xr_standard_thumbstick_pressed_min": [
+   188.1,
+   186.1
+  ],
+  "xr_standard_thumbstick_pressed_value": [
+   194.9,
+   180.7
+  ],
+  "xr_standard_thumbstick_xaxis_pressed_max": [
+   188.1,
+   186.1
+  ],
+  "xr_standard_thumbstick_xaxis_pressed_min": [
+   188.1,
+   186.1
+  ],
+  "xr_standard_thumbstick_xaxis_pressed_value": [
+   194.9,
+   180.7
+  ],
+  "xr_standard_thumbstick_yaxis_pressed_max": [
+   188.1,
+   186.1
+  ],
+  "xr_standard_thumbstick_yaxis_pressed_min": [
+   188.1,
+   186.1
+  ],
+  "xr_standard_thumbstick_yaxis_pressed_value": [
+   194.9,
+   180.7
+  ],
+  "thumbstick_mesh": [
+   194.9,
+   180.7
+  ],
+  "xr_standard_trigger_pressed_max": [
+   96.2,
+   129.1
+  ],
+  "xr_standard_trigger_pressed_min": [
+   96.2,
+   129.1
+  ],
+  "xr_standard_trigger_pressed_value": [
+   63.5,
+   193.6
+  ],
+  "trigger_mesh": [
+   63.5,
+   193.6
+  ]
+ }
+}

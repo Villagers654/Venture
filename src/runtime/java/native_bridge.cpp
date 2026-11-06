@@ -8,7 +8,9 @@
 
 #include "common/log.h"
 #include "common/environment.h"
+#include "core/guest_heap.h"
 #include "core/linker.h"
+#include "core/process.h"
 #include "core/shutdown_trace.h"
 #include "core/os_quit.h"
 #include "core/process_paths.h"
@@ -258,6 +260,43 @@ void JNICALL loader_exit(JNIEnv* env, jclass, jint status) noexcept {
   catch (const ProcessExit&) { throw_thread_death(env); }
   catch (...) { throw_java(env, "java/lang/InternalError", "guest process exit failed"); }
 }
+// com.venture.runtime.DirectBuffers: application direct buffers that a 32-bit
+// guest can address (HotSpot's own storage lies above 4 GiB). Zeroed like
+// ByteBuffer.allocateDirect; 0 leaves the allocation to HotSpot.
+jlong JNICALL direct_allocate(JNIEnv* env, jclass, jint capacity) noexcept {
+  if (process_config().isa() != GuestIsa::a32) return 0;
+  void* storage = nullptr;
+  try { storage = guest_heap::allocator.zero_aligned(1, std::max<jint>(capacity, 1), 16); }
+  catch (...) {}
+  if (!storage) {
+    // java.nio.Bits.reserveMemory's message for exhausted direct memory.
+    const auto message = "Cannot reserve " + std::to_string(capacity) + " bytes of direct buffer memory";
+    throw_java(env, "java/lang/OutOfMemoryError", message.c_str());
+    return 0;
+  }
+  return static_cast<jlong>(h2g(storage));
+}
+jobject JNICALL direct_wrap(JNIEnv* env, jclass, jlong address, jint capacity) noexcept {
+  return env->NewDirectByteBuffer(g2h(static_cast<GuestAddr>(address)), capacity);
+}
+void JNICALL direct_free(JNIEnv*, jclass, jlong address) noexcept {
+  try { guest_heap::allocator.free(g2h(static_cast<GuestAddr>(address))); }
+  catch (const std::exception& error) { log::error("jni", "Direct buffer release failed: {}", error.what()); }
+}
+void bind_direct_buffers(JNIEnv* env) {
+  auto cls = env->FindClass("com/venture/runtime/DirectBuffers");
+  if (!cls) { env->ExceptionClear(); return; }
+  JNINativeMethod methods[]{
+      {const_cast<char*>("allocate0"), const_cast<char*>("(I)J"), reinterpret_cast<void*>(&direct_allocate)},
+      {const_cast<char*>("wrap0"), const_cast<char*>("(JI)Ljava/nio/ByteBuffer;"), reinterpret_cast<void*>(&direct_wrap)},
+      {const_cast<char*>("free0"), const_cast<char*>("(J)V"), reinterpret_cast<void*>(&direct_free)}};
+  if (env->RegisterNatives(cls, methods, static_cast<jint>(std::size(methods))) == JNI_OK) {
+    auto bound = env->GetStaticFieldID(cls, "bound", "Z");
+    if (bound) env->SetStaticBooleanField(cls, bound, JNI_TRUE);
+  }
+  if (env->ExceptionCheck()) env->ExceptionClear();
+  env->DeleteLocalRef(cls);
+}
 void init_bridge(JNIEnv* env) {
   auto strings = env->FindClass("java/lang/String");
   if (!strings) return;
@@ -276,6 +315,7 @@ void init_bridge(JNIEnv* env) {
        reinterpret_cast<void*>(&loader_bind)},
       {const_cast<char*>("exit0"), const_cast<char*>("(I)V"), reinterpret_cast<void*>(&loader_exit)}};
   if (env->RegisterNatives(loader_class, native, 3) != JNI_OK) return;
+  bind_direct_buffers(env);
   auto hooks = env->FindClass("com/venture/runtime/MethodHooks");
   if (!hooks) return;
   JNINativeMethod hook_native{const_cast<char*>("invoke0"),

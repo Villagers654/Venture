@@ -9,6 +9,9 @@ public final class ViewTreeObserver {
   public interface OnDrawListener {
     void onDraw();
   }
+  public interface OnTouchModeChangeListener {
+    void onTouchModeChanged(boolean isInTouchMode);
+  }
   private final java.util.List<OnGlobalLayoutListener> listeners =
       new java.util.concurrent.CopyOnWriteArrayList<>();
   public void addOnGlobalLayoutListener(OnGlobalLayoutListener l) {

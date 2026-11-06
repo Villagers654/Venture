@@ -221,6 +221,17 @@ RegAlloc::ArgumentInfo RegAlloc::GetArgumentInfo(const IR::Inst* inst) noexcept 
     return ret;
 }
 
+Argument RegAlloc::GetArgument(const IR::Value& value) noexcept {
+    Argument ret{};
+    ret.value = value;
+    if (!value.IsImmediate() && !IsValuelessType(value.GetType())) {
+        auto const loc = ValueLocation(value.GetInst());
+        ASSERT(loc && "argument must already been defined");
+        LocInfo(*loc).AddArgReference();
+    }
+    return ret;
+}
+
 void RegAlloc::RegisterPseudoOperation(const IR::Inst* inst) noexcept {
     ASSERT(IsValueLive(inst) || !inst->HasUses());
     for (size_t i = 0; i < inst->NumArgs(); i++) {
@@ -506,6 +517,7 @@ void NextUseTable::Build(IR::Block& block) {
         uses.resize(position);
     for (u32 i = 0; i < position; ++i)
         uses[i].clear();
+    remat.assign(position, 0);
     position = 0;
     for (const auto& inst : block.instructions) {
         // An A64ColdSet* record names the location an abort exit reads, which may
@@ -537,6 +549,86 @@ void NextUseTable::Build(IR::Block& block) {
 std::optional<u32> NextUseTable::Position(const IR::Inst* inst) const noexcept {
     const u32 position = inst->GetEmitPosition();
     return position < insts.size() && insts[position] == inst ? std::optional<u32>{position} : std::nullopt;
+}
+
+void NextUseTable::SetRematerializable(const IR::Inst* inst, Remat source) noexcept {
+    ASSERT(source.offset < (u32(1) << 30));
+    if (const auto position = Position(inst))
+        remat[*position] = (source.offset + 1) | (source.word ? u32(1) << 31 : 0);
+}
+
+std::optional<NextUseTable::Remat> NextUseTable::Rematerializable(const IR::Inst* inst) const noexcept {
+    const auto position = Position(inst);
+    if (!position || !remat[*position])
+        return std::nullopt;
+    const u32 code = remat[*position];
+    return Remat{(code & ~(u32(1) << 31)) - 1, (code >> 31) != 0};
+}
+
+std::optional<Xbyak::Address> RegAlloc::UseSpilled(BlockOfCode& code, Argument& arg) noexcept {
+    ASSERT(!arg.allocated);
+    if (arg.IsImmediate())
+        return std::nullopt;
+    const HostLoc loc = *ValueLocation(arg.value.GetInst());
+    const size_t bit_width = GetBitWidth(arg.value.GetType());
+    if (!HostLocIsSpill(loc) || bit_width > 64 || LocInfo(loc).GetMaxBitWidth() > 64)
+        return std::nullopt;
+    // A word is valid in the low half of its memory only.
+    const auto& size = bit_width <= 32 ? Xbyak::util::dword : Xbyak::util::qword;
+    Xbyak::Address address = size[code.ABI_JIT_PTR];
+    if (const auto source = SpillRematerialization(loc)) {
+        if (source->word && bit_width > 32)
+            return std::nullopt;
+        address = size[code.ABI_JIT_PTR + source->offset];
+    } else {
+        const size_t i = size_t(loc) - size_t(HostLoc::FirstSpill);
+        address = size[Xbyak::util::rsp + reserved_stack_space + ABI_SHADOW_SPACE + offsetof(StackLayout, spill) + i * sizeof(StackLayout::spill[0])];
+    }
+    arg.allocated = true;
+    LocInfo(loc).ReadLock();
+    return address;
+}
+
+std::optional<NextUseTable::Remat> RegAlloc::SpillRematerialization(HostLoc loc) const noexcept {
+    if (!HostLocIsSpill(loc))
+        return std::nullopt;
+    const u32 code = spill_remat[size_t(loc) - size_t(HostLoc::FirstSpill)];
+    if (!code)
+        return std::nullopt;
+    return NextUseTable::Remat{(code & ~(u32(1) << 31)) - 1, (code >> 31) != 0};
+}
+
+void RegAlloc::EndRematerialization(BlockOfCode& code, u32 offset) noexcept {
+    if (!next_uses)
+        return;
+    remat_ended.push_back(offset);
+    for (size_t i = 0; i < SpillCount; ++i) {
+        const auto loc = HostLoc(size_t(HostLoc::FirstSpill) + i);
+        const auto source = SpillRematerialization(loc);
+        if (!source || source->offset != offset)
+            continue;
+        spill_remat[i] = 0;
+        if (hostloc_info[i + size_t(HostLoc::FirstSpill)].IsEmpty())
+            continue;
+        // No register is needed: POP addresses its destination with RSP after the pop.
+        const auto slot = Xbyak::util::rsp + reserved_stack_space + ABI_SHADOW_SPACE + offsetof(StackLayout, spill) + i * sizeof(StackLayout::spill[0]);
+        if (source->word) {
+            code.push(Xbyak::util::qword[code.ABI_JIT_PTR + offset]);
+            code.pop(Xbyak::util::qword[slot]);
+            code.mov(Xbyak::util::dword[slot + 4], 0);
+        } else {
+            code.push(Xbyak::util::qword[code.ABI_JIT_PTR + offset]);
+            code.pop(Xbyak::util::qword[slot]);
+        }
+    }
+}
+
+void NextUseTable::AddUse(const IR::Inst* value, const IR::Inst* user) noexcept {
+    const auto found = Position(value), at = Position(user);
+    if (!found || !at)
+        return;
+    auto& list = uses[*found];
+    list.insert(std::lower_bound(list.begin(), list.end(), *at), *at);
 }
 
 u32 NextUseTable::NextUse(const IR::Inst* value, u32 position) const noexcept {
@@ -632,6 +724,20 @@ void RegAlloc::SpillRegister(BlockOfCode& code, HostLoc loc) noexcept {
     ASSERT(!LocInfo(loc).IsEmpty() && "There is no need to spill unoccupied registers");
     ASSERT(!LocInfo(loc).IsLocked() && "Registers that have been allocated must not be spilt");
     auto const new_loc = FindFreeSpill(HostLocIsXMM(loc));
+    auto& remat = spill_remat[size_t(new_loc) - size_t(HostLoc::FirstSpill)];
+    remat = 0;
+    // Venture: every value of a location holds the same register bits, so one
+    // rematerializable value makes the store unnecessary; reloads read its memory.
+    if (next_uses && HostLocIsGPR(loc)) {
+        for (const IR::Inst* value : LocInfo(loc).values) {
+            const auto source = next_uses->Rematerializable(value);
+            if (source && std::find(remat_ended.begin(), remat_ended.end(), source->offset) == remat_ended.end()) {
+                remat = (source->offset + 1) | (source->word ? u32(1) << 31 : 0);
+                LocInfo(new_loc) = std::exchange(LocInfo(loc), {});
+                return;
+            }
+        }
+    }
     Move(code, new_loc, loc);
 }
 
@@ -699,6 +805,25 @@ void RegAlloc::EmitMove(BlockOfCode& code, const size_t bit_width, const HostLoc
     auto const spill_xmm_to_op = [&](const HostLoc loc) {
         return Xbyak::util::xword[spill_to_op_arg_helper(loc, reserved_stack_space)];
     };
+    if (const auto source = SpillRematerialization(from)) {
+        // Venture: the value was never stored; its memory holds it (zero-extended for words).
+        ASSERT(bit_width != 128);
+        const auto address = code.ABI_JIT_PTR + source->offset;
+        if (HostLocIsGPR(to)) {
+            if (source->word || bit_width <= 32)
+                code.mov(HostLocToReg64(to).cvt32(), Xbyak::util::dword[address]);
+            else
+                code.mov(HostLocToReg64(to), Xbyak::util::qword[address]);
+        } else {
+            ASSERT(HostLocIsXMM(to));
+            if (source->word || bit_width <= 32)
+                MAYBE_AVX(movd, HostLocToXmm(to), Xbyak::util::dword[address]);
+            else
+                MAYBE_AVX(movq, HostLocToXmm(to), Xbyak::util::qword[address]);
+        }
+        return;
+    }
+    ASSERT(!SpillRematerialization(to));
     if (HostLocIsXMM(to) && HostLocIsXMM(from)) {
         MAYBE_AVX(movaps, HostLocToXmm(to), HostLocToXmm(from));
     } else if (HostLocIsGPR(to) && HostLocIsGPR(from)) {

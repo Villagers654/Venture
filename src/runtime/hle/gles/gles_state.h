@@ -1,6 +1,8 @@
 #pragma once
 #include <atomic>
 #include <array>
+#include <deque>
+#include <unordered_map>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -17,10 +19,27 @@ struct TextureLevel {
   GLenum format{};
   GLint width{}, height{}, depth{};
 };
+struct TextureJob;
+// An ASTC upload whose decode runs in the background. Its GL upload waits until
+// a draw may sample the texture, the texture is otherwise used, or the decoded
+// data is ready and the render thread has time (textures.cpp).
+struct PendingUpload {
+  GLuint texture{};
+  GLenum target{}, upload_format{};
+  GLint level{}, x{}, y{}, z{};
+  GLsizei width{}, height{}, depth{};
+  bool three = false, blocks = false;
+  std::shared_ptr<TextureJob> job;
+};
 struct TextureGroup {
   std::recursive_mutex lock;
   std::map<std::tuple<GLuint, GLenum, GLint>, TextureLevel> levels;
   std::uint64_t generation = 0;
+  // In call order; uploads of one texture are applied in this order.
+  std::deque<PendingUpload> pending;
+  std::unordered_map<GLuint, unsigned> pending_textures;
+  std::size_t pending_bytes = 0;
+  std::atomic<std::size_t> pending_count{0};
 };
 struct GlCallback {
   std::mutex lock;
@@ -77,6 +96,11 @@ struct GlContextState {
     bool pending = false, invalid = false;
   };
   std::array<RenderTimer, 32> render_timers{};
+  // Textures bound per unit to the targets ASTC fallback textures can have
+  // (2D, cube map, 2D array, cube map array), for pending uploads.
+  std::vector<std::array<GLuint, 4>> texture_units;
+  GLuint active_texture_unit = 0;
+  GLint texture_unit_count = -1;
   int active_render_timer = -1;
   std::shared_ptr<TextureGroup> textures = std::make_shared<TextureGroup>();
   std::vector<std::string> extensions;
@@ -125,7 +149,15 @@ void gl_error(GLenum error);
 void preserve_gl_errors();
 bool capture_gl_errors();
 hle::Handler texture_gl_handler(std::string_view name);
+// Applies the texture's pending ASTC uploads (textures.cpp) in the current context.
+void settle_texture_uploads(GLuint texture);
 std::vector<GLint> guest_compressed_formats();
+// Quest 3's Adreno 740 reports 4 for GL_MAX_SAMPLES and the other sample
+// limits. Engines pick their MSAA as min(setting, limit); desktop ANGLE's 8 (or
+// more) doubled eye-buffer memory past what the driver allocates at PCVR sizes
+// (Bait!: 8x multiview depth at 4016x4016, out of memory, device lost).
+// Diagnostic: VENTURE_GLES_MAX_SAMPLES raises the limit (device-lost tests).
+GLint guest_max_samples();
 std::shared_ptr<BufferGroup32> buffer_group();
 void* map_buffer(GLenum target, std::int64_t offset, std::int64_t length, GLbitfield access);
 void* map_buffer_oes(GLenum target, GLenum access);

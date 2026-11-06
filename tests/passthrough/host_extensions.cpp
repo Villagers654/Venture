@@ -27,6 +27,7 @@ void write(Level, std::string_view, std::string_view message) {
 }
 namespace venture::xr {
 void recall_display_period(std::string_view, std::string_view) {}
+void remember_host_views(std::string_view, std::string_view, std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t) {}
 }
 
 extern "C" {
@@ -68,14 +69,15 @@ XRAPI_ATTR XrResult XRAPI_CALL xrGetInstanceProcAddr(XrInstance, const char*, PF
 }
 
 int main(int argc, char** argv) {
-  if (argc != 3) throw std::runtime_error("Expected opt-in and host-extension profile");
+  if (argc != 3) throw std::runtime_error("Expected passthrough on/off and host-extension profile");
   const bool opt_in = std::string_view(argv[1]) == "1";
   const std::string_view profile = argv[2];
   if (profile == "both" || profile == "passthrough") advertised.push_back("XR_FB_passthrough");
   if (profile == "both" || profile == "mesh") advertised.push_back("XR_FB_triangle_mesh");
+  if (profile == "both" || profile == "htc") advertised.push_back("XR_HTC_passthrough");
   const auto& host = venture::xr::host_xr();
   std::set<std::string> expected{"XR_KHR_vulkan_enable", "XR_KHR_vulkan_enable2", "XR_EXT_hand_tracking"};
-  for (const auto* name : {"XR_FB_passthrough", "XR_FB_triangle_mesh"}) {
+  for (const auto* name : {"XR_FB_passthrough", "XR_FB_triangle_mesh", "XR_HTC_passthrough"}) {
     const bool available = std::any_of(advertised.begin(), advertised.end(),
                                       [&](const char* entry) { return std::string_view(entry) == name; });
     if (host.available_extensions.contains(name) != available)

@@ -18,6 +18,16 @@ and pixel-unpack-buffer sources are handled. Uncompressed edits and mipmap
 generation on compressed images fail as required by GLES. LDR alone does not
 enable `TEXTURE_3D`; HDR and sliced-3D support are not added by this fallback.
 
+Sub-image uploads on the BC7 block grid (and every RGBA8 sub-image upload)
+return at once: the HLE copies the ASTC data and decodes it on background
+threads. The GL upload waits until a draw or compute dispatch runs with the
+texture bound in that context (any unit), the guest uses the texture in another
+way (a new image or storage, copies, views, EGL images), or the decode is done
+and the render thread has time (about 1 ms in each 10 ms). Uploads of one
+texture keep their order, a deleted texture's uploads are dropped, and decoded
+data waiting for upload is limited to 512 MiB. The Walking Dead's first launch
+lost about a second of render-thread hitches this way.
+
 Decoded packed regions are cached beneath `process_config().cache_dir/textures`.
 Keys include SHA-256 of the compressed content, format/color space, dimensions,
 layer count, decoder revision and output mode. Output hashes detect corrupted

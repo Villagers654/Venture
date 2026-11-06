@@ -1,5 +1,6 @@
 #include "launcher/exit_report.h"
 #include "launcher/app.h"
+#include "launcher/i18n/i18n.h"
 #include "common/library/import.h"
 #include "common/download/asset_files.h"
 #include "common/file_ops.h"
@@ -15,6 +16,7 @@
 #include <imgui_impl_sdlrenderer3.h>
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #define STBIW_WINDOWS_UTF8
+#include <stb_image.h>
 #include <stb_image_write.h>
 
 namespace venture::launcher {
@@ -36,16 +38,39 @@ void save_screenshot(SDL_Renderer *renderer, const fs::path &file) {
     throw std::runtime_error("Could not write the screenshot.");
 }
 } // namespace
-// The UI's scale in window coordinates. Those are physical pixels on Windows but logical units
-// on Wayland and macOS, where the renderer already applies the pixel density.
+// The UI is laid out and drawn in framebuffer pixels on every platform, at the
+// display's scale (Windows' DPI scale, Wayland's buffer scale such as 1.25 or
+// 1.5), so text, logos and edges are rasterized for the pixels they land on.
 static float ui_scale(SDL_Window *window) {
-  const auto density = SDL_GetWindowPixelDensity(window);
-  return std::max(1.f, SDL_GetWindowDisplayScale(window) / (density > 0 ? density : 1.f));
+  return std::max(1.f, SDL_GetWindowDisplayScale(window));
 }
+// Pixels per window coordinate: 1 on Windows, the buffer scale on Wayland.
+static float pixel_density(SDL_Window *window) {
+  const auto density = SDL_GetWindowPixelDensity(window);
+  return density > 0 ? density : 1.f;
+}
+namespace {
+SDL_Renderer *g_ime_renderer = nullptr;
+void (*g_backend_ime)(ImGuiContext *, ImGuiViewport *, ImGuiPlatformImeData *) = nullptr;
+// The backend hands SDL the text cursor in ImGui's coordinates, which are
+// pixels; SDL_SetTextInputArea takes window coordinates.
+void set_ime_data(ImGuiContext *context, ImGuiViewport *viewport, ImGuiPlatformImeData *data) {
+  ImGuiPlatformImeData window = *data;
+  float x = 0, y = 0, bottom = 0;
+  SDL_RenderCoordinatesToWindow(g_ime_renderer, data->InputPos.x - viewport->Pos.x,
+                                data->InputPos.y - viewport->Pos.y, &x, &y);
+  SDL_RenderCoordinatesToWindow(g_ime_renderer, 0, data->InputLineHeight, nullptr, &bottom);
+  window.InputPos = {viewport->Pos.x + x, viewport->Pos.y + y};
+  window.InputLineHeight = bottom;
+  g_backend_ime(context, viewport, &window);
+}
+} // namespace
 void App::fit_window() {
   scale_ = ui_scale(window_) * float(settings_.interface_size) / 100;
-  int width = int(1380 * scale_), height = int(880 * scale_);
-  int min_width = int(900 * scale_), min_height = int(620 * scale_);
+  // The window's size is in window coordinates.
+  const float window_scale = scale_ / pixel_density(window_);
+  int width = int(1380 * window_scale), height = int(880 * window_scale);
+  int min_width = int(900 * window_scale), min_height = int(620 * window_scale);
   // Never larger than the screen: a compositor squeezes an oversized window, which puts the UI
   // and the mouse out of step.
   SDL_Rect usable{};
@@ -55,6 +80,7 @@ void App::fit_window() {
     min_width = std::min(min_width, width);
     min_height = std::min(min_height, height);
   }
+  if (options_.smoke_view.ends_with("-narrow")) width = min_width;  // screenshots of the narrow layout
   SDL_SetWindowMinimumSize(window_, min_width, min_height);
   SDL_SetWindowSize(window_, width, height);
 }
@@ -63,6 +89,7 @@ App::App(Options options) : Core(std::move(options)) {
   settings_runtime_ =
       settings_.runtime_override() ? paths::utf8(settings_.runtime) : "";
   settings_adb_ = paths::utf8(settings_.adb);
+  settings_key_hex_ = settings_.key_color;
   prefer_native_video_driver();
   if (!SDL_Init(SDL_INIT_VIDEO))
     throw std::runtime_error(std::string(video_unavailable_message()) + " (" + SDL_GetError() + ")");
@@ -76,8 +103,13 @@ App::App(Options options) : Core(std::move(options)) {
   if (client_side_decorations())
     SDL_SetWindowHitTest(
         window_,
-        [](SDL_Window *, const SDL_Point *point, void *app) {
-          return chrome::hit_test(static_cast<App *>(app)->chrome_, *point);
+        [](SDL_Window *, const SDL_Point *point, void *data) {
+          // The frame is in pixels (ImGui's coordinates), the point in window coordinates.
+          auto *app = static_cast<App *>(data);
+          float x = float(point->x), y = float(point->y);
+          if (app->renderer_)
+            SDL_RenderCoordinatesFromWindow(app->renderer_, x, y, &x, &y);
+          return chrome::hit_test(app->chrome_, {int(x), int(y)});
         },
         this);
   SDL_SetWindowPosition(window_, SDL_WINDOWPOS_CENTERED,
@@ -101,6 +133,11 @@ App::App(Options options) : Core(std::move(options)) {
   theme();
   ImGui_ImplSDL3_InitForSDLRenderer(window_, renderer_);
   ImGui_ImplSDLRenderer3_Init(renderer_);
+  g_ime_renderer = renderer_;
+  auto &platform = ImGui::GetPlatformIO();
+  g_backend_ime = platform.Platform_SetImeDataFn;
+  if (g_backend_ime)
+    platform.Platform_SetImeDataFn = set_ime_data;
   textures_ =
       std::make_unique<TextureCache>(renderer_, data_, [this] { wake(); });
   start();
@@ -108,15 +145,45 @@ App::App(Options options) : Core(std::move(options)) {
     SDL_ShowWindow(window_);
   if (options_.smoke_view == "downloads")
     page_ = 1;
-  if (options_.smoke_view == "settings" || options_.smoke_view == "settings-end")
+  if (options_.smoke_view == "settings" || options_.smoke_view == "settings-end" ||
+      options_.smoke_view == "settings-runtime")
     page_ = 2;
-  if (options_.smoke_view == "passthrough-info") {
+  // The texture compression warning from Settings > Runtime (nothing is changed).
+  if (options_.smoke_view == "settings-runtime-texture-warning") {
     page_ = 2;
-    passthrough_info_requested_ = true;
+    texture_warning_ = [] {};
   }
+  // Display override examples for screenshots: display (defaults), display-menu,
+  // display-rates, display-mirror, display-mirror-eye and display-pc-audio (open lists),
+  // display-scale and display-custom (their extra rows); game-settings-override
+  // shows a game's own choices, game-settings-override-end down to its Runtime card.
+  if (options_.smoke_view.starts_with("display")) page_ = 2;
+  // In memory only: smoke views never save settings.
+  if (options_.smoke_view == "display-scale") {
+    settings_.display.resolution = "percent";
+    settings_.display.percent = 80;
+    settings_.display.rate = "90";
+  }
+  if (options_.smoke_view == "display-custom") {
+    settings_.display = {.resolution = "custom", .width = 2064, .height = 2208, .rate = "custom", .custom_rate = 100};
+  }
+  if (options_.smoke_view.starts_with("game-settings-override") && !options_.smoke_select.empty())
+    settings_.game_display[options_.smoke_select] = {.resolution = "quest3", .rate = "144", .mirror = "full", .mirror_eye = "right",
+                                                     .pc_audio = "on", .texture_compression = "auto", .texture_compression_threshold = 75};
   if (options_.smoke_view == "account")
     page_ = 3;
-  if (options_.smoke_view == "import" || options_.smoke_view == "import-end")
+  if (options_.smoke_view.starts_with("controls"))
+    page_ = 5;
+  // The manual sign-in steps, with an example link (nothing is sent to Meta).
+  // manual-sign-in-paste: where Venture cannot open oculus:// links.
+  if (options_.smoke_view == "manual-sign-in" || options_.smoke_view == "manual-sign-in-paste") {
+    page_ = 3;
+    signing_in_ = auth_manual_ = true;
+    link_handler_ = options_.smoke_view == "manual-sign-in" ? 1 : -1;
+    auth_url_ = "https://auth.meta.com/native_sso/confirm?native_app_id=512466987071624&native_sso_etoken=EXAMPLE";
+    auth_status_ = "Meta's sign-in window could not open. Sign in manually below.";
+  }
+  if (options_.smoke_view == "import" || options_.smoke_view == "import-end" || options_.smoke_view == "import-link")
     page_ = 4;
   // The dialog Report issue / Upload debug report shows; nothing is saved or uploaded.
   if (options_.smoke_view == "report")
@@ -311,6 +378,45 @@ SDL_Texture *App::logo(int pixels) {
     }
   return it->second;
 }
+SDL_Texture *App::controller_texture(const art::Image *image) {
+  if (!image) return nullptr;
+  auto [it, inserted] = controller_textures_.try_emplace(image, nullptr);
+  if (inserted && !image->rgba.empty()) {
+    if (SDL_Surface *surface = SDL_CreateSurfaceFrom(image->width, image->height, SDL_PIXELFORMAT_ABGR8888,
+                                                     const_cast<unsigned char *>(image->rgba.data()), image->width * 4)) {
+      it->second = SDL_CreateTextureFromSurface(renderer_, surface);
+      if (it->second) SDL_SetTextureScaleMode(it->second, SDL_SCALEMODE_LINEAR);
+      SDL_DestroySurface(surface);
+    }
+  } else if (inserted) {
+    int w = 0, h = 0, channels = 0;
+    if (unsigned char *pixels = stbi_load_from_memory(image->png.data(), int(image->png.size()), &w, &h, &channels, 4)) {
+      if (SDL_Surface *surface = SDL_CreateSurfaceFrom(w, h, SDL_PIXELFORMAT_ABGR8888, pixels, w * 4)) {
+        it->second = SDL_CreateTextureFromSurface(renderer_, surface);
+        if (it->second) SDL_SetTextureScaleMode(it->second, SDL_SCALEMODE_LINEAR);
+        SDL_DestroySurface(surface);
+      }
+      stbi_image_free(pixels);
+    }
+  }
+  return it->second;
+}
+SDL_Texture *App::turned_texture(const art::Image *image, const std::shared_ptr<const art::Shot> &shot) {
+  if (!image || !shot || shot->rgba.empty()) return nullptr;
+  auto &slot = turned_textures_[image];
+  if (slot.shot != shot) {
+    if (slot.texture) SDL_DestroyTexture(slot.texture);
+    slot.texture = nullptr;
+    slot.shot = shot;
+    if (SDL_Surface *surface = SDL_CreateSurfaceFrom(shot->width, shot->height, SDL_PIXELFORMAT_ABGR8888,
+                                                     const_cast<unsigned char *>(shot->rgba.data()), shot->width * 4)) {
+      slot.texture = SDL_CreateTextureFromSurface(renderer_, surface);
+      if (slot.texture) SDL_SetTextureScaleMode(slot.texture, SDL_SCALEMODE_LINEAR);
+      SDL_DestroySurface(surface);
+    }
+  }
+  return slot.texture;
+}
 SDL_Texture *App::steam_logo(int pixels) {
   auto [it, inserted] = steam_logos_.try_emplace(pixels, nullptr);
   if (inserted)
@@ -470,7 +576,9 @@ int App::run() {
     }
     auto frame = SDL_GetTicks();
     SDL_Event event{};
-    auto process = [&](const SDL_Event &e) {
+    auto process = [&](SDL_Event &e) {
+      // Pointer positions from window coordinates to pixels, ImGui's coordinates.
+      SDL_ConvertEventToRenderCoordinates(renderer_, &e);
       ImGui_ImplSDL3_ProcessEvent(&e);
       if (e.type == SDL_EVENT_QUIT ||
           (e.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED &&
@@ -502,13 +610,14 @@ int App::run() {
       if (!direct_started_ && !scanning_) {
         direct_started_ = true;
         auto found = std::ranges::find_if(installs_, [&](const auto& i) {
-          return i.complete && i.plan.package == options_.launch_package;
+          return i.complete && (i.plan.pinned ? i.plan.package + "@" + i.plan.folder() : i.plan.package) ==
+                                   options_.launch_package;
         });
         if (found == installs_.end()) {
           error("The requested package is not installed.");
           smoke_exit_ = 1;
         } else {
-          direct_app_ = found->plan.app_id;
+          direct_app_ = found->id();
           try { launch_game(direct_app_, play_key(direct_app_), {}); }
           catch (...) { error(exception_text()); smoke_exit_ = 1; }
         }
@@ -531,20 +640,32 @@ int App::run() {
       }
     }
     if (!options_.smoke_select.empty() && !smoke_detail_started_ &&
-        !scanning_ && game(options_.smoke_select)) {
+        !scanning_ && (game(options_.smoke_select) || installed(options_.smoke_select, false))) {
       smoke_detail_started_ = true;
       select(options_.smoke_select);
       // The install dialog of a game that is not installed (nothing downloads offline).
-      if (options_.smoke_view == "install")
-        action([&] { request_install(*game(options_.smoke_select)); });
+      const auto& v = options_.smoke_view;
+      // A pinned version's page has no game entry of its own.
+      const auto* g = game(options_.smoke_select);
+      if (v == "install" && g)
+        action([&] { request_install(*g); });
       if (options_.smoke_view == "saves") save_import_target_ = options_.smoke_select;
       // The other confirmations and notices, opened for screenshots (nothing is acted on).
-      const auto& v = options_.smoke_view;
-      const auto* g = game(options_.smoke_select);
-      if (v == "uninstall" && installed(g->id, false)) uninstall_target_ = *installed(g->id, false);
-      if (v == "cancel-download")
+      if (v == "uninstall" && installed(options_.smoke_select, false))
+        uninstall_target_ = *installed(options_.smoke_select, false);
+      // The version picker with example builds (nothing is fetched or downloaded).
+      if (v == "versions" && g) {
+        meta::Build latest{"9000000000000003", "1.3.0", "130", {"LIVE"}, true};
+        builds_[g->id] = {{"9000000000000004", "1.4.0-beta", "140", {"BETA"}}, latest,
+                          {"9000000000000002", "1.2.1", "121", {"LIVE"}}, {"9000000000000001", "1.0.0", "100", {"LIVE"}}};
+        request_versions(*g);
+        builds_pending_.erase(g->id);
+      }
+      if (v == "cancel-download" && g)
         cancel_target_ = download::Job{.app_id = g->id, .name = g->name, .done = 1ull << 30, .total = 3ull << 30};
       if (v == "remove-account" && !accounts_.empty()) remove_account_ = accounts_.front().key;
+      // The texture compression warning from a game's Settings tab (nothing is changed).
+      if (v == "game-settings-texture-warning") texture_warning_ = [] {};
       if (v == "report") report_ = SharedReport{.file = "venture-debug-report.txt", .url = "https://dpaste.com/EXAMPLE"};
       if (v == "report-uploading") report_ = SharedReport{.file = "venture-debug-report.txt"};
       if (v == "report-failed")
@@ -572,17 +693,23 @@ int App::run() {
       smoke_auth_opened_ = true;
       sign_in();
     }
+    ui::load_script_fonts(i18n::language());  // a language chosen in Settings applies at once
     ImGui_ImplSDLRenderer3_NewFrame();
     ImGui_ImplSDL3_NewFrame();
+    {
+      // ImGui works in framebuffer pixels (see ui_scale), not window coordinates.
+      auto &io = ImGui::GetIO();
+      int w = 0, h = 0;
+      if (io.DisplaySize.x > 0 && io.DisplaySize.y > 0 && SDL_GetCurrentRenderOutputSize(renderer_, &w, &h)) {
+        io.DisplaySize = {float(w), float(h)};
+        io.DisplayFramebufferScale = {1, 1};
+      }
+    }
     ImGui::NewFrame();
     draw();
     ImGui::Render();
     SDL_SetRenderDrawColor(renderer_, 26, 27, 30, 255);
     SDL_RenderClear(renderer_);
-    // The backend scales clip rects but not vertices: map window coordinates
-    // to the HiDPI framebuffer (Wayland, macOS) through the render scale.
-    const auto framebuffer_scale = ImGui::GetIO().DisplayFramebufferScale;
-    SDL_SetRenderScale(renderer_, framebuffer_scale.x, framebuffer_scale.y);
     ImGui_ImplSDLRenderer3_RenderDrawData(ImGui::GetDrawData(), renderer_);
     const bool timed_out =
         options_.smoke_seconds &&

@@ -27,6 +27,7 @@
 #endif
 
 #include <algorithm>
+#include <atomic>
 #include <cerrno>
 #include <exception>
 #include <stdexcept>
@@ -463,10 +464,18 @@ void BlockOfCode::RegisterNativeUnwindFrame([[maybe_unused]] const void* begin,
         [[maybe_unused]] const void* end, [[maybe_unused]] const ABIPrologue& prologue, [[maybe_unused]] bool inherits_run_frame) {
     // Unwind entries are appended in address order; the cold region lies above them all.
     ASSERT(!in_cold);
+    if (unwind_observer && !in_arena)
+        unwind_observer(begin, end, prologue, inherits_run_frame);
 #ifdef _WIN32
     if (native_unwind_registrar) native_unwind_registrar(begin, end, prologue, inherits_run_frame);
     else native_unwind_frames.push_back({begin, end, prologue, inherits_run_frame});
 #endif
+}
+
+void BlockOfCode::AppendBytes(std::span<const u8> bytes) {
+    EnsureMemoryCommitted(bytes.size());
+    std::memcpy(GetWritablePointer(getCurr<u8*>()), bytes.data(), bytes.size());
+    setSize(size_ + bytes.size());
 }
 
 void BlockOfCode::SetNativeUnwindCallbacks(NativeUnwindRegistrar registrar, std::function<void(size_t)> reset) {
@@ -487,6 +496,10 @@ size_t BlockOfCode::SpaceRemaining() const {
     return &top_[maxSize_] - current_ptr;
 }
 
+namespace {
+std::atomic<int> failing_commits{0};
+}  // namespace
+
 void BlockOfCode::EnsureMemoryCommitted() {
 #ifdef VENTURE_DUAL_MAPPED_CODE
     // GetBlock's 1 MiB reserve bounds an individual emitter, not a whole block.
@@ -502,6 +515,10 @@ void BlockOfCode::EnsureMemoryCommitted([[maybe_unused]] size_t codesize) {
 #ifdef VENTURE_DUAL_MAPPED_CODE
     if (in_arena)
         return;  // BeginThunkArena committed this thunk's pages.
+    if (failing_commits.load(std::memory_order_relaxed) > 0 && failing_commits.fetch_sub(1) > 0) {
+        failed_commit_size = codesize;  // as if the OS refused this window's pages
+        throw Xbyak::Error(Xbyak::ERR_CANT_ALLOC);
+    }
     const size_t end = RegionEnd();
     if (size_ > end || codesize > end - size_) {
         throw Xbyak::Error(Xbyak::ERR_CODE_IS_TOO_BIG);
@@ -521,16 +538,30 @@ void BlockOfCode::EnsureMemoryCommitted([[maybe_unused]] size_t codesize) {
 #endif
 }
 
+void BlockOfCode::FailCommitsForTesting(int count) {
+    failing_commits.store(count);
+}
+
+size_t BlockOfCode::CommittedSize() const {
+#ifdef VENTURE_DUAL_MAPPED_CODE
+    return committed_size + (cold_begin ? cold_committed - cold_begin : 0);
+#else
+    return maxSize_;
+#endif
+}
+
 void BlockOfCode::CommitCodeSpace([[maybe_unused]] const void* begin, [[maybe_unused]] size_t size) {
 #ifdef _WIN32
     // Committing a page of the section through the writable view commits it for
     // both views; the executable view sees it as PAGE_EXECUTE_READ. Repeating a
     // commit is harmless.
     if (size && !VirtualAlloc(GetWritablePointer(begin), size, MEM_COMMIT, PAGE_READWRITE)) {
+        failed_commit_size = size;
         throw Xbyak::Error(Xbyak::ERR_CANT_ALLOC);
     }
 #elif defined(__linux__)
     if (size && !PopulateWritable(GetWritablePointer(begin), size)) {
+        failed_commit_size = size;
         throw Xbyak::Error(Xbyak::ERR_CANT_ALLOC);
     }
 #endif
@@ -830,6 +861,10 @@ void BlockOfCode::BeginThunkArena() {
     // Thunks may register unwind frames, which the cold region never has.
     in_cold = false;
     in_arena = true;
+    // A thunk emitted while a block is captured is not part of that block: the block
+    // refers to it by key (PortableRefKind::Fallback), and each JIT emits its own.
+    arena_saved_observer = relocObserver_;
+    relocObserver_ = nullptr;
     setSize(arena_size);
     // One thunk is well under 4 KiB; commit a page beyond the insertion point.
     const size_t want = std::min(arena_end, ((arena_size + 4096) + 4095) & ~size_t{4095});
@@ -849,6 +884,8 @@ void BlockOfCode::EndThunkArena() {
     arena_flush_end = std::max(arena_flush_end, size_);
     arena_size = size_;
     in_arena = false;
+    relocObserver_ = arena_saved_observer;
+    arena_saved_observer = nullptr;
     in_cold = arena_saved_cold;
     setSize(arena_saved_size);
 }

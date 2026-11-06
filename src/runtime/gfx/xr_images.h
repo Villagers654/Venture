@@ -37,6 +37,10 @@ struct XrImageDescription {
   // Export subresources only; no guest-visible aggregate texture is needed.
   bool external_subresources = false;
 };
+// The Vulkan layout of an image that glReleaseTexturesANGLE reported as
+// `gl_layout` (EXT_external_objects enums; GENERAL under ANGLE's general
+// layout mode). Throws for a layout ANGLE does not release images in.
+VkImageLayout xr_released_layout(std::uint32_t gl_layout);
 class XrImageBridge {
  public:
   static std::unique_ptr<XrImageBridge> create(const XrImageDescription&,

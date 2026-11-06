@@ -10,7 +10,8 @@ struct Options {
   int smoke_seconds = 0;
   bool smoke_play = false, smoke_auth = false, smoke_details = false;
   bool offline = false;
-  std::string launch_package;
+  std::string language; // --language CODE: the interface language for this run (not saved)
+  std::string launch_package;  // --launch: a package, or <package>@<folder> for a pinned version
   bool launch_requested = false, invalid_launch = false;
   bool automation = false;
   bool cli = false; // venture-cli: no window, its own log
@@ -35,7 +36,7 @@ inline Options parse_options(const std::vector<std::string> &args) {
     if (args[i] == "--launch") {
       if (out.launch_requested) out.invalid_launch = true;
       out.launch_requested = true;
-      if (i + 1 < args.size() && paths::safe_package(args[i + 1])) out.launch_package = args[++i];
+      if (i + 1 < args.size() && paths::safe_launch_target(args[i + 1])) out.launch_package = args[++i];
       else out.invalid_launch = true;
     }
     else if (args[i] == "--smoke-seconds" && i + 1 < args.size())
@@ -50,6 +51,8 @@ inline Options parse_options(const std::vector<std::string> &args) {
       out.smoke_details = true;
     else if (args[i] == "--offline")
       out.offline = true;
+    else if (args[i] == "--language" && i + 1 < args.size())
+      out.language = args[++i];
     else if (args[i] == "--smoke-view" && i + 1 < args.size())
       out.smoke_view = args[++i];
     else if (args[i] == "--smoke-select" && i + 1 < args.size())

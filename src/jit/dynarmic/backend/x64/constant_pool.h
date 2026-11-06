@@ -30,6 +30,12 @@ public:
     ConstantPool(BlockOfCode& code, size_t size);
 
     Xbyak::Address GetConstant(BlockOfCode& code, const Xbyak::AddressFrame& frame, u64 lower, u64 upper = 0);
+    /// Venture: the constant's slot, added if new (portable block installation).
+    const void* GetConstantPointer(BlockOfCode& code, u64 lower, u64 upper);
+    /// Venture: the pool's address range.
+    std::pair<const u8*, const u8*> Range() const {
+        return {reinterpret_cast<const u8*>(pool.data()), reinterpret_cast<const u8*>(pool.data() + pool.size())};
+    }
 
 private:
     static constexpr size_t align_size = 16;  // bytes

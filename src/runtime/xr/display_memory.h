@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <optional>
 #include <string_view>
+#include <vector>
 
 namespace venture::xr {
 // Seeds display_timing_state() from the remembered period of this host.
@@ -20,4 +21,11 @@ void remember_display_period(std::int64_t period);
 std::optional<std::array<XrFovf, 2>> remembered_eye_fov();
 // Records the angles a session's views reported; a no-op until recall_display_period ran.
 void remember_eye_fov(const std::array<XrFovf, 2> &fov);
+// The latest host's display as the launcher's Display settings show it
+// (host-display.json): its name, recommended and maximum eye size, and once a
+// session runs, its refresh rate and the rates it lists (none without
+// XR_FB_display_refresh_rate). Unaffected by Venture's overrides.
+void remember_host_views(std::string_view runtime, std::string_view system, std::uint32_t recommended_width,
+                         std::uint32_t recommended_height, std::uint32_t max_width, std::uint32_t max_height);
+void remember_host_rates(float current, const std::vector<float> &rates);
 } // namespace venture::xr

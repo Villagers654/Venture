@@ -14,10 +14,13 @@ namespace {
 std::atomic<std::int64_t> notified_period{0}, display_phase{0};
 std::int64_t display_period() { return xr::display_timing_state().period.load(); }
 std::atomic<bool> rephase_pending{false};
+// The phase only places the vsync grid: a predicted display time can lie many
+// periods ahead (an unpaced runtime predicts one period per submitted frame),
+// and a frame callback still runs at the next vsync, never later.
 std::int64_t next_frame(std::int64_t after) {
   auto period = display_period(), phase = display_phase.load();
-  if (after < phase) return phase;
   auto remainder = (after - phase) % period;
+  if (remainder < 0) remainder += period;
   return after <= INT64_MAX - period ? after + period - remainder : INT64_MAX;
 }
 struct FrameRequest {

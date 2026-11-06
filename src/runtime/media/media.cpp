@@ -419,7 +419,7 @@ int Decoder::receive(Pcm* out) {
 }
 void Decoder::flush(){if(impl->codec)impl->api().avcodec_flush_buffers(impl->codec);}
 std::int64_t Decoder::video_conversion_us() const{return impl->conversion_us;}
-int Decoder::receive(VideoFrame* out,std::int64_t discard_before_us,int output_width,int output_height) {
+int Decoder::receive(VideoFrame* out,std::int64_t discard_before_us,int output_width,int output_height,bool nv12) {
   auto& s=*impl;if(!s.codec || !out || s.codec->codec_type!=AVMEDIA_TYPE_VIDEO)return bad_state;
   auto& a=s.api();auto f=s.frame;a.av_frame_unref(f);
   auto result=a.avcodec_receive_frame(s.codec,f);
@@ -442,7 +442,7 @@ int Decoder::receive(VideoFrame* out,std::int64_t discard_before_us,int output_w
   auto width=output_width>1 && output_width<=8192?output_width:f->width;
   auto height=output_height>1 && output_height<=8192?output_height:f->height;
   s.scale=a.sws_getCachedContext(s.scale,f->width,f->height,static_cast<AVPixelFormat>(f->format),
-    width,height,AV_PIX_FMT_RGBA,SWS_BILINEAR,nullptr,nullptr,nullptr);
+    width,height,nv12?AV_PIX_FMT_NV12:AV_PIX_FMT_RGBA,SWS_BILINEAR,nullptr,nullptr,nullptr);
   if(!s.scale)return unsupported;
   int space=f->colorspace==AVCOL_SPC_BT709?SWS_CS_ITU709:
     f->colorspace==AVCOL_SPC_BT2020_NCL?SWS_CS_BT2020:SWS_CS_ITU601;
@@ -451,9 +451,10 @@ int Decoder::receive(VideoFrame* out,std::int64_t discard_before_us,int output_w
     coefficients,1,0,1<<16,1<<16);
   out->width=width;out->height=height;
   out->time_us=f->best_effort_timestamp==AV_NOPTS_VALUE?0:f->best_effort_timestamp;
-  out->rgba.resize(std::size_t(width)*height*4);
-  std::uint8_t* data[]={out->rgba.data(),nullptr,nullptr,nullptr};
-  int stride[]={width*4,0,0,0};
+  const auto pitch=nv12_extent(width),rows_out=nv12_extent(height);
+  out->rgba.resize(nv12?std::size_t(pitch)*rows_out*3/2:std::size_t(width)*height*4);
+  std::uint8_t* data[]={out->rgba.data(),nv12?out->rgba.data()+std::size_t(pitch)*rows_out:nullptr,nullptr,nullptr};
+  int stride[]={nv12?pitch:width*4,nv12?pitch:0,0,0};
   auto rows=a.sws_scale(s.scale,f->data,f->linesize,0,f->height,data,stride);
   s.conversion_us=std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now()-conversion_begin).count();
   return rows==height?1:unsupported;
@@ -475,6 +476,9 @@ struct Codec::Impl {
   Track track;
   Sink sink;
   std::vector<std::byte> buffer=std::vector<std::byte>(max_packet);
+  // A MediaCodec output buffer always exists, even for an empty EOS output:
+  // Unity's AndroidVideoMedia converts buffer+offset without a null check.
+  std::vector<std::byte> empty_output;
   struct Packet { Sample sample;std::uint32_t flags; };
   struct Output { std::vector<std::byte> bytes;VideoFrame video;Info info; };
   struct Render { VideoFrame video;std::int64_t at; };
@@ -523,12 +527,12 @@ struct Codec::Impl {
         }
       }
       if(started && !failure && outputs.size()<4 && !eos_output) {
-        Output out;int status=0;const bool video=video_mime(track.mime);
+        Output out;int status=0;const bool video=video_mime(track.mime),buffers=!sink;
         Pcm pcm;
         lock.unlock();
         {
           std::lock_guard decoder_lock(decoder_mutex);
-          if(generation==epoch)status=video?decoder.receive(&out.video):decoder.receive(&pcm);
+          if(generation==epoch)status=video?decoder.receive(&out.video,std::numeric_limits<std::int64_t>::min(),0,0,buffers):decoder.receive(&pcm);
         }
         if(status==1) {
           if(video) {out.info.time=out.video.time_us;out.info.size=static_cast<int>(out.video.rgba.size());}
@@ -660,9 +664,13 @@ std::int64_t Codec::output(Info* info,std::int64_t timeout) {
 std::span<const std::byte> Codec::output_buffer(std::uint64_t index) {
   auto& s=*impl;std::lock_guard lock(s.mutex);
   if(index || !s.output_owned || s.outputs.empty())return {};
-  auto& out=s.outputs.front();
-  if(video_mime(s.track.mime)) {if(s.sink)return {};return {reinterpret_cast<const std::byte*>(out.video.rgba.data()),out.video.rgba.size()};}
-  return out.bytes;
+  auto& out=s.outputs.front();const bool video=video_mime(s.track.mime);
+  if(video && s.sink)return {};
+  if(video && !out.video.rgba.empty())return {reinterpret_cast<const std::byte*>(out.video.rgba.data()),out.video.rgba.size()};
+  if(!video && !out.bytes.empty())return out.bytes;
+  auto capacity=video?std::size_t(nv12_extent(std::max(s.track.width,1)))*nv12_extent(std::max(s.track.height,1))*3/2:std::size_t(16384);
+  if(s.empty_output.size()<capacity)s.empty_output.resize(capacity);
+  return s.empty_output;
 }
 int Codec::release(std::uint64_t index,bool render,std::int64_t at) {
   auto& s=*impl;std::lock_guard lock(s.mutex);
@@ -678,7 +686,7 @@ int Codec::release(std::uint64_t index,bool render,std::int64_t at) {
   s.outputs.pop_front();s.output_owned=false;s.cv.notify_all();return 0;
 }
 Track Codec::format() const {auto& s=*impl;std::lock_guard lock(s.mutex);auto track=s.track;
-  if(video_mime(track.mime))track.color_format=s.sink?color_surface:color_rgba;return track;}
+  if(video_mime(track.mime))track.color_format=s.sink?color_surface:color_nv12;return track;}
 void trim_pcm(Pcm& pcm,std::int64_t begin,std::int64_t end) {
   if(pcm.rate<=0 || pcm.channels<=0)return;
   if(pcm.time_us<begin) {

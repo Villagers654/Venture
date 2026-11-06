@@ -166,7 +166,7 @@ int cacheflush_fn(std::uint32_t start, std::uint32_t end, std::uint32_t flags) {
   return 0;
 }
 std::atomic<int> dumpable{1};
-int prctl_fn(int option, std::uint64_t a, std::uint64_t b, std::uint64_t c, std::uint64_t d) {
+int prctl_fn(int option, std::uint64_t a, std::uint64_t /*b*/, std::uint64_t /*c*/, std::uint64_t /*d*/) {
   auto& thread = *GuestThread::current();
   switch (option) {
     case 3:

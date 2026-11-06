@@ -713,6 +713,69 @@ TEST_CASE("A64 conditional exits store NZCV on the paths whose successors may re
   }
 }
 
+TEST_CASE("A64 conditional exits follow successor branches that read no flags") {
+  struct Callbacks final : A64CacheCallbacks {
+    std::array<std::uint32_t, 12> code{};
+    std::optional<std::uint32_t> MemoryReadCode(Addr p) override {
+      if (p < 0x6000 || p >= 0x6000 + 4 * code.size()) return std::nullopt;
+      return code[(p - 0x6000) / 4];
+    }
+    void CallSVC(std::uint32_t) override { jit->HaltExecution(); }
+  };
+  constexpr std::uint32_t cmp_x0_x1 = 0xeb01001f, bne_7 = 0x540000c1, cbz_x5_5 = 0xb4000065, b_9 = 0x14000002;
+  constexpr std::uint32_t mrs_x9 = 0xd53b4209, cmp_x3 = 0xeb03007f, mov_x10 = 0xd280002a, svc = 0xd4000001, nop = 0xd503201f;
+  constexpr std::uint32_t z_and_c = 0x60000000;
+  for (const bool liveness : {false, true}) {
+    CAPTURE(liveness);
+    Callbacks cb;
+    Dynarmic::A64::UserConfig config{}; config.callbacks = &cb;
+    config.enable_cycle_counting = false; config.nzcv_exit_liveness = liveness;
+    Dynarmic::A64::Jit jit(config); cb.jit = &jit;
+    const auto run = [&](std::uint64_t a, std::uint64_t b, std::uint64_t x5) {
+      jit.SetPC(0x6000); jit.SetPstate(0xf0000000);
+      jit.SetRegister(0, a); jit.SetRegister(1, b); jit.SetRegister(5, x5); jit.SetRegister(9, 0x99); jit.SetRegister(10, 0x1010);
+      jit.Run();
+    };
+    // cmp x0,x1; b.ne 7. Fallthrough: cbz x5 to 5 (reads NZCV or overwrites it), else cmp x3.
+    // Taken: b to 9, which overwrites NZCV.
+    for (const bool reads : {true, false}) {
+      CAPTURE(reads);
+      cb.code = {cmp_x0_x1, bne_7, cbz_x5_5, cmp_x3, svc, reads ? mrs_x9 : cmp_x3, svc, b_9, svc, cmp_x3, mov_x10, svc};
+      jit.ClearCache();
+      for (const std::uint64_t x5 : {0, 1}) {
+        CAPTURE(x5);
+        run(3, 3, x5);  // equal: falls through, Z and C set
+        const bool read = reads && x5 == 0;
+        CHECK(jit.GetRegister(9) == (read ? z_and_c : 0x99));
+        CHECK(jit.GetPstate() == z_and_c);
+        run(1, 2, x5);  // taken: b, then cmp x3
+        CHECK(jit.GetRegister(9) == 0x99);
+        CHECK(jit.GetRegister(10) == 1);
+        CHECK(jit.GetPstate() == z_and_c);
+      }
+    }
+    // The code past the followed B stops overwriting NZCV: invalidating just it
+    // must recompile the branch block so that its taken exit stores NZCV again.
+    cb.code = {cmp_x0_x1, bne_7, cbz_x5_5, cmp_x3, svc, cmp_x3, svc, b_9, svc, cmp_x3, mov_x10, svc};
+    jit.ClearCache();
+    run(1, 2, 0);
+    CHECK(jit.GetPstate() == z_and_c);
+    cb.code[9] = nop;
+    jit.InvalidateCacheRange(0x6024, 4);
+    run(1, 2, 0);
+    CHECK(jit.GetPstate() == 0x80000000);  // 1 - 2: N
+    // And the same through the CBZ target.
+    cb.code = {cmp_x0_x1, bne_7, cbz_x5_5, cmp_x3, svc, cmp_x3, svc, b_9, svc, cmp_x3, mov_x10, svc};
+    jit.ClearCache();
+    run(3, 3, 0);
+    CHECK(jit.GetPstate() == z_and_c);
+    cb.code[5] = mrs_x9;
+    jit.InvalidateCacheRange(0x6014, 4);
+    run(3, 3, 0);
+    CHECK(jit.GetRegister(9) == z_and_c);
+  }
+}
+
 TEST_CASE("A64 FRECPS infinity-times-zero lanes match the Arm reference") {
   struct Callbacks final : A64CacheCallbacks {
     std::uint32_t instruction = 0;

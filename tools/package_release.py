@@ -2,12 +2,14 @@
 """Build a relocatable shipping layout from a completed build (no source at launch)."""
 from __future__ import annotations
 import argparse
+import fnmatch
 import hashlib
 import json
 import os
 from pathlib import Path
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import struct
@@ -51,42 +53,88 @@ def tree(source, target):
             copy(path, target / path.relative_to(source))
 
 
-def scan(layout, forbidden, users=(), hosts=()):
-    # Check ASCII and UTF-16 strings in native files, and inflated JAR entries.
-    # Paths match as substrings. Host names match as whole tokens; account names
-    # only as whole tokens in path/login context (dir/user, DOMAIN\user, user@host),
-    # since short account names are often ordinary words in third-party data
-    # (public-suffix TLDs, translated Android resources).
-    needles = []
+# Third-party files shipped as received: never modified, and only checked for
+# this machine's paths and identity (their upstream build paths are not ours).
+THIRD_PARTY = ("licenses/*", "WebView2Loader.dll", "java/asm/*", "java/dex2jar/*")
+
+
+def is_third_party(name, patterns=THIRD_PARTY):
+    return any(fnmatch.fnmatchcase(name, pattern) for pattern in patterns)
+
+
+def identity(build=None):
+    """Paths, account names and host names of this machine that must not ship."""
+    forbidden = [str(ROOT), str(Path.home())] + ([str(build), str(Path(build).resolve())] if build else [])
+    users = [os.environ.get(name, "") for name in ("USERNAME", "USER", "LOGNAME")]
+    hosts = [os.environ.get("COMPUTERNAME", "")]
+    try:
+        hosts.append(socket.gethostname())
+    except OSError:
+        pass
+    # Generic names are not identities (and would match ordinary words).
+    generic = {"", "localhost", "root", "runner", "runneradmin", "user", "admin", "ubuntu", "builder", "build"}
+    users = sorted({u for u in users if u.lower() not in generic})
+    hosts = sorted({h for h in hosts if h.lower() not in generic})
+    shared = {"", "/", "\\", "/tmp", "/var/tmp"}  # a container's HOME may be a shared folder
+    forbidden = sorted({f for f in forbidden if f.rstrip("/\\") not in shared and len(f) > 2})
+    return forbidden, users, hosts
+
+
+def scan(layout, forbidden, users=(), hosts=(), third_party=THIRD_PARTY):
+    """Raise when a file in layout leaks a build path or the packager's identity.
+
+    Checks ASCII and both UTF-16 alignments of every file, its name and the
+    entries of JARs and ZIPs. This machine's paths match as whole absolute
+    paths (not preceded or followed by a path character, so /src does not match
+    deps/fetch/sdl3-src/src/ and C:/x/Venture does not match C:/x/Venture-wt).
+    Host names match as whole tokens; account names only in path or login
+    context (dir/user, DOMAIN\\user, user@host), since short account names are
+    often ordinary words in third-party data (public-suffix TLDs, translated
+    Android resources). Any other build machine's paths (C:/Users/, /home/<u>/,
+    .../build/) are rejected too, except in third-party files shipped as received.
+    """
+    own = []
     for value in forbidden:
-        for variant in {value, value.replace("\\", "/"), value.replace("/", "\\")}:
+        # A POSIX path only in its own form (\\root is a registry key, not /root).
+        variants = {value} if value.startswith("/") else {value, value.replace("\\", "/"), value.replace("/", "\\")}
+        for variant in variants:
             if variant:
-                needles.extend([variant.lower().encode(), variant.lower().encode("utf-16le")])
-    drive = rb"(?<![a-zA-Z0-9])[a-z]:[/\\](?![/\\])"
-    patterns = [drive + rb"(?:users|build|agent|workspace)[/\\]",
-                rb"(?<![:/\\a-zA-Z0-9])/(?:home|Users)/[^/\x00\s]+/",
-                drive + rb"[^\x00\r\n]{0,512}[/\\](?:build|src|source|_work|out|\.deps)[/\\]"]
+                escaped = re.escape(variant.lower().encode())
+                own.append(rb"(?<![a-z0-9._~-])" + escaped + rb"(?![a-z0-9._~-])")
     token = lambda value, inner: rb"(?<![a-z0-9])" + inner(re.escape(value.lower().encode())) + rb"(?![a-z0-9])"
-    patterns += [token(value, lambda v: v) for value in set(hosts) if value]
-    patterns += [token(value, lambda v: rb"(?:(?<=[/\\@])" + v + rb"|" + v + rb"(?=[/\\@]))") for value in set(users) if value]
-    def check(data, name):
-        lower = data.lower()
-        # Decode both alignments; deleting NUL bytes would join unrelated C
-        # strings and misclassify URI schemes as absolute Windows paths.
-        views = [data] + [data[offset:].decode("utf-16le", errors="replace").encode("utf-8") for offset in (0, 1)]
-        if any(needle in lower for needle in needles) or any(re.search(p, view, re.I) for p in patterns for view in views):
-            raise RuntimeError("Non-redistributable path or identity in " + name)
-    for path in sorted(layout.rglob("*")):
+    own += [token(value, lambda v: v) for value in sorted(set(hosts)) if value]
+    own += [token(value, lambda v: rb"(?:(?<=[/\\@])" + v + rb"|" + v + rb"(?=[/\\@]))")
+            for value in sorted(set(users)) if value]
+    drive = rb"(?<![a-z0-9])[a-z]:[/\\](?![/\\])"
+    generic = [drive + rb"(?:users|build|agent|workspace)[/\\]",
+               rb"(?<![:/\\a-z0-9])/(?:home|users)/[^/\x00\s]+/",
+               drive + rb"[^\x00\r\n]{0,512}[/\\](?:build|src|source|_work|out|\.deps)[/\\]"]
+    own = [re.compile(p) for p in own]
+    generic = [re.compile(p) for p in generic]
+
+    def check(data, name, patterns):
+        # Decode both UTF-16 alignments; deleting NUL bytes would join unrelated
+        # C strings and misclassify URI schemes as absolute Windows paths.
+        views = [data.lower()] + [data[offset:].decode("utf-16le", errors="replace").lower().encode("utf-8")
+                                  for offset in (0, 1)]
+        for view in views:
+            for pattern in patterns:
+                match = pattern.search(view)
+                if match:
+                    raise RuntimeError("Non-redistributable path or identity in %s: %r" % (name, match.group()[:120]))
+
+    for path in sorted(Path(layout).rglob("*")):
         if not path.is_file():
             continue
         name = path.relative_to(layout).as_posix()
-        check(name.encode("utf-8"), name)
-        check(path.read_bytes(), name)
-        if path.suffix in (".jar", ".zip"):
+        patterns = own if is_third_party(name, third_party) else own + generic
+        check(name.encode("utf-8"), name, own + generic)
+        check(path.read_bytes(), name, patterns)
+        if path.suffix.lower() in (".jar", ".zip"):
             with zipfile.ZipFile(path) as archive:
                 for entry in archive.infolist():
-                    check(entry.filename.encode("utf-8"), name + ":" + entry.filename)
-                    check(archive.read(entry), name + ":" + entry.filename)
+                    check(entry.filename.encode("utf-8"), name + ":" + entry.filename, own + generic)
+                    check(archive.read(entry), name + ":" + entry.filename, patterns)
 
 
 def remap_pe_source_names(path):
@@ -386,12 +434,7 @@ def package(build, output, angle, strip, readobj):
         copy(dependency_sources.get(None, ROOT / ".deps/fetch") / "webview2-src/LICENSE.txt", output / "licenses/webview2/LICENSE.txt")
         copy(dependency_sources.get(None, ROOT / ".deps/fetch") / "webview2-src/NOTICE.txt", output / "licenses/webview2/NOTICE.txt")
         check_imports(output, readobj)
-    forbidden = [str(ROOT), str(build), str(Path.home())]
-    users, hosts = [os.environ.get("USERNAME", "")], [os.environ.get("COMPUTERNAME", "")]
-    if os.name != "nt":
-        users += [os.environ.get("USER", ""), os.environ.get("LOGNAME", "")]
-        hosts += [os.uname().nodename] if os.uname().nodename != "localhost" else []
-    scan(output, forbidden, users, hosts)
+    scan(output, *identity(build))
     files = {p.relative_to(output).as_posix(): {"bytes": p.stat().st_size, "sha256": hashlib.sha256(p.read_bytes()).hexdigest()}
              for p in sorted(output.rglob("*")) if p.is_file()}
     (output / "release-files.json").write_text(json.dumps({"files": files}, indent=2) + "\n")

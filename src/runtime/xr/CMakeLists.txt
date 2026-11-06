@@ -19,13 +19,14 @@ if(NOT TARGET Vulkan::Headers)
   target_include_directories(venture_xr_vulkan_headers SYSTEM INTERFACE ${venture_vulkan_headers_SOURCE_DIR}/include)
   add_library(Vulkan::Headers ALIAS venture_xr_vulkan_headers)
 endif()
-add_library(venture_host_xr STATIC host_xr.cpp display_memory.cpp)
+add_library(venture_host_xr STATIC host_xr.cpp display_memory.cpp display_override.cpp vulkan_layers.cpp)
 target_include_directories(venture_host_xr PUBLIC ${PROJECT_SOURCE_DIR}/src/runtime)
 target_link_libraries(venture_host_xr PUBLIC venture_common OpenXR::openxr_loader Vulkan::Headers)
 if(WIN32)
-  target_sources(venture_host_xr PRIVATE ../platform/win32/xr_native.cpp)
+  target_sources(venture_host_xr PRIVATE ../platform/win32/xr_native.cpp ../platform/win32/vulkan_layers.cpp)
+  target_link_libraries(venture_host_xr PRIVATE version)
 else()
-  target_sources(venture_host_xr PRIVATE ../platform/posix/xr_native.cpp)
+  target_sources(venture_host_xr PRIVATE ../platform/posix/xr_native.cpp ../platform/posix/vulkan_layers.cpp)
   target_link_libraries(venture_host_xr PRIVATE ${CMAKE_DL_LIBS})
 endif()
 
@@ -33,25 +34,28 @@ add_library(venture_xr_capture STATIC capture.cpp)
 target_include_directories(venture_xr_capture PUBLIC ${PROJECT_SOURCE_DIR}/src/runtime)
 target_link_libraries(venture_xr_capture PUBLIC Vulkan::Headers OpenXR::headers PRIVATE zlibstatic)
 
-add_library(venture_xr STATIC steam_link.cpp color_space.cpp color_images.cpp guest_images.cpp dev_dump.cpp session.cpp clock.cpp reference_spaces.cpp menu_chord.cpp bindings.cpp hands.cpp angle_images.cpp haptic_output.cpp haptic_sequence.cpp
+add_library(venture_xr STATIC passthrough_source.cpp passthrough_source_sbn1.cpp color_space.cpp color_images.cpp sphere_images.cpp guest_images.cpp desktop_mirror.cpp dev_dump.cpp session.cpp clock.cpp reference_spaces.cpp menu_chord.cpp bindings.cpp hands.cpp angle_images.cpp haptic_output.cpp haptic_sequence.cpp
   ../hle/openxr/state.cpp ../hle/openxr/openxr.cpp ../hle/openxr/graphics.cpp
   ../hle/openxr/extensions.cpp ../hle/openxr/actions.cpp ../hle/openxr/register.cpp ../hle/openxr/hands.cpp
   ../hle/openxr/spaces.cpp ../hle/openxr/haptics.cpp
   ../hle/openxr/android_surface.cpp
-  ../hle/openxr/passthrough.cpp ../hle/openxr/passthrough_images.cpp
+  ../hle/openxr/passthrough.cpp ../hle/openxr/passthrough_images.cpp ../hle/openxr/passthrough_camera.cpp ../hle/openxr/sphere_layers.cpp
+  ../hle/openxr/image_upload.cpp ../hle/openxr/passthrough_report.cpp
   ../hle/vrapi/vrapi.cpp ../hle/vrapi/swapchains.cpp ../hle/vrapi/input.cpp
   ../hle/vrapi/layers.cpp ../hle/vrapi/a32.cpp
   ../hle/vrapi/haptics.cpp
   ../hle/vrapi/vulkan_images.cpp
   ../hle/vrapi/properties.cpp ../hle/vrapi/integration.cpp ../hle/vrapi/register.cpp)
 if(WIN32)
-  target_sources(venture_xr PRIVATE ../platform/win32/xr_clock.cpp ../platform/win32/steam_link.cpp)
+  target_sources(venture_xr PRIVATE ../platform/win32/xr_clock.cpp ../platform/win32/passthrough_source.cpp ../platform/win32/passthrough_source_sbn1.cpp
+    ../platform/win32/tracked_camera.cpp)
   target_link_libraries(venture_xr PRIVATE bcrypt)
 else()
-  target_sources(venture_xr PRIVATE ../platform/posix/xr_clock.cpp)
+  target_sources(venture_xr PRIVATE ../platform/posix/xr_clock.cpp ../platform/posix/passthrough_source.cpp ../platform/posix/passthrough_source_sbn1.cpp
+    ../platform/posix/tracked_camera.cpp)
 endif()
 target_include_directories(venture_xr PUBLIC ${PROJECT_SOURCE_DIR}/src/runtime)
-target_link_libraries(venture_xr PUBLIC venture_host_xr venture_runtime venture_vulkan PRIVATE venture_java venture_xr_capture)
+target_link_libraries(venture_xr PUBLIC venture_host_xr venture_runtime venture_vulkan PRIVATE venture_java venture_xr_capture SDL3::SDL3-static)
 if(EXISTS "${PROJECT_SOURCE_DIR}/src/runtime/gfx/xr_images.h")
   target_compile_definitions(venture_xr PRIVATE VENTURE_XR_HAS_ANGLE)
   target_link_libraries(venture_xr PUBLIC venture_gfx)
@@ -69,9 +73,12 @@ if(NOT TARGET Python3::Interpreter)
   find_package(Python3 REQUIRED COMPONENTS Interpreter)
 endif()
 set(color_generated ${CMAKE_CURRENT_BINARY_DIR}/generated)
-foreach(color_shader IN ITEMS vert frag ms_frag passthrough_frag passthrough_ms_frag)
+foreach(color_shader IN ITEMS vert frag ms_frag passthrough_frag passthrough_ms_frag sphere_frag)
   if(color_shader STREQUAL "vert")
     set(color_source shaders/color.vert)
+    set(color_defines)
+  elseif(color_shader STREQUAL "sphere_frag")
+    set(color_source shaders/sphere.frag)
     set(color_defines)
   else()
     set(color_source shaders/color.frag)

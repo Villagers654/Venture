@@ -1,5 +1,9 @@
 #include "launcher/window_style.h"
 
+#include "common/environment.h"
+
+#include <string_view>
+
 #include <SDL3/SDL.h>
 #include <dwmapi.h>
 #include <windows.h>
@@ -19,6 +23,13 @@ void style_native_window(SDL_Window* window, unsigned char r, unsigned char g, u
   DwmSetWindowAttribute(hwnd, kTextColor, &text, sizeof(text));
 }
 void prefer_native_video_driver() {}  // SDL's default is the native one
-bool client_side_decorations() { return false; }
+// VENTURE_CLIENT_SIDE_DECORATIONS=1 frames it like Linux, for layout checks.
+bool client_side_decorations() {
+  static const bool forced = [] {
+    const char* value = environment::getenv("VENTURE_CLIENT_SIDE_DECORATIONS");
+    return value && std::string_view(value) == "1";
+  }();
+  return forced;
+}
 const char* video_unavailable_message() { return "Could not initialize SDL video."; }
 }  // namespace venture::launcher

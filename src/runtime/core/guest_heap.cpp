@@ -1,4 +1,5 @@
 #include "core/guest_heap.h"
+#include "core/alloc_failure.h"
 #include "core/os_quit.h"
 #include "core/thread.h"
 #include "common/environment.h"
@@ -33,8 +34,38 @@ extern "C" __attribute__((section(".CRT$XLY"), used)) void (__stdcall* const ven
 #endif
 
 namespace venture::guest_heap {
-Allocator allocator{mi_malloc_aligned, mi_calloc_aligned, mi_realloc_aligned, mi_free};
+namespace {
+// A refused guest allocation is logged with the limit it likely hit, and
+// retried once after Venture's spare memory is given back and mimalloc
+// returns its own free pages to the OS: a commit-limited machine often has
+// that much headroom. Still failing, the guest sees its null as malloc defines.
+template <class F>
+void* retry_refused(std::uint64_t bytes, std::string_view what, F allocate) {
+  alloc_failure::report(alloc_failure::Kind::guest_heap, what, bytes);
+  alloc_failure::relieve();
+  mi_collect(true);
+  return allocate();
+}
+}  // namespace
+void* allocate64(std::uint64_t n, std::uint64_t alignment) {
+  if (auto* p = mi_malloc_aligned(n, alignment)) return p;
+  return retry_refused(n, "guest malloc", [&] { return mi_malloc_aligned(n, alignment); });
+}
+void* zero_allocate64(std::uint64_t count, std::uint64_t n, std::uint64_t alignment) {
+  if (auto* p = mi_calloc_aligned(count, n, alignment)) return p;
+  if (n && count > UINT64_MAX / n) return nullptr;
+  return retry_refused(count * n, "guest calloc", [&] { return mi_calloc_aligned(count, n, alignment); });
+}
+void* reallocate64(void* old, std::uint64_t n, std::uint64_t alignment) {
+  if (auto* p = mi_realloc_aligned(old, n, alignment); p || !n) return p;
+  return retry_refused(n, "guest realloc", [&] { return mi_realloc_aligned(old, n, alignment); });
+}
+Allocator allocator{allocate64, zero_allocate64, reallocate64, mi_free};
+namespace {
+std::atomic<bool> selected32{false};
+}
 void select32() {
+  selected32 = true;
   allocator = {[](std::uint64_t n, std::uint64_t alignment) { return allocate(n, alignment); },
                [](std::uint64_t count, std::uint64_t n, std::uint64_t alignment) -> void* {
                  if (n && count > UINT64_MAX / n) return nullptr;
@@ -52,7 +83,8 @@ void select64() {
     // Address space only: mimalloc commits and purges its own pages. First-fit
     // arena search (arena.c) keeps live memory at the low end.
     constexpr std::uint64_t window = 4ull << 30, size = 32ull << 30;
-    const auto p = platform::reserve(0, size + window, false);
+    // A fixed address below the guest arena (address_space.cpp) keeps both stable across runs.
+    const auto p = platform::reserve(0xf0000000000ull, size + window, false);
     if (!p) {
       log::warn("memory", "A64 guest heap reservation failed; mimalloc reserves OS memory itself");
       return;
@@ -222,6 +254,10 @@ void* allocate(std::uint64_t n, std::uint64_t alignment, bool zero) {
   // mimalloc v2.2.4 arena.c:_mi_arena_alloc_aligned explicitly returns ENOMEM
   // for a requested arena id before its OS fallback. No global options needed.
   auto* p = zero ? mi_heap_zalloc_aligned(h, n, alignment) : mi_heap_malloc_aligned(h, n, alignment);
+  if (!p)
+    p = retry_refused(n, "guest malloc (A32 arena)", [&] {
+      return zero ? mi_heap_zalloc_aligned(h, n, alignment) : mi_heap_malloc_aligned(h, n, alignment);
+    });
   if (p) {
     h2g32(p);
     pages(p, mi_usable_size(p), true);
@@ -269,6 +305,13 @@ void prepare_thread() {
 bool contains(GuestAddr p) {
   auto base = arena().base.load(std::memory_order_acquire);
   return base && p >= base && p - base < arena_size;
+}
+bool owns(const void* p) {
+  const auto address = h2g(p);
+  if (selected32.load(std::memory_order_relaxed)) return contains(address);
+  if (const auto begin = arena64_begin.load(std::memory_order_relaxed))
+    return address >= begin && address < arena64_end.load(std::memory_order_relaxed);
+  return mi_is_in_heap_region(p);
 }
 bool accessible(GuestAddr p, std::uint64_t n) {
   auto& a = arena();

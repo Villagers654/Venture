@@ -4,7 +4,7 @@
 // Dependencies"); tilers that run subpasses tile by tile in order tolerate the
 // omission, desktop GPUs overlap them. Unity's and UE4's mobile render passes
 // resolve or read in subpass 1 what subpass 0 wrote, with dependencies that
-// cover only the shader read (docs/DEVICE_LOSS.md, RE4 sync validation).
+// cover only the shader read (RE4 sync validation).
 //
 // For each attachment, every pair of consecutive subpasses that use it gets a
 // dependency covering both uses whenever one of them writes it or its layout

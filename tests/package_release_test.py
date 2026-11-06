@@ -166,5 +166,59 @@ if os.name == "nt":
     finally:
         probe.unlink(missing_ok=True)
 
+def rejected(*args, **kwargs):
+    try:
+        release.scan(probes, *args, **kwargs)
+    except RuntimeError as error:
+        return str(error)
+    return None
+
+
+probe = probes / "scan-whole-path-probe"
+try:
+    for encoding in ("utf-8", "utf-16le"):
+        # Whole paths only: a sibling folder or a nested same-named folder is not this one.
+        probe.write_bytes("C:\\srv\\venture-wt\\x\0deps/fetch/sdl3-src/src/x.c\0".encode(encoding))
+        assert rejected(["C:\\srv\\venture", "/src"]) is None
+        probe.write_bytes("built in C:/srv/venture/out\0".encode(encoding))
+        error = rejected(["C:\\srv\\venture"])
+        assert error and "c:/srv/venture" in error, error  # the error shows what matched
+    # A POSIX path is not also searched in a backslash form (\root is a registry key).
+    probe.write_bytes(b"HKEY_CLASSES_ROOT\\root\\cimv2\0")
+    assert rejected(["/root"]) is None
+finally:
+    probe.unlink(missing_ok=True)
+
+# Generic account and host names are never identities.
+saved = {name: os.environ.get(name) for name in ("USERNAME", "USER", "LOGNAME", "COMPUTERNAME")}
+try:
+    for name in saved:
+        os.environ[name] = "runner"
+    _, users, hosts = release.identity()
+    assert "runner" not in users and "runner" not in hosts
+finally:
+    for name, value in saved.items():
+        if value is None:
+            os.environ.pop(name, None)
+        else:
+            os.environ[name] = value
+
+# Third-party files shipped as received: another machine's build paths are
+# theirs, this machine's are still rejected.
+notice = probes / "licenses" / "upstream" / "LICENSE"
+notice.parent.mkdir(parents=True)
+try:
+    notice.write_bytes(b"Built on /home/upstream-builder/project/ and D:/build/upstream/\0")
+    assert rejected([str(ROOT)]) is None
+    notice.write_bytes(str(ROOT).encode())
+    assert rejected([str(ROOT)])
+    (probes / "ours.bin").write_bytes(b"/home/upstream-builder/project/\0")
+    assert rejected([])
+finally:
+    (probes / "ours.bin").unlink(missing_ok=True)
+    notice.unlink(missing_ok=True)
+    notice.parent.rmdir()
+    notice.parent.parent.rmdir()
+
 probes.rmdir()
 print("Shipping boundaries, ASCII/UTF-16/JAR scanner and PE path remapping passed")

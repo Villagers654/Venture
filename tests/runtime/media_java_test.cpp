@@ -132,6 +132,10 @@ TEST_CASE("MediaPlayer JNI and Looper prepare start seek loop release callbacks"
   failure=static_cast<jstring>(env->CallStaticObjectMethod(cls,method,config,packets,times));
   if(env->ExceptionCheck())env->ExceptionDescribe();REQUIRE_FALSE(env->ExceptionCheck());
   if(failure){auto text=env->GetStringUTFChars(failure,nullptr);INFO(std::string(text));CHECK(failure==nullptr);env->ReleaseStringUTFChars(failure,text);}
+  method=env->GetStaticMethodID(cls,"image","([B[[B[J)Ljava/lang/String;");REQUIRE(method);
+  failure=static_cast<jstring>(env->CallStaticObjectMethod(cls,method,config,packets,times));
+  if(env->ExceptionCheck())env->ExceptionDescribe();REQUIRE_FALSE(env->ExceptionCheck());
+  if(failure){auto text=env->GetStringUTFChars(failure,nullptr);INFO(std::string(text));CHECK(failure==nullptr);env->ReleaseStringUTFChars(failure,text);}
   env->DeleteLocalRef(config);env->DeleteLocalRef(packets);env->DeleteLocalRef(times);env->DeleteLocalRef(array_type);
   method=env->GetStaticMethodID(cls,"video","(Ljava/lang/String;)Ljava/lang/String;");REQUIRE(method);
   auto video=env->NewStringUTF(VENTURE_VIDEO_FIXTURE);REQUIRE(video);

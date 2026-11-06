@@ -150,7 +150,7 @@ struct ColorImages::Impl {
     check(fn<PFN_vkCreateDescriptorSetLayout>("vkCreateDescriptorSetLayout")(
               binding.device, &dl, nullptr, &descriptor_layout),
           "Color descriptor layout failed");
-    VkPushConstantRange pc{VK_SHADER_STAGE_FRAGMENT_BIT, 0, 48};
+    VkPushConstantRange pc{VK_SHADER_STAGE_FRAGMENT_BIT, 0, passthrough_alpha ? 64u : 48u};
     VkPipelineLayoutCreateInfo pl{
         VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
     pl.setLayoutCount = 1;
@@ -557,11 +557,11 @@ ColorImages::ColorImages(const XrGraphicsBindingVulkanKHR &binding,
 }
 ColorImages::~ColorImages() = default;
 XrResult ColorImages::convert(std::uint32_t index, const ColorMatrix &matrix,
-                              bool external_queue_held, Alpha alpha, float camera_opacity) {
+                              bool external_queue_held, Alpha alpha, float camera_opacity, const Key *key) {
   if (index >= impl_->images.size()) return XR_ERROR_RUNTIME_FAILURE;
-  return convert_from(impl_->images[index].target, index, matrix, external_queue_held, alpha, camera_opacity);
+  return convert_from(impl_->images[index].target, index, matrix, external_queue_held, alpha, camera_opacity, key);
 }
-XrResult ColorImages::convert_from(VkImage input, std::uint32_t index, const ColorMatrix &matrix, bool external_queue_held, Alpha alpha, float camera_opacity) {
+XrResult ColorImages::convert_from(VkImage input, std::uint32_t index, const ColorMatrix &matrix, bool external_queue_held, Alpha alpha, float camera_opacity, const Key *key) {
   auto &s = *impl_;
   if (s.failed || index >= s.images.size())
     return XR_ERROR_RUNTIME_FAILURE;
@@ -601,7 +601,7 @@ XrResult ColorImages::convert_from(VkImage input, std::uint32_t index, const Col
                 image.initialized ? VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
                                   : VK_IMAGE_LAYOUT_UNDEFINED,
                 VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
-    std::array<float, 12> rows{};
+    std::array<float, 16> rows{};
     for (unsigned r = 0; r < 3; ++r)
       for (unsigned c = 0; c < 3; ++c)
         rows[r * 4 + c] = float(matrix[r * 3 + c]);
@@ -609,6 +609,10 @@ XrResult ColorImages::convert_from(VkImage input, std::uint32_t index, const Col
       rows[3] = alpha == Alpha::premultiply ? 1.0f : 0.0f;
       rows[7] = alpha == Alpha::opaque ? 1.0f : 0.0f;
       rows[11] = camera_opacity;
+      if (key) {
+        rows[12] = (*key)[0]; rows[13] = (*key)[1]; rows[14] = (*key)[2];
+        rows[15] = 1;
+      }
     }
     for (std::size_t i = 0; i < image.subresources.size(); ++i) {
       const auto mip = std::uint32_t(i) % s.info.mipCount;
@@ -628,7 +632,7 @@ XrResult ColorImages::convert_from(VkImage input, std::uint32_t index, const Col
           1, &sub.descriptor, 0, nullptr);
       s.fn<PFN_vkCmdPushConstants>("vkCmdPushConstants")(
           image.command, s.pipeline_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0,
-          sizeof(rows), rows.data());
+          s.passthrough_alpha ? 64u : 48u, rows.data());
       VkViewport vp{0, 0, float(width), float(height), 0, 1};
       VkRect2D sc{{0, 0}, {width, height}};
       s.fn<PFN_vkCmdSetViewport>("vkCmdSetViewport")(image.command, 0, 1, &vp);

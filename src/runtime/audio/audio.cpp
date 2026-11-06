@@ -3,11 +3,14 @@
 namespace {
 constexpr int interrupted_wait = -venture::linux_errno::EINTR;
 }
+#include "common/paths.h"
 #include <algorithm>
 #include <bit>
 #include <chrono>
 #include <cmath>
+#include <cctype>
 #include <cstring>
+#include <cwchar>
 #include <cstdlib>
 #include <limits>
 #include <optional>
@@ -31,6 +34,7 @@ constexpr int interrupted_wait = -venture::linux_errno::EINTR;
 #include "core/wait.h"
 #include "hle/aaudio/aaudio.h"
 #include "hle/opensles/opensles.h"
+#include "hle/ovrplatform/microphone.h"
 
 namespace venture::audio {
 // Opt-in capture of the final 48 kHz stereo mix passed to the host device.
@@ -38,7 +42,7 @@ namespace venture::audio {
 // writes the WAV after publication, never doing file I/O on the audio thread.
 class DebugCapture {
  public:
-  explicit DebugCapture(const char* path) : path_(std::filesystem::u8path(path)) {
+  explicit DebugCapture(const char* path) : path_(venture::paths::from_utf8(path)) {
     double seconds = 15;
     if (const auto* value = venture::environment::getenv("VENTURE_AUDIO_CAPTURE_SECONDS")) seconds = std::stod(value);
     if (!std::isfinite(seconds) || seconds <= 0 || seconds > 120)
@@ -59,7 +63,7 @@ class DebugCapture {
     // The harness publishes the window start when it reaches a route time (gated
     // routes make that host time unknown at launch): stay unarmed until the file exists.
     if (const auto* value = venture::environment::getenv("VENTURE_AUDIO_CAPTURE_START_FILE"); value && *value) {
-      start_file_ = std::filesystem::u8path(value);
+      start_file_ = venture::paths::from_utf8(value);
       armed_ = false;
     }
     if (start_ns_ >= 0) {
@@ -193,6 +197,8 @@ Backend::Backend() {
   // Its final telemetry must drain before the writer joins and frees its queue;
   // constructing only the Telemetry facade does not establish that ordering.
   timing_enabled_ = av::enabled();
+  const auto* pc = venture::environment::getenv("VENTURE_PC_AUDIO");
+  pc_enabled_ = pc && pc_audio_enabled(pc);
 }
 static_assert(std::atomic<Stream*>::is_always_lock_free);
 static_assert(std::atomic<std::uint64_t>::is_always_lock_free);
@@ -917,6 +923,156 @@ std::vector<DeviceInfo> default_devices() {
     return {};
   }
 }
+bool wasapi_endpoint_matches(std::string_view endpoint_id, std::string_view named) {
+  const auto trim = [](std::string_view v) {
+    while (!v.empty() && std::isspace(static_cast<unsigned char>(v.front()))) v.remove_prefix(1);
+    while (!v.empty() && std::isspace(static_cast<unsigned char>(v.back()))) v.remove_suffix(1);
+    return v;
+  };
+  const auto equal = [](std::string_view a, std::string_view b) {
+    return a.size() == b.size() && std::equal(a.begin(), a.end(), b.begin(), [](char x, char y) {
+             return std::tolower(static_cast<unsigned char>(x)) == std::tolower(static_cast<unsigned char>(y));
+           });
+  };
+  const auto unbraced = [](std::string_view v) {
+    return v.size() >= 2 && v.front() == '{' && v.back() == '}' ? v.substr(1, v.size() - 2) : v;
+  };
+  endpoint_id = trim(endpoint_id);
+  named = trim(named);
+  if (endpoint_id.empty() || named.empty()) return false;
+  if (equal(endpoint_id, named)) return true;
+  // "{0.0.0.00000000}.{guid}": render/capture flow, then the endpoint GUID.
+  const auto guid = unbraced(named);
+  const auto dot = endpoint_id.rfind('.');
+  return guid.size() == 36 && dot != std::string_view::npos && equal(unbraced(endpoint_id.substr(dot + 1)), guid);
+}
+namespace {
+bool endpoint_named(ma_backend backend, const ma_device_info& info, std::string_view named) {
+#ifdef _WIN32
+  if (backend == ma_backend_wasapi)
+    return wasapi_endpoint_matches(paths::utf8(std::filesystem::path(std::wstring(info.id.wasapi))), named);
+#endif
+  // The test executables' null device, by name.
+  if (backend == ma_backend_null) return named == info.name;
+  return false;
+}
+}  // namespace
+void Backend::set_headset_endpoints(std::string runtime, HeadsetSource source) {
+  bool watch = false;
+  {
+    std::lock_guard lock(headset_lock_);
+    headset_runtime_ = std::move(runtime);
+    headset_source_ = std::move(source);
+    watch = headset_source_ && !watching_endpoints_;
+    if (watch) watching_endpoints_ = true;
+  }
+  // A headset endpoint appearing, or the runtime switching endpoints. The
+  // watcher lives for the process, as notifications may arrive until exit.
+  if (watch)
+    platform::watch_audio_endpoints([](void* self) { static_cast<Backend*>(self)->request_route_check(); }, this);
+  request_route_check();
+}
+void Backend::request_route_check() { route_check_.store(true); }
+Backend::Route Backend::route(Direction direction) {
+  std::lock_guard lock(device_lock_);
+  auto value = routes_[std::size_t(direction)].route;
+  value.open = direction == Direction::output ? playback_ready_ : capture_ready_;
+  return value;
+}
+std::string Backend::headset_answer(Direction direction, std::string& runtime, bool& sourced) {
+  HeadsetSource source;
+  {
+    std::lock_guard lock(headset_lock_);
+    source = headset_source_;
+    runtime = headset_runtime_;
+  }
+  sourced = static_cast<bool>(source);
+  try {
+    return source ? source(direction) : std::string();
+  } catch (...) {
+    return {};
+  }
+}
+bool Backend::headset_endpoint(Direction direction, std::string& named, std::string& reason, ma_device_id& id,
+                               std::string& name, bool answered) {
+  std::string runtime;
+  bool sourced = true;
+  if (!answered) named = headset_answer(direction, runtime, sourced);
+  else {
+    std::lock_guard lock(headset_lock_);
+    runtime = headset_runtime_;
+  }
+  if (!sourced) {
+    reason = runtime.empty() ? "no XR runtime names a headset endpoint" : runtime;
+    return false;
+  }
+  if (named.empty()) {
+    reason = std::format("{} names no headset endpoint", runtime);
+    return false;
+  }
+  ma_device_info *outputs = nullptr, *inputs = nullptr;
+  ma_uint32 output_count = 0, input_count = 0;
+  if (ma_context_get_devices(&context_, &outputs, &output_count, &inputs, &input_count) != MA_SUCCESS) {
+    reason = std::format("{} names headset endpoint {}, but the host endpoints could not be listed", runtime, named);
+    return false;
+  }
+  const bool out = direction == Direction::output;
+  auto* list = out ? outputs : inputs;
+  for (ma_uint32 i = 0, count = out ? output_count : input_count; i < count; ++i)
+    if (endpoint_named(context_.backend, list[i], named)) {
+      id = list[i].id;
+      name = list[i].name;
+      reason = std::format("{} names it", runtime);
+      return true;
+    }
+  reason = std::format("{} names headset endpoint {}, which is not an active {} endpoint", runtime, named,
+                       out ? "output" : "capture");
+  return false;
+}
+// Monitor thread: reopens an open device whose endpoint is no longer the one
+// the runtime's answer selects. Guest streams stay attached to their mixer
+// slots, so they continue on the new endpoint as on a default reroute.
+void Backend::check_routes(bool endpoints_changed) {
+  {
+    std::lock_guard lock(headset_lock_);
+    if (!headset_source_ && !watching_endpoints_) return;
+  }
+  std::lock_guard lock(device_lock_);
+  for (auto direction : {Direction::output, Direction::input}) {
+    auto& ready = direction == Direction::output ? playback_ready_ : capture_ready_;
+    auto& device = direction == Direction::output ? playback_ : capture_;
+    // A muted microphone (no host capture) has no endpoint to move.
+    if (!ready || (null_ && !start_null_) || device.pContext != &context_) continue;
+    auto& current = routes_[std::size_t(direction)];
+    std::string runtime, reason, name;
+    bool sourced = false;
+    auto named = headset_answer(direction, runtime, sourced);
+    // The same answer selects the same endpoint until endpoints change; a
+    // lost headset endpoint stops the device, which reopens on the default.
+    if (!endpoints_changed && named == current.route.named) continue;
+    ma_device_id id{};
+    const bool headset = sourced && headset_endpoint(direction, named, reason, id, name, true);
+    current.route.named = named;
+    const bool same = headset ? current.route.headset && std::memcmp(&id, &current.id, sizeof(id)) == 0
+                              : !current.route.headset;
+    // An endpoint that failed to open is retried only for a new answer.
+    const bool failed = headset && current.failed && current.failed_named == named &&
+                        std::memcmp(&id, &current.failed_id, sizeof(id)) == 0;
+    if (same || failed) continue;
+    auto& suppressed = suppressed_stops_[std::size_t(direction)];
+    suppressed.store(true);
+    ma_device_uninit(&device);
+    ready = false;
+    suppressed.store(false);
+    reroutes_.fetch_add(1);
+    endpoint_changed_.store(true);
+    // Opens the runtime's endpoint or the default; if neither opens, the
+    // device-loss path recovers or disconnects the streams.
+    if (!ensure_device(direction)) (direction == Direction::output ? lost_output_ : lost_input_).store(true);
+  }
+  // A new system default, or the headset endpoint becoming it.
+  if (endpoints_changed) update_pc_output();
+}
 Backend::~Backend() {
   shutdown();
 }
@@ -924,13 +1080,15 @@ void Backend::shutdown() {
   if (shutdown_.exchange(true)) return;
   if (monitor_.joinable()) monitor_.join();
   shutdown_libraries();
+  if (pc_ready_) close_pc_output();
   if (capture_ready_) ma_device_uninit(&capture_);
   if (playback_ready_) ma_device_uninit(&playback_);
   capture_ready_ = playback_ready_ = false;
   telemetry();
   if (debug_capture_) debug_capture_->finish();
   if (context_ready_) ma_context_uninit(&context_);
-  context_ready_ = false;
+  if (silent_context_ready_) ma_context_uninit(&silent_context_);
+  context_ready_ = silent_context_ready_ = false;
 }
 bool Backend::use_null_device(bool start_device) {
   std::lock_guard lock(device_lock_);
@@ -944,12 +1102,11 @@ Backend::Hardware Backend::hardware(Direction direction) {
   auto& d = direction == Direction::output ? playback_ : capture_;
   if (!(direction == Direction::output ? playback_ready_ : capture_ready_))
     return {};
-  auto rate = direction == Direction::output ? d.playback.internalSampleRate
-                                             : d.capture.internalSampleRate;
-  auto channels = direction == Direction::output ? d.playback.internalChannels
-                                                 : d.capture.internalChannels;
-  auto format = direction == Direction::output ? d.playback.internalFormat
-                                               : d.capture.internalFormat;
+  // The guest's hardware is Venture's mixer (48 kHz float stereo, as Quest's
+  // HAL), never the host endpoint: a 96 or 192 kHz PC device is resampled.
+  auto rate = d.sampleRate;
+  auto channels = direction == Direction::output ? d.playback.channels : d.capture.channels;
+  auto format = direction == Direction::output ? d.playback.format : d.capture.format;
   std::int32_t guest_format = -1;
   switch (format) {
     case ma_format_s16:
@@ -981,7 +1138,7 @@ bool Backend::ensure_device(Direction direction) {
     }
     context_ready_ = true;
     // Never silently play into a null backend when the real device fails.
-    if (!null_ && context_.backend == ma_backend_null) return false;
+    if (!null_ && context_.backend == ma_backend_null && direction == Direction::output) return false;
     if (const auto* path = venture::environment::getenv("VENTURE_AUDIO_CAPTURE_WAV")) {
       try { debug_capture_ = std::make_unique<DebugCapture>(path); }
       catch (const std::exception& error) { log::error("audio", "Cannot enable mixer capture: {}", error.what()); }
@@ -991,9 +1148,10 @@ bool Backend::ensure_device(Direction direction) {
       auto next_report = monotonic_ns() + 5'000'000'000;
       auto next_av = monotonic_ns() + 1'000'000'000;
       auto next_underrun_check = monotonic_ns() + 10'000'000'000;
-      std::uint64_t underruns_logged = 0, missing_logged = 0;
-      bool reconnect_output = false;
+      std::uint64_t underruns_logged = 0, missing_logged = 0, pc_glitches_logged = 0;
+      bool reconnect_output = false, reconnect_input = false;
       std::int64_t next_reconnect = 0;
+      auto next_route_check = monotonic_ns() + 2'000'000'000;
       while (!shutdown_.load()) {
         if (debug_capture_) debug_capture_->poll();
         if (monotonic_ns() >= next_av) {
@@ -1031,6 +1189,13 @@ bool Backend::ensure_device(Direction direction) {
                       underruns - underruns_logged, missing - missing_logged, underruns);
           underruns_logged = underruns;
           missing_logged = missing;
+          if (mirror_.active()) {
+            const auto pc = mirror_.stats();
+            if (pc.starved + pc.resyncs > pc_glitches_logged)
+              log::info("audio", "PC output: {} starved and {} resynced in total; ratio {:.5f}, {} of {} frames queued",
+                        pc.starved, pc.resyncs, mirror_.ratio(), mirror_.queued(), mirror_.target());
+            pc_glitches_logged = pc.starved + pc.resyncs;
+          }
           next_underrun_check = monotonic_ns() + 10'000'000'000;
         }
         for (auto direction : {Direction::output, Direction::input}) {
@@ -1040,7 +1205,7 @@ bool Backend::ensure_device(Direction direction) {
           if (!lost) continue;
           device_errors_.fetch_add(1);
           endpoint_changed_.store(true);
-          log::error("audio", "Default {} device stopped; notifying streams and recovering logical output tracks",
+          log::error("audio", "Audio {} device stopped; notifying streams and recovering logical output tracks",
                      direction == Direction::output ? "output" : "capture");
           std::lock_guard lock(device_lock_);
           for (auto& slot : slots_)
@@ -1048,6 +1213,8 @@ bool Backend::ensure_device(Direction direction) {
                 s && s->config.direction == direction) {
               if (direction == Direction::output && s->config.follow_default_output)
                 reconnect_output = true;
+              else if (direction == Direction::input && s->config.follow_default_input)
+                reconnect_input = true;
               else s->set_state(State::disconnected);
             }
           if (direction == Direction::output)
@@ -1062,6 +1229,27 @@ bool Backend::ensure_device(Direction direction) {
             ma_device_uninit(&device);
             ready = false;
             suppressed.store(false);
+          }
+          if (direction == Direction::output) update_pc_output();
+        }
+        if (pc_lost_.exchange(false)) {
+          std::lock_guard lock(device_lock_);
+          if (pc_ready_) drop_pc_output("the device stopped");
+        }
+        if (const bool endpoint_event = route_check_.exchange(false); endpoint_event || monotonic_ns() >= next_route_check) {
+          check_routes(endpoint_event);
+          next_route_check = monotonic_ns() + 2'000'000'000;
+        }
+        if (reconnect_input) {
+          // Reopens the default microphone, or silence without one; never fails.
+          std::lock_guard lock(device_lock_);
+          const bool wanted = std::any_of(slots_.begin(), slots_.end(), [](const Slot& slot) {
+            auto* s = slot.stream.load();
+            return s && s->config.direction == Direction::input && s->config.follow_default_input;
+          });
+          if (!wanted || capture_ready_ || ensure_device(Direction::input)) {
+            reconnect_input = false;
+            if (wanted) log::info("audio", "Recovered default capture for recording streams");
           }
         }
         if (reconnect_output && monotonic_ns() >= next_reconnect) {
@@ -1083,7 +1271,8 @@ bool Backend::ensure_device(Direction direction) {
       }
     });
   }
-  if (!null_ && context_.backend == ma_backend_null) return false;
+  const bool no_backend = !null_ && context_.backend == ma_backend_null;
+  if (no_backend && direction == Direction::output) return false;
   bool& ready =
       direction == Direction::output ? playback_ready_ : capture_ready_;
   if (ready) return true;
@@ -1112,6 +1301,14 @@ bool Backend::ensure_device(Direction direction) {
   // WASAPI autoStreamRouting reroutes on endpoint/default changes; SDL's
   // default devices move with the PipeWire/PulseAudio/ALSA default.
   const char* kind_name = direction == Direction::output ? "output" : "capture";
+  // The headset endpoint the XR runtime names, as native PC VR apps use it;
+  // otherwise the system default.
+  auto& route = routes_[std::size_t(direction)];
+  auto& device_id = direction == Direction::output ? cfg.playback.pDeviceID : cfg.capture.pDeviceID;
+  ma_device_id headset_id{};
+  std::string named, reason, headset_name;
+  const bool headset = !no_backend && headset_endpoint(direction, named, reason, headset_id, headset_name);
+  device_id = headset ? &headset_id : nullptr;
   auto open = [&]() -> ma_result {
     if (auto result = ma_device_init(&context_, &cfg, &device); result != MA_SUCCESS) return result;
     (direction == Direction::output ? lost_output_ : lost_input_).store(false);
@@ -1134,16 +1331,51 @@ bool Backend::ensure_device(Direction direction) {
   cfg.wasapi.noAutoConvertSRC = true;
   cfg.resampling.linear.lpfOrder = MA_MAX_FILTER_ORDER;
 #endif
-  auto result = open();
+  auto open_endpoint = [&]() -> ma_result {
+    auto result = open();
 #ifdef _WIN32
-  if (result != MA_SUCCESS && context_.backend == ma_backend_wasapi) {
-    device_errors_.fetch_add(1);
-    log::warn("audio", "Audio {} device did not open at its mix rate ({}); trying Windows sample rate conversion",
-              kind_name, ma_result_description(result));
-    cfg.wasapi.noAutoConvertSRC = false;
-    result = open();
-  }
+    if (result != MA_SUCCESS && context_.backend == ma_backend_wasapi) {
+      device_errors_.fetch_add(1);
+      log::warn("audio", "Audio {} device did not open at its mix rate ({}); trying Windows sample rate conversion",
+                kind_name, ma_result_description(result));
+      cfg.wasapi.noAutoConvertSRC = false;
+      result = open();
+      cfg.wasapi.noAutoConvertSRC = true;
+    }
 #endif
+    return result;
+  };
+  auto result = no_backend ? MA_NO_BACKEND : open_endpoint();
+  if (result != MA_SUCCESS && headset) {
+    device_errors_.fetch_add(1);
+    log::warn("audio", "Headset {} endpoint '{}' did not open ({}); using the system default", kind_name,
+              headset_name, ma_result_description(result));
+    device_id = nullptr;
+    reason = std::format("headset endpoint '{}' did not open", headset_name);
+    route.failed = true;
+    route.failed_named = named;
+    route.failed_id = headset_id;
+    result = open_endpoint();
+  }
+  if (result != MA_SUCCESS && direction == Direction::input) {
+    // No microphone, privacy-blocked or failing: a muted microphone instead.
+    if (!silent_context_ready_) {
+      ma_backend silent = ma_backend_null;
+      silent_context_ready_ = ma_context_init(&silent, 1, nullptr, &silent_context_) == MA_SUCCESS;
+    }
+    if (silent_context_ready_) {
+      log::warn("audio", "No usable host microphone ({}); recording delivers silence",
+                ma_result_description(result));
+      device_id = nullptr;
+      if ((result = ma_device_init(&silent_context_, &cfg, &device)) == MA_SUCCESS &&
+          (result = ma_device_start(&device)) != MA_SUCCESS) {
+        suppressed_stops_[1].store(true);
+        ma_device_uninit(&device);
+        suppressed_stops_[1].store(false);
+      }
+      if (result == MA_SUCCESS) lost_input_.store(false);
+    }
+  }
   if (result != MA_SUCCESS) {
     device_errors_.fetch_add(1);
     log::error("audio", "Audio {} device did not open: {}", kind_name, ma_result_description(result));
@@ -1151,15 +1383,29 @@ bool Backend::ensure_device(Direction direction) {
   }
   ready = true;
   endpoint_changed_.store(true);
+  const bool on_headset = device_id != nullptr && device.pContext == &context_;
+  route.route = {true, on_headset, named, on_headset ? headset_name : std::string()};
+  route.id = on_headset ? headset_id : ma_device_id{};
+  if (on_headset) route.failed = false;
+  // Which endpoint and why, once per decision rather than on every reopen.
+  const auto decision =
+      on_headset                     ? std::format("Audio {}: headset endpoint '{}' ({})", kind_name, headset_name, reason)
+      : device.pContext == &context_ ? std::format("Audio {}: system default ({})", kind_name, reason)
+                                     : std::format("Audio {}: silence, no usable host microphone", kind_name);
+  if (decision != route.logged) {
+    log::info("facts", "{}", decision);
+    route.logged = decision;
+  }
   // The endpoint's own format, which Venture converts its 48 kHz mix to; in debug reports.
   auto fact = [&](const char *kind, const auto &endpoint) {
     log::info("facts", "Audio {} device '{}' via {}: mix {} Hz {} ch; endpoint {} Hz {} ch {}, period {} frames",
-              kind, endpoint.name, ma_get_backend_name(context_.backend), device.sampleRate, endpoint.channels,
+              kind, endpoint.name, ma_get_backend_name(device.pContext->backend), device.sampleRate, endpoint.channels,
               endpoint.internalSampleRate, endpoint.internalChannels, ma_get_format_name(endpoint.internalFormat),
               endpoint.internalPeriodSizeInFrames);
   };
   if (direction == Direction::output) fact("output", device.playback);
   else fact("capture", device.capture);
+  if (direction == Direction::output) update_pc_output();
   return true;
 }
 std::int32_t Backend::attach(Stream& stream) {
@@ -1275,6 +1521,8 @@ void Backend::process(Direction direction, float* output, const float* input,
       if (magnitude > 0) ++non_silent;
       peak = std::max(peak, magnitude);
     }
+    // The same mix for the PC output; a copy that never waits.
+    mirror_.push(output, frames);
     mix_energy_.fetch_add(energy, std::memory_order_relaxed);
     output_frames_.fetch_add(frames, std::memory_order_relaxed);
     non_silent_samples_.fetch_add(non_silent, std::memory_order_relaxed);
@@ -1332,6 +1580,11 @@ void Backend::data_callback(ma_device* device, void* output, const void* input,
 void Backend::notification_callback(
     const ma_device_notification* notification) {
   auto* b = static_cast<Backend*>(notification->pDevice->pUserData);
+  if (notification->pDevice == &b->pc_) {
+    if (notification->type == ma_device_notification_type_stopped && !b->shutdown_.load() && !b->pc_suppressed_.load())
+      b->pc_lost_.store(true);
+    return;
+  }
   auto capture = notification->pDevice->type == ma_device_type_capture;
   if (notification->type == ma_device_notification_type_rerouted && !capture) {
     b->reroutes_.fetch_add(1); b->endpoint_changed_.store(true);
@@ -1342,6 +1595,126 @@ void Backend::notification_callback(
                                                            : b->lost_output_)
         .store(true);
   }
+}
+void Backend::pc_callback(ma_device* device, void* output, const void*, ma_uint32 frames) {
+  static_cast<Backend*>(device->pUserData)->mirror_.pull(static_cast<float*>(output), frames);
+}
+void Backend::set_pc_output(bool enabled) {
+  std::lock_guard lock(device_lock_);
+  pc_enabled_ = enabled;
+  update_pc_output();
+}
+Backend::PcOutput Backend::pc_output() {
+  std::lock_guard lock(device_lock_);
+  return {pc_plan_, pc_ready_};
+}
+namespace {
+// Whether the system default output entry is the endpoint the game plays on.
+int same_output(ma_backend backend, const ma_device_info& system_default, const ma_device_id& id, std::string_view name) {
+#ifdef _WIN32
+  if (backend == ma_backend_wasapi) return _wcsicmp(system_default.id.wasapi, id.wasapi) == 0;
+#endif
+  // SDL (Linux): the default entry carries SDL's default-device ID and the
+  // name of the device it resolves to; a physical entry is never it.
+  if (backend == ma_backend_custom) {
+    if (std::memcmp(&system_default.id, &id, sizeof id) == 0) return 1;
+    return system_default.name[0] && !name.empty() ? name == system_default.name : -1;
+  }
+  return std::memcmp(&system_default.id, &id, sizeof id) == 0;
+}
+}  // namespace
+int Backend::default_output_is_headset() {
+  // The test executables' null backend has one endpoint: the headset and the default.
+  if (null_) return 1;
+  ma_device_info *outputs = nullptr, *inputs = nullptr;
+  ma_uint32 output_count = 0, input_count = 0;
+  if (ma_context_get_devices(&context_, &outputs, &output_count, &inputs, &input_count) != MA_SUCCESS) return -1;
+  const auto& route = routes_[std::size_t(Direction::output)];
+  for (ma_uint32 i = 0; i < output_count; ++i)
+    if (outputs[i].isDefault) return same_output(context_.backend, outputs[i], route.id, route.route.device);
+  return -1;
+}
+void Backend::update_pc_output() {
+  if (shutdown_.load()) return;
+  const bool on_headset = playback_ready_ && routes_[std::size_t(Direction::output)].route.headset &&
+                          playback_.pContext == &context_;
+  const int default_is_headset = pc_enabled_ && !pc_dropped_ && on_headset ? default_output_is_headset() : -1;
+  pc_plan_ = plan_pc_output(pc_enabled_, on_headset, default_is_headset, pc_dropped_);
+  if (pc_plan_ == PcOutputPlan::play && !pc_ready_) open_pc_output();
+  else if (pc_plan_ != PcOutputPlan::play && pc_ready_) close_pc_output();
+  // Once per decision, while the setting is on and the game has an output.
+  if (pc_enabled_ && playback_ready_) {
+    const auto decision = std::format("Audio PC output: {}", describe(pc_plan_));
+    if (decision != pc_logged_) {
+      log::info("facts", "{}", decision);
+      pc_logged_ = decision;
+    }
+  }
+}
+void Backend::open_pc_output() {
+  auto cfg = ma_device_config_init(ma_device_type_playback);
+  cfg.playback.format = ma_format_f32;
+  cfg.playback.channels = OutputMirror::channels;
+  cfg.sampleRate = 48000;
+  // Latency here only delays the PC copy; a third period guards against glitches.
+  cfg.periodSizeInMilliseconds = 10;
+  cfg.periods = 3;
+  cfg.performanceProfile = ma_performance_profile_low_latency;
+  cfg.dataCallback = pc_callback;
+  cfg.notificationCallback = notification_callback;
+  cfg.pUserData = this;
+  // pDeviceID == nullptr: the system default output, followed when it changes.
+#ifdef _WIN32
+  cfg.wasapi.noAutoConvertSRC = true;  // as the headset output: Venture resamples
+  cfg.resampling.linear.lpfOrder = MA_MAX_FILTER_ORDER;
+#endif
+  auto result = ma_device_init(&context_, &cfg, &pc_);
+#ifdef _WIN32
+  if (result != MA_SUCCESS && context_.backend == ma_backend_wasapi) {
+    cfg.wasapi.noAutoConvertSRC = false;
+    result = ma_device_init(&context_, &cfg, &pc_);
+  }
+#endif
+  if (result != MA_SUCCESS) {
+    pc_dropped_ = true;
+    pc_plan_ = PcOutputPlan::dropped;
+    log::warn("audio", "PC output did not open ({}); the game plays on the headset only", ma_result_description(result));
+    return;
+  }
+  // Both devices' periods in mix frames: the queue rides between them, plus margin.
+  const auto period = [](const ma_device& d) {
+    const auto& p = d.playback;
+    return p.internalSampleRate ? std::uint32_t(std::uint64_t(p.internalPeriodSizeInFrames) * d.sampleRate / p.internalSampleRate)
+                                : 480u;
+  };
+  mirror_.activate(2 * (period(playback_) + period(pc_)) + 480);
+  if (result = ma_device_start(&pc_); result != MA_SUCCESS) {
+    mirror_.deactivate();
+    pc_suppressed_.store(true);
+    ma_device_uninit(&pc_);
+    pc_suppressed_.store(false);
+    pc_dropped_ = true;
+    pc_plan_ = PcOutputPlan::dropped;
+    log::warn("audio", "PC output did not start ({}); the game plays on the headset only", ma_result_description(result));
+    return;
+  }
+  pc_ready_ = true;
+  log::info("facts", "Audio PC output device '{}' via {}: endpoint {} Hz {} ch, period {} frames; {} mix frames behind the headset",
+            pc_.playback.name, ma_get_backend_name(context_.backend), pc_.playback.internalSampleRate,
+            pc_.playback.internalChannels, pc_.playback.internalPeriodSizeInFrames, mirror_.target());
+}
+void Backend::close_pc_output() {
+  mirror_.deactivate();
+  pc_suppressed_.store(true);
+  ma_device_uninit(&pc_);
+  pc_suppressed_.store(false);
+  pc_ready_ = false;
+}
+void Backend::drop_pc_output(std::string_view why) {
+  close_pc_output();
+  pc_dropped_ = true;
+  pc_plan_ = PcOutputPlan::dropped;
+  log::warn("audio", "PC output dropped ({}); the game plays on the headset only", why);
 }
 void Backend::stream_closed(Stream& s) {
   if (s.config.direction != Direction::output || !s.telemetry_id) return;
@@ -1420,6 +1793,7 @@ void register_libraries() {
   hle::opensles::register_library();
 }
 void shutdown_libraries() {
+  ovrplatform::close_microphones();
   hle::aaudio::shutdown_library();
   hle::opensles::shutdown_library();
 }

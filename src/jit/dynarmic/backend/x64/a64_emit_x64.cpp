@@ -317,6 +317,7 @@ A64EmitX64::A64EmitX64(BlockOfCode& code, A64::UserConfig conf, A64::Jit* jit_in
     ResetDispatchSites();
     exception_handler.Register(code);
     code.PreludeComplete();
+    InitPortableBlocks();
     if (conf.HasOptimization(OptimizationFlag::FastDispatch) && conf.fast_dispatch_table_pages)
         SeedFastDispatchTable();
 
@@ -394,6 +395,8 @@ static std::optional<size_t> ScaledAddOperand(IR::Inst& add, const IR::Inst* hos
 
 void A64EmitX64::FoldScaledIndices(A64EmitContext& ctx) const {
     for (auto& inst : ctx.block.instructions) {
+        if (ctx.IsIndexedAddress(&inst))
+            continue;
         if (const auto k = ScaledAddOperand(inst, ctx.host_flags_inst))
             ctx.scaled_indices.push_back(inst.GetArg(*k).GetInst());
     }
@@ -504,6 +507,11 @@ A64EmitX64::BlockDescriptor A64EmitX64::Emit(IR::Block& block) {
         FoldScaledIndices(ctx);
     bool host_flags_live = false;
     next_uses.Build(block);
+    // Venture: a folded index is read by its access, not by the add.
+    for (const auto& indexed : ctx.indexed_addresses)
+        next_uses.AddUse(indexed.add->GetArg(indexed.index_arg).GetInst(), indexed.access);
+    if (!conf.very_verbose_debugging_output)
+        MarkRematerializableGets(block);
     reg_alloc.SetNextUses(&next_uses);
     // Raw LinkBlock terminals (mode changes, callbacks and translation caps)
     // remain checkpoints. Only ordinary conditional edges can skip a poll.
@@ -515,6 +523,10 @@ A64EmitX64::BlockDescriptor A64EmitX64::Emit(IR::Block& block) {
     // Start emitting.
     code.align(conf.block_alignment);
     const auto* const entrypoint = code.getCurr();
+    const bool capturing = portable_enabled && conf.portable_block_sink;
+    const size_t capture_cold_begin = code.ColdInsertionOffset();
+    if (capturing)
+        BeginCapture();
     if (conf.profile_cookie && (!conf.profile_cookie_site || conf.profile_cookie_site(ctx.Location().PC())))
         code.mov(code.dword[code.ABI_JIT_PTR + offsetof(A64JitState, profile_cookie)], conf.profile_cookie(ctx.Location().PC()));
     if (conf.profile_function_links) {
@@ -747,6 +759,12 @@ A64EmitX64::BlockDescriptor A64EmitX64::Emit(IR::Block& block) {
             reg_alloc.DefineValue(code, instruction, args[0]);
             goto finish_this_inst;
         }
+        if (const auto* indexed = opcode == IR::Opcode::Add64 ? ctx.FindIndexedAddress(instruction) : nullptr) {
+            // Its only user addresses memory as [base + index*scale] and references the index itself.
+            auto base = reg_alloc.GetArgument(instruction->GetArg(1 - indexed->index_arg));
+            reg_alloc.DefineValue(code, instruction, base);
+            goto finish_this_inst;
+        }
         if (opcode == IR::Opcode::Add64 && ctx.IsFoldedAddress(instruction)) {
             // Its only user addresses memory as [base + imm32]; the value stays in base's location.
             auto args = reg_alloc.GetArgumentInfo(instruction);
@@ -842,6 +860,14 @@ finish_this_inst:
     for (const auto& [begin, end] : inlined_code)
         block_ranges.AddRange(boost::icl::discrete_interval<u64>::closed(begin, end - 1), descriptor);
 
+    if (capturing) {
+        std::vector<std::pair<u64, u64>> ranges{{descriptor.PC(), end_location.PC() - 1}};
+        for (const auto& successor : exit_nzcv_ranges)
+            ranges.emplace_back(boost::icl::first(successor), boost::icl::last(successor));
+        for (const auto& [begin, end] : inlined_code)
+            ranges.emplace_back(begin, end - 1);
+        FinishCapture(descriptor, entrypoint, size, capture_cold_begin, code.ColdInsertionOffset(), ranges);
+    }
     auto bdesc = RegisterBlock(descriptor, entrypoint, size);
     SetCompilePhase(CompilePhase::Finalize);
     code.DisableWriting();
@@ -849,14 +875,29 @@ finish_this_inst:
     return bdesc;
 }
 
+void A64EmitX64::ReserveBlocks(size_t count) {
+    // Side tables grow with the blocks at the ratio seen so far (one entry a block until there is one).
+    const size_t blocks = block_descriptors.size();
+    const auto grow = [&](auto& table) {
+        const size_t per_block = blocks >= 1024 ? (table.size() + blocks - 1) / blocks : 1;
+        table.reserve(table.size() + count * per_block);
+    };
+    grow(patch_information);
+    grow(fastmem_patch_info);
+    grow(unlinked_exits);
+    block_descriptors.reserve(blocks + count);
+}
+
 void A64EmitX64::ClearCache() {
     EmitX64::ClearCache();
+    shared_labels.clear();  // Venture: left over only by an emission that threw
     profile_internal_links.clear();
     block_ranges.ClearCache();
     ClearFastDispatchTable();
     next_dispatch_site = 0;
     ResetDispatchSites();
     fastmem_patch_info.clear();
+    unlinked_exits.clear();
 }
 
 void A64EmitX64::InvalidateCacheRanges(const boost::icl::interval_set<u64>& ranges) {
@@ -867,25 +908,79 @@ void A64EmitX64::InvalidateCacheRanges(const boost::icl::interval_set<u64>& rang
         ResetDispatchSites();
 }
 
-std::optional<u64> A64EmitX64::NZCVOverwriteEnd(u64 pc) const {
-    // The last byte of the first instruction at pc that overwrites NZCV before
-    // any flag read, branch or unrecognised encoding, within 16 instructions.
+void A64EmitX64::MarkRematerializableGets(IR::Block& block) {
+    // Venture: an uncached register's JitState slot holds the value read from it
+    // until an A64SetW/SetX stores (EndRematerialization), so its reads spill for free.
+    // Registers an abort exit may store are left out, as are blocks with callbacks
+    // that may change guest registers.
+    using Op = IR::Opcode;
+    std::bitset<32> written;
+    for (const auto& inst : block.instructions) {
+        switch (inst.GetOpcode()) {
+        case Op::A64ColdSetW:
+        case Op::A64ColdSetX:
+            written.set(size_t(inst.GetArg(1).GetA64RegRef()));
+            break;
+        case Op::A64CallSupervisor:
+        case Op::A64ExceptionRaised:
+        case Op::A64DataCacheOperationRaised:
+        case Op::A64InstructionCacheOperationRaised:
+        case Op::A64InstructionSynchronizationBarrier:
+            return;
+        default:
+            break;
+        }
+    }
+    for (const auto& inst : block.instructions) {
+        const auto opcode = inst.GetOpcode();
+        if (opcode != Op::A64GetW && opcode != Op::A64GetX)
+            continue;
+        const size_t index = size_t(inst.GetArg(0).GetA64RegRef());
+        if (index >= 31 || written.test(index) || code.A64CachedRegister(index))
+            continue;
+        next_uses.SetRematerializable(&inst, {u32(offsetof(A64JitState, reg) + sizeof(u64) * index), opcode == Op::A64GetW});
+    }
+}
+
+bool A64EmitX64::NZCVDeadAt(u64 pc, size_t& budget, size_t depth, std::vector<boost::icl::discrete_interval<u64>>& ranges) const {
+    // Whether every path from pc overwrites NZCV before any flag read or unrecognised
+    // encoding, within `budget` instructions in all. Venture: B, CBZ/CBNZ and TBZ/TBNZ
+    // read no flags; the scan follows them (both ways) up to `depth` branches deep.
+    // Every instruction it relies on is added to `ranges`.
     if (pc & 3)
-        return std::nullopt;
-    for (u64 i = 0; i < 16; ++i) {
-        const auto word = conf.callbacks->MemoryReadCode(pc + i * 4);
+        return false;
+    for (const u64 begin = pc; budget; --budget, pc += 4) {
+        const auto word = conf.callbacks->MemoryReadCode(pc);
         if (!word)
-            return std::nullopt;
-        switch (ClassifyNZCV(*word)) {
+            return false;
+        const u32 i = *word;
+        switch (ClassifyNZCV(i)) {
         case NZCVUse::Overwrite:
-            return pc + i * 4 + 3;
+            ranges.push_back(boost::icl::discrete_interval<u64>::closed(begin, pc + 3));
+            return true;
         case NZCVUse::None:
             continue;
         case NZCVUse::Other:
-            return std::nullopt;
+            break;
         }
+        std::optional<u64> target;
+        bool falls_through = false;
+        if ((i & 0xFC000000) == 0x14000000) {  // B
+            target = pc + u64(s64(s32(i << 6) >> 6) * 4);
+        } else if ((i & 0x7E000000) == 0x34000000) {  // CBZ, CBNZ
+            target = pc + u64(s64(s32(i << 8) >> 13) * 4);
+            falls_through = true;
+        } else if ((i & 0x7E000000) == 0x36000000) {  // TBZ, TBNZ
+            target = pc + u64(s64(s32(i << 13) >> 18) * 4);
+            falls_through = true;
+        }
+        if (!target || depth == 0)
+            return false;
+        ranges.push_back(boost::icl::discrete_interval<u64>::closed(begin, pc + 3));
+        --budget;
+        return NZCVDeadAt(*target, budget, depth - 1, ranges) && (!falls_through || NZCVDeadAt(pc + 4, budget, depth - 1, ranges));
     }
-    return std::nullopt;
+    return false;
 }
 
 IR::Inst* A64EmitX64::PrepareHostFlagsExit(A64EmitContext& ctx) {
@@ -957,9 +1052,11 @@ IR::Inst* A64EmitX64::PrepareHostFlagsExit(A64EmitContext& ctx) {
         if (!next)
             continue;
         const u64 pc = A64::LocationDescriptor{*next}.PC();
-        if (const auto end = NZCVOverwriteEnd(pc)) {
+        std::vector<boost::icl::discrete_interval<u64>> ranges;
+        size_t budget = 24;
+        if (NZCVDeadAt(pc, budget, 3, ranges)) {
             exit_nzcv_live[i] = false;
-            exit_nzcv_ranges.push_back(boost::icl::discrete_interval<u64>::closed(pc, *end));
+            exit_nzcv_ranges.insert(exit_nzcv_ranges.end(), ranges.begin(), ranges.end());
             any_dead = true;
         }
     }
@@ -1558,6 +1655,7 @@ void A64EmitX64::EmitA64SetW(A64EmitContext& ctx, IR::Inst* inst) {
         }
         return;
     }
+    ctx.reg_alloc.EndRematerialization(code, u32(offsetof(A64JitState, reg) + sizeof(u64) * static_cast<size_t>(reg)));
     const auto addr = qword[code.ABI_JIT_PTR + offsetof(A64JitState, reg) + sizeof(u64) * static_cast<size_t>(reg)];
     if (args[1].FitsInImmediateS32()) {
         code.mov(addr, args[1].GetImmediateS32());
@@ -1598,6 +1696,7 @@ void A64EmitX64::EmitA64SetX(A64EmitContext& ctx, IR::Inst* inst) {
         }
         return;
     }
+    ctx.reg_alloc.EndRematerialization(code, u32(offsetof(A64JitState, reg) + sizeof(u64) * static_cast<size_t>(reg)));
     const auto addr = qword[code.ABI_JIT_PTR + offsetof(A64JitState, reg) + sizeof(u64) * static_cast<size_t>(reg)];
     if (args[1].FitsInImmediateS32()) {
         code.mov(addr, args[1].GetImmediateS32());
@@ -1749,7 +1848,16 @@ void A64EmitX64::EmitA64CallSupervisor(A64EmitContext& ctx, IR::Inst* inst) {
     if (known) {
         Devirtualize<&A64::UserCallbacks::CallSVCFastKnown>(conf.callbacks).EmitCall(code, [&](RegList param) {
             code.mov(param[0], imm);
-            code.mov(param[1], reinterpret_cast<u64>(known));
+            if (active_capture) {
+                // Venture: a fixed imm64 the installing JIT replaces with its own lookup.
+                const int idx = param[1].getIdx();
+                code.db(0x48 | (idx >> 3));
+                code.db(0xB8 | (idx & 7));
+                active_capture->svcs.push_back({size_t(code.getCurr<const u8*>() - code.getCode()), ctx.Location().PC(), imm});
+                code.dq(reinterpret_cast<u64>(known));
+            } else {
+                code.mov(param[1], reinterpret_cast<u64>(known));
+            }
             code.mov(param[2], code.ABI_JIT_PTR);
         });
     } else if (fast_svc) {
@@ -1903,6 +2011,7 @@ bool EmitTerminalImpl(A64EmitX64& e, IR::Term::LinkBlock terminal, IR::LocationD
             e.code.cmp(qword[rsp + ABI_SHADOW_SPACE + offsetof(StackLayout, cycles_remaining)], 0);
             e.MarkProfileLink(initial_location, terminal.next);
             e.patch_information[terminal.next].jg.push_back(e.code.getCurr());
+            e.RecordLinkSite(0, terminal.next);
             if (const auto next_bb = e.GetBasicBlock(terminal.next)) {
                 e.EmitPatchJg(terminal.next, next_bb->entrypoint);
             } else {
@@ -1912,6 +2021,7 @@ bool EmitTerminalImpl(A64EmitX64& e, IR::Term::LinkBlock terminal, IR::LocationD
             e.code.cmp(dword[e.code.ABI_JIT_PTR + offsetof(A64JitState, halt_reason)], 0);
             e.MarkProfileLink(initial_location, terminal.next);
             e.patch_information[terminal.next].jz.push_back(e.code.getCurr());
+            e.RecordLinkSite(1, terminal.next);
             if (const auto next_bb = e.GetBasicBlock(terminal.next)) {
                 e.EmitPatchJz(terminal.next, next_bb->entrypoint);
             } else {
@@ -1947,6 +2057,7 @@ bool EmitTerminalImpl(A64EmitX64& e, IR::Term::LinkBlockFast terminal, IR::Locat
             e.UnlinkedExit(terminal.next);
         e.MarkProfileLink(initial_location, terminal.next);
         e.patch_information[terminal.next].jmp.push_back(e.code.getCurr());
+        e.RecordLinkSite(2, terminal.next);
         if (auto next_bb = e.GetBasicBlock(terminal.next)) {
             e.EmitPatchJmp(terminal.next, next_bb->entrypoint);
         } else {
@@ -2082,6 +2193,8 @@ CodePtr A64EmitX64::UnlinkedExit(const IR::LocationDescriptor& target_desc) {
         code.SwitchToColdCode();
         code.EnsureMemoryCommitted();
         exit = code.getCurr();
+        if (portable_enabled)
+            unlinked_exits.insert_or_assign(reinterpret_cast<u64>(exit), target_desc);
         code.mov(rax, A64::LocationDescriptor{target_desc}.PC());
         code.mov(qword[code.ABI_JIT_PTR + offsetof(A64JitState, pc)], rax);
         code.jmp(code.GetReturnFromRunCodeAddress(), Xbyak::CodeGenerator::T_NEAR);

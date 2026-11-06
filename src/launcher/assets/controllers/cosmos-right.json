@@ -1,0 +1,142 @@
+{
+ "width": 515,
+ "height": 720,
+ "nodes": {
+  "Light": [
+   2488.9,
+   2273.0
+  ],
+  "Camera": [
+   37618.5,
+   18140.7
+  ],
+  "htc_vive_cosmos_right": [
+   314.9,
+   387.1
+  ],
+  "a_button_pressed_max": [
+   204.6,
+   308.0
+  ],
+  "a_button_pressed_min": [
+   208.0,
+   305.5
+  ],
+  "a_button_pressed_value": [
+   205.0,
+   306.0
+  ],
+  "a_button": [
+   205.0,
+   306.0
+  ],
+  "b_button_pressed_max": [
+   151.4,
+   254.8
+  ],
+  "b_button_pressed_min": [
+   154.2,
+   251.9
+  ],
+  "b_button_pressed_value": [
+   151.7,
+   254.7
+  ],
+  "b_button": [
+   151.7,
+   254.7
+  ],
+  "bumper_pressed_max": [
+   87.5,
+   222.5
+  ],
+  "bumper_pressed_min": [
+   74.8,
+   216.5
+  ],
+  "bumper_pressed_value": [
+   75.1,
+   227.5
+  ],
+  "bumper": [
+   75.1,
+   227.5
+  ],
+  "controller": [
+   317.2,
+   387.1
+  ],
+  "xr_standard_squeeze_pressed_max": [
+   165.5,
+   420.9
+  ],
+  "xr_standard_squeeze_pressed_min": [
+   156.1,
+   423.5
+  ],
+  "xr_standard_squeeze_pressed_value": [
+   165.7,
+   419.6
+  ],
+  "squeeze": [
+   165.7,
+   419.6
+  ],
+  "xr_standard_thumbstick_pressed_max": [
+   165.8,
+   236.7
+  ],
+  "xr_standard_thumbstick_pressed_min": [
+   167.3,
+   235.2
+  ],
+  "xr_standard_thumbstick_pressed_value": [
+   194.5,
+   215.2
+  ],
+  "xr_standard_thumbstick_xaxis_pressed_max": [
+   167.3,
+   235.2
+  ],
+  "xr_standard_thumbstick_xaxis_pressed_min": [
+   167.3,
+   235.2
+  ],
+  "xr_standard_thumbstick_xaxis_pressed_value": [
+   194.5,
+   215.2
+  ],
+  "xr_standard_thumbstick_yaxis_pressed_max": [
+   167.3,
+   235.2
+  ],
+  "xr_standard_thumbstick_yaxis_pressed_min": [
+   167.3,
+   235.2
+  ],
+  "xr_standard_thumbstick_yaxis_pressed_value": [
+   194.5,
+   215.2
+  ],
+  "thumbstick": [
+   194.5,
+   215.2
+  ],
+  "xr_standard_trigger_pressed_max": [
+   68.4,
+   260.3
+  ],
+  "xr_standard_trigger_pressed_min": [
+   68.4,
+   260.3
+  ],
+  "xr_standard_trigger_pressed_value": [
+   53.5,
+   277.6
+  ],
+  "trigger": [
+   53.5,
+   277.6
+  ]
+ }
+}

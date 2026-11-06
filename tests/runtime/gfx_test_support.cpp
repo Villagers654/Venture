@@ -10,7 +10,6 @@
 #include <openxr/openxr.h>
 #include <openxr/openxr_platform.h>
 #include <map>
-#include <mutex>
 #include <set>
 
 #include "android/native_window.h"
@@ -22,7 +21,6 @@
 #include "xr/host_xr.h"
 
 namespace {
-std::recursive_mutex mutex;
 thread_local venture::test::GraphicsCallback last_callback;
 std::array<unsigned, 4> xr_calls{};
 PFN_vkGetInstanceProcAddr xr_vk_loader = nullptr;

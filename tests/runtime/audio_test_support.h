@@ -14,4 +14,6 @@ GuestAddr add_callback(Callback fn);
 std::int64_t call(GuestAddr thunk, std::initializer_list<std::uint64_t> args);
 GuestAddr symbol(std::string_view library, std::string_view name);
 bool stop_null_output();
+// The host microphone stops as when it is unplugged or its driver fails.
+bool stop_null_input();
 }  // namespace venture::test::audio_core

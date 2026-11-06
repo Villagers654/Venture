@@ -11,6 +11,9 @@
 
 #include "audio/audio.h"
 #include "hle/opensles/abi.h"
+#include "hle/ovrplatform/microphone.h"
+#include "core/hle.h"
+#include "core/linker.h"
 #include "core/thread.h"
 #include "core/signals.h"
 #include "audio_test_support.h"
@@ -350,4 +353,151 @@ TEST_CASE("audio render: OpenSL releases copied buffers before host playback") {
     CHECK(position == 10);
     CHECK(std::all_of(output.begin(), output.end(), [](float value) { return value == doctest::Approx(0.25); }));
   }
+}
+
+TEST_CASE("audio render: OpenSL voice recorder captures the default input (issue 89)") {
+  setup();
+  namespace sl = venture::hle::opensles::abi;
+  auto table = []<class T>(GuestAddr interface) -> const T& { return *g2h<T>(*g2h<GuestAddr>(interface)); };
+  auto get = [&](GuestAddr object, const char* name) {
+    GuestAddr result = 0;
+    REQUIRE(call(table.operator()<sl::ObjectTable>(object).GetInterface,
+      {object, *g2h<GuestAddr>(symbol("libOpenSLES.so", name)), h2g(&result)}) == 0);
+    return result;
+  };
+  GuestAddr engine = 0, recorder = 0;
+  REQUIRE(call(symbol("libOpenSLES.so", "slCreateEngine"), {h2g(&engine), 0, 0, 0, 0, 0}) == 0);
+  struct Destroy { GuestAddr object; ~Destroy() { call(g2h<sl::ObjectTable>(*g2h<GuestAddr>(object))->Destroy, {object}); } } destroy{engine};
+  REQUIRE(call(table.operator()<sl::ObjectTable>(engine).Realize, {engine, 0}) == 0);
+  auto engine_itf = get(engine, "SL_IID_ENGINE");
+  sl::IoLocator device{3, 1, 0xffffffffu, 0, 0};  // SL_DEFAULTDEVICEID_AUDIOINPUT
+  sl::QueueLocator locator{0x800007bd, 2};
+  sl::Pcm pcm{2, 1, 16000 * 1000, 16, 16, 4, 2};  // 16 kHz mono I16, front center
+  sl::Data source{h2g(&device), 0}, sink{h2g(&locator), h2g(&pcm)};
+  REQUIRE(call(table.operator()<sl::EngineTable>(engine_itf).CreateAudioRecorder,
+    {engine_itf, h2g(&recorder), h2g(&source), h2g(&sink), 0, 0, 0}) == 0);
+  // Voice chat asks for VOICE_COMMUNICATION before Realize. AOSP rejects only NONE.
+  auto config = get(recorder, "SL_IID_ANDROIDCONFIGURATION");
+  static const char key[] = "androidRecordingPreset";
+  std::uint32_t preset = 0;
+  CHECK(call(table.operator()<sl::AndroidConfigurationTable>(config).SetConfiguration,
+    {config, h2g(key), h2g(&preset), 4}) == 2);  // SL_RESULT_PARAMETER_INVALID
+  for (std::uint32_t value : {3u, 4u}) {
+    preset = value;
+    CHECK(call(table.operator()<sl::AndroidConfigurationTable>(config).SetConfiguration,
+      {config, h2g(key), h2g(&preset), 4}) == 0);
+  }
+  std::uint32_t size = 4;
+  preset = 0;
+  REQUIRE(call(table.operator()<sl::AndroidConfigurationTable>(config).GetConfiguration,
+    {config, h2g(key), h2g(&size), h2g(&preset)}) == 0);
+  CHECK(preset == 4);
+  REQUIRE(call(table.operator()<sl::ObjectTable>(recorder).Realize, {recorder, 0}) == 0);
+  auto queue = get(recorder, "SL_IID_ANDROIDSIMPLEBUFFERQUEUE"), record = get(recorder, "SL_IID_RECORD");
+  auto filled = std::make_shared<std::promise<void>>();
+  auto filled_future = filled->get_future();
+  auto once = std::make_shared<std::atomic<bool>>(false);
+  auto callback = add_callback([filled, once](auto) {
+    if (!once->exchange(true)) filled->set_value();
+    return 0;
+  });
+  REQUIRE(call(table.operator()<sl::BufferQueueTable>(queue).RegisterCallback, {queue, callback, 0}) == 0);
+  std::vector<std::int16_t> captured(160, 0);
+  REQUIRE(call(table.operator()<sl::BufferQueueTable>(queue).Enqueue,
+    {queue, h2g(captured.data()), captured.size() * sizeof(captured[0])}) == 0);
+  REQUIRE(call(table.operator()<sl::RecordTable>(record).SetRecordState, {record, 3}) == 0);  // RECORDING
+  // The host microphone: 48 kHz stereo at half scale, 20 ms.
+  std::array<float, 480 * 2> input;
+  input.fill(0.5f);
+  for (int i = 0; i < 2; ++i)
+    audio::Backend::get().process(audio::Direction::input, nullptr, input.data(), 480);
+  REQUIRE(filled_future.wait_for(venture::test::hang_timeout) == std::future_status::ready);
+  // Past the 48 to 16 kHz converter's filter startup.
+  CHECK(captured[100] == doctest::Approx(16384).epsilon(0.002));
+  CHECK(captured.back() == doctest::Approx(16384).epsilon(0.002));
+  REQUIRE(call(table.operator()<sl::RecordTable>(record).SetRecordState, {record, 1}) == 0);  // STOPPED
+  call(table.operator()<sl::ObjectTable>(recorder).Destroy, {recorder});
+}
+
+TEST_CASE("audio render: the Platform SDK microphone records the default input at 48 kHz mono (issue 89)") {
+  setup();
+  static const bool registered = [] {
+    auto library = std::make_shared<HleLibrary>("libovrmicrophone_test.so");
+    for (const auto& entry : ovrplatform::microphone_exports())
+      library->add_function(entry.name, hle::make_thunk(library->soname(), entry.name, entry.handler));
+    Linker::get().register_hle_library(library);
+    return true;
+  }();
+  (void)registered;
+  auto mic = [](const char* name, std::initializer_list<std::uint64_t> args) {
+    return call(symbol("libovrmicrophone_test.so", name), args);
+  };
+  const auto handle = mic("ovr_Microphone_Create", {});
+  REQUIRE(handle != 0);
+  CHECK(mic("ovr_Microphone_GetOutputBufferMaxSize", {std::uint64_t(handle)}) == 24000);
+  std::vector<float> samples(2000, 9.0f);
+  std::array<float, 480 * 2> input;
+  input.fill(0.5f);
+  // Nothing is recorded before Start.
+  audio::Backend::get().process(audio::Direction::input, nullptr, input.data(), 480);
+  CHECK(mic("ovr_Microphone_GetPCMFloat", {std::uint64_t(handle), h2g(samples.data()), samples.size()}) == 0);
+  auto notified = std::make_shared<std::atomic<int>>(0);
+  auto user = std::make_shared<std::int64_t>(handle);
+  auto available = add_callback([notified, user](auto args) {
+    if (args[0] == h2g(user.get())) notified->fetch_add(1);
+    // Games read inside the callback; Destroy must not deadlock against it.
+    call(symbol("libovrmicrophone_test.so", "ovr_Microphone_GetNumSamplesAvailable"), {std::uint64_t(*user)});
+    return 0;
+  });
+  mic("ovr_Microphone_SetAudioDataAvailableCallback", {std::uint64_t(handle), available, h2g(user.get())});
+  mic("ovr_Microphone_Start", {std::uint64_t(handle)});
+  for (int i = 0; i < 3; ++i)
+    audio::Backend::get().process(audio::Direction::input, nullptr, input.data(), 480);
+  CHECK(mic("ovr_Microphone_GetNumSamplesAvailable", {std::uint64_t(handle)}) == 1440);
+  // The data-available callback runs on the recording's worker with its user pointer.
+  const auto callback_deadline = std::chrono::steady_clock::now() + venture::test::hang_timeout;
+  while (!notified->load() && std::chrono::steady_clock::now() < callback_deadline)
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  CHECK(notified->load() >= 1);
+  const auto read = mic("ovr_Microphone_GetPCMFloat", {std::uint64_t(handle), h2g(samples.data()), samples.size()});
+  CHECK(read == 1440);
+  CHECK(samples[1439] == doctest::Approx(0.5f));
+  audio::Backend::get().process(audio::Direction::input, nullptr, input.data(), 480);
+  std::array<std::int16_t, 480> pcm{};
+  CHECK(mic("ovr_Microphone_GetPCM", {std::uint64_t(handle), h2g(pcm.data()), pcm.size()}) == 480);
+  CHECK(pcm.back() == doctest::Approx(16384).epsilon(0.002));
+  mic("ovr_Microphone_Stop", {std::uint64_t(handle)});
+  audio::Backend::get().process(audio::Direction::input, nullptr, input.data(), 480);
+  CHECK(mic("ovr_Microphone_GetPCMFloat", {std::uint64_t(handle), h2g(samples.data()), samples.size()}) == 0);
+  mic("ovr_Microphone_Destroy", {std::uint64_t(handle)});
+  CHECK(mic("ovr_Microphone_GetNumSamplesAvailable", {std::uint64_t(handle)}) == 0);
+  CHECK(mic("ovr_Microphone_GetPCMFloat", {std::uint64_t(handle), h2g(samples.data()), samples.size()}) == 0);
+}
+TEST_CASE("audio render: the PC output plays the headset's own mix, sample for sample") {
+  setup();
+  const auto stream = open(false, 2, 48000, 2);
+  struct Close { GuestAddr stream; ~Close() { aa("AAudioStream_close", {stream}); } } close{stream};
+  auto& backend = audio::Backend::get();
+  auto& mirror = backend.output_mirror();
+  struct Off { audio::OutputMirror& mirror; ~Off() { mirror.deactivate(); } } off{mirror};
+  mirror.activate(256);
+  std::vector<float> pcm(2 * 960), mix(2 * 960), pc(2 * 256);
+  for (std::size_t i = 0; i < pcm.size(); ++i) pcm[i] = float(i % 200) / 400 - .25f;
+  REQUIRE(aa("AAudioStream_requestStart", {stream}) == 0);
+  // One mix: the headset device's blocks, queued as they were handed to the headset.
+  for (std::size_t at = 0; at < 960; at += 240) {
+    REQUIRE(aa("AAudioStream_write", {stream, h2g(pcm.data() + 2 * at), 240, 0}) == 240);
+    backend.process(audio::Direction::output, mix.data() + 2 * at, nullptr, 240);
+  }
+  CHECK(mirror.queued() == 960);
+  CHECK(std::equal(mix.begin(), mix.end(), pcm.begin(), [](float a, float b) { return std::abs(a - b) < 1e-4f; }));
+  // The PC output starts target (+ 3) frames before the newest and plays them unchanged.
+  mirror.pull(pc.data(), 256);
+  const std::size_t first = 960 - 256 - 3;
+  for (std::size_t i = 0; i < pc.size(); ++i) CHECK(pc[i] == doctest::Approx(mix[2 * first + i]).epsilon(1e-5));
+  // The microphone is never mirrored.
+  std::vector<float> input(2 * 480, .5f);
+  const auto queued = mirror.queued();
+  backend.process(audio::Direction::input, nullptr, input.data(), 480);
+  CHECK(mirror.queued() == queued);
 }

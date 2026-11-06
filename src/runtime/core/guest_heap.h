@@ -15,6 +15,11 @@ struct Allocator {
   void (*free)(void*);
 };
 extern Allocator allocator;
+// The A64 entries of `allocator` (its default): mimalloc, and on a refusal one
+// report (core/alloc_failure.h) and one retry after spare memory is released.
+void* allocate64(std::uint64_t bytes, std::uint64_t alignment);
+void* zero_allocate64(std::uint64_t count, std::uint64_t bytes, std::uint64_t alignment);
+void* reallocate64(void*, std::uint64_t bytes, std::uint64_t alignment);
 void select32();
 // A64: mimalloc takes its memory from one contiguous reservation, so the guest
 // heap stays in a few adjacent 4 GiB windows as on a device (Unity 2019's
@@ -37,6 +42,12 @@ DetachedThreadHeap detach_thread();
 void release_thread();  // after guest destructors; live allocations are retained
 void prepare_thread();  // before an adopted GuestThread's thread_local owner
 bool contains(GuestAddr);
+// True when `p` lies in memory the selected allocator manages, so its free,
+// realloc and usable-size calls can read the block's metadata: the A64 arena
+// (any mimalloc region when that reservation fell back) or the A32 arena.
+// Anything else (an image, a stack, an mmap, a value that only looks like a
+// pointer) would send mimalloc to read a segment header that is not there.
+bool owns(const void* p);
 // Check live heap pages intersecting a range; other mappings are checked by
 // AddressSpace's immutable permissions snapshot.
 bool accessible(GuestAddr, std::uint64_t size);

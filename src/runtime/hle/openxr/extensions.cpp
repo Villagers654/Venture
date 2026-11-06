@@ -2,6 +2,7 @@
 #include "hle/openxr/state.h"
 #include "hle/openxr/passthrough.h"
 #include "xr/clock.h"
+#include "xr/display_override.h"
 #include "xr/queue.h"
 #include "gfx/gpu_device.h"
 #include <algorithm>
@@ -177,6 +178,8 @@ XrResult xrGetRecommendedLayerResolutionMETA(XrSession handle,
     result = host_call<PFN_xrEnumerateViewConfigurationViews, "xrEnumerateViewConfigurationViews">(host_xr().instance, host_xr().system, XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO,
         count, &count, views.data());
     if (XR_FAILED(result)) return result;
+    // The budget is the eye size the guest is given (display_override.h).
+    xr::apply_display_override(views.data(), count);
     Budget fresh{host_xr().instance, host_xr().system, generation};
     for (const auto& view : views) {
       fresh.width = std::max(fresh.width, view.recommendedImageRectWidth);

@@ -48,7 +48,8 @@ class MemoryFd final : public File {
   int truncate(std::int64_t size) override {
     if (size < 0) return -err::einval;
     std::lock_guard lock(mutex);
-    if ((size < bytes_.size() && (seals_ & 2)) || (size > bytes_.size() && (seals_ & 4)))
+    const auto length = static_cast<std::uint64_t>(size);
+    if ((length < bytes_.size() && (seals_ & 2)) || (length > bytes_.size() && (seals_ & 4)))
       return -err::eperm;
     try {
       bytes_.resize(size);

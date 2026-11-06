@@ -6,6 +6,9 @@
  * SPDX-License-Identifier: 0BSD
  */
 
+#include <algorithm>
+#include <array>
+
 #include <catch2/catch_test_macros.hpp>
 
 #include "tests/A32/testenv.h"
@@ -509,6 +512,44 @@ TEST_CASE("arm: vclt.f32 with zero", "[arm][A32]") {
 
     REQUIRE(jit.ExtRegs()[6] == 0x00000000);
     REQUIRE(jit.ExtRegs()[7] == 0x00000000);
+}
+
+TEST_CASE("arm: vaddhn, vraddhn, vsubhn, vrsubhn", "[arm][A32]") {
+    // Unity 2018's armeabi-v7a libunity (SUPERHOT VR) blends pixels with vaddhn.i16.
+    ArmTestEnv test_env;
+    A32::Jit jit{GetUserConfig(&test_env)};
+    test_env.code_mem = {
+        0xf28404a2,  // vaddhn.i16  d0, q10, q9
+        0xf38614a0,  // vraddhn.i16 d1, q11, q8
+        0xf29426a2,  // vsubhn.i32  d2, q10, q9
+        0xf3a636a0,  // vrsubhn.i64 d3, q11, q8
+        0xf39444a6,  // vraddhn.i32 d4, q10, q11
+        0xeafffffe,  // b +#0
+    };
+
+    const std::array<u32, 16> q8_to_q11{
+        0x9abcdef0, 0x12345678, 0xffff0001, 0x80007fff,
+        0xffffffff, 0x80000000, 0xff80007f, 0x00800080,
+        0x00010080, 0x7fff8001, 0x0000ffff, 0xffffffff,
+        0x00000001, 0xfffffffe, 0x80007f80, 0x00000080,
+    };
+    std::copy(q8_to_q11.begin(), q8_to_q11.end(), jit.ExtRegs().begin() + 32);
+
+    jit.SetCpsr(0x000001d0);  // User-mode
+
+    test_env.ticks_left = 6;
+    CheckedRun([&]() { jit.Run(); });
+
+    REQUIRE(jit.ExtRegs()[0] == 0xff800000);
+    REQUIRE(jit.ExtRegs()[1] == 0x0000ff00);
+    REQUIRE(jit.ExtRegs()[2] == 0x12569bdf);
+    REQUIRE(jit.ExtRegs()[3] == 0x80808080);
+    REQUIRE(jit.ExtRegs()[4] == 0xffff0001);
+    REQUIRE(jit.ExtRegs()[5] == 0xff7f0080);
+    REQUIRE(jit.ExtRegs()[6] == 0xedcba985);
+    REQUIRE(jit.ExtRegs()[7] == 0x7fff8081);
+    REQUIRE(jit.ExtRegs()[8] == 0x7fff0001);
+    REQUIRE(jit.ExtRegs()[9] == 0x00008001);
 }
 
 TEST_CASE("arm: vcvt.s16.f64", "[arm][A32]") {

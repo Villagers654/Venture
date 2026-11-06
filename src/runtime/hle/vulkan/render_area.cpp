@@ -620,21 +620,44 @@ VkResult create_host_framebuffer(VkDevice d, const VkFramebufferCreateInfo* info
 // A guest framebuffer with no size or a null attachment view (HITMAN on Monado
 // computed 0x0 render targets and never created them) is invalid, and RADV
 // dereferences the null view when a pass on it begins. A Quest driver does not
-// crash there, so each missing attachment gets a 1x1 host placeholder and the
-// instance renders into nothing.
+// crash there, so each missing attachment gets a host placeholder: 1x1 for a
+// framebuffer with no size, which then renders into nothing, otherwise of the
+// framebuffer's size so the views the guest did pass keep rendering (transient,
+// lazily allocated memory where the device has it; released with the
+// framebuffer). Unity skips an attachment whose image it lacks
+// ("Missing Vulkan framebuffer attachment image?") and passes fewer attachments
+// than the render pass has (Attack on Titan VR: NVIDIA faulted on a null image
+// view in vkCmdBeginRenderPass); the views it did pass keep their order, so each
+// takes the next render pass attachment of its format and the rest get
+// placeholders as well.
 VkResult VKAPI_CALL create_framebuffer(VkDevice d, const VkFramebufferCreateInfo* info,
                                        const VkAllocationCallbacks* alloc, VkFramebuffer* out) {
+  std::size_t expected = info->attachmentCount;
+  {
+    std::lock_guard lock(mutex);
+    if (auto it = passes.find(info->renderPass); it != passes.end()) expected = it->second.formats.size();
+  }
   if (info->flags & VK_FRAMEBUFFER_CREATE_IMAGELESS_BIT ||
-      (info->width && info->height &&
+      (info->width && info->height && info->attachmentCount >= expected &&
        std::none_of(info->pAttachments, info->pAttachments + info->attachmentCount,
                     [](VkImageView v) { return v == VK_NULL_HANDLE; })))
     return create_host_framebuffer(d, info, alloc, out);
   std::optional<Pass> pass;
+  std::vector<VkImageView> attachments(info->pAttachments, info->pAttachments + info->attachmentCount);
   {
     std::lock_guard lock(mutex);
     if (auto it = passes.find(info->renderPass); it != passes.end()) pass = it->second;
+    if (pass && attachments.size() < pass->formats.size()) {
+      std::vector<VkImageView> aligned(pass->formats.size(), VK_NULL_HANDLE);
+      std::size_t given = 0;
+      for (std::size_t i = 0; i < aligned.size() && given < attachments.size(); ++i) {
+        const auto view = views.find(attachments[given]);
+        if (!attachments[given] || view == views.end() || view->second.format == pass->formats[i])
+          aligned[i] = attachments[given++];
+      }
+      attachments = std::move(aligned);
+    }
   }
-  std::vector<VkImageView> attachments(info->pAttachments, info->pAttachments + info->attachmentCount);
   std::vector<StandIn> blanks;
   auto failed = [&](VkResult result) {
     for (const auto& blank : blanks) release(d, blank);
@@ -645,6 +668,8 @@ VkResult VKAPI_CALL create_framebuffer(VkDevice d, const VkFramebufferCreateInfo
     return result;
   };
   const auto layers = std::max(info->layers, pass ? pass->view_layers : 1u);
+  const bool sized = info->width && info->height;
+  const VkExtent2D extent = sized ? VkExtent2D{info->width, info->height} : VkExtent2D{1, 1};
   for (std::uint32_t i = 0; i < attachments.size(); ++i) {
     if (attachments[i]) continue;
     // Never forward an unresolved null view, even when repair is impossible.
@@ -658,7 +683,7 @@ VkResult VKAPI_CALL create_framebuffer(VkDevice d, const VkFramebufferCreateInfo
     VkImageUsageFlags usage = depth ? VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT : VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
     if (pass->input[i]) usage |= VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT;
     VkResult failure = VK_ERROR_UNKNOWN;
-    if (auto blank = transient_attachment(d, i, format, pass->samples[i], VK_IMAGE_VIEW_TYPE_2D_ARRAY, aspect, {1, 1},
+    if (auto blank = transient_attachment(d, i, format, pass->samples[i], VK_IMAGE_VIEW_TYPE_2D_ARRAY, aspect, extent,
                                           layers, usage, &failure)) {
       attachments[i] = blank->view;
       blanks.push_back(*blank);
@@ -666,16 +691,19 @@ VkResult VKAPI_CALL create_framebuffer(VkDevice d, const VkFramebufferCreateInfo
   }
   static std::atomic<int> reports{0};
   if (reports.fetch_add(1, std::memory_order_relaxed) < 8)
-    log::warn("vulkan", "Guest framebuffer {}x{} has {} null attachment view(s); the host gets a 1x1 framebuffer "
-              "with placeholders", info->width, info->height, blanks.size());
+    log::warn("vulkan", "Guest framebuffer {}x{} has {} null or missing attachment view(s) of {}; the host gets a "
+              "{}x{} framebuffer with placeholders", info->width, info->height, blanks.size(), attachments.size(),
+              extent.width, extent.height);
   auto copy = *info;
+  copy.attachmentCount = static_cast<std::uint32_t>(attachments.size());
   copy.pAttachments = attachments.data();
-  copy.width = copy.height = 1;
+  copy.width = extent.width;
+  copy.height = extent.height;
   copy.layers = std::max(info->layers, 1u);
   const auto r = create_host_framebuffer(d, &copy, alloc, out);
   if (r != VK_SUCCESS) return failed(r);
   std::lock_guard lock(mutex);
-  clamped[*out] = {1, 1};
+  if (!sized) clamped[*out] = extent;
   if (!blanks.empty()) placeholders[*out] = {d, std::move(blanks)};
   return r;
 }

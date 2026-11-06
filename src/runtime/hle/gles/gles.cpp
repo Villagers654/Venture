@@ -14,12 +14,22 @@
 #include "core/thread.h"
 #include "core/guest_storage.h"
 #include "core/process.h"
+#include "core/pipeline_stats.h"
+#include "core/wait.h"
 #include "hle/egl/egl.h"
 #include "hle/gles/gles_state.h"
 #include "gfx/a32_handles.h"
 #include "gfx/gpu_device.h"
 
 namespace venture::gfx {
+GLint guest_max_samples() {
+  static const GLint value = [] {
+    const char* text = environment::getenv("VENTURE_GLES_MAX_SAMPLES");
+    const int parsed = text ? std::atoi(text) : 0;
+    return parsed > 0 ? GLint(parsed) : GLint(4);
+  }();
+  return value;
+}
 namespace {
 std::mutex context_lock;
 std::map<EGLContext, std::shared_ptr<GlContextState>> states;
@@ -29,6 +39,16 @@ std::map<EGLContext, std::shared_ptr<GlContextState>> states;
 std::vector<std::shared_ptr<GlCallback>> retired_callbacks;
 thread_local std::shared_ptr<GlContextState> current;
 thread_local std::set<GLenum> no_context_errors;
+// VENTURE_GL_DEBUG: every context logs ANGLE's KHR_debug messages (validation,
+// performance, internal errors). Opt-in: debug output costs ANGLE per call.
+// Errors Venture reads back are logged without it (note_angle_gl_error).
+bool verbose_gl_debug() {
+  static const bool enabled = environment::getenv("VENTURE_GL_DEBUG") != nullptr;
+  return enabled;
+}
+void GL_APIENTRY debug_callback(GLenum source, GLenum type, GLuint id, GLenum severity,
+                                GLsizei length, const GLchar* message,
+                                const void* user) noexcept;
 // Whether the shared GPU samples ASTC itself rather than through ANGLE's
 // decode.
 bool native_astc() {
@@ -91,6 +111,13 @@ void build_extensions(GlContextState& state) {
     state.extension_string += name;
   }
   state.extensions_ready = true;
+  if (verbose_gl_debug()) {
+    if (auto fn = reinterpret_cast<PFNGLDEBUGMESSAGECALLBACKPROC>(
+            angle_proc("glDebugMessageCallbackKHR"))) {
+      angle_function<PFNGLENABLEPROC, "glEnable">()(GL_DEBUG_OUTPUT_KHR);
+      fn(debug_callback, state.callback.get());
+    }
+  }
 }
 const GLubyte* get_string(GLenum name) {
   if (name == GL_EXTENSIONS)
@@ -149,6 +176,14 @@ bool query(GLenum name, T* value) {
       *value = static_cast<T>(state->extensions.size());
       return true;
     }
+    if (name == GL_MAX_SAMPLES || name == GL_MAX_COLOR_TEXTURE_SAMPLES ||
+        name == GL_MAX_DEPTH_TEXTURE_SAMPLES || name == GL_MAX_INTEGER_SAMPLES ||
+        name == GL_MAX_FRAMEBUFFER_SAMPLES) {
+      GLint host = 0;
+      angle_function<PFNGLGETINTEGERVPROC, "glGetIntegerv">()(name, &host);
+      *value = static_cast<T>(std::min(host, guest_max_samples()));
+      return true;
+    }
     if (state->astc_fallback && (name == GL_NUM_COMPRESSED_TEXTURE_FORMATS ||
                                  name == GL_COMPRESSED_TEXTURE_FORMATS)) {
       auto formats = guest_compressed_formats();
@@ -205,7 +240,9 @@ GLenum get_error() {
     errors.erase(it);
     return error;
   }
-  return angle_function<PFNGLGETERRORPROC, "glGetError">()();
+  const GLenum error = angle_function<PFNGLGETERRORPROC, "glGetError">()();
+  note_angle_gl_error(error, "guest glGetError");
+  return error;
 }
 bool valid_buffer_label(GLenum type, GLuint name) {
   // EXT_debug_label, Errors: labeling a name which is not an object of the
@@ -236,6 +273,11 @@ void GL_APIENTRY debug_callback(GLenum source, GLenum type, GLuint id,
                                 GLenum severity, GLsizei length,
                                 const GLchar* message,
                                 const void* user) noexcept {
+  if (verbose_gl_debug() && message) {
+    const auto count = length > 0 ? static_cast<std::size_t>(length) : std::strlen(message);
+    log::info("angle", "GL debug source 0x{:x} type 0x{:x} id {} severity 0x{:x}: {}", source,
+              type, id, severity, std::string_view(message, count));
+  }
   auto* state = static_cast<GlCallback*>(const_cast<void*>(user));
   GuestAddr callback{}, data{};
   {
@@ -280,8 +322,8 @@ void set_debug_callback(GuestAddr callback, GuestAddr user) {
   if (!fn)
     fn =
         angle_function<PFNGLDEBUGMESSAGECALLBACKPROC, "glDebugMessageCallback">();
-  fn(callback ? debug_callback : nullptr,
-     callback ? state->callback.get() : nullptr);
+  const bool install = callback || verbose_gl_debug();
+  fn(install ? debug_callback : nullptr, install ? state->callback.get() : nullptr);
 }
 void get_pointer(GLenum name, void** value) {
   if (auto state = current_gl_state(); state && value &&
@@ -330,7 +372,9 @@ void finish() {
 // VENTURE_GL_PROGRAM_TIMING=1 (off by default): wall time guest threads spend in
 // ANGLE's shader compile/link entry points. ANGLE links asynchronously and
 // resolves at status queries, so those are timed too. Logged once a second.
-const bool program_timing = venture::environment::getenv("VENTURE_GL_PROGRAM_TIMING") != nullptr;
+// VENTURE_COMPILE_TRACE also records each call (core/pipeline_stats.h).
+const bool program_timing = venture::environment::getenv("VENTURE_GL_PROGRAM_TIMING") != nullptr ||
+                            venture::profile::compile_trace_enabled();
 constexpr const char* timed_names[]{"compile", "link", "binary", "getprogramiv", "getshaderiv", "getbinary"};
 std::atomic<std::uint64_t> timed_calls[6], timed_ns[6], timed_max_ns[6];
 std::atomic<std::int64_t> timing_logged{0};
@@ -340,6 +384,10 @@ struct ProgramTimer {
   ~ProgramTimer() {
     const auto now = std::chrono::steady_clock::now();
     const auto ns = static_cast<std::uint64_t>((now - begin).count());
+    // Status queries are timed only when they wait for a link or compile.
+    if (slot < 3 || ns >= 100'000)
+      venture::profile::trace_compile(std::format("gl_{}", timed_names[slot]),
+                                      venture::monotonic_ns() - static_cast<std::int64_t>(ns), ns);
     timed_calls[slot] += 1;
     timed_ns[slot] += ns;
     for (auto max = timed_max_ns[slot].load(); ns > max && !timed_max_ns[slot].compare_exchange_weak(max, ns);) {}
@@ -480,6 +528,7 @@ bool gl_dispatch_needs_run_loop() {
 void gl_error(GLenum error) {
   (current ? current->errors : no_context_errors).insert(error);
   log::debug("gles", "GL error 0x{:x}", error);
+  note_angle_gl_error(error, "GL call");
 }
 void preserve_gl_errors() {
   auto get = angle_function<PFNGLGETERRORPROC, "glGetError">();

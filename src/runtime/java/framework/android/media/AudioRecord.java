@@ -78,7 +78,13 @@ public class AudioRecord {
 
   public synchronized void startRecording() {
     long current = handle;
-    if (current == 0 || nativeControl(current, 6) < 0) throw new IllegalStateException("AudioRecord unavailable");
+    if (current == 0) throw new IllegalStateException("startRecording() called on an uninitialized AudioRecord.");
+    // AOSP: a failed native start (microphone removed or unavailable) leaves the
+    // record stopped without throwing; the caller sees RECORDSTATE_STOPPED.
+    if (nativeControl(current, 6) < 0) {
+      android.util.Log.e("AudioRecord", "startRecording failed: the host microphone is unavailable");
+      return;
+    }
     recordingState = RECORDSTATE_RECORDING;
     active.add(this);
   }

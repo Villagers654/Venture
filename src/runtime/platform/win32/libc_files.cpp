@@ -412,7 +412,7 @@ int rename_posix(const std::wstring& from, const std::wstring& to, FileInformati
   return rename_posix_impl(from, to, fn, attrs);
 }
 }
-bool unredirected_path(const std::filesystem::path& root, const std::filesystem::path& path) {
+bool unredirected_path(const std::filesystem::path& root, const std::filesystem::path& path, int* error) {
   auto a = root.begin(), b = path.begin();
   for (; a != root.end(); ++a, ++b)
     if (b == path.end() || *a != *b) return false;
@@ -425,10 +425,21 @@ bool unredirected_path(const std::filesystem::path& root, const std::filesystem:
     child /= *b;
     const auto name = native(child);
     const auto attrs = GetFileAttributesW(name.c_str());
-    if (attrs == INVALID_FILE_ATTRIBUTES) return GetLastError() == ERROR_FILE_NOT_FOUND;
+    if (attrs == INVALID_FILE_ATTRIBUTES) {
+      // An absent name, or an absent mount root (an empty /data volume): nothing
+      // below it exists to redirect to.
+      const auto e = GetLastError();
+      return e == ERROR_FILE_NOT_FOUND || e == ERROR_PATH_NOT_FOUND;
+    }
     if (attrs & FILE_ATTRIBUTE_REPARSE_POINT) return false;
     auto next = b; ++next;
-    if (next != path.end() && !(attrs & FILE_ATTRIBUTE_DIRECTORY)) return false;
+    if (next != path.end() && !(attrs & FILE_ATTRIBUTE_DIRECTORY)) {
+      // A plain file cannot be traversed, so nothing below it is reachable. Unity
+      // probes base.apk/assets/... this way; the canonical fallback opened both
+      // paths for every probe (Job Simulator: 2.6 s of a 5.3 s load freeze).
+      *error = -err::enotdir;
+      return true;
+    }
   }
   return true;
 }
@@ -493,8 +504,63 @@ std::int64_t write_standard(int fd, const void* data, std::uint64_t size) {
   if (!WriteFile(handle, data, static_cast<DWORD>(std::min<std::uint64_t>(size, 0x7ffff000)), &written, nullptr)) return error();
   return written;
 }
+// Windows 11 24H2's handle-free stat (GetFileInformationByName, FileStatBasicByNameInfo):
+// one query instead of CreateFile, GetFileInformationByHandle and CloseHandle, whose
+// open and close went through every file system filter (Job Simulator's level load
+// spent 3 s of its main thread in stat). Layout and class from the Windows SDK's WinBase.h.
+namespace {
+struct StatBasicByName {
+  LARGE_INTEGER file_id, creation, last_access, last_write, change, allocation, end_of_file;
+  ULONG attributes, reparse_tag, links, device_type, device_characteristics, reserved;
+  LARGE_INTEGER volume_serial;
+  std::uint8_t file_id_128[16];
+};
+using GetFileInformationByNameFn = BOOL(WINAPI*)(PCWSTR, int, PVOID, ULONG);
+constexpr int kFileStatBasicByNameInfo = 3;
+GetFileInformationByNameFn by_name_stat() {
+  static const auto fn = [] {
+    const auto module = GetModuleHandleW(L"kernelbase.dll");
+    return module ? reinterpret_cast<GetFileInformationByNameFn>(
+                        reinterpret_cast<void*>(GetProcAddress(module, "GetFileInformationByName")))
+                  : nullptr;
+  }();
+  return fn;
+}
+Timespec time(LARGE_INTEGER t) {
+  return time(FILETIME{t.LowPart, static_cast<DWORD>(t.HighPart)});
+}
+// True when the query answered (r holds 0 or an error), false when the handle path must decide.
+bool stat_by_name(const std::wstring& n, Stat* s, int& r) {
+  const auto fn = by_name_stat();
+  if (!fn) return false;
+  StatBasicByName i{};
+  if (!fn(n.c_str(), kFileStatBasicByNameInfo, &i, sizeof(i))) {
+    const auto e = GetLastError();
+    // Absent names answer here; anything else (unsupported file systems, sharing) keeps the handle path.
+    if (e != ERROR_FILE_NOT_FOUND && e != ERROR_PATH_NOT_FOUND) return false;
+    r = error(e);
+    return true;
+  }
+  // Links and other reparse points keep the handle path, which follows or reports them.
+  if (i.attributes & FILE_ATTRIBUTE_REPARSE_POINT) return false;
+  *s = {};
+  s->dev = static_cast<std::uint32_t>(i.volume_serial.LowPart);
+  s->ino = static_cast<std::uint64_t>(i.file_id.QuadPart);
+  s->mode = (i.attributes & FILE_ATTRIBUTE_DIRECTORY) ? 0040777 : 0100666;
+  if (!(i.attributes & FILE_ATTRIBUTE_DIRECTORY) && (i.attributes & FILE_ATTRIBUTE_READONLY)) s->mode &= ~0222u;
+  s->size = (i.attributes & FILE_ATTRIBUTE_DIRECTORY) ? 0 : static_cast<std::uint64_t>(i.end_of_file.QuadPart);
+  s->blocks = (s->size + 511) / 512;
+  s->nlink = i.links;
+  s->atim = time(i.last_access);
+  s->mtim = time(i.last_write);
+  s->ctim = time(i.creation);
+  r = 0;
+  return true;
+}
+}  // namespace
 int stat(const std::filesystem::path& p, Stat* s, bool follow) {
   auto n = native(p);
+  if (int r = 0; stat_by_name(n, s, r)) return r;
   HANDLE h = CreateFileW(
       n.c_str(), FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
       nullptr, OPEN_EXISTING,

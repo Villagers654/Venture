@@ -17,6 +17,7 @@
 #include "core/a32_coverage.h"
 #include "core/address_space.h"
 #include "core/profile.h"
+#include "core/memory_pressure.h"
 #include "platform/runtime_qos.h"
 #include "core/guest_storage.h"
 #include "platform/low_memory.h"
@@ -35,6 +36,7 @@
 #include "hle/registry.h"
 #include "hle/libandroid/libandroid.h"
 #include "hle/ovrplatform/hle.h"
+#include "hle/ovrplatform/microphone.h"
 #include "hle/steam/library.h"
 #include "hle/steam/bridge.h"
 #include "hle/vulkan/vulkan.h"
@@ -84,7 +86,7 @@ std::unique_ptr<venture::ovrplatform::Session> register_libraries(const std::fil
   identity.version_code = config.version_code;
   if (!game.empty()) identity = venture::ovrplatform::read_app_identity(game / "plan.json", config.package, config.version_code);
   auto session = venture::ovrplatform::make_runtime_session(identity, game, broker);
-  venture::ovrplatform::register_library(*session);
+  venture::ovrplatform::register_library(*session, venture::ovrplatform::microphone_exports());
   // app_process, the linker and system libraries as tools on a device find them.
   venture::process_image::publish();
   // Standalone NDK fixtures have only their JNI test classes on the classpath;
@@ -113,6 +115,36 @@ struct Shutdown {
     venture::shutdown_trace::stop();
   }
 };
+// A worker that ended without reporting any of Venture's exit stages was ended
+// by something else: HotSpot's fatal error handler (a native crash on a Java
+// thread, exit status 1, report in <log>-hs_err-<pid>.log) or a host library
+// calling exit. The launcher shows the last "[runtime]" error line, so name the
+// cause there instead of leaving an unrelated guest error line as the reason.
+void report_foreign_worker_exit(const venture::platform::RuntimeChildResult& result) {
+  if (!result.status || result.supervisor_stopped || result.exit_wait != venture::platform::RuntimeExitWait::none ||
+      !result.worker_pid)
+    return;
+  if (const auto log_file = venture::log::file(); !log_file.empty()) {
+    auto report = venture::paths::from_utf8(log_file);
+    report.replace_extension();
+    report += "-hs_err-" + std::to_string(result.worker_pid) + ".log";
+    std::error_code error;
+    if (std::filesystem::is_regular_file(report, error)) {
+      // The cause and the crashing thread come first; the rest is stacks and
+      // memory maps.
+      if (const auto summary = venture::hotspot_fatal_summary(venture::tail_log(report, 1 << 20)); !summary.empty()) {
+        venture::log::error("runtime", "{} HotSpot error report: {}", summary, venture::paths::utf8(report));
+        return;
+      }
+    }
+  }
+  // Venture's own exits carry an Android status (0-255) and its crash reporter
+  // logs host exceptions (NTSTATUS 0xC...); anything else came from outside.
+  const auto status = static_cast<std::uint32_t>(result.status);
+  if (status > 255 && (status & 0xF0000000u) != 0xC0000000u)
+    venture::log::error("runtime", "The app process ended with status 0x{:08X} outside Venture's exit paths "
+                        "(a host library or the Java runtime ended it)", status);
+}
 // Library finalizers run after the guest threads have stopped. One that waits
 // for its own worker thread (an instrumentation runtime's agent thread, say)
 // would wait forever. Android kills an app process without running them, so
@@ -280,7 +312,9 @@ int main(int argc, char** argv) {
       else
         venture::log::warn("runtime", "Ignoring VENTURE_LOG_LEVEL={} (expected 0 to 4)", level);
     }
-    venture::log::info("launch", "Process started");
+    // The wall-clock start lets a debug report match system logs to this run.
+    venture::log::info("launch", "Process started at {:%FT%TZ}",
+                       std::chrono::floor<std::chrono::seconds>(std::chrono::system_clock::now()));
     if (bool(credential_read) != bool(credential_write))
       throw std::runtime_error("Both credential channel handles are required");
     if (!runtime_worker && !game.empty() && guest_test.empty() && !inspect && !boot_native) {
@@ -311,7 +345,10 @@ int main(int argc, char** argv) {
           ? venture::paths::from_utf8(diagnostic_run) : std::filesystem::path{};
       const auto diagnostics = venture::platform::runtime_dump_directory(run_directory);
       for (;;) {
-        if (stop.requested() || expired()) return 0;
+        if (stop.requested() || expired()) {
+          venture::log::info("launch", "Exit code: 0{}", stop.requested() ? " (stop requested)" : "");
+          return 0;
+        }
         auto attempt = arguments;
         if (run_seconds > 0) attempt.insert(attempt.end(), {"--run-seconds", std::to_string(
             run_seconds - std::chrono::duration<double>(std::chrono::steady_clock::now() - began).count())});
@@ -319,6 +356,7 @@ int main(int argc, char** argv) {
           return stop.requested() || (run_seconds > 0 && std::chrono::duration<double>(
               std::chrono::steady_clock::now() - began).count() >= run_seconds + 10);
         }, launch_payload, true, run_directory);
+        report_foreign_worker_exit(result);
         if ((result.status == 124 || result.os_termination) && !diagnostics.empty()) {
           try {
             venture::paths::atomic_write(diagnostics / "worker-exit.json", venture::Json{
@@ -335,8 +373,11 @@ int main(int argc, char** argv) {
         }
         if (result.supervisor_stopped)
           venture::log::warn("launch", "Stopping app worker after shutdown request or teardown grace expired");
-        if (const auto status = result.completion_status(stop.requested() || expired()))
+        if (const auto status = result.completion_status(stop.requested() || expired())) {
+          // A debug report reads the run's result from this line.
+          venture::log::info("launch", "Exit code: {}{}", *status, stop.requested() ? " (stop requested)" : "");
           return *status;
+        }
         launch_payload = std::move(result.launch_payload);
         venture::log::info("launch", "Application requested a fresh process; relaunching within the original run bound");
       }
@@ -504,6 +545,8 @@ int main(int argc, char** argv) {
         throw std::runtime_error(venture::Linker::get().take_error());
     }
     if (!boot_native) {
+      // Headroom watch for the game's lifetime: caches give memory back before allocations fail.
+      venture::memory_pressure::start();
       // A restart must not reset the launch's time limit. Account for worker
       // startup before the Android lifecycle monitor begins.
       if (runtime_worker && run_seconds > 0) run_seconds = std::max(0.001, run_seconds -

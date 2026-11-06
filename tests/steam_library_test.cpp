@@ -290,8 +290,14 @@ TEST_CASE("Steam installation scans cannot prune shortcuts when unavailable or "
   paths::atomic_write(f.target, original);
   auto games = f.root / "games";
   bool reliable = true;
-  CHECK(library::scan(games, &reliable).empty());
+  // A folder on a drive that is not connected: its parent is gone as well.
+  CHECK(library::scan(f.root / "unplugged/games", &reliable).empty());
   CHECK_FALSE(reliable);
+  // A report: a library folder that was never created (or was deleted) on a
+  // present drive kept every later scan from syncing Steam.
+  reliable = false;
+  CHECK(library::scan(games, &reliable).empty());
+  CHECK(reliable);
   paths::atomic_write(games, "not a directory");
   CHECK(library::scan(games, &reliable).empty());
   CHECK_FALSE(reliable);
@@ -299,6 +305,14 @@ TEST_CASE("Steam installation scans cannot prune shortcuts when unavailable or "
   fs::create_directories(games);
   CHECK(library::scan(games, &reliable).empty());
   CHECK(reliable); // A genuinely empty accessible library may remove shortcuts.
+  // A report: version folders left without a manifest (an interrupted
+  // download, an uninstall that could not remove a file) are not installs
+  // and kept the scan from being authoritative across launcher restarts.
+  paths::atomic_write(games / "com.example.leftover/974/base.apk", "partial");
+  fs::create_directories(games / "com.example.leftover/975");
+  CHECK(library::scan(games, &reliable).empty());
+  CHECK(reliable);
+  fs::remove_all(games / "com.example.leftover");
   paths::atomic_write(games / "com.example.installed/1/plan.json",
                       "malformed manifest");
   CHECK(library::scan(games, &reliable).empty());

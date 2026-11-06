@@ -2,7 +2,10 @@
 #include "hle/libandroid/libandroid.h"
 #include "hle/libandroid/parts.h"
 #include "android/handles.h"
+#include "core/a32_types.h"
 #include "core/address_space.h"
+#include "core/guest_storage.h"
+#include "core/process.h"
 #include "media/media.h"
 #include "android/native_window.h"
 #include <array>
@@ -20,15 +23,15 @@ void register_image_reader(HleLibrary& lib);  // image_reader.cpp
 namespace {
 using namespace android_hle;
 // AOSP frameworks/av/media/ndk/include/media/NdkMediaError.h.
-constexpr int unsupported = -10002, invalid_object = -10003, invalid_parameter = -10004,
-              invalid_operation = -10005;
+constexpr int unsupported = -10002, invalid_object = -10003, invalid_parameter = -10004;
 struct Format {
   using Value = std::variant<std::int32_t, std::int64_t, float, double, std::string, std::vector<std::byte>>;
   std::mutex mutex;
   std::map<std::string, Value, std::less<>> values;
   std::string description;
 };
-android::Handles<Format> formats;
+android::Handles<Format> formats("AMediaFormat");
+bool a32_guest() { return process_config().isa() == GuestIsa::a32; }
 Format* format_new() { return formats.create(); }
 int format_delete(Format* p) {
   if (!formats.get(p)) return invalid_object;
@@ -65,7 +68,7 @@ bool get_string(Format* p, const char* key, const char** out) {
   if (it == f->values.end()) return false;
   auto* value = std::get_if<std::string>(&it->second);
   if (!value) return false;
-  *out = value->c_str();
+  *out = guest_string(value->c_str());  // A32: an interned low copy
   return true;
 }
 void set_buffer(Format* p, const char* key, const void* data, std::uint64_t size) {
@@ -82,7 +85,8 @@ bool get_buffer(Format* p, const char* key, GuestAddr* data, std::uint64_t* size
   if (it == f->values.end()) return false;
   auto* value = std::get_if<std::vector<std::byte>>(&it->second);
   if (!value) return false;
-  *data = h2g(value->data());
+  // A32 guests cannot address the host vector: hand out an interned low copy.
+  *data = a32_guest() ? low_data(*value) : h2g(value->data());
   *size = value->size();
   return true;
 }
@@ -109,24 +113,90 @@ const char* format_string(Format* p) {
   f->description += '}';
   return f->description.c_str();
 }
-struct Extractor { std::mutex mutex; media::Extractor backend; };
-android::Handles<Extractor> extractors;
+// AMediaDataSource callbacks run on the guest thread calling the extractor.
+// A32 guests cannot address the extractor's host buffers: reads land in guest
+// storage, at most one 64 KiB stage per call, and are copied out.
+struct Custom {
+  GuestAddr user = 0, read = 0, close = 0;
+  std::mutex mutex;
+  GuestStorage stage;
+};
+GuestThread& caller() { auto t=GuestThread::current();return t?*t:GuestThread::adopt_current(); }
+std::int64_t custom_read(Custom& c, void* out, std::uint64_t size, std::int64_t pos) {
+  auto& t=caller();
+  if(!a32_guest())return static_cast<std::int64_t>(t.call(c.read,{c.user,static_cast<std::uint64_t>(pos),h2g(out),size}));
+  size=std::min<std::uint64_t>(size,65536);
+  std::lock_guard lock(c.mutex);
+  auto stage=c.stage.address()?c.stage.address():c.stage.resize(65536);
+  auto got=static_cast<std::int32_t>(t.call32(c.read,a32::CallBuilder32{}.pointer(c.user).value(pos)
+                                               .pointer(stage).value(static_cast<std::uint32_t>(size))).x0);
+  if(got>0 && static_cast<std::uint64_t>(got)<=size)std::memcpy(out,g2h(stage),static_cast<std::size_t>(got));
+  return got;
+}
+void custom_close(const std::shared_ptr<Custom>& c) {
+  if(!c || !c->close || !c->user)return;  // as AOSP NdkDataSource::close
+  if(a32_guest())caller().call32(c->close,a32::CallBuilder32{}.pointer(c->user));
+  else caller().call(c->close,{c->user});
+}
+struct Extractor { std::mutex mutex; media::Extractor backend; std::shared_ptr<Custom> custom; };
+android::Handles<Extractor> extractors("AMediaExtractor");
 Extractor* extractor_new() { return extractors.create(); }
 int extractor_delete(Extractor* p) {
-  if (!extractors.get(p)) return invalid_object;
+  auto e=extractors.get(p);if(!e)return invalid_object;
   extractors.erase(p);
+  std::shared_ptr<Custom> custom;
+  {std::lock_guard lock(e->mutex);custom=std::move(e->custom);}
+  custom_close(custom);  // the extractor releases its data source, as on Android
   return 0;
 }
-int extractor_source(Extractor* p, const char* path) {
+int extractor_open(Extractor* p, media::Input input, std::shared_ptr<Custom> custom = {}) {
   auto e=extractors.get(p);if(!e)return invalid_object;
-  std::lock_guard lock(e->mutex);
-  return path?e->backend.open(media::path_input(path)):invalid_parameter;
+  std::unique_lock lock(e->mutex);
+  auto r=e->backend.open(std::move(input));if(r)custom.reset();
+  std::swap(custom,e->custom);lock.unlock();
+  custom_close(custom);  // a replaced source is released; a rejected one stays the caller's
+  return r;
+}
+int extractor_source(Extractor* p, const char* path) {
+  return path?extractor_open(p,media::path_input(path)):extractors.get(p)?invalid_parameter:invalid_object;
 }
 int extractor_fd(Extractor* p, int fd, std::int64_t off, std::int64_t len) {
-  auto e=extractors.get(p);if(!e)return invalid_object;
-  std::lock_guard lock(e->mutex);return e->backend.open(media::fd_input(fd,off,len));
+  return extractor_open(p,media::fd_input(fd,off,len));
 }
-int extractor_custom(Extractor* p, void*) { return extractor_source(p, nullptr); }
+struct DataSource {
+  std::mutex mutex;
+  GuestAddr user = 0, read = 0, size = 0, close = 0;
+};
+android::Handles<DataSource> sources("AMediaDataSource");
+// A source of unknown size (getSize absent or negative) is read to its end
+// once, bounded like every extractor source, and served from host memory.
+int extractor_custom(Extractor* p, DataSource* source) {
+  auto d=sources.get(source);if(!extractors.get(p))return invalid_object;
+  if(!d)return invalid_parameter;
+  auto c=std::make_shared<Custom>();GuestAddr get_size;
+  {std::lock_guard lock(d->mutex);c->user=d->user;c->read=d->read;c->close=d->close;get_size=d->size;}
+  if(!c->read)return invalid_parameter;
+  std::int64_t length=-1;
+  if(get_size)length=a32_guest()?static_cast<std::int32_t>(caller().call32(get_size,a32::CallBuilder32{}.pointer(c->user)).x0)
+                                 :static_cast<std::int64_t>(caller().call(get_size,{c->user}));
+  media::Input input{length,[c](void* out,std::uint64_t size,std::int64_t pos){return custom_read(*c,out,size,pos);}};
+  if(length<0) {
+    auto bytes=std::make_shared<std::vector<std::byte>>();
+    for(std::int64_t got=1;got>0;) {
+      if(bytes->size()>=512*1024*1024){log::warn("media","AMediaDataSource of unknown size exceeds bounded region limit");return media::unsupported;}
+      bytes->resize(bytes->size()+65536);
+      got=custom_read(*c,bytes->data()+bytes->size()-65536,65536,static_cast<std::int64_t>(bytes->size()-65536));
+      bytes->resize(bytes->size()-65536+static_cast<std::size_t>(std::clamp<std::int64_t>(got,0,65536)));
+      if(got<0){log::warn("media","AMediaDataSource read failed: {}",got);return media::unsupported;}
+    }
+    input={static_cast<std::int64_t>(bytes->size()),[bytes](void* out,std::uint64_t size,std::int64_t pos) {
+      if(pos<0 || static_cast<std::uint64_t>(pos)>bytes->size())return std::int64_t(-1);
+      auto n=std::min<std::uint64_t>(size,bytes->size()-pos);std::memcpy(out,bytes->data()+pos,n);return static_cast<std::int64_t>(n);
+    }};
+  }
+  log::info("media","AMediaDataSource source of {} bytes{}",input.length,length<0?", size unknown: buffered":"");
+  return extractor_open(p,std::move(input),std::move(c));
+}
 std::uint64_t track_count(Extractor* p) {
   auto e=extractors.get(p);if(!e)return 0;
   std::lock_guard lock(e->mutex);return e->backend.tracks().size();
@@ -181,11 +251,6 @@ int seek_sample(Extractor* p, std::int64_t time, int mode) {
   auto e=extractors.get(p);if(!e)return invalid_object;
   std::lock_guard lock(e->mutex);return e->backend.seek(time,mode);
 }
-struct DataSource {
-  std::mutex mutex;
-  GuestAddr user = 0, read = 0, size = 0, close = 0;
-};
-android::Handles<DataSource> sources;
 DataSource* source_new() { return sources.create(); }
 void source_delete(DataSource* p) { sources.erase(p); }
 template <GuestAddr DataSource::* Field>
@@ -198,8 +263,14 @@ void source_set(DataSource* p, GuestAddr value) {
 
 using CodecInfo=media::Codec::Info;
 static_assert(sizeof(CodecInfo)==24 && offsetof(CodecInfo,time)==8);
-using Codec=media::Codec;
-android::Handles<Codec> codecs;
+// A32 guests reach codec buffers through guest-memory copies, since the
+// decoder's buffers live in host memory above 4 GiB: getInputBuffer hands out
+// guest storage that queueInputBuffer copies in, getOutputBuffer a copy out.
+struct Codec : media::Codec {
+  std::mutex a32_mutex;
+  GuestStorage input32, output32;
+};
+android::Handles<Codec> codecs("AMediaCodec");
 media::Codec::Sink surface_sink(void* surface) {
   auto window=android::pin_native_window(h2g(surface));
   if(!window)return {};
@@ -245,15 +316,30 @@ int codec_flush(Codec* p){auto c=codecs.get(p);return c?c->flush():invalid_objec
 std::int64_t codec_input(Codec* p,std::int64_t timeout){auto c=codecs.get(p);return c?c->input(timeout):invalid_object;}
 std::byte* codec_input_buffer(Codec* p,std::uint64_t index,std::uint64_t* size) {
   if(size)*size=0;auto c=codecs.get(p);if(!c || !size)return nullptr;
-  auto b=c->input_buffer(index);*size=b.size();return b.data();
+  auto b=c->input_buffer(index);*size=b.size();
+  if(!b.data() || !a32_guest())return b.data();
+  std::lock_guard lock(c->a32_mutex);
+  return g2h<std::byte>(c->input32.resize(std::max<std::uint64_t>(b.size(),1)));
 }
 int codec_queue(Codec* p,std::uint64_t index,std::uint64_t offset,std::uint64_t size,std::uint64_t time,std::uint32_t flags) {
-  auto c=codecs.get(p);return c?c->queue(index,offset,size,std::bit_cast<std::int64_t>(time),flags):invalid_object;
+  auto c=codecs.get(p);if(!c)return invalid_object;
+  if(a32_guest()) {
+    std::lock_guard lock(c->a32_mutex);
+    auto b=c->input_buffer(index);
+    if(c->input32.address() && offset<=b.size() && size<=b.size()-offset)
+      std::memcpy(b.data()+offset,g2h(c->input32.address()+offset),size);
+  }
+  return c->queue(index,offset,size,std::bit_cast<std::int64_t>(time),flags);
 }
 std::int64_t codec_output(Codec* p,CodecInfo* info,std::int64_t timeout){auto c=codecs.get(p);return c?c->output(info,timeout):invalid_object;}
 const std::byte* codec_output_buffer(Codec* p,std::uint64_t index,std::uint64_t* size) {
   if(size)*size=0;auto c=codecs.get(p);if(!c || !size)return nullptr;
-  auto b=c->output_buffer(index);*size=b.size();return b.data();
+  auto b=c->output_buffer(index);*size=b.size();
+  if(!b.data() || !a32_guest())return b.data();
+  std::lock_guard lock(c->a32_mutex);
+  auto copy=c->output32.resize(std::max<std::uint64_t>(b.size(),1));
+  std::memcpy(g2h(copy),b.data(),b.size());
+  return g2h<const std::byte>(copy);
 }
 int codec_release(Codec* p,std::uint64_t index,bool render){auto c=codecs.get(p);return c?c->release(index,render):invalid_object;}
 int codec_release_at(Codec* p,std::uint64_t index,std::int64_t time){auto c=codecs.get(p);return c?c->release(index,true,time):invalid_object;}
@@ -267,7 +353,8 @@ Format* codec_format(Codec* p) {
   auto f=make_track_format(track);
   if(!video)format_set(f,"pcm-encoding",std::int32_t(2));
   else {
-    format_set(f,"stride",std::int32_t(track.width));format_set(f,"slice-height",std::int32_t(track.height));
+    format_set(f,"stride",std::int32_t(media::nv12_extent(track.width)));
+    format_set(f,"slice-height",std::int32_t(media::nv12_extent(track.height)));
     format_set(f,"crop-left",std::int32_t(0));format_set(f,"crop-top",std::int32_t(0));
     format_set(f,"crop-right",std::int32_t(track.width-1));format_set(f,"crop-bottom",std::int32_t(track.height-1));
   }
@@ -281,10 +368,6 @@ void bad_object(CallContext& ctx) {
   log::debug("media", "{}: invalid media object", ctx.info().name);
   ctx.return_x(static_cast<std::uint64_t>(static_cast<std::int64_t>(invalid_object)));
 }
-void null_buffer(CallContext& ctx) {
-  if (ctx.x(2)) *g2h<std::uint64_t>(ctx.x(2)) = 0;
-  ctx.return_x(0);
-}
 void null_result(CallContext& ctx) { ctx.return_x(0); }
 void dispose_absent(CallContext& ctx) {
   if (ctx.x(0)) log::warn("media", "{}: invalid media object", ctx.info().name);
@@ -294,6 +377,10 @@ int no_object_out(void*, GuestAddr* out) {
   return invalid_object;
 }
 void add_handler(HleLibrary& lib, const char* name, Handler handler) {
+  // These register-level handlers only read argument registers and return a
+  // 32-bit status or null pointer, so they serve A32 guests unchanged. The
+  // descriptor (tools/codegen/a32_media.py) still pins each signature.
+  if (a32_guest()) a32::register_adapter(lib.soname(), name, handler);
   lib.add_function(name, make_thunk(lib.soname(), name, handler));
 }
 void key(HleLibrary& lib, const char* symbol, const char* value) {

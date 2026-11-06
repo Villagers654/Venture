@@ -1,11 +1,14 @@
 #include "core/pipeline_stats.h"
 #include "core/profile.h"
 #include "platform/profile.h"
+#include "common/environment.h"
 #include "common/log.h"
+#include "common/paths.h"
 #include <algorithm>
 #include <map>
 #include <mutex>
 #include <tuple>
+#include <cstdio>
 #include <cstdlib>
 
 namespace venture::profile {
@@ -22,8 +25,41 @@ struct State {
 };
 State& state() { static auto* s = new State; return *s; }
 const char* name(PipelineSource s) {
-  switch (s) { case PipelineSource::guest: return "guest"; case PipelineSource::angle: return "angle"; default: return "decode"; }
+  switch (s) { case PipelineSource::guest: return "guest"; case PipelineSource::angle: return "angle"; case PipelineSource::async: return "async"; default: return "decode"; }
 }
+struct Trace {
+  std::mutex mutex;
+  std::FILE* file = nullptr;
+};
+Trace* open_trace() {
+  const auto* path = environment::getenv("VENTURE_COMPILE_TRACE");
+  if (!path || !*path) return nullptr;
+  auto* t = new Trace;
+#if defined(_WIN32)
+  t->file = _wfopen(paths::io_path(paths::from_utf8(path)).c_str(), L"ab");
+#else
+  t->file = std::fopen(path, "ab");
+#endif
+  if (!t->file) log::warn("profile", "VENTURE_COMPILE_TRACE: cannot open {}", path);
+  return t;
+}
+Trace* trace() { static Trace* t = open_trace(); return t; }
+}
+bool compile_trace_enabled() noexcept {
+  try { return trace() != nullptr; } catch (...) { return false; }
+}
+void trace_compile(std::string_view kind, std::int64_t start_ns, std::uint64_t wall_ns,
+                   std::uint32_t count, std::uint32_t hits, std::string_view extra) noexcept {
+  try {
+    auto* t = trace();
+    if (!t || !t->file) return;
+    const auto line = std::format("{{\"kind\":\"{}\",\"tid\":{},\"start_ns\":{},\"wall_ns\":{},\"count\":{},\"hits\":{}{}{}}}\n",
+                                  kind, platform::profile_thread_id(), start_ns, wall_ns, count, hits,
+                                  extra.empty() ? "" : ",", extra);
+    std::lock_guard lock(t->mutex);
+    std::fwrite(line.data(), 1, line.size(), t->file);
+    std::fflush(t->file);
+  } catch (...) {}
 }
 void start_pipeline_telemetry() {
   static const bool registered = std::atexit([] { report_pipelines("exit"); }) == 0;
@@ -53,6 +89,11 @@ void record_pipeline(PipelineSource source, bool compute, std::uint32_t count,
                      std::int64_t start_ns, std::uint64_t wall_ns,
                      std::span<const PipelineFeedback> feedback) noexcept {
   try {
+    if (compile_trace_enabled()) {
+      std::uint32_t hits = 0;
+      for (const auto& f : feedback) hits += (f.flags & 3) == 3;
+      trace_compile(std::format("{}_{}", name(source), compute ? "compute" : "graphics"), start_ns, wall_ns, count, hits);
+    }
     const auto tid = platform::profile_thread_id();
     auto& s = state();
     std::lock_guard lock(s.mutex);

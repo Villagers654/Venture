@@ -35,8 +35,15 @@ struct BackendTestAccess {
     return b.null_ && b.playback_ready_ &&
            ma_device_stop(&b.playback_) == MA_SUCCESS;
   }
+  static bool stop_null_input() {
+    auto& b = Backend::get();
+    std::lock_guard lock(b.device_lock_);
+    return b.null_ && b.capture_ready_ &&
+           ma_device_stop(&b.capture_) == MA_SUCCESS;
+  }
 };
 }  // namespace venture::audio
 namespace venture::test::audio_core {
 bool stop_null_output() { return audio::BackendTestAccess::stop_null_output(); }
+bool stop_null_input() { return audio::BackendTestAccess::stop_null_input(); }
 }

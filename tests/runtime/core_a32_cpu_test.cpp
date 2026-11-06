@@ -84,16 +84,18 @@ namespace {
 struct A32AccessRace {
     inline static GuestAddr target;
     inline static std::uint32_t trigger;
-    inline static bool armed, succeeded, readonly;
+    inline static bool armed, readonly;
     static bool query(GuestAddr p, std::uint64_t n, std::uint32_t prot) noexcept {
       const bool allowed = test::A32Memory::query(p, n, prot);
       if (allowed && armed && p == target && prot == trigger) {
         armed = false;
-        std::thread mutation([p] {
-          succeeded = readonly ? platform::protect(align_down(p, 4096), 4096, kProtRead)
-                               : platform::decommit(align_down(p, 4096), 4096);
+        bool changed = false;
+        std::thread mutation([p, &changed] {
+          changed = readonly ? platform::protect(align_down(p, 4096), 4096, kProtRead)
+                             : platform::decommit(align_down(p, 4096), 4096);
         });
         mutation.join(); // deterministic: the old query succeeded, the access cannot
+        CHECK(changed);
       }
       return allowed;
     }

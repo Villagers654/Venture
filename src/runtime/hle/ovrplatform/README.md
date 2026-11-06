@@ -2,8 +2,12 @@
 
 `make_runtime_session()` and `register_library()` replace the guest
 `libovrplatformloader.so` before any original loader code runs. The aliases cover
-bare Unity P/Invoke names, Android sonames, and `libovrplatform.so`. Keep the
-session alive until all guest threads stop. The core/launcher integrator calls:
+bare Unity P/Invoke names, Android sonames, and `libovrplatform.so`. A copy of
+Meta's loader bundled under another file name (an SDK such as Tomahawk ships
+`libovr_custom.so`) is recognized by its exports (`ovr_PlatformInitializeAndroid`,
+`ovr_PopMessage`, `ovr_FreeMessage`, `ovr_Message_GetType`) and served by the same
+slot and session, as one in-process platform driver serves every loader copy on a
+headset. Keep the session alive until all guest threads stop. The core/launcher integrator calls:
 
 ```cpp
 auto identity = venture::ovrplatform::read_app_identity(

@@ -49,6 +49,9 @@ struct Fonts {
 };
 Fonts& fonts();
 void load_fonts();
+// Adds the system font a language's script needs (Chinese, Japanese, Korean)
+// to every UI font, once; call between frames.
+void load_script_fonts(std::string_view language);
 // Type scale (unscaled px).
 inline constexpr float kDisplay = 28, kTitle = 22, kHeading = 17, kBody = 15, kSmall = 14, kLabel = 13;
 
@@ -126,17 +129,33 @@ bool search_field(const char* id, const char* hint, std::string* value, float wi
 // A chip-high pill field that submits: true on Enter or its check button.
 bool submit_field(const char* id, const char* hint, std::string* value, float width, char32_t glyph,
                   bool enabled = true);
-// Pill showing "<prefix><current item>" that opens a menu of `items`.
+// Pill showing "<prefix><current item>" that opens a menu of `items`; items
+// marked in `dim` are listed in gray (still selectable). The label is centered,
+// or beside the chevron when `right`.
+// A label wider than a fixed `width` is ellipsized inside the pill's padding.
 bool dropdown(const char* id, const char* prefix, const char* const* items, int count, int* current,
-              float width = 0);
+              float width = 0, const bool* dim = nullptr, bool right = false);
+// The width that fits the widest of `items` (with `prefix`), its padding and chevron.
+float dropdown_width(const char* prefix, const char* const* items, int count);
+float dropdown_chevron_width();
+// A dialog row's wide dropdown: its label sits beside the chevron.
+inline bool dialog_dropdown(const char* id, const char* const* items, int count, int* current, float width) {
+  return dropdown(id, "", items, count, current, width, nullptr, true);
+}
 // Underlined tabs; returns true when the selection changed.
 bool tabs(const char* id, const char* const* items, int count, int* current, float width = 0);
 // Menu popups and their rows.
+// Places the next menu under a control at `at` (its top-left; x is the menu's
+// edge, pivot_x 0 left-aligns and 1 right-aligns), or above it when the window
+// has more room there; a menu taller than the room scrolls.
+void place_menu(ImVec2 at, float control_h, float menu_h, float pivot_x = 0);
+// The height of a menu of `rows` standard menu_item() rows.
+float menu_height(int rows);
 bool begin_menu(const char* id);
 void end_menu();
 // `image` (a white logo, tinted like the glyphs) replaces the glyph when set.
 bool menu_item(const char* label, char32_t glyph = 0, bool danger = false, bool enabled = true,
-               ImTextureID image = {});
+               ImTextureID image = {}, bool dim = false);
 void spinner(float radius, ImU32 col);
 bool toggle(const char* id, bool* value);
 // A checkbox with its label (and an optional line under it); the whole row clicks.

@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: 0BSD
  */
 
+#include <chrono>
 #include <cstring>
 #include <memory>
 #include <mutex>
@@ -282,6 +283,26 @@ public:
         return true;
     }
 
+    void ReserveBlocks(size_t count) { emitter.ReserveBlocks(count); }
+
+    bool PrecompileIdle(u64 value) {
+        if (Atomic::Load(&jit_state.halt_reason) != 0) return false;
+        const IR::LocationDescriptor descriptor{value};
+        if (emitter.GetBasicBlock(descriptor)) return true;
+        // Well above CompileBlock's 1 MiB evacuation threshold: the code on this stack must survive.
+        if (block_of_code.SpaceRemaining() < 16 * 1024 * 1024) return false;
+        // Only cached blocks: translating would cost the wait hundreds of microseconds a block.
+        if (!conf.portable_block_source || !emitter.PortableBlocksEnabled()) return true;
+        try {
+            CompileBlock(descriptor, true);
+        } catch (...) {
+            // Only requests the clear: Run performs it once this call has returned to the dispatcher.
+            ClearCache();
+            throw;
+        }
+        return true;
+    }
+
     std::string Disassemble() const {
         const size_t size = reinterpret_cast<const char*>(block_of_code.getCurr()) - reinterpret_cast<const char*>(block_of_code.GetCodeBegin());
         auto const* p = reinterpret_cast<const char*>(block_of_code.GetCodeBegin());
@@ -314,7 +335,31 @@ private:
         return CompileBlock(descriptor);
     }
 
-    [[gnu::noinline]] CodePtr CompileBlock(IR::LocationDescriptor descriptor) {
+    // cached_only: install from the portable block source or return nullptr, never translate.
+    [[gnu::noinline]] CodePtr CompileBlock(IR::LocationDescriptor descriptor, bool cached_only = false) {
+        // Venture: the OS can refuse to commit more code pages (the Windows
+        // commit limit) or unwind entries. Clearing the cache reuses the pages
+        // already committed, so a demand compile evicts all translated code and
+        // tries once more instead of stopping the guest thread. As with the
+        // evacuation below, this runs only from the dispatcher or outside Run;
+        // cached-only compiles run on guest frames and leave the clear to Run.
+        // Other exceptions (a guest callback's bad_alloc) propagate unchanged.
+        if (cached_only)
+            return CompileBlockOnce(descriptor, true);
+        try {
+            return CompileBlockOnce(descriptor, false);
+        } catch (const Xbyak::Error& error) {
+            if (int(error) != Xbyak::ERR_CANT_ALLOC)
+                throw;
+        }
+        if (conf.code_allocation_failed)
+            conf.code_allocation_failed(block_of_code.FailedCommitSize(), block_of_code.CommittedSize(), conf.code_cache_size);
+        invalidate_entire_cache = true;
+        PerformRequestedCacheInvalidation(HaltReason::CacheInvalidation);
+        return CompileBlockOnce(descriptor, false);
+    }
+
+    CodePtr CompileBlockOnce(IR::LocationDescriptor descriptor, bool cached_only) {
         // Compilation must use host FP state without altering the suspended
         // guest rounding mode, flush mode or accumulated exception flags.
         const unsigned saved_mxcsr = _mm_getcsr();
@@ -329,6 +374,26 @@ private:
             PerformRequestedCacheInvalidation(HaltReason::CacheInvalidation);
         }
         block_of_code.EnsureMemoryCommitted(MINIMUM_REMAINING_CODESIZE);
+
+        // Venture: a block captured earlier (portable_block.h) skips translation.
+        const auto started = std::chrono::steady_clock::now();
+        if (conf.portable_block_source && emitter.PortableBlocksEnabled()) {
+            if (const auto [data, size] = conf.portable_block_source(descriptor.Value()); data) {
+                if (DeserializePortableBlock({data, size}, portable_scratch)) {
+                    if (const auto installed = emitter.InstallPortableBlock(portable_scratch)) {
+                        timing.Complete();
+                        PortableTime(true, std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - started).count());
+                        return installed->entrypoint;
+                    }
+                }
+            }
+        }
+        if (cached_only)
+            return nullptr;
+        SCOPE_EXIT {
+            if (emitter.PortableBlocksEnabled())
+                PortableTime(false, std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - started).count());
+        };
 
         // JIT Compile
         const auto get_code = [this](u64 vaddr) { return conf.callbacks->MemoryReadCode(vaddr); };
@@ -379,6 +444,7 @@ private:
     std::unique_ptr<u64[]> host_return_stack;
     BlockOfCode block_of_code;
     A64EmitX64 emitter;
+    PortableBlock portable_scratch;  // installs reuse its storage
     Optimization::PolyfillOptions polyfill_options;
     bool is_executing = false;
     bool invalidate_entire_cache = false;
@@ -439,6 +505,14 @@ std::size_t Jit::CodeCacheSize() const {
 
 bool Jit::Precompile(std::uint64_t descriptor) {
     return impl->Precompile(descriptor);
+}
+
+void Jit::ReserveBlocks(std::size_t count) {
+    impl->ReserveBlocks(count);
+}
+
+bool Jit::PrecompileIdle(std::uint64_t descriptor) {
+    return impl->PrecompileIdle(descriptor);
 }
 
 u64 Jit::GetPC() const {

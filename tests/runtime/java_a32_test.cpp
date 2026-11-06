@@ -20,6 +20,8 @@
 #include "hle/libandroid/libandroid.h"
 #include "core/linker.h"
 #include "core/elf.h"
+#include "core/address_space.h"
+#include <algorithm>
 #include <thread>
 #include <filesystem>
 #include <fstream>
@@ -322,6 +324,46 @@ TEST_CASE("A32 JNI copied buffers honor commit abort and object jvalue padding")
   CHECK(invoke("GetDirectBufferAddress", args({high})).x0 == 0);
   REQUIRE(env->ExceptionCheck());
   env->ExceptionClear();
+}
+TEST_CASE("A32 application direct buffers live in guest-addressable storage") {
+  // The APK rewriter sends ByteBuffer.allocateDirect here. SUPERHOT VR's Unity
+  // 2018 UnityWebRequest upload buffer came from HotSpot above 4 GiB, so its
+  // GetDirectBufferAddress threw and the guest aborted in GetDirectBufferCapacity.
+  auto* env = start();
+  auto cls = env->FindClass("com/venture/runtime/DirectBuffers");
+  REQUIRE(cls);
+  auto allocate = env->GetStaticMethodID(cls, "allocateDirect", "(I)Ljava/nio/ByteBuffer;");
+  REQUIRE(allocate);
+  for (jint capacity : {0, 1, 4096, 1 << 20}) {
+    auto buffer = env->CallStaticObjectMethod(cls, allocate, capacity);
+    REQUIRE_FALSE(env->ExceptionCheck());
+    REQUIRE(buffer);
+    auto token = jni32::reference(buffer);
+    const auto address = invoke("GetDirectBufferAddress", args({token})).x0;
+    REQUIRE_FALSE(env->ExceptionCheck());
+    CHECK(invoke("GetDirectBufferCapacity", args({token})).i64() == capacity);
+    REQUIRE(address);
+    CHECK(address <= UINT32_MAX);
+    CHECK(AddressSpace::get().is_guest_accessible(address, std::max<jint>(capacity, 1), true));
+    if (capacity) {
+      auto* bytes = g2h<std::uint8_t>(address);
+      CHECK(std::all_of(bytes, bytes + capacity, [](auto b) { return b == 0; }));
+      bytes[capacity - 1] = 0x5a;  // a guest write is visible to Java
+      auto buffer_class = env->GetObjectClass(buffer);
+      auto get = env->GetMethodID(buffer_class, "get", "(I)B");
+      CHECK(env->CallByteMethod(buffer, get, capacity - 1) == 0x5a);
+      env->DeleteLocalRef(buffer_class);
+    }
+  }
+  env->CallStaticObjectMethod(cls, allocate, jint(-1));
+  REQUIRE(env->ExceptionCheck());
+  auto thrown = env->ExceptionOccurred();
+  env->ExceptionClear();
+  auto illegal = env->FindClass("java/lang/IllegalArgumentException");
+  CHECK(env->IsInstanceOf(thrown, illegal));
+  env->DeleteLocalRef(illegal);
+  env->DeleteLocalRef(thrown);
+  env->DeleteLocalRef(cls);
 }
 TEST_CASE("A32 JNI instance and static fields use aligned pairs and softfp") {
   auto* env = start();

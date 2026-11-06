@@ -8,4 +8,4 @@ Icon=org.venture_emu.Venture
 Terminal=false
 Categories=Game;
 Keywords=VR;OpenXR;Quest;
-StartupWMClass=venture
+StartupWMClass=org.venture_emu.Venture

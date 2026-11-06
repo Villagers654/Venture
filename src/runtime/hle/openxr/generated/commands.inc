@@ -44,7 +44,7 @@ VENTURE_XR_COMMAND(xrEnumeratePerformanceMetricsCounterPathsMETA, "XR_META_perfo
 VENTURE_XR_COMMAND(xrEnumerateReferenceSpaces, "", false)
 VENTURE_XR_COMMAND(xrEnumerateSwapchainFormats, "", true)
 VENTURE_XR_COMMAND(xrEnumerateSwapchainImages, "", true)
-VENTURE_XR_COMMAND(xrEnumerateViewConfigurationViews, "", false)
+VENTURE_XR_COMMAND(xrEnumerateViewConfigurationViews, "", true)
 VENTURE_XR_COMMAND(xrEnumerateViewConfigurations, "", false)
 VENTURE_XR_COMMAND(xrGeometryInstanceSetTransformFB, "XR_FB_passthrough", true)
 VENTURE_XR_COMMAND(xrGetActionStateBoolean, "", false)

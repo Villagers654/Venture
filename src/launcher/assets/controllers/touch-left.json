@@ -1,0 +1,130 @@
+{
+ "width": 517,
+ "height": 720,
+ "nodes": {
+  "root": [
+   272.0,
+   399.5
+  ],
+  "controller_mesh": [
+   272.0,
+   399.5
+  ],
+  "thumbrest_pressed_min": [
+   280.4,
+   278.6
+  ],
+  "thumbrest_pressed_max": [
+   280.4,
+   278.6
+  ],
+  "thumbrest_pressed_value": [
+   280.4,
+   278.6
+  ],
+  "x_button_pressed_max": [
+   223.1,
+   214.5
+  ],
+  "x_button_pressed_min": [
+   219.3,
+   210.8
+  ],
+  "x_button_pressed_value": [
+   219.7,
+   210.4
+  ],
+  "x_button": [
+   219.7,
+   210.4
+  ],
+  "xr_standard_squeeze_pressed_max": [
+   227.4,
+   198.0
+  ],
+  "xr_standard_squeeze_pressed_min": [
+   227.4,
+   198.0
+  ],
+  "xr_standard_squeeze_pressed_value": [
+   239.4,
+   409.6
+  ],
+  "squeeze": [
+   239.4,
+   409.6
+  ],
+  "xr_standard_thumbstick_pressed_min": [
+   292.6,
+   134.1
+  ],
+  "xr_standard_thumbstick_pressed_max": [
+   296.0,
+   137.6
+  ],
+  "xr_standard_thumbstick_pressed_value": [
+   261.2,
+   97.5
+  ],
+  "xr_standard_thumbstick_xaxis_pressed_min": [
+   292.6,
+   134.1
+  ],
+  "xr_standard_thumbstick_xaxis_pressed_value": [
+   261.2,
+   97.5
+  ],
+  "xr_standard_thumbstick_yaxis_pressed_max": [
+   292.6,
+   134.1
+  ],
+  "xr_standard_thumbstick_yaxis_pressed_min": [
+   292.6,
+   134.1
+  ],
+  "xr_standard_thumbstick_yaxis_pressed_value": [
+   261.2,
+   97.5
+  ],
+  "thumbstick": [
+   261.2,
+   97.5
+  ],
+  "xr_standard_thumbstick_xaxis_pressed_max": [
+   292.6,
+   134.1
+  ],
+  "xr_standard_trigger_pressed_min": [
+   446.4,
+   123.3
+  ],
+  "xr_standard_trigger_pressed_max": [
+   446.4,
+   123.3
+  ],
+  "xr_standard_trigger_pressed_value": [
+   427.8,
+   191.7
+  ],
+  "trigger": [
+   427.8,
+   191.7
+  ],
+  "y_button_pressed_max": [
+   306.6,
+   185.6
+  ],
+  "y_button_pressed_min": [
+   302.8,
+   182.0
+  ],
+  "y_button_pressed_value": [
+   303.8,
+   181.3
+  ],
+  "y_button": [
+   303.8,
+   181.3
+  ]
+ }
+}

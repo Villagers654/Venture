@@ -22,6 +22,7 @@
 #include <condition_variable>
 #include <cstdlib>
 #include <cstring>
+#include <cwchar>
 #include <deque>
 #include <map>
 #include <mutex>
@@ -40,6 +41,8 @@
 #include <tuple>
 
 namespace mock {
+// Environment values are UTF-8.
+std::filesystem::path utf8_path(std::string_view text) { return std::u8string(text.begin(), text.end()); }
 std::recursive_mutex mutex;
 std::condition_variable_any haptic_changed;
 std::condition_variable_any frame_changed;
@@ -155,11 +158,28 @@ using SwapchainGeometry = std::tuple<std::uint32_t, std::uint32_t, std::int64_t,
 std::set<SwapchainGeometry> recorded_swapchains;
 std::map<std::uint32_t, std::array<float, 8>> recorded_views; // last projection fov per layer
 bool profile_changed = false;
+std::string profile_override;  // ventureMockXrSetProfile
+const std::string& current_profile() { return profile_override.empty() ? timeline.profile() : profile_override; }
 bool trace_input() { return venture::environment::getenv("VENTURE_MOCK_TRACE_INPUT") != nullptr; }
 // VENTURE_MOCK_SPACE_WARP models a host with XR_FB_space_warp (Meta's PC
 // runtime): the extension, its system properties and the motion-vector and
 // depth swapchain formats. Off by default so titles keep their usual path.
 bool space_warp() { return venture::environment::getenv("VENTURE_MOCK_SPACE_WARP") != nullptr; }
+// VENTURE_MOCK_PASSTHROUGH: comma-separated host passthrough capabilities, any of
+// fb (XR_FB_passthrough reporting support), fb-unsupported (the extension
+// without support), htc (XR_HTC_passthrough), alpha_blend and additive (blend modes).
+bool passthrough(std::string_view capability) {
+  const char* text = venture::environment::getenv("VENTURE_MOCK_PASSTHROUGH");
+  if (!text) return false;
+  for (std::string_view rest = text; !rest.empty();) {
+    const auto comma = rest.find(',');
+    if (rest.substr(0, comma) == capability) return true;
+    rest = comma == rest.npos ? std::string_view{} : rest.substr(comma + 1);
+  }
+  return false;
+}
+// Passthrough handles only; the mock has no camera.
+std::set<std::uintptr_t> passthrough_objects, passthrough_layers_fb, passthrough_htc;
 // VENTURE_MOCK_PCM_RATE=<Hz> models a host with XR_FB_haptic_pcm that answers that device
 // sample rate for every vibration action. 0 is Monado's answer for controllers whose driver
 // reports no output limits. PCM payloads themselves stay unsupported, as core vibration is
@@ -542,7 +562,7 @@ void record_frame(const XrFrameEndInfo& info, const std::vector<XrSwapchainSubIm
   const char* directory = venture::environment::getenv("VENTURE_MOCK_DUMP_DIR");
   if (!directory || !*directory) return;
   try {
-    const std::filesystem::path root = std::filesystem::u8path(directory);
+    const std::filesystem::path root = utf8_path(directory);
     if (const auto path = root / "frames.jsonl"; !frame_log.is_open() || path != frame_log_path) {
       close_frame_log();
       std::filesystem::create_directories(root);
@@ -919,6 +939,10 @@ XrResult m_xrEnumerateInstanceExtensionProperties(const char *, std::uint32_t ca
                     "XR_KHR_composition_layer_depth", "XR_KHR_swapchain_usage_input_attachment_bit",
                     "XR_KHR_composition_layer_equirect2",
                     "XR_KHR_composition_layer_color_scale_bias"}) {
+    // VENTURE_MOCK_NO_EXTENSIONS: a host without these (comma-separated; VDXR has no equirect layers).
+    if (const char* absent = venture::environment::getenv("VENTURE_MOCK_NO_EXTENSIONS");
+        absent && std::format(",{},", absent).find(std::format(",{},", name)) != std::string::npos)
+      continue;
     XrExtensionProperties e{XR_TYPE_EXTENSION_PROPERTIES};
     std::strcpy(e.extensionName, name);
     e.extensionVersion = 1;
@@ -930,6 +954,43 @@ XrResult m_xrEnumerateInstanceExtensionProperties(const char *, std::uint32_t ca
     e.extensionVersion = 2;
     extensions.push_back(e);
   }
+  // Every controller profile Venture suggests, and trackpad halves (unless
+  // VENTURE_MOCK_NO_DPAD, a runtime without them).
+  for (auto name : {"XR_KHR_binding_modification", "XR_EXT_dpad_binding", "XR_META_touch_controller_plus",
+                    "XR_FB_touch_controller_pro", "XR_HTC_vive_cosmos_controller_interaction",
+                    "XR_HTC_vive_focus3_controller_interaction", "XR_EXT_hp_mixed_reality_controller",
+                    "XR_BD_controller_interaction", "XR_MNDX_psvr2_interaction",
+                    "XR_VALVE_frame_controller_interaction", "XR_KHR_generic_controller"}) {
+    if (std::string_view(name) == "XR_EXT_dpad_binding" && venture::environment::getenv("VENTURE_MOCK_NO_DPAD")) continue;
+    XrExtensionProperties e{XR_TYPE_EXTENSION_PROPERTIES};
+    std::strcpy(e.extensionName, name);
+    e.extensionVersion = 1;
+    extensions.push_back(e);
+  }
+  if (passthrough("fb") || passthrough("fb-unsupported")) {
+    XrExtensionProperties e{XR_TYPE_EXTENSION_PROPERTIES};
+    std::strcpy(e.extensionName, "XR_FB_passthrough");
+    e.extensionVersion = 4;
+    extensions.push_back(e);
+  }
+  if (passthrough("htc")) {
+    XrExtensionProperties e{XR_TYPE_EXTENSION_PROPERTIES};
+    std::strcpy(e.extensionName, "XR_HTC_passthrough");
+    e.extensionVersion = 1;
+    extensions.push_back(e);
+  }
+#ifdef _WIN32
+  // As the Meta PC runtime: the headset's audio endpoints, answered from
+  // VENTURE_MOCK_AUDIO_OUTPUT_DEVICE / VENTURE_MOCK_AUDIO_INPUT_DEVICE (empty:
+  // none). VENTURE_MOCK_NO_EXTENSIONS can withhold it.
+  if (const char* absent = venture::environment::getenv("VENTURE_MOCK_NO_EXTENSIONS");
+      !absent || std::format(",{},", absent).find(",XR_OCULUS_audio_device_guid,") == std::string::npos) {
+    XrExtensionProperties e{XR_TYPE_EXTENSION_PROPERTIES};
+    std::strcpy(e.extensionName, "XR_OCULUS_audio_device_guid");
+    e.extensionVersion = 1;
+    extensions.push_back(e);
+  }
+#endif
   if (pcm_rate()) {
     XrExtensionProperties e{XR_TYPE_EXTENSION_PROPERTIES};
     std::strcpy(e.extensionName, "XR_FB_haptic_pcm");
@@ -959,7 +1020,7 @@ XrResult m_xrCreateInstance(const XrInstanceCreateInfo *info, XrInstance *out) {
     timeline = {};
     input_path.clear();
     if (const char* input = venture::environment::getenv("VENTURE_MOCK_INPUT")) {
-      input_path = std::filesystem::u8path(input);
+      input_path = utf8_path(input);
       timeline.load(input_path);
       input_write_time = std::filesystem::last_write_time(input_path);
       timeline.advance(0, script);
@@ -1014,6 +1075,11 @@ XrResult m_xrGetSystemProperties(XrInstance, XrSystemId id, XrSystemProperties *
       reinterpret_cast<XrSystemHandTrackingPropertiesEXT*>(node)->supportsHandTracking = XR_TRUE;
       hand_written = true;
     }
+    if (node->type == XR_TYPE_SYSTEM_PASSTHROUGH_PROPERTIES_FB)
+      reinterpret_cast<XrSystemPassthroughPropertiesFB*>(node)->supportsPassthrough = passthrough("fb");
+    if (node->type == XR_TYPE_SYSTEM_PASSTHROUGH_PROPERTIES2_FB)
+      reinterpret_cast<XrSystemPassthroughProperties2FB*>(node)->capabilities = passthrough("fb")
+          ? XR_PASSTHROUGH_CAPABILITY_BIT_FB | XR_PASSTHROUGH_CAPABILITY_COLOR_BIT_FB : 0;
     if (node->type == XR_TYPE_SYSTEM_SPACE_WARP_PROPERTIES_FB && space_warp()) {
       auto& properties = *reinterpret_cast<XrSystemSpaceWarpPropertiesFB*>(node);
       properties.recommendedMotionVectorImageRectWidth = view_configuration_state.width / 4;
@@ -1062,11 +1128,64 @@ XrResult m_xrEnumerateViewConfigurationViews(XrInstance, XrSystemId, XrViewConfi
       XR_TYPE_VIEW_CONFIGURATION_VIEW, nullptr, view_configuration_state.width, 4096, view_configuration_state.height, 4096, 1, 1};
   return enumerate(cap, count, out, std::vector<XrViewConfigurationView>{view, view});
 }
+std::vector<XrEnvironmentBlendMode> blend_modes() {
+  std::vector<XrEnvironmentBlendMode> modes{XR_ENVIRONMENT_BLEND_MODE_OPAQUE};
+  if (passthrough("additive")) modes.push_back(XR_ENVIRONMENT_BLEND_MODE_ADDITIVE);
+  if (passthrough("alpha_blend")) modes.push_back(XR_ENVIRONMENT_BLEND_MODE_ALPHA_BLEND);
+  return modes;
+}
 XrResult m_xrEnumerateEnvironmentBlendModes(XrInstance, XrSystemId, XrViewConfigurationType,
                                             std::uint32_t cap, std::uint32_t *count,
                                             XrEnvironmentBlendMode *out) {
-  return enumerate(cap, count, out,
-                   std::vector<XrEnvironmentBlendMode>{XR_ENVIRONMENT_BLEND_MODE_OPAQUE});
+  return enumerate(cap, count, out, blend_modes());
+}
+XrResult m_xrCreatePassthroughFB(XrSession, const XrPassthroughCreateInfoFB* info, XrPassthroughFB* out) {
+  if (!passthrough("fb")) return XR_ERROR_FEATURE_UNSUPPORTED;
+  if (!info || info->type != XR_TYPE_PASSTHROUGH_CREATE_INFO_FB || !out) return XR_ERROR_VALIDATION_FAILURE;
+  *out = token<XrPassthroughFB>();
+  passthrough_objects.insert(reinterpret_cast<std::uintptr_t>(*out));
+  return XR_SUCCESS;
+}
+XrResult m_xrDestroyPassthroughFB(XrPassthroughFB handle) {
+  return passthrough_objects.erase(reinterpret_cast<std::uintptr_t>(handle)) ? XR_SUCCESS : XR_ERROR_HANDLE_INVALID;
+}
+XrResult m_xrPassthroughStartFB(XrPassthroughFB handle) {
+  return passthrough_objects.contains(reinterpret_cast<std::uintptr_t>(handle)) ? XR_SUCCESS : XR_ERROR_HANDLE_INVALID;
+}
+XrResult m_xrPassthroughPauseFB(XrPassthroughFB handle) { return m_xrPassthroughStartFB(handle); }
+XrResult m_xrCreatePassthroughLayerFB(XrSession, const XrPassthroughLayerCreateInfoFB* info, XrPassthroughLayerFB* out) {
+  if (!info || info->type != XR_TYPE_PASSTHROUGH_LAYER_CREATE_INFO_FB || !out) return XR_ERROR_VALIDATION_FAILURE;
+  if (!passthrough_objects.contains(reinterpret_cast<std::uintptr_t>(info->passthrough))) return XR_ERROR_HANDLE_INVALID;
+  *out = token<XrPassthroughLayerFB>();
+  passthrough_objects.insert(reinterpret_cast<std::uintptr_t>(*out));
+  passthrough_layers_fb.insert(reinterpret_cast<std::uintptr_t>(*out));
+  return XR_SUCCESS;
+}
+XrResult m_xrDestroyPassthroughLayerFB(XrPassthroughLayerFB handle) {
+  passthrough_layers_fb.erase(reinterpret_cast<std::uintptr_t>(handle));
+  return passthrough_objects.erase(reinterpret_cast<std::uintptr_t>(handle)) ? XR_SUCCESS : XR_ERROR_HANDLE_INVALID;
+}
+XrResult m_xrPassthroughLayerPauseFB(XrPassthroughLayerFB handle) {
+  return passthrough_layers_fb.contains(reinterpret_cast<std::uintptr_t>(handle)) ? XR_SUCCESS : XR_ERROR_HANDLE_INVALID;
+}
+XrResult m_xrPassthroughLayerResumeFB(XrPassthroughLayerFB handle) { return m_xrPassthroughLayerPauseFB(handle); }
+XrResult m_xrPassthroughLayerSetStyleFB(XrPassthroughLayerFB handle, const XrPassthroughStyleFB*) {
+  return m_xrPassthroughLayerPauseFB(handle);
+}
+XrResult XRAPI_CALL create_passthrough_htc(XrSession, const XrPassthroughCreateInfoHTC* info, XrPassthroughHTC* out) {
+  std::lock_guard lock(mutex);
+  if (!info || info->type != XR_TYPE_PASSTHROUGH_CREATE_INFO_HTC || !out ||
+      (info->form != XR_PASSTHROUGH_FORM_PLANAR_HTC && info->form != XR_PASSTHROUGH_FORM_PROJECTED_HTC))
+    return XR_ERROR_VALIDATION_FAILURE;
+  *out = token<XrPassthroughHTC>();
+  passthrough_objects.insert(reinterpret_cast<std::uintptr_t>(*out));
+  passthrough_htc.insert(reinterpret_cast<std::uintptr_t>(*out));
+  return XR_SUCCESS;
+}
+XrResult XRAPI_CALL destroy_passthrough_htc(XrPassthroughHTC handle) {
+  std::lock_guard lock(mutex);
+  passthrough_htc.erase(reinterpret_cast<std::uintptr_t>(handle));
+  return passthrough_objects.erase(reinterpret_cast<std::uintptr_t>(handle)) ? XR_SUCCESS : XR_ERROR_HANDLE_INVALID;
 }
 XrResult m_xrGetVulkanGraphicsRequirements2KHR(XrInstance, XrSystemId,
                                                XrGraphicsRequirementsVulkanKHR *out) {
@@ -1131,16 +1250,19 @@ XrResult m_xrGetVulkanGraphicsDevice2KHR(XrInstance, const XrVulkanGraphicsDevic
   // XR_KHR_vulkan_enable2: the instance must come from xrCreateVulkanInstanceKHR.
   // The Oculus runtime enforces this with XR_ERROR_RUNTIME_FAILURE.
   if (!created_instances.contains(info->vulkanInstance)) return XR_ERROR_RUNTIME_FAILURE;
+  if (info->vulkanInstance == script.refused_vulkan_instance) return XR_ERROR_RUNTIME_FAILURE;
   return graphics_device(info->vulkanInstance, out);
 }
 XrResult m_xrGetVulkanGraphicsDeviceKHR(XrInstance, XrSystemId, VkInstance v, VkPhysicalDevice *out) {
   if (script.refuse_app_vulkan_instances && !created_instances.contains(v)) return XR_ERROR_RUNTIME_FAILURE;
+  if (v == script.refused_vulkan_instance) return XR_ERROR_RUNTIME_FAILURE;
   return graphics_device(v, out);  // XR_KHR_vulkan_enable: application-created instances
 }
 XrResult m_xrCreateVulkanDeviceKHR(XrInstance, const XrVulkanDeviceCreateInfoKHR *info,
                                    VkDevice *out, VkResult *result) {
   // XR_KHR_vulkan_enable2 requires using the supplied resolver. It can wrap
   // allocation callbacks and feature requests before the native driver call.
+  if (script.refuse_vulkan_devices) return XR_ERROR_HANDLE_INVALID;
   auto create = reinterpret_cast<PFN_vkCreateDevice>(
       info->pfnGetInstanceProcAddr(vulkan_instance, "vkCreateDevice"));
   *result = create(info->vulkanPhysicalDevice, info->vulkanCreateInfo, info->vulkanAllocator, out);
@@ -1164,6 +1286,10 @@ XrResult m_xrCreateSession(XrInstance, const XrSessionCreateInfo *info, XrSessio
       get_queue(b->device, b->queueFamilyIndex, b->queueIndex, &graphics_queue);
   }
   last_gpu_wait_ns = 0;
+  // A new session's display timeline starts at the present, like a compositor's.
+  // Unpaced (no VENTURE_MOCK_REALTIME) waits run the prediction ahead of the clock;
+  // an earlier session's lead must not carry into the next one.
+  predicted = 0;
   session = token<XrSession>();
   *out = session;
   running = false;
@@ -1347,6 +1473,16 @@ XrResult m_xrLocateSpace(XrSpace space, XrSpace base, XrTime time, XrSpaceLocati
   const bool active = space_active(space) && space_active(base);
   out->locationFlags = active ? 15 : 0;
   out->pose = venture::xr::compose(venture::xr::inverse(world_pose(base)), world_pose(space));
+  if (trace_input() && spaces.at(space).action) {
+    static std::map<XrSpace, std::pair<bool, float>> seen;
+    const auto found = seen.find(space);
+    if (found == seen.end() || found->second.first != active || found->second.second != out->pose.orientation.x) {
+      seen[space] = {active, out->pose.orientation.x};
+      std::cerr << "[mock-input] locate space=" << space << " action=" << actions[spaces.at(space).action].name
+                << " hand=" << path_names[spaces.at(space).hand] << " active=" << active
+                << " q=" << out->pose.orientation.x << ',' << out->pose.orientation.y << '\n';
+    }
+  }
   if (out->next) {
     auto velocity = static_cast<XrSpaceVelocity *>(out->next);
     if (velocity->type != XR_TYPE_SPACE_VELOCITY)
@@ -1510,11 +1646,35 @@ XrResult m_xrEndFrame(XrSession, const XrFrameEndInfo *info) {
       std::cerr << "[mock-xr] rejected layer type=" << int(type) << ' ' << fields << '\n';
     return XR_ERROR_LAYER_INVALID;
   };
+  // A runtime rejects a blend mode it did not enumerate.
+  if (const auto modes = blend_modes(); std::ranges::find(modes, info->environmentBlendMode) == modes.end()) {
+    frame_phase = 0;
+    return XR_ERROR_ENVIRONMENT_BLEND_MODE_UNSUPPORTED;
+  }
   std::vector<XrSwapchainSubImage> submitted;
+  std::uint32_t passthrough_fb = 0, passthrough_htc_layers = 0;
+  float htc_alpha = 0;
   for (std::uint32_t i = 0; i < info->layerCount; ++i) {
     auto layer = info->layers[i];
+    // XR_FB_passthrough layers have a null space: the runtime places them.
+    if (layer && layer->type == XR_TYPE_COMPOSITION_LAYER_PASSTHROUGH_FB) {
+      const auto& p = *reinterpret_cast<const XrCompositionLayerPassthroughFB*>(layer);
+      if (p.space != XR_NULL_HANDLE || !passthrough_layers_fb.contains(reinterpret_cast<std::uintptr_t>(p.layerHandle)))
+        return invalid_layer(layer->type, "passthrough FB layer");
+      ++passthrough_fb;
+      continue;
+    }
     if (!layer || !spaces.contains(layer->space))
       return XR_ERROR_HANDLE_INVALID;
+    if (layer->type == XR_TYPE_COMPOSITION_LAYER_PASSTHROUGH_HTC) {
+      const auto& p = *reinterpret_cast<const XrCompositionLayerPassthroughHTC*>(layer);
+      if (!passthrough_htc.contains(reinterpret_cast<std::uintptr_t>(p.passthrough)) ||
+          p.color.type != XR_TYPE_PASSTHROUGH_COLOR_HTC || !(p.color.alpha >= 0 && p.color.alpha <= 1))
+        return invalid_layer(layer->type, "passthrough HTC layer");
+      ++passthrough_htc_layers;
+      htc_alpha = p.color.alpha;
+      continue;
+    }
     switch (layer->type) {
     case XR_TYPE_COMPOSITION_LAYER_PROJECTION: {
       auto &p = *reinterpret_cast<const XrCompositionLayerProjection *>(layer);
@@ -1617,6 +1777,10 @@ XrResult m_xrEndFrame(XrSession, const XrFrameEndInfo *info) {
   record_frame(*info, submitted);
   fence_frame();
   last_subimages = std::move(submitted);
+  stats.passthrough_fb = passthrough_fb;
+  stats.passthrough_htc = passthrough_htc_layers;
+  stats.passthrough_htc_alpha = htc_alpha;
+  stats.blend_mode = std::uint32_t(info->environmentBlendMode);
   ++stats.ends;
   last_display_time = info->displayTime;
   ++session_ends;
@@ -1940,7 +2104,7 @@ XrResult m_xrEnumerateBoundSourcesForAction(XrSession,
                                             std::uint32_t capacity, std::uint32_t *count,
                                             XrPath *out) {
   std::vector<XrPath> sources;
-  auto it = paths.find(timeline.profile());
+  auto it = paths.find(current_profile());
   if (it != paths.end())
     for (auto binding : bindings[it->second])
       if (binding.action == info->action)
@@ -1967,6 +2131,11 @@ ActionState source_state(XrPath path) {
   s.source = path;
   const auto part = std::string_view(name).substr(left ? 15 : 16);
   const auto trigger = c.trigger < 0 ? script.trigger : c.trigger;
+  for (const auto& raw : c.raw)
+    if (raw.path[0] && part == raw.path) {
+      s.value = s.active ? raw.value : 0;
+      return s;
+    }
   if (part == "/input/trigger/value") s.value = trigger;
   else if (part == "/input/trigger/click" || part == "/input/select/click") s.value = trigger > 0.5f;
   else if (part == "/input/squeeze/value") s.value = c.squeeze;
@@ -1983,6 +2152,8 @@ ActionState source_state(XrPath path) {
   else if (part == "/input/b/touch" || part == "/input/y/touch") s.value = c.secondary_touch || c.secondary;
   else if (part == "/input/thumbstick/touch") s.value = c.thumbstick_touch || c.thumbstick_click;
   else if (part == "/input/thumbrest/touch" || part == "/input/trackpad/touch") s.value = c.thumbrest_touch;
+  else if (part.ends_with("/click") || part.ends_with("/force") || part.ends_with("/value") ||
+           part.find("/dpad_") != std::string_view::npos) s.value = 0;  // another controller's input, at rest
   else if (part != "/input/aim/pose" && part != "/input/grip/pose" && part != "/output/haptic") return {};
   if (!s.active) { s.value = 0; s.vector = {}; }
   return s;
@@ -2106,7 +2277,7 @@ XrResult m_xrSyncActions(XrSession s, const XrActionsSyncInfo *info) {
       latest_signature_raw.reset();
     }
   }
-  const auto profile = paths.find(timeline.profile());
+  const auto profile = paths.find(current_profile());
   auto enabled = [&](XrAction action, const std::string& source) {
     for (std::uint32_t i = 0; i < info->countActiveActionSets; ++i) {
       const auto& set = info->activeActionSets[i];
@@ -2177,7 +2348,7 @@ XrResult m_xrGetCurrentInteractionProfile(XrSession s, XrPath hand, XrInteractio
   if (it->second != "/user/hand/left" && it->second != "/user/hand/right") return XR_ERROR_PATH_UNSUPPORTED;
   out->interactionProfile = XR_NULL_PATH;
   if (attached_sets.empty() || !script.active || !(it->second.ends_with("left") ? script.left.active : script.right.active)) return XR_SUCCESS;
-  return m_xrStringToPath(instance, timeline.profile().c_str(), &out->interactionProfile);
+  return m_xrStringToPath(instance, current_profile().c_str(), &out->interactionProfile);
 }
 XrResult get_action_state(XrSession s, const XrActionStateGetInfo* info, XrActionType type, ActionState& out) {
   if (s != session || !actions.contains(info->action)) return XR_ERROR_HANDLE_INVALID;
@@ -2320,7 +2491,7 @@ XrResult m_xrApplyHapticFeedback(XrSession s, const XrHapticActionInfo *info,
       (v.duration < 0 && v.duration != XR_MIN_HAPTIC_DURATION))
     return XR_ERROR_VALIDATION_FAILURE;
   if (v.amplitude > 0 && v.duration != 0 && script.active) {
-    auto profile = paths.find(timeline.profile());
+    auto profile = paths.find(current_profile());
     if (profile != paths.end()) {
       bool counted[2]{};
       for (const auto &binding : bindings[profile->second]) {
@@ -2426,6 +2597,23 @@ XrResult timespec_to_time(XrInstance, const Timespec *ts, XrTime *out) {
   *out = ts->sec * 1'000'000'000 + ts->nsec;
   return XR_SUCCESS;
 }
+#ifdef _WIN32
+// XR_OCULUS_audio_device_guid: XR_MAX_AUDIO_DEVICE_STR_SIZE_OCULUS wide characters.
+XrResult audio_device(const char *variable, XrInstance instance, wchar_t *buffer) {
+  if (!instance || !buffer) return XR_ERROR_VALIDATION_FAILURE;
+  const char *value = venture::environment::getenv(variable);
+  const auto text = std::filesystem::path(std::string(value ? value : "")).wstring();
+  if (text.size() >= 128) return XR_ERROR_SIZE_INSUFFICIENT;
+  std::wmemcpy(buffer, text.c_str(), text.size() + 1);
+  return XR_SUCCESS;
+}
+XrResult XRAPI_CALL audio_output_device(XrInstance instance, wchar_t *buffer) {
+  return audio_device("VENTURE_MOCK_AUDIO_OUTPUT_DEVICE", instance, buffer);
+}
+XrResult XRAPI_CALL audio_input_device(XrInstance instance, wchar_t *buffer) {
+  return audio_device("VENTURE_MOCK_AUDIO_INPUT_DEVICE", instance, buffer);
+}
+#endif
 XrResult m_xrGetInstanceProcAddr(XrInstance, const char *, PFN_xrVoidFunction *);
 XrResult XRAPI_CALL d3d11_requirements(XrInstance instance, XrSystemId system, void *out) {
   return d3d11::requirements(instance, system, out);
@@ -2443,6 +2631,17 @@ XrResult m_xrGetInstanceProcAddr(XrInstance, const char *name, PFN_xrVoidFunctio
     *out = reinterpret_cast<PFN_xrVoidFunction>(&counter_to_time);
   if (std::strcmp(name, "xrConvertTimespecTimeToTimeKHR") == 0)
     *out = reinterpret_cast<PFN_xrVoidFunction>(&timespec_to_time);
+#ifdef _WIN32
+  if (std::strcmp(name, "xrGetAudioOutputDeviceGuidOculus") == 0)
+    *out = reinterpret_cast<PFN_xrVoidFunction>(&audio_output_device);
+  if (std::strcmp(name, "xrGetAudioInputDeviceGuidOculus") == 0)
+    *out = reinterpret_cast<PFN_xrVoidFunction>(&audio_input_device);
+#endif
+  // A host-only extension, so outside the generated (guest) dispatch table.
+  if (passthrough("htc") && std::strcmp(name, "xrCreatePassthroughHTC") == 0)
+    *out = reinterpret_cast<PFN_xrVoidFunction>(&create_passthrough_htc);
+  if (passthrough("htc") && std::strcmp(name, "xrDestroyPassthroughHTC") == 0)
+    *out = reinterpret_cast<PFN_xrVoidFunction>(&destroy_passthrough_htc);
   for (const auto &entry : dispatch)
     if (std::strcmp(name, entry.name) == 0)
       *out = entry.function;
@@ -2461,6 +2660,11 @@ extern "C" VENTURE_MOCK_EXPORT XrResult XRAPI_CALL xrNegotiateLoaderRuntimeInter
   return XR_SUCCESS;
 }
 extern "C" VENTURE_MOCK_EXPORT void ventureMockXrRefreshEnvironment() { venture::environment::refresh(); }
+extern "C" VENTURE_MOCK_EXPORT void ventureMockXrSetProfile(const char *profile) {
+  std::lock_guard lock(mock::mutex);
+  mock::profile_override = profile ? profile : "";
+  mock::profile_changed = true;
+}
 extern "C" VENTURE_MOCK_EXPORT void ventureMockXrSetScript(const MockXrScript *s) {
   std::lock_guard lock(mock::mutex);
   if (s)
@@ -2479,6 +2683,7 @@ extern "C" VENTURE_MOCK_EXPORT void ventureMockXrLoseSession() {
 }
 extern "C" VENTURE_MOCK_EXPORT MockXrStats ventureMockXrStats() {
   std::lock_guard lock(mock::mutex);
+  mock::stats.live_passthrough = std::uint32_t(mock::passthrough_objects.size());
   return mock::stats;
 }
 extern "C" VENTURE_MOCK_EXPORT XrTime ventureMockXrLastDisplayTime() {

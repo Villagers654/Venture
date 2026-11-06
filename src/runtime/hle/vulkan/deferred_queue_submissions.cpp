@@ -1,5 +1,6 @@
 #include "deferred_queue_submissions.h"
 #include "chain.h"
+#include "common/log.h"
 #include <algorithm>
 #include <chrono>
 #include <thread>
@@ -168,7 +169,10 @@ VkResult DeferredQueueSubmissions::submit(std::uint32_t logical, std::uint32_t c
           i + 1 == std::max(count, 1u) ? fence : VK_NULL_HANDLE));
     return enqueue(logical, copies);
   } catch (const std::bad_alloc&) { return VK_ERROR_OUT_OF_HOST_MEMORY; }
-  catch (const std::exception&) { return VK_ERROR_INITIALIZATION_FAILED; }
+  catch (const std::exception& e) {
+    log::warn("vulkan", "Guest submission on queue {} refused: {}", logical, e.what());
+    return VK_ERROR_INITIALIZATION_FAILED;
+  }
 }
 VkResult DeferredQueueSubmissions::submit2(std::uint32_t logical, std::uint32_t count,
     const VkSubmitInfo2* input, VkFence fence) {
@@ -185,7 +189,10 @@ VkResult DeferredQueueSubmissions::submit2(std::uint32_t logical, std::uint32_t 
           i + 1 == std::max(count, 1u) ? fence : VK_NULL_HANDLE));
     return enqueue(logical, copies);
   } catch (const std::bad_alloc&) { return VK_ERROR_OUT_OF_HOST_MEMORY; }
-  catch (const std::exception&) { return VK_ERROR_INITIALIZATION_FAILED; }
+  catch (const std::exception& e) {
+    log::warn("vulkan", "Guest submission on queue {} refused: {}", logical, e.what());
+    return VK_ERROR_INITIALIZATION_FAILED;
+  }
 }
 VkResult DeferredQueueSubmissions::submit_sparse(std::uint32_t logical, std::uint32_t count,
     const VkBindSparseInfo* input, VkFence fence, PFN_vkQueueBindSparse bind) {

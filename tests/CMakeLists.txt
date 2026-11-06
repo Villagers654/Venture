@@ -7,18 +7,27 @@ add_executable(venture_tests
   test_main.cpp
   test_launcher.cpp
   steam_library_test.cpp
+  controls_test.cpp
   paths_test.cpp
   digest_test.cpp
+  search_test.cpp
+  auth_test.cpp
+  sign_in_link_test.cpp
+  debug_report_test.cpp
   environment_test.cpp
   log_test.cpp
   dlc_test.cpp
   import_test.cpp
   accounts_test.cpp
   launcher_accounts_test.cpp
+  versions_test.cpp
+  launcher_settings_test.cpp
 
   ${PROJECT_SOURCE_DIR}/src/launcher/ui/rich_text_parse.cpp
   ${PROJECT_SOURCE_DIR}/src/launcher/debug_report.cpp
+  ${PROJECT_SOURCE_DIR}/src/launcher/diagnosis.cpp
   ${PROJECT_SOURCE_DIR}/src/launcher/drives.cpp
+  ${PROJECT_SOURCE_DIR}/src/launcher/sign_in_link.cpp
   ${PROJECT_SOURCE_DIR}/src/launcher/updater.cpp
   broker_test.cpp
   broker_http_test.cpp
@@ -30,12 +39,36 @@ add_executable(venture_tests
 )
 target_include_directories(venture_tests PRIVATE ${PROJECT_SOURCE_DIR}/src/runtime ${CMAKE_CURRENT_SOURCE_DIR}/runtime)
 target_link_libraries(venture_tests PRIVATE venture_common doctest::doctest miniz)
+if(TARGET venture_i18n)
+  target_sources(venture_tests PRIVATE i18n_test.cpp)
+  target_link_libraries(venture_tests PRIVATE venture_i18n)
+endif()
 if(VENTURE_BUILD_LAUNCHER)
   target_compile_definitions(venture_tests PRIVATE VENTURE_TEST_STEAM_ART)
   foreach(format png webp)
     configure_file("${CMAKE_CURRENT_SOURCE_DIR}/data/steam-art.${format}"
       "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/test-data/steam-art.${format}" COPYONLY)
   endforeach()
+endif()
+if(VENTURE_BUILD_LAUNCHER)
+  # The Controls page's turnable controller models.
+  add_executable(venture_controller_art_tests controller_art_test.cpp
+    ${PROJECT_SOURCE_DIR}/src/launcher/assets/controller_art.cpp
+    ${PROJECT_SOURCE_DIR}/src/launcher/assets/render_model.cpp)
+  target_include_directories(venture_controller_art_tests PRIVATE ${PROJECT_SOURCE_DIR}/src)
+  target_include_directories(venture_controller_art_tests SYSTEM PRIVATE ${stb_SOURCE_DIR})
+  target_link_libraries(venture_controller_art_tests PRIVATE venture_common doctest::doctest)
+  add_test(NAME controller_art COMMAND venture_controller_art_tests)
+  # The real settings command and the play command's child environment, with a
+  # probe standing in for the runtime. No account, game runtime or headset.
+  add_executable(venture_passthrough_launch_probe passthrough/launch_probe.cpp)
+  target_link_libraries(venture_passthrough_launch_probe PRIVATE venture_common)
+  if(NOT TARGET Python3::Interpreter)
+    find_package(Python3 COMPONENTS Interpreter REQUIRED)
+  endif()
+  add_test(NAME launcher_settings_cli COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/launcher_settings_test.py"
+    "$<TARGET_FILE:venture-cli>")
+  add_dependencies(venture_passthrough_launch_probe venture-cli)
 endif()
 if(VENTURE_BUILD_LAUNCHER AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
   add_executable(venture_launcher_video_tests launcher_video_test.cpp
@@ -78,7 +111,7 @@ add_dependencies(venture_tests venture_launch_channel_child)
 target_compile_definitions(venture_tests PRIVATE VENTURE_LAUNCH_CHANNEL_CHILD="$<TARGET_FILE:venture_launch_channel_child>")
 if(TARGET venture_hle)
   file(GLOB LIBC_A_TEST_SOURCES CONFIGURE_DEPENDS runtime/libc_a_*_test.cpp runtime/libc_b_*_test.cpp)
-  target_sources(venture_tests PRIVATE ${LIBC_A_TEST_SOURCES} runtime/ossdk_test.cpp)
+  target_sources(venture_tests PRIVATE ${LIBC_A_TEST_SOURCES} runtime/ossdk_test.cpp runtime/memory_pressure_test.cpp)
   target_link_libraries(venture_tests PRIVATE venture_hle)
   target_compile_definitions(venture_tests PRIVATE VENTURE_TEST_CRASH_REPORT)
   target_compile_definitions(venture_tests PRIVATE VENTURE_LIBC_B_TEST_ROOT="${CMAKE_CURRENT_BINARY_DIR}/libc-b-fixtures")
@@ -94,7 +127,9 @@ foreach(source core_restart core_thread_failure jit_cache vulkan vulkan_texture 
   list(APPEND venture_test_split_filters "${filter}")
 endforeach()
 list(JOIN venture_test_split_filters "," venture_test_split_filter)
-add_test(NAME venture_tests COMMAND venture_tests "--source-file-exclude=${venture_test_split_filter}" --duration=true)
+# The JIT block list case runs only in its own test (jit_block_list): it rewrites a fixed
+# fixture directory, and two processes sharing it race each other's replaces.
+add_test(NAME venture_tests COMMAND venture_tests "--source-file-exclude=${venture_test_split_filter}" "--test-case-exclude=JIT block list*" --duration=true)
 set_tests_properties(venture_tests_core_restart PROPERTIES COST 1500)
 # The JIT cache partition again with the register allocator's full-slot checks on (environment appended below).
 add_test(NAME venture_tests_jit_cache_alloc_checks COMMAND venture_tests "--source-file=*jit_cache_test.cpp" --duration=true)
@@ -154,6 +189,9 @@ if(TARGET venture_runtime)
   set_tests_properties(terminal_guest_exit PROPERTIES TIMEOUT 300)
 
 endif()
+# The source catalog matches the marked strings and every translation checks out.
+add_test(NAME i18n_catalogs COMMAND "${Python3_EXECUTABLE}" "${PROJECT_SOURCE_DIR}/tools/i18n_check.py")
+add_test(NAME i18n_tools COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/i18n_tools_test.py")
 foreach(abi IN ITEMS a64 a32)
   add_executable(venture_replacement_exports_${abi} test_main.cpp runtime/replacement_exports_test.cpp)
   target_link_libraries(venture_replacement_exports_${abi} PRIVATE venture_hle doctest::doctest)
@@ -359,6 +397,10 @@ if(TARGET venture_runtime AND TARGET venture_hle)
     add_executable(venture_vulkan_texture_scratch_tests test_main.cpp runtime/vulkan_texture_scratch_test.cpp)
     target_link_libraries(venture_vulkan_texture_scratch_tests PRIVATE venture_runtime venture_vulkan doctest::doctest)
     add_test(NAME vulkan_texture_scratch COMMAND venture_vulkan_texture_scratch_tests)
+    add_executable(venture_pipeline_async_tests test_main.cpp runtime/pipeline_async_test.cpp)
+    target_link_libraries(venture_pipeline_async_tests PRIVATE venture_runtime venture_gfx doctest::doctest)
+    add_test(NAME pipeline_async COMMAND venture_pipeline_async_tests)
+    set_tests_properties(pipeline_async PROPERTIES TIMEOUT 60)
     add_executable(venture_vulkan_lazy_tests test_main.cpp runtime/vulkan_lazy_test.cpp)
     target_link_libraries(venture_vulkan_lazy_tests PRIVATE venture_runtime venture_vulkan doctest::doctest)
     add_test(NAME vulkan_lazy COMMAND venture_vulkan_lazy_tests)
@@ -384,6 +426,40 @@ if(TARGET venture_runtime AND TARGET venture_hle)
     target_link_options(venture_a64_arena_release_tests PRIVATE -pie)
   endif()
   add_test(NAME a64_early_arena_release COMMAND venture_a64_arena_release_tests)
+  add_executable(venture_pretranslate_tests test_main.cpp runtime/pretranslate_test.cpp)
+  target_link_libraries(venture_pretranslate_tests PRIVATE venture_runtime doctest::doctest)
+  if(NOT WIN32)
+    set_property(TARGET venture_pretranslate_tests PROPERTY POSITION_INDEPENDENT_CODE ON)
+    target_link_options(venture_pretranslate_tests PRIVATE -pie)
+  endif()
+  add_test(NAME jit_pretranslate COMMAND ${CMAKE_COMMAND} -E env VENTURE_JIT_PTC_DIR=${CMAKE_CURRENT_BINARY_DIR}/pretranslate-blocks
+           ${CMAKE_COMMAND} -E rm -rf ${CMAKE_CURRENT_BINARY_DIR}/pretranslate-blocks)
+  add_test(NAME jit_pretranslate_run COMMAND ${CMAKE_COMMAND} -E env VENTURE_JIT_PTC_DIR=${CMAKE_CURRENT_BINARY_DIR}/pretranslate-blocks
+           $<TARGET_FILE:venture_pretranslate_tests>)
+  set_tests_properties(jit_pretranslate PROPERTIES FIXTURES_SETUP pretranslate_dir LABELS "cpu;jit")
+  set_tests_properties(jit_pretranslate_run PROPERTIES TIMEOUT 60 FIXTURES_REQUIRED pretranslate_dir LABELS "cpu;jit")
+  # The block cache under concurrent stores, lookups and flushes, from an empty directory.
+  add_executable(venture_portable_cache_tests test_main.cpp runtime/portable_cache_test.cpp)
+  target_link_libraries(venture_portable_cache_tests PRIVATE venture_runtime doctest::doctest)
+  if(NOT WIN32)
+    set_property(TARGET venture_portable_cache_tests PROPERTY POSITION_INDEPENDENT_CODE ON)
+    target_link_options(venture_portable_cache_tests PRIVATE -pie)
+  endif()
+  add_test(NAME jit_portable_cache COMMAND ${CMAKE_COMMAND} -E rm -rf ${CMAKE_CURRENT_BINARY_DIR}/portable-cache-blocks)
+  add_test(NAME jit_portable_cache_run COMMAND ${CMAKE_COMMAND} -E env VENTURE_JIT_PTC_DIR=${CMAKE_CURRENT_BINARY_DIR}/portable-cache-blocks
+           $<TARGET_FILE:venture_portable_cache_tests>)
+  set_tests_properties(jit_portable_cache PROPERTIES FIXTURES_SETUP portable_cache_dir LABELS "cpu;jit")
+  set_tests_properties(jit_portable_cache_run PROPERTIES TIMEOUT 120 FIXTURES_REQUIRED portable_cache_dir LABELS "cpu;jit")
+  # Explored marks across three runs (processes) on one cache directory, in order.
+  add_test(NAME jit_portable_cache_marks COMMAND ${CMAKE_COMMAND} -E rm -rf ${CMAKE_CURRENT_BINARY_DIR}/portable-cache-marks)
+  set_tests_properties(jit_portable_cache_marks PROPERTIES FIXTURES_SETUP portable_cache_marks_dir LABELS "cpu;jit")
+  set(previous jit_portable_cache_marks)
+  foreach(step 1 2 3)
+    add_test(NAME jit_portable_cache_marks_${step} COMMAND ${CMAKE_COMMAND} -E env VENTURE_JIT_PTC_DIR=${CMAKE_CURRENT_BINARY_DIR}/portable-cache-marks
+             $<TARGET_FILE:venture_portable_cache_tests> "--test-case=explored marks ${step}:*" --no-skip=true)
+    set_tests_properties(jit_portable_cache_marks_${step} PROPERTIES TIMEOUT 60 FIXTURES_REQUIRED portable_cache_marks_dir DEPENDS ${previous} LABELS "cpu;jit")
+    set(previous jit_portable_cache_marks_${step})
+  endforeach()
 endif()
 
 if(TARGET venture_runtime)
@@ -566,6 +642,17 @@ if(TARGET venture_audio)
   target_compile_definitions(venture_media_tests PRIVATE VENTURE_VP9_FIXTURE="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/media/pattern-vp9.webm")
   venture_stage_media(venture_media_tests)
   add_test(NAME media_audio COMMAND venture_media_tests)
+  add_executable(venture_a32_media_tests runtime/a32_memory_main.cpp runtime/a32_media_test.cpp)
+  target_include_directories(venture_a32_media_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/runtime)
+  target_link_libraries(venture_a32_media_tests PRIVATE venture_audio venture_android doctest::doctest)
+  target_compile_definitions(venture_a32_media_tests PRIVATE VENTURE_MEDIA_FIXTURE="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/media/tone-aac.mp4")
+  if(NOT WIN32)
+    set_property(TARGET venture_a32_media_tests PROPERTY POSITION_INDEPENDENT_CODE ON)
+    target_link_options(venture_a32_media_tests PRIVATE -pie)
+  endif()
+  venture_stage_media(venture_a32_media_tests)
+  add_test(NAME a32_media COMMAND venture_a32_media_tests)
+  set_tests_properties(a32_media PROPERTIES TIMEOUT 300)
   add_test(NAME media_missing_library COMMAND "${Python3_EXECUTABLE}"
     "${CMAKE_CURRENT_SOURCE_DIR}/media_missing_library_test.py" "$<TARGET_FILE:venture_media_tests>")
   add_test(NAME media_capture_source COMMAND "${Python3_EXECUTABLE}"
@@ -577,6 +664,10 @@ if(TARGET venture_audio)
     target_link_libraries(venture_${kind}_tests PRIVATE venture_audio venture_runtime doctest::doctest)
     add_test(NAME venture_${kind}_tests COMMAND venture_${kind}_tests)
   endforeach()
+  # The PC output's copy of the headset mix, with fake devices in simulated time.
+  add_executable(venture_output_mirror_tests test_main.cpp runtime/output_mirror_test.cpp)
+  target_link_libraries(venture_output_mirror_tests PRIVATE venture_audio doctest::doctest)
+  add_test(NAME output_mirror COMMAND venture_output_mirror_tests)
   add_executable(venture_audio_teardown_child runtime/audio_teardown_child.cpp)
   target_link_libraries(venture_audio_teardown_child PRIVATE venture_audio venture_runtime)
   add_test(NAME audio_static_teardown COMMAND "${Python3_EXECUTABLE}"
@@ -772,16 +863,19 @@ if(TARGET venture_xr)
   add_test(NAME a32_xr COMMAND venture_a32_xr_tests)
   set_tests_properties(a32_xr PROPERTIES ENVIRONMENT "XR_RUNTIME_JSON=${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/mock_openxr_runtime.json;VENTURE_DATA_DIR=${CMAKE_CURRENT_BINARY_DIR}/xr-test-data")
   target_link_libraries(venture_tests PRIVATE venture_xr)
-add_executable(venture_xr_tests test_main.cpp  runtime/xr_test.cpp runtime/xr_vrapi_test.cpp
+add_executable(venture_xr_tests test_main.cpp  runtime/xr_test.cpp runtime/xr_vrapi_test.cpp runtime/xr_controls_test.cpp
      mock_openxr_runtime/input_timeline.cpp runtime/xr_android_surface_test.cpp
-     runtime/xr_color_space_test.cpp runtime/xr_call_trace_test.cpp)
+     runtime/xr_color_space_test.cpp runtime/xr_call_trace_test.cpp runtime/xr_passthrough_test.cpp
+     runtime/xr_vulkan_layers_test.cpp)
   target_link_libraries(venture_xr_tests PRIVATE venture_java_framework)
   target_compile_definitions(venture_xr_tests PRIVATE
     VENTURE_TEST_JAVA_HOME="${VENTURE_JAVA_HOME}" VENTURE_TEST_FRAMEWORK_JAR="${VENTURE_FRAMEWORK_JAR}")
   target_include_directories(venture_xr_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/runtime)
   add_test(NAME xr_call_observer COMMAND venture_xr_tests "--test-case=XR call*")
-  set_tests_properties(xr_call_observer PROPERTIES ENVIRONMENT "VENTURE_TRACE_XR_FRAMES=1" TIMEOUT 30)
+  set_tests_properties(xr_call_observer PROPERTIES ENVIRONMENT "VENTURE_TRACE_XR_FRAMES=1;VENTURE_DATA_DIR=${CMAKE_CURRENT_BINARY_DIR}/xr-call-observer-data" TIMEOUT 30)
   add_test(NAME venture_xr_tests COMMAND venture_xr_tests)
+  add_subdirectory(passthrough)
+  add_subdirectory(passthrough_source_transport)
   # Run wall-clock pacing assertions before long CPU/compile work accumulates.
   set_tests_properties(venture_xr_tests PROPERTIES COST 2000)
 
@@ -795,7 +889,7 @@ add_executable(venture_xr_tests test_main.cpp  runtime/xr_test.cpp runtime/xr_vr
   # whatever runtime (and headset driver) this machine has active.
   foreach(test vulkan_lazy vulkan_terminal_allocator)
     if(TEST ${test})
-      set_tests_properties(${test} PROPERTIES ENVIRONMENT "XR_RUNTIME_JSON=${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/mock_openxr_runtime.json")
+      set_tests_properties(${test} PROPERTIES ENVIRONMENT "XR_RUNTIME_JSON=${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/mock_openxr_runtime.json;VENTURE_DATA_DIR=${CMAKE_CURRENT_BINARY_DIR}/xr-${test}-data")
     endif()
   endforeach()
   # A runtime that numbers each handle type from 1 (VDXR): the instance and session share a value.
@@ -814,7 +908,7 @@ add_executable(venture_xr_tests test_main.cpp  runtime/xr_test.cpp runtime/xr_vr
   set_tests_properties(xr_no_velocity PROPERTIES ENVIRONMENT "XR_RUNTIME_JSON=${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/mock_openxr_runtime.json;VENTURE_DATA_DIR=${CMAKE_CURRENT_BINARY_DIR}/xr-no-velocity-data;VENTURE_MOCK_NO_VELOCITY=1")
   add_test(NAME xr_no_hmd COMMAND venture_xr_probe)
   set_tests_properties(xr_no_hmd PROPERTIES
-    ENVIRONMENT "XR_RUNTIME_JSON=${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/mock_openxr_runtime.json;VENTURE_MOCK_NO_HMD=1"
+    ENVIRONMENT "XR_RUNTIME_JSON=${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/mock_openxr_runtime.json;VENTURE_DATA_DIR=${CMAKE_CURRENT_BINARY_DIR}/xr-no-hmd-data;VENTURE_MOCK_NO_HMD=1"
     PASS_REGULAR_EXPRESSION "HMD available: 0 .*Error: Venture Mock OpenXR reports no headset")
   add_test(NAME xr_missing_runtime COMMAND venture_xr_probe)
 

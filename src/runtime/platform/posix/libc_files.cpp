@@ -117,7 +117,7 @@ class DiskFile final : public File {
   bool readonly_;
 };
 }  // namespace
-bool unredirected_path(const std::filesystem::path&, const std::filesystem::path&) {
+bool unredirected_path(const std::filesystem::path&, const std::filesystem::path&, int*) {
   return false; // POSIX retains the shared canonical containment check.
 }
 int exists(const std::filesystem::path& p, bool follow) {

@@ -77,6 +77,21 @@ inline bool quit_recency_pending(const QuitSample& s, const QuitQuietness& q, Qu
   return s.threads_quiet && s.writers_known && s.destroy_delivered && s.stages_complete && s.files_healthy &&
          !s.write_active && quit_admission(s, q, now);
 }
+// A quit while the game is still starting: no frame shown and the task-removal
+// stop not returned (an engine's native glue waits in onPause for an engine
+// thread that polls lifecycle commands only after startup). A player could not
+// have made progress to save, so a Quest ends the removed task as it stands;
+// Venture does too once no guest file write is in flight or within the last
+// second. A write at the bound is waited for up to save_quit_bound: ending
+// then is safe once none is in flight, while one still in flight at that
+// bound is a stuck write and fails the quit.
+enum class StartupQuit { not_startup, end, wait };
+inline StartupQuit startup_quit(const QuitSample& s, bool first_frame, bool exiting, bool within_save_bound) {
+  if (s.destroy_delivered || first_frame || exiting || !s.writers_known) return StartupQuit::not_startup;
+  if (!s.write_active && s.since_write >= std::chrono::seconds(1)) return StartupQuit::end;
+  if (within_save_bound) return StartupQuit::wait;
+  return s.write_active ? StartupQuit::not_startup : StartupQuit::end;
+}
 // Early termination once destroy is delivered: admitted with every writer closed.
 inline bool quit_settled(const QuitSample& s, const QuitQuietness& q, QuitQuietness::Clock::time_point now) {
   return s.writers_closed && !quit_admission(s, q, now);

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <cstdlib>
 #include <filesystem>
@@ -14,7 +15,9 @@
 
 #include "gfx/gpu_device.h"
 #include "gfx/pipeline_trace.h"
+#include "core/alloc_failure.h"
 #include "hle/vulkan/texture.h"
+#include "hle/vulkan/texture_memory.h"
 #include "hle/vulkan/full_rate_image.h"
 #include "hle/vulkan/internal.h"
 #include "hle/vulkan/chain.h"
@@ -237,6 +240,142 @@ TEST_CASE("Vulkan GPU ASTC decode is bit-exact to astcenc for all LDR footprints
     CHECK(mismatches == 0);
     REQUIRE(test::vk_call("vkResetCommandBuffer", gpu.command, 0u) == VK_SUCCESS);
   }
+}
+
+// Decodes `blocks` with astcenc (profile) and the GPU decoder (format, FP16 or
+// UNORM8 per the format's TextureFormat), returning mismatched bytes. Any two
+// FP16 NaNs match: astcenc round-trips void-extent payloads through FP32. Its
+// NaN error color is magenta for LDR profiles, as the specification requires.
+static std::size_t astc_mismatches(test::VulkanDevice& gpu, vulkan::TextureFormat format, astcenc_profile profile,
+                                   const std::vector<std::uint8_t>& blocks, std::uint32_t width,
+                                   std::uint32_t height) {
+  astcenc_config config{};
+  REQUIRE(astcenc_config_init(profile, format.width, format.height, 1, ASTCENC_PRE_FASTEST,
+                              ASTCENC_FLG_DECOMPRESS_ONLY, &config) == ASTCENC_SUCCESS);
+  astcenc_context* raw{};
+  REQUIRE(astcenc_context_alloc(&config, 1, &raw) == ASTCENC_SUCCESS);
+  std::unique_ptr<astcenc_context, decltype(&astcenc_context_free)> context(raw, astcenc_context_free);
+  const bool half = format.texel_bytes == 8;
+  test::VulkanBuffer source(gpu, blocks.size()), dest(gpu, width * height * format.texel_bytes);
+  std::memcpy(source.mapped, blocks.data(), blocks.size());
+  std::vector<std::uint8_t> expected(dest.size);
+  void* output = expected.data();
+  astcenc_image out{width, height, 1, half ? ASTCENC_TYPE_F16 : ASTCENC_TYPE_U8, &output};
+  astcenc_swizzle swizzle{ASTCENC_SWZ_R, ASTCENC_SWZ_G, ASTCENC_SWZ_B, ASTCENC_SWZ_A};
+  REQUIRE(astcenc_decompress_image(raw, blocks.data(), blocks.size(), &out, &swizzle, 0) == ASTCENC_SUCCESS);
+  gpu.begin();
+  auto resources = vulkan::record_decode(gpu.device, gpu.command, source.buffer, source.size, dest.buffer, dest.size,
+                                         {format, width, height, (width + format.width - 1) / format.width, 0});
+  gpu.barrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_HOST_BIT,
+              VK_ACCESS_HOST_READ_BIT);
+  gpu.submit();
+  REQUIRE(test::vk_call("vkResetCommandBuffer", gpu.command, 0u) == VK_SUCCESS);
+  const auto* actual = static_cast<const std::uint8_t*>(dest.mapped);
+  auto nan = [](const std::uint8_t* p) {
+    const auto v = std::uint16_t(p[0] | (p[1] << 8));
+    return (v & 0x7c00) == 0x7c00 && (v & 0x3ff);
+  };
+  std::size_t mismatches = 0, first = 0;
+  for (std::size_t i = 0; i < expected.size(); i += half ? 2 : 1) {
+    const auto magenta = (i / 2) % 4 == 1 ? 0x0000 : 0x3c00;
+    if (half ? std::memcmp(&expected[i], &actual[i], 2) == 0 || (nan(&expected[i]) && nan(&actual[i])) ||
+                   (profile != ASTCENC_PRF_HDR && nan(&expected[i]) && (actual[i] | (actual[i + 1] << 8)) == magenta)
+             : expected[i] == actual[i])
+      continue;
+    if (!mismatches) first = i;
+    ++mismatches;
+  }
+  if (mismatches) {
+    const auto texel = first / (format.texel_bytes);
+    const auto x = texel % width, y = texel / width;
+    const auto block = (y / format.height) * ((width + format.width - 1) / format.width) + x / format.width;
+    std::string bytes;
+    for (int b = 0; b < 16; ++b) {
+      char hex[3];
+      std::snprintf(hex, sizeof(hex), "%02x", blocks[block * 16 + b]);
+      bytes += hex;
+    }
+    INFO("first mismatch at texel " << x << "," << y << " channel byte " << first % format.texel_bytes
+         << " block " << bytes << " expected " << int(expected[first]) << " actual " << int(actual[first]));
+    CHECK(mismatches == 0);
+  }
+  return mismatches;
+}
+
+TEST_CASE("Vulkan GPU ASTC HDR decode is bit-exact to astcenc for all footprints") {
+  test::VulkanDevice gpu;
+  constexpr std::uint32_t width = 31, height = 23;
+  // HDR gradients from 2^-12 to 2^14, an LDR band, LDR and HDR alpha, and a
+  // flat HDR corner for FP16 void extents.
+  std::vector<float> rgba(width * height * 4);
+  std::mt19937 random(1031);
+  for (std::uint32_t y = 0; y < height; ++y)
+    for (std::uint32_t x = 0; x < width; ++x) {
+      auto* p = &rgba[(y * width + x) * 4];
+      if (x < 12 && y < 12) {
+        p[0] = 3.5f, p[1] = 0.25f, p[2] = 900.0f, p[3] = 1.0f;
+        continue;
+      }
+      const bool ldr = y >= 16;
+      p[0] = ldr ? x / 31.0f : std::exp2(x * 0.8f - 12.0f);
+      p[1] = ldr ? (y * 11 % 23) / 23.0f : std::exp2(y * 1.1f - 10.0f);
+      p[2] = ldr ? (random() & 255) / 255.0f : std::exp2((random() % 2600) / 100.0f - 12.0f);
+      p[3] = x % 3 == 0 ? 1.0f : x % 3 == 1 ? (y * 13 % 23) / 23.0f : std::exp2((x + y) * 0.3f - 4.0f);
+    }
+  astcenc_swizzle swizzle{ASTCENC_SWZ_R, ASTCENC_SWZ_G, ASTCENC_SWZ_B, ASTCENC_SWZ_A};
+  for (int value = VK_FORMAT_ASTC_4x4_SFLOAT_BLOCK; value <= VK_FORMAT_ASTC_12x12_SFLOAT_BLOCK; ++value)
+    for (auto profile : {ASTCENC_PRF_HDR, ASTCENC_PRF_HDR_RGB_LDR_A}) {
+      const auto format = vulkan::texture_format(static_cast<VkFormat>(value));
+      REQUIRE(format.decoded == VK_FORMAT_R16G16B16A16_SFLOAT);
+      CAPTURE(value);
+      CAPTURE(int(profile));
+      astcenc_config config{};
+      REQUIRE(astcenc_config_init(profile, format.width, format.height, 1, ASTCENC_PRE_FAST, 0, &config) ==
+              ASTCENC_SUCCESS);
+      astcenc_context* raw{};
+      REQUIRE(astcenc_context_alloc(&config, 1, &raw) == ASTCENC_SUCCESS);
+      std::unique_ptr<astcenc_context, decltype(&astcenc_context_free)> context(raw, astcenc_context_free);
+      void* input = rgba.data();
+      astcenc_image in{width, height, 1, ASTCENC_TYPE_F32, &input};
+      std::vector<std::uint8_t> blocks(((width + format.width - 1) / format.width) *
+                                       ((height + format.height - 1) / format.height) * 16);
+      REQUIRE(astcenc_compress_image(raw, &in, &swizzle, blocks.data(), blocks.size(), 0) == ASTCENC_SUCCESS);
+      // SFLOAT formats always decode with the full HDR profile.
+      astc_mismatches(gpu, format, ASTCENC_PRF_HDR, blocks, width, height);
+    }
+}
+
+TEST_CASE("Vulkan GPU ASTC decode matches astcenc on random blocks in every profile") {
+  // Random bits reach every block mode, endpoint mode, and illegal encoding.
+  test::VulkanDevice gpu;
+  constexpr std::uint32_t width = 120, height = 120;
+  std::mt19937 random(31);
+  for (auto [first, last] : {std::pair{VK_FORMAT_ASTC_4x4_SFLOAT_BLOCK, VK_FORMAT_ASTC_12x12_SFLOAT_BLOCK},
+                             std::pair{VK_FORMAT_ASTC_4x4_UNORM_BLOCK, VK_FORMAT_ASTC_12x12_SRGB_BLOCK}})
+    for (int value = first; value <= last; ++value) {
+      auto format = vulkan::texture_format(static_cast<VkFormat>(value));
+      const bool hdr = value >= VK_FORMAT_ASTC_4x4_SFLOAT_BLOCK;
+      const bool srgb = format.decoded == VK_FORMAT_R8G8B8A8_SRGB;
+      CAPTURE(value);
+      std::vector<std::uint8_t> blocks(((width + format.width - 1) / format.width) *
+                                       ((height + format.height - 1) / format.height) * 16);
+      for (std::size_t i = 0; i < blocks.size(); i += 16) {
+        for (int b = 0; b < 16; ++b) blocks[i + b] = std::uint8_t(random());
+        // A quarter are void extents, whose bits random data rarely forms.
+        if (random() % 4 == 0) {
+          blocks[i] = 0xfc;
+          blocks[i + 1] = (blocks[i + 1] & 0x02) | 0xfd;
+          if (random() % 2) std::memset(&blocks[i + 2], 0xff, 6);
+        }
+      }
+      astc_mismatches(gpu, format, hdr ? ASTCENC_PRF_HDR : srgb ? ASTCENC_PRF_LDR_SRGB : ASTCENC_PRF_LDR, blocks,
+                      width, height);
+      if (!hdr && !srgb) {
+        format.decoded = VK_FORMAT_R16G16B16A16_SFLOAT;
+        format.texel_bytes = 8;
+        astc_mismatches(gpu, format, ASTCENC_PRF_LDR, blocks, width, height);
+      }
+    }
 }
 
 TEST_CASE("Vulkan ETC2 EAC GPU decoder covers alpha signed and sRGB formats") {
@@ -944,11 +1083,8 @@ struct HostHooks {
   static inline PFN_vkCreateDescriptorPool create_pool{};
   static inline PFN_vkDestroyDescriptorPool destroy_pool{};
   static inline PFN_vkCmdPushConstants push_constants{};
-  static inline VkImage watched{};
-  static inline int watched_registered = -1;
   static inline int pools_until_failure = -1;
   static inline std::vector<VkDescriptorPool> created, destroyed;
-  static inline VkPipelineLayout last_push_layout{};
   static inline PFN_vkGetPhysicalDeviceMemoryProperties memory_properties{};
   static inline PFN_vkGetBufferMemoryRequirements buffer_requirements{};
   static inline PFN_vkAllocateMemory allocate_memory{};
@@ -958,7 +1094,6 @@ struct HostHooks {
   static inline bool restore_memory = false, fail_cached = false, fail_mapped = false,
       fail_coherent = false, noncoherent = false, lost_idle = false;
   static inline VkResult allocation_failure = VK_SUCCESS;
-  static inline int flushes = 0;
   static inline std::atomic<int> lost_waits{0};
   static inline std::set<VkDeviceMemory> map_failures;
   static inline PFN_vkMapMemory map_memory{};
@@ -1028,7 +1163,6 @@ struct HostHooks {
     return map_memory(d, memory, offset, size, flags, out);
   }
   static VkResult VKAPI_CALL on_flush(VkDevice d, std::uint32_t count, const VkMappedMemoryRange* ranges) {
-    ++flushes;
     return flush_memory(d, count, ranges);
   }
   static VkResult VKAPI_CALL on_idle(VkQueue queue) {
@@ -1036,7 +1170,6 @@ struct HostHooks {
     return wait_idle(queue);
   }
   static void VKAPI_CALL on_destroy_image(VkDevice d, VkImage image, const VkAllocationCallbacks* a) {
-    if (image == watched) watched_registered = !vulkan::emulated_texture_planes(image).empty();
     destroy_image(d, image, a);
   }
   static VkResult VKAPI_CALL on_create_pool(VkDevice d, const VkDescriptorPoolCreateInfo* info,
@@ -1053,7 +1186,6 @@ struct HostHooks {
   }
   static void VKAPI_CALL on_push_constants(VkCommandBuffer cmd, VkPipelineLayout layout, VkShaderStageFlags stages,
                                            std::uint32_t offset, std::uint32_t size, const void* values) {
-    last_push_layout = layout;
     push_constants(cmd, layout, stages, offset, size, values);
   }
   template <class F, class H>
@@ -1373,20 +1505,67 @@ TEST_CASE("Vulkan views of emulated input-attachment images, decoded and as BC7"
   }
 }
 
+TEST_CASE("Vulkan texture decode refused memory skips that texture, logs the limit and recovers") {
+  struct Force {
+    Force() { vulkan::force_texture_emulation(true); vulkan::force_texture_compression(0); }
+    ~Force() {
+      vulkan::fail_texture_allocations(-1);
+      vulkan::force_texture_compression(-1);
+      vulkan::force_texture_emulation(false);
+    }
+  } force;
+  test::VulkanDevice gpu;
+  constexpr auto format = VK_FORMAT_ASTC_4x4_UNORM_BLOCK;
+  // An ASTC UNORM16 void-extent block: opaque red.
+  const std::array<std::uint8_t, 16> red{0xfc, 0xfd, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+                                         0xff, 0xff, 0,    0,    0,    0,    0xff, 0xff};
+  test::VulkanImage texture(gpu, format, 8, 4);
+  test::VulkanBuffer upload(gpu, 32), decoded(gpu, 8 * 4 * 8);
+  std::memcpy(upload.mapped, red.data(), 16);
+  std::memcpy(static_cast<std::uint8_t*>(upload.mapped) + 16, red.data(), 16);
+  VkBufferImageCopy copy{};
+  copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+  copy.imageExtent = {8, 4, 1};
+  // RE4 on an 8 GB card: every pool allocation is refused, in VRAM and in
+  // system memory, before and after the spare memory is given back. The
+  // upload is left out with a warning; recording and submission succeed.
+  alloc_failure::reset_counts();
+  vulkan::fail_texture_allocations(1 << 20);
+  gpu.begin();
+  texture.transition();
+  test::vk_call("vkCmdCopyBufferToImage", gpu.command, upload.buffer, texture.image, VK_IMAGE_LAYOUT_GENERAL, 1u,
+                &copy);
+  gpu.submit();
+  CHECK(alloc_failure::counts().reports > 0);
+  CHECK(vulkan::texture_memory_refused());
+  REQUIRE(test::vk_call("vkResetCommandBuffer", gpu.command, 0u) == VK_SUCCESS);
+  // Memory back: the next upload of the same texture decodes as before.
+  vulkan::fail_texture_allocations(-1);
+  alloc_failure::reset_counts();
+  gpu.begin();
+  test::vk_call("vkCmdCopyBufferToImage", gpu.command, upload.buffer, texture.image, VK_IMAGE_LAYOUT_GENERAL, 1u,
+                &copy);
+  gpu.barrier(VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+              VK_ACCESS_TRANSFER_READ_BIT);
+  reinterpret_cast<PFN_vkCmdCopyImageToBuffer>(vulkan::raw_device_proc(gpu.device, "vkCmdCopyImageToBuffer"))(
+      gpu.command, texture.image, VK_IMAGE_LAYOUT_GENERAL, decoded.buffer, 1, &copy);
+  gpu.barrier(VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_HOST_BIT,
+              VK_ACCESS_HOST_READ_BIT);
+  gpu.submit();
+  CHECK(alloc_failure::counts().reports == 0);
+  const auto storage = vulkan::texture_storage(format, false, {});
+  REQUIRE(storage.planes.size() == 1);
+  if (storage.planes[0].texel_bytes == 4) {
+    const auto* texels = static_cast<const std::uint8_t*>(decoded.mapped);
+    for (int texel = 0; texel < 32; ++texel) {
+      CAPTURE(texel);
+      CHECK(texels[texel * 4] == 255);
+      CHECK(texels[texel * 4 + 1] == 0);
+      CHECK(texels[texel * 4 + 3] == 255);
+    }
+  }
+  REQUIRE(test::vk_call("vkResetCommandBuffer", gpu.command, 0u) == VK_SUCCESS);
+}
+
 TEST_SUITE_END();
 
-namespace {
-std::shared_future<void> decode_gate;
-std::promise<void>* decode_entered = nullptr;
-PFN_vkGetDeviceProcAddr decode_raw_gdpa = nullptr;
-PFN_vkCreateComputePipelines decode_raw_create = nullptr;
-std::atomic<unsigned> decode_creates{0};
-VkResult VKAPI_CALL gated_decode_create(VkDevice d, VkPipelineCache cache, std::uint32_t count,
-    const VkComputePipelineCreateInfo* info, const VkAllocationCallbacks* allocator, VkPipeline* out) {
-  ++decode_creates;
-  decode_entered->set_value();
-  decode_gate.wait();
-  return decode_raw_create(d, cache, count, info, allocator, out);
-}
-
-}

@@ -16,8 +16,7 @@ using GuestAddr = std::uint64_t;
 
 // Guest instruction set. Exactly one per process, chosen from the APK slice /
 // ELF e_machine before HLE registration and never changed afterwards. A32
-// guests live entirely in the host's low 4 GiB (docs/ARCHITECTURE.md, "ARM32
-// guests"); A64 is the default and its paths are unaffected by A32 support.
+// guests live entirely in the host's low 4 GiB; A64 is the default and its paths are unaffected by A32 support.
 enum class GuestIsa : std::uint8_t { a64, a32 };
 
 template <class T = void>

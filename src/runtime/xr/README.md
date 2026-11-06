@@ -92,22 +92,40 @@ session's real space warp state, so titles render every frame at the host rate.
   runtime and headset) stands in, so games do not start at Android's 90 Hz.
   Unsupported Meta features are hidden except for the upstream
   `XR_FB_passthrough` compatibility declaration: without a usable backend its
-  properties report unsupported and creation fails. A64 passthrough is available through a
-  real host extension or the experimental Steam Link reconstruction backend
-  selected in **Settings → Runtime → Passthrough (mixed reality)**. `configure_game`
-  captures `VENTURE_PASSTHROUGH=1` before XR initialization (unset or `0` disables
-  both backends); no file
-  I/O or environment lookup occurs in the frame-time selector. See
-  [mixed reality](../../../docs/MIXED_REALITY.md) for its supported
-  layouts, test evidence and hardware validation status. There are no fabricated
+  properties report unsupported and creation fails. A64 passthrough is on by
+  default and uses the first backend the host offers that starts: host
+  `XR_FB_passthrough` (forwarded), host `XR_HTC_passthrough` (planar layers), an
+  `ALPHA_BLEND` or `ADDITIVE` environment blend mode, an OpenVR headset camera
+  (`tracked_camera.h`, Windows), or, temporarily, the Steam Link native
+  passthrough companion over its SBN1 pipe (`passthrough_source.h`,
+  `passthrough_source_sbn1.h`, Windows); an opt-in color key replaces them all
+  (`hle/openxr/passthrough.cpp`, probed once per host instance). `configure_game`
+  captures `VENTURE_PASSTHROUGH` before XR initialization (`0` turns every
+  backend off); no file I/O or environment lookup occurs in the frame-time selector. See
+  [Mixed Reality](https://github.com/Villagers654/Venture/wiki/Mixed-Reality) on the wiki for supported
+  setups. There are no fabricated
   sensor-valid flags or successful stubs for unavailable camera effects.
 - POSIX platform implementations are present, but no Linux build was run on
   this Windows machine (WSL is not installed).
 
-The optional `VENTURE_MENU_CHORD=stick-clicks` fallback holds both controller stick
-(or mapped trackpad) clicks for 500 ms and presses the left-hand menu until a
-click releases, so games that need the menu held (height calibration) work.
-Release both clicks to rearm. Focus loss or inactive inputs cancel the hold.
-It applies to VrApi and OpenXR and preserves ordinary game clicks; overlapping
-game bindings produce a warning. Its host action set has priority zero, so a
-game's higher-priority binding can make the fallback unavailable.
+Controller bindings follow the player's controls (the launcher's Controls page). The launcher passes them in
+`VENTURE_CONTROLS` (JSON, only what differs from the defaults in
+`src/common/controls.h`); `xr/bindings.cpp` translates every Touch path a game
+suggests onto each host controller profile the runtime defines (the profile's
+extension enabled), with trackpad halves through `XR_EXT_dpad_binding` when the
+host has it. A host that refuses a path gets the suggestion again without touch
+sensors, then with only the controller's listed inputs.
+
+The game's menu is bound where the player put it when that is a left-hand
+button; any other choice (a right-hand button, a held button, two buttons held
+together) is synthesized by `xr/menu_chord.cpp`: a priority-zero Venture action
+set reads the chosen inputs and presses the game's menu once they are held for
+the chosen time, until one releases, so menu holds (height calibration) work.
+Release both to rearm. Focus loss or inactive inputs cancel the hold. The
+buttons still reach the game, and a game's higher-priority binding on them can
+hide them from the menu. Automatic adds the old stick-click fallback (both
+stick clicks held 500 ms) where the host leaves a game's menu unbound;
+`VENTURE_MENU_CHORD=off` disables that fallback and `=stick-clicks` forces it on
+every automatic controller (developer overrides; the launcher no longer sets
+them). The runtime reports the controllers it sees to `VENTURE_CONTROLLER_REPORT`
+(the launcher's Connected and Last used tags).

@@ -144,6 +144,7 @@ jlong JNICALL open_input(JNIEnv* env, jclass, jint rate, jint channels, jint enc
   return guard(env, [&]() -> jlong {
     audio::Config c;
     c.api = "AudioRecord";
+    c.follow_default_input = true;
     c.direction = audio::Direction::input;
     c.rate = rate; c.channels = channels;
     switch (encoding) {

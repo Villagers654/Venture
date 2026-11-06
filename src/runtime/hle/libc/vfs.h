@@ -199,7 +199,9 @@ std::int64_t syscall_impl(GuestThread&, std::uint64_t, const std::uint64_t*);
 // OS operations are implemented only in platform/{win32,posix}/libc_*.cpp.
 namespace host {
 // True only when mount-relative components cannot redirect to another path.
-bool unredirected_path(const std::filesystem::path& root, const std::filesystem::path& path);
+// *error becomes -ENOTDIR when a component before the last is a file, as Linux
+// fails such a lookup.
+bool unredirected_path(const std::filesystem::path& root, const std::filesystem::path& path, int* error);
 int exists(const std::filesystem::path&, bool follow);
 std::shared_ptr<File> open(const MappedPath&, int, std::uint32_t, int* error);
 // Native Java descriptor bridge: create an owned, read-only open description.

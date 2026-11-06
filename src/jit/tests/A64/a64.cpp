@@ -3084,6 +3084,406 @@ TEST_CASE("A64: cold abort state under full register pressure", "[a64][ir-pass]"
     }
 }
 
+TEST_CASE("A64: spilled register reads reload from guest state until the register is written", "[a64][ir-pass]") {
+    // Eleven register copies keep the reads of their sources live, so most spill; a
+    // spill of a register read stores nothing and reloads its JitState slot. x5 is
+    // written while its read is still needed (through x26), and the abort exit of a
+    // failed load stores reads into registers written again after the access.
+    using Mode = A64::UserConfig::ColdAbortState;
+    constexpr u64 bad = 0x8000'0000'0000'0000ULL;
+    struct AbortEnv : A64TestEnv {
+        A64::Jit* jit = nullptr;
+        u64 MemoryRead(u64 vaddr, size_t size) override {
+            if (vaddr == bad) {
+                jit->HaltExecution(HaltReason::MemoryAbort);
+                return 0;
+            }
+            return A64TestEnv::MemoryRead(vaddr, size);
+        }
+    };
+    constexpr std::array<u32, 11> sources{2, 3, 4, 6, 11, 12, 14, 5, 15, 16, 7};
+    constexpr std::array<u32, 11> copies{17, 18, 21, 22, 23, 24, 25, 26, 27, 28, 13};
+    const auto mov = [](u32 d, u32 n) { return 0xaa0003e0u | (n << 16) | d; };   // mov xD, xN
+    const auto add = [](u32 m) { return 0x8b000000u | (m << 16) | (29u << 5) | 29u; };  // add x29, x29, xM
+    std::vector<u32> code;
+    for (size_t i = 0; i < sources.size(); ++i)
+        code.push_back(mov(copies[i], sources[i]));
+    for (size_t i = 0; i < 5; ++i)
+        code.push_back(add(copies[i]));
+    code.push_back(mov(5, 29));
+    const size_t access_index = code.size();
+    code.push_back(0xf9400001);  // ldr x1, [x0]
+    for (size_t i = 5; i < copies.size(); ++i)
+        code.push_back(add(copies[i]));
+    code.push_back(mov(copies.back(), 29));
+    code.push_back(0x14000000);  // b .
+
+    std::array<u64, 31> initial{};
+    for (unsigned i = 0; i < 31; ++i)
+        initial[i] = 0x0123'4567'89ab'cdefULL * (i + 3) ^ (u64(i) << 40);
+    // The architectural result, up to the access and to the end.
+    auto x = initial;
+    for (size_t i = 0; i < sources.size(); ++i)
+        x[copies[i]] = x[sources[i]];
+    for (size_t i = 0; i < 5; ++i)
+        x[29] += x[copies[i]];
+    x[5] = x[29];
+    const auto at_access = x;
+    for (size_t i = 5; i < copies.size(); ++i)
+        x[29] += x[copies[i]];
+    x[copies.back()] = x[29];
+    const auto at_end = x;
+
+    for (const bool abort : {false, true})
+    for (const bool fastmem : {false, true})
+    for (const bool cache : {false, true}) {
+        if (cache && !fastmem)
+            continue;
+        for (const auto mode : {Mode::Off, Mode::Live, Mode::All}) {
+            INFO("abort " << abort << " fastmem " << fastmem << " cache " << cache << " mode " << int(mode));
+            AbortEnv env;
+            env.code_mem = code;
+            A64::UserConfig config{};
+            config.callbacks = &env;
+            config.check_halt_on_memory_access = true;
+            config.cold_memory_abort_state = mode;
+            if (fastmem) {
+                config.fastmem_pointer = 0;
+                config.fastmem_address_space_bits = 64;
+                config.silently_mirror_fastmem = false;
+                config.enable_register_cache = cache;
+            }
+            A64::Jit jit{config};
+            env.jit = &jit;
+            std::array<u64, 2> word{0x1122'3344'5566'7788ULL, 0};
+            auto start = initial;
+            start[0] = abort ? bad : (fastmem ? reinterpret_cast<u64>(word.data()) : 0x1000);
+            for (unsigned i = 0; i < 31; ++i)
+                jit.SetRegister(i, start[i]);
+            env.ticks_left = code.size();
+            const auto halt = jit.Run();
+            auto expected = abort ? at_access : at_end;
+            expected[0] = start[0];
+            if (abort) {
+                REQUIRE(Has(halt, HaltReason::MemoryAbort));
+                CHECK(jit.GetPC() == access_index * 4);
+            } else {
+                expected[1] = fastmem ? word[0] : env.MemoryRead(0x1000, 8);
+                CHECK(jit.GetPC() == (code.size() - 1) * 4);
+            }
+            const auto got = jit.GetRegisters();
+            for (unsigned i = 0; i < 31; ++i) {
+                INFO("x" << i);
+                CHECK(got[i] == expected[i]);
+            }
+        }
+    }
+}
+
+TEST_CASE("A64: narrow loads and spilled words read as doublewords are zero-extended", "[a64]") {
+    // LDRB/LDRH results and 32-bit sums stay live together, so many spill, then each
+    // is read as a doubleword (forwarded W writes are ZeroExtendWordToLong). Memory
+    // bytes and the operands' upper halves are nonzero, so a missing extension shows.
+    std::vector<u32> code;
+    for (u32 t = 1; t <= 9; ++t) {
+        if (t % 2)
+            code.push_back(0x79400000u | (t << 10) | t);  // ldrh wT, [x0, #2*T]
+        else
+            code.push_back(0x39400000u | ((3 * t) << 10) | t);  // ldrb wT, [x0, #3*T]
+    }
+    for (u32 d = 10; d <= 20; ++d)
+        code.push_back(0x0b000000u | (22u << 16) | (d << 5) | d);  // add wD, wD, w22
+    for (u32 r = 1; r <= 20; ++r) {
+        code.push_back(0x8b000000u | (r << 16) | (21u << 5) | 21u);  // add x21, x21, xR
+        code.push_back(0xd37ff800u | (21u << 5) | 21u);                // lsl x21, x21, #1
+    }
+    code.push_back(0x14000000);  // b .
+
+    std::array<u8, 64> buffer;
+    for (size_t i = 0; i < buffer.size(); ++i)
+        buffer[i] = u8(0xf1 + 7 * i);
+    std::array<u64, 31> initial{};
+    for (unsigned i = 0; i < 31; ++i)
+        initial[i] = 0xfedc'ba98'7654'3210ULL * (i + 5) ^ (u64(i) << 36);
+
+    for (const bool fastmem : {false, true})
+    for (const bool cache : {false, true}) {
+        if (cache && !fastmem)
+            continue;
+        INFO("fastmem " << fastmem << " cache " << cache);
+        A64TestEnv env;
+        env.code_mem = code;
+        A64::UserConfig config{};
+        config.callbacks = &env;
+        if (fastmem) {
+            config.fastmem_pointer = 0;
+            config.fastmem_address_space_bits = 64;
+            config.silently_mirror_fastmem = false;
+            config.enable_register_cache = cache;
+        }
+        A64::Jit jit{config};
+        auto x = initial;
+        x[0] = fastmem ? reinterpret_cast<u64>(buffer.data()) : 0x10f0;
+        for (unsigned i = 0; i < 31; ++i)
+            jit.SetRegister(i, x[i]);
+        const auto read = [&](u64 offset, size_t size) -> u64 {
+            if (!fastmem)
+                return env.MemoryRead(x[0] + offset, size);
+            return size == 1 ? buffer[offset] : u64(buffer[offset]) | u64(buffer[offset + 1]) << 8;
+        };
+        for (u32 t = 1; t <= 9; ++t)
+            x[t] = t % 2 ? read(2 * t, 2) : read(3 * t, 1);
+        for (u32 d = 10; d <= 20; ++d)
+            x[d] = u32(x[d] + x[22]);
+        for (u32 r = 1; r <= 20; ++r)
+            x[21] = (x[21] + x[r]) << 1;
+        env.ticks_left = code.size();
+        jit.Run();
+        CHECK(jit.GetPC() == (code.size() - 1) * 4);
+        const auto got = jit.GetRegisters();
+        for (unsigned i = 0; i < 31; ++i) {
+            INFO("x" << i);
+            CHECK(got[i] == x[i]);
+        }
+    }
+}
+
+TEST_CASE("A64: ALU and variable shift operands read from spill slots and register homes", "[a64]") {
+    // Random register-register programs over x0-x28 keep more values live than
+    // there are host registers, so operands are spilled (or never loaded from their
+    // JitState home) when an ALU op or variable shift reads them from memory.
+    constexpr u32 ops[] = {
+        0x8b000000, 0x0b000000,  // add
+        0xcb000000, 0x4b000000,  // sub
+        0x8a000000, 0x0a000000,  // and
+        0xaa000000, 0x2a000000,  // orr
+        0xca000000, 0x4a000000,  // eor
+        0xeb000000, 0x6b000000,  // subs
+        0xab000000, 0x2b000000,  // adds
+        0x9ac02000, 0x1ac02000,  // lslv
+        0x9ac02400, 0x1ac02400,  // lsrv
+        0x9ac02800, 0x1ac02800,  // asrv
+        0x9ac02c00, 0x1ac02c00,  // rorv
+        0x93c00000, 0x13800000,  // ror (immediate): extr with both sources the same register
+    };
+    u64 seed = 0x2545'f491'4f6c'dd1dULL;
+    const auto next = [&] {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        return seed;
+    };
+    for (int program = 0; program < 24; ++program) {
+        std::vector<u32> code;
+        std::array<u64, 31> x{};
+        for (unsigned i = 0; i < 31; ++i)
+            x[i] = next() >> (next() % 64 < 8 ? next() % 64 : 0);
+        const auto initial = x;
+        u32 nzcv = 0;
+        for (int n = 0; n < 160; ++n) {
+            const size_t op = next() % std::size(ops);
+            const bool is64 = op % 2 == 0;
+            const u32 d = u32(next() % 29), a = u32(next() % 29);
+            const u32 rotate = u32(next() % (is64 ? 64 : 32));
+            const u32 b = op / 2 == 11 ? a : u32(next() % 29);
+            code.push_back(ops[op] | (b << 16) | (a << 5) | d | (op / 2 == 11 ? rotate << 10 : 0));
+            const u64 mask = is64 ? ~u64(0) : 0xffff'ffffULL;
+            const unsigned width = is64 ? 64 : 32;
+            const u64 va = x[a] & mask, vb = x[b] & mask;
+            const unsigned amount = op / 2 == 11 ? rotate : unsigned(vb % width);
+            u64 r = 0;
+            switch (op / 2) {
+            case 0: r = va + vb; break;
+            case 1: r = va - vb; break;
+            case 2: r = va & vb; break;
+            case 3: r = va | vb; break;
+            case 4: r = va ^ vb; break;
+            case 5:
+            case 6: {
+                const bool sub = op / 2 == 5;
+                const u64 vbx = sub ? ~vb & mask : vb;
+                const u64 wide = va + vbx + (sub ? 1 : 0);
+                r = wide & mask;
+                const u64 top = u64(1) << (width - 1);
+                const bool carry = is64 ? (sub ? va >= vb : r < va) : (wide >> 32) != 0;
+                const bool overflow = ((va ^ r) & (vbx ^ r) & top) != 0;
+                nzcv = (r & top ? 8u : 0u) | (r == 0 ? 4u : 0u) | (carry ? 2u : 0u) | (overflow ? 1u : 0u);
+                break;
+            }
+            case 7: r = (va << amount) & mask; break;
+            case 8: r = va >> amount; break;
+            case 9: r = is64 ? u64(s64(va) >> amount) : u64(u32(s32(u32(va)) >> amount)); break;
+            case 10:
+            case 11: r = amount ? ((va >> amount) | (va << (width - amount))) & mask : va; break;
+            }
+            x[d] = r & mask;
+        }
+        code.push_back(0x14000000);  // b .
+
+        for (const bool cache : {false, true}) {
+            INFO("program " << program << " cache " << cache);
+            A64TestEnv env;
+            env.code_mem = code;
+            A64::UserConfig config{};
+            config.callbacks = &env;
+            if (cache) {
+                config.fastmem_pointer = 0;
+                config.fastmem_address_space_bits = 64;
+                config.silently_mirror_fastmem = false;
+                config.enable_register_cache = true;
+            }
+            A64::Jit jit{config};
+            for (unsigned i = 0; i < 31; ++i)
+                jit.SetRegister(i, initial[i]);
+            jit.SetPstate(0);
+            env.ticks_left = code.size();
+            jit.Run();
+            CHECK(jit.GetPC() == (code.size() - 1) * 4);
+            const auto got = jit.GetRegisters();
+            for (unsigned i = 0; i < 31; ++i) {
+                INFO("x" << i);
+                CHECK(got[i] == x[i]);
+            }
+            CHECK((jit.GetPstate() >> 28) == nzcv);
+        }
+    }
+}
+
+TEST_CASE("A64: register-offset accesses with folded index operands and their fault paths", "[a64]") {
+    // [Xn, Xm] accesses of every size, stores whose value is the base or the index,
+    // base and index in one register, then reads of base and index. With identity
+    // fastmem the add is folded into the operand; an access through a non-canonical
+    // address faults into the fallback, which must see the full address and restore
+    // the base, whether the access completes (a callback value) or aborts.
+    constexpr u64 bad = 0x8000'0000'0000'0000ULL;
+    struct Env : A64TestEnv {
+        A64::Jit* jit = nullptr;
+        bool abort = false;
+        std::vector<u64> faults;
+        u64 MemoryRead(u64 vaddr, size_t size) override {
+            if (vaddr >= bad) {
+                faults.push_back(vaddr);
+                if (abort) jit->HaltExecution(HaltReason::MemoryAbort);
+                return 0x0123'4567'89ab'cdefULL & (size == 8 ? ~u64(0) : (u64(1) << (8 * size)) - 1);
+            }
+            return A64TestEnv::MemoryRead(vaddr, size);
+        }
+    };
+    const auto rr = [](u32 base_op, u32 t, u32 n, u32 m) { return base_op | (m << 16) | (n << 5) | t; };
+    constexpr u32 LDRX = 0xf8606800, LDRW = 0xb8606800, LDRH = 0x78606800, LDRB = 0x38606800;
+    constexpr u32 STRX = 0xf8206800, STRH = 0x78206800, LDRQ = 0x3ce06800, STRQ = 0x3ca06800;
+    constexpr u32 STRW = 0xb8206800, LSL = 1 << 12;  // LSL: the index shifted by the access size
+    const std::vector<u32> code{
+        rr(LDRX, 10, 2, 3),  // ldr x10, [x2, x3]
+        rr(LDRH, 11, 2, 4),  // ldrh w11, [x2, x4]
+        rr(LDRB, 12, 2, 5),  // ldrb w12, [x2, x5]
+        rr(LDRW, 13, 2, 6),  // ldr w13, [x2, x6]
+        rr(STRX, 10, 2, 7),  // str x10, [x2, x7]
+        rr(STRX, 2, 2, 8),   // str x2, [x2, x8]   (value is the base)
+        rr(STRH, 8, 2, 8),   // strh w8, [x2, x8]  (value is the index)
+        rr(LDRX, 14, 9, 9),  // ldr x14, [x9, x9]  (base and index in one register)
+        rr(LDRQ, 0, 2, 3),   // ldr q0, [x2, x3]
+        rr(STRQ, 0, 2, 15),  // str q0, [x2, x15]
+        rr(LDRX | LSL, 18, 2, 19),  // ldr x18, [x2, x19, lsl #3]
+        rr(LDRH | LSL, 20, 2, 21),  // ldrh w20, [x2, x21, lsl #1]
+        rr(STRW | LSL, 13, 2, 22),  // str w13, [x2, x22, lsl #2]
+        0x8b030050,          // add x16, x2, x3
+        0x8b080051,          // add x17, x2, x8
+        0x14000000,          // b .
+    };
+    alignas(16) std::array<u8, 256> initial_memory;
+    for (size_t i = 0; i < initial_memory.size(); ++i) initial_memory[i] = u8(0x9d + 37 * i);
+
+    for (const bool cache : {false, true})
+    for (const int fault : {0, 1, 2}) {  // 0: none, 1: x10's load faults and completes, 2: it aborts
+        INFO("cache " << cache << " fault " << fault);
+        alignas(16) std::array<u8, 256> memory = initial_memory;
+        Env env;
+        env.code_mem = code;
+        env.abort = fault == 2;
+        A64::UserConfig config{};
+        config.callbacks = &env;
+        config.check_halt_on_memory_access = true;
+        config.fastmem_pointer = 0;
+        config.fastmem_address_space_bits = 64;
+        config.silently_mirror_fastmem = false;
+        config.recompile_on_fastmem_failure = false;
+        config.enable_register_cache = cache;
+        A64::Jit jit{config};
+        env.jit = &jit;
+        const u64 base = reinterpret_cast<u64>(memory.data());
+        std::array<u64, 31> x{};
+        for (unsigned i = 0; i < 31; ++i) x[i] = 0x5a5a'0000'0000'0000ULL | i;
+        x[2] = base; x[3] = 16; x[4] = 34; x[5] = 51; x[6] = 60; x[7] = 72; x[8] = 88; x[9] = base / 2; x[15] = 112;
+        x[19] = 4; x[21] = 20; x[22] = 24;
+        if (fault) { x[2] = bad - 8; x[3] = 8; }
+        for (unsigned i = 0; i < 31; ++i) jit.SetRegister(i, x[i]);
+        jit.SetVector(0, {0x1111'1111'1111'1111ULL, 0x2222'2222'2222'2222ULL});
+        env.ticks_left = code.size();
+        const auto halt = jit.Run();
+        const auto got = jit.GetRegisters();
+        const auto load = [&](u64 offset, size_t size) {
+            u64 v = 0;
+            std::memcpy(&v, initial_memory.data() + offset, size);
+            return v;
+        };
+        if (fault == 2) {
+            REQUIRE(Has(halt, HaltReason::MemoryAbort));
+            CHECK(jit.GetPC() == 0);
+            CHECK(env.faults == std::vector<u64>{bad});
+            CHECK(got == x);  // nothing retired: the base and index are intact
+            continue;
+        }
+        if (fault == 1) {
+            // Every access through x2 faults and completes through the callbacks.
+            constexpr u64 value = 0x0123'4567'89ab'cdefULL;
+            CHECK(jit.GetPC() == (code.size() - 1) * 4);
+            CHECK(env.faults.front() == bad);
+            CHECK(got[10] == value);
+            CHECK(got[11] == (value & 0xffff));
+            CHECK(got[12] == (value & 0xff));
+            CHECK(got[13] == (value & 0xffff'ffff));
+            CHECK(got[2] == bad - 8);
+            CHECK(got[3] == 8);
+            CHECK(got[8] == x[8]);
+            CHECK(got[16] == bad);
+            CHECK(got[17] == bad - 8 + 88);
+            CHECK(got[14] == load(0, 8));
+            CHECK(got[18] == value);
+            CHECK(got[20] == (value & 0xffff));
+            CHECK(got[19] == 4);
+            CHECK(got[21] == 20);
+            CHECK(got[22] == 24);
+            continue;
+        }
+        auto expected = x;
+        auto model = initial_memory;
+        expected[10] = load(16, 8);
+        expected[11] = load(34, 2);
+        expected[12] = load(51, 1);
+        expected[13] = load(60, 4);
+        std::memcpy(model.data() + 72, &expected[10], 8);
+        std::memcpy(model.data() + 88, &x[2], 8);
+        const u16 index16 = u16(x[8]);
+        std::memcpy(model.data() + 88, &index16, 2);
+        expected[14] = load(0, 8);  // [x9 + x9] is the buffer's start
+        std::memcpy(model.data() + 112, model.data() + 16, 16);
+        expected[18] = load(32, 8);
+        expected[20] = load(40, 2);
+        const u32 word13 = u32(expected[13]);
+        std::memcpy(model.data() + 96, &word13, 4);
+        expected[16] = x[2] + x[3];
+        expected[17] = x[2] + x[8];
+        CHECK(jit.GetPC() == (code.size() - 1) * 4);
+        for (unsigned i = 0; i < 31; ++i) {
+            INFO("x" << i);
+            CHECK(got[i] == expected[i]);
+        }
+        CHECK(memory == model);
+        CHECK(env.faults.empty());
+    }
+}
+
 TEST_CASE("A64: SQSHLU saturates byte halfword and doubleword lanes", "[a64]") {
     // The 8/16-bit fallback shifted after integer promotion (bits shifted out
     // of the lane were never seen, so nothing saturated) and the 64-bit one

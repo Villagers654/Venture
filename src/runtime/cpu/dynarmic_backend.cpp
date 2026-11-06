@@ -2,11 +2,14 @@
 #include "cpu/outlined_atomics.h"
 #include "cpu/invalidation_gate.h"
 #include "cpu/block_list.h"
+#include "cpu/portable_cache.h"
+#include "cpu/pretranslate.h"
 #include <utility>
 #include "cpu/a32_backend.h"
 #include "common/environment.h"
 #include "common/log.h"
 #include "core/process.h"
+#include "core/alloc_failure.h"
 #include "core/address_space.h"
 #include "core/hle_runtime.h"
 #include "core/thread.h"
@@ -166,6 +169,7 @@ class DynarmicCpu final : public Cpu, private Dynarmic::A64::UserCallbacks {
     // Keep load-time translations when the busiest thread exceeds 128 MiB.
     // This is a bounded reservation; the section commits pages only on emission.
     config.code_cache_size = 256 * 1024 * 1024;
+    config.code_allocation_failed = alloc_failure::jit_code_refused;
     config.cntfrq_el0 = 1'000'000'000;
     config.ctr_el0 = 0x8444c004;  // 64-byte instruction/data lines.
     config.dczid_el0 = 0x10;     // DZP: the initial profile forbids DC ZVA.
@@ -252,12 +256,25 @@ class DynarmicCpu final : public Cpu, private Dynarmic::A64::UserCallbacks {
       config.nzcv_exit_liveness = false;
       config.inline_outlined_atomics = false;
     }
+    if (auto* blocks = PortableBlockCache::get()) {
+      // Every block a guest thread translates or installs seeds background translation of its successors.
+      config.portable_block_sink = [blocks](std::uint64_t descriptor, const std::uint8_t* data, std::size_t size) {
+        blocks->store(descriptor, data, size);
+        pretranslate::reached(descriptor);
+      };
+      config.portable_block_source = [blocks](std::uint64_t descriptor) {
+        const auto found = blocks->find(descriptor);
+        if (found.first) pretranslate::reached(descriptor);
+        return found;
+      };
+    }
     jit_bits_ = config.fast_dispatch_table_bits;
     jit_ = std::make_unique<Dynarmic::A64::Jit>(config);
     cache_begin_ = reinterpret_cast<std::uintptr_t>(jit_->CodeCacheBegin());
     cache_end_ = cache_begin_ + jit_->CodeCacheSize();
   }
   ~DynarmicCpu() override {
+    pretranslate::flush_reached();  // a thread that ends without ever waiting
     if (census_) log_census();
     JitBlockList::retire(std::move(block_list_));
     std::lock_guard lock(backend_.mutex);
@@ -286,19 +303,52 @@ class DynarmicCpu final : public Cpu, private Dynarmic::A64::UserCallbacks {
   }
   void request_halt() override { external_halt_.store(true); jit_->HaltExecution(HaltReason::UserDefined2); }
   JitBlockList detach_jit_hints() noexcept override { return std::exchange(block_list_, JitBlockList{}); }
-  void prepare_call(GuestAddr entry) override {
-    if (!hints_ || block_list_.prepared() || jit_->IsExecuting() || external_halt_.load()) return;
-    // Hold the gate only while compiling: the hint snapshot may wait on files,
-    // and an invalidating thread must not wait on that.
-    bool entered = false;
+  bool pretranslate(std::uint64_t descriptor) noexcept override {
+    invalidations_->enter([&](GuestAddr p, std::uint64_t n) { jit_->InvalidateCacheRange(p, n); });
+    struct Leave { DynarmicCpu* cpu; ~Leave() { cpu->acknowledge_stop(); } } leave{this};
     try {
-      block_list_.prepare(entry, false, [&](std::uint64_t descriptor) {
-        if (!entered) { invalidations_->enter([&](GuestAddr p, std::uint64_t n) { jit_->InvalidateCacheRange(p, n); }); entered = true; }
-        return !external_halt_.load() && jit_->Precompile(descriptor);
-      });
+      // Only the captured copy matters: the code cache is cleared often, so it commits little memory.
+      if (++pretranslated_ % 16384 == 0) jit_->ClearCache();
+      if (jit_->Precompile(descriptor)) return true;
+      jit_->ClearCache();
+      return jit_->Precompile(descriptor);
+    } catch (...) {
+      return false;  // Precompile has requested a clear; the next call performs it.
     }
-    catch (...) { if (entered) acknowledge_stop(); throw; }
-    if (entered) acknowledge_stop();
+  }
+  void set_thread_name(std::string_view name) override { if (hints_) block_list_.name(name, false); }
+  void idle(const std::function<bool()>& stop) noexcept override {
+    pretranslate::flush_reached();
+    if (!hints_ || external_halt_.load()) return;
+    const auto begin = monotonic_ns();
+    // The guest's main thread never exits: its hints are saved from here, by copy.
+    if (block_list_.snapshot_due(begin)) {
+      try { JitBlockList::retire(block_list_.snapshot(begin)); } catch (...) {}
+    }
+    if (!block_list_.hints_pending()) return;
+    // Outside Run the gate must be held, as for any compile; inside, the run already holds it.
+    const bool outside = !jit_->IsExecuting();
+    if (outside) invalidations_->enter([&](GuestAddr p, std::uint64_t n) { jit_->InvalidateCacheRange(p, n); });
+    struct Leave { DynarmicCpu* cpu; bool outside; ~Leave() { if (outside) cpu->acknowledge_stop(); } } leave{this, outside};
+    // Installing the thread's remaining hints here keeps them off its busy frames.
+    JitBlockList::Scope scope(nullptr);
+    std::uint64_t descriptor;
+    bool more = true;
+    try {
+      if (!hints_reserved_) {
+        hints_reserved_ = true;
+        jit_->ReserveBlocks(block_list_.pending_hint_count());
+      }
+      while (!stop() && (more = block_list_.next_hint(descriptor))) {
+        ++idle_hints_;
+        if (AddressSpace::get().is_guest_executable(descriptor & 0x00ffffffffffffffull) && !jit_->PrecompileIdle(descriptor)) break;
+      }
+    } catch (...) {} // Hints are optional; a failed compile has already requested a cache clear.
+    idle_ns_ += monotonic_ns() - begin;
+    if (!more && idle_hints_) {
+      log::info("jit", "Installed {} hints in {} ms of idle time", idle_hints_, idle_ns_ / 1'000'000);
+      idle_hints_ = 0;
+    }
   }
   std::pair<std::shared_ptr<InvalidationGate>, std::uint64_t> queue_invalidation(GuestAddr p, std::uint64_t n) {
     return {invalidations_, invalidations_->queue(p, n, [&] { jit_->HaltExecution(HaltReason::UserDefined3); })};
@@ -353,6 +403,10 @@ class DynarmicCpu final : public Cpu, private Dynarmic::A64::UserCallbacks {
   std::atomic<bool> external_halt_{false};
   JitBlockList block_list_;
   const bool hints_ = JitBlockList::enabled(); // Read once per CPU, not per run.
+  std::uint64_t idle_hints_ = 0;
+  std::int64_t idle_ns_ = 0;
+  bool hints_reserved_ = false;
+  std::uint64_t pretranslated_ = 0;
   void acknowledge_stop() { invalidations_->leave(); }
   // VENTURE_JIT_DISPATCH_CENSUS=1: cumulative per-thread dispatch and callback counts.
   struct Census {
@@ -453,6 +507,22 @@ class DynarmicCpu final : public Cpu, private Dynarmic::A64::UserCallbacks {
     // Translation reads every instruction once. Use a plain guarded load, not a
     // ReadProcessMemory call per instruction; a racing unmap still faults precisely.
     if (!AddressSpace::get().is_guest_executable(address) || !platform::guarded_load32(address, insn)) return std::nullopt;
+    return rewrite_code(insn);
+  }
+  void MemoryReadCodeWords(VAddr address, std::uint32_t* out, std::size_t count) override {
+    // Cached-block checks read whole blocks: test executability once per page.
+    const auto& space = AddressSpace::get();
+    for (std::size_t i = 0; i < count;) {
+      const VAddr page_end = (address | (kGuestPageSize - 1)) + 1;
+      const std::size_t n = std::min<std::size_t>(count - i, (page_end - address) / 4);
+      const bool executable = space.is_guest_executable(address);
+      for (std::size_t k = 0; k < n; ++k, ++i, address += 4) {
+        std::uint32_t insn{};
+        out[i] = executable && platform::guarded_load32(address, insn) ? rewrite_code(insn) : 0;
+      }
+    }
+  }
+  static std::uint32_t rewrite_code(std::uint32_t insn) {
     // CNTVCT has the same clock domain here as CNTPCT. This pin only decodes CNTPCT.
     if ((insn & ~31u) == 0xd53be040u) return (insn & 31u) | 0xd53be020u;
     // Arm's backwards-compatible HINT space includes PAC/AUT, BTI and XPACLRI.

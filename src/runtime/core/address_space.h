@@ -81,6 +81,12 @@ class AddressSpace {
   // Runtime-owned guest memory (stacks, TLS, thunks, data symbols).
   GuestAddr allocate(std::uint64_t size, std::uint32_t prot, std::string_view name,
                      std::uint64_t alignment = kGuestPageSize);
+  // Runtime-owned memory at `preferred` when that range is free, else as allocate.
+  GuestAddr allocate_preferred(GuestAddr preferred, std::uint64_t size, std::uint32_t prot, std::string_view name,
+                               std::uint64_t alignment = kGuestPageSize);
+  // A stable address for a library named `soname` (allocate_preferred): the same
+  // library loads at the same address in every run, so translated code persists.
+  GuestAddr library_slot(std::string_view soname, std::uint64_t size, std::uint64_t alignment);
   // Runtime-owned memory at exactly `address`, replacing what the guest mapped
   // there (a library loaded into a range the guest reserved for it).
   GuestAddr allocate_at(GuestAddr address, std::uint64_t size, std::uint32_t prot, std::string_view name);

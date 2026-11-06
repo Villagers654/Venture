@@ -58,8 +58,20 @@ public class Dialog implements android.content.DialogInterface {
   protected void onStart() {}
   protected void onStop() {}
   public android.window.OnBackInvokedDispatcher getOnBackInvokedDispatcher() { return window.getOnBackInvokedDispatcher(); }
+  // A headset shows a dialog as a panel the player answers. Venture has no
+  // panel for it, so the dialog is shown as far as the game can tell (onShow,
+  // isShowing) and logged for the launcher, which names it as the reason if
+  // the game then closes (library::game_dialog).
   public void show() {
-    throw new UnsupportedOperationException("Host dialog presentation unavailable: " + title);
+    if (showing) return;
+    showing = true;
+    android.util.Log.w("dialog", "Shown without presentation: " + summary());
+    if (showListener != null) showListener.onShow(this);
+  }
+  CharSequence title() { return title; }
+  String summary() {
+    var text = title == null ? "" : title.toString();
+    return text.isEmpty() ? "(untitled)" : text.replace('\n', ' ');
   }
   // AOSP hides the decor view of a shown dialog; nothing is presented here.
   public void hide() {}

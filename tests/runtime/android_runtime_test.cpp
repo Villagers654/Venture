@@ -302,3 +302,28 @@ TEST_CASE("android choreographer executes on looper and refresh carries the int6
   test::android_remove_callback(frame_cb);
   test::android_remove_callback(refresh_cb);
 }
+TEST_CASE("android choreographer runs a frame callback at the next vsync when the display phase lies ahead") {
+  // An unpaced runtime predicts display times many periods ahead; Unity's
+  // TERM_WINDOW handler waits for one frame callback (Open Brush quit hang).
+  auto* l = prepare_looper(1);
+  display_vsync(0, 11111111);                                // rephase on the next frame time
+  display_vsync(monotonic_ns() + 30'000'000'000, 11111111);  // 30 s ahead
+  auto c = call("AChoreographer_getInstance");
+  REQUIRE(c);
+  bool frame = false;
+  auto frame_cb = test::android_callback([&](const GuestCallArgs& args) {
+    CHECK(args.integers[0] <= static_cast<std::uint64_t>(monotonic_ns()));
+    frame = true;
+    return GuestCallResult{};
+  });
+  const auto posted = monotonic_ns();
+  call("AChoreographer_postFrameCallback64", {c, frame_cb, 19});
+  CHECK(test::wait_until([&] {
+    l->poll(20, nullptr, nullptr, nullptr);
+    return frame;
+  }));
+  CHECK(monotonic_ns() - posted < 1'000'000'000);
+  display_vsync(0, 11111111);
+  display_vsync(monotonic_ns(), 11111111);
+  test::android_remove_callback(frame_cb);
+}

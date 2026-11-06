@@ -84,6 +84,7 @@ TEST_CASE("libc B: VFS roots and path traversal") {
   c.native_lib_dir = root / "lib";
   c.cache_dir = root / "version-cache";
   c.guest_cache_dir = c.data_dir / "cache";
+  c.expansion_files = {"main.obb"};
   MappedPath p;
   CHECK(resolve_path("/data/user/0/test.game/save.bin", at_cwd, &p) == 0);
   CHECK(p.host == root / "data" / "save.bin");
@@ -91,6 +92,24 @@ TEST_CASE("libc B: VFS roots and path traversal") {
   CHECK(resolve_path("/sdcard/Android/obb/test.game/main.obb", at_cwd, &p) == 0);
   CHECK(p.host == root / "obb" / "main.obb");
   CHECK(p.readonly);
+  // The app owns its OBB directory as on Android: files of its own beside the
+  // published expansion files (CRIWARE's unpacked sound banks).
+  CHECK(resolve_path("/sdcard/Android/obb/test.game/MAIN.OBB", at_cwd, &p) == 0);
+  CHECK(p.readonly);
+  CHECK(resolve_path("/sdcard/Android/obb/test.game/Freedom.acf0123", at_cwd, &p) == 0);
+  CHECK(p.host == root / "obb" / "Freedom.acf0123");
+  CHECK_FALSE(p.readonly);
+  CHECK(resolve_path("/storage/emulated/0/Android/obb/test.game", at_cwd, &p) == 0);
+  CHECK_FALSE(p.readonly);
+  {
+    const auto bank = fd_open("/sdcard/Android/obb/test.game/Freedom.acf0123", 1 | 0100 | 01000, 0600);
+    REQUIRE(bank >= 0);
+    CHECK(fd_write(static_cast<int>(bank), "acf", 3) == 3);
+    CHECK(FdTable::get().close(static_cast<int>(bank)) == 0);
+    CHECK(paths::read(root / "obb" / "Freedom.acf0123") == "acf");
+    std::filesystem::remove(root / "obb" / "Freedom.acf0123");
+  }
+  CHECK(fd_open("/sdcard/Android/obb/test.game/main.obb", 1 | 0100, 0600) == -err::erofs);
   for (const char* tail : {"Android/obb/test.game/main.obb", "Android/data/test.game/files/a", "Download/a"}) {
     MappedPath alias, canonical;
     REQUIRE(resolve_path(std::string("/sdcard/") + tail, at_cwd, &alias) == 0);

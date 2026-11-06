@@ -60,7 +60,7 @@ class ConversionTest(unittest.TestCase):
                              (dexsha, len(classes), len(natives)))
             self.assertEqual(report["jar_classes"], 2)
             self.assertEqual(report["jar_natives"], 1)
-            self.assertEqual((Path(report["translation_report"]).parent / "conversion.log").read_text().count("phases "), 2)
+            self.assertEqual((Path(report["translation_report"]).parent / "conversion.log").read_text().count("phases parse="), 2)
             subprocess.run([java_tool("java"), "-Xverify:all", "-cp", java_path(dest / "app.jar"), "First"], check=True)
 
     def test_conversion_verification_rewrites_behavior_and_cache(self):

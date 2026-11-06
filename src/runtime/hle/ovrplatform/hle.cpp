@@ -373,16 +373,27 @@ const std::vector<Export>& table() {
 }
 }  // namespace
 std::span<const Export> exports() { return table(); }
+namespace {
+// Exports built outside this library (the microphone), given to make_library.
+std::vector<Export>& extra_table() {
+  static std::vector<Export> result;
+  return result;
+}
+}  // namespace
 
 namespace {
 void platform32(hle::CallContext& ctx) {
   using namespace hle::a32;
   try {
     const auto& d = *ctx.info().a32;
-    auto found = std::find_if(table().begin(), table().end(),
-                              [&](const Export& e) { return e.name == d.symbol; });
-    if (found == table().end()) throw std::logic_error("A32 Platform export missing");
-    auto fn = found->handler;
+    const auto named = [&](const Export& e) { return e.name == d.symbol; };
+    auto found = std::find_if(table().begin(), table().end(), named);
+    hle::Handler fn = nullptr;
+    if (found != table().end()) fn = found->handler;
+    else if (auto extra = std::find_if(extra_table().begin(), extra_table().end(), named);
+             extra != extra_table().end())
+      fn = extra->handler;
+    if (!fn) throw std::logic_error("A32 Platform export missing");
     ArgCursor32 cursor(ctx.cpu());
     ResultWriter32 result(ctx.cpu());
     std::uint64_t value = 0;
@@ -522,9 +533,11 @@ bool word_signature(hle::Handler fn, const hle::a32::Descriptor& d) {
   });
 }
 }  // namespace
-void register_a32_adapters() {
-  for (const auto& e : exports())
-    if (auto d = hle::a32::descriptor("libovrplatformloader.so", e.name); d && word_signature(e.handler, *d))
-      hle::a32::register_adapter("libovrplatformloader.so", e.name, platform32);
+void register_a32_adapters(std::span<const Export> extra) {
+  extra_table().assign(extra.begin(), extra.end());
+  for (auto exports : {std::span<const Export>(table()), extra})
+    for (const auto& e : exports)
+      if (auto d = hle::a32::descriptor("libovrplatformloader.so", e.name); d && word_signature(e.handler, *d))
+        hle::a32::register_adapter("libovrplatformloader.so", e.name, platform32);
 }
 }  // namespace venture::ovrplatform

@@ -41,9 +41,9 @@ struct Fixture {
 };
 }
 
-TEST_CASE("Passthrough configuration snapshots an explicit launcher environment opt-in") {
+TEST_CASE("Passthrough configuration snapshots the launcher environment: on unless exactly 0") {
   Fixture fixture;
-  Environment data("VENTURE_DATA_DIR"), opt_in("VENTURE_PASSTHROUGH");
+  Environment data("VENTURE_DATA_DIR"), setting("VENTURE_PASSTHROUGH");
   const auto data_dir = fixture.root / "data";
   data.set(paths::utf8(data_dir).c_str());
   const auto install = fixture.root / "game";
@@ -66,13 +66,13 @@ TEST_CASE("Passthrough configuration snapshots an explicit launcher environment 
 
   for (const auto* value : {static_cast<const char*>(nullptr), "", "0", "true", " 1", "1 ", "01", "1"}) {
     INFO("VENTURE_PASSTHROUGH=", value ? value : "<unset>");
-    const bool enabled = value && std::string_view(value) == "1";
+    const bool enabled = !value || std::string_view(value) != "0";
     // Saved launcher settings must not override the child's explicit environment.
-    paths::atomic_write(data_dir / "settings.json", enabled ? R"({"passthrough":false})" : R"({"passthrough":true})");
-    opt_in.set(value);
+    paths::atomic_write(data_dir / "settings.json", enabled ? R"({"mixedReality":false})" : R"({"mixedReality":true})");
+    setting.set(value);
     configure_game(install);
     CHECK(process_config().passthrough == enabled);
-    opt_in.set(enabled ? "0" : "1");
+    setting.set(enabled ? "0" : "1");
     CHECK(process_config().passthrough == enabled);
   }
 }

@@ -9,6 +9,21 @@ struct ProcessMemory { std::uint64_t private_kib = 0, shared_pss_kib = 0; };
 bool process_memory(ProcessMemory& out);
 struct ProcessResidentMemory { std::uint64_t resident_kib = 0, peak_resident_kib = 0; };
 bool process_resident_memory(ProcessResidentMemory& out);
+// Memory this process can still allocate before allocations fail, and the limit it
+// counts against. Windows: commit (RAM plus page file, or a job's limit if lower);
+// GPU drivers that charge video memory to the process draw on it too. Linux:
+// CommitLimit - Committed_AS under strict overcommit, else MemAvailable (and a
+// cgroup memory.max if lower). False when the host cannot say.
+struct MemoryHeadroom { std::uint64_t available = 0, limit = 0; };
+bool memory_headroom(MemoryHeadroom& out);
+// System commit charge and limit and this process's commit (Windows private
+// bytes). Linux: Committed_AS and CommitLimit, enforced only in strict
+// overcommit mode, and the process's anonymous resident plus swapped memory.
+struct CommitCharge {
+  std::uint64_t system_used = 0, system_limit = 0, process = 0;
+  bool enforced = true;
+};
+bool commit_charge(CommitCharge& out);
 bool process_debugger_attached();
 // A hardware user shadow stack (x86 CET) is enforced for the calling thread:
 // every RET must match a CALL, so code may not discard return addresses.

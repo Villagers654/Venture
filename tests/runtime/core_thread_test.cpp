@@ -129,6 +129,42 @@ TEST_CASE("a file save that is the only remaining quit work extends the window t
   longer.posted(posted);
   CHECK_FALSE(longer.expired(posted + 45s, true));
 }
+TEST_CASE("a quit before the first frame whose stop never returned ends cleanly once no guest write is in flight") {
+  using namespace std::chrono_literals;
+  // Reach (UE5): the launcher stop came 2.5 s after GameActivity.onCreate;
+  // onPause waited on the starting engine, so the task-removal stop never
+  // returned (stages 0x8 of 0xf) while every thread was quiet.
+  QuitSample s;
+  s.threads_quiet = true;
+  s.writers_known = true;
+  s.since_write = 3s;
+  CHECK(startup_quit(s, false, false, true) == StartupQuit::end);
+  // A busy engine thread (still loading) does not keep a starting game alive.
+  s.threads_quiet = false;
+  CHECK(startup_quit(s, false, false, true) == StartupQuit::end);
+  // A guest write in flight or within the last second is waited for up to
+  // the save bound, then ends unless a write is still in flight.
+  s.since_write = 200ms;
+  CHECK(startup_quit(s, false, false, true) == StartupQuit::wait);
+  CHECK(startup_quit(s, false, false, false) == StartupQuit::end);
+  s.write_active = true;
+  s.since_write = 5s;
+  CHECK(startup_quit(s, false, false, true) == StartupQuit::wait);
+  CHECK(startup_quit(s, false, false, false) == StartupQuit::not_startup);
+  s.write_active = false;
+  CHECK(startup_quit(s, false, false, true) == StartupQuit::end);
+  // Not a startup quit: a game that showed a frame, whose stop returned, that
+  // is already exiting, or whose data handle census failed keeps the normal
+  // admission.
+  CHECK(startup_quit(s, true, false, true) == StartupQuit::not_startup);
+  CHECK(startup_quit(s, false, true, true) == StartupQuit::not_startup);
+  auto delivered = s;
+  delivered.destroy_delivered = true;
+  CHECK(startup_quit(delivered, false, false, true) == StartupQuit::not_startup);
+  auto unknown = s;
+  unknown.writers_known = false;
+  CHECK(startup_quit(unknown, false, false, true) == StartupQuit::not_startup);
+}
 TEST_CASE("core thread creation, join, exit unwind and TLS surplus") {
   GuestThread parent(90); parent.attach_to_current_host_thread();
   std::array<std::byte, 4> initial{std::byte{1}, std::byte{2}, std::byte{3}, std::byte{4}};

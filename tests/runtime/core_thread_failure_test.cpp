@@ -36,4 +36,6 @@ TEST_CASE("a guest thread stopped by a runtime error is reported and ends the pr
   std::error_code ignored; std::filesystem::remove(path, ignored);
   CHECK(text.find("stopped by a runtime error: injected HLE failure") != std::string::npos);
   CHECK(text.find("  #01 ") != std::string::npos);
+  // The failing frame is a host call's thunk, named rather than left as a bare address.
+  CHECK(text.find(std::format("  #00 {:#x} host call test!failing call", failing + 0x18)) != std::string::npos);
 }

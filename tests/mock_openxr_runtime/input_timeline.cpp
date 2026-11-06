@@ -95,10 +95,7 @@ void InputTimeline::load(const std::filesystem::path& path) {
   const auto root = Json::parse(stream);
   InputTimeline parsed;
   parsed.profile_ = root.value("profile", parsed.profile_);
-  if (parsed.profile_ != "/interaction_profiles/oculus/touch_controller" &&
-      parsed.profile_ != "/interaction_profiles/valve/index_controller" &&
-      parsed.profile_ != "/interaction_profiles/htc/vive_controller" &&
-      parsed.profile_ != "/interaction_profiles/khr/simple_controller")
+  if (!parsed.profile_.starts_with("/interaction_profiles/"))
     throw std::runtime_error("unsupported mock controller profile");
   const auto& events = root.at("events");
   if (!events.is_array()) throw std::runtime_error("mock events must be an array");

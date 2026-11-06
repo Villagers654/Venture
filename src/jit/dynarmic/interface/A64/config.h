@@ -105,6 +105,13 @@ struct UserCallbacks {
         return std::uint32_t(MemoryRead(vaddr, sizeof(std::uint32_t)));
     }
 
+    // Reads `count` consecutive instruction words as MemoryReadCode would, with 0 for
+    // a word it would not return. Used to check cached blocks against guest code.
+    virtual void MemoryReadCodeWords(VAddr vaddr, std::uint32_t* out, std::size_t count) {
+        for (std::size_t i = 0; i < count; ++i)
+            out[i] = MemoryReadCode(vaddr + 4 * i).value_or(0);
+    }
+
     // Reads through these callbacks may not be aligned.
     virtual std::uint64_t MemoryRead(VAddr vaddr, std::size_t size) = 0;
     virtual Vector MemoryRead128(VAddr vaddr) = 0;
@@ -430,6 +437,21 @@ struct UserConfig {
     /// the guest mode and raises guest FPSR flags directly; the callback must not
     /// read or write FPSR or FPCR through the Jit interface meanwhile.
     std::optional<std::uint32_t> svc_fp_guest;
+
+    /// Venture: portable blocks (backend/x64/portable_block.h). The sink receives
+    /// each compiled block with the references a later JIT must re-bind; the
+    /// source returns such a block for a location about to be compiled (empty
+    /// for none), which is installed instead when it is compatible. The source's
+    /// bytes must stay valid while the JIT exists. Both need the cold code region
+    /// and compact block links; diagnostics that instrument blocks disable them.
+    std::function<void(std::uint64_t descriptor, const std::uint8_t* data, std::size_t size)> portable_block_sink;
+    std::function<std::pair<const std::uint8_t*, std::size_t>(std::uint64_t descriptor)> portable_block_source;
+
+    /// Venture: called when the OS refused code-cache memory (a commit of
+    /// `requested` bytes, 0 when another allocation failed) with `committed`
+    /// of `cache_size` bytes committed, before the cache is cleared and the
+    /// compile retried. Diagnostics only; must not throw or reenter the Jit.
+    std::function<void(std::size_t requested, std::size_t committed, std::size_t cache_size)> code_allocation_failed;
 
     /// Internal use only
     bool very_verbose_debugging_output = false;

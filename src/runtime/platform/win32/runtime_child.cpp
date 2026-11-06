@@ -230,6 +230,15 @@ RuntimeChildResult run_runtime_child(const std::filesystem::path& executable,
   if (!job.value) failure("create runtime job");
   JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
   limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+  // The worker sees only this, its immediate job: repeat a commit limit of the job
+  // this process runs in, so its headroom watch (platform::memory_headroom) sees it.
+  JOBOBJECT_EXTENDED_LIMIT_INFORMATION outer{};
+  if (QueryInformationJobObject(nullptr, JobObjectExtendedLimitInformation, &outer, sizeof(outer), nullptr)) {
+    limits.BasicLimitInformation.LimitFlags |=
+        outer.BasicLimitInformation.LimitFlags & (JOB_OBJECT_LIMIT_JOB_MEMORY | JOB_OBJECT_LIMIT_PROCESS_MEMORY);
+    limits.JobMemoryLimit = outer.JobMemoryLimit;
+    limits.ProcessMemoryLimit = outer.ProcessMemoryLimit;
+  }
   if (!SetInformationJobObject(job.value, JobObjectExtendedLimitInformation, &limits, sizeof(limits)))
     failure("configure runtime job");
   auto exe = std::filesystem::absolute(executable);
@@ -331,6 +340,7 @@ RuntimeChildResult run_runtime_child(const std::filesystem::path& executable,
       RuntimeChildResult result{124, false};
       result.supervisor_stopped = true;
       result.exit_wait = grace.exit_wait; result.exit_wait_tid = grace.exit_wait_tid;
+      result.worker_pid = process.dwProcessId;
       timeout_dump(executable, process.dwProcessId, job.value, runtime_dump_directory(diagnostic_run_directory), result);
       if (!TerminateJobObject(job.value, 124)) failure("stop app worker");
       if (WaitForSingleObject(child.value, 5000) != WAIT_OBJECT_0)
@@ -351,6 +361,8 @@ RuntimeChildResult run_runtime_child(const std::filesystem::path& executable,
   }
   auto finish_result = [&](RuntimeChildResult result) {
     result.os_termination = grace.os_termination;
+    result.exit_wait = grace.exit_wait; result.exit_wait_tid = grace.exit_wait_tid;
+    result.worker_pid = process.dwProcessId;
     return result;
   };
   if (!GetExitCodeProcess(child.value, &status)) failure("read app worker status");

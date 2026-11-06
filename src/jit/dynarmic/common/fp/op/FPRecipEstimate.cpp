@@ -97,16 +97,21 @@ FPT FPRecipEstimate(FPT op, FPCR fpcr, FPSR& fpsr) {
     return FPT((bits_exponent << FPInfo<FPT>::explicit_mantissa_width) | (bits_mantissa & FPInfo<FPT>::mantissa_mask) | bits_sign);
 }
 
+namespace {
+// Built at startup, not on first use: emitted code embeds the table's address, and a
+// block installed from the portable cache runs without the emitter ever calling here.
+const auto recip_estimate_table32 = [] {
+    std::array<std::uint32_t, 256> fractions{};
+    for (std::uint32_t i = 0; i < fractions.size(); ++i) {
+        FPSR fpsr;
+        fractions[i] = FPRecipEstimate<u32>(0x3F800000 | (i << 15), FPCR{}, fpsr) & FPInfo<u32>::mantissa_mask;
+    }
+    return fractions;
+}();
+}  // namespace
+
 const std::uint32_t* FPRecipEstimateTable32() {
-    static const auto table = [] {
-        std::array<std::uint32_t, 256> fractions{};
-        for (std::uint32_t i = 0; i < fractions.size(); ++i) {
-            FPSR fpsr;
-            fractions[i] = FPRecipEstimate<u32>(0x3F800000 | (i << 15), FPCR{}, fpsr) & FPInfo<u32>::mantissa_mask;
-        }
-        return fractions;
-    }();
-    return table.data();
+    return recip_estimate_table32.data();
 }
 
 template u16 FPRecipEstimate<u16>(u16 op, FPCR fpcr, FPSR& fpsr);

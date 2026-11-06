@@ -46,3 +46,18 @@ TEST_CASE("log lines never keep a Meta access token a game logs") {
   CHECK(text.find(app) == std::string::npos);
   CHECK(count(text, "FRL support and OC|12 and FRLshort stay as written\n") == 1);
 }
+TEST_CASE("an info line reaches the log file when nothing is logged after it") {
+  // A process that stalls logs nothing more; its last lines must not wait in
+  // memory for a later line that never comes.
+  LogFile file;
+  log::warn("test", "flushed at once");
+  log::info("test", "last line before a stall");
+  bool written = false;
+  for (int i = 0; i < 100 && !written; ++i) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    std::ifstream input(file.path, std::ios::binary);
+    const std::string text{std::istreambuf_iterator<char>(input), {}};
+    written = text.find("last line before a stall") != text.npos;
+  }
+  CHECK(written);
+}

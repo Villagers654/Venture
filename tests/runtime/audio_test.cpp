@@ -8,6 +8,8 @@
 #include <chrono>
 #include <cmath>
 #include <cstring>
+#include <mutex>
+#include <string>
 #include <thread>
 
 #include "audio_test_support.h"
@@ -373,6 +375,17 @@ TEST_CASE(
   CHECK(callbacks.load() == 1);
   CHECK(aa("AAudioStream_close", {s}) == 0);
 }
+TEST_CASE("audio: AAudio hardware getters report Venture's 48 kHz float stereo mixer, not the host endpoint") {
+  setup();
+  auto b = builder(false, 1, 44100);  // mono I16 at 44.1 kHz
+  aa("AAudioStreamBuilder_setChannelCount", {b, 1});
+  auto s = open(b);
+  CHECK(aa("AAudioStream_getSampleRate", {s}) == 44100);
+  CHECK(aa("AAudioStream_getHardwareSampleRate", {s}) == 48000);
+  CHECK(aa("AAudioStream_getHardwareChannelCount", {s}) == 2);
+  CHECK(aa("AAudioStream_getHardwareFormat", {s}) == 2);  // AAUDIO_FORMAT_PCM_FLOAT
+  CHECK(aa("AAudioStream_close", {s}) == 0);
+}
 TEST_CASE("audio: AAudio channel masks and attribution follow AOSP builder rules") {
   setup();
   auto b = builder();
@@ -398,72 +411,176 @@ TEST_CASE("audio: AAudio channel masks and attribution follow AOSP builder rules
   CHECK(aa("AAudioStreamBuilder_delete", {b}) == 0);
 }
 
-#ifdef _WIN32
-#include <memory>
-#include <vector>
-
-#include "platform/change_cache.h"
-#include "platform/win32/audio_endpoints.h"
-
-namespace {
-using Devices = std::vector<venture::audio::DeviceInfo>;
-using venture::audio::Direction;
-IMMNotificationClient* endpoint_client = nullptr;
-bool capture_endpoint_client(IMMNotificationClient* client) {
-  endpoint_client = client;
-  return true;
+TEST_CASE("audio: a lost microphone fails capture with DISCONNECTED, not a hang (issue 89)") {
+  setup();
+  auto s = open(builder(true, 2, 48000));
+  REQUIRE(aa("AAudioStream_requestStart", {s}) == 0);
+  // A blocking read waiting on the microphone wakes when the device stops.
+  auto stopper = std::thread([] {
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    CHECK(stop_null_input());
+  });
+  std::array<float, 48000> samples{};
+  const auto begin = std::chrono::steady_clock::now();
+  const auto read = aa("AAudioStream_read", {s, h2g(samples.data()), samples.size(), 30'000'000'000ull});
+  stopper.join();
+  CHECK(std::chrono::steady_clock::now() - begin < std::chrono::seconds(10));
+  // Frames read before the loss are returned first; the next read reports it.
+  if (read >= 0) CHECK(aa("AAudioStream_read", {s, h2g(samples.data()), 1, 0}) == audio::disconnected);
+  else CHECK(read == audio::disconnected);
+  CHECK(until([&] { return aa("AAudioStream_getState", {s}) == 13; }));
+  CHECK(aa("AAudioStream_requestStart", {s}) == audio::disconnected);
+  CHECK(aa("AAudioStream_close", {s}) == 0);
+  // A new stream reopens the microphone.
+  auto reopened = open(builder(true, 2, 48000));
+  CHECK(aa("AAudioStream_requestStart", {reopened}) == 0);
+  CHECK(aa("AAudioStream_close", {reopened}) == 0);
 }
-bool notify_while_registering(IMMNotificationClient* client) {
-  endpoint_client = client;
-  client->OnDefaultDeviceChanged(eRender, eConsole, L"{registering}");
-  return true;
+TEST_CASE("audio: an OpenSL recorder keeps recording across a lost microphone (issue 89)") {
+  setup();
+  SlSession session;
+  GuestAddr recorder = 0;
+  sl::IoLocator device{3, 1, 0xffffffffu, 0, 0};
+  sl::QueueLocator locator{0x800007bd, 2};
+  sl::Pcm pcm{2, 1, 48000 * 1000, 16, 16, 4, 2};
+  sl::Data source{h2g(&device), 0}, sink{h2g(&locator), h2g(&pcm)};
+  REQUIRE(call(table<sl::EngineTable>(session.engine_itf).CreateAudioRecorder,
+               {session.engine_itf, h2g(&recorder), h2g(&source), h2g(&sink), 0, 0, 0}) == 0);
+  struct Destroy { GuestAddr object; ~Destroy() { call(table<sl::ObjectTable>(object).Destroy, {object}); } } destroy{recorder};
+  realize(recorder);
+  auto queue = get(recorder, "SL_IID_ANDROIDSIMPLEBUFFERQUEUE"), record = get(recorder, "SL_IID_RECORD");
+  static std::array<std::array<std::int16_t, 480>, 2> buffers{};
+  std::atomic<int> filled{0};
+  auto callback = add_callback([&](auto args) {
+    filled.fetch_add(1);
+    call(table<sl::BufferQueueTable>(args[0]).Enqueue, {args[0], h2g(buffers[0].data()), sizeof(buffers[0])});
+    return 0;
+  });
+  REQUIRE(call(table<sl::BufferQueueTable>(queue).RegisterCallback, {queue, callback, 0}) == 0);
+  for (auto& buffer : buffers)
+    REQUIRE(call(table<sl::BufferQueueTable>(queue).Enqueue, {queue, h2g(buffer.data()), sizeof(buffer)}) == 0);
+  REQUIRE(call(table<sl::RecordTable>(record).SetRecordState, {record, 3}) == 0);
+  CHECK(until([&] { return filled.load() >= 3; }));
+  // Android restores a legacy recorder's route; the recorder never errors.
+  CHECK(stop_null_input());
+  const auto before = filled.load();
+  CHECK(until([&] { return filled.load() >= before + 5; }));
+  std::uint32_t state = 0;
+  CHECK(call(table<sl::RecordTable>(record).GetRecordState, {record, h2g(&state)}) == 0);
+  CHECK(state == 3);
+  CHECK(call(table<sl::RecordTable>(record).SetRecordState, {record, 1}) == 0);
 }
-bool refuse_endpoint_client(IMMNotificationClient*) { return false; }
-// Host endpoint state behind the query seam; events arrive through the real
-// IMMNotificationClient that watch_audio_endpoints registers.
-struct HostEndpoints {
-  Devices devices;
-  int queries = 0;
-  std::unique_ptr<venture::platform::WatchedQuery<Devices>> watch(venture::platform::RegisterEndpointClient register_client) {
-    return std::make_unique<venture::platform::WatchedQuery<Devices>>(
-        [register_client](auto changed, void* context) {
-          return venture::platform::watch_audio_endpoints(changed, context, register_client);
-        },
-        [this] { ++queries; return devices; });
-  }
-};
-void check_devices(const Devices& actual, const Devices& expected) {
-  REQUIRE(actual.size() == expected.size());
-  for (std::size_t i = 0; i < expected.size(); ++i) {
-    CHECK(actual[i].direction == expected[i].direction);
-    CHECK(actual[i].name == expected[i].name);
-    CHECK(venture::audio::device_id(actual[i]) == venture::audio::device_id(expected[i]));
-  }
+TEST_CASE("audio: WASAPI endpoint IDs match the endpoint an XR runtime names") {
+  const std::string_view render = "{0.0.0.00000000}.{8D2C4C1E-6B1F-4F39-9C1A-2E4A6D7B9F01}";
+  const std::string_view capture = "{0.0.1.00000000}.{8d2c4c1e-6b1f-4f39-9c1a-2e4a6d7b9f01}";
+  // The full endpoint ID, as the Meta runtime answers, in any case.
+  CHECK(audio::wasapi_endpoint_matches(render, "{0.0.0.00000000}.{8d2c4c1e-6b1f-4f39-9c1a-2e4a6d7b9f01}"));
+  CHECK(audio::wasapi_endpoint_matches(render, " {0.0.0.00000000}.{8D2C4C1E-6B1F-4F39-9C1A-2E4A6D7B9F01}\n"));
+  // The endpoint GUID alone, braced or bare.
+  CHECK(audio::wasapi_endpoint_matches(render, "{8d2c4c1e-6b1f-4f39-9c1a-2e4a6d7b9f01}"));
+  CHECK(audio::wasapi_endpoint_matches(capture, "8D2C4C1E-6B1F-4F39-9C1A-2E4A6D7B9F01"));
+  // Another endpoint, the other flow's full ID, fragments and nothing.
+  CHECK_FALSE(audio::wasapi_endpoint_matches(render, "{0.0.0.00000000}.{8d2c4c1e-6b1f-4f39-9c1a-2e4a6d7b9f02}"));
+  CHECK_FALSE(audio::wasapi_endpoint_matches(render, "{8d2c4c1e-6b1f-4f39-9c1a-2e4a6d7b9f02}"));
+  CHECK_FALSE(audio::wasapi_endpoint_matches(capture, render));
+  CHECK_FALSE(audio::wasapi_endpoint_matches(render, "9f01}"));
+  CHECK_FALSE(audio::wasapi_endpoint_matches(render, "{0.0.0.00000000}"));
+  CHECK_FALSE(audio::wasapi_endpoint_matches(render, ""));
+  CHECK_FALSE(audio::wasapi_endpoint_matches("", "{8d2c4c1e-6b1f-4f39-9c1a-2e4a6d7b9f01}"));
 }
-}  // namespace
-
-#endif
-
-#ifndef _WIN32
-#include <cstdio>
-#include <cstdlib>
-#include <optional>
-#include <string>
-#include <unistd.h>
-
-#include "platform/audio_endpoints.h"
-
-namespace {
-std::optional<std::string> run(const std::string& command) {
-  FILE* pipe = popen(command.c_str(), "r");
-  if (!pipe) return std::nullopt;
-  std::string out;
-  char buffer[256];
-  while (fgets(buffer, sizeof buffer, pipe)) out += buffer;
-  if (pclose(pipe) != 0) return std::nullopt;
-  return out;
+TEST_CASE("audio: playback and recording use the headset endpoint the XR runtime names and follow its answer") {
+  setup();
+  auto& backend = audio::Backend::get();
+  // The runtime's answers. Static: the monitor may still hold the source.
+  static std::mutex answers;
+  static std::string output, input;
+  const auto answer = [](std::string out, std::string in) {
+    {
+      std::lock_guard lock(answers);
+      output = std::move(out);
+      input = std::move(in);
+    }
+    audio::Backend::get().request_route_check();
+  };
+  answer("NULL Playback Device", "NULL Capture Device");
+  backend.set_headset_endpoints("Mock runtime (XR_OCULUS_audio_device_guid)", [](audio::Direction direction) {
+    std::lock_guard lock(answers);
+    return direction == audio::Direction::input ? input : output;
+  });
+  struct Reset {
+    ~Reset() { audio::Backend::get().set_headset_endpoints({}, nullptr); }
+  } reset;
+  std::atomic<int> count{0};
+  auto cb = add_callback([&](std::span<const std::uint64_t> args) {
+    std::fill_n(g2h<float>(args[2]), std::size_t(args[3]) * 2, 0.25f);
+    count.fetch_add(1);
+    return 0;
+  });
+  auto b = builder();
+  aa("AAudioStreamBuilder_setDataCallback", {b, cb, 0});
+  auto s = open(b);
+  REQUIRE(aa("AAudioStream_requestStart", {s}) == 0);
+  auto mic = open(builder(true, 2, 48000));
+  REQUIRE(aa("AAudioStream_requestStart", {mic}) == 0);
+  const auto on = [&](audio::Direction direction, bool headset) {
+    return until([&] {
+      const auto route = backend.route(direction);
+      return route.open && route.headset == headset;
+    });
+  };
+  CHECK(on(audio::Direction::output, true));
+  CHECK(on(audio::Direction::input, true));
+  CHECK(backend.route(audio::Direction::output).device == "NULL Playback Device");
+  CHECK(backend.route(audio::Direction::input).device == "NULL Capture Device");
+  CHECK(backend.route(audio::Direction::output).named == "NULL Playback Device");
+  // An endpoint that is not active: the system default, and the stream plays on.
+  answer("{0.0.0.00000000}.{00000000-0000-0000-0000-000000000000}", "NULL Capture Device");
+  CHECK(on(audio::Direction::output, false));
+  CHECK(backend.route(audio::Direction::output).device.empty());
+  CHECK(backend.route(audio::Direction::input).headset);
+  auto before = count.load();
+  CHECK(until([&] { return count.load() >= before + 5; }));
+  CHECK(aa("AAudioStream_getState", {s}) == 4);
+  // The runtime names it again (a headset reconnecting), then nothing.
+  answer("NULL Playback Device", "");
+  CHECK(on(audio::Direction::output, true));
+  CHECK(on(audio::Direction::input, false));
+  before = count.load();
+  CHECK(until([&] { return count.load() >= before + 5; }));
+  CHECK(aa("AAudioStream_getState", {s}) == 4);
+  CHECK(aa("AAudioStream_getState", {mic}) == 4);
+  // Without a runtime source, the system default.
+  audio::Backend::get().set_headset_endpoints("Mock runtime names no headset endpoint", nullptr);
+  CHECK(on(audio::Direction::output, false));
+  CHECK(aa("AAudioStream_close", {s}) == 0);
+  CHECK(aa("AAudioStream_close", {mic}) == 0);
 }
-void count_change(void* counter) { static_cast<std::atomic<int>*>(counter)->fetch_add(1); }
-}  // namespace
-
-#endif
+TEST_CASE("audio: the PC output plays once while the headset endpoint is the system default") {
+  setup();
+  auto& backend = audio::Backend::get();
+  // The null backend's one output is both the headset endpoint and the system default.
+  backend.set_headset_endpoints("Mock runtime (XR_OCULUS_audio_device_guid)", [](audio::Direction direction) {
+    return std::string(direction == audio::Direction::output ? "NULL Playback Device" : "");
+  });
+  struct Reset {
+    ~Reset() {
+      audio::Backend::get().set_pc_output(false);
+      audio::Backend::get().set_headset_endpoints({}, nullptr);
+    }
+  } reset;
+  auto s = open(builder());
+  REQUIRE(aa("AAudioStream_requestStart", {s}) == 0);
+  CHECK(until([&] { return backend.route(audio::Direction::output).headset; }));
+  CHECK(backend.pc_output().plan == audio::PcOutputPlan::off);
+  backend.set_pc_output(true);
+  CHECK(backend.pc_output().plan == audio::PcOutputPlan::same_endpoint);
+  CHECK_FALSE(backend.pc_output().open);
+  CHECK_FALSE(backend.output_mirror().active());
+  // No headset endpoint: the game plays on the system default, once.
+  backend.set_headset_endpoints("Mock runtime names no headset endpoint", nullptr);
+  CHECK(until([&] { return backend.pc_output().plan == audio::PcOutputPlan::not_on_headset; }));
+  CHECK_FALSE(backend.pc_output().open);
+  backend.set_pc_output(false);
+  CHECK(backend.pc_output().plan == audio::PcOutputPlan::off);
+  CHECK(aa("AAudioStream_close", {s}) == 0);
+}
