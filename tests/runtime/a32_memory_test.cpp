@@ -294,8 +294,10 @@ TEST_CASE("Region snapshots are reclaimed while readers never pause") {
   for (auto& r : readers) r.join();
   CHECK(wrong.load() == 0);
   // Every publish ends grace periods unless a reader stays descheduled; the old
-  // single counter kept nearly all 4000 replaced copies here.
-  CHECK(most < 64);
+  // single counter kept nearly all 4000 replaced copies here. Four readers on a
+  // two-core CI runner stay descheduled for a while (112 seen), so the bound only
+  // tells reclamation from none.
+  CHECK(most < 400);
 }
 TEST_CASE("A32 private files preserve bytes and reject writable shared") {
   AddressSpace::FileReader reader = [](auto off, void* out, auto n) {

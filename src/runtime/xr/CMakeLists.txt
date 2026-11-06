@@ -42,7 +42,7 @@ add_library(venture_xr STATIC passthrough_source.cpp passthrough_source_sbn1.cpp
   ../hle/openxr/passthrough.cpp ../hle/openxr/passthrough_images.cpp ../hle/openxr/passthrough_camera.cpp ../hle/openxr/sphere_layers.cpp
   ../hle/openxr/image_upload.cpp ../hle/openxr/passthrough_report.cpp
   ../hle/vrapi/vrapi.cpp ../hle/vrapi/swapchains.cpp ../hle/vrapi/input.cpp
-  ../hle/vrapi/layers.cpp ../hle/vrapi/a32.cpp
+  ../hle/vrapi/layers.cpp ../hle/vrapi/drawn_layers.cpp ../hle/vrapi/a32.cpp
   ../hle/vrapi/haptics.cpp
   ../hle/vrapi/vulkan_images.cpp
   ../hle/vrapi/properties.cpp ../hle/vrapi/integration.cpp ../hle/vrapi/register.cpp)
@@ -73,12 +73,12 @@ if(NOT TARGET Python3::Interpreter)
   find_package(Python3 REQUIRED COMPONENTS Interpreter)
 endif()
 set(color_generated ${CMAKE_CURRENT_BINARY_DIR}/generated)
-foreach(color_shader IN ITEMS vert frag ms_frag passthrough_frag passthrough_ms_frag sphere_frag)
+foreach(color_shader IN ITEMS vert frag ms_frag passthrough_frag passthrough_ms_frag layer_frag)
   if(color_shader STREQUAL "vert")
     set(color_source shaders/color.vert)
     set(color_defines)
-  elseif(color_shader STREQUAL "sphere_frag")
-    set(color_source shaders/sphere.frag)
+  elseif(color_shader STREQUAL "layer_frag")
+    set(color_source shaders/layer.frag)
     set(color_defines)
   else()
     set(color_source shaders/color.frag)

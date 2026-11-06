@@ -35,6 +35,8 @@
 #include <future>
 #include <cstdlib>
 #include <vector>
+#include <set>
+#include <string>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -2645,4 +2647,315 @@ TEST_CASE("A hands-only app sees the host's hands in place of its controllers") 
   // An app that requires hand tracking takes the host's hands, controller-derived or not.
   CHECK(hand_replaces_controller(true, false, true, true));
   CHECK_FALSE(hand_replaces_controller(false, true, true, true));
+}
+namespace {
+// Layers no host layer shows exactly are drawn into a projection layer
+// (drawn_layers.h). The mock host's eyes see 45 degrees each way, 1024 pixels
+// across, 32 mm either side of the head; a layer in VIEW space (flag 4) has
+// the head at the origin. Ring textures are painted in quadrants, GLES rows
+// (row 0 at the bottom): bottom left red, bottom right green, top left blue,
+// top right white.
+struct DrawnLayerScene {
+  MockXrScript script{};
+  struct Restore {
+    ~Restore() {
+      MockXrScript defaults{};
+      ventureMockXrSetScript(&defaults);
+    }
+  } restore;
+  VrApiFrames frames;
+  std::uint64_t index = 1;
+  static constexpr std::array<std::uint8_t, 4> red{255, 0, 0, 255}, green{0, 255, 0, 255}, blue{0, 0, 255, 255},
+      white{255, 255, 255, 255}, clear{0, 0, 0, 0};
+  DrawnLayerScene() {
+    const float quarter = std::numbers::pi_v<float> / 4;
+    script.view_fov = std::array{-quarter, quarter, quarter, -quarter};
+    ventureMockXrSetScript(&script);
+  }
+  vr::abi::TextureSwapChain *ring(int type = 0, std::uint8_t alpha = 255) {
+    auto *chain = vg::vrapi_CreateTextureSwapChain3(type, 0x8058, 16, 16, 1, 1);
+    REQUIRE(chain);
+    frames.images.paint(vr::state().rings.at(chain)->textures[0],
+                        [alpha](std::uint32_t layer, std::uint32_t x, std::uint32_t y) -> std::array<std::uint8_t, 4> {
+                          // A cube's faces: a gray level per face, the left half darker.
+                          if (layer || alpha == 1)
+                            return {std::uint8_t(40 * layer + (x < 8 ? 0 : 20)), 0, 0, 255};
+                          std::array<std::uint8_t, 4> c = y < 8 ? (x < 8 ? red : green) : (x < 8 ? blue : white);
+                          c[3] = alpha;
+                          return c;
+                        });
+    return chain;
+  }
+  // Submits one layer; returns the host layers of the frame.
+  std::uint32_t submit(const vr::abi::LayerHeader &header) {
+    const vr::abi::LayerHeader *layers[]{&header};
+    frames.submit.layer_count = 1;
+    frames.submit.layers = layers;
+    REQUIRE(frames.submit_frame(index++) == 0);
+    return ventureMockXrLastSubImages(nullptr, 0);
+  }
+  // The drawn layer's texel for eye `eye` at view tangents (x, y): the frame
+  // must have been the drawn projection layer alone.
+  std::array<std::uint8_t, 4> pixel(int eye, float x, float y) {
+    std::array<XrSwapchainSubImage, 2> drawn{};
+    REQUIRE(ventureMockXrLastSubImages(drawn.data(), 2) == 2);
+    const auto image = reinterpret_cast<VkImage>(ventureMockXrReleasedImage(drawn[eye].swapchain));
+    REQUIRE(image);
+    const auto px = std::int32_t((x + 1) / 2 * 1024), py = std::int32_t((1 - y) / 2 * 1024);
+    return frames.images.read_pixel(px, py, std::uint32_t(drawn[eye].imageArrayIndex), image);
+  }
+};
+bool near(std::array<std::uint8_t, 4> a, std::array<std::uint8_t, 4> b, int tolerance = 3) {
+  for (int i = 0; i < 4; ++i)
+    if (std::abs(int(a[i]) - int(b[i])) > tolerance) return false;
+  return true;
+}
+struct HostExtension {
+  std::set<std::string> &extensions = venture::xr::host_xr().enabled_extensions;
+  std::set<std::string>::node_type node;
+  explicit HostExtension(const char *name) : node(extensions.extract(name)) {}
+  ~HostExtension() {
+    if (node) extensions.insert(std::move(node));
+  }
+};
+vr::abi::Cylinder head_locked_cylinder(vr::abi::TextureSwapChain *ring) {
+  vr::abi::Cylinder cylinder{};
+  cylinder.header = {3, 4, {1, 1, 1, 1}, 1, 0, 0};
+  cylinder.head.pose.orientation.w = 1;
+  for (auto &t : cylinder.textures) {
+    t.chain = ring;
+    t.rect = {0, 0, 1, 1};
+    for (int i = 0; i < 4; ++i) t.tan_angles.m[i][i] = t.texture_matrix.m[i][i] = 1;
+  }
+  return cylinder;
+}
+} // namespace
+TEST_CASE("VrApi cylinders the host cannot compose are drawn at their true arc") {
+  DrawnLayerScene scene;
+  auto *ring = scene.ring();
+  auto cylinder = head_locked_cylinder(ring);
+  using S = DrawnLayerScene;
+  {
+    // With the extension, a round cylinder stays a host cylinder layer.
+    const auto before = ventureMockXrStats();
+    CHECK(scene.submit(cylinder.header) == 2);
+    CHECK(ventureMockXrStats().cylinder == before.cylinder + 2);
+    CHECK(ventureMockXrStats().projection == before.projection);
+  }
+  SUBCASE("no cylinder extension (SteamVR)") {
+    HostExtension hidden("XR_KHR_composition_layer_cylinder");
+    const auto before = ventureMockXrStats();
+    CHECK(scene.submit(cylinder.header) == 2);
+    CHECK(ventureMockXrStats().cylinder == before.cylinder);
+    CHECK(ventureMockXrStats().projection == before.projection + 1);
+    // The unit cylinder spans pi radians and tan(30 degrees) up and down:
+    // the left of the view shows the image's left, its top the image's top.
+    for (int eye = 0; eye < 2; ++eye) {
+      CAPTURE(eye);
+      CHECK(near(scene.pixel(eye, -.3f, .15f), S::blue));
+      CHECK(near(scene.pixel(eye, .3f, .15f), S::white));
+      CHECK(near(scene.pixel(eye, -.3f, -.15f), S::red));
+      CHECK(near(scene.pixel(eye, .3f, -.15f), S::green));
+      // Above and below the arc, the layers below show through.
+      CHECK(near(scene.pixel(eye, 0, .7f), S::clear));
+      CHECK(near(scene.pixel(eye, 0, -.7f), S::clear));
+    }
+    // A texture matrix taking the image's right half across the whole arc.
+    for (auto &t : cylinder.textures) t.texture_matrix.m[0][0] = .5f, t.texture_matrix.m[0][2] = .5f;
+    CHECK(scene.submit(cylinder.header) == 2);
+    CHECK(near(scene.pixel(0, -.3f, .15f), S::white));
+    CHECK(near(scene.pixel(0, .3f, -.15f), S::green));
+  }
+  SUBCASE("elliptical cylinder (x radius 1, z radius 2)") {
+    for (auto &t : cylinder.textures) t.tan_angles.m[2][2] = .5f;
+    const auto before = ventureMockXrStats();
+    CHECK(scene.submit(cylinder.header) == 2);
+    CHECK(ventureMockXrStats().cylinder == before.cylinder);
+    CHECK(ventureMockXrStats().projection == before.projection + 1);
+    CHECK(near(scene.pixel(0, -.3f, .1f), S::blue));
+    CHECK(near(scene.pixel(0, .3f, -.1f), S::green));
+    // Two metres ahead the arc is half as tall in the view as a round one's.
+    CHECK(near(scene.pixel(0, -.1f, .4f), S::clear));
+    CHECK(near(scene.pixel(0, -.1f, .25f), S::blue));
+  }
+  SUBCASE("blend factors and color scale without a host form") {
+    // ONE/ONE adds the layer to what is below: alpha 0 over it.
+    cylinder.header.src_blend = cylinder.header.dst_blend = 1;
+    CHECK(scene.submit(cylinder.header) == 2);
+    CHECK(near(scene.pixel(0, -.3f, -.15f), {255, 0, 0, 0}));
+    // A color scale without XR_KHR_composition_layer_color_scale_bias.
+    HostExtension hidden("XR_KHR_composition_layer_color_scale_bias");
+    cylinder.header = {3, 4, {.5f, .5f, .5f, 1}, 1, 0, 0};
+    CHECK(scene.submit(cylinder.header) == 2);
+    CHECK(near(scene.pixel(0, .3f, .15f), {128, 128, 128, 255}));
+  }
+}
+TEST_CASE("VrApi straight alpha cylinders are drawn premultiplied over the layers below") {
+  DrawnLayerScene scene;
+  HostExtension hidden("XR_KHR_composition_layer_cylinder");
+  auto cylinder = head_locked_cylinder(scene.ring(0, 128));
+  cylinder.header.src_blend = 2, cylinder.header.dst_blend = 5;
+  CHECK(scene.submit(cylinder.header) == 2);
+  CHECK(near(scene.pixel(1, -.3f, -.15f), {128, 0, 0, 128}));
+  // ONE_MINUS_SRC_ALPHA / SRC_ALPHA (RE4's fades): the inverse alpha.
+  cylinder.header.src_blend = 5, cylinder.header.dst_blend = 2;
+  CHECK(scene.submit(cylinder.header) == 2);
+  CHECK(near(scene.pixel(1, -.3f, -.15f), {127, 0, 0, 127}));
+}
+TEST_CASE("VrApi equirects, cubes and projective planes the host cannot compose are drawn") {
+  DrawnLayerScene scene;
+  using S = DrawnLayerScene;
+  SUBCASE("equirect without the extension") {
+    HostExtension hidden("XR_KHR_composition_layer_equirect");
+    vr::abi::Equirect sphere{};
+    sphere.header = {5, 4, {1, 1, 1, 1}, 1, 0, 0};
+    sphere.head.pose.orientation.w = 1;
+    for (int i = 0; i < 4; ++i) sphere.tan_angles.m[i][i] = 1;
+    auto *ring = scene.ring();
+    for (auto &t : sphere.textures) {
+      t.chain = ring;
+      t.rect = {0, 0, 1, 1};
+      for (int i = 0; i < 4; ++i) t.texture_matrix.m[i][i] = 1;
+    }
+    const auto before = ventureMockXrStats();
+    CHECK(scene.submit(sphere.header) == 2);
+    CHECK(ventureMockXrStats().equirect == before.equirect);
+    // Longitude 0 is ahead: the image's middle column; the north is up.
+    CHECK(near(scene.pixel(0, -.3f, .15f), S::blue));
+    CHECK(near(scene.pixel(0, .3f, -.15f), S::green));
+    CHECK(near(scene.pixel(1, .9f, .9f), S::white));
+    // Half the image's width across the whole sphere: still its middle ahead.
+    for (auto &t : sphere.textures) t.rect = {.25f, 0, .5f, 1};
+    CHECK(scene.submit(sphere.header) == 2);
+    CHECK(near(scene.pixel(0, -.3f, .15f), S::blue));
+  }
+  SUBCASE("cube without the extension") {
+    HostExtension hidden("XR_KHR_composition_layer_cube");
+    vr::abi::Cube cube{};
+    cube.header = {4, 4, {1, 1, 1, 1}, 1, 0, 0};
+    cube.head.pose.orientation.w = 1;
+    for (int i = 0; i < 4; ++i) cube.tan_angles.m[i][i] = 1;
+    auto *ring = scene.ring(3);
+    for (auto &t : cube.textures) t.chain = ring;
+    const auto before = ventureMockXrStats();
+    CHECK(scene.submit(cube.header) == 2);
+    CHECK(ventureMockXrStats().cube == before.cube);
+    // Ahead is the -Z face (5), seen from inside: its right half on the left.
+    CHECK(near(scene.pixel(0, -.3f, 0), {220, 0, 0, 255}));
+    CHECK(near(scene.pixel(0, .3f, 0), {200, 0, 0, 255}));
+    // Turned 90 degrees left, ahead is the -X face (1).
+    cube.tan_angles = {};
+    cube.tan_angles.m[0][2] = 1, cube.tan_angles.m[1][1] = 1, cube.tan_angles.m[2][0] = -1, cube.tan_angles.m[3][3] = 1;
+    CHECK(scene.submit(cube.header) == 2);
+    CHECK(near(scene.pixel(0, -.3f, 0), {60, 0, 0, 255}));
+  }
+  SUBCASE("projection whose tan-angle matrix carries a translation column") {
+    vr::abi::Projection projection{};
+    projection.header = {1, 4, {1, 1, 1, 1}, 1, 0, 0};
+    projection.head.pose.orientation.w = 1;
+    auto *ring = scene.ring();
+    for (auto &t : projection.textures) {
+      t.chain = ring;
+      t.rect = {0, 0, 1, 1};
+      // (tx, ty, -1, 1) to S = (tx + 1) / 2, T = (ty + 1) / 2, Q = 1.
+      t.tan_angles.m[0][0] = .5f, t.tan_angles.m[0][3] = .5f;
+      t.tan_angles.m[1][1] = .5f, t.tan_angles.m[1][3] = .5f;
+      t.tan_angles.m[2][2] = -1;
+    }
+    CHECK(scene.submit(projection.header) == 2);
+    CHECK(near(scene.pixel(0, -.3f, .15f), S::blue));
+    CHECK(near(scene.pixel(1, .3f, -.15f), S::green));
+  }
+}
+
+// A measurement, not a check: run with --no-skip, VENTURE_MOCK_VIEW_SIZE and
+// VENTURE_VULKAN_GPU_TIMING set. Prints SubmitFrame2 wall times of a native
+// projection frame and the GPU time of drawn frames (cylinder menu, full view
+// equirect) at the host's view size.
+TEST_CASE("VrApi drawn layer frame cost (measurement)" * doctest::skip()) {
+  DrawnLayerScene scene;
+  using Clock = std::chrono::steady_clock;
+  auto median = [](std::vector<double> v) {
+    std::sort(v.begin(), v.end());
+    return v[v.size() / 2];
+  };
+  auto &gpu = venture::gfx::gpu_device();
+  const auto device_idle =
+      reinterpret_cast<PFN_vkDeviceWaitIdle>(gpu.get_instance_proc_addr(gpu.instance, "vkDeviceWaitIdle"));
+  REQUIRE(device_idle);
+  // Software Vulkan's timestamps do not wait for draws: also the wall time
+  // from SubmitFrame2 until the device is idle (all its GPU work done).
+  double completed = 0;
+  auto run = [&](const vr::abi::LayerHeader &header, int frames) {
+    std::vector<double> wall, done;
+    for (int i = 0; i < frames; ++i) {
+      const vr::abi::LayerHeader *layers[]{&header};
+      scene.frames.submit.layer_count = 1;
+      scene.frames.submit.layers = layers;
+      {
+        std::lock_guard lock(gpu.queue_lock);
+        REQUIRE(device_idle(gpu.device) == VK_SUCCESS);
+      }
+      const auto start = Clock::now();
+      REQUIRE(scene.frames.submit_frame(scene.index++) == 0);
+      wall.push_back(std::chrono::duration<double, std::micro>(Clock::now() - start).count());
+      {
+        std::lock_guard lock(gpu.queue_lock);
+        REQUIRE(device_idle(gpu.device) == VK_SUCCESS);
+      }
+      done.push_back(std::chrono::duration<double, std::micro>(Clock::now() - start).count());
+    }
+    completed = median(done);
+    return median(wall);
+  };
+  auto *small = scene.ring();
+  vr::abi::Projection projection{};
+  projection.header = {1, 4, {1, 1, 1, 1}, 1, 0, 0};
+  projection.head.pose.orientation.w = 1;
+  for (auto &eye : projection.textures) {
+    eye.chain = small;
+    eye.rect = {0, 0, 1, 1};
+    eye.tan_angles.m[0][0] = eye.tan_angles.m[1][1] = 0.5f;
+    eye.tan_angles.m[0][2] = eye.tan_angles.m[1][2] = -0.5f;
+    eye.tan_angles.m[2][2] = -1;
+  }
+  run(projection.header, 50);
+  const auto native_wall = run(projection.header, 300);
+  MESSAGE("native projection SubmitFrame2 median us: ", native_wall, " until idle: ", completed);
+  auto *menu = vg::vrapi_CreateTextureSwapChain3(0, 0x8058, 1024, 1024, 1, 1);
+  auto *panorama = vg::vrapi_CreateTextureSwapChain3(0, 0x8058, 2048, 1024, 1, 1);
+  REQUIRE(menu);
+  REQUIRE(panorama);
+  auto cylinder = head_locked_cylinder(menu);
+  vr::abi::Equirect sphere{};
+  sphere.header = {5, 4, {1, 1, 1, 1}, 1, 0, 0};
+  sphere.head.pose.orientation.w = 1;
+  for (int i = 0; i < 4; ++i) sphere.tan_angles.m[i][i] = 1;
+  for (auto &t : sphere.textures) {
+    t.chain = panorama;
+    t.rect = {0, 0, 1, 1};
+    for (int i = 0; i < 4; ++i) t.texture_matrix.m[i][i] = 1;
+  }
+  // The same layers as host layers, for their copies' share of the time.
+  for (const auto *header : {&cylinder.header, &sphere.header}) {
+    run(*header, 10);
+    const auto wall = run(*header, 60);
+    MESSAGE("native type ", header->type, " SubmitFrame2 median us: ", wall, " until idle: ", completed);
+  }
+  HostExtension cylinders("XR_KHR_composition_layer_cylinder");
+  HostExtension equirects("XR_KHR_composition_layer_equirect");
+  for (const auto *header : {&cylinder.header, &sphere.header}) {
+    run(*header, 10);
+    const auto wall = run(*header, 60);
+    std::array<XrSwapchainSubImage, 2> drawn{};
+    REQUIRE(ventureMockXrLastSubImages(drawn.data(), 2) == 2);
+    const auto extent = drawn[0].imageRect.extent;
+    const auto image = reinterpret_cast<VkImage>(ventureMockXrReleasedImage(drawn[0].swapchain));
+    CHECK(scene.frames.images.read_pixel(extent.width / 2, extent.height / 2, 0, image)[3] == 255);
+    MESSAGE("drawn type ", header->type, " at ", extent.width, "x", extent.height, " SubmitFrame2 median us: ", wall,
+            " until idle: ", completed,
+            " GPU timestamps us: ", double(venture::hle::vrapi::drawn_layers_gpu_ns()) / 1000);
+  }
+  vg::vrapi_DestroyTextureSwapChain(menu);
+  vg::vrapi_DestroyTextureSwapChain(panorama);
 }

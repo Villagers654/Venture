@@ -5,11 +5,11 @@
 #include <vector>
 
 namespace venture::hle::openxr {
-// Equirect layers (XR_KHR_composition_layer_equirect, _equirect2) on a host
-// without them: each run of consecutive ones is drawn into one projection
-// layer at its place in the frame. A Quest composes them (360 backdrops and
-// loading videos), so the extensions are offered everywhere. Serialized by the
-// guest OpenXR state mutex.
+// Equirect, equirect2, cylinder and cube layers on a host without their
+// extension: each run of consecutive ones is drawn into one projection layer at
+// its place in the frame, at its true geometry (xr/sphere_images.h). A Quest
+// composes them all (360 backdrops, loading videos, curved UI panels), so the
+// extensions are offered everywhere. Serialized by the guest OpenXR state mutex.
 bool sphere_layer_type(XrStructureType);
 class SphereLayers {
  public:
@@ -23,15 +23,17 @@ class SphereLayers {
   bool empty() const { return runs_.empty(); }
 
   struct Sphere {
+    XrStructureType type;
     XrCompositionLayerFlags flags;
     XrSpace space;
     XrEyeVisibility eye;
-    XrSwapchainSubImage sub;
+    XrSwapchainSubImage sub;               // a cube: its swapchain and array index
     XrPosef pose;
-    float radius;
-    bool v1;
-    XrVector2f scale, bias;                // v1
-    float central, upper, lower;           // v2
+    float radius;                          // not a cube
+    XrVector2f scale, bias;                // equirect
+    float central, upper, lower;           // equirect2; a cylinder: central angle, aspect ratio
+    XrColor4f color_scale{1, 1, 1, 1}, color_bias{0, 0, 0, 0};  // XR_KHR_composition_layer_color_scale_bias
+    bool flip = false;  // XR_FB_composition_layer_image_layout VERTICAL_FLIP
   };
  private:
   struct Run {

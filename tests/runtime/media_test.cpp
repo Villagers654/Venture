@@ -560,7 +560,8 @@ TEST_CASE("video-only player follows consumed audio time through pause seek loop
   REQUIRE(player.source(video_input())==0);REQUIRE(player.prepare()==0);
   CHECK(player.video_width()==128);CHECK(player.video_height()==72);CHECK(player.duration_us()==1000000);
   player.loop(true);REQUIRE(player.start()==0);
-  auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(5);
+  // The loop ends at the first wrap (about 1 s); the long bound only covers a busy CI runner (none seen in 5 s once).
+  auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(30);
   while(wraps==0 && std::chrono::steady_clock::now()<deadline)pump();
   CHECK(frames>12);CHECK(wraps>0);REQUIRE(player.pause()==0);
   std::this_thread::sleep_for(std::chrono::milliseconds(20));auto paused=frames.load();auto position=player.position_us();

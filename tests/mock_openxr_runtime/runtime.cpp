@@ -2708,6 +2708,12 @@ extern "C" VENTURE_MOCK_EXPORT std::uint32_t ventureMockXrLastSubImages(XrSwapch
     out[i] = mock::last_subimages[i];
   return count;
 }
+extern "C" VENTURE_MOCK_EXPORT std::uint64_t ventureMockXrReleasedImage(XrSwapchain handle) {
+  std::lock_guard lock(mock::mutex);
+  const auto it = mock::chains.find(handle);
+  if (it == mock::chains.end() || it->second.last_released >= it->second.images.size()) return 0;
+  return reinterpret_cast<std::uint64_t>(it->second.images[it->second.last_released]);
+}
 extern "C" VENTURE_MOCK_EXPORT bool ventureMockXrAwaitHaptics(std::uint32_t count,
                                                     std::uint32_t milliseconds) {
   std::unique_lock lock(mock::mutex);

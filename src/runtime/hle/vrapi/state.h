@@ -21,10 +21,12 @@ struct Ring {
   ImageDesc desc;
   std::vector<std::uint32_t> textures;
   std::vector<bool> owned;
-  // Two host chains per slot, one per displayed row order (XrImages bottom_up).
+  // Four host chains per slot: one per displayed row order (XrImages
+  // bottom_up), and the same again sampled by drawn layers (drawn_layers.h).
+  // Each is created when first used.
   std::vector<HostChain> host;
-  static std::size_t host_chain(int slot, bool bottom_up) {
-    return std::size_t(slot) * 2 + (bottom_up ? 1 : 0);
+  static std::size_t host_chain(int slot, bool bottom_up, bool sampled = false) {
+    return std::size_t(slot) * 4 + (bottom_up ? 1 : 0) + (sampled ? 2 : 0);
   }
   // VrApi does not document initial sampler values. Use linear/edge sampling
   // for a fresh compositor texture, transparent border and no anisotropy.

@@ -3700,17 +3700,24 @@ TEST_CASE("A64: a large block does not slow later compiles", "[a64]") {
         std::nth_element(ms.begin(), ms.begin() + 2, ms.end());
         return ms[2];
     };
-    const double before = compile_small();
-    jit.ClearCache();
-    env.code_mem.assign(large, 0x8b020021);  // add x1, x1, x2: unlike an immediate, no fold merges them
-    env.code_mem.push_back(0x14000000);
-    jit.SetPC(0);
-    jit.SetRegister(1, 0);
-    jit.SetRegister(2, 1);
-    env.ticks_left = large + 1;
-    CheckedRun([&] { jit.Run(); });
-    REQUIRE(jit.GetRegister(1) == large);
-    const double after = compile_small();
+    // A shared CI runner can stall one measurement; the regression this guards
+    // against slows every attempt, so the best of three attempts is compared.
+    double before = 0, after = 0;
+    for (int attempt = 0; attempt < 3; ++attempt) {
+        const double b = compile_small();
+        jit.ClearCache();
+        env.code_mem.assign(large, 0x8b020021);  // add x1, x1, x2: unlike an immediate, no fold merges them
+        env.code_mem.push_back(0x14000000);
+        jit.SetPC(0);
+        jit.SetRegister(1, 0);
+        jit.SetRegister(2, 1);
+        env.ticks_left = large + 1;
+        CheckedRun([&] { jit.Run(); });
+        REQUIRE(jit.GetRegister(1) == large);
+        const double a = compile_small();
+        if (attempt == 0 || a / b < after / before) before = b, after = a;
+        if (after < before * 1.5) break;
+    }
     INFO("2000 small blocks: " << before << " ms before, " << after << " ms after a " << large << "-instruction block");
     CHECK(after < before * 1.5);
 }
