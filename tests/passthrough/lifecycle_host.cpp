@@ -57,6 +57,7 @@ XrResult XRAPI_CALL xrPollEvent(XrInstance, XrEventDataBuffer* out) {
 #include "platform/profile.h"
 #include "hle/vulkan/timing.h"
 #include "xr/display_memory.h"
+#include "common/library/display.h"
 #include <stdexcept>
 namespace venture {
 GuestThread* GuestThread::current() { return nullptr; }
@@ -65,6 +66,10 @@ int futex_wait(GuestThread&, GuestAddr, std::uint32_t, std::int64_t, std::uint32
   throw std::runtime_error("Unexpected emulated guest-thread wait in host-only lifecycle fixture");
 }
 namespace log { void crash_write(const char*, std::size_t) noexcept {} }
+// The display override the fixture links sizes eyes with the library's rule (venture_common is not linked).
+namespace library {
+std::pair<int, int> fit_eye_size(double width, double height, int, int) { return {int(width), int(height)}; }
+}
 namespace platform { std::uint32_t profile_thread_id() noexcept { return 1; } }
 namespace profile {
 const bool enabled = false;
