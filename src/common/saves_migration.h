@@ -29,6 +29,10 @@ void publish_obb_file(const fs::path& source, const fs::path& view);
 // installed files, else beside the installation under .obb/<account>, so a games
 // folder on another drive never fills the data drive with copies. Copies an
 // earlier fallback left at `view` are removed.
+// Gives the game its own copy of a published expansion/asset entry before it
+// first writes to it (the entry is otherwise a hard link into the install).
+// Later syncs keep that copy while the installed file is unchanged.
+void detach_obb_file(const fs::path& view, std::string_view name);
 fs::path obb_view_for(const fs::path& install, const fs::path& view, std::string_view account);
 void remove_cached_obb_aliases(const fs::path& data, std::string_view package);
 // Removes dedicated OBB views (including legacy cache views), preserving saves.

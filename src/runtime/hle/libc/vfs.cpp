@@ -1,4 +1,5 @@
 #include "common/paths.h"
+#include "common/saves_migration.h"
 #include "vfs.h"
 #include "file_io_trace.h"
 #include "common/log.h"
@@ -243,6 +244,7 @@ int resolve_path(std::string_view path, int dirfd, MappedPath* out) {
     const auto obb = std::string(prefix) + "/Android/obb/" + c.package;
     if (map(obb, c.obb_dir, false)) {
       out->readonly = p.size() > obb.size() && published_expansion(std::string_view(p).substr(obb.size() + 1));
+      if (out->readonly && p.find('/', obb.size() + 1) == std::string::npos) out->expansion = p.substr(obb.size() + 1);
       note_missing_expansion(out->host, p);
       mapped = true;
       break;
@@ -380,6 +382,81 @@ std::vector<std::pair<int, std::string>> FdTable::paths() {
   for (auto& [fd, e] : fds_) p.emplace_back(fd, e.file->path);
   return p;
 }
+namespace {
+// Android lets a game write its own Android/obb/<package> files. Venture's
+// entries there are hard links into the install, so a writable open reads the
+// link and the first write gives the game its own copy (detach_obb_file).
+// FileStream(path, FileMode.Open) asks for read/write and usually only reads,
+// so a multi-GB asset is copied only if the game really writes it.
+class ExpansionFile final : public File {
+ public:
+  ExpansionFile(std::shared_ptr<File> inner, MappedPath m, int flags)
+      : inner_(std::move(inner)), m_(std::move(m)), open_flags_(flags) {}
+  int duplicate_host_fd() override { return current()->duplicate_host_fd(); }
+  std::int64_t read(void* p, std::uint64_t n) override { return current()->read(p, n); }
+  std::int64_t read_line(void* p, std::uint64_t n) override { return current()->read_line(p, n); }
+  std::int64_t pread(void* p, std::uint64_t n, std::int64_t o) override { return current()->pread(p, n, o); }
+  std::int64_t seek(std::int64_t o, int w) override { return current()->seek(o, w); }
+  int stat(Stat* s) override { return current()->stat(s); }
+  short ready(short events) override { return current()->ready(events); }
+  std::int64_t control(int c, std::uint64_t a) override { return current()->control(c, a); }
+  std::int64_t write(const void* p, std::uint64_t n) override {
+    if (int r = prepare_write()) return r;
+    return current()->write(p, n);
+  }
+  std::int64_t pwrite(const void* p, std::uint64_t n, std::int64_t o) override {
+    if (int r = prepare_write()) return r;
+    return current()->pwrite(p, n, o);
+  }
+  int truncate(std::int64_t n) override {
+    if (int r = prepare_write()) return r;
+    return current()->truncate(n);
+  }
+  int sync() override { return current()->sync(); }
+  int set_times(const Timespec* t) override {
+    if (int r = prepare_write()) return r;
+    return current()->set_times(t);
+  }
+  int prepare_write() override {
+    std::lock_guard lock(detach_);
+    if (detached_) return 0;
+    auto old = current();
+    const auto offset = old->seek(0, 1);
+    try {
+      detach_obb_file(process_config().obb_dir, m_.expansion);
+    } catch (const std::exception& e) {
+      log::error("vfs", "Could not give the game its own copy of {}: {}", m_.guest, e.what());
+      return -err::eacces;
+    }
+    auto writable = m_;
+    writable.readonly = false;
+    writable.expansion.clear();
+    int error = 0;
+    auto f = host::open(writable, open_flags_ & ~(0100 | 0200 | 01000), 0, &error);
+    if (!f) return error;
+    f->flags = old->flags.load();
+    f->path = old->path;
+    if (offset >= 0) f->seek(offset, 0);
+    {
+      std::lock_guard swap(swap_);
+      inner_ = std::move(f);
+    }
+    detached_ = true;
+    return 0;
+  }
+
+ private:
+  std::shared_ptr<File> current() {
+    std::lock_guard lock(swap_);
+    return inner_;
+  }
+  std::mutex swap_, detach_;
+  std::shared_ptr<File> inner_;
+  MappedPath m_;
+  int open_flags_;
+  bool detached_ = false;
+};
+}  // namespace
 std::int64_t fd_open(const char* path, int flags, std::uint32_t mode, int dirfd) {
   if (!path) return -err::efault;
   if ((flags & 3) == 3) return -err::einval;
@@ -387,9 +464,21 @@ std::int64_t fd_open(const char* path, int flags, std::uint32_t mode, int dirfd)
   int r = resolve_path(path, dirfd, &m);
   if (trace_vfs()) log::info("vfs", "open {} flags={:#x}, resolve={}", m.guest.empty() ? path : m.guest.c_str(), flags, r);
   if (r) return r;
-  if (m.readonly && ((flags & 3) || (flags & (0100 | 01000 | 02000)))) return -err::erofs;
+  const bool writes = (flags & 3) || (flags & (0100 | 01000 | 02000));
+  if (m.readonly && writes && m.expansion.empty()) return -err::erofs;
   std::shared_ptr<File> f;
-  if (m.device) {
+  if (m.readonly && writes) {
+    // A published expansion entry: it exists, so O_CREAT|O_EXCL fails as on Linux.
+    if ((flags & 0300) == 0300) return -err::eexist;
+    f = host::open(m, flags & ~(3 | 0100 | 01000 | 02000), mode, &r);
+    if (!f) return r;
+    f->flags = flags & ~(o_cloexec | 0100 | 0200 | 01000);
+    f->path = m.guest;
+    auto expansion = std::make_shared<ExpansionFile>(f, m, flags);
+    if (flags & 01000)
+      if (int t = expansion->truncate(0)) return t;
+    f = expansion;
+  } else if (m.device) {
     std::string text;
     if (m.device == 4) {
       bool exists;

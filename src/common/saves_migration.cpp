@@ -126,6 +126,11 @@ void publish_obb_file_locked(const fs::path& source, const fs::path& view) {
   if (source_id && target_id &&
       field(field(copies, name), "source") == identity_record(*source_id) &&
       field(field(copies, name), "copy") == identity_record(*target_id)) return;
+  // A copy the game wrote to (detach_obb_file) is its own while the installed
+  // file is unchanged; only its file ID is bound, its size and time are the game's.
+  if (source_id && target_id && field(field(copies, name), "written") == true &&
+      field(field(copies, name), "source") == identity_record(*source_id) &&
+      field(field(copies, name), "copy") == Json::array({target_id->volume, target_id->file})) return;
   // Publish outside the enumerated directory so temporary files never leak
   // into getObbDir().list() or native getdents.
   auto temporary = view.parent_path() / (".obb-" + random_account_key());
@@ -199,6 +204,39 @@ void sync_obb_view(const fs::path& install, const fs::path& raw_view,
   }
   const Json current(std::vector<std::string>(names.begin(), names.end()));
   if (current != published) paths::atomic_write(record, current.dump());
+}
+void detach_obb_file(const fs::path& raw_view, std::string_view name) {
+  if (!paths::safe_name(name)) throw std::runtime_error("Invalid OBB view filename");
+#ifdef _WIN32
+  const fs::path view{platform::native_path(raw_view)};
+#else
+  const auto& view = raw_view;
+#endif
+  FileLock lock(view.parent_path() / (view.filename().string() + ".lock"));
+  const auto target = view / paths::from_utf8(name);
+  if (is_link(target) || !fs::is_regular_file(target)) throw std::runtime_error("Expansion file is not a regular file");
+  const auto sidecar = obb_copy_sidecar(view);
+  Json copies = Json::object();
+  if (fs::exists(sidecar) && !is_link(sidecar)) {
+    copies = Json::parse(paths::read(sidecar), nullptr, false);
+    if (!copies.is_object()) copies = Json::object();
+  }
+  const auto key = std::string(name);
+  // The installed file's identity: the entry's own while it is a hard link,
+  // or the one recorded when it was published as a copy.
+  Json source = field(field(copies, key), "source");
+  if (!source.is_array())
+    if (const auto id = file_identity(target)) source = identity_record(*id);
+  auto temporary = view.parent_path() / (".obb-" + random_account_key());
+  struct Cleanup { fs::path path; ~Cleanup() { std::error_code ignored; fs::remove(path, ignored); } } cleanup{temporary};
+  fs::copy_file(target, temporary);
+  // POSIX-semantics replace: handles already open keep reading the installed file.
+  paths::replace_file(temporary, target);
+  log::info("obb", "The game writes to {}: it now has its own copy", key);
+  if (const auto copy = file_identity(target); copy && source.is_array()) {
+    copies[key] = Json{{"source", source}, {"copy", Json::array({copy->volume, copy->file})}, {"written", true}};
+    paths::atomic_write(sidecar, copies.dump());
+  }
 }
 fs::path obb_view_for(const fs::path& install, const fs::path& view, std::string_view account) {
   if (account != "local" && !meta::valid_account_key(account))
