@@ -1756,15 +1756,7 @@ void App::draw_settings() {
   float w = std::min(ImGui::GetContentRegionAvail().x, s(kPageWidth));
   auto input = [&](const char* id, std::string* value, const char* hint) {
     return [=, this] {
-      ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {s(14), text_y(ImGui::GetFont(), kBody, 0, s(38))});
-      ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, s(10));
-      ImGui::PushStyleColor(ImGuiCol_FrameBg, color::surface_hi);
-      ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, color::surface_top);
-      ImGui::SetNextItemWidth(std::min(s(380), w * 0.48f));
-      ImGui::InputTextWithHint(id, hint, value);
-      if (ImGui::IsItemDeactivatedAfterEdit()) action([&] { save_settings(); });
-      ImGui::PopStyleColor(2);
-      ImGui::PopStyleVar(2);
+      if (text_field(id, hint, value, std::min(s(380), w * 0.48f)).committed) action([&] { save_settings(); });
     };
   };
   float field_w = std::min(s(380), w * 0.48f);
@@ -1926,20 +1918,13 @@ void App::draw_settings() {
         ImGui::Dummy({sw, sw});
         ImGui::SameLine(0, gapw);
         if (custom) {
-          ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {s(14), text_y(ImGui::GetFont(), kBody, 0, s(38))});
-          ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, s(10));
-          ImGui::PushStyleColor(ImGuiCol_FrameBg, color::surface_hi);
-          ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, color::surface_top);
-          ImGui::SetNextItemWidth(hw);
-          ImGui::InputTextWithHint("##key-hex", "RRGGBB", &settings_key_hex_, ImGuiInputTextFlags_CharsHexadecimal);
-          if (ImGui::IsItemDeactivatedAfterEdit()) {
+          if (text_field("##key-hex", "RRGGBB", &settings_key_hex_, hw, ImGuiInputTextFlags_CharsHexadecimal)
+                  .committed) {
             if (environment::parse_color_key(settings_key_hex_))
               action([this, hex = upper(settings_key_hex_)] { settings_.key_color = hex; save_settings(); });
             else
               settings_key_hex_ = settings_.key_color;
           }
-          ImGui::PopStyleColor(2);
-          ImGui::PopStyleVar(2);
           ImGui::SameLine(0, gapw);
         }
         int choice = preset;
@@ -2852,15 +2837,8 @@ void App::draw_import() {
       draw_text(ImGui::GetWindowDrawList(), fonts().regular, kBody,
                 {std::round(at.x), text_y(fonts().regular, kBody, at.y, s(38))}, color::text, "Over Wi-Fi");
       ImGui::SetCursorPos({row.x + inner - cw - fw - s(10), row.y});
-      ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {s(14), text_y(ImGui::GetFont(), kBody, 0, s(38))});
-      ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, s(10));
-      ImGui::PushStyleColor(ImGuiCol_FrameBg, color::surface_hi);
-      ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, color::surface_top);
-      ImGui::SetNextItemWidth(fw);
-      bool enter = ImGui::InputTextWithHint("##address", "192.168.1.20:5555", &import_address_,
-                                            ImGuiInputTextFlags_EnterReturnsTrue);
-      ImGui::PopStyleColor(2);
-      ImGui::PopStyleVar(2);
+      bool enter = text_field("##address", "192.168.1.20:5555", &import_address_, fw,
+                              ImGuiInputTextFlags_EnterReturnsTrue).entered;
       ImGui::SameLine(0, s(10));
       if ((button("Connect##wifi", icons::refresh, Tone::secondary, {cw, s(kControlH)},
                   !import_device_.busy && !import_address_.empty()) ||

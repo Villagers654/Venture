@@ -1549,12 +1549,15 @@ TEST_CASE(
   CHECK(guarded.tracking.head.linear_velocity.x > 0);
   CHECK(guarded.tracking.head.angular_velocity.y > 0);
   const auto motion = guarded.tracking.head.linear_velocity.x;
+  const auto spin = guarded.tracking.head.angular_velocity.y;
   REQUIRE(vg::vrapi_GetInputTrackingState(mobile, 1, time, &guarded.tracking) == 0);
   CHECK(guarded.tracking.head.linear_velocity.x == motion);
   REQUIRE(vr::sync_input() == XR_SUCCESS);
   REQUIRE(vg::vrapi_GetInputTrackingState(mobile, 1, time, &guarded.tracking) == 0);
   CHECK(guarded.tracking.head.linear_velocity.x == 0);
-  CHECK(std::abs(guarded.tracking.head.angular_velocity.y) < 1e-3f);  // float noise through the legacy-pose offset
+  // Float noise through the legacy-pose offset, divided by the same sample interval
+  // as the quarter turn above, so it is bounded relative to that turn's rate.
+  CHECK(std::abs(guarded.tracking.head.angular_velocity.y) < spin * 1e-3f);
   MockXrScript stationary{};
   ventureMockXrSetScript(&stationary);
   REQUIRE(vr::sync_input() == XR_SUCCESS);

@@ -666,6 +666,26 @@ bool search_field(const char* id, const char* hint, std::string* value, float wi
   return changed;
 }
 
+FieldResult text_field(const char* id, const char* hint, std::string* value, float width, int flags) {
+  const float height = s(38), pad = s(14);
+  const ImVec2 p = ImGui::GetCursorScreenPos();
+  // The box is drawn here and the input sits inside its padding, so ImGui clips
+  // the text there (it clips at its own frame, which has no right inset).
+  ImGui::GetWindowDrawList()->AddRectFilled(p, {p.x + width, p.y + height}, color::surface_hi, s(10));
+  ImGui::SetCursorScreenPos({p.x + pad, p.y});
+  ImGui::PushStyleColor(ImGuiCol_FrameBg, IM_COL32(0, 0, 0, 0));
+  ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {0, text_y(ImGui::GetFont(), kBody, 0, height)});
+  ImGui::SetNextItemWidth(width - 2 * pad);
+  FieldResult r;
+  r.entered = ImGui::InputTextWithHint(id, hint, value, flags) && (flags & ImGuiInputTextFlags_EnterReturnsTrue);
+  r.committed = ImGui::IsItemDeactivatedAfterEdit();
+  ImGui::PopStyleVar();
+  ImGui::PopStyleColor();
+  ImGui::SetCursorScreenPos(p);
+  ImGui::Dummy({width, height});
+  return r;
+}
+
 bool submit_field(const char* id, const char* hint, std::string* value, float width, char32_t glyph,
                   bool enabled) {
   ImGui::PushID(id);

@@ -126,6 +126,13 @@ float badge_width(std::string_view text, char32_t glyph = 0);
 // A zero `fill` uses the accent; paused progress passes a muted color.
 void progress_bar(float fraction, ImVec2 size, bool indeterminate = false, ImU32 fill = 0);
 bool search_field(const char* id, const char* hint, std::string* value, float width);
+// A settings text field, 38 high. Long text is clipped inside the padding on
+// both sides, not at the right edge of the box.
+struct FieldResult {
+  bool entered = false;    // Enter was pressed (with ImGuiInputTextFlags_EnterReturnsTrue)
+  bool committed = false;  // editing ended after a change
+};
+FieldResult text_field(const char* id, const char* hint, std::string* value, float width, int flags = 0);
 // A chip-high pill field that submits: true on Enter or its check button.
 bool submit_field(const char* id, const char* hint, std::string* value, float width, char32_t glyph,
                   bool enabled = true);
