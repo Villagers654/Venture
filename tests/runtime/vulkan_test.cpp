@@ -27,6 +27,7 @@
 #include "android/native_window.h"
 #include "fake_cpu.h"
 #include "gfx/gpu_device.h"
+#include "gfx/pipeline_trace.h"
 #include "gfx/queue_sync.h"
 #include "hle/vulkan/callbacks.h"
 #include "hle/vulkan/chain.h"
@@ -362,6 +363,7 @@ struct ScissorHooks {
   static PFN_vkVoidFunction VKAPI_CALL device_proc(VkDevice d, const char* name) {
     auto real = gdpa(d, name);
     const std::string_view n(name);
+
     if (!fail_proc.empty() && real) {
       if (n == "vkCreateImage") return reinterpret_cast<PFN_vkVoidFunction>(on_create_image);
       if (n == "vkAllocateMemory") return reinterpret_cast<PFN_vkVoidFunction>(on_allocate_memory);
@@ -504,6 +506,80 @@ TEST_CASE("Vulkan clamps dynamic scissors to the open render pass instance's ren
     for (std::size_t i = 0; i < std::size(expected); ++i) {
       CAPTURE(i);
       CHECK(same(ScissorHooks::forwarded[i], expected[i]));
+    }
+    // A scissor baked into a pipeline is clamped too: the host pipeline takes it
+    // as dynamic state, set when the pipeline is bound (the Model 2 ports' menu
+    // drew an eye-sized scissor into a smaller panel and faulted NVIDIA).
+    ScissorHooks::forwarded.clear();
+    const VkViewport viewport{0, 0, 64, 64, 0, 1};
+    const VkRect2D eye{{0, 0}, {64, 64}};
+    VkPipelineViewportStateCreateInfo vp{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
+    vp.viewportCount = vp.scissorCount = 1;
+    vp.pViewports = &viewport;
+    vp.pScissors = &eye;
+    // GLSL: an empty vertex shader (a pipeline needs no fragment stage).
+    const std::uint32_t code[]{0x07230203, 0x00010000, 0, 5, 0, 0x00020011, 1, 0x0003000e, 0, 1, 0x0005000f, 0, 3,
+                               0x6e69616d, 0, 0x00020013, 1, 0x00030021, 2, 1, 0x00050036, 1, 3, 0, 2, 0x000200f8,
+                               4, 0x000100fd, 0x00010038};
+    VkShaderModuleCreateInfo shader_info{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
+    shader_info.codeSize = sizeof(code);
+    shader_info.pCode = code;
+    VkShaderModule shader{};
+    REQUIRE(test::vk_call("vkCreateShaderModule", gpu.device, &shader_info, nullptr, &shader) == VK_SUCCESS);
+    VkPipelineLayoutCreateInfo layout_info{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+    VkPipelineLayout layout{};
+    REQUIRE(test::vk_call("vkCreatePipelineLayout", gpu.device, &layout_info, nullptr, &layout) == VK_SUCCESS);
+    VkPipelineShaderStageCreateInfo stage{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+    stage.stage = VK_SHADER_STAGE_VERTEX_BIT;
+    stage.module = shader;
+    stage.pName = "main";
+    VkPipelineVertexInputStateCreateInfo input{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
+    VkPipelineInputAssemblyStateCreateInfo assembly{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
+    assembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    VkPipelineRasterizationStateCreateInfo raster{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
+    raster.lineWidth = 1;
+    VkPipelineMultisampleStateCreateInfo multisample{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
+    multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+    VkPipelineColorBlendAttachmentState blend_attachment{};
+    blend_attachment.colorWriteMask = 0xf;
+    VkPipelineColorBlendStateCreateInfo blend{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
+    blend.attachmentCount = 1;
+    blend.pAttachments = &blend_attachment;
+    VkGraphicsPipelineCreateInfo pi{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
+    pi.stageCount = 1;
+    pi.pStages = &stage;
+    pi.pVertexInputState = &input;
+    pi.pInputAssemblyState = &assembly;
+    pi.pRasterizationState = &raster;
+    pi.pViewportState = &vp;
+    pi.pMultisampleState = &multisample;
+    pi.pColorBlendState = &blend;
+    pi.layout = layout;
+    pi.renderPass = pass;
+    pi.basePipelineIndex = -1;
+    VkPipelineCache cache{};
+    VkPipeline pipeline{};
+    REQUIRE(test::vk_call("vkCreateGraphicsPipelines", gpu.device, cache, 1u, &pi, nullptr, &pipeline) == VK_SUCCESS);
+    // A background pipeline bound before it is ready defers the recording to the submit.
+    for (int i = 0; i < 1000 && gfx::pipeline_pending(pipeline); ++i)
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    REQUIRE_FALSE(gfx::pipeline_pending(pipeline));
+    test::vk_call("vkCmdBindPipeline", gpu.command, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+    test::vk_call("vkCmdBeginRenderPass", gpu.command, &bi, VK_SUBPASS_CONTENTS_INLINE);
+    test::vk_call("vkCmdEndRenderPass", gpu.command);
+    test::vk_call("vkCmdBeginRenderPass", gpu.command, &bi, VK_SUBPASS_CONTENTS_INLINE);
+    test::vk_call("vkCmdBindPipeline", gpu.command, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+    test::vk_call("vkCmdEndRenderPass", gpu.command);
+    test::vk_call("vkDestroyPipeline", gpu.device, pipeline, nullptr);
+    test::vk_call("vkDestroyPipelineLayout", gpu.device, layout, nullptr);
+    test::vk_call("vkDestroyShaderModule", gpu.device, shader, nullptr);
+    // Bound outside a pass: as baked. Clamped at the pass; the second pass
+    // finds the host already clamped; bound inside: clamped.
+    const VkRect2D baked[] = {eye, {{4, 4}, {8, 8}}, {{4, 4}, {8, 8}}};
+    REQUIRE(ScissorHooks::forwarded.size() == std::size(baked));
+    for (std::size_t i = 0; i < std::size(baked); ++i) {
+      CAPTURE(i);
+      CHECK(same(ScissorHooks::forwarded[i], baked[i]));
     }
   }
   REQUIRE(test::vk_call("vkResetCommandBuffer", gpu.command, 0u) == VK_SUCCESS);

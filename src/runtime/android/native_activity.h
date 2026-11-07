@@ -93,4 +93,8 @@ class NativeActivity {
   std::unique_ptr<Impl> impl_;
 };
 void native_activity_set_window_format(GuestAddr activity, std::int32_t format);
+// ANativeActivity_finish: Android calls the Activity's finish(), which the Java
+// framework installs here (the activity's lifecycle then ends it as on a Quest).
+void set_native_activity_finisher(void (*finish)(GuestAddr activity));
+void native_activity_finish(GuestAddr activity);
 }  // namespace venture::android

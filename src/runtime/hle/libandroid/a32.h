@@ -20,7 +20,8 @@ inline bool supported(std::string_view name) {
          name.starts_with("AKeyEvent_") || name.starts_with("AMotionEvent_") ||
          name.starts_with("ANativeWindow_") || name.starts_with("AChoreographer") ||
          name.starts_with("ASensor") ||
-         name == "ANativeActivity_setWindowFormat" || name == "ANativeActivity_setWindowFlags";
+         name == "ANativeActivity_setWindowFormat" || name == "ANativeActivity_setWindowFlags" ||
+         name == "ANativeActivity_finish";
 }
 inline bool supported(a32::Type type) {
   if (type.kind == a32::Kind::Layout)

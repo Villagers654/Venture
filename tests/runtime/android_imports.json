@@ -64,6 +64,7 @@
     "AMotionEvent_getPointerId",
     "AMotionEvent_getX",
     "AMotionEvent_getY",
+    "ANativeActivity_finish",
     "ANativeActivity_setWindowFormat",
     "ANativeWindow_acquire",
     "ANativeWindow_fromSurface",
