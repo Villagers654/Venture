@@ -55,10 +55,6 @@ constexpr Rule kRules[] = {
      "The VR runtime did not create the game's VR session.",
      "Update Venture and your graphics driver, close other VR tools and overlays (OpenXR Toolkit, other OpenXR "
      "layers), restart your VR runtime, then try again. If it keeps happening, send this report."},
-    // library.cpp missing_expansion().
-    {{"[vfs] missing expansion file: the game looked for "},
-     "The game looked for an expansion file (OBB) that its install does not have.",
-     "Install the game again, or import it again together with its OBB file."},
     // The kernel's own reports of a GPU reset (amdgpu, i915/xe, NVIDIA Xid).
     {{"gpu reset", "ring timeout", "nvrm: xid", "gpu hang",
       "stopped responding and has successfully recovered"},  // Windows: Display event 4101

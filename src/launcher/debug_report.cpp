@@ -1027,6 +1027,11 @@ fs::path write_debug_report(const DebugReport &request) {
   } else if (!run->failed) {
     out += "The last run did not fail. If the problem happened in an earlier run, start the game again, "
            "reproduce it, then send a new report.\n";
+  } else if (!library::missing_expansion(runtime_log).empty()) {
+    // Not a log signature: games probe for optional patch OBBs at every start
+    // (UE4 and Unity), so only a probe the game then failed on counts.
+    out += "The game looked for an expansion file (OBB) that its install does not have.\n";
+    steps.push_back("Install the game again, or import it again together with its OBB file.");
   } else if (auto d = diagnose(tail_log(runtime_log, 512 << 10) + "\n" + tail_log(console_log, 128 << 10) + "\n" +
                                tail_log(logs / "launcher.log", 64 << 10) + "\n" + evidence)) {
     out += d->cause + "\n";
