@@ -34,6 +34,10 @@ TEST_CASE("debug report: known causes, most specific first") {
                           "INVALID)\nE [libc] Fatal signal 6\n");
   REQUIRE(session);
   CHECK(session->cause.find("VR session") != std::string::npos);
+  // UE4 and Unity probe for optional patch OBBs at every start: the probe alone
+  // names no cause (Pinball FX VR quit for another reason and was told to reinstall).
+  CHECK_FALSE(diagnose("W [vfs] Missing expansion file: the game looked for patch.com.example.obb, which this "
+                       "install does not have\nI [Process] Application requested process exit 0\n").has_value());
   CHECK(diagnose("The Venture launcher needs a Wayland session, and no Wayland display was reachable")->cause.find(
             "Wayland") != std::string::npos);
   CHECK(error_line("Something FAILED here"));
