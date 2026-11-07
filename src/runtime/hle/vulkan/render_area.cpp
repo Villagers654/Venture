@@ -61,7 +61,9 @@ std::unordered_map<VkCommandBuffer, Scissors> states;
 // Graphics pipelines whose scissors are static: binding one invalidates the
 // dynamic scissors ("made invalid by another pipeline bind with that state
 // specified as static", Pipeline Dynamic State).
-std::unordered_set<VkPipeline> static_scissor;
+// Pipelines whose scissors the guest baked in: the host pipeline takes them
+// as dynamic state, so they can be clamped to each render area like dynamic ones.
+std::unordered_map<VkPipeline, std::vector<VkRect2D>> static_scissor;
 // Images that can be attachments (extent of mip 0), their views (extent of the
 // base mip), and host framebuffers created smaller than the guest asked.
 struct Image {
@@ -882,13 +884,52 @@ bool bakes_scissor(const VkGraphicsPipelineCreateInfo& info) {
     }
   return true;
 }
+// A baked scissor cannot follow the render area: an eye-sized scissor on a
+// pipeline reused for an 848x1060 panel (the Model 2 ports' menu) rasterizes
+// past the panel's depth buffer, which a Quest's tiler never touches and NVIDIA
+// faults ("ZT Violation", then VK_ERROR_DEVICE_LOST). The host pipeline makes
+// the scissor dynamic; binding it sets the baked rects, clamped in a render pass.
+bool converts_scissor(const VkGraphicsPipelineCreateInfo& info) {
+  if (!bakes_scissor(info) || !info.pViewportState->pScissors || !info.pViewportState->scissorCount) return false;
+  if (info.pDynamicState)
+    for (std::uint32_t i = 0; i < info.pDynamicState->dynamicStateCount; ++i)
+      if (info.pDynamicState->pDynamicStates[i] == VK_DYNAMIC_STATE_VIEWPORT_WITH_COUNT) return false;
+  return true;
+}
 VkResult VKAPI_CALL create_graphics_pipelines(VkDevice d, VkPipelineCache cache, std::uint32_t count,
                                               const VkGraphicsPipelineCreateInfo* infos,
                                               const VkAllocationCallbacks* alloc, VkPipeline* out) {
-  auto r = next<PFN_vkCreateGraphicsPipelines, "vkCreateGraphicsPipelines">(d)(d, cache, count, infos, alloc, out);
+  std::vector<VkGraphicsPipelineCreateInfo> copies;
+  std::vector<std::vector<VkDynamicState>> states;
+  std::vector<VkPipelineDynamicStateCreateInfo> dynamic;
+  for (std::uint32_t i = 0; i < count; ++i)
+    if (converts_scissor(infos[i])) {
+      copies.assign(infos, infos + count);
+      states.resize(count);
+      dynamic.resize(count);
+      break;
+    }
+  for (std::uint32_t i = 0; i < copies.size(); ++i) {
+    if (!converts_scissor(infos[i])) continue;
+    if (const auto* given = infos[i].pDynamicState) {
+      states[i].assign(given->pDynamicStates, given->pDynamicStates + given->dynamicStateCount);
+      dynamic[i] = *given;
+    } else {
+      dynamic[i] = {VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
+    }
+    states[i].push_back(VK_DYNAMIC_STATE_SCISSOR);
+    dynamic[i].dynamicStateCount = static_cast<std::uint32_t>(states[i].size());
+    dynamic[i].pDynamicStates = states[i].data();
+    copies[i].pDynamicState = &dynamic[i];
+  }
+  auto r = next<PFN_vkCreateGraphicsPipelines, "vkCreateGraphicsPipelines">(d)(
+      d, cache, count, copies.empty() ? infos : copies.data(), alloc, out);
   std::lock_guard lock(mutex);
   for (std::uint32_t i = 0; i < count; ++i)
-    if (out[i] && bakes_scissor(infos[i])) static_scissor.insert(out[i]);
+    if (out[i] && converts_scissor(infos[i])) {
+      const auto& viewport = *infos[i].pViewportState;
+      static_scissor[out[i]].assign(viewport.pScissors, viewport.pScissors + viewport.scissorCount);
+    }
   return r;
 }
 void VKAPI_CALL destroy_pipeline(VkDevice d, VkPipeline pipeline, const VkAllocationCallbacks* alloc) {
@@ -899,15 +940,20 @@ void VKAPI_CALL destroy_pipeline(VkDevice d, VkPipeline pipeline, const VkAlloca
   next<PFN_vkDestroyPipeline, "vkDestroyPipeline">(d)(d, pipeline, alloc);
 }
 void VKAPI_CALL bind_pipeline(VkCommandBuffer cmd, VkPipelineBindPoint point, VkPipeline pipeline) {
+  std::optional<Forward> f;
   if (point == VK_PIPELINE_BIND_POINT_GRAPHICS) {
     std::lock_guard lock(mutex);
-    if (static_scissor.contains(pipeline)) {
+    if (auto it = static_scissor.find(pipeline); it != static_scissor.end()) {
+      // The baked rects become this command buffer's scissors, as if set.
       auto& s = states[cmd];
-      s.rects.clear();
+      s.with_count = false;
+      s.rects = it->second;
       s.host.clear();
+      f = forwarded(s, 0, static_cast<std::uint32_t>(s.rects.size()));
     }
   }
   next<PFN_vkCmdBindPipeline, "vkCmdBindPipeline">(command_device(cmd))(cmd, point, pipeline);
+  if (f) forward(cmd, *f);
 }
 void VKAPI_CALL end_pass(VkCommandBuffer cmd) {
   const auto after = end_area(cmd);

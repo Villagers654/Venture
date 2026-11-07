@@ -14,6 +14,7 @@
 #include "java/internal.h"
 #include "java/jni32.h"
 #include "common/log.h"
+#include <atomic>
 #include <cstring>
 #include <map>
 #include <thread>
@@ -292,6 +293,15 @@ std::vector<std::byte> NativeActivity::save_state(GuestAddr guest_free) {
     thread.call(guest_free, {data});
   }
   return result;
+}
+namespace {
+std::atomic<void (*)(GuestAddr)> finisher{nullptr};
+}  // namespace
+void set_native_activity_finisher(void (*finish)(GuestAddr activity)) { finisher.store(finish); }
+void native_activity_finish(GuestAddr activity) {
+  log::info("activity", "The game finished its NativeActivity");
+  if (auto finish = finisher.load()) finish(activity);
+  else log::warn("activity", "ANativeActivity_finish before the framework started");
 }
 void native_activity_set_window_format(GuestAddr address, std::int32_t format) {
   std::shared_ptr<WindowState> state;

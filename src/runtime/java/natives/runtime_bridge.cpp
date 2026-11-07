@@ -331,8 +331,31 @@ struct ActivityState {
 std::mutex activity_mutex;
 std::map<GuestAddr, std::shared_ptr<ActivityState>> activities;
 
+// ANativeActivity_finish from any thread: Activity.finish() posts the finish to
+// the main looper itself when called off it, as AOSP's finish request does.
+void finish_activity(GuestAddr address) {
+  std::shared_ptr<ActivityState> state;  // keeps the global ref alive for the call
+  {
+    std::lock_guard lock(activity_mutex);
+    auto it = activities.find(address);
+    if (it == activities.end()) return;
+    state = it->second;
+  }
+  auto object = state->object;
+  auto* env = host_env();
+  LocalFrame frame(env);
+  if (!frame.valid()) return;
+  auto cls = env->GetObjectClass(object);
+  auto finish = cls ? env->GetMethodID(cls, "finish", "()V") : nullptr;
+  if (finish) env->CallVoidMethod(object, finish);
+  if (env->ExceptionCheck()) {
+    env->ExceptionDescribe();
+    env->ExceptionClear();
+  }
+}
 GuestAddr create_activity(JNIEnv* env, void* object, const std::string& name,
                           const std::string& entry, std::string* error) {
+  android::set_native_activity_finisher(finish_activity);
   LocalFrame frame(env);
   if (!frame.valid()) return 0;
   auto activity = static_cast<jobject>(object);

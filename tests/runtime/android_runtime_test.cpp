@@ -257,6 +257,12 @@ TEST_CASE("android NativeActivity AArch64 fields and ordered lifecycle callbacks
   test::android_remove_callback(free_cb);
   call("ANativeActivity_setWindowFormat", {a->address(), 4});
   CHECK(window->format == 4);
+  // ANativeActivity_finish reaches the framework's Activity.finish().
+  static GuestAddr finished = 0;
+  android::set_native_activity_finisher([](GuestAddr activity) { finished = activity; });
+  call("ANativeActivity_finish", {a->address()});
+  CHECK(finished == a->address());
+  android::set_native_activity_finisher(nullptr);
   a->event(ActivityEvent::pause);
   a->event(ActivityEvent::stop);
   a->destroy();
@@ -322,7 +328,8 @@ TEST_CASE("android choreographer runs a frame callback at the next vsync when th
     l->poll(20, nullptr, nullptr, nullptr);
     return frame;
   }));
-  CHECK(monotonic_ns() - posted < 1'000'000'000);
+  // Well before the predicted display time 30 s ahead (a loaded runner took 1.8 s).
+  CHECK(monotonic_ns() - posted < 10'000'000'000);
   display_vsync(0, 11111111);
   display_vsync(monotonic_ns(), 11111111);
   test::android_remove_callback(frame_cb);

@@ -185,6 +185,7 @@ void register_services(HleLibrary& lib) {
 #define API(name, fn) add<&fn>(lib, name)
   API("ANativeActivity_setWindowFormat", android::native_activity_set_window_format);
   API("ANativeActivity_setWindowFlags", set_window_flags);
+  API("ANativeActivity_finish", android::native_activity_finish);
   API("ASensorManager_getInstance", sensor_manager);
   API("ASensorManager_getInstanceForPackage", sensor_manager_package);
   API("ASensorManager_getSensorList", sensor_list);
