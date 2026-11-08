@@ -271,14 +271,15 @@ struct Codec : media::Codec {
   GuestStorage input32, output32;
 };
 android::Handles<Codec> codecs("AMediaCodec");
-media::Codec::Sink surface_sink(void* surface) {
+// An ANativeWindow's frame sink (taking each frame's pixels) and consumer size.
+std::pair<media::Codec::Sink,media::Codec::Extent> surface_sink(void* surface) {
   auto window=android::pin_native_window(h2g(surface));
   if(!window)return {};
   auto* raw=window.get();android::acquire(raw);
   auto owner=std::shared_ptr<android::NativeWindow>(raw,[pin=std::move(window)](android::NativeWindow* p){(void)pin;android::release(p);});
-  return [owner](const media::VideoFrame& f) {
-    return android::publish_window_rgba(owner.get(),f.rgba,f.width,f.height,false,f.time_us*1000);
-  };
+  return {[owner](media::VideoFrame& f) {
+    return android::publish_window_rgba(owner.get(),std::move(f.rgba),f.width,f.height,f.time_us*1000);
+  },[owner]{return android::window_consumer_extent(owner.get());}};
 }
 Codec* codec_new(const char* mime) {
   log::info("media","AMediaCodec_createDecoderByType mime={}",mime?mime:"<null>");
@@ -307,8 +308,8 @@ int codec_configure(Codec* p,Format* format,void* surface,void* crypto,std::uint
     }
   }
   log::info("media","Codec configure {} {}x{} rate={} channels={} csd={} bytes",track.mime,track.width,track.height,track.rate,track.channels,track.config.size());
-  auto sink=surface_sink(surface);if(surface && !sink)return invalid_parameter;
-  return c->configure(track,std::move(sink));
+  auto [sink,extent]=surface_sink(surface);if(surface && !sink)return invalid_parameter;
+  return c->configure(track,std::move(sink),std::move(extent));
 }
 int codec_start(Codec* p){auto c=codecs.get(p);return c?c->start():invalid_object;}
 int codec_stop(Codec* p){auto c=codecs.get(p);return c?c->stop():invalid_object;}
@@ -344,8 +345,8 @@ const std::byte* codec_output_buffer(Codec* p,std::uint64_t index,std::uint64_t*
 int codec_release(Codec* p,std::uint64_t index,bool render){auto c=codecs.get(p);return c?c->release(index,render):invalid_object;}
 int codec_release_at(Codec* p,std::uint64_t index,std::int64_t time){auto c=codecs.get(p);return c?c->release(index,true,time):invalid_object;}
 int codec_surface(Codec* p,void* surface) {
-  auto c=codecs.get(p);if(!c)return invalid_object;auto sink=surface_sink(surface);
-  return sink?c->surface(std::move(sink)):invalid_parameter;
+  auto c=codecs.get(p);if(!c)return invalid_object;auto [sink,extent]=surface_sink(surface);
+  return sink?c->surface(std::move(sink),std::move(extent)):invalid_parameter;
 }
 Format* codec_format(Codec* p) {
   auto c=codecs.get(p);if(!c)return nullptr;auto track=c->format();if(track.mime.empty())return nullptr;

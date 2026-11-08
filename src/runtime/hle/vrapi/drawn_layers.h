@@ -11,9 +11,15 @@ namespace venture::hle::vrapi {
 // VrApi layers the host cannot compose exactly (no cylinder, cube or equirect
 // extension, as on SteamVR; elliptical, sheared or projective layer matrices;
 // texture matrices; blend factors and color scales a host layer cannot
-// express) are drawn into a projection layer at their place in the frame and
+// express) are drawn at their place in the frame and
 // at their true geometry (xr/sphere_images.h). Each run of consecutive ones in
-// the same space shares one projection layer. Serialized by the VrApi state mutex.
+// the same space shares one image per eye, rendered for that eye's view.
+// The images are submitted as one quad per eye covering exactly that view's
+// frustum, not as a projection layer: Virtual Desktop (VirtualDesktopXR 1.1.0,
+// Quest 3) shows a frame carrying a projection layer besides the game's own as
+// a head-locked panel surrounded by black (#63; Tales from the Galaxy's Edge,
+// whose OVRPlugin transition layer is drawn ahead of its eye buffer from the
+// first frame). Serialized by the VrApi state mutex.
 struct DrawnEye {
   TextureSwapChain *chain = nullptr;
   int slot = 0;
@@ -25,8 +31,8 @@ struct DrawnLayer {
 };
 class DrawnLayers {
 public:
-  // Appends the run's projection placeholder to `layers` unless the layer
-  // continues the run that placeholder ends.
+  // Appends the run's placeholder (its left eye quad) to `layers` unless the
+  // layer continues the run that placeholder ends.
   void add(const DrawnLayer &, std::vector<const XrCompositionLayerBaseHeader *> &layers);
   bool empty() const { return runs_.empty(); }
   // A ring slot's contents in a host image the caller holds acquired until
@@ -41,14 +47,17 @@ public:
   // (FEATURE_UNSUPPORTED) is left out; other failures fail the frame.
   XrResult gather(const Sources &, std::vector<const XrCompositionLayerBaseHeader *> &layers);
   // After the sources' copies were submitted, before their release: draws
-  // each run into its host chain and completes its placeholder. Also returns
+  // each run into its host chain and completes its two quads. Also returns
   // chains no longer drawn into; nothing else runs without drawn layers.
   XrResult present(std::vector<const XrCompositionLayerBaseHeader *> &layers);
 
 private:
   struct Run {
-    XrCompositionLayerProjection projection{XR_TYPE_COMPOSITION_LAYER_PROJECTION};
-    std::array<XrCompositionLayerProjectionView, 2> views{};
+    std::array<XrCompositionLayerQuad, 2> quads{{{XR_TYPE_COMPOSITION_LAYER_QUAD},
+                                                  {XR_TYPE_COMPOSITION_LAYER_QUAD}}};
+    const XrCompositionLayerBaseHeader *placeholder() const {
+      return reinterpret_cast<const XrCompositionLayerBaseHeader *>(&quads[0]);
+    }
     std::vector<DrawnLayer> layers;
     std::vector<std::array<Source, 2>> sources;
   };

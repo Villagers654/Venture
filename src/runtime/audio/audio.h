@@ -156,6 +156,11 @@ class Stream : public std::enable_shared_from_this<Stream> {
   // Android counts underrun edges; acceptance retains every short host pull.
   std::atomic<std::uint64_t> lost_callbacks{0};
   std::atomic<std::uint64_t> missing_frames{0};
+  // Producer-side dropouts: digital silence the guest itself wrote between
+  // sounding samples (an abrupt cut to exact zero, 4800 frames or shorter).
+  // A guest mixer that misses its deadline pads with zeros; the host device
+  // never underruns then, but the output crackles all the same.
+  std::atomic<std::uint64_t> guest_gaps{0}, guest_gap_frames{0};
   std::uint64_t telemetry_id = 0;
   // Immutable identity for an opt-in source-specific media measurement.
   std::string media_source_sha256;
@@ -179,6 +184,10 @@ class Stream : public std::enable_shared_from_this<Stream> {
   // A finite decoded source has deliberately reached EOS. Short host reads
   // after its last queued sample are normal silence, not producer starvation.
   std::atomic<bool> source_eos{false};
+  // The guest has queued nothing and no callback of its is running (an OpenSL
+  // player left PLAYING with an empty buffer queue): the silence that follows
+  // is the game's choice, not a producer missing its deadline.
+  std::atomic<bool> guest_idle{false};
   std::atomic<std::uint64_t> buffer_generation{0};
   std::mutex io_lock;
 
@@ -208,7 +217,12 @@ class Stream : public std::enable_shared_from_this<Stream> {
   void complete_stop();
   int slot_ = -1;
   bool underrunning_ = false;  // device-owned; reset after detach drains readers
+  // Producer-owned (io_lock) dropout detector state.
+  std::uint32_t zero_run_ = 0;
+  float before_zero_ = 0;
+  bool sounded_ = false;
   void render(float* output, const float* input, std::uint32_t frames);
+  void track_gaps(const float* frames, std::uint32_t count);  // producer side, io_lock
 };
 
 class Backend {
@@ -297,7 +311,7 @@ class Backend {
   std::atomic<std::uint64_t> output_frames_{0}, non_silent_samples_{0};
   std::atomic<float> output_peak_{0};
   std::thread monitor_;
-  struct SourceStats { std::uint64_t id, underruns, missing, written, consumed; int queue, watermark, rate, state; std::string api; std::uint64_t work_ns, gap_ns, callbacks, callback_wall, callback_cpu, callback_cpu_samples, callback_wall_max, callback_adopt_max; int callback_frames, capacity; std::uint64_t callback_cycles, callback_cycles_samples; std::int32_t callback_guest_tid; std::uint64_t non_silent; float gain_left,gain_right; std::int32_t xrun_episodes; };
+  struct SourceStats { std::uint64_t id, underruns, missing, written, consumed; int queue, watermark, rate, state; std::string api; std::uint64_t work_ns, gap_ns, callbacks, callback_wall, callback_cpu, callback_cpu_samples, callback_wall_max, callback_adopt_max; int callback_frames, capacity; std::uint64_t callback_cycles, callback_cycles_samples; std::int32_t callback_guest_tid; std::uint64_t non_silent; float gain_left,gain_right; std::int32_t xrun_episodes; std::uint64_t guest_gaps, guest_gap_frames; };
   std::vector<SourceStats> source_history_;
   std::uint64_t next_source_id_ = 1;
   std::uint64_t opened_output_streams_ = 0, closed_output_streams_ = 0;

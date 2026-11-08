@@ -30,6 +30,7 @@
 #include <tuple>
 #include "xr/hands.h"
 #include "xr/math.h"
+#include "xr/session.h"
 #include <doctest/doctest.h>
 #include <thread>
 #include <future>
@@ -1128,13 +1129,26 @@ TEST_CASE("VrApi constant projective layers copy their texel across both eye fru
   };
   REQUIRE(vr::translate_layer(projection.header, eyes, image, storage, layers) == XR_SUCCESS);
   CHECK(supplied == 2);
-  REQUIRE(layers.size() == 1);
-  CHECK(storage.projection.layerFlags == (XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT |
-                                          XR_COMPOSITION_LAYER_UNPREMULTIPLIED_ALPHA_BIT));
-  CHECK(storage.projection.space == vr::state().view);
+  // One head-locked quad per eye over that eye's whole view, never a VIEW
+  // space projection layer (Virtual Desktop shows a frame with one as a panel).
+  REQUIRE(layers.size() == 2);
   for (int eye = 0; eye < 2; ++eye) {
-    CHECK(std::memcmp(&storage.views[eye].fov, &eyes[eye].fov, sizeof(XrFovf)) == 0);
-    CHECK(std::memcmp(&storage.views[eye].pose, &eyes[eye].pose, sizeof(XrPosef)) == 0);
+    CAPTURE(eye);
+    const auto &quad = storage.quad[eye];
+    CHECK(layers[eye] == reinterpret_cast<const XrCompositionLayerBaseHeader *>(&quad));
+    CHECK(quad.layerFlags == (XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT |
+                              XR_COMPOSITION_LAYER_UNPREMULTIPLIED_ALPHA_BIT));
+    CHECK(quad.space == vr::state().view);
+    CHECK(quad.eyeVisibility == (eye ? XR_EYE_VISIBILITY_RIGHT : XR_EYE_VISIBILITY_LEFT));
+    const auto &fov = eyes[eye].fov;
+    const float l = std::tan(fov.angleLeft), r = std::tan(fov.angleRight);
+    const float u = std::tan(fov.angleUp), d = std::tan(fov.angleDown);
+    CHECK(quad.size.width == doctest::Approx(r - l));
+    CHECK(quad.size.height == doctest::Approx(u - d));
+    CHECK(quad.pose.position.x == doctest::Approx(eyes[eye].pose.position.x + (l + r) / 2));
+    CHECK(quad.pose.position.y == doctest::Approx((u + d) / 2));
+    CHECK(quad.pose.position.z == doctest::Approx(-1));
+    CHECK(quad.pose.orientation.w == doctest::Approx(1));
   }
   const vr::abi::LayerHeader *headers[]{&projection.header};
   vr::abi::Submit submit{0, 1, 1, 0, 0x1234, 1, headers};
@@ -2653,8 +2667,8 @@ TEST_CASE("A hands-only app sees the host's hands in place of its controllers") 
   CHECK_FALSE(hand_replaces_controller(false, true, true, true));
 }
 namespace {
-// Layers no host layer shows exactly are drawn into a projection layer
-// (drawn_layers.h). The mock host's eyes see 45 degrees each way, 1024 pixels
+// Layers no host layer shows exactly are drawn into one image per eye, shown
+// as one quad per eye over that eye's view (drawn_layers.h). The mock host's eyes see 45 degrees each way, 1024 pixels
 // across, 32 mm either side of the head; a layer in VIEW space (flag 4) has
 // the head at the origin. Ring textures are painted in quadrants, GLES rows
 // (row 0 at the bottom): bottom left red, bottom right green, top left blue,
@@ -2699,7 +2713,7 @@ struct DrawnLayerScene {
     return ventureMockXrLastSubImages(nullptr, 0);
   }
   // The drawn layer's texel for eye `eye` at view tangents (x, y): the frame
-  // must have been the drawn projection layer alone.
+  // must have been the drawn quads alone.
   std::array<std::uint8_t, 4> pixel(int eye, float x, float y) {
     std::array<XrSwapchainSubImage, 2> drawn{};
     REQUIRE(ventureMockXrLastSubImages(drawn.data(), 2) == 2);
@@ -2751,7 +2765,9 @@ TEST_CASE("VrApi cylinders the host cannot compose are drawn at their true arc")
     const auto before = ventureMockXrStats();
     CHECK(scene.submit(cylinder.header) == 2);
     CHECK(ventureMockXrStats().cylinder == before.cylinder);
-    CHECK(ventureMockXrStats().projection == before.projection + 1);
+    // One quad per eye, not a second projection layer.
+    CHECK(ventureMockXrStats().projection == before.projection);
+    CHECK(ventureMockXrStats().quad == before.quad + 2);
     // The unit cylinder spans pi radians and tan(30 degrees) up and down:
     // the left of the view shows the image's left, its top the image's top.
     for (int eye = 0; eye < 2; ++eye) {
@@ -2775,7 +2791,9 @@ TEST_CASE("VrApi cylinders the host cannot compose are drawn at their true arc")
     const auto before = ventureMockXrStats();
     CHECK(scene.submit(cylinder.header) == 2);
     CHECK(ventureMockXrStats().cylinder == before.cylinder);
-    CHECK(ventureMockXrStats().projection == before.projection + 1);
+    // One quad per eye, not a second projection layer.
+    CHECK(ventureMockXrStats().projection == before.projection);
+    CHECK(ventureMockXrStats().quad == before.quad + 2);
     CHECK(near(scene.pixel(0, -.3f, .1f), S::blue));
     CHECK(near(scene.pixel(0, .3f, -.1f), S::green));
     // Two metres ahead the arc is half as tall in the view as a round one's.
@@ -2792,6 +2810,70 @@ TEST_CASE("VrApi cylinders the host cannot compose are drawn at their true arc")
     cylinder.header = {3, 4, {.5f, .5f, .5f, 1}, 1, 0, 0};
     CHECK(scene.submit(cylinder.header) == 2);
     CHECK(near(scene.pixel(0, .3f, .15f), {128, 128, 128, 255}));
+  }
+}
+TEST_CASE("VrApi drawn world-locked layers stay put in the world while the head moves") {
+  // Each eye's quad must cover exactly the view its image was drawn for, and
+  // the content must keep its place in app space as the head turns and moves.
+  DrawnLayerScene scene;
+  HostExtension hidden("XR_KHR_composition_layer_cylinder");
+  auto cylinder = head_locked_cylinder(scene.ring());
+  cylinder.header.flags = 0; // world-locked: a unit cylinder about the app origin
+  struct Head {
+    float yaw;
+    XrVector3f position;
+  };
+  for (const Head head : {Head{0, {0, 0, 0}}, Head{.35f, {.05f, .02f, .03f}}, Head{-.3f, {-.04f, 0, -.05f}}}) {
+    CAPTURE(head.yaw);
+    // The mock's head at 1.6 m is the app space's origin height.
+    scene.script.head = {{0, std::sin(head.yaw / 2), 0, std::cos(head.yaw / 2)},
+                         {head.position.x, 1.6f + head.position.y, head.position.z}};
+    ventureMockXrSetScript(&scene.script);
+    CHECK(scene.submit(cylinder.header) == 2);
+    std::array<XrCompositionLayerQuad, 2> quads{};
+    REQUIRE(ventureMockXrLastQuads(quads.data(), 2) == 2);
+    auto &session = venture::xr::session();
+    XrViewLocateInfo locate{XR_TYPE_VIEW_LOCATE_INFO, nullptr, session.view_configuration,
+                            ventureMockXrLastDisplayTime(), vr::state().app};
+    XrViewState view_state{XR_TYPE_VIEW_STATE};
+    std::array<XrView, 2> views{{{XR_TYPE_VIEW}, {XR_TYPE_VIEW}}};
+    std::uint32_t count = 0;
+    REQUIRE(::xrLocateViews(session.handle, &locate, &view_state, 2, &count, views.data()) == XR_SUCCESS);
+    for (int eye = 0; eye < 2; ++eye) {
+      CAPTURE(eye);
+      const auto &quad = quads[eye];
+      CHECK(quad.space == vr::state().app);
+      CHECK(quad.eyeVisibility == (eye ? XR_EYE_VISIBILITY_RIGHT : XR_EYE_VISIBILITY_LEFT));
+      CHECK(quad.subImage.imageArrayIndex == std::uint32_t(eye));
+      // The quad's corners, seen from the eye, lie on its view's frustum edges.
+      const auto to_eye = venture::xr::inverse(views[eye].pose);
+      for (float sx : {-1.f, 1.f})
+        for (float sy : {-1.f, 1.f}) {
+          const auto corner = venture::xr::compose(
+              quad.pose, {{0, 0, 0, 1}, {sx * quad.size.width / 2, sy * quad.size.height / 2, 0}});
+          const auto p = venture::xr::compose(to_eye, corner).position;
+          REQUIRE(p.z < 0);
+          CHECK(std::abs(-p.x / p.z - sx) < 1e-4f);
+          CHECK(std::abs(-p.y / p.z - sy) < 1e-4f);
+        }
+      // The image's blue/white edge is the cylinder's line straight ahead of
+      // the app origin, (0, y, -1): find it along one row of this eye's image
+      // and check it is where that world point is seen from this eye now.
+      const auto seen = venture::xr::compose(to_eye, {{0, 0, 0, 1}, {0, .2f, -1}}).position;
+      REQUIRE(seen.z < 0);
+      const float tx = -seen.x / seen.z, ty = -seen.y / seen.z;
+      REQUIRE(std::abs(tx) < .7f);
+      REQUIRE(ty > .05f);
+      REQUIRE(ty < .5f);
+      float lo = tx - .2f, hi = tx + .2f;
+      REQUIRE(scene.pixel(eye, lo, ty)[0] < 128);
+      REQUIRE(scene.pixel(eye, hi, ty)[0] >= 128);
+      while (hi - lo > .5f / 512) {
+        const float mid = (lo + hi) / 2;
+        (scene.pixel(eye, mid, ty)[0] < 128 ? lo : hi) = mid;
+      }
+      CHECK(std::abs((lo + hi) / 2 - tx) < 3.f / 512);
+    }
   }
 }
 TEST_CASE("VrApi straight alpha cylinders are drawn premultiplied over the layers below") {

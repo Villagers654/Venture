@@ -48,7 +48,7 @@ std::int64_t thread_cpu_time_ns() {
 #endif
 }
 namespace {
-struct Entry { int id = 0; std::atomic<bool> audio{false}; std::atomic<int> nice{0}; int fifo = 0; Entry* previous = nullptr; std::unique_ptr<AudioThreadPriority> priority; };
+struct Entry { int id = 0; std::atomic<bool> audio{false}; std::atomic<int> nice{0}; int fifo = 0; bool realtime_request = false; Entry* previous = nullptr; std::unique_ptr<AudioThreadPriority> priority; };
 struct Threads { std::mutex mutex; std::map<std::int32_t, std::unique_ptr<Entry>> ids; };
 thread_local Entry* current_entry = nullptr;
 thread_local unsigned realtime_depth = 0;
@@ -176,8 +176,20 @@ int set_audio_thread_priority(std::int32_t tid, int fifo_priority) {
   auto it = state.ids.find(tid);
   if (it == state.ids.end()) return -err::kESRCH;
   it->second->fifo = fifo_priority;
+  // An explicit SCHED_OTHER request withdraws an earlier real-time request.
+  if (!fifo_priority) it->second->realtime_request = false;
   auto nice = it->second->nice.load(std::memory_order_relaxed);
   it->second->audio = fifo_priority || nice == -16 || nice == -19;
+  if (it->second.get() == current_entry) apply_pending_thread_priority();
+  return 0;
+}
+int request_realtime_thread(std::int32_t tid) {
+  auto& state = threads();
+  std::lock_guard lock(state.mutex);
+  auto it = state.ids.find(tid);
+  if (it == state.ids.end()) return -err::kESRCH;
+  it->second->realtime_request = true;
+  it->second->audio = true;
   if (it->second.get() == current_entry) apply_pending_thread_priority();
   return 0;
 }
@@ -250,7 +262,7 @@ int set_thread_priority(std::int32_t tid, int nice) {
       if (applied != nice && !clamp_reported.test_and_set(std::memory_order_relaxed))
         log::warn("scheduling", "Host priority permissions limit requested nice {} to {}; guest priority retained", nice, applied);
       it->second->nice = nice;
-      it->second->audio = false;
+      it->second->audio = it->second->realtime_request;
       if (it->second.get() == current_entry) apply_pending_thread_priority();
       return 0;
     }

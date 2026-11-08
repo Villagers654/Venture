@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <chrono>
 #include <deque>
 #include <mutex>
 #include <unordered_map>
@@ -53,6 +54,7 @@ struct Object {
   std::mutex lock;
   std::deque<Entry> queue;
   GuestAddr queue_cb = 0, queue_user = 0, queue_itf = 0;
+  std::chrono::steady_clock::time_point emptied{};  // queue empty since; epoch while not empty
   GuestAddr object_cb = 0, object_user = 0;
   std::int16_t volume = 0, pan = 0;
   std::uint32_t mute = 0, pan_enabled = 0;
@@ -367,9 +369,18 @@ void queue_work(std::weak_ptr<Object> weak) {
   {
     std::lock_guard lock(o->lock);
     auto& s = *o->stream;
-    if (o->play_state != 3 || (s.state != audio::State::started && s.state != audio::State::starting) ||
-        o->queue.empty())
+    if (o->play_state != 3 || (s.state != audio::State::started && s.state != audio::State::starting))
       return;
+    if (o->queue.empty()) {
+      // Checked between callbacks only, so a late callback still underruns.
+      // A queue the game leaves empty for 100 ms (a player left PLAYING with
+      // nothing to play) starves the device by choice, not by a deadline.
+      const auto now = std::chrono::steady_clock::now();
+      if (o->emptied == decltype(o->emptied){}) o->emptied = now;
+      if (o->kind == Kind::player && now - o->emptied >= std::chrono::milliseconds(100))
+        s.guest_idle.store(true, std::memory_order_release);
+      return;
+    }
     auto bytes = audio::sample_bytes(s.config.format) * s.config.channels;
     // Prefill subsequent buffers before the first one completes, so a queue
     // with two buffers stays continuous across completion callback scheduling.
@@ -568,6 +579,8 @@ Result enqueue(GuestAddr self, GuestAddr buffer, std::uint32_t size) {
   if (o->realized != 2) return precondition;
   if (o->queue.size() == o->queue_limit) return insufficient;
   o->queue.push_back(Entry{buffer, size / bytes});
+  o->emptied = {};
+  o->stream->guest_idle.store(false, std::memory_order_release);
   return ok;
 }
 Result seek_position(GuestAddr self,std::uint32_t milliseconds,std::uint32_t mode) {

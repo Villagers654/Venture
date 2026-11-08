@@ -86,6 +86,20 @@ class Extractor {
 };
 class Decoder {
  public:
+  // A decoded picture held by reference, unconverted: a hardware decoder's
+  // surface stays on the GPU until the picture is converted or dropped.
+  class Picture {
+   public:
+    ~Picture();
+    Picture(const Picture&)=delete;
+    int width=0,height=0;
+    std::int64_t time_us=0;
+   private:
+    friend class Decoder;
+    Picture()=default;
+    std::shared_ptr<Library> library;
+    void* frame=nullptr;
+  };
   explicit Decoder(std::shared_ptr<Library> library = Library::get());
   ~Decoder();
   int configure(const Track& track);
@@ -95,6 +109,9 @@ class Decoder {
   // converted. Reference pictures are retained by FFmpeg as usual.
   int receive(VideoFrame* output,std::int64_t discard_before_us=std::numeric_limits<std::int64_t>::min(),
               int output_width=0,int output_height=0,bool nv12=false);
+  int receive(std::shared_ptr<Picture>* output);
+  // Downloads and converts a picture from this decoder; 1 on success.
+  int convert(const Picture& picture,VideoFrame* output,int output_width=0,int output_height=0,bool nv12=false);
   std::int64_t video_conversion_us() const;
   void flush();
  private:
@@ -103,21 +120,27 @@ class Decoder {
 };
 // Android synchronous codec contract. Decode runs on a private worker; four
 // input packets and four decoded frames bound producer/consumer backpressure.
+// With a Surface, decoded pictures stay unconverted until released for
+// rendering, as a MediaCodec's output buffers stay in the decoder's memory:
+// pictures the player drops cost no download or color conversion.
 class Codec {
  public:
   struct Info { std::int32_t offset=0,size=0;std::int64_t time=0;std::uint32_t flags=0; };
-  using Sink=std::function<int(const VideoFrame&)>;
+  // A sink may take the frame's pixels.
+  using Sink=std::function<int(VideoFrame&)>;
+  // The consumer's fixed size, {0,0} for the source size; queried on the worker.
+  using Extent=std::function<std::pair<int,int>()>;
   Codec();
   ~Codec();
   void release();
   Codec(const Codec&)=delete;
   Codec& operator=(const Codec&)=delete;
   static void shutdown_all();
-  int configure(const Track&, Sink = {});
+  int configure(const Track&, Sink = {}, Extent = {});
   int start();
   int stop();
   int flush();
-  int surface(Sink);
+  int surface(Sink, Extent = {});
   std::int64_t input(std::int64_t timeout_us);
   std::span<std::byte> input_buffer(std::uint64_t index,bool require_owned=true);
   int queue(std::uint64_t index,std::uint64_t offset,std::uint64_t size,std::int64_t time,std::uint32_t flags);
@@ -143,7 +166,7 @@ class Player {
   void loop(bool enabled);
   // Fixed-size window consumers can scale during color conversion. Texture
   // consumers retain the source size. Extent is queried on the video worker.
-  void surface(Codec::Sink,std::function<std::pair<int,int>()> extent={});
+  void surface(Codec::Sink,Codec::Extent extent={});
   void volume(float left, float right);
   void release();
   bool playing() const;

@@ -18,8 +18,10 @@ std::atomic<CpuPresenter> presenter{nullptr};
 std::mutex bridge_lock;
 SurfaceBridge bridge;
 int pixel_size(int format) { return format == 1 || format == 2 ? 4 : format == 4 ? 2 : 0; }
+// Either copies `rgba` or, with `owned`, takes those pixels.
 int publish_locked(NativeWindow& window, std::span<const std::uint8_t> rgba,
-                   std::int32_t width, std::int32_t height, bool bottom_up, std::int64_t timestamp_ns = std::numeric_limits<std::int64_t>::min()) {
+                   std::int32_t width, std::int32_t height, bool bottom_up, std::int64_t timestamp_ns = std::numeric_limits<std::int64_t>::min(),
+                   std::vector<std::uint8_t>* owned = nullptr) {
   if (!window.image_consumer) return 0;
   auto size = std::uint64_t(width) * height * 4;
   if (width <= 0 || height <= 0 || size > INT32_MAX || rgba.size() != size) return -err::invalid;
@@ -28,11 +30,15 @@ int publish_locked(NativeWindow& window, std::span<const std::uint8_t> rgba,
     frame->width = width; frame->height = height;frame->timestamp_ns=timestamp_ns==std::numeric_limits<std::int64_t>::min()?
       std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count():timestamp_ns;
     frame->serial = window.frame ? window.frame->serial + 1 : 1;
-    frame->rgba.resize(size);
-    for (int y = 0; y < height; ++y)
-      std::memcpy(frame->rgba.data() + std::size_t(y) * width * 4,
-          rgba.data() + std::size_t(bottom_up ? height - 1 - y : y) * width * 4,
-          std::size_t(width) * 4);
+    if (owned) {
+      frame->rgba = std::move(*owned);
+    } else {
+      frame->rgba.resize(size);
+      for (int y = 0; y < height; ++y)
+        std::memcpy(frame->rgba.data() + std::size_t(y) * width * 4,
+            rgba.data() + std::size_t(bottom_up ? height - 1 - y : y) * width * 4,
+            std::size_t(width) * 4);
+    }
     window.frame = std::move(frame);
     return 0;
   } catch (const std::bad_alloc&) { return -err::no_memory; }
@@ -186,6 +192,23 @@ int publish_window_rgba(NativeWindow* window, std::span<const std::uint8_t> rgba
   }
   if(notify)notify();
   return result;
+}
+int publish_window_rgba(NativeWindow* window, std::vector<std::uint8_t>&& rgba,
+                        std::int32_t width, std::int32_t height, std::int64_t timestamp_ns) {
+  std::function<void()> notify;
+  int result;
+  {
+    std::lock_guard lock(window->lock);
+    result = publish_locked(*window, rgba, width, height, false, timestamp_ns, &rgba);
+    if (!result && window->frame) notify = window->frame_available;
+  }
+  if (notify) notify();
+  return result;
+}
+std::pair<std::int32_t, std::int32_t> window_consumer_extent(NativeWindow* window) {
+  std::lock_guard lock(window->lock);
+  return window->image_consumer && !window->fixed_consumer_extent ?
+      std::pair{0, 0} : std::pair{window->width, window->height};
 }
 void set_surface_bridge(SurfaceBridge b) {
   std::lock_guard lock(bridge_lock);

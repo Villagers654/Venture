@@ -698,12 +698,35 @@ std::uint32_t Stream::write(const void* data, std::uint32_t frames) {
           config.format);
       non_silent += p[i] != 0;
     }
+    if (config.direction == Direction::output) track_gaps(p, n);
     ring.produced(n);
     total += n;
   }
   frames_written.fetch_add(total);
   non_silent_written.fetch_add(non_silent, std::memory_order_relaxed);
   return total;
+}
+void Stream::track_gaps(const float* p, std::uint32_t frames) {
+  // A natural fade reaches exact zero through tiny values; a producer that
+  // missed its deadline cuts from sound straight to zeros and back.
+  constexpr float abrupt = 1e-3f;
+  constexpr std::uint32_t longest = 4800;  // 100 ms at 48 kHz; longer is a pause
+  const auto channels = std::uint32_t(config.channels);
+  for (std::uint32_t f = 0; f < frames; ++f) {
+    float magnitude = 0;
+    for (std::uint32_t c = 0; c < channels; ++c) magnitude = std::max(magnitude, std::abs(p[f * channels + c]));
+    if (magnitude == 0) {
+      if (sounded_ && zero_run_ <= longest) ++zero_run_;
+      continue;
+    }
+    if (zero_run_ && zero_run_ <= longest && (before_zero_ > abrupt || magnitude > abrupt)) {
+      guest_gaps.fetch_add(1, std::memory_order_relaxed);
+      guest_gap_frames.fetch_add(zero_run_, std::memory_order_relaxed);
+    }
+    zero_run_ = 0;
+    sounded_ = true;
+    before_zero_ = magnitude;
+  }
 }
 std::uint32_t Stream::read(void* data, std::uint32_t frames) {
   std::lock_guard lock(io_lock);
@@ -855,7 +878,8 @@ void Stream::render(float* output, const float* input, std::uint32_t frames) {
     }
     if (result != MA_SUCCESS || (!source && !dest)) break;
   }
-  const bool short_pull = offset < frames && !draining && !source_eos.load(std::memory_order_acquire);
+  const bool short_pull = offset < frames && !draining && !source_eos.load(std::memory_order_acquire) &&
+                          !guest_idle.load(std::memory_order_acquire);
   if (short_pull) {
     lost_callbacks.fetch_add(1, std::memory_order_relaxed);
     if (!underrunning_) xruns.fetch_add(1);
@@ -1148,7 +1172,7 @@ bool Backend::ensure_device(Direction direction) {
       auto next_report = monotonic_ns() + 5'000'000'000;
       auto next_av = monotonic_ns() + 1'000'000'000;
       auto next_underrun_check = monotonic_ns() + 10'000'000'000;
-      std::uint64_t underruns_logged = 0, missing_logged = 0, pc_glitches_logged = 0;
+      std::uint64_t underruns_logged = 0, missing_logged = 0, pc_glitches_logged = 0, gaps_logged = 0, gap_frames_logged = 0;
       bool reconnect_output = false, reconnect_input = false;
       std::int64_t next_reconnect = 0;
       auto next_route_check = monotonic_ns() + 2'000'000'000;
@@ -1174,7 +1198,7 @@ bool Backend::ensure_device(Direction direction) {
         // Output underruns (short device pulls) in every log, so a debug report
         // shows whether crackling sound starved the device.
         if (monotonic_ns() >= next_underrun_check) {
-          std::uint64_t underruns = 0, missing = 0;
+          std::uint64_t underruns = 0, missing = 0, gaps = 0, gap_frames = 0;
           {
             std::lock_guard lock(device_lock_);
             for (auto& slot : slots_) {
@@ -1182,13 +1206,21 @@ bool Backend::ensure_device(Direction direction) {
               if (!s || s->config.direction != Direction::output) continue;
               underruns += s->xruns.load();
               missing += s->missing_frames.load();
+              gaps += s->guest_gaps.load();
+              gap_frames += s->guest_gap_frames.load();
             }
           }
           if (underruns > underruns_logged)
             log::info("audio", "Output underruns: {} in the last 10 s ({} frames missing); {} in total",
                       underruns - underruns_logged, missing - missing_logged, underruns);
+          // Streams come and go; report growth of the attached streams' counts.
+          if (gaps > gaps_logged)
+            log::info("audio", "Game audio dropouts: {} in the last 10 s ({} frames of silence written between sound)",
+                      gaps - gaps_logged, gap_frames - gap_frames_logged);
           underruns_logged = underruns;
           missing_logged = missing;
+          gaps_logged = gaps;
+          gap_frames_logged = gap_frames;
           if (mirror_.active()) {
             const auto pc = mirror_.stats();
             if (pc.starved + pc.resyncs > pc_glitches_logged)
@@ -1735,7 +1767,7 @@ void Backend::remember(Stream& s) {
     std::uint64_t(s.frames_written.load()), std::uint64_t(s.frames_read.load()),
     int(s.ring.readable()), s.buffer_size.load(), s.config.rate, int(s.state == State::closing ? State::closed : s.state.load()), s.config.api, s.worker_work_ns_max.load(), s.worker_gap_ns_max.load(),
     s.callback_count.load(), s.callback_wall_ns.load(), s.callback_cpu_ns.load(),
-    s.callback_cpu_samples.load(), s.callback_wall_ns_max.load(), s.callback_adopt_ns_max.load(), s.config.callback_frames, int(s.ring.capacity), s.callback_cpu_cycles.load(), s.callback_cpu_cycles_samples.load(), s.callback_guest_tid.load(),s.non_silent_written.load(),s.gain_left.load(),s.gain_right.load(),s.xruns.load()};
+    s.callback_cpu_samples.load(), s.callback_wall_ns_max.load(), s.callback_adopt_ns_max.load(), s.config.callback_frames, int(s.ring.capacity), s.callback_cpu_cycles.load(), s.callback_cpu_cycles_samples.load(), s.callback_guest_tid.load(),s.non_silent_written.load(),s.gain_left.load(),s.gain_right.load(),s.xruns.load(),s.guest_gaps.load(),s.guest_gap_frames.load()};
   auto found = std::find_if(source_history_.begin(), source_history_.end(), [&](const auto& v) { return v.id == value.id; });
   if (found == source_history_.end()) source_history_.push_back(std::move(value));
   else *found = std::move(value);
@@ -1761,8 +1793,8 @@ void Backend::telemetry() {
   for (const auto& v : source_history_) {
     underruns += v.underruns; missing += v.missing;
     if (!sources.empty()) sources += ',';
-    sources += std::format("{{\"id\":{},\"api\":\"{}\",\"state\":{},\"rate\":{},\"written\":{},\"consumed\":{},\"underruns\":{},\"missing_frames\":{},\"queue_frames\":{},\"watermark_frames\":{},\"worker_work_ns_max\":{},\"worker_gap_ns_max\":{},\"callback_count\":{},\"callback_wall_ns\":{},\"callback_cpu_ns\":{},\"callback_cpu_samples\":{},\"callback_wall_ns_max\":{},\"callback_adopt_ns_max\":{},\"callback_frames\":{},\"capacity_frames\":{},\"callback_cpu_cycles\":{},\"callback_cpu_cycles_samples\":{},\"callback_guest_tid\":{},\"non_silent_samples\":{},\"gain_left\":{},\"gain_right\":{},\"xrun_episodes\":{}}}",
-      v.id, v.api, v.state, v.rate, v.written, v.consumed, v.underruns, v.missing, v.queue, v.watermark, v.work_ns, v.gap_ns, v.callbacks, v.callback_wall, v.callback_cpu, v.callback_cpu_samples, v.callback_wall_max, v.callback_adopt_max, v.callback_frames, v.capacity, v.callback_cycles, v.callback_cycles_samples, v.callback_guest_tid,v.non_silent,std::isfinite(v.gain_left)?v.gain_left:0.0f,std::isfinite(v.gain_right)?v.gain_right:0.0f,v.xrun_episodes);
+    sources += std::format("{{\"id\":{},\"api\":\"{}\",\"state\":{},\"rate\":{},\"written\":{},\"consumed\":{},\"underruns\":{},\"missing_frames\":{},\"queue_frames\":{},\"watermark_frames\":{},\"worker_work_ns_max\":{},\"worker_gap_ns_max\":{},\"callback_count\":{},\"callback_wall_ns\":{},\"callback_cpu_ns\":{},\"callback_cpu_samples\":{},\"callback_wall_ns_max\":{},\"callback_adopt_ns_max\":{},\"callback_frames\":{},\"capacity_frames\":{},\"callback_cpu_cycles\":{},\"callback_cpu_cycles_samples\":{},\"callback_guest_tid\":{},\"non_silent_samples\":{},\"gain_left\":{},\"gain_right\":{},\"xrun_episodes\":{},\"guest_gaps\":{},\"guest_gap_frames\":{}}}",
+      v.id, v.api, v.state, v.rate, v.written, v.consumed, v.underruns, v.missing, v.queue, v.watermark, v.work_ns, v.gap_ns, v.callbacks, v.callback_wall, v.callback_cpu, v.callback_cpu_samples, v.callback_wall_max, v.callback_adopt_max, v.callback_frames, v.capacity, v.callback_cycles, v.callback_cycles_samples, v.callback_guest_tid,v.non_silent,std::isfinite(v.gain_left)?v.gain_left:0.0f,std::isfinite(v.gain_right)?v.gain_right:0.0f,v.xrun_episodes,v.guest_gaps,v.guest_gap_frames);
   }
   double device_buffer_ms = 0;
   std::uint64_t device_period_frames = 0;

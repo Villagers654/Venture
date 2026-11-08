@@ -8,8 +8,121 @@
 #include <atomic>
 #include <chrono>
 #include <thread>
+#include <cstdlib>
+#include <limits>
+#include <string_view>
+
+namespace {
+using clock_type=std::chrono::steady_clock;
+double seconds_since(clock_type::time_point t){return std::chrono::duration<double>(clock_type::now()-t).count();}
+std::int64_t now_ns(){return std::chrono::duration_cast<std::chrono::nanoseconds>(clock_type::now().time_since_epoch()).count();}
+venture::media::Input open_input(const char* path) {
+  auto file=std::make_shared<std::ifstream>(path,std::ios::binary);
+  file->seekg(0,std::ios::end);auto length=std::int64_t(file->tellg());
+  venture::media::Input input;
+  if(!*file || length<=0 || length>512LL*1024*1024)return input;
+  input.length=length;
+  input.read_at=[file,length](void* data,std::uint64_t size,std::int64_t offset)->std::int64_t {
+    if(offset<0 || offset>length)return -1;
+    size=std::min<std::uint64_t>(size,length-offset);
+    file->clear();file->seekg(offset);file->read(static_cast<char*>(data),size);
+    return file->bad()?-1:file->gcount();
+  };
+  return input;
+}
+int video_track(venture::media::Extractor& extractor) {
+  for(std::size_t i=0;i<extractor.tracks().size();++i)
+    if(venture::media::video_mime(extractor.tracks()[i].mime))return extractor.select(int(i))?-1:int(i);
+  return -1;
+}
+// Movie throughput on this machine: raw decode, conversion at a consumer size,
+// and the Surface codec released on presentation deadlines as ExoPlayer does
+// (a frame more than 30 ms late is dropped, others render at their time).
+int video_rate(const char* path,std::ostream& report,int width,int height) {
+  using namespace venture::media;
+  std::uint64_t frames=0;double decode_s=0,convert_ms=0,convert_max_ms=0;std::uint64_t converted=0;
+  std::int64_t last_pts=0;
+  for(int pass=0;pass<2;++pass) {
+    Extractor extractor;if(extractor.open(open_input(path)))return 3;
+    int track=video_track(extractor);if(track<0)return 3;
+    Decoder decoder;if(decoder.configure(extractor.tracks()[track]))return 3;
+    auto begin=clock_type::now();bool draining=false;std::uint64_t count=0;
+    for(;;) {
+      VideoFrame frame;
+      // Pass 0 decodes without download or conversion; pass 1 converts
+      // every picture to RGBA at the consumer size.
+      auto status=pass==0?decoder.receive(&frame,std::numeric_limits<std::int64_t>::max()):decoder.receive(&frame,std::numeric_limits<std::int64_t>::min(),width,height);
+      if(status==-1)break;if(status<0)return 4;
+      if(status==1 || status==2) {
+        ++count;last_pts=std::max(last_pts,frame.time_us);
+        if(status==1){auto ms=decoder.video_conversion_us()/1000.0;convert_ms+=ms;convert_max_ms=std::max(convert_max_ms,ms);++converted;}
+        continue;
+      }
+      if(draining)return 4;
+      if(extractor.sample().track>=0) {
+        if(decoder.send(&extractor.sample()))return 4;
+        extractor.advance();if(extractor.error())return 4;
+      } else {if(decoder.send(nullptr))return 4;draining=true;}
+    }
+    if(pass==0){frames=count;decode_s=seconds_since(begin);}
+    else report<<"{\"phase\":\"decode_convert\",\"frames\":"<<count<<",\"seconds\":"<<seconds_since(begin)
+      <<",\"convert_avg_ms\":"<<(converted?convert_ms/converted:0)<<",\"convert_max_ms\":"<<convert_max_ms<<"}\n";
+  }
+  auto movie_s=frames>1?last_pts/1e6*frames/(frames-1):0.0;
+  report<<"{\"phase\":\"decode_only\",\"frames\":"<<frames<<",\"seconds\":"<<decode_s<<",\"fps\":"<<frames/decode_s
+    <<",\"movie_seconds\":"<<movie_s<<",\"movie_fps\":"<<(movie_s>0?frames/movie_s:0)<<"}\n";
+  Extractor extractor;if(extractor.open(open_input(path)))return 3;
+  int track=video_track(extractor);if(track<0)return 3;
+  std::atomic<std::uint64_t> presented{0};std::atomic<std::int64_t> present_late_ns{0},present_late_max_ns{0};
+  std::atomic<std::int64_t> start{0};
+  Codec codec;
+  if(codec.configure(extractor.tracks()[track],[&](const VideoFrame& frame) {
+    auto late=now_ns()-(start.load()+frame.time_us*1000);
+    present_late_ns+=late;if(late>present_late_max_ns)present_late_max_ns=late;
+    ++presented;return 0;
+  },[width,height]{return std::pair{width,height};}) || codec.start())return 3;
+  bool sent=false,eos=false;std::uint64_t rendered=0,dropped=0,outputs=0;
+  auto deadline=clock_type::now()+std::chrono::seconds(180);
+  auto begin=clock_type::now();
+  while(!eos && clock_type::now()<deadline) {
+    if(!sent && codec.input(0)==0) {
+      auto& packet=extractor.sample();
+      if(packet.track>=0) {
+        auto buffer=codec.input_buffer(0);if(packet.bytes.size()>buffer.size())return 4;
+        std::copy(packet.bytes.begin(),packet.bytes.end(),buffer.begin());
+        if(codec.queue(0,0,packet.bytes.size(),packet.time_us,0))return 4;
+        extractor.advance();if(extractor.error())return 4;
+      } else {if(codec.queue(0,0,0,0,4))return 4;sent=true;}
+    }
+    Codec::Info info;auto index=codec.output(&info,1000);
+    if(index==-1 || index==-2)continue;if(index<0)return 4;
+    eos=info.flags&4;if(eos){codec.release(index,false);break;}
+    ++outputs;
+    // The clock starts with the first decoded picture, as playback starts
+    // once the first frame is ready.
+    if(!start)start=now_ns()-info.time*1000;
+    auto due=start+info.time*1000;
+    if(now_ns()>due+30000000){++dropped;if(codec.release(index,false))return 4;continue;}
+    while(now_ns()<due-50000000)std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    ++rendered;if(codec.release(index,true,due))return 4;
+  }
+  auto elapsed=seconds_since(begin);
+  std::this_thread::sleep_for(std::chrono::milliseconds(200));
+  codec.release();
+  report<<"{\"phase\":\"surface_paced\",\"outputs\":"<<outputs<<",\"rendered\":"<<rendered<<",\"dropped\":"<<dropped
+    <<",\"presented\":"<<presented<<",\"seconds\":"<<elapsed<<",\"present_late_avg_ms\":"<<(presented?present_late_ns/1e6/presented:0)
+    <<",\"present_late_max_ms\":"<<present_late_max_ns/1e6<<",\"eos\":"<<eos<<"}\n";
+  return eos?0:5;
+}
+}
 
 int main(int argc, char** argv) {
+  if(argc>=4 && std::string_view(argv[3])=="--video-rate") {
+    int width=argc>=6?std::atoi(argv[4]):0,height=argc>=6?std::atoi(argv[5]):0;
+    std::ofstream report(argv[2],std::ios::trunc);if(!report)return 2;
+    auto result=video_rate(argv[1],report,width,height);
+    report.close();std::ifstream echo(argv[2]);std::cout<<echo.rdbuf();return result;
+  }
   if (argc != 3 && argc != 4) return 2;
   const bool video=argc==4 && std::string_view(argv[3])=="--video";
   if(argc==4 && !video)return 2;

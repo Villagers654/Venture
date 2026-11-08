@@ -13,6 +13,7 @@
 #include "core/profile.h"
 #include "core/wait.h"
 #include "common/environment.h"
+#include "common/log.h"
 #include "platform/cpu_affinity.h"
 #include "platform/thread_priority.h"
 #include <array>
@@ -781,6 +782,16 @@ int getsched(GuestAddr h, int* policy, int* priority) {
   if (!policy || !priority) return err::einval;
   return -platform::get_audio_thread_scheduler(target, policy, priority);
 }
+// Android refuses an app other real-time classes (EPERM, which the guest
+// gets); the host still runs the thread with audio scheduling.
+int deny_realtime(std::int32_t target, int policy, int priority) {
+  const auto boosted = platform::request_realtime_thread(target);
+  static std::atomic<int> reports{0};
+  if (reports.fetch_add(1, std::memory_order_relaxed) < 16)
+    log::info("libc", "Real-time request tid={} policy={} priority={}: EPERM to the guest, host audio scheduling {}",
+              target, policy, priority, boosted ? "unavailable" : "applied");
+  return err::eperm;
+}
 int setsched(GuestAddr h, int policy, const int* priority) {
   std::int32_t target;
   int r = threads::describe(h, nullptr, &target, nullptr);
@@ -791,7 +802,8 @@ int setsched(GuestAddr h, int policy, const int* priority) {
   // AOSP audio SCHED_FIFO uses priorities 2 and 3; other RT classes stay denied.
   if (policy == 1 && (*priority == 2 || *priority == 3))
     return -platform::set_audio_thread_priority(target, *priority);
-  if (policy || *priority) return err::eperm;
+  if (policy) return deny_realtime(target, policy, *priority);
+  if (*priority) return err::eperm;
   return -platform::set_audio_thread_priority(target, 0);
 }
 int cpuclock(GuestAddr h, int* clock) {
@@ -823,8 +835,15 @@ int sched_set(int id, int policy, const int* priority) {
   constexpr int reset_on_fork = 0x40000000;
   policy &= ~reset_on_fork;
   if (id < 0 || !priority || policy < 0 || policy > 5 || policy == 4) return failure(err::einval);
-  if (policy == 1 || policy == 2) return failure(*priority < 1 || *priority > 99 ? err::einval : err::eperm);
-  return *priority ? failure(err::einval) : 0;
+  if (policy == 1 || policy == 2) {
+    if (*priority < 1 || *priority > 99) return failure(err::einval);
+    return failure(deny_realtime(id && id != 1000 ? id : gettid(), policy, *priority));
+  }
+  if (*priority) return failure(err::einval);
+  // A normal class withdraws an earlier real-time request (best effort: the
+  // process ID names no single thread).
+  platform::set_audio_thread_priority(id && id != 1000 ? id : gettid(), 0);
+  return 0;
 }
 int sched_set_param(int id, const int* priority) {
   return id < 0 || !priority || *priority ? failure(err::einval) : 0;

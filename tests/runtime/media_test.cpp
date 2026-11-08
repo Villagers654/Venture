@@ -13,6 +13,7 @@
 #include <fstream>
 #include <thread>
 #include <future>
+#include <mutex>
 #include "../async_wait.h"
 
 using namespace venture;
@@ -485,6 +486,43 @@ TEST_CASE("bounded video codec owns buffers across flush EOS surface change and 
   // Destruction with an outstanding input buffer joins the worker.
 }
 
+TEST_CASE("Surface video codec converts only rendered pictures, at the consumer's size and time") {
+  // An 8K movie on an XR Surface swapchain (Batman: Arkham Shadow) missed
+  // every deadline converting each decoded picture at source size, dropped or not.
+  media::Extractor extractor;REQUIRE(extractor.open(video_input())==0);REQUIRE(extractor.select(0)==0);
+  media::Codec codec;std::atomic<int> presented{0},early{0};std::mutex mutex;std::vector<std::int64_t> shown;
+  REQUIRE(codec.configure(extractor.tracks()[0],[&](media::VideoFrame& frame) {
+    CHECK(frame.width==32);CHECK(frame.height==18);CHECK(frame.rgba.size()==32*18*4);
+    {std::lock_guard lock(mutex);shown.push_back(frame.time_us);}
+    ++presented;frame.rgba={};return 0;
+  },[]{return std::pair{32,18};})==0);
+  REQUIRE(codec.start()==0);
+  media::Codec::Info info;int outputs=0,rendered=0;bool sent_eos=false,got_eos=false;
+  std::vector<std::int64_t> expected;
+  auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(5);
+  while(!got_eos && std::chrono::steady_clock::now()<deadline) {
+    if(!sent_eos && codec.input(1000)==0) {
+      auto& packet=extractor.sample();auto buffer=codec.input_buffer(0);
+      if(packet.track>=0){std::copy(packet.bytes.begin(),packet.bytes.end(),buffer.begin());
+        REQUIRE(codec.queue(0,0,packet.bytes.size(),packet.time_us,0)==0);extractor.advance();}
+      else{REQUIRE(codec.queue(0,0,0,1000000,4)==0);sent_eos=true;}
+    }
+    auto index=codec.output(&info,1000);if(index!=0)continue;
+    got_eos=(info.flags&4)!=0;
+    if(got_eos){REQUIRE(codec.release(0,false)==0);break;}
+    // Source-size output format; no ByteBuffer for Surface output.
+    CHECK(codec.format().width==128);CHECK(info.size==128*72*4);CHECK(codec.output_buffer(0).empty());
+    if(outputs++%2) {REQUIRE(codec.release(0,false)==0);continue;}
+    auto now=std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    auto at=now+20000000;expected.push_back(info.time);++rendered;
+    REQUIRE(codec.release(0,true,at)==0);
+    // Released pictures appear at their release time, not before.
+    while(presented<rendered && std::chrono::steady_clock::now()<deadline)std::this_thread::yield();
+    if(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count()<at)++early;
+  }
+  CHECK(got_eos);CHECK(outputs==12);CHECK(rendered==6);CHECK(presented==6);CHECK(early==0);
+  std::lock_guard lock(mutex);CHECK(shown==expected);
+}
 TEST_CASE("ByteBuffer video codecs output NV12 as a Quest decoder does") {
   // Unity's Vulkan AndroidVideoMedia reads ByteBuffer frames and converts only
   // YUV formats; it rejected the RGBA format (Batman: Arkham Shadow videos).

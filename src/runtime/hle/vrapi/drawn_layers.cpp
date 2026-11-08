@@ -50,9 +50,9 @@ std::uintptr_t key(VkImage image) { return (std::uintptr_t)image; }
 } // namespace
 void DrawnLayers::add(const DrawnLayer &layer, std::vector<const XrCompositionLayerBaseHeader *> &layers) {
   if (runs_.empty() || layers.empty() || runs_.back().layers.front().space != layer.space ||
-      layers.back() != reinterpret_cast<const XrCompositionLayerBaseHeader *>(&runs_.back().projection)) {
+      layers.back() != runs_.back().placeholder()) {
     auto &run = runs_.emplace_back();
-    layers.push_back(reinterpret_cast<const XrCompositionLayerBaseHeader *>(&run.projection));
+    layers.push_back(run.placeholder());
   }
   runs_.back().layers.push_back(layer);
 }
@@ -73,7 +73,7 @@ XrResult DrawnLayers::gather(const Sources &sources, std::vector<const XrComposi
       ++layer;
     }
     if (run->layers.empty()) {
-      std::erase(layers, reinterpret_cast<const XrCompositionLayerBaseHeader *>(&run->projection));
+      std::erase(layers, run->placeholder());
       run = runs_.erase(run);
     } else {
       ++run;
@@ -84,9 +84,7 @@ XrResult DrawnLayers::gather(const Sources &sources, std::vector<const XrComposi
 XrResult DrawnLayers::present(std::vector<const XrCompositionLayerBaseHeader *> &layers) {
   auto &p = presenter();
   if (runs_.empty() && p.chains.empty()) return XR_SUCCESS;
-  auto drop = [&](Run &run) {
-    std::erase(layers, reinterpret_cast<const XrCompositionLayerBaseHeader *>(&run.projection));
-  };
+  auto drop = [&](Run &run) { std::erase(layers, run.placeholder()); };
   if (!runs_.empty() && !p.size.width) {
     std::uint32_t count = 0;
     std::array<XrViewConfigurationView, 2> views{};
@@ -201,14 +199,32 @@ XrResult DrawnLayers::present(std::vector<const XrCompositionLayerBaseHeader *> 
     const auto waited = ::xrWaitSwapchainImage(chain.handle, &wait);
     if (waited != XR_SUCCESS && waited != XR_SESSION_LOSS_PENDING) return release(waited);
     if (waited == XR_SESSION_LOSS_PENDING) qualified = waited;
-    // Composited premultiplied (layer.frag) over the layers below.
-    run.projection.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
-    run.projection.space = base;
-    run.projection.viewCount = 2;
-    run.projection.views = run.views.data();
-    for (std::uint32_t eye = 0; eye < 2; ++eye)
-      run.views[eye] = {XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW, nullptr, views[eye].pose, views[eye].fov,
-                        {chain.handle, {{0, 0}, p.size}, eye}};
+    // Each eye's image is the plane its view's rays reach through its frustum:
+    // a quad seen by that eye only, composited premultiplied (layer.frag) over
+    // the layers below. A world-locked run's quad lies far ahead, where the
+    // host's reprojection of the head moves it about as little as a projection
+    // without depth; a head-locked run's stays fixed to the view anyway.
+    const float distance = base == state().view ? 1.f : 10.f;
+    for (std::uint32_t eye = 0; eye < 2; ++eye) {
+      const auto &fov = views[eye].fov;
+      const float l = std::tan(fov.angleLeft), r = std::tan(fov.angleRight);
+      const float u = std::tan(fov.angleUp), d = std::tan(fov.angleDown);
+      auto &quad = run.quads[eye];
+      quad = {XR_TYPE_COMPOSITION_LAYER_QUAD};
+      quad.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
+      quad.space = base;
+      quad.eyeVisibility = eye ? XR_EYE_VISIBILITY_RIGHT : XR_EYE_VISIBILITY_LEFT;
+      quad.subImage = {chain.handle, {{0, 0}, p.size}, eye};
+      quad.pose = venture::xr::compose(
+          views[eye].pose, {{0, 0, 0, 1}, {(l + r) / 2 * distance, (u + d) / 2 * distance, -distance}});
+      quad.size = {(r - l) * distance, (u - d) * distance};
+    }
+  }
+  // The right eye's quad follows the left one each run left in the frame.
+  for (auto &run : runs_) {
+    const auto at = std::find(layers.begin(), layers.end(), run.placeholder());
+    if (at != layers.end())
+      layers.insert(at + 1, reinterpret_cast<const XrCompositionLayerBaseHeader *>(&run.quads[1]));
   }
   if (!p.acquired.empty()) {
     // Every run in one command buffer and one submission, after the sources'
