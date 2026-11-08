@@ -382,7 +382,7 @@ TEST_CASE("O_NOFOLLOW agrees with lstat on junctions, so remove_all removes only
   REQUIRE(static_cast<std::int64_t>(top) >= 0);
   const auto name = std::string("obb");
   CHECK(call("openat", {top, h2g(name.c_str()), o_directory | o_nofollow | cloexec}) == -1);
-  CHECK(*thread.thread.errno_location() == err::eloop);
+  CHECK(*thread.thread.errno_location() == err::enotdir);  // as Linux, with O_DIRECTORY
   CHECK(call("unlinkat", {top, h2g(name.c_str()), 0}) == 0);
   CHECK(call("close", {top}) == 0);
   CHECK(call("rmdir", {h2g(guest_parent.c_str())}) == 0);
@@ -397,6 +397,8 @@ TEST_CASE("O_NOFOLLOW agrees with lstat on junctions, so remove_all removes only
   REQUIRE(path_stat(guest_link.c_str(), &stat, at_cwd, false) == 0);
   CHECK((stat.mode & 0170000) == 0120000);
   CHECK(call("open", {h2g(guest_link.c_str()), o_directory | o_nofollow | cloexec}) == -1);
+  CHECK(*thread.thread.errno_location() == err::enotdir);  // as Linux, with O_DIRECTORY
+  CHECK(call("open", {h2g(guest_link.c_str()), o_nofollow | cloexec}) == -1);
   CHECK(*thread.thread.errno_location() == err::eloop);
   const auto through = call("open", {h2g(guest_link.c_str()), o_directory | cloexec});
   REQUIRE(through >= 0);

@@ -70,6 +70,10 @@ struct AndroidSurface {
     auto width = chain.info.width, height = chain.info.height;
     if (!frame) {
       std::memset(destination, 0, std::size_t(width) * height * 4);
+    } else if (std::uint32_t(frame->width) == width && std::uint32_t(frame->height) == height &&
+               frame->rgba.size() == std::size_t(width) * height * 4) {
+      // Decoders convert to the swapchain's fixed extent: one copy, no sampling.
+      std::memcpy(destination, frame->rgba.data(), frame->rgba.size());
     } else {
       // BufferQueue producers may resize. Snapshot one completed producer
       // buffer, with the same consumer for CPU, EGL and Vulkan publication.

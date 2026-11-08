@@ -87,6 +87,13 @@ bool has_window_image_consumer(NativeWindow*);
 int publish_window_rgba(NativeWindow*, std::span<const std::uint8_t> rgba,
                         std::int32_t width, std::int32_t height, bool bottom_up = false,
                         std::int64_t timestamp_ns = std::numeric_limits<std::int64_t>::min());
+// Publishes a top-down frame by taking its pixels, without a copy.
+int publish_window_rgba(NativeWindow*, std::vector<std::uint8_t>&& rgba,
+                        std::int32_t width, std::int32_t height, std::int64_t timestamp_ns);
+// A decoder's output size for this window: {0,0} (the producer's own size)
+// for a SurfaceTexture or ImageReader consumer, else the window's extent,
+// such as an XR Surface swapchain's fixed size.
+std::pair<std::int32_t, std::int32_t> window_consumer_extent(NativeWindow*);
 // Mirror renderer may install this hook before guest startup. Without it CPU
 // frames are discarded (offscreen VR target). Callback runs with window locked.
 using CpuPresenter = void (*)(NativeWindow&, const WindowBuffer&);

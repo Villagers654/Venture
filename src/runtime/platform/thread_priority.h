@@ -48,6 +48,13 @@ void lower_background_thread_priority();
 void lower_worker_thread_priority();
 int set_audio_thread_priority(std::int32_t tid, int fifo_priority);
 int get_audio_thread_scheduler(std::int32_t tid, int* policy, int* priority);
+// A guest request for SCHED_FIFO/SCHED_RR that Android refuses an app (EPERM,
+// which the guest still gets): the engine marks the thread time-critical, as
+// Wwise, Meta XR Audio and UE4 do for their audio renderers. The host runs it
+// with audio scheduling (MMCSS Pro Audio / best-effort SCHED_FIFO) so its
+// deadline survives contention a headset's reserved cores never see; until
+// the thread asks for SCHED_OTHER again. Zero or a negative Linux errno.
+int request_realtime_thread(std::int32_t tid);
 // Retain the native thread identity while its guest thread is attached.
 void bind_thread_priority(std::int32_t tid);
 void unbind_thread_priority(std::int32_t tid);

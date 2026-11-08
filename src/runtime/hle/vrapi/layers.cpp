@@ -321,16 +321,23 @@ static XrResult translate_native(const LayerHeader &header, const XrView *eyes, 
       for (int eye = 0; eye < 2; ++eye) eye_quad(eye, 10);
       return XR_SUCCESS;
     }
-    dst.projection.viewCount = 2;
-    dst.projection.views = dst.views;
-    append(dst.projection);
     if (constant == 2) {
       // A constant texel covers every ray of each eye wherever the head is.
       // Head-lock it, as the guest's predicted head pose would let reprojection
-      // expose the view's edges.
-      dst.projection.space = state().view;
-      for (int eye = 0; eye < 2; ++eye) dst.views[eye].pose = eyes[eye].pose;
+      // expose the view's edges: one quad per eye over that eye's whole view,
+      // not a projection layer, which Virtual Desktop would show as a
+      // head-locked panel surrounded by black (#63). OVRPlugin's transition
+      // layer (The Walking Dead, Tales from the Galaxy's Edge) takes this form.
+      for (int eye = 0; eye < 2; ++eye) {
+        dst.views[eye].pose = eyes[eye].pose;
+        eye_quad(eye);
+        dst.quad[eye].space = state().view;
+      }
+      return XR_SUCCESS;
     }
+    dst.projection.viewCount = 2;
+    dst.projection.views = dst.views;
+    append(dst.projection);
   } else if (header.type == 3) { // VRAPI_LAYER_TYPE_CYLINDER2
     if (!host_xr().enabled_extensions.contains("XR_KHR_composition_layer_cylinder"))
       return unsupported("host lacks XR_KHR_composition_layer_cylinder");
@@ -441,7 +448,7 @@ static XrResult translate_native(const LayerHeader &header, const XrView *eyes, 
     return unsupported("unknown layer type");
   return XR_SUCCESS;
 }
-// The layer drawn into a projection layer (drawn_layers.h), from the same
+// The layer drawn into an image per eye (drawn_layers.h), from the same
 // fields VrApi's compositor reads.
 static XrResult draw_layer(const LayerHeader &header, const XrView *eyes, LayerStorage &dst, DrawnLayers &drawn,
                     std::vector<const XrCompositionLayerBaseHeader *> &layers) {
@@ -646,7 +653,7 @@ XrResult translate_layer(const LayerHeader &header, const XrView *eyes, LayerIma
   }
   static std::set<std::pair<std::uint32_t, std::string>> reported;
   if (reported.emplace(header.type, reason ? reason : "").second) {
-    log::info("vrapi", "Layer type={} blend={}/{} drawn into a projection layer: {}", header.type, header.src_blend,
+    log::info("vrapi", "Layer type={} blend={}/{} drawn at its geometry: {}", header.type, header.src_blend,
               header.dst_blend, reason ? reason : "no exact host layer");
     log_layer_shape(header);
   }

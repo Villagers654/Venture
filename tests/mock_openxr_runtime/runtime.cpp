@@ -208,6 +208,8 @@ std::int64_t last_end_ns = 0;
 XrTime last_display_time = 0;
 // Layer subimages of the last accepted xrEndFrame, in submission order.
 std::vector<XrSwapchainSubImage> last_subimages;
+// Quad layers of the last accepted xrEndFrame, in submission order.
+std::vector<XrCompositionLayerQuad> last_quads;
 // Compositor pacing. A compositor cannot show a frame before the GPU finishes
 // its images, and it lets the app pipeline one frame: xrWaitFrame for frame
 // N+1 returns once frame N-1 is GPU-complete, while N may still render. Each
@@ -1652,6 +1654,7 @@ XrResult m_xrEndFrame(XrSession, const XrFrameEndInfo *info) {
     return XR_ERROR_ENVIRONMENT_BLEND_MODE_UNSUPPORTED;
   }
   std::vector<XrSwapchainSubImage> submitted;
+  std::vector<XrCompositionLayerQuad> quads;
   std::uint32_t passthrough_fb = 0, passthrough_htc_layers = 0;
   float htc_alpha = 0;
   for (std::uint32_t i = 0; i < info->layerCount; ++i) {
@@ -1767,6 +1770,7 @@ XrResult m_xrEndFrame(XrSession, const XrFrameEndInfo *info) {
             p.subImage.imageRect.extent.width, p.subImage.imageRect.extent.height, p.subImage.imageArrayIndex,
             p.size.width, p.size.height));
       submitted.push_back(p.subImage);
+      quads.push_back(p);
       ++stats.quad;
       break;
     }
@@ -1777,6 +1781,7 @@ XrResult m_xrEndFrame(XrSession, const XrFrameEndInfo *info) {
   record_frame(*info, submitted);
   fence_frame();
   last_subimages = std::move(submitted);
+  last_quads = std::move(quads);
   stats.passthrough_fb = passthrough_fb;
   stats.passthrough_htc = passthrough_htc_layers;
   stats.passthrough_htc_alpha = htc_alpha;
@@ -2706,6 +2711,14 @@ extern "C" VENTURE_MOCK_EXPORT std::uint32_t ventureMockXrLastSubImages(XrSwapch
   const auto count = static_cast<std::uint32_t>(mock::last_subimages.size());
   for (std::uint32_t i = 0; out && i < count && i < capacity; ++i)
     out[i] = mock::last_subimages[i];
+  return count;
+}
+extern "C" VENTURE_MOCK_EXPORT std::uint32_t ventureMockXrLastQuads(XrCompositionLayerQuad *out,
+                                                         std::uint32_t capacity) {
+  std::lock_guard lock(mock::mutex);
+  const auto count = static_cast<std::uint32_t>(mock::last_quads.size());
+  for (std::uint32_t i = 0; out && i < count && i < capacity; ++i)
+    out[i] = mock::last_quads[i];
   return count;
 }
 extern "C" VENTURE_MOCK_EXPORT std::uint64_t ventureMockXrReleasedImage(XrSwapchain handle) {

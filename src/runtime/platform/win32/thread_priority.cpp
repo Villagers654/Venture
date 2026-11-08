@@ -15,7 +15,7 @@ void lower_background_thread_priority() {
 }
 void lower_worker_thread_priority() { SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL); }
 namespace {
-struct Entry { HANDLE handle; bool scoped_audio = false; std::atomic<bool> audio{false}; std::atomic<int> nice{0}; int fifo = 0; Entry* previous = nullptr; std::unique_ptr<AudioThreadPriority> priority; };
+struct Entry { HANDLE handle; bool scoped_audio = false; std::atomic<bool> audio{false}; std::atomic<int> nice{0}; int fifo = 0; bool realtime_request = false; Entry* previous = nullptr; std::unique_ptr<AudioThreadPriority> priority; };
 struct Threads { std::mutex mutex; std::map<std::int32_t, std::unique_ptr<Entry>> handles; };
 thread_local Entry* current_entry = nullptr;
 thread_local unsigned mmcss_depth = 0, realtime_depth = 0;
@@ -93,8 +93,20 @@ int set_audio_thread_priority(std::int32_t tid, int fifo_priority) {
   auto it = state.handles.find(tid);
   if (it == state.handles.end()) return -err::kESRCH;
   it->second->fifo = fifo_priority;
+  // An explicit SCHED_OTHER request withdraws an earlier real-time request.
+  if (!fifo_priority) it->second->realtime_request = false;
   auto nice = it->second->nice.load(std::memory_order_relaxed);
   it->second->audio = fifo_priority || nice == -16 || nice == -19;
+  if (it->second.get() == current_entry) apply_pending_thread_priority();
+  return 0;
+}
+int request_realtime_thread(std::int32_t tid) {
+  auto& state = threads();
+  std::lock_guard lock(state.mutex);
+  auto it = state.handles.find(tid);
+  if (it == state.handles.end()) return -err::kESRCH;
+  it->second->realtime_request = true;
+  it->second->audio = true;
   if (it->second.get() == current_entry) apply_pending_thread_priority();
   return 0;
 }
@@ -161,7 +173,7 @@ int set_thread_priority(std::int32_t tid, int nice) {
       : nice == 0 ? THREAD_PRIORITY_NORMAL : nice < 10 ? THREAD_PRIORITY_BELOW_NORMAL : THREAD_PRIORITY_LOWEST;
   if (it->second->scoped_audio || SetThreadPriority(it->second->handle, priority)) {
     it->second->nice = nice;
-    it->second->audio = false;
+    it->second->audio = it->second->realtime_request;
     if (it->second.get() == current_entry) apply_pending_thread_priority();
     return 0;
   }

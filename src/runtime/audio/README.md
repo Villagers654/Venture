@@ -23,6 +23,21 @@ host endpoint and JIT scheduling. Larger requested callback blocks/buffers
 increase latency. A 1 ms worker poll performs futex wakeups away from the host
 device thread. Blocking guest I/O and state waits use the core futex primitive.
 
+Callback workers and guest threads asking THREAD_PRIORITY_AUDIO/URGENT_AUDIO
+or SCHED_FIFO 2/3 get host audio scheduling (MMCSS Pro Audio on Windows,
+best-effort SCHED_FIFO or raised nice on POSIX). Engines also ask other
+real-time classes for their own audio renderers (Wwise's threads, Meta XR
+Audio's EPS renderer, UE4): Android refuses an app and so does Venture (the
+guest sees EPERM and SCHED_OTHER), but the host still runs those threads with
+audio scheduling until they ask for SCHED_OTHER. A headset reserves cores for
+the game; a PC under load does not, and a renderer that misses its deadline
+pads its output with zeros. Such dropouts never reach the device as underruns,
+so each output stream also counts them: digital silence of 4800 frames or
+less that the guest wrote between sounding samples, cut abruptly (a fade to
+zero or a longer pause does not count). Every log reports them every 10 s
+("Game audio dropouts"), beside host "Output underruns"; AV telemetry carries
+both per stream.
+
 When the host XR runtime names the headset's audio endpoints, output and
 capture open on them, as native PC VR apps do (Meta's VRC.PC.Audio.1): on
 Windows the runtime's XR_OCULUS_audio_device_guid answer (a WASAPI endpoint ID

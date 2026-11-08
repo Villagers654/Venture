@@ -11,11 +11,13 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <vector>
 
 #include "audio_test_support.h"
 #include "core/thread.h"
 #include "core/wait.h"
 #include "hle/opensles/abi.h"
+#include "platform/thread_priority.h"
 
 #include "../async_wait.h"
 
@@ -327,6 +329,65 @@ TEST_CASE("audio: OpenSL buffer queues keep calling back with odd device-period 
   CHECK(call(table<sl::PlayTable>(play).SetPlayState, {play, 2}) == 0);
   CHECK(call(table<sl::PlayTable>(play).SetPlayState, {play, 1}) == 0);
   CHECK(call(table<sl::PlayTable>(play).SetPlayState, {play, 2}) == 0);
+}
+TEST_CASE("audio: silence a game writes between sounds counts as a dropout, a fade or a pause does not") {
+  // A game mixer that misses its deadline (Batman's Meta XR Audio sink under
+  // CPU contention) hands over zeros: the host device never underruns, the
+  // output still crackles.
+  setup();
+  audio::Config config;
+  config.format = audio::Format::f32;
+  config.capacity = 65536;
+  config.burst_frames = 32768;
+  std::int32_t result = 0;
+  auto stream = audio::Stream::create(config, &result);
+  REQUIRE(stream);
+  std::vector<float> pcm;
+  auto put = [&](std::size_t frames, float value) { pcm.insert(pcm.end(), frames * 2, value); };
+  put(480, 0);      // leading silence before any sound
+  put(100, 0.5f);
+  put(480, 0);      // dropout: sound cut to zeros and back
+  put(100, -0.5f);
+  put(100, 1e-5f);  // a fade that reaches zero
+  put(480, 0);
+  put(100, 1e-5f);
+  put(100, 0.5f);
+  put(9600, 0);     // a 200 ms pause
+  put(100, 0.5f);
+  // Two writes split the dropout: the detector follows the stream, not a call.
+  const auto half = std::uint32_t(pcm.size() / 4);
+  REQUIRE(stream->write(pcm.data(), half) == half);
+  REQUIRE(stream->write(pcm.data() + half * 2, std::uint32_t(pcm.size() / 2) - half) == pcm.size() / 2 - half);
+  CHECK(stream->guest_gaps.load() == 1);
+  CHECK(stream->guest_gap_frames.load() == 480);
+  stream->close();
+}
+TEST_CASE("audio: a refused real-time request still gets host audio scheduling until SCHED_OTHER") {
+  // Wwise, Meta XR Audio and UE4 ask SCHED_FIFO/SCHED_RR for their audio
+  // renderers. Android refuses an app (the guest sees EPERM and SCHED_OTHER);
+  // the host runs the thread at audio priority.
+  std::thread([] {
+    constexpr std::int32_t tid = 0x7ffff00;
+    platform::bind_thread_priority(tid);
+    CHECK(platform::request_realtime_thread(tid) == 0);
+    int policy = -1, priority = -1;
+    CHECK(platform::get_audio_thread_scheduler(tid, &policy, &priority) == 0);
+    CHECK(policy == 0);
+    CHECK(priority == 0);
+#ifdef _WIN32
+    CHECK(platform::current_audio_priority_class() != platform::AudioPriorityClass::normal);
+#endif
+    // A nice change keeps the request; SCHED_OTHER withdraws it.
+    CHECK(platform::set_thread_priority(tid, -4) == 0);
+#ifdef _WIN32
+    CHECK(platform::current_audio_priority_class() != platform::AudioPriorityClass::normal);
+#endif
+    CHECK(platform::set_audio_thread_priority(tid, 0) == 0);
+    platform::apply_pending_thread_priority();
+    CHECK(platform::current_audio_priority_class() == platform::AudioPriorityClass::normal);
+    platform::unbind_thread_priority(tid);
+  }).join();
+  CHECK(platform::request_realtime_thread(0x7ffff01) != 0);  // no such thread
 }
 TEST_CASE(
     "audio: AAudio error callback follows actual miniaudio stop notification "

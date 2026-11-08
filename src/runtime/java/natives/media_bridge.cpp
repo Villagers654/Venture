@@ -32,12 +32,13 @@ template<class F> auto guard(JNIEnv* env,F&& f)->decltype(f()) {
 std::shared_ptr<media::Codec> codec(jlong id) {
   std::lock_guard lock(mutex);auto it=codecs.find(id);return it==codecs.end()?nullptr:it->second;
 }
-media::Codec::Sink window_sink(JNIEnv* env,jobject object) {
+// A Surface's frame sink (taking each frame's pixels) and its consumer size.
+std::pair<media::Codec::Sink,media::Codec::Extent> window_sink(JNIEnv* env,jobject object) {
   auto* window=acquire_surface_window(env,object);if(!window)return {};
   auto owner=std::shared_ptr<android::NativeWindow>(window,android::release);
-  return [owner](const media::VideoFrame& f) {
-    return android::publish_window_rgba(owner.get(),f.rgba,f.width,f.height,false,f.time_us*1000);
-  };
+  return {[owner](media::VideoFrame& f) {
+    return android::publish_window_rgba(owner.get(),std::move(f.rgba),f.width,f.height,f.time_us*1000);
+  },[owner]{return android::window_consumer_extent(owner.get());}};
 }
 jlong JNICALL codec_create(JNIEnv* env,jclass,jstring mime) {
   return guard(env,[&]()->jlong {
@@ -57,8 +58,8 @@ jint JNICALL codec_configure(JNIEnv* env,jclass,jlong id,jstring mime,jint width
     track.width=width;track.height=height;track.rate=rate;track.channels=channels;
     if(bytes){auto size=env->GetArrayLength(bytes);if(size>65536)return media::invalid;
       track.config.resize(size);env->GetByteArrayRegion(bytes,0,size,reinterpret_cast<jbyte*>(track.config.data()));}
-    auto sink=window_sink(env,surface);if(surface && !sink)return media::invalid;
-    return c->configure(track,std::move(sink));
+    auto [sink,extent]=window_sink(env,surface);if(surface && !sink)return media::invalid;
+    return c->configure(track,std::move(sink),std::move(extent));
   });
 }
 jlong JNICALL codec_control(JNIEnv* env,jclass,jlong id,jint operation,jlong value) {
@@ -107,7 +108,7 @@ jint JNICALL codec_render(JNIEnv* env,jclass,jlong id,jint index,jboolean render
   return guard(env,[&]()->jint {auto c=codec(id);return c?c->release(index,render,at):media::bad_state;});
 }
 jint JNICALL codec_surface(JNIEnv* env,jclass,jlong id,jobject surface) {
-  return guard(env,[&]()->jint {auto c=codec(id);if(!c)return media::bad_state;auto sink=window_sink(env,surface);return sink?c->surface(std::move(sink)):media::invalid;});
+  return guard(env,[&]()->jint {auto c=codec(id);if(!c)return media::bad_state;auto [sink,extent]=window_sink(env,surface);return sink?c->surface(std::move(sink),std::move(extent)):media::invalid;});
 }
 void JNICALL codec_release(JNIEnv* env,jclass,jlong id) {
   guard(env,[&]()->int {std::shared_ptr<media::Codec> c;{std::lock_guard lock(mutex);auto it=codecs.find(id);if(it!=codecs.end()){c=it->second;codecs.erase(it);}}if(c)c->release();return 0;});
@@ -248,13 +249,9 @@ void JNICALL surface(JNIEnv* env,jclass,jlong id,jobject object) {
     auto owner=std::shared_ptr<android::NativeWindow>(window,android::release);
     {std::lock_guard lock(window->lock);
       log::info("media","MediaPlayer surface {}x{} image_consumer={}",window->width,window->height,window->image_consumer);}
-    p->surface([owner](const media::VideoFrame& f) {
-      return android::publish_window_rgba(owner.get(),f.rgba,f.width,f.height,false,f.time_us*1000);
-    },[owner] {
-      std::lock_guard lock(owner->lock);
-      return owner->image_consumer && !owner->fixed_consumer_extent?
-        std::pair{0,0}:std::pair{owner->width,owner->height};
-    });return 0;
+    p->surface([owner](media::VideoFrame& f) {
+      return android::publish_window_rgba(owner.get(),std::move(f.rgba),f.width,f.height,f.time_us*1000);
+    },[owner]{return android::window_consumer_extent(owner.get());});return 0;
   });
 }
 void JNICALL release(JNIEnv* env,jclass,jlong id) {

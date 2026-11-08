@@ -474,7 +474,8 @@ std::shared_ptr<File> open(const MappedPath& p, int flags, std::uint32_t, int* e
   }
   if ((flags & 0400000) && attributes != INVALID_FILE_ATTRIBUTES &&
       (attributes & FILE_ATTRIBUTE_REPARSE_POINT)) {
-    *e = -err::eloop;
+    // Linux answers a link with O_DIRECTORY|O_NOFOLLOW ENOTDIR, a plain O_NOFOLLOW ELOOP.
+    *e = (flags & 0200000) ? -err::enotdir : -err::eloop;
     return {};
   }
   DWORD access = (flags & 3) == 0   ? GENERIC_READ

@@ -16,6 +16,7 @@
 #include <future>
 #include <condition_variable>
 #include <deque>
+#include <optional>
 #include <thread>
 #ifdef _WIN32
 #include <windows.h>
@@ -78,9 +79,9 @@ struct Library::Impl {
   X(avcodec_get_name) X(avcodec_get_hw_config) X(av_hwdevice_ctx_create) X(av_hwframe_transfer_data) \
   X(avcodec_open2) X(avcodec_free_context) X(avcodec_send_packet) \
   X(avcodec_receive_frame) X(avcodec_flush_buffers) \
-  X(av_frame_alloc) X(av_frame_free) X(av_frame_unref) X(av_frame_apply_cropping) X(av_frame_copy_props) \
-  X(sws_getCachedContext) X(sws_scale) X(sws_freeContext) \
-  X(sws_getCoefficients) X(sws_setColorspaceDetails) \
+  X(av_frame_alloc) X(av_frame_free) X(av_frame_unref) X(av_frame_ref) X(av_frame_move_ref) \
+  X(av_frame_apply_cropping) X(av_frame_copy_props) \
+  X(sws_alloc_context) X(sws_scale_frame) X(sws_freeContext) \
   X(av_sample_fmt_is_planar) X(av_get_bytes_per_sample)
   // The built-in SHA implementation identifies the bounded input region.
 #define MEDIA_HASH_FUNCTIONS(X) X(av_sha_alloc) X(av_sha_init) X(av_sha_update) X(av_sha_final)
@@ -304,13 +305,16 @@ int Extractor::error() const {return impl->failure;}
 const std::string& Extractor::source_hash() const {return impl->hash;}
 struct Decoder::Impl {
   std::shared_ptr<Library> library;
-  AVCodecContext* codec=nullptr;AVFrame* frame=nullptr;AVFrame* downloaded=nullptr;
+  AVCodecContext* codec=nullptr;AVFrame* frame=nullptr;AVFrame* downloaded=nullptr;AVFrame* converted=nullptr;
   bool video_backend_logged=false;
   std::int64_t conversion_us=0;
   SwsContext* scale=nullptr;
   explicit Impl(std::shared_ptr<Library> l):library(std::move(l)){}
   auto& api(){return *library->impl;}
-  ~Impl(){if(codec)api().avcodec_free_context(&codec);if(frame)api().av_frame_free(&frame);if(downloaded)api().av_frame_free(&downloaded);if(scale)api().sws_freeContext(scale);}
+  ~Impl(){if(codec)api().avcodec_free_context(&codec);if(frame)api().av_frame_free(&frame);if(downloaded)api().av_frame_free(&downloaded);
+    if(converted)api().av_frame_free(&converted);if(scale)api().sws_freeContext(scale);}
+  int receive_video();
+  int convert(AVFrame* f,VideoFrame* out,int output_width,int output_height,bool nv12);
 };
 namespace {
 AVCodecID codec_id(std::string_view mime) {
@@ -358,7 +362,12 @@ int Decoder::configure(const Track& t) {
          (config->methods&AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX)) {
         if(a.av_hwdevice_ctx_create(&s.codec->hw_device_ctx,AV_HWDEVICE_TYPE_D3D11VA,nullptr,nullptr,0)<0)
           log::info("media","D3D11VA device unavailable; retaining software video decoder");
-        else log::info("media","D3D11VA device created for {}",t.mime);
+        else {
+          // Surface codec output holds decoded surfaces: four output buffers,
+          // four scheduled releases and the one being converted.
+          s.codec->extra_hw_frames=9;
+          log::info("media","D3D11VA device created for {}",t.mime);
+        }
         break;
       }
     }
@@ -419,45 +428,94 @@ int Decoder::receive(Pcm* out) {
 }
 void Decoder::flush(){if(impl->codec)impl->api().avcodec_flush_buffers(impl->codec);}
 std::int64_t Decoder::video_conversion_us() const{return impl->conversion_us;}
-int Decoder::receive(VideoFrame* out,std::int64_t discard_before_us,int output_width,int output_height,bool nv12) {
-  auto& s=*impl;if(!s.codec || !out || s.codec->codec_type!=AVMEDIA_TYPE_VIDEO)return bad_state;
-  auto& a=s.api();auto f=s.frame;a.av_frame_unref(f);
-  auto result=a.avcodec_receive_frame(s.codec,f);
+namespace {
+// Conversion threads for one picture: short, bursty work beside a running
+// game. Half the logical processors, at most eight, bound its share.
+int conversion_threads() {
+  static const int count=std::clamp(int(std::thread::hardware_concurrency()/2),1,8);
+  return count;
+}
+}
+int Decoder::Impl::receive_video() {
+  auto& a=api();auto f=frame;a.av_frame_unref(f);
+  auto result=a.avcodec_receive_frame(codec,f);
   if(result==AVERROR(EAGAIN))return 0;if(result==AVERROR_EOF)return -1;if(result<0)return unsupported;
-  if(!s.video_backend_logged) {
-    log::info("media","Video decode backend={} {}x{} hardware_device={}",f->format==AV_PIX_FMT_D3D11?"D3D11VA":"software",f->width,f->height,s.codec->hw_device_ctx!=nullptr);
-    s.video_backend_logged=true;
+  if(!video_backend_logged) {
+    log::info("media","Video decode backend={} {}x{} hardware_device={}",f->format==AV_PIX_FMT_D3D11?"D3D11VA":"software",f->width,f->height,codec->hw_device_ctx!=nullptr);
+    video_backend_logged=true;
   }
-  out->time_us=f->best_effort_timestamp==AV_NOPTS_VALUE?0:f->best_effort_timestamp;
-  if(out->time_us<discard_before_us)return 2;
+  return 1;
+}
+int Decoder::Impl::convert(AVFrame* f,VideoFrame* out,int output_width,int output_height,bool nv12) {
+  auto& a=api();
   auto conversion_begin=std::chrono::steady_clock::now();
   if(f->format==AV_PIX_FMT_D3D11) {
-    if(!s.downloaded)s.downloaded=a.av_frame_alloc();if(!s.downloaded)return unsupported;
-    a.av_frame_unref(s.downloaded);
-    if(a.av_hwframe_transfer_data(s.downloaded,f,0)<0 || a.av_frame_copy_props(s.downloaded,f)<0)return unsupported;
-    f=s.downloaded;
+    if(!downloaded)downloaded=a.av_frame_alloc();if(!downloaded)return unsupported;
+    a.av_frame_unref(downloaded);
+    if(a.av_hwframe_transfer_data(downloaded,f,0)<0 || a.av_frame_copy_props(downloaded,f)<0)return unsupported;
+    f=downloaded;
   }
   if(a.av_frame_apply_cropping(f,AV_FRAME_CROP_UNALIGNED)<0 || f->width<=0 || f->height<=0 ||
      f->width>8192 || f->height>8192)return unsupported;
   auto width=output_width>1 && output_width<=8192?output_width:f->width;
   auto height=output_height>1 && output_height<=8192?output_height:f->height;
-  s.scale=a.sws_getCachedContext(s.scale,f->width,f->height,static_cast<AVPixelFormat>(f->format),
-    width,height,nv12?AV_PIX_FMT_NV12:AV_PIX_FMT_RGBA,SWS_BILINEAR,nullptr,nullptr,nullptr);
-  if(!s.scale)return unsupported;
-  int space=f->colorspace==AVCOL_SPC_BT709?SWS_CS_ITU709:
-    f->colorspace==AVCOL_SPC_BT2020_NCL?SWS_CS_BT2020:SWS_CS_ITU601;
-  auto coefficients=a.sws_getCoefficients(space);
-  a.sws_setColorspaceDetails(s.scale,coefficients,f->color_range==AVCOL_RANGE_JPEG,
-    coefficients,1,0,1<<16,1<<16);
+  // Frame-based swscale converts slices on its own threads. The signaling
+  // keeps the earlier contract: BT.709 and BT.2020 as tagged, otherwise
+  // BT.601; limited range unless tagged full; no gamut or transfer change.
+  if(!scale) {
+    scale=a.sws_alloc_context();if(!scale)return unsupported;
+    scale->flags=SWS_BILINEAR;scale->threads=conversion_threads();
+  }
+  if(!converted)converted=a.av_frame_alloc();if(!converted)return unsupported;
+  a.av_frame_unref(converted);
+  if(f->colorspace!=AVCOL_SPC_BT709 && f->colorspace!=AVCOL_SPC_BT2020_NCL)f->colorspace=AVCOL_SPC_BT470BG;
+  if(f->color_range!=AVCOL_RANGE_JPEG)f->color_range=AVCOL_RANGE_MPEG;
+  auto* d=converted;
+  d->format=nv12?AV_PIX_FMT_NV12:AV_PIX_FMT_RGBA;d->width=width;d->height=height;
+  d->colorspace=nv12?f->colorspace:AVCOL_SPC_RGB;d->color_range=nv12?AVCOL_RANGE_MPEG:AVCOL_RANGE_JPEG;
+  d->color_primaries=f->color_primaries;d->color_trc=f->color_trc;d->chroma_location=f->chroma_location;
   out->width=width;out->height=height;
   out->time_us=f->best_effort_timestamp==AV_NOPTS_VALUE?0:f->best_effort_timestamp;
   const auto pitch=nv12_extent(width),rows_out=nv12_extent(height);
   out->rgba.resize(nv12?std::size_t(pitch)*rows_out*3/2:std::size_t(width)*height*4);
-  std::uint8_t* data[]={out->rgba.data(),nv12?out->rgba.data()+std::size_t(pitch)*rows_out:nullptr,nullptr,nullptr};
-  int stride[]={nv12?pitch:width*4,nv12?pitch:0,0,0};
-  auto rows=a.sws_scale(s.scale,f->data,f->linesize,0,f->height,data,stride);
-  s.conversion_us=std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now()-conversion_begin).count();
-  return rows==height?1:unsupported;
+  d->data[0]=out->rgba.data();d->linesize[0]=nv12?pitch:width*4;
+  if(nv12){d->data[1]=out->rgba.data()+std::size_t(pitch)*rows_out;d->linesize[1]=pitch;}
+  auto result=a.sws_scale_frame(scale,d,f);
+  for(auto& plane:d->data)plane=nullptr;
+  conversion_us=std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now()-conversion_begin).count();
+  return result>=0?1:unsupported;
+}
+int Decoder::receive(VideoFrame* out,std::int64_t discard_before_us,int output_width,int output_height,bool nv12) {
+  auto& s=*impl;if(!s.codec || !out || s.codec->codec_type!=AVMEDIA_TYPE_VIDEO)return bad_state;
+  auto result=s.receive_video();if(result!=1)return result;
+  auto f=s.frame;
+  out->time_us=f->best_effort_timestamp==AV_NOPTS_VALUE?0:f->best_effort_timestamp;
+  if(out->time_us<discard_before_us)return 2;
+  return s.convert(f,out,output_width,output_height,nv12);
+}
+int Decoder::receive(std::shared_ptr<Picture>* out) {
+  auto& s=*impl;if(!s.codec || !out || s.codec->codec_type!=AVMEDIA_TYPE_VIDEO)return bad_state;
+  auto result=s.receive_video();if(result!=1)return result;
+  auto& a=s.api();auto frame=a.av_frame_alloc();if(!frame)return unsupported;
+  a.av_frame_move_ref(frame,s.frame);
+  std::shared_ptr<Picture> picture(new Picture);
+  picture->library=s.library;picture->frame=frame;
+  picture->width=frame->width-int(frame->crop_left+frame->crop_right);
+  picture->height=frame->height-int(frame->crop_top+frame->crop_bottom);
+  picture->time_us=frame->best_effort_timestamp==AV_NOPTS_VALUE?0:frame->best_effort_timestamp;
+  *out=std::move(picture);return 1;
+}
+int Decoder::convert(const Picture& picture,VideoFrame* out,int output_width,int output_height,bool nv12) {
+  auto& s=*impl;if(!picture.frame || !out)return bad_state;
+  // Conversion crops and retags its frame; the held picture stays intact.
+  auto& a=s.api();
+  auto copy=a.av_frame_alloc();if(!copy)return unsupported;
+  struct Owned{Library::Impl& a;AVFrame* f;~Owned(){a.av_frame_free(&f);}} owned{a,copy};
+  if(a.av_frame_ref(copy,static_cast<const AVFrame*>(picture.frame))<0)return unsupported;
+  return s.convert(copy,out,output_width,output_height,nv12);
+}
+Decoder::Picture::~Picture() {
+  if(frame){auto f=static_cast<AVFrame*>(frame);library->impl->av_frame_free(&f);}
 }
 
 namespace {
@@ -475,16 +533,21 @@ struct Codec::Impl {
   std::atomic<std::uint64_t> generation{0};
   Track track;
   Sink sink;
+  Extent extent;
   std::vector<std::byte> buffer=std::vector<std::byte>(max_packet);
   // A MediaCodec output buffer always exists, even for an empty EOS output:
   // Unity's AndroidVideoMedia converts buffer+offset without a null check.
   std::vector<std::byte> empty_output;
   struct Packet { Sample sample;std::uint32_t flags; };
-  struct Output { std::vector<std::byte> bytes;VideoFrame video;Info info; };
-  struct Render { VideoFrame video;std::int64_t at; };
+  // Surface output holds the decoded picture; ByteBuffer output its bytes.
+  struct Output { std::vector<std::byte> bytes;VideoFrame video;std::shared_ptr<Decoder::Picture> picture;Info info; };
+  struct Render { std::shared_ptr<Decoder::Picture> picture;std::int64_t at; };
+  struct Ready { VideoFrame video;std::int64_t at; };
   std::deque<Packet> packets;
   std::deque<Output> outputs;
+  // Released pictures await conversion; one converted frame awaits its time.
   std::deque<Render> renders;
+  std::optional<Ready> ready;
   bool configured=false,started=false,input_owned=false,output_owned=false;
   bool eos=false,drain=false,eos_output=false,closing=false,format_changed=false;
   int failure=0;
@@ -500,11 +563,11 @@ struct Codec::Impl {
     {std::lock_guard lock(mutex);closing=true;started=false;++generation;cv.notify_all();}
     if(worker.joinable())worker.join();
     Sink ending_sink;
-    {std::lock_guard lock(mutex);ending_sink=std::move(sink);packets.clear();outputs.clear();renders.clear();}
+    {std::lock_guard lock(mutex);ending_sink=std::move(sink);extent={};packets.clear();outputs.clear();renders.clear();ready.reset();}
   }
   ~Impl() {close();}
   void clear() {
-    packets.clear();outputs.clear();renders.clear();
+    packets.clear();outputs.clear();renders.clear();ready.reset();
     input_owned=output_owned=eos=drain=eos_output=false;failure=0;config_packet=false;eos_time=0;
     ++generation;
     {std::lock_guard decoder_lock(decoder_mutex);decoder.flush();}
@@ -514,28 +577,48 @@ struct Codec::Impl {
     std::unique_lock lock(mutex);
     while(!closing) {
       const auto epoch=generation.load();
-      if(!renders.empty()) {
-        auto now=std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
-        if(renders.front().at<=now) {
-          auto render=std::move(renders.front());renders.pop_front();auto target=sink;
-          lock.unlock();auto result=target && generation==epoch?target(render.video):0;
-          if(target)av::emit("codec_video_present",std::format("\"codec_id\":{},\"pts_us\":{},\"width\":{},\"height\":{},\"result\":{}",
-            id,render.video.time_us,render.video.width,render.video.height,result));
-          lock.lock();
-          if(generation==epoch && result)failure=unsupported;
-          cv.notify_all();continue;
+      auto now=std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+      if(ready && ready->at<=now) {
+        auto video=std::move(ready->video);ready.reset();auto target=sink;
+        lock.unlock();auto result=target && generation==epoch?target(video):0;
+        if(target)av::emit("codec_video_present",std::format("\"codec_id\":{},\"pts_us\":{},\"width\":{},\"height\":{},\"result\":{}",
+          id,video.time_us,video.width,video.height,result));
+        video={};lock.lock();
+        if(generation==epoch && result)failure=unsupported;
+        cv.notify_all();continue;
+      }
+      if(!ready && !renders.empty()) {
+        // Convert the next released picture now; it is shown at its time.
+        auto render=std::move(renders.front());renders.pop_front();auto size_of=extent;
+        cv.notify_all();lock.unlock();
+        Ready converted{{},render.at};int status=0;
+        {
+          std::lock_guard decoder_lock(decoder_mutex);
+          if(generation==epoch) {
+            auto size=size_of?size_of():std::pair{0,0};
+            status=decoder.convert(*render.picture,&converted.video,size.first,size.second);
+          }
         }
+        render.picture.reset();
+        lock.lock();if(generation!=epoch)continue;
+        if(status!=1){log::warn("media","Codec {} conversion failed status={}",track.mime,status);failure=unsupported;cv.notify_all();continue;}
+        ready=std::move(converted);continue;
       }
       if(started && !failure && outputs.size()<4 && !eos_output) {
-        Output out;int status=0;const bool video=video_mime(track.mime),buffers=!sink;
+        Output out;int status=0;const bool video=video_mime(track.mime),surface=bool(sink);
         Pcm pcm;
         lock.unlock();
         {
           std::lock_guard decoder_lock(decoder_mutex);
-          if(generation==epoch)status=video?decoder.receive(&out.video,std::numeric_limits<std::int64_t>::min(),0,0,buffers):decoder.receive(&pcm);
+          if(generation==epoch)status=!video?decoder.receive(&pcm):surface?decoder.receive(&out.picture):
+            decoder.receive(&out.video,std::numeric_limits<std::int64_t>::min(),0,0,true);
         }
         if(status==1) {
-          if(video) {out.info.time=out.video.time_us;out.info.size=static_cast<int>(out.video.rgba.size());}
+          if(video && out.picture) {
+            out.video.width=out.picture->width;out.video.height=out.picture->height;out.video.time_us=out.picture->time_us;
+            out.info.time=out.picture->time_us;
+            out.info.size=static_cast<int>(std::size_t(out.video.width)*out.video.height*4);
+          } else if(video) {out.info.time=out.video.time_us;out.info.size=static_cast<int>(out.video.rgba.size());}
           else {
             out.info.time=pcm.time_us;out.bytes.resize(pcm.samples.size()*2);
             for(std::size_t i=0;i<pcm.samples.size();++i) {
@@ -584,8 +667,8 @@ struct Codec::Impl {
           continue;
         }
       }
-      if(renders.empty())cv.wait(lock);
-      else cv.wait_until(lock,std::chrono::steady_clock::time_point(std::chrono::nanoseconds(renders.front().at)));
+      if(ready)cv.wait_until(lock,std::chrono::steady_clock::time_point(std::chrono::nanoseconds(ready->at)));
+      else if(renders.empty())cv.wait(lock);
     }
   }
 };
@@ -602,10 +685,10 @@ void Codec::shutdown_all() {
 }
 Codec::~Codec(){release();}
 void Codec::release(){impl->close();}
-int Codec::configure(const Track& track,Sink sink) {
+int Codec::configure(const Track& track,Sink sink,Extent extent) {
   auto& s=*impl;std::lock_guard lock(s.mutex);
   if(s.started || s.closing)return bad_state;
-  s.configured=false;s.clear();s.track=track;s.sink=std::move(sink);
+  s.configured=false;s.clear();s.track=track;s.sink=std::move(sink);s.extent=std::move(extent);
   std::lock_guard decoder_lock(s.decoder_mutex);
   auto result=s.decoder.configure(track);s.configured=result==0;
   if(!result && video_mime(track.mime))av::emit("codec_video_configure",std::format("\"codec_id\":{},\"surface\":{},\"width\":{},\"height\":{}",s.id,bool(s.sink),track.width,track.height));
@@ -625,10 +708,10 @@ int Codec::flush() {
   auto& s=*impl;std::lock_guard lock(s.mutex);
   if(!s.started)return bad_state;s.clear();return 0;
 }
-int Codec::surface(Sink sink) {
+int Codec::surface(Sink sink,Extent extent) {
   auto& s=*impl;std::lock_guard lock(s.mutex);
   if(!s.configured || s.closing || !video_mime(s.track.mime) || !sink)return bad_state;
-  s.renders.clear();s.sink=std::move(sink);s.cv.notify_all();return 0;
+  s.renders.clear();s.ready.reset();s.sink=std::move(sink);s.extent=std::move(extent);s.cv.notify_all();return 0;
 }
 std::int64_t Codec::input(std::int64_t timeout) {
   auto& s=*impl;std::unique_lock lock(s.mutex);
@@ -665,7 +748,7 @@ std::span<const std::byte> Codec::output_buffer(std::uint64_t index) {
   auto& s=*impl;std::lock_guard lock(s.mutex);
   if(index || !s.output_owned || s.outputs.empty())return {};
   auto& out=s.outputs.front();const bool video=video_mime(s.track.mime);
-  if(video && s.sink)return {};
+  if(video && (s.sink || out.picture))return {};
   if(video && !out.video.rgba.empty())return {reinterpret_cast<const std::byte*>(out.video.rgba.data()),out.video.rgba.size()};
   if(!video && !out.bytes.empty())return out.bytes;
   auto capacity=video?std::size_t(nv12_extent(std::max(s.track.width,1)))*nv12_extent(std::max(s.track.height,1))*3/2:std::size_t(16384);
@@ -676,12 +759,12 @@ int Codec::release(std::uint64_t index,bool render,std::int64_t at) {
   auto& s=*impl;std::lock_guard lock(s.mutex);
   if(index || !s.started || !s.output_owned || s.outputs.empty())return invalid;
   auto& out=s.outputs.front();
-  if(video_mime(s.track.mime) && !out.video.rgba.empty())
+  if(video_mime(s.track.mime) && (out.picture || !out.video.rgba.empty()))
     av::emit("codec_video_release",std::format("\"codec_id\":{},\"surface\":{},\"pts_us\":{},\"render\":{},\"at_ns\":{}",s.id,bool(s.sink),out.info.time,render,at));
-  if(render && s.sink && !out.video.rgba.empty()) {
+  if(render && s.sink && out.picture) {
     // SurfaceTexture is a latest-frame consumer. Bound scheduled releases too.
     if(s.renders.size()==4)s.renders.pop_front();
-    s.renders.push_back({std::move(out.video),at});
+    s.renders.push_back({std::move(out.picture),at});
   }
   s.outputs.pop_front();s.output_owned=false;s.cv.notify_all();return 0;
 }

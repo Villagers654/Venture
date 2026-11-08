@@ -84,6 +84,9 @@ extern "C" VENTURE_MOCK_EXPORT std::uint32_t ventureMockXrDestroysDuringEnd();
 // Copies up to capacity subimages of the last accepted frame; returns the total.
 extern "C" VENTURE_MOCK_EXPORT std::uint32_t ventureMockXrLastSubImages(XrSwapchainSubImage *out,
                                                              std::uint32_t capacity);
+// Copies up to capacity quad layers of the last accepted frame; returns the total.
+extern "C" VENTURE_MOCK_EXPORT std::uint32_t ventureMockXrLastQuads(XrCompositionLayerQuad *out,
+                                                         std::uint32_t capacity);
 // The Vulkan image a swapchain released last (0 if none), to read what was submitted.
 extern "C" VENTURE_MOCK_EXPORT std::uint64_t ventureMockXrReleasedImage(XrSwapchain);
 // Runtime-initiated stop (headset sleep): queues STOPPING; after the
