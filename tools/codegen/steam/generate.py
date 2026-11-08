@@ -16,9 +16,9 @@ INCLUDES = '\n'.join(f'#include "{h}.h"' for h in (
     'steamnetworkingfakeip', 'isteamgamecoordinator', 'isteamdualsense'))
 
 
-def vtables(dump):
+def vtables(dump, table='VFTable'):
     result = {}
-    for name, body in re.findall(r"VFTable indices for '([^']+)'[^\n]*\n(.*?)(?=\n\n|\Z)", dump, re.S):
+    for name, body in re.findall(table + r" indices for '([^']+)'[^\n]*\n(.*?)(?=\n\n|\Z)", dump, re.S):
         result[name] = [(int(i), sig) for i, sig in re.findall(r'^\s*(\d+) \| (.*)$', body, re.M)]
     return result
 
@@ -117,8 +117,17 @@ def main():
         methods_cpp, skipped = emit_methods(model,version)
         lines += methods_cpp
         (out / f'unsupported{version}.json').write_text(json.dumps(skipped,indent=2)+'\n', newline='\n')
+        cpp_table = ''
+        if cpp := pin.get('cpp_interfaces'):
+            android_vt = vtables(dumps['android'], 'VTable')
+            for name in cpp:
+                if android_vt.get(name) != vt[name]:
+                    raise ValueError(f'Android and Windows virtual slots differ for {name}')
+            lines.append('static constexpr std::string_view cpp_interfaces[]{' + ', '.join(f'"{name}"' for name in cpp) + '};')
+            cpp_table = (f', v{version}::cpp_interfaces, "{pin["android_build_id"]}", '
+                         f'"{pin["android_abi_sha256"]}"')
         lines += ['}', f'namespace venture::steam {{ const Sdk& sdk{version}() {{',
-                  f'  static const Sdk value{{{version}, "{pin["android_sha256"]}", v{version}::layouts, v{version}::methods, v{version}::interfaces, v{version}::exports}};',
+                  f'  static const Sdk value{{{version}, "{pin["android_sha256"]}", v{version}::layouts, v{version}::methods, v{version}::interfaces, v{version}::exports{cpp_table}}};',
                   '  return value;', '} }']
         (out / f'sdk{version}.cpp').write_text('\n'.join(lines)+'\n', newline='\n')
         print(f'SDK {version}: {len(methods)} MSVC slots, {len(metadata["android"])} Android records')

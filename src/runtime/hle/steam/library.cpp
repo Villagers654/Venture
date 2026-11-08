@@ -12,6 +12,7 @@
 #include <cstring>
 
 namespace venture::steam {
+void add_cpp_exports(HleLibrary&, const Sdk&, hle::Handler utils_result);
 namespace {
 struct IdentityMismatch : std::runtime_error { using std::runtime_error::runtime_error; };
 int init(const char* versions, char* error) { return Bridge::get().initialize(versions,error); }
@@ -45,13 +46,15 @@ bool utils_result(GuestAddr self,std::uint64_t call,void* data,std::int32_t size
 GuestAddr client() { return Bridge::get().interface("SteamClient023"); }
 GuestAddr create_interface(const char* version) {
   if (!version) return 0;
-  // Returned handles are only for the flat API, never advertised as guest
-  // Itanium-vtable objects. ContextInit/C++ callback APIs remain unregistered.
   return Bridge::get().interface(version);
 }
 GuestAddr find_user(std::int32_t requested_user,const char* version) {
   auto& b=Bridge::get(); std::lock_guard lock(b.mutex);
-  if (!requested_user || requested_user != b.user()) return 0;
+  if (!b.ready() || !version) return 0;
+  const auto& sdk=b.sdk();
+  // The SDK's SteamUtils() accessor uses zero because Utils is pipe-scoped.
+  const auto* face=sdk.interface(version);
+  if (requested_user != b.user() && !(requested_user == 0 && face && face->name == "ISteamUtils")) return 0;
   return create_interface(version);
 }
 bool running() {
@@ -59,18 +62,28 @@ bool running() {
   // or owns the game. Those checks belong to initialize().
   return platform::steam_client_running();
 }
+template<bool SoftFail>
 void guarded(hle::CallContext& ctx) {
   auto handler = reinterpret_cast<hle::Handler>(ctx.user());
-  try { handler(ctx); }
+  try {
+    handler(ctx);
+    if (ctx.info().name == "SteamAPI_ISteamUser_GetAuthSessionTicket" ||
+        ctx.info().name == "SteamAPI_ISteamUser_GetAuthTicketForWebApi")
+      log::info("steam", "Forwarded Steam authentication request {}", ctx.info().name);
+  }
   catch (const std::exception& e) {
     ctx.thread().set_errno(dynamic_cast<const IdentityMismatch*>(&e) ? err::kEPERM : err::kEIO);
     log::error("steam", "{}: {}",ctx.info().name,e.what());
-    throw; // Fail observably; never fabricate a successful service result.
+    if constexpr (SoftFail) ctx.return_x(0);
+    else throw;
   }
 }
 void add(HleLibrary& lib,std::string_view name,hle::Handler handler) {
-  lib.add_function(name,hle::make_thunk("libsteam_api.so",name,guarded,reinterpret_cast<void*>(handler)));
+  lib.add_function(name,hle::make_thunk("libsteam_api.so",name,guarded<false>,reinterpret_cast<void*>(handler)));
 }
+}
+GuestAddr make_cpp_thunk(std::string_view name, hle::Handler handler) {
+  return hle::make_thunk("libsteam_api.so", name, guarded<true>, reinterpret_cast<void*>(handler));
 }
 void add_exports(HleLibrary& lib,const Sdk& sdk) {
   for (const auto& e:sdk.exports) add(lib,e.name,e.handler);
@@ -96,6 +109,7 @@ void add_exports(HleLibrary& lib,const Sdk& sdk) {
   EXPORT("SteamInternal_CreateInterface",create_interface);
   EXPORT("SteamInternal_FindOrCreateUserInterface",find_user);
 #undef EXPORT
+  if (!sdk.cpp_interfaces.empty()) add_cpp_exports(lib, sdk, hle::wrap<&utils_result>());
 }
 void register_library(const Plan& plan,const fs::path& apk) {
   if (process_config().isa()!=GuestIsa::a64) throw std::runtime_error("Steam bridge requires ARM64 guest");
@@ -109,7 +123,7 @@ void register_library(const Plan& plan,const fs::path& apk) {
   std::vector<std::byte> bytes(stat.m_uncomp_size);
   if(!mz_zip_reader_extract_to_mem(&zip,index,bytes.data(),bytes.size(),0)) throw std::runtime_error("Cannot read Steam SDK from APK");
   const auto* sdk=detect_sdk(bytes);
-  if(!sdk) throw std::runtime_error("Unknown Android Steamworks SDK hash; supported pins: 1.63, 1.64, 1.65a");
+  if(!sdk) throw std::runtime_error("Unknown Android Steamworks SDK build; supported pins: 1.63, 1.64, 1.65a");
   log::info("steam","Verified guest Steamworks SDK {}",sdk->version);
   Bridge::get().configure(plan,*sdk);
   auto lib=std::make_shared<HleLibrary>("libsteam_api.so",std::vector<std::string>{

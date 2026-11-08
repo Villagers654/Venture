@@ -108,14 +108,21 @@ void Bridge::shutdown() {
   // Retain inert handles so stale guest pointers can never alias a new session.
   release_thread();
 }
+void Bridge::set_guest_vtable(std::string_view version, std::vector<GuestAddr> slots) {
+  std::lock_guard lock(mutex);
+  if (initialized_ || !guest_vtables_.try_emplace(version, std::move(slots)).second)
+    throw std::logic_error("Steam guest vtable already configured");
+}
 GuestAddr Bridge::interface(std::string_view version) {
   std::lock_guard lock(mutex);
   if (!initialized_) return 0;
   auto* type = sdk().interface(version);
   if (!type) { log::error("steam", "Interface request outside detected SDK refused"); return 0; }
   for (const auto& [key,h] : handles_) if (h->type == type && h->generation == generation_) return key;
-  auto h = std::make_unique<Handle>(Handle{host_interface(*type), type, generation_});
-  const auto key = h2g(h.get());
+  auto table = guest_vtables_.find(type->version);
+  auto object = std::make_unique<GuestAddr>(table == guest_vtables_.end() ? 0 : h2g(table->second.data()));
+  const auto key = h2g(object.get());
+  auto h = std::make_unique<Handle>(Handle{host_interface(*type), type, generation_, std::move(object)});
   handles_.emplace(key, std::move(h));
   return key;
 }
