@@ -5,7 +5,7 @@ import java.util.Arrays;
 import java.util.Locale;
 
 /** Suggestion metadata attached to an editable text range. */
-public class SuggestionSpan {
+public class SuggestionSpan extends CharacterStyle {
   public static final int FLAG_EASY_CORRECT = 1;
   public static final int FLAG_MISSPELLED = 2;
   public static final int FLAG_AUTO_CORRECTION = 4;
@@ -31,7 +31,9 @@ public class SuggestionSpan {
     this.flags = flags;
   }
 
-  // shortcut: metadata only until the framework supports rendering and parceling text styles.
+  // Nothing draws the suggestion underline or parcels the span.
+  @Override public void updateDrawState(android.text.TextPaint paint) {}
+
   public String[] getSuggestions() { return suggestions; }
   public String getLocale() { return locale == null ? "" : locale.toString(); }
   public Locale getLocaleObject() { return locale; }
