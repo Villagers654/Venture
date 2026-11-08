@@ -899,6 +899,10 @@ add_executable(venture_xr_tests test_main.cpp  runtime/xr_test.cpp runtime/xr_vr
   add_test(NAME xr_typed_handles COMMAND venture_xr_tests
     "--test-case=XR guest lifecycle and real Vulkan swapchain through mock loader")
   set_tests_properties(xr_typed_handles PROPERTIES ENVIRONMENT "XR_RUNTIME_JSON=${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/mock_openxr_runtime.json;VENTURE_DATA_DIR=${CMAKE_CURRENT_BINARY_DIR}/xr-typed-handles-data;VENTURE_MOCK_TYPED_HANDLES=1")
+  # The same runtime: a game's destroyed space shares its value with the game's menu action.
+  add_test(NAME xr_typed_handles_menu COMMAND venture_xr_tests
+    "--test-case=An OpenXR game that also binds both stick clicks gets its Quest menu from the menu button and both stick clicks")
+  set_tests_properties(xr_typed_handles_menu PROPERTIES ENVIRONMENT "XR_RUNTIME_JSON=${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/mock_openxr_runtime.json;VENTURE_DATA_DIR=${CMAKE_CURRENT_BINARY_DIR}/xr-typed-handles-menu-data;VENTURE_MOCK_TYPED_HANDLES=1")
   # A runtime that lists legacy XR_KHR_vulkan_enable requirements and does not add them to the
   # enable2 shared device (the Oculus PC runtime). One name every Vulkan lacks, so it is skipped.
   add_test(NAME xr_vulkan_legacy_requirements COMMAND venture_xr_tests

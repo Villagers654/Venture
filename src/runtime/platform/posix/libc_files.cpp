@@ -126,7 +126,8 @@ int exists(const std::filesystem::path& p, bool follow) {
   return r < 0 ? native_error() : 0;
 }
 std::shared_ptr<File> open(const MappedPath& p, int flags, std::uint32_t mode, int* error) {
-  auto fd = ::open(p.host.c_str(), flags | O_CLOEXEC, mode);
+  // O_DIRECT is only a hint to a guest; host direct IO would demand aligned buffers.
+  auto fd = ::open(p.host.c_str(), (flags & ~O_DIRECT) | O_CLOEXEC, mode);
   if (fd < 0) {
     *error = native_error();
     return {};

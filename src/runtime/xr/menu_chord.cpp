@@ -186,7 +186,12 @@ XrResult suggest(XrInstance instance, const XrInteractionProfileSuggestedBinding
   const auto resolved = resolved_controls(profile);
   Plan plan;
   std::array<std::string, 2> inputs;
-  if (resolved && known && resolved->menu.kind == controls::Menu::Kind::synthesized) {
+  // A synthesized menu, or the automatic one's stick clicks beside its menu button
+  // (bound as the game's own by touch_binding); VENTURE_MENU_CHORD=off keeps only the button.
+  const bool chord = resolved && known && !resolved->menu.sources.empty() &&
+                     (resolved->menu.kind == controls::Menu::Kind::synthesized ||
+                      (resolved->menu.automatic && menu_chord_enabled()));
+  if (chord) {
     plan.synthesized = true;
     plan.automatic = resolved->menu.automatic;
     plan.count = static_cast<unsigned>(std::min<std::size_t>(2, resolved->menu.sources.size()));
@@ -328,10 +333,15 @@ XrResult sync_with_menu_chord(XrSession session, const XrActionsSyncInfo* info) 
 void register_menu_action(XrActionSet set, XrAction action) {
   std::lock_guard lock(mutex); parents[action] = set;
 }
-void forget_menu_object(std::uintptr_t object) {
+namespace {
+// Forgets the menu actions `match` picks. Only handles of one type are compared: VDXR
+// numbers each handle type from 1, so a game's space or swapchain can share its value
+// with the game's action set or menu action, and destroying it dropped them (the game's
+// menu then never saw the stick clicks).
+template <class Match> void forget_menu_actions(Match match) {
   std::lock_guard lock(mutex);
   for (auto it = parents.begin(); it != parents.end();) {
-    if (reinterpret_cast<std::uintptr_t>(it->first) == object || reinterpret_cast<std::uintptr_t>(it->second) == object) {
+    if (match(it->first, it->second)) {
       for (auto& [profile, actions] : menus) actions.erase(it->first);
       for (auto& [profile, actions] : menu_paths) actions.erase(it->first);
       for (auto& [session, snapshot] : sessions) std::erase_if(snapshot.states, [&](auto& entry) { return entry.first.first == it->first; });
@@ -339,6 +349,13 @@ void forget_menu_object(std::uintptr_t object) {
       it = parents.erase(it);
     } else ++it;
   }
+}
+}  // namespace
+void forget_menu_action(XrAction action) {
+  forget_menu_actions([&](XrAction a, XrActionSet) { return a == action; });
+}
+void forget_menu_action_set(XrActionSet set) {
+  forget_menu_actions([&](XrAction, XrActionSet s) { return s == set; });
 }
 void reset_menu_session(XrSession session) { std::lock_guard lock(mutex); sessions.erase(session); }
 bool menu_chord_pulse(XrSession session) {

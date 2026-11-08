@@ -282,6 +282,46 @@ TEST_CASE("core CPU invalidation replaces every block in a range") {
   cpu_backend().invalidate(start + 56, 4);
   for (unsigned i = 1; i <= 6; ++i) CHECK(thread.call(start + i * 4, {}) == 2);
 }
+// And64InlineHook (statically linked by Beat Saber mods built with Custom
+// Types) makes its page-aligned trampoline pool in .bss RWX from a constructor,
+// with a length one page past the pool that can run past the library's last
+// page. Linux changes the mapped pages and fails with ENOMEM; the hook ignores
+// the error, writes trampolines and calls them.
+TEST_CASE("core CPU executes .bss made executable by an mprotect running past the library") {
+  auto& space = AddressSpace::get();
+  GuestThread thread(25); thread.attach_to_current_host_thread();
+  const auto image = space.allocate(3 * 4096, kProtRead | kProtWrite, "/data/app/libhook-test.so");
+  REQUIRE(image);
+  struct Free { GuestAddr p; ~Free() { AddressSpace::get().free(p); } } free_image{image};
+  const auto pool = image + 4096, hole = image + 2 * 4096;
+  REQUIRE(space.unmap(hole, 4096) == 0);  // nothing follows the library
+  auto* words = g2h<std::uint32_t>(pool);
+  words[0] = 0xd28000e0; words[1] = 0xd65f03c0;  // mov x0,#7; ret
+  auto cpu = cpu_backend().create_cpu();
+  cpu->set_pc(pool);
+  CHECK(cpu->run() == CpuExit::MemoryFault);
+  CHECK(cpu->fault().execute);
+  CHECK(space.segv_code(pool) == 2);  // SEGV_ACCERR: mapped, not executable
+  CHECK(space.segv_code(hole) == 1);  // SEGV_MAPERR
+  // Nothing changes when the range starts in the hole.
+  CHECK(space.protect(hole, 4096, kProtRead | kProtWrite | kProtExec) == -err::kENOMEM);
+  CHECK_FALSE(space.find(hole, nullptr));
+  CHECK(space.protect(pool, 2 * 4096, kProtRead | kProtWrite | kProtExec) == -err::kENOMEM);
+  CHECK_FALSE(space.is_guest_executable(image));
+  CHECK(space.is_guest_executable(pool));
+  CHECK_FALSE(space.is_guest_executable(hole));
+  CHECK_FALSE(space.find(hole, nullptr));
+  MemoryRegion region;
+  REQUIRE(space.find(pool, &region));
+  CHECK(region.prot == (kProtRead | kProtWrite | kProtExec));
+  CHECK(thread.call(pool, {}) == 7);
+  // Rewriting a called trampoline in place, then cleaning and invalidating its
+  // line as __clear_cache does, runs the new code.
+  // str w1,[x0]; dc cvau,x0; dsb ish; ic ivau,x0; dsb ish; isb; ret
+  Code patch{0xb9000001, 0xd50b7b20, 0xd5033b9f, 0xd50b7520, 0xd5033b9f, 0xd5033fdf, 0xd65f03c0};
+  thread.call(patch.address, {pool, 0xd2800100});  // mov x0,#8
+  CHECK(thread.call(pool, {}) == 8);
+}
 TEST_CASE("core CPU keeps exclusives working beyond 64 live guest CPUs") {
   // Unity titles keep more than 64 native threads alive; the monitor used to cap at 64.
   std::vector<std::unique_ptr<Cpu>> live;

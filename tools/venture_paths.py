@@ -29,8 +29,9 @@ RUNTIME = ("build/windows-release/bin/venture-runtime.exe" if os.name == "nt"
 
 
 # Recorded routes press the Quest controller's left menu button for the game's menu
-# ("menu": true). Venture's default menu on Touch is both stick clicks (SteamVR keeps
-# that button), so a replay puts the menu back on it, as a player can in Controls.
+# ("menu": true). Venture's default menu on Touch is that button and both stick clicks
+# pressed together; a replay keeps the button alone, as recorded, so a route's
+# simultaneous stick clicks never open the menu.
 ROUTE_CONTROLS = json.dumps({
     profile: {"menu": {"mode": "button", "first": "/user/hand/left/input/menu/click", "holdMs": 500}}
     for profile in ("/interaction_profiles/oculus/touch_controller",

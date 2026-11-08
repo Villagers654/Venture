@@ -161,6 +161,61 @@ public class PackageManager {
     public static ResolveInfoFlags of(long value) { return new ResolveInfoFlags(value); }
     public long getValue() { return value; }
   }
+  // API 33's long-flag forms of the int-flag queries. AndroidX ProfileInstaller
+  // (built for minSdk 33 it calls them unconditionally) asks for its own
+  // PackageInfo this way on a background thread; a missing class was an
+  // uncaught NoClassDefFoundError that closed Pinball FX VR after its intro.
+  public static final class PackageInfoFlags {
+    private final long value;
+    private PackageInfoFlags(long value) { this.value = value; }
+    public static PackageInfoFlags of(long value) { return new PackageInfoFlags(value); }
+    public long getValue() { return value; }
+  }
+  public static final class ApplicationInfoFlags {
+    private final long value;
+    private ApplicationInfoFlags(long value) { this.value = value; }
+    public static ApplicationInfoFlags of(long value) { return new ApplicationInfoFlags(value); }
+    public long getValue() { return value; }
+  }
+  public static final class ComponentInfoFlags {
+    private final long value;
+    private ComponentInfoFlags(long value) { this.value = value; }
+    public static ComponentInfoFlags of(long value) { return new ComponentInfoFlags(value); }
+    public long getValue() { return value; }
+  }
+  public PackageInfo getPackageInfo(String pkg, PackageInfoFlags flags) throws NameNotFoundException {
+    return getPackageInfo(pkg, (int) flags.getValue());
+  }
+  public PackageInfo getPackageInfo(VersionedPackage pkg, PackageInfoFlags flags) throws NameNotFoundException {
+    return getPackageInfo(pkg, (int) flags.getValue());
+  }
+  public ApplicationInfo getApplicationInfo(String pkg, ApplicationInfoFlags flags) throws NameNotFoundException {
+    return getApplicationInfo(pkg, (int) flags.getValue());
+  }
+  public ActivityInfo getActivityInfo(ComponentName name, ComponentInfoFlags flags) throws NameNotFoundException {
+    return getActivityInfo(name, (int) flags.getValue());
+  }
+  public ServiceInfo getServiceInfo(ComponentName name, ComponentInfoFlags flags) throws NameNotFoundException {
+    return getServiceInfo(name, (int) flags.getValue());
+  }
+  public ProviderInfo getProviderInfo(ComponentName name, ComponentInfoFlags flags) throws NameNotFoundException {
+    return getProviderInfo(name, (int) flags.getValue());
+  }
+  public java.util.List<PackageInfo> getInstalledPackages(PackageInfoFlags flags) {
+    return getInstalledPackages((int) flags.getValue());
+  }
+  public java.util.List<ResolveInfo> queryIntentServices(Intent intent, ResolveInfoFlags flags) {
+    return queryIntentServices(intent, (int) flags.getValue());
+  }
+  public java.util.List<ResolveInfo> queryBroadcastReceivers(Intent intent, ResolveInfoFlags flags) {
+    return queryBroadcastReceivers(intent, (int) flags.getValue());
+  }
+  public ResolveInfo resolveActivity(Intent intent, ResolveInfoFlags flags) {
+    return resolveActivity(intent, (int) flags.getValue());
+  }
+  public ProviderInfo resolveContentProvider(String authority, ComponentInfoFlags flags) {
+    return resolveContentProvider(authority, (int) flags.getValue());
+  }
   /** Installed packages visible to the app: with package visibility (API 30), its own. */
   public java.util.List<PackageInfo> getInstalledPackages(int flags) {
     try {

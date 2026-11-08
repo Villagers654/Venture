@@ -182,7 +182,7 @@ void destroy_input() {
     if (tracker)
       host_call<PFN_xrDestroyHandTrackerEXT, "xrDestroyHandTrackerEXT">(tracker);
   if (i.set) {
-    venture::xr::forget_menu_object(reinterpret_cast<std::uintptr_t>(i.set));
+    venture::xr::forget_menu_action_set(i.set);
     ::xrDestroyActionSet(i.set);
   }
   i = {};

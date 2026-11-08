@@ -214,6 +214,7 @@ protected:
   std::string selected_, notice_, warning_, auth_status_;
   bool library_partial_ = false;  // Meta did not confirm the whole library
   bool rescan_again_ = false;  // rescan() was asked for while a scan ran
+  std::set<fs::path> superseded_tried_;  // replaced versions remove_superseded tried
   bool refreshing_ = false, scanning_ = false, signing_in_ = false,
        verifying_ = false;
   bool auth_page_loaded_ = false; // the Meta sign-in page finished loading
@@ -307,8 +308,12 @@ protected:
   static fs::path root_of(const library::Install &install) {
     return install.directory.parent_path().parent_path();
   }
-  // Removes an installed game's files; saves stay.
+  // Removes an installed game's files (every version of its own install, or
+  // one pinned version); saves stay.
   void uninstall(const library::Install &install);
+  // Removes, in the background, the older versions updates left beside a
+  // game's newest complete install (library::superseded), unless it runs.
+  void remove_superseded(const std::vector<library::Install> &installs);
   // Imports an installed game's save data for the account it plays as: from
   // `folder` (saves::find_local), or with none from a headset over adb (the
   // first ready one unless `serial`). Checks now that the game is installed

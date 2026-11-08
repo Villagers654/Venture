@@ -116,16 +116,27 @@ extension enabled), with trackpad halves through `XR_EXT_dpad_binding` when the
 host has it. A host that refuses a path gets the suggestion again without touch
 sensors, then with only the controller's listed inputs.
 
-The game's menu is bound where the player put it when that is a left-hand
-button; any other choice (a right-hand button, a held button, two buttons held
-together) is synthesized by `xr/menu_chord.cpp`: a priority-zero Venture action
-set reads the chosen inputs and presses the game's menu once they are held for
-the chosen time, until one releases, so menu holds (height calibration) work.
-Release both to rearm. Focus loss or inactive inputs cancel the hold. The
-buttons still reach the game, and a game's higher-priority binding on them can
-hide them from the menu. Automatic adds the old stick-click fallback (both
-stick clicks held 500 ms) where the host leaves a game's menu unbound;
-`VENTURE_MENU_CHORD=off` disables that fallback and `=stick-clicks` forces it on
-every automatic controller (developer overrides; the launcher no longer sets
-them). The runtime reports the controllers it sees to `VENTURE_CONTROLLER_REPORT`
-(the launcher's Connected and Last used tags).
+The default (Automatic) menu works on every runtime: the controller's left menu
+input is bound as the game's own menu (Touch, Touch Plus, Pro, Pico 4, Focus 3,
+Cosmos, G2, WMR and Vive menu buttons, Index trackpad press, PSVR2 Create, Steam
+Frame View), so runtimes that leave that button to games (Meta, Virtual Desktop's
+VDXR, Pico, Monado) open the menu with it, and both stick clicks pressed together
+(the Stick click rows) open it as well, for runtimes that keep the button for
+themselves (SteamVR's dashboard). The generic controller has no menu button and
+uses the stick clicks alone. A player's own choice replaces both. The game's
+menu is bound where the player put it when that is a left-hand button; any
+other choice (a right-hand button, a held button, two buttons held together) and
+the default's stick clicks are synthesized by `xr/menu_chord.cpp`: a
+priority-zero Venture action set reads the chosen inputs and presses the game's
+menu once they are held for the chosen time, until one releases, so menu holds
+(height calibration) work. Release both to rearm. Focus loss or inactive inputs
+cancel the hold. The buttons still reach the game, and a game's higher-priority
+binding on them can hide them from the menu. Menu actions are forgotten only
+when that action or action set is destroyed: OpenXR handles are unique only
+within their type (VDXR numbers each type from 1). For a host profile Venture
+does not remap, Automatic adds the old stick-click fallback where the host
+leaves a game's menu unbound; `VENTURE_MENU_CHORD=off` disables the stick
+clicks beside a menu button and that fallback, and `=stick-clicks` forces the
+fallback (developer overrides; the launcher no longer sets them). The runtime
+reports the controllers it sees to `VENTURE_CONTROLLER_REPORT` (the launcher's
+Connected and Last used tags).

@@ -263,6 +263,38 @@ void uninstall(const fs::path &library, const Install &install) {
       log::warn("library", "Could not remove the cache of {}: {}", install.plan.package, error.what());
     }
 }
+namespace {
+std::vector<Install> own_versions(const std::vector<Install> &installs, std::string_view id) {
+  std::vector<Install> result;
+  for (const auto &i : installs)
+    if (!i.plan.pinned && i.id() == id) result.push_back(i);
+  std::ranges::stable_sort(result, std::greater<>{},
+                           [](const Install &i) { return number(Json(i.plan.version_code)); });
+  return result;
+}
+}  // namespace
+std::vector<Install> uninstall_set(const std::vector<Install> &installs, const Install &install) {
+  if (install.plan.pinned) return {install};
+  auto result = own_versions(installs, install.id());
+  // The chosen one first, also when a rescan has not listed it yet.
+  std::erase_if(result, [&](const Install &i) { return i.directory == install.directory; });
+  result.insert(result.begin(), install);
+  return result;
+}
+std::vector<Install> superseded(const std::vector<Install> &installs) {
+  std::vector<Install> result;
+  std::set<std::string> seen;
+  for (const auto &i : installs) {
+    if (i.plan.pinned || !seen.insert(i.id()).second) continue;
+    auto versions = own_versions(installs, i.id());
+    const auto &newest = versions.front();
+    if (!newest.complete) continue;  // an update still downloading: the old version stays playable
+    const auto code = number(Json(newest.plan.version_code));
+    for (const auto &v : versions)
+      if (number(Json(v.plan.version_code)) < code) result.push_back(v);
+  }
+  return result;
+}
 std::vector<std::string> owning_accounts(const std::vector<meta::Game> &games,
                                          const meta::AccountIndex &accounts,
                                          std::string_view app_id) {
@@ -537,6 +569,9 @@ std::string runtime_failure(std::string_view tail, int code) {
   // fatal: the last fatal signal; cause: the trap that raised it (an import
   // with no implementation, or an A32 call without an ABI adapter), if any.
   std::string_view last, last_runtime, dump, fatal, cause, trap, guest_fault, guest_cause, session, stall_seconds;
+  // java_fatal: the first uncaught Java exception (AppMain logs it as Android's
+  // AndroidRuntime does); it closes the app, so later error lines are its fallout.
+  std::string_view java_fatal;
   // A frame-stall snapshot with no frame after it: the game was hung when it
   // was closed (by the user or the quit backstop). Its thread rows are
   // diagnostics, not an error, and must not be quoted as the reason.
@@ -580,6 +615,8 @@ std::string runtime_failure(std::string_view tail, int code) {
       continue;
     }
     last = message;
+    if (tag == "AndroidRuntime" && message.starts_with("FATAL EXCEPTION: ") && java_fatal.empty())
+      java_fatal = message;
     if (tag == "runtime")
       last_runtime = message;
     if ((tag == "a32-abi" && message.starts_with("unsupported ")) ||
@@ -610,7 +647,7 @@ std::string runtime_failure(std::string_view tail, int code) {
         (dump.empty() ? "" : std::format(" Crash dump: {}", dump));
   // A hung game that was closed did not crash: say so instead of quoting an
   // unrelated error line. A fatal signal still outranks the stall.
-  if (stalled && fatal.empty() && guest_fault.empty())
+  if (stalled && fatal.empty() && guest_fault.empty() && java_fatal.empty())
     return std::format("The game stopped responding{} and was closed (exit code {}).",
                        stall_seconds.empty() ? "" : std::format(" (no new frame for {} s)", stall_seconds),
                        exit_code) +
@@ -620,7 +657,9 @@ std::string runtime_failure(std::string_view tail, int code) {
   auto message = std::format("The runtime stopped unexpectedly (exit code {}).", exit_code);
   // A fatal signal outranks error lines around it: a game's own non-fatal
   // errors (a failed HTTPS request) are often logged last, even after it.
-  if (!fatal.empty())
+  if (!java_fatal.empty())
+    message += std::format(" Last error: {}", java_fatal);
+  else if (!fatal.empty())
     message += cause.empty() ? std::format(" Last error: {}", fatal)
                              : std::format(" Last error: {} ({})", cause, fatal);
   else if (!guest_fault.empty())

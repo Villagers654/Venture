@@ -1,6 +1,7 @@
 #include "common/download/manager.h"
 #include "common/file_ops.h"
 #include "common/library/library.h"
+#include "common/saves_migration.h"
 #include "http_loopback.h"
 #include <atomic>
 #include <doctest/doctest.h>
@@ -105,34 +106,35 @@ void seed(const fs::path &root) {
   paths::atomic_write(dir / "com.example.dlc.apk", "base");
   paths::atomic_write(dir / "required.dat", "ok");
 }
+struct DataDir {
+  std::string previous;
+  bool had = std::getenv("VENTURE_DATA_DIR") != nullptr;
+  void set(const std::string &value) {
+#ifdef _WIN32
+    _putenv_s("VENTURE_DATA_DIR", value.c_str());
+#else
+    setenv("VENTURE_DATA_DIR", value.c_str(), 1);
+#endif
+  }
+  explicit DataDir(const fs::path &value) {
+    if (had) previous = std::getenv("VENTURE_DATA_DIR");
+    set(paths::utf8(value));
+  }
+  ~DataDir() {
+    if (had) set(previous);
+#ifdef _WIN32
+    else _putenv_s("VENTURE_DATA_DIR", "");
+#else
+    else unsetenv("VENTURE_DATA_DIR");
+#endif
+  }
+};
 } // namespace
 
 TEST_CASE("a game in a library folder reached through a link uninstalls; a linked game folder does not") {
   Directory directory;
   const auto data = directory.root / "data", real = directory.root / "real", link = directory.root.parent_path() / (directory.root.filename().string() + "-link");
-  struct DataDir {
-    std::string previous;
-    bool had = std::getenv("VENTURE_DATA_DIR") != nullptr;
-    void set(const std::string &value) {
-#ifdef _WIN32
-      _putenv_s("VENTURE_DATA_DIR", value.c_str());
-#else
-      setenv("VENTURE_DATA_DIR", value.c_str(), 1);
-#endif
-    }
-    explicit DataDir(const fs::path &value) {
-      if (had) previous = std::getenv("VENTURE_DATA_DIR");
-      set(paths::utf8(value));
-    }
-    ~DataDir() {
-      if (had) set(previous);
-#ifdef _WIN32
-      else _putenv_s("VENTURE_DATA_DIR", "");
-#else
-      else unsetenv("VENTURE_DATA_DIR");
-#endif
-    }
-  } env(data);
+  DataDir env(data);
   fs::create_directories(real);
   link_directory(link, real);
   seed(link);
@@ -155,6 +157,83 @@ TEST_CASE("a game in a library folder reached through a link uninstalls; a linke
   CHECK(fs::exists(elsewhere / "com.example.dlc" / "12" / "plan.json"));
   fs::remove(real / "com.example.dlc");
   fs::remove(link);
+}
+
+TEST_CASE("uninstalling a game removes every version an update left and its linked OBB view, never the link's target") {
+  Directory directory;
+  const auto data = directory.root / "data", games = directory.root / "games";
+  DataDir env(data);
+  seed(games);
+  // Version 11, which the update to 12 left beside it.
+  auto old_plan = meta::build_plan("123456", binary());
+  old_plan.version_code = "11";
+  old_plan.binary_id = "456788";
+  const auto old_dir = paths::game_dir(games, old_plan.package, old_plan.folder());
+  paths::atomic_write(old_dir / "plan.json", old_plan.json().dump());
+  paths::atomic_write(old_dir / "com.example.dlc.apk", "base");
+  paths::atomic_write(old_dir / "required.dat", "ok");
+  // A pinned version stays a separate install.
+  auto pinned_plan = meta::build_plan("123456", binary());
+  pinned_plan.pinned = true;
+  const auto pinned_dir = paths::game_dir(games, pinned_plan.package, pinned_plan.folder());
+  paths::atomic_write(pinned_dir / "plan.json", pinned_plan.json().dump());
+  paths::atomic_write(pinned_dir / "com.example.dlc.apk", "base");
+  paths::atomic_write(pinned_dir / "required.dat", "ok");
+
+  auto installs = library::scan(games);
+  REQUIRE(installs.size() == 3);
+  const auto newest = std::ranges::find(installs, std::string("12"), [](auto &i) { return i.plan.folder(); });
+  const auto pinned = std::ranges::find_if(installs, [](auto &i) { return i.plan.pinned; });
+  REQUIRE(newest != installs.end());
+  REQUIRE(pinned != installs.end());
+  auto replaced = library::superseded(installs);
+  REQUIRE(replaced.size() == 1);
+  CHECK(replaced[0].plan.version_code == "11");
+  auto set = library::uninstall_set(installs, *newest);
+  REQUIRE(set.size() == 2);
+  CHECK(set[0].plan.version_code == "12");
+  CHECK(set[1].plan.version_code == "11");
+  CHECK(library::uninstall_set(installs, *pinned).size() == 1);
+  // An update still downloading leaves the old version playable.
+  fs::remove(newest->directory / "required.dat");
+  CHECK(library::superseded(library::scan(games)).empty());
+  paths::atomic_write(newest->directory / "required.dat", "ok");
+
+  // The games folder on another drive: the account's OBB view is a junction
+  // to the install's .obb folder. A stale one to a folder of the user's own
+  // files (keep.txt) must lose only the link.
+  const auto view = account_data_dir(data, "local", "com.example.dlc") / "external/Android/obb/com.example.dlc";
+  fs::create_directories(view.parent_path());
+  fs::create_directories(newest->directory / ".obb" / "local");
+  fs::create_hard_link(newest->directory / "required.dat", newest->directory / ".obb" / "local" / "required.dat");
+  link_directory(view, newest->directory / ".obb" / "local");
+  for (const auto &version : set) library::uninstall(games, version);
+  CHECK_FALSE(fs::exists(newest->directory));
+  CHECK_FALSE(fs::exists(old_dir));
+  CHECK(fs::exists(pinned_dir / "plan.json"));
+  CHECK_FALSE(is_link(view));
+  CHECK_FALSE(fs::exists(view));
+
+  const auto user = directory.root / "user";
+  paths::atomic_write(user / "keep.txt", "mine");
+  seed(games);
+  link_directory(view, user);
+  auto again = library::scan(games);
+  auto own = std::ranges::find_if(again, [](auto &i) { return !i.plan.pinned; });
+  REQUIRE(own != again.end());
+  library::uninstall(games, *own);
+  CHECK_FALSE(is_link(view));
+  CHECK(fs::exists(user / "keep.txt"));
+  // A dangling view link (its install already gone) goes too.
+  fs::create_directories(directory.root / "gone");
+  link_directory(view, directory.root / "gone");
+  fs::remove(directory.root / "gone");
+  seed(games);
+  again = library::scan(games);
+  own = std::ranges::find_if(again, [](auto &i) { return !i.plan.pinned; });
+  REQUIRE(own != again.end());
+  library::uninstall(games, *own);
+  CHECK_FALSE(is_link(view));
 }
 
 #ifdef _WIN32
@@ -456,6 +535,87 @@ TEST_CASE("DLC fallback catalogs never replace an installed catalog or count as 
   installs = library::scan(fresh.root);
   REQUIRE(installs.size() == 1);
   CHECK(installs[0].complete);
+}
+TEST_CASE("a game's asset downloads from Meta's reduced catalog; the installed catalog decides its add-on and stays") {
+  // Puzzling Places: Meta's full query fails for its 380 puzzle assets, and each
+  // puzzle is one asset the game downloads by id (ovr_AssetFile_DownloadById).
+  Directory directory;
+  seed(directory.root);
+  auto dir = paths::game_dir(directory.root, "com.example.dlc", "12");
+  const auto full_plan = paths::read(dir / "plan.json");
+  test::Server server;
+  std::atomic<int> transfers{0};
+  const auto transfer = [&](std::string, const fs::path &path, uint64_t size, std::stop_token,
+                            const http::Progress &progress) {
+    ++transfers;
+    paths::atomic_write(path, std::string(size, 'X'));
+    progress(size, size);
+  };
+  download::Manager manager(directory.root / "state", [] {}, {fallback_queries(), loopback(server), transfer});
+  manager.set_account("0123456789ab");
+  manager.enqueue_asset("123456", directory.root, "456789", "222222", "optional.dat", "fixture", "0123456789ab");
+  wait_job(manager);
+  REQUIRE(manager.snapshot()[0].state == download::State::complete);
+  CHECK(transfers == 1);
+  CHECK(paths::read(dir / "optional.dat") == "XXX");
+  CHECK(paths::read(dir / "plan.json") == full_plan);
+  // The reduced catalog lists ride-sound.bundle without its add-on; the
+  // installed full catalog knows it is the "ride" SKU's, which is not owned.
+  server.push(Json{{"data", Json::array()}}.dump());
+  manager.enqueue_asset("123456", directory.root, "456789", "444444", "ride-sound.bundle", "fixture", "0123456789ab");
+  wait_job(manager);
+  REQUIRE(manager.snapshot()[1].state == download::State::failed);
+  CHECK(manager.snapshot()[1].error.find("ownership") != std::string::npos);
+  CHECK(transfers == 1);
+  CHECK_FALSE(fs::exists(dir / "ride-sound.bundle"));
+  // Add-ons (a SKU's files) still need the full catalog.
+  manager.enqueue_addon("123456", "Test ride", directory.root, "456789", "ride", "fixture");
+  wait_job(manager);
+  CHECK(manager.snapshot()[2].state == download::State::failed);
+  CHECK(transfers == 1);
+
+  // An install from the reduced catalog: the installed manifest knows the
+  // asset, so the full query that failed for this build is not repeated;
+  // ownership of the game is still asked.
+  Directory reduced;
+  auto reduced_dir = paths::game_dir(reduced.root, "com.example.dlc", "12");
+  auto reduced_plan = meta::Store("fixture", {}, fallback_queries()).owned_plan("123456", "456789");
+  REQUIRE_FALSE(reduced_plan.assets_complete);
+  paths::atomic_write(reduced_dir / "plan.json", reduced_plan.json().dump());
+  paths::atomic_write(reduced_dir / "com.example.dlc.apk", "base");
+  const auto installed_plan = paths::read(reduced_dir / "plan.json");
+  std::atomic<int> catalog_queries{0};
+  std::atomic<bool> owned{true};
+  auto counted = [&, fallback = fallback_queries()](std::string_view url, const http::Fields &fields) -> Json {
+    std::map<std::string, std::string> f(fields.begin(), fields.end());
+    if (f["doc_id"] == "4734929166632773" || f["doc_id"] == "24072064135771905")
+      ++catalog_queries;
+    if (f["doc_id"] == "6549406941839522")
+      return Json{{"data", {{"item", {{"id", "123456"}, {"platform", "ANDROID_6DOF"}, {"is_viewer_entitled", owned.load()}}}}}};
+    return fallback(url, fields);
+  };
+  download::Manager second(reduced.root / "state", [] {}, {counted, {}, transfer});
+  second.set_account("0123456789ab");
+  second.enqueue_asset("123456", reduced.root, "456789", "222222", "optional.dat", "fixture", "0123456789ab");
+  wait_job(second);
+  REQUIRE(second.snapshot()[0].state == download::State::complete);
+  CHECK(transfers == 2);
+  CHECK(paths::read(reduced_dir / "optional.dat") == "XXX");
+  CHECK(paths::read(reduced_dir / "plan.json") == installed_plan);
+  CHECK(catalog_queries == 0);
+  // Not owned (anymore): nothing is fetched.
+  owned = false;
+  second.enqueue_asset("123456", reduced.root, "456789", "333333", "ride.bundle", "fixture", "0123456789ab");
+  wait_job(second);
+  CHECK(second.snapshot()[1].state == download::State::failed);
+  CHECK(second.snapshot()[1].error.find("does not own") != std::string::npos);
+  CHECK(transfers == 2);
+  // An asset the manifest does not list takes Meta's catalog, which lacks it too.
+  owned = true;
+  second.enqueue_asset("123456", reduced.root, "456789", "999999", "unknown.dat", "fixture", "0123456789ab");
+  wait_job(second);
+  CHECK(second.snapshot()[2].state == download::State::failed);
+  CHECK(transfers == 2);
 }
 // An import keeps its own APK of the store's build (import::plan), possibly a
 // modified one. Upgrading its manifest to the full catalog must not put the

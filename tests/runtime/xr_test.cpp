@@ -137,6 +137,36 @@ struct HapticRootFallbackFixture {
   }
 };
 }
+TEST_CASE("GLES sessions list Quest's 8-bit GL color formats for any host RGBA8 order") {
+  using venture::hle::openxr::gles_swapchain_formats;
+  const auto listed = [](const std::vector<std::int64_t>& formats, std::int64_t f) {
+    return std::ranges::count(formats, f) == 1;
+  };
+  constexpr std::int64_t gl_rgba8 = 0x8058, gl_srgb8_alpha8 = 0x8c43, gl_rgba16f = 0x881a;
+  // SteamVR on NVIDIA lists no R8G8B8A8_UNORM; Unity's OpenXR plugin wants GL_RGBA8 and
+  // ended Sea Monkeys VR ("No runtime swapchain format supported for color swapchain").
+  const std::vector<std::int64_t> steamvr{VK_FORMAT_R8G8B8A8_SRGB, VK_FORMAT_B8G8R8A8_SRGB,
+      VK_FORMAT_R32G32B32A32_SFLOAT, VK_FORMAT_R32G32B32_SFLOAT, VK_FORMAT_R16G16B16A16_SFLOAT,
+      VK_FORMAT_A2B10G10R10_UNORM_PACK32, VK_FORMAT_D32_SFLOAT, VK_FORMAT_D16_UNORM,
+      VK_FORMAT_D24_UNORM_S8_UINT, VK_FORMAT_D32_SFLOAT_S8_UINT};
+  auto gl = gles_swapchain_formats(steamvr);
+  CHECK(listed(gl, gl_rgba8));
+  CHECK(listed(gl, gl_srgb8_alpha8));
+  CHECK(listed(gl, gl_rgba16f));
+  CHECK(listed(gl, 0x8059));
+  for (std::int64_t depth : {0x8cac, 0x81a5, 0x88f0}) CHECK(listed(gl, depth));
+  // The host's own preference stays first; only GL enums are listed.
+  CHECK(gl.front() == gl_srgb8_alpha8);
+  CHECK(std::ranges::none_of(gl, [](std::int64_t f) { return venture::hle::openxr::gl_to_vk(f) == VK_FORMAT_UNDEFINED; }));
+  // A host with only BGRA orders still gets both.
+  gl = gles_swapchain_formats({VK_FORMAT_B8G8R8A8_UNORM, VK_FORMAT_B8G8R8A8_SRGB, VK_FORMAT_R16G16B16A16_SFLOAT});
+  CHECK(gl == std::vector<std::int64_t>{gl_rgba16f, gl_srgb8_alpha8, gl_rgba8});
+  // Without any 8-bit RGBA host chain there is nothing to convert into.
+  CHECK(gles_swapchain_formats({VK_FORMAT_R16G16B16A16_SFLOAT}) == std::vector<std::int64_t>{gl_rgba16f});
+  // A host listing both keeps its order, without duplicates.
+  CHECK(gles_swapchain_formats({VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_R8G8B8A8_SRGB}) ==
+        std::vector<std::int64_t>{gl_rgba8, gl_srgb8_alpha8});
+}
 TEST_CASE("Aggregate vibration falls back when native subaction roots are unsupported") {
   HapticRootFallbackFixture fixture;
   XrActionSetCreateInfo set{XR_TYPE_ACTION_SET_CREATE_INFO};

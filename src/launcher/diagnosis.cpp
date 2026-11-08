@@ -97,6 +97,13 @@ constexpr Rule kRules[] = {
     // runtime_failure(): a trap names the import or ABI adapter that is missing.
     {{"[hle] unimplemented ", "[a32-abi] unsupported "},
      "The game called an Android function that Venture does not provide yet.", kSendReport},
+    // com/venture/runtime/AppMain.java: an uncaught Java exception closes the
+    // app as on Android. Most are a framework class or method Venture lacks
+    // (Pinball FX VR: PackageManager$PackageInfoFlags); a reinstall never helps.
+    {{"[androidruntime] fatal exception: "},
+     "The game stopped on an uncaught Java exception, most often an Android class or method that Venture does not "
+     "provide yet.",
+     kSendReport},
     {{"[libc] fatal signal ", "e [signal] guest tid "},
      "The game crashed.", kSendReport},
 };

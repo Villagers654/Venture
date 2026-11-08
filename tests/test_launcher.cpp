@@ -1197,6 +1197,18 @@ TEST_CASE("a runtime that ends on a fatal signal reports the signal and its trap
         "(SI_QUEUE) in tid 1001");
 }
 
+TEST_CASE("an uncaught Java exception that closed the app is the stop reason, not a later error line") {
+  // Pinball FX VR: ProfileInstaller's NoClassDefFoundError closed the app; the
+  // report quoted an unrelated error line logged before it, then ones logged after.
+  const std::string fatal = "  30398.1 9 E [AndroidRuntime] FATAL EXCEPTION: pool-3-thread-1: "
+                            "java.lang.NoClassDefFoundError: android/content/pm/PackageManager$PackageInfoFlags\n";
+  const std::string after = "  30400.7 1 E [OVRPlugin] InitializePerfMetricsUpdateMask() failed\n"
+                            "  30401.0 1 E [AndroidRuntime] FATAL EXCEPTION: main: java.lang.IllegalStateException\n";
+  CHECK(library::runtime_failure("  30393.2 1 E [framework] some earlier error\n" + fatal + after, 1) ==
+        "The runtime stopped unexpectedly (exit code 1). Last error: FATAL EXCEPTION: pool-3-thread-1: "
+        "java.lang.NoClassDefFoundError: android/content/pm/PackageManager$PackageInfoFlags");
+}
+
 TEST_CASE("a game closed while hung reports that it stopped responding, not a stall snapshot line") {
   // A user report (Max Mustard, 0.1.4.2): the game froze, the user closed it, and the
   // launcher quoted the stall snapshot's last thread row as "Last error".

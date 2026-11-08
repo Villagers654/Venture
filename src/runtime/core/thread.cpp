@@ -409,7 +409,7 @@ template<GuestIsa Isa, bool Profile> void GuestThread::run_for_isa(int depth) {
           const auto fault = cpu_->fault();
           const auto access = fault.execute ? kProtExec : fault.write ? kProtWrite : kProtRead;
           if (!AddressSpace::get().grow_stack(fault.address, access)) {
-            signals::Info info{signals::kSigSegv, 1, fault.address};
+            signals::Info info{signals::kSigSegv, AddressSpace::get().segv_code(fault.address), fault.address};
             info.syndrome = fault.write ? 1ull << 6 : 0;
             signals::deliver_synchronous(*this, info);
           }

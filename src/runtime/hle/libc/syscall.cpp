@@ -311,7 +311,7 @@ std::int64_t syscall_impl(GuestThread& t, std::uint64_t n, const std::uint64_t* 
       name = "fchmod";
       break;
     case 56:
-      return fd_open(g2h<char>(a[1]), a[2], a[3], a[0]);
+      return fd_open(g2h<char>(a[1]), open_flags_from_guest(static_cast<int>(a[2])), a[3], a[0]);
     case 57:
       return FdTable::get().close(a[0]);
     case 59:

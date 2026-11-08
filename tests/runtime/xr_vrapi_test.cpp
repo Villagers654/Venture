@@ -2452,8 +2452,8 @@ TEST_CASE("host XR identity uses game label and preserves UTF-8 boundaries") {
 }
 
 namespace {
-// A controller whose own left menu button is its automatic menu (Touch's is both
-// stick clicks), for the native-menu fallback.
+// A controller whose automatic menu is its own left menu button with both stick
+// clicks beside it.
 struct MenuButtonController {
   MenuButtonController() { ventureMockXrSetProfile("/interaction_profiles/hp/mixed_reality_controller"); }
   ~MenuButtonController() { ventureMockXrSetProfile(nullptr); }
@@ -2494,8 +2494,8 @@ TEST_CASE("VrApi prediction followed by frame wait preserves the input snapshot"
   REQUIRE(vg::vrapi_GetCurrentInputState(mobile, 1, &left.header) == 0);
   CHECK((left.buttons & 0x100000u) != 0);  // the held chord keeps the menu held
   CHECK(left.trigger == doctest::Approx(0.75));
-  host_menu.missing = false;
-  venture::xr::note_menu_profiles_changed(vr::session().handle);
+  // Releasing the sticks ends it; the menu button opens it on its own.
+  script.left.thumbstick_click = script.right.thumbstick_click = false; ventureMockXrSetScript(&script);
   REQUIRE(vr::sync_input() == XR_SUCCESS);
   REQUIRE(vg::vrapi_GetCurrentInputState(mobile, 1, &left.header) == 0);
   CHECK((left.buttons & 0x100000u) == 0);
@@ -2503,7 +2503,8 @@ TEST_CASE("VrApi prediction followed by frame wait preserves the input snapshot"
   REQUIRE(vr::sync_input() == XR_SUCCESS);
   REQUIRE(vg::vrapi_GetCurrentInputState(mobile, 1, &left.header) == 0);
   CHECK((left.buttons & 0x100000u) != 0);
-  CHECK(host_menu.bound_queries > 0);
+  // Both are there from the start: nothing waits on the host's bound sources.
+  CHECK(host_menu.bound_queries == 0);
   vg::vrapi_LeaveVrMode(mobile); vg::vrapi_Shutdown();
   venture::xr::install_xr_images(nullptr); MockXrScript restored{}; ventureMockXrSetScript(&restored);
 }
@@ -2544,7 +2545,8 @@ TEST_CASE("VrApi future predictions preserve a waited input snapshot") {
 
 TEST_CASE("A menu the host binds only to its system button still gets the stick-click menu") {
   // SteamVR with Index controllers reports the game's menu on the system
-  // button, which opens SteamVR's dashboard and never reaches the game.
+  // button, which opens SteamVR's dashboard and never reaches the game; both
+  // stick clicks are always beside the menu button.
   MenuButtonController controller;
   venture::test::ScopedMenuMode automatic("");
   venture::test::XrImageFixture images; venture::xr::install_xr_images(&images);
@@ -2563,7 +2565,6 @@ TEST_CASE("A menu the host binds only to its system button still gets the stick-
   REQUIRE(vg::vrapi_WaitFrame(mobile, 1) == 0);
   vr::abi::RemoteState left{}; left.header.type = 4;
   REQUIRE(vg::vrapi_GetCurrentInputState(mobile, 1, &left.header) == 0);
-  CHECK(host_menu.bound_queries > 0);
   CHECK((left.buttons & 0x100000u) != 0);
   vg::vrapi_LeaveVrMode(mobile); vg::vrapi_Shutdown();
   venture::xr::install_xr_images(nullptr); MockXrScript restored{}; ventureMockXrSetScript(&restored);

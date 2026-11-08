@@ -103,7 +103,8 @@ HostXr& host_xr() { static HostXr host; return host; }
 std::uint64_t host_procedure_generation() { return 1; }
 void cancel_sequence(XrSession, const XrHapticActionInfo*) {}
 void clear_haptic_bindings(XrSession) {}
-void forget_menu_object(std::uintptr_t) {}
+void forget_menu_action(XrAction) {}
+void forget_menu_action_set(XrActionSet) {}
 #ifndef VENTURE_PASSTHROUGH_REAL_SESSION
 Session& session() { static Session value; return value; }
 void Session::finish_host_end() {}
