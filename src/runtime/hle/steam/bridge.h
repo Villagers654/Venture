@@ -32,7 +32,6 @@ class Bridge {
   std::int32_t user() const { return initialized_ ? user_ : 0; }
   std::uint64_t context_generation() const { return initialized_ ? generation_ : 0; }
   void set_guest_vtable(std::string_view version, std::vector<GuestAddr> slots);
-  bool has_guest_vtable(std::string_view version) const { return guest_vtables_.contains(version); }
   GuestAddr interface(std::string_view version);
   void* resolve(GuestAddr handle, std::string_view classname);
   bool next_callback(std::int32_t pipe, void* guest_message);

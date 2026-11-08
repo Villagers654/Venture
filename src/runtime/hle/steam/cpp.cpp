@@ -1,4 +1,5 @@
 #include "hle/steam/bridge.h"
+#include "hle/steam/library.h"
 
 #include "common/log.h"
 #include "core/address_space.h"
@@ -41,15 +42,20 @@ GuestAddr context_init(GuestAddr address) {
   if (!guest_range(address, 3 * sizeof(GuestAddr), kProtRead | kProtWrite)) return 0;
   std::lock_guard context_lock(callback_mutex);
   auto& bridge = Bridge::get();
-  std::lock_guard lock(bridge.mutex);
+  std::uint64_t generation;
+  {
+    std::lock_guard lock(bridge.mutex);
+    generation = bridge.context_generation();
+  }
   auto* context = g2h<GuestAddr>(address);
-  const auto generation = bridge.context_generation();
   const auto value = address + 2 * sizeof(GuestAddr);
   if (context[1] != generation) {
     context[2] = 0;
     if (generation && AddressSpace::get().is_guest_executable(context[0]))
       GuestThread::adopt_current().call(context[0], {value});
-    context[1] = generation;
+    std::lock_guard lock(bridge.mutex);
+    if (bridge.context_generation() == generation) context[1] = generation;
+    else context[1] = context[2] = 0;
   }
   return value;
 }
@@ -163,26 +169,28 @@ void run_callbacks() {
   }
 }
 
-void unsupported(hle::CallContext& ctx) {
-  throw std::runtime_error("Unsupported Steam C++ method: " + std::string(ctx.info().name));
+void unsupported(hle::CallContext&) {
+  throw std::runtime_error("Unsupported Steam C++ method");
 }
 } // namespace
 
-void add_cpp_exports(HleLibrary& library, const Sdk& sdk) {
+void add_cpp_exports(HleLibrary& library, const Sdk& sdk, hle::Handler utils_result) {
+  const auto missing_slot = make_cpp_thunk("Unsupported C++ slot", unsupported);
   for (const auto& face : sdk.interfaces) {
     if (std::ranges::find(sdk.cpp_interfaces, face.name) == sdk.cpp_interfaces.end()) continue;
     const auto prefix = "SteamAPI_" + std::string(face.name) + "_";
     std::vector<GuestAddr> table;
     for (const auto& method : sdk.methods) {
       if (!method.symbol.starts_with(prefix)) continue;
-      if (table.size() <= method.slot) table.resize(method.slot + 1);
-      auto thunk = library.hle_symbol(method.symbol);
-      if (!thunk) thunk = hle::make_thunk("libsteam_api.so", method.symbol, unsupported);
-      table[method.slot] = thunk;
+      if (table.size() <= method.slot) table.resize(method.slot + 1, missing_slot);
+      const auto entry = std::ranges::find(sdk.exports, method.symbol, &Export::name);
+      auto handler = entry == sdk.exports.end() ? unsupported : entry->handler;
+      if (method.symbol == "SteamAPI_ISteamUtils_GetAPICallResult") handler = utils_result;
+      table[method.slot] = make_cpp_thunk(method.symbol, handler);
     }
     Bridge::get().set_guest_vtable(face.version, std::move(table));
   }
-#define EXPORT(name, fn) library.add_function(name, hle::make_thunk("libsteam_api.so", name, hle::wrap<&fn>()))
+#define EXPORT(name, fn) library.add_function(name, make_cpp_thunk(name, hle::wrap<&fn>()))
   EXPORT("SteamInternal_ContextInit", context_init);
   EXPORT("SteamAPI_RegisterCallback", register_callback);
   EXPORT("SteamAPI_UnregisterCallback", unregister_callback);

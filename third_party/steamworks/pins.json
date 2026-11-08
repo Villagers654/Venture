@@ -99,7 +99,17 @@
       "steamtypes.h": "0a552bba9618e70619f15f1f49fcebb23aac848ba38ecdb16e6a2811ccd1f79c",
       "steamuniverse.h": "2b9c0834ae5a71eac07e6d415ded853c0d0ce3bd91f3e6991597973ed3dee394"
     },
-    "android_sha256": "ee573a79ad0bf0fa4e6530fa35a4e2911e9f473141a7580b83a3d79fd1679646"
+    "android_sha256": "ee573a79ad0bf0fa4e6530fa35a4e2911e9f473141a7580b83a3d79fd1679646",
+    "cpp_interfaces": [
+      "ISteamApps",
+      "ISteamFriends",
+      "ISteamMatchmaking",
+      "ISteamMatchmakingServers",
+      "ISteamUser",
+      "ISteamUtils"
+    ],
+    "android_build_id": "ca721d4e3e9192dc5094087647b64b9f1a87b7e0",
+    "android_abi_sha256": "9822456b0d8f919ccb40986f9be48979986b081606d28fc0fe89be6f7c0d96f8"
   },
   "165": {
     "commit": "df2baabf574a738ef1ea90a7e89339107fc0a279",

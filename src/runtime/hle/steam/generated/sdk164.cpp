@@ -16878,6 +16878,6 @@ static const Export exports[] = {
 static constexpr std::string_view cpp_interfaces[]{"ISteamApps", "ISteamFriends", "ISteamMatchmaking", "ISteamMatchmakingServers", "ISteamUser", "ISteamUtils"};
 }
 namespace venture::steam { const Sdk& sdk164() {
-  static const Sdk value{164, "ee573a79ad0bf0fa4e6530fa35a4e2911e9f473141a7580b83a3d79fd1679646", v164::layouts, v164::methods, v164::interfaces, v164::exports, v164::cpp_interfaces};
+  static const Sdk value{164, "ee573a79ad0bf0fa4e6530fa35a4e2911e9f473141a7580b83a3d79fd1679646", v164::layouts, v164::methods, v164::interfaces, v164::exports, v164::cpp_interfaces, "ca721d4e3e9192dc5094087647b64b9f1a87b7e0", "9822456b0d8f919ccb40986f9be48979986b081606d28fc0fe89be6f7c0d96f8"};
   return value;
 } }

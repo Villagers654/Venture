@@ -118,14 +118,14 @@ def main():
         lines += methods_cpp
         (out / f'unsupported{version}.json').write_text(json.dumps(skipped,indent=2)+'\n', newline='\n')
         cpp_table = ''
-        if version == '164':
+        if cpp := pin.get('cpp_interfaces'):
             android_vt = vtables(dumps['android'], 'VTable')
-            cpp = ('ISteamApps', 'ISteamFriends', 'ISteamMatchmaking', 'ISteamMatchmakingServers', 'ISteamUser', 'ISteamUtils')
             for name in cpp:
                 if android_vt.get(name) != vt[name]:
                     raise ValueError(f'Android and Windows virtual slots differ for {name}')
             lines.append('static constexpr std::string_view cpp_interfaces[]{' + ', '.join(f'"{name}"' for name in cpp) + '};')
-            cpp_table = f', v{version}::cpp_interfaces'
+            cpp_table = (f', v{version}::cpp_interfaces, "{pin["android_build_id"]}", '
+                         f'"{pin["android_abi_sha256"]}"')
         lines += ['}', f'namespace venture::steam {{ const Sdk& sdk{version}() {{',
                   f'  static const Sdk value{{{version}, "{pin["android_sha256"]}", v{version}::layouts, v{version}::methods, v{version}::interfaces, v{version}::exports{cpp_table}}};',
                   '  return value;', '} }']

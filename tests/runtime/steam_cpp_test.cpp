@@ -1,15 +1,15 @@
 #include "core/address_space.h"
+#include "core/error.h"
 #include "core/linker.h"
 #include "core/thread.h"
 #include "hle/steam/bridge.h"
+#include "hle/steam/library.h"
 
 #include <array>
 #include <cstring>
 #include <doctest/doctest.h>
 
 namespace venture::steam {
-void add_exports(HleLibrary&, const Sdk&);
-
 struct BridgeTestAccess {
   BridgeTestAccess(void* client, decltype(Bridge::get_callback_) next, decltype(Bridge::free_callback_) free,
                    decltype(Bridge::get_result_) result) {
@@ -98,6 +98,8 @@ int auth_size(GuestAddr) { return sizeof(response); }
 TEST_CASE("Steam C++ client context forwards the authentication callback to Android") {
   const auto& sdk = sdk164();
   client_slots[sdk.slot("SteamAPI_ISteamClient_GetISteamUser")] = reinterpret_cast<void*>(get_user);
+  client_slots[sdk.slot("SteamAPI_ISteamClient_GetISteamUserStats")] = reinterpret_cast<void*>(get_user);
+  client_slots[sdk.slot("SteamAPI_ISteamClient_GetISteamApps")] = reinterpret_cast<void*>(get_user);
   client_slots[sdk.slot("SteamAPI_ISteamClient_GetISteamUtils")] = reinterpret_cast<void*>(get_utils);
   client_slots[sdk.slot("SteamAPI_ISteamClient_GetISteamInput")] = reinterpret_cast<void*>(get_input);
   client_slots[sdk.slot("SteamAPI_ISteamClient_GetISteamController")] = reinterpret_cast<void*>(get_controller);
@@ -116,6 +118,16 @@ TEST_CASE("Steam C++ client context forwards the authentication callback to Andr
   auto& thread = GuestThread::adopt_current();
   REQUIRE(thread.call(find_user_thunk, {0, h2g("SteamUtils010")}) != 0);
   CHECK(thread.call(find_user_thunk, {0, h2g("SteamUser023")}) == 0);
+  const auto stats = thread.call(find_user_thunk, {2, h2g("STEAMUSERSTATS_INTERFACE_VERSION013")});
+  REQUIRE(stats != 0);
+  CHECK(*g2h<GuestAddr>(stats) == 0);
+  const auto apps = thread.call(find_user_thunk, {2, h2g("STEAMAPPS_INTERFACE_VERSION009")});
+  REQUIRE(apps != 0);
+  const auto* apps_table = g2h<GuestAddr>(*g2h<GuestAddr>(apps));
+  const auto unsupported_slot = sdk.slot("SteamAPI_ISteamApps_MarkContentCorrupt");
+  REQUIRE(apps_table[unsupported_slot] != 0);
+  CHECK(thread.call(apps_table[unsupported_slot], {apps, 1, 0}) == 0);
+  CHECK(*thread.errno_location() == err::kEIO);
   const auto block = AddressSpace::get().allocate(kGuestPageSize, kProtRead | kProtWrite, "[steam-test]");
   struct Block { GuestAddr address; ~Block() { AddressSpace::get().free(address); } } memory{block};
   auto* context = g2h<GuestAddr>(block);
