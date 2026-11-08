@@ -178,6 +178,17 @@ public final class FrameworkTest {
     editor.setText("abcd"); editor.setSelection(1, 3); editor.append("ef");
     check(editor.getSelectionStart() == 1 && editor.getSelectionEnd() == 3 && clickedState.get(1), "editor selection callback and retained spans");
     check(editor.getText().toString().equals("abcdef"), "TextView append edits its existing buffer");
+    // Unreal's keyboard watcher queries the suggestion spans when the field is initialized.
+    var suggestion = new android.text.style.SuggestionSpan(java.util.Locale.ROOT,
+        new String[]{"Kino"}, android.text.style.SuggestionSpan.FLAG_EASY_CORRECT);
+    editor.getText().setSpan(suggestion, 0, 4, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+    var suggestions = editor.getText().getSpans(0, editor.getText().length(), android.text.style.SuggestionSpan.class);
+    check(suggestions.length == 1 && suggestions[0] == suggestion, "typed suggestion span lookup");
+    var styles = editor.getText().getSpans(0, editor.getText().length(), android.text.style.CharacterStyle.class);
+    check(Arrays.asList(styles).contains(suggestion), "suggestion span is visible in character style lookups");
+    suggestions[0].setFlags(suggestion.getFlags() & ~android.text.style.SuggestionSpan.FLAG_EASY_CORRECT);
+    check(suggestion.getFlags() == 0 && editor.getText().toString().equals("abcdef"),
+        "suggestion flags can change without editing text");
     var connection = new android.view.inputmethod.BaseInputConnection(editor, true);
     var wrapper = new android.view.inputmethod.InputConnectionWrapper(null, false);
     wrapper.setTarget(connection);
