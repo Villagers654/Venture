@@ -1,6 +1,7 @@
 #include "common/environment.h"
 #include "platform/steam_client.h"
 #include <windows.h>
+#include <tlhelp32.h>
 #include <filesystem>
 #include <mutex>
 #include <stdexcept>
@@ -12,11 +13,40 @@ namespace { HMODULE module{}; std::once_flag loaded; }
 bool steam_client_running() {
   DWORD pid{}, count=sizeof(pid);
   if (RegGetValueW(HKEY_CURRENT_USER, L"Software\\Valve\\Steam\\ActiveProcess", L"pid",
-                   RRF_RT_REG_DWORD, nullptr, &pid, &count)!=ERROR_SUCCESS || !pid) return false;
-  HANDLE process=OpenProcess(SYNCHRONIZE,FALSE,pid);
-  if (!process) return false;
-  const bool active=WaitForSingleObject(process,0)==WAIT_TIMEOUT;
-  CloseHandle(process);
+                   RRF_RT_REG_DWORD, nullptr, &pid, &count)==ERROR_SUCCESS && pid) {
+    if (HANDLE process=OpenProcess(SYNCHRONIZE,FALSE,pid)) {
+      const bool active=WaitForSingleObject(process,0)==WAIT_TIMEOUT;
+      CloseHandle(process);
+      if (active) return true;
+    }
+  }
+  // Some running clients leave ActiveProcess.pid unset. Match the registered
+  // executable in this session; the Steam pipe still checks login and ownership.
+  std::vector<wchar_t> path(32768);
+  count=static_cast<DWORD>(path.size()*sizeof(wchar_t));
+  if (RegGetValueW(HKEY_CURRENT_USER,L"Software\\Valve\\Steam",L"SteamExe",RRF_RT_REG_SZ,
+                   nullptr,path.data(),&count)!=ERROR_SUCCESS) return false;
+  const auto expected=std::filesystem::path(path.data()).make_preferred();
+  if (!expected.is_absolute()) return false;
+  DWORD session;
+  if (!ProcessIdToSessionId(GetCurrentProcessId(),&session)) return false;
+  const auto snapshot=CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS,0);
+  if (snapshot==INVALID_HANDLE_VALUE) return false;
+  PROCESSENTRY32W entry{};
+  entry.dwSize=sizeof(entry);
+  bool active=false;
+  for (BOOL found=Process32FirstW(snapshot,&entry); found && !active; found=Process32NextW(snapshot,&entry)) {
+    DWORD candidate_session;
+    if (_wcsicmp(entry.szExeFile,L"steam.exe") || !ProcessIdToSessionId(entry.th32ProcessID,&candidate_session) ||
+        candidate_session!=session) continue;
+    if (HANDLE process=OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION,FALSE,entry.th32ProcessID)) {
+      count=static_cast<DWORD>(path.size());
+      active=QueryFullProcessImageNameW(process,0,path.data(),&count) &&
+             CompareStringOrdinal(expected.c_str(),-1,path.data(),static_cast<int>(count),TRUE)==CSTR_EQUAL;
+      CloseHandle(process);
+    }
+  }
+  CloseHandle(snapshot);
   return active;
 }
 void prepare_steam_environment(std::uint32_t appid) {

@@ -30,6 +30,9 @@ class Bridge {
   std::uint32_t appid() const { return plan_.appid; }
   std::int32_t pipe() const { return initialized_ ? pipe_ : 0; }
   std::int32_t user() const { return initialized_ ? user_ : 0; }
+  std::uint64_t context_generation() const { return initialized_ ? generation_ : 0; }
+  void set_guest_vtable(std::string_view version, std::vector<GuestAddr> slots);
+  bool has_guest_vtable(std::string_view version) const { return guest_vtables_.contains(version); }
   GuestAddr interface(std::string_view version);
   void* resolve(GuestAddr handle, std::string_view classname);
   bool next_callback(std::int32_t pipe, void* guest_message);
@@ -41,7 +44,7 @@ class Bridge {
  private:
   void require_pipe(std::int32_t);
   void* host_interface(const Interface&);
-  struct Handle { void* host; const Interface* type; std::uint64_t generation; };
+  struct Handle { void* host; const Interface* type; std::uint64_t generation; std::unique_ptr<GuestAddr> object; };
   Plan plan_;
   const Sdk* sdk_{};
   bool initialized_{};
@@ -49,6 +52,7 @@ class Bridge {
   std::int32_t pipe_{}, user_{};
   std::uint64_t generation_{};
   std::map<GuestAddr, std::unique_ptr<Handle>> handles_;
+  std::map<std::string_view, std::vector<GuestAddr>> guest_vtables_;
   std::vector<std::byte> callback_;
   std::set<std::pair<std::int32_t, std::int32_t>> unsupported_callbacks_;
   bool outstanding_{};

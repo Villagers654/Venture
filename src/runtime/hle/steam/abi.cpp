@@ -11,6 +11,9 @@ const Sdk* detect_sdk(std::span<const std::byte> elf) {
       std::to_integer<unsigned>(elf[18]) != 183 || elf[19] != std::byte{}) return nullptr;
   const auto hash = meta::sha256({reinterpret_cast<const char*>(elf.data()), elf.size()});
   for (const auto* sdk : {&sdk163(), &sdk164(), &sdk165()}) if (sdk->android_sha256 == hash) return sdk;
+  // Pavlov Shack packages SDK 1.64 with a different ELF layout. Its build ID,
+  // executable code, dynamic symbols and relocations match the pinned SDK.
+  if (hash == "de0ffad291557797b30e1abd153481cca46225720410f8c8f8709811f9029bb1") return &sdk164();
   return nullptr;
 }
 const Layout* Sdk::callback(std::int32_t id) const {

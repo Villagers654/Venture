@@ -23,6 +23,7 @@ struct Sdk {
   std::span<const Method> methods;
   std::span<const Interface> interfaces;
   std::span<const Export> exports;
+  std::span<const std::string_view> cpp_interfaces{};
   const Layout* callback(std::int32_t id) const;
   const Layout* layout(std::string_view name) const;
   const Interface* interface(std::string_view version) const;
