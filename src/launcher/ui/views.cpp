@@ -3801,10 +3801,17 @@ struct MenuInput {
 MenuInput resolved_menu(const ControlsEdit& e) {
   const auto& p = kProfiles[e.profile];
   switch (MenuMode(e.menu_mode)) {
-    case MenuMode::automatic:
-      if (p.menu_path.empty())
-        return {"Both stick clicks", {{0, "/input/thumbstick/click"}, {1, "/input/thumbstick/click"}}};
-      return {std::string(p.menu_label), {{0, p.menu_path}}};
+    case MenuMode::automatic: {
+      // The controller's menu button where the runtime leaves it to the game, and
+      // both stick clicks (the Stick click rows) on every runtime.
+      MenuInput m{p.menu_path.empty() ? "Both stick clicks" : std::format("{} or both stick clicks", p.menu_label), {}};
+      if (!p.menu_path.empty()) m.at.emplace_back(0, p.menu_path);
+      const std::array clicks{host_path(p, e.host[0][size_t(Quest::stick_click)]),
+                              host_path(p, e.host[1][size_t(Quest::stick_click)])};
+      if (!clicks[0].empty() && !clicks[1].empty())
+        for (int hand = 0; hand < 2; ++hand) m.at.emplace_back(hand, clicks[size_t(hand)]);
+      return m;
+    }
     case MenuMode::button: {
       const auto c = menu_choice(p, e.menu_input);
       return {choice_label(c), {{c.hand, c.input->path}}};

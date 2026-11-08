@@ -1,4 +1,5 @@
 #include "libc_b/test.h"
+#include "common/file_ops.h"
 #include <algorithm>
 #include <array>
 #include <fstream>
@@ -290,6 +291,117 @@ TEST_CASE("POSIX file mutation replaces an open destination and preserves its al
   CHECK(std::memcmp(bytes, "new", 3) == 0);
 }
 
+// libc++ std::filesystem::remove_all opens every entry with O_DIRECTORY |
+// O_NOFOLLOW, removes it as a file on ENOTDIR or ELOOP and recurses otherwise.
+// ARM numbers those flags 040000 and 0100000; Scotland2 failed to clear
+// files/libs when a file opened as a directory.
+TEST_CASE("guest open flags use the ARM numbering for O_DIRECTORY and O_NOFOLLOW") {
+  Thread thread;
+  constexpr std::uint64_t o_directory = 040000, o_nofollow = 0100000, o_direct = 0200000, cloexec = 02000000;
+  const auto directory = process_config().guest_data_dir() + "/remove-all-test";
+  const auto file = directory + "/libmod.so", child = directory + "/child", nested = child + "/nested.so";
+  struct Cleanup {
+    std::string file, nested, child, directory;
+    ~Cleanup() {
+      for (const auto* p : {&file, &nested}) call("unlink", {h2g(p->c_str())});
+      for (const auto* p : {&child, &directory}) call("rmdir", {h2g(p->c_str())});
+    }
+  } cleanup{file, nested, child, directory};
+  REQUIRE(call("mkdir", {h2g(directory.c_str()), 0700}) == 0);
+  REQUIRE(call("mkdir", {h2g(child.c_str()), 0700}) == 0);
+  for (const auto* p : {&file, &nested}) {
+    const auto fd = call("open", {h2g(p->c_str()), 0100 | 01000 | 1, 0600});
+    REQUIRE(fd >= 0);
+    CHECK(call("close", {std::uint64_t(fd)}) == 0);
+  }
+  CHECK(call("open", {h2g(file.c_str()), o_directory | cloexec}) == -1);
+  CHECK(*thread.thread.errno_location() == err::enotdir);
+  // O_DIRECT is a hint that leaves regular files openable.
+  const auto direct = call("open", {h2g(file.c_str()), o_direct});
+  REQUIRE(direct >= 0);
+  CHECK((std::uint64_t(call("fcntl", {std::uint64_t(direct), 3})) & 0740000) == o_direct);
+  CHECK(call("close", {std::uint64_t(direct)}) == 0);
+  const auto name = std::string("libmod.so"), child_name = std::string("child");
+  const std::uint64_t top = call("open", {h2g(directory.c_str()), o_directory | o_nofollow | cloexec});
+  REQUIRE(static_cast<std::int64_t>(top) >= 0);
+  CHECK((std::uint64_t(call("fcntl", {top, 3})) & 0740000) == (o_directory | o_nofollow));
+  CHECK(call("openat", {top, h2g(name.c_str()), o_directory | o_nofollow | cloexec}) == -1);
+  CHECK(*thread.thread.errno_location() == err::enotdir);
+  CHECK(call("unlinkat", {top, h2g(name.c_str()), 0}) == 0);
+  const std::uint64_t sub = call("openat", {top, h2g(child_name.c_str()), o_directory | o_nofollow | cloexec});
+  REQUIRE(static_cast<std::int64_t>(sub) >= 0);
+  const auto nested_name = std::string("nested.so");
+  CHECK(call("openat", {sub, h2g(nested_name.c_str()), o_directory | o_nofollow | cloexec}) == -1);
+  CHECK(call("unlinkat", {sub, h2g(nested_name.c_str()), 0}) == 0);
+  CHECK(call("unlinkat", {top, h2g(child_name.c_str()), 0x200}) == 0);
+  CHECK(call("close", {sub}) == 0);
+  // The directory is removed while its own descriptor is still open, as remove_all does.
+  CHECK(call("rmdir", {h2g(directory.c_str())}) == 0);
+  CHECK(call("close", {top}) == 0);
+  CHECK(call("access", {h2g(directory.c_str()), 0}) == -1);
+}
+// lstat reports Venture's junctions (the OBB view into an install on another
+// drive) as links, and O_NOFOLLOW agrees: libc++ remove_all, which opens each
+// entry with O_DIRECTORY | O_NOFOLLOW and unlinks it on ELOOP, removes the
+// junction and never walks into the install's files.
+TEST_CASE("O_NOFOLLOW agrees with lstat on junctions, so remove_all removes only the junction") {
+  Thread thread;
+  constexpr std::uint64_t o_directory = 040000, o_nofollow = 0100000, cloexec = 02000000;
+  const auto root = process_config().data_dir;
+  const auto target = root / "nofollow-target", parent = root / "nofollow-parent";
+  const auto guest_target = process_config().guest_data_dir() + "/nofollow-target";
+  const auto guest_parent = process_config().guest_data_dir() + "/nofollow-parent";
+  const auto guest_link = process_config().guest_data_dir() + "/nofollow-symlink";
+  struct Cleanup {
+    std::filesystem::path parent, target;
+    std::string link;
+    ~Cleanup() {
+      call("unlink", {h2g(link.c_str())});
+      std::error_code ec;
+      std::filesystem::remove(parent / "obb", ec);  // the link, not its target
+      std::filesystem::remove(parent, ec);
+      std::filesystem::remove_all(target, ec);
+    }
+  } cleanup{parent, target, guest_link};
+  REQUIRE(std::filesystem::create_directory(target));
+  REQUIRE(std::filesystem::create_directory(parent));
+  std::ofstream(target / "main.obb") << "obb";
+  link_directory(parent / "obb", std::filesystem::absolute(target));
+  const auto guest_junction = guest_parent + "/obb";
+  Stat stat{};
+  REQUIRE(path_stat(guest_junction.c_str(), &stat, at_cwd, false) == 0);
+  CHECK((stat.mode & 0170000) == 0120000);
+  REQUIRE(path_stat(guest_junction.c_str(), &stat, at_cwd, true) == 0);
+  CHECK((stat.mode & 0170000) == 0040000);
+  // Without O_NOFOLLOW the junction opens as the directory it points to.
+  const auto followed = call("open", {h2g(guest_junction.c_str()), o_directory | cloexec});
+  REQUIRE(followed >= 0);
+  CHECK(call("close", {std::uint64_t(followed)}) == 0);
+  // remove_all's sequence over the parent.
+  const std::uint64_t top = call("open", {h2g(guest_parent.c_str()), o_directory | o_nofollow | cloexec});
+  REQUIRE(static_cast<std::int64_t>(top) >= 0);
+  const auto name = std::string("obb");
+  CHECK(call("openat", {top, h2g(name.c_str()), o_directory | o_nofollow | cloexec}) == -1);
+  CHECK(*thread.thread.errno_location() == err::eloop);
+  CHECK(call("unlinkat", {top, h2g(name.c_str()), 0}) == 0);
+  CHECK(call("close", {top}) == 0);
+  CHECK(call("rmdir", {h2g(guest_parent.c_str())}) == 0);
+  CHECK(std::filesystem::exists(target / "main.obb"));
+  const auto obb = guest_target + "/main.obb";
+  CHECK(call("access", {h2g(obb.c_str()), 0}) == 0);
+  // A guest symlink: creating one needs Developer Mode or the privilege on Windows.
+  if (call("symlink", {h2g(guest_target.c_str()), h2g(guest_link.c_str())}) != 0) {
+    MESSAGE("symbolic links unavailable here; guest symlink case not run");
+    return;
+  }
+  REQUIRE(path_stat(guest_link.c_str(), &stat, at_cwd, false) == 0);
+  CHECK((stat.mode & 0170000) == 0120000);
+  CHECK(call("open", {h2g(guest_link.c_str()), o_directory | o_nofollow | cloexec}) == -1);
+  CHECK(*thread.thread.errno_location() == err::eloop);
+  const auto through = call("open", {h2g(guest_link.c_str()), o_directory | cloexec});
+  REQUIRE(through >= 0);
+  CHECK(call("close", {std::uint64_t(through)}) == 0);
+}
 TEST_CASE("POSIX file mutation rejects directory type mismatches without removing names") {
   Thread thread;
   const auto path = process_config().guest_data_dir() + "/posix-rename-type.bin";

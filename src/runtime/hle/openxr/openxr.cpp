@@ -481,6 +481,7 @@ XrResult xrDestroyInstance(XrInstance instance) {
   state().enabled.clear();
   state().instance_live = false;
   state().guest_profiles.clear();
+  state().guest_suggestions.clear();
   state().guest_sources.clear();
   state().events.clear();
   invalidate_host_procedures();

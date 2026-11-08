@@ -28,6 +28,14 @@ void merge(std::vector<meta::Game> &games, const meta::Snapshot &snapshot,
 std::vector<meta::Game> load(const fs::path &file);
 void save(const fs::path &file, const std::vector<meta::Game> &games);
 void uninstall(const fs::path &root, const Install &install);
+// What uninstalling `install` removes, newest first: a pinned version is only
+// itself; the game's own install comes with every older version of it an
+// update left in a library folder (unpinned installs with the same id).
+std::vector<Install> uninstall_set(const std::vector<Install> &installs, const Install &install);
+// The older versions updates left behind: unpinned installs of a game below
+// its newest unpinned install's version code, once that one is complete. An
+// update installs beside the version it replaces; on a Quest it replaces it.
+std::vector<Install> superseded(const std::vector<Install> &installs);
 bool addon_installed(const Install &install, std::string_view sku);
 // Upgrade old manifests from a fresh, same-build Meta catalog. Presence comes
 // from size-checked files on disk; this never asserts account ownership.

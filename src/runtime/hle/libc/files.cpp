@@ -46,13 +46,18 @@ int open_file(const char* p, int flags, std::uint32_t mode) {
 int open_at(int dir, const char* p, int flags, std::uint32_t mode) {
   return static_cast<int>(result(fd_open(p, flags, mode & ~creation_mask.load(), dir)));
 }
+// Guest entry points: guest open flags use the ARM numbering.
+int open_guest(const char* p, int flags, std::uint32_t mode) { return open_file(p, open_flags_from_guest(flags), mode); }
+int open_at_guest(int dir, const char* p, int flags, std::uint32_t mode) {
+  return open_at(dir, p, open_flags_from_guest(flags), mode);
+}
 int open_checked(const char* p, int flags) {
   if (flags & 0100) return failure(err::einval);
-  return open_file(p, flags, 0);
+  return open_guest(p, flags, 0);
 }
 int openat_checked(int d, const char* p, int flags) {
   if (flags & 0100) return failure(err::einval);
-  return open_at(d, p, flags, 0);
+  return open_at_guest(d, p, flags, 0);
 }
 int creat_file(const char* p, std::uint32_t mode) { return open_file(p, 0100 | 01000 | 1, mode); }
 // VENTURE_TRACE_NET also covers read/write on sockets (OpenSSL socket BIOs).
@@ -377,7 +382,7 @@ int make_temp(char* p, bool directory, int suffix = 0, int flags = 0) {
     int e = host::random(random, 6);
     if (e) return result(e);
     for (int i = 0; i < 6; ++i) tail[i] = chars[random[i] % 62];
-    int r = directory ? mkdir_file(p, 0700) : open_file(p, 2 | 0100 | 0200 | flags, 0600);
+    int r = directory ? mkdir_file(p, 0700) : open_file(p, 2 | 0100 | 0200 | open_flags_from_guest(flags), 0600);
     if (r >= 0) return r;
     if (*GuestThread::current()->errno_location() != err::eexist) return -1;
   }
@@ -433,7 +438,7 @@ std::int64_t fd_fcntl(int fd, int command, std::uint64_t arg) {
     case 2:
       return table.set_fd_flags(fd, static_cast<int>(arg));
     case 3:
-      return f->flags.load();
+      return open_flags_to_guest(f->flags.load());
     case 4: {
       constexpr int mutable_flags = o_nonblock | 02000;
       auto flags = f->flags.load();
@@ -561,8 +566,8 @@ std::int64_t vector32(int fd, const Iovec32* v, int n, bool write) {
 }
 std::int64_t readv32(int fd, const Iovec32* v, int n) { return vector32(fd, v, n, false); }
 std::int64_t writev32(int fd, const Iovec32* v, int n) { return vector32(fd, v, n, true); }
-int open32(const char* p, int flags, a32::VarArgs32 args) { return open_file(p, flags, flags & 0100 ? args.next<std::uint32_t>() : 0); }
-int openat32(int fd, const char* p, int flags, a32::VarArgs32 args) { return open_at(fd, p, flags, flags & 0100 ? args.next<std::uint32_t>() : 0); }
+int open32(const char* p, int flags, a32::VarArgs32 args) { return open_guest(p, flags, flags & 0100 ? args.next<std::uint32_t>() : 0); }
+int openat32(int fd, const char* p, int flags, a32::VarArgs32 args) { return open_at_guest(fd, p, flags, flags & 0100 ? args.next<std::uint32_t>() : 0); }
 int ioctl32(int fd, int request, a32::VarArgs32 args) {
   // fd_ioctl accepts only FIONREAD (one int) and FIOCLEX/FIONCLEX (no payload).
   // Unknown requests return ENOTTY before touching their ABI-dependent payload.
@@ -687,10 +692,10 @@ void register_files(HleLibrary& lib) {
 #define B(n, f) VENTURE_LIBC_BIND(lib, n, f)
   B("basename", basename_fn);
   B("dirname", dirname_fn);
-  B("open", open_file);
-  B("open64", open_file);
-  B("openat", open_at);
-  B("openat64", open_at);
+  B("open", open_guest);
+  B("open64", open_guest);
+  B("openat", open_at_guest);
+  B("openat64", open_at_guest);
   B("__open_2", open_checked);
   B("__openat_2", openat_checked);
   B("creat", creat_file);

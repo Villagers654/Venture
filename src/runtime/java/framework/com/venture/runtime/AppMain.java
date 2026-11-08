@@ -174,6 +174,11 @@ public final class AppMain {
     Thread.setDefaultUncaughtExceptionHandler((thread, failure) -> {
       if (isThreadExit(failure)) return;
       failureStatus = 1;
+      // Android's AndroidRuntime names the thread and exception in the log
+      // before the process dies; the launcher quotes it as the stop reason.
+      try {
+        RuntimeEnvironment.host().log(6, "AndroidRuntime", "FATAL EXCEPTION: " + thread.getName() + ": " + failure);
+      } catch (RuntimeException | Error ignored) {}
       failure.printStackTrace();
       requestShutdown();
     });

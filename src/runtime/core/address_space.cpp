@@ -110,6 +110,20 @@ void track_heap(State& s, GuestAddr begin, GuestAddr end) {
     ++it;
   }
 }
+// End of the mapped run from begin: region pages and heap arena pages.
+GuestAddr mapped_end(const State& s, GuestAddr begin, GuestAddr end) {
+  while (begin < end) {
+    auto it = s.regions.upper_bound(begin);
+    if (it != s.regions.begin() && std::prev(it)->first + std::prev(it)->second.size > begin) {
+      begin = std::prev(it)->first + std::prev(it)->second.size;
+      continue;
+    }
+    const auto [heap_begin, heap_end] = guest_heap::arena64();
+    if (!heap_begin || begin < heap_begin || begin >= heap_end) break;
+    begin = std::min(heap_end, it != s.regions.end() ? it->first : end);
+  }
+  return std::min(begin, end);
+}
 bool reserve_range(State& s, GuestAddr p, std::uint64_t n) {
   const auto gran = platform::reservation_granularity();
   auto begin = align_down(p, gran), end = align_up(p + n, gran);
@@ -361,10 +375,16 @@ std::int64_t AddressSpace::protect(GuestAddr p, std::uint64_t size, std::uint32_
   if (!valid_range(p, size)) return -err::kEINVAL;
   size = align_up(size, kGuestPageSize);
   auto& s = state(); profile::TimedLock lock(s.mutex);
-  if (!covered(s, p, p + size)) {
-    if (!in_heap(p, size)) return -err::kENOMEM;
-    track_heap(s, p, p + size);
-  }
+  // Linux mprotect (mm/mprotect.c) changes the mapped pages from the start of
+  // the range up to the first hole and then fails with ENOMEM; it changes
+  // nothing only when the start itself is unmapped. And64InlineHook makes its
+  // page-aligned trampoline pool in .bss RWX with a length one page longer than
+  // the pool, past the end of the library, and ignores the error.
+  const auto end = mapped_end(s, p, p + size);
+  if (end == p) return -err::kENOMEM;
+  const bool partial = end < p + size;
+  size = end - p;
+  track_heap(s, p, end);
   split(s, p); split(s, p + size);
   std::int64_t result = 0;
   std::vector<std::pair<GuestAddr, std::uint64_t>> stale;
@@ -390,7 +410,7 @@ std::int64_t AddressSpace::protect(GuestAddr p, std::uint64_t size, std::uint32_
   if (changed) publish(s, p, p + size);
   else s.maps_dirty = true;
   for (const auto& [start, n] : stale) cpu_backend().invalidate(start, n, InvalidationCause::protect);
-  return result;
+  return result ? result : partial ? -err::kENOMEM : 0;
 }
 std::int64_t AddressSpace::advise(GuestAddr p, std::uint64_t size, int advice) {
   if (a32_policy) return low32::advise(p, size, advice);
@@ -507,6 +527,9 @@ bool AddressSpace::find(GuestAddr p, MemoryRegion* out) const {
   if (p >= it->first + it->second.size) return false;
   if (out) *out = it->second;
   return true;
+}
+int AddressSpace::segv_code(GuestAddr p) const {
+  return find(p, nullptr) || (!a32_policy && in_heap(p, 1)) ? 2 : 1;
 }
 bool AddressSpace::is_guest_executable(GuestAddr p) const {
   if (a32_policy) return low32::executable(p);

@@ -76,6 +76,20 @@ struct Iovec {
   std::uint64_t length;
 };
 inline constexpr int at_cwd = -100, o_nonblock = 04000, o_cloexec = 02000000;
+// The VFS and hosts take generic Linux open flags (O_DIRECT 040000, O_LARGEFILE
+// 0100000, O_DIRECTORY 0200000, O_NOFOLLOW 0400000). ARM and arm64 Linux number
+// these four differently (arch/arm64/include/uapi/asm/fcntl.h): O_DIRECTORY
+// 040000, O_NOFOLLOW 0100000, O_DIRECT 0200000, O_LARGEFILE 0400000.
+inline constexpr int open_flags_from_guest(int flags) {
+  return (flags & ~0740000) | (flags & 040000 ? 0200000 : 0) | (flags & 0100000 ? 0400000 : 0) |
+         (flags & 0200000 ? 040000 : 0) | (flags & 0400000 ? 0100000 : 0);
+}
+inline constexpr int open_flags_to_guest(int flags) {
+  return (flags & ~0740000) | (flags & 0200000 ? 040000 : 0) | (flags & 0400000 ? 0100000 : 0) |
+         (flags & 040000 ? 0200000 : 0) | (flags & 0100000 ? 0400000 : 0);
+}
+static_assert(open_flags_to_guest(open_flags_from_guest(0740000 | 02000000 | 2)) == (0740000 | 02000000 | 2));
+static_assert(open_flags_from_guest(040000) == 0200000 && open_flags_from_guest(0100000) == 0400000);
 inline constexpr short poll_in = 1, poll_out = 4, poll_err = 8, poll_hup = 16, poll_nval = 32;
 struct PollFd {
   std::int32_t fd;

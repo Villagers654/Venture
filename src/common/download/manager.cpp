@@ -557,10 +557,32 @@ void Manager::run(std::stop_token shutdown) {
       if (!signed_in)
         throw std::runtime_error("Sign in before resuming downloads.");
       auto &store = *signed_in;
-      auto plan = e->job.binary_id.empty()
+      // An asset of an install whose manifest is Meta's reduced catalog: the
+      // full query failed for this build before and would again, after
+      // retries (15-40 s of a game showing 0% per puzzle). The account's
+      // ownership is still asked; the manifest lists the asset.
+      const auto reduced_install = [&]() -> std::optional<meta::Plan> {
+        if (e->job.asset_id.empty())
+          return std::nullopt;
+        for (auto &i : library::scan(e->job.root))
+          if (i.plan.app_id == e->job.app_id && i.plan.binary_id == e->job.binary_id &&
+              i.plan.pinned == e->job.pinned && !i.plan.assets_complete &&
+              std::ranges::any_of(i.plan.files, [&](const auto &f) {
+                return f.kind == "asset" && f.id == e->job.asset_id && f.name == e->job.asset_name;
+              }))
+            return i.plan;
+        return std::nullopt;
+      }();
+      if (reduced_install && !store.owns(e->job.app_id))
+        throw std::runtime_error("Meta says this account does not own this game.");
+      auto plan = reduced_install ? *reduced_install
+                  : e->job.binary_id.empty()
                       ? store.owned_plan(e->job.app_id)
                       : store.owned_plan(e->job.app_id, e->job.binary_id);
-      if (!e->job.sku.empty() || !e->job.asset_id.empty())
+      // An add-on is a SKU's files, which only the full catalog maps. A
+      // single asset is one id the game names, so Meta's reduced catalog
+      // (large catalogs, Puzzling Places' 380 puzzles) still serves it.
+      if (!e->job.sku.empty())
         meta::require_asset_catalog(plan);
       // A pinned version (and its assets) has its own folder.
       plan.pinned = e->job.pinned;
@@ -575,17 +597,34 @@ void Manager::run(std::stop_token shutdown) {
             plan, meta::parse_plan(paths::read_json(installed / "plan.json")),
             installed);
       std::vector<meta::File> selected;
+      // The reduced catalog has no add-on details and may lack names the
+      // delivery server did not give; the installed manifest of this build,
+      // which the game's request was checked against, knows the asset (and
+      // its add-on, when that manifest is complete).
+      if (!e->job.asset_id.empty() && !plan.assets_complete)
+        if (const auto installed =
+                paths::game_dir(e->job.root, plan.package, plan.folder()) / "plan.json";
+            paths::within(installed.parent_path(), installed) && fs::is_regular_file(installed)) {
+          const auto manifest = meta::parse_plan(paths::read_json(installed));
+          const auto found = std::ranges::find_if(manifest.files, [&](const auto &f) {
+            return f.kind == "asset" && f.id == e->job.asset_id && f.name == e->job.asset_name;
+          });
+          if (manifest.app_id == plan.app_id && manifest.binary_id == plan.binary_id &&
+              found != manifest.files.end())
+            selected.push_back(*found);
+        }
       if (!e->job.sku.empty() &&
           !store.owned_skus(e->job.app_id).contains(e->job.sku))
         throw std::runtime_error("Meta did not confirm ownership of this "
                                  "add-on. No files were downloaded.");
-      for (auto &f : plan.files)
-        if (!e->job.asset_id.empty()
-                ? f.kind == "asset" && f.id == e->job.asset_id &&
-                      f.name == e->job.asset_name
-            : e->job.sku.empty() ? f.base()
-                                 : f.sku == e->job.sku)
-          selected.push_back(f);
+      if (selected.empty())
+        for (auto &f : plan.files)
+          if (!e->job.asset_id.empty()
+                  ? f.kind == "asset" && f.id == e->job.asset_id &&
+                        f.name == e->job.asset_name
+              : e->job.sku.empty() ? f.base()
+                                   : f.sku == e->job.sku)
+            selected.push_back(f);
       if (selected.empty())
         throw std::runtime_error("No files were found for this add-on.");
       if (!e->job.asset_id.empty() &&
@@ -609,7 +648,7 @@ void Manager::run(std::stop_token shutdown) {
       if (fs::exists(dir / "plan.json")) {
         auto previous = meta::parse_plan(paths::read_json(dir / "plan.json"));
         // Never replace an installed asset catalog with the reduced one.
-        keep_manifest = !meta::catalog_replaces(plan, previous);
+        keep_manifest = reduced_install || !meta::catalog_replaces(plan, previous);
         if (previous.binary_id != plan.binary_id ||
             previous.app_id != plan.app_id)
           throw std::runtime_error(
@@ -647,7 +686,7 @@ void Manager::run(std::stop_token shutdown) {
       if (fs::space(dir).available < remaining + 64 * 1024 * 1024)
         throw std::runtime_error("Not enough free space. Free disk space or "
                                  "choose another games folder in Settings.");
-      if (!plan.assets_complete)
+      if (!plan.assets_complete && e->job.sku.empty() && e->job.asset_id.empty())
         log::warn("downloads",
                   "Meta's asset catalog is unavailable; installing the APK "
                   "and OBB of {} without asset files.",
@@ -705,9 +744,15 @@ void Manager::run(std::stop_token shutdown) {
             throw std::runtime_error(
                 "Add-on content did not pass the size check.");
         }
+        // A kept manifest is the better catalog: only its add-on marker
+        // changes, never its file list.
+        auto manifest = keep_manifest
+                            ? meta::parse_plan(paths::read_json(dir / "plan.json"))
+                            : plan;
         auto sku = e->job.sku.empty() ? selected[0].sku : e->job.sku;
-        if (!sku.empty() &&
-            std::ranges::all_of(plan.files,
+        const bool marked =
+            !sku.empty() &&
+            std::ranges::all_of(manifest.files,
                                 [&](const auto& f) {
                                   if (f.sku != sku) return true;
                                   auto p = dir / paths::from_utf8(f.name);
@@ -715,10 +760,12 @@ void Manager::run(std::stop_token shutdown) {
                                          fs::is_regular_file(p) &&
                                          fs::file_size(p) == f.size;
                                 }) &&
-            std::ranges::find(plan.installed_addons, sku) ==
-                plan.installed_addons.end())
-          plan.installed_addons.push_back(sku);
-        paths::atomic_write(dir / "plan.json", plan.json().dump(2));
+            std::ranges::find(manifest.installed_addons, sku) ==
+                manifest.installed_addons.end();
+        if (marked)
+          manifest.installed_addons.push_back(sku);
+        if (marked || !keep_manifest)
+          paths::atomic_write(dir / "plan.json", manifest.json().dump(2));
       }
       {
         std::lock_guard lock(mutex_);

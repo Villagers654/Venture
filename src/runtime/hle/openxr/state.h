@@ -124,7 +124,11 @@ struct State {
   };
   std::map<XrAction, Action> actions;
   std::map<XrSession, std::set<std::uintptr_t>> attached_sets;
+  // Host profile -> the guest profile the game is told is current there.
   std::map<XrPath, XrPath> guest_profiles;
+  // Each guest suggestion as the game made it, by its profile: the host
+  // suggestions are rebuilt from all of them (OpenXR replaces per profile).
+  std::map<XrPath, std::vector<XrActionSuggestedBinding>> guest_suggestions;
   std::map<std::pair<XrAction, XrPath>, XrPath> guest_sources;
   // Action states change only in xrSyncActions; reads in between reuse the
   // host answer stored for this sync (state.cpp stored_action_state).
@@ -195,6 +199,8 @@ GuestAddr command_thunk(std::string_view name);
 XrResult refresh_rate(XrSession, float *);
 VkFormat gl_to_vk(std::int64_t);
 std::int64_t vk_to_gl(std::int64_t);
+// The GL formats a GLES session lists for a host's Vulkan swapchain formats.
+std::vector<std::int64_t> gles_swapchain_formats(const std::vector<std::int64_t>& host);
 XrResult present_android_surfaces();
 // The lowest layer over a see-through host's world, for a reconstruction
 // opacity below 1: its host copies get A' = 1 - opacity * (1 - A), straight

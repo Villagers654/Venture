@@ -54,8 +54,10 @@ struct Profile {
   std::span<const HostInput> inputs;
   // Default host input per Quest input and hand ("" = not assigned).
   std::array<std::array<std::string_view, kQuestCount>, 2> defaults;
-  // Automatic menu: the left-hand input it uses and its label; "" (both stick clicks
-  // pressed together) where any common runtime keeps the menu button for itself.
+  // Automatic menu: the controller's left menu input and its label, or "" where it
+  // has none. Automatic also opens the menu with both stick clicks pressed together,
+  // on every controller: some runtimes keep the menu button for themselves (SteamVR's
+  // dashboard on Touch-shaped controllers), and one default must work on all of them.
   std::string_view menu_path, menu_label;
   // Identifiers with a /touch sensor ("a b trigger"): a Quest touch follows its
   // button only where the host has one.
@@ -67,9 +69,7 @@ struct Profile {
 namespace detail {
 using Row = std::array<std::string_view, kQuestCount>;
 // The common Touch-shaped layout: face buttons, stick, trigger, grip, thumbrest. The
-// menu is both stick clicks: SteamVR (and every path into it: Link, Steam Link,
-// Virtual Desktop, ALVR) takes the left menu button of Touch-shaped controllers
-// for its dashboard, and one default must work on every runtime.
+// menu is the profile's menu_path (the left menu button) plus both stick clicks.
 inline constexpr Row touch_left{"/input/x/click", "/input/y/click", "", "/input/thumbstick",
                                 "/input/thumbstick/click", "/input/trigger/value", "/input/squeeze/value",
                                 "/input/thumbrest/touch"};
@@ -245,11 +245,11 @@ inline constexpr Profile kProfiles[]{
         "/input/squeeze/value", "/input/trackpad/touch"}}},
      "/input/trackpad/force", "Left trackpad press", "a b trigger thumbstick trackpad"},
     {"/interaction_profiles/oculus/touch_controller", "Meta Quest Touch", "quest 2 oculus rift", "touch", "oculus_quest2_controller",
-     kTouchInputs, {{detail::touch_left, detail::touch_right}}, "", "Both stick clicks", "x y a b trigger thumbstick thumbrest", ""},
+     kTouchInputs, {{detail::touch_left, detail::touch_right}}, "/input/menu/click", "Left menu button", "x y a b trigger thumbstick thumbrest", ""},
     {"/interaction_profiles/meta/touch_controller_plus", "Meta Quest Touch Plus", "quest 3 3s oculus", "touch", "oculus_quest_plus_controller",
-     kTouchInputs, {{detail::touch_left, detail::touch_right}}, "", "Both stick clicks", "x y a b trigger thumbstick thumbrest", "XR_META_touch_controller_plus"},
+     kTouchInputs, {{detail::touch_left, detail::touch_right}}, "/input/menu/click", "Left menu button", "x y a b trigger thumbstick thumbrest", "XR_META_touch_controller_plus"},
     {"/interaction_profiles/facebook/touch_controller_pro", "Meta Quest Touch Pro", "quest pro oculus", "touch", "oculus_quest_pro_controller",
-     kTouchInputs, {{detail::touch_left, detail::touch_right}}, "", "Both stick clicks", "x y a b trigger thumbstick thumbrest", "XR_FB_touch_controller_pro"},
+     kTouchInputs, {{detail::touch_left, detail::touch_right}}, "/input/menu/click", "Left menu button", "x y a b trigger thumbstick thumbrest", "XR_FB_touch_controller_pro"},
     {"/interaction_profiles/htc/vive_controller", "HTC Vive wand", "vive pro wands", "vive", "vr_controller_vive_1_5", kViveInputs,
      {{{"/input/trackpad/dpad_down", "/input/trackpad/dpad_up", "/input/menu/click", "/input/trackpad",
         "/input/trackpad/dpad_center", "/input/trigger/value", "/input/squeeze/click", ""},
@@ -257,9 +257,9 @@ inline constexpr Profile kProfiles[]{
         "/input/trigger/value", "/input/squeeze/click", ""}}},
      "/input/menu/click", "Left menu button", "trackpad"},
     {"/interaction_profiles/htc/vive_cosmos_controller", "HTC Vive Cosmos", "cosmos elite", "cosmos", "",
-     kCosmosInputs, {{detail::cosmos_left, detail::cosmos_right}}, "", "Both stick clicks", "thumbstick", "XR_HTC_vive_cosmos_controller_interaction"},
+     kCosmosInputs, {{detail::cosmos_left, detail::cosmos_right}}, "/input/menu/click", "Left menu button", "thumbstick", "XR_HTC_vive_cosmos_controller_interaction"},
     {"/interaction_profiles/htc/vive_focus3_controller", "HTC Vive Focus 3", "focus vision xr elite", "focus3", "vive_focus3_controller",
-     kFocus3Inputs, {{detail::touch_left, detail::touch_right}}, "", "Both stick clicks", "trigger thumbstick thumbrest squeeze", "XR_HTC_vive_focus3_controller_interaction"},
+     kFocus3Inputs, {{detail::touch_left, detail::touch_right}}, "/input/menu/click", "Left menu button", "trigger thumbstick thumbrest squeeze", "XR_HTC_vive_focus3_controller_interaction"},
     {"/interaction_profiles/hp/mixed_reality_controller", "HP Reverb G2", "wmr windows mixed reality", "wmr", "",
      kHpInputs, {{detail::hp_left, detail::face_right}}, "/input/menu/click", "Left menu button", "", "XR_EXT_hp_mixed_reality_controller"},
     {"/interaction_profiles/microsoft/motion_controller", "Windows Mixed Reality", "wmr samsung odyssey acer dell lenovo",
@@ -270,7 +270,7 @@ inline constexpr Profile kProfiles[]{
         "/input/trigger/value", "/input/squeeze/click", ""}}},
      "/input/menu/click", "Left menu button", "trackpad"},
     {"/interaction_profiles/bytedance/pico4_controller", "Pico 4", "pico 4 ultra neo", "pico4", "pico_4_controller", kPico4Inputs,
-     {{detail::face_left, detail::face_right}}, "", "Both stick clicks",
+     {{detail::face_left, detail::face_right}}, "/input/menu/click", "Left menu button",
      "x y a b trigger thumbstick", "XR_BD_controller_interaction"},
     {"/interaction_profiles/mndx/pssense_controller_mndx", "PlayStation VR2 Sense", "psvr2 ps5 sony", "",
      "playstation_vr2_sense", kSenseInputs,
@@ -333,11 +333,12 @@ struct Menu {
   enum class Kind { off, direct, synthesized } kind = Kind::off;
   // direct: the left-hand host input the game's menu action is bound to.
   std::string direct;
-  // synthesized: one or two hand-qualified host inputs held for hold_ns
-  // (both together for two), merged into the game's menu.
+  // One or two hand-qualified host inputs held for hold_ns (both together for
+  // two), merged into the game's menu: a synthesized menu's inputs, and with
+  // automatic also beside a direct one (both stick clicks).
   std::vector<std::string> sources;
   std::int64_t hold_ns = 0;
-  bool automatic = false;  // the controller's default; the runtime may add its stick-click fallback
+  bool automatic = false;  // the controller's default: its menu input (if any) and both stick clicks
 };
 struct Resolved {
   std::array<std::array<std::string, kQuestCount>, 2> rows{};  // component path, or "" for none

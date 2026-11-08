@@ -69,6 +69,19 @@ TEST_CASE("A32 proc maps reflects mapping protection labels and removal") {
   space.free(p);
   CHECK(space.proc_maps().find("/data/app/proc-a32.so") == std::string::npos);
 }
+TEST_CASE("A32 mprotect changes the mapped pages before a hole, then fails") {
+  auto& space = AddressSpace::get();
+  const auto p = space.map(0, 8192, kProtRead | kProtWrite, kMapPrivate | kMapAnonymous, nullptr, 0, "[A32 partial]");
+  REQUIRE(p > 0);
+  REQUIRE(space.unmap(p + 4096, 4096) == 0);
+  CHECK(space.protect(p + 4096, 4096, kProtRead | kProtExec) == -err::kENOMEM);
+  CHECK(space.protect(p, 8192, kProtRead | kProtWrite | kProtExec) == -err::kENOMEM);
+  CHECK(space.is_guest_executable(p));
+  CHECK_FALSE(space.find(p + 4096, nullptr));
+  CHECK(space.segv_code(p) == 2);
+  CHECK(space.segv_code(p + 4096) == 1);
+  CHECK(space.unmap(p, 4096) == 0);
+}
 namespace {
 // Storage adapters now use the descriptor-selected ILP32 marshaler.
 std::uint64_t invoke(Library& lib, std::string_view name, std::initializer_list<std::uint64_t> args = {}) {

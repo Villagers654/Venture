@@ -186,11 +186,61 @@ void Core::uninstall(const library::Install &install) {
   } catch (...) {
     throw std::runtime_error("Close this game before uninstalling it.");
   }
-  library::uninstall(root_of(install), install);
+  // Every version of the game goes, not only the newest: an older folder an
+  // update left behind would otherwise keep the game installed (Pinball FX VR:
+  // "uninstall removed the update but not the game").
+  std::string failure;
+  for (const auto &version : library::uninstall_set(installs_, install))
+    try {
+      library::uninstall(root_of(version), version);
+    } catch (const std::exception &e) {
+      log::warn("library", "Could not uninstall {}: {}", paths::utf8(version.directory), e.what());
+      if (failure.empty()) failure = e.what();
+    }
   // A pinned version's Steam choice goes with it.
   if (install.plan.pinned && settings_.steam_skip.erase(install.id()))
     settings_.save(data_);
   rescan();
+  if (!failure.empty()) throw std::runtime_error(failure);
+}
+void Core::remove_superseded(const std::vector<library::Install> &installs) {
+  if (options_.launch_requested) return;
+  const auto jobs = downloads_ ? downloads_->snapshot() : std::vector<download::Job>{};
+  std::vector<library::Install> old;
+  for (auto &version : library::superseded(installs)) {
+    // Once per folder and session; never while the game runs or downloads.
+    const auto run = running_.find(version.id());
+    if ((run != running_.end() && !run->second.exit) ||
+        std::ranges::any_of(jobs, [&](const download::Job &j) {
+          return j.app_id == version.plan.app_id &&
+                 (j.state == download::State::queued || j.state == download::State::checking ||
+                  j.state == download::State::downloading);
+        }) ||
+        !superseded_tried_.insert(version.directory).second)
+      continue;
+    old.push_back(std::move(version));
+  }
+  if (old.empty()) return;
+  auto data = data_;
+  worker_->submit([this, old = std::move(old), data](std::stop_token) -> Worker::Completion {
+    bool removed = false;
+    for (const auto &version : old)
+      try {
+        // The game's lock: a running copy (another launcher, a Steam
+        // shortcut) keeps its files.
+        FileLock lock(data / "locks" / ("game-" + version.plan.package + ".lock"), false);
+        library::uninstall(root_of(version), version);
+        log::info("library", "Removed {} version {}, which its update replaced.", version.plan.package,
+                  version.plan.version_code);
+        removed = true;
+      } catch (const std::exception &e) {
+        log::warn("library", "Could not remove the replaced version {} of {}: {}", version.plan.version_code,
+                  version.plan.package, e.what());
+      }
+    return [removed, this] {
+      if (removed) rescan();
+    };
+  });
 }
 void Core::apply_settings(library::Settings next, bool announce) {
   // Games already installed stay where they are: a games folder that holds
@@ -940,6 +990,7 @@ void Core::rescan() {
                     previous->plan.binary_id != next->plan.binary_id);
           });
           installs_ = result;
+          remove_superseded(installs_);
           steam_scan_reliable_ = reliable;
           if (!options_.launch_requested) sync_steam();
           log::info("library", "Found {} complete installations.",

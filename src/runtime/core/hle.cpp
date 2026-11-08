@@ -376,7 +376,8 @@ void deliver_memory_fault(GuestThread& thread, FunctionId id, const MemoryFault&
   else
     log::error("hle", "{}!{}: guest memory fault at {:#x} (unmapped)", f.library, f.name, fault.address);
   thread.cpu().set_pc(thread.cpu().pc() - thread.cpu().trap_instruction_size());
-  signals::Info info{fault.bus ? signals::kSigBus : signals::kSigSegv, fault.bus ? 2 : 1, fault.address};
+  signals::Info info{fault.bus ? signals::kSigBus : signals::kSigSegv,
+                     fault.bus ? 2 : AddressSpace::get().segv_code(fault.address), fault.address};
   info.syndrome = fault.write ? 1ull << 6 : 0;
   signals::deliver_synchronous(thread, info);
 }

@@ -84,6 +84,17 @@ bool covered(const State& s, GuestAddr p, std::uint64_t n) {
   }
   return p >= end;
 }
+// End of the mapped run of regions from p, at most p + n.
+GuestAddr mapped_end(const State& s, GuestAddr p, std::uint64_t n) {
+  const auto end = p + n;
+  auto it = s.regions.upper_bound(p);
+  if (it != s.regions.begin()) --it;
+  for (; it != s.regions.end() && p < end; ++it) {
+    if (it->first > p) break;
+    p = std::max(p, it->first + it->second.size);
+  }
+  return std::min(p, end);
+}
 void split(State& s, GuestAddr p) {
   auto it = s.regions.upper_bound(p);
   if (it == s.regions.begin()) return;
@@ -427,7 +438,11 @@ std::int64_t protect(GuestAddr p, std::uint64_t n, std::uint32_t prot) {
   n = align_up(n, 4096);
   auto& s = state();
   profile::TimedLock lock(s.mutex);
-  if (!covered(s, p, n)) return -err::kENOMEM;
+  // Linux applies the change up to the first hole, then fails with ENOMEM.
+  const auto end = mapped_end(s, p, n);
+  if (end == p) return -err::kENOMEM;
+  const bool partial = end < p + n;
+  n = end - p;
   bool writable_file = false;
   each_backing(s, p, n, [&](auto, auto, bool file) {
     writable_file |= file && (prot & kProtWrite);
@@ -451,7 +466,7 @@ std::int64_t protect(GuestAddr p, std::uint64_t n, std::uint32_t prot) {
     s.snapshot.publish(s.regions, r.start, r.start + r.size);
     if ((old | prot) & kProtExec) cpu_backend().invalidate(r.start, r.size, InvalidationCause::protect);
   }
-  return 0;
+  return partial ? -err::kENOMEM : 0;
 }
 std::int64_t advise(GuestAddr p, std::uint64_t n, int advice) {
   if (!n && !(p & 4095) && advice >= 0 && advice <= 4) return 0;

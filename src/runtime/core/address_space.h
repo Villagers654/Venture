@@ -94,6 +94,9 @@ class AddressSpace {
 
   bool find(GuestAddr address, MemoryRegion* out) const;
   bool is_guest_executable(GuestAddr address) const;
+  // Linux fault code for a guest access at address: SEGV_ACCERR (2) when the
+  // page is mapped (the access lacked permission), SEGV_MAPERR (1) otherwise.
+  int segv_code(GuestAddr address) const;
   void for_each(const std::function<void(const MemoryRegion&)>& visit) const;  // /proc/self/maps
   std::string proc_maps() const;  // immutable content for one open, refreshed on mapping changes
   std::uint64_t mapped_size() const;

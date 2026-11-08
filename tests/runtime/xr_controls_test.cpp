@@ -20,6 +20,7 @@
 #include <string>
 #include <set>
 #include <thread>
+#include <vector>
 
 namespace vr = venture::hle::vrapi;
 namespace vg = vr::guest;
@@ -137,30 +138,31 @@ TEST_CASE("Every controller's default inputs reach a VrApi game as the Quest inp
           if (other != q && other != int(Quest::menu)) CHECK_FALSE(sees(state, Quest(other), hand));
         CHECK_FALSE(sees(game.read(MockXrScript{}, 0), Quest::menu, 0));
       }
-    // The automatic menu: the controller's own left input, or both stick clicks
-    // pressed together (at once); one stick click alone stays the game's.
+    // The automatic menu: the controller's own left input (if any), and both stick
+    // clicks pressed together (at once); one stick click alone stays the game's.
     MockXrScript script{};
     if (!p.menu_path.empty()) {
       press(script.left, p.menu_path);
       CHECK(sees(game.read(script, 0), Quest::menu, 0));
-    } else {
-      script.left.thumbstick_click = true;
-      CHECK_FALSE(sees(game.read(script, 0), Quest::menu, 0));
-      CHECK(sees(game.read(script, 0), Quest::stick_click, 0));
-      script.right.thumbstick_click = true;
-      const auto both = game.read(script, 0);
-      CHECK(sees(both, Quest::menu, 0));
-      CHECK(sees(both, Quest::stick_click, 0));  // the game still sees its click
-      CHECK(sees(game.read(script, 0), Quest::menu, 0));  // held while both are
-      // Releasing one ends the press; it rearms only once both are up.
-      script.right.thumbstick_click = false;
-      CHECK_FALSE(sees(game.read(script, 0), Quest::menu, 0));
-      script.right.thumbstick_click = true;
-      CHECK_FALSE(sees(game.read(script, 0), Quest::menu, 0));
       CHECK_FALSE(sees(game.read(MockXrScript{}, 0), Quest::menu, 0));
-      script.left.thumbstick_click = script.right.thumbstick_click = true;
-      CHECK(sees(game.read(script, 0), Quest::menu, 0));
+      script = {};
     }
+    const auto left_click = p.defaults[0][size_t(Quest::stick_click)], right_click = p.defaults[1][size_t(Quest::stick_click)];
+    press(script.left, left_click);
+    CHECK_FALSE(sees(game.read(script, 0), Quest::menu, 0));
+    CHECK(sees(game.read(script, 0), Quest::stick_click, 0));
+    press(script.right, right_click);
+    const auto both = game.read(script, 0);
+    CHECK(sees(both, Quest::menu, 0));
+    CHECK(sees(both, Quest::stick_click, 0));  // the game still sees its click
+    CHECK(sees(game.read(script, 0), Quest::menu, 0));  // held while both are
+    // Releasing one ends the press; it rearms only once both are up.
+    MockXrScript one{};
+    press(one.left, left_click);
+    CHECK_FALSE(sees(game.read(one, 0), Quest::menu, 0));
+    CHECK_FALSE(sees(game.read(script, 0), Quest::menu, 0));
+    CHECK_FALSE(sees(game.read(MockXrScript{}, 0), Quest::menu, 0));
+    CHECK(sees(game.read(script, 0), Quest::menu, 0));
     CHECK_FALSE(sees(game.read(MockXrScript{}, 0), Quest::menu, 0));
   }
 }
@@ -269,16 +271,20 @@ TEST_CASE("The player's menu choice opens a VrApi game's menu") {
   }
 }
 
-TEST_CASE("A Touch-shaped controller's menu is both stick clicks pressed together") {
+TEST_CASE("A Touch-shaped controller's menu is its menu button and both stick clicks pressed together") {
   venture::test::ScopedMenuMode automatic("");
   ScopedControls controls("");
-  for (const char* profile : {"/interaction_profiles/oculus/touch_controller", "/interaction_profiles/bytedance/pico4_controller"}) {
+  for (const char* profile : {"/interaction_profiles/oculus/touch_controller", "/interaction_profiles/meta/touch_controller_plus",
+                              "/interaction_profiles/facebook/touch_controller_pro", "/interaction_profiles/bytedance/pico4_controller",
+                              "/interaction_profiles/htc/vive_focus3_controller", "/interaction_profiles/htc/vive_cosmos_controller"}) {
     CAPTURE(profile);
     VrApiGame game(profile);
     MockXrScript script{};
-    // The left menu button is not the game's menu: runtimes like SteamVR keep it.
+    // The left menu button where the runtime gives it to the game (Meta, Virtual
+    // Desktop, Pico); both stick clicks where it keeps it (SteamVR's dashboard).
     script.left.menu = true;
-    CHECK_FALSE(sees(game.read(script, 0), Quest::menu, 0));
+    CHECK(sees(game.read(script, 0), Quest::menu, 0));
+    CHECK_FALSE(sees(game.read(MockXrScript{}, 0), Quest::menu, 0));
     script = {};
     script.left.thumbstick_click = true;
     CHECK_FALSE(sees(game.read(script, 0), Quest::menu, 0));
@@ -288,13 +294,30 @@ TEST_CASE("A Touch-shaped controller's menu is both stick clicks pressed togethe
     CHECK_FALSE(sees(game.read(MockXrScript{}, 0), Quest::menu, 0));
   }
   {
-    // A player who picks the left menu button gets it.
+    // A player who picks the left menu button gets it alone.
     Config config;
     config["/interaction_profiles/oculus/touch_controller"].menu = {MenuMode::button, "/user/hand/left/input/menu/click", {}, kHoldMs};
     ScopedControls chosen(encode(config));
     VrApiGame game("/interaction_profiles/oculus/touch_controller");
     MockXrScript script{};
     script.left.menu = true;
+    CHECK(sees(game.read(script, 0), Quest::menu, 0));
+    script = {};
+    script.left.thumbstick_click = script.right.thumbstick_click = true;
+    CHECK_FALSE(sees(game.read(script, 0), Quest::menu, 0));
+  }
+  {
+    // A player who picks both stick clicks gets them alone.
+    Config config;
+    config["/interaction_profiles/oculus/touch_controller"].menu = {
+        MenuMode::chord, "/user/hand/left/input/thumbstick/click", "/user/hand/right/input/thumbstick/click", kChordHoldMs};
+    ScopedControls chosen(encode(config));
+    VrApiGame game("/interaction_profiles/oculus/touch_controller");
+    MockXrScript script{};
+    script.left.menu = true;
+    CHECK_FALSE(sees(game.read(script, 0), Quest::menu, 0));
+    script = {};
+    script.left.thumbstick_click = script.right.thumbstick_click = true;
     CHECK(sees(game.read(script, 0), Quest::menu, 0));
   }
 }
@@ -427,15 +450,20 @@ TEST_CASE("An OpenXR game's Touch bindings follow the player's controls on anoth
   ventureMockXrSetProfile(nullptr);
 }
 
-TEST_CASE("An OpenXR game that also binds both stick clicks gets its Quest menu from both stick clicks") {
-  // OVRPlugin's OpenXR backend (Unity games such as Attack on Titan VR) binds the
-  // left menu and both stick clicks on Touch; on SteamVR the host's own menu
-  // button opens the dashboard, so both stick clicks must reach the game's menu.
+TEST_CASE("An OpenXR game that also binds both stick clicks gets its Quest menu from the menu button and both stick clicks") {
+  // OVRPlugin's OpenXR backend (Unreal games such as Asgard's Wrath 2, Unity games
+  // such as Attack on Titan VR) binds the left menu and both stick clicks on Touch.
+  // The default reaches the game's menu from the controller's menu button where the
+  // runtime leaves it to games, and from both stick clicks where it keeps it
+  // (SteamVR's dashboard). A space the game destroys may share its handle value with
+  // the game's actions on a runtime that numbers each handle type from 1 (VDXR, the
+  // xr_typed_handles_menu test); the menu must survive it.
   venture::test::ScopedMenuMode automatic("");
   ScopedControls defaults("");
-  for (const char* profile : {"/interaction_profiles/oculus/touch_controller", "/interaction_profiles/khr/generic_controller"}) {
-    CAPTURE(profile);
-    ventureMockXrSetProfile(profile);
+  const bool typed = std::getenv("VENTURE_MOCK_TYPED_HANDLES") != nullptr;
+  for (const auto& p : kProfiles) {
+    CAPTURE(p.path);
+    ventureMockXrSetProfile(std::string(p.path).c_str());
     venture::test::XrImageFixture interop;
     venture::xr::install_xr_images(&interop);
     const char* extensions[]{"XR_KHR_opengl_es_enable"};
@@ -450,7 +478,7 @@ TEST_CASE("An OpenXR game that also binds both stick clicks gets its Quest menu 
     XrSession session{};
     REQUIRE(xg::xrCreateSession(instance, &ci, &session) == XR_SUCCESS);
     XrActionSetCreateInfo set_info{XR_TYPE_ACTION_SET_CREATE_INFO};
-    std::strcpy(set_info.actionSetName, "ovrplugin_like");
+    std::strcpy(set_info.actionSetName, "default");
     std::strcpy(set_info.localizedActionSetName, "OVRPlugin-like");
     XrActionSet set{};
     REQUIRE(xg::xrCreateActionSet(instance, &set_info, &set) == XR_SUCCESS);
@@ -469,6 +497,8 @@ TEST_CASE("An OpenXR game that also binds both stick clicks gets its Quest menu 
       REQUIRE(xg::xrCreateAction(set, &ai, &out) == XR_SUCCESS);
       return out;
     };
+    // Enough other actions that the menu's handle value is one a space also gets.
+    for (int i = 0; i < 24; ++i) action(("other_" + std::to_string(i)).c_str(), 2);
     const XrAction menu = action("menu", 1), stick = action("thumbstick_click", 2);
     XrPath menu_path{}, left_click{}, right_click{};
     REQUIRE(xg::xrStringToPath(instance, "/user/hand/left/input/menu/click", &menu_path) == XR_SUCCESS);
@@ -480,6 +510,19 @@ TEST_CASE("An OpenXR game that also binds both stick clicks gets its Quest menu 
     REQUIRE(xg::xrSuggestInteractionProfileBindings(instance, &suggestion) == XR_SUCCESS);
     XrSessionActionSetsAttachInfo attach{XR_TYPE_SESSION_ACTION_SETS_ATTACH_INFO, nullptr, 1, &set};
     REQUIRE(xg::xrAttachSessionActionSets(session, &attach) == XR_SUCCESS);
+    // The game makes and destroys spaces; one shares the menu action's value where
+    // handles are numbered per type.
+    bool collided = false;
+    for (int i = 0; i < 96 && !collided; ++i) {
+      XrReferenceSpaceCreateInfo space_info{XR_TYPE_REFERENCE_SPACE_CREATE_INFO, nullptr, XR_REFERENCE_SPACE_TYPE_LOCAL,
+                                            {{0, 0, 0, 1}, {0, 0, 0}}};
+      XrSpace space{};
+      REQUIRE(xg::xrCreateReferenceSpace(session, &space_info, &space) == XR_SUCCESS);
+      collided = reinterpret_cast<std::uintptr_t>(space) == reinterpret_cast<std::uintptr_t>(menu) ||
+                 reinterpret_cast<std::uintptr_t>(space) == reinterpret_cast<std::uintptr_t>(set);
+      REQUIRE(xg::xrDestroySpace(space) == XR_SUCCESS);
+    }
+    CHECK(collided == typed);
     auto poll = [&] {
       XrEventDataBuffer event{XR_TYPE_EVENT_DATA_BUFFER};
       while (xg::xrPollEvent(instance, &event) == XR_SUCCESS) event = {XR_TYPE_EVENT_DATA_BUFFER};
@@ -500,10 +543,18 @@ TEST_CASE("An OpenXR game that also binds both stick clicks gets its Quest menu 
     };
     MockXrScript script{};
     CHECK_FALSE(state(menu, script));
-    script.left.thumbstick_click = true;
+    // The controller's menu button, where it has one.
+    if (!p.menu_path.empty()) {
+      press(script.left, p.menu_path);
+      CHECK(state(menu, script));
+      CHECK_FALSE(state(menu, MockXrScript{}));
+      script = {};
+    }
+    // Both stick clicks (the Stick click rows) pressed together.
+    press(script.left, p.defaults[0][size_t(Quest::stick_click)]);
     CHECK_FALSE(state(menu, script));
     CHECK(state(stick, script, hands[0]));  // one click stays the game's stick click
-    script.right.thumbstick_click = true;
+    press(script.right, p.defaults[1][size_t(Quest::stick_click)]);
     CHECK(state(menu, script));
     CHECK_FALSE(state(menu, MockXrScript{}));
     CHECK(xg::xrDestroySession(session) == XR_SUCCESS);
@@ -513,6 +564,175 @@ TEST_CASE("An OpenXR game that also binds both stick clicks gets its Quest menu 
     ventureMockXrSetScript(&restored);
     ventureMockXrSetProfile(nullptr);
   }
+}
+
+namespace {
+// An OpenXR game on the mock runtime reporting `profile` for both hands, with
+// one action set whose boolean actions the test binds.
+struct OpenXrGame {
+  venture::test::XrImageFixture interop;
+  XrInstance instance{};
+  XrSession session{};
+  XrActionSet set{};
+  XrPath hands[2]{};
+  explicit OpenXrGame(const char* profile) {
+    ventureMockXrSetProfile(profile);
+    venture::xr::install_xr_images(&interop);
+    const char* extensions[]{"XR_KHR_opengl_es_enable", "XR_FB_touch_controller_pro", "XR_META_touch_controller_plus"};
+    XrInstanceCreateInfo create{XR_TYPE_INSTANCE_CREATE_INFO};
+    create.applicationInfo.apiVersion = XR_MAKE_VERSION(1, 0, 0);
+    create.enabledExtensionCount = 3;
+    create.enabledExtensionNames = extensions;
+    REQUIRE(xg::xrCreateInstance(&create, &instance) == XR_SUCCESS);
+    xg::GlesBinding graphics{XR_TYPE_GRAPHICS_BINDING_OPENGL_ES_ANDROID_KHR, nullptr, 1, 2, 3};
+    XrSessionCreateInfo ci{XR_TYPE_SESSION_CREATE_INFO, &graphics, 0, 1};
+    REQUIRE(xg::xrCreateSession(instance, &ci, &session) == XR_SUCCESS);
+    XrActionSetCreateInfo set_info{XR_TYPE_ACTION_SET_CREATE_INFO};
+    std::strcpy(set_info.actionSetName, "profiles_test");
+    std::strcpy(set_info.localizedActionSetName, "Profiles test");
+    REQUIRE(xg::xrCreateActionSet(instance, &set_info, &set) == XR_SUCCESS);
+    hands[0] = path("/user/hand/left");
+    hands[1] = path("/user/hand/right");
+  }
+  ~OpenXrGame() {
+    CHECK(xg::xrDestroySession(session) == XR_SUCCESS);
+    CHECK(xg::xrDestroyInstance(instance) == XR_SUCCESS);
+    venture::xr::install_xr_images(nullptr);
+    MockXrScript restored{};
+    ventureMockXrSetScript(&restored);
+    ventureMockXrSetProfile(nullptr);
+  }
+  XrPath path(const char* text) {
+    XrPath out{};
+    REQUIRE(xg::xrStringToPath(instance, text, &out) == XR_SUCCESS);
+    return out;
+  }
+  XrAction action(const char* name) {
+    XrActionCreateInfo ai{XR_TYPE_ACTION_CREATE_INFO};
+    ai.actionType = XR_ACTION_TYPE_BOOLEAN_INPUT;
+    ai.countSubactionPaths = 2;
+    ai.subactionPaths = hands;
+    std::strcpy(ai.actionName, name);
+    std::strcpy(ai.localizedActionName, name);
+    XrAction out{};
+    REQUIRE(xg::xrCreateAction(set, &ai, &out) == XR_SUCCESS);
+    return out;
+  }
+  XrResult suggest(const char* profile, std::vector<XrActionSuggestedBinding> bindings) {
+    XrInteractionProfileSuggestedBinding suggestion{XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING, nullptr, path(profile),
+                                                    std::uint32_t(bindings.size()), bindings.data()};
+    return xg::xrSuggestInteractionProfileBindings(instance, &suggestion);
+  }
+  void start() {
+    XrSessionActionSetsAttachInfo attach{XR_TYPE_SESSION_ACTION_SETS_ATTACH_INFO, nullptr, 1, &set};
+    REQUIRE(xg::xrAttachSessionActionSets(session, &attach) == XR_SUCCESS);
+    poll();
+    XrSessionBeginInfo begin{XR_TYPE_SESSION_BEGIN_INFO, nullptr, XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO};
+    REQUIRE(xg::xrBeginSession(session, &begin) == XR_SUCCESS);
+    poll();
+  }
+  void poll() {
+    XrEventDataBuffer event{XR_TYPE_EVENT_DATA_BUFFER};
+    while (xg::xrPollEvent(instance, &event) == XR_SUCCESS) event = {XR_TYPE_EVENT_DATA_BUFFER};
+  }
+  XrPath current(int hand) {
+    XrInteractionProfileState state{XR_TYPE_INTERACTION_PROFILE_STATE};
+    REQUIRE(xg::xrGetCurrentInteractionProfile(session, hands[hand], &state) == XR_SUCCESS);
+    return state.interactionProfile;
+  }
+  // Whether `a` is bound and pressed after the host reports `script`.
+  bool pressed(XrAction a, const MockXrScript& script) {
+    ventureMockXrSetScript(&script);
+    XrActiveActionSet active{set, XR_NULL_PATH};
+    XrActionsSyncInfo sync{XR_TYPE_ACTIONS_SYNC_INFO, nullptr, 1, &active};
+    REQUIRE(xg::xrSyncActions(session, &sync) == XR_SUCCESS);
+    XrActionStateGetInfo get{XR_TYPE_ACTION_STATE_GET_INFO, nullptr, a, XR_NULL_PATH};
+    XrActionStateBoolean value{XR_TYPE_ACTION_STATE_BOOLEAN};
+    REQUIRE(xg::xrGetActionStateBoolean(session, &get, &value) == XR_SUCCESS);
+    return value.isActive && value.currentState;
+  }
+};
+}  // namespace
+
+TEST_CASE("A game's Touch, Touch Plus and Touch Pro suggestions all stay bound, reported as a Quest 3's controller") {
+  // Unity's OpenXR input binds only Touch; OVRPlugin then suggests Touch Plus and
+  // Touch Pro (H3VR2). The last suggestion replaced the Touch one on every host
+  // profile, and the game was told Touch Pro, which OVRPlugin passes to Unity
+  // unchanged (it answers Touch only for Touch Plus) and for which Unity has no
+  // device: no controllers.
+  venture::test::ScopedMenuMode automatic("");
+  ScopedControls defaults("");
+  for (const char* host : {"/interaction_profiles/facebook/touch_controller_pro",
+                           "/interaction_profiles/meta/touch_controller_plus",
+                           "/interaction_profiles/oculus/touch_controller",
+                           "/interaction_profiles/valve/index_controller"}) {
+    CAPTURE(host);
+    OpenXrGame game(host);
+    const XrAction unity = game.action("unity_a"), plugin = game.action("plugin_b");
+    const XrPath a = game.path("/user/hand/right/input/a/click"), b = game.path("/user/hand/right/input/b/click");
+    REQUIRE(game.suggest("/interaction_profiles/oculus/touch_controller", {{unity, a}, {plugin, b}}) == XR_SUCCESS);
+    REQUIRE(game.suggest("/interaction_profiles/meta/touch_controller_plus", {{plugin, b}}) == XR_SUCCESS);
+    REQUIRE(game.suggest("/interaction_profiles/facebook/touch_controller_pro", {{plugin, b}}) == XR_SUCCESS);
+    game.start();
+    // A Quest 3 answers Touch Plus where the game binds it, never Touch Pro.
+    const XrPath plus = game.path("/interaction_profiles/meta/touch_controller_plus");
+    CHECK(game.current(0) == plus);
+    CHECK(game.current(1) == plus);
+    MockXrScript script{};
+    script.right.primary = true;
+    CHECK(game.pressed(unity, script));
+    CHECK_FALSE(game.pressed(plugin, script));
+    script = {};
+    script.right.secondary = true;
+    CHECK(game.pressed(plugin, script));
+    CHECK_FALSE(game.pressed(unity, script));
+    XrBoundSourcesForActionEnumerateInfo bound{XR_TYPE_BOUND_SOURCES_FOR_ACTION_ENUMERATE_INFO, nullptr, unity};
+    XrPath source{};
+    std::uint32_t count = 0;
+    REQUIRE(xg::xrEnumerateBoundSourcesForAction(game.session, &bound, 1, &count, &source) == XR_SUCCESS);
+    CHECK(count == 1);
+    CHECK(source == a);
+  }
+}
+
+TEST_CASE("A game that suggests only Touch Pro is told Touch Pro on any controller") {
+  venture::test::ScopedMenuMode automatic("");
+  ScopedControls defaults("");
+  OpenXrGame game("/interaction_profiles/oculus/touch_controller");
+  const XrAction pro_a = game.action("pro_a");
+  const XrPath pro = game.path("/interaction_profiles/facebook/touch_controller_pro");
+  REQUIRE(game.suggest("/interaction_profiles/facebook/touch_controller_pro",
+                       {{pro_a, game.path("/user/hand/right/input/a/click")}}) == XR_SUCCESS);
+  game.start();
+  CHECK(game.current(1) == pro);
+  MockXrScript script{};
+  script.right.primary = true;
+  CHECK(game.pressed(pro_a, script));
+}
+
+TEST_CASE("A game's own suggestion for the host's controller keeps its bindings and profile after its Touch one") {
+  venture::test::ScopedMenuMode automatic("");
+  ScopedControls defaults("");
+  const char* index = "/interaction_profiles/valve/index_controller";
+  OpenXrGame game(index);
+  const XrAction own = game.action("index_b"), touch_only = game.action("touch_x");
+  // The game's Index binding: its action on B. Its later Touch suggestion puts the
+  // same action on A and adds one the Index suggestion leaves out.
+  REQUIRE(game.suggest(index, {{own, game.path("/user/hand/right/input/b/click")}}) == XR_SUCCESS);
+  REQUIRE(game.suggest("/interaction_profiles/oculus/touch_controller",
+                       {{own, game.path("/user/hand/right/input/a/click")},
+                        {touch_only, game.path("/user/hand/left/input/x/click")}}) == XR_SUCCESS);
+  game.start();
+  CHECK(game.current(1) == game.path(index));
+  MockXrScript script{};
+  script.right.secondary = true;
+  CHECK(game.pressed(own, script));
+  script = {};
+  script.right.primary = true;
+  CHECK_FALSE(game.pressed(own, script));
+  script = {};
+  script.left.primary = true;
+  CHECK(game.pressed(touch_only, script));
 }
 
 // Run by hand against a real runtime (not in ctest):

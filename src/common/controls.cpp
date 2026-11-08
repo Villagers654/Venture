@@ -87,16 +87,20 @@ Resolved resolve(const Profile& p, const Choice* choice) {
   auto& m = r.menu;
   switch (menu.mode) {
     case MenuMode::automatic:
+      // The controller's menu input where the runtime lets the game have it, and
+      // both stick clicks (the Stick click rows, as the player put them) where it
+      // does not: the two work side by side, so no runtime is left without a menu.
       m.automatic = true;
-      if (p.menu_path.empty()) {
-        m.kind = Menu::Kind::synthesized;
-        m.sources = {std::string(hand_root(0)) + "/input/thumbstick/click",
-                     std::string(hand_root(1)) + "/input/thumbstick/click"};
-        m.hold_ns = std::int64_t(kChordHoldMs) * 1'000'000;
-      } else {
-        m.kind = Menu::Kind::direct;
-        m.direct = p.menu_path;
+      m.kind = p.menu_path.empty() ? Menu::Kind::synthesized : Menu::Kind::direct;
+      m.direct = p.menu_path;
+      for (int hand = 0; hand < 2; ++hand)
+        if (const auto& click = r.rows[size_t(hand)][size_t(Quest::stick_click)]; !click.empty())
+          m.sources.push_back(std::string(hand_root(hand)) + click);
+      if (m.sources.size() < 2) {
+        m.sources.clear();
+        if (m.kind == Menu::Kind::synthesized) m.kind = Menu::Kind::off;
       }
+      m.hold_ns = std::int64_t(kChordHoldMs) * 1'000'000;
       break;
     case MenuMode::button:
       if (const auto parts = split(menu.first); parts && parts->first == 0) {
@@ -287,8 +291,8 @@ Config migrate_menu_button(int menu_button) {
       choice.menu = {MenuMode::chord, std::string(hand_root(0)) + "/input/thumbstick/click",
                      std::string(hand_root(1)) + "/input/thumbstick/click", kChordHoldMs};
     } else {
-      // The controller's own left menu button (Touch's too, though its default is
-      // the stick clicks), else its automatic input, else none.
+      // The controller's own left menu button (without the default's stick
+      // clicks beside it), else its automatic input, else none.
       const auto* own = find_input(p, "/input/menu/click");
       const std::string_view button =
           own && !own->reserved && on_hand(*own, 0) ? own->path : p.menu_path;

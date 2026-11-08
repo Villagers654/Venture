@@ -42,7 +42,10 @@ XrResult suggest_with_menu_chord(XrInstance, const XrInteractionProfileSuggested
 XrResult attach_with_menu_chord(XrSession, const XrSessionActionSetsAttachInfo*);
 XrResult sync_with_menu_chord(XrSession, const XrActionsSyncInfo*);
 void register_menu_action(XrActionSet, XrAction);
-void forget_menu_object(std::uintptr_t);
+// A destroyed action or action set. Handles are unique only within their type (VDXR
+// numbers each type from 1), so a destroyed space or swapchain never matches one.
+void forget_menu_action(XrAction);
+void forget_menu_action_set(XrActionSet);
 void reset_menu_session(XrSession);
 void menu_action_state(XrSession, const XrActionStateGetInfo*, XrActionStateBoolean*);
 bool menu_chord_pulse(XrSession);

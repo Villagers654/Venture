@@ -307,7 +307,11 @@ void remove_obb_aliases(const fs::path &data, std::string_view package,
       continue;
     auto root = account_data_dir(data, key, package, pin);
     const auto view = root / "external/Android/obb" / paths::from_utf8(package);
-    if (fs::exists(view) && paths::within(root, view)) remove_tree(root, view);
+    // With the games folder on another drive the view is a junction to the
+    // install's own .obb folder (obb_view_for): remove the link itself
+    // (remove_tree never follows one), also when its target is already gone.
+    if (is_link(view)) remove_tree(root, view);
+    else if (fs::exists(view) && paths::within(root, view)) remove_tree(root, view);
     for (const auto& sidecar : {obb_copy_sidecar(view), obb_published_sidecar(view)})
       if (paths::within(root, sidecar)) remove_tree(root, sidecar);
     // Legacy Java OBB aliases are under external-data/files (some engines open

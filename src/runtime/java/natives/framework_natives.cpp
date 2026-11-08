@@ -212,9 +212,19 @@ android::AssetStream* asset_stream(jlong handle) {
 
 jlong JNICALL open_asset_stream(JNIEnv* env, jclass, jstring path) {
   return guarded(env, [&]() -> jlong {
-    auto stream = android::PackageAssets::get().open(utf8(env, path));
+    const auto name = utf8(env, path);
+    auto stream = android::PackageAssets::get().open(name);
     if (!stream) {
-      fail(env, "java/io/FileNotFoundException", "Package asset not found");
+      // Android's AssetManager.open throws FileNotFoundException naming the
+      // asset, and logs nothing: games probe optional assets (Unreal's
+      // GameActivity reads its config rules). Not an error, so it must never be
+      // a stopped game's "last error" (Pinball FX VR's report quoted it).
+      venture::log::debug("framework", "Package asset not found: {}", name);
+      if (!env->ExceptionCheck())
+        if (auto cls = env->FindClass("java/io/FileNotFoundException")) {
+          env->ThrowNew(cls, name.c_str());
+          env->DeleteLocalRef(cls);
+        }
       return 0;
     }
     if (stream->length() > INT64_MAX) {

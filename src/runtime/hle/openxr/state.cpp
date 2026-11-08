@@ -66,7 +66,8 @@ void forget_action_states(bool all) {
 }
 void forget_object(const ObjectKey& value) {
   forget_action_states(true);
-  venture::xr::forget_menu_object(value.second);
+  if (value.first == "XrAction") venture::xr::forget_menu_action(reinterpret_cast<XrAction>(value.second));
+  else if (value.first == "XrActionSet") venture::xr::forget_menu_action_set(reinterpret_cast<XrActionSet>(value.second));
   std::vector<ObjectKey> children;
   for (const auto &[h, o] : state().objects)
     if (o.parent == value.second && o.parent_type == value.first)

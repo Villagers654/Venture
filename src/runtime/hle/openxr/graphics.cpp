@@ -175,6 +175,24 @@ std::int64_t vk_to_gl(std::int64_t format) {
       return gl;
   return 0;
 }
+std::vector<std::int64_t> gles_swapchain_formats(const std::vector<std::int64_t>& host) {
+  std::vector<std::int64_t> gl;
+  for (auto f : host)
+    if (auto translated = vk_to_gl(f)) gl.push_back(translated);
+  // A Quest lists GL_RGBA8 and GL_SRGB8_ALPHA8 for GLES sessions; SteamVR lists
+  // no R8G8B8A8_UNORM, AMD hosts other orders. create_swapchain takes either
+  // through any host 8-bit RGBA chain with a converting copy, so both are listed
+  // (after the host's own order). Unity's OpenXR plugin, which picks a color
+  // format from this list, ended the session without them.
+  const auto rgba8 = [](std::int64_t f) {
+    return f == VK_FORMAT_R8G8B8A8_UNORM || f == VK_FORMAT_B8G8R8A8_UNORM ||
+           f == VK_FORMAT_R8G8B8A8_SRGB || f == VK_FORMAT_B8G8R8A8_SRGB;
+  };
+  if (std::any_of(host.begin(), host.end(), rgba8))
+    for (std::int64_t f : {0x8c43, 0x8058})
+      if (std::find(gl.begin(), gl.end(), f) == gl.end()) gl.push_back(f);
+  return gl;
+}
 XrResult convert_color_image(Swapchain& r, std::uint32_t index, XrColorSpaceFB space,
                              bool external_queue_held, bool force_opaque, float underlay_opacity, bool premultiply,
                              const std::array<float, 3>* key) {
@@ -448,9 +466,7 @@ XrResult xrEnumerateSwapchainFormats(XrSession handle, std::uint32_t capacity, s
   formats.resize(n);
   std::vector<std::int64_t> gl;
   if (state().gles) {
-    for (auto f : formats)
-      if (auto translated = vk_to_gl(f))
-        gl.push_back(translated);
+    gl = gles_swapchain_formats(formats);
   } else {
     // Unity's space warp ends the session unless its D24S8 motion depth is offered.
     gl = formats;

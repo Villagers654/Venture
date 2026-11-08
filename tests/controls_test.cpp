@@ -42,26 +42,24 @@ TEST_CASE("Controls defaults use real, free inputs of each controller") {
         CHECK(on_hand(*input, hand));
         CHECK(is_axes(path) == (q == int(Quest::stick)));
       }
-    // The menu: the left input it names, or both stick clicks where there is none.
+    // The menu: the left input it names (if any) and both stick clicks, always.
     CHECK(r.menu.automatic);
+    CHECK(r.menu.sources == std::vector<std::string>{std::string(hand_root(0)) + std::string(p.defaults[0][size_t(Quest::stick_click)]),
+                                                     std::string(hand_root(1)) + std::string(p.defaults[1][size_t(Quest::stick_click)])});
+    CHECK(r.menu.hold_ns == 0);  // pressed together, no hold
     if (p.menu_path.empty()) {
       CHECK(r.menu.kind == Menu::Kind::synthesized);
-      CHECK(r.menu.sources.size() == 2);
-      CHECK(r.menu.hold_ns == 0);  // pressed together, no hold
     } else {
       CHECK(r.menu.kind == Menu::Kind::direct);
+      CHECK(r.menu.direct == p.menu_path);
       const auto* input = find_input(p, p.menu_path);
       REQUIRE(input);
       CHECK(on_hand(*input, 0));
       CHECK_FALSE(input->reserved);
     }
-    // No two Quest inputs share a host input, except a menu on both stick clicks.
-    const auto shared = conflicts(r, MenuMode::automatic);
-    if (p.menu_path.empty()) {
-      CHECK(shared == std::vector<Conflict>{{0, Quest::menu, Quest::stick_click}, {1, Quest::menu, Quest::stick_click}});
-    } else {
-      CHECK(shared.empty());
-    }
+    // No two Quest inputs share a host input, except the menu's stick clicks.
+    CHECK(conflicts(r, MenuMode::automatic) ==
+          std::vector<Conflict>{{0, Quest::menu, Quest::stick_click}, {1, Quest::menu, Quest::stick_click}});
     // Every translated path is one of the controller's inputs (or a pose, haptics or a sensor it has).
     for (const bool dpad : {true, false})
       for (int hand = 0; hand < 2; ++hand)
@@ -86,37 +84,57 @@ TEST_CASE("Controls defaults use real, free inputs of each controller") {
   }
 }
 
-TEST_CASE("Controls put the menu on both stick clicks where a runtime takes the menu button") {
-  // SteamVR's dashboard takes the left menu of Touch-shaped controllers (and the
-  // Cosmos'), so their menu is both stick clicks on every runtime; the others keep
-  // their menu input.
-  const std::set<std::string_view> stick_clicks{kTouch, "/interaction_profiles/meta/touch_controller_plus",
-                                                "/interaction_profiles/facebook/touch_controller_pro",
-                                                "/interaction_profiles/bytedance/pico4_controller",
-                                                "/interaction_profiles/htc/vive_focus3_controller",
-                                                "/interaction_profiles/htc/vive_cosmos_controller", kGeneric};
+TEST_CASE("Controls open the menu with the menu button and both stick clicks on every runtime") {
+  // Some runtimes keep the left menu button of Touch-shaped controllers (SteamVR's
+  // dashboard), others give it to the game (Meta, Virtual Desktop, Pico, Monado):
+  // the default binds the button where the host lets the game have it and adds both
+  // stick clicks pressed together beside it, so one default works everywhere.
+  const std::set<std::string_view> menu_button{kTouch, "/interaction_profiles/meta/touch_controller_plus",
+                                               "/interaction_profiles/facebook/touch_controller_pro",
+                                               "/interaction_profiles/bytedance/pico4_controller",
+                                               "/interaction_profiles/htc/vive_focus3_controller",
+                                               "/interaction_profiles/htc/vive_cosmos_controller",
+                                               "/interaction_profiles/hp/mixed_reality_controller",
+                                               "/interaction_profiles/microsoft/motion_controller", kVive};
   for (const auto& p : kProfiles) {
     CAPTURE(p.path);
     const auto r = resolve(p, nullptr);
-    CHECK(p.menu_path.empty() == stick_clicks.contains(p.path));
-    if (!stick_clicks.contains(p.path)) continue;
-    CHECK(r.menu.kind == Menu::Kind::synthesized);
-    CHECK(r.menu.sources == std::vector<std::string>{"/user/hand/left/input/thumbstick/click",
-                                                     "/user/hand/right/input/thumbstick/click"});
-    CHECK(r.menu.hold_ns == 0);
-    CHECK(p.menu_label == "Both stick clicks");
-    CHECK_FALSE(host_binding("/user/hand/left/input/menu/click", p, r, true));
+    CHECK((p.menu_path == "/input/menu/click") == menu_button.contains(p.path));
+    if (!menu_button.contains(p.path)) continue;
+    CHECK(r.menu.kind == Menu::Kind::direct);
+    CHECK(p.menu_label == "Left menu button");
+    CHECK(host_binding("/user/hand/left/input/menu/click", p, r, true) == "/user/hand/left/input/menu/click");
+    CHECK_FALSE(host_binding("/user/hand/right/input/menu/click", p, r, true));
   }
+  const auto touch = resolve(profile(kTouch), nullptr);
+  CHECK(touch.menu.sources == std::vector<std::string>{"/user/hand/left/input/thumbstick/click",
+                                                       "/user/hand/right/input/thumbstick/click"});
+  // The generic controller has no menu button: both stick clicks alone.
+  const auto generic = resolve(profile(kGeneric), nullptr);
+  CHECK(generic.menu.kind == Menu::Kind::synthesized);
+  CHECK(generic.menu.sources.size() == 2);
+  CHECK_FALSE(host_binding("/user/hand/left/input/menu/click", profile(kGeneric), generic, true));
+  // The stick clicks follow the Stick click rows: the Vive's are the trackpad centers.
+  CHECK(resolve(profile(kVive), nullptr).menu.sources ==
+        std::vector<std::string>{"/user/hand/left/input/trackpad/dpad_center", "/user/hand/right/input/trackpad/dpad_center"});
   CHECK(profile(kIndex).menu_path == "/input/trackpad/force");
   CHECK(profile("/interaction_profiles/valve/frame_controller_valve").menu_path == "/input/view/click");
   CHECK(profile("/interaction_profiles/mndx/pssense_controller_mndx").menu_path == "/input/share_mndx/click");
-  // A player may still pick the left menu button itself.
+  // A player's own choice replaces both: the left menu button alone, or both stick clicks alone.
   Choice c;
   c.menu = {MenuMode::button, "/user/hand/left/input/menu/click", {}, kHoldMs};
   const auto chosen = resolve(profile(kTouch), &c);
   CHECK(chosen.menu.kind == Menu::Kind::direct);
+  CHECK_FALSE(chosen.menu.automatic);
+  CHECK(chosen.menu.sources.empty());
   CHECK(host_binding("/user/hand/left/input/menu/click", profile(kTouch), chosen, true) ==
         "/user/hand/left/input/menu/click");
+  c.menu = {MenuMode::chord, "/user/hand/left/input/thumbstick/click", "/user/hand/right/input/thumbstick/click",
+            kChordHoldMs};
+  const auto chord = resolve(profile(kTouch), &c);
+  CHECK(chord.menu.kind == Menu::Kind::synthesized);
+  CHECK_FALSE(chord.menu.automatic);
+  CHECK_FALSE(host_binding("/user/hand/left/input/menu/click", profile(kTouch), chord, true));
 }
 
 TEST_CASE("Controls defaults follow each controller's precedent") {
@@ -128,15 +146,13 @@ TEST_CASE("Controls defaults follow each controller's precedent") {
   CHECK_FALSE(bind("/user/hand/right/input/system/click", kIndex));
   CHECK(bind("/user/hand/left/input/thumbstick/x", kIndex) == "/user/hand/left/input/thumbstick/x");
   CHECK(bind("/user/hand/right/output/haptic", kIndex) == "/user/hand/right/output/haptic");
-  // Touch is identity but for the menu (both stick clicks, so never bound); Pro's
-  // extra sensors are not ordinary Touch controls.
+  // Touch is identity (the menu on the left only); Pro's extra sensors are not
+  // ordinary Touch controls.
   for (auto guest : kGuestPaths)
-    if (!std::string_view(guest).starts_with("/input/a") && !std::string_view(guest).starts_with("/input/b") &&
-        guest != "/input/menu/click") {
+    if (!std::string_view(guest).starts_with("/input/a") && !std::string_view(guest).starts_with("/input/b")) {
       const std::string left = "/user/hand/left" + std::string(guest);
       CHECK(bind(left, kTouch) == left);
     }
-  CHECK_FALSE(bind("/user/hand/left/input/menu/click", kTouch));
   CHECK_FALSE(bind("/user/hand/right/input/menu/click", kTouch));
   CHECK_FALSE(bind("/user/hand/left/input/trigger/proximity_fb", kTouch));
   // Vive: trackpad halves for the face buttons, the center for the stick click.
@@ -172,16 +188,14 @@ TEST_CASE("Controls defaults follow each controller's precedent") {
   CHECK(bind("/user/hand/left/input/x/click", kSense) == "/user/hand/left/input/square_mndx/click");
   CHECK(bind("/user/hand/right/input/b/click", kSense) == "/user/hand/right/input/circle_mndx/click");
   CHECK(bind("/user/hand/left/input/menu/click", kSense) == "/user/hand/left/input/share_mndx/click");
-  // Touch-shaped controllers are identity; only the G2's menu button stays the menu.
+  // Touch-shaped controllers are identity, the left menu button included.
   for (auto host : {"/interaction_profiles/htc/vive_cosmos_controller", "/interaction_profiles/htc/vive_focus3_controller",
                     "/interaction_profiles/hp/mixed_reality_controller", "/interaction_profiles/bytedance/pico4_controller"}) {
     CAPTURE(host);
     for (auto guest : {"/user/hand/left/input/x/click", "/user/hand/left/input/y/click", "/user/hand/right/input/a/click",
                        "/user/hand/right/input/b/click"})
       CHECK(bind(guest, host) == guest);
-    const bool hp = std::string_view(host) == "/interaction_profiles/hp/mixed_reality_controller";
-    CHECK(bind("/user/hand/left/input/menu/click", host) ==
-          (hp ? std::optional<std::string>("/user/hand/left/input/menu/click") : std::nullopt));
+    CHECK(bind("/user/hand/left/input/menu/click", host) == "/user/hand/left/input/menu/click");
   }
 }
 
@@ -239,7 +253,9 @@ TEST_CASE("Controls choices move, clear and refuse inputs") {
   shared.rows[0][int(Quest::grip)] = "/input/trigger/value";
   const auto s = resolve(profile(kIndex), &shared);
   CHECK(bind("/user/hand/left/input/squeeze/value", kIndex, &shared) == "/user/hand/left/input/trigger/value");
-  CHECK(conflicts(s, MenuMode::automatic) == std::vector<Conflict>{{0, Quest::trigger, Quest::grip}});
+  CHECK(conflicts(s, MenuMode::automatic) == std::vector<Conflict>{{0, Quest::menu, Quest::stick_click},
+                                                                   {0, Quest::trigger, Quest::grip},
+                                                                   {1, Quest::menu, Quest::stick_click}});
 }
 
 TEST_CASE("Controls menu choices resolve to a binding or a synthesized press") {

@@ -1465,6 +1465,21 @@ public final class FrameworkTest {
           android.content.pm.PackageManager.VERSION_CODE_HIGHEST), 0);
       check(false, "an absent versioned package is not found");
     } catch (android.content.pm.PackageManager.NameNotFoundException expected) {}
+    // API 33's long-flag queries (AndroidX ProfileInstaller in Pinball FX VR).
+    check(packageManager.getPackageInfo("test.intent",
+              android.content.pm.PackageManager.PackageInfoFlags.of(0)).packageName.equals("test.intent")
+            && packageManager.getApplicationInfo("test.intent",
+                   android.content.pm.PackageManager.ApplicationInfoFlags.of(0)) != null
+            && packageManager.getInstalledPackages(
+                   android.content.pm.PackageManager.PackageInfoFlags.of(0)).size() == 1
+            && packageManager.getActivityInfo(new android.content.ComponentName("test.intent", "test.intent.Main"),
+                   android.content.pm.PackageManager.ComponentInfoFlags.of(0)) != null
+            && android.content.pm.PackageManager.PackageInfoFlags.of(128).getValue() == 128,
+        "API 33 PackageInfoFlags, ApplicationInfoFlags and ComponentInfoFlags queries answer as the int forms");
+    try {
+      packageManager.getPackageInfo("com.example.other", android.content.pm.PackageManager.PackageInfoFlags.of(0));
+      check(false, "another package is not found through PackageInfoFlags");
+    } catch (android.content.pm.PackageManager.NameNotFoundException expected) {}
     var parcel = android.os.Parcel.obtain();
     new android.content.ComponentName("test.intent", ".Main").writeToParcel(parcel, 0);
     parcel.setDataPosition(0);
