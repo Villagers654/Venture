@@ -721,6 +721,42 @@ TEST_CASE("the game's audio on the PC is off by default, on globally or per game
   paths::atomic_write(d.root / "settings.json", json.dump());
   CHECK(library::Settings::load(d.root).display.pc_audio == "off");
 }
+TEST_CASE("the performance overlay is off by default, on globally or per game") {
+  Directory d;
+  auto settings = library::Settings::defaults(d.root);
+  CHECK(settings.display.overlay == "off");
+  CHECK(library::overlay_environment(settings.display) == "off");
+  CHECK(library::game_display_defaults().overlay.empty());
+  settings.display.overlay = "on";
+  auto off = library::game_display_defaults();
+  off.overlay = "off";
+  settings.game_display["1"] = off;
+  settings.game_display["2"] = library::game_display_defaults();
+  settings.save(d.root);
+  auto json = paths::read_json(d.root / "settings.json");
+  CHECK(json["display"]["overlay"] == "on");
+  CHECK(json["gameDisplay"]["1"]["overlay"] == "off");
+  auto loaded = library::Settings::load(d.root);
+  CHECK(library::overlay_environment(library::effective_display(loaded.display, nullptr)) == "on");
+  CHECK(library::overlay_environment(library::effective_display(loaded.display, &loaded.game_display["1"])) == "off");
+  CHECK_FALSE(loaded.game_display.contains("2"));
+  // Globally off, one game on.
+  loaded.display.overlay = "off";
+  auto on = library::game_display_defaults();
+  on.overlay = "on";
+  CHECK(library::overlay_environment(library::effective_display(loaded.display, &on)) == "on");
+  // Settings from before the choice, and unknown values, load as off.
+  json["display"] = {{"mirror", "full"}};
+  json["gameDisplay"] = {{"3", {{"overlay", "maybe"}, {"mirror", "full"}}}};
+  paths::atomic_write(d.root / "settings.json", json.dump());
+  loaded = library::Settings::load(d.root);
+  CHECK(loaded.display.overlay == "off");
+  REQUIRE(loaded.game_display.contains("3"));
+  CHECK(loaded.game_display["3"].overlay.empty());
+  json["display"] = {{"overlay", true}};
+  paths::atomic_write(d.root / "settings.json", json.dump());
+  CHECK(library::Settings::load(d.root).display.overlay == "off");
+}
 TEST_CASE("a game's texture compression follows the global one unless it picks its own") {
   Directory d;
   auto settings = library::Settings::defaults(d.root);

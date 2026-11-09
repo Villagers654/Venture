@@ -75,6 +75,21 @@ with tempfile.TemporaryDirectory(prefix="venture-settings-cli-") as temporary:
     (root / "settings.json").write_text(json.dumps(settings))
     assert launched_pc_audio() == "on"
     env.pop("VENTURE_PC_AUDIO")
+    # VENTURE_STATS_OVERLAY reaches the runtime: off by default, the global choice, then a game's own.
+    def launched_overlay():
+        env["VENTURE_STATS_OVERLAY"] = "inherited"  # the launcher's value wins
+        result = command("play", "org.venture.passthrough", "--as", "local")
+        assert result["exitCode"] == 0, result
+        return json.loads((install / "launch-options.json").read_text())["overlay"]
+    assert launched_overlay() == "off"
+    run("set", "overlay", "on")
+    assert launched_overlay() == "on"
+    run("set", "overlay", "off")
+    settings = json.loads((root / "settings.json").read_text())
+    settings["gameDisplay"] = {"org.venture.passthrough": {"overlay": "on"}}
+    (root / "settings.json").write_text(json.dumps(settings))
+    assert launched_overlay() == "on"
+    env.pop("VENTURE_STATS_OVERLAY")
     # VENTURE_TEXTURE_COMPRESSION(_THRESHOLD) reach the runtime: the global choice, then a
     # game's own over it. Always is the runtime's default and sets neither.
     env.pop("VENTURE_TEXTURE_COMPRESSION", None)
@@ -101,4 +116,4 @@ with tempfile.TemporaryDirectory(prefix="venture-settings-cli-") as temporary:
     assert settings["textureCompression"] == 1 and settings["textureCompressionThreshold"] == 50
     run("set", "steam-frame-passthrough", "on")  # legacy command remains usable
     assert run()["passthrough"] is True
-print("PASS saved mixed reality, PC audio and texture compression settings and actual launcher-to-child environment")
+print("PASS saved mixed reality, PC audio, performance overlay and texture compression settings and actual launcher-to-child environment")

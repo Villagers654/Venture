@@ -313,6 +313,7 @@ void settings_section(std::string &out, const fs::path &data, const std::string 
       if (!game->mirror.empty()) lines += std::format("  mirror: {}\n", game->mirror);
       if (!game->mirror_eye.empty()) lines += std::format("  mirror eye: {}\n", game->mirror_eye);
       if (!game->pc_audio.empty()) lines += std::format("  PC audio: {}\n", game->pc_audio);
+      if (!game->overlay.empty()) lines += std::format("  performance overlay: {}\n", game->overlay);
       if (!game->texture_compression.empty())
         lines += std::format("  texture compression: {}\n", game->texture_compression);
       if (game->texture_compression_threshold)
@@ -344,6 +345,8 @@ void settings_section(std::string &out, const fs::path &data, const std::string 
                      source(game && !game->mirror_eye.empty(), s.display.mirror_eye == global.mirror_eye));
   out += std::format("  PC audio: {} ({})\n", library::pc_audio_environment(display),
                      source(game && !game->pc_audio.empty(), s.display.pc_audio == global.pc_audio));
+  out += std::format("  performance overlay: {} ({})\n", library::overlay_environment(display),
+                     source(game && !game->overlay.empty(), s.display.overlay == global.overlay));
   {
     // As the runtime reads them (texture.cpp): unset is always, a threshold
     // outside 1-100 is 50%.

@@ -169,7 +169,8 @@ App::App(Options options) : Core(std::move(options)) {
   }
   if (options_.smoke_view.starts_with("game-settings-override") && !options_.smoke_select.empty())
     settings_.game_display[options_.smoke_select] = {.resolution = "quest3", .rate = "144", .mirror = "full", .mirror_eye = "right",
-                                                     .pc_audio = "on", .texture_compression = "auto", .texture_compression_threshold = 75};
+                                                     .pc_audio = "on", .overlay = "on", .texture_compression = "auto",
+                                                     .texture_compression_threshold = 75};
   if (options_.smoke_view == "account")
     page_ = 3;
   if (options_.smoke_view.starts_with("controls"))

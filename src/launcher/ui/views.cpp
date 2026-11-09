@@ -2461,6 +2461,27 @@ void App::draw_display_rows(library::DisplaySettings& d, bool per_game, const ch
       changed = true;
     }
   });
+#ifdef _WIN32
+  divider();
+  // The in-headset performance overlay (src/runtime/xr/stats_overlay.h), off by
+  // default; the runtime draws it on Windows only.
+  // i18n: Settings row: show frame rates, eye sizes and PC load in the headset while playing.
+  setting_row(tr("Performance overlay"), "", dw, s(38), [&] {
+    std::vector<std::string> ids{"off", "on"};
+    // i18n: Choices for "Performance overlay".
+    std::vector<std::string> names{tr("Off"), tr("On")};
+    if (per_game) {
+      ids.insert(ids.begin(), "");
+      names.insert(names.begin(), tr("Use global setting"));
+    }
+    const auto items = pointers(names);
+    int choice = index(ids, d.overlay);
+    if (dropdown("overlay", "", items.data(), int(items.size()), &choice, dw)) {
+      d.overlay = ids[choice];
+      changed = true;
+    }
+  });
+#endif
   ImGui::PopID();
   if (changed) action([this] { save_settings(); });
 }

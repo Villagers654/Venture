@@ -885,6 +885,8 @@ std::vector<std::pair<std::string, std::string>> launch_environment(const Settin
   environment.push_back({"VENTURE_MIRROR_EYE", mirror_eye_environment(display)});
   // The game's audio on the PC too; off by default.
   environment.push_back({"VENTURE_PC_AUDIO", pc_audio_environment(display)});
+  // The in-headset performance overlay; off by default.
+  environment.push_back({"VENTURE_STATS_OVERLAY", overlay_environment(display)});
   return environment;
 }
 } // namespace venture::library

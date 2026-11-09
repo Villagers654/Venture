@@ -24,6 +24,7 @@ DisplaySettings game_display_defaults() {
   d.mirror.clear();
   d.mirror_eye.clear();
   d.pc_audio.clear();
+  d.overlay.clear();
   return d;
 }
 
@@ -38,6 +39,7 @@ DisplaySettings display_from_json(const Json &j, bool per_game) {
   if (const auto mirror = str(j, "mirror"); mirror == "cropped" || mirror == "full" || mirror == "off") d.mirror = mirror;
   if (const auto eye = str(j, "mirrorEye"); eye == "left" || eye == "right") d.mirror_eye = eye;
   if (const auto pc = str(j, "pcAudio"); pc == "on" || pc == "off") d.pc_audio = pc;
+  if (const auto o = str(j, "overlay"); o == "on" || o == "off") d.overlay = o;
   // A game's texture compression; the global one is a top-level setting.
   if (const auto mode = str(j, "textureCompression");
       per_game && std::ranges::find(texture_compression_modes, mode) != std::end(texture_compression_modes))
@@ -60,7 +62,7 @@ DisplaySettings display_from_json(const Json &j, bool per_game) {
 
 Json display_to_json(const DisplaySettings &d) {
   Json j{{"resolution", d.resolution}, {"percent", d.percent}, {"frameRate", d.rate}, {"customFrameRate", d.custom_rate},
-         {"mirror", d.mirror}, {"mirrorEye", d.mirror_eye}, {"pcAudio", d.pc_audio}};
+         {"mirror", d.mirror}, {"mirrorEye", d.mirror_eye}, {"pcAudio", d.pc_audio}, {"overlay", d.overlay}};
   // Only a game's own choice; the global settings keep none here.
   if (!d.texture_compression.empty()) j["textureCompression"] = d.texture_compression;
   if (d.texture_compression_threshold) j["textureCompressionThreshold"] = d.texture_compression_threshold;
@@ -87,6 +89,7 @@ DisplaySettings effective_display(const DisplaySettings &global, const DisplaySe
   if (!game->mirror.empty()) d.mirror = game->mirror;
   if (!game->mirror_eye.empty()) d.mirror_eye = game->mirror_eye;
   if (!game->pc_audio.empty()) d.pc_audio = game->pc_audio;
+  if (!game->overlay.empty()) d.overlay = game->overlay;
   return d;
 }
 
@@ -112,6 +115,8 @@ std::string mirror_environment(const DisplaySettings &d) {
 std::string mirror_eye_environment(const DisplaySettings &d) { return d.mirror_eye == "right" ? "right" : "left"; }
 
 std::string pc_audio_environment(const DisplaySettings &d) { return d.pc_audio == "on" ? "on" : "off"; }
+
+std::string overlay_environment(const DisplaySettings &d) { return d.overlay == "on" ? "on" : "off"; }
 
 std::pair<std::string, int> texture_compression_environment(int global_mode, int global_threshold,
                                                             const DisplaySettings *game) {

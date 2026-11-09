@@ -101,7 +101,7 @@ TEST_CASE("debug report: the game's overrides, effective settings and launch env
   std::ofstream(data / "settings.json")
       << R"({"textureCompression": 1, "keepTranslatedCode": false, "vulkanLayers": ["VK_LAYER_reshade*"],
              "display": {"mirror": "full"},
-             "gameDisplay": {"1234": {"resolution": "quest3", "pcAudio": "on"},
+             "gameDisplay": {"1234": {"resolution": "quest3", "pcAudio": "on", "overlay": "on"},
                              "5678": {"textureCompression": "auto", "textureCompressionThreshold": 70}},
              "controls": {"games": {"1234": {}}}})";
   auto report = [&](std::string app_id) {
@@ -112,11 +112,12 @@ TEST_CASE("debug report: the game's overrides, effective settings and launch env
   };
   auto text = report("1234");
   CHECK(text.find("=== Settings for this game ===") != std::string::npos);
-  CHECK(text.find("Game overrides:\n  resolution: 1680x1760\n  PC audio: on\n  controls: ") != std::string::npos);
+  CHECK(text.find("Game overrides:\n  resolution: 1680x1760\n  PC audio: on\n  performance overlay: on\n  controls: ") != std::string::npos);
   CHECK(text.find("  resolution: Quest 3 (1680x1760) (game override)") != std::string::npos);
   CHECK(text.find("  frame rate: the host runtime's rate (global default)") != std::string::npos);
   CHECK(text.find("  mirror: full (global setting), eye left (global default)") != std::string::npos);
   CHECK(text.find("  PC audio: on (game override)") != std::string::npos);
+  CHECK(text.find("  performance overlay: on (game override)") != std::string::npos);
   CHECK(text.find("  texture compression: Automatic (global setting), threshold 50% (global default)") !=
         std::string::npos);
   CHECK(text.find("  controls: the game's own") != std::string::npos);
@@ -135,6 +136,7 @@ TEST_CASE("debug report: the game's overrides, effective settings and launch env
   CHECK(text.find("  texture compression: Automatic (game override), threshold 70% (game override)") !=
         std::string::npos);
   CHECK(text.find("  controls: the global controls") != std::string::npos);
+  CHECK(text.find("  performance overlay: off (global default)") != std::string::npos);
 
   text = report("");
   CHECK(text.find("Game overrides: (game not identified; the global settings apply)") != std::string::npos);

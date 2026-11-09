@@ -34,7 +34,7 @@ add_library(venture_xr_capture STATIC capture.cpp)
 target_include_directories(venture_xr_capture PUBLIC ${PROJECT_SOURCE_DIR}/src/runtime)
 target_link_libraries(venture_xr_capture PUBLIC Vulkan::Headers OpenXR::headers PRIVATE zlibstatic)
 
-add_library(venture_xr STATIC passthrough_source.cpp passthrough_source_sbn1.cpp color_space.cpp color_images.cpp sphere_images.cpp guest_images.cpp desktop_mirror.cpp dev_dump.cpp session.cpp clock.cpp reference_spaces.cpp menu_chord.cpp bindings.cpp hands.cpp angle_images.cpp haptic_output.cpp haptic_sequence.cpp
+add_library(venture_xr STATIC passthrough_source.cpp passthrough_source_sbn1.cpp color_space.cpp stats_overlay.cpp color_images.cpp sphere_images.cpp guest_images.cpp desktop_mirror.cpp dev_dump.cpp session.cpp clock.cpp reference_spaces.cpp menu_chord.cpp bindings.cpp hands.cpp angle_images.cpp haptic_output.cpp haptic_sequence.cpp
   ../hle/openxr/state.cpp ../hle/openxr/openxr.cpp ../hle/openxr/graphics.cpp
   ../hle/openxr/extensions.cpp ../hle/openxr/actions.cpp ../hle/openxr/register.cpp ../hle/openxr/hands.cpp
   ../hle/openxr/spaces.cpp ../hle/openxr/haptics.cpp
@@ -103,3 +103,7 @@ foreach(color_shader IN ITEMS vert frag ms_frag passthrough_frag passthrough_ms_
   target_sources(venture_xr PRIVATE ${color_generated}/color_${color_shader}.inc)
 endforeach()
 target_include_directories(venture_xr PRIVATE ${color_generated})
+# The performance overlay (stats_overlay.cpp): PDH for GPU load without NVML.
+if(WIN32)
+  target_link_libraries(venture_xr PRIVATE pdh)
+endif()
