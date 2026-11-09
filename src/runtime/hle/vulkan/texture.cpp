@@ -1597,6 +1597,51 @@ VkResult VKAPI_CALL bind_images(VkDevice d, std::uint32_t count, const VkBindIma
   }
   return VK_SUCCESS;
 }
+// Quest memory is all CPU-visible and device-local, so games put their staging and
+// per-frame buffers in a DEVICE_LOCAL|HOST_VISIBLE type. On a discrete GPU without Resizable
+// BAR that type is a 256 MiB window that the VR runtime and streamer share; once it is full the
+// game's request is refused and the game quits (Pinball FX VR on an RTX 4060 under Virtual
+// Desktop). The request is placed in system memory with the same host properties instead,
+// when buffers of every usage accept that type (images in that type are not covered: their
+// allowed types are not known before they are bound).
+VkResult allocate_guest_bar_fallback(VkDevice d, const VkMemoryAllocateInfo& info, const VkAllocationCallbacks* alloc,
+                                     VkDeviceMemory* out, VkResult failure) {
+  for (auto* link = static_cast<const VkBaseInStructure*>(info.pNext); link; link = link->pNext) {
+    if (link->sType == VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO ||
+        link->sType == VK_STRUCTURE_TYPE_MEMORY_PRIORITY_ALLOCATE_INFO_EXT)
+      continue;
+    if (link->sType == VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO &&
+        !reinterpret_cast<const VkMemoryDedicatedAllocateInfo*>(link)->image)
+      continue;
+    return failure;  // dedicated images, imports and exports keep their own type
+  }
+  VkPhysicalDeviceMemoryProperties memory{};
+  const auto physical = device_physical(d);
+  phys<PFN_vkGetPhysicalDeviceMemoryProperties>(physical, "vkGetPhysicalDeviceMemoryProperties")(physical, &memory);
+  if (gfx::bar_fallback_memory_type(memory, info.memoryTypeIndex, ~0u) == memory.memoryTypeCount) return failure;
+  // The types a buffer of any usage may use.
+  VkBufferCreateInfo probe{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+  probe.size = 256;
+  probe.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                VK_BUFFER_USAGE_UNIFORM_TEXEL_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_TEXEL_BUFFER_BIT |
+                VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT |
+                VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT;
+  VkBuffer buffer{};
+  if (vk<PFN_vkCreateBuffer>(d, "vkCreateBuffer")(d, &probe, nullptr, &buffer) != VK_SUCCESS) return failure;
+  VkMemoryRequirements req{};
+  vk<PFN_vkGetBufferMemoryRequirements>(d, "vkGetBufferMemoryRequirements")(d, buffer, &req);
+  vk<PFN_vkDestroyBuffer>(d, "vkDestroyBuffer")(d, buffer, nullptr);
+  const auto type = gfx::bar_fallback_memory_type(memory, info.memoryTypeIndex, req.memoryTypeBits);
+  if (type == memory.memoryTypeCount) return failure;
+  auto copy = info;
+  copy.memoryTypeIndex = type;
+  const auto result = vk<PFN_vkAllocateMemory>(d, "vkAllocateMemory")(d, &copy, alloc, out);
+  static std::atomic<bool> noted{false};
+  if (result == VK_SUCCESS && !noted.exchange(true))
+    log::warn("vulkan", "CPU-visible GPU memory is full (no Resizable BAR); the game's mapped buffers now also use "
+                        "system memory (memory type {} instead of {})", type, info.memoryTypeIndex);
+  return result == VK_SUCCESS ? result : failure;
+}
 VkResult VKAPI_CALL allocate_guest_memory(VkDevice d, const VkMemoryAllocateInfo* info,
                                           const VkAllocationCallbacks* alloc, VkDeviceMemory* out) {
   auto copy = *info;
@@ -1610,7 +1655,8 @@ VkResult VKAPI_CALL allocate_guest_memory(VkDevice d, const VkMemoryAllocateInfo
       link->pNext = next->pNext;
     } else link = next;
   }
-  const auto result = vk<PFN_vkAllocateMemory>(d, "vkAllocateMemory")(d, &copy, alloc, out);
+  auto result = vk<PFN_vkAllocateMemory>(d, "vkAllocateMemory")(d, &copy, alloc, out);
+  if (out_of_memory_result(result)) result = allocate_guest_bar_fallback(d, copy, alloc, out, result);
   if (result == VK_SUCCESS) note_device_memory(1);
   // The guest receives the error as the API defines; the log says why.
   else if (out_of_memory_result(result))

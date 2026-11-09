@@ -197,7 +197,7 @@ static void measure_surface_texture_rate(JNIEnv* env) {
     {std::lock_guard lock(window->lock);frame=window->frame;}
     if(!frame || frame->serial==last_serial)return;
     last_serial=frame->serial;if(frame->image)++gpu_frames;
-    auto late=now_ns()-(start.load()+frame->timestamp_ns);late_ns+=late;late_max_ns=std::max(late_max_ns,late);
+    const std::int64_t late=now_ns()-(start.load()+frame->timestamp_ns);late_ns+=late;late_max_ns=std::max(late_max_ns,late);
     auto begin=clock_type::now();
     env->CallVoidMethod(object,update);REQUIRE_FALSE(env->ExceptionCheck());
     GL_CALL(PFNGLDRAWARRAYSPROC,"glDrawArrays",GL_TRIANGLES,0,3);

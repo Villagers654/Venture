@@ -56,8 +56,10 @@ TEST_CASE("bundled models drawn unturned match their pictures") {
         CAPTURE(spot.input);
         const Anchor* a = find(shot, spot.input);
         REQUIRE(a);
-        // render_controller.py measures node boxes a little differently.
-        CHECK(std::hypot(a->x - spot.x, a->y - spot.y) < 7.f);
+        // render_controller.py measures node boxes a little differently, and a shown
+        // part whose middle is covered (a Cosmos trigger behind its ring) points at
+        // the nearest sample of it that shows, up to 12 picture pixels away.
+        CHECK(std::hypot(a->x - spot.x, a->y - spot.y) < 7.f + 12.f);
         hidden += a->hidden;
       }
       // Most inputs show from the picture's side (the Cosmos ring covers its face
@@ -282,4 +284,26 @@ TEST_CASE("render models a Steam app's driver ships are found in a library Steam
     CHECK(textured * 2 > covered);
   }
   fs::remove_all(root, ec);
+}
+
+TEST_CASE("an input a model lacks is carried over from another model of the same controller") {
+  // SteamVR's Touch model has no thumbrest part; the bundled model does. Carried from the
+  // complete model onto one without it, the thumbrest lands where it was.
+  const Image* image = controller("touch", "left");
+  REQUIRE(image);
+  const ScenePtr full = scene_of(*image);
+  REQUIRE(full);
+  const Shot before = draw(*full, Turn{}, 0.5f, 1, true);
+  const Anchor* expected = find(before, "thumbrest");
+  REQUIRE(expected);
+  const ScenePtr lacking = without_point(full, "thumbrest");
+  CHECK_FALSE(find(draw(*lacking, Turn{}, 0.5f, 1, true), "thumbrest"));
+  const ScenePtr carried = with_points_from(lacking, *full);
+  const Shot after = draw(*carried, Turn{}, 0.5f, 1, true);
+  const Anchor* got = find(after, "thumbrest");
+  REQUIRE(got);
+  // A part's dot moves up to 12 px onto its visible samples; the carried point is a surface vertex.
+  CHECK(std::hypot(got->x - expected->x, got->y - expected->y) < 7.f + 12.f);
+  // Nothing missing: the same scene back.
+  CHECK(with_points_from(full, *full) == full);
 }

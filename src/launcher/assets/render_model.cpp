@@ -8,6 +8,7 @@
 #include <charconv>
 #include <cmath>
 #include <cctype>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <format>
@@ -962,6 +963,35 @@ Shot draw(const Scene& scene, const Turn& turn, float scale, int ss, bool whole)
              dot(at, cam.d)};
     if (point.part >= 0) {
       a.hidden = float(seen[size_t(point.part)]) < 3 * per_pixel;
+      // The dot sits at the middle of the part's bounds, which can fall behind other
+      // geometry (a tracking ring) or in open space beside a curved part. Where the
+      // part shows near that middle the dot moves onto the nearest shown sample of it;
+      // where none of it shows nearby and something stands in front of the middle,
+      // the input is hidden from this side (a Touch trigger behind the grip, its tip
+      // showing far below).
+      if (!a.hidden) {
+        const int sx = int((a.x - x0) * k), sy = int((a.y - y0) * k);
+        const int near = std::max(1, int(k)), reach = std::max(2, int(std::ceil(12 * k)));
+        int best = -1, bx = sx, by = sy;
+        float front = -std::numeric_limits<float>::infinity();
+        for (int yy = std::max(0, sy - reach); yy <= std::min(H - 1, sy + reach); ++yy)
+          for (int xx = std::max(0, sx - reach); xx <= std::min(W - 1, sx + reach); ++xx) {
+            const size_t at = size_t(yy) * W + xx;
+            const int d2 = (xx - sx) * (xx - sx) + (yy - sy) * (yy - sy);
+            if (f.owner[at] == point.part) {
+              if (d2 <= reach * reach && (best < 0 || d2 < best)) best = d2, bx = xx, by = yy;
+            } else if (std::abs(xx - sx) <= near && std::abs(yy - sy) <= near) {
+              front = std::max(front, f.depth[at]);
+            }
+          }
+        if (best > near * near * 2) {
+          a.x = x0 + (float(bx) + 0.5f) / k;
+          a.y = y0 + (float(by) + 0.5f) / k;
+          a.z = f.depth[size_t(by) * W + bx];
+        } else if (best < 0) {
+          a.hidden = std::isfinite(front) && front > a.z + scene.slack;
+        }
+      }
     } else {
       // In front of whatever covers it nearby, give or take the slack.
       const float z = a.z;
@@ -1138,6 +1168,83 @@ ScenePtr bundled_scene(std::span<const unsigned char> glb, float side, float azi
     scene->points.push_back({m.input, -1, at});
   }
   return scene;
+}
+
+ScenePtr without_point(const ScenePtr& scene, std::string_view input) {
+  auto out = std::make_shared<Scene>(*scene);
+  std::erase_if(out->points, [&](const Scene::Point& p) { return p.input == input; });
+  return out;
+}
+ScenePtr with_points_from(const ScenePtr& target, const Scene& donor) {
+  if (!target) return target;
+  auto where = [](const Scene& s, const Scene::Point& p) {
+    return p.part >= 0 ? s.model->parts[size_t(p.part)].center() : p.at;
+  };
+  std::vector<std::pair<V3, V3>> shared;  // donor, target
+  std::vector<const Scene::Point*> missing;
+  for (const auto& d : donor.points) {
+    const auto t = std::ranges::find(target->points, d.input, &Scene::Point::input);
+    if (t != target->points.end()) shared.push_back({where(donor, d), where(*target, *t)});
+    else missing.push_back(&d);
+  }
+  if (missing.empty() || shared.size() < 3) return target;
+  V3 dc{}, tc{};
+  for (auto& [d, t] : shared) dc = dc + d, tc = tc + t;
+  dc = dc * (1.f / float(shared.size())), tc = tc * (1.f / float(shared.size()));
+  // Cross-covariance and spreads; the rotation (or reflection) is the orthogonal
+  // polar factor of H^T, found by Higham's iteration X <- (X + X^-T) / 2.
+  double h[3][3]{}, sd = 0, st = 0;
+  for (auto& [d0, t0] : shared) {
+    const V3 d = d0 - dc, t = t0 - tc;
+    const float dv[3]{d.x, d.y, d.z}, tv[3]{t.x, t.y, t.z};
+    for (int i = 0; i < 3; ++i)
+      for (int j = 0; j < 3; ++j) h[i][j] += double(tv[i]) * dv[j];  // X starts as H^T
+    sd += dot(d, d), st += dot(t, t);
+  }
+  if (sd <= 0 || st <= 0) return target;
+  double x[3][3];
+  std::memcpy(x, h, sizeof x);
+  for (int it = 0; it < 60; ++it) {
+    const double det = x[0][0] * (x[1][1] * x[2][2] - x[1][2] * x[2][1]) -
+                       x[0][1] * (x[1][0] * x[2][2] - x[1][2] * x[2][0]) +
+                       x[0][2] * (x[1][0] * x[2][1] - x[1][1] * x[2][0]);
+    if (std::abs(det) < 1e-18) return target;  // the shared inputs lie on a line
+    double inv_t[3][3];  // (X^-1)^T = cofactor(X) / det
+    for (int i = 0; i < 3; ++i)
+      for (int j = 0; j < 3; ++j) {
+        const int i1 = (i + 1) % 3, i2 = (i + 2) % 3, j1 = (j + 1) % 3, j2 = (j + 2) % 3;
+        inv_t[i][j] = (x[i1][j1] * x[i2][j2] - x[i1][j2] * x[i2][j1]) / det;
+      }
+    double change = 0;
+    for (int i = 0; i < 3; ++i)
+      for (int j = 0; j < 3; ++j) {
+        const double next = 0.5 * (x[i][j] + inv_t[i][j]);
+        change += std::abs(next - x[i][j]);
+        x[i][j] = next;
+      }
+    if (change < 1e-9) break;
+  }
+  const float scale = float(std::sqrt(st / sd));
+  auto carry = [&](V3 p) {
+    const V3 d = p - dc;
+    const V3 r{float(x[0][0] * d.x + x[0][1] * d.y + x[0][2] * d.z), float(x[1][0] * d.x + x[1][1] * d.y + x[1][2] * d.z),
+               float(x[2][0] * d.x + x[2][1] * d.y + x[2][2] * d.z)};
+    return tc + r * scale;
+  };
+  auto out = std::make_shared<Scene>(*target);
+  const auto& v = out->model->mesh.v;
+  for (const auto* d : missing) {
+    const V3 at = carry(where(donor, *d));
+    // Onto the target's surface: its nearest vertex.
+    float best = std::numeric_limits<float>::infinity();
+    V3 on = at;
+    for (const V3& p : v) {
+      const V3 e = p - at;
+      if (const float d2 = dot(e, e); d2 < best) best = d2, on = p;
+    }
+    out->points.push_back({d->input, -1, on});
+  }
+  return out;
 }
 
 }  // namespace venture::launcher::art

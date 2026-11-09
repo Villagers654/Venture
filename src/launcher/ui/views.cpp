@@ -445,7 +445,10 @@ void App::draw_chrome() {
   auto control = [&](const char* id, ImU32 hover) {
     ImVec2 a = ImGui::GetCursorScreenPos();
     bool pressed = ImGui::InvisibleButton(id, button);
-    if (ImGui::IsItemHovered()) dl->AddRectFilled(a, {a.x + button.x, a.y + button.y}, hover);
+    if (ImGui::IsItemHovered()) {
+      dl->AddRectFilled(a, {a.x + button.x, a.y + button.y}, hover);
+      ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+    }
     ImGui::SameLine(0, 0);
     return std::pair{pressed, ImVec2{std::round(a.x + button.x * 0.5f), std::round(a.y + button.y * 0.5f)}};
   };
@@ -776,7 +779,9 @@ void App::draw_library() {
   float art_h = std::round(card_w * 9 / 16);
   float card_h = art_h + std::round(s(58));
   ImVec2 start = ImGui::GetCursorScreenPos();
-  start = {std::round(start.x), std::round(start.y)};
+  // Room above the first row for a hovered card's lift and focus ring (3 + 3 px
+  // plus the 2 px stroke), which the scroll region would otherwise clip.
+  start = {std::round(start.x), std::round(start.y + s(8))};
   ImDrawList* gdl = ImGui::GetWindowDrawList();
   for (size_t i = 0; i < all.size(); ++i) {
     auto& g = all[i];
@@ -1196,7 +1201,7 @@ void App::draw_game_page() {
       const float rows_h = storage->GetFloat(rows_id, 0);
       ImVec2 at = ImGui::GetCursorScreenPos();
       at.y += s(6);
-      if (!stacked && rows_h > 0) at.y = std::max(at.y, bottom - rows_h);
+      if (!stacked && rows_h > 0) at.y = std::max(at.y, std::round(bottom - rows_h));
       ImGui::SetCursorScreenPos(at);
       // The account picker and Open folder share one width and height.
       float control_w = button_width("Open folder", icons::folder);
@@ -1212,7 +1217,11 @@ void App::draw_game_page() {
         draw_mods(partial->directory, partial->plan.package, control_w);
       }
       ImGui::EndGroup();
-      storage->SetFloat(rows_id, ImGui::GetItemRectSize().y);
+      // The rows round their own positions, so their height can differ by a pixel
+      // with where they sit; following that pixel moved them back and forth every
+      // frame. Only a real change of height moves them.
+      const float height = ImGui::GetItemRectSize().y;
+      if (std::abs(height - rows_h) >= 2) storage->SetFloat(rows_id, height);
     }
     if (!stacked && ImGui::GetCursorScreenPos().y < bottom)
       ImGui::Dummy({0, bottom - ImGui::GetCursorScreenPos().y - ImGui::GetStyle().ItemSpacing.y});
@@ -1228,7 +1237,8 @@ void App::draw_game_page() {
           action([&] { request_versions(g); });
         if (tools && steam_sync_allowed_ && settings_.add_games_to_steam) {
           bool in = in_steam(g.id);
-          if (menu_item(in ? "Remove from Steam" : "Add to Steam", 0, false, true))
+          if (menu_item(in ? "Remove from Steam" : "Add to Steam", 0, false, true,
+                        ImTextureID(reinterpret_cast<uintptr_t>(steam_logo(int(std::round(s(16))))))))
             action([&] { set_in_steam(g.id, !in); });
         }
         // The game's data for the account it plays as: its private storage, where
@@ -3377,12 +3387,8 @@ void App::draw_texture_warning() {
     if (clicked < 0 && (ImGui::IsKeyPressed(ImGuiKey_Enter) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter) ||
                         ImGui::IsKeyPressed(ImGuiKey_Escape)))
       clicked = 1;
-    // Change anyway: the change, and the warning is not shown again (saved with it).
-    if (clicked == 0 && texture_warning_)
-      action([this, apply = texture_warning_] {
-        settings_.texture_compression_warned = true;
-        apply();
-      });
+    // Change anyway: the change. The warning comes back with the next change down from Always.
+    if (clicked == 0 && texture_warning_) action(texture_warning_);
     if (clicked >= 0) {
       texture_warning_ = nullptr;
       ImGui::CloseCurrentPopup();
@@ -4221,7 +4227,7 @@ const art::Image* App::controller_image(const controls::Profile& p, int hand) {
   const char* side = hand ? "right" : "left";
   bool pending = false;
   if (const art::Image* image =
-          art::installed_controller(p.render_model, side, data_ / "cache/controllers", [this] { wake(); }, &pending))
+          art::installed_controller(p.render_model, p.art, side, data_ / "cache/controllers", [this] { wake(); }, &pending))
     return image;
   if (const art::Image* image = p.art.empty() ? nullptr : art::controller(p.art, side)) return image;
   return art::controller("generic", side);

@@ -705,8 +705,8 @@ Settings Settings::defaults(const fs::path &data) {
           paths::executable().parent_path() / "venture-runtime", {}, 2, false};
 #endif
 }
-bool Settings::texture_compression_warns(std::string_view before, std::string_view after) const {
-  return !texture_compression_warned && before == "always" && after != "always";
+bool Settings::texture_compression_warns(std::string_view before, std::string_view after) {
+  return before == "always" && after != "always";
 }
 const controls::Config& Settings::controls_for(std::string_view app_id) const {
   const auto it = game_controls.find(std::string(app_id));
@@ -742,7 +742,6 @@ Settings Settings::load(const fs::path &data) {
   s.texture_compression = int(std::min<uint64_t>(2, number(j, "textureCompression")));
   if (auto percent = number(j, "textureCompressionThreshold"); percent >= 10 && percent <= 95)
     s.texture_compression_threshold = int(percent);
-  s.texture_compression_warned = field(j, "textureCompressionWarned") == true;
   if (auto jobs = number(j, "parallelDownloads"); jobs >= 1 && jobs <= 4)
     s.parallel_downloads = int(jobs);
   s.keep_translated_code = field(j, "keepTranslatedCode") != false;
@@ -804,7 +803,6 @@ void Settings::save(const fs::path &data) const {
          {"interfaceSize", interface_size},
          {"textureCompression", texture_compression},
          {"textureCompressionThreshold", texture_compression_threshold},
-         {"textureCompressionWarned", texture_compression_warned},
          {"parallelDownloads", parallel_downloads},
          {"keepTranslatedCode", keep_translated_code},
          {"gameLanguage", game_language},

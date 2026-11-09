@@ -167,7 +167,7 @@ const Image* controller(std::string_view name, std::string_view hand) {
 
 namespace {
 // Bumped when the drawing changes, so cached pictures are drawn again.
-constexpr int kDrawVersion = 3;
+constexpr int kDrawVersion = 4;
 constexpr int kDrawHeight = 720;
 using Pair = std::array<std::unique_ptr<Image>, 2>;
 
@@ -204,7 +204,9 @@ void save(const Image& image, const fs::path& png, const fs::path& spots) {
 }
 
 // Both hands of `model`, drawn as a matched pair (or read from the cache).
-Pair draw_installed(const std::string& model, const fs::path& cache) {
+// Inputs the installed model has no part for (a Touch thumbrest) come from the
+// bundled model `art` of the same controller, when there is one.
+Pair draw_installed(const std::string& model, const std::string& art, const fs::path& cache) {
   auto left = find_render_model(model + "_left"), right = find_render_model(model + "_right");
   if (!left || !right) left = right = find_render_model(model);
   if (!left) return {};
@@ -215,7 +217,7 @@ Pair draw_installed(const std::string& model, const fs::path& cache) {
     stamp += std::format("{}|{}|", paths::utf8(dir),
                          fs::last_write_time(dir / (name + ".json"), ec).time_since_epoch().count());
   }
-  const size_t key = std::hash<std::string>{}(std::format("{}{}", stamp, kDrawVersion));
+  const size_t key = std::hash<std::string>{}(std::format("{}{}|{}", stamp, kDrawVersion, art));
   Pair pair;
   std::array<fs::path, 2> png, spots;
   for (int hand = 0; hand < 2; ++hand) {
@@ -226,9 +228,15 @@ Pair draw_installed(const std::string& model, const fs::path& cache) {
   }
   // The models load again only when the player turns one (cached pictures skip them).
   auto source = std::make_shared<SceneSource>();
-  source->load = [l = *left, r = *right] {
+  source->load = [l = *left, r = *right, art] {
     auto scenes = installed_pair(l, r, View{}, kDrawHeight);
-    return scenes ? *scenes : std::array<ScenePtr, 2>{};
+    if (!scenes) return std::array<ScenePtr, 2>{};
+    for (int hand = 0; hand < 2; ++hand)
+      if (const Image* bundled = art.empty() ? nullptr : controller(art, hand ? "right" : "left");
+          bundled && bundled->source)
+        if (const ScenePtr donor = bundled->source->get(hand == 1))
+          (*scenes)[size_t(hand)] = with_points_from((*scenes)[size_t(hand)], *donor);
+    return *scenes;
   };
   if (!pair[0] || !pair[1]) {
     const ScenePtr scenes[2] = {source->get(false), source->get(true)};
@@ -259,17 +267,17 @@ struct Installed {
 };
 }  // namespace
 
-const Image* installed_controller(std::string_view model, std::string_view hand, const fs::path& cache,
-                                  const std::function<void()>& wake, bool* pending) {
+const Image* installed_controller(std::string_view model, std::string_view art, std::string_view hand,
+                                  const fs::path& cache, const std::function<void()>& wake, bool* pending) {
   static std::mutex lock;
   static std::map<std::string, Installed, std::less<>> drawings;
   if (pending) *pending = false;
   if (model.empty()) return nullptr;
   std::lock_guard guard(lock);
-  auto& d = drawings[std::string(model)];
+  auto& d = drawings[std::format("{}|{}", model, art)];
   if (!d.done && !d.job.valid())
-    d.job = std::async(std::launch::async, [m = std::string(model), cache, wake] {
-      auto pair = draw_installed(m, cache);
+    d.job = std::async(std::launch::async, [m = std::string(model), a = std::string(art), cache, wake] {
+      auto pair = draw_installed(m, a, cache);
       if (wake) wake();
       return pair;
     });
