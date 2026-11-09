@@ -158,6 +158,15 @@ void release_hardware_buffer_device(VkDevice device);
 // Runs for each guest VkDevice before the host vkDestroyDevice, while it is still
 // valid, so other HLE libraries release the objects they created on it.
 void add_device_release_hook(void (*hook)(VkDevice));
+// VENTURE_EXPERIMENTAL_DLSS: per-eye R32F depth resolved from the stereo pass
+// that resolves into `color` (a guest swapchain image), in
+// SHADER_READ_ONLY_OPTIMAL after that pass. False until a pass has recorded it.
+struct StereoDepthViews {
+  std::array<VkImage, 2> images{};
+  std::array<VkImageView, 2> views{};
+  VkExtent2D extent{};
+};
+bool stereo_depth_for_color(VkImage color, StereoDepthViews& out);
 void register_hardware_buffer_allocator();
 
 PFN_vkVoidFunction raw_device_proc(VkDevice device, const char* name);

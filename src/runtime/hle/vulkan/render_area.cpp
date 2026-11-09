@@ -29,6 +29,7 @@
 //   feedback loops are not handled on this path.
 // - Render passes reach the host with the subpass dependencies their
 //   attachment accesses need (subpass_sync.cpp).
+#include "xr/dlss.h"
 #include <algorithm>
 #include <atomic>
 #include <bit>
@@ -45,9 +46,69 @@
 #include "chain.h"
 #include "common/log.h"
 #include "internal.h"
+#include "texture.h"
 
 namespace venture::vulkan {
 namespace {
+template <class F> F raw(VkDevice d, const char* name);
+
+namespace stereo_depth {
+#include "stereo_depth_resolve.inc"
+}
+
+struct StereoPipeline {
+  VkDevice device;
+  VkDescriptorSetLayout set{};
+  VkPipelineLayout layout{};
+  VkPipeline pipeline{};
+  ~StereoPipeline() {
+    if (pipeline) raw<PFN_vkDestroyPipeline>(device, "vkDestroyPipeline")(device, pipeline, nullptr);
+    if (layout) raw<PFN_vkDestroyPipelineLayout>(device, "vkDestroyPipelineLayout")(device, layout, nullptr);
+    if (set) raw<PFN_vkDestroyDescriptorSetLayout>(device, "vkDestroyDescriptorSetLayout")(device, set, nullptr);
+  }
+};
+
+bool create_stereo_depth_pipeline(StereoPipeline& resources) {
+  const auto device = resources.device;
+  const VkShaderModuleCreateInfo shader_info{
+      VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO, nullptr, 0,
+      sizeof(stereo_depth::decode_shader), stereo_depth::decode_shader};
+  VkShaderModule shader{};
+  auto result = raw<PFN_vkCreateShaderModule>(device, "vkCreateShaderModule")(
+      device, &shader_info, nullptr, &shader);
+  if (result != VK_SUCCESS) {
+    log::warn("vulkan-object", "stereo_depth_shader result={}", int(result));
+    return false;
+  }
+
+  const VkDescriptorSetLayoutBinding bindings[] = {
+      {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+      {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+      {2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}};
+  const VkDescriptorSetLayoutCreateInfo set_info{
+      VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO, nullptr, 0, 3, bindings};
+  auto& [ignored_device, set, layout, pipeline] = resources;
+  result = raw<PFN_vkCreateDescriptorSetLayout>(device, "vkCreateDescriptorSetLayout")(
+      device, &set_info, nullptr, &set);
+  if (result == VK_SUCCESS) {
+    const VkPipelineLayoutCreateInfo layout_info{
+        VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO, nullptr, 0, 1, &set, 0, nullptr};
+    result = raw<PFN_vkCreatePipelineLayout>(device, "vkCreatePipelineLayout")(
+        device, &layout_info, nullptr, &layout);
+  }
+  if (result == VK_SUCCESS) {
+    VkComputePipelineCreateInfo pipeline_info{};
+    pipeline_info.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+    pipeline_info.stage = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+                           nullptr, 0, VK_SHADER_STAGE_COMPUTE_BIT, shader, "main", nullptr};
+    pipeline_info.layout = layout;
+    pipeline_info.basePipelineIndex = -1;
+    result = raw<PFN_vkCreateComputePipelines>(device, "vkCreateComputePipelines")(
+        device, VK_NULL_HANDLE, 1, &pipeline_info, nullptr, &pipeline);
+  }
+  raw<PFN_vkDestroyShaderModule>(device, "vkDestroyShaderModule")(device, shader, nullptr);
+  return result == VK_SUCCESS;
+}
 struct Scissors {
   std::optional<VkRect2D> area;  // the open render pass instance's render area
   std::vector<VkRect2D> rects;   // the guest's dynamic scissors, unclamped
@@ -81,6 +142,22 @@ struct View {
 };
 std::unordered_map<VkImage, Image> images;
 std::unordered_map<VkImageView, View> views;
+struct StereoFrameSource {
+  View depth;
+  VkImage color{};
+  VkImageLayout color_layout{};
+  VkImageSubresourceRange color_range{};
+};
+std::unordered_map<VkImageView, VkImageViewCreateInfo> stereo_color_views;
+std::unordered_map<VkFramebuffer, StereoFrameSource> stereo_framebuffer_depth;
+// DLSS (xr/dlss.cpp) reads the depth of a multiview pass that resolves into a
+// guest swapchain image: Batman's D24S8 depth, 2x MSAA, two layers, which it
+// stores with DONT_CARE and never submits through OpenXR. Such depth images
+// gain SAMPLED usage and STORE (create_image, create_render_pass2), and their
+// framebuffers are tracked to the resolved colour image (create_framebuffer).
+bool store_stereo_depth() { return venture::xr::dlss::requested(); }
+bool track_stereo_depth() { return venture::xr::dlss::requested(); }
+void retire_dlss_depth(VkFramebuffer framebuffer);
 std::unordered_map<VkFramebuffer, VkExtent2D> clamped;
 struct Pass {
   // The attachments its subpasses use as input, color, resolve or
@@ -236,7 +313,23 @@ constexpr VkImageUsageFlags attachment_usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_B
                                                VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT;
 VkResult VKAPI_CALL create_image(VkDevice d, const VkImageCreateInfo* info, const VkAllocationCallbacks* alloc,
                                  VkImage* out) {
-  auto r = next<PFN_vkCreateImage, "vkCreateImage">(d)(d, info, alloc, out);
+  const auto create = next<PFN_vkCreateImage, "vkCreateImage">(d);
+  if (store_stereo_depth() &&
+      info->imageType == VK_IMAGE_TYPE_2D && info->arrayLayers == 2 &&
+      info->format == VK_FORMAT_D24_UNORM_S8_UINT && info->samples == VK_SAMPLE_COUNT_2_BIT &&
+      (info->usage & VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT) &&
+      !(info->usage & (VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT))) {
+    auto sampled = *info;
+    sampled.usage |= VK_IMAGE_USAGE_SAMPLED_BIT;
+    const auto result = create(d, &sampled, alloc, out);
+    if (result == VK_SUCCESS) {
+      note_image(*out, sampled);
+      log::info("dlss", "sampled stereo depth image {}x{}", sampled.extent.width, sampled.extent.height);
+      return result;
+    }
+    if (result != VK_ERROR_FORMAT_NOT_SUPPORTED) return result;
+  }
+  const auto r = create(d, info, alloc, out);
   if (r == VK_SUCCESS) note_image(*out, *info);
   return r;
 }
@@ -249,6 +342,8 @@ VkResult VKAPI_CALL create_view(VkDevice d, const VkImageViewCreateInfo* info, c
   auto r = next<PFN_vkCreateImageView, "vkCreateImageView">(d)(d, info, alloc, out);
   if (r != VK_SUCCESS) return r;
   std::lock_guard lock(mutex);
+  if ((info->subresourceRange.aspectMask & VK_IMAGE_ASPECT_COLOR_BIT) && track_stereo_depth())
+    stereo_color_views[*out] = *info;
   if (auto it = images.find(info->image); it != images.end()) {
     const auto mip = info->subresourceRange.baseMipLevel;
     views[*out] = {{std::max(1u, it->second.extent.width >> mip), std::max(1u, it->second.extent.height >> mip)},
@@ -263,6 +358,7 @@ void VKAPI_CALL destroy_view(VkDevice d, VkImageView view, const VkAllocationCal
   {
     std::lock_guard lock(mutex);
     views.erase(view);
+    stereo_color_views.erase(view);
   }
   next<PFN_vkDestroyImageView, "vkDestroyImageView">(d)(d, view, alloc);
 }
@@ -406,8 +502,30 @@ VkResult VKAPI_CALL create_render_pass2(VkDevice d, const VkRenderPassCreateInfo
     host = &completed;
     report_added_dependencies(added.size(), info->subpassCount);
   }
+  std::vector<VkAttachmentDescription2> attachments;
+  if (store_stereo_depth()) {
+    for (std::uint32_t i = 0; i < info->subpassCount; ++i) {
+      const auto& subpass = info->pSubpasses[i];
+      const auto* depth = subpass.pDepthStencilAttachment;
+      if (subpass.viewMask != 3 || !depth || depth->attachment >= info->attachmentCount)
+        continue;
+      const auto& attachment = info->pAttachments[depth->attachment];
+      if (attachment.format != VK_FORMAT_D24_UNORM_S8_UINT ||
+          attachment.samples != VK_SAMPLE_COUNT_2_BIT ||
+          attachment.storeOp != VK_ATTACHMENT_STORE_OP_DONT_CARE)
+        continue;
+      if (attachments.empty())
+        attachments.assign(info->pAttachments, info->pAttachments + info->attachmentCount);
+      attachments[depth->attachment].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    }
+    if (!attachments.empty()) {
+      completed = *host;
+      completed.pAttachments = attachments.data();
+      host = &completed;
+    }
+  }
   auto r = next<PFN_vkCreateRenderPass2, Name>(d)(d, host, alloc, out);
-  if (r == VK_SUCCESS) record_pass(*out, *info);
+  if (r == VK_SUCCESS) record_pass(*out, *host);
   return r;
 }
 void VKAPI_CALL destroy_render_pass(VkDevice d, VkRenderPass pass, const VkAllocationCallbacks* alloc) {
@@ -480,7 +598,9 @@ std::optional<StandIn> transient_attachment(VkDevice d, std::uint32_t index, VkF
   ci.arrayLayers = layers;
   ci.samples = samples;
   ci.tiling = VK_IMAGE_TILING_OPTIMAL;
-  ci.usage = usage | VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT;
+  // A storage image (DLSS depth) is written by compute: not transient.
+  ci.usage = usage;
+  if (!(usage & VK_IMAGE_USAGE_STORAGE_BIT)) ci.usage |= VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT;
   StandIn s{index};
   auto result = raw<PFN_vkCreateImage>(d, "vkCreateImage")(d, &ci, nullptr, &s.image);
   if (result != VK_SUCCESS) return failed(result);
@@ -493,8 +613,10 @@ std::optional<StandIn> transient_attachment(VkDevice d, std::uint32_t index, VkF
   VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
   ai.allocationSize = req.size;
   ai.memoryTypeIndex = props.memoryTypeCount;
-  for (VkMemoryPropertyFlags wanted : {VkMemoryPropertyFlags(VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT),
-                                       VkMemoryPropertyFlags(VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT), VkMemoryPropertyFlags{}})
+  // Lazily allocated memory suits transient attachments only.
+  const VkMemoryPropertyFlags first = (usage & VK_IMAGE_USAGE_STORAGE_BIT) ? VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT
+                                                                          : VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT;
+  for (VkMemoryPropertyFlags wanted : {first, VkMemoryPropertyFlags(VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT), VkMemoryPropertyFlags{}})
     for (std::uint32_t i = 0; i < props.memoryTypeCount && ai.memoryTypeIndex == props.memoryTypeCount; ++i)
       if ((req.memoryTypeBits >> i & 1) && (props.memoryTypes[i].propertyFlags & wanted) == wanted)
         ai.memoryTypeIndex = i;
@@ -643,7 +765,40 @@ VkResult VKAPI_CALL create_framebuffer(VkDevice d, const VkFramebufferCreateInfo
       (info->width && info->height && info->attachmentCount >= expected &&
        std::none_of(info->pAttachments, info->pAttachments + info->attachmentCount,
                     [](VkImageView v) { return v == VK_NULL_HANDLE; })))
-    return create_host_framebuffer(d, info, alloc, out);
+  {
+    const auto result = create_host_framebuffer(d, info, alloc, out);
+    if (result == VK_SUCCESS && !(info->flags & VK_FRAMEBUFFER_CREATE_IMAGELESS_BIT) && track_stereo_depth()) {
+      std::lock_guard lock(mutex);
+      const auto pass = passes.find(info->renderPass);
+      if (pass != passes.end() && pass->second.view_layers == 2) {
+        for (std::uint32_t i = 0; i < info->attachmentCount && i < pass->second.formats.size(); ++i) {
+          if (pass->second.formats[i] != VK_FORMAT_D24_UNORM_S8_UINT ||
+              pass->second.samples[i] != VK_SAMPLE_COUNT_2_BIT ||
+              pass->second.transient[i] ||
+              pass->second.final_layouts[i] != VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL)
+            continue;
+          const auto view = views.find(info->pAttachments[i]);
+          if (view == views.end() || view->second.range.layerCount != 2 ||
+              !(view->second.range.aspectMask & VK_IMAGE_ASPECT_DEPTH_BIT))
+            continue;
+          const auto image = images.find(view->second.image);
+          if (image != images.end() && (image->second.usage & VK_IMAGE_USAGE_SAMPLED_BIT))
+            for (const auto& [source, target] : pass->second.resolves) {
+              if (source == i || target >= info->attachmentCount ||
+                  pass->second.formats[target] != VK_FORMAT_R8G8B8A8_SRGB)
+                continue;
+              const auto color = stereo_color_views.find(info->pAttachments[target]);
+              if (color != stereo_color_views.end()) {
+                stereo_framebuffer_depth[*out] = {view->second, color->second.image,
+                    pass->second.final_layouts[target], color->second.subresourceRange};
+                break;
+              }
+            }
+        }
+      }
+    }
+    return result;
+  }
   std::optional<Pass> pass;
   std::vector<VkImageView> attachments(info->pAttachments, info->pAttachments + info->attachmentCount);
   {
@@ -710,6 +865,11 @@ VkResult VKAPI_CALL create_framebuffer(VkDevice d, const VkFramebufferCreateInfo
   return r;
 }
 void VKAPI_CALL destroy_framebuffer(VkDevice d, VkFramebuffer framebuffer, const VkAllocationCallbacks* alloc) {
+  {
+    std::lock_guard lock(mutex);
+    stereo_framebuffer_depth.erase(framebuffer);
+  }
+  retire_dlss_depth(framebuffer);
   std::optional<Substitution> owned;
   std::vector<StandIn> blanks;
   {
@@ -856,6 +1016,185 @@ void VKAPI_CALL begin_pass(VkCommandBuffer cmd, const VkRenderPassBeginInfo* inf
   host<PFN_vkCmdBeginRenderPass>(cmd, "vkCmdBeginRenderPass")(cmd, &copy, contents);
   begin_area(cmd, area, inline_subpass(contents), std::move(begin.after));
 }
+thread_local std::unordered_map<VkCommandBuffer, StereoFrameSource> stereo_depth_sources;
+thread_local std::unordered_map<VkCommandBuffer, VkFramebuffer> stereo_depth_framebuffers;
+
+// VENTURE_EXPERIMENTAL_DLSS: the stereo depth of a pass, resolved into two
+// persistent R32F images (one per eye) for DLSS (xr/dlss.cpp). Resources are
+// per framebuffer, kept until the device is released, and found from the
+// pass's color resolve target, which is the guest swapchain image.
+struct DlssDepthTarget {
+  VkImageView input{};
+  std::array<StandIn, 2> outputs{};
+  VkDescriptorSet set{};
+  VkImage color{};
+  VkExtent2D extent{};
+  bool written = false;
+};
+struct DlssDepthDevice {
+  std::unique_ptr<StereoPipeline> pipeline;
+  VkSampler sampler{};
+  std::vector<VkDescriptorPool> pools;
+  std::uint32_t pool_used = 0;
+  std::unordered_map<VkFramebuffer, DlssDepthTarget> targets;
+  std::vector<DlssDepthTarget> retired;
+};
+constexpr std::uint32_t dlss_depth_pool_sets = 16;
+std::mutex dlss_depth_mutex;
+std::unordered_map<VkDevice, DlssDepthDevice> dlss_depth_devices;
+std::unordered_map<VkImage, std::pair<VkDevice, VkFramebuffer>> dlss_depth_by_color;
+
+void release_dlss_depth_target(VkDevice d, DlssDepthTarget& target) {
+  if (target.input) raw<PFN_vkDestroyImageView>(d, "vkDestroyImageView")(d, target.input, nullptr);
+  target.input = VK_NULL_HANDLE;
+  for (auto& output : target.outputs)
+    if (output.image) release(d, output);
+  target.outputs = {};
+}
+void release_dlss_depth_device(VkDevice d) {
+  std::lock_guard lock(dlss_depth_mutex);
+  auto it = dlss_depth_devices.find(d);
+  if (it == dlss_depth_devices.end()) return;
+  for (auto& [framebuffer, target] : it->second.targets) release_dlss_depth_target(d, target);
+  for (auto& target : it->second.retired) release_dlss_depth_target(d, target);
+  for (auto pool : it->second.pools) raw<PFN_vkDestroyDescriptorPool>(d, "vkDestroyDescriptorPool")(d, pool, nullptr);
+  if (it->second.sampler) raw<PFN_vkDestroySampler>(d, "vkDestroySampler")(d, it->second.sampler, nullptr);
+  std::erase_if(dlss_depth_by_color, [&](const auto& entry) { return entry.second.first == d; });
+  dlss_depth_devices.erase(it);
+}
+// A destroyed framebuffer's outputs may still feed a queued presentation copy,
+// so they are kept until the device goes.
+void retire_dlss_depth(VkFramebuffer framebuffer) {
+  std::lock_guard lock(dlss_depth_mutex);
+  for (auto& [d, device] : dlss_depth_devices) {
+    auto it = device.targets.find(framebuffer);
+    if (it == device.targets.end()) continue;
+    // The input view's image goes with the guest framebuffer.
+    if (it->second.input) raw<PFN_vkDestroyImageView>(d, "vkDestroyImageView")(d, it->second.input, nullptr);
+    it->second.input = VK_NULL_HANDLE;
+    auto color = dlss_depth_by_color.find(it->second.color);
+    if (color != dlss_depth_by_color.end() && color->second.second == framebuffer) dlss_depth_by_color.erase(color);
+    device.retired.push_back(std::move(it->second));
+    device.targets.erase(it);
+    return;
+  }
+}
+DlssDepthTarget* dlss_depth_target(VkDevice d, VkFramebuffer framebuffer, const StereoFrameSource& frame) {
+  auto& device = dlss_depth_devices[d];
+  if (!device.pipeline) {
+    add_device_release_hook(release_dlss_depth_device);
+    auto pipeline = std::make_unique<StereoPipeline>();
+    pipeline->device = d;
+    if (!create_stereo_depth_pipeline(*pipeline)) {
+      log::warn("dlss", "stereo depth resolve pipeline could not be created");
+      return nullptr;
+    }
+    VkSamplerCreateInfo sampler{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
+    if (raw<PFN_vkCreateSampler>(d, "vkCreateSampler")(d, &sampler, nullptr, &device.sampler) != VK_SUCCESS)
+      return nullptr;
+    device.pipeline = std::move(pipeline);
+  }
+  if (auto it = device.targets.find(framebuffer); it != device.targets.end()) return &it->second;
+  const auto& source = frame.depth;
+  DlssDepthTarget target;
+  target.color = frame.color;
+  target.extent = source.extent;
+  VkImageViewCreateInfo view{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+  view.image = source.image;
+  view.viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
+  view.format = source.format;
+  view.subresourceRange = source.range;
+  view.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+  if (raw<PFN_vkCreateImageView>(d, "vkCreateImageView")(d, &view, nullptr, &target.input) != VK_SUCCESS)
+    return nullptr;
+  for (auto& output : target.outputs) {
+    auto image = transient_attachment(d, 0, VK_FORMAT_R32_SFLOAT, VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_VIEW_TYPE_2D,
+                                      VK_IMAGE_ASPECT_COLOR_BIT, source.extent, 1,
+                                      VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
+    if (!image) {
+      release_dlss_depth_target(d, target);
+      return nullptr;
+    }
+    output = *image;
+  }
+  if (device.pools.empty() || device.pool_used == dlss_depth_pool_sets) {
+    const VkDescriptorPoolSize sizes[] = {{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, dlss_depth_pool_sets},
+                                          {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 2 * dlss_depth_pool_sets}};
+    const VkDescriptorPoolCreateInfo pool{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO, nullptr, 0,
+                                          dlss_depth_pool_sets, 2, sizes};
+    VkDescriptorPool created{};
+    if (raw<PFN_vkCreateDescriptorPool>(d, "vkCreateDescriptorPool")(d, &pool, nullptr, &created) != VK_SUCCESS) {
+      release_dlss_depth_target(d, target);
+      return nullptr;
+    }
+    device.pools.push_back(created);
+    device.pool_used = 0;
+  }
+  const VkDescriptorSetAllocateInfo allocation{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO, nullptr,
+                                               device.pools.back(), 1, &device.pipeline->set};
+  if (raw<PFN_vkAllocateDescriptorSets>(d, "vkAllocateDescriptorSets")(d, &allocation, &target.set) != VK_SUCCESS) {
+    release_dlss_depth_target(d, target);
+    return nullptr;
+  }
+  ++device.pool_used;
+  const VkDescriptorImageInfo images[] = {
+      {device.sampler, target.input, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+      {VK_NULL_HANDLE, target.outputs[0].view, VK_IMAGE_LAYOUT_GENERAL},
+      {VK_NULL_HANDLE, target.outputs[1].view, VK_IMAGE_LAYOUT_GENERAL}};
+  VkWriteDescriptorSet writes[3]{};
+  for (std::uint32_t i = 0; i < 3; ++i)
+    writes[i] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, target.set, i, 0, 1,
+                 i ? VK_DESCRIPTOR_TYPE_STORAGE_IMAGE : VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                 &images[i], nullptr, nullptr};
+  raw<PFN_vkUpdateDescriptorSets>(d, "vkUpdateDescriptorSets")(d, 3, writes, 0, nullptr);
+  log::info("dlss", "stereo depth resolve {}x{} for color image {}", source.extent.width, source.extent.height,
+            static_cast<const void*>(frame.color));
+  return &device.targets.emplace(framebuffer, std::move(target)).first->second;
+}
+void dispatch_dlss_depth(VkCommandBuffer cmd, VkFramebuffer framebuffer, const StereoFrameSource& frame) {
+  const auto d = command_device(cmd);
+  std::lock_guard lock(dlss_depth_mutex);
+  auto* target = dlss_depth_target(d, framebuffer, frame);
+  if (!target) return;
+  const auto& pipeline = *dlss_depth_devices[d].pipeline;
+  const auto& source = frame.depth;
+  const auto depth_range = transition_range(source.range, source.format);
+  auto read = layout_barrier(source.image, depth_range, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+                             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+  read.srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+  read.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+  std::vector<VkImageMemoryBarrier> barriers{read};
+  for (const auto& output : target->outputs) {
+    // The previous frame's DLSS reads finish before this overwrite.
+    auto write = layout_barrier(output.image, output.range, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
+    write.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    write.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    barriers.push_back(write);
+  }
+  transition(cmd, barriers);
+  raw<PFN_vkCmdBindPipeline>(d, "vkCmdBindPipeline")(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline.pipeline);
+  raw<PFN_vkCmdBindDescriptorSets>(d, "vkCmdBindDescriptorSets")(
+      cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline.layout, 0, 1, &target->set, 0, nullptr);
+  raw<PFN_vkCmdDispatch>(d, "vkCmdDispatch")(cmd, (source.extent.width + 7) / 8, (source.extent.height + 7) / 8, 1);
+  auto restore = layout_barrier(source.image, depth_range, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+  restore.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+  restore.dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+  barriers = {restore};
+  for (const auto& output : target->outputs) {
+    auto ready = layout_barrier(output.image, output.range, VK_IMAGE_LAYOUT_GENERAL,
+                                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    ready.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    ready.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    barriers.push_back(ready);
+  }
+  transition(cmd, barriers);
+  restore_guest_compute_state(cmd);
+  if (!target->written) {
+    target->written = true;
+    dlss_depth_by_color[target->color] = {d, framebuffer};
+  }
+}
 void VKAPI_CALL begin_pass2(VkCommandBuffer cmd, const VkRenderPassBeginInfo* info, const VkSubpassBeginInfo* sub) {
   const auto area = pass_area(info);
   auto begin = host_begin(info);
@@ -863,6 +1202,16 @@ void VKAPI_CALL begin_pass2(VkCommandBuffer cmd, const VkRenderPassBeginInfo* in
   auto copy = with_area(*info, area);
   copy.framebuffer = begin.framebuffer;
   host<PFN_vkCmdBeginRenderPass2>(cmd, "vkCmdBeginRenderPass2")(cmd, &copy, sub);
+  if (venture::xr::dlss::requested()) {
+    std::lock_guard lock(mutex);
+    auto pass = passes.find(info->renderPass);
+    auto framebuffer = stereo_framebuffer_depth.find(info->framebuffer);
+    if (pass != passes.end() && framebuffer != stereo_framebuffer_depth.end() &&
+        begin.framebuffer == info->framebuffer && pass->second.view_layers == 2) {
+      stereo_depth_sources[cmd] = framebuffer->second;
+      stereo_depth_framebuffers[cmd] = info->framebuffer;
+    }
+  }
   begin_area(cmd, area, inline_subpass(sub->contents), std::move(begin.after));
 }
 void VKAPI_CALL begin_rendering(VkCommandBuffer cmd, const VkRenderingInfo* info) {
@@ -964,6 +1313,10 @@ void VKAPI_CALL end_pass2(VkCommandBuffer cmd, const VkSubpassEndInfo* info) {
   const auto after = end_area(cmd);
   host<PFN_vkCmdEndRenderPass2>(cmd, "vkCmdEndRenderPass2")(cmd, info);
   transition(cmd, after);
+  if (auto source = stereo_depth_sources.extract(cmd); source) {
+    const auto framebuffer = stereo_depth_framebuffers.extract(cmd);
+    if (framebuffer) dispatch_dlss_depth(cmd, framebuffer.mapped(), source.mapped());
+  }
 }
 void VKAPI_CALL end_rendering(VkCommandBuffer cmd) {
   end_area(cmd);
@@ -971,6 +1324,21 @@ void VKAPI_CALL end_rendering(VkCommandBuffer cmd) {
 }
 }  // namespace
 
+bool stereo_depth_for_color(VkImage color, StereoDepthViews& out) {
+  std::lock_guard lock(dlss_depth_mutex);
+  const auto entry = dlss_depth_by_color.find(color);
+  if (entry == dlss_depth_by_color.end()) return false;
+  const auto device = dlss_depth_devices.find(entry->second.first);
+  if (device == dlss_depth_devices.end()) return false;
+  const auto target = device->second.targets.find(entry->second.second);
+  if (target == device->second.targets.end() || !target->second.written) return false;
+  for (std::size_t eye = 0; eye < 2; ++eye) {
+    out.images[eye] = target->second.outputs[eye].image;
+    out.views[eye] = target->second.outputs[eye].view;
+  }
+  out.extent = target->second.extent;
+  return true;
+}
 void note_image(VkImage image, const VkImageCreateInfo& info) {
   // Only images that can be attachments ever bound a framebuffer.
   if (!(info.usage & attachment_usage)) return;

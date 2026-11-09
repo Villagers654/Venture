@@ -823,7 +823,9 @@ std::uint32_t copy_slices(const Image& img, std::uint32_t layer_count, std::uint
 // Decode binds only compute state; replay the application's afterwards.
 void restore_compute(VkCommandBuffer cmd) {
   std::lock_guard lock(texture_lock);
-  for (auto& restore : command_state[cmd].compute_state) restore();
+  const auto state = command_state.find(cmd);
+  if (state == command_state.end()) return;
+  for (const auto& restore : state->second.compute_state) restore();
 }
 void decode_mip(VkCommandBuffer cmd, const std::shared_ptr<Image>& img, std::uint32_t mip,
                 std::uint32_t layer, std::uint32_t z, VkImageLayout layout) {
@@ -2783,6 +2785,8 @@ void VKAPI_CALL features2(VkPhysicalDevice p, VkPhysicalDeviceFeatures2* out) {
   }
 }
 }  // namespace
+
+void restore_guest_compute_state(VkCommandBuffer cmd) { restore_compute(cmd); }
 
 struct DecodeResources {
   std::shared_ptr<Pipeline> pipeline;

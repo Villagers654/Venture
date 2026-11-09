@@ -5,6 +5,10 @@
 #include "vulkan.h"
 
 namespace venture::vulkan {
+// Restores the guest's compute pipeline, descriptor and push-constant bindings
+// after host compute work recorded into its command buffer.
+void restore_guest_compute_state(VkCommandBuffer cmd);
+
 struct TextureFormat {
   VkFormat compressed{};
   VkFormat decoded{};

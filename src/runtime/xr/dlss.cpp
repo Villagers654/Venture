@@ -261,6 +261,9 @@ struct Upscaler::Impl {
   VkExtent2D output_extent{};
   bool inputs_cleared = false;
   bool reset = true;
+  bool real_depth = false;
+  // Reversed infinite Z: distance = near / depth (VENTURE_DLSS_NEAR, 10 cm).
+  float inverse_near = 10.0f;
   // Camera motion vectors (shaders/dlss_motion.comp).
   VkDescriptorSetLayout motion_set_layout{};
   VkPipelineLayout motion_layout{};
@@ -271,7 +274,7 @@ struct Upscaler::Impl {
   std::array<ViewSample, 2> previous{};
   bool motion_ready = false;  // motion layers hold defined values
   float jitter_sign = 1.0f;
-  int motion_reported = -1;  // zero 0, rotation 1; logged on change
+  int motion_reported = -1;  // zero 0, rotation 1, depth 2; logged on change
   std::vector<void*> features;  // per layer
   VkFormat output_format = VK_FORMAT_R16G16B16A16_SFLOAT;
 
@@ -507,6 +510,10 @@ std::unique_ptr<Upscaler> Upscaler::create(const XrGraphicsBindingVulkanKHR& bin
     log::warn("dlss", "DLSS motion vector pipeline could not be created");
     return nullptr;
   }
+  if (const char* plane = venture::environment::getenv("VENTURE_DLSS_NEAR"); plane && std::atof(plane) > 0)
+    impl->inverse_near = float(1.0 / std::atof(plane));
+  if (const char* inverted = venture::environment::getenv("VENTURE_DLSS_DEPTH_INVERTED"); inverted && *inverted == '0')
+    impl->inverse_near = 0;  // forward Z is not modeled: rotation only
   if (const char* sign = venture::environment::getenv("VENTURE_DLSS_JITTER_SIGN"); sign && std::atof(sign) < 0)
     impl->jitter_sign = -1.0f;
   return std::unique_ptr<Upscaler>(new Upscaler(std::move(impl)));
@@ -530,7 +537,7 @@ bool Upscaler::record(VkCommandBuffer command, std::uint32_t index, VkImage targ
     return false;
   }
   if (!s.inputs_cleared) {
-    // Constant depth: every pixel counts as distant (see the motion below).
+    // Constant depth, until the game's depth is found: every pixel distant.
     s.barrier(command, s.depth.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1);
     const VkClearColorValue zero{};
     const VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
@@ -544,21 +551,32 @@ bool Upscaler::record(VkCommandBuffer command, std::uint32_t index, VkImage targ
   for (std::uint32_t layer = 0; layer < s.layers; ++layer)
     s.barrier(command, s.outputs[layer].image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL, 1);
   auto* b = bridge();
-  // Motion: when this and the previous frame have poses, the vectors follow
-  // head rotation (every pixel distant), which is what trails without them.
-  // Zero otherwise.
+  // The pass that resolved into this guest image left its per-eye depth
+  // (hle/vulkan/render_area.cpp: Batman's multiview MSAA depth).
+  vulkan::StereoDepthViews depth{};
+  const bool real_depth = s.layers == 2 && vulkan::stereo_depth_for_color(source, depth) &&
+                          depth.extent.width == s.guest.width && depth.extent.height == s.guest.height;
+  if (real_depth != s.real_depth) {
+    s.real_depth = real_depth;
+    log::info("dlss", "DLSS depth input: {}", real_depth ? "resolved stereo depth" : "constant");
+  }
+  // Motion: when this and the previous frame have poses, the game's depth is
+  // reprojected; without it every pixel counts as distant and the vectors
+  // follow head rotation, which is what trails without them. Zero otherwise.
   bool reprojected = views.size() >= s.layers;
   for (std::uint32_t layer = 0; reprojected && layer < s.layers; ++layer)
     reprojected = views[layer].valid && s.previous[layer].valid;
   std::array<VkDescriptorSet, 2> sets{};
   for (std::uint32_t layer = 0; reprojected && layer < s.layers; ++layer)
-    reprojected = (sets[layer] = s.motion_set(s.depth.views[0], layer)) != VK_NULL_HANDLE;
+    reprojected = (sets[layer] = s.motion_set(real_depth ? depth.views[layer] : s.depth.views[0], layer)) !=
+                  VK_NULL_HANDLE;
   const auto before = s.motion_ready ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED;
   if (reprojected) {
     s.barrier(command, s.motion.image, before, VK_IMAGE_LAYOUT_GENERAL, s.layers);
     s.fn<PFN_vkCmdBindPipeline>("vkCmdBindPipeline")(command, VK_PIPELINE_BIND_POINT_COMPUTE, s.motion_pipeline);
     for (std::uint32_t layer = 0; layer < s.layers; ++layer) {
-      const auto parameters = motion_parameters(views[layer], s.previous[layer], 0.0f, rendered);
+      const auto parameters =
+          motion_parameters(views[layer], s.previous[layer], real_depth ? s.inverse_near : 0.0f, rendered);
       s.fn<PFN_vkCmdBindDescriptorSets>("vkCmdBindDescriptorSets")(command, VK_PIPELINE_BIND_POINT_COMPUTE,
                                                                    s.motion_layout, 0, 1, &sets[layer], 0, nullptr);
       s.fn<PFN_vkCmdPushConstants>("vkCmdPushConstants")(command, s.motion_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
@@ -577,15 +595,20 @@ bool Upscaler::record(VkCommandBuffer command, std::uint32_t index, VkImage targ
               s.layers);
   }
   s.motion_ready = true;
-  if (const int kind = reprojected ? 1 : 0; kind != s.motion_reported) {
+  if (const int kind = !reprojected ? 0 : real_depth ? 2 : 1; kind != s.motion_reported) {
     s.motion_reported = kind;
-    log::info("dlss", "DLSS motion vectors: {}", reprojected ? "head rotation" : "zero");
+    log::info("dlss", "DLSS motion vectors: {}",
+              !reprojected ? "zero" : real_depth ? "depth reprojection" : "head rotation");
   }
   for (std::uint32_t layer = 0; layer < s.layers; ++layer) {
     VentureNgxDlssEvaluate e{};
     e.color = {source, s.source_views[index][layer], VkFormat(s.guest.format), s.guest.width, s.guest.height, layer};
     e.output = {s.outputs[layer].image, s.outputs[layer].views[0], s.output_format, extent.width, extent.height, 0};
-    e.depth = {s.depth.image, s.depth.views[0], VK_FORMAT_R32_SFLOAT, s.guest.width, s.guest.height, 0};
+    e.depth = real_depth
+                  ? VentureNgxImage{depth.images[layer], depth.views[layer], VK_FORMAT_R32_SFLOAT, s.guest.width,
+                                    s.guest.height, 0}
+                  : VentureNgxImage{s.depth.image, s.depth.views[0], VK_FORMAT_R32_SFLOAT, s.guest.width,
+                                    s.guest.height, 0};
     e.motion = {s.motion.image, s.motion.views[layer], VK_FORMAT_R16G16_SFLOAT, s.guest.width, s.guest.height,
                 layer};
     if (layer < views.size() && views[layer].valid) {

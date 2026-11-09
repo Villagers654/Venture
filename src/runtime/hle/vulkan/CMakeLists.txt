@@ -91,6 +91,16 @@ add_custom_command(OUTPUT ${vk_generated}/texture_bc7.inc
     ${vk_generated}/texture_bc7.spv ${vk_generated}/texture_bc7.inc
   DEPENDS glslang-standalone shaders/bc7_encode.comp ${PROJECT_SOURCE_DIR}/tools/codegen/vk_spirv.py
   VERBATIM)
+# The stereo depth resolve for DLSS (render_area.cpp).
+set(stereo_depth_shader "${PROJECT_SOURCE_DIR}/src/runtime/xr/shaders/stereo_depth_resolve.comp")
+add_custom_command(OUTPUT ${vk_generated}/stereo_depth_resolve.inc
+  COMMAND $<TARGET_FILE:glslang-standalone> -V --target-env vulkan1.1
+    ${stereo_depth_shader} -o ${vk_generated}/stereo_depth_resolve.spv
+  COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tools/codegen/vk_spirv.py
+    ${vk_generated}/stereo_depth_resolve.spv ${vk_generated}/stereo_depth_resolve.inc
+  DEPENDS glslang-standalone ${stereo_depth_shader} ${PROJECT_SOURCE_DIR}/tools/codegen/vk_spirv.py
+  VERBATIM)
+target_sources(venture_vulkan PRIVATE ${vk_generated}/stereo_depth_resolve.inc)
 target_sources(venture_vulkan PRIVATE texture.cpp render_area.cpp render_checks.cpp subpass_sync.cpp deferred_free.cpp ${vk_generated}/texture_decode.inc ${vk_generated}/texture_depth.inc ${vk_generated}/texture_bc7.inc)
 foreach(mode float_array srgb_array float_volume srgb_volume unorm_array unorm_volume)
   set(image_defines -DIMAGE_OUTPUT=1)

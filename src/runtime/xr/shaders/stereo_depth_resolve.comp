@@ -1,0 +1,20 @@
+#version 450
+
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 0) uniform sampler2DMSArray sourceDepth;
+layout(r32f, set = 0, binding = 1) writeonly uniform image2D leftDepth;
+layout(r32f, set = 0, binding = 2) writeonly uniform image2D rightDepth;
+
+void main() {
+  ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+  ivec3 sourceSize = textureSize(sourceDepth);
+  if (sourceSize.z < 2 || any(greaterThanEqual(pixel, sourceSize.xy)))
+    return;
+
+  // Sample zero preserves an actual surface value at geometry edges.
+  // It also works with both normal and reversed depth conventions.
+  if (all(lessThan(pixel, imageSize(leftDepth))))
+    imageStore(leftDepth, pixel, texelFetch(sourceDepth, ivec3(pixel, 0), 0));
+  if (all(lessThan(pixel, imageSize(rightDepth))))
+    imageStore(rightDepth, pixel, texelFetch(sourceDepth, ivec3(pixel, 1), 0));
+}
