@@ -32,8 +32,10 @@ const Image* controller(std::string_view name, std::string_view hand);
 // The installed SteamVR render model `model` for `hand` ("<model>_<hand>", else
 // "<model>"), drawn in the background and cached in `cache`. nullptr while it is
 // drawn (`*pending` set; `wake` runs when it is ready) or when it is not installed.
-const Image* installed_controller(std::string_view model, std::string_view hand, const fs::path& cache,
-                                  const std::function<void()>& wake, bool* pending = nullptr);
+// Inputs the model has no part for are carried over from bundled model `art`.
+const Image* installed_controller(std::string_view model, std::string_view art, std::string_view hand,
+                                  const fs::path& cache, const std::function<void()>& wake,
+                                  bool* pending = nullptr);
 
 // Turned views, drawn on one background thread; the newest request per picture wins.
 inline bool turnable(const Image& image) { return image.source != nullptr; }

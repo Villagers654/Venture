@@ -792,36 +792,12 @@ TEST_CASE("a game's texture compression follows the global one unless it picks i
   CHECK_FALSE(loaded.game_display.contains("6"));
   CHECK(launched(loaded, "3") == Choice{"never", 0});
 }
-TEST_CASE("turning texture compression down from Always warns until the warning is acknowledged") {
-  Directory d;
-  auto settings = library::Settings::defaults(d.root);
-  CHECK_FALSE(settings.texture_compression_warned);
-  CHECK(settings.texture_compression_warns("always", "auto"));
-  CHECK(settings.texture_compression_warns("always", "never"));
-  CHECK_FALSE(settings.texture_compression_warns("always", "always"));
-  CHECK_FALSE(settings.texture_compression_warns("auto", "never"));
-  CHECK_FALSE(settings.texture_compression_warns("never", "always"));
-  // Not saved until acknowledged.
-  settings.save(d.root);
-  CHECK(paths::read_json(d.root / "settings.json")["textureCompressionWarned"] == false);
-  // "Change anyway" sets it; it survives a reload and covers every change.
-  settings.texture_compression_warned = true;
-  settings.save(d.root);
-  auto json = paths::read_json(d.root / "settings.json");
-  CHECK(json["textureCompressionWarned"] == true);
-  auto loaded = library::Settings::load(d.root);
-  CHECK(loaded.texture_compression_warned);
-  CHECK_FALSE(loaded.texture_compression_warns("always", "auto"));
-  CHECK_FALSE(loaded.texture_compression_warns("always", "never"));
-  // Settings from before the warning, and other values, load as not acknowledged.
-  json.erase("textureCompressionWarned");
-  paths::atomic_write(d.root / "settings.json", json.dump());
-  loaded = library::Settings::load(d.root);
-  CHECK_FALSE(loaded.texture_compression_warned);
-  CHECK(loaded.texture_compression_warns("always", "never"));
-  json["textureCompressionWarned"] = "yes";
-  paths::atomic_write(d.root / "settings.json", json.dump());
-  CHECK_FALSE(library::Settings::load(d.root).texture_compression_warned);
+TEST_CASE("turning texture compression down from Always warns every time") {
+  CHECK(library::Settings::texture_compression_warns("always", "auto"));
+  CHECK(library::Settings::texture_compression_warns("always", "never"));
+  CHECK_FALSE(library::Settings::texture_compression_warns("always", "always"));
+  CHECK_FALSE(library::Settings::texture_compression_warns("auto", "never"));
+  CHECK_FALSE(library::Settings::texture_compression_warns("never", "always"));
 }
 TEST_CASE("the runtime's recorded host display gives the percent size, clamped to its maximum") {
   Directory d;

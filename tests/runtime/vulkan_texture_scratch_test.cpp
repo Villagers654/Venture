@@ -302,3 +302,29 @@ TEST_CASE("Decoded scratch follows per-plane demand and preserves simultaneous-u
   CHECK(buffers.empty());
   CHECK(images.empty());
 }
+TEST_CASE("A refused allocation in CPU-visible VRAM falls back to system memory with the same host properties") {
+  // RTX 4060 without Resizable BAR: 0 device-local, 1 system visible|coherent, 2 system
+  // visible|coherent|cached, 3 BAR device-local|visible|coherent (heap 2).
+  VkPhysicalDeviceMemoryProperties m{};
+  m.memoryHeapCount = 3;
+  m.memoryHeaps[0] = {8ull << 30, VK_MEMORY_HEAP_DEVICE_LOCAL_BIT};
+  m.memoryHeaps[1] = {16ull << 30, 0};
+  m.memoryHeaps[2] = {214ull << 20, VK_MEMORY_HEAP_DEVICE_LOCAL_BIT};
+  constexpr auto visible = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT, coherent = VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                 cached = VK_MEMORY_PROPERTY_HOST_CACHED_BIT, local = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+  m.memoryTypeCount = 4;
+  m.memoryTypes[0] = {local, 0};
+  m.memoryTypes[1] = {visible | coherent, 1};
+  m.memoryTypes[2] = {visible | coherent | cached, 1};
+  m.memoryTypes[3] = {local | visible | coherent, 2};
+  CHECK(venture::gfx::bar_fallback_memory_type(m, 3, ~0u) == 1);
+  // Cached only when the exact properties are not allowed.
+  CHECK(venture::gfx::bar_fallback_memory_type(m, 3, 0b1101) == 2);
+  CHECK(venture::gfx::bar_fallback_memory_type(m, 3, 0b1001) == 4);
+  // Not CPU-visible VRAM: no fallback.
+  CHECK(venture::gfx::bar_fallback_memory_type(m, 0, ~0u) == 4);
+  CHECK(venture::gfx::bar_fallback_memory_type(m, 1, ~0u) == 4);
+  // Unified memory (every heap device-local) has no system memory to go to.
+  m.memoryHeaps[1].flags = VK_MEMORY_HEAP_DEVICE_LOCAL_BIT;
+  CHECK(venture::gfx::bar_fallback_memory_type(m, 3, ~0u) == 4);
+}

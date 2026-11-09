@@ -134,9 +134,6 @@ struct Settings {
   // texture_compression_threshold percent of GPU memory is in use, 2 off.
   int texture_compression = 0;
   int texture_compression_threshold = 50;
-  // The warning before turning compression down from Always was answered with
-  // "Change anyway": it is not shown again, globally or for any game.
-  bool texture_compression_warned = false;
   // Translated game code and pipelines kept between launches (Settings > Runtime).
   bool keep_translated_code = true;
   // Games that download at once (Settings > Library); one by default.
@@ -165,7 +162,8 @@ struct Settings {
   // Whether a texture compression change, from one effective mode to another
   // (texture_compression_modes ids), warns first: from Always to Automatic or
   // Off, until the warning has been acknowledged.
-  bool texture_compression_warns(std::string_view before, std::string_view after) const;
+  // Turning compression down from Always (globally, or a game's effective setting) warns first, every time.
+  static bool texture_compression_warns(std::string_view before, std::string_view after);
   // Passthrough by color key (Settings > Runtime, opt-in): the game's
   // see-through regions are drawn in key_color (RRGGBB, sRGB) for a tool that
   // keys that color (Virtual Desktop, ALVR...). Never chosen automatically.

@@ -96,4 +96,13 @@ struct Spot2 {
 ScenePtr bundled_scene(std::span<const unsigned char> glb, float side, float azimuth, float elevation, float roll,
                        int height, std::span<const Spot2> spots);
 
+// `target` with the inputs `donor` (another model of the same controller) shows and
+// `target` does not, such as a Touch thumbrest, a surface without a part of its own in
+// SteamVR's model. A similarity (scale, rotation or reflection, offset) fitted on the
+// inputs both show carries each one over, onto `target`'s nearest surface point.
+// `target` itself when fewer than three inputs are shared or nothing is missing.
+ScenePtr with_points_from(const ScenePtr& target, const Scene& donor);
+// `scene` without input `input` (tests of with_points_from).
+ScenePtr without_point(const ScenePtr& scene, std::string_view input);
+
 }  // namespace venture::launcher::art
