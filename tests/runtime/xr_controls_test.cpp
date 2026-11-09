@@ -620,13 +620,19 @@ TEST_CASE("An OpenXR game that also binds both stick clicks gets its Quest menu 
     // Enough other actions that the menu's handle value is one a space also gets.
     for (int i = 0; i < 24; ++i) action(("other_" + std::to_string(i)).c_str(), 2);
     const XrAction menu = action("menu", 1), stick = action("thumbstick_click", 2);
-    XrPath menu_path{}, left_click{}, right_click{};
+    const XrAction trigger = action("trigger_click", 2), grip = action("grip_click", 2);
+    XrPath menu_path{}, left_click{}, right_click{}, left_trigger{}, right_trigger{}, left_grip{};
     REQUIRE(xg::xrStringToPath(instance, "/user/hand/left/input/menu/click", &menu_path) == XR_SUCCESS);
     REQUIRE(xg::xrStringToPath(instance, "/user/hand/left/input/thumbstick/click", &left_click) == XR_SUCCESS);
     REQUIRE(xg::xrStringToPath(instance, "/user/hand/right/input/thumbstick/click", &right_click) == XR_SUCCESS);
-    XrActionSuggestedBinding bindings[]{{menu, menu_path}, {stick, left_click}, {stick, right_click}};
-    XrInteractionProfileSuggestedBinding suggestion{XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING, nullptr, touch, 3,
-                                                    bindings};
+    // Unreal omits the component suffix for these boolean Touch actions.
+    REQUIRE(xg::xrStringToPath(instance, "/user/hand/left/input/trigger", &left_trigger) == XR_SUCCESS);
+    REQUIRE(xg::xrStringToPath(instance, "/user/hand/right/input/trigger", &right_trigger) == XR_SUCCESS);
+    REQUIRE(xg::xrStringToPath(instance, "/user/hand/left/input/squeeze", &left_grip) == XR_SUCCESS);
+    XrActionSuggestedBinding bindings[]{{menu, menu_path}, {stick, left_click}, {stick, right_click},
+                                        {trigger, left_trigger}, {trigger, right_trigger}, {grip, left_grip}};
+    XrInteractionProfileSuggestedBinding suggestion{XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING, nullptr, touch,
+                                                    std::size(bindings), bindings};
     REQUIRE(xg::xrSuggestInteractionProfileBindings(instance, &suggestion) == XR_SUCCESS);
     XrSessionActionSetsAttachInfo attach{XR_TYPE_SESSION_ACTION_SETS_ATTACH_INFO, nullptr, 1, &set};
     REQUIRE(xg::xrAttachSessionActionSets(session, &attach) == XR_SUCCESS);
@@ -677,6 +683,17 @@ TEST_CASE("An OpenXR game that also binds both stick clicks gets its Quest menu 
     press(script.right, p.defaults[1][size_t(Quest::stick_click)]);
     CHECK(state(menu, script));
     CHECK_FALSE(state(menu, MockXrScript{}));
+    script = {};
+    press(script.right, p.defaults[1][size_t(Quest::trigger)]);
+    CHECK(state(trigger, script, hands[1]));
+    CHECK_FALSE(state(trigger, script, hands[0]));
+    script = {};
+    press(script.left, p.defaults[0][size_t(Quest::trigger)]);
+    press(script.left, p.defaults[0][size_t(Quest::grip)]);
+    CHECK(state(trigger, script, hands[0]));
+    CHECK_FALSE(state(trigger, script, hands[1]));
+    CHECK(state(grip, script, hands[0]));
+    CHECK_FALSE(state(trigger, MockXrScript{}, hands[0]));
     CHECK(xg::xrDestroySession(session) == XR_SUCCESS);
     CHECK(xg::xrDestroyInstance(instance) == XR_SUCCESS);
     venture::xr::install_xr_images(nullptr);

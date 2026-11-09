@@ -50,7 +50,8 @@ std::optional<std::string> simple_binding(std::string_view path) {
   if (!left && !path.starts_with("/user/hand/right/")) return {};
   const auto component = path.substr(left ? 15 : 16);
   const std::string root(path.substr(0, left ? 15 : 16));
-  if (component == "/input/trigger/value" || component == "/input/trigger/click") return root + "/input/select/click";
+  if (component == "/input/trigger" || component == "/input/trigger/value" || component == "/input/trigger/click")
+    return root + "/input/select/click";
   if (component == "/input/grip/pose" || component == "/input/aim/pose" || component == "/output/haptic")
     return std::string(path);
   return {};
