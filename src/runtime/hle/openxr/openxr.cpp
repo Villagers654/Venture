@@ -1296,17 +1296,18 @@ XrResult xrEndFrame(XrSession handle, const XrFrameEndInfo *info) {
   // The desktop mirror shows the first projection layer's chosen eye.
   std::optional<MirrorEye> mirror;
   if (venture::xr::mirror_ready()) mirror = mirror_eye(layers, venture::xr::mirror_eye());
-  const auto prepare_start = std::chrono::steady_clock::now();
+  const bool overlay = venture::xr::stats_overlay::active();
+  const auto prepare_start = overlay ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
   const auto prepared = [&] {
     vulkan::ScopedHostWait timing("guest_end_prepare");
     return prepare_swapchains(rects.submitted, passthrough.force_opaque,
                               underlay.swapchains.empty() ? nullptr : &underlay, mirror ? &*mirror : nullptr);
   }();
-  // The performance overlay (xr/stats_overlay.h): preparation time and the eye
-  // sizes of the first projection layer.
-  venture::xr::stats_overlay::note_prepare(
+  // The performance overlay (xr/stats_overlay.h), when shown: preparation time
+  // and the eye sizes of the first projection layer.
+  if (overlay) venture::xr::stats_overlay::note_prepare(
       std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - prepare_start).count());
-  for (const auto* layer : layers) {
+  if (overlay) for (const auto* layer : layers) {
     if (!layer || layer->type != XR_TYPE_COMPOSITION_LAYER_PROJECTION) continue;
     const auto* projection = reinterpret_cast<const XrCompositionLayerProjection*>(layer);
     if (!projection->viewCount || !projection->views) continue;
@@ -1322,12 +1323,21 @@ XrResult xrEndFrame(XrSession handle, const XrFrameEndInfo *info) {
   PresentationLayers mapped(true);
   for (auto& layer : layers)
     layer = static_cast<const XrCompositionLayerBaseHeader*>(mapped.chain(layer));
-  // The performance overlay, on top of the game's layers when it is on.
-  if (state().graphics.device)
-    if (const auto* overlay = venture::xr::stats_overlay::layer(session().handle, state().graphics,
+  // The performance overlay, on top of the game's layers when it is on and the
+  // host takes one more layer (fit_layer_limit already trimmed to its limit).
+  if (overlay && state().graphics.device) {
+    const auto limit = host_layer_limit(handle);
+    if (!limit || layers.size() < limit) {
+      if (const auto* panel = venture::xr::stats_overlay::layer(session().handle, state().graphics,
                                                                 gfx::gpu_device().get_instance_proc_addr,
                                                                 info->displayTime))
-      layers.push_back(overlay);
+        layers.push_back(panel);
+    } else {
+      static std::atomic_bool reported{false};
+      if (!reported.exchange(true))
+        log::info("xr", "The frame already has the host's {} layers; the performance overlay is left out", limit);
+    }
+  }
   auto host_info = *info;
   host_info.layerCount = static_cast<std::uint32_t>(layers.size());
   host_info.layers = layers.data();

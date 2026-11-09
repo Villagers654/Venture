@@ -8,10 +8,15 @@
 // VENTURE_STATS_OVERLAY=on (the launcher's "Performance overlay" setting, off
 // by default) shows it from the start. The manual-reset event
 // Local\VentureStatsOverlay-<runtime pid> shows (set) or hides (reset) it
-// during play, for tools outside the launcher.
+// during play, for tools outside the launcher. The panel is painted and the PC
+// load sampled on a worker thread; the render thread only uploads a new panel
+// twice a second through a small ring of buffers, never waiting for the GPU.
 #include "xr/api.h"
 
 namespace venture::xr::stats_overlay {
+// Shown now: one atomic read (a watcher thread follows the event). Callers skip
+// all overlay work, timing included, while it is false.
+bool active();
 // xrEndFrame, after the guest's layers are mapped to the host: the overlay's
 // quad for this frame, or null (off, or not ready). `display_time` paces the
 // headset rate. The returned layer stays valid until the next call.

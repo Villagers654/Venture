@@ -2,6 +2,7 @@
 
 #ifndef _WIN32
 namespace venture::xr::stats_overlay {
+bool active() { return false; }
 const XrCompositionLayerBaseHeader* layer(XrSession, const XrGraphicsBindingVulkanKHR&, PFN_vkGetInstanceProcAddr,
                                           XrTime) {
   return nullptr;
@@ -135,9 +136,40 @@ std::vector<std::uint32_t> background() {
   return p;
 }
 
+// Rates and timings, written by the render thread and read by the painter.
+struct Rates {
+  std::mutex mutex;
+  double prepare_ms = -1, game_fps = -1, headset_hz = -1;
+  std::uint32_t render_width = 0, render_height = 0, output_width = 0, output_height = 0;
+} rates;
+
+// Shown or hidden: the launch setting, then the event a tool sets or resets
+// during play. A watcher thread follows the event, so the render thread only
+// reads this flag (-1 until the first call).
+std::atomic<int> shown{-1};
+void start_watcher() {
+  static std::once_flag once;
+  std::call_once(once, [] {
+    const char* initial = venture::environment::getenv("VENTURE_STATS_OVERLAY");
+    const std::string_view start = initial ? initial : "";
+    const auto name = L"Local\\VentureStatsOverlay-" + std::to_wstring(GetCurrentProcessId());
+    const HANDLE event = CreateEventW(nullptr, TRUE, start == "on" || start == "1", name.c_str());
+    shown.store(event && WaitForSingleObject(event, 0) == WAIT_OBJECT_0 ? 1 : 0);
+    if (!event) return;
+    std::thread([event] {
+      for (;;) {
+        Sleep(250);
+        shown.store(WaitForSingleObject(event, 0) == WAIT_OBJECT_0 ? 1 : 0, std::memory_order_relaxed);
+      }
+    }).detach();
+  });
+}
+
 // PC load, sampled off the render thread twice a second:
 // CPU from GetSystemTimes, RAM from GlobalMemoryStatusEx, GPU and VRAM from
-// NVML on NVIDIA, else the busiest PDH GPU engine of the adapter.
+// NVML on NVIDIA, else the busiest PDH GPU engine of the adapter. The same
+// thread paints the panel (GDI, with fonts and a DIB made once) for the render
+// thread to upload.
 struct Load {
   double cpu = -1, gpu = -1, ram_percent = -1, ram_used = -1, ram_total = -1, vram_percent = -1, vram_used = -1,
          vram_total = -1;
@@ -145,14 +177,19 @@ struct Load {
 class Sampler {
  public:
   Sampler(std::string gpu_name, std::wstring luid_tag)
-      : name_(normalized(gpu_name)), luid_(std::move(luid_tag)), worker_([this] { run(); }) {}
+      : name_(normalized(gpu_name)), luid_(std::move(luid_tag)), background_(background()),
+        worker_([this] { run(); }) {}
   ~Sampler() {
     running_ = false;
     if (worker_.joinable()) worker_.join();
   }
-  Load latest() const {
+  // The newest painted panel, when it is newer than `seen`.
+  bool take_panel(std::vector<std::uint32_t>& out, std::uint64_t& seen) {
     std::lock_guard lock(mutex_);
-    return load_;
+    if (!panel_sequence_ || panel_sequence_ == seen) return false;
+    out = panel_;
+    seen = panel_sequence_;
+    return true;
   }
 
  private:
@@ -168,7 +205,7 @@ class Sampler {
   }
   double pdh_gpu(PDH_HCOUNTER counter) const {
     DWORD bytes = 0, count = 0;
-    if (PdhGetFormattedCounterArrayW(counter, PDH_FMT_DOUBLE, &bytes, &count, nullptr) != PDH_MORE_DATA || !bytes)
+    if (PdhGetFormattedCounterArrayW(counter, PDH_FMT_DOUBLE, &bytes, &count, nullptr) != PDH_STATUS(PDH_MORE_DATA) || !bytes)
       return -1;
     std::vector<std::uint8_t> buffer(bytes);
     auto* items = reinterpret_cast<PDH_FMT_COUNTERVALUE_ITEM_W*>(buffer.data());
@@ -280,57 +317,157 @@ class Sampler {
                  smooth(load_.ram_total, now.ram_total), smooth(load_.vram_percent, now.vram_percent),
                  smooth(load_.vram_used, now.vram_used), smooth(load_.vram_total, now.vram_total)};
       }
+      Load current;
+      {
+        std::lock_guard lock(mutex_);
+        current = load_;
+      }
+      paint(current);
       for (int i = 0; i < 10 && running_; ++i) std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
+    release_gdi();
     if (query) PdhCloseQuery(query);
     if (shutdown) shutdown();
     if (nvml) FreeLibrary(nvml);
+  }
+  // GDI objects for painting, made once on this thread.
+  bool prepare_gdi() {
+    if (dc_) return bits_ != nullptr;
+    dc_ = CreateCompatibleDC(nullptr);
+    BITMAPINFO bmi{};
+    bmi.bmiHeader = {sizeof(BITMAPINFOHEADER), LONG(kWidth), -LONG(kHeight), 1, 32, BI_RGB};
+    bitmap_ = dc_ ? CreateDIBSection(dc_, &bmi, DIB_RGB_COLORS, &bits_, nullptr, 0) : nullptr;
+    if (!bitmap_ || !bits_) return false;
+    SelectObject(dc_, bitmap_);
+    SetBkMode(dc_, TRANSPARENT);
+    const auto font = [](int size, int weight) {
+      return CreateFontW(-size, 0, 0, 0, weight, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                         CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI");
+    };
+    label_font_ = font(11, FW_SEMIBOLD);
+    value_font_ = font(20, FW_BOLD);
+    compact_font_ = font(12, FW_BOLD);
+    return true;
+  }
+  void release_gdi() {
+    for (HFONT f : {label_font_, value_font_, compact_font_})
+      if (f) DeleteObject(f);
+    if (bitmap_) DeleteObject(bitmap_);
+    if (dc_) DeleteDC(dc_);
+  }
+  void paint(const Load& load) {
+    double headset_hz = -1, game_fps = -1, prepare = -1;
+    std::uint32_t rw = 0, rh = 0, ow = 0, oh = 0;
+    {
+      std::lock_guard lock(rates.mutex);
+      headset_hz = rates.headset_hz, game_fps = rates.game_fps, prepare = rates.prepare_ms;
+      rw = rates.render_width, rh = rates.render_height;
+      ow = rates.output_width, oh = rates.output_height;
+    }
+    auto p = background_;
+    // Rate graph: headset (green) and game (violet), 0-120 Hz.
+    history_[0][cursor_] = float(std::clamp(headset_hz, 0.0, 120.0));
+    history_[1][cursor_] = float(std::clamp(game_fps, 0.0, 120.0));
+    cursor_ = (cursor_ + 1) % history_[0].size();
+    filled_ = std::min(filled_ + 1, history_[0].size());
+    constexpr int gl = 398, gr = 500, gt = 32, gb = 68;
+    line(p, gl, gb, gr, gb, kGrid);
+    line(p, gl, gb - int(90.0 / 120.0 * (gb - gt)), gr, gb - int(90.0 / 120.0 * (gb - gt)), 0x807b6632u);
+    const auto n = history_[0].size();
+    for (std::size_t series = 0; series < 2; ++series)
+      for (std::size_t i = 1; i < filled_; ++i) {
+        const auto a = history_[series][(cursor_ + n - filled_ + i - 1) % n], b = history_[series][(cursor_ + n - filled_ + i) % n];
+        line(p, gl + int((i - 1) * (gr - gl) / (n - 1)), gb - int(std::clamp(a / 120.f, 0.f, 1.f) * (gb - gt)),
+             gl + int(i * (gr - gl) / (n - 1)), gb - int(std::clamp(b / 120.f, 0.f, 1.f) * (gb - gt)),
+             series ? kViolet : kGreen);
+      }
+    if (prepare_gdi()) {
+      std::memcpy(bits_, p.data(), p.size() * 4);
+      const auto text = [&](HFONT f, const std::wstring& s, int l, int t, int r, int b, std::uint32_t c) {
+        SelectObject(dc_, f);
+        SetTextColor(dc_, color_ref(c));
+        RECT rect{l, t, r, b};
+        DrawTextW(dc_, s.c_str(), -1, &rect, DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | DT_LEFT);
+      };
+      text(label_font_, L"HEADSET", 20, 26, 126, 42, kLabel);
+      text(value_font_, number(headset_hz, 0, L" Hz"), 20, 40, 126, 74, rate_color(headset_hz, 70, 45));
+      text(label_font_, L"GAME", 142, 26, 236, 42, kLabel);
+      text(value_font_, number(game_fps, 1), 142, 40, 236, 74,
+           rate_color(game_fps, headset_hz > 0 ? headset_hz * 0.95 : 70, 45));
+      // The size sent to the headset for one eye (Display settings may change it)
+      // and the size the game renders one eye at.
+      const auto size = [](std::uint32_t w, std::uint32_t h) {
+        return w ? std::to_wstring(w) + L"\x00d7" + std::to_wstring(h) : std::wstring(L"\x2014");
+      };
+      text(label_font_, L"HEADSET EYE", 254, 26, 370, 42, kLabel);
+      text(compact_font_, size(ow, oh), 254, 46, 370, 70, kCyan);
+      text(label_font_, L"SOURCE RENDER", 650, 26, 792, 42, kLabel);
+      text(value_font_, size(rw, rh), 650, 40, 792, 74, kCyan);
+      text(label_font_, L"PREPARE", 808, 26, 940, 42, kLabel);
+      text(value_font_, number(prepare, 1, L" ms"), 808, 40, 940, 74,
+           prepare <= 4 ? kGreen : prepare <= 8 ? kAmber : kRed);
+      const auto percent = [](const wchar_t* name, double v) {
+        if (!(v >= 0)) return std::wstring(name) + L" \x2014";
+        wchar_t t[32]{};
+        std::swprintf(t, std::size(t), L"%ls %.0f%%", name, v);
+        return std::wstring(t);
+      };
+      const auto memory = [](const wchar_t* name, double used, double total) {
+        if (!(used >= 0) || !(total > 0)) return std::wstring(name) + L" \x2014";
+        wchar_t t[48]{};
+        std::swprintf(t, std::size(t), used < 10 ? L"%ls %.1f/%.0fG" : L"%ls %.0f/%.0fG", name, used, total);
+        return std::wstring(t);
+      };
+      const auto load_color = [](double v) { return !(v >= 0) ? kLabel : v < 75 ? kGreen : v < 90 ? kAmber : kRed; };
+      text(compact_font_, percent(L"PC CPU", load.cpu), 958, 28, 1044, 48, load_color(load.cpu));
+      text(compact_font_, percent(L"PC GPU", load.gpu), 1058, 28, 1156, 48, load_color(load.gpu));
+      text(compact_font_, memory(L"RAM", load.ram_used, load.ram_total), 958, 52, 1044, 72,
+           load_color(load.ram_percent));
+      text(compact_font_, memory(L"VRAM", load.vram_used, load.vram_total), 1058, 52, 1156, 72,
+           load_color(load.vram_percent));
+      GdiFlush();
+      std::memcpy(p.data(), bits_, p.size() * 4);
+      // GDI leaves alpha at zero where it draws: text pixels become opaque.
+      for (auto& px : p)
+        if ((px & 0xffffff) && !(px >> 24)) px |= 0xff000000u;
+    }
+    std::lock_guard lock(mutex_);
+    panel_ = std::move(p);
+    ++panel_sequence_;
   }
   std::string name_;
   std::wstring luid_;
   std::atomic_bool running_{true};
   mutable std::mutex mutex_;
   Load load_;
+  std::vector<std::uint32_t> background_, panel_;
+  std::uint64_t panel_sequence_ = 0;
+  std::array<std::array<float, 72>, 2> history_{};
+  std::size_t cursor_ = 0, filled_ = 0;
+  HDC dc_{};
+  HBITMAP bitmap_{};
+  void* bits_{};
+  HFONT label_font_{}, value_font_{}, compact_font_{};
   std::thread worker_;
 };
-
-// Rates and timings fed by xrEndFrame.
-struct Rates {
-  std::mutex mutex;
-  double prepare_ms = -1;
-  std::uint32_t render_width = 0, render_height = 0, output_width = 0, output_height = 0;
-} rates;
 
 class Overlay {
  public:
   const XrCompositionLayerBaseHeader* layer(XrSession session, const XrGraphicsBindingVulkanKHR& binding,
                                             PFN_vkGetInstanceProcAddr get, XrTime display_time) {
+    if (failed_) return nullptr;
     count_frame(display_time);
-    if (!enabled() || failed_) return nullptr;
     if (session != session_ || binding.device != binding_.device) {
       if (!create(session, binding, get)) {
         failed_ = true;
         return nullptr;
       }
     }
-    const auto now = GetTickCount64();
-    if (now >= next_) {
-      next_ = now + 500;
-      if (!update()) return valid_ ? reinterpret_cast<const XrCompositionLayerBaseHeader*>(&quad_) : nullptr;
-    }
+    update();
     return valid_ ? reinterpret_cast<const XrCompositionLayerBaseHeader*>(&quad_) : nullptr;
   }
 
  private:
-  bool enabled() {
-    if (!event_) {
-      const char* initial = venture::environment::getenv("VENTURE_STATS_OVERLAY");
-      const auto name = L"Local\\VentureStatsOverlay-" + std::to_wstring(GetCurrentProcessId());
-      const std::string_view start = initial ? initial : "";
-      event_ = CreateEventW(nullptr, TRUE, start == "on" || start == "1", name.c_str());
-    }
-    return event_ && WaitForSingleObject(event_, 0) == WAIT_OBJECT_0;
-  }
   // Headset rate from the spacing of display times; game rate from calls.
   void count_frame(XrTime display_time) {
     const auto now = std::chrono::steady_clock::now();
@@ -343,8 +480,9 @@ class Overlay {
     last_display_ = display_time;
     const double seconds = std::chrono::duration<double>(now - window_start_).count();
     if (seconds >= 0.5) {
-      game_fps_ = frames_ / seconds;
-      headset_hz_ = min_period_ > 0 ? 1e9 / min_period_ : -1;
+      std::lock_guard lock(rates.mutex);
+      rates.game_fps = frames_ / seconds;
+      rates.headset_hz = min_period_ > 0 ? 1e9 / min_period_ : -1;
       frames_ = 0;
       min_period_ = 0;
       window_start_ = now;
@@ -387,11 +525,13 @@ class Overlay {
     if (XR_FAILED(::xrEnumerateSwapchainImages(chain_, count, &count,
                                                reinterpret_cast<XrSwapchainImageBaseHeader*>(images_.data()))))
       return false;
-    // Upload: a host-visible staging buffer, one command buffer and a fence.
+    // Upload: a host-visible staging buffer with one region per slot, and a
+    // command buffer and fence per slot. An upload only reuses a slot whose
+    // fence has signalled; the render thread never waits for the GPU.
     const auto device = binding.device;
     fn<PFN_vkGetDeviceQueue>("vkGetDeviceQueue")(device, binding.queueFamilyIndex, binding.queueIndex, &queue_);
     VkBufferCreateInfo bi{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
-    bi.size = VkDeviceSize(kWidth) * kHeight * 4;
+    bi.size = kSlotBytes * kSlots;
     bi.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
     if (fn<PFN_vkCreateBuffer>("vkCreateBuffer")(device, &bi, nullptr, &buffer_) != VK_SUCCESS) return false;
     VkMemoryRequirements req{};
@@ -414,11 +554,13 @@ class Overlay {
     pi.queueFamilyIndex = binding.queueFamilyIndex;
     if (fn<PFN_vkCreateCommandPool>("vkCreateCommandPool")(device, &pi, nullptr, &pool_) != VK_SUCCESS) return false;
     VkCommandBufferAllocateInfo ci{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO, nullptr, pool_,
-                                   VK_COMMAND_BUFFER_LEVEL_PRIMARY, 1};
-    VkFenceCreateInfo fi{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
-    if (fn<PFN_vkAllocateCommandBuffers>("vkAllocateCommandBuffers")(device, &ci, &command_) != VK_SUCCESS ||
-        fn<PFN_vkCreateFence>("vkCreateFence")(device, &fi, nullptr, &fence_) != VK_SUCCESS)
+                                   VK_COMMAND_BUFFER_LEVEL_PRIMARY, kSlots};
+    if (fn<PFN_vkAllocateCommandBuffers>("vkAllocateCommandBuffers")(device, &ci, commands_.data()) != VK_SUCCESS)
       return false;
+    // Signalled at creation: every slot starts free.
+    VkFenceCreateInfo fi{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO, nullptr, VK_FENCE_CREATE_SIGNALED_BIT};
+    for (auto& fence : fences_)
+      if (fn<PFN_vkCreateFence>("vkCreateFence")(device, &fi, nullptr, &fence) != VK_SUCCESS) return false;
     // The PC load sampler matches NVML / PDH to this physical device.
     VkPhysicalDeviceIDProperties id{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES};
     VkPhysicalDeviceProperties2 props{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, &id};
@@ -436,7 +578,6 @@ class Overlay {
       }
     }
     if (!sampler_) sampler_ = std::make_unique<Sampler>(name, luid);
-    if (background_.empty()) background_ = background();
     quad_ = {XR_TYPE_COMPOSITION_LAYER_QUAD};
     quad_.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT |
                        XR_COMPOSITION_LAYER_UNPREMULTIPLIED_ALPHA_BIT;
@@ -451,131 +592,44 @@ class Overlay {
     return true;
   }
   static bool session_shared_gpu();
-  std::vector<std::uint32_t> paint() {
-    auto p = background_;
-    const auto load = sampler_ ? sampler_->latest() : Load{};
-    // Rate graph: headset (green) and game (violet), 0-120 Hz.
-    history_[0][cursor_] = float(std::clamp(headset_hz_, 0.0, 120.0));
-    history_[1][cursor_] = float(std::clamp(game_fps_, 0.0, 120.0));
-    cursor_ = (cursor_ + 1) % history_[0].size();
-    filled_ = std::min(filled_ + 1, history_[0].size());
-    constexpr int gl = 398, gr = 500, gt = 32, gb = 68;
-    line(p, gl, gb, gr, gb, kGrid);
-    line(p, gl, gb - int(90.0 / 120.0 * (gb - gt)), gr, gb - int(90.0 / 120.0 * (gb - gt)), 0x807b6632u);
-    const auto n = history_[0].size();
-    for (std::size_t series = 0; series < 2; ++series)
-      for (std::size_t i = 1; i < filled_; ++i) {
-        const auto a = history_[series][(cursor_ + n - filled_ + i - 1) % n], b = history_[series][(cursor_ + n - filled_ + i) % n];
-        line(p, gl + int((i - 1) * (gr - gl) / (n - 1)), gb - int(std::clamp(a / 120.f, 0.f, 1.f) * (gb - gt)),
-             gl + int(i * (gr - gl) / (n - 1)), gb - int(std::clamp(b / 120.f, 0.f, 1.f) * (gb - gt)),
-             series ? kViolet : kGreen);
-      }
-    BITMAPINFO bmi{};
-    bmi.bmiHeader = {sizeof(BITMAPINFOHEADER), LONG(kWidth), -LONG(kHeight), 1, 32, BI_RGB};
-    void* bits = nullptr;
-    HDC dc = CreateCompatibleDC(nullptr);
-    HBITMAP bitmap = dc ? CreateDIBSection(dc, &bmi, DIB_RGB_COLORS, &bits, nullptr, 0) : nullptr;
-    if (!bitmap || !bits) {
-      if (bitmap) DeleteObject(bitmap);
-      if (dc) DeleteDC(dc);
-      return p;
-    }
-    std::memcpy(bits, p.data(), p.size() * 4);
-    const HGDIOBJ old = SelectObject(dc, bitmap);
-    SetBkMode(dc, TRANSPARENT);
-    const auto font = [](int size, int weight) {
-      return CreateFontW(-size, 0, 0, 0, weight, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
-                         CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI");
-    };
-    HFONT label = font(11, FW_SEMIBOLD), value = font(20, FW_BOLD), compact = font(12, FW_BOLD);
-    const auto text = [&](HFONT f, const std::wstring& s, int l, int t, int r, int b, std::uint32_t c) {
-      SelectObject(dc, f);
-      SetTextColor(dc, color_ref(c));
-      RECT rect{l, t, r, b};
-      DrawTextW(dc, s.c_str(), -1, &rect, DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | DT_LEFT);
-    };
-    text(label, L"HEADSET", 20, 26, 126, 42, kLabel);
-    text(value, number(headset_hz_, 0, L" Hz"), 20, 40, 126, 74, rate_color(headset_hz_, 70, 45));
-    text(label, L"GAME", 142, 26, 236, 42, kLabel);
-    text(value, number(game_fps_, 1), 142, 40, 236, 74, rate_color(game_fps_, headset_hz_ > 0 ? headset_hz_ * 0.95 : 70, 45));
-    double prepare = -1;
-    std::uint32_t rw = 0, rh = 0, ow = 0, oh = 0;
-    {
-      std::lock_guard lock(rates.mutex);
-      prepare = rates.prepare_ms;
-      rw = rates.render_width, rh = rates.render_height;
-      ow = rates.output_width, oh = rates.output_height;
-    }
-    // The size sent to the headset for one eye (Display settings may change it)
-    // and the size the game renders one eye at.
-    const auto size = [](std::uint32_t w, std::uint32_t h) {
-      return w ? std::to_wstring(w) + L"\x00d7" + std::to_wstring(h) : std::wstring(L"\x2014");
-    };
-    text(label, L"HEADSET EYE", 254, 26, 370, 42, kLabel);
-    text(compact, size(ow, oh), 254, 46, 370, 70, kCyan);
-    text(label, L"SOURCE RENDER", 650, 26, 792, 42, kLabel);
-    text(value, size(rw, rh), 650, 40, 792, 74, kCyan);
-    text(label, L"PREPARE", 808, 26, 940, 42, kLabel);
-    text(value, number(prepare, 1, L" ms"), 808, 40, 940, 74, prepare <= 4 ? kGreen : prepare <= 8 ? kAmber : kRed);
-    const auto percent = [](const wchar_t* name, double v) {
-      if (!(v >= 0)) return std::wstring(name) + L" \x2014";
-      wchar_t t[32]{};
-      std::swprintf(t, std::size(t), L"%ls %.0f%%", name, v);
-      return std::wstring(t);
-    };
-    const auto memory = [](const wchar_t* name, double used, double total) {
-      if (!(used >= 0) || !(total > 0)) return std::wstring(name) + L" \x2014";
-      wchar_t t[48]{};
-      std::swprintf(t, std::size(t), used < 10 ? L"%ls %.1f/%.0fG" : L"%ls %.0f/%.0fG", name, used, total);
-      return std::wstring(t);
-    };
-    const auto load_color = [](double v) { return !(v >= 0) ? kLabel : v < 75 ? kGreen : v < 90 ? kAmber : kRed; };
-    text(compact, percent(L"PC CPU", load.cpu), 958, 28, 1044, 48, load_color(load.cpu));
-    text(compact, percent(L"PC GPU", load.gpu), 1058, 28, 1156, 48, load_color(load.gpu));
-    text(compact, memory(L"RAM", load.ram_used, load.ram_total), 958, 52, 1044, 72, load_color(load.ram_percent));
-    text(compact, memory(L"VRAM", load.vram_used, load.vram_total), 1058, 52, 1156, 72, load_color(load.vram_percent));
-    SelectObject(dc, old);
-    std::memcpy(p.data(), bits, p.size() * 4);
-    // GDI leaves alpha at zero where it draws: text pixels become opaque.
-    for (auto& px : p)
-      if ((px & 0xffffff) && !(px >> 24)) px |= 0xff000000u;
-    for (HFONT f : {label, value, compact}) DeleteObject(f);
-    DeleteObject(bitmap);
-    DeleteDC(dc);
-    return p;
-  }
-  bool update() {
-    std::uint32_t index = 0;
-    {
-      HostQueueLock queue(session_shared_gpu());
-      if (!queue || XR_FAILED(::xrAcquireSwapchainImage(chain_, nullptr, &index))) return false;
-    }
-    XrSwapchainImageWaitInfo wait{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO, nullptr, XR_INFINITE_DURATION};
-    if (XR_FAILED(::xrWaitSwapchainImage(chain_, &wait))) return false;
-    const auto pixels = paint();
+  // Uploads the newest painted panel when the next slot is free: twice a
+  // second, as the sampler paints. Never waits for the GPU.
+  void update() {
+    const auto device = binding_.device;
+    const auto slot = next_slot_;
+    if (fn<PFN_vkGetFenceStatus>("vkGetFenceStatus")(device, fences_[slot]) != VK_SUCCESS) return;
+    if (!sampler_ || !sampler_->take_panel(pixels_, panel_seen_)) return;
     // VENTURE_OVERLAY_DUMP=<file>: the first painted panel, raw BGRA 1160x100.
     if (const char* dump = venture::environment::getenv("VENTURE_OVERLAY_DUMP"); dump && *dump && !dumped_) {
       dumped_ = true;
       if (FILE* f = std::fopen(dump, "wb")) {
-        std::fwrite(pixels.data(), 4, pixels.size(), f);
+        std::fwrite(pixels_.data(), 4, pixels_.size(), f);
         std::fclose(f);
       }
     }
-    auto* out = static_cast<std::uint8_t*>(mapped_);
+    std::uint32_t index = 0;
+    {
+      HostQueueLock queue(session_shared_gpu());
+      if (!queue || XR_FAILED(::xrAcquireSwapchainImage(chain_, nullptr, &index))) return;
+    }
+    XrSwapchainImageWaitInfo wait{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO, nullptr, XR_INFINITE_DURATION};
+    if (XR_FAILED(::xrWaitSwapchainImage(chain_, &wait))) return;
+    auto* out = static_cast<std::uint8_t*>(mapped_) + kSlotBytes * slot;
     const bool bgra = format_ == VK_FORMAT_B8G8R8A8_SRGB;
-    for (std::size_t i = 0; i < pixels.size(); ++i) {
-      const auto px = pixels[i];
+    for (std::size_t i = 0; i < pixels_.size(); ++i) {
+      const auto px = pixels_[i];
       const std::uint8_t r = std::uint8_t(px >> 16), g = std::uint8_t(px >> 8), b = std::uint8_t(px), a = std::uint8_t(px >> 24);
       out[i * 4 + 0] = bgra ? b : r;
       out[i * 4 + 1] = g;
       out[i * 4 + 2] = bgra ? r : b;
       out[i * 4 + 3] = a;
     }
+    const auto command = commands_[slot];
     const auto image = images_.at(index).image;
-    fn<PFN_vkResetCommandBuffer>("vkResetCommandBuffer")(command_, 0);
+    fn<PFN_vkResetCommandBuffer>("vkResetCommandBuffer")(command, 0);
     VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
     begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-    fn<PFN_vkBeginCommandBuffer>("vkBeginCommandBuffer")(command_, &begin);
+    fn<PFN_vkBeginCommandBuffer>("vkBeginCommandBuffer")(command, &begin);
     const auto barrier = [&](VkImageLayout from, VkImageLayout to) {
       VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
       b.oldLayout = from;
@@ -585,39 +639,45 @@ class Overlay {
       b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
       b.image = image;
       b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-      fn<PFN_vkCmdPipelineBarrier>("vkCmdPipelineBarrier")(command_, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+      fn<PFN_vkCmdPipelineBarrier>("vkCmdPipelineBarrier")(command, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
                                                            VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr, 0, nullptr,
                                                            1, &b);
     };
     barrier(VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
     VkBufferImageCopy copy{};
+    copy.bufferOffset = kSlotBytes * slot;
     copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
     copy.imageExtent = {kWidth, kHeight, 1};
-    fn<PFN_vkCmdCopyBufferToImage>("vkCmdCopyBufferToImage")(command_, buffer_, image,
+    fn<PFN_vkCmdCopyBufferToImage>("vkCmdCopyBufferToImage")(command, buffer_, image,
                                                              VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
     barrier(VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
-    fn<PFN_vkEndCommandBuffer>("vkEndCommandBuffer")(command_);
-    fn<PFN_vkResetFences>("vkResetFences")(binding_.device, 1, &fence_);
+    fn<PFN_vkEndCommandBuffer>("vkEndCommandBuffer")(command);
     VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
     submit.commandBufferCount = 1;
-    submit.pCommandBuffers = &command_;
+    submit.pCommandBuffers = &command;
     bool submitted = false;
     {
+      // The copy is queued before the release on the session's queue, which
+      // orders it ahead of the compositor's use of the image.
       HostQueueLock queue(session_shared_gpu());
-      submitted = queue && fn<PFN_vkQueueSubmit>("vkQueueSubmit")(queue_, 1, &submit, fence_) == VK_SUCCESS;
-    }
-    // Twice a second: wait for the small copy before the image goes back.
-    if (submitted) fn<PFN_vkWaitForFences>("vkWaitForFences")(binding_.device, 1, &fence_, VK_TRUE, 100'000'000);
-    {
-      HostQueueLock queue(session_shared_gpu());
+      fn<PFN_vkResetFences>("vkResetFences")(device, 1, &fences_[slot]);
+      submitted = queue && fn<PFN_vkQueueSubmit>("vkQueueSubmit")(queue_, 1, &submit, fences_[slot]) == VK_SUCCESS;
       XrSwapchainImageReleaseInfo release{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
-      if (!queue || XR_FAILED(::xrReleaseSwapchainImage(chain_, &release))) return false;
+      if (queue) ::xrReleaseSwapchainImage(chain_, &release);
     }
-    valid_ = submitted;
-    return submitted;
+    if (!submitted) {
+      // Nothing will signal the reset fence: make the slot free again.
+      fn<PFN_vkDestroyFence>("vkDestroyFence")(device, fences_[slot], nullptr);
+      VkFenceCreateInfo fi{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO, nullptr, VK_FENCE_CREATE_SIGNALED_BIT};
+      fn<PFN_vkCreateFence>("vkCreateFence")(device, &fi, nullptr, &fences_[slot]);
+      return;
+    }
+    next_slot_ = (slot + 1) % kSlots;
+    valid_ = true;
   }
 
-  HANDLE event_{};
+  static constexpr std::uint32_t kSlots = 3;
+  static constexpr VkDeviceSize kSlotBytes = VkDeviceSize(kWidth) * kHeight * 4;
   bool failed_ = false, valid_ = false, dumped_ = false;
   XrSession session_{};
   XrGraphicsBindingVulkanKHR binding_{};
@@ -631,18 +691,17 @@ class Overlay {
   VkDeviceMemory memory_{};
   void* mapped_{};
   VkCommandPool pool_{};
-  VkCommandBuffer command_{};
-  VkFence fence_{};
+  std::array<VkCommandBuffer, kSlots> commands_{};
+  std::array<VkFence, kSlots> fences_{};
+  std::uint32_t next_slot_ = 0;
+  std::vector<std::uint32_t> pixels_;
+  std::uint64_t panel_seen_ = 0;
   XrCompositionLayerQuad quad_{XR_TYPE_COMPOSITION_LAYER_QUAD};
-  ULONGLONG next_ = 0;
   std::unique_ptr<Sampler> sampler_;
-  std::vector<std::uint32_t> background_;
   std::chrono::steady_clock::time_point window_start_{};
   std::uint64_t frames_ = 0;
   XrTime last_display_ = 0;
-  double min_period_ = 0, game_fps_ = -1, headset_hz_ = -1;
-  std::array<std::array<float, 72>, 2> history_{};
-  std::size_t cursor_ = 0, filled_ = 0;
+  double min_period_ = 0;
 };
 bool Overlay::session_shared_gpu() { return session().uses_shared_gpu; }
 
@@ -652,9 +711,15 @@ Overlay& overlay() {
 }
 }  // namespace
 
+bool active() {
+  const int state = shown.load(std::memory_order_relaxed);
+  if (state >= 0) return state != 0;
+  start_watcher();
+  return shown.load() > 0;
+}
 const XrCompositionLayerBaseHeader* layer(XrSession host_session, const XrGraphicsBindingVulkanKHR& binding,
                                           PFN_vkGetInstanceProcAddr get, XrTime display_time) {
-  if (!host_session || !binding.device || !get) return nullptr;
+  if (!active() || !host_session || !binding.device || !get) return nullptr;
   return overlay().layer(host_session, binding, get, display_time);
 }
 void note_prepare(double milliseconds) {
