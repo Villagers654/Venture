@@ -175,9 +175,10 @@ std::vector<std::string> host_bindings(std::string_view guest, const Profile& p,
   else if (c == "/input/thumbstick/y") q = Quest::stick, part = Part::y;
   else if (c == "/input/thumbstick/touch") q = Quest::stick, part = Part::touch;
   else if (c == "/input/thumbstick/click") q = Quest::stick_click;
-  else if (c == "/input/trigger/value") q = Quest::trigger;
+  // Boolean actions may bind to the parent path of an analog input.
+  else if (c == "/input/trigger" || c == "/input/trigger/value") q = Quest::trigger;
   else if (c == "/input/trigger/touch") q = Quest::trigger, part = Part::touch;
-  else if (c == "/input/squeeze/value") q = Quest::grip;
+  else if (c == "/input/squeeze" || c == "/input/squeeze/value") q = Quest::grip;
   else if (c == "/input/thumbrest/touch") q = Quest::thumbrest;
   else return {};  // Pro's pinch, force and stylus are not ordinary Touch controls
   if (q == Quest::menu) {
