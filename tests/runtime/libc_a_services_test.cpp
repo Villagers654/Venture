@@ -92,19 +92,23 @@ TEST_CASE("libc A atexit reentrancy, TLS destructors and C++ initialization guar
   run_guest_thread_destructors(f.thread);
   CHECK(order == std::vector<int>{3, 1, 2, 5, 4});
   alignas(8) std::uint64_t guard = 0;
-  CHECK(f.invoke("__cxa_guard_acquire", {h2g(&guard)}, "libstdc++.so") == 1);
+  CHECK(f.invoke("__cxa_guard_acquire", {h2g(&guard)}) == 1);
   f.invoke("__cxa_guard_abort", {h2g(&guard)}, "libstdc++.so");
+  CHECK(guard == 0);
+  CHECK(f.invoke("__cxa_guard_acquire", {h2g(&guard)}, "libstdc++.so") == 1);
+  f.invoke("__cxa_guard_abort", {h2g(&guard)});
   CHECK(guard == 0);
   std::atomic<int> initialized{0};
   int object = 0;
   std::vector<std::thread> threads;
   for (int i = 0; i < 8; ++i)
-    threads.emplace_back([&] {
+    threads.emplace_back([&, i] {
       test::LibcFixture worker;
-      if (worker.invoke("__cxa_guard_acquire", {h2g(&guard)}, "libstdc++.so")) {
+      const char* library = i % 2 ? "libc.so" : "libstdc++.so";
+      if (worker.invoke("__cxa_guard_acquire", {h2g(&guard)}, library)) {
         object = 42;
         initialized.fetch_add(1);
-        worker.invoke("__cxa_guard_release", {h2g(&guard)}, "libstdc++.so");
+        worker.invoke("__cxa_guard_release", {h2g(&guard)});
       }
       CHECK(object == 42);
     });

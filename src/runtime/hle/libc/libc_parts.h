@@ -39,6 +39,7 @@ void register_liblog(HleLibrary& liblog);   // liblog.so (__android_log_*)
 std::string last_guest_error();
 void register_libz(HleLibrary& libz);       // libz.so (zlib)
 void register_libstdcpp(HleLibrary& lib);   // system libstdc++.so (operator new/delete, __cxa_guard_*)
+void register_cxa_guards(HleLibrary& lib);  // ARM64 guards shared by libc.so and libstdc++.so
 
 // printf-family formatting engine shared with the stdio part (bionic semantics).
 struct PrintfConversion {

@@ -67,6 +67,11 @@ void pure_virtual() { fatal("__cxa_pure_virtual: pure virtual guest call"); }
 void deleted_virtual() { fatal("__cxa_deleted_virtual: deleted virtual guest call"); }
 const unsigned char nothrow_object = 0;
 }  // namespace
+void register_cxa_guards(HleLibrary& lib) {
+  bind<&guard_acquire>(lib, "__cxa_guard_acquire");
+  bind<&guard_release>(lib, "__cxa_guard_release");
+  bind<&guard_abort>(lib, "__cxa_guard_abort");
+}
 void register_libstdcpp(HleLibrary& lib) {
   // Bionic's libstdc++.map.txt mangles size_t as unsigned long (m) on LP64 and
   // unsigned int (j) on ARM32. The other forms (sized and aligned) are the
@@ -90,9 +95,7 @@ void register_libstdcpp(HleLibrary& lib) {
   for (auto n : {"_ZdlPvmSt11align_val_t", "_ZdaPvmSt11align_val_t", "_ZdlPvSt11align_val_tRKSt9nothrow_t",
                  "_ZdaPvSt11align_val_tRKSt9nothrow_t"})
     bind<&delete3>(lib, size_name(n));
-  bind<&guard_acquire>(lib, "__cxa_guard_acquire");
-  bind<&guard_release>(lib, "__cxa_guard_release");
-  bind<&guard_abort>(lib, "__cxa_guard_abort");
+  register_cxa_guards(lib);
   bind<&pure_virtual>(lib, "__cxa_pure_virtual");
   bind<&deleted_virtual>(lib, "__cxa_deleted_virtual");
   lib.add_data("_ZSt7nothrow", a32 ? low_data(std::as_bytes(std::span(&nothrow_object, 1))) : h2g(&nothrow_object));

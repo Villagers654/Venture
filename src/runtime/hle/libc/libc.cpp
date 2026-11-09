@@ -19,6 +19,7 @@ void register_libraries() {
   register_formatting(*c);
   register_time_format(*c);
   register_misc(*c);
+  if (process_config().isa() == GuestIsa::a64) register_cxa_guards(*c);
   register_threads(*c);
   register_signals(*c);
   register_files(*c);
