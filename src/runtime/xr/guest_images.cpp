@@ -1,4 +1,5 @@
 #include "xr/guest_images.h"
+#include "xr/dlss.h"
 #include "common/log.h"
 #include "core/wait.h"
 #include "hle/vulkan/internal.h"
@@ -50,6 +51,10 @@ struct GuestImages::Impl {
   bool staged_mode = false;
   std::vector<StagedImage> staged;
   std::uint64_t bytes = 0;
+  // Experimental DLSS for a scaled presentation; created at the first scaled
+  // copy, destroyed only after the queue is idle.
+  std::unique_ptr<dlss::Upscaler> upscaler;
+  bool upscaler_tried = false;
   template <class T> T fn(const char *name) const {
     return reinterpret_cast<T>(get(binding.instance, name));
   }
@@ -101,6 +106,7 @@ struct GuestImages::Impl {
       if (lock)
         fn<PFN_vkQueueWaitIdle>("vkQueueWaitIdle")(queue);
     }
+    upscaler.reset();
     for (const auto &slot : slots) {
       if (slot.fence)
         fn<PFN_vkDestroyFence>("vkDestroyFence")(binding.device, slot.fence,
@@ -209,6 +215,10 @@ GuestImages::GuestImages(const XrGraphicsBindingVulkanKHR &binding,
     if (info.usageFlags & XR_SWAPCHAIN_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT)
       ci.usage |= VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
     if (info.usageFlags & XR_SWAPCHAIN_USAGE_SAMPLED_BIT)
+      ci.usage |= VK_IMAGE_USAGE_SAMPLED_BIT;
+    // DLSS samples the guest image (dlss::Upscaler).
+    if (s.aspects == VK_IMAGE_ASPECT_COLOR_BIT && info.sampleCount == 1 &&
+        dlss::requested())
       ci.usage |= VK_IMAGE_USAGE_SAMPLED_BIT;
     if (info.usageFlags & XR_SWAPCHAIN_USAGE_UNORDERED_ACCESS_BIT)
       ci.usage |= VK_IMAGE_USAGE_STORAGE_BIT;
@@ -330,13 +340,19 @@ XrResult GuestImages::drain() {
   return XR_SUCCESS;
 }
 XrResult GuestImages::copy(std::uint32_t index, VkImage target,
-                           VkFormat format, VkExtent2D extent, bool flip_rows, std::int32_t source_layer) {
+                           VkFormat format, VkExtent2D extent, bool flip_rows, std::int32_t source_layer,
+                           std::span<const dlss::ViewSample> views, bool side_by_side) {
   auto &s = *impl_;
   const auto layer_count = s.info.arraySize * s.info.faceCount;
   if (source_layer < -1 || (source_layer >= 0 && std::uint32_t(source_layer) >= layer_count))
     return XR_ERROR_INDEX_OUT_OF_RANGE;
   const auto copied_layers = source_layer < 0 ? layer_count : 1u;
   const auto first_layer = source_layer < 0 ? 0u : std::uint32_t(source_layer);
+  // Side by side (DLSS with gaze): every layer into its own slice of a
+  // one-layer destination; `extent` becomes one layer's size.
+  const std::uint32_t slices = layer_count;
+  side_by_side = side_by_side && source_layer < 0 && slices > 1 && s.aspects == VK_IMAGE_ASPECT_COLOR_BIT;
+  if (side_by_side) extent.width /= slices;
   const bool scaled = extent.width && extent.height &&
                       (extent.width != s.info.width || extent.height != s.info.height);
   std::lock_guard slot_lock(s.mutex);
@@ -428,10 +444,25 @@ XrResult GuestImages::copy(std::uint32_t index, VkImage target,
       }
       barrier(target, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, s.layout, host_mips, copied_layers);
     } else {
+    // Experimental DLSS (xr/dlss.h): every layer of a scaled, single-level
+    // colour chain; the plain blit otherwise.
+    if (scaled && source_layer < 0 && s.aspects == VK_IMAGE_ASPECT_COLOR_BIT && dlss::requested() &&
+        !std::exchange(s.upscaler_tried, true)) {
+      std::vector<VkImage> images;
+      for (const auto &each : s.slots)
+        images.push_back(each.image);
+      s.upscaler = dlss::Upscaler::create(s.binding, s.get, s.info, images);
+    }
+    const bool upscaled = scaled && source_layer < 0 && s.upscaler && s.info.mipCount == 1 &&
+                          s.upscaler->record(slot.command, index, target, format,
+                                             extent, flip_rows, s.layout, views,
+                                             side_by_side);
+    if (!upscaled) {
     barrier(slot.image, s.layout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, s.info.mipCount, layer_count);
+    const std::uint32_t target_layers = side_by_side ? 1 : copied_layers;
     barrier(target, VK_IMAGE_LAYOUT_UNDEFINED,
-            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, host_mips, copied_layers);
-    if (format == VkFormat(s.info.format) && !scaled && !flip_rows) {
+            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, host_mips, target_layers);
+    if (format == VkFormat(s.info.format) && !scaled && !flip_rows && !side_by_side) {
       for (const auto aspect :
            {VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_ASPECT_DEPTH_BIT,
             VK_IMAGE_ASPECT_STENCIL_BIT}) {
@@ -480,13 +511,27 @@ XrResult GuestImages::copy(std::uint32_t index, VkImage target,
                    : blit.srcOffsets[1];
         if (flip_rows)
           std::swap(blit.srcOffsets[0].y, blit.srcOffsets[1].y);
+        std::vector<VkImageBlit> regions{blit};
+        if (side_by_side) {
+          regions.assign(slices, blit);
+          for (std::uint32_t layer = 0; layer < slices; ++layer) {
+            auto &region = regions[layer];
+            region.srcSubresource = {s.aspects, mip, layer, 1};
+            region.dstSubresource = {s.aspects, mip, 0, 1};
+            const int x = int(layer * std::max(1u, extent.width >> mip));
+            region.dstOffsets[0].x += x;
+            region.dstOffsets[1].x += x;
+          }
+        }
         s.fn<PFN_vkCmdBlitImage>("vkCmdBlitImage")(
             slot.command, slot.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-            target, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, filter);
+            target, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            std::uint32_t(regions.size()), regions.data(), filter);
       }
     }
     barrier(slot.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, s.layout, s.info.mipCount, layer_count);
-    barrier(target, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, s.layout, host_mips, copied_layers);
+    barrier(target, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, s.layout, host_mips, target_layers);
+    }
     }
     if (s.queries)
       s.fn<PFN_vkCmdWriteTimestamp>("vkCmdWriteTimestamp")(

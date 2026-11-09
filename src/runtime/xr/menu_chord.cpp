@@ -1,3 +1,4 @@
+#include "xr/cheeky_live.h"
 #include "common/environment.h"
 #include "xr/menu_chord.h"
 #include "xr/haptic_output.h"
@@ -309,8 +310,10 @@ XrResult sync_with_menu_chord(XrSession session, const XrActionsSyncInfo* info) 
   }
   XrActionStateBoolean values[2]{{XR_TYPE_ACTION_STATE_BOOLEAN}, {XR_TYPE_ACTION_STATE_BOOLEAN}};
   const bool chord = snapshot.synthesized || snapshot.chord_hands[0] || snapshot.chord_hands[1];
+  // Toggle NR (cheeky_live.h) reads the same clicks, with or without the chord.
+  const bool read_sticks = chord || cheeky_live::sticks_wanted();
   const unsigned count = snapshot.synthesized ? std::max(1u, snapshot.source_count) : 2u;
-  for (unsigned i = 0; i < count && XR_SUCCEEDED(result) && chord; ++i) {
+  for (unsigned i = 0; i < count && XR_SUCCEEDED(result) && read_sticks; ++i) {
     XrActionStateGetInfo gi{XR_TYPE_ACTION_STATE_GET_INFO, nullptr, sources[i], XR_NULL_PATH};
     if (XR_FAILED(::xrGetActionStateBoolean(session, &gi, &values[i]))) values[i].isActive = false;
   }
@@ -318,6 +321,8 @@ XrResult sync_with_menu_chord(XrSession session, const XrActionsSyncInfo* info) 
   const auto now = venture::monotonic_ns();
   snapshot.active = result == XR_SUCCESS && chord && values[0].isActive && values[1].isActive;
   snapshot.pulse = snapshot.chord.update(now, values[0].currentState, values[1].currentState, snapshot.active);
+  cheeky_live::note_sticks(now, values[0].currentState, values[1].currentState,
+                           result == XR_SUCCESS && read_sticks && values[0].isActive && values[1].isActive);
   if (XR_FAILED(monotonic_to_time(now, &snapshot.time))) { snapshot.pulse = false; snapshot.active = false; }
   // Update every mapped menu at each sync, even if the app skips a state query.
   for (const auto& [action, parent] : parents) {

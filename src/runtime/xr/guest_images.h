@@ -1,6 +1,7 @@
 #pragma once
 #include "xr/api.h"
 #include "xr/xr_images.h"
+#include "xr/dlss.h"
 #include <memory>
 #include <span>
 
@@ -23,9 +24,14 @@ public:
   // A destination extent other than the guest size (or {}) scales the base level.
   // flip_rows reverses rows (XR_FB_composition_layer_image_layout VERTICAL_FLIP).
   // Staged slots hold GLES rows; their copies turn them top-down first.
+  // `views` (per layer) feeds DLSS motion vectors when a scaled copy upscales.
+  // side_by_side: the destination has one layer, `destination_extent` wide,
+  // and layer i goes to its i-th horizontal slice (prepare_swapchains).
   XrResult copy(std::uint32_t index, VkImage destination,
                 VkFormat destination_format, VkExtent2D destination_extent = {},
-                bool flip_rows = false, std::int32_t source_layer = -1);
+                bool flip_rows = false, std::int32_t source_layer = -1,
+                std::span<const dlss::ViewSample> views = {},
+                bool side_by_side = false);
   XrResult drain();
 
 private:

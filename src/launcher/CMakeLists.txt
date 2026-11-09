@@ -14,7 +14,7 @@ target_compile_definitions(venture_imgui PUBLIC IMGUI_ENABLE_FREETYPE IMGUI_USE_
 include(${PROJECT_SOURCE_DIR}/cmake/I18n.cmake)
 i18n_add_library(venture_i18n SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/i18n)
 # The launcher without its window (core.h): the GUI and venture-cli share it.
-add_library(venture_launcher_core STATIC core.cpp debug_report.cpp diagnosis.cpp drives.cpp import.cpp sign_in_link.cpp store_link.cpp updater.cpp ui/rich_text_parse.cpp)
+add_library(venture_launcher_core STATIC core.cpp debug_report.cpp diagnosis.cpp dlss_optimization.cpp drives.cpp import.cpp sign_in_link.cpp store_link.cpp updater.cpp ui/rich_text_parse.cpp)
 target_link_libraries(venture_launcher_core PUBLIC venture_common venture_ovrplatform venture_i18n)
 # Package -> app id pairs of the tested titles (data/compatibility.json) link
 # imported APKs to their store listing without a lookup (store_link.h).

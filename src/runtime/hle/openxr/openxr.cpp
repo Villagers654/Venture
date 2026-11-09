@@ -1,3 +1,4 @@
+#include "xr/cheeky_live.h"
 #include "core/xr_call_trace.h"
 #include <atomic>
 #include "xr/haptic_sequence.h"
@@ -48,6 +49,10 @@ class PresentationLayers {
  public:
   explicit PresentationLayers(bool host = false) : host_(host) {}
   std::set<XrSwapchain> submitted, flipped;
+  // Chains referenced from projection views (color and their depth nodes).
+  std::set<XrSwapchain> projection;
+  // Projection view samples per chain and array layer (DLSS).
+  std::map<XrSwapchain, std::array<venture::xr::dlss::ViewSample, 2>> view_samples;
   // One application layer; collects its swapchains into `flipped` on request.
   const void* layer(const void* node) {
     flip_ = false;
@@ -67,6 +72,7 @@ class PresentationLayers {
 
  private:
   bool host_, flip_ = false;
+  int projection_depth_ = 0;
   static bool guest_only_depth(const XrBaseInStructure* p) {
     XrSwapchain chain{};
     if (p->type == XR_TYPE_COMPOSITION_LAYER_DEPTH_INFO_KHR)
@@ -208,8 +214,30 @@ class PresentationLayers {
       if (!views || !count) continue;
       std::vector<const void*> mapped(count);
       bool changed = false;
+      ++projection_depth_;
       for (std::uint32_t i = 0; i < count; ++i)
         changed |= (mapped[i] = chain(&views[i])) != &views[i];
+      --projection_depth_;
+      // A field of view jittered for DLSS goes back to the host as located.
+      for (std::uint32_t i = 0; i < count; ++i) {
+        if (views[i].type != XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW) continue;
+        venture::xr::dlss::ViewSample sample{views[i].pose, views[i].fov, 0, 0, true};
+        const bool jittered = venture::xr::dlss::unjitter(sample.fov, sample.jitter_x, sample.jitter_y);
+        if (!host_) {
+          if (views[i].subImage.imageArrayIndex < 2)
+            view_samples[views[i].subImage.swapchain][views[i].subImage.imageArrayIndex] = sample;
+          continue;
+        }
+        if (!jittered) continue;
+        if (mapped[i] == &views[i]) {
+          auto& one = storage_.emplace_back(sizeof(views[i]));
+          std::memcpy(one.data(), &views[i], sizeof(views[i]));
+          mapped[i] = one.data();
+          changed = true;
+        }
+        auto* writable_view = static_cast<XrCompositionLayerProjectionView*>(const_cast<void*>(mapped[i]));
+        writable_view->fov = sample.fov;
+      }
       if (!changed) continue;
       auto& array = storage_.emplace_back(count * sizeof(*views));
       for (std::uint32_t i = 0; i < count; ++i)
@@ -224,6 +252,7 @@ class PresentationLayers {
     if (it == state().swapchains.end()) return false;
     submitted.insert(sub.swapchain);
     if (flip_) flipped.insert(sub.swapchain);
+    if (projection_depth_) projection.insert(sub.swapchain);
     if (!host_) return false;
     sub.swapchain = it->second.host_handle;
     // Unreal's Meta OpenXR plugin can round a view's crop a pixel or two past
@@ -253,8 +282,15 @@ class PresentationLayers {
     // chain (prepare_swapchains): map the rect's edges into its pixels.
     const auto& guest = it->second.info;
     const auto& host = it->second.host_info;
-    if (host.width && host.height && (host.width != guest.width || host.height != guest.height)) {
-      sub.imageRect = map_presentation_rect(sub.imageRect, {guest.width, guest.height}, {host.width, host.height});
+    // A side-by-side host chain holds each array layer in its own half.
+    const bool side_by_side = it->second.host_side_by_side;
+    const auto host_width = side_by_side ? host.width / 2 : host.width;
+    if (host.width && host.height && (host_width != guest.width || host.height != guest.height)) {
+      sub.imageRect = map_presentation_rect(sub.imageRect, {guest.width, guest.height}, {host_width, host.height});
+    }
+    if (side_by_side && sub.imageArrayIndex < 2) {
+      sub.imageRect.offset.x += std::int32_t(sub.imageArrayIndex * host_width);
+      sub.imageArrayIndex = 0;
     }
     return true;
   }
@@ -528,8 +564,11 @@ XrResult xrEnumerateViewConfigurationViews(XrInstance instance, XrSystemId syste
   auto result = host_call<PFN_xrEnumerateViewConfigurationViews, "xrEnumerateViewConfigurationViews">(
       instance, system, type, capacity, count, views);
   if (XR_SUCCEEDED(result) && capacity && views &&
-      (type == XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO || type == XR_VIEW_CONFIGURATION_TYPE_PRIMARY_MONO))
+      (type == XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO || type == XR_VIEW_CONFIGURATION_TYPE_PRIMARY_MONO)) {
     xr::apply_display_override(views, std::min(capacity, *count));
+    // VENTURE_EXPERIMENTAL_RENDER_SCALE (graphics.cpp scale_recommended_views).
+    scale_recommended_views(type, std::min(capacity, *count), views);
+  }
   return result;
 }
 XrResult xrGetSystemProperties(XrInstance instance, XrSystemId system, XrSystemProperties *out) {
@@ -1280,6 +1319,14 @@ XrResult xrEndFrame(XrSession handle, const XrFrameEndInfo *info) {
     r.ever_submitted = true;
     // Blits, which reverse rows, take single-sample images only.
     r.flip_rows = rects.flipped.contains(chain) && r.info.sampleCount == 1;
+    const auto samples = rects.view_samples.find(chain);
+    r.presented_views = samples != rects.view_samples.end() ? samples->second
+                                                             : decltype(r.presented_views){};
+    // Only a color chain whose host presentation does not exist yet changes
+    // size. Depth chains stay 1:1 (a scaled depth blit is not guaranteed).
+    if (!r.host_handle && rects.projection.contains(chain) && experimental_render_scale() < 1.0 &&
+        (r.info.usageFlags & XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT))
+      r.upscale_projection = true;
   }
   if (venture::environment::getenv("VENTURE_XR_SWAPCHAIN_STATS")) {
     const auto ever = std::count_if(state().swapchains.begin(), state().swapchains.end(),
@@ -1305,6 +1352,8 @@ XrResult xrEndFrame(XrSession handle, const XrFrameEndInfo *info) {
   PresentationLayers mapped(true);
   for (auto& layer : layers)
     layer = static_cast<const XrCompositionLayerBaseHeader*>(mapped.chain(layer));
+  // Apply in game requests from the launcher (Cheeky live settings).
+  venture::xr::cheeky_live::tick();
   auto host_info = *info;
   host_info.layerCount = static_cast<std::uint32_t>(layers.size());
   host_info.layers = layers.data();

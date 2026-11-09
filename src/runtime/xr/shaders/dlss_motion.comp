@@ -1,0 +1,42 @@
+#version 450
+// Camera motion vectors for DLSS (xr/dlss.cpp): each pixel is reprojected from
+// its depth with the current and previous eye pose and field of view. Objects
+// that move on their own are not covered. The output is in render pixels, from
+// the current sample to its position in the previous frame (DLSS convention).
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 0) uniform sampler2D depthImage;
+layout(rg16f, set = 0, binding = 1) writeonly uniform image2D motion;
+
+layout(push_constant) uniform Parameters {
+  vec4 current_tan;   // tan(left), tan(right), tan(up), tan(down)
+  vec4 previous_tan;
+  vec4 row0;          // previous-view rotation * current-view rotation, by rows;
+  vec4 row1;          // row0.w = 1 / near plane (reversed infinite depth),
+  vec4 row2;          // or 0 to treat every pixel as distant (rotation only)
+  vec4 translation;   // previous-view position delta, in previous view space
+  vec2 size;          // the view's rect in the image (dynamic resolution)
+  vec2 origin;
+} p;
+
+void main() {
+  ivec2 local = ivec2(gl_GlobalInvocationID.xy);
+  if (any(greaterThanEqual(local, ivec2(p.size))))
+    return;
+  ivec2 pixel = ivec2(p.origin) + local;
+  vec2 uv = (vec2(local) + 0.5) / p.size;
+  // View-space direction through the pixel (x right, y up, -z forward), and
+  // the homogeneous weight 1/distance = depth/near for reversed infinite Z.
+  vec3 direction = vec3(mix(p.current_tan.x, p.current_tan.y, uv.x),
+                        mix(p.current_tan.z, p.current_tan.w, uv.y), -1.0);
+  float weight = texelFetch(depthImage, pixel, 0).r * p.row0.w;
+  vec3 previous = vec3(dot(p.row0.xyz, direction), dot(p.row1.xyz, direction),
+                       dot(p.row2.xyz, direction)) + p.translation.xyz * weight;
+  vec2 offset = vec2(0.0);
+  if (previous.z < -1e-6) {
+    vec2 tangent = previous.xy / -previous.z;
+    vec2 previous_uv = vec2((tangent.x - p.previous_tan.x) / (p.previous_tan.y - p.previous_tan.x),
+                            (p.previous_tan.z - tangent.y) / (p.previous_tan.z - p.previous_tan.w));
+    offset = (previous_uv - uv) * p.size;
+  }
+  imageStore(motion, pixel, vec4(offset, 0.0, 0.0));
+}

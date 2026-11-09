@@ -1,3 +1,4 @@
+#include "xr/dlss.h"
 #include "common/environment.h"
 #include "core/thread_lifetime.h"
 #include "vulkan.h"
@@ -989,6 +990,14 @@ VkResult create_instance_impl(const VkInstanceCreateInfo* info, const VkAllocati
   if (mirror_capable)
     for (const char* name : mirror)
       if (std::ranges::find(names, std::string_view(name)) == names.end()) names.push_back(name);
+  // VENTURE_EXPERIMENTAL_DLSS: NGX's instance extensions, where the host has them.
+  for (const char* name : venture::xr::dlss::required_extensions(false)) {
+    const bool present = std::ranges::any_of(native_instance_extensions(), [&](const auto& e) {
+      return std::string_view(e.extensionName) == name;
+    });
+    if (!present) log::warn("dlss", "Host lacks NGX instance extension {}", name);
+    else if (std::ranges::find(names, std::string_view(name)) == names.end()) names.push_back(name);
+  }
   auto copy = *info;
   // Host diagnostics also work for Vulkan 1.0 guests. Checkpoints require
   // properties2 even when verbose tracing is off. Keep the
@@ -1153,6 +1162,14 @@ VkResult create_device_impl(VkPhysicalDevice physical, const VkDeviceCreateInfo*
   if (!native_xr_extensions(true, xr, required)) return VK_ERROR_INITIALIZATION_FAILED;
   for (const auto& name : required)
     if (unique_names.insert(name).second) names.push_back(name.c_str());
+  // VENTURE_EXPERIMENTAL_DLSS: NGX's device extensions, where the host has them.
+  for (const char* name : venture::xr::dlss::required_extensions(true)) {
+    const bool present = std::ranges::any_of(host_extensions, [&](const auto& e) {
+      return std::string_view(e.extensionName) == name;
+    });
+    if (!present) log::warn("dlss", "Host lacks NGX device extension {}", name);
+    else if (unique_names.insert(name).second) names.push_back(name);
+  }
   if (std::ranges::any_of(host_extensions, [](const auto& e) {
         return std::string_view(e.extensionName) == VK_EXT_PIPELINE_CREATION_FEEDBACK_EXTENSION_NAME;
       }) && unique_names.insert(VK_EXT_PIPELINE_CREATION_FEEDBACK_EXTENSION_NAME).second)

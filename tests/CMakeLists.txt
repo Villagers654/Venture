@@ -22,6 +22,7 @@ add_executable(venture_tests
   launcher_accounts_test.cpp
   versions_test.cpp
   launcher_settings_test.cpp
+  dlss_optimization_test.cpp
 
   ${PROJECT_SOURCE_DIR}/src/launcher/ui/rich_text_parse.cpp
   ${PROJECT_SOURCE_DIR}/src/launcher/debug_report.cpp
@@ -29,6 +30,7 @@ add_executable(venture_tests
   ${PROJECT_SOURCE_DIR}/src/launcher/drives.cpp
   ${PROJECT_SOURCE_DIR}/src/launcher/sign_in_link.cpp
   ${PROJECT_SOURCE_DIR}/src/launcher/updater.cpp
+  ${PROJECT_SOURCE_DIR}/src/launcher/dlss_optimization.cpp
   broker_test.cpp
   broker_http_test.cpp
   launch_channel_test.cpp

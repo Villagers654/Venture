@@ -70,6 +70,18 @@ struct Swapchain {
   // A depth/stencil chain the host offers no format for: the guest renders to
   // it, and the depth it carries never reaches the host (PresentationLayers).
   bool guest_only = false;
+  // Referenced by a projection layer while VENTURE_EXPERIMENTAL_RENDER_SCALE is
+  // active: its host chain is allocated at guest size / scale and the guest
+  // image is scaled up when presented (prepare_swapchains). Decided when the
+  // host chain is first allocated.
+  bool upscale_projection = false;
+  // Projection views submitted with this chain in the current frame, per array
+  // layer (DLSS motion vectors and jitter).
+  std::array<venture::xr::dlss::ViewSample, 2> presented_views{};
+  // A two-layer projection chain presented through a one-layer host chain of
+  // twice the width, each layer in its own half (DLSS with eye tracking: every
+  // view is submitted at array index 0, as Cheeky's gaze mapping requires).
+  bool host_side_by_side = false;
   std::unique_ptr<vulkan::FullRateImage> full_rate_resource;
   std::vector<std::uint32_t> textures;
   // alpha_images: the passthrough-alpha shader (opaque withdrawal, underlay opacity).
@@ -224,6 +236,14 @@ struct MirrorEye {
 std::optional<MirrorEye> mirror_eye(std::span<const XrCompositionLayerBaseHeader* const> layers, std::uint32_t eye);
 XrResult prepare_swapchains(const std::set<XrSwapchain>& submitted, bool force_opaque = false,
                             const UnderlayAlpha* underlay = nullptr, const MirrorEye* mirror = nullptr);
+// VENTURE_EXPERIMENTAL_RENDER_SCALE: a factor in [0.25, 1). The guest is offered
+// recommended eye sizes multiplied by it, and projection chains are presented
+// through host chains at the full size. 1.0 when unset or invalid (disabled).
+double experimental_render_scale();
+// Applies experimental_render_scale() to a guest's recommended view sizes.
+void scale_recommended_views(XrViewConfigurationType type, std::uint32_t count, XrViewConfigurationView* views);
+// VENTURE_EXPERIMENTAL_DLSS: subpixel jitter of the stereo views a guest locates.
+void jitter_located_views(const XrViewLocateInfo& info, std::uint32_t count, XrView* views);
 XrResult destroy_host_swapchain(Swapchain&);
 XrResult convert_color_image(Swapchain&, std::uint32_t index, XrColorSpaceFB, bool external_queue_held = false,
                              bool force_opaque = false, float underlay_opacity = 1, bool premultiply = false,

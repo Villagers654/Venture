@@ -3,6 +3,7 @@
 #include "launcher/assets/controller_art.h"
 #include "launcher/assets/texture_cache.h"
 #include "launcher/core.h"
+#include "launcher/dlss_optimization.h"
 #include "launcher/drives.h"
 #include "launcher/updater.h"
 #include "launcher/ui/chrome.h"
@@ -12,6 +13,7 @@
 #include "common/controls.h"
 #include <map>
 #include <memory>
+#include <optional>
 namespace venture::launcher {
 // Controls: which host controller input each Quest input reaches, for one controller
 // (common/controls.h); saved in Settings::controls and Settings::game_controls.
@@ -73,6 +75,16 @@ private:
   double toast_since_ = 0;    // ImGui time it appeared
   std::set<std::string> log_open_; // games whose runtime log is expanded
   int page_ = 0, sort_ = 1, game_tab_ = 0;
+  // The game page's DLSS VR Optimization tab (launcher/dlss_optimization.h).
+  std::optional<DlssOptimization> dlss_;
+  std::string dlss_cheeky_dir_, dlss_nvidia_dir_;
+  bool dlss_dirty_ = false;
+  double dlss_checked_ = -1;
+  DlssReadiness dlss_ready_;
+  std::set<std::string> dlss_open_;  // expanded advanced sections
+  int dlss_nr_pass_ = 1;             // NR pass settings shown (1-3)
+  std::string dlss_request_, dlss_request_error_;  // the last Apply in game
+  double dlss_request_time_ = 0;
   std::map<int, SDL_Texture *> logos_; // rasterized logo by pixel size
   SDL_Texture *logo(int pixels);
   std::map<int, SDL_Texture *> steam_logos_;
@@ -241,6 +253,7 @@ private:
   void draw_toast();
   void draw_chrome();
   void draw_about(const meta::Game &game, float width);
+  void draw_dlss_optimization(const std::string &package, float width, bool running);
   void draw_backdrop(std::string_view id, ImVec2 a, ImVec2 b, float strength);
   float s(float value) const { return value * scale_; }
 };

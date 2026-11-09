@@ -231,18 +231,48 @@ XrResult destroy_host_swapchain(Swapchain& r) {
   }
   return result;
 }
+double experimental_render_scale() { return venture::xr::dlss::render_scale(); }
+void scale_recommended_views(XrViewConfigurationType type, std::uint32_t count, XrViewConfigurationView* views) {
+  const double scale = experimental_render_scale();
+  if (scale >= 1.0 || !views || type != XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO) return;
+  // Multiples of 8 keep compute tiles and DLSS input sizes aligned.
+  const auto scaled = [&](std::uint32_t size, std::uint32_t maximum) {
+    if (!size) return size;
+    auto value = std::max(16u, (std::uint32_t(size * scale) + 7u) / 8u * 8u);
+    return maximum ? std::min(value, maximum) : value;
+  };
+  for (std::uint32_t i = 0; i < count; ++i) {
+    if (views[i].type != XR_TYPE_VIEW_CONFIGURATION_VIEW) continue;
+    const auto width = views[i].recommendedImageRectWidth, height = views[i].recommendedImageRectHeight;
+    views[i].recommendedImageRectWidth = scaled(width, views[i].maxImageRectWidth);
+    views[i].recommendedImageRectHeight = scaled(height, views[i].maxImageRectHeight);
+    venture::xr::dlss::note_render_size(views[i].recommendedImageRectWidth, views[i].recommendedImageRectHeight);
+    static std::atomic<bool> reported{false};
+    if (!reported.exchange(true))
+      log::info("xr", "render scale: guest view recommendation {}x{} -> {}x{}", width, height,
+                views[i].recommendedImageRectWidth, views[i].recommendedImageRectHeight);
+  }
+}
+void jitter_located_views(const XrViewLocateInfo& info, std::uint32_t count, XrView* views) {
+  if (info.viewConfigurationType == XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO)
+    venture::xr::dlss::jitter_views(info.displayTime, count, views);
+}
 namespace {
 // A guest subimage rect in the host image, as PresentationLayers maps it for
 // the host: clipped to the guest chain, rows flipped like the copy, scaled to
 // a smaller host chain. Row 0 is the top the host displays.
-XrRect2Di host_image_rect(const Swapchain& r, XrRect2Di rect) {
+XrRect2Di host_image_rect(const Swapchain& r, XrRect2Di rect, std::uint32_t layer) {
   const auto gw = std::int64_t(r.info.width), gh = std::int64_t(r.info.height);
   const auto x0 = std::clamp<std::int64_t>(rect.offset.x, 0, gw - 1), y0 = std::clamp<std::int64_t>(rect.offset.y, 0, gh - 1);
   const auto x1 = std::clamp<std::int64_t>(std::int64_t(rect.offset.x) + rect.extent.width, x0 + 1, gw);
   const auto y1 = std::clamp<std::int64_t>(std::int64_t(rect.offset.y) + rect.extent.height, y0 + 1, gh);
   rect = {{std::int32_t(x0), std::int32_t(y0)}, {std::int32_t(x1 - x0), std::int32_t(y1 - y0)}};
   if (r.textures.empty() == r.flip_rows) rect.offset.y = std::int32_t(gh - y1);
-  return map_presentation_rect(rect, {r.info.width, r.info.height}, {r.host_info.width, r.host_info.height});
+  // A side-by-side host chain (DLSS) holds layer `layer` in its own half.
+  const auto host_width = r.host_side_by_side ? r.host_info.width / 2 : r.host_info.width;
+  auto mapped = map_presentation_rect(rect, {r.info.width, r.info.height}, {host_width, r.host_info.height});
+  if (r.host_side_by_side) mapped.offset.x += std::int32_t(layer * host_width);
+  return mapped;
 }
 }  // namespace
 std::optional<MirrorEye> mirror_eye(std::span<const XrCompositionLayerBaseHeader* const> layers, std::uint32_t eye) {
@@ -292,6 +322,27 @@ XrResult prepare_swapchains(const std::set<XrSwapchain>& submitted, bool force_o
     // Guest images keep every mip; the host compositor owns filtering. Some hosts
     // accept a mipmapped request but allocate one level (SteamVR), as in VrApi.
     r.host_info.mipCount = 1;
+    // Experimental render scale: present a projection chain through a host
+    // chain at the size the guest would have used unscaled. The copy scales
+    // up and layer rects follow (map_subimage). Multisample chains cannot be
+    // blitted, so they stay 1:1.
+    if (r.upscale_projection && r.info.sampleCount == 1 && experimental_render_scale() < 1.0) {
+      const double scale = experimental_render_scale();
+      r.host_info.width = std::max(1u, std::uint32_t(r.info.width / scale + 0.5));
+      r.host_info.height = std::max(1u, std::uint32_t(r.info.height / scale + 0.5));
+      log::info("xr", "render scale: presenting guest chain {}x{} through host chain {}x{}",
+                r.info.width, r.info.height, r.host_info.width, r.host_info.height);
+      r.host_side_by_side = r.info.arraySize == 2 && r.info.faceCount == 1 && venture::xr::dlss::requested();
+      if (r.host_side_by_side) {
+        r.host_info.width *= 2;
+        r.host_info.arraySize = 1;
+        log::info("xr", "render scale: both layers side by side in one {}x{} host image",
+                  r.host_info.width, r.host_info.height);
+      }
+    } else {
+      r.upscale_projection = false;
+      r.host_side_by_side = false;
+    }
     // Fit the host's maximum with the guest aspect; the copy scales and layer
     // rects follow (map_subimage). Sizes within the maximum stay 1:1. A zero
     // maximum is no limit: the Oculus PC runtime (Link 2.18) reports 0x0.
@@ -299,9 +350,9 @@ XrResult prepare_swapchains(const std::set<XrSwapchain>& submitted, bool force_o
     if (XR_SUCCEEDED(::xrGetSystemProperties(host_xr().instance, host_xr().system, &properties)) &&
         properties.graphicsProperties.maxSwapchainImageWidth && properties.graphicsProperties.maxSwapchainImageHeight) {
       const auto& limits = properties.graphicsProperties;
-      const auto size = fit_presentation_extent({r.info.width, r.info.height},
+      const auto size = fit_presentation_extent({r.host_info.width, r.host_info.height},
           limits.maxSwapchainImageWidth, limits.maxSwapchainImageHeight);
-      if (size.width != r.info.width || size.height != r.info.height) {
+      if (size.width != r.host_info.width || size.height != r.host_info.height) {
         r.host_info.width = size.width;
         r.host_info.height = size.height;
         log::info("xr", "guest swapchain {}x{} exceeds the host maximum {}x{}; presenting through {}x{}",
@@ -379,16 +430,18 @@ XrResult prepare_swapchains(const std::set<XrSwapchain>& submitted, bool force_o
     }
     if (result == XR_SESSION_LOSS_PENDING) qualified = result;
     result = r.backing->copy(std::uint32_t(r.released_index), r.host_images.at(target).image, VkFormat(r.host_info.format),
-                             {r.host_info.width, r.host_info.height}, r.flip_rows);
+                             {r.host_info.width, r.host_info.height}, r.flip_rows, -1, r.presented_views,
+                             r.host_side_by_side);
     if (XR_SUCCEEDED(result))
       result = convert_color_image(r, target, s.color_space, false, opaque, opacity, premultiply, key ? &*key : nullptr);
     // The desktop mirror blits the eye exactly as the headset gets it, before
     // the image goes back to the runtime.
     if (XR_SUCCEEDED(result) && mirror && handle == mirror->sub.swapchain && r.info.sampleCount == 1 &&
         (r.host_info.usageFlags & XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT) &&
-        mirror->sub.imageArrayIndex < r.host_info.arraySize) {
+        mirror->sub.imageArrayIndex < (r.host_side_by_side ? 2u : r.host_info.arraySize)) {
       venture::xr::MirrorSource source{r.host_images.at(target).image, VkFormat(r.host_info.format),
-                                       mirror->sub.imageArrayIndex, host_image_rect(r, mirror->sub.imageRect)};
+                                       r.host_side_by_side ? 0u : mirror->sub.imageArrayIndex,
+                                       host_image_rect(r, mirror->sub.imageRect, mirror->sub.imageArrayIndex)};
       venture::xr::mirror_axis(mirror->fov, source.axis_x, source.axis_y);
       venture::xr::mirror_capture(session().binding, session().uses_shared_gpu, source);
     }

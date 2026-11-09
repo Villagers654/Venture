@@ -1357,6 +1357,10 @@ void App::draw_game_page() {
   if (has_settings) {
     tab_items.push_back("Controls");
     tab_items.push_back("Settings");
+#ifdef _WIN32
+    // DLSS VR Optimization: DLSS and Cheeky settings for this game.
+    tab_items.push_back("DLSS VR Optimization");
+#endif
   }
   // --smoke-view game-controls* and game-settings* keep those tabs open for
   // screenshots (by name: the Add-ons tab can come and go while it is checked).
@@ -1369,6 +1373,10 @@ void App::draw_game_page() {
     for (int i = 0; i < int(tab_items.size()); ++i)
       if (std::string_view(tab_items[size_t(i)]) == smoke_tab) game_tab_ = i;
   }
+#ifdef _WIN32
+  // --smoke-view dlss opens the DLSS tab for screenshots.
+  if (has_settings && options_.smoke_view.starts_with("dlss")) game_tab_ = int(tab_items.size()) - 1;
+#endif
   if (game_tab_ >= int(tab_items.size())) game_tab_ = 0;
   if (tab_items.size() > 1) {
     tabs("game-tabs", tab_items.data(), int(tab_items.size()), &game_tab_, avail);
@@ -1383,12 +1391,441 @@ void App::draw_game_page() {
     draw_game_controls(g, std::min(body_w, s(1180)));
   else if (tab == "Settings")
     draw_game_settings(g, std::min(body_w, s(kPageWidth)));
+  else if (tab == "DLSS VR Optimization")
+    draw_dlss_optimization(partial->plan.package, std::min(body_w, s(1240)), running);
   else if (game_tab_ == 1 && has_addons)
     draw_addons(g, std::min(body_w, s(980)));
   else
     draw_about(g, body_w);
   gap(30);
   if (pad > 0) ImGui::Unindent(pad);
+}
+
+// The game page's DLSS VR Optimization tab: Venture's render scale + DLSS, and
+// Cheeky's foveated SR and NR on top of it. Settings apply at the next launch (launcher/dlss_optimization.h).
+void App::draw_dlss_optimization(const std::string& package, float width, bool running) {
+  if (!dlss_) {
+    dlss_ = DlssOptimization::load(data_);
+    dlss_cheeky_dir_ = paths::utf8(dlss_->cheeky_dir);
+    dlss_nvidia_dir_ = paths::utf8(dlss_->nvidia_dir);
+  }
+  auto& settings = *dlss_;
+  const bool fresh = !settings.games.contains(package);
+  auto& p = settings.games[package];
+  if (fresh) {
+    apply_sr_defaults(p);
+    apply_nr_defaults(p);
+  }
+  // --smoke-view dlss-end shows the advanced sections expanded.
+  if (options_.smoke_view == "dlss-end") dlss_open_.insert({"dlss-sr-advanced", "dlss-nr-advanced"});
+  bool changed = false;
+  const double now = ImGui::GetTime();
+  if (dlss_checked_ < 0 || now - dlss_checked_ > 2) {
+    dlss_ready_ = dlss_readiness(settings, settings_.runtime);
+    dlss_checked_ = now;
+  }
+  constexpr ImU32 sr_color = IM_COL32(243, 66, 95, 255), nr_color = IM_COL32(69, 189, 98, 255);
+  // Cards are child windows: draw into the window being laid out.
+  const auto dl_now = [] { return ImGui::GetWindowDrawList(); };
+  const float row = s(24);
+
+  // A label on the left and a toggle on the right of the current width.
+  const auto toggle_row = [&](const char* id, std::string_view label, bool* value, bool enabled,
+                              ImU32 mark = 0) {
+    const ImVec2 at = ImGui::GetCursorPos(), screen = ImGui::GetCursorScreenPos();
+    ImDrawList* dl = dl_now();
+    const float w = ImGui::GetContentRegionAvail().x;
+    draw_text(dl, fonts().regular, kBody, {screen.x, text_y(fonts().regular, kBody, screen.y, row)},
+              enabled ? color::text : color::text3, label);
+    if (mark) {
+      const float x = screen.x + w - s(44) - s(34), y = screen.y + row * 0.5f;
+      dl->AddRect({x, y - s(6)}, {x + s(20), y + s(6)}, enabled ? mark : color::alpha(mark, 0.4f), s(2), 0, s(2));
+    }
+    ImGui::SetCursorPos({at.x + w - s(44), at.y});
+    const ImVec2 knob = ImGui::GetCursorScreenPos();
+    ImGui::BeginDisabled(!enabled);
+    const bool clicked = toggle(id, value);
+    ImGui::EndDisabled();
+    // The toggle draws its own colors: veil it when it does not apply.
+    if (!enabled)
+      dl->AddRectFilled(knob, {knob.x + s(44), knob.y + row}, color::alpha(color::surface, 0.6f), row * 0.5f);
+    ImGui::SetCursorPos({at.x, at.y + row + s(14)});
+    ImGui::Dummy({0, 0});
+    changed |= clicked;
+    return clicked;
+  };
+  // A labeled percentage with its slider underneath.
+  const auto percent_row = [&](const char* id, std::string_view label, int* value, int lo, int hi, bool enabled,
+                               ImU32 fill, std::string_view suffix = "%") {
+    const ImVec2 at = ImGui::GetCursorPos(), screen = ImGui::GetCursorScreenPos();
+    ImDrawList* dl = dl_now();
+    const float w = ImGui::GetContentRegionAvail().x;
+    const ImU32 ink = enabled ? color::text : color::text3;
+    draw_text(dl, fonts().regular, kBody, {screen.x, screen.y}, ink, label);
+    const auto number = std::format("{} {}", *value, suffix);
+    const float nw = measure(fonts().semibold, kBody, number).x;
+    draw_text(dl, fonts().semibold, kBody, {screen.x + w - nw, screen.y}, ink, number);
+    ImGui::SetCursorPos({at.x, at.y + s(26)});
+    float v = float(*value);
+    if (slider(id, &v, float(lo), float(hi), 1, w, enabled, fill)) {
+      *value = int(v);
+      changed = true;
+    }
+    ImGui::SetCursorPos({at.x, at.y + s(26) + row + s(14)});
+    ImGui::Dummy({0, 0});
+  };
+  const auto caption = [&](std::string_view line, ImU32 ink = color::text3) {
+    text(fonts().regular, kSmall, ink, line);
+    gap(6);
+  };
+
+  // Header: Venture's DLSS switch, Cheeky, the gaze mode and what is ready.
+  begin_card("dlss-header", width, {24, 22});
+  {
+    text(fonts().semibold, kHeading, color::text, "Cheeky Foveated DLSS SR / NR", false);
+    gap(4);
+    caption("Venture renders the game below the headset's resolution and DLSS rebuilds it; Cheeky then "
+            "concentrates the work where you look. Changes apply at the next launch.");
+    gap(6);
+    toggle_row("dlss-enabled", "DLSS in Venture (render scale + DLSS)", &p.enabled, true);
+    if (!p.enabled) {
+      // Every setting below stays editable; say plainly that none applies yet.
+      badge("Off for this game: turn this on, then Play, for DLSS, Cheeky and the debug views", color::warning,
+            color::alpha(color::warning, 0.15f), icons::warning);
+      gap(12);
+    }
+    toggle_row("dlss-cheeky", "Cheeky Foveated DLSS layer", &p.cheeky, true);
+    toggle_row("dlss-nr-stick", "Toggle NR", &p.nr_thumbstick, true);
+    {
+      // A speech bubble under the toggle with the controller sequence.
+      constexpr std::string_view sequence = "Hold both thumbsticks pressed (L3 + R3) for about 2 seconds, then release: NR switches on or off.";
+      ImDrawList* dl = dl_now();
+      const ImVec2 at = ImGui::GetCursorScreenPos();
+      const ImVec2 size = measure(fonts().regular, kSmall, sequence);
+      const float pad = s(10), tail = s(7);
+      const ImVec2 a{at.x, at.y + tail}, b{at.x + size.x + 2 * pad, at.y + tail + size.y + 2 * pad};
+      const ImU32 fill = p.nr_thumbstick ? color::alpha(color::positive, 0.16f) : color::surface_top;
+      const ImU32 edge = p.nr_thumbstick ? color::alpha(color::positive, 0.6f) : color::stroke_hi;
+      dl->AddRectFilled(a, b, fill, s(8));
+      dl->AddRect(a, b, edge, s(8));
+      const float tx = a.x + s(22);
+      dl->AddTriangleFilled({tx - tail, a.y + 1}, {tx + tail, a.y + 1}, {tx, at.y}, fill);
+      dl->AddLine({tx - tail, a.y}, {tx, at.y}, edge);
+      dl->AddLine({tx, at.y}, {tx + tail, a.y}, edge);
+      draw_text(dl, fonts().regular, kSmall, {a.x + pad, a.y + pad}, p.nr_thumbstick ? color::text : color::text2,
+                sequence);
+      ImGui::Dummy({b.x - at.x, b.y - at.y});
+      gap(14);
+    }
+    ImGui::BeginDisabled(false);
+    const float row_x = ImGui::GetCursorPosX(), row_w = ImGui::GetContentRegionAvail().x;
+    if (filter_chip("Eye tracking foveated##dlss-gaze", p.eye_tracking) && !p.eye_tracking) {
+      p.eye_tracking = true;
+      changed = true;
+    }
+    ImGui::SameLine(0, s(8));
+    if (filter_chip("Fixed foveated##dlss-fixed", !p.eye_tracking) && p.eye_tracking) {
+      p.eye_tracking = false;
+      changed = true;
+    }
+    ImGui::EndDisabled();
+    // Apply in game, right-aligned on the foveation row: the running runtime
+    // applies the settings below through Cheeky (xr/cheeky_live.h); they are
+    // also kept for the next launch. Its state shows to the button's left.
+    {
+      const float bw = button_width("Apply in game", icons::check);
+      ImGui::SameLine(row_x + row_w - bw);
+      const ImVec2 button_at = ImGui::GetCursorScreenPos();
+      if (button("Apply in game##dlss-apply", icons::check, Tone::primary, {bw, s(38)},
+                 running && p.enabled && p.cheeky)) {
+        settings.save(data_);
+        dlss_dirty_ = false;
+        dlss_request_error_.clear();
+        dlss_request_ = apply_in_game(settings, package, settings_.runtime, dlss_request_error_);
+        dlss_request_time_ = ImGui::GetTime();
+      }
+      std::string status;
+      ImU32 tone = color::text3;
+      const double waited = ImGui::GetTime() - dlss_request_time_;
+      if (!running) {
+        status = "Start the game to apply live";
+      } else if (!dlss_request_error_.empty()) {
+        status = dlss_request_error_;
+        tone = color::warning;
+      } else if (!dlss_request_.empty()) {
+        if (const auto answer = in_game_status(settings_.runtime, dlss_request_); !answer) {
+          status = waited > 5 ? "No answer from the game" : "Applying...";
+          tone = waited > 5 ? color::warning : color::text2;
+        } else if (*answer) {
+          status = "Applied in game and saved";
+          tone = color::positive;
+        } else {
+          status = "Refused: Cheeky is not loaded";
+          tone = color::warning;
+        }
+      }
+      if (!status.empty()) {
+        const float tw = measure(fonts().regular, kSmall, status).x;
+        draw_text(dl_now(), fonts().regular, kSmall,
+                  {button_at.x - s(14) - tw, text_y(fonts().regular, kSmall, button_at.y, s(38))}, tone, status);
+      }
+    }
+    gap(14);
+    const auto state = [&](bool ok, std::string_view what) {
+      badge(what, ok ? color::positive : color::warning,
+            color::alpha(ok ? color::positive : color::warning, 0.15f), ok ? icons::check : 0);
+      ImGui::SameLine(0, s(8));
+    };
+    state(dlss_ready_.bridge, "venture_ngx.dll");
+    state(dlss_ready_.dlss_model, "nvngx_dlss.dll");
+    state(dlss_ready_.cheeky_package, "Cheeky package");
+    state(dlss_ready_.nr_model, "nvngx_dlssnr.dll");
+    ImGui::NewLine();
+  }
+  end_card();
+  gap(18);
+
+  // SR and NR side by side (stacked on narrow windows): framed areas, the
+  // source quality block, NR pass settings 1-3 and collapsible advanced
+  // settings. Venture's Vulkan path has
+  // no frame generation (Cheeky's FG is D3D12 only), so no FG column. Every
+  // setting stays editable: the switches above decide what applies at launch.
+  constexpr bool active = true, cheeky = true;
+  const auto number_text = [](float v, float step) {
+    return step >= 1 ? std::format("{:.0f}", v) : step >= 0.1f ? std::format("{:.1f}", v) : std::format("{:.2f}", v);
+  };
+  // A slider bound to a Cheeky INI key (DlssGameProfile::values).
+  const auto value_row = [&](const char* id, std::string_view label, const std::string& key, float lo, float hi,
+                             float step, ImU32 fill) {
+    const ImVec2 at = ImGui::GetCursorPos(), screen = ImGui::GetCursorScreenPos();
+    ImDrawList* dl = dl_now();
+    const float w = ImGui::GetContentRegionAvail().x;
+    float v = std::clamp(p.value(key), lo, hi);
+    draw_text(dl, fonts().regular, kBody, {screen.x, screen.y}, color::text, label);
+    const auto number = number_text(v, step);
+    const float nw = measure(fonts().semibold, kBody, number).x;
+    draw_text(dl, fonts().semibold, kBody, {screen.x + w - nw, screen.y}, color::text, number);
+    ImGui::SetCursorPos({at.x, at.y + s(26)});
+    if (slider(id, &v, lo, hi, step, w, true, fill)) {
+      p.set(key, v);
+      changed = true;
+    }
+    ImGui::SetCursorPos({at.x, at.y + s(26) + row + s(14)});
+    ImGui::Dummy({0, 0});
+  };
+  // A toggle bound to a Cheeky INI key.
+  const auto flag_row = [&](const char* id, std::string_view label, const std::string& key, bool enabled = true) {
+    bool on = enabled && p.value(key) != 0;
+    const bool before = on;
+    toggle_row(id, label, &on, enabled);
+    if (on != before) p.set(key, on ? 1.f : 0.f);
+  };
+  // A label and a dropdown on the right.
+  const auto choice_row = [&](const char* id, std::string_view label, const char* const* items, int count,
+                              int* current) {
+    const ImVec2 at = ImGui::GetCursorPos(), screen = ImGui::GetCursorScreenPos();
+    const float w = ImGui::GetContentRegionAvail().x, dw = std::min(s(230), w * 0.55f);
+    draw_text(dl_now(), fonts().regular, kBody, {screen.x, text_y(fonts().regular, kBody, screen.y, s(34))},
+              color::text, label);
+    ImGui::SetCursorPos({at.x + w - dw, at.y});
+    const bool picked = dropdown(id, "", items, count, current, dw);
+    changed |= picked;
+    ImGui::SetCursorPos({at.x, at.y + s(34) + s(14)});
+    ImGui::Dummy({0, 0});
+    return picked;
+  };
+  // A bordered group with an optional legend.
+  const auto frame = [&](const char* id, std::string_view legend, auto&& body) {
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, IM_COL32(0, 0, 0, 0));
+    ImGui::PushStyleColor(ImGuiCol_Border, color::stroke_hi);
+    ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, s(10));
+    ImGui::PushStyleVar(ImGuiStyleVar_ChildBorderSize, 1.f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {s(14), s(12)});
+    ImGui::BeginChild(id, {ImGui::GetContentRegionAvail().x, 0},
+                      ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY | ImGuiChildFlags_AlwaysUseWindowPadding,
+                      ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+    if (!legend.empty()) {
+      text(fonts().semibold, kBody, color::text, legend, false);
+      gap(6);
+    }
+    body();
+    ImGui::EndChild();
+    ImGui::PopStyleVar(3);
+    ImGui::PopStyleColor(2);
+    gap(12);
+  };
+  // A disclosure row that shows `body` in a frame while open.
+  const auto collapsible = [&](const char* id, std::string_view title, auto&& body) {
+    const bool open = dlss_open_.contains(id);
+    const ImVec2 screen = ImGui::GetCursorScreenPos();
+    const float w = ImGui::GetContentRegionAvail().x;
+    ImGui::PushID(id);
+    if (ImGui::InvisibleButton("##head", {w, row + s(8)})) {
+      if (open) dlss_open_.erase(id);
+      else dlss_open_.insert(id);
+    }
+    const bool hover = ImGui::IsItemHovered();
+    if (hover) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+    ImGui::PopID();
+    ImDrawList* dl = dl_now();
+    const float cy = screen.y + (row + s(8)) * 0.5f;
+    draw_glyph(dl, open ? icons::chevron_down : icons::chevron_right, s(14), {screen.x + s(8), cy},
+               hover ? color::text : color::text2);
+    draw_text(dl, fonts().semibold, kBody, {screen.x + s(24), text_y(fonts().semibold, kBody, screen.y, row + s(8))},
+              hover ? color::text : color::text2, title);
+    gap(6);
+    if (open) frame((std::string(id) + "-body").c_str(), "", body);
+  };
+
+  const int columns = width >= s(760) ? 2 : 1;
+  if (ImGui::BeginTable("dlss-columns", columns, ImGuiTableFlags_SizingStretchSame, {width, 0})) {
+    const auto cell = [&](const char* id, auto&& body) {
+      ImGui::TableNextColumn();
+      begin_card(id, ImGui::GetContentRegionAvail().x, {18, 18});
+      body();
+      end_card();
+      if (columns == 1) gap(14);
+    };
+    cell("dlss-sr", [&] {
+      // Turning SR on starts from the tested settings (apply_sr_defaults).
+      if (toggle_row("dlss-sr-on", "Super Resolution", &p.super_resolution, cheeky) && p.super_resolution)
+        apply_sr_defaults(p);
+      toggle_row("dlss-sr-debug", "SR Debug View", &p.sr_debug, cheeky, sr_color);
+      frame("dlss-sr-area", "SR Foveated area", [&] {
+        caption("Size of the processed region.");
+        percent_row("dlss-sr-w", "Width", &p.sr_width, 10, 100, cheeky, 0);
+        percent_row("dlss-sr-h", "Height", &p.sr_height, 10, 100, cheeky, 0);
+      });
+      text(fonts().semibold, kBody, color::text, "DLSS SR source quality", false);
+      gap(10);
+      percent_row("dlss-source", "Source resolution per eye", &p.source_percent, 30, 95, active, 0);
+      // The game sizes its images once, at start: Apply in game cannot change it.
+      text(fonts().regular, kSmall, color::text2, "Takes effect at the next launch (not with Apply in game).", false);
+      gap(6);
+      // Peripheral reconstruction: Cheeky's default, DLSS SR or FSR1 EASU.
+      static const char* const reconstruction[] = {"Default (Cheeky)", "DLSS SR (50-100%)", "FSR1 EASU (30 / 40 / 50%)"};
+      int mode = p.value("PeripheralFsr1Enabled") != 0 ? 2 : p.value("PeripheralSrEnabled") != 0 ? 1 : 0;
+      if (mode == 2)
+        value_row("dlss-fsr1-scale", "Peripheral FSR1 scale (0.30 / 0.40 / 0.50)", "PeripheralFsr1Scale", 0.3f, 0.5f,
+                  0.1f, 0);
+      else
+        value_row("dlss-psr-scale", "Peripheral SR scale", "PeripheralSrScale", 0.5f, 1.f, 0.01f, 0);
+      if (choice_row("dlss-reconstruction", "Peripheral reconstruction", reconstruction, 3, &mode)) {
+        p.set("PeripheralSrEnabled", mode == 1 ? 1.f : 0.f);
+        p.set("PeripheralFsr1Enabled", mode == 2 ? 1.f : 0.f);
+      }
+      value_row("dlss-center-ss", "Center Supersampling", "CenterSupersampling", 1.f, 2.f, 0.01f, 0);
+      collapsible("dlss-sr-advanced", "SR advanced settings", [&] {
+        value_row("dlss-sr-round", "Roundness", "Roundness", 0.f, 1.f, 0.01f, 0);
+        value_row("dlss-sr-transition", "Transition Width", "TransitionWidth", 0.f, 0.3f, 0.01f, 0);
+      });
+    });
+    cell("dlss-nr", [&] {
+      // Turning NR on starts from the tested settings (apply_nr_defaults).
+      if (toggle_row("dlss-nr-on", "Neural Rendering", &p.neural_rendering, cheeky) && p.neural_rendering)
+        apply_nr_defaults(p);
+      toggle_row("dlss-nr-debug", "NR Debug View", &p.nr_debug, cheeky, nr_color);
+      frame("dlss-nr-area", "NR Foveated area", [&] {
+        caption("Size of the processed region.");
+        percent_row("dlss-nr-w", "Width", &p.nr_width, 10, 100, cheeky, nr_color);
+        percent_row("dlss-nr-h", "Height", &p.nr_height, 10, 100, cheeky, nr_color);
+      });
+      toggle_row("dlss-nr-fov", "NR Foveated", &p.nr_foveated, cheeky);
+      flag_row("dlss-nr-cache", "NR Adaptive Cache", "NrAdaptiveCache");
+      // Cheeky's Vulkan NR runs one pass (vulkan_nr.cpp): passes 2 and 3 are
+      // greyed until it chains them like its D3D12 NR.
+      constexpr bool extra_passes = false;
+      flag_row("dlss-nr-second", "Second NR pass", "NrSecondPass", extra_passes);
+      flag_row("dlss-nr-third", "Third NR pass", "NrThirdPass", extra_passes);
+      if (!extra_passes) dlss_nr_pass_ = 1;
+      frame("dlss-nr-passes", "", [&] {
+        // NR pass settings with the 1 / 2 / 3 pass selector on the right.
+        const ImVec2 at = ImGui::GetCursorPos(), screen = ImGui::GetCursorScreenPos();
+        const float w = ImGui::GetContentRegionAvail().x, dot = s(30);
+        ImDrawList* dl = dl_now();
+        draw_text(dl, fonts().semibold, kBody, {screen.x, text_y(fonts().semibold, kBody, screen.y, dot)}, color::text,
+                  "NR pass settings");
+        for (int pass = 1; pass <= 3; ++pass) {
+          const ImVec2 c{screen.x + w - (4 - pass) * (dot + s(8)) + s(8) + dot * 0.5f, screen.y + dot * 0.5f};
+          ImGui::SetCursorScreenPos({c.x - dot * 0.5f, screen.y});
+          ImGui::PushID(pass);
+          const bool usable = pass == 1 || extra_passes;
+          ImGui::BeginDisabled(!usable);
+          if (ImGui::InvisibleButton("##pass", {dot, dot})) dlss_nr_pass_ = pass;
+          ImGui::EndDisabled();
+          const bool hover = usable && ImGui::IsItemHovered();
+          if (hover) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+          ImGui::PopID();
+          const bool on = dlss_nr_pass_ == pass;
+          dl->AddCircleFilled(c, dot * 0.5f, on ? nr_color : color::mix(color::surface_top, color::stroke_hi, hover),
+                              24);
+          const auto label = std::to_string(pass);
+          const ImVec2 ls = measure(fonts().semibold, kBody, label);
+          draw_text(dl, fonts().semibold, kBody, {c.x - ls.x * 0.5f, c.y - ls.y * 0.5f},
+                    on ? color::on_selected : usable ? color::text : color::text3, label);
+        }
+        ImGui::SetCursorPos({at.x, at.y + dot + s(14)});
+        ImGui::Dummy({0, 0});
+        const int pass = std::clamp(dlss_nr_pass_, 1, 3);
+        const auto key = [&](const char* name) { return nr_pass_key(pass, name); };
+        const auto id = [&](const char* name) { return std::format("dlss-nr{}-{}", pass, name); };
+        value_row(id("scale").c_str(), "NR Working Scale", key("WorkingScale"), 0.1f, 1.f, 0.01f, nr_color);
+        value_row(id("intensity").c_str(), "NR Intensity", key("Intensity"), 0.f, 1.f, 0.01f, nr_color);
+        value_row(id("tone").c_str(), "NR Local Tone Strength", key("LocalToneStrength"), 0.f, 2.f, 0.01f, nr_color);
+        value_row(id("structure").c_str(), "NR Local Structure Strength", key("LocalStructureStrength"), 0.f, 2.f,
+                  0.01f, nr_color);
+        value_row(id("skin").c_str(), "NR Skin Structure Strength", key("SkinStructureStrength"), 0.f, 2.f, 0.01f,
+                  nr_color);
+        // Cheeky's NrPreset: 0 lets the NR DLL pick, 1 model A, 2 model B (NR 310.9.16+).
+        static const char* const presets[] = {"Default (NVIDIA)", "NR Model A (original)", "NR Model B (faster)"};
+        int preset = std::clamp(int(p.value(key("Preset"))), 0, 2);
+        if (choice_row(id("preset").c_str(), "NR model preset", presets, 3, &preset)) p.set(key("Preset"), float(preset));
+        static const char* const styles[] = {"Neutral", "Natural", "Cinematic"};
+        int style = std::clamp(int(p.value(key("Style"))), 0, 2);
+        if (choice_row(id("style").c_str(), "DLSS NR Style", styles, 3, &style)) p.set(key("Style"), float(style));
+      });
+      collapsible("dlss-nr-advanced", "NR advanced settings", [&] {
+        flag_row("dlss-nr-reuse", "Reuse NR correction every other frame", "NrEditCache");
+        value_row("dlss-nr-budget", "NR GPU Budget Ms", "NrGpuBudgetMs", 0.f, 20.f, 0.1f, nr_color);
+        value_row("dlss-nr-interval", "NR Cache Max Interval", "NrCacheMaxInterval", 2.f, 4.f, 1.f, nr_color);
+        value_row("dlss-nr-transition", "NR Transition Width", "NrTransitionWidth", 0.f, 0.5f, 0.01f, nr_color);
+        flag_row("dlss-nr-use-sr", "NR Use SR Foveation", "NrUseSrFoveation");
+        value_row("dlss-nr-round", "NR Roundness", "NrRoundness", 0.f, 1.f, 0.01f, nr_color);
+      });
+    });
+    ImGui::EndTable();
+  }
+  gap(18);
+
+  // Where the files come from: Cheeky's Standalone package and NVIDIA's DLLs.
+  begin_card("dlss-files", width, {24, 22});
+  {
+    text(fonts().semibold, kHeading, color::text, "Files", false);
+    gap(4);
+    caption("Cheeky Standalone package (CheekyVulkanLayer.dll and its CheekyFoveatedDLSS folder) and the NVIDIA "
+            "DLLs folder (nvngx_dlss.dll, nvngx_dlssnr.dll). Cheeky is copied beside the runtime at launch.");
+    gap(4);
+    const float field = std::min(ImGui::GetContentRegionAvail().x, s(760));
+    if (submit_field("dlss-cheeky-dir", "Cheeky package folder", &dlss_cheeky_dir_, field, icons::check)) {
+      settings.cheeky_dir = paths::from_utf8(dlss_cheeky_dir_);
+      changed = true;
+    }
+    gap(10);
+    if (submit_field("dlss-nvidia-dir", "NVIDIA DLLs folder", &dlss_nvidia_dir_, field, icons::check)) {
+      settings.nvidia_dir = paths::from_utf8(dlss_nvidia_dir_);
+      changed = true;
+    }
+  }
+  end_card();
+
+  if (options_.smoke_view == "dlss-end") ImGui::SetScrollHereY(1.0f);
+  // Sliders change every frame while dragged: write once the mouse is up.
+  dlss_dirty_ |= changed;
+  if (dlss_dirty_ && !ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+    dlss_dirty_ = false;
+    dlss_checked_ = -1;
+    action([&] { settings.save(data_); });
+  }
 }
 
 const App::ModsSummary& App::mods_summary(const std::string& package, const fs::path& install) {
