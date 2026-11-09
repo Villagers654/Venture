@@ -136,13 +136,8 @@ int iterate_fn(CallContext& c, GuestAddr callback, GuestAddr data) {
     images.push_back({l.load_bias, l.phdr, l.phnum, l.tls_module_id, l.tls_offset, l.path()});
   });
   if (images.empty()) return 0;
-  std::size_t bytes = 0;
-  for (const auto& l : images) bytes = std::max(bytes, sizeof(PhdrInfo) + l.name.size() + 1);
-  // bionic/linker/linker.cpp do_dl_iterate_phdr uses callback-local stack data.
-  // Reuse one guest mapping per invocation; nested calls get independent storage.
-  // Mapping each image separately needlessly republishes the address-space and
-  // executable-page snapshots on every callback.
-  const auto memory = AddressSpace::get().allocate(bytes, kProtRead | kProtWrite, "[dl_phdr_info]");
+  // Bionic keeps the record on the stack and the name in the linker.
+  const auto memory = AddressSpace::get().allocate(sizeof(PhdrInfo), kProtRead | kProtWrite, "[dl_phdr_info]");
   if (!memory) {
     c.thread().set_errno(err::enomem);
     log::error("libdl", "dl_iterate_phdr scratch allocation failed");
@@ -153,7 +148,7 @@ int iterate_fn(CallContext& c, GuestAddr callback, GuestAddr data) {
     for (const auto& l : images) {
       auto* p = g2h<PhdrInfo>(memory);
       *p = {l.addr,
-            memory + sizeof(*p),
+            process_image::module_name(l.name),
             l.phdr,
             l.phnum,
             {},
@@ -161,7 +156,6 @@ int iterate_fn(CallContext& c, GuestAddr callback, GuestAddr data) {
             0,
             l.modid,
             l.modid ? c.thread().thread_pointer + l.offset : 0};
-      std::memcpy(g2h(p->name), l.name.c_str(), l.name.size() + 1);
       result = static_cast<int>(c.thread().call(callback, {memory, sizeof(*p), data}));
       if (result) break;
     }
