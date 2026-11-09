@@ -73,7 +73,7 @@ TEST_CASE("Controls are saved globally and per game, and the old menu setting mi
   CHECK_FALSE(settings.controls.empty());
   // Saved without menuButton; a later load keeps the player's edits.
   settings.controls["/interaction_profiles/valve/index_controller"].menu.mode = controls::MenuMode::off;
-  settings.game_controls["1234"]["/interaction_profiles/htc/vive_controller"].rows[0][0] = "/input/menu/click";
+  settings.game_controls["1234"]["/interaction_profiles/htc/vive_controller"].rows[0][0] = controls::Inputs{"/input/menu/click"};
   settings.save(profile.root);
   const auto json = paths::read_json(profile.root / "settings.json");
   CHECK_FALSE(json.contains("menuButton"));
@@ -119,4 +119,33 @@ TEST_CASE("Color key values parse as six hex digits only") {
   CHECK(environment::parse_color_key("#99007f") == std::array<std::uint8_t, 3>{153, 0, 127});
   for (const auto* bad : {"", "#", "FF00F", "FF00FF0", "FF00FG", " FF00FF"})
     CHECK_FALSE(environment::parse_color_key(bad));
+}
+TEST_CASE("Hidden library entries and Show hidden survive a settings round trip") {
+  Profile profile;
+  auto settings = library::Settings::load(profile.root);
+  CHECK(settings.hidden.empty());
+  CHECK_FALSE(settings.show_hidden);
+  CHECK(settings.listed("1234567890"));
+  settings.hidden = {"1234567890", "com.example.import", "2345678901@abc"};
+  settings.steam_skip = {"1234567890"};
+  settings.save(profile.root);
+  auto loaded = library::Settings::load(profile.root);
+  CHECK(loaded.hidden == settings.hidden);
+  CHECK(loaded.steam_skip == settings.steam_skip);  // hiding and Steam are separate choices
+  CHECK_FALSE(loaded.show_hidden);
+  CHECK_FALSE(loaded.listed("1234567890"));
+  CHECK(loaded.listed("3456789012"));
+  loaded.show_hidden = true;
+  loaded.save(profile.root);
+  loaded = library::Settings::load(profile.root);
+  CHECK(loaded.show_hidden);
+  CHECK(loaded.listed("1234567890"));
+  // Malformed entries are dropped, not fatal.
+  paths::atomic_write(profile.root / "settings.json",
+                      Json{{"hiddenGames", Json::array({"1234567890", 5, "", std::string(65, '1'), nullptr})},
+                           {"showHiddenGames", "yes"}}
+                          .dump());
+  loaded = library::Settings::load(profile.root);
+  CHECK(loaded.hidden == std::set<std::string>{"1234567890"});
+  CHECK_FALSE(loaded.show_hidden);
 }

@@ -359,6 +359,31 @@ if(TARGET venture_runtime AND TARGET venture_hle)
     target_compile_definitions(venture_a32_abi_tests PRIVATE VENTURE_A32_PERSONALITY_FIXTURE="${personality_fixture}")
   endif()
   target_compile_options(venture_a32_abi_tests PRIVATE -Wall -Wextra)
+  # Clang-compiled ARMv7 code calling the system libstdc++.so (guards, operator
+  # new/delete) and libc exports through the real runtime, without an NDK.
+  find_program(VENTURE_JNI_FIXTURE_CLANG NAMES clang HINTS "${PROJECT_SOURCE_DIR}/.deps/llvm-mingw/bin")
+  find_program(VENTURE_JNI_FIXTURE_LLD NAMES ld.lld HINTS "${PROJECT_SOURCE_DIR}/.deps/llvm-mingw/bin")
+  if(VENTURE_JNI_FIXTURE_CLANG AND VENTURE_JNI_FIXTURE_LLD AND TARGET venture-runtime)
+    set(a32_cxx_dir "${CMAKE_CURRENT_BINARY_DIR}/a32-cxx-libc")
+    set(a32_cxx_fixture "${a32_cxx_dir}/libvtest_a32_cxx_libc.so")
+    set(a32_cxx_flags --target=armv7a-linux-androideabi23 -marm -mfloat-abi=softfp -O2 -fPIC -nostdlib -shared
+      -fuse-ld=${VENTURE_JNI_FIXTURE_LLD} -Wl,--hash-style=sysv)
+    add_custom_command(OUTPUT "${a32_cxx_fixture}"
+      COMMAND ${CMAKE_COMMAND} -E make_directory "${a32_cxx_dir}/stubs"
+      COMMAND "${VENTURE_JNI_FIXTURE_CLANG}" ${a32_cxx_flags} -x c "${CMAKE_CURRENT_SOURCE_DIR}/guest/a32_soname_stub.c"
+        -Wl,-soname,libc.so -o "${a32_cxx_dir}/stubs/libc.so"
+      COMMAND "${VENTURE_JNI_FIXTURE_CLANG}" ${a32_cxx_flags} -x c "${CMAKE_CURRENT_SOURCE_DIR}/guest/a32_soname_stub.c"
+        -Wl,-soname,libstdc++.so -o "${a32_cxx_dir}/stubs/libstdc++.so"
+      COMMAND "${VENTURE_JNI_FIXTURE_CLANG}" ${a32_cxx_flags} -x c++ -std=c++17 -fno-exceptions -fno-rtti -fno-builtin
+        -Wall -Werror "${CMAKE_CURRENT_SOURCE_DIR}/guest/a32_cxx_libc.cpp" -x none
+        -Wl,--no-as-needed "${a32_cxx_dir}/stubs/libc.so" "${a32_cxx_dir}/stubs/libstdc++.so" -o "${a32_cxx_fixture}"
+      DEPENDS guest/a32_cxx_libc.cpp guest/a32_soname_stub.c VERBATIM)
+    add_custom_target(a32_cxx_libc_fixture ALL DEPENDS "${a32_cxx_fixture}")
+    add_test(NAME a32_cxx_libc_guest COMMAND venture-runtime --run-guest-test "${a32_cxx_fixture}"
+      --test-dir "${a32_cxx_dir}/run")
+    set_tests_properties(a32_cxx_libc_guest PROPERTIES TIMEOUT 60
+      ENVIRONMENT "VENTURE_DATA_DIR=${CMAKE_CURRENT_BINARY_DIR}/a32-cxx-libc/data")
+  endif()
   add_executable(venture_a32_memory_tests runtime/a32_memory_main.cpp runtime/a32_memory_test.cpp)
   target_link_libraries(venture_a32_memory_tests PRIVATE venture_runtime venture_hle doctest::doctest)
   target_compile_options(venture_a32_memory_tests PRIVATE -Wall -Wextra)

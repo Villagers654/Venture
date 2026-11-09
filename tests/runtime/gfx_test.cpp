@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <fstream>
 #include <random>
+#include <set>
 #include <thread>
 #include <zlib.h>
 
@@ -24,6 +25,7 @@
 #include "gfx/gpu_device.h"
 #include "hle/gles/gles_state.h"
 #include "gfx/gpu_device_internal.h"
+#include "gfx/spirv_precision.h"
 #include "gfx/texture_decode.h"
 #include "gfx/xr_images.h"
 #include "hle/vulkan/timing.h"
@@ -581,6 +583,92 @@ TEST_CASE("gfx desktop multisample-to-texture resolves antialiased guest eye buf
   unsigned partial = 0;
   for (std::size_t i = 0; i < pixels.size(); i += 4) partial += pixels[i] > 0 && pixels[i] < 255;
   CHECK(partial >= 12);
+  call("glBindFramebuffer", GL_FRAMEBUFFER, 0);
+  call("glDeleteFramebuffers", 1, &fbo);
+  call("glDeleteTextures", 1, &texture);
+  call("glUseProgram", 0);
+  call("glDeleteProgram", program);
+  for (auto shader : shaders) call("glDeleteShader", shader);
+}
+TEST_CASE("gfx relaxed SPIR-V keeps fp16 except vector magnitudes") {
+  constexpr std::uint32_t relaxed = 0;
+  auto op = [](std::uint32_t code, std::initializer_list<std::uint32_t> operands) {
+    std::vector<std::uint32_t> words{std::uint32_t(operands.size() + 1) << 16 | code};
+    words.insert(words.end(), operands);
+    return words;
+  };
+  std::vector<std::uint32_t> module{0x07230203, 0x10000, 0, 40, 0};
+  auto add = [&](std::vector<std::uint32_t> words) { module.insert(module.end(), words.begin(), words.end()); };
+  // OpExtInstImport %1 "GLSL.std.450"
+  std::uint32_t name[4]{};
+  std::memcpy(name, "GLSL.std.450", 12);
+  add(op(11, {1, name[0], name[1], name[2], name[3]}));
+  for (std::uint32_t id : {10u, 11u, 12u, 13u, 14u, 15u, 16u, 17u}) add(op(71, {id, relaxed}));
+  add(op(71, {18, 1}));                // a decoration other than RelaxedPrecision stays
+  add(op(129, {2, 10, 3, 4}));         // %10 = OpFSub: stays fp16
+  add(op(12, {2, 11, 1, 66, 10}));     // %11 = Length %10
+  add(op(148, {2, 12, 10, 10}));       // %12 = OpDot %10 %10
+  add(op(12, {2, 13, 1, 31, 12}));     // %13 = Sqrt %12
+  add(op(12, {2, 14, 1, 31, 10}));     // %14 = Sqrt %10: not a magnitude
+  add(op(12, {2, 15, 1, 69, 10}));     // %15 = Normalize %10
+  add(op(12, {2, 16, 1, 67, 10, 10})); // %16 = Distance %10 %10
+  add(op(133, {2, 17, 11, 11}));       // %17 = OpFMul of the length: stays fp16
+  std::vector<std::uint32_t> out;
+  REQUIRE(venture::gfx::promote_relaxed_magnitudes(module, out));
+  std::set<std::uint32_t> still;
+  for (std::size_t i = 5; i < out.size(); i += out[i] >> 16)
+    if ((out[i] & 0xffff) == 71 && out[i + 2] == relaxed) still.insert(out[i + 1]);
+  CHECK(still == std::set<std::uint32_t>{10, 14, 17});
+  CHECK(out.size() == module.size() - 5 * 3);
+  // Nothing to promote, or not SPIR-V: the module is used as it is.
+  std::vector<std::uint32_t> plain(module.begin(), module.begin() + 5);
+  CHECK_FALSE(venture::gfx::promote_relaxed_magnitudes(plain, out));
+  CHECK_FALSE(venture::gfx::promote_relaxed_magnitudes(std::vector<std::uint32_t>{1, 2, 3}, out));
+}
+TEST_CASE("gfx mediump shader math keeps the range Quest games rely on") {
+  // UE4 materials fade by length() of a mediump world offset in centimetres.
+  // Run as fp16 on a desktop GPU, the squared length overflows past 2.56 m
+  // (First Contact drew everything farther away untextured). Vector
+  // magnitudes are computed at full precision (gfx/spirv_precision.h).
+  if (!have_angle()) return;
+  EglSession egl;
+  const char* sources[]{
+      "#version 300 es\nvoid main(){vec2 p[3]=vec2[](vec2(-1,-1),vec2(3,-1),vec2(-1,3));gl_Position=vec4(p[gl_VertexID],0,1);}",
+      "#version 300 es\nprecision mediump float;uniform float d;out vec4 color;"
+      "void main(){float l=length(vec3(d,d,0.0));color=vec4(abs(l-d*1.41421356)<d*0.01?1.0:0.0,0,0,1);}"};
+  GLuint shaders[2];
+  auto program = static_cast<GLuint>(call("glCreateProgram"));
+  for (int i = 0; i < 2; ++i) {
+    shaders[i] = static_cast<GLuint>(call("glCreateShader", i ? GL_FRAGMENT_SHADER : GL_VERTEX_SHADER));
+    call("glShaderSource", shaders[i], 1, &sources[i], 0);
+    call("glCompileShader", shaders[i]);
+    GLint compiled{}; call("glGetShaderiv", shaders[i], GL_COMPILE_STATUS, &compiled);
+    REQUIRE(compiled);
+    call("glAttachShader", program, shaders[i]);
+  }
+  call("glLinkProgram", program);
+  GLint linked{}; call("glGetProgramiv", program, GL_LINK_STATUS, &linked); REQUIRE(linked);
+  call("glUseProgram", program);
+  GLuint texture{}, fbo{};
+  call("glGenTextures", 1, &texture);
+  call("glBindTexture", GL_TEXTURE_2D, texture);
+  call("glTexStorage2D", GL_TEXTURE_2D, 1, GL_RGBA8, 1, 1);
+  call("glGenFramebuffers", 1, &fbo);
+  call("glBindFramebuffer", GL_FRAMEBUFFER, fbo);
+  call("glFramebufferTexture2D", GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
+  REQUIRE(call("glCheckFramebufferStatus", GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE);
+  call("glViewport", 0, 0, 1, 1);
+  const auto location = static_cast<GLint>(call("glGetUniformLocation", program, "d"));
+  REQUIRE(location >= 0);
+  for (float d : {100.f, 300.f, 2000.f}) {
+    CAPTURE(d);
+    call("glUniform1f", location, d);
+    call("glDrawArrays", GL_TRIANGLES, 0, 3);
+    std::array<std::uint8_t, 4> pixel{};
+    call("glReadPixels", 0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel.data());
+    CHECK(pixel[0] == 255);
+  }
+  CHECK(call("glGetError") == GL_NO_ERROR);
   call("glBindFramebuffer", GL_FRAMEBUFFER, 0);
   call("glDeleteFramebuffers", 1, &fbo);
   call("glDeleteTextures", 1, &texture);

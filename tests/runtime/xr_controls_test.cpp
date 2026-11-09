@@ -171,10 +171,10 @@ TEST_CASE("Moved, cleared and swapped inputs reach a VrApi game where the player
   venture::test::ScopedMenuMode automatic("");
   Config config;
   auto& touch = config["/interaction_profiles/oculus/touch_controller"];
-  touch.rows[0][int(Quest::primary)] = "/input/y/click";
-  touch.rows[0][int(Quest::secondary)] = "/input/x/click";
-  touch.rows[1][int(Quest::stick_click)] = "";
-  touch.rows[1][int(Quest::grip)] = "/input/trigger/value";
+  touch.rows[0][int(Quest::primary)] = Inputs{"/input/y/click"};
+  touch.rows[0][int(Quest::secondary)] = Inputs{"/input/x/click"};
+  touch.rows[1][int(Quest::stick_click)] = Inputs{};
+  touch.rows[1][int(Quest::grip)] = Inputs{"/input/trigger/value"};
   ScopedControls controls(encode(config));
   VrApiGame game("/interaction_profiles/oculus/touch_controller");
   MockXrScript script{};
@@ -351,8 +351,8 @@ TEST_CASE("Without XR_EXT_dpad_binding a Vive wand's trackpad press is X and A")
 TEST_CASE("An OpenXR game's Touch bindings follow the player's controls on another controller") {
   venture::test::ScopedMenuMode automatic("");
   Config config;
-  config["/interaction_profiles/htc/vive_controller"].rows[0][int(Quest::primary)] = "/input/trackpad/dpad_up";
-  config["/interaction_profiles/htc/vive_controller"].rows[0][int(Quest::secondary)] = "/input/trackpad/dpad_down";
+  config["/interaction_profiles/htc/vive_controller"].rows[0][int(Quest::primary)] = Inputs{"/input/trackpad/dpad_up"};
+  config["/interaction_profiles/htc/vive_controller"].rows[0][int(Quest::secondary)] = Inputs{"/input/trackpad/dpad_down"};
   config["/interaction_profiles/htc/vive_controller"].menu = {MenuMode::hold, "/user/hand/left/input/menu/click", {}, 500};
   ScopedControls controls(encode(config));
   ventureMockXrSetProfile("/interaction_profiles/htc/vive_controller");
@@ -448,6 +448,126 @@ TEST_CASE("An OpenXR game's Touch bindings follow the player's controls on anoth
   MockXrScript restored{};
   ventureMockXrSetScript(&restored);
   ventureMockXrSetProfile(nullptr);
+}
+
+TEST_CASE("An OpenXR game's action reaches every host input the player gave its Quest input") {
+  // A Steam Frame player puts Stick click on the stick and on the bumper: the game's
+  // one stick-click action is suggested on both host paths, and either drives it.
+  venture::test::ScopedMenuMode automatic("");
+  const char* frame = "/interaction_profiles/valve/frame_controller_valve";
+  Config config;
+  config[frame].rows[0][int(Quest::stick_click)] = Inputs{"/input/thumbstick/click", "/input/shoulder/click"};
+  ScopedControls controls(encode(config));
+  ventureMockXrSetProfile(frame);
+  CHECK(venture::xr::touch_bindings("/user/hand/left/input/thumbstick/click", frame) ==
+        std::vector<std::string>{"/user/hand/left/input/thumbstick/click", "/user/hand/left/input/shoulder/click"});
+  venture::test::XrImageFixture interop;
+  venture::xr::install_xr_images(&interop);
+  const char* extensions[]{"XR_KHR_opengl_es_enable"};
+  XrInstanceCreateInfo create{XR_TYPE_INSTANCE_CREATE_INFO};
+  create.applicationInfo.apiVersion = XR_MAKE_VERSION(1, 0, 0);
+  create.enabledExtensionCount = 1;
+  create.enabledExtensionNames = extensions;
+  XrInstance instance{};
+  REQUIRE(xg::xrCreateInstance(&create, &instance) == XR_SUCCESS);
+  xg::GlesBinding graphics{XR_TYPE_GRAPHICS_BINDING_OPENGL_ES_ANDROID_KHR, nullptr, 1, 2, 3};
+  XrSessionCreateInfo ci{XR_TYPE_SESSION_CREATE_INFO, &graphics, 0, 1};
+  XrSession session{};
+  REQUIRE(xg::xrCreateSession(instance, &ci, &session) == XR_SUCCESS);
+  XrActionSetCreateInfo set_info{XR_TYPE_ACTION_SET_CREATE_INFO};
+  std::strcpy(set_info.actionSetName, "multi_test");
+  std::strcpy(set_info.localizedActionSetName, "Multi test");
+  XrActionSet set{};
+  REQUIRE(xg::xrCreateActionSet(instance, &set_info, &set) == XR_SUCCESS);
+  XrPath left{}, touch{}, click_path{};
+  REQUIRE(xg::xrStringToPath(instance, "/user/hand/left", &left) == XR_SUCCESS);
+  REQUIRE(xg::xrStringToPath(instance, "/interaction_profiles/oculus/touch_controller", &touch) == XR_SUCCESS);
+  REQUIRE(xg::xrStringToPath(instance, "/user/hand/left/input/thumbstick/click", &click_path) == XR_SUCCESS);
+  XrActionCreateInfo ai{XR_TYPE_ACTION_CREATE_INFO};
+  ai.actionType = XR_ACTION_TYPE_BOOLEAN_INPUT;
+  ai.countSubactionPaths = 1;
+  ai.subactionPaths = &left;
+  std::strcpy(ai.actionName, "click");
+  std::strcpy(ai.localizedActionName, "click");
+  XrAction click{};
+  REQUIRE(xg::xrCreateAction(set, &ai, &click) == XR_SUCCESS);
+  XrActionSuggestedBinding binding{click, click_path};
+  XrInteractionProfileSuggestedBinding suggestion{XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING, nullptr, touch, 1,
+                                                  &binding};
+  REQUIRE(xg::xrSuggestInteractionProfileBindings(instance, &suggestion) == XR_SUCCESS);
+  XrSessionActionSetsAttachInfo attach{XR_TYPE_SESSION_ACTION_SETS_ATTACH_INFO, nullptr, 1, &set};
+  REQUIRE(xg::xrAttachSessionActionSets(session, &attach) == XR_SUCCESS);
+  auto poll = [&] {
+    XrEventDataBuffer event{XR_TYPE_EVENT_DATA_BUFFER};
+    while (xg::xrPollEvent(instance, &event) == XR_SUCCESS) event = {XR_TYPE_EVENT_DATA_BUFFER};
+  };
+  poll();
+  XrSessionBeginInfo begin{XR_TYPE_SESSION_BEGIN_INFO, nullptr, XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO};
+  REQUIRE(xg::xrBeginSession(session, &begin) == XR_SUCCESS);
+  poll();
+  // The game sees one bound source, its own path.
+  XrBoundSourcesForActionEnumerateInfo bound{XR_TYPE_BOUND_SOURCES_FOR_ACTION_ENUMERATE_INFO, nullptr, click};
+  std::array<XrPath, 4> sources{};
+  std::uint32_t count = 0;
+  REQUIRE(xg::xrEnumerateBoundSourcesForAction(session, &bound, std::uint32_t(sources.size()), &count, sources.data()) ==
+          XR_SUCCESS);
+  REQUIRE(count >= 1);
+  for (std::uint32_t i = 0; i < count; ++i) CHECK(sources[i] == click_path);
+  XrActiveActionSet active{set, XR_NULL_PATH};
+  XrActionsSyncInfo sync{XR_TYPE_ACTIONS_SYNC_INFO, nullptr, 1, &active};
+  auto pressed = [&](const MockXrScript& script) {
+    ventureMockXrSetScript(&script);
+    REQUIRE(xg::xrSyncActions(session, &sync) == XR_SUCCESS);
+    XrActionStateGetInfo get{XR_TYPE_ACTION_STATE_GET_INFO, nullptr, click, XR_NULL_PATH};
+    XrActionStateBoolean value{XR_TYPE_ACTION_STATE_BOOLEAN};
+    REQUIRE(xg::xrGetActionStateBoolean(session, &get, &value) == XR_SUCCESS);
+    return value.isActive && value.currentState;
+  };
+  CHECK_FALSE(pressed(MockXrScript{}));
+  MockXrScript script{};
+  press(script.left, "/input/thumbstick/click");
+  CHECK(pressed(script));
+  script = {};
+  press(script.left, "/input/shoulder/click");
+  CHECK(pressed(script));
+  CHECK_FALSE(pressed(MockXrScript{}));
+  // The right bumper is not the left Stick click.
+  script = {};
+  press(script.right, "/input/shoulder/click");
+  CHECK_FALSE(pressed(script));
+  CHECK(xg::xrDestroySession(session) == XR_SUCCESS);
+  CHECK(xg::xrDestroyInstance(instance) == XR_SUCCESS);
+  venture::xr::install_xr_images(nullptr);
+  MockXrScript restored{};
+  ventureMockXrSetScript(&restored);
+  ventureMockXrSetProfile(nullptr);
+}
+
+TEST_CASE("Several host inputs on one Quest input reach a VrApi game, and both stick-click sets open the automatic menu") {
+  venture::test::ScopedMenuMode automatic("");
+  const char* frame = "/interaction_profiles/valve/frame_controller_valve";
+  Config config;
+  for (int hand = 0; hand < 2; ++hand)
+    config[frame].rows[size_t(hand)][int(Quest::stick_click)] = Inputs{"/input/thumbstick/click", "/input/shoulder/click"};
+  ScopedControls controls(encode(config));
+  VrApiGame game(frame);
+  for (int hand = 0; hand < 2; ++hand)
+    for (auto input : {"/input/thumbstick/click", "/input/shoulder/click"}) {
+      CAPTURE(hand);
+      CAPTURE(input);
+      MockXrScript script{};
+      press(hand ? script.right : script.left, input);
+      const auto state = game.read(script, hand);
+      CHECK(sees(state, Quest::stick_click, hand));
+      CHECK_FALSE(sees(game.read(script, 0), Quest::menu, 0));
+      CHECK_FALSE(sees(game.read(MockXrScript{}, hand), Quest::stick_click, hand));
+    }
+  // The automatic menu's both stick clicks: any of each hand's Stick click inputs.
+  MockXrScript script{};
+  press(script.left, "/input/shoulder/click");
+  press(script.right, "/input/thumbstick/click");
+  CHECK(sees(game.read(script, 0), Quest::menu, 0));
+  CHECK_FALSE(sees(game.read(MockXrScript{}, 0), Quest::menu, 0));
 }
 
 TEST_CASE("An OpenXR game that also binds both stick clicks gets its Quest menu from the menu button and both stick clicks") {
@@ -798,11 +918,11 @@ TEST_CASE("Probe: the host runtime accepts the bindings of every controller prof
       for (int hand = 0; hand < 2; ++hand) {
         const char* suffix = hand ? spec.right : spec.left;
         if (!suffix) continue;
-        auto mapped = venture::xr::touch_binding(std::string(hand ? "/user/hand/right" : "/user/hand/left") + suffix,
-                                                profile);
-        XrPath path{};
-        if (mapped && XR_SUCCEEDED(::xrStringToPath(instance, mapped->c_str(), &path)))
-          bindings.push_back({spec.action, path});
+        for (const auto& mapped :
+             venture::xr::touch_bindings(std::string(hand ? "/user/hand/right" : "/user/hand/left") + suffix, profile)) {
+          XrPath path{};
+          if (XR_SUCCEEDED(::xrStringToPath(instance, mapped.c_str(), &path))) bindings.push_back({spec.action, path});
+        }
       }
     XrPath profile_path{};
     REQUIRE(::xrStringToPath(instance, profile.c_str(), &profile_path) == XR_SUCCESS);

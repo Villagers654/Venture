@@ -56,11 +56,11 @@ TEST_CASE("stores, lookups and flushes from many threads beside the background w
     });
   for (unsigned t = 0; t < kReaders; ++t)
     threads.emplace_back([&, t] {
-      std::vector<std::uint8_t> copied;
+      std::vector<std::uint8_t> copied, buffer;
       for (std::uint64_t n = t; !stop.load(); n = n * 6364136223846793005ull + 1442695040888963407ull) {
         const auto descriptor = kBase + (n >> 33) % ((kStorers / 2) * kPerStorer);
         const auto expected = block(descriptor);
-        if (const auto hit = cache->find(descriptor); hit.first) {
+        if (const auto hit = cache->find(descriptor, buffer); hit.first) {
           found.fetch_add(1);
           if (!same(hit, expected)) wrong.fetch_add(1);
         }
@@ -80,14 +80,58 @@ TEST_CASE("stores, lookups and flushes from many threads beside the background w
   CHECK(cache->unwritten_bytes() == 0);
   // Every block is in the file now, and reads back as stored.
   unsigned missing = 0, differ = 0;
+  std::vector<std::uint8_t> buffer;
   for (std::uint64_t i = 0; i < (kStorers / 2) * kPerStorer; ++i) {
     const auto descriptor = kBase + i;
-    const auto hit = cache->find(descriptor);
+    const auto hit = cache->find(descriptor, buffer);
     if (!hit.first) ++missing;
     else if (!same(hit, block(descriptor))) ++differ;
   }
   CHECK(missing == 0);
   CHECK(differ == 0);
+}
+
+// Guest code runs during host-thread exit: an adopted thread's guest TLS destructors run from a
+// thread_local destructor, after the thread_locals constructed later on that thread are gone. A
+// translation then looks its block up here; when find decoded into a thread_local buffer of its
+// own, that buffer was already freed and the decode wrote 1 MiB into freed heap memory.
+namespace {
+constexpr std::uint64_t kExit = 0x5c00000000000000ull;
+constexpr std::size_t kExitSizes[2] = {std::size_t(1) << 20, (std::size_t(1) << 20) + 4096};
+std::vector<std::uint8_t> large_block(std::uint64_t descriptor) {
+  auto bytes = block(descriptor);
+  bytes.resize(kExitSizes[descriptor - kExit], 0x90);
+  return bytes;
+}
+struct LookupAtExit {
+  PortableBlockCache* cache = nullptr;
+  bool* intact = nullptr;
+  std::vector<std::uint8_t> buffer;
+  ~LookupAtExit() {
+    if (cache) *intact = same(cache->find(kExit + 1, buffer), large_block(kExit + 1));
+  }
+};
+}  // namespace
+
+TEST_CASE("a lookup from a thread_local destructor during thread exit decodes intact blocks") {
+  auto* cache = PortableBlockCache::get();
+  REQUIRE(cache);
+  for (const std::uint64_t d : {kExit, kExit + 1}) {
+    const auto bytes = large_block(d);
+    cache->store(d, bytes.data(), bytes.size());
+  }
+  cache->flush();
+  bool early = false, intact = false;
+  std::thread([&] {
+    // Constructed before the thread's first lookup, so destroyed after anything that lookup creates.
+    thread_local LookupAtExit at_exit;
+    at_exit.cache = cache;
+    at_exit.intact = &intact;
+    std::vector<std::uint8_t> buffer;
+    early = same(cache->find(kExit, buffer), large_block(kExit));
+  }).join();
+  CHECK(early);
+  CHECK(intact);
 }
 
 // Explored marks across runs: ctest runs these three in order, each in its own process
@@ -104,7 +148,8 @@ void store_range(PortableBlockCache* cache, std::uint64_t from, std::uint64_t to
 }
 unsigned intact(PortableBlockCache* cache, std::uint64_t from, std::uint64_t to) {
   unsigned n = 0;
-  for (auto d = from; d < to; ++d) n += same(cache->find(d), block(d));
+  std::vector<std::uint8_t> buffer;
+  for (auto d = from; d < to; ++d) n += same(cache->find(d, buffer), block(d));
   return n;
 }
 }  // namespace

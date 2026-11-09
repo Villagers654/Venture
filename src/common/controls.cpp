@@ -29,6 +29,24 @@ bool usable(const Profile& p, int hand, std::string_view component, bool axes) {
   const auto* input = find_input(p, component);
   return input && !input->reserved && on_hand(*input, hand) && is_axes(component) == axes;
 }
+// A saved row: a string ("" for none) or a list of strings, whose repeats and
+// empty entries are dropped. Anything else is not a row.
+std::optional<Inputs> decode_row(const Json& row) {
+  constexpr std::size_t kMaxPath = 128, kMaxInputs = 16;
+  if (row.is_string()) {
+    const auto& path = row.get_ref<const std::string&>();
+    if (path.size() >= kMaxPath) return std::nullopt;
+    return path.empty() ? Inputs{} : Inputs{path};
+  }
+  if (!row.is_array() || row.size() > kMaxInputs) return std::nullopt;
+  Inputs inputs;
+  for (const auto& item : row) {
+    if (!item.is_string() || item.get_ref<const std::string&>().size() >= kMaxPath) return std::nullopt;
+    const auto& path = item.get_ref<const std::string&>();
+    if (!path.empty() && std::ranges::find(inputs, path) == inputs.end()) inputs.push_back(path);
+  }
+  return inputs;
+}
 // The whole pad's press, for a half without XR_EXT_dpad_binding.
 std::string pad_press(const Profile& p, std::string_view component) {
   const std::string id(identifier(component));
@@ -56,16 +74,15 @@ Resolved resolve(const Profile& p, const Choice* choice) {
   Resolved r;
   for (int hand = 0; hand < 2; ++hand)
     for (int q = 0; q < kQuestCount; ++q) {
-      std::string path(p.defaults[size_t(hand)][size_t(q)]);
-      if (q == int(Quest::menu)) {
-        r.rows[size_t(hand)][size_t(q)] = path;
-        continue;
-      }
-      if (choice && choice->rows[size_t(hand)][size_t(q)]) {
-        const auto& chosen = *choice->rows[size_t(hand)][size_t(q)];
-        if (chosen.empty() || usable(p, hand, chosen, q == int(Quest::stick))) path = chosen;
-      }
-      r.rows[size_t(hand)][size_t(q)] = path;
+      auto& row = r.rows[size_t(hand)][size_t(q)];
+      if (const auto path = p.defaults[size_t(hand)][size_t(q)]; !path.empty()) row = {std::string(path)};
+      if (q == int(Quest::menu) || !choice || !choice->rows[size_t(hand)][size_t(q)]) continue;
+      const auto& chosen = *choice->rows[size_t(hand)][size_t(q)];
+      Inputs kept;
+      for (const auto& path : chosen)
+        if (usable(p, hand, path, q == int(Quest::stick)) && std::ranges::find(kept, path) == kept.end())
+          kept.push_back(path);
+      if (chosen.empty() || !kept.empty()) row = std::move(kept);
     }
   // The menu.
   auto source = [&](const std::string& path) {
@@ -94,8 +111,10 @@ Resolved resolve(const Profile& p, const Choice* choice) {
       m.kind = p.menu_path.empty() ? Menu::Kind::synthesized : Menu::Kind::direct;
       m.direct = p.menu_path;
       for (int hand = 0; hand < 2; ++hand)
-        if (const auto& click = r.rows[size_t(hand)][size_t(Quest::stick_click)]; !click.empty())
-          m.sources.push_back(std::string(hand_root(hand)) + click);
+        if (const auto& clicks = r.rows[size_t(hand)][size_t(Quest::stick_click)]; !clicks.empty()) {
+          auto& source = m.sources.emplace_back();
+          for (const auto& click : clicks) source.push_back(std::string(hand_root(hand)) + click);
+        }
       if (m.sources.size() < 2) {
         m.sources.clear();
         if (m.kind == Menu::Kind::synthesized) m.kind = Menu::Kind::off;
@@ -109,17 +128,17 @@ Resolved resolve(const Profile& p, const Choice* choice) {
         m.direct = parts->second;
       } else {
         m.kind = Menu::Kind::synthesized;
-        m.sources = {menu.first};
+        m.sources = {{menu.first}};
       }
       break;
     case MenuMode::hold:
       m.kind = Menu::Kind::synthesized;
-      m.sources = {menu.first};
+      m.sources = {{menu.first}};
       m.hold_ns = std::int64_t(hold_ms) * 1'000'000;
       break;
     case MenuMode::chord:
       m.kind = Menu::Kind::synthesized;
-      m.sources = {menu.first, menu.second};
+      m.sources = {{menu.first}, {menu.second}};
       m.hold_ns = std::int64_t(hold_ms) * 1'000'000;
       break;
     case MenuMode::off: m.kind = Menu::Kind::off; break;
@@ -136,12 +155,12 @@ std::string bindable(std::string_view path, const Profile& p, bool dpad) {
   return press.empty() ? std::string() : std::string(hand_root(hand)) + press;
 }
 
-std::optional<std::string> host_binding(std::string_view guest, const Profile& p, const Resolved& r, bool dpad) {
+std::vector<std::string> host_bindings(std::string_view guest, const Profile& p, const Resolved& r, bool dpad) {
   const auto parts = split(guest);
-  if (!parts) return std::nullopt;
+  if (!parts) return {};
   const auto [hand, c] = *parts;
   const std::string root(hand_root(hand));
-  if (c == "/input/grip/pose" || c == "/input/aim/pose" || c == "/output/haptic") return std::string(guest);
+  if (c == "/input/grip/pose" || c == "/input/aim/pose" || c == "/output/haptic") return {std::string(guest)};
   // The Quest row and which part of it the game reads.
   enum class Part { main, x, y, touch };
   Quest q;
@@ -160,49 +179,60 @@ std::optional<std::string> host_binding(std::string_view guest, const Profile& p
   else if (c == "/input/trigger/touch") q = Quest::trigger, part = Part::touch;
   else if (c == "/input/squeeze/value") q = Quest::grip;
   else if (c == "/input/thumbrest/touch") q = Quest::thumbrest;
-  else return std::nullopt;  // Pro's pinch, force and stylus are not ordinary Touch controls
+  else return {};  // Pro's pinch, force and stylus are not ordinary Touch controls
   if (q == Quest::menu) {
-    if (hand != 0 || r.menu.kind != Menu::Kind::direct) return std::nullopt;
+    if (hand != 0 || r.menu.kind != Menu::Kind::direct) return {};
     auto path = bindable(root + r.menu.direct, p, dpad);
-    return path.empty() ? std::nullopt : std::optional(path);
+    if (path.empty()) return {};
+    return {std::move(path)};
   }
-  const auto& host = r.rows[size_t(hand)][size_t(q)];
-  if (host.empty()) return std::nullopt;
-  if (is_dpad(host) && !dpad) {
-    // The first half on this pad, in row order, takes the pad's press.
+  // Without XR_EXT_dpad_binding: whether `host` (an input of this row) is the
+  // first half on its pad, by row order and then by order within a row.
+  auto first_half = [&](const std::string& host) {
     for (int other = 0; other < kQuestCount; ++other) {
-      const auto& o = r.rows[size_t(hand)][size_t(other)];
-      if (other == int(Quest::menu) || !is_dpad(o) || identifier(o) != identifier(host)) continue;
-      if (other != int(q)) return std::nullopt;
-      break;
+      if (other == int(Quest::menu)) continue;
+      for (const auto& o : r.rows[size_t(hand)][size_t(other)])
+        if (is_dpad(o) && identifier(o) == identifier(host)) return &o == &host;
+    }
+    return false;
+  };
+  std::vector<std::string> out;
+  auto add = [&](std::string path) {
+    if (std::ranges::find(out, path) == out.end()) out.push_back(std::move(path));
+  };
+  for (const auto& host : r.rows[size_t(hand)][size_t(q)]) {
+    const bool half = is_dpad(host);
+    if (half && !dpad && !first_half(host)) continue;
+    switch (part) {
+      case Part::main:
+        if (half && !dpad) {
+          if (const auto press = pad_press(p, host); !press.empty()) add(root + press);
+        } else {
+          add(root + host);
+        }
+        break;
+      case Part::x:
+      case Part::y:
+        if (is_axes(host)) add(root + host + (part == Part::x ? "/x" : "/y"));
+        break;
+      case Part::touch: {
+        if (half) break;
+        const auto id = identifier(host);
+        const auto name = id.substr(7);
+        for (std::string_view t = p.touches; !t.empty();) {
+          const auto space = t.find(' ');
+          if (t.substr(0, space) == name) {
+            add(root + std::string(id) + "/touch");
+            break;
+          }
+          if (space == std::string_view::npos) break;
+          t.remove_prefix(space + 1);
+        }
+        break;
+      }
     }
   }
-  switch (part) {
-    case Part::main: {
-      if (is_dpad(host) && !dpad) {
-        const auto press = pad_press(p, host);
-        return press.empty() ? std::nullopt : std::optional(root + press);
-      }
-      return root + host;
-    }
-    case Part::x:
-    case Part::y:
-      if (!is_axes(host)) return std::nullopt;
-      return root + host + (part == Part::x ? "/x" : "/y");
-    case Part::touch: {
-      if (is_dpad(host)) return std::nullopt;
-      const auto id = identifier(host);
-      const auto name = id.substr(7);
-      for (std::string_view t = p.touches; !t.empty();) {
-        const auto space = t.find(' ');
-        if (t.substr(0, space) == name) return root + std::string(id) + "/touch";
-        if (space == std::string_view::npos) break;
-        t.remove_prefix(space + 1);
-      }
-      return std::nullopt;
-    }
-  }
-  return std::nullopt;
+  return out;
 }
 
 std::vector<Conflict> conflicts(const Resolved& r, MenuMode mode) {
@@ -211,13 +241,13 @@ std::vector<Conflict> conflicts(const Resolved& r, MenuMode mode) {
     // Each row's host inputs on this hand; the menu's come from its sources.
     std::array<std::vector<std::string>, kQuestCount> at;
     for (int q = 0; q < kQuestCount; ++q)
-      if (q != int(Quest::menu) && !r.rows[size_t(hand)][size_t(q)].empty())
-        at[size_t(q)].push_back(r.rows[size_t(hand)][size_t(q)]);
+      if (q != int(Quest::menu)) at[size_t(q)] = r.rows[size_t(hand)][size_t(q)];
     if (mode != MenuMode::hold) {
       if (r.menu.kind == Menu::Kind::direct && hand == 0) at[size_t(Quest::menu)].push_back(r.menu.direct);
-      for (const auto& s : r.menu.sources)
-        if (const auto parts = split(s); parts && parts->first == hand)
-          at[size_t(Quest::menu)].emplace_back(parts->second);
+      for (const auto& source : r.menu.sources)
+        for (const auto& s : source)
+          if (const auto parts = split(s); parts && parts->first == hand)
+            at[size_t(Quest::menu)].emplace_back(parts->second);
     }
     for (int a = 0; a < kQuestCount; ++a)
       for (int b = a + 1; b < kQuestCount; ++b)
@@ -233,8 +263,13 @@ std::string encode(const Config& config) {
     Json entry = Json::object();
     for (int hand = 0; hand < 2; ++hand) {
       Json rows = Json::object();
-      for (int q = 0; q < kQuestCount; ++q)
-        if (const auto& row = choice.rows[size_t(hand)][size_t(q)]) rows[std::string(kKeys[q])] = *row;
+      for (int q = 0; q < kQuestCount; ++q) {
+        const auto& row = choice.rows[size_t(hand)][size_t(q)];
+        if (!row) continue;
+        // None or one input stays a string, as settings always had it; several are a list.
+        if (row->size() > 1) rows[std::string(kKeys[q])] = *row;
+        else rows[std::string(kKeys[q])] = row->empty() ? std::string() : row->front();
+      }
       if (!rows.empty()) entry[hand ? "right" : "left"] = std::move(rows);
     }
     if (choice.menu != MenuChoice{}) {
@@ -263,8 +298,8 @@ Config decode(std::string_view text) {
       const auto rows = entry.find(hand ? "right" : "left");
       if (rows == entry.end() || !rows->is_object()) continue;
       for (int q = 0; q < kQuestCount; ++q)
-        if (const auto row = rows->find(std::string(kKeys[q])); row != rows->end() && row->is_string() && row->get_ref<const std::string&>().size() < 128)
-          choice.rows[size_t(hand)][size_t(q)] = row->get<std::string>();
+        if (const auto row = rows->find(std::string(kKeys[q])); row != rows->end())
+          if (auto inputs = decode_row(*row)) choice.rows[size_t(hand)][size_t(q)] = std::move(*inputs);
     }
     if (const auto menu = entry.find("menu"); menu != entry.end() && menu->is_object()) {
       const auto mode = string(*menu, "mode");

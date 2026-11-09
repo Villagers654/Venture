@@ -1,4 +1,5 @@
 #include "hle/egl/egl.h"
+#include "core/thread_lifetime.h"
 
 #include <algorithm>
 #include <atomic>
@@ -40,7 +41,8 @@ std::set<EGLContext> no_error_contexts;
 std::map<EGLSurface, std::shared_ptr<Surface>> surfaces;
 std::set<EGLSyncKHR> syncs;
 std::set<EGLImageKHR> images;
-thread_local std::shared_ptr<Surface> current_draw, current_read;
+std::shared_ptr<Surface>& current_draw() { return thread_lifetime::local<std::shared_ptr<Surface>, struct EglCurrentDraw>(); }
+std::shared_ptr<Surface>& current_read() { return thread_lifetime::local<std::shared_ptr<Surface>, struct EglCurrentRead>(); }
 std::atomic<std::uint64_t> frames{0};
 std::string extension_string;
 
@@ -434,8 +436,8 @@ EGLBoolean guest_eglMakeCurrent(EGLDisplay d, EGLSurface draw, EGLSurface read,
     return EGL_FALSE;
   auto ok = host<PFNEGLMAKECURRENTPROC>("eglMakeCurrent", d, draw, read, c);
   if (ok) {
-    current_draw = draw ? surfaces.at(draw) : nullptr;
-    current_read = read ? surfaces.at(read) : nullptr;
+    current_draw() = draw ? surfaces.at(draw) : nullptr;
+    current_read() = read ? surfaces.at(read) : nullptr;
     gles_context_bound(c);
   }
   return ok;
@@ -563,8 +565,8 @@ EGLenum guest_eglQueryAPI() { return host<PFNEGLQUERYAPIPROC>("eglQueryAPI"); }
 EGLBoolean guest_eglReleaseThread() {
   auto ok = host<PFNEGLRELEASETHREADPROC>("eglReleaseThread");
   if (ok) {
-    current_draw.reset();
-    current_read.reset();
+    current_draw().reset();
+    current_read().reset();
     gles_context_bound(EGL_NO_CONTEXT);
   }
   return ok;

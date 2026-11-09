@@ -21,7 +21,8 @@ LOCK_HASH = hashlib.sha256(LOCK_FILE.read_bytes()).hexdigest()
 LOCK = json.loads(LOCK_FILE.read_text())
 COMPONENTS = {'CONFIG_AAC_DECODER', 'CONFIG_H264_DECODER', 'CONFIG_HEVC_DECODER',
               'CONFIG_VP8_DECODER', 'CONFIG_VP9_DECODER', 'CONFIG_MOV_DEMUXER',
-              'CONFIG_MATROSKA_DEMUXER', 'CONFIG_VP9_PARSER', 'CONFIG_VP9_SUPERFRAME_SPLIT_BSF'}
+              'CONFIG_MATROSKA_DEMUXER', 'CONFIG_VP9_PARSER', 'CONFIG_VP9_SUPERFRAME_SPLIT_BSF',
+              'CONFIG_H264_VULKAN_HWACCEL', 'CONFIG_HEVC_VULKAN_HWACCEL', 'CONFIG_VP9_VULKAN_HWACCEL'}
 if os.name == 'nt':
     COMPONENTS |= {'CONFIG_'+codec+'_'+entry+'_HWACCEL' for codec in ('H264','HEVC','VP9')
                    for entry in ('D3D11VA','D3D11VA2')}
@@ -196,7 +197,29 @@ def build_dependency():
     if '[GNUPG:] VALIDSIG '+LOCK['fingerprint']+' ' not in verified.stdout:
         raise RuntimeError('FFmpeg signature fingerprint mismatch')
     source_tree_hash = verify_source(archive, source)
-    build = BASE / ('build-windows' if os.name == 'nt' else 'build-posix'); build.mkdir(exist_ok=True)
+    # Vulkan Video hwaccels compile against the same pinned Vulkan-Headers the
+    # runtime fetches; FFmpeg loads the Vulkan loader itself at run time.
+    # Only include/ is extracted, without the archive's long top directory:
+    # the full tree exceeds MAX_PATH under the hash-keyed cache directory.
+    headers_spec = LOCK['vulkan_headers']
+    headers_archive = fetch_file('vulkan-headers-archive', headers_spec['url'], headers_spec['sha256'],
+                                 'vulkan-headers.tar.gz')
+    vulkan_headers = BASE / 'vulkan-headers'
+    if not vulkan_headers.exists():
+        staging = BASE / 'vulkan-headers.staging'
+        shutil.rmtree(staging, ignore_errors=True)
+        prefix = headers_spec['strip'] + '/include/'
+        with tarfile.open(headers_archive) as bundle:
+            members = []
+            for member in bundle.getmembers():
+                if member.name.startswith(prefix) and (member.isfile() or member.isdir()):
+                    member.name = 'include/' + member.name[len(prefix):]
+                    members.append(member)
+            bundle.extractall(staging, members=members, filter='data')
+        staging.rename(vulkan_headers)
+    if not (vulkan_headers / 'include/vulkan/vulkan.h').exists():
+        raise RuntimeError('Pinned Vulkan-Headers are incomplete')
+    build =BASE / ('build-windows' if os.name == 'nt' else 'build-posix'); build.mkdir(exist_ok=True)
     source_link = build / 'src'
     if not source_link.exists():
         bootstrap.junction(source_link, source)

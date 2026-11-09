@@ -13,6 +13,7 @@
 #include <vector>
 
 namespace venture::hle::libc { class File; }
+namespace venture::gfx { struct SharedImage; }
 namespace venture::audio { class Stream; }
 namespace venture::media {
 inline constexpr int unsupported = -10002, invalid = -10004, bad_state = -10005;
@@ -50,6 +51,9 @@ struct Pcm {
 };
 struct VideoFrame {
   std::vector<std::uint8_t> rgba;  // NV12 bytes when decoded with nv12=true
+  // Instead of rgba: the RGBA8 picture in GPU memory, for a consumer that
+  // imports shared images.
+  std::shared_ptr<const gfx::SharedImage> image;
   int width = 0, height = 0;
   std::int64_t time_us = 0;
 };
@@ -102,16 +106,22 @@ class Decoder {
   };
   explicit Decoder(std::shared_ptr<Library> library = Library::get());
   ~Decoder();
-  int configure(const Track& track);
+  // Hardware decode is preferred for large pictures, and for a Surface whose
+  // consumer imports shared images, so pictures can stay on the GPU.
+  int configure(const Track& track,bool surface=false,bool shared_images=false);
   int send(const Sample* sample);  // null drains EOS
   int receive(Pcm* output);       // 1 frame, 0 EAGAIN, -1 EOF, negative error
   // 2 means a picture older than discard_before_us was decoded but not
   // converted. Reference pictures are retained by FFmpeg as usual.
   int receive(VideoFrame* output,std::int64_t discard_before_us=std::numeric_limits<std::int64_t>::min(),
-              int output_width=0,int output_height=0,bool nv12=false);
+              int output_width=0,int output_height=0,bool nv12=false,bool shared_image=false);
   int receive(std::shared_ptr<Picture>* output);
-  // Downloads and converts a picture from this decoder; 1 on success.
-  int convert(const Picture& picture,VideoFrame* output,int output_width=0,int output_height=0,bool nv12=false);
+  // Downloads and converts a picture from this decoder; 1 on success. With
+  // shared_image, a GPU picture is converted on the GPU into output->image.
+  int convert(const Picture& picture,VideoFrame* output,int output_width=0,int output_height=0,bool nv12=false,
+              bool shared_image=false);
+  // The video decode backend: "software", "D3D11VA" or "Vulkan".
+  std::string_view video_backend() const;
   std::int64_t video_conversion_us() const;
   void flush();
  private:
@@ -128,8 +138,15 @@ class Codec {
   struct Info { std::int32_t offset=0,size=0;std::int64_t time=0;std::uint32_t flags=0; };
   // A sink may take the frame's pixels.
   using Sink=std::function<int(VideoFrame&)>;
-  // The consumer's fixed size, {0,0} for the source size; queried on the worker.
-  using Extent=std::function<std::pair<int,int>()>;
+  // The consumer's fixed size, {0,0} for the source size, and whether it
+  // imports GPU pictures (VideoFrame::image); queried on the worker.
+  struct Target {
+    int width=0,height=0;
+    bool shared_image=false;
+    Target()=default;
+    Target(std::pair<int,int> extent,bool shared=false):width(extent.first),height(extent.second),shared_image(shared){}
+  };
+  using Extent=std::function<Target()>;
   Codec();
   ~Codec();
   void release();

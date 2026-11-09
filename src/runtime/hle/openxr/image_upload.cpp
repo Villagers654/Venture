@@ -1,7 +1,9 @@
 #include "hle/openxr/image_upload.h"
 #include "common/log.h"
 #include "gfx/gpu_device.h"
+#include "gfx/shared_image_import.h"
 #include "xr/queue.h"
+#include <cstring>
 
 namespace venture::hle::openxr {
 template<class F> F ImageUpload::vk(const char* name) const {
@@ -15,6 +17,7 @@ XrResult ImageUpload::checked(VkResult result, const char* operation) const {
 }
 ImageUpload::~ImageUpload() {
   if (!binding_.device) return;
+  imports_.clear();
   if (mapped_) vk<PFN_vkUnmapMemory>("vkUnmapMemory")(binding_.device, memory_);
   if (staging_) vk<PFN_vkDestroyBuffer>("vkDestroyBuffer")(binding_.device, staging_, nullptr);
   if (memory_) vk<PFN_vkFreeMemory>("vkFreeMemory")(binding_.device, memory_, nullptr);
@@ -24,6 +27,16 @@ ImageUpload::~ImageUpload() {
 XrResult ImageUpload::initialize(std::uint32_t width, std::uint32_t height) {
   binding_ = state().graphics;
   vk<PFN_vkGetDeviceQueue>("vkGetDeviceQueue")(binding_.device, binding_.queueFamilyIndex, binding_.queueIndex, &queue_);
+  if (gfx::shared_image_device(binding_.device)) {
+    VkPhysicalDeviceIDProperties id{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES};
+    VkPhysicalDeviceProperties2 query{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, &id};
+    if (auto properties = vk<PFN_vkGetPhysicalDeviceProperties2>("vkGetPhysicalDeviceProperties2")) {
+      properties(binding_.physicalDevice, &query);
+      std::memcpy(device_uuid_.data(), id.deviceUUID, VK_UUID_SIZE);
+      imports_.bind(binding_.device, [this](const char* name) { return vk<PFN_vkVoidFunction>(name); });
+      shared_images_ = true;
+    }
+  }
   VkCommandPoolCreateInfo pci{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
   pci.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
   pci.queueFamilyIndex = binding_.queueFamilyIndex;
@@ -103,17 +116,77 @@ XrResult ImageUpload::publish(Swapchain& chain) {
   barrier.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
   vk<PFN_vkCmdPipelineBarrier>("vkCmdPipelineBarrier")(command_, VK_PIPELINE_STAGE_TRANSFER_BIT,
       VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
-  result = checked(vk<PFN_vkEndCommandBuffer>("vkEndCommandBuffer")(command_), "vkEndCommandBuffer");
+  result = submit();
+  if (XR_FAILED(result)) return result;
+  chain.released_index = index;
+  ++chain.release_serial;
+  return XR_SUCCESS;
+}
+XrResult ImageUpload::submit() {
+  auto result = checked(vk<PFN_vkEndCommandBuffer>("vkEndCommandBuffer")(command_), "vkEndCommandBuffer");
   if (XR_FAILED(result)) return result;
   result = checked(vk<PFN_vkResetFences>("vkResetFences")(binding_.device, 1, &fence_), "vkResetFences");
   if (XR_FAILED(result)) return result;
-  VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
-  submit.commandBufferCount = 1;
-  submit.pCommandBuffers = &command_;
-  result = checked(vk<PFN_vkQueueSubmit>("vkQueueSubmit")(queue_, 1, &submit, fence_), "vkQueueSubmit");
+  VkSubmitInfo info{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+  info.commandBufferCount = 1;
+  info.pCommandBuffers = &command_;
+  result = checked(vk<PFN_vkQueueSubmit>("vkQueueSubmit")(queue_, 1, &info, fence_), "vkQueueSubmit");
   if (XR_FAILED(result)) return result;
-  result = checked(vk<PFN_vkWaitForFences>("vkWaitForFences")(binding_.device, 1, &fence_, VK_TRUE, UINT64_MAX),
-                   "vkWaitForFences");
+  return checked(vk<PFN_vkWaitForFences>("vkWaitForFences")(binding_.device, 1, &fence_, VK_TRUE, UINT64_MAX),
+                 "vkWaitForFences");
+}
+XrResult ImageUpload::publish(Swapchain& chain, const gfx::SharedImage& shared) {
+  if (!shared_images_ || shared.device_uuid != device_uuid_ || shared.width != chain.info.width ||
+      shared.height != chain.info.height || shared.format != VK_FORMAT_R8G8B8A8_UNORM)
+    return XR_ERROR_VALIDATION_FAILURE;
+  HostQueueLock lock(session().uses_shared_gpu);
+  if (!lock) return XR_ERROR_RUNTIME_FAILURE;
+  VkResult failure = VK_SUCCESS;
+  const VkImage source = imports_.import(shared, &failure);
+  if (!source) {
+    log::warn("xr-upload", "Shared video image import failed: VkResult={}", int(failure));
+    return XR_ERROR_VALIDATION_FAILURE;
+  }
+  const std::uint32_t index = 0;
+  auto result = chain.backing->wait(index);
+  if (result != XR_SUCCESS) return result;
+  result = checked(vk<PFN_vkResetCommandBuffer>("vkResetCommandBuffer")(command_, 0), "vkResetCommandBuffer");
+  if (XR_FAILED(result)) return result;
+  VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+  begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+  result = checked(vk<PFN_vkBeginCommandBuffer>("vkBeginCommandBuffer")(command_, &begin), "vkBeginCommandBuffer");
+  if (XR_FAILED(result)) return result;
+  // Acquire the producer's release (EXTERNAL, GENERAL) and write the whole
+  // swapchain image. A same-format-class copy keeps the encoded bytes, as the
+  // CPU path's buffer copy does.
+  VkImageMemoryBarrier barriers[2]{{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER}, {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER}};
+  barriers[0].dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+  barriers[0].oldLayout = barriers[0].newLayout = VK_IMAGE_LAYOUT_GENERAL;
+  barriers[0].srcQueueFamilyIndex = VK_QUEUE_FAMILY_EXTERNAL;
+  barriers[0].dstQueueFamilyIndex = binding_.queueFamilyIndex;
+  barriers[0].image = source;
+  barriers[0].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+  barriers[1].dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+  barriers[1].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+  barriers[1].newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+  barriers[1].srcQueueFamilyIndex = barriers[1].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+  barriers[1].image = chain.images.at(index).image;
+  barriers[1].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+  vk<PFN_vkCmdPipelineBarrier>("vkCmdPipelineBarrier")(command_, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+      VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 2, barriers);
+  VkImageCopy copy{};
+  copy.srcSubresource = copy.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+  copy.extent = {chain.info.width, chain.info.height, 1};
+  vk<PFN_vkCmdCopyImage>("vkCmdCopyImage")(command_, source, VK_IMAGE_LAYOUT_GENERAL, barriers[1].image,
+      VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+  auto& done = barriers[1];
+  done.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+  done.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+  done.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+  done.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+  vk<PFN_vkCmdPipelineBarrier>("vkCmdPipelineBarrier")(command_, VK_PIPELINE_STAGE_TRANSFER_BIT,
+      VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0, 0, nullptr, 0, nullptr, 1, &done);
+  result = submit();
   if (XR_FAILED(result)) return result;
   chain.released_index = index;
   ++chain.release_serial;

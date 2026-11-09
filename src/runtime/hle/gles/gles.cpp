@@ -1,4 +1,5 @@
 #include "common/environment.h"
+#include "core/thread_lifetime.h"
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -37,8 +38,8 @@ std::map<EGLContext, std::shared_ptr<GlContextState>> states;
 // destruction. Keep these small records until process exit; never a dangling
 // PC.
 std::vector<std::shared_ptr<GlCallback>> retired_callbacks;
-thread_local std::shared_ptr<GlContextState> current;
-thread_local std::set<GLenum> no_context_errors;
+std::shared_ptr<GlContextState>& current_state() { return thread_lifetime::local<std::shared_ptr<GlContextState>, struct GlCurrentState>(); }
+std::set<GLenum>& no_context_errors() { return thread_lifetime::local<std::set<GLenum>, struct GlNoContextErrors>(); }
 // VENTURE_GL_DEBUG: every context logs ANGLE's KHR_debug messages (validation,
 // performance, internal errors). Opt-in: debug output costs ANGLE per call.
 // Errors Venture reads back are logged without it (note_angle_gl_error).
@@ -225,8 +226,8 @@ void get_boolean(GLenum name, GLboolean* value) {
   angle_function<PFNGLGETBOOLEANVPROC, "glGetBooleanv">()(name, value);
 }
 GLenum get_error() {
-  auto& errors = current ? current->errors : no_context_errors;
-  if (current && current->no_error) {
+  auto& errors = current_state() ? current_state()->errors : no_context_errors();
+  if (current_state() && current_state()->no_error) {
     // KHR_no_error: "All calls to GetError will return NO_ERROR or
     // OUT_OF_MEMORY." ANGLE still validates; drop what it reports.
     preserve_gl_errors();
@@ -457,19 +458,19 @@ void gles_context_destroyed(EGLContext context) {
 void gles_context_bound(EGLContext context) {
   std::lock_guard lock(context_lock);
   auto it = states.find(context);
-  current = it == states.end() ? nullptr : it->second;
+  current_state() = it == states.end() ? nullptr : it->second;
 }
 std::shared_ptr<GlContextState> current_gl_state() {
-  if (current && !current->extensions_ready) build_extensions(*current);
-  return current;
+  if (current_state() && !current_state()->extensions_ready) build_extensions(*current_state());
+  return current_state();
 }
-GlContextState* current_gl_dispatch_state() noexcept { return current.get(); }
+GlContextState* current_gl_dispatch_state() noexcept { return current_state().get(); }
 void begin_gl_render_timing() {
   static const bool enabled = [] {
     const auto* path = venture::environment::getenv("VENTURE_VULKAN_GPU_TIMING");
     return path && *path;
   }();
-  if (!enabled || !current || current->active_render_timer >= 0) return;
+  if (!enabled || !current_state() || current_state()->active_render_timer >= 0) return;
   auto state = current_gl_state();
   const auto* extensions = angle_function<PFNGLGETSTRINGPROC, "glGetString">()(GL_EXTENSIONS);
   if (!extensions || !has_extension(reinterpret_cast<const char*>(extensions),
@@ -489,8 +490,8 @@ void begin_gl_render_timing() {
 }
 std::vector<GlRenderTiming> end_gl_render_timing(std::uint64_t frame) {
   std::vector<GlRenderTiming> samples;
-  if (!current) return samples;
-  auto& state = *current;
+  if (!current_state()) return samples;
+  auto& state = *current_state();
   const bool allocated = std::any_of(state.render_timers.begin(), state.render_timers.end(),
                                     [](const auto& timer) { return timer.queries[0] != 0; });
   if (!allocated) return samples;
@@ -522,11 +523,11 @@ std::vector<GlRenderTiming> end_gl_render_timing(std::uint64_t frame) {
   return samples;
 }
 bool gl_dispatch_needs_run_loop() {
-  return current && (!current->extensions_ready ||
-      current->callback->guest_calls.load(std::memory_order_acquire));
+  return current_state() && (!current_state()->extensions_ready ||
+      current_state()->callback->guest_calls.load(std::memory_order_acquire));
 }
 void gl_error(GLenum error) {
-  (current ? current->errors : no_context_errors).insert(error);
+  (current_state() ? current_state()->errors : no_context_errors()).insert(error);
   log::debug("gles", "GL error 0x{:x}", error);
   note_angle_gl_error(error, "GL call");
 }

@@ -4,6 +4,7 @@
 #include "common/log.h"
 #include "core/process.h"
 #include "gfx/gpu_device.h"
+#include "gfx/shared_image.h"
 #include "hle/openxr/image_upload.h"
 #include "hle/openxr/state.h"
 #include "java/jvm.h"
@@ -26,6 +27,7 @@ struct AndroidSurface {
   std::vector<std::size_t> source_columns;
   std::uint32_t sampled_width = 0;
   XrColorSpaceFB published_color = XR_COLOR_SPACE_REC709_FB;
+  bool shared_image_rejected = false;
 
   ~AndroidSurface() {
     if (surface && java::host_vm()) {
@@ -66,8 +68,27 @@ struct AndroidSurface {
     }
     auto serial = frame ? frame->serial : 0;
     if (initialized && serial == published && published_color == state().color_space) return XR_SUCCESS;
-    auto* destination = upload.pixels();
     auto width = chain.info.width, height = chain.info.height;
+    if (frame && frame->image) {
+      // A decoder's GPU picture at the swapchain's size: one GPU copy, no
+      // pixels through system memory.
+      auto result = upload.publish(chain, *frame->image);
+      if (result == XR_ERROR_VALIDATION_FAILURE) {
+        // Keep the last published image, and have producers send pixels.
+        if (!shared_image_rejected)
+          log::warn("xr-surface", "Shared video image {}x{} unusable for {}x{} surface; using CPU frames",
+                    frame->image->width, frame->image->height, width, height);
+        shared_image_rejected = true;
+        { std::lock_guard lock(window->lock); window->shared_image_consumer = false; }
+        result = initialized ? XR_SUCCESS : upload.publish(chain);
+      }
+      if (XR_FAILED(result)) return result;
+      initialized = true;
+      published = serial;
+      published_color = state().color_space;
+      return XR_SUCCESS;
+    }
+    auto* destination = upload.pixels();
     if (!frame) {
       std::memset(destination, 0, std::size_t(width) * height * 4);
     } else if (std::uint32_t(frame->width) == width && std::uint32_t(frame->height) == height &&
@@ -139,6 +160,7 @@ XrResult xrCreateSwapchainAndroidSurfaceKHR(XrSession handle, const XrSwapchainC
   producer->window->fixed_consumer_extent = true;
   auto result = producer->initialize(info->width, info->height);
   if (XR_FAILED(result)) return result;
+  producer->window->shared_image_consumer = producer->upload.imports_shared_images();
   auto* env = java::host_env();
   producer->surface = bridge.to_surface(nullptr, producer->window);
   if (!producer->surface) return XR_ERROR_RUNTIME_FAILURE;

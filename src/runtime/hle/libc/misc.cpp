@@ -1,4 +1,5 @@
 #include <algorithm>
+#include "core/thread_lifetime.h"
 #include <atomic>
 #include <cstring>
 #include <map>
@@ -19,7 +20,7 @@ namespace venture::hle::libc {
 int* error_location() {
   if (auto t = GuestThread::current()) return t->errno_location();
   if (process_config().isa() == GuestIsa::a32) {
-    thread_local GuestStorage cell;
+    auto& cell = thread_lifetime::local<GuestStorage, struct HostErrnoCell32>();
     return g2h<int>(cell.resize(sizeof(int)));
   }
   thread_local int host_hle_errno = 0;
@@ -197,7 +198,7 @@ struct Destructor {
 };
 std::mutex exit_mutex;
 std::vector<Destructor> exit_handlers;
-thread_local std::vector<Destructor> thread_handlers;
+std::vector<Destructor>& thread_handlers() { return thread_lifetime::local<std::vector<Destructor>, struct GuestThreadExitHandlers>(); }
 int cxa_atexit_impl(GuestAddr f, GuestAddr arg, GuestAddr dso) {
   shutdown_trace::trace_destructor("__cxa_atexit register", f, dso);
   std::lock_guard lock(exit_mutex);
@@ -246,7 +247,7 @@ void cxa_finalize_impl(CallContext& c, GuestAddr dso) { finalize(c.thread(), dso
 int cxa_thread_atexit_impl(GuestAddr f, GuestAddr arg, GuestAddr dso) {
   shutdown_trace::trace_destructor("__cxa_thread_atexit register", f, dso);
   try {
-    thread_handlers.push_back({f, arg, dso});
+    thread_handlers().push_back({f, arg, dso});
     return 0;
   } catch (const std::bad_alloc&) {
     set_error(err::kENOMEM);
@@ -319,9 +320,9 @@ void register_misc(HleLibrary& lib) {
 #undef B
 }
 void run_thread_destructors(GuestThread& t) {
-  while (!thread_handlers.empty()) {
-    auto d = thread_handlers.back();
-    thread_handlers.pop_back();
+  while (!thread_handlers().empty()) {
+    auto d = thread_handlers().back();
+    thread_handlers().pop_back();
     shutdown_trace::trace_destructor("thread exit invoke", d.function, d.dso);
     t.call(d.function, {d.arg});
   }

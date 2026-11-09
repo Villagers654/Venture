@@ -1,4 +1,5 @@
 #include "vfs.h"
+#include "core/thread_lifetime.h"
 #include "abi32.h"
 #include "core/token32.h"
 #include "core/linker_runtime.h"
@@ -15,7 +16,10 @@
 #include <cstring>
 namespace venture::hle::libc {
 namespace {
-thread_local std::string local_error, error_text, info_path, info_symbol;
+std::string& local_error() { return thread_lifetime::local<std::string, struct DlLocalError>(); }
+std::string& error_text() { return thread_lifetime::local<std::string, struct DlErrorText>(); }
+std::string& info_path() { return thread_lifetime::local<std::string, struct DlInfoPath>(); }
+std::string& info_symbol() { return thread_lifetime::local<std::string, struct DlInfoSymbol>(); }
 Library* caller(CallContext& c) {
   auto lock = guest_loader_lock();
   return Linker::get().library_at(c.cpu().lr());
@@ -27,7 +31,7 @@ Library* dlopen_fn(CallContext& c, const char* name, int flags) {
 int dlclose_fn(Library* l) { return Linker::get().close(l); }
 GuestAddr dlsym_fn(CallContext& c, Library* l, const char* name) {
   if (!name) {
-    local_error = "dlsym: null symbol";
+    local_error() = "dlsym: null symbol";
     return 0;
   }
   if (!l) return Linker::get().symbol_default(name, caller(c));
@@ -38,24 +42,24 @@ GuestAddr dlvsym_fn(CallContext& c, Library* l, const char* name, const char* ve
   auto lock = guest_loader_lock();
   if (!version || !*version) return dlsym_fn(c, l, name);
   if (!name) {
-    local_error = "dlvsym: null symbol";
+    local_error() = "dlvsym: null symbol";
     return 0;
   }
   if (!l || h2g(l) == UINT64_MAX) {
-    local_error = "dlvsym: versioned global/next lookup requires linker support";
+    local_error() = "dlvsym: versioned global/next lookup requires linker support";
     return 0;
   }
   auto p = l->find_symbol(name, version);
-  if (!p) local_error = "dlvsym: versioned symbol not found";
+  if (!p) local_error() = "dlvsym: versioned symbol not found";
   return p;
 }
 const char* dlerror_fn() {
-  error_text = local_error.empty() ? Linker::get().take_error() : std::exchange(local_error, {});
-  return error_text.empty() ? nullptr : error_text.c_str();
+  error_text() = local_error().empty() ? Linker::get().take_error() : std::exchange(local_error(), {});
+  return error_text().empty() ? nullptr : error_text().c_str();
 }
 const char* dlerror32() {
   auto* error = dlerror_fn();
-  thread_local GuestStorage storage;
+  auto& storage = thread_lifetime::local<GuestStorage, struct DlErrorStorage32>();
   return error ? storage.string(error) : nullptr;
 }
 struct GuestDlInfo {
@@ -65,9 +69,9 @@ int dladdr_fn(GuestAddr address, GuestDlInfo* out) {
   if (!out) return 0;
   DlInfo i;
   if (!Linker::get().address_info(address, &i)) return 0;
-  info_path = std::move(i.path);
-  info_symbol = std::move(i.symbol);
-  *out = {h2g(info_path.c_str()), i.base, info_symbol.empty() ? 0 : h2g(info_symbol.c_str()),
+  info_path() = std::move(i.path);
+  info_symbol() = std::move(i.symbol);
+  *out = {h2g(info_path().c_str()), i.base, info_symbol().empty() ? 0 : h2g(info_symbol().c_str()),
           i.symbol_address};
   return 1;
 }
@@ -175,7 +179,7 @@ bool placement(const std::uint64_t* ext, elf::Placement& out) {
   if (!ext || !*ext) return true;
   if (*ext & ~(kDlextReservedAddress | kDlextReservedAddressHint)) {
     log::warn("libdl", "unsupported android_dlopen_ext flags {:#x}", *ext);
-    local_error = "android_dlopen_ext: extended flags are not supported";
+    local_error() = "android_dlopen_ext: extended flags are not supported";
     return false;
   }
   out = {ext[1], ext[2], (*ext & kDlextReservedAddress) != 0};
@@ -250,8 +254,8 @@ std::uint32_t dlopen32(CallContext& c, const char* name, int flags) {
 int dlclose32(std::uint32_t token) {
   auto lock = guest_loader_lock();
   auto h = dl_tokens.resolve(Token32<DlHandle32>{token});
-  if (!h) { local_error = "dlclose: invalid A32 handle"; return -1; }
-  if (!h->library) { local_error = "dlclose: closed A32 handle"; return -1; }
+  if (!h) { local_error() = "dlclose: invalid A32 handle"; return -1; }
+  if (!h->library) { local_error() = "dlclose: closed A32 handle"; return -1; }
   auto r = dlclose_fn(h->library);
   if (!r) { h->library = nullptr; dl_tokens.erase(Token32<DlHandle32>{token}); }
   return r;
@@ -262,16 +266,16 @@ GuestAddr dlsym32(CallContext& c, std::uint32_t token, const char* name) {
   if (token == UINT32_MAX || !token) return dlsym_fn(c, nullptr, name);
   if (token == UINT32_MAX - 1) return dlsym_fn(c, g2h<Library>(UINT64_MAX), name);
   auto h = dl_tokens.resolve(Token32<DlHandle32>{token});
-  if (!h) { local_error = "dlsym: invalid A32 handle"; return 0; }
-  if (!h->library) { local_error = "dlsym: closed A32 handle"; return 0; }
+  if (!h) { local_error() = "dlsym: invalid A32 handle"; return 0; }
+  if (!h->library) { local_error() = "dlsym: closed A32 handle"; return 0; }
   return dlsym_fn(c, h->library, name);
 }
 GuestAddr dlvsym32(CallContext& c, std::uint32_t token, const char* name, const char* version) {
   auto lock = guest_loader_lock();
   if (!version || !*version) return dlsym32(c, token, name);
   auto h = dl_tokens.resolve(Token32<DlHandle32>{token});
-  if (!h) { local_error = "dlvsym: invalid A32 handle or unsupported versioned global lookup"; return 0; }
-  if (!h->library) { local_error = "dlvsym: closed A32 handle"; return 0; }
+  if (!h) { local_error() = "dlvsym: invalid A32 handle or unsupported versioned global lookup"; return 0; }
+  if (!h->library) { local_error() = "dlvsym: closed A32 handle"; return 0; }
   return dlvsym_fn(c, h->library, name, version);
 }
 // bionic/linker/dlfcn.cpp: the linker's __loader_* entry points, which
@@ -293,7 +297,7 @@ Library* loader_dlopen_ext(const char* name, int flags, const std::uint64_t* ext
 }
 GuestAddr loader_dlvsym(Library* l, const char* name, const char* version, GuestAddr caller_address) {
   if (!name) {
-    local_error = "dlsym: null symbol";
+    local_error() = "dlsym: null symbol";
     return 0;
   }
   auto lock = guest_loader_lock();
@@ -302,7 +306,7 @@ GuestAddr loader_dlvsym(Library* l, const char* name, const char* version, Guest
   if (h2g(l) == UINT64_MAX) return Linker::get().symbol_next(name, caller);
   if (!version || !*version) return Linker::get().symbol(l, name);
   auto p = l->find_symbol(name, version);
-  if (!p) local_error = "dlvsym: versioned symbol not found";
+  if (!p) local_error() = "dlvsym: versioned symbol not found";
   return p;
 }
 GuestAddr loader_dlsym(Library* l, const char* name, GuestAddr caller) { return loader_dlvsym(l, name, nullptr, caller); }
@@ -314,7 +318,7 @@ int dladdr32(GuestAddr address, DlInfo32* out) {
   return 1;
 }
 std::uint32_t android_open32(CallContext& c, const char* name, int flags, const std::uint64_t* ext) {
-  if (ext && *ext) { local_error = "android_dlopen_ext: extended flags are not supported"; log::warn("libdl", "unsupported android_dlopen_ext flags {:#x}", *ext); return 0; }
+  if (ext && *ext) { local_error() = "android_dlopen_ext: extended flags are not supported"; log::warn("libdl", "unsupported android_dlopen_ext flags {:#x}", *ext); return 0; }
   return dlopen32(c, name, flags);
 }
 }  // namespace

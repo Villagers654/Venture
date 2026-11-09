@@ -19,6 +19,7 @@
 
 #include "core/guest.h"
 
+namespace venture::gfx { struct SharedImage; }
 namespace venture::android {
 
 struct SurfaceFrame {
@@ -26,6 +27,8 @@ struct SurfaceFrame {
   std::uint64_t serial;
   std::int64_t timestamp_ns = 0;
   std::vector<std::uint8_t> rgba;  // top-left origin, Android's default sRGB dataspace
+  // Instead of rgba, for a shared-image consumer: the same pixels in GPU memory.
+  std::shared_ptr<const gfx::SharedImage> image;
 };
 
 struct NativeWindow {
@@ -54,6 +57,8 @@ struct NativeWindow {
   // XR Surface swapchains have a fixed consumer extent. SurfaceTexture
   // consumers instead preserve each producer frame's source dimensions.
   bool fixed_consumer_extent = false;
+  // The consumer imports GPU frames (SurfaceFrame::image) on the host GPU.
+  bool shared_image_consumer = false;
   std::shared_ptr<const SurfaceFrame> frame;
   std::function<void()> frame_available;
   float requested_frame_rate = 0;
@@ -94,6 +99,10 @@ int publish_window_rgba(NativeWindow*, std::vector<std::uint8_t>&& rgba,
 // for a SurfaceTexture or ImageReader consumer, else the window's extent,
 // such as an XR Surface swapchain's fixed size.
 std::pair<std::int32_t, std::int32_t> window_consumer_extent(NativeWindow*);
+// Whether the window's consumer imports GPU frames, and publishing one.
+bool window_shared_image_consumer(NativeWindow*);
+int publish_window_image(NativeWindow*, std::shared_ptr<const gfx::SharedImage> image,
+                         std::int32_t width, std::int32_t height, std::int64_t timestamp_ns);
 // Mirror renderer may install this hook before guest startup. Without it CPU
 // frames are discarded (offscreen VR target). Callback runs with window locked.
 using CpuPresenter = void (*)(NativeWindow&, const WindowBuffer&);

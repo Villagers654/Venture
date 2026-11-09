@@ -1,4 +1,5 @@
 #include "core/pc_trace.h"
+#include "core/thread_lifetime.h"
 #include "common/environment.h"
 #include "core/signals.h"
 #include "core/api_result_trace.h"
@@ -772,12 +773,12 @@ void log_rejected_guest_call(GuestThread* thread, std::string_view reason, std::
 }
 namespace {
 struct UnwindingCall { std::exception_ptr exception; Frame frame; };
-thread_local UnwindingCall unwinding_call;
+UnwindingCall& unwinding_call() { return thread_lifetime::local<UnwindingCall, struct UnwindingCallOwner>(); }
 }
 void note_unwinding_guest_call(GuestThread& thread) noexcept {
   auto exception = std::current_exception();
-  if (!exception || exception == unwinding_call.exception) return;
-  unwinding_call = {std::move(exception), cpu_frame(thread.cpu())};
+  if (!exception || exception == unwinding_call().exception) return;
+  unwinding_call() = {std::move(exception), cpu_frame(thread.cpu())};
 }
 void log_guest_thread_failure(GuestThread& thread, std::string_view name, const std::exception_ptr& failure) noexcept {
   try {
@@ -786,9 +787,9 @@ void log_guest_thread_failure(GuestThread& thread, std::string_view name, const 
     catch (const std::exception& e) { what = e.what(); }
     catch (...) {}
     log::error("thread", "guest tid {} \"{}\" stopped by a runtime error: {}", thread.tid(), name, what);
-    if (!failure || failure != unwinding_call.exception) return;
-    log_registers(unwinding_call.frame);
-    log_backtrace(unwinding_call.frame);
+    if (!failure || failure != unwinding_call().exception) return;
+    log_registers(unwinding_call().frame);
+    log_backtrace(unwinding_call().frame);
   } catch (...) {
   }
 }

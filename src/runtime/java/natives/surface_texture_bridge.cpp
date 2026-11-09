@@ -2,6 +2,7 @@
 #include "java/internal.h"
 #include "android/native_window.h"
 #include "gfx/angle.h"
+#include "gfx/shared_texture.h"
 #include "hle/gles/gles_state.h"
 #include "common/log.h"
 #include "av_telemetry.h"
@@ -30,6 +31,8 @@ jlong JNICALL create(JNIEnv* env,jobject self) {
     if(!listener->method)return 0;listener->object=env->NewWeakGlobalRef(self);if(!listener->object)return 0;
     auto window=android::create_native_window(1,1);if(!window)return 0;
     window->image_consumer=true;window->frame_available=[listener]{listener->notify();};
+    // Decoders then keep video pictures on the GPU (gfx/shared_texture.h).
+    window->shared_image_consumer=gfx::gl_imports_shared_images();
     log::info("media","SurfaceTexture created native-window consumer");return h2g(window);
   });
 }
@@ -60,42 +63,54 @@ jlongArray JNICALL update(JNIEnv* env,jclass,jlong handle,jint texture,jlong ser
     auto display=angle_function<PFNEGLGETCURRENTDISPLAYPROC,"eglGetCurrentDisplay">()();
     auto context=angle_function<PFNEGLGETCURRENTCONTEXTPROC,"eglGetCurrentContext">()();
     if(context==EGL_NO_CONTEXT)throw std::runtime_error("updateTexImage requires the attached GL context");
-    auto get=angle_function<PFNGLGETINTEGERVPROC,"glGetIntegerv">();
     auto bind=angle_function<PFNGLBINDTEXTUREPROC,"glBindTexture">();
-    auto pixel=angle_function<PFNGLPIXELSTOREIPROC,"glPixelStorei">();
-    GLint previous2d=0,alignment=0,pbo=0,row=0,skip_rows=0,skip_pixels=0;
-    get(GL_TEXTURE_BINDING_2D,&previous2d);get(GL_UNPACK_ALIGNMENT,&alignment);
-    EGLint version=2;
-    angle_function<PFNEGLQUERYCONTEXTPROC,"eglQueryContext">()(display,context,EGL_CONTEXT_CLIENT_VERSION,&version);
-    bool es3=version>=3;
-    auto bind_buffer=angle_function<PFNGLBINDBUFFERPROC,"glBindBuffer">();
-    if(es3) {
-      get(GL_PIXEL_UNPACK_BUFFER_BINDING,&pbo);bind_buffer(GL_PIXEL_UNPACK_BUFFER,0);
-      get(GL_UNPACK_ROW_LENGTH,&row);get(GL_UNPACK_SKIP_ROWS,&skip_rows);get(GL_UNPACK_SKIP_PIXELS,&skip_pixels);
-      pixel(GL_UNPACK_ROW_LENGTH,0);pixel(GL_UNPACK_SKIP_ROWS,0);pixel(GL_UNPACK_SKIP_PIXELS,0);
-    }
-    GLuint source=0;angle_function<PFNGLGENTEXTURESPROC,"glGenTextures">()(1,&source);
-    bind(GL_TEXTURE_2D,source);pixel(GL_UNPACK_ALIGNMENT,1);
-    auto parameter=angle_function<PFNGLTEXPARAMETERIPROC,"glTexParameteri">();
-    parameter(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_LINEAR);parameter(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_LINEAR);
-    angle_function<PFNGLTEXIMAGE2DPROC,"glTexImage2D">()(GL_TEXTURE_2D,0,GL_RGBA,frame->width,frame->height,0,GL_RGBA,GL_UNSIGNED_BYTE,frame->rgba.data());
-    const EGLint attrs[]={EGL_GL_TEXTURE_LEVEL_KHR,0,EGL_IMAGE_PRESERVED_KHR,EGL_TRUE,EGL_NONE};
-    auto image=angle_function<PFNEGLCREATEIMAGEKHRPROC,"eglCreateImageKHR">()(display,context,EGL_GL_TEXTURE_2D_KHR,
-      reinterpret_cast<EGLClientBuffer>(std::uintptr_t(source)),attrs);
-    if(image!=EGL_NO_IMAGE_KHR) {
-      bind(GL_TEXTURE_EXTERNAL_OES,texture);
-      angle_function<PFNGLEGLIMAGETARGETTEXTURE2DOESPROC,"glEGLImageTargetTexture2DOES">()(GL_TEXTURE_EXTERNAL_OES,image);
-      angle_function<PFNEGLDESTROYIMAGEKHRPROC,"eglDestroyImageKHR">()(display,image);
+    SharedTexture source;
+    if(frame->image) {
+      // A decoder picture on the GPU: copied into a new texture on the GPU.
+      std::string failure;
+      if(!shared_image_texture(*frame->image,&source,&failure)) {
+        // Later pictures arrive as pixels; this one is skipped.
+        {std::lock_guard lock(w->lock);w->shared_image_consumer=false;}
+        log::warn("media","SurfaceTexture cannot import GPU video pictures ({}); using CPU frames",failure);
+        return nullptr;
+      }
+    } else {
+      auto get=angle_function<PFNGLGETINTEGERVPROC,"glGetIntegerv">();
+      auto pixel=angle_function<PFNGLPIXELSTOREIPROC,"glPixelStorei">();
+      GLint previous2d=0,alignment=0,pbo=0,row=0,skip_rows=0,skip_pixels=0;
+      get(GL_TEXTURE_BINDING_2D,&previous2d);get(GL_UNPACK_ALIGNMENT,&alignment);
+      EGLint version=2;
+      angle_function<PFNEGLQUERYCONTEXTPROC,"eglQueryContext">()(display,context,EGL_CONTEXT_CLIENT_VERSION,&version);
+      bool es3=version>=3;
+      auto bind_buffer=angle_function<PFNGLBINDBUFFERPROC,"glBindBuffer">();
+      if(es3) {
+        get(GL_PIXEL_UNPACK_BUFFER_BINDING,&pbo);bind_buffer(GL_PIXEL_UNPACK_BUFFER,0);
+        get(GL_UNPACK_ROW_LENGTH,&row);get(GL_UNPACK_SKIP_ROWS,&skip_rows);get(GL_UNPACK_SKIP_PIXELS,&skip_pixels);
+        pixel(GL_UNPACK_ROW_LENGTH,0);pixel(GL_UNPACK_SKIP_ROWS,0);pixel(GL_UNPACK_SKIP_PIXELS,0);
+      }
+      angle_function<PFNGLGENTEXTURESPROC,"glGenTextures">()(1,&source.texture);
+      bind(GL_TEXTURE_2D,source.texture);pixel(GL_UNPACK_ALIGNMENT,1);
+      auto parameter=angle_function<PFNGLTEXPARAMETERIPROC,"glTexParameteri">();
+      parameter(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_LINEAR);parameter(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_LINEAR);
+      angle_function<PFNGLTEXIMAGE2DPROC,"glTexImage2D">()(GL_TEXTURE_2D,0,GL_RGBA,frame->width,frame->height,0,GL_RGBA,GL_UNSIGNED_BYTE,frame->rgba.data());
+      const EGLint attrs[]={EGL_GL_TEXTURE_LEVEL_KHR,0,EGL_IMAGE_PRESERVED_KHR,EGL_TRUE,EGL_NONE};
+      source.image=angle_function<PFNEGLCREATEIMAGEKHRPROC,"eglCreateImageKHR">()(display,context,EGL_GL_TEXTURE_2D_KHR,
+        reinterpret_cast<EGLClientBuffer>(std::uintptr_t(source.texture)),attrs);
+      bind(GL_TEXTURE_2D,previous2d);pixel(GL_UNPACK_ALIGNMENT,alignment);
+      if(es3){pixel(GL_UNPACK_ROW_LENGTH,row);pixel(GL_UNPACK_SKIP_ROWS,skip_rows);pixel(GL_UNPACK_SKIP_PIXELS,skip_pixels);bind_buffer(GL_PIXEL_UNPACK_BUFFER,pbo);}
     }
     // updateTexImage implicitly binds the attached external texture. Publish
     // writes before a shared render context samples its EGLImage sibling.
-    bind(GL_TEXTURE_2D,previous2d);pixel(GL_UNPACK_ALIGNMENT,alignment);
-    if(es3){pixel(GL_UNPACK_ROW_LENGTH,row);pixel(GL_UNPACK_SKIP_ROWS,skip_rows);pixel(GL_UNPACK_SKIP_PIXELS,skip_pixels);bind_buffer(GL_PIXEL_UNPACK_BUFFER,pbo);}
-    angle_function<PFNGLDELETETEXTURESPROC,"glDeleteTextures">()(1,&source);
-    if(image==EGL_NO_IMAGE_KHR)throw std::runtime_error("SurfaceTexture EGLImage upload failed");
+    if(source.image!=EGL_NO_IMAGE_KHR) {
+      bind(GL_TEXTURE_EXTERNAL_OES,texture);
+      angle_function<PFNGLEGLIMAGETARGETTEXTURE2DOESPROC,"glEGLImageTargetTexture2DOES">()(GL_TEXTURE_EXTERNAL_OES,source.image);
+      angle_function<PFNEGLDESTROYIMAGEKHRPROC,"eglDestroyImageKHR">()(display,source.image);
+    }
+    angle_function<PFNGLDELETETEXTURESPROC,"glDeleteTextures">()(1,&source.texture);
+    if(source.image==EGL_NO_IMAGE_KHR)throw std::runtime_error("SurfaceTexture EGLImage upload failed");
     angle_function<PFNGLFLUSHPROC,"glFlush">()();
-    av::emit("surface_texture_update",std::format("\"texture\":{},\"serial\":{},\"pts_ns\":{},\"width\":{},\"height\":{}",
-      texture,frame->serial,frame->timestamp_ns,frame->width,frame->height));
+    av::emit("surface_texture_update",std::format("\"texture\":{},\"serial\":{},\"pts_ns\":{},\"width\":{},\"height\":{},\"gpu\":{}",
+      texture,frame->serial,frame->timestamp_ns,frame->width,frame->height,bool(frame->image)));
     jlong values[]={static_cast<jlong>(frame->serial),frame->timestamp_ns};auto result=env->NewLongArray(2);
     if(result)env->SetLongArrayRegion(result,0,2,values);return result;
   });

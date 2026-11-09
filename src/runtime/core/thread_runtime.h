@@ -60,8 +60,8 @@ int recorded_guest_process_failure();
 void check_guest_exit(GuestThread& thread);
 // Process-owner teardown: reject new workers, interrupt and drain existing workers.
 void shutdown_guest_threads();
-// Default cleanup for adopted and managed threads, before CPU/TLS teardown.
-void set_guest_thread_exit_handler(void (*handler)(GuestThread&));
+// Default cleanup for adopted and managed threads, before CPU/TLS teardown. Returns the previous one.
+void (*set_guest_thread_exit_handler(void (*handler)(GuestThread&)))(GuestThread&);
 // Native service TLS cleanup after guest destructors, even on forced exit.
 void set_guest_thread_native_cleanup(void (*handler)());
 void finish_guest_thread(GuestThread& thread);

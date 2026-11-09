@@ -1,4 +1,5 @@
 #include "common/paths.h"
+#include "core/thread_lifetime.h"
 #include "core/linker.h"
 #include "core/hle_unwind.h"
 #include "core/linker_runtime.h"
@@ -126,7 +127,7 @@ void promote(State& s, Library* lib) {
   if (std::find(s.globals.begin(), s.globals.end(), lib) == s.globals.end()) s.globals.push_back(lib);
   lib->global = true;
 }
-thread_local std::string last_error;
+std::string& last_error() { return thread_lifetime::local<std::string, struct LinkerLastError>(); }
 // Venture replaces app_process and its basic startup providers. These HLE
 // definitions exist before any app dlopen, independently of APK DT_NEEDED lists.
 // app_process lists libdl/liblog, then the default libc/libm dependencies.
@@ -222,9 +223,16 @@ std::shared_ptr<Library> load(State& s, std::string_view name, int flags, bool b
       log::info("linker", "Serving {} as {}: it exports that library's identifying API", base, slot->soname());
       image.reset();
       auto* hle = static_cast<HleLibrary*>(slot.get());
-      if (!s.backing_files.contains(hle)) s.backing_files[hle] = path;
-      s.names[key] = slot; s.names[base] = slot;
-      return slot;
+      std::shared_ptr<Library> served = slot;
+      if (const auto& make_copy = hle->copy_factory()) served = make_copy(*hle, base);
+      if (served != slot) {
+        // The copy's own file backs any function the slot leaves to it.
+        s.libraries.push_back(served);
+        s.backing_files[static_cast<HleLibrary*>(served.get())] = path;
+        s.names[served->soname()] = served;
+      } else if (!s.backing_files.contains(hle)) s.backing_files[hle] = path;
+      s.names[key] = served; s.names[base] = served;
+      return served;
     } else lib = std::move(image);
   } else if (lib) {
     return lib;
@@ -560,8 +568,8 @@ void Linker::set_search_paths(std::vector<std::string> paths) { auto& s = state(
 Library* Linker::open_main(int flags) {
   // bionic accepts these flag bits even when no filename is supplied.
   if (flags & ~(kRtldNow | kRtldLazy | kRtldGlobal | kRtldNoDelete | kRtldNoLoad)) {
-    last_error = "invalid flags to dlopen";
-    log::error("linker", "{}: {:#x}", last_error, flags);
+    last_error() = "invalid flags to dlopen";
+    log::error("linker", "{}: {:#x}", last_error(), flags);
     return nullptr;
   }
   return &state().main;
@@ -661,11 +669,11 @@ Library* Linker::open_impl(std::string_view name, int flags, bool backing, const
   } catch (const ProcessExit&) { throw; }
   catch (const ThreadExit&) { throw; }
   catch (const std::exception& e) {
-    last_error = e.what();
+    last_error() = e.what();
     // An absent requested library is an expected probe result (bionic logs
     // nothing); a missing dependency of a library that exists stays an error.
-    if (!root && dynamic_cast<const LibraryNotFound*>(&e)) log::warn("linker", "{}", last_error);
-    else log::error("linker", "{}", last_error);
+    if (!root && dynamic_cast<const LibraryNotFound*>(&e)) log::warn("linker", "{}", last_error());
+    else log::error("linker", "{}", last_error());
     // Roll back every newly introduced object after a failed load; retain previously live images.
     std::set<Library*> removed;
     for (std::size_t i = initial_count; i < s.libraries.size(); ++i) removed.insert(s.libraries[i].get());
@@ -707,14 +715,14 @@ void Linker::prepare_java_exports(const Library& library) {
   if (names == s.exports.end()) return;
   for (const auto& name : names->second) if (name.starts_with("Java_")) {
     if (!activate_backing(slot, name))
-      throw std::runtime_error(last_error.empty() ? "cannot activate Java native backing" : last_error);
+      throw std::runtime_error(last_error().empty() ? "cannot activate Java native backing" : last_error());
     return;
   }
 }
 int Linker::close(Library* lib) {
   auto& s = state(); auto lock = guest_loader_lock();
   if (lib == &s.main) return 0; // The process itself cannot be unloaded.
-  if (!lib || std::none_of(s.libraries.begin(), s.libraries.end(), [&](const auto& p) { return p.get() == lib; })) { last_error = "invalid dlclose handle"; return -1; }
+  if (!lib || std::none_of(s.libraries.begin(), s.libraries.end(), [&](const auto& p) { return p.get() == lib; })) { last_error() = "invalid dlclose handle"; return -1; }
   if (lib->references) --lib->references;
   // References from other images keep the dependency closure alive.
   auto retained = [&] {
@@ -757,19 +765,19 @@ GuestAddr Linker::symbol(Library* lib, std::string_view name) {
   auto& s = state(); auto lock = guest_loader_lock();
   if (!lib) return symbol_default(name, nullptr);
   if (lib != &s.main && std::none_of(s.libraries.begin(), s.libraries.end(), [&](const auto& p) { return p.get() == lib; })) {
-    last_error = "invalid dlsym handle"; return 0;
+    last_error() = "invalid dlsym handle"; return 0;
   }
   for (auto* candidate : local_group(lib)) {
     auto d = lookup_one(candidate, name, {}); if (d.library) return symbol_address(s, d);
   }
   for (auto* candidate : local_group(lib))
     if (auto* slot = dynamic_cast<HleLibrary*>(candidate); slot && activate_backing(slot, name)) return symbol(lib, name);
-  last_error = "symbol not found: " + std::string(name); return 0;
+  last_error() = "symbol not found: " + std::string(name); return 0;
 }
 GuestAddr Linker::symbol_default(std::string_view name, Library* caller) {
   auto& s = state(); auto lock = guest_loader_lock();
   if (caller && !(caller = canonical_caller(s, caller))) {
-    last_error = "invalid RTLD_DEFAULT caller"; return 0;
+    last_error() = "invalid RTLD_DEFAULT caller"; return 0;
   }
   auto* image = (caller ? caller->mapped_image() : nullptr);
   auto local = local_group(image && image->group_root ? image->group_root : caller);
@@ -778,12 +786,12 @@ GuestAddr Linker::symbol_default(std::string_view name, Library* caller) {
   auto scope = s.globals; scope.insert(scope.end(), local.begin(), local.end());
   for (auto* candidate : scope)
     if (auto* slot = dynamic_cast<HleLibrary*>(candidate); slot && activate_backing(slot, name)) return symbol_default(name, caller);
-  last_error = "symbol not found: " + std::string(name); return 0;
+  last_error() = "symbol not found: " + std::string(name); return 0;
 }
 GuestAddr Linker::symbol_next(std::string_view name, Library* caller) {
   auto& s = state(); auto lock = guest_loader_lock();
   if (caller && !(caller = canonical_caller(s, caller))) {
-    last_error = "invalid RTLD_NEXT caller"; return 0;
+    last_error() = "invalid RTLD_NEXT caller"; return 0;
   }
   std::vector<Library*> scope;
   std::set<Library*> seen;
@@ -801,7 +809,7 @@ GuestAddr Linker::symbol_next(std::string_view name, Library* caller) {
     if (after) if (auto* slot = dynamic_cast<HleLibrary*>(lib); slot && activate_backing(slot, name)) return symbol_next(name, caller);
     if (lib == caller) after = true;
   }
-  last_error = "RTLD_NEXT symbol not found: " + std::string(name); return 0;
+  last_error() = "RTLD_NEXT symbol not found: " + std::string(name); return 0;
 }
 Library* Linker::library_at(GuestAddr p) {
   auto& s = state(); std::lock_guard lock(s.mutex);
@@ -837,7 +845,7 @@ GuestAddr Linker::try_find_exidx(GuestAddr pc, std::int32_t* count) {
   auto& s = state(); std::unique_lock lock(s.mutex, std::try_to_lock);
   return lock.owns_lock() ? find_exidx(pc, count) : 0;
 }
-std::string Linker::take_error() { auto text = std::move(last_error); last_error.clear(); return text; }
+std::string Linker::take_error() { auto text = std::move(last_error()); last_error().clear(); return text; }
 std::vector<std::shared_ptr<const HleLibrary>> Linker::hle_libraries() const {
   auto& s = state(); std::lock_guard lock(s.mutex);
   std::vector<std::shared_ptr<const HleLibrary>> result;

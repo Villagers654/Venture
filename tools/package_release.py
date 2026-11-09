@@ -431,8 +431,9 @@ def package(build, output, angle, strip, readobj):
         if source.startswith(ANGLE_NOTICES):
             copy(angle / "licenses" / name, output / "licenses/angle" / source)
     if windows:
-        copy(dependency_sources.get(None, ROOT / ".deps/fetch") / "webview2-src/LICENSE.txt", output / "licenses/webview2/LICENSE.txt")
-        copy(dependency_sources.get(None, ROOT / ".deps/fetch") / "webview2-src/NOTICE.txt", output / "licenses/webview2/NOTICE.txt")
+        webview2 = dependency_sources.get("webview2", dependency_sources.get(None, ROOT / ".deps/fetch") / "webview2-src")
+        copy(webview2 / "LICENSE.txt", output / "licenses/webview2/LICENSE.txt")
+        copy(webview2 / "NOTICE.txt", output / "licenses/webview2/NOTICE.txt")
         check_imports(output, readobj)
     scan(output, *identity(build))
     files = {p.relative_to(output).as_posix(): {"bytes": p.stat().st_size, "sha256": hashlib.sha256(p.read_bytes()).hexdigest()}

@@ -104,10 +104,11 @@ TargetPlan plan_target(XrInstance instance, const std::string &target, XrPath ta
       const auto path = path_string(instance, binding.binding);
       plan.declares_menu |= path == "/user/hand/left/input/menu/click" || path == "/user/hand/right/input/menu/click";
       plan.menu_source.push_back(binding);
-      auto mapped = touch_binding(path, target);
-      XrActionSuggestedBinding host{binding.action, XR_NULL_PATH};
-      if (mapped && XR_SUCCEEDED(::xrStringToPath(instance, mapped->c_str(), &host.binding)))
-        add(host, binding.binding);
+      for (const auto &mapped : touch_bindings(path, target)) {
+        XrActionSuggestedBinding host{binding.action, XR_NULL_PATH};
+        if (XR_SUCCEEDED(::xrStringToPath(instance, mapped.c_str(), &host.binding)))
+          add(host, binding.binding);
+      }
     }
     covered.insert(mine.begin(), mine.end());
   }

@@ -23,5 +23,8 @@ std::unique_ptr<Session> make_runtime_session(
 // extra: exports implemented outside venture_ovrplatform (the microphone, on
 // venture_audio), A32 included.
 std::shared_ptr<HleLibrary> make_library(Session&, std::span<const Export> extra = {});
+// Serves one renamed copy of Meta's loader: the slot's functions, with the
+// initialize entries and ovr_IsPlatformInitialized bound to the copy's state.
+std::shared_ptr<HleLibrary> make_loader_copy(Session&, const HleLibrary& slot, const std::string& soname);
 void register_library(Session&, std::span<const Export> extra = {});
 }  // namespace venture::ovrplatform

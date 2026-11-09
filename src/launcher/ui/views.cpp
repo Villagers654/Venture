@@ -637,6 +637,9 @@ void App::draw_sidebar() {
 void App::draw_library() {
   auto all = visible_games();
   auto jobs = downloads_->snapshot();
+  // Hidden entries are left out unless the player shows them (the chip below).
+  const auto hidden_count = std::ranges::count_if(all, [&](auto& g) { return hidden(g.id); });
+  std::erase_if(all, [&](auto& g) { return !settings_.listed(g.id); });
 
   // Header: title left; search, sort and refresh at the end of the filter row.
   float top = ImGui::GetCursorPosY();
@@ -652,7 +655,7 @@ void App::draw_library() {
   }
   float after_title = top + s(kHeaderHeight);
   const float sort_w = measure(fonts().semibold, kSmall + 1, "Sort by: Recently played").x + s(52);
-  if (!all.empty() || !search_.empty()) {
+  if (!all.empty() || !search_.empty() || hidden_count) {
     // At the end of the filter chips' row, centred on them and clear of the
     // window buttons; on its own row under the title when the window is narrow.
     const char* sorts[] = {"Name", "Recently played"};
@@ -660,8 +663,8 @@ void App::draw_library() {
     float title_w = measure(fonts().semibold, kDisplay, "Library").x + s(warning_.empty() ? 24 : 54);
     const bool can_refresh = refreshing_ || (session_ && !options_.offline);
     float fixed = s(10) + sort_w + (can_refresh ? s(10) + s(38) : 0);
-    const bool chips = !all.empty();
-    const float chips_w = chips ? s(240) : title_w;
+    const bool chips = !all.empty() || hidden_count;
+    const float chips_w = chips ? s(hidden_count ? 380 : 240) : title_w;
     bool beside = content_w - chips_w - fixed >= s(200);
     float search_w = std::min(s(260), (beside ? content_w - chips_w : content_w) - fixed);
     float toolbar_w = search_w + fixed;
@@ -689,14 +692,21 @@ void App::draw_library() {
   }
   ImGui::SetCursorPosY(after_title + s(kAfterHeader) - s(6));
 
-  // Filter chips.
-  if (!all.empty()) {
+  // Filter chips; "Hidden" shows or hides the entries the player hid.
+  if (!all.empty() || hidden_count) {
     auto installed_count = std::ranges::count_if(all, [&](auto& g) { return installed(g.id) != nullptr; });
     std::string all_label = std::format("All  {}##all", all.size());
     std::string installed_label = std::format("Installed  {}##installed", installed_count);
     if (filter_chip(all_label.c_str(), !installed_only_)) installed_only_ = false;
     ImGui::SameLine(0, s(8));
     if (filter_chip(installed_label.c_str(), installed_only_)) installed_only_ = true;
+    if (hidden_count) {
+      ImGui::SameLine(0, s(8));
+      // i18n: Library filter chip that lists the games the player hid; {0} is how many.
+      std::string hidden_label = trf("Show hidden  {0}", hidden_count) + "##hidden";
+      if (filter_chip(hidden_label.c_str(), settings_.show_hidden))
+        action([&] { set_show_hidden(!settings_.show_hidden); });
+    }
     gap(18);
   }
 
@@ -735,11 +745,14 @@ void App::draw_library() {
       empty_state(icons::search, "No results", "");
     else if (installed_only_)
       empty_state(icons::download, "Nothing installed yet", "");
+    else if (hidden_count)
+      // i18n: Library empty state when the player hid every game; "Show hidden" is the filter chip.
+      empty_state(icons::hide, tr("All your games are hidden"), tr("Select Show hidden to see them."));
     else if (!session_)
       empty_state(icons::library, "No games yet", "Sign in, or import a game.");
     else
       empty_state(icons::library, "No games yet", refresh_error_);
-    if (session_ && !refreshing_ && search_.empty() && !installed_only_ && !options_.offline) {
+    if (session_ && !refreshing_ && search_.empty() && !installed_only_ && !hidden_count && !options_.offline) {
       gap(22);
       float bw = s(200);
       ImGui::SetCursorPosX((ImGui::GetContentRegionAvail().x - bw) * 0.5f + ImGui::GetCursorPosX());
@@ -773,6 +786,27 @@ void App::draw_library() {
     ImGui::PushID(g.id.c_str());
     bool clicked = ImGui::InvisibleButton("card", {card_w, card_h});
     bool hovered = ImGui::IsItemHovered();
+    // Right-click: hide the entry from the library, or bring a hidden one back.
+    // --smoke-view library-menu opens it on the first card for screenshots,
+    // library-menu-hidden on the first hidden one.
+    const bool is_hidden = hidden(g.id);
+    // --smoke-view library-hover shows the first card hovered (its hide button),
+    // library-hover-hidden the first hidden one (its Unhide button).
+    static bool smoke_hover = options_.smoke_view.starts_with("library-hover");
+    if (smoke_hover && (is_hidden || options_.smoke_view != "library-hover-hidden") &&
+        std::exchange(smoke_hover, false))
+      smoke_hovered_ = g.id;
+    hovered |= smoke_hovered_ == g.id;
+    static bool smoke_card_menu = options_.smoke_view.starts_with("library-menu");
+    if (ImGui::IsItemClicked(ImGuiMouseButton_Right) ||
+        (smoke_card_menu && (is_hidden || options_.smoke_view != "library-menu-hidden") &&
+         std::exchange(smoke_card_menu, false))) {
+      ImGui::OpenPopup("card-menu");
+      // At the pointer; a smoke run's has no position, so the card's middle.
+      card_menu_at_ = ImGui::IsMousePosValid() && ImGui::IsItemClicked(ImGuiMouseButton_Right)
+                          ? ImGui::GetIO().MousePos
+                          : ImVec2{p.x + card_w * 0.5f, p.y + card_h * 0.4f};
+    }
     if (hovered) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
     float t = anim(ImGui::GetID("hover"), hovered ? 1.f : 0.f, 16);
     const auto* local = installed(g.id);
@@ -789,6 +823,29 @@ void App::draw_library() {
     ImGui::SetCursorScreenPos(a0);
     art(g.id, {card_w, art_h}, r, 0.03f * t);
     if (!local && !downloading) gdl->AddRectFilled(a0, a1, color::alpha(color::bg, 0.42f * (1 - t * 0.6f)), r);
+    if (is_hidden)  // shown with "Show hidden": dimmed, with the hidden mark (below)
+      gdl->AddRectFilled(a0, a1, color::alpha(color::bg, 0.5f * (1 - t * 0.6f)), r);
+    // Top-left, across from the cloud badge: a hidden entry's mark, and on hover
+    // the button that hides the entry, or on a hidden one brings it back.
+    if (is_hidden || t > 0.01f) {
+      ImVec2 c{a0.x + s(22), a0.y + s(22)};
+      float cr = s(14);
+      ImVec2 m = ImGui::GetIO().MousePos;
+      bool over = t > 0.01f && (m.x - c.x) * (m.x - c.x) + (m.y - c.y) * (m.y - c.y) <= (cr + s(2)) * (cr + s(2));
+      float shown = is_hidden ? 1.f : t;
+      gdl->AddCircleFilled(c, cr + (over ? s(1.5f) : 0),
+                           over ? IM_COL32_WHITE : color::alpha(IM_COL32(20, 21, 24, 190), shown), 32);
+      draw_glyph(gdl, is_hidden && t > 0.5f ? icons::view : icons::hide, kSmall, c,
+                 over ? color::on_selected : color::alpha(color::text, shown));
+      if (over) {
+        ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+        tooltip(is_hidden ? tr("Unhide") : tr("Hide from library"));
+      }
+      if (clicked && over) {
+        clicked = false;
+        action([&] { set_hidden(g.id, !is_hidden); });
+      }
+    }
     if (downloading) {
       vertical_fade(gdl, {a0.x, a1.y - s(44)}, a1, IM_COL32(0, 0, 0, 0), IM_COL32(0, 0, 0, 150));
       float frac = job->total ? float(double(job->done) / double(job->total)) : 0.f;
@@ -845,9 +902,20 @@ void App::draw_library() {
         status = installed(g.id, false) ? "Partly downloaded" : "Not installed";
       else
         status = g.publisher;
+      if (is_hidden) {
+        // i18n: Status under a library entry the player hid, while hidden entries are shown.
+        status = (status.empty() ? std::string() : status + "  \xC2\xB7  ") + tr("Hidden");
+        status_col = color::text3;
+      }
       draw_text(gdl, fonts().regular, kSmall, {p.x, sy}, status_col, ellipsize(fonts().regular, kSmall, status, card_w));
     }
     if (clicked) select(g.id);
+    ImGui::SetNextWindowPos(card_menu_at_, ImGuiCond_Appearing);
+    if (begin_menu("card-menu")) {
+      if (is_hidden ? menu_item(tr("Unhide"), icons::view) : menu_item(tr("Hide from library"), icons::hide))
+        action([&] { set_hidden(g.id, !is_hidden); });
+      end_menu();
+    }
     ImGui::PopID();
   }
   if (!all.empty()) {
@@ -1011,6 +1079,10 @@ void App::draw_game_page() {
       ImGui::SameLine(0, s(6));
       badge("Update available", color::accent_text, color::accent_wash, icons::update);
     }
+    if (hidden(g.id)) {
+      ImGui::SameLine(0, s(6));
+      badge(tr("Hidden"), color::text2, color::surface_hi, icons::hide);
+    }
     if (local) {
       ImGui::SameLine(0, s(10));
       ImVec2 b = ImGui::GetCursorScreenPos();
@@ -1035,15 +1107,15 @@ void App::draw_game_page() {
     auto owners = game_owners(g.id);
     std::string owner = owner_for(g.id);
     bool active_owns = std::ranges::find(owners, account_key_) != owners.end();
-    // Files and the overflow menu sit beside the primary button (not mid-download).
+    // Files and the overflow menu sit beside the primary button (not mid-download);
+    // the menu is there for every game, as it can hide the game from the library.
     bool tools = partial && !downloading;
     // A version pinned beside the game's own install keeps its build.
     const bool pinned = !meta::version_binary(g.id).empty();
     // Any version of a store game can be installed beside the others.
     const bool versions = digits(g.id, 5) && !owners.empty() && !downloading;
-    ImVec2 cta{inner - (tools ? s(52) * 2 : versions ? s(52) : 0), s(46)}, more{};
+    ImVec2 cta{inner - (tools ? s(52) * 2 : s(52)), s(46)}, more{};
     auto draw_tools = [&] {
-      if (!tools && !versions) return;
       if (tools) {
         ImGui::SameLine(0, s(6));
         if (icon_button("folder", icons::folder, nullptr, 46, true, true))
@@ -1144,7 +1216,7 @@ void App::draw_game_page() {
     }
     if (!stacked && ImGui::GetCursorScreenPos().y < bottom)
       ImGui::Dummy({0, bottom - ImGui::GetCursorScreenPos().y - ImGui::GetStyle().ItemSpacing.y});
-    if (tools || versions) {
+    {
       ImGui::SetNextWindowPos({more.x + s(46), more.y + s(52)}, ImGuiCond_Appearing, {1, 0});
       if (begin_menu("game-menu")) {
         if (tools && !pinned && menu_item("Check for updates", icons::refresh, false, session_ && !options_.offline)) {
@@ -1190,6 +1262,9 @@ void App::draw_game_page() {
             action([&] { remove_store_link(g.id); });
           }
         }
+        // A view filter only: the game stays installed, playable and in Steam.
+        if (hidden(g.id) ? menu_item(tr("Unhide"), icons::view) : menu_item(tr("Hide from library"), icons::hide))
+          action([&] { set_hidden(g.id, !hidden(g.id)); });
         if (tools && menu_item("Uninstall", icons::trash, true, !running && !downloads_->busy()))
           uninstall_target_ = *partial;
         end_menu();
@@ -3665,12 +3740,22 @@ int host_index(const controls::Profile& p, std::string_view path) {
     if (p.inputs[i].path == path) return int(i) + 1;
   return 0;
 }
+// A row's host inputs as component paths, in its order.
+std::vector<std::string_view> host_paths(const controls::Profile& p, const std::vector<int>& row) {
+  std::vector<std::string_view> out;
+  for (const int i : row)
+    if (const auto path = host_path(p, i); !path.empty()) out.push_back(path);
+  return out;
+}
 void reset_controls(ControlsEdit& e, int profile) {
   const auto& p = kProfiles[profile];
   const int n = int(p.inputs.size());
   e.profile = profile;
   for (int hand = 0; hand < 2; ++hand)
-    for (int q = 0; q < kQuestCount; ++q) e.host[hand][q] = host_index(p, p.defaults[hand][q]);
+    for (int q = 0; q < kQuestCount; ++q) {
+      const int i = host_index(p, p.defaults[hand][q]);
+      e.host[hand][q] = i ? std::vector<int>{i} : std::vector<int>{};
+    }
   e.menu_mode = int(MenuMode::automatic);
   // One button and hold start on the automatic input; two buttons on both stick clicks.
   const int stick_click = std::max(1, host_index(p, "/input/thumbstick/click"));
@@ -3710,8 +3795,11 @@ void open_controls(ControlsEdit& e, int profile, const controls::Config& config)
   for (int hand = 0; hand < 2; ++hand)
     for (int q = 0; q < kQuestCount; ++q)
       if (const auto& row = c.rows[size_t(hand)][size_t(q)]; row && q != int(Quest::menu)) {
-        const int i = row->empty() ? 0 : host_index(p, *row);
-        if (row->empty() || i) e.host[size_t(hand)][size_t(q)] = i;
+        // Inputs this controller does not have are left out; none left keeps the default.
+        std::vector<int> picked;
+        for (const auto& path : *row)
+          if (const int i = host_index(p, path); i && std::ranges::find(picked, i) == picked.end()) picked.push_back(i);
+        if (row->empty() || !picked.empty()) e.host[size_t(hand)][size_t(q)] = std::move(picked);
       }
   const int first = choice_index(p, c.menu.first), second = choice_index(p, c.menu.second);
   if (first) e.menu_input = e.menu_first = first;
@@ -3731,8 +3819,11 @@ controls::Choice edit_choice(const ControlsEdit& e) {
   for (int hand = 0; hand < 2; ++hand)
     for (int q = 0; q < kQuestCount; ++q) {
       if (q == int(Quest::menu)) continue;
-      const auto path = host_path(p, e.host[size_t(hand)][size_t(q)]);
-      if (path != p.defaults[size_t(hand)][size_t(q)]) c.rows[size_t(hand)][size_t(q)] = std::string(path);
+      controls::Inputs row;
+      for (const auto path : host_paths(p, e.host[size_t(hand)][size_t(q)])) row.emplace_back(path);
+      const auto fallback = p.defaults[size_t(hand)][size_t(q)];
+      if (row != (fallback.empty() ? controls::Inputs{} : controls::Inputs{std::string(fallback)}))
+        c.rows[size_t(hand)][size_t(q)] = std::move(row);
     }
   switch (MenuMode(e.menu_mode)) {
     case MenuMode::automatic: break;
@@ -3806,10 +3897,11 @@ MenuInput resolved_menu(const ControlsEdit& e) {
       // both stick clicks (the Stick click rows) on every runtime.
       MenuInput m{p.menu_path.empty() ? "Both stick clicks" : std::format("{} or both stick clicks", p.menu_label), {}};
       if (!p.menu_path.empty()) m.at.emplace_back(0, p.menu_path);
-      const std::array clicks{host_path(p, e.host[0][size_t(Quest::stick_click)]),
-                              host_path(p, e.host[1][size_t(Quest::stick_click)])};
+      const std::array clicks{host_paths(p, e.host[0][size_t(Quest::stick_click)]),
+                              host_paths(p, e.host[1][size_t(Quest::stick_click)])};
       if (!clicks[0].empty() && !clicks[1].empty())
-        for (int hand = 0; hand < 2; ++hand) m.at.emplace_back(hand, clicks[size_t(hand)]);
+        for (int hand = 0; hand < 2; ++hand)
+          for (const auto click : clicks[size_t(hand)]) m.at.emplace_back(hand, click);
       return m;
     }
     case MenuMode::button: {
@@ -3836,6 +3928,28 @@ MenuInput resolved_menu(const ControlsEdit& e) {
     case MenuMode::off: return {"Off", {}};
   }
   return {};
+}
+
+// Screenshots of a row with two inputs: each Stick click also on the controller's
+// first free button (a Steam Frame's bumper).
+void add_second_stick_click(ControlsEdit& e) {
+  const auto& p = kProfiles[e.profile];
+  for (int hand = 0; hand < 2; ++hand) {
+    auto& row = e.host[hand][size_t(Quest::stick_click)];
+    if (const int bumper = host_index(p, "/input/shoulder/click")) {
+      row.push_back(bumper);
+      continue;
+    }
+    for (int i = 1; i <= int(p.inputs.size()); ++i) {
+      const auto& in = p.inputs[size_t(i - 1)];
+      bool taken = false;
+      for (const auto& other : e.host[hand]) taken |= std::ranges::contains(other, i);
+      if (!taken && !in.reserved && controls::on_hand(in, hand) && in.path.ends_with("/click") && !controls::is_axes(in.path)) {
+        row.push_back(i);
+        break;
+      }
+    }
+  }
 }
 
 // Case-insensitive: every word of `query` is in the profile's name or aliases.
@@ -4024,7 +4138,7 @@ void App::draw_controls() {
     for (int i = 0; i < int(std::size(kProfiles)); ++i) {
       const auto v = options_.smoke_view;
       if ((v == "controls" && i == 0) ||
-          (v == "controls-frame" && kProfiles[i].name == "Steam Frame") ||
+          ((v == "controls-frame" || v.starts_with("controls-multi")) && kProfiles[i].name == "Steam Frame") ||
           (v == "controls-psvr2" && kProfiles[i].name == "PlayStation VR2 Sense") ||
           (v == "controls-vive" && kProfiles[i].name == "HTC Vive wand") ||
           (v == "controls-wmr" && kProfiles[i].name == "Windows Mixed Reality") ||
@@ -4037,6 +4151,9 @@ void App::draw_controls() {
         profile = i;
     }
     open_controls(controls_, profile, settings_.controls);
+    if (options_.smoke_view.starts_with("controls-multi")) add_second_stick_click(controls_);
+    // The left Stick click's second list open: its Remove and Add another input.
+    if (options_.smoke_view == "controls-multi-add") controls_open_line_ = std::array{0, int(Quest::stick_click), 1};
   }
   const float w = std::min(ImGui::GetContentRegionAvail().x, s(1180));
   const float top = ImGui::GetCursorPosY();
@@ -4060,7 +4177,9 @@ void App::draw_game_controls(const meta::Game& g, float w) {
   read_controller_report();
   if (!controls_.initialized) {
     const int profile = controls_connected_ >= 0 ? controls_connected_ : controls_last_used_ >= 0 ? controls_last_used_ : 1;
-    open_controls(controls_, options_.smoke_view.starts_with("game-controls") ? 0 : profile, settings_.controls);
+    int shown = options_.smoke_view.starts_with("game-controls") ? 0 : profile;
+    if (options_.smoke_view.starts_with("game-controls-multi")) shown = profile_index("/interaction_profiles/valve/frame_controller_valve");
+    open_controls(controls_, shown, settings_.controls);
   }
   if (!game_controls_.initialized || controls_game_ != g.id) {
     controls_game_ = g.id;
@@ -4071,7 +4190,12 @@ void App::draw_game_controls(const meta::Game& g, float w) {
       // Screenshots: this game's own choices, with two conflicts to show.
       game_controls_.custom = true;
       game_controls_.menu_mode = int(controls::MenuMode::chord);
-      game_controls_.host[0][int(controls::Quest::secondary)] = game_controls_.host[0][int(controls::Quest::primary)];
+      if (options_.smoke_view.starts_with("game-controls-multi")) {
+        game_controls_.menu_mode = int(controls::MenuMode::automatic);
+        add_second_stick_click(game_controls_);
+      } else {
+        game_controls_.host[0][int(controls::Quest::secondary)] = game_controls_.host[0][int(controls::Quest::primary)];
+      }
     }
   }
   const bool was_custom = game_controls_.custom;
@@ -4128,7 +4252,7 @@ void App::draw_controls_editor(ControlsEdit& e, const ControlsEdit* base, float 
   // game, only the hold or the pair opens the menu.
   auto reaches = [&](int hand, int q, std::string_view path) {
     if (path.empty()) return false;
-    if (q != int(Quest::menu)) return host_path(p, e.host[hand][q]) == path;
+    if (q != int(Quest::menu)) return std::ranges::contains(host_paths(p, e.host[hand][q]), path);
     return std::ranges::any_of(menu.at, [&](const auto& m) { return m.first == hand && m.second == path; });
   };
   std::array<std::array<int, kQuestCount>, 2> twin{};  // the other Quest row + 1
@@ -4143,7 +4267,7 @@ void App::draw_controls_editor(ControlsEdit& e, const ControlsEdit* base, float 
           for (const auto& [h, path] : menu.at)
             if (h == hand) paths.push_back(path);
         } else {
-          paths.push_back(host_path(p, e.host[hand][a]));
+          paths = host_paths(p, e.host[hand][a]);
         }
         for (auto path : paths)
           if (reaches(hand, b, path)) twin[hand][a] = b + 1;
@@ -4153,13 +4277,24 @@ void App::draw_controls_editor(ControlsEdit& e, const ControlsEdit* base, float 
   // the window is too narrow for both.
   const float pad = s(22);
   const float inner = w - 2 * pad;
-  const float row_h = s(50), head_h = s(28), mid = s(4), gutter = s(30), lw = s(92), mark_w = s(14);
+  // The label column also holds the hover + (and an extra input's x) beside the dropdown.
+  const float row_h = s(50), head_h = s(28), mid = s(4), gutter = s(30), lw = s(100), mark_w = s(14);
   const float half_wide = (inner - mid) * 0.5f;
   const float dw = std::clamp(half_wide * 0.32f, s(146), s(190));
   const float rows_w = lw + dw + mark_w + s(8);
   const bool stacked = half_wide - rows_w - gutter < s(150);
   const float half = stacked ? inner : half_wide;
-  const float rows_h = head_h + row_h * 8;  // both sides as tall as the longer list
+  // A row with several host inputs stacks one dropdown per input; both sides as
+  // tall as the longer list.
+  const float line_h = s(44);
+  auto row_lines = [&](int hand, int q) { return q == int(Quest::menu) ? 1 : std::max<int>(1, int(e.host[hand][q].size())); };
+  int extra_lines = 0;
+  for (int hand = 0; hand < 2; ++hand) {
+    int lines = 0;
+    for (int q = 0; q < kQuestCount; ++q) lines += row_lines(hand, q) - 1;
+    extra_lines = std::max(extra_lines, lines);
+  }
+  const float rows_h = head_h + row_h * 8 + line_h * float(extra_lines);
   const std::array<const art::Image*, 2> images{controller_image(p, 0), controller_image(p, 1)};
   // One scale for the pair, so the two controllers read as a matched pair.
   const float pic_room = std::min(half - rows_w - gutter, s(460));
@@ -4242,8 +4377,8 @@ void App::draw_controls_editor(ControlsEdit& e, const ControlsEdit* base, float 
       if (q == int(Quest::menu)) {
         for (const auto& [h, mp] : menu.at)
           if (h == hand) paths.push_back(mp);
-      } else if (auto path = host_path(p, e.host[hand][q]); !path.empty()) {
-        paths.push_back(path);
+      } else {
+        paths = host_paths(p, e.host[hand][q]);
       }
       std::optional<ImVec2> spot;
       for (auto path : paths)
@@ -4355,15 +4490,17 @@ void App::draw_controls_editor(ControlsEdit& e, const ControlsEdit* base, float 
     const float mark_x = hand ? rows_x + mark_w * 0.5f : rows_x + rows_w - mark_w * 0.5f;
     const float edge = hand ? pic_x + pic_w + s(6) : pic_x - s(6);  // where callouts leave the picture
     const float dw_in = dw - s(8);
+    float ry = at.y + head_h;
     for (size_t i = 0; i < rows.size(); ++i) {
       const int q = rows[i].q;
       ImGui::PushID(q);
-      const float ry = at.y + head_h + row_h * float(i);
-      const float cy = ry + row_h * 0.5f;
+      if (i) ry += row_h + line_h * float(row_lines(hand, rows[i - 1].q) - 1);
+      const int lines = row_lines(hand, q);
+      const float cy = ry + row_h * 0.5f;  // the first line; each further input one line_h lower
       if (i) hline(dl, rows_x, rows_x + rows_w, ry, color::alpha(color::stroke, 0.6f));
       ImGui::SetCursorScreenPos({rows_x, ry});
       ImGui::SetNextItemAllowOverlap();
-      ImGui::InvisibleButton("##row", {rows_w, row_h});
+      ImGui::InvisibleButton("##row", {rows_w, row_h + line_h * float(lines - 1)});
       // The row's dropdown sits on top of it: pointing at the dropdown lights the row too.
       if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenOverlappedByItem)) controls_hover_ = hand * kQuestCount + q;
       const bool lit_row_self = lit_row == hand * kQuestCount + q;
@@ -4371,7 +4508,7 @@ void App::draw_controls_editor(ControlsEdit& e, const ControlsEdit* base, float 
       const bool dim = lit_row >= 0 && !lit;
       const ImU32 lit_tone = color::accent;
       const bool is_menu = q == int(Quest::menu);
-      const bool lost = !is_menu && e.host[hand][q] == 0;
+      const bool lost = !is_menu && e.host[hand][q].empty();
       // A missing thumbrest only changes a hand pose; it is not worth a warning.
       const bool quiet = lost && !twin[hand][q] && q == int(Quest::thumbrest);
       const bool warn = twin[hand][q] || (lost && !quiet);
@@ -4381,7 +4518,10 @@ void App::draw_controls_editor(ControlsEdit& e, const ControlsEdit* base, float 
       // A changing row glows. Where the model stands in front of an input (by the
       // drawing's depth, live while it turns), its line goes on as faint dashes
       // from the silhouette in; an input the model hides gets an open dot.
-      for (auto path : rows[i].paths) {
+      for (size_t pi = 0; pi < rows[i].paths.size(); ++pi) {
+        const auto path = rows[i].paths[pi];
+        // Each input's line ends at its own dropdown; the menu's all at its pill.
+        const float cy = is_menu ? ry + row_h * 0.5f : ry + row_h * 0.5f + line_h * float(pi);
         const auto live = live_of(path);
         if (!live) continue;
         // Only the changing row's own lines glow. Another row's line to a button
@@ -4435,15 +4575,29 @@ void App::draw_controls_editor(ControlsEdit& e, const ControlsEdit* base, float 
         else
           dl->AddCircleFilled(a, glow ? s(4.5f) : s(3.5f), glow ? lit_tone : color::alpha(IM_COL32_WHITE, faint ? 0.55f : 1.f), 20);
       }
-      if (lit) dl->AddCircleFilled({mark_x, cy}, s(9), color::alpha(lit_tone, 0.25f), 20);
-      dl->AddCircleFilled({mark_x, cy}, s(5), lit ? lit_tone : warn || is_menu ? tone : color::alpha(color::text2, dim ? 0.45f : 0.8f), 16);
+      for (int line = 0; line < lines; ++line) {
+        const float my = cy + line_h * float(line);
+        if (lit) dl->AddCircleFilled({mark_x, my}, s(9), color::alpha(lit_tone, 0.25f), 20);
+        dl->AddCircleFilled({mark_x, my}, s(5), lit ? lit_tone : warn || is_menu ? tone : color::alpha(color::text2, dim ? 0.45f : 0.8f), 16);
+      }
 
       // The Quest input, and under it a warning only; the pill says the rest.
       std::string sub = is_menu         ? std::string()
                         : twin[hand][q] ? std::format("Shared with {}", quest_label(hand, twin[hand][q] - 1))
                         : lost && !quiet ? std::string("No button for it here")
                                          : std::string();
-      auto place = [&](ImFont* font, float size, std::string_view t, float y, ImU32 col) {
+      // A one-line row that can take another input keeps the + spot beside its
+      // dropdown free (shown on hover): a long label is ellipsized short of it.
+      bool can_add = false;
+      if (!is_menu && !locked && lines == 1)
+        for (int i = 1; i <= n_inputs && !can_add; ++i) {
+          const auto& in = p.inputs[size_t(i - 1)];
+          can_add = !in.reserved && controls::on_hand(in, hand) && controls::is_axes(in.path) == (q == int(Quest::stick)) &&
+                    !std::ranges::contains(e.host[hand][q], i);
+        }
+      const float label_room = lw - (can_add ? s(6) + s(26) + s(4) : 0.f);
+      auto place = [&](ImFont* font, float size, std::string_view full, float y, ImU32 col) {
+        const auto t = ellipsize(font, size, full, label_room);
         const float x = hand ? label_x + lw - measure(font, size, t).x : label_x;
         draw_text(dl, font, size, {std::round(x), y}, col, t);
       };
@@ -4621,27 +4775,100 @@ void App::draw_controls_editor(ControlsEdit& e, const ControlsEdit* base, float 
                                              game ? std::string(game->name) : std::string("the game"))});
         if (mode == MenuMode::off) notes[hand].push_back({"Games get no menu button.", false});
       } else {
-        // The inputs this row can take on this hand: a stick only on a stick or pad.
-        std::vector<std::string> names{"Not assigned"};
-        std::vector<int> ids{0};
-        for (int i = 0; i < n_inputs; ++i) {
-          const auto& in = p.inputs[size_t(i)];
-          if (!controls::on_hand(in, hand) || controls::is_axes(in.path) != (q == int(Quest::stick))) continue;
-          names.emplace_back(in.reserved ? "System (kept by the runtime)" : in.label);
-          ids.push_back(i + 1);
-        }
-        std::vector<const char*> items;
-        for (auto& nm : names) items.push_back(nm.c_str());
-        int pick = int(std::ranges::find(ids, e.host[hand][q]) - ids.begin());
-        if (pick >= int(ids.size())) pick = 0;
+        // One dropdown per host input of the row, stacked. Each lists the inputs this
+        // row can take on this hand (a stick only on a stick or pad) that the row's
+        // other dropdowns do not hold; the last one can add another input, and with
+        // several each can remove its own (as does the x beside the extra ones).
+        auto& row = e.host[hand][q];
+        auto eligible = [&](int i) {
+          const auto& in = p.inputs[size_t(i - 1)];
+          return controls::on_hand(in, hand) && controls::is_axes(in.path) == (q == int(Quest::stick));
+        };
+        auto unused = [&]() {
+          for (int i = 1; i <= n_inputs; ++i)
+            if (eligible(i) && !p.inputs[size_t(i - 1)].reserved && !std::ranges::contains(row, i)) return i;
+          return 0;
+        };
+        constexpr int kAdd = -1;
         ImGui::BeginDisabled(locked);
-        if (dropdown("host", "", items.data(), int(items.size()), &pick, dw_in) &&
-            (pick == 0 || !p.inputs[size_t(ids[size_t(pick)] - 1)].reserved))
-          e.host[hand][q] = ids[size_t(pick)];
-        ImGui::PushID("host");
-        const bool list_open = ImGui::IsPopupOpen("##menu");
-        ImGui::PopID();
-        if (list_open || ImGui::IsItemFocused()) controls_active_ = hand * kQuestCount + q;
+        std::optional<int> remove;  // a line taken out after the loop
+        for (int line = 0; line < lines; ++line) {
+          ImGui::PushID(line);
+          const float ly = ry + (row_h - s(38)) * 0.5f + line_h * float(line);
+          const int current = line < int(row.size()) ? row[size_t(line)] : 0;
+          std::vector<std::string> names{lines > 1 ? "Remove" : "Not assigned"};
+          std::vector<int> ids{0};
+          for (int i = 1; i <= n_inputs; ++i) {
+            if (!eligible(i) || (i != current && std::ranges::contains(row, i))) continue;
+            const auto& in = p.inputs[size_t(i - 1)];
+            names.emplace_back(in.reserved ? "System (kept by the runtime)" : in.label);
+            ids.push_back(i);
+          }
+          if (line == lines - 1 && current && unused()) {
+            names.emplace_back("Add another input");
+            ids.push_back(kAdd);
+          }
+          std::vector<const char*> items;
+          for (auto& nm : names) items.push_back(nm.c_str());
+          int pick = int(std::ranges::find(ids, current) - ids.begin());
+          if (pick >= int(ids.size())) pick = 0;
+          if (!locked && controls_open_line_ == std::array{hand, q, line}) {
+            ImGui::PushID("host");
+            ImGui::OpenPopup("##menu");
+            ImGui::PopID();
+            controls_open_line_.reset();
+          }
+          ImGui::SetCursorScreenPos({drop_x, ly});
+          if (dropdown("host", "", items.data(), int(items.size()), &pick, dw_in)) {
+            const int id = ids[size_t(pick)];
+            if (id == kAdd) {
+              // The next free input, its list opened for the player's pick.
+              row.push_back(unused());
+              controls_open_line_ = std::array{hand, q, int(row.size()) - 1};
+            } else if (id == 0) {
+              if (current) remove = line;
+            } else if (!p.inputs[size_t(id - 1)].reserved) {
+              if (current) row[size_t(line)] = id;
+              else row.push_back(id);
+            }
+          }
+          ImGui::PushID("host");
+          const bool list_open = ImGui::IsPopupOpen("##menu");
+          ImGui::PopID();
+          if (list_open || ImGui::IsItemFocused()) controls_active_ = hand * kQuestCount + q;
+          // Small buttons in the label column, outward from the dropdown: an extra
+          // input's remove x, then on the row's last line the + while a free input is left.
+          const float bs = 26;
+          // The x and the + show only while the row is pointed at or being changed;
+          // their spots stay reserved (the label never reaches them), so nothing moves on hover.
+          int slot = 0;
+          auto small_button = [&](const char* id, char32_t glyph, const char* tip, bool hover_shot, bool shown) {
+            const float off = s(6) + float(slot++) * (s(bs) + s(4));
+            const ImVec2 at_b{hand ? drop_x + dw_in + off : drop_x - off - s(bs), ly + (s(38) - s(bs)) * 0.5f};
+            // Screenshots: the pointer on the left one.
+            if (hover_shot && hand == 0) ImGui::GetIO().AddMousePosEvent(at_b.x + s(bs) * 0.5f, at_b.y + s(bs) * 0.5f);
+            if (!shown) return false;
+            ImGui::SetCursorScreenPos(at_b);
+            const bool hit = icon_button(id, glyph, tip, bs);
+            if (ImGui::IsItemHovered()) controls_hover_ = hand * kQuestCount + q;
+            return hit;
+          };
+          // Both small buttons show only while the row is pointed at or being changed.
+          const bool row_lit = hover == hand * kQuestCount + q || active == hand * kQuestCount + q;
+          if (line > 0 && small_button("remove", icons::cancel, "Remove this input",
+                                       options_.smoke_view.ends_with("-remove-hover"), row_lit))
+            remove = line;
+          if (line == lines - 1 && !locked && unused() &&
+              small_button("add", icons::add, "Add another input",
+                           (options_.smoke_view.ends_with("-plus-hover") && q == int(Quest::stick_click)) ||
+                               (options_.smoke_view.ends_with("-plus-hover-thumbrest") && q == int(Quest::thumbrest)),
+                           row_lit)) {
+            row.push_back(unused());
+            controls_open_line_ = std::array{hand, q, int(row.size()) - 1};
+          }
+          ImGui::PopID();
+        }
+        if (remove && *remove < int(row.size())) row.erase(row.begin() + *remove);
         if (options_.smoke_view == "controls-edit" && hand == 0 && q == int(Quest::secondary))
           controls_active_ = hand * kQuestCount + q;
         ImGui::EndDisabled();

@@ -17,6 +17,8 @@ namespace venture::gfx {
 // directory.
 bool configure_angle(const std::filesystem::path& directory);
 bool initialize_angle();
+// Whether initialize_angle() has succeeded, without initializing.
+bool angle_initialized();
 EGLDisplay angle_display();
 void* angle_proc(const char* name);
 template <class T>

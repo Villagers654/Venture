@@ -205,6 +205,31 @@ int publish_window_rgba(NativeWindow* window, std::vector<std::uint8_t>&& rgba,
   if (notify) notify();
   return result;
 }
+bool window_shared_image_consumer(NativeWindow* window) {
+  std::lock_guard lock(window->lock);
+  return window->image_consumer && window->shared_image_consumer;
+}
+int publish_window_image(NativeWindow* window, std::shared_ptr<const gfx::SharedImage> image,
+                         std::int32_t width, std::int32_t height, std::int64_t timestamp_ns) {
+  std::function<void()> notify;
+  {
+    std::lock_guard lock(window->lock);
+    if (!window->image_consumer) return 0;
+    if (!image || !window->shared_image_consumer || width <= 0 || height <= 0) return -err::invalid;
+    try {
+      auto frame = std::make_shared<SurfaceFrame>();
+      frame->width = width;
+      frame->height = height;
+      frame->timestamp_ns = timestamp_ns;
+      frame->serial = window->frame ? window->frame->serial + 1 : 1;
+      frame->image = std::move(image);
+      window->frame = std::move(frame);
+    } catch (const std::bad_alloc&) { return -err::no_memory; }
+    notify = window->frame_available;
+  }
+  if (notify) notify();
+  return 0;
+}
 std::pair<std::int32_t, std::int32_t> window_consumer_extent(NativeWindow* window) {
   std::lock_guard lock(window->lock);
   return window->image_consumer && !window->fixed_consumer_extent ?

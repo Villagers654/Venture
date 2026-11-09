@@ -8,7 +8,7 @@ add_library(venture_runtime STATIC
   core/address_space.cpp core/hle.cpp core/hle_unwind.cpp core/a32_abi.cpp core/a32_call.cpp core/a32_coverage.cpp
   core/generated/a32_ndk.cpp core/generated/a32_graphics.cpp core/generated/a32_vendor.cpp core/generated/a32_media.cpp
   core/generated/a32_libc.cpp
-  core/thread.cpp core/tls.cpp
+  core/thread.cpp core/thread_lifetime.cpp core/tls.cpp
   core/dev_game_control.cpp core/dev_il2cpp.cpp core/engine_policy.cpp core/engine_defaults.cpp
   core/profile.cpp core/memory_pressure.cpp core/frame_cpu.cpp core/startup_diagnostics.cpp
   core/pipeline_stats.cpp core/invalidation_stats.cpp core/av_telemetry.cpp

@@ -242,6 +242,72 @@ const Descriptor* descriptor(std::string_view library, std::string_view symbol) 
     static constexpr Descriptor mmap2{"libc.so", "__mmap2", {Kind::Ptr, "void *"}, arguments, false, "bionic __mmap2.S"};
     return &mmap2;
   }
+  // bionic libstdc++.map.txt plus the C++14/17 <new> forms; ARM's size_t is
+  // unsigned int, so these are the j-mangled names. std::align_val_t is a
+  // size_t enum. The ARM C++ ABI (IHI 0041, 3.2.3) guard is one 32-bit word.
+  if (library == "libstdc++.so") {
+    static constexpr Type v{Kind::Void, "void"}, ptr{Kind::Ptr, "void *"}, size{Kind::Size, "size_t"},
+        align{Kind::Size, "std::align_val_t"}, nothrow{Kind::Ptr, "const std::nothrow_t &"},
+        guard{Kind::Ptr, "int *", 4}, i32{Kind::I32, "int"};
+    static constexpr Type n[]{size}, nn[]{size, nothrow}, na[]{size, align}, nan[]{size, align, nothrow}, d[]{ptr},
+        ds[]{ptr, size}, dn[]{ptr, nothrow}, da[]{ptr, align}, dsa[]{ptr, size, align}, dan[]{ptr, align, nothrow},
+        g[]{guard};
+    static constexpr std::string_view source = "bionic libstdc++.map.txt, <new>, ARM C++ ABI";
+    static constexpr Descriptor entries[]{
+        {"libstdc++.so", "_ZdaPv", v, d, false, source},
+        {"libstdc++.so", "_ZdaPvRKSt9nothrow_t", v, dn, false, source},
+        {"libstdc++.so", "_ZdaPvSt11align_val_t", v, da, false, source},
+        {"libstdc++.so", "_ZdaPvSt11align_val_tRKSt9nothrow_t", v, dan, false, source},
+        {"libstdc++.so", "_ZdaPvj", v, ds, false, source},
+        {"libstdc++.so", "_ZdaPvjSt11align_val_t", v, dsa, false, source},
+        {"libstdc++.so", "_ZdlPv", v, d, false, source},
+        {"libstdc++.so", "_ZdlPvRKSt9nothrow_t", v, dn, false, source},
+        {"libstdc++.so", "_ZdlPvSt11align_val_t", v, da, false, source},
+        {"libstdc++.so", "_ZdlPvSt11align_val_tRKSt9nothrow_t", v, dan, false, source},
+        {"libstdc++.so", "_ZdlPvj", v, ds, false, source},
+        {"libstdc++.so", "_ZdlPvjSt11align_val_t", v, dsa, false, source},
+        {"libstdc++.so", "_Znaj", ptr, n, false, source},
+        {"libstdc++.so", "_ZnajRKSt9nothrow_t", ptr, nn, false, source},
+        {"libstdc++.so", "_ZnajSt11align_val_t", ptr, na, false, source},
+        {"libstdc++.so", "_ZnajSt11align_val_tRKSt9nothrow_t", ptr, nan, false, source},
+        {"libstdc++.so", "_Znwj", ptr, n, false, source},
+        {"libstdc++.so", "_ZnwjRKSt9nothrow_t", ptr, nn, false, source},
+        {"libstdc++.so", "_ZnwjSt11align_val_t", ptr, na, false, source},
+        {"libstdc++.so", "_ZnwjSt11align_val_tRKSt9nothrow_t", ptr, nan, false, source},
+        {"libstdc++.so", "__cxa_deleted_virtual", v, {}, false, source},
+        {"libstdc++.so", "__cxa_guard_abort", v, g, false, source},
+        {"libstdc++.so", "__cxa_guard_acquire", i32, g, false, source},
+        {"libstdc++.so", "__cxa_guard_release", v, g, false, source},
+        {"libstdc++.so", "__cxa_pure_virtual", v, {}, false, source}};
+    for (const auto& entry : entries) if (entry.symbol == symbol) return &entry;
+    return nullptr;
+  }
+  // Bionic syslog.h and inttypes.h. The NDK generator's pinned header set
+  // misses them; ARM intmax_t is 64-bit and imaxdiv_t returns through memory.
+  if (library == "libc.so") {
+    static constexpr Type v{Kind::Void, "void"}, i32{Kind::I32, "int"}, cstr{Kind::Ptr, "const char *", 1},
+        i64{Kind::I64, "intmax_t"}, u64{Kind::U64, "uintmax_t"}, end{Kind::OutPtr, "char * *"},
+        wstr{Kind::Ptr, "const wchar_t *", 4}, wend{Kind::OutPtr, "wchar_t * *"}, va{Kind::VaList, "va_list"},
+        div{Kind::Layout, "imaxdiv_t", 16, 8}, locale{Kind::Handle, "locale_t"};
+    static constexpr Type open[]{cstr, i32, i32}, mask[]{i32}, log[]{i32, cstr}, vlog[]{i32, cstr, va},
+        parse[]{cstr, end, i32}, parse_l[]{cstr, end, i32, locale}, wparse[]{wstr, wend, i32}, one[]{i64}, two[]{i64, i64};
+    static constexpr std::string_view syslog = "bionic syslog.h", inttypes = "bionic inttypes.h";
+    static constexpr Descriptor entries[]{
+        {"libc.so", "closelog", v, {}, false, syslog},
+        {"libc.so", "imaxabs", i64, one, false, inttypes},
+        {"libc.so", "imaxdiv", div, two, false, inttypes},
+        {"libc.so", "openlog", v, open, false, syslog},
+        {"libc.so", "setlogmask", i32, mask, false, syslog},
+        {"libc.so", "strtoimax", i64, parse, false, inttypes},
+        {"libc.so", "strtoumax", u64, parse, false, inttypes},
+        {"libc.so", "strtoimax_l", i64, parse_l, false, inttypes},
+        {"libc.so", "strtoumax_l", u64, parse_l, false, inttypes},
+        {"libc.so", "syslog", v, log, true, syslog},
+        {"libc.so", "vsyslog", v, vlog, false, syslog},
+        {"libc.so", "wcstoimax", i64, wparse, false, inttypes},
+        {"libc.so", "wcstoumax", u64, wparse, false, inttypes}};
+    for (const auto& entry : entries) if (entry.symbol == symbol) return &entry;
+  }
   // ELF general/local-dynamic TLS: void* __tls_get_addr(tls_index*), with
   // bionic's ARM tls_index of two 32-bit words. Exported by libc, no header.
   if (library == "libc.so" && symbol == "__tls_get_addr") {

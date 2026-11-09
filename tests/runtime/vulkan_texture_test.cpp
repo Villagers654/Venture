@@ -1569,3 +1569,25 @@ TEST_CASE("Vulkan texture decode refused memory skips that texture, logs the lim
 
 TEST_SUITE_END();
 
+
+TEST_CASE("Vulkan density views of a null image get a full-density image; other null views are refused") {
+  test::VulkanDevice gpu;
+  VkImageViewCreateInfo vi{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+  vi.image = VK_NULL_HANDLE;
+  vi.viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
+  vi.format = VK_FORMAT_R8G8_UNORM;
+  vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 2};
+  VkImageView view{};
+  REQUIRE(test::vk_call("vkCreateImageView", gpu.device, &vi, nullptr, &view) == VK_SUCCESS);
+  CHECK(view != VK_NULL_HANDLE);
+  vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
+  vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 1, 1};
+  VkImageView second{};
+  REQUIRE(test::vk_call("vkCreateImageView", gpu.device, &vi, nullptr, &second) == VK_SUCCESS);
+  test::vk_call("vkDestroyImageView", gpu.device, second, nullptr);
+  test::vk_call("vkDestroyImageView", gpu.device, view, nullptr);
+  vi.format = VK_FORMAT_R8G8B8A8_UNORM;
+  VkImageView refused{};
+  CHECK(test::vk_call("vkCreateImageView", gpu.device, &vi, nullptr, &refused) == VK_ERROR_INITIALIZATION_FAILED);
+  CHECK(refused == VK_NULL_HANDLE);
+}

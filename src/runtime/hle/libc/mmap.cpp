@@ -257,6 +257,11 @@ GuestAddr mremap_fn(GuestAddr p, std::uint64_t old_size, std::uint64_t size, int
   }
   return next;
 }
+// bionic sys/mman.h: void* mremap(void*, size_t, size_t, int, ...). The
+// variadic new address is read only for MREMAP_FIXED, which mremap rejects.
+std::uint32_t mremap32(GuestAddr p, std::uint64_t old_size, std::uint64_t size, int flags) {
+  return static_cast<std::uint32_t>(mremap_fn(p, old_size, size, flags, 0));
+}
 std::int64_t process_read(int pid, const Iovec* local, std::uint64_t local_count,
                           const Iovec* remote, std::uint64_t remote_count, std::uint64_t flags) {
   if (pid != 1000) return failure(err::esrch);
@@ -299,6 +304,7 @@ void register_memory_map(HleLibrary& lib) {
     abi32::adapt<&sbrk32>("sbrk");
     abi32::adapt<&mmap32>("mmap"); abi32::adapt<&mmap32>("mmap64");
     abi32::adapt<&mmap2_32>("__mmap2");
+    abi32::adapt<&mremap32>("mremap");
     VENTURE_LIBC_BIND(lib, "__mmap2", mmap_fn);
   }
 #define B(n, f) VENTURE_LIBC_BIND(lib, n, f)

@@ -73,12 +73,16 @@ std::optional<controls::Resolved> resolved_controls(std::string_view profile) {
   if (it == c.resolved.end()) return std::nullopt;
   return it->second;
 }
-std::optional<std::string> touch_binding(std::string_view path, std::string_view profile) {
-  if (profile == "/interaction_profiles/khr/simple_controller") return simple_binding(path);
+std::vector<std::string> touch_bindings(std::string_view path, std::string_view profile) {
+  if (profile == "/interaction_profiles/khr/simple_controller") {
+    auto simple = simple_binding(path);
+    if (!simple) return {};
+    return {std::move(*simple)};
+  }
   const auto* p = controls::find_profile(profile);
   const auto r = resolved_controls(profile);
   if (!p || !r) return {};
-  return controls::host_binding(path, *p, *r, host_dpad());
+  return controls::host_bindings(path, *p, *r, host_dpad());
 }
 std::vector<std::string> touch_targets() {
   std::vector<std::string> targets{"/interaction_profiles/oculus/touch_controller"};

@@ -1,4 +1,5 @@
 #include "common/environment.h"
+#include "core/thread_lifetime.h"
 #include "common/paths.h"
 #include <algorithm>
 #include <atomic>
@@ -28,9 +29,9 @@ std::thread::id starter;
 std::vector<NativeRegistrar> registrars;
 std::string startup_error;
 std::atomic<jobject> fallback_loader{nullptr};
-thread_local ThreadState local;
+ThreadState& local() { return thread_lifetime::local<ThreadState, struct JavaThreadState>(); }
 }  // namespace
-ThreadState& thread_state() { return local; }
+ThreadState& thread_state() { return local(); }
 ThreadState::~ThreadState() {
   if (process_config().isa() == GuestIsa::a32) jni32::clear_thread();
   if (attached_here)
@@ -43,8 +44,8 @@ JNIEnv* env_no_attach() {
   if (!current) return nullptr;
   void* env = nullptr;
   if (current->GetEnv(&env, JNI_VERSION_1_6) != JNI_OK) return nullptr;
-  local.env = static_cast<JNIEnv*>(env);
-  return local.env;
+  local().env = static_cast<JNIEnv*>(env);
+  return local().env;
 }
 jint attach_host(bool daemon, JavaVMAttachArgs* args, JNIEnv** out) {
   *out = nullptr;
@@ -55,23 +56,23 @@ jint attach_host(bool daemon, JavaVMAttachArgs* args, JNIEnv** out) {
   if (status == JNI_EDETACHED) {
     status =
         daemon ? current->AttachCurrentThreadAsDaemon(&env, args) : current->AttachCurrentThread(&env, args);
-    if (status == JNI_OK) local.attached_here = true;
+    if (status == JNI_OK) local().attached_here = true;
   }
   if (status == JNI_OK) {
-    local.env = static_cast<JNIEnv*>(env);
-    *out = local.env;
+    local().env = static_cast<JNIEnv*>(env);
+    *out = local().env;
   }
   return status;
 }
 jint detach_host() {
-  if (local.native_depth) return JNI_ERR;
+  if (local().native_depth) return JNI_ERR;
   auto* current = host_vm();
   if (!current) return JNI_ERR;
   if (process_config().isa() == GuestIsa::a32) jni32::clear_thread();
   jint status = current->DetachCurrentThread();
   if (status == JNI_OK) {
-    local.env = nullptr;
-    local.attached_here = false;
+    local().env = nullptr;
+    local().attached_here = false;
     if (auto* thread = GuestThread::current()) thread->jni_env = 0;
   }
   return status;
@@ -98,7 +99,7 @@ void throw_thread_death(JNIEnv* env) noexcept {
   if (error) { env->Throw(error); env->DeleteLocalRef(error); }
   env->DeleteLocalRef(cls);
 }
-jobject current_loader() { return local.has_loader ? local.loader : fallback_loader.load(); }
+jobject current_loader() { return local().has_loader ? local().loader : fallback_loader.load(); }
 void set_app_class_loader(void* value) {
   JNIEnv* env = host_env();
   jobject ref = value ? env->NewGlobalRef(static_cast<jobject>(value)) : nullptr;
@@ -185,11 +186,11 @@ bool start_jvm(const JvmOptions& options, std::string* error) {
     jint result = create(&instance, &env, &args);
     if (result != JNI_OK) throw std::runtime_error("JNI_CreateJavaVM failed: " + std::to_string(result));
     vm.store(instance);
-    local.env = static_cast<JNIEnv*>(env);
+    local().env = static_cast<JNIEnv*>(env);
     if (!options.agent_path.empty())
       initialize_method_hooks(paths::from_utf8(options.agent_path));
-    init_bridge(local.env);
-    if (local.env->ExceptionCheck())
+    init_bridge(local().env);
+    if (local().env->ExceptionCheck())
       throw std::runtime_error("NativeLoader initialization failed (pending Java exception)");
     std::size_t next = 0;
     for (;;) {
@@ -202,8 +203,8 @@ bool start_jvm(const JvmOptions& options, std::string* error) {
         }
         registrar = registrars[next++];
       }
-      registrar(local.env);
-      if (local.env->ExceptionCheck())
+      registrar(local().env);
+      if (local().env->ExceptionCheck())
         throw std::runtime_error("framework native registrar left a pending exception");
     }
     lifecycle_changed.notify_all();
@@ -243,7 +244,7 @@ void add_framework_natives(NativeRegistrar registrar) {
 bool stop_jvm(std::string* error) {
   auto* current = host_vm();
   if (!current) return true;
-  if (local.native_depth) {
+  if (local().native_depth) {
     if (error) *error = "cannot destroy JVM from a Java-to-native transition";
     return false;
   }
@@ -266,8 +267,8 @@ bool stop_jvm(std::string* error) {
     return false;
   }
   vm.store(nullptr);
-  local.env = nullptr;
-  local.attached_here = false;
+  local().env = nullptr;
+  local().attached_here = false;
   {
     std::lock_guard lock(lifecycle_mutex);
     state = State::Stopped;

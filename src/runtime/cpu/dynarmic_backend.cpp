@@ -262,8 +262,10 @@ class DynarmicCpu final : public Cpu, private Dynarmic::A64::UserCallbacks {
         blocks->store(descriptor, data, size);
         pretranslate::reached(descriptor);
       };
-      config.portable_block_source = [blocks](std::uint64_t descriptor) {
-        const auto found = blocks->find(descriptor);
+      // Decoded into this CPU's buffer, not a thread_local one: an adopted host thread's exit
+      // runs guest TLS destructors (and so translations) after its later thread_locals are gone.
+      config.portable_block_source = [blocks, this](std::uint64_t descriptor) {
+        const auto found = blocks->find(descriptor, portable_buffer_);
         if (found.first) pretranslate::reached(descriptor);
         return found;
       };
@@ -393,6 +395,7 @@ class DynarmicCpu final : public Cpu, private Dynarmic::A64::UserCallbacks {
   unsigned jit_bits_ = 0;
   std::array<std::uint64_t, 16> outlined_counts_{};
   std::uint64_t tp_{}, tpro_{};
+  std::vector<std::uint8_t> portable_buffer_;  // the last cached block found (portable_block_source)
   std::unique_ptr<Dynarmic::A64::Jit> jit_;
   std::uintptr_t cache_begin_ = 0, cache_end_ = 0;
   std::optional<CpuExit> exit_;

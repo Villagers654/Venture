@@ -23,35 +23,25 @@
 #else
 #include <dlfcn.h>
 #endif
-extern "C" {
-#include <libavformat/avformat.h>
-#include <libavcodec/avcodec.h>
-#include <libavutil/channel_layout.h>
-#include <libavutil/samplefmt.h>
-#include <libavutil/mem.h>
-#include <libavutil/mathematics.h>
-#include <libavutil/log.h>
-#include <libavutil/sha.h>
-#include <libavutil/hwcontext.h>
-#include <libswscale/swscale.h>
-}
+#include "media/ffmpeg_api.h"
+#include "media/vulkan_video.h"
+#include "gfx/shared_image.h"
 
 namespace venture::media {
 namespace {
 constexpr std::size_t max_packet = 4*1024*1024;
 constexpr AVRational microseconds{1,1000000};
-#ifdef _WIN32
 bool hardware_video_allowed() {
   if(venture::environment::getenv("VENTURE_MEDIA_SOFTWARE_VIDEO")){log::info("media","Hardware video disabled by software diagnostic");return false;}
-  // D3D11 does not honor Vulkan ICD overrides. Software/suite/CPU policy
-  // admission must therefore opt out before any hardware device is created.
+  // D3D11 does not honor Vulkan ICD overrides, and a decode queue is a real
+  // GPU engine. Software/suite/CPU policy admission must therefore opt out
+  // before any hardware device is created.
   if(auto background=venture::environment::getenv("VENTURE_GPU_POLICY_BACKGROUND");background && *background){log::info("media","Hardware video disabled for background admission {}",background);return false;}
   auto admitted=venture::environment::getenv("VENTURE_GPU_POLICY_ADMITTED");
   auto allowed=!admitted || std::string_view(admitted).find("hardware")!=std::string_view::npos;
   if(!allowed)log::info("media","Hardware video disabled for admission {}",admitted);
   return allowed;
 }
-#endif
 #ifdef _WIN32
 using Module = HMODULE;
 Module load(const std::filesystem::path& p) { return LoadLibraryW(p.c_str()); }
@@ -64,33 +54,7 @@ void unload(Module m) { if(m) dlclose(m); }
 void* symbol(Module m,const char* n) { return dlsym(m,n); }
 #endif
 }
-struct Library::Impl {
-  std::vector<Module> modules;
-  bool ready = false;
-#define MEDIA_FUNCTIONS(X) \
-  X(avutil_version) X(avcodec_version) X(avformat_version) \
-  X(av_malloc) X(av_free) X(av_max_alloc) X(av_rescale_q) X(av_log_set_level) \
-  X(avio_alloc_context) X(avio_context_free) X(avformat_alloc_context) \
-  X(av_find_input_format) X(avformat_open_input) X(avformat_find_stream_info) \
-  X(avformat_close_input) X(av_read_frame) X(av_seek_frame) \
-  X(av_packet_alloc) X(av_packet_free) X(av_packet_unref) X(av_new_packet) \
-  X(av_packet_get_side_data) X(av_packet_new_side_data) \
-  X(avcodec_find_decoder) X(avcodec_alloc_context3) X(avcodec_parameters_to_context) \
-  X(avcodec_get_name) X(avcodec_get_hw_config) X(av_hwdevice_ctx_create) X(av_hwframe_transfer_data) \
-  X(avcodec_open2) X(avcodec_free_context) X(avcodec_send_packet) \
-  X(avcodec_receive_frame) X(avcodec_flush_buffers) \
-  X(av_frame_alloc) X(av_frame_free) X(av_frame_unref) X(av_frame_ref) X(av_frame_move_ref) \
-  X(av_frame_apply_cropping) X(av_frame_copy_props) \
-  X(sws_alloc_context) X(sws_scale_frame) X(sws_freeContext) \
-  X(av_sample_fmt_is_planar) X(av_get_bytes_per_sample)
-  // The built-in SHA implementation identifies the bounded input region.
-#define MEDIA_HASH_FUNCTIONS(X) X(av_sha_alloc) X(av_sha_init) X(av_sha_update) X(av_sha_final)
-#define FIELD(n) decltype(&::n) n = nullptr;
-  MEDIA_FUNCTIONS(FIELD)
-  MEDIA_HASH_FUNCTIONS(FIELD)
-#undef FIELD
-  ~Impl() { for(auto i=modules.rbegin();i!=modules.rend();++i) unload(*i); }
-};
+Library::Impl::~Impl() { for(auto i=modules.rbegin();i!=modules.rend();++i) unload(static_cast<Module>(*i)); }
 Library::Library(const std::filesystem::path& dir):impl(std::make_unique<Impl>()) {
   if(!dir.is_absolute()) return;
 #ifdef _WIN32
@@ -104,7 +68,7 @@ Library::Library(const std::filesystem::path& dir):impl(std::make_unique<Impl>()
     impl->modules.push_back(module);
   }
 #define RESOLVE(n) \
-  for(auto module:impl->modules) if(auto p=symbol(module,#n)) {impl->n=reinterpret_cast<decltype(impl->n)>(p);break;} \
+  for(auto module:impl->modules) if(auto p=symbol(static_cast<Module>(module),#n)) {impl->n=reinterpret_cast<decltype(impl->n)>(p);break;} \
   if(!impl->n) {log::warn("media","Audio backend missing required export {}",#n);return;}
   MEDIA_FUNCTIONS(RESOLVE)
   MEDIA_HASH_FUNCTIONS(RESOLVE)
@@ -309,12 +273,14 @@ struct Decoder::Impl {
   bool video_backend_logged=false;
   std::int64_t conversion_us=0;
   SwsContext* scale=nullptr;
+  std::unique_ptr<vulkan_video::Converter> gpu;
+  std::string_view backend="software";
   explicit Impl(std::shared_ptr<Library> l):library(std::move(l)){}
   auto& api(){return *library->impl;}
   ~Impl(){if(codec)api().avcodec_free_context(&codec);if(frame)api().av_frame_free(&frame);if(downloaded)api().av_frame_free(&downloaded);
     if(converted)api().av_frame_free(&converted);if(scale)api().sws_freeContext(scale);}
   int receive_video();
-  int convert(AVFrame* f,VideoFrame* out,int output_width,int output_height,bool nv12);
+  int convert(AVFrame* f,VideoFrame* out,int output_width,int output_height,bool nv12,bool shared_image=false);
 };
 namespace {
 AVCodecID codec_id(std::string_view mime) {
@@ -329,7 +295,7 @@ AVCodecID codec_id(std::string_view mime) {
 bool video_mime(std::string_view mime) {return mime.starts_with("video/") && codec_id(mime)!=AV_CODEC_ID_NONE;}
 Decoder::Decoder(std::shared_ptr<Library> l):impl(std::make_unique<Impl>(std::move(l))){}
 Decoder::~Decoder()=default;
-int Decoder::configure(const Track& t) {
+int Decoder::configure(const Track& t,bool surface,bool shared_images) {
   auto& s=*impl;
   const bool video=video_mime(t.mime);
   if(!s.library->available() || codec_id(t.mime)==AV_CODEC_ID_NONE || t.config.size()>65536) return unsupported;
@@ -351,28 +317,53 @@ int Decoder::configure(const Track& t) {
   s.codec->thread_count=video?(std::int64_t(t.width)*t.height>4096LL*2160?8:4):1;
   s.codec->thread_type=video?(FF_THREAD_FRAME|FF_THREAD_SLICE):FF_THREAD_SLICE;
   s.video_backend_logged=false;s.conversion_us=0;
-#ifdef _WIN32
-  // Measured >4K software movies can miss presentation deadlines. D3D11VA
-  // uses the Windows video API across GPU vendors; FFmpeg's default format
-  // negotiation retains software fallback for unsupported stream profiles.
-  if(video && std::int64_t(t.width)*t.height>4096LL*2160 && hardware_video_allowed()) {
-    log::info("media","Considering D3D11VA for {} {}x{}",t.mime,t.width,t.height);
-    for(int index=0;auto config=a.avcodec_get_hw_config(codec,index);++index) {
-      if(config->device_type==AV_HWDEVICE_TYPE_D3D11VA &&
-         (config->methods&AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX)) {
-        if(a.av_hwdevice_ctx_create(&s.codec->hw_device_ctx,AV_HWDEVICE_TYPE_D3D11VA,nullptr,nullptr,0)<0)
-          log::info("media","D3D11VA device unavailable; retaining software video decoder");
-        else {
-          // Surface codec output holds decoded surfaces: four output buffers,
-          // four scheduled releases and the one being converted.
-          s.codec->extra_hw_frames=9;
-          log::info("media","D3D11VA device created for {}",t.mime);
-        }
-        break;
+  s.backend="software";s.gpu.reset();
+  // Measured >4K software movies can miss presentation deadlines. Vulkan Video
+  // works across GPU vendors on Windows and Linux and keeps pictures on the
+  // GPU, which pays off when the consumer imports them (a shared-image
+  // Surface: conversion and handoff stay on the GPU). For any other consumer
+  // the pictures come back to the CPU, where D3D11VA plus threaded swscale is
+  // faster on Windows (measured at 8192x4096), so Vulkan is used there only
+  // without D3D11VA. FFmpeg's format negotiation falls back to software
+  // decoding for stream profiles or sizes the hardware does not support.
+  const auto pixels=std::int64_t(t.width)*t.height;
+  const bool large=pixels>4096LL*2160,gpu_consumer=surface && shared_images && pixels>=1280LL*720;
+  if(video && (large || gpu_consumer) && hardware_video_allowed()) {
+    auto offers=[&](AVHWDeviceType type) {
+      for(int index=0;auto config=a.avcodec_get_hw_config(codec,index);++index)
+        if(config->device_type==type && (config->methods&AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX))return true;
+      return false;
+    };
+    auto try_vulkan=[&] {
+      if(s.codec->hw_device_ctx || !offers(AV_HWDEVICE_TYPE_VULKAN))return;
+      if(auto device=vulkan_video::device_reference(*s.library)) {
+        s.codec->hw_device_ctx=device;
+        s.gpu=std::make_unique<vulkan_video::Converter>(s.library);
+        log::info("media","Vulkan video decoder considered for {} {}x{}",t.mime,t.width,t.height);
       }
-    }
-  }
+    };
+    auto try_d3d11=[&] {
+#ifdef _WIN32
+      if(s.codec->hw_device_ctx || !large || !offers(AV_HWDEVICE_TYPE_D3D11VA))return;
+      if(a.av_hwdevice_ctx_create(&s.codec->hw_device_ctx,AV_HWDEVICE_TYPE_D3D11VA,nullptr,nullptr,0)<0)
+        log::info("media","D3D11VA device unavailable; retaining software video decoder");
+      else log::info("media","D3D11VA device created for {}",t.mime);
 #endif
+    };
+    if(gpu_consumer){try_vulkan();try_d3d11();}
+    else{try_d3d11();try_vulkan();}
+    // Surface codec output holds decoded surfaces: four output buffers,
+    // four scheduled releases and the one being converted.
+    if(s.codec->hw_device_ctx)s.codec->extra_hw_frames=9;
+  }
+  // FFmpeg selects the Vulkan hwaccel only with a Vulkan device context, so
+  // this covers every Vulkan decode. One decoding context submits
+  // asynchronously; frame threads add contexts racing on one video session
+  // (measured: NVIDIA device loss with eight frame threads at 8192x4096) and
+  // gain nothing on the GPU.
+  if(s.codec->hw_device_ctx &&
+     reinterpret_cast<const AVHWDeviceContext*>(s.codec->hw_device_ctx->data)->type==AV_HWDEVICE_TYPE_VULKAN)
+    s.codec->thread_type=FF_THREAD_SLICE;
   if(!t.config.empty()) {
     s.codec->extradata=static_cast<std::uint8_t*>(a.av_malloc(t.config.size()+AV_INPUT_BUFFER_PADDING_SIZE));
     if(!s.codec->extradata)return unsupported;
@@ -440,16 +431,30 @@ int Decoder::Impl::receive_video() {
   auto& a=api();auto f=frame;a.av_frame_unref(f);
   auto result=a.avcodec_receive_frame(codec,f);
   if(result==AVERROR(EAGAIN))return 0;if(result==AVERROR_EOF)return -1;if(result<0)return unsupported;
+  backend=f->format==AV_PIX_FMT_VULKAN?"Vulkan":f->format==AV_PIX_FMT_D3D11?"D3D11VA":"software";
   if(!video_backend_logged) {
-    log::info("media","Video decode backend={} {}x{} hardware_device={}",f->format==AV_PIX_FMT_D3D11?"D3D11VA":"software",f->width,f->height,codec->hw_device_ctx!=nullptr);
+    log::info("media","Video decode backend={} {}x{} hardware_device={}",backend,f->width,f->height,codec->hw_device_ctx!=nullptr);
     video_backend_logged=true;
   }
   return 1;
 }
-int Decoder::Impl::convert(AVFrame* f,VideoFrame* out,int output_width,int output_height,bool nv12) {
+int Decoder::Impl::convert(AVFrame* f,VideoFrame* out,int output_width,int output_height,bool nv12,bool shared_image) {
   auto& a=api();
   auto conversion_begin=std::chrono::steady_clock::now();
-  if(f->format==AV_PIX_FMT_D3D11) {
+  if(f->format==AV_PIX_FMT_VULKAN && gpu && !nv12) {
+    // Convert on the GPU at the consumer's size: into a shared image for a
+    // consumer on the host device, else into a readback of the final pixels.
+    const int visible_width=f->width-int(f->crop_left+f->crop_right),visible_height=f->height-int(f->crop_top+f->crop_bottom);
+    const int width=output_width>1 && output_width<=8192?output_width:visible_width;
+    const int height=output_height>1 && output_height<=8192?output_height:visible_height;
+    if(gpu->convert(f,width,height,shared_image?&out->image:nullptr,shared_image?nullptr:&out->rgba)) {
+      out->width=width;out->height=height;
+      out->time_us=f->best_effort_timestamp==AV_NOPTS_VALUE?0:f->best_effort_timestamp;
+      conversion_us=std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now()-conversion_begin).count();
+      return 1;
+    }
+  }
+  if(f->hw_frames_ctx) {
     if(!downloaded)downloaded=a.av_frame_alloc();if(!downloaded)return unsupported;
     a.av_frame_unref(downloaded);
     if(a.av_hwframe_transfer_data(downloaded,f,0)<0 || a.av_frame_copy_props(downloaded,f)<0)return unsupported;
@@ -485,13 +490,14 @@ int Decoder::Impl::convert(AVFrame* f,VideoFrame* out,int output_width,int outpu
   conversion_us=std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now()-conversion_begin).count();
   return result>=0?1:unsupported;
 }
-int Decoder::receive(VideoFrame* out,std::int64_t discard_before_us,int output_width,int output_height,bool nv12) {
+int Decoder::receive(VideoFrame* out,std::int64_t discard_before_us,int output_width,int output_height,bool nv12,
+                     bool shared_image) {
   auto& s=*impl;if(!s.codec || !out || s.codec->codec_type!=AVMEDIA_TYPE_VIDEO)return bad_state;
   auto result=s.receive_video();if(result!=1)return result;
   auto f=s.frame;
   out->time_us=f->best_effort_timestamp==AV_NOPTS_VALUE?0:f->best_effort_timestamp;
   if(out->time_us<discard_before_us)return 2;
-  return s.convert(f,out,output_width,output_height,nv12);
+  return s.convert(f,out,output_width,output_height,nv12,shared_image);
 }
 int Decoder::receive(std::shared_ptr<Picture>* out) {
   auto& s=*impl;if(!s.codec || !out || s.codec->codec_type!=AVMEDIA_TYPE_VIDEO)return bad_state;
@@ -505,15 +511,16 @@ int Decoder::receive(std::shared_ptr<Picture>* out) {
   picture->time_us=frame->best_effort_timestamp==AV_NOPTS_VALUE?0:frame->best_effort_timestamp;
   *out=std::move(picture);return 1;
 }
-int Decoder::convert(const Picture& picture,VideoFrame* out,int output_width,int output_height,bool nv12) {
+int Decoder::convert(const Picture& picture,VideoFrame* out,int output_width,int output_height,bool nv12,bool shared_image) {
   auto& s=*impl;if(!picture.frame || !out)return bad_state;
   // Conversion crops and retags its frame; the held picture stays intact.
   auto& a=s.api();
   auto copy=a.av_frame_alloc();if(!copy)return unsupported;
   struct Owned{Library::Impl& a;AVFrame* f;~Owned(){a.av_frame_free(&f);}} owned{a,copy};
   if(a.av_frame_ref(copy,static_cast<const AVFrame*>(picture.frame))<0)return unsupported;
-  return s.convert(copy,out,output_width,output_height,nv12);
+  return s.convert(copy,out,output_width,output_height,nv12,shared_image);
 }
+std::string_view Decoder::video_backend() const{return impl->backend;}
 Decoder::Picture::~Picture() {
   if(frame){auto f=static_cast<AVFrame*>(frame);library->impl->av_frame_free(&f);}
 }
@@ -595,8 +602,8 @@ struct Codec::Impl {
         {
           std::lock_guard decoder_lock(decoder_mutex);
           if(generation==epoch) {
-            auto size=size_of?size_of():std::pair{0,0};
-            status=decoder.convert(*render.picture,&converted.video,size.first,size.second);
+            auto target=size_of?size_of():Target{};
+            status=decoder.convert(*render.picture,&converted.video,target.width,target.height,false,target.shared_image);
           }
         }
         render.picture.reset();
@@ -646,12 +653,13 @@ struct Codec::Impl {
             track.config.insert(track.config.end(),packet.sample.bytes.begin(),packet.sample.bytes.end());
             config_packet=true;
           } else config_packet=false;
-          auto config=track;cv.notify_all();lock.unlock();
+          auto config=track;const bool surface=bool(sink);auto consumer=extent;cv.notify_all();lock.unlock();
+          const bool shared=surface && consumer && consumer().shared_image;
           int result=0;
           {
             std::lock_guard decoder_lock(decoder_mutex);
             if(generation==epoch) {
-              if(packet.flags&2)result=decoder.configure(config);
+              if(packet.flags&2)result=decoder.configure(config,surface,shared);
               else if(!packet.sample.bytes.empty())result=decoder.send(&packet.sample);
             }
           }
@@ -690,7 +698,7 @@ int Codec::configure(const Track& track,Sink sink,Extent extent) {
   if(s.started || s.closing)return bad_state;
   s.configured=false;s.clear();s.track=track;s.sink=std::move(sink);s.extent=std::move(extent);
   std::lock_guard decoder_lock(s.decoder_mutex);
-  auto result=s.decoder.configure(track);s.configured=result==0;
+  auto result=s.decoder.configure(track,bool(s.sink),s.sink && s.extent && s.extent().shared_image);s.configured=result==0;
   if(!result && video_mime(track.mime))av::emit("codec_video_configure",std::format("\"codec_id\":{},\"surface\":{},\"width\":{},\"height\":{}",s.id,bool(s.sink),track.width,track.height));
   return result;
 }
@@ -793,7 +801,7 @@ struct Player::Impl {
   std::unique_ptr<Extractor> video_extractor;
   std::unique_ptr<Decoder> video_decoder;
   Codec::Sink video_sink;
-  std::function<std::pair<int,int>()> video_extent;
+  Codec::Extent video_extent;
   VideoFrame primed_video;
   bool video_primed=false;
   std::thread video_worker;
@@ -819,7 +827,7 @@ struct Player::Impl {
     auto epoch=video_epoch.load();
     while(!cancelled) {
       std::shared_ptr<audio::Stream> output;Codec::Sink sink;
-      std::function<std::pair<int,int>()> extent;
+      Codec::Extent extent;
       std::int64_t clock=0;bool loop=false;
       {
         std::lock_guard lock(mutex);
@@ -860,8 +868,8 @@ struct Player::Impl {
       // finish within the presentation tolerance. Decode still consumes all
       // reference pictures; audio remains the presentation clock.
       auto floor=std::max(video_floor,clock+video_decoder->video_conversion_us()-50000);
-      auto size=extent?extent():std::pair{0,0};
-      auto result=video_decoder->receive(&frame,floor,size.first,size.second);
+      auto consumer=extent?extent():Codec::Target{};
+      auto result=video_decoder->receive(&frame,floor,consumer.width,consumer.height,false,consumer.shared_image);
       if(result==2) {
         av::emit("media_video_drop",std::format("\"source_id\":{},\"pts_us\":{},\"clock_us\":{},\"reason\":\"conversion_deadline\"",output->telemetry_id,frame.time_us,clock));
         continue;
@@ -997,7 +1005,7 @@ int Player::prepare() {
   if(video_index>=0) {
     auto video=s.extractor->tracks()[video_index];s.duration=std::max(s.duration,video.duration_us);
     s.video_extractor=std::make_unique<Extractor>();s.video_decoder=std::make_unique<Decoder>();
-    if(s.video_extractor->open(s.input) || s.video_extractor->select(video_index) || s.video_decoder->configure(video))return unsupported;
+    if(s.video_extractor->open(s.input) || s.video_extractor->select(video_index) || s.video_decoder->configure(video,true,s.video_extent && s.video_extent().shared_image))return unsupported;
     // Pre-roll before audio starts so first-frame decode latency cannot put
     // the picture behind the device-consumption clock. One frame is retained.
     bool draining=false;
@@ -1076,7 +1084,7 @@ int Player::seek(std::int64_t time) {
   if(active)stream->start();
   return 0;
 }
-void Player::surface(Codec::Sink sink,std::function<std::pair<int,int>()> extent) {
+void Player::surface(Codec::Sink sink,Codec::Extent extent) {
   std::lock_guard lock(impl->mutex);impl->video_sink=std::move(sink);impl->video_extent=std::move(extent);
 }
 void Player::loop(bool enabled) {

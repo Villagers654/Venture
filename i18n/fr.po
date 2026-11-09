@@ -239,3 +239,35 @@ msgstr "Lier quand même"
 
 msgid "Link"
 msgstr "Lier"
+
+#. Library filter chip that lists the games the player hid; {0} is how many.
+#: src/launcher/ui/views.cpp:706
+#, python-brace-format
+msgid "Show hidden  {0}"
+msgstr "Afficher les masqués  {0}"
+
+#. Library empty state when the player hid every game; "Show hidden" is the filter chip.
+#: src/launcher/ui/views.cpp:750
+msgid "All your games are hidden"
+msgstr "Tous vos jeux sont masqués"
+
+#. Library empty state when the player hid every game; "Show hidden" is the filter chip.
+#: src/launcher/ui/views.cpp:750
+msgid "Select Show hidden to see them."
+msgstr "Sélectionnez Afficher les masqués pour les voir."
+
+#. Status under a library entry the player hid, while hidden entries are shown.
+#: src/launcher/ui/views.cpp:874
+#: src/launcher/ui/views.cpp:1048
+msgid "Hidden"
+msgstr "Masqué"
+
+#: src/launcher/ui/views.cpp:879
+#: src/launcher/ui/views.cpp:1230
+msgid "Unhide"
+msgstr "Ne plus masquer"
+
+#: src/launcher/ui/views.cpp:879
+#: src/launcher/ui/views.cpp:1230
+msgid "Hide from library"
+msgstr "Masquer de la bibliothèque"

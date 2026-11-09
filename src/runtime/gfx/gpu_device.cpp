@@ -4,6 +4,7 @@
 #include "gfx/pipeline_trace.h"
 #include "gfx/gpu_device_internal.h"
 #include "gfx/queue_probe.h"
+#include "gfx/shared_image.h"
 #include "platform/gfx_library.h"
 #include "xr/host_xr.h"
 #include "xr/vulkan_extensions.h"
@@ -290,6 +291,11 @@ VkResult create_device(VkPhysicalDevice physical,
         }) && std::ranges::none_of(names, [](const char* n) {
           return std::strcmp(n, VK_EXT_PIPELINE_CREATION_FEEDBACK_EXTENSION_NAME) == 0;
         })) names.push_back(VK_EXT_PIPELINE_CREATION_FEEDBACK_EXTENSION_NAME);
+    // Imports decoded video pictures from the media decoder's device on this
+    // GPU (gfx/shared_image.h); enabling it changes nothing else.
+    if (std::ranges::any_of(extensions, [](const auto& e) { return std::strcmp(e.extensionName, shared_image_extension) == 0; }) &&
+        std::ranges::none_of(names, [](const char* n) { return std::strcmp(n, shared_image_extension) == 0; }))
+      names.push_back(shared_image_extension);
   }
   if (const char* swapchain = xr::mirror_device_extension();
       std::ranges::find(instance_enabled, "VK_KHR_surface") != instance_enabled.end() &&
@@ -470,6 +476,21 @@ void create_direct() {
   log::info("gfx", "Vulkan device: {}, queue {}:{}", properties.deviceName,
             gpu.queue_family, gpu.queue_index);
 }
+// Media decoders place their shared images on this physical device.
+void publish_host_gpu() {
+  if (gpu.api_version < VK_API_VERSION_1_1) return;
+  auto properties = vk<PFN_vkGetPhysicalDeviceProperties2>(gpu.instance, "vkGetPhysicalDeviceProperties2");
+  if (!properties) return;
+  VkPhysicalDeviceIDProperties id{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES};
+  VkPhysicalDeviceProperties2 query{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, &id};
+  properties(gpu.physical_device, &query);
+  HostGpu host;
+  std::memcpy(host.device_uuid.data(), id.deviceUUID, VK_UUID_SIZE);
+  std::memcpy(host.driver_uuid.data(), id.driverUUID, VK_UUID_SIZE);
+  set_host_gpu(host);
+  note_shared_image_device(gpu.device,
+                           std::ranges::find(device_enabled, shared_image_extension) != device_enabled.end());
+}
 }  // namespace
 GpuDevice& gpu_device_state() { return gpu; }
 bool shutdown_for_os_quit() {
@@ -508,6 +529,7 @@ GpuDevice& gpu_device() {
       throw std::runtime_error("Graphics device has no reported queue");
     register_queue_probe();
     xr::log_loaded_vulkan_layers();
+    publish_host_gpu();
   });
   return gpu;
 }

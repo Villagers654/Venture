@@ -1,4 +1,5 @@
 #include "vfs_net.h"
+#include "core/thread_lifetime.h"
 #include "abi32.h"
 #include "libc_a.h"
 #include "core/signals.h"
@@ -1012,9 +1013,9 @@ struct Hostent {
   GuestAddr addresses;
 };
 thread_local Hostent hostent;
-thread_local std::string host_name;
-thread_local std::vector<std::array<unsigned char, 16>> host_addresses;
-thread_local std::vector<GuestAddr> host_pointers;
+std::string& host_name() { return thread_lifetime::local<std::string, struct HostentName>(); }
+std::vector<std::array<unsigned char, 16>>& host_addresses() { return thread_lifetime::local<std::vector<std::array<unsigned char, 16>>, struct HostentAddresses>(); }
+std::vector<GuestAddr>& host_pointers() { return thread_lifetime::local<std::vector<GuestAddr>, struct HostentPointers>(); }
 thread_local GuestAddr no_aliases[1]{};
 thread_local int host_errno = 0;
 int* h_errno_fn() { return &host_errno; }
@@ -1044,17 +1045,17 @@ Hostent* gethostbyname_fn(const char* name) {
     host_errno = r == 2 ? 2 : 1;
     return nullptr;
   }
-  host_name = name;
-  host_addresses.clear();
+  host_name() = name;
+  host_addresses().clear();
   for (auto& e : entries) {
     std::array<unsigned char, 16> address{};
     std::memcpy(address.data(), e.address.bytes.data() + 4, 4);
-    host_addresses.push_back(address);
+    host_addresses().push_back(address);
   }
-  host_pointers.clear();
-  for (auto& a : host_addresses) host_pointers.push_back(h2g(a.data()));
-  host_pointers.push_back(0);
-  hostent = {h2g(host_name.c_str()), h2g(no_aliases), 2, 4, h2g(host_pointers.data())};
+  host_pointers().clear();
+  for (auto& a : host_addresses()) host_pointers().push_back(h2g(a.data()));
+  host_pointers().push_back(0);
+  hostent = {h2g(host_name().c_str()), h2g(no_aliases), 2, 4, h2g(host_pointers().data())};
   return &hostent;
 }
 Hostent* gethostbyaddr_fn(const void* address, std::uint32_t length, int family) {
@@ -1065,12 +1066,12 @@ Hostent* gethostbyaddr_fn(const void* address, std::uint32_t length, int family)
   std::memcpy(sa + (family == 2 ? 4 : 8), address, length);
   char name[1025];
   if (getnameinfo_fn(sa, family == 2 ? 16 : 28, name, sizeof(name), nullptr, 0, 4)) return nullptr;
-  host_name = name;
-  host_addresses.resize(1);
-  std::memcpy(host_addresses[0].data(), address, length);
-  host_pointers = {h2g(host_addresses[0].data()), 0};
-  hostent = {h2g(host_name.c_str()), h2g(no_aliases), family, static_cast<int>(length),
-             h2g(host_pointers.data())};
+  host_name() = name;
+  host_addresses().resize(1);
+  std::memcpy(host_addresses()[0].data(), address, length);
+  host_pointers() = {h2g(host_addresses()[0].data()), 0};
+  hostent = {h2g(host_name().c_str()), h2g(no_aliases), family, static_cast<int>(length),
+             h2g(host_pointers().data())};
   host_errno = 0;
   return &hostent;
 }
@@ -1170,7 +1171,7 @@ GuestAddr getservbyname_fn(const char* name, const char* protocol) {
   const auto header = low ? sizeof(Servent32) : sizeof(Servent64);
   auto bytes = header + (value.aliases.size() + 1) * width + value.name.size() + value.protocol.size() + 2;
   for (const auto& alias : value.aliases) bytes += alias.size() + 1;
-  thread_local GuestStorage storage;
+  auto& storage = thread_lifetime::local<GuestStorage, struct ServentStorage>();
   auto base = storage.resize(bytes);
   auto aliases = base + header;
   auto next = aliases + (value.aliases.size() + 1) * width;
@@ -1307,17 +1308,17 @@ int getaddrinfo32(const char* node, const char* service, const Addrinfo32* hints
 struct Hostent32 { std::uint32_t name, aliases; std::int32_t family, length; std::uint32_t addresses; };
 Hostent32* copy_hostent32(Hostent* h) {
   if (!h) return nullptr;
-  thread_local GuestStorage storage;
-  auto n = host_addresses.size(); auto p = storage.resize(sizeof(Hostent32) + 4 + (n + 1) * 4 + n * 16 + host_name.size() + 1);
+  auto& storage = thread_lifetime::local<GuestStorage, struct Hostent32Storage>();
+  auto n = host_addresses().size(); auto p = storage.resize(sizeof(Hostent32) + 4 + (n + 1) * 4 + n * 16 + host_name().size() + 1);
   auto* out = g2h<Hostent32>(p);
   auto aliases = std::uint32_t(p + sizeof(Hostent32)), pointers = aliases + 4;
   auto data = pointers + std::uint32_t((n + 1) * 4), name = data + std::uint32_t(n * 16);
   *out = {name, aliases, h->family, h->length, pointers}; *g2h<std::uint32_t>(aliases) = 0;
   for (std::size_t i = 0; i < n; ++i) {
     g2h<std::uint32_t>(pointers)[i] = data + std::uint32_t(i * 16);
-    std::memcpy(g2h(data + i * 16), host_addresses[i].data(), 16);
+    std::memcpy(g2h(data + i * 16), host_addresses()[i].data(), 16);
   }
-  g2h<std::uint32_t>(pointers)[n] = 0; std::memcpy(g2h(name), host_name.c_str(), host_name.size() + 1); return out;
+  g2h<std::uint32_t>(pointers)[n] = 0; std::memcpy(g2h(name), host_name().c_str(), host_name().size() + 1); return out;
 }
 Hostent32* gethostbyname32(const char* name) { return copy_hostent32(gethostbyname_fn(name)); }
 Hostent32* gethostbyaddr32(const void* address, std::uint32_t length, int family) { return copy_hostent32(gethostbyaddr_fn(address,length,family)); }
@@ -1360,6 +1361,61 @@ int pselect32(int n, std::uint32_t* rd, std::uint32_t* wr, std::uint32_t* ex,
   }
   return value;
 }
+// bionic sys/socket.h on ARM: msghdr is 28 bytes of 32-bit pointers, socklen_t
+// and size_t; iovec is two words; mmsghdr appends the 32-bit length.
+struct Iovec32 { std::uint32_t base, length; };
+struct Message32 { std::uint32_t name, namelen, iov, iovlen, control, controllen; std::int32_t flags; };
+struct MultiMessage32 { Message32 message; std::uint32_t length; };
+static_assert(sizeof(Message32) == 28 && sizeof(MultiMessage32) == 32);
+std::int32_t message_io32(int fd, Message32* m, int flags, bool write) {
+  if (!m) return failure(err::efault);
+  if (m->iovlen > 1024 || (m->iovlen && !m->iov)) return failure(err::einval);
+  std::vector<Iovec> iov(m->iovlen);
+  const auto* narrow = g2h<const Iovec32>(m->iov);
+  for (std::uint32_t i = 0; i < m->iovlen; ++i) iov[i] = {narrow[i].base, narrow[i].length};
+  Message wide{m->name, m->namelen, 0, h2g(iov.data()), m->iovlen, m->control, m->controllen, m->flags, 0};
+  const auto r = message_io(fd, &wide, flags, write);
+  if (!write && r >= 0) {
+    m->namelen = wide.namelen;
+    m->controllen = static_cast<std::uint32_t>(wide.controllen);
+    m->flags = wide.flags;
+  }
+  return static_cast<std::int32_t>(r);
+}
+std::int32_t sendmsg32(int fd, Message32* m, int flags) { return message_io32(fd, m, flags, true); }
+std::int32_t recvmsg32(int fd, Message32* m, int flags) { return message_io32(fd, m, flags, false); }
+int sendmmsg32(int fd, MultiMessage32* m, unsigned count, int flags) {
+  if (count > 1024) return failure(err::einval);
+  for (unsigned i = 0; i < count; ++i) {
+    auto r = sendmsg32(fd, &m[i].message, flags);
+    if (r < 0) return i ? static_cast<int>(i) : -1;
+    m[i].length = static_cast<std::uint32_t>(r);
+  }
+  return count;
+}
+int recvmmsg32(int fd, MultiMessage32* m, unsigned count, int flags, const abi32::Timespec* timeout) {
+  if (count > 1024) return failure(err::einval);
+  if (timeout) {
+    const Timespec wide{timeout->sec, timeout->nsec};
+    PollFd p{fd, poll_in, 0};
+    int r = ppoll_fn(&p, 1, &wide, nullptr);
+    if (r <= 0) return r;
+  }
+  for (unsigned i = 0; i < count; ++i) {
+    auto r = recvmsg32(fd, &m[i].message,
+                       (flags & ~0x10000) | ((i && ((flags & 0x10000) || timeout)) ? 0x40 : 0));
+    if (r < 0) return i ? static_cast<int>(i) : -1;
+    m[i].length = static_cast<std::uint32_t>(r);
+  }
+  return count;
+}
+// bionic arpa/inet.h: in_addr is one 32-bit word, passed by value in r0;
+// inet_ntoa's static buffer must be guest memory.
+std::uint32_t inet_ntoa32(std::uint32_t address) {
+  auto& storage = thread_lifetime::local<GuestStorage, struct InetNtoa32Storage>();
+  const auto p = storage.resize(16);
+  return inet_ntop_fn(2, &address, g2h<char>(p), 16) ? static_cast<std::uint32_t>(p) : 0;
+}
 int epoll_pwait32(int fd, EpollEvent* e, int n, int timeout, const std::uint32_t* set) {
   const std::uint64_t mask = set ? *set : 0;
   return epoll_pwait_fn(fd, e, n, timeout, set ? &mask : nullptr);
@@ -1385,6 +1441,9 @@ void register_net(HleLibrary& lib) {
     abi32::adapt<&gethostbyname32>("gethostbyname"); abi32::adapt<&gethostbyaddr32>("gethostbyaddr");
     abi32::adapt<&getservbyname_fn>("getservbyname");
     abi32::adapt<&gai_strerror32>("gai_strerror"); abi32::adapt<&select32>("select");
+    abi32::adapt<&sendmsg32>("sendmsg"); abi32::adapt<&recvmsg32>("recvmsg");
+    abi32::adapt<&sendmmsg32>("sendmmsg"); abi32::adapt<&recvmmsg32>("recvmmsg");
+    abi32::adapt<&inet_aton_fn>("inet_aton"); abi32::adapt<&inet_ntoa32>("inet_ntoa");
   }
 #define B(n, f) VENTURE_LIBC_BIND(lib, n, f)
   B("pipe", pipe_fn);

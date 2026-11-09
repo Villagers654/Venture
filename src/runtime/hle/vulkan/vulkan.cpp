@@ -1,4 +1,5 @@
 #include "common/environment.h"
+#include "core/thread_lifetime.h"
 #include "vulkan.h"
 
 #include <algorithm>
@@ -36,6 +37,7 @@
 #include "gfx/gpu_device.h"
 #include "gfx/pipeline_trace.h"
 #include "gfx/queue_sync.h"
+#include "gfx/shared_image.h"
 #include "internal.h"
 #include "timing.h"
 #include "external.h"
@@ -280,7 +282,7 @@ struct DispatchCache {
 // are filled at the outer boundary only; table ownership is retained across
 // invalidation, avoiding reclamation races and per-call shared_ptr operations.
 DispatchCache& dispatch_cache(Scope scope, GuestAddr handle) {
-  thread_local std::array<DispatchCache, 4> cache;
+  auto& cache = thread_lifetime::local<std::array<DispatchCache, 4>, struct DispatchCaches>();
   return cache[((handle >> 4) ^ (handle >> 16) ^ static_cast<unsigned>(scope)) % cache.size()];
 }
 bool cache_current(const DispatchCache& cache, Scope scope, GuestAddr handle) {
@@ -629,7 +631,7 @@ class Invocation {
     // Calls a deferred recording takes or flushes run at the outer boundary.
     if (fast_ && deferred::needs_slow_path<Name, F>(handle, args...)) return false;
     const auto phase = fast_ ? api_result_trace::Phase::vulkan_fast :
-        pending_.active && pending_.slot == Slot && pending_.handle == handle ?
+        pending_state().active && pending_state().slot == Slot && pending_state().handle == handle ?
         api_result_trace::Phase::vulkan_delivery : api_result_trace::Phase::vulkan_slow;
     return api_result_trace::observe<std::is_same_v<R, VkResult>>(name, phase, [&](auto& trace) {
       return invoke_observed<F, Name, Slot>(scope, handle, trace, args...);
@@ -647,7 +649,7 @@ class Invocation {
           if constexpr (std::is_same_v<R, VkResult>) {
             trace.finish(result);
             if (result != VK_SUCCESS) {
-              pending_ = {true, Slot, handle, result, true, {}};
+              pending_state() = {true, Slot, handle, result, true, {}};
               return false;
             }
           }
@@ -657,7 +659,7 @@ class Invocation {
         completed_ = true;
         return true;
       } catch (...) {
-        pending_ = {true, Slot, handle, VK_ERROR_INITIALIZATION_FAILED, false, std::current_exception()};
+        pending_state() = {true, Slot, handle, VK_ERROR_INITIALIZATION_FAILED, false, std::current_exception()};
         return false;
       }
     }
@@ -665,8 +667,8 @@ class Invocation {
     // A native failure has already completed the driver call in the SVC
     // callback. Report/deliver it at the outer boundary without replaying any
     // side effects or losing driver-written outputs.
-    if (pending_.active && pending_.slot == Slot && pending_.handle == handle) {
-      auto pending = std::exchange(pending_, {});
+    if (pending_state().active && pending_state().slot == Slot && pending_state().handle == handle) {
+      auto pending = std::exchange(pending_state(), {});
       if (pending.exception) {
         try { std::rethrow_exception(pending.exception); }
         catch (const std::bad_alloc&) { pending.result = VK_ERROR_OUT_OF_HOST_MEMORY; }
@@ -804,12 +806,11 @@ class Invocation {
     bool native = false;
     std::exception_ptr exception;
   };
-  static thread_local Pending pending_;
+  static Pending& pending_state() { return thread_lifetime::local<Pending, struct PendingInvocation>(); }
   ForwardingCounters* counters_{};
   std::size_t slot_{};
   bool completed_ = false;
 };
-thread_local Invocation::Pending Invocation::pending_;
 
 #include "vk_commands.inc"
 
@@ -1545,6 +1546,15 @@ VkResult create_device_impl(VkPhysicalDevice physical, const VkDeviceCreateInfo*
   });
   if (buffer_marker && unique_names.insert(VK_AMD_BUFFER_MARKER_EXTENSION_NAME).second)
     names.push_back(VK_AMD_BUFFER_MARKER_EXTENSION_NAME);
+  // XR Surface swapchains import decoded video pictures from the media
+  // decoder's device on this GPU (gfx/shared_image.h). Host-only; enabling it
+  // changes nothing else.
+  const bool shared_images = instance_version >= VK_API_VERSION_1_1 &&
+      std::ranges::any_of(host_extensions, [](const auto& e) {
+        return std::string_view(e.extensionName) == gfx::shared_image_extension;
+      });
+  if (shared_images && unique_names.insert(gfx::shared_image_extension).second)
+    names.push_back(gfx::shared_image_extension);
   copy.enabledExtensionCount = static_cast<std::uint32_t>(names.size());
   copy.ppEnabledExtensionNames = names.data();
   const bool trace = venture::environment::getenv("VENTURE_TRACE_VULKAN") != nullptr;
@@ -1581,6 +1591,7 @@ VkResult create_device_impl(VkPhysicalDevice physical, const VkDeviceCreateInfo*
       {
         std::lock_guard lock(state_lock);
         devices[*out].null_vertex_bindings = null_vertex_bindings;
+        gfx::note_shared_image_device(*out, shared_images);
       }
       install_queue_facades(*out, *info, shared_queues);
     } catch (...) {
@@ -1670,6 +1681,7 @@ void VKAPI_CALL destroy_device(VkDevice device, const VkAllocationCallbacks* all
   gfx::forget_device_queues(device);
   std::lock_guard lock(state_lock);
   devices.erase(device);
+  gfx::note_shared_image_device(device, false);
   device_registry_epoch.fetch_add(1, std::memory_order_release);
   set_storage_without_format(device, false);
   std::erase_if(pool_callbacks, [&](const auto& pool) {
@@ -2597,7 +2609,7 @@ struct RawProcCache {
 };
 PFN_vkVoidFunction raw_device_proc_uncached(VkDevice device, const char* name);
 PFN_vkVoidFunction raw_device_proc(VkDevice device, const char* name) {
-  thread_local std::array<RawProcCache, 32> cache;
+  auto& cache = thread_lifetime::local<std::array<RawProcCache, 32>, struct RawProcCaches>();
   const auto key = reinterpret_cast<std::uintptr_t>(name) ^ reinterpret_cast<std::uintptr_t>(device);
   auto& entry = cache[((key >> 3) ^ (key >> 11)) % cache.size()];
   const auto generation = layer_procedure_generation.load(std::memory_order_acquire);

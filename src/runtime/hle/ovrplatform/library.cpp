@@ -66,6 +66,12 @@ std::shared_ptr<HleLibrary> make_library(Session& session, std::span<const Expor
   // is the same C API; mapped, it fails to find the Quest platform driver.
   library->set_identity({"ovr_PlatformInitializeAndroid", "ovr_PopMessage",
                          "ovr_FreeMessage", "ovr_Message_GetType"});
+  // Each copy binds its own entry points (A32 copies keep the shared slot:
+  // its adapters dispatch by the slot's export table).
+  if (!a32)
+    library->set_copy_factory([&session](const HleLibrary& slot, const std::string& soname) {
+      return make_loader_copy(session, slot, soname);
+    });
   for (const auto& entry : exports())
     library->add_function(entry.name,
                           hle::make_thunk(library->soname(), entry.name,

@@ -15,6 +15,7 @@
 #include "core/hle_runtime.h"
 #include "core/thread_runtime.h"
 #include "core/tls.h"
+#include "core/thread_lifetime.h"
 #include "core/error.h"
 #include "core/lifecycle_grace.h"
 #include "core/address_space.h"
@@ -211,6 +212,60 @@ TEST_CASE("core thread creation, join, exit unwind and TLS surplus") {
   auto detached = create_guest_thread(quick, 0, options);
   REQUIRE(detached != nullptr);
   CHECK(detach_guest_thread(detached->pthread_self) < 0);
+}
+// An adopted host thread runs the game's thread-exit handlers from its adoption record's
+// thread_local destructor. A per-thread object an HLE call first creates after the adoption
+// must still be alive then: a plain thread_local constructed later is destroyed earlier.
+namespace {
+struct ExitProbe {
+  std::string text;
+  std::atomic<bool>* destroyed = nullptr;
+  ~ExitProbe() { if (destroyed) destroyed->store(true); }
+};
+ExitProbe& exit_probe() { return thread_lifetime::local<ExitProbe, struct AdoptedExitProbe>(); }
+std::atomic<bool> exit_probe_destroyed{false}, exit_probe_intact{false}, exit_handler_ran{false};
+}  // namespace
+TEST_CASE("per-thread objects first used after a thread's adoption outlive its guest thread-exit handlers") {
+  exit_probe_destroyed = exit_probe_intact = exit_handler_ran = false;
+  const auto previous = set_guest_thread_exit_handler(+[](GuestThread&) {
+    exit_handler_ran = true;
+    exit_probe_intact = !exit_probe_destroyed.load() && exit_probe().text == "intact";
+  });
+  std::thread([] {
+    GuestThread::adopt_current();
+    auto& probe = exit_probe();
+    probe.text = "intact";
+    probe.destroyed = &exit_probe_destroyed;
+  }).join();
+  set_guest_thread_exit_handler(previous);
+  CHECK(exit_handler_ran.load());
+  CHECK(exit_probe_intact.load());
+  // And it is destroyed with the thread.
+  CHECK(exit_probe_destroyed.load());
+}
+// A destructor that reaches its own object through local() (the Java thread state clears its
+// A32 half through thread_state()) sees that object, not a fresh one created and destroyed
+// without end at thread exit.
+namespace {
+std::atomic<int> self_probe_destroyed{0};
+struct SelfProbe;
+SelfProbe& self_probe();
+struct SelfProbe {
+  int value = 0;
+  ~SelfProbe() {
+    self_probe_destroyed.fetch_add(1);
+    self_probe().value = -1;
+  }
+};
+SelfProbe& self_probe() { return thread_lifetime::local<SelfProbe, struct SelfReachingProbe>(); }
+}  // namespace
+TEST_CASE("a per-thread object's destructor reaching its own object does not recreate it") {
+  self_probe_destroyed = 0;
+  std::thread([] {
+    thread_lifetime::prepare();
+    self_probe().value = 1;
+  }).join();
+  CHECK(self_probe_destroyed.load() == 1);
 }
 #ifdef __linux__
 #endif

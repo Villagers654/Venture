@@ -786,6 +786,11 @@ Settings Settings::load(const fs::path &data) {
     for (const auto &id : skip)
       if (id.is_string())
         s.steam_skip.insert(id.get<std::string>());
+  if (const auto &hidden = field(j, "hiddenGames"); hidden.is_array())
+    for (const auto &id : hidden)
+      if (id.is_string() && !id.get<std::string>().empty() && id.get<std::string>().size() <= 64)
+        s.hidden.insert(id.get<std::string>());
+  s.show_hidden = field(j, "showHiddenGames") == true;
   return s;
 }
 void Settings::save(const fs::path &data) const {
@@ -814,7 +819,9 @@ void Settings::save(const fs::path &data) const {
          {"steamAddNew", steam_add_new},
          {"installAsk", install_ask},
          {"lookupImportsOnline", lookup_imports_online},
-         {"steamSkip", steam_skip}};
+         {"steamSkip", steam_skip},
+         {"hiddenGames", hidden},
+         {"showHiddenGames", show_hidden}};
   {
     Json games = Json::object();
     for (const auto& [id, config] : game_controls) games[id] = Json::parse(controls::encode(config));

@@ -1,4 +1,5 @@
 #include "common/environment.h"
+#include "core/thread_lifetime.h"
 #include "gfx/xr_images.h"
 
 #include <mutex>
@@ -161,7 +162,7 @@ struct BridgeBatch {
   std::vector<VkCommandBuffer> commands;
   std::vector<std::function<void(bool)>> finish;
 };
-thread_local BridgeBatch batch;
+BridgeBatch& batch() { return thread_lifetime::local<BridgeBatch, struct BridgeBatchOwner>(); }
 void wait_fence(VkFence fence, bool interruptible = true) {
   auto wait = device_proc<PFN_vkWaitForFences>("vkWaitForFences");
   for (;;) {
@@ -632,12 +633,12 @@ bool XrImageBridge::release(std::uint32_t index, std::string* error, bool bottom
         angle_function<PFNGLFLUSHPROC>("glFlush")();
       }
     };
-    if (batch.active) {
-      batch.ownership_wait |= desc.source_texture != 0 && !impl_->gpu_ownership;
-      if (!batch.preferred) batch.preferred = &image.fence;
-      batch.images.push_back({&image.submitted_fence, &image.submitted, &image.failed});
-      batch.commands.push_back(image.command);
-      batch.finish.push_back(std::move(finish));
+    if (batch().active) {
+      batch().ownership_wait |= desc.source_texture != 0 && !impl_->gpu_ownership;
+      if (!batch().preferred) batch().preferred = &image.fence;
+      batch().images.push_back({&image.submitted_fence, &image.submitted, &image.failed});
+      batch().commands.push_back(image.command);
+      batch().finish.push_back(std::move(finish));
     } else {
       // A former stereo batch may still own this fence through another eye.
       if (image.fence.use_count() > 1) image.fence = make_fence();
@@ -672,21 +673,21 @@ bool XrImageBridge::release(std::uint32_t index, std::string* error, bool bottom
   }
 }
 bool XrImageBridge::begin_batch() {
-  if (batch.active) return false;
-  batch.active = true;
+  if (batch().active) return false;
+  batch().active = true;
   return true;
 }
 bool XrImageBridge::end_batch(std::string* error, std::int64_t* ownership_wait_ns) {
   if (ownership_wait_ns) *ownership_wait_ns = 0;
-  if (!batch.active) return true;
-  auto& current = batch;
+  if (!batch().active) return true;
+  auto& current = batch();
   struct Clear {
     ~Clear() {
-      batch.active = batch.ownership_wait = false;
-      batch.preferred = nullptr;
-      batch.commands.clear();
-      batch.images.clear();
-      batch.finish.clear();
+      batch().active = batch().ownership_wait = false;
+      batch().preferred = nullptr;
+      batch().commands.clear();
+      batch().images.clear();
+      batch().finish.clear();
     }
   } clear;
   bool submitted = false;

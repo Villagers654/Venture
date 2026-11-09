@@ -19,6 +19,7 @@
 #include <vector>
 
 #include "chain.h"
+#include "full_rate_image.h"
 #include "common/log.h"
 #include "core/alloc_failure.h"
 #include "gfx/gpu_device.h"
@@ -1641,6 +1642,28 @@ void VKAPI_CALL free_guest_memory(VkDevice d, VkDeviceMemory memory, const VkAll
 VkResult VKAPI_CALL create_view(VkDevice d, const VkImageViewCreateInfo* info,
                                 const VkAllocationCallbacks* alloc, VkImageView* out) {
   auto copy = *info;
+  if (!info->image) {
+    // VrApi answers the foveation query with success and no image (vrapi/vulkan_images.cpp);
+    // some engines create their R8G8 density view of that handle regardless (The Climb). A
+    // full-density image stands in, rendering at full rate. Any other view of a null image is
+    // invalid usage that would fault in the driver: refuse it.
+    const bool density = info->format == VK_FORMAT_R8G8_UNORM &&
+        (info->viewType == VK_IMAGE_VIEW_TYPE_2D || info->viewType == VK_IMAGE_VIEW_TYPE_2D_ARRAY);
+    const auto& range = info->subresourceRange;
+    const auto layers = range.layerCount == VK_REMAINING_ARRAY_LAYERS ? std::max(2u, range.baseArrayLayer + 1)
+                                                                       : range.baseArrayLayer + range.layerCount;
+    if (density) copy.image = null_view_density_image(d, layers);
+    if (!copy.image) {
+      log::error("vulkan", "vkCreateImageView on a null image (format {}, view type {}) refused",
+                 int(info->format), int(info->viewType));
+      return VK_ERROR_INITIALIZATION_FAILED;
+    }
+    static std::once_flag noted;
+    std::call_once(noted, [] {
+      log::info("vulkan", "A density view of a null image uses a full-density image (empty VrApi foveation answer)");
+    });
+    return vk<PFN_vkCreateImageView>(d, "vkCreateImageView")(d, &copy, alloc, out);
+  }
   if (auto img = image(info->image)) {
     // The chain is the call's translated copy. Usage and min-LOD apply to the
     // decoded view unchanged. Consume ASTC decode precision before forwarding

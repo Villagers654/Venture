@@ -33,6 +33,7 @@
 
 // Messages from bionic/libc/private/bionic_errdefs.h; numeric values are Linux asm-generic.
 #include <algorithm>
+#include "core/thread_lifetime.h"
 #include <cstring>
 #include <string>
 
@@ -314,14 +315,14 @@ const char* known_error(int e) {
 }  // namespace
 const char* error_string(int e) {
   if (auto s = known_error(e)) return s;
-  thread_local std::string unknown;
+  auto& unknown = thread_lifetime::local<std::string, struct UnknownErrorText>();
   unknown = "Unknown error " + std::to_string(e);
   return unknown.c_str();
 }
 namespace {
 const char* error_string32(int e) {
   if (auto s = known_error(e)) return low_string(s);
-  thread_local GuestStorage storage;
+  auto& storage = thread_lifetime::local<GuestStorage, struct ErrorString32Storage>();
   return storage.string(error_string(e));
 }
 int strerror_r_impl(int e, char* d, std::uint64_t n) {
@@ -385,14 +386,14 @@ const char* strsignal_impl(int n) {
                                       "Power failure",
                                       "Bad system call"};
   if (n > 0 && n <= 31) return names[n - 1];
-  thread_local std::string msg;
+  auto& msg = thread_lifetime::local<std::string, struct SignalText>();
   msg = n >= 41 && n <= 64 ? "Real-time signal " + std::to_string(n - 41)
                            : "Unknown signal " + std::to_string(n);
   return msg.c_str();
 }
 const char* strsignal32(int n) {
   if (n > 0 && n <= 31) return low_string(strsignal_impl(n));
-  thread_local GuestStorage storage;
+  auto& storage = thread_lifetime::local<GuestStorage, struct SignalText32Storage>();
   return storage.string(strsignal_impl(n));
 }
 }  // namespace
