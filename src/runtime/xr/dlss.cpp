@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <format>
 #include <map>
 #include <mutex>
 #include <string>
@@ -259,6 +260,7 @@ struct Upscaler::Impl {
   std::array<Image, 2> outputs;
   Image motion, depth;
   VkExtent2D output_extent{};
+  bool partial_reported = false;  // DLSS input: a view rect, logged on change
   bool inputs_cleared = false;
   bool reset = true;
   bool real_depth = false;
@@ -530,9 +532,42 @@ bool Upscaler::record(VkCommandBuffer command, std::uint32_t index, VkImage targ
   s.fn<PFN_vkGetPhysicalDeviceFormatProperties>("vkGetPhysicalDeviceFormatProperties")(
       s.binding.physicalDevice, target_format, &properties);
   if (!(properties.optimalTilingFeatures & VK_FORMAT_FEATURE_BLIT_DST_BIT)) return false;
-  // Each eye's whole image is upscaled to the host size.
-  const VkRect2D rendered{{0, 0}, {s.guest.width, s.guest.height}};
-  if (!s.prepare_output(command, extent)) {
+  // The area each eye rendered, in image rows: a game with dynamic resolution
+  // (Iron Man) draws into a rect smaller than its image. DLSS upscales that
+  // rect to its host size, which is what the layer shows and what Cheeky's
+  // gaze mapping compares with. Both eyes must share a size (one output size).
+  const VkRect2D whole{{0, 0}, {s.guest.width, s.guest.height}};
+  std::array<VkRect2D, 2> area{whole, whole};
+  bool partial = false;
+  for (std::uint32_t layer = 0; layer < s.layers && layer < 2; ++layer) {
+    if (layer >= views.size() || !views[layer].valid) continue;
+    const auto& r = views[layer].rect;
+    if (r.extent.width <= 0 || r.extent.height <= 0 || r.offset.x < 0 || r.offset.y < 0 ||
+        std::uint32_t(r.offset.x + r.extent.width) > s.guest.width ||
+        std::uint32_t(r.offset.y + r.extent.height) > s.guest.height)
+      continue;
+    area[layer] = {{r.offset.x, r.offset.y}, {std::uint32_t(r.extent.width), std::uint32_t(r.extent.height)}};
+    partial |= area[layer].extent.width != s.guest.width || area[layer].extent.height != s.guest.height;
+  }
+  if (partial && s.layers == 2 && (area[0].extent.width != area[1].extent.width ||
+                                   area[0].extent.height != area[1].extent.height)) {
+    partial = false;
+    area = {whole, whole};
+  }
+  const auto to_host_x = [&](std::int64_t v) { return std::int32_t((v * extent.width + s.guest.width / 2) / s.guest.width); };
+  const auto to_host_y = [&](std::int64_t v) { return std::int32_t((v * extent.height + s.guest.height / 2) / s.guest.height); };
+  const VkExtent2D output_extent =
+      partial ? VkExtent2D{std::uint32_t(to_host_x(area[0].extent.width)), std::uint32_t(to_host_y(area[0].extent.height))}
+              : extent;
+  if (partial != s.partial_reported) {
+    s.partial_reported = partial;
+    log::info("dlss", "DLSS input: {}", partial ? std::format("view rect {}x{} at ({},{}) / ({},{}) of {}x{}",
+                                                               area[0].extent.width, area[0].extent.height,
+                                                               area[0].offset.x, area[0].offset.y, area[1].offset.x,
+                                                               area[1].offset.y, s.guest.width, s.guest.height)
+                                                 : std::string("whole image"));
+  }
+  if (!s.prepare_output(command, output_extent)) {
     s.failed = true;
     return false;
   }
@@ -575,6 +610,7 @@ bool Upscaler::record(VkCommandBuffer command, std::uint32_t index, VkImage targ
     s.barrier(command, s.motion.image, before, VK_IMAGE_LAYOUT_GENERAL, s.layers);
     s.fn<PFN_vkCmdBindPipeline>("vkCmdBindPipeline")(command, VK_PIPELINE_BIND_POINT_COMPUTE, s.motion_pipeline);
     for (std::uint32_t layer = 0; layer < s.layers; ++layer) {
+      const auto& rendered = area[layer < 2 ? layer : 0];
       const auto parameters =
           motion_parameters(views[layer], s.previous[layer], real_depth ? s.inverse_near : 0.0f, rendered);
       s.fn<PFN_vkCmdBindDescriptorSets>("vkCmdBindDescriptorSets")(command, VK_PIPELINE_BIND_POINT_COMPUTE,
@@ -603,7 +639,8 @@ bool Upscaler::record(VkCommandBuffer command, std::uint32_t index, VkImage targ
   for (std::uint32_t layer = 0; layer < s.layers; ++layer) {
     VentureNgxDlssEvaluate e{};
     e.color = {source, s.source_views[index][layer], VkFormat(s.guest.format), s.guest.width, s.guest.height, layer};
-    e.output = {s.outputs[layer].image, s.outputs[layer].views[0], s.output_format, extent.width, extent.height, 0};
+    e.output = {s.outputs[layer].image, s.outputs[layer].views[0], s.output_format, output_extent.width,
+                output_extent.height, 0};
     e.depth = real_depth
                   ? VentureNgxImage{depth.images[layer], depth.views[layer], VK_FORMAT_R32_SFLOAT, s.guest.width,
                                     s.guest.height, 0}
@@ -611,13 +648,19 @@ bool Upscaler::record(VkCommandBuffer command, std::uint32_t index, VkImage targ
                                     s.guest.height, 0};
     e.motion = {s.motion.image, s.motion.views[layer], VK_FORMAT_R16G16_SFLOAT, s.guest.width, s.guest.height,
                 layer};
+    const auto& rendered = area[layer < 2 ? layer : 0];
     if (layer < views.size() && views[layer].valid) {
-      e.jitter_x = s.jitter_sign * views[layer].jitter_x;
-      e.jitter_y = s.jitter_sign * views[layer].jitter_y;
+      // jitter_views offsets in recommended-size pixels; the view spans its rect.
+      const float sx = partial && render_width ? float(rendered.extent.width) / float(render_width) : 1.0f;
+      const float sy = partial && render_height ? float(rendered.extent.height) / float(render_height) : 1.0f;
+      e.jitter_x = s.jitter_sign * views[layer].jitter_x * sx;
+      e.jitter_y = s.jitter_sign * views[layer].jitter_y * sy;
     }
     e.motion_scale_x = e.motion_scale_y = 1.0f;
     e.render_width = rendered.extent.width;
     e.render_height = rendered.extent.height;
+    e.subrect_x = std::uint32_t(rendered.offset.x);
+    e.subrect_y = std::uint32_t(rendered.offset.y);
     e.reset = s.reset ? 1 : 0;
     const auto result = b->evaluate(command, s.features[layer], &e);
     if (!succeeded(result)) {
@@ -639,10 +682,16 @@ bool Upscaler::record(VkCommandBuffer command, std::uint32_t index, VkImage targ
     VkImageBlit blit{};
     blit.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
     blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, side_by_side ? 0 : layer, 1};
-    const int x = side_by_side ? int(layer * extent.width) : 0;
-    blit.srcOffsets[1] = {int(extent.width), int(extent.height), 1};
-    blit.dstOffsets[0] = {x, 0, 0};
-    blit.dstOffsets[1] = {x + int(extent.width), int(extent.height), 1};
+    // The upscaled view rect lands where the presented rect maps in the host image.
+    const auto& rendered = area[layer < 2 ? layer : 0];
+    const int x = (side_by_side ? int(layer * extent.width) : 0) + (partial ? to_host_x(rendered.offset.x) : 0);
+    // A flipped copy puts the rect's rows top first in the host image.
+    const int y = !partial ? 0
+                  : flip_rows ? to_host_y(std::int64_t(s.guest.height) - rendered.offset.y - rendered.extent.height)
+                              : to_host_y(rendered.offset.y);
+    blit.srcOffsets[1] = {int(output_extent.width), int(output_extent.height), 1};
+    blit.dstOffsets[0] = {x, y, 0};
+    blit.dstOffsets[1] = {x + int(output_extent.width), y + int(output_extent.height), 1};
     if (flip_rows) std::swap(blit.srcOffsets[0].y, blit.srcOffsets[1].y);
     s.fn<PFN_vkCmdBlitImage>("vkCmdBlitImage")(command, s.outputs[layer].image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                                                target, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit,

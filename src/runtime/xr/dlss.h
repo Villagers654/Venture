@@ -24,6 +24,9 @@ struct ViewSample {
   XrFovf fov{};
   float jitter_x = 0, jitter_y = 0;
   bool valid = false;
+  // The view's subimage rect in the guest image (OpenXR rows, top first);
+  // empty for the whole image.
+  XrRect2Di rect{};
 };
 // The render size offered to the guest (scaled recommendation).
 void note_render_size(std::uint32_t width, std::uint32_t height);

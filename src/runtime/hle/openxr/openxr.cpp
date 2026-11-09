@@ -221,7 +221,7 @@ class PresentationLayers {
       // A field of view jittered for DLSS goes back to the host as located.
       for (std::uint32_t i = 0; i < count; ++i) {
         if (views[i].type != XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW) continue;
-        venture::xr::dlss::ViewSample sample{views[i].pose, views[i].fov, 0, 0, true};
+        venture::xr::dlss::ViewSample sample{views[i].pose, views[i].fov, 0, 0, true, views[i].subImage.imageRect};
         const bool jittered = venture::xr::dlss::unjitter(sample.fov, sample.jitter_x, sample.jitter_y);
         if (!host_) {
           if (views[i].subImage.imageArrayIndex < 2)
