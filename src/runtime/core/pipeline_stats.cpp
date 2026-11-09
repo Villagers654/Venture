@@ -1,4 +1,5 @@
 #include "core/pipeline_stats.h"
+#include "core/thread_lifetime.h"
 #include "core/profile.h"
 #include "platform/profile.h"
 #include "common/environment.h"
@@ -72,7 +73,7 @@ std::shared_ptr<std::atomic<std::uint32_t>> pipeline_thread_activity(std::uint32
 }
 std::uint32_t pipeline_exchange_activity(std::uint32_t value) noexcept {
   if (!enabled) return host;
-  thread_local std::shared_ptr<std::atomic<std::uint32_t>> activity;
+  auto& activity = thread_lifetime::local<std::shared_ptr<std::atomic<std::uint32_t>>, struct PipelineActivity>();
   try {
     if (!activity) {
       if (value != pipeline_create) return host;

@@ -11,7 +11,7 @@ add_custom_command(OUTPUT ${generated}/gl_dispatch.cpp ${generated}/egl_dispatch
     ${venture_gl_registry_SOURCE_DIR}/xml/gl.xml ${venture_egl_registry_SOURCE_DIR}/api/egl.xml
   VERBATIM)
 add_library(venture_gfx STATIC
-  angle.cpp blob_cache.cpp gpu_device.cpp pipeline_trace.cpp queue_probe.cpp queue_sync.cpp dispatch.cpp texture_decode.cpp xr_images.cpp a32_handles.cpp
+  angle.cpp blob_cache.cpp gpu_device.cpp pipeline_trace.cpp spirv_precision.cpp queue_probe.cpp queue_sync.cpp dispatch.cpp texture_decode.cpp xr_images.cpp shared_texture.cpp a32_handles.cpp
   ../hle/egl/egl.cpp ../hle/gles/gles.cpp ../hle/gles/gles_a32.cpp ../hle/gles/buffers.cpp ../hle/gles/textures.cpp
   ${generated}/gl_dispatch.cpp ${generated}/egl_dispatch.inc)
 if(WIN32)

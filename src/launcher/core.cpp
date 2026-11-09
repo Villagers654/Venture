@@ -197,8 +197,8 @@ void Core::uninstall(const library::Install &install) {
       log::warn("library", "Could not uninstall {}: {}", paths::utf8(version.directory), e.what());
       if (failure.empty()) failure = e.what();
     }
-  // A pinned version's Steam choice goes with it.
-  if (install.plan.pinned && settings_.steam_skip.erase(install.id()))
+  // A pinned version's Steam and library choices go with it.
+  if (install.plan.pinned && (settings_.steam_skip.erase(install.id()) | settings_.hidden.erase(install.id())))
     settings_.save(data_);
   rescan();
   if (!failure.empty()) throw std::runtime_error(failure);
@@ -1354,6 +1354,23 @@ void Core::set_in_steam(std::string_view app_id, bool in) {
   else settings_.steam_skip.insert(id);
   settings_.save(data_);
   sync_steam();
+}
+void Core::set_hidden(std::string_view app_id, bool hidden) {
+  const std::string id(app_id);
+  if (hidden == settings_.hidden.contains(id)) return;
+  if (hidden) settings_.hidden.insert(id);
+  else settings_.hidden.erase(id);
+  // Unhiding the last hidden entry the library lists ends Show hidden: the
+  // library is back to its normal view, and a later hide starts hidden again.
+  if (!hidden && settings_.show_hidden &&
+      std::ranges::none_of(visible_games(), [&](const auto &g) { return settings_.hidden.contains(g.id); }))
+    settings_.show_hidden = false;
+  settings_.save(data_);
+}
+void Core::set_show_hidden(bool show) {
+  if (show == settings_.show_hidden) return;
+  settings_.show_hidden = show;
+  settings_.save(data_);
 }
 void Core::install_for_owner(const meta::Game &g, const fs::path &root) {
   const auto game_copy = g;

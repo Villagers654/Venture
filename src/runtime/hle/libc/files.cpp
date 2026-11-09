@@ -1,4 +1,5 @@
 #include "vfs.h"
+#include "core/thread_lifetime.h"
 #include "vfs_net.h"
 #include "common/environment.h"
 #include "common/log.h"
@@ -646,7 +647,7 @@ int alphasort32(const std::uint32_t* a, const std::uint32_t* b) { return std::st
 char* basename_fn(const char* path) {
   // NDK libgen.h / bionic basename.cpp: POSIX variant strips trailing
   // slashes without modifying input; its result may use thread-local storage.
-  thread_local GuestStorage storage;
+  auto& storage = thread_lifetime::local<GuestStorage, struct BasenameStorage>();
   std::string_view name = path ? path : "";
   while (!name.empty() && name.back() == '/') name.remove_suffix(1);
   if (name.empty()) return const_cast<char*>(storage.string(path && *path ? "/" : "."));
@@ -657,7 +658,7 @@ char* dirname_fn(const char* path) {
   // bionic/libc/bionic/libgen.cpp: never changes the argument, uses a
   // per-thread buffer, collapses a slash-only parent to "/", and rejects a
   // directory component of PATH_MAX bytes (including room for the terminator).
-  thread_local GuestStorage storage;
+  auto& storage = thread_lifetime::local<GuestStorage, struct DirnameStorage>();
   std::string_view parent = path ? path : "";
   while (!parent.empty() && parent.back() == '/') parent.remove_suffix(1);
   if (parent.empty()) parent = path && *path ? "/" : ".";

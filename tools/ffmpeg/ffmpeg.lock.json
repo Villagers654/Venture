@@ -34,6 +34,14 @@
     "--enable-demuxer=mov",
     "--enable-swscale",
     "--enable-decoder=h264,hevc,vp8,vp9",
-    "--enable-demuxer=matroska"
-  ]
+    "--enable-demuxer=matroska",
+    "--enable-vulkan",
+    "--enable-hwaccel=h264_vulkan,hevc_vulkan,vp9_vulkan",
+    "--extra-cflags=-I../vulkan-headers/include"
+  ],
+  "vulkan_headers": {
+    "url": "https://github.com/KhronosGroup/Vulkan-Headers/archive/c46850864f4661461b0f6cb9922c058ffea4915e.tar.gz",
+    "sha256": "539ff8eaa4abf22fddbd98225c68a0c5ddb940075a4048c8b7f5d04449070a4e",
+    "strip": "Vulkan-Headers-c46850864f4661461b0f6cb9922c058ffea4915e"
+  }
 }

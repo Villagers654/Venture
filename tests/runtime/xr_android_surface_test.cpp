@@ -1,6 +1,7 @@
 #include "../mock_openxr_runtime/control.h"
 #include "android/native_window.h"
 #include "gfx/gpu_device.h"
+#include "shared_image_test_support.h"
 #include "hle/openxr/state.h"
 #include "java/jvm.h"
 #include "java/natives/framework_natives.h"
@@ -10,6 +11,7 @@
 #include <atomic>
 #include <future>
 #include <doctest/doctest.h>
+
 
 TEST_CASE("XR Android Surface consumes real producer pixels and owns JNI lifetime") {
   using namespace venture;
@@ -41,10 +43,18 @@ TEST_CASE("XR Android Surface consumes real producer pixels and owns JNI lifetim
   VkDeviceCreateInfo device_info{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
   device_info.queueCreateInfoCount = 1;
   device_info.pQueueCreateInfos = &queue_info;
+  // Guest devices enable the shared-image import extension where available.
+  const bool shared_images = gfx::host_gpu() && test::device_extension(gpu, gfx::shared_image_extension);
+  const char* import_extension = gfx::shared_image_extension;
+  if (shared_images) {
+    device_info.enabledExtensionCount = 1;
+    device_info.ppEnabledExtensionNames = &import_extension;
+  }
   auto create_device = reinterpret_cast<PFN_vkCreateDevice>(gpu.get_instance_proc_addr(gpu.instance, "vkCreateDevice"));
   REQUIRE(create_device(gpu.physical_device, &device_info, nullptr, &producer_gpu.device) == VK_SUCCESS);
   auto get_queue = reinterpret_cast<PFN_vkGetDeviceQueue>(gpu.get_instance_proc_addr(gpu.instance, "vkGetDeviceQueue"));
   get_queue(producer_gpu.device, gpu.queue_family, 0, &producer_gpu.queue);
+  gfx::note_shared_image_device(producer_gpu.device, shared_images);
   XrGraphicsBindingVulkanKHR binding{XR_TYPE_GRAPHICS_BINDING_VULKAN_KHR};
   binding.instance = gpu.instance;
   binding.physicalDevice = gpu.physical_device;
@@ -171,6 +181,31 @@ TEST_CASE("XR Android Surface consumes real producer pixels and owns JNI lifetim
     reader.last_destination=hle::openxr::state().swapchains.at(chain).host_images.at(hle::openxr::state().swapchains.at(chain).host_index).image;
     const std::array<std::uint8_t,4> expected{std::uint8_t((3*width/4)*17),std::uint8_t((height/2)*31),77,255};
     CHECK(reader.read_pixel(3,1)==expected);
+  }
+  // A decoder's GPU picture: imported from another device on this GPU and
+  // copied into the swapchain image, with no pixels through system memory.
+  CHECK(android::window_shared_image_consumer(window.get()) == shared_images);
+  if (shared_images) {
+    test::ExportedImage exported(gpu, 4, 2, {{0.2f, 0.4f, 0.6f, 1.0f}});
+    auto picture = std::make_shared<gfx::SharedImage>(exported.shared);
+    REQUIRE(android::publish_window_image(window.get(), picture, 4, 2, 1000) == 0);
+    REQUIRE(xg::xrWaitFrame(session, nullptr, &frame) == XR_SUCCESS);
+    REQUIRE(xg::xrBeginFrame(session, nullptr) == XR_SUCCESS);
+    end.displayTime = frame.predictedDisplayTime;
+    REQUIRE(xg::xrEndFrame(session, &end) == XR_SUCCESS);
+    test::XrImageFixture reader(producer_gpu);
+    auto& published = hle::openxr::state().swapchains.at(chain);
+    reader.last_destination = published.host_images.at(published.host_index).image;
+    const std::array<std::uint8_t, 4> expected{51, 102, 153, 255};
+    CHECK(reader.read_pixel(3, 1) == expected);
+    CHECK(android::window_shared_image_consumer(window.get()));
+    // The window lets go of the picture with its next frame; the import
+    // cache must not keep the producer's reference.
+    std::vector<std::uint8_t> rgba(4 * 2 * 4, 0);
+    REQUIRE(android::publish_window_rgba(window.get(), rgba, 4, 2) == 0);
+    CHECK(picture.use_count() == 1);
+  } else {
+    MESSAGE("Shared-image import not available on this Vulkan device; GPU picture path not exercised");
   }
   REQUIRE(xg::xrDestroySwapchain(chain) == XR_SUCCESS);
   CHECK_FALSE(env->CallBooleanMethod(static_cast<jobject>(surface), valid));

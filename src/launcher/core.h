@@ -191,6 +191,11 @@ protected:
   // Adds a game to Steam or leaves it out (saved), then syncs.
   void set_in_steam(std::string_view app_id, bool in);
   bool in_steam(std::string_view app_id) const { return !settings_.steam_skip.contains(std::string(app_id)); }
+  // Hides a library entry or brings it back (saved). Only the library view
+  // changes: installs, launches and Steam shortcuts stay as they are.
+  void set_hidden(std::string_view app_id, bool hidden);
+  bool hidden(std::string_view app_id) const { return settings_.hidden.contains(std::string(app_id)); }
+  void set_show_hidden(bool show);
   struct LaunchRequest {
     std::string target, account;
     LaunchDetails details;

@@ -273,6 +273,26 @@ struct PortableBlockCache::Impl {
   std::atomic<std::uint64_t> unwritten{0}, dropped{0};
   // Verify mode: every stored block is translated again and compared.
   bool verify = false;
+  std::mutex verify_mutex;
+  std::unordered_map<std::uint64_t, std::vector<std::uint8_t>> verify_expected;  // found, not yet translated again
+  bool take_verify_expected(std::uint64_t descriptor, std::vector<std::uint8_t>& out) noexcept {
+    std::lock_guard lock(verify_mutex);
+    const auto it = verify_expected.find(descriptor);
+    if (it == verify_expected.end()) return false;
+    out = std::move(it->second);
+    verify_expected.erase(it);
+    return true;
+  }
+  void verify_block(std::uint64_t descriptor, const std::vector<std::uint8_t>& expected, const std::uint8_t* data, std::size_t size) {
+    const auto difference = Dynarmic::Backend::X64::ComparePortableBlocks(expected, {data, size});
+    verified.fetch_add(1, std::memory_order_relaxed);
+    if (difference.starts_with('~') || difference == "guest ranges differ") {
+      benign.fetch_add(1, std::memory_order_relaxed);
+      return;
+    }
+    if (!difference.empty() && mismatched.fetch_add(1, std::memory_order_relaxed) < 200)
+      log::warn("jit", "Portable block {:#x} differs: {}", descriptor, difference);
+  }
   std::uint32_t exclude = 0;
   std::uint64_t svc_mask = 0, svc_value = 0, mask = 0, value = 0;
   std::atomic<std::uint64_t> svc_installed{0};
@@ -650,22 +670,12 @@ PortableBlockCache* PortableBlockCache::get() {
   return instance;
 }
 
-namespace {
-thread_local std::uint64_t verify_descriptor = ~0ull;
-thread_local std::vector<std::uint8_t> verify_expected;
-}
 void PortableBlockCache::store(std::uint64_t descriptor, const std::uint8_t* data, std::size_t size) noexcept {
-  if (impl_->verify && descriptor == verify_descriptor) {
-    verify_descriptor = ~0ull;
-    const auto difference = Dynarmic::Backend::X64::ComparePortableBlocks(verify_expected, {data, size});
-    impl_->verified.fetch_add(1, std::memory_order_relaxed);
-    if (difference.starts_with('~') || difference == "guest ranges differ") {
-      impl_->benign.fetch_add(1, std::memory_order_relaxed);
+  if (impl_->verify) [[unlikely]] {
+    if (std::vector<std::uint8_t> expected; impl_->take_verify_expected(descriptor, expected)) {
+      try { impl_->verify_block(descriptor, expected, data, size); } catch (...) {}
       return;
     }
-    if (!difference.empty() && impl_->mismatched.fetch_add(1, std::memory_order_relaxed) < 200)
-      log::warn("jit", "Portable block {:#x} differs: {}", descriptor, difference);
-    return;
   }
   if (!impl_->writer || size > kRecordLimit) return;
   try {
@@ -694,8 +704,7 @@ void PortableBlockCache::store(std::uint64_t descriptor, const std::uint8_t* dat
   } catch (...) {}
 }
 
-std::pair<const std::uint8_t*, std::size_t> PortableBlockCache::find(std::uint64_t descriptor) noexcept {
-  thread_local std::vector<std::uint8_t> buffer;
+std::pair<const std::uint8_t*, std::size_t> PortableBlockCache::find(std::uint64_t descriptor, std::vector<std::uint8_t>& buffer) noexcept {
   try {
     const std::uint8_t* data = nullptr;
     std::size_t size = 0;
@@ -770,8 +779,9 @@ std::pair<const std::uint8_t*, std::size_t> PortableBlockCache::find(std::uint64
     }
     impl_->hits.fetch_add(1, std::memory_order_relaxed);
     if (impl_->verify) {
-      verify_descriptor = descriptor;
-      verify_expected.assign(data, data + size);
+      // The translation that follows on this thread stores the same descriptor: store() compares.
+      std::lock_guard lock(impl_->verify_mutex);
+      impl_->verify_expected.insert_or_assign(descriptor, std::vector<std::uint8_t>(data, data + size));
       return {nullptr, 0};
     }
     return {data, size};

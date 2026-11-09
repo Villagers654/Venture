@@ -476,6 +476,65 @@ TEST_CASE("replacement exports serve a renamed copy of a slot's API from the slo
   CHECK(linker.close(root) == 0);
 }
 
+TEST_CASE("replacement exports serve a renamed copy from the library its slot's factory builds") {
+  // Each copy of an SDK loader keeps state of its own over the shared API:
+  // the factory's library serves the copy under its own name, once.
+  const auto dir = review_directory("identity-copy");
+  GuestThread thread(97); thread.attach_to_current_host_thread();
+  auto& linker = Linker::get();
+  auto slot = std::make_shared<HleLibrary>("libcopy-sdk.so");
+  slot->add_function("copy_init", hle::make_thunk(slot->soname(), "copy_init",
+      [](hle::CallContext& c) { c.return_x(306); }));
+  slot->add_function("copy_state", hle::make_thunk(slot->soname(), "copy_state",
+      [](hle::CallContext& c) { c.return_x(1); }));
+  slot->set_identity({"copy_init", "copy_pop"});
+  unsigned built = 0;
+  std::string built_name;
+  slot->set_copy_factory([&](const HleLibrary& from, const std::string& soname) {
+    ++built; built_name = soname;
+    auto copy = std::make_shared<HleLibrary>(soname);
+    for (const auto& [name, thunk] : from.functions()) copy->add_function(name, thunk);
+    copy->add_function("copy_state", hle::make_thunk(soname, "copy_state",
+        [](hle::CallContext& c) { c.return_x(0); }));
+    return copy;
+  });
+  linker.register_hle_library(slot);
+  ReplacementFixture vendor; vendor.function("copy_init", 111); vendor.function("copy_pop", 112);
+  vendor.function("copy_state", 113); vendor.write(dir / "libvendor_copy.so");
+  ReplacementFixture caller; caller.needed("libvendor_copy.so"); caller.import("copy_init");
+  caller.write(dir / "libcopy-caller.so");
+  unsigned images = 0; linker.for_each_image([&](const Library&) { ++images; });
+  auto* root = linker.open((dir / "libcopy-caller.so").string(), kRtldNow, nullptr);
+  INFO(linker.take_error());
+  REQUIRE(root);
+  auto* served = linker.open("libvendor_copy.so", kRtldNow, nullptr);
+  REQUIRE(served);
+  CHECK(served != slot.get());
+  CHECK(served->soname() == "libvendor_copy.so");
+  CHECK(built == 1);
+  CHECK(built_name == "libvendor_copy.so");
+  auto* copy = dynamic_cast<HleLibrary*>(served);
+  REQUIRE(copy);
+  CHECK_FALSE(copy->mapped_image());
+  CHECK_FALSE(slot->mapped_image());
+  // Shared functions are the slot's own thunks; the copy's state is its own.
+  CHECK(copy->hle_symbol("copy_init") == slot->hle_symbol("copy_init"));
+  CHECK(copy->hle_symbol("copy_state"));
+  CHECK(copy->hle_symbol("copy_state") != slot->hle_symbol("copy_state"));
+  auto* image = root->mapped_image(); REQUIRE(image);
+  const auto bound = process_config().isa() == GuestIsa::a32
+      ? GuestAddr(*g2h<std::uint32_t>(image->load_bias + 0x900))
+      : *g2h<GuestAddr>(image->load_bias + 0x900);
+  CHECK(bound == slot->hle_symbol("copy_init"));
+  unsigned after = 0; linker.for_each_image([&](const Library&) { ++after; });
+  CHECK(after == images + 1);  // The caller only; the copy is never mapped.
+  CHECK(linker.open("libvendor_copy.so", kRtldNow | kRtldNoLoad, nullptr) == served);
+  CHECK(built == 1);
+  CHECK(linker.close(served) == 0);
+  CHECK(linker.close(served) == 0);
+  CHECK(linker.close(root) == 0);
+}
+
 TEST_CASE("linker never resolves a bare library name against the host working directory") {
   // Linux packages keep host libEGL.so/libGLESv2.so beside the binary, which
   // is the working directory of Steam shortcuts.

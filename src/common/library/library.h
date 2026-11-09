@@ -111,6 +111,13 @@ struct Settings {
   // out are listed by app id.
   bool steam_add_new = true;
   std::set<std::string> steam_skip;
+  // Library entries the player hid (by library id): a view filter only. A
+  // hidden game stays installed, launchable and in Steam; the library lists it
+  // again while show_hidden is on (the library's "Show hidden" toggle).
+  std::set<std::string> hidden;
+  bool show_hidden = false;
+  // Whether the library lists `id`: not hidden, or hidden ones are shown.
+  bool listed(std::string_view id) const { return show_hidden || !hidden.contains(std::string(id)); }
   // Starting a new game's install asks where it goes and whether it goes to
   // Steam (a dialog in the GUI); off installs to `games` with the defaults.
   bool install_ask = true;

@@ -882,12 +882,14 @@ struct LogCapture {
     return {std::istreambuf_iterator<char>(input), {}};
   }
 };
-// A guest address with nothing mapped (SEGV_MAPERR).
+// A guest address with nothing mapped (SEGV_MAPERR): the middle of a freed
+// 64-page hole, so a later small allocation (a thunk or stub page opened by
+// the call itself) reuses the hole's start, not the faulting page.
 GuestAddr unmapped_address() {
-  auto page = AddressSpace::get().allocate(kGuestPageSize, kProtRead | kProtWrite, "[unmapped]");
+  auto page = AddressSpace::get().allocate(64 * kGuestPageSize, kProtRead | kProtWrite, "[unmapped]");
   REQUIRE(page);
   AddressSpace::get().free(page);
-  return page + 0x18;
+  return page + 32 * kGuestPageSize + 0x18;
 }
 }
 TEST_CASE("bionic debuggerd handlers are installed before guest code runs") {
@@ -1168,8 +1170,8 @@ TEST_CASE("debuggerd reports the fault for a one-shot SA_SIGINFO crash reporter"
   signals::Action action{hle::make_thunk("test", "one-shot reporter", crash_reporter), 0, 0x80000000 | 4};
   REQUIRE(signals::set_action(signals::kSigSegv, &action, &reporter.chained) == 0);
   REQUIRE(reporter.chained.handler == signals::debuggerd_handler());
-  const auto fault = unmapped_address();
   const auto load = hle::code_stub(null_load, "one-shot fault");
+  const auto fault = unmapped_address();
   LogCapture capture;
   CHECK(exit_status(thread, load, fault) == 128 + signals::kSigSegv);
   CHECK(reporter.calls == 1);
@@ -1187,8 +1189,8 @@ TEST_CASE("debuggerd reports the fault for a one-shot SA_SIGINFO crash reporter"
 TEST_CASE("a fault delivered straight to debuggerd keeps the sentinel's summary line" * doctest::skip()) {
   register_all_hle_libraries();
   GuestThread thread(91); thread.attach_to_current_host_thread();
-  const auto fault = unmapped_address();
   const auto load = hle::code_stub(null_load, "unhandled fault");
+  const auto fault = unmapped_address();
   LogCapture capture;
 #ifdef _WIN32
   _putenv_s("VENTURE_FAULT_MEMORY", "pc:0x10,x0+0x10:0x10");

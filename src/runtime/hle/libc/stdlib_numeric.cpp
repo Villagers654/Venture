@@ -3,6 +3,9 @@
 #include <charconv>
 #include <cmath>
 #include <limits>
+#include <span>
+#include <type_traits>
+#include <utility>
 #include <string>
 #include <vector>
 
@@ -16,9 +19,14 @@ int digit(char c) {
   if (c >= 'A' && c <= 'Z') return c - 'A' + 10;
   return 99;
 }
-template <bool Signed>
-auto integer(const char* text, char** end, int base)
-    -> std::conditional_t<Signed, std::int64_t, std::uint64_t> {
+// bionic strtol.cpp (OpenBSD) for the guest's T: every digit is consumed;
+// a signed overflow gives T's minimum or maximum by sign, an unsigned one
+// T's maximum, both with ERANGE; an unsigned negative value is negated in T.
+// ARM's long is 32-bit, so strtol/strtoul saturate there at 32 bits.
+template <class T>
+T parse_integer(const char* text, char** end, int base) {
+  constexpr bool Signed = std::is_signed_v<T>;
+  using U = std::make_unsigned_t<T>;
   if (end) *end = const_cast<char*>(text);
   if (base && (base < 2 || base > 36)) {
     set_error(err::kEINVAL);
@@ -37,7 +45,8 @@ auto integer(const char* text, char** end, int base)
   }
   if (!base) base = *p == '0' ? 8 : 10;
   auto start = p;
-  std::uint64_t value = 0, limit = Signed ? (neg ? 1ull << 63 : INT64_MAX) : UINT64_MAX;
+  constexpr std::uint64_t maximum = std::numeric_limits<T>::max();
+  std::uint64_t value = 0, limit = Signed && neg ? maximum + 1 : maximum;
   bool overflow = false;
   for (int d; (d = digit(*p)) < base; ++p) {
     if (value > (limit - static_cast<unsigned>(d)) / static_cast<unsigned>(base))
@@ -49,10 +58,13 @@ auto integer(const char* text, char** end, int base)
   if (end) *end = const_cast<char*>(p);
   if (overflow) {
     set_error(err::kERANGE);
-    return static_cast<std::conditional_t<Signed, std::int64_t, std::uint64_t>>(Signed && neg ? 1ull << 63
-                                                                                              : limit);
+    return Signed && neg ? std::numeric_limits<T>::min() : std::numeric_limits<T>::max();
   }
-  return static_cast<std::conditional_t<Signed, std::int64_t, std::uint64_t>>(neg ? 0 - value : value);
+  return static_cast<T>(neg ? static_cast<U>(0 - static_cast<U>(value)) : static_cast<U>(value));
+}
+template <bool Signed>
+auto integer(const char* text, char** end, int base) -> std::conditional_t<Signed, std::int64_t, std::uint64_t> {
+  return parse_integer<std::conditional_t<Signed, std::int64_t, std::uint64_t>>(text, end, base);
 }
 bool starts(const char* p, const char* literal) {
   while (*literal) {
@@ -345,16 +357,37 @@ template <class T>
 T abs_impl(T x) {
   return x < 0 ? -x : x;
 }
+// Truncating division as ARM's SDIV and bionic compute it: the one quotient
+// that overflows (minimum / -1) wraps instead of trapping on the host.
+template <class T>
+std::pair<T, T> divide(T a, T b, const char* name) {
+  if (!b) fatal(std::string(name) + ": zero divisor");
+  if (b == -1) return {static_cast<T>(0 - static_cast<std::make_unsigned_t<T>>(a)), 0};
+  return {a / b, a % b};
+}
 void div_impl(CallContext& c) {
-  auto a = static_cast<std::int32_t>(c.x(0)), b = static_cast<std::int32_t>(c.x(1));
-  if (!b) fatal("div: zero divisor");
-  c.return_x(static_cast<std::uint32_t>(a / b) | (std::uint64_t(static_cast<std::uint32_t>(a % b)) << 32));
+  auto [q, r] = divide(static_cast<std::int32_t>(c.x(0)), static_cast<std::int32_t>(c.x(1)), "div");
+  c.return_x(static_cast<std::uint32_t>(q) | (std::uint64_t(static_cast<std::uint32_t>(r)) << 32));
 }
 void ldiv_impl(CallContext& c) {
-  auto a = static_cast<std::int64_t>(c.x(0)), b = static_cast<std::int64_t>(c.x(1));
-  if (!b) fatal("ldiv: zero divisor");
-  c.return_x(a / b);
-  c.return_x1(a % b);
+  auto [q, r] = divide(static_cast<std::int64_t>(c.x(0)), static_cast<std::int64_t>(c.x(1)), "ldiv");
+  c.return_x(q);
+  c.return_x1(r);
+}
+// AAPCS32 returns div_t/ldiv_t (8 bytes) and lldiv_t/imaxdiv_t (16 bytes)
+// through memory at r0; the operands follow from r1 with doubleword alignment.
+template <class T>
+void div32(CallContext& c) {
+  try {
+    const auto& d = *c.info().a32;
+    a32::ArgCursor32 args(c.cpu(), c.registers32(), true);
+    const auto a = static_cast<T>(args.next(d.arguments[0])), b = static_cast<T>(args.next(d.arguments[1]));
+    const auto [quot, rem] = divide(a, b, "div");
+    const T out[2]{quot, rem};
+    a32::ResultWriter32(c.cpu(), c.registers32()).composite(std::as_bytes(std::span(out)));
+  } catch (const a32::AbiError& e) {
+    a32::fail(c, e.error);
+  }
 }
 void strtold_impl(CallContext& c) { c.cpu().set_v(0, parse_quad(g2h<char>(c.x(0)), g2h<char*>(c.x(1)))); }
 template <class F>
@@ -443,7 +476,49 @@ double quad_to_double(Vec128 q) {
   double r = std::ldexp(static_cast<double>(m), std::max(unbiased, -1022) - 52);
   return sign ? -r : r;
 }
+// A32 parsers in the guest's widths (long is 32-bit). The _l forms take a
+// locale_t bionic ignores; explicit adapters, as the host signatures differ.
+template <class T>
+T strto32(const char* s, char** end, int base) { return parse_integer<T>(s, end, base); }
+template <class T>
+T strto32_l(const char* s, char** end, int base, std::uint32_t) { return parse_integer<T>(s, end, base); }
+template <class T>
+T wcsto32(const std::uint32_t* s, std::uint32_t** end, int base) {
+  return wide_number(s, end, [&](auto a, auto b) { return parse_integer<T>(a, b, base); });
+}
+template <class T>
+T wcsto32_l(const std::uint32_t* s, std::uint32_t** end, int base, std::uint32_t) { return wcsto32<T>(s, end, base); }
+// bionic atoi/atol are (int)strtol(s, NULL, 10) and strtol(s, NULL, 10).
+std::int32_t atol32(const char* s) { return parse_integer<std::int32_t>(s, nullptr, 10); }
+template <auto F>
+void adapt_numeric(const char* name) {
+  a32::register_adapter("libc.so", name, [](CallContext& c) { a32::invoke(F, c); });
+}
 void register_numeric(HleLibrary& lib) {
+  if (process_config().isa() == GuestIsa::a32) {
+    adapt_numeric<&strto32<std::int32_t>>("strtol");
+    adapt_numeric<&strto32<std::uint32_t>>("strtoul");
+    adapt_numeric<&strto32_l<std::int32_t>>("strtol_l");
+    adapt_numeric<&strto32_l<std::uint32_t>>("strtoul_l");
+    for (auto n : {"strtoll_l", "strtoimax_l"}) a32::register_adapter("libc.so", n, [](CallContext& c) {
+      a32::invoke(&strto32_l<std::int64_t>, c);
+    });
+    for (auto n : {"strtoull_l", "strtoumax_l"}) a32::register_adapter("libc.so", n, [](CallContext& c) {
+      a32::invoke(&strto32_l<std::uint64_t>, c);
+    });
+    adapt_numeric<&wcsto32<std::int32_t>>("wcstol");
+    adapt_numeric<&wcsto32<std::uint32_t>>("wcstoul");
+    adapt_numeric<&wcsto32_l<std::int32_t>>("wcstol_l");
+    adapt_numeric<&wcsto32_l<std::uint32_t>>("wcstoul_l");
+    adapt_numeric<&wcsto32_l<std::int64_t>>("wcstoll_l");
+    adapt_numeric<&wcsto32_l<std::uint64_t>>("wcstoull_l");
+    adapt_numeric<&atol32>("atoi");
+    adapt_numeric<&atol32>("atol");
+    a32::register_adapter("libc.so", "div", &div32<std::int32_t>);
+    a32::register_adapter("libc.so", "ldiv", &div32<std::int32_t>);
+    a32::register_adapter("libc.so", "lldiv", &div32<std::int64_t>);
+    a32::register_adapter("libc.so", "imaxdiv", &div32<std::int64_t>);
+  }
   for (auto n : {"strtol", "strtoll", "strtoimax", "strtol_l", "strtoll_l", "strtoimax_l"})
     bind<&integer<true>>(lib, n);
   for (auto n : {"strtoul", "strtoull", "strtoumax", "strtoul_l", "strtoull_l", "strtoumax_l"})

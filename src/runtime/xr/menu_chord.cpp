@@ -185,9 +185,10 @@ XrResult suggest(XrInstance instance, const XrInteractionProfileSuggestedBinding
   const auto* known = controls::find_profile(profile);
   const auto resolved = resolved_controls(profile);
   Plan plan;
-  std::array<std::string, 2> inputs;
+  // Each source's host inputs: any of them presses it.
+  std::array<std::vector<std::string>, 2> inputs;
   // A synthesized menu, or the automatic one's stick clicks beside its menu button
-  // (bound as the game's own by touch_binding); VENTURE_MENU_CHORD=off keeps only the button.
+  // (bound as the game's own by touch_bindings); VENTURE_MENU_CHORD=off keeps only the button.
   const bool chord = resolved && known && !resolved->menu.sources.empty() &&
                      (resolved->menu.kind == controls::Menu::Kind::synthesized ||
                       (resolved->menu.automatic && menu_chord_enabled()));
@@ -196,20 +197,24 @@ XrResult suggest(XrInstance instance, const XrInteractionProfileSuggestedBinding
     plan.automatic = resolved->menu.automatic;
     plan.count = static_cast<unsigned>(std::min<std::size_t>(2, resolved->menu.sources.size()));
     plan.hold = resolved->menu.hold_ns;
-    for (unsigned i = 0; i < plan.count; ++i) inputs[i] = controls::bindable(resolved->menu.sources[i], *known, host_dpad());
+    for (unsigned i = 0; i < plan.count; ++i)
+      for (const auto& source : resolved->menu.sources[i])
+        if (auto path = controls::bindable(source, *known, host_dpad());
+            !path.empty() && std::ranges::find(inputs[i], path) == inputs[i].end())
+          inputs[i].push_back(std::move(path));
   } else if (resolved && !resolved->menu.automatic) {
     // The player's menu button (bound as the game's own) or no menu: no fallback.
     plan.automatic = false;
     plan.off = resolved->menu.kind == controls::Menu::Kind::off;
   } else if (menu_chord_enabled()) {
     for (int hand = 0; hand < 2; ++hand)
-      inputs[hand] = touch_binding(std::string(hands_root(hand)) + "/input/thumbstick/click", profile).value_or("");
+      inputs[hand] = touch_bindings(std::string(hands_root(hand)) + "/input/thumbstick/click", profile);
   }
-  for (unsigned i = 0; i < 2; ++i) {
-    XrPath path{};
-    if (!inputs[i].empty() && XR_SUCCEEDED(::xrStringToPath(instance, inputs[i].c_str(), &path)))
-      bindings.push_back({sources[i], path});
-  }
+  for (unsigned i = 0; i < 2; ++i)
+    for (const auto& input : inputs[i]) {
+      XrPath path{};
+      if (XR_SUCCEEDED(::xrStringToPath(instance, input.c_str(), &path))) bindings.push_back({sources[i], path});
+    }
   plans[info->interactionProfile] = plan;
   if (!conflict_warned && plan.automatic && menu_chord_enabled())
     for (std::uint32_t i = 0; i < info->countSuggestedBindings; ++i) {

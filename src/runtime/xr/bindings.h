@@ -6,11 +6,13 @@
 #include <string_view>
 #include <vector>
 namespace venture::xr {
-// The host path a game's Touch path reaches on host profile `profile`, under the
-// player's controls (VENTURE_CONTROLS, else the defaults in common/controls.h).
-// Empty result means the profile has no corresponding physical input. Never
-// steal runtime system/menu input or pretend advanced Touch sensors exist.
-std::optional<std::string> touch_binding(std::string_view path, std::string_view profile);
+// The host paths a game's Touch path reaches on host profile `profile`, under the
+// player's controls (VENTURE_CONTROLS, else the defaults in common/controls.h):
+// one per host input the player gave its Quest input, each suggested for the
+// game's action (OpenXR combines them). Empty means the profile has no
+// corresponding physical input. Never steal runtime system/menu input or
+// pretend advanced Touch sensors exist.
+std::vector<std::string> touch_bindings(std::string_view path, std::string_view profile);
 bool is_touch_profile(std::string_view profile);
 // The host profiles a Touch game's bindings are suggested for, Touch first;
 // those the host does not define (a missing extension) are left out.

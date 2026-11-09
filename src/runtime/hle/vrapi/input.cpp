@@ -87,13 +87,12 @@ XrResult initialize_input() {
         auto suffix = hand ? spec.right : spec.left;
         if (!suffix)
           continue;
-        auto mapped = touch_binding(
-            std::string(hand ? "/user/hand/right" : "/user/hand/left") + suffix, profile);
-        if (!mapped)
-          continue;
-        XrPath path{};
-        if (XR_SUCCEEDED(::xrStringToPath(instance, mapped->c_str(), &path)))
-          bindings.push_back({*spec.handle, path});
+        for (const auto &mapped : touch_bindings(
+                 std::string(hand ? "/user/hand/right" : "/user/hand/left") + suffix, profile)) {
+          XrPath path{};
+          if (XR_SUCCEEDED(::xrStringToPath(instance, mapped.c_str(), &path)))
+            bindings.push_back({*spec.handle, path});
+        }
       }
     XrInteractionProfileSuggestedBinding bi{XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING};
     ::xrStringToPath(instance, profile.c_str(), &bi.interactionProfile);

@@ -5,6 +5,8 @@
 #include <sstream>
 
 #include "common/log.h"
+#include "core/hle_runtime.h"
+#include "core/linker.h"
 #include "ovrplatform_support.h"
 
 #include "../async_wait.h"
@@ -270,6 +272,52 @@ TEST_CASE(
   CHECK(optest::invoke(session, "ovr_UnityInitWrapper", {h2g(app.c_str())}) ==
         1);
   CHECK(optest::invoke(session, "ovr_IsPlatformInitialized") == 1);
+  CHECK(arena.live == 0);
+}
+
+namespace {
+std::uint64_t call_export(const HleLibrary& library, std::string_view name,
+                          std::initializer_list<std::uint64_t> args = {}) {
+  const auto* info = hle::function_at(library.hle_symbol(name));
+  REQUIRE(info);
+  venture::test::FakeCpu cpu;
+  std::uint64_t stack[16]{};
+  cpu.use_stack(stack);
+  int i = 0;
+  for (auto value : args) cpu.xs[i++] = value;
+  hle::CallContext ctx(*reinterpret_cast<GuestThread*>(&cpu), cpu, *info);
+  info->handler(ctx);
+  return cpu.xs[0];
+}
+}  // namespace
+
+TEST_CASE("Platform loader copy reports itself uninitialized until its own initialize call") {
+  // Wizherd's Tomahawk SDK loads Meta's loader again as libovr_custom.so after
+  // the game's loader initialized the platform. That copy's
+  // ovr_IsPlatformInitialized is false until the copy binds its entry points
+  // in its first initialize call, which then succeeds on the shared platform.
+  optest::Arena arena;
+  auto provider = std::make_shared<optest::FakeProvider>();
+  Session session(optest::app(), provider, arena.memory());
+  auto slot = make_library(session);
+  auto copy = make_loader_copy(session, *slot, "libvendor_custom.so");
+  REQUIRE(copy);
+  CHECK(copy->soname() == "libvendor_custom.so");
+  CHECK(copy->hle_symbol("ovr_PopMessage") == slot->hle_symbol("ovr_PopMessage"));
+  CHECK(copy->hle_symbol("ovr_IsPlatformInitialized") !=
+        slot->hle_symbol("ovr_IsPlatformInitialized"));
+  const auto app = optest::app().app_id;
+  CHECK(call_export(*copy, "ovr_IsPlatformInitialized") == 0);
+  CHECK(call_export(*slot, "ovr_PlatformInitializeAndroid", {h2g(app.c_str()), 0, 0}) == 0);
+  CHECK(call_export(*slot, "ovr_IsPlatformInitialized") == 1);
+  CHECK(call_export(*copy, "ovr_IsPlatformInitialized") == 0);
+  CHECK(call_export(*copy, "ovr_PlatformInitializeAndroid", {h2g(app.c_str()), 0, 0}) == 0);
+  CHECK(call_export(*copy, "ovr_IsPlatformInitialized") == 1);
+  // A second copy keeps its own state; the Unity wrapper binds it as well.
+  auto second = make_loader_copy(session, *slot, "libother_custom.so");
+  CHECK(call_export(*second, "ovr_IsPlatformInitialized") == 0);
+  CHECK(call_export(*second, "ovr_UnityInitWrapper", {h2g(app.c_str())}) == 1);
+  CHECK(call_export(*second, "ovr_IsPlatformInitialized") == 1);
   CHECK(arena.live == 0);
 }
 

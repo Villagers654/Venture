@@ -1,4 +1,5 @@
 #include <algorithm>
+#include "core/thread_lifetime.h"
 #include <array>
 #include <condition_variable>
 #include <cstring>
@@ -440,7 +441,7 @@ jint unregister_natives(JNIEnv* env, jclass cls) {
 void bind_class(JNIEnv* env, jclass cls) {
   if (env->ExceptionCheck()) return;
   // Recursion is possible when Class.forName is called by a user classloader.
-  static thread_local std::set<std::string> binding;
+  auto& binding = thread_lifetime::local<std::set<std::string>, struct BindingClasses>();
   LocalFrame frame(env, 64);
   if (!frame.valid()) return;
   auto loader = env->CallObjectMethod(cls, class_loader);

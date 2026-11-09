@@ -296,8 +296,9 @@ inline constexpr Profile kProfiles[]{
 };
 
 // ---- The player's choices -------------------------------------------------
-// One controller's choices. An unset row keeps the default; "" leaves that
-// Quest input without a host input.
+// One controller's choices. An unset row keeps the default; an empty list leaves
+// that Quest input without a host input. A row may list several host inputs: any
+// of them presses the Quest input (Stick click on the stick and on a bumper).
 // The default hold for one held button, and for two buttons together: a pair
 // (both stick clicks by default) is deliberate enough to open the menu at once.
 inline constexpr int kHoldMs = 500, kChordHoldMs = 0;
@@ -312,8 +313,10 @@ struct MenuChoice {
   int hold_ms = kHoldMs;
   bool operator==(const MenuChoice&) const = default;
 };
+// A row's host inputs (component paths), in the player's order.
+using Inputs = std::vector<std::string>;
 struct Choice {
-  std::array<std::array<std::optional<std::string>, kQuestCount>, 2> rows{};
+  std::array<std::array<std::optional<Inputs>, kQuestCount>, 2> rows{};
   MenuChoice menu;
   bool operator==(const Choice&) const = default;
 };
@@ -333,28 +336,33 @@ struct Menu {
   enum class Kind { off, direct, synthesized } kind = Kind::off;
   // direct: the left-hand host input the game's menu action is bound to.
   std::string direct;
-  // One or two hand-qualified host inputs held for hold_ns (both together for
-  // two), merged into the game's menu: a synthesized menu's inputs, and with
-  // automatic also beside a direct one (both stick clicks).
-  std::vector<std::string> sources;
+  // One or two sources held for hold_ns (both together for two), merged into the
+  // game's menu: a synthesized menu's inputs, and with automatic also beside a
+  // direct one (both stick clicks). A source is pressed by any of its
+  // hand-qualified host inputs: automatic's are the Stick click rows, as many
+  // inputs as the player gave each; a chosen button is one.
+  std::vector<Inputs> sources;
   std::int64_t hold_ns = 0;
   bool automatic = false;  // the controller's default: its menu input (if any) and both stick clicks
 };
 struct Resolved {
-  std::array<std::array<std::string, kQuestCount>, 2> rows{};  // component path, or "" for none
+  // Component paths, none or several per row; duplicates never.
+  std::array<std::array<Inputs, kQuestCount>, 2> rows{};
   Menu menu;
 };
 // The choices in effect: the defaults with `choice` (may be null) applied.
-// Choices the controller cannot take (another hand's button, a reserved input,
-// a stick on a button) fall back to the default.
+// Inputs the controller cannot take (another hand's button, a reserved input,
+// a stick on a button) and repeats are dropped from a row; a row left with none
+// of the player's inputs falls back to the default.
 Resolved resolve(const Profile& profile, const Choice* choice);
-// The host path a game's Touch path reaches ("/user/hand/left/input/x/click" ->
-// "/user/hand/left/input/trackpad/dpad_down"), or none. Touch sensors follow their
-// button where the host has a sensor there. `dpad`: the host binds trackpad and
-// stick halves (XR_EXT_dpad_binding); without it the first half on a pad, in row
-// order, gets the whole pad's press and the others stay unbound.
-std::optional<std::string> host_binding(std::string_view guest_path, const Profile& profile,
-                                        const Resolved& resolved, bool dpad);
+// The host paths a game's Touch path reaches ("/user/hand/left/input/x/click" ->
+// "/user/hand/left/input/trackpad/dpad_down"), one per host input of its row, or
+// none. Touch sensors follow their button where the host has a sensor there.
+// `dpad`: the host binds trackpad and stick halves (XR_EXT_dpad_binding); without
+// it the first half on a pad, in row order (and within a row, in its order),
+// gets the whole pad's press and the others stay unbound.
+std::vector<std::string> host_bindings(std::string_view guest_path, const Profile& profile,
+                                       const Resolved& resolved, bool dpad);
 // A menu source or direct menu input as the host can bind it (the dpad fallback), or "".
 std::string bindable(std::string_view hand_qualified, const Profile& profile, bool dpad);
 // Two Quest inputs of one hand on one host input. A held menu shares on purpose
@@ -368,6 +376,8 @@ std::vector<Conflict> conflicts(const Resolved& resolved, MenuMode mode);
 
 // VENTURE_CONTROLS and settings.json: {"<profile>": {"left": {"primary": "/input/a/click", ...},
 // "right": {...}, "menu": {"mode": "hold", "first": "...", "second": "...", "holdMs": 1000}}}.
+// A row is a string ("" for none), or a list of strings when it has several
+// inputs ("stickClick": ["/input/thumbstick/click", "/input/shoulder/click"]).
 std::string encode(const Config& config);
 // Malformed text or entries are ignored, never fatal.
 Config decode(std::string_view text);

@@ -232,10 +232,14 @@ bool configure_angle(const std::filesystem::path& directory) {
   angle_directory = std::filesystem::absolute(directory);
   return true;
 }
+std::atomic<bool> display_ready{false};
 bool initialize_angle() {
   std::call_once(display_once, init_display);
-  return display != EGL_NO_DISPLAY;
+  if (display == EGL_NO_DISPLAY) return false;
+  display_ready.store(true, std::memory_order_release);
+  return true;
 }
+bool angle_initialized() { return display_ready.load(std::memory_order_acquire); }
 EGLDisplay angle_display() {
   return initialize_angle() ? display : EGL_NO_DISPLAY;
 }

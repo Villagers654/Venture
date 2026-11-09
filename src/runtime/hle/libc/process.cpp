@@ -1,4 +1,5 @@
 #include "platform/thread_priority.h"
+#include "core/thread_lifetime.h"
 #include "vfs.h"
 #include "abi32.h"
 #include "core/guest_storage.h"
@@ -156,6 +157,17 @@ int getrusage_fn(int who, void* p) {
   if (who != -1) {
     auto ns = host::cpu_time(who == 1);
     *static_cast<Timeval*>(p) = {ns / 1000000000, (ns / 1000) % 1000000};
+  }
+  return 0;
+}
+// bionic sys/resource.h on ARM: two 32-bit timevals and 14 longs, 72 bytes.
+int getrusage32(int who, abi32::Timeval* p) {
+  if (who != 0 && who != -1 && who != 1) return failure(err::einval);
+  if (!p) return failure(err::efault);
+  std::memset(p, 0, 72);
+  if (who != -1) {
+    auto ns = host::cpu_time(who == 1);
+    *p = {static_cast<std::int32_t>(ns / 1000000000), static_cast<std::int32_t>((ns / 1000) % 1000000)};
   }
   return 0;
 }
@@ -346,25 +358,39 @@ struct Group {
   std::uint32_t gid, pad;
   GuestAddr members;
 };
+unsigned group_id(const char* name) {
+  if (!name) return 0;
+  if (std::strcmp(name, "inet") == 0) return 3003;
+  if (std::strcmp(name, "sdcard_rw") == 0) return 1015;
+  if (std::strcmp(name, "sdcard_r") == 0) return 1028;
+  if (std::strcmp(name, "u0_a125") == 0) return 10125;
+  return 0;
+}
 Group* getgrnam_fn(const char* name) {
-  if (!name) return nullptr;
-  unsigned id;
-  if (std::strcmp(name, "inet") == 0)
-    id = 3003;
-  else if (std::strcmp(name, "sdcard_rw") == 0)
-    id = 1015;
-  else if (std::strcmp(name, "sdcard_r") == 0)
-    id = 1028;
-  else if (std::strcmp(name, "u0_a125") == 0)
-    id = 10125;
-  else
-    return nullptr;
-  thread_local std::string group_name;
+  const unsigned id = group_id(name);
+  if (!id) return nullptr;
+  auto& group_name = thread_lifetime::local<std::string, struct GroupName>();
   thread_local Group g;
   thread_local GuestAddr members[1]{};
   group_name = name;
   g = {h2g(group_name.c_str()), 0, id, 0, h2g(members)};
   return &g;
+}
+// bionic grp.h on ARM: char*, char*, gid_t, char**; 16 bytes, in guest memory
+// with its empty member list and name, per thread as bionic's group_state_t.
+struct Group32 { std::uint32_t name, password, gid, members; };
+Group32* getgrnam32(const char* name) {
+  const unsigned id = group_id(name);
+  if (!id) return nullptr;
+  auto& storage = thread_lifetime::local<GuestStorage, struct Group32Storage>();
+  const auto length = std::strlen(name);
+  const auto p = storage.resize(sizeof(Group32) + 4 + length + 1);
+  auto* g = g2h<Group32>(p);
+  const auto members = static_cast<std::uint32_t>(p + sizeof(Group32)), text = members + 4;
+  *g2h<std::uint32_t>(members) = 0;
+  std::memcpy(g2h<char>(text), name, length + 1);
+  *g = {text, 0, id, members};
+  return g;
 }
 struct Sysinfo {
   std::int64_t uptime;
@@ -435,7 +461,7 @@ int getpwnam_r32(const char* name, Passwd32* out, char* buffer, std::uint64_t si
   return getpwuid_r32(name && !std::strcmp(name, "u0_a125") ? 10125 : UINT32_MAX, out, buffer, size, resultp);
 }
 Passwd32* getpwuid32(unsigned id) {
-  thread_local GuestStorage storage;
+  auto& storage = thread_lifetime::local<GuestStorage, struct Passwd32Storage>();
   auto p = storage.resize(sizeof(Passwd32) + 8192); std::uint32_t out = 0;
   int r = getpwuid_r32(id, g2h<Passwd32>(p), g2h<char>(p + sizeof(Passwd32)), 8192, &out);
   if (r) { failure(r); return nullptr; } return g2h<Passwd32>(out);
@@ -447,6 +473,10 @@ void register_process(HleLibrary& lib) {
     abi32::adapt<&getrlimit32>("getrlimit"); abi32::adapt<&setrlimit32>("setrlimit"); abi32::adapt<&prlimit32>("prlimit");
     abi32::adapt<&getrlimit_fn>("getrlimit64"); abi32::adapt<&setrlimit_fn>("setrlimit64"); abi32::adapt<&prlimit_fn>("prlimit64");
     abi32::adapt<&getpwuid_r32>("getpwuid_r"); abi32::adapt<&getpwnam_r32>("getpwnam_r"); abi32::adapt<&getpwuid32>("getpwuid");
+    abi32::adapt<&getrusage32>("getrusage"); abi32::adapt<&getgrnam32>("getgrnam");
+    // Process images are unavailable on both ISAs: ENOSYS before any argv read.
+    for (auto name : {"execl", "execle", "execlp", "execv", "execve", "execvp", "execvpe"})
+      a32::register_adapter("libc.so", name, [](CallContext& c) { a32::invoke(&unsupported, c); });
   }
 #define B(n, f) VENTURE_LIBC_BIND(lib, n, f)
   B("getpid", pid);
@@ -500,6 +530,8 @@ void register_process(HleLibrary& lib) {
   B("wait", wait_fn);
   B("waitpid", waitpid_fn);
   B("execl", unsupported);
+  B("execle", unsupported);
+  B("execlp", unsupported);
   B("execv", unsupported);
   B("execvp", unsupported);
   B("execvpe", unsupported);

@@ -15,8 +15,10 @@ class PortableBlockCache {
   // Null when disabled (VENTURE_JIT_PTC=0; on by default) or without a cache directory.
   static PortableBlockCache* get();
   void store(std::uint64_t descriptor, const std::uint8_t* data, std::size_t size) noexcept;
-  // The bytes stay valid on the calling thread until its next find.
-  std::pair<const std::uint8_t*, std::size_t> find(std::uint64_t descriptor) noexcept;
+  // The bytes are decoded into the caller's `buffer` and stay valid until it changes. Callers own
+  // it: guest code also runs during host-thread exit (an adopted thread's TLS destructors), after
+  // the thread_local objects constructed later than its guest thread are already destroyed.
+  std::pair<const std::uint8_t*, std::size_t> find(std::uint64_t descriptor, std::vector<std::uint8_t>& buffer) noexcept;
   // Writes every stored block (tests, exit).
   void flush() noexcept;
   // Background translation (cpu/pretranslate.cpp): whether stores are kept,

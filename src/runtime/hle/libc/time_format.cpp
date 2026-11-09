@@ -1,4 +1,5 @@
 #include "hle/libc/time_format.h"
+#include "core/thread_lifetime.h"
 #include "abi32.h"
 
 #include <utf8proc.h>
@@ -712,7 +713,7 @@ template<bool Local> Tm32* time_r32(const std::int32_t* time, Tm32* out) {
   *out = narrow(t); return out;
 }
 template<bool Local> Tm32* time32(const std::int32_t* time) {
-  thread_local GuestStorage storage;
+  auto& storage = thread_lifetime::local<GuestStorage, struct Tm32Storage>();
   return time_r32<Local>(time, g2h<Tm32>(storage.resize(sizeof(Tm32))));
 }
 template<bool Local> std::int32_t mktime32(Tm32* out) {
@@ -730,9 +731,9 @@ char* strptime32(const char* input, const char* fmt, Tm32* t) {
   auto wide = widen(*t); auto* result = strptime_impl(input, fmt, &wide); if (result) *t = narrow(wide); return result;
 }
 char* asctime_r32(const Tm32* t, char* out) { auto wide = widen(*t); return asctime_r_impl(&wide, out); }
-char* asctime32(const Tm32* t) { thread_local GuestStorage storage; return asctime_r32(t, g2h<char>(storage.resize(26))); }
+char* asctime32(const Tm32* t) { auto& storage = thread_lifetime::local<GuestStorage, struct Asctime32Storage>(); return asctime_r32(t, g2h<char>(storage.resize(26))); }
 char* ctime_r32(const std::int32_t* t, char* out) { std::int64_t wide = *t; return ctime_r_impl(&wide, out); }
-char* ctime32(const std::int32_t* t) { thread_local GuestStorage storage; return ctime_r32(t, g2h<char>(storage.resize(26))); }
+char* ctime32(const std::int32_t* t) { auto& storage = thread_lifetime::local<GuestStorage, struct Ctime32Storage>(); return ctime_r32(t, g2h<char>(storage.resize(26))); }
 // Locale_t is an opaque token, ignored by the existing fixed C locale formatter.
 std::uint64_t strftime_l32(char* out, std::uint64_t n, const char* fmt, const Tm32* t, std::uint32_t) { return strftime32(out,n,fmt,t); }
 char* strptime_l32(const char* in, const char* fmt, Tm32* t, std::uint32_t) { return strptime32(in,fmt,t); }

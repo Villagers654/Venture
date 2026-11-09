@@ -1,5 +1,6 @@
 #include "full_rate_image.h"
 #include "internal.h"
+#include "vulkan.h"
 #include "common/log.h"
 #include "gfx/queue_sync.h"
 #include "gfx/vulkan_memory.h"
@@ -170,6 +171,38 @@ FullRateImage::~FullRateImage() {
   }
 }
 VkImage FullRateImage::image() const { return impl_->image; }
+namespace {
+std::mutex null_view_mutex;
+std::map<VkDevice, std::map<std::uint32_t, std::unique_ptr<FullRateImage>>> null_view_images;
+void release_null_view_images(VkDevice device) {
+  std::map<std::uint32_t, std::unique_ptr<FullRateImage>> released;
+  std::lock_guard lock(null_view_mutex);
+  if (auto it = null_view_images.find(device); it != null_view_images.end()) {
+    released = std::move(it->second);
+    null_view_images.erase(it);
+  }
+}
+}  // namespace
+VkImage null_view_density_image(VkDevice device, std::uint32_t layers) {
+  static std::once_flag hooked;
+  std::call_once(hooked, [] { add_device_release_hook(release_null_view_images); });
+  std::lock_guard lock(null_view_mutex);
+  auto& image = null_view_images[device][layers];
+  if (!image) {
+    const auto families = device_queue_families(device);
+    if (families.empty()) return VK_NULL_HANDLE;
+    try {
+      // Sized for the largest eye image a guest renders (Quest 3 eye buffers are
+      // below 4096 square), so a native density map covers every framebuffer.
+      image = std::make_unique<FullRateImage>(device_physical(device), device, families.front(),
+                                              host_queue_index(device, families.front(), 0), layers, 4096, 4096);
+    } catch (const std::exception& e) {
+      log::error("vulkan", "Full-density image for a density view of a null image failed: {}", e.what());
+      return VK_NULL_HANDLE;
+    }
+  }
+  return image->image();
+}
 std::uint32_t FullRateImage::width() const { return impl_->width; }
 std::uint32_t FullRateImage::height() const { return impl_->height; }
 }

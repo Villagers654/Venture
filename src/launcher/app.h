@@ -22,7 +22,8 @@ struct ControlsEdit {
   int menu_first = 0, menu_second = 0;  // two buttons: hand-prefixed inputs
   int menu_hold_ms = controls::kHoldMs;         // hold: how long
   int menu_chord_ms = controls::kChordHoldMs;   // two buttons: how long both are held (0: at once)
-  std::array<std::array<int, 8>, 2> host{};  // input index + 1 per Quest input and hand (0: not assigned)
+  // Per Quest input and hand: the host inputs (index + 1) in the player's order; empty: not assigned.
+  std::array<std::array<std::vector<int>, 8>, 2> host{};
   bool custom = false;  // per game: overrides the defaults
   bool initialized = false;
 };
@@ -92,6 +93,8 @@ private:
   std::map<const art::Image *, TurnedTexture> turned_textures_;
   SDL_Texture *turned_texture(const art::Image *image, const std::shared_ptr<const art::Shot> &shot);
   bool installed_only_ = false, quit_ = false;
+  ImVec2 card_menu_at_{};  // where a library card's menu opens
+  std::string smoke_hovered_;  // --smoke-view library-hover: the card drawn hovered
   // Display settings rows, for Settings (global) or a game's Settings tab;
   // a change is saved at once.
   void draw_display_rows(library::DisplaySettings& display, bool per_game, const char* id);
@@ -191,6 +194,8 @@ private:
   ControlsEdit controls_, game_controls_;
   int controls_hover_ = -1;  // hand * 8 + Quest input under the pointer
   int controls_active_ = -1;  // the row being changed (its list open or focused), last frame
+  // A row line whose list opens next frame (an input just added): hand, Quest input, line.
+  std::optional<std::array<int, 3>> controls_open_line_;
   void draw_controls();
   void draw_controls_editor(ControlsEdit& edit, const ControlsEdit* base, float width, const meta::Game* game);
   void draw_controller_picker(ControlsEdit& edit, float width, const controls::Config& config);

@@ -67,6 +67,12 @@ class HleLibrary final : public Library {
   // such a copy from this slot instead of mapping it. Set before loading.
   void set_identity(std::vector<std::string> exports) { identity_ = std::move(exports); }
   const std::vector<std::string>& identity() const { return identity_; }
+  // Builds the library that serves one such copy when each copy keeps state of
+  // its own over this slot's functions (each copy of an SDK loader binds its
+  // own entry points). Without a factory this slot serves every copy.
+  using CopyFactory = std::function<std::shared_ptr<HleLibrary>(const HleLibrary& slot, const std::string& soname)>;
+  void set_copy_factory(CopyFactory factory) { copy_factory_ = std::move(factory); }
+  const CopyFactory& copy_factory() const { return copy_factory_; }
   bool is_function(std::string_view name) const;
   GuestAddr hle_symbol(std::string_view name) const;
   // As hle_symbol, but 0 for an A32 export without an ABI adapter: absent to
@@ -84,6 +90,7 @@ class HleLibrary final : public Library {
   std::shared_ptr<Impl> impl_;
   std::vector<std::string> aliases_;
   std::vector<std::string> identity_;
+  CopyFactory copy_factory_;
 };
 
 enum DlopenFlags : int {

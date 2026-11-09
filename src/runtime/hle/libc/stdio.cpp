@@ -916,7 +916,7 @@ void syslog_write(int priority, const char* fmt, Cursor a) {
   if (!(syslog_mask.load() & (1 << (priority & 7)))) return;
   Args<Cursor> args(a);
   std::string text;
-  try { text = format_printf(fmt, args); }
+  try { text = stdio_format(fmt, args); }
   catch (const PrintfError&) { return; }
   std::string ident;
   {
@@ -1075,6 +1075,8 @@ int printf32(const char* fmt, a32::VarArgs32 a) { auto r = print(standard[1], fm
 int vprintf32(const char* fmt, a32::VaList32 a) { auto r = print(standard[1], fmt, a); mirror_file32(standard[1]); return r; }
 int scanf32(const char* fmt, a32::VarArgs32 a) { auto r = scan(standard[0], fmt, a); mirror_file32(standard[0]); return r; }
 int vscanf32(const char* fmt, a32::VaList32 a) { auto r = scan(standard[0], fmt, a); mirror_file32(standard[0]); return r; }
+void syslog32(int priority, const char* fmt, a32::VarArgs32 a) { syslog_write(priority, fmt, a); }
+void vsyslog32(int priority, const char* fmt, a32::VaList32 a) { syslog_write(priority, fmt, a); }
 void register_stdio32_adapters() {
 #define A(n, f) stdio_adapter32<&f>(n)
   A("fopen", fopen_fn); A("fopen64", fopen_fn); A("fdopen", fdopen_fn);
@@ -1101,6 +1103,8 @@ void register_stdio32_adapters() {
   A("fprintf", print<a32::VarArgs32>); A("vfprintf", print<a32::VaList32>);
   A("dprintf", print_fd<a32::VarArgs32>); A("vdprintf", print_fd<a32::VaList32>);
   A("scanf", scanf32); A("vscanf", vscanf32); A("fscanf", scan<a32::VarArgs32>); A("vfscanf", scan<a32::VaList32>);
+  A("popen", popen_fn); A("pclose", pclose_fn);
+  A("syslog", syslog32); A("vsyslog", vsyslog32);
 #undef A
 }
 }  // namespace

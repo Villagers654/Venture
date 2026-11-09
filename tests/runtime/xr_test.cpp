@@ -393,12 +393,12 @@ TEST_CASE("Registry controller mappings preserve haptic outputs on either hand")
                        "/interaction_profiles/htc/vive_controller",
                        "/interaction_profiles/khr/simple_controller"})
     for (auto source : {"/user/hand/left/output/haptic", "/user/hand/right/output/haptic"})
-      CHECK(venture::xr::touch_binding(source, profile) == std::string(source));
-  CHECK(venture::xr::touch_binding("/user/hand/left/input/thumbstick/x",
-      "/interaction_profiles/htc/vive_controller") == "/user/hand/left/input/trackpad/x");
+      CHECK(venture::xr::touch_bindings(source, profile) == std::vector<std::string>{source});
+  CHECK(venture::xr::touch_bindings("/user/hand/left/input/thumbstick/x",
+      "/interaction_profiles/htc/vive_controller") == std::vector<std::string>{"/user/hand/left/input/trackpad/x"});
   // The Vive wand's face buttons are its trackpad halves.
-  CHECK(venture::xr::touch_binding("/user/hand/left/input/x/click",
-      "/interaction_profiles/htc/vive_controller") == "/user/hand/left/input/trackpad/dpad_down");
+  CHECK(venture::xr::touch_bindings("/user/hand/left/input/x/click",
+      "/interaction_profiles/htc/vive_controller") == std::vector<std::string>{"/user/hand/left/input/trackpad/dpad_down"});
 }
 
 TEST_CASE("XR PCM and envelope haptics bind both hands, append, replace and stop") {
@@ -2161,11 +2161,11 @@ TEST_CASE("XR generated metadata retains A64 member layouts") {
       CHECK(m.offset == offsetof(XrInstanceCreateInfo, enabledExtensionNames));
     }
   CHECK(found);
-  CHECK(venture::xr::touch_binding("/user/hand/left/input/x/click",
-                              "/interaction_profiles/valve/index_controller") ==
-        "/user/hand/left/input/a/click");
-  CHECK_FALSE(venture::xr::touch_binding("/user/hand/right/input/system/click",
-                                    "/interaction_profiles/valve/index_controller"));
+  CHECK(venture::xr::touch_bindings("/user/hand/left/input/x/click",
+                               "/interaction_profiles/valve/index_controller") ==
+        std::vector<std::string>{"/user/hand/left/input/a/click"});
+  CHECK(venture::xr::touch_bindings("/user/hand/right/input/system/click",
+                                    "/interaction_profiles/valve/index_controller").empty());
 }
 TEST_CASE("XR input-chain filtering preserves an enabled tail and guest memory") {
   const char* extension = "XR_KHR_composition_layer_color_scale_bias";

@@ -23,6 +23,8 @@
 using namespace venture;
 namespace {
 std::uint32_t call(const char*, std::initializer_list<std::uint32_t>);
+std::uint32_t call(HleLibrary&, const char*, std::initializer_list<std::uint32_t>);
+thread_local std::uint32_t last_r1 = 0;  // r1 after this thread's last call (64-bit results)
 HleLibrary& library() {
   static HleLibrary lib("libc.so");
   static const bool initialized = [] {
@@ -36,8 +38,14 @@ HleLibrary& library() {
   (void)initialized;
   return lib;
 }
-const hle::FunctionInfo& function(const char* name) {
-  auto thunk = library().find_symbol(name);
+HleLibrary& libstdcpp() {
+  static HleLibrary lib("libstdc++.so");
+  static const bool initialized = [] { hle::libc::register_libstdcpp(lib); return true; }();
+  (void)initialized;
+  return lib;
+}
+const hle::FunctionInfo& function(const char* name, HleLibrary& lib = library()) {
+  auto thunk = lib.find_symbol(name);
   for (const auto& f : hle::registered_functions())
     if (f.thunk == thunk) {
       // Snapshots are values; fetch the stable registry entry via its ARM thunk id.
@@ -245,17 +253,19 @@ TEST_CASE("A32 setjmp restores ARM core and VFP registers without overwriting si
   CHECK(cpu.x(11) == 0x12340b); CHECK(cpu.v(8).lo == 0x1234567800000008ull); CHECK(cpu.fpcr() == 0x800010);
   CHECK(t.blocked_signals == (1ull << 40)); t.blocked_signals = 0; t.signal_mask_snapshot.store(0);
 }
-std::uint32_t call(const char* name, std::initializer_list<std::uint32_t> args) {
+std::uint32_t call(const char* name, std::initializer_list<std::uint32_t> args) { return call(library(), name, args); }
+std::uint32_t call(HleLibrary& lib, const char* name, std::initializer_list<std::uint32_t> args) {
   auto& t = GuestThread::adopt_current();
   test::FakeCpu32 cpu;
   test::LowMemory32 memory;
   cpu.set_sp(memory.address);
   unsigned i = 0;
   for (auto a : args) { if (i < 4) cpu.set_x(i, a); else memory.at<std::uint32_t>()[i - 4] = a; ++i; }
-  const auto& info = function(name);
+  const auto& info = function(name, lib);
   REQUIRE(info.handler != hle::a32::diagnostic);
   hle::CallContext context(t, cpu, info);
   if (!info.try_handler || !info.try_handler(context)) info.handler(context);
+  last_r1 = static_cast<std::uint32_t>(cpu.x(1));
   return static_cast<std::uint32_t>(cpu.x(0));
 }
 }
@@ -356,4 +366,177 @@ TEST_CASE("A32 syscall and SVC use ARM numbers, wire pointers and Linux error co
   // EABI rt_sigaction takes an eight-byte kernel sigset, never sizeof(sigset_t).
   CHECK(call("syscall", {174, 10, 0, 0, 4}) == UINT32_MAX);
   CHECK(*thread.errno_location() == err::kEINVAL);
+}
+TEST_CASE("A32 libstdc++ exports bionic's ARM names with 32-bit guard words") {
+  auto& lib = libstdcpp();
+  for (auto lp64 : {"_Znwm", "_Znam", "_ZdlPvm", "_ZnwmRKSt9nothrow_t", "_ZnamSt11align_val_t"})
+    CHECK(lib.hle_symbol(lp64) == 0);
+  for (auto name : {"__cxa_pure_virtual", "__cxa_deleted_virtual", "_ZnajRKSt9nothrow_t", "_ZdaPv",
+                    "_ZdaPvRKSt9nothrow_t", "_ZdlPvSt11align_val_tRKSt9nothrow_t", "_ZdaPvjSt11align_val_t"})
+    CHECK(function(name, lib).handler != hle::a32::diagnostic);
+  test::LowMemory32 memory;
+  const auto p = h2g32(memory.at<void>());
+  auto* words = memory.at<std::uint32_t>();
+  std::memset(words, 0xa5, 64);
+  words[0] = 0;
+  // ARM C++ ABI: compiled code tests bit 0 of the guard word; underway keeps it clear.
+  CHECK(call(lib, "__cxa_guard_acquire", {p}) == 1);
+  CHECK(words[0] != 0); CHECK((words[0] & 1) == 0);
+  call(lib, "__cxa_guard_abort", {p});
+  CHECK(words[0] == 0); CHECK(words[1] == 0xa5a5a5a5);
+  REQUIRE(call(lib, "__cxa_guard_acquire", {p}) == 1);
+  std::atomic<int> object{0}, initializers{0}, seen{0};
+  std::vector<std::thread> waiters;
+  for (int i = 0; i < 4; ++i)
+    waiters.emplace_back([&] {
+      if (call(lib, "__cxa_guard_acquire", {p})) initializers.fetch_add(1);
+      if (object.load() == 42) seen.fetch_add(1);
+    });
+  std::this_thread::sleep_for(std::chrono::milliseconds(30));
+  object = 42;
+  call(lib, "__cxa_guard_release", {p});
+  for (auto& t : waiters) t.join();
+  CHECK(initializers == 0); CHECK(seen == 4);
+  CHECK(words[0] == 1); CHECK(words[1] == 0xa5a5a5a5);
+  CHECK(call(lib, "__cxa_guard_acquire", {p}) == 0);
+  // operator new/delete in ARM's unsigned int size_t mangling.
+  const auto block = call(lib, "_Znwj", {24});
+  REQUIRE(block != 0);
+  std::memset(g2h<void>(block), 0x5a, 24);
+  call(lib, "_ZdlPvj", {block, 24});
+  const auto nothrow = static_cast<std::uint32_t>(lib.hle_symbol("_ZSt7nothrow"));
+  REQUIRE(nothrow != 0);
+  const auto array = call(lib, "_ZnajRKSt9nothrow_t", {16, nothrow});
+  REQUIRE(array != 0);
+  call(lib, "_ZdaPvRKSt9nothrow_t", {array, nothrow});
+  const auto aligned = call(lib, "_ZnwjSt11align_val_t", {64, 256});
+  REQUIRE(aligned != 0); CHECK(aligned % 256 == 0);
+  call(lib, "_ZdlPvjSt11align_val_t", {aligned, 64, 256});
+}
+TEST_CASE("A32 libc process, numeric, inet, syslog and mremap adapters keep ARM layouts") {
+  test::LowMemory32 memory;
+  const auto p = h2g32(memory.at<void>());
+  auto* words = memory.at<std::uint32_t>();
+  std::memset(words, 0xa5, 4096);
+  auto& thread = GuestThread::adopt_current();
+  // struct rusage: two 32-bit timevals and 14 longs, 72 bytes.
+  CHECK(call("getrusage", {0, p}) == 0);
+  CHECK(words[1] < 1000000); CHECK(words[2] == 0); CHECK(words[17] == 0); CHECK(words[18] == 0xa5a5a5a5);
+  std::strcpy(memory.at<char>(256), "inet");
+  const auto group = call("getgrnam", {p + 256});
+  REQUIRE(group != 0);
+  const auto* g = g2h<std::uint32_t>(group);
+  CHECK(std::strcmp(g2h<char>(g[0]), "inet") == 0); CHECK(g[1] == 0); CHECK(g[2] == 3003);
+  CHECK(*g2h<std::uint32_t>(g[3]) == 0);
+  std::strcpy(memory.at<char>(256), "no-such-group");
+  CHECK(call("getgrnam", {p + 256}) == 0);
+  // div_t/ldiv_t (8 bytes) and lldiv_t/imaxdiv_t (16) return through memory at r0.
+  call("div", {p + 512, std::uint32_t(-7), 2});
+  CHECK(std::int32_t(words[128]) == -3); CHECK(std::int32_t(words[129]) == -1); CHECK(words[130] == 0xa5a5a5a5);
+  call("ldiv", {p + 512, 0x80000000u, UINT32_MAX});
+  CHECK(words[128] == 0x80000000u); CHECK(words[129] == 0);
+  const std::int64_t dividend = -9000000000ll, divisor = 7;
+  for (auto name : {"lldiv", "imaxdiv"}) {
+    std::memset(memory.at<void>(512), 0xa5, 32);
+    call(name, {p + 512, 0xdeadbeef, std::uint32_t(dividend), std::uint32_t(std::uint64_t(dividend) >> 32),
+                std::uint32_t(divisor), 0});
+    CHECK(*memory.at<std::int64_t>(512) == dividend / divisor);
+    CHECK(*memory.at<std::int64_t>(520) == dividend % divisor);
+    CHECK(words[132] == 0xa5a5a5a5);
+  }
+  // intmax_t is 64-bit on ARM: r0:r1 results, 32-bit end pointers.
+  std::strcpy(memory.at<char>(640), "  -9000000000xyz");
+  words[170] = 0; words[171] = 0xa5a5a5a5;
+  auto low = call("strtoimax", {p + 640, p + 680, 10});
+  CHECK(std::int64_t(low | std::uint64_t(last_r1) << 32) == -9000000000ll);
+  CHECK(words[170] == p + 640 + 13); CHECK(words[171] == 0xa5a5a5a5);
+  std::strcpy(memory.at<char>(640), "18446744073709551615");
+  low = call("strtoumax", {p + 640, 0, 10});
+  CHECK(low == UINT32_MAX); CHECK(last_r1 == UINT32_MAX);
+  CHECK(call("imaxabs", {std::uint32_t(-5), UINT32_MAX}) == 5); CHECK(last_r1 == 0);
+  std::strcpy(memory.at<char>(640), "-9000000000");
+  low = call("strtoimax_l", {p + 640, 0, 10, 0});
+  CHECK(std::int64_t(low | std::uint64_t(last_r1) << 32) == -9000000000ll);
+  // ARM long is 32-bit: strtol/strtoul saturate there with ERANGE, as bionic's ARM build does.
+  std::strcpy(memory.at<char>(640), "9000000000");
+  thread.set_errno(0);
+  CHECK(call("strtol", {p + 640, p + 680, 10}) == 0x7fffffffu);
+  CHECK(*thread.errno_location() == err::kERANGE); CHECK(words[170] == p + 640 + 10);
+  std::strcpy(memory.at<char>(640), "-9000000000");
+  CHECK(call("strtol", {p + 640, 0, 10}) == 0x80000000u);
+  std::strcpy(memory.at<char>(640), "4294967296");
+  thread.set_errno(0);
+  CHECK(call("strtoul", {p + 640, 0, 10}) == UINT32_MAX);
+  CHECK(*thread.errno_location() == err::kERANGE);
+  std::strcpy(memory.at<char>(640), "-1");
+  thread.set_errno(0);
+  CHECK(call("strtoul", {p + 640, 0, 10}) == UINT32_MAX);
+  CHECK(*thread.errno_location() == 0);
+  std::strcpy(memory.at<char>(640), "  42");
+  CHECK(call("atoi", {p + 640}) == 42);
+  CHECK(call("strtol_l", {p + 640, 0, 16, 0}) == 0x42);
+  // in_addr is one word, by value in r0; inet_ntoa's buffer is guest memory.
+  std::strcpy(memory.at<char>(768), "1.2.3.4");
+  CHECK(call("inet_aton", {p + 768, p + 800}) == 1);
+  CHECK(words[200] == 0x04030201); CHECK(words[201] == 0xa5a5a5a5);
+  const auto text = call("inet_ntoa", {0x04030201});
+  REQUIRE(text != 0);
+  CHECK(std::strcmp(g2h<char>(text), "1.2.3.4") == 0);
+  CHECK(call("setlogmask", {0}) == 255);
+  std::strcpy(memory.at<char>(832), "venture");
+  std::strcpy(memory.at<char>(848), "a32 syslog %d %s");
+  call("openlog", {p + 832, 1, 8});
+  call("syslog", {6, p + 848, 42, p + 832});
+  call("closelog", {});
+  // Process images and popen stay unavailable: ENOSYS, never the ABI trap.
+  std::strcpy(memory.at<char>(880), "sh");
+  std::strcpy(memory.at<char>(888), "r");
+  CHECK(call("popen", {p + 880, p + 888}) == 0);
+  CHECK(*thread.errno_location() == err::kENOSYS);
+  for (auto name : {"execl", "execlp", "execv", "execvp"}) {
+    thread.set_errno(0);
+    CHECK(call(name, {p + 880, 0}) == UINT32_MAX);
+    CHECK(*thread.errno_location() == err::kENOSYS);
+  }
+  CHECK(call("execve", {p + 880, 0, 0}) == UINT32_MAX);
+  // mremap(void*, size_t, size_t, int, ...): MAP_FAILED is the 32-bit -1.
+  const auto mapped = call("mmap", {0, 4096, 3, 0x22, UINT32_MAX, 0});
+  REQUIRE(mapped != UINT32_MAX);
+  *g2h<std::uint32_t>(mapped) = 0x12345678;
+  const auto grown = call("mremap", {mapped, 4096, 8192, 1});
+  REQUIRE(grown != UINT32_MAX);
+  CHECK(*g2h<std::uint32_t>(grown) == 0x12345678);
+  CHECK(AddressSpace::get().is_guest_accessible(grown, 8192, true));
+  CHECK(call("mremap", {grown, 8192, 4096, 4}) == UINT32_MAX);
+  CHECK(*thread.errno_location() == err::kEINVAL);
+  CHECK(call("munmap", {grown, 8192}) == 0);
+}
+TEST_CASE("A32 sendmsg and recvmsg carry 28-byte msghdr and 8-byte iovec records") {
+  test::LowMemory32 memory;
+  const auto p = h2g32(memory.at<void>());
+  auto* words = memory.at<std::uint32_t>();
+  std::memset(words, 0xa5, 4096);
+  REQUIRE(call("socketpair", {1, 1, 0, p}) == 0);
+  const auto a = words[0], b = words[1];
+  struct Close {
+    std::uint32_t a, b;
+    ~Close() { call("close", {a}); call("close", {b}); }
+  } close{a, b};
+  std::memcpy(memory.at<char>(64), "ven", 3);
+  std::memcpy(memory.at<char>(72), "ture", 4);
+  const std::uint32_t send_iov[]{p + 64, 3, p + 72, 4}, send_msg[]{0, 0, p + 128, 2, 0, 0, 0};
+  std::memcpy(memory.at<void>(128), send_iov, sizeof(send_iov));
+  std::memcpy(memory.at<void>(256), send_msg, sizeof(send_msg));
+  CHECK(call("sendmsg", {a, p + 256, 0}) == 7);
+  const std::uint32_t recv_iov[]{p + 512, 16}, recv_msg[]{0, 0, p + 160, 1, 0, 0, 0x7777};
+  std::memcpy(memory.at<void>(160), recv_iov, sizeof(recv_iov));
+  std::memcpy(memory.at<void>(320), recv_msg, sizeof(recv_msg));
+  CHECK(call("recvmsg", {b, p + 320, 0}) == 7);
+  CHECK(std::memcmp(memory.at<char>(512), "venture", 7) == 0);
+  CHECK(words[85] == 0); CHECK(words[86] == 0); CHECK(words[87] == 0xa5a5a5a5);
+  // mmsghdr: the msghdr then the 32-bit sent length.
+  std::memcpy(memory.at<void>(384), send_msg, sizeof(send_msg));
+  CHECK(call("sendmmsg", {a, p + 384, 1, 0}) == 1);
+  CHECK(words[(384 + 28) / 4] == 7); CHECK(words[(384 + 32) / 4] == 0xa5a5a5a5);
+  CHECK(call("recvmsg", {b, p + 320, 0}) == 7);
 }

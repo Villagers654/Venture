@@ -1,6 +1,7 @@
 #include <doctest/doctest.h>
 #include "media/media.h"
 #include "android/native_window.h"
+#include "gfx/shared_image.h"
 #include "audio/audio.h"
 #include "hle/libc/vfs.h"
 #include "android_test_support.h"
@@ -690,6 +691,37 @@ TEST_CASE("native-window frame notification unlocks before callback and preserve
   CHECK(notifications==2);CHECK(window->frame->timestamp_ns==0);
   REQUIRE(android::publish_window_rgba(window,pixels,16,8)==0);
   CHECK(notifications==3);CHECK(window->frame->timestamp_ns>0);
+  {std::lock_guard lock(window->lock);window->frame_available={};}
+  android::release(window);
+}
+TEST_CASE("GPU video pictures reach only windows whose consumer imports shared images") {
+  auto window=android::create_native_window(16,8);REQUIRE(window);
+  std::atomic<int> notifications{0};
+  {std::lock_guard lock(window->lock);window->image_consumer=true;window->fixed_consumer_extent=true;
+   window->frame_available=[&]{++notifications;};}
+  auto image=std::make_shared<gfx::SharedImage>();image->width=16;image->height=8;
+  // A CPU consumer is told to take pixels and refuses a GPU picture.
+  CHECK_FALSE(android::window_shared_image_consumer(window));
+  media::Codec::Target target(android::window_consumer_extent(window),android::window_shared_image_consumer(window));
+  CHECK(target.width==16);CHECK(target.height==8);CHECK_FALSE(target.shared_image);
+  CHECK(android::publish_window_image(window,image,16,8,5)<0);
+  CHECK(notifications==0);
+  {std::lock_guard lock(window->lock);window->shared_image_consumer=true;}
+  CHECK(android::window_shared_image_consumer(window));
+  REQUIRE(android::publish_window_image(window,image,16,8,5)==0);
+  CHECK(notifications==1);
+  {
+    std::lock_guard lock(window->lock);
+    REQUIRE(window->frame);
+    CHECK(window->frame->image==image);CHECK(window->frame->rgba.empty());
+    CHECK(window->frame->timestamp_ns==5);CHECK(window->frame->serial==1);
+  }
+  // The producer reuses its image once the window lets go of the frame.
+  std::weak_ptr<const gfx::SharedImage> held=image;image.reset();
+  CHECK_FALSE(held.expired());
+  std::vector<std::uint8_t> pixels(16*8*4);
+  REQUIRE(android::publish_window_rgba(window,pixels,16,8)==0);
+  CHECK(held.expired());
   {std::lock_guard lock(window->lock);window->frame_available={};}
   android::release(window);
 }

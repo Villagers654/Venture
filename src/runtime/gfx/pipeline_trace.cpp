@@ -1,4 +1,6 @@
 #include "gfx/pipeline_trace.h"
+#include "core/thread_lifetime.h"
+#include "gfx/spirv_precision.h"
 #include "common/environment.h"
 #include "common/log.h"
 #include "common/paths.h"
@@ -57,6 +59,7 @@ struct Device {
   PFN_vkCreateGraphicsPipelines graphics;
   PFN_vkCreateComputePipelines compute;
   PFN_vkCreatePipelineCache create_cache;
+  PFN_vkCreateShaderModule create_module;
   PFN_vkCmdBindPipeline bind;
   PFN_vkDestroyPipeline destroy_pipeline;
   PFN_vkDestroyShaderModule destroy_module;
@@ -181,7 +184,7 @@ std::shared_ptr<const Device> device(VkDevice d) {
 // loader dispatch table, which is their first word.
 std::shared_ptr<const Device> command_device(VkCommandBuffer command_buffer) {
   thread_local void* key = nullptr;
-  thread_local std::weak_ptr<const Device> cached;
+  auto& cached = thread_lifetime::local<std::weak_ptr<const Device>, struct CommandDevice>();
   const auto table = *reinterpret_cast<void* const*>(command_buffer);
   if (table == key)
     if (auto d = cached.lock()) return d;
@@ -813,6 +816,23 @@ VkResult VKAPI_CALL create_cache(VkDevice handle, const VkPipelineCacheCreateInf
     return result;
   });
 }
+// ANGLE's shaders keep guest mediump as RelaxedPrecision, except the vector
+// magnitudes Quest content needs the range of (gfx/spirv_precision.h).
+VkResult VKAPI_CALL create_module(VkDevice handle, const VkShaderModuleCreateInfo* info,
+                                  const VkAllocationCallbacks* a, VkShaderModule* out) {
+  return guarded([&] {
+    const auto d = device(handle);
+    if (!d || !d->create_module) return VK_ERROR_INITIALIZATION_FAILED;
+    std::vector<std::uint32_t> code;
+    if (d->source != profile::PipelineSource::angle || !info || info->codeSize % 4 ||
+        !promote_relaxed_magnitudes({info->pCode, info->codeSize / 4}, code))
+      return d->create_module(handle, info, a, out);
+    auto copy = *info;
+    copy.codeSize = code.size() * 4;
+    copy.pCode = code.data();
+    return d->create_module(handle, &copy, a, out);
+  });
+}
 std::atomic<PFN_vkCmdBindPipeline> common_bind{nullptr};
 std::atomic<bool> mixed_bind{false};
 void VKAPI_CALL bind(VkCommandBuffer command_buffer, VkPipelineBindPoint point, VkPipeline pipeline) {
@@ -932,6 +952,11 @@ VkResult VKAPI_CALL marker_tag(VkDevice handle, const VkDebugMarkerObjectTagInfo
   copy.object = reinterpret_cast<std::uint64_t>(resolve(reinterpret_cast<VkPipeline>(info->object), "name"));
   return copy.object ? d->marker_tag(handle, &copy) : VK_SUCCESS;
 }
+// The loader ANGLE resolves through: pipeline creation plus its shader modules.
+PFN_vkVoidFunction angle_proc(std::string_view name) {
+  if (name == "vkCreateShaderModule") return reinterpret_cast<PFN_vkVoidFunction>(create_module);
+  return pipeline_proc(name);
+}
 std::atomic<PFN_vkGetDeviceProcAddr> device_loader{nullptr};
 PFN_vkVoidFunction VKAPI_CALL device_gdpa(VkDevice d, const char* name) {
   auto get = device_loader.load();
@@ -939,7 +964,7 @@ PFN_vkVoidFunction VKAPI_CALL device_gdpa(VkDevice d, const char* name) {
   // display initialization can wrap another loader while old devices live.
   if (auto entry = device(d)) get = entry->loader;
   auto fn = get ? get(d, name) : nullptr;
-  if (fn) if (auto traced = pipeline_proc(name)) return traced;
+  if (fn) if (auto traced = angle_proc(name)) return traced;
   return fn;
 }
 PFN_vkVoidFunction VKAPI_CALL gipa(VkInstance i, const char* name) {
@@ -950,7 +975,7 @@ PFN_vkVoidFunction VKAPI_CALL gipa(VkInstance i, const char* name) {
     device_loader = reinterpret_cast<PFN_vkGetDeviceProcAddr>(fn);
     return reinterpret_cast<PFN_vkVoidFunction>(device_gdpa);
   }
-  if (auto traced = pipeline_proc(name)) return traced;
+  if (auto traced = angle_proc(name)) return traced;
   return fn;
 }
 }
@@ -1018,6 +1043,7 @@ void register_pipeline_device(VkDevice d, PFN_vkGetDeviceProcAddr raw, bool feed
       d, raw,
       reinterpret_cast<PFN_vkCreateGraphicsPipelines>(raw(d, "vkCreateGraphicsPipelines")),
       reinterpret_cast<PFN_vkCreateComputePipelines>(raw(d, "vkCreateComputePipelines")), create_cache,
+      reinterpret_cast<PFN_vkCreateShaderModule>(raw(d, "vkCreateShaderModule")),
       reinterpret_cast<PFN_vkCmdBindPipeline>(raw(d, "vkCmdBindPipeline")),
       reinterpret_cast<PFN_vkDestroyPipeline>(raw(d, "vkDestroyPipeline")),
       reinterpret_cast<PFN_vkDestroyShaderModule>(raw(d, "vkDestroyShaderModule")),

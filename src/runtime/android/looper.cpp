@@ -1,4 +1,5 @@
 #include "android/errors.h"
+#include "core/thread_lifetime.h"
 #include "android/looper.h"
 #include "android/libc_bridge.h"
 #include "android/handles.h"
@@ -25,7 +26,7 @@ struct ThreadLooper {
     if (ptr) release_looper(ptr);
   }
 };
-thread_local ThreadLooper local;
+ThreadLooper& local() { return thread_lifetime::local<ThreadLooper, struct ThreadLooperOwner>(); }
 std::mutex lifetime_mutex;
 GuestAddr fd_key(int fd) { return 0x8000000000000000ull | static_cast<std::uint32_t>(fd); }
 // AOSP looper.h event bits are NOT identical to Linux POLL* bits.
@@ -55,10 +56,10 @@ Looper::Looper(int options) : options_(options) {
 Looper::~Looper() { AddressSpace::get().free(sequence_address_); }
 std::shared_ptr<Looper> pin_looper(Looper* p) { return loopers().get(p); }
 Looper* prepare_looper(int options) {
-  if (!local.ptr) local.ptr = loopers().create(options);
-  return local.ptr;
+  if (!local().ptr) local().ptr = loopers().create(options);
+  return local().ptr;
 }
-Looper* thread_looper() { return local.ptr; }
+Looper* thread_looper() { return local().ptr; }
 void acquire_looper(Looper* p) {
   std::lock_guard lock(lifetime_mutex);
   if (auto l = pin_looper(p)) ++l->refs;

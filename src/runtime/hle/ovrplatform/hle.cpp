@@ -1,12 +1,16 @@
 #include "hle/ovrplatform/hle.h"
 
 #include <algorithm>
+#include <atomic>
 #include <charconv>
 #include <cstring>
+#include <memory>
 #include <mutex>
+#include <vector>
 
 #include "common/log.h"
 #include "common/environment.h"
+#include "core/linker.h"
 #include "core/process.h"
 #include "common/milestone.h"
 
@@ -22,20 +26,20 @@ void log_init(hle::CallContext& ctx) {
   log::info("ovrplatform", "{} guest_app_id={} caller={:#x}", ctx.info().name,
             valid_id(app) ? app : "<invalid>", ctx.cpu().lr());
 }
-void sync_init(hle::CallContext& ctx) {
+void sync_init_on(hle::CallContext& ctx, Session& platform) {
   // r5 V-Speedway/Bait: Wrapper at 0x53570 tail-calls Internal, passing
   // the same app ID and JNI contexts. Both return the Unity boolean result.
   log_init(ctx);
-  auto result = session(ctx).initialize(text(ctx.x(0)));
+  auto result = platform.initialize(text(ctx.x(0)));
   const bool unity = ctx.info().name == "ovr_UnityInitWrapper" ||
                      ctx.info().name == "ovr_UnityInitWrapperInternal";
   ctx.return_x(unity ? result == InitResult::success : static_cast<std::uint64_t>(result));
 }
-void async_init(hle::CallContext& ctx) {
+void async_init_on(hle::CallContext& ctx, Session& platform) {
   log_init(ctx);
-  ctx.return_x(session(ctx).initialize_async(text(ctx.x(0))));
+  ctx.return_x(platform.initialize_async(text(ctx.x(0))));
 }
-void sync_options(hle::CallContext& ctx) {
+void sync_options_on(hle::CallContext& ctx, Session& platform) {
   // Android WithOptions preserves X0..X4. Verified in the V-Speedway/Bait
   // loader at VA 0x537f0 (r5-platform evidence); X3/X4 are the config
   // array/count. Nonempty configuration is not silently discarded.
@@ -44,12 +48,38 @@ void sync_options(hle::CallContext& ctx) {
     log::warn("ovrplatform", "{}: initialization options unsupported", ctx.info().name);
     ctx.return_x(static_cast<std::uint64_t>(InitResult::unknown));
   } else
-    sync_init(ctx);
+    sync_init_on(ctx, platform);
 }
-void async_options(hle::CallContext& ctx) {
+void async_options_on(hle::CallContext& ctx, Session& platform) {
   log_init(ctx);
-  ctx.return_x(ctx.x(4) ? session(ctx).reject_initialization(0x1ad307b4)
-                        : session(ctx).initialize_async(text(ctx.x(0))));
+  ctx.return_x(ctx.x(4) ? platform.reject_initialization(0x1ad307b4)
+                        : platform.initialize_async(text(ctx.x(0))));
+}
+void sync_init(hle::CallContext& ctx) { sync_init_on(ctx, session(ctx)); }
+void async_init(hle::CallContext& ctx) { async_init_on(ctx, session(ctx)); }
+void sync_options(hle::CallContext& ctx) { sync_options_on(ctx, session(ctx)); }
+void async_options(hle::CallContext& ctx) { async_options_on(ctx, session(ctx)); }
+// A renamed copy of Meta's loader (Tomahawk's libovr_custom.so in Wizherd)
+// forwards to the one platform the game's loader uses, but each copy binds
+// its entry points in its own first initialize call: until then its
+// ovr_IsPlatformInitialized returns false (a null-entry check in the loader),
+// even after the game's loader initialized the platform. The SDK that bundled
+// the copy reads true there as its private platform already being in use.
+struct LoaderCopy {
+  explicit LoaderCopy(Session& platform) : platform(platform) {}
+  Session& platform;
+  std::atomic<bool> bound{false};
+};
+LoaderCopy& loader_copy(hle::CallContext& ctx) { return *static_cast<LoaderCopy*>(ctx.user()); }
+template <void (*Initialize)(hle::CallContext&, Session&)>
+void copy_init(hle::CallContext& ctx) {
+  auto& copy = loader_copy(ctx);
+  copy.bound.store(true, std::memory_order_release);
+  Initialize(ctx, copy.platform);
+}
+void copy_initialized(hle::CallContext& ctx) {
+  auto& copy = loader_copy(ctx);
+  ctx.return_x(copy.bound.load(std::memory_order_acquire) && copy.platform.initialized());
 }
 void reject_developer_token(hle::CallContext& ctx) {
   log::warn("ovrplatform", "{}: developer credential scope is not verified", ctx.info().name);
@@ -373,6 +403,33 @@ const std::vector<Export>& table() {
 }
 }  // namespace
 std::span<const Export> exports() { return table(); }
+std::shared_ptr<HleLibrary> make_loader_copy(Session& platform, const HleLibrary& slot,
+                                             const std::string& soname) {
+  // Thunks keep their copy's state for the life of the process, as the session.
+  static std::mutex mutex;
+  static std::vector<std::unique_ptr<LoaderCopy>> copies;
+  LoaderCopy* copy;
+  {
+    std::lock_guard lock(mutex);
+    copy = copies.emplace_back(std::make_unique<LoaderCopy>(platform)).get();
+  }
+  auto library = std::make_shared<HleLibrary>(soname);
+  for (const auto& [name, thunk] : slot.functions()) library->add_function(name, thunk);
+  const std::pair<const char*, hle::Handler> own[] = {
+      {"ovr_PlatformInitializeAndroid", copy_init<sync_init_on>},
+      {"ovr_PlatformInitializeAndroidAsynchronous", copy_init<async_init_on>},
+      {"ovr_PlatformInitializeAndroidWithOptions", copy_init<sync_options_on>},
+      {"ovr_PlatformInitializeAndroidAsynchronousWithOptions", copy_init<async_options_on>},
+      {"ovr_UnityInitWrapper", copy_init<sync_init_on>},
+      {"ovr_UnityInitWrapperAsynchronous", copy_init<async_init_on>},
+      {"ovr_UnityInitWrapperInternal", copy_init<sync_init_on>},
+      {"ovr_UnityInitWrapperInternalAsynchronous", copy_init<async_init_on>},
+      {"ovr_IsPlatformInitialized", copy_initialized},
+  };
+  for (const auto& [name, handler] : own)
+    library->add_function(name, hle::make_thunk(soname, name, handler, copy));
+  return library;
+}
 namespace {
 // Exports built outside this library (the microphone), given to make_library.
 std::vector<Export>& extra_table() {

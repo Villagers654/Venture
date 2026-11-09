@@ -278,8 +278,10 @@ std::pair<media::Codec::Sink,media::Codec::Extent> surface_sink(void* surface) {
   auto* raw=window.get();android::acquire(raw);
   auto owner=std::shared_ptr<android::NativeWindow>(raw,[pin=std::move(window)](android::NativeWindow* p){(void)pin;android::release(p);});
   return {[owner](media::VideoFrame& f) {
+    if(f.image)return android::publish_window_image(owner.get(),std::move(f.image),f.width,f.height,f.time_us*1000);
     return android::publish_window_rgba(owner.get(),std::move(f.rgba),f.width,f.height,f.time_us*1000);
-  },[owner]{return android::window_consumer_extent(owner.get());}};
+  },[owner]{return media::Codec::Target(android::window_consumer_extent(owner.get()),
+                                        android::window_shared_image_consumer(owner.get()));}};
 }
 Codec* codec_new(const char* mime) {
   log::info("media","AMediaCodec_createDecoderByType mime={}",mime?mime:"<null>");

@@ -1,4 +1,5 @@
 #include "core/pc_trace.h"
+#include "core/thread_lifetime.h"
 #include "platform/runtime_child.h"
 #include "core/process_exit.h"
 #include "core/os_quit.h"
@@ -108,6 +109,8 @@ GuestThread& GuestThread::adopt_current() {
   // The heap's TLS owner must outlive adopted's destructor, which can run
   // guest TLS destructors that allocate or free memory during host-thread exit.
   if (process_config().isa() == GuestIsa::a32) guest_heap::prepare_thread();
+  // So must the per-thread objects those destructors reach through HLE calls (thread_lifetime.h).
+  thread_lifetime::prepare();
   thread_local std::unique_ptr<GuestThread> adopted;
   if (!adopted) adopted = std::make_unique<GuestThread>(next_tid.fetch_add(1));
   adopted->attach_to_current_host_thread();
@@ -689,7 +692,7 @@ void shutdown_guest_threads() {
   workers_finished.wait(lock, [] { return active_workers == 0; });
   managed_threads.clear();
 }
-void set_guest_thread_exit_handler(void (*handler)(GuestThread&)) { thread_exit_handler.store(handler); }
+void (*set_guest_thread_exit_handler(void (*handler)(GuestThread&)))(GuestThread&) { return thread_exit_handler.exchange(handler); }
 void set_guest_thread_native_cleanup(void (*handler)()) { native_thread_cleanup.store(handler); }
 void finish_guest_thread(GuestThread& thread) {
   if (os_quit::requested()) return;

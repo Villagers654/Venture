@@ -1,4 +1,5 @@
 #include "android/errors.h"
+#include "core/thread_lifetime.h"
 #include "hle/libandroid/parts.h"
 #include "android/choreographer.h"
 #include "android/handles.h"
@@ -117,21 +118,21 @@ struct LocalChoreographer {
     if (ptr) choreographers().erase(ptr);
   }
 };
-thread_local LocalChoreographer local;
+LocalChoreographer& local() { return thread_lifetime::local<LocalChoreographer, struct LocalChoreographerOwner>(); }
 struct FrameData {
   std::int64_t time, period, id;
 };
 Handles<FrameData> frames("AChoreographerFrameCallbackData");
 std::atomic<std::int64_t> next_vsync_id{1};
 Choreographer* instance() {
-  if (!local.ptr) {
+  if (!local().ptr) {
     auto l = pin_looper(thread_looper());
     if (!l) return nullptr;
-    local.ptr = choreographers().create(l);
+    local().ptr = choreographers().create(l);
     std::lock_guard lock(all_mutex);
-    all.push_back(choreographers().get(local.ptr));
+    all.push_back(choreographers().get(local().ptr));
   }
-  return local.ptr;
+  return local().ptr;
 }
 enum class Callback { legacy, wide, vsync };
 void post(Choreographer* ptr, GuestAddr cb, GuestAddr data, std::int64_t delay_ms, Callback kind) {

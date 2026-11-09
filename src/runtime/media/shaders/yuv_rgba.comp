@@ -1,0 +1,23 @@
+#version 450
+// Y'CbCr 4:2:0 (two planes) to R'G'B'A8 at the consumer's size. Bilinear
+// sampling scales; the affine rows fold range expansion, the matrix and the
+// container's bit packing. Encoded (non-linear) values are kept, as Android
+// writes them into an sRGB-dataspace buffer.
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(binding = 0) uniform sampler2D luma;
+layout(binding = 1) uniform sampler2D chroma;
+layout(binding = 2, rgba8) uniform writeonly image2D target;
+layout(push_constant) uniform Conversion {
+  vec4 r, g, b;   // dot with (Y, Cb, Cr, 1)
+  vec2 scale;     // visible extent / image extent
+  vec2 offset;    // crop origin / image extent
+  ivec2 size;     // target extent
+} p;
+
+void main() {
+  ivec2 xy = ivec2(gl_GlobalInvocationID.xy);
+  if (any(greaterThanEqual(xy, p.size))) return;
+  vec2 uv = p.offset + (vec2(xy) + 0.5) / vec2(p.size) * p.scale;
+  vec4 ycc = vec4(texture(luma, uv).r, texture(chroma, uv).rg, 1.0);
+  imageStore(target, xy, vec4(clamp(vec3(dot(p.r, ycc), dot(p.g, ycc), dot(p.b, ycc)), 0.0, 1.0), 1.0));
+}
