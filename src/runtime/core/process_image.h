@@ -34,6 +34,8 @@ struct SyntheticModule {
   std::uint16_t phnum;
 };
 std::vector<SyntheticModule> synthetic_modules();
+// A guest-readable module name owned by the linker for the process lifetime.
+GuestAddr module_name(std::string_view path);
 // The linker's current libraries in load order, under the loader lock. Calls
 // the guest's r_brk hook (as bionic does) when someone has replaced it.
 void sync(const std::vector<std::shared_ptr<Library>>& libraries);

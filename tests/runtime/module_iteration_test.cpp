@@ -6,8 +6,9 @@
 #include "core/thread_runtime.h"
 #include "hle/registry.h"
 #include "java/jvm.h"
-#include <set>
+#include <map>
 #include <string>
+#include <string_view>
 
 using namespace venture;
 namespace {
@@ -19,7 +20,7 @@ struct PhdrInfo {
   GuestAddr tls_data;
 };
 struct Seen {
-  std::set<std::string> names;
+  std::map<std::string, GuestAddr> names;
   unsigned calls = 0;
   bool valid = true;
   int stop = 0;
@@ -30,7 +31,7 @@ void visit(hle::CallContext& c) {
   ++seen.calls;
   seen.valid &= c.x(1) >= sizeof(PhdrInfo) && info.name && info.phdr && info.count;
   const std::string name = g2h<char>(info.name);
-  seen.valid &= seen.names.insert(name).second;
+  seen.valid &= seen.names.emplace(name, info.name).second;
   c.return_x(seen.stop);
 }
 }
@@ -57,6 +58,11 @@ TEST_CASE("Published system libraries are visible through the guest module API")
   CHECK(seen.names.contains(process_image::system_path("libart.so")));
   CHECK(seen.names.contains(process_image::program_path()));
   CHECK(seen.names.contains(process_image::system_path("ld-android.so")));
+  for (const auto& [name, address] : seen.names) {
+    REQUIRE(AddressSpace::get().is_guest_accessible(address, name.size() + 1, false));
+    CHECK(std::string_view(g2h<char>(address), name.size() + 1) ==
+          std::string_view(name.c_str(), name.size() + 1));
+  }
   seen = Seen{};
   seen.stop = 17;
   CHECK(thread.call(iterate, {callback, 0}) == 17);

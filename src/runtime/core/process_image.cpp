@@ -259,6 +259,7 @@ struct State {
   std::map<GuestAddr, std::pair<const Image*, std::string>> entries;  // HLE entry -> (image, name)
   std::unordered_map<const Library*, Node> nodes;
   std::vector<SyntheticModule> synthetic_modules;
+  std::map<std::string, GuestAddr, std::less<>> strings;
   GuestAddr pool = 0; std::uint64_t pool_used = 0;
   std::vector<std::pair<std::uint64_t, std::uint64_t>> auxv;
   GuestAddr pthread_start = 0;
@@ -317,8 +318,10 @@ GuestAddr pool_alloc(State& s, std::uint64_t n) {
 }
 GuestAddr new_soinfo(State& s) { return pool_alloc(s, kSoinfoSize); }
 GuestAddr guest_string(State& s, std::string_view text) {
+  if (const auto it = s.strings.find(text); it != s.strings.end()) return it->second;
   auto p = pool_alloc(s, text.size() + 1);
   std::memcpy(g2h(p), text.data(), text.size());
+  s.strings.emplace(text, p);
   return p;
 }
 void fill_soinfo(State& s, GuestAddr address, const std::string& path, GuestAddr base, std::uint64_t size, GuestAddr bias,
@@ -559,6 +562,12 @@ std::vector<SyntheticModule> synthetic_modules() {
   auto& s = state();
   std::lock_guard lock(s.mutex);
   return s.synthetic_modules;
+}
+
+GuestAddr module_name(std::string_view path) {
+  auto& s = state();
+  std::lock_guard lock(s.mutex);
+  return guest_string(s, path);
 }
 
 void sync(const std::vector<std::shared_ptr<Library>>& libraries) {
