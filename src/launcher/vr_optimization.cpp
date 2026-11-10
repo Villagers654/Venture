@@ -31,6 +31,7 @@ Json to_json(const VrProfile& p) {
               {"cache", p.cache},
               {"interval", p.interval},
               {"transition", p.transition},
+              {"roundness", p.roundness},
               {"gpuBudgetTenths", p.gpu_budget_tenths},
               {"cacheMaxRotation", p.cache_max_rotation},
               {"split", p.split},
@@ -82,6 +83,7 @@ VrProfile from_json(const Json& j) {
   flag("cache", p.cache);
   num("interval", p.interval, 2, 8);
   num("transition", p.transition, 0, 50);
+  num("roundness", p.roundness, 0, 100);
   num("gpuBudgetTenths", p.gpu_budget_tenths, 0, 500);
   num("cacheMaxRotation", p.cache_max_rotation, 0, 300);
   flag("split", p.split);
@@ -269,7 +271,9 @@ bool write_venture_nr(const VrProfile& p, std::string& error) {
                                                    {L"WorkingScale", p.working_scale},
                                                    {L"Cache", p.cache ? 1 : 0},
                                                    {L"Interval", p.interval},
-                                                   {L"Transition", p.transition}};
+                                                   {L"Transition", p.transition},
+                                                   {L"Roundness", p.roundness},
+                                                   {L"Split", p.split ? 1 : 0}};
   return write_dwords(L"SOFTWARE\\Venture\\NR", values, "Venture NR", error);
 #else
   (void)p;

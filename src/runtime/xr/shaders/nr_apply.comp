@@ -1,8 +1,9 @@
 #version 450
-// Venture NR (xr/dlss.cpp): the region as shown is the game's region plus NR's
+// Venture NR (xr/venture_nr.cpp): the region as shown is the game's region plus NR's
 // correction (NR's output minus its input, at NR's working resolution, read
 // bilinearly), faded out over the transition band at the region's edge. With a
-// cached frame the correction is the last one NR made.
+// cached frame the correction is the last one NR made. Its corners can be rounded
+// (an ellipse at 1), and the split view applies NR to the left half only.
 layout(local_size_x = 8, local_size_y = 8) in;
 layout(set = 0, binding = 0) uniform sampler2D original;   // the region, full size
 layout(set = 0, binding = 1) uniform sampler2D lowInput;   // NR's input, working size
@@ -13,6 +14,8 @@ layout(push_constant) uniform Parameters {
   ivec2 size;        // the region
   float transition;  // the faded band, a fraction of the region (0: a hard edge)
   float strength;    // 1: NR's correction, 0: none
+  float roundness;   // 0: square corners, 1: an ellipse
+  int split;         // 1: NR on the left half only (A/B comparison)
 } p;
 
 void main() {
@@ -23,9 +26,15 @@ void main() {
   vec4 base = texelFetch(original, q, 0);
   vec3 correction = texture(lowOutput, uv).rgb - texture(lowInput, uv).rgb;
   float weight = p.strength;
-  if (p.transition > 0.0) {
-    vec2 edge = min(uv, 1.0 - uv);
-    weight *= smoothstep(0.0, p.transition, min(edge.x, edge.y));
-  }
+  if (p.split != 0 && uv.x >= 0.5)
+    weight = 0.0;
+  // Distance inside the rounded rectangle, in the region's normalized coordinates.
+  float radius = 0.5 * clamp(p.roundness, 0.0, 1.0);
+  vec2 corner = abs(uv - 0.5) - (0.5 - radius);
+  float inside = radius - length(max(corner, 0.0)) - min(max(corner.x, corner.y), 0.0);
+  if (inside <= 0.0)
+    weight = 0.0;
+  else if (p.transition > 0.0)
+    weight *= smoothstep(0.0, p.transition, inside);
   imageStore(result, q, vec4(base.rgb + correction * weight, base.a));
 }

@@ -43,10 +43,11 @@ struct VrProfile {
   bool cache = false;        // NR at most every `interval` frames, its last correction between
   int interval = 2;
   int transition = 8;        // percent of the region over which its edge fades into the game's image
+  int roundness = 0;         // Venture NR: the region's corners (percent: 0 square, 100 an ellipse)
   // VDXR only.
   int gpu_budget_tenths = 0;    // adaptive cache: NR every frame while it costs less (0.1 ms; 0 = always cache)
   int cache_max_rotation = 20;  // tenths of a degree of head rotation before the cache refreshes
-  bool split = false;           // A/B: NR on the region's left half only
+  bool split = false;           // A/B: NR on the region's left half only (VDXR and Venture NR)
   bool motion = true;           // motion vectors from optical flow
   bool use_depth = true;        // the game's depth, when it submits one
   bool mirror = false;          // VDXR's mirror window (the right eye after NR), for an OBS window capture

@@ -102,6 +102,8 @@ struct NrSettings {
   bool cache = false;          // NR every `interval` frames, its last correction on the frames between
   std::uint32_t interval = 2;
   float transition = 0.f;      // the region's edge fades over this fraction of it
+  float roundness = 0.f;       // the region's corners: 0 square, 1 an ellipse
+  bool split = false;          // NR on the region's left half only (A/B comparison)
 };
 // The launcher's values (SOFTWARE\Venture\NR), read again a few times a second.
 NrSettings read_nr_settings(NrSettings current) {
@@ -129,6 +131,8 @@ NrSettings read_nr_settings(NrSettings current) {
   if (const auto v = dword(L"Cache")) current.cache = *v != 0;
   if (const auto v = dword(L"Interval")) current.interval = std::clamp<std::uint32_t>(*v, 2, 8);
   if (const auto v = dword(L"Transition")) current.transition = std::min<DWORD>(*v, 50) / 100.f;
+  if (const auto v = dword(L"Roundness")) current.roundness = std::min<DWORD>(*v, 100) / 100.f;
+  if (const auto v = dword(L"Split")) current.split = *v != 0;
   RegCloseKey(key);
   return current;
 }
@@ -244,7 +248,7 @@ struct NeuralRenderer::Impl {
         {3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}};
     const VkDescriptorSetLayoutCreateInfo set_info{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO, nullptr, 0, 4,
                                                    bindings};
-    const VkPushConstantRange range{VK_SHADER_STAGE_COMPUTE_BIT, 0, 16};
+    const VkPushConstantRange range{VK_SHADER_STAGE_COMPUTE_BIT, 0, 24};  // nr_apply.comp's parameters
     const VkShaderModuleCreateInfo shader_info{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO, nullptr, 0,
                                                sizeof(nr_apply_shader::decode_shader), nr_apply_shader::decode_shader};
     VkShaderModule shader{};
@@ -590,8 +594,10 @@ bool NeuralRenderer::record(VkCommandBuffer command, VkImage source, VkImage tar
     s.barrier(command, eye.result.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
     const struct {
       std::int32_t width, height;
-      float transition, strength;
-    } push{std::int32_t(size.width), std::int32_t(size.height), s.settings.transition, eye.correction ? 1.f : 0.f};
+      float transition, strength, roundness;
+      std::int32_t split;
+    } push{std::int32_t(size.width), std::int32_t(size.height), s.settings.transition, eye.correction ? 1.f : 0.f,
+           s.settings.roundness, s.settings.split ? 1 : 0};
     s.fn<PFN_vkCmdBindPipeline>("vkCmdBindPipeline")(command, VK_PIPELINE_BIND_POINT_COMPUTE, s.pipeline);
     s.fn<PFN_vkCmdBindDescriptorSets>("vkCmdBindDescriptorSets")(command, VK_PIPELINE_BIND_POINT_COMPUTE,
                                                                  s.pipeline_layout, 0, 1, &eye.set, 0, nullptr);

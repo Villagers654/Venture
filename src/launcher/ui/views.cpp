@@ -1932,8 +1932,24 @@ void App::draw_vr_optimization(const std::string& package, float width, bool run
           gap(6);
         }
         if (ui.fold("vr-nr-all", "NR all settings",
-                    vdxr_nr ? "processing order, gaze tracking, motion vectors, depth" : "processing order")) {
+                    vdxr_nr ? "processing order, gaze tracking, motion vectors, depth"
+                            : "processing order, roundness, split view, gaze")) {
           VrUi::value_row("NR Processing Order", "Native image (no upscaling)");
+          if (venture_nr) {
+            ui.percent_row("vr-nr-round", "NR Roundness", &v.roundness, 0, 100, 1, true, kNrColor,
+                           std::format("{:.2f}", v.roundness / 100.0));
+            ui.toggle_row("vr-nr-split", "Split view (NR on the left half)", &v.split);
+            // The NR area follows the same center as VRS (Venture's gaze, or the fixed stereo point).
+            const bool gaze = v.eye_tracking;
+            ui.percent_row("vr-nr-gaze-smoothing", "Gaze smoothing", &v.vrs_gaze_smoothing, 0, 95, 5, gaze, kNrColor);
+            ui.percent_row("vr-nr-gaze-hold", "Gaze hold (blink)", &v.vrs_gaze_hold_ms, 0, 2000, 50, gaze, kNrColor,
+                           std::format("{} ms", v.vrs_gaze_hold_ms));
+            ui.percent_row("vr-nr-distance", "Stereo distance (fixed)", &v.fixed_distance, 0, 1000, 10, !gaze, kNrColor,
+                           v.fixed_distance == 0 ? std::string("infinity")
+                                                 : std::format("{:.1f} m", v.fixed_distance / 100.0));
+            text(fonts().regular, kSmall, color::text3,
+                 "Gaze and stereo distance are shared with VRS. Roundness and split view apply live.");
+          }
           if (vdxr_nr) {
             const bool gaze = v.eye_tracking;
             ui.toggle_row("vr-gaze-eye", "Each eye's own gaze", &v.gaze_per_eye, gaze);

@@ -9,7 +9,8 @@
 // eye), Preset (0 NVIDIA's, 1 model A, 2 model B), Style (0 Neutral, 1 Natural, 2 Cinematic), Intensity, Tone,
 // Structure and Skin (percent), Debug (green outline), WorkingScale (percent: NR at this size, its correction
 // applied full size), Cache and Interval (NR every N frames, its last correction between), Transition (percent:
-// the region's edge fades into the game's image).
+// the region's edge fades into the game's image), Roundness (percent: its corners, 100 an ellipse) and Split
+// (NR on the region's left half only).
 #include "xr/api.h"
 #include "xr/ngx_bridge.h"
 #include <memory>
