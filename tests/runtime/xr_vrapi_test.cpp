@@ -14,6 +14,7 @@
 #include "hle/vrapi/layers.h"
 #include "hle/vrapi/vrapi.h"
 #include "hle/vrapi/state.h"
+#include "hle/vrapi/breathedge_input.h"
 #include "hle/vrapi/vulkan_images.h"
 #include "vulkan_test_support.h"
 #include "gfx/queue_sync.h"
@@ -3044,4 +3045,19 @@ TEST_CASE("VrApi drawn layer frame cost (measurement)" * doctest::skip()) {
   }
   vg::vrapi_DestroyTextureSwapChain(menu);
   vg::vrapi_DestroyTextureSwapChain(panorama);
+}
+
+TEST_CASE("Breathedge legacy turning advertises and emits only right-hand horizontal buttons") {
+  using namespace venture::hle::vrapi;
+  constexpr auto game = "com.HypetrainDigitalLtd.Breathedge";
+  CHECK(breathedge_horizontal_button_mask(game,2)==0x000c0000u);
+  CHECK(breathedge_horizontal_buttons(game,2,-1.f)==0x00040000u);
+  CHECK(breathedge_horizontal_buttons(game,2,1.f)==0x00080000u);
+  for(float value : {-0.5f,0.f,0.5f}) CHECK(breathedge_horizontal_buttons(game,2,value)==0);
+  CHECK(breathedge_horizontal_buttons(game,1,1.f)==0);
+  CHECK(breathedge_horizontal_button_mask(game,1)==0);
+  CHECK(breathedge_horizontal_buttons("com.example.other",2,1.f)==0);
+  CHECK(breathedge_horizontal_button_mask("com.example.other",2)==0);
+  constexpr std::uint32_t held_trigger_and_click=0xa0000000u;
+  CHECK((held_trigger_and_click | breathedge_horizontal_buttons(game,2,1.f))==0xa0080000u);
 }

@@ -15,6 +15,7 @@
 #include "core/thread.h"
 #include "core/guest_storage.h"
 #include "core/process.h"
+#include "hle/gles/breathedge_flat_varyings.h"
 #include "core/pipeline_stats.h"
 #include "core/wait.h"
 #include "hle/egl/egl.h"
@@ -402,6 +403,32 @@ struct ProgramTimer {
     }
   }
 };
+void breathedge_shader_source(GLuint shader, GLsizei count,
+                              const GLchar* const* strings, const GLint* lengths) {
+  const auto forward = angle_function<PFNGLSHADERSOURCEPROC, "glShaderSource">();
+  if (count <= 0 || !strings) {
+    forward(shader, count, strings, lengths);
+    return;
+  }
+  GLint type = 0;
+  angle_function<PFNGLGETSHADERIVPROC, "glGetShaderiv">()(shader, GL_SHADER_TYPE, &type);
+  if (type != GL_VERTEX_SHADER && type != GL_FRAGMENT_SHADER) {
+    forward(shader, count, strings, lengths);
+    return;
+  }
+  std::string original;
+  for (GLsizei i = 0; i < count; ++i) {
+    if (!strings[i]) { forward(shader, count, strings, lengths); return; }
+    if (lengths && lengths[i] >= 0) original.append(strings[i], std::size_t(lengths[i]));
+    else original.append(strings[i]);
+  }
+  const auto corrected = breathedge_flat_varyings(original, type == GL_VERTEX_SHADER);
+  if (corrected == original) { forward(shader, count, strings, lengths); return; }
+  const GLchar* data = corrected.data();
+  const GLint size = static_cast<GLint>(corrected.size());
+  forward(shader, 1, &data, &size);
+  log::info("gles", "Breathedge integer varying flat correction shader={} type={:#x}", shader, type);
+}
 void compile_shader(GLuint shader) {
   static const auto fn = angle_function<PFNGLCOMPILESHADERPROC, "glCompileShader">();
   ProgramTimer timer{0};
@@ -545,6 +572,9 @@ bool capture_gl_errors() {
   return ok;
 }
 hle::Handler special_gl_handler(std::string_view name) {
+  if (name == "glShaderSource" && process_config().isa() == GuestIsa::a64 &&
+      process_config().package == "com.HypetrainDigitalLtd.Breathedge")
+    return wrap<&breathedge_shader_source>();
   if (name == "glLabelObjectEXT") return wrap<&label_object>();
   if (name == "glGetObjectLabelEXT") return wrap<&get_object_label>();
   if (name == "glGetString")

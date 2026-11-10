@@ -24,6 +24,7 @@
 #include "gfx/dispatch.h"
 #include "gfx/gpu_device.h"
 #include "hle/gles/gles_state.h"
+#include "hle/gles/breathedge_flat_varyings.h"
 #include "gfx/gpu_device_internal.h"
 #include "gfx/spirv_precision.h"
 #include "gfx/texture_decode.h"
@@ -1711,6 +1712,50 @@ TEST_CASE("gfx guest no-error contexts follow KHR_no_error over validated ANGLE"
   call("glGetIntegerv", GL_ARRAY_BUFFER_BINDING, &binding);
   CHECK(binding == static_cast<GLint>(buffer));
   call("glDeleteBuffers", 1, &buffer);
+}
+
+
+TEST_CASE("Breathedge integer varying repair preserves stage interfaces") {
+  const std::string source="#version 310 es\nout highp uint eye;\nin highp uint attribute;\nout vec4 color;\nflat out int ready;\nvoid f(out int argument) {}\n";
+  const auto vertex=breathedge_flat_varyings(source,true);
+  CHECK(vertex.find("flat out highp uint eye;")!=std::string::npos);
+  CHECK(vertex.find("\nin highp uint attribute;")!=std::string::npos);
+  CHECK(vertex.find("out vec4 color;")!=std::string::npos);
+  CHECK(vertex.find("flat flat")==std::string::npos);
+  CHECK(vertex.find("void f(out int argument) {}")!=std::string::npos);
+  CHECK(breathedge_flat_varyings(vertex,true)==vertex);
+  const auto fragment=breathedge_flat_varyings(source,false);
+  CHECK(fragment.find("flat in highp uint attribute;")!=std::string::npos);
+  CHECK(fragment.find("\nout highp uint eye;")!=std::string::npos);
+  CHECK(breathedge_flat_varyings("layout(location=2) out mediump uvec4 data[2];\n",true)=="layout(location=2) flat out mediump uvec4 data[2];\n");
+}
+// Run alone with VENTURE_BREATHEDGE_GPU_TEST=1 and VENTURE_ANGLE_DIR set.
+TEST_CASE("Breathedge original integer varying shaders link and render on ANGLE") {
+  if (!have_angle() || !std::getenv("VENTURE_BREATHEDGE_GPU_TEST")) return;
+  process_config().package="com.HypetrainDigitalLtd.Breathedge";
+  EglSession egl;
+  const char* sources[]{
+    "#version 300 es\nout highp uint eye;\nvoid main(){vec2 p=vec2((gl_VertexID<<1)&2,gl_VertexID&2);gl_Position=vec4(p*2.-1.,0,1);eye=1u;}\n",
+    "#version 300 es\nprecision highp float;\nflat in highp uint eye;\nout vec4 color;\nvoid main(){color=vec4(0.,eye==1u?1.:0.,0.,1.);}\n"};
+  GLuint shaders[2];
+  const auto program=static_cast<GLuint>(call("glCreateProgram"));
+  for(int i=0;i<2;++i) {
+    shaders[i]=static_cast<GLuint>(call("glCreateShader",i?GL_FRAGMENT_SHADER:GL_VERTEX_SHADER));
+    call("glShaderSource",shaders[i],1,&sources[i],0);call("glCompileShader",shaders[i]);
+    GLint compiled{};call("glGetShaderiv",shaders[i],GL_COMPILE_STATUS,&compiled);REQUIRE(compiled);
+    call("glAttachShader",program,shaders[i]);
+  }
+  call("glLinkProgram",program);GLint linked{};call("glGetProgramiv",program,GL_LINK_STATUS,&linked);REQUIRE(linked);
+  call("glUseProgram",program);
+  GLuint texture{},fbo{};call("glGenTextures",1,&texture);call("glBindTexture",GL_TEXTURE_2D,texture);
+  call("glTexStorage2D",GL_TEXTURE_2D,1,GL_RGBA8,1,1);call("glGenFramebuffers",1,&fbo);
+  call("glBindFramebuffer",GL_FRAMEBUFFER,fbo);call("glFramebufferTexture2D",GL_FRAMEBUFFER,GL_COLOR_ATTACHMENT0,GL_TEXTURE_2D,texture,0);
+  REQUIRE(call("glCheckFramebufferStatus",GL_FRAMEBUFFER)==GL_FRAMEBUFFER_COMPLETE);
+  call("glViewport",0,0,1,1);call("glDrawArrays",GL_TRIANGLES,0,3);
+  std::array<std::uint8_t,4> pixel{};call("glReadPixels",0,0,1,1,GL_RGBA,GL_UNSIGNED_BYTE,pixel.data());
+  CHECK(pixel[0]==0);CHECK(pixel[1]==255);CHECK(pixel[2]==0);CHECK(pixel[3]==255);
+  call("glDeleteFramebuffers",1,&fbo);call("glDeleteTextures",1,&texture);call("glDeleteProgram",program);
+  for(auto shader:shaders)call("glDeleteShader",shader);CHECK(call("glGetError")==GL_NO_ERROR);
 }
 
 TEST_SUITE_END();
