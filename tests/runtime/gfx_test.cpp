@@ -1713,5 +1713,63 @@ TEST_CASE("gfx guest no-error contexts follow KHR_no_error over validated ANGLE"
   call("glDeleteBuffers", 1, &buffer);
 }
 
+// Run alone with VENTURE_HOMEWORLD_GPU_TEST=1 and VENTURE_ANGLE_DIR set.
+// Exercises the real guest ABI, GLSL compiler and GPU array layers.
+TEST_CASE("Homeworld emulation preserves both eyes and base-vertex draws") {
+  if (!have_angle()) return;
+  if (!std::getenv("VENTURE_HOMEWORLD_GPU_TEST")) { MESSAGE("Run this isolated GPU test with VENTURE_HOMEWORLD_GPU_TEST=1"); return; }
+  process_config().package = "com.farbridge.vastreaches";
+  EglSession egl;
+  const char* sources[]{
+    "#version 300 es\n#extension GL_OVR_multiview2 : require\n"
+    "#ifdef UNDEFINED_OPTIONAL_EXTENSION\n#extension GL_EXT_shader_texture_lod : enable\n#endif\n"
+    "layout(num_views=2) in;\nflat out highp uint eye;\n"
+    "void main(){vec2 p=vec2((gl_VertexID<<1)&2,gl_VertexID&2);"
+    "gl_Position=vec4(p*2.-1.,0,1);eye=gl_ViewID_OVR;}\n",
+    "#version 300 es\nprecision highp float;\nflat in highp uint eye;\nout vec4 color;\n"
+    "void main(){color=vec4(eye==0u?1.:0.,eye==1u?1.:0.,0.,1.);}\n"};
+  GLuint shaders[2];
+  const auto program=static_cast<GLuint>(call("glCreateProgram"));
+  for(int i=0;i<2;++i) {
+    shaders[i]=static_cast<GLuint>(call("glCreateShader",i?GL_FRAGMENT_SHADER:GL_VERTEX_SHADER));
+    call("glShaderSource",shaders[i],1,&sources[i],0);
+    call("glCompileShader",shaders[i]);
+    GLint compiled{};call("glGetShaderiv",shaders[i],GL_COMPILE_STATUS,&compiled);REQUIRE(compiled);
+    call("glAttachShader",program,shaders[i]);
+  }
+  call("glLinkProgram",program);
+  GLint linked{};call("glGetProgramiv",program,GL_LINK_STATUS,&linked);REQUIRE(linked);
+  call("glUseProgram",program);
+  GLuint texture{},fbo[2]{},ebo{};
+  call("glGenTextures",1,&texture);call("glBindTexture",GL_TEXTURE_2D_ARRAY,texture);
+  call("glTexStorage3D",GL_TEXTURE_2D_ARRAY,1,GL_RGBA8,4,4,2);
+  call("glGenFramebuffers",2,fbo);
+  call("glGenBuffers",1,&ebo);call("glBindBuffer",GL_ELEMENT_ARRAY_BUFFER,ebo);
+  const std::uint16_t indices[]{1,2,3};
+  call("glBufferData",GL_ELEMENT_ARRAY_BUFFER,sizeof(indices),indices,GL_STATIC_DRAW);
+  for(int mode=0;mode<4;++mode) {
+    CAPTURE(mode);
+    call("glBindFramebuffer",GL_FRAMEBUFFER,fbo[0]);
+    call("glFramebufferTextureMultisampleMultiviewOVR",GL_FRAMEBUFFER,GL_COLOR_ATTACHMENT0,texture,0,4,0,2);
+    REQUIRE(call("glCheckFramebufferStatus",GL_FRAMEBUFFER)==GL_FRAMEBUFFER_COMPLETE);
+    call("glViewport",0,0,4,4);call("glClearColor",0.f,0.f,0.f,1.f);call("glClear",GL_COLOR_BUFFER_BIT);
+    if(mode==0)call("glDrawArrays",GL_TRIANGLES,0,3);
+    if(mode==1)call("glDrawElementsBaseVertex",GL_TRIANGLES,3,GL_UNSIGNED_SHORT,0,-1);
+    if(mode==2)call("glDrawRangeElementsBaseVertex",GL_TRIANGLES,1,3,3,GL_UNSIGNED_SHORT,0,-1);
+    if(mode==3)call("glDrawElementsInstancedBaseVertex",GL_TRIANGLES,3,GL_UNSIGNED_SHORT,0,1,-1);
+    REQUIRE(call("glGetError")==GL_NO_ERROR);
+    for(int eye=0;eye<2;++eye) {
+      call("glBindFramebuffer",GL_FRAMEBUFFER,fbo[1]);
+      call("glFramebufferTextureLayer",GL_FRAMEBUFFER,GL_COLOR_ATTACHMENT0,texture,0,eye);
+      std::array<std::uint8_t,4> pixel{};
+      call("glReadPixels",1,1,1,1,GL_RGBA,GL_UNSIGNED_BYTE,pixel.data());
+      CHECK(pixel[0]==(eye==0?255:0));CHECK(pixel[1]==(eye==1?255:0));CHECK(pixel[3]==255);
+    }
+  }
+  call("glDeleteBuffers",1,&ebo);call("glDeleteFramebuffers",2,fbo);call("glDeleteTextures",1,&texture);
+  call("glDeleteProgram",program);for(auto shader:shaders)call("glDeleteShader",shader);
+  CHECK(call("glGetError")==GL_NO_ERROR);
+}
+
 TEST_SUITE_END();
 
