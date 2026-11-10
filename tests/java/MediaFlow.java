@@ -83,6 +83,76 @@ public class MediaFlow {
   // Unreal's MediaPlayer14 reads tracks through the Java MediaExtractor and
   // A decoder without a Surface serves each output buffer as a YUV_420_888 Image
   // (CRIWARE Mana reads its movie frames this way), invalid once released.
+  // MediaCodec renders into an ImageReader's Surface (Unreal's Electra player
+  // on Quest): one onImageAvailable per frame on the listener's Handler, CPU
+  // planes for RGBA readers and an AHardwareBuffer for PRIVATE ones.
+  public static String imageReader(byte[] config, byte[][] packets, long[] times, int format) {
+    android.media.MediaCodec codec=null;
+    var reader=android.media.ImageReader.newInstance(128,72,format,3);
+    HandlerThread events=new HandlerThread("image-reader-test");events.start();
+    var images=new java.util.concurrent.LinkedBlockingQueue<Object>();
+    try {
+      if(reader.getSurface()==null || !reader.getSurface().isValid())return "reader surface";
+      reader.setOnImageAvailableListener(r->{
+        try {
+          var image=r.acquireNextImage();
+          if(image==null){images.add("no image after onImageAvailable");return;}
+          try {
+            if(image.getWidth()!=128 || image.getHeight()!=72 || image.getFormat()!=format){images.add("image size/format");return;}
+            var buffer=image.getHardwareBuffer();
+            if(format==android.graphics.ImageFormat.PRIVATE) {
+              if(buffer==null){images.add("no hardware buffer");return;}
+              if(buffer.getWidth()!=128 || buffer.getHeight()!=72 || buffer.getLayers()!=1){images.add("buffer size");return;}
+              if((buffer.getUsage()&android.hardware.HardwareBuffer.USAGE_GPU_SAMPLED_IMAGE)==0){images.add("buffer usage");return;}
+              buffer.close();
+              if(!buffer.isClosed()){images.add("buffer close");return;}
+              images.add(Integer.valueOf(0));
+            } else {
+              var planes=image.getPlanes();
+              if(planes.length!=1 || planes[0].getPixelStride()!=4 || planes[0].getRowStride()!=128*4){images.add("rgba plane");return;}
+              var pixels=planes[0].getBuffer();
+              if(pixels.remaining()!=128*72*4){images.add("rgba size");return;}
+              int low=255,high=0;
+              for(int n=0;n<pixels.remaining();n+=4){int v=pixels.get(n)&0xff;low=Math.min(low,v);high=Math.max(high,v);}
+              images.add(Integer.valueOf(high-low));
+            }
+          } finally {image.close();}
+          try{image.getPlanes();images.add("image valid after close");}catch(IllegalStateException expected){}
+        } catch(Throwable e){images.add("listener: "+e);}
+      },new Handler(events.getLooper()));
+      codec=android.media.MediaCodec.createDecoderByType("video/avc");
+      var mediaFormat=android.media.MediaFormat.createVideoFormat("video/avc",128,72);
+      mediaFormat.setByteBuffer("csd-0",java.nio.ByteBuffer.wrap(config));codec.configure(mediaFormat,reader.getSurface(),null,0);codec.start();
+      var info=new android.media.MediaCodec.BufferInfo();int input=0,frames=0;boolean queuedEos=false,eos=false;
+      long deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(5);
+      int range=0;
+      while(!eos && System.nanoTime()<deadline) {
+        int index=queuedEos?-1:codec.dequeueInputBuffer(1000);
+        if(index>=0) {
+          var buffer=codec.getInputBuffer(index);buffer.clear();
+          if(input<packets.length){buffer.put(packets[input]);codec.queueInputBuffer(index,0,packets[input].length,times[input],0);input++;}
+          else {codec.queueInputBuffer(index,0,0,1000000,4);queuedEos=true;}
+        }
+        index=codec.dequeueOutputBuffer(info,1000);
+        if(index<0)continue;
+        eos=(info.flags&4)!=0;
+        codec.releaseOutputBuffer(index,!eos);
+        if(eos)break;
+        // Wait for this frame's image before rendering the next: a reader drops
+        // its oldest frame when full, as an asynchronous BufferQueue does.
+        var result=images.poll(2,TimeUnit.SECONDS);
+        if(result==null)return "no onImageAvailable for frame "+frames;
+        if(result instanceof String)return (String)result;
+        range=Math.max(range,(Integer)result);frames++;
+      }
+      if(!eos || frames!=12)return "reader EOS/frame count "+frames;
+      if(format!=android.graphics.ImageFormat.PRIVATE && range<32)return "rgba range "+range;
+      reader.close();
+      try{reader.acquireNextImage();return "acquire after close";}catch(IllegalStateException expected){}
+      return null;
+    } catch(Throwable e){return "image reader: "+e;}
+    finally {if(codec!=null)codec.release();reader.close();events.quitSafely();try{events.join(2000);}catch(InterruptedException e){Thread.currentThread().interrupt();}}
+  }
   public static String image(byte[] config, byte[][] packets, long[] times) {
     android.media.MediaCodec codec=null;
     try {

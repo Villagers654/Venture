@@ -3,5 +3,6 @@
 namespace venture::java {
 void register_media_players(JNIEnv*);
 void register_surface_textures(JNIEnv*);
+void register_image_readers(JNIEnv*);
 void shutdown_media_players();
 }

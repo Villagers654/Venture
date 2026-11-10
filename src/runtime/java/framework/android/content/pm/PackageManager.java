@@ -319,6 +319,14 @@ public class PackageManager {
   public android.content.res.Resources getResourcesForApplication(ApplicationInfo info) {
     return RuntimeEnvironment.resources();
   }
+  // AOSP returns null when the package or the resource is missing.
+  public android.content.res.XmlResourceParser getXml(String pkg, int id, ApplicationInfo info) {
+    try {
+      return getResourcesForApplication(info).getXml(id);
+    } catch (RuntimeException missing) {
+      return null;
+    }
+  }
   public String getInstallerPackageName(String pkg) {
     return null;
   }

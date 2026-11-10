@@ -7,6 +7,8 @@ public class Surface implements AutoCloseable {
     if (ownedHandle == 0) throw new IllegalArgumentException("Null native window");
     nativeHandle = ownedHandle;
   }
+  // A consumer's own window (ImageReader): the Surface takes the reference it is given.
+  public static Surface ventureAdopt(long ownedHandle) { return new Surface(ownedHandle); }
   public Surface(android.graphics.SurfaceTexture texture) {
     this(java.util.Objects.requireNonNull(texture).ventureAcquireWindow());
   }

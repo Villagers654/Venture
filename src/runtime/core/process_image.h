@@ -1,5 +1,5 @@
 // The guest's view of an Android app process (Quest: Android 12L, API 32):
-// /system/bin/app_process64, the bionic linker and the system libraries as ELF
+// /system/bin/app_process64 (app_process32 for A32), the bionic linker and the system libraries as ELF
 // objects in memory and on the guest filesystem, the linker's soinfo list,
 // r_debug for load notifications, and the auxiliary vector. In-process tools
 // (instrumentation runtimes, crash reporters, mod loaders) locate the linker
@@ -23,7 +23,7 @@ struct DlInfo;
 }
 
 namespace venture::process_image {
-// After HLE registration, before guest code runs. A64 processes only.
+// After HLE registration, before guest code runs. A64 and A32 processes.
 void publish();
 bool published();
 // Published ELF objects without native backing. Snapshot under the process

@@ -1,4 +1,5 @@
 #pragma once
+#include <filesystem>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -90,4 +91,7 @@ class Session {
   struct Impl;
   std::unique_ptr<Impl> impl_;
 };
+// ovr_CloudStorage2_GetUserDirectoryPath as on Quest: the app's cloud backup
+// folder under its external files directory, created on first request.
+void register_cloud_storage_handler(Session&, std::string guest_path, std::filesystem::path host_path);
 }  // namespace venture::ovrplatform

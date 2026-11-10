@@ -6,6 +6,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstring>
+#include <optional>
 #include <functional>
 #include <future>
 #include <cstdlib>
@@ -2205,31 +2206,40 @@ std::vector<VkBufferMemoryBarrier> shadow_ownership(VkCommandBuffer cmd, std::ui
 }
 // Eager companions follow guest layouts and ownership. Sparse companions use
 // GENERAL and concurrent sharing so private first-use decoding is independent
-// of the guest's current layout and queue family.
+// of the guest's current layout and queue family. A barrier on a null image is
+// dropped: VrApi answers the foveation query with no image, and an engine that
+// views that handle (texture.cpp vkCreateImageView) also transitions it (The
+// Climb: the NVIDIA driver faulted). The stand-in density image keeps its layout.
+// Unset when the barriers pass through unchanged.
 template <class Barrier>
-std::vector<Barrier> with_companions(std::uint32_t count, const Barrier* barriers) {
-  std::vector<Barrier> out;
+std::optional<std::vector<Barrier>> with_companions(std::uint32_t count, const Barrier* barriers) {
+  std::optional<std::vector<Barrier>> out;
+  auto start = [&](std::uint32_t upto) {
+    if (!out) out.emplace(barriers, barriers + upto);
+  };
   for (std::uint32_t i = 0; i < count; ++i) {
+    if (!barriers[i].image) { start(i); continue; }
+    if (out) out->push_back(barriers[i]);
     auto img = image(barriers[i].image);
     if (!img || img->companions.empty()) continue;
-    if (out.empty()) out.assign(barriers, barriers + count);
+    start(i + 1);
     for (auto& companion : img->companions) {
-      out.push_back(barriers[i]);
-      out.back().image = companion->image;
+      out->push_back(barriers[i]);
+      out->back().image = companion->image;
       if (companion->lazy) {
-        out.back().oldLayout = barriers[i].oldLayout == VK_IMAGE_LAYOUT_UNDEFINED ?
+        out->back().oldLayout = barriers[i].oldLayout == VK_IMAGE_LAYOUT_UNDEFINED ?
             VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_GENERAL;
-        out.back().newLayout = VK_IMAGE_LAYOUT_GENERAL;
-        out.back().srcQueueFamilyIndex = out.back().dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        out->back().newLayout = VK_IMAGE_LAYOUT_GENERAL;
+        out->back().srcQueueFamilyIndex = out->back().dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
       }
     }
   }
   return out;
 }
 VkDependencyInfo with_companions(const VkDependencyInfo& info, std::vector<VkImageMemoryBarrier2>& storage) {
-  storage = with_companions(info.imageMemoryBarrierCount, info.pImageMemoryBarriers);
   auto copy = info;
-  if (!storage.empty()) {
+  if (auto images = with_companions(info.imageMemoryBarrierCount, info.pImageMemoryBarriers)) {
+    storage = std::move(*images);
     copy.imageMemoryBarrierCount = static_cast<std::uint32_t>(storage.size());
     copy.pImageMemoryBarriers = storage.data();
   }
@@ -2248,9 +2258,9 @@ void VKAPI_CALL barrier(VkCommandBuffer cmd, VkPipelineStageFlags source, VkPipe
     dest |= VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
   }
   auto images = with_companions(image_count, image_barriers);
-  if (!images.empty()) {
-    image_barriers = images.data();
-    image_count = static_cast<std::uint32_t>(images.size());
+  if (images) {
+    image_barriers = images->data();
+    image_count = static_cast<std::uint32_t>(images->size());
   }
   vk<PFN_vkCmdPipelineBarrier>(command_device(cmd), "vkCmdPipelineBarrier")(
       cmd, source, dest, flags, memory_count, memory, buffer_count, buffers, image_count, image_barriers);
@@ -2267,9 +2277,9 @@ void VKAPI_CALL wait_events(VkCommandBuffer cmd, std::uint32_t event_count, cons
   auto additional = shadow_ownership(cmd, image_count, image_barriers);
   if (!additional.empty()) throw std::runtime_error("queue ownership transfer in vkCmdWaitEvents");
   auto images = with_companions(image_count, image_barriers);
-  if (!images.empty()) {
-    image_barriers = images.data();
-    image_count = static_cast<std::uint32_t>(images.size());
+  if (images) {
+    image_barriers = images->data();
+    image_count = static_cast<std::uint32_t>(images->size());
   }
   vk<PFN_vkCmdWaitEvents>(command_device(cmd), "vkCmdWaitEvents")(cmd, event_count, events, source, dest,
                                                                   memory_count, memory, buffer_count, buffers,

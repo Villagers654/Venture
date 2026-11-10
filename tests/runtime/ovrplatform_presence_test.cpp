@@ -116,3 +116,25 @@ TEST_CASE("Platform LaunchOtherApp forwards optional options and receives standa
   completion(session, id, 0x54e2d1f8);
   session.shutdown(); child->close(); launcher.join();
 }
+TEST_CASE("Platform CloudStorage2 user directory is the app's cloud folder and exists, as on Quest") {
+  optest::Arena arena;
+  Session session(optest::app(), std::make_shared<PresenceProvider>(), arena.memory());
+  const auto host = std::filesystem::temp_directory_path() /
+      ("venture-cloud-" + std::to_string(venture::current_process_id())) / "files" / "cloud" / "data";
+  std::filesystem::remove_all(host.parent_path().parent_path());
+  const std::string guest = "/storage/emulated/0/Android/data/com.fixture/files/cloud/data";
+  register_cloud_storage_handler(session, guest, host);
+  REQUIRE(session.initialize(optest::app().app_id) == InitResult::success);
+  const auto id = optest::invoke(session, "ovr_CloudStorage2_GetUserDirectoryPath");
+  auto message = optest::wait_pop(session);
+  CHECK(session.get(message, "ovr_Message_GetRequestID") == id);
+  CHECK(session.get(message, "ovr_Message_GetType") == 0x76a42eee);
+  REQUIRE_FALSE(session.get(message, "ovr_Message_IsError"));
+  const auto text = session.get(message, "ovr_Message_GetString");
+  REQUIRE(text);
+  CHECK(std::string(venture::g2h<char>(text)) == guest);
+  session.free_message(message);
+  CHECK(std::filesystem::is_directory(host));
+  session.shutdown();
+  std::filesystem::remove_all(host.parent_path().parent_path());
+}

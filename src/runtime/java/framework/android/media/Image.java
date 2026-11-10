@@ -31,6 +31,8 @@ public abstract class Image implements AutoCloseable {
     }
     this.cropRect = cropRect;
   }
+  // API 28: images without a buffer (CPU frames) return null.
+  public android.hardware.HardwareBuffer getHardwareBuffer() { throwISEIfImageIsInvalid(); return null; }
   public abstract Plane[] getPlanes();
   @Override public abstract void close();
   public abstract static class Plane {

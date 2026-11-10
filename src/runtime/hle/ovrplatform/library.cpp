@@ -52,6 +52,10 @@ std::unique_ptr<Session> make_runtime_session(
   ProgressionPolicy policy;
   policy.leaderboard_writes = process_config().platform_leaderboard_writes;
   register_progression_handlers(*session, policy);
+  const auto& config = process_config();
+  register_cloud_storage_handler(*session, config.guest_external_files_dir() + "/cloud/data",
+                                 config.data_dir.empty() ? std::filesystem::path{}
+                                     : config.data_dir / "external-data" / "files" / "cloud" / "data");
   return session;
 }
 std::shared_ptr<HleLibrary> make_library(Session& session, std::span<const Export> extra) {

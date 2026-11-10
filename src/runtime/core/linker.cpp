@@ -312,6 +312,11 @@ Definition resolve(State& s, elf::Image* requester, const std::vector<Library*>&
     if (skip_self && requester && lib == requester->owner) continue;
     auto d = lookup_one(lib, name, version, hide_absent); if (d.library) return d;
   }
+  // app_process also links the system C++ runtime, so its ABI exports
+  // (__cxa_guard_*, operator new) reach a library that lists no C++ library
+  // (Espire 2's libEOSSDK.so). Last, so no definition found above changes.
+  if (auto it = s.names.find("libstdc++.so"); it != s.names.end() && !(skip_self && requester && it->second.get() == requester->owner))
+    if (auto d = lookup_one(it->second.get(), name, version, hide_absent); d.library) return d;
   return {};
 }
 GuestAddr ifunc(State& s, elf::Image& image, GuestAddr resolver) {
@@ -561,7 +566,7 @@ void Linker::register_hle_library(std::shared_ptr<HleLibrary> lib) {
   auto& s = state(); std::lock_guard lock(s.mutex);
   if (lib->soname() == "libc.so" && !lib->hle_symbol("__tls_get_addr")) lib->add_function("__tls_get_addr", tls::get_addr_thunk());
   s.libraries.push_back(lib); s.names[lib->soname()] = lib; s.names[lib->path()] = lib;
-  if (process_config().isa() == GuestIsa::a64) s.names[process_image::system_path(lib->soname())] = lib;
+  s.names[process_image::system_path(lib->soname())] = lib;
   for (const auto& alias : lib->aliases()) s.names[alias] = lib;
 }
 void Linker::set_search_paths(std::vector<std::string> paths) { auto& s = state(); std::lock_guard lock(s.mutex); s.search_paths = std::move(paths); s.exports.clear(); s.backing_files.clear(); }

@@ -1034,4 +1034,15 @@ void Session::shutdown() {
   for (auto& worker : impl_->workers) worker.request_stop();
   impl_->wake.notify_all();
 }
+void register_cloud_storage_handler(Session& session, std::string guest_path, std::filesystem::path host_path) {
+  session.register_handler("ovr_CloudStorage2_GetUserDirectoryPath", HandlerSpec{
+      [guest = std::move(guest_path), host = std::move(host_path)](Provider&, const RequestArgs&, std::stop_token) {
+        Result r;
+        std::error_code error;
+        if (!host.empty()) std::filesystem::create_directories(host, error);
+        if (error) r.error = failure(ErrorCode::unavailable);
+        else r.model = {"String", {{"Value", guest}}};
+        return r;
+      }, "String"});
+}
 }  // namespace venture::ovrplatform

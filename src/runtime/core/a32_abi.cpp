@@ -242,6 +242,44 @@ const Descriptor* descriptor(std::string_view library, std::string_view symbol) 
     static constexpr Descriptor mmap2{"libc.so", "__mmap2", {Kind::Ptr, "void *"}, arguments, false, "bionic __mmap2.S"};
     return &mmap2;
   }
+  // bionic linker internals presented by the process image (core/process_image.cpp):
+  // soinfo* solist_get_head(), soinfo* solist_get_somain(), and the soinfo
+  // getters const char* soinfo::get_realpath() / get_soname() (this in r0).
+  // The linker's __loader_* entry points (bionic linker/dlfcn.cpp) take the
+  // caller's address last; libdl.so forwards its calls to them.
+  // NDK android/hardware_buffer_jni.h (API 26), not in the generated NDK table.
+  if (library == "libandroid.so") {
+    static constexpr Type env{Kind::Layout, "JNIEnv *"}, object{Kind::Handle, "jobject"}, buffer{Kind::Handle, "AHardwareBuffer *"};
+    static constexpr Type from[]{env, object}, to[]{env, buffer};
+    static constexpr Descriptor jni[]{
+        {"libandroid.so", "AHardwareBuffer_fromHardwareBuffer", buffer, from, false, "NDK r30 hardware_buffer_jni.h"},
+        {"libandroid.so", "AHardwareBuffer_toHardwareBuffer", object, to, false, "NDK r30 hardware_buffer_jni.h"}};
+    for (const auto& entry : jni) if (entry.symbol == symbol) return &entry;
+  }
+  if (library == "ld-android.so") {
+    static constexpr Type self[]{{Kind::Ptr, "const soinfo *"}};
+    static constexpr Type caller{Kind::Ptr, "const void *"}, name{Kind::Ptr, "const char *", 1, 4}, flags{Kind::I32, "int"},
+        handle{Kind::Ptr, "void *"};
+    static constexpr Type open[]{name, flags, caller}, open_ext[]{name, flags, {Kind::Layout, "const android_dlextinfo *"}, caller},
+        sym[]{handle, name, caller}, vsym[]{handle, name, name, caller}, close[]{handle},
+        addr[]{{Kind::Ptr, "const void *"}, {Kind::Layout, "Dl_info *"}},
+        iterate[]{{Kind::Callback, "int (*)(struct dl_phdr_info *, size_t, void *)"}, {Kind::Ptr, "void *"}};
+    static constexpr std::string_view source = "bionic linker_soinfo.h, linker_main.cpp, linker/dlfcn.cpp";
+    static constexpr Descriptor internals[]{
+        {"ld-android.so", "solist_get_head", {Kind::Ptr, "soinfo *"}, {}, false, source},
+        {"ld-android.so", "solist_get_somain", {Kind::Ptr, "soinfo *"}, {}, false, source},
+        {"ld-android.so", "soinfo::get_realpath", {Kind::Ptr, "const char *"}, self, false, source},
+        {"ld-android.so", "soinfo::get_soname", {Kind::Ptr, "const char *"}, self, false, source},
+        {"ld-android.so", "__loader_dlopen", handle, open, false, source},
+        {"ld-android.so", "__loader_android_dlopen_ext", handle, open_ext, false, source},
+        {"ld-android.so", "__loader_dlsym", handle, sym, false, source},
+        {"ld-android.so", "__loader_dlvsym", handle, vsym, false, source},
+        {"ld-android.so", "__loader_dlclose", flags, close, false, source},
+        {"ld-android.so", "__loader_dlerror", {Kind::Ptr, "char *", 1, 4}, {}, false, source},
+        {"ld-android.so", "__loader_dladdr", flags, addr, false, source},
+        {"ld-android.so", "__loader_dl_iterate_phdr", flags, iterate, false, source}};
+    for (const auto& entry : internals) if (entry.symbol == symbol) return &entry;
+  }
   // bionic libstdc++.map.txt plus the C++14/17 <new> forms; ARM's size_t is
   // unsigned int, so these are the j-mangled names. std::align_val_t is a
   // size_t enum. The ARM C++ ABI (IHI 0041, 3.2.3) guard is one 32-bit word.

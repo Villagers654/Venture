@@ -1,3 +1,4 @@
+#include "android/hardware_buffer.h"
 #include <doctest/doctest.h>
 #include "audio/audio.h"
 #include "media/media.h"
@@ -291,6 +292,19 @@ TEST_CASE("MediaPlayer JNI and Looper prepare start seek loop release callbacks"
   failure=static_cast<jstring>(env->CallStaticObjectMethod(cls,method,config,packets,times));
   if(env->ExceptionCheck())env->ExceptionDescribe();REQUIRE_FALSE(env->ExceptionCheck());
   if(failure){auto text=env->GetStringUTFChars(failure,nullptr);INFO(std::string(text));CHECK(failure==nullptr);env->ReleaseStringUTFChars(failure,text);}
+  // PRIVATE images live in GPU buffers; this stands in for the Vulkan HLE's allocator.
+  struct TestPayload : android::GpuPayload { mutable std::size_t writes=0; };
+  android::set_gpu_allocator({[](const android::HardwareBufferDesc&){return true;},
+    [](const android::HardwareBufferDesc&)->std::shared_ptr<const android::GpuPayload>{return std::make_shared<TestPayload>();},
+    [](const android::GpuPayload& p,std::span<const std::uint8_t> rgba){static_cast<const TestPayload&>(p).writes++;return !rgba.empty();}});
+  method=env->GetStaticMethodID(cls,"imageReader","([B[[B[JI)Ljava/lang/String;");REQUIRE(method);
+  for(jint format:{1,0x22}) {  // RGBA_8888, PRIVATE
+    CAPTURE(format);
+    failure=static_cast<jstring>(env->CallStaticObjectMethod(cls,method,config,packets,times,format));
+    if(env->ExceptionCheck())env->ExceptionDescribe();REQUIRE_FALSE(env->ExceptionCheck());
+    if(failure){auto text=env->GetStringUTFChars(failure,nullptr);INFO(std::string(text));CHECK(failure==nullptr);env->ReleaseStringUTFChars(failure,text);}
+  }
+  android::set_gpu_allocator({});
   env->DeleteLocalRef(config);env->DeleteLocalRef(packets);env->DeleteLocalRef(times);env->DeleteLocalRef(array_type);
   method=env->GetStaticMethodID(cls,"video","(Ljava/lang/String;)Ljava/lang/String;");REQUIRE(method);
   auto video=env->NewStringUTF(VENTURE_VIDEO_FIXTURE);REQUIRE(video);

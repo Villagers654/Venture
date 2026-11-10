@@ -346,7 +346,39 @@ void register_libdl(HleLibrary& lib) {
   }
 #undef B
 }
+namespace {
+// A32 __loader_* entry points: libdl.so's 32-bit forms with the explicit
+// caller address last (handles are the same A32 tokens dlopen returns).
+std::uint32_t loader_dlopen32(CallContext& c, const char* name, int flags, GuestAddr) { return dlopen32(c, name, flags); }
+std::uint32_t loader_dlopen_ext32(CallContext& c, const char* name, int flags, const std::uint64_t* ext, GuestAddr) {
+  return android_open32(c, name, flags, ext);
+}
+GuestAddr loader_dlsym32(CallContext& c, std::uint32_t token, const char* name, GuestAddr) { return dlsym32(c, token, name); }
+GuestAddr loader_dlvsym32(CallContext& c, std::uint32_t token, const char* name, const char* version, GuestAddr) {
+  return dlvsym32(c, token, name, version);
+}
+}  // namespace
 void register_loader(HleLibrary& lib) {
+  if (process_config().isa() == GuestIsa::a32) {
+    abi32::adapt<&loader_dlopen32>("__loader_dlopen", "ld-android.so");
+    abi32::adapt<&loader_dlopen_ext32>("__loader_android_dlopen_ext", "ld-android.so");
+    abi32::adapt<&loader_dlsym32>("__loader_dlsym", "ld-android.so");
+    abi32::adapt<&loader_dlvsym32>("__loader_dlvsym", "ld-android.so");
+    abi32::adapt<&dlclose32>("__loader_dlclose", "ld-android.so");
+    abi32::adapt<&dladdr32>("__loader_dladdr", "ld-android.so");
+    abi32::adapt<&iterate32_fn>("__loader_dl_iterate_phdr", "ld-android.so");
+#define B(n, f) VENTURE_LIBC_BIND(lib, n, f)
+    B("__loader_dlopen", loader_dlopen);
+    B("__loader_android_dlopen_ext", loader_dlopen_ext);
+    B("__loader_dlsym", loader_dlsym);
+    B("__loader_dlvsym", loader_dlvsym);
+    B("__loader_dlclose", dlclose_fn);
+    B("__loader_dlerror", dlerror32);
+    B("__loader_dladdr", dladdr_fn);
+    B("__loader_dl_iterate_phdr", iterate32_fn);
+#undef B
+    return;
+  }
 #define B(n, f) VENTURE_LIBC_BIND(lib, n, f)
   B("__loader_dlopen", loader_dlopen);
   B("__loader_android_dlopen_ext", loader_dlopen_ext);
