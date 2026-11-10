@@ -18,6 +18,11 @@ GuestAddr package_asset_manager();
 struct SurfaceBridge {
   NativeWindow* (*from_surface)(void* env, _jobject* surface) = nullptr;
   _jobject* (*to_surface)(void* env, NativeWindow* window) = nullptr;
+  // AHardwareBuffer_fromHardwareBuffer (the object's buffer, not acquired) and
+  // AHardwareBuffer_toHardwareBuffer (a new android.hardware.HardwareBuffer
+  // holding its own reference).
+  GuestAddr (*from_hardware_buffer)(void* env, _jobject* buffer) = nullptr;
+  _jobject* (*to_hardware_buffer)(void* env, GuestAddr buffer) = nullptr;
 };
 void set_surface_bridge(SurfaceBridge bridge);
 SurfaceBridge surface_bridge();

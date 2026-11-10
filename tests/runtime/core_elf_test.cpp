@@ -58,9 +58,10 @@ TEST_CASE("core relocation decoders APS2 groups and RELR bitmaps") {
   const std::array<std::uint32_t, 1> bad32{3};
   CHECK_THROWS(elf::decode_relr32(bad32, [](auto) {}));
 }
-// A one-page shared object exporting `symbol` and binding "bound" to it.
+// A one-page shared object exporting `symbol` and binding "bound" to it; with
+// `defined` false it imports `symbol` instead and lists no DT_NEEDED.
 static std::filesystem::path scope_fixture(const std::filesystem::path& directory, std::string_view filename,
-                                           std::string_view symbol, bool global_group) {
+                                           std::string_view symbol, bool global_group, bool defined = true) {
   std::array<std::byte, 4096> file{};
   auto put = [&]<class T>(std::size_t offset, const T& value) {
     std::memcpy(file.data() + offset, &value, sizeof(value));
@@ -74,7 +75,8 @@ static std::filesystem::path scope_fixture(const std::filesystem::path& director
   auto shared = std::uint32_t(strings.size()); strings += symbol; strings += '\0';
   auto bound = std::uint32_t(strings.size()); strings += "bound"; strings += '\0';
   std::memcpy(file.data() + 0x400, strings.data(), strings.size());
-  put(0x500, std::array<elf::Sym, 3>{{{}, {shared, 0x11, 0, 1, 0x900, 8}, {bound, 0x11, 0, 1, 0x908, 8}}});
+  put(0x500, std::array<elf::Sym, 3>{{{}, defined ? elf::Sym{shared, 0x11, 0, 1, 0x900, 8} : elf::Sym{shared, 0x12, 0, 0, 0, 0},
+                                                {bound, 0x11, 0, 1, 0x908, 8}}});
   put(0x700, std::array<std::uint32_t, 6>{1, 3, 1, 0, 2, 0});
   put(0x800, elf::Rela{0x908, (std::uint64_t(1) << 32) | 257, 0});
   std::array<elf::Dyn, 10> dynamic{{{5, 0x400}, {10, strings.size()}, {6, 0x500},
@@ -111,6 +113,24 @@ TEST_CASE("core ELF relocation global group differs from RTLD_DEFAULT scope") {
     CHECK(linker.symbol_default(symbol, consumer) == shared);
     CHECK(linker.close(consumer) == 0); CHECK(linker.close(provider) == 0);
   }
+}
+TEST_CASE("core a library that lists no C++ library still reaches the system C++ runtime") {
+  // app_process links the system C++ runtime: Espire 2's libEOSSDK.so imports
+  // __cxa_guard_acquire with only libc, libm, libdl and liblog as DT_NEEDED.
+  register_all_hle_libraries();
+  auto directory = std::filesystem::current_path() / "build/core-fixtures";
+  std::filesystem::create_directories(directory);
+  struct RestoreInspection { ~RestoreInspection() { linker_set_inspection(false); } } restore;
+  linker_set_inspection(true);
+  auto& linker = Linker::get();
+  auto* runtime = linker.open("libstdc++.so", kRtldNow, nullptr);
+  INFO(linker.take_error()); REQUIRE(runtime);
+  auto* consumer = linker.open(
+      scope_fixture(directory, "libcxx-guard-consumer.so", "__cxa_guard_acquire", false, false).string(), kRtldNow,
+      nullptr);
+  INFO(linker.take_error()); REQUIRE(consumer);
+  CHECK(*g2h<GuestAddr>(consumer->find_symbol("bound")) == runtime->find_symbol("__cxa_guard_acquire"));
+  CHECK(linker.close(consumer) == 0);
 }
 TEST_CASE("core android_dlopen_ext loads a library into the range its caller reserved") {
   auto directory = std::filesystem::current_path() / "build/core-fixtures";

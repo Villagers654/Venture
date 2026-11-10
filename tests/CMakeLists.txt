@@ -171,6 +171,9 @@ if(TARGET venture_runtime)
   add_executable(venture_module_iteration_tests test_main.cpp runtime/module_iteration_test.cpp)
   target_link_libraries(venture_module_iteration_tests PRIVATE venture_hle venture_java doctest::doctest)
   add_test(NAME guest_module_iteration COMMAND venture_module_iteration_tests)
+  add_executable(venture_process_image_a32_tests runtime/a32_memory_main.cpp runtime/process_image_a32_test.cpp)
+  target_link_libraries(venture_process_image_a32_tests PRIVATE venture_hle venture_java doctest::doctest)
+  add_test(NAME process_image_a32 COMMAND venture_process_image_a32_tests)
   # Freestanding, synthetic C API fixtures: no SDK, engine or guest game code.
   set(engine_policy_fixture "${CMAKE_CURRENT_BINARY_DIR}/engine-policy/libCrySystem.so")
   add_custom_command(OUTPUT "${engine_policy_fixture}"

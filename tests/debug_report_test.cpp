@@ -41,6 +41,12 @@ TEST_CASE("debug report: known causes, most specific first") {
   REQUIRE(java);
   CHECK(java->cause.find("uncaught Java exception") != std::string::npos);
   CHECK(java->advice.find("fix in Venture") != std::string::npos);
+  // The same on the game's Android main thread (Ballrs, while Unity starts).
+  auto main_thread = diagnose("E [java] The game's Android main thread stopped on an uncaught "
+                              "java.lang.NoClassDefFoundError: android/hardware/camera2/CameraManager$Availability"
+                              "Callback\n");
+  REQUIRE(main_thread);
+  CHECK(main_thread->cause.find("uncaught Java exception") != std::string::npos);
   // UE4 and Unity probe for optional patch OBBs at every start: the probe alone
   // names no cause (Pinball FX VR quit for another reason and was told to reinstall).
   CHECK_FALSE(diagnose("W [vfs] Missing expansion file: the game looked for patch.com.example.obb, which this "
@@ -79,6 +85,22 @@ TEST_CASE("debug report: a failed run, its times, cause and next steps come firs
   // The summary comes before the system details.
   CHECK(text.find("=== Likely cause ===") < text.find("=== System ==="));
   in.close();
+
+  // launcher.log also holds earlier runs: an earlier run's runtime failure is not
+  // this run's cause when the run's own log names one (Ballrs).
+  std::ofstream(data / "logs" / "launcher.log", std::ios::binary)
+      << "  0.500 9 W [launcher] Example stopped: The OpenXR runtime failed to create an instance (XrResult -2).\n";
+  std::ofstream(data / "logs" / "runtime-com.example.game.log", std::ios::binary)
+      << std::format("  1.000 1 I [launch] Process started at {:%FT%TZ}\n"
+                     "  3.000 2 E [libc] Fatal signal 11 (SIGSEGV), code 1 in tid 2\n"
+                     "  3.100 1 I [launch] Exit code: 139\n",
+                     start);
+  file = write_debug_report({.data = data, .version = "9.9.9", .package = "com.example.game"});
+  in.open(file, std::ios::binary);
+  text.assign(std::istreambuf_iterator<char>(in), {});
+  CHECK(text.find("=== Likely cause ===\nThe game crashed.") != std::string::npos);
+  in.close();
+  fs::remove(data / "logs" / "launcher.log");
 
   // A run stopped from Venture is not a failure.
   std::ofstream(data / "logs" / "runtime-com.example.game.log", std::ios::binary)

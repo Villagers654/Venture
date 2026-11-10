@@ -35,7 +35,7 @@ add_custom_target(venture-framework ALL DEPENDS "${VENTURE_FRAMEWORK_JAR}")
 # core and libandroid definitions when the launch entry is called.
 add_library(venture_java_framework STATIC ../app_launcher.cpp ../natives/framework_natives.cpp ../natives/display_bridge.cpp ../natives/path_bridge.cpp ../natives/runtime_bridge.cpp ../natives/audio_bridge.cpp)
 target_sources(venture_java_framework PRIVATE ../natives/graphics_bridge.cpp ../natives/sqlite_bridge.cpp)
-target_sources(venture_java_framework PRIVATE ../natives/media_bridge.cpp ../natives/surface_texture_bridge.cpp)
+target_sources(venture_java_framework PRIVATE ../natives/media_bridge.cpp ../natives/surface_texture_bridge.cpp ../natives/image_reader_bridge.cpp)
 target_include_directories(venture_java_framework PUBLIC "${PROJECT_SOURCE_DIR}/src/runtime"
   PRIVATE "${VENTURE_JAVA_HOME}/include")
 if(WIN32)

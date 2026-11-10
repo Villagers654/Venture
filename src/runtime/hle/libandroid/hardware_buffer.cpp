@@ -1,5 +1,6 @@
 #include "android/errors.h"
 #include "android/hardware_buffer.h"
+#include "android/framework_bridge.h"
 #include "android/native_window.h"
 #include "hle/libandroid/parts.h"
 
@@ -44,6 +45,18 @@ int unlock(Buffer* p, int* fence) {
   if (fence) *fence = -1;
   return 0;
 }
+// NDK android/hardware_buffer_jni.h.
+Buffer* from_java(void* env, _jobject* object) {
+  auto bridge = surface_bridge();
+  if (!object || !bridge.from_hardware_buffer) return nullptr;
+  const auto buffer = bridge.from_hardware_buffer(env, object);
+  return hardware_buffer(buffer) ? g2h<Buffer>(buffer) : nullptr;
+}
+_jobject* to_java(void* env, Buffer* p) {
+  auto bridge = surface_bridge();
+  if (!p || !bridge.to_hardware_buffer || !hardware_buffer(h2g(p))) return nullptr;
+  return bridge.to_hardware_buffer(env, h2g(p));
+}
 }  // namespace
 void register_hardware_buffers(HleLibrary& lib) {
   add<&allocate>(lib, "AHardwareBuffer_allocate");
@@ -53,5 +66,7 @@ void register_hardware_buffers(HleLibrary& lib) {
   add<&describe>(lib, "AHardwareBuffer_describe");
   add<&lock>(lib, "AHardwareBuffer_lock");
   add<&unlock>(lib, "AHardwareBuffer_unlock");
+  add<&from_java>(lib, "AHardwareBuffer_fromHardwareBuffer");
+  add<&to_java>(lib, "AHardwareBuffer_toHardwareBuffer");
 }
 }  // namespace venture::hle::android_hle

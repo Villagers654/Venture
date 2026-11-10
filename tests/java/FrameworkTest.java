@@ -1053,6 +1053,14 @@ public final class FrameworkTest {
     check(users != null && users.isUserUnlocked() && !users.isManagedProfile(), "the owner user is unlocked");
     check(new android.content.Context().getSystemService(android.os.PowerManager.class) != null
         && new android.content.Context().getSystemService(String.class) == null, "class service lookup follows service names");
+    // Unity's player registers a camera availability callback at start (Ballrs): a device without cameras.
+    var cameras = new android.content.Context().getSystemService(android.hardware.camera2.CameraManager.class);
+    cameras.registerAvailabilityCallback(new android.hardware.camera2.CameraManager.AvailabilityCallback() {}, null);
+    try {
+      check(cameras.getCameraIdList().length == 0, "the camera service lists no cameras");
+    } catch (android.hardware.camera2.CameraAccessException e) {
+      check(false, "the camera service lists no cameras: " + e);
+    }
     var wifi = new android.content.Context().getSystemService(android.net.wifi.WifiManager.class);
     var multicast = wifi.createMulticastLock("venture");
     multicast.acquire(); multicast.acquire(); multicast.release();
@@ -2645,6 +2653,21 @@ public final class FrameworkTest {
     check(android.os.FileObserver.ALL_EVENTS == 0xfff && android.os.FileObserver.CLOSE_WRITE == 8
         && fileEvents.isEmpty() && providerWarnings.remove("No host file events; not watching [" + outbox + "]"),
         "FileObserver keeps inotify event values and warns that the host reports no events");
+    // AOSP's private Activity.mCalled, set by the base lifecycle methods; Horizon
+    // Worlds looks it up by reflection in a static initializer.
+    try {
+      var called = android.app.Activity.class.getDeclaredField("mCalled");
+      called.setAccessible(true);
+      var lifecycleActivity = new android.app.Activity() {
+        void pause() { onPause(); }
+      };
+      boolean before = called.getBoolean(lifecycleActivity);
+      lifecycleActivity.pause();
+      check(called.getType() == boolean.class && !before && called.getBoolean(lifecycleActivity),
+          "Activity.mCalled is set by the base lifecycle methods");
+    } catch (ReflectiveOperationException e) {
+      check(false, "Activity.mCalled: " + e);
+    }
     // Sentry passes its watcher to Lifecycle.addObserver behind a Class.forName probe.
     check(androidx.lifecycle.LifecycleObserver.class.isInterface()
         && androidx.lifecycle.LifecycleObserver.class.getDeclaredMethods().length == 0,

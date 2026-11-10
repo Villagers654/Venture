@@ -277,6 +277,7 @@ void shutdown_media_players() {
 }
 void register_media_players(JNIEnv* env) {
   register_surface_textures(env);if(env->ExceptionCheck())return;
+  register_image_readers(env);if(env->ExceptionCheck())return;
   auto cls=env->FindClass("android/media/MediaPlayer");if(!cls)return;
   const JNINativeMethod methods[]{
     {const_cast<char*>("nativeSource"),const_cast<char*>("(Ljava/lang/String;Ljava/io/FileDescriptor;JJ)J"),reinterpret_cast<void*>(source)},

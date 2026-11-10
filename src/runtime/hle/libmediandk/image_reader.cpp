@@ -12,9 +12,11 @@
 #include "android/native_window.h"
 #include "core/address_space.h"
 #include "hle/libc/vfs.h"
+#include "hle/libmediandk/image_reader.h"
 #include "media/yuv.h"
 
 #include <algorithm>
+#include <chrono>
 #include <condition_variable>
 #include <cstring>
 #include <deque>
@@ -457,4 +459,45 @@ void register_image_reader(HleLibrary& lib) {
   API("AImage_getHardwareBuffer", image_buffer);
 #undef API
 }
+namespace image_reader {
+int create(std::int32_t width, std::int32_t height, std::int32_t format, std::uint64_t usage,
+           std::int32_t max_images, GuestAddr* reader) {
+  return hle::create(width, height, format, usage, max_images, reader);
+}
+void destroy(GuestAddr reader) { reader_delete(g2h<Reader>(reader)); }
+GuestAddr window(GuestAddr reader) {
+  GuestAddr out = 0;
+  return reader_window(g2h<Reader>(reader), &out) == 0 ? out : 0;
+}
+void listen(GuestAddr reader) {
+  if (auto r = readers.get(g2h<Reader>(reader))) {
+    std::lock_guard lock(r->mutex);
+    r->pending = r->queue.size();
+  }
+}
+int wait(GuestAddr reader, int timeout_ms) {
+  auto r = readers.get(g2h<Reader>(reader));
+  if (!r) return invalid_object;
+  std::unique_lock lock(r->mutex);
+  if (!r->available.wait_for(lock, std::chrono::milliseconds(timeout_ms), [&] { return r->pending > 0; })) return 0;
+  --r->pending;
+  return 1;
+}
+int acquire(GuestAddr reader, bool latest, GuestAddr* image) { return hle::acquire(g2h<Reader>(reader), image, latest); }
+void release(GuestAddr image) { image_delete(g2h<Image>(image)); }
+int info(GuestAddr image, ImageInfo* out) {
+  auto i = images.get(g2h<Image>(image));
+  if (!i) return invalid_object;
+  *out = {i->frame->width, i->frame->height, i->reader->format, plane_count(i->reader->format), i->frame->timestamp_ns};
+  return 0;
+}
+int plane(GuestAddr image, int index, GuestAddr* data, std::int32_t* length, std::int32_t* pixel_stride,
+          std::int32_t* row_stride) {
+  auto* p = g2h<Image>(image);
+  if (auto e = image_pixel_stride(p, index, pixel_stride)) return e;
+  if (auto e = image_row_stride(p, index, row_stride)) return e;
+  return image_plane_data(p, index, data, length);
+}
+int hardware_buffer(GuestAddr image, GuestAddr* buffer) { return image_buffer(g2h<Image>(image), buffer); }
+}  // namespace image_reader
 }  // namespace venture::hle

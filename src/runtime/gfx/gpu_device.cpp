@@ -267,6 +267,23 @@ VkResult select_device(VkInstance instance, VkPhysicalDevice* out) {
     return VK_ERROR_INITIALIZATION_FAILED;
   }
   gpu.physical_device = *out;
+  // Which GPU renders, and its VRAM, for reports: PCs with an integrated GPU
+  // beside a discrete one run on whichever the XR runtime names.
+  try {
+    VkPhysicalDeviceProperties prop{};
+    vk<PFN_vkGetPhysicalDeviceProperties>(instance, "vkGetPhysicalDeviceProperties")(*out, &prop);
+    VkPhysicalDeviceMemoryProperties memory{};
+    vk<PFN_vkGetPhysicalDeviceMemoryProperties>(instance, "vkGetPhysicalDeviceMemoryProperties")(*out, &memory);
+    VkDeviceSize vram = 0;
+    for (std::uint32_t i = 0; i < memory.memoryHeapCount; ++i)
+      if (memory.memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) vram = std::max(vram, memory.memoryHeaps[i].size);
+    log::info("gfx", "Host GPU: {} ({}, {} MiB device memory), chosen by {}", prop.deviceName,
+              prop.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU     ? "discrete"
+              : prop.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU ? "integrated"
+                                                                          : "other",
+              vram >> 20, xr::host_xr().available ? "the XR runtime" : "Venture (first discrete GPU)");
+  } catch (const std::exception&) {
+  }
   return VK_SUCCESS;
 }
 VkResult create_device(VkPhysicalDevice physical,

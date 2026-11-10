@@ -21,7 +21,7 @@ public class Context {
                              BATTERY_SERVICE = "batterymanager", DISPLAY_SERVICE = "display";
   public static final String LOCATION_SERVICE = "location", BLUETOOTH_SERVICE = "bluetooth";
   public static final String SENSOR_SERVICE = "sensor", LAYOUT_INFLATER_SERVICE = "layout_inflater",
-      UI_MODE_SERVICE = "uimode";
+      UI_MODE_SERVICE = "uimode", CAMERA_SERVICE = "camera";
   public static final String MEDIA_ROUTER_SERVICE = "media_router", INPUT_SERVICE = "input";
   public static final String USER_SERVICE = "user", WIFI_SERVICE = "wifi", JOB_SCHEDULER_SERVICE = "jobscheduler",
       STORAGE_SERVICE = "storage", ALARM_SERVICE = "alarm", NOTIFICATION_SERVICE = "notification",
@@ -261,6 +261,7 @@ public class Context {
       case LOCALE_SERVICE -> new android.app.LocaleManager(this);
       case "layout_inflater" -> new android.view.LayoutInflater(this);
       case "sensor" -> new android.hardware.SensorManager();
+      case CAMERA_SERVICE -> new android.hardware.camera2.CameraManager();
       case WINDOW_SERVICE -> new android.view.WindowManagerImpl(this);
       case AUDIO_SERVICE -> new android.media.AudioManager();
       case MEDIA_ROUTER_SERVICE -> new android.media.MediaRouter();
@@ -294,6 +295,7 @@ public class Context {
       java.util.Map.entry(android.app.UiModeManager.class, UI_MODE_SERVICE),
       java.util.Map.entry(android.view.LayoutInflater.class, LAYOUT_INFLATER_SERVICE),
       java.util.Map.entry(android.hardware.SensorManager.class, SENSOR_SERVICE),
+      java.util.Map.entry(android.hardware.camera2.CameraManager.class, CAMERA_SERVICE),
       java.util.Map.entry(android.view.WindowManager.class, WINDOW_SERVICE),
       java.util.Map.entry(android.media.AudioManager.class, AUDIO_SERVICE),
       java.util.Map.entry(android.media.MediaRouter.class, MEDIA_ROUTER_SERVICE),

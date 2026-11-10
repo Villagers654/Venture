@@ -75,21 +75,29 @@ public class Activity extends ContextWrapper implements KeyEvent.Callback, Windo
   public final void ventureAttach(android.content.Context context) {
     attachBaseContext(new com.venture.runtime.ComponentContext(context, this));
   }
+  // AOSP Activity.mCalled: every base lifecycle method sets it, so the
+  // framework can tell that a subclass called through to super. Apps read and
+  // write it by reflection (Horizon Worlds' SocialVrActivity looks it up in its
+  // static initializer).
+  /* package */ boolean mCalled;
   protected void onCreate(Bundle state) {
     RuntimeEnvironment.trace("Activity.onCreate");
+    mCalled = true;
   }
   protected void onStart() {
     RuntimeEnvironment.trace("Activity.onStart");
+    mCalled = true;
   }
   protected void onResume() {
     RuntimeEnvironment.trace("Activity.onResume");
+    mCalled = true;
   }
-  protected void onRestart() {}
-  protected void onPause() {}
-  protected void onStop() {}
-  protected void onDestroy() {}
-  protected void onPostCreate(Bundle state) {}
-  protected void onPostResume() {}
+  protected void onRestart() { mCalled = true; }
+  protected void onPause() { mCalled = true; }
+  protected void onStop() { mCalled = true; }
+  protected void onDestroy() { mCalled = true; }
+  protected void onPostCreate(Bundle state) { mCalled = true; }
+  protected void onPostResume() { mCalled = true; }
   protected void onSaveInstanceState(Bundle state) {}
   // AOSP Activity.java: the persistent-state overload also runs the ordinary hook.
   public void onSaveInstanceState(Bundle state, android.os.PersistableBundle persistentState) {
@@ -99,9 +107,9 @@ public class Activity extends ContextWrapper implements KeyEvent.Callback, Windo
     intent = i;
   }
   protected void onActivityResult(int request, int result, Intent data) {}
-  public void onConfigurationChanged(android.content.res.Configuration config) {}
-  public void onLowMemory() {}
-  public void onTrimMemory(int level) {}
+  public void onConfigurationChanged(android.content.res.Configuration config) { mCalled = true; }
+  public void onLowMemory() { mCalled = true; }
+  public void onTrimMemory(int level) { mCalled = true; }
   public Window getWindow() {
     RuntimeEnvironment.trace("Activity.getWindow");
     return window;

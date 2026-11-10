@@ -1570,6 +1570,32 @@ TEST_CASE("Vulkan texture decode refused memory skips that texture, logs the lim
 TEST_SUITE_END();
 
 
+TEST_CASE("Vulkan barriers on a null image are dropped; the rest of the barrier still records") {
+  // The Climb transitions the foveation image VrApi answered with no image, in
+  // an all-commands barrier: the NVIDIA driver faulted on the null handle.
+  test::VulkanDevice gpu(true);
+  VkMemoryBarrier memory{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+  memory.srcAccessMask = memory.dstAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
+  VkImageMemoryBarrier null_image{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+  null_image.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+  null_image.newLayout = VK_IMAGE_LAYOUT_FRAGMENT_DENSITY_MAP_OPTIMAL_EXT;
+  null_image.srcQueueFamilyIndex = null_image.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+  null_image.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 2};
+  test::vk_call("vkCmdPipelineBarrier", gpu.command, VkPipelineStageFlags(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT),
+                VkPipelineStageFlags(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT), VkDependencyFlags(0), 1u, &memory, 0u,
+                static_cast<const VkBufferMemoryBarrier*>(nullptr), 1u, &null_image);
+  VkImageMemoryBarrier2 null_image2{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+  null_image2.srcStageMask = null_image2.dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+  null_image2.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+  null_image2.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+  null_image2.srcQueueFamilyIndex = null_image2.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+  null_image2.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+  VkDependencyInfo dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+  dependency.imageMemoryBarrierCount = 1;
+  dependency.pImageMemoryBarriers = &null_image2;
+  test::vk_call("vkCmdPipelineBarrier2", gpu.command, &dependency);
+  gpu.submit();
+}
 TEST_CASE("Vulkan density views of a null image get a full-density image; other null views are refused") {
   test::VulkanDevice gpu;
   VkImageViewCreateInfo vi{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};

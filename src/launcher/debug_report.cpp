@@ -1032,8 +1032,13 @@ fs::path write_debug_report(const DebugReport &request) {
     // (UE4 and Unity), so only a probe the game then failed on counts.
     out += "The game looked for an expansion file (OBB) that its install does not have.\n";
     steps.push_back("Install the game again, or import it again together with its OBB file.");
-  } else if (auto d = diagnose(tail_log(runtime_log, 512 << 10) + "\n" + tail_log(console_log, 128 << 10) + "\n" +
-                               tail_log(logs / "launcher.log", 64 << 10) + "\n" + evidence)) {
+  } else if (auto d = [&] {
+               // The run's own logs first: launcher.log also holds earlier runs, whose
+               // failures (a runtime that was still closing) are not this run's.
+               auto own = diagnose(tail_log(runtime_log, 512 << 10) + "\n" + tail_log(console_log, 128 << 10) +
+                                   "\n" + evidence);
+               return own ? own : diagnose(tail_log(logs / "launcher.log", 64 << 10));
+             }()) {
     out += d->cause + "\n";
     steps.push_back(d->advice);
   } else {

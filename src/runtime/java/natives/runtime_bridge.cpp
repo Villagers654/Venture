@@ -457,10 +457,29 @@ jobject to_surface(void*, android::NativeWindow* window) {
   return result;
 }
 }
+GuestAddr from_hardware_buffer(void*, jobject object) {
+  auto* env = host_env();
+  if (!object) return 0;
+  auto cls = env->FindClass("android/hardware/HardwareBuffer");
+  auto method = cls ? env->GetMethodID(cls, "ventureNativeBuffer", "()J") : nullptr;
+  GuestAddr result = 0;
+  if (method && env->IsInstanceOf(object, cls)) result = static_cast<GuestAddr>(env->CallLongMethod(object, method));
+  if (cls) env->DeleteLocalRef(cls);
+  return result;
+}
+jobject to_hardware_buffer(void*, GuestAddr buffer) {
+  auto* env = host_env();
+  if (!buffer) return nullptr;
+  auto cls = env->FindClass("android/hardware/HardwareBuffer");
+  auto method = cls ? env->GetStaticMethodID(cls, "ventureWrap", "(J)Landroid/hardware/HardwareBuffer;") : nullptr;
+  jobject result = method ? env->CallStaticObjectMethod(cls, method, static_cast<jlong>(buffer)) : nullptr;
+  if (cls) env->DeleteLocalRef(cls);
+  return result;
+}
 void install_runtime_framework_bridges() {
   static std::once_flag once;
   std::call_once(once, [] { add_framework_natives(register_loopers); add_framework_natives(register_audio_tracks); add_framework_natives(register_media_players); });
-  android::set_surface_bridge({from_surface, to_surface});
+  android::set_surface_bridge({from_surface, to_surface, from_hardware_buffer, to_hardware_buffer});
   set_native_activity_bridge({create_activity, activity_event});
 }
 void destroy_native_activities() {

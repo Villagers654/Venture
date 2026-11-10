@@ -40,13 +40,12 @@ void register_libraries() {
     Linker::get().register_hle_library(lib);
   }
   // bionic's linker presents itself as ld-android.so (the __loader_* exports
-  // libdl.so forwards to). A32 keeps its existing flat libdl view.
-  if (process_config().isa() == GuestIsa::a64) {
-    auto loader = make("ld-android.so");
-    register_loader(*loader);
-    shape_dlopen(*libdl, *loader);
-    Linker::get().register_hle_library(loader);
-  }
+  // libdl.so forwards to). A32 libdl keeps its flat dlopen; the loader still
+  // exists there for in-process tools that call the linker directly.
+  auto loader = make("ld-android.so");
+  register_loader(*loader);
+  if (process_config().isa() == GuestIsa::a64) shape_dlopen(*libdl, *loader);
+  Linker::get().register_hle_library(loader);
   // libc++_shared.so is always guest code shipped with the APK.
   // bionic's linker calls debuggerd_init() before loading the app's libraries.
   signals::install_debuggerd_handlers();

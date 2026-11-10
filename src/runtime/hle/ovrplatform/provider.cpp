@@ -556,8 +556,7 @@ Error unsupported_operation(std::string_view name) {
   // Signed Meta Platform 1.205 StandalonePlatform panel/dialog slots (plan §2).
   if (name.find("Panel") != name.npos || name.find("Flow") != name.npos ||
       name.find("Dialog") != name.npos || name.starts_with("ovr_Media_") ||
-      name.starts_with("ovr_Livestreaming_") || name == "ovr_Application_LaunchOtherApp" ||
-      name == "ovr_CloudStorage2_GetUserDirectoryPath")
+      name.starts_with("ovr_Livestreaming_") || name == "ovr_Application_LaunchOtherApp")
     error.message = "Not supported on Standalone platform.";
   return error;
 }
