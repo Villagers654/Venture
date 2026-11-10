@@ -155,7 +155,8 @@ TEST_CASE(
   CHECK(string_field(list.model.elements[0], "Filepath") ==
         "/sdcard/Android/obb/com.example.assets/required.bundle");
   CHECK(string_field(list.model.elements[1], "DownloadStatus") == "available");
-  CHECK(string_field(list.model.elements[1], "Filepath").empty());
+  CHECK(string_field(list.model.elements[1], "Filepath").starts_with(
+      "/sdcard/Android/obb/com.example.assets/"));
   CHECK(query(s, "StatusById", std::uint64_t{444444}).error.code ==
         ErrorCode::not_entitled);
   CHECK(query(s, "StatusByName", std::string("paid.bundle")).error.code ==
