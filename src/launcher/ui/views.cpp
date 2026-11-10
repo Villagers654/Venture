@@ -1849,7 +1849,7 @@ void App::draw_vr_optimization(const std::string& package, float width, bool run
         ui.toggle_row("vr-vrs-debug", "VRS debug view", &v.vrs_debug, on && any_nr, kVrsColor);
         ui.percent_row("vr-vrs-w", "Area width", &v.vrs_width, 5, 100, 1, on, kVrsColor);
         ui.percent_row("vr-vrs-h", "Area height", &v.vrs_height, 5, 100, 1, on, kVrsColor);
-        ui.stepper_row("vr-supersample", "Render resolution", &v.supersample, 100, 150, 10, true,
+        ui.stepper_row("vr-supersample", "Render resolution", &v.supersample, 100, 200, 10, true,
                        v.supersample <= 100 ? std::string("100 % (native)") : std::format("{} %", v.supersample));
         static const char* const rates[] = {"2x2", "4x4"};
         int rate = v.vrs_rate >= 4 ? 1 : 0;

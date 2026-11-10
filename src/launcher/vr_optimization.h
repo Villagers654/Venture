@@ -68,7 +68,7 @@ struct VrProfile {
   int vrs_margin = 10;          // percent of the image around the NR region
   int vrs_gaze_smoothing = 50;  // Venture's own gaze: percent kept from the last position
   int vrs_gaze_hold_ms = 300;
-  // Supersampling: each eye renders at this percent of the headset's size (100 = native, up to 150) and the
+  // Supersampling: each eye renders at this percent of the headset's size (100 = native, up to 200) and the
   // compositor scales it down; VRS keeps the periphery's cost down (VENTURE_RENDER_SCALE).
   int supersample = 100;
   // The in-headset performance overlay (VENTURE_STATS_OVERLAY): frame times, VRS and NR state.

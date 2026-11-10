@@ -107,7 +107,7 @@ VrProfile from_json(const Json& j) {
   num("vrsMargin", p.vrs_margin, 0, 40);
   num("vrsGazeSmoothing", p.vrs_gaze_smoothing, 0, 95);
   num("vrsGazeHoldMs", p.vrs_gaze_hold_ms, 0, 2000);
-  num("supersample", p.supersample, 100, 150);
+  num("supersample", p.supersample, 100, 200);
   flag("overlay", p.overlay);
   flag("nrToggle", p.nr_toggle);
   num("nrShortcut", p.nr_shortcut, 0, 2);
