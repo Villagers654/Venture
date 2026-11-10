@@ -1,0 +1,31 @@
+#version 450
+// Venture NR (xr/dlss.cpp): the region as shown is the game's region plus NR's
+// correction (NR's output minus its input, at NR's working resolution, read
+// bilinearly), faded out over the transition band at the region's edge. With a
+// cached frame the correction is the last one NR made.
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 0) uniform sampler2D original;   // the region, full size
+layout(set = 0, binding = 1) uniform sampler2D lowInput;   // NR's input, working size
+layout(set = 0, binding = 2) uniform sampler2D lowOutput;  // NR's output, working size
+layout(rgba16f, set = 0, binding = 3) writeonly uniform image2D result;
+
+layout(push_constant) uniform Parameters {
+  ivec2 size;        // the region
+  float transition;  // the faded band, a fraction of the region (0: a hard edge)
+  float strength;    // 1: NR's correction, 0: none
+} p;
+
+void main() {
+  ivec2 q = ivec2(gl_GlobalInvocationID.xy);
+  if (any(greaterThanEqual(q, p.size)))
+    return;
+  vec2 uv = (vec2(q) + 0.5) / vec2(p.size);
+  vec4 base = texelFetch(original, q, 0);
+  vec3 correction = texture(lowOutput, uv).rgb - texture(lowInput, uv).rgb;
+  float weight = p.strength;
+  if (p.transition > 0.0) {
+    vec2 edge = min(uv, 1.0 - uv);
+    weight *= smoothstep(0.0, p.transition, min(edge.x, edge.y));
+  }
+  imageStore(result, q, vec4(base.rgb + correction * weight, base.a));
+}

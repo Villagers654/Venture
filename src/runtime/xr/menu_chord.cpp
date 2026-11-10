@@ -1,5 +1,7 @@
 #include "common/environment.h"
 #include "xr/menu_chord.h"
+#include "xr/eye_gaze.h"
+#include "xr/nr_toggle.h"
 #include "xr/haptic_output.h"
 #include "xr/bindings.h"
 #include "common/controls.h"
@@ -225,6 +227,7 @@ XrResult suggest(XrInstance instance, const XrInteractionProfileSuggestedBinding
         break;
       }
     }
+  eye_gaze::add_binding(instance, profile, bindings);
   auto copy = *info;
   copy.countSuggestedBindings = static_cast<std::uint32_t>(bindings.size()); copy.suggestedBindings = bindings.data();
   return ::xrSuggestInteractionProfileBindings(instance, &copy);
@@ -242,9 +245,15 @@ XrResult attach_with_menu_chord(XrSession session, const XrSessionActionSetsAtta
   std::vector<XrActionSet> sets;
   if (info->countActionSets) sets.assign(info->actionSets, info->actionSets + info->countActionSets);
   sets.push_back(chord_set);
+  // Venture's eye gaze (VRS, Venture NR) is attached with the game's sets.
+  eye_gaze::before_attach(host_xr().instance);
+  if (const auto gaze = eye_gaze::action_set(host_xr().instance)) sets.push_back(gaze);
   auto copy = *info; copy.countActionSets = static_cast<std::uint32_t>(sets.size()); copy.actionSets = sets.data();
   result = host_call<PFN_xrAttachSessionActionSets, "xrAttachSessionActionSets">(session, &copy);
-  if (XR_SUCCEEDED(result)) sessions[session].attached = true;
+  if (XR_SUCCEEDED(result)) {
+    sessions[session].attached = true;
+    eye_gaze::attached(session);
+  }
   return result;
 }
 XrResult sync_with_menu_chord(XrSession session, const XrActionsSyncInfo* info) {
@@ -255,6 +264,7 @@ XrResult sync_with_menu_chord(XrSession session, const XrActionsSyncInfo* info) 
   std::vector<XrActiveActionSet> sets;
   if (info->countActiveActionSets) sets.assign(info->activeActionSets, info->activeActionSets + info->countActiveActionSets);
   sets.push_back({chord_set, XR_NULL_PATH});
+  if (const auto gaze = eye_gaze::action_set(host_xr().instance)) sets.push_back({gaze, XR_NULL_PATH});
   auto copy = *info; copy.countActiveActionSets = static_cast<std::uint32_t>(sets.size()); copy.activeActionSets = sets.data();
   auto result = host_call<PFN_xrSyncActions, "xrSyncActions">(session, &copy);
   if (XR_FAILED(result)) return result;
@@ -309,8 +319,10 @@ XrResult sync_with_menu_chord(XrSession session, const XrActionsSyncInfo* info) 
   }
   XrActionStateBoolean values[2]{{XR_TYPE_ACTION_STATE_BOOLEAN}, {XR_TYPE_ACTION_STATE_BOOLEAN}};
   const bool chord = snapshot.synthesized || snapshot.chord_hands[0] || snapshot.chord_hands[1];
+  // Toggle NR (xr/nr_toggle.h) reads the same clicks, with or without the chord.
+  const bool read_sticks = chord || nr_toggle::sticks_wanted();
   const unsigned count = snapshot.synthesized ? std::max(1u, snapshot.source_count) : 2u;
-  for (unsigned i = 0; i < count && XR_SUCCEEDED(result) && chord; ++i) {
+  for (unsigned i = 0; i < count && XR_SUCCEEDED(result) && read_sticks; ++i) {
     XrActionStateGetInfo gi{XR_TYPE_ACTION_STATE_GET_INFO, nullptr, sources[i], XR_NULL_PATH};
     if (XR_FAILED(::xrGetActionStateBoolean(session, &gi, &values[i]))) values[i].isActive = false;
   }
@@ -318,6 +330,8 @@ XrResult sync_with_menu_chord(XrSession session, const XrActionsSyncInfo* info) 
   const auto now = venture::monotonic_ns();
   snapshot.active = result == XR_SUCCESS && chord && values[0].isActive && values[1].isActive;
   snapshot.pulse = snapshot.chord.update(now, values[0].currentState, values[1].currentState, snapshot.active);
+  nr_toggle::note_sticks(now, values[0].currentState, values[1].currentState,
+                         result == XR_SUCCESS && read_sticks && values[0].isActive && values[1].isActive);
   if (XR_FAILED(monotonic_to_time(now, &snapshot.time))) { snapshot.pulse = false; snapshot.active = false; }
   // Update every mapped menu at each sync, even if the app skips a state query.
   for (const auto& [action, parent] : parents) {
@@ -362,7 +376,11 @@ void forget_menu_action(XrAction action) {
 void forget_menu_action_set(XrActionSet set) {
   forget_menu_actions([&](XrAction, XrActionSet s) { return s == set; });
 }
-void reset_menu_session(XrSession session) { std::lock_guard lock(mutex); sessions.erase(session); }
+void reset_menu_session(XrSession session) {
+  eye_gaze::forget_session(session);
+  std::lock_guard lock(mutex);
+  sessions.erase(session);
+}
 bool menu_chord_pulse(XrSession session) {
   std::lock_guard lock(mutex); auto it = sessions.find(session);
   return it != sessions.end() && it->second.active && it->second.pulse &&

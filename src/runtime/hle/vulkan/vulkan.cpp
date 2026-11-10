@@ -1,3 +1,4 @@
+#include "xr/ngx_bridge.h"
 #include "common/environment.h"
 #include "core/thread_lifetime.h"
 #include "vulkan.h"
@@ -989,6 +990,14 @@ VkResult create_instance_impl(const VkInstanceCreateInfo* info, const VkAllocati
   if (mirror_capable)
     for (const char* name : mirror)
       if (std::ranges::find(names, std::string_view(name)) == names.end()) names.push_back(name);
+  // Venture NR (VENTURE_NR): NGX's instance extensions, where the host has them.
+  for (const char* name : venture::xr::ngx_bridge::required_extensions(false)) {
+    const bool present = std::ranges::any_of(native_instance_extensions(), [&](const auto& e) {
+      return std::string_view(e.extensionName) == name;
+    });
+    if (!present) log::warn("venture-nr", "Host lacks NGX instance extension {}", name);
+    else if (std::ranges::find(names, std::string_view(name)) == names.end()) names.push_back(name);
+  }
   auto copy = *info;
   // Host diagnostics also work for Vulkan 1.0 guests. Checkpoints require
   // properties2 even when verbose tracing is off. Keep the
@@ -1153,6 +1162,14 @@ VkResult create_device_impl(VkPhysicalDevice physical, const VkDeviceCreateInfo*
   if (!native_xr_extensions(true, xr, required)) return VK_ERROR_INITIALIZATION_FAILED;
   for (const auto& name : required)
     if (unique_names.insert(name).second) names.push_back(name.c_str());
+  // Venture NR (VENTURE_NR): NGX's device extensions, where the host has them.
+  for (const char* name : venture::xr::ngx_bridge::required_extensions(true)) {
+    const bool present = std::ranges::any_of(host_extensions, [&](const auto& e) {
+      return std::string_view(e.extensionName) == name;
+    });
+    if (!present) log::warn("venture-nr", "Host lacks NGX device extension {}", name);
+    else if (unique_names.insert(name).second) names.push_back(name);
+  }
   if (std::ranges::any_of(host_extensions, [](const auto& e) {
         return std::string_view(e.extensionName) == VK_EXT_PIPELINE_CREATION_FEEDBACK_EXTENSION_NAME;
       }) && unique_names.insert(VK_EXT_PIPELINE_CREATION_FEEDBACK_EXTENSION_NAME).second)
@@ -1555,6 +1572,46 @@ VkResult create_device_impl(VkPhysicalDevice physical, const VkDeviceCreateInfo*
       });
   if (shared_images && unique_names.insert(gfx::shared_image_extension).second)
     names.push_back(gfx::shared_image_extension);
+  // VENTURE_VRS: attachment shading rates for the stereo scene passes (render_area.cpp), where the host
+  // has them and the guest does not use fragment density maps (they exclude each other).
+  VkPhysicalDeviceFragmentShadingRateFeaturesKHR vrs_features{
+      VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADING_RATE_FEATURES_KHR};
+  VkExtent2D vrs_texel{};
+  if (vrs_requested() && std::ranges::any_of(host_extensions, [](const auto& e) {
+        return std::string_view(e.extensionName) == VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME;
+      })) {
+    VkPhysicalDeviceFragmentShadingRateFeaturesKHR supported{
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADING_RATE_FEATURES_KHR};
+    VkPhysicalDeviceFeatures2 features2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, &supported};
+    host<PFN_vkGetPhysicalDeviceFeatures2>(physical, "vkGetPhysicalDeviceFeatures2")(physical, &features2);
+    VkPhysicalDeviceFragmentShadingRatePropertiesKHR rates{
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADING_RATE_PROPERTIES_KHR};
+    VkPhysicalDeviceProperties2 properties2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, &rates};
+    host<PFN_vkGetPhysicalDeviceProperties2>(physical, "vkGetPhysicalDeviceProperties2")(physical, &properties2);
+    bool conflict = false;
+    for (auto* next = static_cast<const VkBaseInStructure*>(copy.pNext); next; next = next->pNext) {
+      if (next->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_DENSITY_MAP_FEATURES_EXT &&
+          reinterpret_cast<const VkPhysicalDeviceFragmentDensityMapFeaturesEXT*>(next)->fragmentDensityMap)
+        conflict = true;
+      if (next->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADING_RATE_FEATURES_KHR) conflict = true;
+    }
+    if (supported.pipelineFragmentShadingRate && supported.attachmentFragmentShadingRate && !conflict) {
+      vrs_features.pipelineFragmentShadingRate = vrs_features.attachmentFragmentShadingRate = VK_TRUE;
+      vrs_features.pNext = const_cast<void*>(copy.pNext);
+      copy.pNext = &vrs_features;
+      for (const char* name : {VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME, VK_KHR_CREATE_RENDERPASS_2_EXTENSION_NAME})
+        if (std::ranges::any_of(host_extensions, [&](const auto& e) { return std::string_view(e.extensionName) == name; }) &&
+            unique_names.insert(name).second)
+          names.push_back(name);
+      // 16x16 texels, within what the host takes (powers of two).
+      const auto& lo = rates.minFragmentShadingRateAttachmentTexelSize;
+      const auto& hi = rates.maxFragmentShadingRateAttachmentTexelSize;
+      vrs_texel = {std::clamp(16u, std::max(1u, lo.width), std::max(1u, hi.width)),
+                   std::clamp(16u, std::max(1u, lo.height), std::max(1u, hi.height))};
+    } else {
+      log::warn("vulkan", "VENTURE_VRS: attachment shading rates are unavailable on this device; VRS stays off");
+    }
+  }
   copy.enabledExtensionCount = static_cast<std::uint32_t>(names.size());
   copy.ppEnabledExtensionNames = names.data();
   const bool trace = venture::environment::getenv("VENTURE_TRACE_VULKAN") != nullptr;
@@ -1586,6 +1643,7 @@ VkResult create_device_impl(VkPhysicalDevice physical, const VkDeviceCreateInfo*
       venture::xr::note_mirror_capable(*out);
       mirror_queue.created(*out);
     }
+    if (vrs_texel.width) vrs_device_created(*out, vrs_texel);
     try {
       adopt_device(physical, *out, *info, alloc != nullptr, shared_queues);
       {

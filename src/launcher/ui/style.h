@@ -166,6 +166,10 @@ bool menu_item(const char* label, char32_t glyph = 0, bool danger = false, bool 
                ImTextureID image = {}, bool dim = false);
 void spinner(float radius, ImU32 col);
 bool toggle(const char* id, bool* value);
+// A horizontal slider over [min, max] in `step`s; true while the value changes.
+// `fill` colors the track up to the knob (0: accent).
+bool slider(const char* id, float* value, float min, float max, float step, float width, bool enabled = true,
+            ImU32 fill = 0);
 // A checkbox with its label (and an optional line under it); the whole row clicks.
 // `small` is the compact form for secondary choices; `image` (a white logo)
 // sits before the label.

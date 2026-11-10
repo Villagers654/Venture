@@ -11,6 +11,7 @@
 #include "common/log.h"
 #include "common/process.h"
 #include "common/saves_migration.h"
+#include "launcher/vr_optimization.h"
 #include "hle/ovrplatform/broker.h"
 #include <chrono>
 
@@ -1819,6 +1820,10 @@ void Core::launch_game(std::string_view id, std::string_view requested,
           // page. Smoke and automation runs open no mirror window.
           Environment environment = library::launch_environment(settings_, app_id, options_.automation);
           environment.push_back({"VENTURE_CONTROLLER_REPORT", paths::utf8(data_ / "controllers.json")});
+          // The game page's VR Optimization tab (launcher/vr_optimization.h): foveated VRS and NR.
+          for (const auto &problem : apply_vr_optimization(VrOptimization::load(data_), install.plan.package, runtime,
+                                                           environment))
+            log::warn("vr-optimization", "{}", problem);
           r.process.spawn(runtime, args, r.console, console,
                           [broker, routes = std::move(routes), details, key, queue = launch_queue_](const Json &request) {
                             const auto op = str(request, "op");

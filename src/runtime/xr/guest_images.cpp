@@ -1,4 +1,5 @@
 #include "xr/guest_images.h"
+#include "xr/venture_nr.h"
 #include "common/log.h"
 #include "core/wait.h"
 #include "hle/vulkan/internal.h"
@@ -50,6 +51,9 @@ struct GuestImages::Impl {
   bool staged_mode = false;
   std::vector<StagedImage> staged;
   std::uint64_t bytes = 0;
+  // Venture NR (xr/venture_nr.h): DLSS-NR on each eye's foveated region after the copy.
+  std::unique_ptr<venture_nr::NeuralRenderer> neural;
+  bool neural_tried = false;
   template <class T> T fn(const char *name) const {
     return reinterpret_cast<T>(get(binding.instance, name));
   }
@@ -101,6 +105,7 @@ struct GuestImages::Impl {
       if (lock)
         fn<PFN_vkQueueWaitIdle>("vkQueueWaitIdle")(queue);
     }
+    neural.reset();
     for (const auto &slot : slots) {
       if (slot.fence)
         fn<PFN_vkDestroyFence>("vkDestroyFence")(binding.device, slot.fence,
@@ -487,6 +492,11 @@ XrResult GuestImages::copy(std::uint32_t index, VkImage target,
     }
     barrier(slot.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, s.layout, s.info.mipCount, layer_count);
     barrier(target, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, s.layout, host_mips, copied_layers);
+    // Venture NR: both eyes of a stereo colour chain.
+    if (source_layer < 0 && s.aspects == VK_IMAGE_ASPECT_COLOR_BIT && venture_nr::requested()) {
+      if (!std::exchange(s.neural_tried, true)) s.neural = venture_nr::NeuralRenderer::create(s.binding, s.get, s.info);
+      if (s.neural) s.neural->record(slot.command, slot.image, target, format, extent, flip_rows, s.layout);
+    }
     }
     if (s.queries)
       s.fn<PFN_vkCmdWriteTimestamp>("vkCmdWriteTimestamp")(

@@ -335,6 +335,7 @@ Tracking tracking_at(XrTime time, XrSpace target) {
     std::uint32_t count = 0;
     if (XR_SUCCEEDED(::xrLocateViews(session().handle, &li, &vs, 2, &count, views)) && count == 2) {
       hle::openxr::sanitize_views(vs, count, views);
+      hle::openxr::note_views_for_vrs(time, count, views);
       for (int eye = 0; eye < 2; ++eye) {
         out.eye[eye].view = view_matrix(views[eye].pose);
         out.eye[eye].projection = projection_matrix(views[eye].fov);

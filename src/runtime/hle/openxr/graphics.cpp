@@ -1,4 +1,6 @@
 #include "xr/dev_dump.h"
+#include "xr/eye_gaze.h"
+#include "xr/venture_nr.h"
 #include "gfx/gpu_device.h"
 #include "common/log.h"
 #include "hle/vulkan/vulkan.h"
@@ -15,6 +17,9 @@
 #include "core/wait.h"
 #include "platform/profile.h"
 #include <algorithm>
+#include "common/environment.h"
+#include <cstdlib>
+#include <cmath>
 #include <atomic>
 #include <bit>
 #include <cstring>
@@ -245,6 +250,60 @@ XrRect2Di host_image_rect(const Swapchain& r, XrRect2Di rect) {
   return map_presentation_rect(rect, {r.info.width, r.info.height}, {r.host_info.width, r.host_info.height});
 }
 }  // namespace
+double render_scale() {
+  static const double scale = [] {
+    const char* text = venture::environment::getenv("VENTURE_RENDER_SCALE");
+    if (!text || !*text) return 1.0;
+    char* end = nullptr;
+    const double value = std::strtod(text, &end);
+    if (end == text || !std::isfinite(value) || value < 1.0 || value > 2.0) {
+      log::warn("xr", "VENTURE_RENDER_SCALE={} ignored; expected a value in [1, 2]", text);
+      return 1.0;
+    }
+    if (value > 1.0)
+      log::info("xr", "supersampling {:.2f}: the guest renders larger and the host compositor scales down", value);
+    return value;
+  }();
+  return scale;
+}
+void scale_recommended_views(XrViewConfigurationType type, std::uint32_t count, XrViewConfigurationView* views) {
+  const double scale = render_scale();
+  if (scale == 1.0 || !views || type != XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO) return;
+  // Multiples of 8, within the host's maximum; the chains are presented as they are.
+  const auto scaled = [&](std::uint32_t size, std::uint32_t maximum) {
+    if (!size) return size;
+    const auto value = std::max(16u, (std::uint32_t(size * scale) + 7u) / 8u * 8u);
+    return maximum ? std::min(value, maximum) : value;
+  };
+  for (std::uint32_t i = 0; i < count; ++i) {
+    if (views[i].type != XR_TYPE_VIEW_CONFIGURATION_VIEW) continue;
+    const auto width = views[i].recommendedImageRectWidth, height = views[i].recommendedImageRectHeight;
+    views[i].recommendedImageRectWidth = scaled(width, views[i].maxImageRectWidth);
+    views[i].recommendedImageRectHeight = scaled(height, views[i].maxImageRectHeight);
+    static std::atomic<bool> reported{false};
+    if (!reported.exchange(true))
+      log::info("xr", "render scale: guest view recommendation {}x{} -> {}x{}", width, height,
+                views[i].recommendedImageRectWidth, views[i].recommendedImageRectHeight);
+  }
+}
+void note_views_for_vrs(XrTime time, std::uint32_t count, const XrView* views) {
+  // VENTURE_VRS's shading-rate maps and Venture NR's region share this center.
+  if (!(vulkan::vrs_requested() || venture::xr::venture_nr::requested()) || count < 2 || !views) return;
+  float tangents[2][4];
+  for (std::uint32_t eye = 0; eye < 2; ++eye) {
+    const auto& fov = views[eye].fov;
+    tangents[eye][0] = std::tan(fov.angleLeft);
+    tangents[eye][1] = std::tan(fov.angleRight);
+    tangents[eye][2] = std::tan(fov.angleUp);
+    tangents[eye][3] = std::tan(fov.angleDown);
+  }
+  const auto& a = views[0].pose.position;
+  const auto& b = views[1].pose.position;
+  const float dx = b.x - a.x, dy = b.y - a.y, dz = b.z - a.z;
+  // The eye gaze (VENTURE_VRS_GAZE), used when VDXR shares no NR region to follow.
+  const auto gaze = venture::xr::eye_gaze::direction(time);
+  vulkan::vrs_note_views(tangents, 0.5f * std::sqrt(dx * dx + dy * dy + dz * dz), gaze ? &gaze->x : nullptr);
+}
 std::optional<MirrorEye> mirror_eye(std::span<const XrCompositionLayerBaseHeader* const> layers, std::uint32_t eye) {
   for (auto* layer : layers)
     if (layer && layer->type == XR_TYPE_COMPOSITION_LAYER_PROJECTION) {

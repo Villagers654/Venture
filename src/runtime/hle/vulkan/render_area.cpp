@@ -32,7 +32,10 @@
 #include <algorithm>
 #include <atomic>
 #include <bit>
+#include <chrono>
+#include <cmath>
 #include <cstddef>
+#include <cstdlib>
 #include <cstring>
 #include <mutex>
 #include <optional>
@@ -43,8 +46,13 @@
 #include <vector>
 
 #include "chain.h"
+#include "common/environment.h"
 #include "common/log.h"
 #include "internal.h"
+
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 namespace venture::vulkan {
 namespace {
@@ -100,6 +108,172 @@ struct Pass {
   std::vector<std::pair<std::uint32_t, std::uint32_t>> resolves;
 };
 std::unordered_map<VkRenderPass, Pass> passes;
+// A depth (or depth/stencil) format.
+bool is_depth_format(VkFormat format) {
+  switch (format) {
+    case VK_FORMAT_D16_UNORM: case VK_FORMAT_X8_D24_UNORM_PACK32: case VK_FORMAT_D32_SFLOAT:
+    case VK_FORMAT_D16_UNORM_S8_UINT: case VK_FORMAT_D24_UNORM_S8_UINT: case VK_FORMAT_D32_SFLOAT_S8_UINT:
+      return true;
+    default:
+      return false;
+  }
+}
+// VENTURE_VRS: foveated variable rate shading on the guest's stereo scene passes
+// (VK_KHR_fragment_shading_rate). Each multiview render pass with a depth
+// attachment gets a shading-rate attachment (one layer per view): full rate
+// in a VENTURE_VRS_WIDTH x VENTURE_VRS_HEIGHT region around a stereo-aligned
+// center, 2x2 (or 4x4) outside. The center is a point straight ahead (VENTURE_VRS_DISTANCE, 2 m),
+// projected into each eye with its own field of view, so both eyes keep the
+// same part of the scene at full rate. Pipelines take the map's rate
+// (combiner REPLACE); where no map is bound it is 1x1.
+float vrs_setting(const char* name, float fallback, float lo, float hi) {
+  const char* text = venture::environment::getenv(name);
+  const float value = text && *text ? float(std::atof(text)) : fallback;
+  return std::isfinite(value) ? std::clamp(value, lo, hi) : fallback;
+}
+struct VrsTarget {
+  VkImage image{};
+  VkDeviceMemory memory{};
+  VkImageView view{};
+  VkBuffer staging{};
+  VkDeviceMemory staging_memory{};
+  VkExtent2D extent{};       // in texels
+  VkExtent2D framebuffer{};  // in pixels
+  std::uint64_t version = 0; // the centers it was filled with (0: never filled)
+};
+std::mutex vrs_mutex;
+std::unordered_map<VkDevice, VkExtent2D> vrs_devices;           // texel size
+std::unordered_map<VkRenderPass, std::uint32_t> vrs_passes;      // the shading-rate attachment's index
+std::unordered_map<VkFramebuffer, std::pair<VkDevice, VrsTarget>> vrs_targets;
+float vrs_centers[2][2]{{0.5f, 0.5f}, {0.5f, 0.5f}};
+std::uint64_t vrs_centers_version = 1;  // 1: the image centers, until views are located
+constexpr std::uint8_t vrs_full = 0;               // 1x1
+constexpr std::uint8_t vrs_coarse = (1 << 2) | 1;  // 2x2: log2(width) << 2 | log2(height)
+// The settings in use: the launch environment, then the launcher's live values
+// (HKCU\SOFTWARE\Venture\VRS: On, Width, Height in %, Rate 2/4, Distance in cm;
+// written at launch and by Apply in game). Off keeps the attachment but fills it at 1x1.
+struct VrsLive {
+  bool on = true;
+  float width = 0.45f, height = 0.45f;
+  bool rate4 = false;
+  float distance = 2.f;
+  float margin = 0.10f;          // around VDXR's NR region
+  float gaze_smoothing = 0.5f;   // Venture's own gaze: fraction kept from the last position
+  int gaze_hold_ms = 300;        // Venture's own gaze lost: keep the area in place
+  bool debug = false;            // the red outline (drawn by Venture NR, xr/venture_nr.cpp)
+  bool operator==(const VrsLive&) const = default;
+};
+// The settings, from the environment on first use. Call with vrs_mutex held.
+VrsLive& vrs_settings() {
+  static VrsLive live = [] {
+    VrsLive v;
+    v.width = vrs_setting("VENTURE_VRS_WIDTH", 0.45f, 0.05f, 1.f);
+    v.height = vrs_setting("VENTURE_VRS_HEIGHT", 0.45f, 0.05f, 1.f);
+    v.rate4 = vrs_setting("VENTURE_VRS_RATE", 2.f, 2.f, 4.f) >= 4.f;
+    v.distance = vrs_setting("VENTURE_VRS_DISTANCE", 2.f, 0.f, 100.f);
+    return v;
+  }();
+  return live;
+}
+// VDXR DLSS-NR's foveal center (VirtualDesktop-OpenXR dlssnr.cpp, publishDlssnrFovea; same layout).
+struct VdxrFovea {
+  std::uint32_t magic;   // 0x564F4656
+  std::uint32_t sequence;  // odd while written
+  std::int64_t qpc;
+  float tangent[2][2];   // per eye: the center's tangents (x right, y up)
+  float nrWidth, nrHeight;
+  std::uint32_t following;
+};
+float vrs_follow[2]{};                      // the area's size while following VDXR (0: fixed); vrs_mutex
+// The center to follow, when VDXR wrote one in the last 200 ms with the gaze tracked.
+#ifdef _WIN32
+std::optional<VdxrFovea> read_vdxr_fovea() {
+  static HANDLE mapping{};
+  static const VdxrFovea* view{};
+  static std::chrono::steady_clock::time_point next_open{};
+  if (!view) {
+    const auto now = std::chrono::steady_clock::now();
+    if (now < next_open) return std::nullopt;
+    next_open = now + std::chrono::seconds(1);
+    mapping = OpenFileMappingW(FILE_MAP_READ, FALSE, L"Local\\VirtualDesktopOpenXR_DlssnrFovea");
+    if (!mapping) return std::nullopt;
+    view = static_cast<const VdxrFovea*>(MapViewOfFile(mapping, FILE_MAP_READ, 0, 0, sizeof(VdxrFovea)));
+    if (!view) {
+      CloseHandle(mapping);
+      mapping = {};
+      return std::nullopt;
+    }
+    log::info("vulkan", "VRS: VDXR shares its foveal center");
+  }
+  VdxrFovea copy{};
+  for (int attempt = 0; attempt < 4; ++attempt) {
+    const std::uint32_t before = reinterpret_cast<const volatile VdxrFovea*>(view)->sequence;
+    std::atomic_thread_fence(std::memory_order_acquire);
+    std::memcpy(&copy, view, sizeof(copy));
+    std::atomic_thread_fence(std::memory_order_acquire);
+    if (!(before & 1) && reinterpret_cast<const volatile VdxrFovea*>(view)->sequence == before) {
+      LARGE_INTEGER now, frequency;
+      QueryPerformanceCounter(&now);
+      QueryPerformanceFrequency(&frequency);
+      const bool fresh = copy.magic == 0x564F4656u && now.QuadPart - copy.qpc < frequency.QuadPart / 5;
+      if (!fresh || !copy.following) return std::nullopt;
+      for (const auto& eye : copy.tangent)
+        if (!std::isfinite(eye[0]) || !std::isfinite(eye[1])) return std::nullopt;
+      if (!std::isfinite(copy.nrWidth) || !std::isfinite(copy.nrHeight)) return std::nullopt;
+      copy.nrWidth = std::clamp(copy.nrWidth, 0.05f, 1.f);
+      copy.nrHeight = std::clamp(copy.nrHeight, 0.05f, 1.f);
+      return copy;
+    }
+  }
+  return std::nullopt;
+}
+VrsLive read_vrs_live(VrsLive current) {
+  HKEY key{};
+  if (RegOpenKeyExW(HKEY_CURRENT_USER, L"SOFTWARE\\Venture\\VRS", 0, KEY_READ | KEY_WOW64_64KEY, &key) != ERROR_SUCCESS)
+    return current;
+  auto dword = [&](const wchar_t* name, std::optional<DWORD>& out) {
+    DWORD value{}, size = sizeof(value), type{};
+    if (RegQueryValueExW(key, name, nullptr, &type, reinterpret_cast<BYTE*>(&value), &size) == ERROR_SUCCESS &&
+        type == REG_DWORD)
+      out = value;
+  };
+  std::optional<DWORD> on, width, height, rate, distance, margin, smoothing, hold, debug;
+  dword(L"On", on);
+  dword(L"Width", width);
+  dword(L"Height", height);
+  dword(L"Rate", rate);
+  dword(L"Distance", distance);
+  dword(L"Margin", margin);
+  dword(L"GazeSmoothing", smoothing);
+  dword(L"GazeHoldMs", hold);
+  dword(L"Debug", debug);
+  RegCloseKey(key);
+  if (on) current.on = *on != 0;
+  if (width) current.width = std::clamp(float(*width) / 100.f, 0.05f, 1.f);
+  if (height) current.height = std::clamp(float(*height) / 100.f, 0.05f, 1.f);
+  if (rate) current.rate4 = *rate >= 4;
+  if (distance) current.distance = std::clamp(float(*distance) / 100.f, 0.f, 100.f);
+  if (margin) current.margin = std::clamp(float(*margin) / 100.f, 0.f, 0.4f);
+  if (smoothing) current.gaze_smoothing = std::clamp(float(*smoothing) / 100.f, 0.f, 0.95f);
+  if (hold) current.gaze_hold_ms = int(std::min<DWORD>(*hold, 2000));
+  if (debug) current.debug = *debug != 0;
+  return current;
+}
+#else
+std::optional<VdxrFovea> read_vdxr_fovea() { return std::nullopt; }
+VrsLive read_vrs_live(VrsLive current) { return current; }
+#endif
+
+VkExtent2D vrs_texel(VkDevice d) {
+  std::lock_guard lock(vrs_mutex);
+  const auto it = vrs_devices.find(d);
+  return it == vrs_devices.end() ? VkExtent2D{} : it->second;
+}
+std::uint32_t vrs_pass_index(VkRenderPass pass) {
+  std::lock_guard lock(vrs_mutex);
+  const auto it = vrs_passes.find(pass);
+  return it == vrs_passes.end() ? VK_ATTACHMENT_UNUSED : it->second;
+}
 // SwiftShader: host images standing in for guest resolve sources.
 struct StandIn {
   std::uint32_t index;  // the attachment it replaces
@@ -382,8 +556,118 @@ bool complete(const VkRenderPassCreateInfo& guest, CompletedPass& out) {
   report_added_dependencies(added.size(), guest.subpassCount);
   return true;
 }
+template <ProcedureName Name>
+VkResult VKAPI_CALL create_render_pass2(VkDevice d, const VkRenderPassCreateInfo2* info,
+                                        const VkAllocationCallbacks* alloc, VkRenderPass* out);
+// VENTURE_VRS on a vkCreateRenderPass pass: the same pass as a VkRenderPassCreateInfo2, which
+// can carry a shading-rate attachment. Only stereo scene passes (a multiview subpass over both
+// views with a depth attachment) whose chain holds nothing but multiview and input aspects.
+struct Pass2 {
+  VkRenderPassCreateInfo2 info{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO_2};
+  std::vector<VkAttachmentDescription2> attachments;
+  std::vector<VkSubpassDescription2> subpasses;
+  std::vector<std::vector<VkAttachmentReference2>> references;  // per subpass: inputs, colors, resolves, depth
+  std::vector<VkSubpassDependency2> dependencies;
+};
+bool vrs_pass2(const VkRenderPassCreateInfo& v1, Pass2& out) {
+  const VkRenderPassMultiviewCreateInfo* multiview = nullptr;
+  const VkRenderPassInputAttachmentAspectCreateInfo* aspects = nullptr;
+  for (auto* p = static_cast<const VkBaseInStructure*>(v1.pNext); p; p = p->pNext) {
+    if (p->sType == VK_STRUCTURE_TYPE_RENDER_PASS_MULTIVIEW_CREATE_INFO)
+      multiview = reinterpret_cast<const VkRenderPassMultiviewCreateInfo*>(p);
+    else if (p->sType == VK_STRUCTURE_TYPE_RENDER_PASS_INPUT_ATTACHMENT_ASPECT_CREATE_INFO)
+      aspects = reinterpret_cast<const VkRenderPassInputAttachmentAspectCreateInfo*>(p);
+    else
+      return false;
+  }
+  if (!multiview || multiview->subpassCount != v1.subpassCount) return false;
+  bool scene = false;
+  for (std::uint32_t i = 0; i < v1.subpassCount; ++i) {
+    const auto* depth = v1.pSubpasses[i].pDepthStencilAttachment;
+    scene |= multiview->pViewMasks[i] == 3 && depth && depth->attachment < v1.attachmentCount &&
+             is_depth_format(v1.pAttachments[depth->attachment].format);
+  }
+  if (!scene) return false;
+  for (std::uint32_t i = 0; i < v1.attachmentCount; ++i) {
+    const auto& a = v1.pAttachments[i];
+    out.attachments.push_back({VK_STRUCTURE_TYPE_ATTACHMENT_DESCRIPTION_2, nullptr, a.flags, a.format, a.samples,
+                               a.loadOp, a.storeOp, a.stencilLoadOp, a.stencilStoreOp, a.initialLayout,
+                               a.finalLayout});
+  }
+  // An input attachment's aspects: as the guest gave them, else all of its format's.
+  const auto aspect_of = [&](std::uint32_t subpass, std::uint32_t index, std::uint32_t attachment) {
+    if (aspects)
+      for (std::uint32_t i = 0; i < aspects->aspectReferenceCount; ++i)
+        if (aspects->pAspectReferences[i].subpass == subpass && aspects->pAspectReferences[i].inputAttachmentIndex == index)
+          return aspects->pAspectReferences[i].aspectMask;
+    if (attachment >= v1.attachmentCount) return VkImageAspectFlags(0);
+    const auto format = v1.pAttachments[attachment].format;
+    if (!is_depth_format(format)) return VkImageAspectFlags(VK_IMAGE_ASPECT_COLOR_BIT);
+    return VkImageAspectFlags(VK_IMAGE_ASPECT_DEPTH_BIT | (has_stencil(format) ? VK_IMAGE_ASPECT_STENCIL_BIT : 0));
+  };
+  out.references.resize(v1.subpassCount);
+  for (std::uint32_t i = 0; i < v1.subpassCount; ++i) {
+    const auto& s = v1.pSubpasses[i];
+    auto& refs = out.references[i];
+    refs.reserve(s.inputAttachmentCount + 2 * s.colorAttachmentCount + 1);
+    const auto add = [&](const VkAttachmentReference& r, VkImageAspectFlags aspect) {
+      refs.push_back({VK_STRUCTURE_TYPE_ATTACHMENT_REFERENCE_2, nullptr, r.attachment, r.layout, aspect});
+      return &refs.back();
+    };
+    VkSubpassDescription2 d{VK_STRUCTURE_TYPE_SUBPASS_DESCRIPTION_2};
+    d.flags = s.flags;
+    d.pipelineBindPoint = s.pipelineBindPoint;
+    d.viewMask = multiview->pViewMasks[i];
+    d.inputAttachmentCount = s.inputAttachmentCount;
+    for (std::uint32_t j = 0; j < s.inputAttachmentCount; ++j) {
+      auto* r = add(s.pInputAttachments[j], aspect_of(i, j, s.pInputAttachments[j].attachment));
+      if (!j) d.pInputAttachments = r;
+    }
+    d.colorAttachmentCount = s.colorAttachmentCount;
+    for (std::uint32_t j = 0; j < s.colorAttachmentCount; ++j) {
+      auto* r = add(s.pColorAttachments[j], 0);
+      if (!j) d.pColorAttachments = r;
+    }
+    if (s.pResolveAttachments)
+      for (std::uint32_t j = 0; j < s.colorAttachmentCount; ++j) {
+        auto* r = add(s.pResolveAttachments[j], 0);
+        if (!j) d.pResolveAttachments = r;
+      }
+    if (s.pDepthStencilAttachment) d.pDepthStencilAttachment = add(*s.pDepthStencilAttachment, 0);
+    d.preserveAttachmentCount = s.preserveAttachmentCount;
+    d.pPreserveAttachments = s.pPreserveAttachments;
+    out.subpasses.push_back(d);
+  }
+  for (std::uint32_t i = 0; i < v1.dependencyCount; ++i) {
+    const auto& g = v1.pDependencies[i];
+    const std::int32_t offset = i < multiview->dependencyCount && multiview->pViewOffsets ? multiview->pViewOffsets[i] : 0;
+    out.dependencies.push_back({VK_STRUCTURE_TYPE_SUBPASS_DEPENDENCY_2, nullptr, g.srcSubpass, g.dstSubpass,
+                                g.srcStageMask, g.dstStageMask, g.srcAccessMask, g.dstAccessMask, g.dependencyFlags,
+                                offset});
+  }
+  out.info.flags = v1.flags;
+  out.info.attachmentCount = v1.attachmentCount;
+  out.info.pAttachments = out.attachments.data();
+  out.info.subpassCount = v1.subpassCount;
+  out.info.pSubpasses = out.subpasses.data();
+  out.info.dependencyCount = std::uint32_t(out.dependencies.size());
+  out.info.pDependencies = out.dependencies.data();
+  out.info.correlatedViewMaskCount = multiview->correlationMaskCount;
+  out.info.pCorrelatedViewMasks = multiview->pCorrelationMasks;
+  return true;
+}
 VkResult VKAPI_CALL create_render_pass(VkDevice d, const VkRenderPassCreateInfo* info,
                                        const VkAllocationCallbacks* alloc, VkRenderPass* out) {
+  // VENTURE_VRS: a stereo scene pass goes through vkCreateRenderPass2 (it does the rest below too).
+  if (vrs_texel(d).width) {
+    Pass2 pass2;
+    if (vrs_pass2(*info, pass2)) {
+      static std::atomic<int> reports{0};
+      if (reports.fetch_add(1, std::memory_order_relaxed) < 4)
+        log::info("vulkan", "VRS: a vkCreateRenderPass scene pass is created as a render pass 2");
+      return create_render_pass2<"vkCreateRenderPass2KHR">(d, &pass2.info, alloc, out);
+    }
+  }
   CompletedPass completed;
   const auto* host = complete(*info, completed) ? &completed.info : info;
   auto r = next<PFN_vkCreateRenderPass, "vkCreateRenderPass">(d)(d, host, alloc, out);
@@ -406,8 +690,64 @@ VkResult VKAPI_CALL create_render_pass2(VkDevice d, const VkRenderPassCreateInfo
     host = &completed;
     report_added_dependencies(added.size(), info->subpassCount);
   }
+  // VENTURE_VRS: a shading-rate attachment (last) for the multiview subpasses with a depth attachment.
+  // The pass is recorded as the guest made it: framebuffers get the attachment at creation.
+  const auto* recorded = host;
+  VkRenderPassCreateInfo2 shaded;
+  std::vector<VkAttachmentDescription2> shaded_attachments;
+  std::vector<VkSubpassDescription2> shaded_subpasses;
+  std::vector<VkFragmentShadingRateAttachmentInfoKHR> rates;
+  VkAttachmentReference2 rate_reference{VK_STRUCTURE_TYPE_ATTACHMENT_REFERENCE_2, nullptr, host->attachmentCount,
+                                        VK_IMAGE_LAYOUT_FRAGMENT_SHADING_RATE_ATTACHMENT_OPTIMAL_KHR, 0};
+  if (const auto texel = vrs_texel(d); texel.width) {
+    rates.resize(host->subpassCount);
+    for (std::uint32_t i = 0; i < host->subpassCount; ++i) {
+      const auto& subpass = host->pSubpasses[i];
+      const auto* depth = subpass.pDepthStencilAttachment;
+      if (subpass.viewMask != 3 || !depth || depth->attachment >= host->attachmentCount ||
+          !is_depth_format(host->pAttachments[depth->attachment].format) ||
+          find_chain<VkFragmentShadingRateAttachmentInfoKHR>(
+              subpass.pNext, VK_STRUCTURE_TYPE_FRAGMENT_SHADING_RATE_ATTACHMENT_INFO_KHR))
+        continue;
+      if (shaded_subpasses.empty()) shaded_subpasses.assign(host->pSubpasses, host->pSubpasses + host->subpassCount);
+      rates[i] = {VK_STRUCTURE_TYPE_FRAGMENT_SHADING_RATE_ATTACHMENT_INFO_KHR, subpass.pNext, &rate_reference, texel};
+      shaded_subpasses[i].pNext = &rates[i];
+    }
+    if (!shaded_subpasses.empty()) {
+      shaded_attachments.assign(host->pAttachments, host->pAttachments + host->attachmentCount);
+      VkAttachmentDescription2 rate{VK_STRUCTURE_TYPE_ATTACHMENT_DESCRIPTION_2};
+      rate.format = VK_FORMAT_R8_UINT;
+      rate.samples = VK_SAMPLE_COUNT_1_BIT;
+      rate.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+      rate.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+      rate.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+      rate.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+      rate.initialLayout = rate.finalLayout = VK_IMAGE_LAYOUT_FRAGMENT_SHADING_RATE_ATTACHMENT_OPTIMAL_KHR;
+      shaded_attachments.push_back(rate);
+      shaded = *host;
+      shaded.attachmentCount = std::uint32_t(shaded_attachments.size());
+      shaded.pAttachments = shaded_attachments.data();
+      shaded.pSubpasses = shaded_subpasses.data();
+      host = &shaded;
+    }
+  }
   auto r = next<PFN_vkCreateRenderPass2, Name>(d)(d, host, alloc, out);
-  if (r == VK_SUCCESS) record_pass(*out, *info);
+  if (r == VK_SUCCESS) {
+    record_pass(*out, *recorded);
+    if (host == &shaded) {
+      std::lock_guard lock(vrs_mutex);
+      vrs_passes[*out] = recorded->attachmentCount;
+      static std::atomic<int> reports{0};
+      if (reports.fetch_add(1, std::memory_order_relaxed) < 8)
+        log::info("vulkan", "VRS: scene render pass {} gets a shading-rate attachment",
+                  static_cast<const void*>(*out));
+    }
+  } else if (host == &shaded) {
+    log::warn("vulkan", "VRS: a render pass with a shading-rate attachment was refused ({}); created without",
+              int(r));
+    r = next<PFN_vkCreateRenderPass2, Name>(d)(d, recorded, alloc, out);
+    if (r == VK_SUCCESS) record_pass(*out, *recorded);
+  }
   return r;
 }
 void VKAPI_CALL destroy_render_pass(VkDevice d, VkRenderPass pass, const VkAllocationCallbacks* alloc) {
@@ -464,6 +804,137 @@ void release(VkDevice d, const StandIn& s) {
   raw<PFN_vkFreeMemory>(d, "vkFreeMemory")(d, s.memory, nullptr);
 }
 // A host-only transient attachment image of `extent` and its view, or nullopt.
+std::uint32_t vrs_memory_type(VkDevice d, std::uint32_t bits, VkMemoryPropertyFlags wanted) {
+  VkPhysicalDeviceMemoryProperties props{};
+  const auto physical = device_physical(d);
+  reinterpret_cast<PFN_vkGetPhysicalDeviceMemoryProperties>(
+      raw_physical_proc(physical, "vkGetPhysicalDeviceMemoryProperties"))(physical, &props);
+  for (std::uint32_t i = 0; i < props.memoryTypeCount; ++i)
+    if ((bits & (1u << i)) && (props.memoryTypes[i].propertyFlags & wanted) == wanted) return i;
+  return props.memoryTypeCount;
+}
+void release_vrs_target(VkDevice d, VrsTarget& t) {
+  if (t.view) raw<PFN_vkDestroyImageView>(d, "vkDestroyImageView")(d, t.view, nullptr);
+  if (t.image) raw<PFN_vkDestroyImage>(d, "vkDestroyImage")(d, t.image, nullptr);
+  if (t.memory) raw<PFN_vkFreeMemory>(d, "vkFreeMemory")(d, t.memory, nullptr);
+  if (t.staging) raw<PFN_vkDestroyBuffer>(d, "vkDestroyBuffer")(d, t.staging, nullptr);
+  if (t.staging_memory) raw<PFN_vkFreeMemory>(d, "vkFreeMemory")(d, t.staging_memory, nullptr);
+  t = {};
+}
+// The shading-rate image of one framebuffer (two layers, one per view) and its upload buffer.
+std::optional<VrsTarget> make_vrs_target(VkDevice d, VkExtent2D framebuffer, VkExtent2D texel) {
+  VrsTarget t;
+  t.framebuffer = framebuffer;
+  t.extent = {(framebuffer.width + texel.width - 1) / texel.width, (framebuffer.height + texel.height - 1) / texel.height};
+  VkImageCreateInfo ci{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+  ci.imageType = VK_IMAGE_TYPE_2D;
+  ci.format = VK_FORMAT_R8_UINT;
+  ci.extent = {t.extent.width, t.extent.height, 1};
+  ci.mipLevels = 1;
+  ci.arrayLayers = 2;
+  ci.samples = VK_SAMPLE_COUNT_1_BIT;
+  ci.tiling = VK_IMAGE_TILING_OPTIMAL;
+  ci.usage = VK_IMAGE_USAGE_FRAGMENT_SHADING_RATE_ATTACHMENT_BIT_KHR | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+  bool ok = raw<PFN_vkCreateImage>(d, "vkCreateImage")(d, &ci, nullptr, &t.image) == VK_SUCCESS;
+  if (ok) {
+    VkMemoryRequirements req{};
+    raw<PFN_vkGetImageMemoryRequirements>(d, "vkGetImageMemoryRequirements")(d, t.image, &req);
+    VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, nullptr, req.size,
+                            vrs_memory_type(d, req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)};
+    ok = raw<PFN_vkAllocateMemory>(d, "vkAllocateMemory")(d, &ai, nullptr, &t.memory) == VK_SUCCESS &&
+         raw<PFN_vkBindImageMemory>(d, "vkBindImageMemory")(d, t.image, t.memory, 0) == VK_SUCCESS;
+  }
+  if (ok) {
+    VkImageViewCreateInfo vi{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+    vi.image = t.image;
+    vi.viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
+    vi.format = VK_FORMAT_R8_UINT;
+    vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 2};
+    ok = raw<PFN_vkCreateImageView>(d, "vkCreateImageView")(d, &vi, nullptr, &t.view) == VK_SUCCESS;
+  }
+  if (ok) {
+    const VkDeviceSize layer = (VkDeviceSize(t.extent.width) * t.extent.height + 3) & ~VkDeviceSize(3);
+    VkBufferCreateInfo bi{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+    bi.size = 2 * layer;
+    bi.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+    ok = raw<PFN_vkCreateBuffer>(d, "vkCreateBuffer")(d, &bi, nullptr, &t.staging) == VK_SUCCESS;
+    if (ok) {
+      VkMemoryRequirements req{};
+      raw<PFN_vkGetBufferMemoryRequirements>(d, "vkGetBufferMemoryRequirements")(d, t.staging, &req);
+      VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, nullptr, req.size,
+                              vrs_memory_type(d, req.memoryTypeBits,
+                                              VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)};
+      ok = raw<PFN_vkAllocateMemory>(d, "vkAllocateMemory")(d, &ai, nullptr, &t.staging_memory) == VK_SUCCESS &&
+           raw<PFN_vkBindBufferMemory>(d, "vkBindBufferMemory")(d, t.staging, t.staging_memory, 0) == VK_SUCCESS;
+    }
+  }
+  if (!ok) {
+    release_vrs_target(d, t);
+    return std::nullopt;
+  }
+  return t;
+}
+// Before a scene pass begins: (re)fill its map when the centers changed.
+void prepare_vrs(VkCommandBuffer cmd, VkFramebuffer framebuffer) {
+  std::lock_guard lock(vrs_mutex);
+  const auto it = vrs_targets.find(framebuffer);
+  if (it == vrs_targets.end()) return;
+  const auto d = it->second.first;
+  auto& t = it->second.second;
+  if (t.version == vrs_centers_version) return;
+  const VkDeviceSize layer = (VkDeviceSize(t.extent.width) * t.extent.height + 3) & ~VkDeviceSize(3);
+  void* mapped{};
+  if (raw<PFN_vkMapMemory>(d, "vkMapMemory")(d, t.staging_memory, 0, VK_WHOLE_SIZE, 0, &mapped) != VK_SUCCESS) return;
+  // The full-rate region: width x height (fractions of the image) around each eye's center.
+  const VrsLive& live = vrs_settings();
+  const float half_w = 0.5f * std::max(live.width, vrs_follow[0]) * float(t.framebuffer.width);
+  const float half_h = 0.5f * std::max(live.height, vrs_follow[1]) * float(t.framebuffer.height);
+  // Outside: 2x2, or 4x4 (a rate the device lacks is clamped to a supported one); 1x1 everywhere when off.
+  const std::uint8_t coarse = !live.on ? vrs_full : live.rate4 ? std::uint8_t((2 << 2) | 2) : vrs_coarse;
+  for (std::uint32_t eye = 0; eye < 2; ++eye) {
+    auto* out = static_cast<std::uint8_t*>(mapped) + eye * layer;
+    const float cx = vrs_centers[eye][0] * float(t.framebuffer.width);
+    const float cy = vrs_centers[eye][1] * float(t.framebuffer.height);
+    const float tw = float(t.framebuffer.width) / float(t.extent.width);
+    const float th = float(t.framebuffer.height) / float(t.extent.height);
+    for (std::uint32_t y = 0; y < t.extent.height; ++y)
+      for (std::uint32_t x = 0; x < t.extent.width; ++x) {
+        // A texel the region touches stays full rate.
+        const bool inside = (x + 1) * tw > cx - half_w && x * tw < cx + half_w && (y + 1) * th > cy - half_h &&
+                            y * th < cy + half_h;
+        out[y * t.extent.width + x] = inside ? vrs_full : coarse;
+      }
+  }
+  raw<PFN_vkUnmapMemory>(d, "vkUnmapMemory")(d, t.staging_memory);
+  const VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 2};
+  VkImageMemoryBarrier to_copy = layout_barrier(
+      t.image, range, t.version ? VK_IMAGE_LAYOUT_FRAGMENT_SHADING_RATE_ATTACHMENT_OPTIMAL_KHR : VK_IMAGE_LAYOUT_UNDEFINED,
+      VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+  to_copy.srcAccessMask = t.version ? VK_ACCESS_FRAGMENT_SHADING_RATE_ATTACHMENT_READ_BIT_KHR : 0;
+  to_copy.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+  host<PFN_vkCmdPipelineBarrier>(cmd, "vkCmdPipelineBarrier")(
+      cmd, VK_PIPELINE_STAGE_FRAGMENT_SHADING_RATE_ATTACHMENT_BIT_KHR | VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+      VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &to_copy);
+  const VkBufferImageCopy regions[2] = {
+      {0, 0, 0, {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, {0, 0, 0}, {t.extent.width, t.extent.height, 1}},
+      {layer, 0, 0, {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 1}, {0, 0, 0}, {t.extent.width, t.extent.height, 1}}};
+  host<PFN_vkCmdCopyBufferToImage>(cmd, "vkCmdCopyBufferToImage")(cmd, t.staging, t.image,
+                                                                 VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 2, regions);
+  VkImageMemoryBarrier to_read = layout_barrier(t.image, range, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                                VK_IMAGE_LAYOUT_FRAGMENT_SHADING_RATE_ATTACHMENT_OPTIMAL_KHR);
+  to_read.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+  to_read.dstAccessMask = VK_ACCESS_FRAGMENT_SHADING_RATE_ATTACHMENT_READ_BIT_KHR;
+  host<PFN_vkCmdPipelineBarrier>(cmd, "vkCmdPipelineBarrier")(
+      cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADING_RATE_ATTACHMENT_BIT_KHR, 0, 0, nullptr,
+      0, nullptr, 1, &to_read);
+  static std::atomic<int> reports{0};
+  if (reports.fetch_add(1, std::memory_order_relaxed) < 4)
+    log::info("vulkan", "VRS map {}x{} texels for a {}x{} scene pass: full rate in {:.0f}x{:.0f} px around ({:.3f},{:.3f}) / "
+              "({:.3f},{:.3f}), outside rate code {}", t.extent.width, t.extent.height, t.framebuffer.width,
+              t.framebuffer.height, 2 * half_w, 2 * half_h, vrs_centers[0][0], vrs_centers[0][1], vrs_centers[1][0],
+              vrs_centers[1][1], int(coarse));
+  t.version = vrs_centers_version;
+}
 std::optional<StandIn> transient_attachment(VkDevice d, std::uint32_t index, VkFormat format,
                                             VkSampleCountFlagBits samples, VkImageViewType type,
                                             VkImageAspectFlags aspect, VkExtent2D extent, std::uint32_t layers,
@@ -596,14 +1067,37 @@ VkResult create_host_framebuffer(VkDevice d, const VkFramebufferCreateInfo* info
       sub.stand_ins.push_back(*s);
     }
   const bool resized = bounds.width != info->width || bounds.height != info->height;
-  if (!resized && sub.stand_ins.empty())
-    return next<PFN_vkCreateFramebuffer, "vkCreateFramebuffer">(d)(d, info, alloc, out);
+  // VENTURE_VRS: the scene pass's shading-rate map, appended to its attachments.
+  const auto create = [&](const VkFramebufferCreateInfo* ci) {
+    const auto index = vrs_pass_index(ci->renderPass);
+    if (index == VK_ATTACHMENT_UNUSED) return next<PFN_vkCreateFramebuffer, "vkCreateFramebuffer">(d)(d, ci, alloc, out);
+    if ((ci->flags & VK_FRAMEBUFFER_CREATE_IMAGELESS_BIT) || ci->attachmentCount != index) {
+      log::warn("vulkan", "VRS: an imageless or unexpected framebuffer for a scene pass is not supported");
+      return VK_ERROR_INITIALIZATION_FAILED;
+    }
+    auto target = make_vrs_target(d, {ci->width, ci->height}, vrs_texel(d));
+    if (!target) return VK_ERROR_OUT_OF_DEVICE_MEMORY;
+    std::vector<VkImageView> list(ci->pAttachments, ci->pAttachments + ci->attachmentCount);
+    list.push_back(target->view);
+    auto with_rate = *ci;
+    with_rate.attachmentCount = std::uint32_t(list.size());
+    with_rate.pAttachments = list.data();
+    const auto result = next<PFN_vkCreateFramebuffer, "vkCreateFramebuffer">(d)(d, &with_rate, alloc, out);
+    if (result != VK_SUCCESS) {
+      release_vrs_target(d, *target);
+      return result;
+    }
+    std::lock_guard lock(vrs_mutex);
+    vrs_targets[*out] = {d, *target};
+    return result;
+  };
+  if (!resized && sub.stand_ins.empty()) return create(info);
   if (resized) report_clamp("Framebuffer", info->width, info->height, bounds);
   auto copy = *info;
   copy.width = bounds.width;
   copy.height = bounds.height;
   if (!sub.stand_ins.empty()) copy.pAttachments = attachments.data();
-  auto r = next<PFN_vkCreateFramebuffer, "vkCreateFramebuffer">(d)(d, &copy, alloc, out);
+  auto r = create(&copy);
   if (r != VK_SUCCESS) {
     for (const auto& s : sub.stand_ins) release(d, s);
     return r;
@@ -710,6 +1204,14 @@ VkResult VKAPI_CALL create_framebuffer(VkDevice d, const VkFramebufferCreateInfo
   return r;
 }
 void VKAPI_CALL destroy_framebuffer(VkDevice d, VkFramebuffer framebuffer, const VkAllocationCallbacks* alloc) {
+  {
+    // The guest destroys a framebuffer once no submitted work uses it.
+    std::lock_guard lock(vrs_mutex);
+    if (auto it = vrs_targets.find(framebuffer); it != vrs_targets.end()) {
+      release_vrs_target(it->second.first, it->second.second);
+      vrs_targets.erase(it);
+    }
+  }
   std::optional<Substitution> owned;
   std::vector<StandIn> blanks;
   {
@@ -851,6 +1353,7 @@ void VKAPI_CALL begin_pass(VkCommandBuffer cmd, const VkRenderPassBeginInfo* inf
   const auto area = pass_area(info);
   auto begin = host_begin(info);
   transition(cmd, begin.before);
+  prepare_vrs(cmd, info->framebuffer);
   auto copy = with_area(*info, area);
   copy.framebuffer = begin.framebuffer;
   host<PFN_vkCmdBeginRenderPass>(cmd, "vkCmdBeginRenderPass")(cmd, &copy, contents);
@@ -860,6 +1363,7 @@ void VKAPI_CALL begin_pass2(VkCommandBuffer cmd, const VkRenderPassBeginInfo* in
   const auto area = pass_area(info);
   auto begin = host_begin(info);
   transition(cmd, begin.before);
+  prepare_vrs(cmd, info->framebuffer);
   auto copy = with_area(*info, area);
   copy.framebuffer = begin.framebuffer;
   host<PFN_vkCmdBeginRenderPass2>(cmd, "vkCmdBeginRenderPass2")(cmd, &copy, sub);
@@ -922,6 +1426,22 @@ VkResult VKAPI_CALL create_graphics_pipelines(VkDevice d, VkPipelineCache cache,
     dynamic[i].pDynamicStates = states[i].data();
     copies[i].pDynamicState = &dynamic[i];
   }
+  // VENTURE_VRS: pipelines take the shading-rate map's rate (1x1 where none is bound).
+  std::vector<VkPipelineFragmentShadingRateStateCreateInfoKHR> rate_states;
+  if (vrs_texel(d).width) {
+    if (copies.empty()) copies.assign(infos, infos + count);
+    rate_states.resize(count);
+    for (std::uint32_t i = 0; i < count; ++i) {
+      if (find_chain<VkPipelineFragmentShadingRateStateCreateInfoKHR>(
+              copies[i].pNext, VK_STRUCTURE_TYPE_PIPELINE_FRAGMENT_SHADING_RATE_STATE_CREATE_INFO_KHR) ||
+          find_chain<VkPipelineRenderingCreateInfo>(copies[i].pNext, VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO))
+        continue;
+      rate_states[i] = {VK_STRUCTURE_TYPE_PIPELINE_FRAGMENT_SHADING_RATE_STATE_CREATE_INFO_KHR, copies[i].pNext,
+                        {1, 1},
+                        {VK_FRAGMENT_SHADING_RATE_COMBINER_OP_KEEP_KHR, VK_FRAGMENT_SHADING_RATE_COMBINER_OP_REPLACE_KHR}};
+      copies[i].pNext = &rate_states[i];
+    }
+  }
   auto r = next<PFN_vkCreateGraphicsPipelines, "vkCreateGraphicsPipelines">(d)(
       d, cache, count, copies.empty() ? infos : copies.data(), alloc, out);
   std::lock_guard lock(mutex);
@@ -971,6 +1491,129 @@ void VKAPI_CALL end_rendering(VkCommandBuffer cmd) {
 }
 }  // namespace
 
+bool vrs_requested() {
+  static const bool on = [] {
+    const char* text = venture::environment::getenv("VENTURE_VRS");
+    return text && *text == '1';
+  }();
+  return on;
+}
+std::atomic<float> local_nr_width{0.f}, local_nr_height{0.f};
+void fovea_center(std::uint32_t eye, float& u, float& v) {
+  std::lock_guard lock(vrs_mutex);
+  u = vrs_centers[eye & 1][0];
+  v = vrs_centers[eye & 1][1];
+}
+void note_local_nr_area(float width, float height) {
+  local_nr_width = width;
+  local_nr_height = height;
+}
+bool vrs_outline(float& width, float& height) {
+  if (!vrs_requested()) return false;
+  std::lock_guard lock(vrs_mutex);
+  const auto& live = vrs_settings();
+  if (!live.on || !live.debug || vrs_targets.empty()) return false;
+  width = std::max(live.width, vrs_follow[0]);
+  height = std::max(live.height, vrs_follow[1]);
+  return true;
+}
+bool vrs_active() {
+  if (!vrs_requested()) return false;
+  std::lock_guard lock(vrs_mutex);
+  return vrs_settings().on && !vrs_targets.empty();
+}
+void vrs_device_created(VkDevice device, VkExtent2D texel_size) {
+  std::lock_guard lock(vrs_mutex);
+  vrs_devices[device] = texel_size;
+  log::info("vulkan", "VRS: attachment shading rates enabled ({}x{} pixel texels)", texel_size.width,
+            texel_size.height);
+}
+void vrs_note_views(const float tangents[2][4], float half_ipd, const float* gaze) {
+  // The launcher's live values, a few times a second.
+  static std::chrono::steady_clock::time_point next_read{};
+  const auto now = std::chrono::steady_clock::now();
+  if (now >= next_read) {
+    next_read = now + std::chrono::milliseconds(250);
+    VrsLive current;
+    {
+      std::lock_guard lock(vrs_mutex);
+      current = vrs_settings();
+    }
+    const VrsLive fresh = read_vrs_live(current);
+    if (!(fresh == current)) {
+      std::lock_guard lock(vrs_mutex);
+      vrs_settings() = fresh;
+      ++vrs_centers_version;
+      log::info("vulkan", "VRS live: {} , full rate {:.0f}% x {:.0f}%, outside {}", fresh.on ? "on" : "off",
+                100 * fresh.width, 100 * fresh.height, fresh.rate4 ? "4x4" : "2x2");
+    }
+  }
+  VrsLive live;
+  {
+    std::lock_guard lock(vrs_mutex);
+    live = vrs_settings();
+  }
+  const float distance = live.distance;
+  const auto hold = std::chrono::milliseconds(live.gaze_hold_ms);
+  // VDXR's NR region when it follows the gaze; else Venture's own gaze, smoothed (held for a blink);
+  // else straight ahead. Both look at a point `distance` away (infinity when 0), seen from each eye.
+  const auto fovea = read_vdxr_fovea();
+  struct Direction { float x, y, z; };
+  static Direction smoothed{0.f, 0.f, -1.f};
+  static std::chrono::steady_clock::time_point last_gaze{};
+  bool own_gaze = false;
+  if (!fovea && gaze) {
+    const float length = std::max(1e-6f, std::sqrt(gaze[0] * gaze[0] + gaze[1] * gaze[1] + gaze[2] * gaze[2]));
+    const Direction d{gaze[0] / length, gaze[1] / length, gaze[2] / length};
+    const bool fresh = now - last_gaze > std::max(hold, std::chrono::milliseconds(50));
+    const float follow = fresh ? 1.f : 1.f - live.gaze_smoothing;
+    smoothed = {smoothed.x + (d.x - smoothed.x) * follow, smoothed.y + (d.y - smoothed.y) * follow,
+                smoothed.z + (d.z - smoothed.z) * follow};
+    last_gaze = now;
+  }
+  own_gaze = !fovea && smoothed.z < -0.1f && now - last_gaze < std::max(hold, std::chrono::milliseconds(50));
+  float centers[2][2];
+  for (std::uint32_t eye = 0; eye < 2; ++eye) {
+    const auto* t = tangents[eye];
+    if (!(t[1] > t[0]) || !(t[2] > t[3])) return;
+    const float eye_x = eye == 0 ? -half_ipd : half_ipd;
+    float x = distance > 0 ? -eye_x / distance : 0.f, y = 0.f;
+    if (fovea) {
+      x = fovea->tangent[eye][0];
+      y = fovea->tangent[eye][1];
+    } else if (own_gaze) {
+      const float ahead = -smoothed.z;
+      x = distance > 0 ? (smoothed.x / ahead * distance - eye_x) / distance : smoothed.x / ahead;
+      y = smoothed.y / ahead;
+    }
+    centers[eye][0] = std::clamp((x - t[0]) / (t[1] - t[0]), 0.f, 1.f);
+    centers[eye][1] = std::clamp((t[2] - y) / (t[2] - t[3]), 0.f, 1.f);
+  }
+  // Following, the area covers the NR region plus a margin: the gaze arrives one frame late.
+  // Venture NR (xr/venture_nr.h) on the same center: VRS covers its region plus the margin too.
+  const float local_w = local_nr_width.load(), local_h = local_nr_height.load();
+  const float follow_w = fovea ? std::min(1.f, fovea->nrWidth + live.margin)
+                         : local_w > 0.f ? std::min(1.f, local_w + live.margin) : 0.f;
+  const float follow_h = fovea ? std::min(1.f, fovea->nrHeight + live.margin)
+                         : local_h > 0.f ? std::min(1.f, local_h + live.margin) : 0.f;
+  std::lock_guard lock(vrs_mutex);
+  bool changed = std::abs(follow_w - vrs_follow[0]) > 0.005f || std::abs(follow_h - vrs_follow[1]) > 0.005f;
+  for (std::uint32_t eye = 0; eye < 2; ++eye)
+    for (std::uint32_t axis = 0; axis < 2; ++axis)
+      changed |= std::abs(centers[eye][axis] - vrs_centers[eye][axis]) > 0.005f;
+  if (!changed) return;
+  static int reported_mode = -1;
+  const int mode = fovea ? 2 : own_gaze ? 1 : 0;
+  if (mode != reported_mode) {
+    reported_mode = mode;
+    log::info("vulkan", "VRS: {}",
+              mode == 2 ? "follows VDXR's gaze-tracked NR region" : mode == 1 ? "follows the eye gaze" : "fixed center");
+  }
+  std::memcpy(vrs_centers, centers, sizeof(centers));
+  vrs_follow[0] = follow_w;
+  vrs_follow[1] = follow_h;
+  ++vrs_centers_version;
+}
 void note_image(VkImage image, const VkImageCreateInfo& info) {
   // Only images that can be attachments ever bound a framebuffer.
   if (!(info.usage & attachment_usage)) return;

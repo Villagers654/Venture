@@ -91,6 +91,9 @@ HostXr initialize_host() {
     // The headset's audio endpoints, for host audio (headset_audio_endpoint).
     usable.insert("XR_OCULUS_audio_device_guid");
 #endif
+    // The eye gaze for the foveated VRS and Venture NR that follow it (xr/eye_gaze.h).
+    if (const char* gaze = environment::getenv("VENTURE_VRS_GAZE"); gaze && *gaze == '1')
+      usable.insert("XR_EXT_eye_gaze_interaction");
     // Passthrough backends are chosen by what the host offers (hle/openxr/passthrough.cpp);
     // XR_HTC_passthrough is only a host-side target and never offered to guests.
     if (environment::passthrough_enabled()) {

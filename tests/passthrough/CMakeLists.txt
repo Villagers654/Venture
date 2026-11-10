@@ -14,7 +14,10 @@ add_library(venture_passthrough_fixture OBJECT
   ${PROJECT_SOURCE_DIR}/src/runtime/hle/openxr/state.cpp
   ${PROJECT_SOURCE_DIR}/src/runtime/xr/color_images.cpp
   ${PROJECT_SOURCE_DIR}/src/runtime/xr/color_space.cpp
-  ${PROJECT_SOURCE_DIR}/src/runtime/xr/guest_images.cpp)
+  ${PROJECT_SOURCE_DIR}/src/runtime/xr/guest_images.cpp
+  # Venture NR's hook in the host copy (off: VENTURE_NR is unset).
+  ${PROJECT_SOURCE_DIR}/src/runtime/xr/ngx_bridge.cpp
+  ${PROJECT_SOURCE_DIR}/src/runtime/xr/venture_nr.cpp)
 add_executable(venture_passthrough_tests tests.cpp support.cpp ../test_main.cpp)
 add_executable(venture_passthrough_lifecycle_tests lifecycle.cpp lifecycle_host.cpp support.cpp ../test_main.cpp
   ${PROJECT_SOURCE_DIR}/src/runtime/hle/openxr/openxr.cpp

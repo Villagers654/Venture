@@ -153,6 +153,8 @@ def generate(registry, output, check=False):
             code.append('  if (XR_SUCCEEDED(result)) { venture::xr::clear_haptic_bindings(session); for (uint32_t i = 0; i < attachInfo->countActionSets; ++i) state().attached_sets[session].insert(key(attachInfo->actionSets[i])); }')
         if name == 'xrLocateViews':
             code.append('  if (XR_SUCCEEDED(result) && views) sanitize_views(*viewState, std::min(viewCapacityInput, *viewCountOutput), views);')
+            # VRS and Venture NR's foveal center (graphics.cpp note_views_for_vrs).
+            code.append('  if (XR_SUCCEEDED(result) && views && viewLocateInfo->viewConfigurationType == XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO) note_views_for_vrs(viewLocateInfo->displayTime, std::min(viewCapacityInput, *viewCountOutput), views);')
         code += ['  return result;', '}']
         if name in ('xrLocateViews', 'xrSyncActions'):
             code = [code[0], f'  xr_call_trace::Call trace("guest.{name}");',

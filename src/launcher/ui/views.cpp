@@ -1357,6 +1357,8 @@ void App::draw_game_page() {
   if (has_settings) {
     tab_items.push_back("Controls");
     tab_items.push_back("Settings");
+    // VR Optimization: foveated VRS and NR for this game (launcher/vr_optimization.h).
+    tab_items.push_back("VR Optimization");
   }
   // --smoke-view game-controls* and game-settings* keep those tabs open for
   // screenshots (by name: the Add-ons tab can come and go while it is checked).
@@ -1369,6 +1371,8 @@ void App::draw_game_page() {
     for (int i = 0; i < int(tab_items.size()); ++i)
       if (std::string_view(tab_items[size_t(i)]) == smoke_tab) game_tab_ = i;
   }
+  // --smoke-view vr opens the VR Optimization tab for screenshots.
+  if (has_settings && options_.smoke_view.starts_with("vr")) game_tab_ = int(tab_items.size()) - 1;
   if (game_tab_ >= int(tab_items.size())) game_tab_ = 0;
   if (tab_items.size() > 1) {
     tabs("game-tabs", tab_items.data(), int(tab_items.size()), &game_tab_, avail);
@@ -1383,12 +1387,667 @@ void App::draw_game_page() {
     draw_game_controls(g, std::min(body_w, s(1180)));
   else if (tab == "Settings")
     draw_game_settings(g, std::min(body_w, s(kPageWidth)));
+  else if (tab == "VR Optimization")
+    draw_vr_optimization(partial->plan.package, std::min(body_w, s(1240)), running);
   else if (game_tab_ == 1 && has_addons)
     draw_addons(g, std::min(body_w, s(980)));
   else
     draw_about(g, body_w);
   gap(30);
   if (pad > 0) ImGui::Unindent(pad);
+}
+
+// The game page's VR Optimization tab: one of three modes, then its settings (launcher/vr_optimization.h).
+//   SteamVR       Venture NR + VRS on the system's OpenXR runtime (SteamVR, Virtual Desktop...). NVIDIA RTX.
+//   VDXR DLSS NR  the VDXR build's DLSS-NR + VRS following its NR area. NVIDIA RTX and Virtual Desktop.
+//   VRS           Venture's VRS alone, any GPU and runtime.
+// Each is eye tracked or uses a fixed foveated area.
+namespace {
+constexpr ImU32 kVrsColor = IM_COL32(243, 66, 95, 255), kNrColor = IM_COL32(69, 189, 98, 255);
+constexpr ImU32 kNvidia = IM_COL32(118, 185, 0, 255), kAmd = IM_COL32(237, 28, 36, 255);
+
+// The modes in display order.
+struct VrModeInfo {
+  VrMode mode;
+  const char* name;
+  const char* title;
+  const char* subtitle;
+};
+constexpr VrModeInfo kVrModes[] = {
+    {VrMode::venture_nr, "SteamVR", "SteamVR / Venture NR / VRS", "Any OpenXR runtime"},
+    {VrMode::vdxr_nr, "VDXR DLSS NR", "VDXR DLSS NR / VRS", "Best quality, NR and VRS aligned"},
+    {VrMode::vrs_only, "VRS", "VRS only", "Performance, no NR"},
+};
+int vr_mode_index(VrMode mode) {
+  for (int i = 0; i < 3; ++i)
+    if (kVrModes[i].mode == mode) return i;
+  return 2;
+}
+
+// Rows of label + control on Venture's surfaces.
+struct VrUi {
+  bool& changed;
+  std::set<std::string>& open;
+  static ImDrawList* dl() { return ImGui::GetWindowDrawList(); }
+  static float row_h() { return s(40); }
+
+  // A row's label; returns the row's origin (window coordinates) and screen position.
+  static std::pair<ImVec2, ImVec2> begin_row(std::string_view label, bool enabled) {
+    const ImVec2 at = ImGui::GetCursorPos(), screen = ImGui::GetCursorScreenPos();
+    draw_text(dl(), fonts().regular, kBody, {screen.x, text_y(fonts().regular, kBody, screen.y, row_h())},
+              enabled ? color::text : color::text3, label);
+    return {at, screen};
+  }
+  static void end_row(ImVec2 at, ImVec2 screen) {
+    hline(dl(), screen.x, screen.x + ImGui::GetContentRegionAvail().x, screen.y + row_h(), color::stroke);
+    ImGui::SetCursorPos({at.x, at.y + row_h() + s(1)});
+    ImGui::Dummy({0, 0});
+  }
+  // Label and toggle (right); `mark` draws a small outline of that color after the label.
+  bool toggle_row(const char* id, std::string_view label, bool* value, bool enabled = true, ImU32 mark = 0) {
+    const auto [at, screen] = begin_row(label, enabled);
+    const float w = ImGui::GetContentRegionAvail().x;
+    if (mark) {
+      const float x = screen.x + measure(fonts().regular, kBody, label).x + s(10), y = screen.y + row_h() * 0.5f;
+      dl()->AddRect({x, y - s(6)}, {x + s(18), y + s(6)}, enabled ? mark : color::alpha(mark, 0.4f), s(2), 0, s(1.5f));
+    }
+    ImGui::SetCursorScreenPos({screen.x + w - s(44), screen.y + (row_h() - s(24)) * 0.5f});
+    ImGui::BeginDisabled(!enabled);
+    const bool clicked = toggle(id, value);
+    ImGui::EndDisabled();
+    end_row(at, screen);
+    changed |= clicked;
+    return clicked;
+  }
+  // A value with up / down arrows (and the mouse wheel).
+  bool stepper(const char* id, int* value, int lo, int hi, int step, const std::string& shown, float width,
+               bool enabled) {
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    const float h = s(30), arrows = s(22);
+    ImGui::PushID(id);
+    ImGui::BeginDisabled(!enabled);
+    const bool up = ImGui::InvisibleButton("##up", {width, h * 0.5f});
+    const bool hover_up = ImGui::IsItemHovered();
+    ImGui::SetCursorScreenPos({p.x, p.y + h * 0.5f});
+    const bool down = ImGui::InvisibleButton("##down", {width, h * 0.5f});
+    const bool hover_down = ImGui::IsItemHovered();
+    ImGui::EndDisabled();
+    ImGui::PopID();
+    int next = *value;
+    const bool on_arrows = ImGui::GetIO().MousePos.x > p.x + width - arrows;
+    if (enabled && up && on_arrows) next += step;
+    if (enabled && down && on_arrows) next -= step;
+    if (enabled && (hover_up || hover_down) && ImGui::GetIO().MouseWheel != 0)
+      next += ImGui::GetIO().MouseWheel > 0 ? step : -step;
+    next = std::clamp(next, lo, hi);
+    const ImU32 ink = enabled ? color::text : color::text3;
+    dl()->AddRectFilled(p, {p.x + width, p.y + h},
+                        color::mix(color::bg, color::surface_hi, hover_up || hover_down ? 1.f : 0.f), s(7));
+    dl()->AddRect(p, {p.x + width, p.y + h}, color::stroke_hi, s(7));
+    const float tw = measure(fonts().regular, kBody, shown).x;
+    draw_text(dl(), fonts().regular, kBody, {p.x + width - arrows - s(8) - tw, text_y(fonts().regular, kBody, p.y, h)},
+              ink, shown);
+    hline(dl(), p.x + width - arrows, p.x + width, p.y + h * 0.5f, color::stroke);
+    draw_glyph(dl(), icons::chevron_up, s(10), {p.x + width - arrows * 0.5f, p.y + h * 0.27f}, ink);
+    draw_glyph(dl(), icons::chevron_down, s(10), {p.x + width - arrows * 0.5f, p.y + h * 0.73f}, ink);
+    ImGui::SetCursorScreenPos({p.x, p.y + h});
+    ImGui::Dummy({width, 0});
+    if (next == *value) return false;
+    *value = next;
+    changed = true;
+    return true;
+  }
+  bool stepper_row(const char* id, std::string_view label, int* value, int lo, int hi, int step, bool enabled,
+                   const std::string& shown) {
+    const auto [at, screen] = begin_row(label, enabled);
+    const float w = ImGui::GetContentRegionAvail().x, sw = std::min(s(170), w * 0.5f);
+    ImGui::SetCursorScreenPos({screen.x + w - sw, screen.y + (row_h() - s(30)) * 0.5f});
+    const bool moved = stepper(id, value, lo, hi, step, shown, sw, enabled);
+    end_row(at, screen);
+    return moved;
+  }
+  // Label and a dropdown (right).
+  bool choice_row(const char* id, std::string_view label, const char* const* items, int count, int* current,
+                  bool enabled = true) {
+    const auto [at, screen] = begin_row(label, enabled);
+    const float w = ImGui::GetContentRegionAvail().x, dw = std::min(s(230), w * 0.55f);
+    ImGui::SetCursorScreenPos({screen.x + w - dw, screen.y + (row_h() - s(34)) * 0.5f});
+    ImGui::BeginDisabled(!enabled);
+    const bool picked = dropdown(id, "", items, count, current, dw, nullptr, true);
+    ImGui::EndDisabled();
+    end_row(at, screen);
+    changed |= picked;
+    return picked;
+  }
+  // Label, value text (right).
+  static void value_row(std::string_view label, std::string_view value, bool enabled = true) {
+    const auto [at, screen] = begin_row(label, enabled);
+    const float w = ImGui::GetContentRegionAvail().x, vw = measure(fonts().regular, kBody, value).x;
+    draw_text(dl(), fonts().regular, kBody, {screen.x + w - vw, text_y(fonts().regular, kBody, screen.y, row_h())},
+              enabled ? color::text2 : color::text3, value);
+    end_row(at, screen);
+  }
+  // Label, a short slider and its value (right).
+  bool slider_row(const char* id, std::string_view label, float* value, float lo, float hi, float step, bool enabled,
+                  ImU32 fill, const std::string& shown) {
+    const auto [at, screen] = begin_row(label, enabled);
+    const float w = ImGui::GetContentRegionAvail().x, vw = s(64), sw = std::min(s(200), w * 0.45f);
+    ImGui::SetCursorScreenPos({screen.x + w - vw - sw, screen.y + (row_h() - s(24)) * 0.5f});
+    const bool moved = slider(id, value, lo, hi, step, sw, enabled, fill);
+    const float tw = measure(fonts().regular, kBody, shown).x;
+    draw_text(dl(), fonts().regular, kBody, {screen.x + w - tw, text_y(fonts().regular, kBody, screen.y, row_h())},
+              enabled ? color::text : color::text3, shown);
+    end_row(at, screen);
+    changed |= moved;
+    return moved;
+  }
+  bool percent_row(const char* id, std::string_view label, int* value, int lo, int hi, int step, bool enabled,
+                   ImU32 fill, std::string shown = {}) {
+    float v = float(*value);
+    if (shown.empty()) shown = std::format("{} %", *value);
+    if (!slider_row(id, label, &v, float(lo), float(hi), float(step), enabled, fill, shown)) return false;
+    *value = std::clamp(int(std::lround(v / float(step))) * step, lo, hi);
+    return true;
+  }
+  // A folded section: a chevron, its title and a hint line; returns whether it is open (closed by default).
+  bool fold(const char* id, std::string_view title, std::string_view hint) {
+    const ImVec2 at = ImGui::GetCursorPos(), screen = ImGui::GetCursorScreenPos();
+    const float w = ImGui::GetContentRegionAvail().x, h = s(52);
+    const bool is_open = open.contains(id);
+    ImGui::PushID(id);
+    if (ImGui::InvisibleButton("##head", {w, h})) {
+      if (is_open) open.erase(id);
+      else open.insert(id);
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+    ImGui::PopID();
+    draw_glyph(dl(), is_open ? icons::chevron_down : icons::chevron_right, s(12), {screen.x + s(6), screen.y + s(14)},
+               color::accent_text);
+    draw_text(dl(), fonts().semibold, kBody, {screen.x + s(20), screen.y + s(4)}, color::text, title);
+    draw_text(dl(), fonts().regular, kSmall, {screen.x + s(20), screen.y + s(26)}, color::text3, hint);
+    ImGui::SetCursorPos({at.x, at.y + h});
+    ImGui::Dummy({0, 0});
+    return is_open;
+  }
+  // A bordered column card with its title, tag and feature toggle.
+  template <class Body>
+  void column(const char* id, std::string_view title, std::string_view tag, ImU32 tint, bool* on, bool enabled,
+              Body&& body) {
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, color::surface);
+    ImGui::PushStyleColor(ImGuiCol_Border, color::stroke_hi);
+    ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, s(12));
+    ImGui::PushStyleVar(ImGuiStyleVar_ChildBorderSize, 1.f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {s(18), s(14)});
+    ImGui::BeginChild(id, {ImGui::GetContentRegionAvail().x, 0},
+                      ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY | ImGuiChildFlags_AlwaysUseWindowPadding,
+                      ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+    {
+      const ImVec2 at = ImGui::GetCursorPos(), screen = ImGui::GetCursorScreenPos();
+      const float w = ImGui::GetContentRegionAvail().x, h = s(36);
+      const ImU32 ink = enabled ? color::text : color::text3;
+      draw_text(dl(), fonts().semibold, kHeading, {screen.x, text_y(fonts().semibold, kHeading, screen.y, h)}, ink, title);
+      const float x = screen.x + measure(fonts().semibold, kHeading, title).x + s(10);
+      const ImVec2 ts = measure(fonts().semibold, kSmall, tag);
+      dl()->AddRect({x, screen.y + s(6)}, {x + ts.x + s(14), screen.y + h - s(6)}, enabled ? tint : color::stroke_hi,
+                    s(5), 0, s(1.5f));
+      draw_text(dl(), fonts().semibold, kSmall, {x + s(7), text_y(fonts().semibold, kSmall, screen.y, h)},
+                enabled ? tint : color::text3, tag);
+      if (on) {
+        ImGui::SetCursorScreenPos({screen.x + w - s(44), screen.y + (h - s(24)) * 0.5f});
+        changed |= toggle((std::string(id) + "-on").c_str(), on);
+      }
+      ImGui::SetCursorPos({at.x, at.y + h + s(4)});
+      hline(dl(), screen.x, screen.x + w, screen.y + h + s(2), color::stroke);
+      ImGui::Dummy({0, 0});
+    }
+    body();
+    ImGui::EndChild();
+    ImGui::PopStyleVar(3);
+    ImGui::PopStyleColor(2);
+  }
+};
+
+// A monitor with a colored label over its top right (the VDXR DLSS NR and VRS icons).
+void monitor_icon(ImDrawList* dl, ImVec2 c, float size, std::string_view label, ImU32 tint) {
+  const float w = size * 0.92f, h = size * 0.62f, t = s(2.2f);
+  const ImVec2 a{c.x - size * 0.5f, c.y - size * 0.42f}, b{a.x + w, a.y + h};
+  dl->AddRect(a, b, color::text, s(2), 0, t);
+  const float foot = a.x + w * 0.5f;
+  dl->AddLine({foot, b.y}, {foot, b.y + size * 0.16f}, color::text, t);
+  dl->AddLine({foot - size * 0.2f, b.y + size * 0.17f}, {foot + size * 0.2f, b.y + size * 0.17f}, color::text, t);
+  const float fs = label.size() > 2 ? size * 0.42f : size * 0.78f;
+  const ImVec2 ls = measure(fonts().bold, fs, label);
+  const ImVec2 at{b.x - ls.x * (label.size() > 2 ? 0.86f : 0.62f), a.y - ls.y * 0.18f};
+  // A dark halo keeps the label readable where it crosses the frame.
+  for (const ImVec2 d : {ImVec2{-1, 0}, ImVec2{1, 0}, ImVec2{0, -1}, ImVec2{0, 1}})
+    draw_text(dl, fonts().bold, fs, {at.x + d.x * s(1.5f), at.y + d.y * s(1.5f)}, color::bg, label);
+  draw_text(dl, fonts().bold, fs, at, tint, label);
+}
+// A large radio card (icon, name). `icon` draws the mode's icon around a center.
+template <class Icon>
+bool mode_button(const char* id, Icon&& icon, std::string_view name, bool selected, float width) {
+  const ImVec2 p = ImGui::GetCursorScreenPos();
+  const float h = s(64);
+  const bool clicked = ImGui::InvisibleButton(id, {width, h});
+  const bool hover = ImGui::IsItemHovered();
+  if (hover) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+  ImDrawList* dl = ImGui::GetWindowDrawList();
+  dl->AddRectFilled(p, {p.x + width, p.y + h},
+                    selected ? color::mix(color::surface, color::accent, 0.16f) : hover ? color::surface_hi : color::surface,
+                    s(12));
+  dl->AddRect(p, {p.x + width, p.y + h}, selected ? color::accent_text : color::stroke_hi, s(12), 0,
+              selected ? s(2) : s(1));
+  const float cy = p.y + h * 0.5f;
+  dl->AddCircle({p.x + s(30), cy}, s(9), selected ? color::accent_text : color::text3, 24, s(1.5f));
+  if (selected) dl->AddCircleFilled({p.x + s(30), cy}, s(5), color::accent_text, 24);
+  icon(dl, ImVec2{p.x + s(84), cy});
+  draw_text(dl, fonts().semibold, kTitle, {p.x + s(124), text_y(fonts().semibold, kTitle, p.y, h)}, color::text, name);
+  return clicked;
+}
+
+// A requirement line: a check when the PC has it.
+void requirement(ImDrawList* dl, ImVec2 at, bool met, std::string_view what) {
+  const float box = s(16);
+  if (met) {
+    dl->AddRectFilled(at, {at.x + box, at.y + box}, color::accent, s(3));
+    draw_glyph(dl, icons::check, s(11), {at.x + box * 0.5f, at.y + box * 0.5f}, color::on_accent);
+  } else {
+    dl->AddRect(at, {at.x + box, at.y + box}, color::stroke_hi, s(3), 0, s(1.5f));
+  }
+  draw_text(dl, fonts().regular, kBody, {at.x + box + s(10), text_y(fonts().regular, kBody, at.y, box)},
+            met ? color::text : color::text2, what);
+}
+
+// A mode's card: title, what it gives, the GPU it needs and what the PC has.
+bool mode_card(const char* id, const VrModeInfo& mode, bool selected, const VrSystemInfo& pc, float width) {
+  const ImVec2 p = ImGui::GetCursorScreenPos();
+  const float h = s(176);
+  const bool clicked = ImGui::InvisibleButton(id, {width, h});
+  const bool hover = ImGui::IsItemHovered();
+  if (hover) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+  ImDrawList* dl = ImGui::GetWindowDrawList();
+  dl->AddRectFilled(p, {p.x + width, p.y + h}, selected ? color::mix(color::surface, color::accent, 0.10f)
+                                                         : hover ? color::surface_hi : color::surface, s(12));
+  dl->AddRect(p, {p.x + width, p.y + h}, selected ? color::accent_text : color::stroke_hi, s(12), 0,
+              selected ? s(2) : s(1));
+  dl->AddCircle({p.x + s(26), p.y + s(30)}, s(9), selected ? color::accent_text : color::text3, 24, s(1.5f));
+  if (selected) dl->AddCircleFilled({p.x + s(26), p.y + s(30)}, s(5), color::accent_text, 24);
+  const float x = p.x + s(50);
+  draw_text(dl, fonts().semibold, kHeading, {x, p.y + s(18)}, color::text, mode.title);
+  draw_text(dl, fonts().regular, kSmall, {x, p.y + s(44)}, color::text2, mode.subtitle);
+  // The GPU badge: NVIDIA RTX for NR, AMD or NVIDIA for VRS.
+  const bool nr = mode.mode != VrMode::vrs_only;
+  const std::string gpu = nr ? "NVIDIA RTX" : "AMD or NVIDIA";
+  const bool gpu_ok = nr ? pc.rtx : (pc.nvidia || pc.amd);
+  const ImU32 tint = nr ? kNvidia : kAmd;
+  const ImVec2 gs = measure(fonts().semibold, kBody, gpu);
+  const ImVec2 b{x, p.y + s(70)};
+  dl->AddRectFilled(b, {b.x + gs.x + s(46), b.y + s(30)}, color::alpha(tint, 0.14f), s(15));
+  dl->AddRect(b, {b.x + gs.x + s(46), b.y + s(30)}, color::alpha(tint, 0.6f), s(15));
+  draw_glyph(dl, gpu_ok ? icons::check : icons::warning, s(14), {b.x + s(18), b.y + s(15)}, gpu_ok ? tint : color::warning);
+  draw_text(dl, fonts().semibold, kBody, {b.x + s(32), text_y(fonts().semibold, kBody, b.y, s(30))}, tint, gpu);
+  // What the PC has for this mode.
+  const bool runtime_ok = mode.mode == VrMode::vdxr_nr      ? pc.virtual_desktop
+                          : mode.mode == VrMode::venture_nr ? pc.steamvr
+                                                            : pc.steamvr || pc.virtual_desktop;
+  const char* runtime = mode.mode == VrMode::vdxr_nr      ? "Virtual Desktop"
+                        : mode.mode == VrMode::venture_nr ? "SteamVR"
+                                                          : "SteamVR or Virtual Desktop";
+  requirement(dl, {x, p.y + s(114)}, runtime_ok, runtime);
+  requirement(dl, {x, p.y + s(142)}, true, "Eye tracked or fixed foveated");
+  return clicked;
+}
+}  // namespace
+
+void App::draw_vr_optimization(const std::string& package, float width, bool running) {
+  if (!vr_) {
+    vr_ = VrOptimization::load(data_);
+    vr_runtime_json_ = paths::utf8(vr_->runtime_json);
+    vr_nvidia_dir_ = paths::utf8(vr_->nvidia_dir);
+  }
+  // What the PC has, checked again every few seconds.
+  const double now = ImGui::GetTime();
+  if (now - vr_pc_checked_ > 5) {
+    vr_pc_ = detect_vr_system();
+    vr_pc_checked_ = now;
+  }
+  if (vr_checked_ < 0 || now - vr_checked_ > 2) {
+    vr_ready_ = vr_readiness(*vr_, settings_.runtime);
+    vr_checked_ = now;
+  }
+  const auto& pc = vr_pc_;
+  auto& v = vr_->games[package];
+  if (options_.smoke_view == "vr-end") vr_open_.insert({"vr-vrs-advanced", "vr-nr-advanced", "vr-nr-all", "vr-files"});
+
+  bool changed = false;
+  VrUi ui{changed, vr_open_};
+  const int index = vr_mode_index(v.vr_mode());
+  const auto pick = [&](int i) {
+    if (i == index) return;
+    v.mode = int(kVrModes[i].mode);
+    changed = true;
+  };
+  // A mode's icon: Steam's logo, or a monitor marked "5" (VDXR DLSS NR) or "VRS".
+  const auto mode_icon = [&](int i, ImDrawList* dl, ImVec2 c, float size) {
+    if (SDL_Texture* steam = i == 0 ? steam_logo(int(std::round(size))) : nullptr)
+      draw_image(dl, ImTextureID(reinterpret_cast<uintptr_t>(steam)), {c.x - size * 0.5f, c.y - size * 0.5f},
+                 {c.x + size * 0.5f, c.y + size * 0.5f});
+    else if (i == 1)
+      monitor_icon(dl, c, size, "5", IM_COL32(118, 205, 32, 255));
+    else
+      monitor_icon(dl, c, size, "VRS", kVrsColor);
+  };
+  // Mode buttons.
+  {
+    const float gapx = s(16), bw = (width - 2 * gapx) / 3;
+    for (int i = 0; i < 3; ++i) {
+      if (i) ImGui::SameLine(0, gapx);
+      const auto icon = [&](ImDrawList* dl, ImVec2 c) { mode_icon(i, dl, c, s(34)); };
+      if (mode_button(std::format("##vr-mode-{}", i).c_str(), icon, kVrModes[i].name, i == index, bw)) pick(i);
+    }
+    gap(16);
+  }
+  // Mode cards with what each needs.
+  begin_card("vr-modes", width, {16, 16});
+  {
+    const float gapx = s(16), cw = (ImGui::GetContentRegionAvail().x - 2 * gapx) / 3;
+    for (int i = 0; i < 3; ++i) {
+      if (i) ImGui::SameLine(0, gapx);
+      if (mode_card(std::format("##vr-card-{}", i).c_str(), kVrModes[i], i == index, pc, cw)) pick(i);
+    }
+  }
+  end_card();
+  gap(16);
+
+  // The mode's settings.
+  const int current = vr_mode_index(v.vr_mode());
+  const bool vdxr_nr = v.vdxr_nr(), venture_nr = v.venture_nr(), any_nr = v.any_nr();
+  begin_card("vr-settings", width, {20, 18});
+  {
+    const float w = ImGui::GetContentRegionAvail().x;
+    {
+      const ImVec2 at = ImGui::GetCursorPos(), screen = ImGui::GetCursorScreenPos();
+      const float h = s(42);
+      mode_icon(current, VrUi::dl(), {screen.x + s(18), screen.y + h * 0.5f}, s(34));
+      draw_text(VrUi::dl(), fonts().semibold, kTitle, {screen.x + s(48), text_y(fonts().semibold, kTitle, screen.y, h)},
+                color::text, std::format("{} settings", kVrModes[current].title));
+      const float bw = button_width("Apply in game", icons::play);
+      ImGui::SetCursorScreenPos({screen.x + w - bw, screen.y + (h - s(38)) * 0.5f});
+      if (button("Apply in game##vr-apply", icons::play, Tone::primary, {bw, s(38)}, true)) {
+        vr_->save(data_);
+        vr_dirty_ = false;
+        // The running game reads these live (VRS turned on needs a relaunch if it was off at launch).
+        std::string error;
+        bool ok = write_venture_vrs(v, error);
+        if (vdxr_nr) ok &= write_vdxr_settings(v, error);
+        if (venture_nr) ok &= write_venture_nr(v, error);
+        vr_apply_ok_ = ok;
+        vr_apply_status_ = !ok ? error : running ? "Applied in game and saved" : "Saved: applies at launch";
+      }
+      ImGui::SetCursorPos({at.x, at.y + h + s(10)});
+      ImGui::Dummy({0, 0});
+    }
+    // Foveation and what the PC has.
+    {
+      const ImVec2 screen = ImGui::GetCursorScreenPos();
+      bool eye = v.eye_tracking;
+      if (filter_chip("Eye tracking foveated##vr-gaze", eye) && !eye) eye = true;
+      ImGui::SameLine(0, s(10));
+      if (filter_chip("Fixed foveated##vr-fixed", !eye) && eye) eye = false;
+      if (eye != v.eye_tracking) {
+        v.eye_tracking = eye;
+        changed = true;
+      }
+      // The status: what the mode needs, else the last Apply in game.
+      std::string status = vr_apply_status_;
+      bool good = vr_apply_ok_;
+      if (status.empty()) {
+        const bool gpu = any_nr ? pc.rtx : (pc.nvidia || pc.amd);
+        const bool runtime = vdxr_nr ? pc.virtual_desktop : venture_nr ? pc.steamvr : true;
+        good = gpu && runtime && (!vdxr_nr || vr_ready_.vdxr) && (!venture_nr || (vr_ready_.bridge && vr_ready_.nr_model));
+        status = !gpu && any_nr     ? "NVIDIA RTX not found"
+                 : !gpu             ? "No GPU found"
+                 : vdxr_nr          ? (!runtime            ? "Virtual Desktop not found"
+                                       : !vr_ready_.vdxr   ? "Set the VDXR manifest (Files and runtime)"
+                                                           : "Virtual Desktop and RTX found")
+                 : venture_nr       ? (!runtime                ? "SteamVR is not the active runtime"
+                                       : !vr_ready_.bridge     ? "venture_ngx.dll is missing beside the runtime"
+                                       : !vr_ready_.nr_model   ? "Set the NVIDIA DLLs folder (Files and runtime)"
+                                                               : "SteamVR and RTX found")
+                                    : std::format("{} found", pc.gpu);
+      }
+      // SteamVR mode without SteamVR as the active runtime: a button to make it so (Windows asks for rights).
+      float right = screen.x + w;
+      if (venture_nr && !pc.steamvr) {
+        const float bw = button_width("Enable SteamVR runtime", icons::play);
+        right -= bw + s(14);
+        const ImVec2 back = ImGui::GetCursorScreenPos();
+        ImGui::SetCursorScreenPos({screen.x + w - bw, screen.y + (s(kChipHeight) - s(36)) * 0.5f});
+        if (button("Enable SteamVR runtime##vr-steamvr", icons::play, Tone::secondary, {bw, s(36)})) {
+          std::string error;
+          vr_apply_ok_ = enable_steamvr_runtime(error);
+          vr_apply_status_ = vr_apply_ok_ ? "SteamVR is the active runtime" : error;
+          vr_pc_checked_ = -100;
+        }
+        ImGui::SetCursorScreenPos(back);
+      }
+      const ImU32 tone = good ? color::positive : color::warning;
+      const float tw = measure(fonts().regular, kBody, status).x;
+      const float y = text_y(fonts().regular, kBody, screen.y, s(kChipHeight));
+      draw_glyph(VrUi::dl(), good ? icons::check : icons::warning, s(16), {right - tw - s(14), y + s(9)}, tone);
+      draw_text(VrUi::dl(), fonts().regular, kBody, {right - tw, y}, tone, status);
+      gap(16);
+    }
+
+    const int columns = w >= s(760) ? 2 : 1;
+    if (ImGui::BeginTable("vr-columns", columns, ImGuiTableFlags_SizingStretchSame, {w, 0})) {
+      // VRS.
+      ImGui::TableNextColumn();
+      ui.column("vr-vrs", "Variable Rate Shading", "VRS", kVrsColor, &v.vrs, true, [&] {
+        const bool on = v.vrs;
+        // The red outline is drawn with NR (by VDXR, or by Venture NR).
+        ui.toggle_row("vr-vrs-debug", "VRS debug view", &v.vrs_debug, on && any_nr, kVrsColor);
+        ui.percent_row("vr-vrs-w", "Area width", &v.vrs_width, 5, 100, 1, on, kVrsColor);
+        ui.percent_row("vr-vrs-h", "Area height", &v.vrs_height, 5, 100, 1, on, kVrsColor);
+        ui.stepper_row("vr-supersample", "Render resolution", &v.supersample, 100, 150, 10, true,
+                       v.supersample <= 100 ? std::string("100 % (native)") : std::format("{} %", v.supersample));
+        static const char* const rates[] = {"2x2", "4x4"};
+        int rate = v.vrs_rate >= 4 ? 1 : 0;
+        if (ui.choice_row("vr-vrs-rate", "Periphery shading", rates, 2, &rate, on)) v.vrs_rate = rate == 1 ? 4 : 2;
+        if (any_nr) {
+          static const char* const margins[] = {"NR area + 0 %", "NR area + 5 %", "NR area + 10 %", "NR area + 15 %",
+                                                "NR area + 20 %"};
+          int margin = std::clamp((v.vrs_margin + 2) / 5, 0, 4);
+          if (ui.choice_row("vr-vrs-follows", "Follows", margins, 5, &margin, on)) v.vrs_margin = margin * 5;
+        } else {
+          VrUi::value_row("Follows", v.eye_tracking ? "Headset eye gaze" : "Fixed center (stereo aligned)", on);
+        }
+        if (ui.fold("vr-vrs-advanced", "Advanced", "margin, gaze smoothing, hold, stereo distance")) {
+          ui.percent_row("vr-vrs-margin", "Margin around the NR area", &v.vrs_margin, 0, 40, 1, on, kVrsColor);
+          ui.percent_row("vr-vrs-smoothing", "Gaze smoothing", &v.vrs_gaze_smoothing, 0, 95, 5, on, kVrsColor);
+          ui.percent_row("vr-vrs-hold", "Gaze hold (blink)", &v.vrs_gaze_hold_ms, 0, 2000, 50, on, kVrsColor,
+                         std::format("{} ms", v.vrs_gaze_hold_ms));
+          ui.percent_row("vr-vrs-distance", "Stereo distance", &v.fixed_distance, 0, 1000, 10, true, kVrsColor,
+                         v.fixed_distance == 0 ? std::string("infinity") : std::format("{:.1f} m", v.fixed_distance / 100.0));
+          text(fonts().regular, kSmall, color::text3,
+               "Turning VRS off or resizing applies live; turning it on needs a relaunch if it was off at launch. "
+               "Render resolution applies at the next launch. The red outline needs VDXR DLSS NR or Venture NR.");
+          gap(6);
+        }
+      });
+      if (columns == 1) gap(14);
+
+      // NR: Venture's, VDXR's, or none.
+      ImGui::TableNextColumn();
+      bool nr_on = any_nr;
+      const char* nr_title = vdxr_nr ? "VDXR Neural Rendering" : venture_nr ? "Venture Neural Rendering" : "Neural Rendering";
+      ui.column("vr-nr", nr_title, "NR", kNrColor, any_nr ? &nr_on : nullptr, any_nr, [&] {
+        if (!any_nr) {
+          text(fonts().regular, kBody, color::text2,
+               "No NR in the VRS mode. Neural rendering needs an NVIDIA RTX GPU: pick SteamVR or VDXR DLSS NR.");
+          gap(8);
+          return;
+        }
+        ui.toggle_row("vr-nr-debug", "NR debug view", &v.debug, true, kNrColor);
+        // Toggle NR with a controller shortcut, its binding in a folded section.
+        ui.toggle_row("vr-nr-shortcut", "Toggle NR with a controller shortcut", &v.nr_toggle);
+        if (v.nr_toggle && ui.fold("vr-nr-shortcut-bind", "Toggle NR shortcut", "buttons and hold time")) {
+          static const char* const shortcuts[] = {"Both thumbsticks (L3 + R3)", "Left thumbstick (L3)",
+                                                  "Right thumbstick (R3)"};
+          ui.choice_row("vr-nr-shortcut-keys", "Shortcut", shortcuts, 3, &v.nr_shortcut);
+          ui.percent_row("vr-nr-shortcut-hold", "Hold", &v.nr_shortcut_ms, 500, 5000, 250, true, kNrColor,
+                         std::format("{:g} s", v.nr_shortcut_ms / 1000.0));
+        }
+        ui.percent_row("vr-nr-w", "Area width", &v.nr_width, 10, 100, 1, true, kNrColor);
+        ui.percent_row("vr-nr-h", "Area height", &v.nr_height, 10, 100, 1, true, kNrColor);
+        static const char* const looks[] = {"Default / Neutral", "Default / Natural", "Default / Cinematic",
+                                            "Model A / Neutral", "Model A / Natural", "Model A / Cinematic",
+                                            "Model B / Neutral", "Model B / Natural", "Model B / Cinematic"};
+        int look = std::clamp(v.preset, 0, 2) * 3 + std::clamp(v.style, 0, 2);
+        if (ui.choice_row("vr-nr-look", "Model / style", looks, 9, &look)) {
+          v.preset = look / 3;
+          v.style = look % 3;
+        }
+        ui.percent_row("vr-nr-intensity", "Intensity", &v.intensity, 0, 100, 1, true, kNrColor);
+        ui.percent_row("vr-nr-scale", "NR Working Scale", &v.working_scale, 25, 100, 5, true, kNrColor);
+        ui.percent_row("vr-nr-tone", "Tone", &v.local_tone, 0, 200, 1, true, kNrColor);
+        ui.percent_row("vr-nr-structure", "Structure", &v.local_structure, 0, 200, 1, true, kNrColor);
+        ui.percent_row("vr-nr-skin", "Skin", &v.skin_structure, 0, 200, 1, true, kNrColor);
+        ui.toggle_row("vr-nr-cache", "NR Adaptive Cache", &v.cache);
+        if (ui.fold("vr-nr-advanced", "NR advanced settings", "GPU budget, cache interval, transition width")) {
+          ui.percent_row("vr-budget", "NR GPU Budget", &v.gpu_budget_tenths, 0, 200, 1, vdxr_nr && v.cache, kNrColor,
+                         v.gpu_budget_tenths == 0 ? std::string("off") : std::format("{:.1f} ms", v.gpu_budget_tenths / 10.0));
+          ui.percent_row("vr-interval", "NR Cache Max Interval", &v.interval, 2, 8, 1, v.cache, kNrColor,
+                         std::to_string(v.interval));
+          ui.percent_row("vr-transition", "NR Transition Width", &v.transition, 0, 50, 1, true, kNrColor,
+                         std::format("{:.2f}", v.transition / 100.0));
+          if (vdxr_nr)
+            ui.percent_row("vr-rotation", "Cache refresh after head rotation", &v.cache_max_rotation, 0, 300, 5,
+                           v.cache, kNrColor, std::format("{:.1f}\xc2\xb0", v.cache_max_rotation / 10.0));
+          text(fonts().regular, kSmall, color::text3,
+               vdxr_nr ? "Adaptive: with a GPU budget, NR runs every frame while it costs less. Transition width: "
+                         "the region's edge fades into the game's image."
+                       : "Venture NR: NR every N frames with the cache, its correction on the frames between. The GPU "
+                         "budget is VDXR's only.");
+          gap(6);
+        }
+        if (ui.fold("vr-nr-all", "NR all settings",
+                    vdxr_nr ? "processing order, gaze tracking, motion vectors, depth" : "processing order")) {
+          VrUi::value_row("NR Processing Order", "Native image (no upscaling)");
+          if (vdxr_nr) {
+            const bool gaze = v.eye_tracking;
+            ui.toggle_row("vr-gaze-eye", "Each eye's own gaze", &v.gaze_per_eye, gaze);
+            ui.percent_row("vr-gaze-smoothing", "Gaze smoothing", &v.gaze_smoothing, 0, 95, 5, gaze, kNrColor);
+            ui.percent_row("vr-gaze-step", "Movement step", &v.gaze_quantization, 1, 64, 1, gaze, kNrColor,
+                           std::format("{} px", v.gaze_quantization));
+            ui.percent_row("vr-gaze-jump", "Jump reset (saccade)", &v.gaze_jump_reset, 0, 100, 5, gaze, kNrColor,
+                           v.gaze_jump_reset == 0 ? std::string("off") : std::format("{} %", v.gaze_jump_reset));
+            ui.percent_row("vr-gaze-hold", "Gaze hold (blink)", &v.gaze_hold_ms, 0, 2000, 50, gaze, kNrColor,
+                           std::format("{} ms", v.gaze_hold_ms));
+            ui.toggle_row("vr-motion", "Motion vectors (optical flow)", &v.motion);
+            ui.percent_row("vr-motion-x", "Motion scale X", &v.motion_scale_x, -200, 200, 5, v.motion, kNrColor);
+            ui.percent_row("vr-motion-y", "Motion scale Y", &v.motion_scale_y, -200, 200, 5, v.motion, kNrColor);
+            ui.percent_row("vr-flow-radius", "Flow search radius", &v.flow_radius, 0, 8, 1, v.motion, kNrColor,
+                           std::format("{} blocks", v.flow_radius));
+            ui.percent_row("vr-flow-penalty", "Flow prediction bias", &v.flow_penalty, 0, 200, 1, v.motion, kNrColor,
+                           std::format("{:.3f}", v.flow_penalty / 1000.0));
+            ui.toggle_row("vr-depth", "Use the game's depth", &v.use_depth);
+            ui.toggle_row("vr-split", "Split view (NR on the left half)", &v.split);
+          }
+          gap(6);
+        }
+      });
+      // NR switched off: the VRS mode.
+      if (any_nr && !nr_on) {
+        v.mode = int(VrMode::vrs_only);
+        changed = true;
+      }
+      ImGui::EndTable();
+    }
+  }
+  end_card();
+  gap(16);
+
+  // Options: the overlay, the OBS mirror, files and runtime.
+  begin_card("vr-options", width, {16, 14});
+  {
+    const float gapx = s(14), bw = (ImGui::GetContentRegionAvail().x - 2 * gapx) / 3;
+    const auto option = [&](const char* id, char32_t glyph, std::string_view label, bool on, bool enabled) {
+      const ImVec2 p = ImGui::GetCursorScreenPos();
+      const float h = s(48);
+      ImGui::BeginDisabled(!enabled);
+      const bool clicked = ImGui::InvisibleButton(id, {bw, h});
+      ImGui::EndDisabled();
+      const bool hover = enabled && ImGui::IsItemHovered();
+      if (hover) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+      ImDrawList* dl = ImGui::GetWindowDrawList();
+      dl->AddRectFilled(p, {p.x + bw, p.y + h}, on ? color::mix(color::surface, color::accent, 0.16f)
+                                                   : hover ? color::surface_hi : color::surface, s(10));
+      dl->AddRect(p, {p.x + bw, p.y + h}, on ? color::accent_text : color::stroke_hi, s(10), 0, on ? s(1.5f) : s(1));
+      const ImU32 ink = enabled ? (on ? color::text : color::text2) : color::text3;
+      const float tw = measure(fonts().semibold, kBody, label).x, total = s(30) + tw;
+      const float x = p.x + (bw - total) * 0.5f;
+      draw_glyph(dl, glyph, s(18), {x + s(10), p.y + h * 0.5f}, on ? color::accent_text : ink);
+      draw_text(dl, fonts().semibold, kBody, {x + s(30), text_y(fonts().semibold, kBody, p.y, h)}, ink, label);
+      return clicked && enabled;
+    };
+    if (option("##vr-overlay", 0xE9D9 /* chart */, "Overlay", v.overlay, true)) {
+      v.overlay = !v.overlay;
+      changed = true;
+    }
+    ImGui::SameLine(0, gapx);
+    if (option("##vr-obs", 0xE714 /* video */, "OBS mirror", v.mirror && vdxr_nr, vdxr_nr)) {
+      v.mirror = !v.mirror;
+      changed = true;
+    }
+    ImGui::SameLine(0, gapx);
+    const bool files_open = vr_open_.contains("vr-files");
+    if (option("##vr-files", icons::folder, "Files and runtime", files_open, true)) {
+      if (files_open) vr_open_.erase("vr-files");
+      else vr_open_.insert("vr-files");
+    }
+    if (vdxr_nr && v.mirror) {
+      gap(10);
+      text(fonts().regular, kSmall, color::text3,
+           "OBS: Window Capture of \"VirtualDesktopOpenXR Mirror Window\", method Windows 10, matched by executable.");
+    }
+    if (vr_open_.contains("vr-files")) {
+      gap(14);
+      const float field = std::min(ImGui::GetContentRegionAvail().x, s(760));
+      if (submit_field("vr-nvidia-dir", "NVIDIA DLLs folder (nvngx_dlssnr.dll)", &vr_nvidia_dir_, field, icons::check)) {
+        vr_->nvidia_dir = paths::from_utf8(vr_nvidia_dir_);
+        changed = true;
+      }
+      gap(10);
+      if (submit_field("vr-vdxr-runtime", "VDXR DLSS-NR manifest (virtualdesktop-openxr.json)", &vr_runtime_json_, field,
+                       icons::check)) {
+        vr_->runtime_json = paths::from_utf8(vr_runtime_json_);
+        changed = true;
+      }
+      gap(10);
+      const auto state = [&](bool ok, std::string_view what) {
+        badge(what, ok ? color::positive : color::warning, color::alpha(ok ? color::positive : color::warning, 0.15f),
+              ok ? icons::check : 0);
+        ImGui::SameLine(0, s(8));
+      };
+      state(vr_ready_.bridge, "venture_ngx.dll");
+      state(vr_ready_.nr_model, "nvngx_dlssnr.dll");
+      state(vr_ready_.vdxr, "virtualdesktop-openxr.json");
+      state(!pc.gpu.empty(), pc.gpu.empty() ? std::string("GPU") : pc.gpu);
+      ImGui::NewLine();
+    }
+  }
+  end_card();
+
+  if (options_.smoke_view == "vr-end") ImGui::SetScrollHereY(1.0f);
+  // Sliders change every frame while dragged: save once the mouse is up.
+  vr_dirty_ |= changed;
+  if (changed) vr_apply_status_.clear();
+  if (vr_dirty_ && !ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+    vr_dirty_ = false;
+    vr_checked_ = -1;
+    action([this] { vr_->save(data_); });
+  }
 }
 
 const App::ModsSummary& App::mods_summary(const std::string& package, const fs::path& install) {

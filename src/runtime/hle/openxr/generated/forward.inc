@@ -193,6 +193,7 @@ XrResult xrLocateViews(XrSession session, const XrViewLocateInfo* viewLocateInfo
   if (!viewCountOutput) return XR_ERROR_VALIDATION_FAILURE;
   auto result = host_call<PFN_xrLocateViews, "xrLocateViews">(session, viewLocateInfo, viewState, viewCapacityInput, viewCountOutput, views);
   if (XR_SUCCEEDED(result) && views) sanitize_views(*viewState, std::min(viewCapacityInput, *viewCountOutput), views);
+  if (XR_SUCCEEDED(result) && views && viewLocateInfo->viewConfigurationType == XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO) note_views_for_vrs(viewLocateInfo->displayTime, std::min(viewCapacityInput, *viewCountOutput), views);
   return result;
   }());
 }

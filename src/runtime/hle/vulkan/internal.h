@@ -158,6 +158,27 @@ void release_hardware_buffer_device(VkDevice device);
 // Runs for each guest VkDevice before the host vkDestroyDevice, while it is still
 // valid, so other HLE libraries release the objects they created on it.
 void add_device_release_hook(void (*hook)(VkDevice));
+// VENTURE_VRS=1 (render_area.cpp): foveated variable rate shading on the guest's stereo scene passes:
+// full rate in a VENTURE_VRS_WIDTH x VENTURE_VRS_HEIGHT region (fractions of the image) around the foveal
+// center, VENTURE_VRS_RATE (2: 2x2, 4: 4x4) outside. Its settings are also read live from
+// HKCU\SOFTWARE\Venture\VRS (Windows).
+bool vrs_requested();
+// VRS shades a scene pass now: on (launch and live setting) with at least one shading-rate map (the overlay's VRS).
+bool vrs_active();
+// VRS Debug View with Venture NR: the full-rate area's size (fractions of each eye's image) when the red outline is
+// on and VRS shades; its center is fovea_center().
+bool vrs_outline(float& width, float& height);
+// The foveal center of `eye` (fractions of its image, rows top first): VDXR's NR region, the eye gaze, or the
+// stereo-aligned point. Venture NR places its region there too.
+void fovea_center(std::uint32_t eye, float& u, float& v);
+// Venture NR's region size (fractions of each eye's image; 0 when off): VRS then covers it plus its margin.
+void note_local_nr_area(float width, float height);
+// A device created with attachment shading rates, and the texel size of its shading-rate maps.
+void vrs_device_created(VkDevice device, VkExtent2D texel_size);
+// xrLocateViews: each eye's field-of-view tangents (left, right, up, down; left and down are
+// negative) and half the IPD, for the stereo-aligned center.
+// `gaze`: the eye gaze direction in the head's frame (x, y, z; xr/eye_gaze.h), or null.
+void vrs_note_views(const float tangents[2][4], float half_ipd, const float* gaze);
 void register_hardware_buffer_allocator();
 
 PFN_vkVoidFunction raw_device_proc(VkDevice device, const char* name);

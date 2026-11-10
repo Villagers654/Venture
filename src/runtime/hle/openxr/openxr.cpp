@@ -1,4 +1,6 @@
 #include "core/xr_call_trace.h"
+#include "xr/stats_overlay.h"
+#include <chrono>
 #include <atomic>
 #include "xr/haptic_sequence.h"
 #include "xr/haptic_output.h"
@@ -530,6 +532,8 @@ XrResult xrEnumerateViewConfigurationViews(XrInstance instance, XrSystemId syste
   if (XR_SUCCEEDED(result) && capacity && views &&
       (type == XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO || type == XR_VIEW_CONFIGURATION_TYPE_PRIMARY_MONO))
     xr::apply_display_override(views, std::min(capacity, *count));
+  // VENTURE_RENDER_SCALE: supersampling (graphics.cpp scale_recommended_views).
+  if (XR_SUCCEEDED(result) && capacity && views) scale_recommended_views(type, std::min(capacity, *count), views);
   return result;
 }
 XrResult xrGetSystemProperties(XrInstance instance, XrSystemId system, XrSystemProperties *out) {
@@ -1294,17 +1298,45 @@ XrResult xrEndFrame(XrSession handle, const XrFrameEndInfo *info) {
   // The desktop mirror shows the first projection layer's chosen eye.
   std::optional<MirrorEye> mirror;
   if (venture::xr::mirror_ready()) mirror = mirror_eye(layers, venture::xr::mirror_eye());
+  const bool overlay = venture::xr::stats_overlay::active();
+  const auto prepare_start = overlay ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
   const auto prepared = [&] {
     vulkan::ScopedHostWait timing("guest_end_prepare");
     return prepare_swapchains(rects.submitted, passthrough.force_opaque,
                               underlay.swapchains.empty() ? nullptr : &underlay, mirror ? &*mirror : nullptr);
   }();
+  // The performance overlay, when shown: preparation time and eye size.
+  if (overlay) venture::xr::stats_overlay::note_prepare(
+      std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - prepare_start).count());
+  // The eye size shown is the first stereo colour chain submitted this frame.
+  if (overlay) for (auto chain : rects.submitted)
+    if (const auto it = state().swapchains.find(chain); it != state().swapchains.end() &&
+        it->second.info.arraySize == 2 && (it->second.info.usageFlags & XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT)) {
+      venture::xr::stats_overlay::note_render_size(it->second.info.width, it->second.info.height,
+                                                   it->second.host_info.width, it->second.host_info.height);
+      break;
+    }
   if (prepared != XR_SUCCESS && prepared != XR_SESSION_LOSS_PENDING) return prepared;
   const auto drawn = drawn_spheres.present(handle, info->displayTime, layers);
   if (XR_FAILED(drawn)) return drawn;
   PresentationLayers mapped(true);
   for (auto& layer : layers)
     layer = static_cast<const XrCompositionLayerBaseHeader*>(mapped.chain(layer));
+  // The performance overlay (VENTURE_STATS_OVERLAY), on top, when the host takes one more layer
+  // (fit_layer_limit already trimmed to its limit).
+  if (overlay && state().graphics.device) {
+    const auto limit = host_layer_limit(handle);
+    if (!limit || layers.size() < limit) {
+      if (const auto* panel = venture::xr::stats_overlay::layer(session().handle, state().graphics,
+                                                                gfx::gpu_device().get_instance_proc_addr,
+                                                                info->displayTime))
+        layers.push_back(panel);
+    } else {
+      static std::atomic_bool reported{false};
+      if (!reported.exchange(true))
+        log::info("xr", "The frame already has the host's {} layers; the performance overlay is left out", limit);
+    }
+  }
   auto host_info = *info;
   host_info.layerCount = static_cast<std::uint32_t>(layers.size());
   host_info.layers = layers.data();

@@ -5,6 +5,7 @@
 #include "launcher/core.h"
 #include "launcher/drives.h"
 #include "launcher/updater.h"
+#include "launcher/vr_optimization.h"
 #include "launcher/ui/chrome.h"
 #include <imgui.h>
 #include <atomic>
@@ -12,6 +13,8 @@
 #include "common/controls.h"
 #include <map>
 #include <memory>
+#include <optional>
+#include <set>
 namespace venture::launcher {
 // Controls: which host controller input each Quest input reaches, for one controller
 // (common/controls.h); saved in Settings::controls and Settings::game_controls.
@@ -75,6 +78,17 @@ private:
   int page_ = 0, sort_ = 1, game_tab_ = 0;
   std::map<int, SDL_Texture *> logos_; // rasterized logo by pixel size
   SDL_Texture *logo(int pixels);
+  // The game page's VR Optimization tab (launcher/vr_optimization.h).
+  std::optional<VrOptimization> vr_;
+  std::string vr_runtime_json_, vr_nvidia_dir_;  // the Files and runtime fields
+  std::set<std::string> vr_open_;                // its open folds
+  bool vr_dirty_ = false;
+  std::string vr_apply_status_;
+  bool vr_apply_ok_ = false;
+  VrReadiness vr_ready_;
+  double vr_checked_ = -1;
+  VrSystemInfo vr_pc_;
+  double vr_pc_checked_ = -100;
   std::map<int, SDL_Texture *> steam_logos_;
   SDL_Texture *steam_logo(int pixels);
   std::map<int, SDL_Texture *> discord_logos_;
@@ -241,6 +255,8 @@ private:
   void draw_toast();
   void draw_chrome();
   void draw_about(const meta::Game &game, float width);
+  // The game page's VR Optimization tab: VRS, Venture NR or VDXR DLSS NR.
+  void draw_vr_optimization(const std::string &package, float width, bool running);
   void draw_backdrop(std::string_view id, ImVec2 a, ImVec2 b, float strength);
   float s(float value) const { return value * scale_; }
 };

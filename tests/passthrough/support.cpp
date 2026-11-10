@@ -8,6 +8,7 @@
 #include "xr/tracked_camera.h"
 #include "xr/clock.h"
 #include "xr/dev_dump.h"
+#include "xr/stats_overlay.h"
 #include "xr/queue.h"
 #include "hle/vulkan/timing.h"
 #include "core/process.h"
@@ -285,6 +286,18 @@ XrResult dev_release_swapchain(XrSwapchain handle, const XrSwapchainImageRelease
   auto& chain = host_chains.at(handle); CHECK(chain.acquired); CHECK(chain.waited); chain.acquired = false; return XR_SUCCESS;
 }
 }
+#ifdef VENTURE_PASSTHROUGH_REAL_SESSION
+// The performance overlay (xr/stats_overlay.h) stays off in the fixture: VENTURE_STATS_OVERLAY is unset.
+namespace venture::xr::stats_overlay {
+bool active() { return false; }
+const XrCompositionLayerBaseHeader* layer(XrSession, const XrGraphicsBindingVulkanKHR&, PFN_vkGetInstanceProcAddr,
+                                          XrTime) {
+  return nullptr;
+}
+void note_prepare(double) {}
+void note_render_size(std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t) {}
+}  // namespace venture::xr::stats_overlay
+#endif
 namespace venture::test::passthrough {
 using namespace hle::openxr;
 Fixture::Fixture() {

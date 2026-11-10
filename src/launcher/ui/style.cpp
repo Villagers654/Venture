@@ -912,6 +912,32 @@ bool toggle(const char* id, bool* value) {
   return in.clicked;
 }
 
+bool slider(const char* id, float* value, float min, float max, float step, float width, bool enabled, ImU32 fill) {
+  ImGui::PushID(id);
+  const ImVec2 size{width, s(24)};
+  const ImVec2 p = ImGui::GetCursorScreenPos();
+  auto in = interact("##slider", size, enabled);
+  const float knob = s(8), x0 = p.x + knob, x1 = p.x + size.x - knob;
+  const float before = *value;
+  if (in.held && x1 > x0) {
+    float t = std::clamp((ImGui::GetIO().MousePos.x - x0) / (x1 - x0), 0.f, 1.f);
+    float v = min + t * (max - min);
+    if (step > 0) v = min + std::round((v - min) / step) * step;
+    *value = std::clamp(v, min, max);
+  }
+  const float t = max > min ? std::clamp((*value - min) / (max - min), 0.f, 1.f) : 0.f;
+  ImDrawList* dl = ImGui::GetWindowDrawList();
+  const float cy = p.y + size.y * 0.5f, track = s(4);
+  const ImU32 on = enabled ? (fill ? fill : color::mix(color::accent, color::accent_hi, in.hover))
+                           : color::alpha(color::text3, 0.5f);
+  dl->AddRectFilled({x0, cy - track * 0.5f}, {x1, cy + track * 0.5f}, color::surface_top, track);
+  const float x = x0 + (x1 - x0) * t;
+  dl->AddRectFilled({x0, cy - track * 0.5f}, {x, cy + track * 0.5f}, on, track);
+  dl->AddCircleFilled({x, cy}, knob * (in.held ? 1.12f : 1.f), enabled ? IM_COL32_WHITE : color::text3, 24);
+  ImGui::PopID();
+  return *value != before;
+}
+
 bool checkbox(const char* id, std::string_view label, bool* value, std::string_view hint, bool small,
               ImTextureID image) {
   ImGui::PushID(id);

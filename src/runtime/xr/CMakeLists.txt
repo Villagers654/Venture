@@ -19,7 +19,7 @@ if(NOT TARGET Vulkan::Headers)
   target_include_directories(venture_xr_vulkan_headers SYSTEM INTERFACE ${venture_vulkan_headers_SOURCE_DIR}/include)
   add_library(Vulkan::Headers ALIAS venture_xr_vulkan_headers)
 endif()
-add_library(venture_host_xr STATIC host_xr.cpp display_memory.cpp display_override.cpp vulkan_layers.cpp)
+add_library(venture_host_xr STATIC host_xr.cpp display_memory.cpp display_override.cpp vulkan_layers.cpp ngx_bridge.cpp)
 target_include_directories(venture_host_xr PUBLIC ${PROJECT_SOURCE_DIR}/src/runtime)
 target_link_libraries(venture_host_xr PUBLIC venture_common OpenXR::openxr_loader Vulkan::Headers)
 if(WIN32)
@@ -34,7 +34,7 @@ add_library(venture_xr_capture STATIC capture.cpp)
 target_include_directories(venture_xr_capture PUBLIC ${PROJECT_SOURCE_DIR}/src/runtime)
 target_link_libraries(venture_xr_capture PUBLIC Vulkan::Headers OpenXR::headers PRIVATE zlibstatic)
 
-add_library(venture_xr STATIC passthrough_source.cpp passthrough_source_sbn1.cpp color_space.cpp color_images.cpp sphere_images.cpp guest_images.cpp desktop_mirror.cpp dev_dump.cpp session.cpp clock.cpp reference_spaces.cpp menu_chord.cpp bindings.cpp hands.cpp angle_images.cpp haptic_output.cpp haptic_sequence.cpp
+add_library(venture_xr STATIC passthrough_source.cpp passthrough_source_sbn1.cpp color_space.cpp venture_nr.cpp stats_overlay.cpp nr_toggle.cpp color_images.cpp sphere_images.cpp guest_images.cpp desktop_mirror.cpp dev_dump.cpp session.cpp clock.cpp reference_spaces.cpp menu_chord.cpp eye_gaze.cpp bindings.cpp hands.cpp angle_images.cpp haptic_output.cpp haptic_sequence.cpp
   ../hle/openxr/state.cpp ../hle/openxr/openxr.cpp ../hle/openxr/graphics.cpp
   ../hle/openxr/extensions.cpp ../hle/openxr/actions.cpp ../hle/openxr/register.cpp ../hle/openxr/hands.cpp
   ../hle/openxr/spaces.cpp ../hle/openxr/haptics.cpp
@@ -102,4 +102,18 @@ foreach(color_shader IN ITEMS vert frag ms_frag passthrough_frag passthrough_ms_
     VERBATIM)
   target_sources(venture_xr PRIVATE ${color_generated}/color_${color_shader}.inc)
 endforeach()
+# Venture NR's correction and transition (venture_nr.cpp).
+add_custom_command(OUTPUT ${color_generated}/nr_apply.inc
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${color_generated}
+  COMMAND $<TARGET_FILE:glslang-standalone> -V --target-env vulkan1.0
+    ${CMAKE_CURRENT_SOURCE_DIR}/shaders/nr_apply.comp -o ${color_generated}/nr_apply.spv
+  COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tools/codegen/vk_spirv.py
+    ${color_generated}/nr_apply.spv ${color_generated}/nr_apply.inc
+  DEPENDS glslang-standalone shaders/nr_apply.comp ${PROJECT_SOURCE_DIR}/tools/codegen/vk_spirv.py
+  VERBATIM)
+target_sources(venture_xr PRIVATE ${color_generated}/nr_apply.inc)
 target_include_directories(venture_xr PRIVATE ${color_generated})
+# The performance overlay (stats_overlay.cpp): PDH for GPU load.
+if(WIN32)
+  target_link_libraries(venture_xr PRIVATE pdh)
+endif()

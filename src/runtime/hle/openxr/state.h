@@ -224,6 +224,14 @@ struct MirrorEye {
 std::optional<MirrorEye> mirror_eye(std::span<const XrCompositionLayerBaseHeader* const> layers, std::uint32_t eye);
 XrResult prepare_swapchains(const std::set<XrSwapchain>& submitted, bool force_opaque = false,
                             const UnderlayAlpha* underlay = nullptr, const MirrorEye* mirror = nullptr);
+// VENTURE_RENDER_SCALE: supersampling, a factor in [1, 2] (1 when unset or invalid). The guest is offered its
+// recommended eye sizes multiplied by it (capped by the host's maximum) and the host compositor scales the
+// larger images down; foveated VRS keeps the periphery's cost down.
+double render_scale();
+// Applies render_scale() to a guest's recommended view sizes.
+void scale_recommended_views(XrViewConfigurationType type, std::uint32_t count, XrViewConfigurationView* views);
+// Stereo views located at `time` (OpenXR and VrApi games): the foveal center of VRS and Venture NR.
+void note_views_for_vrs(XrTime time, std::uint32_t count, const XrView* views);
 XrResult destroy_host_swapchain(Swapchain&);
 XrResult convert_color_image(Swapchain&, std::uint32_t index, XrColorSpaceFB, bool external_queue_held = false,
                              bool force_opaque = false, float underlay_opacity = 1, bool premultiply = false,
