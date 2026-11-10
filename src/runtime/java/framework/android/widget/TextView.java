@@ -136,6 +136,70 @@ public class TextView extends android.view.View {
   public void setOnEditorActionListener(OnEditorActionListener l) {
     editorListener = l;
   }
+  // Size, font and layout attributes: kept for the game to read back (Venture
+  // draws no Java views).
+  private float textSize = 14f * 2f;  // 14sp at the reported density
+  private android.graphics.Typeface typeface = android.graphics.Typeface.DEFAULT;
+  private float lineSpacingExtra, lineSpacingMultiplier = 1f;
+  private boolean allCaps, includeFontPadding = true, horizontallyScrolling;
+  private int minLines, linkColor, compoundPadding, maxWidth = Integer.MAX_VALUE, minWidth;
+  private android.text.TextUtils.TruncateAt ellipsize;
+  private android.text.method.MovementMethod movement;
+  public void setTextSize(float size) { setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, size); }
+  public void setTextSize(int unit, float size) {
+    android.util.DisplayMetrics metrics;
+    try {
+      metrics = getResources().getDisplayMetrics();
+    } catch (IllegalStateException e) {  // a view built before the app's resources exist
+      metrics = new android.util.DisplayMetrics();
+    }
+    textSize = android.util.TypedValue.applyDimension(unit, size, metrics);
+    invalidate();
+  }
+  public float getTextSize() { return textSize; }
+  public void setTypeface(android.graphics.Typeface tf) { typeface = tf; invalidate(); }
+  public void setTypeface(android.graphics.Typeface tf, int style) {
+    typeface = style > 0 ? android.graphics.Typeface.create(tf, style) : tf;
+    invalidate();
+  }
+  public android.graphics.Typeface getTypeface() { return typeface; }
+  public void setLineSpacing(float add, float mult) { lineSpacingExtra = add; lineSpacingMultiplier = mult; }
+  public float getLineSpacingExtra() { return lineSpacingExtra; }
+  public float getLineSpacingMultiplier() { return lineSpacingMultiplier; }
+  public void setAllCaps(boolean allCaps) { this.allCaps = allCaps; }
+  public boolean isAllCaps() { return allCaps; }
+  public void setIncludeFontPadding(boolean include) { includeFontPadding = include; }
+  public boolean getIncludeFontPadding() { return includeFontPadding; }
+  public void setHorizontallyScrolling(boolean whether) { horizontallyScrolling = whether; }
+  public void setLines(int lines) { minLines = lines; setMaxLines(lines); }
+  public void setMinLines(int lines) { minLines = lines; }
+  public int getMinLines() { return minLines; }
+  public void setEms(int ems) {}
+  public void setMaxEms(int ems) {}
+  public void setMinEms(int ems) {}
+  public void setMaxWidth(int pixels) { maxWidth = pixels; }
+  public int getMaxWidth() { return maxWidth; }
+  public void setMinWidth(int pixels) { minWidth = pixels; }
+  public int getMinWidth() { return minWidth; }
+  public void setEllipsize(android.text.TextUtils.TruncateAt where) { ellipsize = where; }
+  public android.text.TextUtils.TruncateAt getEllipsize() { return ellipsize; }
+  public void setShadowLayer(float radius, float dx, float dy, int color) {}
+  public void setLinkTextColor(int color) { linkColor = color; }
+  public void setTextColor(android.content.res.ColorStateList colors) {
+    if (colors != null) setTextColor(colors.getDefaultColor());
+  }
+  public void setMovementMethod(android.text.method.MovementMethod method) { movement = method; }
+  public android.text.method.MovementMethod getMovementMethod() { return movement; }
+  public void setCompoundDrawablePadding(int pad) { compoundPadding = pad; }
+  public int getCompoundDrawablePadding() { return compoundPadding; }
+  public void setCompoundDrawables(android.graphics.drawable.Drawable left, android.graphics.drawable.Drawable top,
+                                   android.graphics.drawable.Drawable right, android.graphics.drawable.Drawable bottom) {}
+  public void setCompoundDrawablesWithIntrinsicBounds(int left, int top, int right, int bottom) {}
+  public void setCompoundDrawablesWithIntrinsicBounds(android.graphics.drawable.Drawable left,
+      android.graphics.drawable.Drawable top, android.graphics.drawable.Drawable right,
+      android.graphics.drawable.Drawable bottom) {}
+  public int getLineCount() { return text.length() == 0 ? 0 : text.toString().split("\n", -1).length; }
+  public int length() { return text.length(); }
   public interface OnEditorActionListener {
     boolean onEditorAction(TextView view, int actionId, android.view.KeyEvent event);
   }

@@ -18,7 +18,7 @@ std::string oculusdb_id(std::string_view body, std::string_view package);
 // The verification every looked-up candidate passes: the public listing's
 // package name (latest_supported_binary.package_name) is the APK's.
 bool listing_matches(std::string_view listing_package, std::string_view apk_package);
-// The package -> app id pairs Venture ships (data/compatibility.json, compiled
+// The package -> app id pairs Venture ships (known_store_ids.h, compiled
 // in); empty for a package it does not list.
 std::string known_id(std::string_view package);
 

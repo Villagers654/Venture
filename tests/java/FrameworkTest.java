@@ -1980,6 +1980,27 @@ public final class FrameworkTest {
     var keyEvent = new android.view.KeyEvent(10, 15, 0, 29, 3, 0x40, 7, 99, 0, 0x101);
     check(keyEvent.getUnicodeChar() == 'A' && keyEvent.getRepeatCount() == 3 && keyEvent.getScanCode() == 99,
         "key event preserves data and normalizes modifiers");
+    // An import screen sizes and styles its labels in onCreate.
+    var label = new android.widget.TextView(context);
+    label.setTextSize(20f);
+    float spSize = label.getTextSize();
+    label.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, 12f);
+    label.setTypeface(android.graphics.Typeface.DEFAULT, android.graphics.Typeface.BOLD);
+    label.setEllipsize(android.text.TextUtils.TruncateAt.END);
+    label.setMovementMethod(android.text.method.LinkMovementMethod.getInstance());
+    check(spSize == 20f * new android.util.DisplayMetrics().scaledDensity && label.getTextSize() == 12f
+            && label.getTypeface().isBold() && label.getEllipsize() == android.text.TextUtils.TruncateAt.END,
+        "TextView keeps its text size, typeface and ellipsize");
+    // Flurry's content provider answers queries with a MatrixCursor.
+    var matrix = new android.database.MatrixCursor(new String[] {"id", "name", "score"}, 1);
+    matrix.addRow(new Object[] {1L, "a", 2.5});
+    matrix.newRow().add(2).add(null).add("3");
+    matrix.addRow(java.util.List.of(3, "c", 4f));
+    check(matrix.getCount() == 3 && matrix.moveToFirst() && matrix.getLong(0) == 1 && "a".equals(matrix.getString(1))
+            && matrix.getType(2) == android.database.Cursor.FIELD_TYPE_FLOAT && matrix.moveToNext()
+            && matrix.isNull(1) && matrix.getInt(2) == 3 && matrix.moveToLast() && matrix.getFloat(2) == 4f
+            && matrix.getColumnIndexOrThrow("score") == 2 && !matrix.moveToNext(),
+        "MatrixCursor stores and reads rows as AOSP");
     var activity = new android.app.Activity();
     var editor = new android.widget.EditText(context);
     var edits = new ArrayList<String>();
@@ -2667,6 +2688,19 @@ public final class FrameworkTest {
           "Activity.mCalled is set by the base lifecycle methods");
     } catch (ReflectiveOperationException e) {
       check(false, "Activity.mCalled: " + e);
+    }
+    // A Halo launcher activity builds its colors in a static initializer.
+    {
+      int c = android.graphics.Color.parseColor("#80FF8000");
+      float[] hsv = new float[3];
+      android.graphics.Color.colorToHSV(android.graphics.Color.rgb(255, 128, 0), hsv);
+      check(c == 0x80FF8000 && android.graphics.Color.alpha(c) == 0x80 && android.graphics.Color.green(c) == 0x80
+              && android.graphics.Color.parseColor("#123456") == 0xFF123456
+              && android.graphics.Color.parseColor("Teal") == 0xFF008080
+              && android.graphics.Color.argb(1f, 1f, 0f, 0f) == android.graphics.Color.RED
+              && android.graphics.Color.HSVToColor(hsv) == 0xFFFF8000
+              && android.graphics.Color.valueOf(android.graphics.Color.BLUE).toArgb() == 0xFF0000FF,
+          "android.graphics.Color packs, parses and converts colors as AOSP");
     }
     // Sentry passes its watcher to Lifecycle.addObserver behind a Class.forName probe.
     check(androidx.lifecycle.LifecycleObserver.class.isInterface()
