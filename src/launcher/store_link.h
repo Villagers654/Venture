@@ -18,29 +18,24 @@ std::string oculusdb_id(std::string_view body, std::string_view package);
 // The verification every looked-up candidate passes: the public listing's
 // package name (latest_supported_binary.package_name) is the APK's.
 bool listing_matches(std::string_view listing_package, std::string_view apk_package);
-// The package -> app id pairs Venture ships (known_store_ids.h, compiled
-// in); empty for a package it does not list.
-std::string known_id(std::string_view package);
 
 struct Lookups {
   // a: a signed-in account's library lists a game with this package (its
   // listing names the package, so it needs no further check).
   std::string library;
-  // b: the shipped pairs (known_id).
-  std::function<std::string(std::string_view package)> known;
-  // c: the online package lookup; empty when the setting is off.
+  // b: the online package lookup; empty when the setting is off.
   std::function<std::string(std::string_view package)> online;
-  // d: the package name of an app id's public store listing.
+  // c: the package name of an app id's public store listing.
   std::function<std::string(std::string_view app_id)> listing_package;
 };
 struct Resolved {
   std::string id;      // empty: not found
-  std::string source;  // "library", "known" or "online"
+  std::string source;  // "library" or "online"
   // False when a lookup failed (network, server), so the answer is not final
   // and the package may be tried again later.
   bool final = true;
 };
-// Tries a, then b and c each verified with d; the first that passes wins.
+// Tries a, then b verified with c.
 // Lookups that throw count as failed, not as "not found".
 Resolved resolve(std::string_view package, const Lookups &lookups);
 }  // namespace venture::launcher::store_link
