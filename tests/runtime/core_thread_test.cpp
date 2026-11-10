@@ -224,14 +224,19 @@ struct ExitProbe {
 };
 ExitProbe& exit_probe() { return thread_lifetime::local<ExitProbe, struct AdoptedExitProbe>(); }
 std::atomic<bool> exit_probe_destroyed{false}, exit_probe_intact{false}, exit_handler_ran{false};
+// The handler is process-wide: another guest thread (the previous case's detached one) may
+// exit meanwhile, so only the probe thread's exit counts.
+thread_local bool exit_probe_thread = false;
 }  // namespace
 TEST_CASE("per-thread objects first used after a thread's adoption outlive its guest thread-exit handlers") {
   exit_probe_destroyed = exit_probe_intact = exit_handler_ran = false;
   const auto previous = set_guest_thread_exit_handler(+[](GuestThread&) {
+    if (!exit_probe_thread) return;
     exit_handler_ran = true;
     exit_probe_intact = !exit_probe_destroyed.load() && exit_probe().text == "intact";
   });
   std::thread([] {
+    exit_probe_thread = true;
     GuestThread::adopt_current();
     auto& probe = exit_probe();
     probe.text = "intact";
