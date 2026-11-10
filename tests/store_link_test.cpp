@@ -88,13 +88,7 @@ TEST_CASE("OculusDB answers name the app id only for the package asked about") {
   CHECK(sl::oculusdb_id("{}", "com.a.b").empty());
 }
 
-TEST_CASE("the shipped package pairs come from the compatibility list") {
-  CHECK(sl::known_id("com.camouflaj.manta") == "3551691271620960");
-  CHECK(sl::known_id("com.example.not.listed").empty());
-  CHECK(sl::known_id("").empty());
-}
-
-TEST_CASE("store link lookups go library, shipped pairs, then online, each checked against the listing") {
+TEST_CASE("store link lookups go library, then online checked against the listing") {
   std::vector<std::string> calls;
   std::map<std::string, std::string> listings = {{"1000001", "com.a.b"}, {"2000002", "com.a.b"},
                                                  {"3000003", "com.other"}};
@@ -104,10 +98,6 @@ TEST_CASE("store link lookups go library, shipped pairs, then online, each check
     auto it = listings.find(std::string(id));
     if (it == listings.end()) throw std::runtime_error("no listing");
     return it->second;
-  };
-  l.known = [&](std::string_view) {
-    calls.push_back("known");
-    return std::string("1000001");
   };
   l.online = [&](std::string_view) {
     calls.push_back("online");
@@ -121,35 +111,29 @@ TEST_CASE("store link lookups go library, shipped pairs, then online, each check
     CHECK(r.source == "library");
     CHECK(calls.empty());
   }
-  SUBCASE("a shipped pair is verified and wins before the online lookup") {
-    auto r = sl::resolve("com.a.b", l);
-    CHECK(r.id == "1000001");
-    CHECK(r.source == "known");
-    CHECK(calls == std::vector<std::string>{"known", "listing 1000001"});
-  }
-  SUBCASE("a candidate whose listing is another package is discarded") {
-    l.known = [&](std::string_view) {
-      calls.push_back("known");
-      return std::string("3000003");
-    };
+  SUBCASE("an online answer is verified against its listing") {
     auto r = sl::resolve("com.a.b", l);
     CHECK(r.id == "2000002");
     CHECK(r.source == "online");
-    CHECK(calls == std::vector<std::string>{"known", "listing 3000003", "online", "listing 2000002"});
+    CHECK(calls == std::vector<std::string>{"online", "listing 2000002"});
   }
-  SUBCASE("with the online lookup off, nothing leaves but the listing check") {
-    l.known = [&](std::string_view) {
-      calls.push_back("known");
-      return std::string();
+  SUBCASE("a candidate whose listing is another package is discarded") {
+    l.online = [&](std::string_view) {
+      calls.push_back("online");
+      return std::string("3000003");
     };
+    auto r = sl::resolve("com.a.b", l);
+    CHECK(r.id.empty());
+    CHECK(calls == std::vector<std::string>{"online", "listing 3000003"});
+  }
+  SUBCASE("with the online lookup off, nothing is looked up") {
     l.online = nullptr;
     auto r = sl::resolve("com.a.b", l);
     CHECK(r.id.empty());
     CHECK(r.final);
-    CHECK(calls == std::vector<std::string>{"known"});
+    CHECK(calls.empty());
   }
   SUBCASE("nothing found is final; a failed lookup is not") {
-    l.known = [](std::string_view) { return std::string(); };
     l.online = [](std::string_view) { return std::string(); };
     CHECK(sl::resolve("com.a.b", l).final);
     l.online = [](std::string_view) -> std::string { throw std::runtime_error("offline"); };

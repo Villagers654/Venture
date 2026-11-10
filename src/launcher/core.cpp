@@ -602,8 +602,7 @@ void Core::resolve_store_links() {
         break;
       store_link::Lookups lookups;
       lookups.library = library;
-      lookups.known = store_link::known_id;
-      // c: only the package name is sent.
+      // b: only the package name is sent.
       if (online)
         lookups.online = [&stop](std::string_view p) {
           auto r = http::get_oculusdb_package(p, stop);

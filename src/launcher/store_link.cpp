@@ -2,7 +2,6 @@
 
 #include "common/json.h"
 #include <algorithm>
-#include "launcher/known_store_ids.h"
 
 namespace venture::launcher::store_link {
 std::string id_from_link(std::string_view text) {
@@ -35,12 +34,6 @@ bool listing_matches(std::string_view listing_package, std::string_view apk_pack
   return !apk_package.empty() && listing_package == apk_package;
 }
 
-std::string known_id(std::string_view package) {
-  for (const auto &[p, id] : kKnownStoreIds)
-    if (p == package) return std::string(id);
-  return {};
-}
-
 Resolved resolve(std::string_view package, const Lookups &lookups) {
   Resolved out;
   if (digits(lookups.library, 5)) {
@@ -62,7 +55,7 @@ Resolved resolve(std::string_view package, const Lookups &lookups) {
       return false;
     }
   };
-  if (attempt(lookups.known, "known") || attempt(lookups.online, "online")) out.final = true;
+  if (attempt(lookups.online, "online")) out.final = true;
   return out;
 }
 }  // namespace venture::launcher::store_link
