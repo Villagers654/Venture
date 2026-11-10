@@ -18,7 +18,7 @@ No virtual machine. Free and open source.
 ## Why Venture
 
 - **Fast.** Venture is by far the fastest way to play Quest games on PC, with steady frame times.
-- **Compatible.** Runs all 25 games we tested; see the [compatibility wiki](docs/COMPATIBILITY.md). The next best runs 7.
+- **Compatible.** Runs all 25 games we tested; see the [compatibility wiki](https://github.com/Villagers654/Venture/wiki/Compatibility). The next best runs 7.
 - **Straight to your hardware.** Every game runs as an ordinary PC process that renders on your GPU and talks to your headset through OpenXR.
 - **Simple.** Sign in with Meta, install, press Play. Your games can show up in your Steam library too.
 

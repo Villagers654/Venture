@@ -401,7 +401,7 @@ def package(build, output, angle, strip, readobj):
     copy(ROOT / "LICENSE", output / "LICENSE")
     copy(ROOT / "LICENSES/MIT.txt", output / "licenses/venture/MIT.txt")
     copy(ROOT / "LICENSES/0BSD.txt", output / "licenses/venture/0BSD.txt")
-    copy(ROOT / "docs/THIRD_PARTY_NOTICES.md", output / "licenses/THIRD_PARTY_NOTICES.md")
+    copy(ROOT / "LICENSES/THIRD_PARTY_NOTICES.md", output / "licenses/THIRD_PARTY_NOTICES.md")
     tree(ROOT / "tools/release-notices", output / "licenses")
     # The framework JAR already carries AOSP's NOTICE and Apache license.
     for relative, name in (("src/runtime/java/framework/org/kxml2/io/KXmlParser.java", "kxml2.txt"),

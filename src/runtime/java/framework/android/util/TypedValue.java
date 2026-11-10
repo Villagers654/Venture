@@ -4,6 +4,8 @@ public class TypedValue {
                           TYPE_FLOAT = 4, TYPE_DIMENSION = 5, TYPE_FRACTION = 6, TYPE_INT_DEC = 16,
                           TYPE_INT_HEX = 17, TYPE_INT_BOOLEAN = 18, TYPE_FIRST_COLOR_INT = 28,
                           TYPE_LAST_COLOR_INT = 31;
+  public static final int COMPLEX_UNIT_PX = 0, COMPLEX_UNIT_DIP = 1, COMPLEX_UNIT_SP = 2, COMPLEX_UNIT_PT = 3,
+                          COMPLEX_UNIT_IN = 4, COMPLEX_UNIT_MM = 5;
   public int type, data, resourceId, assetCookie, density, changingConfigurations;
   public CharSequence string;
   public float getFloat() {
