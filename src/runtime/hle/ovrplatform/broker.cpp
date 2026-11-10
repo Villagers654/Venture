@@ -66,8 +66,13 @@ class Brokered final : public Provider {
          token_.find('\0') != token_.npos))
       return reject(ErrorCode::invalid_response);
     ready_ = true;
-    log::info("accounts",
-              "Application credentials received identity={}", !identity_);
+    if (identity_)
+      log::warn("accounts",
+                "Application credentials received without a user: error {} "
+                "(-20001 means no Meta account is signed in for this game)",
+                static_cast<int>(identity_.code));
+    else
+      log::info("accounts", "Application credentials received identity=true");
     return {};
   }
   Error validate() {

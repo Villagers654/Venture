@@ -146,6 +146,19 @@ inline constexpr HostInput kPico4Inputs[]{
     {"/input/squeeze/value", "Grip"},
     {"/input/system/click", "System", true},
 };
+// Pico Neo 3 (XR_BD_controller_interaction): a menu button on each controller.
+inline constexpr HostInput kPicoNeo3Inputs[]{
+    {"/input/x/click", "X", false, 1},
+    {"/input/y/click", "Y", false, 1},
+    {"/input/a/click", "A", false, 2},
+    {"/input/b/click", "B", false, 2},
+    {"/input/menu/click", "Menu"},
+    {"/input/thumbstick", "Thumbstick"},
+    {"/input/thumbstick/click", "Thumbstick click"},
+    {"/input/trigger/value", "Trigger"},
+    {"/input/squeeze/value", "Grip"},
+    {"/input/system/click", "System", true},
+};
 inline constexpr HostInput kHpInputs[]{
     {"/input/x/click", "X", false, 1},
     {"/input/y/click", "Y", false, 1},
@@ -269,7 +282,10 @@ inline constexpr Profile kProfiles[]{
        {"/input/trackpad/dpad_down", "/input/trackpad/dpad_up", "", "/input/thumbstick", "/input/thumbstick/click",
         "/input/trigger/value", "/input/squeeze/click", ""}}},
      "/input/menu/click", "Left menu button", "trackpad"},
-    {"/interaction_profiles/bytedance/pico4_controller", "Pico 4", "pico 4 ultra neo", "pico4", "pico_4_controller", kPico4Inputs,
+    {"/interaction_profiles/bytedance/pico4_controller", "Pico 4", "pico 4 ultra", "pico4", "pico_4_controller", kPico4Inputs,
+     {{detail::face_left, detail::face_right}}, "/input/menu/click", "Left menu button",
+     "x y a b trigger thumbstick", "XR_BD_controller_interaction"},
+    {"/interaction_profiles/bytedance/pico_neo3_controller", "Pico Neo 3", "pico neo 3 link pro eye", "", "", kPicoNeo3Inputs,
      {{detail::face_left, detail::face_right}}, "/input/menu/click", "Left menu button",
      "x y a b trigger thumbstick", "XR_BD_controller_interaction"},
     {"/interaction_profiles/mndx/pssense_controller_mndx", "PlayStation VR2 Sense", "psvr2 ps5 sony", "",

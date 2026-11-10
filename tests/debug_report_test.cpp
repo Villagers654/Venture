@@ -113,6 +113,20 @@ TEST_CASE("debug report: a failed run, its times, cause and next steps come firs
   CHECK(text.find("Result: stopped from Venture (exit code 0)") != std::string::npos);
   CHECK(text.find("The last run did not fail.") != std::string::npos);
   in.close();
+
+  // A game that got no Meta user waits for one (Pinball FX VR's black screen): the report says to sign in.
+  std::ofstream(data / "logs" / "runtime-com.example.game.log", std::ios::binary)
+      << std::format("  1.000 1 I [launch] Process started at {:%FT%TZ}\n"
+                     "  2.000 1 W [accounts] Application credentials received without a user: error -20001 "
+                     "(-20001 means no Meta account is signed in for this game)\n"
+                     "  9.000 1 I [launch] Exit code: 0 (stop requested)\n",
+                     start);
+  file = write_debug_report({.data = data, .version = "9.9.9", .package = "com.example.game"});
+  in.open(file, std::ios::binary);
+  text.assign(std::istreambuf_iterator<char>(in), {});
+  CHECK(text.find("=== Likely cause ===\nThe game ran without a Meta user") != std::string::npos);
+  CHECK(text.find("- Sign in with Meta in Venture") != std::string::npos);
+  in.close();
   fs::remove_all(data);
 }
 

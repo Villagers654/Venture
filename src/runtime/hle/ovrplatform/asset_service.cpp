@@ -175,7 +175,10 @@ Model AssetService::details(const meta::File& f, std::stop_token stop) const {
           {{"AssetId", id(f)},
            {"AssetType", type},
            {"DownloadStatus", status},
-           {"Filepath", status == "installed" ? filepath(f) : std::string{}},
+           // The path is where the file is or will be, whatever its status:
+           // games build their mount paths from it before downloading (Pinball
+           // FX's tables crashed on an empty path at "Downloading 0%").
+           {"Filepath", status == "installed" ? filepath(f) : guest_root_ + '/' + f.name},
            // Without Meta's full catalog an asset's add-on is unknown; the game
            // still checks the account's real purchases before offering paid content.
            {"IapStatus", std::string(gated(f) || reduced_ ? "entitled" : "free")},

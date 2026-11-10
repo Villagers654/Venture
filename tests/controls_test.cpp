@@ -99,6 +99,7 @@ TEST_CASE("Controls open the menu with the menu button and both stick clicks on 
   const std::set<std::string_view> menu_button{kTouch, "/interaction_profiles/meta/touch_controller_plus",
                                                "/interaction_profiles/facebook/touch_controller_pro",
                                                "/interaction_profiles/bytedance/pico4_controller",
+                                               "/interaction_profiles/bytedance/pico_neo3_controller",
                                                "/interaction_profiles/htc/vive_focus3_controller",
                                                "/interaction_profiles/htc/vive_cosmos_controller",
                                                "/interaction_profiles/hp/mixed_reality_controller",
@@ -197,7 +198,8 @@ TEST_CASE("Controls defaults follow each controller's precedent") {
   CHECK(bind("/user/hand/left/input/menu/click", kSense) == "/user/hand/left/input/share_mndx/click");
   // Touch-shaped controllers are identity, the left menu button included.
   for (auto host : {"/interaction_profiles/htc/vive_cosmos_controller", "/interaction_profiles/htc/vive_focus3_controller",
-                    "/interaction_profiles/hp/mixed_reality_controller", "/interaction_profiles/bytedance/pico4_controller"}) {
+                    "/interaction_profiles/hp/mixed_reality_controller", "/interaction_profiles/bytedance/pico4_controller",
+                    "/interaction_profiles/bytedance/pico_neo3_controller"}) {
     CAPTURE(host);
     for (auto guest : {"/user/hand/left/input/x/click", "/user/hand/left/input/y/click", "/user/hand/right/input/a/click",
                        "/user/hand/right/input/b/click"})
@@ -216,6 +218,15 @@ TEST_CASE("Controls offer only inputs the controller has on that hand") {
   Choice choice;
   choice.menu = {MenuMode::button, "/user/hand/right/input/menu/click", {}, kHoldMs};
   CHECK(resolve(pico, &choice).menu.automatic);
+  // Pico Neo 3 has one on each controller: the right one can be the menu button.
+  const auto& neo3 = profile("/interaction_profiles/bytedance/pico_neo3_controller");
+  const auto* neo3_menu = find_input(neo3, "/input/menu/click");
+  REQUIRE(neo3_menu);
+  CHECK(on_hand(*neo3_menu, 0));
+  CHECK(on_hand(*neo3_menu, 1));
+  const auto right = resolve(neo3, &choice);
+  CHECK_FALSE(right.menu.automatic);
+  CHECK(right.menu.sources == std::vector<Inputs>{{"/user/hand/right/input/menu/click"}});
 }
 
 TEST_CASE("Controls trackpad halves fall back to the whole pad without XR_EXT_dpad_binding") {

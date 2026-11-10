@@ -1024,6 +1024,13 @@ fs::path write_debug_report(const DebugReport &request) {
     out += package.empty() ? "No game has been started with this Venture yet.\n"
                            : std::format("{} has no run to report yet.\n", request.game.empty() ? package : request.game);
     steps.push_back("Start the game that has the problem, then send a new report.");
+  } else if (!run->failed &&
+             tail_log(runtime_log, 512 << 10).find("Application credentials received without a user: error -20001") !=
+                 std::string::npos) {
+    // Games that need a Meta user (Pinball FX VR) wait on a black screen without one.
+    out += "The game ran without a Meta user: no Meta account was signed in for it. Games that need one can "
+           "stay on a black or loading screen.\n";
+    steps.push_back("Sign in with Meta in Venture (the account that owns the game), then start the game again.");
   } else if (!run->failed) {
     out += "The last run did not fail. If the problem happened in an earlier run, start the game again, "
            "reproduce it, then send a new report.\n";
