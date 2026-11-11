@@ -8,6 +8,7 @@
 #include "gfx/gpu_device.h"
 #include "gfx/xr_images.h"
 #include "hle/gles/gles_state.h"
+#include "hle/gles/homeworld_multiview.h"
 #include "hle/vulkan/timing.h"
 #include "platform/profile.h"
 #include <algorithm>
@@ -85,6 +86,20 @@ class AngleImages final : public XrImages {
       if (first == GL_NO_ERROR) first = e;
     }
     return first;
+  }
+  static XrResult finish_homeworld_producer() {
+    const bool enabled = gfx::homeworld_multiview::enabled();
+    if (!enabled) return XR_SUCCESS;
+    const auto finish = gfx::angle_function<PFNGLFINISHPROC>("glFinish");
+    if (!finish) return XR_ERROR_FEATURE_UNSUPPORTED;
+    finish();
+    if (const auto failure = own_gl_error()) {
+      log::warn("xr-angle", "Homeworld glFinish failed before image transfer: GL error {:#x}", failure);
+      return XR_ERROR_RUNTIME_FAILURE;
+    }
+    static std::once_flag logged;
+    std::call_once(logged, [] { log::info("xr-angle", "Homeworld glFinish completed before image transfer"); });
+    return XR_SUCCESS;
   }
   static PFNGLCOPYIMAGESUBDATAPROC copy_image() {
     auto copy = reinterpret_cast<PFNGLCOPYIMAGESUBDATAPROC>(gfx::angle_proc("glCopyImageSubDataEXT"));
@@ -315,6 +330,8 @@ public:
       return XR_ERROR_GRAPHICS_DEVICE_INVALID;
     auto &textures = it->second.textures;
     gfx::preserve_gl_errors();
+    if (const auto finished = finish_homeworld_producer(); XR_FAILED(finished))
+      return finished;
     try {
       std::vector<GLenum> layouts(textures.size());
       if (slot.staged) {
@@ -411,6 +428,8 @@ public:
       return XR_ERROR_GRAPHICS_DEVICE_INVALID;
     if (d.host_mip_count > d.mip_count) return XR_ERROR_VALIDATION_FAILURE;
     gfx::preserve_gl_errors();
+    if (const auto finished = finish_homeworld_producer(); XR_FAILED(finished))
+      return finished;
     // EGL HLE retains native sync identities (hle/egl/egl.cpp); wait on the
     // producer's sync in the current context before the GPU-side image copy.
     auto sync_result = wait_producer_sync(fence);

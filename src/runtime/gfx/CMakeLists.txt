@@ -12,7 +12,7 @@ add_custom_command(OUTPUT ${generated}/gl_dispatch.cpp ${generated}/egl_dispatch
   VERBATIM)
 add_library(venture_gfx STATIC
   angle.cpp blob_cache.cpp gpu_device.cpp pipeline_trace.cpp spirv_precision.cpp queue_probe.cpp queue_sync.cpp dispatch.cpp texture_decode.cpp xr_images.cpp shared_texture.cpp a32_handles.cpp
-  ../hle/egl/egl.cpp ../hle/gles/gles.cpp ../hle/gles/gles_a32.cpp ../hle/gles/buffers.cpp ../hle/gles/textures.cpp
+  ../hle/egl/egl.cpp ../hle/gles/gles.cpp ../hle/gles/homeworld_multiview.cpp ../hle/gles/gles_a32.cpp ../hle/gles/buffers.cpp ../hle/gles/textures.cpp
   ${generated}/gl_dispatch.cpp ${generated}/egl_dispatch.inc)
 if(WIN32)
   target_sources(venture_gfx PRIVATE ../platform/win32/gfx_library.cpp)

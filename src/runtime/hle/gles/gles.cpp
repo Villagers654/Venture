@@ -18,6 +18,7 @@
 #include "core/pipeline_stats.h"
 #include "core/wait.h"
 #include "hle/egl/egl.h"
+#include "hle/gles/homeworld_multiview.h"
 #include "hle/gles/gles_state.h"
 #include "gfx/a32_handles.h"
 #include "gfx/gpu_device.h"
@@ -545,6 +546,7 @@ bool capture_gl_errors() {
   return ok;
 }
 hle::Handler special_gl_handler(std::string_view name) {
+  if (auto handler = homeworld_multiview::handler(name)) return handler;
   if (name == "glLabelObjectEXT") return wrap<&label_object>();
   if (name == "glGetObjectLabelEXT") return wrap<&get_object_label>();
   if (name == "glGetString")
