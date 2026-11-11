@@ -207,7 +207,7 @@ int resolve_path(std::string_view path, int dirfd, MappedPath* out) {
     out->device = 2;
   else if (p == "/dev/urandom" || p == "/dev/random")
     out->device = 3;
-  else if (below(p, "/proc") || below(p, "/sys") || process_image::has_file(p))
+  else if (below(p, "/proc") || below(p, "/sys") || process_image::has_file(p) || p == openxr_runtime_manifest)
     out->device = 4;
   if (out->device) return 0;
   auto map = [&](std::string_view prefix, const std::filesystem::path& root, bool ro) {

@@ -15,6 +15,7 @@ using EGLenum = unsigned int;
 #include "core/process.h"
 #include "gfx/gpu_device.h"
 #include "gfx/gpu_device_internal.h"
+#include "hle/libc/vfs.h"
 #include "hle/openxr/openxr.h"
 #include "hle/openxr/state.h"
 #include "xr/bindings.h"
@@ -365,6 +366,25 @@ TEST_CASE("Host mode events update shared Android timing before guest filtering"
 namespace ox = venture::hle::openxr;
 namespace xg = ox::guest;
 
+TEST_CASE("A Khronos loader built into the game finds and negotiates with Venture's runtime") {
+  bool exists = false;
+  const auto manifest = venture::hle::libc::proc_file(venture::hle::libc::openxr_runtime_manifest, &exists);
+  CHECK(exists);
+  CHECK(manifest.find("\"library_path\":\"libopenxr_forwardloader.so\"") != std::string::npos);
+  xg::NegotiateLoaderInfo info{1, 1, sizeof(xg::NegotiateLoaderInfo), 1, 1, XR_MAKE_VERSION(1, 0, 0),
+                               XR_MAKE_VERSION(1, 0x3ff, 0xfff)};
+  xg::NegotiateRuntimeRequest request{3, 1, sizeof(xg::NegotiateRuntimeRequest)};
+  REQUIRE(xg::xrNegotiateLoaderRuntimeInterface(&info, &request) == XR_SUCCESS);
+  CHECK(request.runtime_interface_version == 1);
+  CHECK(request.runtime_api_version == XR_CURRENT_API_VERSION);
+  CHECK(request.get_instance_proc_addr == venture::hle::openxr::command_thunk("xrGetInstanceProcAddr"));
+  info.max_api_version = XR_MAKE_VERSION(1, 0, 34);
+  REQUIRE(xg::xrNegotiateLoaderRuntimeInterface(&info, &request) == XR_SUCCESS);
+  CHECK(request.runtime_api_version == XR_MAKE_VERSION(1, 0, 34));
+  info.min_interface_version = 2;
+  info.max_interface_version = 2;
+  CHECK(xg::xrNegotiateLoaderRuntimeInterface(&info, &request) == XR_ERROR_INITIALIZATION_FAILED);
+}
 TEST_CASE("PCM haptics retain signed carrier energy and report consumed input samples") {
   std::array<float, 8> carrier{1, -1, 1, -1, 0, 0, 0, 0};
   uint32_t consumed = 99;

@@ -34,6 +34,7 @@ const std::map<std::string, GuestAddr> &thunks() {
     VENTURE_XR_COMMAND(xrConvertTimeToTimespecTimeKHR, "", true)
     if (process_config().isa() == GuestIsa::a64) {
       VENTURE_XR_COMMAND(xrCreateSwapchainAndroidSurfaceKHR, "XR_KHR_android_surface_swapchain", true)
+      VENTURE_XR_COMMAND(xrNegotiateLoaderRuntimeInterface, "", true)
     }
 #undef VENTURE_XR_COMMAND
     result["_Z21xrInitializeLoaderKHRPK29XrLoaderInitInfoBaseHeaderKHR"] =

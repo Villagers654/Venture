@@ -389,6 +389,22 @@ XrResult xrInitializeLoaderKHR(const XrLoaderInitInfoBaseHeaderKHR *header) {
   log::debug("xr", "Stored guest Android loader context");
   return XR_SUCCESS;
 }
+XrResult xrNegotiateLoaderRuntimeInterface(const NegotiateLoaderInfo *info, NegotiateRuntimeRequest *request) {
+  // XR_LOADER_INTERFACE_STRUCT_LOADER_INFO = 1, _RUNTIME_REQUEST = 3, each at struct version 1.
+  if (!info || !request || info->struct_type != 1 || info->struct_version != 1 ||
+      info->struct_size != sizeof(NegotiateLoaderInfo) || request->struct_type != 3 ||
+      request->struct_version != 1 || request->struct_size != sizeof(NegotiateRuntimeRequest) ||
+      info->min_interface_version > 1 || info->max_interface_version < 1 ||
+      info->min_api_version > XR_MAKE_VERSION(1, 1, 0) || XR_VERSION_MAJOR(info->max_api_version) < 1)
+    return XR_ERROR_INITIALIZATION_FAILED;
+  // xrCreateInstance accepts 1.0 and 1.1 applications.
+  request->runtime_interface_version = 1;
+  request->runtime_api_version = std::min<XrVersion>(info->max_api_version, XR_CURRENT_API_VERSION);
+  request->get_instance_proc_addr = command_thunk("xrGetInstanceProcAddr");
+  log::info("xr", "A Khronos loader in the game negotiated with Venture's runtime (API {}.{})",
+            XR_VERSION_MAJOR(request->runtime_api_version), XR_VERSION_MINOR(request->runtime_api_version));
+  return XR_SUCCESS;
+}
 XrResult xrCreateInstance(const XrInstanceCreateInfo *info, XrInstance *out) {
   std::lock_guard lock(state().mutex);
   if (!out)

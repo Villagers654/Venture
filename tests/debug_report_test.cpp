@@ -127,6 +127,36 @@ TEST_CASE("debug report: a failed run, its times, cause and next steps come firs
   CHECK(text.find("=== Likely cause ===\nThe game ran without a Meta user") != std::string::npos);
   CHECK(text.find("- Sign in with Meta in Venture") != std::string::npos);
   in.close();
+
+  // A game that closed on its failed ownership check: the sign-in is the cause, not another
+  // game's crash in launcher.log (I Am Cat was told Table Troopers' Java exception).
+  std::ofstream(data / "logs" / "launcher.log", std::ios::binary)
+      << "  0.500 9 W [launcher] com.other.game stopped: The game's Android main thread stopped on an uncaught "
+         "java.lang.NoClassDefFoundError: android/hardware/camera2/CameraManager$AvailabilityCallback\n";
+  std::ofstream(data / "logs" / "runtime-com.example.game.log", std::ios::binary)
+      << std::format("  1.000 1 I [launch] Process started at {:%FT%TZ}\n"
+                     "  2.000 1 W [accounts] Application credentials received without a user: error -20001 "
+                     "(-20001 means no Meta account is signed in for this game)\n"
+                     "  2.100 1 W [ovrplatform] ovr_Entitlement_GetIsViewerEntitled request=1 type=0x1 error=-20001\n"
+                     "  4.000 1 I [launch] Exit code: 0\n",
+                     start);
+  file = write_debug_report({.data = data, .version = "9.9.9", .package = "com.example.game"});
+  in.open(file, std::ios::binary);
+  text.assign(std::istreambuf_iterator<char>(in), {});
+  CHECK(text.find("Result: closed: it needs a signed-in Meta account that owns it") != std::string::npos);
+  CHECK(text.find("=== Likely cause ===\nNo Meta account was signed in for the game") != std::string::npos);
+  CHECK(text.find("- Sign in with Meta in Venture") != std::string::npos);
+  in.close();
+
+  // Another game's stop line in launcher.log names no cause for this run.
+  std::ofstream(data / "logs" / "runtime-com.example.game.log", std::ios::binary)
+      << std::format("  1.000 1 I [launch] Process started at {:%FT%TZ}\n  3.100 1 I [launch] Exit code: 139\n",
+                     start);
+  file = write_debug_report({.data = data, .version = "9.9.9", .package = "com.example.game"});
+  in.open(file, std::ios::binary);
+  text.assign(std::istreambuf_iterator<char>(in), {});
+  CHECK(text.find("uncaught Java exception") == std::string::npos);
+  in.close();
   fs::remove_all(data);
 }
 
