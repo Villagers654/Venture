@@ -282,8 +282,9 @@ std::int32_t vrapi_GetInputDeviceCapabilities(Mobile *mobile, InputHeader *out) 
     caps->capabilities = 1 | 2 | (id == 1 ? 4 : 8) | 0x40 | 0x80 | 0x200 | 0x400 | 0x2000 | 0x4000;
     caps->haptic_max = 256;
     caps->haptic_ms = 4;
-    caps->buttons = 0x20000000 | 0x04000000 | 0x80000000 | stick_direction_mask |
-                    (id == 1 ? 0x100 | 0x200 | 0x100000 : 1 | 2);
+    // The stick directions are reported in the state only: advertised here,
+    // Breathedge's OVRPlugin 1.59 stops turning from the right stick.
+    caps->buttons = 0x20000000 | 0x04000000 | 0x80000000 | (id == 1 ? 0x100 | 0x200 | 0x100000 : 1 | 2);
     caps->touches = 0x40 | 0x20 | (id == 1 ? 4 | 8 : 1 | 2);
     return success;
   }

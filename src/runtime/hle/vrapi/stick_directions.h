@@ -3,9 +3,9 @@
 #include <cstdint>
 
 namespace venture::hle::vrapi {
-// VrApi_Input.h ovrButton_Up/Down/Left/Right. The Quest runtime sets them from
-// the thumbstick on both Touch controllers, and some OVRPlugin titles turn or
-// navigate from these bits rather than from the analog joystick.
+// VrApi_Input.h ovrButton_Up/Down/Left/Right, set from the thumbstick on both
+// Touch controllers: some OVRPlugin titles turn or navigate from these bits
+// rather than from the analog joystick. They are state only, not capabilities.
 inline constexpr std::uint32_t stick_up = 0x00010000u, stick_down = 0x00020000u,
                                stick_left = 0x00040000u, stick_right = 0x00080000u;
 inline constexpr std::uint32_t stick_direction_mask = stick_up | stick_down | stick_left | stick_right;

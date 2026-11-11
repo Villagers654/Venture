@@ -1349,7 +1349,7 @@ TEST_CASE(
     REQUIRE(vg::vrapi_GetInputDeviceCapabilities(mobile, &caps.header) == vr::abi::success);
     CHECK((caps.capabilities & 0x4000u) != 0); // ModelOculusTouch
     CHECK((caps.capabilities & 0x0800u) == 0); // no ModelGearVR emulation target
-    CHECK((caps.buttons & 0x000f0000u) == 0x000f0000u); // stick Up/Down/Left/Right
+    CHECK((caps.buttons & 0x000f0000u) == 0u); // stick directions: state only (Breathedge turning)
   }
   CHECK(vg::vrapi_SetRemoteEmulation(mobile, true) == vr::abi::success);
   CHECK(vg::vrapi_SetRemoteEmulation(mobile, false) == vr::abi::success);
