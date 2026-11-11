@@ -1349,7 +1349,7 @@ TEST_CASE(
     REQUIRE(vg::vrapi_GetInputDeviceCapabilities(mobile, &caps.header) == vr::abi::success);
     CHECK((caps.capabilities & 0x4000u) != 0); // ModelOculusTouch
     CHECK((caps.capabilities & 0x0800u) == 0); // no ModelGearVR emulation target
-    CHECK((caps.buttons & 0x000f0000u) == 0u); // stick directions: state only (Breathedge turning)
+    CHECK((caps.buttons & 0x000f0000u) == 0x000c0000u); // stick Left/Right, not Up/Down
   }
   CHECK(vg::vrapi_SetRemoteEmulation(mobile, true) == vr::abi::success);
   CHECK(vg::vrapi_SetRemoteEmulation(mobile, false) == vr::abi::success);
@@ -3050,16 +3050,11 @@ TEST_CASE("VrApi drawn layer frame cost (measurement)" * doctest::skip()) {
 
 TEST_CASE("VrApi stick direction buttons follow the thumbstick past half travel") {
   using namespace venture::hle::vrapi;
-  CHECK(stick_direction_mask == 0x000f0000u);
-  CHECK(stick_direction_buttons(0.f, 0.f) == 0);
-  for (float value : {-0.5f, 0.5f}) {
-    CHECK(stick_direction_buttons(value, 0.f) == 0);
-    CHECK(stick_direction_buttons(0.f, value) == 0);
-  }
-  CHECK(stick_direction_buttons(0.f, 1.f) == 0x00010000u);
-  CHECK(stick_direction_buttons(0.f, -1.f) == 0x00020000u);
-  CHECK(stick_direction_buttons(-1.f, 0.f) == 0x00040000u);
-  CHECK(stick_direction_buttons(1.f, 0.f) == 0x00080000u);
-  CHECK(stick_direction_buttons(0.7f, 0.7f) == (0x00080000u | 0x00010000u));
-  CHECK(stick_direction_buttons(-0.7f, -0.7f) == (0x00040000u | 0x00020000u));
+  CHECK(stick_direction_mask == 0x000c0000u);
+  CHECK(stick_direction_buttons(0.f) == 0);
+  for (float value : {-0.5f, 0.5f}) CHECK(stick_direction_buttons(value) == 0);
+  CHECK(stick_direction_buttons(-1.f) == 0x00040000u);
+  CHECK(stick_direction_buttons(1.f) == 0x00080000u);
+  CHECK(stick_direction_buttons(-0.51f) == 0x00040000u);
+  CHECK(stick_direction_buttons(0.51f) == 0x00080000u);
 }

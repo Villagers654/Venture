@@ -282,9 +282,8 @@ std::int32_t vrapi_GetInputDeviceCapabilities(Mobile *mobile, InputHeader *out) 
     caps->capabilities = 1 | 2 | (id == 1 ? 4 : 8) | 0x40 | 0x80 | 0x200 | 0x400 | 0x2000 | 0x4000;
     caps->haptic_max = 256;
     caps->haptic_ms = 4;
-    // The stick directions are reported in the state only: advertised here,
-    // Breathedge's OVRPlugin 1.59 stops turning from the right stick.
-    caps->buttons = 0x20000000 | 0x04000000 | 0x80000000 | (id == 1 ? 0x100 | 0x200 | 0x100000 : 1 | 2);
+    caps->buttons = 0x20000000 | 0x04000000 | 0x80000000 | stick_direction_mask |
+                    (id == 1 ? 0x100 | 0x200 | 0x100000 : 1 | 2);
     caps->touches = 0x40 | 0x20 | (id == 1 ? 4 | 8 : 1 | 2);
     return success;
   }
@@ -328,7 +327,7 @@ std::int32_t vrapi_GetCurrentInputState(Mobile *mobile, std::uint32_t id, InputS
       if (std::hypot(stick.currentState.x, stick.currentState.y) >= 0.1f)
         remote->joystick = remote->raw_joystick;
     }
-    remote->buttons |= stick_direction_buttons(remote->joystick.x, remote->joystick.y);
+    remote->buttons |= stick_direction_buttons(remote->joystick.x);
     if (av::enabled()) {
       using Clock = std::chrono::steady_clock;
       static std::array<Clock::time_point, 2> reported{}; // protected by state().mutex
