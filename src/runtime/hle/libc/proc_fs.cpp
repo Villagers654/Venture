@@ -101,6 +101,10 @@ std::string proc_file(std::string_view p, bool* exists) {
     }
   }
   if (auto image = process_image::file(p)) return std::move(*image);
+  // Its library resolves to Venture's OpenXR runtime (hle/openxr), which the loader negotiates with.
+  if (p == openxr_runtime_manifest)
+    return R"({"file_format_version":"1.0.0","runtime":{"name":"Venture","library_path":"libopenxr_forwardloader.so"}}
+)";
   if (p == "/proc/self/cmdline") return process_config().package + std::string(1, '\0');
   if (p == "/proc/self/cgroup") return "0::/\n";
   if (p == "/proc/self/status") {

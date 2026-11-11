@@ -24,6 +24,7 @@
 #include <ranges>
 #include <regex>
 #include <set>
+#include <sstream>
 #include <thread>
 #ifdef _WIN32
 #include <windows.h>
@@ -1039,12 +1040,35 @@ fs::path write_debug_report(const DebugReport &request) {
     // (UE4 and Unity), so only a probe the game then failed on counts.
     out += "The game looked for an expansion file (OBB) that its install does not have.\n";
     steps.push_back("Install the game again, or import it again together with its OBB file.");
+  } else if (library::needed_meta_sign_in(runtime_log)) {
+    // The run's result already names it; a crash in launcher.log from another game's run is not it.
+    if (tail_log(runtime_log, 512 << 10).find("Application credentials received without a user: error -20001") !=
+        std::string::npos) {
+      out += "No Meta account was signed in for the game, so its ownership check failed and it closed.\n";
+      steps.push_back("Sign in with Meta in Venture (the account that owns the game), then start the game again.");
+    } else {
+      out += "Meta refused the game's ownership check: the signed-in account may not own it.\n";
+      steps.push_back("Sign in with the Meta account that owns the game, then start it again.");
+    }
   } else if (auto d = [&] {
                // The run's own logs first: launcher.log also holds earlier runs, whose
                // failures (a runtime that was still closing) are not this run's.
                auto own = diagnose(tail_log(runtime_log, 512 << 10) + "\n" + tail_log(console_log, 128 << 10) +
                                    "\n" + evidence);
-               return own ? own : diagnose(tail_log(logs / "launcher.log", 64 << 10));
+               if (own) return own;
+               // Another game's "<game> stopped: <why>" line is not this run's cause (Table Troopers'
+               // crash was reported for I Am Cat).
+               std::string launcher;
+               std::istringstream lines(tail_log(logs / "launcher.log", 64 << 10));
+               for (std::string line; std::getline(lines, line);) {
+                 const auto at = line.find("[launcher] "), stop = line.find(" stopped: ");
+                 if (at != std::string::npos && stop != std::string::npos && stop > at) {
+                   const std::string_view who = std::string_view(line).substr(at + 11, stop - at - 11);
+                   if (who != package && (request.game.empty() || who != request.game)) continue;
+                 }
+                 launcher += line + "\n";
+               }
+               return diagnose(launcher);
              }()) {
     out += d->cause + "\n";
     steps.push_back(d->advice);

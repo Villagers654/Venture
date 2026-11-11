@@ -449,13 +449,20 @@ public class Context {
   }
   private static Intent sticky(String action) {
     return switch (action) {
+      // A Quest has a battery: UE's BatteryReceiver drops the event when "present" is false, its
+      // native level stays 0 and games treat that as a dying battery (Puzzling Places stops saving).
       case Intent.ACTION_BATTERY_CHANGED ->
         new Intent(action)
             .putExtra("level", 100)
             .putExtra("scale", 100)
             .putExtra("status", 5)
+            .putExtra("health", 2)
             .putExtra("plugged", 1)
-            .putExtra("present", false);
+            .putExtra("present", true)
+            .putExtra("temperature", 250)
+            .putExtra("voltage", 4200)
+            .putExtra("technology", "Li-ion")
+            .putExtra("battery_low", false);
       case Intent.ACTION_HEADSET_PLUG ->
         new Intent(action).putExtra("state", 0).putExtra("microphone", 0).putExtra("name", "");
       case "android.media.VOLUME_CHANGED_ACTION" ->

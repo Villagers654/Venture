@@ -5,6 +5,7 @@
 #include "core/shutdown_trace.h"
 #include "core/thread.h"
 #include "core/wait.h"
+#include "platform/memory.h"
 #include <array>
 #include <map>
 #include <mutex>
@@ -75,6 +76,19 @@ std::int64_t start() { return enabled ? monotonic_ns() : 0; }
 void opened(std::string_view path, int flags, std::int64_t result) {
   record('o', result >= 0 ? static_cast<int>(result) : -1, 0, flags, result, 0);
   log::info("file-io", "open tid={} path={} flags={:#x} -> {}", current_tid(), path, flags, result);
+  // VENTURE_TRACE_FILE_IO_STACK=<substring>: the guest frame-pointer chain of opens whose path contains it.
+  static const char* const stack_filter = environment::getenv("VENTURE_TRACE_FILE_IO_STACK");
+  if (!stack_filter || !*stack_filter || path.find(stack_filter) == std::string_view::npos) return;
+  auto* thread = GuestThread::current();
+  if (!thread || thread->cpu().isa() != GuestIsa::a64) return;
+  log::info("file-io", "open-stack tid={} pc={:#x} lr={:#x}", current_tid(), thread->cpu().pc(), thread->cpu().lr());
+  auto fp = thread->cpu().x(29);
+  for (unsigned depth = 0; depth < 24 && fp && !(fp & 15); ++depth) {
+    GuestAddr frame[2]{};
+    if (!platform::read_memory(fp, frame, sizeof(frame))) break;
+    log::info("file-io", "open-stack tid={} frame={} return_pc={:#x}", current_tid(), depth, frame[1]);
+    fp = frame[0];
+  }
 }
 void read(char op, int fd, std::string_view path, std::uint64_t n, std::int64_t offset,
           std::int64_t result, std::int64_t start_ns) {

@@ -663,7 +663,7 @@ void record_frame(const XrFrameEndInfo& info, const std::vector<XrSwapchainSubIm
       auto eye_name=[](XrEyeVisibility eye) {
         return eye==XR_EYE_VISIBILITY_LEFT?"left":eye==XR_EYE_VISIBILITY_RIGHT?"right":"both";
       };
-      auto capture = [&](const XrSwapchainSubImage& sub, const std::filesystem::path& path,const char* eye="unspecified") {
+      auto capture = [&](const XrSwapchainSubImage& sub, const std::filesystem::path& path,const char* eye="unspecified",const std::string& extra={}) {
         const auto& chain = chains.at(sub.swapchain);
         if (chain.last_released >= chain.count())
           throw std::runtime_error("Submitted layer has no released image");
@@ -679,9 +679,9 @@ void record_frame(const XrFrameEndInfo& info, const std::vector<XrSwapchainSubIm
         capture_writer.push(std::move(pending));
         // Preserve which eye actually consumes an overlay. These records
         // describe submitted source images, not synthesized composite views.
-        layer_metadata<<std::format("{{\"frame\":{},\"image\":\"{}\",\"eye_visibility\":\"{}\",\"capture_ns\":{},\"array_index\":{},\"rect\":[{},{},{},{}]}}\n",
+        layer_metadata<<std::format("{{\"frame\":{},\"image\":\"{}\",\"eye_visibility\":\"{}\",\"capture_ns\":{},\"array_index\":{},\"rect\":[{},{},{},{}]{}}}\n",
           frame,path.filename().string(),eye,venture::xr::native_now_ns(),sub.imageArrayIndex,
-          sub.imageRect.offset.x,sub.imageRect.offset.y,sub.imageRect.extent.width,sub.imageRect.extent.height);
+          sub.imageRect.offset.x,sub.imageRect.offset.y,sub.imageRect.extent.width,sub.imageRect.extent.height,extra);
         std::cerr << std::format(
             "[mock-xr] layer image: {} swapchain={:#x} image={:#x} released={} format={} array={} rect=[{},{} {}x{}]\n",
             path.string(), reinterpret_cast<std::uintptr_t>(sub.swapchain),
@@ -712,7 +712,11 @@ void record_frame(const XrFrameEndInfo& info, const std::vector<XrSwapchainSubIm
           capture(sphere.subImage, root / std::format("frame-{:06}-layer-{}-equirect.png", frame, layer),eye_name(sphere.eyeVisibility));
         } else if (header->type == XR_TYPE_COMPOSITION_LAYER_QUAD) {
           const auto& quad = *reinterpret_cast<const XrCompositionLayerQuad*>(header);
-          capture(quad.subImage, root / std::format("frame-{:06}-layer-{}-quad.png", frame, layer),eye_name(quad.eyeVisibility));
+          // Pose and size in the layer's space, so routes can aim at overlay panels.
+          const auto& o = quad.pose.orientation; const auto& q = quad.pose.position;
+          capture(quad.subImage, root / std::format("frame-{:06}-layer-{}-quad.png", frame, layer),eye_name(quad.eyeVisibility),
+                  std::format(",\"quad\":{{\"position\":[{},{},{}],\"orientation\":[{},{},{},{}],\"size\":[{},{}]}}",
+                              q.x, q.y, q.z, o.x, o.y, o.z, o.w, quad.size.width, quad.size.height));
         } else if (header->type == XR_TYPE_COMPOSITION_LAYER_CYLINDER_KHR) {
           const auto& cylinder = *reinterpret_cast<const XrCompositionLayerCylinderKHR*>(header);
           capture(cylinder.subImage, root / std::format("frame-{:06}-layer-{}-cylinder.png", frame, layer));

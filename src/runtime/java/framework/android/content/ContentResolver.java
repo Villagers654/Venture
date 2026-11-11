@@ -46,6 +46,20 @@ public class ContentResolver {
     var provider = com.venture.runtime.RuntimeEnvironment.get().contentProviders.get(uri.getAuthority());
     return provider == null ? null : provider.query(uri, projection, selection, selectionArgs, sortOrder);
   }
+  // The Khronos OpenXR loader asks the runtime broker with the CancellationSignal overload.
+  public final android.database.Cursor query(android.net.Uri uri, String[] projection, String selection,
+      String[] selectionArgs, String sortOrder, android.os.CancellationSignal cancellationSignal) {
+    if (cancellationSignal != null) cancellationSignal.throwIfCanceled();
+    var provider = provider(uri);
+    return provider == null ? null
+        : provider.query(uri, projection, selection, selectionArgs, sortOrder, cancellationSignal);
+  }
+  public final android.database.Cursor query(android.net.Uri uri, String[] projection,
+      android.os.Bundle queryArgs, android.os.CancellationSignal cancellationSignal) {
+    if (cancellationSignal != null) cancellationSignal.throwIfCanceled();
+    var provider = provider(uri);
+    return provider == null ? null : provider.query(uri, projection, queryArgs, cancellationSignal);
+  }
   private static ContentProvider provider(android.net.Uri uri) {
     java.util.Objects.requireNonNull(uri);
     if (!"content".equals(uri.getScheme()) || uri.getAuthority() == null) return null;

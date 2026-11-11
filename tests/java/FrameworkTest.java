@@ -2535,6 +2535,8 @@ public final class FrameworkTest {
     var battery = obbContext.registerReceiver(null, new android.content.IntentFilter(android.content.Intent.ACTION_BATTERY_CHANGED),
         android.content.Context.RECEIVER_EXPORTED);
     check(battery != null && battery.getIntExtra("level", -1) == 100, "flagged registration returns the sticky intent");
+    check(battery.getBooleanExtra("present", false) && battery.getIntExtra("temperature", 0) > 0,
+        "the sticky battery is present, so UE's BatteryReceiver dispatches its level");
     boolean bothExported = false;
     try {
       obbContext.registerReceiver(null, new android.content.IntentFilter("x"),
@@ -2851,6 +2853,11 @@ public final class FrameworkTest {
         .resolveType(obbContext.getContentResolver()).equals("image/png"), "content MIME queries reach the owned provider");
     check(obbContext.getContentResolver().getType(android.net.Uri.parse("content://missing/a")) == null,
         "absent content provider has no MIME type");
+    check(obbContext.getContentResolver().query(android.net.Uri.parse("content://org.khronos.openxr.runtime_broker/openxr/1"),
+        null, null, null, null, new android.os.CancellationSignal()) == null
+        && obbContext.getContentResolver().query(android.net.Uri.parse("content://missing/a"), null,
+            (android.os.Bundle) null, null) == null,
+        "cancellable queries of an absent provider return null (the Khronos OpenXR loader's broker lookup)");
     RuntimeEnvironment.get().contentProviders.put("test.images", new android.content.ContentProvider() {
       public boolean onCreate() { return true; }
       public String getType(android.net.Uri uri) {

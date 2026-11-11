@@ -71,5 +71,22 @@ XrResult xrCreateSwapchainAndroidSurfaceKHR(XrSession, const XrSwapchainCreateIn
 XrResult xrGetOpenGLESGraphicsRequirementsKHR(XrInstance, XrSystemId, GlesRequirements *);
 XrResult xrConvertTimespecTimeToTimeKHR(XrInstance, const Timespec *, XrTime *);
 XrResult xrConvertTimeToTimespecTimeKHR(XrInstance, XrTime, Timespec *);
+// openxr_loader_negotiation.h (LP64): a Khronos loader built into the game loads this library
+// as its runtime from the system manifest and negotiates through this entry point.
+struct NegotiateLoaderInfo {
+  std::uint32_t struct_type, struct_version;
+  std::size_t struct_size;
+  std::uint32_t min_interface_version, max_interface_version;
+  XrVersion min_api_version, max_api_version;
+};
+struct NegotiateRuntimeRequest {
+  std::uint32_t struct_type, struct_version;
+  std::size_t struct_size;
+  std::uint32_t runtime_interface_version;
+  XrVersion runtime_api_version;
+  std::uint64_t get_instance_proc_addr;
+};
+static_assert(sizeof(NegotiateLoaderInfo) == 40 && sizeof(NegotiateRuntimeRequest) == 40);
+XrResult xrNegotiateLoaderRuntimeInterface(const NegotiateLoaderInfo *, NegotiateRuntimeRequest *);
 } // namespace guest
 } // namespace venture::hle::openxr

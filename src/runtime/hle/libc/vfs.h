@@ -113,6 +113,8 @@ int resolve_path(std::string_view path, int dirfd, MappedPath* out);
 std::string cwd();
 int change_cwd(const char* path);
 std::string proc_file(std::string_view path, bool* exists);
+// The system OpenXR runtime manifest a Khronos loader built into the game falls back to.
+inline constexpr std::string_view openxr_runtime_manifest = "/system/etc/openxr/1/active_runtime.json";
 bool proc_directory(std::string_view path, std::vector<Dirent>* entries);
 std::uint32_t cpu_count();
 std::int64_t realtime_ns();
