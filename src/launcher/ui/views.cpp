@@ -1,6 +1,7 @@
 #include "launcher/app.h"
 #include "launcher/assets/controller_art.h"
 #include "launcher/store_link.h"
+#include "launcher/obs_mirror.h"
 #include "launcher/i18n/i18n.h"
 #include "launcher/ui/rich_text.h"
 #include "launcher/ui/style.h"
@@ -2461,6 +2462,39 @@ void App::draw_display_rows(library::DisplaySettings& d, bool per_game, const ch
       changed = true;
     }
   });
+#ifdef _WIN32
+  if (!per_game) {
+    // Recording in OBS: the OpenXR OBS Mirror layer loads into the runtime like
+    // into any OpenXR app (launcher/obs_mirror.h). Checked every few seconds,
+    // so an install or a toggle in its Control Center shows up here.
+    divider();
+    static ObsMirror obs;
+    static double obs_checked = -1;
+    if (obs_checked < 0 || ImGui::GetTime() - obs_checked > 3) {
+      obs = find_obs_mirror(implicit_openxr_layers());
+      obs_checked = ImGui::GetTime();
+    }
+    // i18n: Settings row: whether games can be recorded in OBS (the OpenXR OBS Mirror layer).
+    setting_row(tr("OBS recording"), "", dw, s(38), [&] {
+      if (obs.state == ObsMirror::State::ready) {
+        // i18n: OBS recording status: the OBS Mirror layer is installed and enabled.
+        badge(obs.version.empty() ? std::string(tr("OBS Mirror ready")) : std::format("{} {}", tr("OBS Mirror ready"), obs.version),
+              color::positive, color::alpha(color::positive, 0.15f), icons::check);
+      } else if (obs.state == ObsMirror::State::disabled) {
+        // i18n: OBS recording status: the layer is installed but turned off (its Control Center turns it on).
+        badge(tr("OBS Mirror turned off"), color::warning, color::alpha(color::warning, 0.15f), icons::warning);
+      } else {
+        // i18n: Button: opens the OpenXR OBS Mirror download page.
+        if (button(tr("Get OBS Mirror"), icons::download, Tone::secondary, {dw, s(38)}))
+          action([] { open_url(kObsMirrorUrl); });
+      }
+    }, [&] {
+      // i18n: Tooltip of the OBS recording row's help icon.
+      if (icon_button("obs-help", icons::info, tr("Recording VR games in OBS (opens OpenXR OBS Mirror)"), kHelpIcon))
+        action([] { open_url(kObsMirrorUrl); });
+    });
+  }
+#endif
   ImGui::PopID();
   if (changed) action([this] { save_settings(); });
 }
