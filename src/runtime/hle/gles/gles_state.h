@@ -146,6 +146,10 @@ bool try_gl_draw_dispatch(hle::CallContext& ctx);
 // would otherwise reuse binaries ANGLE rejects after a host GPU or driver change.
 std::string host_gl_version(std::string_view version, std::string_view renderer);
 void gl_error(GLenum error);
+// glShaderSource and glCreateShaderProgramv with integer varyings made flat.
+void guest_shader_source(GLuint shader, GLsizei count, const GLchar* const* strings,
+                         const GLint* lengths);
+GLuint guest_shader_program(GLenum type, GLsizei count, const GLchar* const* strings);
 void preserve_gl_errors();
 bool capture_gl_errors();
 hle::Handler texture_gl_handler(std::string_view name);
