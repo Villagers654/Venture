@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <format>
+#include <optional>
 #include <sstream>
 
 #include <vulkan/vulkan.h>
@@ -15,7 +16,7 @@
 #include "core/thread.h"
 #include "core/guest_storage.h"
 #include "core/process.h"
-#include "hle/gles/breathedge_flat_varyings.h"
+#include "hle/gles/flat_integer_varyings.h"
 #include "core/pipeline_stats.h"
 #include "core/wait.h"
 #include "hle/egl/egl.h"
@@ -403,31 +404,22 @@ struct ProgramTimer {
     }
   }
 };
-void breathedge_shader_source(GLuint shader, GLsizei count,
-                              const GLchar* const* strings, const GLint* lengths) {
-  const auto forward = angle_function<PFNGLSHADERSOURCEPROC, "glShaderSource">();
-  if (count <= 0 || !strings) {
-    forward(shader, count, strings, lengths);
-    return;
-  }
-  GLint type = 0;
-  angle_function<PFNGLGETSHADERIVPROC, "glGetShaderiv">()(shader, GL_SHADER_TYPE, &type);
-  if (type != GL_VERTEX_SHADER && type != GL_FRAGMENT_SHADER) {
-    forward(shader, count, strings, lengths);
-    return;
-  }
+// The joined source with integer varyings made flat, or nothing when the
+// source is unchanged (or unreadable, which ANGLE then reports itself).
+std::optional<std::string> flat_varying_source(GLenum type, GLsizei count,
+                                               const GLchar* const* strings, const GLint* lengths) {
+  if (count <= 0 || !strings || (type != GL_VERTEX_SHADER && type != GL_FRAGMENT_SHADER))
+    return std::nullopt;
   std::string original;
   for (GLsizei i = 0; i < count; ++i) {
-    if (!strings[i]) { forward(shader, count, strings, lengths); return; }
+    if (!strings[i]) return std::nullopt;
     if (lengths && lengths[i] >= 0) original.append(strings[i], std::size_t(lengths[i]));
     else original.append(strings[i]);
   }
-  const auto corrected = breathedge_flat_varyings(original, type == GL_VERTEX_SHADER);
-  if (corrected == original) { forward(shader, count, strings, lengths); return; }
-  const GLchar* data = corrected.data();
-  const GLint size = static_cast<GLint>(corrected.size());
-  forward(shader, 1, &data, &size);
-  log::info("gles", "Breathedge integer varying flat correction shader={} type={:#x}", shader, type);
+  auto corrected = flat_integer_varyings(original, type == GL_VERTEX_SHADER);
+  if (corrected == original) return std::nullopt;
+  log::debug("gles", "made integer varyings flat type={:#x}", type);
+  return corrected;
 }
 void compile_shader(GLuint shader) {
   static const auto fn = angle_function<PFNGLCOMPILESHADERPROC, "glCompileShader">();
@@ -571,10 +563,33 @@ bool capture_gl_errors() {
   }
   return ok;
 }
+void guest_shader_source(GLuint shader, GLsizei count, const GLchar* const* strings,
+                         const GLint* lengths) {
+  static const auto forward = angle_function<PFNGLSHADERSOURCEPROC, "glShaderSource">();
+  GLint type = 0;
+  if (count > 0 && strings && angle_function<PFNGLISSHADERPROC, "glIsShader">()(shader))
+    angle_function<PFNGLGETSHADERIVPROC, "glGetShaderiv">()(shader, GL_SHADER_TYPE, &type);
+  if (const auto corrected = flat_varying_source(GLenum(type), count, strings, lengths)) {
+    const GLchar* data = corrected->data();
+    const GLint size = static_cast<GLint>(corrected->size());
+    forward(shader, 1, &data, &size);
+    return;
+  }
+  forward(shader, count, strings, lengths);
+}
+GLuint guest_shader_program(GLenum type, GLsizei count, const GLchar* const* strings) {
+  static const auto forward =
+      angle_function<PFNGLCREATESHADERPROGRAMVPROC, "glCreateShaderProgramv">();
+  if (const auto corrected = flat_varying_source(type, count, strings, nullptr)) {
+    const GLchar* data = corrected->c_str();
+    return forward(type, 1, &data);
+  }
+  return forward(type, count, strings);
+}
 hle::Handler special_gl_handler(std::string_view name) {
-  if (name == "glShaderSource" && process_config().isa() == GuestIsa::a64 &&
-      process_config().package == "com.HypetrainDigitalLtd.Breathedge")
-    return wrap<&breathedge_shader_source>();
+  if (name == "glShaderSource") return wrap<&guest_shader_source>();
+  if (name == "glCreateShaderProgramv" || name == "glCreateShaderProgramvEXT")
+    return wrap<&guest_shader_program>();
   if (name == "glLabelObjectEXT") return wrap<&label_object>();
   if (name == "glGetObjectLabelEXT") return wrap<&get_object_label>();
   if (name == "glGetString")

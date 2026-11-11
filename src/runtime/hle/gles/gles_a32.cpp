@@ -21,7 +21,7 @@ void shader_source(GLuint shader, GLsizei count, const std::uint32_t* input, con
   if (count < 0) { gl_error(GL_INVALID_VALUE); return; }
   if (count && !input) { gl_error(GL_INVALID_VALUE); return; }
   auto strings = strings32(count, input);
-  angle_function<PFNGLSHADERSOURCEPROC, "glShaderSource">()(shader, count, strings.data(), lengths);
+  guest_shader_source(shader, count, strings.data(), lengths);
 }
 void varyings(GLuint program, GLsizei count, const std::uint32_t* input, GLenum mode) {
   if (count < 0) { gl_error(GL_INVALID_VALUE); return; }
@@ -39,7 +39,7 @@ GLuint shader_program(GLenum type, GLsizei count, const std::uint32_t* input) {
   if (count < 0) { gl_error(GL_INVALID_VALUE); return 0; }
   if (count && !input) { gl_error(GL_INVALID_VALUE); return 0; }
   auto strings = strings32(count, input);
-  return angle_function<PFNGLCREATESHADERPROGRAMVPROC, "glCreateShaderProgramv">()(type, count, strings.data());
+  return guest_shader_program(type, count, strings.data());
 }
 void vertex_pointer(GLuint index, GLenum name, std::uint32_t* out) {
   if (!out) return;

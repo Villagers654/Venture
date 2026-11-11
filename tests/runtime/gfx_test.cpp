@@ -24,7 +24,7 @@
 #include "gfx/dispatch.h"
 #include "gfx/gpu_device.h"
 #include "hle/gles/gles_state.h"
-#include "hle/gles/breathedge_flat_varyings.h"
+#include "hle/gles/flat_integer_varyings.h"
 #include "gfx/gpu_device_internal.h"
 #include "gfx/spirv_precision.h"
 #include "gfx/texture_decode.h"
@@ -1715,24 +1715,31 @@ TEST_CASE("gfx guest no-error contexts follow KHR_no_error over validated ANGLE"
 }
 
 
-TEST_CASE("Breathedge integer varying repair preserves stage interfaces") {
+TEST_CASE("gfx integer varying repair preserves stage interfaces") {
+  using venture::gfx::flat_integer_varyings;
   const std::string source="#version 310 es\nout highp uint eye;\nin highp uint attribute;\nout vec4 color;\nflat out int ready;\nvoid f(out int argument) {}\n";
-  const auto vertex=breathedge_flat_varyings(source,true);
+  const auto vertex=flat_integer_varyings(source,true);
   CHECK(vertex.find("flat out highp uint eye;")!=std::string::npos);
   CHECK(vertex.find("\nin highp uint attribute;")!=std::string::npos);
   CHECK(vertex.find("out vec4 color;")!=std::string::npos);
   CHECK(vertex.find("flat flat")==std::string::npos);
   CHECK(vertex.find("void f(out int argument) {}")!=std::string::npos);
-  CHECK(breathedge_flat_varyings(vertex,true)==vertex);
-  const auto fragment=breathedge_flat_varyings(source,false);
+  CHECK(flat_integer_varyings(vertex,true)==vertex);
+  const auto fragment=flat_integer_varyings(source,false);
   CHECK(fragment.find("flat in highp uint attribute;")!=std::string::npos);
   CHECK(fragment.find("\nout highp uint eye;")!=std::string::npos);
-  CHECK(breathedge_flat_varyings("layout(location=2) out mediump uvec4 data[2];\n",true)=="layout(location=2) flat out mediump uvec4 data[2];\n");
+  CHECK(flat_integer_varyings("layout(location=2) out mediump uvec4 data[2];\n",true)=="layout(location=2) flat out mediump uvec4 data[2];\n");
+  CHECK(flat_integer_varyings("  smooth out ivec2 cell;\r\n",true)=="  flat out ivec2 cell;\r\n");
+  CHECK(flat_integer_varyings("out uint eye;",true)=="flat out uint eye;");
+  // Untouched: interface blocks, floats, the other stage, flat already, num_views.
+  for (const char* kept : {"out Block { uint eye; } block;\n", "out highp vec4 color;\n", "in uint eye;\n",
+                           "flat out uint eye;\n", "layout(num_views=2) in;\n", "out uintx eye;\n",
+                           "#version 100\nvarying highp float v;\n", ""})
+    CHECK(flat_integer_varyings(kept,true)==kept);
 }
-// Run alone with VENTURE_BREATHEDGE_GPU_TEST=1 and VENTURE_ANGLE_DIR set.
-TEST_CASE("Breathedge original integer varying shaders link and render on ANGLE") {
-  if (!have_angle() || !std::getenv("VENTURE_BREATHEDGE_GPU_TEST")) return;
-  process_config().package="com.HypetrainDigitalLtd.Breathedge";
+// Run alone with VENTURE_FLAT_VARYING_GPU_TEST=1 and VENTURE_ANGLE_DIR set.
+TEST_CASE("gfx integer varyings without flat link and render on ANGLE") {
+  if (!have_angle() || !std::getenv("VENTURE_FLAT_VARYING_GPU_TEST")) return;
   EglSession egl;
   const char* sources[]{
     "#version 300 es\nout highp uint eye;\nvoid main(){vec2 p=vec2((gl_VertexID<<1)&2,gl_VertexID&2);gl_Position=vec4(p*2.-1.,0,1);eye=1u;}\n",

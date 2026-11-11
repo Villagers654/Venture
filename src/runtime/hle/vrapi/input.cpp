@@ -1,6 +1,5 @@
 #include "xr/menu_chord.h"
-#include "core/process.h"
-#include "hle/vrapi/breathedge_input.h"
+#include "hle/vrapi/stick_directions.h"
 #include "core/av_telemetry.h"
 #include "xr/haptic_output.h"
 #include "hle/openxr/state.h"
@@ -283,10 +282,9 @@ std::int32_t vrapi_GetInputDeviceCapabilities(Mobile *mobile, InputHeader *out) 
     caps->capabilities = 1 | 2 | (id == 1 ? 4 : 8) | 0x40 | 0x80 | 0x200 | 0x400 | 0x2000 | 0x4000;
     caps->haptic_max = 256;
     caps->haptic_ms = 4;
-    caps->buttons =
-        0x20000000 | 0x04000000 | 0x80000000 | (id == 1 ? 0x100 | 0x200 | 0x100000 : 1 | 2);
+    caps->buttons = 0x20000000 | 0x04000000 | 0x80000000 | stick_direction_mask |
+                    (id == 1 ? 0x100 | 0x200 | 0x100000 : 1 | 2);
     caps->touches = 0x40 | 0x20 | (id == 1 ? 4 | 8 : 1 | 2);
-    caps->buttons |= breathedge_horizontal_button_mask(process_config().package, id);
     return success;
   }
   if (out->type == 32 && id >= 3 && id <= 4 && state().input.hands_supported) {
@@ -329,7 +327,7 @@ std::int32_t vrapi_GetCurrentInputState(Mobile *mobile, std::uint32_t id, InputS
       if (std::hypot(stick.currentState.x, stick.currentState.y) >= 0.1f)
         remote->joystick = remote->raw_joystick;
     }
-    remote->buttons |= breathedge_horizontal_buttons(process_config().package, id, remote->joystick.x);
+    remote->buttons |= stick_direction_buttons(remote->joystick.x, remote->joystick.y);
     if (av::enabled()) {
       using Clock = std::chrono::steady_clock;
       static std::array<Clock::time_point, 2> reported{}; // protected by state().mutex
