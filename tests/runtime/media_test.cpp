@@ -608,8 +608,9 @@ TEST_CASE("video-only player follows consumed audio time through pause seek loop
   REQUIRE(player.seek(700000)==0);CHECK(player.position_us()==700000);
   required_floor=700000;player.loop(false);REQUIRE(player.start()==0);
   // This is a new playback interval. Time spent establishing the first loop
-  // and pausing must not consume the seek/EOS phase's pumping budget.
-  deadline=std::chrono::steady_clock::now()+std::chrono::seconds(5);
+  // and pausing must not consume the seek/EOS phase's pumping budget. It ends at EOS
+  // (about 0.3 s); the long bound only covers a busy CI runner.
+  deadline=std::chrono::steady_clock::now()+std::chrono::seconds(30);
   while(!player.completed() && std::chrono::steady_clock::now()<deadline)pump();
   CHECK(player.completed());CHECK(player.position_us()==1000000);CHECK(player.error()==0);
   required_floor=0;REQUIRE(player.start()==0);player.release();player.release();CHECK_FALSE(player.playing());
@@ -624,7 +625,8 @@ TEST_CASE("AV player keeps video on the consumption clock after its shorter audi
   });
   REQUIRE(player.source(video_input(VENTURE_AV_FIXTURE))==0);REQUIRE(player.prepare()==0);
   REQUIRE(player.duration_us()==1000000);REQUIRE(player.start()==0);
-  auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(5);
+  // Ends at EOS (about 1 s); a busy release runner reached 0.98 s within 5 s once.
+  auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(30);
   while(!player.completed() && std::chrono::steady_clock::now()<deadline)pump();
   CHECK(player.completed());CHECK(player.error()==0);
   CHECK(player.stream()->non_silent_written>0);CHECK(player.position_us()==1000000);
