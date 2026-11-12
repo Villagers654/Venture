@@ -799,6 +799,16 @@ XrResult xrCreateSession(XrInstance instance, const XrSessionCreateInfo *info, X
   }
   return result;
 }
+// Destroys the host copies of guest-destroyed spaces that this frame (null: none) does not submit.
+void destroy_retired_spaces(const XrFrameEndInfo* frame) {
+  std::erase_if(state().retired_spaces, [&](XrSpace space) {
+    for (std::uint32_t i = 0; frame && i < frame->layerCount; ++i)
+      if (frame->layers[i] && frame->layers[i]->space == space) return false;
+    session().finish_host_end();
+    ::xrDestroySpace(space);
+    return true;
+  });
+}
 XrResult xrDestroySession(XrSession handle) {
   std::lock_guard lock(state().mutex);
   std::lock_guard session_lock(session().mutex);
@@ -814,6 +824,7 @@ XrResult xrDestroySession(XrSession handle) {
     if (XR_FAILED(result))
       return result;
   }
+  destroy_retired_spaces(nullptr);
   venture::xr::cancel_sequence(handle);
   venture::xr::clear_haptic_bindings(handle);
   auto result = session().destroy(SessionOwner::openxr);
@@ -863,6 +874,18 @@ XrReferenceSpaceCreateInfo emulated_local_floor(XrSession handle, XrReferenceSpa
   return native;
 }
 }  // namespace
+XrResult xrDestroySpace(XrSpace space) {
+  std::lock_guard lock(state().mutex);
+  if (!valid_handle(space, "XrSpace")) return XR_ERROR_HANDLE_INVALID;
+  forget_handle(space);
+  // The host copy stays until no submitted frame uses it (destroy_retired_spaces).
+  if (session().handle) {
+    state().retired_spaces.push_back(space);
+    return XR_SUCCESS;
+  }
+  session().finish_host_end();
+  return ::xrDestroySpace(space);
+}
 XrResult xrCreateReferenceSpace(XrSession handle, const XrReferenceSpaceCreateInfo* info,
                                 XrSpace* out) {
   std::lock_guard lock(state().mutex);
@@ -1168,6 +1191,7 @@ XrResult xrEndFrame(XrSession handle, const XrFrameEndInfo *info) {
   if (XR_FAILED(validate_struct(info, XR_TYPE_FRAME_END_INFO)) ||
       (info->layerCount && !info->layers))
     return XR_ERROR_VALIDATION_FAILURE;
+  if (!state().retired_spaces.empty()) destroy_retired_spaces(info);
   {
     auto& probe = space_probe();
     if (recenter_frames.load(std::memory_order_relaxed) >= 0) {
@@ -1252,7 +1276,14 @@ XrResult xrEndFrame(XrSession handle, const XrFrameEndInfo *info) {
       if (XR_FAILED(result)) return result;
       layer = static_cast<const XrCompositionLayerBaseHeader*>(chains.back().head());
     }
-    if (!layer || (!passthrough_layer && !valid_handle(layer->space, "XrSpace")) ||
+    bool space_ok = passthrough_layer || (layer && valid_handle(layer->space, "XrSpace"));
+    if (!space_ok && layer && std::ranges::contains(state().retired_spaces, layer->space)) {
+      space_ok = true;
+      static std::atomic_flag reported = ATOMIC_FLAG_INIT;
+      if (!reported.test_and_set(std::memory_order_relaxed))
+        log::info("xr", "The game submitted a frame on a space it had just destroyed (a recenter); the frame is kept");
+    }
+    if (!layer || !space_ok ||
         XR_FAILED(converted ? validate_chain(layer->next) : validate_chain(layer))) {
       static unsigned reports = 0;
       if (reports++ < 8)
