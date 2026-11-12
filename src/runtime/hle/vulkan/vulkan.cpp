@@ -1415,9 +1415,12 @@ VkResult create_device_impl(VkPhysicalDevice physical, const VkDeviceCreateInfo*
   const bool fault_enabled = fault.deviceFault;
   VkPhysicalDeviceRobustness2FeaturesEXT robust2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ROBUSTNESS_2_FEATURES_EXT};
   VkPhysicalDeviceImageRobustnessFeatures image_robust{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_ROBUSTNESS_FEATURES};
-  // Opt-in diagnostic. Preserve guest-requested features when disabled, and
-  // keep internal extensions and feature changes out of guest capabilities.
-  if (const auto* setting = venture::environment::getenv("VENTURE_VULKAN_ROBUST_ACCESS"); setting && std::string_view(setting) == "1") {
+  // Games built for Quest can read past a buffer or image: Adreno returns zeros, a PC GPU
+  // without robustness takes a page fault and loses the device (H3VR2 on AMD when an NPC
+  // is shot). On by default; VENTURE_VULKAN_ROBUST_ACCESS=0 turns it off. Preserve
+  // guest-requested features when off, and keep internal extensions and feature changes
+  // out of guest capabilities.
+  if (const auto* setting = venture::environment::getenv("VENTURE_VULKAN_ROBUST_ACCESS"); !setting || std::string_view(setting) != "0") {
     VkPhysicalDeviceFeatures supported{};
     host<PFN_vkGetPhysicalDeviceFeatures>(physical, "vkGetPhysicalDeviceFeatures")(physical, &supported);
     auto& enabled = base_features ? base_features->features : features;
@@ -1471,7 +1474,7 @@ VkResult create_device_impl(VkPhysicalDevice physical, const VkDeviceCreateInfo*
       if (has_extension(VK_EXT_IMAGE_ROBUSTNESS_EXTENSION_NAME))
         add_extension(VK_EXT_IMAGE_ROBUSTNESS_EXTENSION_NAME);
     }
-    log::info("vulkan-robustness", "Host diagnostic enabled buffer={} buffer2={} image={} image2={}",
+    log::info("vulkan-robustness", "GPU bounds checks enabled buffer={} buffer2={} image={} image2={}",
         bool(enabled.robustBufferAccess), bool(robust2.robustBufferAccess2),
         bool(image_robust.robustImageAccess), bool(robust2.robustImageAccess2));
   }
