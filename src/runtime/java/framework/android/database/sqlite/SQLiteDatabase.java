@@ -95,6 +95,34 @@ public final class SQLiteDatabase extends SQLiteClosable {
     }
   }
   public void setVersion(int version) { execSQL("PRAGMA user_version = " + version); }
+  public boolean needUpgrade(int newVersion) { return newVersion > getVersion(); }
+  private long pragmaLong(String sql) {
+    try (Cursor c = rawQuery(sql, null)) {
+      return c.moveToFirst() ? c.getLong(0) : 0;
+    }
+  }
+  /** AOSP: max_page_count times page_size; the size is rounded up to whole pages. */
+  public long getMaximumSize() { return pragmaLong("PRAGMA max_page_count;") * getPageSize(); }
+  public long setMaximumSize(long numBytes) {
+    long pageSize = getPageSize();
+    long numPages = numBytes / pageSize;
+    if ((numBytes % pageSize) != 0) numPages++;
+    return pragmaLong("PRAGMA max_page_count = " + numPages + ";") * pageSize;
+  }
+  public long getPageSize() { return pragmaLong("PRAGMA page_size;"); }
+  public void setPageSize(long numBytes) { execSQL("PRAGMA page_size = " + numBytes); }
+  public void setForeignKeyConstraintsEnabled(boolean enable) {
+    execSQL("PRAGMA foreign_keys = " + (enable ? "ON" : "OFF"));
+  }
+  /** Android collation locales are an ICU table here SQLite has none of; the default collation stays. */
+  public void setLocale(java.util.Locale locale) {
+    if (locale == null) throw new IllegalArgumentException("locale must not be null.");
+  }
+  public boolean isDatabaseIntegrityOk() {
+    try (Cursor c = rawQuery("PRAGMA integrity_check(1);", null)) {
+      return c.moveToFirst() && "ok".equalsIgnoreCase(c.getString(0));
+    }
+  }
   public static final int MAX_SQL_CACHE_SIZE = 100;
   /** Android's prepared-statement cache bound; SQLite here prepares each statement on use. */
   public void setMaxSqlCacheSize(int cacheSize) {
@@ -230,6 +258,15 @@ public final class SQLiteDatabase extends SQLiteClosable {
                                  String orderBy, String limit) {
     return rawQueryWithFactory(cursorFactory,
         buildQueryString(distinct, table, columns, selection, groupBy, having, orderBy, limit), selectionArgs, table);
+  }
+  /** AOSP: the first table of a join or table list. */
+  public static String findEditTable(String tables) {
+    if (tables == null || tables.isEmpty()) throw new IllegalStateException("Invalid tables");
+    int spacepos = tables.indexOf(' ');
+    int commapos = tables.indexOf(',');
+    if (spacepos > 0 && (spacepos < commapos || commapos < 0)) return tables.substring(0, spacepos);
+    if (commapos > 0 && (commapos < spacepos || spacepos < 0)) return tables.substring(0, commapos);
+    return tables;
   }
   // AOSP SQLiteQueryBuilder.buildQueryString.
   static String buildQueryString(boolean distinct, String tables, String[] columns, String where, String groupBy,

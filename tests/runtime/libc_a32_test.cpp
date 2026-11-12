@@ -201,6 +201,36 @@ TEST_CASE("A32 sorting callbacks receive low ARM pointers and preserve size_t wi
   CHECK(call("bsearch", {std::uint32_t(memory.address + 64), std::uint32_t(memory.address), 6, 4,
                           std::uint32_t(code.address)}) == 0);
 }
+TEST_CASE("A32 iconv handles are guest addresses and its cursors stay 32-bit") {
+  test::LowMemory32 memory;
+  auto p = std::uint32_t(memory.address);
+  auto* words = memory.at<std::uint32_t>();
+  auto* errno_cell = GuestThread::adopt_current().errno_location();
+  std::strcpy(memory.at<char>(0), "UTF-16BE"); std::strcpy(memory.at<char>(32), "u.t.f-008");
+  std::strcpy(memory.at<char>(48), "UTF-16");
+  std::memcpy(memory.at<char>(64), "A\xe2\x82\xac", 4);
+  *errno_cell = 0;
+  CHECK(call("iconv_open", {p, p + 48}) == UINT32_MAX);
+  CHECK(*errno_cell == err::kEINVAL);
+  auto cd = call("iconv_open", {p, p + 32});
+  REQUIRE(cd != UINT32_MAX); REQUIRE(cd != 0);
+  words[32] = p + 64; words[33] = 4; words[34] = 0xfeedbeef; // in, in_left, guard
+  words[35] = p + 256; words[36] = 3; words[37] = 0xfeedbeef; // out, out_left, guard
+  *errno_cell = 0;
+  CHECK(call("iconv", {cd, p + 128, p + 132, p + 140, p + 144}) == UINT32_MAX);
+  CHECK(*errno_cell == err::kE2BIG);
+  CHECK(words[32] == p + 65); CHECK(words[33] == 3); CHECK(words[34] == 0xfeedbeef);
+  CHECK(words[35] == p + 258); CHECK(words[36] == 1); CHECK(words[37] == 0xfeedbeef);
+  words[36] = 8;
+  CHECK(call("iconv", {cd, p + 128, p + 132, p + 140, p + 144}) == 0);
+  CHECK(words[33] == 0); CHECK(words[36] == 6);
+  CHECK(std::memcmp(memory.at<char>(256), "\x00\x41\x20\xac", 4) == 0);
+  CHECK(call("iconv", {cd, 0, 0, 0, 0}) == 0);
+  CHECK(call("iconv_close", {cd}) == 0);
+  *errno_cell = 0;
+  CHECK(call("iconv_close", {UINT32_MAX}) == UINT32_MAX);
+  CHECK(*errno_cell == err::kEBADF);
+}
 TEST_CASE("A32 socket records, poll and socklen outputs retain wire boundaries") {
   test::LowMemory32 memory;
   auto p = std::uint32_t(memory.address);
@@ -539,4 +569,24 @@ TEST_CASE("A32 sendmsg and recvmsg carry 28-byte msghdr and 8-byte iovec records
   CHECK(call("sendmmsg", {a, p + 384, 1, 0}) == 1);
   CHECK(words[(384 + 28) / 4] == 7); CHECK(words[(384 + 32) / 4] == 0xa5a5a5a5);
   CHECK(call("recvmsg", {b, p + 320, 0}) == 7);
+}
+TEST_CASE("A32 libm keeps bionic's legacy isnan/isinf exports callable") {
+  // libOculusXRPlugin (Unity OpenXR Oculus plugin) imports isnan; it was a SIGSYS trap.
+  static HleLibrary libm("libm.so");
+  static const bool initialized = [] { hle::libc::register_libm(libm); return true; }();
+  (void)initialized;
+  auto words = [](double v) {
+    const auto bits = std::bit_cast<std::uint64_t>(v);
+    return std::pair{std::uint32_t(bits), std::uint32_t(bits >> 32)};  // softfp: r0:r1
+  };
+  for (auto name : {"isnan", "__isnan"}) {
+    auto [lo, hi] = words(std::numeric_limits<double>::quiet_NaN());
+    CHECK(call(libm, name, {lo, hi}) != 0);
+    std::tie(lo, hi) = words(1.5);
+    CHECK(call(libm, name, {lo, hi}) == 0);
+  }
+  auto [lo, hi] = words(-std::numeric_limits<double>::infinity());
+  CHECK(call(libm, "isinf", {lo, hi}) != 0);
+  CHECK(call(libm, "__isnanf", {std::bit_cast<std::uint32_t>(std::numeric_limits<float>::quiet_NaN())}) != 0);
+  CHECK(call(libm, "__isnanf", {std::bit_cast<std::uint32_t>(2.0f)}) == 0);
 }

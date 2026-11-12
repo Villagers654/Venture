@@ -23,6 +23,7 @@ using EGLenum = unsigned int;
 #include "xr/frame_hitches.h"
 #include "xr/session.h"
 #include "xr/display_override.h"
+#include "xr/eye_scale.h"
 #include "xr/desktop_mirror.h"
 #include "common/library/display.h"
 #include "common/paths.h"
@@ -770,6 +771,335 @@ TEST_CASE("XR PCM haptics use core vibration when the host's PCM sample rate is 
   venture::xr::install_xr_images(nullptr);
 }
 
+TEST_CASE("XR boundary visibility is negotiable and stays visible without passthrough") {
+  venture::test::XrImageFixture interop;
+  venture::xr::install_xr_images(&interop);
+  // Part of Civilization VII's fixed instance list, with GLES standing in for Vulkan.
+  const char* extensions[]{"XR_KHR_opengl_es_enable", "XR_EXT_performance_settings", "XR_KHR_android_thread_settings",
+                           "XR_FB_display_refresh_rate", "XR_META_recommended_layer_resolution",
+                           "XR_META_boundary_visibility", "XR_FB_composition_layer_settings"};
+  XrInstanceCreateInfo create{XR_TYPE_INSTANCE_CREATE_INFO};
+  create.applicationInfo.apiVersion = XR_MAKE_VERSION(1, 0, 0);
+  create.enabledExtensionNames = extensions;
+  create.enabledExtensionCount = 7;
+  XrInstance instance{};
+  REQUIRE(xg::xrCreateInstance(&create, &instance) == XR_SUCCESS);
+  XrSystemBoundaryVisibilityPropertiesMETA boundary{XR_TYPE_SYSTEM_BOUNDARY_VISIBILITY_PROPERTIES_META};
+  XrSystemProperties properties{XR_TYPE_SYSTEM_PROPERTIES, &boundary};
+  REQUIRE(xg::xrGetSystemProperties(instance, venture::xr::host_xr().system, &properties) == XR_SUCCESS);
+  CHECK(boundary.supportsBoundaryVisibility == XR_TRUE);
+  PFN_xrVoidFunction proc{};
+  REQUIRE(xg::xrGetInstanceProcAddr(instance, "xrRequestBoundaryVisibilityMETA", &proc) == XR_SUCCESS);
+  CHECK(proc != nullptr);
+  xg::GlesBinding binding{XR_TYPE_GRAPHICS_BINDING_OPENGL_ES_ANDROID_KHR, nullptr, 1, 2, 3};
+  XrSessionCreateInfo session_info{XR_TYPE_SESSION_CREATE_INFO, &binding, 0, 1};
+  XrSession session{};
+  REQUIRE(xg::xrCreateSession(instance, &session_info, &session) == XR_SUCCESS);
+  CHECK(xg::xrRequestBoundaryVisibilityMETA(session, XR_BOUNDARY_VISIBILITY_NOT_SUPPRESSED_META) == XR_SUCCESS);
+  CHECK(xg::xrRequestBoundaryVisibilityMETA(session, XR_BOUNDARY_VISIBILITY_SUPPRESSED_META) ==
+        XR_BOUNDARY_VISIBILITY_SUPPRESSION_NOT_ALLOWED_META);
+  CHECK(xg::xrRequestBoundaryVisibilityMETA(session, XrBoundaryVisibilityMETA(7)) == XR_ERROR_VALIDATION_FAILURE);
+  CHECK(xg::xrRequestBoundaryVisibilityMETA(XrSession{}, XR_BOUNDARY_VISIBILITY_NOT_SUPPRESSED_META) == XR_ERROR_HANDLE_INVALID);
+  ox::state().enabled.erase("XR_META_boundary_visibility");
+  CHECK(xg::xrGetInstanceProcAddr(instance, "xrRequestBoundaryVisibilityMETA", &proc) == XR_ERROR_FUNCTION_UNSUPPORTED);
+  CHECK(xg::xrRequestBoundaryVisibilityMETA(session, XR_BOUNDARY_VISIBILITY_NOT_SUPPRESSED_META) == XR_ERROR_FUNCTION_UNSUPPORTED);
+  ox::state().enabled.insert("XR_META_boundary_visibility");
+  CHECK(xg::xrDestroySession(session) == XR_SUCCESS);
+  CHECK(xg::xrDestroyInstance(instance) == XR_SUCCESS);
+  venture::xr::install_xr_images(nullptr);
+}
+
+namespace {
+// Civilization VII's instance list, with GLES standing in for Vulkan.
+const char* const kCivExtensions[]{"XR_KHR_opengl_es_enable", "XR_EXT_performance_settings",
+    "XR_KHR_android_thread_settings", "XR_FB_display_refresh_rate", "XR_META_recommended_layer_resolution",
+    "XR_META_boundary_visibility", "XR_EXT_hand_tracking", "XR_EXT_hand_joints_motion_range",
+    "XR_EXT_hand_tracking_data_source", "XR_EXT_debug_utils", "XR_FB_passthrough", "XR_FB_spatial_entity",
+    "XR_FB_spatial_entity_query", "XR_FB_spatial_entity_storage", "XR_FB_scene", "XR_FB_scene_capture"};
+XrEventDataBuffer next_event(XrInstance instance) {
+  XrEventDataBuffer event{XR_TYPE_EVENT_DATA_BUFFER};
+  REQUIRE(xg::xrPollEvent(instance, &event) == XR_SUCCESS);
+  return event;
+}
+template <class E> E as_event(const XrEventDataBuffer& buffer) {
+  E event;
+  std::memcpy(&event, &buffer, sizeof(event));
+  return event;
+}
+}  // namespace
+
+TEST_CASE("XR spatial entities work in process as a Quest without a room setup") {
+  venture::test::XrImageFixture interop;
+  venture::xr::install_xr_images(&interop);
+  XrInstanceCreateInfo create{XR_TYPE_INSTANCE_CREATE_INFO};
+  create.applicationInfo.apiVersion = XR_MAKE_VERSION(1, 0, 0);
+  create.enabledExtensionNames = kCivExtensions;
+  create.enabledExtensionCount = std::uint32_t(std::size(kCivExtensions));
+  XrInstance instance{};
+  REQUIRE(xg::xrCreateInstance(&create, &instance) == XR_SUCCESS);
+  XrSystemSpatialEntityPropertiesFB entity{XR_TYPE_SYSTEM_SPATIAL_ENTITY_PROPERTIES_FB};
+  XrSystemProperties properties{XR_TYPE_SYSTEM_PROPERTIES, &entity};
+  REQUIRE(xg::xrGetSystemProperties(instance, venture::xr::host_xr().system, &properties) == XR_SUCCESS);
+  CHECK(entity.supportsSpatialEntity == XR_TRUE);
+  xg::GlesBinding binding{XR_TYPE_GRAPHICS_BINDING_OPENGL_ES_ANDROID_KHR, nullptr, 1, 2, 3};
+  XrSessionCreateInfo session_info{XR_TYPE_SESSION_CREATE_INFO, &binding, 0, 1};
+  XrSession session{};
+  REQUIRE(xg::xrCreateSession(instance, &session_info, &session) == XR_SUCCESS);
+  XrReferenceSpaceCreateInfo ri{XR_TYPE_REFERENCE_SPACE_CREATE_INFO, nullptr, XR_REFERENCE_SPACE_TYPE_LOCAL,
+                                {{0, 0, 0, 1}, {0, 0, 0}}};
+  XrSpace local{};
+  REQUIRE(xg::xrCreateReferenceSpace(session, &ri, &local) == XR_SUCCESS);
+  ri.poseInReferenceSpace.position = {0, 0, -1};
+  XrSpace shifted{};
+  REQUIRE(xg::xrCreateReferenceSpace(session, &ri, &shifted) == XR_SUCCESS);
+  const XrTime time = 1'000'000;
+
+  // An anchor is placed relative to its space and stays where it was placed.
+  XrSpatialAnchorCreateInfoFB anchor_info{XR_TYPE_SPATIAL_ANCHOR_CREATE_INFO_FB, nullptr, shifted,
+                                          {{0, 0, 0, 1}, {1, 0, 0}}, time};
+  XrAsyncRequestIdFB request{};
+  anchor_info.poseInSpace.orientation.w = 2;
+  CHECK(xg::xrCreateSpatialAnchorFB(session, &anchor_info, &request) == XR_ERROR_POSE_INVALID);
+  anchor_info.poseInSpace.orientation.w = 1;
+  anchor_info.time = 0;
+  CHECK(xg::xrCreateSpatialAnchorFB(session, &anchor_info, &request) == XR_ERROR_TIME_INVALID);
+  anchor_info.time = time;
+  REQUIRE(xg::xrCreateSpatialAnchorFB(session, &anchor_info, &request) == XR_SUCCESS);
+  auto created = as_event<XrEventDataSpatialAnchorCreateCompleteFB>(next_event(instance));
+  REQUIRE(created.type == XR_TYPE_EVENT_DATA_SPATIAL_ANCHOR_CREATE_COMPLETE_FB);
+  CHECK(created.requestId == request);
+  REQUIRE(created.result == XR_SUCCESS);
+  REQUIRE(created.space != XR_NULL_HANDLE);
+  const XrSpace anchor = created.space;
+  XrSpaceLocation where{XR_TYPE_SPACE_LOCATION};
+  REQUIRE(xg::xrLocateSpace(anchor, local, time, &where) == XR_SUCCESS);
+  CHECK(where.locationFlags == 15);
+  CHECK(where.pose.position.x == doctest::Approx(1));
+  CHECK(where.pose.position.z == doctest::Approx(-1));
+  XrUuidEXT uuid{};
+  REQUIRE(xg::xrGetSpaceUuidFB(anchor, &uuid) == XR_SUCCESS);
+  CHECK(std::memcmp(uuid.data, created.uuid.data, XR_UUID_SIZE_EXT) == 0);
+  CHECK((uuid.data[6] >> 4) == 4);
+  CHECK(xg::xrGetSpaceUuidFB(local, &uuid) == XR_ERROR_VALIDATION_FAILURE);
+
+  // Components: an anchor is locatable and storable, both enabled; other spaces have none.
+  std::uint32_t count = 0;
+  XrSpaceComponentTypeFB types[4]{};
+  REQUIRE(xg::xrEnumerateSpaceSupportedComponentsFB(anchor, 0, &count, nullptr) == XR_SUCCESS);
+  CHECK(count == 2);
+  CHECK(xg::xrEnumerateSpaceSupportedComponentsFB(anchor, 1, &count, types) == XR_ERROR_SIZE_INSUFFICIENT);
+  REQUIRE(xg::xrEnumerateSpaceSupportedComponentsFB(anchor, 4, &count, types) == XR_SUCCESS);
+  CHECK(types[0] == XR_SPACE_COMPONENT_TYPE_LOCATABLE_FB);
+  CHECK(types[1] == XR_SPACE_COMPONENT_TYPE_STORABLE_FB);
+  REQUIRE(xg::xrEnumerateSpaceSupportedComponentsFB(local, 0, &count, nullptr) == XR_SUCCESS);
+  CHECK(count == 0);
+  XrSpaceComponentStatusFB status{XR_TYPE_SPACE_COMPONENT_STATUS_FB};
+  REQUIRE(xg::xrGetSpaceComponentStatusFB(anchor, XR_SPACE_COMPONENT_TYPE_LOCATABLE_FB, &status) == XR_SUCCESS);
+  CHECK(status.enabled == XR_TRUE);
+  CHECK(status.changePending == XR_FALSE);
+  CHECK(xg::xrGetSpaceComponentStatusFB(anchor, XR_SPACE_COMPONENT_TYPE_SHARABLE_FB, &status) ==
+        XR_ERROR_SPACE_COMPONENT_NOT_SUPPORTED_FB);
+  CHECK(xg::xrGetSpaceComponentStatusFB(local, XR_SPACE_COMPONENT_TYPE_LOCATABLE_FB, &status) ==
+        XR_ERROR_SPACE_COMPONENT_NOT_SUPPORTED_FB);
+  XrSpaceComponentStatusSetInfoFB set{XR_TYPE_SPACE_COMPONENT_STATUS_SET_INFO_FB, nullptr,
+                                      XR_SPACE_COMPONENT_TYPE_LOCATABLE_FB, XR_TRUE, 0};
+  CHECK(xg::xrSetSpaceComponentStatusFB(anchor, &set, &request) == XR_ERROR_SPACE_COMPONENT_STATUS_ALREADY_SET_FB);
+  set.enabled = XR_FALSE;
+  REQUIRE(xg::xrSetSpaceComponentStatusFB(anchor, &set, &request) == XR_SUCCESS);
+  auto changed = as_event<XrEventDataSpaceSetStatusCompleteFB>(next_event(instance));
+  CHECK(changed.type == XR_TYPE_EVENT_DATA_SPACE_SET_STATUS_COMPLETE_FB);
+  CHECK(changed.requestId == request);
+  CHECK(changed.result == XR_SUCCESS);
+  CHECK(changed.space == anchor);
+  CHECK(changed.enabled == XR_FALSE);
+  REQUIRE(xg::xrLocateSpace(anchor, local, time, &where) == XR_SUCCESS);
+  CHECK(where.locationFlags == 0);
+  set.enabled = XR_TRUE;
+  REQUIRE(xg::xrSetSpaceComponentStatusFB(anchor, &set, &request) == XR_SUCCESS);
+  CHECK(next_event(instance).type == XR_TYPE_EVENT_DATA_SPACE_SET_STATUS_COMPLETE_FB);
+
+  // Storage: a LOCAL save lasts for the process and a query by UUID finds the same space.
+  XrSpaceSaveInfoFB save{XR_TYPE_SPACE_SAVE_INFO_FB, nullptr, anchor, XR_SPACE_STORAGE_LOCATION_LOCAL_FB,
+                         XR_SPACE_PERSISTENCE_MODE_INDEFINITE_FB};
+  REQUIRE(xg::xrSaveSpaceFB(session, &save, &request) == XR_SUCCESS);
+  auto saved = as_event<XrEventDataSpaceSaveCompleteFB>(next_event(instance));
+  CHECK(saved.type == XR_TYPE_EVENT_DATA_SPACE_SAVE_COMPLETE_FB);
+  CHECK(saved.requestId == request);
+  CHECK(saved.result == XR_SUCCESS);
+  CHECK(saved.space == anchor);
+  save.location = XR_SPACE_STORAGE_LOCATION_CLOUD_FB;
+  REQUIRE(xg::xrSaveSpaceFB(session, &save, &request) == XR_SUCCESS);
+  CHECK(as_event<XrEventDataSpaceSaveCompleteFB>(next_event(instance)).result == XR_ERROR_SPACE_CLOUD_STORAGE_DISABLED_FB);
+  CHECK(xg::xrSaveSpaceFB(session, &save, nullptr) == XR_ERROR_VALIDATION_FAILURE);
+  XrSpaceUuidFilterInfoFB by_uuid{XR_TYPE_SPACE_UUID_FILTER_INFO_FB, nullptr, 1, &uuid};
+  XrSpaceQueryInfoFB query{XR_TYPE_SPACE_QUERY_INFO_FB, nullptr, XR_SPACE_QUERY_ACTION_LOAD_FB, 8, 0,
+                           reinterpret_cast<const XrSpaceFilterInfoBaseHeaderFB*>(&by_uuid), nullptr};
+  const auto run_query = [&] {
+    XrAsyncRequestIdFB id{};
+    std::vector<XrSpaceQueryResultFB> list;
+    REQUIRE(xg::xrQuerySpacesFB(session, reinterpret_cast<const XrSpaceQueryInfoBaseHeaderFB*>(&query), &id) == XR_SUCCESS);
+    auto available = as_event<XrEventDataSpaceQueryResultsAvailableFB>(next_event(instance));
+    CHECK(available.type == XR_TYPE_EVENT_DATA_SPACE_QUERY_RESULTS_AVAILABLE_FB);
+    CHECK(available.requestId == id);
+    auto complete = as_event<XrEventDataSpaceQueryCompleteFB>(next_event(instance));
+    CHECK(complete.type == XR_TYPE_EVENT_DATA_SPACE_QUERY_COMPLETE_FB);
+    CHECK(complete.requestId == id);
+    CHECK(complete.result == XR_SUCCESS);
+    XrSpaceQueryResultFB found[4]{};
+    XrSpaceQueryResultsFB results{XR_TYPE_SPACE_QUERY_RESULTS_FB, nullptr, 0, 0, nullptr};
+    REQUIRE(xg::xrRetrieveSpaceQueryResultsFB(session, id, &results) == XR_SUCCESS);
+    if (results.resultCountOutput) {
+      results.resultCapacityInput = 4;
+      results.results = found;
+      REQUIRE(xg::xrRetrieveSpaceQueryResultsFB(session, id, &results) == XR_SUCCESS);
+      list.assign(found, found + results.resultCountOutput);
+      CHECK(xg::xrRetrieveSpaceQueryResultsFB(session, id, &results) == XR_ERROR_VALIDATION_FAILURE);
+    }
+    return list;
+  };
+  auto results = run_query();
+  REQUIRE(results.size() == 1);
+  CHECK(results[0].space == anchor);
+  CHECK(std::memcmp(results[0].uuid.data, uuid.data, XR_UUID_SIZE_EXT) == 0);
+  // No scene: a room-layout query finds nothing, and the getters report no scene component.
+  XrSpaceComponentFilterInfoFB by_room{XR_TYPE_SPACE_COMPONENT_FILTER_INFO_FB, nullptr,
+                                       XR_SPACE_COMPONENT_TYPE_ROOM_LAYOUT_FB};
+  query.filter = reinterpret_cast<const XrSpaceFilterInfoBaseHeaderFB*>(&by_room);
+  CHECK(run_query().empty());
+  XrRoomLayoutFB room{XR_TYPE_ROOM_LAYOUT_FB};
+  CHECK(xg::xrGetSpaceRoomLayoutFB(session, anchor, &room) == XR_ERROR_SPACE_COMPONENT_NOT_ENABLED_FB);
+  XrRect3DfFB box{};
+  CHECK(xg::xrGetSpaceBoundingBox3DFB(session, anchor, &box) == XR_ERROR_SPACE_COMPONENT_NOT_ENABLED_FB);
+  XrSemanticLabelsFB labels{XR_TYPE_SEMANTIC_LABELS_FB};
+  CHECK(xg::xrGetSpaceSemanticLabelsFB(session, local, &labels) == XR_ERROR_SPACE_COMPONENT_NOT_ENABLED_FB);
+  // Erasing removes the save; a later query by UUID finds nothing.
+  XrSpaceEraseInfoFB erase{XR_TYPE_SPACE_ERASE_INFO_FB, nullptr, anchor, XR_SPACE_STORAGE_LOCATION_LOCAL_FB};
+  REQUIRE(xg::xrEraseSpaceFB(session, &erase, &request) == XR_SUCCESS);
+  auto erased = as_event<XrEventDataSpaceEraseCompleteFB>(next_event(instance));
+  CHECK(erased.type == XR_TYPE_EVENT_DATA_SPACE_ERASE_COMPLETE_FB);
+  CHECK(erased.result == XR_SUCCESS);
+  query.filter = reinterpret_cast<const XrSpaceFilterInfoBaseHeaderFB*>(&by_uuid);
+  CHECK(run_query().empty());
+
+  // Scene capture completes without a room.
+  XrSceneCaptureRequestInfoFB capture{XR_TYPE_SCENE_CAPTURE_REQUEST_INFO_FB, nullptr, 0, nullptr};
+  REQUIRE(xg::xrRequestSceneCaptureFB(session, &capture, &request) == XR_SUCCESS);
+  auto captured = as_event<XrEventDataSceneCaptureCompleteFB>(next_event(instance));
+  CHECK(captured.type == XR_TYPE_EVENT_DATA_SCENE_CAPTURE_COMPLETE_FB);
+  CHECK(captured.requestId == request);
+  CHECK(XR_FAILED(captured.result));
+
+  // Destroying the anchor space ends it as an anchor; the extension gates its functions.
+  REQUIRE(xg::xrDestroySpace(anchor) == XR_SUCCESS);
+  CHECK(ox::state().anchors.empty());
+  CHECK(xg::xrGetSpaceUuidFB(anchor, &uuid) == XR_ERROR_HANDLE_INVALID);
+  ox::state().enabled.erase("XR_FB_spatial_entity");
+  PFN_xrVoidFunction proc{};
+  CHECK(xg::xrGetInstanceProcAddr(instance, "xrCreateSpatialAnchorFB", &proc) == XR_ERROR_FUNCTION_UNSUPPORTED);
+  CHECK(xg::xrCreateSpatialAnchorFB(session, &anchor_info, &request) == XR_ERROR_FUNCTION_UNSUPPORTED);
+  ox::state().enabled.insert("XR_FB_spatial_entity");
+  CHECK(xg::xrDestroySession(session) == XR_SUCCESS);
+  CHECK(xg::xrDestroyInstance(instance) == XR_SUCCESS);
+  ox::state().saved_anchors.clear();
+  venture::xr::install_xr_images(nullptr);
+}
+
+TEST_CASE("XR debug utils accept messengers and labels and log submitted messages") {
+  venture::test::XrImageFixture interop;
+  venture::xr::install_xr_images(&interop);
+  struct Callback {
+    static XrBool32 XRAPI_CALL call(XrDebugUtilsMessageSeverityFlagsEXT, XrDebugUtilsMessageTypeFlagsEXT,
+                                    const XrDebugUtilsMessengerCallbackDataEXT*, void*) { return XR_FALSE; }
+  };
+  XrDebugUtilsMessengerCreateInfoEXT messenger_info{XR_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT, nullptr,
+      XR_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT | XR_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT,
+      XR_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT, &Callback::call, nullptr};
+  XrInstanceCreateInfo create{XR_TYPE_INSTANCE_CREATE_INFO, &messenger_info};
+  create.applicationInfo.apiVersion = XR_MAKE_VERSION(1, 0, 0);
+  create.enabledExtensionNames = kCivExtensions;
+  create.enabledExtensionCount = 9;  // without XR_EXT_debug_utils its structure is invalid here
+  XrInstance instance{};
+  CHECK(xg::xrCreateInstance(&create, &instance) == XR_ERROR_VALIDATION_FAILURE);
+  create.enabledExtensionCount = 10;
+  REQUIRE(xg::xrCreateInstance(&create, &instance) == XR_SUCCESS);
+  XrDebugUtilsMessengerEXT messenger{};
+  REQUIRE(xg::xrCreateDebugUtilsMessengerEXT(instance, &messenger_info, &messenger) == XR_SUCCESS);
+  CHECK(messenger != XR_NULL_HANDLE);
+  messenger_info.userCallback = nullptr;
+  XrDebugUtilsMessengerEXT invalid{};
+  CHECK(xg::xrCreateDebugUtilsMessengerEXT(instance, &messenger_info, &invalid) == XR_ERROR_VALIDATION_FAILURE);
+  XrDebugUtilsMessengerCallbackDataEXT data{XR_TYPE_DEBUG_UTILS_MESSENGER_CALLBACK_DATA_EXT, nullptr, "id", "fn", "hello"};
+  CHECK(xg::xrSubmitDebugUtilsMessageEXT(instance, XR_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT,
+                                         XR_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT, &data) == XR_SUCCESS);
+  CHECK(xg::xrSubmitDebugUtilsMessageEXT(instance, 0, XR_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT, &data) ==
+        XR_ERROR_VALIDATION_FAILURE);
+  XrDebugUtilsObjectNameInfoEXT name{XR_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT, nullptr, XR_OBJECT_TYPE_INSTANCE,
+                                     reinterpret_cast<std::uint64_t>(instance), "instance"};
+  CHECK(xg::xrSetDebugUtilsObjectNameEXT(instance, &name) == XR_SUCCESS);
+  name.objectType = XR_OBJECT_TYPE_UNKNOWN;
+  CHECK(xg::xrSetDebugUtilsObjectNameEXT(instance, &name) == XR_ERROR_VALIDATION_FAILURE);
+  xg::GlesBinding binding{XR_TYPE_GRAPHICS_BINDING_OPENGL_ES_ANDROID_KHR, nullptr, 1, 2, 3};
+  XrSessionCreateInfo session_info{XR_TYPE_SESSION_CREATE_INFO, &binding, 0, 1};
+  XrSession session{};
+  REQUIRE(xg::xrCreateSession(instance, &session_info, &session) == XR_SUCCESS);
+  XrDebugUtilsLabelEXT label{XR_TYPE_DEBUG_UTILS_LABEL_EXT, nullptr, "frame"};
+  CHECK(xg::xrSessionBeginDebugUtilsLabelRegionEXT(session, &label) == XR_SUCCESS);
+  CHECK(xg::xrSessionInsertDebugUtilsLabelEXT(session, &label) == XR_SUCCESS);
+  CHECK(xg::xrSessionEndDebugUtilsLabelRegionEXT(session) == XR_SUCCESS);
+  CHECK(xg::xrSessionInsertDebugUtilsLabelEXT(session, nullptr) == XR_ERROR_VALIDATION_FAILURE);
+  REQUIRE(xg::xrDestroyDebugUtilsMessengerEXT(messenger) == XR_SUCCESS);
+  CHECK(xg::xrDestroyDebugUtilsMessengerEXT(messenger) == XR_ERROR_HANDLE_INVALID);
+  CHECK(xg::xrDestroySession(session) == XR_SUCCESS);
+  CHECK(xg::xrDestroyInstance(instance) == XR_SUCCESS);
+  venture::xr::install_xr_images(nullptr);
+}
+
+TEST_CASE("XR hand tracking data source is reported as a Quest reports it on a host without it") {
+  venture::test::XrImageFixture interop;
+  venture::xr::install_xr_images(&interop);
+  REQUIRE(!venture::xr::host_xr().enabled_extensions.contains("XR_EXT_hand_tracking_data_source"));
+  XrInstanceCreateInfo create{XR_TYPE_INSTANCE_CREATE_INFO};
+  create.applicationInfo.apiVersion = XR_MAKE_VERSION(1, 0, 0);
+  create.enabledExtensionNames = kCivExtensions;
+  create.enabledExtensionCount = 9;
+  XrInstance instance{};
+  REQUIRE(xg::xrCreateInstance(&create, &instance) == XR_SUCCESS);
+  xg::GlesBinding binding{XR_TYPE_GRAPHICS_BINDING_OPENGL_ES_ANDROID_KHR, nullptr, 1, 2, 3};
+  XrSessionCreateInfo session_info{XR_TYPE_SESSION_CREATE_INFO, &binding, 0, 1};
+  XrSession session{};
+  REQUIRE(xg::xrCreateSession(instance, &session_info, &session) == XR_SUCCESS);
+  XrReferenceSpaceCreateInfo ri{XR_TYPE_REFERENCE_SPACE_CREATE_INFO, nullptr, XR_REFERENCE_SPACE_TYPE_LOCAL,
+                                {{0, 0, 0, 1}, {0, 0, 0}}};
+  XrSpace local{};
+  REQUIRE(xg::xrCreateReferenceSpace(session, &ri, &local) == XR_SUCCESS);
+  const auto source_of = [&](std::vector<XrHandTrackingDataSourceEXT> sources, XrResult expected) {
+    XrHandTrackingDataSourceInfoEXT request{XR_TYPE_HAND_TRACKING_DATA_SOURCE_INFO_EXT, nullptr,
+                                            std::uint32_t(sources.size()), sources.data()};
+    XrHandTrackerCreateInfoEXT hi{XR_TYPE_HAND_TRACKER_CREATE_INFO_EXT, &request, XR_HAND_RIGHT_EXT,
+                                  XR_HAND_JOINT_SET_DEFAULT_EXT};
+    XrHandTrackerEXT tracker{};
+    XrHandTrackingDataSourceStateEXT state{XR_TYPE_HAND_TRACKING_DATA_SOURCE_STATE_EXT};
+    REQUIRE(xg::xrCreateHandTrackerEXT(session, &hi, &tracker) == expected);
+    if (XR_FAILED(expected)) return state;
+    XrHandJointLocationEXT joints[26]{};
+    XrHandJointLocationsEXT locations{XR_TYPE_HAND_JOINT_LOCATIONS_EXT, &state, XR_FALSE, 26, joints};
+    XrHandJointsLocateInfoEXT li{XR_TYPE_HAND_JOINTS_LOCATE_INFO_EXT, nullptr, local, 1'000'000};
+    REQUIRE(xg::xrLocateHandJointsEXT(tracker, &li, &locations) == XR_SUCCESS);
+    CHECK(state.isActive == locations.isActive);
+    CHECK(xg::xrDestroyHandTrackerEXT(tracker) == XR_SUCCESS);
+    return state;
+  };
+  CHECK(source_of({XR_HAND_TRACKING_DATA_SOURCE_UNOBSTRUCTED_EXT, XR_HAND_TRACKING_DATA_SOURCE_CONTROLLER_EXT},
+                  XR_SUCCESS).dataSource == XR_HAND_TRACKING_DATA_SOURCE_UNOBSTRUCTED_EXT);
+  CHECK(source_of({XR_HAND_TRACKING_DATA_SOURCE_CONTROLLER_EXT}, XR_SUCCESS).dataSource ==
+        XR_HAND_TRACKING_DATA_SOURCE_CONTROLLER_EXT);
+  source_of({}, XR_ERROR_VALIDATION_FAILURE);
+  source_of({XrHandTrackingDataSourceEXT(7)}, XR_ERROR_VALIDATION_FAILURE);
+  CHECK(xg::xrDestroySession(session) == XR_SUCCESS);
+  CHECK(xg::xrDestroyInstance(instance) == XR_SUCCESS);
+  venture::xr::install_xr_images(nullptr);
+}
+
 TEST_CASE("XR layer sizing uses runtime pixels, honors allocation limits and rejects stale time") {
   venture::test::XrImageFixture interop;
   venture::xr::install_xr_images(&interop);
@@ -1181,11 +1511,11 @@ TEST_CASE("XR GLES subimage rects reach the host in the bridged image's row orde
   venture::test::XrImageFixture interop;
   venture::xr::install_xr_images(&interop);
   const char* extensions[]{"XR_KHR_opengl_es_enable", "XR_KHR_composition_layer_cylinder",
-                           "XR_FB_composition_layer_image_layout"};
+                           "XR_FB_composition_layer_image_layout", "XR_FB_composition_layer_settings"};
   XrInstanceCreateInfo create{XR_TYPE_INSTANCE_CREATE_INFO};
   create.applicationInfo.apiVersion = XR_MAKE_VERSION(1, 0, 0);
   create.enabledExtensionNames = extensions;
-  create.enabledExtensionCount = 3;
+  create.enabledExtensionCount = 4;
   XrInstance instance{};
   REQUIRE(xg::xrCreateInstance(&create, &instance) == XR_SUCCESS);
   xg::GlesBinding binding{XR_TYPE_GRAPHICS_BINDING_OPENGL_ES_ANDROID_KHR, nullptr, 1, 2, 3};
@@ -1281,6 +1611,10 @@ TEST_CASE("XR GLES subimage rects reach the host in the bridged image's row orde
   // rows once more in the host copy, so its rect keeps the application's y.
   XrCompositionLayerImageLayoutFB flip{XR_TYPE_COMPOSITION_LAYER_IMAGE_LAYOUT_FB, nullptr,
                                        XR_COMPOSITION_LAYER_IMAGE_LAYOUT_VERTICAL_FLIP_BIT_FB};
+  // XR_FB_composition_layer_settings filter requests are accepted and left out of host copies.
+  XrCompositionLayerSettingsFB settings{XR_TYPE_COMPOSITION_LAYER_SETTINGS_FB, nullptr,
+                                        XR_COMPOSITION_LAYER_SETTINGS_QUALITY_SUPER_SAMPLING_BIT_FB};
+  flip.next = &settings;
   cylinder.next = &flip;
   for (int frame = 0; frame < 2; ++frame) {
     XrFrameState timing{XR_TYPE_FRAME_STATE};
@@ -3413,7 +3747,8 @@ TEST_CASE("XR Android chains, GLES image copies, host-clock conversion and hands
   const char *extensions[]{
       "XR_KHR_android_create_instance", "XR_KHR_opengl_es_enable", "XR_KHR_convert_timespec_time",
       "XR_EXT_hand_tracking",           "XR_FB_hand_tracking_aim", "XR_FB_hand_tracking_capsules",
-      "XR_FB_hand_tracking_mesh",       "XR_FB_color_space",       "XR_KHR_locate_spaces"};
+      "XR_FB_hand_tracking_mesh",       "XR_FB_color_space",       "XR_KHR_locate_spaces",
+      "XR_EXT_hand_joints_motion_range"};
   xg::AndroidInstance android{XR_TYPE_INSTANCE_CREATE_INFO_ANDROID_KHR, nullptr, 0x1234, 0x5678};
   XrInstanceCreateInfo ci{XR_TYPE_INSTANCE_CREATE_INFO, &android};
   ci.applicationInfo.apiVersion = XR_MAKE_VERSION(1, 0, 0);
@@ -3627,6 +3962,15 @@ TEST_CASE("XR Android chains, GLES image copies, host-clock conversion and hands
   REQUIRE(xg::xrLocateHandJointsEXT(tracker, &li, &locations) == XR_SUCCESS);
   CHECK(locations.isActive);
   CHECK((aim.status & XR_HAND_TRACKING_AIM_VALID_BIT_FB) != 0);
+  // XR_EXT_hand_joints_motion_range is accepted on this host without it; an invalid range is refused.
+  XrHandJointsMotionRangeInfoEXT range{XR_TYPE_HAND_JOINTS_MOTION_RANGE_INFO_EXT, nullptr,
+                                       XR_HAND_JOINTS_MOTION_RANGE_CONFORMING_TO_CONTROLLER_EXT};
+  li.next = &range;
+  CHECK(xg::xrLocateHandJointsEXT(tracker, &li, &locations) == XR_SUCCESS);
+  CHECK(locations.isActive);
+  range.handJointsMotionRange = XrHandJointsMotionRangeEXT(9);
+  CHECK(xg::xrLocateHandJointsEXT(tracker, &li, &locations) == XR_ERROR_VALIDATION_FAILURE);
+  li.next = nullptr;
   CHECK(capsules.capsules[0].radius > 0);
   // Hand joints follow the scripted STAGE wrist and the caller's base space.
   MockXrScript positioned{};
@@ -4752,7 +5096,9 @@ TEST_CASE("XR display overrides resize the views a game sees and record the host
     REQUIRE(xg::xrEnumerateViewConfigurationViews(instance, venture::xr::host_xr().system, type, 2, &count,
                                                   out.data()) == XR_SUCCESS);
     CHECK(out[0].recommendedImageRectWidth == out[1].recommendedImageRectWidth);
-    CHECK(out[0].maxImageRectWidth == 4096);
+    // The recommendation is also the maximum, following the Display setting.
+    CHECK(out[0].maxImageRectWidth == out[0].recommendedImageRectWidth);
+    CHECK(out[0].maxImageRectHeight == out[0].recommendedImageRectHeight);
     return std::pair{out[0].recommendedImageRectWidth, out[0].recommendedImageRectHeight};
   };
   CHECK(views() == std::pair{1024u, 1024u});
@@ -4774,6 +5120,91 @@ TEST_CASE("XR display overrides resize the views a game sees and record the host
   }
   CHECK(views() == std::pair{1024u, 1024u});
   CHECK(xg::xrDestroyInstance(instance) == XR_SUCCESS);
+  venture::xr::install_xr_images(nullptr);
+}
+
+TEST_CASE("XR eye scale learns a multiplier, confirms it and stops for fixed-size games") {
+  namespace es = venture::xr::eye_scale;
+  const VkExtent2D target{2800, 2856};
+  // Uncompensated, rendering 1.2x of the target: learned, compensated next time.
+  auto first = es::learn(std::nullopt, 1, target, target, {3360, 3427});
+  CHECK(first.state == es::State::learned);
+  CHECK(first.multiplier == doctest::Approx(1.2).epsilon(0.01));
+  CHECK(es::compensation_for(first) == doctest::Approx(1.2).epsilon(0.01));
+  // Told 1/1.2 of the target, it renders the target: confirmed, still compensated.
+  const VkExtent2D told{2333, 2380};
+  auto second = es::learn(first, first.multiplier, told, target, {2800, 2856});
+  CHECK(second.state == es::State::confirmed);
+  CHECK(es::compensation_for(second) == doctest::Approx(1.2).epsilon(0.01));
+  // A game that keeps 3360x3427 whatever it is told is fixed: no compensation.
+  auto fixed = es::learn(first, first.multiplier, told, target, {3360, 3427});
+  CHECK(fixed.state == es::State::fixed);
+  CHECK(es::compensation_for(fixed) == 1);
+  // A bundled multiplier (no earlier eye) that misses the target is relearned, not fixed.
+  es::Record seeded;
+  seeded.multiplier = 1.6;
+  seeded.state = es::State::learned;
+  auto relearned = es::learn(seeded, 1.6, {1750, 1785}, target, {2450, 2499});
+  CHECK(relearned.state == es::State::learned);
+  CHECK(relearned.multiplier == doctest::Approx(1.4).epsilon(0.01));
+  // At or below the size it is told: nothing to compensate.
+  CHECK(es::compensation_for(es::learn(std::nullopt, 1, target, target, {2800, 2864})) == 1);
+  CHECK(es::compensation_for(es::learn(std::nullopt, 1, target, target, {2000, 2040})) == 1);
+  // Within 10% (rounding, padding, quantized scales) counts as the target.
+  const auto close = es::learn(std::nullopt, 1, target, target, {3024, 3080});
+  CHECK(close.state == es::State::native);
+  CHECK(es::compensation_for(close) == 1);
+  // The bundled table seeds H3VR2 from its debug report.
+  const auto h3 = es::bundled("com.rustltd.h3vr2");
+  REQUIRE(h3);
+  CHECK(h3->multiplier == doctest::Approx(1.6));
+  CHECK(es::compensation_for(*h3) == doctest::Approx(1.6));
+  CHECK_FALSE(es::bundled("com.example.unknown"));
+}
+
+TEST_CASE("XR eye scale tells a compensated game less and keeps the target as its maximum") {
+  namespace es = venture::xr::eye_scale;
+  venture::test::XrImageFixture interop;
+  venture::xr::install_xr_images(&interop);
+  struct Reset { ~Reset() { venture::xr::eye_scale::reset_for_tests(); } } reset;
+  const auto learned = venture::paths::data_dir() / "eye-scale.json";
+  std::filesystem::remove(learned);
+  // The mock recommends 1024x1024; H3VR2's bundled multiplier is 1.6.
+  es::begin("com.rustltd.h3vr2");
+  CHECK(es::compensation() == doctest::Approx(1.6));
+  XrViewConfigurationView views[2]{{XR_TYPE_VIEW_CONFIGURATION_VIEW}, {XR_TYPE_VIEW_CONFIGURATION_VIEW}};
+  std::uint32_t count = 0;
+  REQUIRE(xrEnumerateViewConfigurationViews(venture::xr::host_xr().instance, venture::xr::host_xr().system,
+                                            XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO, 2, &count, views) == XR_SUCCESS);
+  venture::xr::apply_display_override(views, count);
+  CHECK(views[0].recommendedImageRectWidth == 640);
+  CHECK(views[0].recommendedImageRectHeight == 640);
+  CHECK(views[0].maxImageRectWidth == 1024);
+  const auto eye = venture::xr::reported_eye();
+  CHECK(eye.told.width == 640);
+  CHECK(eye.target.width == 1024);
+  // Rendering 1.6x of what it was told reaches the target: confirmed and recorded.
+  es::observe(eye.told, eye.target, {1024, 1024});
+  REQUIRE(std::filesystem::exists(learned));
+  const auto all = venture::paths::read_json(learned);
+  CHECK(all["com.rustltd.h3vr2"]["state"] == "confirmed");
+  CHECK(!all["com.rustltd.h3vr2"].contains("version"));
+  // Off tells the target and keeps learning.
+#ifdef _WIN32
+  _putenv_s("VENTURE_EYE_SCALE", "off");
+#else
+  setenv("VENTURE_EYE_SCALE", "off", 1);
+#endif
+  venture::environment::refresh();
+  es::begin("com.rustltd.h3vr2");
+  CHECK(es::compensation() == 1);
+#ifdef _WIN32
+  _putenv_s("VENTURE_EYE_SCALE", "");
+#else
+  unsetenv("VENTURE_EYE_SCALE");
+#endif
+  venture::environment::refresh();
+  std::filesystem::remove(learned);
   venture::xr::install_xr_images(nullptr);
 }
 

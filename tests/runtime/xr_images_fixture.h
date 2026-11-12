@@ -108,6 +108,7 @@ public:
   std::uint32_t copies = 0, last_texture = 0;
   std::uint32_t last_source_mips = 0, last_destination_mips = 0;
   VkImage last_destination{};
+  VkExtent2D last_host_extent{};  // ImageDesc host size of the last copy (zero: unscaled)
   std::uint64_t last_fence = 0;
   std::vector<std::uint64_t> producer_syncs;
   bool last_bottom_up = false;
@@ -365,13 +366,24 @@ public:
     commands([&](VkCommandBuffer cmd) {
       barrier(cmd, destination, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
               desc.layers * desc.face_count);
-      VkImageCopy copy{};
-      copy.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, desc.layers * desc.face_count};
-      copy.dstSubresource = copy.srcSubresource;
-      copy.extent = {desc.width, desc.height, 1};
-      vk<PFN_vkCmdCopyImage>("vkCmdCopyImage")(cmd, it->second.image,
-                                               VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, destination,
-                                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+      if (desc.scaled()) {
+        VkImageBlit blit{};
+        blit.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, desc.layers * desc.face_count};
+        blit.dstSubresource = blit.srcSubresource;
+        blit.srcOffsets[1] = {std::int32_t(desc.width), std::int32_t(desc.height), 1};
+        blit.dstOffsets[1] = {std::int32_t(desc.host_width), std::int32_t(desc.host_height), 1};
+        vk<PFN_vkCmdBlitImage>("vkCmdBlitImage")(cmd, it->second.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                                 destination, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit,
+                                                 VK_FILTER_LINEAR);
+      } else {
+        VkImageCopy copy{};
+        copy.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, desc.layers * desc.face_count};
+        copy.dstSubresource = copy.srcSubresource;
+        copy.extent = {desc.width, desc.height, 1};
+        vk<PFN_vkCmdCopyImage>("vkCmdCopyImage")(cmd, it->second.image,
+                                                 VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, destination,
+                                                 VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+      }
       barrier(cmd, destination, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
               VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, desc.layers * desc.face_count);
     });
@@ -381,6 +393,7 @@ public:
     last_source_mips = desc.mip_count;
     last_destination_mips = desc.host_mip_count ? desc.host_mip_count : desc.mip_count;
     last_destination = destination;
+    last_host_extent = {desc.host_width, desc.host_height};
     last_fence = fence;
     last_bottom_up = bottom_up;
     destinations.emplace_back(destination, bottom_up);

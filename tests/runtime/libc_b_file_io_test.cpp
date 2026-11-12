@@ -709,3 +709,46 @@ TEST_CASE("POSIX file mutation child race restores or preserves a predictable re
 }
 
 #endif
+
+TEST_CASE("fts walks a directory tree preorder and postorder without changing directory") {
+  Thread thread;
+  const auto root = std::string("/storage/emulated/0/fts-walk-test");
+  const auto sub = root + "/sub";
+  REQUIRE(call("mkdir", {h2g(root.c_str()), 0700}) == 0);
+  REQUIRE(call("mkdir", {h2g(sub.c_str()), 0700}) == 0);
+  for (const auto& file : {root + "/a.txt", sub + "/b.txt"}) {
+    const auto fd = fd_open(file.c_str(), 0100 | 0200 | 1, 0600);
+    REQUIRE(fd >= 0);
+    CHECK(fd_write(fd, "x", 1) == 1);
+    CHECK(call("close", {std::uint64_t(fd)}) == 0);
+  }
+  std::array<GuestAddr, 2> argv{h2g(root.c_str()), 0};
+  const auto fts = call("fts_open", {h2g(argv.data()), 0x10 | 0x4, 0});  // FTS_PHYSICAL | FTS_NOCHDIR
+  REQUIRE(fts != 0);
+  std::vector<std::string> walk;
+  while (const auto entry = call("fts_read", {std::uint64_t(fts)})) {
+    const auto* bytes = g2h<const char>(GuestAddr(entry));
+    std::int16_t level;
+    std::uint16_t info;
+    std::memcpy(&level, bytes + 100, 2);
+    std::memcpy(&info, bytes + 102, 2);
+    GuestAddr path;
+    std::memcpy(&path, bytes + 48, 8);
+    CHECK(std::string(g2h<const char>(path)).starts_with(root));
+    walk.push_back(std::to_string(level) + ":" + std::to_string(info) + ":" + std::string(bytes + 120));
+  }
+  CHECK(*thread.thread.errno_location() == 0);
+  CHECK(call("fts_close", {std::uint64_t(fts)}) == 0);
+  // FTS_D = 1, FTS_DP = 6, FTS_F = 8; siblings come in directory order.
+  REQUIRE(walk.size() == 6);
+  CHECK(walk.front() == "0:1:" + root);  // a root's fts_name is its argv string
+  CHECK(walk.back() == "0:6:" + root);
+  const auto at = [&](const std::string& item) { return std::find(walk.begin(), walk.end(), item) - walk.begin(); };
+  CHECK(at("1:8:a.txt") < 5);
+  CHECK(at("1:1:sub") + 1 == at("2:8:b.txt"));
+  CHECK(at("2:8:b.txt") + 1 == at("1:6:sub"));
+  CHECK(call("unlink", {h2g((sub + "/b.txt").c_str())}) == 0);
+  CHECK(call("unlink", {h2g((root + "/a.txt").c_str())}) == 0);
+  CHECK(call("rmdir", {h2g(sub.c_str())}) == 0);
+  CHECK(call("rmdir", {h2g(root.c_str())}) == 0);
+}

@@ -11,6 +11,7 @@ import argparse
 import hashlib
 import re
 import xml.etree.ElementTree as ET
+import xr_a32
 
 ROOT = Path(__file__).resolve().parents[2]
 FORWARD_EXT = [
@@ -32,7 +33,9 @@ MANUAL_EXT = [
     'XR_FB_touch_controller_pro', 'XR_META_touch_controller_plus',
     'XR_KHR_locate_spaces', 'XR_FB_haptic_pcm', 'XR_FB_haptic_amplitude_envelope',
     'XR_META_recommended_layer_resolution', 'XR_META_vulkan_swapchain_create_info',
-    'XR_FB_passthrough',
+    'XR_FB_passthrough', 'XR_META_boundary_visibility',
+    'XR_FB_spatial_entity', 'XR_FB_spatial_entity_query', 'XR_FB_spatial_entity_storage',
+    'XR_FB_scene', 'XR_FB_scene_capture', 'XR_EXT_debug_utils',
 ]
 MANUAL = set('''xrGetInstanceProcAddr xrEnumerateApiLayerProperties
 xrEnumerateInstanceExtensionProperties xrCreateInstance xrDestroyInstance
@@ -43,7 +46,7 @@ xrEnumerateSwapchainImages xrAcquireSwapchainImage xrWaitSwapchainImage
 xrReleaseSwapchainImage xrSuggestInteractionProfileBindings
 xrGetCurrentInteractionProfile xrInitializeLoaderKHR xrCreateHandTrackerEXT
 xrDestroyHandTrackerEXT xrLocateHandJointsEXT xrGetHandMeshFB xrLocateSpaces
-xrGetDeviceSampleRateFB xrEnumerateBoundSourcesForAction xrApplyHapticFeedback xrStopHapticFeedback
+xrGetDeviceSampleRateFB xrEnumerateBoundSourcesForAction xrGetInputSourceLocalizedName xrApplyHapticFeedback xrStopHapticFeedback
 xrCreateActionSpace xrLocateSpace xrPerfSettingsSetPerformanceLevelEXT xrEnumerateViewConfigurationViews'''.split())
 
 # Action states change only in xrSyncActions, so reads between syncs reuse the
@@ -173,6 +176,7 @@ def generate(registry, output, check=False):
     for name, lines in [('declarations.inc', declarations), ('forward.inc', wrappers),
                         ('commands.inc', table), ('structures.inc', layouts)]:
         emit(output / name, lines)
+    xr_a32.generate(xml, types, commands, selected, emit, output, ROOT / 'src/runtime/core/generated')
     mock = ROOT / 'tests/mock_openxr_runtime'
     if (mock / 'runtime.cpp').exists():
         implemented = set(re.findall(r'XrResult\s+m_(xr\w+)\(', (mock / 'runtime.cpp').read_text()))

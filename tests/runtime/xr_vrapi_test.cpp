@@ -2245,6 +2245,44 @@ TEST_CASE("VrApi flipped texture rects stay inside odd-height images") {
     CHECK(rect.extent.height == 16);
   }
 }
+TEST_CASE("VrApi eyes past the reported eye size present through a host chain of that size") {
+  // The mock recommends 1024x1024 per eye. A game multiplying that renders
+  // both eyes side by side at 1600x1600 each: the displayed host chain takes
+  // the reported size and the layer rects follow it.
+  const float quarter = std::numbers::pi_v<float> / 4;
+  MockXrScript script{};
+  script.view_fov = std::array{-quarter, quarter, quarter, -quarter};
+  ventureMockXrSetScript(&script);
+  struct RestoreScript { ~RestoreScript() { MockXrScript defaults{}; ventureMockXrSetScript(&defaults); } } restore;
+  VrApiFrames vr_frames;
+  auto *ring = vg::vrapi_CreateTextureSwapChain3(0, 0x8058, 3200, 1600, 1, 1);
+  REQUIRE(ring);
+  vr::abi::Projection projection{};
+  projection.header = {1, 0, {1, 1, 1, 1}, 1, 0, 0};
+  projection.head.pose.orientation.w = 1;
+  for (int eye = 0; eye < 2; ++eye) {
+    auto &texture = projection.textures[eye];
+    texture.chain = ring;
+    texture.tan_angles.m[0][0] = texture.tan_angles.m[1][1] = 0.5f;
+    texture.tan_angles.m[0][2] = texture.tan_angles.m[1][2] = -0.5f;
+    texture.tan_angles.m[2][2] = -1;
+    texture.rect = {eye * 0.5f, 0, 0.5f, 1};
+  }
+  const vr::abi::LayerHeader *layers[]{&projection.header};
+  vr_frames.submit.layer_count = 1;
+  vr_frames.submit.layers = layers;
+  REQUIRE(vr_frames.submit_frame(1) == 0);
+  CHECK(vr_frames.images.last_host_extent.width == 2048);
+  CHECK(vr_frames.images.last_host_extent.height == 1024);
+  XrSwapchainSubImage host[2]{};
+  REQUIRE(ventureMockXrLastSubImages(host, 2) == 2);
+  for (int eye = 0; eye < 2; ++eye) {
+    CAPTURE(eye);
+    CHECK(host[eye].imageRect.offset.x == eye * 1024);
+    CHECK(host[eye].imageRect.extent.width == 1024);
+    CHECK(host[eye].imageRect.extent.height == 1024);
+  }
+}
 TEST_CASE("VrApi gives the renderer the full abandonment bound once the next wait blocks") {
   using namespace std::chrono_literals;
   VrApiFrames vr_frames;

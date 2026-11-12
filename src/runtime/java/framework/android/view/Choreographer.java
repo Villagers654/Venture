@@ -18,10 +18,11 @@ public final class Choreographer {
       ThreadLocal.withInitial(Choreographer::new);
   private final Handler handler = new Handler();
   private final List<Request> pending = new ArrayList<>();
-  // Guarded by this. AOSP Choreographer.mLastFrameTimeNanos, when the fallback
+  // Guarded by this. AOSP Choreographer.mLastFrameTimeNanos (by that name: Sentry's
+  // frame metrics collector reads it reflectively for frame start times), when the fallback
   // timer last served a frame, and the last pulse whose display interval such a
   // fallback frame had already served.
-  private long lastFrameTimeNanos = Long.MIN_VALUE;
+  private long mLastFrameTimeNanos = Long.MIN_VALUE;
   private long lastFallbackNanos = Long.MIN_VALUE;
   private Pulse servedByFallback;
   private final Runnable timer = () -> {
@@ -116,8 +117,8 @@ public final class Choreographer {
       if (!ready.isEmpty()) {
         // AOSP Choreographer.doFrame never reports a frame time earlier than the
         // last one; a later host pulse may predict less display latency.
-        if (frameTime <= lastFrameTimeNanos) frameTime = lastFrameTimeNanos + period;
-        lastFrameTimeNanos = frameTime;
+        if (frameTime <= mLastFrameTimeNanos) frameTime = mLastFrameTimeNanos + period;
+        mLastFrameTimeNanos = frameTime;
         if (fallback) lastFallbackNanos = arrival;
       }
     }

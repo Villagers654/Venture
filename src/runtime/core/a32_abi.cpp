@@ -191,6 +191,22 @@ const Descriptor* descriptor(std::string_view library, std::string_view symbol) 
         {"libaaudio.so", "AAudioStream_isMMapUsed", {Kind::U8, "bool"}, stream, false, "AAudioTesting.h"}};
     for (const auto& entry : policies) if (entry.symbol == symbol) return &entry;
   }
+  // bionic's ARM32 libm.map.txt keeps the pre-C99 functions behind the
+  // isnan/isinf macros as exports (LIBC_DEPRECATED), so NDK headers declare no
+  // prototype for them. Engine plugins built against old headers still import
+  // them (libOculusXRPlugin: isnan). Plain base-PCS scalar signatures.
+  if (library == "libm.so") {
+    static constexpr Type f64[]{{Kind::F64, "double"}};
+    static constexpr Type f32[]{{Kind::F32, "float"}};
+    static constexpr Type f32_sign[]{{Kind::F32, "float"}, {Kind::Ptr, "int *", 4, 4}};
+    static constexpr Descriptor legacy[]{
+        {"libm.so", "__isnan", {Kind::I32, "int"}, f64, false, "bionic libm.map.txt (LIBC_DEPRECATED)"},
+        {"libm.so", "__isnanf", {Kind::I32, "int"}, f32, false, "bionic libm.map.txt (LIBC_DEPRECATED)"},
+        {"libm.so", "isinf", {Kind::I32, "int"}, f64, false, "bionic libm.map.txt (LIBC_DEPRECATED)"},
+        {"libm.so", "isnan", {Kind::I32, "int"}, f64, false, "bionic libm.map.txt (LIBC_DEPRECATED)"},
+        {"libm.so", "lgamma_rf", {Kind::F32, "float"}, f32_sign, false, "bionic libm.map.txt"}};
+    for (const auto& entry : legacy) if (entry.symbol == symbol) return &entry;
+  }
   // VrApi.h: const char * vrapi_GetVersionString(void). The vendor inventory
   // lists First Contact's imports only; Venture answers this query for every
   // A32 VrApi library, imported or not.
@@ -403,7 +419,7 @@ const Descriptor* descriptor(std::string_view library, std::string_view symbol) 
         {"libc.so", "__write_chk", ssize, wr, false, source}};
     for (const auto& entry : fortify) if (entry.symbol == symbol) return &entry;
   }
-  for (auto table : {ndk_descriptors(), libc_descriptors(), graphics_descriptors(), vendor_descriptors(), media_descriptors()}) {
+  for (auto table : {ndk_descriptors(), libc_descriptors(), graphics_descriptors(), vendor_descriptors(), media_descriptors(), openxr_descriptors()}) {
     auto key = std::pair(library, symbol);
     auto it = std::lower_bound(table.begin(), table.end(), key, [](const Descriptor& d, auto k) {
       return std::pair(d.library, d.symbol) < k;

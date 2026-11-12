@@ -50,5 +50,9 @@ struct GpuDevice {
 // available). Thread-safe; returns the same object afterwards.
 GpuDevice& gpu_device();
 bool shutdown_for_os_quit();
+// Whether optimal-tiling images of `format` (a VkFormat; this header keeps
+// vulkan.h out) blit both ways with linear filtering on this device: what a
+// scaled presentation copy needs. False before the device exists.
+bool supports_filtered_blit(std::int64_t format);
 
 }  // namespace venture::gfx

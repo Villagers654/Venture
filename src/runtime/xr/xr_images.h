@@ -17,6 +17,13 @@ struct ImageDesc {
   // Destination mip count when presentation uses fewer levels than the guest
   // texture. Zero preserves the source count; the guest storage is unchanged.
   std::uint32_t host_mip_count = 0;
+  // Destination size when presentation uses a smaller host image (a VrApi eye
+  // past the reported eye size); zero keeps width x height. Scaled copies
+  // filter linearly and write the destination's base level only.
+  std::uint32_t host_width = 0, host_height = 0;
+  bool scaled() const {
+    return host_width && host_height && (host_width != width || host_height != height);
+  }
 };
 // Provider storage that holds one OpenXR GLES slot's released contents for
 // host presentation, in place of a private Vulkan image plus a bridge copy.

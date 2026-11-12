@@ -270,9 +270,11 @@ std::string to_modified_utf8(std::u16string_view s) {
   }
   return out;
 }
-NativeArguments native_arguments(const Descriptor& d, const HostArguments& host, HostAbi abi, GuestAddr env) {
+NativeArguments native_arguments(const Descriptor& d, const HostArguments& host, HostAbi abi, GuestAddr env,
+                                 bool critical) {
   NativeArguments out;
-  out.integers = {env, host.gp[1]};
+  // The host JVM always passes JNIEnv* and jclass; the guest sees them unless critical.
+  if (!critical) out.integers = {env, host.gp[1]};
   unsigned gp = 2, simd = 0, position = 2, stack = 0;
   for (Type t : d.parameters) {
     std::uint64_t value;

@@ -57,6 +57,7 @@ public class VirtualFilesFixture {
     try (var output = new FileOutputStream(written.toString(), false)) { output.write('w'); }
     check(new File(written.toString()).length() == 1);
     check(ItfCaller.call().equals("interface static"));
+    check(ItfMerged.call().equals("default merged"));
     // Rewritten to DirectBuffers; without its natives (an A64 process) HotSpot allocates.
     var direct = java.nio.ByteBuffer.allocateDirect(8);
     check(direct.isDirect() && direct.capacity() == 8 && direct.order() == java.nio.ByteOrder.BIG_ENDIAN && direct.getLong(0) == 0);

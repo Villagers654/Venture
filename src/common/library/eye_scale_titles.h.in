@@ -1,0 +1,4 @@
+// Generated from xr/eye_scale_titles.json; edit that file.
+#pragma once
+#include <string_view>
+inline constexpr std::string_view eye_scale_titles_json = R"VENTURE_JSON(@VENTURE_EYE_SCALE_TITLES@)VENTURE_JSON";

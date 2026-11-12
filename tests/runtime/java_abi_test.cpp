@@ -16,6 +16,24 @@ TEST_CASE("JNI descriptors reject malformed input and preserve JVM widths") {
     CHECK_THROWS_AS(Descriptor::parse(bad), std::invalid_argument);
   CHECK(Descriptor::parse("(JLandroid/view/MotionEvent;IIIIIJJIIIIIIFF)Z").parameters.size() == 17);
 }
+TEST_CASE("A @CriticalNative guest native gets its parameters without JNIEnv* and jclass") {
+  // Host Win64 call of (II)I and (IJFD)V: JNIEnv*, jclass, then the parameters.
+  HostArguments host;
+  host.gp = {0x1000, 0x2000, 7, 9, 0, 0};
+  const auto normal = native_arguments(Descriptor::parse("(II)I"), host, HostAbi::Win64, 0xe000);
+  CHECK(normal.integers == std::vector<std::uint64_t>{0xe000, 0x2000, 7, 9});
+  const auto critical = native_arguments(Descriptor::parse("(II)I"), host, HostAbi::Win64, 0xe000, true);
+  CHECK(critical.integers == std::vector<std::uint64_t>{7, 9});
+  std::uint64_t spill[]{std::bit_cast<std::uint64_t>(2.5)};
+  host.gp = {0x1000, 0x2000, 3, 0, 0, 0};
+  host.fp[3] = std::bit_cast<std::uint32_t>(1.5f);
+  host.stack = spill;
+  const auto mixed = native_arguments(Descriptor::parse("(IFD)V"), host, HostAbi::Win64, 0xe000, true);
+  CHECK(mixed.integers == std::vector<std::uint64_t>{3});
+  REQUIRE(mixed.doubles.size() == 2);
+  CHECK(std::bit_cast<std::uint64_t>(mixed.doubles[0]) == std::bit_cast<std::uint32_t>(1.5f));
+  CHECK(mixed.doubles[1] == 2.5);
+}
 TEST_CASE("JNI mangling round-trips escaped underscores, arrays, Unicode and empty overloads") {
   std::u16string owner = u"com/example/Cl_ass\u03bb";
   std::u16string name = u"foo_bar\U0001F600";

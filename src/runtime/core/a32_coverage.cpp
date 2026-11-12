@@ -64,7 +64,7 @@ nlohmann::json inspection_report() {
   }
   result["descriptor_counts"] = {{"ndk", ndk_descriptors().size()}, {"libc_supplement", libc_descriptors().size()},
     {"graphics", graphics_descriptors().size()}, {"vendor", vendor_descriptors().size()},
-    {"media", media_descriptors().size()}};
+    {"media", media_descriptors().size()}, {"openxr", openxr_descriptors().size()}};
   // The optional census is read only at inspection. Accept the dispatch-census
   // array format; reject unfamiliar input instead of silently inventing ranks.
   if (auto* path = venture::environment::getenv("VENTURE_A32_BOOT_CENSUS")) {

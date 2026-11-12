@@ -7,6 +7,7 @@
 #include "core/address_space.h"
 #include <array>
 #include <cstdlib>
+#include <cstring>
 #include <fstream>
 #include <thread>
 using namespace venture;
@@ -427,6 +428,23 @@ TEST_CASE("libc B: Winsock sockaddr conversion and nonblocking UDP") {
   unsigned char ipv6[16]{};
   CHECK(call("inet_pton", {10, h2g("::1"), h2g(ipv6)}) == 1);
   CHECK(ipv6[15] == 1);
+}
+TEST_CASE("libc B: CMSG_NXTHDR returns a zeroed next header that fits, like bionic") {
+  Thread thread;
+  // msquic's datapath: a zeroed 48-byte control buffer, a 20-byte first
+  // header, then the second header is filled after CMSG_NXTHDR returns it.
+  alignas(8) unsigned char control[48]{};
+  std::uint64_t first_len = 20;
+  std::memcpy(control, &first_len, sizeof(first_len));
+  struct {
+    std::uint64_t name;
+    std::uint32_t namelen, pad;
+    std::uint64_t iov, iovlen, control, controllen;
+    std::int32_t flags, pad2;
+  } message{0, 0, 0, 0, 0, h2g(control), sizeof(control), 0, 0};
+  CHECK(call("__cmsg_nxthdr", {h2g(&message), h2g(control)}) == h2g(control + 24));
+  message.controllen = 39;  // the next header no longer fits
+  CHECK(call("__cmsg_nxthdr", {h2g(&message), h2g(control)}) == 0);
 }
 TEST_CASE("libc B: socketpair messages scanf signal ABI and timers") {
   Thread thread;

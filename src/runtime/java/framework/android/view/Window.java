@@ -97,6 +97,28 @@ public class Window {
   public View peekDecorView() {
     return decor;
   }
+  public final android.content.Context getContext() {
+    return surfaceContext;
+  }
+  // API 24 frame statistics. Sentry's SentryFrameMetricsCollector implements the
+  // listener in its constructor, so without the type its init callback failed
+  // before the manifest DSN was read. The decor view has no hardware renderer
+  // here (games draw through their own surfaces), so no frames are reported.
+  public interface OnFrameMetricsAvailableListener {
+    void onFrameMetricsAvailable(Window window, FrameMetrics frameMetrics, int dropCountSinceLastInvocation);
+  }
+  private final java.util.List<OnFrameMetricsAvailableListener> frameMetricsListeners =
+      new java.util.concurrent.CopyOnWriteArrayList<>();
+  public final void addOnFrameMetricsAvailableListener(
+      OnFrameMetricsAvailableListener listener, android.os.Handler handler) {
+    frameMetricsListeners.add(java.util.Objects.requireNonNull(listener));
+  }
+  // AOSP View.removeFrameMetricsListener rejects a listener that was never added.
+  public final void removeOnFrameMetricsAvailableListener(OnFrameMetricsAvailableListener listener) {
+    if (!frameMetricsListeners.remove(listener))
+      throw new IllegalArgumentException(
+          "attempt to remove OnFrameMetricsAvailableListener that was never added");
+  }
   public WindowManager.LayoutParams getAttributes() {
     return attrs;
   }

@@ -68,6 +68,34 @@ public final class Bitmap {
     return new Bitmap(new java.awt.image.BufferedImage(
         width, height, java.awt.image.BufferedImage.TYPE_INT_ARGB));
   }
+  public enum CompressFormat { JPEG, PNG, WEBP, WEBP_LOSSY, WEBP_LOSSLESS }
+  // Host image writers: PNG and JPEG (quality applied). Java has no WebP writer,
+  // so WebP requests write PNG rather than nothing.
+  public boolean compress(CompressFormat format, int quality, java.io.OutputStream stream) {
+    if (recycled) throw new IllegalStateException("Can't compress a recycled bitmap");
+    if (quality < 0 || quality > 100) throw new IllegalArgumentException("quality must be 0..100");
+    java.util.Objects.requireNonNull(stream);
+    try {
+      if (format != CompressFormat.JPEG) return javax.imageio.ImageIO.write(image, "png", stream);
+      // JPEG has no alpha: Android composites onto black.
+      var rgb = new java.awt.image.BufferedImage(getWidth(), getHeight(), java.awt.image.BufferedImage.TYPE_INT_RGB);
+      var g = rgb.createGraphics();
+      try { g.drawImage(image, 0, 0, null); } finally { g.dispose(); }
+      var writer = javax.imageio.ImageIO.getImageWritersByFormatName("jpeg").next();
+      var params = writer.getDefaultWriteParam();
+      params.setCompressionMode(javax.imageio.ImageWriteParam.MODE_EXPLICIT);
+      params.setCompressionQuality(quality / 100f);
+      try (var out = javax.imageio.ImageIO.createImageOutputStream(stream)) {
+        writer.setOutput(out);
+        writer.write(null, new javax.imageio.IIOImage(rgb, null, null), params);
+      } finally {
+        writer.dispose();
+      }
+      return true;
+    } catch (java.io.IOException e) {
+      return false;
+    }
+  }
   private int density = 160;
   public void setDensity(int density) { this.density = density; }
   public int getDensity() { return density; }

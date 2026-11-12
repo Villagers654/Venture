@@ -9,6 +9,19 @@ inline VkExtent2D fit_presentation_extent(VkExtent2D guest, std::uint32_t maximu
   const double scale = std::min({1.0, double(maximum_width) / guest.width, double(maximum_height) / guest.height});
   return {std::max(1u, std::uint32_t(guest.width * scale)), std::max(1u, std::uint32_t(guest.height * scale))};
 }
+// The host chain for a projection-view image whose largest eye rect is `rect`:
+// scaled so that rect fits the eye size the game was told (`eye`, the host's
+// recommended size or the Display setting). That size already includes the
+// host's supersampling; a game multiplier on top only adds pixels the host
+// compositor and stream scale away. Overshoots within 5% stay 1:1, where an
+// exact copy beats a slight resample.
+inline VkExtent2D eye_presentation_extent(VkExtent2D guest, VkExtent2D rect, VkExtent2D eye) {
+  if (!guest.width || !guest.height || !rect.width || !rect.height || !eye.width || !eye.height) return guest;
+  const double scale = std::min({1.0, double(eye.width) / rect.width, double(eye.height) / rect.height});
+  if (scale > 0.95) return guest;
+  const auto side = [&](std::uint32_t v) { return std::max(1u, std::uint32_t(v * scale + 0.5)); };
+  return {side(guest.width), side(guest.height)};
+}
 inline XrRect2Di map_presentation_rect(XrRect2Di rect, VkExtent2D guest, VkExtent2D host) {
   if (!guest.width || !guest.height || !host.width || !host.height || (guest.width == host.width && guest.height == host.height)) return rect;
   const auto edge = [](std::int64_t value, std::uint32_t from, std::uint32_t to) {

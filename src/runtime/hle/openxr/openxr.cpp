@@ -430,14 +430,20 @@ XrResult xrCreateInstance(const XrInstanceCreateInfo *info, XrInstance *out) {
     return XR_ERROR_VALIDATION_FAILURE;
   const auto caps = capabilities();
   std::set<std::string> requested;
+  std::string missing;
   for (std::uint32_t i = 0; i < info->enabledExtensionCount; ++i) {
     const char *name = info->enabledExtensionNames[i];
     if (!name)
       return XR_ERROR_VALIDATION_FAILURE;
     log::info("xr", "Guest requests {}", name);
     if (!caps.contains(name))
-      return XR_ERROR_EXTENSION_NOT_PRESENT;
+      missing += missing.empty() ? name : std::string(", ") + name;
     requested.insert(name);
+  }
+  // Every unavailable name in one line, so one launch shows the whole gap.
+  if (!missing.empty()) {
+    log::error("xr", "Guest instance requires unavailable extensions: {}", missing);
+    return XR_ERROR_EXTENSION_NOT_PRESENT;
   }
   // OVRPlugin requests both sampler extensions for a Vulkan-only instance.
   // Accept the unused API's declaration: Get/Update still require the actual
@@ -451,11 +457,24 @@ XrResult xrCreateInstance(const XrInstanceCreateInfo *info, XrInstance *out) {
     return XR_ERROR_EXTENSION_DEPENDENCY_NOT_ENABLED;
   if (requested.contains("XR_FB_foveation_configuration") && !requested.contains("XR_FB_foveation"))
     return XR_ERROR_EXTENSION_DEPENDENCY_NOT_ENABLED;
-  if (info->next) {
-    auto android = static_cast<const AndroidInstance *>(info->next);
-    if (android->type != XR_TYPE_INSTANCE_CREATE_INFO_ANDROID_KHR || android->next ||
-        !requested.contains("XR_KHR_android_create_instance") || !android->vm || !android->activity)
+  const AndroidInstance *android = nullptr;
+  unsigned nodes = 0;
+  for (auto p = static_cast<const XrBaseInStructure *>(info->next); p; p = p->next) {
+    if (++nodes > 64)
       return XR_ERROR_VALIDATION_FAILURE;
+    if (p->type == XR_TYPE_INSTANCE_CREATE_INFO_ANDROID_KHR && !android) {
+      android = reinterpret_cast<const AndroidInstance *>(p);
+      if (!requested.contains("XR_KHR_android_create_instance") || !android->vm || !android->activity)
+        return XR_ERROR_VALIDATION_FAILURE;
+      continue;
+    }
+    // XR_EXT_debug_utils: a messenger for instance creation itself. Its callback
+    // is not called; messages go to the log (debug_utils.cpp).
+    if (p->type == XR_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT && requested.contains("XR_EXT_debug_utils"))
+      continue;
+    return XR_ERROR_VALIDATION_FAILURE;
+  }
+  if (android) {
     state().vm = android->vm;
     state().context = android->activity;
   }
@@ -577,6 +596,14 @@ XrResult xrGetSystemProperties(XrInstance instance, XrSystemId system, XrSystemP
     if (p->type == XR_TYPE_SYSTEM_HEADSET_ID_PROPERTIES_META && enabled("XR_META_headset_id")) {
       const auto &id = process_config().device_identity->headset_id;
       std::memcpy(reinterpret_cast<XrSystemHeadsetIdPropertiesMETA *>(p)->id.data, id.data(), id.size());
+      continue;
+    }
+    if (p->type == XR_TYPE_SYSTEM_BOUNDARY_VISIBILITY_PROPERTIES_META && enabled("XR_META_boundary_visibility")) {
+      reinterpret_cast<XrSystemBoundaryVisibilityPropertiesMETA *>(p)->supportsBoundaryVisibility = XR_TRUE;
+      continue;
+    }
+    if (p->type == XR_TYPE_SYSTEM_SPATIAL_ENTITY_PROPERTIES_FB && enabled("XR_FB_spatial_entity")) {
+      reinterpret_cast<XrSystemSpatialEntityPropertiesFB *>(p)->supportsSpatialEntity = XR_TRUE;
       continue;
     }
     if (p->type == XR_TYPE_SYSTEM_COLOR_SPACE_PROPERTIES_FB && enabled("XR_FB_color_space") &&
@@ -1149,6 +1176,8 @@ XrResult xrEndFrame(XrSession handle, const XrFrameEndInfo *info) {
   SphereLayers drawn_spheres;
   std::vector<InputChain> chains;
   PresentationLayers rects;
+  // The largest view rect of each projection color chain (prepare_swapchains).
+  std::map<XrSwapchain, VkExtent2D> eye_rects;
   layers.reserve(info->layerCount);
   spheres.reserve(info->layerCount);
   chains.reserve(info->layerCount);
@@ -1196,6 +1225,13 @@ XrResult xrEndFrame(XrSession handle, const XrFrameEndInfo *info) {
                       int(p->views[j].type), valid_handle(p->views[j].subImage.swapchain, "XrSwapchain"));
           return XR_ERROR_VALIDATION_FAILURE;
         }
+      for (std::uint32_t j = 0; j < p->viewCount; ++j) {
+        const auto& rect = p->views[j].subImage.imageRect;
+        if (rect.extent.width <= 0 || rect.extent.height <= 0) continue;
+        auto& eye = eye_rects[p->views[j].subImage.swapchain];
+        eye.width = std::max(eye.width, std::uint32_t(rect.extent.width));
+        eye.height = std::max(eye.height, std::uint32_t(rect.extent.height));
+      }
     }
     const auto* mapped = static_cast<const XrCompositionLayerBaseHeader*>(rects.layer(layer));
     if (std::exchange(underlay_pending, false) && (mapped->layerFlags & XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT)) {
@@ -1313,7 +1349,8 @@ XrResult xrEndFrame(XrSession handle, const XrFrameEndInfo *info) {
   const auto prepared = [&] {
     vulkan::ScopedHostWait timing("guest_end_prepare");
     return prepare_swapchains(rects.submitted, passthrough.force_opaque,
-                              underlay.swapchains.empty() ? nullptr : &underlay, mirror ? &*mirror : nullptr);
+                              underlay.swapchains.empty() ? nullptr : &underlay, mirror ? &*mirror : nullptr,
+                              &eye_rects);
   }();
   if (prepared != XR_SUCCESS && prepared != XR_SESSION_LOSS_PENDING) return prepared;
   const auto drawn = drawn_spheres.present(handle, info->displayTime, layers);

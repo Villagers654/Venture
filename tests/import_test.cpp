@@ -547,6 +547,24 @@ TEST_CASE("an import job installs the source's files, completes them from an own
   CHECK(job.state == download::State::complete);
 }
 
+TEST_CASE("a partly downloaded install names the files that make it so") {
+  Directory d;
+  meta::Plan plan;
+  plan.files = {{{}, "game.apk", {}, "apk", 3}, {{}, "main.obb", {}, "obb", 4}, {{}, "data.bin", {}, "asset", 5},
+                {{}, "gone.bin", {}, "asset", 6}, {{}, "extra.bin", {}, "asset", 7}};
+  plan.files[4].required = false;  // not a base file: never reported
+  auto write = [&](const char *name, std::size_t n) { std::ofstream(d.root / name, std::ios::binary) << std::string(n, 'x'); };
+  write("game.apk", 3);
+  write("main.obb", 2);  // changed after install
+  write("data.bin.part", 1);
+  CHECK(library::install_problems(d.root, plan) ==
+        std::vector<std::string>{"main.obb has 2 bytes, the manifest says 4",
+                                 "data.bin is still downloading (1 of 5 bytes)", "gone.bin is missing"});
+  write("main.obb", 4);
+  write("data.bin", 5);
+  write("gone.bin", 6);
+  CHECK(library::install_problems(d.root, plan).empty());
+}
 TEST_CASE("queued jobs start in list order, move, and cancel; a running job stops before it leaves") {
   Directory d;
   const auto games = d.root / "games";

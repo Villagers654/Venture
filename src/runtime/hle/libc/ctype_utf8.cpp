@@ -200,6 +200,10 @@ std::uint32_t wcstombs32(char* out, const std::uint32_t* s, std::uint32_t n) { r
 std::uint32_t mbsrtowcs_l32(std::uint32_t* out, const char** src, std::uint32_t n, unsigned char* p, std::uint32_t) { return mbsrtowcs32(out,src,n,p); }
 std::uint32_t wcsrtombs_l32(char* out, const std::uint32_t** src, std::uint32_t n, unsigned char* p, std::uint32_t) { return wcsrtombs32(out,src,n,p); }
 }  // namespace
+std::uint64_t decode_utf8(std::uint32_t* out, const char* input, std::uint64_t n) {
+  MbState state{};
+  return mbrtowc_impl(out, input, n, &state);
+}
 void register_multibyte(HleLibrary& lib) {
   if (process_config().isa() == GuestIsa::a32) {
 #define A(n, f) abi32::adapt<&f>(n)
@@ -227,6 +231,8 @@ void register_multibyte(HleLibrary& lib) {
   B(btowc);
   B(wctob);
 #undef B
+  extern void register_iconv(HleLibrary&);
+  register_iconv(lib);
   bind<&mbrtowc_impl>(lib, "mbrtoc32");
   bind<&wcrtomb_impl>(lib, "c32rtomb");
   bind<&mbsrtowcs_impl>(lib, "mbsrtowcs_l");

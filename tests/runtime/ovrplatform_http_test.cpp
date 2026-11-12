@@ -601,6 +601,10 @@ TEST_CASE("Platform user proof HTTP and malformed responses fail without exposin
     status = 403; expected = ErrorCode::unauthenticated;
     body = R"({"error":{"message":"fixture-app-token fixture-private-nonce"}})";
   }
+  SUBCASE("HTTP 403 permission error keeps the sign-in") {
+    status = 403; expected = ErrorCode::unavailable;
+    body = R"({"error":{"message":"fixture-app-token","code":10,"error_subcode":1891537}})";
+  }
   SUBCASE("HTTP unavailable") {
     status = 503; expected = ErrorCode::unavailable;
     body = "fixture-app-token fixture-private-nonce";
@@ -637,6 +641,12 @@ TEST_CASE("Platform user proof HTTP and malformed responses fail without exposin
   const std::string text(venture::g2h<char>(session.get(error, "ovr_Error_GetMessage")));
   CHECK(text == failure(expected).message);
   session.free_message(message);
+  // Only an authentication failure ends the sign-in: the signed-in user is still known.
+  const auto user_request = optest::invoke(session, "ovr_User_GetLoggedInUser");
+  const auto user_message = optest::wait_pop(session);
+  CHECK(session.get(user_message, "ovr_Message_GetRequestID") == user_request);
+  CHECK(session.get(user_message, "ovr_Message_IsError") == (expected == ErrorCode::unauthenticated ? 1 : 0));
+  session.free_message(user_message);
   CHECK(arena.live == 0);
   CHECK(server.requests().size() == 3); // No automatic retry, even on 503.
 }

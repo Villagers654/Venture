@@ -41,8 +41,20 @@ DisplayOverride parse_display_override(std::string_view resolution, std::string_
 DisplayOverride display_override();
 // The recommended size the override gives for one host view, clamped to its maximum.
 XrExtent2Di override_view_size(const DisplayOverride& o, const XrViewConfigurationView& host);
-// Applies the override to host views of a primary stereo (or mono) configuration in place.
+// Applies the override to host views of a primary stereo (or mono) configuration in
+// place. Each view's maximum becomes that size, the target: it already includes the
+// host's supersampling. A compensated game is recommended the target divided by its
+// multiplier (eye_scale.h).
 void apply_display_override(XrViewConfigurationView* views, std::uint32_t count);
+// The per-eye sizes of the views games are given (the larger of the two):
+// `target`, the host's recommendation or the Display setting's size, which is
+// also the views' maximum, and `told`, their recommendation: the target, or
+// less for a game whose multiplier is compensated (eye_scale.h). Zero when the
+// host has no views.
+struct ReportedEye {
+  VkExtent2D told{}, target{};
+};
+ReportedEye reported_eye();
 // The rate a host with XR_FB_display_refresh_rate switches to, from the rates it
 // lists; nullopt keeps the host's own (no override, or a rate it does not list).
 std::optional<float> supported_override_rate(float rate, const float* rates, std::uint32_t count);

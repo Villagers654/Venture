@@ -214,6 +214,22 @@ XrResult xrGetRecommendedLayerResolutionMETA(XrSession handle,
                                                 : XrExtent2Di{0, 0};
   return XR_SUCCESS;
 }
+// Venture draws no Guardian boundary of its own; the host runtime keeps its
+// chaperone. Answer as a Quest does without passthrough running: the boundary
+// stays visible and a suppression request is declined with the success code,
+// so visibility never changes and no change event is queued.
+XrResult xrRequestBoundaryVisibilityMETA(XrSession handle, XrBoundaryVisibilityMETA visibility) {
+  std::lock_guard lock(state().mutex);
+  if (!valid_handle(handle, "XrSession"))
+    return XR_ERROR_HANDLE_INVALID;
+  if (!enabled("XR_META_boundary_visibility"))
+    return XR_ERROR_FUNCTION_UNSUPPORTED;
+  if (visibility == XR_BOUNDARY_VISIBILITY_NOT_SUPPRESSED_META)
+    return XR_SUCCESS;
+  if (visibility == XR_BOUNDARY_VISIBILITY_SUPPRESSED_META)
+    return XR_BOUNDARY_VISIBILITY_SUPPRESSION_NOT_ALLOWED_META;
+  return XR_ERROR_VALIDATION_FAILURE;
+}
 XrResult xrGetDisplayRefreshRateFB(XrSession handle, float *out) {
   std::lock_guard lock(state().mutex);
   if (!valid_handle(handle, "XrSession"))

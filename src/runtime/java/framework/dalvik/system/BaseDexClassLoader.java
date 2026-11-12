@@ -1,14 +1,20 @@
 package dalvik.system;
 public class BaseDexClassLoader extends java.net.URLClassLoader {
   private final String libraries;
+  // A loader whose path names the app's own APK serves the app loader's classes.
+  private final boolean appClasses;
   public BaseDexClassLoader(String path, java.io.File optimized, String libs, ClassLoader parent) {
     super(urls(path), parent);
     libraries = libs;
+    appClasses = entries(path).anyMatch(BaseDexClassLoader::appApk);
+  }
+  private static java.util.stream.Stream<String> entries(String path) {
+    return java.util.Arrays.stream(path.split(java.util.regex.Pattern.quote(java.io.File.pathSeparator)))
+        .filter(s -> !s.isEmpty());
   }
   private static java.net.URL[] urls(String path) {
-    return java.util.Arrays
-        .stream(path.split(java.util.regex.Pattern.quote(java.io.File.pathSeparator)))
-        .filter(s -> !s.isEmpty())
+    return entries(path)
+        .filter(s -> !appApk(s))
         .map(s -> {
           if (!s.endsWith(".jar"))
             throw new UnsupportedOperationException("DEX must be converted before loading: " + s);
@@ -19,6 +25,22 @@ public class BaseDexClassLoader extends java.net.URLClassLoader {
           }
         })
         .toArray(java.net.URL[] ::new);
+  }
+  // The app's own APK, by its host path (getPackageCodePath) or its device path
+  // (/data/app/<package>/base.apk). Its classes were converted at launch and the
+  // app loader defines them: a second loader over the same APK (a DexClassLoader
+  // Civilization VII builds with the app loader as parent, then calls findClass
+  // on) gets those classes instead of second copies, which would sit in another
+  // runtime package than their package-private nest mates.
+  private static boolean appApk(String path) {
+    if (path.endsWith(".jar")) return false;
+    var env = com.venture.runtime.RuntimeEnvironment.current();
+    return env != null && (path.equals("/data/app/" + env.manifest.info.packageName + "/base.apk") ||
+                           new java.io.File(path).getAbsoluteFile().equals(env.apk));
+  }
+  private ClassLoader appLoader() {
+    var env = com.venture.runtime.RuntimeEnvironment.current();
+    return appClasses && env != null && env.loader != this ? env.loader : null;
   }
   // Optional SDK contracts exist only to link signatures retained by Unity
   // callbacks and by SDKs that probe for androidx.lifecycle. Prefer the APK's
@@ -68,6 +90,14 @@ public class BaseDexClassLoader extends java.net.URLClassLoader {
       // ART's DefineClass returns an existing definition for this loader. UE4
       // calls findClass directly through JNI, bypassing loadClass's cache check.
       Class<?> cls = findLoadedClass(name);
+      ClassLoader app = appLoader();
+      if (cls == null && app != null) {
+        try {
+          return app.loadClass(name);
+        } catch (ClassNotFoundException notInApp) {
+          // The other entries of this loader's path may define it.
+        }
+      }
       if (cls == null) {
         cls = super.findClass(name);
         com.venture.runtime.RuntimeEnvironment.host().bindClass(cls);
@@ -122,6 +152,7 @@ public class BaseDexClassLoader extends java.net.URLClassLoader {
   @Override
   public java.net.URL findResource(String name) {
     java.net.URL own = super.findResource(name);
+    if (own == null && appLoader() != null) own = appLoader().getResource(name);
     return own != null ? own : apkResource(name);
   }
   @Override

@@ -7,6 +7,7 @@
 #include "common/log.h"
 namespace venture::hle::libc {
 void register_files_memory(HleLibrary&);
+void register_fts(HleLibrary&);
 // bionic fchmodat(): AT_SYMLINK_NOFOLLOW (0x100) changes the link itself, which
 // Linux cannot do, so a symlink answers EOPNOTSUPP and anything else is changed.
 int chmod_at(int dirfd, const char* p, std::uint32_t mode, int flags) {
@@ -274,6 +275,7 @@ void register_files_extra(HleLibrary& lib) {
 #undef A
   }
   register_files_memory(lib);
+  register_fts(lib);
 #define B(n, f) VENTURE_LIBC_BIND(lib, n, f)
   B("statfs", statfs_fn);
   B("chmod", chmod_fn);

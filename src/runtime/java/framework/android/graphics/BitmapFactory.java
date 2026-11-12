@@ -4,6 +4,13 @@ public final class BitmapFactory {
     public boolean inJustDecodeBounds, inScaled = true;
     public int outWidth = -1, outHeight = -1, inSampleSize = 1, inDensity, inTargetDensity;
   }
+  public static Bitmap decodeByteArray(byte[] data, int offset, int length) {
+    return decodeByteArray(data, offset, length, null);
+  }
+  public static Bitmap decodeByteArray(byte[] data, int offset, int length, Options options) {
+    if ((offset | length) < 0 || data.length < offset + length) throw new ArrayIndexOutOfBoundsException();
+    return decodeStream(new java.io.ByteArrayInputStream(data, offset, length), null, options);
+  }
   public static Bitmap decodeStream(java.io.InputStream in) {
     return decodeStream(in, null, null);
   }

@@ -59,7 +59,7 @@ public final class PackageModel {
     app.name = app.className;
     app.enabled = application.integer("enabled", 1) != 0;
     app.processName = processName(application.text("process", info.packageName));
-    app.metaData = metadata(application);
+    app.metaData = metadata(application, resources);
     app.theme = application.integer("theme", 0);
     app.flags = application.integer("debuggable", 0) != 0 ? ApplicationInfo.FLAG_DEBUGGABLE : 0;
     for (var n : application.children) {
@@ -70,7 +70,7 @@ public final class PackageModel {
         String target = n.text("targetActivity", null);
         a.targetActivity = target == null ? null : qualified(target);
         a.applicationInfo = app;
-        a.metaData = metadata(n);
+        a.metaData = metadata(n, resources);
         a.theme = n.integer("theme", app.theme);
         a.screenOrientation = n.integer("screenOrientation", -1);
         a.configChanges = n.integer("configChanges", 0);
@@ -120,7 +120,7 @@ public final class PackageModel {
         s.name = qualified(n.text("name", ""));
         s.packageName = info.packageName;
         s.applicationInfo = app;
-        s.metaData = metadata(n);
+        s.metaData = metadata(n, resources);
         s.permission = n.text("permission", null);
         s.processName = processName(n.text("process", app.processName));
         s.enabled = n.integer("enabled", 1) != 0 && app.enabled;
@@ -149,7 +149,7 @@ public final class PackageModel {
         r.name = qualified(n.text("name", ""));
         r.packageName = info.packageName;
         r.applicationInfo = app;
-        r.metaData = metadata(n);
+        r.metaData = metadata(n, resources);
         r.processName = processName(n.text("process", app.processName));
         r.enabled = n.integer("enabled", 1) != 0 && app.enabled;
         r.exported = n.integer("exported", 0) != 0;
@@ -160,7 +160,7 @@ public final class PackageModel {
         p.packageName = info.packageName;
         p.applicationInfo = app;
         p.authority = n.text("authorities", "");
-        p.metaData = metadata(n);
+        p.metaData = metadata(n, resources);
         p.processName = processName(n.text("process", app.processName));
         p.enabled = n.integer("enabled", 1) != 0 && app.enabled;
         // targetSdk 17+ default; androidx FileProvider rejects an exported provider.
@@ -309,20 +309,39 @@ public final class PackageModel {
         : name.contains(".")    ? name
                                 : info.packageName + "." + name;
   }
-  private static Bundle metadata(BinaryResources.Node n) {
+  // AOSP ParsingPackageUtils.parseMetaData: android:resource keeps its id;
+  // android:value is read through the TypedArray, so a reference (such as
+  // @string/sentry_dsn) arrives resolved, as the string, boolean or number it names.
+  private static Bundle metadata(BinaryResources.Node n,
+      java.util.function.IntFunction<BinaryResources.Value> resources) {
     Bundle out = new Bundle();
     for (var c : n.children)
       if (c.name.equals("meta-data")) {
         String name = c.text("name", "");
+        BinaryResources.Value resource = c.attributes.get("resource");
+        if (resource != null && resource.data() != 0) {
+          out.putInt(name, resource.data());
+          continue;
+        }
         BinaryResources.Value v = c.attributes.get("value");
+        Set<Integer> seen = new HashSet<>();
+        try {
+          while (v != null && v.type() == 1 && v.data() != 0 && seen.add(v.data()))
+            v = resources.apply(v.data());
+        } catch (RuntimeException e) {
+          // Without the resource table the id is all there is.
+        }
         if (v == null)
-          v = c.attributes.get("resource");
-        if (v != null)
-          switch (v.type()) {
-            case 3 -> out.putString(name, v.text());
-            case 18 -> out.putBoolean(name, v.data() != 0);
-            default -> out.putInt(name, v.data());
-          }
+          continue;
+        int type = v.type();
+        if (type == 3)
+          out.putString(name, v.text());
+        else if (type == 18)
+          out.putBoolean(name, v.data() != 0);
+        else if (type == 4)
+          out.putFloat(name, Float.intBitsToFloat(v.data()));
+        else if (type == 1 || (type >= 16 && type <= 31))
+          out.putInt(name, v.data());
       }
     return out;
   }

@@ -590,9 +590,16 @@ bool XrImageBridge::release(std::uint32_t index, std::string* error, bool bottom
       blit.srcOffsets[0] = {0, bottom_up ? height : 0, 0};
       blit.srcOffsets[1] = {width, bottom_up ? 0 : height, 1};
       blit.dstOffsets[1] = {width, height, 1};
+      // A smaller presentation image (VrApi eyes past the reported eye size).
+      const bool scaled = desc.target_width && desc.target_height &&
+                          (desc.target_width != desc.width || desc.target_height != desc.height);
+      if (scaled)
+        blit.dstOffsets[1] = {std::int32_t(std::max(1u, desc.target_width >> level)),
+                              std::int32_t(std::max(1u, desc.target_height >> level)), 1};
       device_proc<PFN_vkCmdBlitImage>("vkCmdBlitImage")(
           image.command, image.sources[subresource], VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-          impl_->targets[index], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_NEAREST);
+          impl_->targets[index], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit,
+          scaled ? VK_FILTER_LINEAR : VK_FILTER_NEAREST);
       if (image.direct && vk_layout(layouts[subresource]) != VK_IMAGE_LAYOUT_UNDEFINED)
         barrier(image.command, image.sources[subresource],
                 VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, vk_layout(layouts[subresource]), 1);

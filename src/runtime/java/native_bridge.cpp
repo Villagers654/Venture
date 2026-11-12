@@ -26,6 +26,7 @@ extern "C" void venture_java_native_entry();
 namespace venture::java {
 namespace {
 jclass loader_class = nullptr;
+jmethodID critical_natives_method = nullptr;
 jmethodID descriptor_method = nullptr, native_methods_method = nullptr, load_kind_method = nullptr,
           reflect_invoke = nullptr;
 jclass class_class = nullptr;
@@ -48,6 +49,7 @@ struct NativeRecord {
   void* stub = nullptr;
   bool registered = true;  // protected by records_mutex; storage survives unregistration
   bool platform_destroy = false;
+  bool critical = false;  // @CriticalNative: the guest gets no JNIEnv* or jclass
 };
 std::mutex records_mutex;
 std::vector<std::unique_ptr<NativeRecord>> records;  // live through process shutdown
@@ -222,7 +224,8 @@ extern "C" std::uint64_t venture_java_native_dispatch(NativeRecord* record, cons
       std::uint64_t returned;
       {
         jni32::NativeScope tokens;
-        auto args = jni32::native_arguments(record->descriptor, path_host, host_abi, guest_env(thread));
+        auto args = jni32::native_arguments(record->descriptor, path_host, host_abi, guest_env(thread),
+                                             record->critical);
         auto value = thread.call32(record->function, args);
         returned =
             record->descriptor.result == Type::Object
@@ -232,7 +235,7 @@ extern "C" std::uint64_t venture_java_native_dispatch(NativeRecord* record, cons
       }
       return record->descriptor.result == Type::Object ? h2g(frame.pop(g2h<_jobject>(returned))) : returned;
     }
-    auto args = native_arguments(record->descriptor, path_host, host_abi, guest_env(thread));
+    auto args = native_arguments(record->descriptor, path_host, host_abi, guest_env(thread), record->critical);
     auto value = thread.call(record->function, args.view());
     if (record->descriptor.result == Type::Object) {
       // Promote the returned local out of the transition frame, including null
@@ -333,6 +336,9 @@ void init_bridge(JNIEnv* env) {
   native_methods_method =
       env->GetStaticMethodID(loader_class, "nativeMethods", "(Ljava/lang/Class;)[Ljava/lang/String;");
   if (!native_methods_method) return;
+  critical_natives_method =
+      env->GetStaticMethodID(loader_class, "criticalNatives", "(Ljava/lang/Class;)[Ljava/lang/String;");
+  if (!critical_natives_method) return;
   load_kind_method = env->GetStaticMethodID(loader_class, "loadKind", "(Ljava/lang/reflect/Executable;)I");
   if (!load_kind_method) return;
   reflect_invoke = env->GetStaticMethodID(loader_class, "invokeWithLoader",
@@ -394,6 +400,21 @@ jint register_natives(JNIEnv* env, jclass owner, const JNINativeMethod* methods,
   if (!frame.valid()) return JNI_ENOMEM;
   auto loader = env->CallObjectMethod(owner, class_loader);
   if (env->ExceptionCheck()) return JNI_ERR;
+  // ART binds a @CriticalNative static native (primitive parameters and result
+  // only) without JNIEnv* and jclass. Delightex's GL bindings are; with the two
+  // extra arguments every GL call read shifted, invalid arguments.
+  std::set<std::pair<std::string, std::string>> critical;
+  if (critical_natives_method) {
+    auto pairs = static_cast<jobjectArray>(env->CallStaticObjectMethod(loader_class, critical_natives_method, owner));
+    if (env->ExceptionCheck()) return JNI_ERR;
+    for (jint i = 0, n = pairs ? env->GetArrayLength(pairs) : 0; i + 1 < n; i += 2) {
+      auto name = static_cast<jstring>(env->GetObjectArrayElement(pairs, i));
+      auto sig = static_cast<jstring>(env->GetObjectArrayElement(pairs, i + 1));
+      critical.emplace(string_value(env, name), string_value(env, sig));
+      env->DeleteLocalRef(name);
+      env->DeleteLocalRef(sig);
+    }
+  }
   std::vector<JNINativeMethod> host_methods;
   std::vector<std::unique_ptr<NativeRecord>> added;
   for (jint i = 0; i < count; ++i) {
@@ -413,6 +434,10 @@ jint register_natives(JNIEnv* env, jclass owner, const JNINativeMethod* methods,
       env->DeleteLocalRef(name);
     }
     record->descriptor = Descriptor::parse(method.signature);
+    record->critical = critical.contains({record->name, record->signature}) &&
+        record->descriptor.result != Type::Object &&
+        std::none_of(record->descriptor.parameters.begin(), record->descriptor.parameters.end(),
+                     [](Type t) { return t == Type::Object; });
     record->function = h2g(method.fnPtr);
     record->owner = static_cast<jclass>(env->NewGlobalRef(owner));
     record->loader = loader ? env->NewGlobalRef(loader) : nullptr;

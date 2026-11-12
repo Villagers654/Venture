@@ -9,6 +9,7 @@
 #include "xr/presentation.h"
 #include "xr/desktop_mirror.h"
 #include "xr/display_override.h"
+#include "xr/eye_scale.h"
 #include "xr/queue.h"
 #include "xr/vulkan_extensions.h"
 #include "hle/vulkan/timing.h"
@@ -255,8 +256,19 @@ std::optional<MirrorEye> mirror_eye(std::span<const XrCompositionLayerBaseHeader
     }
   return std::nullopt;
 }
+namespace {
+// A color format the guest copy can scale with a filtered blit (guest_images.cpp).
+bool scalable_color_format(std::int64_t format) {
+  switch (VkFormat(format)) {
+  case VK_FORMAT_D16_UNORM: case VK_FORMAT_X8_D24_UNORM_PACK32: case VK_FORMAT_D32_SFLOAT:
+  case VK_FORMAT_D16_UNORM_S8_UINT: case VK_FORMAT_D24_UNORM_S8_UINT: case VK_FORMAT_D32_SFLOAT_S8_UINT:
+  case VK_FORMAT_S8_UINT: return false;
+  default: return gfx::supports_filtered_blit(format);
+  }
+}
+}  // namespace
 XrResult prepare_swapchains(const std::set<XrSwapchain>& submitted, bool force_opaque, const UnderlayAlpha* underlay,
-                            const MirrorEye* mirror) {
+                            const MirrorEye* mirror, const std::map<XrSwapchain, VkExtent2D>* eye_rects) {
   auto& s = state();
   XrResult qualified = XR_SUCCESS;
   const auto live_hosts = [&] {
@@ -292,6 +304,27 @@ XrResult prepare_swapchains(const std::set<XrSwapchain>& submitted, bool force_o
     // Guest images keep every mip; the host compositor owns filtering. Some hosts
     // accept a mipmapped request but allocate one level (SteamVR), as in VrApi.
     r.host_info.mipCount = 1;
+    // An eye image rendered past the eye size the game was told presents
+    // through a host chain of that size (eye_presentation_extent). Scaled
+    // copies blit, so only single-sample color chains in a format that blits
+    // with filtering qualify; depth stays.
+    const VkExtent2D* eye_rect = nullptr;
+    if (eye_rects)
+      if (const auto found = eye_rects->find(handle); found != eye_rects->end()) eye_rect = &found->second;
+    if (eye_rect) {
+      // The game's eye against the size it was told teaches its multiplier.
+      const auto reported = venture::xr::reported_eye();
+      venture::xr::eye_scale::observe(reported.told, reported.target, *eye_rect);
+      const auto size = venture::xr::eye_presentation_extent({r.info.width, r.info.height}, *eye_rect, reported.target);
+      if ((size.width != r.info.width || size.height != r.info.height) && r.info.sampleCount == 1 &&
+          scalable_color_format(r.info.format)) {
+        r.host_info.width = size.width;
+        r.host_info.height = size.height;
+        log::info("xr", "eye swapchain {}x{} (eye rect {}x{}) exceeds the eye size {}x{}; presenting "
+                  "through {}x{}", r.info.width, r.info.height, eye_rect->width, eye_rect->height,
+                  reported.target.width, reported.target.height, size.width, size.height);
+      }
+    }
     // Fit the host's maximum with the guest aspect; the copy scales and layer
     // rects follow (map_subimage). Sizes within the maximum stay 1:1. A zero
     // maximum is no limit: the Oculus PC runtime (Link 2.18) reports 0x0.
@@ -299,9 +332,9 @@ XrResult prepare_swapchains(const std::set<XrSwapchain>& submitted, bool force_o
     if (XR_SUCCEEDED(::xrGetSystemProperties(host_xr().instance, host_xr().system, &properties)) &&
         properties.graphicsProperties.maxSwapchainImageWidth && properties.graphicsProperties.maxSwapchainImageHeight) {
       const auto& limits = properties.graphicsProperties;
-      const auto size = fit_presentation_extent({r.info.width, r.info.height},
-          limits.maxSwapchainImageWidth, limits.maxSwapchainImageHeight);
-      if (size.width != r.info.width || size.height != r.info.height) {
+      const VkExtent2D wanted{r.host_info.width, r.host_info.height};
+      const auto size = fit_presentation_extent(wanted, limits.maxSwapchainImageWidth, limits.maxSwapchainImageHeight);
+      if (size.width != wanted.width || size.height != wanted.height) {
         r.host_info.width = size.width;
         r.host_info.height = size.height;
         log::info("xr", "guest swapchain {}x{} exceeds the host maximum {}x{}; presenting through {}x{}",

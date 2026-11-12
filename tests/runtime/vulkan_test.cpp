@@ -1320,6 +1320,25 @@ TEST_CASE("Vulkan Android hardware buffers share GPU payloads through allocation
   vi.subresourceRange = range;
   VkImageView view{};
   REQUIRE(call("vkCreateImageView", device, &vi, nullptr, &view) == VK_SUCCESS);
+  // Unreal's Quest RHI names the Quest driver's video external formats (506,
+  // 654) without a buffer and creates samplers with them at device creation.
+  VkExternalFormatANDROID quest_format{VK_STRUCTURE_TYPE_EXTERNAL_FORMAT_ANDROID, nullptr, 506};
+  VkSamplerYcbcrConversionCreateInfo quest_info{VK_STRUCTURE_TYPE_SAMPLER_YCBCR_CONVERSION_CREATE_INFO,
+                                                &quest_format, VK_FORMAT_UNDEFINED,
+                                                VK_SAMPLER_YCBCR_MODEL_CONVERSION_YCBCR_709,
+                                                VK_SAMPLER_YCBCR_RANGE_ITU_FULL, VkComponentMapping{},
+                                                VK_CHROMA_LOCATION_MIDPOINT, VK_CHROMA_LOCATION_MIDPOINT,
+                                                VK_FILTER_NEAREST, VK_FALSE};
+  VkSamplerYcbcrConversion quest_conversion{};
+  REQUIRE(call("vkCreateSamplerYcbcrConversion", device, &quest_info, nullptr, &quest_conversion) == VK_SUCCESS);
+  REQUIRE(quest_conversion);
+  VkSamplerYcbcrConversionInfo quest_use{VK_STRUCTURE_TYPE_SAMPLER_YCBCR_CONVERSION_INFO, nullptr, quest_conversion};
+  auto quest_si = si;
+  quest_si.pNext = &quest_use;
+  VkSampler quest_sampler{};
+  REQUIRE(call("vkCreateSampler", device, &quest_si, nullptr, &quest_sampler) == VK_SUCCESS);
+  call("vkDestroySampler", device, quest_sampler, nullptr);
+  call("vkDestroySamplerYcbcrConversion", device, quest_conversion, nullptr);
 
   call("vkDestroyImageView", device, view, nullptr);
   call("vkDestroySampler", device, sampler, nullptr);

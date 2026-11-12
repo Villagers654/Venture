@@ -417,6 +417,25 @@ TEST_CASE("An OpenXR game's Touch bindings follow the player's controls on anoth
   REQUIRE(xg::xrEnumerateBoundSourcesForAction(session, &bound, 1, &count, &source) == XR_SUCCESS);
   CHECK(count == 1);
   CHECK(source == x_path);
+  // The game names its own source as a Quest would, whatever the host controller is.
+  XrInputSourceLocalizedNameGetInfo name_info{XR_TYPE_INPUT_SOURCE_LOCALIZED_NAME_GET_INFO, nullptr, source,
+      XR_INPUT_SOURCE_LOCALIZED_NAME_USER_PATH_BIT | XR_INPUT_SOURCE_LOCALIZED_NAME_INTERACTION_PROFILE_BIT |
+      XR_INPUT_SOURCE_LOCALIZED_NAME_COMPONENT_BIT};
+  std::uint32_t name_size = 0;
+  REQUIRE(xg::xrGetInputSourceLocalizedName(session, &name_info, 0, &name_size, nullptr) == XR_SUCCESS);
+  std::string name(name_size, '\0');
+  CHECK(xg::xrGetInputSourceLocalizedName(session, &name_info, 1, &name_size, name.data()) ==
+        XR_ERROR_SIZE_INSUFFICIENT);
+  REQUIRE(xg::xrGetInputSourceLocalizedName(session, &name_info, name_size, &name_size, name.data()) == XR_SUCCESS);
+  CHECK(std::string(name.c_str()) == "Left Hand Oculus Touch Controller X Button");
+  name_info.whichComponents = XR_INPUT_SOURCE_LOCALIZED_NAME_COMPONENT_BIT;
+  REQUIRE(xg::xrGetInputSourceLocalizedName(session, &name_info, name_size, &name_size, name.data()) == XR_SUCCESS);
+  CHECK(std::string(name.c_str()) == "X Button");
+  name_info.whichComponents = 0;
+  CHECK(xg::xrGetInputSourceLocalizedName(session, &name_info, 0, &name_size, nullptr) == XR_ERROR_VALIDATION_FAILURE);
+  name_info.whichComponents = XR_INPUT_SOURCE_LOCALIZED_NAME_COMPONENT_BIT;
+  name_info.sourcePath = left;
+  CHECK(xg::xrGetInputSourceLocalizedName(session, &name_info, 0, &name_size, nullptr) == XR_ERROR_PATH_UNSUPPORTED);
   XrActiveActionSet active{set, XR_NULL_PATH};
   XrActionsSyncInfo sync{XR_TYPE_ACTIONS_SYNC_INFO, nullptr, 1, &active};
   auto state = [&](XrAction a, const MockXrScript& script) {

@@ -20,6 +20,7 @@ add_library(venture_common STATIC
   meta/commerce.cpp
   library/library.cpp
   library/display.cpp
+  library/eye_scale_db.cpp
   library/import.cpp
   library/save_import.cpp
   android/adb.cpp
@@ -29,6 +30,13 @@ add_library(venture_common STATIC
   download/asset_files.cpp
 )
 target_include_directories(venture_common PUBLIC ${PROJECT_SOURCE_DIR}/src)
+# The eye scale database (third_party/venture-eye-scale, a copy of its own
+# repository; tools/sync_eye_scale_db.py) is compiled in.
+set(venture_eye_scale_db "${PROJECT_SOURCE_DIR}/third_party/venture-eye-scale/titles.json")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${venture_eye_scale_db}")
+file(READ "${venture_eye_scale_db}" VENTURE_EYE_SCALE_TITLES)
+configure_file(library/eye_scale_titles.h.in "${CMAKE_CURRENT_BINARY_DIR}/generated/eye_scale_titles.h" @ONLY)
+target_include_directories(venture_common PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
 target_link_libraries(venture_common PUBLIC nlohmann_json::nlohmann_json CURL::libcurl PRIVATE miniz)
 if(VENTURE_BUILD_LAUNCHER)
   target_compile_definitions(venture_common PRIVATE VENTURE_STEAM_ART)

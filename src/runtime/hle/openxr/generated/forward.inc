@@ -148,15 +148,6 @@ XrResult xrGetActionStateVector2f(XrSession session, const XrActionStateGetInfo*
   auto result = stored_action_state<PFN_xrGetActionStateVector2f, "xrGetActionStateVector2f">(session, getInfo, state);
   return result;
 }
-XrResult xrGetInputSourceLocalizedName(XrSession session, const XrInputSourceLocalizedNameGetInfo* getInfo, uint32_t bufferCapacityInput, uint32_t* bufferCountOutput, char* buffer) {
-  std::lock_guard lock(venture::hle::openxr::state().mutex);
-  if (!valid_handle(session, "XrSession")) return XR_ERROR_HANDLE_INVALID;
-  if (!getInfo) return XR_ERROR_VALIDATION_FAILURE;
-  if (!getInfo || XR_FAILED(validate_struct(getInfo, XR_TYPE_INPUT_SOURCE_LOCALIZED_NAME_GET_INFO))) return XR_ERROR_VALIDATION_FAILURE;
-  if (!bufferCountOutput) return XR_ERROR_VALIDATION_FAILURE;
-  auto result = host_call<PFN_xrGetInputSourceLocalizedName, "xrGetInputSourceLocalizedName">(session, getInfo, bufferCapacityInput, bufferCountOutput, buffer);
-  return result;
-}
 XrResult xrGetPerformanceMetricsStateMETA(XrSession session, XrPerformanceMetricsStateMETA* state) {
   std::lock_guard lock(venture::hle::openxr::state().mutex);
   if (!enabled("XR_META_performance_metrics")) return XR_ERROR_FUNCTION_UNSUPPORTED;

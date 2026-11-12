@@ -33,6 +33,7 @@ std::span<const Descriptor> libc_descriptors(); // later NDK API declarations, s
 std::span<const Descriptor> graphics_descriptors();
 std::span<const Descriptor> vendor_descriptors();
 std::span<const Descriptor> media_descriptors();
+std::span<const Descriptor> openxr_descriptors(); // tools/codegen/xr_generate.py
 std::string_view kind_name(Kind);
 bool is_signed(Kind);
 bool is_wide(Kind);

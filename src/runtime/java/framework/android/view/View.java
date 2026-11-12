@@ -191,9 +191,9 @@ public class View implements ViewParent {
     out.set(0, 0, display.getWidth(), display.getHeight());
   }
   public void getDrawingRect(android.graphics.Rect out) {
-    // AOSP 12L View.java: local drawing bounds exclude layout/translation.
-    // Hosted views currently have no scroll offset.
-    out.set(0, 0, width, height);
+    // AOSP 12L View.java: local drawing bounds exclude layout/translation and
+    // are offset by the scroll position.
+    out.set(scrollX, scrollY, scrollX + width, scrollY + height);
   }
   public int getHeight() {
     return height;
@@ -487,6 +487,19 @@ public class View implements ViewParent {
     void onViewAttachedToWindow(View v);
     void onViewDetachedFromWindow(View v);
   }
+  // API 28. AndroidX ViewCompat registers one for AppCompat's key handling; a
+  // Quest has no soft keyboard events to route, so the listeners only register.
+  private final java.util.List<OnUnhandledKeyEventListener> unhandledKeyListeners =
+      new java.util.concurrent.CopyOnWriteArrayList<>();
+  public void addOnUnhandledKeyEventListener(OnUnhandledKeyEventListener l) {
+    unhandledKeyListeners.add(l);
+  }
+  public void removeOnUnhandledKeyEventListener(OnUnhandledKeyEventListener l) {
+    unhandledKeyListeners.remove(l);
+  }
+  public interface OnUnhandledKeyEventListener {
+    boolean onUnhandledKeyEvent(View v, KeyEvent event);
+  }
   private static final java.util.concurrent.atomic.AtomicInteger nextId =
       new java.util.concurrent.atomic.AtomicInteger(1);
   public static int generateViewId() {
@@ -677,8 +690,42 @@ public class View implements ViewParent {
     com.venture.runtime.RuntimeEnvironment.trace("View.cancelPendingInputEvents");
   }
   public View findFocus() { return focus ? this : null; }
-  public int getScrollX() { return 0; }
-  public int getScrollY() { return 0; }
+  // AOSP View scroll state: scrollTo records the content offset and reports it
+  // through onScrollChanged; views with scrollable content override these.
+  private int scrollX, scrollY;
+  public int getScrollX() { return scrollX; }
+  public int getScrollY() { return scrollY; }
+  public void setScrollX(int value) { scrollTo(value, scrollY); }
+  public void setScrollY(int value) { scrollTo(scrollX, value); }
+  public void scrollTo(int x, int y) {
+    if (scrollX == x && scrollY == y) return;
+    int oldX = scrollX, oldY = scrollY;
+    scrollX = x; scrollY = y;
+    onScrollChanged(x, y, oldX, oldY);
+  }
+  public void scrollBy(int x, int y) { scrollTo(scrollX + x, scrollY + y); }
+  protected void onScrollChanged(int l, int t, int oldl, int oldt) {}
+  private boolean horizontalScrollBar, verticalScrollBar, hapticFeedback = true,
+      filterTouchesWhenObscured;
+  private int scrollBarSize = 10;
+  public void setHorizontalScrollBarEnabled(boolean enabled) { horizontalScrollBar = enabled; }
+  public boolean isHorizontalScrollBarEnabled() { return horizontalScrollBar; }
+  public void setVerticalScrollBarEnabled(boolean enabled) { verticalScrollBar = enabled; }
+  public boolean isVerticalScrollBarEnabled() { return verticalScrollBar; }
+  public void setScrollBarSize(int size) { scrollBarSize = size; }
+  public int getScrollBarSize() { return scrollBarSize; }
+  public void setHapticFeedbackEnabled(boolean enabled) { hapticFeedback = enabled; }
+  public boolean isHapticFeedbackEnabled() { return hapticFeedback; }
+  public void setFilterTouchesWhenObscured(boolean enabled) { filterTouchesWhenObscured = enabled; }
+  public boolean getFilterTouchesWhenObscured() { return filterTouchesWhenObscured; }
+  // AOSP View: an event is dropped only when filtering is on and the window was
+  // obscured; Venture's single app window is never covered by another window.
+  public boolean onFilterTouchEventForSecurity(MotionEvent event) { return true; }
+  public boolean onHoverEvent(MotionEvent event) { return false; }
+  public boolean dispatchHoverEvent(MotionEvent event) {
+    return (hoverListener != null && enabled && hoverListener.onHover(this, event))
+        || onHoverEvent(event);
+  }
   public boolean hasWindowFocus() {
     var context = getContext();
     return context instanceof android.app.Activity a && a.hasWindowFocus();

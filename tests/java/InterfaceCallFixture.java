@@ -40,5 +40,42 @@ public class InterfaceCallFixture {
     use.visitInsn(Opcodes.RETURN); use.visitMaxs(0, 0); use.visitEnd();
     members.visitEnd();
     Files.write(out.resolve("MemberCaller.class"), members.toByteArray());
+    // DEX invoke-super on a default method of an interface the class implements only through
+    // its superclass (R8 class merging leaves these). ART accepts it; HotSpot's verifier rejects
+    // an interface invokespecial unless the rewriter declares ItfDefault as a direct superinterface.
+    var dflt = new ClassWriter(ClassWriter.COMPUTE_FRAMES | ClassWriter.COMPUTE_MAXS);
+    dflt.visit(Opcodes.V1_8, Opcodes.ACC_PUBLIC | Opcodes.ACC_INTERFACE | Opcodes.ACC_ABSTRACT, "ItfDefault", null, "java/lang/Object", null);
+    var greet = dflt.visitMethod(Opcodes.ACC_PUBLIC, "greet", "()Ljava/lang/String;", null, null);
+    greet.visitCode(); greet.visitLdcInsn("default"); greet.visitInsn(Opcodes.ARETURN); greet.visitMaxs(0, 0); greet.visitEnd();
+    dflt.visitEnd();
+    Files.write(out.resolve("ItfDefault.class"), dflt.toByteArray());
+    Files.write(out.resolve("ItfBase.class"), withConstructor("ItfBase", "java/lang/Object", new String[] {"ItfDefault"}, null));
+    Files.write(out.resolve("ItfMerged.class"), withConstructor("ItfMerged", "ItfBase", null, merged -> {
+      var override = merged.visitMethod(Opcodes.ACC_PUBLIC, "greet", "()Ljava/lang/String;", null, null);
+      override.visitCode();
+      override.visitVarInsn(Opcodes.ALOAD, 0);
+      override.visitMethodInsn(Opcodes.INVOKESPECIAL, "ItfDefault", "greet", "()Ljava/lang/String;", true);
+      override.visitLdcInsn(" merged");
+      override.visitMethodInsn(Opcodes.INVOKEVIRTUAL, "java/lang/String", "concat", "(Ljava/lang/String;)Ljava/lang/String;", false);
+      override.visitInsn(Opcodes.ARETURN); override.visitMaxs(0, 0); override.visitEnd();
+      var call2 = merged.visitMethod(Opcodes.ACC_PUBLIC | Opcodes.ACC_STATIC, "call", "()Ljava/lang/String;", null, null);
+      call2.visitCode();
+      call2.visitTypeInsn(Opcodes.NEW, "ItfMerged"); call2.visitInsn(Opcodes.DUP);
+      call2.visitMethodInsn(Opcodes.INVOKESPECIAL, "ItfMerged", "<init>", "()V", false);
+      call2.visitMethodInsn(Opcodes.INVOKEVIRTUAL, "ItfMerged", "greet", "()Ljava/lang/String;", false);
+      call2.visitInsn(Opcodes.ARETURN); call2.visitMaxs(0, 0); call2.visitEnd();
+    }));
+  }
+  static byte[] withConstructor(String name, String parent, String[] interfaces,
+                                java.util.function.Consumer<ClassWriter> body) {
+    var writer = new ClassWriter(ClassWriter.COMPUTE_FRAMES | ClassWriter.COMPUTE_MAXS);
+    writer.visit(Opcodes.V1_8, Opcodes.ACC_PUBLIC, name, null, parent, interfaces);
+    var init = writer.visitMethod(Opcodes.ACC_PUBLIC, "<init>", "()V", null, null);
+    init.visitCode(); init.visitVarInsn(Opcodes.ALOAD, 0);
+    init.visitMethodInsn(Opcodes.INVOKESPECIAL, parent, "<init>", "()V", false);
+    init.visitInsn(Opcodes.RETURN); init.visitMaxs(0, 0); init.visitEnd();
+    if (body != null) body.accept(writer);
+    writer.visitEnd();
+    return writer.toByteArray();
   }
 }
