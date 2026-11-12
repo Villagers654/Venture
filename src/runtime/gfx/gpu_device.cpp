@@ -25,6 +25,9 @@ GpuDevice gpu;
 std::recursive_mutex creation_lock;
 std::vector<std::string> instance_requirements, device_requirements;
 std::vector<std::string> instance_enabled, device_enabled;
+// False when an XR runtime created the object without calling the GIPA it was given
+// (Virtual Desktop); the requested extensions, which the runtime must enable, stand in.
+bool instance_recorded = false, device_recorded = false;
 PFN_vkGetInstanceProcAddr angle_loader = nullptr;
 bool unified_image_layouts = false;
 PFN_vkGetInstanceProcAddr loader() {
@@ -101,12 +104,22 @@ VkResult VKAPI_CALL record_instance(const VkInstanceCreateInfo* ci,
     std::vector<std::string> names;
     remember(names, ci->enabledExtensionCount, ci->ppEnabledExtensionNames);
     auto r = vk<PFN_vkCreateInstance>(nullptr, "vkCreateInstance")(ci, a, out);
-    if (r == VK_SUCCESS) instance_enabled.swap(names);
+    if (r == VK_SUCCESS) { instance_enabled.swap(names); instance_recorded = true; }
     return r;
   } catch (...) {
     *out = nullptr;
     return VK_ERROR_OUT_OF_HOST_MEMORY;
   }
+}
+void adopt_device(VkPhysicalDevice p, VkDevice device, std::vector<std::string> names) {
+  device_recorded = true;
+  device_enabled.swap(names);
+  VkPhysicalDeviceProperties properties{};
+  vk<PFN_vkGetPhysicalDeviceProperties>(gpu.instance, "vkGetPhysicalDeviceProperties")(p, &properties);
+  const bool feedback = std::ranges::find(device_enabled, VK_EXT_PIPELINE_CREATION_FEEDBACK_EXTENSION_NAME) != device_enabled.end() ||
+      (gpu.api_version >= VK_API_VERSION_1_3 && properties.apiVersion >= VK_API_VERSION_1_3);
+  auto get = vk<PFN_vkGetDeviceProcAddr>(gpu.instance, "vkGetDeviceProcAddr");
+  register_pipeline_device(device, get, feedback, profile::PipelineSource::angle);
 }
 VkResult VKAPI_CALL record_device(VkPhysicalDevice p,
                                   const VkDeviceCreateInfo* ci,
@@ -124,13 +137,8 @@ VkResult VKAPI_CALL record_device(VkPhysicalDevice p,
     auto r =
         vk<PFN_vkCreateDevice>(gpu.instance, "vkCreateDevice")(p, ci, a, out);
     if (r == VK_SUCCESS) {
-      device_enabled.swap(names); unified_image_layouts = unified;
-      VkPhysicalDeviceProperties properties{};
-      vk<PFN_vkGetPhysicalDeviceProperties>(gpu.instance, "vkGetPhysicalDeviceProperties")(p, &properties);
-      const bool feedback = std::ranges::find(device_enabled, VK_EXT_PIPELINE_CREATION_FEEDBACK_EXTENSION_NAME) != device_enabled.end() ||
-          (gpu.api_version >= VK_API_VERSION_1_3 && properties.apiVersion >= VK_API_VERSION_1_3);
-      auto get = vk<PFN_vkGetDeviceProcAddr>(gpu.instance, "vkGetDeviceProcAddr");
-      register_pipeline_device(*out, get, feedback, profile::PipelineSource::angle);
+      unified_image_layouts = unified;
+      adopt_device(p, *out, std::move(names));
     }
     return r;
   } catch (...) {
@@ -208,12 +216,17 @@ VkResult create_instance(const VkInstanceCreateInfo* requested,
       info.pfnGetInstanceProcAddr = recording_gipa;
       info.vulkanCreateInfo = &ci;
       info.vulkanAllocator = alloc;
+      instance_recorded = false;
       xr_result = xr_proc<PFN_xrCreateVulkanInstanceKHR>(
           "xrCreateVulkanInstanceKHR")(host.instance, &info, out, &result);
       if (XR_FAILED(xr_result)) {
         log::error("gfx", "xrCreateVulkanInstanceKHR failed: {}",
                    static_cast<int>(xr_result));
         return VK_ERROR_INITIALIZATION_FAILED;
+      }
+      if (result == VK_SUCCESS && !instance_recorded) {
+        log::info("gfx", "The XR runtime created the Vulkan instance itself; using the requested extensions");
+        remember(instance_enabled, ci.enabledExtensionCount, ci.ppEnabledExtensionNames);
       }
     } else
       result = record_instance(&ci, alloc, out);
@@ -345,12 +358,19 @@ VkResult create_device(VkPhysicalDevice physical,
       info.vulkanPhysicalDevice = physical;
       info.vulkanCreateInfo = &ci;
       info.vulkanAllocator = alloc;
+      device_recorded = false;
       auto xr_result = xr_proc<PFN_xrCreateVulkanDeviceKHR>(
           "xrCreateVulkanDeviceKHR")(host.instance, &info, out, &result);
       if (XR_FAILED(xr_result)) {
         log::error("gfx", "xrCreateVulkanDeviceKHR failed: {}",
                    static_cast<int>(xr_result));
         return VK_ERROR_INITIALIZATION_FAILED;
+      }
+      if (result == VK_SUCCESS && !device_recorded) {
+        log::info("gfx", "The XR runtime created the Vulkan device itself; using the requested extensions");
+        std::vector<std::string> requested;
+        remember(requested, ci.enabledExtensionCount, ci.ppEnabledExtensionNames);
+        adopt_device(physical, *out, std::move(requested));
       }
     } else
       result = record_device(physical, &ci, alloc, out);

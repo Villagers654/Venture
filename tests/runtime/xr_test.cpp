@@ -2099,6 +2099,94 @@ TEST_CASE("XR leaves out the smallest layers when the host takes fewer than the 
   venture::xr::install_xr_images(nullptr);
 }
 
+TEST_CASE("XR keeps a destroyed space for the frame in flight, as a Quest does") {
+  // H3VR2 recenters by replacing its app space on the main thread while the render
+  // thread still submits the frame begun on the old one. Rejecting that frame made
+  // Unity tear the session down (Quest Link then crashed in xrDestroySwapchain).
+  venture::test::XrImageFixture interop;
+  venture::xr::install_xr_images(&interop);
+  const char* extensions[]{"XR_KHR_opengl_es_enable"};
+  XrInstanceCreateInfo create{XR_TYPE_INSTANCE_CREATE_INFO};
+  create.applicationInfo.apiVersion = XR_MAKE_VERSION(1, 0, 0);
+  create.enabledExtensionNames = extensions;
+  create.enabledExtensionCount = 1;
+  XrInstance instance{};
+  REQUIRE(xg::xrCreateInstance(&create, &instance) == XR_SUCCESS);
+  xg::GlesBinding binding{XR_TYPE_GRAPHICS_BINDING_OPENGL_ES_ANDROID_KHR, nullptr, 1, 2, 3};
+  XrSessionCreateInfo session_info{XR_TYPE_SESSION_CREATE_INFO, &binding, 0, 1};
+  XrSession session{};
+  REQUIRE(xg::xrCreateSession(instance, &session_info, &session) == XR_SUCCESS);
+  XrReferenceSpaceCreateInfo space_info{XR_TYPE_REFERENCE_SPACE_CREATE_INFO, nullptr,
+      XR_REFERENCE_SPACE_TYPE_LOCAL, {{0, 0, 0, 1}, {0, 0, 0}}};
+  XrSpace old_space{}, new_space{}, view{};
+  REQUIRE(xg::xrCreateReferenceSpace(session, &space_info, &old_space) == XR_SUCCESS);
+  REQUIRE(xg::xrCreateReferenceSpace(session, &space_info, &new_space) == XR_SUCCESS);
+  space_info.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_VIEW;
+  REQUIRE(xg::xrCreateReferenceSpace(session, &space_info, &view) == XR_SUCCESS);
+  XrSwapchainCreateInfo chain_info{XR_TYPE_SWAPCHAIN_CREATE_INFO};
+  chain_info.format = 0x8058;  // GL_RGBA8
+  chain_info.width = 32;
+  chain_info.height = 24;
+  chain_info.arraySize = 2;
+  chain_info.sampleCount = chain_info.mipCount = chain_info.faceCount = 1;
+  chain_info.usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT;
+  XrSwapchain eyes{};
+  REQUIRE(xg::xrCreateSwapchain(session, &chain_info, &eyes) == XR_SUCCESS);
+  auto poll = [&] {
+    XrEventDataBuffer event{XR_TYPE_EVENT_DATA_BUFFER};
+    while (xg::xrPollEvent(instance, &event) == XR_SUCCESS) event = {XR_TYPE_EVENT_DATA_BUFFER};
+  };
+  poll();
+  XrSessionBeginInfo begin{XR_TYPE_SESSION_BEGIN_INFO, nullptr, XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO};
+  REQUIRE(xg::xrBeginSession(session, &begin) == XR_SUCCESS);
+  poll();
+  XrCompositionLayerProjectionView views[2]{{XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW},
+                                           {XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW}};
+  for (std::uint32_t eye = 0; eye < 2; ++eye) {
+    views[eye].pose.orientation.w = 1;
+    views[eye].fov = {-0.5f, 0.5f, 0.5f, -0.5f};
+    views[eye].subImage = {eyes, {{0, 0}, {32, 24}}, eye};
+  }
+  auto frame = [&](XrSpace space) {
+    XrFrameState timing{XR_TYPE_FRAME_STATE};
+    REQUIRE(xg::xrWaitFrame(session, nullptr, &timing) == XR_SUCCESS);
+    // The frame after a rejected one discards it.
+    const auto began = xg::xrBeginFrame(session, nullptr);
+    REQUIRE((began == XR_SUCCESS || began == XR_FRAME_DISCARDED));
+    std::uint32_t index{};
+    REQUIRE(xg::xrAcquireSwapchainImage(eyes, nullptr, &index) == XR_SUCCESS);
+    XrSwapchainImageWaitInfo wait{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO, nullptr, XR_INFINITE_DURATION};
+    REQUIRE(xg::xrWaitSwapchainImage(eyes, &wait) == XR_SUCCESS);
+    REQUIRE(xg::xrReleaseSwapchainImage(eyes, nullptr) == XR_SUCCESS);
+    XrCompositionLayerProjection projection{XR_TYPE_COMPOSITION_LAYER_PROJECTION, nullptr, 0, space, 2, views};
+    const XrCompositionLayerBaseHeader* layer = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&projection);
+    XrFrameEndInfo end{XR_TYPE_FRAME_END_INFO, nullptr, timing.predictedDisplayTime,
+                       XR_ENVIRONMENT_BLEND_MODE_OPAQUE, 1, &layer};
+    return xg::xrEndFrame(session, &end);
+  };
+  CHECK(frame(old_space) == XR_SUCCESS);
+  CHECK(xg::xrDestroySpace(old_space) == XR_SUCCESS);
+  // Gone for the guest at once...
+  CHECK(xg::xrDestroySpace(old_space) == XR_ERROR_HANDLE_INVALID);
+  XrSpaceLocation where{XR_TYPE_SPACE_LOCATION};
+  CHECK(xg::xrLocateSpace(old_space, view, 1, &where) == XR_ERROR_HANDLE_INVALID);
+  // ...but the frame begun on it still composes, and so does the next on the new space.
+  CHECK(frame(old_space) == XR_SUCCESS);
+  CHECK(frame(new_space) == XR_SUCCESS);
+  // Once a frame went without it, it is gone for frames too.
+  CHECK(frame(old_space) == XR_ERROR_VALIDATION_FAILURE);
+  CHECK(frame(new_space) == XR_SUCCESS);
+  REQUIRE(xg::xrRequestExitSession(session) == XR_SUCCESS);
+  poll();
+  CHECK(xg::xrEndSession(session) == XR_SUCCESS);
+  CHECK(xg::xrDestroySpace(new_space) == XR_SUCCESS);
+  CHECK(xg::xrDestroySpace(view) == XR_SUCCESS);
+  CHECK(xg::xrDestroySwapchain(eyes) == XR_SUCCESS);
+  CHECK(xg::xrDestroySession(session) == XR_SUCCESS);
+  CHECK(xg::xrDestroyInstance(instance) == XR_SUCCESS);
+  venture::xr::install_xr_images(nullptr);
+}
+
 TEST_CASE("XR paced waits survive session restart, guest interruption and session loss") {
   using namespace std::chrono_literals;
   venture::test::XrImageFixture interop;
@@ -2387,11 +2475,10 @@ TEST_CASE("XR asynchronous submission finishes its host End before host objects 
   CHECK(held.get() == XR_SUCCESS);
   // Destroying a space or the session waits for that End, and the session's
   // drain runs before its queue lock, which the held End owns.
-  auto space_gone = std::async(std::launch::async, [&] { return xg::xrDestroySpace(space); });
-  CHECK(space_gone.wait_for(100ms) == std::future_status::timeout);
+  // The guest's space goes at once; its host copy waits for the next End, which
+  // first finishes the held one.
+  CHECK(xg::xrDestroySpace(space) == XR_SUCCESS);
   ventureMockXrGateEnd(false);
-  REQUIRE(settled(space_gone, 30s));
-  CHECK(space_gone.get() == XR_SUCCESS);
   gate();
   auto last = frames(1);
   CHECK(ventureMockXrAwaitGatedEnd(5000));
@@ -5204,6 +5291,62 @@ TEST_CASE("XR eye scale tells a compensated game less and keeps the target as it
   unsetenv("VENTURE_EYE_SCALE");
 #endif
   venture::environment::refresh();
+  std::filesystem::remove(learned);
+  venture::xr::install_xr_images(nullptr);
+}
+
+TEST_CASE("XR recommends a compensated game the target as its render size, not the size it was told") {
+  // H3VR2 allocates 1.6x the size it is told and renders the recommended layer
+  // resolution into that allocation; answering the told size drew 900x990 of 1440x1584.
+  namespace es = venture::xr::eye_scale;
+  venture::test::XrImageFixture interop;
+  venture::xr::install_xr_images(&interop);
+  struct Reset { ~Reset() { venture::xr::eye_scale::reset_for_tests(); } } reset;
+  const auto learned = venture::paths::data_dir() / "eye-scale.json";
+  std::filesystem::remove(learned);
+  es::begin("com.rustltd.h3vr2");
+  REQUIRE(es::compensation() == doctest::Approx(1.6));
+  const char* extensions[]{"XR_KHR_opengl_es_enable", "XR_META_recommended_layer_resolution"};
+  XrInstanceCreateInfo create{XR_TYPE_INSTANCE_CREATE_INFO};
+  create.applicationInfo.apiVersion = XR_MAKE_VERSION(1, 0, 0);
+  create.enabledExtensionNames = extensions;
+  create.enabledExtensionCount = 2;
+  XrInstance instance{};
+  REQUIRE(xg::xrCreateInstance(&create, &instance) == XR_SUCCESS);
+  xg::GlesBinding binding{XR_TYPE_GRAPHICS_BINDING_OPENGL_ES_ANDROID_KHR, nullptr, 1, 2, 3};
+  XrSessionCreateInfo session_info{XR_TYPE_SESSION_CREATE_INFO, &binding, 0, 1};
+  XrSession session{};
+  REQUIRE(xg::xrCreateSession(instance, &session_info, &session) == XR_SUCCESS);
+  XrReferenceSpaceCreateInfo space_info{XR_TYPE_REFERENCE_SPACE_CREATE_INFO, nullptr,
+      XR_REFERENCE_SPACE_TYPE_LOCAL, {{0, 0, 0, 1}, {0, 0, 0}}};
+  XrSpace space{};
+  REQUIRE(xg::xrCreateReferenceSpace(session, &space_info, &space) == XR_SUCCESS);
+  // Told 640x640 of the mock's 1024x1024; the game allocates 1.6x that.
+  const auto eye = venture::xr::reported_eye();
+  CHECK(eye.told.width == 640);
+  XrSwapchainCreateInfo image_info{XR_TYPE_SWAPCHAIN_CREATE_INFO};
+  image_info.format = 0x8058;
+  image_info.width = image_info.height = 1024;
+  image_info.arraySize = 2;
+  image_info.sampleCount = image_info.mipCount = image_info.faceCount = 1;
+  image_info.usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT;
+  XrSwapchain chain{};
+  REQUIRE(xg::xrCreateSwapchain(session, &image_info, &chain) == XR_SUCCESS);
+  XrCompositionLayerProjectionView views[2]{{XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW},
+                                           {XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW}};
+  views[0].subImage.swapchain = views[1].subImage.swapchain = chain;
+  XrCompositionLayerProjection projection{XR_TYPE_COMPOSITION_LAYER_PROJECTION, nullptr, 0, space, 2, views};
+  XrRecommendedLayerResolutionGetInfoMETA info{XR_TYPE_RECOMMENDED_LAYER_RESOLUTION_GET_INFO_META,
+      nullptr, reinterpret_cast<const XrCompositionLayerBaseHeader*>(&projection), 1};
+  XrRecommendedLayerResolutionMETA out{XR_TYPE_RECOMMENDED_LAYER_RESOLUTION_META};
+  REQUIRE(xg::xrGetRecommendedLayerResolutionMETA(session, &info, &out) == XR_SUCCESS);
+  CHECK(out.isValid == XR_TRUE);
+  CHECK(out.recommendedImageDimensions.width == 1024);
+  CHECK(out.recommendedImageDimensions.height == 1024);
+  CHECK(xg::xrDestroySwapchain(chain) == XR_SUCCESS);
+  CHECK(xg::xrDestroySpace(space) == XR_SUCCESS);
+  CHECK(xg::xrDestroySession(session) == XR_SUCCESS);
+  CHECK(xg::xrDestroyInstance(instance) == XR_SUCCESS);
   std::filesystem::remove(learned);
   venture::xr::install_xr_images(nullptr);
 }

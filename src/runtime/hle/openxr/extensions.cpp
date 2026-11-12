@@ -178,12 +178,15 @@ XrResult xrGetRecommendedLayerResolutionMETA(XrSession handle,
     result = host_call<PFN_xrEnumerateViewConfigurationViews, "xrEnumerateViewConfigurationViews">(host_xr().instance, host_xr().system, XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO,
         count, &count, views.data());
     if (XR_FAILED(result)) return result;
-    // The budget is the eye size the guest is given (display_override.h).
+    // The budget is the target eye size (display_override.h): the views' maximum. A game
+    // compensated for its multiplier is told less so its allocation lands on the target,
+    // but it renders the budget into that allocation (H3VR2's Automatic Viewport Dynamic
+    // Resolution), so the told size would draw 1/1.6 per axis of the target, upscaled.
     xr::apply_display_override(views.data(), count);
     Budget fresh{host_xr().instance, host_xr().system, generation};
     for (const auto& view : views) {
-      fresh.width = std::max(fresh.width, view.recommendedImageRectWidth);
-      fresh.height = std::max(fresh.height, view.recommendedImageRectHeight);
+      fresh.width = std::max(fresh.width, view.maxImageRectWidth);
+      fresh.height = std::max(fresh.height, view.maxImageRectHeight);
     }
     XrSystemProperties properties{XR_TYPE_SYSTEM_PROPERTIES};
     result = host_call<PFN_xrGetSystemProperties, "xrGetSystemProperties">(host_xr().instance, host_xr().system, &properties);

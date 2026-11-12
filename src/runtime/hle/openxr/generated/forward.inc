@@ -61,14 +61,6 @@ XrResult xrDestroyActionSet(XrActionSet actionSet) {
   if (XR_SUCCEEDED(result)) forget_handle(actionSet);
   return result;
 }
-XrResult xrDestroySpace(XrSpace space) {
-  std::lock_guard lock(venture::hle::openxr::state().mutex);
-  if (!valid_handle(space, "XrSpace")) return XR_ERROR_HANDLE_INVALID;
-  venture::xr::session().finish_host_end();
-  auto result = host_call<PFN_xrDestroySpace, "xrDestroySpace">(space);
-  if (XR_SUCCEEDED(result)) forget_handle(space);
-  return result;
-}
 XrResult xrDestroyTriangleMeshFB(XrTriangleMeshFB mesh) {
   std::lock_guard lock(venture::hle::openxr::state().mutex);
   if (!enabled("XR_FB_triangle_mesh")) return XR_ERROR_FUNCTION_UNSUPPORTED;

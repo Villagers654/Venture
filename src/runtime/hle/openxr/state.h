@@ -159,6 +159,10 @@ struct State {
     XrPosef pose{};  // in host LOCAL
     bool locatable = true, storable = true;
   };
+  // Spaces the guest destroyed while a session ran. A Quest compositor still accepts
+  // them in the frame in flight (Unity's render thread submits on the app space its
+  // main thread just replaced at a recenter); the host copy goes once no frame uses it.
+  std::vector<XrSpace> retired_spaces;
   std::map<XrSpace, SpatialAnchor> anchors;
   // XR_FB_spatial_entity_storage: anchors saved to LOCAL storage, by UUID, for
   // this process (host LOCAL coordinates do not outlive the host session).
