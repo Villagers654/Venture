@@ -250,6 +250,10 @@ public class Canvas {
       if (g != null) g.dispose();
       return;
     }
+    if (!Paint.HOST_FONTS) {
+      g.dispose();
+      return;
+    }
     try {
       g.setFont(paint.font());
       float advance = paint.measureText(text);

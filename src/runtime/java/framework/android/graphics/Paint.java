@@ -79,10 +79,24 @@ public class Paint {
   public String getFontFeatureSettings() { return null; }
   public String getFontVariationSettings() { return null; }
   java.awt.Font font() { return font; }
+  // Java2D needs the host's font configuration (fontconfig on Linux). Without it every
+  // font call throws, so text is measured with Roboto's proportions and not drawn.
+  static final boolean HOST_FONTS = hostFonts();
+  private static boolean hostFonts() {
+    try {
+      new java.awt.Font(java.awt.Font.SANS_SERIF, java.awt.Font.PLAIN, 12)
+          .getLineMetrics("Ag", new java.awt.font.FontRenderContext(null, false, false));
+      return true;
+    } catch (Throwable unavailable) {
+      return false;
+    }
+  }
+  private float size() { return font.getSize2D(); }
   java.awt.font.FontRenderContext renderContext() {
     return new java.awt.font.FontRenderContext(null, (flags & ANTI_ALIAS_FLAG) != 0, (flags & SUBPIXEL_TEXT_FLAG) != 0);
   }
   public float measureText(String text) {
+    if (!HOST_FONTS) return 0.55f * size() * text.length();
     return (float) font.getStringBounds(text, renderContext()).getWidth();
   }
   public float measureText(CharSequence text, int start, int end) {
@@ -92,13 +106,17 @@ public class Paint {
     return measureText(new String(text, index, count));
   }
   public void getTextBounds(String text, int start, int end, Rect bounds) {
+    if (!HOST_FONTS) {
+      bounds.set(0, (int) Math.floor(-0.72f * size()), (int) Math.ceil(measureText(text.substring(start, end))), 0);
+      return;
+    }
     var r = new java.awt.font.TextLayout(text.substring(start, end).isEmpty() ? " " : text.substring(start, end),
         font, renderContext()).getBounds();
     bounds.set((int) Math.floor(r.getMinX()), (int) Math.floor(r.getMinY()),
         (int) Math.ceil(r.getMaxX()), (int) Math.ceil(r.getMaxY()));
   }
   public boolean hasGlyph(String text) {
-    return font.canDisplayUpTo(text) < 0;
+    return !HOST_FONTS || font.canDisplayUpTo(text) < 0;
   }
   // Android's metrics are y-down from the baseline: ascent and top are negative.
   public static class FontMetrics {
@@ -113,6 +131,17 @@ public class Paint {
     return metrics;
   }
   public float getFontMetrics(FontMetrics metrics) {
+    if (!HOST_FONTS) {
+      float s = size(), ascent = -0.928f * s, descent = 0.244f * s;
+      if (metrics != null) {
+        metrics.ascent = ascent;
+        metrics.descent = descent;
+        metrics.leading = 0;
+        metrics.top = -1.056f * s;
+        metrics.bottom = 0.271f * s;
+      }
+      return descent - ascent;
+    }
     var frc = renderContext();
     var line = font.getLineMetrics("Ag", frc);
     var max = font.getMaxCharBounds(frc);
