@@ -1816,6 +1816,19 @@ TEST_CASE("Vulkan preserves guest core robustness and null descriptor enablement
 }
 
 TEST_CASE("Vulkan enables null descriptors so unbound vertex bindings read zero") {
+  // With bounds checks turned off (they are on by default), only nullDescriptor is enabled.
+  struct RobustOff {
+    RobustOff() { set("0"); }
+    ~RobustOff() { set(""); }
+    static void set(const char* value) {
+#ifdef _WIN32
+      _putenv_s("VENTURE_VULKAN_ROBUST_ACCESS", value);
+#else
+      if (*value) setenv("VENTURE_VULKAN_ROBUST_ACCESS", value, 1); else unsetenv("VENTURE_VULKAN_ROBUST_ACCESS");
+#endif
+      venture::environment::refresh();
+    }
+  } robust_off;
   test::VulkanDevice resources;
   // Ask the host directly whether it supports nullDescriptor.
   auto& host = gfx::gpu_device();
@@ -1868,7 +1881,7 @@ TEST_CASE("Vulkan enables null descriptors so unbound vertex bindings read zero"
   info.queueCreateInfoCount = 1; info.pQueueCreateInfos = &queue;
   VkDevice device{};
   CHECK(call("vkCreateDevice", resources.physical, &info, nullptr, &device) == VK_ERROR_INITIALIZATION_FAILED);
-  // Only nullDescriptor: the robustness features that cost performance stay off.
+  // Only nullDescriptor: the bounds checks that cost performance stay off.
   CHECK(null_descriptor == bool(host_robust.nullDescriptor));
   CHECK(extension == bool(host_robust.nullDescriptor));
   CHECK_FALSE(other_robustness);
