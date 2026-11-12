@@ -64,10 +64,18 @@ void forget_action_states(bool all) {
   if (all) state().action_states.clear();
   ++state().action_sync;
 }
+// Anchor bookkeeping lives with the state it changes, so every user of forget_object
+// (fixtures without spatial.cpp too) links it.
+void forget_spatial_anchor(XrSpace space) { state().anchors.erase(space); }
+bool anchor_locatable(XrSpace space) {
+  const auto found = state().anchors.find(space);
+  return found == state().anchors.end() || found->second.locatable;
+}
 void forget_object(const ObjectKey& value) {
   forget_action_states(true);
   if (value.first == "XrAction") venture::xr::forget_menu_action(reinterpret_cast<XrAction>(value.second));
   else if (value.first == "XrActionSet") venture::xr::forget_menu_action_set(reinterpret_cast<XrActionSet>(value.second));
+  else if (value.first == "XrSpace") forget_spatial_anchor(reinterpret_cast<XrSpace>(value.second));
   std::vector<ObjectKey> children;
   for (const auto &[h, o] : state().objects)
     if (o.parent == value.second && o.parent_type == value.first)
@@ -267,6 +275,8 @@ std::map<std::string, std::uint32_t> capabilities() {
       // Drawn into a projection layer where the host has none (sphere_layers.h).
       {"XR_KHR_composition_layer_equirect", 3},
       {"XR_KHR_composition_layer_equirect2", 1},
+      // Answered without the host (extensions.cpp xrRequestBoundaryVisibilityMETA).
+      {"XR_META_boundary_visibility", 1},
   };
   if (xr_images())
     result["XR_KHR_opengl_es_enable"] = 10;
@@ -274,6 +284,18 @@ std::map<std::string, std::uint32_t> capabilities() {
     result["XR_META_recommended_layer_resolution"] = 1;
     result["XR_META_headset_id"] = 2;
     result["XR_META_vulkan_swapchain_create_info"] = 1;  // translated to core usage flags (graphics.cpp)
+    // Compositor filter hints: host copies omit the node (PresentationLayers drops
+    // structures without metadata) and the host composites the full image.
+    result["XR_FB_composition_layer_settings"] = 1;
+    // Answered as a Quest without a room setup (spatial.cpp): anchors work in
+    // process, saves last for the process, queries find no scene, capture fails.
+    result["XR_FB_spatial_entity"] = XR_FB_spatial_entity_SPEC_VERSION;
+    result["XR_FB_spatial_entity_query"] = XR_FB_spatial_entity_query_SPEC_VERSION;
+    result["XR_FB_spatial_entity_storage"] = XR_FB_spatial_entity_storage_SPEC_VERSION;
+    result["XR_FB_scene"] = XR_FB_scene_SPEC_VERSION;
+    result["XR_FB_scene_capture"] = XR_FB_scene_capture_SPEC_VERSION;
+    // Messengers and labels are accepted; messages go to the log (debug_utils.cpp).
+    result["XR_EXT_debug_utils"] = XR_EXT_debug_utils_SPEC_VERSION;
   }
   if (process_config().isa() == GuestIsa::a64 && java::host_vm() && android::surface_bridge().to_surface)
     result["XR_KHR_android_surface_swapchain"] = 4;
@@ -327,6 +349,10 @@ std::map<std::string, std::uint32_t> capabilities() {
     result["XR_FB_foveation_vulkan"] = 1;
   }
   if (result.contains("XR_EXT_hand_tracking")) {
+    // A host without it keeps its default range (hands.cpp xrLocateHandJointsEXT).
+    result.emplace("XR_EXT_hand_joints_motion_range", 1);
+    // A host without it reports what a Quest reports (hands.cpp).
+    result.emplace("XR_EXT_hand_tracking_data_source", 1);
     result["XR_FB_hand_tracking_aim"] = 2;
     result["XR_FB_hand_tracking_capsules"] = 3;
     result["XR_FB_hand_tracking_mesh"] = 3;

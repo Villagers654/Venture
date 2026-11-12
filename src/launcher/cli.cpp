@@ -104,7 +104,7 @@ Settings
                                  language auto|en|CODE |
                                  color-key off|RRGGBB |
                                  mirror cropped|full|off | mirror-eye left|right |
-                                 pc-audio on|off
+                                 pc-audio on|off | match-resolution auto|off
 
 GAME is a name (or a unique part of it), an app id or a package name.
 ACCOUNT is a name, alias, account key or the number `accounts` shows.
@@ -1322,6 +1322,10 @@ int Cli::settings_cmd(const Args &args) {
       next.display.mirror_eye = value;
     } else if (key == "pc-audio") {
       next.display.pc_audio = on_off(value) ? "on" : "off";
+    } else if (key == "match-resolution") {
+      if (value != "auto" && value != "off")
+        throw UsageError("match-resolution takes auto or off.");
+      next.display.match_resolution = value;
     }
     else
       throw UsageError(std::format("Unknown setting \"{}\".", key));
@@ -1343,7 +1347,8 @@ int Cli::settings_cmd(const Args &args) {
            {"language", settings_.interface_language.empty() ? "auto" : settings_.interface_language},
            {"mirror", library::mirror_environment(settings_.display)},
            {"mirror-eye", library::mirror_eye_environment(settings_.display)},
-           {"pc-audio", library::pc_audio_environment(settings_.display)}};
+           {"pc-audio", library::pc_audio_environment(settings_.display)},
+           {"match-resolution", library::eye_scale_environment(settings_.display)}};
   Json folders = Json::array();
   for (const auto &folder : settings_.libraries)
     folders.push_back(paths::utf8(folder));

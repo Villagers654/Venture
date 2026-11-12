@@ -21,9 +21,11 @@ if(TARGET venture-framework)
       "${CMAKE_CURRENT_SOURCE_DIR}/ThermalTest.java"
       "${CMAKE_CURRENT_SOURCE_DIR}/MenuQuitTest.java"
       "${CMAKE_CURRENT_SOURCE_DIR}/SQLiteTest.java"
+      "${CMAKE_CURRENT_SOURCE_DIR}/WebkitTest.java"
+      "${CMAKE_CURRENT_SOURCE_DIR}/DownloadManagerTest.java"
       "${CMAKE_CURRENT_SOURCE_DIR}/InstrumentationProbe.java"
     DEPENDS "${VENTURE_FRAMEWORK_JAR}" FrameworkTest.java AbiProfileTest.java VMStackTest.java ProcessExitTest.java ProcessCommandsTest.java
-      ColdRestartTest.java LifecycleTest.java LocalServicesTest.java PreferencesTest.java AssetReadTraceTest.java RecordingHost.java TestNatives.java GraphicsTest.java ThermalTest.java MenuQuitTest.java SQLiteTest.java InstrumentationProbe.java VERBATIM)
+      ColdRestartTest.java LifecycleTest.java LocalServicesTest.java PreferencesTest.java AssetReadTraceTest.java RecordingHost.java TestNatives.java GraphicsTest.java ThermalTest.java MenuQuitTest.java SQLiteTest.java WebkitTest.java DownloadManagerTest.java InstrumentationProbe.java VERBATIM)
   add_custom_target(venture_framework_tests ALL DEPENDS "${framework_test_classes}/FrameworkTest.class")
   if(WIN32)
     set(framework_classpath "${VENTURE_FRAMEWORK_JAR}\;${framework_test_classes}")
@@ -35,6 +37,11 @@ if(TARGET venture-framework)
 
   add_test(NAME framework_preferences COMMAND "${VENTURE_JAVA}" -Xverify:all -cp "${framework_classpath}" PreferencesTest)
   set_tests_properties(framework_preferences PROPERTIES TIMEOUT 30)
+
+  add_test(NAME framework_webkit COMMAND "${VENTURE_JAVA}" -Xverify:all -cp "${framework_classpath}" WebkitTest)
+  set_tests_properties(framework_webkit PROPERTIES TIMEOUT 30)
+  add_test(NAME framework_download_manager COMMAND "${VENTURE_JAVA}" -Xverify:all -cp "${framework_classpath}" android.app.DownloadManagerTest)
+  set_tests_properties(framework_download_manager PROPERTIES TIMEOUT 60)
 
   if(NOT TARGET Python3::Interpreter)
     find_package(Python3 COMPONENTS Interpreter REQUIRED)

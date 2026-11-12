@@ -1,6 +1,7 @@
 #include "xr/hands.h"
 #include "common/log.h"
 #include "hle/openxr/state.h"
+#include <algorithm>
 #include <cstring>
 #include <cmath>
 namespace venture::hle::openxr::guest {
@@ -16,6 +17,7 @@ XrResult xrCreateHandTrackerEXT(XrSession handle, const XrHandTrackerCreateInfoE
   auto native = *info;
   native.next = nullptr;
   XrHandTrackingDataSourceInfoEXT source{};
+  std::vector<XrHandTrackingDataSourceEXT> requested_sources;
   std::set<const void*> seen;
   std::set<XrStructureType> types;
   for (auto p = static_cast<const XrBaseInStructure*>(info->next); p; p = p->next) {
@@ -28,6 +30,22 @@ XrResult xrCreateHandTrackerEXT(XrSession handle, const XrHandTrackerCreateInfoE
     // Epic's OVRPlugin supplies disabled data-source preferences; skipping
     // them preserves the runtime's default tracking source.
     if (!metadata || !types.insert(p->type).second) continue;
+    // XR_EXT_hand_tracking_data_source on a host without it: the request is
+    // validated and kept for the state this tracker reports (xrLocateHandJointsEXT).
+    const bool local_source = p->type == XR_TYPE_HAND_TRACKING_DATA_SOURCE_INFO_EXT &&
+        enabled(metadata->extension) && !host_xr().enabled_extensions.contains(metadata->extension);
+    if (local_source) {
+      const auto& request = *reinterpret_cast<const XrHandTrackingDataSourceInfoEXT*>(p);
+      if (!request.requestedDataSourceCount || !request.requestedDataSources)
+        return XR_ERROR_VALIDATION_FAILURE;
+      for (std::uint32_t i = 0; i < request.requestedDataSourceCount; ++i) {
+        const auto value = request.requestedDataSources[i];
+        if (value != XR_HAND_TRACKING_DATA_SOURCE_UNOBSTRUCTED_EXT && value != XR_HAND_TRACKING_DATA_SOURCE_CONTROLLER_EXT)
+          return XR_ERROR_VALIDATION_FAILURE;
+        requested_sources.push_back(value);
+      }
+      continue;
+    }
     if (*metadata->extension && (!enabled(metadata->extension) ||
         !host_xr().enabled_extensions.contains(metadata->extension))) continue;
     if (!extends_structure(*metadata, XR_TYPE_HAND_TRACKER_CREATE_INFO_EXT))
@@ -60,7 +78,7 @@ XrResult xrCreateHandTrackerEXT(XrSession handle, const XrHandTrackerCreateInfoE
   }
   if (XR_SUCCEEDED(r)) {
     track_handle(*out, "XrHandTrackerEXT", handle);
-    state().hands[*out] = {info->hand == XR_HAND_LEFT_EXT, {}};
+    state().hands[*out] = {info->hand == XR_HAND_LEFT_EXT, {}, std::move(requested_sources)};
   }
   return r;
 }
@@ -80,6 +98,23 @@ XrResult xrLocateHandJointsEXT(XrHandTrackerEXT tracker, const XrHandJointsLocat
   std::lock_guard lock(state().mutex);
   if (!valid_handle(tracker, "XrHandTrackerEXT"))
     return XR_ERROR_HANDLE_INVALID;
+  // XR_EXT_hand_joints_motion_range on a host without it: the host's default
+  // range applies and the request stays out of the host call.
+  XrHandJointsLocateInfoEXT local_info{};
+  if (info && info->type == XR_TYPE_HAND_JOINTS_LOCATE_INFO_EXT && enabled("XR_EXT_hand_joints_motion_range") &&
+      !host_xr().enabled_extensions.contains("XR_EXT_hand_joints_motion_range")) {
+    local_info = *info;
+    auto* next = static_cast<const XrBaseInStructure*>(info->next);
+    for (unsigned i = 0; next && next->type == XR_TYPE_HAND_JOINTS_MOTION_RANGE_INFO_EXT && i < 64; ++i) {
+      const auto range = reinterpret_cast<const XrHandJointsMotionRangeInfoEXT*>(next)->handJointsMotionRange;
+      if (range != XR_HAND_JOINTS_MOTION_RANGE_UNOBSTRUCTED_EXT &&
+          range != XR_HAND_JOINTS_MOTION_RANGE_CONFORMING_TO_CONTROLLER_EXT)
+        return XR_ERROR_VALIDATION_FAILURE;
+      next = next->next;
+    }
+    local_info.next = next;
+    info = &local_info;
+  }
   if (!out || out->type != XR_TYPE_HAND_JOINT_LOCATIONS_EXT || out->jointCount != 26 ||
       !out->jointLocations ||
       XR_FAILED(validate_struct(info, XR_TYPE_HAND_JOINTS_LOCATE_INFO_EXT)) ||
@@ -91,7 +126,7 @@ XrResult xrLocateHandJointsEXT(XrHandTrackerEXT tracker, const XrHandJointsLocat
   XrHandTrackingAimStateFB *aim = nullptr;
   XrHandTrackingCapsulesStateFB *capsules = nullptr;
   XrHandTrackingScaleFB *scale = nullptr;
-  XrHandTrackingDataSourceStateEXT *source = nullptr;
+  XrHandTrackingDataSourceStateEXT *source = nullptr, *local_source = nullptr;
   std::set<void *> seen;
   std::set<XrStructureType> types;
   for (auto p = static_cast<XrBaseOutStructure *>(out->next); p; p = p->next) {
@@ -119,9 +154,8 @@ XrResult xrLocateHandJointsEXT(XrHandTrackerEXT tracker, const XrHandJointsLocat
       scale = reinterpret_cast<XrHandTrackingScaleFB *>(p);
       break;
     case XR_TYPE_HAND_TRACKING_DATA_SOURCE_STATE_EXT:
-      if (!host_xr().enabled_extensions.contains(metadata->extension))
-        return XR_ERROR_FEATURE_UNSUPPORTED;
-      source = reinterpret_cast<XrHandTrackingDataSourceStateEXT *>(p);
+      (host_xr().enabled_extensions.contains(metadata->extension) ? source : local_source) =
+          reinterpret_cast<XrHandTrackingDataSourceStateEXT *>(p);
       break;
     default:
       return XR_ERROR_FEATURE_UNSUPPORTED;
@@ -178,6 +212,15 @@ XrResult xrLocateHandJointsEXT(XrHandTrackerEXT tracker, const XrHandJointsLocat
     if (source) {
       source->isActive = source_copy.isActive;
       source->dataSource = source_copy.dataSource;
+    }
+    if (local_source) {
+      // A Quest reports free hands unless the tracker asked for controller-held hands only.
+      const auto& requested = state().hands.at(tracker).requested_sources;
+      const bool free_hands = requested.empty() ||
+          std::find(requested.begin(), requested.end(), XR_HAND_TRACKING_DATA_SOURCE_UNOBSTRUCTED_EXT) != requested.end();
+      local_source->isActive = copy.isActive;
+      local_source->dataSource = free_hands ? XR_HAND_TRACKING_DATA_SOURCE_UNOBSTRUCTED_EXT
+                                            : XR_HAND_TRACKING_DATA_SOURCE_CONTROLLER_EXT;
     }
   }
   return r;

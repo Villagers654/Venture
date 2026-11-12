@@ -253,6 +253,7 @@ TEST_CASE("XR color handoff transforms linear and sRGB arrays without changing "
 }
 
 #include "hle/openxr/state.h"
+#include "xr/presentation.h"
 #include "xr/host_xr.h"
 namespace {
 struct ColorHost {
@@ -961,6 +962,107 @@ TEST_CASE("XR guest chains over the host maximum present through a fitted host c
     CHECK(host_pixels[i] == expected[i % expected.size()]);
   }
   REQUIRE(g::xrDestroySwapchain(chain) == XR_SUCCESS);
+  REQUIRE(g::xrDestroySession(session) == XR_SUCCESS);
+  REQUIRE(g::xrDestroyInstance(instance) == XR_SUCCESS);
+}
+
+TEST_CASE("XR eye presentation fits the reported eye size and keeps small overshoots 1:1") {
+  using venture::xr::eye_presentation_extent;
+  // H3VR2 at 1.6x of a 2684x2860 recommendation.
+  const auto h3 = eye_presentation_extent({4296, 4576}, {4296, 4576}, {2684, 2860});
+  CHECK(h3.width == 2684);
+  CHECK(h3.height == 2859);
+  // A side-by-side chain scales by its eye rect, not its width.
+  const auto pair = eye_presentation_extent({3200, 1600}, {1600, 1600}, {1024, 1024});
+  CHECK(pair.width == 2048);
+  CHECK(pair.height == 1024);
+  // Within 5% (rounding, padding) and at or below the size: unchanged.
+  CHECK(eye_presentation_extent({1050, 1050}, {1050, 1050}, {1024, 1024}).width == 1050);
+  CHECK(eye_presentation_extent({900, 900}, {900, 900}, {1024, 1024}).width == 900);
+  CHECK(eye_presentation_extent({2000, 2000}, {2000, 2000}, {0, 0}).width == 2000);
+}
+
+TEST_CASE("XR eye chains past the reported eye size present through a host chain of that size") {
+  // The mock recommends 1024x1024 per eye. A game multiplying that renders a
+  // larger eye; the host chain holds the reported size, a quad keeps its own.
+  namespace g = venture::hle::openxr::guest;
+  const char *names[]{"XR_KHR_vulkan_enable2"};
+  XrInstanceCreateInfo ci{XR_TYPE_INSTANCE_CREATE_INFO};
+  ci.applicationInfo.apiVersion = XR_MAKE_VERSION(1, 0, 0);
+  ci.enabledExtensionCount = 1;
+  ci.enabledExtensionNames = names;
+  XrInstance instance{};
+  REQUIRE(g::xrCreateInstance(&ci, &instance) == XR_SUCCESS);
+  auto &gpu = venture::gfx::gpu_device();
+  XrGraphicsBindingVulkanKHR binding{XR_TYPE_GRAPHICS_BINDING_VULKAN_KHR,
+      nullptr, gpu.instance, gpu.physical_device, gpu.device,
+      gpu.queue_family, gpu.queue_index};
+  XrSessionCreateInfo sc{XR_TYPE_SESSION_CREATE_INFO, &binding, 0, venture::xr::host_xr().system};
+  XrSession session{};
+  REQUIRE(g::xrCreateSession(instance, &sc, &session) == XR_SUCCESS);
+  XrReferenceSpaceCreateInfo reference{XR_TYPE_REFERENCE_SPACE_CREATE_INFO,
+      nullptr, XR_REFERENCE_SPACE_TYPE_LOCAL, {{0,0,0,1},{0,0,0}}};
+  XrSpace space{};
+  REQUIRE(g::xrCreateReferenceSpace(session, &reference, &space) == XR_SUCCESS);
+  XrEventDataBuffer event{XR_TYPE_EVENT_DATA_BUFFER};
+  while (g::xrPollEvent(instance, &event) == XR_SUCCESS) event = {XR_TYPE_EVENT_DATA_BUFFER};
+  XrSessionBeginInfo begin{XR_TYPE_SESSION_BEGIN_INFO, nullptr, XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO};
+  REQUIRE(g::xrBeginSession(session, &begin) == XR_SUCCESS);
+  auto create = [&](std::uint32_t width, std::uint32_t height) {
+    XrSwapchainCreateInfo info{XR_TYPE_SWAPCHAIN_CREATE_INFO};
+    info.format = VK_FORMAT_R8G8B8A8_UNORM;
+    info.width = width;
+    info.height = height;
+    info.sampleCount = info.faceCount = info.mipCount = info.arraySize = 1;
+    info.usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT | XR_SWAPCHAIN_USAGE_TRANSFER_DST_BIT;
+    XrSwapchain chain{};
+    REQUIRE(g::xrCreateSwapchain(session, &info, &chain) == XR_SUCCESS);
+    std::uint32_t index{};
+    REQUIRE(g::xrAcquireSwapchainImage(chain, nullptr, &index) == XR_SUCCESS);
+    XrSwapchainImageWaitInfo wait{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO, nullptr, XR_INFINITE_DURATION};
+    REQUIRE(g::xrWaitSwapchainImage(chain, &wait) == XR_SUCCESS);
+    REQUIRE(g::xrReleaseSwapchainImage(chain, nullptr) == XR_SUCCESS);
+    return chain;
+  };
+  XrFrameState frame{XR_TYPE_FRAME_STATE};
+  REQUIRE(g::xrWaitFrame(session, nullptr, &frame) == XR_SUCCESS);
+  REQUIRE(g::xrBeginFrame(session, nullptr) == XR_SUCCESS);
+  // Both eyes side by side at 1.5625x, and a 2000x2000 quad panel.
+  const auto eyes = create(3200, 1600), panel = create(2000, 2000);
+  XrCompositionLayerProjectionView views[2]{};
+  for (int i = 0; i < 2; ++i) {
+    views[i] = {XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW};
+    views[i].pose = {{0,0,0,1},{0,0,0}};
+    views[i].fov = {-0.8f, 0.8f, 0.8f, -0.8f};
+    views[i].subImage = {eyes, {{i * 1600, 0}, {1600, 1600}}, 0};
+  }
+  XrCompositionLayerProjection projection{XR_TYPE_COMPOSITION_LAYER_PROJECTION, nullptr, 0, space, 2, views};
+  XrCompositionLayerQuad quad{XR_TYPE_COMPOSITION_LAYER_QUAD, nullptr, 0, space,
+      XR_EYE_VISIBILITY_BOTH, {panel, {{0,0},{2000,2000}}, 0}, {{0,0,0,1},{0,0,-1}}, {1,1}};
+  const XrCompositionLayerBaseHeader *layers[]{
+      reinterpret_cast<const XrCompositionLayerBaseHeader*>(&projection),
+      reinterpret_cast<const XrCompositionLayerBaseHeader*>(&quad)};
+  XrFrameEndInfo end{XR_TYPE_FRAME_END_INFO, nullptr, frame.predictedDisplayTime,
+      XR_ENVIRONMENT_BLEND_MODE_OPAQUE, 2, layers};
+  REQUIRE(g::xrEndFrame(session, &end) == XR_SUCCESS);
+  const auto& eye_record = venture::hle::openxr::state().swapchains.at(eyes);
+  CHECK(eye_record.host_info.width == 2048);
+  CHECK(eye_record.host_info.height == 1024);
+  const auto& panel_record = venture::hle::openxr::state().swapchains.at(panel);
+  CHECK(panel_record.host_info.width == 2000);
+  CHECK(panel_record.host_info.height == 2000);
+  XrSwapchainSubImage host[3]{};
+  REQUIRE(ventureMockXrLastSubImages(host, 3) == 3);
+  for (int i = 0; i < 2; ++i) {
+    CAPTURE(i);
+    CHECK(host[i].swapchain == eye_record.host_handle);
+    CHECK(host[i].imageRect.offset.x == i * 1024);
+    CHECK(host[i].imageRect.extent.width == 1024);
+    CHECK(host[i].imageRect.extent.height == 1024);
+  }
+  CHECK(host[2].imageRect.extent.width == 2000);
+  REQUIRE(g::xrDestroySwapchain(eyes) == XR_SUCCESS);
+  REQUIRE(g::xrDestroySwapchain(panel) == XR_SUCCESS);
   REQUIRE(g::xrDestroySession(session) == XR_SUCCESS);
   REQUIRE(g::xrDestroyInstance(instance) == XR_SUCCESS);
 }

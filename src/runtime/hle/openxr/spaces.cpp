@@ -118,6 +118,7 @@ XrResult xrLocateSpace(XrSpace space, XrSpace baseSpace, XrTime time, XrSpaceLoc
   if (!location || XR_FAILED(validate_struct(location, XR_TYPE_SPACE_LOCATION))) return XR_ERROR_VALIDATION_FAILURE;
   auto result = host_call<PFN_xrLocateSpace, "xrLocateSpace">(space, baseSpace, time, location);
   if (XR_SUCCEEDED(result)) {
+    if (!anchor_locatable(space) || !anchor_locatable(baseSpace)) location->locationFlags = 0;
     sanitize(location->locationFlags, location->pose);
     for (auto* next = static_cast<XrBaseOutStructure*>(location->next); next; next = next->next)
       if (next->type == XR_TYPE_SPACE_VELOCITY) {
@@ -156,6 +157,10 @@ XrResult xrLocateSpaces(XrSession handle, const XrSpacesLocateInfo *info, XrSpac
       return r;
   }
   for (std::uint32_t i = 0; i < info->spaceCount; ++i) {
+    if (!anchor_locatable(info->spaces[i]) || !anchor_locatable(info->baseSpace)) {
+      locations[i].locationFlags = 0;
+      speed[i].velocityFlags = 0;
+    }
     sanitize(locations[i].locationFlags, locations[i].pose);
     out->locations[i] = {locations[i].locationFlags, locations[i].pose};
     report_hand_pose(info->spaces[i], locations[i]);

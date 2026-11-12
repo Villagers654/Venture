@@ -36,6 +36,9 @@ struct XrImageDescription {
   // Destination mip_count may select only its base or a prefix of its levels.
   // Export subresources only; no guest-visible aggregate texture is needed.
   bool external_subresources = false;
+  // Size of the destination images when smaller than the source (zero: the
+  // same). The handoff blit scales the base level with linear filtering.
+  std::uint32_t target_width = 0, target_height = 0;
 };
 // The Vulkan layout of an image that glReleaseTexturesANGLE reported as
 // `gl_layout` (EXT_external_objects enums; GENERAL under ANGLE's general

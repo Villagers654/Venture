@@ -9,6 +9,8 @@
 #include "xr/clock.h"
 #include "xr/dev_dump.h"
 #include "xr/queue.h"
+#include "xr/eye_scale.h"
+#include "gfx/gpu_device.h"
 #include "hle/vulkan/timing.h"
 #include "core/process.h"
 #include "common/log.h"
@@ -97,6 +99,12 @@ GpuDevice& gpu_device() {
   return gpu;
 }
 std::shared_ptr<std::recursive_mutex> queue_mutex(VkQueue) { static auto mutex = std::make_shared<std::recursive_mutex>(); return mutex; }
+// Eyes keep the guest's size here: eye presentation scaling has its own tests.
+bool supports_filtered_blit(std::int64_t) { return false; }
+}
+namespace xr::eye_scale {
+double compensation() { return 1; }
+void observe(VkExtent2D, VkExtent2D, VkExtent2D) {}
 }
 namespace xr {
 HostXr& host_xr() { static HostXr host; return host; }

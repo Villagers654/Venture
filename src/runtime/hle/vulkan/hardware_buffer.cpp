@@ -16,6 +16,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <type_traits>
 
 #include "android/hardware_buffer.h"
@@ -606,13 +607,22 @@ VkResult VKAPI_CALL create_conversion(VkDevice d, const VkSamplerYcbcrConversion
   auto* node = find<const VkExternalFormatANDROID>(info->pNext, VK_STRUCTURE_TYPE_EXTERNAL_FORMAT_ANDROID);
   if (!node || !node->externalFormat)
     return device_fn<PFN_vkCreateSamplerYcbcrConversion>(d, "vkCreateSamplerYcbcrConversion")(d, info, alloc, out);
-  if (!vk_format(node->externalFormat)) {
-    log::error("vulkan", "unknown Android external format {}", node->externalFormat);
-    return VK_ERROR_OUT_OF_HOST_MEMORY;
-  }
   // Every external format here is RGB: the suggested model is RGB_IDENTITY
   // with full range, which leaves texels unchanged apart from the mapping.
-  if (info->ycbcrModel != VK_SAMPLER_YCBCR_MODEL_CONVERSION_RGB_IDENTITY)
+  // Guests may also name a Quest driver's own external format identifiers
+  // without querying a buffer: Unreal's Quest Vulkan RHI creates conversions
+  // for 506 and 654 (its video formats) at device creation and samplers with
+  // them right after, so a failure left a null conversion in vkCreateSampler,
+  // which crashed the host driver (AMAZE VR Concerts). Any image a guest can
+  // bind here comes from an AHB Venture made, so it is RGB too.
+  if (!vk_format(node->externalFormat)) {
+    static std::mutex reported_lock;
+    static std::set<std::uint64_t> reported;
+    std::lock_guard lock(reported_lock);
+    if (reported.insert(node->externalFormat).second)
+      log::info("vulkan", "Android external format {} is not a Venture buffer format; its conversion samples RGB",
+                node->externalFormat);
+  } else if (info->ycbcrModel != VK_SAMPLER_YCBCR_MODEL_CONVERSION_RGB_IDENTITY)
     log::warn("vulkan", "YCbCr model {} on an RGB Android external format is sampled as RGB", int(info->ycbcrModel));
   Conversion conversion{d, info->components, std::make_unique<char>()};
   auto handle = reinterpret_cast<VkSamplerYcbcrConversion>(conversion.token.get());

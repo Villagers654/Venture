@@ -44,6 +44,8 @@ inline void check_memory_range(GuestAddr address, std::uint64_t size, bool write
 }
 const char* error_string(int error);
 int encode_utf8(char* out, std::uint32_t cp);
+// One stateless mbrtoc32 step: bytes used, 0 for NUL, -2 incomplete, -1 EILSEQ.
+std::uint64_t decode_utf8(std::uint32_t* out, const char* s, std::uint64_t n);
 Vec128 parse_quad(const char* text, char** end);
 std::int64_t parse_signed(const char* text, char** end, int base);
 std::uint64_t parse_unsigned(const char* text, char** end, int base);

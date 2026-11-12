@@ -2373,6 +2373,38 @@ void App::draw_display_rows(library::DisplaySettings& d, bool per_game, const ch
     });
   }
   divider();
+  // Games that multiply the eye size they are told (most Unity and Unreal
+  // titles do on a Quest) are asked for less, so they render at the
+  // resolution above. --smoke-view display-match opens its list once.
+  static bool smoke_match = options_.smoke_view == "display-match";
+  // i18n: Settings row: make games render at the resolution above although they scale it up themselves.
+  setting_row(tr("Match game resolution"), "", dw, s(38), [&] {
+    if (std::exchange(smoke_match, false)) {
+      ImGui::PushID("match-resolution");
+      ImGui::OpenPopup("##menu");
+      ImGui::PopID();
+    }
+    std::vector<std::string> ids{"auto", "off"};
+    // i18n: Choices for "Match game resolution".
+    std::vector<std::string> names{tr("Automatic"), tr("Off")};
+    if (per_game) {
+      ids.insert(ids.begin(), "");
+      names.insert(names.begin(), tr("Use global setting"));
+    }
+    const auto items = pointers(names);
+    int choice = index(ids, d.match_resolution);
+    if (dropdown("match-resolution", "", items.data(), int(items.size()), &choice, dw)) {
+      d.match_resolution = ids[choice];
+      changed = true;
+    }
+  }, [&] {
+    // i18n: Tooltip of "Match game resolution".
+    icon_button("match-resolution-help", icons::info,
+                tr("Many Quest games render larger than the size they are asked for. Automatic learns how much "
+                   "and asks for less, so they render at the resolution above instead of wasting GPU time."),
+                kHelpIcon);
+  });
+  divider();
   setting_row("Frame rate", "", dw, s(38), [&] {
     if (std::exchange(smoke_rates, false)) {
       ImGui::PushID("rate");

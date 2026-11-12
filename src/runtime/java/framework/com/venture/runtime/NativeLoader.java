@@ -184,4 +184,7 @@ public final class NativeLoader {
   public static String[] nativeMethods(Class<?> cls) {
     return NativeMethods.declarations(cls);
   }
+  public static String[] criticalNatives(Class<?> cls) {
+    return NativeMethods.criticalNatives(cls);
+  }
 }

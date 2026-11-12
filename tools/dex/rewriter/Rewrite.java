@@ -37,6 +37,34 @@ public final class Rewrite {
         return (owner.equals("java/lang/System") || owner.equals("java/lang/Runtime"))
             && name.equals("exit") && desc.equals("(I)V");
     }
+    /** Interfaces this class super-calls (invoke-super) but implements only through an ancestor.
+     *  ART resolves such a call by assignability; the JVM accepts an interface invokespecial only
+     *  on a direct superinterface (JVMS 4.9.2), and R8 class merging leaves indirect ones behind.
+     *  Declaring an interface the class already implements changes neither its type nor method
+     *  selection, since the set of superinterfaces stays the same. */
+    static List<String> inheritedSuperInterfaceCalls(ClassReader reader, Hierarchy hierarchy) {
+        String self = reader.getClassName();
+        Set<String> direct = new HashSet<>(Arrays.asList(reader.getInterfaces()));
+        Set<String> found = new LinkedHashSet<>();
+        reader.accept(new ClassVisitor(Opcodes.ASM9) {
+            @Override public MethodVisitor visitMethod(int access, String name, String desc, String signature, String[] exceptions) {
+                return new MethodVisitor(Opcodes.ASM9) {
+                    @Override public void visitMethodInsn(int opcode, String cls, String method, String descriptor, boolean itf) {
+                        if (opcode != Opcodes.INVOKESPECIAL || method.equals("<init>") || cls.equals(self)
+                                || direct.contains(cls) || found.contains(cls)) return;
+                        Hierarchy.Info info = hierarchy.types.get(cls);
+                        if (info == null || !info.isInterface()) return;
+                        try {
+                            if (hierarchy.assignable(cls, self, new HashSet<>())) found.add(cls);
+                        } catch (IllegalArgumentException unknownAncestry) {
+                            // The frame pass reports the missing type.
+                        }
+                    }
+                };
+            }
+        }, ClassReader.SKIP_DEBUG | ClassReader.SKIP_FRAMES);
+        return new ArrayList<>(found);
+    }
     public static void main(String[] args) throws Exception {
         long started = System.nanoTime();
         Hierarchy hierarchy = new Hierarchy();
@@ -57,7 +85,17 @@ public final class Rewrite {
                 ClassWriter writer = new ClassWriter(reader, ClassWriter.COMPUTE_MAXS);
                 String owner = reader.getClassName();
                 census.println("C\t" + owner);
+                List<String> superCalls = inheritedSuperInterfaceCalls(reader, hierarchy);
+                for (String itf : superCalls) census.println("R\t" + owner + "\t<class>\tdirect superinterface " + itf);
                 reader.accept(new ClassVisitor(Opcodes.ASM9, writer) {
+                    @Override public void visit(int version, int access, String name, String signature, String superName, String[] interfaces) {
+                        if (!superCalls.isEmpty()) {
+                            List<String> all = new ArrayList<>(Arrays.asList(interfaces == null ? new String[0] : interfaces));
+                            all.addAll(superCalls);
+                            interfaces = all.toArray(new String[0]);
+                        }
+                        super.visit(version, access, name, signature, superName, interfaces);
+                    }
                     @Override public MethodVisitor visitMethod(int access, String name, String desc, String signature, String[] exceptions) {
                         if ((access & Opcodes.ACC_NATIVE) != 0)
                             census.println("N\t" + owner + "\t" + name + "\t" + desc + "\t" + ((access & Opcodes.ACC_STATIC) != 0));

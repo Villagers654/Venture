@@ -11,6 +11,8 @@
 #include "xr/queue.h"
 #include "xr/desktop_mirror.h"
 #include "xr/display_override.h"
+#include "xr/eye_scale.h"
+#include "xr/presentation.h"
 #include "hle/vulkan/timing.h"
 #include "core/wait.h"
 #include <algorithm>
@@ -157,6 +159,29 @@ XrResult apply_host_sampler(HostChain &h, const TextureSamplerState &s) {
   if (XR_SUCCEEDED(r)) h.sampler_current = true;
   return r;
 }
+// The displayed host chains' size for a ring first shown in `rect` (texture
+// fractions). A projection eye past the eye size the game was told presents
+// through a host image of that size (xr/presentation.h eye_presentation_extent):
+// the host's recommendation already includes its supersampling, so a game
+// multiplier on top only adds pixels the compositor scales away. Everything
+// else, and formats the copy cannot scale with filtering, stays 1:1.
+static VkExtent2D presentation_size(const Ring &ring, Rect rect, bool projection) {
+  const VkExtent2D full{ring.desc.width, ring.desc.height};
+  if (!projection || ring.desc.face_count != 1) return full;
+  const VkExtent2D eye{std::uint32_t(std::lround(rect.width * float(full.width))),
+                       std::uint32_t(std::lround(rect.height * float(full.height)))};
+  // The game's eye against the size it was told teaches its multiplier.
+  const auto reported = venture::xr::reported_eye();
+  venture::xr::eye_scale::observe(reported.told, reported.target, eye);
+  const auto size = venture::xr::eye_presentation_extent(full, eye, reported.target);
+  if ((size.width == full.width && size.height == full.height) || ring.desc.samples != 1 ||
+      !gfx::supports_filtered_blit(ring.desc.vk_format))
+    return full;
+  log::info("vrapi", "eye swapchain {}x{} (eye rect {}x{}) exceeds the eye size {}x{}; presenting "
+            "through {}x{}", full.width, full.height, eye.width, eye.height, reported.target.width,
+            reported.target.height, size.width, size.height);
+  return size;
+}
 // `chain` is an index from Ring::host_chain.
 XrResult ensure_host_chain(Ring &ring, std::size_t chain) {
   HostQueueLock host_queue(session().uses_shared_gpu);
@@ -168,8 +193,10 @@ XrResult ensure_host_chain(Ring &ring, std::size_t chain) {
   XrSwapchainCreateInfo ci{XR_TYPE_SWAPCHAIN_CREATE_INFO};
   ci.usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT | XR_SWAPCHAIN_USAGE_TRANSFER_DST_BIT;
   if (chain & 2) ci.usageFlags |= XR_SWAPCHAIN_USAGE_SAMPLED_BIT;  // drawn layers sample it
-  ci.width = ring.desc.width;
-  ci.height = ring.desc.height;
+  // Drawn layers sample the whole ring; displayed chains take its presentation size.
+  const bool sized = !(chain & 2) && ring.present.width && ring.present.height;
+  ci.width = sized ? ring.present.width : ring.desc.width;
+  ci.height = sized ? ring.present.height : ring.desc.height;
   ci.sampleCount = 1;
   ci.arraySize = ring.desc.layers;
   ci.faceCount = ring.desc.face_count;
@@ -184,6 +211,8 @@ XrResult ensure_host_chain(Ring &ring, std::size_t chain) {
     return r;
   h.sampler_current = false;
   h.format = static_cast<VkFormat>(ci.format);
+  h.width = ci.width;
+  h.height = ci.height;
   std::uint32_t count = 0;
   r = ::xrEnumerateSwapchainImages(h.handle, 0, &count, nullptr);
   if (XR_SUCCEEDED(r)) {
@@ -232,6 +261,8 @@ struct Submission {
   const FenceMap *fences = nullptr;
   // The desktop mirror shows the first projection layer's chosen eye.
   bool mirror_layer = false, mirrored = false;
+  // The layer being translated is a projection: its rings may present scaled (presentation_size).
+  bool projection = false;
   int mirror_eye = 0;
   XrFovf mirror_fov{};
   // Acquires and waits one of `h`'s images (the result), then copies the
@@ -259,6 +290,10 @@ struct Submission {
     auto copy_desc = ring.desc;
     copy_desc.host_mip_count = 1;
     if (h.format != ring.desc.vk_format) copy_desc.host_format = h.format;
+    if (h.width != ring.desc.width || h.height != ring.desc.height) {
+      copy_desc.host_width = h.width;
+      copy_desc.host_height = h.height;
+    }
     const auto fence_key = std::make_pair(token, slot);
     if (fences && fences->contains(fence_key)) {
       // Consume all producers, then transfer this slot only once.
@@ -328,6 +363,7 @@ struct Submission {
         !std::isfinite(rect.height) || rect.x < 0 || rect.y < 0 || rect.width <= 0 ||
         rect.height <= 0 || rect.x + rect.width > 1.00001f || rect.y + rect.height > 1.00001f)
       return XR_ERROR_SWAPCHAIN_RECT_INVALID;
+    if (!ring.present.width) ring.present = presentation_size(ring, rect, projection);
     // A slot shown with both row orders needs one host chain for each.
     const auto chain = Ring::host_chain(slot, bottom_up);
     auto r = ensure_host_chain(ring, chain);
@@ -345,8 +381,8 @@ struct Submission {
       const long last = std::clamp(std::lround((begin + size) * float(pixels)), first + 1, long(pixels));
       return std::pair{int(first), int(last - first)};
     };
-    const auto [x, width] = span(rect.x, rect.width, ring.desc.width);
-    const auto [y, height] = span(top, rect.height, ring.desc.height);
+    const auto [x, width] = span(rect.x, rect.width, h.width);
+    const auto [y, height] = span(top, rect.height, h.height);
     out.imageRect = {{x, y}, {width, height}};
     if (!copied.contains(k)) {
       std::uint32_t acquired = 0;
@@ -651,6 +687,7 @@ static std::int32_t submit_frame(Mobile *mobile, const Submit *frame, const Fenc
     };
     const auto translated = layers.size();
     submission.mirror_layer = header->type == 1;
+    submission.projection = header->type == 1;
     submission.mirror_eye = venture::xr::mirror_mode() == venture::xr::MirrorMode::off ? 0 : int(venture::xr::mirror_eye());
     submission.mirror_fov = eye_offsets[submission.mirror_eye].fov;
     r = translate_layer(*header, eye_offsets, copy, storage[i], layers, submission.mirror_eye, &drawn);

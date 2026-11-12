@@ -17,6 +17,43 @@ public final class FrameworkTest {
       + "Hzmc+i3pAiEA1kpEXFh0CpxPhvnkdp8bFlk1dZdMs0GSLQRKAlL8uFU=";
   public static final class ServiceRunnable implements Runnable { public void run() {} }
   private static int checks;
+  // A FAT12 volume (512-byte sectors and clusters, one FAT, 16 root entries) with
+  // A.TXT, a long-named LongName.dat and SUB/B.BIN, followed by the OBB footer.
+  private static byte[] fatObbImage() {
+    var image = java.nio.ByteBuffer.allocate(16 * 512).order(java.nio.ByteOrder.LITTLE_ENDIAN);
+    image.put(0, (byte) 0xeb).putShort(11, (short) 512).put(13, (byte) 1).putShort(14, (short) 1).put(16, (byte) 1)
+        .putShort(17, (short) 16).putShort(19, (short) 16).putShort(22, (short) 1).putShort(510, (short) 0xaa55);
+    image.put(512, (byte) 0xf8);
+    for (int i = 1; i < 9; i++) image.put(512 + i, (byte) 0xff);
+    java.util.function.BiConsumer<Integer, Object[]> entry = (at, f) -> {
+      byte[] name = ((String) f[0]).getBytes(java.nio.charset.StandardCharsets.US_ASCII);
+      for (int i = 0; i < 11; i++) image.put(at + i, name[i]);
+      image.put(at + 11, (byte) (int) f[1]).putShort(at + 26, (short) (int) f[2]).putInt(at + 28, (int) f[3]);
+    };
+    int root = 2 * 512;
+    entry.accept(root, new Object[] {"A       TXT", 0x20, 3, 5});
+    entry.accept(root + 32, new Object[] {"SUB        ", 0x10, 2, 0});
+    String longName = "LongName.dat";
+    image.put(root + 64, (byte) 0x41).put(root + 64 + 11, (byte) 0x0f);
+    int[] offsets = {1, 3, 5, 7, 9, 14, 16, 18, 20, 22, 24, 28, 30};
+    for (int i = 0; i < offsets.length; i++)
+      image.putChar(root + 64 + offsets[i], i < longName.length() ? longName.charAt(i) : i == longName.length() ? 0 : (char) 0xffff);
+    entry.accept(root + 96, new Object[] {"LONGNA~1DAT", 0x20, 5, 4});
+    java.util.function.IntFunction<Integer> cluster = n -> (3 + n - 2) * 512;
+    entry.accept(cluster.apply(2), new Object[] {".          ", 0x10, 2, 0});
+    entry.accept(cluster.apply(2) + 32, new Object[] {"..         ", 0x10, 0, 0});
+    entry.accept(cluster.apply(2) + 64, new Object[] {"B       BIN", 0x20, 4, 3});
+    image.put(cluster.apply(3), "hello".getBytes()).position(0);
+    image.put(cluster.apply(4), "xyz".getBytes()).position(0);
+    image.put(cluster.apply(5), "long".getBytes()).position(0);
+    byte[] pkg = "test.game".getBytes();
+    var footer = java.nio.ByteBuffer.allocate(24 + pkg.length + 8).order(java.nio.ByteOrder.LITTLE_ENDIAN);
+    footer.putInt(1).putInt(1).putInt(0).putLong(0).putInt(pkg.length).put(pkg).putInt(24 + pkg.length).putInt(0x01059983);
+    var out = new byte[image.capacity() + footer.capacity()];
+    System.arraycopy(image.array(), 0, out, 0, image.capacity());
+    System.arraycopy(footer.array(), 0, out, image.capacity(), footer.capacity());
+    return out;
+  }
   private static void check(boolean ok, String message) {
     checks++;
     if (!ok)
@@ -169,6 +206,15 @@ public final class FrameworkTest {
     check(window.getDecorView().getMeasuredWidth() == 0 && hosted.getMeasuredHeight() == 0,
         "window measures decor and content on the next traversal");
     window.detach();
+    // Sentry's frame metrics collector registers on every started activity's window.
+    android.view.Window.OnFrameMetricsAvailableListener frames = (w, metrics, dropped) -> {};
+    window.addOnFrameMetricsAvailableListener(frames, null);
+    window.removeOnFrameMetricsAvailableListener(frames);
+    check(window.getContext() == context, "window context");
+    try {
+      window.removeOnFrameMetricsAvailableListener(frames);
+      check(false, "removing an unregistered frame metrics listener");
+    } catch (IllegalArgumentException expected) {}
     int limited = android.view.View.resolveSizeAndState(80,
         android.view.View.MeasureSpec.makeMeasureSpec(50, android.view.View.MeasureSpec.AT_MOST), 0);
     check(limited == (50 | android.view.View.MEASURED_STATE_TOO_SMALL), "at-most measurement reports clipped state");
@@ -203,6 +249,17 @@ public final class FrameworkTest {
   public static class NativeMetadataFixture {
     public native int call(Object value);
     public void optional(OptionalParameter value) {}
+  }
+  @java.lang.annotation.Retention(java.lang.annotation.RetentionPolicy.CLASS)
+  @interface Tagged { String value(); int[] numbers(); java.lang.annotation.ElementType kind(); }
+  public static class CriticalNativeFixture {
+    @dalvik.annotation.optimization.CriticalNative public static native int add(int a, int b);
+    // ART ignores the annotation on an instance method.
+    @dalvik.annotation.optimization.CriticalNative public native int instance(int a);
+    @dalvik.annotation.optimization.FastNative public static native void fast(int a);
+    @Tagged(value = "x", numbers = {1, 2}, kind = java.lang.annotation.ElementType.METHOD)
+    @dalvik.annotation.optimization.CriticalNative @Deprecated public static native long tagged(long value);
+    public static native void plain();
   }
   private static BinaryResources.Node manifestNode(String tag, String... attributes) throws Exception {
     var constructor = BinaryResources.Node.class.getDeclaredConstructor(String.class);
@@ -600,6 +657,21 @@ public final class FrameworkTest {
         new android.os.storage.OnObbStateChangeListener() {}); }
     catch (IllegalArgumentException expected) { missingObb = true; }
     check(missingObb, "mounting a missing OBB file is rejected");
+    var obbImage = Files.createTempDirectory("obb-image").resolve("main.1.test.obb");
+    Files.write(obbImage, fatObbImage());
+    var obbStates = new java.util.ArrayList<Integer>();
+    storage.mountObb(obbImage.toString(), null, new android.os.storage.OnObbStateChangeListener() {
+      @Override public void onObbStateChange(String path, int state) { obbStates.add(state); }
+    });
+    String obbMount = storage.getMountedObbPath(obbImage.toString());
+    check(storage.isObbMounted(obbImage.toString()) && obbMount != null, "an OBB filesystem image mounts");
+    var obbFiles = new java.io.File(RuntimeEnvironment.toHostPath(obbMount));
+    check(Files.readString(new java.io.File(obbFiles, "A.TXT").toPath()).equals("hello")
+        && Files.readString(new java.io.File(obbFiles, "LongName.dat").toPath()).equals("long")
+        && Files.readString(new java.io.File(obbFiles, "SUB/B.BIN").toPath()).equals("xyz"),
+        "the mounted OBB image's files, long names and directories read back");
+    storage.unmountObb(obbImage.toString(), false, new android.os.storage.OnObbStateChangeListener() {});
+    check(!storage.isObbMounted(obbImage.toString()), "an unmounted OBB image is no longer mounted");
     var activities = (android.app.ActivityManager) context.getSystemService(android.content.Context.ACTIVITY_SERVICE);
     check(activities.getHistoricalProcessExitReasons(null, 0, 0).isEmpty(), "no earlier process exits are recorded");
     var attributes = new android.media.AudioAttributes.Builder()
@@ -627,6 +699,16 @@ public final class FrameworkTest {
     locales.setApplicationLocales(LocaleList.forLanguageTags("es-ES"));
     check(locales.getApplicationLocales().get(0).getLanguage().equals("es"), "an app locale selection is kept");
     locales.setApplicationLocales(LocaleList.getEmptyLocaleList());
+    // Unity 6 asks GameManager for the game mode on API 31+ before it extracts il2cpp data.
+    var games = context.getSystemService(android.app.GameManager.class);
+    check(games != null && games == context.getSystemService(android.content.Context.GAME_SERVICE)
+        && games.getGameMode() == android.app.GameManager.GAME_MODE_UNSUPPORTED,
+        "GameManager is a system service with no game mode applied");
+    var state = new android.app.GameState(true, android.app.GameState.MODE_CONTENT, 7, 2);
+    games.setGameState(state);
+    check(state.isLoading() && state.getMode() == 4 && state.getLabel() == 7 && state.getQuality() == 2
+        && new android.app.GameState(false, android.app.GameState.MODE_NONE).getLabel() == -1,
+        "GameState keeps what the game reports");
 
     var flags = new android.util.SparseBooleanArray();
     flags.put(9, true); flags.put(2, false); flags.put(5, true);
@@ -1088,6 +1170,55 @@ public final class FrameworkTest {
     span.draw(canvas, "e", 0, 1, 0, 0, 0, 0, null);
     check(span instanceof android.text.style.UpdateAppearance && canvas.getSaveCount() == 2,
         "replacement spans draw on an inert canvas");
+  }
+  // Apps rasterize labels and shapes into bitmaps they upload as textures
+  // (Delightex Edu builds its scene this way).
+  private static void canvasDrawing() {
+    var target = android.graphics.Bitmap.createBitmap(32, 32, android.graphics.Bitmap.Config.ARGB_8888);
+    var canvas = new android.graphics.Canvas(target);
+    canvas.drawColor(0xff0000ff);
+    var paint = new android.text.TextPaint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+    paint.setARGB(255, 255, 0, 0);
+    canvas.drawRect(new android.graphics.RectF(0, 0, 8, 8), paint);
+    check(target.getPixel(4, 4) == 0xffff0000 && target.getPixel(20, 20) == 0xff0000ff,
+        "Canvas fills a rect into its bitmap");
+    var path = new android.graphics.Path();
+    path.moveTo(16, 16);
+    path.lineTo(31, 16);
+    path.lineTo(31, 31);
+    path.close();
+    paint.setColor(0xff00ff00);
+    canvas.drawPath(path, paint);
+    check(target.getPixel(28, 20) == 0xff00ff00 && target.getPixel(18, 28) == 0xff0000ff, "Canvas fills a path");
+    var matrix = new android.graphics.Matrix();
+    matrix.setScale(2, 2);
+    canvas.setMatrix(matrix);
+    paint.setColor(0xffffffff);
+    canvas.drawRect(0, 12, 2, 14, paint);
+    canvas.setMatrix(null);
+    check(target.getPixel(3, 26) == 0xffffffff, "Canvas.setMatrix scales drawing");
+    canvas.drawColor(0, android.graphics.PorterDuff.Mode.CLEAR);
+    check(target.getPixel(4, 4) == 0 && target.getPixel(28, 20) == 0, "PorterDuff CLEAR clears the bitmap");
+    paint.setTextSize(24);
+    paint.setTextAlign(android.graphics.Paint.Align.CENTER);
+    var metrics = paint.getFontMetrics();
+    check(metrics.ascent < 0 && metrics.descent > 0 && metrics.top <= metrics.ascent && paint.measureText("Hi") > 0,
+        "Paint measures text with Android's y-down metrics");
+    canvas.drawText("Hi", 16, 24, paint);
+    int inked = 0;
+    for (int y = 0; y < 32; ++y)
+      for (int x = 0; x < 32; ++x)
+        if ((target.getPixel(x, y) >>> 24) != 0) ++inked;
+    check(inked > 10, "Canvas draws text");
+    var png = new java.io.ByteArrayOutputStream();
+    check(target.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, png), "Bitmap.compress writes PNG");
+    var decoded = android.graphics.BitmapFactory.decodeByteArray(png.toByteArray(), 0, png.size());
+    check(decoded != null && decoded.getWidth() == 32 && decoded.getPixel(16, 16) == target.getPixel(16, 16),
+        "BitmapFactory.decodeByteArray reads it back");
+    boolean immutable = false;
+    try { new android.graphics.Canvas(android.graphics.Bitmap.createBitmap(new int[4], 2, 2,
+        android.graphics.Bitmap.Config.ARGB_8888)); } catch (IllegalStateException e) { immutable = true; }
+    check(immutable, "Canvas rejects an immutable bitmap");
   }
   private static void textToSpeech() throws Exception {
     // Unreal's GameActivity implements OnInitListener; with no engine every request fails (Espire 2).
@@ -1673,6 +1804,10 @@ public final class FrameworkTest {
       boolean missing = false;
       try { cls.getDeclaredMethods(); } catch (NoClassDefFoundError e) { missing = true; }
       check(missing, "reflection fixture actually contains an unavailable dependency");
+      check(Arrays.equals(NativeLoader.criticalNatives(CriticalNativeFixture.class),
+              new String[]{"add", "(II)I", "tagged", "(J)J"}),
+          "@CriticalNative static natives read from the class file past other annotations");
+      check(NativeLoader.nativeMethods(CriticalNativeFixture.class).length == 10, "every native declaration");
     }
     Looper.prepareMainLooper();
     var resolver = new android.content.ContentResolver();
@@ -2259,6 +2394,7 @@ public final class FrameworkTest {
     var scaled = android.graphics.Bitmap.createScaledBitmap(android.graphics.Bitmap.createBitmap(4, 4,
         android.graphics.Bitmap.Config.ARGB_8888), 2, 3, true);
     check(scaled.getWidth() == 2 && scaled.getHeight() == 3, "Bitmap.createScaledBitmap");
+    canvasDrawing();
     var back = new java.util.ArrayList<String>();
     var dispatcher = (android.window.BackDispatcher) activity.getOnBackInvokedDispatcher();
     dispatcher.registerOnBackInvokedCallback(0, () -> back.add("low"));

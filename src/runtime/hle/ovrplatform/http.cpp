@@ -86,6 +86,19 @@ std::string graph_error_codes(const Json& body) {
       text += std::string(text.empty() ? "" : " ") + key + "=" + (*e)[key].dump();
   return text.empty() ? "unnumbered" : text;
 }
+bool graph_permission(const Json& body) {
+  auto permission = [](const Json& e) {
+    if (!e.is_object() || !e.contains("code") || !e["code"].is_number_integer()) return false;
+    const auto code = e["code"].get<std::int64_t>();
+    return code == 10 || (code >= 200 && code <= 299);
+  };
+  if (!body.is_object()) return false;
+  if (body.contains("error") && permission(body["error"])) return true;
+  if (body.contains("errors") && body["errors"].is_array())
+    for (auto& e : body["errors"])
+      if (permission(e)) return true;
+  return false;
+}
 bool graph_190(const Json& body) {
   auto has_code = [](const Json& e) {
     return e.is_object() && e.contains("code") && e["code"].is_number_integer() && e["code"] == 190;
@@ -354,8 +367,10 @@ Error http_response_error(const HttpResponse& r) {
     return e;
   }
   const auto body = Json::parse(r.body, nullptr, false);
-  auto code = r.status == 401 || r.status == 403 || graph_190(body) ? ErrorCode::unauthenticated
-                                                                    : ErrorCode::unavailable;
+  // Graph permission errors (code 10 and 200-299: the app or user lacks a
+  // permission, such as friends for Civilization VII's demo) leave the token valid.
+  auto code = (r.status == 401 || r.status == 403 || graph_190(body)) && !graph_permission(body)
+      ? ErrorCode::unauthenticated : ErrorCode::unavailable;
   if (r.status >= 200 && r.status < 300 && !graph_190(body)) {
     if (!body.is_object())
       code = ErrorCode::invalid_response;

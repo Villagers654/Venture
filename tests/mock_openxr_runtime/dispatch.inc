@@ -32,6 +32,10 @@ XrResult XRAPI_CALL dispatch_xrCreateActionSpace(XrSession session, const XrActi
   std::lock_guard lock(mutex);
   return m_xrCreateActionSpace(session, createInfo, space);
 }
+XrResult XRAPI_CALL dispatch_xrCreateDebugUtilsMessengerEXT(XrInstance /*instance*/, const XrDebugUtilsMessengerCreateInfoEXT* /*createInfo*/, XrDebugUtilsMessengerEXT* /*messenger*/) {
+  std::lock_guard lock(mutex);
+  return XR_ERROR_FUNCTION_UNSUPPORTED;
+}
 XrResult XRAPI_CALL dispatch_xrCreateFoveationProfileFB(XrSession /*session*/, const XrFoveationProfileCreateInfoFB* /*createInfo*/, XrFoveationProfileFB* /*profile*/) {
   std::lock_guard lock(mutex);
   return XR_ERROR_FUNCTION_UNSUPPORTED;
@@ -64,6 +68,10 @@ XrResult XRAPI_CALL dispatch_xrCreateSession(XrInstance instance, const XrSessio
   std::lock_guard lock(mutex);
   return m_xrCreateSession(instance, createInfo, session);
 }
+XrResult XRAPI_CALL dispatch_xrCreateSpatialAnchorFB(XrSession /*session*/, const XrSpatialAnchorCreateInfoFB* /*info*/, XrAsyncRequestIdFB* /*requestId*/) {
+  std::lock_guard lock(mutex);
+  return XR_ERROR_FUNCTION_UNSUPPORTED;
+}
 XrResult XRAPI_CALL dispatch_xrCreateSwapchain(XrSession session, const XrSwapchainCreateInfo* createInfo, XrSwapchain* swapchain) {
   std::lock_guard lock(mutex);
   return m_xrCreateSwapchain(session, createInfo, swapchain);
@@ -87,6 +95,10 @@ XrResult XRAPI_CALL dispatch_xrDestroyAction(XrAction action) {
 XrResult XRAPI_CALL dispatch_xrDestroyActionSet(XrActionSet actionSet) {
   std::lock_guard lock(mutex);
   return m_xrDestroyActionSet(actionSet);
+}
+XrResult XRAPI_CALL dispatch_xrDestroyDebugUtilsMessengerEXT(XrDebugUtilsMessengerEXT /*messenger*/) {
+  std::lock_guard lock(mutex);
+  return XR_ERROR_FUNCTION_UNSUPPORTED;
 }
 XrResult XRAPI_CALL dispatch_xrDestroyFoveationProfileFB(XrFoveationProfileFB /*profile*/) {
   std::lock_guard lock(mutex);
@@ -167,6 +179,10 @@ XrResult XRAPI_CALL dispatch_xrEnumerateReferenceSpaces(XrSession session, uint3
   std::lock_guard lock(mutex);
   return m_xrEnumerateReferenceSpaces(session, spaceCapacityInput, spaceCountOutput, spaces);
 }
+XrResult XRAPI_CALL dispatch_xrEnumerateSpaceSupportedComponentsFB(XrSpace /*space*/, uint32_t /*componentTypeCapacityInput*/, uint32_t* /*componentTypeCountOutput*/, XrSpaceComponentTypeFB* /*componentTypes*/) {
+  std::lock_guard lock(mutex);
+  return XR_ERROR_FUNCTION_UNSUPPORTED;
+}
 XrResult XRAPI_CALL dispatch_xrEnumerateSwapchainFormats(XrSession session, uint32_t formatCapacityInput, uint32_t* formatCountOutput, int64_t* formats) {
   std::lock_guard lock(mutex);
   return m_xrEnumerateSwapchainFormats(session, formatCapacityInput, formatCountOutput, formats);
@@ -182,6 +198,10 @@ XrResult XRAPI_CALL dispatch_xrEnumerateViewConfigurationViews(XrInstance instan
 XrResult XRAPI_CALL dispatch_xrEnumerateViewConfigurations(XrInstance instance, XrSystemId systemId, uint32_t viewConfigurationTypeCapacityInput, uint32_t* viewConfigurationTypeCountOutput, XrViewConfigurationType* viewConfigurationTypes) {
   std::lock_guard lock(mutex);
   return m_xrEnumerateViewConfigurations(instance, systemId, viewConfigurationTypeCapacityInput, viewConfigurationTypeCountOutput, viewConfigurationTypes);
+}
+XrResult XRAPI_CALL dispatch_xrEraseSpaceFB(XrSession /*session*/, const XrSpaceEraseInfoFB* /*info*/, XrAsyncRequestIdFB* /*requestId*/) {
+  std::lock_guard lock(mutex);
+  return XR_ERROR_FUNCTION_UNSUPPORTED;
 }
 XrResult XRAPI_CALL dispatch_xrGeometryInstanceSetTransformFB(XrGeometryInstanceFB /*instance*/, const XrGeometryInstanceTransformFB* /*transformation*/) {
   std::lock_guard lock(mutex);
@@ -242,6 +262,34 @@ XrResult XRAPI_CALL dispatch_xrGetRecommendedLayerResolutionMETA(XrSession /*ses
 XrResult XRAPI_CALL dispatch_xrGetReferenceSpaceBoundsRect(XrSession session, XrReferenceSpaceType referenceSpaceType, XrExtent2Df* bounds) {
   std::lock_guard lock(mutex);
   return m_xrGetReferenceSpaceBoundsRect(session, referenceSpaceType, bounds);
+}
+XrResult XRAPI_CALL dispatch_xrGetSpaceBoundary2DFB(XrSession /*session*/, XrSpace /*space*/, XrBoundary2DFB* /*boundary2DOutput*/) {
+  std::lock_guard lock(mutex);
+  return XR_ERROR_FUNCTION_UNSUPPORTED;
+}
+XrResult XRAPI_CALL dispatch_xrGetSpaceBoundingBox2DFB(XrSession /*session*/, XrSpace /*space*/, XrRect2Df* /*boundingBox2DOutput*/) {
+  std::lock_guard lock(mutex);
+  return XR_ERROR_FUNCTION_UNSUPPORTED;
+}
+XrResult XRAPI_CALL dispatch_xrGetSpaceBoundingBox3DFB(XrSession /*session*/, XrSpace /*space*/, XrRect3DfFB* /*boundingBox3DOutput*/) {
+  std::lock_guard lock(mutex);
+  return XR_ERROR_FUNCTION_UNSUPPORTED;
+}
+XrResult XRAPI_CALL dispatch_xrGetSpaceComponentStatusFB(XrSpace /*space*/, XrSpaceComponentTypeFB /*componentType*/, XrSpaceComponentStatusFB* /*status*/) {
+  std::lock_guard lock(mutex);
+  return XR_ERROR_FUNCTION_UNSUPPORTED;
+}
+XrResult XRAPI_CALL dispatch_xrGetSpaceRoomLayoutFB(XrSession /*session*/, XrSpace /*space*/, XrRoomLayoutFB* /*roomLayoutOutput*/) {
+  std::lock_guard lock(mutex);
+  return XR_ERROR_FUNCTION_UNSUPPORTED;
+}
+XrResult XRAPI_CALL dispatch_xrGetSpaceSemanticLabelsFB(XrSession /*session*/, XrSpace /*space*/, XrSemanticLabelsFB* /*semanticLabelsOutput*/) {
+  std::lock_guard lock(mutex);
+  return XR_ERROR_FUNCTION_UNSUPPORTED;
+}
+XrResult XRAPI_CALL dispatch_xrGetSpaceUuidFB(XrSpace /*space*/, XrUuidEXT* /*uuid*/) {
+  std::lock_guard lock(mutex);
+  return XR_ERROR_FUNCTION_UNSUPPORTED;
 }
 XrResult XRAPI_CALL dispatch_xrGetSwapchainStateFB(XrSwapchain swapchain, XrSwapchainStateBaseHeaderFB* state) {
   std::lock_guard lock(mutex);
@@ -343,9 +391,17 @@ XrResult XRAPI_CALL dispatch_xrQueryPerformanceMetricsCounterMETA(XrSession /*se
   std::lock_guard lock(mutex);
   return XR_ERROR_FUNCTION_UNSUPPORTED;
 }
+XrResult XRAPI_CALL dispatch_xrQuerySpacesFB(XrSession /*session*/, const XrSpaceQueryInfoBaseHeaderFB* /*info*/, XrAsyncRequestIdFB* /*requestId*/) {
+  std::lock_guard lock(mutex);
+  return XR_ERROR_FUNCTION_UNSUPPORTED;
+}
 XrResult XRAPI_CALL dispatch_xrReleaseSwapchainImage(XrSwapchain swapchain, const XrSwapchainImageReleaseInfo* releaseInfo) {
   std::lock_guard lock(mutex);
   return m_xrReleaseSwapchainImage(swapchain, releaseInfo);
+}
+XrResult XRAPI_CALL dispatch_xrRequestBoundaryVisibilityMETA(XrSession /*session*/, XrBoundaryVisibilityMETA /*boundaryVisibility*/) {
+  std::lock_guard lock(mutex);
+  return XR_ERROR_FUNCTION_UNSUPPORTED;
 }
 XrResult XRAPI_CALL dispatch_xrRequestDisplayRefreshRateFB(XrSession /*session*/, float /*displayRefreshRate*/) {
   std::lock_guard lock(mutex);
@@ -355,15 +411,47 @@ XrResult XRAPI_CALL dispatch_xrRequestExitSession(XrSession session) {
   std::lock_guard lock(mutex);
   return m_xrRequestExitSession(session);
 }
+XrResult XRAPI_CALL dispatch_xrRequestSceneCaptureFB(XrSession /*session*/, const XrSceneCaptureRequestInfoFB* /*info*/, XrAsyncRequestIdFB* /*requestId*/) {
+  std::lock_guard lock(mutex);
+  return XR_ERROR_FUNCTION_UNSUPPORTED;
+}
 XrResult XRAPI_CALL dispatch_xrResultToString(XrInstance instance, XrResult value, char buffer[XR_MAX_RESULT_STRING_SIZE]) {
   std::lock_guard lock(mutex);
   return m_xrResultToString(instance, value, buffer);
+}
+XrResult XRAPI_CALL dispatch_xrRetrieveSpaceQueryResultsFB(XrSession /*session*/, XrAsyncRequestIdFB /*requestId*/, XrSpaceQueryResultsFB* /*results*/) {
+  std::lock_guard lock(mutex);
+  return XR_ERROR_FUNCTION_UNSUPPORTED;
+}
+XrResult XRAPI_CALL dispatch_xrSaveSpaceFB(XrSession /*session*/, const XrSpaceSaveInfoFB* /*info*/, XrAsyncRequestIdFB* /*requestId*/) {
+  std::lock_guard lock(mutex);
+  return XR_ERROR_FUNCTION_UNSUPPORTED;
+}
+XrResult XRAPI_CALL dispatch_xrSessionBeginDebugUtilsLabelRegionEXT(XrSession /*session*/, const XrDebugUtilsLabelEXT* /*labelInfo*/) {
+  std::lock_guard lock(mutex);
+  return XR_ERROR_FUNCTION_UNSUPPORTED;
+}
+XrResult XRAPI_CALL dispatch_xrSessionEndDebugUtilsLabelRegionEXT(XrSession /*session*/) {
+  std::lock_guard lock(mutex);
+  return XR_ERROR_FUNCTION_UNSUPPORTED;
+}
+XrResult XRAPI_CALL dispatch_xrSessionInsertDebugUtilsLabelEXT(XrSession /*session*/, const XrDebugUtilsLabelEXT* /*labelInfo*/) {
+  std::lock_guard lock(mutex);
+  return XR_ERROR_FUNCTION_UNSUPPORTED;
 }
 XrResult XRAPI_CALL dispatch_xrSetColorSpaceFB(XrSession /*session*/, const XrColorSpaceFB /*colorSpace*/) {
   std::lock_guard lock(mutex);
   return XR_ERROR_FUNCTION_UNSUPPORTED;
 }
+XrResult XRAPI_CALL dispatch_xrSetDebugUtilsObjectNameEXT(XrInstance /*instance*/, const XrDebugUtilsObjectNameInfoEXT* /*nameInfo*/) {
+  std::lock_guard lock(mutex);
+  return XR_ERROR_FUNCTION_UNSUPPORTED;
+}
 XrResult XRAPI_CALL dispatch_xrSetPerformanceMetricsStateMETA(XrSession /*session*/, const XrPerformanceMetricsStateMETA* /*state*/) {
+  std::lock_guard lock(mutex);
+  return XR_ERROR_FUNCTION_UNSUPPORTED;
+}
+XrResult XRAPI_CALL dispatch_xrSetSpaceComponentStatusFB(XrSpace /*space*/, const XrSpaceComponentStatusSetInfoFB* /*info*/, XrAsyncRequestIdFB* /*requestId*/) {
   std::lock_guard lock(mutex);
   return XR_ERROR_FUNCTION_UNSUPPORTED;
 }
@@ -378,6 +466,10 @@ XrResult XRAPI_CALL dispatch_xrStringToPath(XrInstance instance, const char* pat
 XrResult XRAPI_CALL dispatch_xrStructureTypeToString(XrInstance instance, XrStructureType value, char buffer[XR_MAX_STRUCTURE_NAME_SIZE]) {
   std::lock_guard lock(mutex);
   return m_xrStructureTypeToString(instance, value, buffer);
+}
+XrResult XRAPI_CALL dispatch_xrSubmitDebugUtilsMessageEXT(XrInstance /*instance*/, XrDebugUtilsMessageSeverityFlagsEXT /*messageSeverity*/, XrDebugUtilsMessageTypeFlagsEXT /*messageTypes*/, const XrDebugUtilsMessengerCallbackDataEXT* /*callbackData*/) {
+  std::lock_guard lock(mutex);
+  return XR_ERROR_FUNCTION_UNSUPPORTED;
 }
 XrResult XRAPI_CALL dispatch_xrSuggestInteractionProfileBindings(XrInstance instance, const XrInteractionProfileSuggestedBinding* suggestedBindings) {
   std::lock_guard lock(mutex);
@@ -432,6 +524,7 @@ const Entry dispatch[]{
   {"xrCreateAction", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrCreateAction)},
   {"xrCreateActionSet", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrCreateActionSet)},
   {"xrCreateActionSpace", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrCreateActionSpace)},
+  {"xrCreateDebugUtilsMessengerEXT", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrCreateDebugUtilsMessengerEXT)},
   {"xrCreateFoveationProfileFB", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrCreateFoveationProfileFB)},
   {"xrCreateGeometryInstanceFB", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrCreateGeometryInstanceFB)},
   {"xrCreateHandTrackerEXT", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrCreateHandTrackerEXT)},
@@ -440,12 +533,14 @@ const Entry dispatch[]{
   {"xrCreatePassthroughLayerFB", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrCreatePassthroughLayerFB)},
   {"xrCreateReferenceSpace", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrCreateReferenceSpace)},
   {"xrCreateSession", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrCreateSession)},
+  {"xrCreateSpatialAnchorFB", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrCreateSpatialAnchorFB)},
   {"xrCreateSwapchain", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrCreateSwapchain)},
   {"xrCreateTriangleMeshFB", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrCreateTriangleMeshFB)},
   {"xrCreateVulkanDeviceKHR", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrCreateVulkanDeviceKHR)},
   {"xrCreateVulkanInstanceKHR", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrCreateVulkanInstanceKHR)},
   {"xrDestroyAction", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrDestroyAction)},
   {"xrDestroyActionSet", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrDestroyActionSet)},
+  {"xrDestroyDebugUtilsMessengerEXT", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrDestroyDebugUtilsMessengerEXT)},
   {"xrDestroyFoveationProfileFB", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrDestroyFoveationProfileFB)},
   {"xrDestroyGeometryInstanceFB", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrDestroyGeometryInstanceFB)},
   {"xrDestroyHandTrackerEXT", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrDestroyHandTrackerEXT)},
@@ -466,10 +561,12 @@ const Entry dispatch[]{
   {"xrEnumerateInstanceExtensionProperties", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrEnumerateInstanceExtensionProperties)},
   {"xrEnumeratePerformanceMetricsCounterPathsMETA", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrEnumeratePerformanceMetricsCounterPathsMETA)},
   {"xrEnumerateReferenceSpaces", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrEnumerateReferenceSpaces)},
+  {"xrEnumerateSpaceSupportedComponentsFB", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrEnumerateSpaceSupportedComponentsFB)},
   {"xrEnumerateSwapchainFormats", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrEnumerateSwapchainFormats)},
   {"xrEnumerateSwapchainImages", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrEnumerateSwapchainImages)},
   {"xrEnumerateViewConfigurationViews", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrEnumerateViewConfigurationViews)},
   {"xrEnumerateViewConfigurations", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrEnumerateViewConfigurations)},
+  {"xrEraseSpaceFB", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrEraseSpaceFB)},
   {"xrGeometryInstanceSetTransformFB", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrGeometryInstanceSetTransformFB)},
   {"xrGetActionStateBoolean", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrGetActionStateBoolean)},
   {"xrGetActionStateFloat", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrGetActionStateFloat)},
@@ -485,6 +582,13 @@ const Entry dispatch[]{
   {"xrGetPerformanceMetricsStateMETA", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrGetPerformanceMetricsStateMETA)},
   {"xrGetRecommendedLayerResolutionMETA", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrGetRecommendedLayerResolutionMETA)},
   {"xrGetReferenceSpaceBoundsRect", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrGetReferenceSpaceBoundsRect)},
+  {"xrGetSpaceBoundary2DFB", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrGetSpaceBoundary2DFB)},
+  {"xrGetSpaceBoundingBox2DFB", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrGetSpaceBoundingBox2DFB)},
+  {"xrGetSpaceBoundingBox3DFB", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrGetSpaceBoundingBox3DFB)},
+  {"xrGetSpaceComponentStatusFB", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrGetSpaceComponentStatusFB)},
+  {"xrGetSpaceRoomLayoutFB", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrGetSpaceRoomLayoutFB)},
+  {"xrGetSpaceSemanticLabelsFB", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrGetSpaceSemanticLabelsFB)},
+  {"xrGetSpaceUuidFB", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrGetSpaceUuidFB)},
   {"xrGetSwapchainStateFB", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrGetSwapchainStateFB)},
   {"xrGetSystem", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrGetSystem)},
   {"xrGetSystemProperties", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrGetSystemProperties)},
@@ -510,15 +614,26 @@ const Entry dispatch[]{
   {"xrPerfSettingsSetPerformanceLevelEXT", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrPerfSettingsSetPerformanceLevelEXT)},
   {"xrPollEvent", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrPollEvent)},
   {"xrQueryPerformanceMetricsCounterMETA", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrQueryPerformanceMetricsCounterMETA)},
+  {"xrQuerySpacesFB", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrQuerySpacesFB)},
   {"xrReleaseSwapchainImage", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrReleaseSwapchainImage)},
+  {"xrRequestBoundaryVisibilityMETA", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrRequestBoundaryVisibilityMETA)},
   {"xrRequestDisplayRefreshRateFB", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrRequestDisplayRefreshRateFB)},
   {"xrRequestExitSession", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrRequestExitSession)},
+  {"xrRequestSceneCaptureFB", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrRequestSceneCaptureFB)},
   {"xrResultToString", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrResultToString)},
+  {"xrRetrieveSpaceQueryResultsFB", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrRetrieveSpaceQueryResultsFB)},
+  {"xrSaveSpaceFB", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrSaveSpaceFB)},
+  {"xrSessionBeginDebugUtilsLabelRegionEXT", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrSessionBeginDebugUtilsLabelRegionEXT)},
+  {"xrSessionEndDebugUtilsLabelRegionEXT", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrSessionEndDebugUtilsLabelRegionEXT)},
+  {"xrSessionInsertDebugUtilsLabelEXT", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrSessionInsertDebugUtilsLabelEXT)},
   {"xrSetColorSpaceFB", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrSetColorSpaceFB)},
+  {"xrSetDebugUtilsObjectNameEXT", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrSetDebugUtilsObjectNameEXT)},
   {"xrSetPerformanceMetricsStateMETA", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrSetPerformanceMetricsStateMETA)},
+  {"xrSetSpaceComponentStatusFB", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrSetSpaceComponentStatusFB)},
   {"xrStopHapticFeedback", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrStopHapticFeedback)},
   {"xrStringToPath", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrStringToPath)},
   {"xrStructureTypeToString", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrStructureTypeToString)},
+  {"xrSubmitDebugUtilsMessageEXT", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrSubmitDebugUtilsMessageEXT)},
   {"xrSuggestInteractionProfileBindings", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrSuggestInteractionProfileBindings)},
   {"xrSyncActions", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrSyncActions)},
   {"xrTriangleMeshBeginUpdateFB", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrTriangleMeshBeginUpdateFB)},

@@ -22,6 +22,9 @@ struct Install {
 // Such a scan must never drive removal of shortcuts. A root that is gone from
 // a present parent and a version folder without plan.json hold no games.
 std::vector<Install> scan(const fs::path &root, bool* authoritative = nullptr);
+// Why an install is not complete: each required file that is missing, still
+// downloading, empty or not the size its manifest records. Empty when complete.
+std::vector<std::string> install_problems(const fs::path &directory, const meta::Plan &plan);
 // Only the current account may reconcile its own previously confirmed titles.
 void merge(std::vector<meta::Game> &games, const meta::Snapshot &snapshot,
            std::string_view account);

@@ -33,5 +33,8 @@ with tempfile.TemporaryDirectory(prefix="venture-files-rewrite-") as directory:
     arrays = [line for line in (work / "census.tsv").read_text().splitlines()
               if line.startswith("R\tVirtualFilesFixture\t") and "direct buffer contents" in line]
     assert len(arrays) == 4, arrays
+    superinterfaces = [line for line in (work / "census.tsv").read_text().splitlines()
+                       if line.startswith("R\t") and "direct superinterface" in line]
+    assert superinterfaces == ["R\tItfMerged\t<class>\tdirect superinterface ItfDefault"], superinterfaces
     subprocess.run([java_tool("java"), "-Xverify:all", "-Djava.io.tmpdir=" + str(snapshots),
                     "-cp", os.pathsep.join([framework, bridge, str(rewritten)]), "VirtualFilesFixture", str(work)], check=True)

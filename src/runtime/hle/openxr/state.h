@@ -7,6 +7,7 @@
 #include "xr/guest_images.h"
 #include "hle/vulkan/full_rate_image.h"
 #include <array>
+#include <cstring>
 #include <optional>
 #include <atomic>
 #include <deque>
@@ -43,6 +44,7 @@ VENTURE_XR_HANDLE_TYPE(XrPassthroughFB)
 VENTURE_XR_HANDLE_TYPE(XrPassthroughLayerFB)
 VENTURE_XR_HANDLE_TYPE(XrGeometryInstanceFB)
 VENTURE_XR_HANDLE_TYPE(XrTriangleMeshFB)
+VENTURE_XR_HANDLE_TYPE(XrDebugUtilsMessengerEXT)
 #undef VENTURE_XR_HANDLE_TYPE
 struct AndroidSurface;
 struct Swapchain {
@@ -143,9 +145,27 @@ struct State {
   struct Hand {
     bool left;
     std::array<bool, 4> pinching{};
+    // XR_EXT_hand_tracking_data_source answered without the host: the sources
+    // the guest asked for (none: the Quest default, free hands).
+    std::vector<XrHandTrackingDataSourceEXT> requested_sources;
   };
   std::map<XrHandTrackerEXT, Hand> hands;
   std::deque<XrEventDataBuffer> events;
+  // XR_FB_spatial_entity without the host (spatial.cpp): anchors are host LOCAL
+  // reference spaces fixed where the guest placed them.
+  struct SpatialAnchor {
+    XrSession session{};
+    XrUuidEXT uuid{};
+    XrPosef pose{};  // in host LOCAL
+    bool locatable = true, storable = true;
+  };
+  std::map<XrSpace, SpatialAnchor> anchors;
+  // XR_FB_spatial_entity_storage: anchors saved to LOCAL storage, by UUID, for
+  // this process (host LOCAL coordinates do not outlive the host session).
+  std::map<std::array<std::uint8_t, XR_UUID_SIZE_EXT>, XrPosef> saved_anchors;
+  // XR_FB_spatial_entity_query results awaiting xrRetrieveSpaceQueryResultsFB.
+  std::map<std::uint64_t, std::vector<XrSpaceQueryResultFB>> space_queries;
+  std::uint64_t next_request = 1;
   XrColorSpaceFB color_space = XR_COLOR_SPACE_REC709_FB;
   bool color_spaces_logged = false, color_space_set_logged = false;
   // The live instance when XR_KHR_convert_timespec_time is enabled. The time
@@ -162,6 +182,17 @@ template <class H, class P> void track_handle(H h, const char *type, P parent) {
   state().objects[{type, key(h)}] = {type, key(parent), parent ? handle_type<P>() : std::string_view{}};
 }
 void forget_object(const ObjectKey&);
+// A destroyed space stops being a spatial anchor (spatial.cpp).
+void forget_spatial_anchor(XrSpace);
+// False for a spatial anchor whose locatable component the guest disabled.
+bool anchor_locatable(XrSpace);
+// A completion event for the guest's next xrPollEvent.
+template <class E> void queue_event(const E& event) {
+  static_assert(sizeof(E) <= sizeof(XrEventDataBuffer));
+  XrEventDataBuffer buffer{};
+  std::memcpy(&buffer, &event, sizeof(event));
+  state().events.push_back(buffer);
+}
 // Undefined or non-finite host poses, velocities and views become neutral values (spaces.cpp).
 void sanitize(XrSpaceLocationFlags& flags, XrPosef& pose);
 void sanitize(XrSpaceVelocityFlags& flags, XrVector3f& linear, XrVector3f& angular);
@@ -222,8 +253,12 @@ struct MirrorEye {
 // The first projection layer's view `eye` (0 left, 1 right; a mono projection's
 // only view), if a layer is one.
 std::optional<MirrorEye> mirror_eye(std::span<const XrCompositionLayerBaseHeader* const> layers, std::uint32_t eye);
+// `eye_rects`: the largest projection-view rect this frame of each color chain
+// a projection layer shows; a new host chain for one is sized to the eye size
+// the game was told (xr/presentation.h eye_presentation_extent).
 XrResult prepare_swapchains(const std::set<XrSwapchain>& submitted, bool force_opaque = false,
-                            const UnderlayAlpha* underlay = nullptr, const MirrorEye* mirror = nullptr);
+                            const UnderlayAlpha* underlay = nullptr, const MirrorEye* mirror = nullptr,
+                            const std::map<XrSwapchain, VkExtent2D>* eye_rects = nullptr);
 XrResult destroy_host_swapchain(Swapchain&);
 XrResult convert_color_image(Swapchain&, std::uint32_t index, XrColorSpaceFB, bool external_queue_held = false,
                              bool force_opaque = false, float underlay_opacity = 1, bool premultiply = false,

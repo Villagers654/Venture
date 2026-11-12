@@ -4,6 +4,7 @@
 #include "core/linker.h"
 #include "core/thread.h"
 #include "fake_cpu32.h"
+#include "hle/openxr/openxr.h"
 #include "hle/opensles/abi.h"
 #include "hle/opensles/opensles.h"
 #include "hle/ovrplatform/microphone.h"
@@ -474,4 +475,91 @@ TEST_CASE(
   CHECK(session.get(write_message, "ovr_Message_IsError") == 0);
   session.free_message(write_message);
   session.shutdown();
+}
+TEST_CASE("A32 OpenXR converts ILP32 structures, pointer arrays and procedure addresses") {
+  hle::openxr::register_library();
+  Calls c;
+  auto call = [&](std::string_view name, const CallBuilder32 &args) {
+    return std::int32_t(c.call("libopenxr_loader.so", name, args));
+  };
+  // Vulkan entry points have no ILP32 translation and are absent, not traps.
+  CHECK(!adapted("libopenxr_loader.so", "xrGetVulkanGraphicsDeviceKHR"));
+  for (auto name : {"xrGetInstanceProcAddr", "xrCreateInstance", "xrEndFrame", "xrPollEvent",
+                    "xrSuggestInteractionProfileBindings", "xrGetCurrentInteractionProfile",
+                    "xrGetOpenGLESGraphicsRequirementsKHR", "xrConvertTimespecTimeToTimeKHR"})
+    CHECK_MESSAGE(adapted("libopenxr_loader.so", name), name);
+  // PFN_xrVoidFunction* is a 4-byte cell on ARM32.
+  auto name = c.put(0x100, "xrCreateInstance");
+  auto pfn = c.put(0x140, std::array<std::uint32_t, 2>{0, 0xfeedface});
+  REQUIRE(call("xrGetInstanceProcAddr", CallBuilder32{}.value(std::uint64_t{0}).pointer(name).pointer(pfn)) ==
+          XR_SUCCESS);
+  CHECK(*c.memory.at<std::uint32_t>(0x140) != 0);
+  CHECK(*c.memory.at<std::uint32_t>(0x144) == 0xfeedface);
+  // XrExtensionProperties is 140 bytes on ARM32: the array stride differs from LP64.
+  auto count = c.memory.address + 0x180;
+  REQUIRE(call("xrEnumerateInstanceExtensionProperties",
+               CallBuilder32{}.pointer(0).value(0u).pointer(count).pointer(0)) == XR_SUCCESS);
+  const auto extensions = *c.memory.at<std::uint32_t>(0x180);
+  REQUIRE(extensions > 1);
+  REQUIRE(extensions * 140 < 0x8000);
+  for (std::uint32_t i = 0; i < extensions; ++i)
+    c.put(0x1000 + 140 * i, std::array<std::uint32_t, 2>{XR_TYPE_EXTENSION_PROPERTIES, 0});
+  c.put(0x1000 + 140 * extensions, 0xfeedfaceu);
+  REQUIRE(call("xrEnumerateInstanceExtensionProperties",
+               CallBuilder32{}.pointer(0).value(extensions).pointer(count).pointer(c.memory.address + 0x1000)) ==
+          XR_SUCCESS);
+  bool refresh = false;
+  for (std::uint32_t i = 0; i < extensions; ++i) {
+    std::string_view ext(c.memory.at<char>(0x1000 + 140 * i + 8));
+    CHECK(*c.memory.at<std::uint32_t>(0x1000 + 140 * i) == XR_TYPE_EXTENSION_PROPERTIES);
+    CHECK(*c.memory.at<std::uint32_t>(0x1000 + 140 * i + 136) > 0);
+    CHECK(ext.rfind("XR_", 0) == 0);
+    refresh |= ext == "XR_FB_display_refresh_rate";
+  }
+  CHECK(refresh);
+  CHECK(*c.memory.at<std::uint32_t>(0x1000 + 140 * extensions) == 0xfeedface);
+  // XrInstanceCreateInfo (304 bytes) with a 32-bit name pointer array and an
+  // unknown chain node, which is dropped like any unknown structure.
+  auto ext_name = c.put(0x200, "XR_FB_display_refresh_rate");
+  auto names = c.put(0x240, std::array<std::uint32_t, 1>{std::uint32_t(ext_name)});
+  auto unknown = c.put(0x260, std::array<std::uint32_t, 4>{0x7ffffff0u, 0, 0, 0});
+  std::array<std::byte, 304> create{};
+  auto set = [&](unsigned offset, auto value) { std::memcpy(create.data() + offset, &value, sizeof(value)); };
+  set(0, std::uint32_t(XR_TYPE_INSTANCE_CREATE_INFO));
+  set(4, std::uint32_t(unknown));
+  std::memcpy(create.data() + 16, "a32-test", 9);
+  set(16 + 264, std::uint64_t(XR_MAKE_VERSION(1, 0, 0)));
+  set(296, 1u);
+  set(300, std::uint32_t(names));
+  auto info = c.put(0x400, create);
+  auto handle = c.put(0x600, std::array<std::uint32_t, 3>{0, 0, 0xfeedface});
+  REQUIRE(call("xrCreateInstance", CallBuilder32{}.pointer(info).pointer(handle)) == XR_SUCCESS);
+  const auto instance = *c.memory.at<std::uint64_t>(0x600);
+  REQUIRE(instance);
+  CHECK(*c.memory.at<std::uint32_t>(0x608) == 0xfeedface);
+  name = c.put(0x100, "xrGetVulkanGraphicsDeviceKHR");
+  CHECK(call("xrGetInstanceProcAddr", CallBuilder32{}.value(instance).pointer(name).pointer(pfn)) ==
+        XR_ERROR_FUNCTION_UNSUPPORTED);
+  // XrInstanceProperties: runtimeVersion at 8, runtimeName at 16 (LP64: 16, 24).
+  auto properties = c.put(0x700, std::array<std::uint32_t, 2>{XR_TYPE_INSTANCE_PROPERTIES, 0});
+  c.put(0x700 + 144, 0xfeedfaceu);
+  REQUIRE(call("xrGetInstanceProperties", CallBuilder32{}.value(instance).pointer(properties)) == XR_SUCCESS);
+  CHECK(*c.memory.at<std::uint64_t>(0x708) != 0);
+  CHECK(std::string_view(c.memory.at<char>(0x710)).size() > 0);
+  CHECK(*c.memory.at<std::uint32_t>(0x700 + 144) == 0xfeedface);
+  // XrSystemProperties (296 bytes): nested pointer-free structures move with the header.
+  auto get_info = c.put(0x800, std::array<std::uint32_t, 3>{XR_TYPE_SYSTEM_GET_INFO, 0,
+                                                             XR_FORM_FACTOR_HEAD_MOUNTED_DISPLAY});
+  auto system = c.memory.address + 0x820;
+  REQUIRE(call("xrGetSystem", CallBuilder32{}.value(instance).pointer(get_info).pointer(system)) == XR_SUCCESS);
+  const auto system_id = *c.memory.at<std::uint64_t>(0x820);
+  auto system_properties = c.put(0x900, std::array<std::uint32_t, 2>{XR_TYPE_SYSTEM_PROPERTIES, 0});
+  c.put(0x900 + 296, 0xfeedfaceu);
+  REQUIRE(call("xrGetSystemProperties",
+               CallBuilder32{}.value(instance).value(system_id).pointer(system_properties)) == XR_SUCCESS);
+  CHECK(*c.memory.at<std::uint64_t>(0x908) == system_id);
+  CHECK(std::string_view(c.memory.at<char>(0x900 + 20)).size() > 0);
+  CHECK(*c.memory.at<std::uint32_t>(0x900 + 276 + 4) > 0);  // maxSwapchainImageWidth
+  CHECK(*c.memory.at<std::uint32_t>(0x900 + 296) == 0xfeedface);
+  CHECK(call("xrDestroyInstance", CallBuilder32{}.value(instance)) == XR_SUCCESS);
 }

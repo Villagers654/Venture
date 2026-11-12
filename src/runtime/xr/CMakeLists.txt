@@ -19,7 +19,7 @@ if(NOT TARGET Vulkan::Headers)
   target_include_directories(venture_xr_vulkan_headers SYSTEM INTERFACE ${venture_vulkan_headers_SOURCE_DIR}/include)
   add_library(Vulkan::Headers ALIAS venture_xr_vulkan_headers)
 endif()
-add_library(venture_host_xr STATIC host_xr.cpp display_memory.cpp display_override.cpp vulkan_layers.cpp)
+add_library(venture_host_xr STATIC host_xr.cpp display_memory.cpp display_override.cpp eye_scale.cpp vulkan_layers.cpp)
 target_include_directories(venture_host_xr PUBLIC ${PROJECT_SOURCE_DIR}/src/runtime)
 target_link_libraries(venture_host_xr PUBLIC venture_common OpenXR::openxr_loader Vulkan::Headers)
 if(WIN32)
@@ -36,8 +36,8 @@ target_link_libraries(venture_xr_capture PUBLIC Vulkan::Headers OpenXR::headers 
 
 add_library(venture_xr STATIC passthrough_source.cpp passthrough_source_sbn1.cpp color_space.cpp color_images.cpp sphere_images.cpp guest_images.cpp desktop_mirror.cpp dev_dump.cpp session.cpp clock.cpp reference_spaces.cpp menu_chord.cpp bindings.cpp hands.cpp angle_images.cpp haptic_output.cpp haptic_sequence.cpp
   ../hle/openxr/state.cpp ../hle/openxr/openxr.cpp ../hle/openxr/graphics.cpp
-  ../hle/openxr/extensions.cpp ../hle/openxr/actions.cpp ../hle/openxr/register.cpp ../hle/openxr/hands.cpp
-  ../hle/openxr/spaces.cpp ../hle/openxr/haptics.cpp
+  ../hle/openxr/extensions.cpp ../hle/openxr/actions.cpp ../hle/openxr/register.cpp ../hle/openxr/a32.cpp ../hle/openxr/hands.cpp
+  ../hle/openxr/spaces.cpp ../hle/openxr/haptics.cpp ../hle/openxr/spatial.cpp ../hle/openxr/debug_utils.cpp
   ../hle/openxr/android_surface.cpp
   ../hle/openxr/passthrough.cpp ../hle/openxr/passthrough_images.cpp ../hle/openxr/passthrough_camera.cpp ../hle/openxr/sphere_layers.cpp
   ../hle/openxr/image_upload.cpp ../hle/openxr/passthrough_report.cpp

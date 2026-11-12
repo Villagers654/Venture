@@ -1,3 +1,4 @@
+#include "xr/eye_scale.h"
 #include "common/environment.h"
 #include "common/log.h"
 #include "common/paths.h"
@@ -78,6 +79,8 @@ std::unique_ptr<venture::ovrplatform::Session> register_libraries(const std::fil
   venture::audio::register_libraries();
   venture::gfx::register_graphics_libraries();
   venture::vulkan::register_library();
+  // Before the game is told any eye size.
+  venture::xr::eye_scale::begin(config.package);
   venture::hle::openxr::register_library();
   venture::hle::vrapi::register_libraries();
   if (config.source == "steam") { venture::process_image::publish(); return {}; }

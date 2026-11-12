@@ -13,6 +13,8 @@ public final class RuntimeEnvironment {
   public final PackageModel manifest;
   public final File apk, data, cache, obb, nativeLib, external;
   private final String guestNativeLib;
+  // The APK's classes converted for the host JVM; empty for a native-only APK.
+  public final String classesJar;
   public final AssetManager assets = new AssetManager();
   public final Resources resources;
   public final PackageManager packageManager;
@@ -61,7 +63,8 @@ public final class RuntimeEnvironment {
     packageManager = new PackageManager(manifest);
     // A native-only APK (no classes.dex) passes the APK itself: it has no classes
     // to load, and its NativeActivity comes from the framework.
-    loader = new dalvik.system.PathClassLoader(args[7].equals(args[1]) ? "" : args[7],
+    classesJar = args[7].equals(args[1]) ? "" : args[7];
+    loader = new dalvik.system.PathClassLoader(classesJar,
         guestNativeLibDir(), RuntimeEnvironment.class.getClassLoader());
     if (apk.isFile()) try {
       ((dalvik.system.BaseDexClassLoader) loader).ventureResourceApk(apk);
@@ -115,6 +118,8 @@ public final class RuntimeEnvironment {
   public static Host host() {
     return host;
   }
+  // The configured application, or null while it is being configured.
+  public static RuntimeEnvironment current() { return current; }
   public static RuntimeEnvironment get() {
     RuntimeEnvironment e = current;
     if (e == null)

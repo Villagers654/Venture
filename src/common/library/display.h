@@ -3,7 +3,8 @@
 // (a game's Settings tab), and a game's own texture compression over the global
 // one (Settings > Runtime). The launcher passes the effective choice to the
 // runtime as VENTURE_RESOLUTION, VENTURE_FRAME_RATE, VENTURE_MIRROR and
-// VENTURE_MIRROR_EYE (src/runtime/xr/display_override.h), VENTURE_PC_AUDIO
+// VENTURE_MIRROR_EYE (src/runtime/xr/display_override.h), VENTURE_EYE_SCALE
+// (src/runtime/xr/eye_scale.h), VENTURE_PC_AUDIO
 // (src/runtime/audio/output_mirror.h) and VENTURE_TEXTURE_COMPRESSION(_THRESHOLD)
 // (src/runtime/hle/vulkan/texture.cpp).
 #pragma once
@@ -61,6 +62,10 @@ struct DisplaySettings {
   // The game's audio also on the PC's own output (the system default) while it
   // plays on the headset: "on" or "off"; "" follows the global setting.
   std::string pc_audio = "off";
+  // Match game resolution: "auto" asks a game that multiplies the eye size it
+  // is told for less, so it renders at the resolution above; "off" tells every
+  // game that resolution. "" follows the global setting.
+  std::string match_resolution = "auto";
   // A game's decoded textures stored as BC7: a texture_compression_modes id;
   // "" follows the global setting, which Settings::texture_compression keeps
   // (empty here in the global settings).
@@ -89,6 +94,8 @@ std::string mirror_environment(const DisplaySettings &d);
 std::string mirror_eye_environment(const DisplaySettings &d);
 // VENTURE_PC_AUDIO for effective settings: "on" or "off".
 std::string pc_audio_environment(const DisplaySettings &d);
+// VENTURE_EYE_SCALE for effective settings: "auto" or "off".
+std::string eye_scale_environment(const DisplaySettings &d);
 // VENTURE_TEXTURE_COMPRESSION for a game, its own choice over the global one
 // (Settings::texture_compression and _threshold): "always", "auto" or "never",
 // and for "auto" its VENTURE_TEXTURE_COMPRESSION_THRESHOLD percent (0 otherwise).

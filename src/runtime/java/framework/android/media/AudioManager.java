@@ -226,6 +226,9 @@ public class AudioManager {
   }
   // Unique positive ids; AOSP hands out session ids in steps of 8.
   public int generateAudioSessionId() { return sessions.getAndIncrement() << 3 | 1; }
+  // AOSP AudioManager.isVolumeFixed (API 21) reports config_useFixedVolume;
+  // a Quest's media volume is user adjustable, so it is not fixed.
+  public boolean isVolumeFixed() { return false; }
   public synchronized boolean isStreamMute(int stream) { return muted; }
   public synchronized void setStreamMute(int stream, boolean state) { muted = state; }
   public synchronized void adjustStreamVolume(int stream, int direction, int flags) {

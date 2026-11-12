@@ -298,7 +298,15 @@ public:
     if (desc.host_mip_count > desc.mip_count) return XR_ERROR_VALIDATION_FAILURE;
     auto host_desc = desc;
     if (desc.host_mip_count) host_desc.mip_count = desc.host_mip_count;
-    if (bottom_up) {
+    // A smaller host image (an eye past the reported eye size) takes the base
+    // level through a filtered blit.
+    const bool scaled = desc.scaled();
+    if (scaled) {
+      host_desc.width = desc.host_width;
+      host_desc.height = desc.host_height;
+      host_desc.mip_count = 1;
+    }
+    if (bottom_up || scaled) {
       VkFormatProperties format{};
       physical_vk<PFN_vkGetPhysicalDeviceFormatProperties>("vkGetPhysicalDeviceFormatProperties")(
           physical(), desc.vk_format, &format);
@@ -341,8 +349,9 @@ public:
     barrier(destination, destinations_[destination] ? VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
         : VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, host_desc);
     // A substituted host format (e.g. SRGB for a host without 8-bit UNORM) needs a converting blit, not a copy.
-    if (bottom_up || (desc.host_format && desc.host_format != desc.vk_format)) {
-      // Same-size nearest blits with reversed source rows are exact copies.
+    if (bottom_up || scaled || (desc.host_format && desc.host_format != desc.vk_format)) {
+      // Same-size nearest blits with reversed source rows are exact copies;
+      // a scaled blit filters linearly.
       std::vector<VkImageBlit> blits(host_desc.mip_count);
       for (std::uint32_t level = 0; level < host_desc.mip_count; ++level) {
         auto &blit = blits[level];
@@ -352,11 +361,12 @@ public:
                                                      desc.layers * desc.face_count};
         blit.srcOffsets[0] = {0, bottom_up ? h : 0, 0};
         blit.srcOffsets[1] = {w, bottom_up ? 0 : h, 1};
-        blit.dstOffsets[1] = {w, h, 1};
+        blit.dstOffsets[1] = {std::int32_t(std::max(1u, host_desc.width >> level)),
+                              std::int32_t(std::max(1u, host_desc.height >> level)), 1};
       }
       vk<PFN_vkCmdBlitImage>("vkCmdBlitImage")(command_, source, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
           destination, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, std::uint32_t(blits.size()),
-          blits.data(), VK_FILTER_NEAREST);
+          blits.data(), scaled ? VK_FILTER_LINEAR : VK_FILTER_NEAREST);
     } else {
       std::vector<VkImageCopy> copies(host_desc.mip_count);
       for (std::uint32_t level = 0; level < host_desc.mip_count; ++level) {

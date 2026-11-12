@@ -656,4 +656,17 @@ void discard_angle_device() {
   instance_enabled.clear();
   device_enabled.clear();
 }
+bool supports_filtered_blit(std::int64_t format) {
+  // Never creates the device: without one there is nothing to present with.
+  auto& device = gpu_device_state();
+  if (!device.instance || !device.physical_device || !device.get_instance_proc_addr) return false;
+  const auto query = reinterpret_cast<PFN_vkGetPhysicalDeviceFormatProperties>(
+      device.get_instance_proc_addr(device.instance, "vkGetPhysicalDeviceFormatProperties"));
+  if (!query) return false;
+  VkFormatProperties properties{};
+  query(device.physical_device, VkFormat(format), &properties);
+  constexpr VkFormatFeatureFlags needed = VK_FORMAT_FEATURE_BLIT_SRC_BIT | VK_FORMAT_FEATURE_BLIT_DST_BIT |
+                                          VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT;
+  return (properties.optimalTilingFeatures & needed) == needed;
+}
 }  // namespace venture::gfx

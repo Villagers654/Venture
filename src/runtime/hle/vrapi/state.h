@@ -16,6 +16,7 @@ struct HostChain {
   std::vector<XrSwapchainImageVulkanKHR> images;
   bool sampler_current = false;
   VkFormat format{};  // host image format; differs from the ring's when the host lacks it
+  std::uint32_t width = 0, height = 0;  // host image size; smaller than the ring's for a scaled eye
 };
 struct Ring {
   ImageDesc desc;
@@ -25,6 +26,10 @@ struct Ring {
   // bottom_up), and the same again sampled by drawn layers (drawn_layers.h).
   // Each is created when first used.
   std::vector<HostChain> host;
+  // Size of the displayed (unsampled) host chains, chosen at the ring's first
+  // displayed use: smaller than the ring for an eye past the reported eye size
+  // (presentation_size in swapchains.cpp). Zero until then.
+  VkExtent2D present{};
   static std::size_t host_chain(int slot, bool bottom_up, bool sampled = false) {
     return std::size_t(slot) * 4 + (bottom_up ? 1 : 0) + (sampled ? 2 : 0);
   }

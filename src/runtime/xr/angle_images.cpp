@@ -440,8 +440,12 @@ public:
       desc.format = d.vk_format;
       desc.images = std::span(&image, 1);
       desc.external_subresources = d.layers > 1 || d.mip_count > 1;
+      if (d.scaled()) {
+        desc.target_width = d.host_width;
+        desc.target_height = d.host_height;
+      }
       const char* direct = venture::environment::getenv("VENTURE_XR_DIRECT_TEXTURES");
-      const bool eligible = direct && std::string_view(direct) == "1" &&
+      const bool eligible = direct && std::string_view(direct) == "1" && !d.scaled() &&
           d.layers == 1 && d.mip_count == 1 && d.samples == 1 && d.face_count == 1 &&
           owned.contains(Key{current.get(), name});
       if (eligible) {

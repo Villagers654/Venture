@@ -1,0 +1,363 @@
+{
+  "about": "Eye size multipliers of Quest titles: the eye a title renders over the eye size it is told (geometric mean of the sides). Entries come from Venture's survey runs and players' debug reports.",
+  "titles": {
+    "co.sn.supernatural": {
+      "multiplier": 1.0
+    },
+    "com.aarpinnovation.alcoveonquest": {
+      "name": "Alcove",
+      "multiplier": 1.0
+    },
+    "com.AmazeVR.VRConcerts": {
+      "name": "AMAZE VR Concerts",
+      "multiplier": 1.386
+    },
+    "com.AnotherAxiom.A2": {
+      "name": "Orion Drift",
+      "multiplier": 1.023
+    },
+    "com.arkio.arkio": {
+      "name": "Arkio",
+      "multiplier": 1.0
+    },
+    "com.Armature.VR4": {
+      "name": "Resident Evil 4",
+      "multiplier": 1.202
+    },
+    "com.beatgames.beatsaber": {
+      "name": "Beat Saber",
+      "multiplier": 1.2
+    },
+    "com.beatgames.beatsaber.demo": {
+      "name": "Beat Saber - Demo",
+      "multiplier": 1.204
+    },
+    "com.BigBoxVR.PopulationONE": {
+      "multiplier": 1.0
+    },
+    "com.bodyswaps.bodyswap": {
+      "name": "Bodyswaps - Soft Skills Training",
+      "multiplier": 1.0
+    },
+    "com.BRDYStudios.CosmicXR": {
+      "name": "Cosmic XR - Space In Your Room",
+      "multiplier": 1.6
+    },
+    "com.CactusVRStudios.CactusCowboyPlantsAtWar": {
+      "name": "Cactus Cowboy - Plants At War",
+      "multiplier": 1.001
+    },
+    "com.camouflaj.manta": {
+      "name": "Batman: Arkham Shadow",
+      "multiplier": 1.001
+    },
+    "com.camouflaj.salmon": {
+      "name": "Marvel's Iron Man VR",
+      "multiplier": 0.999
+    },
+    "com.CDC.BSCVR": {
+      "name": "LabTrainingVR: Biosafety Cabinet Edition",
+      "multiplier": 1.001
+    },
+    "com.Claphanz.GolfVR": {
+      "multiplier": 1.001
+    },
+    "com.coatsink.alone": {
+      "multiplier": 1.005
+    },
+    "com.coatsink.nexus": {
+      "name": "Shadow Point",
+      "multiplier": 1.004
+    },
+    "com.commutergames.vspeedwayalpha": {
+      "name": "V-Speedway",
+      "multiplier": 1.301
+    },
+    "com.crytek.climb2": {
+      "name": "The Climb 2",
+      "multiplier": 1.0
+    },
+    "com.DefaultCompany.Geomancer": {
+      "name": "Geomancer",
+      "multiplier": 1.0
+    },
+    "com.DefaultCompany.MovingOut": {
+      "name": "MovingOut",
+      "multiplier": 1.001
+    },
+    "com.DefaultCompany.TheOneLeftBehind": {
+      "name": "TheOneLeftBehind",
+      "multiplier": 1.001
+    },
+    "com.deovr.gearvr": {
+      "name": "DeoVR Classic - VR Video Player",
+      "multiplier": 1.703
+    },
+    "com.fasttravelgames.lollipop": {
+      "multiplier": 1.005
+    },
+    "com.firaxis.invernessdemo": {
+      "name": "Sid Meier's Civilization® VII - VR",
+      "multiplier": 0.426
+    },
+    "com.flightschoolstudio.StonesOfHope": {
+      "name": "MLK: Now is the Time",
+      "multiplier": 0.999
+    },
+    "com.galaxy.quest": {
+      "name": "GalaxyQuest",
+      "multiplier": 1.0
+    },
+    "com.gameboomvr.CookingSimulatorVR": {
+      "name": "Cooking Simulator VR",
+      "multiplier": 1.402
+    },
+    "com.gritGames.Nope": {
+      "name": "NOPE CHALLENGE",
+      "multiplier": 0.999
+    },
+    "com.Icosa.OpenBrush": {
+      "name": "Open Brush - 3D Painting",
+      "multiplier": 1.001
+    },
+    "com.ideographer.muze": {
+      "name": "Muze XR: Social Virtual Museum & Beyond",
+      "multiplier": 1.204
+    },
+    "com.ilmxlab.tales": {
+      "multiplier": 1.007
+    },
+    "com.ILMxLAB.VaderImmortal.ep1": {
+      "name": "Vader Immortal: Episode I",
+      "multiplier": 1.001
+    },
+    "com.ILMxLAB.VaderImmortal.ep2": {
+      "name": "Vader Immortal: Episode II",
+      "multiplier": 1.001
+    },
+    "com.ILMxLAB.VaderImmortal.ep3": {
+      "name": "Vader Immortal: Episode III",
+      "multiplier": 1.001
+    },
+    "com.InterplayLearning.SkillMillApp": {
+      "name": "Interplay Learning",
+      "multiplier": 1.001
+    },
+    "com.LACGames.Crashland": {
+      "name": "Crashland",
+      "multiplier": 1.6
+    },
+    "com.LeadHead.Pencil": {
+      "name": "Pencil - Learn to Draw",
+      "multiplier": 1.0
+    },
+    "com.magnopus.ElixirStore": {
+      "name": "Elixir",
+      "multiplier": 1.001
+    },
+    "com.Magnopus.MissionISS": {
+      "name": "Mission: ISS",
+      "multiplier": 1.0
+    },
+    "com.Medvr.Medvr_Tutorial_s": {
+      "name": "MedVR Tutorial",
+      "multiplier": 0.999
+    },
+    "com.meta.curio.toybox": {
+      "name": "First Encounters",
+      "multiplier": 1.001
+    },
+    "com.meta.samples.NorthStar": {
+      "name": "North Star",
+      "multiplier": 1.301
+    },
+    "com.Microids.SyberiaVR": {
+      "name": "Syberia",
+      "multiplier": 1.08
+    },
+    "com.mixedrealms.hellsweepervr_untethered": {
+      "multiplier": 1.0
+    },
+    "com.Nanome.NanomeCurie": {
+      "name": "Nanome",
+      "multiplier": 1.001
+    },
+    "com.nDreams.Elevation.Reach": {
+      "multiplier": 0.924
+    },
+    "com.NewFolderGames.IAmCat": {
+      "multiplier": 1.002
+    },
+    "com.Oculus.FirstContact": {
+      "name": "Oculus First Contact",
+      "multiplier": 0.851
+    },
+    "com.odders.shapeit": {
+      "multiplier": 1.203
+    },
+    "com.Oisoi.PaintingVrNUX": {
+      "name": "First Touch for Meta Quest Touch Pro controllers",
+      "multiplier": 1.001
+    },
+    "com.owlchemylabs.jobsimulator": {
+      "name": "Job Simulator",
+      "multiplier": 1.001
+    },
+    "com.parkline.wander": {
+      "name": "Wander",
+      "multiplier": 1.001
+    },
+    "com.PolarityOne.ExoShock": {
+      "name": "Exoshock",
+      "multiplier": 1.104
+    },
+    "com.polyarc.Moss2": {
+      "name": "Moss: Book II",
+      "multiplier": 1.185
+    },
+    "com.polyarc.MossGame": {
+      "name": "Moss",
+      "multiplier": 1.488
+    },
+    "com.Raetae.Artheon": {
+      "name": "Artheon – The Living Museum",
+      "multiplier": 0.994
+    },
+    "com.RealitiesIO.puzzlingPlaces": {
+      "name": "Puzzling Places",
+      "multiplier": 1.692
+    },
+    "com.resolutiongames.baitsantacruz": {
+      "name": "Bait!",
+      "multiplier": 1.256
+    },
+    "com.resolutiongames.demeo": {
+      "name": "Demeo",
+      "multiplier": 1.016
+    },
+    "com.resolutiongames.demeopvp": {
+      "name": "Demeo Battles",
+      "multiplier": 1.016
+    },
+    "com.resolutiongames.homesports": {
+      "name": "Home Sports",
+      "multiplier": 1.001
+    },
+    "com.Rockhopper.GuitarGods": {
+      "multiplier": 1.323
+    },
+    "com.rustltd.h3vr2": {
+      "multiplier": 1.6
+    },
+    "com.s8l.vst": {
+      "name": "VR Speech Trainer",
+      "multiplier": 1.001
+    },
+    "com.Sanzaru.Wrath2": {
+      "name": "Asgard's Wrath 2",
+      "multiplier": 1.284
+    },
+    "com.scil.vr1776": {
+      "name": "1776",
+      "multiplier": 1.0
+    },
+    "com.SDI.TWD": {
+      "name": "The Walking Dead: Saints & Sinners",
+      "multiplier": 1.001
+    },
+    "com.SDI.TWDCH2": {
+      "multiplier": 1.0
+    },
+    "com.simpsonsHitAndRun.vr": {
+      "multiplier": 0.729
+    },
+    "com.slindev.grab_demo": {
+      "name": "GRAB",
+      "multiplier": 1.0
+    },
+    "com.squidostudio.spellcast": {
+      "name": "Wizherd",
+      "multiplier": 1.0
+    },
+    "com.tassystems.flightunlimitedvr": {
+      "multiplier": 1.104
+    },
+    "com.TH3GangGamez.FearingGorilla": {
+      "name": "Fearing Gorilla",
+      "multiplier": 1.055
+    },
+    "com.Thoughtfish.GoodAndEvil": {
+      "multiplier": 1.0
+    },
+    "com.ToastVR.Matilda": {
+      "name": "Max Mustard",
+      "multiplier": 1.552
+    },
+    "com.tripp.tripp_client_unity": {
+      "name": "TRIPP: Meditation, Relaxation, Sleep",
+      "multiplier": 1.016
+    },
+    "com.Tvori.Shapes": {
+      "name": "ShapesXR",
+      "multiplier": 1.406
+    },
+    "com.twistedpixelgames.PILO": {
+      "name": "Marvel's Deadpool VR",
+      "multiplier": 0.999
+    },
+    "com.Ubisoft.ACNexusVR": {
+      "name": "Assassin’s Creed® Nexus VR",
+      "multiplier": 1.301
+    },
+    "com.Unity.AwraVR": {
+      "name": "AWRA",
+      "multiplier": 1.001
+    },
+    "com.virtualSpeech.quest": {
+      "name": "VirtualSpeech",
+      "multiplier": 1.0
+    },
+    "com.VoxounGames.GorillaRoyale": {
+      "name": "Gorilla Royale",
+      "multiplier": 1.0
+    },
+    "com.VRSpeaking.Ovation": {
+      "name": "Ovation",
+      "multiplier": 1.001
+    },
+    "com.wisteriaintl.balancebeam": {
+      "name": "BalanceBeamOculus",
+      "multiplier": 1.001
+    },
+    "com.YourCompany.RoboRecall": {
+      "multiplier": 1.5
+    },
+    "com.zenstudios.PFXVRQuest": {
+      "multiplier": 1.001
+    },
+    "com.zoink.ghostgiant": {
+      "name": "Ghost Giant",
+      "multiplier": 1.005
+    },
+    "delightex.cospaces.edu": {
+      "name": "Delightex Edu",
+      "multiplier": 1.0
+    },
+    "games.b4t.epicrollercoasters.oculus": {
+      "name": "Epic Roller Coasters",
+      "multiplier": 1.0
+    },
+    "net.novelab.OnTheMorningYouWake": {
+      "name": "On The Morning You Wake (To the End of The World)",
+      "multiplier": 1.001
+    },
+    "unity.SUPERHOT_Team.SUPERHOT_VR_Demo": {
+      "name": "SUPERHOT VR - Demo",
+      "multiplier": 1.001
+    },
+    "xyz.skybox.player.ovr": {
+      "name": "SKYBOX VR Video Player",
+      "multiplier": 1.801
+    }
+  }
+}

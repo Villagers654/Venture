@@ -2,6 +2,8 @@
 #include "common/environment.h"
 #include "common/library/display.h"
 #include "common/log.h"
+#include "xr/eye_scale.h"
+#include "xr/host_xr.h"
 #include <algorithm>
 #include <charconv>
 #include <cmath>
@@ -85,12 +87,50 @@ XrExtent2Di override_view_size(const DisplayOverride& o, const XrViewConfigurati
 void apply_display_override(XrViewConfigurationView* views, std::uint32_t count) {
   if (!views || !count) return;
   const auto o = display_override();
-  if (!o.resizes()) return;
   for (std::uint32_t i = 0; i < count; ++i) {
-    const auto size = override_view_size(o, views[i]);
-    views[i].recommendedImageRectWidth = std::uint32_t(size.width);
-    views[i].recommendedImageRectHeight = std::uint32_t(size.height);
+    if (o.resizes()) {
+      const auto size = override_view_size(o, views[i]);
+      views[i].recommendedImageRectWidth = std::uint32_t(size.width);
+      views[i].recommendedImageRectHeight = std::uint32_t(size.height);
+    }
+    // The recommended size (the target) already includes the host's
+    // supersampling, so it is also the most a game is offered: engines clamp
+    // their own resolution scale to the maximum (OpenXR allows a maximum equal
+    // to the recommendation). A game known to multiply the size it is told is
+    // told the target divided by its multiplier (eye_scale.h); the maximum
+    // stays the target.
+    const std::uint32_t target_width = views[i].recommendedImageRectWidth;
+    const std::uint32_t target_height = views[i].recommendedImageRectHeight;
+    if (!target_width || !target_height) continue;
+    views[i].maxImageRectWidth = target_width;
+    views[i].maxImageRectHeight = target_height;
+    if (const double k = eye_scale::compensation(); k > 1) {
+      const auto side = [&](std::uint32_t v) {
+        return std::max(std::min(v, kMinSide), std::uint32_t(std::lround(v / k)));
+      };
+      views[i].recommendedImageRectWidth = side(target_width);
+      views[i].recommendedImageRectHeight = side(target_height);
+    }
   }
+}
+
+ReportedEye reported_eye() {
+  XrViewConfigurationView views[2]{{XR_TYPE_VIEW_CONFIGURATION_VIEW}, {XR_TYPE_VIEW_CONFIGURATION_VIEW}};
+  std::uint32_t count = 0;
+  if (!host_xr().instance ||
+      XR_FAILED(::xrEnumerateViewConfigurationViews(host_xr().instance, host_xr().system,
+                                                    XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO, 2, &count, views)) ||
+      !count)
+    return {};
+  apply_display_override(views, count);
+  ReportedEye eye;
+  for (std::uint32_t i = 0; i < count; ++i) {
+    eye.told.width = std::max(eye.told.width, views[i].recommendedImageRectWidth);
+    eye.told.height = std::max(eye.told.height, views[i].recommendedImageRectHeight);
+    eye.target.width = std::max(eye.target.width, views[i].maxImageRectWidth);
+    eye.target.height = std::max(eye.target.height, views[i].maxImageRectHeight);
+  }
+  return eye;
 }
 
 std::optional<float> supported_override_rate(float rate, const float* rates, std::uint32_t count) {

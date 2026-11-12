@@ -1209,17 +1209,19 @@ int fd_isset_fn(int fd, const std::uint64_t* set, std::uint64_t size) {
   if (fd < 0 || fd >= 1024 || static_cast<unsigned>(fd) / 8 >= size) return failure(err::einval);
   return (set[fd / 64] >> (fd % 64)) & 1;
 }
+// bionic __cmsg_nxthdr: the next header follows the aligned current one and
+// must fit in msg_controllen. Its cmsg_len is not inspected: senders build a
+// zeroed control buffer and fill each header after CMSG_NXTHDR returns it
+// (msquic's datapath does; a length check made it write through NULL).
 GuestAddr cmsg_next_fn(const Message* m, GuestAddr current) {
   if (!m || !current || current < m->control || m->controllen > UINT64_MAX - m->control) return 0;
   auto end = m->control + m->controllen;
   if (current > end || end - current < 16) return 0;
   auto size = *g2h<std::uint64_t>(current);
-  if (size < 16 || size > UINT64_MAX - 7) return 0;
+  if (size > UINT64_MAX - 7) return 0;
   auto step = align_up(size, 8);
   if (step > end - current || end - current - step < 16) return 0;
-  auto next = current + step;
-  auto next_size = *g2h<std::uint64_t>(next);
-  return next_size >= 16 && next_size <= end - next ? next : 0;
+  return current + step;
 }
 }  // namespace
 int fd_poll(PollFd* f, std::uint64_t n, int timeout, sync_census::IoSource source) {

@@ -314,6 +314,8 @@ void settings_section(std::string &out, const fs::path &data, const std::string 
       if (!game->mirror.empty()) lines += std::format("  mirror: {}\n", game->mirror);
       if (!game->mirror_eye.empty()) lines += std::format("  mirror eye: {}\n", game->mirror_eye);
       if (!game->pc_audio.empty()) lines += std::format("  PC audio: {}\n", game->pc_audio);
+      if (!game->match_resolution.empty())
+        lines += std::format("  match game resolution: {}\n", game->match_resolution);
       if (!game->texture_compression.empty())
         lines += std::format("  texture compression: {}\n", game->texture_compression);
       if (game->texture_compression_threshold)
@@ -345,6 +347,9 @@ void settings_section(std::string &out, const fs::path &data, const std::string 
                      source(game && !game->mirror_eye.empty(), s.display.mirror_eye == global.mirror_eye));
   out += std::format("  PC audio: {} ({})\n", library::pc_audio_environment(display),
                      source(game && !game->pc_audio.empty(), s.display.pc_audio == global.pc_audio));
+  out += std::format("  match game resolution: {} ({})\n", library::eye_scale_environment(display),
+                     source(game && !game->match_resolution.empty(),
+                            s.display.match_resolution == global.match_resolution));
   {
     // As the runtime reads them (texture.cpp): unset is always, a threshold
     // outside 1-100 is 50%.
@@ -424,14 +429,16 @@ void log_section(std::string &out, const fs::path &file, size_t limit) {
   if (!text.empty() && text.back() != '\n') out += '\n';
 }
 
-// The runtime's [facts] lines (headset, FOV, audio endpoint, clock rate) from
-// the whole log, which the tail section may cut.
+// The runtime's [facts] lines (headset, FOV, audio endpoint, clock rate) and
+// [eye-scale] lines (the eye size the game was told and rendered, which feed
+// the eye scale database) from the whole log, which the tail section may cut.
 void facts_section(std::string &out, const fs::path &file) {
   std::ifstream in(file, std::ios::binary);
   if (!in) return;
   std::string facts;
   for (std::string line; std::getline(in, line) && facts.size() < 16 * 1024;)
-    if (line.find(" [facts] ") != std::string::npos) facts += line.substr(0, 1024) + "\n";
+    if (line.find(" [facts] ") != std::string::npos || line.find(" [eye-scale] ") != std::string::npos)
+      facts += line.substr(0, 1024) + "\n";
   if (!facts.empty()) out += "\n=== Session facts ===\n" + facts;
 }
 
@@ -1099,6 +1106,15 @@ fs::path write_debug_report(const DebugReport &request) {
   if (!request.plan.empty()) {
     std::string text = read_file(request.plan);
     if (!text.empty()) out += std::format("\n=== Installed game (plan.json) ===\n{}\n", text);
+    // A library card says "Partly downloaded" for any of these.
+    try {
+      auto problems = library::install_problems(request.plan.parent_path(),
+                                                meta::parse_plan(paths::read_json(request.plan)));
+      out += "\n=== Installed files ===\n";
+      if (problems.empty()) out += "All required files are present with their recorded sizes.\n";
+      for (auto &p : problems) out += p + "\n";
+    } catch (const std::exception &) {
+    }
   }
   if (!package.empty() && paths::safe_package(package)) {
     // Files the player put in the mods folder replace same-named installed files.

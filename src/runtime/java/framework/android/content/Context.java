@@ -25,7 +25,9 @@ public class Context {
   public static final String MEDIA_ROUTER_SERVICE = "media_router", INPUT_SERVICE = "input";
   public static final String USER_SERVICE = "user", WIFI_SERVICE = "wifi", JOB_SCHEDULER_SERVICE = "jobscheduler",
       STORAGE_SERVICE = "storage", ALARM_SERVICE = "alarm", NOTIFICATION_SERVICE = "notification",
-      CAPTIONING_SERVICE = "captioning", MEDIA_METRICS_SERVICE = "media_metrics", LOCALE_SERVICE = "locale";
+      CAPTIONING_SERVICE = "captioning", MEDIA_METRICS_SERVICE = "media_metrics", LOCALE_SERVICE = "locale",
+      DOWNLOAD_SERVICE = "download",
+      GAME_SERVICE = "game";
   private static final Map<String, SharedPreferences> preferences =
       new java.util.concurrent.ConcurrentHashMap<>();
   // Dynamic receivers match process-wide, as ActivityManagerService does; each
@@ -259,6 +261,7 @@ public class Context {
       case "uimode" -> new android.app.UiModeManager();
       case CAPTIONING_SERVICE -> new android.view.accessibility.CaptioningManager(this);
       case LOCALE_SERVICE -> new android.app.LocaleManager(this);
+      case GAME_SERVICE -> new android.app.GameManager(this);
       case "layout_inflater" -> new android.view.LayoutInflater(this);
       case "sensor" -> new android.hardware.SensorManager();
       case CAMERA_SERVICE -> new android.hardware.camera2.CameraManager();
@@ -281,6 +284,7 @@ public class Context {
       case STORAGE_SERVICE -> new android.os.storage.StorageManager();
       case ALARM_SERVICE -> new android.app.AlarmManager();
       case NOTIFICATION_SERVICE -> new android.app.NotificationManager();
+      case DOWNLOAD_SERVICE -> android.app.DownloadManager.ventureLocal(this);
       default -> null;
     });
   }
@@ -290,6 +294,7 @@ public class Context {
       java.util.Map.entry(android.app.ActivityManager.class, ACTIVITY_SERVICE),
       java.util.Map.entry(android.view.accessibility.CaptioningManager.class, CAPTIONING_SERVICE),
       java.util.Map.entry(android.app.LocaleManager.class, LOCALE_SERVICE),
+      java.util.Map.entry(android.app.GameManager.class, GAME_SERVICE),
       java.util.Map.entry(android.location.LocationManager.class, LOCATION_SERVICE),
       java.util.Map.entry(android.bluetooth.BluetoothManager.class, BLUETOOTH_SERVICE),
       java.util.Map.entry(android.app.UiModeManager.class, UI_MODE_SERVICE),
@@ -314,7 +319,8 @@ public class Context {
       java.util.Map.entry(android.app.job.JobScheduler.class, JOB_SCHEDULER_SERVICE),
       java.util.Map.entry(android.os.storage.StorageManager.class, STORAGE_SERVICE),
       java.util.Map.entry(android.app.AlarmManager.class, ALARM_SERVICE),
-      java.util.Map.entry(android.app.NotificationManager.class, NOTIFICATION_SERVICE));
+      java.util.Map.entry(android.app.NotificationManager.class, NOTIFICATION_SERVICE),
+      java.util.Map.entry(android.app.DownloadManager.class, DOWNLOAD_SERVICE));
   public String getSystemServiceName(Class<?> serviceClass) {
     return SERVICE_NAMES.get(serviceClass);
   }

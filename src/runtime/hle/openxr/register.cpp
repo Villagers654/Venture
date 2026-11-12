@@ -1,4 +1,5 @@
 #include "common/log.h"
+#include "core/a32_abi.h"
 #include "core/hle.h"
 #include "core/linker.h"
 #include "core/process.h"
@@ -18,6 +19,7 @@ bool try_action_state(hle::CallContext& ctx) {
 const std::map<std::string, GuestAddr> &thunks() {
   static const auto functions = [] {
     std::map<std::string, GuestAddr> result;
+    if (process_config().isa() == GuestIsa::a32) register_a32_adapters();
 #define VENTURE_XR_COMMAND(name, ext, manual)                                                           \
   {                                                                                              \
     const bool action_read = process_config().isa() == GuestIsa::a64 &&                            \
@@ -95,6 +97,9 @@ XrResult xrGetInstanceProcAddr(XrInstance instance, const char *name, PFN_xrVoid
   if (!global && !extension.empty() && !enabled(extension))
     return XR_ERROR_FUNCTION_UNSUPPORTED;
   auto thunk = command_thunk(n);
+  // An A32 entry point without an ILP32 adapter (Vulkan) is unsupported, not a trap.
+  if (thunk && process_config().isa() == GuestIsa::a32 && !hle::a32::callable("libopenxr_loader.so", n))
+    thunk = 0;
   log::debug("xr", "Guest GIPA {}: {}", n, thunk ? "thunk" : "unsupported");
   if (!thunk)
     return XR_ERROR_FUNCTION_UNSUPPORTED;

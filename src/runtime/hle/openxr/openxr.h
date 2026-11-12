@@ -7,6 +7,8 @@
 
 namespace venture::hle::openxr {
 void register_library();
+// ILP32 adapters for every generated command (a32.cpp); before thunk registration.
+void register_a32_adapters();
 struct CommandInfo {
   const char *name;
   const char *extension;

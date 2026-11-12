@@ -61,6 +61,8 @@ struct NativeArguments {
   std::vector<double> doubles;
   GuestCallArgs view() const { return {integers, doubles, stack}; }
 };
-NativeArguments native_arguments(const Descriptor&, const HostArguments&, HostAbi, GuestAddr guest_env);
+// A @CriticalNative method gets only its parameters: no JNIEnv* or jclass (ART, API 26+).
+NativeArguments native_arguments(const Descriptor&, const HostArguments&, HostAbi, GuestAddr guest_env,
+                                 bool critical = false);
 std::uint64_t native_result(Type, const GuestCallResult&);
 }  // namespace venture::java

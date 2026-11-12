@@ -409,9 +409,9 @@ bool special(JNIEnv* env, hle::CallContext& c) {
 }
 
 hle::a32::CallBuilder32 native_arguments(const Descriptor& d, const HostArguments& host, HostAbi abi,
-                                         GuestAddr env) {
+                                         GuestAddr env, bool critical) {
   hle::a32::CallBuilder32 out;
-  out.pointer(env).value(reference(g2h<_jobject>(host.gp[1])));
+  if (!critical) out.pointer(env).value(reference(g2h<_jobject>(host.gp[1])));
   unsigned gp = 2, simd = 0, position = 2, stack = 0;
   for (auto type : d.parameters) {
     bool fp = type == Type::Float || type == Type::Double;

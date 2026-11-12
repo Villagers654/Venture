@@ -7,11 +7,35 @@
 #include <cctype>
 #include <cstdlib>
 #include <deque>
+#include <format>
 #include <fstream>
 #include <mutex>
 #include <set>
 #include <utility>
 namespace venture::library {
+std::vector<std::string> install_problems(const fs::path &directory, const meta::Plan &plan) {
+  std::vector<std::string> out;
+  for (auto &f : plan.files) {
+    if (!f.base()) continue;
+    auto target = directory / paths::from_utf8(f.name);
+    std::error_code ec;
+    if (!paths::within(directory, target) || !fs::is_regular_file(target, ec)) {
+      auto part = target;
+      part += ".part";
+      if (paths::within(directory, part) && fs::is_regular_file(part, ec))
+        out.push_back(std::format("{} is still downloading ({} of {} bytes)", f.name, fs::file_size(part, ec), f.size));
+      else
+        out.push_back(f.name + " is missing");
+      continue;
+    }
+    auto n = fs::file_size(target, ec);
+    if (ec || !n)
+      out.push_back(f.name + " is empty");
+    else if (f.size && f.size != n)
+      out.push_back(std::format("{} has {} bytes, the manifest says {}", f.name, n, f.size));
+  }
+  return out;
+}
 std::vector<Install> scan(const fs::path &root, bool* authoritative) {
   if (authoritative) *authoritative = false;
   std::vector<Install> result;
@@ -104,6 +128,18 @@ std::vector<Install> scan(const fs::path &root, bool* authoritative) {
           install.bytes += n;
           if (!n || (f.size && f.size != n))
             install.complete = false;
+        }
+        // Say once why an install counts as partly downloaded: a file that
+        // changed after it was installed looks the same in the library.
+        if (!install.complete) {
+          static std::mutex mutex;
+          static std::set<fs::path> reported;
+          if (std::lock_guard lock(mutex); reported.insert(version.path()).second) {
+            auto problems = install_problems(version.path(), p);
+            std::string text;
+            for (std::size_t i = 0; i < problems.size() && i < 3; ++i) text += (i ? "; " : "") + problems[i];
+            log::info("library", "{} is not complete: {}", paths::utf8(version.path()), text);
+          }
         }
         result.push_back(std::move(install));
       } catch (const std::exception &e) {
@@ -885,6 +921,8 @@ std::vector<std::pair<std::string, std::string>> launch_environment(const Settin
   environment.push_back({"VENTURE_MIRROR_EYE", mirror_eye_environment(display)});
   // The game's audio on the PC too; off by default.
   environment.push_back({"VENTURE_PC_AUDIO", pc_audio_environment(display)});
+  // Games that multiply the eye size they are told render at the resolution above.
+  environment.push_back({"VENTURE_EYE_SCALE", eye_scale_environment(display)});
   return environment;
 }
 } // namespace venture::library
