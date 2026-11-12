@@ -13,6 +13,8 @@
 #include "core/process.h"
 #include "core/thread.h"
 #include "core/shutdown_trace.h"
+#include "core/signals.h"
+#include "core/thread_runtime.h"
 #include "gfx/gpu_device.h"
 #include "hle/openxr/state.h"
 #include "xr/presentation.h"
@@ -22,6 +24,8 @@
 #include "hle/vulkan/timing.h"
 #include "platform/thread_priority.h"
 #include <algorithm>
+#include <chrono>
+#include <condition_variable>
 #include <cmath>
 #include <cstddef>
 #include <cstring>
@@ -31,6 +35,7 @@
 #include <mutex>
 #include <numbers>
 #include <optional>
+#include <thread>
 
 namespace venture::hle::openxr {
 namespace {
@@ -344,6 +349,49 @@ class OwnedFrameEnd {
   bool ok_ = true;
 };
 
+// A game that quits tears OpenXR down and then ends its own process. On a Quest a
+// process whose engine teardown stalls lingers unseen once its activity is gone; on a
+// PC it leaves the game's window and runtime open (H3VR2 stopped after OVRManager's
+// OnDestroy). When the instance of a session that ran is destroyed and no new instance
+// follows within the grace, log what each guest thread is doing and end the process as
+// a finished quit. Startup re-creation (OVRPlugin's preinitialize instance) never ran a
+// session, and a re-created instance cancels the deadline.
+constexpr auto quit_grace = std::chrono::seconds(10);
+std::mutex quit_mutex;
+std::condition_variable quit_changed;
+std::uint64_t quit_generation = 0;
+bool quit_session_ran = false;
+void note_session_ran() {
+  std::lock_guard lock(quit_mutex);
+  quit_session_ran = true;
+}
+void cancel_quit_deadline() {
+  {
+    std::lock_guard lock(quit_mutex);
+    ++quit_generation;
+  }
+  quit_changed.notify_all();
+}
+void arm_quit_deadline() {
+  if (!terminal_guest_process_exit()) return;
+  std::uint64_t armed;
+  {
+    std::lock_guard lock(quit_mutex);
+    if (!quit_session_ran) return;
+    quit_session_ran = false;
+    armed = ++quit_generation;
+  }
+  std::thread([armed] {
+    std::unique_lock lock(quit_mutex);
+    if (quit_changed.wait_for(lock, quit_grace, [&] { return quit_generation != armed; })) return;
+    lock.unlock();
+    if (guest_process_exit_status() >= 0) return;
+    log::warn("runtime", "The game destroyed its OpenXR instance {} s ago and is still running; ending it as a finished quit",
+              quit_grace.count());
+    signals::log_guest_threads("quit did not finish after the OpenXR instance was destroyed");
+    exit_guest_process(0);
+  }).detach();
+}
 }  // namespace
 }  // namespace venture::hle::openxr
 
@@ -406,6 +454,7 @@ XrResult xrNegotiateLoaderRuntimeInterface(const NegotiateLoaderInfo *info, Nego
   return XR_SUCCESS;
 }
 XrResult xrCreateInstance(const XrInstanceCreateInfo *info, XrInstance *out) {
+  cancel_quit_deadline();
   std::lock_guard lock(state().mutex);
   if (!out)
     return XR_ERROR_VALIDATION_FAILURE;
@@ -521,6 +570,7 @@ XrResult xrDestroyInstance(XrInstance instance) {
   state().events.clear();
   invalidate_host_procedures();
   if (shutdown_trace::enabled) log::info("shutdown", "xrDestroyInstance returned success");
+  arm_quit_deadline();
   return XR_SUCCESS;
 }
 XrResult xrGetInstanceProperties(XrInstance instance, XrInstanceProperties *out) {
@@ -745,6 +795,7 @@ XrResult xrCreateSession(XrInstance instance, const XrSessionCreateInfo *info, X
       state().guest_graphics_queue_index = reinterpret_cast<const XrGraphicsBindingVulkanKHR*>(b)->queueIndex;
     }
     track_handle(*out, "XrSession", instance);
+    note_session_ran();
   }
   return result;
 }
