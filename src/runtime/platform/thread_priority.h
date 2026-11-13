@@ -1,6 +1,7 @@
 #pragma once
 #include "common/environment.h"
 #include <cstdint>
+#include <string_view>
 namespace venture::platform {
 // Measurement switch: VENTURE_THREAD_HINTS=0 keeps the earlier advisory-only
 // hints and setpriority EPERM, for same-binary comparisons.
@@ -56,6 +57,10 @@ int get_audio_thread_scheduler(std::int32_t tid, int* policy, int* priority);
 // the thread asks for SCHED_OTHER again. Zero or a negative Linux errno.
 int request_realtime_thread(std::int32_t tid);
 // Retain the native thread identity while its guest thread is attached.
+// Gives a bound guest thread's native thread the guest's name, so host tools (and the
+// session timeline) show it; not the process's main thread on Linux, whose name is the
+// process name.
+void name_native_thread(std::int32_t tid, std::string_view name);
 void bind_thread_priority(std::int32_t tid);
 void unbind_thread_priority(std::int32_t tid);
 // Linux nice range [-20,19]; returns zero or a negative Linux errno.

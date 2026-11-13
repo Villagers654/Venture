@@ -13,6 +13,8 @@
 #include <mutex>
 #include <sys/resource.h>
 #include <unistd.h>
+#include <string>
+#include <fcntl.h>
 #include <time.h>
 #ifdef __linux__
 #include <sys/syscall.h>
@@ -202,6 +204,23 @@ int get_audio_thread_scheduler(std::int32_t tid, int* policy, int* priority) {
   *policy = it->second->fifo ? 1 : 0;
   *priority = it->second->fifo;
   return 0;
+}
+void name_native_thread([[maybe_unused]] std::int32_t tid, [[maybe_unused]] std::string_view name) {
+#ifdef __linux__
+  int id = 0;
+  {
+    auto& state = threads();
+    std::lock_guard lock(state.mutex);
+    if (auto it = state.ids.find(tid); it != state.ids.end()) id = it->second->id;
+  }
+  if (!id || id == getpid() || name.empty()) return;
+  const auto path = "/proc/self/task/" + std::to_string(id) + "/comm";
+  const int fd = open(path.c_str(), O_WRONLY | O_CLOEXEC);
+  if (fd < 0) return;
+  const auto length = std::min<std::size_t>(name.size(), 15);  // TASK_COMM_LEN - 1
+  [[maybe_unused]] const auto written = write(fd, name.data(), length);
+  close(fd);
+#endif
 }
 void bind_thread_priority(std::int32_t tid) {
   auto& state = threads();

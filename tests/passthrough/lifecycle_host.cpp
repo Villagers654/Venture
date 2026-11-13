@@ -2,6 +2,7 @@
 // openxr.cpp, graphics.cpp and xr/session.cpp are production code in this target.
 #include "support.h"
 #include "lifecycle_host.h"
+#include "core/session_timeline.h"
 #include "core/wait.h"
 #include "xr/clock.h"
 #include "xr/desktop_mirror.h"
@@ -76,6 +77,9 @@ const bool enabled = false;
 void mark(std::string_view) {}
 void frame(std::uint64_t) {}
 void report_pipelines(std::string_view) {}
+}
+namespace session_timeline {
+void frame_submitted(std::int64_t, std::int64_t) {}
 }
 namespace startup_diagnostics {
 void arm() {}

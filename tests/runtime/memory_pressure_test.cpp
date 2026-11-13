@@ -47,3 +47,28 @@ TEST_CASE("Memory pressure: the host reports its allocation headroom") {
   CHECK(room.limit > 0);
   CHECK(room.available <= room.limit);
 }
+
+#include "core/session_timeline.h"
+
+TEST_CASE("session timeline: one line per minute names fps, hitches, CPU and memory") {
+  using namespace venture::session_timeline;
+  Sample s;
+  s.minutes = 31.2;
+  s.seconds = 60;
+  s.frames = {.count = 5400, .long_frames = 12, .worst_ns = 41'500'000};
+  s.cpu_percent = 312.4;
+  s.top = {{"UnityMain", 97.6}, {"UnityGfxDevice", 44.9}};
+  s.private_bytes = 5ull << 30;
+  s.gpu_used = 8200ull << 20;
+  s.gpu_budget = 15000ull << 20;
+  s.threads = 74;
+  CHECK(format(s) == "t=31m fps=90.0 worst_frame_ms=41.5 long_frames=12 cpu=312% "
+                     "top=\"UnityMain 98%, UnityGfxDevice 45%\" private_mib=5120 gpu_mib=8200/15000 threads=74");
+  // The first minute has no CPU baseline, and unknown memory is left out.
+  Sample first;
+  first.minutes = 1;
+  first.seconds = 60;
+  first.frames.count = 0;
+  first.threads = 20;
+  CHECK(format(first) == "t=1m fps=0.0 worst_frame_ms=0.0 long_frames=0 threads=20");
+}

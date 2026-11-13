@@ -10,7 +10,7 @@ add_library(venture_runtime STATIC
   core/generated/a32_libc.cpp
   core/thread.cpp core/thread_lifetime.cpp core/tls.cpp
   core/dev_game_control.cpp core/dev_il2cpp.cpp core/engine_policy.cpp core/engine_defaults.cpp
-  core/profile.cpp core/memory_pressure.cpp core/frame_cpu.cpp core/startup_diagnostics.cpp
+  core/profile.cpp core/memory_pressure.cpp core/session_timeline.cpp core/frame_cpu.cpp core/startup_diagnostics.cpp
   core/pipeline_stats.cpp core/invalidation_stats.cpp core/av_telemetry.cpp
   core/wait.cpp core/readiness.cpp core/sync_census.cpp core/diagnostic_trace.cpp core/signals.cpp core/syscall.cpp core/a32_unwind.cpp core/shutdown_trace.cpp
   core/elf.cpp core/elf_relocations.cpp core/linker.cpp core/process_image.cpp core/process.cpp core/device_identity.cpp core/java_script_loader.cpp

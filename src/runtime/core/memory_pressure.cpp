@@ -119,4 +119,15 @@ void set_gpu_probe(std::function<bool(std::uint64_t&, std::uint64_t&)> probe) {
   std::lock_guard lock(s.mutex);
   s.gpu_probe = std::move(probe);
 }
+
+bool gpu_memory(std::uint64_t& usage, std::uint64_t& budget) {
+  auto& s = state();
+  std::function<bool(std::uint64_t&, std::uint64_t&)> probe;
+  {
+    std::lock_guard lock(s.mutex);
+    probe = s.gpu_probe;
+  }
+  usage = budget = 0;
+  return probe && probe(usage, budget);
+}
 }  // namespace venture::memory_pressure

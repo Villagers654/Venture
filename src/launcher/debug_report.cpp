@@ -443,6 +443,26 @@ void facts_section(std::string &out, const fs::path &file) {
   if (!facts.empty()) out += "\n=== Session facts ===\n" + facts;
 }
 
+// The runtime's once-a-minute "[timeline]" lines from the whole log, which log_section
+// cuts in the middle: a slowdown that starts half an hour in shows when it began and
+// what changed with it. A long session keeps 120 lines spread evenly, first and last.
+void timeline_section(std::string &out, const fs::path &file) {
+  std::ifstream in(file, std::ios::binary);
+  if (!in) return;
+  std::vector<std::string> lines;
+  for (std::string line; std::getline(in, line);)
+    if (line.find(" [timeline] ") != std::string::npos) lines.push_back(line.substr(0, 512));
+  if (lines.empty()) return;
+  constexpr std::size_t kKeep = 120;
+  out += std::format("\n=== Session timeline ({} minutes{}) ===\n", lines.size(),
+                     lines.size() > kKeep ? std::format(", {} shown", kKeep) : std::string());
+  if (lines.size() <= kKeep) {
+    for (const auto &line : lines) out += line + "\n";
+    return;
+  }
+  for (std::size_t i = 0; i < kKeep; ++i) out += lines[i * (lines.size() - 1) / (kKeep - 1)] + "\n";
+}
+
 // The Android framework classes and members the game's Java needs and Venture lacks, from
 // the conversion report the runtime log names ("Details: .../report.json"):
 // each missing class with how many of the app's classes need it.
@@ -1171,6 +1191,7 @@ fs::path write_debug_report(const DebugReport &request) {
       if (!text.empty() && text.back() != '\n') out += '\n';
     }
     facts_section(out, logs / (base + ".log"));
+    timeline_section(out, logs / (base + ".log"));
     missing_classes_section(out, logs / (base + ".log"));
     if (window) {
       out += std::format("\n=== Errors logged during the last run ({} to {}) ===\n", local_time(window->from),
