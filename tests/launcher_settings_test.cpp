@@ -149,3 +149,13 @@ TEST_CASE("Hidden library entries and Show hidden survive a settings round trip"
   CHECK(loaded.hidden == std::set<std::string>{"1234567890"});
   CHECK_FALSE(loaded.show_hidden);
 }
+TEST_CASE("SteamVR runtime manifests are recognised by path, link or contents") {
+  CHECK(environment::steamvr_manifest("/home/u/.local/share/Steam/steamapps/common/SteamVR/steamxr_linux64.json", ""));
+  CHECK(environment::steamvr_manifest("/home/u/.config/openxr/1/active_runtime.json /x/SteamVR/steamxr_linux64.json", ""));
+  CHECK(environment::steamvr_manifest("/tmp/active_runtime.json",
+                                      R"({"runtime":{"library_path":"../bin/linux64/vrclient.so","name":"SteamVR"}})"));
+  CHECK_FALSE(environment::steamvr_manifest("/usr/share/openxr/1/openxr_monado.json",
+                                            R"({"runtime":{"library_path":"../../../lib/libopenxr_monado.so"}})"));
+  CHECK_FALSE(environment::steamvr_manifest("/home/u/.config/openxr/1/active_runtime.json",
+                                            R"({"runtime":{"name":"WiVRn","library_path":"libopenxr_wivrn.so"}})"));
+}

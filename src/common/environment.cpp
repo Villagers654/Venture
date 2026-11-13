@@ -1,6 +1,9 @@
 #include "common/environment.h"
 #include <atomic>
 #include <cstdio>
+#include <filesystem>
+#include <fstream>
+#include <sstream>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -122,5 +125,27 @@ std::optional<std::array<std::uint8_t, 3>> parse_color_key(std::string_view text
 std::optional<std::array<std::uint8_t, 3>> passthrough_color_key() {
   const auto* value = getenv("VENTURE_PASSTHROUGH_KEY");
   return value ? parse_color_key(value) : std::nullopt;
+}
+bool steamvr_manifest(std::string_view path, std::string_view contents) {
+  std::string text(path);
+  text += ' ';
+  text += contents;
+  for (char& c : text) c = char(c >= 'A' && c <= 'Z' ? c + ('a' - 'A') : c);
+  return text.find("steamvr") != std::string::npos || text.find("steamxr") != std::string::npos;
+}
+bool flatpak_steamvr() {
+  const auto* id = getenv("FLATPAK_ID");
+  if (!id || !*id) return false;
+  std::filesystem::path manifest;
+  if (const auto* json = getenv("XR_RUNTIME_JSON"); json && *json) manifest = json;
+  else if (const auto* home = getenv("HOME"); home && *home) manifest = std::filesystem::path(home) / ".config/openxr/1/active_runtime.json";
+  else return false;
+  std::error_code ec;
+  std::string path = manifest.string();
+  // SteamVR's manifest is a link into the Steam library, which the sandbox may not see.
+  if (auto target = std::filesystem::read_symlink(manifest, ec); !ec) path += " " + target.string();
+  std::ostringstream contents;
+  if (std::ifstream file(manifest); file) contents << file.rdbuf();
+  return steamvr_manifest(path, contents.str());
 }
 } // namespace venture::environment

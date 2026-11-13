@@ -410,6 +410,7 @@ void App::draw() {
     }
   draw_uninstall();
   draw_texture_warning();
+  draw_flatpak_steamvr();
   draw_save_import();
   draw_store_link();
   draw_cancel_download();
@@ -3423,6 +3424,31 @@ void App::draw_texture_warning() {
     if (clicked == 0 && texture_warning_) action(texture_warning_);
     if (clicked >= 0) {
       texture_warning_ = nullptr;
+      ImGui::CloseCurrentPopup();
+    }
+    end_dialog();
+  }
+}
+
+void App::draw_flatpak_steamvr() {
+  static bool checked = false;
+  if (!checked) {
+    checked = true;
+    flatpak_steamvr_warning_ = environment::flatpak_steamvr();
+  }
+  if (flatpak_steamvr_warning_ && !ImGui::IsPopupOpen("SteamVR and Flatpak")) ImGui::OpenPopup("SteamVR and Flatpak");
+  if (begin_dialog("SteamVR and Flatpak", 460)) {
+    // i18n: Shown at start in the Linux Flatpak when SteamVR is the active OpenXR runtime.
+    dialog_text(tr("SteamVR does not work with the Flatpak"),
+                tr("SteamVR is your OpenXR runtime, and the Flatpak sandbox cannot reach SteamVR, so games will not "
+                   "start. Use the Venture AppImage, tarball or your distribution's package with SteamVR, or use "
+                   "WiVRn or Monado with the Flatpak."));
+    int clicked = dialog_footer({{tr("OK"), Tone::primary}});
+    if (clicked < 0 && (ImGui::IsKeyPressed(ImGuiKey_Enter) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter) ||
+                        ImGui::IsKeyPressed(ImGuiKey_Escape)))
+      clicked = 0;
+    if (clicked >= 0) {
+      flatpak_steamvr_warning_ = false;
       ImGui::CloseCurrentPopup();
     }
     end_dialog();
