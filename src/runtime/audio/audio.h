@@ -339,7 +339,25 @@ class Backend {
   void record_underrun(const Stream&, std::uint32_t requested,
                        std::uint32_t delivered, std::uint32_t queue_before);
   void drain_underruns();
-  bool ensure_device(Direction direction);
+  // device_lock_ held through lock, which is released while the backend opens,
+  // starts or closes the endpoint: WASAPI can block in those calls for seconds
+  // on a newly connected endpoint (an H3VR2 player switched to a wireless
+  // headset and FMOD's reopen waited on device_lock_ until the game froze).
+  // False while another thread has the endpoint open in progress.
+  bool ensure_device(Direction direction, std::unique_lock<std::mutex>& lock);
+  // device_lock_ held: whether a guest call opens the endpoint itself. Not
+  // while the monitor recovers a lost or rerouted endpoint: the guest asks it
+  // to reopen (reopen_requested_), and the stream attaches and plays when the
+  // endpoint is back.
+  bool guest_opens(Direction direction) const;
+  // Releases lock around fn, marking direction's endpoint busy meanwhile.
+  template <class F> void unlocked(Direction direction, std::unique_lock<std::mutex>& lock, F&& fn);
+  std::array<bool, 2> device_busy_{}, recovering_{};  // device_lock_
+  // The opened endpoint's rate and period (internal frames), kept for guest
+  // queries while it is closed or reopening; device_lock_.
+  std::array<std::pair<std::uint32_t, std::uint32_t>, 2> last_period_{};
+  std::pair<std::int32_t, std::int32_t> last_output_properties_{};
+  std::array<std::atomic<bool>, 2> reopen_requested_{};
   // device_lock_ held: the runtime's endpoint for direction, matched against
   // the backend's active endpoints into id; false for the system default.
   // answered: named already holds the runtime's answer.
@@ -360,7 +378,13 @@ class Backend {
     bool failed = false;  // the runtime's endpoint did not open
     std::string failed_named;
     ma_device_id failed_id{};
+    // The system default endpoint the device opened on (WASAPI), which
+    // check_routes compares with the current default.
+    bool default_known = false;
+    ma_device_id default_id{};
   };
+  // device_lock_ held: the backend's current default endpoint for direction.
+  bool default_endpoint(Direction direction, ma_device_id& id);
   std::array<OpenRoute, 2> routes_{};  // device_lock_
   // The PC output, device_lock_ held.
   ma_device pc_{};

@@ -46,6 +46,7 @@
 #include "serialized_queues.h"
 #include "deferred_queue_submissions.h"
 #include "deferred_recording.h"
+#include "xr/api.h"
 #include "xr/vulkan_extensions.h"
 #include "xr/display_override.h"
 
@@ -1024,6 +1025,7 @@ VkResult VKAPI_CALL create_instance(const VkInstanceCreateInfo* info, const VkAl
 void VKAPI_CALL destroy_instance(VkInstance instance, const VkAllocationCallbacks* alloc) {
   if (!instance) return;
   address_log_detach(instance);
+  venture::xr::forget_runtime_created_instance(instance);
   host<PFN_vkDestroyInstance>(instance, "vkDestroyInstance")(instance, alloc);
   std::lock_guard lock(state_lock);
   instances.erase(instance);

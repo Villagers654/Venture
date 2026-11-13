@@ -43,6 +43,22 @@ inline constexpr int min_custom_rate = 20, max_custom_rate = 1000;
 inline constexpr const char *texture_compression_modes[] = {"always", "auto", "never"};
 // Percents of GPU memory in use a compression threshold may name.
 inline constexpr int min_compression_threshold = 10, max_compression_threshold = 95;
+// A game's troubleshooting switches (its Settings > Advanced): runtime
+// behaviours that suit nearly every game, each turned "on" or "off" over the
+// runtime's default. The launcher passes a game's choice as `variable`, `on`
+// or `off`; a game without one passes nothing, so a variable the user set in
+// the launcher's environment still applies. The labels live in the launcher.
+struct AdvancedSwitch {
+  const char *id, *variable, *on, *off;
+};
+inline constexpr AdvancedSwitch advanced_switches[] = {
+    {"gpu-bounds-checks", "VENTURE_VULKAN_ROBUST_ACCESS", "1", "0"},      // hle/vulkan/vulkan.cpp
+    {"descriptor-fill", "VENTURE_VULKAN_DESCRIPTOR_FILL", "1", "0"},      // hle/vulkan/descriptor_fill.cpp
+    {"null-descriptors", "VENTURE_VULKAN_NULL_DESCRIPTORS", "1", "0"},    // hle/vulkan/vulkan.cpp
+    {"zero-shader-variables", "VENTURE_VULKAN_ZERO_INIT_LOCALS", "1", "0"},  // hle/vulkan/shader.cpp
+    {"sampled-subpass-inputs", "VENTURE_VULKAN_SAMPLED_INPUTS", "1", "0"},  // hle/vulkan/input_attachments.cpp
+    {"density-maps", "VENTURE_VULKAN_QUEST_DENSITY_MAPS", "1", "0"},      // hle/vulkan/vulkan.cpp
+};
 
 struct DisplaySettings {
   // "runtime", a headset preset id, "percent" or "custom". In a game's
@@ -73,6 +89,9 @@ struct DisplaySettings {
   // For a game's "auto": the percent of GPU memory in use past which new
   // textures are compressed; 0 follows the global threshold.
   int texture_compression_threshold = 0;
+  // A game's advanced switches it turned on or off: advanced_switches id ->
+  // "on" or "off". An absent id keeps the runtime's default.
+  std::map<std::string, std::string> advanced;
   bool operator==(const DisplaySettings &) const = default;
 };
 // The global settings with no game overrides; a game's starts as inherit.
@@ -101,6 +120,8 @@ std::string eye_scale_environment(const DisplaySettings &d);
 // and for "auto" its VENTURE_TEXTURE_COMPRESSION_THRESHOLD percent (0 otherwise).
 std::pair<std::string, int> texture_compression_environment(int global_mode, int global_threshold,
                                                             const DisplaySettings *game);
+// The variables of a game's advanced switches that are not at the default.
+std::vector<std::pair<std::string, std::string>> advanced_environment(const DisplaySettings &d);
 
 // The host display the last game launch reported (host-display.json, written by
 // the runtime): recommended and maximum eye size, refresh rate and the rates the
