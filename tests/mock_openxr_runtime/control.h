@@ -39,6 +39,11 @@ struct MockXrScript {
   // AMD + NVIDIA laptop: RUNTIME_FAILURE, then HANDLE_INVALID; issue 92).
   VkInstance refused_vulkan_instance = VK_NULL_HANDLE;
   bool refuse_vulkan_devices = false;
+  // The enable1 query of an instance from xrCreateVulkanInstanceKHR fails, and
+  // the runtime then refuses that instance's enable2 query too (Oculus with an
+  // AMD GPU answered H3VR2's queries this way; the device fell back and the
+  // runtime later called through null in xrDestroySwapchain).
+  bool enable1_spoils_runtime_instances = false;
   bool retain_failed_end = false;
   bool depth_formats = false;
   std::uint32_t swapchain_limit = 0; // zero disables the per-session host budget

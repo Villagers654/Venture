@@ -320,6 +320,7 @@ void settings_section(std::string &out, const fs::path &data, const std::string 
         lines += std::format("  texture compression: {}\n", game->texture_compression);
       if (game->texture_compression_threshold)
         lines += std::format("  texture compression threshold: {}%\n", game->texture_compression_threshold);
+      for (const auto &[id, value] : game->advanced) lines += std::format("  advanced {}: {}\n", id, value);
     }
     if (own_controls) lines += std::format("  controls: {}\n", controls::encode(s.game_controls.at(app_id)));
     out += lines.empty() ? " none (the game follows the global settings)\n" : "\n" + lines;
