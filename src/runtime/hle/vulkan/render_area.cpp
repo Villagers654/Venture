@@ -81,6 +81,9 @@ struct View {
 };
 std::unordered_map<VkImage, Image> images;
 std::unordered_map<VkImageView, View> views;
+// Sampled input reads: the one-layer 2D array view standing in for each 2D view
+// of an input attachment image (sampled_input_view).
+std::unordered_map<VkImageView, std::pair<VkDevice, VkImageView>> array_views;
 std::unordered_map<VkFramebuffer, VkExtent2D> clamped;
 struct Pass {
   // The attachments its subpasses use as input, color, resolve or
@@ -234,8 +237,32 @@ void transition(VkCommandBuffer cmd, const std::vector<VkImageMemoryBarrier>& ba
 constexpr VkImageUsageFlags attachment_usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
                                                VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
                                                VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT;
+// Sampled input reads (input_attachments.cpp): whether the format can be
+// sampled with optimal tiling, as an input attachment image must then be.
+bool samplable(VkDevice d, VkFormat format) {
+  const auto physical = device_physical(d);
+  VkFormatProperties properties{};
+  if (auto get = reinterpret_cast<PFN_vkGetPhysicalDeviceFormatProperties>(
+          raw_physical_proc(physical, "vkGetPhysicalDeviceFormatProperties")))
+    get(physical, format, &properties);
+  return properties.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT;
+}
 VkResult VKAPI_CALL create_image(VkDevice d, const VkImageCreateInfo* info, const VkAllocationCallbacks* alloc,
                                  VkImage* out) {
+  if (sampled_input_reads() && (info->usage & VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT) &&
+      info->tiling == VK_IMAGE_TILING_OPTIMAL) {
+    if (samplable(d, info->format)) {
+      auto copy = *info;
+      copy.usage = (copy.usage | VK_IMAGE_USAGE_SAMPLED_BIT) & ~VkImageUsageFlags(VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT);
+      auto r = next<PFN_vkCreateImage, "vkCreateImage">(d)(d, &copy, alloc, out);
+      if (r == VK_SUCCESS) note_image(*out, copy);
+      return r;
+    }
+    static std::atomic<unsigned> reported{0};
+    if (reported.fetch_add(1, std::memory_order_relaxed) < 4)
+      log::warn("vulkan", "Input attachment image format {} cannot be sampled: its subpass reads stay unchanged",
+                int(info->format));
+  }
   auto r = next<PFN_vkCreateImage, "vkCreateImage">(d)(d, info, alloc, out);
   if (r == VK_SUCCESS) note_image(*out, *info);
   return r;
@@ -246,9 +273,36 @@ void VKAPI_CALL destroy_image(VkDevice d, VkImage image, const VkAllocationCallb
 }
 VkResult VKAPI_CALL create_view(VkDevice d, const VkImageViewCreateInfo* info, const VkAllocationCallbacks* alloc,
                                 VkImageView* out) {
+  // Sampled input reads: a view restricted to input attachment usage may also be
+  // sampled (its image has that usage), and a 2D view gets a 2D array twin.
+  bool array_twin = false;
+  if (sampled_input_reads()) {
+    VkImageUsageFlags usage = 0;
+    {
+      std::lock_guard lock(mutex);
+      if (auto it = images.find(info->image); it != images.end()) usage = it->second.usage;
+    }
+    if ((usage & VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT) && (usage & VK_IMAGE_USAGE_SAMPLED_BIT)) {
+      // The call's structures are its translated copy (dispatch boundary).
+      for (auto* p = static_cast<const VkBaseInStructure*>(info->pNext); p; p = p->pNext)
+        if (p->sType == VK_STRUCTURE_TYPE_IMAGE_VIEW_USAGE_CREATE_INFO) {
+          auto* restricted =
+              const_cast<VkImageViewUsageCreateInfo*>(reinterpret_cast<const VkImageViewUsageCreateInfo*>(p));
+          if (restricted->usage & VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT) restricted->usage |= VK_IMAGE_USAGE_SAMPLED_BIT;
+        }
+      array_twin = info->viewType == VK_IMAGE_VIEW_TYPE_2D;
+    }
+  }
   auto r = next<PFN_vkCreateImageView, "vkCreateImageView">(d)(d, info, alloc, out);
   if (r != VK_SUCCESS) return r;
+  VkImageView twin{};
+  if (array_twin) {
+    auto copy = *info;
+    copy.viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
+    if (next<PFN_vkCreateImageView, "vkCreateImageView">(d)(d, &copy, nullptr, &twin) != VK_SUCCESS) twin = {};
+  }
   std::lock_guard lock(mutex);
+  if (twin) array_views[*out] = {d, twin};
   if (auto it = images.find(info->image); it != images.end()) {
     const auto mip = info->subresourceRange.baseMipLevel;
     views[*out] = {{std::max(1u, it->second.extent.width >> mip), std::max(1u, it->second.extent.height >> mip)},
@@ -260,10 +314,16 @@ VkResult VKAPI_CALL create_view(VkDevice d, const VkImageViewCreateInfo* info, c
   return r;
 }
 void VKAPI_CALL destroy_view(VkDevice d, VkImageView view, const VkAllocationCallbacks* alloc) {
+  VkImageView twin{};
   {
     std::lock_guard lock(mutex);
     views.erase(view);
+    if (auto it = array_views.find(view); it != array_views.end()) {
+      twin = it->second.second;
+      array_views.erase(it);
+    }
   }
+  if (twin) next<PFN_vkDestroyImageView, "vkDestroyImageView">(d)(d, twin, nullptr);
   next<PFN_vkDestroyImageView, "vkDestroyImageView">(d)(d, view, alloc);
 }
 template <class Subpass>
@@ -382,10 +442,35 @@ bool complete(const VkRenderPassCreateInfo& guest, CompletedPass& out) {
   report_added_dependencies(added.size(), guest.subpassCount);
   return true;
 }
+// Sampled input reads: dependencies into input attachment reads also make the
+// writes visible to fragment shader reads, beyond the framebuffer region
+// (except self-dependencies, whose flags the subpass's barriers must match).
+template <class Dependency>
+bool sample_input_dependencies(std::vector<Dependency>& dependencies) {
+  bool changed = false;
+  for (auto& dep : dependencies)
+    if (dep.dstAccessMask & VK_ACCESS_INPUT_ATTACHMENT_READ_BIT) {
+      dep.dstAccessMask |= VK_ACCESS_SHADER_READ_BIT;
+      dep.dstStageMask |= VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+      if (dep.srcSubpass != dep.dstSubpass) dep.dependencyFlags &= ~VkDependencyFlags(VK_DEPENDENCY_BY_REGION_BIT);
+      changed = true;
+    }
+  return changed;
+}
 VkResult VKAPI_CALL create_render_pass(VkDevice d, const VkRenderPassCreateInfo* info,
                                        const VkAllocationCallbacks* alloc, VkRenderPass* out) {
   CompletedPass completed;
   const auto* host = complete(*info, completed) ? &completed.info : info;
+  VkRenderPassCreateInfo sampled;
+  std::vector<VkSubpassDependency> sampled_dependencies;
+  if (sampled_input_reads() && host->dependencyCount) {
+    sampled_dependencies.assign(host->pDependencies, host->pDependencies + host->dependencyCount);
+    if (sample_input_dependencies(sampled_dependencies)) {
+      sampled = *host;
+      sampled.pDependencies = sampled_dependencies.data();
+      host = &sampled;
+    }
+  }
   auto r = next<PFN_vkCreateRenderPass, "vkCreateRenderPass">(d)(d, host, alloc, out);
   if (r == VK_SUCCESS) record_pass(*out, *info);
   return r;
@@ -405,6 +490,15 @@ VkResult VKAPI_CALL create_render_pass2(VkDevice d, const VkRenderPassCreateInfo
     completed.pDependencies = dependencies.data();
     host = &completed;
     report_added_dependencies(added.size(), info->subpassCount);
+  }
+  if (sampled_input_reads() && host->dependencyCount) {
+    std::vector<VkSubpassDependency2> sampled(host->pDependencies, host->pDependencies + host->dependencyCount);
+    if (sample_input_dependencies(sampled)) {
+      dependencies = std::move(sampled);
+      if (host != &completed) completed = *info;
+      completed.pDependencies = dependencies.data();
+      host = &completed;
+    }
   }
   auto r = next<PFN_vkCreateRenderPass2, Name>(d)(d, host, alloc, out);
   if (r == VK_SUCCESS) record_pass(*out, *info);
@@ -977,6 +1071,11 @@ void note_image(VkImage image, const VkImageCreateInfo& info) {
   std::lock_guard lock(mutex);
   images[image] = {{info.extent.width, info.extent.height}, info.arrayLayers, info.samples, info.usage};
 }
+VkImageView sampled_input_view(VkImageView view) {
+  std::lock_guard lock(mutex);
+  auto it = array_views.find(view);
+  return it == array_views.end() ? view : it->second.second;
+}
 void forget_image(VkImage image) {
   std::lock_guard lock(mutex);
   images.erase(image);
@@ -994,9 +1093,38 @@ void force_resolve_stand_ins(std::optional<bool> enabled) {
   std::lock_guard lock(mutex);
   forced_stand_ins = enabled;
 }
+// Sampled input reads: input attachment bindings and pool sizes are sampled images.
+VkResult VKAPI_CALL create_set_layout(VkDevice d, const VkDescriptorSetLayoutCreateInfo* info,
+                                      const VkAllocationCallbacks* alloc, VkDescriptorSetLayout* out) {
+  auto create = next<PFN_vkCreateDescriptorSetLayout, "vkCreateDescriptorSetLayout">(d);
+  if (!sampled_input_reads() || !info->pBindings ||
+      std::none_of(info->pBindings, info->pBindings + info->bindingCount,
+                   [](const auto& b) { return b.descriptorType == VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT; }))
+    return create(d, info, alloc, out);
+  std::vector<VkDescriptorSetLayoutBinding> bindings(info->pBindings, info->pBindings + info->bindingCount);
+  for (auto& b : bindings) b.descriptorType = sampled_input_type(b.descriptorType);
+  auto copy = *info;
+  copy.pBindings = bindings.data();
+  return create(d, &copy, alloc, out);
+}
+VkResult VKAPI_CALL create_pool(VkDevice d, const VkDescriptorPoolCreateInfo* info, const VkAllocationCallbacks* alloc,
+                                VkDescriptorPool* out) {
+  auto create = next<PFN_vkCreateDescriptorPool, "vkCreateDescriptorPool">(d);
+  if (!sampled_input_reads() || !info->pPoolSizes ||
+      std::none_of(info->pPoolSizes, info->pPoolSizes + info->poolSizeCount,
+                   [](const auto& s) { return s.type == VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT; }))
+    return create(d, info, alloc, out);
+  std::vector<VkDescriptorPoolSize> sizes(info->pPoolSizes, info->pPoolSizes + info->poolSizeCount);
+  for (auto& size : sizes) size.type = sampled_input_type(size.type);
+  auto copy = *info;
+  copy.pPoolSizes = sizes.data();
+  return create(d, &copy, alloc, out);
+}
 PFN_vkVoidFunction render_area_proc(std::string_view name) {
 #define FN(command, function) \
   if (name == #command) return reinterpret_cast<PFN_vkVoidFunction>(function)
+  FN(vkCreateDescriptorSetLayout, create_set_layout);
+  FN(vkCreateDescriptorPool, create_pool);
   FN(vkCreateImage, create_image);
   FN(vkDestroyImage, destroy_image);
   FN(vkCreateImageView, create_view);

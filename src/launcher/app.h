@@ -105,6 +105,10 @@ private:
   // "Change anyway", dropped on Cancel.
   std::function<void()> texture_warning_;
   void draw_texture_warning();
+  // Flatpak with SteamVR as the OpenXR runtime (checked at start): told once
+  // that SteamVR cannot work from the Flatpak, and which builds or runtimes do.
+  bool flatpak_steamvr_warning_ = false;
+  void draw_flatpak_steamvr();
   // The host display of the last game launch (host-display.json), re-read when it changes.
   const library::HostDisplay* host_display();
   std::optional<library::HostDisplay> host_display_;

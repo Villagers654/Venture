@@ -4,6 +4,7 @@
 // constant per-view scalar values with Flat on both sides of the interface.
 // Ordinary attributes, mixed expressions and explicit interpolation are untouched.
 #include <algorithm>
+#include <atomic>
 #include <iterator>
 #include <map>
 #include <memory>
@@ -12,6 +13,7 @@
 #include <string>
 #include <tuple>
 
+#include "common/log.h"
 #include "internal.h"
 #include "multiview.h"
 
@@ -61,6 +63,22 @@ void release_device(VkDevice device) {
 VkResult VKAPI_CALL create_shader(VkDevice device, const VkShaderModuleCreateInfo* info,
                                   const VkAllocationCallbacks* alloc, VkShaderModule* out) {
   try {
+    // Subpass inputs read as sampled images (input_attachments.cpp); pipelines
+    // made later from this module, and the Flat rewrite, start from that code.
+    std::vector<std::uint32_t> sampled;
+    VkShaderModuleCreateInfo with_sampled;
+    if (sampled_input_reads() && info->pCode && info->codeSize >= 20) {
+      sampled = sample_subpass_inputs({info->pCode, info->codeSize / sizeof(std::uint32_t)});
+      if (!sampled.empty()) {
+        with_sampled = *info;
+        with_sampled.pCode = sampled.data();
+        with_sampled.codeSize = sampled.size() * sizeof(std::uint32_t);
+        info = &with_sampled;
+        static std::atomic<unsigned> logged{0};
+        if (logged.fetch_add(1, std::memory_order_relaxed) < 16)
+          log::info("vulkan", "Fragment shader reads its subpass inputs as sampled array layers");
+      }
+    }
     auto shader = std::make_shared<Shader>(*info);
     auto result =
         next<PFN_vkCreateShaderModule, "vkCreateShaderModule">(device)(device, info, alloc, out);

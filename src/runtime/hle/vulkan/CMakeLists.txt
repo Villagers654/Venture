@@ -37,7 +37,7 @@ add_custom_command(OUTPUT ${vk_generated}/vk_commands.inc ${vk_generated}/vk_str
   VERBATIM)
 
 add_library(venture_vulkan STATIC
-  vulkan.cpp multiview.cpp multiview_pipeline.cpp callbacks.cpp chain.cpp hardware_buffer.cpp sync_fd.cpp timing.cpp window_readback.cpp wsi.cpp address_log.cpp breadcrumbs.cpp shader.cpp full_rate_image.cpp
+  vulkan.cpp multiview.cpp multiview_pipeline.cpp input_attachments.cpp callbacks.cpp chain.cpp hardware_buffer.cpp sync_fd.cpp timing.cpp window_readback.cpp wsi.cpp address_log.cpp breadcrumbs.cpp shader.cpp full_rate_image.cpp
   ${vk_generated}/vk_commands.inc ${vk_generated}/vk_structs.inc ${vk_generated}/vk_members.inc
   ${vk_generated}/vk_borrow_traits.inc ${vk_generated}/vk_borrow_members.inc
   ${vk_generated}/vk_plain_members.inc ${vk_generated}/vk_plain_borrow.inc ${vk_generated}/vk_structure_extensions.inc)
@@ -91,7 +91,7 @@ add_custom_command(OUTPUT ${vk_generated}/texture_bc7.inc
     ${vk_generated}/texture_bc7.spv ${vk_generated}/texture_bc7.inc
   DEPENDS glslang-standalone shaders/bc7_encode.comp ${PROJECT_SOURCE_DIR}/tools/codegen/vk_spirv.py
   VERBATIM)
-target_sources(venture_vulkan PRIVATE texture.cpp render_area.cpp render_checks.cpp subpass_sync.cpp deferred_free.cpp ${vk_generated}/texture_decode.inc ${vk_generated}/texture_depth.inc ${vk_generated}/texture_bc7.inc)
+target_sources(venture_vulkan PRIVATE texture.cpp render_area.cpp render_checks.cpp subpass_sync.cpp deferred_free.cpp descriptor_fill.cpp ${vk_generated}/texture_decode.inc ${vk_generated}/texture_depth.inc ${vk_generated}/texture_bc7.inc)
 foreach(mode float_array srgb_array float_volume srgb_volume unorm_array unorm_volume)
   set(image_defines -DIMAGE_OUTPUT=1)
   if(mode MATCHES "srgb|unorm")

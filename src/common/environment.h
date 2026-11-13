@@ -20,4 +20,11 @@ bool passthrough_enabled();
 std::optional<std::array<std::uint8_t, 3>> passthrough_color_key();
 // Six hex digits (an optional leading '#') as RGB; nothing when malformed.
 std::optional<std::array<std::uint8_t, 3>> parse_color_key(std::string_view);
+// Whether an OpenXR runtime manifest (its path, the path it links to, or its
+// contents) names SteamVR.
+bool steamvr_manifest(std::string_view path, std::string_view contents);
+// Running inside the Venture Flatpak (FLATPAK_ID) with SteamVR as the OpenXR
+// runtime (XR_RUNTIME_JSON, else ~/.config/openxr/1/active_runtime.json).
+// Flatpak's sandbox cannot reach SteamVR, so a launch cannot work.
+bool flatpak_steamvr();
 } // namespace venture::environment

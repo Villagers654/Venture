@@ -2218,3 +2218,80 @@ TEST_CASE("Vulkan repeated signals of a never-waited binary semaphore are droppe
   call("vkDestroySemaphore", device, a, nullptr);
   call("vkDestroyDevice", device, nullptr);
 }
+
+TEST_CASE("New descriptor sets get null descriptors for the bindings that can hold one") {
+  using venture::vulkan::null_fill_plan;
+  const VkSampler immutable = reinterpret_cast<VkSampler>(std::uintptr_t(0x1234));
+  const VkDescriptorSetLayoutBinding bindings[] = {
+      {0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_ALL, nullptr},
+      {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 4, VK_SHADER_STAGE_ALL, nullptr},
+      {2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_ALL, &immutable},
+      {3, VK_DESCRIPTOR_TYPE_SAMPLER, 1, VK_SHADER_STAGE_ALL, &immutable},
+      {4, VK_DESCRIPTOR_TYPE_SAMPLER, 1, VK_SHADER_STAGE_ALL, nullptr},
+      {5, VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+      {6, VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER, 2, VK_SHADER_STAGE_ALL, nullptr},
+      {7, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 100000, VK_SHADER_STAGE_ALL, nullptr},
+      {8, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC, 1, VK_SHADER_STAGE_ALL, nullptr},
+      {9, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 16, VK_SHADER_STAGE_ALL, nullptr},
+  };
+  const VkDescriptorBindingFlags flags[std::size(bindings)] = {0, 0, 0, 0, 0, 0, 0, 0, 0,
+                                                               VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT};
+  VkDescriptorSetLayoutBindingFlagsCreateInfo binding_flags{
+      VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO, nullptr, std::uint32_t(std::size(bindings)),
+      flags};
+  VkDescriptorSetLayoutCreateInfo info{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO, &binding_flags};
+  info.bindingCount = std::uint32_t(std::size(bindings));
+  info.pBindings = bindings;
+  const auto plan = null_fill_plan(info);
+  std::vector<std::uint32_t> filled;
+  for (const auto& b : plan) filled.push_back(b.binding);
+  // Immutable samplers, input attachments and large arrays are left alone.
+  CHECK(filled == std::vector<std::uint32_t>{0, 1, 2, 4, 6, 8, 9});
+  CHECK(plan[1].sampler);
+  CHECK(plan[1].count == 4);
+  CHECK_FALSE(plan[2].sampler);
+  CHECK(plan[3].sampler);
+  CHECK_FALSE(plan[0].sampler);
+  CHECK(plan[6].variable);
+  CHECK_FALSE(plan[0].variable);
+  info.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT;
+  CHECK(null_fill_plan(info).empty());
+
+  // On a real device: sets of such a layout allocate, fill and free.
+  test::VulkanDevice resources;
+  const VkDescriptorSetLayoutBinding device_bindings[] = {
+      {0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_ALL, nullptr},
+      {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 4, VK_SHADER_STAGE_ALL, nullptr},
+      {2, VK_DESCRIPTOR_TYPE_SAMPLER, 1, VK_SHADER_STAGE_ALL, nullptr},
+      {3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 2, VK_SHADER_STAGE_ALL, nullptr},
+      {4, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_ALL, nullptr},
+  };
+  VkDescriptorSetLayoutCreateInfo device_info{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+  device_info.bindingCount = std::uint32_t(std::size(device_bindings));
+  device_info.pBindings = device_bindings;
+  VkDescriptorSetLayout layout{};
+  REQUIRE(call("vkCreateDescriptorSetLayout", resources.device, &device_info, nullptr, &layout) == VK_SUCCESS);
+  const VkDescriptorPoolSize sizes[] = {{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 4},
+                                        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 16},
+                                        {VK_DESCRIPTOR_TYPE_SAMPLER, 4},
+                                        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 8},
+                                        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 4}};
+  VkDescriptorPoolCreateInfo pool_info{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+  pool_info.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
+  pool_info.maxSets = 4;
+  pool_info.poolSizeCount = std::uint32_t(std::size(sizes));
+  pool_info.pPoolSizes = sizes;
+  VkDescriptorPool pool{};
+  REQUIRE(call("vkCreateDescriptorPool", resources.device, &pool_info, nullptr, &pool) == VK_SUCCESS);
+  const VkDescriptorSetLayout layouts[] = {layout, layout, layout};
+  VkDescriptorSetAllocateInfo alloc{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+  alloc.descriptorPool = pool;
+  alloc.descriptorSetCount = 3;
+  alloc.pSetLayouts = layouts;
+  VkDescriptorSet sets[3]{};
+  CHECK(call("vkAllocateDescriptorSets", resources.device, &alloc, sets) == VK_SUCCESS);
+  CHECK(sets[2] != VK_NULL_HANDLE);
+  CHECK(call("vkFreeDescriptorSets", resources.device, pool, 3u, sets) == VK_SUCCESS);
+  call("vkDestroyDescriptorPool", resources.device, pool, nullptr);
+  call("vkDestroyDescriptorSetLayout", resources.device, layout, nullptr);
+}

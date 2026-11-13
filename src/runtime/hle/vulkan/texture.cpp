@@ -2454,13 +2454,41 @@ bool translate_descriptor(VkDevice d, VkDescriptorImageInfo& info) {
   info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
   return true;
 }
+// Writes own their image infos here (push copies).
 void translate_write(VkDevice d, VkWriteDescriptorSet& write) {
   if (!image_descriptor(write.descriptorType)) return;
   auto* infos = const_cast<VkDescriptorImageInfo*>(write.pImageInfo);
+  if (write.descriptorType == VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT && sampled_input_reads()) {
+    write.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+    for (std::uint32_t i = 0; i < write.descriptorCount; ++i) infos[i].imageView = sampled_input_view(infos[i].imageView);
+  }
   for (std::uint32_t i = 0; i < write.descriptorCount; ++i) translate_descriptor(d, infos[i]);
+}
+// Input attachment writes as sampled image writes (input_attachments.cpp): the
+// converted writes, or empty when there are none.
+std::vector<VkWriteDescriptorSet> sampled_input_writes(std::uint32_t count, const VkWriteDescriptorSet* writes,
+                                                        std::vector<std::vector<VkDescriptorImageInfo>>& images) {
+  std::vector<VkWriteDescriptorSet> converted;
+  if (!sampled_input_reads()) return converted;
+  for (std::uint32_t i = 0; i < count; ++i) {
+    if (writes[i].descriptorType != VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT) continue;
+    if (converted.empty()) {
+      converted.assign(writes, writes + count);
+      images.resize(count);
+    }
+    converted[i].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+    if (!writes[i].descriptorCount || !writes[i].pImageInfo) continue;
+    images[i].assign(writes[i].pImageInfo, writes[i].pImageInfo + writes[i].descriptorCount);
+    for (auto& image : images[i]) image.imageView = sampled_input_view(image.imageView);
+    converted[i].pImageInfo = images[i].data();
+  }
+  return converted;
 }
 void VKAPI_CALL update_descriptors(VkDevice d, std::uint32_t count, const VkWriteDescriptorSet* writes,
                                     std::uint32_t copy_count, const VkCopyDescriptorSet* copies) {
+  std::vector<std::vector<VkDescriptorImageInfo>> input_images;
+  const auto inputs = sampled_input_writes(count, writes, input_images);
+  if (!inputs.empty()) writes = inputs.data();
   {
     std::lock_guard lock(texture_lock);
     if (companion_views.empty()) {
@@ -2574,8 +2602,22 @@ void VKAPI_CALL push_descriptors2(VkCommandBuffer cmd, const VkPushDescriptorSet
 }
 VkResult VKAPI_CALL create_template(VkDevice d, const VkDescriptorUpdateTemplateCreateInfo* info,
                                     const VkAllocationCallbacks* alloc, VkDescriptorUpdateTemplate* out) {
+  // The record keeps the guest's types: its input attachment entries name views to replace.
+  VkDescriptorUpdateTemplateCreateInfo sampled;
+  std::vector<VkDescriptorUpdateTemplateEntry> sampled_entries;
+  const auto* host = info;
+  if (sampled_input_reads() && info->descriptorUpdateEntryCount &&
+      std::any_of(info->pDescriptorUpdateEntries, info->pDescriptorUpdateEntries + info->descriptorUpdateEntryCount,
+                  [](const auto& e) { return e.descriptorType == VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT; })) {
+    sampled_entries.assign(info->pDescriptorUpdateEntries,
+                           info->pDescriptorUpdateEntries + info->descriptorUpdateEntryCount);
+    for (auto& e : sampled_entries) e.descriptorType = sampled_input_type(e.descriptorType);
+    sampled = *info;
+    sampled.pDescriptorUpdateEntries = sampled_entries.data();
+    host = &sampled;
+  }
   auto r =
-      vk<PFN_vkCreateDescriptorUpdateTemplate>(d, "vkCreateDescriptorUpdateTemplate")(d, info, alloc, out);
+      vk<PFN_vkCreateDescriptorUpdateTemplate>(d, "vkCreateDescriptorUpdateTemplate")(d, host, alloc, out);
   if (r == VK_SUCCESS) {
     DescriptorTemplate record;
     if (info->descriptorUpdateEntryCount)
@@ -2632,16 +2674,21 @@ void VKAPI_CALL push_template2(VkCommandBuffer cmd, const VkPushDescriptorSetWit
 void VKAPI_CALL update_template(VkDevice d, VkDescriptorSet set, VkDescriptorUpdateTemplate t,
                                 const void* data) {
   DescriptorTemplate info;
+  bool changed = false;
   {
     std::lock_guard lock(texture_lock);
-    if (companion_views.empty()) {
+    if (companion_views.empty() && !sampled_input_reads()) {
       vk<PFN_vkUpdateDescriptorSetWithTemplate>(d, "vkUpdateDescriptorSetWithTemplate")(d, set, t, data);
       return;
     }
     info = descriptor_templates.at(t);
   }
-  bool changed = false;
+  // Input attachment views may be replaced (sampled_input_view).
+  if (sampled_input_reads())
+    for (const auto& entry : info.entries)
+      changed |= entry.descriptorType == VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT && entry.descriptorCount;
   for (const auto& entry : info.entries) {
+    if (changed) break;
     if (!image_descriptor(entry.descriptorType)) continue;
     for (std::uint32_t i = 0; i < entry.descriptorCount; ++i) {
       VkDescriptorImageInfo image;
@@ -2671,6 +2718,8 @@ void VKAPI_CALL update_template(VkDevice d, VkDescriptorSet set, VkDescriptorUpd
       auto* slot = payload.data() + entry.offset + i * entry.stride;
       VkDescriptorImageInfo image;
       std::memcpy(&image, slot, sizeof(image));
+      if (entry.descriptorType == VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT && sampled_input_reads())
+        image.imageView = sampled_input_view(image.imageView);
       translate_descriptor(d, image);
       std::memcpy(slot, &image, sizeof(image));
     }

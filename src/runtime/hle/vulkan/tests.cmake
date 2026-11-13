@@ -8,7 +8,7 @@ target_sources(venture_tests PRIVATE runtime/deferred_queues_test.cpp runtime/vu
 target_link_libraries(venture_tests PRIVATE venture_vulkan)
 
 target_sources(venture_tests PRIVATE runtime/vulkan_texture_test.cpp)
-target_sources(venture_tests PRIVATE runtime/vulkan_multiview_test.cpp)
+target_sources(venture_tests PRIVATE runtime/vulkan_multiview_test.cpp runtime/vulkan_subpass_inputs_test.cpp)
 target_include_directories(venture_tests PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 foreach(stage vert frag)
   add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/vulkan_multiview.${stage}.inc
@@ -21,6 +21,18 @@ foreach(stage vert frag)
     DEPENDS glslang-standalone runtime/vulkan_multiview.${stage} ${PROJECT_SOURCE_DIR}/tools/codegen/vk_spirv.py
     VERBATIM)
   target_sources(venture_tests PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/vulkan_multiview.${stage}.inc)
+endforeach()
+foreach(env 1.0 1.1)
+  add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/vulkan_subpass_inputs.${env}.inc
+    COMMAND $<TARGET_FILE:glslang-standalone> -V --target-env vulkan${env}
+      ${PROJECT_SOURCE_DIR}/tests/runtime/vulkan_subpass_inputs.frag
+      -o ${CMAKE_CURRENT_BINARY_DIR}/vulkan_subpass_inputs.${env}.spv
+    COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tools/codegen/vk_spirv.py
+      ${CMAKE_CURRENT_BINARY_DIR}/vulkan_subpass_inputs.${env}.spv
+      ${CMAKE_CURRENT_BINARY_DIR}/vulkan_subpass_inputs.${env}.inc
+    DEPENDS glslang-standalone runtime/vulkan_subpass_inputs.frag ${PROJECT_SOURCE_DIR}/tools/codegen/vk_spirv.py
+    VERBATIM)
+  target_sources(venture_tests PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/vulkan_subpass_inputs.${env}.inc)
 endforeach()
 target_link_libraries(venture_tests PRIVATE astcenc-sse2-static)
 if(UNIX)

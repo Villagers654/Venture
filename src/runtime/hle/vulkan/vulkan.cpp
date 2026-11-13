@@ -1073,6 +1073,57 @@ bool same_gpu(VkInstance instance, VkPhysicalDevice physical) {
   return p.vendorID == sp.vendorID && p.deviceID == sp.deviceID &&
          std::memcmp(p.pipelineCacheUUID, sp.pipelineCacheUUID, VK_UUID_SIZE) == 0;
 }
+// Two installed Vulkan drivers can both offer one GPU: an AMD PC with the
+// discrete card's driver and the integrated GPU's driver listed the RX 9070 XT
+// twice with one device UUID, and H3VR2 got no VR session ("selected GPU is
+// ambiguous"). Entries with the shared device's UUID are that one GPU: keep the
+// one with the shared device's driver (driverUUID), else the first. Without
+// device UUIDs (Vulkan 1.0) identical adapters stay ambiguous.
+std::vector<VkPhysicalDevice> same_gpu_one_driver(VkInstance instance, std::vector<VkPhysicalDevice> values) {
+  const auto& shared = gfx::gpu_device();
+  bool ids = false;
+  {
+    std::lock_guard lock(state_lock);
+    if (auto it = instances.find(instance); it != instances.end()) {
+      const auto& extensions = it->second.extensions;
+      ids = it->second.version >= VK_API_VERSION_1_1 ||
+            (extensions.contains("VK_KHR_get_physical_device_properties2") &&
+             (extensions.contains("VK_KHR_external_memory_capabilities") ||
+              extensions.contains("VK_KHR_external_fence_capabilities") ||
+              extensions.contains("VK_KHR_external_semaphore_capabilities")));
+    }
+  }
+  if (!ids || shared.api_version < VK_API_VERSION_1_1) return values;
+  std::uint32_t version = VK_API_VERSION_1_0;
+  {
+    std::lock_guard lock(state_lock);
+    if (auto it = instances.find(instance); it != instances.end()) version = it->second.version;
+  }
+  auto query = reinterpret_cast<PFN_vkGetPhysicalDeviceProperties2>(loader()(
+      instance, version >= VK_API_VERSION_1_1 ? "vkGetPhysicalDeviceProperties2" : "vkGetPhysicalDeviceProperties2KHR"));
+  auto shared_query = reinterpret_cast<PFN_vkGetPhysicalDeviceProperties2>(
+      loader()(shared.instance, "vkGetPhysicalDeviceProperties2"));
+  if (!query || !shared_query) return values;
+  // Images shared with the host device need the same driver (driverUUID).
+  VkPhysicalDeviceIDProperties wanted_id{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES};
+  VkPhysicalDeviceProperties2 wanted{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, &wanted_id};
+  shared_query(shared.physical_device, &wanted);
+  auto chosen = values.front();
+  for (auto p : values) {
+    VkPhysicalDeviceIDProperties id{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES};
+    VkPhysicalDeviceProperties2 candidate{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, &id};
+    query(p, &candidate);
+    if (std::memcmp(id.driverUUID, wanted_id.driverUUID, VK_UUID_SIZE) == 0) {
+      chosen = p;
+      break;
+    }
+  }
+  static std::atomic<bool> logged{false};
+  if (!logged.exchange(true))
+    log::warn("vulkan", "{} Vulkan drivers offer the shared GPU ({}); using the one with the shared device's driver",
+              values.size(), wanted.properties.deviceName);
+  return {chosen};
+}
 VkResult VKAPI_CALL enumerate_physicals(VkInstance instance, std::uint32_t* count, VkPhysicalDevice* out) {
   auto f = host<PFN_vkEnumeratePhysicalDevices>(instance, "vkEnumeratePhysicalDevices");
   std::uint32_t n = 0;
@@ -1083,6 +1134,7 @@ VkResult VKAPI_CALL enumerate_physicals(VkInstance instance, std::uint32_t* coun
   if (r != VK_SUCCESS) return r;
   values.resize(n);
   std::erase_if(values, [&](auto p) { return !same_gpu(instance, p); });
+  if (values.size() > 1 && gfx::gpu_device().physical_device) values = same_gpu_one_driver(instance, std::move(values));
   if (values.size() > 1 && gfx::gpu_device().physical_device) {
     log::error("vulkan", "selected GPU is ambiguous without a unique device UUID");
     if (count) *count = 0;
@@ -1591,6 +1643,7 @@ VkResult create_device_impl(VkPhysicalDevice physical, const VkDeviceCreateInfo*
     }
     try {
       adopt_device(physical, *out, *info, alloc != nullptr, shared_queues);
+      choose_sampled_input_reads(physical, *info);
       {
         std::lock_guard lock(state_lock);
         devices[*out].null_vertex_bindings = null_vertex_bindings;
@@ -1675,6 +1728,7 @@ void release_device_resources(VkDevice device) {
   release_external_device(device);
   release_wsi_device(device);
   release_deferred_free_device(device);
+  release_descriptor_fill_device(device);
   forget_queue_facades(device);
 }
 void VKAPI_CALL destroy_device(VkDevice device, const VkAllocationCallbacks* alloc) {
@@ -2207,6 +2261,7 @@ constexpr std::pair<Layer, PFN_vkVoidFunction (*)(std::string_view)> layer_chain
     {Layer::texture, texture_proc},
     {Layer::pipeline, gfx::pipeline_proc},
     {Layer::deferred_free, deferred_free_proc},
+    {Layer::descriptor_fill, descriptor_fill_proc},
 };
 // Layer functions that run in the JIT: host bookkeeping under a short lock
 // (never across a GPU wait) around the next call, no guest callbacks, no
@@ -2219,6 +2274,8 @@ constexpr std::pair<Layer, std::string_view> jit_layer_functions[] = {
     // Binding a background-created pipeline that is not ready creates it or
     // waits for its worker: CPU work the game's own creation call did before.
     {Layer::pipeline, "vkCmdBindPipeline"},
+    // Writes null descriptors into the new sets: one host update, no waits.
+    {Layer::descriptor_fill, "vkAllocateDescriptorSets"},
 };
 PFN_vkVoidFunction next_proc(Layer self, std::string_view name) {
   for (const auto& [layer, proc] : layer_chain)
@@ -2728,6 +2785,11 @@ std::uint32_t device_api_version(VkDevice device) {
   auto it = devices.find(device);
   if (it == devices.end()) throw std::runtime_error("untracked Vulkan device");
   return it->second.version;
+}
+bool device_null_descriptor(VkDevice device) {
+  std::lock_guard lock(state_lock);
+  auto it = devices.find(device);
+  return it != devices.end() && it->second.null_vertex_bindings;
 }
 std::uint32_t command_null_vertex_bindings(VkCommandBuffer command) {
   std::lock_guard lock(state_lock);

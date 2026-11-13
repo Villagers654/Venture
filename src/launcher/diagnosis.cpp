@@ -37,6 +37,10 @@ constexpr Rule kRules[] = {
      "The game needs a signed-in Meta account that owns it.",
      "Sign in with the account that owns the game, then start it again."},
     // xr/host_xr.cpp host_initialization_error().
+    {{"steamvr does not work with the venture flatpak"},
+     "SteamVR was the OpenXR runtime, and the Venture Flatpak cannot reach SteamVR.",
+     "Use the Venture AppImage, tarball or your distribution's package with SteamVR, or use WiVRn or Monado with "
+     "the Flatpak."},
     {{"your configured openxr runtime is unavailable", "xr_error_runtime_unavailable"},
      "No OpenXR runtime was running, or none is set as the active one.",
      "Start your VR runtime (SteamVR, WiVRn or Monado), make it the active OpenXR runtime, connect the headset, "

@@ -180,6 +180,11 @@ HostXr initialize_host() {
 }
 }
 std::string host_initialization_error(std::int32_t result, const char *operation) {
+  // Flatpak's sandbox cannot reach SteamVR's server, whatever the error says.
+  if (venture::environment::flatpak_steamvr())
+    return "SteamVR does not work with the Venture Flatpak: the Flatpak sandbox cannot reach SteamVR. Use the "
+           "Venture AppImage, tarball or your distribution's package with SteamVR, or use WiVRn or Monado with the "
+           "Flatpak.";
   if (result == XR_ERROR_RUNTIME_UNAVAILABLE)
     return "Your configured OpenXR runtime is unavailable. Make sure your headset and its runtime service are running, then press Play again.";
   // SteamVR answers xrCreateInstance this way while its server is stuck or

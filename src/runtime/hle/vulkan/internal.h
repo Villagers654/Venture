@@ -185,7 +185,22 @@ std::uint32_t command_null_vertex_bindings(VkCommandBuffer command);
 // The pass-through layers between the guest's dispatch and the host, top first.
 // A layer forwards a command it intercepts to the next layer below it that also
 // intercepts it, else to the host, so every layer sees every call it hooks.
-enum class Layer { dispatch, breadcrumbs, render_check, render_area, multiview, hardware_buffer, sync_fd, external, wsi, shader, texture, pipeline, deferred_free };
+enum class Layer { dispatch, breadcrumbs, render_check, render_area, multiview, hardware_buffer, sync_fd, external, wsi, shader, texture, pipeline, deferred_free, descriptor_fill };
+// Whether the device has nullDescriptor enabled (VENTURE_VULKAN_NULL_DESCRIPTORS).
+bool device_null_descriptor(VkDevice device);
+// New descriptor sets start with null descriptors (descriptor_fill.cpp).
+inline constexpr std::uint32_t max_null_fill_count = 256;  // larger arrays (descriptor indexing) stay unwritten
+struct NullFillBinding {
+  std::uint32_t binding = 0;
+  VkDescriptorType type{};
+  std::uint32_t count = 0;
+  bool sampler = false;   // writes the shared default sampler
+  bool variable = false;  // VARIABLE_DESCRIPTOR_COUNT: the allocation gives the count
+};
+// The bindings of a layout that get null descriptors, in binding order.
+std::vector<NullFillBinding> null_fill_plan(const VkDescriptorSetLayoutCreateInfo& info);
+PFN_vkVoidFunction descriptor_fill_proc(std::string_view name);
+void release_descriptor_fill_device(VkDevice device);
 PFN_vkVoidFunction shader_proc(std::string_view name);
 // Empty means no change. Explicit initializers and nonnumeric types stay intact.
 std::vector<std::uint32_t> initialize_shader_locals(std::span<const std::uint32_t> code);
@@ -266,6 +281,20 @@ PFN_vkVoidFunction texture_proc(std::string_view name);
 // Keeps rendering inside every attachment: clamps host framebuffers and render
 // areas to the smallest attachment and dynamic scissors to the render area.
 PFN_vkVoidFunction render_area_proc(std::string_view name);
+// Subpass inputs read as sampled images (input_attachments.cpp): on for AMD's
+// Windows driver, whose multiview subpass inputs read the first view's layer.
+bool sampled_input_reads();
+void set_sampled_input_reads(bool on);  // tests
+bool sampled_input_driver(std::uint32_t driver_id, bool multiview);
+void choose_sampled_input_reads(VkPhysicalDevice physical, const VkDeviceCreateInfo& info);
+// INPUT_ATTACHMENT becomes SAMPLED_IMAGE while sampled_input_reads().
+VkDescriptorType sampled_input_type(VkDescriptorType type);
+// The module with its subpass inputs read as sampled 2D array layers at
+// ViewIndex; empty when it has none or cannot be rewritten.
+std::vector<std::uint32_t> sample_subpass_inputs(std::span<const std::uint32_t> code);
+// The one-layer 2D array view standing in for a 2D view written to an input
+// attachment descriptor (render_area.cpp), else the view itself.
+VkImageView sampled_input_view(VkImageView view);
 // Subpass dependencies a render pass lacks for its attachment accesses and
 // layout transitions between subpasses (subpass_sync.cpp); empty when the
 // guest's own dependencies cover them.

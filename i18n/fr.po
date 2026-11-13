@@ -271,3 +271,12 @@ msgstr "Ne plus masquer"
 #: src/launcher/ui/views.cpp:1230
 msgid "Hide from library"
 msgstr "Masquer de la bibliothèque"
+
+msgid "SteamVR does not work with the Flatpak"
+msgstr "SteamVR ne fonctionne pas avec le Flatpak"
+
+msgid "SteamVR is your OpenXR runtime, and the Flatpak sandbox cannot reach SteamVR, so games will not start. Use the Venture AppImage, tarball or your distribution's package with SteamVR, or use WiVRn or Monado with the Flatpak."
+msgstr "SteamVR est votre runtime OpenXR, et le bac à sable du Flatpak ne peut pas atteindre SteamVR : les jeux ne démarreront pas. Utilisez l'AppImage, l'archive tar ou le paquet de votre distribution de Venture avec SteamVR, ou utilisez WiVRn ou Monado avec le Flatpak."
+
+msgid "OK"
+msgstr "OK"
