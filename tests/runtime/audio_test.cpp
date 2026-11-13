@@ -412,8 +412,14 @@ TEST_CASE(
   CHECK(aa("AAudioStream_write", {s, h2g(samples.data()), 1, 0}) ==
         audio::disconnected);
   CHECK(aa("AAudioStream_close", {s}) == 0);
+  // The game reopens at once, with the endpoint's last properties; the monitor
+  // brings the endpoint back without the game waiting on it (an H3VR2 player's
+  // FMOD reopen waited on a WASAPI open until the game froze).
   auto reopened = open(builder());
+  CHECK(aa("AAudioStream_getFramesPerBurst", {reopened}) > 0);
+  CHECK(aa("AAudioStream_getHardwareSampleRate", {reopened}) == 48000);
   CHECK(aa("AAudioStream_requestStart", {reopened}) == 0);
+  CHECK(until([] { return audio::Backend::get().route(audio::Direction::output).open; }));
   CHECK(aa("AAudioStream_close", {reopened}) == 0);
 }
 TEST_CASE(

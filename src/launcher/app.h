@@ -46,6 +46,7 @@ private:
   uint32_t wake_event_ = 0;
   std::unique_ptr<TextureCache> textures_;
   std::set<std::string> addons_expanded_;      // games showing unowned add-ons
+  bool advanced_confirmed_ = false;            // the troubleshooting dialog is past its warning
   std::optional<std::string> remove_account_;  // pending removal confirmation
   bool remove_saves_ = false;
   // The install dialog: where the game goes (free bytes there), Steam, and "don't ask again".
@@ -100,6 +101,7 @@ private:
   void draw_display_rows(library::DisplaySettings& display, bool per_game, const char* id);
   // A game's texture compression rows (its Settings tab, beside Settings > Runtime's).
   void draw_game_runtime_rows(const std::string& id);
+  void draw_game_advanced(const std::string& id, float width);
   // A Compress textures change that turns compression down from Always (globally,
   // or for a game whose setting was Always), waiting on its warning: applied on
   // "Change anyway", dropped on Cancel.

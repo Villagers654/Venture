@@ -57,6 +57,12 @@ DisplaySettings display_from_json(const Json &j, bool per_game) {
     d.custom_rate = int(hz);
   // A custom size needs one; without, it is the runtime's.
   if (d.resolution == "custom" && !d.width) d.resolution = per_game ? "" : "runtime";
+  // A game's advanced switches; unknown ids and values (other versions) are dropped.
+  if (const auto it = j.find("advanced"); per_game && it != j.end() && it->is_object())
+    for (const auto &[id, value] : it->items())
+      if (value.is_string() && (value == "on" || value == "off") &&
+          std::ranges::any_of(advanced_switches, [&](const auto &a) { return id == a.id; }))
+        d.advanced[id] = value.get<std::string>();
   return d;
 }
 
@@ -67,6 +73,11 @@ Json display_to_json(const DisplaySettings &d) {
   // Only a game's own choice; the global settings keep none here.
   if (!d.texture_compression.empty()) j["textureCompression"] = d.texture_compression;
   if (d.texture_compression_threshold) j["textureCompressionThreshold"] = d.texture_compression_threshold;
+  if (!d.advanced.empty()) {
+    Json advanced = Json::object();
+    for (const auto &[id, value] : d.advanced) advanced[id] = value;
+    j["advanced"] = advanced;
+  }
   if (d.width && d.height) {
     j["width"] = d.width;
     j["height"] = d.height;
@@ -77,6 +88,7 @@ Json display_to_json(const DisplaySettings &d) {
 DisplaySettings effective_display(const DisplaySettings &global, const DisplaySettings *game) {
   auto d = global;
   if (!game) return d;
+  d.advanced = game->advanced;  // per game only
   if (!game->resolution.empty()) {
     d.resolution = game->resolution;
     d.percent = game->percent;
@@ -175,5 +187,12 @@ std::pair<int, int> fit_eye_size(double width, double height, int max_width, int
 std::pair<int, int> percent_size(const HostDisplay &host, int percent) {
   const double k = std::sqrt(percent / 100.0);
   return fit_eye_size(host.width * k, host.height * k, host.max_width, host.max_height);
+}
+std::vector<std::pair<std::string, std::string>> advanced_environment(const DisplaySettings &d) {
+  std::vector<std::pair<std::string, std::string>> out;
+  for (const auto &a : advanced_switches)
+    if (const auto it = d.advanced.find(a.id); it != d.advanced.end())
+      out.emplace_back(a.variable, it->second == "on" ? a.on : a.off);
+  return out;
 }
 } // namespace venture::library

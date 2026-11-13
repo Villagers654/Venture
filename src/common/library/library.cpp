@@ -923,6 +923,8 @@ std::vector<std::pair<std::string, std::string>> launch_environment(const Settin
   environment.push_back({"VENTURE_PC_AUDIO", pc_audio_environment(display)});
   // Games that multiply the eye size they are told render at the resolution above.
   environment.push_back({"VENTURE_EYE_SCALE", eye_scale_environment(display)});
+  // A game's advanced switches, only those it changed.
+  for (auto &variable : advanced_environment(display)) environment.push_back(std::move(variable));
   return environment;
 }
 } // namespace venture::library

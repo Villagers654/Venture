@@ -1220,7 +1220,7 @@ XrResult m_xrGetVulkanDeviceExtensionsKHR(XrInstance, XrSystemId, std::uint32_t 
                                           std::uint32_t *count, char *out) {
   return legacy_vulkan_extensions("VENTURE_MOCK_VULKAN_DEVICE_EXTENSIONS", cap, count, out);
 }
-std::set<VkInstance> created_instances;
+std::set<VkInstance> created_instances, spoiled_instances;
 XrResult m_xrCreateVulkanInstanceKHR(XrInstance, const XrVulkanInstanceCreateInfoKHR *info,
                                      VkInstance *out, VkResult *result) {
   auto create = reinterpret_cast<PFN_vkCreateInstance>(
@@ -1229,6 +1229,7 @@ XrResult m_xrCreateVulkanInstanceKHR(XrInstance, const XrVulkanInstanceCreateInf
   if (*result == VK_SUCCESS) {
     vulkan_instance = *out;
     created_instances.insert(*out);
+    spoiled_instances.erase(*out);
   }
   return XR_SUCCESS;
 }
@@ -1257,11 +1258,16 @@ XrResult m_xrGetVulkanGraphicsDevice2KHR(XrInstance, const XrVulkanGraphicsDevic
   // The Oculus runtime enforces this with XR_ERROR_RUNTIME_FAILURE.
   if (!created_instances.contains(info->vulkanInstance)) return XR_ERROR_RUNTIME_FAILURE;
   if (info->vulkanInstance == script.refused_vulkan_instance) return XR_ERROR_RUNTIME_FAILURE;
+  if (spoiled_instances.contains(info->vulkanInstance)) return XR_ERROR_RUNTIME_FAILURE;
   return graphics_device(info->vulkanInstance, out);
 }
 XrResult m_xrGetVulkanGraphicsDeviceKHR(XrInstance, XrSystemId, VkInstance v, VkPhysicalDevice *out) {
   if (script.refuse_app_vulkan_instances && !created_instances.contains(v)) return XR_ERROR_RUNTIME_FAILURE;
   if (v == script.refused_vulkan_instance) return XR_ERROR_RUNTIME_FAILURE;
+  if (script.enable1_spoils_runtime_instances && created_instances.contains(v)) {
+    spoiled_instances.insert(v);
+    return XR_ERROR_RUNTIME_FAILURE;
+  }
   return graphics_device(v, out);  // XR_KHR_vulkan_enable: application-created instances
 }
 XrResult m_xrCreateVulkanDeviceKHR(XrInstance, const XrVulkanDeviceCreateInfoKHR *info,

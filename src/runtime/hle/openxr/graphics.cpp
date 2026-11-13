@@ -988,8 +988,8 @@ XrResult xrGetVulkanGraphicsDevice2KHR(XrInstance i, const XrVulkanGraphicsDevic
     return XR_ERROR_HANDLE_INVALID;
   if (!out || XR_FAILED(validate_struct(info, XR_TYPE_VULKAN_GRAPHICS_DEVICE_GET_INFO_KHR)))
     return XR_ERROR_VALIDATION_FAILURE;
-  // Guest instances are created by the game or by Venture, not by the host's
-  // xrCreateVulkanInstanceKHR, so even enable2 games query through enable.
+  // A game's own instance is asked through enable; one the host made through
+  // xrCreateVulkanInstanceKHR through enable2 first (host_graphics_device).
   auto result = venture::xr::host_graphics_device(info->systemId, info->vulkanInstance, out);
   if (XR_FAILED(result)) {
     // The host runtime already chose the GPU for Venture's shared device. Some
@@ -1070,8 +1070,11 @@ XrResult xrCreateVulkanInstanceKHR(XrInstance i, const XrVulkanInstanceCreateInf
   copy.vulkanCreateInfo = &vk;
   vulkan::XrResolverScope resolver(reinterpret_cast<GuestAddr>(info->pfnGetInstanceProcAddr));
   copy.pfnGetInstanceProcAddr = vulkan::XrResolverScope::proc;
-  return host_call<PFN_xrCreateVulkanInstanceKHR, "xrCreateVulkanInstanceKHR">(i, &copy, out,
-                                                  vk_result);
+  const auto result = host_call<PFN_xrCreateVulkanInstanceKHR, "xrCreateVulkanInstanceKHR">(i, &copy, out,
+                                                                                         vk_result);
+  if (XR_SUCCEEDED(result) && *vk_result == VK_SUCCESS)
+    venture::xr::note_runtime_created_instance(*out);
+  return result;
 }
 XrResult xrCreateVulkanDeviceKHR(XrInstance i, const XrVulkanDeviceCreateInfoKHR *info,
                                  VkDevice *out, VkResult *vk_result) {
