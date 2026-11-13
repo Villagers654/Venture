@@ -8,8 +8,9 @@
 #include <vector>
 
 // A Quest (or any Android device) reached through Android platform-tools adb,
-// over USB or Wi-Fi debugging. Read-only: apps are listed and their files
-// pulled; nothing on the device is changed.
+// over USB or Wi-Fi debugging. Apps are listed and their files pulled; only
+// a save export (saves::export_headset) writes to the device, through push and
+// shell.
 namespace venture::android::adb {
 struct Device {
   std::string serial, state, model;  // state as adb reports it: device, unauthorized, offline...
@@ -62,12 +63,17 @@ public:
   // adb connect for Wi-Fi debugging ("host" or "host:port"); returns the
   // serial adb lists the headset under, throws with adb's reason.
   std::string connect(std::string_view address, std::stop_token stop = {}) const;
+  // Copies a local file or folder to `remote`, an absolute path on the device
+  // that does not exist yet; throws with adb's reason.
+  void push(const fs::path &local, std::string_view remote, std::stop_token stop = {}) const;
+  // Runs `command` in the device's shell and returns what it printed; throws
+  // when it exits non-zero.
+  std::string shell(const std::string &command, std::stop_token stop) const;
   const std::string &serial() const { return serial_; }
 
 private:
   fs::path adb_;
   std::string serial_;
-  std::string shell(const std::string &command, std::stop_token stop) const;
   std::vector<std::string> base() const;
   std::vector<App> files(const std::vector<std::pair<std::string, std::int64_t>> &packages,
                          std::stop_token stop) const;

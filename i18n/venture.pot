@@ -59,6 +59,9 @@ msgid ""
 "  import-saves GAME --from FOLDER | --headset [--serial SERIAL]\n"
 "                                 Import an installed game's save data (the save\n"
 "                                 data it replaces is kept in a backup)\n"
+"  export-saves GAME [--serial SERIAL]\n"
+"                                 Send an installed game's save data to a Quest\n"
+"                                 over adb (the headset's saves are backed up first)\n"
 "\n"
 "Accounts\n"
 "  accounts                       Signed-in Meta accounts\n"
@@ -88,27 +91,27 @@ msgid ""
 "game's own exit code.\n"
 msgstr ""
 
-#: src/launcher/cli.cpp:149
+#: src/launcher/cli.cpp:152
 #, python-brace-format
 msgid "{0} needs a value."
 msgstr ""
 
-#: src/launcher/cli.cpp:154
+#: src/launcher/cli.cpp:157
 #, python-brace-format
 msgid "Unknown option {0}."
 msgstr ""
 
-#: src/launcher/cli.cpp:1380
+#: src/launcher/cli.cpp:1398
 #, python-brace-format
 msgid "Unknown command \"{0}\"."
 msgstr ""
 
-#: src/launcher/cli.cpp:1410
-#: src/launcher/cli.cpp:1443
+#: src/launcher/cli.cpp:1428
+#: src/launcher/cli.cpp:1461
 msgid "error: "
 msgstr ""
 
-#: src/launcher/cli.cpp:1443
+#: src/launcher/cli.cpp:1461
 msgid "See: venture-cli --help"
 msgstr ""
 
@@ -314,80 +317,80 @@ msgstr ""
 msgid "On"
 msgstr ""
 
-#: src/launcher/ui/views.cpp:3395
+#: src/launcher/ui/views.cpp:3403
 #, python-brace-format
 msgid "Uninstall {0}?"
 msgstr ""
 
-#: src/launcher/ui/views.cpp:3395
+#: src/launcher/ui/views.cpp:3403
 msgid "Uninstall this game?"
 msgstr ""
 
-#: src/launcher/ui/views.cpp:3396
+#: src/launcher/ui/views.cpp:3404
 msgid "Its files are removed from this PC. Saves are kept, and you can install it again from your library."
 msgstr ""
 
-#: src/launcher/ui/views.cpp:3397
-#: src/launcher/ui/views.cpp:3419
-#: src/launcher/ui/views.cpp:3528
-#: src/launcher/ui/views.cpp:3529
+#: src/launcher/ui/views.cpp:3405
+#: src/launcher/ui/views.cpp:3427
+#: src/launcher/ui/views.cpp:3536
+#: src/launcher/ui/views.cpp:3537
 msgid "Cancel"
 msgstr ""
 
-#: src/launcher/ui/views.cpp:3397
+#: src/launcher/ui/views.cpp:3405
 msgid "Uninstall"
 msgstr ""
 
 #. Warning when Compress textures changes from Always to Automatic or Off.
-#: src/launcher/ui/views.cpp:3415
+#: src/launcher/ui/views.cpp:3423
 msgid "Disable texture compression?"
 msgstr ""
 
-#: src/launcher/ui/views.cpp:3416
+#: src/launcher/ui/views.cpp:3424
 msgid "This can increase video memory use by up to 4 times. It isn't recommended on GPUs with less than 20 GB of video memory."
 msgstr ""
 
-#: src/launcher/ui/views.cpp:3419
+#: src/launcher/ui/views.cpp:3427
 msgid "Change anyway"
 msgstr ""
 
 #. Shown at start in the Linux Flatpak when SteamVR is the active OpenXR runtime.
-#: src/launcher/ui/views.cpp:3442
+#: src/launcher/ui/views.cpp:3450
 msgid "SteamVR does not work with the Flatpak"
 msgstr ""
 
-#: src/launcher/ui/views.cpp:3443
+#: src/launcher/ui/views.cpp:3451
 msgid "SteamVR is your OpenXR runtime, and the Flatpak sandbox cannot reach SteamVR, so games will not start. Use the Venture AppImage, tarball or your distribution's package with SteamVR, or use WiVRn or Monado with the Flatpak."
 msgstr ""
 
-#: src/launcher/ui/views.cpp:3446
+#: src/launcher/ui/views.cpp:3454
 msgid "OK"
 msgstr ""
 
-#: src/launcher/ui/views.cpp:3498
+#: src/launcher/ui/views.cpp:3506
 msgid "Link to store page"
 msgstr ""
 
 #. {0} is an Android package name such as com.studio.game.
-#: src/launcher/ui/views.cpp:3500
+#: src/launcher/ui/views.cpp:3508
 #, python-brace-format
 msgid "Paste the game's Meta store link or its ID. Its name, description and art then come from the store. The store page must be for {0}."
 msgstr ""
 
-#: src/launcher/ui/views.cpp:3513
+#: src/launcher/ui/views.cpp:3521
 msgid "Checking the store page…"
 msgstr ""
 
 #. {0} is a game's store name, {1} and {2} Android package names.
-#: src/launcher/ui/views.cpp:3519
+#: src/launcher/ui/views.cpp:3527
 #, python-brace-format
 msgid "This store page is for {0} ({1}), not {2}. Link it anyway only for a modified build or another edition of the same game."
 msgstr ""
 
-#: src/launcher/ui/views.cpp:3528
+#: src/launcher/ui/views.cpp:3536
 msgid "Link anyway"
 msgstr ""
 
-#: src/launcher/ui/views.cpp:3529
+#: src/launcher/ui/views.cpp:3537
 msgid "Link"
 msgstr ""

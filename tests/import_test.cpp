@@ -734,4 +734,70 @@ TEST_CASE("a headset save import skips a file the headset will not send") {
   CHECK(n.files == 1);
   CHECK(n.skipped == 1);
 }
+TEST_CASE("a save export backs up the headset's saves and replaces the folders it sends") {
+  Directory d;
+  const std::string package = "com.example.game";
+  const auto device = d.root / "device", headset = device / "sdcard/Android/data" / package;
+  auto text = [](const fs::path &file) {
+    std::ifstream in(file, std::ios::binary);
+    return std::string((std::istreambuf_iterator<char>(in)), {});
+  };
+  write(headset / "files/save.dat", "quest");
+  write(headset / "files/old.dat", "stale");
+  write(headset / "files/.fbns/Mqtt.store", "sdk");
+  write(headset / "other/keep.dat", "kept");
+  const auto game = d.root / "data/data/users/local" / package / "external-data";
+  write(game / "files/save.dat", "venture");
+  write(game / "files/slot2.dat", "slot");
+  write(game / "files/.fbns/Mqtt.store", "pc");
+  // Runtime state that is not the game's saves.
+  write(game / "files/il2cpp/Metadata/global-metadata.dat", "meta");
+  write(game / "files/cloud/data/blob", "cloud");
+  write(game / ("files/main.1." + package + ".obb"), "obb");
+  write(game / "cache/x", "cache");
+  // A stand-in adb whose /sdcard and /data/local/tmp are folders here; the
+  // headset will not send the SDK cache, as in the import test above.
+  const auto adb = d.root / "adb";
+  write(adb,
+        "#!/bin/sh\n"
+        "D='" + paths::utf8(device) + "'\n"
+        "map() { printf %s \"$1\" | sed \"s#/sdcard#$D/sdcard#g; s#/data/local/tmp#$D/tmp#g\"; }\n"
+        "[ \"$1\" = -s ] && shift 2\n"
+        "case \"$1\" in\n"
+        "shell) case \"$2\" in\n"
+        "  pm\\ list*) printf 'package:" + package + " versionCode:12\\n' ;;\n"
+        "  echo\\ @*) printf '@" + package + "\\n9 /data/app/x/base.apk\\n'\n"
+        "     find \"$D/sdcard/Android/data/" + package + "\" -type f -exec stat -c '%s %n' {} + | sed \"s#$D##\" ;;\n"
+        "  stat\\ -c\\ %s*) echo 'Permission denied' >&2; exit 1 ;;\n"
+        "  *) sh -c \"am() { :; }; $(map \"$2\")\" ;;\n"
+        "  esac ;;\n"
+        "exec-out) case \"$2\" in *Mqtt*) exit 1 ;; *) sh -c \"$(map \"$2\")\" ;; esac ;;\n"
+        "push) to=$(map \"$3\"); cp -r \"$2\" \"$to\" || exit 1\n"
+        "  case \"$3\" in *.remove) sed -i \"s#/sdcard#$D/sdcard#g\" \"$to\" ;; esac ;;\n"
+        "esac\n");
+  fs::permissions(adb, fs::perms::owner_all);
+  const auto n = saves::export_headset(d.root / "data", "local", package, android::adb::Client(adb, "SERIAL1"));
+  CHECK(n.files == 2);
+  CHECK(n.kept == 1);
+  CHECK(text(headset / "files/save.dat") == "venture");
+  CHECK(text(headset / "files/slot2.dat") == "slot");
+  CHECK_FALSE(fs::exists(headset / "files/old.dat"));  // files/ was replaced whole...
+  CHECK(text(headset / "files/.fbns/Mqtt.store") == "sdk");  // ...but for what had no backup
+  CHECK(text(headset / "other/keep.dat") == "kept");
+  CHECK_FALSE(fs::exists(headset / "files/il2cpp"));
+  CHECK_FALSE(fs::exists(headset / "files/cloud"));
+  CHECK_FALSE(fs::exists(headset / ("files/main.1." + package + ".obb")));
+  CHECK_FALSE(fs::exists(headset / "cache"));
+  CHECK(fs::is_empty(device / "tmp/venture-saves"));
+  REQUIRE(!n.backup.empty());
+  CHECK(n.backup.parent_path() == saves::backups_dir(d.root / "data", "local", package));
+  CHECK(text(n.backup / "headset-Android-data/files/save.dat") == "quest");
+  CHECK(text(n.backup / "headset-Android-data/files/old.dat") == "stale");
+  CHECK(text(game / "files/save.dat") == "venture");  // Venture's copy is untouched
+  CHECK(fs::exists(game / "files/il2cpp/Metadata/global-metadata.dat"));
+  // Nothing to send fails before the headset changes.
+  fs::remove_all(game);
+  CHECK_THROWS(saves::export_headset(d.root / "data", "local", package, android::adb::Client(adb, "SERIAL1")));
+  CHECK(text(headset / "files/save.dat") == "venture");
+}
 #endif

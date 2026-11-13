@@ -1527,18 +1527,61 @@ Core::SaveImport Core::import_saves(std::string_view app_id, const fs::path &fol
   const auto adb = adb_path();
   if (adb.empty()) throw std::runtime_error("adb was not found. Install Android platform-tools, or set adb's location in Settings.");
   return [data = data_, key, package, adb, serial, lock](std::stop_token stop) {
-    auto chosen = serial;
-    if (chosen.empty()) {
-      auto devices = android::adb::Client(adb).devices(stop);
-      auto ready = std::ranges::find_if(devices, &android::adb::Device::ready);
-      if (ready == devices.end())
-        throw std::runtime_error(devices.empty() ? "No headset found. Connect it with a USB cable (or turn on Wi-Fi "
-                                                   "debugging) and enable developer mode in the Meta Horizon app."
-                                                 : android::adb::state_message(devices.front()));
-      chosen = ready->serial;
-    }
-    return saves::import_headset(data, key, package, android::adb::Client(adb, chosen), stop);
+    return saves::import_headset(data, key, package, headset(adb, serial, stop), stop);
   };
+}
+android::adb::Client Core::headset(const fs::path &adb, std::string serial, std::stop_token stop) {
+  if (serial.empty()) {
+    auto devices = android::adb::Client(adb).devices(stop);
+    auto ready = std::ranges::find_if(devices, &android::adb::Device::ready);
+    if (ready == devices.end())
+      throw std::runtime_error(devices.empty() ? "No headset found. Connect it with a USB cable (or turn on Wi-Fi "
+                                                 "debugging) and enable developer mode in the Meta Horizon app."
+                                               : android::adb::state_message(devices.front()));
+    serial = ready->serial;
+  }
+  return android::adb::Client(adb, std::move(serial));
+}
+Core::SaveExport Core::export_saves(std::string_view app_id, std::string serial) {
+  auto current = installed(app_id, false);
+  if (!current) throw std::runtime_error("Install this game before sending its save data.");
+  if (current->plan.pinned) throw std::runtime_error("Save data exports come from the game's own install.");
+  const auto package = current->plan.package;
+  auto running = running_.find(std::string(app_id));
+  if (running != running_.end() && !running->second.exit)
+    throw std::runtime_error("Close this game before sending its save data.");
+  // Keeps the game from starting (and changing its saves) while they are sent.
+  auto lock = std::make_shared<FileLock>(data_ / "locks" / ("game-" + package + ".lock"), false);
+  auto key = launch_choice(app_id, play_key(app_id)).account_key;
+  if (key.empty()) key = "local";
+  const auto adb = adb_path();
+  if (adb.empty()) throw std::runtime_error("adb was not found. Install Android platform-tools, or set adb's location in Settings.");
+  return [data = data_, key, package, adb, serial, lock](std::stop_token stop) {
+    return saves::export_headset(data, key, package, headset(adb, serial, stop), stop);
+  };
+}
+void Core::export_saves_later(std::string_view app_id) {
+  auto task = export_saves(app_id);
+  notice_ = "Sending save data to the headset...";
+  import_worker_->submit([this, task = std::move(task)](std::stop_token stop) -> Worker::Completion {
+    std::string message;
+    bool sent = false;
+    try {
+      auto n = task(stop);
+      message = std::format("Sent {} save file{} to the headset.{}{}", n.files, n.files == 1 ? "" : "s",
+                            n.kept ? std::format(" {} {} the headset would not back up {} left unchanged (see the log).",
+                                                 n.kept, n.kept == 1 ? "file" : "files", n.kept == 1 ? "was" : "were")
+                                   : "",
+                            n.backup.empty() ? "" : " The headset's previous saves are kept in a backup.");
+      sent = true;
+    } catch (...) {
+      message = exception_text();
+    }
+    return [this, message, sent] {
+      if (sent) notice_ = message;
+      else error(message);
+    };
+  });
 }
 void Core::import_saves_later(std::string_view app_id, const fs::path &folder) {
   auto task = import_saves(app_id, folder);

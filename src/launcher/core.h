@@ -327,6 +327,13 @@ protected:
   SaveImport import_saves(std::string_view app_id, const fs::path &folder, std::string serial = {});
   // The same on the import thread; a notice reports the result.
   void import_saves_later(std::string_view app_id, const fs::path &folder);
+  // Sends an installed game's saves for the account it plays as back to a
+  // headset over adb (saves::export_headset), with import_saves' checks.
+  using SaveExport = std::function<saves::Exported(std::stop_token)>;
+  SaveExport export_saves(std::string_view app_id, std::string serial = {});
+  void export_saves_later(std::string_view app_id);
+  // `serial`, or with none the first ready headset; throws saying why none is.
+  static android::adb::Client headset(const fs::path &adb, std::string serial, std::stop_token stop);
   // Saves settings and rescans the library folders they name.
   void apply_settings(library::Settings next, bool announce = true);
   void save_library();

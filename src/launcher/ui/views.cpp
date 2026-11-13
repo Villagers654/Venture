@@ -3045,13 +3045,15 @@ void App::draw_import() {
       int index = current == games.end() ? 0 : int(current - games.begin());
       std::vector<const char*> names;
       for (const auto& g : games) names.push_back(g.name.c_str());
-      float fw = row_button_w("From a folder", icons::folder), hw = row_button_w("From headset", icons::download);
+      float fw = row_button_w("From a folder", icons::folder), hw = row_button_w("From headset", icons::download),
+            tw = row_button_w("To headset", icons::save);
       ImVec2 row = ImGui::GetCursorPos();
       ImGui::SetCursorPos(row);
-      dropdown("save-game", "", names.data(), int(names.size()), &index, std::min(s(360), inner - fw - hw - s(20)));
+      dropdown("save-game", "", names.data(), int(names.size()), &index,
+               std::min(s(360), inner - fw - hw - tw - s(30)));
       save_game_ = games[index].id;
       const bool running = running_.contains(save_game_) && running_[save_game_].process.active();
-      ImGui::SetCursorPos({row.x + inner - fw - hw - s(10), row.y});
+      ImGui::SetCursorPos({row.x + inner - fw - hw - tw - s(20), row.y});
       constexpr auto replaces = "Replaces the game's saves in Venture; the current ones are kept in a backup.";
       if (button("From a folder##saves-page", icons::folder, Tone::secondary, {fw, s(kControlH)}, !running))
         choose_save_folder(save_game_);
@@ -3062,6 +3064,12 @@ void App::draw_import() {
         action([id = save_game_, this] { import_saves_later(id, {}); });
       if (ImGui::IsItemHovered())
         tooltip(replaces);
+      ImGui::SameLine(0, s(10));
+      if (button("To headset##saves-page", icons::save, Tone::secondary, {tw, s(kControlH)}, !running))
+        action([id = save_game_, this] { export_saves_later(id); });
+      if (ImGui::IsItemHovered())
+        tooltip("Replaces the game's saves on the headset and closes it there; the headset's current saves are "
+                "kept in a backup on this computer.");
       ImGui::SetCursorPos({row.x, row.y + s(kControlH)});
       ImGui::Dummy({inner, 0});
     }
