@@ -2144,8 +2144,10 @@ void Core::tick() {
         error(event->value);
       }
     }
+    // The window a failed WebView2 start closes is not a cancel once the sign-in
+    // moved to the browser (Windows sends closed right after the error).
     if (event->kind == AuthBrowser::Kind::closed && signing_in_ &&
-        !verifying_) {
+        !verifying_ && !auth_manual_) {
       ++epoch_;
       signing_in_ = false;
       auth_.reset();

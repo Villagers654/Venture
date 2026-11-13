@@ -194,6 +194,7 @@ void GuestThread::attach_locked() {
   if (cpu_->isa() == GuestIsa::a32 && !mutex_owner_index_)
     mutex_owner_index_ = acquire_mutex_owner_index();
   platform::bind_thread_priority(tid_);
+  if (!r.name.empty()) platform::name_native_thread(tid_, r.name);  // named before it ran
   r.previous = current_thread;
   current_thread = this;
   live_threads.emplace(tid_, this);
@@ -745,6 +746,7 @@ int set_name(GuestAddr handle, const char* name) {
   RegistryLock lock(registry_mutex);
   for (auto& [thread, r] : resources) if (handle && thread->pthread_self == handle) {
     r.name = name; frame_cpu::name(thread->tid(), name); profile::set_thread_name(thread->tid(), name);
+    platform::name_native_thread(thread->tid(), name);
     if (thread == current_thread && thread->has_cpu()) thread->cpu().set_thread_name(name); // Owner only.
     return 0;
   }

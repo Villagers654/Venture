@@ -8,6 +8,7 @@
 #include <map>
 #include <mutex>
 #include <stdexcept>
+#include <string>
 
 namespace venture::platform {
 void lower_background_thread_priority() {
@@ -119,6 +120,19 @@ int get_audio_thread_scheduler(std::int32_t tid, int* policy, int* priority) {
   *policy = it->second->fifo ? 1 : 0;
   *priority = it->second->fifo;
   return 0;
+}
+void name_native_thread(std::int32_t tid, std::string_view name) {
+  using SetDescription = HRESULT(WINAPI*)(HANDLE, PCWSTR);
+  static const auto set_description = reinterpret_cast<SetDescription>(
+      reinterpret_cast<void*>(GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "SetThreadDescription")));
+  if (!set_description || name.empty()) return;
+  std::wstring wide(name.size(), L'\0');
+  const int length = MultiByteToWideChar(CP_UTF8, 0, name.data(), int(name.size()), wide.data(), int(wide.size()));
+  if (length <= 0) return;
+  wide.resize(std::size_t(length));
+  auto& state = threads();
+  std::lock_guard lock(state.mutex);
+  if (auto it = state.handles.find(tid); it != state.handles.end()) set_description(it->second->handle, wide.c_str());
 }
 void bind_thread_priority(std::int32_t tid) {
   HANDLE handle{};

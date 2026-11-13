@@ -31,4 +31,6 @@ void on_pressure(const char* name, std::function<std::uint64_t(Level)> release);
 // GPU memory in use and the driver's budget in bytes; false when unknown. One
 // source; the Vulkan layer sets it once a device exists.
 void set_gpu_probe(std::function<bool(std::uint64_t& usage, std::uint64_t& budget)> probe);
+// Reads that source now; false before a device exists or when unknown.
+bool gpu_memory(std::uint64_t& usage, std::uint64_t& budget);
 }  // namespace venture::memory_pressure

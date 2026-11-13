@@ -10,6 +10,7 @@
 #include "common/environment.h"
 #include "core/profile.h"
 #include "core/pipeline_stats.h"
+#include "core/session_timeline.h"
 #include "core/thread.h"
 #include "core/wait.h"
 #include "gfx/gpu_device.h"
@@ -932,7 +933,12 @@ XrResult Session::end(const XrFrameEndInfo *info, std::shared_ptr<const void> ow
   if (XR_SUCCEEDED(result) && lead_active() && !async) request_host_wait();
   if (XR_SUCCEEDED(result)) {
     ++frame_index;
-    hitches.submitted(monotonic_ns(), display_timing.period.load());
+    {
+      const auto now = monotonic_ns();
+      const auto period = display_timing.period.load();
+      hitches.submitted(now, period);
+      session_timeline::frame_submitted(now, period);
+    }
     vulkan::timing_end_frame(info->displayTime, guest_swap_interval, display_timing.rate());
     if (frame_index == 1) { profile::mark("first_frame_submission"); startup_diagnostics::arm(); }
     startup_diagnostics::note_frame_submitted();

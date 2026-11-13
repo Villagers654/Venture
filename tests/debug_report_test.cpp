@@ -206,3 +206,41 @@ TEST_CASE("debug report: the game's overrides, effective settings and launch env
   CHECK(text.find("Game overrides: (game not identified; the global settings apply)") != std::string::npos);
   fs::remove_all(data);
 }
+
+TEST_CASE("debug report: the session timeline comes from the whole runtime log") {
+  const auto data = fs::temp_directory_path() / ("venture-report-timeline-" + std::to_string(current_process_id()));
+  fs::remove_all(data);
+  fs::create_directories(data / "logs");
+  const auto log = data / "logs" / "runtime-com.example.game.log";
+  const auto report = [&] {
+    auto file = write_debug_report({.data = data, .version = "9.9.9", .package = "com.example.game"});
+    std::ifstream in(file, std::ios::binary);
+    return std::string{std::istreambuf_iterator<char>(in), {}};
+  };
+  {
+    std::ofstream out(log, std::ios::binary);
+    out << "  1.000 1 I [launch] Process started\n";
+    // The log's middle, which the runtime log section cuts, holds the timeline.
+    for (int minute = 1; minute <= 200; ++minute) {
+      out << std::format("{:7}.000 9 I [timeline] t={}m fps={} worst_frame_ms=9.0 long_frames=0\n", minute * 60,
+                         minute, minute < 30 ? 120 : 90);
+      for (int i = 0; i < 400; ++i) out << std::format("{:7}.500 3 I [game] filler line {}\n", minute * 60, i);
+    }
+  }
+  auto text = report();
+  CHECK(text.find("=== Session timeline (200 minutes, 120 shown) ===") != std::string::npos);
+  CHECK(text.find("[timeline] t=1m fps=120") != std::string::npos);
+  CHECK(text.find("[timeline] t=200m fps=90") != std::string::npos);
+  auto section = text.substr(text.find("=== Session timeline"));
+  section = section.substr(0, section.find("\n===", 4));
+  std::size_t lines = 0;
+  for (std::size_t at = 0; (at = section.find(" [timeline] ", at)) != std::string::npos; ++at) ++lines;
+  CHECK(lines == 120);
+
+  std::ofstream(log, std::ios::binary) << "  1.000 1 I [launch] Process started\n"
+                                          "     60.000 9 I [timeline] t=1m fps=72.0\n";
+  text = report();
+  CHECK(text.find("=== Session timeline (1 minutes) ===\n     60.000 9 I [timeline] t=1m fps=72.0\n") !=
+        std::string::npos);
+  fs::remove_all(data);
+}
