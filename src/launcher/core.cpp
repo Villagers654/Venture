@@ -1504,6 +1504,16 @@ void Core::uninstall_addon(std::string_view app, std::string_view sku) {
                               sku);
   rescan();
 }
+// The game's lock, held while its saves are imported or sent; another import or
+// export, or the game running from another launcher, holds it already.
+static std::shared_ptr<FileLock> save_lock(const fs::path &data, const std::string &package) {
+  try {
+    return std::make_shared<FileLock>(data / "locks" / ("game-" + package + ".lock"), false);
+  } catch (...) {
+    throw std::runtime_error("This game's saves are in use: another save import or export is still running, "
+                             "or the game is open in another Venture window.");
+  }
+}
 Core::SaveImport Core::import_saves(std::string_view app_id, const fs::path &folder, std::string serial) {
   auto current = installed(app_id, false);
   if (!current) throw std::runtime_error("Install this game before importing its save data.");
@@ -1513,7 +1523,7 @@ Core::SaveImport Core::import_saves(std::string_view app_id, const fs::path &fol
   if (running != running_.end() && !running->second.exit)
     throw std::runtime_error("Close this game before importing its save data.");
   // Also keeps the game from starting until the import is done.
-  auto lock = std::make_shared<FileLock>(data_ / "locks" / ("game-" + package + ".lock"), false);
+  auto lock = save_lock(data_, package);
   auto key = launch_choice(app_id, play_key(app_id)).account_key;
   if (key.empty()) key = "local";
   if (!folder.empty())
@@ -1551,7 +1561,7 @@ Core::SaveExport Core::export_saves(std::string_view app_id, std::string serial)
   if (running != running_.end() && !running->second.exit)
     throw std::runtime_error("Close this game before sending its save data.");
   // Keeps the game from starting (and changing its saves) while they are sent.
-  auto lock = std::make_shared<FileLock>(data_ / "locks" / ("game-" + package + ".lock"), false);
+  auto lock = save_lock(data_, package);
   auto key = launch_choice(app_id, play_key(app_id)).account_key;
   if (key.empty()) key = "local";
   const auto adb = adb_path();
@@ -1568,11 +1578,16 @@ void Core::export_saves_later(std::string_view app_id) {
     bool sent = false;
     try {
       auto n = task(stop);
-      message = std::format("Sent {} save file{} to the headset.{}{}", n.files, n.files == 1 ? "" : "s",
+      message = std::format("Sent {} save file{} to the headset.{}{}{}{}", n.files, n.files == 1 ? "" : "s",
                             n.kept ? std::format(" {} {} the headset would not back up {} left unchanged (see the log).",
                                                  n.kept, n.kept == 1 ? "file" : "files", n.kept == 1 ? "was" : "were")
                                    : "",
-                            n.backup.empty() ? "" : " The headset's previous saves are kept in a backup.");
+                            n.removed ? std::format(" Removed {} {} from the headset that Venture's copy doesn't have.",
+                                                    n.removed, n.removed == 1 ? "file" : "files")
+                                      : "",
+                            n.backup.empty() ? "" : " The headset's previous saves are kept in a backup.",
+                            n.has_private ? " This game also keeps saves in private storage, which can't be sent over USB."
+                                          : "");
       sent = true;
     } catch (...) {
       message = exception_text();

@@ -170,6 +170,9 @@ private:
   std::vector<std::pair<std::string, fs::path>> save_picks_;
   void choose_save_folder(const std::string &app_id);
   void draw_save_import();
+  // Export save data: confirm before sending to headset.
+  std::string save_export_target_;
+  void draw_save_export();
   // Link to store page...: the import whose dialog is open and the pasted link.
   std::string store_link_target_, store_link_text_;
   void draw_store_link();

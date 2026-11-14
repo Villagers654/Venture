@@ -211,7 +211,8 @@ Imported import_headset(const fs::path &data, std::string_view key, std::string_
 
 Exported export_headset(const fs::path &data, std::string_view key, std::string_view package,
                         const android::adb::Client &client, std::stop_token stop) {
-  const auto from = account_data_dir(data, key, package) / "external-data";
+  const auto game_root = account_data_dir(data, key, package);
+  const auto from = game_root / "external-data";
   const auto backups = backups_dir(data, key, package);
   const auto app = client.app(package, stop);
   if (!app) throw std::runtime_error("This game is not installed on the headset.");
@@ -270,8 +271,12 @@ Exported export_headset(const fs::path &data, std::string_view key, std::string_
         sent.insert(file);
       }
     }
+    // adb cannot write private storage, so its saves stay as the headset has them.
+    n.has_private = private_storage(game_root);
     if (!n.files)
-      throw std::runtime_error("Venture has no save data for this game to send. Play it here first, or import its saves.");
+      throw std::runtime_error(n.has_private ? "This game keeps its saves in private storage, which can't be sent over USB."
+                                             : "Venture has no save data for this game to send. Play it here first, or "
+                                               "import its saves.");
     // Like an import, each folder sent replaces the headset's: backed-up files
     // Venture lacks in it go.
     std::set<std::string> folders;
@@ -280,8 +285,12 @@ Exported export_headset(const fs::path &data, std::string_view key, std::string_
     std::string remove;
     for (const auto &file : backed_up)
       if (auto slash = file.find('/');
-          slash != std::string::npos && folders.contains(file.substr(0, slash)) && !sent.contains(file))
-        remove += dest + "/" + file + "\n";
+          slash != std::string::npos && folders.contains(file.substr(0, slash)) && !sent.contains(file) &&
+          exported(paths::from_utf8(file)))
+        remove += dest + "/" + file + "\n", ++n.removed;
+    if (n.removed)
+      log::info("saves", "Removing {} file{} from the headset that Venture's copy no longer has", n.removed,
+                n.removed == 1 ? "" : "s");
 
     // Everything goes to a staging folder on the headset first, so a dropped
     // cable leaves its saves as they were.
@@ -308,7 +317,10 @@ Exported export_headset(const fs::path &data, std::string_view key, std::string_
             "fi; cp -r \"$s/.\" \"$d/\" && rm -rf \"$s\" \"$r\" && echo sent",
         stop);
     if (reply.find("sent") == std::string::npos)
-      throw std::runtime_error("The headset could not replace the game's saves.");
+      throw std::runtime_error(
+          n.backup.empty() ? std::string("The headset could not replace the game's saves.")
+                           : "The headset could not replace the game's saves. Its previous saves are in " +
+                                 paths::utf8(n.backup) + ".");
   } catch (...) {
     std::error_code ec;
     fs::remove_all(staging, ec);
@@ -320,8 +332,10 @@ Exported export_headset(const fs::path &data, std::string_view key, std::string_
   }
   std::error_code ec;
   fs::remove_all(staging, ec);
-  log::info("saves", "Exported {} save files ({} bytes, {} kept) of {} to the headset{}", n.files, n.bytes, n.kept,
-            package, n.backup.empty() ? std::string() : "; its saves before are in " + paths::utf8(n.backup));
+  log::info("saves", "Exported {} save files ({} bytes, {} kept, {} removed) of {} to the headset{}{}", n.files, n.bytes,
+            n.kept, n.removed, package,
+            n.backup.empty() ? std::string() : "; its saves before are in " + paths::utf8(n.backup),
+            n.has_private ? "; the game also has private storage (not sendable over USB)" : "");
   return n;
 }
 

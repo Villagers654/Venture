@@ -39,8 +39,10 @@ Imported import_headset(const fs::path &data, std::string_view key, std::string_
 struct Exported {
   std::size_t files = 0;
   std::size_t kept = 0;  // left as the headset has them: it would not send them for the backup (each logged)
+  std::size_t removed = 0;  // backed-up files removed from the headset because Venture's copy lacks them
   std::uint64_t bytes = 0;
   fs::path backup;  // the headset's saves before the export; empty when it had none
+  bool has_private = false;  // the account also has private storage (not sendable over USB)
 };
 // Sends the account's copy of the game's shared storage back to the headset's
 // Android/data/<package> (private storage cannot be written over adb). The

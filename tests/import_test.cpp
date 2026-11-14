@@ -746,7 +746,11 @@ TEST_CASE("a save export backs up the headset's saves and replaces the folders i
   write(headset / "files/old.dat", "stale");
   write(headset / "files/.fbns/Mqtt.store", "sdk");
   write(headset / "other/keep.dat", "kept");
-  const auto game = d.root / "data/data/users/local" / package / "external-data";
+  // The headset's own runtime state in files/ is neither sent nor removed.
+  write(headset / "files/il2cpp/Metadata/global-metadata.dat", "quest-meta");
+  write(headset / "files/cloud/data/blob", "quest-cloud");
+  write(headset / ("files/main.1." + package + ".obb"), "quest-obb");
+  const auto game =d.root / "data/data/users/local" / package / "external-data";
   write(game / "files/save.dat", "venture");
   write(game / "files/slot2.dat", "slot");
   write(game / "files/.fbns/Mqtt.store", "pc");
@@ -779,14 +783,16 @@ TEST_CASE("a save export backs up the headset's saves and replaces the folders i
   const auto n = saves::export_headset(d.root / "data", "local", package, android::adb::Client(adb, "SERIAL1"));
   CHECK(n.files == 2);
   CHECK(n.kept == 1);
+  CHECK(n.removed == 1);  // old.dat is the only backed-up file Venture lacks that exported() accepts
+  CHECK_FALSE(n.has_private);
   CHECK(text(headset / "files/save.dat") == "venture");
   CHECK(text(headset / "files/slot2.dat") == "slot");
   CHECK_FALSE(fs::exists(headset / "files/old.dat"));  // files/ was replaced whole...
   CHECK(text(headset / "files/.fbns/Mqtt.store") == "sdk");  // ...but for what had no backup
   CHECK(text(headset / "other/keep.dat") == "kept");
-  CHECK_FALSE(fs::exists(headset / "files/il2cpp"));
-  CHECK_FALSE(fs::exists(headset / "files/cloud"));
-  CHECK_FALSE(fs::exists(headset / ("files/main.1." + package + ".obb")));
+  CHECK(text(headset / "files/il2cpp/Metadata/global-metadata.dat") == "quest-meta");
+  CHECK(text(headset / "files/cloud/data/blob") == "quest-cloud");
+  CHECK(text(headset / ("files/main.1." + package + ".obb")) == "quest-obb");
   CHECK_FALSE(fs::exists(headset / "cache"));
   CHECK(fs::is_empty(device / "tmp/venture-saves"));
   REQUIRE(!n.backup.empty());
@@ -795,9 +801,18 @@ TEST_CASE("a save export backs up the headset's saves and replaces the folders i
   CHECK(text(n.backup / "headset-Android-data/files/old.dat") == "stale");
   CHECK(text(game / "files/save.dat") == "venture");  // Venture's copy is untouched
   CHECK(fs::exists(game / "files/il2cpp/Metadata/global-metadata.dat"));
-  // Nothing to send fails before the headset changes.
+  // Private storage cannot be sent, and the result says so.
+  const auto private_prefs = game.parent_path() / "shared_prefs/prefs.xml";
+  write(private_prefs, "prefs");
+  CHECK(saves::export_headset(d.root / "data", "local", package, android::adb::Client(adb, "SERIAL1")).has_private);
+  // Nothing to send fails before the headset changes, naming private storage
+  // when that is where the saves are.
   fs::remove_all(game);
-  CHECK_THROWS(saves::export_headset(d.root / "data", "local", package, android::adb::Client(adb, "SERIAL1")));
+  CHECK_THROWS_WITH(saves::export_headset(d.root / "data", "local", package, android::adb::Client(adb, "SERIAL1")),
+                    doctest::Contains("private storage"));
+  fs::remove_all(private_prefs.parent_path());
+  CHECK_THROWS_WITH(saves::export_headset(d.root / "data", "local", package, android::adb::Client(adb, "SERIAL1")),
+                    doctest::Contains("Play it here first"));
   CHECK(text(headset / "files/save.dat") == "venture");
 }
 #endif

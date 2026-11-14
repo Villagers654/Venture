@@ -412,6 +412,7 @@ void App::draw() {
   draw_texture_warning();
   draw_flatpak_steamvr();
   draw_save_import();
+  draw_save_export();
   draw_store_link();
   draw_cancel_download();
   draw_report();
@@ -3066,7 +3067,7 @@ void App::draw_import() {
         tooltip(replaces);
       ImGui::SameLine(0, s(10));
       if (button("To headset##saves-page", icons::save, Tone::secondary, {tw, s(kControlH)}, !running))
-        action([id = save_game_, this] { export_saves_later(id); });
+        save_export_target_ = save_game_;
       if (ImGui::IsItemHovered())
         tooltip("Replaces the game's saves on the headset and closes it there; the headset's current saves are "
                 "kept in a backup on this computer.");
@@ -3476,6 +3477,24 @@ void App::draw_save_import() {
     if (clicked == 2) action([id = save_import_target_, this] { import_saves_later(id, {}); });
     if (clicked >= 0) {
       save_import_target_.clear();
+      ImGui::CloseCurrentPopup();
+    }
+    end_dialog();
+  }
+}
+
+void App::draw_save_export() {
+  if (!save_export_target_.empty() && !ImGui::IsPopupOpen("Export save data")) ImGui::OpenPopup("Export save data");
+  if (begin_dialog("Export save data", 460)) {
+    const meta::Game* g = game(save_export_target_);
+    dialog_text(g ? trf("Send the saves of {0} to the headset?", g->name)
+                  : std::string(tr("Send this game's saves to the headset?")),
+                tr("This closes the game on the headset and replaces its saves with Venture's copy. "
+                   "The headset's current saves are backed up on this computer first."));
+    const int clicked = dialog_footer({{tr("Cancel")}, {tr("Send to headset"), Tone::primary, true, icons::save}});
+    if (clicked == 1) action([id = save_export_target_, this] { export_saves_later(id); });
+    if (clicked >= 0) {
+      save_export_target_.clear();
       ImGui::CloseCurrentPopup();
     }
     end_dialog();
