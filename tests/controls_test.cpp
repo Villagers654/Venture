@@ -145,6 +145,24 @@ TEST_CASE("Controls open the menu with the menu button and both stick clicks on 
   CHECK_FALSE(one_binding("/user/hand/left/input/menu/click", profile(kTouch), chord, true));
 }
 
+TEST_CASE("Steam Frame thumbstick touch can emulate the Quest thumbrest") {
+  const auto& frame = profile("/interaction_profiles/valve/frame_controller_valve");
+  Choice choice;
+  for (int hand = 0; hand < 2; ++hand) {
+    const auto root = std::string(hand_root(hand));
+    const auto thumbrest = root + "/input/thumbrest/touch";
+    const auto stick_touch = root + "/input/thumbstick/touch";
+    CHECK_FALSE(one_binding(thumbrest, frame, resolve(frame, nullptr), true));
+
+    choice.rows[size_t(hand)][int(Quest::thumbrest)] = Inputs{"/input/thumbstick/touch"};
+    const auto mapped = resolve(frame, &choice);
+    CHECK(one_binding(thumbrest, frame, mapped, true) == stick_touch);
+    CHECK(one_binding(stick_touch, frame, mapped, true) == stick_touch);
+    CHECK(one_binding(root + "/input/thumbstick/click", frame, mapped, true) ==
+          root + "/input/thumbstick/click");
+  }
+}
+
 TEST_CASE("Controls defaults follow each controller's precedent") {
   CHECK(bind("/user/hand/left/input/x/click", kIndex) == "/user/hand/left/input/a/click");
   CHECK(bind("/user/hand/left/input/x/touch", kIndex) == "/user/hand/left/input/a/touch");

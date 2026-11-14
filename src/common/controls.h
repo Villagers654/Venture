@@ -236,6 +236,7 @@ inline constexpr HostInput kFrameInputs[]{
     {"/input/shoulder/click", "Bumper"},
     {"/input/thumbstick", "Thumbstick"},
     {"/input/thumbstick/click", "Thumbstick click"},
+    {"/input/thumbstick/touch", "Thumbstick touch"},
     {"/input/trigger/value", "Trigger"},
     {"/input/squeeze/value", "Grip"},
     {"/input/system/click", "Steam button", true},
