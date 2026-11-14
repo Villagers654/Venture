@@ -11,6 +11,8 @@ No virtual machine. Free and open source.
 
 [**Download**](https://github.com/Villagers654/Venture/releases/latest) · [Website](https://venture-emu.org/) · [Report an issue](https://github.com/Villagers654/Venture/issues) · [Discord](https://discord.gg/Ey9hHszvwa)
 
+<a href="https://ko-fi.com/Villagers654"><img src="https://ko-fi.com/img/githubbutton_sm.svg" alt="Support on Ko-fi"></a>
+
 <img src="docs/media/launcher.webp" width="760" alt="The Venture launcher: game library, a download in progress and Batman: Arkham Shadow ready to play">
 
 </div>
