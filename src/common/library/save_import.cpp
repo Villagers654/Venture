@@ -5,9 +5,13 @@
 #include "common/log.h"
 #include "common/saves_migration.h"
 
+#include <algorithm>
 #include <chrono>
+#include <cstdio>
 #include <format>
 #include <fstream>
+#include <set>
+#include <sstream>
 
 namespace venture::saves {
 namespace {
@@ -32,6 +36,17 @@ std::optional<Found> found_in(const fs::path &folder) {
   return Found{folder, private_storage(folder) ? Area::internal : Area::external};
 }
 
+// A backup name for now that `backups` does not use yet.
+std::string new_stamp(const fs::path &backups) {
+  auto stamp =
+      std::format("{:%Y-%m-%d %H-%M-%S}", std::chrono::floor<std::chrono::seconds>(std::chrono::system_clock::now()));
+  std::error_code ec;
+  for (int i = 2; fs::exists(backups / stamp, ec) || fs::exists(backups / (stamp + ".import"), ec) ||
+                  fs::exists(backups / (stamp + ".export"), ec);
+       ++i)
+    stamp = std::format("{} ({})", stamp.substr(0, 19), i);
+  return stamp;
+}
 // The area's folder in the account's storage, and a staging and a backup
 // folder for this import on the same volume.
 struct Target {
@@ -40,11 +55,7 @@ struct Target {
 Target target(const fs::path &data, std::string_view key, std::string_view package, Area area) {
   const auto game = account_data_dir(data, key, package);
   const auto backups = backups_dir(data, key, package);
-  auto stamp =
-      std::format("{:%Y-%m-%d %H-%M-%S}", std::chrono::floor<std::chrono::seconds>(std::chrono::system_clock::now()));
-  std::error_code ec;
-  for (int i = 2; fs::exists(backups / stamp, ec) || fs::exists(backups / (stamp + ".import"), ec); ++i)
-    stamp = std::format("{} ({})", stamp.substr(0, 19), i);
+  const auto stamp = new_stamp(backups);
   return {area == Area::internal ? game : game / "external-data", backups / (stamp + ".import"),
           backups / stamp / (area == Area::internal ? "private" : "Android-data")};
 }
@@ -89,6 +100,54 @@ Imported publish(const Target &t, Imported n, std::string_view package) {
   log::info("saves", "Imported {} save files ({} bytes, {} skipped) of {}{}", n.files, n.bytes, n.skipped, package,
             n.backup.empty() ? std::string() : "; the replaced data is in " + paths::utf8(n.backup));
   return n;
+}
+// Copies the headset's save files into `folder`. A file the headset will not
+// send is skipped, logged and named in `refused`.
+void pull_saves(const import::Source &source, const fs::path &folder, Imported &n, std::string_view package,
+                std::stop_token stop, std::vector<std::string> *refused = nullptr) {
+  for (const auto &file : source.saves) {
+    const auto path = folder / paths::from_utf8(file.name);
+    if (!paths::within(folder, path)) throw std::runtime_error("A save's path escapes the game's storage.");
+    fs::create_directories(path.parent_path());
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    try {
+      source.read(file, [&](std::span<const std::uint8_t> bytes) {
+        out.write(reinterpret_cast<const char *>(bytes.data()), std::streamsize(bytes.size()));
+      }, stop);
+    } catch (const std::exception &error) {
+      if (stop.stop_requested()) throw;
+      // Shared storage also holds SDK caches the headset will not let adb read
+      // (Asgard's Wrath 2: Facebook's .fbns/MqttFizzCache.store), as in game imports.
+      out.close();
+      std::error_code ec;
+      fs::remove(path, ec);
+      ++n.skipped;
+      if (refused) refused->push_back(file.name);
+      log::warn("saves", "Skipped {} of {}: {}", file.name, package, error.what());
+      continue;
+    }
+    out.close();
+    if (!out || fs::file_size(path) != file.size)
+      throw std::runtime_error("Copying " + file.name + " from the headset failed.");
+    count(n, path);
+  }
+}
+// What the runtime keeps beside a game's saves in its shared storage is not
+// sent: Unity's il2cpp extraction (the game redoes it), Venture's stand-in for
+// Meta's cloud storage, and the OBB aliases older versions put in files/.
+bool exported(const fs::path &relative) {
+  auto it = relative.begin();
+  if (it == relative.end() || *it == "cache") return false;
+  if (*it != "files" || ++it == relative.end()) return true;
+  const auto next = std::next(it);
+  if (*it == "il2cpp" || (*it == "cloud" && next != relative.end() && *next == "data")) return false;
+  return next != relative.end() || it->extension() != ".obb";
+}
+// `relative` as the headset names it under Android/data/<package>.
+std::string device_name(const fs::path &relative) {
+  std::string out;
+  for (const auto &part : relative) out += (out.empty() ? "" : "/") + paths::utf8(part);
+  return out;
 }
 template <class Fill>
 Imported staged(const Target &t, std::string_view package, Fill fill) {
@@ -144,34 +203,140 @@ Imported import_headset(const fs::path &data, std::string_view key, std::string_
                              ". Saves a game keeps in its private storage cannot be read over USB.");
   const auto t = target(data, key, package, Area::external);
   return staged(t, package, [&](Imported &n) {
-    for (const auto &file : source->saves) {
-      const auto path = t.staging / paths::from_utf8(file.name);
-      if (!paths::within(t.staging, path)) throw std::runtime_error("A save's path escapes the game's storage.");
-      fs::create_directories(path.parent_path());
-      std::ofstream out(path, std::ios::binary | std::ios::trunc);
-      try {
-        source->read(file, [&](std::span<const std::uint8_t> bytes) {
-          out.write(reinterpret_cast<const char *>(bytes.data()), std::streamsize(bytes.size()));
-        }, stop);
-      } catch (const std::exception &error) {
-        if (stop.stop_requested()) throw;
-        // Shared storage also holds SDK caches the headset will not let adb read
-        // (Asgard's Wrath 2: Facebook's .fbns/MqttFizzCache.store), as in game imports.
-        out.close();
-        std::error_code ec;
-        fs::remove(path, ec);
-        ++n.skipped;
-        log::warn("saves", "Skipped {} of {}: {}", file.name, package, error.what());
-        continue;
-      }
-      out.close();
-      if (!out || fs::file_size(path) != file.size)
-        throw std::runtime_error("Copying " + file.name + " from the headset failed.");
-      count(n, path);
-    }
+    pull_saves(*source, t.staging, n, package, stop);
     if (!n.files && n.skipped)
       throw std::runtime_error("The headset would not send any of this game's save files (see the log).");
   });
+}
+
+Exported export_headset(const fs::path &data, std::string_view key, std::string_view package,
+                        const android::adb::Client &client, std::stop_token stop) {
+  const auto game_root = account_data_dir(data, key, package);
+  const auto from = game_root / "external-data";
+  const auto backups = backups_dir(data, key, package);
+  const auto app = client.app(package, stop);
+  if (!app) throw std::runtime_error("This game is not installed on the headset.");
+  const auto stamp = new_stamp(backups);
+  const auto staging = backups / (stamp + ".export");
+  const std::string name(package), dest = "/sdcard/Android/data/" + name,
+                    stage = "/data/local/tmp/venture-saves/" + name, removals = stage + ".remove";
+  const auto q = [](const std::string &path) { return *android::adb::quote(path); };
+  Exported n;
+  bool pushed = false;
+  try {
+    // The headset's saves first, so an export can be undone.
+    std::vector<std::string> backed_up, refused;
+    if (!app->saves.empty()) {
+      const auto source = import::open_device(client, *app);
+      n.backup = backups / stamp;
+      Imported pulled;
+      pull_saves(*source, n.backup / "headset-Android-data", pulled, package, stop, &refused);
+      for (const auto &file : source->saves)
+        if (std::ranges::find(refused, file.name) == refused.end()) backed_up.push_back(file.name);
+      if (!pulled.files) {
+        std::error_code ec;
+        fs::remove_all(n.backup, ec);
+        n.backup.clear();
+      }
+    }
+    // Venture's copy, staged as hard links (copies where the volume has none).
+    const auto tree = staging / "saves";
+    std::set<std::string> sent;
+    if (directory(from)) {
+      for (auto it = fs::recursive_directory_iterator(from); it != fs::recursive_directory_iterator(); ++it) {
+        if (stop.stop_requested()) throw std::runtime_error("Save export cancelled.");
+        const auto relative = it->path().lexically_relative(from);
+        if (is_link(it->path()) || !exported(relative)) {
+          it.disable_recursion_pending();
+          continue;
+        }
+        if (!it->is_regular_file()) continue;
+        const auto file = device_name(relative);
+        if (std::ranges::find(refused, file) != refused.end()) {
+          ++n.kept;
+          log::warn("saves", "Not sending {} of {}: the headset would not send its copy for the backup", file, package);
+          continue;
+        }
+        if (!android::adb::quote(dest + "/" + file)) {
+          log::warn("saves", "Not sending {} of {}: the headset's shell cannot name it", file, package);
+          continue;
+        }
+        const auto target = tree / relative;
+        fs::create_directories(target.parent_path());
+        std::error_code ec;
+        fs::create_hard_link(it->path(), target, ec);
+        if (ec) fs::copy_file(it->path(), target);
+        ++n.files;
+        n.bytes += fs::file_size(target);
+        sent.insert(file);
+      }
+    }
+    // adb cannot write private storage, so its saves stay as the headset has them.
+    n.has_private = private_storage(game_root);
+    if (!n.files)
+      throw std::runtime_error(n.has_private ? "This game keeps its saves in private storage, which can't be sent over USB."
+                                             : "Venture has no save data for this game to send. Play it here first, or "
+                                               "import its saves.");
+    // Like an import, each folder sent replaces the headset's: backed-up files
+    // Venture lacks in it go.
+    std::set<std::string> folders;
+    for (const auto &file : sent)
+      if (auto slash = file.find('/'); slash != std::string::npos) folders.insert(file.substr(0, slash));
+    std::string remove;
+    for (const auto &file : backed_up)
+      if (auto slash = file.find('/');
+          slash != std::string::npos && folders.contains(file.substr(0, slash)) && !sent.contains(file) &&
+          exported(paths::from_utf8(file)))
+        remove += dest + "/" + file + "\n", ++n.removed;
+    if (n.removed)
+      log::info("saves", "Removing {} file{} from the headset that Venture's copy no longer has", n.removed,
+                n.removed == 1 ? "" : "s");
+
+    // Everything goes to a staging folder on the headset first, so a dropped
+    // cable leaves its saves as they were.
+    pushed = true;
+    client.shell("rm -rf " + q(stage) + " " + q(removals) + " && mkdir -p /data/local/tmp/venture-saves", stop);
+    client.push(tree, stage, stop);
+    if (!remove.empty()) {
+      std::ofstream(staging / "remove", std::ios::binary) << remove;
+      client.push(staging / "remove", removals, stop);
+    }
+    std::istringstream listing(client.shell("find " + q(stage) + " -type f -exec stat -c '%s %n' {} +", stop));
+    std::size_t files = 0;
+    std::uint64_t bytes = 0;
+    for (std::string line; std::getline(listing, line);) {
+      unsigned long long size = 0;
+      if (std::sscanf(line.c_str(), "%llu ", &size) == 1) ++files, bytes += size;
+    }
+    if (files != n.files || bytes != n.bytes)
+      throw std::runtime_error("The headset did not receive every save file. Check the cable and retry.");
+    // The game must not write its saves while they are replaced.
+    const auto reply = client.shell(
+        "am force-stop " + name + "; d=" + q(dest) + "; s=" + q(stage) + "; r=" + q(removals) +
+            "; mkdir -p \"$d\" || exit 1; if [ -f \"$r\" ]; then while IFS= read -r f; do rm -f \"$f\"; done < \"$r\"; "
+            "fi; cp -r \"$s/.\" \"$d/\" && rm -rf \"$s\" \"$r\" && echo sent",
+        stop);
+    if (reply.find("sent") == std::string::npos)
+      throw std::runtime_error(
+          n.backup.empty() ? std::string("The headset could not replace the game's saves.")
+                           : "The headset could not replace the game's saves. Its previous saves are in " +
+                                 paths::utf8(n.backup) + ".");
+  } catch (...) {
+    std::error_code ec;
+    fs::remove_all(staging, ec);
+    if (pushed) try {
+        client.shell("rm -rf " + q(stage) + " " + q(removals), {});
+      } catch (...) {
+      }
+    throw;
+  }
+  std::error_code ec;
+  fs::remove_all(staging, ec);
+  log::info("saves", "Exported {} save files ({} bytes, {} kept, {} removed) of {} to the headset{}{}", n.files, n.bytes,
+            n.kept, n.removed, package,
+            n.backup.empty() ? std::string() : "; its saves before are in " + paths::utf8(n.backup),
+            n.has_private ? "; the game also has private storage (not sendable over USB)" : "");
+  return n;
 }
 
 fs::path backups_dir(const fs::path &data, std::string_view key, std::string_view package) {

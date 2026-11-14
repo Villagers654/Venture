@@ -83,6 +83,9 @@ Import
   import-saves GAME --from FOLDER | --headset [--serial SERIAL]
                                  Import an installed game's save data (the save
                                  data it replaces is kept in a backup)
+  export-saves GAME [--serial SERIAL]
+                                 Send an installed game's save data to a Quest
+                                 over adb (the headset's saves are backed up first)
 
 Accounts
   accounts                       Signed-in Meta accounts
@@ -582,6 +585,7 @@ private:
   int downloads_cmd(const Args &);
   int import_cmd(const Args &);
   int import_saves_cmd(const Args &);
+  int export_saves_cmd(const Args &);
   int accounts_cmd(const Args &);
   int settings_cmd(const Args &);
 };
@@ -887,6 +891,19 @@ int Cli::import_saves_cmd(const Args &args) {
     return print({{"id", g.id}, {"files", n.files}, {"skipped", n.skipped}, {"bytes", n.bytes}, {"backup", paths::utf8(n.backup)}}), 0;
   std::cout << std::format("Imported {} save files ({}) of {}.\n", n.files, bytes(n.bytes), g.name);
   if (!n.backup.empty()) std::cout << "The save data it replaced is in " << paths::utf8(n.backup) << "\n";
+  return 0;
+}
+
+int Cli::export_saves_cmd(const Args &args) {
+  wait_scan();
+  auto g = resolve_game(args.word(1, "game"));
+  auto task = export_saves(g.id, args.value("--serial").value_or(""));
+  auto n = task(std::stop_token{});
+  if (json_)
+    return print({{"id", g.id}, {"files", n.files}, {"kept", n.kept}, {"bytes", n.bytes}, {"backup", paths::utf8(n.backup)}}), 0;
+  std::cout << std::format("Sent {} save files ({}) of {} to the headset.\n", n.files, bytes(n.bytes), g.name);
+  if (n.kept) std::cout << std::format("{} files the headset would not back up were left unchanged.\n", n.kept);
+  if (!n.backup.empty()) std::cout << "The headset's previous saves are in " << paths::utf8(n.backup) << "\n";
   return 0;
 }
 
@@ -1375,6 +1392,7 @@ int Cli::run(const Args &args) {
   if (cmd == "downloads") return downloads_cmd(args);
   if (cmd == "import") return import_cmd(args);
   if (cmd == "import-saves") return import_saves_cmd(args);
+  if (cmd == "export-saves") return export_saves_cmd(args);
   if (cmd == "accounts") return accounts_cmd(args);
   if (cmd == "settings") return settings_cmd(args);
   throw UsageError(trf("Unknown command \"{0}\".", cmd));

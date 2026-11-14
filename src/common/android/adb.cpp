@@ -288,6 +288,19 @@ std::optional<std::string> Client::sha256(const RemoteFile &file, std::stop_toke
   if (hash.find_first_not_of("0123456789abcdef") != std::string::npos) return std::nullopt;
   return hash;
 }
+void Client::push(const fs::path &local, std::string_view remote, std::stop_token stop) const {
+  if (!quote(remote)) throw std::runtime_error("Unsupported path on the headset: " + std::string(remote));
+  auto args = base();
+  args.insert(args.end(), {"push", paths::utf8(local), std::string(remote)});
+  std::string error;
+  // adb push prints progress on stdout; failures go to stderr.
+  const int code = run_tool(adb_, args, [](std::string_view) {}, &error, stop);
+  if (stop.stop_requested()) throw std::runtime_error("Cancelled.");
+  if (code != 0) {
+    auto reason = first_error(error);
+    throw std::runtime_error("Copying to the headset failed" + (reason.empty() ? ". Check the cable and retry." : ": " + reason));
+  }
+}
 std::string Client::connect(std::string_view address, std::stop_token stop) const {
   auto valid = !address.empty() && address.size() < 256 && std::ranges::all_of(address, [](unsigned char c) {
     return std::isalnum(c) || std::string_view(".:-_[]").find(char(c)) != std::string_view::npos;

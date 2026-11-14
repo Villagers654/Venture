@@ -412,6 +412,7 @@ void App::draw() {
   draw_texture_warning();
   draw_flatpak_steamvr();
   draw_save_import();
+  draw_save_export();
   draw_store_link();
   draw_cancel_download();
   draw_report();
@@ -3174,13 +3175,15 @@ void App::draw_import() {
       int index = current == games.end() ? 0 : int(current - games.begin());
       std::vector<const char*> names;
       for (const auto& g : games) names.push_back(g.name.c_str());
-      float fw = row_button_w("From a folder", icons::folder), hw = row_button_w("From headset", icons::download);
+      float fw = row_button_w("From a folder", icons::folder), hw = row_button_w("From headset", icons::download),
+            tw = row_button_w("To headset", icons::save);
       ImVec2 row = ImGui::GetCursorPos();
       ImGui::SetCursorPos(row);
-      dropdown("save-game", "", names.data(), int(names.size()), &index, std::min(s(360), inner - fw - hw - s(20)));
+      dropdown("save-game", "", names.data(), int(names.size()), &index,
+               std::min(s(360), inner - fw - hw - tw - s(30)));
       save_game_ = games[index].id;
       const bool running = running_.contains(save_game_) && running_[save_game_].process.active();
-      ImGui::SetCursorPos({row.x + inner - fw - hw - s(10), row.y});
+      ImGui::SetCursorPos({row.x + inner - fw - hw - tw - s(20), row.y});
       constexpr auto replaces = "Replaces the game's saves in Venture; the current ones are kept in a backup.";
       if (button("From a folder##saves-page", icons::folder, Tone::secondary, {fw, s(kControlH)}, !running))
         choose_save_folder(save_game_);
@@ -3191,6 +3194,12 @@ void App::draw_import() {
         action([id = save_game_, this] { import_saves_later(id, {}); });
       if (ImGui::IsItemHovered())
         tooltip(replaces);
+      ImGui::SameLine(0, s(10));
+      if (button("To headset##saves-page", icons::save, Tone::secondary, {tw, s(kControlH)}, !running))
+        save_export_target_ = save_game_;
+      if (ImGui::IsItemHovered())
+        tooltip("Replaces the game's saves on the headset and closes it there; the headset's current saves are "
+                "kept in a backup on this computer.");
       ImGui::SetCursorPos({row.x, row.y + s(kControlH)});
       ImGui::Dummy({inner, 0});
     }
@@ -3597,6 +3606,24 @@ void App::draw_save_import() {
     if (clicked == 2) action([id = save_import_target_, this] { import_saves_later(id, {}); });
     if (clicked >= 0) {
       save_import_target_.clear();
+      ImGui::CloseCurrentPopup();
+    }
+    end_dialog();
+  }
+}
+
+void App::draw_save_export() {
+  if (!save_export_target_.empty() && !ImGui::IsPopupOpen("Export save data")) ImGui::OpenPopup("Export save data");
+  if (begin_dialog("Export save data", 460)) {
+    const meta::Game* g = game(save_export_target_);
+    dialog_text(g ? trf("Send the saves of {0} to the headset?", g->name)
+                  : std::string(tr("Send this game's saves to the headset?")),
+                tr("This closes the game on the headset and replaces its saves with Venture's copy. "
+                   "The headset's current saves are backed up on this computer first."));
+    const int clicked = dialog_footer({{tr("Cancel")}, {tr("Send to headset"), Tone::primary, true, icons::save}});
+    if (clicked == 1) action([id = save_export_target_, this] { export_saves_later(id); });
+    if (clicked >= 0) {
+      save_export_target_.clear();
       ImGui::CloseCurrentPopup();
     }
     end_dialog();

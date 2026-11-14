@@ -7,7 +7,7 @@
 // Importing a game's save data on its own, from a Quest over adb or a folder
 // on this computer, into an account's storage for the game. Each top-level
 // folder the import brings (files/, shared_prefs/...) replaces the current
-// one, which moves to a backup first.
+// one, which moves to a backup first. Exporting sends it back to a Quest.
 namespace venture::saves {
 // Where a game keeps data, as on Android: its private storage
 // (/data/data/<package>: shared_prefs/, databases/, files/...) or its shared
@@ -35,6 +35,22 @@ Imported import_local(const fs::path &data, std::string_view key, std::string_vi
 // The app's shared storage on the headset (its private storage cannot be read
 // over adb); throws when the game is not on it or has nothing there.
 Imported import_headset(const fs::path &data, std::string_view key, std::string_view package,
+                        const android::adb::Client &client, std::stop_token stop = {});
+struct Exported {
+  std::size_t files = 0;
+  std::size_t kept = 0;  // left as the headset has them: it would not send them for the backup (each logged)
+  std::size_t removed = 0;  // backed-up files removed from the headset because Venture's copy lacks them
+  std::uint64_t bytes = 0;
+  fs::path backup;  // the headset's saves before the export; empty when it had none
+  bool has_private = false;  // the account also has private storage (not sendable over USB)
+};
+// Sends the account's copy of the game's shared storage back to the headset's
+// Android/data/<package> (private storage cannot be written over adb). The
+// headset's saves come to a backup here first. Each file sent replaces the
+// headset's, and backed-up files Venture lacks in the folders it sends are
+// removed; a file that could not be backed up is never touched. Closes the game
+// on the headset. Throws when the game is not on it or there is nothing to send.
+Exported export_headset(const fs::path &data, std::string_view key, std::string_view package,
                         const android::adb::Client &client, std::stop_token stop = {});
 // Backups of `package` for `key`, newest last.
 fs::path backups_dir(const fs::path &data, std::string_view key, std::string_view package);
