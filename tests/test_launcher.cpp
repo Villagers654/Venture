@@ -721,6 +721,35 @@ TEST_CASE("the game's audio on the PC is off by default, on globally or per game
   paths::atomic_write(d.root / "settings.json", json.dump());
   CHECK(library::Settings::load(d.root).display.pc_audio == "off");
 }
+TEST_CASE("a game's advanced switches pass only the variables it changed") {
+  Directory d;
+  auto settings = library::Settings::defaults(d.root);
+  auto variables = [&](const std::string& id) {
+    std::map<std::string, std::string> out;
+    for (const auto& [key, value] : library::launch_environment(settings, id))
+      if (key.starts_with("VENTURE_VULKAN_")) out[key] = value;
+    return out;
+  };
+  // Defaults pass nothing, so a variable in the launcher's environment still applies.
+  CHECK(variables("1").empty());
+  auto game = library::game_display_defaults();
+  game.advanced = {{"gpu-bounds-checks", "off"}, {"sampled-subpass-inputs", "on"}};
+  settings.game_display["1"] = game;
+  CHECK(variables("1") == std::map<std::string, std::string>{{"VENTURE_VULKAN_ROBUST_ACCESS", "0"},
+                                                             {"VENTURE_VULKAN_SAMPLED_INPUTS", "1"}});
+  CHECK(variables("2").empty());
+  settings.game_display["2"] = library::game_display_defaults();
+  settings.save(d.root);
+  auto json = paths::read_json(d.root / "settings.json");
+  CHECK(json["gameDisplay"]["1"]["advanced"]["gpu-bounds-checks"] == "off");
+  CHECK_FALSE(json["gameDisplay"].contains("2"));
+  // Unknown switches and values (other versions) load as the default.
+  json["gameDisplay"]["1"]["advanced"]["future-switch"] = "off";
+  json["gameDisplay"]["1"]["advanced"]["density-maps"] = "maybe";
+  paths::atomic_write(d.root / "settings.json", json.dump());
+  auto loaded = library::Settings::load(d.root);
+  CHECK(loaded.game_display["1"] == game);
+}
 TEST_CASE("a game's texture compression follows the global one unless it picks its own") {
   Directory d;
   auto settings = library::Settings::defaults(d.root);

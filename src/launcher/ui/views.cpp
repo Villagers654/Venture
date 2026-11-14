@@ -2513,7 +2513,136 @@ void App::draw_game_settings(const meta::Game& g, float width) {
   draw_game_runtime_rows(g.id);
   ImGui::Dummy({0, 0});
   end_card();
+  draw_game_advanced(g.id, width);
   if (options_.smoke_view == "game-settings-override-end") ImGui::SetScrollHereY(1.0f);
+}
+
+// A game's troubleshooting switches (library::advanced_switches). Out of the
+// way on purpose: a faint link under the game's settings opens a dialog that
+// first warns, then shows the switches. A game with a changed switch shows the
+// link as a notice and opens the switches directly.
+// --smoke-view game-settings-advanced scrolls to the link; -warning and -open
+// open the dialog at each step; -changed has one switch turned off.
+void App::draw_game_advanced(const std::string& id, float width) {
+  auto entry = [this, id]() -> library::DisplaySettings& {
+    return settings_.game_display.try_emplace(id, library::game_display_defaults()).first->second;
+  };
+  auto& d = entry();
+  ImGui::PushID("game-advanced");
+  const bool changed_any = !d.advanced.empty();
+  static bool smoke_warning = options_.smoke_view == "game-settings-advanced-warning";
+  static bool smoke_open = options_.smoke_view == "game-settings-advanced-open" ||
+                           options_.smoke_view == "game-settings-advanced-changed";
+  bool open_dialog = false;
+  if (std::exchange(smoke_warning, false)) open_dialog = true;
+  if (std::exchange(smoke_open, false)) {
+    open_dialog = true;
+    advanced_confirmed_ = true;
+  }
+  gap(18);
+  // i18n: Faint link under a game's settings that opens its troubleshooting switches.
+  const char* label = changed_any ? tr("Troubleshooting settings changed") : tr("Troubleshooting");
+  if (link(std::format("{}##advanced", label).c_str(), changed_any ? color::text2 : color::text3)) {
+    open_dialog = true;
+    advanced_confirmed_ = changed_any;
+  }
+  gap(8);
+  if (options_.smoke_view.starts_with("game-settings-advanced")) ImGui::SetScrollHereY(1.0f);
+  (void)width;
+  const char* dialog_id = "Troubleshooting##advanced-dialog";
+  if (open_dialog) ImGui::OpenPopup(dialog_id);
+  if (begin_dialog(dialog_id, 640)) {
+    if (!advanced_confirmed_) {
+      // i18n: Warning before a game's troubleshooting switches are shown.
+      dialog_text(tr("Troubleshooting settings"),
+                  tr("These change how Venture runs this game. A wrong choice can make it look broken or crash. "
+                     "Change them only when asked to in a bug report."));
+      // Cancel is the default (the main button, last), and Enter and Escape choose it.
+      int clicked = dialog_footer({{tr("Show them")}, {tr("Cancel"), Tone::primary}});
+      if (clicked < 0 && (ImGui::IsKeyPressed(ImGuiKey_Enter) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter) ||
+                          ImGui::IsKeyPressed(ImGuiKey_Escape)))
+        clicked = 1;
+      if (clicked == 0) advanced_confirmed_ = true;
+      if (clicked == 1) ImGui::CloseCurrentPopup();
+    } else {
+      // i18n: Title of a game's troubleshooting switches.
+      dialog_text(tr("Troubleshooting settings"), "");
+    struct Labels {
+        const char *title, *help, *default_choice;
+      };
+      // In the order of library::advanced_switches.
+      const Labels labels[] = {
+          // i18n: Advanced setting: the GPU checks that a game's reads stay inside its buffers and images.
+          {tr("GPU bounds checks"),
+           tr("Stops a game's out-of-range GPU reads, which crash PC graphics drivers. Off can fix effects that look "
+              "wrong in some games, but the game may crash."),
+           tr("Default (On)")},
+          // i18n: Advanced setting: new descriptor sets start with empty descriptors.
+          {tr("Start new resource slots empty"),
+           tr("Fills the shader resource slots a game has not written yet with empty ones, as a Quest does. Prevents "
+              "GPU crashes on AMD graphics cards."),
+           tr("Default (On)")},
+          // i18n: Advanced setting: games may bind empty (null) shader resources.
+          {tr("Allow empty resources"),
+           tr("Lets a game use empty shader resources, as a Quest does. Turn off only to test a graphics driver "
+              "problem."),
+           tr("Default (On)")},
+          // i18n: Advanced setting: shader variables start at zero.
+          {tr("Zero shader variables"),
+           tr("Starts shader variables at zero, as a Quest's driver does. Prevents speckles or flicker in games that "
+              "read a variable before setting it."),
+           tr("Default (On)")},
+          // i18n: Advanced setting: render pass inputs are read as ordinary images, one layer per eye.
+          {tr("Read pass inputs as images"),
+           tr("Reads render pass inputs as ordinary images, one layer per eye. Automatic turns it on for AMD graphics "
+              "cards, whose driver otherwise shows the left eye's picture in the right eye."),
+           tr("Default (Automatic)")},
+          // i18n: Advanced setting: games are offered the Quest's foveated rendering interface.
+          {tr("Foveation support"),
+           tr("Offers games the Quest's foveated rendering interface; the PC still renders every pixel. Off can help "
+              "a game that shows nothing or flickers."),
+           tr("Default (On)")},
+      };
+      static_assert(std::size(labels) == std::size(library::advanced_switches));
+      const float dw = s(kControlW);
+      bool changed = false;
+      for (std::size_t i = 0; i < std::size(labels); ++i) {
+        const auto& sw = library::advanced_switches[i];
+        if (i) divider();
+        ImGui::PushID(sw.id);
+        const char* ids[] = {"", "on", "off"};
+        // i18n: Choices of a troubleshooting setting, after its default.
+        const char* names[] = {labels[i].default_choice, tr("On"), tr("Off")};
+        const auto it = d.advanced.find(sw.id);
+        int choice = it == d.advanced.end() ? 0 : it->second == "on" ? 1 : 2;
+        setting_row(labels[i].title, "", dw, s(38), [&] {
+          if (dropdown("value", "", names, 3, &choice, dw)) {
+            if (choice == 0) d.advanced.erase(sw.id);
+            else d.advanced[sw.id] = ids[choice];
+            changed = true;
+          }
+        }, [&] { icon_button("help", icons::info, labels[i].help, kHelpIcon); });
+        ImGui::PopID();
+      }
+      const bool any = !d.advanced.empty();
+      // Reset to defaults sits at the left; Done closes (Escape too).
+      int clicked = dialog_footer({{tr("Done"), Tone::primary}}, [&](float h) {
+        if (button(std::format("{}##reset", tr("Reset to defaults")).c_str(), 0, Tone::ghost,
+                   {button_width(tr("Reset to defaults")), h}, any)) {
+          d.advanced.clear();
+          changed = true;
+        }
+      });
+      if (clicked < 0 && ImGui::IsKeyPressed(ImGuiKey_Escape)) clicked = 0;
+      if (changed) action([this] { save_settings(); });
+      if (clicked == 0) {
+        advanced_confirmed_ = false;
+        ImGui::CloseCurrentPopup();
+      }
+    }
+    end_dialog();
+  }
+  ImGui::PopID();
 }
 
 void App::draw_game_runtime_rows(const std::string& id) {

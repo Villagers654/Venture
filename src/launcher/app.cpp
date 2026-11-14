@@ -170,6 +170,10 @@ App::App(Options options) : Core(std::move(options)) {
   if (options_.smoke_view.starts_with("game-settings-override") && !options_.smoke_select.empty())
     settings_.game_display[options_.smoke_select] = {.resolution = "quest3", .rate = "144", .mirror = "full", .mirror_eye = "right",
                                                      .pc_audio = "on", .texture_compression = "auto", .texture_compression_threshold = 75};
+  // game-settings-advanced opens a game's Advanced card; -changed has one switch turned off.
+  if (options_.smoke_view == "game-settings-advanced-changed" && !options_.smoke_select.empty())
+    settings_.game_display.try_emplace(options_.smoke_select, library::game_display_defaults())
+        .first->second.advanced["gpu-bounds-checks"] = "off";
   if (options_.smoke_view == "account")
     page_ = 3;
   if (options_.smoke_view.starts_with("controls"))

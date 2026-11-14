@@ -244,7 +244,7 @@ msgstr ""
 
 #. Choices for "Compress textures".
 #: src/launcher/ui/views.cpp:2057
-#: src/launcher/ui/views.cpp:2531
+#: src/launcher/ui/views.cpp:2660
 msgid "Always"
 msgstr ""
 
@@ -253,33 +253,37 @@ msgstr ""
 #: src/launcher/ui/views.cpp:2057
 #: src/launcher/ui/views.cpp:2174
 #: src/launcher/ui/views.cpp:2391
-#: src/launcher/ui/views.cpp:2531
+#: src/launcher/ui/views.cpp:2660
 msgid "Automatic"
 msgstr ""
 
 #. Choices for "Compress textures".
 #. Choices for "Match game resolution".
 #. Choices for "Audio on PC too".
+#. Choices of a troubleshooting setting, after its default.
 #: src/launcher/ui/views.cpp:2057
 #: src/launcher/ui/views.cpp:2391
 #: src/launcher/ui/views.cpp:2486
-#: src/launcher/ui/views.cpp:2531
+#: src/launcher/ui/views.cpp:2615
+#: src/launcher/ui/views.cpp:2660
 msgid "Off"
 msgstr ""
 
 #. Settings row: store game textures compressed, in less GPU memory.
 #: src/launcher/ui/views.cpp:2060
-#: src/launcher/ui/views.cpp:2532
+#: src/launcher/ui/views.cpp:2661
 msgid "Compress textures"
 msgstr ""
 
 #. Settings row: GPU memory in use before new textures are compressed.
 #: src/launcher/ui/views.cpp:2086
-#: src/launcher/ui/views.cpp:2559
+#: src/launcher/ui/views.cpp:2688
 msgid "Compression threshold"
 msgstr ""
 
+#. Faint link under a game's settings that opens its troubleshooting switches.
 #: src/launcher/ui/views.cpp:2111
+#: src/launcher/ui/views.cpp:2544
 msgid "Troubleshooting"
 msgstr ""
 
@@ -298,8 +302,8 @@ msgstr ""
 
 #: src/launcher/ui/views.cpp:2394
 #: src/launcher/ui/views.cpp:2489
-#: src/launcher/ui/views.cpp:2531
-#: src/launcher/ui/views.cpp:2556
+#: src/launcher/ui/views.cpp:2660
+#: src/launcher/ui/views.cpp:2685
 msgid "Use global setting"
 msgstr ""
 
@@ -313,102 +317,200 @@ msgid "Audio on PC too"
 msgstr ""
 
 #. Choices for "Audio on PC too".
+#. Choices of a troubleshooting setting, after its default.
 #: src/launcher/ui/views.cpp:2486
+#: src/launcher/ui/views.cpp:2615
 msgid "On"
 msgstr ""
 
-#: src/launcher/ui/views.cpp:3404
+#. Faint link under a game's settings that opens its troubleshooting switches.
+#: src/launcher/ui/views.cpp:2544
+msgid "Troubleshooting settings changed"
+msgstr ""
+
+#. Warning before a game's troubleshooting switches are shown.
+#. Title of a game's troubleshooting switches.
+#: src/launcher/ui/views.cpp:2557
+#: src/launcher/ui/views.cpp:2569
+msgid "Troubleshooting settings"
+msgstr ""
+
+#: src/launcher/ui/views.cpp:2558
+msgid "These change how Venture runs this game. A wrong choice can make it look broken or crash. Change them only when asked to in a bug report."
+msgstr ""
+
+#: src/launcher/ui/views.cpp:2561
+msgid "Show them"
+msgstr ""
+
+#: src/launcher/ui/views.cpp:2561
+#: src/launcher/ui/views.cpp:3535
+#: src/launcher/ui/views.cpp:3557
+#: src/launcher/ui/views.cpp:3623
+#: src/launcher/ui/views.cpp:3684
+#: src/launcher/ui/views.cpp:3685
+msgid "Cancel"
+msgstr ""
+
+#. Advanced setting: the GPU checks that a game's reads stay inside its buffers and images.
+#: src/launcher/ui/views.cpp:2576
+msgid "GPU bounds checks"
+msgstr ""
+
+#: src/launcher/ui/views.cpp:2577
+msgid "Stops a game's out-of-range GPU reads, which crash PC graphics drivers. Off can fix effects that look wrong in some games, but the game may crash."
+msgstr ""
+
+#: src/launcher/ui/views.cpp:2579
+#: src/launcher/ui/views.cpp:2584
+#: src/launcher/ui/views.cpp:2589
+#: src/launcher/ui/views.cpp:2594
+#: src/launcher/ui/views.cpp:2604
+msgid "Default (On)"
+msgstr ""
+
+#. Advanced setting: new descriptor sets start with empty descriptors.
+#: src/launcher/ui/views.cpp:2581
+msgid "Start new resource slots empty"
+msgstr ""
+
+#: src/launcher/ui/views.cpp:2582
+msgid "Fills the shader resource slots a game has not written yet with empty ones, as a Quest does. Prevents GPU crashes on AMD graphics cards."
+msgstr ""
+
+#. Advanced setting: games may bind empty (null) shader resources.
+#: src/launcher/ui/views.cpp:2586
+msgid "Allow empty resources"
+msgstr ""
+
+#: src/launcher/ui/views.cpp:2587
+msgid "Lets a game use empty shader resources, as a Quest does. Turn off only to test a graphics driver problem."
+msgstr ""
+
+#. Advanced setting: shader variables start at zero.
+#: src/launcher/ui/views.cpp:2591
+msgid "Zero shader variables"
+msgstr ""
+
+#: src/launcher/ui/views.cpp:2592
+msgid "Starts shader variables at zero, as a Quest's driver does. Prevents speckles or flicker in games that read a variable before setting it."
+msgstr ""
+
+#. Advanced setting: render pass inputs are read as ordinary images, one layer per eye.
+#: src/launcher/ui/views.cpp:2596
+msgid "Read pass inputs as images"
+msgstr ""
+
+#: src/launcher/ui/views.cpp:2597
+msgid "Reads render pass inputs as ordinary images, one layer per eye. Automatic turns it on for AMD graphics cards, whose driver otherwise shows the left eye's picture in the right eye."
+msgstr ""
+
+#: src/launcher/ui/views.cpp:2599
+msgid "Default (Automatic)"
+msgstr ""
+
+#. Advanced setting: games are offered the Quest's foveated rendering interface.
+#: src/launcher/ui/views.cpp:2601
+msgid "Foveation support"
+msgstr ""
+
+#: src/launcher/ui/views.cpp:2602
+msgid "Offers games the Quest's foveated rendering interface; the PC still renders every pixel. Off can help a game that shows nothing or flickers."
+msgstr ""
+
+#: src/launcher/ui/views.cpp:2629
+msgid "Done"
+msgstr ""
+
+#: src/launcher/ui/views.cpp:2630
+#: src/launcher/ui/views.cpp:2631
+msgid "Reset to defaults"
+msgstr ""
+
+#: src/launcher/ui/views.cpp:3533
 #, python-brace-format
 msgid "Uninstall {0}?"
 msgstr ""
 
-#: src/launcher/ui/views.cpp:3404
+#: src/launcher/ui/views.cpp:3533
 msgid "Uninstall this game?"
 msgstr ""
 
-#: src/launcher/ui/views.cpp:3405
+#: src/launcher/ui/views.cpp:3534
 msgid "Its files are removed from this PC. Saves are kept, and you can install it again from your library."
 msgstr ""
 
-#: src/launcher/ui/views.cpp:3406
-#: src/launcher/ui/views.cpp:3428
-#: src/launcher/ui/views.cpp:3494
-#: src/launcher/ui/views.cpp:3555
-#: src/launcher/ui/views.cpp:3556
-msgid "Cancel"
-msgstr ""
-
-#: src/launcher/ui/views.cpp:3406
+#: src/launcher/ui/views.cpp:3535
 msgid "Uninstall"
 msgstr ""
 
 #. Warning when Compress textures changes from Always to Automatic or Off.
-#: src/launcher/ui/views.cpp:3424
+#: src/launcher/ui/views.cpp:3553
 msgid "Disable texture compression?"
 msgstr ""
 
-#: src/launcher/ui/views.cpp:3425
+#: src/launcher/ui/views.cpp:3554
 msgid "This can increase video memory use by up to 4 times. It isn't recommended on GPUs with less than 20 GB of video memory."
 msgstr ""
 
-#: src/launcher/ui/views.cpp:3428
+#: src/launcher/ui/views.cpp:3557
 msgid "Change anyway"
 msgstr ""
 
 #. Shown at start in the Linux Flatpak when SteamVR is the active OpenXR runtime.
-#: src/launcher/ui/views.cpp:3451
+#: src/launcher/ui/views.cpp:3580
 msgid "SteamVR does not work with the Flatpak"
 msgstr ""
 
-#: src/launcher/ui/views.cpp:3452
+#: src/launcher/ui/views.cpp:3581
 msgid "SteamVR is your OpenXR runtime, and the Flatpak sandbox cannot reach SteamVR, so games will not start. Use the Venture AppImage, tarball or your distribution's package with SteamVR, or use WiVRn or Monado with the Flatpak."
 msgstr ""
 
-#: src/launcher/ui/views.cpp:3455
+#: src/launcher/ui/views.cpp:3584
 msgid "OK"
 msgstr ""
 
-#: src/launcher/ui/views.cpp:3490
+#: src/launcher/ui/views.cpp:3619
 #, python-brace-format
 msgid "Send the saves of {0} to the headset?"
 msgstr ""
 
-#: src/launcher/ui/views.cpp:3491
+#: src/launcher/ui/views.cpp:3620
 msgid "Send this game's saves to the headset?"
 msgstr ""
 
-#: src/launcher/ui/views.cpp:3492
+#: src/launcher/ui/views.cpp:3621
 msgid "This closes the game on the headset and replaces its saves with Venture's copy. The headset's current saves are backed up on this computer first."
 msgstr ""
 
-#: src/launcher/ui/views.cpp:3494
+#: src/launcher/ui/views.cpp:3623
 msgid "Send to headset"
 msgstr ""
 
-#: src/launcher/ui/views.cpp:3525
+#: src/launcher/ui/views.cpp:3654
 msgid "Link to store page"
 msgstr ""
 
 #. {0} is an Android package name such as com.studio.game.
-#: src/launcher/ui/views.cpp:3527
+#: src/launcher/ui/views.cpp:3656
 #, python-brace-format
 msgid "Paste the game's Meta store link or its ID. Its name, description and art then come from the store. The store page must be for {0}."
 msgstr ""
 
-#: src/launcher/ui/views.cpp:3540
+#: src/launcher/ui/views.cpp:3669
 msgid "Checking the store page…"
 msgstr ""
 
 #. {0} is a game's store name, {1} and {2} Android package names.
-#: src/launcher/ui/views.cpp:3546
+#: src/launcher/ui/views.cpp:3675
 #, python-brace-format
 msgid "This store page is for {0} ({1}), not {2}. Link it anyway only for a modified build or another edition of the same game."
 msgstr ""
 
-#: src/launcher/ui/views.cpp:3555
+#: src/launcher/ui/views.cpp:3684
 msgid "Link anyway"
 msgstr ""
 
-#: src/launcher/ui/views.cpp:3556
+#: src/launcher/ui/views.cpp:3685
 msgid "Link"
 msgstr ""

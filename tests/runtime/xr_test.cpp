@@ -2753,8 +2753,25 @@ TEST_CASE("XR enable2 creates tracked guest Vulkan objects with feature chains")
   REQUIRE(result == VK_SUCCESS);
   XrVulkanGraphicsDeviceGetInfoKHR get{XR_TYPE_VULKAN_GRAPHICS_DEVICE_GET_INFO_KHR};
   get.systemId = ici.systemId; get.vulkanInstance = vkInstance;
+  // An instance the runtime made is asked through enable2 first, so a runtime
+  // whose enable1 query spoils it still names its GPU and creates its device.
+  MockXrScript spoiling{}; spoiling.enable1_spoils_runtime_instances = true;
+  ventureMockXrSetScript(&spoiling);
   VkPhysicalDevice physical{};
-  REQUIRE(xg::xrGetVulkanGraphicsDevice2KHR(instance, &get, &physical) == XR_SUCCESS);
+  {
+    const auto previous = venture::log::file();
+    const auto log_path = std::filesystem::temp_directory_path() /
+        std::format("venture-xr-enable2-query-{}", std::chrono::steady_clock::now().time_since_epoch().count());
+    venture::log::set_file(log_path.string());
+    REQUIRE(xg::xrGetVulkanGraphicsDevice2KHR(instance, &get, &physical) == XR_SUCCESS);
+    venture::log::set_file(previous);
+    std::ifstream input(log_path, std::ios::binary);
+    const std::string text{std::istreambuf_iterator<char>(input), {}};
+    input.close();
+    std::error_code ignored;
+    std::filesystem::remove(log_path, ignored);
+    CHECK(text.find("Host Vulkan graphics device query failed") == std::string::npos);
+  }
   std::uint32_t count = 0;
   venture::test::vk_call("vkGetPhysicalDeviceQueueFamilyProperties", physical, &count, nullptr);
   std::vector<VkQueueFamilyProperties> families(count);
@@ -2812,6 +2829,8 @@ TEST_CASE("XR enable2 creates tracked guest Vulkan objects with feature chains")
   venture::test::vk_call("vkGetDeviceQueue", device, family, 0u, &actualQueue);
   CHECK(actualQueue != VK_NULL_HANDLE);
   venture::test::vk_call("vkDestroyDevice", device, nullptr);
+  MockXrScript restored{};
+  ventureMockXrSetScript(&restored);
   venture::test::vk_call("vkDestroyInstance", vkInstance, nullptr);
   CHECK(xg::xrDestroyInstance(instance) == XR_SUCCESS);
 }
