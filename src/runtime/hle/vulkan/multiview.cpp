@@ -55,7 +55,7 @@ struct Decoration {
 struct Module {
   std::vector<Instruction> instructions;
   std::map<std::uint32_t, std::uint32_t> pointers;
-  std::set<std::uint32_t> floats, signed_ints, interface, escaped;
+  std::set<std::uint32_t> floats, ints, interface, escaped;
   std::map<std::uint32_t, VariableInfo> variables;
   std::map<std::uint32_t, Decoration> decorations;
   std::map<std::uint32_t, std::vector<std::uint32_t>> stores;
@@ -87,8 +87,8 @@ std::optional<Module> parse(std::span<const std::uint32_t> code, std::string_vie
         }
       if (terminated && name == entry && w[1] == (output ? 0u : 4u))
         m.interface.insert(w.begin() + end, w.end());
-    } else if (op == TypeInt && count == 4 && w[2] == 32 && w[3] == 1)
-      m.signed_ints.insert(w[1]);
+    } else if (op == TypeInt && count == 4 && w[2] == 32)
+      m.ints.insert(w[1]);
     else if (op == TypeFloat && count == 3 && w[2] == 32)
       m.floats.insert(w[1]);
     else if (op == TypePointer && count == 4)
@@ -153,7 +153,9 @@ std::map<std::uint32_t, Origin> origins(const Module& m) {
       auto v = m.variables.find(id);
       if (v != m.variables.end() && v->second.storage == Input && m.interface.contains(id)) {
         auto p = m.pointers.find(v->second.type);
-        if (p != m.pointers.end() && m.signed_ints.contains(p->second)) known[id] = {id};
+        // GLSL declares gl_ViewIndex an int; Unity's HLSLcc output declares it
+        // (as gl_ViewID_OVR) a uint and converts it with ConvertUToF.
+        if (p != m.pointers.end() && m.ints.contains(p->second)) known[id] = {id};
       }
     }
   bool changed = true;

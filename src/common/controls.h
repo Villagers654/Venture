@@ -334,6 +334,9 @@ using Inputs = std::vector<std::string>;
 struct Choice {
   std::array<std::array<std::optional<Inputs>, kQuestCount>, 2> rows{};
   MenuChoice menu;
+  // Grip toggle: each press of a grip flips the game's grip between held and
+  // released (both hands), for controllers whose grips only click (Vive wands).
+  bool grip_toggle = false;
   bool operator==(const Choice&) const = default;
 };
 // Choices by interaction profile path; a profile without an entry uses the defaults.
@@ -365,6 +368,7 @@ struct Resolved {
   // Component paths, none or several per row; duplicates never.
   std::array<std::array<Inputs, kQuestCount>, 2> rows{};
   Menu menu;
+  bool grip_toggle = false;  // the game's grip latches: one press holds, the next lets go
 };
 // The choices in effect: the defaults with `choice` (may be null) applied.
 // Inputs the controller cannot take (another hand's button, a reserved input,
@@ -391,7 +395,8 @@ struct Conflict {
 std::vector<Conflict> conflicts(const Resolved& resolved, MenuMode mode);
 
 // VENTURE_CONTROLS and settings.json: {"<profile>": {"left": {"primary": "/input/a/click", ...},
-// "right": {...}, "menu": {"mode": "hold", "first": "...", "second": "...", "holdMs": 1000}}}.
+// "right": {...}, "menu": {"mode": "hold", "first": "...", "second": "...", "holdMs": 1000},
+// "gripToggle": true}} (gripToggle only when on).
 // A row is a string ("" for none), or a list of strings when it has several
 // inputs ("stickClick": ["/input/thumbstick/click", "/input/shoulder/click"]).
 std::string encode(const Config& config);

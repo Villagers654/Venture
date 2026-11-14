@@ -55,6 +55,13 @@ struct ReportedEye {
   VkExtent2D told{}, target{};
 };
 ReportedEye reported_eye();
+// The Android display a game is given for an eye of this size: a Quest's
+// display is its two panels side by side, and each panel is about 1.25 times
+// the eye size it recommends on each side (Quest 3: 2064x2208 panels for a
+// 1680x1760 eye, Quest 2: 1832x1920 for 1440x1584). Unreal clamps its views to
+// the window: at the old fixed 1920x1080 window a 2800x2856 eye only got its
+// bottom-left 1920x1080 drawn. Zero sides give the 1920x1080 default.
+VkExtent2D android_display_size(VkExtent2D eye);
 // The rate a host with XR_FB_display_refresh_rate switches to, from the rates it
 // lists; nullopt keeps the host's own (no override, or a rate it does not list).
 std::optional<float> supported_override_rate(float rate, const float* rates, std::uint32_t count);

@@ -108,6 +108,7 @@ XrResult xrGetActionStateBoolean(XrSession session, const XrActionStateGetInfo* 
   if (!state || XR_FAILED(validate_struct(state, XR_TYPE_ACTION_STATE_BOOLEAN))) return XR_ERROR_VALIDATION_FAILURE;
   auto result = stored_action_state<PFN_xrGetActionStateBoolean, "xrGetActionStateBoolean">(session, getInfo, state);
   if (XR_SUCCEEDED(result)) venture::xr::menu_action_state(session, getInfo, state);
+  if (XR_SUCCEEDED(result)) venture::xr::grip_action_state(session, getInfo, state);
   return result;
 }
 XrResult xrGetActionStateFloat(XrSession session, const XrActionStateGetInfo* getInfo, XrActionStateFloat* state) {
@@ -118,6 +119,7 @@ XrResult xrGetActionStateFloat(XrSession session, const XrActionStateGetInfo* ge
   if (!state) return XR_ERROR_VALIDATION_FAILURE;
   if (!state || XR_FAILED(validate_struct(state, XR_TYPE_ACTION_STATE_FLOAT))) return XR_ERROR_VALIDATION_FAILURE;
   auto result = stored_action_state<PFN_xrGetActionStateFloat, "xrGetActionStateFloat">(session, getInfo, state);
+  if (XR_SUCCEEDED(result)) venture::xr::grip_action_state(session, getInfo, state);
   return result;
 }
 XrResult xrGetActionStatePose(XrSession session, const XrActionStateGetInfo* getInfo, XrActionStatePose* state) {

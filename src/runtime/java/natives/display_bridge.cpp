@@ -108,6 +108,15 @@ bool configure_framework_display(std::int32_t width, std::int32_t height,
                            static_cast<jboolean>(host_vsync));
   return finish(env);
 }
+bool set_framework_display_size(std::int32_t width, std::int32_t height) {
+  auto* env = host_env();
+  if (!env) return false;
+  auto metrics = env->FindClass("android/util/DisplayMetrics");
+  auto set = metrics ? env->GetStaticMethodID(metrics, "ventureSetDisplaySize", "(II)V") : nullptr;
+  if (set) env->CallStaticVoidMethod(metrics, set, width, height);
+  if (metrics) env->DeleteLocalRef(metrics);
+  return finish(env) && set;
+}
 bool dispatch_framework_vsync(std::int64_t frame_time_ns) {
   auto* env = host_env();
   if (!env) return false;

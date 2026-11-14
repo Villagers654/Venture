@@ -8,6 +8,9 @@ bool update_framework_display_period(std::int64_t);
 bool configure_framework_display(std::int32_t width, std::int32_t height,
                                  std::int32_t density_dpi, float refresh_hz,
                                  bool host_vsync);
+// The Android display size (DisplayMetrics) applications start with; call
+// before the application's framework is configured.
+bool set_framework_display_size(std::int32_t width, std::int32_t height);
 bool dispatch_framework_vsync(std::int64_t frame_time_ns);
 bool dispatch_framework_xr_vsync(std::int64_t monotonic_time_ns, std::int64_t period_ns);
 }  // namespace venture::java

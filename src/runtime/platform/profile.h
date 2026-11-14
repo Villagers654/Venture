@@ -66,6 +66,9 @@ ProfileThread profile_current_thread();
 bool profile_cpu_time(const ProfileThread&, std::uint64_t& nanoseconds) noexcept;
 std::int64_t profile_cpu_cycles(const ProfileThread&) noexcept;
 std::vector<ProfileThread> profile_threads();
+// File name of the module a thread started in (e.g. "nvoglv64.dll"), for naming threads that
+// have no name of their own; empty when unknown or unsupported.
+std::string profile_thread_start_module(const ProfileThread&);
 // No allocation, logging, or mutex acquisition while the target is suspended.
 // Cpu lifetime is pinned by the caller's per-thread lifetime guard.
 bool profile_sample(const ProfileThread&, const Cpu*, const std::atomic<std::uint32_t>*, ProfileSample&) noexcept;

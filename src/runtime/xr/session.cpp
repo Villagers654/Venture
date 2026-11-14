@@ -1,5 +1,6 @@
 #include "core/xr_call_trace.h"
 #include "xr/menu_chord.h"
+#include "xr/grip_toggle.h"
 #include "common/first_frame_progress.h"
 #include "common/startup_progress.h"
 #include "xr/dev_dump.h"
@@ -299,6 +300,7 @@ XrResult Session::destroy(SessionOwner requested) {
   if (!queue)
     return XR_ERROR_RUNTIME_FAILURE;
   reset_menu_session(handle);
+  reset_grip_session(handle);
   if (host_waiter) {
     {
       std::lock_guard waiter_lock(host_waiter->mutex);

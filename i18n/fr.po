@@ -280,3 +280,10 @@ msgstr "SteamVR est votre runtime OpenXR, et le bac à sable du Flatpak ne peut 
 
 msgid "OK"
 msgstr "OK"
+
+#. Controls page checkbox and its hint. The grip is the controller's side button held to grab.
+msgid "Grip toggle"
+msgstr "Poignée en bascule"
+
+msgid "Press grip once to hold, again to let go. For controllers with click grips like Vive wands."
+msgstr "Appuyez une fois sur la poignée pour saisir, une seconde fois pour lâcher. Pour les manettes à poignée cliquable comme les Vive wands."

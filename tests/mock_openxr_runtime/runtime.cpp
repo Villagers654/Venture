@@ -1524,10 +1524,22 @@ XrResult m_xrLocateViews(XrSession, const XrViewLocateInfo *info, XrViewState *s
   if (!spaces.contains(info->space))
     return XR_ERROR_HANDLE_INVALID;
   auto head = venture::xr::compose(venture::xr::inverse(world_pose(info->space)), script.head);
+  // VENTURE_MOCK_VIEW_FOV="left,right,up,down" in degrees for the left eye, as a host with an
+  // asymmetric display reports it (SteamVR, Virtual Desktop, PSVR2); the right eye mirrors it.
+  static const std::optional<std::array<float, 4>> env_fov = []() -> std::optional<std::array<float, 4>> {
+    const char *text = venture::environment::getenv("VENTURE_MOCK_VIEW_FOV");
+    if (!text || !*text) return std::nullopt;
+    std::array<float, 4> degrees{};
+    if (std::sscanf(text, "%f,%f,%f,%f", &degrees[0], &degrees[1], &degrees[2], &degrees[3]) != 4)
+      throw std::invalid_argument("VENTURE_MOCK_VIEW_FOV must be left,right,up,down in degrees");
+    for (auto &angle : degrees) angle *= 3.14159265358979f / 180;
+    return degrees;
+  }();
   for (int eye = 0; eye < 2; ++eye) {
     views[eye].pose = venture::xr::compose(head, {{0, 0, 0, 1}, {eye ? 0.032f : -0.032f, 0, 0}});
-    const auto f = script.view_fov.value_or(
-        std::array{mock::host_fov[0], mock::host_fov[1], mock::host_fov[2], mock::host_fov[3]});
+    auto f = script.view_fov.value_or(env_fov.value_or(
+        std::array{mock::host_fov[0], mock::host_fov[1], mock::host_fov[2], mock::host_fov[3]}));
+    if (eye && !script.view_fov && env_fov) f = {-f[1], -f[0], f[2], f[3]};
     views[eye].fov = {f[0], f[1], f[2], f[3]};
   }
   state->viewStateFlags = script.active ? 15 : 0;

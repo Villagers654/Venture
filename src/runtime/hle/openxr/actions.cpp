@@ -1,4 +1,5 @@
 #include "xr/menu_chord.h"
+#include "xr/grip_toggle.h"
 #include <algorithm>
 #include <optional>
 #include <set>
@@ -179,7 +180,10 @@ XrResult xrSuggestInteractionProfileBindings(XrInstance instance,
   if (!touch && std::find(targets.begin(), targets.end(), profile) == targets.end()) {
     // A profile Venture translates nothing onto: the game's bindings as they are.
     auto result = venture::xr::suggest_with_menu_chord(instance, info);
-    if (XR_SUCCEEDED(result)) venture::xr::remember_menu_bindings(instance, info->interactionProfile, info);
+    if (XR_SUCCEEDED(result)) {
+      venture::xr::remember_menu_bindings(instance, info->interactionProfile, info);
+      venture::xr::remember_grip_bindings(instance, info->interactionProfile, info);
+    }
     return result;
   }
   // OpenXR replaces a profile's earlier suggestion; the host profiles are
@@ -212,6 +216,8 @@ XrResult xrSuggestInteractionProfileBindings(XrInstance instance,
   if (XR_FAILED(result)) {
     if (previous) stored[info->interactionProfile] = std::move(*previous);
     else stored.erase(info->interactionProfile);
+  } else {
+    venture::xr::remember_grip_bindings(instance, info->interactionProfile, info);
   }
   return result;
 }

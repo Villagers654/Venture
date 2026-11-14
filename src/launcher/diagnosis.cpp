@@ -45,6 +45,13 @@ constexpr Rule kRules[] = {
      "No OpenXR runtime was running, or none is set as the active one.",
      "Start your VR runtime (SteamVR, WiVRn or Monado), make it the active OpenXR runtime, connect the headset, "
      "then press Play again."},
+    // SteamVR's vrserver.txt when it saw no headset (a Quest over Link, Air Link or
+    // Virtual Desktop not connected yet); its xrCreateInstance then fails with -2.
+    {{"vriniterror_driver_wirelesshmdnotconnected", "vriniterror_init_hmdnotfound",
+      "vriniterror_driver_hmddisplaynotfound"},
+     "SteamVR found no headset: it was not connected yet when the game started.",
+     "Connect the headset to SteamVR first (Quest Link, Air Link, Virtual Desktop or Steam Link) and wait until "
+     "SteamVR shows it as connected, then press Play again."},
     {{"the openxr runtime failed to create an instance (xrresult -2)"},
      "The VR runtime could not start a session; it is often still shutting down from an earlier one.",
      "Close your VR runtime completely and start it again, then press Play again."},

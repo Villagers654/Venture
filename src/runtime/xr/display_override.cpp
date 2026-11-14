@@ -133,6 +133,13 @@ ReportedEye reported_eye() {
   return eye;
 }
 
+VkExtent2D android_display_size(VkExtent2D eye) {
+  if (!eye.width || !eye.height) return {1920, 1080};
+  // Panels 5/4 of the eye on each side, rounded up to even pixels.
+  const auto panel = [](std::uint32_t side) { return (side * 5 / 4 + 1) & ~1u; };
+  return {2 * panel(eye.width), panel(eye.height)};
+}
+
 std::optional<float> supported_override_rate(float rate, const float* rates, std::uint32_t count) {
   if (!(rate > 0) || !rates) return std::nullopt;
   for (std::uint32_t i = 0; i < count; ++i)

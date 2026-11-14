@@ -143,6 +143,7 @@ Resolved resolve(const Profile& p, const Choice* choice) {
       break;
     case MenuMode::off: m.kind = Menu::Kind::off; break;
   }
+  r.grip_toggle = choice && choice->grip_toggle;
   return r;
 }
 
@@ -279,6 +280,7 @@ std::string encode(const Config& config) {
       if (!choice.menu.second.empty()) menu["second"] = choice.menu.second;
       entry["menu"] = std::move(menu);
     }
+    if (choice.grip_toggle) entry["gripToggle"] = true;
     j[profile] = std::move(entry);
   }
   return j.dump();
@@ -313,6 +315,8 @@ Config decode(std::string_view text) {
       else if (choice.menu.mode == MenuMode::chord)
         choice.menu.hold_ms = kChordHoldMs;
     }
+    if (const auto toggle = entry.find("gripToggle"); toggle != entry.end() && toggle->is_boolean())
+      choice.grip_toggle = toggle->get<bool>();
     config[profile] = std::move(choice);
   }
   return config;

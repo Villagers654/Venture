@@ -1,5 +1,6 @@
 #include "core/xr_call_trace.h"
 #include "xr/menu_chord.h"
+#include "xr/grip_toggle.h"
 #include "hle/openxr/state.h"
 #include "hle/openxr/passthrough.h"
 #include "xr/haptic_sequence.h"
@@ -73,7 +74,10 @@ bool anchor_locatable(XrSpace space) {
 }
 void forget_object(const ObjectKey& value) {
   forget_action_states(true);
-  if (value.first == "XrAction") venture::xr::forget_menu_action(reinterpret_cast<XrAction>(value.second));
+  if (value.first == "XrAction") {
+    venture::xr::forget_menu_action(reinterpret_cast<XrAction>(value.second));
+    venture::xr::forget_grip_action(reinterpret_cast<XrAction>(value.second));
+  }
   else if (value.first == "XrActionSet") venture::xr::forget_menu_action_set(reinterpret_cast<XrActionSet>(value.second));
   else if (value.first == "XrSpace") forget_spatial_anchor(reinterpret_cast<XrSpace>(value.second));
   std::vector<ObjectKey> children;

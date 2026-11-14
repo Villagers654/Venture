@@ -1,4 +1,5 @@
 #include "xr/menu_chord.h"
+#include "xr/grip_toggle.h"
 #include "core/av_telemetry.h"
 #include "xr/haptic_output.h"
 #include "hle/openxr/state.h"
@@ -69,6 +70,8 @@ XrResult initialize_input() {
       return r;
     if (spec.handle == &input.menu)
       venture::xr::register_menu_action(input.set, input.menu);
+    if (spec.handle == &input.squeeze)
+      venture::xr::register_grip_action(input.squeeze, 3);
   }
   XrPath menu_path{};
   r = ::xrStringToPath(instance, "/user/hand/left/input/menu/click", &menu_path);
@@ -180,6 +183,8 @@ void destroy_input() {
   for (auto tracker : i.trackers)
     if (tracker)
       host_call<PFN_xrDestroyHandTrackerEXT, "xrDestroyHandTrackerEXT">(tracker);
+  if (i.squeeze)
+    venture::xr::forget_grip_action(i.squeeze);
   if (i.set) {
     venture::xr::forget_menu_action_set(i.set);
     ::xrDestroyActionSet(i.set);
@@ -196,9 +201,9 @@ float axis(XrAction action, int hand) {
   XrActionStateGetInfo gi{XR_TYPE_ACTION_STATE_GET_INFO, nullptr, action,
                           state().input.hands[hand]};
   XrActionStateFloat value{XR_TYPE_ACTION_STATE_FLOAT};
-  return XR_SUCCEEDED(::xrGetActionStateFloat(session().handle, &gi, &value)) && value.isActive
-             ? value.currentState
-             : 0;
+  if (XR_FAILED(::xrGetActionStateFloat(session().handle, &gi, &value))) return 0;
+  venture::xr::grip_action_state(session().handle, &gi, &value);  // the grip, latched with grip toggle on
+  return value.isActive ? value.currentState : 0;
 }
 bool button(XrAction action, int hand) {
   XrActionStateGetInfo gi{XR_TYPE_ACTION_STATE_GET_INFO, nullptr, action,

@@ -165,21 +165,35 @@ int Extractor::open(Input input) {
   if(!s.library->available() || !input.read_at || input.length<=0) return unsupported;
   s.input=std::move(input);s.begin();
   auto& a=s.api();
-  if(s.input.length>512*1024*1024) {log::warn("media","Audio source exceeds bounded region limit");return unsupported;}
+  // The source's identity for logs and the AV harness: SHA-256 of the whole source, or for one over
+  // 512 MiB (a long movie inside an OBB: Bulletstorm VR) of its size and first and last 4 MiB, so
+  // opening it does not read it all. Android plays sources of any size.
+  constexpr std::int64_t whole_limit=512LL*1024*1024, sample=4LL*1024*1024;
+  const bool sampled=s.input.length>whole_limit;
   auto sha=a.av_sha_alloc();if(!sha)return unsupported;
   a.av_sha_init(sha,256);
-  std::array<std::uint8_t,65536> bytes{};
-  for(std::int64_t offset=0;offset<s.input.length;) {
-    if(Impl::interrupted(&s)){a.av_free(sha);return unsupported;}
-    auto count=std::min<std::int64_t>(bytes.size(),s.input.length-offset);
-    auto got=s.input.read_at(bytes.data(),count,offset);
-    if(got<=0 || got>count){a.av_free(sha);return unsupported;}
-    a.av_sha_update(sha,bytes.data(),static_cast<std::size_t>(got));offset+=got;
+  if(sampled) {
+    std::array<std::uint8_t,8> size{};
+    for(int i=0;i<8;++i) size[i]=static_cast<std::uint8_t>(static_cast<std::uint64_t>(s.input.length)>>(8*i));
+    a.av_sha_update(sha,size.data(),size.size());
   }
+  std::array<std::uint8_t,65536> bytes{};
+  auto hash_range=[&](std::int64_t offset,std::int64_t end) {
+    while(offset<end) {
+      if(Impl::interrupted(&s)) return false;
+      auto count=std::min<std::int64_t>(bytes.size(),end-offset);
+      auto got=s.input.read_at(bytes.data(),count,offset);
+      if(got<=0 || got>count) return false;
+      a.av_sha_update(sha,bytes.data(),static_cast<std::size_t>(got));offset+=got;
+    }
+    return true;
+  };
+  if(!(sampled ? hash_range(0,sample) && hash_range(s.input.length-sample,s.input.length)
+               : hash_range(0,s.input.length))) {a.av_free(sha);return unsupported;}
   std::array<std::uint8_t,32> digest{};a.av_sha_final(sha,digest.data());a.av_free(sha);
   const char* hex="0123456789abcdef";
   for(auto byte:digest){s.hash+=hex[byte>>4];s.hash+=hex[byte&15];}
-  log::info("media","Bounded source SHA-256 {}: {} bytes",s.hash,s.input.length);
+  log::info("media","{} source SHA-256 {}: {} bytes",sampled?"Sampled":"Bounded",s.hash,s.input.length);
   s.begin();
   auto buffer=static_cast<std::uint8_t*>(a.av_malloc(32768));
   if(!buffer) return unsupported;

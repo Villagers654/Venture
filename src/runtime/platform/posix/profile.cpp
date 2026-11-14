@@ -197,6 +197,8 @@ ProfilePowerThrottling profile_power_throttling() noexcept {
   } catch (...) { return {}; }
 }
 ProfileThread profile_current_thread() { return describe(profile_thread_id()); }
+// Linux threads carry a name (comm) from creation, which describe() already reads.
+std::string profile_thread_start_module(const ProfileThread&) { return {}; }
 std::vector<ProfileThread> profile_threads() {
   std::vector<ProfileThread> out;
   const auto self = profile_thread_id();

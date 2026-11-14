@@ -29,6 +29,14 @@ Frames take_frames() {
           worst_ns.exchange(0, std::memory_order_relaxed)};
 }
 
+// A thread without a name of its own (host, driver or runtime threads) is named by its id
+// and the module it started in, e.g. "tid 37228 nvoglv64.dll".
+std::string thread_name(const platform::ProfileThread& t) {
+  if (!t.name.empty()) return t.name;
+  const auto module = platform::profile_thread_start_module(t);
+  return module.empty() ? std::format("tid {}", t.id) : std::format("tid {} {}", t.id, module);
+}
+
 void run() {
   platform::lower_background_thread_priority();
   using clock = std::chrono::steady_clock;
@@ -36,6 +44,8 @@ void run() {
   auto window_start = start;
   // CPU time per live thread at the last sample, by OS id and creation time (ids are reused).
   std::map<std::pair<std::uint32_t, std::uint64_t>, std::uint64_t> previous;
+  std::map<std::string, std::uint64_t> previous_gpu;  // GPU engine running time at the last sample
+  std::vector<platform::GpuEngineTime> engines;
   for (;;) {
     std::this_thread::sleep_for(kInterval);
     const auto now = clock::now();
@@ -45,12 +55,13 @@ void run() {
     window_start = now;
     s.frames = take_frames();
     std::map<std::pair<std::uint32_t, std::uint64_t>, std::uint64_t> current;
-    std::vector<std::pair<std::uint64_t, std::string>> busy;
+    std::vector<std::pair<std::uint64_t, std::size_t>> busy;  // CPU time, index into threads
     std::uint64_t total = 0;
     bool any = false;
     const auto threads = platform::profile_threads();
     s.threads = threads.size() + 1;  // the list leaves out this thread
-    for (const auto& t : threads) {
+    for (std::size_t i = 0; i < threads.size(); ++i) {
+      const auto& t = threads[i];
       std::uint64_t ns = 0;
       if (!platform::profile_cpu_time(t, ns)) continue;
       const auto key = std::pair{t.id, t.creation_ticks};
@@ -60,16 +71,27 @@ void run() {
       any = true;
       const auto delta = ns - old->second;
       total += delta;
-      busy.emplace_back(delta, t.name.empty() ? std::format("tid {}", t.id) : t.name);
+      busy.emplace_back(delta, i);
     }
     const bool baseline = !previous.empty();
     previous = std::move(current);
     if (baseline && any && s.seconds > 0) {
       const double wall_ns = s.seconds * 1e9;
       s.cpu_percent = total / wall_ns * 100;
-      std::ranges::sort(busy, std::greater{}, &std::pair<std::uint64_t, std::string>::first);
+      std::ranges::sort(busy, std::greater{}, &std::pair<std::uint64_t, std::size_t>::first);
       for (std::size_t i = 0; i < busy.size() && s.top.size() < kTopThreads; ++i)
-        if (const double p = busy[i].first / wall_ns * 100; p >= 1) s.top.push_back({busy[i].second, p});
+        if (const double p = busy[i].first / wall_ns * 100; p >= 1) s.top.push_back({thread_name(threads[busy[i].second]), p});
+    }
+    if (platform::gpu_engine_times(engines)) {
+      std::map<std::string, std::uint64_t> current_gpu;
+      std::uint64_t busiest = 0;
+      for (const auto& e : engines) {
+        current_gpu[e.engine] = e.ns;
+        if (const auto old = previous_gpu.find(e.engine); old != previous_gpu.end())
+          if (const auto delta = counter_delta(e.ns, old->second)) busiest = std::max(busiest, *delta);
+      }
+      if (!previous_gpu.empty()) s.gpu_busy_ns = static_cast<std::int64_t>(busiest);
+      previous_gpu = std::move(current_gpu);
     }
     platform::CommitCharge commit;
     if (platform::commit_charge(commit)) s.private_bytes = commit.process;
@@ -113,6 +135,10 @@ std::string format(const Sample& s) {
         out += std::format("{}{} {:.0f}%", i ? ", " : "", s.top[i].name, s.top[i].percent);
       out += '"';
     }
+  }
+  if (s.gpu_busy_ns >= 0 && s.seconds > 0) {
+    out += std::format(" gpu_busy={:.0f}%", s.gpu_busy_ns / (s.seconds * 1e9) * 100);
+    if (s.frames.count) out += std::format(" gpu_frame_ms={:.2f}", s.gpu_busy_ns / 1e6 / s.frames.count);
   }
   if (s.private_bytes) out += std::format(" private_mib={}", s.private_bytes / MiB);
   if (s.gpu_budget) out += std::format(" gpu_mib={}/{}", s.gpu_used / MiB, s.gpu_budget / MiB);

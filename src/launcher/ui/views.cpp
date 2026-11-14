@@ -3957,6 +3957,7 @@ void reset_controls(ControlsEdit& e, int profile) {
   e.menu_second = n + stick_click;
   e.menu_hold_ms = controls::kHoldMs;
   e.menu_chord_ms = controls::kChordHoldMs;
+  e.grip_toggle = false;
   e.initialized = true;
 }
 
@@ -3985,6 +3986,7 @@ void open_controls(ControlsEdit& e, int profile, const controls::Config& config)
   const auto it = config.find(p.path);
   if (it == config.end()) return;
   const auto& c = it->second;
+  e.grip_toggle = c.grip_toggle;
   for (int hand = 0; hand < 2; ++hand)
     for (int q = 0; q < kQuestCount; ++q)
       if (const auto& row = c.rows[size_t(hand)][size_t(q)]; row && q != int(Quest::menu)) {
@@ -4027,6 +4029,7 @@ controls::Choice edit_choice(const ControlsEdit& e) {
       c.menu = {MenuMode::chord, choice_path(p, e.menu_first), choice_path(p, e.menu_second), e.menu_chord_ms};
       break;
   }
+  c.grip_toggle = e.grip_toggle;
   return c;
 }
 // Writes the editor's choices into `config`; true when that changed it.
@@ -5085,6 +5088,18 @@ void App::draw_controls_editor(ControlsEdit& e, const ControlsEdit* base, float 
     return notes[hand].empty() ? 0.f : s(12) + s(22) * float(notes[hand].size());
   };
 
+  // Grip toggle, for both hands of this controller: under the controllers.
+  auto grip_toggle = [&] {
+    gap(14);
+    divider();
+    gap(14);
+    ImGui::BeginDisabled(locked);
+    // i18n: Controls page checkbox and its hint. The grip is the controller's side button held to grab.
+    checkbox("grip-toggle", tr("Grip toggle"), &e.grip_toggle,
+             tr("Press grip once to hold, again to let go. For controllers with click grips like Vive wands."));
+    ImGui::EndDisabled();
+  };
+
   if (!stacked) {
     begin_card("controllers", w, {22, 20});
     toolbar();
@@ -5093,6 +5108,7 @@ void App::draw_controls_editor(ControlsEdit& e, const ControlsEdit* base, float 
     const float nh = std::max(draw_notes(0, at.x, at.y + h + s(8)), draw_notes(1, at.x + half + mid, at.y + h + s(8)));
     ImGui::SetCursorScreenPos(at);
     ImGui::Dummy({inner, h + nh});
+    grip_toggle();
     end_card();
   } else {
     for (int hand = 0; hand < 2; ++hand) {
@@ -5104,6 +5120,7 @@ void App::draw_controls_editor(ControlsEdit& e, const ControlsEdit* base, float 
       const float nh = draw_notes(hand, at.x, at.y + h + s(8));
       ImGui::SetCursorScreenPos(at);
       ImGui::Dummy({inner, h + nh});
+      if (hand) grip_toggle();
       end_card();
     }
   }
