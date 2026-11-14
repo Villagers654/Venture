@@ -10,6 +10,7 @@
 #include "hle/vrapi/vrapi.h"
 #include "xr/bindings.h"
 #include "xr/host_xr.h"
+#include "xr/grip_toggle.h"
 #include "xr/menu_chord.h"
 #include "xr_images_fixture.h"
 #include "xr_menu_binding_fixture.h"
@@ -967,4 +968,205 @@ TEST_CASE("Probe: the host runtime accepts the bindings of every controller prof
     CHECK(result == XR_SUCCESS);
   }
   ::xrDestroyActionSet(set);
+}
+
+TEST_CASE("A grip latch flips once per press, whatever the game reads per sync") {
+  venture::xr::GripLatch latch;
+  CHECK_FALSE(latch.update(1, 0.f, true, 10));
+  CHECK(latch.update(2, 1.f, true, 20));
+  CHECK(latch.changed);
+  CHECK(latch.time == 20);
+  // Read again in the same sync: nothing changes, still the flip of this sync.
+  CHECK(latch.update(2, 0.f, true, 25));
+  CHECK(latch.changed);
+  CHECK(latch.time == 20);
+  CHECK(latch.update(3, 1.f, true, 30));  // still pressed
+  CHECK_FALSE(latch.changed);
+  CHECK(latch.update(4, 0.45f, true, 40));  // between release and press: still pressed
+  CHECK(latch.update(5, 0.45f, true, 50));
+  CHECK(latch.update(6, 0.f, true, 60));  // released: still held
+  CHECK_FALSE(latch.changed);
+  CHECK_FALSE(latch.update(7, 0.6f, true, 70));  // the next press lets go
+  CHECK(latch.changed);
+  CHECK(latch.time == 70);
+  CHECK_FALSE(latch.update(8, 0.f, true, 80));
+  CHECK(latch.update(9, 1.f, true, 90));
+  // No controller: let go, and the press still down when it returns counts as a new one.
+  CHECK_FALSE(latch.update(10, 1.f, false, 100));
+  CHECK(latch.changed);
+  CHECK(latch.update(11, 1.f, true, 110));
+  CHECK(latch.update(12, 0.f, true, 120));
+  CHECK_FALSE(latch.update(13, 1.f, true, 130));
+}
+
+namespace {
+// An OpenXR game with a float grip action per hand and a boolean one without
+// subaction paths, both bound to Touch's squeeze, on the host controller `profile`.
+struct GripGame {
+  venture::test::XrImageFixture interop;
+  XrInstance instance{};
+  XrSession session{};
+  XrActionSet set{};
+  XrAction grab{}, any{};
+  std::array<XrPath, 2> hands{};
+  explicit GripGame(const char* profile) {
+    ventureMockXrSetProfile(profile);
+    venture::xr::install_xr_images(&interop);
+    const char* extensions[]{"XR_KHR_opengl_es_enable"};
+    XrInstanceCreateInfo create{XR_TYPE_INSTANCE_CREATE_INFO};
+    create.applicationInfo.apiVersion = XR_MAKE_VERSION(1, 0, 0);
+    create.enabledExtensionCount = 1;
+    create.enabledExtensionNames = extensions;
+    REQUIRE(xg::xrCreateInstance(&create, &instance) == XR_SUCCESS);
+    xg::GlesBinding graphics{XR_TYPE_GRAPHICS_BINDING_OPENGL_ES_ANDROID_KHR, nullptr, 1, 2, 3};
+    XrSessionCreateInfo ci{XR_TYPE_SESSION_CREATE_INFO, &graphics, 0, 1};
+    REQUIRE(xg::xrCreateSession(instance, &ci, &session) == XR_SUCCESS);
+    XrActionSetCreateInfo set_info{XR_TYPE_ACTION_SET_CREATE_INFO};
+    std::strcpy(set_info.actionSetName, "grip_test");
+    std::strcpy(set_info.localizedActionSetName, "Grip test");
+    REQUIRE(xg::xrCreateActionSet(instance, &set_info, &set) == XR_SUCCESS);
+    REQUIRE(xg::xrStringToPath(instance, "/user/hand/left", &hands[0]) == XR_SUCCESS);
+    REQUIRE(xg::xrStringToPath(instance, "/user/hand/right", &hands[1]) == XR_SUCCESS);
+    XrActionCreateInfo ai{XR_TYPE_ACTION_CREATE_INFO};
+    ai.actionType = XR_ACTION_TYPE_FLOAT_INPUT;
+    ai.countSubactionPaths = 2;
+    ai.subactionPaths = hands.data();
+    std::strcpy(ai.actionName, "grab");
+    std::strcpy(ai.localizedActionName, "grab");
+    REQUIRE(xg::xrCreateAction(set, &ai, &grab) == XR_SUCCESS);
+    ai.actionType = XR_ACTION_TYPE_BOOLEAN_INPUT;
+    ai.countSubactionPaths = 0;
+    ai.subactionPaths = nullptr;
+    std::strcpy(ai.actionName, "any");
+    std::strcpy(ai.localizedActionName, "any");
+    REQUIRE(xg::xrCreateAction(set, &ai, &any) == XR_SUCCESS);
+    XrPath touch{}, left{}, right{};
+    REQUIRE(xg::xrStringToPath(instance, "/interaction_profiles/oculus/touch_controller", &touch) == XR_SUCCESS);
+    REQUIRE(xg::xrStringToPath(instance, "/user/hand/left/input/squeeze/value", &left) == XR_SUCCESS);
+    REQUIRE(xg::xrStringToPath(instance, "/user/hand/right/input/squeeze/value", &right) == XR_SUCCESS);
+    XrActionSuggestedBinding bindings[]{{grab, left}, {grab, right}, {any, left}, {any, right}};
+    XrInteractionProfileSuggestedBinding suggestion{XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING, nullptr, touch, 4,
+                                                    bindings};
+    REQUIRE(xg::xrSuggestInteractionProfileBindings(instance, &suggestion) == XR_SUCCESS);
+    XrSessionActionSetsAttachInfo attach{XR_TYPE_SESSION_ACTION_SETS_ATTACH_INFO, nullptr, 1, &set};
+    REQUIRE(xg::xrAttachSessionActionSets(session, &attach) == XR_SUCCESS);
+    poll();
+    XrSessionBeginInfo begin{XR_TYPE_SESSION_BEGIN_INFO, nullptr, XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO};
+    REQUIRE(xg::xrBeginSession(session, &begin) == XR_SUCCESS);
+    poll();
+  }
+  ~GripGame() {
+    CHECK(xg::xrDestroySession(session) == XR_SUCCESS);
+    CHECK(xg::xrDestroyInstance(instance) == XR_SUCCESS);
+    venture::xr::install_xr_images(nullptr);
+    MockXrScript restored{};
+    ventureMockXrSetScript(&restored);
+    ventureMockXrSetProfile(nullptr);
+  }
+  void poll() {
+    XrEventDataBuffer event{XR_TYPE_EVENT_DATA_BUFFER};
+    while (xg::xrPollEvent(instance, &event) == XR_SUCCESS) event = {XR_TYPE_EVENT_DATA_BUFFER};
+  }
+  // Both grips as the host reports them, synced once.
+  void sync(float left, float right) {
+    MockXrScript script{};
+    script.left.squeeze = left;
+    script.right.squeeze = right;
+    ventureMockXrSetScript(&script);
+    XrActiveActionSet active{set, XR_NULL_PATH};
+    XrActionsSyncInfo info{XR_TYPE_ACTIONS_SYNC_INFO, nullptr, 1, &active};
+    REQUIRE(xg::xrSyncActions(session, &info) == XR_SUCCESS);
+  }
+  XrActionStateFloat hand(int h) {
+    XrActionStateGetInfo get{XR_TYPE_ACTION_STATE_GET_INFO, nullptr, grab, hands[size_t(h)]};
+    XrActionStateFloat value{XR_TYPE_ACTION_STATE_FLOAT};
+    REQUIRE(xg::xrGetActionStateFloat(session, &get, &value) == XR_SUCCESS);
+    CHECK(value.isActive);
+    return value;
+  }
+  XrActionStateBoolean either() {
+    XrActionStateGetInfo get{XR_TYPE_ACTION_STATE_GET_INFO, nullptr, any, XR_NULL_PATH};
+    XrActionStateBoolean value{XR_TYPE_ACTION_STATE_BOOLEAN};
+    REQUIRE(xg::xrGetActionStateBoolean(session, &get, &value) == XR_SUCCESS);
+    CHECK(value.isActive);
+    return value;
+  }
+};
+std::string grip_toggle_on(const char* profile) {
+  Config config;
+  config[profile].grip_toggle = true;
+  return encode(config);
+}
+}  // namespace
+
+TEST_CASE("Grip toggle latches an OpenXR game's grip per hand on a Vive wand") {
+  venture::test::ScopedMenuMode automatic("");
+  ScopedControls controls(grip_toggle_on("/interaction_profiles/htc/vive_controller"));
+  GripGame game("/interaction_profiles/htc/vive_controller");
+  game.sync(0, 0);
+  CHECK(game.hand(0).currentState == 0.f);
+  CHECK_FALSE(game.either().currentState);
+  // A press holds: the game sees the change once, however often it reads.
+  game.sync(1, 0);
+  auto left = game.hand(0);
+  CHECK(left.currentState == 1.f);
+  CHECK(left.changedSinceLastSync);
+  const XrTime pressed_at = left.lastChangeTime;
+  left = game.hand(0);
+  CHECK(left.currentState == 1.f);
+  CHECK(left.changedSinceLastSync);
+  CHECK(game.hand(1).currentState == 0.f);
+  CHECK(game.either().currentState);
+  game.sync(1, 0);
+  left = game.hand(0);
+  CHECK(left.currentState == 1.f);
+  CHECK_FALSE(left.changedSinceLastSync);
+  CHECK(left.lastChangeTime == pressed_at);
+  // Let go of the button: still held.
+  game.sync(0, 0);
+  CHECK(game.hand(0).currentState == 1.f);
+  CHECK(game.either().currentState);
+  // The other hand latches on its own; the action without a hand is one latch.
+  game.sync(0, 1);
+  CHECK(game.hand(1).currentState == 1.f);
+  CHECK(game.hand(0).currentState == 1.f);
+  CHECK_FALSE(game.either().currentState);
+  game.sync(0, 0);
+  // The next press lets go.
+  game.sync(1, 0);
+  left = game.hand(0);
+  CHECK(left.currentState == 0.f);
+  CHECK(left.changedSinceLastSync);
+  CHECK(game.either().currentState);
+  game.sync(0, 0);
+  CHECK(game.hand(0).currentState == 0.f);
+  CHECK(game.hand(1).currentState == 1.f);
+}
+
+TEST_CASE("Without grip toggle an OpenXR game's grip follows the button") {
+  venture::test::ScopedMenuMode automatic("");
+  // On for another controller only: the Vive wand's grip is unchanged.
+  ScopedControls controls(grip_toggle_on("/interaction_profiles/valve/index_controller"));
+  GripGame game("/interaction_profiles/htc/vive_controller");
+  game.sync(1, 0);
+  CHECK(game.hand(0).currentState == 1.f);
+  CHECK(game.either().currentState);
+  game.sync(0, 0);
+  CHECK(game.hand(0).currentState == 0.f);
+  CHECK_FALSE(game.either().currentState);
+  game.sync(1, 0);
+  CHECK(game.hand(0).currentState == 1.f);
+}
+
+TEST_CASE("Grip toggle latches a VrApi game's grip") {
+  venture::test::ScopedMenuMode automatic("");
+  ScopedControls controls(grip_toggle_on("/interaction_profiles/htc/vive_controller"));
+  VrApiGame game("/interaction_profiles/htc/vive_controller");
+  MockXrScript pressed{};
+  pressed.left.squeeze = 1;
+  CHECK(sees(game.read(pressed, 0), Quest::grip, 0));
+  CHECK(sees(game.read(MockXrScript{}, 0), Quest::grip, 0));
+  CHECK_FALSE(sees(game.read(MockXrScript{}, 1), Quest::grip, 1));
+  CHECK_FALSE(sees(game.read(pressed, 0), Quest::grip, 0));
+  CHECK_FALSE(sees(game.read(MockXrScript{}, 0), Quest::grip, 0));
 }

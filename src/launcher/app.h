@@ -24,6 +24,7 @@ struct ControlsEdit {
   int menu_chord_ms = controls::kChordHoldMs;   // two buttons: how long both are held (0: at once)
   // Per Quest input and hand: the host inputs (index + 1) in the player's order; empty: not assigned.
   std::array<std::array<std::vector<int>, 8>, 2> host{};
+  bool grip_toggle = false;  // each grip press flips the game's grip held / released
   bool custom = false;  // per game: overrides the defaults
   bool initialized = false;
 };

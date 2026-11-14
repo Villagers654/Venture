@@ -9,6 +9,7 @@ public final class NativeHost implements Host {
   public native void restartProcess(byte[] launchIntent);
   public native byte[] coldLaunchIntent();
   public native int vulkanHardwareVersion();
+  public native String convertDex(String archive, String[] classPath);
   public native void setupShadersDiskCache(String cacheFile);
   public native int activeNetworkType();
   public native boolean hasInternetConnectivity();

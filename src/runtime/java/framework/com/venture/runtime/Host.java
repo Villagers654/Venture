@@ -23,6 +23,12 @@ public interface Host {
   }
   default byte[] coldLaunchIntent() { return null; }
   default int vulkanHardwareVersion() { return 0; }
+  // Converts the classes*.dex of a zip archive (an APK, JAR or a wrapped DEX the
+  // app wrote at run time) to a verified host JAR linked against classPath, and
+  // returns that JAR's host path.
+  default String convertDex(String archive, String[] classPath) {
+    throw new UnsupportedOperationException("Host DEX conversion unavailable");
+  }
   // libEGL egl_set_cache_filename (HardwareRenderer.setupDiskCache). Hosts
   // without guest EGL have no blob cache to persist.
   default void setupShadersDiskCache(String cacheFile) {}

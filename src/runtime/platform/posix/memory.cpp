@@ -3,6 +3,7 @@
 #include "core/address_space.h"
 #include "core/error.h"
 #include <cerrno>
+#include <dirent.h>
 #include <sys/mman.h>
 #include <sys/syscall.h>
 #include <sys/uio.h>
@@ -125,6 +126,43 @@ bool memory_headroom(MemoryHeadroom& out) {
   }
   out = result;
   return true;
+}
+bool gpu_engine_times(std::vector<GpuEngineTime>& out) {
+  // Linux Documentation/gpu/drm-usage-stats.rst: each open DRM file reports
+  // "drm-engine-<name>: <ns> ns" per client; duplicated fds share a drm-client-id.
+  out.clear();
+  std::vector<std::pair<std::string, std::string>> seen;  // (pdev, client id)
+  auto* directory = opendir("/proc/self/fdinfo");
+  if (!directory) return false;
+  while (auto* entry = readdir(directory)) {
+    if (entry->d_name[0] == '.') continue;
+    std::ifstream file(std::string("/proc/self/fdinfo/") + entry->d_name);
+    std::string line, pdev, client;
+    std::vector<std::pair<std::string, std::uint64_t>> engines;
+    while (std::getline(file, line)) {
+      const auto colon = line.find(':');
+      if (colon == std::string::npos) continue;
+      const auto key = line.substr(0, colon);
+      std::istringstream value(line.substr(colon + 1));
+      if (key == "drm-pdev") value >> pdev;
+      else if (key == "drm-client-id") value >> client;
+      else if (key.rfind("drm-engine-", 0) == 0 && key.find("capacity") == std::string::npos) {
+        std::uint64_t ns = 0;
+        if (value >> ns) engines.emplace_back(key.substr(11), ns);
+      }
+    }
+    if (engines.empty() || client.empty()) continue;
+    if (std::find(seen.begin(), seen.end(), std::pair{pdev, client}) != seen.end()) continue;
+    seen.emplace_back(pdev, client);
+    for (auto& [name, ns] : engines) {
+      const auto key = pdev + " " + name;
+      auto it = std::find_if(out.begin(), out.end(), [&](const GpuEngineTime& e) { return e.engine == key; });
+      if (it == out.end()) out.push_back({key, ns});
+      else it->ns += ns;
+    }
+  }
+  closedir(directory);
+  return !out.empty();
 }
 bool commit_charge(CommitCharge& out) {
   // Linux Documentation/filesystems/proc.rst (meminfo) and mm/overcommit-accounting.rst.

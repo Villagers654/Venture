@@ -1,5 +1,6 @@
 #include "common/environment.h"
 #include "xr/menu_chord.h"
+#include "xr/grip_toggle.h"
 #include "xr/haptic_output.h"
 #include "xr/bindings.h"
 #include "common/controls.h"
@@ -262,7 +263,8 @@ XrResult sync_with_menu_chord(XrSession session, const XrActionsSyncInfo* info) 
   snapshot.active_sets.clear();
   for (std::uint32_t i = 0; i < info->countActiveActionSets; ++i)
     snapshot.active_sets[info->activeActionSets[i].actionSet] |= mask(info->activeActionSets[i].subactionPath);
-  if (result == XR_SUCCESS && (snapshot.profiles_stale || snapshot.sync % profile_refresh_syncs == 1)) {
+  const bool refresh = result == XR_SUCCESS && (snapshot.profiles_stale || snapshot.sync % profile_refresh_syncs == 1);
+  if (refresh) {
     snapshot.profiles_stale = false;
     const bool forced = menu_chord_forced();
     for (int hand = 0; hand < 2; ++hand) {
@@ -307,6 +309,7 @@ XrResult sync_with_menu_chord(XrSession session, const XrActionsSyncInfo* info) 
         if (missing & (1u << hand)) snapshot.chord_hands[hand] = true;
     }
   }
+  grip_toggle_sync(session, snapshot.sync, snapshot.profiles, refresh);
   XrActionStateBoolean values[2]{{XR_TYPE_ACTION_STATE_BOOLEAN}, {XR_TYPE_ACTION_STATE_BOOLEAN}};
   const bool chord = snapshot.synthesized || snapshot.chord_hands[0] || snapshot.chord_hands[1];
   const unsigned count = snapshot.synthesized ? std::max(1u, snapshot.source_count) : 2u;

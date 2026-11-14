@@ -5133,6 +5133,28 @@ TEST_CASE("the desktop mirror gets a low-priority queue of its own beside the ga
   }
   venture::xr::forget_mirror_queue(device);
 }
+TEST_CASE("XR Android display covers both eyes with a Quest's panel headroom") {
+  using venture::xr::android_display_size;
+  // Quest 3: 1680x1760 eyes on 2064x2208 panels (4128x2208 display); close to 5/4.
+  auto size = android_display_size({1680, 1760});
+  CHECK(size.width == 4200);
+  CHECK(size.height == 2200);
+  // A PC VR eye larger than 1920x1080 (Star Wars: Tales from the Galaxy's Edge
+  // drew only the bottom-left 1920x1080 of its 2800x2864 eye): the display
+  // covers the eye and the rows an engine rounds it up by.
+  size = android_display_size({2800, 2856});
+  CHECK(size.width == 7000);
+  CHECK(size.height == 3570);
+  CHECK(size.height >= 2864);
+  // Odd sides round up to even pixels.
+  size = android_display_size({2801, 1001});
+  CHECK(size.width == 2 * 3502);
+  CHECK(size.height == 1252);
+  // No host views: the previous fixed window.
+  size = android_display_size({});
+  CHECK(size.width == 1920);
+  CHECK(size.height == 1080);
+}
 TEST_CASE("XR display overrides parse the launcher's settings, clamp sizes and pick only listed rates") {
   using venture::xr::parse_display_override;
   auto o = parse_display_override("1680x1760", "90");

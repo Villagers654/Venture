@@ -2606,8 +2606,19 @@ public final class FrameworkTest {
     var libraryLoads = new ArrayList<String>();
     var libraryLoaders = new ArrayList<ClassLoader>();
     var nativeCreates = new int[1];
+    var dexInputs = new ArrayList<byte[]>();
+    var dexClassPaths = new ArrayList<List<String>>();
+    var dexResult = new String[1];
     var obbHost = (Host) java.lang.reflect.Proxy.newProxyInstance(Host.class.getClassLoader(),
         new Class<?>[]{Host.class}, (proxy, method, values) -> {
+          if (method.getName().equals("convertDex")) {
+            try (var zip = new java.util.zip.ZipFile((String) values[0])) {
+              dexInputs.add(zip.getInputStream(zip.getEntry("classes.dex")).readAllBytes());
+            }
+            dexClassPaths.add(List.of((String[]) values[1]));
+            if (dexResult[0] == null) throw new IllegalStateException("fixture conversion failed");
+            return dexResult[0];
+          }
           if (method.getName().equals("loadLibrary")) { libraryLoads.add((String) values[0]); libraryLoaders.add((ClassLoader) values[1]); return null; }
           if (method.getName().equals("setupShadersDiskCache")) { shaderCache[0] = (String) values[0]; return null; }
           if (method.getName().equals("setEnvironment")) {
@@ -2873,6 +2884,36 @@ public final class FrameworkTest {
           && loader.getResource("androidx/lifecycle/LifecycleObserver.class").getProtocol().equals("jar"),
           "the APK's own androidx.lifecycle takes precedence over the contract");
     }
+    // DEX the app has at run time (Swappy's classes from the Android Game SDK)
+    // goes through the host converter; the converted JAR serves its classes.
+    byte[] dex = "dex\n035\0fixture".getBytes(java.nio.charset.StandardCharsets.ISO_8859_1);
+    Files.createDirectories(obbRoot.resolve("cache"));
+    Files.write(obbRoot.resolve("cache/ags1.dex"), dex);
+    dexResult[0] = lifecycleJar.toString();
+    try (var loader = new dalvik.system.DexClassLoader("/data/user/0/test.game/cache/ags1.dex",
+        null, null, FrameworkTest.class.getClassLoader())) {
+      check(loader.loadClass("androidx.lifecycle.LifecycleObserver").getClassLoader() == loader
+          && dexInputs.size() == 1 && Arrays.equals(dexInputs.get(0), dex)
+          && dexClassPaths.get(0).equals(List.of(obbRoot.resolve("app.jar").toString())),
+          "a DEX file at a guest path is converted against the app's classes and its classes load");
+    }
+    try (var loader = new dalvik.system.InMemoryDexClassLoader(java.nio.ByteBuffer.wrap(dex),
+        FrameworkTest.class.getClassLoader())) {
+      check(loader.loadClass("androidx.lifecycle.LifecycleObserver").getClassLoader() == loader
+          && dexInputs.size() == 2 && Arrays.equals(dexInputs.get(1), dex),
+          "InMemoryDexClassLoader converts its buffer's DEX");
+    }
+    dexResult[0] = null;
+    providerWarnings.clear();
+    for (String entry : List.of("/data/user/0/test.game/cache/missing.dex", "/data/user/0/test.game/cache/ags1.dex")) {
+      try (var loader = new dalvik.system.PathClassLoader(entry, FrameworkTest.class.getClassLoader())) {
+        // The contract class from the parent, not one of the entry's own.
+        boolean absent = loader.loadClass("androidx.lifecycle.LifecycleObserver") == androidx.lifecycle.LifecycleObserver.class;
+        check(absent && providerWarnings.stream().anyMatch(w -> w.startsWith("Unable to load dex file: " + entry)),
+            "a missing or unconvertible DEX entry is skipped with a warning: " + entry);
+      }
+    }
+    providerWarnings.clear();
     var layout = new android.view.WindowManager.LayoutParams();
     check(layout.preferredDisplayModeId == 0 && layout.preferredRefreshRate == 0, "no preferred display mode by default");
     android.os.BaseBundle base = new Bundle();  // bytecode names BaseBundle as the accessor owner

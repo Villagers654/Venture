@@ -15,16 +15,66 @@ public class BaseDexClassLoader extends java.net.URLClassLoader {
   private static java.net.URL[] urls(String path) {
     return entries(path)
         .filter(s -> !appApk(s))
-        .map(s -> {
-          if (!s.endsWith(".jar"))
-            throw new UnsupportedOperationException("DEX must be converted before loading: " + s);
-          try {
-            return new java.io.File(s).toURI().toURL();
-          } catch (java.net.MalformedURLException e) {
-            throw new IllegalArgumentException(e);
-          }
-        })
+        .map(BaseDexClassLoader::url)
+        .filter(java.util.Objects::nonNull)
         .toArray(java.net.URL[] ::new);
+  }
+  // A host class JAR (the converted app, framework tests) is used as it is. Any
+  // other entry is Android code: a DEX file, or an APK/JAR/zip with root
+  // classes*.dex, converted like the APK. As in ART's DexPathList, any other
+  // entry that is missing or holds no DEX is skipped with a warning, and its
+  // classes are simply not found.
+  private static java.net.URL url(String entry) {
+    var file = new java.io.File(com.venture.runtime.RuntimeEnvironment.toHostPath(entry));
+    try {
+      String converted = file.isFile() ? convert(file) : null;
+      if (converted == null && entry.endsWith(".jar"))
+        converted = file.getPath();
+      if (converted == null) {
+        android.util.Log.w("DexPathList", "Unable to load dex file: " + entry);
+        return null;
+      }
+      return new java.io.File(converted).toURI().toURL();
+    } catch (java.io.IOException | RuntimeException e) {
+      android.util.Log.w("DexPathList", "Unable to load dex file: " + entry + ": " + e);
+      return null;
+    }
+  }
+  private static final byte[] DEX_MAGIC = {'d', 'e', 'x', '\n'};
+  private static final java.util.regex.Pattern ROOT_DEX = java.util.regex.Pattern.compile("classes[0-9]*\\.dex");
+  // The converted JAR's host path, or null when the file holds no DEX.
+  private static String convert(java.io.File file) throws java.io.IOException {
+    byte[] head = new byte[4];
+    int read;
+    try (var in = new java.io.FileInputStream(file)) {
+      read = in.readNBytes(head, 0, 4);
+    }
+    var env = com.venture.runtime.RuntimeEnvironment.current();
+    String[] classPath = env == null || env.classesJar.isEmpty()
+        ? new String[0] : env.classesJar.split(java.util.regex.Pattern.quote(java.io.File.pathSeparator));
+    var host = com.venture.runtime.RuntimeEnvironment.host();
+    if (read == 4 && java.util.Arrays.equals(head, DEX_MAGIC)) {
+      // The converter reads root classes*.dex from a zip; the cache is keyed by
+      // DEX content, so the wrapper is only its input.
+      var archive = java.io.File.createTempFile("venture-dex", ".zip");
+      try {
+        try (var zip = new java.util.zip.ZipOutputStream(new java.io.FileOutputStream(archive))) {
+          zip.putNextEntry(new java.util.zip.ZipEntry("classes.dex"));
+          java.nio.file.Files.copy(file.toPath(), zip);
+          zip.closeEntry();
+        }
+        return host.convertDex(archive.getPath(), classPath);
+      } finally {
+        archive.delete();
+      }
+    }
+    try (var zip = new java.util.zip.ZipFile(file)) {
+      if (zip.stream().noneMatch(e -> ROOT_DEX.matcher(e.getName()).matches()))
+        return null;
+    } catch (java.util.zip.ZipException notZip) {
+      return null;
+    }
+    return host.convertDex(file.getPath(), classPath);
   }
   // The app's own APK, by its host path (getPackageCodePath) or its device path
   // (/data/app/<package>/base.apk). Its classes were converted at launch and the

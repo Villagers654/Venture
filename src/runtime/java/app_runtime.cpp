@@ -34,6 +34,7 @@
 #include "platform/runtime_stop.h"
 #include "core/profile.h"
 #include "core/lifecycle_grace.h"
+#include "xr/display_override.h"
 #include "xr/host_xr.h"
 #include "xr/native.h"
 #include "xr/vulkan_layers.h"
@@ -57,6 +58,54 @@
 
 namespace venture::java {
 namespace {
+std::string java_utf8(JNIEnv* env, jstring text) {
+  std::u16string value(static_cast<std::size_t>(env->GetStringLength(text)), u' ');
+  env->GetStringRegion(text, 0, static_cast<jsize>(value.size()), reinterpret_cast<jchar*>(value.data()));
+  return paths::utf8(std::filesystem::path(value));
+}
+// NativeHost.convertDex: a DexClassLoader or InMemoryDexClassLoader over DEX the
+// app has at run time (the Android Game SDK extracts Swappy's Java classes from
+// its native library) gets the APK's own cached converter, keyed by DEX
+// content and linked against the framework and the given class path.
+jstring JNICALL convert_dex(JNIEnv* env, jobject, jstring archive, jobjectArray class_path) {
+  try {
+    if (!archive) throw std::invalid_argument("null DEX archive");
+    const auto support = support_files();
+    ConversionOptions options;
+    options.java = paths::utf8(support.dex_java);
+    options.tools = paths::utf8(support.dex_tools);
+    options.apk = java_utf8(env, archive);
+    options.package = process_config().package;
+    options.cache = paths::utf8(process_config().cache_dir / "java-dex");
+    options.framework_jars = {paths::utf8(support.framework), paths::utf8(support.bridge)};
+    options.hierarchy_metadata = {paths::utf8(support.hierarchy)};
+    const jsize count = class_path ? env->GetArrayLength(class_path) : 0;
+    for (jsize i = 0; i < count; ++i) {
+      auto entry = static_cast<jstring>(env->GetObjectArrayElement(class_path, i));
+      if (entry) options.framework_jars.push_back(java_utf8(env, entry));
+      env->DeleteLocalRef(entry);
+    }
+    ConvertedApk converted;
+    std::string error;
+    if (!convert_apk(options, &converted, &error) && !converted.translation_complete)
+      throw std::runtime_error("DEX conversion failed: " + error);
+    log::info("framework", "Run-time DEX converted: {}", converted.app_jar);
+    const auto jar = paths::from_utf8(converted.app_jar).u16string();
+    return env->NewString(reinterpret_cast<const jchar*>(jar.data()), static_cast<jsize>(jar.size()));
+  } catch (const std::exception& e) {
+    if (auto cls = env->FindClass("java/lang/IllegalStateException")) env->ThrowNew(cls, e.what());
+    return nullptr;
+  }
+}
+void register_dex_conversion(JNIEnv* env) {
+  auto cls = env->FindClass("com/venture/runtime/NativeHost");
+  if (!cls) return;
+  const JNINativeMethod method{const_cast<char*>("convertDex"),
+                               const_cast<char*>("(Ljava/lang/String;[Ljava/lang/String;)Ljava/lang/String;"),
+                               reinterpret_cast<void*>(convert_dex)};
+  if (env->RegisterNatives(cls, &method, 1) != JNI_OK) env->ExceptionClear();
+  env->DeleteLocalRef(cls);
+}
 // Set by the first successful xrWaitFrame: the game reached its XR frame loop.
 std::atomic<bool> frame_loop_started{false};
 std::string apk_label() {
@@ -295,6 +344,7 @@ void launch_android_app(const AppLaunchOptions& options) {
   std::string error;
   install_runtime_framework_bridges();
   register_framework_natives();
+  add_framework_natives(register_dex_conversion);
   register_sqlite_natives();
   register_graphics_natives();
   log::info("launch", "Starting HotSpot with Android framework and verified class loading");
@@ -322,6 +372,15 @@ void launch_android_app(const AppLaunchOptions& options) {
   log::info("launch", "Initializing host OpenXR");
   auto& xr = xr::host_xr();
   if (!xr.available) throw std::runtime_error(xr.error);
+  {
+    // The Android display covers both eyes at the size games render, as a
+    // Quest's covers its panels; Unreal draws no more of an eye than the window.
+    const auto display = xr::android_display_size(xr::reported_eye().target);
+    if (set_framework_display_size(std::int32_t(display.width), std::int32_t(display.height)))
+      log::info("launch", "Android display {}x{}", display.width, display.height);
+    else
+      log::warn("launch", "Android display size could not be set; keeping 1920x1080");
+  }
   // Games play and record on the headset's endpoint when the runtime names
   // one, as native PC VR apps do; otherwise on the system default.
   if (xr.enabled_extensions.contains("XR_OCULUS_audio_device_guid"))

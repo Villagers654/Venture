@@ -142,6 +142,8 @@ def generate(registry, output, check=False):
             code.append('  forget_action_states();')
         if name == 'xrGetActionStateBoolean':
             code.append('  if (XR_SUCCEEDED(result)) venture::xr::menu_action_state(session, getInfo, state);')
+        if name in ('xrGetActionStateBoolean', 'xrGetActionStateFloat'):
+            code.append('  if (XR_SUCCEEDED(result)) venture::xr::grip_action_state(session, getInfo, state);')
         if name.startswith('xrCreate'):
             last = params[-1]; typ = last.findtext('type'); pname = last.findtext('name')
             if types.get(typ) is not None and types[typ].get('category') == 'handle':

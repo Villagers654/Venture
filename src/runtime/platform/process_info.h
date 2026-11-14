@@ -2,6 +2,7 @@
 #include <cstdint>
 #include <mutex>
 #include <string>
+#include <vector>
 
 namespace venture::platform {
 struct ProcessMemory { std::uint64_t private_kib = 0, shared_pss_kib = 0; };
@@ -24,6 +25,12 @@ struct CommitCharge {
   bool enforced = true;
 };
 bool commit_charge(CommitCharge& out);
+// Cumulative time each GPU engine has spent running this process's work, as the OS
+// accounts it: Windows "GPU Engine" Running Time (Task Manager's per-process GPU
+// usage); Linux DRM fdinfo drm-engine-* (amdgpu, i915, xe, panfrost, ...). Keyed by
+// adapter and engine. False when the host cannot say (e.g. NVIDIA's Linux driver).
+struct GpuEngineTime { std::string engine; std::uint64_t ns = 0; };
+bool gpu_engine_times(std::vector<GpuEngineTime>& out);
 bool process_debugger_attached();
 // A hardware user shadow stack (x86 CET) is enforced for the calling thread:
 // every RET must match a CALL, so code may not discard return addresses.

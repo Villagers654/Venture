@@ -17,6 +17,12 @@ TEST_CASE("debug report: known causes, most specific first") {
   REQUIRE(xr);
   CHECK(xr->cause.find("No OpenXR runtime") != std::string::npos);
   // A crash after the game could not read its account: the account is the cause.
+  // SteamVR saw no headset (Animal Company report): that, not a closing runtime, is the cause.
+  auto no_hmd = diagnose("E [runtime] The OpenXR runtime failed to create an instance (XrResult -2). Close ...\n"
+                         "[Info] - No connected devices found. Returning best error "
+                         "VRInitError_Driver_WirelessHmdNotConnectedAndNoSteam\n");
+  REQUIRE(no_hmd);
+  CHECK(no_hmd->cause.find("found no headset") != std::string::npos);
   auto vault = diagnose("W [ovrplatform] Meta session load failed stage=vault-session\nE [libc] Fatal signal 11\n");
   REQUIRE(vault);
   CHECK(vault->cause.find("Meta sign-in") != std::string::npos);

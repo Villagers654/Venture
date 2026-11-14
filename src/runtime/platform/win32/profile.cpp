@@ -130,6 +130,23 @@ std::vector<ProfileThread> profile_threads() {
   } while (Thread32Next(snapshot.get(), &e));
   return out;
 }
+std::string profile_thread_start_module(const ProfileThread& t) {
+  // NtQueryInformationThread(ThreadQuerySetWin32StartAddress = 9): the start routine
+  // CreateThread was given, which belongs to the module that created the thread.
+  using Query = LONG (NTAPI*)(HANDLE, int, PVOID, ULONG, PULONG);
+  static const auto query = reinterpret_cast<Query>(GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtQueryInformationThread"));
+  void* start = nullptr;
+  if (!query || !t.handle || query(t.handle.get(), 9, &start, sizeof(start), nullptr) < 0 || !start) return {};
+  HMODULE module = nullptr;
+  if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                          static_cast<LPCWSTR>(start), &module)) return {};
+  wchar_t path[MAX_PATH];
+  const auto n = GetModuleFileNameW(module, path, MAX_PATH);
+  if (!n || n >= MAX_PATH) return {};
+  const wchar_t* name = path;
+  for (const wchar_t* p = path; *p; ++p) if (*p == L'\\' || *p == L'/') name = p + 1;
+  return utf8(name);
+}
 bool profile_cpu_time(const ProfileThread& t, std::uint64_t& ns) noexcept {
   FILETIME created{}, exited{}, kernel{}, user{};
   if (!GetThreadTimes(t.handle.get(), &created, &exited, &kernel, &user)) return false;

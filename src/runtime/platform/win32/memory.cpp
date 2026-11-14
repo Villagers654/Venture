@@ -7,6 +7,7 @@
 #include <io.h>
 #include <cstring>
 #include <algorithm>
+#include <string>
 #include <vector>
 
 namespace venture::platform {
@@ -152,6 +153,53 @@ bool memory_headroom(MemoryHeadroom& out) {
   }
   out = result;
   return true;
+}
+bool gpu_engine_times(std::vector<GpuEngineTime>& out) {
+  // PDH "\GPU Engine(pid_<pid>_luid_..._phys_N_eng_M_engtype_X)\Running Time", in 100 ns
+  // units. pdh.dll is loaded on first use; the query stays open and re-expands the
+  // wildcard on every collection, so engines first used later appear too.
+  out.clear();
+  struct RawCounter { DWORD status; FILETIME time; LONGLONG first, second; DWORD count; };
+  struct RawItem { wchar_t* name; RawCounter value; };
+  using Open = LONG (WINAPI*)(const wchar_t*, DWORD_PTR, HANDLE*);
+  using Add = LONG (WINAPI*)(HANDLE, const wchar_t*, DWORD_PTR, HANDLE*);
+  using Collect = LONG (WINAPI*)(HANDLE);
+  using Array = LONG (WINAPI*)(HANDLE, DWORD*, DWORD*, RawItem*);
+  struct Pdh {
+    Collect collect = nullptr;
+    Array array = nullptr;
+    HANDLE query = nullptr, counter = nullptr;
+    std::wstring prefix;
+  };
+  static const Pdh pdh = [] {
+    Pdh p;
+    const auto library = LoadLibraryExW(L"pdh.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
+    if (!library) return p;
+    const auto open = reinterpret_cast<Open>(GetProcAddress(library, "PdhOpenQueryW"));
+    const auto add = reinterpret_cast<Add>(GetProcAddress(library, "PdhAddEnglishCounterW"));
+    p.collect = reinterpret_cast<Collect>(GetProcAddress(library, "PdhCollectQueryData"));
+    p.array = reinterpret_cast<Array>(GetProcAddress(library, "PdhGetRawCounterArrayW"));
+    p.prefix = L"pid_" + std::to_wstring(GetCurrentProcessId()) + L"_";
+    const auto path = L"\\GPU Engine(" + p.prefix + L"*)\\Running Time";
+    if (!open || !add || !p.collect || !p.array || open(nullptr, 0, &p.query) != 0 ||
+        add(p.query, path.c_str(), 0, &p.counter) != 0)
+      p.collect = nullptr;
+    return p;
+  }();
+  if (!pdh.collect || pdh.collect(pdh.query) != 0) return false;
+  DWORD bytes = 0, count = 0;
+  constexpr LONG more_data = static_cast<LONG>(0x800007D2);  // PDH_MORE_DATA
+  if (pdh.array(pdh.counter, &bytes, &count, nullptr) != more_data || !bytes) return false;
+  std::vector<std::byte> buffer(bytes);
+  auto* items = reinterpret_cast<RawItem*>(buffer.data());
+  if (pdh.array(pdh.counter, &bytes, &count, items) != 0) return false;
+  for (DWORD i = 0; i < count; ++i) {
+    std::wstring name = items[i].name ? items[i].name : L"";
+    if (name.rfind(pdh.prefix, 0) == 0) name.erase(0, pdh.prefix.size());
+    std::string engine(name.begin(), name.end());  // ASCII instance names
+    out.push_back({std::move(engine), static_cast<std::uint64_t>(items[i].value.first) * 100});  // wraps; diffs stay right
+  }
+  return !out.empty();
 }
 bool commit_charge(CommitCharge& out) {
   PERFORMANCE_INFORMATION system{};

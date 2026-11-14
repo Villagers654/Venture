@@ -480,3 +480,28 @@ TEST_CASE("Controls rows with several inputs are saved as lists; single ones sta
   CHECK(rows[int(Quest::trigger)] == Inputs{"/input/trigger/value"});
   CHECK_FALSE(rows[int(Quest::grip)]);
 }
+
+TEST_CASE("Controls grip toggle is saved only when on, and older settings decode without it") {
+  Config config;
+  config["/interaction_profiles/htc/vive_controller"].grip_toggle = true;
+  config["/interaction_profiles/valve/index_controller"].rows[0][int(Quest::primary)] = Inputs{"/input/b/click"};
+  const auto text = encode(config);
+  CHECK(text.find("\"gripToggle\":true") != std::string::npos);
+  CHECK(text.find("gripToggle") == text.rfind("gripToggle"));  // the Index entry has none
+  CHECK(decode(text) == config);
+  // Settings saved before the option: off.
+  const auto old = decode(R"({"/interaction_profiles/htc/vive_controller":{"menu":{"mode":"off","holdMs":500}}})");
+  CHECK_FALSE(old.at("/interaction_profiles/htc/vive_controller").grip_toggle);
+  // Not a boolean: ignored.
+  CHECK_FALSE(decode(R"({"p":{"gripToggle":1}})").at("p").grip_toggle);
+  CHECK_FALSE(decode(R"({"p":{"gripToggle":"yes"}})").at("p").grip_toggle);
+  // A choice of only the toggle is still a choice (not the defaults).
+  Choice only;
+  only.grip_toggle = true;
+  CHECK_FALSE(only == Choice{});
+  // resolve() carries it; no choice is off.
+  const auto& vive = profile("/interaction_profiles/htc/vive_controller");
+  CHECK(resolve(vive, &only).grip_toggle);
+  CHECK_FALSE(resolve(vive, nullptr).grip_toggle);
+  CHECK_FALSE(resolve(vive, &old.at("/interaction_profiles/htc/vive_controller")).grip_toggle);
+}
