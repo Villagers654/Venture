@@ -111,7 +111,9 @@ XrResult suggest_translated(XrInstance instance, XrPath profile, std::vector<XrA
         if (slash == std::string::npos) return false;
         const std::string_view component = std::string_view(path).substr(slash);
         if (component.ends_with("/pose")) return false;
-        if (step == 1) return component.ends_with("/touch") && !component.ends_with("/thumbrest/touch");
+        if (step == 1)
+          return component.ends_with("/touch") && !component.ends_with("/thumbrest/touch") &&
+                 !(p && controls::find_input(*p, component));
         if (!p) return false;
         std::string_view base = component;
         if (base.ends_with("/x") || base.ends_with("/y")) base.remove_suffix(2);
