@@ -176,6 +176,21 @@ TEST_CASE("OpenXR layer manifests are read as the loader reads them") {
 //   2: a working layer first, then the broken ones and a layer that loads
 //      and fails every xrCreateInstance itself.
 TEST_CASE("The host OpenXR instance leaves out only the implicit layers that fail to load" * doctest::skip()) {
+#ifdef _WIN32
+  // An elevated process (CI runners are) makes the OpenXR loader ignore
+  // XR_RUNTIME_JSON, so the mock runtime this test needs can't be selected.
+  HANDLE token = nullptr;
+  TOKEN_ELEVATION elevation{};
+  DWORD size = 0;
+  const bool elevated = OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token) &&
+                        GetTokenInformation(token, TokenElevation, &elevation, sizeof(elevation), &size) &&
+                        elevation.TokenIsElevated;
+  if (token) CloseHandle(token);
+  if (elevated) {
+    MESSAGE("skipped: the OpenXR loader ignores XR_RUNTIME_JSON in an elevated process");
+    return;
+  }
+#endif
   const char *mode_text = std::getenv("VENTURE_TEST_XR_WORKING_LAYER");
   const int mode = mode_text ? std::atoi(mode_text) : 0;
   const bool working = mode != 0;
