@@ -313,13 +313,12 @@ bool same_create_info(const XrSwapchainCreateInfo& a, const XrSwapchainCreateInf
          a.sampleCount == b.sampleCount && a.width == b.width && a.height == b.height &&
          a.faceCount == b.faceCount && a.arraySize == b.arraySize && a.mipCount == b.mipCount;
 }
-// Only the Oculus runtime faults in a running session's xrDestroySwapchain;
-// others keep destroying at once (VENTURE_XR_PARK_SWAPCHAINS=1/0 overrides).
+// A running session's host chains are parked rather than destroyed: some
+// runtimes (Oculus) fault in xrDestroySwapchain mid-session, and a parked chain
+// serves the next guest chain like it. VENTURE_XR_PARK_SWAPCHAINS=0 destroys at once.
 bool park_on_destroy() {
   if (const auto* v = venture::environment::getenv("VENTURE_XR_PARK_SWAPCHAINS"); v && *v) return *v == '1';
-  auto name = host_xr().runtime_name;
-  std::ranges::transform(name, name.begin(), [](unsigned char c) { return char(std::tolower(c)); });
-  return name.find("oculus") != std::string::npos || name.find("meta") != std::string::npos;
+  return true;
 }
 // A chain with an extension struct, or a static image the runtime lets the
 // application acquire once, cannot serve another guest chain.

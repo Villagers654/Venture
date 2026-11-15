@@ -1,11 +1,16 @@
 // Subpass inputs read as sampled images.
 //
-// AMD's Windows driver reads a multiview subpass input from the first view's
-// layer in every view: the H3VR2 eye pass resolves its second subpass from
-// subpassLoad of the first subpass's color, and the right eye came out a copy
-// of the left (diagnostic build 5: both views render correctly, and reading the
-// same attachment as a sampled image at layer ViewIndex gives each eye its own
-// image). On that driver every subpass input is read that way:
+// Some drivers read a multiview subpass input from the first view's layer in
+// every view. On AMD's Windows driver the H3VR2 eye pass resolves its second
+// subpass from subpassLoad of the first subpass's color, and the right eye
+// came out a copy of the left (diagnostic build 5: both views render
+// correctly, and reading the same attachment as a sampled image at layer
+// ViewIndex gives each eye its own image); an Intel Arc on Windows showed H3VR2
+// in the left eye only. Which drivers do this is not a vendor list: at device
+// creation a two-view render reads back what view 1's subpassLoad got
+// (subpass_input_probe.cpp), once per driver, the result kept in Venture's
+// cache folder. Where a view reads another view's layer, every subpass input
+// is read as a sampled image:
 //
 // - fragment shaders: each subpass input image type becomes a sampled 2D array
 //   image, and each subpassLoad (OpImageRead) becomes a texel fetch at the
@@ -20,14 +25,19 @@
 //   fragment shader reads (render_area.cpp).
 //
 // The input attachment references stay in the subpasses for their layouts.
-// VENTURE_VULKAN_SAMPLED_INPUTS=1 turns this on for any driver, =0 off.
+// When the probe cannot run, AMD's Windows driver (where the bug was found)
+// reads sampled inputs and other drivers do not.
+// VENTURE_VULKAN_SAMPLED_INPUTS=1 turns this on for any driver, =0 off; either
+// skips the probe.
 #include <algorithm>
 #include <cstring>
+#include <format>
 #include <unordered_map>
 #include <unordered_set>
 
 #include "common/environment.h"
 #include "common/log.h"
+#include "common/paths.h"
 #include "internal.h"
 
 namespace venture::vulkan {
@@ -36,13 +46,29 @@ std::atomic<bool> active{false};
 }
 bool sampled_input_reads() { return active.load(std::memory_order_relaxed); }
 void set_sampled_input_reads(bool on) { active.store(on, std::memory_order_relaxed); }
-bool sampled_input_driver(std::uint32_t driver_id, bool multiview) {
+std::optional<bool> sampled_input_override() {
   const auto* value = venture::environment::getenv("VENTURE_VULKAN_SAMPLED_INPUTS");
   if (value && std::string_view(value) == "0") return false;
   if (value && std::string_view(value) == "1") return true;
-  return multiview && driver_id == VK_DRIVER_ID_AMD_PROPRIETARY;
+  return std::nullopt;
 }
-void choose_sampled_input_reads(VkPhysicalDevice physical, const VkDeviceCreateInfo& info) {
+bool sampled_input_driver(std::uint32_t driver_id, bool multiview, SubpassInputProbe probe) {
+  if (const auto forced = sampled_input_override()) return *forced;
+  if (!multiview) return false;
+  if (probe != SubpassInputProbe::unavailable) return probe == SubpassInputProbe::other_layer;
+  // Without a result, take the reads that are right on every driver.
+  (void)driver_id;
+  return true;
+}
+std::filesystem::path gpu_probe_cache_directory() {
+  try {
+    return paths::data_dir() / "cache" / "gpu-probes";
+  } catch (...) {
+    return {};
+  }
+}
+void choose_sampled_input_reads(VkPhysicalDevice physical, VkDevice device, const VkDeviceCreateInfo& info,
+                                const std::filesystem::path& cache_directory) try {
   // Without the multiview feature no render pass has views, and the shaders
   // could not declare ViewIndex.
   bool multiview = false;
@@ -52,19 +78,53 @@ void choose_sampled_input_reads(VkPhysicalDevice physical, const VkDeviceCreateI
     if (p->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES)
       multiview |= reinterpret_cast<const VkPhysicalDeviceVulkan11Features*>(p)->multiview != VK_FALSE;
   }
+  if (const auto forced = sampled_input_override()) {
+    if (*forced && !multiview) {
+      log::warn("vulkan", "Subpass inputs stay input attachments: the device has no multiview feature to read them by view");
+      return;
+    }
+    set_sampled_input_reads(*forced);
+    if (*forced)
+      log::info("vulkan", "Subpass inputs are read as sampled images, one array layer per view "
+                          "(VENTURE_VULKAN_SAMPLED_INPUTS=1)");
+    return;
+  }
+  if (!multiview) {
+    set_sampled_input_reads(false);
+    return;
+  }
   VkPhysicalDeviceDriverProperties driver{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES};
   VkPhysicalDeviceProperties2 properties{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, &driver};
   if (auto get = reinterpret_cast<PFN_vkGetPhysicalDeviceProperties2>(
           raw_physical_proc(physical, "vkGetPhysicalDeviceProperties2")))
     get(physical, &properties);
-  const bool on = sampled_input_driver(driver.driverID, multiview);
-  if (on && !multiview) {
-    log::warn("vulkan", "Subpass inputs stay input attachments: the device has no multiview feature to read them by view");
-    return;
+  const auto& p = properties.properties;
+  // Once per driver: a result in the cache folder stands until the driver changes.
+  const auto file = cache_directory.empty()
+      ? std::filesystem::path{}
+      : subpass_input_probe_file(cache_directory, p.vendorID, p.deviceID, p.driverVersion);
+  auto probe = file.empty() ? SubpassInputProbe::unavailable : cached_subpass_input_probe(file);
+  const bool cached = probe != SubpassInputProbe::unavailable;
+  double milliseconds = 0;
+  if (!cached) {
+    probe = probe_subpass_inputs(physical, device, std::span(info.pQueueCreateInfos, info.queueCreateInfoCount),
+                                 &milliseconds);
+    if (!file.empty()) cache_subpass_input_probe(file, probe);
   }
+  const bool on = sampled_input_driver(driver.driverID, multiview, probe);
   set_sampled_input_reads(on);
-  if (on) log::info("vulkan", "Subpass inputs are read as sampled images, one array layer per view (driver {})",
-                    int(driver.driverID));
+  const auto gpu = std::format("{} ({} {}, vendor {:#06x} device {:#06x} driver version {:#x})", p.deviceName,
+                               driver.driverName, driver.driverInfo, p.vendorID, p.deviceID, p.driverVersion);
+  const char* outcome = on ? "subpass inputs are read as sampled images, one array layer per view"
+                           : "subpass inputs stay input attachments";
+  if (probe == SubpassInputProbe::unavailable)
+    log::warn("vulkan", "Multiview subpass input probe could not run on {}; {}", gpu, outcome);
+  else
+    log::info("vulkan", "Multiview subpass input probe ({}): view 1 read {} on {}; {}",
+              cached ? std::string("cached") : std::format("{:.1f} ms", milliseconds),
+              probe == SubpassInputProbe::own_layer ? "its own layer" : "another view's layer", gpu, outcome);
+} catch (...) {
+  // Never fails device creation; the choice stays as it was.
 }
 VkDescriptorType sampled_input_type(VkDescriptorType type) {
   return type == VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT && sampled_input_reads() ? VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE

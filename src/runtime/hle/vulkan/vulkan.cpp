@@ -417,13 +417,24 @@ void report_device_fault_info(VkDevice device) {
     log::warn("vulkan-fault", "kind={} address={:#x} precision={:#x}", int(a.addressType),
               a.reportedAddress, a.addressPrecision);
     // 0xdeadbeef filling both halves of a 64-bit word reads as GPU address
-    // 0xbeefdeadbeef (48 bits): the GPU took its address from memory holding
-    // that fill, such as a descriptor or pointer that was never written.
+    // 0xbeefdeadbeef (48 bits). AMD's driver (PAL InitPageFaultDebugSrd) puts
+    // one buffer descriptor with base 0xdeadbeefdeadbeef and unlimited range
+    // at the start of its descriptor-table address range, where a table
+    // pointer of 0 lands: a shader that reads the first binding of a set no
+    // command bound (or one a later bind disturbed) fetches from that address
+    // plus its own offset. A descriptor the game left unwritten in a bound set
+    // reads differently, so the null fill cannot prevent this one.
     constexpr std::uint64_t fill = 0xbeefdeadbeefull;
-    if (a.reportedAddress + a.addressPrecision >= fill && a.reportedAddress < fill + (std::uint64_t(1) << 24))
+    if (a.reportedAddress + a.addressPrecision >= fill && a.reportedAddress < fill + (std::uint64_t(1) << 24)) {
       log::warn("vulkan-fault", "address {:#x} is {:#x} past 0xbeefdeadbeef, the 48-bit address of a 0xdeadbeef fill "
-                "pattern: the GPU likely used an address read from memory holding that fill, not one of the "
-                "device's ranges", a.reportedAddress, a.reportedAddress >= fill ? a.reportedAddress - fill : 0);
+                "pattern: on AMD this is the debug descriptor behind descriptor sets that are not bound, so a draw "
+                "or dispatch read the first binding of a set index nothing bound (or a later bind disturbed), as a "
+                "buffer at about that offset; elsewhere an address read from memory holding that fill",
+                a.reportedAddress, a.reportedAddress >= fill ? a.reportedAddress - fill : 0);
+      for (const auto& note : bound_sets_fault_notes()) log::warn("vulkan-fault", "unbound sets: {}", note);
+      for (const auto& note : descriptor_fill_fault_notes(device)) log::warn("vulkan-fault", "fill suspects: {}", note);
+      log::warn("vulkan-fault", "fill suspects: {}", texture_pass_census());
+    }
     address_log_describe(a.reportedAddress, a.addressPrecision);
   }
   for (std::size_t i = 0; i < std::min<std::size_t>(counts.vendorInfoCount, vendors.size()); ++i) {
@@ -1645,7 +1656,7 @@ VkResult create_device_impl(VkPhysicalDevice physical, const VkDeviceCreateInfo*
     }
     try {
       adopt_device(physical, *out, *info, alloc != nullptr, shared_queues);
-      choose_sampled_input_reads(physical, *info);
+      choose_sampled_input_reads(physical, *out, *info, gpu_probe_cache_directory());
       {
         std::lock_guard lock(state_lock);
         devices[*out].null_vertex_bindings = null_vertex_bindings;
@@ -2260,6 +2271,7 @@ constexpr std::pair<Layer, PFN_vkVoidFunction (*)(std::string_view)> layer_chain
     {Layer::external, external_proc},
     {Layer::wsi, wsi_proc},
     {Layer::shader, shader_proc},
+    {Layer::bound_sets, bound_sets_proc},
     {Layer::texture, texture_proc},
     {Layer::pipeline, gfx::pipeline_proc},
     {Layer::deferred_free, deferred_free_proc},
@@ -2278,6 +2290,16 @@ constexpr std::pair<Layer, std::string_view> jit_layer_functions[] = {
     {Layer::pipeline, "vkCmdBindPipeline"},
     // Writes null descriptors into the new sets: one host update, no waits.
     {Layer::descriptor_fill, "vkAllocateDescriptorSets"},
+    // Bound-set masks without locks; a pipeline bind that finds a set nothing
+    // bound may create one descriptor pool and set (host calls, no waits).
+    // Draws and dispatches are not hooked.
+    {Layer::bound_sets, "vkCmdBindPipeline"},
+    {Layer::bound_sets, "vkCmdBindDescriptorSets"},
+    {Layer::bound_sets, "vkCmdBindDescriptorSets2"},
+    {Layer::bound_sets, "vkCmdPushDescriptorSet"},
+    {Layer::bound_sets, "vkCmdPushDescriptorSet2"},
+    {Layer::bound_sets, "vkCmdPushDescriptorSetWithTemplate"},
+    {Layer::bound_sets, "vkCmdPushDescriptorSetWithTemplate2"},
 };
 PFN_vkVoidFunction next_proc(Layer self, std::string_view name) {
   for (const auto& [layer, proc] : layer_chain)

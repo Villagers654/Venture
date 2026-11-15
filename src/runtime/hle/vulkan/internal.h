@@ -1,6 +1,8 @@
 #pragma once
 #include <vector>
+#include <filesystem>
 #include <functional>
+#include <optional>
 #include <span>
 #include <atomic>
 #include <mutex>
@@ -64,6 +66,8 @@ std::vector<std::uint32_t> device_queue_families(VkDevice device);
 // The private queue has no guest submissions waiting on future guest signals.
 void configure_lazy_texture_device(VkDevice device, VkQueue queue, std::uint32_t family,
                                     const VkPhysicalDeviceFeatures& features);
+// Venture's texture passes and guest submissions so far, for a device-fault report.
+std::string texture_pass_census();
 VkResult texture_submit(VkQueue queue, std::uint32_t count, const VkSubmitInfo* submits,
                         VkFence fence, PFN_vkQueueSubmit native);
 VkResult texture_submit2(VkQueue queue, std::uint32_t count, const VkSubmitInfo2* submits,
@@ -185,7 +189,7 @@ std::uint32_t command_null_vertex_bindings(VkCommandBuffer command);
 // The pass-through layers between the guest's dispatch and the host, top first.
 // A layer forwards a command it intercepts to the next layer below it that also
 // intercepts it, else to the host, so every layer sees every call it hooks.
-enum class Layer { dispatch, breadcrumbs, render_check, render_area, multiview, hardware_buffer, sync_fd, external, wsi, shader, texture, pipeline, deferred_free, descriptor_fill };
+enum class Layer { dispatch, breadcrumbs, render_check, render_area, multiview, hardware_buffer, sync_fd, external, wsi, shader, bound_sets, texture, pipeline, deferred_free, descriptor_fill };
 // Whether the device has nullDescriptor enabled (VENTURE_VULKAN_NULL_DESCRIPTORS).
 bool device_null_descriptor(VkDevice device);
 // New descriptor sets start with null descriptors (descriptor_fill.cpp).
@@ -197,9 +201,55 @@ struct NullFillBinding {
   bool sampler = false;   // writes the shared default sampler
   bool variable = false;  // VARIABLE_DESCRIPTOR_COUNT: the allocation gives the count
 };
-// The bindings of a layout that get null descriptors, in binding order.
-std::vector<NullFillBinding> null_fill_plan(const VkDescriptorSetLayoutCreateInfo& info);
+// The bindings of a layout that get null descriptors, in binding order. Push
+// descriptor layouts get none unless `push` (the unbound set guard pushes them).
+std::vector<NullFillBinding> null_fill_plan(const VkDescriptorSetLayoutCreateInfo& info, bool push = false);
+// Buffer bindings of a layout that the fill leaves unwritten (push descriptor and
+// descriptor buffer layouts, arrays past max_null_fill_count), one entry each.
+std::vector<std::string> unfilled_buffer_bindings(const VkDescriptorSetLayoutCreateInfo& info);
+// What the null fill covered on a device, for a fault at a 0xdeadbeef fill address.
+std::vector<std::string> descriptor_fill_fault_notes(VkDevice device);
 PFN_vkVoidFunction descriptor_fill_proc(std::string_view name);
+// Unbound descriptor sets (bound_sets.cpp). A pipeline bind whose layout has a
+// set index nothing bound or pushed on that bind point binds (or pushes) a set
+// of null descriptors there; a set the game never bound before the next
+// pipeline bind or the end of recording is logged once per pipeline layout.
+// Only sets 0..31 are tracked.
+inline constexpr std::uint32_t max_tracked_sets = 32;
+// Equal for identically defined set layouts (Vulkan's compatibility rule).
+std::uint64_t set_layout_hash(const VkDescriptorSetLayoutCreateInfo& info);
+struct SetLayoutShape {
+  std::uint64_t hash = 0;
+  bool used = false;  // has bindings, so a shader can read it
+  bool push = false;  // push descriptor layout
+};
+struct PipelineLayoutShape {
+  std::array<std::uint64_t, max_tracked_sets> prefix{};  // equal: compatible for set i
+  std::uint32_t required = 0;                            // sets with bindings
+  std::uint32_t push = 0;                                // push descriptor sets
+  std::uint32_t count = 0;
+};
+PipelineLayoutShape pipeline_layout_shape(std::span<const SetLayoutShape> sets,
+                                          std::span<const VkPushConstantRange> ranges);
+// The sets bound on one bind point of a command buffer since it began.
+struct BindPointSets {
+  static constexpr std::uint64_t unknown = ~std::uint64_t(0);  // bound with a layout not tracked
+  std::uint32_t bound = 0;
+  std::array<std::uint64_t, max_tracked_sets> compat{};
+  // A bind or push of sets [first, first + count) with `layout` (nullptr: unknown).
+  void bind(const PipelineLayoutShape* layout, std::uint32_t first, std::uint32_t count);
+  struct Unmet {
+    std::uint32_t missing = 0;       // never bound or pushed
+    std::uint32_t incompatible = 0;  // last bound with a layout not compatible for that set
+  };
+  Unmet unmet(const PipelineLayoutShape& pipeline) const;
+};
+PFN_vkVoidFunction bound_sets_proc(std::string_view name);
+// A Venture compute pass (texture decode, depth conversion) recorded into a guest
+// command buffer and replayed the guest's compute state after it.
+void note_venture_compute_pass(VkCommandBuffer command);
+// Unbound set hits and guard binds so far, for a device-fault report.
+std::vector<std::string> bound_sets_fault_notes();
 void release_descriptor_fill_device(VkDevice device);
 PFN_vkVoidFunction shader_proc(std::string_view name);
 // Empty means no change. Explicit initializers and nonnumeric types stay intact.
@@ -281,12 +331,39 @@ PFN_vkVoidFunction texture_proc(std::string_view name);
 // Keeps rendering inside every attachment: clamps host framebuffers and render
 // areas to the smallest attachment and dynamic scissors to the render area.
 PFN_vkVoidFunction render_area_proc(std::string_view name);
-// Subpass inputs read as sampled images (input_attachments.cpp): on for AMD's
-// Windows driver, whose multiview subpass inputs read the first view's layer.
+// Whether a multiview subpass input reads the current view's layer, as a
+// render on the device shows (subpass_input_probe.cpp).
+enum class SubpassInputProbe { own_layer, other_layer, unavailable };
+// Renders a two-view pass whose second subpass copies the first's color out
+// with subpassLoad and reads back what view 1 got. Uses a graphics queue the
+// device was created with (queues[0] of a family without create flags) before
+// anything else submits to it. Never throws: unavailable on any failure.
+// Writes the elapsed time to `milliseconds` when given.
+SubpassInputProbe probe_subpass_inputs(VkPhysicalDevice physical, VkDevice device,
+                                       std::span<const VkDeviceQueueCreateInfo> queues,
+                                       double* milliseconds = nullptr);
+// The probe's file in `directory`, one per driver: vendor, device and driver version.
+std::filesystem::path subpass_input_probe_file(const std::filesystem::path& directory, std::uint32_t vendor_id,
+                                               std::uint32_t device_id, std::uint32_t driver_version);
+// The result stored in `file`; unavailable when missing or unreadable.
+SubpassInputProbe cached_subpass_input_probe(const std::filesystem::path& file);
+// Stores a conclusive result (unavailable is not stored). Never throws.
+void cache_subpass_input_probe(const std::filesystem::path& file, SubpassInputProbe result);
+// Subpass inputs read as sampled images (input_attachments.cpp): on when the
+// probe shows a multiview subpass input reading another view's layer (AMD's
+// and Intel's Windows drivers read the first view's), or, when the probe
+// could not run, on AMD's Windows driver.
 bool sampled_input_reads();
 void set_sampled_input_reads(bool on);  // tests
-bool sampled_input_driver(std::uint32_t driver_id, bool multiview);
-void choose_sampled_input_reads(VkPhysicalDevice physical, const VkDeviceCreateInfo& info);
+bool sampled_input_driver(std::uint32_t driver_id, bool multiview, SubpassInputProbe probe);
+// VENTURE_VULKAN_SAMPLED_INPUTS: "1" forces sampled inputs on, "0" off, else unset.
+std::optional<bool> sampled_input_override();
+// <Venture data>/cache/gpu-probes; empty when the data folder is unknown.
+std::filesystem::path gpu_probe_cache_directory();
+// Probes once per driver: the result is kept in `cache_directory` (empty: not kept).
+// Never throws.
+void choose_sampled_input_reads(VkPhysicalDevice physical, VkDevice device, const VkDeviceCreateInfo& info,
+                                const std::filesystem::path& cache_directory);
 // INPUT_ATTACHMENT becomes SAMPLED_IMAGE while sampled_input_reads().
 VkDescriptorType sampled_input_type(VkDescriptorType type);
 // The module with its subpass inputs read as sampled 2D array layers at
