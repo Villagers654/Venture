@@ -533,6 +533,24 @@ bool needed_meta_sign_in(const fs::path &log) {
   const bool waiting_for_user = recent.size() == 200 && polls >= 180 && last - first_poll >= 30;
   return init_failed && (frames < 10 || crashed_on_reply || waiting_for_user);
 }
+bool refused_entitlement(const fs::path &log) {
+  std::ifstream in(log, std::ios::binary);
+  double refused = -1, last = 0;
+  for (std::string line; std::getline(in, line);) {
+    // log::write lines start with "<seconds>.<ms>"; continuation lines do not.
+    char *end = nullptr;
+    const double at = std::strtod(line.c_str(), &end);
+    if (end == line.c_str() || at <= 0) continue;
+    last = at;
+    if (line.find("[ovrplatform] ovr_Entitlement_GetIsViewerEntitled request=") != std::string::npos) {
+      if (line.find(" error=-20002") != std::string::npos) refused = at;
+      else if (line.find(" completed") != std::string::npos) refused = -1;  // a later check passed
+    }
+  }
+  // Games that only note the refusal keep playing; one that closes soon after
+  // it (H3VR2 quits five seconds after its menu shows) was stopped by it.
+  return refused >= 0 && last - refused < 60;
+}
 bool needed_device_attestation(const fs::path &log) {
   std::ifstream in(log, std::ios::binary);
   double failed = -1, last = 0;
@@ -721,8 +739,12 @@ void rotate_log(const fs::path &log) {
   }
 }
 bool Settings::runtime_override() const {
-  return runtime.lexically_normal() !=
-         defaults({}).runtime.lexically_normal();
+#ifdef _WIN32
+  const auto bundled = paths::executable().parent_path() / "venture-runtime.exe";
+#else
+  const auto bundled = paths::executable().parent_path() / "venture-runtime";
+#endif
+  return runtime.lexically_normal() != bundled.lexically_normal();
 }
 std::vector<fs::path> Settings::roots() const {
   std::vector<fs::path> result{games};
@@ -731,15 +753,24 @@ std::vector<fs::path> Settings::roots() const {
       result.push_back(folder);
   return result;
 }
+// The runtime beside the launcher, or VENTURE_RUNTIME (an absolute path to a
+// venture-runtime build) for development. It is no setting: players put their
+// VR runtime's program there (SteamVR's vrstartup.exe), and Play did nothing.
+// A runtimeExecutable an older Venture saved is ignored and dropped on save.
 Settings Settings::defaults(const fs::path &data) {
 #ifdef _WIN32
-  return {data / "games",
-          paths::executable().parent_path() / "venture-runtime.exe", {}, 2,
-          false};
+  Settings s{data / "games",
+             paths::executable().parent_path() / "venture-runtime.exe", {}, 2,
+             false};
 #else
-  return {data / "games",
-          paths::executable().parent_path() / "venture-runtime", {}, 2, false};
+  Settings s{data / "games",
+             paths::executable().parent_path() / "venture-runtime", {}, 2, false};
 #endif
+  if (const auto* value = environment::getenv("VENTURE_RUNTIME"); value && *value) {
+    const auto runtime = paths::from_utf8(value);
+    if (runtime.is_absolute() && fs::exists(runtime)) s.runtime = runtime.lexically_normal();
+  }
+  return s;
 }
 bool Settings::texture_compression_warns(std::string_view before, std::string_view after) {
   return before == "always" && after != "always";
@@ -753,14 +784,9 @@ Settings Settings::load(const fs::path &data) {
   if (!fs::exists(data / "settings.json"))
     return s;
   auto j = paths::read_json(data / "settings.json");
-  auto games = paths::from_utf8(str(j, "gamesDirectory")),
-       runtime = paths::from_utf8(str(j, "runtimeExecutable"));
+  auto games = paths::from_utf8(str(j, "gamesDirectory"));
   if (games.is_absolute())
     s.games = games.lexically_normal();
-  // A saved runtime that no longer exists (moved build, old install) falls back
-  // to the one shipped beside the launcher.
-  if (runtime.is_absolute() && fs::exists(runtime))
-    s.runtime = runtime.lexically_normal();
   if (auto adb = paths::from_utf8(str(j, "adbExecutable")); adb.is_absolute())
     s.adb = adb.lexically_normal();
   s.log_level = int(std::min<uint64_t>(4, number(j, "logLevel")));
@@ -826,6 +852,7 @@ Settings Settings::load(const fs::path &data) {
       if (id.is_string() && !id.get<std::string>().empty() && id.get<std::string>().size() <= 64)
         s.hidden.insert(id.get<std::string>());
   s.show_hidden = field(j, "showHiddenGames") == true;
+  s.installed_only = field(j, "libraryInstalledOnly") == true;
   return s;
 }
 void Settings::save(const fs::path &data) const {
@@ -855,7 +882,8 @@ void Settings::save(const fs::path &data) const {
          {"lookupImportsOnline", lookup_imports_online},
          {"steamSkip", steam_skip},
          {"hiddenGames", hidden},
-         {"showHiddenGames", show_hidden}};
+         {"showHiddenGames", show_hidden},
+         {"libraryInstalledOnly", installed_only}};
   {
     Json games = Json::object();
     for (const auto& [id, config] : game_controls) games[id] = Json::parse(controls::encode(config));
@@ -873,9 +901,6 @@ void Settings::save(const fs::path &data) const {
       folders.push_back(paths::utf8(folder));
     j["libraryFolders"] = std::move(folders);
   }
-  // The bundled runtime is never pinned: a later launcher update brings its own.
-  if (runtime_override())
-    j["runtimeExecutable"] = paths::utf8(runtime);
   if (!adb.empty()) {
     if (!adb.is_absolute())
       throw std::runtime_error("Use an absolute path for adb.");

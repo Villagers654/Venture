@@ -81,6 +81,10 @@ std::string runtime_failure(std::string_view log_tail, int exit_code);
 // rendering more than a few frames, or crashed right after a later platform
 // request failed.
 bool needed_meta_sign_in(const fs::path &log);
+// Whether Meta answered the game's entitlement check with "not entitled"
+// (-20002: the signed-in account does not own it) and the game closed within a
+// minute of that answer.
+bool refused_entitlement(const fs::path &log);
 // The expansion files (.obb) an install's plan requires that are absent from
 // its directory. Files only probed for (an optional patch OBB) are not listed.
 std::vector<std::string> missing_expansions(const Install &install);
@@ -99,8 +103,8 @@ std::string game_dialog(const fs::path &log);
 // an older one), so the runtime, which appends, starts a log of this run only.
 void rotate_log(const fs::path &log);
 struct Settings {
-  // `runtime` is the bundled runtime beside the launcher unless the user set
-  // another one; only such an override is saved.
+  // `runtime` is the bundled runtime beside the launcher, or VENTURE_RUNTIME
+  // for development; it is never saved.
   fs::path games, runtime;
   fs::path adb;  // Android platform-tools adb for imports; empty finds it
   int log_level = 2;
@@ -119,6 +123,8 @@ struct Settings {
   // again while show_hidden is on (the library's "Show hidden" toggle).
   std::set<std::string> hidden;
   bool show_hidden = false;
+  // The library shows installed games only (its "Installed" filter); remembered.
+  bool installed_only = false;
   // Whether the library lists `id`: not hidden, or hidden ones are shown.
   bool listed(std::string_view id) const { return show_hidden || !hidden.contains(std::string(id)); }
   // Starting a new game's install asks where it goes and whether it goes to

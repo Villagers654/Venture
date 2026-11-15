@@ -15,6 +15,7 @@ bool word_char(char c) { return std::isalnum(static_cast<unsigned char>(c)) || c
 struct Rule {
   std::array<std::string_view, 6> signatures;  // any one matches; lower case
   std::string_view cause, advice;
+  std::string_view also{};  // when set, must appear too; lower case
 };
 constexpr std::string_view kSendReport = "Send this report with an issue: the game needs a fix in Venture.";
 constexpr std::string_view kGpuAdvice =
@@ -66,6 +67,22 @@ constexpr Rule kRules[] = {
      "The VR runtime did not create the game's VR session.",
      "Update Venture and your graphics driver, close other VR tools and overlays (OpenXR Toolkit, other OpenXR "
      "layers), restart your VR runtime, then try again. If it keeps happening, send this report."},
+    // runtime/main.cpp report_foreign_worker_exit(): 0xFFFFFFFF from outside,
+    // with the run's host runtime from xr/host_xr.cpp's facts line. Virtual
+    // Desktop closes SteamVR when a game starts on its own runtime (VDXR), and
+    // closes that game when SteamVR starts again (H3VR2 with Index controllers).
+    {{"status 0xffffffff outside venture's exit paths"},
+     "Virtual Desktop's own OpenXR runtime (VDXR) ran the game, and the game was closed from outside. Virtual "
+     "Desktop closes SteamVR when a game starts on VDXR and closes that game when SteamVR starts again; controllers "
+     "and trackers that only SteamVR sees (Index controllers, Vive trackers) do not work on VDXR.",
+     "To use SteamVR controllers or trackers, set OpenXR Runtime to SteamVR in the Virtual Desktop Streamer app, "
+     "start SteamVR, then press Play. To stay on VDXR, leave SteamVR closed while the game runs.",
+     "host runtime: virtualdesktopxr"},
+    {{"status 0xffffffff outside venture's exit paths"},
+     "Another program closed the game (exit status 0xFFFFFFFF, a forced close from outside Venture). VR runtimes "
+     "do this to the games they run when they shut down or hand the headset to another runtime.",
+     "Keep your VR runtime running while the game plays, and do not start or close another VR runtime meanwhile. "
+     "If nothing like that happened, send this report with an issue."},
     // The kernel's own reports of a GPU reset (amdgpu, i915/xe, NVIDIA Xid).
     {{"gpu reset", "ring timeout", "nvrm: xid", "gpu hang",
       "stopped responding and has successfully recovered"},  // Windows: Display event 4101
@@ -150,7 +167,8 @@ std::optional<Diagnosis> diagnose(std::string_view evidence) {
   const std::string text = lower(evidence);
   for (const auto &rule : kRules)
     for (auto signature : rule.signatures)
-      if (!signature.empty() && text.find(signature) != std::string::npos)
+      if (!signature.empty() && text.find(signature) != std::string::npos &&
+          (rule.also.empty() || text.find(rule.also) != std::string::npos))
         return Diagnosis{std::string(rule.cause), std::string(rule.advice)};
   return std::nullopt;
 }

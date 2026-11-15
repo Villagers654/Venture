@@ -70,6 +70,11 @@ const HostInput* find_input(const Profile& p, std::string_view path) {
   return nullptr;
 }
 
+bool needs_grip_toggle(const Profile& profile) {
+  return profile.path == "/interaction_profiles/htc/vive_controller" ||
+         profile.path == "/interaction_profiles/microsoft/motion_controller";
+}
+
 Resolved resolve(const Profile& p, const Choice* choice) {
   Resolved r;
   for (int hand = 0; hand < 2; ++hand)
@@ -143,7 +148,7 @@ Resolved resolve(const Profile& p, const Choice* choice) {
       break;
     case MenuMode::off: m.kind = Menu::Kind::off; break;
   }
-  r.grip_toggle = choice && choice->grip_toggle;
+  r.grip_toggle = choice && choice->grip_toggle ? *choice->grip_toggle : needs_grip_toggle(p);
   return r;
 }
 
@@ -280,10 +285,26 @@ std::string encode(const Config& config) {
       if (!choice.menu.second.empty()) menu["second"] = choice.menu.second;
       entry["menu"] = std::move(menu);
     }
-    if (choice.grip_toggle) entry["gripToggle"] = true;
+    if (choice.grip_toggle) entry["gripToggle"] = *choice.grip_toggle;
     j[profile] = std::move(entry);
   }
   return j.dump();
+}
+
+// Paths an earlier Venture saved that the profile spells differently: the Steam
+// Frame's bumper was /input/shoulder/click, which Valve's profile does not have.
+static void rename_paths(std::string_view profile, Choice& choice) {
+  if (profile != "/interaction_profiles/valve/frame_controller_valve") return;
+  const auto fix = [](std::string& path) {
+    if (const auto at = path.find("/input/shoulder/"); at != std::string::npos)
+      path.replace(at, std::string_view("/input/shoulder/").size(), "/input/bumper/");
+  };
+  for (auto& hand : choice.rows)
+    for (auto& row : hand)
+      if (row)
+        for (auto& path : *row) fix(path);
+  fix(choice.menu.first);
+  fix(choice.menu.second);
 }
 
 Config decode(std::string_view text) {
@@ -317,6 +338,7 @@ Config decode(std::string_view text) {
     }
     if (const auto toggle = entry.find("gripToggle"); toggle != entry.end() && toggle->is_boolean())
       choice.grip_toggle = toggle->get<bool>();
+    rename_paths(profile, choice);
     config[profile] = std::move(choice);
   }
   return config;

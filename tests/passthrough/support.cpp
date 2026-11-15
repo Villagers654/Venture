@@ -113,6 +113,7 @@ void cancel_sequence(XrSession, const XrHapticActionInfo*) {}
 void clear_haptic_bindings(XrSession) {}
 void forget_menu_action(XrAction) {}
 void forget_menu_action_set(XrActionSet) {}
+void forget_grip_action(XrAction) {}
 #ifndef VENTURE_PASSTHROUGH_REAL_SESSION
 Session& session() { static Session value; return value; }
 void Session::finish_host_end() {}

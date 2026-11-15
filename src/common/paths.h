@@ -10,8 +10,21 @@ fs::path data_dir();
 // the owner's profile. Failure returns legacy without copying or deleting data.
 fs::path migrate_data_dir(const fs::path &current, const fs::path &legacy);
 fs::path executable();
+// UTF-8 <-> host path conversions that never throw. libc++ std::filesystem
+// throws runtime_error("locale not supported") for a byte string that is not
+// UTF-8 (path(u8string)) and for a Windows name holding an unpaired surrogate
+// (u8string()). A guest file name is any byte string, and that exception once
+// escaped libc in the middle of a game's frame. On Windows a byte outside a
+// UTF-8 sequence becomes U+F000+byte (as host_name does for NTFS-forbidden
+// characters; guest_name reverses both), and CESU-8 surrogates (Java's
+// modified UTF-8) are accepted. utf8() writes U+FFFD for an unpaired surrogate,
+// so its result is always valid UTF-8. POSIX paths stay byte strings.
 std::string utf8(const fs::path &path);
+// utf8() with '/' separators (generic_u8string without the exception).
+std::string generic_utf8(const fs::path &path);
 fs::path from_utf8(std::string_view text);
+// UTF-16 (a Java string's chars) from UTF-8 with the same lenient decoding.
+std::u16string utf16(std::string_view text);
 // A guest (Linux) file name component as a host one: on Windows the characters NTFS
 // forbids (:*?"<>| and controls) become U+F000+c, as Cygwin, MSYS and WSL store them;
 // unchanged elsewhere. guest_name reverses it for directory listings.

@@ -1,8 +1,12 @@
 #pragma once
+#include "common/log.h"
 #include "xr/host_xr.h"
 #include <openxr/openxr.h>
 #include <cstring>
+#include <mutex>
+#include <set>
 #include <sstream>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -33,6 +37,19 @@ inline XrResult vulkan_extension_requirements(XrInstance instance, XrSystemId sy
   std::istringstream stream(text.c_str());
   for (std::string name; stream >> name;) names.push_back(std::move(name));
   return result;
+}
+
+// A Vulkan command the XR runtime asked Venture's resolver for (the GIPA in
+// XrVulkanInstanceCreateInfoKHR/XrVulkanDeviceCreateInfoKHR) and got null: an
+// extension that is not enabled, or a version above the instance's. Logged
+// once per name, so a runtime that calls one unchecked names it in the report.
+inline void note_unresolved_vulkan_proc(const char* name) {
+  static std::mutex mutex;
+  static std::set<std::string> noted;
+  if (!name) return;
+  std::lock_guard lock(mutex);
+  if (noted.size() < 256 && noted.emplace(name).second)
+    log::info("xr", "Host XR runtime asked for Vulkan command {}, which resolves to null here", name);
 }
 
 template<class Translatable>

@@ -494,11 +494,11 @@ msgstr ""
 msgid "Link"
 msgstr ""
 
-#. Controls page checkbox and its hint. The grip is the controller's side button held to grab.
-#: src/launcher/ui/views.cpp:5098
+#. Controls page checkbox. The grip is the controller's side button held to grab.
+#: src/launcher/ui/views.cpp:5099
 msgid "Grip toggle"
 msgstr ""
 
-#: src/launcher/ui/views.cpp:5099
-msgid "Press grip once to hold, again to let go. For controllers with click grips like Vive wands."
+#: src/launcher/ui/views.cpp:5103
+msgid "Press once to hold, again to let go"
 msgstr ""

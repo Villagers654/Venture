@@ -495,35 +495,21 @@ TEST_CASE(
   paths::atomic_write(dir / p.files[2].name, "X");
   CHECK_FALSE(library::scan(d.root)[0].complete);
 }
-TEST_CASE("only a runtime override is saved; the bundled runtime is never "
-          "pinned") {
+TEST_CASE("the runtime is never a setting: a saved runtimeExecutable is ignored and dropped") {
   Directory d;
   auto settings = library::Settings::defaults(d.root);
   CHECK_FALSE(settings.runtime_override());
-  settings.save(d.root);
-  CHECK_FALSE(paths::read_json(d.root / "settings.json")
-                  .contains("runtimeExecutable"));
-  CHECK(library::Settings::load(d.root).runtime == settings.runtime);
-
-  auto custom = d.root / "custom-runtime.exe";
-  paths::atomic_write(custom, "fixture");
-  settings.runtime = custom;
-  CHECK(settings.runtime_override());
-  settings.save(d.root);
-  CHECK(paths::from_utf8(str(paths::read_json(d.root / "settings.json"),
-                             "runtimeExecutable")) == custom);
+  // An older Venture saved a player's choice (SteamVR's vrstartup.exe), and
+  // Play started that program instead of Venture's runtime.
+  auto steamvr = d.root / "vrstartup.exe";
+  paths::atomic_write(steamvr, "fixture");
+  paths::atomic_write(d.root / "settings.json",
+                      Json{{"runtimeExecutable", paths::utf8(steamvr)}}.dump());
   auto loaded = library::Settings::load(d.root);
-  CHECK(loaded.runtime_override());
-  CHECK(loaded.runtime == custom.lexically_normal());
-
-  // An override that was removed falls back to the bundled runtime and is
-  // dropped on the next save.
-  fs::remove(custom);
-  loaded = library::Settings::load(d.root);
+  CHECK(loaded.runtime == settings.runtime);
   CHECK_FALSE(loaded.runtime_override());
   loaded.save(d.root);
-  CHECK_FALSE(paths::read_json(d.root / "settings.json")
-                  .contains("runtimeExecutable"));
+  CHECK_FALSE(paths::read_json(d.root / "settings.json").contains("runtimeExecutable"));
 }
 TEST_CASE("library folders are saved, and the install dialog's ask setting "
           "reads the older Steam-only one") {
@@ -1114,6 +1100,17 @@ TEST_CASE("a game that asked Meta for its user without a sign-in is recognised f
                            "runtime_period_hz=90.00\n", 90.0 + i, 8000 + i * 90);
   CHECK_FALSE(library::needed_meta_sign_in(write("init-polling-then-played.log", playing)));
   CHECK_FALSE(library::needed_meta_sign_in(dir / "missing.log"));
+  // An account that does not own the game: H3VR2 quits soon after "not entitled" (-20002).
+  const auto not_owned = std::string("  8615.2 1 I [ovrplatform] ovr_Entitlement_GetIsViewerEntitled request=2 type=0x186b58b1\n"
+      "  8616.9 2 W [ovrplatform] ovr_Entitlement_GetIsViewerEntitled request=2 type=0x186b58b1 error=-20002\n");
+  CHECK(library::refused_entitlement(write("refused.log", not_owned + "  8617.2 1 I [Unity] Quit requested\n"
+      "  8619.1 3 I [launch] Exit code: 0\n")));
+  CHECK_FALSE(library::needed_meta_sign_in(dir / "refused.log"));
+  CHECK_FALSE(library::refused_entitlement(write("refused-played.log", not_owned +
+      "  9000.0 1 I [xr] Frames submitted=30000 xrEndFrame_errors=0 submission_fps=90.00 runtime_period_hz=90.00\n")));
+  CHECK_FALSE(library::refused_entitlement(write("refused-then-owned.log", not_owned +
+      "  8620.0 2 I [ovrplatform] ovr_Entitlement_GetIsViewerEntitled request=3 type=0x186b58b1 completed\n")));
+  CHECK_FALSE(library::refused_entitlement(dir / "missing.log"));
   const auto missing_line = std::string("  1.0 1 W [vfs] Missing expansion file: the game looked for "
                                         "patch.42.com.example.game.obb, which this install does not have\n");
   const auto unity_error = std::string("  2.0 1 E [Unity] Unable to load GUID for '/storage/emulated/0/Android/obb/"

@@ -2850,7 +2850,9 @@ PFN_vkVoidFunction VKAPI_CALL xr_host_proc(VkInstance instance, const char* name
     return reinterpret_cast<PFN_vkVoidFunction>(xr_create_device);
   if (std::string_view(name) == "vkEnumeratePhysicalDevices")
     return reinterpret_cast<PFN_vkVoidFunction>(enumerate_physicals);
-  return loader() ? loader()(instance, name) : nullptr;
+  auto fn = loader() ? loader()(instance, name) : nullptr;
+  if (!fn) venture::xr::note_unresolved_vulkan_proc(name);
+  return fn;
 }
 
 thread_local XrResolverScope* XrResolverScope::current_ = nullptr;

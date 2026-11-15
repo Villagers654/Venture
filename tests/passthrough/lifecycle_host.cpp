@@ -80,6 +80,12 @@ void report_pipelines(std::string_view) {}
 }
 namespace session_timeline {
 void frame_submitted(std::int64_t, std::int64_t) {}
+void host_wait(std::int64_t) {}
+void frame_phases(std::int64_t, std::int64_t, std::int64_t) {}
+void end_prep(std::int64_t) {}
+void eye_rect(std::int32_t, std::int32_t) {}
+void recommended_size(std::int32_t, std::int32_t) {}
+void timed_wait_expired(std::int64_t) {}
 }
 namespace startup_diagnostics {
 void arm() {}

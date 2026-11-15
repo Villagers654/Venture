@@ -112,7 +112,14 @@ bool Session::deliver_host_event(const XrEventDataBuffer& event) const {
          !host_stop_requested || guest_exit_requested;
 }
 XrResult Session::request_host_stop() {
-  std::unique_lock lock(mutex, std::try_to_lock);
+  // The game's frame thread holds the session mutex for most of each frame; a
+  // single try missed the short gaps between frames for 7.4 s on SteamVR
+  // (H3VR2 at 60 fps). Retry across a few frames, still never blocking on a
+  // frame call the host has stalled.
+  std::unique_lock lock(mutex, std::defer_lock);
+  for (const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(100);
+       !lock.try_lock() && std::chrono::steady_clock::now() < until;)
+    std::this_thread::yield();
   if (!lock.owns_lock()) return XR_ERROR_SESSION_NOT_READY;
   if (host_stop_requested) return XR_SUCCESS;
   if (!handle || !running) return XR_ERROR_SESSION_NOT_RUNNING;
@@ -309,6 +316,7 @@ XrResult Session::destroy(SessionOwner requested) {
     }
     host_waiter.reset();
   }
+  dev_destroy_parked_swapchains();
   auto result = xrDestroySession(handle);
   if (XR_SUCCEEDED(result)) {
     log::info("xr", "Session ended: submitted={} xrEndFrame_errors={}", frame_index, end_errors);
@@ -689,6 +697,7 @@ XrResult Session::wait(const XrFrameWaitInfo *info, XrFrameState *out) {
   // A simulation thread may wait for frame N+1 while the render thread ends N.
   // No API-state or GPU queue lock may be held across the runtime's pacing wait.
   lock.unlock();
+  const auto wait_start = monotonic_ns();
   auto result = [&] {
     vulkan::ScopedHostWait timing("xr_wait_frame");
     if (!proxied) return xrWaitFrame(handle, info, out);
@@ -702,6 +711,7 @@ XrResult Session::wait(const XrFrameWaitInfo *info, XrFrameState *out) {
     out->shouldRender = taken.shouldRender;
     return taken_generation == generation ? r : XR_ERROR_SESSION_NOT_RUNNING;
   }();
+  if (XR_SUCCEEDED(result)) session_timeline::host_wait(monotonic_ns() - wait_start);
   lock.lock();
   wait_in_progress = false;
   note(result);
@@ -833,8 +843,15 @@ XrResult Session::end(const XrFrameEndInfo *info, std::shared_ptr<const void> ow
   if (!running) return XR_ERROR_SESSION_NOT_RUNNING;
   if (phase != Phase::begun)
     return XR_ERROR_CALL_ORDER_INVALID;
+  // The frame's lead on its predicted display as its submission starts ([timeline] margin).
+  std::int64_t app_ns = 0, margin_ns = 0;
+  if (info) {
+    std::int64_t display = 0;
+    if (XR_SUCCEEDED(time_to_monotonic(info->displayTime, &display))) margin_ns = display - monotonic_ns();
+  }
   if (lead.frame_start_ns) {
     const auto chain = monotonic_ns() - lead.frame_start_ns;
+    app_ns = chain;
     lead.frame_start_ns = 0;
     lead.chain_ns = lead.chain_ns ? (lead.chain_ns * 7 + chain) / 8 : chain;
     lead.previous_chain_ns = lead.last_chain_ns;
@@ -852,6 +869,7 @@ XrResult Session::end(const XrFrameEndInfo *info, std::shared_ptr<const void> ow
     std::int64_t returned = 0;
     const bool proxied = host_wait_pending();
     mutex.unlock();
+    const auto wait_start = monotonic_ns();
     auto waited = [&] {
       vulkan::ScopedHostWait timing("xr_wait_frame");
       if (!proxied) return xrWaitFrame(host, nullptr, &host_frame);
@@ -860,6 +878,7 @@ XrResult Session::end(const XrFrameEndInfo *info, std::shared_ptr<const void> ow
       return taken_generation == generation ? r : XR_ERROR_SESSION_NOT_RUNNING;
     }();
     if (!proxied) returned = monotonic_ns();
+    if (XR_SUCCEEDED(waited)) session_timeline::host_wait(monotonic_ns() - wait_start);
     mutex.lock();
     note(waited);
     // A take cancelled by a known loss returns the loss, as a plain wait does.
@@ -907,6 +926,7 @@ XrResult Session::end(const XrFrameEndInfo *info, std::shared_ptr<const void> ow
   const bool async = owned && async_end_ready() && request_host_end(*info, std::move(owned));
   std::optional<HostQueueLock> queue;
   XrResult result = XR_SUCCESS;
+  std::int64_t end_ns = 0;
   if (async) {
     ++lead.async_ends;
   } else {
@@ -915,7 +935,9 @@ XrResult Session::end(const XrFrameEndInfo *info, std::shared_ptr<const void> ow
     lock_timing.reset();
     if (!*queue)
       return XR_ERROR_RUNTIME_FAILURE;
+    const auto end_start = monotonic_ns();
     result = [&] { vulkan::ScopedHostWait timing("xr_end_frame"); return xrEndFrame(handle, info); }();
+    end_ns = monotonic_ns() - end_start;
     dev_dump_frame(info, result);
     note(result);
   }
@@ -940,6 +962,16 @@ XrResult Session::end(const XrFrameEndInfo *info, std::shared_ptr<const void> ow
       const auto period = display_timing.period.load();
       hitches.submitted(now, period);
       session_timeline::frame_submitted(now, period);
+      session_timeline::frame_phases(app_ns, end_ns, margin_ns);
+      for (std::uint32_t i = 0; i < info->layerCount; ++i)
+        if (info->layers[i] && info->layers[i]->type == XR_TYPE_COMPOSITION_LAYER_PROJECTION) {
+          const auto* projection = reinterpret_cast<const XrCompositionLayerProjection*>(info->layers[i]);
+          if (projection->viewCount && projection->views) {
+            const auto& extent = projection->views[0].subImage.imageRect.extent;
+            session_timeline::eye_rect(extent.width, extent.height);
+          }
+          break;
+        }
     }
     vulkan::timing_end_frame(info->displayTime, guest_swap_interval, display_timing.rate());
     if (frame_index == 1) { profile::mark("first_frame_submission"); startup_diagnostics::arm(); }

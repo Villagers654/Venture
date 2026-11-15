@@ -1371,6 +1371,12 @@ void Core::set_show_hidden(bool show) {
   settings_.show_hidden = show;
   settings_.save(data_);
 }
+// The library's Installed filter, remembered without a rescan.
+void Core::set_installed_only(bool installed_only) {
+  if (installed_only == settings_.installed_only) return;
+  settings_.installed_only = installed_only;
+  settings_.save(data_);
+}
 void Core::install_for_owner(const meta::Game &g, const fs::path &root) {
   const auto game_copy = g;
   const auto owner = owner_for(game_copy.id);
@@ -1705,7 +1711,7 @@ void Core::launch_game(std::string_view id, std::string_view requested,
   const auto root = root_of(install);
   const bool console = settings_.console;
   if (settings_.runtime_override())
-    log::warn("launcher", "Using the runtime set in Settings: {}",
+    log::warn("launcher", "Using the runtime set by VENTURE_RUNTIME: {}",
               paths::utf8(runtime));
   notice_ = catalog_token.empty()
                 ? "Preparing application credentials..."
@@ -2210,6 +2216,11 @@ void Core::tick() {
           auto entry = game(id);
           r.failure = "It needs a Meta account. Use Sign in at the bottom left with the account that owns it, then "
                       "start it again.";
+          error(std::format("{} closed: {}", entry ? entry->name : id, r.failure));
+        } else if (library::refused_entitlement(r.log)) {
+          auto entry = game(id);
+          r.failure = "Meta says the signed-in account does not own it, and the game closed. Sign in with the "
+                      "account that bought it, then start it again.";
           error(std::format("{} closed: {}", entry ? entry->name : id, r.failure));
         } else if (library::needed_device_attestation(r.log)) {
           auto entry = game(id);

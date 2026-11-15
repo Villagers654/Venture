@@ -86,8 +86,6 @@ void App::fit_window() {
 }
 App::App(Options options) : Core(std::move(options)) {
   settings_games_ = paths::utf8(settings_.games);
-  settings_runtime_ =
-      settings_.runtime_override() ? paths::utf8(settings_.runtime) : "";
   settings_adb_ = paths::utf8(settings_.adb);
   settings_key_hex_ = settings_.key_color;
   prefer_native_video_driver();
@@ -365,10 +363,6 @@ void App::smoke_import() {
 void App::save_settings(bool announce) {
   auto next = settings_;
   next.games = paths::from_utf8(settings_games_).lexically_normal();
-  // An empty runtime field means the runtime beside the launcher.
-  next.runtime = settings_runtime_.empty()
-                     ? library::Settings::defaults(data_).runtime
-                     : paths::from_utf8(settings_runtime_).lexically_normal();
   next.adb = settings_adb_.empty()
                  ? fs::path{}
                  : paths::from_utf8(settings_adb_).lexically_normal();

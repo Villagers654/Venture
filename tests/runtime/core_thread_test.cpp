@@ -166,6 +166,22 @@ TEST_CASE("a quit before the first frame whose stop never returned ends cleanly 
   unknown.writers_known = false;
   CHECK(startup_quit(unknown, false, false, true) == StartupQuit::not_startup);
 }
+TEST_CASE("a game never focused or in a loading stall at the quit is not presenting") {
+  using namespace std::chrono_literals;
+  // H3VR2 on a cold cache: one frame, then 26 s of loading when the stop came;
+  // its engine thread never polled the task-removal stop.
+  CHECK_FALSE(presenting_at_quit(true, true, true, 26s));
+  CHECK_FALSE(presenting_at_quit(true, true, true, loading_stall));
+  CHECK(presenting_at_quit(true, true, true, loading_stall - 1ms));
+  // H3VR2 on SteamVR: one frame 1.7 s before the quit, a guest library still
+  // loading, the session never focused: no input was ever deliverable.
+  CHECK_FALSE(presenting_at_quit(true, false, false, 1700ms));
+  // A game that lost focus after play (a dashboard) stops rendering
+  // legitimately; one before its first frame is not presenting either way.
+  CHECK(presenting_at_quit(true, true, false, 26s));
+  CHECK_FALSE(presenting_at_quit(false, false, false, 0s));
+  CHECK_FALSE(presenting_at_quit(false, true, true, 0s));
+}
 TEST_CASE("core thread creation, join, exit unwind and TLS surplus") {
   GuestThread parent(90); parent.attach_to_current_host_thread();
   std::array<std::byte, 4> initial{std::byte{1}, std::byte{2}, std::byte{3}, std::byte{4}};

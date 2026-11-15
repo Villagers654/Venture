@@ -1,8 +1,12 @@
 #include "common/environment.h"
 #include "xr/dev_dump.h"
 #include "xr/capture.h"
+#include "xr/host_xr.h"
+#include "xr/sampler.h"
 #include "gfx/gpu_device.h"
 #include <algorithm>
+#include <cctype>
+#include <atomic>
 #include "common/log.h"
 #include "common/json.h"
 #include "common/paths.h"
@@ -279,26 +283,152 @@ void dev_dump_bind(const XrGraphicsBindingVulkanKHR& b) {
   binding.next = nullptr;
   chains.clear(); frame = 0; previous = {};
 }
-XrResult dev_create_swapchain(XrSession s, const XrSwapchainCreateInfo* info, XrSwapchain* out) {
-  auto copy = *info;
-  const bool enabled = dev_dump_enabled();
-  if (enabled && (copy.usageFlags & XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT))
-    copy.usageFlags |= XR_SWAPCHAIN_USAGE_TRANSFER_SRC_BIT;
-  auto result = ::xrCreateSwapchain(s, &copy, out);
-  log::info("xr", "Host swapchain result={} format={} size={}x{} arrays={} samples={} usage={}",
-      int(result), copy.format, copy.width, copy.height, copy.arraySize, copy.sampleCount, copy.usageFlags);
-  if (enabled && XR_SUCCEEDED(result)) {
-    std::lock_guard lock(mutex);
-    chains[*out] = {copy, {}, 0};
-  }
-  return result;
+namespace {
+// Host swapchains outlive the guest swapchains they back until their session
+// ends. The Oculus PC runtime (Meta Horizon 1.208) calls through a null
+// pointer inside xrDestroySwapchain while a session runs: Job Simulator on its
+// loading quad, H3VR2 on a scene change, Beat Saber on a resolution rebuild
+// (issue 46). A destroyed guest chain parks its host chain; a later chain with
+// the same create info takes it back, and the rest are destroyed just before
+// the host session, as native applications do at exit. Every runtime saves the
+// reallocation on a rebuild. Past the byte cap the oldest parked chain is
+// destroyed for real, so churn through many sizes stays bounded.
+struct ParkedChain {
+  XrSwapchain handle;
+  XrSwapchainCreateInfo info;
+  std::uint64_t bytes;
+};
+struct LiveChain {
+  XrSession session;
+  XrSwapchainCreateInfo info;
+};
+std::mutex pool_mutex;
+XrSession pool_session = XR_NULL_HANDLE;
+std::map<XrSwapchain, LiveChain> live_chains;
+std::deque<ParkedChain> parked_chains;
+std::uint64_t parked_bytes = 0;
+constexpr std::uint64_t kParkedByteCap = 512ull << 20;
+bool same_create_info(const XrSwapchainCreateInfo& a, const XrSwapchainCreateInfo& b) {
+  return a.createFlags == b.createFlags && a.usageFlags == b.usageFlags && a.format == b.format &&
+         a.sampleCount == b.sampleCount && a.width == b.width && a.height == b.height &&
+         a.faceCount == b.faceCount && a.arraySize == b.arraySize && a.mipCount == b.mipCount;
 }
-XrResult dev_destroy_swapchain(XrSwapchain s) {
+// Only the Oculus runtime faults in a running session's xrDestroySwapchain;
+// others keep destroying at once (VENTURE_XR_PARK_SWAPCHAINS=1/0 overrides).
+bool park_on_destroy() {
+  if (const auto* v = venture::environment::getenv("VENTURE_XR_PARK_SWAPCHAINS"); v && *v) return *v == '1';
+  auto name = host_xr().runtime_name;
+  std::ranges::transform(name, name.begin(), [](unsigned char c) { return char(std::tolower(c)); });
+  return name.find("oculus") != std::string::npos || name.find("meta") != std::string::npos;
+}
+// A chain with an extension struct, or a static image the runtime lets the
+// application acquire once, cannot serve another guest chain.
+bool parkable(const XrSwapchainCreateInfo& info) {
+  return !info.next && !(info.createFlags & XR_SWAPCHAIN_CREATE_STATIC_IMAGE_BIT);
+}
+std::uint64_t texel_bytes(std::int64_t format) {
+  switch (VkFormat(format)) {
+  case VK_FORMAT_D16_UNORM: return 2;
+  case VK_FORMAT_R16G16B16A16_UNORM: case VK_FORMAT_R16G16B16A16_SNORM: case VK_FORMAT_R16G16B16A16_UINT:
+  case VK_FORMAT_R16G16B16A16_SINT: case VK_FORMAT_R16G16B16A16_SFLOAT: case VK_FORMAT_D32_SFLOAT_S8_UINT: return 8;
+  case VK_FORMAT_R32G32B32A32_UINT: case VK_FORMAT_R32G32B32A32_SINT: case VK_FORMAT_R32G32B32A32_SFLOAT: return 16;
+  default: return 4;
+  }
+}
+// The host session changed: chains parked for the previous one went with it.
+void adopt_pool_session(XrSession s) {
+  if (pool_session == s) return;
+  pool_session = s;
+  parked_chains.clear();
+  parked_bytes = 0;
+  std::erase_if(live_chains, [&](const auto& entry) { return entry.second.session != s; });
+}
+XrResult destroy_now(XrSwapchain s) {
   auto result = ::xrDestroySwapchain(s);
   if (dev_dump_enabled() && XR_SUCCEEDED(result)) {
     std::lock_guard lock(mutex); chains.erase(s);
   }
   return result;
+}
+XrResult destroy_oldest_parked() {
+  const auto oldest = parked_chains.front();
+  parked_chains.pop_front();
+  parked_bytes -= oldest.bytes;
+  const auto result = destroy_now(oldest.handle);
+  log::info("xr", "Destroyed a parked host swapchain {}x{} format={}: result={}", oldest.info.width,
+            oldest.info.height, oldest.info.format, int(result));
+  return result;
+}
+}  // namespace
+XrResult dev_create_swapchain(XrSession s, const XrSwapchainCreateInfo* info, XrSwapchain* out) {
+  auto copy = *info;
+  const bool enabled = dev_dump_enabled();
+  if (enabled && (copy.usageFlags & XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT))
+    copy.usageFlags |= XR_SWAPCHAIN_USAGE_TRANSFER_SRC_BIT;
+  std::lock_guard pool(pool_mutex);
+  adopt_pool_session(s);
+  if (parkable(copy)) {
+    const auto found = std::find_if(parked_chains.begin(), parked_chains.end(),
+        [&](const ParkedChain& chain) { return same_create_info(chain.info, copy); });
+    if (found != parked_chains.end()) {
+      *out = found->handle;
+      parked_bytes -= found->bytes;
+      parked_chains.erase(found);
+      live_chains[*out] = {s, copy};
+      // The previous guest chain may have set its own sampler (XR_FB_swapchain_update_state).
+      const auto& extensions = host_xr().enabled_extensions;
+      if (extensions.contains("XR_FB_swapchain_update_state") &&
+          extensions.contains("XR_FB_swapchain_update_state_vulkan"))
+        update_host_sampler(*out, default_sampler());
+      if (enabled) {
+        std::lock_guard lock(mutex);
+        chains[*out] = {copy, {}, 0};
+      }
+      return XR_SUCCESS;
+    }
+  }
+  auto result = ::xrCreateSwapchain(s, &copy, out);
+  // A runtime that counts parked chains against its limit gets them back first.
+  while (result == XR_ERROR_LIMIT_REACHED && !parked_chains.empty()) {
+    destroy_oldest_parked();
+    result = ::xrCreateSwapchain(s, &copy, out);
+  }
+  log::info("xr", "Host swapchain result={} format={} size={}x{} arrays={} samples={} usage={}",
+      int(result), copy.format, copy.width, copy.height, copy.arraySize, copy.sampleCount, copy.usageFlags);
+  if (XR_SUCCEEDED(result)) {
+    live_chains[*out] = {s, copy};
+    if (enabled) {
+      std::lock_guard lock(mutex);
+      chains[*out] = {copy, {}, 0};
+    }
+  }
+  return result;
+}
+XrResult dev_destroy_swapchain(XrSwapchain s) {
+  std::lock_guard pool(pool_mutex);
+  const auto live = live_chains.find(s);
+  if (live == live_chains.end() || live->second.session != pool_session || !parkable(live->second.info) ||
+      !park_on_destroy()) {
+    if (live != live_chains.end()) live_chains.erase(live);
+    return destroy_now(s);
+  }
+  const auto info = live->second.info;
+  live_chains.erase(live);
+  std::uint32_t images = 0;
+  if (XR_FAILED(::xrEnumerateSwapchainImages(s, 0, &images, nullptr)) || !images) images = 3;
+  const std::uint64_t bytes = std::uint64_t(info.width) * info.height * info.arraySize * info.faceCount *
+                              std::max<std::uint32_t>(info.sampleCount, 1) * texel_bytes(info.format) * images;
+  parked_chains.push_back({s, info, bytes});
+  parked_bytes += bytes;
+  if (dev_dump_enabled()) {
+    std::lock_guard lock(mutex); chains.erase(s);
+  }
+  static std::atomic<bool> noted{false};
+  if (!noted.exchange(true))
+    log::info("xr", "Host swapchains of destroyed guest swapchains are kept for reuse until the session ends");
+  // The newest parked chain stays: it is the likeliest to be asked for again.
+  while (parked_bytes > kParkedByteCap && parked_chains.size() > 1) destroy_oldest_parked();
+  return XR_SUCCESS;
 }
 XrResult dev_release_swapchain(XrSwapchain s, const XrSwapchainImageReleaseInfo* info, VkImage image) {
   // Caller holds the native queue lock and has waited the oldest acquired image.
@@ -334,7 +464,16 @@ XrResult dev_release_swapchain(XrSwapchain s, const XrSwapchainImageReleaseInfo*
   return result;
 }
 void dev_dump_flush() { writer().drain(); }
+void dev_destroy_parked_swapchains() {
+  std::lock_guard pool(pool_mutex);
+  while (!parked_chains.empty()) destroy_oldest_parked();
+}
 void dev_dump_end() {
+  {
+    // The session is gone; a later session may reuse its handle value.
+    std::lock_guard pool(pool_mutex);
+    adopt_pool_session(XR_NULL_HANDLE);
+  }
   dev_dump_flush();
   std::lock_guard lock(mutex);
   frames_log.close();

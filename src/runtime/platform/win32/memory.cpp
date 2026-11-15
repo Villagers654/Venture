@@ -5,6 +5,7 @@
 #include <windows.h>
 #include <psapi.h>
 #include <io.h>
+#include <cstdio>
 #include <cstring>
 #include <algorithm>
 #include <string>
@@ -200,6 +201,68 @@ bool gpu_engine_times(std::vector<GpuEngineTime>& out) {
     out.push_back({std::move(engine), static_cast<std::uint64_t>(items[i].value.first) * 100});  // wraps; diffs stay right
   }
   return !out.empty();
+}
+bool gpu_clock(const std::string& engine, GpuClock& out) {
+  // gpu_engine_times names an engine "luid_0x<high>_0x<low>_phys_<adapter>_eng_<node>_engtype_<type>".
+  // d3dkmthk.h: D3DKMTOpenAdapterFromLuid, D3DKMTQueryAdapterInfo with KMTQAITYPE_NODEPERFDATA (61)
+  // and KMTQAITYPE_ADAPTERPERFDATA (62); mingw's headers lack these, so they are declared here.
+  out = {};
+  unsigned long high = 0, low = 0;
+  unsigned adapter = 0, node = 0;
+  if (std::sscanf(engine.c_str(), "luid_0x%lx_0x%lx_phys_%u_eng_%u", &high, &low, &adapter, &node) != 4) return false;
+  struct OpenFromLuid { LUID luid; UINT adapter; };
+  struct Query { UINT adapter; int type; void* data; UINT size; };
+  struct NodePerf {
+    UINT32 node, physical_adapter;
+    ULONGLONG frequency, max_frequency, max_frequency_oc;
+    ULONG voltage, voltage_max, voltage_max_oc;
+    ULONGLONG max_transition_latency;
+  };
+  struct AdapterPerf {
+    UINT32 physical_adapter;
+    ULONGLONG memory_frequency, max_memory_frequency, max_memory_frequency_oc, memory_bandwidth, pcie_bandwidth;
+    ULONG fan_rpm, power, temperature;  // power in tenths of a percent, temperature in tenths of a degree C
+    UCHAR power_state_override;
+  };
+  using OpenFn = LONG (APIENTRY*)(OpenFromLuid*);
+  using QueryFn = LONG (APIENTRY*)(const Query*);
+  struct Kmt { OpenFn open = nullptr; QueryFn query = nullptr; };
+  static const Kmt kmt = [] {
+    Kmt k;
+    if (const auto gdi = LoadLibraryExW(L"gdi32.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32)) {
+      k.open = reinterpret_cast<OpenFn>(reinterpret_cast<void*>(GetProcAddress(gdi, "D3DKMTOpenAdapterFromLuid")));
+      k.query = reinterpret_cast<QueryFn>(reinterpret_cast<void*>(GetProcAddress(gdi, "D3DKMTQueryAdapterInfo")));
+    }
+    return k;
+  }();
+  if (!kmt.open || !kmt.query) return false;
+  // One adapter handle per LUID for the process (the timeline asks once a minute).
+  static std::vector<std::pair<std::uint64_t, UINT>> opened;
+  const std::uint64_t key = std::uint64_t(high) << 32 | low;
+  UINT handle = 0;
+  if (const auto it = std::ranges::find(opened, key, &std::pair<std::uint64_t, UINT>::first); it != opened.end()) {
+    handle = it->second;
+  } else {
+    OpenFromLuid open{};
+    open.luid.HighPart = static_cast<LONG>(high);
+    open.luid.LowPart = static_cast<DWORD>(low);
+    if (kmt.open(&open) < 0) return false;
+    handle = open.adapter;
+    opened.emplace_back(key, handle);
+  }
+  NodePerf node_perf{};
+  node_perf.node = node;
+  node_perf.physical_adapter = adapter;
+  const Query node_query{handle, 61, &node_perf, sizeof(node_perf)};
+  if (kmt.query(&node_query) >= 0) {
+    out.hz = node_perf.frequency;
+    out.max_hz = node_perf.max_frequency;
+  }
+  AdapterPerf adapter_perf{};
+  adapter_perf.physical_adapter = adapter;
+  const Query adapter_query{handle, 62, &adapter_perf, sizeof(adapter_perf)};
+  if (kmt.query(&adapter_query) >= 0) out.celsius = adapter_perf.temperature / 10.0;
+  return out.hz || out.celsius > 0;
 }
 bool commit_charge(CommitCharge& out) {
   PERFORMANCE_INFORMATION system{};

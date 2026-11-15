@@ -66,7 +66,7 @@ private:
   std::string direct_app_;
   bool direct_started_ = false;
   std::string backdrop_; // game whose ambient art tints the game page
-  std::string search_, settings_games_, settings_runtime_, settings_adb_;
+  std::string search_, settings_games_, settings_adb_;
   // Settings > Runtime color key: the hex field's text, and Custom chosen
   // although the color matches a preset.
   std::string settings_key_hex_;
@@ -94,7 +94,7 @@ private:
   };
   std::map<const art::Image *, TurnedTexture> turned_textures_;
   SDL_Texture *turned_texture(const art::Image *image, const std::shared_ptr<const art::Shot> &shot);
-  bool installed_only_ = false, quit_ = false;
+  bool quit_ = false;
   ImVec2 card_menu_at_{};  // where a library card's menu opens
   std::string smoke_hovered_;  // --smoke-view library-hover: the card drawn hovered
   // Display settings rows, for Settings (global) or a game's Settings tab;

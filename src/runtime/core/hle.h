@@ -32,6 +32,7 @@
 #include <bit>
 #include <cstdint>
 #include <cstring>
+#include <exception>
 #include <string>
 #include <string_view>
 #include <tuple>
@@ -124,6 +125,10 @@ GuestAddr return_to_host_trampoline();
 
 // Executes handler `id` for the calling guest thread (used by the run loop).
 void dispatch(GuestThread& thread, FunctionId id);
+// "library!symbol" of the innermost HLE import `error` escaped on this thread,
+// or empty when it did not leave an HLE handler. For the boundary that reports
+// a host exception which crossed guest code (the JNI native transition).
+std::string escaped_import(const std::exception& error);
 
 class CallContext {
  public:

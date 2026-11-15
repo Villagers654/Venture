@@ -164,6 +164,26 @@ bool gpu_engine_times(std::vector<GpuEngineTime>& out) {
   closedir(directory);
   return !out.empty();
 }
+bool gpu_clock(const std::string& engine, GpuClock& out) {
+  // gpu_engine_times names an engine "<drm-pdev> <engine>"; Documentation/hwmon/sysfs-interface.rst:
+  // freqN_input in Hz (amdgpu: freq1 is the shader clock), tempN_input in millidegrees Celsius.
+  out = {};
+  const auto pdev = engine.substr(0, engine.find(' '));
+  if (pdev.empty() || pdev.find('/') != std::string::npos) return false;
+  const auto base = "/sys/bus/pci/devices/" + pdev + "/hwmon";
+  auto* directory = opendir(base.c_str());
+  if (!directory) return false;
+  while (auto* entry = readdir(directory)) {
+    if (std::strncmp(entry->d_name, "hwmon", 5) != 0) continue;
+    const auto hwmon = base + "/" + entry->d_name;
+    std::uint64_t value = 0;
+    if (std::ifstream f(hwmon + "/freq1_input"); f >> value) out.hz = value;
+    if (std::ifstream f(hwmon + "/temp1_input"); f >> value) out.celsius = value / 1000.0;
+    if (out.hz || out.celsius > 0) break;
+  }
+  closedir(directory);
+  return out.hz || out.celsius > 0;
+}
 bool commit_charge(CommitCharge& out) {
   // Linux Documentation/filesystems/proc.rst (meminfo) and mm/overcommit-accounting.rst.
   std::ifstream meminfo("/proc/meminfo");

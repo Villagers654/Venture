@@ -122,8 +122,7 @@ bool index_zip(Index& result, const std::string& path, bool obb) {
   if (!range(offset, bytes, end_offset) || count > bytes / 46 || bytes > SIZE_MAX) return false;
   std::vector<unsigned char> central(static_cast<std::size_t>(bytes));
   if (!read_at(file, offset, central.data(), bytes)) return false;
-  auto basename = host_path(path).filename().u8string();
-  std::string prefix(reinterpret_cast<const char*>(basename.data()), basename.size());
+  std::string prefix = paths::utf8(host_path(path).filename());
   prefix += '/';
   std::size_t pos = 0;
   for (std::uint64_t i = 0; i < count; ++i) {
@@ -424,16 +423,15 @@ bool PackageAssets::open_apk(const std::string& path) {
     for (auto& item : std::filesystem::directory_iterator(
              host_path(path).has_parent_path() ? host_path(path).parent_path() : std::filesystem::path("."),
              ec)) {
-      auto name = item.path().filename().string();
+      auto name = paths::utf8(item.path().filename());
       if (item.path().extension() == ".obb" && (name.starts_with("main.") || name.starts_with("patch.")))
         obbs.push_back(item.path());
     }
     std::sort(obbs.begin(), obbs.end());
     for (auto& obb : obbs) {
-      auto utf8 = obb.u8string();
       auto with_obb = std::make_shared<Index>(*next);
-      if (!index_zip(*with_obb, std::string(reinterpret_cast<const char*>(utf8.data()), utf8.size()), true)) {
-        log::warn("assets", "OBB is not a supported ZIP: {}", obb.filename().string());
+      if (!index_zip(*with_obb, paths::utf8(obb), true)) {
+        log::warn("assets", "OBB is not a supported ZIP: {}", paths::utf8(obb.filename()));
         // UE4 expansion files may use other formats; the VFS still exposes the
         // original file. Never report those files as mounted ZIP assets.
       } else {

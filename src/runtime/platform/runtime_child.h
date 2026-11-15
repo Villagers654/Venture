@@ -64,6 +64,9 @@ void set_runtime_teardown_channel(std::uintptr_t channel);
 void notify_runtime_teardown_posted();
 // A file save is the worker's only remaining quit work; see RuntimeTeardownGrace::saving.
 void notify_runtime_save_wait();
+// The quit lifecycle reached the game (pause, stop and the final callback);
+// the worker's destroy settle bound starts. See RuntimeTeardownGrace::delivered.
+void notify_runtime_destroy_delivered();
 std::string take_runtime_launch_payload();
 // Android Runtime.exit after a queued cold launcher intent. Kernel process
 // teardown is required: native globals and HotSpot cannot be reinitialized.

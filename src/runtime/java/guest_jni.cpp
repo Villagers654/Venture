@@ -443,8 +443,8 @@ void call(JNIEnv* env, hle::CallContext& ctx, ArgumentForm form) {
       auto host = resolve_guest_path(utf);
       env->ReleaseStringUTFChars(string, utf);
       if (!host.empty()) {
-        const auto path = host.generic_u8string();
-        mapped = env->NewStringUTF(reinterpret_cast<const char*>(path.c_str()));
+        const auto path = paths::utf16(paths::generic_utf8(host));
+        mapped = env->NewString(reinterpret_cast<const jchar*>(path.data()), static_cast<jsize>(path.size()));
         if (!mapped) return;
         args[0].l = mapped;
       }

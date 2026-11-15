@@ -1,4 +1,5 @@
 #include "xr/vulkan_layers.h"
+#include "common/paths.h"
 #include <cstddef>
 #include <cstdlib>
 #include <iterator>
@@ -35,8 +36,7 @@ std::string vulkan_loader_description() {
   HMODULE loader = GetModuleHandleW(L"vulkan-1.dll");
   wchar_t path[MAX_PATH]{};
   if (!loader || !GetModuleFileNameW(loader, path, MAX_PATH)) return "vulkan-1.dll not loaded";
-  const auto u8 = std::filesystem::path(path).u8string();
-  std::string text(u8.begin(), u8.end());
+  std::string text = paths::utf8(std::filesystem::path(path));
   DWORD ignored = 0;
   if (const auto size = GetFileVersionInfoSizeW(path, &ignored)) {
     std::vector<std::byte> data(size);
@@ -51,7 +51,7 @@ std::string vulkan_loader_description() {
 }
 bool vulkan_layer_library_loaded(const ImplicitVulkanLayer& layer) {
   // A library path relative to its manifest; a bare name is found by the search order.
-  std::filesystem::path library = std::u8string(layer.library.begin(), layer.library.end());
+  std::filesystem::path library = paths::from_utf8(layer.library);
   if (library.has_parent_path() && library.is_relative()) library = layer.manifest.parent_path() / library;
   return GetModuleHandleW(library.lexically_normal().c_str()) != nullptr;
 }

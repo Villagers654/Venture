@@ -79,6 +79,7 @@ public final class RuntimeEnvironment {
     host = Objects.requireNonNull(bridge);
     TlsPolicy.install();
     AndroidCAStore.install();
+    AndroidKeyStore.install();
     current = new RuntimeEnvironment(args);
   }
   public static void configure(String[] args) {

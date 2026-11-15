@@ -31,6 +31,13 @@ bool commit_charge(CommitCharge& out);
 // adapter and engine. False when the host cannot say (e.g. NVIDIA's Linux driver).
 struct GpuEngineTime { std::string engine; std::uint64_t ns = 0; };
 bool gpu_engine_times(std::vector<GpuEngineTime>& out);
+// The clock of the GPU that runs `engine` (a name from gpu_engine_times) now and at most, and
+// its temperature, as the OS or driver reports them: Windows D3DKMT node and adapter
+// performance data (Task Manager's GPU clock and temperature, WDDM 2.4+); Linux the
+// device's hwmon freq1_input and temp1_input (amdgpu and others). Zero where unknown;
+// false when nothing is known.
+struct GpuClock { std::uint64_t hz = 0, max_hz = 0; double celsius = 0; };
+bool gpu_clock(const std::string& engine, GpuClock& out);
 bool process_debugger_attached();
 // A hardware user shadow stack (x86 CET) is enforced for the calling thread:
 // every RET must match a CALL, so code may not discard return addresses.

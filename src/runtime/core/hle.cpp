@@ -381,6 +381,22 @@ void deliver_memory_fault(GuestThread& thread, FunctionId id, const MemoryFault&
   info.syndrome = fault.write ? 1ull << 6 : 0;
   signals::deliver_synchronous(thread, info);
 }
+namespace {
+// The innermost import each host exception left, per thread. Keyed by the
+// exception object, which a rethrow keeps: outer handlers the same exception
+// unwinds through do not overwrite it, and a stale entry never matches a later
+// exception. Registry entries live until process exit. Exception path only.
+struct Escape { const void* object = nullptr; const FunctionInfo* function = nullptr; };
+thread_local Escape escape;
+void note_escape(const std::exception& error, FunctionId id) noexcept {
+  if (escape.object == &error) return;
+  escape = {&error, id < capacity ? registry().functions[id].load(std::memory_order_acquire) : nullptr};
+}
+}
+std::string escaped_import(const std::exception& error) {
+  if (escape.object != &error || !escape.function) return {};
+  return escape.function->library + "!" + escape.function->name;
+}
 void dispatch(GuestThread& thread, FunctionId id) {
   try {
     const auto& f = function(id);
@@ -391,6 +407,7 @@ void dispatch(GuestThread& thread, FunctionId id) {
     } else invoke_handler(thread, id, f);
   }
   catch (const MemoryFault& fault) { deliver_memory_fault(thread, id, fault); }
+  catch (const std::exception& error) { note_escape(error, id); throw; }
 }
 bool dispatch_in_jit(GuestThread& thread, FunctionId id) {
   const auto& f = function(id);
@@ -413,8 +430,10 @@ bool dispatch_registered_in_jit(GuestThread& thread, const FunctionInfo& f, Regi
     return true;
   };
   bool completed;
-  if (profile::enabled) { profile::Activity activity(id); completed = invoke(); }
-  else completed = invoke();
+  try {
+    if (profile::enabled) { profile::Activity activity(id); completed = invoke(); }
+    else completed = invoke();
+  } catch (const std::exception& error) { note_escape(error, id); throw; }
   if (!completed) return false;
   // The unresolved-fault guard treats a completed HLE call as guest progress,
   // even when it no longer makes Run return to the thread loop.

@@ -285,5 +285,5 @@ msgstr "OK"
 msgid "Grip toggle"
 msgstr "Poignée en bascule"
 
-msgid "Press grip once to hold, again to let go. For controllers with click grips like Vive wands."
-msgstr "Appuyez une fois sur la poignée pour saisir, une seconde fois pour lâcher. Pour les manettes à poignée cliquable comme les Vive wands."
+msgid "Press once to hold, again to let go"
+msgstr "Appuyez une fois pour saisir, une seconde fois pour lâcher"

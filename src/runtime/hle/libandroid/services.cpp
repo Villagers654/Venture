@@ -133,17 +133,14 @@ void mount_obb(Storage* p, const char* name, const char* key, GuestAddr cb, Gues
   auto filename = host_path(name).filename();
   auto host = config.obb_dir / filename;
   std::error_code ec;
-  auto utf8 = filename.u8string();
-  std::string basename(reinterpret_cast<const char*>(utf8.data()), utf8.size());
+  const auto basename = paths::utf8(filename);
   bool known_path = std::string(name) == config.guest_obb_dir() + '/' + basename || host_path(name) == host;
   if ((!key || !*key) && known_path && std::filesystem::is_regular_file(host, ec)) {
     std::lock_guard lock(s->mutex);
     if (s->mounted.contains(name))
       state = 24;
     else {
-      auto utf8_path = host.u8string();
-      if (PackageAssets::get().open_obb(
-              std::string(reinterpret_cast<const char*>(utf8_path.data()), utf8_path.size()))) {
+      if (PackageAssets::get().open_obb(paths::utf8(host))) {
         s->mounted.emplace(name, config.guest_obb_dir());
         state = 1;
       }

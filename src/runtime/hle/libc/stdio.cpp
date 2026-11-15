@@ -413,6 +413,14 @@ int fputs_fn(const char* text, GuestFile* p) {
   auto n = std::strlen(text);
   return fwrite_fn(text, 1, n, p) == n ? 0 : -1;
 }
+// malloc_info (bionic malloc_info.cpp): options must be 0; the allocator's XML
+// report goes to the stream. The guest heap is mimalloc, so the report names no
+// arenas or bins (Custom Types' logAll prints it for diagnostics).
+int malloc_info_fn(int options, GuestFile* p) {
+  if (options != 0) return failure(err::einval);
+  if (!p) return failure(err::einval);
+  return fputs_fn("<malloc version=\"scudo-1\">\n</malloc>\n", p) < 0 ? -1 : 0;
+}
 int puts_fn(const char* text) {
   auto s = stream(standard[1]);
   if (!s) return -1;
@@ -1085,7 +1093,7 @@ void register_stdio32_adapters() {
   A("fwrite", fwrite_fn); A("__fread_chk", fread_chk); A("__fwrite_chk", fwrite_chk);
   A("fgetc", fgetc_fn); A("getc", fgetc_fn); A("getc_unlocked", fgetc_fn);
   A("fputc", fputc_fn); A("putc", fputc_fn); A("putc_unlocked", fputc_fn);
-  A("fgets", fgets_fn); A("fputs", fputs_fn); A("ungetc", ungetc_fn);
+  A("fgets", fgets_fn); A("fputs", fputs_fn); A("malloc_info", malloc_info_fn); A("ungetc", ungetc_fn);
   A("fgetc_unlocked", fgetc_fn); A("fputc_unlocked", fputc_fn); A("fgets_unlocked", fgets_fn);
   A("fputs_unlocked", fputs_fn); A("fwrite_unlocked", fwrite_fn); A("fflush_unlocked", fflush_fn);
   A("feof_unlocked", feof_fn); A("ferror_unlocked", ferror_fn); A("clearerr_unlocked", clearerr_fn);
@@ -1147,6 +1155,7 @@ void register_stdio(HleLibrary& lib) {
   B("fgets", fgets_fn);
   B("__fgets_chk", fgets_chk);
   B("fputs", fputs_fn);
+  B("malloc_info", malloc_info_fn);
   B("ungetc", ungetc_fn);
   B("getdelim", getdelim_fn);
   B("getline", getline_fn);

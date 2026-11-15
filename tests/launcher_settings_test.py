@@ -48,7 +48,7 @@ with tempfile.TemporaryDirectory(prefix="venture-settings-cli-") as temporary:
         "files": [{"name": "fixture.apk", "kind": "apk", "size": (install / "fixture.apk").stat().st_size}],
     }))
     run("set", "games-folder", str(root / "games"))
-    run("set", "runtime", str(probe))
+    env["VENTURE_RUNTIME"] = str(probe)  # the runtime is not a setting; development names another one
     for value in ("off", "on", "off"):
         run("set", "passthrough", value)
         assert run()["passthrough"] == (value == "on")

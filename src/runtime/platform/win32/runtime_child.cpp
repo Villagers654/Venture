@@ -121,6 +121,7 @@ void notify_worker(std::string_view packet) noexcept {
 }
 void notify_runtime_teardown_posted() { notify_worker(std::string_view("\1", 1)); }
 void notify_runtime_save_wait() { notify_worker(std::string_view("\3", 1)); }
+void notify_runtime_destroy_delivered() { notify_worker(std::string_view("\4", 1)); }
 const char* runtime_exit_wait_name(RuntimeExitWait wait) {
   switch (wait) {
     case RuntimeExitWait::arbitration: return "exit-arbitration";

@@ -5,6 +5,7 @@
 #include "gfx/gpu_device_internal.h"
 #include "gfx/queue_probe.h"
 #include "gfx/shared_image.h"
+#include "gfx/xr_vulkan_version.h"
 #include "platform/gfx_library.h"
 #include "xr/host_xr.h"
 #include "xr/vulkan_extensions.h"
@@ -16,6 +17,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <format>
 #include <stdexcept>
 #include <string>
 
@@ -90,6 +92,77 @@ void add_legacy_xr_requirements(bool device, std::vector<const char*>& names,
   }
   for (const auto& name : storage) names.push_back(name.c_str());
 }
+const char* vk_result_name(VkResult r) {
+  switch (r) {
+    case VK_ERROR_OUT_OF_HOST_MEMORY: return "VK_ERROR_OUT_OF_HOST_MEMORY";
+    case VK_ERROR_OUT_OF_DEVICE_MEMORY: return "VK_ERROR_OUT_OF_DEVICE_MEMORY";
+    case VK_ERROR_INITIALIZATION_FAILED: return "VK_ERROR_INITIALIZATION_FAILED";
+    case VK_ERROR_LAYER_NOT_PRESENT: return "VK_ERROR_LAYER_NOT_PRESENT";
+    case VK_ERROR_EXTENSION_NOT_PRESENT: return "VK_ERROR_EXTENSION_NOT_PRESENT";
+    case VK_ERROR_INCOMPATIBLE_DRIVER: return "VK_ERROR_INCOMPATIBLE_DRIVER";
+    default: return "VkResult";
+  }
+}
+std::string joined(std::uint32_t count, const char* const* names) {
+  std::string text;
+  for (std::uint32_t i = 0; i < count; ++i) text += (i ? " " : "") + std::string(names[i]);
+  return text.empty() ? "none" : text;
+}
+// Why the last shared instance creation failed, for the launch error a report shows.
+std::string instance_failure;
+// On a failed instance creation, what the plain loader sees: its version and
+// every adapter a bare Vulkan 1.0 instance enumerates, with its driver's
+// Vulkan version, so a report names the GPU and driver (hybrid PCs list two).
+std::string describe_vulkan_adapters() {
+  try {
+    std::uint32_t loader_version = VK_API_VERSION_1_0;
+    if (auto version = vk<PFN_vkEnumerateInstanceVersion>(nullptr, "vkEnumerateInstanceVersion")) version(&loader_version);
+    std::string text = "loader Vulkan " + vulkan_version_text(loader_version);
+    VkApplicationInfo app{VK_STRUCTURE_TYPE_APPLICATION_INFO};
+    app.pApplicationName = "Venture adapter probe";
+    app.apiVersion = VK_API_VERSION_1_0;
+    VkInstanceCreateInfo ci{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
+    ci.pApplicationInfo = &app;
+    VkInstance probe{};
+    const auto create = vk<PFN_vkCreateInstance>(nullptr, "vkCreateInstance");
+    if (!create) return text + "; no vkCreateInstance";
+    if (auto r = create(&ci, nullptr, &probe); r != VK_SUCCESS)
+      return text + std::format("; a plain Vulkan 1.0 instance fails too ({} {}): no Vulkan driver loads", static_cast<int>(r), vk_result_name(r));
+    const auto enumerate = vk<PFN_vkEnumeratePhysicalDevices>(probe, "vkEnumeratePhysicalDevices");
+    const auto properties = vk<PFN_vkGetPhysicalDeviceProperties>(probe, "vkGetPhysicalDeviceProperties");
+    std::uint32_t count = 0;
+    std::vector<VkPhysicalDevice> devices;
+    if (enumerate && properties && enumerate(probe, &count, nullptr) == VK_SUCCESS) {
+      devices.resize(count);
+      if (enumerate(probe, &count, devices.data()) != VK_SUCCESS) count = 0;
+      devices.resize(std::min<std::size_t>(count, devices.size()));
+    }
+    text += devices.empty() ? "; no adapters" : "; adapters:";
+    for (auto device : devices) {
+      VkPhysicalDeviceProperties p{};
+      properties(device, &p);
+      text += std::format(" [{} ({}, vendor 0x{:x}, Vulkan {}, driver 0x{:x})]", p.deviceName,
+                          p.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU     ? "discrete"
+                          : p.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU ? "integrated"
+                                                                                   : "other",
+                          p.vendorID, vulkan_version_text(vulkan_major_minor(p.apiVersion)), p.driverVersion);
+    }
+    if (auto destroy = vk<PFN_vkDestroyInstance>(probe, "vkDestroyInstance")) destroy(probe, nullptr);
+    return text;
+  } catch (const std::exception& e) {
+    return e.what();
+  }
+}
+void log_instance_failure(std::string cause, const VkInstanceCreateInfo& ci) {
+  static bool probed = false;
+  log::error("gfx", "Vulkan instance creation failed: {}; extensions: {}", cause,
+             joined(ci.enabledExtensionCount, ci.ppEnabledExtensionNames));
+  if (!probed) {
+    probed = true;
+    log::error("gfx", "Vulkan on this PC: {}", describe_vulkan_adapters());
+  }
+  instance_failure = std::move(cause);
+}
 void remember(std::vector<std::string>& to, std::uint32_t count,
               const char* const* names) {
   to.clear();
@@ -152,12 +225,18 @@ PFN_vkVoidFunction VKAPI_CALL recording_gipa(VkInstance instance,
     return reinterpret_cast<PFN_vkVoidFunction>(&record_instance);
   if (std::strcmp(name, "vkCreateDevice") == 0)
     return reinterpret_cast<PFN_vkVoidFunction>(&record_device);
-  return loader()(instance, name);
+  auto fn = loader()(instance, name);
+  if (!fn) xr::note_unresolved_vulkan_proc(name);
+  return fn;
 }
 VkResult create_instance(const VkInstanceCreateInfo* requested,
                          const VkAllocationCallbacks* alloc, VkInstance* out) {
   std::lock_guard lock(creation_lock);
-  if (!loader()) return VK_ERROR_INCOMPATIBLE_DRIVER;
+  if (!loader()) {
+    instance_failure = "the Vulkan loader (" + std::string(platform::vulkan_library_name()) + ") did not load";
+    log::error("gfx", "Vulkan instance creation failed: {}", instance_failure);
+    return VK_ERROR_INCOMPATIBLE_DRIVER;
+  }
   if (gpu.instance) return VK_ERROR_INITIALIZATION_FAILED;
   auto ci = *requested;
   auto names = union_names(ci.enabledExtensionCount, ci.ppEnabledExtensionNames,
@@ -177,26 +256,37 @@ VkResult create_instance(const VkInstanceCreateInfo* requested,
   if (!app.apiVersion) app.apiVersion = VK_API_VERSION_1_0;
   ci.pApplicationInfo = &app;
   VkResult result = VK_ERROR_INITIALIZATION_FAILED;
+  instance_failure.clear();
   try {
     auto& host = xr::host_xr();
     if (host.available) {
-      if (!host.enabled_extensions.contains("XR_KHR_vulkan_enable2"))
+      if (!host.enabled_extensions.contains("XR_KHR_vulkan_enable2")) {
+        log_instance_failure(host.runtime_name + " does not offer XR_KHR_vulkan_enable2", ci);
         return VK_ERROR_EXTENSION_NOT_PRESENT;
+      }
       XrGraphicsRequirementsVulkan2KHR requirements{
           XR_TYPE_GRAPHICS_REQUIREMENTS_VULKAN2_KHR};
       auto xr_result = xr_proc<PFN_xrGetVulkanGraphicsRequirements2KHR>(
           "xrGetVulkanGraphicsRequirements2KHR")(host.instance, host.system,
                                                  &requirements);
-      if (XR_FAILED(xr_result)) return VK_ERROR_INITIALIZATION_FAILED;
-      auto to_vk = [](XrVersion v) {
-        return VK_MAKE_API_VERSION(0, XR_VERSION_MAJOR(v), XR_VERSION_MINOR(v),
-                                   0);
-      };
-      app.apiVersion =
-          std::max(app.apiVersion, to_vk(requirements.minApiVersionSupported));
-      if ((app.apiVersion & ~0xfffu) >
-          to_vk(requirements.maxApiVersionSupported))
-        return VK_ERROR_INCOMPATIBLE_DRIVER;
+      if (XR_FAILED(xr_result)) {
+        log_instance_failure(std::format("{} xrGetVulkanGraphicsRequirements2KHR failed: {}", host.runtime_name,
+                                         static_cast<int>(xr_result)), ci);
+        return VK_ERROR_INITIALIZATION_FAILED;
+      }
+      // The maximum is only what the runtime was tested with (gfx/xr_vulkan_version.h).
+      const auto plan = plan_xr_vulkan_version(app.apiVersion, requirements.minApiVersionSupported,
+                                               requirements.maxApiVersionSupported,
+                                               std::min(app.apiVersion, VK_API_VERSION_1_1));
+      const auto bounds = std::format("{} requires Vulkan {} and was tested up to {} (XrVersion {} to {})",
+                                      host.runtime_name, vulkan_version_text(plan.min_version),
+                                      vulkan_version_text(plan.max_version),
+                                      xr_version_text(requirements.minApiVersionSupported),
+                                      xr_version_text(requirements.maxApiVersionSupported));
+      const std::uint32_t asked = app.apiVersion;
+      app.apiVersion = plan.api_version;
+      if (plan.above_tested_max || !plan.min_version || !plan.max_version)
+        log::warn("gfx", "Vulkan {} requested; {}; trying it", vulkan_version_text(vulkan_major_minor(asked)), bounds);
       std::vector<VkExtensionProperties> available;
       if (auto enumerate = vk<PFN_vkEnumerateInstanceExtensionProperties>(
               nullptr, "vkEnumerateInstanceExtensionProperties")) {
@@ -216,22 +306,46 @@ VkResult create_instance(const VkInstanceCreateInfo* requested,
       info.pfnGetInstanceProcAddr = recording_gipa;
       info.vulkanCreateInfo = &ci;
       info.vulkanAllocator = alloc;
-      instance_recorded = false;
-      xr_result = xr_proc<PFN_xrCreateVulkanInstanceKHR>(
-          "xrCreateVulkanInstanceKHR")(host.instance, &info, out, &result);
+      const auto create = xr_proc<PFN_xrCreateVulkanInstanceKHR>("xrCreateVulkanInstanceKHR");
+      auto attempt = [&](std::uint32_t version) {
+        app.apiVersion = version;  // ci.pApplicationInfo points at app
+        instance_recorded = false;
+        result = VK_ERROR_INITIALIZATION_FAILED;
+        *out = nullptr;
+        return create(host.instance, &info, out, &result);
+      };
+      xr_result = attempt(plan.api_version);
+      if (XR_SUCCEEDED(xr_result) && result == VK_ERROR_INCOMPATIBLE_DRIVER && plan.retry_version) {
+        log::warn("gfx", "Vulkan {} instance refused as incompatible; {}; retrying with Vulkan {}",
+                  vulkan_version_text(vulkan_major_minor(plan.api_version)), bounds,
+                  vulkan_version_text(plan.retry_version));
+        xr_result = attempt(plan.retry_version);
+      }
       if (XR_FAILED(xr_result)) {
-        log::error("gfx", "xrCreateVulkanInstanceKHR failed: {}",
-                   static_cast<int>(xr_result));
+        log_instance_failure(std::format("{} xrCreateVulkanInstanceKHR failed: {} (requested Vulkan {}; {})",
+                                         host.runtime_name, static_cast<int>(xr_result),
+                                         vulkan_version_text(vulkan_major_minor(app.apiVersion)), bounds),
+                             ci);
         return VK_ERROR_INITIALIZATION_FAILED;
       }
+      if (result != VK_SUCCESS)
+        log_instance_failure(std::format("{} from {} xrCreateVulkanInstanceKHR (requested Vulkan {}; {})",
+                                         vk_result_name(result), host.runtime_name,
+                                         vulkan_version_text(vulkan_major_minor(app.apiVersion)), bounds),
+                             ci);
       if (result == VK_SUCCESS && !instance_recorded) {
         log::info("gfx", "The XR runtime created the Vulkan instance itself; using the requested extensions");
         remember(instance_enabled, ci.enabledExtensionCount, ci.ppEnabledExtensionNames);
       }
-    } else
+    } else {
       result = record_instance(&ci, alloc, out);
+      if (result != VK_SUCCESS)
+        log_instance_failure(std::format("{} from the Vulkan loader (requested Vulkan {})", vk_result_name(result),
+                                         vulkan_version_text(vulkan_major_minor(app.apiVersion))),
+                             ci);
+    }
   } catch (const std::exception& e) {
-    log::error("gfx", "{}", e.what());
+    log_instance_failure(e.what(), ci);
     return VK_ERROR_INITIALIZATION_FAILED;
   }
   if (result == VK_SUCCESS) {
@@ -252,7 +366,11 @@ VkResult select_device(VkInstance instance, VkPhysicalDevice* out) {
       info.vulkanInstance = instance;
       auto r = xr_proc<PFN_xrGetVulkanGraphicsDevice2KHR>(
           "xrGetVulkanGraphicsDevice2KHR")(host.instance, &info, out);
-      if (XR_FAILED(r)) return VK_ERROR_INITIALIZATION_FAILED;
+      if (XR_FAILED(r)) {
+        log::error("gfx", "{} xrGetVulkanGraphicsDevice2KHR failed: {}; Vulkan on this PC: {}", host.runtime_name,
+                   static_cast<int>(r), describe_vulkan_adapters());
+        return VK_ERROR_INITIALIZATION_FAILED;
+      }
     } else {
       auto enumerate = vk<PFN_vkEnumeratePhysicalDevices>(
           instance, "vkEnumeratePhysicalDevices");
@@ -476,8 +594,8 @@ void create_direct() {
   auto r = create_instance(&ci, nullptr, &instance);
   if (r != VK_SUCCESS) {
     if (auto message = missing_vulkan_surface_support(); !message.empty()) throw std::runtime_error(message);
-    throw std::runtime_error("Vulkan instance creation failed: " +
-                             std::to_string(r));
+    throw std::runtime_error("Vulkan instance creation failed: " + std::to_string(r) +
+                             (instance_failure.empty() ? "" : " (" + instance_failure + ")"));
   }
   VkPhysicalDevice p{};
   if (select_device(instance, &p) != VK_SUCCESS)

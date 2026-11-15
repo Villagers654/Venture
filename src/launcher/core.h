@@ -196,6 +196,7 @@ protected:
   void set_hidden(std::string_view app_id, bool hidden);
   bool hidden(std::string_view app_id) const { return settings_.hidden.contains(std::string(app_id)); }
   void set_show_hidden(bool show);
+  void set_installed_only(bool installed_only);
   struct LaunchRequest {
     std::string target, account;
     LaunchDetails details;

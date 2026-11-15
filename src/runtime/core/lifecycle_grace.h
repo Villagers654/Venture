@@ -85,6 +85,20 @@ inline bool quit_recency_pending(const QuitSample& s, const QuitQuietness& q, Qu
 // second. A write at the bound is waited for up to save_quit_bound: ending
 // then is safe once none is in flight, while one still in flight at that
 // bound is a stuck write and fails the quit.
+// Whether the game was in play when the quit came; otherwise it ends like a
+// quit before its first frame (startup_quit). OpenXR delivers input only to a
+// focused session, so a game never focused has no player progress to save
+// (H3VR2 on SteamVR: one frame, a guest library still loading, never focused).
+// A focused game whose render loop produced no frame for loading_stall before
+// the quit is inside a load and polls lifecycle commands only after it (H3VR2
+// on a cold cache: one frame, then 26 s of loading when the stop came). A game
+// that lost focus after play (a dashboard) legitimately stops rendering and
+// keeps the normal admission.
+inline constexpr std::chrono::seconds loading_stall{5};
+inline bool presenting_at_quit(bool first_frame, bool ever_focused, bool focused,
+                               std::chrono::steady_clock::duration since_frame) {
+  return first_frame && ever_focused && (!focused || since_frame < loading_stall);
+}
 enum class StartupQuit { not_startup, end, wait };
 inline StartupQuit startup_quit(const QuitSample& s, bool first_frame, bool exiting, bool within_save_bound) {
   if (s.destroy_delivered || first_frame || exiting || !s.writers_known) return StartupQuit::not_startup;

@@ -1,3 +1,5 @@
+#include "core/wait.h"
+#include "core/session_timeline.h"
 #include "core/xr_call_trace.h"
 #include <atomic>
 #include "xr/haptic_sequence.h"
@@ -1184,6 +1186,7 @@ XrResult xrEndFrame(XrSession handle, const XrFrameEndInfo *info) {
   return trace.finish([&]() -> XrResult {
   // The guest's whole call; the host runtime's share is the xr_end_frame record inside it.
   vulkan::ScopedHostWait timing("guest_end_frame");
+  const auto entered_ns = monotonic_ns();
   std::unique_lock lock(state().mutex);
   std::unique_lock sl(session().mutex);
   if (!valid_handle(handle, "XrSession"))
@@ -1454,6 +1457,7 @@ XrResult xrEndFrame(XrSession handle, const XrFrameEndInfo *info) {
     if (!owned->copy(host_info)) owned.reset();
   }
   lock.unlock();
+  session_timeline::end_prep(monotonic_ns() - entered_ns);
   const auto result = owned ? session().end(&owned->info, owned) : session().end(&host_info);
   return result == XR_SUCCESS ? prepared : result;
 

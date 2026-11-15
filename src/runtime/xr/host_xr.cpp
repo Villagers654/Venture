@@ -248,8 +248,10 @@ std::string headset_audio_endpoint(bool input) {
   wchar_t buffer[128]{};
   if (XR_FAILED(reinterpret_cast<XrResult(XRAPI_PTR *)(XrInstance, wchar_t *)>(raw)(host.instance, buffer))) return {};
   buffer[std::size(buffer) - 1] = 0;
-  const auto text = std::filesystem::path(std::wstring(buffer)).u8string();
-  return std::string(text.begin(), text.end());
+  // An MMDevice endpoint id ("{0.0.0.00000000}.{guid}") is ASCII; never throw.
+  std::string text;
+  for (const wchar_t* c = buffer; *c; ++c) text += *c < 0x80 ? static_cast<char>(*c) : '?';
+  return text;
 #else
   (void)input;
   return {};
