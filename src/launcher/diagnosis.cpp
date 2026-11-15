@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "launcher/diagnosis.h"
+#include <algorithm>
 #include <array>
 #include <cctype>
 
@@ -16,6 +17,8 @@ struct Rule {
   std::array<std::string_view, 6> signatures;  // any one matches; lower case
   std::string_view cause, advice;
   std::string_view also{};  // when set, must appear too; lower case
+  // When one appears, the rest of its line (as written) is added to the cause.
+  std::array<std::string_view, 2> detail{};
 };
 constexpr std::string_view kSendReport = "Send this report with an issue: the game needs a fix in Venture.";
 constexpr std::string_view kGpuAdvice =
@@ -42,6 +45,16 @@ constexpr Rule kRules[] = {
      "SteamVR was the OpenXR runtime, and the Venture Flatpak cannot reach SteamVR.",
      "Use the Venture AppImage, tarball or your distribution's package with SteamVR, or use WiVRn or Monado with "
      "the Flatpak."},
+    // xr/host_xr.cpp: an implicit OpenXR API layer the loader could not load
+    // failed the host instance (the loader's "Failed loading layer
+    // information"), named by the runtime's "OpenXR API layer broken:" warning
+    // or the report's own check of the registered layers (debug_report.cpp).
+    {{"repair or uninstall the program that installed it", "failed loading layer information"},
+     "An OpenXR API layer installed on this PC could not be loaded, and the VR runtime could not start with it.",
+     "Repair or reinstall the program that installed the layer, or uninstall it so its leftover registration goes, "
+     "update Venture, then press Play again.",
+     "could not create an instance",
+     {"openxr api layer broken: "}},
     {{"your configured openxr runtime is unavailable", "xr_error_runtime_unavailable"},
      "No OpenXR runtime was running, or none is set as the active one.",
      "Start your VR runtime (SteamVR, WiVRn or Monado), make it the active OpenXR runtime, connect the headset, "
@@ -168,8 +181,20 @@ std::optional<Diagnosis> diagnose(std::string_view evidence) {
   for (const auto &rule : kRules)
     for (auto signature : rule.signatures)
       if (!signature.empty() && text.find(signature) != std::string::npos &&
-          (rule.also.empty() || text.find(rule.also) != std::string::npos))
-        return Diagnosis{std::string(rule.cause), std::string(rule.advice)};
+          (rule.also.empty() || text.find(rule.also) != std::string::npos)) {
+        std::string cause(rule.cause);
+        for (auto prefix : rule.detail)
+          if (const auto at = prefix.empty() ? std::string::npos : text.find(prefix); at != std::string::npos) {
+            const auto from = at + prefix.size();
+            const auto end = std::min(evidence.find('\n', from), evidence.size());
+            auto line = evidence.substr(from, end - from);
+            while (!line.empty() && (line.back() == '\r' || line.back() == ' ' || line.back() == '.'))
+              line.remove_suffix(1);
+            cause += " Broken layer: " + std::string(line) + ".";
+            break;
+          }
+        return Diagnosis{std::move(cause), std::string(rule.advice)};
+      }
   return std::nullopt;
 }
 } // namespace venture::launcher

@@ -291,7 +291,7 @@ TEST_CASE("Decoded scratch follows per-plane demand and preserves simultaneous-u
     CHECK(buffers.at(copies[2 * i]) == 18 * 18 * 4);
     CHECK(buffers.at(copies[2 * i + 1]) == 18 * 18 * 4);
   }
-  venture::vulkan::release_texture_commands(command);
+  venture::vulkan::release_texture_commands(device, command);
   venture::vulkan::trim_texture_pool(device, pool);
   vk_call("vkDestroyImage", device, image, nullptr);
   for (auto next : growing) vk_call("vkDestroyImage", device, next, nullptr);

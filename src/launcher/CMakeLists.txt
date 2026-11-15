@@ -14,7 +14,7 @@ target_compile_definitions(venture_imgui PUBLIC IMGUI_ENABLE_FREETYPE IMGUI_USE_
 include(${PROJECT_SOURCE_DIR}/cmake/I18n.cmake)
 i18n_add_library(venture_i18n SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/i18n)
 # The launcher without its window (core.h): the GUI and venture-cli share it.
-add_library(venture_launcher_core STATIC core.cpp debug_report.cpp diagnosis.cpp drives.cpp import.cpp sign_in_link.cpp store_link.cpp updater.cpp ui/rich_text_parse.cpp)
+add_library(venture_launcher_core STATIC core.cpp debug_report.cpp diagnosis.cpp drives.cpp import.cpp sign_in_link.cpp store_link.cpp updater.cpp ui/rich_text_parse.cpp ui/text_scripts.cpp)
 target_link_libraries(venture_launcher_core PUBLIC venture_common venture_ovrplatform venture_i18n)
 # Store links are looked up again once per version (core.cpp).
 target_compile_definitions(venture_launcher_core PRIVATE VENTURE_VERSION="${PROJECT_VERSION}")
@@ -72,7 +72,7 @@ if(WIN32)
     ${webview2_SOURCE_DIR}/build/native/x64/WebView2Loader.dll $<TARGET_FILE_DIR:venture>/WebView2Loader.dll)
 else()
   target_sources(venture_launcher_core PRIVATE platform/posix/auth_browser.cpp)
-  target_sources(venture PRIVATE platform/posix/window_style.cpp platform/posix/system_fonts.cpp)
+  target_sources(venture PRIVATE platform/posix/window_style.cpp)
 endif()
 if(MINGW)
   target_link_options(venture PRIVATE -municode)

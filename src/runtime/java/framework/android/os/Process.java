@@ -55,6 +55,9 @@ public final class Process {
   public static int myUid() {
     return 10000;
   }
+  public static UserHandle myUserHandle() {
+    return UserHandle.of(UserHandle.getUserId(myUid()));
+  }
   public static void setThreadPriority(int p) {
     setThreadPriority(0, p);
   }

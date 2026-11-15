@@ -1,0 +1,8 @@
+#version 450
+// A guest compute pass around Venture's texture decodes (vulkan_texture_test.cpp):
+// it reads two sets and its push constants, which the decodes bind over and give back.
+layout(local_size_x = 1) in;
+layout(set = 0, binding = 0, std430) buffer Totals { uint totals[]; };
+layout(set = 1, binding = 0, std430) readonly buffer Input { uint value; } input_value;
+layout(push_constant) uniform Push { uint slot; uint add; } push;
+void main() { totals[push.slot] += input_value.value + push.add; }

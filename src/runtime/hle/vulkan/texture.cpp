@@ -26,6 +26,7 @@
 #include "gfx/gpu_device.h"
 #include "gfx/pipeline_trace.h"
 #include "gfx/queue_sync.h"
+#include "gfx/vulkan_enumerate.h"
 #include "gfx/vulkan_memory.h"
 #include "internal.h"
 #include "external.h"
@@ -377,8 +378,27 @@ struct Commands {
   std::vector<Upload> uploads;
   std::vector<VkCommandBuffer> secondary;
   bool may_wait = false;
+  // Venture passes (decodes, BC7 encodes, depth conversions) recorded into it, for the fault census.
+  std::uint64_t passes = 0;
+  // The latest guest submission serial (deferred_free_serial) per queue that carried it, directly or
+  // through a primary; its passes' objects outlive a release only until these complete.
+  std::vector<std::pair<VkQueue, std::uint64_t>> submitted;
+  // Secondaries with Venture state that this primary executes.
+  std::vector<VkCommandBuffer> executed;
 };
 std::recursive_mutex texture_lock;
+// Objects of Venture's passes the GPU may read from the command buffer's executions.
+static bool holds_pass_objects(const Commands& c) {
+  return !c.resources.empty() || !c.decoded.empty() || !c.decoded_planes.empty() || !c.uploads.empty();
+}
+// Commands a guest reset, freed or re-recorded, kept until the GPU work
+// submitted before that completes (release_texture_commands).
+// `trims` is its scratch pool's trim count at the release: scratch returns to
+// the pool only if the pool was not trimmed (or destroyed) since.
+struct Retiring { VkDevice device{}; Commands commands; std::uint64_t trims{}; };
+std::map<std::uint64_t, Retiring> retiring;
+std::uint64_t retiring_serial = 0;
+std::map<std::pair<VkDevice, VkCommandPool>, std::uint64_t> scratch_trims;
 struct LazyTextureDevice {
   VkQueue queue{};
   PFN_vkQueueWaitIdle wait_idle{};
@@ -1046,7 +1066,14 @@ VkResult try_lazy_companion(VkDevice d, const VkImageCreateInfo& info, Companion
 // Venture's own compute passes recorded into guest command buffers and the
 // guest submissions, for the device-fault report (texture_pass_census).
 std::atomic<std::uint64_t> decode_passes{0}, bc7_passes{0}, depth_passes{0}, guest_submits{0},
-    passes_at_first_submit{UINT64_MAX};
+    passes_at_first_submit{UINT64_MAX}, passes_submitted{0};
+// One pass in `counter` and in the guest command buffer it was recorded into
+// (Venture's private command buffers have no record and are counted globally only).
+void count_pass(std::atomic<std::uint64_t>& counter, VkCommandBuffer cmd) {
+  counter.fetch_add(1, std::memory_order_relaxed);
+  std::lock_guard lock(texture_lock);
+  if (auto it = command_state.find(cmd); it != command_state.end()) ++it->second.passes;
+}
 std::atomic<int> compression_forced{-1};
 // Decoded textures (RGBA8, 4 to 8 times their ASTC size; they filled 8-12 GB
 // GPUs in Batman: Arkham Shadow, Asgard's Wrath 2 and Resident Evil 4) are
@@ -1148,14 +1175,13 @@ bool memory_budget_supported(VkPhysicalDevice physical) {
   if (inserted) {
     auto enumerate = phys<PFN_vkEnumerateDeviceExtensionProperties>(physical,
         "vkEnumerateDeviceExtensionProperties");
-    std::uint32_t count = 0;
-    if (enumerate && enumerate(physical, nullptr, &count, nullptr) == VK_SUCCESS) {
-      std::vector<VkExtensionProperties> extensions(count);
-      if (enumerate(physical, nullptr, &count, extensions.data()) == VK_SUCCESS)
-        it->second = std::ranges::any_of(extensions, [](const auto& e) {
-          return std::string_view(e.extensionName) == VK_EXT_MEMORY_BUDGET_EXTENSION_NAME;
-        });
-    }
+    std::vector<VkExtensionProperties> extensions;
+    if (enumerate && gfx::enumerate_vulkan(extensions, [&](std::uint32_t* n, VkExtensionProperties* p) {
+          return enumerate(physical, nullptr, n, p);
+        }) >= 0)
+      it->second = std::ranges::any_of(extensions, [](const auto& e) {
+        return std::string_view(e.extensionName) == VK_EXT_MEMORY_BUDGET_EXTENSION_NAME;
+      });
   }
   return it->second;
 }
@@ -1872,7 +1898,6 @@ void convert_depth(VkCommandBuffer cmd, const std::shared_ptr<Buffer>& words, st
   conversion->words = words;
   conversion->destroy_pool = vk<PFN_vkDestroyDescriptorPool>(d, "vkDestroyDescriptorPool");
   auto& p = *conversion->pipeline;
-  depth_passes.fetch_add(1, std::memory_order_relaxed);
   VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1};
   VkDescriptorPoolCreateInfo pi{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
   pi.maxSets = 1;
@@ -1883,6 +1908,7 @@ void convert_depth(VkCommandBuffer cmd, const std::shared_ptr<Buffer>& words, st
     std::lock_guard lock(texture_lock);
     command_state[cmd].resources.push_back(conversion);
   }
+  count_pass(depth_passes, cmd);
   VkDescriptorSetAllocateInfo ai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
   ai.descriptorPool = conversion->pool;
   ai.descriptorSetCount = 1;
@@ -2343,11 +2369,22 @@ void VKAPI_CALL execute_commands(VkCommandBuffer cmd, std::uint32_t count, const
   std::lock_guard lock(texture_lock);
   if (count && lazy_devices.contains(command_device(cmd)))
     command_state[cmd].secondary.insert(command_state[cmd].secondary.end(), secondary, secondary + count);
+  std::uint64_t passes = 0;
+  std::vector<VkCommandBuffer> executed;
+  for (std::uint32_t i = 0; i < count; ++i)
+    if (auto it = command_state.find(secondary[i]); it != command_state.end()) {
+      passes += it->second.passes;
+      executed.push_back(secondary[i]);
+    }
+  if (executed.empty()) return;
+  auto& state = command_state[cmd];
+  state.passes += passes;
+  state.executed.insert(state.executed.end(), executed.begin(), executed.end());
 }
 VkResult VKAPI_CALL begin(VkCommandBuffer cmd, const VkCommandBufferBeginInfo* info) {
   auto r = vk<PFN_vkBeginCommandBuffer>(command_device(cmd), "vkBeginCommandBuffer")(cmd, info);
   if (r == VK_SUCCESS) {
-    release_texture_commands(cmd);
+    release_texture_commands(command_device(cmd), cmd);
     release_render_commands(cmd);
     if (const auto bindings = command_null_vertex_bindings(cmd)) {
       static constexpr std::array<VkBuffer, max_null_vertex_bindings> buffers{};
@@ -2377,7 +2414,7 @@ VkResult VKAPI_CALL end(VkCommandBuffer cmd) {
 VkResult VKAPI_CALL reset(VkCommandBuffer cmd, VkCommandBufferResetFlags flags) {
   auto r = vk<PFN_vkResetCommandBuffer>(command_device(cmd), "vkResetCommandBuffer")(cmd, flags);
   if (r == VK_SUCCESS) {
-    release_texture_commands(cmd);
+    release_texture_commands(command_device(cmd), cmd);
     release_render_commands(cmd);
   }
   return r;
@@ -3133,24 +3170,86 @@ VkResult submit_textures(VkQueue queue, std::uint32_t count, const Submit* submi
 }
 } // namespace
 namespace {
-void count_guest_submit() {
+// Counts a guest submission and returns the Venture passes in its command buffers.
+template <class Submit>
+std::uint64_t count_guest_submit(std::uint32_t count, const Submit* submits) {
   if (guest_submits.fetch_add(1, std::memory_order_relaxed) == 0)
     passes_at_first_submit.store(decode_passes.load(std::memory_order_relaxed) + bc7_passes.load(std::memory_order_relaxed) +
                                  depth_passes.load(std::memory_order_relaxed), std::memory_order_relaxed);
+  std::uint64_t passes = 0;
+  std::lock_guard lock(texture_lock);
+  if (command_state.empty()) return 0;
+  auto add = [&](VkCommandBuffer cmd) {
+    if (auto it = command_state.find(cmd); it != command_state.end()) passes += it->second.passes;
+  };
+  for (std::uint32_t i = 0; i < count; ++i) {
+    if constexpr (std::is_same_v<Submit, VkSubmitInfo>)
+      for (std::uint32_t j = 0; j < submits[i].commandBufferCount; ++j) add(submits[i].pCommandBuffers[j]);
+    else
+      for (std::uint32_t j = 0; j < submits[i].commandBufferInfoCount; ++j)
+        add(submits[i].pCommandBufferInfos[j].commandBuffer);
+  }
+  return passes;
+}
+// Marks the command buffers of an accepted submission, and the secondaries they
+// execute, with the queue's submission serial. True if any holds Venture state.
+template <class Submit>
+bool note_guest_submit(VkQueue queue, std::uint64_t serial, std::uint32_t count, const Submit* submits) {
+  std::lock_guard lock(texture_lock);
+  if (command_state.empty()) return false;
+  bool noted = false;
+  // Only command buffers holding pass objects; compute state replay alone holds nothing on the GPU.
+  auto mark = [&](Commands& state) {
+    if (!holds_pass_objects(state)) return;
+    auto at = std::ranges::find(state.submitted, queue, &std::pair<VkQueue, std::uint64_t>::first);
+    if (at == state.submitted.end()) state.submitted.emplace_back(queue, serial);
+    else at->second = serial;
+    noted = true;
+  };
+  auto add = [&](VkCommandBuffer cmd) {
+    auto it = command_state.find(cmd);
+    if (it == command_state.end()) return;
+    mark(it->second);
+    for (auto secondary : it->second.executed)
+      if (auto s = command_state.find(secondary); s != command_state.end()) mark(s->second);
+  };
+  for (std::uint32_t i = 0; i < count; ++i) {
+    if constexpr (std::is_same_v<Submit, VkSubmitInfo>)
+      for (std::uint32_t j = 0; j < submits[i].commandBufferCount; ++j) add(submits[i].pCommandBuffers[j]);
+    else
+      for (std::uint32_t j = 0; j < submits[i].commandBufferInfoCount; ++j)
+        add(submits[i].pCommandBufferInfos[j].commandBuffer);
+  }
+  return noted;
+}
+// After an accepted submission holding Venture state, a fence follows it, so a
+// release after the guest waited for that work finds it complete.
+template <class Submit>
+void track_guest_submit(VkQueue queue, std::uint32_t count, const Submit* submits) {
+  if (note_guest_submit(queue, deferred_free_serial(queue), count, submits)) deferred_free_cover(queue);
 }
 }  // namespace
+// Passes are counted when recorded and again when the driver accepts a submission
+// holding them: a device lost before then (the loss is reported by a later call)
+// cannot have been caused by passes that never reached the GPU.
 std::string texture_pass_census() {
   const auto first = passes_at_first_submit.load(std::memory_order_relaxed);
   return std::format("{} guest submissions; Venture recorded {} texture decodes, {} BC7 encodes and {} depth "
-                     "conversions into guest command buffers ({} before the first submission)",
+                     "conversions into guest command buffers ({} before the first submission; {} in submissions "
+                     "the driver accepted)",
                      guest_submits.load(std::memory_order_relaxed), decode_passes.load(std::memory_order_relaxed),
                      bc7_passes.load(std::memory_order_relaxed), depth_passes.load(std::memory_order_relaxed),
-                     first == UINT64_MAX ? std::string("none submitted") : std::to_string(first));
+                     first == UINT64_MAX ? std::string("none submitted") : std::to_string(first),
+                     passes_submitted.load(std::memory_order_relaxed));
 }
 VkResult texture_submit(VkQueue queue, std::uint32_t count, const VkSubmitInfo* submits,
                         VkFence fence, PFN_vkQueueSubmit native) {
-  count_guest_submit();
+  const auto passes = count_guest_submit(count, submits);
   auto result = submit_textures(queue, count, submits, fence, native);
+  if (result == VK_SUCCESS) {
+    passes_submitted.fetch_add(passes, std::memory_order_relaxed);
+    track_guest_submit(queue, count, submits);
+  }
   if (have_pageable_sources.load(std::memory_order_relaxed) && result == VK_SUCCESS) {
     auto binding = queue_binding(queue);
     if (!binding) return result;
@@ -3161,8 +3260,12 @@ VkResult texture_submit(VkQueue queue, std::uint32_t count, const VkSubmitInfo* 
 }
 VkResult texture_submit2(VkQueue queue, std::uint32_t count, const VkSubmitInfo2* submits,
                          VkFence fence, PFN_vkQueueSubmit2 native) {
-  count_guest_submit();
+  const auto passes = count_guest_submit(count, submits);
   auto result = submit_textures(queue, count, submits, fence, native);
+  if (result == VK_SUCCESS) {
+    passes_submitted.fetch_add(passes, std::memory_order_relaxed);
+    track_guest_submit(queue, count, submits);
+  }
   if (have_pageable_sources.load(std::memory_order_relaxed) && result == VK_SUCCESS) {
     auto binding = queue_binding(queue);
     if (!binding) return result;
@@ -3213,7 +3316,7 @@ std::shared_ptr<DecodeResources> record_decode(VkDevice d, VkCommandBuffer cmd, 
                                                VkDeviceSize dest_size, const DecodeRegion& region) {
   auto resources = std::make_shared<DecodeResources>();
   resources->pipeline = pipeline(d);
-  decode_passes.fetch_add(1, std::memory_order_relaxed);
+  count_pass(decode_passes, cmd);
   resources->destroy_pool = vk<PFN_vkDestroyDescriptorPool>(d, "vkDestroyDescriptorPool");
   auto& p = *resources->pipeline;
   VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 2};
@@ -3259,7 +3362,7 @@ std::shared_ptr<DecodeResources> record_encode_bc7(VkDevice d, VkCommandBuffer c
     VkDeviceSize source_size, VkBuffer dest, VkDeviceSize dest_size, std::uint32_t width, std::uint32_t height) {
   auto resources = std::make_shared<DecodeResources>();
   resources->pipeline = image_pipeline(d, bc7_mode);
-  bc7_passes.fetch_add(1, std::memory_order_relaxed);
+  count_pass(bc7_passes, cmd);
   resources->destroy_pool = vk<PFN_vkDestroyDescriptorPool>(d, "vkDestroyDescriptorPool");
   auto& p = *resources->pipeline;
   VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 2};
@@ -3300,7 +3403,7 @@ std::shared_ptr<DecodeResources> record_decode_image(VkDevice d, VkCommandBuffer
   const bool srgb = region.format.decoded == VK_FORMAT_R8G8B8A8_SRGB;
   resources->pipeline = image_pipeline(d, region.format.decoded == VK_FORMAT_R8G8B8A8_UNORM
       ? (volume ? 6u : 5u) : (volume ? 3u : 1u) + unsigned(srgb));
-  decode_passes.fetch_add(1, std::memory_order_relaxed);
+  count_pass(decode_passes, cmd);
   resources->destroy_pool = vk<PFN_vkDestroyDescriptorPool>(d, "vkDestroyDescriptorPool");
   auto& p = *resources->pipeline;
   VkDescriptorPoolSize sizes[] = {{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 2},
@@ -3552,32 +3655,72 @@ VkResult host_texture_features(VkPhysicalDevice physical, VkPhysicalDeviceFeatur
   requested.textureCompressionBC |= native.textureCompressionBC;
   return VK_SUCCESS;
 }
-void release_texture_commands(VkCommandBuffer command) {
+// Returns a retired command buffer's scratch to its pool; the rest is destroyed
+// after the lock is released (`done` outlives `lock`).
+static void finish_retiring(std::uint64_t id) {
+  Commands done;
+  std::lock_guard lock(texture_lock);
+  auto it = retiring.find(id);
+  if (it == retiring.end()) return;  // the device was released first
+  done = std::move(it->second.commands);
+  const auto device = it->second.device;
+  const bool trimmed = scratch_trims[done.decode_pool] != it->second.trims;
+  retiring.erase(it);
+  // A released device took its retiring commands, so this device is alive.
+  if (!done.decoded.empty() && !trimmed) {
+    auto& budget = scratch_budgets[device];
+    auto& idle = scratch_pools[done.decode_pool];
+    for (auto& b : done.decoded) {
+      if (budget.count == scratch_count_limit || b->allocation_size > scratch_byte_limit - budget.bytes)
+        continue;
+      budget.bytes += b->allocation_size;
+      ++budget.count;
+      idle.push_back(std::move(b));
+    }
+  }
+}
+void release_texture_commands(VkDevice device, VkCommandBuffer command) {
   Commands removed;
+  std::uint64_t id = 0;
+  std::vector<std::pair<VkQueue, std::uint64_t>> waits;
   {
     std::lock_guard lock(texture_lock);
     auto it = command_state.find(command);
-    if (it != command_state.end()) {
-      removed = std::move(it->second);
-      command_state.erase(it);
-      if (!removed.decoded.empty()) {
-        auto& budget = scratch_budgets[removed.decode_pool.first];
-        auto& idle = scratch_pools[removed.decode_pool];
-        for (auto& b : removed.decoded) {
-          if (budget.count == scratch_count_limit || b->allocation_size > scratch_byte_limit - budget.bytes)
-            continue;
-          budget.bytes += b->allocation_size;
-          ++budget.count;
-          idle.push_back(std::move(b));
-        }
-      }
+    if (it == command_state.end()) return;
+    removed = std::move(it->second);
+    command_state.erase(it);
+    if (holds_pass_objects(removed)) {
+      id = ++retiring_serial;
+      waits = std::move(removed.submitted);
+      const auto trims = scratch_trims[removed.decode_pool];
+      retiring.emplace(id, Retiring{device, std::move(removed), trims});
     }
   }
+  // Destroyed outside texture_lock, as is the GPU-free state of a command
+  // buffer that recorded no pass.
+  if (!id) return;
+  // A guest normally waits for a command buffer's work before it resets, frees
+  // or re-records it: then its submissions have completed and the passes'
+  // objects return at once (a never-submitted one has nothing pending either).
+  // Quest's driver keeps freed allocations until the GPU retires them, so a
+  // title may also release a command buffer whose submission still runs (as
+  // with vkFreeMemory, deferred_free.cpp); the passes' descriptor pools,
+  // scratch and sources then live until those submissions complete, checked at
+  // each later submission. Never call this under texture_lock: covering a busy
+  // queue takes its submission mutex, which submissions hold while they take
+  // texture_lock.
+  if (waits.empty()) finish_retiring(id);
+  else defer_until_complete(device, std::move(waits), [id] { finish_retiring(id); });
+}
+std::size_t texture_commands_retiring(VkDevice device) {
+  std::lock_guard lock(texture_lock);
+  return std::size_t(std::ranges::count_if(retiring, [&](const auto& r) { return r.second.device == device; }));
 }
 void trim_texture_pool(VkDevice device, VkCommandPool pool) {
   std::vector<std::shared_ptr<Buffer>> removed;
   {
     std::lock_guard lock(texture_lock);
+    ++scratch_trims[{device, pool}];
     auto it = scratch_pools.find({device, pool});
     if (it == scratch_pools.end()) return;
     removed = std::move(it->second);
@@ -3631,12 +3774,19 @@ void release_texture_device(VkDevice device) {
       removed_commands.push_back(std::move(p.second));
       return true;
     });
+    // The device is idle at release; commands still retiring go with it.
+    std::erase_if(retiring, [&](auto& p) {
+      if (p.second.device != device) return false;
+      removed_commands.push_back(std::move(p.second.commands));
+      return true;
+    });
     std::erase_if(images, [&](auto& p) {
       if (p.second->device != device) return false;
       removed_images.push_back(std::move(p.second));
       return true;
     });
     std::erase_if(depth_aliases, [&](const auto& p) { return p.second == device; });
+    std::erase_if(scratch_trims, [&](const auto& p) { return p.first.first == device; });
     std::erase_if(scratch_pools, [&](auto& p) {
       if (p.first.first != device) return false;
       removed_scratch.push_back(std::move(p.second));

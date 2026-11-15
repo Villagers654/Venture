@@ -49,8 +49,8 @@ struct Fonts {
 };
 Fonts& fonts();
 void load_fonts();
-// Adds the system font a language's script needs (Chinese, Japanese, Korean)
-// to every UI font, once; call between frames.
+// Adds system fonts for Han, kana and hangul to every UI font, once, the UI
+// language's own first (names show in any script); call between frames.
 void load_script_fonts(std::string_view language);
 // Type scale (unscaled px).
 inline constexpr float kDisplay = 28, kTitle = 22, kHeading = 17, kBody = 15, kSmall = 14, kLabel = 13;

@@ -32,6 +32,25 @@ FileLock::FileLock(const fs::path &file, bool wait) : impl_(std::make_unique<Imp
     throw std::runtime_error("Could not lock Venture account data.");
 }
 FileLock::~FileLock() = default;
+MappedFile::MappedFile(const fs::path &file) {
+  HANDLE handle = CreateFileW(platform::native_path(file).c_str(), GENERIC_READ,
+                              FILE_SHARE_READ | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+                              FILE_ATTRIBUTE_NORMAL, nullptr);
+  if (handle == INVALID_HANDLE_VALUE) return;
+  LARGE_INTEGER size{};
+  if (GetFileSizeEx(handle, &size) && size.QuadPart > 0 && std::uint64_t(size.QuadPart) <= SIZE_MAX) {
+    // The view keeps the section, and the section the file, open.
+    if (HANDLE section = CreateFileMappingW(handle, nullptr, PAGE_READONLY, 0, 0, nullptr)) {
+      data_ = static_cast<const unsigned char *>(MapViewOfFile(section, FILE_MAP_READ, 0, 0, 0));
+      if (data_) size_ = std::size_t(size.QuadPart);
+      CloseHandle(section);
+    }
+  }
+  CloseHandle(handle);
+}
+MappedFile::~MappedFile() {
+  if (data_) UnmapViewOfFile(data_);
+}
 std::string random_account_key() {
   std::array<unsigned char, 6> bytes{};
   if (BCryptGenRandom(nullptr, bytes.data(), bytes.size(),

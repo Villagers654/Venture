@@ -81,6 +81,13 @@ public final class Parcel {
     byte[] v = (byte[]) get();
     return v == null ? null : v.clone();
   }
+  public void writeStringArray(String[] v) {
+    put(v == null ? null : v.clone());
+  }
+  public String[] createStringArray() {
+    String[] v = (String[]) get();
+    return v == null ? null : v.clone();
+  }
   public void writeBundle(Bundle v) {
     put(v == null ? null : new Bundle(v));
   }

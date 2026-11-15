@@ -23,6 +23,31 @@ TEST_CASE("debug report: known causes, most specific first") {
                          "VRInitError_Driver_WirelessHmdNotConnectedAndNoSteam\n");
   REQUIRE(no_hmd);
   CHECK(no_hmd->cause.find("found no headset") != std::string::npos);
+  // An implicit OpenXR layer whose DLL does not load failed the instance (Haymaker
+  // report, Venture 0.2.4): the report's own check of the layers names it.
+  constexpr std::string_view loader_failure =
+      "Error [GENERAL | xrCreateInstance | OpenXR-Loader] : Failed loading layer information\n"
+      "E [runtime] The OpenXR runtime could not create an instance (XrResult -32)\n";
+  auto layer = diagnose(std::string(loader_failure) +
+                        "OpenXR API layer broken: XR_APILAYER_reshade (C:\\ProgramData\\ReShade\\ReShade64_XR.json): "
+                        "the library C:\\ProgramData\\ReShade\\ReShade64.dll is a x86 DLL, not one for this x64 "
+                        "process\n");
+  REQUIRE(layer);
+  CHECK(layer->cause.find("OpenXR API layer") != std::string::npos);
+  CHECK(layer->cause.find("Broken layer: XR_APILAYER_reshade (C:\\ProgramData\\ReShade\\ReShade64_XR.json): the "
+                          "library") != std::string::npos);
+  CHECK(layer->advice.find("uninstall") != std::string::npos);
+  // This Venture's own line, after it left the layer out and still failed.
+  auto runtime_named = diagnose(std::string(loader_failure) +
+                                "W [xr] OpenXR API layer broken: XR_APILAYER_x (x.json): its library x.dll "
+                                "does not load (Windows error 126: The specified module could not be found.)\n");
+  REQUIRE(runtime_named);
+  CHECK(runtime_named->cause.find("Broken layer: XR_APILAYER_x (x.json): its library x.dll does not load (Windows "
+                                  "error 126: The specified module could not be found.)") != std::string::npos);
+  // A run that started after leaving the layer out is not failed by it.
+  CHECK_FALSE(diagnose("Error [GENERAL | xrCreateInstance | OpenXR-Loader] : Failed loading layer information\n"
+                       "I [xr] Host xrCreateInstance result=0\n")
+                  .has_value());
   // A forced close from outside (H3VR2 report): on Virtual Desktop's runtime, name it and the SteamVR switch.
   constexpr std::string_view killed =
       "E [runtime] The app process ended with status 0xFFFFFFFF outside Venture's exit paths (another program, a "
@@ -254,6 +279,30 @@ TEST_CASE("debug report: the session timeline comes from the whole runtime log")
   std::size_t lines = 0;
   for (std::size_t at = 0; (at = section.find(" [timeline] ", at)) != std::string::npos; ++at) ++lines;
   CHECK(lines == 120);
+
+  // Layer arrangements and session states also come from the whole log.
+  {
+    std::ofstream out(log, std::ios::binary);
+    out << "  1.000 1 I [launch] Process started\n";
+    for (int i = 0; i < 2000; ++i) out << std::format("  2.{:03} 3 I [game] filler line {}\n", i % 1000, i);
+    out << "  3.000 4 I [xr] Host session state=5\n"
+           "  4.000 4 I [xr-layers] layers arrangement #1: 1 layer, blend mode 1; [0] projection flags=0x0 -> host: projection\n";
+    for (int i = 0; i < 2000; ++i) out << std::format("  5.{:03} 3 I [game] filler line {}\n", i % 1000, i);
+  }
+  text = report();
+  CHECK(text.find("=== Frame layers and session states (2 lines) ===\n  3.000 4 I [xr] Host session state=5\n"
+                  "  4.000 4 I [xr-layers] layers arrangement #1") != std::string::npos);
+  {
+    std::ofstream out(log, std::ios::binary);
+    for (int i = 0; i < 300; ++i) out << std::format("{:6}.000 4 I [xr-layers] layers back to arrangement #{}\n", i, i);
+  }
+  text = report();
+  CHECK(text.find("=== Frame layers and session states (300 lines, first and last 60 shown) ===") != std::string::npos);
+  CHECK(text.find("arrangement #59\n... 180 lines left out ...\n   240.000") != std::string::npos);
+  auto layers = text.substr(text.find("=== Frame layers"));
+  layers = layers.substr(0, layers.find("\n===", 4));
+  CHECK(layers.find("arrangement #299\n") != std::string::npos);
+  CHECK(layers.find("arrangement #60\n") == std::string::npos);
 
   std::ofstream(log, std::ios::binary) << "  1.000 1 I [launch] Process started\n"
                                           "     60.000 9 I [timeline] t=1m fps=72.0\n";

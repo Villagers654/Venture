@@ -41,8 +41,9 @@ public class Typeface {
       throw new RuntimeException("Font asset not found " + path, e);
     }
   }
+  // Android paths (/system/fonts/..., app storage) name host files here.
   public static Typeface createFromFile(String path) {
-    try (var in = new java.io.FileInputStream(path)) {
+    try (var in = new java.io.FileInputStream(com.venture.runtime.RuntimeEnvironment.toHostPath(path))) {
       return new Typeface(path, NORMAL, read(in, path));
     } catch (java.io.IOException e) {
       throw new RuntimeException("Font not found " + path, e);

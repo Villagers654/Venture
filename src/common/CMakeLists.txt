@@ -12,7 +12,9 @@ add_library(venture_common STATIC
   search.cpp
   ipc.cpp
   launch_details.cpp
+  openxr_layers.cpp
   startup_progress.cpp
+  system_fonts.cpp
   http/client.cpp
   meta/auth.cpp
   meta/accounts.cpp
@@ -44,12 +46,12 @@ if(VENTURE_BUILD_LAUNCHER)
   target_link_libraries(venture_common PRIVATE webpdecoder)
 endif()
 if(WIN32)
-  target_sources(venture_common PRIVATE platform/win32/digest.cpp platform/win32/paths.cpp platform/win32/secret_store.cpp platform/win32/process.cpp platform/win32/file_ops.cpp platform/win32/pipe.cpp)
+  target_sources(venture_common PRIVATE platform/win32/digest.cpp platform/win32/paths.cpp platform/win32/secret_store.cpp platform/win32/process.cpp platform/win32/file_ops.cpp platform/win32/pipe.cpp platform/win32/openxr_layers.cpp platform/win32/system_fonts.cpp)
   target_link_libraries(venture_common PRIVATE crypt32 bcrypt shell32 ole32 uuid advapi32)
 else()
   find_package(OpenSSL REQUIRED)
   target_link_libraries(venture_common PRIVATE OpenSSL::Crypto)
-  target_sources(venture_common PRIVATE platform/posix/digest.cpp platform/posix/paths.cpp platform/posix/secret_store.cpp platform/posix/process.cpp platform/posix/file_ops.cpp platform/posix/pipe.cpp platform/posix/dbus.cpp)
+  target_sources(venture_common PRIVATE platform/posix/digest.cpp platform/posix/paths.cpp platform/posix/secret_store.cpp platform/posix/process.cpp platform/posix/file_ops.cpp platform/posix/pipe.cpp platform/posix/dbus.cpp platform/posix/openxr_layers.cpp platform/posix/system_fonts.cpp)
   target_link_libraries(venture_common PRIVATE ${CMAKE_DL_LIBS})
   find_package(PkgConfig QUIET)
   if(PkgConfig_FOUND)

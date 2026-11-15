@@ -14,7 +14,8 @@
         "CMAKE_CXX_COMPILER": "${sourceDir}/.deps/llvm-mingw/bin/clang++.exe",
         "CMAKE_RC_COMPILER": "${sourceDir}/.deps/llvm-mingw/bin/llvm-rc.exe",
         "CMAKE_MAKE_PROGRAM": "${sourceDir}/.deps/ninja/ninja.exe",
-        "FETCHCONTENT_BASE_DIR": "${sourceDir}/.deps/fetch",
+        "CMAKE_PROJECT_TOP_LEVEL_INCLUDES": "${sourceDir}/cmake/FetchCache.cmake",
+        "VENTURE_FETCH_CACHE_DIR": "${sourceDir}/.deps/fetch",
         "VENTURE_PROBE_CACHE": "ON",
         "FETCHCONTENT_UPDATES_DISCONNECTED": "ON"
       },
@@ -38,7 +39,8 @@
         "CMAKE_BUILD_TYPE": "RelWithDebInfo",
         "CMAKE_C_COMPILER": "clang",
         "CMAKE_CXX_COMPILER": "clang++",
-        "FETCHCONTENT_BASE_DIR": "${sourceDir}/.deps/fetch",
+        "CMAKE_PROJECT_TOP_LEVEL_INCLUDES": "${sourceDir}/cmake/FetchCache.cmake",
+        "VENTURE_FETCH_CACHE_DIR": "${sourceDir}/.deps/fetch",
         "VENTURE_PROBE_CACHE": "ON",
         "FETCHCONTENT_UPDATES_DISCONNECTED": "ON"
       },

@@ -354,16 +354,31 @@ void Image::parse_dynamic() {
   }
 }
 std::string Image::symbol_name(const Sym& sym) const { return string_at(sym.name); }
+// The hash table's count covers the symbols lookups can find. A relocation
+// may name a symbol past it, which bionic reads from DT_SYMTAB unchecked:
+// Mozilla's post-link tools append an undefined mprotect to the dynsym of
+// GeckoView's libnss3, libfreebl3 and others without adding it to DT_HASH. Such
+// an entry is read when it lies in the image's PT_LOAD segments.
 const Sym& Image::symbol_at(std::size_t index) const {
-  if (index >= symbol_count_) throw std::runtime_error("ELF relocation symbol index outside dynsym");
-  return symbols_[index];
+  if (index < symbol_count_) return symbols_[index];
+  if (index >= 10'000'000) throw std::runtime_error("ELF relocation symbol index outside dynsym");
+  if (isa_ != GuestIsa::a32) return *g2h<const Sym>(address(dynamic(6) + index * sizeof(Sym), sizeof(Sym)));
+  if (auto it = unhashed32_.find(index); it != unhashed32_.end()) return it->second;
+  Sym32 s;
+  std::memcpy(&s, g2h(address(dynamic(6) + index * sizeof(Sym32), sizeof(Sym32))), sizeof(s));
+  return unhashed32_.emplace(index, Sym{s.name, s.info, s.other, s.shndx, s.value, s.size}).first->second;
 }
 SymbolVersion Image::symbol_version(std::size_t index) const {
   if (!versym_) return {};
-  auto v = g2h<const std::uint16_t>(address(versym_, symbol_count_ * 2))[index];
+  auto v = g2h<const std::uint16_t>(address(versym_, std::max(index + 1, symbol_count_) * 2))[index];
   auto it = versions_.find(v & 0x7fff);
   SymbolVersion result = it == versions_.end() ? SymbolVersion{} : it->second;
   result.hidden = v & 0x8000; return result;
+}
+std::string_view Image::version_provider(std::string_view version) const {
+  for (const auto& [index, v] : versions_)
+    if (v.name == version && !v.provider.empty()) return v.provider;
+  return {};
 }
 const Sym* Image::lookup(std::string_view name, std::string_view version) const {
   auto it = exports_.find(std::string(name));

@@ -62,7 +62,8 @@ void register_library() {
             "libopenxr_forwardloader.so", "/system/lib64/libopenxr_forwardloader.so",
             root + "/libopenxr_loader.so",
             process_config().guest_apk_path() + "!/lib/arm64-v8a/libopenxr_loader.so",
-            "/system/priv-app/VrDriver/VrDriver.apk!/lib/arm64-v8a/libopenxr_forwardloader.so"});
+            "/system/priv-app/VrDriver/VrDriver.apk!/lib/arm64-v8a/libopenxr_forwardloader.so",
+            "/system/priv-app/VrDriver/lib/arm64/libopenxr_forwardloader.so"});
     for (auto &[name, thunk] : thunks())
       lib->add_function(name, thunk);
     Linker::get().register_hle_library(std::move(lib));

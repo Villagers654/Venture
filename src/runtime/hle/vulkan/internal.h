@@ -111,6 +111,15 @@ void deferred_free_queue_idle(VkQueue queue);
 void release_deferred_free_device(VkDevice device);
 // Private suballocations cannot be reused while preceding GPU work still runs.
 void defer_gpu_release(VkDevice device, std::function<void()> release);
+// The serial of the queue's latest guest submission (counted by deferred_free_submitting).
+std::uint64_t deferred_free_serial(VkQueue queue);
+// Makes a fence follow the queue's latest guest submission (one empty batch, unless one does already),
+// so its completion is seen promptly. Not under texture_lock: it takes the queue's submission mutex.
+void deferred_free_cover(VkQueue queue);
+// Runs `release` at once if each queue has completed the given serial, else once it has; pending
+// releases are checked at every guest submission and queue wait idle.
+void defer_until_complete(VkDevice device, std::vector<std::pair<VkQueue, std::uint64_t>> waits,
+                          std::function<void()> release);
 // Tests: frees of the device still waiting for the GPU.
 std::size_t deferred_free_pending(VkDevice device);
 
@@ -395,7 +404,12 @@ void release_texture_device(VkDevice device);
 // device release joins it before destroying any Vulkan objects.
 void prepare_texture_device(VkDevice device);
 VkPipeline wait_texture_pipeline(VkDevice device);
-void release_texture_commands(VkCommandBuffer command);
+// A reset, free or re-recording of `command`: Venture's objects recorded into it
+// (descriptor pools, scratch, sources) are released once the device's queues
+// have completed the work submitted before this call (defer_gpu_release).
+void release_texture_commands(VkDevice device, VkCommandBuffer command);
+// Tests: released command buffers of the device whose passes may still run.
+std::size_t texture_commands_retiring(VkDevice device);
 void trim_texture_pool(VkDevice device, VkCommandPool pool);
 void texture_extensions(VkPhysicalDevice physical, std::vector<VkExtensionProperties>& extensions);
 void guest_texture_features(VkPhysicalDevice physical, VkPhysicalDeviceFeatures& features);

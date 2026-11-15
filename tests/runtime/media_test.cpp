@@ -36,6 +36,41 @@ class RegionFile final:public hle::libc::File {
   }
   int stat(hle::libc::Stat* info) override {*info={};info->size=bytes.size();info->mode=0100400;return 0;}
 };
+class MemoryFile final:public hle::libc::File {
+ public:
+  std::vector<std::uint8_t> bytes;
+  explicit MemoryFile(std::vector<std::uint8_t> b):bytes(std::move(b)) {}
+  std::int64_t pread(void* p,std::uint64_t size,std::int64_t off) override {
+    if(off<0 || static_cast<std::uint64_t>(off)>bytes.size())return -1;
+    auto n=std::min<std::uint64_t>(size,bytes.size()-off);
+    std::memcpy(p,bytes.data()+off,n);return n;
+  }
+  int stat(hle::libc::Stat* info) override {*info={};info->size=bytes.size();info->mode=0100400;return 0;}
+};
+// A RIFF/WAVE file with a LIST chunk of odd size (padded) ahead of "fmt ".
+// extensible writes WAVE_FORMAT_EXTENSIBLE with format as its subformat.
+std::vector<std::uint8_t> wave(int format,int bits,int channels,int rate,const std::vector<std::uint8_t>& data,
+                               bool extensible=false,std::uint32_t data_size=UINT32_MAX) {
+  std::vector<std::uint8_t> out;
+  auto u16=[&](std::uint32_t v){out.push_back(v&0xff);out.push_back((v>>8)&0xff);};
+  auto u32=[&](std::uint32_t v){u16(v&0xffff);u16(v>>16);};
+  auto tag=[&](const char* t){out.insert(out.end(),t,t+4);};
+  tag("RIFF");u32(0);tag("WAVE");
+  tag("LIST");u32(5);tag("INFO");out.push_back(0);out.push_back(0);
+  tag("fmt ");u32(extensible?40:16);u16(extensible?0xfffe:format);u16(channels);u32(rate);
+  u32(rate*channels*bits/8);u16(channels*bits/8);u16(bits);
+  if(extensible){u16(22);u16(bits);u32(0);u16(format);u16(0);u32(0x00100000);u32(0xaa000080);u32(0x719b3800);}
+  tag("data");u32(data_size==UINT32_MAX?static_cast<std::uint32_t>(data.size()):data_size);
+  out.insert(out.end(),data.begin(),data.end());
+  return out;
+}
+media::Input memory_input(std::vector<std::uint8_t> bytes) {
+  return media::file_input(std::make_shared<MemoryFile>(std::move(bytes)),0,INT64_MAX);
+}
+std::vector<std::int16_t> pcm16(const media::Sample& sample) {
+  std::vector<std::int16_t> out(sample.bytes.size()/2);
+  std::memcpy(out.data(),sample.bytes.data(),out.size()*2);return out;
+}
 media::Input input(std::shared_ptr<RegionFile> file) {
   return media::file_input(file,31,file->bytes.size()-67);
 }
@@ -159,6 +194,212 @@ TEST_CASE("NDK extractor flags and MediaCodec buffers carry AAC to caller owned 
   REQUIRE(call("AMediaFormat_delete",{format})==0);
   REQUIRE(call("AMediaExtractor_delete",{extractor})==0);
   CHECK(call("AMediaExtractor_getSampleFlags",{extractor})==0);
+  hle::libc::FdTable::get().close(fd);
+}
+TEST_CASE("WAVE sources extract as Android's 16-bit audio/raw tracks and pass through the raw decoder") {
+  // 8-bit unsigned mono at 8 kHz: 1000 frames.
+  std::vector<std::uint8_t> u8(1000);
+  for(std::size_t i=0;i<u8.size();++i)u8[i]=static_cast<std::uint8_t>(i%4==0?0:i%4==1?128:i%4==2?255:192);
+  media::Extractor extractor;
+  REQUIRE(extractor.open(memory_input(wave(1,8,1,8000,u8)))==0);
+  REQUIRE(extractor.tracks().size()==1);
+  auto track=extractor.tracks()[0];
+  CHECK(track.mime=="audio/raw");CHECK(track.rate==8000);CHECK(track.channels==1);CHECK(track.duration_us==125000);
+  REQUIRE(extractor.select(0)==0);
+  REQUIRE(extractor.sample().track==0);CHECK(extractor.sample().flags==1);CHECK(extractor.sample().time_us==0);
+  auto first=pcm16(extractor.sample());
+  REQUIRE(first.size()==1000);
+  CHECK(first[0]==-32768);CHECK(first[1]==0);CHECK(first[2]==32512);CHECK(first[3]==16384);
+  CHECK_FALSE(extractor.advance());CHECK(extractor.error()==0);CHECK(extractor.sample().track==-1);
+  // Seeking lands on the frame at that time; every frame is a sync sample.
+  REQUIRE(extractor.seek(62500,0)==0);
+  CHECK(extractor.sample().time_us==62500);CHECK(pcm16(extractor.sample()).size()==500);
+
+  // 24-bit stereo through WAVE_FORMAT_EXTENSIBLE, longer than one 32 KiB sample.
+  std::vector<std::uint8_t> s24;
+  for(int i=0;i<10000;++i)for(int c=0;c<2;++c) {
+    std::int32_t v=c?-(i<<8):(i<<8);
+    s24.push_back(0x7f);s24.push_back(static_cast<std::uint8_t>(v>>8));s24.push_back(static_cast<std::uint8_t>(v>>16));
+  }
+  REQUIRE(extractor.open(memory_input(wave(1,24,2,48000,s24,true)))==0);
+  CHECK(extractor.tracks()[0].channels==2);CHECK(extractor.tracks()[0].rate==48000);
+  REQUIRE(extractor.select(0)==0);
+  std::vector<std::int16_t> all;std::int64_t expected_time=0;
+  do {
+    CHECK(extractor.sample().time_us==expected_time);
+    auto part=pcm16(extractor.sample());CHECK(part.size()*2<=32768);
+    all.insert(all.end(),part.begin(),part.end());
+    expected_time=static_cast<std::int64_t>(all.size()/2)*1000000/48000;
+  } while(extractor.advance());
+  REQUIRE(all.size()==20000);
+  CHECK(all[2*1234]==1234);CHECK(all[2*1234+1]==-1234);
+
+  // 32-bit float, clamped; a data size larger than the file reads to its end.
+  std::vector<float> floats{0.5f,-1.5f,1.0f,-0.25f};
+  std::vector<std::uint8_t> f32(floats.size()*4);std::memcpy(f32.data(),floats.data(),f32.size());
+  REQUIRE(extractor.open(memory_input(wave(3,32,1,44100,f32,false,0x7fffffff)))==0);
+  REQUIRE(extractor.select(0)==0);
+  auto converted=pcm16(extractor.sample());
+  REQUIRE(converted.size()==4);
+  CHECK(converted[0]==16384);CHECK(converted[1]==-32768);CHECK(converted[2]==32767);CHECK(converted[3]==-8192);
+
+  // The raw decoder passes 16-bit PCM through with its time.
+  media::Decoder decoder;
+  media::Track raw;raw.mime="audio/raw";raw.rate=44100;raw.channels=1;
+  REQUIRE(decoder.configure(raw)==0);
+  REQUIRE(decoder.send(&extractor.sample())==0);
+  media::Pcm pcm;
+  REQUIRE(decoder.receive(&pcm)==1);
+  CHECK(pcm.rate==44100);CHECK(pcm.channels==1);CHECK(pcm.time_us==0);
+  REQUIRE(pcm.samples.size()==4);CHECK(pcm.samples[0]==0.5f);CHECK(pcm.samples[1]==-1.0f);
+  CHECK(decoder.receive(&pcm)==0);
+  REQUIRE(decoder.send(nullptr)==0);CHECK(decoder.receive(&pcm)==-1);
+  decoder.flush();CHECK(decoder.receive(&pcm)==0);
+
+  // Formats Android's WAVExtractor does not play as audio/raw are refused.
+  CHECK(extractor.open(memory_input(wave(2,4,1,8000,u8)))==media::unsupported);
+  CHECK(extractor.tracks().empty());
+  CHECK(extractor.open(memory_input(wave(1,12,1,8000,u8)))==media::unsupported);
+  auto truncated=wave(1,16,1,8000,u8);truncated.resize(40);
+  CHECK(extractor.open(memory_input(truncated))==media::unsupported);
+
+  // WAVE needs no FFmpeg component.
+  auto missing=std::make_shared<media::Library>(std::filesystem::absolute("missing-media-libraries"));
+  media::Extractor native(missing);
+  REQUIRE(native.open(memory_input(wave(1,16,2,22050,std::vector<std::uint8_t>(400))))==0);
+  CHECK(native.tracks()[0].mime=="audio/raw");
+  media::Decoder native_decoder(missing);
+  CHECK(native_decoder.configure(raw)==0);
+}
+TEST_CASE("NDK extractor and the audio/raw MediaCodec decode a WAVE file descriptor") {
+  // Audio360 opens .wav sounds this way: AMediaExtractor_setDataSourceFd, then
+  // a decoder created from the track's mime.
+  std::vector<std::uint8_t> data(2*2*3000);
+  for(std::size_t i=0;i<data.size()/2;++i){auto v=static_cast<std::int16_t>(i*7-9000);std::memcpy(data.data()+i*2,&v,2);}
+  auto file=std::make_shared<MemoryFile>(wave(1,16,2,48000,data));
+  auto fd=hle::libc::FdTable::get().insert(file);
+  auto extractor=static_cast<GuestAddr>(call("AMediaExtractor_new"));REQUIRE(extractor);
+  REQUIRE(call("AMediaExtractor_setDataSourceFd",{extractor,static_cast<std::uint64_t>(fd),0,file->bytes.size()})==0);
+  REQUIRE(call("AMediaExtractor_getTrackCount",{extractor})==1);
+  auto format=static_cast<GuestAddr>(call("AMediaExtractor_getTrackFormat",{extractor,0}));REQUIRE(format);
+  GuestAddr mime=0;
+  REQUIRE(call("AMediaFormat_getString",{format,h2g("mime"),h2g(&mime)})==1);
+  REQUIRE(mime);CHECK(std::string(g2h<const char>(mime))=="audio/raw");
+  std::int32_t value=0;
+  REQUIRE(call("AMediaFormat_getInt32",{format,h2g("pcm-encoding"),h2g(&value)})==1);CHECK(value==2);
+  REQUIRE(call("AMediaFormat_getInt32",{format,h2g("sample-rate"),h2g(&value)})==1);CHECK(value==48000);
+  REQUIRE(call("AMediaFormat_getInt32",{format,h2g("channel-count"),h2g(&value)})==1);CHECK(value==2);
+  auto codec=static_cast<GuestAddr>(call("AMediaCodec_createDecoderByType",{mime}));REQUIRE(codec);
+  REQUIRE(call("AMediaCodec_configure",{codec,format,0,0,0})==0);
+  REQUIRE(call("AMediaCodec_start",{codec})==0);
+  REQUIRE(call("AMediaExtractor_selectTrack",{extractor,0})==0);
+  struct Info {std::int32_t offset,size;std::int64_t time;std::uint32_t flags;} info{};
+  std::vector<std::uint8_t> decoded;bool eos=false;
+  auto drain=[&] {
+    for(int count=0;count<8;++count) {
+      auto index=call("AMediaCodec_dequeueOutputBuffer",{codec,h2g(&info),100000});
+      if(index==-2)continue;if(index==-1)break;REQUIRE(index>=0);
+      std::uint64_t size=0;auto buffer=call("AMediaCodec_getOutputBuffer",{codec,static_cast<std::uint64_t>(index),h2g(&size)});
+      REQUIRE(buffer);
+      auto bytes=g2h<std::uint8_t>(static_cast<GuestAddr>(buffer))+info.offset;
+      decoded.insert(decoded.end(),bytes,bytes+info.size);
+      eos|=(info.flags&4)!=0;
+      REQUIRE(call("AMediaCodec_releaseOutputBuffer",{codec,static_cast<std::uint64_t>(index),0})==0);
+    }
+  };
+  do {
+    auto index=call("AMediaCodec_dequeueInputBuffer",{codec,100000});REQUIRE(index>=0);
+    std::uint64_t capacity=0;
+    auto buffer=static_cast<GuestAddr>(call("AMediaCodec_getInputBuffer",{codec,static_cast<std::uint64_t>(index),h2g(&capacity)}));REQUIRE(buffer);
+    auto size=call("AMediaExtractor_readSampleData",{extractor,buffer,capacity});REQUIRE(size>0);
+    auto time=call("AMediaExtractor_getSampleTime",{extractor});
+    REQUIRE(call("AMediaCodec_queueInputBuffer",{codec,static_cast<std::uint64_t>(index),0,static_cast<std::uint64_t>(size),static_cast<std::uint64_t>(time),0})==0);
+    drain();
+  } while(call("AMediaExtractor_advance",{extractor}));
+  auto index=call("AMediaCodec_dequeueInputBuffer",{codec,100000});REQUIRE(index>=0);
+  REQUIRE(call("AMediaCodec_queueInputBuffer",{codec,static_cast<std::uint64_t>(index),0,0,62500,4})==0);
+  for(int i=0;i<16 && !eos;++i)drain();
+  CHECK(eos);
+  CHECK(decoded==data);
+  REQUIRE(call("AMediaCodec_stop",{codec})==0);
+  REQUIRE(call("AMediaCodec_delete",{codec})==0);
+  REQUIRE(call("AMediaFormat_delete",{format})==0);
+  REQUIRE(call("AMediaExtractor_delete",{extractor})==0);
+  hle::libc::FdTable::get().close(fd);
+}
+std::vector<std::uint8_t> fixture_bytes(const char* path) {
+  std::ifstream input(path,std::ios::binary);
+  return {std::istreambuf_iterator<char>(input),{}};
+}
+TEST_CASE("MP3 sources extract as audio/mpeg and decode the authored tone") {
+  media::Extractor extractor;
+  REQUIRE(extractor.open(memory_input(fixture_bytes(VENTURE_MP3_FIXTURE)))==0);
+  REQUIRE(extractor.tracks().size()==1);
+  auto track=extractor.tracks()[0];
+  CHECK(track.mime=="audio/mpeg");CHECK(track.rate==44100);CHECK(track.channels==1);
+  CHECK(track.duration_us>=240000);CHECK(track.duration_us<=300000);
+  media::Decoder decoder;REQUIRE(decoder.configure(track)==0);
+  REQUIRE(extractor.select(0)==0);
+  std::size_t samples=0;float peak=0;
+  do {
+    REQUIRE(extractor.sample().track==0);
+    REQUIRE(decoder.send(&extractor.sample())==0);
+    media::Pcm pcm;
+    while(decoder.receive(&pcm)==1) {
+      CHECK(pcm.rate==44100);CHECK(pcm.channels==1);samples+=pcm.samples.size();
+      for(auto value:pcm.samples)peak=std::max(peak,std::abs(value));
+    }
+  } while(extractor.advance());
+  REQUIRE(decoder.send(nullptr)>=0);
+  for(media::Pcm pcm;decoder.receive(&pcm)==1;)samples+=pcm.samples.size();
+  CHECK(samples>=10000);CHECK(samples<=13000);CHECK(peak>0.09f);CHECK(peak<0.2f);  // lavfi sine peaks at 1/8
+  REQUIRE(extractor.seek(100000,0)==0);CHECK(extractor.sample().time_us<=100000);
+}
+TEST_CASE("NDK extractor and an audio/mpeg MediaCodec decode an MP3 file descriptor") {
+  auto file=std::make_shared<MemoryFile>(fixture_bytes(VENTURE_MP3_FIXTURE));
+  auto fd=hle::libc::FdTable::get().insert(file);
+  auto extractor=static_cast<GuestAddr>(call("AMediaExtractor_new"));REQUIRE(extractor);
+  REQUIRE(call("AMediaExtractor_setDataSourceFd",{extractor,static_cast<std::uint64_t>(fd),0,file->bytes.size()})==0);
+  REQUIRE(call("AMediaExtractor_getTrackCount",{extractor})==1);
+  auto format=static_cast<GuestAddr>(call("AMediaExtractor_getTrackFormat",{extractor,0}));REQUIRE(format);
+  GuestAddr mime=0;
+  REQUIRE(call("AMediaFormat_getString",{format,h2g("mime"),h2g(&mime)})==1);
+  REQUIRE(mime);CHECK(std::string(g2h<const char>(mime))=="audio/mpeg");
+  auto codec=static_cast<GuestAddr>(call("AMediaCodec_createDecoderByType",{mime}));REQUIRE(codec);
+  REQUIRE(call("AMediaCodec_configure",{codec,format,0,0,0})==0);
+  REQUIRE(call("AMediaCodec_start",{codec})==0);
+  REQUIRE(call("AMediaExtractor_selectTrack",{extractor,0})==0);
+  struct Info {std::int32_t offset,size;std::int64_t time;std::uint32_t flags;} info{};
+  std::size_t decoded=0;float peak=0;bool eos=false;
+  auto drain=[&] {
+    for(int count=0;count<8;++count) {
+      auto index=call("AMediaCodec_dequeueOutputBuffer",{codec,h2g(&info),100000});
+      if(index==-2)continue;if(index==-1)break;REQUIRE(index>=0);
+      std::uint64_t size=0;auto buffer=call("AMediaCodec_getOutputBuffer",{codec,static_cast<std::uint64_t>(index),h2g(&size)});
+      REQUIRE(buffer);
+      auto pcm=reinterpret_cast<const std::int16_t*>(g2h<std::uint8_t>(static_cast<GuestAddr>(buffer))+info.offset);
+      for(std::size_t i=0;i<std::size_t(info.size)/2;++i)peak=std::max(peak,std::abs(pcm[i]/32768.0f));
+      decoded+=info.size;eos|=(info.flags&4)!=0;
+      REQUIRE(call("AMediaCodec_releaseOutputBuffer",{codec,static_cast<std::uint64_t>(index),0})==0);
+    }
+  };
+  do {
+    auto index=call("AMediaCodec_dequeueInputBuffer",{codec,100000});REQUIRE(index>=0);
+    std::uint64_t capacity=0;
+    auto buffer=static_cast<GuestAddr>(call("AMediaCodec_getInputBuffer",{codec,static_cast<std::uint64_t>(index),h2g(&capacity)}));REQUIRE(buffer);
+    auto size=call("AMediaExtractor_readSampleData",{extractor,buffer,capacity});REQUIRE(size>0);
+    auto time=call("AMediaExtractor_getSampleTime",{extractor});
+    REQUIRE(call("AMediaCodec_queueInputBuffer",{codec,static_cast<std::uint64_t>(index),0,static_cast<std::uint64_t>(size),static_cast<std::uint64_t>(time),0})==0);
+    drain();
+  } while(call("AMediaExtractor_advance",{extractor}));
+  auto index=call("AMediaCodec_dequeueInputBuffer",{codec,100000});REQUIRE(index>=0);
+  REQUIRE(call("AMediaCodec_queueInputBuffer",{codec,static_cast<std::uint64_t>(index),0,0,250000,4})==0);
+  for(int i=0;i<16 && !eos;++i)drain();
+  CHECK(eos);CHECK(decoded>=20000);CHECK(peak>0.09f);CHECK(peak<0.2f);
+  REQUIRE(call("AMediaCodec_stop",{codec})==0);
+  REQUIRE(call("AMediaCodec_delete",{codec})==0);
+  REQUIRE(call("AMediaFormat_delete",{format})==0);
+  REQUIRE(call("AMediaExtractor_delete",{extractor})==0);
   hle::libc::FdTable::get().close(fd);
 }
 TEST_CASE("NDK extractor reads an AMediaDataSource through its guest callbacks") {

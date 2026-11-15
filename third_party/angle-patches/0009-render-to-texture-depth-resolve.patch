@@ -1,0 +1,101 @@
+diff --git a/src/libANGLE/renderer/vulkan/FramebufferVk.cpp b/src/libANGLE/renderer/vulkan/FramebufferVk.cpp
+--- a/src/libANGLE/renderer/vulkan/FramebufferVk.cpp
++++ b/src/libANGLE/renderer/vulkan/FramebufferVk.cpp
+@@ -3884,21 +3884,24 @@ angle::Result FramebufferVk::startNewRenderPass(ContextVk *contextVk,
+         // If the image data was previously discarded (with no update in between), don't attempt to
+         // load the image.  Additionally, if the multisampled image data is transient and there is
+         // no resolve attachment, there's no data to load.  The latter is the case with
+-        // depth/stencil texture attachments per GL_EXT_multisampled_render_to_texture2.
+-        if (!depthStencilRenderTarget->hasDefinedContent() ||
+-            depthStencilRenderTarget->isEntirelyTransient())
++        // depth/stencil texture attachments per GL_EXT_multisampled_render_to_texture2, unless the
++        // multisampled image keeps its contents (see RenderTargetVk::keepsMultisampledContent) so
++        // that depth survives a render pass break.
++        const bool keepsMultisampledContent = depthStencilRenderTarget->keepsMultisampledContent();
++        const bool discardsMultisampledContent =
++            depthStencilRenderTarget->isEntirelyTransient() && !keepsMultisampledContent;
++        if (!depthStencilRenderTarget->hasDefinedContent() || discardsMultisampledContent)
+         {
+             depthLoadOp = vk::RenderPassLoadOp::DontCare;
+         }
+-        if (!depthStencilRenderTarget->hasDefinedStencilContent() ||
+-            depthStencilRenderTarget->isEntirelyTransient())
++        if (!depthStencilRenderTarget->hasDefinedStencilContent() || discardsMultisampledContent)
+         {
+             stencilLoadOp = vk::RenderPassLoadOp::DontCare;
+         }
+ 
+         // If depth/stencil image is transient, no need to store its data at the end of the render
+         // pass.
+-        if (depthStencilRenderTarget->isImageTransient())
++        if (depthStencilRenderTarget->isImageTransient() && !keepsMultisampledContent)
+         {
+             depthStoreOp   = vk::RenderPassStoreOp::DontCare;
+             stencilStoreOp = vk::RenderPassStoreOp::DontCare;
+diff --git a/src/libANGLE/renderer/vulkan/RenderTargetVk.cpp b/src/libANGLE/renderer/vulkan/RenderTargetVk.cpp
+--- a/src/libANGLE/renderer/vulkan/RenderTargetVk.cpp
++++ b/src/libANGLE/renderer/vulkan/RenderTargetVk.cpp
+@@ -415,13 +415,13 @@ angle::Result RenderTargetVk::flushStagedUpdates(ContextVk *contextVk,
+ 
+ bool RenderTargetVk::hasDefinedContent() const
+ {
+-    vk::ImageHelper *image = getOwnerOfData();
++    vk::ImageHelper *image = keepsMultisampledContent() ? mImage : getOwnerOfData();
+     return image->hasSubresourceDefinedContent(mLevelIndexGL, mLayerIndex, mLayerCount);
+ }
+ 
+ bool RenderTargetVk::hasDefinedStencilContent() const
+ {
+-    vk::ImageHelper *image = getOwnerOfData();
++    vk::ImageHelper *image = keepsMultisampledContent() ? mImage : getOwnerOfData();
+     return image->hasSubresourceDefinedStencilContent(mLevelIndexGL, mLayerIndex, mLayerCount);
+ }
+ 
+@@ -431,6 +431,12 @@ void RenderTargetVk::invalidateEntireContent(ContextVk *contextVk,
+     vk::ImageHelper *image = getOwnerOfData();
+     image->invalidateSubresourceContent(contextVk, mLevelIndexGL, mLayerIndex, mLayerCount,
+                                         preferToKeepContentsDefinedOut);
++    if (keepsMultisampledContent())
++    {
++        bool preferToKeepMultisampledContentsDefined = false;
++        mImage->invalidateSubresourceContent(contextVk, mLevelIndexGL, mLayerIndex, mLayerCount,
++                                             &preferToKeepMultisampledContentsDefined);
++    }
+ }
+ 
+ void RenderTargetVk::invalidateEntireStencilContent(ContextVk *contextVk,
+@@ -439,6 +445,13 @@ void RenderTargetVk::invalidateEntireStencilContent(ContextVk *contextVk,
+     vk::ImageHelper *image = getOwnerOfData();
+     image->invalidateSubresourceStencilContent(contextVk, mLevelIndexGL, mLayerIndex, mLayerCount,
+                                                preferToKeepContentsDefinedOut);
++    if (keepsMultisampledContent())
++    {
++        bool preferToKeepMultisampledContentsDefined = false;
++        mImage->invalidateSubresourceStencilContent(contextVk, mLevelIndexGL, mLayerIndex,
++                                                    mLayerCount,
++                                                    &preferToKeepMultisampledContentsDefined);
++    }
+ }
+ 
+ gl::OwnerImageIndex RenderTargetVk::getImageIndexForClear(uint32_t layerCount) const
+diff --git a/src/libANGLE/renderer/vulkan/RenderTargetVk.h b/src/libANGLE/renderer/vulkan/RenderTargetVk.h
+--- a/src/libANGLE/renderer/vulkan/RenderTargetVk.h
++++ b/src/libANGLE/renderer/vulkan/RenderTargetVk.h
+@@ -153,6 +153,17 @@ class RenderTargetVk final : public FramebufferAttachmentRenderTarget
+     {
+         return mTransience == RenderTargetTransience::EntirelyTransient;
+     }
++    // An entirely transient (depth/stencil multisampled-render-to-texture) target whose
++    // multisampled image has real memory keeps its contents in that image across render passes:
++    // storeOp=STORE, and loadOp=LOAD while the image holds defined contents.  No resolve or
++    // unresolve attachment is added, so a render pass that is cleared or invalidated costs
++    // nothing extra and a render pass break costs a load.  Images backed by lazily allocated
++    // memory keep discarding their contents.
++    bool keepsMultisampledContent() const
++    {
++        return isEntirelyTransient() &&
++               (mImage->getUsage() & VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT) == 0;
++    }
+     bool isYuvResolve() const
+     {
+         return mResolveImage != nullptr ? mResolveImage->isYuvExternalFormat() : false;

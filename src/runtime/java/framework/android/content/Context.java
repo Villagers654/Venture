@@ -230,7 +230,10 @@ public class Context {
   }
   // The app's own package gets a context for itself. Horizon's context is where
   // Avatar SDK 1 loaders find com.oculus.avatar.loader.EntryPoint (First Steps,
-  // Bogo); any other package is not installed, as on a Quest without it.
+  // Bogo). The system driver's context is where Meta's OpenXR loader finds
+  // com.oculus.systemdriver.DriverLoader: it has the system package's identity
+  // and the framework's class loader. Any other package is not installed, as on
+  // a Quest without it.
   public Context createPackageContext(String packageName, int flags)
       throws android.content.pm.PackageManager.NameNotFoundException {
     if (packageName != null && packageName.equals(getPackageName())) return ventureOuterContext();
@@ -238,6 +241,16 @@ public class Context {
       return new ContextWrapper(ventureOuterContext()) {
         @Override public String getPackageName() { return packageName; }
       };
+    if ("com.oculus.systemdriver".equals(packageName)) {
+      ApplicationInfo driver = android.content.pm.PackageManager.systemApplicationInfo(packageName);
+      return new ContextWrapper(ventureOuterContext()) {
+        @Override public String getPackageName() { return packageName; }
+        @Override public ApplicationInfo getApplicationInfo() { return driver; }
+        @Override public ClassLoader getClassLoader() {
+          return com.oculus.systemdriver.DriverLoader.class.getClassLoader();
+        }
+      };
+    }
     throw new android.content.pm.PackageManager.NameNotFoundException(packageName);
   }
   private static final class DisplayMetricsHolder {
@@ -540,8 +553,38 @@ public class Context {
   public String getAttributionTag() {
     return null;
   }
+  // AOSP ContextImpl: the app uid, the op package and this context's tag, with the default token.
+  private volatile AttributionSource attributionSource;
+  public AttributionSource getAttributionSource() {
+    AttributionSource source = attributionSource;
+    if (source == null)
+      attributionSource = source = new AttributionSource.Builder(android.os.Process.myUid())
+          .setPackageName(getOpPackageName()).setAttributionTag(getAttributionTag()).build();
+    return source;
+  }
   public Context createAttributionContext(String attributionTag) {
-    return this;
+    return createContext(new ContextParams.Builder().setAttributionTag(attributionTag).build());
+  }
+  /** A context like this one whose attribution is the params' (they replace any it had). */
+  public Context createContext(ContextParams contextParams) {
+    return new AttributionContext(ventureOuterContext(), Objects.requireNonNull(contextParams));
+  }
+  private static final class AttributionContext extends ContextWrapper {
+    private final ContextParams params;
+    private final AttributionSource source;
+    AttributionContext(Context base, ContextParams params) {
+      super(base);
+      this.params = params;
+      source = new AttributionSource(android.os.Process.myUid(), base.getOpPackageName(), params.getAttributionTag(),
+          params.getRenouncedPermissions(), params.getNextAttributionSource());
+    }
+    @Override public String getAttributionTag() { return params.getAttributionTag(); }
+    @Override public AttributionSource getAttributionSource() { return source; }
+    @Override public ContextParams getParams() { return params; }
+  }
+  /** The params this context was created with, or null for an app or component context. */
+  public ContextParams getParams() {
+    return null;
   }
   public boolean isRestricted() {
     return false;

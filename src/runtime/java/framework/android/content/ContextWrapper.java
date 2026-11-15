@@ -23,6 +23,24 @@ public class ContextWrapper extends Context {
     return base == null ? super.createConfigurationContext(override)
                         : base.createConfigurationContext(override);
   }
+  @Override public String getOpPackageName() {
+    return base == null ? super.getOpPackageName() : base.getOpPackageName();
+  }
+  @Override public String getAttributionTag() {
+    return base == null ? super.getAttributionTag() : base.getAttributionTag();
+  }
+  @Override public AttributionSource getAttributionSource() {
+    return base == null ? super.getAttributionSource() : base.getAttributionSource();
+  }
+  @Override public ContextParams getParams() {
+    return base == null ? super.getParams() : base.getParams();
+  }
+  @Override public Context createAttributionContext(String attributionTag) {
+    return base == null ? super.createAttributionContext(attributionTag) : base.createAttributionContext(attributionTag);
+  }
+  @Override public Context createContext(ContextParams contextParams) {
+    return base == null ? super.createContext(contextParams) : base.createContext(contextParams);
+  }
   public android.view.Display getDisplay() {
     return base == null ? super.getDisplay() : base.getDisplay();
   }

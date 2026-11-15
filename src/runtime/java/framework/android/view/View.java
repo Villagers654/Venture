@@ -118,6 +118,10 @@ public class View implements ViewParent {
   public Context getContext() {
     return context;
   }
+  // AOSP View: the name that matches shared elements across activity and scene transitions.
+  private String transitionName;
+  public final void setTransitionName(String name) { transitionName = name; }
+  public String getTransitionName() { return transitionName; }
   // AOSP View: IDE layout previews override this; an application view is not a preview.
   public boolean isInEditMode() { return false; }
   // AOSP android12-release View.java gates these inspection records on
@@ -460,6 +464,12 @@ public class View implements ViewParent {
   }
   public void setBackgroundDrawable(android.graphics.drawable.Drawable d) {
     setBackground(d);
+  }
+  private int backgroundResource;
+  public void setBackgroundResource(int resid) {
+    if (resid != 0 && resid == backgroundResource) return;
+    setBackground(resid == 0 ? null : getContext().getDrawable(resid));
+    backgroundResource = resid;
   }
   public android.graphics.drawable.Drawable getBackground() {
     return background;

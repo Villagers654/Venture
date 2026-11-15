@@ -2,6 +2,7 @@
 #include "common/saves_migration.h"
 #include "vfs.h"
 #include "file_io_trace.h"
+#include "system_fonts.h"
 #include "common/log.h"
 #include "core/process_paths.h"
 #include "core/process_image.h"
@@ -198,6 +199,8 @@ int resolve_path(std::string_view path, int dirfd, MappedPath* out) {
   };
   alias_proc("/proc/" + std::to_string(kGuestPid), "/proc/self");
   if (auto* thread = GuestThread::current()) alias_proc("/proc/thread-self", "/proc/self/task/" + std::to_string(thread->tid()));
+  // Android's /etc is a link to /system/etc (Unity reads /etc/fonts.xml).
+  if (below(p, "/etc")) p = "/system" + p;
   auto& c = process_config();
   if (proc_directory(p, nullptr))
     out->device = 5;
@@ -207,9 +210,18 @@ int resolve_path(std::string_view path, int dirfd, MappedPath* out) {
     out->device = 2;
   else if (p == "/dev/urandom" || p == "/dev/random")
     out->device = 3;
-  else if (below(p, "/proc") || below(p, "/sys") || process_image::has_file(p) || p == openxr_runtime_manifest)
+  else if (below(p, "/proc") || below(p, "/sys") || process_image::has_file(p) || p == openxr_runtime_manifest ||
+           p == system_fonts::fonts_xml_path)
     out->device = 4;
   if (out->device) return 0;
+  // An installed host font under its Android name, read in place.
+  if (below(p, system_fonts::directory)) {
+    out->host = system_fonts::host_file(p);
+    if (out->host.empty()) return -err::enoent;
+    out->root = out->host.parent_path();
+    out->readonly = true;
+    return 0;
+  }
   auto map = [&](std::string_view prefix, const std::filesystem::path& root, bool ro) {
     if (!below(p, prefix) || root.empty()) return false;
     out->root = root;

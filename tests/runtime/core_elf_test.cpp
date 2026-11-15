@@ -59,9 +59,12 @@ TEST_CASE("core relocation decoders APS2 groups and RELR bitmaps") {
   CHECK_THROWS(elf::decode_relr32(bad32, [](auto) {}));
 }
 // A one-page shared object exporting `symbol` and binding "bound" to it; with
-// `defined` false it imports `symbol` instead and lists no DT_NEEDED.
+// `defined` false it imports `symbol` instead and lists no DT_NEEDED. With
+// `unhashed` the relocation names a fourth, undefined `symbol` that DT_HASH's
+// three chain entries leave out.
 static std::filesystem::path scope_fixture(const std::filesystem::path& directory, std::string_view filename,
-                                           std::string_view symbol, bool global_group, bool defined = true) {
+                                           std::string_view symbol, bool global_group, bool defined = true,
+                                           bool unhashed = false) {
   std::array<std::byte, 4096> file{};
   auto put = [&]<class T>(std::size_t offset, const T& value) {
     std::memcpy(file.data() + offset, &value, sizeof(value));
@@ -75,10 +78,10 @@ static std::filesystem::path scope_fixture(const std::filesystem::path& director
   auto shared = std::uint32_t(strings.size()); strings += symbol; strings += '\0';
   auto bound = std::uint32_t(strings.size()); strings += "bound"; strings += '\0';
   std::memcpy(file.data() + 0x400, strings.data(), strings.size());
-  put(0x500, std::array<elf::Sym, 3>{{{}, defined ? elf::Sym{shared, 0x11, 0, 1, 0x900, 8} : elf::Sym{shared, 0x12, 0, 0, 0, 0},
-                                                {bound, 0x11, 0, 1, 0x908, 8}}});
+  put(0x500, std::array<elf::Sym, 4>{{{}, defined ? elf::Sym{shared, 0x11, 0, 1, 0x900, 8} : elf::Sym{shared, 0x12, 0, 0, 0, 0},
+                                                {bound, 0x11, 0, 1, 0x908, 8}, elf::Sym{shared, 0x12, 0, 0, 0, 0}}});
   put(0x700, std::array<std::uint32_t, 6>{1, 3, 1, 0, 2, 0});
-  put(0x800, elf::Rela{0x908, (std::uint64_t(1) << 32) | 257, 0});
+  put(0x800, elf::Rela{0x908, (std::uint64_t(unhashed ? 3 : 1) << 32) | 257, 0});
   std::array<elf::Dyn, 10> dynamic{{{5, 0x400}, {10, strings.size()}, {6, 0x500},
     {11, sizeof(elf::Sym)}, {4, 0x700}, {7, 0x800}, {8, sizeof(elf::Rela)},
     {9, sizeof(elf::Rela)}, {0x6ffffffb, global_group ? 2u : 0u}, {0, 0}}};
@@ -127,6 +130,85 @@ TEST_CASE("core a library that lists no C++ library still reaches the system C++
   INFO(linker.take_error()); REQUIRE(runtime);
   auto* consumer = linker.open(
       scope_fixture(directory, "libcxx-guard-consumer.so", "__cxa_guard_acquire", false, false).string(), kRtldNow,
+      nullptr);
+  INFO(linker.take_error()); REQUIRE(consumer);
+  CHECK(*g2h<GuestAddr>(consumer->find_symbol("bound")) == runtime->find_symbol("__cxa_guard_acquire"));
+  CHECK(linker.close(consumer) == 0);
+}
+// A one-page library that defines `malloc` under the version "libverprov.so"
+// (`provider`), or imports that version of it from libverprov.so and binds
+// "bound" to it.
+static std::filesystem::path versioned_fixture(const std::filesystem::path& directory, std::string_view filename,
+                                               bool provider) {
+  std::array<std::byte, 4096> file{};
+  auto put = [&]<class T>(std::size_t offset, const T& value) {
+    std::memcpy(file.data() + offset, &value, sizeof(value));
+  };
+  elf::Header header{};
+  std::memcpy(header.ident, "\177ELF\2\1\1", 7);
+  header.type = 3; header.machine = 183; header.version = 1; header.ehsize = sizeof(header);
+  header.phoff = 64; header.phentsize = sizeof(elf::Phdr); header.phnum = 2;
+  put(0, header); put(64, elf::Phdr{1, 6, 0, 0, 0, 4096, 4096, 4096});
+  const std::string strings("\0malloc\0bound\0libverprov.so\0", 28);
+  constexpr std::uint32_t malloc_name = 1, bound_name = 8, library = 14;
+  std::memcpy(file.data() + 0x400, strings.data(), strings.size());
+  put(0x500, std::array<elf::Sym, 3>{{{}, provider ? elf::Sym{malloc_name, 0x12, 0, 1, 0x900, 8} : elf::Sym{malloc_name, 0x12, 0, 0, 0, 0},
+                                                {bound_name, 0x11, 0, 1, 0x908, 8}}});
+  put(0x700, std::array<std::uint32_t, 6>{1, 3, 1, 0, 2, 0});
+  put(0x800, elf::Rela{0x908, (std::uint64_t(1) << 32) | 257, 0});
+  put(0x880, std::array<std::uint16_t, 3>{0, 2, 1});
+  if (provider) {
+    put(0x8a0, elf::Verdef{1, 0, 2, 1, 0, sizeof(elf::Verdef), 0});
+    put(0x8a0 + sizeof(elf::Verdef), elf::Verdaux{library, 0});
+  } else {
+    put(0x8a0, elf::Verneed{1, 1, library, sizeof(elf::Verneed), 0});
+    put(0x8a0 + sizeof(elf::Verneed), elf::Vernaux{0, 0, 2, library, 0});
+  }
+  std::array<elf::Dyn, 14> dynamic{{{5, 0x400}, {10, strings.size()}, {6, 0x500},
+    {11, sizeof(elf::Sym)}, {4, 0x700}, {7, 0x800}, {8, sizeof(elf::Rela)}, {9, sizeof(elf::Rela)},
+    {0x6ffffff0, 0x880}, {provider ? 0x6ffffffcll : 0x6ffffffell, 0x8a0}, {provider ? 0x6ffffffdll : 0x6fffffffll, 1},
+    {provider ? 14ll : 1ll, library}, {0, 0}}};
+  put(120, elf::Phdr{2, 6, 0x200, 0x200, 0, sizeof(dynamic), sizeof(dynamic), 8});
+  put(0x200, dynamic);
+  auto path = directory / filename;
+  std::ofstream out(path, std::ios::binary);
+  out.write(reinterpret_cast<const char*>(file.data()), file.size());
+  return path;
+}
+TEST_CASE("core an import versioned by an app library binds that library's definition, not a system API") {
+  // GeckoView's libxul imports malloc@libmozglue.so and free@libmozglue.so
+  // (Aim XR's Vuplex 3D WebView). Bionic's libc defines only LIBC versions, so
+  // they bind mozglue's allocator; libc's free of mozglue's blocks fails.
+  register_all_hle_libraries();
+  auto directory = std::filesystem::current_path() / "build/core-fixtures";
+  std::filesystem::create_directories(directory);
+  struct RestoreInspection { ~RestoreInspection() { linker_set_inspection(false); } } restore;
+  linker_set_inspection(true);
+  auto& linker = Linker::get();
+  auto* provider = linker.open(versioned_fixture(directory, "libverprov.so", true).string(), kRtldNow, nullptr);
+  INFO(linker.take_error()); REQUIRE(provider);
+  auto* consumer = linker.open(versioned_fixture(directory, "libverconsumer.so", false).string(), kRtldNow, nullptr);
+  INFO(linker.take_error()); REQUIRE(consumer);
+  const auto own = provider->find_symbol("malloc", "libverprov.so");
+  REQUIRE(own != 0);
+  CHECK(own == provider->load_bias + 0x900);
+  CHECK(*g2h<GuestAddr>(consumer->find_symbol("bound")) == own);
+  CHECK(linker.close(consumer) == 0); CHECK(linker.close(provider) == 0);
+}
+TEST_CASE("core a relocation may name a dynsym entry past the hash table's chain count") {
+  // GeckoView's libnss3 (Aim XR's Vuplex 3D WebView): Mozilla's post-link step
+  // appends an undefined mprotect to dynsym without adding it to DT_HASH, and
+  // a GLOB_DAT names it. Bionic reads relocation symbols from DT_SYMTAB unchecked.
+  register_all_hle_libraries();
+  auto directory = std::filesystem::current_path() / "build/core-fixtures";
+  std::filesystem::create_directories(directory);
+  struct RestoreInspection { ~RestoreInspection() { linker_set_inspection(false); } } restore;
+  linker_set_inspection(true);
+  auto& linker = Linker::get();
+  auto* runtime = linker.open("libstdc++.so", kRtldNow, nullptr);
+  INFO(linker.take_error()); REQUIRE(runtime);
+  auto* consumer = linker.open(
+      scope_fixture(directory, "libunhashed-import.so", "__cxa_guard_acquire", false, false, true).string(), kRtldNow,
       nullptr);
   INFO(linker.take_error()); REQUIRE(consumer);
   CHECK(*g2h<GuestAddr>(consumer->find_symbol("bound")) == runtime->find_symbol("__cxa_guard_acquire"));

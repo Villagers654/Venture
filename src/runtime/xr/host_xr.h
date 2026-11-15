@@ -19,6 +19,7 @@
 #include <set>
 #include <string>
 #include <string_view>
+#include <vector>
 
 typedef struct XrInstance_T *XrInstance;
 typedef std::uint64_t XrSystemId;
@@ -36,6 +37,9 @@ struct HostXr {
   std::map<std::string, std::uint32_t> available_extensions;
   std::int32_t system_result = -51; // XR_ERROR_RUNTIME_UNAVAILABLE until queried
   std::string error; // why `available` is false, phrased for the user
+  // Implicit OpenXR API layers left out because the loader could not load them
+  // and they failed the instance (xr/openxr_layers.h); the others stay loaded.
+  std::vector<std::string> skipped_api_layers;
 };
 
 // Initializes on first call (loads the host OpenXR loader, creates the

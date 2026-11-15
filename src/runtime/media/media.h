@@ -58,6 +58,8 @@ struct VideoFrame {
   std::int64_t time_us = 0;
 };
 bool video_mime(std::string_view mime);
+// An audio mime with a decoder: AAC, MP3 ("audio/mpeg") or raw 16-bit PCM.
+bool audio_mime(std::string_view mime);
 // Packet timestamps are rounded to microseconds. Round back to the nearest
 // sample when clipping the container origin/duration, avoiding one-frame loss.
 void trim_pcm(Pcm&, std::int64_t begin_us, std::int64_t end_us);

@@ -131,6 +131,10 @@ public final class Rewrite {
                                     // must stay non-virtual, or GuestFiles.exists would recurse into it.
                                     rewrite("java/io/File.exists virtual filesystem query");
                                     super.visitMethodInsn(Opcodes.INVOKESTATIC, "com/venture/runtime/GuestFiles", "exists", "(Ljava/io/File;)Z", false);
+                                } else if (opcode == Opcodes.INVOKEVIRTUAL && cls.equals("java/io/File") && method.equals("isDirectory") && descriptor.equals("()Z")) {
+                                    // Unreal's GameActivity takes /system/fonts only when it exists and is a directory.
+                                    rewrite("java/io/File.isDirectory virtual filesystem query");
+                                    super.visitMethodInsn(Opcodes.INVOKESTATIC, "com/venture/runtime/GuestFiles", "isDirectory", "(Ljava/io/File;)Z", false);
                                 } else if (opcode == Opcodes.INVOKESPECIAL && cls.equals("java/io/File") && method.equals("<init>")
                                         && (descriptor.equals("(Ljava/io/File;Ljava/lang/String;)V") || descriptor.equals("(Ljava/lang/String;Ljava/lang/String;)V"))) {
                                     // parent, child -> parent, GuestFiles.child(parent, child)

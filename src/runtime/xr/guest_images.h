@@ -3,6 +3,7 @@
 #include "xr/xr_images.h"
 #include <memory>
 #include <span>
+#include <string>
 
 namespace venture::xr {
 // Private guest backing. Copies use the session binding queue; a slot's fence
@@ -27,6 +28,12 @@ public:
                 VkFormat destination_format, VkExtent2D destination_extent = {},
                 bool flip_rows = false, std::int32_t source_layer = -1);
   XrResult drain();
+  // Diagnostics (VENTURE_XR_LAYER_CHECK): reads an 8x8 grid of texels from
+  // every array slice of slot `index` and of `destination` (a host image the
+  // last copy wrote, in the attachment layout) and describes how many are not
+  // black. Waits for the GPU; never call it per frame.
+  std::string sample_layers(std::uint32_t index, VkImage destination, VkFormat destination_format,
+                            VkExtent2D destination_extent, std::uint32_t destination_layers);
 
 private:
   struct Impl;

@@ -21,4 +21,8 @@ public class UserManager {
   public boolean hasUserRestriction(String restriction) { return false; }
   public Bundle getApplicationRestrictions(String packageName) { return new Bundle(); }
   public long getUserCreationTime() { return 0; }
+  // GeckoView exports the serial number to Gecko's environment at start (Vuplex 3D WebView).
+  public long getSerialNumberForUser(UserHandle user) { return user != null && user.isSystem() ? 0 : -1; }
+  public UserHandle getUserForSerialNumber(long serialNumber) { return serialNumber == 0 ? UserHandle.SYSTEM : null; }
+  public java.util.List<UserHandle> getUserProfiles() { return java.util.List.of(UserHandle.SYSTEM); }
 }

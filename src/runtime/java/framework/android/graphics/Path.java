@@ -70,14 +70,69 @@ public class Path {
   public void close() {
     if (shape.getCurrentPoint() != null) shape.closePath();
   }
+  // Java2D rectangles, ellipses and round rectangles run clockwise (y down), as
+  // Skia's CW contours do; CCW appends them reversed, so winding fills cut holes.
+  private void append(java.awt.Shape source, Direction dir) {
+    if (dir != Direction.CCW) {
+      shape.append(source, false);
+      return;
+    }
+    var segments = new java.util.ArrayList<float[]>();
+    float[] c = new float[6];
+    float startX = 0, startY = 0, x = 0, y = 0;
+    boolean open = false, closed = false;
+    for (PathIterator it = source.getPathIterator(null); !it.isDone(); it.next()) {
+      int type = it.currentSegment(c);
+      if (type == PathIterator.SEG_MOVETO) {
+        if (open) appendReversed(segments, startX, startY, closed);
+        segments.clear();
+        open = true;
+        closed = false;
+        startX = x = c[0];
+        startY = y = c[1];
+      } else if (type == PathIterator.SEG_CLOSE) {
+        closed = true;
+        x = startX;
+        y = startY;
+      } else {
+        int n = type == PathIterator.SEG_LINETO ? 2 : type == PathIterator.SEG_QUADTO ? 4 : 6;
+        float[] segment = new float[2 + n];
+        segment[0] = x;
+        segment[1] = y;
+        System.arraycopy(c, 0, segment, 2, n);
+        segments.add(segment);
+        x = c[n - 2];
+        y = c[n - 1];
+      }
+    }
+    if (open) appendReversed(segments, startX, startY, closed);
+  }
+  private void appendReversed(java.util.List<float[]> segments, float startX, float startY, boolean closed) {
+    if (segments.isEmpty()) {
+      shape.moveTo(startX, startY);
+      if (closed) shape.closePath();
+      return;
+    }
+    float[] last = segments.get(segments.size() - 1);
+    shape.moveTo(last[last.length - 2], last[last.length - 1]);
+    for (int i = segments.size() - 1; i >= 0; i--) {
+      float[] e = segments.get(i);
+      switch (e.length) {
+        case 4 -> shape.lineTo(e[0], e[1]);
+        case 6 -> shape.quadTo(e[2], e[3], e[0], e[1]);
+        default -> shape.curveTo(e[4], e[5], e[2], e[3], e[0], e[1]);
+      }
+    }
+    if (closed) shape.closePath();
+  }
   public void addRect(float left, float top, float right, float bottom, Direction dir) {
-    shape.append(new Rectangle2D.Float(left, top, right - left, bottom - top), false);
+    append(new Rectangle2D.Float(left, top, right - left, bottom - top), dir);
   }
   public void addRect(RectF rect, Direction dir) {
     addRect(rect.left, rect.top, rect.right, rect.bottom, dir);
   }
   public void addOval(float left, float top, float right, float bottom, Direction dir) {
-    shape.append(new Ellipse2D.Float(left, top, right - left, bottom - top), false);
+    append(new Ellipse2D.Float(left, top, right - left, bottom - top), dir);
   }
   public void addOval(RectF oval, Direction dir) {
     addOval(oval.left, oval.top, oval.right, oval.bottom, dir);
@@ -86,8 +141,51 @@ public class Path {
     addOval(x - radius, y - radius, x + radius, y + radius, dir);
   }
   public void addRoundRect(RectF rect, float rx, float ry, Direction dir) {
-    shape.append(new RoundRectangle2D.Float(rect.left, rect.top, rect.right - rect.left,
-        rect.bottom - rect.top, 2 * rx, 2 * ry), false);
+    addRoundRect(rect.left, rect.top, rect.right, rect.bottom, rx, ry, dir);
+  }
+  public void addRoundRect(float left, float top, float right, float bottom, float rx, float ry, Direction dir) {
+    addRoundRect(left, top, right, bottom, new float[] {rx, ry, rx, ry, rx, ry, rx, ry}, dir);
+  }
+  public void addRoundRect(RectF rect, float[] radii, Direction dir) {
+    if (rect == null) throw new NullPointerException("need rect parameter");
+    addRoundRect(rect.left, rect.top, rect.right, rect.bottom, radii, dir);
+  }
+  // Corner radii are top-left, top-right, bottom-right, bottom-left (x, y) pairs.
+  // As SkRRect: invalid radii become 0, a corner with one zero radius is square, and
+  // radii that overflow a side all scale down together.
+  public void addRoundRect(float left, float top, float right, float bottom, float[] radii, Direction dir) {
+    if (radii.length < 8) throw new ArrayIndexOutOfBoundsException("radii[] needs 8 values");
+    float w = right - left, h = bottom - top;
+    if (!(w > 0 && h > 0)) {
+      addRect(left, top, right, bottom, dir);
+      return;
+    }
+    float[] r = new float[8];
+    for (int i = 0; i < 8; i += 2) {
+      float x = radii[i], y = radii[i + 1];
+      if (!(x > 0 && y > 0) || !Float.isFinite(x) || !Float.isFinite(y)) x = y = 0;
+      r[i] = x;
+      r[i + 1] = y;
+    }
+    double scale = Math.min(Math.min(fit(w, r[0], r[2]), fit(h, r[3], r[5])), Math.min(fit(w, r[4], r[6]), fit(h, r[7], r[1])));
+    if (scale < 1)
+      for (int i = 0; i < 8; i++) r[i] = (float) (r[i] * scale);
+    final float k = 1 - 0.5522847498f;
+    var path = new Path2D.Float();
+    path.moveTo(left + r[0], top);
+    path.lineTo(right - r[2], top);
+    path.curveTo(right - r[2] * k, top, right, top + r[3] * k, right, top + r[3]);
+    path.lineTo(right, bottom - r[5]);
+    path.curveTo(right, bottom - r[5] * k, right - r[4] * k, bottom, right - r[4], bottom);
+    path.lineTo(left + r[6], bottom);
+    path.curveTo(left + r[6] * k, bottom, left, bottom - r[7] * k, left, bottom - r[7]);
+    path.lineTo(left, top + r[1]);
+    path.curveTo(left, top + r[1] * k, left + r[0] * k, top, left + r[0], top);
+    path.closePath();
+    append(path, dir);
+  }
+  private static double fit(float side, float a, float b) {
+    return a + b > side ? side / ((double) a + b) : 1;
   }
   public void addPath(Path source) {
     shape.append(source.shape, false);

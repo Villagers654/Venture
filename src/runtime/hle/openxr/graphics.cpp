@@ -1,5 +1,6 @@
 #include "xr/dev_dump.h"
 #include "gfx/gpu_device.h"
+#include "common/environment.h"
 #include "common/log.h"
 #include "hle/vulkan/vulkan.h"
 #include "hle/vulkan/internal.h"
@@ -18,6 +19,7 @@
 #include <algorithm>
 #include <atomic>
 #include <bit>
+#include <cstdlib>
 #include <cstring>
 #include <sstream>
 
@@ -266,6 +268,29 @@ bool scalable_color_format(std::int64_t format) {
   default: return gfx::supports_filtered_blit(format);
   }
 }
+// Whether this copy into a multi-slice color host chain is sampled for the eye
+// slice check (GuestImages::sample_layers): a one-time GPU readback of an 8x8
+// texel grid per slice of the game's image and of the host image, which tells a
+// slice the game never drew from one the copy or the host lost (a single-eye
+// report: H3VR2 on an Intel Arc with Virtual Desktop). By default the 600th and
+// 5400th copies (about 7 s and 1 min at 90 Hz) of each such chain are checked,
+// at most four checks a session; VENTURE_XR_LAYER_CHECK=0 turns it off and
+// VENTURE_XR_LAYER_CHECK=<n> checks every n-th copy instead (diagnostics only).
+bool eye_slice_check_due(Swapchain& r) {
+  ++r.host_copies;
+  if (r.info.arraySize * r.info.faceCount < 2 || r.info.sampleCount != 1 ||
+      !(r.host_info.usageFlags & XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT))
+    return false;
+  static const long every = [] {
+    const auto* value = venture::environment::getenv("VENTURE_XR_LAYER_CHECK");
+    return value && *value ? std::strtol(value, nullptr, 10) : -1L;
+  }();
+  if (every == 0) return false;
+  if (every > 0) return r.host_copies % std::uint64_t(every) == 0;
+  static std::atomic_uint checks{};
+  if (r.host_copies != 600 && r.host_copies != 5400) return false;
+  return checks.fetch_add(1, std::memory_order_relaxed) < 4;
+}
 }  // namespace
 XrResult prepare_swapchains(const std::set<XrSwapchain>& submitted, bool force_opaque, const UnderlayAlpha* underlay,
                             const MirrorEye* mirror, const std::map<XrSwapchain, VkExtent2D>* eye_rects) {
@@ -415,6 +440,13 @@ XrResult prepare_swapchains(const std::set<XrSwapchain>& submitted, bool force_o
                              {r.host_info.width, r.host_info.height}, r.flip_rows);
     if (XR_SUCCEEDED(result))
       result = convert_color_image(r, target, s.color_space, false, opaque, opacity, premultiply, key ? &*key : nullptr);
+    if (XR_SUCCEEDED(result) && eye_slice_check_due(r))
+      log::info("xr", "Eye slice check after {} copies ({}x{} arrays={} -> host {}x{} arrays={}): {}", r.host_copies,
+                r.info.width, r.info.height, r.info.arraySize, r.host_info.width, r.host_info.height,
+                r.host_info.arraySize,
+                r.backing->sample_layers(std::uint32_t(r.released_index), r.host_images.at(target).image,
+                                         VkFormat(r.host_info.format), {r.host_info.width, r.host_info.height},
+                                         r.host_info.arraySize * r.host_info.faceCount));
     // The desktop mirror blits the eye exactly as the headset gets it, before
     // the image goes back to the runtime.
     if (XR_SUCCEEDED(result) && mirror && handle == mirror->sub.swapchain && r.info.sampleCount == 1 &&

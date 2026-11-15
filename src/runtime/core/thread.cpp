@@ -664,13 +664,22 @@ void flush_guest_process_files(int status) {
     // Diagnostics may flush while another thread records a fatal outcome.
     platform::terminate_runtime_process(process_exit_status.load());
   }
-  for_each_guest_thread([](GuestThread& t) { if (&t != GuestThread::current()) { t.exit_requested = true; t.interrupt(); } });
+  for_each_guest_thread([](GuestThread& t) {
+    if (&t == GuestThread::current()) return;
+    t.exit_requested = true;
+    platform::restore_thread_priority_for_exit(t.tid());
+    t.interrupt();
+  });
   throw ProcessExit(process_exit_status.load());
 }
 void os_quit::stop_guest_execution() {
   if (!enabled) throw std::logic_error("OS quit disabled by VENTURE_MENU_QUIT=0");
   stopping.store(true, std::memory_order_release);
-  for_each_guest_thread([](GuestThread& thread) { thread.interrupt(); });
+  // Each thread must be scheduled to leave its host call within the drain's bound.
+  for_each_guest_thread([](GuestThread& thread) {
+    platform::restore_thread_priority_for_exit(thread.tid());
+    thread.interrupt();
+  });
 }
 void check_guest_exit(GuestThread& thread) {
   platform::apply_pending_thread_priority();
@@ -688,6 +697,7 @@ void shutdown_guest_threads() {
   shutting_down = true;
   for (auto& [handle, control] : managed_threads) {
     control->guest.exit_requested = true;
+    platform::restore_thread_priority_for_exit(control->guest.tid());
     control->guest.interrupt();
   }
   workers_finished.wait(lock, [] { return active_workers == 0; });

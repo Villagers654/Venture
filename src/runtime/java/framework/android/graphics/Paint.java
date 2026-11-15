@@ -34,6 +34,8 @@ public class Paint {
     cap = source.cap;
     join = source.join;
     strokeWidth = source.strokeWidth;
+    shader = source.shader;
+    colorFilter = source.colorFilter;
   }
   public int getFlags() {
     return flags;
@@ -43,6 +45,17 @@ public class Paint {
   }
   public boolean isAntiAlias() { return (flags & ANTI_ALIAS_FLAG) != 0; }
   public void setAntiAlias(boolean on) { flags = on ? flags | ANTI_ALIAS_FLAG : flags & ~ANTI_ALIAS_FLAG; }
+  public boolean isDither() { return (flags & DITHER_FLAG) != 0; }
+  public void setDither(boolean on) { flags = on ? flags | DITHER_FLAG : flags & ~DITHER_FLAG; }
+  public boolean isFilterBitmap() { return (flags & FILTER_BITMAP_FLAG) != 0; }
+  public void setFilterBitmap(boolean on) { flags = on ? flags | FILTER_BITMAP_FLAG : flags & ~FILTER_BITMAP_FLAG; }
+  // Recorded for the app; Canvas fills with the paint color alone.
+  private Shader shader;
+  private ColorFilter colorFilter;
+  public Shader getShader() { return shader; }
+  public Shader setShader(Shader shader) { this.shader = shader; return shader; }
+  public ColorFilter getColorFilter() { return colorFilter; }
+  public ColorFilter setColorFilter(ColorFilter filter) { colorFilter = filter; return filter; }
   public void setColor(int c) {
     color = c;
   }

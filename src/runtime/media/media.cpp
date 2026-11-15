@@ -110,9 +110,17 @@ Input path_input(std::string_view path) {
   hle::libc::FdTable::get().close(static_cast<int>(fd));
   return input;
 }
+// A RIFF/WAVE source, read as Android's WAVExtractor reads it: one
+// "audio/raw" track of 16-bit PCM whatever the stored sample format.
+struct Wav {
+  std::int64_t data=0,frames=0,frame=0;
+  int format=0,bits=0,channels=0,rate=0;
+  int frame_bytes() const {return channels*bits/8;}
+};
 struct Extractor::Impl {
   std::shared_ptr<Library> library;
   Input input;
+  std::optional<Wav> wav;
   AVFormatContext* format=nullptr;
   AVIOContext* io=nullptr;
   AVPacket* packet=nullptr;
@@ -130,8 +138,10 @@ struct Extractor::Impl {
     if(packet) api().av_packet_free(&packet);
     if(format) api().avformat_close_input(&format);
     if(io) {api().av_free(io->buffer);io->buffer=nullptr;api().avio_context_free(&io);}
-    tracks.clear();selected.clear();current={};hash.clear();failure=0;
+    tracks.clear();selected.clear();current={};hash.clear();failure=0;wav.reset();
   }
+  int open_wav();
+  bool advance_wav();
   ~Impl() {close();}
   static int interrupted(void* p) {
     auto& s=*static_cast<Impl*>(p);
@@ -157,13 +167,104 @@ struct Extractor::Impl {
   }
   void begin() { deadline=std::chrono::steady_clock::now()+std::chrono::seconds(5); }
 };
+namespace {
+std::uint32_t le16(const std::uint8_t* p) {return p[0]|(p[1]<<8);}
+std::uint32_t le32(const std::uint8_t* p) {return p[0]|(p[1]<<8)|(p[2]<<16)|(std::uint32_t(p[3])<<24);}
+// Android's 16-bit PCM from a WAVE sample: unsigned 8-bit, signed 16/24/32-bit
+// or 32-bit IEEE float, little endian.
+std::int16_t wav_sample(const std::uint8_t* p,int format,int bits) {
+  if(format==3) {
+    float v;std::memcpy(&v,p,4);
+    if(!std::isfinite(v))return 0;
+    return static_cast<std::int16_t>(std::lrint(std::clamp(v*32768.0f,-32768.0f,32767.0f)));
+  }
+  switch(bits) {
+    case 8:return static_cast<std::int16_t>((int(p[0])-128)*256);
+    case 16:return static_cast<std::int16_t>(le16(p));
+    case 24:return static_cast<std::int16_t>(le16(p+1));
+    default:return static_cast<std::int16_t>(le16(p+2));
+  }
+}
+}
+// 1 for a supported RIFF/WAVE source, 0 for another container, negative for
+// a WAVE source Android's WAVExtractor would not play as audio/raw either:
+// PCM (format 1) of 8, 16, 24 or 32 bits, IEEE float (3) of 32 bits, or
+// WAVE_FORMAT_EXTENSIBLE with one of those subformats, 1 to 8 channels.
+int Extractor::Impl::open_wav() {
+  std::array<std::uint8_t,40> head{};
+  if(input.length<12 || input.read_at(head.data(),12,0)!=12 ||
+     std::memcmp(head.data(),"RIFF",4) || std::memcmp(head.data()+8,"WAVE",4))return 0;
+  Wav w;bool format=false;
+  std::int64_t offset=12;
+  for(int chunks=0;chunks<4096 && offset<=input.length-8;++chunks) {
+    if(input.read_at(head.data(),8,offset)!=8)break;
+    const std::int64_t size=le32(head.data()+4),body=offset+8;
+    if(!std::memcmp(head.data(),"fmt ",4)) {
+      if(size<16)break;
+      auto n=std::min<std::int64_t>(size,40);
+      if(input.read_at(head.data(),n,body)!=n)break;
+      w.format=static_cast<int>(le16(head.data()));w.channels=static_cast<int>(le16(head.data()+2));
+      w.rate=static_cast<int>(std::min<std::uint32_t>(le32(head.data()+4),INT_MAX));w.bits=static_cast<int>(le16(head.data()+14));
+      if(w.format==0xfffe)w.format=n>=26?static_cast<int>(le16(head.data()+24)):0;
+      format=true;
+    } else if(!std::memcmp(head.data(),"data",4)) {
+      if(!format)break;
+      const bool pcm=w.format==1 && (w.bits==8 || w.bits==16 || w.bits==24 || w.bits==32);
+      const bool flt=w.format==3 && w.bits==32;
+      if((!pcm && !flt) || w.channels<1 || w.channels>8 || w.rate<=0 || w.rate>384000) {
+        log::warn("media","WAV source unsupported: format {:#x}, {} bits, {} channels, {} Hz",w.format,w.bits,w.channels,w.rate);
+        return -1;
+      }
+      // A streamed WAVE file may leave the data size unset (0 or ~0): read to its end.
+      const auto available=input.length-body;
+      const auto bytes=size==0 || size>available?available:size;
+      w.data=body;w.frames=bytes/w.frame_bytes();
+      Track track;track.mime="audio/raw";track.rate=w.rate;track.channels=w.channels;
+      track.duration_us=w.frames*1000000/w.rate;
+      log::info("media","WAV track 0: audio/raw ({}-bit {}), {} Hz, {} channels, {} us",
+        w.bits,w.format==3?"float":"PCM",w.rate,w.channels,track.duration_us);
+      tracks.push_back(std::move(track));selected.assign(1,false);wav=w;
+      return 1;
+    }
+    offset=body+size+(size&1);
+  }
+  log::warn("media","WAV source invalid");
+  return -1;
+}
+bool Extractor::Impl::advance_wav() {
+  auto& w=*wav;current={};
+  if(!selected[0] || w.frame>=w.frames)return false;
+  // Android's WAVSource reads up to 32 KiB of PCM per sample.
+  const auto frame_bytes=w.frame_bytes();
+  const auto count=std::min<std::int64_t>(w.frames-w.frame,std::max(1,32768/(w.channels*2)));
+  std::vector<std::uint8_t> raw(static_cast<std::size_t>(count*frame_bytes));
+  auto got=input.read_at(raw.data(),raw.size(),w.data+w.frame*frame_bytes);
+  if(got<0 || got>static_cast<std::int64_t>(raw.size())){failure=unsupported;return false;}
+  const auto frames=got/frame_bytes;
+  if(!frames)return false;
+  const auto samples=static_cast<std::size_t>(frames*w.channels);
+  current.bytes.resize(samples*2);
+  for(std::size_t i=0;i<samples;++i) {
+    auto v=wav_sample(raw.data()+i*(w.bits/8),w.format,w.bits);
+    std::memcpy(current.bytes.data()+i*2,&v,2);
+  }
+  current.track=0;current.flags=1;current.time_us=w.frame*1000000/w.rate;
+  w.frame+=frames;
+  return true;
+}
 Extractor::Extractor(std::shared_ptr<Library> l):impl(std::make_unique<Impl>(std::move(l))) {}
 Extractor::~Extractor()=default;
 int Extractor::open(Input input) {
   auto& s=*impl;
   s.close();s.cancelled=false;s.position=0;
-  if(!s.library->available() || !input.read_at || input.length<=0) return unsupported;
+  if(!input.read_at || input.length<=0) return unsupported;
   s.input=std::move(input);s.begin();
+  // WAVE needs no FFmpeg component: Android's WAVExtractor is native too.
+  if(!s.library->available()) {
+    auto wav=s.open_wav();
+    if(wav<=0)s.close();
+    return wav>0?0:unsupported;
+  }
   auto& a=s.api();
   // The source's identity for logs and the AV harness: SHA-256 of the whole source, or for one over
   // 512 MiB (a long movie inside an OBB: Bulletstorm VR) of its size and first and last 4 MiB, so
@@ -195,6 +296,10 @@ int Extractor::open(Input input) {
   for(auto byte:digest){s.hash+=hex[byte>>4];s.hash+=hex[byte&15];}
   log::info("media","{} source SHA-256 {}: {} bytes",sampled?"Sampled":"Bounded",s.hash,s.input.length);
   s.begin();
+  if(auto wav=s.open_wav()) {
+    if(wav<0){s.close();return unsupported;}
+    return 0;
+  }
   auto buffer=static_cast<std::uint8_t*>(a.av_malloc(32768));
   if(!buffer) return unsupported;
   s.io=a.avio_alloc_context(buffer,32768,0,&s,Impl::read,nullptr,Impl::seek_io);
@@ -207,12 +312,13 @@ int Extractor::open(Input input) {
   s.format->max_streams=16;s.format->max_index_size=4*1024*1024;s.format->max_probe_packets=64;
   if(a.avformat_open_input(&s.format,nullptr,nullptr,nullptr)<0 ||
      a.avformat_find_stream_info(s.format,nullptr)<0 || s.format->nb_streams>16) {
-    s.close();log::warn("media","MOV audio source unsupported or invalid");return unsupported;
+    s.close();log::warn("media","Media source unsupported or invalid");return unsupported;
   }
   for(unsigned i=0;i<s.format->nb_streams;++i) {
     auto st=s.format->streams[i];auto p=st->codecpar;
     Track track;
     if(p->codec_id==AV_CODEC_ID_AAC) track.mime="audio/mp4a-latm";
+    else if(p->codec_id==AV_CODEC_ID_MP3) track.mime="audio/mpeg";
     else if(p->codec_id==AV_CODEC_ID_H264) track.mime="video/avc";
     else if(p->codec_id==AV_CODEC_ID_HEVC) track.mime="video/hevc";
     else if(p->codec_id==AV_CODEC_ID_VP8) track.mime="video/x-vnd.on2.vp8";
@@ -243,6 +349,7 @@ int Extractor::select(int index,bool enabled) {
 }
 bool Extractor::advance() {
   auto& s=*impl;s.current={};
+  if(s.wav)return s.advance_wav();
   if(!s.format || std::none_of(s.selected.begin(),s.selected.end(),[](bool b){return b;})) return false;
   s.begin();auto& a=s.api();
   while(!s.cancelled) {
@@ -272,6 +379,11 @@ bool Extractor::advance() {
 const Sample& Extractor::sample() const {return impl->current;}
 int Extractor::seek(std::int64_t time,int mode) {
   auto& s=*impl;
+  if(s.wav && time>=0 && mode>=0 && mode<=2) {
+    // Every PCM frame is a sync point, as in Android's WAVSource.
+    s.wav->frame=std::min(s.wav->frames,time/1000000*s.wav->rate+time%1000000*s.wav->rate/1000000);
+    return advance()?0:unsupported;
+  }
   if(!s.format || time<0 || mode<0 || mode>2) return invalid;
   av::emit("media_extractor_seek",std::format("\"source_sha256\":\"{}\",\"time_us\":{},\"mode\":{}",s.hash,time,mode));
   s.begin();
@@ -289,6 +401,9 @@ struct Decoder::Impl {
   SwsContext* scale=nullptr;
   std::unique_ptr<vulkan_video::Converter> gpu;
   std::string_view backend="software";
+  // "audio/raw" (Android's raw decoder): 16-bit PCM input passes through.
+  bool raw=false,raw_eos=false;int raw_rate=0,raw_channels=0;
+  std::deque<Pcm> raw_frames;
   explicit Impl(std::shared_ptr<Library> l):library(std::move(l)){}
   auto& api(){return *library->impl;}
   ~Impl(){if(codec)api().avcodec_free_context(&codec);if(frame)api().av_frame_free(&frame);if(downloaded)api().av_frame_free(&downloaded);
@@ -299,6 +414,7 @@ struct Decoder::Impl {
 namespace {
 AVCodecID codec_id(std::string_view mime) {
   if(mime=="audio/mp4a-latm")return AV_CODEC_ID_AAC;
+  if(mime=="audio/mpeg")return AV_CODEC_ID_MP3;
   if(mime=="video/avc")return AV_CODEC_ID_H264;
   if(mime=="video/hevc")return AV_CODEC_ID_HEVC;
   if(mime=="video/x-vnd.on2.vp8")return AV_CODEC_ID_VP8;
@@ -307,11 +423,21 @@ AVCodecID codec_id(std::string_view mime) {
 }
 }
 bool video_mime(std::string_view mime) {return mime.starts_with("video/") && codec_id(mime)!=AV_CODEC_ID_NONE;}
+bool audio_mime(std::string_view mime) {
+  return mime=="audio/raw" || (mime.starts_with("audio/") && codec_id(mime)!=AV_CODEC_ID_NONE);
+}
 Decoder::Decoder(std::shared_ptr<Library> l):impl(std::make_unique<Impl>(std::move(l))){}
 Decoder::~Decoder()=default;
 int Decoder::configure(const Track& t,bool surface,bool shared_images) {
   auto& s=*impl;
   const bool video=video_mime(t.mime);
+  s.raw=false;s.raw_eos=false;s.raw_frames.clear();
+  if(t.mime=="audio/raw") {
+    if(t.channels<1 || t.channels>8 || t.rate<8000 || t.rate>192000)return unsupported;
+    if(s.codec)s.api().avcodec_free_context(&s.codec);
+    s.raw=true;s.raw_rate=t.rate;s.raw_channels=t.channels;
+    return 0;
+  }
   if(!s.library->available() || codec_id(t.mime)==AV_CODEC_ID_NONE || t.config.size()>65536) return unsupported;
   if(video ? (t.width<=0 || t.height<=0 || t.width>8192 || t.height>8192) :
      (t.channels<1 || t.channels>2 || t.rate<8000 || t.rate>192000))return unsupported;
@@ -389,7 +515,21 @@ int Decoder::configure(const Track& t,bool surface,bool shared_images) {
   return s.frame?0:unsupported;
 }
 int Decoder::send(const Sample* sample) {
-  auto& s=*impl;if(!s.codec)return bad_state;auto& a=s.api();
+  auto& s=*impl;
+  if(s.raw) {
+    if(!sample){s.raw_eos=true;return 0;}
+    if(sample->bytes.size()>max_packet)return invalid;
+    if(sample->flags&2)return unsupported;
+    Pcm pcm;pcm.rate=s.raw_rate;pcm.channels=s.raw_channels;pcm.time_us=sample->time_us;
+    const auto frames=sample->bytes.size()/(2*s.raw_channels);  // a partial last frame is dropped
+    pcm.samples.resize(frames*s.raw_channels);
+    for(std::size_t i=0;i<pcm.samples.size();++i) {
+      std::int16_t v;std::memcpy(&v,sample->bytes.data()+i*2,2);pcm.samples[i]=v/32768.0f;
+    }
+    if(frames)s.raw_frames.push_back(std::move(pcm));
+    return 0;
+  }
+  if(!s.codec)return bad_state;auto& a=s.api();
   if(!sample) return a.avcodec_send_packet(s.codec,nullptr);
   if(sample->bytes.size()>max_packet)return invalid;
   if(sample->flags&2)return unsupported;
@@ -408,7 +548,13 @@ int Decoder::send(const Sample* sample) {
   a.av_packet_free(&p);return result;
 }
 int Decoder::receive(Pcm* out) {
-  auto& s=*impl;if(!s.codec || !out)return bad_state;
+  auto& s=*impl;
+  if(s.raw) {
+    if(!out)return bad_state;
+    if(s.raw_frames.empty())return s.raw_eos?-1:0;
+    *out=std::move(s.raw_frames.front());s.raw_frames.pop_front();return 1;
+  }
+  if(!s.codec || !out)return bad_state;
   auto& a=s.api();auto f=s.frame;a.av_frame_unref(f);
   auto result=a.avcodec_receive_frame(s.codec,f);
   if(result==AVERROR(EAGAIN))return 0;if(result==AVERROR_EOF)return -1;if(result<0)return unsupported;
@@ -431,7 +577,10 @@ int Decoder::receive(Pcm* out) {
   }
   return 1;
 }
-void Decoder::flush(){if(impl->codec)impl->api().avcodec_flush_buffers(impl->codec);}
+void Decoder::flush() {
+  if(impl->raw){impl->raw_frames.clear();impl->raw_eos=false;}
+  if(impl->codec)impl->api().avcodec_flush_buffers(impl->codec);
+}
 std::int64_t Decoder::video_conversion_us() const{return impl->conversion_us;}
 namespace {
 // Conversion threads for one picture: short, bursty work beside a running
@@ -1007,7 +1156,7 @@ int Player::prepare() {
   for(std::size_t i=0;i<s.extractor->tracks().size();++i) {
     auto& t=s.extractor->tracks()[i];
     if(video_mime(t.mime) && video_index<0){video_index=static_cast<int>(i);s.width=t.width;s.height=t.height;}
-    if(t.mime=="audio/mp4a-latm" && index<0)index=static_cast<int>(i);
+    if(audio_mime(t.mime) && index<0)index=static_cast<int>(i);
   }
   if(index<0 && video_index<0)return unsupported;
   Track track;

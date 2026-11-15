@@ -3,6 +3,7 @@
 #include "common/log.h"
 #include "xr/display_memory.h"
 #include "xr/host_xr.h"
+#include "xr/openxr_layers.h"
 #include <openxr/openxr.h>
 #include <algorithm>
 #include <cstdio>
@@ -28,6 +29,11 @@ void write(Level, std::string_view, std::string_view message) {
 namespace venture::xr {
 void recall_display_period(std::string_view, std::string_view) {}
 void remember_host_views(std::string_view, std::string_view, std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t) {}
+// The test host's instance always starts: no implicit API layer to leave out.
+std::vector<ApiLayer> enabled_openxr_layers() { return {}; }
+bool skip_openxr_layers(const std::vector<ApiLayer>&) { return true; }
+QuietLibraryErrors::QuietLibraryErrors() = default;
+QuietLibraryErrors::~QuietLibraryErrors() = default;
 }
 
 extern "C" {
@@ -48,6 +54,7 @@ XRAPI_ATTR XrResult XRAPI_CALL xrCreateInstance(const XrInstanceCreateInfo* info
   *instance = reinterpret_cast<XrInstance>(1);
   return XR_SUCCESS;
 }
+XRAPI_ATTR XrResult XRAPI_CALL xrDestroyInstance(XrInstance) { return XR_SUCCESS; }
 XRAPI_ATTR XrResult XRAPI_CALL xrGetInstanceProperties(XrInstance, XrInstanceProperties* properties) {
   std::strcpy(properties->runtimeName, "Passthrough test host");
   return XR_SUCCESS;

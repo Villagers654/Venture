@@ -153,6 +153,41 @@ void VKAPI_CALL free_memory(VkDevice d, VkDeviceMemory memory, const VkAllocatio
 void defer_gpu_release(VkDevice device, std::function<void()> release) {
   deferred_release(device, std::move(release));
 }
+std::uint64_t deferred_free_serial(VkQueue queue) {
+  std::lock_guard lock(mutex);
+  auto it = queues.find(queue);
+  return it == queues.end() ? 0 : it->second.submitted;
+}
+void deferred_free_cover(VkQueue queue) { cover(queue); }
+void defer_until_complete(VkDevice device, std::vector<std::pair<VkQueue, std::uint64_t>> waits,
+                          std::function<void()> release_resource) {
+  {
+    std::lock_guard lock(mutex);
+    std::erase_if(waits, [](const auto& wait) {
+      auto it = queues.find(wait.first);
+      if (it == queues.end()) return true;  // a queue of a released device holds nothing back
+      poll(it->second);
+      return it->second.completed >= wait.second;
+    });
+    if (!waits.empty()) {
+      pending.push_back({device, std::move(release_resource), waits});
+      any_pending.store(true, std::memory_order_relaxed);
+    }
+  }
+  if (waits.empty()) {
+    release_resource();
+    return;
+  }
+  // Normally a fence already follows each submission (deferred_free_cover);
+  // otherwise one is added, so the release does not wait for another free.
+  for (const auto& wait : waits) cover(wait.first);
+  std::vector<Pending> freed;
+  {
+    std::lock_guard lock(mutex);
+    freed = ready(device);
+  }
+  release(std::move(freed));
+}
 
 void deferred_free_submitting(VkQueue queue) {
   std::lock_guard lock(mutex);

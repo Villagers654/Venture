@@ -3,6 +3,7 @@
 #include <cerrno>
 #include <fcntl.h>
 #include <sys/file.h>
+#include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -26,6 +27,22 @@ FileLock::FileLock(const fs::path &file, bool wait) : impl_(std::make_unique<Imp
     throw std::runtime_error("Could not lock Venture account data.");
 }
 FileLock::~FileLock() = default;
+MappedFile::MappedFile(const fs::path &file) {
+  int fd = open(file.c_str(), O_RDONLY | O_CLOEXEC);
+  if (fd < 0) return;
+  struct stat info {};
+  if (fstat(fd, &info) == 0 && info.st_size > 0) {
+    void *view = mmap(nullptr, std::size_t(info.st_size), PROT_READ, MAP_PRIVATE, fd, 0);
+    if (view != MAP_FAILED) {
+      data_ = static_cast<const unsigned char *>(view);
+      size_ = std::size_t(info.st_size);
+    }
+  }
+  close(fd);  // the mapping keeps the file
+}
+MappedFile::~MappedFile() {
+  if (data_) munmap(const_cast<unsigned char *>(data_), size_);
+}
 std::string random_account_key() {
   std::array<unsigned char, 6> bytes{};
   int fd = open("/dev/urandom", O_RDONLY | O_CLOEXEC);

@@ -47,7 +47,7 @@ jlong JNICALL codec_create(JNIEnv* env,jclass,jstring mime) {
     if(!mime || !media::Library::get()->available())return 0;
     auto text=env->GetStringUTFChars(mime,nullptr);if(!text)return 0;
     std::string name(text);env->ReleaseStringUTFChars(mime,text);
-    if(name!="audio/mp4a-latm" && !media::video_mime(name))return 0;
+    if(!media::audio_mime(name) && !media::video_mime(name))return 0;
     auto value=std::make_shared<media::Codec>();std::lock_guard lock(mutex);
     if(closing)return 0;auto id=next++;codecs.emplace(id,std::move(value));return id;
   });

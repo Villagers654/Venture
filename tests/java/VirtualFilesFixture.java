@@ -17,13 +17,19 @@ public class VirtualFilesFixture {
   }
   public static void main(String[] args) throws Exception {
     var reads = new AtomicInteger();
+    Path font = Path.of(args[0], "host-sans.ttf"); Files.writeString(font, "font");
     Host host = (Host) java.lang.reflect.Proxy.newProxyInstance(Host.class.getClassLoader(), new Class<?>[]{Host.class},
         (object, method, values) -> {
           if (method.getName().equals("log")) throw new AssertionError("snapshot cleanup failed");
+          if (method.getName().equals("systemFont"))
+            return values[0].equals("/system/fonts/Roboto-Regular.ttf") ? font.toString() : null;
           String path = new String((byte[])values[0], StandardCharsets.UTF_8);
-          if (method.getName().equals("virtualFileExists")) return path.equals("/proc/self/status") || path.equals("/proc");
+          if (method.getName().equals("virtualFileExists"))
+            return path.equals("/proc/self/status") || path.equals("/proc") || path.equals("/system/fonts")
+                || path.equals("/system/fonts/Roboto-Regular.ttf") || path.equals("/system/etc/fonts.xml");
           if (method.getName().equals("readVirtualFile"))
-            return path.equals("/proc/self/status") ? ("VmRSS: " + reads.incrementAndGet() + " kB\n\u96ea\n").getBytes(StandardCharsets.UTF_8) : null;
+            return path.equals("/proc/self/status") ? ("VmRSS: " + reads.incrementAndGet() + " kB\n\u96ea\n").getBytes(StandardCharsets.UTF_8)
+                : path.equals("/system/etc/fonts.xml") ? "<familyset/>".getBytes(StandardCharsets.UTF_8) : null;
           throw new AssertionError("unexpected host call");
         });
     var boundary = RuntimeEnvironment.class.getDeclaredField("host");
@@ -41,6 +47,19 @@ public class VirtualFilesFixture {
     }
     try { new FileReader("/proc/missing"); throw new AssertionError("missing virtual file"); }
     catch (FileNotFoundException expected) {}
+    // Unreal's GameActivity.AndroidThunkJava_GetFontDirectory: the first of its
+    // directories that exists and is a directory; the fonts are host files.
+    File fonts = new File("/system/fonts");
+    check(fonts.exists() && fonts.isDirectory() && !new File("/system/fonts/Roboto-Regular.ttf").isDirectory());
+    check(new File("/system/fonts/Roboto-Regular.ttf").exists() && new File(fonts, "Roboto-Regular.ttf").exists());
+    check(!new File("/system/fonts/Missing.ttf").exists() && !new File(fonts, "Missing.ttf").exists());
+    try (var joined = new FileInputStream(new File(fonts, "Roboto-Regular.ttf"));
+         var named = new FileInputStream("/system/fonts/Roboto-Regular.ttf");
+         var xml = new BufferedReader(new FileReader("/etc/fonts.xml"))) {
+      check(new String(joined.readAllBytes(), StandardCharsets.UTF_8).equals("font"));
+      check(new String(named.readAllBytes(), StandardCharsets.UTF_8).equals("font"));
+      check(xml.readLine().equals("<familyset/>"));
+    }
     Path nativeFile = Path.of(args[0], "ordinary.txt"); Files.writeString(nativeFile, "host file");
     check(nativeFile.toFile().exists());
     File checked = new CheckedFile(nativeFile.toString());

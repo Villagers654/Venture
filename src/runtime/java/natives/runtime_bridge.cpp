@@ -3,6 +3,7 @@
 
 #include <jni.h>
 #include "platform/runtime_child.h"
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -29,6 +30,8 @@
 #include "core/thread_runtime.h"
 #include "hle/libc/libc_parts.h"
 #include "hle/libc/vfs.h"
+#include "hle/libc/system_fonts.h"
+#include "common/paths.h"
 #include "java/internal.h"
 #include "java/jni32.h"
 #include "java/natives/native_activity_bridge.h"
@@ -80,12 +83,26 @@ std::string virtual_path(JNIEnv* env, jbyteArray input) {
       reinterpret_cast<jbyte*>(path.data()));
   if (path.find('\0') != std::string::npos) throw std::invalid_argument("Invalid virtual path");
   hle::libc::MappedPath mapped;
-  if (auto error = hle::libc::resolve_path(path, hle::libc::at_cwd, &mapped); error < 0)
+  // A font name this host has no file for is a missing file, not an error.
+  if (auto error = hle::libc::resolve_path(path, hle::libc::at_cwd, &mapped);
+      error < 0 && !(error == -hle::libc::err::enoent && hle::libc::system_fonts::is_virtual(mapped.guest)))
     throw std::runtime_error(hle::libc::error_string(-error));
   if (!mapped.guest.starts_with("/proc/") && mapped.guest != "/proc" &&
-      !mapped.guest.starts_with("/sys/") && mapped.guest != "/sys")
+      !mapped.guest.starts_with("/sys/") && mapped.guest != "/sys" && !hle::libc::system_fonts::is_virtual(mapped.guest))
     throw std::invalid_argument("Path is outside the virtual filesystem");
   return mapped.guest;
+}
+// The installed font a /system/fonts path names, as a host path, or null.
+jstring JNICALL system_font(JNIEnv* env, jobject, jstring path) {
+  return guarded(env, [&]() -> jstring {
+    if (!path) return nullptr;
+    const auto* chars = env->GetStringUTFChars(path, nullptr);
+    if (!chars) return nullptr;
+    const std::string guest(chars);
+    env->ReleaseStringUTFChars(path, chars);
+    const auto host = hle::libc::system_fonts::host_file(guest);
+    return host.empty() ? nullptr : env->NewStringUTF(paths::utf8(host).c_str());
+  });
 }
 jbyteArray JNICALL read_virtual_file(JNIEnv* env, jobject, jbyteArray input) {
   return guarded(env, [&]() -> jbyteArray {
@@ -104,6 +121,7 @@ jboolean JNICALL virtual_file_exists(JNIEnv* env, jobject, jbyteArray input) {
   return guarded(env, [&]() -> jboolean {
     auto path = virtual_path(env, input);
     if (hle::libc::proc_directory(path, nullptr)) return true;
+    if (!hle::libc::system_fonts::host_file(path).empty()) return true;
     bool exists = false;
     hle::libc::proc_file(path, &exists);
     return exists;
@@ -135,6 +153,27 @@ void JNICALL poll_looper(JNIEnv* env, jclass, jlong handle, jint timeout) {
 }
 // Avatar SDK 1 driver for com.oculus.avatar.loader.EntryPoint.
 jlong JNICALL avatar_driver(JNIEnv*, jclass) { return static_cast<jlong>(hle::ovravatar::driver_lookup()); }
+// DriverLoader.getProcAddr: dlsym on the system driver's OpenXR runtime library, which
+// is Venture's OpenXR runtime (hle/openxr serves libopenxr_forwardloader.so). 0 when it
+// does not export the name, or has no ABI adapter for an A32 guest.
+jlong JNICALL openxr_runtime_proc_addr(JNIEnv* env, jclass, jstring name) {
+  return guarded(env, [&]() -> jlong {
+    if (!name) throw std::invalid_argument("Null OpenXR runtime function name");
+    const auto* text = env->GetStringUTFChars(name, nullptr);
+    if (!text) return 0;
+    struct Release {
+      JNIEnv* env; jstring name; const char* text;
+      ~Release() { env->ReleaseStringUTFChars(name, text); }
+    } release{env, name, text};
+    constexpr std::string_view runtime = "libopenxr_forwardloader.so";
+    for (const auto& library : Linker::get().hle_libraries()) {
+      const auto& aliases = library->aliases();
+      if (library->soname() == runtime || std::find(aliases.begin(), aliases.end(), runtime) != aliases.end())
+        return static_cast<jlong>(library->callable_symbol(text));
+    }
+    return 0;
+  });
+}
 void JNICALL wake_looper(JNIEnv* env, jclass, jlong handle) {
   guarded(env, [&] {
     auto looper = android::pin_looper(g2h<android::Looper>(handle));
@@ -287,6 +326,7 @@ void register_loopers(JNIEnv* env) {
   const JNINativeMethod methods[]{
       {const_cast<char*>("readVirtualFile"), const_cast<char*>("([B)[B"), reinterpret_cast<void*>(read_virtual_file)},
       {const_cast<char*>("virtualFileExists"), const_cast<char*>("([B)Z"), reinterpret_cast<void*>(virtual_file_exists)},
+      {const_cast<char*>("systemFont"), const_cast<char*>("(Ljava/lang/String;)Ljava/lang/String;"), reinterpret_cast<void*>(system_font)},
       {const_cast<char*>("setEnvironment"), const_cast<char*>("([B[BZ)I"), reinterpret_cast<void*>(set_environment)},
       {const_cast<char*>("guestErrorString"), const_cast<char*>("(I)Ljava/lang/String;"), reinterpret_cast<void*>(guest_error_string)},
       {const_cast<char*>("restartProcess"), const_cast<char*>("()V"), reinterpret_cast<void*>(restart_process)},
@@ -307,6 +347,7 @@ void register_loopers(JNIEnv* env) {
       {const_cast<char*>("pollLooper"), const_cast<char*>("(JI)V"), reinterpret_cast<void*>(poll_looper)},
       {const_cast<char*>("wakeLooper"), const_cast<char*>("(J)V"), reinterpret_cast<void*>(wake_looper)},
       {const_cast<char*>("avatarDriver"), const_cast<char*>("()J"), reinterpret_cast<void*>(avatar_driver)},
+      {const_cast<char*>("openxrRuntimeProcAddr"), const_cast<char*>("(Ljava/lang/String;)J"), reinterpret_cast<void*>(openxr_runtime_proc_addr)},
   };
   if (env->RegisterNatives(cls, methods, static_cast<jint>(std::size(methods))) == JNI_OK) {
     auto available = env->GetStaticFieldID(cls, "nativeLoopersAvailable", "Z");

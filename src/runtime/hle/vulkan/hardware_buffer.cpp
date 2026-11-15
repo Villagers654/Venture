@@ -23,6 +23,7 @@
 #include "common/log.h"
 #include "external.h"
 #include "gfx/gpu_device.h"
+#include "gfx/vulkan_enumerate.h"
 #include "internal.h"
 
 namespace venture::vulkan {
@@ -100,11 +101,11 @@ void unlink(void* owner, VkStructureType type) {
 
 bool host_extension(VkPhysicalDevice physical, std::string_view name) {
   auto f = physical_fn<PFN_vkEnumerateDeviceExtensionProperties>(physical, "vkEnumerateDeviceExtensionProperties");
-  std::uint32_t count = 0;
-  if (!f || f(physical, nullptr, &count, nullptr) != VK_SUCCESS) return false;
-  std::vector<VkExtensionProperties> values(count);
-  if (f(physical, nullptr, &count, values.data()) < VK_SUCCESS) return false;
-  values.resize(count);
+  std::vector<VkExtensionProperties> values;
+  if (!f || gfx::enumerate_vulkan(values, [&](std::uint32_t* n, VkExtensionProperties* p) {
+        return f(physical, nullptr, n, p);
+      }) < 0)
+    return false;
   return std::ranges::any_of(values, [&](auto& e) { return name == e.extensionName; });
 }
 bool host_foreign_queue() {

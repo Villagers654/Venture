@@ -6,6 +6,8 @@ import java.awt.geom.AffineTransform;
 // and Path apply (no perspective). pre* applies before the current matrix,
 // post* after it, as in Skia.
 public class Matrix {
+  public static final int MSCALE_X = 0, MSKEW_X = 1, MTRANS_X = 2, MSKEW_Y = 3, MSCALE_Y = 4,
+      MTRANS_Y = 5, MPERSP_0 = 6, MPERSP_1 = 7, MPERSP_2 = 8;
   private final AffineTransform transform = new AffineTransform();
   public Matrix() {}
   public Matrix(Matrix source) {
@@ -72,6 +74,25 @@ public class Matrix {
   public boolean postConcat(Matrix other) {
     transform.preConcatenate(other.transform);
     return true;
+  }
+  // The nine values in Android's row-major order; the perspective row of the
+  // affine subset is always 0, 0, 1, and setValues ignores it.
+  public void getValues(float[] values) {
+    if (values.length < 9) throw new ArrayIndexOutOfBoundsException();
+    values[MSCALE_X] = (float) transform.getScaleX();
+    values[MSKEW_X] = (float) transform.getShearX();
+    values[MTRANS_X] = (float) transform.getTranslateX();
+    values[MSKEW_Y] = (float) transform.getShearY();
+    values[MSCALE_Y] = (float) transform.getScaleY();
+    values[MTRANS_Y] = (float) transform.getTranslateY();
+    values[MPERSP_0] = 0;
+    values[MPERSP_1] = 0;
+    values[MPERSP_2] = 1;
+  }
+  public void setValues(float[] values) {
+    if (values.length < 9) throw new ArrayIndexOutOfBoundsException();
+    transform.setTransform(values[MSCALE_X], values[MSKEW_Y], values[MSKEW_X], values[MSCALE_Y],
+        values[MTRANS_X], values[MTRANS_Y]);
   }
   public void mapPoints(float[] points) {
     transform.transform(points, 0, points, 0, points.length / 2);

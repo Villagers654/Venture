@@ -19,6 +19,9 @@ public final class MessageQueue {
   private final PriorityQueue<Message> messages = new PriorityQueue<>(
       Comparator.comparingLong((Message m) -> m.when).thenComparingLong(m -> m.sequence));
   private final List<IdleHandler> idleHandlers = new ArrayList<>();
+  // AOSP's queue head (null when empty), a greylisted field native code reads
+  // through JNI: GeckoView checks it before calling next(), which would block.
+  @SuppressWarnings("unused") private volatile Message mMessages;
   private long sequence;
   private boolean quitting;
   private final long nativeLooper = RuntimeEnvironment.host() instanceof NativeHost && NativeHost.hasNativeLoopers()
@@ -36,6 +39,7 @@ public final class MessageQueue {
     m.when = when;
     m.sequence = sequence++;
     messages.add(m);
+    mMessages = messages.peek();
     if (TRACE) trace("enqueue", m, 0);
     wake();
     return true;
@@ -53,6 +57,7 @@ public final class MessageQueue {
         long now = SystemClock.uptimeMillis();
         if (first != null && first.when <= now) {
           messages.poll();
+          mMessages = messages.peek();
           first.inUse = false;
           return first;
         }
@@ -79,12 +84,14 @@ public final class MessageQueue {
     quitting = true;
     long now = SystemClock.uptimeMillis();
     messages.removeIf(m -> !safe || m.when > now);
+    mMessages = messages.peek();
     wake();
   }
   synchronized void remove(Handler h, Runnable r, Object token, Integer what) {
     messages.removeIf(m
         -> m.target == h && (r == null || m.callback == r) && (token == null || m.obj == token)
             && (what == null || m.what == what));
+    mMessages = messages.peek();
   }
   synchronized boolean has(Handler h, int what, Object object) {
     return messages.stream().anyMatch(

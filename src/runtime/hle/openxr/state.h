@@ -62,6 +62,7 @@ struct Swapchain {
   float host_underlay = 1; // reconstruction opacity carried by the host copy's alpha (1: none)
   std::optional<std::array<float, 3>> host_key; // color key passthrough drawn into the host copy
   bool rect_clipped = false; // logged once (map_subimage)
+  std::uint64_t host_copies = 0; // copies into the host chain, for the eye slice check (prepare_swapchains)
   std::int32_t released_index = -1;
   std::uint32_t next_index = 0, host_index = 0;
   bool static_acquired = false;

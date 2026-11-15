@@ -7,6 +7,7 @@
 #include <span>
 #include <set>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 #include "core/linker.h"
@@ -89,6 +90,8 @@ class Image final : public Library {
   const Sym* lookup(std::string_view name, std::string_view version = {}) const;
   std::string symbol_name(const Sym& symbol) const;
   SymbolVersion symbol_version(std::size_t index) const;
+  // The library a needed version comes from (its Verneed file), empty for none.
+  std::string_view version_provider(std::string_view version) const;
   const Sym& symbol_at(std::size_t index) const;
   std::span<const Sym> symbols() const { return {symbols_, symbol_count_}; }
   std::string string_at(std::uint64_t offset) const;
@@ -114,6 +117,8 @@ class Image final : public Library {
   void parse_dynamic();
   GuestIsa isa_ = GuestIsa::a64;
   std::vector<Sym> symbols32_;
+  // ELF32 symbols past the hash table's count that relocations named (symbol_at).
+  mutable std::map<std::size_t, Sym> unhashed32_;
   std::unordered_map<std::int64_t, std::uint64_t> dynamic_;
   std::vector<std::uint64_t> needed_;
   std::unordered_map<std::string, std::vector<std::size_t>> exports_;

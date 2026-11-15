@@ -3,6 +3,7 @@
 #include <intrin.h>
 #include "core/error.h"
 #include <windows.h>
+#include <algorithm>
 #include <atomic>
 #include <memory>
 #include <map>
@@ -16,7 +17,7 @@ void lower_background_thread_priority() {
 }
 void lower_worker_thread_priority() { SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL); }
 namespace {
-struct Entry { HANDLE handle; bool scoped_audio = false; std::atomic<bool> audio{false}; std::atomic<int> nice{0}; int fifo = 0; bool realtime_request = false; Entry* previous = nullptr; std::unique_ptr<AudioThreadPriority> priority; };
+struct Entry { HANDLE handle; bool scoped_audio = false; std::atomic<bool> exiting{false}; std::atomic<bool> audio{false}; std::atomic<int> nice{0}; int fifo = 0; bool realtime_request = false; Entry* previous = nullptr; std::unique_ptr<AudioThreadPriority> priority; };
 struct Threads { std::mutex mutex; std::map<std::int32_t, std::unique_ptr<Entry>> handles; };
 thread_local Entry* current_entry = nullptr;
 thread_local unsigned mmcss_depth = 0, realtime_depth = 0;
@@ -82,10 +83,21 @@ void apply_pending_thread_priority() {
     current_entry->priority.reset();
     if (current_entry->scoped_audio) return;
     const auto nice = current_entry->nice.load(std::memory_order_relaxed);
-    const int priority = nice <= -10 ? THREAD_PRIORITY_HIGHEST : nice < 0 ? THREAD_PRIORITY_ABOVE_NORMAL
+    int priority = nice <= -10 ? THREAD_PRIORITY_HIGHEST : nice < 0 ? THREAD_PRIORITY_ABOVE_NORMAL
         : nice == 0 ? THREAD_PRIORITY_NORMAL : nice < 10 ? THREAD_PRIORITY_BELOW_NORMAL : THREAD_PRIORITY_LOWEST;
+    if (current_entry->exiting.load(std::memory_order_relaxed)) priority = std::max(priority, int(THREAD_PRIORITY_NORMAL));
     SetThreadPriority(GetCurrentThread(), priority);
   }
+}
+void restore_thread_priority_for_exit(std::int32_t tid) {
+  auto& state = threads();
+  std::lock_guard lock(state.mutex);
+  auto it = state.handles.find(tid);
+  if (it == state.handles.end()) return;
+  it->second->exiting.store(true, std::memory_order_relaxed);
+  const int priority = GetThreadPriority(it->second->handle);
+  if (priority != THREAD_PRIORITY_ERROR_RETURN && priority < THREAD_PRIORITY_NORMAL)
+    SetThreadPriority(it->second->handle, THREAD_PRIORITY_NORMAL);
 }
 int set_audio_thread_priority(std::int32_t tid, int fifo_priority) {
   if (fifo_priority != 0 && fifo_priority != 2 && fifo_priority != 3) return -err::kEINVAL;
@@ -183,8 +195,9 @@ int set_thread_priority(std::int32_t tid, int nice) {
   }
   // Map Android's nice bands to ordinary Win32 scheduling priorities. Avoid
   // time-critical priority: Windows has no one-to-one Linux nice equivalent.
-  const int priority = nice <= -10 ? THREAD_PRIORITY_HIGHEST : nice < 0 ? THREAD_PRIORITY_ABOVE_NORMAL
+  int priority = nice <= -10 ? THREAD_PRIORITY_HIGHEST : nice < 0 ? THREAD_PRIORITY_ABOVE_NORMAL
       : nice == 0 ? THREAD_PRIORITY_NORMAL : nice < 10 ? THREAD_PRIORITY_BELOW_NORMAL : THREAD_PRIORITY_LOWEST;
+  if (it->second->exiting.load(std::memory_order_relaxed)) priority = std::max(priority, int(THREAD_PRIORITY_NORMAL));
   if (it->second->scoped_audio || SetThreadPriority(it->second->handle, priority)) {
     it->second->nice = nice;
     it->second->audio = it->second->realtime_request;

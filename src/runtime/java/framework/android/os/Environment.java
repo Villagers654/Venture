@@ -21,6 +21,11 @@ public final class Environment {
   public static File getRootDirectory() {
     return RuntimeEnvironment.directory(new File(RuntimeEnvironment.get().data, "volumes/system"));
   }
+  // GeckoView (Vuplex 3D WebView) reads it while preparing Gecko's environment;
+  // Android sets DOWNLOAD_CACHE to /data/cache.
+  public static File getDownloadCacheDirectory() {
+    return RuntimeEnvironment.directory(new File(getDataDirectory(), "cache"));
+  }
   public static File getExternalStorageDirectory() {
     var environment = RuntimeEnvironment.get();
     File root = RuntimeEnvironment.directory(new File(environment.data, "external"));

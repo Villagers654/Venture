@@ -22,8 +22,10 @@ add_executable(venture_tests
   launcher_accounts_test.cpp
   versions_test.cpp
   launcher_settings_test.cpp
+  launcher_text_test.cpp
 
   ${PROJECT_SOURCE_DIR}/src/launcher/ui/rich_text_parse.cpp
+  ${PROJECT_SOURCE_DIR}/src/launcher/ui/text_scripts.cpp
   ${PROJECT_SOURCE_DIR}/src/launcher/debug_report.cpp
   ${PROJECT_SOURCE_DIR}/src/launcher/diagnosis.cpp
   ${PROJECT_SOURCE_DIR}/src/launcher/drives.cpp
@@ -150,6 +152,8 @@ set_tests_properties(venture_tests_vulkan_fastpath PROPERTIES COST 20)
 if(NOT TARGET Python3::Interpreter)
   find_package(Python3 COMPONENTS Interpreter REQUIRED)
 endif()
+add_test(NAME fetch_cache COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/fetch_cache_test.py")
+set_tests_properties(fetch_cache PROPERTIES TIMEOUT 1800)
 
 # Windows release import allowlist; synthetic PE files, so it runs on any host.
 get_filename_component(venture_compiler_dir "${CMAKE_CXX_COMPILER}" DIRECTORY)
@@ -261,6 +265,7 @@ add_test(NAME guest_signal_unwind COMMAND "${Python3_EXECUTABLE}"
   "${CMAKE_CURRENT_SOURCE_DIR}/runtime/signal_unwind_test.py"
   "$<TARGET_FILE:venture_guest_unwind_runner>" "${CMAKE_CURRENT_BINARY_DIR}/signal-unwind")
 set_tests_properties(guest_signal_unwind PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
+# Venture measurements hold the shared gpu-quiet lease for their whole run; builds never take it.
 
 
 add_test(NAME ffmpeg_cache COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/ffmpeg_cache_test.py")
@@ -675,6 +680,7 @@ if(TARGET venture_audio)
   target_compile_definitions(venture_media_tests PRIVATE VENTURE_VIDEO_FIXTURE="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/media/pattern-h264.mp4")
   target_compile_definitions(venture_media_tests PRIVATE VENTURE_AV_FIXTURE="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/media/pattern-av.mp4")
   target_compile_definitions(venture_media_tests PRIVATE VENTURE_VP9_FIXTURE="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/media/pattern-vp9.webm")
+  target_compile_definitions(venture_media_tests PRIVATE VENTURE_MP3_FIXTURE="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/media/tone-mp3.mp3")
   venture_stage_media(venture_media_tests)
   add_test(NAME media_audio COMMAND venture_media_tests)
   add_executable(venture_a32_media_tests runtime/a32_memory_main.cpp runtime/a32_media_test.cpp)
@@ -844,9 +850,11 @@ if(TARGET venture_java_framework)
     add_dependencies(venture_java_graphics_tests venture_framework_tests venture_mock_openxr_runtime)
     add_test(NAME java_graphics COMMAND venture_java_graphics_tests)
     # The mock host remembers its display rate in the data dir: keep it out of the user profile.
-    set_tests_properties(java_graphics PROPERTIES TIMEOUT 30 ENVIRONMENT "VENTURE_DATA_DIR=${CMAKE_CURRENT_BINARY_DIR}/xr-test-data")
+    # Both start HotSpot. Under a loaded parallel suite JVM startup alone has taken over 60 s
+    # (siblings ran 40-300x slower), so the limits leave the same headroom as the other JVM tests.
+    set_tests_properties(java_graphics PROPERTIES TIMEOUT 300 ENVIRONMENT "VENTURE_DATA_DIR=${CMAKE_CURRENT_BINARY_DIR}/xr-test-data")
     add_test(NAME java_graphics_inputs COMMAND venture_java_graphics_tests)
-    set_tests_properties(java_graphics_inputs PROPERTIES TIMEOUT 15 ENVIRONMENT "VENTURE_TEST_EGL_INPUTS_ONLY=1;VENTURE_DATA_DIR=${CMAKE_CURRENT_BINARY_DIR}/xr-test-data")
+    set_tests_properties(java_graphics_inputs PROPERTIES TIMEOUT 300 ENVIRONMENT "VENTURE_TEST_EGL_INPUTS_ONLY=1;VENTURE_DATA_DIR=${CMAKE_CURRENT_BINARY_DIR}/xr-test-data")
   endif()
   add_executable(venture_framework_native_tests test_main.cpp runtime/framework_native_test.cpp
     ${PROJECT_SOURCE_DIR}/src/runtime/core/device_identity.cpp
@@ -901,7 +909,7 @@ if(TARGET venture_xr)
 add_executable(venture_xr_tests test_main.cpp  runtime/xr_test.cpp runtime/xr_vrapi_test.cpp runtime/xr_controls_test.cpp
      mock_openxr_runtime/input_timeline.cpp runtime/xr_android_surface_test.cpp
      runtime/xr_color_space_test.cpp runtime/xr_call_trace_test.cpp runtime/xr_passthrough_test.cpp
-     runtime/xr_vulkan_layers_test.cpp)
+     runtime/xr_vulkan_layers_test.cpp runtime/xr_api_layers_test.cpp)
   target_link_libraries(venture_xr_tests PRIVATE venture_java_framework)
   target_compile_definitions(venture_xr_tests PRIVATE
     VENTURE_TEST_JAVA_HOME="${VENTURE_JAVA_HOME}" VENTURE_TEST_FRAMEWORK_JAR="${VENTURE_FRAMEWORK_JAR}")
@@ -927,6 +935,17 @@ add_executable(venture_xr_tests test_main.cpp  runtime/xr_test.cpp runtime/xr_vr
       set_tests_properties(${test} PROPERTIES ENVIRONMENT "XR_RUNTIME_JSON=${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/mock_openxr_runtime.json;VENTURE_DATA_DIR=${CMAKE_CURRENT_BINARY_DIR}/xr-${test}-data")
     endif()
   endforeach()
+  # Meta's OpenXR loader as guest code, from VENTURE_TEST_META_XR_LOADER (it cannot live in
+  # this repository); skipped without it. Its own process: it configures the framework's
+  # one application.
+  add_executable(venture_meta_xr_loader_tests test_main.cpp runtime/xr_meta_loader_test.cpp)
+  target_link_libraries(venture_meta_xr_loader_tests PRIVATE venture_java_framework venture_xr venture_mock_openxr_runtime
+    miniz doctest::doctest)
+  target_compile_definitions(venture_meta_xr_loader_tests PRIVATE
+    VENTURE_TEST_JAVA_HOME="${VENTURE_JAVA_HOME}" VENTURE_TEST_FRAMEWORK_JAR="${VENTURE_FRAMEWORK_JAR}")
+  add_test(NAME xr_meta_loader COMMAND venture_meta_xr_loader_tests)
+  set_tests_properties(xr_meta_loader PROPERTIES TIMEOUT 120 SKIP_REGULAR_EXPRESSION "skipped: VENTURE_TEST_META_XR_LOADER"
+    ENVIRONMENT "XR_RUNTIME_JSON=${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/mock_openxr_runtime.json;VENTURE_DATA_DIR=${CMAKE_CURRENT_BINARY_DIR}/xr-meta-loader-data")
   # A runtime that numbers each handle type from 1 (VDXR): the instance and session share a value.
   add_test(NAME xr_typed_handles COMMAND venture_xr_tests
     "--test-case=XR guest lifecycle and real Vulkan swapchain through mock loader")
@@ -945,6 +964,19 @@ add_executable(venture_xr_tests test_main.cpp  runtime/xr_test.cpp runtime/xr_vr
   add_test(NAME xr_no_velocity COMMAND venture_xr_tests
     "--test-case=XR guest lifecycle and real Vulkan swapchain through mock loader")
   set_tests_properties(xr_no_velocity PROPERTIES ENVIRONMENT "XR_RUNTIME_JSON=${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/mock_openxr_runtime.json;VENTURE_DATA_DIR=${CMAKE_CURRENT_BINARY_DIR}/xr-no-velocity-data;VENTURE_MOCK_NO_VELOCITY=1")
+  # Implicit OpenXR API layers: a pass-through layer that works, and broken
+  # registrations around it (xr/openxr_layers.h). The test remaps the loader's
+  # registry keys (Windows) or XDG dirs for its own process only.
+  add_library(venture_test_xr_layer SHARED xr_test_layer/layer.cpp)
+  target_link_libraries(venture_test_xr_layer PRIVATE OpenXR::headers)
+  add_dependencies(venture_xr_tests venture_test_xr_layer)
+  target_compile_definitions(venture_xr_tests PRIVATE VENTURE_TEST_XR_LAYER="$<TARGET_FILE:venture_test_xr_layer>")
+  foreach(working 0 1 2)
+    add_test(NAME xr_api_layer_skip_${working} COMMAND venture_xr_tests
+      "--test-case=The host OpenXR instance leaves out only the implicit layers that fail to load" --no-skip=true)
+    set_tests_properties(xr_api_layer_skip_${working} PROPERTIES TIMEOUT 60 ENVIRONMENT
+      "XR_RUNTIME_JSON=${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/mock_openxr_runtime.json;VENTURE_DATA_DIR=${CMAKE_CURRENT_BINARY_DIR}/xr-api-layer-${working}-data;VENTURE_TEST_XR_WORKING_LAYER=${working}")
+  endforeach()
   add_test(NAME xr_no_hmd COMMAND venture_xr_probe)
   set_tests_properties(xr_no_hmd PROPERTIES
     ENVIRONMENT "XR_RUNTIME_JSON=${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/mock_openxr_runtime.json;VENTURE_DATA_DIR=${CMAKE_CURRENT_BINARY_DIR}/xr-no-hmd-data;VENTURE_MOCK_NO_HMD=1"

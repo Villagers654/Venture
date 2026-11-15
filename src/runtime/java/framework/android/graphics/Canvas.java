@@ -188,6 +188,15 @@ public class Canvas {
   public void drawCircle(float cx, float cy, float radius, Paint paint) {
     draw(new Ellipse2D.Float(cx - radius, cy - radius, 2 * radius, 2 * radius), paint);
   }
+  // Android angles run clockwise from 3 o'clock (y down); Java2D's run the other way.
+  public void drawArc(RectF oval, float startAngle, float sweepAngle, boolean useCenter, Paint paint) {
+    drawArc(oval.left, oval.top, oval.right, oval.bottom, startAngle, sweepAngle, useCenter, paint);
+  }
+  public void drawArc(float left, float top, float right, float bottom, float startAngle, float sweepAngle,
+      boolean useCenter, Paint paint) {
+    draw(new Arc2D.Float(left, top, right - left, bottom - top, -startAngle, -sweepAngle,
+        useCenter ? Arc2D.PIE : Arc2D.OPEN), paint);
+  }
   public void drawPath(Path path, Paint paint) {
     draw(path.shape(), paint);
   }

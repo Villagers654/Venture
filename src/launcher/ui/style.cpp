@@ -1,10 +1,13 @@
 #include "launcher/ui/style.h"
-#include "launcher/system_fonts.h"
+#include "launcher/ui/text_scripts.h"
 #include "launcher/icon_font.h"
+#include "common/file_ops.h"
 #include "common/paths.h"
+#include "common/system_fonts.h"
 
 #include <algorithm>
 #include <cctype>
+#include <climits>
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
@@ -57,9 +60,34 @@ std::string first_existing(std::initializer_list<const char*> candidates) {
 constexpr const char* kFontDir = "C:/Windows/Fonts/";
 #endif
 
-std::vector<std::string> g_fallbacks;  // merged after each base font: symbols, emoji
+std::vector<system_fonts::Face> g_fallbacks;  // merged after each base font: symbols, emoji
 // No system icon font: the embedded one (Lucide icons at Segoe's code points).
 constexpr const char* kEmbeddedIcons = "<embedded>";
+
+// A font file mapped once and shared by every UI font that merges it; the atlas
+// reads it in place, so only the pages of glyphs drawn are ever loaded.
+const MappedFile* mapped_font(const std::filesystem::path& path) {
+  static std::vector<std::pair<std::filesystem::path, std::unique_ptr<MappedFile>>> files;
+  for (const auto& [file, view] : files)
+    if (file == path) return view->data() ? view.get() : nullptr;
+  auto& view = files.emplace_back(path, std::make_unique<MappedFile>(path)).second;
+  return view->data() && view->size() <= size_t(INT_MAX) ? view.get() : nullptr;
+}
+// Merges a mapped system font (face `index`) into `font`.
+bool merge_font(ImFont* font, const std::filesystem::path& path, int index, int flags) {
+  const MappedFile* file = mapped_font(path);
+  if (!file) return false;
+  ImFontConfig merge;
+  merge.MergeMode = true;
+  merge.DstFont = font;
+  merge.FontNo = index;
+  merge.SizePixels = kBody;
+  merge.FontData = const_cast<unsigned char*>(file->data());
+  merge.FontDataSize = int(file->size());
+  merge.FontDataOwnedByAtlas = false;
+  merge.FontLoaderFlags = flags;
+  return ImGui::GetIO().Fonts->AddFont(&merge) != nullptr;
+}
 
 ImFont* add_font(const std::string& path, const std::string& icon_path) {
   auto& io = ImGui::GetIO();
@@ -80,12 +108,9 @@ ImFont* add_font(const std::string& path, const std::string& icon_path) {
       io.Fonts->AddFontFromFileTTF(icon_path.c_str(), kBody, &merge);
     }
   }
-  for (const std::string& fallback : g_fallbacks) {
-    ImFontConfig merge;
-    merge.MergeMode = true;
-    merge.FontLoaderFlags = ImGuiFreeTypeLoaderFlags_LightHinting | ImGuiFreeTypeLoaderFlags_LoadColor;
-    io.Fonts->AddFontFromFileTTF(fallback.c_str(), kBody, &merge);
-  }
+  for (const auto& fallback : g_fallbacks)
+    merge_font(font, fallback.file, fallback.index,
+               ImGuiFreeTypeLoaderFlags_LightHinting | ImGuiFreeTypeLoaderFlags_LoadColor);
   return font;
 }
 }  // namespace
@@ -119,19 +144,14 @@ void load_fonts() {
   std::string semibold = first_existing({"C:/Windows/Fonts/seguisb.ttf", "C:/Windows/Fonts/segoeuib.ttf"});
   std::string bold = first_existing({"C:/Windows/Fonts/segoeuib.ttf", "C:/Windows/Fonts/seguisb.ttf"});
   std::string italic = first_existing({"C:/Windows/Fonts/segoeuii.ttf"});
-  for (const char* fallback : {"C:/Windows/Fonts/seguisym.ttf", "C:/Windows/Fonts/seguiemj.ttf"})
-    if (std::string path = first_existing({fallback}); !path.empty()) g_fallbacks.push_back(path);
 #else
   // fontconfig's choice: Inter, then Noto Sans, then the desktop's sans-serif.
-  // Symbols and color emoji only when those families are installed.
-  for (const char* fallback : {"Noto Sans Symbols 2", "Noto Color Emoji"})
-    if (std::string path = system_font(fallback, true); !path.empty()) g_fallbacks.push_back(path);
   std::string icons = kEmbeddedIcons;
-  std::string regular = system_font("Inter,Noto Sans,sans-serif:style=Regular");
+  std::string regular = system_fonts::fontconfig_file("Inter,Noto Sans,sans-serif:style=Regular");
   std::string semilight = regular;
-  std::string semibold = system_font("Inter,Noto Sans,sans-serif:weight=semibold");
+  std::string semibold = system_fonts::fontconfig_file("Inter,Noto Sans,sans-serif:weight=semibold");
   std::string bold = semibold;
-  std::string italic = system_font("Inter,Noto Sans,sans-serif:slant=italic");
+  std::string italic = system_fonts::fontconfig_file("Inter,Noto Sans,sans-serif:slant=italic");
   // No fontconfig or fonts: the release's bundled DejaVu Sans (the JRE's fonts).
   if (regular.empty()) {
     std::error_code ec;
@@ -143,6 +163,9 @@ void load_fonts() {
     }
   }
 #endif
+  // Symbols and color emoji only when such a font is installed.
+  for (const auto* query : {&system_fonts::scripts::symbols, &system_fonts::scripts::emoji})
+    if (auto face = system_fonts::find(*query)) g_fallbacks.push_back(*face);
   if (icons.empty()) icons = kEmbeddedIcons;
   g_fonts.regular = add_font(regular, icons);
   if (!g_fonts.regular) {
@@ -161,56 +184,28 @@ void load_fonts() {
   io.FontDefault = g_fonts.regular;
 }
 
-// Han, kana and hangul come from a system font merged into every UI font the
-// first time a Chinese, Japanese or Korean interface is shown (the base fonts
-// cover Latin, Greek and Cyrillic). Glyphs rasterize on demand, so only the
-// font file's memory is spent, once.
+// Han, kana and hangul come from system fonts merged into every UI font after
+// its own glyphs (the base fonts cover Latin, Greek and Cyrillic). They are
+// merged whatever the UI language: Meta account names and store titles come in
+// their owner's script. The language's own CJK font goes first, so Han
+// characters take its forms; a later switch to another CJK language keeps the
+// first order. The files are mapped, not read: glyphs rasterize on demand.
 void load_script_fonts(std::string_view language) {
-  std::string code(language);
-  std::ranges::transform(code, code.begin(), [](unsigned char c) { return char(std::tolower(c)); });
-  std::string lang = code.substr(0, code.find_first_of("_-"));
-  std::string key = lang == "zh"                 ? (code.find("hant") != std::string::npos ? "zh_hant" : "zh_hans")
-                    : lang == "ja" || lang == "ko" ? lang
-                                                   : "";
-  static std::vector<std::string> loaded;
-  static std::vector<std::unique_ptr<std::vector<char>>> files;  // the atlas reads them in place
-  if (key.empty() || std::ranges::find(loaded, key) != loaded.end()) return;
-  loaded.push_back(key);
-#ifdef _WIN32
-  std::string path = key == "zh_hans" ? first_existing({"C:/Windows/Fonts/msyh.ttc", "C:/Windows/Fonts/simsun.ttc"})
-                     : key == "zh_hant" ? first_existing({"C:/Windows/Fonts/msjh.ttc", "C:/Windows/Fonts/mingliu.ttc"})
-                     : key == "ja" ? first_existing({"C:/Windows/Fonts/YuGothM.ttc", "C:/Windows/Fonts/meiryo.ttc",
-                                                     "C:/Windows/Fonts/msgothic.ttc"})
-                                   : first_existing({"C:/Windows/Fonts/malgun.ttf"});
-#else
-  std::string path = system_font(key == "zh_hans"   ? "sans-serif:lang=zh-cn"
-                                 : key == "zh_hant" ? "sans-serif:lang=zh-tw"
-                                 : key == "ja"      ? "sans-serif:lang=ja"
-                                                    : "sans-serif:lang=ko");
-#endif
-  if (path.empty()) return;
-  auto data = std::make_unique<std::vector<char>>();
-  if (FILE* f = std::fopen(path.c_str(), "rb")) {
-    char buffer[65536];
-    for (size_t n; (n = std::fread(buffer, 1, sizeof buffer, f)) > 0;) data->insert(data->end(), buffer, buffer + n);
-    std::fclose(f);
-  }
-  if (data->empty()) return;
+  static bool loaded = false;
+  if (loaded) return;
+  loaded = true;
   std::vector<ImFont*> targets;
   for (ImFont* font : {g_fonts.regular, g_fonts.semilight, g_fonts.semibold, g_fonts.bold, g_fonts.italic})
     if (font && std::ranges::find(targets, font) == targets.end()) targets.push_back(font);
-  for (ImFont* font : targets) {
-    ImFontConfig merge;
-    merge.MergeMode = true;
-    merge.DstFont = font;
-    merge.FontData = data->data();
-    merge.FontDataSize = int(data->size());
-    merge.FontDataOwnedByAtlas = false;
-    merge.FontLoaderFlags = ImGuiFreeTypeLoaderFlags_LightHinting;
-    ImGui::GetIO().Fonts->AddFont(&merge);
+  std::vector<system_fonts::Face> merged;
+  for (const auto* query : script_font_queries(language)) {
+    auto face = system_fonts::find(*query);
+    if (!face || std::ranges::find(merged, *face) != merged.end()) continue;
+    merged.push_back(*face);
+    for (ImFont* font : targets) merge_font(font, face->file, face->index, ImGuiFreeTypeLoaderFlags_LightHinting);
   }
-  files.push_back(std::move(data));
 }
+
 
 const char* icon(char32_t code_point) {
   static std::unordered_map<char32_t, std::string> cache;

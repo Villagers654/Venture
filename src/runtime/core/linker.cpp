@@ -269,10 +269,14 @@ Library* canonical_caller(State& s, Library* caller) {
 struct Definition { Library* library{}; const elf::Sym* symbol{}; GuestAddr address{}; };
 // hide_absent: dlsym and weak imports do not see A32 exports without an ABI
 // adapter (HleLibrary::callable_symbol); strong imports bind their trap.
-Definition lookup_one(Library* lib, std::string_view name, std::string_view version, bool hide_absent = true) {
+// registered false: the import's version belongs to an app library, which no
+// registered system API defines (resolve).
+Definition lookup_one(Library* lib, std::string_view name, std::string_view version, bool hide_absent = true,
+                      bool registered = true) {
   if (auto* hle = dynamic_cast<HleLibrary*>(lib)) {
     // Registered APIs override the backing, including its own relocations.
-    if (auto address = hide_absent ? hle->callable_symbol(name) : hle->hle_symbol(name)) return {lib, nullptr, address};
+    if (registered)
+      if (auto address = hide_absent ? hle->callable_symbol(name) : hle->hle_symbol(name)) return {lib, nullptr, address};
     if (!hle->mapped_image()) return {};
   }
   if (auto* image = lib->mapped_image()) {
@@ -287,8 +291,17 @@ Definition lookup_one(Library* lib, std::string_view name, std::string_view vers
 Definition resolve(State& s, elf::Image* requester, const std::vector<Library*>& local,
                    std::string_view name, std::string_view version, bool skip_self = false,
                    bool relocation = false, bool hide_absent = true) {
+  // Bionic binds a versioned import only to a library that defines that
+  // version (find_verdef_version_index). A version that came from an app
+  // library is never one of Venture's registered system APIs, whatever its
+  // name: GeckoView's libxul imports malloc@libmozglue.so and
+  // free@libmozglue.so, and freeing mozglue's blocks with libc's free fails.
+  bool registered = true;
+  if (requester && !version.empty())
+    if (const auto provider = requester->version_provider(version); !provider.empty())
+      if (auto it = s.names.find(std::string(provider)); it != s.names.end() && !it->second->is_hle()) registered = false;
   if (requester && requester->symbolic && !skip_self) {
-    auto d = lookup_one(requester->owner, name, version, hide_absent); if (d.library) return d;
+    auto d = lookup_one(requester->owner, name, version, hide_absent, registered); if (d.library) return d;
   }
   // The host executable substitutes for app_process: its startup HLE APIs
   // must not disappear merely because their slots have no guest ELF flags.
@@ -297,26 +310,26 @@ Definition resolve(State& s, elf::Image* requester, const std::vector<Library*>&
     if (it == s.names.end()) continue;
     auto* lib = it->second.get();
     if (skip_self && requester && lib == requester->owner) continue;
-    auto d = lookup_one(lib, name, version, hide_absent); if (d.library) return d;
+    auto d = lookup_one(lib, name, version, hide_absent, registered); if (d.library) return d;
   }
   for (auto* lib : s.globals) {
     if (skip_self && requester && lib == requester->owner) continue;
     // Registered APIs belong to the stable HLE slot, not to an optional APK
     // backing image. Guest backing exports still obey bionic's ELF global group.
-    if (auto* hle = dynamic_cast<HleLibrary*>(lib))
+    if (auto* hle = dynamic_cast<HleLibrary*>(lib); hle && registered)
       if (auto address = hide_absent ? hle->callable_symbol(name) : hle->hle_symbol(name)) return {lib, nullptr, address};
     if (auto* image = lib->mapped_image(); relocation && (!image || !(image->dynamic(0x6ffffffb) & 2))) continue;
-    auto d = lookup_one(lib, name, version, hide_absent); if (d.library) return d;
+    auto d = lookup_one(lib, name, version, hide_absent, registered); if (d.library) return d;
   }
   for (auto* lib : local) {
     if (skip_self && requester && lib == requester->owner) continue;
-    auto d = lookup_one(lib, name, version, hide_absent); if (d.library) return d;
+    auto d = lookup_one(lib, name, version, hide_absent, registered); if (d.library) return d;
   }
   // app_process also links the system C++ runtime, so its ABI exports
   // (__cxa_guard_*, operator new) reach a library that lists no C++ library
   // (Espire 2's libEOSSDK.so). Last, so no definition found above changes.
   if (auto it = s.names.find("libstdc++.so"); it != s.names.end() && !(skip_self && requester && it->second.get() == requester->owner))
-    if (auto d = lookup_one(it->second.get(), name, version, hide_absent); d.library) return d;
+    if (auto d = lookup_one(it->second.get(), name, version, hide_absent, registered); d.library) return d;
   return {};
 }
 GuestAddr ifunc(State& s, elf::Image& image, GuestAddr resolver) {

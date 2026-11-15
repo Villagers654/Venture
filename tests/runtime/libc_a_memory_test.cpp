@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <string_view>
 
 #include "core/address_space.h"
 #include "core/guest_heap.h"
@@ -45,4 +46,31 @@ TEST_CASE("libc A free, realloc and malloc_usable_size skip memory no heap alloc
   REQUIRE(grown);
   CHECK(f.invoke("malloc_usable_size", {grown}) >= 4096);
   f.invoke("free", {grown});
+}
+// Aim XR (Unity 2019, OPS.Obfuscator): the IL2CPP metadata loader frees the
+// std::string holding the metadata file's name, allocates and frees again,
+// then opens the freed name. Bionic's allocators leave a freed small block's
+// bytes alone until it is reused; mimalloc wrote its free-list link over the
+// name's first word, so the loader opened a wrong path and no assembly loaded.
+TEST_CASE("libc A free leaves a small block's bytes intact through later allocations and frees") {
+  test::LibcFixture f;
+  constexpr std::string_view name = "mono/2.0/DefaultWsdlHelpGenerator.aspx";
+  const auto block = f.invoke("malloc", {name.size() + 1});
+  REQUIRE(block);
+  std::memcpy(g2h<char>(block), name.data(), name.size() + 1);
+  f.invoke("free", {block});
+  const auto big = f.invoke("malloc", {20000});
+  REQUIRE(big);
+  f.invoke("free", {big});
+  const auto next = f.invoke("malloc", {name.size() + 1});
+  REQUIRE(next);
+  CHECK(next != block);
+  CHECK(std::string_view(g2h<char>(block)) == name);
+  f.invoke("free", {next});
+  // Later frees release it; the heap keeps serving and freeing blocks.
+  for (int i = 0; i < 64; ++i) {
+    const auto p = f.invoke("malloc", {48});
+    REQUIRE(p);
+    f.invoke("free", {p});
+  }
 }

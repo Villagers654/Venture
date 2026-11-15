@@ -737,6 +737,30 @@ public final class FrameworkTest {
                .getMethod("loadGeneric", android.content.Context.class, android.content.Context.class,
                           int.class, int.class, int.class, int.class, int.class).getReturnType() == long.class,
         "Avatar SDK 1 loaders find Horizon's EntryPoint");
+    var flagsDriver = android.content.Context.CONTEXT_INCLUDE_CODE | android.content.Context.CONTEXT_IGNORE_SECURITY;
+    var driverContext = context.createPackageContext("com.oculus.systemdriver", flagsDriver);
+    var driverInfo = driverContext.getApplicationInfo();
+    var driverClass = Class.forName("com.oculus.systemdriver.DriverLoader", true, driverContext.getClassLoader());
+    var loadXrRuntime = driverClass.getMethod("loadXrRuntime");
+    var getProcAddr = driverClass.getMethod("getProcAddr", String.class);
+    check(driverContext.getPackageName().equals("com.oculus.systemdriver")
+        && (driverInfo.flags & android.content.pm.ApplicationInfo.FLAG_SYSTEM) != 0
+        && driverInfo.sourceDir.equals("/system/priv-app/VrDriver/VrDriver.apk")
+        && driverInfo.nativeLibraryDir.equals("/system/priv-app/VrDriver/lib/arm64")
+        && driverContext.getPackageCodePath().equals(driverInfo.sourceDir)
+        && java.lang.reflect.Modifier.isStatic(loadXrRuntime.getModifiers()) && loadXrRuntime.getReturnType() == void.class
+        && java.lang.reflect.Modifier.isStatic(getProcAddr.getModifiers()) && getProcAddr.getReturnType() == long.class
+        && (long) getProcAddr.invoke(null, (Object) null) == 0,
+        "Meta's OpenXR loader finds the system driver's DriverLoader: ()V loadXrRuntime, (String)J getProcAddr");
+    var driverPm = context.getPackageManager();
+    var driverPackage = driverPm.getPackageInfo("com.oculus.systemdriver", 0);
+    check(driverPackage.packageName.equals("com.oculus.systemdriver")
+        && driverPackage.applicationInfo.nativeLibraryDir.equals(driverInfo.nativeLibraryDir)
+        && driverPm.getApplicationInfo("com.oculus.systemdriver", 0).sourceDir.equals(driverInfo.sourceDir)
+        && driverPm.getApplicationInfo("com.oculus.systemactivities", 0).nativeLibraryDir.equals("/system/lib64")
+        && driverPm.getPackageInfo("com.oculus.systemactivities", 0).applicationInfo.flags
+               == android.content.pm.ApplicationInfo.FLAG_SYSTEM,
+        "PackageManager knows the Quest system driver and system activities packages");
 
     var hevc = Arrays.stream(new android.media.MediaCodecList(android.media.MediaCodecList.ALL_CODECS).getCodecInfos())
         .filter(info -> Arrays.asList(info.getSupportedTypes()).contains("video/hevc")).findFirst().orElseThrow();
@@ -1133,6 +1157,13 @@ public final class FrameworkTest {
     // Firebase checks androidx UserManagerCompat.isUserUnlocked through the API 23 class lookup.
     var users = new android.content.Context().getSystemService(android.os.UserManager.class);
     check(users != null && users.isUserUnlocked() && !users.isManagedProfile(), "the owner user is unlocked");
+    check(android.os.Process.myUserHandle().equals(android.os.UserHandle.SYSTEM) && users.getSerialNumberForUser(android.os.Process.myUserHandle()) == 0
+        && users.getUserForSerialNumber(0).getIdentifier() == 0, "the app runs as the owner user, serial number 0");
+    // GeckoView names its child process services by a context and a class name.
+    var serviceContext = new android.content.Context();
+    var childService = new android.content.Intent().setClassName(serviceContext, "org.example.ChildService").getComponent();
+    check(childService.getClassName().equals("org.example.ChildService") && childService.getPackageName().equals(serviceContext.getPackageName()),
+        "Intent.setClassName(Context, String) names a class in the context's package");
     check(new android.content.Context().getSystemService(android.os.PowerManager.class) != null
         && new android.content.Context().getSystemService(String.class) == null, "class service lookup follows service names");
     // Unity's player registers a camera availability callback at start (Ballrs): a device without cameras.
@@ -1255,6 +1286,210 @@ public final class FrameworkTest {
         android.graphics.Bitmap.Config.ARGB_8888)); } catch (IllegalStateException e) { immutable = true; }
     check(immutable, "Canvas rejects an immutable bitmap");
   }
+  private static int inked(android.graphics.Bitmap bitmap, int x, int y) {
+    return bitmap.getPixel(x, y) >>> 24;
+  }
+  // AndroidX/Material code reached from an AppCompat activity's constructor links
+  // ShapeDrawable and the shapes package (Lethal Ape Redux died on a missing Shape).
+  private static void shapeDrawables() throws Exception {
+    final int opaque = android.graphics.PixelFormat.OPAQUE, translucent = android.graphics.PixelFormat.TRANSLUCENT;
+    int[] resized = {0};
+    var counted = new android.graphics.drawable.shapes.Shape() {
+      @Override public void draw(android.graphics.Canvas canvas, android.graphics.Paint paint) {}
+      @Override protected void onResize(float width, float height) { resized[0]++; }
+    };
+    counted.resize(-3, 5);
+    counted.resize(0, 5);
+    check(counted.getWidth() == 0 && counted.getHeight() == 5 && resized[0] == 1 && counted.hasAlpha(),
+        "Shape.resize clamps negative sizes and calls onResize only on a change");
+
+    var target = android.graphics.Bitmap.createBitmap(32, 32, android.graphics.Bitmap.Config.ARGB_8888);
+    var canvas = new android.graphics.Canvas(target);
+    var rect = new android.graphics.drawable.ShapeDrawable(new android.graphics.drawable.shapes.RectShape());
+    check(rect.getPaint().isAntiAlias() && rect.getPaint().getColor() == 0xff000000 && rect.getIntrinsicWidth() == 0
+        && rect.getIntrinsicHeight() == 0 && rect.getAlpha() == 255 && rect.getOpacity() == translucent,
+        "ShapeDrawable starts with an anti-aliased black paint, no intrinsic size and a translucent shape");
+    rect.getPaint().setColor(0xffff0000);
+    rect.setBounds(4, 4, 12, 12);
+    check(rect.getShape().getWidth() == 8 && rect.getShape().getHeight() == 8, "bounds resize the shape");
+    rect.draw(canvas);
+    check(target.getPixel(8, 8) == 0xffff0000 && inked(target, 2, 2) == 0 && inked(target, 14, 14) == 0,
+        "ShapeDrawable draws its shape translated to its bounds");
+    rect.setAlpha(0);
+    rect.getPaint().setColor(0xff00ff00);
+    rect.draw(canvas);
+    check(target.getPixel(8, 8) == 0xffff0000 && rect.getPaint().getAlpha() == 255,
+        "drawable alpha modulates the paint for the draw only");
+    rect.setAlpha(255);
+
+    var padding = new android.graphics.Rect(9, 9, 9, 9);
+    check(!rect.getPadding(padding) && padding.equals(new android.graphics.Rect()), "no padding reports zero");
+    rect.setPadding(1, 2, 3, 4);
+    check(rect.getPadding(padding) && padding.equals(new android.graphics.Rect(1, 2, 3, 4)), "ShapeDrawable padding");
+    rect.setPadding(0, 0, 0, 0);
+    check(!rect.getPadding(padding), "zero padding clears it");
+    rect.setIntrinsicWidth(40);
+    rect.setIntrinsicHeight(20);
+    check(rect.getIntrinsicWidth() == 40 && rect.getMinimumHeight() == 20, "intrinsic size");
+
+    var fill = new android.graphics.drawable.ShapeDrawable();
+    check(fill.getOpacity() == opaque, "a shapeless ShapeDrawable with an opaque paint is opaque");
+    fill.getPaint().setAlpha(0);
+    check(fill.getOpacity() == android.graphics.PixelFormat.TRANSPARENT, "and transparent with a clear paint");
+    fill.getPaint().setColor(0xff0000ff);
+    fill.setBounds(16, 0, 32, 4);
+    fill.draw(canvas);
+    check(target.getPixel(24, 2) == 0xff0000ff, "a shapeless ShapeDrawable fills its bounds");
+
+    canvas.drawColor(0, android.graphics.PorterDuff.Mode.CLEAR);
+    var oval = new android.graphics.drawable.ShapeDrawable(new android.graphics.drawable.shapes.OvalShape());
+    oval.setBounds(0, 0, 32, 32);
+    oval.draw(canvas);
+    check(inked(target, 16, 16) == 255 && inked(target, 1, 1) == 0 && inked(target, 30, 30) == 0,
+        "OvalShape fills the inscribed ellipse");
+    var outline = new android.graphics.Outline();
+    oval.getOutline(outline);
+    var outlineRect = new android.graphics.Rect();
+    check(outline.getRadius() == 16 && outline.getRect(outlineRect)
+        && outlineRect.equals(new android.graphics.Rect(0, 0, 32, 32)) && outline.getAlpha() == 1,
+        "a circle's outline is a round rect of half its size");
+    oval.setBounds(0, 0, 32, 16);
+    oval.getOutline(outline);
+    check(!outline.canClip() && !outline.getRect(outlineRect) && !outline.isEmpty(), "an ellipse outline is a convex path");
+
+    canvas.drawColor(0, android.graphics.PorterDuff.Mode.CLEAR);
+    var ring = new android.graphics.drawable.ShapeDrawable(new android.graphics.drawable.shapes.RoundRectShape(
+        null, new android.graphics.RectF(6, 6, 6, 6), null));
+    ring.setBounds(0, 0, 32, 32);
+    ring.draw(canvas);
+    check(inked(target, 3, 16) == 255 && inked(target, 16, 3) == 255 && inked(target, 16, 16) == 0,
+        "RoundRectShape cuts its inset rectangle out as a hole");
+    var untouched = new android.graphics.Outline();
+    ring.getOutline(untouched);
+    check(untouched.isEmpty(), "a shape with a hole provides no outline");
+    float[] eight = {8, 8, 8, 8, 8, 8, 8, 8};
+    var rounded = new android.graphics.drawable.ShapeDrawable(
+        new android.graphics.drawable.shapes.RoundRectShape(eight, null, null));
+    rounded.setBounds(0, 0, 32, 32);
+    rounded.setAlpha(51);
+    rounded.getOutline(outline);
+    check(outline.getRadius() == 8 && outline.getRect(outlineRect) && Math.abs(outline.getAlpha() - 0.2f) < 1e-6,
+        "equal corner radii make a round rect outline carrying the drawable alpha");
+    canvas.drawColor(0, android.graphics.PorterDuff.Mode.CLEAR);
+    rounded.setAlpha(255);
+    rounded.draw(canvas);
+    check(inked(target, 0, 0) == 0 && inked(target, 16, 0) == 255 && inked(target, 16, 16) == 255,
+        "RoundRectShape rounds its corners");
+    var mixed = new android.graphics.drawable.ShapeDrawable(new android.graphics.drawable.shapes.RoundRectShape(
+        new float[] {0, 0, 8, 8, 0, 0, 8, 8}, null, null));
+    mixed.setBounds(0, 0, 32, 32);
+    mixed.getOutline(outline);
+    check(!outline.canClip(), "mixed corner radii make a convex path outline");
+    boolean shortRadii = false;
+    try {
+      new android.graphics.drawable.shapes.RoundRectShape(new float[4], null, null);
+    } catch (ArrayIndexOutOfBoundsException e) {
+      shortRadii = true;
+    }
+    check(shortRadii, "RoundRectShape needs eight radii");
+
+    canvas.drawColor(0, android.graphics.PorterDuff.Mode.CLEAR);
+    var arcShape = new android.graphics.drawable.shapes.ArcShape(0, 90);
+    var arc = new android.graphics.drawable.ShapeDrawable(arcShape);
+    arc.setBounds(0, 0, 32, 32);
+    arc.draw(canvas);
+    check(inked(target, 24, 24) == 255 && inked(target, 8, 8) == 0 && inked(target, 24, 8) == 0
+        && inked(target, 8, 24) == 0, "ArcShape sweeps clockwise from 3 o'clock");
+    var arcOutline = new android.graphics.Outline();
+    arc.getOutline(arcOutline);
+    check(arcShape.getStartAngle() == 0 && arcShape.getSweepAngle() == 90 && arcOutline.isEmpty(),
+        "ArcShape keeps its angles and provides no outline");
+
+    canvas.drawColor(0, android.graphics.PorterDuff.Mode.CLEAR);
+    var triangle = new android.graphics.Path();
+    triangle.moveTo(0, 0);
+    triangle.lineTo(1, 0);
+    triangle.lineTo(0, 1);
+    triangle.close();
+    var pathShape = new android.graphics.drawable.shapes.PathShape(triangle, 1, 1);
+    var pathDrawable = new android.graphics.drawable.ShapeDrawable(pathShape);
+    pathDrawable.setBounds(0, 0, 32, 32);
+    pathDrawable.draw(canvas);
+    check(inked(target, 4, 4) == 255 && inked(target, 28, 28) == 0 && canvas.getSaveCount() == 1,
+        "PathShape scales its standard-size path to the bounds");
+
+    var a = new android.graphics.drawable.shapes.RectShape();
+    a.resize(10, 20);
+    var copy = a.clone();
+    check(copy != a && copy.equals(a) && copy.hashCode() == a.hashCode(), "a shape clone equals the original");
+    copy.resize(5, 5);
+    check(!copy.equals(a) && a.getWidth() == 10, "a resized clone leaves the original");
+    check(new android.graphics.drawable.shapes.ArcShape(0, 90).equals(new android.graphics.drawable.shapes.ArcShape(0, 90))
+        && !new android.graphics.drawable.shapes.ArcShape(0, 90).equals(new android.graphics.drawable.shapes.ArcShape(0, 45))
+        && !new android.graphics.drawable.shapes.RectShape().equals(new android.graphics.drawable.shapes.OvalShape()),
+        "shape equality compares class and geometry");
+    var ringClone = (android.graphics.drawable.shapes.RoundRectShape) ring.getShape().clone();
+    check(ringClone.equals(ring.getShape()), "a RoundRectShape clone equals the original");
+
+    int[] factorySize = new int[2];
+    var shader = new android.graphics.Shader();
+    var shaded = new android.graphics.drawable.ShapeDrawable(new android.graphics.drawable.shapes.RectShape());
+    shaded.setShaderFactory(new android.graphics.drawable.ShapeDrawable.ShaderFactory() {
+      @Override public android.graphics.Shader resize(int width, int height) {
+        factorySize[0] = width;
+        factorySize[1] = height;
+        return shader;
+      }
+    });
+    shaded.setBounds(0, 0, 7, 9);
+    check(factorySize[0] == 7 && factorySize[1] == 9 && shaded.getPaint().getShader() == shader,
+        "a ShaderFactory supplies the paint shader on resize");
+
+    var tinted = new android.graphics.drawable.ShapeDrawable(new android.graphics.drawable.shapes.OvalShape());
+    tinted.setTint(0xff00ff00);
+    check(!tinted.isStateful() && tinted.getColorFilter() == null, "a plain tint is not stateful and is not the color filter");
+    tinted.setTintList(new android.content.res.ColorStateList(
+        new int[][] {{android.R.attr.state_pressed}, {}}, new int[] {0xffff0000, 0xff00ff00}));
+    check(tinted.isStateful() && tinted.setState(new int[] {android.R.attr.state_pressed})
+        && !tinted.setState(new int[] {android.R.attr.state_pressed}), "a state list tint makes it stateful");
+    var filter = new android.graphics.PorterDuffColorFilter(0xff123456, android.graphics.PorterDuff.Mode.SRC_IN);
+    tinted.setColorFilter(filter);
+    check(tinted.getColorFilter() == filter && tinted.getPaint().getColorFilter() == filter, "the color filter is the paint's");
+
+    rect.getPaint().setColor(0xff112233);
+    var state = rect.getConstantState();
+    var fromState = (android.graphics.drawable.ShapeDrawable) state.newDrawable();
+    check(fromState != rect && fromState.getPaint() != rect.getPaint() && fromState.getPaint().getColor() == 0xff112233
+        && fromState.getShape() != rect.getShape() && fromState.getShape().equals(rect.getShape())
+        && fromState.getIntrinsicWidth() == 40, "a ShapeDrawable's constant state makes an equal copy");
+    check(rect.mutate() == rect && rect.getConstantState() != state, "mutate gives the drawable its own state");
+
+    int[] invalidated = {0};
+    var callback = new android.graphics.drawable.Drawable.Callback() {
+      public void invalidateDrawable(android.graphics.drawable.Drawable d) { invalidated[0]++; }
+      public void scheduleDrawable(android.graphics.drawable.Drawable d, Runnable r, long when) {}
+      public void unscheduleDrawable(android.graphics.drawable.Drawable d, Runnable r) {}
+    };
+    var color = new android.graphics.drawable.ColorDrawable(0x80ff0000);
+    color.setCallback(callback);
+    color.setAlpha(128);
+    check(color.getCallback() == callback && color.getColor() == 0x40ff0000 && color.getAlpha() == 0x40
+        && color.getOpacity() == translucent && invalidated[0] == 1, "ColorDrawable alpha modulates its color");
+    check(color.setVisible(false, false) && !color.isVisible() && !color.setVisible(false, false) && invalidated[0] == 2,
+        "visibility changes invalidate once");
+    check(!color.setLevel(5) && color.getLevel() == 5 && !color.isStateful() && !color.setState(new int[] {1})
+        && color.getState()[0] == 1, "level and state are kept for a stateless drawable");
+    color.setColor(0xff00ff00);
+    color.setBounds(0, 0, 4, 4);
+    canvas.drawColor(0, android.graphics.PorterDuff.Mode.CLEAR);
+    color.draw(canvas);
+    check(target.getPixel(2, 2) == 0xff00ff00 && inked(target, 6, 6) == 0 && color.getOpacity() == opaque,
+        "ColorDrawable fills its bounds");
+    check(android.graphics.drawable.Drawable.resolveOpacity(opaque, translucent) == translucent
+        && android.graphics.drawable.Drawable.resolveOpacity(opaque, android.graphics.PixelFormat.TRANSPARENT)
+            == android.graphics.PixelFormat.TRANSPARENT,
+        "Drawable.resolveOpacity");
+  }
   private static void textToSpeech() throws Exception {
     // Unreal's GameActivity implements OnInitListener; with no engine every request fails (Espire 2).
     int[] heard = {1};
@@ -1320,6 +1555,343 @@ public final class FrameworkTest {
     report.invoke(logger, event, true);
   }
 
+  // Firebase's GoogleApi reads Context.getAttributionSource on API 31+ (Pickleball One).
+  private static void attributionSource() {
+    var app = new android.content.Context() {
+      @Override public String getPackageName() { return "test.attribution"; }
+    };
+    var source = app.getAttributionSource();
+    check(source.getUid() == android.os.Process.myUid() && "test.attribution".equals(source.getPackageName())
+        && source.getAttributionTag() == null && source.getNext() == null && source.getRenouncedPermissions().isEmpty()
+        && app.getAttributionTag() == null && app.getParams() == null && source == app.getAttributionSource(),
+        "a context's attribution source is the app uid and package with no tag");
+    var built = new android.content.AttributionSource.Builder(android.os.Process.myUid())
+        .setPackageName("test.attribution").build();
+    check(built.equals(source) && built.hashCode() == source.hashCode() && source.checkCallingUid()
+        && !source.isTrusted(app), "built and context sources compare by value");
+    var builder = new android.content.AttributionSource.Builder(1).setPackageName("p");
+    builder.build();
+    boolean reused = false;
+    try { builder.setAttributionTag("t"); } catch (IllegalStateException e) { reused = true; }
+    check(reused, "an AttributionSource.Builder is single-use");
+    var tagged = app.createAttributionContext("ads");
+    var taggedSource = tagged.getAttributionSource();
+    check("ads".equals(tagged.getAttributionTag()) && "ads".equals(taggedSource.getAttributionTag())
+        && "test.attribution".equals(taggedSource.getPackageName()) && !taggedSource.equals(source)
+        && "ads".equals(tagged.getParams().getAttributionTag()), "an attribution context carries its tag");
+    var retagged = tagged.createAttributionContext(null);
+    check(retagged.getAttributionTag() == null && retagged.getAttributionSource().equals(source),
+        "a new attribution replaces the old one");
+    var chained = app.createContext(new android.content.ContextParams.Builder().setAttributionTag("c")
+        .setNextAttributionSource(built).build());
+    check(built.equals(chained.getAttributionSource().getNext()), "context params chain the next source");
+    var wrapper = new android.content.ContextWrapper(tagged);
+    check("ads".equals(wrapper.getAttributionTag()) && wrapper.getAttributionSource().equals(taggedSource),
+        "a ContextWrapper reports its base context's attribution");
+    var parcel = Parcel.obtain();
+    chained.getAttributionSource().writeToParcel(parcel, 0);
+    parcel.setDataPosition(0);
+    check(android.content.AttributionSource.CREATOR.createFromParcel(parcel).equals(chained.getAttributionSource()),
+        "an attribution source survives a parcel");
+  }
+
+  // Rust android-activity binds KeyCharacterMap at startup (Starworn); maps follow Virtual.kcm.
+  private static void keyCharacterMap() throws Exception {
+    var map = android.view.KeyCharacterMap.load(android.view.KeyCharacterMap.VIRTUAL_KEYBOARD);
+    check(map == android.view.KeyCharacterMap.load(7) && map.getKeyboardType() == android.view.KeyCharacterMap.FULL
+        && map.getModifierBehavior() == android.view.KeyCharacterMap.MODIFIER_BEHAVIOR_CHORDED,
+        "every device loads the full virtual keyboard map");
+    int a = android.view.KeyEvent.KEYCODE_A, shift = android.view.KeyEvent.META_SHIFT_ON;
+    int caps = android.view.KeyEvent.META_CAPS_LOCK_ON, numLock = android.view.KeyEvent.META_NUM_LOCK_ON;
+    check(map.get(a, 0) == 'a' && map.get(a, shift) == 'A' && map.get(a, android.view.KeyEvent.META_SHIFT_LEFT_ON) == 'A'
+        && map.get(a, caps) == 'A' && map.get(a, shift | caps) == 'a'
+        && map.get(a, android.view.KeyEvent.META_CTRL_ON) == 0 && map.get(a, android.view.KeyEvent.META_ALT_LEFT_ON) == 0,
+        "letters follow shift and caps lock; ctrl and alt type nothing");
+    check(map.get(8, 0) == '1' && map.get(8, shift) == '!' && map.get(7, shift) == ')' && map.get(16, shift) == '('
+        && map.get(android.view.KeyEvent.KEYCODE_SLASH, shift) == '?'
+        && map.get(android.view.KeyEvent.KEYCODE_APOSTROPHE, shift) == '"'
+        && map.get(android.view.KeyEvent.KEYCODE_SPACE, 0) == ' ' && map.get(android.view.KeyEvent.KEYCODE_ENTER, 0) == '\n'
+        && map.get(android.view.KeyEvent.KEYCODE_DEL, 0) == 0 && map.get(android.view.KeyEvent.KEYCODE_BACK, 0) == 0
+        && map.get(151, 0) == 0 && map.get(151, numLock) == '7'
+        && map.get(android.view.KeyEvent.KEYCODE_NUMPAD_ADD, 0) == '+' && map.get(-5, 0) == 0 && map.get(100000, 0) == 0,
+        "US QWERTY digits, symbols and keypad");
+    check(map.getDisplayLabel(a) == 'A' && map.getDisplayLabel(android.view.KeyEvent.KEYCODE_BACK) == 0
+        && map.getNumber(15) == '8' && map.getNumber(android.view.KeyEvent.KEYCODE_SEMICOLON) == ';'
+        && map.getNumber(android.view.KeyEvent.KEYCODE_EQUALS) == '+' && map.getNumber(a) == 0,
+        "labels and dial-pad numbers");
+    check(map.isPrintingKey(a) && map.isPrintingKey(android.view.KeyEvent.KEYCODE_COMMA)
+        && !map.isPrintingKey(android.view.KeyEvent.KEYCODE_SPACE) && !map.isPrintingKey(android.view.KeyEvent.KEYCODE_ENTER)
+        && !map.isPrintingKey(android.view.KeyEvent.KEYCODE_BACK), "printing keys");
+    check(map.getMatch(15, new char[] {'*', '8'}) == '8' && map.getMatch(15, new char[] {'*'}) == '*'
+        && map.getMatch(15, new char[] {'*', '8'}, shift) == '*' && map.getMatch(a, new char[] {'x'}) == 0,
+        "getMatch prefers the most general or exactly held behavior");
+    var events = map.getEvents("aB".toCharArray());
+    check(events.length == 6 && events[0].getKeyCode() == a && events[0].getAction() == 0 && events[1].getAction() == 1
+        && events[2].getKeyCode() == android.view.KeyEvent.KEYCODE_SHIFT_LEFT
+        && events[3].getKeyCode() == a + 1 && (events[3].getMetaState() & shift) != 0
+        && events[5].getKeyCode() == android.view.KeyEvent.KEYCODE_SHIFT_LEFT && events[5].getMetaState() == 0
+        && events[3].getDeviceId() == -1 && events[3].getSource() == android.view.InputDevice.SOURCE_KEYBOARD
+        && map.getEvents(new char[] {(char) 0xE9}) == null, "getEvents types characters with their meta keys");
+    check(android.view.KeyCharacterMap.getDeadChar('`', 'e') == 0xE8 && android.view.KeyCharacterMap.getDeadChar(0xA8, 'u') == 0xFC
+        && android.view.KeyCharacterMap.getDeadChar('`', ' ') == '`' && android.view.KeyCharacterMap.getDeadChar('`', 'q') == 0
+        && android.view.KeyCharacterMap.getDeadChar('x', 'e') == 0, "dead keys compose through NFC");
+    check(!android.view.KeyCharacterMap.deviceHasKey(android.view.KeyEvent.KEYCODE_BACK)
+        && android.view.KeyCharacterMap.deviceHasKeys(new int[] {4, 29}).length == 2, "no device has physical keys");
+    var data = new android.view.KeyCharacterMap.KeyData();
+    check(map.getKeyData(9, data) && data.displayLabel == '2' && data.number == '2' && data.meta[0] == '2'
+        && data.meta[1] == '@' && data.meta[2] == 0 && !map.getKeyData(4, data), "deprecated KeyData");
+    var key = new android.view.KeyEvent(0, 0, 0, a, 0, shift);
+    check(key.getKeyCharacterMap() == map && key.getUnicodeChar() == 'A' && key.getUnicodeChar(0) == 'a'
+        && key.getDisplayLabel() == 'A' && key.isPrintingKey() && key.getMatch(new char[] {'a'}) == 'a',
+        "KeyEvent characters come from its device's map");
+    var cls = android.view.KeyCharacterMap.class;
+    check(cls.getMethod("get", int.class, int.class).getReturnType() == int.class
+        && cls.getMethod("getDeadChar", int.class, int.class).getReturnType() == int.class
+        && cls.getMethod("getKeyboardType").getReturnType() == int.class
+        && android.view.InputDevice.class.getMethod("getKeyCharacterMap").getReturnType() == cls,
+        "the JNI signatures android-activity binds exist");
+    // Every Android device, a Quest included, has EventHub's virtual keyboard and lists it.
+    var ids = android.view.InputDevice.getDeviceIds();
+    var keyboard = android.view.InputDevice.getDevice(android.view.KeyCharacterMap.VIRTUAL_KEYBOARD);
+    check(ids.length == 1 && ids[0] == -1 && keyboard != null && keyboard.getId() == -1
+        && android.view.InputDevice.getDevice(0) == null && android.view.InputDevice.getDevice(1) == null
+        && android.hardware.input.InputManager.getInstance().getInputDevice(-1) == keyboard
+        && java.util.Arrays.equals(android.hardware.input.InputManager.getInstance().getInputDeviceIds(), ids),
+        "the virtual keyboard is the one listed input device");
+    check("Virtual".equals(keyboard.getName()) && keyboard.isVirtual() && !keyboard.isExternal() && keyboard.isEnabled()
+        && keyboard.getSources() == android.view.InputDevice.SOURCE_KEYBOARD
+        && keyboard.supportsSource(android.view.InputDevice.SOURCE_KEYBOARD)
+        && !keyboard.supportsSource(android.view.InputDevice.SOURCE_GAMEPAD)
+        && !keyboard.supportsSource(android.view.InputDevice.SOURCE_JOYSTICK)
+        && keyboard.getKeyboardType() == android.view.InputDevice.KEYBOARD_TYPE_ALPHABETIC
+        && keyboard.getKeyCharacterMap() == map && keyboard.getVendorId() == 0 && keyboard.getProductId() == 0
+        && keyboard.getControllerNumber() == 0
+        && "a718a782d34bc767f4689c232d64d527998ea7fd".equals(keyboard.getDescriptor())
+        && !keyboard.hasKeys(4, 29)[0] && !keyboard.hasMicrophone()
+        && !keyboard.getVibrator().hasVibrator() && keyboard.getVibratorManager().getVibratorIds().length == 0
+        && !keyboard.getVibratorManager().getDefaultVibrator().hasVibrator(),
+        "the virtual keyboard matches Android's: alphabetic keyboard source, no vendor, no controller, no vibrator");
+    var descriptor = new StringBuilder();
+    for (byte b : java.security.MessageDigest.getInstance("SHA-1").digest(
+        ":0000:0000:uniqueId:<virtual>name:Virtual".getBytes(java.nio.charset.StandardCharsets.UTF_8)))
+      descriptor.append(String.format("%02x", b));
+    check(descriptor.toString().equals(keyboard.getDescriptor()), "the descriptor is EventHub's for the virtual keyboard");
+  }
+
+  // androidx.core's ActivityCompat passes a SharedElementCallback subclass to
+  // Activity.setEnterSharedElementCallback; verifying it loads the framework
+  // class (Espire 2's main thread died on the missing type after onCreate).
+  private static void sharedElementTransitions() throws Exception {
+    var app = new android.content.Context() {
+      @Override public String getPackageName() { return "test.transitions"; }
+    };
+    check(java.lang.reflect.Modifier.isAbstract(android.app.SharedElementCallback.class.getModifiers())
+        && android.app.SharedElementCallback.OnSharedElementsReadyListener.class.isInterface(),
+        "SharedElementCallback is abstract with its ready listener interface");
+    var callback = new android.app.SharedElementCallback() {};
+    var names = new ArrayList<String>(List.of("hero"));
+    var views = new ArrayList<android.view.View>(List.of(new android.view.View(app)));
+    var mapped = new HashMap<String, android.view.View>(Map.of("hero", views.get(0)));
+    callback.onSharedElementStart(names, views, null);
+    callback.onSharedElementEnd(names, views, null);
+    callback.onRejectSharedElements(views);
+    callback.onMapSharedElements(names, mapped);
+    var ready = new int[1];
+    callback.onSharedElementsArrived(names, views, () -> ready[0]++);
+    check(names.equals(List.of("hero")) && views.size() == 1 && mapped.size() == 1 && ready[0] == 1,
+        "default shared element callbacks change nothing and report the elements ready at once");
+    var bitmap = android.graphics.Bitmap.createBitmap(4, 2, android.graphics.Bitmap.Config.ARGB_8888);
+    bitmap.setPixel(1, 1, 0xff102030);
+    var image = new android.widget.ImageView(app);
+    image.setImageBitmap(bitmap);
+    var snapshot = callback.onCaptureSharedElementSnapshot(image, new android.graphics.Matrix(), new android.graphics.RectF());
+    check(snapshot instanceof Bundle bundle && bundle.getParcelable("sharedElement:snapshot:bitmap") == bitmap
+        && "FIT_CENTER".equals(bundle.getString("sharedElement:snapshot:imageScaleType"))
+        && bundle.getFloatArray("sharedElement:snapshot:imageMatrix") == null,
+        "an ImageView snapshot carries its unscaled bitmap and scale type");
+    var imageMatrix = new android.graphics.Matrix();
+    imageMatrix.setScale(2, 3);
+    imageMatrix.postTranslate(5, 7);
+    image.setScaleType(android.widget.ImageView.ScaleType.MATRIX);
+    image.setImageMatrix(imageMatrix);
+    var matrixSnapshot = (Bundle) callback.onCaptureSharedElementSnapshot(image, new android.graphics.Matrix(), new android.graphics.RectF());
+    check(Arrays.equals(matrixSnapshot.getFloatArray("sharedElement:snapshot:imageMatrix"), new float[] {2, 0, 5, 0, 3, 7, 0, 0, 1}),
+        "a MATRIX ImageView snapshot carries its image matrix values");
+    var restored = callback.onCreateSnapshotView(app, matrixSnapshot);
+    check(restored instanceof android.widget.ImageView view && view.getScaleType() == android.widget.ImageView.ScaleType.MATRIX
+        && view.getImageMatrix().equals(imageMatrix)
+        && view.getDrawable() instanceof android.graphics.drawable.BitmapDrawable drawable && drawable.getBitmap() == bitmap,
+        "a Bundle snapshot becomes an ImageView with the captured image, scale type and matrix");
+    var bitmapView = callback.onCreateSnapshotView(app, bitmap);
+    check(bitmapView != null && bitmapView.getClass() == android.view.View.class
+        && bitmapView.getBackground() instanceof android.graphics.drawable.BitmapDrawable background && background.getBitmap() == bitmap
+        && callback.onCreateSnapshotView(app, new Bundle()) == null && callback.onCreateSnapshotView(app, null) == null,
+        "a Bitmap snapshot becomes a View with that background; an empty snapshot makes no view");
+    image.setBackground(new android.graphics.drawable.ColorDrawable(0xff000000));
+    check(callback.onCaptureSharedElementSnapshot(image, new android.graphics.Matrix(), new android.graphics.RectF()) == null
+        && callback.onCaptureSharedElementSnapshot(new android.view.View(app), new android.graphics.Matrix(), new android.graphics.RectF()) == null,
+        "views that need view rendering to snapshot give no snapshot");
+    var large = new android.widget.ImageView(app);
+    large.setImageBitmap(android.graphics.Bitmap.createBitmap(2048, 1024, android.graphics.Bitmap.Config.ARGB_8888));
+    var largeShot = ((Bundle) callback.onCaptureSharedElementSnapshot(large, new android.graphics.Matrix(), new android.graphics.RectF()))
+        .<android.graphics.Bitmap>getParcelable("sharedElement:snapshot:bitmap");
+    check(largeShot.getWidth() == 1024 && largeShot.getHeight() == 512, "a snapshot is drawn down to at most 1M pixels as on AOSP");
+    var parcel = Parcel.obtain();
+    bitmap.writeToParcel(parcel, 0);
+    parcel.setDataPosition(0);
+    var copy = android.graphics.Bitmap.CREATOR.createFromParcel(parcel);
+    check(copy.getWidth() == 4 && copy.getHeight() == 2 && copy.getPixel(1, 1) == 0xff102030 && copy != bitmap,
+        "bitmaps parcel their pixels");
+
+    // The Activity side ActivityCompat calls, with a window that runs no transitions.
+    var activity = new android.app.Activity();
+    class CompatCallback extends android.app.SharedElementCallback {}
+    activity.setEnterSharedElementCallback(new CompatCallback());
+    activity.setExitSharedElementCallback(null);
+    activity.postponeEnterTransition();
+    activity.startPostponedEnterTransition();
+    activity.setLocusContext(new android.content.LocusId("level"), null);
+    check(!activity.isActivityTransitionRunning(), "the activity transition API is present and runs no transition");
+    var window = activity.getWindow();
+    check(window.hasFeature(android.view.Window.FEATURE_OPTIONS_PANEL) && window.hasFeature(android.view.Window.FEATURE_CONTEXT_MENU)
+        && !window.hasFeature(android.view.Window.FEATURE_ACTIVITY_TRANSITIONS)
+        && !window.hasFeature(android.view.Window.FEATURE_CONTENT_TRANSITIONS) && window.getTransitionManager() == null,
+        "a window has the default features and no transition features until requested");
+    var element = new android.view.View(app);
+    var basic = android.app.ActivityOptions.makeSceneTransitionAnimation(activity, element, "hero").toBundle();
+    check(basic.size() == 1 && basic.getInt("android:activity.animType") == 6,
+        "without activity transitions a scene transition is the default animation");
+    check(window.requestFeature(android.view.Window.FEATURE_ACTIVITY_TRANSITIONS)
+        && window.requestFeature(android.view.Window.FEATURE_CONTENT_TRANSITIONS)
+        && !window.requestFeature(android.view.Window.FEATURE_ACTION_BAR)
+        && window.hasFeature(android.view.Window.FEATURE_ACTIVITY_TRANSITIONS) && window.getTransitionManager() != null,
+        "the transition features are accepted and recorded");
+    @SuppressWarnings("unchecked")
+    var scene = android.app.ActivityOptions.makeSceneTransitionAnimation(activity,
+        android.util.Pair.create(element, "hero"), android.util.Pair.create(new android.view.View(app), "title")).toBundle();
+    check(scene.getInt("android:activity.animType") == 5
+        && List.of("hero", "title").equals(scene.getStringArrayList("android:activity.sharedElementNames"))
+        && !scene.getBoolean("android:activity.transitionIsReturning") && scene.getString("android:activity.packageName") == null,
+        "with activity transitions the options carry the shared element names");
+    boolean nullName = false;
+    try { android.app.ActivityOptions.makeSceneTransitionAnimation(activity, element, null); }
+    catch (IllegalArgumentException expected) { nullName = true; }
+    check(nullName, "a shared element needs a name");
+    var custom = android.app.ActivityOptions.makeCustomAnimation(app, 11, 12);
+    var customBundle = custom.toBundle();
+    check(customBundle.getInt("android:activity.animType") == 1 && customBundle.getInt("android:activity.animEnterRes") == 11
+        && customBundle.getInt("android:activity.animExitRes") == 12
+        && "test.transitions".equals(customBundle.getString("android:activity.packageName"))
+        && android.app.ActivityOptions.makeBasic().toBundle().isEmpty()
+        && android.app.ActivityOptions.makeBasic().setLaunchDisplayId(0).toBundle().getInt("android.activity.launchDisplayId", -1) == 0,
+        "custom, basic and display options have AOSP's Bundle form");
+    var updated = android.app.ActivityOptions.makeBasic();
+    updated.update(custom);
+    check(updated.toBundle().getInt("android:activity.animEnterRes") == 11, "update takes the other options' animation");
+    window.setEnterTransition(new android.transition.Slide());
+    check(window.getReturnTransition() == window.getEnterTransition() && window.getReenterTransition() == null
+        && window.getAllowEnterTransitionOverlap() && window.getTransitionBackgroundFadeDuration() == 300
+        && window.getSharedElementsUseOverlay(),
+        "window transitions default as AOSP's: return follows enter, overlaps allowed, 300 ms background fade");
+    window.setReturnTransition(null);
+    check(window.getReturnTransition() == null, "an explicit null return transition stays null");
+
+    // android.transition values.
+    var fade = new android.transition.Fade(android.transition.Fade.IN);
+    check(fade.getMode() == android.transition.Visibility.MODE_IN && fade.getDuration() == -1 && fade.getStartDelay() == -1
+        && fade.getInterpolator() == null && fade.getEpicenter() == null && fade.getPathMotion() != null,
+        "a transition starts with no duration, delay, interpolator or epicenter");
+    boolean badMode = false, badEdge = false, duplicateMatch = false;
+    try { fade.setMode(4); } catch (IllegalArgumentException expected) { badMode = true; }
+    try { new android.transition.Slide(17); } catch (IllegalArgumentException expected) { badEdge = true; }
+    try { fade.setMatchOrder(android.transition.Transition.MATCH_ID, android.transition.Transition.MATCH_ID); }
+    catch (IllegalArgumentException expected) { duplicateMatch = true; }
+    check(badMode && badEdge && duplicateMatch, "invalid modes, slide edges and match orders are rejected");
+    check(new android.transition.Slide().getSlideEdge() == android.view.Gravity.BOTTOM
+        && new android.transition.Slide().getPropagation() instanceof android.transition.SidePropagation
+        && new android.transition.Explode().getPropagation() instanceof android.transition.CircularPropagation,
+        "slides propagate from their edge and explodes from the epicenter");
+    var auto = new android.transition.AutoTransition();
+    check(auto.getOrdering() == android.transition.TransitionSet.ORDERING_SEQUENTIAL && auto.getTransitionCount() == 3
+        && ((android.transition.Fade) auto.getTransitionAt(0)).getMode() == android.transition.Fade.OUT
+        && auto.getTransitionAt(1) instanceof android.transition.ChangeBounds
+        && ((android.transition.Fade) auto.getTransitionAt(2)).getMode() == android.transition.Fade.IN,
+        "AutoTransition fades out, changes bounds, then fades in");
+    auto.setDuration(250);
+    auto.addTarget(42);
+    var cloned = auto.clone();
+    cloned.addTarget(7);
+    check(auto.getTransitionAt(1).getDuration() == 250 && cloned.getTransitionAt(2).getDuration() == 250
+        && auto.getTargetIds().equals(List.of(42)) && cloned.getTargetIds().equals(List.of(42, 7))
+        && cloned.getTransitionAt(0) != auto.getTransitionAt(0),
+        "a set's duration and targets reach its children, and clones are independent");
+    var locus = new android.content.LocusId("level");
+    var locusParcel = Parcel.obtain();
+    locus.writeToParcel(locusParcel, 0);
+    locusParcel.setDataPosition(0);
+    check(locus.equals(android.content.LocusId.CREATOR.createFromParcel(locusParcel)) && "LocusId[5_chars]".equals(locus.toString()),
+        "LocusId has value equality and hides the id in its string");
+    check(new android.accounts.AuthenticatorException("x") instanceof android.accounts.AccountsException
+        && new android.accounts.OperationCanceledException() instanceof android.accounts.AccountsException
+        && new android.accounts.NetworkErrorException() instanceof android.accounts.AccountsException
+        && android.accounts.AccountsException.class.getSuperclass() == Exception.class,
+        "the AccountManager exceptions are checked AccountsExceptions");
+
+    // Scene changes apply at once; the transition starts and ends from the Looper.
+    var thread = new HandlerThread("transitions");
+    thread.start();
+    var events = new CopyOnWriteArrayList<String>();
+    var done = new CountDownLatch(1);
+    var root = new android.widget.FrameLayout(app);
+    var first = new android.view.View(app);
+    var second = new android.view.View(app);
+    var listener = new android.transition.TransitionListenerAdapter() {
+      @Override public void onTransitionStart(android.transition.Transition transition) { events.add("start:" + transition.getClass().getSimpleName()); }
+      @Override public void onTransitionEnd(android.transition.Transition transition) {
+        events.add("end:" + transition.getClass().getSimpleName());
+        if (transition instanceof android.transition.TransitionSet) done.countDown();
+      }
+    };
+    new Handler(thread.getLooper()).post(() -> {
+      var firstScene = new android.transition.Scene(root, first);
+      var secondScene = new android.transition.Scene(root, second);
+      var exits = new int[1];
+      firstScene.setExitAction(() -> exits[0]++);
+      android.transition.TransitionManager.go(firstScene, null);
+      check(root.getChildCount() == 1 && root.getChildAt(0) == first, "a scene without a transition enters at once");
+      var set = new android.transition.TransitionSet().addTransition(new android.transition.Fade())
+          .addTransition(new android.transition.ChangeBounds()).setOrdering(android.transition.TransitionSet.ORDERING_SEQUENTIAL);
+      set.getTransitionAt(0).addListener(listener);
+      set.addListener(listener);
+      android.transition.TransitionManager.go(secondScene, set);
+      check(root.getChildCount() == 1 && root.getChildAt(0) == second && exits[0] == 1 && events.isEmpty(),
+          "a scene change applies at once and exits the old scene; its transition waits for the Looper");
+      android.transition.TransitionManager.go(firstScene, null);
+      check(root.getChildAt(0) == second, "a root with a waiting transition ignores scene changes");
+      events.add("posted");
+    });
+    check(done.await(5, TimeUnit.SECONDS)
+        && events.equals(List.of("posted", "start:Fade", "start:TransitionSet", "end:Fade", "end:TransitionSet")),
+        "the set starts with its first child and ends with its last: " + events);
+    var cancelled = new CountDownLatch(1);
+    var cancelEvents = new CopyOnWriteArrayList<String>();
+    new Handler(thread.getLooper()).post(() -> {
+      var detached = new android.widget.FrameLayout(app);
+      var delayed = new android.transition.Fade().addListener(new android.transition.TransitionListenerAdapter() {
+        @Override public void onTransitionStart(android.transition.Transition transition) { cancelEvents.add("start"); }
+      });
+      android.transition.TransitionManager.beginDelayedTransition(detached, delayed);
+      root.attach();
+      android.transition.TransitionManager.beginDelayedTransition(root, delayed);
+      android.transition.TransitionManager.endTransitions(root);
+      root.detach();
+      new Handler(Looper.myLooper()).post(cancelled::countDown);
+    });
+    check(cancelled.await(5, TimeUnit.SECONDS) && cancelEvents.isEmpty(),
+        "delayed transitions need a laid-out root, and endTransitions cancels a waiting one");
+    thread.quitSafely();
+  }
+
   public static void main(String[] args) throws Exception {
     if (args.length == 1 && args[0].equals("--host-quit")) {
       hostQuitFixture();
@@ -1333,6 +1905,8 @@ public final class FrameworkTest {
     disabledTelemetry();
     androidCAStore();
     textToSpeech();
+    attributionSource();
+    keyCharacterMap();
     var power = new PowerManager();
     check(Float.isNaN(power.getThermalHeadroom(0)) && Float.isNaN(power.getThermalHeadroom(60)),
         "unavailable thermal prediction is NaN");
@@ -1909,7 +2483,12 @@ public final class FrameworkTest {
       throw new AssertionError("Cancelled callback ran");
     };
     h.postAtTime(forbidden, deadline);
+    // GeckoView reads the queue head through JNI before it calls next().
+    var head = MessageQueue.class.getDeclaredField("mMessages"); head.setAccessible(true);
+    var headMessage = (Message) head.get(thread.getLooper().getQueue());
+    check(headMessage != null && headMessage.getCallback() == forbidden, "MessageQueue.mMessages is the queue head");
     h.removeCallbacks(forbidden);
+    check(head.get(thread.getLooper().getQueue()) == null, "MessageQueue.mMessages is null when the queue is empty");
     for (int i = 0; i < 3; i++) {
       final int n = i;
       h.postAtTime(() -> {
@@ -2430,6 +3009,7 @@ public final class FrameworkTest {
         android.graphics.Bitmap.Config.ARGB_8888), 2, 3, true);
     check(scaled.getWidth() == 2 && scaled.getHeight() == 3, "Bitmap.createScaledBitmap");
     canvasDrawing();
+    shapeDrawables();
     var back = new java.util.ArrayList<String>();
     var dispatcher = (android.window.BackDispatcher) activity.getOnBackInvokedDispatcher();
     dispatcher.registerOnBackInvokedCallback(0, () -> back.add("low"));
@@ -2709,6 +3289,7 @@ public final class FrameworkTest {
     System.setProperty("java.io.tmpdir", jvmTmpdir);
     censusWidgets(obbContext);
     valueAnimators();
+    sharedElementTransitions();
     cursors();
     broadcasts();
     cancelledBroadcasts();
@@ -3098,6 +3679,12 @@ public final class FrameworkTest {
         "Environment.getDataDirectory projects the Android data partition");
     check(RuntimeEnvironment.toGuestPath(Environment.getRootDirectory().toString()).equals("/system"),
         "Environment.getRootDirectory projects the Android system partition");
+    check(RuntimeEnvironment.toGuestPath(Environment.getDownloadCacheDirectory().toString()).equals("/data/cache")
+        && Environment.getDownloadCacheDirectory().isDirectory(),
+        "Environment.getDownloadCacheDirectory is the data partition's existing cache directory");
+    var depth = new android.graphics.PixelFormat();
+    android.graphics.PixelFormat.getPixelFormatInfo(new android.view.Display().getPixelFormat(), depth);
+    check(depth.bitsPerPixel == 32, "Display.getPixelFormat reports AOSP's 32-bit RGBA_8888");
     check(RuntimeEnvironment.toGuestPath(Environment.getExternalStorageDirectory().toString()).equals("/storage/emulated/0"),
         "Environment.getExternalStorageDirectory projects Quest primary storage");
     check(RuntimeEnvironment.toGuestPath(obbContext.getExternalFilesDir(null).toString()).equals("/storage/emulated/0/Android/data/test.game/files"),
