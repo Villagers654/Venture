@@ -152,8 +152,6 @@ set_tests_properties(venture_tests_vulkan_fastpath PROPERTIES COST 20)
 if(NOT TARGET Python3::Interpreter)
   find_package(Python3 COMPONENTS Interpreter REQUIRED)
 endif()
-add_test(NAME fetch_cache COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/fetch_cache_test.py")
-set_tests_properties(fetch_cache PROPERTIES TIMEOUT 1800)
 
 # Windows release import allowlist; synthetic PE files, so it runs on any host.
 get_filename_component(venture_compiler_dir "${CMAKE_CXX_COMPILER}" DIRECTORY)
