@@ -2,12 +2,16 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <span>
 #include <string>
 #include <vector>
 
+#include "common/environment.h"
 #include "hle/vulkan/internal.h"
+#include "vulkan_test_support.h"
 
 namespace {
 namespace spirv10 {
@@ -90,15 +94,111 @@ TEST_CASE("Subpass inputs become texel fetches from the fragment's view layer") 
     CHECK(sample_subpass_inputs(rewritten).empty());
   }
 }
-TEST_CASE("Subpass inputs are read as sampled images on AMD's Windows driver unless set otherwise") {
+TEST_CASE("Subpass inputs are read as sampled images where the probe shows another view's layer") {
   using venture::vulkan::sampled_input_driver;
-  CHECK(sampled_input_driver(VK_DRIVER_ID_AMD_PROPRIETARY, true));
-  CHECK_FALSE(sampled_input_driver(VK_DRIVER_ID_NVIDIA_PROPRIETARY, true));
-  CHECK_FALSE(sampled_input_driver(VK_DRIVER_ID_MESA_RADV, true));
-  CHECK_FALSE(sampled_input_driver(VK_DRIVER_ID_AMD_PROPRIETARY, false));
+  using Probe = venture::vulkan::SubpassInputProbe;
+  // The probe decides, whatever the driver.
+  CHECK(sampled_input_driver(VK_DRIVER_ID_INTEL_PROPRIETARY_WINDOWS, true, Probe::other_layer));
+  CHECK(sampled_input_driver(VK_DRIVER_ID_NVIDIA_PROPRIETARY, true, Probe::other_layer));
+  CHECK_FALSE(sampled_input_driver(VK_DRIVER_ID_AMD_PROPRIETARY, true, Probe::own_layer));
+  // Without a result, every driver takes the sampled reads, which are right everywhere.
+  CHECK(sampled_input_driver(VK_DRIVER_ID_AMD_PROPRIETARY, true, Probe::unavailable));
+  CHECK(sampled_input_driver(VK_DRIVER_ID_NVIDIA_PROPRIETARY, true, Probe::unavailable));
+  CHECK(sampled_input_driver(VK_DRIVER_ID_MESA_RADV, true, Probe::unavailable));
+  CHECK_FALSE(sampled_input_driver(VK_DRIVER_ID_AMD_PROPRIETARY, false, Probe::other_layer));
+  // The environment variable overrides the probe.
+  auto set = [](const char* value) {
+#ifdef _WIN32
+    _putenv_s("VENTURE_VULKAN_SAMPLED_INPUTS", value);
+#else
+    if (*value) setenv("VENTURE_VULKAN_SAMPLED_INPUTS", value, 1);
+    else unsetenv("VENTURE_VULKAN_SAMPLED_INPUTS");
+#endif
+    venture::environment::refresh();
+  };
+  set("0");
+  CHECK_FALSE(sampled_input_driver(VK_DRIVER_ID_INTEL_PROPRIETARY_WINDOWS, true, Probe::other_layer));
+  set("1");
+  CHECK(sampled_input_driver(VK_DRIVER_ID_NVIDIA_PROPRIETARY, true, Probe::own_layer));
+  set("");
+  CHECK_FALSE(venture::vulkan::sampled_input_override());
   venture::vulkan::set_sampled_input_reads(true);
   CHECK(venture::vulkan::sampled_input_type(VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT) == VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE);
   CHECK(venture::vulkan::sampled_input_type(VK_DESCRIPTOR_TYPE_STORAGE_IMAGE) == VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);
   venture::vulkan::set_sampled_input_reads(false);
   CHECK(venture::vulkan::sampled_input_type(VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT) == VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT);
+}
+TEST_CASE("Multiview subpass input probe results are kept per driver") {
+  using Probe = venture::vulkan::SubpassInputProbe;
+  namespace v = venture::vulkan;
+  const auto directory = std::filesystem::temp_directory_path() / "venture-subpass-probe-test";
+  std::filesystem::remove_all(directory);
+  const auto file = v::subpass_input_probe_file(directory, 0x8086, 0xe20b, 0x65a2f6);
+  CHECK(file != v::subpass_input_probe_file(directory, 0x8086, 0xe20b, 0x65a2f7));  // a new driver probes again
+  CHECK(file != v::subpass_input_probe_file(directory, 0x8086, 0xe20c, 0x65a2f6));
+  CHECK(file != v::subpass_input_probe_file(directory, 0x1002, 0xe20b, 0x65a2f6));
+  CHECK(v::cached_subpass_input_probe(file) == Probe::unavailable);
+  v::cache_subpass_input_probe(file, Probe::unavailable);  // not kept: the next launch tries again
+  CHECK_FALSE(std::filesystem::exists(file));
+  v::cache_subpass_input_probe(file, Probe::other_layer);
+  CHECK(v::cached_subpass_input_probe(file) == Probe::other_layer);
+  v::cache_subpass_input_probe(file, Probe::own_layer);
+  CHECK(v::cached_subpass_input_probe(file) == Probe::own_layer);
+  std::filesystem::remove_all(directory);
+}
+TEST_CASE("Multiview subpass input probe renders two views on the host GPU and its kept result decides") {
+  using venture::test::vk_call;
+  using Probe = venture::vulkan::SubpassInputProbe;
+  namespace v = venture::vulkan;
+  VkApplicationInfo app{VK_STRUCTURE_TYPE_APPLICATION_INFO};
+  app.apiVersion = VK_API_VERSION_1_1;
+  VkInstanceCreateInfo ci{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
+  ci.pApplicationInfo = &app;
+  VkInstance instance{};
+  REQUIRE(vk_call("vkCreateInstance", &ci, nullptr, &instance) == VK_SUCCESS);
+  std::uint32_t count = 1;
+  VkPhysicalDevice physical{};
+  REQUIRE(vk_call("vkEnumeratePhysicalDevices", instance, &count, &physical) == VK_SUCCESS);
+  vk_call("vkGetPhysicalDeviceQueueFamilyProperties", physical, &count, nullptr);
+  std::vector<VkQueueFamilyProperties> families(count);
+  vk_call("vkGetPhysicalDeviceQueueFamilyProperties", physical, &count, families.data());
+  std::uint32_t family = 0;
+  while (family < count && !(families[family].queueFlags & VK_QUEUE_GRAPHICS_BIT)) ++family;
+  REQUIRE(family < count);
+  float priority = 1;
+  VkDeviceQueueCreateInfo queue{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};
+  queue.queueFamilyIndex = family;
+  queue.queueCount = 1;
+  queue.pQueuePriorities = &priority;
+  VkPhysicalDeviceMultiviewFeatures multiview{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MULTIVIEW_FEATURES};
+  multiview.multiview = VK_TRUE;
+  VkDeviceCreateInfo di{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO, &multiview};
+  di.queueCreateInfoCount = 1;
+  di.pQueueCreateInfos = &queue;
+  VkDevice device{};
+  REQUIRE(vk_call("vkCreateDevice", physical, &di, nullptr, &device) == VK_SUCCESS);
+  double milliseconds = 0;
+  const auto result = v::probe_subpass_inputs(physical, device, std::span(&queue, 1), &milliseconds);
+  MESSAGE("Probe: ", result == Probe::own_layer ? "own layer" : result == Probe::other_layer ? "other layer" : "unavailable",
+          " in ", milliseconds, " ms");
+  CHECK(result != Probe::unavailable);
+  // A kept result stands without probing; without one the probe runs and is kept.
+  VkPhysicalDeviceProperties properties{};
+  vk_call("vkGetPhysicalDeviceProperties", physical, &properties);
+  const auto directory = std::filesystem::temp_directory_path() / "venture-subpass-probe-device-test";
+  std::filesystem::remove_all(directory);
+  const auto file = v::subpass_input_probe_file(directory, properties.vendorID, properties.deviceID,
+                                                properties.driverVersion);
+  const auto flipped = result == Probe::own_layer ? Probe::other_layer : Probe::own_layer;
+  v::cache_subpass_input_probe(file, flipped);
+  v::choose_sampled_input_reads(physical, device, di, directory);
+  CHECK(v::sampled_input_reads() == (flipped == Probe::other_layer));
+  std::filesystem::remove_all(directory);
+  v::choose_sampled_input_reads(physical, device, di, directory);
+  CHECK(v::sampled_input_reads() == (result == Probe::other_layer));
+  CHECK(v::cached_subpass_input_probe(file) == result);
+  std::filesystem::remove_all(directory);
+  v::set_sampled_input_reads(false);
+  vk_call("vkDestroyDevice", device, nullptr);
+  vk_call("vkDestroyInstance", instance, nullptr);
 }

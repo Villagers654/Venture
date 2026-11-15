@@ -823,6 +823,7 @@ std::uint32_t copy_slices(const Image& img, std::uint32_t layer_count, std::uint
 }
 // Decode binds only compute state; replay the application's afterwards.
 void restore_compute(VkCommandBuffer cmd) {
+  note_venture_compute_pass(cmd);
   std::lock_guard lock(texture_lock);
   for (auto& restore : command_state[cmd].compute_state) restore();
 }
@@ -1042,6 +1043,10 @@ VkResult try_lazy_companion(VkDevice d, const VkImageCreateInfo& info, Companion
   created = true;
   return VK_SUCCESS;
 }
+// Venture's own compute passes recorded into guest command buffers and the
+// guest submissions, for the device-fault report (texture_pass_census).
+std::atomic<std::uint64_t> decode_passes{0}, bc7_passes{0}, depth_passes{0}, guest_submits{0},
+    passes_at_first_submit{UINT64_MAX};
 std::atomic<int> compression_forced{-1};
 // Decoded textures (RGBA8, 4 to 8 times their ASTC size; they filled 8-12 GB
 // GPUs in Batman: Arkham Shadow, Asgard's Wrath 2 and Resident Evil 4) are
@@ -1867,6 +1872,7 @@ void convert_depth(VkCommandBuffer cmd, const std::shared_ptr<Buffer>& words, st
   conversion->words = words;
   conversion->destroy_pool = vk<PFN_vkDestroyDescriptorPool>(d, "vkDestroyDescriptorPool");
   auto& p = *conversion->pipeline;
+  depth_passes.fetch_add(1, std::memory_order_relaxed);
   VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1};
   VkDescriptorPoolCreateInfo pi{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
   pi.maxSets = 1;
@@ -3126,8 +3132,24 @@ VkResult submit_textures(VkQueue queue, std::uint32_t count, const Submit* submi
   return r;
 }
 } // namespace
+namespace {
+void count_guest_submit() {
+  if (guest_submits.fetch_add(1, std::memory_order_relaxed) == 0)
+    passes_at_first_submit.store(decode_passes.load(std::memory_order_relaxed) + bc7_passes.load(std::memory_order_relaxed) +
+                                 depth_passes.load(std::memory_order_relaxed), std::memory_order_relaxed);
+}
+}  // namespace
+std::string texture_pass_census() {
+  const auto first = passes_at_first_submit.load(std::memory_order_relaxed);
+  return std::format("{} guest submissions; Venture recorded {} texture decodes, {} BC7 encodes and {} depth "
+                     "conversions into guest command buffers ({} before the first submission)",
+                     guest_submits.load(std::memory_order_relaxed), decode_passes.load(std::memory_order_relaxed),
+                     bc7_passes.load(std::memory_order_relaxed), depth_passes.load(std::memory_order_relaxed),
+                     first == UINT64_MAX ? std::string("none submitted") : std::to_string(first));
+}
 VkResult texture_submit(VkQueue queue, std::uint32_t count, const VkSubmitInfo* submits,
                         VkFence fence, PFN_vkQueueSubmit native) {
+  count_guest_submit();
   auto result = submit_textures(queue, count, submits, fence, native);
   if (have_pageable_sources.load(std::memory_order_relaxed) && result == VK_SUCCESS) {
     auto binding = queue_binding(queue);
@@ -3139,6 +3161,7 @@ VkResult texture_submit(VkQueue queue, std::uint32_t count, const VkSubmitInfo* 
 }
 VkResult texture_submit2(VkQueue queue, std::uint32_t count, const VkSubmitInfo2* submits,
                          VkFence fence, PFN_vkQueueSubmit2 native) {
+  count_guest_submit();
   auto result = submit_textures(queue, count, submits, fence, native);
   if (have_pageable_sources.load(std::memory_order_relaxed) && result == VK_SUCCESS) {
     auto binding = queue_binding(queue);
@@ -3190,6 +3213,7 @@ std::shared_ptr<DecodeResources> record_decode(VkDevice d, VkCommandBuffer cmd, 
                                                VkDeviceSize dest_size, const DecodeRegion& region) {
   auto resources = std::make_shared<DecodeResources>();
   resources->pipeline = pipeline(d);
+  decode_passes.fetch_add(1, std::memory_order_relaxed);
   resources->destroy_pool = vk<PFN_vkDestroyDescriptorPool>(d, "vkDestroyDescriptorPool");
   auto& p = *resources->pipeline;
   VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 2};
@@ -3235,6 +3259,7 @@ std::shared_ptr<DecodeResources> record_encode_bc7(VkDevice d, VkCommandBuffer c
     VkDeviceSize source_size, VkBuffer dest, VkDeviceSize dest_size, std::uint32_t width, std::uint32_t height) {
   auto resources = std::make_shared<DecodeResources>();
   resources->pipeline = image_pipeline(d, bc7_mode);
+  bc7_passes.fetch_add(1, std::memory_order_relaxed);
   resources->destroy_pool = vk<PFN_vkDestroyDescriptorPool>(d, "vkDestroyDescriptorPool");
   auto& p = *resources->pipeline;
   VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 2};
@@ -3275,6 +3300,7 @@ std::shared_ptr<DecodeResources> record_decode_image(VkDevice d, VkCommandBuffer
   const bool srgb = region.format.decoded == VK_FORMAT_R8G8B8A8_SRGB;
   resources->pipeline = image_pipeline(d, region.format.decoded == VK_FORMAT_R8G8B8A8_UNORM
       ? (volume ? 6u : 5u) : (volume ? 3u : 1u) + unsigned(srgb));
+  decode_passes.fetch_add(1, std::memory_order_relaxed);
   resources->destroy_pool = vk<PFN_vkDestroyDescriptorPool>(d, "vkDestroyDescriptorPool");
   auto& p = *resources->pipeline;
   VkDescriptorPoolSize sizes[] = {{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 2},

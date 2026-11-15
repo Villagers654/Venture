@@ -2254,8 +2254,24 @@ TEST_CASE("New descriptor sets get null descriptors for the bindings that can ho
   CHECK_FALSE(plan[0].sampler);
   CHECK(plan[6].variable);
   CHECK_FALSE(plan[0].variable);
+  // A device fault at a 0xdeadbeef address names the buffer bindings the fill
+  // left unwritten: only buffer types hold a 48-bit address.
+  const VkDescriptorSetLayoutBinding big[] = {
+      {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 300, VK_SHADER_STAGE_ALL, nullptr},
+      {1, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 300, VK_SHADER_STAGE_ALL, nullptr},
+      {2, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_ALL, nullptr}};
+  VkDescriptorSetLayoutCreateInfo big_info{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+  big_info.bindingCount = std::uint32_t(std::size(big));
+  big_info.pBindings = big;
+  CHECK(venture::vulkan::unfilled_buffer_bindings(big_info) ==
+        std::vector<std::string>{"storage buffer array of 300 (array past the fill limit)"});
+  CHECK(venture::vulkan::unfilled_buffer_bindings(info).empty());
   info.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT;
   CHECK(null_fill_plan(info).empty());
+  CHECK(venture::vulkan::unfilled_buffer_bindings(info) ==
+        std::vector<std::string>{"uniform buffer array of 1 (push descriptor layout)",
+                                 "storage texel buffer array of 2 (push descriptor layout)",
+                                 "dynamic storage buffer array of 1 (push descriptor layout)"});
 
   // On a real device: sets of such a layout allocate, fill and free.
   test::VulkanDevice resources;
@@ -2294,4 +2310,124 @@ TEST_CASE("New descriptor sets get null descriptors for the bindings that can ho
   CHECK(call("vkFreeDescriptorSets", resources.device, pool, 3u, sets) == VK_SUCCESS);
   call("vkDestroyDescriptorPool", resources.device, pool, nullptr);
   call("vkDestroyDescriptorSetLayout", resources.device, layout, nullptr);
+}
+
+namespace {
+std::uint64_t unbound_set_hits() {
+  const auto notes = venture::vulkan::bound_sets_fault_notes();
+  if (notes.empty() || notes[0].empty() || notes[0][0] < '0' || notes[0][0] > '9') return 0;
+  return std::stoull(notes[0]);
+}
+}  // namespace
+TEST_CASE("A pipeline bind binds null descriptors at a set its command buffer never bound, and counts it if the game never does") {
+  using namespace venture::vulkan;
+  // Identically defined set layouts hash alike, whatever their binding order.
+  const VkDescriptorSetLayoutBinding ab[] = {{0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+                                             {1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 2, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}};
+  const VkDescriptorSetLayoutBinding ba[] = {ab[1], ab[0]};
+  VkDescriptorSetLayoutCreateInfo a{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+  a.bindingCount = 2;
+  a.pBindings = ab;
+  auto b = a;
+  b.pBindings = ba;
+  CHECK(set_layout_hash(a) == set_layout_hash(b));
+  auto pushed = a;
+  pushed.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT;
+  CHECK(set_layout_hash(a) != set_layout_hash(pushed));
+  // The guard pushes null descriptors for push layouts too.
+  CHECK(null_fill_plan(pushed).empty());
+  CHECK(null_fill_plan(pushed, true).size() == 2);
+
+  const SetLayoutShape s0{11, true, false}, s1{22, true, true}, other{33, true, false}, empty{44, false, false};
+  const SetLayoutShape p_sets[] = {s0, s1, empty};
+  const auto p = pipeline_layout_shape(p_sets, {});
+  CHECK(p.count == 3);
+  CHECK(p.required == 0b011u);
+  CHECK(p.push == 0b010u);
+  const SetLayoutShape q_sets[] = {other, s1};
+  const auto q = pipeline_layout_shape(q_sets, {});
+  CHECK(q.prefix[1] != p.prefix[1]);  // set 0 differs: no later set is compatible
+  const VkPushConstantRange range{VK_SHADER_STAGE_COMPUTE_BIT, 0, 16};
+  CHECK(pipeline_layout_shape(p_sets, std::span(&range, 1)).prefix[0] != p.prefix[0]);
+  BindPointSets sets;
+  CHECK(sets.unmet(p).missing == 0b011u);
+  sets.bind(&p, 0, 1);
+  CHECK(sets.unmet(p).missing == 0b010u);
+  CHECK(sets.unmet(p).incompatible == 0);
+  sets.bind(&q, 1, 1);  // bound, but with a layout incompatible for set 1
+  CHECK(sets.unmet(p).missing == 0);
+  CHECK(sets.unmet(p).incompatible == 0b010u);
+  sets.bind(nullptr, 1, 1);  // an untracked layout counts as compatible
+  CHECK(sets.unmet(p).incompatible == 0);
+  sets.bind(&p, 30, 5);  // indices past 31 are not tracked
+  CHECK(sets.bound == (0b011u | 1u << 30 | 1u << 31));
+
+  // On a real device: set 1 left unbound until the end of recording is counted once (set 0, bound after the
+  // pipeline, replaces its null set and is not); binding both is not counted.
+  test::VulkanDevice gpu;
+  // GLSL: void main() {} with local size 1.
+  const std::uint32_t code[]{0x07230203, 0x00010000, 0, 5, 0, 0x00020011, 1, 0x0003000e, 0, 1, 0x0005000f, 5, 3,
+                             0x6e69616d, 0, 0x00060010, 3, 17, 1, 1, 1, 0x00020013, 1, 0x00030021, 2, 1,
+                             0x00050036, 1, 3, 0, 2, 0x000200f8, 4, 0x000100fd, 0x00010038};
+  VkShaderModuleCreateInfo shader_info{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
+  shader_info.codeSize = sizeof(code);
+  shader_info.pCode = code;
+  VkShaderModule shader{};
+  REQUIRE(call("vkCreateShaderModule", gpu.device, &shader_info, nullptr, &shader) == VK_SUCCESS);
+  VkDescriptorSetLayout layouts[2]{};
+  REQUIRE(call("vkCreateDescriptorSetLayout", gpu.device, &a, nullptr, &layouts[0]) == VK_SUCCESS);
+  VkDescriptorSetLayoutCreateInfo uniform_info = a;
+  uniform_info.bindingCount = 1;
+  uniform_info.pBindings = &ab[1];
+  REQUIRE(call("vkCreateDescriptorSetLayout", gpu.device, &uniform_info, nullptr, &layouts[1]) == VK_SUCCESS);
+  VkPipelineLayoutCreateInfo layout_info{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+  layout_info.setLayoutCount = 2;
+  layout_info.pSetLayouts = layouts;
+  VkPipelineLayout layout{};
+  REQUIRE(call("vkCreatePipelineLayout", gpu.device, &layout_info, nullptr, &layout) == VK_SUCCESS);
+  VkComputePipelineCreateInfo pipeline_info{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
+  pipeline_info.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+  pipeline_info.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+  pipeline_info.stage.module = shader;
+  pipeline_info.stage.pName = "main";
+  pipeline_info.layout = layout;
+  VkPipeline pipeline{};
+  REQUIRE(call("vkCreateComputePipelines", gpu.device, VK_NULL_HANDLE, 1u, &pipeline_info, nullptr, &pipeline) ==
+          VK_SUCCESS);
+  const VkDescriptorPoolSize sizes[] = {{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 2}, {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 8}};
+  VkDescriptorPoolCreateInfo pool_info{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+  pool_info.maxSets = 2;
+  pool_info.poolSizeCount = 2;
+  pool_info.pPoolSizes = sizes;
+  VkDescriptorPool pool{};
+  REQUIRE(call("vkCreateDescriptorPool", gpu.device, &pool_info, nullptr, &pool) == VK_SUCCESS);
+  VkDescriptorSetAllocateInfo alloc{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+  alloc.descriptorPool = pool;
+  alloc.descriptorSetCount = 2;
+  alloc.pSetLayouts = layouts;
+  VkDescriptorSet descriptor_sets[2]{};
+  REQUIRE(call("vkAllocateDescriptorSets", gpu.device, &alloc, descriptor_sets) == VK_SUCCESS);
+
+  const auto before = unbound_set_hits();
+  gpu.begin();
+  call("vkCmdBindPipeline", gpu.command, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
+  call("vkCmdBindDescriptorSets", gpu.command, VK_PIPELINE_BIND_POINT_COMPUTE, layout, 0u, 1u, descriptor_sets, 0u,
+       static_cast<const std::uint32_t*>(nullptr));
+  call("vkCmdDispatch", gpu.command, 1u, 1u, 1u);
+  call("vkCmdDispatch", gpu.command, 1u, 1u, 1u);
+  gpu.submit();
+  CHECK(unbound_set_hits() == before + 1);
+  gpu.begin();
+  call("vkCmdBindDescriptorSets", gpu.command, VK_PIPELINE_BIND_POINT_COMPUTE, layout, 0u, 2u, descriptor_sets, 0u,
+       static_cast<const std::uint32_t*>(nullptr));
+  call("vkCmdBindPipeline", gpu.command, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
+  call("vkCmdDispatch", gpu.command, 1u, 1u, 1u);
+  gpu.submit();
+  CHECK(unbound_set_hits() == before + 1);
+
+  call("vkDestroyDescriptorPool", gpu.device, pool, nullptr);
+  call("vkDestroyPipeline", gpu.device, pipeline, nullptr);
+  call("vkDestroyPipelineLayout", gpu.device, layout, nullptr);
+  for (auto l : layouts) call("vkDestroyDescriptorSetLayout", gpu.device, l, nullptr);
+  call("vkDestroyShaderModule", gpu.device, shader, nullptr);
 }

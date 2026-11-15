@@ -91,7 +91,20 @@ add_custom_command(OUTPUT ${vk_generated}/texture_bc7.inc
     ${vk_generated}/texture_bc7.spv ${vk_generated}/texture_bc7.inc
   DEPENDS glslang-standalone shaders/bc7_encode.comp ${PROJECT_SOURCE_DIR}/tools/codegen/vk_spirv.py
   VERBATIM)
-target_sources(venture_vulkan PRIVATE texture.cpp render_area.cpp render_checks.cpp subpass_sync.cpp deferred_free.cpp descriptor_fill.cpp ${vk_generated}/texture_decode.inc ${vk_generated}/texture_depth.inc ${vk_generated}/texture_bc7.inc)
+# The multiview subpass input self-test (subpass_input_probe.cpp).
+foreach(shader subpass_probe.vert subpass_probe_write.frag subpass_probe_read.frag)
+  string(REPLACE "." "_" shader_name ${shader})
+  add_custom_command(OUTPUT ${vk_generated}/${shader_name}.inc
+    COMMAND $<TARGET_FILE:glslang-standalone> -V --target-env vulkan1.0
+      ${CMAKE_CURRENT_SOURCE_DIR}/shaders/${shader} -o ${vk_generated}/${shader_name}.spv
+    COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tools/codegen/vk_spirv.py
+      ${vk_generated}/${shader_name}.spv ${vk_generated}/${shader_name}.inc
+    DEPENDS glslang-standalone shaders/${shader} ${PROJECT_SOURCE_DIR}/tools/codegen/vk_spirv.py
+    VERBATIM)
+  target_sources(venture_vulkan PRIVATE ${vk_generated}/${shader_name}.inc)
+endforeach()
+target_sources(venture_vulkan PRIVATE subpass_input_probe.cpp)
+target_sources(venture_vulkan PRIVATE texture.cpp render_area.cpp render_checks.cpp subpass_sync.cpp deferred_free.cpp descriptor_fill.cpp bound_sets.cpp ${vk_generated}/texture_decode.inc ${vk_generated}/texture_depth.inc ${vk_generated}/texture_bc7.inc)
 foreach(mode float_array srgb_array float_volume srgb_volume unorm_array unorm_volume)
   set(image_defines -DIMAGE_OUTPUT=1)
   if(mode MATCHES "srgb|unorm")

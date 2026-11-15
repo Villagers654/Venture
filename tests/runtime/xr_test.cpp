@@ -3806,9 +3806,10 @@ TEST_CASE("XR guest lifecycle and real Vulkan swapchain through mock loader") {
   CHECK(xg::xrDestroySpace(static_space) == XR_SUCCESS);
   CHECK(xg::xrDestroySwapchain(static_chain) == XR_SUCCESS);
   CHECK(xg::xrDestroySwapchain(chain) == XR_SUCCESS);
+  // Host chains stay parked for reuse until the session ends (dev_dump.cpp).
+  CHECK(xg::xrDestroySession(session) == XR_SUCCESS);
   CHECK(ventureMockXrStats().live_images == 0);
   for (const auto& image : images) CHECK(venture::vulkan::attachment_extent(image.image).width == 0);
-  CHECK(xg::xrDestroySession(session) == XR_SUCCESS);
   CHECK(xg::xrDestroyInstance(instance) == XR_SUCCESS);
 }
 
