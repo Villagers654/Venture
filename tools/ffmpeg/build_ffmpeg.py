@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fetch, authenticate and build the approved LGPL MOV/AAC dependency."""
+"""Fetch, authenticate and build the approved LGPL media dependency."""
 from pathlib import Path
 import hashlib
 import json
@@ -22,6 +22,7 @@ LOCK = json.loads(LOCK_FILE.read_text())
 COMPONENTS = {'CONFIG_AAC_DECODER', 'CONFIG_H264_DECODER', 'CONFIG_HEVC_DECODER',
               'CONFIG_VP8_DECODER', 'CONFIG_VP9_DECODER', 'CONFIG_MOV_DEMUXER',
               'CONFIG_MATROSKA_DEMUXER', 'CONFIG_VP9_PARSER', 'CONFIG_VP9_SUPERFRAME_SPLIT_BSF',
+              'CONFIG_MP3_DEMUXER', 'CONFIG_MP3FLOAT_DECODER', 'CONFIG_MPEGAUDIO_PARSER',
               'CONFIG_H264_VULKAN_HWACCEL', 'CONFIG_HEVC_VULKAN_HWACCEL', 'CONFIG_VP9_VULKAN_HWACCEL'}
 if os.name == 'nt':
     COMPONENTS |= {'CONFIG_'+codec+'_'+entry+'_HWACCEL' for codec in ('H264','HEVC','VP9')
@@ -304,7 +305,7 @@ def build_dependency():
         artifacts=artifacts, imports=imports, source_url=LOCK['url'],
         source_tree_sha256=source_tree_hash, source_patches=[]), indent=2)+'\n')
     pending.replace(published)
-    print('Verified LGPL FFmpeg MOV/AAC build:', install, flush=True)
+    print('Verified LGPL FFmpeg build:', install, flush=True)
 
 
 if __name__ == '__main__':

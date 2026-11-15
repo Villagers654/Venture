@@ -5,6 +5,8 @@
 #include "core/signals.h"
 #include "core/syscall.h"
 #include "core/address_space.h"
+#include "hle/libc/system_fonts.h"
+#include <algorithm>
 #include <array>
 #include <cstdlib>
 #include <cstring>
@@ -262,6 +264,121 @@ TEST_CASE("libc B: names with characters Windows forbids are created, opened and
   REQUIRE(FdTable::get().file(dfd)->entries(entries) == 0);
   CHECK(std::any_of(entries.begin(), entries.end(), [&](const Dirent& e) { return name == e.name; }));
   CHECK(FdTable::get().close(dfd) == 0);
+}
+namespace {
+std::vector<std::string> listing(const char* path) {
+  std::vector<std::string> names;
+  const auto dfd = static_cast<int>(fd_open(path, 0200000, 0));
+  if (dfd < 0) return names;
+  std::vector<Dirent> entries;
+  if (FdTable::get().file(dfd)->entries(entries) == 0)
+    for (const auto& e : entries) names.emplace_back(e.name);
+  FdTable::get().close(dfd);
+  return names;
+}
+std::string guest_text(const char* path) {
+  const auto fd = static_cast<int>(fd_open(path, 0, 0));
+  if (fd < 0) return "<" + std::to_string(fd) + ">";
+  std::string text;
+  char buffer[4096];
+  for (std::int64_t n; (n = fd_read(fd, buffer, sizeof buffer)) > 0;) text.append(buffer, std::size_t(n));
+  FdTable::get().close(fd);
+  return text;
+}
+bool listed(const std::vector<std::string>& names, std::string_view name) {
+  return std::ranges::find(names, name) != names.end();
+}
+}  // namespace
+TEST_CASE("libc B: /system/fonts lists installed host fonts under a Quest's names, and fonts.xml their families") {
+  namespace fonts = venture::hle::libc::system_fonts;
+  Thread thread;
+  const auto root = std::filesystem::path(VENTURE_LIBC_B_TEST_ROOT) / "host-fonts";
+  std::filesystem::create_directories(root);
+  // Separate host files per script, as on Windows: each CJK font keeps its own name.
+  const auto host = [&](const std::string& file) {
+    paths::atomic_write(root / file, "font:" + file);
+    return std::filesystem::canonical(root / file);
+  };
+  const auto sans = host("sans.ttf"), sc = host("sc.ttc"), tc = host("tc.ttc"), jp = host("jp.ttc"), kr = host("kr.ttf");
+  fonts::set_catalog(fonts::build([&](const venture::system_fonts::Query& q) -> std::optional<venture::system_fonts::Face> {
+    namespace s = venture::system_fonts::scripts;
+    if (q.sample == s::simplified_chinese.sample) return venture::system_fonts::Face{sc, 0};
+    if (q.sample == s::traditional_chinese.sample) return venture::system_fonts::Face{tc, 1};
+    if (q.sample == s::japanese.sample) return venture::system_fonts::Face{jp, 0};
+    if (q.sample == s::korean.sample) return venture::system_fonts::Face{kr, 0};
+    if (q.sample == U'A') return venture::system_fonts::Face{sans, 0};
+    return std::nullopt;  // no other script on this "host"
+  }));
+  const auto names = listing("/system/fonts");
+  for (auto name : {"Roboto-Regular.ttf", "Roboto-Bold.ttf", "NotoSerif-Regular.ttf", "DroidSansMono.ttf",
+                    "DroidSans.ttf", "DroidSans-Bold.ttf", "NotoSansCJK-Regular.ttc", "NotoSansTC-Regular.otf",
+                    "NotoSansJP-Regular.otf", "NotoSansKR-Regular.otf"})
+    CHECK_MESSAGE(listed(names, name), name);
+  CHECK_FALSE(listed(names, "NotoColorEmoji.ttf"));
+  CHECK_FALSE(listed(names, "NotoNaskhArabic-Regular.ttf"));
+  CHECK(listed(listing("/system/etc"), "fonts.xml"));
+  CHECK(listed(listing("/"), "etc"));
+  // Each name opens its host font in place, read-only.
+  CHECK(guest_text("/system/fonts/NotoSansCJK-Regular.ttc") == "font:sc.ttc");
+  CHECK(guest_text("/system/fonts/DroidSans.ttf") == "font:sans.ttf");
+  CHECK(guest_text("/system/fonts/NotoSansKR-Regular.otf") == "font:kr.ttf");
+  Stat st{};
+  CHECK(path_stat("/system/fonts/NotoSansTC-Regular.otf", &st) == 0);
+  CHECK((st.mode & 0170000) == 0100000);
+  CHECK(st.size == std::int64_t(std::string("font:tc.ttc").size()));
+  CHECK(path_stat("/system/fonts", &st) == 0);
+  CHECK((st.mode & 0170000) == 0040000);
+  CHECK(path_stat("/system/fonts/NotoColorEmoji.ttf", &st) == -err::enoent);
+  CHECK(fd_open("/system/fonts/Roboto-Regular.ttf", 1) == -err::erofs);
+  CHECK(fd_open("/system/fonts/../fonts/Missing.ttf", 0) == -err::enoent);
+  // Android 12's fonts.xml, also through the /etc link Unity reads.
+  const auto xml = guest_text("/etc/fonts.xml");
+  CHECK(xml == guest_text("/system/etc/fonts.xml"));
+  CHECK(xml.starts_with("<?xml version=\"1.0\" encoding=\"utf-8\"?>"));
+  CHECK(xml.find("<familyset version=\"23\">") != std::string::npos);
+  CHECK(xml.find("<family name=\"sans-serif\">\n"
+                 "        <font weight=\"400\" style=\"normal\">Roboto-Regular.ttf</font>") != std::string::npos);
+  CHECK(xml.find("<alias name=\"arial\" to=\"sans-serif\" />") != std::string::npos);
+  CHECK(xml.find("<family lang=\"zh-Hans\">\n        <font weight=\"400\" style=\"normal\">NotoSansCJK-Regular.ttc"
+                 "</font>") != std::string::npos);
+  CHECK(xml.find("<family lang=\"zh-Hant,zh-Bopo\">\n        <font weight=\"400\" style=\"normal\" index=\"1\">"
+                 "NotoSansTC-Regular.otf</font>") != std::string::npos);
+  CHECK(xml.find("<family lang=\"ja\">") < xml.find("<family lang=\"ko\">"));
+  CHECK(xml.find("und-Zsye") == std::string::npos);  // no emoji font on this host
+  CHECK(xml.find("sans-serif") < xml.find("zh-Hans"));  // named families, then the fallback chain
+  // One collection for every CJK face, as a Quest (and fontconfig's Noto CJK) has.
+  const auto cjk = host("NotoSansCJK.ttc");
+  fonts::set_catalog(fonts::build([&](const venture::system_fonts::Query& q) -> std::optional<venture::system_fonts::Face> {
+    namespace s = venture::system_fonts::scripts;
+    if (q.sample == s::simplified_chinese.sample) return venture::system_fonts::Face{cjk, 2};
+    if (q.sample == s::traditional_chinese.sample) return venture::system_fonts::Face{cjk, 3};
+    if (q.sample == s::japanese.sample) return venture::system_fonts::Face{cjk, 0};
+    if (q.sample == s::korean.sample) return venture::system_fonts::Face{cjk, 1};
+    return std::nullopt;
+  }));
+  const auto shared = listing("/system/fonts");
+  CHECK(std::ranges::count_if(shared, [](const std::string& n) { return n.starts_with("NotoSans"); }) == 1);
+  const auto quest = guest_text("/system/etc/fonts.xml");
+  for (auto [lang, index] : {std::pair{"zh-Hans", 2}, {"zh-Hant,zh-Bopo", 3}, {"ja", 0}, {"ko", 1}}) {
+    CAPTURE(lang);
+    const auto font = std::string("<font weight=\"400\" style=\"normal\"") +
+                      (index ? " index=\"" + std::to_string(index) + "\"" : "") + ">NotoSansCJK-Regular.ttc</font>";
+    CHECK(quest.find(std::string("<family lang=\"") + lang + "\">\n        " + font) != std::string::npos);
+  }
+  CHECK(quest.find("Roboto") == std::string::npos);
+  CHECK(path_stat("/system/fonts/Roboto-Regular.ttf", &st) == -err::enoent);
+  // This computer's own fonts: every listed file is a font that exists, and a
+  // CJK collection name maps Chinese.
+  const auto real = fonts::host_catalog();
+  for (const auto& file : real.files) {
+    CAPTURE(file.name);
+    CHECK(std::filesystem::is_regular_file(file.host.file));
+  }
+  if (const auto* han = real.find("NotoSansCJK-Regular.ttc"))
+    CHECK(venture::system_fonts::covers(han->host, 0x4E2D));
+  else
+    MESSAGE("No CJK font on this host");
+  fonts::set_catalog(real);
 }
 TEST_CASE("libc B: stdio and legacy FILE array") {
   Thread thread;

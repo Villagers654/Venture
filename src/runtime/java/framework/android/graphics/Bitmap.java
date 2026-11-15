@@ -1,5 +1,5 @@
 package android.graphics;
-public final class Bitmap {
+public final class Bitmap implements android.os.Parcelable {
   public enum Config { ALPHA_8, RGB_565, ARGB_4444, ARGB_8888, RGBA_F16, HARDWARE }
   final java.awt.image.BufferedImage image;
   private final boolean mutable;
@@ -130,4 +130,34 @@ public final class Bitmap {
       }
     }
   }
+  // AOSP Bitmap is Parcelable (shared-element snapshots carry one in a Bundle). The
+  // in-process Parcel carries the size, mutability, density and ARGB pixels.
+  public int describeContents() { return 0; }
+  public void writeToParcel(android.os.Parcel out, int flags) {
+    if (recycled) throw new IllegalStateException("Can't parcel a recycled bitmap");
+    int w = getWidth(), h = getHeight();
+    int[] pixels = image.getRGB(0, 0, w, h, null, 0, w);
+    var bytes = java.nio.ByteBuffer.allocate(pixels.length * 4);
+    bytes.asIntBuffer().put(pixels);
+    out.writeInt(w);
+    out.writeInt(h);
+    out.writeInt(mutable ? 1 : 0);
+    out.writeInt(density);
+    out.writeByteArray(bytes.array());
+  }
+  public static final android.os.Parcelable.Creator<Bitmap> CREATOR = new android.os.Parcelable.Creator<>() {
+    public Bitmap createFromParcel(android.os.Parcel in) {
+      int w = in.readInt(), h = in.readInt();
+      boolean mutable = in.readInt() != 0;
+      int density = in.readInt();
+      int[] pixels = new int[w * h];
+      java.nio.ByteBuffer.wrap(in.createByteArray()).asIntBuffer().get(pixels);
+      var image = new java.awt.image.BufferedImage(w, h, java.awt.image.BufferedImage.TYPE_INT_ARGB);
+      image.setRGB(0, 0, w, h, pixels, 0, w);
+      var bitmap = new Bitmap(image, mutable);
+      bitmap.density = density;
+      return bitmap;
+    }
+    public Bitmap[] newArray(int size) { return new Bitmap[size]; }
+  };
 }

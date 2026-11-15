@@ -11,8 +11,25 @@ public final class GuestFiles {
   private static String virtualPath(File file) {
     // WinNTFileSystem normalizes a leading Android slash to a backslash.
     String path = file.getPath().replace('\\', '/');
+    // Android's /etc links to /system/etc.
+    if (path.equals("/etc") || path.startsWith("/etc/")) path = "/system" + path;
     return path.equals("/proc") || path.startsWith("/proc/") || path.equals("/sys") || path.startsWith("/sys/")
-        ? path : null;
+        || systemFontsPath(path) ? path : null;
+  }
+  // The guest's system font directory, its files and fonts.xml (hle/libc/system_fonts.h).
+  private static boolean systemFontsPath(String path) {
+    return path.equals(FONTS) || path.startsWith(FONTS + "/") || path.equals("/system/etc")
+        || path.equals("/system/etc/fonts.xml");
+  }
+  private static final String FONTS = "/system/fonts";
+  /** The installed host font an Android /system/fonts/<name> path stands for, or null. */
+  public static String systemFont(String path) {
+    if (path == null || !path.startsWith(FONTS + "/")) return null;
+    try {
+      return RuntimeEnvironment.host().systemFont(path);
+    } catch (UnsatisfiedLinkError noRuntime) {  // the framework outside the runtime
+      return null;
+    }
   }
   /** Android absolute paths of the application's mounts as host paths (RuntimeEnvironment.toHostPath). */
   public static String host(String path) { return RuntimeEnvironment.toHostPath(path); }
@@ -20,6 +37,12 @@ public final class GuestFiles {
     String path = virtualPath(file);
     return path == null ? file.exists()
         : RuntimeEnvironment.host().virtualFileExists(path.getBytes(StandardCharsets.UTF_8));
+  }
+  /** Android's synthesized directories (/system/fonts, /system/etc) are directories here too. */
+  public static boolean isDirectory(File file) {
+    String path = virtualPath(file);
+    if (path == null || !(path.equals(FONTS) || path.equals("/system/etc"))) return file.isDirectory();
+    return RuntimeEnvironment.host().virtualFileExists(path.getBytes(StandardCharsets.UTF_8));
   }
   /**
    * Android's File(parent, child) joins even an absolute child under the parent. App paths are
@@ -49,6 +72,8 @@ public final class GuestFiles {
   static Snapshot open(File file) throws FileNotFoundException {
     String path = virtualPath(file);
     if (path == null) return new Snapshot(file, false);
+    String font = systemFont(path);
+    if (font != null) return new Snapshot(new File(font), false);
     byte[] bytes = RuntimeEnvironment.host().readVirtualFile(path.getBytes(StandardCharsets.UTF_8));
     if (bytes == null) throw new FileNotFoundException(path);
     Path temporary = null;

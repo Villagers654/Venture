@@ -1,0 +1,350 @@
+diff --git a/src/gpu_info_util/SystemInfo_vulkan.cpp b/src/gpu_info_util/SystemInfo_vulkan.cpp
+--- a/src/gpu_info_util/SystemInfo_vulkan.cpp
++++ b/src/gpu_info_util/SystemInfo_vulkan.cpp
+@@ -29,6 +29,47 @@
+ {
+ namespace
+ {
++// Venture: a count can change between a vkEnumerate* count call and its fill call (a hybrid
++// laptop's loader adding or dropping a GPU, a driver answering differently between calls). The
++// fill then returns VK_INCOMPLETE, which is not an error: the array holds valid entries.
++// Repeat count+fill a bounded number of times while it is incomplete, then accept the entries
++// the last fill returned.
++constexpr int kEnumerateAttemptsVENTURE = 4;
++template <typename T, typename Enumerate>
++VkResult EnumerateAllVENTURE(std::vector<T> *out, Enumerate &&enumerate, const T &blank = T{})
++{
++    for (int attempt = 0; attempt < kEnumerateAttemptsVENTURE; ++attempt)
++    {
++        uint32_t count  = 0;
++        VkResult result = enumerate(&count, static_cast<T *>(nullptr));
++        if (result < VK_SUCCESS)
++        {
++            out->clear();
++            return result;
++        }
++        out->assign(count, blank);
++        if (count == 0)
++        {
++            return VK_SUCCESS;
++        }
++        result = enumerate(&count, out->data());
++        if (result < VK_SUCCESS)
++        {
++            out->clear();
++            return result;
++        }
++        if (count < out->size())
++        {
++            out->resize(count);
++        }
++        if (result != VK_INCOMPLETE)
++        {
++            return VK_SUCCESS;
++        }
++    }
++    return VK_SUCCESS;
++}
++
+ // Note: most drivers use VK_MAKE_API_VERSION to create the version.
+ VersionInfo ParseGenericDriverVersion(uint32_t driverVersion)
+ {
+@@ -225,16 +266,12 @@
+             return extensionNames;
+         }
+ 
+-        uint32_t extensionCount = 0;
+-        if (mPfnEnumerateInstanceExtensionProperties(nullptr, &extensionCount, nullptr) !=
+-            VK_SUCCESS)
+-        {
+-            return extensionNames;
+-        }
+-
+-        std::vector<VkExtensionProperties> extensions(extensionCount);
+-        if (mPfnEnumerateInstanceExtensionProperties(nullptr, &extensionCount, extensions.data()) !=
+-            VK_SUCCESS)
++        std::vector<VkExtensionProperties> extensions;
++        if (EnumerateAllVENTURE(&extensions,
++                                [&](uint32_t *count, VkExtensionProperties *properties) {
++                                    return mPfnEnumerateInstanceExtensionProperties(nullptr, count,
++                                                                                    properties);
++                                }) < VK_SUCCESS)
+         {
+             return extensionNames;
+         }
+@@ -536,17 +573,14 @@
+     auto pfnEnumeratePhysicalDevices     = vkLibrary.getEnumeratePhysicalDevicesFunc();
+     auto pfnGetPhysicalDeviceProperties  = vkLibrary.getPhysicalDevicePropertiesFunc();
+     auto pfnGetPhysicalDeviceProperties2 = vkLibrary.getPhysicalDeviceProperties2Func();
+-    uint32_t physicalDeviceCount = 0;
+-    if (pfnEnumeratePhysicalDevices(instance, &physicalDeviceCount, nullptr) != VK_SUCCESS)
+-    {
+-        return false;
+-    }
+-    std::vector<VkPhysicalDevice> physicalDevices(physicalDeviceCount);
+-    if (pfnEnumeratePhysicalDevices(instance, &physicalDeviceCount, physicalDevices.data()) !=
+-        VK_SUCCESS)
++    std::vector<VkPhysicalDevice> physicalDevices;
++    if (EnumerateAllVENTURE(&physicalDevices, [&](uint32_t *count, VkPhysicalDevice *devices) {
++            return pfnEnumeratePhysicalDevices(instance, count, devices);
++        }) < VK_SUCCESS)
+     {
+         return false;
+     }
++    uint32_t physicalDeviceCount = static_cast<uint32_t>(physicalDevices.size());
+ 
+     // If we get to here, we will likely provide a valid answer (unless an unknown vendorID):
+     info->gpus.resize(physicalDeviceCount);
+diff --git a/src/libANGLE/renderer/vulkan/vk_renderer.cpp b/src/libANGLE/renderer/vulkan/vk_renderer.cpp
+--- a/src/libANGLE/renderer/vulkan/vk_renderer.cpp
++++ b/src/libANGLE/renderer/vulkan/vk_renderer.cpp
+@@ -149,6 +149,47 @@
+      "Queue submission imminent due to staged texture updates"},
+     {QueueSubmitReason::InitializeMemory, "Queue submission imminent due to initializing memory"},
+ }};
++
++// Venture: a count can change between a vkEnumerate* count call and its fill call (a hybrid
++// laptop's loader adding or dropping a GPU, a driver answering differently between calls). The
++// fill then returns VK_INCOMPLETE, which is not an error: the array holds valid entries.
++// Repeat count+fill a bounded number of times while it is incomplete, then accept the entries
++// the last fill returned.
++constexpr int kEnumerateAttemptsVENTURE = 4;
++template <typename T, typename Enumerate>
++VkResult EnumerateAllVENTURE(std::vector<T> *out, Enumerate &&enumerate, const T &blank = T{})
++{
++    for (int attempt = 0; attempt < kEnumerateAttemptsVENTURE; ++attempt)
++    {
++        uint32_t count  = 0;
++        VkResult result = enumerate(&count, static_cast<T *>(nullptr));
++        if (result < VK_SUCCESS)
++        {
++            out->clear();
++            return result;
++        }
++        out->assign(count, blank);
++        if (count == 0)
++        {
++            return VK_SUCCESS;
++        }
++        result = enumerate(&count, out->data());
++        if (result < VK_SUCCESS)
++        {
++            out->clear();
++            return result;
++        }
++        if (count < out->size())
++        {
++            out->resize(count);
++        }
++        if (result != VK_INCOMPLETE)
++        {
++            return VK_SUCCESS;
++        }
++    }
++    return VK_SUCCESS;
++}
+ }  // namespace
+ 
+ std::ostream &operator<<(std::ostream &os, const QueueSubmitReason reason)
+@@ -2320,48 +2361,30 @@
+ {
+     // Enumerate instance extensions that are provided by the vulkan implementation and implicit
+     // layers.
+-    uint32_t instanceExtensionCount = 0;
+-    {
+-        ANGLE_SCOPED_DISABLE_LSAN();
+-        ANGLE_SCOPED_DISABLE_MSAN();
+-        ANGLE_VK_TRY(context, VK_CALL(vkEnumerateInstanceExtensionProperties, nullptr,
+-                                      &instanceExtensionCount, nullptr));
+-    }
+-
+-    std::vector<VkExtensionProperties> instanceExtensionProps(instanceExtensionCount);
+-    if (instanceExtensionCount > 0)
+-    {
+-        ANGLE_SCOPED_DISABLE_LSAN();
+-        ANGLE_SCOPED_DISABLE_MSAN();
+-        ANGLE_VK_TRY(context, VK_CALL(vkEnumerateInstanceExtensionProperties, nullptr,
+-                                      &instanceExtensionCount, instanceExtensionProps.data()));
+-        // In case fewer items were returned than requested, resize instanceExtensionProps to the
+-        // number of extensions returned (i.e. instanceExtensionCount).
+-        instanceExtensionProps.resize(instanceExtensionCount);
+-    }
++    std::vector<VkExtensionProperties> instanceExtensionProps;
++    ANGLE_VK_TRY(context, EnumerateAllVENTURE(
++                              &instanceExtensionProps,
++                              [&](uint32_t *count, VkExtensionProperties *properties) {
++                                  ANGLE_SCOPED_DISABLE_LSAN();
++                                  ANGLE_SCOPED_DISABLE_MSAN();
++                                  return VK_CALL(vkEnumerateInstanceExtensionProperties, nullptr,
++                                                 count, properties);
++                              }));
+ 
+     // Enumerate instance extensions that are provided by explicit layers.
+     for (const char *layerName : enabledInstanceLayerNames)
+     {
+-        uint32_t previousExtensionCount      = static_cast<uint32_t>(instanceExtensionProps.size());
+-        uint32_t instanceLayerExtensionCount = 0;
+-        {
+-            ANGLE_SCOPED_DISABLE_LSAN();
+-            ANGLE_SCOPED_DISABLE_MSAN();
+-            ANGLE_VK_TRY(context, VK_CALL(vkEnumerateInstanceExtensionProperties, layerName,
+-                                          &instanceLayerExtensionCount, nullptr));
+-        }
+-        instanceExtensionProps.resize(previousExtensionCount + instanceLayerExtensionCount);
+-        {
+-            ANGLE_SCOPED_DISABLE_LSAN();
+-            ANGLE_SCOPED_DISABLE_MSAN();
+-            ANGLE_VK_TRY(context, VK_CALL(vkEnumerateInstanceExtensionProperties, layerName,
+-                                          &instanceLayerExtensionCount,
+-                                          instanceExtensionProps.data() + previousExtensionCount));
+-        }
+-        // In case fewer items were returned than requested, resize instanceExtensionProps to the
+-        // number of extensions returned (i.e. instanceLayerExtensionCount).
+-        instanceExtensionProps.resize(previousExtensionCount + instanceLayerExtensionCount);
++        std::vector<VkExtensionProperties> layerExtensionProps;
++        ANGLE_VK_TRY(context, EnumerateAllVENTURE(
++                                  &layerExtensionProps,
++                                  [&](uint32_t *count, VkExtensionProperties *properties) {
++                                      ANGLE_SCOPED_DISABLE_LSAN();
++                                      ANGLE_SCOPED_DISABLE_MSAN();
++                                      return VK_CALL(vkEnumerateInstanceExtensionProperties,
++                                                     layerName, count, properties);
++                                  }));
++        instanceExtensionProps.insert(instanceExtensionProps.end(), layerExtensionProps.begin(),
++                                      layerExtensionProps.end());
+     }
+ 
+     // Get the list of instance extensions that are available.
+@@ -2561,22 +2584,14 @@
+     mEnabledICD             = scopedEnvironment.getEnabledICD();
+ 
+     // Gather global layer properties.
+-    uint32_t instanceLayerCount = 0;
+-    {
+-        ANGLE_SCOPED_DISABLE_LSAN();
+-        ANGLE_SCOPED_DISABLE_MSAN();
+-        ANGLE_VK_TRY(context,
+-                     VK_CALL(vkEnumerateInstanceLayerProperties, &instanceLayerCount, nullptr));
+-    }
+-
+-    std::vector<VkLayerProperties> instanceLayerProps(instanceLayerCount);
+-    if (instanceLayerCount > 0)
+-    {
+-        ANGLE_SCOPED_DISABLE_LSAN();
+-        ANGLE_SCOPED_DISABLE_MSAN();
+-        ANGLE_VK_TRY(context, VK_CALL(vkEnumerateInstanceLayerProperties, &instanceLayerCount,
+-                                      instanceLayerProps.data()));
+-    }
++    std::vector<VkLayerProperties> instanceLayerProps;
++    ANGLE_VK_TRY(context, EnumerateAllVENTURE(&instanceLayerProps,
++                                              [&](uint32_t *count, VkLayerProperties *properties) {
++                                                  ANGLE_SCOPED_DISABLE_LSAN();
++                                                  ANGLE_SCOPED_DISABLE_MSAN();
++                                                  return VK_CALL(vkEnumerateInstanceLayerProperties,
++                                                                 count, properties);
++                                              }));
+ 
+     mEnabledInstanceLayerNames.clear();
+ 
+@@ -2740,14 +2755,14 @@
+                                       nullptr, &mDebugUtilsMessenger));
+     }
+ 
+-    uint32_t physicalDeviceCount = 0;
+-    ANGLE_VK_TRY(context,
+-                 VK_CALL(vkEnumeratePhysicalDevices, mInstance, &physicalDeviceCount, nullptr));
+-    ANGLE_VK_CHECK(context, physicalDeviceCount > 0, VK_ERROR_INITIALIZATION_FAILED);
+-
+-    std::vector<VkPhysicalDevice> physicalDevices(physicalDeviceCount);
+-    ANGLE_VK_TRY(context, VK_CALL(vkEnumeratePhysicalDevices, mInstance, &physicalDeviceCount,
+-                                  physicalDevices.data()));
++    std::vector<VkPhysicalDevice> physicalDevices;
++    ANGLE_VK_TRY(context, EnumerateAllVENTURE(&physicalDevices,
++                                              [&](uint32_t *count, VkPhysicalDevice *devices) {
++                                                  return VK_CALL(vkEnumeratePhysicalDevices,
++                                                                 mInstance, count, devices);
++                                              }));
++    ANGLE_VK_CHECK(context, !physicalDevices.empty(), VK_ERROR_INITIALIZATION_FAILED);
++    uint32_t physicalDeviceCount = static_cast<uint32_t>(physicalDevices.size());
+     if (hasCreationCallbacksVENTURE())
+     {
+         VkPhysicalDevice selected = VK_NULL_HANDLE;
+@@ -4592,37 +4607,30 @@
+ {
+     // Enumerate device extensions that are provided by the vulkan
+     // implementation and implicit layers.
+-    uint32_t deviceExtensionCount = 0;
+-    ANGLE_VK_TRY(context, VK_CALL(vkEnumerateDeviceExtensionProperties, mPhysicalDevice, nullptr,
+-                                  &deviceExtensionCount, nullptr));
+-
+-    // Work-around a race condition in the Android platform during Android start-up, that can cause
+-    // the second call to vkEnumerateDeviceExtensionProperties to have an additional extension.  In
+-    // that case, the second call will return VK_INCOMPLETE.  To work-around that, add 1 to
+-    // deviceExtensionCount and ask for one more extension property than the first call said there
+-    // were.  See: http://anglebug.com/42265209 and internal-to-Google bug: b/206733351.
+-    deviceExtensionCount++;
+-    std::vector<VkExtensionProperties> deviceExtensionProps(deviceExtensionCount);
+-    ANGLE_VK_TRY(context, VK_CALL(vkEnumerateDeviceExtensionProperties, mPhysicalDevice, nullptr,
+-                                  &deviceExtensionCount, deviceExtensionProps.data()));
+-    // In case fewer items were returned than requested, resize deviceExtensionProps to the number
+-    // of extensions returned (i.e. deviceExtensionCount).  See: b/208937840
+-    deviceExtensionProps.resize(deviceExtensionCount);
++    // The Android start-up race that adds an extension between the two calls
++    // (http://anglebug.com/42265209, b/206733351) is one case of a count that changes between
++    // them; EnumerateAllVENTURE retries it and accepts what the last fill returned.
++    std::vector<VkExtensionProperties> deviceExtensionProps;
++    ANGLE_VK_TRY(context, EnumerateAllVENTURE(
++                              &deviceExtensionProps,
++                              [&](uint32_t *count, VkExtensionProperties *properties) {
++                                  return VK_CALL(vkEnumerateDeviceExtensionProperties,
++                                                 mPhysicalDevice, nullptr, count, properties);
++                              }));
+ 
+     // Enumerate device extensions that are provided by explicit layers.
+     for (const char *layerName : mEnabledInstanceLayerNames)
+     {
+-        uint32_t previousExtensionCount    = static_cast<uint32_t>(deviceExtensionProps.size());
+-        uint32_t deviceLayerExtensionCount = 0;
+-        ANGLE_VK_TRY(context, VK_CALL(vkEnumerateDeviceExtensionProperties, mPhysicalDevice,
+-                                      layerName, &deviceLayerExtensionCount, nullptr));
+-        deviceExtensionProps.resize(previousExtensionCount + deviceLayerExtensionCount);
+-        ANGLE_VK_TRY(context, VK_CALL(vkEnumerateDeviceExtensionProperties, mPhysicalDevice,
+-                                      layerName, &deviceLayerExtensionCount,
+-                                      deviceExtensionProps.data() + previousExtensionCount));
+-        // In case fewer items were returned than requested, resize deviceExtensionProps to the
+-        // number of extensions returned (i.e. deviceLayerExtensionCount).
+-        deviceExtensionProps.resize(previousExtensionCount + deviceLayerExtensionCount);
++        std::vector<VkExtensionProperties> layerExtensionProps;
++        ANGLE_VK_TRY(context, EnumerateAllVENTURE(
++                                  &layerExtensionProps,
++                                  [&](uint32_t *count, VkExtensionProperties *properties) {
++                                      return VK_CALL(vkEnumerateDeviceExtensionProperties,
++                                                     mPhysicalDevice, layerName, count,
++                                                     properties);
++                                  }));
++        deviceExtensionProps.insert(deviceExtensionProps.end(), layerExtensionProps.begin(),
++                                    layerExtensionProps.end());
+     }
+ 
+     // Get the list of device extensions that are available.
+@@ -4783,13 +4791,13 @@
+                                     UseVulkanSwapchain useVulkanSwapchain,
+                                     angle::NativeWindowSystem nativeWindowSystem)
+ {
+-    uint32_t deviceLayerCount = 0;
+-    ANGLE_VK_TRY(context, VK_CALL(vkEnumerateDeviceLayerProperties, mPhysicalDevice,
+-                                  &deviceLayerCount, nullptr));
+-
+-    std::vector<VkLayerProperties> deviceLayerProps(deviceLayerCount);
+-    ANGLE_VK_TRY(context, VK_CALL(vkEnumerateDeviceLayerProperties, mPhysicalDevice,
+-                                  &deviceLayerCount, deviceLayerProps.data()));
++    std::vector<VkLayerProperties> deviceLayerProps;
++    ANGLE_VK_TRY(context, EnumerateAllVENTURE(&deviceLayerProps,
++                                              [&](uint32_t *count, VkLayerProperties *properties) {
++                                                  return VK_CALL(vkEnumerateDeviceLayerProperties,
++                                                                 mPhysicalDevice, count,
++                                                                 properties);
++                                              }));
+ 
+     mEnabledFeatures       = {};
+     mEnabledFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;

@@ -8,6 +8,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <random>
 #include <set>
 #include <thread>
@@ -27,6 +28,7 @@
 #include "gfx/gpu_device_internal.h"
 #include "gfx/spirv_precision.h"
 #include "gfx/texture_decode.h"
+#include "gfx/vulkan_enumerate.h"
 #include "gfx/xr_images.h"
 #include "gfx/xr_vulkan_version.h"
 #include "hle/vulkan/timing.h"
@@ -581,6 +583,120 @@ TEST_CASE("gfx shared Vulkan instance treats an XR runtime's maximum version as 
       CHECK_FALSE(plan.above_tested_max);
       CHECK(plan.max_version == 0);
     }
+  }
+}
+TEST_CASE("gfx Vulkan enumerations retry a changing count and accept VK_INCOMPLETE's entries") {
+  // A fake vkEnumeratePhysicalDevices whose device list changes between calls,
+  // as a hybrid laptop's loader did when a GPU appeared or vanished.
+  struct Fake {
+    std::vector<std::vector<int>> lists;  // the list each count+fill pair sees, last one repeats
+    std::size_t calls = 0;
+    VkResult error = VK_SUCCESS;
+    VkResult operator()(std::uint32_t* count, int* out) {
+      const auto& list = lists[std::min(calls++ / 2, lists.size() - 1)];
+      if (error != VK_SUCCESS) return error;
+      if (!out) {
+        *count = static_cast<std::uint32_t>(list.size());
+        return VK_SUCCESS;
+      }
+      const auto n = std::min<std::size_t>(*count, list.size());
+      std::copy_n(list.begin(), n, out);
+      *count = static_cast<std::uint32_t>(n);
+      return n < list.size() ? VK_INCOMPLETE : VK_SUCCESS;
+    }
+  };
+  std::vector<int> out{99};
+  SUBCASE("a stable list is complete in one pass") {
+    Fake fake{{{1, 2}}};
+    CHECK(gfx::enumerate_vulkan(out, std::ref(fake)) == VK_SUCCESS);
+    CHECK(out == std::vector<int>{1, 2});
+    CHECK(fake.calls == 2);
+  }
+  SUBCASE("a list that grew before the fill is retried until it holds") {
+    // Count 1, fill sees 2 (VK_INCOMPLETE); the retry counts 2 and fills 2.
+    Fake fake{{{1, 2}}};
+    bool grew = false;
+    auto growing = [&](std::uint32_t* count, int* p) {
+      if (!p && !grew) {
+        grew = true;
+        *count = 1;
+        ++fake.calls;
+        return VK_SUCCESS;
+      }
+      return fake(count, p);
+    };
+    CHECK(gfx::enumerate_vulkan(out, growing) == VK_SUCCESS);
+    CHECK(out == std::vector<int>{1, 2});
+  }
+  SUBCASE("a list that shrank before the fill keeps only the written entries") {
+    Fake fake{{{1, 2, 3}}};
+    bool shrank = false;
+    auto shrinking = [&](std::uint32_t* count, int* p) {
+      if (p && !shrank) {
+        shrank = true;
+        *count = 1;  // the fill wrote fewer than counted, with VK_SUCCESS
+        p[0] = 7;
+        return VK_SUCCESS;
+      }
+      return fake(count, p);
+    };
+    CHECK(gfx::enumerate_vulkan(out, shrinking) == VK_SUCCESS);
+    CHECK(out == std::vector<int>{7});
+  }
+  SUBCASE("a count that never settles is accepted after the bounded retries") {
+    // Every count call sees n entries and every fill n + 1, as a loader that
+    // always lists one more device on the fill than on the count.
+    std::uint32_t n = 0, counts = 0;
+    auto changing = [&](std::uint32_t* count, int* p) {
+      if (!p) {
+        *count = ++n;
+        ++counts;
+        return VK_SUCCESS;
+      }
+      for (std::uint32_t i = 0; i < *count; ++i) p[i] = static_cast<int>(10 * n + i);
+      return VK_INCOMPLETE;
+    };
+    CHECK(gfx::enumerate_vulkan(out, changing) == VK_INCOMPLETE);
+    CHECK(counts == static_cast<std::uint32_t>(gfx::vulkan_enumeration_attempts));
+    // The last fill's entries, all of them valid.
+    std::vector<int> last;
+    for (std::uint32_t i = 0; i < n; ++i) last.push_back(static_cast<int>(10 * n + i));
+    CHECK(out == last);
+  }
+  SUBCASE("errors return nothing") {
+    Fake fake{{{1}}, 0, VK_ERROR_INITIALIZATION_FAILED};
+    CHECK(gfx::enumerate_vulkan(out, std::ref(fake)) == VK_ERROR_INITIALIZATION_FAILED);
+    CHECK(out.empty());
+  }
+  SUBCASE("an empty list needs no fill call") {
+    Fake fake{{{}}};
+    CHECK(gfx::enumerate_vulkan(out, std::ref(fake)) == VK_SUCCESS);
+    CHECK(out.empty());
+    CHECK(fake.calls == 1);
+  }
+  SUBCASE("structures start from the given blank entry") {
+    std::vector<VkQueueFamilyProperties2> families;
+    auto query = [](std::uint32_t* count, VkQueueFamilyProperties2* p) {
+      if (p) CHECK(p[0].sType == VK_STRUCTURE_TYPE_QUEUE_FAMILY_PROPERTIES_2);
+      *count = 1;
+      return VK_SUCCESS;
+    };
+    CHECK(gfx::enumerate_vulkan(families, query, VkQueueFamilyProperties2{VK_STRUCTURE_TYPE_QUEUE_FAMILY_PROPERTIES_2}) ==
+          VK_SUCCESS);
+    REQUIRE(families.size() == 1);
+  }
+  SUBCASE("the callee half reports VK_INCOMPLETE only for a short array") {
+    const std::vector<int> values{1, 2, 3};
+    std::uint32_t count = 0;
+    CHECK(gfx::fill_vulkan_enumeration(values, &count, static_cast<int*>(nullptr)) == VK_SUCCESS);
+    CHECK(count == 3);
+    std::array<int, 3> filled{};
+    count = 2;
+    CHECK(gfx::fill_vulkan_enumeration(values, &count, filled.data()) == VK_INCOMPLETE);
+    CHECK(count == 2);
+    count = 3;
+    CHECK(gfx::fill_vulkan_enumeration(values, &count, filled.data()) == VK_SUCCESS);
+    CHECK(filled == std::array<int, 3>{1, 2, 3});
   }
 }
 TEST_SUITE_BEGIN("gpu");
@@ -1570,6 +1686,119 @@ TEST_CASE("gfx multiview eye layers survive MSAA resolve and XR orientation conv
   }
   call("glUseProgram", 0); call("glDeleteProgram", program);
   for (auto shader : shaders) call("glDeleteShader", shader);
+}
+
+TEST_CASE("gfx multisampled render-to-texture depth survives a render pass break") {
+  // Unity on Quest attaches its eye depth as a multisampled render-to-texture
+  // depth texture (multiview: a depth array) and draws the skybox and the
+  // transparent queue after other framebuffers have interrupted the eye pass.
+  // A Quest keeps that depth, as ANGLE does through
+  // VK_EXT_multisampled_render_to_single_sampled; the emulated path must too.
+  if (!have_angle()) return;
+  EglSession egl;
+  const auto* extensions = g2h<const char>(call("glGetString", GL_EXTENSIONS));
+  const bool multiview_msaa = gfx::has_extension(extensions, "GL_OVR_multiview_multisampled_render_to_texture");
+  REQUIRE(gfx::has_extension(extensions, "GL_EXT_multisampled_render_to_texture2"));
+  constexpr GLsizei size = 64;
+  for (const bool multiview : {false, true}) {
+    if (multiview && !multiview_msaa) continue;
+    CAPTURE(multiview);
+    const char* vertex = multiview
+        ? "#version 300 es\n#extension GL_OVR_multiview2 : require\nlayout(num_views=2) in; uniform float z;"
+          "void main(){vec2 p=vec2((gl_VertexID<<1)&2,gl_VertexID&2);gl_Position=vec4(p*2.-1.,z,1);}"
+        : "#version 300 es\nuniform float z;"
+          "void main(){vec2 p=vec2((gl_VertexID<<1)&2,gl_VertexID&2);gl_Position=vec4(p*2.-1.,z,1);}";
+    const char* sources[]{vertex,
+        "#version 300 es\nprecision highp float;uniform vec4 c;out vec4 color;void main(){color=c;}"};
+    GLuint shaders[2];
+    const auto program = static_cast<GLuint>(call("glCreateProgram"));
+    for (int i = 0; i < 2; ++i) {
+      shaders[i] = static_cast<GLuint>(call("glCreateShader", i ? GL_FRAGMENT_SHADER : GL_VERTEX_SHADER));
+      call("glShaderSource", shaders[i], 1, &sources[i], 0);
+      call("glCompileShader", shaders[i]);
+      GLint compiled{};
+      call("glGetShaderiv", shaders[i], GL_COMPILE_STATUS, &compiled);
+      REQUIRE(compiled);
+      call("glAttachShader", program, shaders[i]);
+    }
+    call("glLinkProgram", program);
+    GLint linked{};
+    call("glGetProgramiv", program, GL_LINK_STATUS, &linked);
+    REQUIRE(linked);
+    const GLint layers = multiview ? 2 : 1;
+    const GLenum target = multiview ? GL_TEXTURE_2D_ARRAY : GL_TEXTURE_2D;
+    GLuint textures[2]{}, fbos[2]{};
+    call("glGenTextures", 2, textures);
+    call("glGenFramebuffers", 2, fbos);
+    for (int i = 0; i < 2; ++i) {
+      call("glBindTexture", target, textures[i]);
+      const GLenum format = i ? GL_DEPTH24_STENCIL8 : GL_RGBA8;
+      if (multiview) call("glTexStorage3D", target, 1, format, size, size, layers);
+      else call("glTexStorage2D", target, 1, format, size, size);
+    }
+    call("glBindFramebuffer", GL_FRAMEBUFFER, fbos[0]);
+    for (int i = 0; i < 2; ++i) {
+      const GLenum attachment = i ? GL_DEPTH_STENCIL_ATTACHMENT : GL_COLOR_ATTACHMENT0;
+      if (multiview)
+        call("glFramebufferTextureMultisampleMultiviewOVR", GL_FRAMEBUFFER, attachment, textures[i], 0, 4, 0, 2);
+      else
+        call("glFramebufferTexture2DMultisampleEXT", GL_FRAMEBUFFER, attachment, GL_TEXTURE_2D, textures[i], 0, 4);
+    }
+    REQUIRE(call("glGetError") == GL_NO_ERROR);
+    REQUIRE(call("glCheckFramebufferStatus", GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE);
+    call("glUseProgram", program);
+    const auto z = static_cast<GLint>(call("glGetUniformLocation", program, "z"));
+    const auto c = static_cast<GLint>(call("glGetUniformLocation", program, "c"));
+    call("glViewport", 0, 0, size, size);
+    call("glEnable", GL_DEPTH_TEST);
+    call("glDepthFunc", GL_LESS);
+    call("glClearColor", 0.f, 0.f, 0.f, 1.f);
+    call("glClearDepthf", 1.f);
+    call("glClear", GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+    call("glUniform1f", z, 0.f);  // the opaque scene, window depth 0.5
+    call("glUniform4f", c, 1.f, 0.f, 0.f, 1.f);
+    call("glDrawArrays", GL_TRIANGLES, 0, 3);
+    // Another framebuffer's work ends the eye framebuffer's render pass.
+    GLuint other{};
+    call("glGenTextures", 1, &other);
+    call("glBindTexture", GL_TEXTURE_2D, other);
+    call("glTexStorage2D", GL_TEXTURE_2D, 1, GL_RGBA8, 4, 4);
+    call("glBindFramebuffer", GL_FRAMEBUFFER, fbos[1]);
+    call("glFramebufferTexture2D", GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, other, 0);
+    call("glClear", GL_COLOR_BUFFER_BIT);
+    std::array<std::uint8_t, 64> scratch{};
+    call("glReadPixels", 0, 0, 4, 4, GL_RGBA, GL_UNSIGNED_BYTE, scratch.data());
+    call("glFinish");
+    // The skybox, at the far plane behind the scene: every fragment fails.
+    call("glBindFramebuffer", GL_FRAMEBUFFER, fbos[0]);
+    call("glUniform1f", z, 0.5f);
+    call("glUniform4f", c, 0.f, 1.f, 0.f, 1.f);
+    call("glDrawArrays", GL_TRIANGLES, 0, 3);
+    call("glDisable", GL_DEPTH_TEST);
+    REQUIRE(call("glGetError") == GL_NO_ERROR);
+    std::vector<std::uint8_t> pixels(std::size_t(size) * size * 4);
+    for (GLint layer = 0; layer < layers; ++layer) {
+      CAPTURE(layer);
+      call("glBindFramebuffer", GL_FRAMEBUFFER, fbos[1]);
+      if (multiview) call("glFramebufferTextureLayer", GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, textures[0], 0, layer);
+      else call("glFramebufferTexture2D", GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, textures[0], 0);
+      REQUIRE(call("glCheckFramebufferStatus", GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE);
+      call("glReadPixels", 0, 0, size, size, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+      std::size_t overwritten = 0;
+      for (std::size_t p = 0; p < pixels.size(); p += 4)
+        overwritten += pixels[p] != 255 || pixels[p + 1] != 0;
+      CHECK(overwritten == 0);
+    }
+    REQUIRE(call("glGetError") == GL_NO_ERROR);
+    call("glBindFramebuffer", GL_FRAMEBUFFER, 0);
+    call("glDeleteFramebuffers", 2, fbos);
+    call("glDeleteTextures", 2, textures);
+    call("glDeleteTextures", 1, &other);
+    call("glUseProgram", 0);
+    call("glDeleteProgram", program);
+    for (auto shader : shaders) call("glDeleteShader", shader);
+    CHECK(call("glGetError") == GL_NO_ERROR);
+  }
 }
 
 TEST_CASE("gfx XR staging exports every GLES ring layer for Vulkan and hands it back") {

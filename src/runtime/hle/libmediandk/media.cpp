@@ -210,6 +210,8 @@ Format* make_track_format(const media::Track& track) {
   if(track.height)format_set(f,"height",std::int32_t(track.height));
   if(track.color_format)format_set(f,"color-format",std::int32_t(track.color_format));
   if(!track.config.empty())set_buffer(f,"csd-0",track.config.data(),track.config.size());
+  // Android's WAVExtractor: raw tracks are 16-bit PCM.
+  if(track.mime=="audio/raw")format_set(f,"pcm-encoding",std::int32_t(2));
   return f;
 }
 Format* track_format(Extractor* p, std::uint64_t index) {
@@ -285,7 +287,11 @@ std::pair<media::Codec::Sink,media::Codec::Extent> surface_sink(void* surface) {
 }
 Codec* codec_new(const char* mime) {
   log::info("media","AMediaCodec_createDecoderByType mime={}",mime?mime:"<null>");
-  if(!mime || (std::strcmp(mime,"audio/mp4a-latm") && !media::video_mime(mime)) || !media::Library::get()->available())return nullptr;
+  // "audio/raw" is Android's PCM passthrough decoder, for raw extractor tracks
+  // (WAVE); it needs no FFmpeg component.
+  if(!mime)return nullptr;
+  if(std::strcmp(mime,"audio/raw") &&
+     ((!media::audio_mime(mime) && !media::video_mime(mime)) || !media::Library::get()->available()))return nullptr;
   return codecs.create();
 }
 int codec_delete(Codec* p) {

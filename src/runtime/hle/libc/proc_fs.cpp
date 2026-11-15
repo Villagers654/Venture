@@ -1,4 +1,5 @@
 #include "vfs.h"
+#include "system_fonts.h"
 #include "core/address_space.h"
 #include "core/process_image.h"
 #include "core/thread_api.h"
@@ -11,8 +12,14 @@ namespace venture::hle::libc {
 bool proc_directory(std::string_view p, std::vector<Dirent>* out) {
   std::vector<std::pair<std::string, int>> names;
   if (p == "/")
-    names = {{"data", 4}, {"sdcard", 4}, {"storage", 4}, {"proc", 4},
-             {"sys", 4},  {"dev", 4},    {"system", 4}, {"mnt", 4}};
+    names = {{"data", 4}, {"sdcard", 4}, {"storage", 4}, {"proc", 4}, {"sys", 4},
+             {"dev", 4},  {"system", 4}, {"mnt", 4},     {"etc", 10}};
+  else if (p == system_fonts::etc_directory)
+    names = {{"fonts.xml", 8}};
+  else if (p == system_fonts::directory) {
+    if (out)
+      for (const auto& file : system_fonts::catalog()->files) names.emplace_back(file.name, 8);
+  }
   // These mount parents exist on Android independently of app directories.
   // Recursive directory creation reaches external storage through them.
   else if (p == "/storage")
@@ -105,6 +112,7 @@ std::string proc_file(std::string_view p, bool* exists) {
   if (p == openxr_runtime_manifest)
     return R"({"file_format_version":"1.0.0","runtime":{"name":"Venture","library_path":"libopenxr_forwardloader.so"}}
 )";
+  if (p == system_fonts::fonts_xml_path) return system_fonts::catalog()->fonts_xml;
   if (p == "/proc/self/cmdline") return process_config().package + std::string(1, '\0');
   if (p == "/proc/self/cgroup") return "0::/\n";
   if (p == "/proc/self/status") {

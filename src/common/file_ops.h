@@ -19,6 +19,22 @@ private:
   struct Impl;
   std::unique_ptr<Impl> impl_;
 };
+// A read-only view of a whole file. Pages are read when first touched and are
+// shared with the system's file cache, so a large file costs no commit. Empty
+// (null data) when the file cannot be opened or mapped.
+class MappedFile {
+public:
+  explicit MappedFile(const fs::path &file);
+  ~MappedFile();
+  MappedFile(const MappedFile &) = delete;
+  MappedFile &operator=(const MappedFile &) = delete;
+  const unsigned char *data() const { return data_; }
+  std::size_t size() const { return size_; }
+
+private:
+  const unsigned char *data_ = nullptr;
+  std::size_t size_ = 0;
+};
 std::string random_account_key();
 bool is_link(const fs::path &path);
 struct FileIdentity {

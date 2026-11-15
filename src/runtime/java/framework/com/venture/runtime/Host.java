@@ -8,6 +8,8 @@ public interface Host {
   default boolean virtualFileExists(byte[] path) {
     throw new UnsupportedOperationException("Guest virtual filesystem unavailable");
   }
+  // The installed host font a /system/fonts/<name> path stands for, or null.
+  default String systemFont(String path) { return null; }
   default int setEnvironment(byte[] name, byte[] value, boolean overwrite) {
     throw new UnsupportedOperationException("Guest environment unavailable");
   }

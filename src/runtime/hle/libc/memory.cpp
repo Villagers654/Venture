@@ -5,10 +5,12 @@
 #include <format>
 #include <limits>
 #include <string>
+#include <utility>
 
 #include "common/log.h"
 #include "core/address_space.h"
 #include "core/guest_heap.h"
+#include "core/os_quit.h"
 #include "core/process.h"
 #include "core/signals.h"
 #include "core/thread.h"
@@ -44,12 +46,45 @@ bool owned(const char* call, const void* p) {
   }
   return false;
 }
+// Bionic's allocators (scudo, jemalloc) keep their bookkeeping outside a
+// freed small block, so its bytes stay as the guest left them until the block
+// is allocated again. mimalloc links a freed block into its page's free list
+// through the block's first word at once. Guests that read a block just after
+// freeing it work on a device and break here: Aim XR's IL2CPP metadata loader
+// (OPS.Obfuscator) frees the std::string holding its metadata file's name and
+// then opens that name, which began with mimalloc's free-list link, so the
+// metadata was never loaded and every assembly lookup failed. The guest's last
+// few small frees on each thread reach mimalloc only when later frees push them
+// out, or when the thread exits. The ring is constant-initialized thread data,
+// so a steady-state free is a TLS load, a swap and an index step: no guard,
+// lock or call. The exit flush registers once, from the frees that fill the ring.
+struct RecentFrees {
+  static constexpr std::uint32_t count = 16;
+  static constexpr std::uint64_t max_bytes = 1024;
+  void* blocks[count];
+  std::uint32_t next;
+};
+constinit thread_local RecentFrees recent_frees{};
+struct RecentFreesFlush {
+  ~RecentFreesFlush() {
+    if (os_quit::requested()) return;
+    for (auto*& p : recent_frees.blocks)
+      if (auto* block = std::exchange(p, nullptr)) guest_heap::allocator.free(block);
+  }
+};
 }  // namespace
 void* allocate(std::uint64_t size) { return record(guest_heap::allocator.aligned(size, 16)); }
 void deallocate(void* p) {
   if (!p || !owned("free", p)) return;
-  allocated_bytes.fetch_sub(mi_usable_size(p), std::memory_order_relaxed);
-  guest_heap::allocator.free(p);
+  const auto size = mi_usable_size(p);
+  allocated_bytes.fetch_sub(size, std::memory_order_relaxed);
+  if (size > RecentFrees::max_bytes) return guest_heap::allocator.free(p);
+  auto& recent = recent_frees;
+  auto* oldest = std::exchange(recent.blocks[recent.next], p);
+  recent.next = (recent.next + 1) % RecentFrees::count;
+  if (oldest) return guest_heap::allocator.free(oldest);
+  thread_local RecentFreesFlush flush;
+  (void)flush;
 }
 std::uint64_t usable_size(const void* p) { return p && owned("malloc_usable_size", p) ? mi_usable_size(p) : 0; }
 void* allocate_aligned(std::uint64_t alignment, std::uint64_t size) {

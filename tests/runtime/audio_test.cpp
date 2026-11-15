@@ -20,6 +20,9 @@
 #include "platform/thread_priority.h"
 
 #include "../async_wait.h"
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 using namespace venture;
 using namespace venture::test::audio_core;
@@ -253,6 +256,50 @@ TEST_CASE(
              {queue, h2g(&state)}) == 0);
   CHECK(state.index == 0);
 }
+TEST_CASE("audio: OpenSL audio players expose EffectSend with Android's direct and aux-send semantics") {
+  // Audio360 requires SL_IID_EFFECTSEND on its buffer-queue player.
+  setup();
+  SlSession sls;
+  sl::PcmEx pcm{{4, 2, 48000000, 32, 32, 3, 2}, 3};
+  sl::QueueLocator queue{0x800007bd, 4};
+  sl::OutputMixLocator loc{4, 0, sls.mix};
+  sl::Data source{h2g(&queue), h2g(&pcm)}, sink{h2g(&loc), 0};
+  GuestAddr ids[] = {iid("SL_IID_ANDROIDSIMPLEBUFFERQUEUE"), iid("SL_IID_EFFECTSEND")};
+  std::uint32_t required[] = {1, 1};
+  GuestAddr player = 0;
+  REQUIRE(call(table<sl::EngineTable>(sls.engine_itf).CreateAudioPlayer,
+               {sls.engine_itf, h2g(&player), h2g(&source), h2g(&sink), 2,
+                h2g(ids), h2g(required)}) == 0);
+  realize(player);
+  auto send = get(player, "SL_IID_EFFECTSEND");
+  REQUIRE(send);
+  auto& fx = table<sl::EffectSendTable>(send);
+  std::int16_t level = 1;
+  CHECK(call(fx.GetDirectLevel, {send, h2g(&level)}) == 0);
+  CHECK(level == 0);
+  CHECK(call(fx.SetDirectLevel, {send, std::uint64_t(std::int64_t(-600))}) == 0);
+  CHECK(call(fx.GetDirectLevel, {send, h2g(&level)}) == 0);
+  CHECK(level == -600);
+  CHECK(call(fx.SetDirectLevel, {send, 1}) == 2);  // SL_RESULT_PARAMETER_INVALID above 0 mB
+  CHECK(call(fx.GetDirectLevel, {send, 0}) == 2);
+  // The output mix has no EnvironmentalReverb or PresetReverb interface, so
+  // no pointer is a valid aux effect, as with AOSP's getEnableLevel.
+  auto volume = get(player, "SL_IID_VOLUME");
+  std::uint32_t enabled = 1;
+  CHECK(call(fx.EnableEffectSend, {send, volume, 1, 0}) == 2);
+  CHECK(call(fx.IsEnabled, {send, volume, h2g(&enabled)}) == 2);
+  CHECK(enabled == 0);
+  CHECK(call(fx.SetSendLevel, {send, volume, std::uint64_t(std::int64_t(-100))}) == 2);
+  CHECK(call(fx.GetSendLevel, {send, volume, h2g(&level)}) == 2);
+  // The direct level scales the dry signal like the volume level does.
+  CHECK(call(table<sl::VolumeTable>(volume).SetVolumeLevel,
+             {volume, std::uint64_t(std::int64_t(-600))}) == 0);
+  // EffectSend is a player interface, not an output mix one.
+  GuestAddr none = 0;
+  CHECK(call(table<sl::ObjectTable>(sls.mix).GetInterface,
+             {sls.mix, iid("SL_IID_EFFECTSEND"), h2g(&none)}) == 12);
+  CHECK(none == 0);
+}
 TEST_CASE("audio: OpenSL object callback registration permits Wwise engine initialization and PCM playback") {
   setup();
   std::atomic<int> object_events{0}, completed{0};
@@ -388,6 +435,36 @@ TEST_CASE("audio: a refused real-time request still gets host audio scheduling u
     platform::unbind_thread_priority(tid);
   }).join();
   CHECK(platform::request_realtime_thread(0x7ffff01) != 0);  // no such thread
+}
+TEST_CASE("scheduling: a thread stopped for exit leaves a background priority and keeps a raised one") {
+  // Beat Saber's background job workers (nice 10) waited for Windows' starvation
+  // boost while the cores were busy, past the OS quit drain's 2 s bound.
+  std::thread([] {
+    constexpr std::int32_t tid = 0x7ffff02;
+    platform::bind_thread_priority(tid);
+    CHECK(platform::set_thread_priority(tid, 10) == 0);
+#ifdef _WIN32
+    CHECK(GetThreadPriority(GetCurrentThread()) == THREAD_PRIORITY_LOWEST);
+#endif
+    platform::restore_thread_priority_for_exit(tid);
+#ifdef _WIN32
+    CHECK(GetThreadPriority(GetCurrentThread()) == THREAD_PRIORITY_NORMAL);
+#endif
+    // A later lowering request still reports the guest's value but runs at normal.
+    CHECK(platform::set_thread_priority(tid, 19) == 0);
+    int nice = 0;
+    CHECK(platform::get_thread_priority(tid, &nice) == 0);
+    CHECK(nice == 19);
+#ifdef _WIN32
+    CHECK(GetThreadPriority(GetCurrentThread()) == THREAD_PRIORITY_NORMAL);
+    CHECK(platform::set_thread_priority(tid, -4) == 0);
+    CHECK(GetThreadPriority(GetCurrentThread()) == THREAD_PRIORITY_ABOVE_NORMAL);
+    platform::restore_thread_priority_for_exit(tid);
+    CHECK(GetThreadPriority(GetCurrentThread()) == THREAD_PRIORITY_ABOVE_NORMAL);
+#endif
+    platform::unbind_thread_priority(tid);
+  }).join();
+  platform::restore_thread_priority_for_exit(0x7ffff03);  // no such thread: nothing to do
 }
 TEST_CASE(
     "audio: AAudio error callback follows actual miniaudio stop notification "

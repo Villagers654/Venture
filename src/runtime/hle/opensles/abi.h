@@ -183,6 +183,18 @@ static_assert(offsetof(VolumeTable, EnableStereoPosition) == 40);
 static_assert(offsetof(VolumeTable, IsEnabledStereoPosition) == 48);
 static_assert(offsetof(VolumeTable, SetStereoPosition) == 56);
 static_assert(offsetof(VolumeTable, GetStereoPosition) == 64);
+// NDK SLES/OpenSLES.h SLEffectSendItf_: six slots in declaration order.
+struct EffectSendTable {
+  GuestAddr EnableEffectSend;
+  GuestAddr IsEnabled;
+  GuestAddr SetDirectLevel;
+  GuestAddr GetDirectLevel;
+  GuestAddr SetSendLevel;
+  GuestAddr GetSendLevel;
+};
+static_assert(sizeof(EffectSendTable) == 48);
+static_assert(offsetof(EffectSendTable, SetDirectLevel) == 16);
+static_assert(offsetof(EffectSendTable, GetSendLevel) == 40);
 struct BufferQueueTable {
   GuestAddr Enqueue;
   GuestAddr Clear;

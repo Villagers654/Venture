@@ -50,7 +50,7 @@ std::int64_t thread_cpu_time_ns() {
 #endif
 }
 namespace {
-struct Entry { int id = 0; std::atomic<bool> audio{false}; std::atomic<int> nice{0}; int fifo = 0; bool realtime_request = false; Entry* previous = nullptr; std::unique_ptr<AudioThreadPriority> priority; };
+struct Entry { int id = 0; std::atomic<bool> exiting{false}; std::atomic<bool> audio{false}; std::atomic<int> nice{0}; int fifo = 0; bool realtime_request = false; Entry* previous = nullptr; std::unique_ptr<AudioThreadPriority> priority; };
 struct Threads { std::mutex mutex; std::map<std::int32_t, std::unique_ptr<Entry>> ids; };
 thread_local Entry* current_entry = nullptr;
 thread_local unsigned realtime_depth = 0;
@@ -167,9 +167,30 @@ void apply_pending_thread_priority() {
   } else if (current_entry->priority) {
     current_entry->priority.reset();
 #ifdef __linux__
-    setpriority(PRIO_PROCESS, static_cast<id_t>(current_entry->id), current_entry->nice.load(std::memory_order_relaxed));
+    const auto nice = current_entry->nice.load(std::memory_order_relaxed);
+    setpriority(PRIO_PROCESS, static_cast<id_t>(current_entry->id),
+                current_entry->exiting.load(std::memory_order_relaxed) ? std::min(nice, 0) : nice);
 #endif
   }
+}
+void restore_thread_priority_for_exit(std::int32_t tid) {
+  auto& state = threads();
+  std::lock_guard lock(state.mutex);
+  auto it = state.ids.find(tid);
+  if (it == state.ids.end()) return;
+  it->second->exiting.store(true, std::memory_order_relaxed);
+#ifdef __linux__
+  // CFS still runs a niced thread in proportion to its weight. Undo a lowered
+  // nice where RLIMIT_NICE permits; an unprivileged process may be refused.
+  const auto id = static_cast<id_t>(it->second->id);
+  errno = 0;
+  const int current = getpriority(PRIO_PROCESS, id);
+  if (errno || current <= 0) return;
+  int target = 0;
+  if (rlimit limit{}; !getrlimit(RLIMIT_NICE, &limit) && limit.rlim_cur != RLIM_INFINITY)
+    target = std::max(target, 20 - static_cast<int>(std::min<rlim_t>(limit.rlim_cur, 40)));
+  if (target < current) setpriority(PRIO_PROCESS, id, target);
+#endif
 }
 int set_audio_thread_priority(std::int32_t tid, int fifo_priority) {
   if (fifo_priority != 0 && fifo_priority != 2 && fifo_priority != 3) return -err::kEINVAL;
@@ -266,19 +287,21 @@ int set_thread_priority(std::int32_t tid, int nice) {
   // lower nice to 20 - RLIMIT_NICE, so a raise beyond that applies the nearest
   // permitted value instead of failing the guest with SecurityException.
   const auto id = static_cast<id_t>(it->second->id);
+  // A thread stopped for exit keeps running at normal priority or above.
+  const int host_nice = it->second->exiting.load(std::memory_order_relaxed) ? std::min(nice, 0) : nice;
   errno = 0;
   const int current = getpriority(PRIO_PROCESS, id);
   if (errno == 0) {
-    int applied = nice;
+    int applied = host_nice;
     if (rlimit limit{}; !getrlimit(RLIMIT_NICE, &limit) && limit.rlim_cur != RLIM_INFINITY) {
       const int permitted = 20 - static_cast<int>(std::min<rlim_t>(limit.rlim_cur, 40));
       // Restoring zero from a lowered thread is also a priority raise. Keep
       // an already permitted priority, while still honoring requests to lower it.
-      applied = std::max(nice, std::min(current, permitted));
+      applied = std::max(host_nice, std::min(current, permitted));
     }
     if (applied == current || !setpriority(PRIO_PROCESS, id, applied)) {
       static std::atomic_flag clamp_reported = ATOMIC_FLAG_INIT;
-      if (applied != nice && !clamp_reported.test_and_set(std::memory_order_relaxed))
+      if (applied != host_nice && !clamp_reported.test_and_set(std::memory_order_relaxed))
         log::warn("scheduling", "Host priority permissions limit requested nice {} to {}; guest priority retained", nice, applied);
       it->second->nice = nice;
       it->second->audio = it->second->realtime_request;

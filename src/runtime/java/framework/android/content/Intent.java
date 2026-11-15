@@ -77,6 +77,9 @@ public class Intent implements Parcelable {
   public Intent setClassName(String p, String c) {
     return setComponent(new ComponentName(p, c));
   }
+  public Intent setClassName(Context packageContext, String c) {
+    return setComponent(new ComponentName(packageContext, c));
+  }
   public Intent setClass(Context c, Class<?> t) {
     return setComponent(new ComponentName(c, t));
   }

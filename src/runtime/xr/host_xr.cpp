@@ -1,12 +1,14 @@
 #include "xr/application_identity.h"
 #include "xr/host_xr.h"
 #include "xr/display_memory.h"
+#include "xr/openxr_layers.h"
 #include "common/environment.h"
 
 #include <algorithm>
 #include <atomic>
 #include <cstring>
 #include <filesystem>
+#include <format>
 #include <openxr/openxr.h>
 #include <thread>
 #include <vector>
@@ -24,24 +26,24 @@ bool initialized = false;
 std::atomic<std::uint64_t> procedure_generation{1};
 XrApplicationInfo configured_identity = application_identity({}, {}, 0);
 std::chrono::milliseconds system_wait{0};
-HostXr initialize_host() {
-    HostXr h;
-    // The Khronos loader honors XR_RUNTIME_JSON in this process. Never write
-    // ActiveRuntime or an active_runtime.json as part of discovery.
-    h.get_instance_proc_addr = reinterpret_cast<void *>(&xrGetInstanceProcAddr);
+// Lists the host extensions and creates the instance on `h`; on failure
+// `operation` names the step for host_initialization_error, or is null when
+// the runtime lacks Vulkan (h.error says so).
+XrResult create_instance(HostXr &h, const char *&operation) {
+    h.available_extensions.clear();
+    h.enabled_extensions.clear();
+    operation = "list its extensions";
     std::uint32_t count = 0;
     XrResult result = xrEnumerateInstanceExtensionProperties(nullptr, 0, &count, nullptr);
     if (XR_FAILED(result)) {
       log::info("xr", "Host extension enumeration result={}", int(result));
-      h.error = host_initialization_error(result, "list its extensions");
-      return h;
+      return result;
     }
     std::vector<XrExtensionProperties> extensions(count, {XR_TYPE_EXTENSION_PROPERTIES});
     result = xrEnumerateInstanceExtensionProperties(nullptr, count, &count, extensions.data());
     if (XR_FAILED(result)) {
       log::info("xr", "Host extension enumeration result={}", int(result));
-      h.error = host_initialization_error(result, "list its extensions");
-      return h;
+      return result;
     }
     // r4-xr/report.md: SDK strings are not a guest capability list. This is
     // only the host side; guest enumeration is filtered independently.
@@ -107,7 +109,8 @@ HostXr initialize_host() {
     if (!h.enabled_extensions.contains("XR_KHR_vulkan_enable2")) {
       log::warn("xr", "Host runtime lacks required XR_KHR_vulkan_enable2; flat mode");
       h.error = "The active OpenXR runtime does not support Vulkan (XR_KHR_vulkan_enable2)";
-      return h;
+      operation = nullptr;
+      return XR_ERROR_EXTENSION_NOT_PRESENT;
     }
     std::vector<const char *> names;
     for (const auto &e : h.enabled_extensions)
@@ -118,10 +121,105 @@ HostXr initialize_host() {
     info.applicationInfo.apiVersion = XR_MAKE_VERSION(1, 0, 0);
     info.enabledExtensionCount = static_cast<std::uint32_t>(names.size());
     info.enabledExtensionNames = names.data();
+    operation = "create an instance";
     result = xrCreateInstance(&info, &h.instance);
     log::info("xr", "Host xrCreateInstance result={}", int(result));
+    return result;
+}
+bool creating_instance(const char *operation) {
+    return operation && std::string_view(operation) == "create an instance";
+}
+// The host instance failed at xrCreateInstance with `failed`: leaves out the
+// enabled implicit API layers that are broken and creates it again; every
+// working layer stays (xr/openxr_layers.h). A layer whose library does not load
+// or negotiate is found directly. When none is, and the instance starts with
+// no implicit layer at all, each layer is added back in the loader's order
+// and the ones the instance fails with stay out. `unloadable` gets the
+// layers that do not load, for the error text.
+XrResult create_without_broken_layers(HostXr &h, const char *&operation, XrResult failed, std::string &unloadable) {
+    auto layers = enabled_openxr_layers();
+    std::vector<ApiLayer> broken, working;
+    for (auto &layer : layers) (layer.reason.empty() ? working : broken).push_back(std::move(layer));
+    auto report = [&](const ApiLayer &layer) {
+      log::warn("xr", "OpenXR API layer broken: {} ({}): {}", layer.name, layer.manifest, layer.reason);
+      h.skipped_api_layers.push_back(layer.name);
+    };
+    auto create_without = [&](const std::vector<ApiLayer> &skipped) {
+      if (!skip_openxr_layers(skipped)) {
+        log::warn("xr", "The OpenXR loader refused its layer properties; no layer can be left out");
+        return XR_ERROR_INITIALIZATION_FAILED;
+      }
+      return create_instance(h, operation);
+    };
+    auto names = [](const std::vector<ApiLayer> &list) {
+      std::string out;
+      for (const auto &layer : list) out += (out.empty() ? "" : ", ") + layer.name;
+      return out.empty() ? std::string("none") : out;
+    };
+    XrResult result = failed;
+    if (!broken.empty()) {
+      for (const auto &layer : broken) {
+        report(layer);
+        unloadable += std::format("{}the OpenXR API layer {} ({}) could not be loaded: {}", unloadable.empty() ? "" : "; ",
+                                  layer.name, layer.manifest, layer.reason);
+      }
+      log::warn("xr", "Creating the host instance again without the broken OpenXR API layers: {}; the others stay: {}",
+                names(broken), names(working));
+      result = create_without(broken);
+    }
+    if (XR_SUCCEEDED(result) || !creating_instance(operation) || result == XR_ERROR_RUNTIME_UNAVAILABLE ||
+        working.empty())
+      return result;
+    // Whether an implicit layer fails it at all.
+    auto none = broken;
+    none.insert(none.end(), working.begin(), working.end());
+    const XrResult with_layers = result;
+    result = create_without(none);
     if (XR_FAILED(result)) {
-      h.error = host_initialization_error(result, "create an instance");
+      log::info("xr", "The host instance fails without implicit OpenXR API layers too (XrResult {}); none is left "
+                "out for that", int(result));
+      skip_openxr_layers(broken);
+      return result;
+    }
+    log::warn("xr", "The host instance starts without the implicit OpenXR API layers ({}) and failed with them "
+              "(XrResult {}); adding them back one at a time", names(working), int(with_layers));
+    for (std::size_t i = 0; i < working.size(); ++i) {
+      if (h.instance) xrDestroyInstance(h.instance);
+      h.instance = XR_NULL_HANDLE;
+      auto skipped = broken;
+      skipped.insert(skipped.end(), working.begin() + std::ptrdiff_t(i) + 1, working.end());
+      result = create_without(skipped);
+      if (XR_FAILED(result) && creating_instance(operation)) {
+        working[i].reason = std::format("xrCreateInstance fails with XrResult {} while it is loaded", int(result));
+        report(working[i]);
+        broken.push_back(working[i]);
+      }
+    }
+    // The last layer added back failed it: the instance without it.
+    if (XR_FAILED(result)) result = create_without(broken);
+    if (XR_SUCCEEDED(result))
+      log::warn("xr", "The host instance runs without the broken OpenXR API layers: {}", names(broken));
+    return result;
+}
+HostXr initialize_host() {
+    HostXr h;
+    // The Khronos loader honors XR_RUNTIME_JSON in this process. Never write
+    // ActiveRuntime or an active_runtime.json as part of discovery.
+    h.get_instance_proc_addr = reinterpret_cast<void *>(&xrGetInstanceProcAddr);
+    // The loader loads the runtime and every implicit API layer here; a damaged
+    // DLL among them must fail its load, not stop the start behind a dialog.
+    QuietLibraryErrors quiet_library_errors;
+    const char *operation = nullptr;
+    XrResult result = create_instance(h, operation);
+    std::string unloadable;
+    if (XR_FAILED(result) && creating_instance(operation) && result != XR_ERROR_RUNTIME_UNAVAILABLE)
+      result = create_without_broken_layers(h, operation, result, unloadable);
+    if (XR_FAILED(result)) {
+      if (operation) {
+        h.error = host_initialization_error(result, operation);
+        if (!unloadable.empty())
+          h.error += ". Also, " + unloadable + ". Repair or uninstall the program that installed it";
+      }
       return h;
     }
     XrInstanceProperties properties{XR_TYPE_INSTANCE_PROPERTIES};

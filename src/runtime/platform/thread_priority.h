@@ -66,4 +66,10 @@ void unbind_thread_priority(std::int32_t tid);
 // Linux nice range [-20,19]; returns zero or a negative Linux errno.
 int set_thread_priority(std::int32_t tid, int nice);
 int get_thread_priority(std::int32_t tid, int* nice);
+// A guest thread stopped for process exit or OS quit must run to leave its host
+// call. A lowered (background) priority goes back to normal, as far as the host
+// permits, and stays there: on Windows a thread below normal priority waits for
+// the scheduler's starvation boost (about 4 s) while normal work keeps every
+// core busy, past the quit drain's bound. Raised and audio priorities are kept.
+void restore_thread_priority_for_exit(std::int32_t tid);
 }

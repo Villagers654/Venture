@@ -18,6 +18,7 @@ using EGLenum = unsigned int;
 #include "hle/libc/vfs.h"
 #include "hle/openxr/openxr.h"
 #include "hle/openxr/state.h"
+#include "hle/openxr/layer_layout.h"
 #include "xr/bindings.h"
 #include "xr/clock.h"
 #include "xr/frame_hitches.h"
@@ -1805,6 +1806,74 @@ TEST_CASE("XR GLES swapchains upload staged layers and fail creation, not releas
   CHECK(xg::xrDestroySession(session) == XR_SUCCESS);
   CHECK(xg::xrDestroyInstance(instance) == XR_SUCCESS);
   venture::xr::install_xr_images(nullptr);
+}
+
+TEST_CASE("XR layer arrangements are described once, when they change, with chained structures the guest did not enable") {
+  // A black menu in a report shows what the game submitted at that menu.
+  const auto eyes = reinterpret_cast<XrSwapchain>(std::uintptr_t(0x10));
+  const auto panel = reinterpret_cast<XrSwapchain>(std::uintptr_t(0x20));
+  const auto space = reinterpret_cast<XrSpace>(std::uintptr_t(77));
+  const venture::hle::openxr::LayerLayoutQueries queries{
+      [&](XrSwapchain chain) -> std::optional<XrExtent2Di> {
+        if (chain == eyes) return XrExtent2Di{100, 90};
+        if (chain == panel) return XrExtent2Di{64, 32};
+        return std::nullopt;
+      },
+      [](const char*) { return false; }};
+  std::array<XrCompositionLayerProjectionView, 2> views{};
+  for (std::uint32_t i = 0; i < 2; ++i)
+    views[i] = {XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW, nullptr, {}, {}, {eyes, {{0, 0}, {100, 90}}, i}};
+  XrCompositionLayerProjection projection{XR_TYPE_COMPOSITION_LAYER_PROJECTION, nullptr, 0, space, 2, views.data()};
+  XrCompositionLayerColorScaleBiasKHR fade{XR_TYPE_COMPOSITION_LAYER_COLOR_SCALE_BIAS_KHR};
+  XrCompositionLayerQuad quad{XR_TYPE_COMPOSITION_LAYER_QUAD, &fade, XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT,
+                              space, XR_EYE_VISIBILITY_BOTH, {panel, {{0, 0}, {64, 32}}, 0},
+                              {{0, 0.7071068f, 0, 0.7071068f}, {0, 1, -2}}, {2, 1}};
+  std::array<const XrCompositionLayerBaseHeader*, 2> both{
+      reinterpret_cast<const XrCompositionLayerBaseHeader*>(&projection),
+      reinterpret_cast<const XrCompositionLayerBaseHeader*>(&quad)};
+  XrFrameEndInfo menu{XR_TYPE_FRAME_END_INFO, nullptr, 1, XR_ENVIRONMENT_BLEND_MODE_OPAQUE, 2, both.data()};
+  XrFrameEndInfo game = menu;
+  game.layerCount = 1;
+  venture::hle::openxr::LayerLayouts layouts;
+  const auto first = layouts.change(game, queries);
+  REQUIRE(first);
+  CHECK(*first == "layers arrangement #1: 1 layer, blend mode 1; [0] projection flags=0x0 space=77 "
+                  "view 0 chain 100x90 slice 0 rect 100x90 view 1 chain 100x90 slice 1 rect 100x90");
+  CHECK_FALSE(layouts.change(game, queries));
+  // Dynamic resolution is not a change.
+  views[0].subImage.imageRect.extent.width = views[1].subImage.imageRect.extent.width = 80;
+  CHECK_FALSE(layouts.change(game, queries));
+  const auto opened = layouts.change(menu, queries);
+  REQUIRE(opened);
+  CHECK(opened->starts_with("layers arrangement #2: 2 layers, blend mode 1; [0] projection flags=0x0 space=77 view 0 chain 100x90 slice 0 rect 80x90"));
+  CHECK(opened->ends_with("; [1] quad flags=0x2 space=77 eye both chain 64x32 slice 0 rect 64x32 2.00x1.00 m at (0.00,1.00,-2.00)"
+                          " rot (0.00,0.71,0.00,0.71)"
+                          " +XrCompositionLayerColorScaleBiasKHR (not enabled)"));
+  // A moving or turning panel is not a change either (the orientation is named
+  // because a panel turned edge-on shows as a thin strip); a return to the game
+  // is named by number.
+  quad.pose.position.z = -3;
+  quad.pose.orientation = {0, 0, 0, 1};
+  CHECK_FALSE(layouts.change(menu, queries));
+  CHECK(layouts.change(game, queries) == "layers back to arrangement #1");
+  CHECK(layouts.change(menu, queries) == "layers back to arrangement #2");
+  CHECK(venture::hle::openxr::layer_type_list(both) == "projection, quad");
+  CHECK(venture::hle::openxr::layer_type_list({}) == "none");
+  // Chains are read before validation rejects a cycle: the walk stops.
+  XrCompositionLayerImageLayoutFB loop{XR_TYPE_COMPOSITION_LAYER_IMAGE_LAYOUT_FB};
+  loop.next = &loop;
+  quad.next = &loop;
+  venture::hle::openxr::LayerLayouts cyclic;
+  const auto described = cyclic.change(menu, queries);
+  REQUIRE(described);
+  CHECK(described->ends_with("+XrCompositionLayerImageLayoutFB (not enabled) +..."));
+  CHECK_FALSE(cyclic.change(menu, queries));
+  quad.next = &fade;
+  // Reports stop at the limit.
+  for (unsigned i = 0; i < venture::hle::openxr::LayerLayouts::kMaxReports; ++i)
+    (void)layouts.change(i % 2 ? menu : game, queries);
+  CHECK_FALSE(layouts.change(game, queries));
+  CHECK_FALSE(layouts.change(menu, queries));
 }
 
 TEST_CASE("XR draws guest cylinders a host cannot compose at their true arc, honoring the FB vertical flip") {

@@ -261,15 +261,19 @@ def configured_sources(build):
     """Honor the same source overrides that supplied the linked dependency."""
     cache = build / "CMakeCache.txt"
     result = {}
+    shared = {}
     if cache.is_file():
         for line in cache.read_text(encoding="utf-8").splitlines():
             key, separator, value = line.partition("=")
             if separator and value and key.startswith("FETCHCONTENT_SOURCE_DIR_"):
                 name = key.partition(":")[0].removeprefix("FETCHCONTENT_SOURCE_DIR_").lower()
                 result[name] = Path(value)
+            elif separator and value and key.startswith("VENTURE_FETCH_SOURCE_DIR_"):
+                # The shared source cache (cmake/FetchCache.cmake); an explicit override wins.
+                shared[key.partition(":")[0].removeprefix("VENTURE_FETCH_SOURCE_DIR_").lower()] = Path(value)
             elif separator and value and key.partition(":")[0] == "FETCHCONTENT_BASE_DIR":
                 result[None] = Path(value)
-    return result
+    return {**shared, **result}
 
 
 def headless_jre(build, jdk):

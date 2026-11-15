@@ -1617,3 +1617,343 @@ TEST_CASE("Vulkan density views of a null image get a full-density image; other 
   CHECK(test::vk_call("vkCreateImageView", gpu.device, &vi, nullptr, &refused) == VK_ERROR_INITIALIZATION_FAILED);
   CHECK(refused == VK_NULL_HANDLE);
 }
+namespace guest_compute {
+#include "vulkan_texture_guest_compute.comp.inc"
+}
+namespace {
+// Texture decodes and BC7 encodes recorded so far, and the passes in submissions the driver accepted,
+// from the device-fault census.
+struct PassCensus {
+  unsigned long long decodes = 0, encodes = 0, submitted = 0;
+};
+PassCensus recorded_texture_passes() {
+  const auto census = vulkan::texture_pass_census();
+  PassCensus counts;
+  const auto at = census.find("recorded ");
+  REQUIRE(at != std::string::npos);
+  REQUIRE(std::sscanf(census.c_str() + at, "recorded %llu texture decodes, %llu BC7 encodes", &counts.decodes,
+                      &counts.encodes) == 2);
+  const auto submitted = census.find("; ", at);
+  REQUIRE(submitted != std::string::npos);
+  REQUIRE(std::sscanf(census.c_str() + submitted, "; %llu in submissions the driver accepted", &counts.submitted) == 1);
+  return counts;
+}
+}  // namespace
+// RUMBLE on an RX 9060 XT lost the device in its first texture uploads, stored as BC7, before it had any
+// descriptor set layout of its own. Venture's decode and BC7 passes in a guest command buffer bind every
+// descriptor their shaders use and give the guest its compute state back: the guest's pipeline, both its
+// sets and its push constants reach its dispatches between more than 1500 passes of mixed formats and sizes.
+// Run under VK_LAYER_KHRONOS_validation (GPU-assisted) this also checks every pass's descriptors.
+TEST_CASE("Vulkan texture decodes and BC7 encodes inside a guest command buffer bind their own descriptors and keep the guest's") {
+  struct Force {
+    Force() { vulkan::force_texture_emulation(true); vulkan::force_texture_compression(1); }
+    ~Force() { vulkan::force_texture_compression(-1); vulkan::force_texture_emulation(false); }
+  } force;
+  test::VulkanDevice gpu;
+  VkPhysicalDeviceFeatures features{};
+  test::vk_call("vkGetPhysicalDeviceFeatures", gpu.physical, &features);
+  if (!features.textureCompressionBC) {
+    MESSAGE("host has no BC textures");
+    return;
+  }
+  // The guest's compute pass: set 0 the totals, set 1 the input, push constants the slot and addend.
+  VkShaderModuleCreateInfo shader_info{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
+  shader_info.codeSize = sizeof(guest_compute::decode_shader);
+  shader_info.pCode = guest_compute::decode_shader;
+  VkShaderModule shader{};
+  REQUIRE(test::vk_call("vkCreateShaderModule", gpu.device, &shader_info, nullptr, &shader) == VK_SUCCESS);
+  const VkDescriptorSetLayoutBinding binding{0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT,
+                                             nullptr};
+  VkDescriptorSetLayoutCreateInfo set_info{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+  set_info.bindingCount = 1;
+  set_info.pBindings = &binding;
+  VkDescriptorSetLayout set_layouts[2]{};
+  for (auto& l : set_layouts)
+    REQUIRE(test::vk_call("vkCreateDescriptorSetLayout", gpu.device, &set_info, nullptr, &l) == VK_SUCCESS);
+  const VkPushConstantRange range{VK_SHADER_STAGE_COMPUTE_BIT, 0, 8};
+  VkPipelineLayoutCreateInfo layout_info{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+  layout_info.setLayoutCount = 2;
+  layout_info.pSetLayouts = set_layouts;
+  layout_info.pushConstantRangeCount = 1;
+  layout_info.pPushConstantRanges = &range;
+  VkPipelineLayout layout{};
+  REQUIRE(test::vk_call("vkCreatePipelineLayout", gpu.device, &layout_info, nullptr, &layout) == VK_SUCCESS);
+  VkComputePipelineCreateInfo pipeline_info{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
+  pipeline_info.stage = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_COMPUTE_BIT,
+                         shader, "main", nullptr};
+  pipeline_info.layout = layout;
+  VkPipeline pipeline{};
+  REQUIRE(test::vk_call("vkCreateComputePipelines", gpu.device, VK_NULL_HANDLE, 1u, &pipeline_info, nullptr,
+                        &pipeline) == VK_SUCCESS);
+  const VkDescriptorPoolSize pool_size{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 2};
+  VkDescriptorPoolCreateInfo pool_info{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+  pool_info.maxSets = 2;
+  pool_info.poolSizeCount = 1;
+  pool_info.pPoolSizes = &pool_size;
+  VkDescriptorPool pool{};
+  REQUIRE(test::vk_call("vkCreateDescriptorPool", gpu.device, &pool_info, nullptr, &pool) == VK_SUCCESS);
+  VkDescriptorSetAllocateInfo alloc{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+  alloc.descriptorPool = pool;
+  alloc.descriptorSetCount = 2;
+  alloc.pSetLayouts = set_layouts;
+  VkDescriptorSet sets[2]{};
+  REQUIRE(test::vk_call("vkAllocateDescriptorSets", gpu.device, &alloc, sets) == VK_SUCCESS);
+  test::VulkanBuffer totals(gpu, 16), input(gpu, 4);
+  std::memset(totals.mapped, 0, 16);
+  *static_cast<std::uint32_t*>(input.mapped) = 40;
+  const VkDescriptorBufferInfo buffers[] = {{totals.buffer, 0, 16}, {input.buffer, 0, 4}};
+  VkWriteDescriptorSet writes[2]{};
+  for (std::uint32_t i = 0; i < 2; ++i) {
+    writes[i] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    writes[i].dstSet = sets[i];
+    writes[i].descriptorCount = 1;
+    writes[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    writes[i].pBufferInfo = &buffers[i];
+  }
+  test::vk_call("vkUpdateDescriptorSets", gpu.device, 2u, writes, 0u, static_cast<const VkCopyDescriptorSet*>(nullptr));
+
+  // Emulated textures of mixed formats and sizes, 512x512 among them, with every mip.
+  struct Shape {
+    VkFormat format;
+    std::uint32_t width, height, levels;
+  };
+  std::vector<Shape> shapes;
+  const VkFormat formats[] = {VK_FORMAT_ASTC_4x4_SRGB_BLOCK, VK_FORMAT_ASTC_6x6_UNORM_BLOCK,
+                              VK_FORMAT_ASTC_8x8_SRGB_BLOCK, VK_FORMAT_ETC2_R8G8B8A8_UNORM_BLOCK,
+                              VK_FORMAT_ETC2_R8G8B8_SRGB_BLOCK};
+  const VkExtent2D sizes[] = {{512, 512}, {256, 256}, {61, 37}, {128, 64}, {64, 64}, {32, 128}, {16, 16}, {4, 4}};
+  for (std::size_t i = 0; i < std::size(formats) * std::size(sizes); ++i) {
+    const auto size = sizes[i % std::size(sizes)];
+    const auto levels = 1 + std::uint32_t(std::log2(std::max(size.width, size.height)));
+    shapes.push_back({formats[i % std::size(formats)], size.width, size.height, levels});
+  }
+  std::vector<std::unique_ptr<test::VulkanImage>> images;
+  std::vector<std::vector<VkBufferImageCopy>> copies;
+  VkDeviceSize upload_bytes = 0;
+  for (const auto& s : shapes) {
+    images.push_back(std::make_unique<test::VulkanImage>(gpu, s.format, s.width, s.height, s.levels));
+    const auto info = vulkan::texture_format(s.format);
+    auto& regions = copies.emplace_back();
+    for (std::uint32_t mip = 0; mip < s.levels; ++mip) {
+      const auto w = std::max(1u, s.width >> mip), h = std::max(1u, s.height >> mip);
+      VkBufferImageCopy copy{};
+      copy.bufferOffset = upload_bytes;
+      copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, mip, 0, 1};
+      copy.imageExtent = {w, h, 1};
+      regions.push_back(copy);
+      upload_bytes += VkDeviceSize((w + info.width - 1) / info.width) * ((h + info.height - 1) / info.height) *
+                      info.block_bytes;
+    }
+  }
+  // Random blocks: valid, error and void-extent encodings alike decode to some color.
+  test::VulkanBuffer upload(gpu, upload_bytes);
+  std::mt19937 random(9060);
+  for (VkDeviceSize i = 0; i < upload_bytes / 4; ++i) static_cast<std::uint32_t*>(upload.mapped)[i] = random();
+
+  const auto before = recorded_texture_passes();
+  std::uint64_t uploaded = 0;
+  gpu.begin();
+  for (auto& image : images) image->transition();
+  test::vk_call("vkCmdBindPipeline", gpu.command, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
+  test::vk_call("vkCmdBindDescriptorSets", gpu.command, VK_PIPELINE_BIND_POINT_COMPUTE, layout, 0u, 2u, sets, 0u,
+                static_cast<const std::uint32_t*>(nullptr));
+  std::uint32_t push[2] = {0, 1};
+  test::vk_call("vkCmdPushConstants", gpu.command, layout, VK_SHADER_STAGE_COMPUTE_BIT, 0u, 8u,
+                static_cast<const void*>(push));
+  std::uint32_t expected[4]{};
+  auto dispatch = [&] {
+    gpu.barrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
+    test::vk_call("vkCmdDispatch", gpu.command, 1u, 1u, 1u);
+    expected[push[0]] += 40 + push[1];
+  };
+  dispatch();
+  for (std::uint32_t round = 0; uploaded < 1536; ++round) {
+    for (std::size_t i = 0; i < images.size(); ++i) {
+      test::vk_call("vkCmdCopyBufferToImage", gpu.command, upload.buffer, images[i]->image, VK_IMAGE_LAYOUT_GENERAL,
+                    std::uint32_t(copies[i].size()), copies[i].data());
+      uploaded += copies[i].size();
+      // Between uploads the guest dispatches with the state it bound before them.
+      if (i % 16 == 15) dispatch();
+    }
+    if (round == 0) {
+      push[0] = 1;
+      push[1] = 2;
+      test::vk_call("vkCmdPushConstants", gpu.command, layout, VK_SHADER_STAGE_COMPUTE_BIT, 0u, 8u,
+                    static_cast<const void*>(push));
+    }
+  }
+  dispatch();
+  gpu.barrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
+              VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_HOST_BIT,
+              VK_ACCESS_HOST_READ_BIT);
+  REQUIRE(test::vk_call("vkEndCommandBuffer", gpu.command) == VK_SUCCESS);
+  const auto recorded = recorded_texture_passes();
+  CHECK(uploaded >= 1536);
+  CHECK(recorded.decodes - before.decodes == uploaded);
+  CHECK(recorded.encodes - before.encodes == uploaded);  // every texture is stored as BC7
+  // The census tells passes that reached the driver from passes only recorded.
+  CHECK(recorded.submitted == before.submitted);
+  VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+  submit.commandBufferCount = 1;
+  submit.pCommandBuffers = &gpu.command;
+  REQUIRE(test::vk_call("vkQueueSubmit", gpu.queue, 1u, &submit, VkFence{}) == VK_SUCCESS);
+  REQUIRE(test::vk_call("vkQueueWaitIdle", gpu.queue) == VK_SUCCESS);
+  CHECK(recorded_texture_passes().submitted - before.submitted == 2 * uploaded);
+  const auto* got = static_cast<const std::uint32_t*>(totals.mapped);
+  for (int i = 0; i < 4; ++i) {
+    CAPTURE(i);
+    CHECK(got[i] == expected[i]);
+  }
+
+  images.clear();
+  test::vk_call("vkDestroyDescriptorPool", gpu.device, pool, nullptr);
+  test::vk_call("vkDestroyPipeline", gpu.device, pipeline, nullptr);
+  test::vk_call("vkDestroyPipelineLayout", gpu.device, layout, nullptr);
+  for (auto l : set_layouts) test::vk_call("vkDestroyDescriptorSetLayout", gpu.device, l, nullptr);
+  test::vk_call("vkDestroyShaderModule", gpu.device, shader, nullptr);
+}
+// Quest's driver keeps what a title frees until the GPU retires the work using it, so a title may reset or
+// free a command buffer, or reset or destroy its pool, while that work still runs. Venture's decode and BC7
+// passes in a secondary command buffer, run from two primaries, keep their descriptor pools, scratch and
+// sources until that work completes when the command buffers are released right after the submit, with the
+// work held behind a timeline value the host signals only afterwards. Under VK_LAYER_KHRONOS_validation no descriptor
+// pool, buffer or image of Venture's is destroyed in use (VUID-vkDestroyDescriptorPool-descriptorPool-00303).
+TEST_CASE("Vulkan texture passes keep their descriptor pools, scratch and sources while a released command buffer still runs") {
+  struct Force {
+    Force() { vulkan::force_texture_emulation(true); vulkan::force_texture_compression(1); }
+    ~Force() { vulkan::force_texture_compression(-1); vulkan::force_texture_emulation(false); }
+  } force;
+  test::VulkanDevice gpu(false, false, true);  // timeline semaphores
+  VkPhysicalDeviceFeatures features{};
+  test::vk_call("vkGetPhysicalDeviceFeatures", gpu.physical, &features);
+  if (!features.textureCompressionBC) {
+    MESSAGE("host has no BC textures");
+    return;
+  }
+  const VkFormat formats[] = {VK_FORMAT_ASTC_4x4_SRGB_BLOCK, VK_FORMAT_ASTC_6x6_UNORM_BLOCK,
+                              VK_FORMAT_ASTC_8x8_SRGB_BLOCK, VK_FORMAT_ETC2_R8G8B8A8_UNORM_BLOCK,
+                              VK_FORMAT_ETC2_R8G8B8_SRGB_BLOCK};
+  const VkExtent2D sizes[] = {{512, 512}, {256, 256}, {61, 37}, {128, 64}, {64, 64}, {32, 128}, {16, 16}, {4, 4}};
+  std::vector<std::unique_ptr<test::VulkanImage>> images;
+  std::vector<std::vector<VkBufferImageCopy>> copies;
+  VkDeviceSize upload_bytes = 0;
+  std::uint64_t uploaded = 0;
+  for (std::size_t i = 0; i < std::size(formats) * std::size(sizes); ++i) {
+    const auto format = formats[i % std::size(formats)];
+    const auto size = sizes[i % std::size(sizes)];
+    const auto levels = 1 + std::uint32_t(std::log2(std::max(size.width, size.height)));
+    images.push_back(std::make_unique<test::VulkanImage>(gpu, format, size.width, size.height, levels));
+    const auto info = vulkan::texture_format(format);
+    auto& regions = copies.emplace_back();
+    for (std::uint32_t mip = 0; mip < levels; ++mip) {
+      const auto w = std::max(1u, size.width >> mip), h = std::max(1u, size.height >> mip);
+      VkBufferImageCopy copy{};
+      copy.bufferOffset = upload_bytes;
+      copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, mip, 0, 1};
+      copy.imageExtent = {w, h, 1};
+      regions.push_back(copy);
+      upload_bytes += VkDeviceSize((w + info.width - 1) / info.width) * ((h + info.height - 1) / info.height) *
+                      info.block_bytes;
+      ++uploaded;
+    }
+  }
+  auto upload = std::make_unique<test::VulkanBuffer>(gpu, upload_bytes);
+  std::mt19937 random(9061);
+  for (VkDeviceSize i = 0; i < upload_bytes / 4; ++i) static_cast<std::uint32_t*>(upload->mapped)[i] = random();
+  gpu.begin();
+  for (auto& image : images) image->transition();
+  gpu.submit();
+
+  VkCommandPoolCreateInfo pool_info{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
+  pool_info.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+  pool_info.queueFamilyIndex = gpu.family;
+  VkCommandPool pool{};
+  REQUIRE(test::vk_call("vkCreateCommandPool", gpu.device, &pool_info, nullptr, &pool) == VK_SUCCESS);
+  VkCommandBufferAllocateInfo alloc{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+  alloc.commandPool = pool;
+  alloc.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+  alloc.commandBufferCount = 2;
+  VkCommandBuffer primaries[2]{};
+  REQUIRE(test::vk_call("vkAllocateCommandBuffers", gpu.device, &alloc, primaries) == VK_SUCCESS);
+  alloc.level = VK_COMMAND_BUFFER_LEVEL_SECONDARY;
+  alloc.commandBufferCount = 1;
+  VkCommandBuffer secondary{};
+  REQUIRE(test::vk_call("vkAllocateCommandBuffers", gpu.device, &alloc, &secondary) == VK_SUCCESS);
+
+  const auto before = recorded_texture_passes();
+  VkCommandBufferInheritanceInfo inheritance{VK_STRUCTURE_TYPE_COMMAND_BUFFER_INHERITANCE_INFO};
+  VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+  begin.flags = VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT;  // pending in both primaries at once
+  begin.pInheritanceInfo = &inheritance;
+  REQUIRE(test::vk_call("vkBeginCommandBuffer", secondary, &begin) == VK_SUCCESS);
+  for (std::size_t i = 0; i < images.size(); ++i)
+    test::vk_call("vkCmdCopyBufferToImage", secondary, upload->buffer, images[i]->image, VK_IMAGE_LAYOUT_GENERAL,
+                  std::uint32_t(copies[i].size()), copies[i].data());
+  REQUIRE(test::vk_call("vkEndCommandBuffer", secondary) == VK_SUCCESS);
+  CHECK(recorded_texture_passes().decodes - before.decodes == uploaded);
+
+  // The work waits on a timeline value the host signals only after the release.
+  VkSemaphoreTypeCreateInfo timeline{VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO};
+  timeline.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
+  VkSemaphoreCreateInfo semaphore_info{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO, &timeline};
+  VkSemaphore gate{};
+  REQUIRE(test::vk_call("vkCreateSemaphore", gpu.device, &semaphore_info, nullptr, &gate) == VK_SUCCESS);
+  VkCommandBufferBeginInfo primary_begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+  primary_begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+  for (auto primary : primaries) {
+    REQUIRE(test::vk_call("vkBeginCommandBuffer", primary, &primary_begin) == VK_SUCCESS);
+    test::vk_call("vkCmdExecuteCommands", primary, 1u, &secondary);
+    REQUIRE(test::vk_call("vkEndCommandBuffer", primary) == VK_SUCCESS);
+  }
+  const std::uint64_t open = 1;
+  VkTimelineSemaphoreSubmitInfo wait_value{VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO};
+  wait_value.waitSemaphoreValueCount = 1;
+  wait_value.pWaitSemaphoreValues = &open;
+  const VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+  VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO, &wait_value};
+  submit.waitSemaphoreCount = 1;
+  submit.pWaitSemaphores = &gate;
+  submit.pWaitDstStageMask = &wait_stage;
+  submit.commandBufferCount = 2;
+  submit.pCommandBuffers = primaries;
+  REQUIRE(test::vk_call("vkQueueSubmit", gpu.queue, 1u, &submit, VkFence{}) == VK_SUCCESS);
+  // Each primary carries the secondary's passes.
+  CHECK(recorded_texture_passes().submitted - before.submitted == 4 * uploaded);
+
+  // While the work waits on the semaphore, Venture releases the command buffers as a guest reset, free or
+  // pool reset or destroy releases them (vkResetCommandBuffer, vkBeginCommandBuffer, vkFreeCommandBuffers,
+  // vkResetCommandPool and vkDestroyCommandPool all end in release_texture_commands). The host command
+  // buffers themselves stay alive here: a host driver that runs them from their own memory (SwiftShader)
+  // cannot have them freed under it.
+  const auto held = vulkan::deferred_free_pending(gpu.device);
+  for (auto command : {secondary, primaries[0], primaries[1]}) vulkan::release_texture_commands(gpu.device, command);
+  // The secondary holds the passes; the primaries only count them.
+  CHECK(vulkan::texture_commands_retiring(gpu.device) == 1);
+  CHECK(vulkan::deferred_free_pending(gpu.device) == held + 1);
+  VkSemaphoreSignalInfo signal{VK_STRUCTURE_TYPE_SEMAPHORE_SIGNAL_INFO};
+  signal.semaphore = gate;
+  signal.value = open;
+  REQUIRE(test::vk_call("vkSignalSemaphore", gpu.device, &signal) == VK_SUCCESS);
+  REQUIRE(test::vk_call("vkQueueWaitIdle", gpu.queue) == VK_SUCCESS);
+  CHECK(vulkan::deferred_free_pending(gpu.device) == 0);
+  CHECK(vulkan::texture_commands_retiring(gpu.device) == 0);
+  // The guest's own frees, now that the work is done.
+  REQUIRE(test::vk_call("vkResetCommandBuffer", primaries[1], 0u) == VK_SUCCESS);
+  test::vk_call("vkFreeCommandBuffers", gpu.device, pool, 1u, &secondary);
+  REQUIRE(test::vk_call("vkResetCommandPool", gpu.device, pool, 0u) == VK_SUCCESS);
+  test::vk_call("vkDestroyCommandPool", gpu.device, pool, nullptr);
+  test::vk_call("vkDestroySemaphore", gpu.device, gate, nullptr);
+  // The usual case: the guest re-records a command buffer whose work has completed. Its passes' objects
+  // return at once.
+  gpu.begin();
+  test::vk_call("vkCmdCopyBufferToImage", gpu.command, upload->buffer, images[0]->image, VK_IMAGE_LAYOUT_GENERAL,
+                std::uint32_t(copies[0].size()), copies[0].data());
+  gpu.submit();  // waits for the queue
+  gpu.begin();
+  CHECK(vulkan::texture_commands_retiring(gpu.device) == 0);
+  CHECK(vulkan::deferred_free_pending(gpu.device) == 0);
+  REQUIRE(test::vk_call("vkEndCommandBuffer", gpu.command) == VK_SUCCESS);
+  upload.reset();
+  images.clear();
+}

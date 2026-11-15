@@ -40,7 +40,8 @@ enum class Itf {
   android_queue,
   volume,
   config,
-  seek
+  seek,
+  effect_send
 };
 struct Entry {
   GuestAddr buffer;
@@ -57,6 +58,7 @@ struct Object {
   std::chrono::steady_clock::time_point emptied{};  // queue empty since; epoch while not empty
   GuestAddr object_cb = 0, object_user = 0;
   std::int16_t volume = 0, pan = 0;
+  std::int16_t direct_level = 0;  // SLEffectSendItf direct (dry) level, millibels
   std::uint32_t mute = 0, pan_enabled = 0;
   std::int32_t priority = 0;
   std::uint32_t preemptable = 0;
@@ -101,7 +103,8 @@ bool supported(Kind kind, std::string_view name) {
       name == "SL_IID_ANDROIDCONFIGURATION")
     return true;
   return kind == Kind::player
-             ? (name == "SL_IID_PLAY" || name == "SL_IID_VOLUME" || name == "SL_IID_SEEK")
+             ? (name == "SL_IID_PLAY" || name == "SL_IID_VOLUME" || name == "SL_IID_SEEK" ||
+                name == "SL_IID_EFFECTSEND")
              : name == "SL_IID_RECORD";
 }
 Itf interface_kind(std::string_view name) {
@@ -113,6 +116,7 @@ Itf interface_kind(std::string_view name) {
   if (name == "SL_IID_VOLUME") return Itf::volume;
   if (name == "SL_IID_ANDROIDCONFIGURATION") return Itf::config;
   if (name == "SL_IID_SEEK") return Itf::seek;
+  if (name == "SL_IID_EFFECTSEND") return Itf::effect_send;
   return Itf::object;
 }
 Result check_interfaces(Kind kind, std::uint32_t count,
@@ -154,7 +158,7 @@ std::shared_ptr<Object> make_object(Kind kind, GuestAddr parent) {
     add(Itf::queue);
     add(Itf::android_queue);
     add(Itf::config);
-    if (kind == Kind::player) {add(Itf::volume);add(Itf::seek);}
+    if (kind == Kind::player) {add(Itf::volume);add(Itf::seek);add(Itf::effect_send);}
   }
   obj->address = obj->interfaces.at(Itf::object);
   return obj;
@@ -165,7 +169,10 @@ void publish(const std::shared_ptr<Object>& obj) {
     registry.emplace(p, Interface{obj, kind});
 }
 void update_gain(Object& o) {
-  float gain = o.mute ? 0 : std::pow(10.0f, float(o.volume) / 2000);
+  // AOSP android_AudioPlayer: the player's amplification is its volume level
+  // times the EffectSend direct level (the dry path to the output mix).
+  float gain = o.mute ? 0 : std::pow(10.0f, float(o.volume) / 2000) *
+                                std::pow(10.0f, float(o.direct_level) / 2000);
   float pan = o.pan_enabled ? float(o.pan) / 1000 : 0;
   o.stream->gain_left.store(gain * (pan > 0 ? 1 - pan : 1));
   o.stream->gain_right.store(gain * (pan < 0 ? 1 + pan : 1));
@@ -715,6 +722,53 @@ Result get_pan(GuestAddr self, std::int16_t* value) {
   *value = o->pan;
   return ok;
 }
+// SLEffectSendItf, AOSP wilhelm/src/itf/IEffectSend.c. A send targets an
+// auxiliary effect interface of the player's output mix: its
+// EnvironmentalReverb or PresetReverb. This output mix exposes neither, so no
+// pointer names a valid aux effect and those calls fail with
+// PARAMETER_INVALID, as AOSP's getEnableLevel lookup does; the direct level
+// scales the player's dry signal. Levels are millibels in [SL_MILLIBEL_MIN, 0].
+bool aux_effect(const Object&, GuestAddr) { return false; }
+Result enable_effect_send(GuestAddr self, GuestAddr aux, std::uint32_t, std::int16_t level) {
+  auto o = find(self);
+  if (!o || level > 0) return invalid;
+  std::lock_guard lock(o->lock);
+  return aux_effect(*o, aux) ? ok : invalid;
+}
+Result effect_send_enabled(GuestAddr self, GuestAddr aux, std::uint32_t* enabled) {
+  auto o = find(self);
+  if (!o || !enabled) return invalid;
+  std::lock_guard lock(o->lock);
+  *enabled = 0;
+  return aux_effect(*o, aux) ? ok : invalid;
+}
+Result set_direct_level(GuestAddr self, std::int16_t level) {
+  auto o = find(self);
+  if (!o || level > 0) return invalid;
+  std::lock_guard lock(o->lock);
+  o->direct_level = level;
+  if (o->stream) update_gain(*o);
+  return ok;
+}
+Result get_direct_level(GuestAddr self, std::int16_t* level) {
+  auto o = find(self);
+  if (!o || !level) return invalid;
+  std::lock_guard lock(o->lock);
+  *level = o->direct_level;
+  return ok;
+}
+Result set_send_level(GuestAddr self, GuestAddr aux, std::int16_t level) {
+  auto o = find(self);
+  if (!o || level > 0) return invalid;
+  std::lock_guard lock(o->lock);
+  return aux_effect(*o, aux) ? ok : invalid;
+}
+Result get_send_level(GuestAddr self, GuestAddr aux, std::int16_t* level) {
+  auto o = find(self);
+  if (!o || !level) return invalid;
+  std::lock_guard lock(o->lock);
+  return aux_effect(*o, aux) ? ok : invalid;
+}
 std::uint32_t* config_value(Object& o, std::string_view key) {
   if (key == "androidPlaybackStreamType" && o.kind == Kind::player)
     return &o.stream_type;
@@ -1072,6 +1126,14 @@ void register_library() {
                          FN("Volume.IsEnabledStereoPosition", get_pan_enabled),
                          FN("Volume.SetStereoPosition", set_pan),
                          FN("Volume.GetStereoPosition", get_pan)});
+    install_table(
+        Itf::effect_send,
+        abi::EffectSendTable{FN("EffectSend.EnableEffectSend", enable_effect_send),
+                             FN("EffectSend.IsEnabled", effect_send_enabled),
+                             FN("EffectSend.SetDirectLevel", set_direct_level),
+                             FN("EffectSend.GetDirectLevel", get_direct_level),
+                             FN("EffectSend.SetSendLevel", set_send_level),
+                             FN("EffectSend.GetSendLevel", get_send_level)});
     install_table(Itf::config,
                   abi::AndroidConfigurationTable{
                       FN("AndroidConfiguration.SetConfiguration", set_config),

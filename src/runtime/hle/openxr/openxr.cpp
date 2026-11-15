@@ -22,6 +22,7 @@
 #include "xr/presentation.h"
 #include "hle/openxr/passthrough.h"
 #include "hle/openxr/sphere_layers.h"
+#include "hle/openxr/layer_layout.h"
 #include "hle/vulkan/vulkan.h"
 #include "hle/vulkan/timing.h"
 #include "platform/thread_priority.h"
@@ -1179,6 +1180,44 @@ void fit_layer_limit(XrSession session, std::vector<const XrCompositionLayerBase
     if (!drop[i]) layers[out++] = layers[i];
   layers.resize(out);
 }
+// How each projection view reaches the host, logged when it changes (at most 8
+// times): the guest chain and slice the game submitted, the host chain, slice and
+// rect the host is given. A single-eye report then shows whether the second eye
+// names the slice the copy filled (prepare_swapchains copies every slice).
+void log_eye_routing(std::span<const XrCompositionLayerBaseHeader* const> host_layers) {
+  static std::string previous;
+  static unsigned reports = 0;
+  if (reports >= 8) return;
+  std::string line;
+  for (auto* layer : host_layers) {
+    if (!layer || layer->type != XR_TYPE_COMPOSITION_LAYER_PROJECTION) continue;
+    const auto& projection = *reinterpret_cast<const XrCompositionLayerProjection*>(layer);
+    for (std::uint32_t i = 0; i < projection.viewCount && projection.views; ++i) {
+      const auto& sub = projection.views[i].subImage;
+      const Swapchain* guest = nullptr;
+      for (const auto& [handle, chain] : state().swapchains)
+        if (chain.host_handle && chain.host_handle == sub.swapchain) { guest = &chain; break; }
+      line += std::format("{}view {}: ", line.empty() ? "" : "; ", i);
+      if (guest)
+        line += std::format("guest {}x{} arrays={} format={} -> host {:#x} {}x{} arrays={} slice {} rect {}x{}+{}+{}",
+                            guest->info.width, guest->info.height, guest->info.arraySize, guest->info.format,
+                            reinterpret_cast<std::uintptr_t>(sub.swapchain), guest->host_info.width,
+                            guest->host_info.height, guest->host_info.arraySize, sub.imageArrayIndex,
+                            sub.imageRect.extent.width, sub.imageRect.extent.height, sub.imageRect.offset.x,
+                            sub.imageRect.offset.y);
+      else
+        line += std::format("host {:#x} (not a guest chain) slice {} rect {}x{}+{}+{}",
+                            reinterpret_cast<std::uintptr_t>(sub.swapchain), sub.imageArrayIndex,
+                            sub.imageRect.extent.width, sub.imageRect.extent.height, sub.imageRect.offset.x,
+                            sub.imageRect.offset.y);
+    }
+    break;  // the first projection layer carries the eyes
+  }
+  if (line.empty() || line == previous) return;
+  previous = line;
+  ++reports;
+  log::info("xr", "Eye routing: {}", line);
+}
 }  // namespace
 
 XrResult xrEndFrame(XrSession handle, const XrFrameEndInfo *info) {
@@ -1207,6 +1246,23 @@ XrResult xrEndFrame(XrSession handle, const XrFrameEndInfo *info) {
   }
   trace.display(info->displayTime);
   trace.layers(info->layerCount);
+  // A changed layer arrangement is logged once, with the host layers it became.
+  struct LayoutReport {
+    std::optional<std::string> line;
+    std::string host = "the frame failed";
+    ~LayoutReport() { if (line) log::info("xr-layers", "{} -> host: {}", *line, host); }
+  } layout_report;
+  {
+    static LayerLayouts layouts;
+    const LayerLayoutQueries queries{
+        [](XrSwapchain chain) -> std::optional<XrExtent2Di> {
+          const auto found = state().swapchains.find(chain);
+          if (found == state().swapchains.end()) return std::nullopt;
+          return XrExtent2Di{std::int32_t(found->second.info.width), std::int32_t(found->second.info.height)};
+        },
+        [](const char* extension) { return enabled(extension); }};
+    layout_report.line = layouts.change(*info, queries);
+  }
   // Native composition must follow accepted work on the guest queue. Pump
   // issuance before taking a physical queue lock so other producers can enter.
   if (!state().gles && [] {
@@ -1239,6 +1295,7 @@ XrResult xrEndFrame(XrSession handle, const XrFrameEndInfo *info) {
       const auto result = make_passthrough_frame_opaque(handle, passthrough);
       if (XR_FAILED(result)) return result;
     }
+    layout_report.host = "the external passthrough source's frame";
     lock.unlock();
     const auto result = session().end(&passthrough.info);
     if (XR_FAILED(result) || result == XR_SESSION_LOSS_PENDING) {
@@ -1443,6 +1500,8 @@ XrResult xrEndFrame(XrSession handle, const XrFrameEndInfo *info) {
   PresentationLayers mapped(true);
   for (auto& layer : layers)
     layer = static_cast<const XrCompositionLayerBaseHeader*>(mapped.chain(layer));
+  log_eye_routing(layers);
+  if (layout_report.line) layout_report.host = layer_type_list(layers);
   auto host_info = *info;
   host_info.layerCount = static_cast<std::uint32_t>(layers.size());
   host_info.layers = layers.data();

@@ -14,6 +14,33 @@ public class ImageView extends android.view.View {
   public ImageView(Context context, AttributeSet attrs, int style, int resource) {
     super(context, attrs, style, resource);
   }
+  // AOSP ImageView.ScaleType, with its native ordinals.
+  public enum ScaleType {
+    MATRIX(0), FIT_XY(1), FIT_START(2), FIT_CENTER(3), FIT_END(4), CENTER(5), CENTER_CROP(6), CENTER_INSIDE(7);
+    ScaleType(int ni) { nativeInt = ni; }
+    final int nativeInt;
+  }
+  private ScaleType scaleType = ScaleType.FIT_CENTER;
+  private final android.graphics.Matrix matrix = new android.graphics.Matrix();
+  public void setScaleType(ScaleType value) {
+    if (value == null) throw new NullPointerException();
+    if (scaleType != value) { scaleType = value; requestLayout(); invalidate(); }
+  }
+  public ScaleType getScaleType() { return scaleType; }
+  // AOSP: an identity matrix is stored as no matrix.
+  public void setImageMatrix(android.graphics.Matrix value) {
+    if (value != null && value.isIdentity()) value = null;
+    if (value == null ? !matrix.isIdentity() : !matrix.equals(value)) { matrix.set(value); invalidate(); }
+  }
+  // The draw matrix: the image matrix for MATRIX. The fitted scale types derive
+  // theirs from composing the image into the view's bounds, which no host Java
+  // view renderer does here, so they report identity.
+  public android.graphics.Matrix getImageMatrix() {
+    return scaleType == ScaleType.MATRIX && !matrix.isIdentity() ? matrix : new android.graphics.Matrix();
+  }
+  public void setImageBitmap(android.graphics.Bitmap bitmap) {
+    setImageDrawable(new android.graphics.drawable.BitmapDrawable(getContext().getResources(), bitmap));
+  }
   public Drawable getDrawable() { return drawable; }
   public void setImageDrawable(Drawable value) {
     if (drawable == value) return;

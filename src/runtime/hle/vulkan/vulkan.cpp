@@ -38,6 +38,7 @@
 #include "gfx/pipeline_trace.h"
 #include "gfx/queue_sync.h"
 #include "gfx/shared_image.h"
+#include "gfx/vulkan_enumerate.h"
 #include "internal.h"
 #include "timing.h"
 #include "external.h"
@@ -388,20 +389,53 @@ void report_device_fault(Scope scope, GuestAddr handle, const char* name) {
   signals::log_guest_call_frames(thread, std::format("{} returned VK_ERROR_DEVICE_LOST", name));
   signals::try_log_guest_threads_raw("vulkan-device-lost", true);
 }
+const char* fault_address_kind(VkDeviceFaultAddressTypeEXT type) {
+  switch (type) {
+    case VK_DEVICE_FAULT_ADDRESS_TYPE_NONE_EXT: return "none";
+    case VK_DEVICE_FAULT_ADDRESS_TYPE_READ_INVALID_EXT: return "invalid read";
+    case VK_DEVICE_FAULT_ADDRESS_TYPE_WRITE_INVALID_EXT: return "invalid write";
+    case VK_DEVICE_FAULT_ADDRESS_TYPE_EXECUTE_INVALID_EXT: return "invalid execute";
+    case VK_DEVICE_FAULT_ADDRESS_TYPE_INSTRUCTION_POINTER_UNKNOWN_EXT: return "shader instruction, not known to fault";
+    case VK_DEVICE_FAULT_ADDRESS_TYPE_INSTRUCTION_POINTER_INVALID_EXT: return "invalid shader instruction";
+    case VK_DEVICE_FAULT_ADDRESS_TYPE_INSTRUCTION_POINTER_FAULT_EXT: return "faulting shader instruction";
+    default: return "unknown kind";
+  }
+}
+// The lost device's name and driver: a PC with integrated and discrete GPUs
+// lists both in a report, and only this says which one faulted.
+std::string fault_device_name(VkDevice device) {
+  VkPhysicalDevice physical{};
+  { std::lock_guard lock(state_lock); physical = devices.at(device).physical; }
+  VkPhysicalDeviceDriverProperties driver{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES};
+  VkPhysicalDeviceProperties2 properties{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
+  properties.pNext = &driver;
+  if (auto query2 = reinterpret_cast<PFN_vkGetPhysicalDeviceProperties2>(
+          host_proc(Scope::physical, h2g(physical), "vkGetPhysicalDeviceProperties2"))) {
+    query2(physical, &properties);
+  } else if (auto query = reinterpret_cast<PFN_vkGetPhysicalDeviceProperties>(
+                 host_proc(Scope::physical, h2g(physical), "vkGetPhysicalDeviceProperties"))) {
+    query(physical, &properties.properties);
+  }
+  return std::format("{} (vendor=0x{:04x}, device=0x{:04x}), driver {} {}", properties.properties.deviceName,
+                     properties.properties.vendorID, properties.properties.deviceID, driver.driverName,
+                     driver.driverInfo);
+}
 void report_device_fault_info(VkDevice device) {
   { std::lock_guard lock(state_lock); if (!devices.at(device).fault_enabled) return; }
   auto query = reinterpret_cast<PFN_vkGetDeviceFaultInfoEXT>(
       host_proc(Scope::device, h2g(device), "vkGetDeviceFaultInfoEXT"));
   if (!query) return;
+  log::warn("vulkan-fault", "lost device: {}", fault_device_name(device));
   // VUID-device-07336: call only after a native VK_ERROR_DEVICE_LOST.
   // First obtain counts, then supply arrays of exactly those sizes. Binary
-  // dumps are not enabled; fault kinds and GPU addresses suffice here.
+  // dumps are not requested; fault kinds and GPU addresses suffice here.
   VkDeviceFaultCountsEXT counts{VK_STRUCTURE_TYPE_DEVICE_FAULT_COUNTS_EXT};
   auto r = query(device, &counts, nullptr);
   if (r != VK_SUCCESS) {
     log::warn("vulkan-fault", "vkGetDeviceFaultInfoEXT counts returned {}", int(r));
     return;
   }
+  const auto binary_size = counts.vendorBinarySize;
   std::vector<VkDeviceFaultAddressInfoEXT> addresses(counts.addressInfoCount);
   std::vector<VkDeviceFaultVendorInfoEXT> vendors(counts.vendorInfoCount);
   VkDeviceFaultInfoEXT info{VK_STRUCTURE_TYPE_DEVICE_FAULT_INFO_EXT};
@@ -409,13 +443,44 @@ void report_device_fault_info(VkDevice device) {
   info.pVendorInfos = vendors.data();
   counts.vendorBinarySize = 0;
   r = query(device, &counts, &info);
-  log::warn("vulkan-fault", "vkGetDeviceFaultInfoEXT returned {}: {} (addresses={}, vendor records={})",
-            int(r), info.description, counts.addressInfoCount, counts.vendorInfoCount);
+  // VK_INCOMPLETE: a count was smaller than what the driver had. A driver with
+  // a vendor binary dump, which Venture does not request, always returns it,
+  // and still writes every address and vendor record asked for.
+  std::string incomplete;
+  if (r == VK_INCOMPLETE)
+    incomplete = binary_size ? std::format("; VK_INCOMPLETE only because Venture does not request the driver's "
+                                           "{}-byte vendor binary dump, every address and record is below",
+                                           binary_size)
+                             : std::string("; VK_INCOMPLETE: the driver had more records than it counted first");
+  log::warn("vulkan-fault", "vkGetDeviceFaultInfoEXT returned {}: {} (addresses={}, vendor records={}{})", int(r),
+            info.description[0] ? info.description : "no description", counts.addressInfoCount,
+            counts.vendorInfoCount, incomplete);
   if (r != VK_SUCCESS && r != VK_INCOMPLETE) return;
-  for (std::size_t i = 0; i < std::min<std::size_t>(counts.addressInfoCount, addresses.size()); ++i) {
+  const auto count = std::min<std::size_t>(counts.addressInfoCount, addresses.size());
+  // Shader instruction addresses of the waves in flight go on one line: dozens are common.
+  std::string waves;
+  std::size_t wave_count = 0;
+  bool null_page = false, fill = false;
+  for (std::size_t i = 0; i < count; ++i) {
     const auto& a = addresses[i];
-    log::warn("vulkan-fault", "kind={} address={:#x} precision={:#x}", int(a.addressType),
-              a.reportedAddress, a.addressPrecision);
+    if (a.addressType == VK_DEVICE_FAULT_ADDRESS_TYPE_INSTRUCTION_POINTER_UNKNOWN_EXT) {
+      waves += std::format("{}{:#x}", wave_count++ ? " " : "", a.reportedAddress);
+      continue;
+    }
+    log::warn("vulkan-fault", "kind={} ({}) address={:#x} precision={:#x}", int(a.addressType),
+              fault_address_kind(a.addressType), a.reportedAddress, a.addressPrecision);
+    const bool access = a.addressType == VK_DEVICE_FAULT_ADDRESS_TYPE_READ_INVALID_EXT ||
+                        a.addressType == VK_DEVICE_FAULT_ADDRESS_TYPE_WRITE_INVALID_EXT;
+    // An access in the first 64 KiB went through an address of 0 plus an
+    // offset: a descriptor or buffer device address of 0, a buffer with no
+    // memory bound, or a set nothing bound on a driver that then reads a
+    // descriptor of 0.
+    if (access && a.reportedAddress < 0x10000) {
+      null_page = true;
+      log::warn("vulkan-fault", "address {:#x} is in the null page: the {} went through an address of 0 (a descriptor "
+                "or buffer device address of 0, a buffer with no memory bound, or a descriptor set nothing bound)",
+                a.reportedAddress, a.addressType == VK_DEVICE_FAULT_ADDRESS_TYPE_WRITE_INVALID_EXT ? "write" : "read");
+    }
     // 0xdeadbeef filling both halves of a 64-bit word reads as GPU address
     // 0xbeefdeadbeef (48 bits). AMD's driver (PAL InitPageFaultDebugSrd) puts
     // one buffer descriptor with base 0xdeadbeefdeadbeef and unlimited range
@@ -424,18 +489,25 @@ void report_device_fault_info(VkDevice device) {
     // command bound (or one a later bind disturbed) fetches from that address
     // plus its own offset. A descriptor the game left unwritten in a bound set
     // reads differently, so the null fill cannot prevent this one.
-    constexpr std::uint64_t fill = 0xbeefdeadbeefull;
-    if (a.reportedAddress + a.addressPrecision >= fill && a.reportedAddress < fill + (std::uint64_t(1) << 24)) {
+    constexpr std::uint64_t pattern = 0xbeefdeadbeefull;
+    if (a.reportedAddress + a.addressPrecision >= pattern && a.reportedAddress < pattern + (std::uint64_t(1) << 24)) {
+      fill = true;
       log::warn("vulkan-fault", "address {:#x} is {:#x} past 0xbeefdeadbeef, the 48-bit address of a 0xdeadbeef fill "
                 "pattern: on AMD this is the debug descriptor behind descriptor sets that are not bound, so a draw "
                 "or dispatch read the first binding of a set index nothing bound (or a later bind disturbed), as a "
                 "buffer at about that offset; elsewhere an address read from memory holding that fill",
-                a.reportedAddress, a.reportedAddress >= fill ? a.reportedAddress - fill : 0);
-      for (const auto& note : bound_sets_fault_notes()) log::warn("vulkan-fault", "unbound sets: {}", note);
-      for (const auto& note : descriptor_fill_fault_notes(device)) log::warn("vulkan-fault", "fill suspects: {}", note);
-      log::warn("vulkan-fault", "fill suspects: {}", texture_pass_census());
+                a.reportedAddress, a.reportedAddress >= pattern ? a.reportedAddress - pattern : 0);
     }
     address_log_describe(a.reportedAddress, a.addressPrecision);
+  }
+  if (wave_count)
+    log::warn("vulkan-fault", "kind={} ({}): {} addresses of shader waves in flight: {}",
+              int(VK_DEVICE_FAULT_ADDRESS_TYPE_INSTRUCTION_POINTER_UNKNOWN_EXT),
+              fault_address_kind(VK_DEVICE_FAULT_ADDRESS_TYPE_INSTRUCTION_POINTER_UNKNOWN_EXT), wave_count, waves);
+  if (null_page || fill) {
+    for (const auto& note : bound_sets_fault_notes()) log::warn("vulkan-fault", "unbound sets: {}", note);
+    for (const auto& note : descriptor_fill_fault_notes(device)) log::warn("vulkan-fault", "fill suspects: {}", note);
+    log::warn("vulkan-fault", "fill suspects: {}", texture_pass_census());
   }
   for (std::size_t i = 0; i < std::min<std::size_t>(counts.vendorInfoCount, vendors.size()); ++i) {
     const auto& v = vendors[i];
@@ -890,19 +962,13 @@ VkResult enumerate(const std::vector<T>& values, std::uint32_t* count, T* out) {
   *count = n;
   return n < values.size() ? VK_INCOMPLETE : VK_SUCCESS;
 }
+// A list that keeps changing between the count and fill calls is accepted as
+// last returned (gfx/vulkan_enumerate.h), not dropped.
 template <class F>
 std::vector<VkExtensionProperties> extensions(F query) {
   std::vector<VkExtensionProperties> values;
-  for (int attempt = 0; attempt < 8; ++attempt) {
-    std::uint32_t count = 0;
-    if (query(&count, nullptr) != VK_SUCCESS) return {};
-    values.resize(count);
-    auto result = query(&count, values.data());
-    values.resize(count);
-    if (result == VK_SUCCESS) return values;
-    if (result != VK_INCOMPLETE) return {};
-  }
-  return {};
+  gfx::enumerate_vulkan(values, [&](std::uint32_t* n, VkExtensionProperties* p) { return query(n, p); });
+  return values;
 }
 std::vector<VkExtensionProperties> native_instance_extensions() {
   auto f = reinterpret_cast<PFN_vkEnumerateInstanceExtensionProperties>(
@@ -1139,13 +1205,13 @@ std::vector<VkPhysicalDevice> same_gpu_one_driver(VkInstance instance, std::vect
 }
 VkResult VKAPI_CALL enumerate_physicals(VkInstance instance, std::uint32_t* count, VkPhysicalDevice* out) {
   auto f = host<PFN_vkEnumeratePhysicalDevices>(instance, "vkEnumeratePhysicalDevices");
-  std::uint32_t n = 0;
-  auto r = f(instance, &n, nullptr);
-  if (r != VK_SUCCESS) return r;
-  std::vector<VkPhysicalDevice> values(n);
-  r = f(instance, &n, values.data());
-  if (r != VK_SUCCESS) return r;
-  values.resize(n);
+  std::vector<VkPhysicalDevice> values;
+  // VK_INCOMPLETE from the host still lists valid handles (gfx/vulkan_enumerate.h).
+  if (auto r = gfx::enumerate_vulkan(values, [&](std::uint32_t* n, VkPhysicalDevice* p) { return f(instance, n, p); });
+      r < 0) {
+    if (count) *count = 0;
+    return r;
+  }
   std::erase_if(values, [&](auto p) { return !same_gpu(instance, p); });
   if (values.size() > 1 && gfx::gpu_device().physical_device) values = same_gpu_one_driver(instance, std::move(values));
   if (values.size() > 1 && gfx::gpu_device().physical_device) {
@@ -1161,12 +1227,11 @@ VkResult VKAPI_CALL enumerate_physicals(VkInstance instance, std::uint32_t* coun
 }
 VkResult VKAPI_CALL enumerate_groups(VkInstance instance, std::uint32_t* count,
                                      VkPhysicalDeviceGroupProperties* out) {
-  std::uint32_t n = 0;
-  auto r = enumerate_physicals(instance, &n, nullptr);
-  if (r != VK_SUCCESS) return r;
-  std::vector<VkPhysicalDevice> selected(n);
-  r = enumerate_physicals(instance, &n, selected.data());
-  if (r != VK_SUCCESS) return r;
+  std::vector<VkPhysicalDevice> selected;
+  if (auto r = gfx::enumerate_vulkan(
+          selected, [&](std::uint32_t* n, VkPhysicalDevice* p) { return enumerate_physicals(instance, n, p); });
+      r < 0)
+    return r;
   std::vector<VkPhysicalDeviceGroupProperties> groups;
   for (auto p : selected) {
     VkPhysicalDeviceGroupProperties group{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_GROUP_PROPERTIES};
@@ -1982,7 +2047,7 @@ void VKAPI_CALL free_commands(VkDevice device, VkCommandPool pool, std::uint32_t
                               const VkCommandBuffer* cmds) {
   host<PFN_vkFreeCommandBuffers>(device, "vkFreeCommandBuffers")(device, pool, count, cmds);
   for (std::uint32_t i = 0; i < count; ++i) {
-    release_texture_commands(cmds[i]);
+    release_texture_commands(device, cmds[i]);
     release_render_commands(cmds[i]);
   }
   std::lock_guard lock(state_lock);
@@ -2005,7 +2070,7 @@ VkResult VKAPI_CALL reset_pool(VkDevice device, VkCommandPool pool, VkCommandPoo
       commands.assign(owner->second.begin(), owner->second.end());
   }
   for (auto command : commands) {
-    release_texture_commands(command);
+    release_texture_commands(device, command);
     release_render_commands(command);
   }
   if (flags & VK_COMMAND_POOL_RESET_RELEASE_RESOURCES_BIT) trim_texture_pool(device, pool);
@@ -2038,7 +2103,7 @@ void VKAPI_CALL destroy_pool(VkDevice device, VkCommandPool pool, const VkAlloca
     invalidate_layer_procedures();
   }
   for (auto command : removed) {
-    release_texture_commands(command);
+    release_texture_commands(device, command);
     release_render_commands(command);
   }
   trim_texture_pool(device, pool);

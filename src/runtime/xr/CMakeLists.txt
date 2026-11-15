@@ -19,14 +19,14 @@ if(NOT TARGET Vulkan::Headers)
   target_include_directories(venture_xr_vulkan_headers SYSTEM INTERFACE ${venture_vulkan_headers_SOURCE_DIR}/include)
   add_library(Vulkan::Headers ALIAS venture_xr_vulkan_headers)
 endif()
-add_library(venture_host_xr STATIC host_xr.cpp display_memory.cpp display_override.cpp eye_scale.cpp vulkan_layers.cpp)
+add_library(venture_host_xr STATIC host_xr.cpp display_memory.cpp display_override.cpp eye_scale.cpp vulkan_layers.cpp openxr_layers.cpp)
 target_include_directories(venture_host_xr PUBLIC ${PROJECT_SOURCE_DIR}/src/runtime)
 target_link_libraries(venture_host_xr PUBLIC venture_common OpenXR::openxr_loader Vulkan::Headers)
 if(WIN32)
-  target_sources(venture_host_xr PRIVATE ../platform/win32/xr_native.cpp ../platform/win32/vulkan_layers.cpp)
+  target_sources(venture_host_xr PRIVATE ../platform/win32/xr_native.cpp ../platform/win32/vulkan_layers.cpp ../platform/win32/openxr_layers.cpp)
   target_link_libraries(venture_host_xr PRIVATE version)
 else()
-  target_sources(venture_host_xr PRIVATE ../platform/posix/xr_native.cpp ../platform/posix/vulkan_layers.cpp)
+  target_sources(venture_host_xr PRIVATE ../platform/posix/xr_native.cpp ../platform/posix/vulkan_layers.cpp ../platform/posix/openxr_layers.cpp)
   target_link_libraries(venture_host_xr PRIVATE ${CMAKE_DL_LIBS})
 endif()
 
@@ -40,7 +40,7 @@ add_library(venture_xr STATIC passthrough_source.cpp passthrough_source_sbn1.cpp
   ../hle/openxr/spaces.cpp ../hle/openxr/haptics.cpp ../hle/openxr/spatial.cpp ../hle/openxr/debug_utils.cpp
   ../hle/openxr/android_surface.cpp
   ../hle/openxr/passthrough.cpp ../hle/openxr/passthrough_images.cpp ../hle/openxr/passthrough_camera.cpp ../hle/openxr/sphere_layers.cpp
-  ../hle/openxr/image_upload.cpp ../hle/openxr/passthrough_report.cpp
+  ../hle/openxr/image_upload.cpp ../hle/openxr/passthrough_report.cpp ../hle/openxr/layer_layout.cpp
   ../hle/vrapi/vrapi.cpp ../hle/vrapi/swapchains.cpp ../hle/vrapi/input.cpp
   ../hle/vrapi/layers.cpp ../hle/vrapi/drawn_layers.cpp ../hle/vrapi/a32.cpp
   ../hle/vrapi/haptics.cpp

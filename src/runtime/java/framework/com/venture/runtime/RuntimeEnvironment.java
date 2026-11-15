@@ -155,6 +155,11 @@ public final class RuntimeEnvironment {
    */
   public static String toHostPath(String path) {
     if (path == null || !path.startsWith("/") || path.startsWith("//")) return path;
+    // /system/fonts files are installed host fonts (hle/libc/system_fonts.h).
+    if (path.startsWith("/system/fonts/")) {
+      String font = GuestFiles.systemFont(path);
+      if (font != null) return font;
+    }
     RuntimeEnvironment e = current;
     if (e == null) return path;
     String pkg = e.manifest.info.packageName;

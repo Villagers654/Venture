@@ -17,8 +17,9 @@ public class Activity extends ContextWrapper implements KeyEvent.Callback, Windo
   public void startActivityForResult(Intent intent, int request) {
     AppMain.startActivityForResult(this, intent, request);
   }
+  // ActivityOptions (launch animations, bounds, display) change nothing for the
+  // one hosted task, as for Context.startActivity(Intent, Bundle).
   public void startActivityForResult(Intent intent, int request, Bundle options) {
-    if (options != null && !options.isEmpty()) throw new UnsupportedOperationException("Activity launch options unavailable");
     startActivityForResult(intent, request);
   }
   public void setResult(int code) { setResult(code, null); }
@@ -34,6 +35,29 @@ public class Activity extends ContextWrapper implements KeyEvent.Callback, Windo
   public void overridePendingTransition(int enter, int exit) {
     android.util.Log.w("Activity", "Window transition animations unavailable");
   }
+  // AOSP Activity activity-transition API. A null callback is AOSP's
+  // NULL_CALLBACK. No activity transition runs here (no host renderer for Java
+  // views), so a postponed enter transition only waits for its start call and
+  // finishAfterTransition finishes at once, as AOSP does with no transition.
+  private SharedElementCallback enterSharedElementCallback = SharedElementCallback.NULL_CALLBACK;
+  private SharedElementCallback exitSharedElementCallback = SharedElementCallback.NULL_CALLBACK;
+  private boolean enterTransitionPostponed;
+  public void setEnterSharedElementCallback(SharedElementCallback callback) {
+    enterSharedElementCallback = callback == null ? SharedElementCallback.NULL_CALLBACK : callback;
+  }
+  public void setExitSharedElementCallback(SharedElementCallback callback) {
+    exitSharedElementCallback = callback == null ? SharedElementCallback.NULL_CALLBACK : callback;
+  }
+  public void postponeEnterTransition() { enterTransitionPostponed = true; }
+  public void startPostponedEnterTransition() { enterTransitionPostponed = false; }
+  public void finishAfterTransition() { finish(); }
+  public boolean isActivityTransitionRunning() { return false; }
+  public void onEnterAnimationComplete() {}
+  public void onActivityReenter(int resultCode, Intent data) {}
+  private LocusId locusId;
+  // AOSP sends the locus to content capture and the activity manager; Quest
+  // apps get no content capture service, so it is only kept.
+  public void setLocusContext(LocusId locusId, Bundle bundle) { this.locusId = locusId; }
   private final Window window = new Window(this);
   private final FragmentManager fragments = new FragmentManager(this);
   public FragmentManager getFragmentManager() { return fragments; }

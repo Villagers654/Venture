@@ -3,6 +3,7 @@
 #include "common/environment.h"
 #include "common/http/client.h"
 #include "common/library/library.h"
+#include "common/openxr_layers.h"
 #include "common/process.h"
 #include "common/saves_migration.h"
 #include "common/steam_library.h"
@@ -164,8 +165,6 @@ void xr_section(std::string &out) {
   for (auto [root, label] : {std::pair{HKEY_LOCAL_MACHINE, "machine"}, std::pair{HKEY_CURRENT_USER, "user"}}) {
     for (const auto &[name, value] : reg_values(root, L"SOFTWARE\\Khronos\\OpenXR\\1\\AvailableRuntimes"))
       out += std::format("OpenXR runtime ({}): {}{}\n", label, name, value ? " (disabled)" : "");
-    for (const auto &[name, value] : reg_values(root, L"SOFTWARE\\Khronos\\OpenXR\\1\\ApiLayers\\Implicit"))
-      out += std::format("OpenXR implicit layer ({}): {}{}\n", label, name, value ? " (disabled)" : "");
     for (const auto &[name, value] : reg_values(root, L"SOFTWARE\\Khronos\\Vulkan\\Drivers"))
       out += std::format("Vulkan driver ({}): {}{}\n", label, manifest(name), value ? " (disabled)" : "");
     for (const auto &[name, value] : reg_values(root, L"SOFTWARE\\Khronos\\Vulkan\\ImplicitLayers"))
@@ -235,12 +234,30 @@ void xr_section(std::string &out) {
   else if (const char *h = std::getenv("HOME")) data.push_back(fs::path(h) / ".local/share");
   for (auto d : {"/usr/local/share", "/usr/share", "/etc"}) data.emplace_back(d);
   for (const auto &dir : data)
-    for (auto [sub, label] : {std::pair{"openxr/1/api_layers/implicit.d", "OpenXR implicit layer"},
-                              std::pair{"vulkan/implicit_layer.d", "Vulkan implicit layer"}})
-      for (const auto &f : fs::directory_iterator(dir / sub, ec))
-        out += std::format("{}: {}\n", label, paths::utf8(f.path()));
+    for (const auto &f : fs::directory_iterator(dir / "vulkan/implicit_layer.d", ec))
+      out += std::format("Vulkan implicit layer: {}\n", paths::utf8(f.path()));
 }
 #endif
+
+// Each implicit OpenXR API layer the loader finds, with the state of its
+// manifest and library. `broken` gets the enabled ones whose library the
+// loader would try and fail to load: with no other layer loading, that fails
+// xrCreateInstance whole (xr/openxr_layers.h).
+void openxr_layer_section(std::string &out, std::string &broken) {
+  for (const auto &path : openxr_layers::implicit_manifests()) {
+    const auto layer = openxr_layers::read(path);
+    // The loader passes over an unusable manifest and a library path naming no file.
+    const bool unusable = layer.problem.starts_with("the manifest");
+    const bool skipped = unusable || (layer.library.has_parent_path() && layer.problem.ends_with(" is missing"));
+    const bool enabled = unusable || openxr_layers::enabled(layer);
+    std::string state = layer.problem.empty() ? "ok" : layer.problem + (skipped ? " (the loader skips it)" : "");
+    if (!enabled) state += std::format(" (disabled by {})", layer.disable_environment);
+    out += std::format("OpenXR implicit layer: {} ({}), library {}: {}\n", layer.name.empty() ? "unnamed" : layer.name,
+                       paths::utf8(path), layer.library_path.empty() ? "none" : layer.library_path, state);
+    if (!layer.problem.empty() && !skipped && enabled)
+      broken += std::format("OpenXR API layer broken: {} ({}): {}\n", layer.name, paths::utf8(path), layer.problem);
+  }
+}
 
 void environment_section(std::string &out) {
   std::vector<std::string> lines;
@@ -430,15 +447,18 @@ void log_section(std::string &out, const fs::path &file, size_t limit) {
   if (!text.empty() && text.back() != '\n') out += '\n';
 }
 
-// The runtime's [facts] lines (headset, FOV, audio endpoint, clock rate) and
+// The runtime's [facts] lines (headset, FOV, audio endpoint, clock rate),
 // [eye-scale] lines (the eye size the game was told and rendered, which feed
-// the eye scale database) from the whole log, which the tail section may cut.
+// the eye scale database) and the implicit OpenXR API layers it left out as
+// broken (xr/host_xr.cpp) from the whole log, which the tail section may cut.
 std::string session_facts(const fs::path &file) {
   std::ifstream in(file, std::ios::binary);
   std::string facts;
   if (!in) return facts;
   for (std::string line; std::getline(in, line) && facts.size() < 16 * 1024;)
-    if (line.find(" [facts] ") != std::string::npos || line.find(" [eye-scale] ") != std::string::npos)
+    if (line.find(" [facts] ") != std::string::npos || line.find(" [eye-scale] ") != std::string::npos ||
+        line.find("OpenXR API layer broken: ") != std::string::npos ||
+        line.find("without the broken OpenXR API layers") != std::string::npos)
       facts += line.substr(0, 1024) + "\n";
   return facts;
 }
@@ -464,6 +484,30 @@ void timeline_section(std::string &out, const fs::path &file) {
     return;
   }
   for (std::size_t i = 0; i < kKeep; ++i) out += lines[i * (lines.size() - 1) / (kKeep - 1)] + "\n";
+}
+
+// The game's layer arrangements ("[xr-layers]": what it submits and what the host is
+// given) and the host session states, from the whole log, which log_section cuts in
+// the middle: a menu that shows black has its frame here whenever it opened. More
+// than 120 lines keep the first and last 60.
+void layers_section(std::string &out, const fs::path &file) {
+  std::ifstream in(file, std::ios::binary);
+  if (!in) return;
+  std::vector<std::string> lines;
+  for (std::string line; std::getline(in, line);)
+    if (line.find(" [xr-layers] ") != std::string::npos || line.find(" [xr] Host session state=") != std::string::npos)
+      lines.push_back(line.substr(0, 2048));
+  if (lines.empty()) return;
+  constexpr std::size_t kKeep = 120;
+  out += std::format("\n=== Frame layers and session states ({} lines{}) ===\n", lines.size(),
+                     lines.size() > kKeep ? std::format(", first and last {} shown", kKeep / 2) : std::string());
+  for (std::size_t i = 0; i < lines.size(); ++i) {
+    if (lines.size() > kKeep && i == kKeep / 2) {
+      out += std::format("... {} lines left out ...\n", lines.size() - kKeep);
+      i = lines.size() - kKeep / 2;
+    }
+    out += lines[i] + "\n";
+  }
 }
 
 // The Android framework classes and members the game's Java needs and Venture lacks, from
@@ -1053,6 +1097,8 @@ fs::path write_debug_report(const DebugReport &request) {
   // Gathered before the summary is written, which they inform.
   std::string evidence_text, evidence;
   if (window) evidence = evidence_section(evidence_text, *window, run->failed);
+  std::string layer_lines, broken_layers;
+  openxr_layer_section(layer_lines, broken_layers);
   std::vector<std::string> steps;
   out += "\n=== Likely cause ===\n";
   if (!run) {
@@ -1093,7 +1139,7 @@ fs::path write_debug_report(const DebugReport &request) {
                // failures (a runtime that was still closing) are not this run's.
                // The facts (the host runtime among them) from the whole log: some causes depend on them.
                auto own = diagnose(tail_log(runtime_log, 512 << 10) + "\n" + tail_log(console_log, 128 << 10) +
-                                   "\n" + evidence + "\n" + session_facts(runtime_log));
+                                   "\n" + evidence + "\n" + session_facts(runtime_log) + "\n" + broken_layers);
                if (own) return own;
                // Another game's "<game> stopped: <why>" line is not this run's cause (Table Troopers'
                // crash was reported for I Am Cat).
@@ -1124,6 +1170,7 @@ fs::path write_debug_report(const DebugReport &request) {
   system_section(out);
   out += "\n=== VR runtime ===\n";
   xr_section(out);
+  out += layer_lines;
   processes_section(out);
   out += "\n=== Environment ===\n";
   environment_section(out);
@@ -1203,6 +1250,7 @@ fs::path write_debug_report(const DebugReport &request) {
     }
     facts_section(out, logs / (base + ".log"));
     timeline_section(out, logs / (base + ".log"));
+    layers_section(out, logs / (base + ".log"));
     missing_classes_section(out, logs / (base + ".log"));
     if (window) {
       out += std::format("\n=== Errors logged during the last run ({} to {}) ===\n", local_time(window->from),

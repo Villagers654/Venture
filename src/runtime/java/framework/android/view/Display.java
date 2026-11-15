@@ -14,6 +14,8 @@ public class Display {
   public Mode[] getSupportedModes() { return new Mode[]{getMode()}; }
   public boolean isWideColorGamut() { return false; }
   public boolean isHdr() { return false; }
+  // Deprecated in AOSP and always RGBA_8888. GeckoView picks its screen depth from it.
+  public int getPixelFormat() { return android.graphics.PixelFormat.RGBA_8888; }
   // Framework callbacks use the XR display timestamp without an early phase.
   public long getAppVsyncOffsetNanos() { return 0; }
   public long getPresentationDeadlineNanos() { return Math.round(1_000_000_000d / getRefreshRate()); }

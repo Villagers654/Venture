@@ -27,6 +27,15 @@ public class RectF implements android.os.Parcelable {
   }
   public void offset(float dx, float dy) { left += dx; right += dx; top += dy; bottom += dy; }
   public void inset(float dx, float dy) { left += dx; right -= dx; top += dy; bottom -= dy; }
+  public boolean equals(Object o) {
+    return o instanceof RectF r && left == r.left && top == r.top && right == r.right && bottom == r.bottom;
+  }
+  public int hashCode() {
+    int result = left != +0.0f ? Float.floatToIntBits(left) : 0;
+    result = 31 * result + (top != +0.0f ? Float.floatToIntBits(top) : 0);
+    result = 31 * result + (right != +0.0f ? Float.floatToIntBits(right) : 0);
+    return 31 * result + (bottom != +0.0f ? Float.floatToIntBits(bottom) : 0);
+  }
   public int describeContents() { return 0; }
   public void writeToParcel(android.os.Parcel parcel, int flags) {
     parcel.writeFloat(left); parcel.writeFloat(top); parcel.writeFloat(right); parcel.writeFloat(bottom);

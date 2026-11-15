@@ -4,6 +4,7 @@
 #include "launcher/i18n/i18n.h"
 #include "launcher/ui/rich_text.h"
 #include "launcher/ui/style.h"
+#include "launcher/ui/text_scripts.h"
 #include "launcher/window_style.h"
 #include "common/controls.h"
 #include "common/environment.h"
@@ -49,21 +50,6 @@ std::string time_left(uint64_t seconds) {
 std::string lowercase(std::string s) {
   std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return char(std::tolower(c)); });
   return s;
-}
-
-std::string initials(std::string_view name) {
-  std::string out;
-  bool start = true;
-  for (char ch : name) {
-    if (ch == ' ' || ch == '_' || ch == '.') {
-      start = true;
-    } else if (start && std::isalnum(static_cast<unsigned char>(ch))) {
-      out += char(std::toupper(static_cast<unsigned char>(ch)));
-      start = false;
-      if (out.size() == 2) break;
-    }
-  }
-  return out;
 }
 
 // The name Meta shows for the account: its display name, else its alias.

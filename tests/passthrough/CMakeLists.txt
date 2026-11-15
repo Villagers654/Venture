@@ -20,6 +20,7 @@ add_executable(venture_passthrough_lifecycle_tests lifecycle.cpp lifecycle_host.
   ${PROJECT_SOURCE_DIR}/src/runtime/hle/openxr/openxr.cpp
   ${PROJECT_SOURCE_DIR}/src/runtime/hle/openxr/graphics.cpp
   ${PROJECT_SOURCE_DIR}/src/runtime/hle/openxr/sphere_layers.cpp
+  ${PROJECT_SOURCE_DIR}/src/runtime/hle/openxr/layer_layout.cpp
   ${PROJECT_SOURCE_DIR}/src/runtime/xr/sphere_images.cpp
   ${PROJECT_SOURCE_DIR}/src/runtime/xr/session.cpp
   ${PROJECT_SOURCE_DIR}/src/runtime/xr/display_override.cpp)

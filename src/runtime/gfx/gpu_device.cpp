@@ -5,6 +5,7 @@
 #include "gfx/gpu_device_internal.h"
 #include "gfx/queue_probe.h"
 #include "gfx/shared_image.h"
+#include "gfx/vulkan_enumerate.h"
 #include "gfx/xr_vulkan_version.h"
 #include "platform/gfx_library.h"
 #include "xr/host_xr.h"
@@ -130,13 +131,15 @@ std::string describe_vulkan_adapters() {
       return text + std::format("; a plain Vulkan 1.0 instance fails too ({} {}): no Vulkan driver loads", static_cast<int>(r), vk_result_name(r));
     const auto enumerate = vk<PFN_vkEnumeratePhysicalDevices>(probe, "vkEnumeratePhysicalDevices");
     const auto properties = vk<PFN_vkGetPhysicalDeviceProperties>(probe, "vkGetPhysicalDeviceProperties");
-    std::uint32_t count = 0;
     std::vector<VkPhysicalDevice> devices;
-    if (enumerate && properties && enumerate(probe, &count, nullptr) == VK_SUCCESS) {
-      devices.resize(count);
-      if (enumerate(probe, &count, devices.data()) != VK_SUCCESS) count = 0;
-      devices.resize(std::min<std::size_t>(count, devices.size()));
-    }
+    // VK_INCOMPLETE still returns valid handles: a count that changed between
+    // the count and fill calls once made this report "no adapters".
+    VkResult listed = VK_ERROR_INITIALIZATION_FAILED;
+    if (enumerate && properties)
+      listed = enumerate_vulkan(devices, [&](std::uint32_t* n, VkPhysicalDevice* p) { return enumerate(probe, n, p); });
+    if (!enumerate || !properties) text += "; no vkEnumeratePhysicalDevices";
+    else if (listed < 0) text += std::format("; vkEnumeratePhysicalDevices failed ({})", static_cast<int>(listed));
+    else if (listed == VK_INCOMPLETE) text += "; the adapter count kept changing between calls (VK_INCOMPLETE)";
     text += devices.empty() ? "; no adapters" : "; adapters:";
     for (auto device : devices) {
       VkPhysicalDeviceProperties p{};
@@ -219,12 +222,74 @@ VkResult VKAPI_CALL record_device(VkPhysicalDevice p,
     return VK_ERROR_OUT_OF_HOST_MEMORY;
   }
 }
+// The XR runtime finds the HMD's GPU on the shared instance with procedures
+// from the GIPA it was given (xrGetVulkanGraphicsDevice2KHR). Each call answers
+// from one complete or accepted list (gfx/vulkan_enumerate.h), so a count that
+// changes between the loader's count and fill calls reaches the runtime as one
+// consistent count and fill instead of VK_INCOMPLETE.
+VkResult VKAPI_CALL steady_enumerate_physicals(VkInstance instance, std::uint32_t* count, VkPhysicalDevice* out) {
+  try {
+    auto next = vk<PFN_vkEnumeratePhysicalDevices>(instance, "vkEnumeratePhysicalDevices");
+    if (!next) return VK_ERROR_INITIALIZATION_FAILED;
+    std::vector<VkPhysicalDevice> devices;
+    if (auto r = enumerate_vulkan(devices, [&](std::uint32_t* n, VkPhysicalDevice* p) { return next(instance, n, p); });
+        r < 0)
+      return r;
+    return fill_vulkan_enumeration(devices, count, out);
+  } catch (const std::bad_alloc&) {
+    return VK_ERROR_OUT_OF_HOST_MEMORY;
+  }
+}
+VkResult VKAPI_CALL steady_enumerate_groups(VkInstance instance, std::uint32_t* count,
+                                            VkPhysicalDeviceGroupProperties* out, const char* name) {
+  try {
+    auto next = vk<PFN_vkEnumeratePhysicalDeviceGroups>(instance, name);
+    if (!next || !count) return VK_ERROR_INITIALIZATION_FAILED;
+    std::vector<VkPhysicalDeviceGroupProperties> groups;
+    if (auto r = enumerate_vulkan(
+            groups, [&](std::uint32_t* n, VkPhysicalDeviceGroupProperties* p) { return next(instance, n, p); },
+            VkPhysicalDeviceGroupProperties{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_GROUP_PROPERTIES});
+        r < 0)
+      return r;
+    if (!out) {
+      *count = static_cast<std::uint32_t>(groups.size());
+      return VK_SUCCESS;
+    }
+    // The caller's sType and pNext stay as given.
+    const auto n = std::min(*count, static_cast<std::uint32_t>(groups.size()));
+    for (std::uint32_t i = 0; i < n; ++i) {
+      out[i].physicalDeviceCount = groups[i].physicalDeviceCount;
+      std::copy_n(groups[i].physicalDevices, VK_MAX_DEVICE_GROUP_SIZE, out[i].physicalDevices);
+      out[i].subsetAllocation = groups[i].subsetAllocation;
+    }
+    *count = n;
+    return n < groups.size() ? VK_INCOMPLETE : VK_SUCCESS;
+  } catch (const std::bad_alloc&) {
+    return VK_ERROR_OUT_OF_HOST_MEMORY;
+  }
+}
+VkResult VKAPI_CALL steady_enumerate_groups_core(VkInstance instance, std::uint32_t* count,
+                                                 VkPhysicalDeviceGroupProperties* out) {
+  return steady_enumerate_groups(instance, count, out, "vkEnumeratePhysicalDeviceGroups");
+}
+VkResult VKAPI_CALL steady_enumerate_groups_khr(VkInstance instance, std::uint32_t* count,
+                                                VkPhysicalDeviceGroupProperties* out) {
+  return steady_enumerate_groups(instance, count, out, "vkEnumeratePhysicalDeviceGroupsKHR");
+}
 PFN_vkVoidFunction VKAPI_CALL recording_gipa(VkInstance instance,
                                              const char* name) {
   if (std::strcmp(name, "vkCreateInstance") == 0)
     return reinterpret_cast<PFN_vkVoidFunction>(&record_instance);
   if (std::strcmp(name, "vkCreateDevice") == 0)
     return reinterpret_cast<PFN_vkVoidFunction>(&record_device);
+  if (instance && loader()(instance, name)) {
+    if (std::strcmp(name, "vkEnumeratePhysicalDevices") == 0)
+      return reinterpret_cast<PFN_vkVoidFunction>(&steady_enumerate_physicals);
+    if (std::strcmp(name, "vkEnumeratePhysicalDeviceGroups") == 0)
+      return reinterpret_cast<PFN_vkVoidFunction>(&steady_enumerate_groups_core);
+    if (std::strcmp(name, "vkEnumeratePhysicalDeviceGroupsKHR") == 0)
+      return reinterpret_cast<PFN_vkVoidFunction>(&steady_enumerate_groups_khr);
+  }
   auto fn = loader()(instance, name);
   if (!fn) xr::note_unresolved_vulkan_proc(name);
   return fn;
@@ -289,14 +354,8 @@ VkResult create_instance(const VkInstanceCreateInfo* requested,
         log::warn("gfx", "Vulkan {} requested; {}; trying it", vulkan_version_text(vulkan_major_minor(asked)), bounds);
       std::vector<VkExtensionProperties> available;
       if (auto enumerate = vk<PFN_vkEnumerateInstanceExtensionProperties>(
-              nullptr, "vkEnumerateInstanceExtensionProperties")) {
-        std::uint32_t count = 0;
-        if (enumerate(nullptr, &count, nullptr) == VK_SUCCESS) {
-          available.resize(count);
-          if (enumerate(nullptr, &count, available.data()) != VK_SUCCESS) available.clear();
-          available.resize(std::min<std::size_t>(count, available.size()));
-        }
-      }
+              nullptr, "vkEnumerateInstanceExtensionProperties"))
+        enumerate_vulkan(available, [&](std::uint32_t* n, VkExtensionProperties* p) { return enumerate(nullptr, n, p); });
       add_legacy_xr_requirements(false, names, legacy, available);
       ci.enabledExtensionCount = static_cast<std::uint32_t>(names.size());
       ci.ppEnabledExtensionNames = names.data();
@@ -374,11 +433,10 @@ VkResult select_device(VkInstance instance, VkPhysicalDevice* out) {
     } else {
       auto enumerate = vk<PFN_vkEnumeratePhysicalDevices>(
           instance, "vkEnumeratePhysicalDevices");
-      std::uint32_t count = 0;
-      auto result = enumerate(instance, &count, nullptr);
-      if (result != VK_SUCCESS || !count) return VK_ERROR_INITIALIZATION_FAILED;
-      std::vector<VkPhysicalDevice> devices(count);
-      if (enumerate(instance, &count, devices.data()) != VK_SUCCESS)
+      std::vector<VkPhysicalDevice> devices;
+      if (!enumerate ||
+          enumerate_vulkan(devices, [&](std::uint32_t* n, VkPhysicalDevice* p) { return enumerate(instance, n, p); }) < 0 ||
+          devices.empty())
         return VK_ERROR_INITIALIZATION_FAILED;
       // Prefer a discrete GPU, with no vendor assumptions.
       auto properties = vk<PFN_vkGetPhysicalDeviceProperties>(
@@ -428,12 +486,10 @@ VkResult create_device(VkPhysicalDevice physical,
   auto names = union_names(ci.enabledExtensionCount, ci.ppEnabledExtensionNames,
                            device_requirements);
   auto enumerate = vk<PFN_vkEnumerateDeviceExtensionProperties>(gpu.instance, "vkEnumerateDeviceExtensionProperties");
-  std::uint32_t extension_count = 0;
   std::vector<VkExtensionProperties> extensions;
-  if (enumerate(physical, nullptr, &extension_count, nullptr) == VK_SUCCESS) {
-    extensions.resize(extension_count);
-    if (enumerate(physical, nullptr, &extension_count, extensions.data()) != VK_SUCCESS) extensions.clear();
-    extensions.resize(std::min<std::size_t>(extension_count, extensions.size()));
+  if (enumerate_vulkan(extensions, [&](std::uint32_t* n, VkExtensionProperties* p) {
+        return enumerate(physical, nullptr, n, p);
+      }) >= 0) {
     if (std::ranges::any_of(extensions, [](const auto& e) {
           return std::strcmp(e.extensionName, VK_EXT_PIPELINE_CREATION_FEEDBACK_EXTENSION_NAME) == 0;
         }) && std::ranges::none_of(names, [](const char* n) {
@@ -709,10 +765,10 @@ bool host_vulkan_instance_extension(std::string_view name) {
   if (!loader()) return false;
   auto enumerate = vk<PFN_vkEnumerateInstanceExtensionProperties>(
       nullptr, "vkEnumerateInstanceExtensionProperties");
-  std::uint32_t count = 0;
-  if (!enumerate || enumerate(nullptr, &count, nullptr) != VK_SUCCESS) return false;
-  std::vector<VkExtensionProperties> extensions(count);
-  if (enumerate(nullptr, &count, extensions.data()) != VK_SUCCESS) return false;
+  std::vector<VkExtensionProperties> extensions;
+  if (!enumerate ||
+      enumerate_vulkan(extensions, [&](std::uint32_t* n, VkExtensionProperties* p) { return enumerate(nullptr, n, p); }) < 0)
+    return false;
   return std::ranges::any_of(extensions, [&](const auto& e) { return name == e.extensionName; });
 }
 std::string missing_vulkan_surface_support() {

@@ -23,25 +23,46 @@ public class PackageManager {
   public PackageManager(PackageModel m) {
     model = m;
   }
-  public ApplicationInfo getApplicationInfo(String pkg, int flags) throws NameNotFoundException {
-    // Unity's built-in Oculus provider checks this package after reading the
-    // application's vr_only/vr_dual metadata. Venture supplies the runtime
-    // through libvrapi HLE, so expose that system-runtime package's identity.
-    // It has no launchable Activity or bindable service in this framework.
-    if ("com.oculus.systemactivities".equals(pkg)) {
-      ApplicationInfo runtime = new ApplicationInfo();
-      runtime.packageName = pkg;
-      runtime.processName = pkg;
-      runtime.className = "android.app.Application";
-      runtime.name = runtime.className;
-      runtime.flags = ApplicationInfo.FLAG_SYSTEM;
-      runtime.nativeLibraryDir = "/system/lib64";
-      return runtime;
+  // System packages a Quest has that games look up. Unity's built-in Oculus
+  // provider checks com.oculus.systemactivities after reading the application's
+  // vr_only/vr_dual metadata (Venture supplies that runtime through libvrapi HLE).
+  // Meta's OpenXR loader loads com.oculus.systemdriver.DriverLoader through the
+  // system driver's package context (Context.createPackageContext). Neither has a
+  // launchable Activity or bindable service in this framework. Null for any
+  // other package.
+  public static ApplicationInfo systemApplicationInfo(String pkg) {
+    ApplicationInfo info = new ApplicationInfo();
+    switch (pkg == null ? "" : pkg) {
+      case "com.oculus.systemactivities" -> info.nativeLibraryDir = "/system/lib64";
+      case "com.oculus.systemdriver" -> {
+        info.sourceDir = "/system/priv-app/VrDriver/VrDriver.apk";
+        info.publicSourceDir = info.sourceDir;
+        info.nativeLibraryDir = "/system/priv-app/VrDriver/lib/arm64";
+        info.uid = 1000;
+      }
+      default -> { return null; }
     }
+    info.packageName = pkg;
+    info.processName = pkg;
+    info.className = "android.app.Application";
+    info.name = info.className;
+    info.flags = ApplicationInfo.FLAG_SYSTEM;
+    return info;
+  }
+  public ApplicationInfo getApplicationInfo(String pkg, int flags) throws NameNotFoundException {
+    ApplicationInfo system = systemApplicationInfo(pkg);
+    if (system != null) return system;
     check(pkg);
     return model.info.applicationInfo;
   }
   public PackageInfo getPackageInfo(String pkg, int flags) throws NameNotFoundException {
+    ApplicationInfo system = systemApplicationInfo(pkg);
+    if (system != null) {
+      PackageInfo info = new PackageInfo();
+      info.packageName = pkg;
+      info.applicationInfo = system;
+      return info;
+    }
     check(pkg);
     if ((flags & (GET_SIGNATURES | GET_SIGNING_CERTIFICATES)) != 0) {
       try {
