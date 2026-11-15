@@ -11,6 +11,7 @@
 #include "core/process.h"
 #include "core/process_image.h"
 #include "common/log.h"
+#include "common/paths.h"
 #include <algorithm>
 #include <array>
 #include <cstring>
@@ -207,8 +208,7 @@ void update_path(const char* text) {
     if (end == s.npos) end = s.size();
     MappedPath p;
     if (!resolve_path(s.substr(i, end - i), at_cwd, &p) && !p.device) {
-      auto utf = p.host.u8string();
-      paths.emplace_back(reinterpret_cast<const char*>(utf.data()), utf.size());
+      paths.push_back(venture::paths::utf8(p.host));
     }
     i = end + 1;
   }

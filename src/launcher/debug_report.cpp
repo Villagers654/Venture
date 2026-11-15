@@ -433,14 +433,17 @@ void log_section(std::string &out, const fs::path &file, size_t limit) {
 // The runtime's [facts] lines (headset, FOV, audio endpoint, clock rate) and
 // [eye-scale] lines (the eye size the game was told and rendered, which feed
 // the eye scale database) from the whole log, which the tail section may cut.
-void facts_section(std::string &out, const fs::path &file) {
+std::string session_facts(const fs::path &file) {
   std::ifstream in(file, std::ios::binary);
-  if (!in) return;
   std::string facts;
+  if (!in) return facts;
   for (std::string line; std::getline(in, line) && facts.size() < 16 * 1024;)
     if (line.find(" [facts] ") != std::string::npos || line.find(" [eye-scale] ") != std::string::npos)
       facts += line.substr(0, 1024) + "\n";
-  if (!facts.empty()) out += "\n=== Session facts ===\n" + facts;
+  return facts;
+}
+void facts_section(std::string &out, const fs::path &file) {
+  if (const auto facts = session_facts(file); !facts.empty()) out += "\n=== Session facts ===\n" + facts;
 }
 
 // The runtime's once-a-minute "[timeline]" lines from the whole log, which log_section
@@ -451,7 +454,7 @@ void timeline_section(std::string &out, const fs::path &file) {
   if (!in) return;
   std::vector<std::string> lines;
   for (std::string line; std::getline(in, line);)
-    if (line.find(" [timeline] ") != std::string::npos) lines.push_back(line.substr(0, 512));
+    if (line.find(" [timeline] ") != std::string::npos) lines.push_back(line.substr(0, 1024));
   if (lines.empty()) return;
   constexpr std::size_t kKeep = 120;
   out += std::format("\n=== Session timeline ({} minutes{}) ===\n", lines.size(),
@@ -580,6 +583,9 @@ Run read_run(const fs::path &log, const fs::path &console) {
     run.failed = true;
   } else if (library::needed_meta_sign_in(log)) {
     run.result = "closed: it needs a signed-in Meta account that owns it";
+    run.failed = true;
+  } else if (library::refused_entitlement(log)) {
+    run.result = "closed: Meta says the signed-in account does not own it";
     run.failed = true;
   } else if (library::needed_device_attestation(log)) {
     run.result = "closed: it requires Meta device attestation, which only a real Quest can provide";
@@ -1078,11 +1084,16 @@ fs::path write_debug_report(const DebugReport &request) {
       out += "Meta refused the game's ownership check: the signed-in account may not own it.\n";
       steps.push_back("Sign in with the Meta account that owns the game, then start it again.");
     }
+  } else if (library::refused_entitlement(runtime_log)) {
+    out += "Meta answered the game's ownership check with \"not entitled\": the signed-in Meta account does not "
+           "own this game, so the game closed itself. This is not a crash.\n";
+    steps.push_back("Sign in with the Meta account that bought the game, then start it again.");
   } else if (auto d = [&] {
                // The run's own logs first: launcher.log also holds earlier runs, whose
                // failures (a runtime that was still closing) are not this run's.
+               // The facts (the host runtime among them) from the whole log: some causes depend on them.
                auto own = diagnose(tail_log(runtime_log, 512 << 10) + "\n" + tail_log(console_log, 128 << 10) +
-                                   "\n" + evidence);
+                                   "\n" + evidence + "\n" + session_facts(runtime_log));
                if (own) return own;
                // Another game's "<game> stopped: <why>" line is not this run's cause (Table Troopers'
                // crash was reported for I Am Cat).

@@ -80,6 +80,27 @@ TEST_CASE("Supervisor extends its deadline when the worker waits for a file save
   CHECK(grace.expired(begin + 43s));
 }
 
+TEST_CASE("Supervisor keeps the worker's destroy settle bound after a slow lifecycle delivery") {
+  using namespace std::chrono_literals;
+  using venture::platform::RuntimeTeardownGrace;
+  const auto begin = RuntimeTeardownGrace::Clock::time_point{};
+  const char posted = 1, delivered = 4;
+  // Without a delivery the posted deadline holds.
+  RuntimeTeardownGrace stuck(true, venture::quit_backstop(nullptr) + 5s);
+  stuck.request(begin);
+  stuck.consume(std::span(&posted, 1), begin, [](auto, auto, auto) {});
+  CHECK(stuck.expired(begin + 10s));
+  // H3VR2 on the mock: pause/stop/destroy reached the game 2.4 s after posting,
+  // and an idle open save file kept it in its 8 s settle bound until 10.4 s.
+  RuntimeTeardownGrace grace(true, venture::quit_backstop(nullptr) + 5s);
+  grace.request(begin);
+  grace.consume(std::span(&posted, 1), begin, [](auto, auto, auto) {});
+  grace.consume(std::span(&delivered, 1), begin + 2400ms, [](auto, auto, auto) {});
+  CHECK_FALSE(grace.expired(begin + 10s));
+  CHECK_FALSE(grace.expired(begin + 15399ms));
+  CHECK(grace.expired(begin + 15400ms));
+}
+
 TEST_CASE("Supervisor gives committed exit stages their own budget past the posted deadline") {
   using namespace std::chrono_literals;
   using venture::platform::RuntimeTeardownGrace;
@@ -95,6 +116,32 @@ TEST_CASE("Supervisor gives committed exit stages their own budget past the post
   CHECK_FALSE(grace.expired(begin + 11s));  // past posted + 10 s
   CHECK_FALSE(grace.expired(begin + 18s));
   CHECK(grace.expired(begin + 18300ms));
+}
+
+TEST_CASE("Supervisor waits for the kernel once the worker has ended itself") {
+  using namespace std::chrono_literals;
+  using venture::platform::RuntimeTeardownGrace;
+  using venture::platform::RuntimeExitWait;
+  RuntimeTeardownGrace grace(true, venture::quit_backstop(nullptr) + 5s);
+  const auto begin = RuntimeTeardownGrace::Clock::time_point{};
+  grace.request(begin);
+  const char posted = 1;
+  grace.consume(std::span(&posted, 1), begin, [](auto, auto, auto) {});
+  // H3VR2: a clean OS quit reached kernel exit at 9.5 s, and Windows took
+  // 15.7 s more to finish the termination the worker had already made.
+  const char flush[10] = {2, static_cast<char>(RuntimeExitWait::log_flush), 0, 0, 0, 0, 0, 0, 0, 0};
+  const char kernel[10] = {2, static_cast<char>(RuntimeExitWait::kernel_exit), 0, 0, 0, 0, 0, 0, 0, 0};
+  grace.consume(std::span(flush, sizeof(flush)), begin + 9500ms, [](auto, auto, auto) {});
+  grace.consume(std::span(kernel, sizeof(kernel)), begin + 9500ms, [](auto, auto, auto) {});
+  CHECK_FALSE(grace.expired(begin + 25200ms));
+  CHECK_FALSE(grace.expired(begin + 9500ms + RuntimeTeardownGrace::kernel_exit_bound - 1ms));
+  CHECK(grace.expired(begin + 9500ms + RuntimeTeardownGrace::kernel_exit_bound));
+  // Stages before kernel exit keep their 10 s budget.
+  RuntimeTeardownGrace flushing(true, venture::quit_backstop(nullptr) + 5s);
+  flushing.request(begin);
+  flushing.consume(std::span(&posted, 1), begin, [](auto, auto, auto) {});
+  flushing.consume(std::span(flush, sizeof(flush)), begin + 9500ms, [](auto, auto, auto) {});
+  CHECK(flushing.expired(begin + 19500ms));
 }
 
 TEST_CASE("App worker restart uses a private channel and fresh processes") {

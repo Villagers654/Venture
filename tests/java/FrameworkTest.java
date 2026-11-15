@@ -1149,6 +1149,33 @@ public final class FrameworkTest {
     boolean stillHeld = multicast.isHeld();
     multicast.release();
     check(wifi.isWifiEnabled() && stillHeld && !multicast.isHeld(), "Wi-Fi multicast locks are reference counted");
+    // H3VR2's BrainCloud DeviceInfo plugin names NsdManager$RegistrationListener
+    // in its methods; reflecting over them failed with NoClassDefFoundError.
+    var nsd = new android.content.Context().getSystemService(android.net.nsd.NsdManager.class);
+    var service = new android.net.nsd.NsdServiceInfo();
+    service.setServiceName("NdiNsdService");
+    service.setServiceType("_http._tcp.");
+    service.setAttribute("v", "1");
+    var registration = new android.net.nsd.NsdManager.RegistrationListener() {
+      public void onRegistrationFailed(android.net.nsd.NsdServiceInfo info, int error) {}
+      public void onUnregistrationFailed(android.net.nsd.NsdServiceInfo info, int error) {}
+      public void onServiceRegistered(android.net.nsd.NsdServiceInfo info) {}
+      public void onServiceUnregistered(android.net.nsd.NsdServiceInfo info) {}
+    };
+    boolean badPort = false, badProtocol = false, notRegistered = false;
+    try { nsd.registerService(service, android.net.nsd.NsdManager.PROTOCOL_DNS_SD, registration); } catch (IllegalArgumentException e) { badPort = true; }
+    service.setPort(5960);
+    try { nsd.registerService(service, 2, registration); } catch (IllegalArgumentException e) { badProtocol = true; }
+    try { nsd.unregisterService(registration); } catch (IllegalArgumentException e) { notRegistered = true; }
+    nsd.registerService(service, android.net.nsd.NsdManager.PROTOCOL_DNS_SD, registration);
+    boolean inUse = false;
+    try { nsd.registerService(service, android.net.nsd.NsdManager.PROTOCOL_DNS_SD, registration); } catch (IllegalArgumentException e) { inUse = true; }
+    var nsdParcel = Parcel.obtain();
+    service.writeToParcel(nsdParcel, 0); nsdParcel.setDataPosition(0);
+    var copied = android.net.nsd.NsdServiceInfo.CREATOR.createFromParcel(nsdParcel);
+    check(nsd != null && badPort && badProtocol && notRegistered && inUse && copied.getPort() == 5960
+        && "NdiNsdService".equals(copied.getServiceName()) && new String(copied.getAttributes().get("V")).equals("1"),
+        "NsdManager checks its arguments and listeners as AOSP does");
     // ByteBrew reads the carrier during Les Mills Bodycombat's entry load (NoSuchMethodError stopped it).
     var phone = (android.telephony.TelephonyManager) new android.content.Context().getSystemService(android.content.Context.TELEPHONY_SERVICE);
     check(phone.getSimOperatorName().isEmpty() && phone.getSimOperator().isEmpty()

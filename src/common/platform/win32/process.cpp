@@ -80,7 +80,7 @@ void Process::spawn(const fs::path &exe, const std::vector<std::string> &args,
     throw std::runtime_error("This game is already running.");
   if (!fs::is_regular_file(exe))
     throw std::runtime_error(
-        "Runtime executable was not found. Set its path in Settings.");
+        "Venture's runtime (venture-runtime.exe) was not found beside the launcher. Reinstall Venture.");
   auto absolute = fs::absolute(exe);
   std::wstring cmd = quote_windows_arg(absolute.wstring());
   for (auto &a : args)

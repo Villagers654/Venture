@@ -28,6 +28,7 @@
 #include "gfx/spirv_precision.h"
 #include "gfx/texture_decode.h"
 #include "gfx/xr_images.h"
+#include "gfx/xr_vulkan_version.h"
 #include "hle/vulkan/timing.h"
 #include "platform/profile.h"
 #include "common/json.h"
@@ -534,6 +535,53 @@ TEST_CASE("gfx ASTC every LDR footprint and sRGB decode plus cache integrity") {
   // This directory is exclusively created by the test, below
   // temp_directory_path.
   std::filesystem::remove_all(cache);
+}
+TEST_CASE("gfx shared Vulkan instance treats an XR runtime's maximum version as tested, not binding") {
+  constexpr std::uint64_t xr_1_0 = std::uint64_t{1} << 48, xr_1_1 = xr_1_0 | std::uint64_t{1} << 32,
+                          xr_1_3 = xr_1_0 | std::uint64_t{3} << 32, xr_1_4 = xr_1_0 | std::uint64_t{4} << 32;
+  CHECK(gfx::xr_to_vulkan_version(xr_1_3 | 7) == VK_API_VERSION_1_3);
+  CHECK(gfx::xr_to_vulkan_version(VK_API_VERSION_1_3) == 0);  // Vulkan-packed: major 0 as an XrVersion
+  CHECK(gfx::vulkan_major_minor(VK_MAKE_API_VERSION(0, 1, 3, 250)) == VK_API_VERSION_1_3);
+  CHECK(gfx::vulkan_version_text(VK_API_VERSION_1_1) == "1.1");
+  CHECK(gfx::xr_version_text(xr_1_1 | 2) == "1.1.2");
+  CHECK(gfx::xr_version_text(0x403000) == "0x403000");
+  SUBCASE("within the range: requested as asked") {
+    auto plan = gfx::plan_xr_vulkan_version(VK_API_VERSION_1_3, xr_1_0, xr_1_4, VK_API_VERSION_1_1);
+    CHECK(plan.api_version == VK_API_VERSION_1_3);
+    CHECK_FALSE(plan.above_tested_max);
+    CHECK(plan.retry_version == 0);
+    // Patch levels never exceed a maximum.
+    plan = gfx::plan_xr_vulkan_version(VK_MAKE_API_VERSION(0, 1, 4, 300), xr_1_0, xr_1_4, VK_API_VERSION_1_1);
+    CHECK_FALSE(plan.above_tested_max);
+  }
+  SUBCASE("below the minimum: raised to it") {
+    auto plan = gfx::plan_xr_vulkan_version(VK_API_VERSION_1_0, xr_1_1, xr_1_4, VK_API_VERSION_1_0);
+    CHECK(plan.api_version == VK_API_VERSION_1_1);
+    plan = gfx::plan_xr_vulkan_version(0, 0, 0, 0);
+    CHECK(plan.api_version == VK_API_VERSION_1_0);
+  }
+  SUBCASE("above the tested maximum: tried as asked, retried at the maximum") {
+    // ANGLE asks 1.3 of a runtime tested up to 1.1 (formerly VK_ERROR_INCOMPATIBLE_DRIVER without asking it).
+    auto plan = gfx::plan_xr_vulkan_version(VK_API_VERSION_1_3, xr_1_0, xr_1_1, VK_API_VERSION_1_1);
+    CHECK(plan.api_version == VK_API_VERSION_1_3);
+    CHECK(plan.above_tested_max);
+    CHECK(plan.retry_version == VK_API_VERSION_1_1);
+    // A maximum below the caller's floor is still tried as asked, with no retry.
+    plan = gfx::plan_xr_vulkan_version(VK_API_VERSION_1_1, xr_1_0, xr_1_0, VK_API_VERSION_1_1);
+    CHECK(plan.api_version == VK_API_VERSION_1_1);
+    CHECK(plan.above_tested_max);
+    CHECK(plan.retry_version == 0);
+  }
+  SUBCASE("unusable bounds are ignored") {
+    // Vulkan-packed or zero values decode to no version; a maximum below the minimum is inconsistent.
+    for (auto [min, max] : {std::pair<std::uint64_t, std::uint64_t>{VK_API_VERSION_1_0, VK_API_VERSION_1_3}, {0, 0},
+                            {xr_1_3, xr_1_1}}) {
+      auto plan = gfx::plan_xr_vulkan_version(VK_API_VERSION_1_3, min, max, VK_API_VERSION_1_1);
+      CHECK(plan.api_version == VK_API_VERSION_1_3);
+      CHECK_FALSE(plan.above_tested_max);
+      CHECK(plan.max_version == 0);
+    }
+  }
 }
 TEST_SUITE_BEGIN("gpu");
 TEST_CASE("gfx desktop multisample-to-texture resolves antialiased guest eye buffers") {

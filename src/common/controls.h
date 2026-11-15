@@ -233,9 +233,12 @@ inline constexpr HostInput kFrameInputs[]{
     {"/input/dpad_right/click", "D-pad right", false, 1},
     {"/input/view/click", "View", false, 1},
     {"/input/menu/click", "Menu", false, 2},
-    {"/input/shoulder/click", "Bumper"},
+    {"/input/bumper/click", "Bumper"},
     {"/input/thumbstick", "Thumbstick"},
     {"/input/thumbstick/click", "Thumbstick click"},
+    // Valve's profile has no thumbrest sensor; a player can give the game's
+    // Thumbrest the stick's touch sensor instead.
+    {"/input/thumbstick/touch", "Thumbstick touch"},
     {"/input/trigger/value", "Trigger"},
     {"/input/squeeze/value", "Grip"},
     {"/input/system/click", "Steam button", true},
@@ -335,14 +338,19 @@ struct Choice {
   std::array<std::array<std::optional<Inputs>, kQuestCount>, 2> rows{};
   MenuChoice menu;
   // Grip toggle: each press of a grip flips the game's grip between held and
-  // released (both hands), for controllers whose grips only click (Vive wands).
-  bool grip_toggle = false;
+  // released (both hands). Unset: the controller's default (needs_grip_toggle).
+  std::optional<bool> grip_toggle;
   bool operator==(const Choice&) const = default;
 };
 // Choices by interaction profile path; a profile without an entry uses the defaults.
 using Config = std::map<std::string, Choice, std::less<>>;
 
 const Profile* find_profile(std::string_view path);
+// The controller's grip is a side button on a wand (Vive wands, Windows Mixed Reality),
+// tiring to hold the whole time a Quest game expects a grab held. The grip toggle
+// defaults on for these. Click grips under the fingers (Cosmos, PS VR2 Sense) hold
+// like a Touch grip and keep it off.
+bool needs_grip_toggle(const Profile& profile);
 // A host input of `profile` by component path ("/input/a/click"), or null.
 const HostInput* find_input(const Profile& profile, std::string_view path);
 inline bool on_hand(const HostInput& input, int hand) { return (input.hands >> hand) & 1; }
@@ -396,7 +404,7 @@ std::vector<Conflict> conflicts(const Resolved& resolved, MenuMode mode);
 
 // VENTURE_CONTROLS and settings.json: {"<profile>": {"left": {"primary": "/input/a/click", ...},
 // "right": {...}, "menu": {"mode": "hold", "first": "...", "second": "...", "holdMs": 1000},
-// "gripToggle": true}} (gripToggle only when on).
+// "gripToggle": true}} (gripToggle only when the player set it).
 // A row is a string ("" for none), or a list of strings when it has several
 // inputs ("stickClick": ["/input/thumbstick/click", "/input/shoulder/click"]).
 std::string encode(const Config& config);

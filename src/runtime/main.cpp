@@ -143,10 +143,13 @@ void report_foreign_worker_exit(const venture::platform::RuntimeChildResult& res
   }
   // Venture's own exits carry an Android status (0-255) and its crash reporter
   // logs host exceptions (NTSTATUS 0xC...); anything else came from outside.
+  // 0xFFFFFFFF is also what another program's forced close leaves (.NET's
+  // Process.Kill): a game on Virtual Desktop's own OpenXR runtime ended so,
+  // its mirror window asked to close first, when SteamVR started.
   const auto status = static_cast<std::uint32_t>(result.status);
   if (status > 255 && (status & 0xF0000000u) != 0xC0000000u)
     venture::log::error("runtime", "The app process ended with status 0x{:08X} outside Venture's exit paths "
-                        "(a host library or the Java runtime ended it)", status);
+                        "(another program, a host library or the Java runtime ended it)", status);
 }
 // Library finalizers run after the guest threads have stopped. One that waits
 // for its own worker thread (an instrumentation runtime's agent thread, say)

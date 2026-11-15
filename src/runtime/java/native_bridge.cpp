@@ -2,13 +2,18 @@
 #include "core/thread_lifetime.h"
 #include <array>
 #include <condition_variable>
+#include <cstdlib>
 #include <cstring>
+#include <cxxabi.h>
 #include <map>
 #include <set>
 #include <stdexcept>
+#include <typeinfo>
 
 #include "common/log.h"
 #include "common/environment.h"
+#include "common/paths.h"
+#include "core/hle.h"
 #include "core/guest_heap.h"
 #include "core/linker.h"
 #include "core/process.h"
@@ -32,6 +37,17 @@ jmethodID descriptor_method = nullptr, native_methods_method = nullptr, load_kin
 jclass class_class = nullptr;
 jclass string_class = nullptr;
 jmethodID for_name = nullptr, class_loader = nullptr, class_name = nullptr;
+// "std::runtime_error from libc.so!open": what a crash report needs to name the
+// host code behind a bare message ("locale not supported").
+std::string exception_origin(const std::exception& error) {
+  const char* mangled = typeid(error).name();
+  int status = -1;
+  std::unique_ptr<char, decltype(&std::free)> demangled(abi::__cxa_demangle(mangled, nullptr, nullptr, &status), &std::free);
+  std::string text = status == 0 && demangled ? demangled.get() : mangled;
+  if (text.starts_with("std::__1::")) text.erase(5, 5);
+  const auto import = hle::escaped_import(error);
+  return text + (import.empty() ? ", not from an HLE import" : " from " + import);
+}
 std::string string_value(JNIEnv* env, jstring string) {
   if (!string) throw std::runtime_error("missing Java string (pending exception)");
   const char* chars = env->GetStringUTFChars(string, nullptr);
@@ -153,18 +169,14 @@ HostArguments guest_path_arguments(JNIEnv* env, const Descriptor& descriptor,
     const bool absolute = path.starts_with('/') || path.starts_with("\\\\") ||
         (path.size() >= 3 && path[1] == ':' && (path[2] == '/' || path[2] == '\\'));
     try {
-      if (absolute) {
-        const auto utf8 = std::filesystem::path(from_modified_utf8(path)).generic_u8string();
-        mapped = host_path_to_guest(std::string_view(reinterpret_cast<const char*>(utf8.data()), utf8.size()));
-      }
+      // Modified UTF-8 (CESU-8 surrogates) decodes leniently; an arbitrary
+      // Java string that names no mount alias is preserved unchanged.
+      if (absolute) mapped = host_path_to_guest(paths::generic_utf8(paths::from_utf8(path)));
     }
-    catch (const std::runtime_error&) {
-      // Arbitrary Java strings (including unpaired UTF-16 surrogates) need
-      // not be valid host filenames. Preserve those strings unchanged.
-    }
+    catch (const std::exception&) {}
     env->ReleaseStringUTFChars(string, chars);
     if (!mapped) continue;
-    const auto utf16 = std::filesystem::path(std::u8string(mapped->begin(), mapped->end())).u16string();
+    const auto utf16 = paths::utf16(*mapped);
     auto replacement = env->NewString(reinterpret_cast<const jchar*>(utf16.data()), static_cast<jsize>(utf16.size()));
     if (!replacement) return out;
     // Java retains host File paths for JDK I/O. Strings passed into native
@@ -251,7 +263,7 @@ extern "C" std::uint64_t venture_java_native_dispatch(NativeRecord* record, cons
     // The process status is retained by the core and observed by the launcher.
     throw_thread_death(env);
   } catch (const std::exception& e) {
-    log::error("jni", "native {}{}: {}", record->name, record->signature, e.what());
+    log::error("jni", "native {}{}: {} ({})", record->name, record->signature, e.what(), exception_origin(e));
     throw_java(env, "java/lang/InternalError", e.what());
   } catch (...) {
     throw_java(env, "java/lang/InternalError", "guest native callback failed");

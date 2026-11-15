@@ -2,12 +2,14 @@
 #pragma once
 #include <array>
 #include <optional>
+#include "common/paths.h"
 #include "core/process.h"
 
 namespace venture {
 inline std::optional<std::string> host_path_to_guest(std::string_view path) {
   const auto& c = process_config();
-  const auto requested = std::filesystem::path(std::u8string(path.begin(), path.end())).lexically_normal();
+  // Every guest path passes here first (vfs resolve_path); it may be any bytes.
+  const auto requested = paths::from_utf8(path).lexically_normal();
   if (!requested.is_absolute()) return std::nullopt;
   const std::array<std::pair<std::filesystem::path, std::string>, 9> roots{{
       {c.apk, c.guest_apk_path()},
@@ -26,9 +28,9 @@ inline std::optional<std::string> host_path_to_guest(std::string_view path) {
     auto p = requested.begin(), r = root.begin();
     for (; p != requested.end() && r != root.end() && *p == *r; ++p, ++r) {}
     if (r != root.end() || (host == c.apk && p != requested.end())) continue;
-    const auto relative = requested.lexically_relative(root).generic_u8string();
-    if (relative == u8".") return guest;
-    return guest + "/" + std::string(reinterpret_cast<const char*>(relative.data()), relative.size());
+    const auto relative = paths::generic_utf8(requested.lexically_relative(root));
+    if (relative == ".") return guest;
+    return guest + "/" + relative;
   }
   return std::nullopt;
 }

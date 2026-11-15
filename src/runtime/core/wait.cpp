@@ -8,6 +8,7 @@
 #include "core/signals.h"
 #include "core/error.h"
 #include "core/profile.h"
+#include "core/session_timeline.h"
 #include "platform/memory.h"
 #include "platform/timed_wait.h"
 #include <array>
@@ -206,6 +207,9 @@ int wait(GuestThread& thread, GuestAddr address, std::uint32_t expected, std::in
       wait_error = w.timed->wait_until(lock, deadline, !sleeping);
     }
     signalled = ready();
+    // How late a guest's timed wait or sleep came back ([timeline] timeouts): the host's
+    // timer precision, which other modules in the process can change.
+    if (!signalled) session_timeline::timed_wait_expired(monotonic_ns() - deadline);
   }
   if (w.event) w.event->timing.resumed_ns = monotonic_ns();
   b.remove(w);

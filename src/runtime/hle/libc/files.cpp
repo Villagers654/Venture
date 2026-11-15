@@ -3,6 +3,7 @@
 #include "vfs_net.h"
 #include "common/environment.h"
 #include "common/log.h"
+#include "common/paths.h"
 #include "abi32.h"
 #include "core/token32.h"
 #include "core/guest_storage.h"
@@ -269,8 +270,7 @@ std::int64_t readlink_at(int dir, const char* p, char* out, std::uint64_t size) 
     std::error_code ec;
     auto link = std::filesystem::read_symlink(m.host, ec);
     if (ec) return failure(err::einval);
-    auto text = link.generic_u8string();
-    target.assign(reinterpret_cast<const char*>(text.data()), text.size());
+    target = paths::generic_utf8(link);
   }
   auto n = std::min<std::uint64_t>(size, target.size());
   std::memcpy(out, target.data(), n);

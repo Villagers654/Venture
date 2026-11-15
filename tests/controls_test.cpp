@@ -388,21 +388,21 @@ TEST_CASE("Controls rows take several host inputs") {
   // Stick click on the stick and the bumper; repeats, another hand's button, a
   // reserved input and a stick on a button are dropped, the order kept.
   choice.rows[0][int(Quest::stick_click)] =
-      Inputs{"/input/thumbstick/click", "/input/shoulder/click", "/input/thumbstick/click", "/input/a/click",
+      Inputs{"/input/thumbstick/click", "/input/bumper/click", "/input/thumbstick/click", "/input/a/click",
              "/input/system/click", "/input/thumbstick"};
   auto r = resolve(frame, &choice);
-  CHECK(r.rows[0][int(Quest::stick_click)] == Inputs{"/input/thumbstick/click", "/input/shoulder/click"});
+  CHECK(r.rows[0][int(Quest::stick_click)] == Inputs{"/input/thumbstick/click", "/input/bumper/click"});
   CHECK(host_bindings("/user/hand/left/input/thumbstick/click", frame, r, true) ==
-        std::vector<std::string>{"/user/hand/left/input/thumbstick/click", "/user/hand/left/input/shoulder/click"});
+        std::vector<std::string>{"/user/hand/left/input/thumbstick/click", "/user/hand/left/input/bumper/click"});
   // The automatic menu's left stick click is either of them.
-  CHECK(r.menu.sources == std::vector<Inputs>{{"/user/hand/left/input/thumbstick/click", "/user/hand/left/input/shoulder/click"},
+  CHECK(r.menu.sources == std::vector<Inputs>{{"/user/hand/left/input/thumbstick/click", "/user/hand/left/input/bumper/click"},
                                               {"/user/hand/right/input/thumbstick/click"}});
   // A row of only unusable inputs keeps the default.
   choice.rows[0][int(Quest::stick_click)] = Inputs{"/input/a/click", "/input/system/click"};
   CHECK(resolve(frame, &choice).rows[0][int(Quest::stick_click)] == Inputs{"/input/thumbstick/click"});
   // The stick row takes only two-axis inputs.
   choice = {};
-  choice.rows[1][int(Quest::stick)] = Inputs{"/input/thumbstick", "/input/shoulder/click"};
+  choice.rows[1][int(Quest::stick)] = Inputs{"/input/thumbstick", "/input/bumper/click"};
   CHECK(resolve(frame, &choice).rows[1][int(Quest::stick)] == Inputs{"/input/thumbstick"});
   // Touch sensors follow every input of the row that has one.
   const auto& index = profile(kIndex);
@@ -418,8 +418,8 @@ TEST_CASE("Controls rows take several host inputs") {
 TEST_CASE("Controls conflicts count every input of a row") {
   Choice choice;
   // The bumper on Stick click and on the grip.
-  choice.rows[0][int(Quest::stick_click)] = Inputs{"/input/thumbstick/click", "/input/shoulder/click"};
-  choice.rows[0][int(Quest::grip)] = Inputs{"/input/squeeze/value", "/input/shoulder/click"};
+  choice.rows[0][int(Quest::stick_click)] = Inputs{"/input/thumbstick/click", "/input/bumper/click"};
+  choice.rows[0][int(Quest::grip)] = Inputs{"/input/squeeze/value", "/input/bumper/click"};
   const auto r = resolve(profile("/interaction_profiles/valve/frame_controller_valve"), &choice);
   CHECK(conflicts(r, MenuMode::automatic) == std::vector<Conflict>{{0, Quest::menu, Quest::stick_click},
                                                                    {0, Quest::menu, Quest::grip},
@@ -456,11 +456,11 @@ TEST_CASE("Controls trackpad halves in a row with several inputs follow the whol
 TEST_CASE("Controls rows with several inputs are saved as lists; single ones stay strings") {
   Config config;
   Choice& frame = config["/interaction_profiles/valve/frame_controller_valve"];
-  frame.rows[0][int(Quest::stick_click)] = Inputs{"/input/thumbstick/click", "/input/shoulder/click"};
+  frame.rows[0][int(Quest::stick_click)] = Inputs{"/input/thumbstick/click", "/input/bumper/click"};
   frame.rows[1][int(Quest::primary)] = Inputs{"/input/b/click"};
   frame.rows[1][int(Quest::thumbrest)] = Inputs{};
   const auto text = encode(config);
-  CHECK(text.find(R"("stickClick":["/input/thumbstick/click","/input/shoulder/click"])") != std::string::npos);
+  CHECK(text.find(R"("stickClick":["/input/thumbstick/click","/input/bumper/click"])") != std::string::npos);
   CHECK(text.find(R"("primary":"/input/b/click")") != std::string::npos);
   CHECK(text.find(R"("thumbrest":"")") != std::string::npos);
   CHECK(decode(text) == config);
@@ -481,7 +481,7 @@ TEST_CASE("Controls rows with several inputs are saved as lists; single ones sta
   CHECK_FALSE(rows[int(Quest::grip)]);
 }
 
-TEST_CASE("Controls grip toggle is saved only when on, and older settings decode without it") {
+TEST_CASE("Controls grip toggle is saved only when set, defaults on for wand side grips, and older settings decode without it") {
   Config config;
   config["/interaction_profiles/htc/vive_controller"].grip_toggle = true;
   config["/interaction_profiles/valve/index_controller"].rows[0][int(Quest::primary)] = Inputs{"/input/b/click"};
@@ -489,7 +489,7 @@ TEST_CASE("Controls grip toggle is saved only when on, and older settings decode
   CHECK(text.find("\"gripToggle\":true") != std::string::npos);
   CHECK(text.find("gripToggle") == text.rfind("gripToggle"));  // the Index entry has none
   CHECK(decode(text) == config);
-  // Settings saved before the option: off.
+  // Settings saved before the option: unset (the controller's default).
   const auto old = decode(R"({"/interaction_profiles/htc/vive_controller":{"menu":{"mode":"off","holdMs":500}}})");
   CHECK_FALSE(old.at("/interaction_profiles/htc/vive_controller").grip_toggle);
   // Not a boolean: ignored.
@@ -499,9 +499,45 @@ TEST_CASE("Controls grip toggle is saved only when on, and older settings decode
   Choice only;
   only.grip_toggle = true;
   CHECK_FALSE(only == Choice{});
-  // resolve() carries it; no choice is off.
+  // resolve() carries it; unset follows the controller: on where the grip only clicks.
   const auto& vive = profile("/interaction_profiles/htc/vive_controller");
+  const auto& index = profile("/interaction_profiles/valve/index_controller");
+  const auto& touch = profile("/interaction_profiles/oculus/touch_controller");
+  CHECK(needs_grip_toggle(vive));
+  CHECK_FALSE(needs_grip_toggle(index));
+  CHECK_FALSE(needs_grip_toggle(touch));
+  CHECK(needs_grip_toggle(profile("/interaction_profiles/microsoft/motion_controller")));
+  CHECK_FALSE(needs_grip_toggle(profile("/interaction_profiles/htc/vive_cosmos_controller")));
   CHECK(resolve(vive, &only).grip_toggle);
-  CHECK_FALSE(resolve(vive, nullptr).grip_toggle);
-  CHECK_FALSE(resolve(vive, &old.at("/interaction_profiles/htc/vive_controller")).grip_toggle);
+  CHECK(resolve(vive, nullptr).grip_toggle);
+  CHECK(resolve(vive, &old.at("/interaction_profiles/htc/vive_controller")).grip_toggle);
+  CHECK_FALSE(resolve(index, nullptr).grip_toggle);
+  CHECK_FALSE(resolve(touch, nullptr).grip_toggle);
+  // Turned off on a click grip: saved as off and stays off.
+  Config off;
+  off["/interaction_profiles/htc/vive_controller"].grip_toggle = false;
+  const auto off_text = encode(off);
+  CHECK(off_text.find("\"gripToggle\":false") != std::string::npos);
+  CHECK_FALSE(resolve(vive, &decode(off_text).at("/interaction_profiles/htc/vive_controller")).grip_toggle);
+}
+
+TEST_CASE("Steam Frame: the bumper uses Valve's path, saved shoulder paths move to it, and Thumbrest can take the stick's touch") {
+  constexpr std::string_view kFrame = "/interaction_profiles/valve/frame_controller_valve";
+  const auto& frame = profile(kFrame);
+  CHECK(find_input(frame, "/input/bumper/click"));
+  CHECK_FALSE(find_input(frame, "/input/shoulder/click"));
+  const auto config = decode(
+      R"({"/interaction_profiles/valve/frame_controller_valve":{"left":{"stickClick":["/input/thumbstick/click","/input/shoulder/click"]},)"
+      R"("menu":{"mode":"button","first":"/user/hand/left/input/shoulder/click"}}})");
+  const auto& choice = config.at(std::string(kFrame));
+  CHECK(choice.rows[0][int(Quest::stick_click)] == Inputs{"/input/thumbstick/click", "/input/bumper/click"});
+  CHECK(choice.menu.first == "/user/hand/left/input/bumper/click");
+  // Another profile's shoulder (the Cosmos bumper) is left alone.
+  const auto cosmos = decode(R"({"/interaction_profiles/htc/vive_cosmos_controller":{"left":{"grip":"/input/shoulder/click"}}})");
+  CHECK(cosmos.begin()->second.rows[0][int(Quest::grip)] == Inputs{"/input/shoulder/click"});
+  Choice rest;
+  for (int hand = 0; hand < 2; ++hand) rest.rows[size_t(hand)][int(Quest::thumbrest)] = Inputs{"/input/thumbstick/touch"};
+  const auto r = resolve(frame, &rest);
+  CHECK(host_bindings("/user/hand/right/input/thumbrest/touch", frame, r, true) ==
+        std::vector<std::string>{"/user/hand/right/input/thumbstick/touch"});
 }

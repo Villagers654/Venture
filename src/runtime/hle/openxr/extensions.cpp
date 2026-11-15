@@ -1,4 +1,5 @@
 #include "common/log.h"
+#include "core/session_timeline.h"
 #include "hle/openxr/state.h"
 #include "hle/openxr/passthrough.h"
 #include "xr/clock.h"
@@ -215,6 +216,8 @@ XrResult xrGetRecommendedLayerResolutionMETA(XrSession handle,
   out->isValid = width && height ? XR_TRUE : XR_FALSE;
   out->recommendedImageDimensions = out->isValid ? XrExtent2Di{std::int32_t(width), std::int32_t(height)}
                                                 : XrExtent2Di{0, 0};
+  if (layer->type == XR_TYPE_COMPOSITION_LAYER_PROJECTION && out->isValid)
+    session_timeline::recommended_size(out->recommendedImageDimensions.width, out->recommendedImageDimensions.height);
   return XR_SUCCESS;
 }
 // Venture draws no Guardian boundary of its own; the host runtime keeps its

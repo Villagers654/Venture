@@ -23,6 +23,18 @@ TEST_CASE("debug report: known causes, most specific first") {
                          "VRInitError_Driver_WirelessHmdNotConnectedAndNoSteam\n");
   REQUIRE(no_hmd);
   CHECK(no_hmd->cause.find("found no headset") != std::string::npos);
+  // A forced close from outside (H3VR2 report): on Virtual Desktop's runtime, name it and the SteamVR switch.
+  constexpr std::string_view killed =
+      "E [runtime] The app process ended with status 0xFFFFFFFF outside Venture's exit paths (another program, a "
+      "host library or the Java runtime ended it)\n";
+  auto vdxr = diagnose(std::string(killed) +
+                       "I [facts] Host runtime: VirtualDesktopXR 1.1.0; headset: Meta Quest Pro (vendor 0xffffd23e)\n");
+  REQUIRE(vdxr);
+  CHECK(vdxr->cause.find("VDXR") != std::string::npos);
+  CHECK(vdxr->advice.find("OpenXR Runtime to SteamVR") != std::string::npos);
+  auto outside = diagnose(std::string(killed) + "I [facts] Host runtime: SteamVR/OpenXR 2.15.4; headset: Index\n");
+  REQUIRE(outside);
+  CHECK(outside->cause.find("Another program closed the game") != std::string::npos);
   auto vault = diagnose("W [ovrplatform] Meta session load failed stage=vault-session\nE [libc] Fatal signal 11\n");
   REQUIRE(vault);
   CHECK(vault->cause.find("Meta sign-in") != std::string::npos);

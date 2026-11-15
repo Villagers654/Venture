@@ -48,6 +48,29 @@ TEST_CASE("Quest storage canonical paths preserve sdcard loader aliases") {
   CHECK(host_path_to_guest(paths::utf8(c.obb_dir / "main.obb")) == c.guest_obb_dir() + "/main.obb");
   process_config() = saved;
 }
+TEST_CASE("guest path aliasing accepts any bytes and non-ASCII host folders") {
+  const auto saved = process_config();
+  auto& c = process_config();
+  c = {};
+  c.package = "test.game";
+  // A Windows profile such as C:\Users\Jo\xC3\xA3o (Jo\u00e3o).
+  c.data_dir = fs::temp_directory_path() / paths::from_utf8("Jo\xC3\xA3o-\xE6\x97\xA5") / "data";
+  c.guest_cache_dir = c.data_dir / "cache";
+  // Every guest path reaches host_path_to_guest first (vfs resolve_path); a
+  // name that is not UTF-8 threw "locale not supported" out of libc.
+  for (const char* guest : {"/sdcard/save-\xE9t\xE9.dat", "/data/local/tmp/\xC0\xAF", "\xFF\xFE", "/x\xED\xA0\x80"}) {
+    CHECK_NOTHROW((void)host_path_to_guest(guest));
+    CHECK_NOTHROW((void)resolve_guest_path(guest));
+  }
+  CHECK_FALSE(host_path_to_guest("/sdcard/save-\xE9t\xE9.dat").has_value());
+  const std::string file = "Usu\xC3\xA1rio/\xF0\x9F\x8E\xAF.sav";
+  CHECK(host_path_to_guest(paths::utf8(c.data_dir / "external" / paths::from_utf8(file))) == "/storage/emulated/0/" + file);
+  CHECK(host_path_to_guest(paths::utf8(c.guest_cache_dir / paths::from_utf8(file))) == c.guest_data_dir() + "/cache/" + file);
+  CHECK(resolve_guest_path(c.guest_data_dir() + "/cache/" + file) == c.guest_cache_dir / paths::from_utf8(file));
+  const std::string latin1 = "\xE9t\xE9.sav";
+  CHECK(resolve_guest_path(c.guest_data_dir() + "/cache/" + latin1) == c.guest_cache_dir / paths::from_utf8(latin1));
+  process_config() = saved;
+}
 TEST_CASE("save migration preserves hard links and journals conflicts without "
           "overwriting") {
   auto root = fs::temp_directory_path() / ("venture-saves-" + random_account_key());

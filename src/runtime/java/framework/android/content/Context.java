@@ -26,7 +26,7 @@ public class Context {
   public static final String USER_SERVICE = "user", WIFI_SERVICE = "wifi", JOB_SCHEDULER_SERVICE = "jobscheduler",
       STORAGE_SERVICE = "storage", ALARM_SERVICE = "alarm", NOTIFICATION_SERVICE = "notification",
       CAPTIONING_SERVICE = "captioning", MEDIA_METRICS_SERVICE = "media_metrics", LOCALE_SERVICE = "locale",
-      DOWNLOAD_SERVICE = "download",
+      DOWNLOAD_SERVICE = "download", NSD_SERVICE = "servicediscovery",
       GAME_SERVICE = "game";
   private static final Map<String, SharedPreferences> preferences =
       new java.util.concurrent.ConcurrentHashMap<>();
@@ -285,6 +285,7 @@ public class Context {
       case ALARM_SERVICE -> new android.app.AlarmManager();
       case NOTIFICATION_SERVICE -> new android.app.NotificationManager();
       case DOWNLOAD_SERVICE -> android.app.DownloadManager.ventureLocal(this);
+      case NSD_SERVICE -> new android.net.nsd.NsdManager();
       default -> null;
     });
   }
@@ -320,7 +321,8 @@ public class Context {
       java.util.Map.entry(android.os.storage.StorageManager.class, STORAGE_SERVICE),
       java.util.Map.entry(android.app.AlarmManager.class, ALARM_SERVICE),
       java.util.Map.entry(android.app.NotificationManager.class, NOTIFICATION_SERVICE),
-      java.util.Map.entry(android.app.DownloadManager.class, DOWNLOAD_SERVICE));
+      java.util.Map.entry(android.app.DownloadManager.class, DOWNLOAD_SERVICE),
+      java.util.Map.entry(android.net.nsd.NsdManager.class, NSD_SERVICE));
   public String getSystemServiceName(Class<?> serviceClass) {
     return SERVICE_NAMES.get(serviceClass);
   }

@@ -1284,9 +1284,6 @@ int Cli::settings_cmd(const Args &args) {
     };
     if (key == "games-folder")
       next.games = fs::absolute(paths::from_utf8(value)).lexically_normal();
-    else if (key == "runtime")
-      next.runtime = value == "default" ? library::Settings::defaults(data_).runtime
-                                        : fs::absolute(paths::from_utf8(value)).lexically_normal();
     else if (key == "adb")
       next.adb = value == "auto" ? fs::path{} : fs::absolute(paths::from_utf8(value)).lexically_normal();
     else if (key == "log-level") {
@@ -1335,7 +1332,7 @@ int Cli::settings_cmd(const Args &args) {
     throw UsageError(std::format("Unknown settings command \"{}\".", sub));
   }
   Json out{{"games-folder", paths::utf8(settings_.games)},
-           {"runtime", settings_.runtime_override() ? paths::utf8(settings_.runtime) : "default"},
+           {"runtime", settings_.runtime_override() ? paths::utf8(settings_.runtime) + " (VENTURE_RUNTIME)" : "default"},
            {"adb", settings_.adb.empty() ? "auto" : paths::utf8(settings_.adb)},
            {"log-level", std::string(kLevels[std::clamp(settings_.log_level, 0, 4)])},
            {"passthrough", settings_.passthrough},

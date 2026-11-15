@@ -9,16 +9,14 @@
 
 #include "android/package_assets.h"
 #include "common/log.h"
+#include "common/paths.h"
 #include "core/process.h"
 #include "core/thread.h"
 #include "java/jvm.h"
 
 namespace venture::java {
 namespace {
-std::string path_utf8(const std::filesystem::path& path) {
-  auto text = path.u8string();
-  return {reinterpret_cast<const char*>(text.data()), text.size()};
-}
+std::string path_utf8(const std::filesystem::path& path) { return paths::utf8(path); }
 // Throwable.toString() ("java.lang.X: message") on one line, bounded; empty
 // when it cannot be read.
 std::string throwable_text(JNIEnv* env, jthrowable throwable) {

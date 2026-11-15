@@ -476,11 +476,11 @@ TEST_CASE("An OpenXR game's action reaches every host input the player gave its 
   venture::test::ScopedMenuMode automatic("");
   const char* frame = "/interaction_profiles/valve/frame_controller_valve";
   Config config;
-  config[frame].rows[0][int(Quest::stick_click)] = Inputs{"/input/thumbstick/click", "/input/shoulder/click"};
+  config[frame].rows[0][int(Quest::stick_click)] = Inputs{"/input/thumbstick/click", "/input/bumper/click"};
   ScopedControls controls(encode(config));
   ventureMockXrSetProfile(frame);
   CHECK(venture::xr::touch_bindings("/user/hand/left/input/thumbstick/click", frame) ==
-        std::vector<std::string>{"/user/hand/left/input/thumbstick/click", "/user/hand/left/input/shoulder/click"});
+        std::vector<std::string>{"/user/hand/left/input/thumbstick/click", "/user/hand/left/input/bumper/click"});
   venture::test::XrImageFixture interop;
   venture::xr::install_xr_images(&interop);
   const char* extensions[]{"XR_KHR_opengl_es_enable"};
@@ -548,12 +548,12 @@ TEST_CASE("An OpenXR game's action reaches every host input the player gave its 
   press(script.left, "/input/thumbstick/click");
   CHECK(pressed(script));
   script = {};
-  press(script.left, "/input/shoulder/click");
+  press(script.left, "/input/bumper/click");
   CHECK(pressed(script));
   CHECK_FALSE(pressed(MockXrScript{}));
   // The right bumper is not the left Stick click.
   script = {};
-  press(script.right, "/input/shoulder/click");
+  press(script.right, "/input/bumper/click");
   CHECK_FALSE(pressed(script));
   CHECK(xg::xrDestroySession(session) == XR_SUCCESS);
   CHECK(xg::xrDestroyInstance(instance) == XR_SUCCESS);
@@ -568,11 +568,11 @@ TEST_CASE("Several host inputs on one Quest input reach a VrApi game, and both s
   const char* frame = "/interaction_profiles/valve/frame_controller_valve";
   Config config;
   for (int hand = 0; hand < 2; ++hand)
-    config[frame].rows[size_t(hand)][int(Quest::stick_click)] = Inputs{"/input/thumbstick/click", "/input/shoulder/click"};
+    config[frame].rows[size_t(hand)][int(Quest::stick_click)] = Inputs{"/input/thumbstick/click", "/input/bumper/click"};
   ScopedControls controls(encode(config));
   VrApiGame game(frame);
   for (int hand = 0; hand < 2; ++hand)
-    for (auto input : {"/input/thumbstick/click", "/input/shoulder/click"}) {
+    for (auto input : {"/input/thumbstick/click", "/input/bumper/click"}) {
       CAPTURE(hand);
       CAPTURE(input);
       MockXrScript script{};
@@ -584,7 +584,7 @@ TEST_CASE("Several host inputs on one Quest input reach a VrApi game, and both s
     }
   // The automatic menu's both stick clicks: any of each hand's Stick click inputs.
   MockXrScript script{};
-  press(script.left, "/input/shoulder/click");
+  press(script.left, "/input/bumper/click");
   press(script.right, "/input/thumbstick/click");
   CHECK(sees(game.read(script, 0), Quest::menu, 0));
   CHECK_FALSE(sees(game.read(MockXrScript{}, 0), Quest::menu, 0));
@@ -1145,8 +1145,10 @@ TEST_CASE("Grip toggle latches an OpenXR game's grip per hand on a Vive wand") {
 
 TEST_CASE("Without grip toggle an OpenXR game's grip follows the button") {
   venture::test::ScopedMenuMode automatic("");
-  // On for another controller only: the Vive wand's grip is unchanged.
-  ScopedControls controls(grip_toggle_on("/interaction_profiles/valve/index_controller"));
+  // Turned off for the Vive wand (on by default for its click grip): its grip follows the button.
+  Config config;
+  config["/interaction_profiles/htc/vive_controller"].grip_toggle = false;
+  ScopedControls controls(encode(config));
   GripGame game("/interaction_profiles/htc/vive_controller");
   game.sync(1, 0);
   CHECK(game.hand(0).currentState == 1.f);

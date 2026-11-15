@@ -43,12 +43,11 @@ bool convert_apk(const ConversionOptions& options, ConvertedApk* output, std::st
         std::filesystem::remove(dir, ec);
       }
     } cleanup{result_file, directory};
-    auto utf8 = result_file.u8string();
     std::vector<std::string> args{options.java, "-cp",     options.tools,   "com.venture.dex.ApkCache",
                                   options.apk,  "--package", options.package, "--cache",
                                   options.cache};
     args.push_back("--result-file");
-    args.emplace_back(reinterpret_cast<const char*>(utf8.data()), utf8.size());
+    args.push_back(paths::utf8(result_file));
     for (const auto& path : options.framework_jars) {
       args.push_back("--framework");
       args.push_back(path);

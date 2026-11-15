@@ -123,9 +123,8 @@ bool start_jvm(const JvmOptions& options, std::string* error) {
   }
   try {
     if (options.java_home.empty()) throw std::invalid_argument("java_home is required");
-    std::u8string home(reinterpret_cast<const char8_t*>(options.java_home.data()), options.java_home.size());
     auto create = reinterpret_cast<jint(JNICALL*)(JavaVM**, void**, void*)>(
-        platform::jvm_entry(std::filesystem::path(home)));
+        platform::jvm_entry(paths::from_utf8(options.java_home)));
     // Native engines keep their large assets outside Java. HotSpot's RAM-based
     // ergonomics otherwise commit ~1 GiB initially on a 64 GiB test host.
     // Keep room to grow; explicit extra_options below can override these limits.

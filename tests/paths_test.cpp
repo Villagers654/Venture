@@ -4,6 +4,7 @@
 #include <atomic>
 #include <exception>
 #include <fstream>
+#include <set>
 #include <thread>
 #ifdef _WIN32
 #include <windows.h>
@@ -148,4 +149,51 @@ TEST_CASE("file replacement preserves an open reader and failed publication") {
   CHECK_FALSE(fs::exists(root / "source"));
   CHECK_THROWS(paths::replace_file(root / "missing", root / "target"));
   CHECK(paths::read(root / "target") == "new bytes");
+}
+TEST_CASE("UTF-8 path conversions never throw on bytes that are not UTF-8") {
+  // libc++ path(u8string) and u8string() throw runtime_error("locale not
+  // supported") for these; a guest file name may be any bytes (AimXR crash).
+  const std::string latin1 = "save-\xE9t\xE9.dat", truncated = "a\xC3", overlong = "\xC0\xAF/x",
+                    lone_cesu = "x\xED\xA0\x80", stray = "\x80\xBF\xFE\xFF";
+  for (const auto& bytes : {latin1, truncated, overlong, lone_cesu, stray}) {
+    fs::path path;
+    CHECK_NOTHROW(path = paths::from_utf8(bytes));
+    std::string back;
+    CHECK_NOTHROW(back = paths::utf8(path));
+    CHECK_NOTHROW((void)paths::generic_utf8(path));
+    CHECK_NOTHROW((void)paths::utf16(bytes));
+#ifdef _WIN32
+    // utf8() is always valid UTF-8, so libc++ (and JSON) accept it.
+    CHECK_NOTHROW((void)fs::path(std::u8string(back.begin(), back.end())));
+    if (bytes != lone_cesu) CHECK(paths::guest_name(back) == bytes);
+#else
+    CHECK(back == bytes);
+#endif
+  }
+  CHECK(paths::from_utf8(latin1) != paths::from_utf8("save-\xC3\xA9t\xC3\xA9.dat"));
+  // Well-formed UTF-8, including 4-byte sequences, round trips unchanged.
+  const std::string text = "Configura\xC3\xA7\xC3\xB5" "es/\xE6\x97\xA5\xE6\x9C\xAC/\xF0\x9F\x8E\xAF.json";
+  CHECK(paths::utf8(paths::from_utf8(text)) == text);
+  CHECK(paths::generic_utf8(paths::from_utf8(text)) == text);
+  CHECK(paths::utf16(text) == u"Configurações/日本/\U0001F3AF.json");
+  // Java's modified UTF-8 (a CESU-8 surrogate pair) names the same file.
+  CHECK(paths::utf16("\xED\xA0\xBC\xED\xBE\xAF.json") == paths::utf16("\xF0\x9F\x8E\xAF.json"));
+#ifdef _WIN32
+  CHECK(paths::from_utf8("\xED\xA0\xBC\xED\xBE\xAF.json") == paths::from_utf8("\xF0\x9F\x8E\xAF.json"));
+  CHECK(paths::utf8(fs::path(std::wstring{L'a', wchar_t(0xD800), L'b'})) == "a\xEF\xBF\xBD" "b");
+  CHECK(paths::generic_utf8(fs::path(L"a\\b/c")) == "a/b/c");
+#endif
+}
+TEST_CASE("files with non-UTF-8 and non-ASCII names keep their guest names") {
+  const auto dir = fs::temp_directory_path() /
+                   paths::from_utf8("venture-\xC3\xA7\xC3\xA3o-\xE6\x97\xA5-" + random_account_key());
+  struct Cleanup { fs::path root; ~Cleanup() { remove_tree(root.parent_path(), root); } } cleanup{dir};
+  fs::create_directories(dir);
+  const std::string names[]{"\xE9t\xE9.sav", "Usu\xC3\xA1rio.json", "a:b"};
+  for (const auto& name : names) paths::atomic_write(dir / paths::from_utf8(paths::host_name(name)), name);
+  std::set<std::string> listed;
+  for (const auto& entry : fs::directory_iterator(dir))
+    listed.insert(paths::guest_name(paths::utf8(entry.path().filename())));
+  CHECK(listed == std::set<std::string>(std::begin(names), std::end(names)));
+  CHECK(paths::read(dir / paths::from_utf8(names[0])) == names[0]);
 }

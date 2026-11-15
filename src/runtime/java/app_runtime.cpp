@@ -90,7 +90,7 @@ jstring JNICALL convert_dex(JNIEnv* env, jobject, jstring archive, jobjectArray 
     if (!convert_apk(options, &converted, &error) && !converted.translation_complete)
       throw std::runtime_error("DEX conversion failed: " + error);
     log::info("framework", "Run-time DEX converted: {}", converted.app_jar);
-    const auto jar = paths::from_utf8(converted.app_jar).u16string();
+    const auto jar = paths::utf16(converted.app_jar);
     return env->NewString(reinterpret_cast<const jchar*>(jar.data()), static_cast<jsize>(jar.size()));
   } catch (const std::exception& e) {
     if (auto cls = env->FindClass("java/lang/IllegalStateException")) env->ThrowNew(cls, e.what());
@@ -117,7 +117,7 @@ std::string apk_label() {
     if (cls) env->DeleteLocalRef(cls);
     return {};
   }
-  const auto path = process_config().apk.u16string();
+  const auto path = paths::utf16(paths::utf8(process_config().apk));
   auto argument = env->NewString(reinterpret_cast<const jchar*>(path.data()), static_cast<jsize>(path.size()));
   auto bytes = method && argument ? static_cast<jbyteArray>(env->CallStaticObjectMethod(cls, method, argument)) : nullptr;
   std::string label;
@@ -239,8 +239,24 @@ void require_recorded_outcome(ExecutionFreeze& execution) {
     const auto drain_end = std::chrono::steady_clock::now() + std::chrono::seconds(2);
     while (os_quit::active_calls.load() && std::chrono::steady_clock::now() < drain_end)
       std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    if (os_quit::active_calls.load() || os_quit::cleanup_failed.load())
+    if (const auto calls = os_quit::active_calls.load(); calls || os_quit::cleanup_failed.load()) {
+      // Name the holders: registered threads still inside a guest call; any
+      // remainder is a call on a thread outside the registry (a host callback).
+      unsigned named = 0;
+      for_each_guest_thread([&](GuestThread& thread) {
+        if (const auto depth = thread.os_call_depth.load()) {
+          named += depth;
+          log::error("launch", "OS quit drain: guest tid={} still in {} guest call(s)", thread.tid(), depth);
+        }
+      });
+      log::error("launch", "OS quit drain: active guest calls={} (unregistered {}), owner-thread graphics release {}",
+                 calls, calls > named ? calls - named : 0, os_quit::cleanup_failed.load() ? "failed" : "ok");
+      // VENTURE_SHUTDOWN_NATIVE_SNAPSHOT=drain: native stacks of the holders.
+      if (const char* native = environment::getenv("VENTURE_SHUTDOWN_NATIVE_SNAPSHOT");
+          native && std::string_view(native) == "drain")
+        platform::request_runtime_stall_dump();
       os_quit_failed("guest execution or owner-thread graphics release did not drain");
+    }
     // Read the framework acknowledgement before suspending application Java
     // threads. No Java code may be called after the suspension barrier.
     const auto progress = quit_progress();
@@ -456,8 +472,18 @@ void launch_android_app(const AppLaunchOptions& options) {
     startup_diagnostics::FrameStallTrigger frame_stall_probe;
     startup_diagnostics::FrameStallTrigger frame_freeze_probe{startup_diagnostics::FrameStallTrigger::dump_stall_seconds};
     const auto first_frame_bound = startup_diagnostics::first_frame_timeout_seconds();
+    // Render progress up to the quit (see presenting_at_quit).
+    std::uint64_t seen_frames = 0;
+    auto frame_advanced = started;
+    bool presenting = true;
     while (!token.stop_requested()) {
       const auto now = std::chrono::steady_clock::now();
+      if (!closing) {
+        if (const auto frames = startup_diagnostics::frames_submitted(); frames != seen_frames) {
+          seen_frames = frames;
+          frame_advanced = now;
+        }
+      }
       if (startup_diagnostics::enabled && !closing) startup_diagnostics::poll();
       const bool timed_out = options.run_seconds > 0 &&
           std::chrono::duration<double>(now - started).count() >= options.run_seconds;
@@ -481,6 +507,13 @@ void launch_android_app(const AppLaunchOptions& options) {
       if (!closing && stopping) {
         closing = true;
         host_stop = stop.requested() || timed_out;
+        presenting = presenting_at_quit(startup_diagnostics::first_frame_submitted(),
+                                        startup_diagnostics::host_session_ever_focused(),
+                                        startup_diagnostics::host_session_focused(), now - frame_advanced);
+        if (!presenting && startup_diagnostics::first_frame_submitted())
+          log::info("launch", "Quit while the game is not in play ({}): last frame {} ms ago",
+                    startup_diagnostics::host_session_ever_focused() ? "loading stall" : "never focused",
+                    std::chrono::duration_cast<std::chrono::milliseconds>(now - frame_advanced).count());
         if (os_quit::enabled && host_stop) {
           files = std::make_unique<platform::FileActivity>(process_config().data_dir);
           quietness.emplace(std::chrono::steady_clock::now());
@@ -556,6 +589,7 @@ void launch_android_app(const AppLaunchOptions& options) {
           const auto ns = os_quit::native_destroy_ns.load();
           destroy_delivered = ns ? std::chrono::steady_clock::time_point(std::chrono::nanoseconds(ns)) : clock;
           log::info("launch", "OS quit lifecycle delivered; terminating after one quiet second (bound 8000 ms) native_activities={}", menu_progress.native_activities);
+          platform::notify_runtime_destroy_delivered();
         }
       }
       bool expired = grace.expired(clock, saving);
@@ -588,11 +622,11 @@ void launch_android_app(const AppLaunchOptions& options) {
         expired = settled || (since >= destroy_settle_bound && !waiting);
       }
       if (expired && os_quit::enabled && host_stop && files && !destroy_delivered &&
-          startup_quit(sample(), startup_diagnostics::first_frame_submitted(), guest_process_exit_status() > 0,
+          startup_quit(sample(), presenting, guest_process_exit_status() > 0,
                        grace.within_save_bound(clock)) == StartupQuit::wait) {
         if (!startup_write_logged) {
           startup_write_logged = true;
-          log::info("launch", "Quit before the first frame waits for a guest file write to finish (bound {} s)",
+          log::info("launch", "Quit while the game shows no frames waits for a guest file write to finish (bound {} s)",
                     save_quit_bound.count());
         }
         expired = false;
@@ -605,9 +639,9 @@ void launch_android_app(const AppLaunchOptions& options) {
             // A quit while the game is still starting (see startup_quit): The
             // Climb 2's native glue waits in onPause while CryEngine
             // initializes, as does Reach's (UE5) while its engine starts.
-            if (startup_quit(bound_sample, startup_diagnostics::first_frame_submitted(),
+            if (startup_quit(bound_sample, presenting,
                              guest_process_exit_status() > 0, grace.within_save_bound(clock)) == StartupQuit::end) {
-              log::warn("launch", "Quit before the first frame; the lifecycle still waits on game startup ({}: {}, "
+              log::warn("launch", "Quit while the game shows no frames (starting or loading); the lifecycle still waits on the engine ({}: {}, "
                         "stages {:#x} of 0xf); ending the process as a Quest ends a removed task",
                         unsettled, bound_sample.threads_quiet ? "threads quiet" : menu_quiet_error, menu_progress.stages);
               shutdown_trace::snapshot("startup-quit");

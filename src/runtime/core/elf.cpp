@@ -1,6 +1,7 @@
 #include "core/shutdown_trace.h"
 #include "core/mutex_watch.h"
 #include "core/elf.h"
+#include "common/paths.h"
 #include "core/linker_runtime.h"
 #include "core/profile.h"
 #include "core/address_space.h"
@@ -49,7 +50,7 @@ GuestIsa detect_isa(const std::filesystem::path& file) {
   std::ifstream input(file, std::ios::binary);
   std::array<std::byte, 20> bytes{};
   if (!input.read(reinterpret_cast<char*>(bytes.data()), bytes.size()))
-    throw std::runtime_error("cannot read ELF header: " + file.string());
+    throw std::runtime_error("cannot read ELF header: " + paths::utf8(file));
   return detect_isa(bytes);
 }
 std::set<std::string> exported_names(const std::filesystem::path& file, std::string_view version) {
@@ -145,9 +146,9 @@ std::set<std::string> exported_names(const std::filesystem::path& file, std::str
 Image::Image(const std::filesystem::path& file, std::string guest_path, const Placement* placement) {
   // Host source path only for the features that read it (hint hashing, compile census).
   if (JitBlockList::enabled() || profile::compile_timing_enabled) source_file_ = file;
-  path_ = std::move(guest_path); soname_ = file.filename().string();
+  path_ = std::move(guest_path); soname_ = paths::utf8(file.filename());
   std::ifstream input(file, std::ios::binary);
-  if (!input) throw std::runtime_error("cannot open ELF: " + file.string());
+  if (!input) throw std::runtime_error("cannot open ELF: " + paths::utf8(file));
   const auto file_size = std::filesystem::file_size(file);
   auto ident = read_file<std::array<std::byte, 20>>(input, 0);
   isa_ = detect_isa(ident);
@@ -165,7 +166,7 @@ Image::Image(const std::filesystem::path& file, std::string guest_path, const Pl
   const auto phsize = isa_ == GuestIsa::a32 ? sizeof(Phdr32) : sizeof(Phdr);
   if (header.type != 3 || header.version != 1 || header.ehsize != ehsize || header.phentsize != phsize ||
       !header.phnum || header.phnum > 4096)
-    throw std::runtime_error("invalid ARM ELF ET_DYN header: " + file.string());
+    throw std::runtime_error("invalid ARM ELF ET_DYN header: " + paths::utf8(file));
   if (header.phoff > file_size || header.phnum * phsize > file_size - header.phoff)
     throw std::runtime_error("ELF program headers outside file");
   std::uint64_t low = std::numeric_limits<std::uint64_t>::max(), high = 0, alignment = 4096;

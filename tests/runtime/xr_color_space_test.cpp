@@ -816,8 +816,38 @@ TEST_CASE("XR lazy swapchains retain guest color and recycle only inactive host 
       REQUIRE(g::xrEndFrame(session, &end) == XR_SUCCESS);
     }
     if (rebuild == 0) {
+      // Host chains of destroyed guest chains stay parked for reuse until the
+      // session ends (dev_dump.cpp; the Oculus runtime faults in a running
+      // session's xrDestroySwapchain). A new chain like them takes one back.
+#ifdef _WIN32
+      _putenv_s("VENTURE_XR_PARK_SWAPCHAINS", "1");
+#else
+      setenv("VENTURE_XR_PARK_SWAPCHAINS", "1", 1);
+#endif
+      venture::environment::refresh();
+      const auto live = ventureMockXrStats().live_swapchains;
       for (auto chain : chains) REQUIRE(g::xrDestroySwapchain(chain) == XR_SUCCESS);
-      CHECK(ventureMockXrStats().live_swapchains == 0);
+      CHECK(ventureMockXrStats().live_swapchains == live);
+      XrSwapchain again{};
+      REQUIRE(g::xrCreateSwapchain(session, &info, &again) == XR_SUCCESS);
+      std::uint32_t index{};
+      REQUIRE(g::xrAcquireSwapchainImage(again, nullptr, &index) == XR_SUCCESS);
+      XrSwapchainImageWaitInfo wait{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO, nullptr, XR_INFINITE_DURATION};
+      REQUIRE(g::xrWaitSwapchainImage(again, &wait) == XR_SUCCESS);
+      REQUIRE(g::xrReleaseSwapchainImage(again, nullptr) == XR_SUCCESS);
+      {
+        std::lock_guard lock(venture::hle::openxr::state().mutex);
+        CHECK(venture::hle::openxr::prepare_swapchains({again}) == XR_SUCCESS);
+        CHECK(venture::hle::openxr::state().swapchains.at(again).host_handle != XR_NULL_HANDLE);
+      }
+      CHECK(ventureMockXrStats().live_swapchains == live);
+      REQUIRE(g::xrDestroySwapchain(again) == XR_SUCCESS);
+#ifdef _WIN32
+      _putenv_s("VENTURE_XR_PARK_SWAPCHAINS", "");
+#else
+      unsetenv("VENTURE_XR_PARK_SWAPCHAINS");
+#endif
+      venture::environment::refresh();
     }
     REQUIRE(g::xrDestroySession(session) == XR_SUCCESS);
     CHECK(ventureMockXrStats().live_swapchains == 0);

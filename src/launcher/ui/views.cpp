@@ -701,9 +701,10 @@ void App::draw_library() {
     auto installed_count = std::ranges::count_if(all, [&](auto& g) { return installed(g.id) != nullptr; });
     std::string all_label = std::format("All  {}##all", all.size());
     std::string installed_label = std::format("Installed  {}##installed", installed_count);
-    if (filter_chip(all_label.c_str(), !installed_only_)) installed_only_ = false;
+    // The choice is remembered (settings.json libraryInstalledOnly).
+    if (filter_chip(all_label.c_str(), !settings_.installed_only)) action([&] { set_installed_only(false); });
     ImGui::SameLine(0, s(8));
-    if (filter_chip(installed_label.c_str(), installed_only_)) installed_only_ = true;
+    if (filter_chip(installed_label.c_str(), settings_.installed_only)) action([&] { set_installed_only(true); });
     if (hidden_count) {
       ImGui::SameLine(0, s(8));
       // i18n: Library filter chip that lists the games the player hid; {0} is how many.
@@ -715,7 +716,7 @@ void App::draw_library() {
   }
 
   std::erase_if(all, [&](auto& g) {
-    return !search::matches(search_, g.name) || (installed_only_ && !installed(g.id));
+    return !search::matches(search_, g.name) || (settings_.installed_only && !installed(g.id));
   });
   std::sort(all.begin(), all.end(), [&](auto& a, auto& b) {
     if (sort_ && a.recent != b.recent) return a.recent > b.recent;
@@ -747,7 +748,7 @@ void App::draw_library() {
       empty_state(icons::library, "Finding your games\xE2\x80\xA6", "");
     else if (!search_.empty())
       empty_state(icons::search, "No results", "");
-    else if (installed_only_)
+    else if (settings_.installed_only)
       empty_state(icons::download, "Nothing installed yet", "");
     else if (hidden_count)
       // i18n: Library empty state when the player hid every game; "Show hidden" is the filter chip.
@@ -756,7 +757,7 @@ void App::draw_library() {
       empty_state(icons::library, "No games yet", "Sign in, or import a game.");
     else
       empty_state(icons::library, "No games yet", refresh_error_);
-    if (session_ && !refreshing_ && search_.empty() && !installed_only_ && !hidden_count && !options_.offline) {
+    if (session_ && !refreshing_ && search_.empty() && !settings_.installed_only && !hidden_count && !options_.offline) {
       gap(22);
       float bw = s(200);
       ImGui::SetCursorPosX((ImGui::GetContentRegionAvail().x - bw) * 0.5f + ImGui::GetCursorPosX());
@@ -1959,9 +1960,6 @@ void App::draw_settings() {
   // --smoke-view settings-runtime(-texture-warning) shows the Runtime card at the top for screenshots.
   if (options_.smoke_view.starts_with("settings-runtime")) ImGui::SetScrollHereY(0.0f);
   begin_card("runtime", w, {22, 2});
-  setting_row("Runtime", "Leave empty to use the runtime that came with Venture.", field_w, s(38),
-              input("##runtime", &settings_runtime_, "Included runtime"));
-  divider();
   {
     // Automatic picks what the VR runtime or headset offers; Color key is the
     // user's choice for a streaming tool that keys a color (never automatic).
@@ -3957,7 +3955,7 @@ void reset_controls(ControlsEdit& e, int profile) {
   e.menu_second = n + stick_click;
   e.menu_hold_ms = controls::kHoldMs;
   e.menu_chord_ms = controls::kChordHoldMs;
-  e.grip_toggle = false;
+  e.grip_toggle = controls::needs_grip_toggle(p);
   e.initialized = true;
 }
 
@@ -3986,7 +3984,7 @@ void open_controls(ControlsEdit& e, int profile, const controls::Config& config)
   const auto it = config.find(p.path);
   if (it == config.end()) return;
   const auto& c = it->second;
-  e.grip_toggle = c.grip_toggle;
+  if (c.grip_toggle) e.grip_toggle = *c.grip_toggle;
   for (int hand = 0; hand < 2; ++hand)
     for (int q = 0; q < kQuestCount; ++q)
       if (const auto& row = c.rows[size_t(hand)][size_t(q)]; row && q != int(Quest::menu)) {
@@ -4029,7 +4027,8 @@ controls::Choice edit_choice(const ControlsEdit& e) {
       c.menu = {MenuMode::chord, choice_path(p, e.menu_first), choice_path(p, e.menu_second), e.menu_chord_ms};
       break;
   }
-  c.grip_toggle = e.grip_toggle;
+  // The controller's default is left unset, so it follows needs_grip_toggle.
+  if (e.grip_toggle != controls::needs_grip_toggle(p)) c.grip_toggle = e.grip_toggle;
   return c;
 }
 // Writes the editor's choices into `config`; true when that changed it.
@@ -4132,7 +4131,7 @@ void add_second_stick_click(ControlsEdit& e) {
   const auto& p = kProfiles[e.profile];
   for (int hand = 0; hand < 2; ++hand) {
     auto& row = e.host[hand][size_t(Quest::stick_click)];
-    if (const int bumper = host_index(p, "/input/shoulder/click")) {
+    if (const int bumper = host_index(p, "/input/bumper/click")) {
       row.push_back(bumper);
       continue;
     }
@@ -5094,9 +5093,13 @@ void App::draw_controls_editor(ControlsEdit& e, const ControlsEdit* base, float 
     divider();
     gap(14);
     ImGui::BeginDisabled(locked);
-    // i18n: Controls page checkbox and its hint. The grip is the controller's side button held to grab.
-    checkbox("grip-toggle", tr("Grip toggle"), &e.grip_toggle,
-             tr("Press grip once to hold, again to let go. For controllers with click grips like Vive wands."));
+    // A small checkbox with its hint on the same line, centred on the box.
+    // i18n: Controls page checkbox. The grip is the controller's side button held to grab.
+    checkbox("grip-toggle", tr("Grip toggle"), &e.grip_toggle, {}, true);
+    const ImVec2 min = ImGui::GetItemRectMin(), max = ImGui::GetItemRectMax();
+    // i18n: Controls page hint beside "Grip toggle".
+    draw_text(ImGui::GetWindowDrawList(), fonts().regular, kLabel, {max.x + s(10), text_y(fonts().regular, kLabel, min.y, max.y - min.y)},
+              color::text3, tr("Press once to hold, again to let go"));
     ImGui::EndDisabled();
   };
 
