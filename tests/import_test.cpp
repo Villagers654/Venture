@@ -750,7 +750,7 @@ TEST_CASE("a save export backs up the headset's saves and replaces the folders i
   write(headset / "files/il2cpp/Metadata/global-metadata.dat", "quest-meta");
   write(headset / "files/cloud/data/blob", "quest-cloud");
   write(headset / ("files/main.1." + package + ".obb"), "quest-obb");
-  const auto game =d.root / "data/data/users/local" / package / "external-data";
+  const auto game = d.root / "data/data/users/local" / package / "external-data";
   write(game / "files/save.dat", "venture");
   write(game / "files/slot2.dat", "slot");
   write(game / "files/.fbns/Mqtt.store", "pc");

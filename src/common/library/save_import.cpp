@@ -286,8 +286,10 @@ Exported export_headset(const fs::path &data, std::string_view key, std::string_
     for (const auto &file : backed_up)
       if (auto slash = file.find('/');
           slash != std::string::npos && folders.contains(file.substr(0, slash)) && !sent.contains(file) &&
-          exported(paths::from_utf8(file)))
-        remove += dest + "/" + file + "\n", ++n.removed;
+          exported(paths::from_utf8(file))) {
+        remove += dest + "/" + file + "\n";
+        ++n.removed;
+      }
     if (n.removed)
       log::info("saves", "Removing {} file{} from the headset that Venture's copy no longer has", n.removed,
                 n.removed == 1 ? "" : "s");

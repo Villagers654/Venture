@@ -1586,7 +1586,8 @@ void Core::export_saves_later(std::string_view app_id) {
                                                     n.removed, n.removed == 1 ? "file" : "files")
                                       : "",
                             n.backup.empty() ? "" : " The headset's previous saves are kept in a backup.",
-                            n.has_private ? " This game also keeps saves in private storage, which can't be sent over USB."
+                            n.has_private ? " Settings and saves the game keeps in private storage stay as they are "
+                                            "on the headset."
                                           : "");
       sent = true;
     } catch (...) {
