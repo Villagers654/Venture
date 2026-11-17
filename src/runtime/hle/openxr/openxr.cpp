@@ -19,6 +19,7 @@
 #include "core/thread_runtime.h"
 #include "gfx/gpu_device.h"
 #include "hle/openxr/state.h"
+#include "hle/openxr/controller_layer.h"
 #include "xr/presentation.h"
 #include "hle/openxr/passthrough.h"
 #include "hle/openxr/sphere_layers.h"
@@ -554,22 +555,11 @@ XrResult xrDestroyInstance(XrInstance instance) {
     if (XR_FAILED(result))
       return result;
   }
-  std::vector<XrActionSet> sets;
-  for (const auto &[h, o] : state().objects)
-    if (o.type == "XrActionSet")
-      sets.push_back(reinterpret_cast<XrActionSet>(h.second));
-  for (auto set : sets) {
-    auto r = ::xrDestroyActionSet(set);
-    if (XR_FAILED(r))
-      return r;
-  }
+  controls::destroy_instance();
   state().timespec_instance.store(XrInstance{}, std::memory_order_release);
   forget_handle(instance);
   state().enabled.clear();
   state().instance_live = false;
-  state().guest_profiles.clear();
-  state().guest_suggestions.clear();
-  state().guest_sources.clear();
   state().events.clear();
   invalidate_host_procedures();
   if (shutdown_trace::enabled) log::info("shutdown", "xrDestroyInstance returned success");
@@ -828,6 +818,7 @@ XrResult xrDestroySession(XrSession handle) {
       return result;
   }
   destroy_retired_spaces(nullptr);
+  controls::reset_session(handle);
   venture::xr::cancel_sequence(handle);
   venture::xr::clear_haptic_bindings(handle);
   auto result = session().destroy(SessionOwner::openxr);
@@ -881,6 +872,7 @@ XrResult xrDestroySpace(XrSpace space) {
   std::lock_guard lock(state().mutex);
   if (!valid_handle(space, "XrSpace")) return XR_ERROR_HANDLE_INVALID;
   forget_handle(space);
+  controls::destroy_space(space);
   // The host copy stays until no submitted frame uses it (destroy_retired_spaces).
   if (session().handle) {
     state().retired_spaces.push_back(space);
@@ -1000,6 +992,7 @@ XrResult xrPollEvent(XrInstance instance, XrEventDataBuffer *out) {
   if (result == XR_SUCCESS && out->type == XR_TYPE_EVENT_DATA_INTERACTION_PROFILE_CHANGED) {
     venture::xr::clear_haptic_bindings(session().handle);
     venture::xr::note_menu_profiles_changed(session().handle);
+    controls::profiles_changed();
   }
   if (result == XR_SUCCESS && out->type == XR_TYPE_EVENT_DATA_SESSION_STATE_CHANGED) {
     auto e = reinterpret_cast<XrEventDataSessionStateChanged *>(out);
@@ -1406,6 +1399,16 @@ XrResult xrEndFrame(XrSession handle, const XrFrameEndInfo *info) {
           }
       }
     }
+    // A layer in a hand's action space goes to the host space that hand's pose is at now.
+    if (const auto host_space = controls::located_space(mapped->space); host_space != mapped->space)
+      for (const auto& info : structure_metadata())
+        if (info.type == mapped->type) {
+          auto& copy = premultiplied.emplace_back(info.size);
+          std::memcpy(copy.data(), mapped, info.size);
+          reinterpret_cast<XrCompositionLayerBaseHeader*>(copy.data())->space = host_space;
+          mapped = reinterpret_cast<const XrCompositionLayerBaseHeader*>(copy.data());
+          break;
+        }
     layers.push_back(mapped);
     return XR_SUCCESS;
   };

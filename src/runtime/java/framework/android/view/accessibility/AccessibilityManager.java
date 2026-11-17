@@ -6,6 +6,13 @@ public class AccessibilityManager {
   public boolean isTouchExplorationEnabled() {
     return false;
   }
+  // No accessibility services are installed or enabled.
+  public java.util.List<android.accessibilityservice.AccessibilityServiceInfo> getEnabledAccessibilityServiceList(int feedbackTypes) {
+    return new java.util.ArrayList<>();
+  }
+  public java.util.List<android.accessibilityservice.AccessibilityServiceInfo> getInstalledAccessibilityServiceList() {
+    return new java.util.ArrayList<>();
+  }
   public interface AccessibilityStateChangeListener {
     void onAccessibilityStateChanged(boolean enabled);
   }

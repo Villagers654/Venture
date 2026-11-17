@@ -1,6 +1,7 @@
 #include "common/log.h"
 #include "core/a32_abi.h"
 #include "core/token32.h"
+#include "gfx/a32_handles.h"
 #include "hle/vrapi/abi32.h"
 #include "hle/vrapi/integration.h"
 #include "hle/vrapi/state.h"
@@ -34,6 +35,19 @@ template <class T> T *resolve(std::uint32_t token) {
   if (!h)
     throw BadHandle{};
   return h->value;
+}
+// A completion fence is the guest's EGLSyncKHR: a 32-bit EGL handle here, the
+// host sync once decoded. Garbage in the low word (older SDKs' Pad) is no fence.
+std::uint64_t completion_fence(std::uint64_t guest) {
+  const auto token = std::uint32_t(guest);
+  if (!token) return 0;
+  try {
+    return std::uint64_t(std::uintptr_t(gfx::a32::decode(gfx::a32::Handle::egl_sync, token)));
+  } catch (const gfx::a32::BadHandle &) {
+    static unsigned reports = 0;
+    if (reports++ < 4) log::warn("vrapi", "A32 completion fence {:#x} is not an EGL sync; not waited", token);
+    return 0;
+  }
 }
 template <class T> std::uint32_t insert(T *value) {
   return value ? tokens.insert(std::make_shared<Handle<T>>(Handle<T>{value}))
@@ -356,7 +370,7 @@ void submit(CallContext &ctx) {
         storage[i]);
   }
   abi::Submit n{w.flags,        w.swap_interval,    w.frame_index,
-                w.display_time, w.completion_fence, w.layer_count,
+                w.display_time, completion_fence(w.completion_fence), w.layer_count,
                 pointers.data()};
   ctx.return_x(guest::vrapi_SubmitFrame2(resolve<abi::Mobile>(ctx.x(0)), &n));
 }
@@ -399,7 +413,7 @@ void legacy_submit(CallContext &ctx) {
                        t.rect,
                        0,
                        t.head,
-                       t.completion_fence};
+                       completion_fence(t.completion_fence)};
     }
   }
   guest::vrapi_SubmitFrame(resolve<abi::Mobile>(ctx.x(0)), &n);

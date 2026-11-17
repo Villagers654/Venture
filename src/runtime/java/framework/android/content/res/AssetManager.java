@@ -14,6 +14,10 @@ public class AssetManager implements AutoCloseable {
     var trace = AssetReadTrace.begin(path);
     return AssetReadTrace.opened(RuntimeEnvironment.host().openAsset(path, mode), trace);
   }
+  // The locales the app's resources are configured with; the device locale here.
+  public String[] getLocales() {
+    return new String[] {java.util.Locale.getDefault().toLanguageTag()};
+  }
   public String[] list(String path) throws IOException {
     return RuntimeEnvironment.host().listAssets("assets/" + path);
   }

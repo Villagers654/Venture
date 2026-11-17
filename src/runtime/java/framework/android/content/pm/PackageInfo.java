@@ -6,7 +6,10 @@ public class PackageInfo {
   public ActivityInfo[] activities;
   public ProviderInfo[] providers;
   public ServiceInfo[] services;
+  public static final int REQUESTED_PERMISSION_REQUIRED = 1, REQUESTED_PERMISSION_GRANTED = 2;
+  public ActivityInfo[] receivers;
   public String[] requestedPermissions;
+  public int[] requestedPermissionsFlags;
   public Signature[] signatures;
   public SigningInfo signingInfo;
   public long firstInstallTime, lastUpdateTime;

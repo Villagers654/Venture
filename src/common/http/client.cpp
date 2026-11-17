@@ -488,6 +488,18 @@ std::string get_image(std::string url, std::stop_token stop) {
 static int hex_digit(char c) {
   return c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : c >= 'A' && c <= 'F' ? c - 'A' + 10 : -1;
 }
+// Meta's CDN answers 404 for a file this account may not download, as for a
+// copy granted with the headset rather than taken from the store (Theater
+// Elsewhere on such an account; other titles download), so signing in again
+// does not help there.
+std::string refusal(long status) {
+  if (status == 404)
+    return "Meta's file server won't send this game to this account (HTTP 404). It does this for "
+           "apps that came with the headset rather than from the store. Get the game from the "
+           "Meta Horizon Store on this account, or download it with another account that owns it.";
+  return "File server refused the transfer (HTTP " + std::to_string(status) +
+         "). Sign in again, then resume.";
+}
 std::string delivery_file_name(std::string url, std::stop_token stop) {
   for (int i = 0; i < 8; ++i) {
     if (!allowed_delivery(url))
@@ -498,7 +510,7 @@ std::string delivery_file_name(std::string url, std::stop_token stop) {
       continue;
     }
     if (r.status != 200 && r.status != 206)
-      throw std::runtime_error("File server refused the request (HTTP " + std::to_string(r.status) + ").");
+      throw std::runtime_error(refusal(r.status));
     // RFC 6266: filename* (RFC 5987, UTF-8) is the exact name when present.
     auto disposition = r.headers["content-disposition"];
     std::string name;
@@ -530,9 +542,7 @@ std::string delivery_file_name(std::string url, std::stop_token stop) {
 RangeDecision check_range(long status, uint64_t offset, uint64_t expected,
                           std::string_view range, uint64_t length) {
   if (status != 200 && status != 206)
-    throw std::runtime_error("File server refused the transfer (HTTP " +
-                             std::to_string(status) +
-                             "). Sign in again, then resume.");
+    throw std::runtime_error(refusal(status));
   if (status == 200)
     return {0, expected ? expected : length};
   static const std::regex pattern(R"(^bytes ([0-9]+)-([0-9]+)/([0-9]+)$)");
@@ -629,6 +639,8 @@ void fetch_file(std::string url, const fs::path &dest, uint64_t expected, std::s
           try {
             if (!out.opened) {
               auto &hdr = out.response->headers;
+              if (out.response->status != 200 && out.response->status != 206)
+                throw std::runtime_error(refusal(out.response->status));
               auto type = lower(hdr["content-type"]);
               if (type.find("text/html") != type.npos ||
                   type.find("application/json") != type.npos)

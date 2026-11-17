@@ -6,4 +6,10 @@ public final class Sensor {
   public int getType() {
     throw new UnsupportedOperationException("No host Android sensor adapter");
   }
+  public String getName() {
+    throw new UnsupportedOperationException("No host Android sensor adapter");
+  }
+  public String getVendor() {
+    throw new UnsupportedOperationException("No host Android sensor adapter");
+  }
 }

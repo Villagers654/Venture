@@ -55,7 +55,10 @@ public final class XmlPreferences implements SharedPreferences {
             values.put(key, value);
           }
       } catch (Exception e) {
-        throw new IllegalStateException("Cannot read preferences " + path, e);
+        // As SharedPreferencesImpl.loadFromDisk: an unreadable file (empty,
+        // truncated, not XML) is logged and the preferences start empty.
+        values.clear();
+        RuntimeEnvironment.host().log(5, "SharedPreferencesImpl", "Cannot read " + path + ": " + e);
       }
     trace("load", 0, 0, true, values.size());
   }

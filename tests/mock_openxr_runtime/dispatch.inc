@@ -52,6 +52,10 @@ XrResult XRAPI_CALL dispatch_xrCreateInstance(const XrInstanceCreateInfo* create
   std::lock_guard lock(mutex);
   return m_xrCreateInstance(createInfo, instance);
 }
+XrResult XRAPI_CALL dispatch_xrCreatePassthroughColorLutMETA(XrPassthroughFB /*passthrough*/, const XrPassthroughColorLutCreateInfoMETA* /*createInfo*/, XrPassthroughColorLutMETA* /*colorLut*/) {
+  std::lock_guard lock(mutex);
+  return XR_ERROR_FUNCTION_UNSUPPORTED;
+}
 XrResult XRAPI_CALL dispatch_xrCreatePassthroughFB(XrSession session, const XrPassthroughCreateInfoFB* createInfo, XrPassthroughFB* outPassthrough) {
   std::lock_guard lock(mutex);
   return m_xrCreatePassthroughFB(session, createInfo, outPassthrough);
@@ -115,6 +119,10 @@ XrResult XRAPI_CALL dispatch_xrDestroyHandTrackerEXT(XrHandTrackerEXT handTracke
 XrResult XRAPI_CALL dispatch_xrDestroyInstance(XrInstance instance) {
   std::lock_guard lock(mutex);
   return m_xrDestroyInstance(instance);
+}
+XrResult XRAPI_CALL dispatch_xrDestroyPassthroughColorLutMETA(XrPassthroughColorLutMETA /*colorLut*/) {
+  std::lock_guard lock(mutex);
+  return XR_ERROR_FUNCTION_UNSUPPORTED;
 }
 XrResult XRAPI_CALL dispatch_xrDestroyPassthroughFB(XrPassthroughFB passthrough) {
   std::lock_guard lock(mutex);
@@ -503,6 +511,10 @@ XrResult XRAPI_CALL dispatch_xrTriangleMeshGetVertexBufferFB(XrTriangleMeshFB /*
   std::lock_guard lock(mutex);
   return XR_ERROR_FUNCTION_UNSUPPORTED;
 }
+XrResult XRAPI_CALL dispatch_xrUpdatePassthroughColorLutMETA(XrPassthroughColorLutMETA /*colorLut*/, const XrPassthroughColorLutUpdateInfoMETA* /*updateInfo*/) {
+  std::lock_guard lock(mutex);
+  return XR_ERROR_FUNCTION_UNSUPPORTED;
+}
 XrResult XRAPI_CALL dispatch_xrUpdateSwapchainFB(XrSwapchain swapchain, const XrSwapchainStateBaseHeaderFB* state) {
   std::lock_guard lock(mutex);
   return m_xrUpdateSwapchainFB(swapchain, state);
@@ -529,6 +541,7 @@ const Entry dispatch[]{
   {"xrCreateGeometryInstanceFB", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrCreateGeometryInstanceFB)},
   {"xrCreateHandTrackerEXT", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrCreateHandTrackerEXT)},
   {"xrCreateInstance", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrCreateInstance)},
+  {"xrCreatePassthroughColorLutMETA", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrCreatePassthroughColorLutMETA)},
   {"xrCreatePassthroughFB", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrCreatePassthroughFB)},
   {"xrCreatePassthroughLayerFB", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrCreatePassthroughLayerFB)},
   {"xrCreateReferenceSpace", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrCreateReferenceSpace)},
@@ -545,6 +558,7 @@ const Entry dispatch[]{
   {"xrDestroyGeometryInstanceFB", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrDestroyGeometryInstanceFB)},
   {"xrDestroyHandTrackerEXT", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrDestroyHandTrackerEXT)},
   {"xrDestroyInstance", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrDestroyInstance)},
+  {"xrDestroyPassthroughColorLutMETA", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrDestroyPassthroughColorLutMETA)},
   {"xrDestroyPassthroughFB", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrDestroyPassthroughFB)},
   {"xrDestroyPassthroughLayerFB", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrDestroyPassthroughLayerFB)},
   {"xrDestroySession", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrDestroySession)},
@@ -642,6 +656,7 @@ const Entry dispatch[]{
   {"xrTriangleMeshEndVertexBufferUpdateFB", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrTriangleMeshEndVertexBufferUpdateFB)},
   {"xrTriangleMeshGetIndexBufferFB", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrTriangleMeshGetIndexBufferFB)},
   {"xrTriangleMeshGetVertexBufferFB", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrTriangleMeshGetVertexBufferFB)},
+  {"xrUpdatePassthroughColorLutMETA", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrUpdatePassthroughColorLutMETA)},
   {"xrUpdateSwapchainFB", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrUpdateSwapchainFB)},
   {"xrWaitFrame", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrWaitFrame)},
   {"xrWaitSwapchainImage", reinterpret_cast<PFN_xrVoidFunction>(&dispatch_xrWaitSwapchainImage)},

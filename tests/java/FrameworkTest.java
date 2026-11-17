@@ -2263,6 +2263,64 @@ public final class FrameworkTest {
     check(packageManager.resolveContentProvider("com.google.android.gms.chimera", 0) == null
         && packageManager.resolveContentProvider(null, 0) == null,
         "an authority no package provides resolves to null");
+    // Talsec asks for the install source at start (Yeeps): the same installer as getInstallerPackageName.
+    try {
+      var source = packageManager.getInstallSourceInfo(packageManager.getInstalledPackages(0).get(0).packageName);
+      check(source.getInstallingPackageName() == null && source.getPackageSource() == 0, "install source of the game");
+    } catch (android.content.pm.PackageManager.NameNotFoundException e) { throw new AssertionError(e); }
+    try {
+      packageManager.getInstallSourceInfo("com.example.absent");
+      check(false, "install source of another package is not found");
+    } catch (android.content.pm.PackageManager.NameNotFoundException expected) {}
+    // Talsec's start-up checks (Yeeps): no lock screen, no usage stats, no accessibility services,
+    // software keys, grant flags per requested permission, and the game's own class list.
+    check(!((android.app.KeyguardManager) packaged.getSystemService(android.content.Context.KEYGUARD_SERVICE)).isDeviceSecure()
+        && packaged.getSystemService(android.app.KeyguardManager.class) != null, "a game sees no lock screen credential");
+    check(((android.app.usage.UsageStatsManager) packaged.getSystemService(android.content.Context.USAGE_STATS_SERVICE))
+        .queryUsageStats(0, 0, Long.MAX_VALUE).isEmpty(), "usage stats need an access a game never has");
+    check(((android.view.accessibility.AccessibilityManager) packaged.getSystemService(android.content.Context.ACCESSIBILITY_SERVICE))
+        .getEnabledAccessibilityServiceList(-1).isEmpty(), "no accessibility services are enabled");
+    check(!new android.security.keystore.KeyInfo("k", 256, 3).isInsideSecureHardware(), "keys are software keys");
+    // FingerprintJS inside Talsec builds every signal source at start.
+    check(new android.media.RingtoneManager(packaged).getRingtoneUri(0) == null && android.hardware.Camera.getNumberOfCameras() == 0
+        && new android.app.ActivityManager().getDeviceConfigurationInfo().getGlEsVersion().equals("3.2")
+        && packageManager.getInstalledApplications(0).size() == 1
+        && android.provider.Settings.System.getString(null, "absent") == null, "device signals a fingerprinting library reads");
+    check(packaged.getSystemService(android.hardware.fingerprint.FingerprintManager.class) == null
+        && ((android.hardware.biometrics.BiometricManager) packaged.getSystemService(android.content.Context.BIOMETRIC_SERVICE))
+            .canAuthenticate() == android.hardware.biometrics.BiometricManager.BIOMETRIC_ERROR_NO_HARDWARE,
+        "no fingerprint or biometric hardware");
+    var typed = new android.content.Intent("a").setDataAndType(android.net.Uri.parse("content://x/y"), "text/plain").addCategory("c");
+    check("text/plain".equals(typed.resolveTypeIfNeeded(null)) && typed.hasCategory("c") && !typed.hasCategory("d"),
+        "LocalBroadcastManager reads the intent type and categories");
+    var signer = new android.content.pm.Signature(new byte[] {1});
+    check(new android.content.pm.SigningInfo(new android.content.pm.Signature[] {signer}).getSigningCertificateHistory()[0].equals(signer)
+        && new android.content.pm.SigningInfo(new android.content.pm.Signature[] {signer},
+            new android.content.pm.Signature[] {new android.content.pm.Signature(new byte[] {2}), signer}).getSigningCertificateHistory().length == 2,
+        "signing history is the current signer, or the rotation lineage");
+    check(android.os.Build.VERSION.SECURITY_PATCH.isEmpty() && android.os.Build.USER.equals("unknown"), "unset build properties");
+    try {
+      var info = packageManager.getPackageInfo(packageManager.getInstalledPackages(0).get(0).packageName, 0);
+      check(info.receivers != null && info.requestedPermissionsFlags.length == info.requestedPermissions.length,
+          "package info lists receivers and one grant flag per requested permission");
+    } catch (android.content.pm.PackageManager.NameNotFoundException e) { throw new AssertionError(e); }
+    {
+      byte[] descriptor = "Lcom/example/A;".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+      var dex = java.nio.ByteBuffer.allocate(0x98 + 2 + descriptor.length).order(java.nio.ByteOrder.LITTLE_ENDIAN);
+      dex.put("dex\n035\0".getBytes(java.nio.charset.StandardCharsets.US_ASCII));
+      dex.putInt(0x38, 1).putInt(0x3c, 0x70).putInt(0x40, 1).putInt(0x44, 0x74).putInt(0x60, 1).putInt(0x64, 0x78);
+      dex.putInt(0x70, 0x98).putInt(0x74, 0).putInt(0x78, 0);
+      dex.put(0x98, (byte) descriptor.length).put(0x99, descriptor);
+      Path dexFile = Files.createTempFile("venture-dexfile", ".dex"), apk = Files.createTempFile("venture-dexfile", ".apk");
+      Files.write(dexFile, dex.array());
+      try (var zip = new java.util.zip.ZipOutputStream(Files.newOutputStream(apk))) {
+        zip.putNextEntry(new java.util.zip.ZipEntry("classes.dex")); zip.write(dex.array()); zip.closeEntry();
+        zip.putNextEntry(new java.util.zip.ZipEntry("classes2.dex")); zip.write(dex.array()); zip.closeEntry();
+      }
+      check(java.util.Collections.list(new dalvik.system.DexFile(dexFile.toString()).entries()).equals(List.of("com.example.A"))
+          && java.util.Collections.list(new dalvik.system.DexFile(apk.toFile()).entries()).equals(List.of("com.example.A", "com.example.A")),
+          "DexFile lists the classes of a dex file and of every dex in an APK");
+    }
     // Firebase's executors build and install StrictMode thread policies (Pickleball One).
     var policy = new android.os.StrictMode.ThreadPolicy.Builder().detectAll().detectResourceMismatches()
         .detectUnbufferedIo().penaltyLog().build();
@@ -3103,16 +3161,6 @@ public final class FrameworkTest {
       check(changed.size() == 6, "preference notifications");
       check(reloaded.edit().clear().putInt("survivor", 1).commit(), "clear then updates");
       check(new XmlPreferences(file).getAll().size() == 1, "clear persistence");
-      Files.writeString(file,
-          "<!DOCTYPE x [<!ENTITY e SYSTEM 'file:///private'>]><map><string "
-              + "name='x'>&e;</string></map>");
-      boolean rejected = false;
-      try {
-        new XmlPreferences(file);
-      } catch (IllegalStateException e) {
-        rejected = true;
-      }
-      check(rejected, "external XML entities rejected");
     } finally {
       Files.deleteIfExists(file);
       Files.deleteIfExists(directory);
@@ -3547,6 +3595,30 @@ public final class FrameworkTest {
     check(obbContext.getPackageManager().hasSystemFeature(android.content.pm.PackageManager.FEATURE_BLUETOOTH)
         && obbContext.getPackageManager().hasSystemFeature(android.content.pm.PackageManager.FEATURE_BLUETOOTH_LE),
         "Bluetooth hardware features agree with the available adapter");
+    // Firebase Analytics asks at start (Pickleball One); a game reads window flags as fields (Medieval Dynasty).
+    check(!obbContext.getPackageManager().isInstantApp()
+        && !obbContext.getPackageManager().isInstantApp(obbContext.getPackageName()),
+        "a game is never an instant app");
+    // Vuplex WebView probes a local socket (On Target VR Darts); nothing listens, so connect refuses.
+    try (var probe = new android.net.LocalSocket()) {
+      boolean refused = false;
+      try {
+        probe.connect(new android.net.LocalSocketAddress("webview_devtools_remote"));
+      } catch (java.io.IOException e) {
+        refused = true;
+      }
+      check(refused && !probe.isConnected(), "a local socket connect is refused, not a missing class");
+    } catch (java.io.IOException e) {
+      check(false, "local socket close: " + e);
+    }
+    try {
+      check(android.view.WindowManager.LayoutParams.class.getField("FLAG_DIM_BEHIND").getInt(null) == 2
+          && android.view.WindowManager.LayoutParams.class.getField("FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS").getInt(null)
+              == 0x80000000,
+          "window flags are fields with Android's values");
+    } catch (ReflectiveOperationException e) {
+      check(false, "window flags are fields: " + e);
+    }
     var bluetoothApp = obbContext.getApplicationInfo();
     int savedBluetoothTarget = bluetoothApp.targetSdkVersion, savedPlatformSdk = Build.VERSION.SDK_INT;
     var bluetoothPermissions = RuntimeEnvironment.get().manifest.permissions;

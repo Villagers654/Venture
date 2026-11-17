@@ -443,6 +443,10 @@ TEST_CASE("resume checks restart on 200 and validate range and total on 206") {
   CHECK_THROWS(http::check_range(206, 40, 100, "bytes */100", 0));
   CHECK_THROWS(http::check_range(416, 40, 100, "bytes */100", 0));
   CHECK_THROWS(http::check_range(403, 0, 100, "", 0));
+  // Meta refuses a headset-granted copy with 404; signing in again would not help.
+  CHECK(http::refusal(404).find("came with the headset") != std::string::npos);
+  CHECK(http::refusal(404).find("Sign in again") == std::string::npos);
+  CHECK(http::refusal(401).find("Sign in again") != std::string::npos);
 }
 TEST_CASE("cross platform filenames and path containment") {
   for (auto name : {"../escape", "a/b", "a\\b", "C:drive", "CON", "aux.txt",

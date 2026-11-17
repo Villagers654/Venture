@@ -13,6 +13,7 @@ XrResult xrCreateFoveationProfileFB(XrSession session, const XrFoveationProfileC
 XrResult xrCreateGeometryInstanceFB(XrSession session, const XrGeometryInstanceCreateInfoFB* createInfo, XrGeometryInstanceFB* outGeometryInstance);
 XrResult xrCreateHandTrackerEXT(XrSession session, const XrHandTrackerCreateInfoEXT* createInfo, XrHandTrackerEXT* handTracker);
 XrResult xrCreateInstance(const XrInstanceCreateInfo* createInfo, XrInstance* instance);
+XrResult xrCreatePassthroughColorLutMETA(XrPassthroughFB passthrough, const XrPassthroughColorLutCreateInfoMETA* createInfo, XrPassthroughColorLutMETA* colorLut);
 XrResult xrCreatePassthroughFB(XrSession session, const XrPassthroughCreateInfoFB* createInfo, XrPassthroughFB* outPassthrough);
 XrResult xrCreatePassthroughLayerFB(XrSession session, const XrPassthroughLayerCreateInfoFB* createInfo, XrPassthroughLayerFB* outLayer);
 XrResult xrCreateReferenceSpace(XrSession session, const XrReferenceSpaceCreateInfo* createInfo, XrSpace* space);
@@ -29,6 +30,7 @@ XrResult xrDestroyFoveationProfileFB(XrFoveationProfileFB profile);
 XrResult xrDestroyGeometryInstanceFB(XrGeometryInstanceFB instance);
 XrResult xrDestroyHandTrackerEXT(XrHandTrackerEXT handTracker);
 XrResult xrDestroyInstance(XrInstance instance);
+XrResult xrDestroyPassthroughColorLutMETA(XrPassthroughColorLutMETA colorLut);
 XrResult xrDestroyPassthroughFB(XrPassthroughFB passthrough);
 XrResult xrDestroyPassthroughLayerFB(XrPassthroughLayerFB layer);
 XrResult xrDestroySession(XrSession session);
@@ -126,6 +128,7 @@ XrResult xrTriangleMeshEndUpdateFB(XrTriangleMeshFB mesh, uint32_t vertexCount, 
 XrResult xrTriangleMeshEndVertexBufferUpdateFB(XrTriangleMeshFB mesh);
 XrResult xrTriangleMeshGetIndexBufferFB(XrTriangleMeshFB mesh, uint32_t** outIndexBuffer);
 XrResult xrTriangleMeshGetVertexBufferFB(XrTriangleMeshFB mesh, XrVector3f** outVertexBuffer);
+XrResult xrUpdatePassthroughColorLutMETA(XrPassthroughColorLutMETA colorLut, const XrPassthroughColorLutUpdateInfoMETA* updateInfo);
 XrResult xrUpdateSwapchainFB(XrSwapchain swapchain, const XrSwapchainStateBaseHeaderFB* state);
 XrResult xrWaitFrame(XrSession session, const XrFrameWaitInfo* frameWaitInfo, XrFrameState* frameState);
 XrResult xrWaitSwapchainImage(XrSwapchain swapchain, const XrSwapchainImageWaitInfo* waitInfo);

@@ -25,11 +25,20 @@ struct Layer {
   XrSpace host_space = XR_NULL_HANDLE;
 };
 struct Geometry { XrSession session; XrPassthroughLayerFB layer; };
+// XR_META_passthrough_color_lut: a host that implements it gets the calls;
+// otherwise the table is kept as a local handle and its colours are not shown.
+struct ColorLut { XrPassthroughFB feature; XrPassthroughColorLutChannelsMETA channels; std::uint32_t resolution; };
+constexpr std::uint32_t local_lut_resolution = 64; // Quest's maxColorLutResolution
 // Storage also supplies stable, typed local handles. Native handles retain the
 // host's identity and are never substituted in a forwarded structure.
 std::map<XrPassthroughFB, std::unique_ptr<Feature>> features;
 std::map<XrPassthroughLayerFB, std::unique_ptr<Layer>> layers;
 std::map<XrGeometryInstanceFB, Geometry> geometries;
+std::map<XrPassthroughColorLutMETA, std::unique_ptr<ColorLut>> color_luts;
+bool host_lut() { return host_xr().enabled_extensions.contains("XR_META_passthrough_color_lut"); }
+bool lut_map(XrStructureType type) {
+  return type == XR_TYPE_PASSTHROUGH_COLOR_MAP_LUT_META || type == XR_TYPE_PASSTHROUGH_COLOR_MAP_INTERPOLATED_LUT_META;
+}
 std::unique_ptr<PassthroughSource> source;
 CameraPassthrough camera;
 // The HTC passthrough that proved the backend starts, kept for the first layer.
@@ -361,6 +370,12 @@ bool local_passthrough() {
 void withdraw_passthrough_source() { withdraw(); }
 void suspend_passthrough_source() { session().passthrough_suspended = true; withdraw(); }
 bool passthrough_properties(XrBaseOutStructure* property) {
+  if (property->type == XR_TYPE_SYSTEM_PASSTHROUGH_COLOR_LUT_PROPERTIES_META &&
+      enabled("XR_META_passthrough_color_lut") && !(native() && host_lut())) {
+    reinterpret_cast<XrSystemPassthroughColorLutPropertiesMETA*>(property)->maxColorLutResolution =
+        backend() == PassthroughBackend::none ? 0 : local_lut_resolution;
+    return true;
+  }
   if (!enabled("XR_FB_passthrough") || native()) return false;
   const auto chosen = backend();
   const auto caps = passthrough_capabilities(chosen);
@@ -639,6 +654,12 @@ XrResult xrDestroyPassthroughFB(XrPassthroughFB handle) {
     const auto result = guest::xrDestroyPassthroughLayerFB(child);
     if (XR_FAILED(result)) return result;
   }
+  std::vector<XrPassthroughColorLutMETA> tables;
+  for (const auto& [id, lut] : color_luts) if (lut->feature == handle) tables.push_back(id);
+  for (auto table : tables) {
+    const auto result = guest::xrDestroyPassthroughColorLutMETA(table);
+    if (XR_FAILED(result)) return result;
+  }
   session().finish_host_end();
   const auto result = native() ? host_call<PFN_xrDestroyPassthroughFB, "xrDestroyPassthroughFB">(handle) : XR_SUCCESS;
   if (XR_SUCCEEDED(result)) {
@@ -745,6 +766,13 @@ XrResult xrPassthroughLayerSetStyleFB(XrPassthroughLayerFB handle, const XrPasst
   std::lock_guard lock(state().mutex);
   if (!enabled("XR_FB_passthrough")) return XR_ERROR_FUNCTION_UNSUPPORTED;
   if (!valid_layer(handle)) return XR_ERROR_HANDLE_INVALID;
+  // A colour LUT map names a table; a host without the extension never sees it.
+  // Bounded: the chain is validated (cycles included) only below.
+  unsigned depth = 0;
+  for (auto* node = static_cast<const XrBaseInStructure*>(style ? style->next : nullptr); node && depth < 64;
+       node = node->next, ++depth)
+    if (lut_map(node->type) && enabled("XR_META_passthrough_color_lut") && !host_lut())
+      return XR_ERROR_FEATURE_UNSUPPORTED;
   const auto validation = validate_passthrough_info(style, XR_TYPE_PASSTHROUGH_STYLE_FB);
   if (XR_FAILED(validation)) return validation;
   if (!std::isfinite(style->textureOpacityFactor) || style->textureOpacityFactor < 0 || style->textureOpacityFactor > 1 ||
@@ -754,6 +782,57 @@ XrResult xrPassthroughLayerSetStyleFB(XrPassthroughLayerFB handle, const XrPasst
   // Edge rendering is not something a local backend can show.
   if (style->edgeColor.a != 0 && !passthrough_capabilities(backend()).styles) return XR_ERROR_FEATURE_UNSUPPORTED;
   layers.at(handle)->opacity = style->textureOpacityFactor;
+  return XR_SUCCESS;
+}
+XrResult xrCreatePassthroughColorLutMETA(XrPassthroughFB passthrough, const XrPassthroughColorLutCreateInfoMETA* info,
+                                         XrPassthroughColorLutMETA* out) {
+  std::lock_guard lock(state().mutex);
+  if (!enabled("XR_META_passthrough_color_lut")) return XR_ERROR_FUNCTION_UNSUPPORTED;
+  if (!valid_handle(passthrough, "XrPassthroughFB") || !features.contains(passthrough)) return XR_ERROR_HANDLE_INVALID;
+  if (!info || info->type != XR_TYPE_PASSTHROUGH_COLOR_LUT_CREATE_INFO_META || !out) return XR_ERROR_VALIDATION_FAILURE;
+  *out = XR_NULL_HANDLE;
+  const auto parent = features.at(passthrough)->session;
+  if (native() && host_lut()) {
+    const auto result = host_call<PFN_xrCreatePassthroughColorLutMETA, "xrCreatePassthroughColorLutMETA">(passthrough, info, out);
+    if (XR_SUCCEEDED(result)) {
+      color_luts[*out] = std::make_unique<ColorLut>(passthrough, info->channels, info->resolution);
+      track_handle(*out, "XrPassthroughColorLutMETA", parent);
+    }
+    return result;
+  }
+  const std::uint64_t channels = info->channels == XR_PASSTHROUGH_COLOR_LUT_CHANNELS_RGB_META ? 3
+                               : info->channels == XR_PASSTHROUGH_COLOR_LUT_CHANNELS_RGBA_META ? 4 : 0;
+  if (!channels || !info->data.buffer || info->resolution == 0 || info->resolution > local_lut_resolution)
+    return XR_ERROR_VALIDATION_FAILURE;
+  const std::uint64_t size = std::uint64_t(info->resolution) * info->resolution * info->resolution * channels;
+  if (info->data.bufferSize != size) return XR_ERROR_PASSTHROUGH_COLOR_LUT_BUFFER_SIZE_MISMATCH_META;
+  auto record = std::make_unique<ColorLut>(passthrough, info->channels, info->resolution);
+  *out = reinterpret_cast<XrPassthroughColorLutMETA>(record.get());
+  color_luts[*out] = std::move(record);
+  track_handle(*out, "XrPassthroughColorLutMETA", parent);
+  return XR_SUCCESS;
+}
+XrResult xrDestroyPassthroughColorLutMETA(XrPassthroughColorLutMETA handle) {
+  std::lock_guard lock(state().mutex);
+  if (!enabled("XR_META_passthrough_color_lut")) return XR_ERROR_FUNCTION_UNSUPPORTED;
+  if (!valid_handle(handle, "XrPassthroughColorLutMETA") || !color_luts.contains(handle)) return XR_ERROR_HANDLE_INVALID;
+  const auto result = native() && host_lut()
+      ? host_call<PFN_xrDestroyPassthroughColorLutMETA, "xrDestroyPassthroughColorLutMETA">(handle) : XR_SUCCESS;
+  if (XR_SUCCEEDED(result)) { forget_handle(handle); color_luts.erase(handle); }
+  return result;
+}
+XrResult xrUpdatePassthroughColorLutMETA(XrPassthroughColorLutMETA handle, const XrPassthroughColorLutUpdateInfoMETA* info) {
+  std::lock_guard lock(state().mutex);
+  if (!enabled("XR_META_passthrough_color_lut")) return XR_ERROR_FUNCTION_UNSUPPORTED;
+  if (!valid_handle(handle, "XrPassthroughColorLutMETA") || !color_luts.contains(handle)) return XR_ERROR_HANDLE_INVALID;
+  if (!info || info->type != XR_TYPE_PASSTHROUGH_COLOR_LUT_UPDATE_INFO_META) return XR_ERROR_VALIDATION_FAILURE;
+  if (native() && host_lut())
+    return host_call<PFN_xrUpdatePassthroughColorLutMETA, "xrUpdatePassthroughColorLutMETA">(handle, info);
+  const auto& lut = *color_luts.at(handle);
+  const std::uint64_t channels = lut.channels == XR_PASSTHROUGH_COLOR_LUT_CHANNELS_RGB_META ? 3 : 4;
+  if (!info->data.buffer) return XR_ERROR_VALIDATION_FAILURE;
+  if (info->data.bufferSize != std::uint64_t(lut.resolution) * lut.resolution * lut.resolution * channels)
+    return XR_ERROR_PASSTHROUGH_COLOR_LUT_BUFFER_SIZE_MISMATCH_META;
   return XR_SUCCESS;
 }
 XrResult xrCreateGeometryInstanceFB(XrSession target, const XrGeometryInstanceCreateInfoFB* info, XrGeometryInstanceFB* out) {

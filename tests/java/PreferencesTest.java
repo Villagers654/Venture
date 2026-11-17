@@ -57,6 +57,16 @@ public final class PreferencesTest {
   }
   private static void exercise(Path root, AtomicInteger writeFailures) throws Exception {
     Path file = root.resolve("preferences.xml");
+    // Android starts empty when the file is unreadable (Talsec creates an empty one first).
+    Path empty = Files.createFile(root.resolve("empty.xml"));
+    var fromEmpty = new XmlPreferences(empty);
+    check(fromEmpty.getAll().isEmpty() && fromEmpty.edit().putInt("x", 1).commit()
+        && new XmlPreferences(empty).getInt("x", 0) == 1, "an empty preferences file reads as empty and is writable");
+    Files.writeString(root.resolve("broken.xml"), "<map><int name=");
+    check(new XmlPreferences(root.resolve("broken.xml")).getAll().isEmpty(), "a truncated preferences file reads as empty");
+    Files.writeString(root.resolve("entity.xml"),
+        "<!DOCTYPE x [<!ENTITY e SYSTEM 'file:///private'>]><map><string name='x'>&e;</string></map>");
+    check(new XmlPreferences(root.resolve("entity.xml")).getAll().isEmpty(), "external XML entities are never read");
     preferences = new XmlPreferences(file);
     var changes = new CopyOnWriteArrayList<String>();
     preferences.registerOnSharedPreferenceChangeListener((store, key) -> {

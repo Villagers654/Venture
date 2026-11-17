@@ -1,4 +1,5 @@
 #include "hle/openxr/state.h"
+#include "hle/openxr/controller_layer.h"
 #include "core/av_telemetry.h"
 #include "common/log.h"
 #include "xr/host_xr.h"
@@ -104,7 +105,8 @@ XrResult xrCreateActionSpace(XrSession session, const XrActionSpaceCreateInfo* c
   if (!valid_handle(session, "XrSession")) return XR_ERROR_HANDLE_INVALID;
   if (!createInfo || XR_FAILED(validate_struct(createInfo, XR_TYPE_ACTION_SPACE_CREATE_INFO))) return XR_ERROR_VALIDATION_FAILURE;
   if (!space) return XR_ERROR_VALIDATION_FAILURE;
-  auto result = host_call<PFN_xrCreateActionSpace, "xrCreateActionSpace">(session, createInfo, space);
+  // The host space of the fixed pose (or the game's own action) the guest action is bound to.
+  auto result = controls::create_action_space(session, createInfo, space);
   if (XR_SUCCEEDED(result)) {
     track_handle(*space, "XrSpace", session);
     note_hand_space(*space, *createInfo);
@@ -116,7 +118,8 @@ XrResult xrLocateSpace(XrSpace space, XrSpace baseSpace, XrTime time, XrSpaceLoc
   if (!valid_handle(space, "XrSpace")) return XR_ERROR_HANDLE_INVALID;
   if (!valid_handle(baseSpace, "XrSpace")) return XR_ERROR_HANDLE_INVALID;
   if (!location || XR_FAILED(validate_struct(location, XR_TYPE_SPACE_LOCATION))) return XR_ERROR_VALIDATION_FAILURE;
-  auto result = host_call<PFN_xrLocateSpace, "xrLocateSpace">(space, baseSpace, time, location);
+  auto result = host_call<PFN_xrLocateSpace, "xrLocateSpace">(controls::located_space(space),
+                                                             controls::located_space(baseSpace), time, location);
   if (XR_SUCCEEDED(result)) {
     if (!anchor_locatable(space) || !anchor_locatable(baseSpace)) location->locationFlags = 0;
     sanitize(location->locationFlags, location->pose);
@@ -152,7 +155,8 @@ XrResult xrLocateSpaces(XrSession handle, const XrSpacesLocateInfo *info, XrSpac
       return XR_ERROR_HANDLE_INVALID;
     if (velocities)
       locations[i].next = &speed[i];
-    auto r = ::xrLocateSpace(info->spaces[i], info->baseSpace, info->time, &locations[i]);
+    auto r = ::xrLocateSpace(controls::located_space(info->spaces[i]), controls::located_space(info->baseSpace),
+                             info->time, &locations[i]);
     if (XR_FAILED(r))
       return r;
   }

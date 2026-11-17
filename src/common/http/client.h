@@ -51,6 +51,8 @@ std::string delivery_file_name(std::string url, std::stop_token stop = {});
 struct RangeDecision {
   uint64_t offset, total;
 };
+// The message for a delivery or transfer the file server refused.
+std::string refusal(long status);
 RangeDecision check_range(long status, uint64_t offset, uint64_t expected,
                           std::string_view content_range, uint64_t length);
 using Progress = std::function<void(uint64_t done, uint64_t total)>;
