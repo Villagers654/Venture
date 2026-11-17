@@ -7,6 +7,10 @@ struct Game {
       ownership_account;
   std::string package;  // Android package of the live build; empty when unknown
   std::string icon;     // the listing's square app icon; not cached in library.json
+  // The listing's latest build (binary id, version code), which the library
+  // compares with the installed build to show an update without asking for
+  // every game's details. The details' Quest 3 build wins once fetched.
+  std::string live_id, live_version_code;
   bool owned = false;
   bool system = false; // a Quest OS component or home environment
   uint64_t recent = 0;

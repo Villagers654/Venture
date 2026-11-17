@@ -196,6 +196,10 @@ void merge(std::vector<meta::Game> &games, const meta::Snapshot &s,
       g.publisher = known(&meta::Game::publisher);
     if (g.package.empty())
       g.package = known(&meta::Game::package);
+    if (g.live_id.empty() && g.live_version_code.empty()) {
+      g.live_id = known(&meta::Game::live_id);
+      g.live_version_code = known(&meta::Game::live_version_code);
+    }
     if (found == games.end())
       games.push_back(g);
     else {
@@ -225,6 +229,10 @@ std::vector<meta::Game> load(const fs::path &file) {
     g.platform = str(r, "platform");
     if (auto package = str(r, "package"); paths::safe_package(package))
       g.package = package;
+    if (auto id = str(r, "liveId"); digits(id))
+      g.live_id = id;
+    if (auto code = str(r, "liveVersionCode"); digits(code))
+      g.live_version_code = code;
     g.ownership_account = str(r, "accountId");
     if (g.ownership_account.starts_with("session:"))
       continue;
@@ -246,6 +254,8 @@ void save(const fs::path &file, const std::vector<meta::Game> &games) {
                     {"publisher", g.publisher},
                     {"platform", g.platform},
                     {"package", g.package},
+                    {"liveId", g.live_id},
+                    {"liveVersionCode", g.live_version_code},
                     {"owned", g.owned},
                     {"system", g.system},
                     {"accountId", g.ownership_account},

@@ -165,6 +165,14 @@ Game card(const Json &j) {
     package = str(j, "package_name");
   if (paths::safe_package(package))
     g.package = package;
+  // Only an Android build: a cross-buy listing's latest can be its PC build.
+  if (const auto &binary = field(j, "latest_supported_binary");
+      android_build(binary) && str(binary, "__typename") != "PCBinary") {
+    if (auto id = str(binary, "id"); digits(id))
+      g.live_id = id;
+    if (auto code = build_revision(binary))
+      g.live_version_code = std::to_string(code);
+  }
   bool first_party = package.starts_with("com.oculus.") || package.starts_with("com.meta.") ||
                      package.starts_with("com.facebook.");
   g.system = package.find(".environment.") != std::string::npos || package.starts_with("com.meta.shell.env.") ||

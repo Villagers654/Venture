@@ -808,6 +808,10 @@ void App::draw_library() {
     auto job = download::base_job(jobs, g.id);
     bool downloading = job && (job->state == download::State::downloading ||
                                job->state == download::State::queued || job->state == download::State::checking);
+    // An installed game with a newer build: a badge across from the hide button
+    // that updates it, the status line, and Update in the right-click menu.
+    const bool update = local && !downloading && update_available(g.id);
+    const bool can_update = update && !running && session_ && !options_.offline;
 
     // Art tile: lifts on hover with the white focus ring Horizon uses.
     float lift = std::round(s(3) * t);
@@ -850,6 +854,25 @@ void App::draw_library() {
       ImVec2 c{a1.x - s(22), a0.y + s(22)};
       gdl->AddCircleFilled(c, s(14), IM_COL32(20, 21, 24, 190), 32);
       draw_glyph(gdl, icons::cloud, kSmall, c, color::text);
+    }
+    if (update) {
+      ImVec2 c{a1.x - s(22), a0.y + s(22)};
+      float cr = s(14);
+      ImVec2 m = ImGui::GetIO().MousePos;
+      bool over = can_update && t > 0.01f &&
+                  (m.x - c.x) * (m.x - c.x) + (m.y - c.y) * (m.y - c.y) <= (cr + s(2)) * (cr + s(2));
+      gdl->AddCircleFilled(c, cr + (over ? s(1.5f) : 0), over ? IM_COL32_WHITE : color::accent, 32);
+      draw_glyph(gdl, icons::update, kSmall, c, over ? color::accent : color::on_accent);
+      if (over) {
+        ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+        tooltip("Update");
+      } else if (t > 0.01f && (m.x - c.x) * (m.x - c.x) + (m.y - c.y) * (m.y - c.y) <= cr * cr) {
+        tooltip("Update available");
+      }
+      if (clicked && over) {
+        clicked = false;
+        action([&] { install_for_owner(g); });
+      }
     }
     if (t > 0.01f) {
       gdl->AddRect({a0.x - s(3), a0.y - s(3)}, {a1.x + s(3), a1.y + s(3)}, color::alpha(color::selected, t), r + s(3), 0,
@@ -894,6 +917,8 @@ void App::draw_library() {
         status = "Needs attention", status_col = color::warning;
       else if (!local)
         status = installed(g.id, false) ? "Partly downloaded" : "Not installed";
+      else if (update)
+        status = "Update available", status_col = color::accent_text;
       else
         status = g.publisher;
       if (is_hidden) {
@@ -906,6 +931,8 @@ void App::draw_library() {
     if (clicked) select(g.id);
     ImGui::SetNextWindowPos(card_menu_at_, ImGuiCond_Appearing);
     if (begin_menu("card-menu")) {
+      if (update && menu_item("Update", icons::update, false, can_update))
+        action([&] { install_for_owner(g); });
       if (is_hidden ? menu_item(tr("Unhide"), icons::view) : menu_item(tr("Hide from library"), icons::hide))
         action([&] { set_hidden(g.id, !is_hidden); });
       end_menu();

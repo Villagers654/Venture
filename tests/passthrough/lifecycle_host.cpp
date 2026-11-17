@@ -4,6 +4,7 @@
 #include "lifecycle_host.h"
 #include "core/session_timeline.h"
 #include "core/wait.h"
+#include "xr/bindings.h"
 #include "xr/clock.h"
 #include "xr/desktop_mirror.h"
 #include "xr/dev_dump.h"
@@ -110,6 +111,9 @@ void dev_dump_frame(const XrFrameEndInfo*, XrResult) {}
 void note_menu_profiles_changed(XrSession) {}
 // No desktop mirror window in the fixture.
 bool mirror_ready() { return false; }
+// The controller layer's Touch tables; the fixture's game has no actions.
+bool is_touch_profile(std::string_view) { return false; }
+std::vector<std::string> touch_targets() { return {}; }
 void mirror_axis(const XrFovf&, float& x, float& y) { x = y = 0; }
 void mirror_capture(const XrGraphicsBindingVulkanKHR&, bool, const MirrorSource&) {}
 XrResult time_to_monotonic(XrTime value, std::int64_t* out) { *out=value;return XR_SUCCESS; }
@@ -118,6 +122,10 @@ XrResult clock_sample(XrTime* time, std::int64_t* monotonic) { *time = *monotoni
 namespace hle::openxr { XrResult present_android_surfaces() { return XR_SUCCESS; } }
 }
 XrResult XRAPI_CALL xrPathToString(XrInstance, XrPath, std::uint32_t, std::uint32_t*, char*) { return XR_ERROR_PATH_INVALID; }
+XrResult XRAPI_CALL xrStringToPath(XrInstance, const char*, XrPath*) { return XR_ERROR_PATH_INVALID; }
+XrResult XRAPI_CALL xrCreateActionSpace(XrSession, const XrActionSpaceCreateInfo*, XrSpace*) {
+  return XR_ERROR_FUNCTION_UNSUPPORTED;
+}
 // The head 1.5 m above LOCAL's origin, looking along -Z.
 XrResult XRAPI_CALL xrLocateSpace(XrSpace, XrSpace, XrTime, XrSpaceLocation* location) {
   location->locationFlags = XR_SPACE_LOCATION_ORIENTATION_VALID_BIT | XR_SPACE_LOCATION_POSITION_VALID_BIT;

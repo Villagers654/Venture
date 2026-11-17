@@ -134,6 +134,34 @@ TEST_CASE("malformed entitlements reject the whole snapshot") {
       {"edges", Json::array({Json{{"node", nullptr}}})}};
   CHECK_THROWS(meta::parse_library(j));
 }
+TEST_CASE("the library listing's latest build is kept for update badges") {
+  auto item = title();
+  item["latest_supported_binary"] = Json{{"__typename", "AndroidBinary"}, {"id", "456789"}, {"version_code", 34060}};
+  auto g = meta::card(item);
+  CHECK(g.live_id == "456789");
+  CHECK(g.live_version_code == "34060");
+  item["latest_supported_binary"] = Json{{"__typename", "PCBinary"}, {"id", "456789"}, {"version_code", 12}};
+  CHECK(meta::card(item).live_version_code.empty());
+  CHECK(meta::card(title()).live_id.empty());
+
+  // A snapshot without them keeps what the cache knew; the cache keeps them.
+  g.owned = true;
+  g.ownership_account = "777777";
+  std::vector<meta::Game> games{g};
+  meta::Snapshot s;
+  s.account_id = "777777";
+  auto bare = meta::card(title());
+  bare.owned = true;
+  s.games = {bare};
+  library::merge(games, s, "777777");
+  CHECK(games[0].live_version_code == "34060");
+  Directory dir;
+  library::save(dir.root / "library.json", games);
+  auto loaded = library::load(dir.root / "library.json");
+  REQUIRE(loaded.size() == 1);
+  CHECK(loaded[0].live_id == "456789");
+  CHECK(loaded[0].live_version_code == "34060");
+}
 TEST_CASE("library reconciliation is conservative and account scoped") {
   auto g = meta::card(title());
   g.owned = true;
