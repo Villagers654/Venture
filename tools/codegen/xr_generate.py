@@ -35,7 +35,7 @@ MANUAL_EXT = [
     'XR_META_recommended_layer_resolution', 'XR_META_vulkan_swapchain_create_info',
     'XR_FB_passthrough', 'XR_META_boundary_visibility',
     'XR_FB_spatial_entity', 'XR_FB_spatial_entity_query', 'XR_FB_spatial_entity_storage',
-    'XR_FB_scene', 'XR_FB_scene_capture', 'XR_EXT_debug_utils',
+    'XR_FB_scene', 'XR_FB_scene_capture', 'XR_EXT_debug_utils', 'XR_META_passthrough_color_lut',
 ]
 MANUAL = set('''xrGetInstanceProcAddr xrEnumerateApiLayerProperties
 xrEnumerateInstanceExtensionProperties xrCreateInstance xrDestroyInstance
@@ -47,11 +47,9 @@ xrReleaseSwapchainImage xrSuggestInteractionProfileBindings
 xrGetCurrentInteractionProfile xrInitializeLoaderKHR xrCreateHandTrackerEXT
 xrDestroyHandTrackerEXT xrLocateHandJointsEXT xrGetHandMeshFB xrLocateSpaces
 xrGetDeviceSampleRateFB xrEnumerateBoundSourcesForAction xrGetInputSourceLocalizedName xrApplyHapticFeedback xrStopHapticFeedback
-xrCreateActionSpace xrLocateSpace xrPerfSettingsSetPerformanceLevelEXT xrEnumerateViewConfigurationViews'''.split())
-
-# Action states change only in xrSyncActions, so reads between syncs reuse the
-# host answer (state.cpp stored_action_state).
-ACTION_READS = {'xrGetActionStateBoolean', 'xrGetActionStateFloat', 'xrGetActionStateVector2f', 'xrGetActionStatePose'}
+xrCreateActionSpace xrLocateSpace xrPerfSettingsSetPerformanceLevelEXT xrEnumerateViewConfigurationViews
+xrCreateActionSet xrDestroyActionSet xrCreateAction xrDestroyAction xrAttachSessionActionSets xrSyncActions
+xrGetActionStateBoolean xrGetActionStateFloat xrGetActionStateVector2f xrGetActionStatePose'''.split())
 
 def text(e): return ''.join(e.itertext()).strip()
 
@@ -126,24 +124,7 @@ def generate(registry, output, check=False):
         if name.startswith('xrDestroy'):
             # An asynchronous host xrEndFrame may still reference the object.
             code.append('  venture::xr::session().finish_host_end();')
-        if name in ('xrDestroyAction', 'xrDestroyActionSet'):
-            code.append(f'  cancel_handle_haptics({params[0].findtext("name")});')
-        if name == 'xrAttachSessionActionSets':
-            code.append('  auto result = venture::xr::attach_with_menu_chord(session, attachInfo);')
-        elif name == 'xrSyncActions':
-            code.append('  auto result = venture::xr::sync_with_menu_chord(session, syncInfo);')
-        elif name in ACTION_READS:
-            code.append(f'  auto result = stored_action_state<PFN_{name}, "{name}">({args});')
-        elif name == 'xrCreateAction':
-            code.append(f'  auto result = create_action_for_host({args});')
-        else:
-            code.append(f'  auto result = host_call<PFN_{name}, "{name}">({args});')
-        if name in ('xrSyncActions', 'xrAttachSessionActionSets'):
-            code.append('  forget_action_states();')
-        if name == 'xrGetActionStateBoolean':
-            code.append('  if (XR_SUCCEEDED(result)) venture::xr::menu_action_state(session, getInfo, state);')
-        if name in ('xrGetActionStateBoolean', 'xrGetActionStateFloat'):
-            code.append('  if (XR_SUCCEEDED(result)) venture::xr::grip_action_state(session, getInfo, state);')
+        code.append(f'  auto result = host_call<PFN_{name}, "{name}">({args});')
         if name.startswith('xrCreate'):
             last = params[-1]; typ = last.findtext('type'); pname = last.findtext('name')
             if types.get(typ) is not None and types[typ].get('category') == 'handle':
@@ -151,15 +132,10 @@ def generate(registry, output, check=False):
                 code.append(f'  if (XR_SUCCEEDED(result)) track_handle(*{pname}, "{typ}", {parent});')
         if name.startswith('xrDestroy'):
             code.append(f'  if (XR_SUCCEEDED(result)) forget_handle({params[0].findtext("name")});')
-        if name == 'xrCreateAction':
-            code.append('  if (XR_SUCCEEDED(result)) venture::xr::register_menu_action(actionSet, *action);')
-            code.append('  if (XR_SUCCEEDED(result)) { auto &a = state().actions[*action]; a.type = createInfo->actionType; if (createInfo->countSubactionPaths) a.subactions.assign(createInfo->subactionPaths, createInfo->subactionPaths + createInfo->countSubactionPaths); }')
-        if name == 'xrAttachSessionActionSets':
-            code.append('  if (XR_SUCCEEDED(result)) { venture::xr::clear_haptic_bindings(session); for (uint32_t i = 0; i < attachInfo->countActionSets; ++i) state().attached_sets[session].insert(key(attachInfo->actionSets[i])); }')
         if name == 'xrLocateViews':
             code.append('  if (XR_SUCCEEDED(result) && views) sanitize_views(*viewState, std::min(viewCapacityInput, *viewCountOutput), views);')
         code += ['  return result;', '}']
-        if name in ('xrLocateViews', 'xrSyncActions'):
+        if name == 'xrLocateViews':
             code = [code[0], f'  xr_call_trace::Call trace("guest.{name}");',
                     '  return trace.finish([&]() -> XrResult {', *code[1:-1], '  }());', code[-1]]
         wrappers.extend(code)

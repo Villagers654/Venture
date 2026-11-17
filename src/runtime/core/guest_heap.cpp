@@ -83,8 +83,19 @@ void select64() {
     // Address space only: mimalloc commits and purges its own pages. First-fit
     // arena search (arena.c) keeps live memory at the low end.
     constexpr std::uint64_t window = 4ull << 30, size = 32ull << 30;
-    // A fixed address below the guest arena (address_space.cpp) keeps both stable across runs.
-    const auto p = platform::reserve(0xf0000000000ull, size + window, false);
+    // A fixed address keeps the heap stable across runs. It sits below 512 GiB,
+    // as every pointer does in a Quest's 39-bit address space: code may treat a
+    // higher one as garbage (Custom Types 0.17's GC descriptor check aborts
+    // modded Beat Saber 1.37 when il2cpp's class tables are above 0xe000000000).
+    // Later candidates stay below that; the last is the old 15 TiB address.
+    std::uint64_t p = 0;
+    for (const std::uint64_t candidate : {0x2000000000ull, 0x3000000000ull, 0x5000000000ull, 0x6800000000ull,
+                                          0xf0000000000ull}) {
+      p = platform::reserve(candidate, size + window, true);
+      if (p) break;
+      log::info("memory", "A64 guest heap candidate {:#x} unavailable", candidate);
+    }
+    if (!p) p = platform::reserve(0xf0000000000ull, size + window, false);
     if (!p) {
       log::warn("memory", "A64 guest heap reservation failed; mimalloc reserves OS memory itself");
       return;

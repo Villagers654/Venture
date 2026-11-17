@@ -86,6 +86,25 @@ TEST_CASE("libc A wide string operations and bounded FORTIFY source checks") {
   CHECK(f.invoke("wcscpy", {h2g(out), h2g(source)}) == h2g(out));
   CHECK(out[1] == 0x12345);
   CHECK(f.invoke("wmemchr", {h2g(source), 0x12345, 3}) == h2g(source + 1));
+  // Theater Elsewhere's JSON reader matches keywords with wcsncasecmp.
+  std::uint32_t upper[] = {'T', 'R', 'U', 'E', 0x0394, 0}, lower[] = {'t', 'r', 'u', 'e', 0x03b4, 0},
+                other[] = {'t', 'r', 'u', 'x', 0};
+  CHECK(f.invoke("wcsncasecmp", {h2g(upper), h2g(lower), 4}) == 0);
+  CHECK(f.invoke("wcscasecmp", {h2g(upper), h2g(lower)}) == 0);
+  CHECK(f.invoke("wcsncasecmp_l", {h2g(upper), h2g(other), 3, 0}) == 0);
+  CHECK(static_cast<std::int32_t>(f.invoke("wcsncasecmp", {h2g(upper), h2g(other), 4})) == 'e' - 'x');
+  CHECK(static_cast<std::int32_t>(f.invoke("wcscasecmp_l", {h2g(other), h2g(lower), 0})) == 'x' - 'e');
+  std::uint32_t small[3]{};
+  CHECK(f.invoke("wcslcpy", {h2g(small), h2g(upper), 3}) == 5);
+  CHECK(small[1] == 'R');
+  CHECK(small[2] == 0);
+  std::uint32_t joined[8] = {'a', 0};
+  CHECK(f.invoke("wcslcat", {h2g(joined), h2g(other), 8}) == 5);
+  CHECK(joined[4] == 'x');
+  std::uint32_t widths[] = {'a', 0x4e2d, 0x0301, 0};
+  CHECK(static_cast<std::int32_t>(f.invoke("wcwidth", {0x4e2d})) == 2);
+  CHECK(static_cast<std::int32_t>(f.invoke("wcwidth", {0x1b})) == -1);
+  CHECK(static_cast<std::int32_t>(f.invoke("wcswidth", {h2g(widths), 8})) == 3);
   char bytes[8] = "abcdef";
   CHECK(f.invoke("__memmove_chk", {h2g(bytes + 1), h2g(bytes), 5, 7}) == h2g(bytes + 1));
   CHECK(std::string(bytes) == "aabcde");

@@ -58,7 +58,7 @@ struct XrForwardingFixture {
   venture::xr::HostXr& host = venture::xr::host_xr();
   void* original = host.get_instance_proc_addr;
   inline static XrForwardingFixture* active = nullptr;
-  std::atomic<unsigned> boolean_resolves{0}, sync_resolves{0}, missing_resolves{0}, boolean_calls{0};
+  std::atomic<unsigned> bounds_resolves{0}, sync_resolves{0}, missing_resolves{0};
   bool second = false, missing = false, transient = false;
   XrInstance instance{};
   XrSession session = reinterpret_cast<XrSession>(0x3330);
@@ -80,20 +80,17 @@ struct XrForwardingFixture {
     if (XR_SUCCEEDED(result)) venture::hle::openxr::track_handle(session, "XrSession", instance);
     return result;
   }
-  static XrResult XRAPI_CALL first(XrSession, const XrActionStateGetInfo*, XrActionStateBoolean* out) {
-    ++active->boolean_calls;
-    out->currentState = XR_TRUE; out->changedSinceLastSync = XR_TRUE;
-    out->isActive = XR_TRUE; out->lastChangeTime = 1234; return XR_SUCCESS;
+  static XrResult XRAPI_CALL first(XrSession, XrReferenceSpaceType, XrExtent2Df* out) {
+    *out = {1234, 1}; return XR_SUCCESS;
   }
-  static XrResult XRAPI_CALL next(XrSession, const XrActionStateGetInfo*, XrActionStateBoolean* out) {
-    out->currentState = XR_FALSE; out->changedSinceLastSync = XR_FALSE;
-    out->isActive = XR_TRUE; out->lastChangeTime = 4321; return XR_SUCCESS;
+  static XrResult XRAPI_CALL next(XrSession, XrReferenceSpaceType, XrExtent2Df* out) {
+    *out = {4321, 0}; return XR_SUCCESS;
   }
   static XrResult XRAPI_CALL sync(XrSession, const XrActionsSyncInfo*) { return XR_SUCCESS; }
   static XrResult XRAPI_CALL resolve(XrInstance, const char* name, PFN_xrVoidFunction* out) {
     *out = nullptr;
-    if (std::strcmp(name, "xrGetActionStateBoolean") == 0) {
-      ++active->boolean_resolves;
+    if (std::strcmp(name, "xrGetReferenceSpaceBoundsRect") == 0) {
+      ++active->bounds_resolves;
       if (active->transient) { active->transient = false; return XR_ERROR_OUT_OF_MEMORY; }
       if (active->missing) return XR_ERROR_FUNCTION_UNSUPPORTED;
       *out = reinterpret_cast<PFN_xrVoidFunction>(active->second ? next : first);
@@ -199,70 +196,47 @@ TEST_CASE("Aggregate vibration falls back when native subaction roots are unsupp
   REQUIRE(::xrDestroyAction(action) == XR_SUCCESS);
 }
 TEST_CASE("XR forwarding slots retain results and refresh after instance recreation") {
-  XrForwardingFixture fixture;
-  REQUIRE(fixture.create() == XR_SUCCESS);
-  XrActionStateGetInfo info{XR_TYPE_ACTION_STATE_GET_INFO};
-  XrActionStateBoolean value{XR_TYPE_ACTION_STATE_BOOLEAN};
-  for (unsigned i = 0; i < 100; ++i) {
-    REQUIRE(venture::hle::openxr::guest::xrGetActionStateBoolean(fixture.session, &info, &value) == XR_SUCCESS);
-    CHECK(value.currentState == XR_TRUE); CHECK(value.changedSinceLastSync == XR_TRUE);
-    CHECK(value.isActive == XR_TRUE); CHECK(value.lastChangeTime == 1234);
-  }
-  CHECK(fixture.boolean_resolves == 1);
-  value.type = XR_TYPE_ACTION_STATE_FLOAT;
-  CHECK(venture::hle::openxr::guest::xrGetActionStateBoolean(fixture.session, &info, &value) == XR_ERROR_VALIDATION_FAILURE);
-  CHECK(fixture.boolean_resolves == 1);
-  value.type = XR_TYPE_ACTION_STATE_BOOLEAN;
-  REQUIRE(venture::hle::openxr::guest::xrDestroyInstance(fixture.instance) == XR_SUCCESS);
-  fixture.instance = {};
-  CHECK(venture::hle::openxr::guest::xrGetActionStateBoolean(fixture.session, &info, &value) == XR_ERROR_HANDLE_INVALID);
-  CHECK(fixture.boolean_resolves == 1);
-  fixture.second = true;
-  fixture.session = reinterpret_cast<XrSession>(0x4440);
-  REQUIRE(fixture.create() == XR_SUCCESS);
-  REQUIRE(venture::hle::openxr::guest::xrGetActionStateBoolean(fixture.session, &info, &value) == XR_SUCCESS);
-  CHECK(value.currentState == XR_FALSE); CHECK(value.changedSinceLastSync == XR_FALSE);
-  CHECK(value.isActive == XR_TRUE); CHECK(value.lastChangeTime == 4321);
-  CHECK(fixture.boolean_resolves == 2);
-}
-TEST_CASE("XR action reads reuse the host answer until the next sync") {
   namespace xg = venture::hle::openxr::guest;
   XrForwardingFixture fixture;
   REQUIRE(fixture.create() == XR_SUCCESS);
-  XrActionStateGetInfo info{XR_TYPE_ACTION_STATE_GET_INFO};
-  XrActionStateBoolean value{XR_TYPE_ACTION_STATE_BOOLEAN};
-  for (unsigned i = 0; i < 10; ++i) {
-    value.lastChangeTime = 0;
-    REQUIRE(xg::xrGetActionStateBoolean(fixture.session, &info, &value) == XR_SUCCESS);
-    CHECK(value.currentState == XR_TRUE); CHECK(value.lastChangeTime == 1234);
+  constexpr auto stage = XR_REFERENCE_SPACE_TYPE_STAGE;
+  XrExtent2Df bounds{};
+  for (unsigned i = 0; i < 100; ++i) {
+    bounds = {};
+    REQUIRE(xg::xrGetReferenceSpaceBoundsRect(fixture.session, stage, &bounds) == XR_SUCCESS);
+    CHECK(bounds.width == 1234); CHECK(bounds.height == 1);
   }
-  CHECK(fixture.boolean_calls == 1);
-  XrActionsSyncInfo sync{XR_TYPE_ACTIONS_SYNC_INFO};
-  REQUIRE(xg::xrSyncActions(fixture.session, &sync) == XR_SUCCESS);
-  REQUIRE(xg::xrGetActionStateBoolean(fixture.session, &info, &value) == XR_SUCCESS);
-  CHECK(fixture.boolean_calls == 2);
-  info.subactionPath = 7; // each subaction path is its own read
-  REQUIRE(xg::xrGetActionStateBoolean(fixture.session, &info, &value) == XR_SUCCESS);
-  REQUIRE(xg::xrGetActionStateBoolean(fixture.session, &info, &value) == XR_SUCCESS);
-  CHECK(fixture.boolean_calls == 3);
+  CHECK(fixture.bounds_resolves == 1);
+  CHECK(xg::xrGetReferenceSpaceBoundsRect(fixture.session, stage, nullptr) == XR_ERROR_VALIDATION_FAILURE);
+  CHECK(fixture.bounds_resolves == 1);
+  REQUIRE(xg::xrDestroyInstance(fixture.instance) == XR_SUCCESS);
+  fixture.instance = {};
+  CHECK(xg::xrGetReferenceSpaceBoundsRect(fixture.session, stage, &bounds) == XR_ERROR_HANDLE_INVALID);
+  CHECK(fixture.bounds_resolves == 1);
+  fixture.second = true;
+  fixture.session = reinterpret_cast<XrSession>(0x4440);
+  REQUIRE(fixture.create() == XR_SUCCESS);
+  REQUIRE(xg::xrGetReferenceSpaceBoundsRect(fixture.session, stage, &bounds) == XR_SUCCESS);
+  CHECK(bounds.width == 4321); CHECK(bounds.height == 0);
+  CHECK(fixture.bounds_resolves == 2);
 }
 TEST_CASE("XR forwarding caches missing procedures but retries transient lookup errors") {
+  namespace xg = venture::hle::openxr::guest;
   XrForwardingFixture fixture;
   fixture.missing = true;
   REQUIRE(fixture.create() == XR_SUCCESS);
-  XrActionStateGetInfo info{XR_TYPE_ACTION_STATE_GET_INFO};
-  XrActionStateBoolean value{XR_TYPE_ACTION_STATE_BOOLEAN};
-  value.lastChangeTime = 99;
+  constexpr auto stage = XR_REFERENCE_SPACE_TYPE_STAGE;
+  XrExtent2Df bounds{99, 99};
   for (unsigned i = 0; i < 100; ++i)
-    CHECK(venture::hle::openxr::guest::xrGetActionStateBoolean(fixture.session, &info, &value) == XR_ERROR_FUNCTION_UNSUPPORTED);
-  CHECK(value.lastChangeTime == 99); CHECK(fixture.boolean_resolves == 1);
-  REQUIRE(venture::hle::openxr::guest::xrDestroyInstance(fixture.instance) == XR_SUCCESS);
+    CHECK(xg::xrGetReferenceSpaceBoundsRect(fixture.session, stage, &bounds) == XR_ERROR_FUNCTION_UNSUPPORTED);
+  CHECK(bounds.width == 99); CHECK(fixture.bounds_resolves == 1);
+  REQUIRE(xg::xrDestroyInstance(fixture.instance) == XR_SUCCESS);
   fixture.instance = {};
   fixture.missing = false; fixture.transient = true;
   REQUIRE(fixture.create() == XR_SUCCESS);
-  CHECK(venture::hle::openxr::guest::xrGetActionStateBoolean(fixture.session, &info, &value) == XR_ERROR_FUNCTION_UNSUPPORTED);
-  REQUIRE(venture::hle::openxr::guest::xrGetActionStateBoolean(fixture.session, &info, &value) == XR_SUCCESS);
-  CHECK(value.lastChangeTime == 1234); CHECK(fixture.boolean_resolves == 3);
+  CHECK(xg::xrGetReferenceSpaceBoundsRect(fixture.session, stage, &bounds) == XR_ERROR_FUNCTION_UNSUPPORTED);
+  REQUIRE(xg::xrGetReferenceSpaceBoundsRect(fixture.session, stage, &bounds) == XR_SUCCESS);
+  CHECK(bounds.width == 1234); CHECK(fixture.bounds_resolves == 3);
 }
 TEST_CASE("XR forwarding resolves one shared procedure across threads and distinguishes names") {
   XrForwardingFixture fixture;
@@ -287,24 +261,22 @@ TEST_CASE("XR forwarding slots follow host instance and loader replacement") {
     XrInstance instance;
     ~RestoreInstance() { host.instance = instance; }
   } restore{fixture.host, original_instance};
-  XrActionStateGetInfo info{XR_TYPE_ACTION_STATE_GET_INFO};
-  XrActionStateBoolean value{XR_TYPE_ACTION_STATE_BOOLEAN};
-  REQUIRE((venture::xr::host_call<PFN_xrGetActionStateBoolean, "xrGetActionStateBoolean">(
-      fixture.session, &info, &value)) == XR_SUCCESS);
-  CHECK(value.currentState == XR_TRUE);
+  constexpr auto stage = XR_REFERENCE_SPACE_TYPE_STAGE;
+  XrExtent2Df bounds{};
+  using Bounds = PFN_xrGetReferenceSpaceBoundsRect;
+  REQUIRE((venture::xr::host_call<Bounds, "xrGetReferenceSpaceBoundsRect">(fixture.session, stage, &bounds)) == XR_SUCCESS);
+  CHECK(bounds.width == 1234);
   fixture.second = true;
   fixture.host.instance = reinterpret_cast<XrInstance>(0x7770);
-  REQUIRE((venture::xr::host_call<PFN_xrGetActionStateBoolean, "xrGetActionStateBoolean">(
-      fixture.session, &info, &value)) == XR_SUCCESS);
-  CHECK(value.currentState == XR_FALSE);
-  CHECK(fixture.boolean_resolves == 2);
+  REQUIRE((venture::xr::host_call<Bounds, "xrGetReferenceSpaceBoundsRect">(fixture.session, stage, &bounds)) == XR_SUCCESS);
+  CHECK(bounds.width == 4321);
+  CHECK(fixture.bounds_resolves == 2);
   fixture.host.get_instance_proc_addr = nullptr;
-  CHECK((venture::xr::host_call<PFN_xrGetActionStateBoolean, "xrGetActionStateBoolean">(
-      fixture.session, &info, &value)) == XR_ERROR_FUNCTION_UNSUPPORTED);
+  CHECK((venture::xr::host_call<Bounds, "xrGetReferenceSpaceBoundsRect">(fixture.session, stage, &bounds)) ==
+        XR_ERROR_FUNCTION_UNSUPPORTED);
   fixture.host.get_instance_proc_addr = reinterpret_cast<void*>(XrForwardingFixture::resolve);
-  REQUIRE((venture::xr::host_call<PFN_xrGetActionStateBoolean, "xrGetActionStateBoolean">(
-      fixture.session, &info, &value)) == XR_SUCCESS);
-  CHECK(fixture.boolean_resolves == 3);
+  REQUIRE((venture::xr::host_call<Bounds, "xrGetReferenceSpaceBoundsRect">(fixture.session, stage, &bounds)) == XR_SUCCESS);
+  CHECK(fixture.bounds_resolves == 3);
 }
 
 TEST_CASE("Display timing distinguishes startup, measured modes and prediction jitter") {

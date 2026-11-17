@@ -3,6 +3,7 @@
 #include "core/hle_runtime.h"
 #include "core/linker.h"
 #include "core/thread.h"
+#include "gfx/a32_handles.h"
 #include "fake_cpu32.h"
 #include "hle/openxr/openxr.h"
 #include "hle/opensles/abi.h"
@@ -195,12 +196,21 @@ TEST_CASE("A32 VrApi 1.21 wire layouts, sret, Token32 and frame submission") {
   }
   auto lp = c.put(2048, layer);
   auto list = c.put(2400, std::uint32_t(lp));
+  // The completion fence is the guest's 32-bit EGLSyncKHR handle: the host sync is waited.
+  int host_sync = 0;
+  const auto fence_token = venture::gfx::a32::encode(venture::gfx::a32::Handle::egl_sync, &host_sync);
   vr::abi32::Submit frame{
-      0, 1, 1, time, 0x123456789abcdef0, 1, std::uint32_t(list)};
+      0, 1, 1, time, fence_token, 1, std::uint32_t(list)};
   REQUIRE(c.v("vrapi_SubmitFrame2", {mobile, c.put(2432, frame)}) == 0);
   CHECK(images.copies == 1);
   CHECK(images.last_texture == texture);
-  CHECK(images.last_fence == frame.completion_fence);
+  CHECK(images.last_fence == std::uint64_t(std::uintptr_t(&host_sync)));
+  venture::gfx::a32::retire(venture::gfx::a32::Handle::egl_sync, &host_sync);
+  // A value that is no EGL handle (older SDKs' Pad) is not waited on.
+  frame.completion_fence = 0x123456789abcdef0;
+  ++frame.frame_index;
+  REQUIRE(c.v("vrapi_SubmitFrame2", {mobile, c.put(2432, frame)}) == 0);
+  CHECK(images.last_fence == 0);
   // Two pointers test the ILP32 list stride independently of layer decoding.
   auto projections = ventureMockXrStats().projection;
   c.put(2400,

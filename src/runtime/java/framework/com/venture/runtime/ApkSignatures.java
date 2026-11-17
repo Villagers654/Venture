@@ -22,7 +22,30 @@ public final class ApkSignatures {
     b.position(b.position() + n);
     return s;
   }
+  /** Current signers and, for a v3 signer with a proof-of-rotation, every signing certificate oldest first. */
+  public record Details(Signature[] signers, Signature[] history) {}
+  private static final int V2 = 0x7109871a, V3 = 0xf05368c0, PROOF_OF_ROTATION = 0x3ba06f8c;
   public static Signature[] read(File apk) throws IOException {
+    return details(apk).signers();
+  }
+  private static Signature certificate(ByteBuffer certs) throws IOException {
+    ByteBuffer certificate = slice(certs);
+    byte[] cert = new byte[certificate.remaining()];
+    certificate.get(cert);
+    return new Signature(cert);
+  }
+  // apksig V3SchemeSigner/SigningCertificateLineage: version, then nodes of
+  // ((certificate, signature algorithm), flags, signature algorithm, signature).
+  private static Signature[] lineage(ByteBuffer attribute) throws IOException {
+    if (attribute.remaining() < 4 || attribute.getInt() != 1) return null;
+    List<Signature> history = new ArrayList<>();
+    while (attribute.hasRemaining()) {
+      ByteBuffer node = slice(attribute), signed = slice(node);
+      history.add(certificate(signed));
+    }
+    return history.isEmpty() ? null : history.toArray(Signature[] ::new);
+  }
+  public static Details details(File apk) throws IOException {
     try (RandomAccessFile f = new RandomAccessFile(apk, "r")) {
       int tailSize = (int) Math.min(f.length(), 65557);
       byte[] tail = new byte[tailSize];
@@ -50,6 +73,7 @@ public final class ApkSignatures {
               if (b.getLong() != size)
                 throw new IOException("Signing block size mismatch");
               b.limit(block.length - 24);
+              Details v2 = null;
               while (b.hasRemaining()) {
                 if (b.remaining() < 8)
                   throw new IOException("Truncated signing pair");
@@ -58,25 +82,35 @@ public final class ApkSignatures {
                   throw new IOException("Invalid signing pair");
                 int stop = b.position() + (int) n;
                 int id = b.getInt();
-                if (id == 0x7109871a || id == 0xf05368c0) {
+                if (id == V2 || id == V3) {
                   ByteBuffer pair = b.slice().order(ByteOrder.LITTLE_ENDIAN);
                   pair.limit((int) n - 4);
                   ByteBuffer signers = slice(pair);
                   List<Signature> signatures = new ArrayList<>();
+                  Signature[] history = null;
                   while (signers.hasRemaining()) {
                     ByteBuffer signer = slice(signers), signed = slice(signer);
                     slice(signed);
-                    ByteBuffer certs = slice(signed);
-                    ByteBuffer certificate = slice(certs);
-                    byte[] cert = new byte[certificate.remaining()];
-                    certificate.get(cert);
-                    signatures.add(new Signature(cert));
+                    signatures.add(certificate(slice(signed)));
+                    if (id == V3) {
+                      signed.getInt();  // minSdkVersion
+                      signed.getInt();  // maxSdkVersion
+                      ByteBuffer attributes = slice(signed);
+                      while (attributes.hasRemaining()) {
+                        ByteBuffer attribute = slice(attributes);
+                        if (attribute.getInt() == PROOF_OF_ROTATION) history = lineage(attribute);
+                      }
+                    }
                   }
-                  if (!signatures.isEmpty())
-                    return signatures.toArray(Signature[] ::new);
+                  if (!signatures.isEmpty()) {
+                    var found = new Details(signatures.toArray(Signature[] ::new), history);
+                    if (id == V3) return found;
+                    v2 = found;
+                  }
                 }
                 b.position(stop);
               }
+              if (v2 != null) return v2;
             }
           }
           break;
@@ -98,7 +132,7 @@ public final class ApkSignatures {
         }
       if (signatures.isEmpty())
         throw new IOException("APK has no supported signing certificate");
-      return signatures.toArray(Signature[] ::new);
+      return new Details(signatures.toArray(Signature[] ::new), null);
     }
   }
 }

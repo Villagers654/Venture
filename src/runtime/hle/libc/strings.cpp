@@ -6,6 +6,8 @@
 #include <string>
 #include <vector>
 
+#include <utf8proc.h>
+
 #include "hle/libc/libc_a.h"
 #include "core/hle_runtime.h"
 #include "platform/memory.h"
@@ -361,6 +363,53 @@ void swab_impl(const void* s, void* d, std::int64_t n) {
   }
 }
 using W = std::uint32_t;
+// Bionic's wcscasecmp/wcsncasecmp compare towlower() of each wide character,
+// with towlower's full Unicode mapping, as towlower in ctype.cpp does.
+W wide_lower(W c) {
+  return c <= 0x10ffff ? static_cast<W>(utf8proc_tolower(static_cast<utf8proc_int32_t>(c))) : c;
+}
+int wide_casecompare(const W* a, const W* b, std::uint64_t n) {
+  for (std::uint64_t i = 0; i < n; ++i) {
+    const W x = wide_lower(load(a + i)), y = wide_lower(load(b + i));
+    if (x != y) return static_cast<int>(x) - static_cast<int>(y);  // FreeBSD/bionic: the difference
+    if (!x) break;
+  }
+  return 0;
+}
+int wcscase(const W* a, const W* b) { return wide_casecompare(a, b, UINT64_MAX); }
+int wcscase_l(const W* a, const W* b, GuestAddr) { return wcscase(a, b); }
+int wcsncase_l(const W* a, const W* b, std::uint64_t n, GuestAddr) { return wide_casecompare(a, b, n); }
+std::uint64_t wcslcopy(W* d, const W* s, std::uint64_t n) {
+  auto len = length(s);
+  if (n) {
+    auto k = std::min(len, n - 1);
+    copy_bytes(d, s, k * sizeof(W));
+    store(d + k, W{});
+  }
+  return len;
+}
+std::uint64_t wcslcat(W* d, const W* s, std::uint64_t n) {
+  auto dn = nlength(d, n);
+  return dn + (dn < n ? wcslcopy(d + dn, s, n - dn) : length(s));
+}
+// Bionic's wcwidth: 0 for NUL, -1 for other C0/C1 controls, else the
+// character's terminal width (utf8proc's East Asian width tables).
+int wide_width(W c) {
+  if (!c) return 0;
+  if (c < 0x20 || (c >= 0x7f && c < 0xa0) || c > 0x10ffff) return -1;
+  return utf8proc_charwidth(static_cast<utf8proc_int32_t>(c));
+}
+int wide_widths(const W* s, std::uint64_t n) {
+  int total = 0;
+  for (std::uint64_t i = 0; i < n; ++i) {
+    const W c = load(s + i);
+    if (!c) break;
+    const int w = wide_width(c);
+    if (w < 0) return -1;
+    total += w;
+  }
+  return total;
+}
 W* wmemcopy(W* d, const W* s, std::uint64_t n) {
   copy_bytes(d, s, bytes(n, 4, s));
   return d;
@@ -525,6 +574,14 @@ void register_strings(HleLibrary& lib) {
   B("strstr", search<char>);
   B("wcsstr", search<W>);
   B("wcstok", tokenize<W>);
+  B("wcscasecmp", wcscase);
+  B("wcscasecmp_l", wcscase_l);
+  B("wcsncasecmp", wide_casecompare);
+  B("wcsncasecmp_l", wcsncase_l);
+  B("wcslcpy", wcslcopy);
+  B("wcslcat", wcslcat);
+  B("wcwidth", wide_width);
+  B("wcswidth", wide_widths);
   bind<&duplicate<W>>(lib, "wcsdup");
   B("stpcpy", endcopy<char>);
   B("stpncpy", endncopy<char>);

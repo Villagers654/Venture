@@ -1159,6 +1159,24 @@ TEST_CASE("VrApi constant projective layers copy their texel across both eye fru
   CHECK(pixel[0] == 64);
   CHECK(pixel[2] == 191);
   CHECK(pixel[3] == 255);
+  // A full plane homography no frustum describes (Tales from the Galaxy's
+  // Edge's fade, logged on SteamVR) samples the same texel for every ray.
+  const float tales[2][3][3]{{{-.42718607f, .5219796f, 7.4087005f},
+                              {18.905249f, -18.745749f, -270.40482f},
+                              {.13919945f, -.13864866f, -1.9903265f}},
+                             {{.4271862f, .39345914f, 4.9317064f},
+                              {-18.905249f, 19.549337f, 269.54724f},
+                              {-.13919945f, .13864866f, 1.9903265f}}};
+  const auto saved = projection;
+  for (int eye = 0; eye < 2; ++eye)
+    for (int i = 0; i < 3; ++i)
+      for (int j = 0; j < 3; ++j) projection.textures[eye].tan_angles.m[i][j] = tales[eye][i][j];
+  layers.clear();
+  REQUIRE(vr::translate_layer(projection.header, eyes, image, storage, layers) == XR_SUCCESS);
+  REQUIRE(layers.size() == 2);
+  CHECK(storage.quad[0].space == vr::state().view);
+  CHECK(storage.quad[1].eyeVisibility == XR_EYE_VISIBILITY_RIGHT);
+  projection = saved;
   // Other degenerate transforms cannot use this constant-texel conversion.
   auto &native = *vr::state().rings.at(ring);
   for (int invalid = 0; invalid < 4; ++invalid) {

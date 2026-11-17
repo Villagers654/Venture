@@ -179,6 +179,7 @@ public final class PackageModel {
     info.activities = activities.toArray(ActivityInfo[] ::new);
     info.providers = providers.toArray(ProviderInfo[] ::new);
     info.services = services.toArray(ServiceInfo[] ::new);
+    info.receivers = receivers.toArray(ActivityInfo[] ::new);
     info.requestedPermissions = permissions.toArray(String[] ::new);
     Intent launch = launchIntent();
     if (launch != null) {

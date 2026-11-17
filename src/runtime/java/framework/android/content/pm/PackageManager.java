@@ -64,10 +64,16 @@ public class PackageManager {
       return info;
     }
     check(pkg);
+    int[] granted = new int[model.info.requestedPermissions.length];
+    for (int i = 0; i < granted.length; ++i)
+      granted[i] = checkPermission(model.info.requestedPermissions[i], pkg) == PERMISSION_GRANTED
+          ? PackageInfo.REQUESTED_PERMISSION_GRANTED : 0;
+    model.info.requestedPermissionsFlags = granted;
     if ((flags & (GET_SIGNATURES | GET_SIGNING_CERTIFICATES)) != 0) {
       try {
-        model.info.signatures = ApkSignatures.read(RuntimeEnvironment.get().apk);
-        model.info.signingInfo = new SigningInfo(model.info.signatures);
+        var signing = ApkSignatures.details(RuntimeEnvironment.get().apk);
+        model.info.signatures = signing.signers();
+        model.info.signingInfo = new SigningInfo(signing.signers(), signing.history());
       } catch (java.io.IOException e) {
         throw new IllegalStateException("Cannot read APK signer certificates", e);
       }
@@ -154,6 +160,14 @@ public class PackageManager {
   }
   // Installing other packages is the launcher's job, never the game's.
   public boolean canRequestPackageInstalls() {
+    return false;
+  }
+  // A game is an installed APK, never an instant app (Firebase Analytics asks
+  // at start; Pickleball One stopped on the missing method).
+  public boolean isInstantApp() {
+    return false;
+  }
+  public boolean isInstantApp(String pkg) {
     return false;
   }
   public Intent getLaunchIntentForPackage(String pkg) {
@@ -244,6 +258,11 @@ public class PackageManager {
     } catch (NameNotFoundException e) {
       throw new IllegalStateException(e);
     }
+  }
+  public java.util.List<ApplicationInfo> getInstalledApplications(int flags) {
+    var list = new java.util.ArrayList<ApplicationInfo>();
+    for (var info : getInstalledPackages(flags)) list.add(info.applicationInfo);
+    return list;
   }
   /** Services are matched by explicit component; this framework records no service intent filters. */
   public ResolveInfo resolveService(Intent intent, int flags) {
@@ -350,5 +369,10 @@ public class PackageManager {
   }
   public String getInstallerPackageName(String pkg) {
     return null;
+  }
+  // Talsec's start asks this (API 30); the same installer answer, or NameNotFound for other packages.
+  public InstallSourceInfo getInstallSourceInfo(String pkg) throws NameNotFoundException {
+    check(pkg);
+    return new InstallSourceInfo(getInstallerPackageName(pkg));
   }
 }

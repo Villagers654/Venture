@@ -1,4 +1,5 @@
 #include "hle/openxr/state.h"
+#include "hle/openxr/controller_layer.h"
 #include "xr/haptic_output.h"
 #include "xr/haptic_sequence.h"
 #include <algorithm>
@@ -75,31 +76,36 @@ XrResult xrApplyHapticFeedback(XrSession handle, const XrHapticActionInfo *info,
   if (XR_FAILED(translated)) return reject(api, handle, info, translated, "validate_guest_payload_chain");
   info = static_cast<const XrHapticActionInfo *>(action_chain.head());
   header = static_cast<const XrHapticBaseHeader *>(payload_chain.head());
-  if (header->type == XR_TYPE_HAPTIC_VIBRATION) {
-    venture::xr::cancel_sequence(handle, info);
-    return venture::xr::apply_haptic("xr_core", handle, *info,
-                               *reinterpret_cast<const XrHapticVibration *>(header), "guest_request");
-  }
   bool pcm = header->type == XR_TYPE_HAPTIC_PCM_VIBRATION_FB;
   bool envelope = header->type == XR_TYPE_HAPTIC_AMPLITUDE_ENVELOPE_VIBRATION_FB;
-  if (!pcm && !envelope) return reject(api, handle, info, XR_ERROR_VALIDATION_FAILURE, "validate_guest_payload");
+  if (header->type != XR_TYPE_HAPTIC_VIBRATION && !pcm && !envelope)
+    return reject(api, handle, info, XR_ERROR_VALIDATION_FAILURE, "validate_guest_payload");
   auto extension = pcm ? "XR_FB_haptic_pcm" : "XR_FB_haptic_amplitude_envelope";
-  if (!enabled(extension)) return reject(api, handle, info, XR_ERROR_VALIDATION_FAILURE, "validate_guest_extension");
-  const bool native = host_xr().enabled_extensions.contains(extension) && !(pcm && pcm_silent_on_host(handle, *info));
-  if (!native) {
-    auto contract = check_emulated(handle, *info);
-    if (contract != XR_SUCCESS) {
-      if (pcm) {
-        auto &p = *reinterpret_cast<const XrHapticPcmVibrationFB *>(header);
-        if (p.samplesConsumed) *p.samplesConsumed = 0;
-      }
-      venture::xr::haptic_event(pcm ? "xr_pcm" : "xr_envelope", handle, *info, 0, 0, 0, "validate_core_sequence", contract, {{"stage", "guest_request"}});
-      return contract;
+  if ((pcm || envelope) && !enabled(extension))
+    return reject(api, handle, info, XR_ERROR_VALIDATION_FAILURE, "validate_guest_extension");
+  // The game's action is Venture's own: its contract is checked here, and the
+  // pulse goes to the host actions it is bound to (controller_layer.h).
+  if (auto contract = check_emulated(handle, *info); contract != XR_SUCCESS) {
+    if (pcm) {
+      auto &p = *reinterpret_cast<const XrHapticPcmVibrationFB *>(header);
+      if (p.samplesConsumed) *p.samplesConsumed = 0;
     }
+    venture::xr::haptic_event(api, handle, *info, 0, 0, 0, "validate_guest_contract", contract, {{"stage", "guest_request"}});
+    return contract;
+  }
+  const auto targets = controls::haptic_targets(*info);
+  if (header->type == XR_TYPE_HAPTIC_VIBRATION) {
+    XrResult result = XR_SUCCESS;
+    for (const auto &target : targets) {
+      venture::xr::cancel_sequence(handle, &target);
+      const auto r = venture::xr::apply_haptic("xr_core", handle, target,
+                                               *reinterpret_cast<const XrHapticVibration *>(header), "guest_request");
+      if (result == XR_SUCCESS) result = r;
+    }
+    return result;
   }
   float amplitude = 0;
   XrDuration duration = 0;
-  XrResult result;
   nlohmann::json fields{{"payload_type", int(header->type)}, {"stage", "guest_request"}};
   if (pcm) {
     auto &p = *reinterpret_cast<const XrHapticPcmVibrationFB *>(header);
@@ -130,22 +136,7 @@ XrResult xrApplyHapticFeedback(XrSession handle, const XrHapticActionInfo *info,
       return rejected();
     duration = XrDuration(double(p.bufferSize) * 1e9 / p.sampleRate);
     for (uint32_t i = 0; i < p.bufferSize; ++i) amplitude = std::max(amplitude, std::abs(p.buffer[i]));
-    if (native) {
-      venture::xr::cancel_sequence(handle, info);
-      // Mixed PCM clips can overshoot their nominal [-1,1] range. Bound the
-      // native copy as well; do not alter the application's samples. Native
-      // samplesConsumed still describes the accepted original input prefix.
-      if (amplitude > 1) {
-        auto count = std::min(p.bufferSize, uint32_t(XR_MAX_HAPTIC_PCM_BUFFER_SIZE_FB));
-        std::vector<float> normalized(count);
-        for (uint32_t i = 0; i < count; ++i) normalized[i] = std::clamp(p.buffer[i], -1.f, 1.f);
-        auto copy = p; copy.bufferSize = count; copy.buffer = normalized.data();
-        result = ::xrApplyHapticFeedback(handle, info, reinterpret_cast<const XrHapticBaseHeader *>(&copy));
-      } else result = ::xrApplyHapticFeedback(handle, info, header);
-    } else result = venture::xr::queue_haptic(handle, *info, {p.buffer, p.bufferSize}, p.sampleRate,
-                                        p.append != XR_FALSE, *p.samplesConsumed);
-    fields.update({{"buffer_size", p.bufferSize}, {"samples_consumed", *p.samplesConsumed},
-                   {"sample_rate", p.sampleRate}, {"append", p.append != XR_FALSE}});
+    fields.update({{"buffer_size", p.bufferSize}, {"sample_rate", p.sampleRate}, {"append", p.append != XR_FALSE}});
   } else {
     auto &p = *reinterpret_cast<const XrHapticAmplitudeEnvelopeVibrationFB *>(header);
     if (!samples_valid(p.amplitudes, p.amplitudeCount, false) || p.duration <= 0) {
@@ -156,12 +147,47 @@ XrResult xrApplyHapticFeedback(XrSession handle, const XrHapticActionInfo *info,
     }
     duration = p.duration;
     for (uint32_t i = 0; i < p.amplitudeCount; ++i) amplitude = std::max(amplitude, p.amplitudes[i]);
-    venture::xr::cancel_sequence(handle, info);
-    if (host_xr().enabled_extensions.contains(extension)) result = ::xrApplyHapticFeedback(handle, info, header);
-    else result = venture::xr::queue_envelope(handle, *info, {p.amplitudes, p.amplitudeCount}, p.duration);
   }
-  venture::xr::haptic_event(pcm ? "xr_pcm" : "xr_envelope", handle, *info, amplitude, duration, 0,
-      native ? "xrApplyHapticFeedback_native" : "enqueue_core_sequence", result, std::move(fields));
+  if (targets.empty()) {
+    // Bound to nothing: accepted and dropped, as a runtime does for an unbound output.
+    if (pcm) {
+      auto &p = *reinterpret_cast<const XrHapticPcmVibrationFB *>(header);
+      *p.samplesConsumed = std::min(p.bufferSize, uint32_t(XR_MAX_HAPTIC_PCM_BUFFER_SIZE_FB));
+    }
+    return XR_SUCCESS;
+  }
+  XrResult result = XR_SUCCESS;
+  for (const auto &target_info : targets) {
+    const auto *target = &target_info;
+    const bool native = host_xr().enabled_extensions.contains(extension) && !(pcm && pcm_silent_on_host(handle, *target));
+    XrResult r;
+    if (pcm) {
+      auto &p = *reinterpret_cast<const XrHapticPcmVibrationFB *>(header);
+      if (native) {
+        venture::xr::cancel_sequence(handle, target);
+        // Mixed PCM clips can overshoot their nominal [-1,1] range. Bound the
+        // native copy as well; do not alter the application's samples. Native
+        // samplesConsumed still describes the accepted original input prefix.
+        if (amplitude > 1) {
+          auto count = std::min(p.bufferSize, uint32_t(XR_MAX_HAPTIC_PCM_BUFFER_SIZE_FB));
+          std::vector<float> normalized(count);
+          for (uint32_t i = 0; i < count; ++i) normalized[i] = std::clamp(p.buffer[i], -1.f, 1.f);
+          auto copy = p; copy.bufferSize = count; copy.buffer = normalized.data();
+          r = ::xrApplyHapticFeedback(handle, target, reinterpret_cast<const XrHapticBaseHeader *>(&copy));
+        } else r = ::xrApplyHapticFeedback(handle, target, header);
+      } else r = venture::xr::queue_haptic(handle, *target, {p.buffer, p.bufferSize}, p.sampleRate,
+                                           p.append != XR_FALSE, *p.samplesConsumed);
+      fields["samples_consumed"] = *p.samplesConsumed;
+    } else {
+      auto &p = *reinterpret_cast<const XrHapticAmplitudeEnvelopeVibrationFB *>(header);
+      venture::xr::cancel_sequence(handle, target);
+      if (host_xr().enabled_extensions.contains(extension)) r = ::xrApplyHapticFeedback(handle, target, header);
+      else r = venture::xr::queue_envelope(handle, *target, {p.amplitudes, p.amplitudeCount}, p.duration);
+    }
+    venture::xr::haptic_event(pcm ? "xr_pcm" : "xr_envelope", handle, *target, amplitude, duration, 0,
+        native ? "xrApplyHapticFeedback_native" : "enqueue_core_sequence", r, fields);
+    if (result == XR_SUCCESS) result = r;
+  }
   return result;
 }
 XrResult xrStopHapticFeedback(XrSession handle, const XrHapticActionInfo *info) {
@@ -172,8 +198,14 @@ XrResult xrStopHapticFeedback(XrSession handle, const XrHapticActionInfo *info) 
   auto translated = action_chain.copy(info);
   if (XR_FAILED(translated)) return reject("xr_core", handle, info, translated, "validate_guest_action_chain");
   info = static_cast<const XrHapticActionInfo *>(action_chain.head());
-  venture::xr::cancel_sequence(handle, info);
-  return venture::xr::stop_haptic("xr_core", handle, *info, "guest_request");
+  if (auto contract = check_emulated(handle, *info); contract != XR_SUCCESS) return contract;
+  XrResult result = XR_SUCCESS;
+  for (const auto &target : controls::haptic_targets(*info)) {
+    venture::xr::cancel_sequence(handle, &target);
+    const auto r = venture::xr::stop_haptic("xr_core", handle, target, "guest_request");
+    if (result == XR_SUCCESS) result = r;
+  }
+  return result;
 }
 XrResult xrGetDeviceSampleRateFB(XrSession handle, const XrHapticActionInfo *info,
                                 XrDevicePcmSampleRateGetInfoFB *out) {
@@ -189,11 +221,15 @@ XrResult xrGetDeviceSampleRateFB(XrSession handle, const XrHapticActionInfo *inf
       XR_FAILED(validate_chain(out->next, true, XR_TYPE_DEVICE_PCM_SAMPLE_RATE_STATE_FB, true)))
     return reject("xr_pcm", handle, info, XR_ERROR_VALIDATION_FAILURE, "validate_guest_query_output");
   XrResult result = XR_SUCCESS;
-  if (host_xr().enabled_extensions.contains("XR_FB_haptic_pcm")) {
-    result = host_call<PFN_xrGetDeviceSampleRateFB, "xrGetDeviceSampleRateFB">(handle, info, out);
+  const auto targets = controls::haptic_targets(*info);
+  if (host_xr().enabled_extensions.contains("XR_FB_haptic_pcm") && !targets.empty()) {
+    // The rate of the first host output the action reaches.
+    const auto &target = targets.front();
+    result = host_call<PFN_xrGetDeviceSampleRateFB, "xrGetDeviceSampleRateFB">(handle, &target, out);
     const bool silent = XR_SUCCEEDED(result) && !(out->sampleRate > 0);
-    host_pcm_silent[{handle, info->action, info->subactionPath}] = silent;
-    if (silent && venture::xr::haptic_bound(handle, *info)) out->sampleRate = venture::xr::haptic_emulation_rate;
+    host_pcm_silent[{handle, target.action, target.subactionPath}] = silent;
+    if (silent && (venture::xr::haptic_bound(handle, target) || controls::haptic_suggested(*info)))
+      out->sampleRate = venture::xr::haptic_emulation_rate;
   } else {
     auto a = state().actions.find(info->action);
     if (a == state().actions.end()) return reject("xr_pcm", handle, info, XR_ERROR_HANDLE_INVALID, "validate_guest_query_action", false);
@@ -203,8 +239,9 @@ XrResult xrGetDeviceSampleRateFB(XrSession handle, const XrHapticActionInfo *inf
       return reject("xr_pcm", handle, info, XR_ERROR_PATH_UNSUPPORTED, "validate_guest_query_path");
     // The rate is a controller property on a headset, known before focus: the Haptics SDK reads it once at
     // startup (Batman) and keeps it. A suggested haptic binding is enough; pulses before the host binds are no-ops.
-    out->sampleRate = venture::xr::haptic_suggested(*info) || venture::xr::haptic_bound(handle, *info)
-                          ? venture::xr::haptic_emulation_rate : 0;
+    bool bound = false;
+    for (const auto &target : targets) bound |= venture::xr::haptic_bound(handle, target);
+    out->sampleRate = controls::haptic_suggested(*info) || bound ? venture::xr::haptic_emulation_rate : 0;
   }
   // Titles poll this every frame. Record a query when its answer changes; the
   // guest API mutex protects the last answers.

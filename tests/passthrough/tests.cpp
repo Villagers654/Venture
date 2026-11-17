@@ -652,3 +652,36 @@ TEST_CASE("OpenVR camera geometry comes from the API's transforms and layout") {
   const auto upright = xr::tracked_camera_pose(flipped);
   CHECK(std::abs(upright.orientation.w) == doctest::Approx(1));
 }
+TEST_CASE("Passthrough colour LUTs are tables a local backend keeps, sized as Quest sizes them") {
+  Fixture fixture; fixture.create();
+  state().enabled.insert("XR_META_passthrough_color_lut");
+  XrSystemPassthroughColorLutPropertiesMETA properties{XR_TYPE_SYSTEM_PASSTHROUGH_COLOR_LUT_PROPERTIES_META};
+  CHECK(passthrough_properties(reinterpret_cast<XrBaseOutStructure*>(&properties)));
+  CHECK(properties.maxColorLutResolution == 64);
+  std::vector<std::uint8_t> rgb(16 * 16 * 16 * 3);
+  XrPassthroughColorLutCreateInfoMETA create{XR_TYPE_PASSTHROUGH_COLOR_LUT_CREATE_INFO_META, nullptr,
+      XR_PASSTHROUGH_COLOR_LUT_CHANNELS_RGB_META, 16, {std::uint32_t(rgb.size()), rgb.data()}};
+  XrPassthroughColorLutMETA lut{};
+  REQUIRE(guest::xrCreatePassthroughColorLutMETA(fixture.feature, &create, &lut) == XR_SUCCESS);
+  CHECK(lut != XR_NULL_HANDLE);
+  XrPassthroughColorLutUpdateInfoMETA update{XR_TYPE_PASSTHROUGH_COLOR_LUT_UPDATE_INFO_META, nullptr,
+      {std::uint32_t(rgb.size()), rgb.data()}};
+  CHECK(guest::xrUpdatePassthroughColorLutMETA(lut, &update) == XR_SUCCESS);
+  update.data.bufferSize -= 1;
+  CHECK(guest::xrUpdatePassthroughColorLutMETA(lut, &update) == XR_ERROR_PASSTHROUGH_COLOR_LUT_BUFFER_SIZE_MISMATCH_META);
+  create.channels = XR_PASSTHROUGH_COLOR_LUT_CHANNELS_RGBA_META; // RGB-sized data for an RGBA table
+  XrPassthroughColorLutMETA wrong{};
+  CHECK(guest::xrCreatePassthroughColorLutMETA(fixture.feature, &create, &wrong) == XR_ERROR_PASSTHROUGH_COLOR_LUT_BUFFER_SIZE_MISMATCH_META);
+  create.resolution = 128;
+  CHECK(guest::xrCreatePassthroughColorLutMETA(fixture.feature, &create, &wrong) == XR_ERROR_VALIDATION_FAILURE);
+  CHECK(wrong == XR_NULL_HANDLE);
+  // Mapping through a table is not shown by a local backend.
+  XrPassthroughColorMapLutMETA map{XR_TYPE_PASSTHROUGH_COLOR_MAP_LUT_META, nullptr, lut, 1};
+  XrPassthroughStyleFB style{XR_TYPE_PASSTHROUGH_STYLE_FB, &map, 1, {0, 0, 0, 0}};
+  CHECK(guest::xrPassthroughLayerSetStyleFB(fixture.layer, &style) == XR_ERROR_FEATURE_UNSUPPORTED);
+  // Tables belong to their passthrough and go with it.
+  CHECK(guest::xrDestroyPassthroughFB(fixture.feature) == XR_SUCCESS);
+  CHECK(guest::xrUpdatePassthroughColorLutMETA(lut, &update) == XR_ERROR_HANDLE_INVALID);
+  state().enabled.erase("XR_META_passthrough_color_lut");
+  CHECK_FALSE(passthrough_properties(reinterpret_cast<XrBaseOutStructure*>(&properties)));
+}

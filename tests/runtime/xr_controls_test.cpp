@@ -3,6 +3,7 @@
 #include "common/controls.h"
 #include "common/environment.h"
 #include "common/log.h"
+#include "core/wait.h"
 #include "../mock_openxr_runtime/control.h"
 #include "hle/openxr/openxr.h"
 #include "hle/openxr/state.h"
@@ -600,7 +601,6 @@ TEST_CASE("An OpenXR game that also binds both stick clicks gets its Quest menu 
   // xr_typed_handles_menu test); the menu must survive it.
   venture::test::ScopedMenuMode automatic("");
   ScopedControls defaults("");
-  const bool typed = std::getenv("VENTURE_MOCK_TYPED_HANDLES") != nullptr;
   for (const auto& p : kProfiles) {
     CAPTURE(p.path);
     ventureMockXrSetProfile(std::string(p.path).c_str());
@@ -656,8 +656,9 @@ TEST_CASE("An OpenXR game that also binds both stick clicks gets its Quest menu 
     REQUIRE(xg::xrSuggestInteractionProfileBindings(instance, &suggestion) == XR_SUCCESS);
     XrSessionActionSetsAttachInfo attach{XR_TYPE_SESSION_ACTION_SETS_ATTACH_INFO, nullptr, 1, &set};
     REQUIRE(xg::xrAttachSessionActionSets(session, &attach) == XR_SUCCESS);
-    // The game makes and destroys spaces; one shares the menu action's value where
-    // handles are numbered per type.
+    // The game makes and destroys spaces. Where the host numbers handles per type a
+    // space may share the value of a host action or set; the game's own actions and
+    // sets are Venture's handles, which no host space shares.
     bool collided = false;
     for (int i = 0; i < 96 && !collided; ++i) {
       XrReferenceSpaceCreateInfo space_info{XR_TYPE_REFERENCE_SPACE_CREATE_INFO, nullptr, XR_REFERENCE_SPACE_TYPE_LOCAL,
@@ -668,7 +669,7 @@ TEST_CASE("An OpenXR game that also binds both stick clicks gets its Quest menu 
                  reinterpret_cast<std::uintptr_t>(space) == reinterpret_cast<std::uintptr_t>(set);
       REQUIRE(xg::xrDestroySpace(space) == XR_SUCCESS);
     }
-    CHECK(collided == typed);
+    CHECK_FALSE(collided);
     auto poll = [&] {
       XrEventDataBuffer event{XR_TYPE_EVENT_DATA_BUFFER};
       while (xg::xrPollEvent(instance, &event) == XR_SUCCESS) event = {XR_TYPE_EVENT_DATA_BUFFER};
@@ -865,6 +866,31 @@ TEST_CASE("A game that suggests only Touch Pro is told Touch Pro on any controll
   MockXrScript script{};
   script.right.primary = true;
   CHECK(game.pressed(pro_a, script));
+}
+
+TEST_CASE("A game whose Touch Pro suggestion binds all its Touch actions is told Touch Pro on a Pro controller") {
+  // H3VR2 since 20261115C binds every action on Touch Pro as well as Touch Plus and Touch.
+  venture::test::ScopedMenuMode automatic("");
+  ScopedControls defaults("");
+  for (const char* host : {"/interaction_profiles/facebook/touch_controller_pro",
+                           "/interaction_profiles/meta/touch_controller_plus"}) {
+    CAPTURE(host);
+    OpenXrGame game(host);
+    const XrAction a_action = game.action("a"), b_action = game.action("b");
+    const XrPath a = game.path("/user/hand/right/input/a/click"), b = game.path("/user/hand/right/input/b/click");
+    REQUIRE(game.suggest("/interaction_profiles/meta/touch_controller_plus", {{a_action, a}, {b_action, b}}) == XR_SUCCESS);
+    REQUIRE(game.suggest("/interaction_profiles/facebook/touch_controller_pro", {{a_action, a}, {b_action, b}}) == XR_SUCCESS);
+    REQUIRE(game.suggest("/interaction_profiles/oculus/touch_controller", {{a_action, a}}) == XR_SUCCESS);
+    game.start();
+    // A Pro controller is reported as one; a Quest 3's stays Touch Plus.
+    CHECK(game.current(1) == game.path(host));
+    MockXrScript script{};
+    script.right.primary = true;
+    CHECK(game.pressed(a_action, script));
+    script = {};
+    script.right.secondary = true;
+    CHECK(game.pressed(b_action, script));
+  }
 }
 
 TEST_CASE("A game's own suggestion for the host's controller keeps its bindings and profile after its Touch one") {
@@ -1126,11 +1152,11 @@ TEST_CASE("Grip toggle latches an OpenXR game's grip per hand on a Vive wand") {
   game.sync(0, 0);
   CHECK(game.hand(0).currentState == 1.f);
   CHECK(game.either().currentState);
-  // The other hand latches on its own; the action without a hand is one latch.
+  // The other hand latches on its own; the action without a hand holds while either hand does.
   game.sync(0, 1);
   CHECK(game.hand(1).currentState == 1.f);
   CHECK(game.hand(0).currentState == 1.f);
-  CHECK_FALSE(game.either().currentState);
+  CHECK(game.either().currentState);
   game.sync(0, 0);
   // The next press lets go.
   game.sync(1, 0);
@@ -1171,4 +1197,219 @@ TEST_CASE("Grip toggle latches a VrApi game's grip") {
   CHECK_FALSE(sees(game.read(MockXrScript{}, 1), Quest::grip, 1));
   CHECK_FALSE(sees(game.read(pressed, 0), Quest::grip, 0));
   CHECK_FALSE(sees(game.read(MockXrScript{}, 0), Quest::grip, 0));
+}
+
+namespace {
+// The host action sets and actions Venture creates, by name.
+struct HostNames {
+  venture::xr::HostXr& host = venture::xr::host_xr();
+  void* original = host.get_instance_proc_addr;
+  inline static HostNames* active = nullptr;
+  PFN_xrCreateActionSet native_set{};
+  PFN_xrCreateAction native_action{};
+  std::set<std::string> sets, actions;
+  HostNames() {
+    const auto resolve = reinterpret_cast<PFN_xrGetInstanceProcAddr>(original);
+    PFN_xrVoidFunction function{};
+    REQUIRE(resolve(host.instance, "xrCreateActionSet", &function) == XR_SUCCESS);
+    native_set = reinterpret_cast<PFN_xrCreateActionSet>(function);
+    REQUIRE(resolve(host.instance, "xrCreateAction", &function) == XR_SUCCESS);
+    native_action = reinterpret_cast<PFN_xrCreateAction>(function);
+    active = this;
+    host.get_instance_proc_addr = reinterpret_cast<void*>(lookup);
+    venture::xr::invalidate_host_procedures();
+  }
+  ~HostNames() {
+    host.get_instance_proc_addr = original;
+    venture::xr::invalidate_host_procedures();
+    active = nullptr;
+  }
+  static XrResult XRAPI_CALL create_set(XrInstance instance, const XrActionSetCreateInfo* info, XrActionSet* out) {
+    active->sets.insert(info->actionSetName);
+    return active->native_set(instance, info, out);
+  }
+  static XrResult XRAPI_CALL create_action(XrActionSet set, const XrActionCreateInfo* info, XrAction* out) {
+    active->actions.insert(info->actionName);
+    return active->native_action(set, info, out);
+  }
+  static XrResult XRAPI_CALL lookup(XrInstance instance, const char* name, PFN_xrVoidFunction* out) {
+    if (std::strcmp(name, "xrCreateActionSet") == 0) {
+      *out = reinterpret_cast<PFN_xrVoidFunction>(create_set);
+      return XR_SUCCESS;
+    }
+    if (std::strcmp(name, "xrCreateAction") == 0) {
+      *out = reinterpret_cast<PFN_xrVoidFunction>(create_action);
+      return XR_SUCCESS;
+    }
+    return reinterpret_cast<PFN_xrGetInstanceProcAddr>(active->original)(instance, name, out);
+  }
+};
+// One build of a game: its action set and actions under its own names, Touch bindings
+// for the trigger, played on an Index controller. What the host is asked to create.
+struct Names {
+  std::set<std::string> sets, actions;
+};
+Names play_build(const char* set_name, const std::vector<std::string>& action_names) {
+  ventureMockXrSetProfile("/interaction_profiles/valve/index_controller");
+  venture::test::XrImageFixture interop;
+  venture::xr::install_xr_images(&interop);
+  const char* extensions[]{"XR_KHR_opengl_es_enable"};
+  XrInstanceCreateInfo create{XR_TYPE_INSTANCE_CREATE_INFO};
+  create.applicationInfo.apiVersion = XR_MAKE_VERSION(1, 0, 0);
+  create.enabledExtensionCount = 1;
+  create.enabledExtensionNames = extensions;
+  XrInstance instance{};
+  REQUIRE(xg::xrCreateInstance(&create, &instance) == XR_SUCCESS);
+  HostNames names;
+  xg::GlesBinding graphics{XR_TYPE_GRAPHICS_BINDING_OPENGL_ES_ANDROID_KHR, nullptr, 1, 2, 3};
+  XrSessionCreateInfo ci{XR_TYPE_SESSION_CREATE_INFO, &graphics, 0, 1};
+  XrSession session{};
+  REQUIRE(xg::xrCreateSession(instance, &ci, &session) == XR_SUCCESS);
+  XrActionSetCreateInfo set_info{XR_TYPE_ACTION_SET_CREATE_INFO};
+  std::strcpy(set_info.actionSetName, set_name);
+  std::strcpy(set_info.localizedActionSetName, set_name);
+  XrActionSet set{};
+  REQUIRE(xg::xrCreateActionSet(instance, &set_info, &set) == XR_SUCCESS);
+  XrPath touch{}, trigger{};
+  REQUIRE(xg::xrStringToPath(instance, "/interaction_profiles/oculus/touch_controller", &touch) == XR_SUCCESS);
+  REQUIRE(xg::xrStringToPath(instance, "/user/hand/right/input/trigger/value", &trigger) == XR_SUCCESS);
+  std::vector<XrAction> actions;
+  std::vector<XrActionSuggestedBinding> bindings;
+  for (const auto& name : action_names) {
+    XrActionCreateInfo ai{XR_TYPE_ACTION_CREATE_INFO};
+    ai.actionType = XR_ACTION_TYPE_FLOAT_INPUT;
+    std::strcpy(ai.actionName, name.c_str());
+    std::strcpy(ai.localizedActionName, name.c_str());
+    XrAction action{};
+    REQUIRE(xg::xrCreateAction(set, &ai, &action) == XR_SUCCESS);
+    actions.push_back(action);
+    bindings.push_back({action, trigger});
+  }
+  XrInteractionProfileSuggestedBinding suggestion{XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING, nullptr, touch,
+                                                  std::uint32_t(bindings.size()), bindings.data()};
+  REQUIRE(xg::xrSuggestInteractionProfileBindings(instance, &suggestion) == XR_SUCCESS);
+  XrSessionActionSetsAttachInfo attach{XR_TYPE_SESSION_ACTION_SETS_ATTACH_INFO, nullptr, 1, &set};
+  REQUIRE(xg::xrAttachSessionActionSets(session, &attach) == XR_SUCCESS);
+  auto poll = [&] {
+    XrEventDataBuffer event{XR_TYPE_EVENT_DATA_BUFFER};
+    while (xg::xrPollEvent(instance, &event) == XR_SUCCESS) event = {XR_TYPE_EVENT_DATA_BUFFER};
+  };
+  poll();
+  XrSessionBeginInfo begin{XR_TYPE_SESSION_BEGIN_INFO, nullptr, XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO};
+  REQUIRE(xg::xrBeginSession(session, &begin) == XR_SUCCESS);
+  poll();
+  // Every build reads the trigger, whatever it calls its actions.
+  MockXrScript script{};
+  script.right.trigger = 0.75f;
+  ventureMockXrSetScript(&script);
+  XrActiveActionSet active{set, XR_NULL_PATH};
+  XrActionsSyncInfo sync{XR_TYPE_ACTIONS_SYNC_INFO, nullptr, 1, &active};
+  REQUIRE(xg::xrSyncActions(session, &sync) == XR_SUCCESS);
+  for (const auto action : actions) {
+    XrActionStateGetInfo get{XR_TYPE_ACTION_STATE_GET_INFO, nullptr, action, XR_NULL_PATH};
+    XrActionStateFloat value{XR_TYPE_ACTION_STATE_FLOAT};
+    REQUIRE(xg::xrGetActionStateFloat(session, &get, &value) == XR_SUCCESS);
+    CHECK(value.isActive);
+    CHECK(value.currentState == doctest::Approx(0.75f));
+  }
+  CHECK(xg::xrDestroySession(session) == XR_SUCCESS);
+  CHECK(xg::xrDestroyInstance(instance) == XR_SUCCESS);
+  venture::xr::install_xr_images(nullptr);
+  MockXrScript restored{};
+  ventureMockXrSetScript(&restored);
+  ventureMockXrSetProfile(nullptr);
+  return {names.sets, names.actions};
+}
+}  // namespace
+
+TEST_CASE("A game update that renames its actions leaves the host's actions as they were") {
+  // SteamVR keeps a player's custom binding by action name: the host sees the same
+  // names from every build of a game, none of them the game's.
+  venture::test::ScopedMenuMode automatic("");
+  ScopedControls defaults("");
+  const auto first = play_build("gameplay", {"fire"});
+  const auto second = play_build("gameplay_v2", {"shoot_v2", "trigger_axis"});
+  CHECK(first.sets == second.sets);
+  CHECK(first.actions == second.actions);
+  CHECK(first.sets == std::set<std::string>{"venture_controls"});
+  for (const char* name : {"fire", "shoot_v2", "trigger_axis"}) CHECK_FALSE(second.actions.contains(name));
+}
+
+TEST_CASE("An OpenXR hand space made before the game suggests its bindings follows the hand") {
+  // H3VR2 makes its grip pose space first and binds it later; the space must follow
+  // the binding the game gives it, as on a Quest.
+  venture::test::ScopedMenuMode automatic("");
+  ScopedControls defaults("");
+  ventureMockXrSetProfile("/interaction_profiles/valve/index_controller");
+  venture::test::XrImageFixture interop;
+  venture::xr::install_xr_images(&interop);
+  const char* extensions[]{"XR_KHR_opengl_es_enable"};
+  XrInstanceCreateInfo create{XR_TYPE_INSTANCE_CREATE_INFO};
+  create.applicationInfo.apiVersion = XR_MAKE_VERSION(1, 0, 0);
+  create.enabledExtensionCount = 1;
+  create.enabledExtensionNames = extensions;
+  XrInstance instance{};
+  REQUIRE(xg::xrCreateInstance(&create, &instance) == XR_SUCCESS);
+  xg::GlesBinding graphics{XR_TYPE_GRAPHICS_BINDING_OPENGL_ES_ANDROID_KHR, nullptr, 1, 2, 3};
+  XrSessionCreateInfo ci{XR_TYPE_SESSION_CREATE_INFO, &graphics, 0, 1};
+  XrSession session{};
+  REQUIRE(xg::xrCreateSession(instance, &ci, &session) == XR_SUCCESS);
+  XrActionSetCreateInfo set_info{XR_TYPE_ACTION_SET_CREATE_INFO};
+  std::strcpy(set_info.actionSetName, "hands");
+  std::strcpy(set_info.localizedActionSetName, "Hands");
+  XrActionSet set{};
+  REQUIRE(xg::xrCreateActionSet(instance, &set_info, &set) == XR_SUCCESS);
+  XrPath hands[2]{}, touch{}, grip{};
+  REQUIRE(xg::xrStringToPath(instance, "/user/hand/left", &hands[0]) == XR_SUCCESS);
+  REQUIRE(xg::xrStringToPath(instance, "/user/hand/right", &hands[1]) == XR_SUCCESS);
+  REQUIRE(xg::xrStringToPath(instance, "/interaction_profiles/oculus/touch_controller", &touch) == XR_SUCCESS);
+  REQUIRE(xg::xrStringToPath(instance, "/user/hand/left/input/grip/pose", &grip) == XR_SUCCESS);
+  XrActionCreateInfo ai{XR_TYPE_ACTION_CREATE_INFO};
+  ai.actionType = XR_ACTION_TYPE_POSE_INPUT;
+  ai.countSubactionPaths = 2;
+  ai.subactionPaths = hands;
+  std::strcpy(ai.actionName, "grip");
+  std::strcpy(ai.localizedActionName, "Grip");
+  XrAction pose{};
+  REQUIRE(xg::xrCreateAction(set, &ai, &pose) == XR_SUCCESS);
+  // The space first, the bindings after.
+  XrActionSpaceCreateInfo space_info{XR_TYPE_ACTION_SPACE_CREATE_INFO, nullptr, pose, hands[0], {{0, 0, 0, 1}, {0, 0, 0}}};
+  XrSpace hand{};
+  REQUIRE(xg::xrCreateActionSpace(session, &space_info, &hand) == XR_SUCCESS);
+  XrReferenceSpaceCreateInfo local_info{XR_TYPE_REFERENCE_SPACE_CREATE_INFO, nullptr, XR_REFERENCE_SPACE_TYPE_LOCAL,
+                                        {{0, 0, 0, 1}, {0, 0, 0}}};
+  XrSpace local{};
+  REQUIRE(xg::xrCreateReferenceSpace(session, &local_info, &local) == XR_SUCCESS);
+  XrActionSuggestedBinding binding{pose, grip};
+  XrInteractionProfileSuggestedBinding suggestion{XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING, nullptr, touch, 1,
+                                                  &binding};
+  REQUIRE(xg::xrSuggestInteractionProfileBindings(instance, &suggestion) == XR_SUCCESS);
+  XrSessionActionSetsAttachInfo attach{XR_TYPE_SESSION_ACTION_SETS_ATTACH_INFO, nullptr, 1, &set};
+  REQUIRE(xg::xrAttachSessionActionSets(session, &attach) == XR_SUCCESS);
+  auto poll = [&] {
+    XrEventDataBuffer event{XR_TYPE_EVENT_DATA_BUFFER};
+    while (xg::xrPollEvent(instance, &event) == XR_SUCCESS) event = {XR_TYPE_EVENT_DATA_BUFFER};
+  };
+  poll();
+  XrSessionBeginInfo begin{XR_TYPE_SESSION_BEGIN_INFO, nullptr, XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO};
+  REQUIRE(xg::xrBeginSession(session, &begin) == XR_SUCCESS);
+  poll();
+  XrSpaceLocation location{XR_TYPE_SPACE_LOCATION};
+  // Not synced yet: not located.
+  REQUIRE(xg::xrLocateSpace(hand, local, venture::monotonic_ns(), &location) == XR_SUCCESS);
+  CHECK(location.locationFlags == 0);
+  XrActiveActionSet active{set, XR_NULL_PATH};
+  XrActionsSyncInfo sync{XR_TYPE_ACTIONS_SYNC_INFO, nullptr, 1, &active};
+  REQUIRE(xg::xrSyncActions(session, &sync) == XR_SUCCESS);
+  REQUIRE(xg::xrLocateSpace(hand, local, venture::monotonic_ns(), &location) == XR_SUCCESS);
+  CHECK((location.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT) != 0);
+  CHECK((location.locationFlags & XR_SPACE_LOCATION_ORIENTATION_VALID_BIT) != 0);
+  CHECK(xg::xrDestroySpace(hand) == XR_SUCCESS);
+  CHECK(xg::xrDestroySpace(local) == XR_SUCCESS);
+  CHECK(xg::xrDestroySession(session) == XR_SUCCESS);
+  CHECK(xg::xrDestroyInstance(instance) == XR_SUCCESS);
+  venture::xr::install_xr_images(nullptr);
+  MockXrScript restored{};
+  ventureMockXrSetScript(&restored);
+  ventureMockXrSetProfile(nullptr);
 }

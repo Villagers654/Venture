@@ -4388,6 +4388,10 @@ void xr32_xrCreateInstance(Call32& c) {
   const auto a0 = c.word(); const auto a1 = c.word();
   c.finish(guest::xrCreateInstance(c.in(a0, 335, 1u), c.identity(a1)));
 }
+void xr32_xrCreatePassthroughColorLutMETA(Call32& c) {
+  const auto a0 = c.u64(); const auto a1 = c.word(); const auto a2 = c.word();
+  c.finish(guest::xrCreatePassthroughColorLutMETA(Value{a0}, c.in(a1, 380, 1u), c.identity(a2)));
+}
 void xr32_xrCreatePassthroughFB(Call32& c) {
   const auto a0 = c.u64(); const auto a1 = c.word(); const auto a2 = c.word();
   c.finish(guest::xrCreatePassthroughFB(Value{a0}, c.in(a1, 387, 1u), c.identity(a2)));
@@ -4443,6 +4447,10 @@ void xr32_xrDestroyHandTrackerEXT(Call32& c) {
 void xr32_xrDestroyInstance(Call32& c) {
   const auto a0 = c.u64();
   c.finish(guest::xrDestroyInstance(Value{a0}));
+}
+void xr32_xrDestroyPassthroughColorLutMETA(Call32& c) {
+  const auto a0 = c.u64();
+  c.finish(guest::xrDestroyPassthroughColorLutMETA(Value{a0}));
 }
 void xr32_xrDestroyPassthroughFB(Call32& c) {
   const auto a0 = c.u64();
@@ -4824,6 +4832,10 @@ void xr32_xrTriangleMeshEndVertexBufferUpdateFB(Call32& c) {
   const auto a0 = c.u64();
   c.finish(guest::xrTriangleMeshEndVertexBufferUpdateFB(Value{a0}));
 }
+void xr32_xrUpdatePassthroughColorLutMETA(Call32& c) {
+  const auto a0 = c.u64(); const auto a1 = c.word();
+  c.finish(guest::xrUpdatePassthroughColorLutMETA(Value{a0}, c.in(a1, 382, 1u)));
+}
 void xr32_xrUpdateSwapchainFB(Call32& c) {
   const auto a0 = c.u64(); const auto a1 = c.word();
   c.finish(guest::xrUpdateSwapchainFB(Value{a0}, c.in(a1, 709, 1u)));
@@ -4852,6 +4864,7 @@ VENTURE_XR32_COMMAND(xrCreateFoveationProfileFB, xrCreateFoveationProfileFB)
 VENTURE_XR32_COMMAND(xrCreateGeometryInstanceFB, xrCreateGeometryInstanceFB)
 VENTURE_XR32_COMMAND(xrCreateHandTrackerEXT, xrCreateHandTrackerEXT)
 VENTURE_XR32_COMMAND(xrCreateInstance, xrCreateInstance)
+VENTURE_XR32_COMMAND(xrCreatePassthroughColorLutMETA, xrCreatePassthroughColorLutMETA)
 VENTURE_XR32_COMMAND(xrCreatePassthroughFB, xrCreatePassthroughFB)
 VENTURE_XR32_COMMAND(xrCreatePassthroughLayerFB, xrCreatePassthroughLayerFB)
 VENTURE_XR32_COMMAND(xrCreateReferenceSpace, xrCreateReferenceSpace)
@@ -4866,6 +4879,7 @@ VENTURE_XR32_COMMAND(xrDestroyFoveationProfileFB, xrDestroyFoveationProfileFB)
 VENTURE_XR32_COMMAND(xrDestroyGeometryInstanceFB, xrDestroyGeometryInstanceFB)
 VENTURE_XR32_COMMAND(xrDestroyHandTrackerEXT, xrDestroyHandTrackerEXT)
 VENTURE_XR32_COMMAND(xrDestroyInstance, xrDestroyInstance)
+VENTURE_XR32_COMMAND(xrDestroyPassthroughColorLutMETA, xrDestroyPassthroughColorLutMETA)
 VENTURE_XR32_COMMAND(xrDestroyPassthroughFB, xrDestroyPassthroughFB)
 VENTURE_XR32_COMMAND(xrDestroyPassthroughLayerFB, xrDestroyPassthroughLayerFB)
 VENTURE_XR32_COMMAND(xrDestroySession, xrDestroySession)
@@ -4962,6 +4976,7 @@ VENTURE_XR32_COMMAND(xrTriangleMeshBeginUpdateFB, xrTriangleMeshBeginUpdateFB)
 VENTURE_XR32_COMMAND(xrTriangleMeshBeginVertexBufferUpdateFB, xrTriangleMeshBeginVertexBufferUpdateFB)
 VENTURE_XR32_COMMAND(xrTriangleMeshEndUpdateFB, xrTriangleMeshEndUpdateFB)
 VENTURE_XR32_COMMAND(xrTriangleMeshEndVertexBufferUpdateFB, xrTriangleMeshEndVertexBufferUpdateFB)
+VENTURE_XR32_COMMAND(xrUpdatePassthroughColorLutMETA, xrUpdatePassthroughColorLutMETA)
 VENTURE_XR32_COMMAND(xrUpdateSwapchainFB, xrUpdateSwapchainFB)
 VENTURE_XR32_COMMAND(xrWaitFrame, xrWaitFrame)
 VENTURE_XR32_COMMAND(xrWaitSwapchainImage, xrWaitSwapchainImage)

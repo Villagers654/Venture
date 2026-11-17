@@ -9,7 +9,7 @@ public final class Build {
                              MODEL = System.getProperty("venture.device.model", UNKNOWN),
                              DEVICE = System.getProperty("venture.device.name", UNKNOWN),
                              BRAND = "oculus", PRODUCT = DEVICE, HARDWARE = DEVICE,
-                             TYPE = "user", TAGS = "release-keys";
+                             TYPE = "user", TAGS = "release-keys", USER = UNKNOWN;
   public static final String FINGERPRINT = "oculus/" + DEVICE + "/" + DEVICE + ":12/Venture/0:user/release-keys";
   public static final String CPU_ABI = System.getProperty("venture.guest.abi", "arm64-v8a"), CPU_ABI2 = "", BOARD = DEVICE,
                              HOST = "venture", ID = "Venture", DISPLAY = ID, SERIAL = "unknown";
@@ -20,6 +20,8 @@ public final class Build {
     public static int SDK_INT = 32;
     public static final int PREVIEW_SDK_INT = 0;
     public static String SDK = "32", RELEASE = "12", CODENAME = "REL", INCREMENTAL = "1";
+    // ro.build.version.security_patch is not set: AOSP reads it as "".
+    public static final String SECURITY_PATCH = "", BASE_OS = "";
   }
   public static class VERSION_CODES {
     public static final int LOLLIPOP = 21, M = 23, N = 24, N_MR1 = 25, O = 26, O_MR1 = 27, P = 28,

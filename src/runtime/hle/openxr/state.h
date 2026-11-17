@@ -42,6 +42,7 @@ VENTURE_XR_HANDLE_TYPE(XrHandTrackerEXT)
 VENTURE_XR_HANDLE_TYPE(XrFoveationProfileFB)
 VENTURE_XR_HANDLE_TYPE(XrPassthroughFB)
 VENTURE_XR_HANDLE_TYPE(XrPassthroughLayerFB)
+VENTURE_XR_HANDLE_TYPE(XrPassthroughColorLutMETA)
 VENTURE_XR_HANDLE_TYPE(XrGeometryInstanceFB)
 VENTURE_XR_HANDLE_TYPE(XrTriangleMeshFB)
 VENTURE_XR_HANDLE_TYPE(XrDebugUtilsMessengerEXT)
@@ -127,22 +128,6 @@ struct State {
   };
   std::map<XrAction, Action> actions;
   std::map<XrSession, std::set<std::uintptr_t>> attached_sets;
-  // Host profile -> the guest profile the game is told is current there.
-  std::map<XrPath, XrPath> guest_profiles;
-  // Each guest suggestion as the game made it, by its profile: the host
-  // suggestions are rebuilt from all of them (OpenXR replaces per profile).
-  std::map<XrPath, std::vector<XrActionSuggestedBinding>> guest_suggestions;
-  std::map<std::pair<XrAction, XrPath>, XrPath> guest_sources;
-  // Action states change only in xrSyncActions; reads in between reuse the
-  // host answer stored for this sync (state.cpp stored_action_state).
-  struct ActionRead {
-    XrSession session; XrAction action; XrPath path; XrStructureType type;
-    bool operator==(const ActionRead &) const = default;
-  };
-  struct ActionReadHash { std::size_t operator()(const ActionRead &) const noexcept; };
-  struct StoredActionState { std::uint64_t sync = 0; XrResult result{}; std::array<std::byte, 32> value{}; };
-  std::unordered_map<ActionRead, StoredActionState, ActionReadHash> action_states;
-  std::uint64_t action_sync = 1;
   struct Hand {
     bool left;
     std::array<bool, 4> pinching{};
@@ -202,8 +187,6 @@ template <class E> void queue_event(const E& event) {
 void sanitize(XrSpaceLocationFlags& flags, XrPosef& pose);
 void sanitize(XrSpaceVelocityFlags& flags, XrVector3f& linear, XrVector3f& angular);
 void sanitize_views(XrViewState& state, std::uint32_t count, XrView* views);
-// A sync or attach starts a new action state; destroying any object drops all.
-void forget_action_states(bool all = false);
 void cancel_object_haptics(const ObjectKey&);
 template <class H> void forget_handle(H h) { forget_object({handle_type<H>(), key(h)}); }
 template <class H> void cancel_handle_haptics(H h) { cancel_object_haptics({handle_type<H>(), key(h)}); }

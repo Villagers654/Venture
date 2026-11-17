@@ -107,6 +107,13 @@ public class Intent implements Parcelable {
   public String resolveType(ContentResolver resolver) {
     return type != null ? type : data != null && "content".equals(data.getScheme()) ? resolver.getType(data) : null;
   }
+  // AOSP: an explicit intent's type is never resolved (LocalBroadcastManager.sendBroadcast).
+  public String resolveTypeIfNeeded(ContentResolver resolver) {
+    return component != null ? type : resolveType(resolver);
+  }
+  public boolean hasCategory(String category) {
+    return categories.contains(category);
+  }
   public ComponentName resolveActivity(android.content.pm.PackageManager manager) {
     if (component != null) return component;
     var resolved = manager.resolveActivity(this, android.content.pm.PackageManager.MATCH_DEFAULT_ONLY);
@@ -157,6 +164,13 @@ public class Intent implements Parcelable {
   public int[] getIntArrayExtra(String k) { return extras.getIntArray(k); }
   public byte[] getByteArrayExtra(String k) { return extras.getByteArray(k); }
   public Intent putExtra(String k, Bundle v) { extras.putBundle(k, v); return this; }
+  public Intent putParcelableArrayListExtra(String k, java.util.ArrayList<? extends Parcelable> v) {
+    extras.putParcelableArrayList(k, v);
+    return this;
+  }
+  public <T extends Parcelable> java.util.ArrayList<T> getParcelableArrayListExtra(String k) {
+    return extras.getParcelableArrayList(k);
+  }
   public Intent putExtra(String k, java.io.Serializable v) { extras.putSerializable(k, v); return this; }
   public Intent putExtra(String k, float v) { extras.putFloat(k, v); return this; }
   public Intent putExtra(String k, double v) { extras.putDouble(k, v); return this; }

@@ -97,6 +97,7 @@ XrResult create_instance(HostXr &h, const char *&operation) {
     // XR_HTC_passthrough is only a host-side target and never offered to guests.
     if (environment::passthrough_enabled()) {
       usable.insert("XR_FB_passthrough");
+      usable.insert("XR_META_passthrough_color_lut");
       usable.insert("XR_FB_triangle_mesh");
       usable.insert("XR_HTC_passthrough");
     }

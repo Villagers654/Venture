@@ -43,6 +43,9 @@ public class ActivityManager {
     public long advertisedMem, availMem, totalMem, threshold;
     public boolean lowMemory;
   }
+  public android.content.pm.ConfigurationInfo getDeviceConfigurationInfo() {
+    return new android.content.pm.ConfigurationInfo();
+  }
   public void getMemoryInfo(MemoryInfo out) {
     // Same manifest-selected Quest profile as libc sysinfo and /proc/meminfo.
     out.totalMem = Long.getLong("venture.device.memory", 8L * 1024 * 1024 * 1024);

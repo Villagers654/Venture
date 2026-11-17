@@ -15,20 +15,22 @@ constexpr float pi = std::numbers::pi_v<float>;
 bool close(float a, float b) { return std::abs(a - b) < 0.0001f; }
 bool constant_projection(const ProjectionTexture &texture, std::uint32_t flags) {
   // VrApi_Types.h TexCoordsFromTanAngles maps (tanX,tanY,-1,1) to
-  // (S,T,Q,_) for texture2DProj. TanAngleMatrixFromUnitSquare in
-  // VrApi_Helpers.h can produce zero X/Y scales for a plane at the eye.
-  // With constant S/Q,T/Q and a single edge-clamped texel this is a real
-  // full-view color layer, even when the coordinates lie outside [0,1].
+  // (S,T,Q,_) for texture2DProj. A single edge-clamped texel gives every ray
+  // the same color whatever S/Q,T/Q come to, even outside [0,1], so this is a
+  // real full-view color layer for any finite matrix whose Q is not zero for
+  // every ray. TanAngleMatrixFromUnitSquare in VrApi_Helpers.h gives zero X/Y
+  // scales for a plane at the eye, and a full plane homography elsewhere
+  // (Tales from the Galaxy's Edge's fade, which no frustum describes).
   // CLIP_TO_TEXTURE_RECT would change that coverage; leave it unsupported.
   if (flags & 16 || texture.rect.x != 0 || texture.rect.y != 0 ||
       texture.rect.width != 1 || texture.rect.height != 1)
     return false;
   const auto &m = texture.tan_angles.m;
-  for (int i = 0; i < 3; ++i)
-    if (m[i][0] != 0 || m[i][1] != 0 || m[i][3] != 0 || !std::isfinite(m[i][2]))
-      return false;
-  if (m[2][2] >= 0 || !std::isfinite(m[0][2] / m[2][2]) ||
-      !std::isfinite(m[1][2] / m[2][2]))
+  for (int i = 0; i < 4; ++i)
+    for (int j = 0; j < 4; ++j)
+      if (!std::isfinite(m[i][j])) return false;
+  // Q = m20*tanX + m21*tanY - m22 + m23.
+  if (m[2][0] == 0 && m[2][1] == 0 && m[2][3] == m[2][2])
     return false;
   const auto it = state().rings.find(texture.chain);
   if (it == state().rings.end()) return false;

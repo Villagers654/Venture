@@ -55,16 +55,6 @@ void cancel_object_haptics(const ObjectKey& value) {
   for (const auto &[child, record] : state().objects)
     if (record.parent == value.second && record.parent_type == value.first) cancel_object_haptics(child);
 }
-std::size_t State::ActionReadHash::operator()(const ActionRead &r) const noexcept {
-  std::uint64_t h = key(r.session) * 0x9e3779b97f4a7c15ull;
-  for (const std::uint64_t part : {std::uint64_t(key(r.action)), std::uint64_t(r.path), std::uint64_t(r.type)})
-    h ^= part + 0x9e3779b97f4a7c15ull + (h << 6) + (h >> 2);
-  return h;
-}
-void forget_action_states(bool all) {
-  if (all) state().action_states.clear();
-  ++state().action_sync;
-}
 // Anchor bookkeeping lives with the state it changes, so every user of forget_object
 // (fixtures without spatial.cpp too) links it.
 void forget_spatial_anchor(XrSpace space) { state().anchors.erase(space); }
@@ -73,7 +63,6 @@ bool anchor_locatable(XrSpace space) {
   return found == state().anchors.end() || found->second.locatable;
 }
 void forget_object(const ObjectKey& value) {
-  forget_action_states(true);
   if (value.first == "XrAction") {
     venture::xr::forget_menu_action(reinterpret_cast<XrAction>(value.second));
     venture::xr::forget_grip_action(reinterpret_cast<XrAction>(value.second));
@@ -328,6 +317,10 @@ std::map<std::string, std::uint32_t> capabilities() {
   // Keep the upstream compatibility declaration even without a backend:
   // required-extension games can query unsupported properties and run in VR.
   result["XR_FB_passthrough"] = XR_FB_passthrough_SPEC_VERSION;
+  // Colour LUTs are kept as tables and forwarded to a host that has them;
+  // their creation data holds a pointer the A32 adapter does not translate.
+  if (process_config().isa() == GuestIsa::a64)
+    result["XR_META_passthrough_color_lut"] = XR_META_passthrough_color_lut_SPEC_VERSION;
   // A host-side target for guest XR_FB_passthrough (passthrough.cpp); Quest has no HTC extension.
   result.erase("XR_HTC_passthrough");
   if (process_config().isa() == GuestIsa::a32)
@@ -361,28 +354,6 @@ std::map<std::string, std::uint32_t> capabilities() {
     result["XR_FB_hand_tracking_capsules"] = 3;
     result["XR_FB_hand_tracking_mesh"] = 3;
   }
-  return result;
-}
-// Games read every action every frame (North Star: about 150 reads per frame),
-// and each read was a host runtime call. Chained structures always reach the
-// host; failures are not stored.
-template <class F, HostProcedureName Name, class S>
-XrResult stored_action_state(XrSession session, const XrActionStateGetInfo *info, S *out) {
-  constexpr auto begin = offsetof(S, next) + sizeof(void *);
-  static_assert(sizeof(S) - begin <= sizeof(State::StoredActionState::value));
-  if (info->next || out->next) return host_call<F, Name>(session, info, out);
-  auto &s = state();
-  auto &stored = s.action_states[{session, info->action, info->subactionPath, out->type}];
-  auto *bytes = reinterpret_cast<std::byte *>(out) + begin;
-  if (stored.sync == s.action_sync) {
-    std::memcpy(bytes, stored.value.data(), sizeof(S) - begin);
-    return stored.result;
-  }
-  const auto result = host_call<F, Name>(session, info, out);
-  if (XR_FAILED(result)) return result;
-  stored.sync = s.action_sync;
-  stored.result = result;
-  std::memcpy(stored.value.data(), bytes, sizeof(S) - begin);
   return result;
 }
 namespace guest {
