@@ -144,9 +144,19 @@ void Core::start(bool refresh_library) {
 }
 bool Core::update_available(std::string_view id) const {
   const auto *local = installed(id);
-  auto detail = details_.find(std::string(id));
-  if (!local || detail == details_.end())
+  if (!local)
     return false;
+  auto detail = details_.find(std::string(id));
+  if (detail == details_.end()) {
+    // Until the details are read: a newer version code in the library listing.
+    // Pinned versions have their own id, so they never match a listing here.
+    const auto current = number(Json(local->plan.version_code));
+    uint64_t live = 0;
+    for (const auto &g : games_)
+      if (g.id == id)
+        live = std::max(live, number(Json(g.live_version_code)));
+    return current && live > current;
+  }
   auto live = number(Json(detail->second.version_code)), current = number(Json(local->plan.version_code));
   return live && current ? live > current
                          : (!detail->second.live_id.empty() && detail->second.live_id != local->plan.binary_id);

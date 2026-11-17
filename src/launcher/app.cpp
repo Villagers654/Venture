@@ -143,6 +143,11 @@ App::App(Options options) : Core(std::move(options)) {
     SDL_ShowWindow(window_);
   if (options_.smoke_view == "downloads")
     page_ = 1;
+  // The library searched for the text after ':' (library-search:, library-hover:,
+  // library-menu:), for screenshots of particular cards.
+  if (const auto colon = options_.smoke_view.find(':');
+      options_.smoke_view.starts_with("library-") && colon != std::string::npos)
+    search_ = options_.smoke_view.substr(colon + 1);
   if (options_.smoke_view == "settings" || options_.smoke_view == "settings-end" ||
       options_.smoke_view == "settings-runtime")
     page_ = 2;
@@ -646,7 +651,8 @@ int App::run() {
       const auto& v = options_.smoke_view;
       // A pinned version's page has no game entry of its own.
       const auto* g = game(options_.smoke_select);
-      if (v == "install" && g)
+      // An installed game installs (updates) at once, so it gets no dialog here.
+      if (v == "install" && g && !installed(g->id, false))
         action([&] { request_install(*g); });
       if (options_.smoke_view == "saves") save_import_target_ = options_.smoke_select;
       // The other confirmations and notices, opened for screenshots (nothing is acted on).
