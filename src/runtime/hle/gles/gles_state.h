@@ -62,6 +62,11 @@ struct BufferDataState {
   // OES write maps must preserve unwritten bytes. Only CPU-known contents
   // can seed a shadow; any binding through which the GPU can write opts out.
   bool gpu_writable = false, contents_known = false;
+  // Set by the first write map that keeps the bytes it does not overwrite
+  // (no INVALIDATE bit, including every OES map). Only such maps read the
+  // mirror, so a buffer that always discards its old contents (per-frame
+  // streaming) does not copy each upload a second time to keep one.
+  bool preserving_maps = false;
   std::vector<std::byte> contents;
 };
 struct BufferTextureState {

@@ -124,6 +124,7 @@ static void* map_buffer_impl(GLenum target, std::int64_t offset, std::int64_t le
     forget_contents(*buffers, data);
     data.size = -1;
   }
+  if ((access & GL_MAP_WRITE_BIT) && !(access & invalidate_access)) data.preserving_maps = true;
   bool emulate = (access & GL_MAP_WRITE_BIT) && !(access & ~shadow_access) &&
       offset >= 0 && length > 0 && buffer_state(target, data) &&
       offset <= data.size && length <= data.size - offset;
@@ -293,7 +294,8 @@ GLboolean unmap_buffer(GLenum target) {
         target, m.offset, m.length, g2h(m.shadow->address()));
     result = capture_gl_errors() ? GL_TRUE : GL_FALSE;
     auto &data = buffers->data[name];
-    if (result && !data.gpu_writable) {
+    // Only maps that keep unwritten bytes read the mirror; without one, skip the second copy.
+    if (result && !data.gpu_writable && data.preserving_maps) {
       try {
         if (!m.offset && m.length == m.size) {
           data.contents_known = resize_contents(*buffers, data, m.size);
@@ -315,7 +317,9 @@ GLboolean unmap_buffer(GLenum target) {
     // The first full native map seeds the mirror, including OES write-only
     // maps whose native staging storage preserves unwritten bytes. Explicit
     // flush maps cannot seed it: unflushed writes do not belong to the store.
-    if (!data.gpu_writable && !m.offset && m.length == m.size &&
+    // Nor do buffers no map has needed it for: the copy reads mapped (often
+    // write-combined) memory.
+    if (!data.gpu_writable && data.preserving_maps && !m.offset && m.length == m.size &&
         !(m.access & GL_MAP_FLUSH_EXPLICIT_BIT) && resize_contents(*buffers, data, m.size)) {
       std::memcpy(data.contents.data(), m.host, m.length);
       data.contents_known = true;
