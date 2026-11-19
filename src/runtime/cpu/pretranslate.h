@@ -21,6 +21,19 @@ void flush_reached() noexcept;
 // Process exit: workers finish their current block and stop.
 void stop() noexcept;
 
+// Before a game's first launch (venture-runtime --prepare), with its libraries loaded and no
+// guest code running: translates the function entries of every loaded image and their
+// successors until nothing is left, `block_limit` blocks are explored (0: no limit) or `stop`
+// returns true, then writes the cache. A pass that ran out of work records every block
+// explored, as an idle game run does; a limited or stopped one leaves the rest to the game's
+// own background translation (complete is true for a limited pass). False if background
+// translation is off (no block cache, A32, VENTURE_JIT_AOT=0).
+struct PrepareResult {
+  std::uint64_t translated = 0, failed = 0, explored = 0;
+  bool complete = false, limited = false;
+};
+bool prepare(bool (*stop)(void*), void* context, std::uint64_t block_limit, PrepareResult& result) noexcept;
+
 namespace detail {
 // The function entries in the unwind information of PT_GNU_EH_FRAME [hdr, hdr + size)
 // that lie in `code`, `segments` being the image's PT_LOADs ([begin, end) each).

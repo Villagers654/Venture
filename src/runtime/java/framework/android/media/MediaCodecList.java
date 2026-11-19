@@ -25,4 +25,9 @@ public final class MediaCodecList {
     return null;
   }
   public String findEncoderForFormat(MediaFormat format) { return null; }
+  /** The listed decoder for a media type, or null when MediaCodec cannot decode it. */
+  static MediaCodecInfo decoderFor(String mime) {
+    for (var info : DECODERS) if (info.getSupportedTypes()[0].equalsIgnoreCase(mime)) return info;
+    return null;
+  }
 }

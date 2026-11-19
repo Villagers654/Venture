@@ -34,6 +34,29 @@ TEST_CASE("A @CriticalNative guest native gets its parameters without JNIEnv* an
   CHECK(std::bit_cast<std::uint64_t>(mixed.doubles[0]) == std::bit_cast<std::uint32_t>(1.5f));
   CHECK(mixed.doubles[1] == 2.5);
 }
+TEST_CASE("AAPCS64 host natives take eight integer registers before the stack") {
+  // (IIIIIIIJD)V from a Linux AArch64 JVM: JNIEnv*, jclass and six parameters in
+  // x0-x7, the seventh and the long on the stack, the double in d0.
+  HostArguments host;
+  host.gp = {0x1000, 0x2000, 1, 2, 3, 4, 5, 6};
+  host.fp[0] = std::bit_cast<std::uint64_t>(0.5);
+  std::uint64_t spill[]{7, 0x1122334455667788ull};
+  host.stack = spill;
+  const auto d = Descriptor::parse("(IIIIIIIJD)V");
+  const auto out = native_arguments(d, host, HostAbi::Aapcs64, 0xe000);
+  CHECK(out.integers == std::vector<std::uint64_t>{0xe000, 0x2000, 1, 2, 3, 4, 5, 6});
+  CHECK(out.stack == std::vector<std::uint64_t>{7, 0x1122334455667788ull});
+  REQUIRE(out.doubles.size() == 1);
+  CHECK(out.doubles[0] == 0.5);
+  // System V reads the same call with six integer registers: x6/x7 are not arguments there.
+  std::uint64_t sysv_spill[]{5, 6, 7, 0x1122334455667788ull};
+  host.stack = sysv_spill;
+  const auto sysv = native_arguments(d, host, HostAbi::SysV, 0xe000);
+  CHECK(sysv.integers == out.integers);
+  CHECK(sysv.stack == out.stack);
+  CHECK(host_gp_registers(HostAbi::Aapcs64) == 8);
+  CHECK(host_gp_registers(HostAbi::SysV) == 6);
+}
 TEST_CASE("JNI mangling round-trips escaped underscores, arrays, Unicode and empty overloads") {
   std::u16string owner = u"com/example/Cl_ass\u03bb";
   std::u16string name = u"foo_bar\U0001F600";

@@ -31,7 +31,9 @@
 #include "core/wait.h"
 #include "cpu/state.h"
 #include "cpu/block_list.h"
+#include "cpu/a32_backend.h"
 #include "cpu/pretranslate.h"
+#include <dynarmic/interface/profiling.h>
 #include "core/guest_call32.h"
 #include "common/log.h"
 #include "common/environment.h"
@@ -197,6 +199,7 @@ void GuestThread::attach_locked() {
   if (!r.name.empty()) platform::name_native_thread(tid_, r.name);  // named before it ran
   r.previous = current_thread;
   current_thread = this;
+  Dynarmic::SetCompileMarker(&jit_compiling);
   live_threads.emplace(tid_, this);
   frame_cpu::attach(tid_);
   profile::attach(*this);
@@ -229,6 +232,7 @@ void GuestThread::detach_from_current_host_thread() {
     live_threads.erase(tid_);
     platform::unbind_thread_priority(tid_);
     current_thread = resources.at(this).previous;
+    Dynarmic::SetCompileMarker(current_thread ? &current_thread->jit_compiling : nullptr);
     if (cpu_) retired_hints = cpu_->detach_jit_hints();
     cpu_.reset();
     if (mutex_owner_index_) {
@@ -331,6 +335,17 @@ void GuestThread::run_until_return(int depth) {
   try { (this->*run_impl_)(depth); }
   catch (...) { _mm_setcsr(host_mxcsr); throw; }
   _mm_setcsr(host_mxcsr);
+#elif defined(__aarch64__)
+  // FPCR holds the controls and FPSR the sticky flags. Engines load the guest
+  // FPCR while guest code runs and accumulate the guest flags in the CPU state,
+  // but leave them in the hardware FPSR on exit; the host gets both back.
+  std::uint64_t host_fpcr, host_fpsr;
+  __asm__ volatile("mrs %0, fpcr\n\tmrs %1, fpsr" : "=r"(host_fpcr), "=r"(host_fpsr));
+  __asm__ volatile("msr fpsr, xzr");
+  const auto restore = [&] { __asm__ volatile("msr fpcr, %0\n\tmsr fpsr, %1" : : "r"(host_fpcr), "r"(host_fpsr)); };
+  try { (this->*run_impl_)(depth); }
+  catch (...) { restore(); throw; }
+  restore();
 #else
   (this->*run_impl_)(depth);
 #endif
@@ -634,6 +649,7 @@ void flush_guest_process_files(int status) {
   }
   platform::notify_runtime_exit_wait(platform::RuntimeExitWait::profiler_flush, status);
   hle::write_census();
+  write_jit_code_stats();
   // A terminal exit ends the process without atexit: write the profile and
   // invalidation reports here, so a fatal exit keeps its diagnostics.
   api_result_trace::flush();
@@ -767,6 +783,13 @@ std::vector<std::pair<std::int32_t, std::string>> list() {
   std::vector<std::pair<std::int32_t, std::string>> out;
   for (auto [tid, thread] : live_threads) out.emplace_back(tid, resources.at(thread).name);
   return out;
+}
+bool try_list(std::vector<std::pair<std::int32_t, std::string>>& out) {
+  RegistryLock lock(registry_mutex, std::try_to_lock);
+  if (!lock.owns_lock()) return false;
+  out.clear();
+  for (auto [tid, thread] : live_threads) out.emplace_back(tid, resources.at(thread).name);
+  return true;
 }
 std::size_t count() {
   RegistryLock lock(registry_mutex);

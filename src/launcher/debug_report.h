@@ -12,6 +12,10 @@ struct DebugReport {
   std::string game;         // its name, when known
   std::string app_id;       // its library id, which keys its own settings; empty: global settings only
   fs::path plan;            // its installation manifest, when installed
+  // On a headset: the headset check (headset_play.h) and the logs of the
+  // Venture libraries inside the game.
+  std::string headset;
+  std::vector<fs::path> headset_logs;
   // Text removed wherever it appears: account ids, keys, aliases and names.
   std::vector<std::string> private_text;
 };
@@ -29,6 +33,8 @@ struct DebugReport {
 // The home folder, user and computer names, account details and anything
 // shaped like a token are removed; credentials and crash dumps are never read.
 fs::path write_debug_report(const DebugReport &request);
+// The package of the most recently written runtime log: the last game launched.
+std::string latest_launched_package(const fs::path &data);
 // Uploads a written report to dpaste.com as an unlisted paste that expires
 // after 90 days and returns its link. Throws when it cannot.
 std::string upload_debug_report(const fs::path &file, std::stop_token stop = {});

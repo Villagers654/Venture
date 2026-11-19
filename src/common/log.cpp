@@ -1,11 +1,15 @@
 #include "common/log.h"
 #include "common/paths.h"
+#ifdef __ANDROID__
+#include <android/log.h>
+#endif
 
 #include <atomic>
 #include <algorithm>
 #include <chrono>
 #include <cerrno>
 #include <cstdio>
+#include <cstring>
 #include <fcntl.h>
 #include <sys/stat.h>
 #ifdef _WIN32
@@ -123,6 +127,17 @@ void emit(Level level, std::string_view tag, std::string_view message, Clock::ti
               : std::format("{:>10}.{:03} {:>5} {} [{}] {}\n", now / 1000, now % 1000, tid,
                             kNames[static_cast<int>(level)], tag, message);
   const bool important = level >= Level::warn;
+#ifdef __ANDROID__
+  // Android discards an app's stderr: lines at the log level also go to logcat.
+  if (level >= g_level.load()) {
+    const int priority = level >= Level::error ? ANDROID_LOG_ERROR
+                         : level >= Level::warn ? ANDROID_LOG_WARN
+                         : level >= Level::info ? ANDROID_LOG_INFO
+                                                : ANDROID_LOG_DEBUG;
+    __android_log_print(priority, "Venture", "[%.*s] %.*s", static_cast<int>(tag.size()), tag.data(),
+                        static_cast<int>(message.size()), message.data());
+  }
+#endif
   if (g_console.stream && level >= g_level.load()) {
     std::fwrite(line.data(), 1, line.size(), g_console.stream);
     std::fflush(g_console.stream); // Console output must be live, not file-buffered.
@@ -319,6 +334,22 @@ void crash_write(const char* bytes, std::size_t size) noexcept {
     write_pending();
   if (g_file >= 0) raw_write(g_file, bytes, size);
   raw_write(2, bytes, size);
+}
+
+namespace {
+char g_fatal_reason[1024];
+std::atomic<int> g_fatal_reason_state{0};  // 0 empty, 1 writing, 2 set
+}  // namespace
+void set_fatal_reason(std::string_view reason) noexcept {
+  int expected = 0;
+  if (!g_fatal_reason_state.compare_exchange_strong(expected, 1, std::memory_order_acq_rel)) return;
+  const auto size = std::min(reason.size(), sizeof(g_fatal_reason) - 1);
+  std::memcpy(g_fatal_reason, reason.data(), size);
+  g_fatal_reason[size] = '\0';
+  g_fatal_reason_state.store(2, std::memory_order_release);
+}
+const char* fatal_reason() noexcept {
+  return g_fatal_reason_state.load(std::memory_order_acquire) == 2 ? g_fatal_reason : "";
 }
 
 void set_flush_interval(std::chrono::milliseconds interval) {

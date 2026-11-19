@@ -77,6 +77,35 @@ if os.name == 'nt':
     assert 'E [host-stack]   #0 unknown+0x0' in text, text
     assert re.search(r'E \[host-stack\]   #1 venture_crash_report_child\.exe\+0x', text), text
 if os.name == 'nt':
+    # Deliberate stops end through __fastfail, which no exception handler sees:
+    # the report must still name the stop, walk the stack and write a dump.
+    for mode, reason in (('abort', 'abort() was called'),
+                         ('fatal-reason', 'std::terminate was called: JIT assertion failed: fixture (Unreachable code!)'),
+                         ('invalid-parameter', 'the C runtime was passed an invalid parameter')):
+        code, text = run(mode, 0)
+        assert code & 0xFFFFFFFF == 0xC0000409, (mode, code, text)
+        assert re.search(r'E \[runtime\] Host abort: ' + re.escape(reason) + r' \(thread \d+\)', text), (mode, text)
+        assert 'E [host-stack]   #0 ' in text and 'Crash dump:' in text, (mode, text)
+    # An exception that leaves a thread reaches the unhandled exception filter
+    # through the unwinder's own exception code.
+    code, text = run('thread-exception', 0)
+    assert re.search(r'E \[runtime\] Host exception 0x20474343 at ', text), text
+    # A __fastfail ends the process before any handler; the supervisor reads
+    # Windows Error Reporting's record instead, where the service records one.
+    log = root / 'fastfail-0.log'
+    process = subprocess.run([child, str(log), 'fastfail', '0'], env=env, stdout=subprocess.PIPE, timeout=45)
+    assert process.returncode & 0xFFFFFFFF == 0xC0000409, process.returncode
+    assert 'Host ' not in log.read_text(encoding='utf-8')
+    pid = int(process.stdout.split()[0])
+    lookup = subprocess.run([child, str(root / 'wer-lookup.log'), 'wer-lookup', str(pid)], env=env,
+                            stdout=subprocess.PIPE, text=True, timeout=45)
+    assert lookup.returncode == 0, lookup
+    record = lookup.stdout.strip()
+    if record:
+        assert re.match(r'Windows Error Reporting: exception 0xc0000409 in venture_crash_report_child\.exe\+0x[0-9a-f]+', record), record
+    else:
+        print('Windows Error Reporting recorded no event for the fail-fast fixture (service off or throttled)')
+if os.name == 'nt':
     for mode in ('jit64', 'jit32'):
         code, text = run(mode, 0)
         assert code & 0xFFFFFFFF == 0xC0000005, (code, text)

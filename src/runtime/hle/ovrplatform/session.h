@@ -56,6 +56,12 @@ class Session {
   bool initialized() const;
   Id logged_in_user_id() const;
   void set_microphone_mute(VoipMuteState);
+  // The game is running for the signed-in account: Meta's presence heartbeat
+  // (/user_heartbeat with the game's app id) runs from now until shutdown, on
+  // the interval Meta's server asks for, as the headset reports the app it is
+  // in, whether or not the game ever sets rich presence. Meta counts the time
+  // its players spend in an app from what the headset reports.
+  void report_playing();
   VoipMuteState microphone_mute() const;
   Request request(const RequestSpec&);
   Request request(const RequestSpec&, RequestArgs);

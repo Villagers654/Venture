@@ -295,4 +295,117 @@ std::vector<std::uint32_t> sample_subpass_inputs(std::span<const std::uint32_t> 
   out[3] = bound;
   return out;
 }
+// A subpassInputMS whose attachment has one sample: Adreno reads its only
+// sample, but the SPIR-V is invalid for that attachment, and once it is read as
+// a sampled image (above) a multisampled fetch goes to a single-sampled image
+// descriptor (VUID-RuntimeSpirv-samples-08726): undefined, and on AMD's
+// hardware a multisampled load also reads the descriptor's multisample
+// metadata. UE4's mobile depth fetch (GENERATED_SubpassDepthFetchAttachment in
+// Moss) is declared multisampled and bound to a one-sample depth attachment.
+// The type loses MS and the read its Sample operand, which reads the same
+// (only) sample. An image type shared with an input that is multisampled, an
+// array of subpass inputs, and reads with operands other than Sample are left
+// as they are.
+std::vector<std::uint32_t> single_sample_subpass_inputs(std::span<const std::uint32_t> code,
+                                                        std::uint32_t single_sampled) {
+  enum : std::uint32_t {
+    OpName = 5, OpTypeImage = 25, OpTypeArray = 28, OpTypeRuntimeArray = 29, OpTypePointer = 32, OpTypeFunction = 33,
+    OpFunctionParameter = 55, OpVariable = 59, OpLoad = 61, OpDecorate = 71, OpImageRead = 98
+  };
+  constexpr std::uint32_t InputAttachmentIndex = 43, SubpassData = 6, SampleOperand = 0x40;
+  if (!single_sampled || code.size() < 5 || code[0] != 0x07230203) return {};
+  std::unordered_map<std::uint32_t, std::size_t> ms_types;  // multisampled subpass image type -> word offset
+  std::vector<std::size_t> images;                          // every OpTypeImage
+  std::unordered_map<std::uint32_t, std::uint32_t> pointee, element, variable_pointer, index_of, loads;
+  for (std::size_t i = 5; i < code.size();) {
+    const auto n = code[i] >> 16, op = code[i] & 0xffff;
+    if (!n || i + n > code.size()) return {};
+    if (op == OpTypeImage && n >= 9) {
+      images.push_back(i);
+      if (code[i + 3] == SubpassData && code[i + 6] == 1) ms_types[code[i + 1]] = i;
+    } else if (op == OpTypePointer && n == 4) {
+      pointee[code[i + 1]] = code[i + 3];
+    } else if ((op == OpTypeArray && n == 4) || (op == OpTypeRuntimeArray && n == 3)) {
+      element[code[i + 1]] = code[i + 2];
+    } else if (op == OpVariable && n >= 4) {
+      variable_pointer[code[i + 2]] = code[i + 1];
+    } else if (op == OpDecorate && n == 4 && code[i + 2] == InputAttachmentIndex) {
+      index_of[code[i + 1]] = code[i + 3];
+    } else if (op == OpLoad && n >= 4 && ms_types.contains(code[i + 1])) {
+      loads[code[i + 2]] = code[i + 1];
+    }
+    i += n;
+  }
+  if (ms_types.empty()) return {};
+  // A type changes only when every variable of it reads a single-sampled attachment.
+  std::unordered_map<std::uint32_t, bool> convert;
+  for (const auto& [variable, pointer] : variable_pointer) {
+    const auto p = pointee.find(pointer);
+    if (p == pointee.end()) continue;
+    auto type = p->second;
+    bool array = false;
+    if (const auto e = element.find(type); e != element.end()) {
+      type = e->second;
+      array = true;
+    }
+    if (!ms_types.contains(type)) continue;
+    const auto index = index_of.find(variable);
+    const bool single = !array && index != index_of.end() && index->second < 32 && (single_sampled >> index->second & 1);
+    const auto [it, inserted] = convert.emplace(type, single);
+    if (!inserted) it->second = it->second && single;
+  }
+  std::erase_if(convert, [](const auto& c) { return !c.second; });
+  if (convert.empty()) return {};
+  // A single-sampled type the module already declares (a subpassInput beside
+  // the subpassInputMS) would duplicate the changed one, which is invalid for
+  // non-aggregate types: the later declaration goes, its uses name the earlier.
+  // Those may only be where a type is expected below; otherwise the module is
+  // left as it is.
+  std::unordered_map<std::uint32_t, std::uint32_t> remap;
+  for (const auto& [type, ok] : convert) {
+    const auto t = ms_types[type];
+    const auto n = code[t] >> 16;
+    for (const auto at : images) {
+      if (at == t || (code[at] >> 16) != n || code[at + 6] != 0) continue;
+      bool same = true;
+      for (std::uint32_t w = 2; w < n && same; ++w) same = w == 6 || code[at + w] == code[t + w];
+      if (!same) continue;
+      if (at < t) remap[type] = code[at + 1];
+      else remap[code[at + 1]] = type;
+    }
+  }
+  auto replace = [&](std::uint32_t& id) {
+    if (auto it = remap.find(id); it != remap.end()) id = it->second;
+  };
+  std::vector<std::uint32_t> out(code.begin(), code.begin() + 5);
+  out.reserve(code.size());
+  for (std::size_t i = 5; i < code.size();) {
+    const auto n = code[i] >> 16, op = code[i] & 0xffff;
+    if ((op == OpTypeImage || op == OpName || op == OpDecorate) && n >= 2 && remap.contains(code[i + 1])) {
+      // Replaced by the declared single-sampled type, with its name and decorations.
+    } else if (op == OpTypeImage && convert.contains(code[i + 1])) {
+      out.insert(out.end(), code.begin() + i, code.begin() + i + n);
+      out[out.size() - n + 6] = 0;  // MS
+    } else if (!remap.empty() && (op == OpTypePointer || op == OpLoad || op == OpFunctionParameter ||
+                                  op == OpTypeFunction)) {
+      out.insert(out.end(), code.begin() + i, code.begin() + i + n);
+      const auto at = out.size() - n;
+      if (op == OpTypePointer) replace(out[at + 3]);
+      if (op == OpLoad || op == OpFunctionParameter) replace(out[at + 1]);
+      if (op == OpTypeFunction)
+        for (std::uint32_t w = 2; w < n; ++w) replace(out[at + w]);
+    } else if (!remap.empty() && op != OpImageRead && op != OpName && op != OpDecorate &&
+               std::any_of(code.begin() + i + 1, code.begin() + i + n,
+                           [&](std::uint32_t w) { return remap.contains(w); })) {
+      return {};  // a use this does not know (or a literal that looks like one)
+    } else if (op == OpImageRead && n >= 6 && loads.contains(code[i + 3]) && convert.contains(loads[code[i + 3]])) {
+      if (code[i + 5] != SampleOperand || n != 7) return {};
+      out.insert(out.end(), {(5u << 16) | OpImageRead, code[i + 1], code[i + 2], code[i + 3], code[i + 4]});
+    } else {
+      out.insert(out.end(), code.begin() + i, code.begin() + i + n);
+    }
+    i += n;
+  }
+  return out;
+}
 }  // namespace venture::vulkan

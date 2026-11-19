@@ -8,6 +8,7 @@
 #include "xr/clock.h"
 #include "xr/desktop_mirror.h"
 #include "xr/dev_dump.h"
+#include "xr/sanitize.h"
 #include <deque>
 #include <cstring>
 #include <mutex>
@@ -108,6 +109,10 @@ void remember_display_period(std::int64_t) {}
 void remember_eye_fov(const std::array<XrFovf, 2>&) {}
 void remember_host_rates(float, const std::vector<float>&) {}
 void dev_dump_frame(const XrFrameEndInfo*, XrResult) {}
+std::size_t dev_forget_parked_swapchains() { return 0; }
+// The fixture's host locates no views, so projection layers are never fitted to a host field of view.
+std::optional<std::array<XrFovf, 2>> located_stereo_fov() { return std::nullopt; }
+void forget_located_stereo_fov() {}
 void note_menu_profiles_changed(XrSession) {}
 // No desktop mirror window in the fixture.
 bool mirror_ready() { return false; }
@@ -133,6 +138,10 @@ XrResult XRAPI_CALL xrLocateSpace(XrSpace, XrSpace, XrTime, XrSpaceLocation* loc
   return XR_SUCCESS;
 }
 XrResult XRAPI_CALL xrLocateViews(XrSession, const XrViewLocateInfo*, XrViewState*, std::uint32_t, std::uint32_t*, XrView*) { return XR_ERROR_FUNCTION_UNSUPPORTED; }
+XrResult XRAPI_CALL xrGetViewConfigurationProperties(XrInstance, XrSystemId, XrViewConfigurationType, XrViewConfigurationProperties* out) {
+  out->fovMutable = XR_TRUE;
+  return XR_SUCCESS;
+}
 XrResult XRAPI_CALL xrEnumerateViewConfigurationViews(XrInstance, XrSystemId, XrViewConfigurationType,
     std::uint32_t capacity, std::uint32_t* count, XrViewConfigurationView* out) {
   *count = 2;

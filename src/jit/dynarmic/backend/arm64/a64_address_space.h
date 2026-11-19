@@ -8,6 +8,9 @@
 
 #pragma once
 
+#include <utility>
+#include <vector>
+
 #include "dynarmic/backend/arm64/address_space.h"
 #include "dynarmic/backend/block_range_information.h"
 #include "dynarmic/interface/A64/config.h"
@@ -28,11 +31,20 @@ protected:
     friend class A64Core;
 
     void EmitPrelude();
+    bool RegisterCacheEnabled() const;
+    void EmitRegisterCacheLoad();
+    void EmitRegisterCacheStore();
     EmitConfig GetEmitConfig() override;
     void RegisterNewBasicBlock(const IR::Block& block, const EmittedBlockInfo& block_info) override;
+    u64 DescriptorPC(IR::LocationDescriptor descriptor) const override;
+    bool IsA32() const override { return false; }
+    std::string FriendlyName(IR::LocationDescriptor descriptor) const override;
+    void ClearBlockRanges() override { block_ranges.ClearCache(); }
 
     const A64::UserConfig conf;
     BlockRangeInformation<u64> block_ranges;
+    // Venture: the outlined atomic helpers the block being compiled translated in place.
+    mutable std::vector<std::pair<u64, u64>> inlined_code;
 };
 
 }  // namespace Dynarmic::Backend::Arm64

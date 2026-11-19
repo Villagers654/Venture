@@ -1,4 +1,5 @@
 #include "xr/eye_scale.h"
+#include "xr/system_keyboard.h"
 #include "common/environment.h"
 #include "common/log.h"
 #include "common/paths.h"
@@ -25,7 +26,13 @@
 #include "platform/crash_report.h"
 #include "platform/runtime_child.h"
 #include "platform/runtime_stop.h"
+#include "platform/thread_priority.h"
 #include "common/process.h"
+#include "common/first_launch.h"
+#include "common/file_ops.h"
+#include "cpu/portable_cache.h"
+#include "cpu/pretranslate.h"
+#include "host_check.h"
 #include <chrono>
 #include <condition_variable>
 #include <mutex>
@@ -96,6 +103,10 @@ std::unique_ptr<venture::ovrplatform::Session> register_libraries(const std::fil
   // the Horizon OS supplement belongs to an installed Android application's
   // framework, not that minimal JVM.
   if (!game.empty()) venture::java::install_horizon_bridge(*session);
+  // The system keyboard games open through InputMethodManager.
+  if (!game.empty()) venture::xr::keyboard::install_java_bridge();
+  // An installed game: Meta hears it is being played, as from a headset.
+  if (!game.empty()) session->report_playing();
   return session;
 }
 struct Shutdown {
@@ -147,7 +158,26 @@ void report_foreign_worker_exit(const venture::platform::RuntimeChildResult& res
   // Process.Kill): a game on Virtual Desktop's own OpenXR runtime ended so,
   // its mirror window asked to close first, when SteamVR started.
   const auto status = static_cast<std::uint32_t>(result.status);
-  if (status > 255 && (status & 0xF0000000u) != 0xC0000000u)
+  if ((status & 0xF0000000u) == 0xC0000000u) {
+    // Venture's crash report names host exceptions and deliberate stops
+    // (platform/win32/crash_report.cpp). A __fastfail in a host library (a
+    // runtime or driver DLL with its own C runtime, or a /GS stack check)
+    // ends the process before any handler runs: only the system recorded it.
+    const auto log_file = venture::log::file();
+    const auto tail = log_file.empty() ? std::string{} : venture::tail_log(venture::paths::from_utf8(log_file), 64 * 1024);
+    if (tail.find(" E [runtime] Host exception ") != std::string::npos ||
+        tail.find(" E [runtime] Host abort: ") != std::string::npos)
+      return;
+    const auto record = venture::platform::system_crash_record(result.worker_pid, std::chrono::seconds(5));
+    const char* kind = status == 0xC0000409u ? " (a fail-fast stop, which no crash handler sees)" : "";
+    if (!record.empty())
+      venture::log::error("runtime", "The app process ended with status 0x{:08X}{}. {}", status, kind, record);
+    else
+      venture::log::error("runtime", "The app process ended with status 0x{:08X}{} and left no crash report; "
+                          "the system recorded no details either", status, kind);
+    return;
+  }
+  if (status > 255)
     venture::log::error("runtime", "The app process ended with status 0x{:08X} outside Venture's exit paths "
                         "(another program, a host library or the Java runtime ended it)", status);
 }
@@ -216,8 +246,145 @@ jobject start_java(const std::filesystem::path& home, std::vector<std::string> c
   env->DeleteLocalRef(type);
   return loader;
 }
+constexpr const char* kPreparationPid = "prepare.pid";
+constexpr std::uint64_t kPrepareBlocks = 0;
+// A launch that its launcher did not stop the game's preparation for (a Steam shortcut, the
+// command line): the preparation holds the block cache's lock, and the game would keep none of
+// the code it translates. It stops on request within milliseconds (or once a Java conversion
+// it runs finishes).
+void stop_preparation() {
+  const auto& cache = venture::process_config().cache_dir;
+  const auto lock_file = cache / "jit-blocks" / "ptc.lock";
+  std::error_code error;
+  if (!std::filesystem::exists(cache / kPreparationPid, error) || !std::filesystem::exists(lock_file, error)) return;
+  const auto held = [&] {
+    try { venture::FileLock lock(lock_file, false); return false; } catch (...) { return true; }
+  };
+  if (!held()) return;
+  std::uint32_t pid = 0;
+  try { pid = static_cast<std::uint32_t>(std::stoul(venture::paths::read(cache / kPreparationPid, 32))); } catch (...) { return; }
+  if (!pid || pid == venture::current_process_id() || !venture::platform::request_runtime_stop(pid)) return;
+  venture::log::info("launch", "Stopping this game's first-launch preparation (process {})", pid);
+  for (int i = 0; i < 600 && held(); ++i) std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  if (held()) venture::log::warn("launch", "The first-launch preparation still holds the translated code cache");
+}
+// venture-runtime --prepare: a first launch's one-time work, which the launcher runs
+// right after an install while the player is still in the launcher, so the first
+// launch starts like a later one. Runs no guest code, opens no device or window, and
+// makes no platform or network calls: the native libraries are extracted, the APK's
+// Java converted and verified, and the libraries' code translated into the block
+// cache. The process runs at the OS's idle priority and stops at once when asked to
+// (the launcher's stop request, or the launcher exiting); every cache it writes is
+// atomic or checked per record, so a stop at any point leaves nothing a launch
+// cannot use. prepared.json in the game's cache directory records the result.
+// Blocks translated before a first launch: VENTURE_PREPARE_BLOCKS, 0 for no limit.
+std::uint64_t prepare_block_limit() {
+  const auto* value = venture::environment::getenv("VENTURE_PREPARE_BLOCKS");
+  return value ? std::strtoull(value, nullptr, 10) : kPrepareBlocks;
+}
+int prepare_game(const std::filesystem::path& game, const std::string& package, const std::string& account,
+                 std::uint32_t parent_pid) {
+  venture::platform::enter_background_process_mode();
+  venture::platform::RuntimeStop stop(parent_pid);
+  using clock = std::chrono::steady_clock;
+  const auto began = clock::now();
+  const auto since = [](clock::time_point from) { return std::chrono::duration<double>(clock::now() - from).count(); };
+  venture::configure_game(game, package, account.empty() ? "local" : account);
+  auto& config = venture::process_config();
+  venture::AddressSpace::get().initialize(config.isa());
+  venture::Json stamp{{"runtime", venture::first_launch::runtime_identity(venture::paths::executable())}, {"complete", false}};
+  const auto stamp_file = config.cache_dir / venture::first_launch::kStampName;
+  const auto save_stamp = [&] {
+    try { venture::paths::atomic_write(stamp_file, stamp.dump(1) + "\n"); }
+    catch (const std::exception& e) { venture::log::warn("prepare", "Cannot record the preparation: {}", e.what()); }
+  };
+  save_stamp();  // started: a stopped preparation is resumed later
+  // Where a launch finds this process to stop it (stop_preparation).
+  const auto pid_file = config.cache_dir / kPreparationPid;
+  venture::paths::atomic_write(pid_file, std::to_string(venture::current_process_id()));
+  struct RemovePid {
+    std::filesystem::path file;
+    ~RemovePid() { std::error_code e; std::filesystem::remove(file, e); }
+  } remove_pid{pid_file};
+  // The block cache's lock from the start, so a launch that begins meanwhile finds it held and
+  // stops this process (stop_preparation) instead of running without a writable cache.
+  auto* blocks = config.isa() == venture::GuestIsa::a64 ? venture::PortableBlockCache::get() : nullptr;
+  venture::log::info("prepare", "Preparing the first launch of {} ({})", config.package, config.version_code);
+  auto step = clock::now();
+  const auto libraries = venture::extract_native_libraries();
+  stamp["libraries_s"] = since(step);
+  venture::log::info("prepare", "Native libraries ready in {:.1f} s", since(step));
+  if (stop.requested()) return save_stamp(), 0;
+  // Java conversion runs in its own (inherited idle priority) JVM while this process
+  // translates native code beside it.
+  bool java_ok = !config.has_code;
+  double java_seconds = 0;
+  std::jthread java;  // joined before anything it sets is read, also on an exception
+  if (config.has_code)
+    java = std::jthread([&] {
+      const auto begin = clock::now();
+      const auto support = venture::java::support_files();
+      venture::java::ConversionOptions conversion;
+      conversion.java = venture::paths::utf8(support.dex_java);
+      conversion.tools = venture::paths::utf8(support.dex_tools);
+      conversion.apk = venture::paths::utf8(config.apk);
+      conversion.package = config.package;
+      conversion.cache = venture::paths::utf8(config.cache_dir / "java");
+      conversion.framework_jars = {venture::paths::utf8(support.framework), venture::paths::utf8(support.bridge)};
+      conversion.hierarchy_metadata = {venture::paths::utf8(support.hierarchy)};
+      venture::java::ConvertedApk converted;
+      std::string error;
+      // Unresolved optional dependencies are the launch's to report; the cache is ready either way.
+      java_ok = venture::java::convert_apk(conversion, &converted, &error) || converted.translation_complete;
+      java_seconds = since(begin);
+      venture::log::info("prepare", "APK Java {} in {:.1f} s", java_ok ? "converted and verified" : "not converted", java_seconds);
+    });
+  bool code_ok = !blocks || blocks->accepting();  // held by a running launch: not done
+  if (blocks && blocks->accepting()) {
+    step = clock::now();
+    venture::freeze_process_isa();
+    // The libraries load where a launch loads them (each name has its own slot), relocated
+    // but never initialized, as for --inspect.
+    auto platform_session = register_libraries({});
+    venture::Linker::get().set_search_paths({venture::paths::utf8(config.native_lib_dir)});
+    venture::linker_set_inspection(true);
+    for (const auto& path : libraries) {
+      char magic[4]{};
+      std::ifstream(path, std::ios::binary).read(magic, sizeof(magic));
+      bool loadable = std::memcmp(magic, "\177ELF", sizeof(magic)) == 0;
+      try { loadable = loadable && venture::elf::detect_isa(path) == config.isa(); } catch (const std::exception&) { loadable = false; }
+      if (loadable && !venture::Linker::get().open(venture::paths::utf8(path.filename()), venture::kRtldNow | venture::kRtldGlobal, nullptr))
+        venture::log::info("prepare", "{} not translated: {}", venture::paths::utf8(path.filename()), venture::Linker::get().take_error());
+    }
+    venture::pretranslate::PrepareResult result;
+    code_ok = venture::pretranslate::prepare([](void* s) { return static_cast<venture::platform::RuntimeStop*>(s)->requested(); },
+                                             &stop, prepare_block_limit(), result) && result.complete;
+    stamp["translation_s"] = since(step);
+    stamp["translated_blocks"] = result.translated;
+    venture::log::info("prepare", "Native code: {} blocks translated, {} explored, {} failed in {:.1f} s{}", result.translated,
+                       result.explored, result.failed, since(step),
+                       result.limited ? " (limit reached)" : result.complete ? "" : " (stopped)");
+  }
+  if (java.joinable()) java.join();
+  if (config.has_code) stamp["java_s"] = java_seconds;
+  stamp["complete"] = java_ok && code_ok && !stop.requested();
+  stamp["seconds"] = since(began);
+  save_stamp();
+  venture::log::info("prepare", "First launch of {} {} in {:.1f} s", config.package,
+                     stamp["complete"] == true ? "prepared" : "partly prepared", since(began));
+  return 0;
+}
 }  // namespace
 
+#ifdef _WIN32
+// Hybrid-graphics PCs: ask the drivers for the dedicated GPU, which the host
+// VR runtime renders on. Each driver reads its export from the executable;
+// others ignore both, and the system's graphics settings still override them.
+extern "C" {
+__declspec(dllexport) unsigned long NvOptimusEnablement = 1;
+__declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 1;
+}
+#endif
 int main(int argc, char** argv) {
   if (auto status = venture::platform::run_runtime_dump_helper(argc, argv))
     venture::platform::terminate_runtime_process(*status);
@@ -231,7 +398,7 @@ int main(int argc, char** argv) {
     std::string package, logfile;
     std::string account_key;
     std::uintptr_t credential_read = 0, credential_write = 0;
-    bool inspect = false, boot_native = false, defer_gpu = false, test_a32_memory = false;
+    bool inspect = false, boot_native = false, defer_gpu = false, test_a32_memory = false, prepare = false;
     bool leaderboard_writes = true;
     bool runtime_worker = false, console = false;
     std::uint32_t parent_pid = 0;
@@ -265,6 +432,7 @@ int main(int argc, char** argv) {
             handle;
       }
       else if (option == "--inspect") inspect = true;
+      else if (option == "--prepare") prepare = true;
       else if (option == "--boot-native") boot_native = true;
       else if (option == "--defer-gpu") defer_gpu = true;
       else if (option == "--no-leaderboard-writes") leaderboard_writes = false;
@@ -289,9 +457,14 @@ int main(int argc, char** argv) {
         if (!runtime_worker) throw std::runtime_error("Lifecycle acknowledgement requires an app worker");
         venture::platform::set_runtime_teardown_channel(std::stoull(value()));
       }
+      else if (option == "--host-check") {
+        // The headset check's host lines (host_check.h); nothing else runs.
+        std::cout << venture::host_check() << std::flush;
+        return 0;
+      }
       else if (option == "--help") {
         std::cout << "venture-runtime --game <install dir> [--boot-native | "
-                     "--inspect] [--package <pkg>] [--log <file>] [--console]\n"
+                     "--inspect | --prepare] [--package <pkg>] [--log <file>] [--console]\n"
                      "venture-runtime --run-guest-test <so> [--test-dir "
                      "<dir>] [--log <file>] [--console]\n"
                      "Java options: --java-home <JDK/JRE> --class-path <jar or "
@@ -304,7 +477,9 @@ int main(int argc, char** argv) {
                      "Diagnostic option: --defer-gpu (initialize graphics on "
                      "first guest use)\n"
                      "Memory test: --test-a32-memory (reserve low arena and "
-                     "exit before HLE)\n";
+                     "exit before HLE)\n"
+                     "Host check: --host-check (the CPU engine, GLES path and "
+                     "OpenXR runtime found here, then exit)\n";
         return 0;
       } else throw std::runtime_error("unknown option: " + option);
     }
@@ -323,6 +498,11 @@ int main(int argc, char** argv) {
                        std::chrono::floor<std::chrono::seconds>(std::chrono::system_clock::now()));
     if (bool(credential_read) != bool(credential_write))
       throw std::runtime_error("Both credential channel handles are required");
+    if (prepare) {
+      if (game.empty() || inspect || boot_native || !guest_test.empty())
+        throw std::runtime_error("--prepare takes --game and no other mode");
+      return prepare_game(game, package, account_key, parent_pid);
+    }
     if (!runtime_worker && !game.empty() && guest_test.empty() && !inspect && !boot_native) {
       // Android launches a replacement process when an app queues a cold task
       // and exits. Keep this small supervisor outside the JVM/guest/GPU so a
@@ -466,6 +646,13 @@ int main(int argc, char** argv) {
     venture::initialize_diagnostic_trace();
     venture::configure_game(game, package,
                        account_key.empty() ? "local" : account_key);
+    if (!inspect) stop_preparation();
+    // The block cache opens (indexing every record: about a second for a game whose code is all
+    // translated) while the libraries are validated and registered; the first guest thread waits
+    // for it only if it is not done by then.
+    std::jthread open_blocks;
+    if (!inspect && venture::process_config().isa() == venture::GuestIsa::a64)
+      open_blocks = std::jthread([] { venture::PortableBlockCache::get(); });
     venture::AddressSpace::get().initialize(venture::process_config().isa());
     venture::log::info("launch", "Validating cached {} libraries", venture::process_config().abi);
     auto libraries = venture::extract_native_libraries();

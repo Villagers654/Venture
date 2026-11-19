@@ -7,6 +7,9 @@
  */
 
 #include <algorithm>
+#include <chrono>
+#include <cstdio>
+#include <memory>
 #include <array>
 
 #include <catch2/catch_test_macros.hpp>
@@ -253,6 +256,86 @@ TEST_CASE("arm: Test InvalidateCacheRange", "[arm][A32]") {
     REQUIRE(jit.Regs()[2] == 12);
     REQUIRE(jit.Regs()[15] == 0x0000000c);
     REQUIRE(jit.Cpsr() == 0x000001d0);
+}
+
+TEST_CASE("arm: fast dispatch follows an invalidated indirect target", "[arm][A32]") {
+    ArmTestEnv test_env;
+    A32::UserConfig config = GetUserConfig(&test_env);
+    config.optimizations |= OptimizationFlag::FastDispatch;
+    A32::Jit jit{config};
+    test_env.code_mem = {
+        0xe3a00000,  // 0x00: mov r0, #0
+        0xe3a04020,  // 0x04: mov r4, #0x20
+        0xe12fff34,  // 0x08: blx r4
+        0xe2555001,  // 0x0c: subs r5, r5, #1
+        0x1afffffc,  // 0x10: bne 0x08
+        0xeafffffe,  // 0x14: b +#0
+        0xe320f000,  // 0x18: nop
+        0xe320f000,  // 0x1c: nop
+        0xe2800001,  // 0x20: add r0, r0, #1
+        0xe1a0f00e,  // 0x24: mov pc, lr (no RSB pop: returns through the dispatcher too)
+    };
+
+    jit.Regs() = {};
+    jit.Regs()[5] = 100;
+    jit.SetCpsr(0x000001d0);  // User-mode
+    test_env.ticks_left = 1000;
+    CheckedRun([&]() { jit.Run(); });
+    REQUIRE(jit.Regs()[0] == 100);
+    REQUIRE(jit.Regs()[15] == 0x14);
+
+    test_env.code_mem[8] = 0xe2800002;  // add r0, r0, #2
+    jit.InvalidateCacheRange(0x20, 4);
+    jit.Regs()[5] = 100;
+    jit.Regs()[15] = 0;
+    test_env.ticks_left = 1000;
+    CheckedRun([&]() { jit.Run(); });
+    REQUIRE(jit.Regs()[0] == 200);
+    REQUIRE(jit.Regs()[15] == 0x14);
+
+    jit.ClearCache();
+    jit.Regs()[5] = 100;
+    jit.Regs()[15] = 0;
+    test_env.ticks_left = 1000;
+    CheckedRun([&]() { jit.Run(); });
+    REQUIRE(jit.Regs()[0] == 200);
+}
+
+// Hidden: indirect call loop cost with and without FastDispatch (run with "[bench]").
+TEST_CASE("arm: fast dispatch indirect call loop timing", "[.][bench]") {
+    const auto run = [](bool fast_dispatch) {
+        ArmTestEnv test_env;
+        A32::UserConfig config = GetUserConfig(&test_env);
+        if (fast_dispatch) {
+            config.optimizations |= OptimizationFlag::FastDispatch;
+        }
+        A32::Jit jit{config};
+        test_env.code_mem = {
+            0xe3a00000,  // 0x00: mov r0, #0
+            0xe3a04020,  // 0x04: mov r4, #0x20
+            0xe12fff34,  // 0x08: blx r4
+            0xe2555001,  // 0x0c: subs r5, r5, #1
+            0x1afffffc,  // 0x10: bne 0x08
+            0xeafffffe,  // 0x14: b +#0
+            0xe320f000,  // 0x18: nop
+            0xe320f000,  // 0x1c: nop
+            0xe2800001,  // 0x20: add r0, r0, #1
+            0xe1a0f00e,  // 0x24: mov pc, lr
+        };
+        jit.Regs() = {};
+        jit.Regs()[5] = 2'000'000;
+        jit.SetCpsr(0x000001d0);
+        test_env.ticks_left = 2 + 5 * 2'000'000;  // the loop's instructions
+        const auto start = std::chrono::steady_clock::now();
+        CheckedRun([&]() { jit.Run(); });
+        const auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start).count();
+        REQUIRE(jit.Regs()[0] >= 1'999'990);
+        return ns;
+    };
+    const auto off = run(false);
+    const auto on = run(true);
+    std::printf("indirect call loop, 2M iterations: dispatcher %lld ns, fast dispatch %lld ns (%.2fx)\n",
+                static_cast<long long>(off), static_cast<long long>(on), double(off) / double(on));
 }
 
 TEST_CASE("arm: Step blx", "[arm]") {
@@ -605,6 +688,76 @@ TEST_CASE("arm: Memory access (fastmem)", "[arm][A32]") {
 
     CheckedRun([&]() { jit.Run(); });
     REQUIRE(strncmp(backing_memory + 0x100, backing_memory + 0x1F0, 4) == 0);
+}
+
+TEST_CASE("arm: FPSCR flags survive inline and fallback memory accesses", "[arm][A32]") {
+    // Page 1 is mapped (inline access), page 2 is not (callback fallback).
+    using PageTable = std::array<std::uint8_t*, A32::UserConfig::NUM_PAGE_TABLE_ENTRIES>;
+    auto page_table = std::make_unique<PageTable>();
+    alignas(4096) static std::uint8_t page[4096] = {};
+    (*page_table)[1] = page;
+
+    const auto run = [&](std::vector<u32> code, bool expect_inexact) {
+        ArmTestEnv test_env;
+        A32::UserConfig config = GetUserConfig(&test_env);
+        config.page_table = page_table.get();
+        A32::Jit jit{config};
+        test_env.code_mem = std::move(code);
+        jit.Regs() = {};
+        jit.Regs()[0] = 0x2000;  // unmapped: fallback
+        jit.Regs()[1] = 0x1000;  // mapped: inline
+        jit.ExtRegs() = {};
+        jit.ExtRegs()[1] = 0x3f800000;  // s1 = 1.0f
+        jit.ExtRegs()[2] = 0x2edbe6ff;  // s2 = 1e-10f: 1.0f + s2 is inexact
+        jit.ExtRegs()[4] = 0x3f800000;  // s4 = 1.0f: s4 + s4 is exact
+        jit.SetFpscr(0);
+        jit.SetCpsr(0x000001d0);  // User-mode
+        test_env.ticks_left = test_env.code_mem.size();
+        CheckedRun([&]() { jit.Run(); });
+        constexpr u32 ixc = 1 << 4;
+        REQUIRE(((jit.Regs()[5] & ixc) != 0) == expect_inexact);
+        REQUIRE(((jit.Fpscr() & ixc) != 0) == expect_inexact);
+    };
+
+    // Inexact before the fallback, exact after.
+    run({
+            0xee300a81,  // vadd.f32 s0, s1, s2
+            0xe5904000,  // ldr r4, [r0]
+            0xee721a02,  // vadd.f32 s3, s4, s4
+            0xe5916000,  // ldr r6, [r1]
+            0xeef15a10,  // vmrs r5, fpscr
+            0xeafffffe,  // b +#0
+        },
+        true);
+    // Inexact between an inline access and the fallback.
+    run({
+            0xee721a02,  // vadd.f32 s3, s4, s4
+            0xe5916000,  // ldr r6, [r1]
+            0xee300a81,  // vadd.f32 s0, s1, s2
+            0xe5904000,  // ldr r4, [r0]
+            0xeef15a10,  // vmrs r5, fpscr
+            0xeafffffe,  // b +#0
+        },
+        true);
+    // Inexact after the fallback.
+    run({
+            0xee721a02,  // vadd.f32 s3, s4, s4
+            0xe5904000,  // ldr r4, [r0]
+            0xee300a81,  // vadd.f32 s0, s1, s2
+            0xe5806000,  // str r6, [r0]
+            0xeef15a10,  // vmrs r5, fpscr
+            0xeafffffe,  // b +#0
+        },
+        true);
+    // Exact throughout.
+    run({
+            0xee721a02,  // vadd.f32 s3, s4, s4
+            0xe5904000,  // ldr r4, [r0]
+            0xe5916000,  // ldr r6, [r1]
+            0xeef15a10,  // vmrs r5, fpscr
+            0xeafffffe,  // b +#0
+        },
+        false);
 }
 
 TEST_CASE("arm: vmsr, vcmp, vmrs", "[arm][A32]") {

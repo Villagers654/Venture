@@ -282,6 +282,9 @@ inline constexpr std::int32_t success = 0, invalid = -1005, not_initialized = -1
 
 // SDK 1.42.0 OVR_VRAPI_ASSERT_TYPE_SIZE_64_BIT declarations and AAPCS64
 // aggregate alignment (including the explicit padding before double fields).
+// A 32-bit build (the armeabi-v7a libvrapi.so) uses these types only inside,
+// converting the game's ILP32 records (abi32.h) at its exports.
+#if UINTPTR_MAX == UINT64_MAX
 static_assert(sizeof(Java) == 24 && sizeof(Init) == 48 && sizeof(Mode) == 56);
 static_assert(sizeof(SystemVulkan) == 24 && sizeof(ModeVulkan) == 64 && offsetof(ModeVulkan, queue) == 56);
 static_assert(sizeof(Pose) == 28 && sizeof(RigidPose) == 96 && sizeof(Tracking) == 360);
@@ -296,4 +299,5 @@ static_assert(sizeof(InputHeader) == 8 && sizeof(RemoteCapabilities) == 48 &&
               sizeof(RemoteState) == 72);
 static_assert(sizeof(HandPoseHeader) == 16 && sizeof(HandPose) == 480);
 static_assert(sizeof(HandSkeleton) == 1360 && sizeof(HandMesh) == 204064);
+#endif
 } // namespace venture::hle::vrapi::abi

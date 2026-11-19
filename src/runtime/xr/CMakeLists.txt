@@ -1,16 +1,5 @@
 # Headers, registry and loader deliberately come from the same pinned SDK.
-set(BUILD_API_LAYERS OFF CACHE BOOL "" FORCE)
-set(BUILD_TESTS OFF CACHE BOOL "" FORCE)
-set(BUILD_CONFORMANCE_TESTS OFF CACHE BOOL "" FORCE)
-set(BUILD_LOADER ON CACHE BOOL "" FORCE)
-set(DYNAMIC_LOADER OFF CACHE BOOL "" FORCE)
-set(BUILD_WITH_SYSTEM_JSONCPP OFF CACHE BOOL "" FORCE)
-FetchContent_MakeAvailable(openxr_sdk)
-if(MINGW)
-  # SDK 1.1.63 applies its ELF version script to every non-MSVC compiler,
-  # including MinGW. PE exports already use XRAPI_DLL_EXPORT.
-  set_target_properties(openxr_loader PROPERTIES LINK_FLAGS "" PREFIX "")
-endif()
+include(${PROJECT_SOURCE_DIR}/cmake/OpenXRSdk.cmake)
 
 # Use the same Vulkan declarations as GLES and guest Vulkan.
 FetchContent_GetProperties(venture_vulkan_headers)
@@ -34,14 +23,14 @@ add_library(venture_xr_capture STATIC capture.cpp)
 target_include_directories(venture_xr_capture PUBLIC ${PROJECT_SOURCE_DIR}/src/runtime)
 target_link_libraries(venture_xr_capture PUBLIC Vulkan::Headers OpenXR::headers PRIVATE zlibstatic)
 
-add_library(venture_xr STATIC passthrough_source.cpp passthrough_source_sbn1.cpp color_space.cpp color_images.cpp sphere_images.cpp guest_images.cpp desktop_mirror.cpp dev_dump.cpp session.cpp clock.cpp reference_spaces.cpp menu_chord.cpp grip_toggle.cpp bindings.cpp hands.cpp angle_images.cpp haptic_output.cpp haptic_sequence.cpp
+add_library(venture_xr STATIC system_keyboard.cpp passthrough_source.cpp passthrough_source_sbn1.cpp color_space.cpp color_images.cpp sphere_images.cpp guest_images.cpp desktop_mirror.cpp dev_dump.cpp session.cpp sanitize.cpp clock.cpp reference_spaces.cpp menu_chord.cpp grip_toggle.cpp bindings.cpp openvr_devices.cpp hands.cpp angle_images.cpp haptic_output.cpp haptic_sequence.cpp
   ../hle/openxr/state.cpp ../hle/openxr/openxr.cpp ../hle/openxr/graphics.cpp
   ../hle/openxr/extensions.cpp ../hle/openxr/actions.cpp ../hle/openxr/controller_layer.cpp ../hle/openxr/register.cpp ../hle/openxr/a32.cpp ../hle/openxr/hands.cpp
   ../hle/openxr/spaces.cpp ../hle/openxr/haptics.cpp ../hle/openxr/spatial.cpp ../hle/openxr/debug_utils.cpp
   ../hle/openxr/android_surface.cpp
   ../hle/openxr/passthrough.cpp ../hle/openxr/passthrough_images.cpp ../hle/openxr/passthrough_camera.cpp ../hle/openxr/sphere_layers.cpp
   ../hle/openxr/image_upload.cpp ../hle/openxr/passthrough_report.cpp ../hle/openxr/layer_layout.cpp
-  ../hle/vrapi/vrapi.cpp ../hle/vrapi/swapchains.cpp ../hle/vrapi/input.cpp
+  ../hle/vrapi/vrapi.cpp ../hle/vrapi/swapchains.cpp ../hle/vrapi/swapchain_common.cpp ../hle/vrapi/runtime_host.cpp ../hle/vrapi/input.cpp
   ../hle/vrapi/layers.cpp ../hle/vrapi/drawn_layers.cpp ../hle/vrapi/a32.cpp
   ../hle/vrapi/haptics.cpp
   ../hle/vrapi/vulkan_images.cpp
@@ -53,6 +42,7 @@ if(WIN32)
 else()
   target_sources(venture_xr PRIVATE ../platform/posix/xr_clock.cpp ../platform/posix/passthrough_source.cpp ../platform/posix/passthrough_source_sbn1.cpp
     ../platform/posix/tracked_camera.cpp)
+  target_link_libraries(venture_xr PRIVATE ${CMAKE_DL_LIBS})
 endif()
 target_include_directories(venture_xr PUBLIC ${PROJECT_SOURCE_DIR}/src/runtime)
 target_link_libraries(venture_xr PUBLIC venture_host_xr venture_runtime venture_vulkan PRIVATE venture_java venture_xr_capture SDL3::SDL3-static)

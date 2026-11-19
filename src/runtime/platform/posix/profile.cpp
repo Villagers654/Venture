@@ -62,8 +62,14 @@ void park(int, siginfo_t*, void* raw) {
   if (slot.target.load(std::memory_order_acquire) == gettid_raw() &&
       slot.state.compare_exchange_strong(expected, captured, std::memory_order_acq_rel)) {
     const auto& context = static_cast<ucontext_t*>(raw)->uc_mcontext;
+#if defined(__aarch64__)
+    // The program counter and frame pointer (x29) play rip's and rbp's part.
+    slot.rip = static_cast<std::uintptr_t>(context.pc);
+    slot.rbp = static_cast<std::uintptr_t>(context.regs[29]);
+#else
     slot.rip = static_cast<std::uintptr_t>(context.gregs[REG_RIP]);
     slot.rbp = static_cast<std::uintptr_t>(context.gregs[REG_RBP]);
+#endif
     futex(slot.state, FUTEX_WAKE, 1);
     // Bounded: a sampler that vanished must not wedge the target.
     wait_change(slot.state, captured, 2'000'000'000);

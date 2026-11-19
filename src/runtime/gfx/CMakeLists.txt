@@ -26,4 +26,4 @@ target_include_directories(venture_gfx SYSTEM PUBLIC
   ${venture_gl_registry_SOURCE_DIR}/api ${venture_egl_registry_SOURCE_DIR}/api)
 target_include_directories(venture_gfx PRIVATE ${generated} ${venture_astcenc_SOURCE_DIR}/Source)
 target_compile_definitions(venture_gfx PUBLIC VK_NO_PROTOTYPES)
-target_link_libraries(venture_gfx PUBLIC venture_common venture_runtime venture_android venture_host_xr PRIVATE astcenc-sse2-static)
+target_link_libraries(venture_gfx PUBLIC venture_common venture_runtime venture_android venture_host_xr PRIVATE ${VENTURE_ASTCENC})

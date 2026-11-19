@@ -22,7 +22,7 @@ template <class F, HostProcedureName Name> F host_proc() {
   auto& h = host_xr();
   struct Entry {
     std::uint64_t generation = 0;
-    XrInstance instance = nullptr;
+    XrInstance instance = XR_NULL_HANDLE;
     void* loader = nullptr;
     F function = nullptr;
   };

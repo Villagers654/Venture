@@ -47,6 +47,7 @@ Json parse_commands(std::string_view text) {
     auto at = c.value("after_first_frame_s", 0.0);
     if (!std::isfinite(at) || at < 0) throw std::invalid_argument("invalid after_first_frame_s");
     if (c.contains("chain") && !c["chain"].is_boolean()) throw std::invalid_argument("chain must be a boolean");
+    if (c.contains("optional") && !c["optional"].is_boolean()) throw std::invalid_argument("optional must be a boolean");
     if (c.contains("args") && (!c["args"].is_array() || c["args"].size() > 32))
       throw std::invalid_argument("args must be an array of at most 32 values");
   }
@@ -139,9 +140,20 @@ void boundary(GuestThread& thread, std::string_view function, bool completed) {
         state->done.insert(id);
         state->results[id] = result;
         emit({{"id", id}, {"ok", true}, {"result", result}});
-      } catch (const std::runtime_error& e) {
-        state->failed = id; emit({{"id", id}, {"ok", false}, {"error", e.what()}});
-        break;
+      } catch (const ProcessExit&) { throw; }
+        catch (const ThreadExit&) { throw; }
+        catch (const std::exception& e) {
+        // A malformed reference (a null result used as an instance) fails
+        // this command by id like any guest error.
+        // An optional command (an API that engine stripping may have removed)
+        // records its error and lets the batch go on; its result stays unset.
+        if (command.value("optional", false)) {
+          state->done.insert(id);
+          emit({{"id", id}, {"ok", false}, {"optional", true}, {"error", e.what()}});
+        } else {
+          state->failed = id; emit({{"id", id}, {"ok", false}, {"error", e.what()}});
+          break;
+        }
       }
       // One operation per frame boundary, bounded introspection work. "chain"
       // runs the next one in the same frame: per-frame Unity state such as

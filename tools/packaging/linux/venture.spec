@@ -5,7 +5,7 @@ Release:        1
 Summary:        Play Meta Quest games on PC VR
 License:        GPL-3.0-or-later
 URL:            https://venture-emu.org/
-ExclusiveArch:  x86_64
+ExclusiveArch:  @ARCH@
 # Everything beyond glibc and the desktop session is bundled in /opt/venture;
 # automatic dependency/provide scanning would export the bundled libraries.
 AutoReqProv:    no

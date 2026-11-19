@@ -190,6 +190,8 @@ inline constexpr VkExtent2D emulated_density_texel_min{8, 8}, emulated_density_t
 std::uint32_t device_api_version(VkDevice device);
 VkInstance device_instance(VkDevice device);
 bool command_supports_compute(VkCommandBuffer command);
+// The queue flags of the family of the command buffer's pool (0: unknown).
+VkQueueFlags command_queue_flags(VkCommandBuffer command);
 // Vertex bindings a guest graphics command buffer starts with bound to VK_NULL_HANDLE
 // (nullDescriptor), so a binding the guest never binds reads zero as on Quest; 0 when
 // the device lacks nullDescriptor or the buffer's pool has no graphics.
@@ -378,6 +380,17 @@ VkDescriptorType sampled_input_type(VkDescriptorType type);
 // The module with its subpass inputs read as sampled 2D array layers at
 // ViewIndex; empty when it has none or cannot be rewritten.
 std::vector<std::uint32_t> sample_subpass_inputs(std::span<const std::uint32_t> code);
+// The module with each multisampled subpass input (subpassInputMS) whose input
+// attachment index is set in `single_sampled` read as single-sampled: its image
+// type loses MS and its subpassLoad its Sample operand. Empty when no such input
+// can be changed. A one-sample attachment read through an MS type is invalid
+// (VUID-RuntimeSpirv-samples-08726 once read as a sampled image).
+std::vector<std::uint32_t> single_sample_subpass_inputs(std::span<const std::uint32_t> code,
+                                                        std::uint32_t single_sampled);
+// The input attachments of a render pass's subpass that have one sample, as a
+// mask of input attachment indices below 32 (render_area.cpp); 0 when none or
+// the render pass is unknown.
+std::uint32_t single_sampled_subpass_inputs(VkRenderPass pass, std::uint32_t subpass);
 // The one-layer 2D array view standing in for a 2D view written to an input
 // attachment descriptor (render_area.cpp), else the view itself.
 VkImageView sampled_input_view(VkImageView view);
@@ -389,6 +402,22 @@ std::vector<VkSubpassDependency2> missing_subpass_dependencies(const VkRenderPas
 // Preserve constant per-view shader values across rasterizer interpolation.
 PFN_vkVoidFunction multiview_proc(std::string_view name);
 void release_render_commands(VkCommandBuffer command);
+// Images whose current layout Venture needs where it records its own work
+// after the guest's on a queue (VrApi eye images; tracked_layouts.cpp). The
+// guest's layout transitions (barriers, render pass final layouts) are noted per
+// command buffer as recorded and take effect when a submission is accepted.
+void track_layouts(VkImage image, std::uint32_t mips, std::uint32_t layers, VkImageLayout layout);
+void untrack_layouts(VkImage image);
+bool layouts_tracked(VkImage image);
+void note_layout(VkCommandBuffer command, VkImage image, const VkImageSubresourceRange& range, VkImageLayout layout);
+void note_layouts(VkCommandBuffer command, std::uint32_t count, const VkImageMemoryBarrier* barriers);
+void note_layouts(VkCommandBuffer command, const VkDependencyInfo* info);
+void note_executed_layouts(VkCommandBuffer primary, std::uint32_t count, const VkCommandBuffer* secondaries);
+void forget_command_layouts(VkCommandBuffer command);
+void submitted_layouts(std::uint32_t count, const VkSubmitInfo* submits);
+void submitted_layouts(std::uint32_t count, const VkSubmitInfo2* submits);
+// Per subresource, mip-major ([mip * layers + layer]); empty if untracked.
+std::vector<VkImageLayout> tracked_layouts(VkImage image);
 // Attachment images created outside the guest's vkCreateImage (XR eye images).
 void note_image(VkImage image, const VkImageCreateInfo& info);
 void forget_image(VkImage image);

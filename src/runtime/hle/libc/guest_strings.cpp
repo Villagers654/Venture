@@ -1,7 +1,7 @@
 #include "core/hle_runtime.h"
 #include "core/linker.h"
 #include "core/process.h"
-#include "cpu/stubs.h"
+#include "cpu/guest_entry.h"
 #include "platform/low_memory.h"
 #include <array>
 #include <cstring>
@@ -1637,7 +1637,7 @@ GuestAddr bounded_routine(const std::array<std::uint32_t, N>& body, GuestAddr ho
   }
   code.insert(code.end(), body.begin(), body.end());
   const auto* thunk = g2h<const std::uint32_t>(host);
-  code.insert(code.end(), thunk, thunk + guest_stub(arm ? GuestIsa::a32 : GuestIsa::a64, GuestStub::hle_call).count);
+  code.insert(code.end(), thunk, thunk + guest_entry_stub(arm ? GuestIsa::a32 : GuestIsa::a64, GuestStub::hle_call).count);
   return code_stub(code, "bounded guest libc routine");
 }
 } // namespace

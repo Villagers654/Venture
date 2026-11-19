@@ -69,6 +69,24 @@ TEST_CASE("debug report: known causes, most specific first") {
   auto reset = diagnose("kernel: amdgpu 0000:03:00.0: amdgpu: GPU reset begin!\n");
   REQUIRE(reset);
   CHECK(reset->cause.find("reset the GPU") != std::string::npos);
+  // GPU breadcrumbs: the cause quotes the verdict; one inside Venture's own pass is Venture's to fix, even with
+  // the reset Windows logs for every device loss.
+  constexpr std::string_view venture_verdict =
+      "W [vulkan-fault] GPU fault verdict: the GPU stopped inside Venture's ASTC 8x8 texture decode of a 2048x2048 "
+      "linear image (mip 0 at 2048x2048, layer 0) (submission 135, command buffer 1 of 2 (0x1234))\n";
+  auto pass = diagnose(std::string(venture_verdict) + "E [vulkan-fault] Native Vulkan device lost on guest tid 7\n"
+                       "Display 4101: Display driver amdkmdag stopped responding and has successfully recovered.\n");
+  REQUIRE(pass);
+  CHECK(pass->cause.find("Venture's own GPU work") != std::string::npos);
+  CHECK(pass->cause.find("The GPU stopped inside Venture's ASTC 8x8 texture decode of a 2048x2048 linear image") !=
+        std::string::npos);
+  CHECK(pass->advice.find("Send this report") != std::string::npos);
+  auto game = diagnose("W [vulkan-fault] GPU fault verdict: the GPU stopped in the game's commands (it holds no "
+                       "Venture pass) (submission 9, command buffer 1 of 1 (0x10))\n"
+                       "E [vulkan-fault] Native Vulkan device lost on guest tid 7\n");
+  REQUIRE(game);
+  CHECK(game->cause.find("The game lost the graphics device. The GPU stopped in the game's commands") !=
+        std::string::npos);
   auto trap = diagnose("E [hle] unimplemented libandroid.so!AFoo\nE [libc] Fatal signal 11\n");
   REQUIRE(trap);
   CHECK(trap->cause.find("Android function") != std::string::npos);
@@ -309,5 +327,25 @@ TEST_CASE("debug report: the session timeline comes from the whole runtime log")
   text = report();
   CHECK(text.find("=== Session timeline (1 minutes) ===\n     60.000 9 I [timeline] t=1m fps=72.0\n") !=
         std::string::npos);
+  fs::remove_all(data);
+}
+
+TEST_CASE("debug report: without a game, the last launch is the newest runtime log") {
+  const auto data = fs::temp_directory_path() / ("venture-report-latest-" + std::to_string(current_process_id()));
+  fs::remove_all(data);
+  fs::create_directories(data / "logs");
+  CHECK(latest_launched_package(data).empty());
+  const auto now = fs::file_time_type::clock::now();
+  auto write = [&](const char *name, auto age) {
+    std::ofstream(data / "logs" / name) << "x";
+    fs::last_write_time(data / "logs" / name, now - age);
+  };
+  write("runtime-com.example.old.log", std::chrono::hours(2));
+  write("runtime-com.example.last.log", std::chrono::hours(1));
+  // Side files of a run never name the game.
+  write("runtime-com.example.side.console.log", std::chrono::minutes(1));
+  write("runtime-com.example.side.prev.log", std::chrono::minutes(1));
+  write("launcher.log", std::chrono::minutes(1));
+  CHECK(latest_launched_package(data) == "com.example.last");
   fs::remove_all(data);
 }

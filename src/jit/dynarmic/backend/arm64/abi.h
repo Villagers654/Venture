@@ -8,7 +8,10 @@
 
 #pragma once
 
+#include <array>
+#include <cstddef>
 #include <initializer_list>
+#include <optional>
 
 #include "common/common_types.h"
 #include "common/assert.h"
@@ -49,6 +52,30 @@ constexpr auto Rscratch1() {
 }
 
 constexpr std::initializer_list<int> GPR_ORDER{19, 20, 21, 22, 23, 9, 10, 11, 12, 13, 14, 15, 0, 1, 2, 3, 4, 5, 6, 7, 8};
+
+// Venture: the A64 register cache (UserConfig::enable_register_cache, as x64's
+// A64CachedRegister): guest X0, X1, X30 and X8, the registers with the most
+// block-boundary traffic, stay in callee-saved host X19, X20, X21 and X24 for a
+// whole run. Those leave the allocator, and X24 (Xpagetable) is free because
+// the cache needs no page table. The cached guest registers are a subset of
+// x64's, which the shared cold-abort-state pass never defers.
+struct A64CachedPair {
+    std::size_t guest;
+    int host;
+};
+constexpr std::array<A64CachedPair, 4> A64_REGISTER_CACHE{{{0, 19}, {1, 20}, {30, 21}, {8, 24}}};
+constexpr std::initializer_list<int> GPR_ORDER_A64_REGISTER_CACHE{22, 23, 9, 10, 11, 12, 13, 14, 15, 0, 1, 2, 3, 4, 5, 6, 7, 8};
+
+inline std::optional<oaknut::XReg> A64CachedRegister(bool enabled, std::size_t guest) {
+    if (enabled) {
+        for (const auto& pair : A64_REGISTER_CACHE) {
+            if (pair.guest == guest) {
+                return oaknut::XReg{pair.host};
+            }
+        }
+    }
+    return std::nullopt;
+}
 constexpr std::initializer_list<int> FPR_ORDER{8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31};
 
 using RegisterList = u64;

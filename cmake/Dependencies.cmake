@@ -60,6 +60,11 @@ set(CURL_DISABLE_LDAPS ON CACHE BOOL "" FORCE)
 if(WIN32)
   set(CURL_USE_SCHANNEL ON CACHE BOOL "" FORCE)
   set(CURL_USE_OPENSSL OFF CACHE BOOL "" FORCE)
+elseif(ANDROID)
+  # The NDK exposes no TLS library. HTTPS on Android goes through the device's
+  # own stack (docs/design/native-headsets.md); libcurl serves URL handling.
+  set(CURL_ENABLE_SSL OFF CACHE BOOL "" FORCE)
+  set(CURL_USE_OPENSSL OFF CACHE BOOL "" FORCE)
 else()
   set(CURL_USE_OPENSSL ON CACHE BOOL "" FORCE)
 endif()
@@ -83,6 +88,30 @@ set(SDL_INSTALL OFF CACHE BOOL "" FORCE)
 # window chrome instead (launcher/ui/chrome.h).
 set(SDL_X11 OFF CACHE BOOL "" FORCE)
 set(SDL_WAYLAND_LIBDECOR OFF CACHE BOOL "" FORCE)
+# SDL loads its desktop libraries at run time by the name it derives from the
+# library it finds: the symlink chain lib<x>.so -> lib<x>.so.N -> lib<x>.so.N.M.
+# A sysroot unpacked on Windows (cmake/toolchains/linux-arm64.cmake) holds
+# copies instead of links, so SDL would ask for the development name
+# lib<x>.so, which only -dev packages install: the Frame's launcher found no
+# Wayland. Point SDL at each library's runtime name (lib<x>.so.N) instead.
+if(CMAKE_CROSSCOMPILING AND CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSROOT)
+  set(triple "${CMAKE_LIBRARY_ARCHITECTURE}")
+  if(NOT triple AND VENTURE_LINUX_ARM64_TRIPLE)
+    set(triple "${VENTURE_LINUX_ARM64_TRIPLE}")
+  endif()
+  foreach(library asound drm gbm pulse udev wayland-client wayland-cursor wayland-egl xkbcommon pipewire-0.3 usb-1.0
+                  dbus-1)
+    string(TOUPPER "${library}" variable)
+    string(REPLACE "-" "_" variable "${variable}")
+    file(GLOB candidates "${CMAKE_SYSROOT}/usr/lib/${triple}/lib${library}.so.[0-9]"
+                         "${CMAKE_SYSROOT}/usr/lib/${triple}/lib${library}.so.[0-9][0-9]"
+                         "${CMAKE_SYSROOT}/lib/${triple}/lib${library}.so.[0-9]")
+    if(candidates)
+      list(GET candidates 0 runtime_name)
+      set(${variable}_LIB "${runtime_name}" CACHE FILEPATH "" FORCE)
+    endif()
+  endforeach()
+endif()
 FetchContent_Declare(SDL3
   URL https://github.com/libsdl-org/SDL/archive/7f3ae3d57459e59943a4ecfefc8f6277ec6bf540.tar.gz # release-3.2.28
   URL_HASH SHA256=7a8347c770b90b33daac2352858ca03f9c9a2ccc8ce711054870361d1a6b32e5
@@ -187,7 +216,7 @@ if(VENTURE_BUILD_RUNTIME)
   # (boost/icl/impl_config.hpp) consistently inside both Dynarmic frontends.
   target_compile_definitions(dynarmic PRIVATE ICL_USE_BOOST_MOVE_IMPLEMENTATION)
   # Pinned fmt predates libc++ removing the transitive malloc declaration.
-  target_compile_options(fmt PUBLIC "SHELL:-include stdlib.h")
+  target_compile_options(fmt PUBLIC "$<$<COMPILE_LANGUAGE:C,CXX>:SHELL:-include stdlib.h>")
 endif()
 
 # miniz reads APKs and ZIP archives: the runtime's APK loader and the
@@ -246,7 +275,8 @@ endif()
 # DejaVu Sans for the bundled headless JRE (java/jdk/lib/fonts with a static
 # tools/dex/fontconfig.properties) and the launcher's fallback font, so text
 # renders without fontconfig or installed fonts. Files only, no build.
-if(NOT WIN32)
+# Android has its own system fonts and no bundled JRE.
+if(NOT WIN32 AND NOT ANDROID)
   FetchContent_Declare(dejavu_fonts
     URL https://github.com/dejavu-fonts/dejavu-fonts/releases/download/version_2_37/dejavu-fonts-ttf-2.37.tar.bz2
     URL_HASH SHA256=fa9ca4d13871dd122f61258a80d01751d603b4d3ee14095d65453b4e846e17d7

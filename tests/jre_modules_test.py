@@ -30,6 +30,11 @@ class JreModulesTest(unittest.TestCase):
                     missing.setdefault(module, []).append(str(source.relative_to(ROOT)))
         self.assertEqual(missing, {}, "make_jre.py MODULES lacks modules the framework uses")
 
+    def test_android_api_jdk_modules_are_in_the_jre(self):
+        # Games call Android's java.* and javax.* API directly, not only through the framework:
+        # java.sql and javax.sql are Android API (Gson loads java.sql.Time), as are logging and XML.
+        self.assertLessEqual({"java.logging", "java.xml", "java.sql"}, modules())
+
 
 if __name__ == "__main__":
     sys.exit(unittest.main())

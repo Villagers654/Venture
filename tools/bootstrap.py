@@ -33,6 +33,7 @@ import urllib.request
 import zipfile
 import tarfile
 import json
+import platform
 
 ROOT = Path(__file__).resolve().parent.parent
 DEPS = ROOT / ".deps"
@@ -59,10 +60,21 @@ JAVA_DEPENDENCIES = {
         "file": "asm.jar", "bin": "",
     },
 }
+# Linux arm64 hosts (the Steam Frame's architecture; the arm64 CI job).
+ARM64_LINUX = os.name != "nt" and platform.machine().lower() in ("aarch64", "arm64")
 if os.name != "nt":
     JAVA_DEPENDENCIES["jdk"].update(
         url="https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.12.1%2B1/OpenJDK21U-jdk_x64_linux_hotspot_21.0.12.1_1.tar.gz",
         sha256="ce79869e1307ed8ee1e2baa86a412b1eb5b75d10a01006d788a6f968bcfaee94")
+# The same Temurin build for linux-aarch64: native arm64 hosts, and the target
+# JDK of Linux arm64 cross builds (tools/linux_arm64/sysroot.py).
+JDK_LINUX_AARCH64 = {
+    "url": "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.12.1%2B1/OpenJDK21U-jdk_aarch64_linux_hotspot_21.0.12.1_1.tar.gz",
+    "sha256": "23e37e026f12f3e706f18938ff611db3032d075b09d0879a25d06718c773e223",
+    "strip": "jdk-21.0.12.1+1", "bin": "bin",
+}
+if ARM64_LINUX:
+    JAVA_DEPENDENCIES["jdk"].update(url=JDK_LINUX_AARCH64["url"], sha256=JDK_LINUX_AARCH64["sha256"])
 
 DEPENDENCIES = {
     "llvm-mingw": {
@@ -99,6 +111,15 @@ if os.name != "nt":
         url="https://github.com/ninja-build/ninja/releases/download/v1.13.2/ninja-linux.zip",
         sha256="5749cbc4e668273514150a80e387a957f933c6ed3f5f11e03fb30955e2bbead6",
         shared="ninja-1.13.2-linux")
+if ARM64_LINUX:
+    DEPENDENCIES["cmake"].update(
+        url="https://github.com/Kitware/CMake/releases/download/v4.4.3/cmake-4.4.3-linux-aarch64.tar.gz",
+        sha256="2efc974dbd63b4444c0e8494b92f2e80c2d7e635b4b80eac2916985ddd8f72a6",
+        strip="cmake-4.4.3-linux-aarch64", shared="cmake-4.4.3-linux-aarch64")
+    DEPENDENCIES["ninja"].update(
+        url="https://github.com/ninja-build/ninja/releases/download/v1.13.2/ninja-linux-aarch64.zip",
+        sha256="fd2cacc8050a7f12a16a2e48f9e06fca5c14fc4c2bee2babb67b58be17a607fc",
+        shared="ninja-1.13.2-linux-aarch64")
 
 # Official ccache 4.14.1 release assets; SHA-256 from the upstream release API.
 # https://github.com/ccache/ccache/releases/tag/v4.14.1
@@ -114,6 +135,12 @@ if os.name != "nt":
         sha256="8f684cf82a7acd2f1daddbefcda505c499afe8245cfbfe78f751ce389cd6df52",
         strip="ccache-4.14.1-linux-x86_64-musl-static", bin="bin",
         shared="ccache-4.14.1-linux-x86_64-musl-static")
+if ARM64_LINUX:
+    CCACHE.update(
+        url="https://github.com/ccache/ccache/releases/download/v4.14.1/ccache-4.14.1-linux-aarch64-musl-static.tar.gz",
+        sha256="dd0b8516cd796aa4a260c543441653cc12bfa7ac34864970c068fc4ff04932fb",
+        strip="ccache-4.14.1-linux-aarch64-musl-static", bin="bin",
+        shared="ccache-4.14.1-linux-aarch64-musl-static")
 
 # Latest stable LTS, verified against https://developer.android.com/ndk/downloads
 # on 2026-10-08. Google publishes SHA-1 for this archive; verify every cache hit.
@@ -365,7 +392,9 @@ def main() -> None:
     parser.add_argument("--platform-sdk", action="store_true", help="provision pinned Platform ABI generator inputs")
     parser.add_argument("--angle", action="store_true", help="build/reuse pinned ANGLE")
     parser.add_argument("--ffmpeg", action="store_true", help="explicitly rebuild pinned shared LGPL audio-only FFmpeg")
-    parser.add_argument("--jdk", action="store_true", help="provision pinned JDK 21, dex2jar and ASM (Windows/Linux x64)")
+    parser.add_argument("--jdk", action="store_true", help="provision pinned JDK 21, dex2jar and ASM (Windows/Linux x64 and arm64)")
+    parser.add_argument("--linux-arm64", action="store_true",
+                        help="provision the Linux arm64 cross sysroot and target JDK (tools/linux_arm64/sysroot.py)")
     args = parser.parse_args()
     DEPS.mkdir(exist_ok=True)
     # The shared native CMake check cache is automatic for every configure,
@@ -382,6 +411,8 @@ def main() -> None:
         paths.append(provision_ndk() / NDK["bin"])
     if args.platform_sdk:
         provision_platform_sdk()
+    if args.linux_arm64:
+        subprocess.run([sys.executable, str(ROOT / "tools/linux_arm64/sysroot.py")], check=True)
     if args.angle:
         subprocess.run([sys.executable, str(ROOT / "tools/angle/build_angle.py")], check=True)
     subprocess.run([sys.executable, str(ROOT / "tools/ffmpeg/build_ffmpeg.py"),

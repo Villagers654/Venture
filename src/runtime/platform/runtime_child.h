@@ -1,4 +1,5 @@
 #pragma once
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
@@ -58,6 +59,13 @@ RuntimeChildResult run_runtime_child(const std::filesystem::path& executable,
     const std::function<bool()>& stop, std::string_view launch_payload,
     bool acknowledged_teardown = false,
     const std::filesystem::path& diagnostic_run_directory = {});
+// The system's own record of how a worker that ended without Venture's crash
+// report crashed, waiting up to `wait` for it: on Windows, Windows Error
+// Reporting's Application Error event (module, offset, status), which also
+// covers a __fastfail in a host library that no in-process handler sees.
+// Empty when there is none (and on other systems, whose signals Venture's
+// handlers do see).
+std::string system_crash_record(unsigned long pid, std::chrono::milliseconds wait);
 void set_runtime_restart_channel(std::uintptr_t channel);
 void set_runtime_launch_channel(std::uintptr_t channel);
 void set_runtime_teardown_channel(std::uintptr_t channel);

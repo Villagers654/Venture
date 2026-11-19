@@ -128,6 +128,32 @@ TEST_CASE("HotSpot JNI tables, all invocation families and native trampolines") 
     env->DeleteLocalRef(local);
   }
   {
+    // Release ART (no CheckJNI) runs a JNI call made with an exception pending and
+    // leaves that exception pending, or replaces it when the call throws its own.
+    // CRIWARE looks up MediaCodec methods without checking for NoSuchMethodError.
+    auto object = env->FindClass("java/lang/Object");
+    auto state = env->FindClass("java/lang/IllegalStateException");
+    auto missing = env->FindClass("java/lang/NoSuchMethodError");
+    REQUIRE(object);
+    REQUIRE(state);
+    REQUIRE(missing);
+    env->ThrowNew(state, "pending before lookup");
+    CHECK(method(object, "hashCode", "()I"));
+    REQUIRE(env->ExceptionCheck());
+    auto thrown = env->ExceptionOccurred();
+    CHECK(env->IsInstanceOf(thrown, state));
+    env->DeleteLocalRef(thrown);
+    CHECK_FALSE(method(object, "venturePendingProbe", "()V"));
+    REQUIRE(env->ExceptionCheck());
+    thrown = env->ExceptionOccurred();
+    CHECK(env->IsInstanceOf(thrown, missing));
+    env->DeleteLocalRef(thrown);
+    env->ExceptionClear();
+    env->DeleteLocalRef(object);
+    env->DeleteLocalRef(state);
+    env->DeleteLocalRef(missing);
+  }
+  {
     auto* library = Linker::get().open("libventure_java_bridge.so", kRtldNow, nullptr);
     REQUIRE(library);
     const auto install = library->find_symbol("VentureJavaInstallHook");

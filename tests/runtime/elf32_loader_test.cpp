@@ -271,6 +271,8 @@ TEST_CASE("ELF32 HLE backing preserves Thumb exports, precedence and unload") {
   f.dynamic[0].value = f.name("liba32-slot-missing.so"); f.write();
   REQUIRE(Linker::get().open(f.path.string(), kRtldNow, nullptr) == slot.get());
   CHECK(slot->find_symbol("guest_only") == 0);
+  // A missing dependency of a library that exists is an error, not a probe.
+  CHECK_FALSE(Linker::get().error_is_absent_library());
   CHECK(Linker::get().take_error().find("library not found") != std::string::npos);
   CHECK(Linker::get().close(slot.get()) == 0);
   CHECK(slot->map_size == 0);

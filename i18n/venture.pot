@@ -12,6 +12,11 @@ msgstr ""
 "Content-Transfer-Encoding: 8bit\n"
 "Plural-Forms: nplurals=INTEGER; plural=EXPRESSION;\n"
 
+#: src/launcher/app.cpp:571
+#, python-brace-format
+msgid "No mod of this game takes {0}."
+msgstr ""
+
 #. The whole --help text. Keep commands, options and the words in capitals (GAME, ACCOUNT, FOLDER...) in English and keep the descriptions in one column; lines are best under 80 characters.
 #: src/launcher/cli.cpp:42
 msgid ""
@@ -101,159 +106,382 @@ msgstr ""
 msgid "Unknown option {0}."
 msgstr ""
 
-#: src/launcher/cli.cpp:1398
+#: src/launcher/cli.cpp:1395
 #, python-brace-format
 msgid "Unknown command \"{0}\"."
 msgstr ""
 
-#: src/launcher/cli.cpp:1428
-#: src/launcher/cli.cpp:1461
+#: src/launcher/cli.cpp:1425
+#: src/launcher/cli.cpp:1458
 msgid "error: "
 msgstr ""
 
-#: src/launcher/cli.cpp:1461
+#: src/launcher/cli.cpp:1458
 msgid "See: venture-cli --help"
 msgstr ""
 
-#: src/launcher/core.cpp:691
+#: src/launcher/core.cpp:714
 msgid "Only imported games can be linked to a store page."
 msgstr ""
 
-#: src/launcher/core.cpp:696
+#: src/launcher/core.cpp:719
 msgid "Paste the game's Meta store link, like meta.com/experiences/1234567890123456, or its ID."
 msgstr ""
 
-#: src/launcher/core.cpp:700
+#: src/launcher/core.cpp:723
 msgid "Store pages can't be checked in offline mode."
 msgstr ""
 
+#: src/launcher/mods.cpp:33
+msgid "Its mod loader (Scotland2) is not here yet: go online once, or drop libsl2.so on its page."
+msgstr ""
+
+#: src/launcher/mods.cpp:45
+msgid "Its mod loader (Scotland2) could not be downloaded: drop libsl2.so on its page."
+msgstr ""
+
+#: src/launcher/mods.cpp:95
+msgid "Open the game's page, then add this mod there."
+msgstr ""
+
+#: src/launcher/mods.cpp:96
+#, python-brace-format
+msgid "{0} is a mod for {1}, which is not installed."
+msgstr ""
+
+#: src/launcher/mods.cpp:102
+#, python-brace-format
+msgid "Installing {0}…"
+msgstr ""
+
+#: src/launcher/mods.cpp:112
+#, python-brace-format
+msgid "Installed {1} {2} with {0} mod it needs."
+msgid_plural "Installed {1} {2} with {0} mods it needs."
+msgstr[0] ""
+msgstr[1] ""
+
+#: src/launcher/mods.cpp:114
+#, python-brace-format
+msgid "Installed {0} {1}."
+msgstr ""
+
+#: src/launcher/mods.cpp:118
+#, python-brace-format
+msgid "{0} also needs {1}: add their .qmod files."
+msgstr ""
+
+#: src/launcher/mods.cpp:143
+#: src/launcher/mods.cpp:294
+msgid "Close the game before replacing its APK."
+msgstr ""
+
+#: src/launcher/mods.cpp:151
+msgid "Replacing the game's APK…"
+msgstr ""
+
+#: src/launcher/mods.cpp:157
+msgid "This APK is already installed."
+msgstr ""
+
+#: src/launcher/mods.cpp:164
+#, python-brace-format
+msgid "Installed the patched APK ({0} mod loader). Saves and settings stay."
+msgstr ""
+
+#: src/launcher/mods.cpp:165
+msgid "Installed the APK. Saves and settings stay."
+msgstr ""
+
+#: src/launcher/mods.cpp:188
+msgid "This game has no expansion file (OBB) to replace."
+msgstr ""
+
+#: src/launcher/mods.cpp:189
+msgid "Choose which expansion file to replace on the game's Mods tab."
+msgstr ""
+
+#: src/launcher/mods.cpp:203
+msgid "Added the Scotland2 mod loader."
+msgstr ""
+
+#: src/launcher/mods.cpp:206
+#, python-brace-format
+msgid "Added {0} for its mods."
+msgstr ""
+
+#: src/launcher/mods.cpp:222
+#: src/launcher/mods.cpp:229
+#: src/launcher/mods.cpp:236
+#: src/launcher/mods.cpp:243
+#: src/launcher/mods.cpp:270
+#: src/launcher/mods.cpp:276
+#: src/launcher/mods.cpp:278
+#: src/launcher/mods.cpp:292
+msgid "Install this game first."
+msgstr ""
+
+#: src/launcher/mods.cpp:245
+#: src/launcher/mods.cpp:273
+msgid "Close the game before replacing its expansion file."
+msgstr ""
+
+#: src/launcher/mods.cpp:250
+#, python-brace-format
+msgid "Replacing {0}…"
+msgstr ""
+
+#: src/launcher/mods.cpp:263
+#, python-brace-format
+msgid "Replaced {0}. Restore downloads the store's file again."
+msgstr ""
+
+#: src/launcher/mods.cpp:271
+msgid "This game was imported: import its expansion file again."
+msgstr ""
+
+#: src/launcher/mods.cpp:274
+msgid "Sign in and go online to download the store's file."
+msgstr ""
+
+#: src/launcher/mods.cpp:299
+msgid "The original APK is back. Saves and settings stay."
+msgstr ""
+
 #. Sidebar pages.
-#: src/launcher/ui/views.cpp:572
-#: src/launcher/ui/views.cpp:1875
+#: src/launcher/ui/views.cpp:564
+#: src/launcher/ui/views.cpp:2073
 msgid "Library"
 msgstr ""
 
-#: src/launcher/ui/views.cpp:573
+#: src/launcher/ui/views.cpp:565
 msgid "Downloads"
 msgstr ""
 
-#: src/launcher/ui/views.cpp:574
+#: src/launcher/ui/views.cpp:566
 msgid "Import"
 msgstr ""
 
-#: src/launcher/ui/views.cpp:575
+#: src/launcher/ui/views.cpp:567
 msgid "Controls"
 msgstr ""
 
-#: src/launcher/ui/views.cpp:576
-#: src/launcher/ui/views.cpp:1841
+#: src/launcher/ui/views.cpp:568
+#: src/launcher/ui/views.cpp:2039
 msgid "Settings"
 msgstr ""
 
-#: src/launcher/ui/views.cpp:626
+#: src/launcher/ui/views.cpp:618
 msgid "Sign in"
 msgstr ""
 
 #. Under the account name at the bottom of the sidebar.
-#: src/launcher/ui/views.cpp:630
+#: src/launcher/ui/views.cpp:622
 msgid "Connect your Meta account"
 msgstr ""
 
-#: src/launcher/ui/views.cpp:631
+#: src/launcher/ui/views.cpp:623
 msgid "Offline"
 msgstr ""
 
-#: src/launcher/ui/views.cpp:632
+#: src/launcher/ui/views.cpp:624
 #, python-brace-format
 msgid "{0} account"
 msgid_plural "{0} accounts"
 msgstr[0] ""
 msgstr[1] ""
 
-#: src/launcher/ui/views.cpp:633
+#: src/launcher/ui/views.cpp:625
 msgid "Meta account"
 msgstr ""
 
 #. Library filter chip that lists the games the player hid; {0} is how many.
-#: src/launcher/ui/views.cpp:711
+#: src/launcher/ui/views.cpp:704
 #, python-brace-format
 msgid "Show hidden  {0}"
 msgstr ""
 
 #. Library empty state when the player hid every game; "Show hidden" is the filter chip.
-#: src/launcher/ui/views.cpp:755
+#: src/launcher/ui/views.cpp:748
 msgid "All your games are hidden"
 msgstr ""
 
 #. Library empty state when the player hid every game; "Show hidden" is the filter chip.
-#: src/launcher/ui/views.cpp:755
+#: src/launcher/ui/views.cpp:748
 msgid "Select Show hidden to see them."
 msgstr ""
 
-#: src/launcher/ui/views.cpp:849
-#: src/launcher/ui/views.cpp:922
-#: src/launcher/ui/views.cpp:1278
+#: src/launcher/ui/views.cpp:846
+#: src/launcher/ui/views.cpp:942
+#: src/launcher/ui/views.cpp:1294
 msgid "Unhide"
 msgstr ""
 
-#: src/launcher/ui/views.cpp:849
-#: src/launcher/ui/views.cpp:922
-#: src/launcher/ui/views.cpp:1278
+#: src/launcher/ui/views.cpp:846
+#: src/launcher/ui/views.cpp:942
+#: src/launcher/ui/views.cpp:1294
 msgid "Hide from library"
 msgstr ""
 
 #. Status under a library entry the player hid, while hidden entries are shown.
-#: src/launcher/ui/views.cpp:914
-#: src/launcher/ui/views.cpp:1091
+#: src/launcher/ui/views.cpp:932
+#: src/launcher/ui/views.cpp:1111
 msgid "Hidden"
 msgstr ""
 
-#: src/launcher/ui/views.cpp:1268
+#: src/launcher/ui/views.cpp:1284
 msgid "Link to store page…"
 msgstr ""
 
-#: src/launcher/ui/views.cpp:1273
+#: src/launcher/ui/views.cpp:1289
 msgid "Remove store link"
 msgstr ""
 
-#: src/launcher/ui/views.cpp:1851
+#: src/launcher/ui/views.cpp:1529
+msgid "Add mods"
+msgstr ""
+
+#: src/launcher/ui/views.cpp:1530
+msgid "Restore original APK"
+msgstr ""
+
+#: src/launcher/ui/views.cpp:1533
+msgid "Mods"
+msgstr ""
+
+#: src/launcher/ui/views.cpp:1538
+msgid "Mod packages (.qmod), a patched APK of this version, or files your mods take. Dropping them on this window works too. Changes apply at the next launch."
+msgstr ""
+
+#: src/launcher/ui/views.cpp:1544
+msgid "None: the APK is not patched"
+msgstr ""
+
+#: src/launcher/ui/views.cpp:1547
+msgid "Scotland2: libsl2.so is missing"
+msgstr ""
+
+#: src/launcher/ui/views.cpp:1552
+msgid "Mod loader"
+msgstr ""
+
+#: src/launcher/ui/views.cpp:1558
+msgid "Puts back the APK this game had before a patched one replaced it. Saves and settings stay."
+msgstr ""
+
+#: src/launcher/ui/views.cpp:1559
+msgid "Patch the APK with a mod patcher (QuestPatcher or ModsBeforeFriday), then drop the patched APK here: its saves and settings stay."
+msgstr ""
+
+#: src/launcher/ui/views.cpp:1565
+msgid "Installed mods"
+msgstr ""
+
+#: src/launcher/ui/views.cpp:1575
+#, python-brace-format
+msgid "Needs {0}"
+msgstr ""
+
+#: src/launcher/ui/views.cpp:1578
+#, python-brace-format
+msgid "Made for game version {0}"
+msgstr ""
+
+#: src/launcher/ui/views.cpp:1584
+#: src/launcher/ui/views.cpp:1599
+msgid "Remove"
+msgstr ""
+
+#: src/launcher/ui/views.cpp:1594
+msgid "Files for mods"
+msgstr ""
+
+#: src/launcher/ui/views.cpp:1610
+msgid "Replace…"
+msgstr ""
+
+#: src/launcher/ui/views.cpp:1610
+msgid "Restore"
+msgstr ""
+
+#: src/launcher/ui/views.cpp:1612
+msgid "Expansion files (OBB)"
+msgstr ""
+
+#: src/launcher/ui/views.cpp:1617
+msgid "Replaced with your file"
+msgstr ""
+
+#: src/launcher/ui/views.cpp:1625
+msgid "Writes the file you choose over this one. The original is not kept: Restore downloads it again from Meta."
+msgstr ""
+
+#: src/launcher/ui/views.cpp:1627
+msgid "Writes the file you choose over this one. The original is not kept: install or import the game again to get it back."
+msgstr ""
+
+#: src/launcher/ui/views.cpp:1635
+msgid "Removes your file and downloads the store's file again from Meta."
+msgstr ""
+
+#: src/launcher/ui/views.cpp:2049
 msgid "Appearance"
 msgstr ""
 
-#: src/launcher/ui/views.cpp:1859
+#: src/launcher/ui/views.cpp:2057
 msgid "Interface size"
 msgstr ""
 
-#: src/launcher/ui/views.cpp:1918
+#: src/launcher/ui/views.cpp:2116
 msgid "Look up imported games online"
 msgstr ""
 
-#: src/launcher/ui/views.cpp:1933
+#: src/launcher/ui/views.cpp:2131
 msgid "Finds an imported game's store page on OculusDB. Only its package name is sent."
 msgstr ""
 
-#: src/launcher/ui/views.cpp:1952
-#: src/launcher/ui/views.cpp:2506
+#: src/launcher/ui/views.cpp:2150
+#: src/launcher/ui/views.cpp:2816
 msgid "Display"
 msgstr ""
 
-#: src/launcher/ui/views.cpp:1959
-#: src/launcher/ui/views.cpp:2511
+#: src/launcher/ui/views.cpp:2157
+#: src/launcher/ui/views.cpp:2821
 msgid "Runtime"
 msgstr ""
 
+#. Settings > VR runtime, the default choice: the system's active OpenXR runtime, its name after.
+#: src/launcher/ui/views.cpp:2176
+msgid "Default"
+msgstr ""
+
+#. Settings > VR runtime: a chosen runtime that is no longer installed.
+#: src/launcher/ui/views.cpp:2192
+msgid "not found"
+msgstr ""
+
+#. Settings row: which installed OpenXR runtime games run on.
+#: src/launcher/ui/views.cpp:2201
+msgid "VR runtime"
+msgstr ""
+
+#. Settings > VR runtime, under the row's name.
+#: src/launcher/ui/views.cpp:2203
+msgid "The OpenXR runtime games run on. Choose the one your headset uses when another is active, such as SteamVR for a Steam Frame while Virtual Desktop is the active runtime."
+msgstr ""
+
 #. Choices for "Compress textures".
-#: src/launcher/ui/views.cpp:2057
-#: src/launcher/ui/views.cpp:2660
+#: src/launcher/ui/views.cpp:2312
+#: src/launcher/ui/views.cpp:2970
 msgid "Always"
 msgstr ""
 
 #. Choices for "Compress textures".
 #. Choices for "Match game resolution".
-#: src/launcher/ui/views.cpp:2057
-#: src/launcher/ui/views.cpp:2174
-#: src/launcher/ui/views.cpp:2391
-#: src/launcher/ui/views.cpp:2660
+#: src/launcher/ui/views.cpp:2312
+#: src/launcher/ui/views.cpp:2459
+#: src/launcher/ui/views.cpp:2685
+#: src/launcher/ui/views.cpp:2970
 msgid "Automatic"
 msgstr ""
 
@@ -261,265 +489,419 @@ msgstr ""
 #. Choices for "Match game resolution".
 #. Choices for "Audio on PC too".
 #. Choices of a troubleshooting setting, after its default.
-#: src/launcher/ui/views.cpp:2057
-#: src/launcher/ui/views.cpp:2391
-#: src/launcher/ui/views.cpp:2486
-#: src/launcher/ui/views.cpp:2615
-#: src/launcher/ui/views.cpp:2660
+#. Controls page: vibration turned off.
+#: src/launcher/ui/views.cpp:2312
+#: src/launcher/ui/views.cpp:2685
+#: src/launcher/ui/views.cpp:2796
+#: src/launcher/ui/views.cpp:2925
+#: src/launcher/ui/views.cpp:2970
+#: src/launcher/ui/views.cpp:5782
 msgid "Off"
 msgstr ""
 
 #. Settings row: store game textures compressed, in less GPU memory.
-#: src/launcher/ui/views.cpp:2060
-#: src/launcher/ui/views.cpp:2661
+#: src/launcher/ui/views.cpp:2315
+#: src/launcher/ui/views.cpp:2971
 msgid "Compress textures"
 msgstr ""
 
 #. Settings row: GPU memory in use before new textures are compressed.
-#: src/launcher/ui/views.cpp:2086
-#: src/launcher/ui/views.cpp:2688
+#: src/launcher/ui/views.cpp:2341
+#: src/launcher/ui/views.cpp:2998
 msgid "Compression threshold"
 msgstr ""
 
 #. Faint link under a game's settings that opens its troubleshooting switches.
-#: src/launcher/ui/views.cpp:2111
-#: src/launcher/ui/views.cpp:2544
+#: src/launcher/ui/views.cpp:2366
+#: src/launcher/ui/views.cpp:2854
 msgid "Troubleshooting"
 msgstr ""
 
-#: src/launcher/ui/views.cpp:2142
+#: src/launcher/ui/views.cpp:2427
 msgid "About"
 msgstr ""
 
-#: src/launcher/ui/views.cpp:2182
+#: src/launcher/ui/views.cpp:2467
 msgid "Language"
 msgstr ""
 
 #. Settings row: make games render at the resolution above although they scale it up themselves.
-#: src/launcher/ui/views.cpp:2383
+#: src/launcher/ui/views.cpp:2677
 msgid "Match game resolution"
 msgstr ""
 
-#: src/launcher/ui/views.cpp:2394
-#: src/launcher/ui/views.cpp:2489
-#: src/launcher/ui/views.cpp:2660
-#: src/launcher/ui/views.cpp:2685
+#: src/launcher/ui/views.cpp:2688
+#: src/launcher/ui/views.cpp:2799
+#: src/launcher/ui/views.cpp:2970
+#: src/launcher/ui/views.cpp:2995
 msgid "Use global setting"
 msgstr ""
 
-#: src/launcher/ui/views.cpp:2405
+#: src/launcher/ui/views.cpp:2699
 msgid "Many Quest games render larger than the size they are asked for. Automatic learns how much and asks for less, so they render at the resolution above instead of wasting GPU time."
 msgstr ""
 
+#. Settings row: the desktop mirror opens fullscreen (F11 switches while playing).
+#: src/launcher/ui/views.cpp:2768
+msgid "Mirror fullscreen"
+msgstr ""
+
+#. Choices for "Mirror fullscreen".
+#: src/launcher/ui/views.cpp:2770
+msgid "Off (F11 switches)"
+msgstr ""
+
+#. Choices for "Mirror fullscreen".
+#: src/launcher/ui/views.cpp:2770
+msgid "On (F11 switches)"
+msgstr ""
+
 #. Settings row: also play the game's sound on the PC's speakers or headphones.
-#: src/launcher/ui/views.cpp:2478
+#: src/launcher/ui/views.cpp:2788
 msgid "Audio on PC too"
 msgstr ""
 
 #. Choices for "Audio on PC too".
 #. Choices of a troubleshooting setting, after its default.
-#: src/launcher/ui/views.cpp:2486
-#: src/launcher/ui/views.cpp:2615
+#: src/launcher/ui/views.cpp:2796
+#: src/launcher/ui/views.cpp:2925
 msgid "On"
 msgstr ""
 
 #. Faint link under a game's settings that opens its troubleshooting switches.
-#: src/launcher/ui/views.cpp:2544
+#: src/launcher/ui/views.cpp:2854
 msgid "Troubleshooting settings changed"
 msgstr ""
 
 #. Warning before a game's troubleshooting switches are shown.
 #. Title of a game's troubleshooting switches.
-#: src/launcher/ui/views.cpp:2557
-#: src/launcher/ui/views.cpp:2569
+#: src/launcher/ui/views.cpp:2867
+#: src/launcher/ui/views.cpp:2879
 msgid "Troubleshooting settings"
 msgstr ""
 
-#: src/launcher/ui/views.cpp:2558
+#: src/launcher/ui/views.cpp:2868
 msgid "These change how Venture runs this game. A wrong choice can make it look broken or crash. Change them only when asked to in a bug report."
 msgstr ""
 
-#: src/launcher/ui/views.cpp:2561
+#: src/launcher/ui/views.cpp:2871
 msgid "Show them"
 msgstr ""
 
-#: src/launcher/ui/views.cpp:2561
-#: src/launcher/ui/views.cpp:3535
-#: src/launcher/ui/views.cpp:3557
-#: src/launcher/ui/views.cpp:3623
-#: src/launcher/ui/views.cpp:3684
-#: src/launcher/ui/views.cpp:3685
+#: src/launcher/ui/views.cpp:2871
+#: src/launcher/ui/views.cpp:3845
+#: src/launcher/ui/views.cpp:3867
+#: src/launcher/ui/views.cpp:3933
+#: src/launcher/ui/views.cpp:3994
+#: src/launcher/ui/views.cpp:3995
 msgid "Cancel"
 msgstr ""
 
 #. Advanced setting: the GPU checks that a game's reads stay inside its buffers and images.
-#: src/launcher/ui/views.cpp:2576
+#: src/launcher/ui/views.cpp:2886
 msgid "GPU bounds checks"
 msgstr ""
 
-#: src/launcher/ui/views.cpp:2577
+#: src/launcher/ui/views.cpp:2887
 msgid "Stops a game's out-of-range GPU reads, which crash PC graphics drivers. Off can fix effects that look wrong in some games, but the game may crash."
 msgstr ""
 
-#: src/launcher/ui/views.cpp:2579
-#: src/launcher/ui/views.cpp:2584
-#: src/launcher/ui/views.cpp:2589
-#: src/launcher/ui/views.cpp:2594
-#: src/launcher/ui/views.cpp:2604
+#: src/launcher/ui/views.cpp:2889
+#: src/launcher/ui/views.cpp:2894
+#: src/launcher/ui/views.cpp:2899
+#: src/launcher/ui/views.cpp:2904
+#: src/launcher/ui/views.cpp:2914
 msgid "Default (On)"
 msgstr ""
 
 #. Advanced setting: new descriptor sets start with empty descriptors.
-#: src/launcher/ui/views.cpp:2581
+#: src/launcher/ui/views.cpp:2891
 msgid "Start new resource slots empty"
 msgstr ""
 
-#: src/launcher/ui/views.cpp:2582
+#: src/launcher/ui/views.cpp:2892
 msgid "Fills the shader resource slots a game has not written yet with empty ones, as a Quest does. Prevents GPU crashes on AMD graphics cards."
 msgstr ""
 
 #. Advanced setting: games may bind empty (null) shader resources.
-#: src/launcher/ui/views.cpp:2586
+#: src/launcher/ui/views.cpp:2896
 msgid "Allow empty resources"
 msgstr ""
 
-#: src/launcher/ui/views.cpp:2587
+#: src/launcher/ui/views.cpp:2897
 msgid "Lets a game use empty shader resources, as a Quest does. Turn off only to test a graphics driver problem."
 msgstr ""
 
 #. Advanced setting: shader variables start at zero.
-#: src/launcher/ui/views.cpp:2591
+#: src/launcher/ui/views.cpp:2901
 msgid "Zero shader variables"
 msgstr ""
 
-#: src/launcher/ui/views.cpp:2592
+#: src/launcher/ui/views.cpp:2902
 msgid "Starts shader variables at zero, as a Quest's driver does. Prevents speckles or flicker in games that read a variable before setting it."
 msgstr ""
 
 #. Advanced setting: render pass inputs are read as ordinary images, one layer per eye.
-#: src/launcher/ui/views.cpp:2596
+#: src/launcher/ui/views.cpp:2906
 msgid "Read pass inputs as images"
 msgstr ""
 
-#: src/launcher/ui/views.cpp:2597
+#: src/launcher/ui/views.cpp:2907
 msgid "Reads render pass inputs as ordinary images, one layer per eye. Automatic turns it on for AMD graphics cards, whose driver otherwise shows the left eye's picture in the right eye."
 msgstr ""
 
-#: src/launcher/ui/views.cpp:2599
+#: src/launcher/ui/views.cpp:2909
 msgid "Default (Automatic)"
 msgstr ""
 
 #. Advanced setting: games are offered the Quest's foveated rendering interface.
-#: src/launcher/ui/views.cpp:2601
+#: src/launcher/ui/views.cpp:2911
 msgid "Foveation support"
 msgstr ""
 
-#: src/launcher/ui/views.cpp:2602
+#: src/launcher/ui/views.cpp:2912
 msgid "Offers games the Quest's foveated rendering interface; the PC still renders every pixel. Off can help a game that shows nothing or flickers."
 msgstr ""
 
-#: src/launcher/ui/views.cpp:2629
+#: src/launcher/ui/views.cpp:2939
 msgid "Done"
 msgstr ""
 
-#: src/launcher/ui/views.cpp:2630
-#: src/launcher/ui/views.cpp:2631
+#: src/launcher/ui/views.cpp:2940
+#: src/launcher/ui/views.cpp:2941
 msgid "Reset to defaults"
 msgstr ""
 
-#: src/launcher/ui/views.cpp:3533
+#: src/launcher/ui/views.cpp:3843
 #, python-brace-format
 msgid "Uninstall {0}?"
 msgstr ""
 
-#: src/launcher/ui/views.cpp:3533
+#: src/launcher/ui/views.cpp:3843
 msgid "Uninstall this game?"
 msgstr ""
 
-#: src/launcher/ui/views.cpp:3534
+#: src/launcher/ui/views.cpp:3844
 msgid "Its files are removed from this PC. Saves are kept, and you can install it again from your library."
 msgstr ""
 
-#: src/launcher/ui/views.cpp:3535
+#: src/launcher/ui/views.cpp:3845
 msgid "Uninstall"
 msgstr ""
 
 #. Warning when Compress textures changes from Always to Automatic or Off.
-#: src/launcher/ui/views.cpp:3553
+#: src/launcher/ui/views.cpp:3863
 msgid "Disable texture compression?"
 msgstr ""
 
-#: src/launcher/ui/views.cpp:3554
+#: src/launcher/ui/views.cpp:3864
 msgid "This can increase video memory use by up to 4 times. It isn't recommended on GPUs with less than 20 GB of video memory."
 msgstr ""
 
-#: src/launcher/ui/views.cpp:3557
+#: src/launcher/ui/views.cpp:3867
 msgid "Change anyway"
 msgstr ""
 
 #. Shown at start in the Linux Flatpak when SteamVR is the active OpenXR runtime.
-#: src/launcher/ui/views.cpp:3580
+#: src/launcher/ui/views.cpp:3890
 msgid "SteamVR does not work with the Flatpak"
 msgstr ""
 
-#: src/launcher/ui/views.cpp:3581
+#: src/launcher/ui/views.cpp:3891
 msgid "SteamVR is your OpenXR runtime, and the Flatpak sandbox cannot reach SteamVR, so games will not start. Use the Venture AppImage, tarball or your distribution's package with SteamVR, or use WiVRn or Monado with the Flatpak."
 msgstr ""
 
-#: src/launcher/ui/views.cpp:3584
+#: src/launcher/ui/views.cpp:3894
 msgid "OK"
 msgstr ""
 
-#: src/launcher/ui/views.cpp:3619
+#: src/launcher/ui/views.cpp:3929
 #, python-brace-format
 msgid "Send the saves of {0} to the headset?"
 msgstr ""
 
-#: src/launcher/ui/views.cpp:3620
+#: src/launcher/ui/views.cpp:3930
 msgid "Send this game's saves to the headset?"
 msgstr ""
 
-#: src/launcher/ui/views.cpp:3621
+#: src/launcher/ui/views.cpp:3931
 msgid "This closes the game on the headset and replaces its saves with Venture's copy. The headset's current saves are backed up on this computer first."
 msgstr ""
 
-#: src/launcher/ui/views.cpp:3623
+#: src/launcher/ui/views.cpp:3933
 msgid "Send to headset"
 msgstr ""
 
-#: src/launcher/ui/views.cpp:3654
+#: src/launcher/ui/views.cpp:3964
 msgid "Link to store page"
 msgstr ""
 
 #. {0} is an Android package name such as com.studio.game.
-#: src/launcher/ui/views.cpp:3656
+#: src/launcher/ui/views.cpp:3966
 #, python-brace-format
 msgid "Paste the game's Meta store link or its ID. Its name, description and art then come from the store. The store page must be for {0}."
 msgstr ""
 
-#: src/launcher/ui/views.cpp:3669
+#: src/launcher/ui/views.cpp:3979
 msgid "Checking the store page…"
 msgstr ""
 
 #. {0} is a game's store name, {1} and {2} Android package names.
-#: src/launcher/ui/views.cpp:3675
+#: src/launcher/ui/views.cpp:3985
 #, python-brace-format
 msgid "This store page is for {0} ({1}), not {2}. Link it anyway only for a modified build or another edition of the same game."
 msgstr ""
 
-#: src/launcher/ui/views.cpp:3684
+#: src/launcher/ui/views.cpp:3994
 msgid "Link anyway"
 msgstr ""
 
-#: src/launcher/ui/views.cpp:3685
+#: src/launcher/ui/views.cpp:3995
 msgid "Link"
 msgstr ""
 
-#. Controls page checkbox. The grip is the controller's side button held to grab.
-#: src/launcher/ui/views.cpp:5099
+#. Controls page icon button tooltip: read controls from a file.
+#: src/launcher/ui/views.cpp:4632
+msgid "Import controls: a Venture controls file, or a SteamVR binding file for Venture"
+msgstr ""
+
+#. Controls page icon button tooltip: save these controls to a file.
+#: src/launcher/ui/views.cpp:4636
+msgid "Export this controller's controls to share them"
+msgstr ""
+
+#. notice after a controls file could not be read.
+#: src/launcher/ui/views.cpp:4859
+msgid "Could not read controls file"
+msgstr ""
+
+#. notice; {} is why ("not a controls file").
+#: src/launcher/ui/views.cpp:4868
+msgid "Controls not imported"
+msgstr ""
+
+#: src/launcher/ui/views.cpp:4904
+msgid "Could not save controls file"
+msgstr ""
+
+#. Controls page, the last item of the Grip input's list. The grip is the controller's side button held to grab.
+#: src/launcher/ui/views.cpp:5525
 msgid "Grip toggle"
 msgstr ""
 
-#: src/launcher/ui/views.cpp:5103
+#. Controls page, under "Grip toggle" in the Grip input's list.
+#. Controls page, the last item of a button's input list (A/X, B/Y, stick click, trigger).
+#: src/launcher/ui/views.cpp:5527
+#: src/launcher/ui/views.cpp:5530
 msgid "Press once to hold, again to let go"
+msgstr ""
+
+#. Controls page, the last item of a button's input list (A/X, B/Y, stick click, trigger).
+#: src/launcher/ui/views.cpp:5530
+msgid "Toggle"
+msgstr ""
+
+#. Controls page "Position in hand" rows (millimetres, then degrees).
+#: src/launcher/ui/views.cpp:5610
+#: src/launcher/ui/views.cpp:5640
+msgid "Forward"
+msgstr ""
+
+#. Controls page "Position in hand" rows (millimetres, then degrees).
+#: src/launcher/ui/views.cpp:5610
+#: src/launcher/ui/views.cpp:5640
+msgid "Up"
+msgstr ""
+
+#. Controls page "Position in hand" rows (millimetres, then degrees).
+#: src/launcher/ui/views.cpp:5610
+#: src/launcher/ui/views.cpp:5640
+msgid "Right"
+msgstr ""
+
+#: src/launcher/ui/views.cpp:5610
+#: src/launcher/ui/views.cpp:5641
+msgid "Tilt up"
+msgstr ""
+
+#: src/launcher/ui/views.cpp:5610
+#: src/launcher/ui/views.cpp:5641
+msgid "Turn left"
+msgstr ""
+
+#: src/launcher/ui/views.cpp:5610
+#: src/launcher/ui/views.cpp:5641
+msgid "Roll left"
+msgstr ""
+
+#. Controls page "Sticks, triggers and vibration" rows. Stick dead zone: how far the stick moves before the game sees it.
+#: src/launcher/ui/views.cpp:5611
+#: src/launcher/ui/views.cpp:5727
+msgid "Stick dead zone"
+msgstr ""
+
+#. Controls page "Sticks, triggers and vibration" rows. Stick dead zone: how far the stick moves before the game sees it.
+#: src/launcher/ui/views.cpp:5611
+#: src/launcher/ui/views.cpp:5727
+msgid "Invert stick left/right"
+msgstr ""
+
+#: src/launcher/ui/views.cpp:5611
+#: src/launcher/ui/views.cpp:5728
+msgid "Invert stick up/down"
+msgstr ""
+
+#. Controls page rows: how far the trigger or grip is pulled before it counts as pressed.
+#: src/launcher/ui/views.cpp:5612
+#: src/launcher/ui/views.cpp:5730
+msgid "Trigger press at"
+msgstr ""
+
+#. Controls page rows: how far the trigger or grip is pulled before it counts as pressed.
+#: src/launcher/ui/views.cpp:5612
+#: src/launcher/ui/views.cpp:5730
+msgid "Grip press at"
+msgstr ""
+
+#. Controls page rows: how far the trigger or grip is pulled before it counts as pressed.
+#: src/launcher/ui/views.cpp:5612
+#: src/launcher/ui/views.cpp:5730
+msgid "Vibration"
+msgstr ""
+
+#. Controls page card heading: moving and turning where the game sees the controllers.
+#: src/launcher/ui/views.cpp:5629
+msgid "Position in hand"
+msgstr ""
+
+#. Controls page checkbox under "Position in hand".
+#: src/launcher/ui/views.cpp:5688
+msgid "Mirror for both hands"
+msgstr ""
+
+#. Controls page button: clears both hands' position offsets.
+#: src/launcher/ui/views.cpp:5690
+#: src/launcher/ui/views.cpp:5694
+msgid "Reset position"
+msgstr ""
+
+#. Controls page card heading: stick dead zone and inversion, trigger and grip press points, vibration.
+#: src/launcher/ui/views.cpp:5718
+msgid "Sticks, triggers and vibration"
+msgstr ""
+
+#. Controls page: a trigger or grip press point left to the runtime.
+#: src/launcher/ui/views.cpp:5773
+msgid "Auto"
+msgstr ""
+
+#. Controls page checkbox under "Sticks, triggers and vibration".
+#: src/launcher/ui/views.cpp:5798
+msgid "Same for both hands"
+msgstr ""
+
+#. Controls page button: puts the sticks, press points and vibration back to their defaults.
+#: src/launcher/ui/views.cpp:5801
+#: src/launcher/ui/views.cpp:5804
+msgid "Reset"
 msgstr ""

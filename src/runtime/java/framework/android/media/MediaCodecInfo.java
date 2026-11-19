@@ -7,10 +7,13 @@ package android.media;
 public final class MediaCodecInfo {
   private final String name;
   private final String type;
-  MediaCodecInfo(String name, String type) { this.name = name; this.type = type; }
+  private final String canonical;
+  MediaCodecInfo(String name, String type) { this(name, type, name); }
+  /** An alias (a codec created by another component name) of the canonical listed decoder. */
+  MediaCodecInfo(String name, String type, String canonical) { this.name = name; this.type = type; this.canonical = canonical; }
   public String getName() { return name; }
-  public String getCanonicalName() { return name; }
-  public boolean isAlias() { return false; }
+  public String getCanonicalName() { return canonical; }
+  public boolean isAlias() { return !name.equals(canonical); }
   public boolean isEncoder() { return false; }
   public boolean isVendor() { return false; }
   public boolean isSoftwareOnly() { return true; }
@@ -54,6 +57,40 @@ public final class MediaCodecInfo {
     public boolean areSizeAndRateSupported(int width, int height, double frameRate) {
       return isSizeSupported(width, height) && frameRate >= 0 && frameRate <= 960;
     }
+    /** AOSP returns null when the device has no measured rates; the host decoder publishes none. */
+    public android.util.Range<Double> getAchievableFrameRatesFor(int width, int height) {
+      if (!isSizeSupported(width, height)) throw new IllegalArgumentException("unsupported size");
+      return null;
+    }
+    /** Null: the host decoder declares no performance points (AOSP: unknown). */
+    public java.util.List<PerformancePoint> getSupportedPerformancePoints() { return null; }
+    /** AOSP's video performance point: a frame size in 16x16 macroblocks at a frame rate. */
+    public static final class PerformancePoint {
+      private final int width, height, frameRate, blocks;
+      private final long blockRate;
+      public PerformancePoint(int width, int height, int frameRate) {
+        if (width < 1 || height < 1 || frameRate < 1) throw new IllegalArgumentException("invalid performance point");
+        this.width = width; this.height = height; this.frameRate = frameRate;
+        blocks = ((width + 15) / 16) * ((height + 15) / 16);
+        blockRate = (long) blocks * frameRate;
+      }
+      private int side() { return Math.max((width + 15) / 16, (height + 15) / 16); }
+      public boolean covers(PerformancePoint other) {
+        return other != null && blocks >= other.blocks && blockRate >= other.blockRate
+            && frameRate >= other.frameRate && side() >= other.side();
+      }
+      public boolean covers(MediaFormat format) {
+        Number rate = format.getNumber(MediaFormat.KEY_FRAME_RATE, 0);
+        return covers(new PerformancePoint(Math.max(1, format.getInteger(MediaFormat.KEY_WIDTH, 1)),
+            Math.max(1, format.getInteger(MediaFormat.KEY_HEIGHT, 1)), Math.max(1, (int) Math.ceil(rate.doubleValue()))));
+      }
+      @Override public boolean equals(Object other) {
+        return other instanceof PerformancePoint p && blocks == p.blocks && blockRate == p.blockRate
+            && frameRate == p.frameRate && side() == p.side();
+      }
+      @Override public int hashCode() { return java.util.Objects.hash(blocks, blockRate, frameRate); }
+      @Override public String toString() { return "PerformancePoint(" + width + "x" + height + "@" + frameRate + ")"; }
+    }
   }
   public static final class AudioCapabilities {
     AudioCapabilities() {}
@@ -67,6 +104,18 @@ public final class MediaCodecInfo {
     // Venture's host decoder outputs mono or stereo PCM.
     public int getMaxInputChannelCount() { return 2; }
     public int getMinInputChannelCount() { return 1; }
+    public android.util.Range<Integer>[] getInputChannelCountRanges() {
+      @SuppressWarnings("unchecked") var ranges = (android.util.Range<Integer>[]) new android.util.Range<?>[] {android.util.Range.create(1, 2)};
+      return ranges;
+    }
+  }
+  /** Encoder controls; Venture lists no encoders, so no codec returns these. */
+  public static final class EncoderCapabilities {
+    public static final int BITRATE_MODE_CQ = 0, BITRATE_MODE_VBR = 1, BITRATE_MODE_CBR = 2, BITRATE_MODE_CBR_FD = 3;
+    EncoderCapabilities() {}
+    public android.util.Range<Integer> getComplexityRange() { return android.util.Range.create(0, 0); }
+    public android.util.Range<Integer> getQualityRange() { return android.util.Range.create(0, 0); }
+    public boolean isBitrateModeSupported(int mode) { return false; }
   }
   public static final class CodecCapabilities {
     public static final int COLOR_Format12bitRGB444 = 3;
@@ -138,7 +187,10 @@ public final class MediaCodecInfo {
     static CodecCapabilities forType(String mime) {
       var c = new CodecCapabilities();
       c.mime = mime;
-      if (mime.startsWith("video/")) c.colorFormats = new int[] {COLOR_FormatYUV420Flexible};
+      // AOSP's c2.android decoders list these ByteBuffer layouts (Codec2InfoBuilder). MediaCodec
+      // outputs NV12 for the semi-planar ones and flexible YUV, and I420 for the planar ones.
+      if (mime.startsWith("video/")) c.colorFormats = new int[] {COLOR_FormatYUV420Flexible, COLOR_FormatYUV420Planar,
+          COLOR_FormatYUV420SemiPlanar, COLOR_FormatYUV420PackedPlanar, COLOR_FormatYUV420PackedSemiPlanar};
       c.profileLevels = switch (mime) {
         case "video/avc" -> new CodecProfileLevel[] {
             level(CodecProfileLevel.AVCProfileConstrainedBaseline, CodecProfileLevel.AVCLevel62),
@@ -167,9 +219,40 @@ public final class MediaCodecInfo {
       return mime.startsWith("video/") && FEATURE_AdaptivePlayback.equals(feature);
     }
     public boolean isFeatureRequired(String feature) { return false; }
-    public boolean isFormatSupported(MediaFormat format) {
-      return format != null && mime.equalsIgnoreCase(format.getString(MediaFormat.KEY_MIME));
+    /** AOSP createFromProfileLevel: capabilities for one supported profile and level, else null. */
+    public static CodecCapabilities createFromProfileLevel(String mime, int profile, int level) {
+      var decoder = mime == null ? null : MediaCodecList.decoderFor(mime);
+      if (decoder == null) return null;
+      var c = forType(decoder.getSupportedTypes()[0]);
+      if (!c.supportsProfileLevel(profile, level)) return null;
+      c.profileLevels = new CodecProfileLevel[] {level(profile, level)};
+      return c;
     }
+    // Levels are flags ordered by size; 0 leaves the level unspecified (AAC has none).
+    private boolean supportsProfileLevel(int profile, int level) {
+      for (var p : profileLevels) if (p.profile == profile && (level <= 0 || p.level == 0 || level <= p.level)) return true;
+      return false;
+    }
+    public boolean isFormatSupported(MediaFormat format) {
+      if (format == null || !mime.equalsIgnoreCase(format.getString(MediaFormat.KEY_MIME))) return false;
+      if (format.containsKey(MediaFormat.KEY_PROFILE)
+          && !supportsProfileLevel(format.getInteger(MediaFormat.KEY_PROFILE), format.getInteger(MediaFormat.KEY_LEVEL, 0))) return false;
+      for (var feature : new String[] {FEATURE_SecurePlayback, FEATURE_TunneledPlayback, FEATURE_LowLatency, FEATURE_PartialFrame,
+                                       FEATURE_FrameParsing, FEATURE_MultipleFrames, FEATURE_DynamicTimestamp, FEATURE_IntraRefresh})
+        if (format.getInteger("feature-" + feature, 0) != 0 && !isFeatureSupported(feature)) return false;
+      if (mime.startsWith("video/")) {
+        int width = format.getInteger(MediaFormat.KEY_WIDTH, 0), height = format.getInteger(MediaFormat.KEY_HEIGHT, 0);
+        if ((width != 0 || height != 0) && !getVideoCapabilities().isSizeSupported(width != 0 ? width : 2, height != 0 ? height : 2))
+          return false;
+        double rate = format.getNumber(MediaFormat.KEY_FRAME_RATE, 0).doubleValue();
+        return rate >= 0 && rate <= 960;
+      }
+      var audio = getAudioCapabilities();
+      if (audio == null) return true;
+      int rate = format.getInteger(MediaFormat.KEY_SAMPLE_RATE, 0), channels = format.getInteger(MediaFormat.KEY_CHANNEL_COUNT, 0);
+      return (rate == 0 || audio.isSampleRateSupported(rate)) && channels <= audio.getMaxInputChannelCount();
+    }
+    public EncoderCapabilities getEncoderCapabilities() { return null; }
     public VideoCapabilities getVideoCapabilities() { return mime.startsWith("video/") ? new VideoCapabilities() : null; }
     public AudioCapabilities getAudioCapabilities() { return mime.startsWith("audio/") ? new AudioCapabilities() : null; }
     public MediaFormat getDefaultFormat() { var format = new MediaFormat(); format.setString(MediaFormat.KEY_MIME, mime); return format; }

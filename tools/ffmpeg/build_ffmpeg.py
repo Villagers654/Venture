@@ -19,34 +19,63 @@ from tools import bootstrap
 LOCK_FILE = Path(__file__).with_name('ffmpeg.lock.json')
 LOCK_HASH = hashlib.sha256(LOCK_FILE.read_bytes()).hexdigest()
 LOCK = json.loads(LOCK_FILE.read_text())
+# The build's target: the host (win32-x64, linux-x64, linux-arm64), or
+# linux-arm64 cross-built from Windows or x64 Linux with the pinned sysroot
+# (tools/linux_arm64/sysroot.py, --target linux-arm64).
+HOST_TARGET = 'win32-x64' if os.name == 'nt' else (
+    'linux-arm64' if bootstrap.ARM64_LINUX else sys.platform + '-x64')
+TARGET = HOST_TARGET
 COMPONENTS = {'CONFIG_AAC_DECODER', 'CONFIG_H264_DECODER', 'CONFIG_HEVC_DECODER',
               'CONFIG_VP8_DECODER', 'CONFIG_VP9_DECODER', 'CONFIG_MOV_DEMUXER',
               'CONFIG_MATROSKA_DEMUXER', 'CONFIG_VP9_PARSER', 'CONFIG_VP9_SUPERFRAME_SPLIT_BSF',
               'CONFIG_MP3_DEMUXER', 'CONFIG_MP3FLOAT_DECODER', 'CONFIG_MPEGAUDIO_PARSER',
               'CONFIG_H264_VULKAN_HWACCEL', 'CONFIG_HEVC_VULKAN_HWACCEL', 'CONFIG_VP9_VULKAN_HWACCEL'}
-if os.name == 'nt':
-    COMPONENTS |= {'CONFIG_'+codec+'_'+entry+'_HWACCEL' for codec in ('H264','HEVC','VP9')
-                   for entry in ('D3D11VA','D3D11VA2')}
-BASE = bootstrap.TOOLCHAINS / ('ffmpeg-' + sys.platform + '-x64-' + LOCK_HASH)
+WINDOWS_COMPONENTS = {'CONFIG_'+codec+'_'+entry+'_HWACCEL' for codec in ('H264','HEVC','VP9')
+                      for entry in ('D3D11VA','D3D11VA2')}
+
+
+def configure_target(target):
+    """Select the build target; module state the functions below read."""
+    global TARGET, BASE, COMPONENTS, WINDOWS_TARGET
+    TARGET = target
+    WINDOWS_TARGET = target == 'win32-x64'
+    COMPONENTS = BASE_COMPONENTS | (WINDOWS_COMPONENTS if WINDOWS_TARGET else set())
+    BASE = bootstrap.TOOLCHAINS / ('ffmpeg-' + target + '-' + LOCK_HASH)
+
+
+def install_name():
+    return 'install' if WINDOWS_TARGET else 'install-posix'
+
+
+def link_name():
+    """.deps/ffmpeg for the host's own build; a cross target gets its own name."""
+    return 'ffmpeg' if TARGET == HOST_TARGET else 'ffmpeg-' + TARGET
+
+
+def library_names():
+    return {'bin/avutil-60.dll', 'bin/avcodec-62.dll', 'bin/avformat-62.dll', 'bin/swscale-9.dll'} if WINDOWS_TARGET else {
+        'lib/libavutil.so.60', 'lib/libavcodec.so.62', 'lib/libavformat.so.62', 'lib/libswscale.so.9'}
+
+
+BASE_COMPONENTS = set(COMPONENTS)
+configure_target(HOST_TARGET)
 
 
 def validate_cache(base):
     """Verify published bytes without invoking configure, make or a compiler."""
-    install = base / ('install' if os.name == 'nt' else 'install-posix')
+    install = base / install_name()
     manifest = json.loads((install / 'venture-ffmpeg.json').read_text())
     if (manifest.get('lock_sha256') != LOCK_HASH or
         manifest['recipe']['signature_fingerprint'] != LOCK['fingerprint'] or
         manifest['recipe']['sha256'] != LOCK['sha256'] or
         manifest['recipe']['version'] != LOCK['version'] or
         manifest['recipe']['flags'][:len(LOCK['flags'])] != LOCK['flags'] or
-        (os.name == 'nt' and manifest['recipe']['flags'][len(LOCK['flags'])+1:len(LOCK['flags'])+1+len(LOCK['windows_flags'])] != LOCK['windows_flags']) or
+        (WINDOWS_TARGET and manifest['recipe']['flags'][len(LOCK['flags'])+1:len(LOCK['flags'])+1+len(LOCK['windows_flags'])] != LOCK['windows_flags']) or
         manifest['source_patches'] != [] or
         set(manifest['components']) != COMPONENTS):
         raise RuntimeError('FFmpeg cache recipe does not match the pinned lock')
     expected = dict(manifest['artifacts'])
-    names = {'bin/avutil-60.dll', 'bin/avcodec-62.dll', 'bin/avformat-62.dll', 'bin/swscale-9.dll'} if os.name == 'nt' else {
-        'lib/libavutil.so.60', 'lib/libavcodec.so.62', 'lib/libavformat.so.62', 'lib/libswscale.so.9'}
-    if set(expected) != names or not manifest['headers']:
+    if set(expected) != library_names() or not manifest['headers']:
         raise RuntimeError('Incomplete FFmpeg cache manifest')
     expected.update(manifest['headers'])
     for name, digest in expected.items():
@@ -65,7 +94,7 @@ def provision(rebuild=False):
     """One serialized build per lock; each worktree gets only a junction."""
     bootstrap.TOOLCHAINS.mkdir(parents=True, exist_ok=True)
     with bootstrap.cache_lock(BASE.with_suffix('.lock')):
-        manifest = BASE / ('install' if os.name == 'nt' else 'install-posix') / 'venture-ffmpeg.json'
+        manifest = BASE / install_name() / 'venture-ffmpeg.json'
         if rebuild or not manifest.exists():
             print('[ffmpeg] building shared pinned dependency', flush=True)
             build_dependency()
@@ -73,7 +102,7 @@ def provision(rebuild=False):
             validate_cache(BASE)
         except (OSError, ValueError, KeyError, RuntimeError) as error:
             raise RuntimeError('Invalid FFmpeg cache; run python tools/bootstrap.py --ffmpeg: ' + str(error)) from error
-        link = bootstrap.DEPS / 'ffmpeg'
+        link = bootstrap.DEPS / link_name()
         bootstrap.DEPS.mkdir(parents=True, exist_ok=True)
         if os.path.lexists(link):
             if link.is_symlink() or link.is_junction():
@@ -220,13 +249,13 @@ def build_dependency():
         staging.rename(vulkan_headers)
     if not (vulkan_headers / 'include/vulkan/vulkan.h').exists():
         raise RuntimeError('Pinned Vulkan-Headers are incomplete')
-    build =BASE / ('build-windows' if os.name == 'nt' else 'build-posix'); build.mkdir(exist_ok=True)
+    build =BASE / ('build-windows' if WINDOWS_TARGET else 'build-posix'); build.mkdir(exist_ok=True)
     source_link = build / 'src'
     if not source_link.exists():
         bootstrap.junction(source_link, source)
     if source_link.resolve() != source.resolve():
         raise RuntimeError('FFmpeg source junction points outside the pinned source')
-    install = BASE / ('install' if os.name == 'nt' else 'install-posix')
+    install = BASE / install_name()
     # Native mingw32-make needs Windows/relative paths, not MSYS /c/... paths.
     native_path = lambda p: str(Path(p).absolute()).replace('\\', '/')
     # Configure embeds these arguments in each DLL. Relative paths preserve
@@ -234,18 +263,37 @@ def build_dependency():
     flags = list(LOCK['flags']) + ['--prefix=../'+install.name]
     env = dict(os.environ)
     make_flags = []
+    if TARGET != HOST_TARGET:
+        # linux-arm64 cross build: clang for aarch64-linux-gnu against the pinned
+        # sysroot, linked by lld; the sysroot is reached through a junction so the
+        # configuration embedded in the libraries holds no workspace path.
+        sysroot = ROOT / '.deps/linux-arm64-sysroot'
+        if not (sysroot / '.venture-sysroot.ok').exists():
+            raise RuntimeError('Missing the Linux arm64 sysroot: run py -3 tools/linux_arm64/sysroot.py')
+        sysroot_link = BASE / 'sysroot'
+        if not sysroot_link.exists():
+            bootstrap.junction(sysroot_link, sysroot.resolve())
+        if sysroot_link.resolve() != sysroot.resolve():
+            raise RuntimeError('FFmpeg sysroot junction differs from the pinned sysroot')
+        target_flags = '--target=aarch64-linux-gnu --sysroot=../sysroot'
+        flags += ['--target-os=linux', '--arch=aarch64', '--enable-cross-compile', '--pkg-config=false',
+                  '--extra-cflags='+target_flags, '--extra-ldflags='+target_flags+' -fuse-ld=lld']
     if os.name == 'nt':
-        flags += LOCK['windows_flags']
+        if WINDOWS_TARGET:
+            flags += LOCK['windows_flags']
         tools = ROOT / '.deps/llvm-mingw/bin'
         compiler_link = BASE / 'llvm-mingw'
         if not compiler_link.exists():
             bootstrap.junction(compiler_link, tools.parent.resolve())
         if compiler_link.resolve() != tools.parent.resolve():
             raise RuntimeError('FFmpeg compiler junction differs from the pinned toolchain')
-        flags += ['--target-os=mingw32', '--arch=x86_64', '--enable-cross-compile']
-        for flag, tool in [('cc','clang'), ('cxx','clang++'), ('ld','clang'),
-                           ('host-cc','clang'), ('windres','llvm-windres'), ('ar','llvm-ar'),
-                           ('nm','llvm-nm'), ('ranlib','llvm-ranlib'), ('strip','llvm-strip')]:
+        if WINDOWS_TARGET:
+            flags += ['--target-os=mingw32', '--arch=x86_64', '--enable-cross-compile']
+        tool_flags = [('cc','clang'), ('cxx','clang++'), ('ld','clang'), ('host-cc','clang'), ('ar','llvm-ar'),
+                      ('nm','llvm-nm'), ('ranlib','llvm-ranlib'), ('strip','llvm-strip')]
+        if WINDOWS_TARGET:
+            tool_flags.insert(4, ('windres', 'llvm-windres'))
+        for flag, tool in tool_flags:
             flags += ['--'+flag+'=../llvm-mingw/bin/'+tool+'.exe']
         bash = git_bash()
         shell = bash.parent
@@ -283,11 +331,10 @@ def build_dependency():
                   '_ENCODER','_MUXER','_PROTOCOL','_BSF','_FILTER','_HWACCEL'))]
     if set(restricted) != COMPONENTS:
         raise RuntimeError('Unapproved FFmpeg components: '+repr(restricted))
-    names = ['bin/avutil-60.dll','bin/avcodec-62.dll','bin/avformat-62.dll', 'bin/swscale-9.dll'] if os.name=='nt' else [
-        'lib/libavutil.so.60','lib/libavcodec.so.62','lib/libavformat.so.62', 'lib/libswscale.so.9']
+    names = sorted(library_names())
     artifacts = {name:hashlib.sha256((install/name).read_bytes()).hexdigest() for name in names}
     imports = {}
-    if os.name == 'nt':
+    if WINDOWS_TARGET:
         for name in names:
             report = subprocess.check_output([str(tools/'llvm-readobj.exe'), '--coff-imports',
                 str(install/name)], text=True)
@@ -311,4 +358,8 @@ def build_dependency():
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--rebuild', action='store_true')
-    provision(parser.parse_args().rebuild)
+    parser.add_argument('--target', choices=sorted({HOST_TARGET, 'linux-arm64'}), default=HOST_TARGET,
+                        help='build target (default: the host); linux-arm64 cross-builds with the pinned sysroot')
+    arguments = parser.parse_args()
+    configure_target(arguments.target)
+    provision(arguments.rebuild)

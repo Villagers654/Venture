@@ -18,4 +18,6 @@ public interface InputConnection {
   boolean requestCursorUpdates(int mode);
   android.os.Handler getHandler();
   void closeConnection();
+  // AOSP declares it abstract; a default keeps connections written against older levels loading.
+  default ExtractedText getExtractedText(ExtractedTextRequest request, int flags) { return null; }
 }

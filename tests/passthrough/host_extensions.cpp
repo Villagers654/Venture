@@ -1,6 +1,7 @@
 // Exercise the production host initializer against an external OpenXR host.
 // Each invocation is a fresh process, as host_xr() owns a process-lifetime instance.
 #include "common/log.h"
+#include "common/openxr_layers.h"
 #include "xr/display_memory.h"
 #include "xr/host_xr.h"
 #include "xr/openxr_layers.h"
@@ -34,6 +35,10 @@ std::vector<ApiLayer> enabled_openxr_layers() { return {}; }
 bool skip_openxr_layers(const std::vector<ApiLayer>&) { return true; }
 QuietLibraryErrors::QuietLibraryErrors() = default;
 QuietLibraryErrors::~QuietLibraryErrors() = default;
+}
+namespace venture::openxr_layers {
+// No other installed runtime to name beside the test host.
+std::vector<Runtime> installed_runtimes() { return {}; }
 }
 
 extern "C" {

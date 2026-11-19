@@ -5,12 +5,14 @@
 #include <cerrno>
 #include <dirent.h>
 #include <sys/mman.h>
+#include <sys/resource.h>
 #include <sys/syscall.h>
 #include <sys/uio.h>
 #include <unistd.h>
 #include <algorithm>
 #include <atomic>
 #include <optional>
+#include <cstdlib>
 #include <cstring>
 #include <cstdio>
 #include <fstream>
@@ -212,6 +214,19 @@ bool commit_charge(CommitCharge& out) {
   out = result;
   return true;
 }
+bool process_activity(ProcessActivity& out) {
+  rusage usage{};
+  if (getrusage(RUSAGE_SELF, &usage)) return false;
+  const auto ns = [](timeval t) { return std::uint64_t(t.tv_sec) * 1'000'000'000 + std::uint64_t(t.tv_usec) * 1000; };
+  out = {};
+  out.cpu_ns = ns(usage.ru_utime) + ns(usage.ru_stime);
+  out.faults = std::uint64_t(usage.ru_minflt) + std::uint64_t(usage.ru_majflt);
+  out.hard_faults = usage.ru_majflt;
+  std::ifstream io("/proc/self/io");
+  for (std::string line; std::getline(io, line);)
+    if (line.starts_with("rchar: ")) { out.read_bytes = std::strtoull(line.c_str() + 7, nullptr, 10); break; }
+  return true;
+}
 bool process_resident_memory(ProcessResidentMemory& out) {
   std::ifstream input("/proc/self/status");
   ProcessResidentMemory result;
@@ -234,10 +249,13 @@ __attribute__((target("cx16"))) bool cas128(GuestAddr p, const void* value, cons
   std::memcpy(&v, value, 16); std::memcpy(&e, expected, 16);
   return __sync_bool_compare_and_swap(g2h<unsigned __int128>(p), e, v);
 }
+std::atomic<bool> guest_code_executable{false};
 int protection(std::uint32_t p) {
-  return ((p & (kProtRead | kProtExec)) ? PROT_READ : 0) | ((p & kProtWrite) ? PROT_WRITE : 0);
+  return ((p & (kProtRead | kProtExec)) ? PROT_READ : 0) | ((p & kProtWrite) ? PROT_WRITE : 0) |
+         ((p & kProtExec) && guest_code_executable.load(std::memory_order_relaxed) ? PROT_EXEC : 0);
 }
 }
+void set_guest_code_executable(bool executable) { guest_code_executable.store(executable, std::memory_order_relaxed); }
 std::uint64_t reservation_granularity() { return 4096; }
 GuestAddr reserve(GuestAddr address, std::uint64_t size, bool exact) {
   auto p = mmap(g2h(address), size, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS |
@@ -250,8 +268,9 @@ bool decommit(GuestAddr address, std::uint64_t size) {
   return mprotect(g2h(address), size, PROT_NONE) == 0 && madvise(g2h(address), size, MADV_DONTNEED) == 0;
 }
 bool protect(GuestAddr address, std::uint64_t size, std::uint32_t prot) { return mprotect(g2h(address), size, protection(prot)) == 0; }
-int map_shared_file(int fd, std::uint64_t offset, std::uint64_t size, std::uint32_t prot, FileMapping& out) {
-  auto* view = mmap(nullptr, size, protection(prot), MAP_SHARED, fd, static_cast<off_t>(offset));
+int map_shared_file(int fd, std::uint64_t offset, std::uint64_t size, std::uint32_t prot, FileMapping& out, GuestAddr at) {
+  auto* view = mmap(at ? g2h(at) : nullptr, size, protection(prot), MAP_SHARED | (at ? MAP_FIXED : 0), fd,
+                    static_cast<off_t>(offset));
   if (view == MAP_FAILED) {
     switch (errno) { case EACCES: return -err::kEACCES; case EBADF: return -err::kEBADF;
       case EINVAL: return -err::kEINVAL; default: return -err::kENOMEM; }
@@ -262,7 +281,12 @@ void unmap_shared_file(const FileMapping& mapping) { munmap(g2h(mapping.base), m
 int sync_shared_file(GuestAddr address, std::uint64_t size, bool synchronous) {
   return msync(g2h(address), size, synchronous ? MS_SYNC : MS_ASYNC) == 0 ? 0 : -err::kEIO;
 }
-#if defined(__linux__) && defined(__x86_64__)
+#if defined(__linux__) && (defined(__x86_64__) || defined(__aarch64__))
+#define VENTURE_POSIX_GUARDED 1
+#else
+#define VENTURE_POSIX_GUARDED 0
+#endif
+#if VENTURE_POSIX_GUARDED
 namespace {
 bool guarded_access_ready();
 bool guarded_read(GuestAddr address, void* out, std::size_t size);
@@ -270,7 +294,7 @@ bool guarded_read(GuestAddr address, void* out, std::size_t size);
 #endif
 bool read_memory(GuestAddr address, void* out, std::size_t size) {
   if (address + size < address) return false;
-#if defined(__linux__) && defined(__x86_64__)
+#if VENTURE_POSIX_GUARDED
   // As on Windows, a naturally aligned 1, 2, 4 or 8-byte read is one load of
   // that width (ARMv8 single-copy atomicity); process_vm_readv promises none.
   if (size && size <= 8 && !(size & (size - 1)) && !(address & (size - 1)) && guarded_access_ready())
@@ -310,6 +334,19 @@ bool memory_accessible(GuestAddr address, std::size_t size, bool write) {
 }
 bool compare_exchange(GuestAddr address, const void* value, void* expected, std::size_t size) {
   if (address & (size - 1)) return false;
+#if defined(__linux__) && defined(__aarch64__)
+  // The translator's every exclusive store comes here on arm64: one guarded
+  // CAS instead of reading /proc/self/maps first. A fault reports false and
+  // leaves expected alone.
+  if (size <= 8 && guarded_access_ready()) {
+    std::uint64_t want = 0, next = 0, seen = 0;
+    std::memcpy(&want, expected, size);
+    std::memcpy(&next, value, size);
+    if (!atomic_rmw(address, static_cast<unsigned>(size), AtomicRmw::compare_exchange, want, next, seen)) return false;
+    std::memcpy(expected, &seen, size);
+    return seen == want;
+  }
+#endif
   // Callback path is used only after fastmem faults. Never dereference a bad address.
   if (!memory_accessible(address, size, true)) return false;
   switch (size) {
@@ -323,7 +360,7 @@ bool compare_exchange(GuestAddr address, const void* value, void* expected, std:
 }
 }
 
-#if defined(__linux__) && defined(__x86_64__)
+#if VENTURE_POSIX_GUARDED
 #include <csignal>
 #include <ucontext.h>
 #include <csetjmp>
@@ -345,16 +382,47 @@ thread_local NativeMemoryScope* native_memory_scope = nullptr;
 struct sigaction previous_segv{}, previous_bus{};
 // Installed on first use, so it runs before (and chains to) handlers installed
 // earlier, such as Dynarmic's fastmem handler.
+#if defined(__aarch64__)
+// The fault's ESR from the signal frame's records (arch/arm64/include/uapi/asm/sigcontext.h).
+std::uint64_t fault_esr(mcontext_t& machine) {
+  auto* p = reinterpret_cast<unsigned char*>(machine.__reserved);
+  auto* const end = p + sizeof machine.__reserved;
+  while (p + 8 <= end) {
+    std::uint32_t magic, size;
+    std::memcpy(&magic, p, 4);
+    std::memcpy(&size, p + 4, 4);
+    if (!magic || size < 8) break;
+    if (magic == 0x45535201u && size >= 16) {
+      std::uint64_t esr;
+      std::memcpy(&esr, p + 8, 8);
+      return esr;
+    }
+    p += size;
+  }
+  return 0;
+}
+#endif
 void guarded_fault(int signal, siginfo_t* info, void* raw_context) {
-  auto& rip = static_cast<ucontext_t*>(raw_context)->uc_mcontext.gregs[REG_RIP];
+  auto& machine = static_cast<ucontext_t*>(raw_context)->uc_mcontext;
+#if defined(__aarch64__)
+  if (guarded_ip(static_cast<std::uintptr_t>(machine.pc))) {
+    machine.pc = reinterpret_cast<std::uintptr_t>(venture_guarded_fault);
+    return;
+  }
+  const auto esr = fault_esr(machine);
+  const auto exception_class = (esr >> 26) & 0x3f;
+  const bool write = (exception_class == 0x24 || exception_class == 0x25) && ((esr >> 6) & 1);
+  const bool execute = exception_class == 0x20 || exception_class == 0x21;
+#else
+  auto& rip = machine.gregs[REG_RIP];
   if (guarded_ip(static_cast<std::uintptr_t>(rip))) {
     rip = reinterpret_cast<greg_t>(venture_guarded_fault);
     return;
   }
+  const bool write = (machine.gregs[REG_ERR] & 2) != 0;
+  const bool execute = (machine.gregs[REG_ERR] & 16) != 0;
+#endif
   if (auto* scope = native_memory_scope; scope && info->si_code > 0) {
-    const auto& machine = static_cast<ucontext_t*>(raw_context)->uc_mcontext;
-    const bool write = (machine.gregs[REG_ERR] & 2) != 0;
-    const bool execute = (machine.gregs[REG_ERR] & 16) != 0;
     if (!execute && native_fault_matches(scope->call, h2g(info->si_addr), write)) {
       scope->fault_address = h2g(info->si_addr); scope->fault_write = write;
       scope->fault_bus = signal == SIGBUS;

@@ -1,6 +1,7 @@
 # Venture Linux release baseline: Ubuntu 22.04 (glibc 2.35) with LLVM/clang 22
 # and a static libc++. Binaries built here run on glibc >= 2.35 distributions.
 # See docs/LINUX_RELEASE_BUILD.md. Build: tools/linux-baseline/baseline.sh image
+# The same file builds the x86_64 and the aarch64 baseline (on an arm64 host).
 FROM docker.io/library/ubuntu:22.04
 
 ARG LLVM=22
@@ -33,5 +34,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN mkdir -p /opt/venture-baseline/bin /opt/venture-baseline/static && \
     ln -s /usr/bin/python3.12 /opt/venture-baseline/bin/python3 && \
     ln -s /usr/bin/python3.12 /opt/venture-baseline/bin/python && \
-    ln -s /usr/lib/gcc/x86_64-linux-gnu/11/libatomic.a /opt/venture-baseline/static/libatomic.a
+    ln -s /usr/lib/gcc/$(uname -m)-linux-gnu/11/libatomic.a /opt/venture-baseline/static/libatomic.a && \
+    test -f /opt/venture-baseline/static/libatomic.a
 ENV PATH=/opt/venture-baseline/bin:/usr/lib/llvm-${LLVM}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin

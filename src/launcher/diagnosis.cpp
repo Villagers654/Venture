@@ -17,8 +17,10 @@ struct Rule {
   std::array<std::string_view, 6> signatures;  // any one matches; lower case
   std::string_view cause, advice;
   std::string_view also{};  // when set, must appear too; lower case
-  // When one appears, the rest of its line (as written) is added to the cause.
+  // When one appears, the rest of its line (as written) is added to the cause,
+  // after detail_label.
   std::array<std::string_view, 2> detail{};
+  std::string_view detail_label{};
 };
 constexpr std::string_view kSendReport = "Send this report with an issue: the game needs a fix in Venture.";
 constexpr std::string_view kGpuAdvice =
@@ -54,7 +56,8 @@ constexpr Rule kRules[] = {
      "Repair or reinstall the program that installed the layer, or uninstall it so its leftover registration goes, "
      "update Venture, then press Play again.",
      "could not create an instance",
-     {"openxr api layer broken: "}},
+     {"openxr api layer broken: "},
+     "Broken layer: "},
     {{"your configured openxr runtime is unavailable", "xr_error_runtime_unavailable"},
      "No OpenXR runtime was running, or none is set as the active one.",
      "Start your VR runtime (SteamVR, WiVRn or Monado), make it the active OpenXR runtime, connect the headset, "
@@ -74,7 +77,8 @@ constexpr Rule kRules[] = {
      "Update your VR runtime or switch to one with Vulkan support (SteamVR, WiVRn, Monado)."},
     {{"hmd result -35 (flat mode)", "xr_error_form_factor_unavailable"},
      "Your VR runtime had no headset connected.",
-     "Connect the headset and make sure it is tracking, then start the game again."},
+     "Connect the headset and make sure it is tracking, then start the game again. If your headset uses another VR "
+     "runtime (SteamVR for a Steam Frame, for example), choose it in Settings > VR runtime."},
     // xr/session.cpp session_failed(): the game ran on without its session.
     {{"the vr session could not be created: "},
      "The VR runtime did not create the game's VR session.",
@@ -96,13 +100,19 @@ constexpr Rule kRules[] = {
      "do this to the games they run when they shut down or hand the headset to another runtime.",
      "Keep your VR runtime running while the game plays, and do not start or close another VR runtime meanwhile. "
      "If nothing like that happened, send this report with an issue."},
+    // hle/vulkan/fault_markers.cpp: GPU breadcrumbs put the loss inside a pass
+    // Venture recorded into the game's commands. Before the GPU reset rule:
+    // Windows logs that reset (event 4101) for every device loss.
+    {{"gpu fault verdict: the gpu stopped inside venture's"},
+     "The graphics device was lost while it ran Venture's own GPU work.", kSendReport, {},
+     {"gpu fault verdict: "}},
     // The kernel's own reports of a GPU reset (amdgpu, i915/xe, NVIDIA Xid).
     {{"gpu reset", "ring timeout", "nvrm: xid", "gpu hang",
       "stopped responding and has successfully recovered"},  // Windows: Display event 4101
-     "The graphics driver reset the GPU during the game.", kGpuAdvice},
+     "The graphics driver reset the GPU during the game.", kGpuAdvice, {}, {"gpu fault verdict: "}},
     // hle/vulkan/vulkan.cpp, and the host's own device loss.
     {{"native vulkan device lost", "vk_error_device_lost"},
-     "The game lost the graphics device.", kGpuAdvice},
+     "The game lost the graphics device.", kGpuAdvice, {}, {"gpu fault verdict: "}},
     // core/alloc_failure.cpp: a refused allocation and the limit it likely hit.
     {{"likely limit: system commit limit"},
      "The PC ran out of commit memory (RAM plus page file), so memory requests failed even though RAM and GPU "
@@ -190,7 +200,10 @@ std::optional<Diagnosis> diagnose(std::string_view evidence) {
             auto line = evidence.substr(from, end - from);
             while (!line.empty() && (line.back() == '\r' || line.back() == ' ' || line.back() == '.'))
               line.remove_suffix(1);
-            cause += " Broken layer: " + std::string(line) + ".";
+            std::string added(line);
+            if (rule.detail_label.empty() && !added.empty())
+              added[0] = char(std::toupper(static_cast<unsigned char>(added[0])));
+            cause += " " + std::string(rule.detail_label) + added + ".";
             break;
           }
         return Diagnosis{std::move(cause), std::string(rule.advice)};

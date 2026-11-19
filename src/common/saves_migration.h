@@ -14,16 +14,17 @@ SaveMigration migrate_saves(const fs::path &data, std::string_view primary,
 // never reads or downgrades the current save.
 fs::path account_data_dir(const fs::path &data, std::string_view key,
                           std::string_view package, std::string_view pin = {});
-// Where the player puts replacement expansion/asset files (mods) for a game:
-// <data>/mods/<package>. Outside every installation, so downloads, updates and
-// their size checks never see or overwrite them.
-fs::path mods_dir(const fs::path &data, std::string_view package);
+// Where Venture keeps a game's mods (common/library/mods.h): <data>/mods/<package>,
+// and for a pinned version <package>@<pin> as account_data_dir names it: mods
+// are made for one game version. Outside every installation, so downloads,
+// updates and their size checks never see or overwrite them. Players manage
+// mods in the launcher, not in this folder.
+fs::path mods_dir(const fs::path &data, std::string_view package, std::string_view pin = {});
 // Reconcile a dedicated Java/native OBB directory with the installed plan.
 // Hard links are an optimization; other filesystems use atomically published copies.
-// A same-named file in `mods` replaces the installed one in the view. Files the
-// game created there stay; expansion/asset files no longer installed go.
+// Files the game created there stay; expansion/asset files no longer installed go.
 void sync_obb_view(const fs::path& install, const fs::path& view,
-                   std::span<const std::string> names, const fs::path& mods = {});
+                   std::span<const std::string> names);
 void publish_obb_file(const fs::path& source, const fs::path& view);
 // Where an installation's view goes: `view` when its folder can hard-link the
 // installed files, else beside the installation under .obb/<account>, so a games

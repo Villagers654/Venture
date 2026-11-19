@@ -206,5 +206,27 @@ void register_social_handlers(Session& session) {
                                           route.kind});
   // Meta's standalone push parser (0xdcc30) has no GroupPresence join/leave
   // intent or InvitationsSent source. Do not infer notifications from REST.
+
+  // The invite, roster, rejoin and multiplayer-error panels are Horizon OS
+  // system UI that this device does not have (candidates for a Venture system
+  // dialog). Each completes as on a headset where the user closes the panel
+  // without acting: no invites sent, rejoin not chosen, nothing else.
+  struct Panel {
+    const char* name;
+    Model result;
+  };
+  const Panel panels[] = {
+      {"ovr_GroupPresence_LaunchInvitePanel", {"InvitePanelResultInfo", {{"InvitesSent", false}}}},
+      {"ovr_GroupPresence_LaunchRejoinDialog", {"RejoinDialogResult", {{"RejoinSelected", false}}}},
+      {"ovr_GroupPresence_LaunchRosterPanel", {}},
+      {"ovr_GroupPresence_LaunchMultiplayerErrorDialog", {}},
+  };
+  for (const auto& panel : panels)
+    session.register_handler(panel.name, {[result = panel.result](Provider&, const RequestArgs& args,
+                                                                  std::stop_token) -> Result {
+                               if (args.error) return {args.error};
+                               return {{}, {}, {}, result};
+                             },
+                             panel.result.kind});
 }
 }  // namespace venture::ovrplatform

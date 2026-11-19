@@ -142,8 +142,74 @@ RegAlloc::ArgumentInfo RegAlloc::GetArgumentInfo(IR::Inst* inst) {
     return ret;
 }
 
+std::optional<HostLoc> RegAlloc::UseInPlace(const IR::Value& value) {
+    if (value.IsImmediate()) {
+        return std::nullopt;
+    }
+    const auto location = ValueLocation(value.GetInst());
+    if (location) {
+        ValueInfo(value.GetInst()).uses_this_inst++;
+    }
+    return location;
+}
+
+void RegAlloc::MarkRematerializable(const IR::Inst* inst, u32 offset, bool word) {
+    if (InTable(inst)) {
+        remat_by_position[inst->GetEmitPosition()] = (offset + 1) | (word ? u32(1) << 31 : 0);
+    }
+}
+
+u32 RegAlloc::RematCode(const HostLocInfo& info) const {
+    if (info.values.size() != 1 || !InTable(info.values[0])) {
+        return 0;
+    }
+    return remat_by_position[info.values[0]->GetEmitPosition()];
+}
+
+std::optional<RegAlloc::Remat> RegAlloc::SpillRematerialization(int spill_index) const {
+    const u32 remat = spill_remat[static_cast<std::size_t>(spill_index)];
+    if (!remat) {
+        return std::nullopt;
+    }
+    return Remat{(remat & ~(u32(1) << 31)) - 1, (remat >> 31) != 0};
+}
+
+void RegAlloc::LoadSpill(oaknut::XReg reg, int spill_index, bool word) {
+    if (const auto remat = SpillRematerialization(spill_index)) {
+        if (remat->word) {
+            code.LDR(reg.toW(), Xstate, remat->offset);
+        } else {
+            code.LDR(reg, Xstate, remat->offset);
+        }
+        return;
+    }
+    if (word) {
+        code.LDR(reg.toW(), SP, spill_offset + spill_index * spill_slot_size);
+        return;
+    }
+    code.LDR(reg, SP, spill_offset + spill_index * spill_slot_size);
+}
+
+std::optional<u32> RegAlloc::LastUse(const IR::Inst* inst) const {
+    if (!InTable(inst) || next_use_positions[inst->GetEmitPosition()].empty()) {
+        return std::nullopt;
+    }
+    return next_use_positions[inst->GetEmitPosition()].back();
+}
+
 bool RegAlloc::WasValueDefined(IR::Inst* inst) const {
+    if (InTable(inst)) {
+        return defined_by_position[inst->GetEmitPosition()] != 0;
+    }
     return defined_insts.count(inst) > 0;
+}
+
+void RegAlloc::MarkDefined(const IR::Inst* inst) {
+    if (InTable(inst)) {
+        defined_by_position[inst->GetEmitPosition()] = 1;
+    } else {
+        defined_insts.insert(inst);
+    }
 }
 
 void RegAlloc::PrepareForCall(std::optional<Argument::copyable_reference> arg0, std::optional<Argument::copyable_reference> arg1, std::optional<Argument::copyable_reference> arg2, std::optional<Argument::copyable_reference> arg3) {
@@ -191,7 +257,7 @@ void RegAlloc::PrepareForCall(std::optional<Argument::copyable_reference> arg0, 
 }
 
 void RegAlloc::DefineAsExisting(IR::Inst* inst, Argument& arg) {
-    defined_insts.insert(inst);
+    MarkDefined(inst);
     ASSERT(!ValueLocation(inst));
 
     if (arg.value.IsImmediate()) {
@@ -204,8 +270,30 @@ void RegAlloc::DefineAsExisting(IR::Inst* inst, Argument& arg) {
     info.expected_uses += inst->UseCount();
 }
 
+Argument RegAlloc::UseArgument(const IR::Value& value) {
+    Argument arg;
+    arg.value = value;
+    if (!value.IsImmediate() && !IsValuelessType(value.GetType())) {
+        ASSERT(ValueLocation(value.GetInst()) && "argument must already been defined");
+        ValueInfo(value.GetInst()).uses_this_inst++;
+    }
+    return arg;
+}
+
+bool RegAlloc::IsLastUse(const Argument& arg) {
+    if (arg.value.IsImmediate()) {
+        return false;
+    }
+    const auto location = ValueLocation(arg.value.GetInst());
+    if (!location) {
+        return false;
+    }
+    const HostLocInfo& info = ValueInfo(*location);
+    return info.accumulated_uses + info.uses_this_inst == info.expected_uses;
+}
+
 void RegAlloc::DefineAsRegister(IR::Inst* inst, oaknut::Reg reg) {
-    defined_insts.insert(inst);
+    MarkDefined(inst);
     ASSERT(!ValueLocation(inst));
     auto& info = reg.is_vector() ? fprs[reg.index()] : gprs[reg.index()];
     ASSERT(info.IsCompletelyEmpty());
@@ -221,8 +309,8 @@ void RegAlloc::UpdateAllUses() {
         fpr.UpdateUses();
     }
     flags.UpdateUses();
-    for (auto& spill : spills) {
-        spill.UpdateUses();
+    for (std::size_t i = 0; i < spill_high; i++) {
+        spills[i].UpdateUses();
     }
 }
 
@@ -231,7 +319,7 @@ void RegAlloc::AssertAllUnlocked() const {
     ASSERT(std::all_of(gprs.begin(), gprs.end(), is_unlocked));
     ASSERT(std::all_of(fprs.begin(), fprs.end(), is_unlocked));
     ASSERT(is_unlocked(flags));
-    ASSERT(std::all_of(spills.begin(), spills.end(), is_unlocked));
+    ASSERT(std::all_of(spills.begin(), spills.begin() + spill_high, is_unlocked));
 }
 
 void RegAlloc::AssertNoMoreUses() const {
@@ -239,7 +327,7 @@ void RegAlloc::AssertNoMoreUses() const {
     ASSERT(std::all_of(gprs.begin(), gprs.end(), is_empty));
     ASSERT(std::all_of(fprs.begin(), fprs.end(), is_empty));
     ASSERT(is_empty(flags));
-    ASSERT(std::all_of(spills.begin(), spills.end(), is_empty));
+    ASSERT(std::all_of(spills.begin(), spills.begin() + spill_high, is_empty));
 }
 
 void RegAlloc::EmitVerboseDebuggingOutput() {
@@ -327,11 +415,17 @@ int RegAlloc::RealizeReadImpl(const IR::Value& value) {
         case HostLoc::Kind::Gpr:
             UNREACHABLE(); //logic error
         case HostLoc::Kind::Fpr:
-            code.FMOV(oaknut::XReg{new_location_index}, oaknut::DReg{current_location->index});
-            // ASSERT size fits
+            // Venture: only the low 32 bits of a U32 in an FPR are defined (a
+            // LowLaneAliasing lane 0 keeps the vector's other lanes); a W move
+            // zero-extends it, as every U32 in a GPR is.
+            if (value.GetType() == IR::Type::U32) {
+                code.FMOV(oaknut::WReg{new_location_index}, oaknut::SReg{current_location->index});
+            } else {
+                code.FMOV(oaknut::XReg{new_location_index}, oaknut::DReg{current_location->index});
+            }
             break;
         case HostLoc::Kind::Spill:
-            code.LDR(oaknut::XReg{new_location_index}, SP, spill_offset + current_location->index * spill_slot_size);
+            LoadSpill(oaknut::XReg{new_location_index}, current_location->index, value.GetType() == IR::Type::U32);
             break;
         case HostLoc::Kind::Flags:
             code.MRS(oaknut::XReg{new_location_index}, oaknut::SystemReg::NZCV);
@@ -352,7 +446,15 @@ int RegAlloc::RealizeReadImpl(const IR::Value& value) {
         case HostLoc::Kind::Fpr:
             UNREACHABLE(); //logic error
         case HostLoc::Kind::Spill:
-            code.LDR(oaknut::QReg{new_location_index}, SP, spill_offset + current_location->index * spill_slot_size);
+            if (const auto remat = SpillRematerialization(current_location->index)) {
+                if (remat->word) {
+                    code.LDR(oaknut::SReg{new_location_index}, Xstate, remat->offset);
+                } else {
+                    code.LDR(oaknut::DReg{new_location_index}, Xstate, remat->offset);
+                }
+            } else {
+                code.LDR(oaknut::QReg{new_location_index}, SP, spill_offset + current_location->index * spill_slot_size);
+            }
             break;
         case HostLoc::Kind::Flags:
             ASSERT(false && "Moving from flags into fprs is not currently supported");
@@ -371,7 +473,7 @@ int RegAlloc::RealizeReadImpl(const IR::Value& value) {
 
 template<HostLoc::Kind kind>
 int RegAlloc::RealizeWriteImpl(const IR::Inst* value) {
-    defined_insts.insert(value);
+    MarkDefined(value);
     ASSERT(!ValueLocation(value));
 
     if constexpr (kind == HostLoc::Kind::Gpr) {
@@ -395,7 +497,7 @@ int RegAlloc::RealizeWriteImpl(const IR::Inst* value) {
 
 template<HostLoc::Kind kind>
 int RegAlloc::RealizeReadWriteImpl(const IR::Value& read_value, const IR::Inst* write_value) {
-    defined_insts.insert(write_value);
+    MarkDefined(write_value);
     // TODO: Move elimination
 
     const int write_loc = RealizeWriteImpl<kind>(write_value);
@@ -431,11 +533,78 @@ int RegAlloc::AllocateRegister(const std::array<HostLocInfo, 32>& regs, const st
 
     std::vector<int> candidates;
     std::copy_if(order.begin(), order.end(), std::back_inserter(candidates), [&](int i) { return regs[i].MaybeAllocatable(); });
+    ASSERT(!candidates.empty());
 
-    // TODO: The candidate was chosen randomly before, and a LRU was
-    // suggested as an improvement. However, using an incrementing index
-    // seems to be close enough. Determine if an LRU is still needed.
-    return candidates[alloc_candidate_index++ % candidates.size()];
+    if (next_use_insts.empty()) {
+        return candidates[alloc_candidate_index++ % candidates.size()];
+    }
+    // Venture: evict the register needed furthest ahead (Belady), as on x64.
+    int selected = candidates[0];
+    u32 selected_next_use = NextUse(regs[selected]);
+    for (std::size_t i = 1; i < candidates.size() && selected_next_use != no_use; i++) {
+        const u32 next_use = NextUse(regs[candidates[i]]);
+        if (next_use > selected_next_use) {
+            selected = candidates[i];
+            selected_next_use = next_use;
+        }
+    }
+    return selected;
+}
+
+void RegAlloc::BuildNextUses(IR::Block& block) {
+    next_use_insts.clear();
+    u32 position = 0;
+    for (auto& inst : block.instructions) {
+        inst.SetEmitPosition(position++);
+        next_use_insts.push_back(&inst);
+    }
+    defined_by_position.assign(position, 0);
+    remat_by_position.assign(position, 0);
+    if (next_use_positions.size() < position) {
+        next_use_positions.resize(position);
+    }
+    for (u32 i = 0; i < position; i++) {
+        next_use_positions[i].clear();
+    }
+    for (auto& inst : block.instructions) {
+        for (std::size_t i = 0; i < inst.NumArgs(); i++) {
+            const IR::Value arg = inst.GetArg(i);
+            if (arg.IsImmediate()) {
+                continue;
+            }
+            const IR::Inst* const value = arg.GetInstRecursive();
+            const u32 at = value->GetEmitPosition();
+            if (at < next_use_insts.size() && next_use_insts[at] == value) {
+                next_use_positions[at].push_back(inst.GetEmitPosition());
+            }
+        }
+    }
+    current_position = 0;
+}
+
+void RegAlloc::AddUse(const IR::Inst* value, const IR::Inst* user) {
+    const u32 at = value->GetEmitPosition();
+    if (at >= next_use_insts.size() || next_use_insts[at] != value) {
+        return;
+    }
+    auto& uses = next_use_positions[at];
+    uses.insert(std::upper_bound(uses.begin(), uses.end(), user->GetEmitPosition()), user->GetEmitPosition());
+}
+
+u32 RegAlloc::NextUse(const HostLocInfo& info) const {
+    u32 next = no_use;
+    for (const IR::Inst* value : info.values) {
+        const u32 at = value->GetEmitPosition();
+        if (at >= next_use_insts.size() || next_use_insts[at] != value) {
+            return 0;  // unknown: keep it
+        }
+        const auto& uses = next_use_positions[at];
+        const auto use = std::lower_bound(uses.begin(), uses.end(), current_position);
+        if (use != uses.end()) {
+            next = std::min(next, *use);
+        }
+    }
+    return next;
 }
 
 void RegAlloc::SpillGpr(int index) {
@@ -444,8 +613,12 @@ void RegAlloc::SpillGpr(int index) {
         return;
     }
     const int new_location_index = FindFreeSpill();
-    code.STR(oaknut::XReg{index}, SP, spill_offset + new_location_index * spill_slot_size);
+    spill_remat[new_location_index] = RematCode(gprs[index]);
+    if (!spill_remat[new_location_index]) {
+        code.STR(oaknut::XReg{index}, SP, spill_offset + new_location_index * spill_slot_size);
+    }
     spills[new_location_index] = std::exchange(gprs[index], {});
+    spill_high = std::max<std::size_t>(spill_high, new_location_index + 1);
 }
 
 void RegAlloc::SpillFpr(int index) {
@@ -454,12 +627,18 @@ void RegAlloc::SpillFpr(int index) {
         return;
     }
     const int new_location_index = FindFreeSpill();
-    code.STR(oaknut::QReg{index}, SP, spill_offset + new_location_index * spill_slot_size);
+    spill_remat[new_location_index] = RematCode(fprs[index]);
+    if (!spill_remat[new_location_index]) {
+        code.STR(oaknut::QReg{index}, SP, spill_offset + new_location_index * spill_slot_size);
+    }
     spills[new_location_index] = std::exchange(fprs[index], {});
+    spill_high = std::max<std::size_t>(spill_high, new_location_index + 1);
 }
 
 void RegAlloc::ReadWriteFlags(Argument& read, IR::Inst* write) {
-    defined_insts.insert(write);
+    if (write) {
+        MarkDefined(write);
+    }
     const auto current_location = ValueLocation(read.value.GetInst());
     ASSERT(current_location);
 
@@ -476,7 +655,7 @@ void RegAlloc::ReadWriteFlags(Argument& read, IR::Inst* write) {
         if (!flags.values.empty()) {
             SpillFlags();
         }
-        code.LDR(Wscratch0, SP, spill_offset + current_location->index * spill_slot_size);
+        LoadSpill(Xscratch0, current_location->index);
         code.MSR(oaknut::SystemReg::NZCV, Xscratch0);
     } else {
         UNREACHABLE(); //ASSERT(false && "Invalid current location for flags");
@@ -518,11 +697,14 @@ void RegAlloc::LoadCopyInto(const IR::Value& value, oaknut::XReg reg) {
         code.MOV(reg, oaknut::XReg{current_location->index});
         break;
     case HostLoc::Kind::Fpr:
-        code.FMOV(reg, oaknut::DReg{current_location->index});
-        // ASSERT size fits
+        if (value.GetType() == IR::Type::U32) {  // as in RealizeReadImpl
+            code.FMOV(reg.toW(), oaknut::SReg{current_location->index});
+        } else {
+            code.FMOV(reg, oaknut::DReg{current_location->index});
+        }
         break;
     case HostLoc::Kind::Spill:
-        code.LDR(reg, SP, spill_offset + current_location->index * spill_slot_size);
+        LoadSpill(reg, current_location->index, value.GetType() == IR::Type::U32);
         break;
     case HostLoc::Kind::Flags:
         code.MRS(reg, oaknut::SystemReg::NZCV);
@@ -548,7 +730,15 @@ void RegAlloc::LoadCopyInto(const IR::Value& value, oaknut::QReg reg) {
         break;
     case HostLoc::Kind::Spill:
         // TODO: Minimize move size to max value width
-        code.LDR(reg, SP, spill_offset + current_location->index * spill_slot_size);
+        if (const auto remat = SpillRematerialization(current_location->index)) {
+            if (remat->word) {
+                code.LDR(reg.toS(), Xstate, remat->offset);
+            } else {
+                code.LDR(reg.toD(), Xstate, remat->offset);
+            }
+        } else {
+            code.LDR(reg, SP, spill_offset + current_location->index * spill_slot_size);
+        }
         break;
     case HostLoc::Kind::Flags:
         UNREACHABLE(); //ASSERT(false && "Moving from flags into fprs is not currently supported");
@@ -567,7 +757,7 @@ std::optional<HostLoc> RegAlloc::ValueLocation(const IR::Inst* value) const {
     if (contains_value(flags)) {
         return HostLoc{HostLoc::Kind::Flags, 0};
     }
-    if (const auto iter = std::find_if(spills.begin(), spills.end(), contains_value); iter != spills.end()) {
+    if (const auto iter = std::find_if(spills.begin(), spills.begin() + spill_high, contains_value); iter != spills.begin() + spill_high) {
         return HostLoc{HostLoc::Kind::Spill, static_cast<int>(iter - spills.begin())};
     }
     return std::nullopt;
@@ -596,7 +786,7 @@ HostLocInfo& RegAlloc::ValueInfo(const IR::Inst* value) {
         return *iter;
     } else if (contains_value(flags)) {
         return flags;
-    } else if (const auto iter = std::find_if(spills.begin(), spills.end(), contains_value); iter != spills.end()) {
+    } else if (const auto iter = std::find_if(spills.begin(), spills.begin() + spill_high, contains_value); iter != spills.begin() + spill_high) {
         return *iter;
     }
     UNREACHABLE();

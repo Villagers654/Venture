@@ -10,6 +10,7 @@ public class KeyEvent extends InputEvent {
     return eventTime;
   }
   public static final int ACTION_DOWN = 0, ACTION_UP = 1, KEYCODE_BACK = 4;
+  public static final int FLAG_SOFT_KEYBOARD = 2, FLAG_KEEP_TOUCH_MODE = 4, FLAG_EDITOR_ACTION = 16;
   public static final int KEYCODE_UNKNOWN = 0, KEYCODE_0 = 7, KEYCODE_STAR = 17, KEYCODE_POUND = 18,
       KEYCODE_A = 29, KEYCODE_COMMA = 55, KEYCODE_PERIOD = 56, KEYCODE_ALT_LEFT = 57, KEYCODE_ALT_RIGHT = 58,
       KEYCODE_SHIFT_LEFT = 59, KEYCODE_SHIFT_RIGHT = 60, KEYCODE_TAB = 61, KEYCODE_SPACE = 62, KEYCODE_SYM = 63,

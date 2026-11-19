@@ -38,4 +38,22 @@ std::string library_problem(const std::filesystem::path &library);
 bool enabled(const Manifest &layer);
 // Whether `name` is set in the process environment the loader reads.
 bool environment_set(const char *name);
+
+// Installed OpenXR runtimes, for choosing the one a game runs on (the loader
+// takes XR_RUNTIME_JSON over the system's active runtime). Windows: HKLM then
+// HKCU SOFTWARE\Khronos\OpenXR\1\AvailableRuntimes values whose data is 0;
+// elsewhere openxr/1/*.json in the XDG config and data dirs and SteamVR's in
+// the Steam folder. Only manifests that exist, each once, active first.
+struct Runtime {
+  std::filesystem::path manifest;
+  std::string name;  // the manifest's runtime name, else its file name
+  bool active = false;
+};
+std::vector<Runtime> installed_runtimes();
+// The manifest the loader uses without XR_RUNTIME_JSON, or empty.
+std::filesystem::path active_runtime();
+// The runtime name in a manifest, else its file name without extension.
+std::string runtime_name(const std::filesystem::path &manifest);
+// Platform parts: registered or found manifests (may not exist), and the active one.
+std::vector<std::filesystem::path> runtime_manifests();
 }  // namespace venture::openxr_layers

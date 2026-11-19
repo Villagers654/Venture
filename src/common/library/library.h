@@ -11,6 +11,9 @@ struct Install {
   bool complete = false;
   uint64_t bytes = 0;
   std::string label;  // an imported app's own name (its APK label), when Meta has no listing
+  // OBB files whose size differs from the store's: the player replaced them
+  // (a modded expansion file), so they never make the install incomplete.
+  std::vector<std::string> replaced;
   // Its library id: the app id, or for a version pinned beside the game's own
   // install meta::version_id. Launches, Steam and settings use it.
   std::string id() const {
@@ -25,6 +28,11 @@ std::vector<Install> scan(const fs::path &root, bool* authoritative = nullptr);
 // Why an install is not complete: each required file that is missing, still
 // downloading, empty or not the size its manifest records. Empty when complete.
 std::vector<std::string> install_problems(const fs::path &directory, const meta::Plan &plan);
+// A base OBB file present with a size other than the store's is the player's
+// replacement, never damage: launches use it and only a warning names it.
+bool replaced_obb(const meta::File &file, uint64_t size);
+// "<name> was replaced (<n> bytes; the store's file has <m>)" for each one.
+std::vector<std::string> replaced_files(const fs::path &directory, const meta::Plan &plan);
 // Only the current account may reconcile its own previously confirmed titles.
 void merge(std::vector<meta::Game> &games, const meta::Snapshot &snapshot,
            std::string_view account);
@@ -145,6 +153,9 @@ struct Settings {
   int texture_compression_threshold = 50;
   // Translated game code and pipelines kept between launches (Settings > Runtime).
   bool keep_translated_code = true;
+  // The OpenXR runtime games run on: a runtime manifest (XR_RUNTIME_JSON), or
+  // empty for the system's active runtime (Settings > VR runtime).
+  std::string xr_runtime;
   // Games that download at once (Settings > Library); one by default.
   int parallel_downloads = 1;
   // The language games see as the system language, a BCP-47 tag such as
@@ -189,6 +200,13 @@ struct Settings {
   static Settings load(const fs::path &data);
   void save(const fs::path &data) const;
 };
+// The Meta VR OS SDK version games are told the headset runs (VENTURE_METAVR_OS_SDK):
+// games that check it refuse an older OS. The newest <version> in Maven's listing of
+// Meta's VR OS Java SDK (0 when none parses); the newest seen, cached in the data
+// directory (0 before the first check); caching keeps the higher of the two.
+int metavr_os_sdk_from_maven(std::string_view metadata);
+int cached_metavr_os_sdk(const fs::path &data);
+void cache_metavr_os_sdk(const fs::path &data, int version);
 // The environment a launch of `app_id` takes from the settings, the game's own
 // choices over the global ones: VENTURE_LOG_LEVEL, passthrough, controls,
 // locale, kept Vulkan layers, texture compression, translated code and display.

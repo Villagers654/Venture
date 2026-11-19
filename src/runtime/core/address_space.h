@@ -42,6 +42,15 @@ struct MemoryRegion {
     return grow_down ? (start >= kStackGuardGap ? start - kStackGuardGap : 0) : start;
   }
 };
+// The pages holding host functions' guest entry points (core/hle.cpp). Each
+// holds the entries of many functions of many libraries, which on a device
+// are pages of their own: a guest mprotect of one page (an inline hook
+// patching libc's abort, which drops execute while it writes) keeps the page
+// readable and executable for every other entry on it, mprotect's own among them.
+inline constexpr std::string_view kHleThunkRegion = "[hle thunks]";
+inline std::uint32_t region_protection(const MemoryRegion& region, std::uint32_t prot) {
+  return region.name == kHleThunkRegion ? prot | kProtRead | kProtExec : prot;
+}
 
 // Guest-executable pages are kept readable but never host-executable; only JIT
 // output executes. Protection changes / unmapping of executable ranges call
@@ -54,6 +63,9 @@ class AddressSpace {
   // A32 failure throws; no mappings may precede selection of the A32 policy.
   void initialize(GuestIsa isa);
   bool is_guest_accessible(GuestAddr address, std::uint64_t size, bool write) const;
+  // The A64 guest arena [begin, end): every guest mapping without a fixed
+  // address outside it. {0, 0} for A32 or before initialize().
+  std::pair<GuestAddr, GuestAddr> arena64() const;
   // Resolve a guest access fault below an anonymous VM_GROWSDOWN region.
   // Failure leaves the mapping unchanged and the caller delivers SIGSEGV.
   bool grow_stack(GuestAddr address, std::uint32_t access);

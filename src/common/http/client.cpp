@@ -7,6 +7,11 @@
 #include <fstream>
 #include <memory>
 #include <regex>
+#ifdef __ANDROID__
+// Transfers go through the device's own network stack; libcurl (built without
+// TLS there) serves URL handling only.
+#include "common/platform/android/http_transfer.h"
+#endif
 
 namespace venture::http {
 namespace {
@@ -145,6 +150,7 @@ void use_system_ca(void *curl) {
 #endif
 }
 namespace {
+#ifndef __ANDROID__
 Handle handle(std::string_view url, std::stop_token *stop) {
   init();
   Handle h(curl_easy_init(), curl_easy_cleanup);
@@ -168,6 +174,7 @@ Handle handle(std::string_view url, std::stop_token *stop) {
   curl_easy_setopt(h.get(), CURLOPT_XFERINFODATA, stop);
   return h;
 }
+#endif
 std::string lower(std::string s) {
   std::transform(s.begin(), s.end(), s.begin(),
                  [](unsigned char c) { return char(std::tolower(c)); });
@@ -195,6 +202,40 @@ size_t headers(char *data, size_t size, size_t count, void *ctx) {
   }
   return n;
 }
+#ifdef __ANDROID__
+// The same messages as check() below, for a transfer through the device's stack.
+void check(const android::Result &result, std::stop_token stop) {
+  if (stop.stop_requested() || result.failure == android::Failure::stopped)
+    throw std::runtime_error("Transfer paused. Resume when ready.");
+  switch (result.failure) {
+  case android::Failure::none:
+    return;
+  case android::Failure::timeout:
+    throw std::runtime_error("Connection timed out. Check your connection and retry.");
+  case android::Failure::tls:
+    throw std::runtime_error(std::format(
+        "The secure connection could not be verified ({}). This system's certificate store may be out of date.",
+        result.message));
+  case android::Failure::write:
+    throw std::runtime_error("Network transfer failed (the response was refused). Check your connection and retry.");
+  default:
+    throw std::runtime_error(std::format(
+        "Network transfer failed ({}). Check your connection and retry.", result.message));
+  }
+}
+// Request headers as libcurl sends them, plus the caller's.
+android::Request android_request(std::string_view url, const Fields &extra_headers) {
+  android::Request request{.url = std::string(url)};
+  request.headers = {{"User-Agent", "Venture/0.3 native"}};
+  for (auto &[key, value] : extra_headers) {
+    if (key.empty() || key.find_first_of("\r\n:") != key.npos ||
+        value.find_first_of("\r\n") != value.npos)
+      throw std::runtime_error("Invalid HTTP header.");
+    request.headers.emplace_back(key, value);
+  }
+  return request;
+}
+#else
 void check(CURLcode code, std::stop_token stop) {
   if (stop.stop_requested())
     throw std::runtime_error("Transfer paused. Resume when ready.");
@@ -210,6 +251,7 @@ void check(CURLcode code, std::stop_token stop) {
     throw std::runtime_error(std::format(
         "Network transfer failed ({}). Check your connection and retry.", curl_easy_strerror(code)));
 }
+#endif
 std::string redirect(std::string_view from, const Response &r,
                      bool (*allowed)(std::string_view) = allowed_delivery) {
   auto i = r.headers.find("location");
@@ -237,6 +279,47 @@ bool redirected(long status) {
   return status == 301 || status == 302 || status == 303 || status == 307 ||
          status == 308;
 }
+struct MemorySink {
+  std::string *text;
+  size_t limit;
+};
+size_t write_memory(char *b, size_t s, size_t c, void *p) {
+  auto &out = *static_cast<MemorySink *>(p);
+  auto n = s * c;
+  if (out.text->size() + n > out.limit)
+    return 0;
+  try {
+    out.text->append(b, n);
+  } catch (...) {
+    return 0;
+  }
+  return n;
+}
+#ifdef __ANDROID__
+Response memory(std::string_view url, const Fields *fields, size_t limit,
+                std::stop_token stop, const Fields &extra_headers = {},
+                bool /*loopback: only http://127.0.0.1 is let through as plain HTTP*/ = false) {
+  Fields sent{{"Accept", "application/json"}};
+  sent.insert(sent.end(), extra_headers.begin(), extra_headers.end());
+  auto request = android_request(url, sent);
+  request.read_seconds = 40;
+  if (!extra_headers.empty() && !fields) {
+    request.connect_seconds = 5;
+    request.read_seconds = 15;
+  }
+  if (fields) {
+    request.method = "POST";
+    request.body = form(*fields);
+    request.headers.emplace_back("Content-Type", "application/x-www-form-urlencoded");
+  }
+  Response r;
+  MemorySink sink{&r.body, limit};
+  auto result = android::perform(request, stop, headers, &r, write_memory, &sink);
+  r.status = result.status ? result.status : r.status;
+  check(result, stop);
+  return r;
+}
+#else
 Response memory(std::string_view url, const Fields *fields, size_t limit,
                 std::stop_token stop, const Fields &extra_headers = {},
                 bool loopback = false) {
@@ -246,10 +329,7 @@ Response memory(std::string_view url, const Fields *fields, size_t limit,
     curl_easy_setopt(h.get(), CURLOPT_NOPROXY, "*");
   }
   Response r;
-  struct Sink {
-    std::string *text;
-    size_t limit;
-  } sink{&r.body, limit};
+  MemorySink sink{&r.body, limit};
   curl_easy_setopt(h.get(), CURLOPT_TIMEOUT, 40L);
   if (!extra_headers.empty() && !fields) {
     curl_easy_setopt(h.get(), CURLOPT_CONNECTTIMEOUT, 5L);
@@ -257,20 +337,7 @@ Response memory(std::string_view url, const Fields *fields, size_t limit,
   }
   curl_easy_setopt(h.get(), CURLOPT_HEADERFUNCTION, headers);
   curl_easy_setopt(h.get(), CURLOPT_HEADERDATA, &r);
-  curl_easy_setopt(
-      h.get(), CURLOPT_WRITEFUNCTION,
-      +[](char *b, size_t s, size_t c, void *p) -> size_t {
-        auto &out = *static_cast<Sink *>(p);
-        auto n = s * c;
-        if (out.text->size() + n > out.limit)
-          return 0;
-        try {
-          out.text->append(b, n);
-        } catch (...) {
-          return 0;
-        }
-        return n;
-      });
+  curl_easy_setopt(h.get(), CURLOPT_WRITEFUNCTION, write_memory);
   curl_easy_setopt(h.get(), CURLOPT_WRITEDATA, &sink);
   std::string body;
   curl_slist *raw_headers = nullptr;
@@ -312,6 +379,7 @@ Response memory(std::string_view url, const Fields *fields, size_t limit,
   check(code, stop);
   return r;
 }
+#endif
 } // namespace
 Url parse_url(std::string_view url) {
   init();
@@ -391,6 +459,15 @@ bool allowed_release(std::string_view url) {
   }
   return false;
 }
+bool allowed_mod_download(std::string_view url) {
+  try {
+    auto u = parse_url(url);
+    return u.scheme == "https" && !u.host.empty() && u.user.empty() && u.password.empty() &&
+           (u.port.empty() || u.port == "443");
+  } catch (...) {
+  }
+  return false;
+}
 bool allowed_delivery(std::string_view url) {
   try {
     auto u = parse_url(url);
@@ -444,6 +521,10 @@ Response get_meta(std::string_view url, const Fields &headers,
 Response get_latest_release(std::stop_token stop) {
   return memory("https://api.github.com/repos/Villagers654/Venture/releases/latest", nullptr, 1024 * 1024, stop,
                 {{"Accept", "application/vnd.github+json"}});
+}
+Response get_metavr_os_sdk(std::stop_token stop) {
+  return memory("https://repo1.maven.org/maven2/com/meta/metavr/metavr-os-jsdk/maven-metadata.xml", nullptr,
+                256 * 1024, stop, {});
 }
 Response get_oculusdb_package(std::string_view package, std::stop_token stop) {
   if (!paths::safe_package(package))
@@ -571,6 +652,10 @@ void download_release(std::string url, const fs::path &dest, uint64_t expected,
   fetch_file(std::move(url), dest, expected, stop, progress, allowed_release,
              "Update URL is outside Venture's GitHub releases.");
 }
+void download_mod(std::string url, const fs::path &dest, std::stop_token stop) {
+  fetch_file(std::move(url), dest, 0, stop, [](uint64_t, uint64_t) {}, allowed_mod_download,
+             "The mod's download address is not a secure (https) link.");
+}
 std::string get_release_text(std::string url, std::stop_token stop) {
   for (int i = 0; i < 8; ++i) {
     if (!allowed_release(url))
@@ -614,12 +699,6 @@ void fetch_file(std::string url, const fs::path &dest, uint64_t expected, std::s
     if (stop.stop_requested())
       throw std::runtime_error("Transfer paused. Resume when ready.");
     Response r;
-    auto h = handle(url, &stop);
-    if (offset)
-      curl_easy_setopt(h.get(), CURLOPT_RANGE,
-                       (std::to_string(offset) + '-').c_str());
-    curl_easy_setopt(h.get(), CURLOPT_HEADERFUNCTION, headers);
-    curl_easy_setopt(h.get(), CURLOPT_HEADERDATA, &r);
     struct Sink {
       Response *response;
       fs::path path;
@@ -629,9 +708,7 @@ void fetch_file(std::string url, const fs::path &dest, uint64_t expected, std::s
       std::string error;
       const Progress *progress;
     } sink{&r, part, {}, offset, expected, 0, 0, false, {}, &progress};
-    curl_easy_setopt(
-        h.get(), CURLOPT_WRITEFUNCTION,
-        +[](char *b, size_t s, size_t c, void *p) -> size_t {
+    auto write = +[](char *b, size_t s, size_t c, void *p) -> size_t {
           auto &out = *static_cast<Sink *>(p);
           auto n = s * c;
           if (redirected(out.response->status))
@@ -670,7 +747,25 @@ void fetch_file(std::string url, const fs::path &dest, uint64_t expected, std::s
             out.error = e.what();
             return 0;
           }
-        });
+        };
+#ifdef __ANDROID__
+    auto request = android_request(url, offset ? Fields{{"Range", "bytes=" + std::to_string(offset) + '-'}}
+                                               : Fields{});
+    auto result = android::perform(request, stop, headers, &r, write, &sink);
+    sink.out.close();
+    if (result.status)
+      r.status = result.status;
+    if (!sink.error.empty())
+      throw std::runtime_error(sink.error);
+    check(result, stop);
+#else
+    auto h = handle(url, &stop);
+    if (offset)
+      curl_easy_setopt(h.get(), CURLOPT_RANGE,
+                       (std::to_string(offset) + '-').c_str());
+    curl_easy_setopt(h.get(), CURLOPT_HEADERFUNCTION, headers);
+    curl_easy_setopt(h.get(), CURLOPT_HEADERDATA, &r);
+    curl_easy_setopt(h.get(), CURLOPT_WRITEFUNCTION, write);
     curl_easy_setopt(h.get(), CURLOPT_WRITEDATA, &sink);
     auto code = curl_easy_perform(h.get());
     sink.out.close();
@@ -678,6 +773,7 @@ void fetch_file(std::string url, const fs::path &dest, uint64_t expected, std::s
     if (!sink.error.empty())
       throw std::runtime_error(sink.error);
     check(code, stop);
+#endif
     if (redirected(r.status)) {
       url = redirect(url, r, allowed);
       continue;

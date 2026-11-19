@@ -27,4 +27,5 @@ public class InputConnectionWrapper implements InputConnection {
   @Override public boolean requestCursorUpdates(int mode) { return target.requestCursorUpdates(mode); }
   @Override public android.os.Handler getHandler() { return target.getHandler(); }
   @Override public void closeConnection() { target.closeConnection(); }
+  @Override public ExtractedText getExtractedText(ExtractedTextRequest request, int flags) { return target.getExtractedText(request, flags); }
 }

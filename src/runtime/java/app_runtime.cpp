@@ -1,3 +1,4 @@
+#include "cpu/a32_backend.h"
 #include "common/environment.h"
 #include "common/first_frame_progress.h"
 #include "core/startup_stack.h"
@@ -48,6 +49,8 @@
 #include "hle/vulkan/terminal_allocator.h"
 #include "core/process_exit.h"
 #include "java/execution_freeze.h"
+#include "java/gc_clock.h"
+#include "core/stall_finder.h"
 #include "java/natives/audio_bridge.h"
 #include "audio/audio.h"
 #include "gfx/angle.h"
@@ -383,6 +386,7 @@ void launch_android_app(const AppLaunchOptions& options) {
     }
   }
   if (!start_jvm(jvm, &error)) throw std::runtime_error(error);
+  start_gc_clock();
   xr::set_application_identity(apk_label(), process_config().package, process_config().version_code);
   xr::configure_vulkan_layers_for_process();
   log::info("launch", "Initializing host OpenXR");
@@ -471,6 +475,8 @@ void launch_android_app(const AppLaunchOptions& options) {
     startup_diagnostics::FirstFrameTrigger first_frame_probe;
     startup_diagnostics::FrameStallTrigger frame_stall_probe;
     startup_diagnostics::FrameStallTrigger frame_freeze_probe{startup_diagnostics::FrameStallTrigger::dump_stall_seconds};
+    // Shorter stalls (>= 250 ms) get a cheap snapshot and a [stall] record each.
+    stall_finder::Finder stall_records{gc_ns};
     const auto first_frame_bound = startup_diagnostics::first_frame_timeout_seconds();
     // Render progress up to the quit (see presenting_at_quit).
     std::uint64_t seen_frames = 0;
@@ -504,6 +510,8 @@ void launch_android_app(const AppLaunchOptions& options) {
       }
       if (frame_freeze_probe.poll(stall_now, startup_diagnostics::frames_submitted(), stall_excluded))
         signals::capture_frame_stall(frame_freeze_probe.seconds(), true);
+      stall_records.poll(std::chrono::duration_cast<std::chrono::milliseconds>(now - started).count(),
+                         startup_diagnostics::frames_submitted(), stall_excluded || closing);
       if (!closing && stopping) {
         closing = true;
         host_stop = stop.requested() || timed_out;
@@ -523,6 +531,7 @@ void launch_android_app(const AppLaunchOptions& options) {
         profile::stop();
         gfx::flush_blob_cache();
         hle::write_census();
+        write_jit_code_stats();
         if (venture::environment::getenv("VENTURE_TRACE_THREADS") && guest_process_exit_status() < 0)
           signals::log_guest_threads(timed_out ? "run time elapsed" : "stop requested");
         log::info("launch", "Shutdown requested; posting Android lifecycle teardown (host_quit={} backstop_ms={} reason={})",

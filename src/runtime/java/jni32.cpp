@@ -422,7 +422,7 @@ hle::a32::CallBuilder32 native_arguments(const Descriptor& d, const HostArgument
     } else if (fp)
       bits = simd < 8 ? host.fp[simd++] : host.stack[stack++];
     else
-      bits = gp < 6 ? host.gp[gp++] : host.stack[stack++];
+      bits = gp < host_gp_registers(abi) ? host.gp[gp++] : host.stack[stack++];
     using K = hle::a32::Kind;
     K kind = K::U32;
     switch (type) {

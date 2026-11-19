@@ -94,6 +94,54 @@ TEST_CASE("Subpass inputs become texel fetches from the fragment's view layer") 
     CHECK(sample_subpass_inputs(rewritten).empty());
   }
 }
+TEST_CASE("A multisampled subpass input of a one-sample attachment is read single-sampled") {
+  using venture::vulkan::sample_subpass_inputs;
+  using venture::vulkan::single_sample_subpass_inputs;
+  for (std::span<const std::uint32_t> original : {std::span<const std::uint32_t>(spirv10::decode_shader),
+                                                  std::span<const std::uint32_t>(spirv13::decode_shader)}) {
+    CAPTURE(original[1]);
+    // Input 0 is the subpassInputMS, input 1 an ordinary subpassInput.
+    CHECK(single_sample_subpass_inputs(original, 0).empty());
+    CHECK(single_sample_subpass_inputs(original, 2).empty());  // only the single-sampled input has one sample
+    const auto single = single_sample_subpass_inputs(original, 1 | 2);
+    REQUIRE_FALSE(single.empty());
+    CHECK(single[3] == original[3]);
+    const auto after = instructions(single);
+    // One subpass image type is left, single-sampled: the changed one would duplicate the declared one.
+    std::size_t subpass_types = 0;
+    for (const auto& i : after)
+      if (i.op == 25 && i.words[2] == 6) {
+        ++subpass_types;
+        CHECK(i.words[5] == 0);
+      }
+    CHECK(subpass_types == 1);
+    // Both reads remain, neither with a Sample operand.
+    CHECK(count(after, 98) == 2);
+    for (const auto& i : after)
+      if (i.op == 98) CHECK(i.words.size() == 4);
+    // Every type a pointer or load names is still declared.
+    std::vector<std::uint32_t> declared;
+    for (const auto& i : after)
+      if (i.op >= 19 && i.op <= 39) declared.push_back(i.words[0]);
+    for (const auto& i : after) {
+      if (i.op == 32) CHECK(std::find(declared.begin(), declared.end(), i.words[2]) != declared.end());
+      if (i.op == 61) CHECK(std::find(declared.begin(), declared.end(), i.words[0]) != declared.end());
+    }
+    // Read as sampled images, both inputs are level-0 fetches, not multisampled ones.
+    const auto sampled = sample_subpass_inputs(single);
+    REQUIRE_FALSE(sampled.empty());
+    std::size_t fetches = 0;
+    for (const auto& i : instructions(sampled)) {
+      if (i.op == 25) CHECK(i.words[5] == 0);
+      if (i.op == 95) {
+        ++fetches;
+        REQUIRE(i.words.size() == 6);
+        CHECK(i.words[4] == 0x2);
+      }
+    }
+    CHECK(fetches == 2);
+  }
+}
 TEST_CASE("Subpass inputs are read as sampled images where the probe shows another view's layer") {
   using venture::vulkan::sampled_input_driver;
   using Probe = venture::vulkan::SubpassInputProbe;

@@ -482,7 +482,8 @@ struct UserConfig {
         }
         return (f & optimizations) != no_optimizations;
     }
-    // Diagnostic JIT feature mask (Backend::X64::HostFeature bits). Only disables detected features.
+    // Diagnostic JIT feature mask (Backend::X64::HostFeature or Backend::Arm64::HostFeature
+    // bits, by host). Only disables detected features.
     std::uint32_t disabled_host_features = 0;
 };
 

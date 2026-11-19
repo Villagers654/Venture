@@ -11,6 +11,8 @@ public class PackageInfo {
   public String[] requestedPermissions;
   public int[] requestedPermissionsFlags;
   public Signature[] signatures;
+  /** The manifest's uses-feature entries (null without any). */
+  public FeatureInfo[] reqFeatures;
   public SigningInfo signingInfo;
   public long firstInstallTime, lastUpdateTime;
   public long getLongVersionCode() {

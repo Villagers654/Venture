@@ -1,14 +1,17 @@
 #!/usr/bin/env bash
 # Package a Linux release layout (dist/Venture-linux64 from the baseline build,
-# docs/LINUX_RELEASE_BUILD.md) as tar.gz, .deb, .rpm, AUR PKGBUILD, AppImage
-# and Flatpak bundle. Every artifact name contains "linux".
+# or an arm64 layout, docs/LINUX_RELEASE_BUILD.md) as tar.gz, .deb, .rpm, AUR
+# PKGBUILD, AppImage and Flatpak bundle, and write the Flathub manifest. Every
+# artifact name contains "linux" and the architecture of the layout's binaries
+# (x86_64 or aarch64).
 #
 #   tools/packaging/linux/build_packages.sh [--layout DIR] [--out DIR] [--version X.Y.Z] [FORMAT...]
-#   FORMAT: tar deb rpm aur appimage flatpak (default: all)
+#   FORMAT: tar deb rpm aur appimage flatpak flathub (default: all but flathub)
 #
 # Needs rootless podman (deb: baseline image, rpm: Fedora image), appimagetool
 # (APPIMAGETOOL, default appimagetool on PATH) and flatpak with
-# org.gnome.Platform//$FLATPAK_BRANCH (default 51) installed.
+# org.gnome.Platform/<arch>/$FLATPAK_BRANCH (default 51) installed. flathub
+# reads both architectures' tarballs from --out (written by earlier tar runs).
 set -euo pipefail
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 root=$(cd "$here/../../.." && pwd)
@@ -21,14 +24,20 @@ while [ $# -gt 0 ]; do
     --layout) layout=$(realpath "$2"); shift 2 ;;
     --out) out=$(realpath -m "$2"); shift 2 ;;
     --version) version=$2; shift 2 ;;
-    -h|--help) sed -n '2,12p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,14p' "$0"; exit 0 ;;
     *) formats+=("$1"); shift ;;
   esac
 done
 [ ${#formats[@]} -gt 0 ] || formats=(tar deb rpm aur appimage flatpak)
 [ -x "$layout/venture" ] && [ -f "$layout/release-files.json" ] || { echo "Not a release layout: $layout" >&2; exit 1; }
 id=org.venture_emu.Venture
-base=Venture-$version-linux-x86_64
+# The architecture of the layout's binaries (ELF e_machine).
+case $(od -An -tx1 -j18 -N2 "$layout/venture" | tr -d ' \n') in
+  3e00) arch=x86_64 debarch=amd64 tardir=Venture-linux64 ;;
+  b700) arch=aarch64 debarch=arm64 tardir=Venture-linux-arm64 ;;
+  *) echo "Unknown architecture: $layout/venture" >&2; exit 1 ;;
+esac
+base=Venture-$version-linux-$arch
 baseline_image=${VENTURE_BASELINE_IMAGE:-localhost/venture-linux-baseline:22.04}
 fedora_image=${VENTURE_FEDORA_IMAGE:-registry.fedoraproject.org/fedora:44}
 flatpak_branch=${FLATPAK_BRANCH:-51}
@@ -56,10 +65,10 @@ fhs_tree() {
 }
 
 do_tar() {
-  local stage=$work/tar/Venture-linux64
+  local stage=$work/tar/$tardir
   mkdir -p "$stage"; cp -a --reflink=auto "$layout/." "$stage/"
   desktop_files "$stage/share"
-  tar -C "$work/tar" --owner=0 --group=0 --sort=name -czf "$out/$base.tar.gz" Venture-linux64
+  tar -C "$work/tar" --owner=0 --group=0 --sort=name -czf "$out/$base.tar.gz" "$tardir"
   echo "tar: $out/$base.tar.gz"
 }
 
@@ -71,7 +80,7 @@ do_deb() {
   cat > "$stage/DEBIAN/control" <<EOF
 Package: venture
 Version: $version
-Architecture: amd64
+Architecture: $debarch
 Maintainer: Venture developers <https://github.com/Villagers654/Venture/issues>
 Installed-Size: $(du -sk "$stage" | cut -f1)
 Depends: libc6 (>= 2.35), libgcc-s1
@@ -91,16 +100,17 @@ EOF
 do_rpm() {
   local stage=$work/rpm
   fhs_tree "$stage/root"
-  sed -e "s/@VERSION@/$version/" "$here/venture.spec" > "$stage/venture.spec"
+  sed -e "s/@VERSION@/$version/" -e "s/@ARCH@/$arch/" "$here/venture.spec" > "$stage/venture.spec"
   in_container "$fedora_image" bash -c "
     set -e; (command -v rpmbuild || dnf -y -q install rpm-build) >/dev/null 2>&1
-    rpmbuild -bb --quiet --define '_topdir $stage/top' --define 'stage $stage/root' \
+    rpmbuild -bb --quiet --target $arch --define '_topdir $stage/top' --define 'stage $stage/root' \
       --define '_build_id_links none' $stage/venture.spec"
-  mv "$stage"/top/RPMS/x86_64/venture-*.rpm "$out/$base.rpm"
+  mv "$stage"/top/RPMS/$arch/venture-*.rpm "$out/$base.rpm"
   echo "rpm: $out/$base.rpm"
 }
 
 do_aur() {
+  [ "$arch" = x86_64 ] || { echo "aur: x86_64 only, skipped"; return; }
   [ -f "$out/$base.tar.gz" ] || do_tar
   local sum aur=$out/aur
   sum=$(sha256sum "$out/$base.tar.gz" | cut -d' ' -f1)
@@ -145,21 +155,29 @@ here=$(dirname "$(readlink -f "$0")")
 exec "$here/usr/venture/venture" "$@"
 EOF
   chmod +x "$appdir/AppRun"
-  ARCH=x86_64 VERSION=$version "$tool" --no-appstream "$appdir" "$out/$base.AppImage" >/dev/null
+  ARCH=$arch VERSION=$version "$tool" --no-appstream "$appdir" "$out/$base.AppImage" >/dev/null
   echo "appimage: $out/$base.AppImage"
+}
+
+# The Flatpak's own files beside the layout: the entry point, and the desktop
+# entry that hands oculus:// sign-in addresses to the sandboxed launcher.
+flatpak_files() {  # PREFIX (/app)
+  install -Dm755 "$here/venture-flatpak.sh" "$1/bin/venture-flatpak.sh"
+  desktop_files "$1/share"
+  sed -i "s/^Exec=venture /Exec=venture-flatpak.sh /" "$1/share/applications/$id.desktop"
+  install -Dm644 "$here/$id.SignIn.desktop" "$1/share/applications/$id.SignIn.desktop"
 }
 
 do_flatpak() {
   # Binary repackaging needs no SDK build step: the flatpak CLI alone (build-init,
   # build-finish, build-export) assembles the app from the layout, with the
-  # finish-args of org.venture_emu.Venture.yml (which flatpak-builder can also use).
+  # finish-args of org.venture_emu.Venture.yml (the Flathub manifest, which
+  # flatpak-builder builds from the release tarballs).
   local fp=$work/flatpak app args
   app=$fp/app
-  flatpak build-init "$app" "$id" org.gnome.Platform org.gnome.Platform "$flatpak_branch" >/dev/null
+  flatpak build-init --arch="$arch" "$app" "$id" org.gnome.Platform org.gnome.Platform "$flatpak_branch" >/dev/null
   cp -a --reflink=auto "$layout" "$app/files/venture"
-  install -Dm755 "$here/venture-flatpak.sh" "$app/files/bin/venture-flatpak.sh"
-  desktop_files "$app/files/share"
-  sed -i "s/^Exec=venture /Exec=venture-flatpak.sh /" "$app/files/share/applications/$id.desktop"
+  flatpak_files "$app/files"
   mapfile -t args < <(sed -n 's/^  - \(--[a-z-]*=.*\|--[a-z-]*\)$/\1/p' "$here/$id.yml")
   flatpak build-finish "$app" --command=venture-flatpak.sh "${args[@]}" >/dev/null
   # OSTree refuses writes when less than 3% of the disk is free; a bundle's
@@ -168,13 +186,30 @@ do_flatpak() {
     ostree init --repo="$fp/repo" --mode=archive-z2
     ostree config --repo="$fp/repo" set core.min-free-space-size 256MB
   fi
-  flatpak build-export "$fp/repo" "$app" stable >/dev/null
+  flatpak build-export --arch="$arch" "$fp/repo" "$app" stable >/dev/null
   # Installing the bundle fetches its runtime from Flathub when it is missing.
-  flatpak build-bundle --runtime-repo=https://dl.flathub.org/repo/flathub.flatpakrepo "$fp/repo" "$out/$base.flatpak" "$id" stable
+  flatpak build-bundle --arch="$arch" --runtime-repo=https://dl.flathub.org/repo/flathub.flatpakrepo \
+    "$fp/repo" "$out/$base.flatpak" "$id" stable
   echo "flatpak: $out/$base.flatpak"
+}
+
+do_flathub() {
+  # The Flathub submission: the manifest with each architecture's release
+  # tarball and checksum, and the files it installs beside the layout.
+  local hub=$out/flathub sums=() a tarball
+  for a in x86_64 aarch64; do
+    tarball=$out/Venture-$version-linux-$a.tar.gz
+    [ -f "$tarball" ] || { echo "flathub: $tarball is missing (run tar on the $a layout first)" >&2; exit 1; }
+    sums+=(-e "s/@SHA256_$a@/$(sha256sum "$tarball" | cut -d' ' -f1)/")
+  done
+  mkdir -p "$hub"
+  sed -e "s/@VERSION@/$version/g" "${sums[@]}" "$here/$id.yml" > "$hub/$id.yml"
+  install -m755 "$here/venture-flatpak.sh" "$hub/venture-flatpak.sh"
+  install -m644 "$here/$id.SignIn.desktop" "$hub/$id.SignIn.desktop"
+  echo "flathub: $hub/$id.yml"
 }
 
 for format in "${formats[@]}"; do "do_$format"; done
 rm -rf "$work"
-( cd "$out" && sha256sum Venture-* > SHA256SUMS-linux.txt 2>/dev/null || true )
+( cd "$out" && sha256sum "Venture-$version-linux-$arch".* > "SHA256SUMS-linux-$arch.txt" 2>/dev/null || true )
 ls -la "$out"

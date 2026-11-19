@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <optional>
+#include <string>
 #include <string_view>
 namespace venture::environment {
 // Immutable host settings captured on first use. Guest libc environment is separate.
@@ -24,7 +25,11 @@ std::optional<std::array<std::uint8_t, 3>> parse_color_key(std::string_view);
 // contents) names SteamVR.
 bool steamvr_manifest(std::string_view path, std::string_view contents);
 // Running inside the Venture Flatpak (FLATPAK_ID) with SteamVR as the OpenXR
-// runtime (XR_RUNTIME_JSON, else ~/.config/openxr/1/active_runtime.json).
-// Flatpak's sandbox cannot reach SteamVR, so a launch cannot work.
+// runtime (XR_RUNTIME_JSON, else ~/.config/openxr/1/active_runtime.json), and
+// SteamVR's manifest or client library not visible in the sandbox, so a
+// launch cannot work.
 bool flatpak_steamvr();
+// The client library an OpenXR runtime manifest names (`contents`), resolved
+// beside the manifest's real file when relative; empty when it names none.
+std::string steamvr_library(std::string_view manifest, std::string_view contents);
 } // namespace venture::environment

@@ -10,6 +10,9 @@
 #include <nlohmann/json.hpp>
 
 #include "common/http/client.h"
+#ifdef __ANDROID__
+#include "common/platform/android/http_transfer.h"
+#endif
 #include "common/log.h"
 #include "hle/ovrplatform/provider.h"
 #include "hle/ovrplatform/identity_iap.h"
@@ -299,6 +302,25 @@ class CurlTransport final : public HttpTransport {
     }
     if (!form_body && !form.empty()) url += (url.find('?') == url.npos ? '?' : '&') + form;
     Transfer transfer{{}, stop};
+#ifdef __ANDROID__
+    // The device's own network stack; libcurl has no TLS on Android.
+    http::android::Request request{.url = url};
+    request.method = method == HttpMethod::post ? "POST" : method == HttpMethod::erase ? "DELETE" : "GET";
+    request.connect_seconds = 5;
+    request.read_seconds = 15;
+    if (!bearer.empty()) request.headers.emplace_back("Authorization", "Bearer " + bearer);
+    if (method == HttpMethod::post) {
+      request.body = form_body ? form : std::string();
+      request.headers.emplace_back("Content-Type", "application/x-www-form-urlencoded");
+    }
+    auto ignore_header = +[](char*, std::size_t size, std::size_t count, void*) { return size * count; };
+    auto result = http::android::perform(request, stop, ignore_header, nullptr, receive, &transfer);
+    if (result.failure != http::android::Failure::none)
+      return {static_cast<std::int32_t>(result.status),
+              {},
+              failure(stop.stop_requested() ? ErrorCode::cancelled : ErrorCode::unavailable)};
+    return {static_cast<std::int32_t>(result.status), std::move(transfer.body), {}};
+#else
     curl_slist* raw = nullptr;
     if (!bearer.empty()) {
       raw = curl_slist_append(nullptr, ("Authorization: Bearer " + bearer).c_str());
@@ -336,6 +358,7 @@ class CurlTransport final : public HttpTransport {
               {},
               failure(stop.stop_requested() ? ErrorCode::cancelled : ErrorCode::unavailable)};
     return {static_cast<std::int32_t>(status), std::move(transfer.body), {}};
+#endif
   }
   struct Backoff {
     unsigned failures = 0;

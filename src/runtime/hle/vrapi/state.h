@@ -7,6 +7,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <string>
 #include <vector>
 namespace venture::hle::vrapi {
 using namespace abi;
@@ -45,6 +46,13 @@ struct Input {
   XrAction grip_action{}, aim_action{}, trigger{}, squeeze{}, stick{}, a{}, b{}, click{}, menu{},
       haptic{};
   XrAction touch_trigger{}, touch_stick{}, touch_a{}, touch_b{}, touch_rest{};
+  // Without XR_EXT_dpad_binding: the pad and its press, split into halves here.
+  XrAction pad{}, pad_press{};
+  // Each hand's host profile (its offset and halves), refreshed when the host
+  // reports a change; the grip and aim spaces carry that controller's offset.
+  XrPath profiles[2]{};
+  std::string profile_names[2];
+  bool profiles_stale = true;
   XrHandTrackerEXT trackers[2]{};
   bool hands_supported = false;
 };

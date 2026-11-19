@@ -26,6 +26,16 @@ void lower_background_thread_priority() {
   setpriority(PRIO_PROCESS, static_cast<id_t>(syscall(SYS_gettid)), 10);
 #endif
 }
+void enter_background_process_mode() {
+  // Scheduling attributes belong to the calling thread on Linux; threads and processes it starts
+  // later inherit them. SCHED_IDLE runs only on otherwise idle CPU time, nice 19 where it is
+  // refused, and the idle I/O class (ioprio_set, IOPRIO_CLASS_IDLE) on disks.
+  sched_param param{};
+  if (sched_setscheduler(0, SCHED_IDLE, &param) != 0) setpriority(PRIO_PROCESS, 0, 19);
+#ifdef __linux__
+  syscall(SYS_ioprio_set, 1 /* IOPRIO_WHO_PROCESS */, 0, 3 << 13 /* IOPRIO_CLASS_IDLE */);
+#endif
+}
 void lower_worker_thread_priority() {
 #ifdef __linux__
   setpriority(PRIO_PROCESS, static_cast<id_t>(syscall(SYS_gettid)), 5);

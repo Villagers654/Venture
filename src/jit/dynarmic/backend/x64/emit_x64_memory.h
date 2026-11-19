@@ -14,7 +14,7 @@
 
 #include "dynarmic/backend/x64/a32_emit_x64.h"
 #include "dynarmic/backend/x64/a64_emit_x64.h"
-#include "dynarmic/backend/x64/exclusive_monitor_friend.h"
+#include "dynarmic/backend/exclusive_monitor_friend.h"
 #include "dynarmic/common/spin_lock_x64.h"
 #include "dynarmic/interface/exclusive_monitor.h"
 #include "dynarmic/ir/acc_type.h"

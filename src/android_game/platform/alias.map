@@ -1,0 +1,5 @@
+/* The alias exports nothing; symbols come from libovrplatformloader.so. */
+{
+  local:
+    *;
+};

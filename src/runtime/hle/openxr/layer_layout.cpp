@@ -110,6 +110,13 @@ std::string describe(const XrCompositionLayerBaseHeader& layer, const LayerLayou
       const auto& sub = p.views[i].subImage;
       text += std::format(" view {} {} slice {} rect {}x{}", i, chain_text(sub.swapchain, queries), sub.imageArrayIndex,
                           sub.imageRect.extent.width, sub.imageRect.extent.height);
+      if (sub.imageRect.offset.x || sub.imageRect.offset.y)
+        text += std::format("+{}+{}", sub.imageRect.offset.x, sub.imageRect.offset.y);
+      // Degrees left/right/up/down: a field that differs from the host's eye FOV shows here.
+      constexpr double degrees = 57.29577951308232;
+      const auto& f = p.views[i].fov;
+      text += std::format(" fov {:.1f}/{:.1f}/{:.1f}/{:.1f}", f.angleLeft * degrees, f.angleRight * degrees,
+                          f.angleUp * degrees, f.angleDown * degrees);
       if (each_chained(p.views[i].next, [&](XrStructureType type) { text += " +" + chained(type, queries); }))
         text += " +...";
     }

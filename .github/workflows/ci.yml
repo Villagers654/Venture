@@ -25,3 +25,11 @@ jobs:
   linux:
     if: github.repository == 'Villagers654/Venture'
     uses: ./.github/workflows/linux.yml
+  linux-arm64:
+    # The Steam Frame stand-in: shared code and its tests on a native arm64 runner.
+    if: github.repository == 'Villagers654/Venture'
+    uses: ./.github/workflows/linux-arm64.yml
+  android:
+    # The Android headset APK: built, checked, and started in an emulator.
+    if: github.repository == 'Villagers654/Venture'
+    uses: ./.github/workflows/android.yml

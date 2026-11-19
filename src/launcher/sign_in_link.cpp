@@ -97,6 +97,15 @@ std::string exec_arg(std::string_view arg) {
   }
   return out + '"';
 }
+// The Flatpak's exported oculus:// handler (tools/packaging/linux); empty
+// outside a Flatpak or when the package lacks it.
+fs::path packaged_handler() {
+  const char *id = environment::getenv("FLATPAK_ID");
+  if (!id || !*id || !paths::safe_name(id)) return {};
+  std::error_code ec;
+  auto entry = fs::path("/app/share/applications") / (std::string(id) + ".SignIn.desktop");
+  return fs::is_regular_file(entry, ec) ? entry : fs::path();
+}
 // What restore() leaves when there was no default before: no user default.
 void forget_default() {
   std::error_code ec;
@@ -136,9 +145,14 @@ bool take_over(const fs::path &data) {
       L"\"" + paths::executable().wstring() + L"\" --sign-in-callback \"" + data.wstring() + L"\" \"%1\"";
   return set(scheme_key(), nullptr, L"URL:oculus") && set(scheme_key(), L"URL Protocol", L"") &&
          set(command_key(), nullptr, command);
+#elif defined(__ANDROID__)
+  // The APK's own intent filter hands oculus:// addresses to Venture
+  // (Native.signInLink delivers them here).
+  return true;
 #else
-  // The sandbox has no say over the host's handlers.
-  if (environment::getenv("FLATPAK_ID") || user_data().empty() || user_config().empty()) return false;
+  // The sandbox has no say over the host's handlers; the package brings its own.
+  if (environment::getenv("FLATPAK_ID")) return !packaged_handler().empty();
+  if (user_data().empty() || user_config().empty()) return false;
   if (which("xdg-mime").empty()) return false;
   const auto before = user_default();
   const bool ours = before == kEntry || before == std::string(kEntry) + ";";
@@ -155,9 +169,23 @@ bool take_over(const fs::path &data) {
 #endif
 }
 
+bool system_browser() {
+#if defined(_WIN32) || defined(__ANDROID__)
+  return false;
+#else
+  return !packaged_handler().empty();
+#endif
+}
+
 void restore(const fs::path &data) {
   std::error_code ec;
+#ifdef __ANDROID__
+  (void)data;
+  return;  // the manifest's handler stays; take_over() changed nothing
+#endif
 #ifndef _WIN32
+  if (environment::getenv("FLATPAK_ID")) return;  // the package's handler stays
+
   fs::remove(user_data() / "applications" / kEntry, ec);
 #endif
   if (!fs::exists(previous_file(data), ec)) return;

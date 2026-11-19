@@ -23,6 +23,42 @@ std::string text_of(const Json &node, const char *key) {
 }
 }  // namespace
 
+std::string runtime_name(const std::filesystem::path &manifest) {
+  std::ifstream in(paths::io_path(manifest), std::ios::binary);
+  std::stringstream text;
+  text << in.rdbuf();
+  const Json j = Json::parse(text.str(), nullptr, false);
+  if (j.is_object())
+    if (const auto runtime = j.find("runtime"); runtime != j.end() && runtime->is_object())
+      if (auto name = text_of(*runtime, "name"); !name.empty()) return name;
+  return paths::utf8(manifest.stem());
+}
+std::vector<Runtime> installed_runtimes() {
+  std::vector<Runtime> out;
+  std::error_code ec;
+  auto same = [&](const std::filesystem::path &a, const std::filesystem::path &b) {
+    std::error_code e;
+    return std::filesystem::equivalent(a, b, e);
+  };
+  auto add = [&](const std::filesystem::path &manifest, bool active) {
+    if (manifest.empty() || !std::filesystem::is_regular_file(manifest, ec)) return;
+    for (auto &r : out)
+      if (same(r.manifest, manifest)) return void(r.active |= active);
+    // A runtime manifest names its library; layer and other files in the same folders do not.
+    std::ifstream in(paths::io_path(manifest), std::ios::binary);
+    std::stringstream text;
+    text << in.rdbuf();
+    const Json j = Json::parse(text.str(), nullptr, false);
+    const auto runtime = j.is_object() ? j.find("runtime") : j.end();
+    if (!j.is_object() || runtime == j.end() || !runtime->is_object() || text_of(*runtime, "library_path").empty())
+      return;
+    out.push_back({manifest, runtime_name(manifest), active});
+  };
+  add(active_runtime(), true);
+  for (const auto &manifest : runtime_manifests()) add(manifest, false);
+  return out;
+}
+
 std::string library_problem(const std::filesystem::path &library) {
   std::error_code ec;
   if (!std::filesystem::exists(library, ec)) return "the library " + paths::utf8(library) + " is missing";

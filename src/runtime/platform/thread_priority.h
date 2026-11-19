@@ -44,6 +44,10 @@ const char* thread_cycles_method();
 void apply_pending_thread_priority();
 // For a dedicated background worker only; its lowered priority lasts until exit.
 void lower_background_thread_priority();
+// The whole process, before it starts threads or child processes (both inherit it): the
+// OS's idle CPU priority, with background I/O and memory priority where the host has them.
+// For work nobody waits for (venture-runtime --prepare).
+void enter_background_process_mode();
 // For a worker whose output is usually not awaited yet: below normal, so game
 // threads run first, without background mode's I/O and memory priority.
 void lower_worker_thread_priority();

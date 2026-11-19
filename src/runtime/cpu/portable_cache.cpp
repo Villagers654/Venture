@@ -1,6 +1,5 @@
 #include "cpu/portable_cache.h"
-#include "cpu/host_tuning.h"
-#include <dynarmic/backend/x64/portable_block.h>
+#include "cpu/jit_backend.h"
 #include "common/environment.h"
 #include "common/file_ops.h"
 #include "common/log.h"
@@ -49,6 +48,15 @@
 
 namespace venture {
 namespace {
+// The backend's portable block statistics, for the periodic cache report.
+std::string stats_report() {
+#if VENTURE_JIT_PORTABLE_BLOCKS
+  return jit_backend::portable::PortableStatsReport();
+#else
+  return {};
+#endif
+}
+
 constexpr char kMagic[4] = {'V', 'P', 'C', '5'};
 // Records are LZ4-compressed against a dictionary: the first record of every file (this
 // descriptor), the first 64 KiB of blocks it stored. Blocks are a few hundred bytes, too
@@ -116,9 +124,6 @@ std::uint64_t fingerprint() {
     h = fnv(h, name);
     h = fnv(h, value ? std::string_view(value) : std::string_view("unset"));
   }
-  // Defaults chosen per host CPU (cpu/host_tuning.cpp), not only their overrides.
-  const auto return_pop = static_cast<unsigned>(host_tuning::return_pop());
-  h = fnv(h, &return_pop, sizeof(return_pop));
 #if defined(__x86_64__) || defined(_M_X64)
   unsigned regs[4]{};
   for (const unsigned leaf : {0x1u, 0x7u, 0x80000001u}) {
@@ -288,7 +293,11 @@ struct PortableBlockCache::Impl {
     return true;
   }
   void verify_block(std::uint64_t descriptor, const std::vector<std::uint8_t>& expected, const std::uint8_t* data, std::size_t size) {
-    const auto difference = Dynarmic::Backend::X64::ComparePortableBlocks(expected, {data, size});
+#if VENTURE_JIT_PORTABLE_BLOCKS
+    const auto difference = jit_backend::portable::ComparePortableBlocks(expected, {data, size});
+#else
+    const std::string difference = expected.size() == size && std::memcmp(expected.data(), data, size) == 0 ? "" : "bytes differ";
+#endif
     verified.fetch_add(1, std::memory_order_relaxed);
     if (difference.starts_with('~') || difference == "guest ranges differ") {
       benign.fetch_add(1, std::memory_order_relaxed);
@@ -618,7 +627,7 @@ struct PortableBlockCache::Impl {
         if (h + m + s != last) {
           last = h + m + s;
           log::info("jit", "Portable block cache: {} found, {} missed, {} stored, {} MB, {} verified, {} differ, {} benign; {}", h, m, s, end >> 20, verified.load(),
-                    mismatched.load(), benign.load(), Dynarmic::Backend::X64::PortableStatsReport());
+                    mismatched.load(), benign.load(), stats_report());
           // Memory its indexes and unwritten records hold (flat maps: bucket_count 16-byte slots).
           std::uint64_t index_bytes = loaded.bucket_count() * 16 + explored_exceptions.bucket_count() * 8 + unmarked.capacity() * 8, unwritten_held = 0;
           std::size_t records = 0;
@@ -642,6 +651,8 @@ struct PortableBlockCache::Impl {
 
 PortableBlockCache* PortableBlockCache::get() {
   static PortableBlockCache* instance = []() -> PortableBlockCache* {
+    // A backend without a portable block format translates every block when first reached.
+    if (!VENTURE_JIT_PORTABLE_BLOCKS) return nullptr;
     // On by default; VENTURE_JIT_PTC=0 (Settings > Runtime > Keep translated code off) disables it.
     const auto* e = environment::getenv("VENTURE_JIT_PTC");
     if (e && std::string_view(e) == "0") return nullptr;
@@ -748,9 +759,11 @@ std::pair<const std::uint8_t*, std::size_t> PortableBlockCache::find(std::uint64
       return {nullptr, 0};
     }
     const std::span<const std::uint8_t> bytes{data, size};
+#if VENTURE_JIT_PORTABLE_BLOCKS
+    namespace portable = jit_backend::portable;
     if (impl_->exclude) {
       // Diagnostics: refuse blocks with any reference kind in the mask (bit 16: fastmem sites, 17: links).
-      const auto block = Dynarmic::Backend::X64::DeserializePortableBlock(bytes);
+      const auto block = portable::DeserializePortableBlock(bytes);
       if (!block) return {nullptr, 0};
       std::uint32_t kinds = (block->fastmem.empty() ? 0 : 1u << 16) | (block->links.empty() ? 0 : 1u << 17);
       for (const auto& r : block->relocs) kinds |= 1u << unsigned(r.target.kind);
@@ -771,9 +784,9 @@ std::pair<const std::uint8_t*, std::size_t> PortableBlockCache::find(std::uint64
     }
     if (impl_->svc_mask) {
       // Diagnostics: of the blocks with HLE calls, install only those whose hash matches.
-      const auto block = Dynarmic::Backend::X64::DeserializePortableBlock(bytes);
+      const auto block = portable::DeserializePortableBlock(bytes);
       if (!block) return {nullptr, 0};
-      if (std::any_of(block->relocs.begin(), block->relocs.end(), [](const auto& r) { return r.target.kind == Dynarmic::Backend::X64::PortableRefKind::Svc; })) {
+      if (std::any_of(block->relocs.begin(), block->relocs.end(), [](const auto& r) { return r.target.kind == portable::PortableRefKind::Svc; })) {
         std::uint64_t h = descriptor * 0x9e3779b97f4a7c15ull;
         h ^= h >> 31;
         if ((h & impl_->svc_mask) != impl_->svc_value) return {nullptr, 0};
@@ -781,6 +794,7 @@ std::pair<const std::uint8_t*, std::size_t> PortableBlockCache::find(std::uint64
         if (impl_->svc_mask >= 0x3fff) log::info("jit", "bisect install {:#x}", descriptor);
       }
     }
+#endif
     impl_->hits.fetch_add(1, std::memory_order_relaxed);
     if (impl_->verify) {
       // The translation that follows on this thread stores the same descriptor: store() compares.

@@ -258,7 +258,7 @@ static void EmitTwoOpFallbackWithoutRegAlloc(oaknut::CodeGenerator& code, EmitCo
     const u32 fpcr = ctx.FPCR(fpcr_controlled).Value();
     constexpr u64 stack_size = sizeof(u64) * 4;  // sizeof(u128) * 2
 
-    ABI_PushRegisters(code, ABI_CALLER_SAVE & ~(1ull << Qresult.index()), stack_size);
+    ABI_PushRegisters(code, ABI_CALLER_SAVE & ~ToRegList(Qresult), stack_size);
 
     code.MOV(Xscratch0, std::bit_cast<u64>(fn));
     code.ADD(X0, SP, 0 * 16);
@@ -269,7 +269,7 @@ static void EmitTwoOpFallbackWithoutRegAlloc(oaknut::CodeGenerator& code, EmitCo
     code.BLR(Xscratch0);
     code.LDR(Qresult, SP);
 
-    ABI_PopRegisters(code, ABI_CALLER_SAVE & ~(1ull << Qresult.index()), stack_size);
+    ABI_PopRegisters(code, ABI_CALLER_SAVE & ~ToRegList(Qresult), stack_size);
 }
 
 template<std::size_t fpcr_controlled_arg_index = 1, typename Lambda>
@@ -283,6 +283,74 @@ static void EmitTwoOpFallback(oaknut::CodeGenerator& code, EmitContext& ctx, IR:
 
     const bool fpcr_controlled = args[fpcr_controlled_arg_index].GetImmediateU1();
     EmitTwoOpFallbackWithoutRegAlloc(code, ctx, Qresult, Qarg1, lambda, fpcr_controlled);
+}
+
+// Venture: FP16 lanes run in the soft-float library, which applies the guest FPCR exactly (FEAT_FP16 is not
+// part of the host baseline). Operands go through the call frame; `extra` carries per-opcode immediates.
+using FP16VectorFallback = void (*)(VectorArray<u16>& result, const VectorArray<u16>& a, const VectorArray<u16>& b,
+                                    const VectorArray<u16>& c, u64 extra, u32 fpcr, FP::FPSR& fpsr);
+
+static void CallFP16VectorFallback(oaknut::CodeGenerator& code, EmitContext& ctx, oaknut::QReg Qresult, std::initializer_list<oaknut::QReg> operands, u64 extra, bool fpcr_controlled, FP16VectorFallback fn) {
+    ctx.reg_alloc.SpillFlags();
+    ctx.fpsr.Spill();
+
+    constexpr u64 stack_size = 4 * 16;  // result, a, b, c
+    ABI_PushRegisters(code, ABI_CALLER_SAVE & ~ToRegList(Qresult), stack_size);
+
+    u64 offset = 16;
+    for (const oaknut::QReg Qoperand : operands) {
+        code.STR(Qoperand, SP, offset);
+        offset += 16;
+    }
+    code.MOV(Xscratch0, std::bit_cast<u64>(fn));
+    code.ADD(X0, SP, 0 * 16);
+    code.ADD(X1, SP, 1 * 16);
+    code.ADD(X2, SP, 2 * 16);
+    code.ADD(X3, SP, 3 * 16);
+    code.MOV(X4, extra);
+    code.MOV(W5, ctx.FPCR(fpcr_controlled).Value());
+    code.ADD(X6, Xstate, ctx.conf.state_fpsr_offset);
+    code.BLR(Xscratch0);
+    code.LDR(Qresult, SP);
+
+    ABI_PopRegisters(code, ABI_CALLER_SAVE & ~ToRegList(Qresult), stack_size);
+}
+
+template<std::size_t operand_count>
+static void EmitFP16VectorFallback(oaknut::CodeGenerator& code, EmitContext& ctx, IR::Inst* inst, std::size_t fpcr_controlled_arg_index, u64 extra, FP16VectorFallback fn) {
+    auto args = ctx.reg_alloc.GetArgumentInfo(inst);
+    const bool fpcr_controlled = args[fpcr_controlled_arg_index].GetImmediateU1();
+    auto Qresult = ctx.reg_alloc.WriteQ(inst);
+    auto Qa = ctx.reg_alloc.ReadQ(args[0]);
+    if constexpr (operand_count == 1) {
+        RegAlloc::Realize(Qresult, Qa);
+        CallFP16VectorFallback(code, ctx, *Qresult, {*Qa}, extra, fpcr_controlled, fn);
+    } else if constexpr (operand_count == 2) {
+        auto Qb = ctx.reg_alloc.ReadQ(args[1]);
+        RegAlloc::Realize(Qresult, Qa, Qb);
+        CallFP16VectorFallback(code, ctx, *Qresult, {*Qa, *Qb}, extra, fpcr_controlled, fn);
+    } else {
+        static_assert(operand_count == 3);
+        auto Qb = ctx.reg_alloc.ReadQ(args[1]);
+        auto Qc = ctx.reg_alloc.ReadQ(args[2]);
+        RegAlloc::Realize(Qresult, Qa, Qb, Qc);
+        CallFP16VectorFallback(code, ctx, *Qresult, {*Qa, *Qb, *Qc}, extra, fpcr_controlled, fn);
+    }
+}
+
+template<bool unsigned_>
+static void FPVectorToFixed16Thunk(VectorArray<u16>& result, const VectorArray<u16>& a, const VectorArray<u16>&, const VectorArray<u16>&, u64 extra, u32 fpcr, FP::FPSR& fpsr) {
+    const std::size_t fbits = extra & 0xff;
+    const auto rounding = FP::RoundingMode(extra >> 8);
+    for (std::size_t i = 0; i < result.size(); ++i)
+        result[i] = u16(FP::FPToFixed<u16>(16, a[i], fbits, unsigned_, FP::FPCR{fpcr}, rounding, fpsr));
+}
+
+template<bool unsigned_>
+static void EmitFPVectorToFixed16(oaknut::CodeGenerator& code, EmitContext& ctx, IR::Inst* inst) {
+    const u64 fbits = inst->GetArg(1).GetU8();
+    const u64 rounding = inst->GetArg(2).GetU8();
+    EmitFP16VectorFallback<1>(code, ctx, inst, 3, fbits | (rounding << 8), FPVectorToFixed16Thunk<unsigned_>);
 }
 
 template<>
@@ -326,10 +394,10 @@ void EmitIR<IR::Opcode::FPVectorDiv64>(oaknut::CodeGenerator& code, EmitContext&
 
 template<>
 void EmitIR<IR::Opcode::FPVectorEqual16>(oaknut::CodeGenerator& code, EmitContext& ctx, IR::Inst* inst) {
-    (void)code;
-    (void)ctx;
-    (void)inst;
-    UNREACHABLE();
+    EmitFP16VectorFallback<2>(code, ctx, inst, 2, 0, [](VectorArray<u16>& result, const VectorArray<u16>& a, const VectorArray<u16>& b, const VectorArray<u16>&, u64, u32 fpcr, FP::FPSR& fpsr) {
+        for (std::size_t i = 0; i < result.size(); ++i)
+            result[i] = FP::FPCompareEQ<u16>(a[i], b[i], FP::FPCR{fpcr}, fpsr) ? 0xFFFF : 0;
+    });
 }
 
 template<>
@@ -451,10 +519,10 @@ void EmitIR<IR::Opcode::FPVectorMul64>(oaknut::CodeGenerator& code, EmitContext&
 
 template<>
 void EmitIR<IR::Opcode::FPVectorMulAdd16>(oaknut::CodeGenerator& code, EmitContext& ctx, IR::Inst* inst) {
-    (void)code;
-    (void)ctx;
-    (void)inst;
-    UNREACHABLE();
+    EmitFP16VectorFallback<3>(code, ctx, inst, 3, 0, [](VectorArray<u16>& result, const VectorArray<u16>& addend, const VectorArray<u16>& op1, const VectorArray<u16>& op2, u64, u32 fpcr, FP::FPSR& fpsr) {
+        for (std::size_t i = 0; i < result.size(); ++i)
+            result[i] = FP::FPMulAdd<u16>(addend[i], op1[i], op2[i], FP::FPCR{fpcr}, fpsr);
+    });
 }
 
 template<>
@@ -479,10 +547,12 @@ void EmitIR<IR::Opcode::FPVectorMulX64>(oaknut::CodeGenerator& code, EmitContext
 
 template<>
 void EmitIR<IR::Opcode::FPVectorNeg16>(oaknut::CodeGenerator& code, EmitContext& ctx, IR::Inst* inst) {
-    (void)code;
-    (void)ctx;
-    (void)inst;
-    UNREACHABLE();
+    auto args = ctx.reg_alloc.GetArgumentInfo(inst);
+    auto Qresult = ctx.reg_alloc.ReadWriteQ(args[0], inst);
+    RegAlloc::Realize(Qresult);
+
+    code.MOVI(V0.H8(), 0b10000000, LSL, 8);
+    code.EOR(Qresult->B16(), Qresult->B16(), V0.B16());
 }
 
 template<>
@@ -524,10 +594,10 @@ void EmitIR<IR::Opcode::FPVectorPairedAddLower64>(oaknut::CodeGenerator& code, E
 
 template<>
 void EmitIR<IR::Opcode::FPVectorRecipEstimate16>(oaknut::CodeGenerator& code, EmitContext& ctx, IR::Inst* inst) {
-    (void)code;
-    (void)ctx;
-    (void)inst;
-    UNREACHABLE();
+    EmitFP16VectorFallback<1>(code, ctx, inst, 1, 0, [](VectorArray<u16>& result, const VectorArray<u16>& a, const VectorArray<u16>&, const VectorArray<u16>&, u64, u32 fpcr, FP::FPSR& fpsr) {
+        for (std::size_t i = 0; i < result.size(); ++i)
+            result[i] = FP::FPRecipEstimate<u16>(a[i], FP::FPCR{fpcr}, fpsr);
+    });
 }
 
 template<>
@@ -542,10 +612,10 @@ void EmitIR<IR::Opcode::FPVectorRecipEstimate64>(oaknut::CodeGenerator& code, Em
 
 template<>
 void EmitIR<IR::Opcode::FPVectorRecipStepFused16>(oaknut::CodeGenerator& code, EmitContext& ctx, IR::Inst* inst) {
-    (void)code;
-    (void)ctx;
-    (void)inst;
-    UNREACHABLE();
+    EmitFP16VectorFallback<2>(code, ctx, inst, 2, 0, [](VectorArray<u16>& result, const VectorArray<u16>& a, const VectorArray<u16>& b, const VectorArray<u16>&, u64, u32 fpcr, FP::FPSR& fpsr) {
+        for (std::size_t i = 0; i < result.size(); ++i)
+            result[i] = FP::FPRecipStepFused<u16>(a[i], b[i], FP::FPCR{fpcr}, fpsr);
+    });
 }
 
 template<>
@@ -685,10 +755,10 @@ void EmitIR<IR::Opcode::FPVectorRoundInt64>(oaknut::CodeGenerator& code, EmitCon
 
 template<>
 void EmitIR<IR::Opcode::FPVectorRSqrtEstimate16>(oaknut::CodeGenerator& code, EmitContext& ctx, IR::Inst* inst) {
-    (void)code;
-    (void)ctx;
-    (void)inst;
-    UNREACHABLE();
+    EmitFP16VectorFallback<1>(code, ctx, inst, 1, 0, [](VectorArray<u16>& result, const VectorArray<u16>& a, const VectorArray<u16>&, const VectorArray<u16>&, u64, u32 fpcr, FP::FPSR& fpsr) {
+        for (std::size_t i = 0; i < result.size(); ++i)
+            result[i] = FP::FPRSqrtEstimate<u16>(a[i], FP::FPCR{fpcr}, fpsr);
+    });
 }
 
 template<>
@@ -703,10 +773,10 @@ void EmitIR<IR::Opcode::FPVectorRSqrtEstimate64>(oaknut::CodeGenerator& code, Em
 
 template<>
 void EmitIR<IR::Opcode::FPVectorRSqrtStepFused16>(oaknut::CodeGenerator& code, EmitContext& ctx, IR::Inst* inst) {
-    (void)code;
-    (void)ctx;
-    (void)inst;
-    UNREACHABLE();
+    EmitFP16VectorFallback<2>(code, ctx, inst, 2, 0, [](VectorArray<u16>& result, const VectorArray<u16>& a, const VectorArray<u16>& b, const VectorArray<u16>&, u64, u32 fpcr, FP::FPSR& fpsr) {
+        for (std::size_t i = 0; i < result.size(); ++i)
+            result[i] = FP::FPRSqrtStepFused<u16>(a[i], b[i], FP::FPCR{fpcr}, fpsr);
+    });
 }
 
 template<>
@@ -758,10 +828,7 @@ void EmitIR<IR::Opcode::FPVectorToHalf32>(oaknut::CodeGenerator& code, EmitConte
 
 template<>
 void EmitIR<IR::Opcode::FPVectorToSignedFixed16>(oaknut::CodeGenerator& code, EmitContext& ctx, IR::Inst* inst) {
-    (void)code;
-    (void)ctx;
-    (void)inst;
-    UNREACHABLE();
+    EmitFPVectorToFixed16<false>(code, ctx, inst);
 }
 
 template<>
@@ -776,10 +843,7 @@ void EmitIR<IR::Opcode::FPVectorToSignedFixed64>(oaknut::CodeGenerator& code, Em
 
 template<>
 void EmitIR<IR::Opcode::FPVectorToUnsignedFixed16>(oaknut::CodeGenerator& code, EmitContext& ctx, IR::Inst* inst) {
-    (void)code;
-    (void)ctx;
-    (void)inst;
-    UNREACHABLE();
+    EmitFPVectorToFixed16<true>(code, ctx, inst);
 }
 
 template<>

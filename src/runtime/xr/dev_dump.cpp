@@ -288,9 +288,12 @@ namespace {
 // ends. The Oculus PC runtime (Meta Horizon 1.208) calls through a null
 // pointer inside xrDestroySwapchain while a session runs: Job Simulator on its
 // loading quad, H3VR2 on a scene change, Beat Saber on a resolution rebuild
-// (issue 46). A destroyed guest chain parks its host chain; a later chain with
-// the same create info takes it back, and the rest are destroyed just before
-// the host session, as native applications do at exit. Every runtime saves the
+// (issue 46), and after the session stopped too: Underdogs on an AMD GPU, whose
+// device the runtime did not create, crashed at quit in the first parked
+// chain's xrDestroySwapchain. A destroyed guest chain parks its host chain; a
+// later chain with the same create info takes it back, and the rest go with the
+// host session: OpenXR's xrDestroySession destroys the session's swapchains, so
+// the host never sees an xrDestroySwapchain for them. Every runtime saves the
 // reallocation on a rebuild. Past the byte cap the oldest parked chain is
 // destroyed for real, so churn through many sizes stays bounded.
 struct ParkedChain {
@@ -463,9 +466,12 @@ XrResult dev_release_swapchain(XrSwapchain s, const XrSwapchainImageReleaseInfo*
   return result;
 }
 void dev_dump_flush() { writer().drain(); }
-void dev_destroy_parked_swapchains() {
+std::size_t dev_forget_parked_swapchains() {
   std::lock_guard pool(pool_mutex);
-  while (!parked_chains.empty()) destroy_oldest_parked();
+  const auto count = parked_chains.size();
+  parked_chains.clear();
+  parked_bytes = 0;
+  return count;
 }
 void dev_dump_end() {
   {

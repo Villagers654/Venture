@@ -431,8 +431,8 @@ std::int64_t unmap(GuestAddr p, std::uint64_t n) {
   erase(s, p, align_up(n, 4096));
   return 0;
 }
-std::int64_t protect(GuestAddr p, std::uint64_t n, std::uint32_t prot) {
-  if ((p & 4095) || (prot & ~7u)) return -err::kEINVAL;
+std::int64_t protect(GuestAddr p, std::uint64_t n, std::uint32_t requested) {
+  if ((p & 4095) || (requested & ~7u)) return -err::kEINVAL;
   if (!n) return 0;
   if (!valid(p, n)) return -err::kEINVAL;
   n = align_up(n, 4096);
@@ -445,7 +445,7 @@ std::int64_t protect(GuestAddr p, std::uint64_t n, std::uint32_t prot) {
   n = end - p;
   bool writable_file = false;
   each_backing(s, p, n, [&](auto, auto, bool file) {
-    writable_file |= file && (prot & kProtWrite);
+    writable_file |= file && (requested & kProtWrite);
     return true;
   });
   if (writable_file) return -err::kEACCES;
@@ -453,6 +453,7 @@ std::int64_t protect(GuestAddr p, std::uint64_t n, std::uint32_t prot) {
   split(s, p + n);
   for (auto it = s.regions.lower_bound(p); it != s.regions.end() && it->first < p + n; ++it) {
     auto& r = it->second;
+    const auto prot = region_protection(r, requested);
     if (!each_backing(s, r.start, r.size, [&](auto p, auto n, bool file) {
           // Guest instructions are read by the JIT, never executed as host code.
           // A read-only file section need not have host execute permission.

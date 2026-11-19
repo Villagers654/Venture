@@ -277,6 +277,60 @@ bool commit_charge(CommitCharge& out) {
          counters.PrivateUsage, true};
   return true;
 }
+namespace {
+// SYSTEM_PROCESS_INFORMATION.HardFaultCount (Windows 7+), which winternl.h keeps in
+// Reserved1 after WorkingSetPrivateSize: the only per-process count of page-ins.
+std::int64_t hard_faults() {
+  using Query = LONG(WINAPI*)(int, PVOID, ULONG, PULONG);
+  constexpr int kSystemProcessInformation = 5;
+  static const auto query = reinterpret_cast<Query>(
+      reinterpret_cast<void*>(GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtQuerySystemInformation")));
+  if (!query) return -1;
+  static std::vector<std::uint64_t> buffer(1 << 17);  // grows to what the system needs; stall diagnostics only
+  for (int attempt = 0; attempt < 4; ++attempt) {
+    ULONG needed = 0;
+    const auto bytes = static_cast<ULONG>(buffer.size() * sizeof(buffer[0]));
+    const auto status = query(kSystemProcessInformation, buffer.data(), bytes, &needed);
+    if (status == LONG(0xC0000004)) {  // STATUS_INFO_LENGTH_MISMATCH
+      buffer.resize(std::max<std::size_t>(needed, bytes) / sizeof(buffer[0]) * 2);
+      continue;
+    }
+    if (status < 0) return -1;
+    // x64 layout, read by offset: SDK headers disagree on the member names.
+    constexpr std::size_t kHardFaults = 16, kProcessId = 80;
+    static_assert(sizeof(void*) == 8);
+    const auto self = static_cast<ULONG_PTR>(GetCurrentProcessId());
+    const auto* at = reinterpret_cast<const unsigned char*>(buffer.data());
+    for (;;) {
+      ULONG next = 0, count = 0;
+      ULONG_PTR id = 0;
+      std::memcpy(&next, at, sizeof(next));
+      std::memcpy(&id, at + kProcessId, sizeof(id));
+      if (id == self) {
+        std::memcpy(&count, at + kHardFaults, sizeof(count));
+        return count;
+      }
+      if (!next) return -1;
+      at += next;
+    }
+  }
+  return -1;
+}
+}
+bool process_activity(ProcessActivity& out) {
+  FILETIME created, exited, kernel, user;
+  if (!GetProcessTimes(GetCurrentProcess(), &created, &exited, &kernel, &user)) return false;
+  const auto ticks = [](FILETIME t) { return std::uint64_t(t.dwHighDateTime) << 32 | t.dwLowDateTime; };
+  out = {};
+  out.cpu_ns = (ticks(kernel) + ticks(user)) * 100;
+  PROCESS_MEMORY_COUNTERS memory{};
+  memory.cb = sizeof(memory);
+  if (K32GetProcessMemoryInfo(GetCurrentProcess(), &memory, sizeof(memory))) out.faults = memory.PageFaultCount;
+  IO_COUNTERS io{};
+  if (GetProcessIoCounters(GetCurrentProcess(), &io)) out.read_bytes = io.ReadTransferCount;
+  out.hard_faults = hard_faults();
+  return true;
+}
 bool process_memory(ProcessMemory& out) {
   // PSAPI_WORKING_SET_INFORMATION/PSAPI_WORKING_SET_BLOCK (psapi.h).
   // ShareCount is capped at 7 by Windows; proportional shared residency is
@@ -334,7 +388,8 @@ bool protect(GuestAddr address, std::uint64_t size, std::uint32_t prot) {
   DWORD previous;
   return VirtualProtect(g2h(address), size, protection(prot), &previous) != 0;
 }
-int map_shared_file(int fd, std::uint64_t offset, std::uint64_t size, std::uint32_t prot, FileMapping& out) {
+int map_shared_file(int fd, std::uint64_t offset, std::uint64_t size, std::uint32_t prot, FileMapping& out, GuestAddr at) {
+  if (at) return -err::kENOMEM;
   const auto handle = reinterpret_cast<HANDLE>(_get_osfhandle(fd));
   if (handle == INVALID_HANDLE_VALUE) return -err::kEBADF;
   LARGE_INTEGER length;

@@ -47,3 +47,38 @@ TEST_CASE("invalidation gate never lets a run start with a completed invalidatio
   CHECK(ok);
   for (int t = 0; t < threads; ++t) CHECK(applied[t] == per_thread);
 }
+
+TEST_CASE("a parked run does not hold up invalidation and applies it at its next entry") {
+  // The owner blocks in a host call inside its run; an invalidator must not
+  // wait for it to wake, and the range is applied when the run ends and the
+  // next one begins.
+  InvalidationGate gate;
+  bool halted = false;
+  std::vector<std::uint64_t> applied;
+  gate.enter([&](std::uint64_t p, std::uint64_t) { applied.push_back(p); });
+  gate.park();
+  std::atomic<bool> done = false;
+  std::thread invalidator([&] {
+    gate.wait(gate.queue(7, 1, [&] { halted = true; }));
+    done.store(true);
+  });
+  invalidator.join();  // returns while the owner is still parked
+  CHECK(done.load());
+  CHECK(halted);
+  gate.unpark();
+  CHECK(applied.empty());  // not applied inside the run that was halted
+  gate.leave();
+  gate.enter([&](std::uint64_t p, std::uint64_t) { applied.push_back(p); });
+  gate.leave();
+  CHECK(applied == std::vector<std::uint64_t>{7});
+
+  // A range queued after unpark waits for the run to end again.
+  gate.enter([](std::uint64_t, std::uint64_t) {});
+  gate.park();
+  gate.unpark();
+  const auto epoch = gate.queue(8, 1, [] {});
+  CHECK(epoch != 0);
+  std::thread waiter([&] { gate.wait(epoch); });
+  gate.leave();
+  waiter.join();
+}

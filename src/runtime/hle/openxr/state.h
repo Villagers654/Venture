@@ -1,6 +1,7 @@
 #pragma once
 #include "hle/openxr/openxr.h"
 #include "xr/session.h"
+#include "xr/sanitize.h"
 #include "xr/sampler.h"
 #include "xr/xr_images.h"
 #include "xr/color_images.h"
@@ -183,10 +184,9 @@ template <class E> void queue_event(const E& event) {
   std::memcpy(&buffer, &event, sizeof(event));
   state().events.push_back(buffer);
 }
-// Undefined or non-finite host poses, velocities and views become neutral values (spaces.cpp).
-void sanitize(XrSpaceLocationFlags& flags, XrPosef& pose);
-void sanitize(XrSpaceVelocityFlags& flags, XrVector3f& linear, XrVector3f& angular);
-void sanitize_views(XrViewState& state, std::uint32_t count, XrView* views);
+// Undefined or non-finite host poses, velocities and views become neutral values.
+using venture::xr::sanitize;
+using venture::xr::sanitize_views;
 void cancel_object_haptics(const ObjectKey&);
 template <class H> void forget_handle(H h) { forget_object({handle_type<H>(), key(h)}); }
 template <class H> void cancel_handle_haptics(H h) { cancel_object_haptics({handle_type<H>(), key(h)}); }

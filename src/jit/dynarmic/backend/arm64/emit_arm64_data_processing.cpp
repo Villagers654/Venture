@@ -200,17 +200,47 @@ void EmitIR<IR::Opcode::TestBit>(oaknut::CodeGenerator& code, EmitContext& ctx, 
     code.UBFX(Xresult, Xoperand, args[1].GetImmediateU8(), 1);
 }
 
+// Venture: FP select, as x64's blend: a select of two values in FPRs (scalar
+// lanes, which LowLaneAliasing keeps there) is an FCSEL, with no FMOV to GPRs
+// and back. flags: the ConditionalSelectFlags* NZCV argument (3).
+template<std::size_t size>
+static bool EmitFpSelect(oaknut::CodeGenerator& code, EmitContext& ctx, IR::Inst* inst, RegAlloc::ArgumentInfo& args, bool flags) {
+    if (!args[1].IsInFpr(ctx.reg_alloc) || !args[2].IsInFpr(ctx.reg_alloc)) {
+        return false;
+    }
+    const auto cond = static_cast<oaknut::Cond>(args[0].GetImmediateCond());
+    auto Vresult = ctx.reg_alloc.WriteVec<size>(inst);
+    auto Vthen = ctx.reg_alloc.ReadVec<size>(args[1]);
+    auto Velse = ctx.reg_alloc.ReadVec<size>(args[2]);
+    if (flags && ctx.select_flags_in_host) {
+        RegAlloc::Realize(Vresult, Vthen, Velse);
+    } else if (flags) {
+        auto Wflags = ctx.reg_alloc.ReadW(args[3]);
+        RegAlloc::Realize(Vresult, Vthen, Velse, Wflags);
+        ctx.reg_alloc.SpillFlags();
+        code.MSR(oaknut::SystemReg::NZCV, Wflags->toX());
+    } else {
+        RegAlloc::Realize(Vresult, Vthen, Velse);
+        ctx.reg_alloc.SpillFlags();
+        code.LDR(Wscratch0, Xstate, ctx.conf.state_nzcv_offset);
+        code.MSR(oaknut::SystemReg::NZCV, Xscratch0);
+    }
+    code.FCSEL(Vresult, Vthen, Velse, cond);
+    return true;
+}
+
 template<>
 void EmitIR<IR::Opcode::ConditionalSelect32>(oaknut::CodeGenerator& code, EmitContext& ctx, IR::Inst* inst) {
     auto args = ctx.reg_alloc.GetArgumentInfo(inst);
+    if (inst->GetOpcode() == IR::Opcode::ConditionalSelect32 && EmitFpSelect<32>(code, ctx, inst, args, false)) {
+        return;
+    }
     const IR::Cond cond = args[0].GetImmediateCond();
     auto Wresult = ctx.reg_alloc.WriteW(inst);
     auto Wthen = ctx.reg_alloc.ReadW(args[1]);
     auto Welse = ctx.reg_alloc.ReadW(args[2]);
     RegAlloc::Realize(Wresult, Wthen, Welse);
     ctx.reg_alloc.SpillFlags();
-
-    // TODO: FSEL for fprs
 
     code.LDR(Wscratch0, Xstate, ctx.conf.state_nzcv_offset);
     code.MSR(oaknut::SystemReg::NZCV, Xscratch0);
@@ -220,14 +250,15 @@ void EmitIR<IR::Opcode::ConditionalSelect32>(oaknut::CodeGenerator& code, EmitCo
 template<>
 void EmitIR<IR::Opcode::ConditionalSelect64>(oaknut::CodeGenerator& code, EmitContext& ctx, IR::Inst* inst) {
     auto args = ctx.reg_alloc.GetArgumentInfo(inst);
+    if (EmitFpSelect<64>(code, ctx, inst, args, false)) {
+        return;
+    }
     const IR::Cond cond = args[0].GetImmediateCond();
     auto Xresult = ctx.reg_alloc.WriteX(inst);
     auto Xthen = ctx.reg_alloc.ReadX(args[1]);
     auto Xelse = ctx.reg_alloc.ReadX(args[2]);
     RegAlloc::Realize(Xresult, Xthen, Xelse);
     ctx.reg_alloc.SpillFlags();
-
-    // TODO: FSEL for fprs
 
     code.LDR(Wscratch0, Xstate, ctx.conf.state_nzcv_offset);
     code.MSR(oaknut::SystemReg::NZCV, Xscratch0);
@@ -237,6 +268,61 @@ void EmitIR<IR::Opcode::ConditionalSelect64>(oaknut::CodeGenerator& code, EmitCo
 template<>
 void EmitIR<IR::Opcode::ConditionalSelectNZCV>(oaknut::CodeGenerator& code, EmitContext& ctx, IR::Inst* inst) {
     EmitIR<IR::Opcode::ConditionalSelect32>(code, ctx, inst);
+}
+
+// Venture: selects on an NZCV value already in a register (argument 3, written by
+// A64SetNZCV in this block) instead of reloading the guest flags (opt_passes.cpp).
+template<>
+void EmitIR<IR::Opcode::ConditionalSelectFlags32>(oaknut::CodeGenerator& code, EmitContext& ctx, IR::Inst* inst) {
+    auto args = ctx.reg_alloc.GetArgumentInfo(inst);
+    if (inst->GetOpcode() == IR::Opcode::ConditionalSelectFlags32 && EmitFpSelect<32>(code, ctx, inst, args, true)) {
+        return;
+    }
+    const IR::Cond cond = args[0].GetImmediateCond();
+    auto Wresult = ctx.reg_alloc.WriteW(inst);
+    auto Wthen = ctx.reg_alloc.ReadW(args[1]);
+    auto Welse = ctx.reg_alloc.ReadW(args[2]);
+    if (ctx.select_flags_in_host) {
+        // Venture: host NZCV still holds the flags (the emit loop).
+        RegAlloc::Realize(Wresult, Wthen, Welse);
+        code.CSEL(Wresult, Wthen, Welse, static_cast<oaknut::Cond>(cond));
+        return;
+    }
+    auto Wflags = ctx.reg_alloc.ReadW(args[3]);
+    RegAlloc::Realize(Wresult, Wthen, Welse, Wflags);
+    ctx.reg_alloc.SpillFlags();
+
+    code.MSR(oaknut::SystemReg::NZCV, Wflags->toX());
+    code.CSEL(Wresult, Wthen, Welse, static_cast<oaknut::Cond>(cond));
+}
+
+template<>
+void EmitIR<IR::Opcode::ConditionalSelectFlags64>(oaknut::CodeGenerator& code, EmitContext& ctx, IR::Inst* inst) {
+    auto args = ctx.reg_alloc.GetArgumentInfo(inst);
+    if (EmitFpSelect<64>(code, ctx, inst, args, true)) {
+        return;
+    }
+    const IR::Cond cond = args[0].GetImmediateCond();
+    auto Xresult = ctx.reg_alloc.WriteX(inst);
+    auto Xthen = ctx.reg_alloc.ReadX(args[1]);
+    auto Xelse = ctx.reg_alloc.ReadX(args[2]);
+    if (ctx.select_flags_in_host) {
+        // Venture: host NZCV still holds the flags (the emit loop).
+        RegAlloc::Realize(Xresult, Xthen, Xelse);
+        code.CSEL(Xresult, Xthen, Xelse, static_cast<oaknut::Cond>(cond));
+        return;
+    }
+    auto Wflags = ctx.reg_alloc.ReadW(args[3]);
+    RegAlloc::Realize(Xresult, Xthen, Xelse, Wflags);
+    ctx.reg_alloc.SpillFlags();
+
+    code.MSR(oaknut::SystemReg::NZCV, Wflags->toX());
+    code.CSEL(Xresult, Xthen, Xelse, static_cast<oaknut::Cond>(cond));
+}
+
+template<>
+void EmitIR<IR::Opcode::ConditionalSelectFlagsNZCV>(oaknut::CodeGenerator& code, EmitContext& ctx, IR::Inst* inst) {
+    EmitIR<IR::Opcode::ConditionalSelectFlags32>(code, ctx, inst);
 }
 
 template<>
@@ -1349,14 +1435,103 @@ void EmitIR<IR::Opcode::ZeroExtendHalfToLong>(oaknut::CodeGenerator&, EmitContex
 }
 
 template<>
-void EmitIR<IR::Opcode::ZeroExtendWordToLong>(oaknut::CodeGenerator&, EmitContext& ctx, IR::Inst* inst) {
+void EmitIR<IR::Opcode::ZeroExtendWordToLong>(oaknut::CodeGenerator& code, EmitContext& ctx, IR::Inst* inst) {
     auto args = ctx.reg_alloc.GetArgumentInfo(inst);
+    // Venture: a lane alias's bits above 32 are other lanes (LowLaneAliasing).
+    if (!args[0].IsImmediate() && ctx.lane_aliases.contains(inst->GetArg(0).GetInst())) {
+        if (args[0].IsInFpr(ctx.reg_alloc)) {
+            auto Svalue = ctx.reg_alloc.ReadS(args[0]);
+            auto Sresult = ctx.reg_alloc.WriteS(inst);
+            RegAlloc::Realize(Svalue, Sresult);
+            code.FMOV(Sresult, Svalue);
+        } else {
+            auto Wvalue = ctx.reg_alloc.ReadW(args[0]);
+            auto Xresult = ctx.reg_alloc.WriteX(inst);
+            RegAlloc::Realize(Wvalue, Xresult);
+            code.MOV(Xresult->toW(), Wvalue);
+        }
+        return;
+    }
     ctx.reg_alloc.DefineAsExisting(inst, args[0]);
 }
 
+// Venture: scalars known zero above their width, as x64's IsZeroAboveScalar.
+// Scalar FP instructions write an S or D register and clear the rest of the
+// vector register, as do the in-register FMOVs of a non-aliased lane 0
+// (LowLaneAliasing); a scalar extracted into a GPR reaches an FPR through
+// FMOV D, X from a zero-extended X. A lane alias keeps the other lanes.
+static bool IsZeroAboveScalar(const EmitContext& ctx, const IR::Value& value, int depth = 0) {
+    if (value.IsImmediate() || depth > 8) {
+        return false;
+    }
+    const IR::Inst* const inst = value.GetInstRecursive();
+    if (ctx.lane_aliases.contains(inst)) {
+        return false;
+    }
+    switch (inst->GetOpcode()) {
+    case IR::Opcode::FPAbs32:
+    case IR::Opcode::FPAbs64:
+    case IR::Opcode::FPAdd32:
+    case IR::Opcode::FPAdd64:
+    case IR::Opcode::FPDiv32:
+    case IR::Opcode::FPDiv64:
+    case IR::Opcode::FPMax32:
+    case IR::Opcode::FPMax64:
+    case IR::Opcode::FPMaxNumeric32:
+    case IR::Opcode::FPMaxNumeric64:
+    case IR::Opcode::FPMin32:
+    case IR::Opcode::FPMin64:
+    case IR::Opcode::FPMinNumeric32:
+    case IR::Opcode::FPMinNumeric64:
+    case IR::Opcode::FPMul32:
+    case IR::Opcode::FPMul64:
+    case IR::Opcode::FPMulAdd32:
+    case IR::Opcode::FPMulAdd64:
+    case IR::Opcode::FPMulSub32:
+    case IR::Opcode::FPMulSub64:
+    case IR::Opcode::FPMulX32:
+    case IR::Opcode::FPMulX64:
+    case IR::Opcode::FPNeg32:
+    case IR::Opcode::FPNeg64:
+    case IR::Opcode::FPSqrt32:
+    case IR::Opcode::FPSqrt64:
+    case IR::Opcode::FPSub32:
+    case IR::Opcode::FPSub64:
+    case IR::Opcode::FPSingleToDouble:
+    case IR::Opcode::ConditionalSelect32:  // FCSEL, or CSEL in a GPR
+    case IR::Opcode::ConditionalSelect64:
+    case IR::Opcode::ConditionalSelectFlags32:
+    case IR::Opcode::ConditionalSelectFlags64:
+    case IR::Opcode::VectorGetElement32:
+    case IR::Opcode::VectorGetElement64:
+        return true;
+    case IR::Opcode::ZeroExtendWordToLong:
+        // A lane alias's extension is an FMOV S (EmitIR<ZeroExtendWordToLong>);
+        // others alias their operand.
+        return (!inst->GetArg(0).IsImmediate() && ctx.lane_aliases.contains(inst->GetArg(0).GetInst())) ||
+               IsZeroAboveScalar(ctx, inst->GetArg(0), depth + 1);
+    default:
+        return false;
+    }
+}
+
+// Venture: a scalar in an FPR stays there: one in-register FMOV D (clearing
+// the upper half), or no instruction when it is known zero above its width and
+// its register is not needed after this.
 template<>
 void EmitIR<IR::Opcode::ZeroExtendLongToQuad>(oaknut::CodeGenerator& code, EmitContext& ctx, IR::Inst* inst) {
     auto args = ctx.reg_alloc.GetArgumentInfo(inst);
+    if (args[0].IsInFpr(ctx.reg_alloc)) {
+        if (IsZeroAboveScalar(ctx, inst->GetArg(0)) && ctx.reg_alloc.IsLastUse(args[0])) {
+            ctx.reg_alloc.DefineAsExisting(inst, args[0]);
+            return;
+        }
+        auto Dvalue = ctx.reg_alloc.ReadD(args[0]);
+        auto Qresult = ctx.reg_alloc.WriteQ(inst);
+        RegAlloc::Realize(Dvalue, Qresult);
+        code.FMOV(Qresult->toD(), Dvalue);
+        return;
+    }
     auto Xvalue = ctx.reg_alloc.ReadX(args[0]);
     auto Qresult = ctx.reg_alloc.WriteQ(inst);
     RegAlloc::Realize(Xvalue, Qresult);

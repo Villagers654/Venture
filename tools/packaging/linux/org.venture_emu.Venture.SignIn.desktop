@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Venture sign-in
+Comment=Hands Meta's sign-in address back to Venture
+Exec=venture-flatpak.sh --sign-in-callback %u
+Icon=org.venture_emu.Venture
+NoDisplay=true
+Terminal=false
+MimeType=x-scheme-handler/oculus;

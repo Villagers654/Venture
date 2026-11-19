@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <bit>
 #include <cstddef>
 #include <span>
@@ -32,9 +33,10 @@ public:
     Xbyak::Address GetConstant(BlockOfCode& code, const Xbyak::AddressFrame& frame, u64 lower, u64 upper = 0);
     /// Venture: the constant's slot, added if new (portable block installation).
     const void* GetConstantPointer(BlockOfCode& code, u64 lower, u64 upper);
-    /// Venture: the pool's address range.
+    /// Venture: the address range of the constants added so far. The rest of the pool is
+    /// committed only as constants are added: reading an address there faults.
     std::pair<const u8*, const u8*> Range() const {
-        return {reinterpret_cast<const u8*>(pool.data()), reinterpret_cast<const u8*>(pool.data() + pool.size())};
+        return {reinterpret_cast<const u8*>(pool.data()), reinterpret_cast<const u8*>(pool.data() + std::min(insertion_point, pool.size()))};
     }
 
 private:

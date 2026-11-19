@@ -111,6 +111,54 @@ std::string joined(std::uint32_t count, const char* const* names) {
 }
 // Why the last shared instance creation failed, for the launch error a report shows.
 std::string instance_failure;
+// Why the host runtime's GPU could not be found, for the launch error.
+std::string device_failure;
+// The system's hardware display adapters that no Vulkan device matches by LUID,
+// by name ("A and B"); empty when Vulkan lists them all or the system has no
+// adapter list (platform::display_adapters).
+std::string adapters_vulkan_misses() {
+  const auto system = platform::display_adapters();
+  if (system.empty()) return {};
+  std::vector<std::array<std::uint8_t, 8>> listed;
+  try {
+    VkApplicationInfo app{VK_STRUCTURE_TYPE_APPLICATION_INFO};
+    app.pApplicationName = "Venture adapter probe";
+    app.apiVersion = VK_API_VERSION_1_1;
+    VkInstanceCreateInfo ci{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
+    ci.pApplicationInfo = &app;
+    const auto create = vk<PFN_vkCreateInstance>(nullptr, "vkCreateInstance");
+    VkInstance probe{};
+    if (!create || create(&ci, nullptr, &probe) != VK_SUCCESS) return {};
+    const auto enumerate = vk<PFN_vkEnumeratePhysicalDevices>(probe, "vkEnumeratePhysicalDevices");
+    const auto properties2 = vk<PFN_vkGetPhysicalDeviceProperties2>(probe, "vkGetPhysicalDeviceProperties2");
+    std::vector<VkPhysicalDevice> devices;
+    bool known = enumerate && properties2 &&
+                 enumerate_vulkan(devices, [&](std::uint32_t* n, VkPhysicalDevice* p) { return enumerate(probe, n, p); }) >= 0;
+    for (auto device : devices) {
+      if (!known) break;
+      VkPhysicalDeviceIDProperties id{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES};
+      VkPhysicalDeviceProperties2 p{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
+      p.pNext = &id;
+      properties2(device, &p);
+      // Without LUIDs nothing can be matched: name no adapter.
+      if (!id.deviceLUIDValid) known = false;
+      else {
+        std::array<std::uint8_t, 8> luid{};
+        std::copy(id.deviceLUID, id.deviceLUID + 8, luid.begin());
+        listed.push_back(luid);
+      }
+    }
+    if (auto destroy = vk<PFN_vkDestroyInstance>(probe, "vkDestroyInstance")) destroy(probe, nullptr);
+    if (!known) return {};
+  } catch (...) {
+    return {};
+  }
+  std::string names;
+  for (const auto& a : system)
+    if (std::find(listed.begin(), listed.end(), a.luid) == listed.end())
+      names += (names.empty() ? "" : " and ") + (a.name.empty() ? std::string("a display adapter") : a.name);
+  return names;
+}
 // On a failed instance creation, what the plain loader sees: its version and
 // every adapter a bare Vulkan 1.0 instance enumerates, with its driver's
 // Vulkan version, so a report names the GPU and driver (hybrid PCs list two).
@@ -426,8 +474,17 @@ VkResult select_device(VkInstance instance, VkPhysicalDevice* out) {
       auto r = xr_proc<PFN_xrGetVulkanGraphicsDevice2KHR>(
           "xrGetVulkanGraphicsDevice2KHR")(host.instance, &info, out);
       if (XR_FAILED(r)) {
+        const auto adapters = describe_vulkan_adapters();
         log::error("gfx", "{} xrGetVulkanGraphicsDevice2KHR failed: {}; Vulkan on this PC: {}", host.runtime_name,
-                   static_cast<int>(r), describe_vulkan_adapters());
+                   static_cast<int>(r), adapters);
+        // A GPU the system has but Vulkan does not list (a driver without
+        // Vulkan, or a laptop's dedicated GPU while Windows runs Venture on the
+        // power-saving one) is likely the one the runtime renders on.
+        if (const auto missing = adapters_vulkan_misses(); !missing.empty())
+          device_failure = std::format(
+              "Vulkan does not list {}, which {} likely renders on. Install the current driver from its maker; "
+              "on a laptop, also set venture-runtime.exe to High performance in Windows' graphics settings",
+              missing, host.runtime_name);
         return VK_ERROR_INITIALIZATION_FAILED;
       }
     } else {
@@ -655,7 +712,8 @@ void create_direct() {
   }
   VkPhysicalDevice p{};
   if (select_device(instance, &p) != VK_SUCCESS)
-    throw std::runtime_error("No Vulkan physical device");
+    throw std::runtime_error(device_failure.empty() ? "No Vulkan physical device"
+                                                    : "No Vulkan physical device: " + device_failure);
   auto get_families = vk<PFN_vkGetPhysicalDeviceQueueFamilyProperties>(
       instance, "vkGetPhysicalDeviceQueueFamilyProperties");
   std::uint32_t count = 0;

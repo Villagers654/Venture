@@ -77,8 +77,15 @@ public class BaseInputConnection implements InputConnection {
   public boolean sendKeyEvent(android.view.KeyEvent e) {
     return target.dispatchKeyEvent(e);
   }
+  // AOSP: an editor action the view does not handle itself arrives as Enter.
   public boolean performEditorAction(int action) {
-    return false;
+    long now = android.os.SystemClock.uptimeMillis();
+    int flags = android.view.KeyEvent.FLAG_SOFT_KEYBOARD | android.view.KeyEvent.FLAG_KEEP_TOUCH_MODE
+        | android.view.KeyEvent.FLAG_EDITOR_ACTION;
+    for (int keyAction : new int[] {android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.ACTION_UP})
+      sendKeyEvent(new android.view.KeyEvent(now, now, keyAction, android.view.KeyEvent.KEYCODE_ENTER, 0, 0,
+          android.view.KeyCharacterMap.VIRTUAL_KEYBOARD, 0, flags, 0x101));
+    return true;
   }
   public boolean beginBatchEdit() {
     return false;

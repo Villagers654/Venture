@@ -114,6 +114,9 @@ class Cpu {
   virtual std::uint64_t frame_pointer() const { return x(29); }
   // Size of the SVC/trap instruction that caused an Svc exit (PC - size = SVC).
   virtual std::uint32_t trap_instruction_size() const { return 4; }
+  // After an HLE call left run() (Svc or HleException), point the PC back at the
+  // call so resuming repeats it: the thunk's SVC. thunk is the function's stub.
+  virtual void rewind_hle_call(GuestAddr thunk) { (void)thunk; set_pc(pc() - trap_instruction_size()); }
   // Profiler only: caller pins Cpu lifetime and suspends the owning host thread.
   // Must be lock-free, allocation-free and noexcept. PC is the last PC spilled
   // by the JIT dispatcher, not necessarily the current linked block's PC.
@@ -122,6 +125,12 @@ class Cpu {
   virtual void set_thread_name(std::string_view name) { (void)name; }
   // Optional owner-thread work while guest code waits in a host call, until stop() is true.
   virtual void idle(const std::function<bool()>& stop) noexcept { (void)stop; }
+  // Owner thread, around a host wait that may block for long (futex, sleep):
+  // the JIT run counts as stopped meanwhile, so code invalidation (mprotect,
+  // hooks written into code) does not wait for the thread to wake. No guest
+  // code runs or compiles between park() and unpark().
+  virtual void park() noexcept {}
+  virtual void unpark() noexcept {}
   // Move only hint data while protected; persistence must run after thread locks.
   virtual JitBlockList detach_jit_hints() noexcept { return {}; }
   // Owner thread of a CPU that never runs guest code (cpu/pretranslate.cpp):
@@ -162,6 +171,9 @@ class CpuBackend {
   // (code modified, unmapped or made non-executable). Thread-safe.
   virtual void invalidate(GuestAddr address, std::uint64_t size,
                           InvalidationCause cause = InvalidationCause::other) = 0;
+  // Called before guest pages in [address, address + size) become executable
+  // (mmap or mprotect with PROT_EXEC). False refuses: the mapping fails.
+  virtual bool prepare_executable(GuestAddr, std::uint64_t) { return true; }
 };
 
 // The process-wide backend (Dynarmic A64 by default).

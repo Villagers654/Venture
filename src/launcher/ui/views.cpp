@@ -7,12 +7,15 @@
 #include "launcher/ui/text_scripts.h"
 #include "launcher/window_style.h"
 #include "common/controls.h"
+#include "common/controls_file.h"
 #include "common/environment.h"
 #include "common/http/client.h"
 #include "common/json.h"
 #include "common/log.h"
 #include "common/saves_migration.h"
+#include "common/library/mods.h"
 #include "common/search.h"
+#include "common/paths.h"
 
 #include <algorithm>
 #include <functional>
@@ -21,6 +24,8 @@
 #include <cmath>
 #include <charconv>
 #include <format>
+#include <fstream>
+#include <sstream>
 #include <memory>
 #include <imgui_internal.h>
 #include <imgui_stdlib.h>
@@ -402,6 +407,7 @@ void App::draw() {
   draw_store_link();
   draw_cancel_download();
   draw_report();
+  draw_headset_check();
   draw_update();
   draw_remove_account();
   draw_install_ask();
@@ -1207,11 +1213,11 @@ void App::draw_game_page() {
         text(fonts().regular, kSmall, color::text3, "Sign in to Meta to install this game.", false);
       }
     }
-    // The owning account (when it is not simply the active one) and the mods
-    // folder, at the bottom of a card as tall as the cover beside it.
+    // The owning account (when it is not simply the active one), at the bottom
+    // of a card as tall as the cover beside it.
     bool owner_row = owners.size() > 1 || (!owners.empty() && !active_owns);
     const float bottom = card_top + media_h - s(24);
-    if (owner_row || tools) {
+    if (owner_row) {
       auto* storage = ImGui::GetStateStorage();
       const ImGuiID rows_id = ImGui::GetID("info-rows");
       const float rows_h = storage->GetFloat(rows_id, 0);
@@ -1227,10 +1233,6 @@ void App::draw_game_page() {
       if (owner_row) {
         divider();
         draw_owner(g, local != nullptr, control_w);
-      }
-      if (tools) {
-        divider();
-        draw_mods(partial->directory, partial->plan.package, control_w);
       }
       ImGui::EndGroup();
       // The rows round their own positions, so their height can differ by a pixel
@@ -1371,6 +1373,7 @@ void App::draw_game_page() {
   std::vector<const char*> tab_items{"About"};
   if (has_addons) tab_items.push_back(addon_tab.c_str());
   if (has_settings) {
+    tab_items.push_back("Mods");
     tab_items.push_back("Controls");
     tab_items.push_back("Settings");
   }
@@ -1378,6 +1381,7 @@ void App::draw_game_page() {
   // screenshots (by name: the Add-ons tab can come and go while it is checked).
   const char* smoke_tab = options_.smoke_view.starts_with("game-controls")   ? "Controls"
                           : options_.smoke_view.starts_with("game-settings") ? "Settings"
+                          : options_.smoke_view.starts_with("game-mods")     ? "Mods"
                                                                              : nullptr;
   if (smoke_tab && has_settings) {
     static bool scrolled = false;
@@ -1395,7 +1399,9 @@ void App::draw_game_page() {
   }
   float body_w = std::min(ImGui::GetContentRegionAvail().x, avail);
   const std::string_view tab = tab_items[game_tab_];
-  if (tab == "Controls")
+  if (tab == "Mods")
+    draw_game_mods(g, std::min(body_w, s(kPageWidth)));
+  else if (tab == "Controls")
     draw_game_controls(g, std::min(body_w, s(1180)));
   else if (tab == "Settings")
     draw_game_settings(g, std::min(body_w, s(kPageWidth)));
@@ -1407,52 +1413,230 @@ void App::draw_game_page() {
   if (pad > 0) ImGui::Unindent(pad);
 }
 
-const App::ModsSummary& App::mods_summary(const std::string& package, const fs::path& install) {
-  auto& m = mods_[package];
+// A game's Mods tab (common/library/mods.h): its mod loader, its installed mods
+// (.qmod) with a switch and Remove each, and the files its mods took. Mods
+// arrive by drag and drop or Add mods; the runtime puts the enabled ones where
+// the loader reads them at the next launch.
+void App::draw_game_mods(const meta::Game& g, float width) {
+  const auto* install = installed(g.id);
+  if (!install) return;
+  const auto package = install->plan.package;
+  const auto folder = mods_folder(*install);
+  auto& v = mods_view_;
   const double now = ImGui::GetTime();
-  if (m.checked >= 0 && now - m.checked < 2) return m;
-  m = {.checked = now};
-  std::error_code ec;
-  for (const auto& entry : fs::directory_iterator(mods_dir(data_, package), ec)) {
-    if (!entry.is_regular_file(ec)) continue;
-    const auto name = entry.path().filename();
-    if (fs::is_regular_file(install / name, ec)) {
-      ++m.active;
-      m.bytes += entry.file_size(ec);
-      m.name = paths::utf8(name);
-    } else {
-      ++m.unused;
+  if (v.game != g.id || v.generation != mods_generation_ || now - v.read_at > 3) {
+    v = {.game = g.id, .generation = mods_generation_, .read_at = now};
+    try {
+      v.mods = mods::list(folder);
+      v.items = mods::items(folder);
+      v.loader_present = !mods::loader_file(folder).empty();
+      v.original_apk = !mods::original_apk(install->directory).empty();
+      v.obbs = mods::obb_names(install->directory);
+      const auto apk = std::ranges::find(install->plan.files, std::string("apk"), &meta::File::kind);
+      if (apk != install->plan.files.end()) v.apk_loader = mods::apk_loader(install->directory / paths::from_utf8(apk->name));
+    } catch (const std::exception& e) {
+      log::warn("mods", "Could not read the mods of {}: {}", package, e.what());
     }
   }
-  return m;
-}
+  // --smoke-view game-mods shows the tab with example mods for screenshots
+  // (game-mods-obb scrolled to the expansion files); game-mods-empty shows the
+  // game as it is.
+  // A "-narrow" suffix shows any of them at the window's minimum width.
+  std::string_view smoke_view = options_.smoke_view;
+  if (smoke_view.ends_with("-narrow")) smoke_view.remove_suffix(7);
+  const bool smoke_sample = smoke_view.starts_with("game-mods") && smoke_view != "game-mods-empty";
+  static bool smoke_mods = smoke_sample;
+  if (std::exchange(smoke_mods, false)) {
+    mods::Installed hook{.manifest = {.id = "hook", .name = "beatsaber-hook", .author = "sc2ad", .version = "5.1.9", .library = true,
+                                      .loader = mods::Loader::scotland2},
+                         .dependency = true};
+    mods::Installed songs{.manifest = {.id = "songloader", .name = "SongLoader", .author = "darknight1050", .version = "0.10.17",
+                                       .description = "Loads custom songs", .package_version = "0.0.0",
+                                       .loader = mods::Loader::scotland2,
+                                       .dependencies = {{.id = "hook", .range = "^5.1.0"}, {.id = "custom-types", .range = "^0.17.0"}}}};
+    mods::Installed sabers{.manifest = {.id = "qosmetics", .name = "Qosmetics Sabers", .author = "RedBrumbler", .version = "1.4.2",
+                                        .loader = mods::Loader::scotland2},
+                           .enabled = false};
+    v.mods = {hook, sabers, songs};
+    v.items = {{"qsaber", "Laser.qsaber", {}}};
+    v.apk_loader = mods::Loader::scotland2;
+    v.loader_present = true;
+    v.original_apk = true;
+    v.obbs = {"main.7.com.example.moddable.obb", "patch.7.com.example.moddable.obb"};
+    v.read_at = 1e12;  // kept while the smoke run shows it
+  }
+  static const std::vector<std::string> smoke_replaced{"main.7.com.example.moddable.obb"};
+  const auto& replaced = smoke_sample ? smoke_replaced : install->replaced;
+  const bool busy = mods_busy_.contains(package);
+  const bool running = running_.contains(g.id) && running_[g.id].process.active();
+  ImFont* rf = fonts().regular;
 
-// The mods folder on the game page: its same-named files replace the installed
-// expansion files at launch. A status shows what is in use or ignored.
-void App::draw_mods(const fs::path& install, const std::string& package, float bw) {
-  const auto& m = mods_summary(package, install);
-  std::string status;
-  if (m.active) status = std::format("{} in use", m.active);
-  if (m.unused) status += std::format("{}{} unused", status.empty() ? "" : "  \xC2\xB7  ", m.unused);
-  const ImU32 tone = m.unused ? color::warning : color::positive;
-  const auto tip = (m.active == 1 ? "In use: " + m.name + "\n\n" : std::string()) +
-                   "Files here replace the game's OBB files of the same name, for example main.<version>." + package +
-                   ".obb. Files under any other name are unused. Delete a file to go back to the original.";
-  float sw = status.empty() ? 0 : std::round(measure(fonts().regular, kSmall, status).x + s(14));
-  setting_row("Mods", tip, sw + bw, s(38), [&] {
-    ImVec2 p = ImGui::GetCursorScreenPos();
-    if (sw)
-      draw_text(ImGui::GetWindowDrawList(), fonts().regular, kSmall,
-                {p.x, text_y(fonts().regular, kSmall, p.y, s(38))}, tone, status);
-    ImGui::SetCursorScreenPos({p.x + sw, p.y});
-    if (button("Open folder##mods", icons::folder, Tone::secondary, {bw, s(38)}))
-      action([&] {
-        auto folder = mods_dir(data_, package);
-        fs::create_directories(folder);
-        open_folder(folder);
-        mods_.erase(package);
-      });
+  // Every row on this tab: a title with one line under it, and its controls
+  // right-aligned in one column (the rightmost first), all the same height and
+  // inset as the Settings page's rows.
+  constexpr float kRowH = 62, kControlH = 38, kControlGap = 12, kSectionGap = 20;
+  struct Right {
+    float x, cy, gap;
+    // The top-left of the next control to the left, `w` wide and `h` high.
+    ImVec2 next(float w, float h) {
+      x -= w;
+      ImVec2 at{std::round(x), std::round(cy - h * 0.5f)};
+      x -= gap;
+      return at;
+    }
+  };
+  auto row = [&](const char* id, std::string_view title, std::string_view sub, ImU32 sub_color, float controls_w,
+                 auto&& controls, bool last, std::string_view tip = {}) {
+    ImGui::PushID(id);
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    const float w = ImGui::GetContentRegionAvail().x, h = s(kRowH), text_w = w - controls_w - s(24);
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const float cy = std::round(p.y + h * 0.5f);
+    const auto shown_title = ellipsize(rf, kBody, title, text_w);
+    const auto shown_sub = ellipsize(rf, kSmall, sub, text_w);
+    if (sub.empty()) {
+      draw_text(dl, rf, kBody, {std::round(p.x), text_y(rf, kBody, p.y, h)}, color::text, shown_title);
+    } else {
+      draw_text(dl, rf, kBody, {std::round(p.x), text_y(rf, kBody, cy - s(21), s(21))}, color::text, shown_title);
+      draw_text(dl, rf, kSmall, {std::round(p.x), text_y(rf, kSmall, cy + s(1), s(19))}, sub_color, shown_sub);
+    }
+    // The whole text in a tooltip when it does not fit, and what more it has to say.
+    if ((!tip.empty() || shown_title != title || shown_sub != sub) &&
+        ImGui::IsMouseHoveringRect(p, {p.x + text_w, p.y + h}))
+      tooltip((sub.empty() ? std::string(title) : std::string(title) + "\n" + std::string(sub)) +
+              (tip.empty() ? std::string() : "\n\n" + std::string(tip)));
+    Right right{p.x + w, cy, s(kControlGap)};
+    controls(right);
+    if (!last) hline(dl, p.x, p.x + w, p.y + h);
+    ImGui::SetCursorScreenPos({p.x, p.y + h - ImGui::GetStyle().ItemSpacing.y});
+    ImGui::Dummy({w, 0});
+    ImGui::PopID();
+  };
+  auto card = [&](const char* id, std::string_view title, auto&& rows) {
+    if (!title.empty()) heading(title);
+    begin_card(id, width, {22, 2});
+    rows();
+    ImGui::Dummy({0, 0});  // the last row keeps its bottom padding
+    end_card();
+    gap(kSectionGap);
+  };
+  const float trash_w = s(kControlH), toggle_w = s(44), toggle_h = s(24);
+
+  // The game: its mods and its mod loader.
+  if (smoke_view == "game-mods-empty") ImGui::SetScrollHereY(0.1f);
+  card("mods-game", {}, [&] {
+    // Add mods and Restore original APK share one width, the wider of the two.
+    const std::string add_label = tr("Add mods");
+    const std::string restore = tr("Restore original APK");
+    const float add_w = std::max(button_width(add_label, icons::add), v.original_apk ? button_width(restore) : 0.0f);
+    const float restore_w = v.original_apk ? add_w : 0;
+    row("mods", tr("Mods"), {}, color::text3, add_w, [&](Right& r) {
+      ImGui::SetCursorScreenPos(r.next(add_w, s(kControlH)));
+      if (button((add_label + "##mods-add").c_str(), icons::add, Tone::secondary, {add_w, s(kControlH)}, !busy))
+        choose_mod_file(g.id);
+      if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        tooltip(tr("Mod packages (.qmod), a patched APK of this version, or files your mods take. Dropping them on "
+                   "this window works too. Changes apply at the next launch."));
+    }, false);
+    std::string status;
+    ImU32 tone = color::text3;
+    if (!v.apk_loader) {
+      status = tr("None: the APK is not patched");
+      if (!v.mods.empty()) tone = color::warning;
+    } else if (*v.apk_loader == mods::Loader::scotland2 && !v.loader_present) {
+      status = tr("Scotland2: libsl2.so is missing");
+      tone = color::warning;
+    } else {
+      status = mods::loader_name(*v.apk_loader);
+    }
+    row("loader", tr("Mod loader"), status, tone, restore_w, [&](Right& r) {
+      if (!v.original_apk) return;
+      ImGui::SetCursorScreenPos(r.next(restore_w, s(kControlH)));
+      if (button((restore + "##mods-restore").c_str(), 0, Tone::secondary, {restore_w, s(kControlH)}, !running && !busy))
+        action([&] { restore_original_apk(g.id); });
+      if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        tooltip(tr("Puts back the APK this game had before a patched one replaced it. Saves and settings stay."));
+    }, true, v.apk_loader ? std::string_view() : std::string_view(tr("Patch the APK with a mod patcher (QuestPatcher or "
+                                                                     "ModsBeforeFriday), then drop the patched APK here: "
+                                                                     "its saves and settings stay.")));
   });
+
+  if (!v.mods.empty())
+    card("mods-list", tr("Installed mods"), [&] {
+      for (std::size_t i = 0; i < v.mods.size(); ++i) {
+        const auto& m = v.mods[i];
+        // What keeps it from working, if anything.
+        std::string sub;
+        ImU32 tone = color::text3;
+        if (m.enabled) {
+          std::string needs;
+          for (const auto& d : mods::missing_dependencies(v.mods, m.manifest))
+            needs += (needs.empty() ? "" : ", ") + d.id + " " + d.range;
+          if (!needs.empty()) sub = trf("Needs {0}", needs);
+          else if (!m.manifest.package_version.empty() && !install->plan.version.empty() &&
+                   m.manifest.package_version != install->plan.version)
+            sub = trf("Made for game version {0}", m.manifest.package_version);
+          if (!sub.empty()) tone = color::warning;
+        }
+        row(m.manifest.id.c_str(), m.manifest.name + "  " + m.manifest.version, sub, tone,
+            trash_w + s(kControlGap) + toggle_w, [&](Right& r) {
+              ImGui::SetCursorScreenPos(r.next(trash_w, trash_w));
+              if (icon_button("remove", icons::trash, tr("Remove"), kControlH, !busy, true))
+                action([&, id = m.manifest.id] { remove_mod(g.id, id); });
+              ImGui::SetCursorScreenPos(r.next(toggle_w, toggle_h));
+              bool enabled = m.enabled;
+              if (toggle("enabled", &enabled) && !busy) action([&, id = m.manifest.id] { set_mod_enabled(g.id, id, enabled); });
+            }, i + 1 == v.mods.size());
+      }
+    });
+
+  if (!v.items.empty())
+    card("mods-items", tr("Files for mods"), [&] {
+      for (std::size_t i = 0; i < v.items.size(); ++i) {
+        const auto& item = v.items[i];
+        row(item.name.c_str(), item.name, {}, color::text3, trash_w, [&](Right& r) {
+          ImGui::SetCursorScreenPos(r.next(trash_w, trash_w));
+          if (icon_button("remove-item", icons::trash, tr("Remove"), kControlH, !busy, true))
+            action([&, ext = item.extension, name = item.name] { remove_mod_item(g.id, ext, name); });
+        }, i + 1 == v.items.size());
+      }
+    });
+
+  // Expansion files: each can be replaced by a modded one. The store's file is
+  // not kept; Restore downloads it again.
+  if (!v.obbs.empty()) {
+    if (smoke_view == "game-mods-obb") ImGui::SetScrollHereY(0.1f);
+    const bool restorable = smoke_sample || (!install->plan.local && !install->plan.pinned);
+    const std::string replace_label = tr("Replace\xE2\x80\xA6"), restore_label = tr("Restore");
+    const float replace_w = button_width(replace_label), restore_w = button_width(restore_label);
+    card("mods-obbs", tr("Expansion files (OBB)"), [&] {
+      for (std::size_t i = 0; i < v.obbs.size(); ++i) {
+        const auto& name = v.obbs[i];
+        const bool is_replaced = std::ranges::contains(replaced, name);
+        const bool can_restore = is_replaced && restorable;
+        row(name.c_str(), name, is_replaced ? std::string_view(tr("Replaced with your file")) : std::string_view(),
+            is_replaced ? color::warning : color::text3,
+            replace_w + (can_restore ? s(kControlGap) + restore_w : 0), [&](Right& r) {
+              ImGui::SetCursorScreenPos(r.next(replace_w, s(kControlH)));
+              if (button((replace_label + "##obb-replace").c_str(), 0, Tone::secondary, {replace_w, s(kControlH)},
+                         !running && !busy))
+                choose_mod_file(g.id, name);
+              if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                tooltip(restorable ? tr("Writes the file you choose over this one. The original is not kept: "
+                                        "Restore downloads it again from Meta.")
+                                   : tr("Writes the file you choose over this one. The original is not kept: "
+                                        "install or import the game again to get it back."));
+              if (!can_restore) return;
+              ImGui::SetCursorScreenPos(r.next(restore_w, s(kControlH)));
+              if (button((restore_label + "##obb-restore").c_str(), 0, Tone::secondary, {restore_w, s(kControlH)},
+                         !running && !busy && session_ && !options_.offline))
+                action([&, name] { restore_obb(g.id, name); });
+              if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                tooltip(tr("Removes your file and downloads the store's file again from Meta."));
+            }, i + 1 == v.obbs.size());
+      }
+    });
+  }
 }
 
 // Description plus the store's "Additional details" list.
@@ -1975,6 +2159,66 @@ void App::draw_settings() {
   if (options_.smoke_view.starts_with("settings-runtime")) ImGui::SetScrollHereY(0.0f);
   begin_card("runtime", w, {22, 2});
   {
+    // The OpenXR runtime games run on: the system's active one, or one the player
+    // picks (a headset on SteamVR while another runtime is active, #161).
+    if (const double now = ImGui::GetTime(); now - xr_runtimes_checked_ >= 3) {
+      xr_runtimes_checked_ = now;
+      xr_runtimes_ = openxr_layers::installed_runtimes();
+      // --smoke-view settings-runtime-xr: two runtimes for screenshots, the list open.
+      if (options_.smoke_view == "settings-runtime-xr")
+        xr_runtimes_ = {{"C:/Program Files/Virtual Desktop Streamer/OpenXR/virtualdesktop-openxr.json", "VirtualDesktopXR", true},
+                        {"C:/Program Files (x86)/Steam/steamapps/common/SteamVR/steamxr_win64.json", "SteamVR", false}};
+    }
+    std::string active_name;
+    for (const auto& r : xr_runtimes_)
+      if (r.active) active_name = r.name;
+    // i18n: Settings > VR runtime, the default choice: the system's active OpenXR runtime, its name after.
+    std::string first = tr("Default");
+    if (!active_name.empty()) first += " (" + active_name + ")";
+    std::vector<std::string> names{first};
+    std::vector<std::string> manifests{""};
+    for (const auto& r : xr_runtimes_) {
+      names.push_back(r.name);
+      manifests.push_back(paths::utf8(r.manifest));
+    }
+    int choice = 0;
+    if (!settings_.xr_runtime.empty()) {
+      const auto chosen = paths::from_utf8(settings_.xr_runtime);
+      std::error_code ec;
+      for (size_t i = 1; i < manifests.size() && !choice; ++i)
+        if (std::filesystem::equivalent(paths::from_utf8(manifests[i]), chosen, ec)) choice = int(i);
+      if (!choice) {
+        // i18n: Settings > VR runtime: a chosen runtime that is no longer installed.
+        names.push_back(openxr_layers::runtime_name(chosen) + " (" + tr("not found") + ")");
+        manifests.push_back(settings_.xr_runtime);
+        choice = int(names.size()) - 1;
+      }
+    }
+    std::vector<const char*> items;
+    for (const auto& n : names) items.push_back(n.c_str());
+    const float dw = std::clamp(dropdown_width("", items.data(), int(items.size())), s(180), s(320));
+    // i18n: Settings row: which installed OpenXR runtime games run on.
+    setting_row(tr("VR runtime"),
+                // i18n: Settings > VR runtime, under the row's name.
+                tr("The OpenXR runtime games run on. Choose the one your headset uses when another is active, "
+                   "such as SteamVR for a Steam Frame while Virtual Desktop is the active runtime."),
+                dw, s(38), [&] {
+      static bool smoke_open = options_.smoke_view == "settings-runtime-xr";
+      if (smoke_open) {
+        ImGui::PushID("xr-runtime");
+        ImGui::OpenPopup("##menu");
+        ImGui::PopID();
+        smoke_open = false;
+      }
+      if (dropdown("xr-runtime", "", items.data(), int(items.size()), &choice, dw))
+        action([this, manifest = manifests[size_t(choice)]] {
+          settings_.xr_runtime = manifest;
+          save_settings();
+        });
+    });
+    divider();
+  }
+  {
     // Automatic picks what the VR runtime or headset offers; Color key is the
     // user's choice for a streaming tool that keys a color (never automatic).
     const char* modes[] = {"Automatic", "Color key", "Off"};
@@ -2146,6 +2390,36 @@ void App::draw_settings() {
                   if (button("Upload debug report", 0, Tone::secondary, {bw, s(38)})) share_report({});
                 });
   }
+#if VENTURE_HEADSET_CHECK
+  divider();
+  {
+    float bw = row_button_w("Check this headset");
+    setting_row("Headset check",
+                "What this headset offers and how each installed game runs on it. The debug report includes it.", bw,
+                s(38), [&] {
+                  if (button("Check this headset", 0, Tone::secondary, {bw, s(38)})) {
+#ifdef __ANDROID__
+                    action([&] {
+                      headset_check_ = headset_check().text;
+                      headset_check_copied_ = false;
+                    });
+#else
+                    // The runtime's check can take seconds (an OpenXR instance): off the UI thread.
+                    headset_check_ = std::string("Checking...\n");
+                    headset_check_copied_ = false;
+                    worker_->submit([this, runtime = settings_.runtime,
+                                     environment = library::launch_environment(settings_, {}, options_.automation),
+                                     data = data_](std::stop_token) -> Worker::Completion {
+                      auto text = headset::check_linux(runtime, environment, data).text;
+                      return [this, text = std::move(text)] {
+                        if (headset_check_) headset_check_ = text;  // still open
+                      };
+                    });
+#endif
+                  }
+                });
+  }
+#endif
   ImGui::Dummy({0, 0});  // the last row keeps its bottom padding
   end_card();
   gap(20);
@@ -2235,11 +2509,12 @@ std::vector<std::string> rate_names() {
 // A whole-number field drawn as a pill like the dropdowns, its value centered
 // in both directions; `suffix` (such as "Hz") follows the value inside the
 // pill. Returns true when an edit within [low, high] is committed to `value`.
-bool number_field(const char* id, int* value, int low, int high, float width, std::string_view suffix = {}) {
+bool number_field(const char* id, int* value, int low, int high, float width, std::string_view suffix = {},
+                  bool show_zero = false, std::string_view zero_text = {}) {
   static std::unordered_map<ImGuiID, std::string> buffers;
   const ImGuiID key = ImGui::GetID(id);
   auto& text = buffers[key];
-  if (ImGui::GetActiveID() != key) text = *value ? std::to_string(*value) : std::string();
+  if (ImGui::GetActiveID() != key) text = *value || show_zero ? std::to_string(*value) : std::string();
   ImFont* font = fonts().semibold;
   constexpr float size = kSmall + 1;
   const ImVec2 p = ImGui::GetCursorScreenPos();
@@ -2248,6 +2523,14 @@ bool number_field(const char* id, int* value, int low, int high, float width, st
   ImDrawList* dl = ImGui::GetWindowDrawList();
   dl->AddRectFilled(p, {p.x + width, p.y + h}, color::mix(color::surface_hi, color::surface_top, hot ? 1.f : 0.f),
                     h * 0.5f);
+  // Zero shown as a word ("Auto", "Off") while the field is not being typed in.
+  if (!zero_text.empty() && text.empty() && ImGui::GetActiveID() != key) {
+    suffix = {};
+    draw_text(dl, fonts().regular, size,
+              {std::round(p.x + (width - measure(fonts().regular, size, zero_text).x) * 0.5f),
+               p.y + text_y(fonts().regular, size, 0, h)},
+              color::text2, zero_text);
+  }
   const float tw = measure(font, size, text).x;
   const float sw = suffix.empty() ? 0 : measure(fonts().regular, size, suffix).x + s(5);
   const float left = std::max(s(8), (width - tw - sw) * 0.5f);
@@ -2477,6 +2760,22 @@ void App::draw_display_rows(library::DisplaySettings& d, bool per_game, const ch
       int choice = index(ids, d.mirror_eye);
       if (dropdown("mirror-eye", "", items.data(), int(items.size()), &choice, dw)) {
         d.mirror_eye = ids[choice];
+        changed = true;
+      }
+    });
+    divider();
+    // i18n: Settings row: the desktop mirror opens fullscreen (F11 switches while playing).
+    setting_row(tr("Mirror fullscreen"), "", dw, s(38), [&] {
+      // i18n: Choices for "Mirror fullscreen".
+      std::vector<std::string> ids{"off", "on"}, names{tr("Off (F11 switches)"), tr("On (F11 switches)")};
+      if (per_game) {
+        ids.insert(ids.begin(), "");
+        names.insert(names.begin(), "Use global setting");
+      }
+      const auto items = pointers(names);
+      int choice = index(ids, d.mirror_fullscreen);
+      if (dropdown("mirror-fullscreen", "", items.data(), int(items.size()), &choice, dw)) {
+        d.mirror_fullscreen = ids[choice];
         changed = true;
       }
     });
@@ -3724,32 +4023,6 @@ void App::draw_cancel_download() {
   }
 }
 
-namespace {
-// True when release `tag` (v1.2.3.4) is a later version than `current` (1.2.3); missing parts count as 0.
-bool newer_version(std::string_view tag, std::string_view current) {
-  auto parts = [](std::string_view text) {
-    if (text.starts_with('v')) text.remove_prefix(1);
-    std::vector<int> out;
-    for (std::size_t at = 0; at <= text.size();) {
-      const auto end = std::min(text.find('.', at), text.size());
-      int value = 0;
-      for (char c : text.substr(at, end - at)) {
-        if (c < '0' || c > '9') return std::vector<int>{};
-        value = value * 10 + (c - '0');
-      }
-      out.push_back(value);
-      at = end + 1;
-    }
-    return out;
-  };
-  auto a = parts(tag), b = parts(current);
-  if (a.empty() || b.empty()) return false;
-  a.resize(std::max(a.size(), b.size()));
-  b.resize(a.size());
-  return a > b;
-}
-}  // namespace
-
 // Once per start: Flatpak updates itself, and offline or direct launches ask no one.
 void App::check_update() {
   if (update_checked_ || !worker_) return;
@@ -3772,7 +4045,7 @@ void App::check_update() {
     }
     return [this, tag, url, release] {
       const std::string version = tag.starts_with('v') ? tag.substr(1) : tag;
-      if (!newer_version(tag, VENTURE_VERSION) || version == settings_.dismissed_update ||
+      if (!update::newer_version(tag, VENTURE_VERSION) || version == settings_.dismissed_update ||
           !url.starts_with("https://github.com/Villagers654/Venture/releases/"))
         return;
       log::info("launcher", "Venture {} is available", version);
@@ -3782,6 +4055,27 @@ void App::check_update() {
       update_->sums = update::sums(release);
       if (!update_->file || !update_->sums) update_->method = update::Method::page;
     };
+  });
+}
+
+// Once per start: the newest Meta VR OS SDK, which games are told the headset runs
+// (games that check it ask for a system update below their minimum). The runtime
+// keeps its own floor when this is offline or fails.
+void App::check_os_sdk() {
+  if (os_sdk_checked_ || !worker_) return;
+  os_sdk_checked_ = true;
+  if (options_.offline || options_.launch_requested) return;
+  worker_->submit([data = data_](std::stop_token stop) -> Worker::Completion {
+    try {
+      if (const auto r = http::get_metavr_os_sdk(stop); r.status == 200)
+        if (const int version = library::metavr_os_sdk_from_maven(r.body); version > 0) {
+          library::cache_metavr_os_sdk(data, version);
+          log::info("launcher", "Meta VR OS SDK {} is the newest", version);
+        }
+    } catch (...) {
+      log::info("launcher", "Meta VR OS SDK check failed: {}", exception_text());
+    }
+    return [] {};
   });
 }
 
@@ -3806,6 +4100,13 @@ void App::start_update() {
         done->store(d);
         if (t) total->store(t);
       });
+      if (method == update::Method::apk) {
+        // Waits here for Android's confirmation; a completed install restarts Venture.
+        update::apply(method, path);
+        return [this] {
+          if (update_) update_->downloading = false;
+        };
+      }
       return [this, method, path] {
         try {
           update::apply(method, path);
@@ -3833,6 +4134,7 @@ void App::start_update() {
 
 void App::draw_update() {
   check_update();
+  check_os_sdk();
   if (update_worker_) update_worker_->drain();
   // Waits for any other dialog, so it never stacks on one.
   if (update_ && !ImGui::IsPopupOpen("Update available") &&
@@ -3851,6 +4153,8 @@ void App::draw_update() {
                       : std::string("Downloading the update\xE2\x80\xA6");
     } else if (update_->method == update::Method::installer)
       detail += "Venture closes to install it. Your games and saves stay.";
+    else if (update_->method == update::Method::apk)
+      detail += "Android asks you to confirm the update, then Venture restarts. Your games and saves stay.";
     else
       detail += "Venture replaces this AppImage and restarts. Your games and saves stay.";
     dialog_text(std::format("Venture {} is available", version), detail);
@@ -3879,6 +4183,33 @@ void App::draw_update() {
       if (update_) action([url = update_->url] { open_url(url); });
       update_.reset();
       ImGui::CloseCurrentPopup();
+    }
+    end_dialog();
+  }
+}
+
+// The headset check (Settings > Troubleshooting, Android): the text the debug
+// report's Headset section has, scrollable, with Copy.
+void App::draw_headset_check() {
+  if (headset_check_ && !ImGui::IsPopupOpen("Headset check")) ImGui::OpenPopup("Headset check");
+  if (begin_dialog("Headset check", 640)) {
+    dialog_text("Headset check", "What this headset offers and how each installed game runs on it.");
+    gap(16);
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, color::surface_hi);
+    ImGui::BeginChild("headset-check-text", {g_dialog_w, s(360)}, ImGuiChildFlags_AlwaysUseWindowPadding);
+    ImGui::PushTextWrapPos(0);
+    if (headset_check_) text(fonts().regular, kBody, color::text, *headset_check_);
+    ImGui::PopTextWrapPos();
+    ImGui::EndChild();
+    ImGui::PopStyleColor();
+    const int clicked =
+        dialog_footer({{"Done"}, {headset_check_copied_ ? "Copied" : "Copy", Tone::primary, bool(headset_check_)}});
+    if (clicked == 0) {
+      headset_check_.reset();
+      ImGui::CloseCurrentPopup();
+    } else if (clicked == 1 && headset_check_) {
+      ImGui::SetClipboardText(headset_check_->c_str());
+      headset_check_copied_ = true;
     }
     end_dialog();
   }
@@ -3996,6 +4327,11 @@ void reset_controls(ControlsEdit& e, int profile) {
   e.menu_hold_ms = controls::kHoldMs;
   e.menu_chord_ms = controls::kChordHoldMs;
   e.grip_toggle = controls::needs_grip_toggle(p);
+  e.offsets = {};
+  e.mirror = true;
+  e.tuning = {};
+  e.tuning_mirror = true;
+  e.toggles = {};
   e.initialized = true;
 }
 
@@ -4025,6 +4361,11 @@ void open_controls(ControlsEdit& e, int profile, const controls::Config& config)
   if (it == config.end()) return;
   const auto& c = it->second;
   if (c.grip_toggle) e.grip_toggle = *c.grip_toggle;
+  e.offsets = c.offsets;
+  e.mirror = c.offsets[1] == controls::mirrored(c.offsets[0]);
+  e.tuning = c.tuning;
+  e.tuning_mirror = c.tuning[0] == c.tuning[1];
+  e.toggles = c.toggles;
   for (int hand = 0; hand < 2; ++hand)
     for (int q = 0; q < kQuestCount; ++q)
       if (const auto& row = c.rows[size_t(hand)][size_t(q)]; row && q != int(Quest::menu)) {
@@ -4069,6 +4410,10 @@ controls::Choice edit_choice(const ControlsEdit& e) {
   }
   // The controller's default is left unset, so it follows needs_grip_toggle.
   if (e.grip_toggle != controls::needs_grip_toggle(p)) c.grip_toggle = e.grip_toggle;
+  c.offsets = e.offsets;
+  c.tuning = e.tuning;
+  for (int q = 0; q < kQuestCount; ++q)
+    c.toggles[size_t(q)] = e.toggles[size_t(q)] && controls::can_toggle(Quest(q)) && q != int(Quest::grip);
   return c;
 }
 // Writes the editor's choices into `config`; true when that changed it.
@@ -4252,6 +4597,20 @@ void menu_section(std::string_view t) {
 }
 }  // namespace
 
+// Sharing a controller's controls: Import reads a file (Venture's, or a SteamVR
+// binding file for Venture; a .json dropped on the page reads too), Export saves one.
+float App::controls_file_buttons_width() const { return s(38) * 2 + s(6); }
+void App::draw_controls_file_buttons(const std::string& game) {
+  const ImVec2 at = ImGui::GetCursorPos();
+  // i18n: Controls page icon button tooltip: read controls from a file.
+  if (icon_button("controls-import", icons::folder, tr("Import controls: a Venture controls file, or a SteamVR binding file for Venture"), 38, true, true))
+    choose_controls_file(false, game);
+  ImGui::SetCursorPos({at.x + s(38) + s(6), at.y});
+  // i18n: Controls page icon button tooltip: save these controls to a file.
+  if (icon_button("controls-export", icons::save, tr("Export this controller's controls to share them"), 38, true, true))
+    choose_controls_file(true, game);
+}
+
 // The controller shown: a pill that opens a searchable list of every supported
 // controller, where Connected (the runtime reports it now) and Last used are tagged.
 void App::draw_controller_picker(ControlsEdit& e, float width, const controls::Config& config) {
@@ -4372,7 +4731,7 @@ void App::draw_controls() {
     int profile = controls_connected_ >= 0 ? controls_connected_ : controls_last_used_ >= 0 ? controls_last_used_ : 1;
     for (int i = 0; i < int(std::size(kProfiles)); ++i) {
       const auto v = options_.smoke_view;
-      if ((v == "controls" && i == 0) ||
+      if (((v == "controls" || v == "controls-index-list") && i == 0) ||
           ((v == "controls-frame" || v.starts_with("controls-multi")) && kProfiles[i].name == "Steam Frame") ||
           (v == "controls-psvr2" && kProfiles[i].name == "PlayStation VR2 Sense") ||
           (v == "controls-vive" && kProfiles[i].name == "HTC Vive wand") ||
@@ -4389,13 +4748,26 @@ void App::draw_controls() {
     if (options_.smoke_view.starts_with("controls-multi")) add_second_stick_click(controls_);
     // The left Stick click's second list open: its Remove and Add another input.
     if (options_.smoke_view == "controls-multi-add") controls_open_line_ = std::array{0, int(Quest::stick_click), 1};
+    // The left Grip's list open, with grip toggle on or off.
+    if (options_.smoke_view == "controls-grip-on" || options_.smoke_view == "controls-grip-off") {
+      controls_.grip_toggle = options_.smoke_view == "controls-grip-on";
+      controls_open_line_ = std::array{0, int(Quest::grip), 0};
+    }
+    // The right A list open: Index trackpad halves among its inputs.
+    if (options_.smoke_view == "controls-index-list") controls_open_line_ = std::array{1, int(Quest::primary), 0};
   }
+  // --smoke-view controls* --smoke-import <file>.json: the page reads it, as a dropped file.
+  static bool smoke_file = options_.smoke_view.starts_with("controls") && options_.smoke_import.extension() == ".json";
+  if (std::exchange(smoke_file, false)) import_controls(options_.smoke_import, {});
   const float w = std::min(ImGui::GetContentRegionAvail().x, s(1180));
   const float top = ImGui::GetCursorPosY();
   page_title("Controls");
   const float bw = button_width("Reset to defaults");
   const float hw = std::min(w, ImGui::GetContentRegionAvail().x - s(header_right_inset()));
   const float pw = std::clamp(hw - bw - s(10) - measure(fonts().semibold, kDisplay, "Controls").x - s(24), s(180), s(300));
+  ImGui::SetCursorPos({ImGui::GetCursorStartPos().x + hw - pw - bw - s(20) - controls_file_buttons_width(),
+                       top + s(kHeaderHeight - 38) * 0.5f});
+  draw_controls_file_buttons({});
   ImGui::SetCursorPos({ImGui::GetCursorStartPos().x + hw - pw - bw - s(10), top + s(kHeaderHeight - 38) * 0.5f});
   draw_controller_picker(controls_, pw, settings_.controls);
   ImGui::SetCursorPos({ImGui::GetCursorStartPos().x + hw - bw, top + s(kHeaderHeight - 38) * 0.5f});
@@ -4450,8 +4822,70 @@ void App::draw_game_controls(const meta::Game& g, float w) {
   if (changed) action([&] { settings_.save(data_); });
 }
 
+// A controls file read into the Controls page (`game` empty) or a game's own
+// controls, whose controllers it sets replace the ones there.
+void App::import_controls(const fs::path& file, const std::string& game) {
+  std::ifstream in(file, std::ios::binary);
+  std::ostringstream text;
+  if (in) text << in.rdbuf();
+  if (!in || text.str().size() > (1u << 20)) {
+    // i18n: notice after a controls file could not be read.
+    error(std::format("{} {}", tr("Could not read controls file"), paths::utf8(file.filename())));
+    return;
+  }
+  const bool for_game = !game.empty();
+  if (for_game && controls_game_ != game) return;  // the tab has moved on
+  ControlsEdit& edit = for_game ? game_controls_ : controls_;
+  const auto imported = controls::import_file(text.str(), kProfiles[edit.profile].path);
+  if (!imported.error.empty()) {
+    // i18n: notice; {} is why ("not a controls file").
+    error(std::format("{}: {}", tr("Controls not imported"), imported.error));
+    return;
+  }
+  if (for_game && !game_controls_.custom) {
+    // A file read into a game's tab gives the game its own controls, from the player's.
+    game_controls_.custom = true;
+    settings_.game_controls[game] = settings_.controls;
+  }
+  auto& config = for_game ? settings_.game_controls[game] : settings_.controls;
+  for (const auto& [profile, choice] : imported.config) {
+    if (choice == controls::Choice{}) config.erase(profile);
+    else config[profile] = choice;
+  }
+  const auto& first = imported.config.begin()->first;
+  open_controls(edit, std::max(0, profile_index(first)), config);
+  if (options_.smoke_view.empty()) action([&] { settings_.save(data_); });
+  const auto name = kProfiles[edit.profile].name;
+  if (imported.steamvr)
+    // i18n: notice after a SteamVR binding file was read; {0} controller, {1} bindings taken, {2} left out.
+    notice_ = imported.skipped ? std::format("Imported SteamVR bindings for {0}: {1} used, {2} Venture can't use", name,
+                                             imported.mapped, imported.skipped)
+                               : std::format("Imported SteamVR bindings for {0}: {1} used", name, imported.mapped);
+  else
+    // i18n: notice after a Venture controls file was read; {} controller.
+    notice_ = std::format("Imported controls for {}", name);
+}
+void App::export_controls(const fs::path& chosen, const std::string& game) {
+  const bool for_game = !game.empty() && controls_game_ == game && game_controls_.custom;
+  const ControlsEdit& edit = for_game ? game_controls_ : controls_;
+  fs::path file = chosen;
+  if (file.extension().empty()) file += ".json";
+  const auto& p = kProfiles[edit.profile];
+  std::ofstream out(file, std::ios::binary | std::ios::trunc);
+  out << controls::export_file(p.path, edit_choice(edit));
+  out.close();
+  if (!out) {
+    error(std::format("{} {}", tr("Could not save controls file"), paths::utf8(file.filename())));
+    return;
+  }
+  // i18n: notice after controls were saved to a file; {0} controller, {1} file name.
+  notice_ = std::format("Saved {0} controls to {1}", p.name, paths::utf8(file.filename()));
+}
+
 // The picture of profile `p` for one hand: the user's installed render model,
-// else Venture's bundled picture, else the generic controller.
+// else Venture's bundled picture of that controller, else the unbranded generic
+// controller (also while an installed model is still being drawn), never another
+// controller's picture.
 const art::Image* App::controller_image(const controls::Profile& p, int hand) {
   const char* side = hand ? "right" : "left";
   bool pending = false;
@@ -4464,6 +4898,8 @@ const art::Image* App::controller_image(const controls::Profile& p, int hand) {
 
 void App::draw_controls_editor(ControlsEdit& e, const ControlsEdit* base, float w, const meta::Game* game) {
   const auto& p = kProfiles[e.profile];
+  controls_drawn_frame_ = ImGui::GetFrameCount();
+  controls_drawn_game_ = game ? game->id : std::string();
   const int n_inputs = int(p.inputs.size());
   const bool locked = base && !e.custom;  // a game without its own controls shows the defaults
   const int hover = std::exchange(controls_hover_, -1);  // the row under the pointer last frame
@@ -4553,9 +4989,12 @@ void App::draw_controls_editor(ControlsEdit& e, const ControlsEdit* base, float 
     // The picker and reset share the line when they fit beside the toggle, else take the next.
     const float label_end = t1.x - ImGui::GetWindowPos().x + ImGui::GetScrollX() + s(12) +
                             measure(fonts().regular, kBody, "Custom controls for this game").x + s(24);
-    const bool wrap = right - bw - s(10) - s(220) < label_end;
+    const float fw = controls_file_buttons_width() + s(10);
+    const bool wrap = right - bw - s(10) - fw - s(220) < label_end;
     const float line = wrap ? row.y + s(38) + s(12) : row.y;
-    const float pw = std::clamp(right - bw - s(10) - (wrap ? row.x : label_end), s(180), s(300));
+    const float pw = std::clamp(right - bw - s(10) - fw - (wrap ? row.x : label_end), s(180), s(300));
+    ImGui::SetCursorPos({right - pw - bw - s(10) - fw, line});
+    draw_controls_file_buttons(game->id);
     ImGui::SetCursorPos({right - pw - bw - s(10), line});
     draw_controller_picker(game_controls_.custom ? game_controls_ : controls_, pw,
                            game_controls_.custom && game ? settings_.game_controls[game->id] : settings_.controls);
@@ -5054,7 +5493,19 @@ void App::draw_controls_editor(ControlsEdit& e, const ControlsEdit* base, float 
             controls_open_line_.reset();
           }
           ImGui::SetCursorScreenPos({drop_x, ly});
-          if (dropdown("host", "", items.data(), int(items.size()), &pick, dw_in)) {
+          // The Grip lists end with grip toggle: one setting for both hands of this
+          // controller, the same from either list.
+          // i18n: Controls page, the last item of the Grip input's list. The grip is the controller's side button held to grab.
+          const DropdownOption grip_option{tr("Grip toggle"),
+                                           // i18n: Controls page, under "Grip toggle" in the Grip input's list.
+                                           tr("Press once to hold, again to let go"), &e.grip_toggle};
+          // The other buttons' lists end with their own toggle, the same for both hands.
+          // i18n: Controls page, the last item of a button's input list (A/X, B/Y, stick click, trigger).
+          const DropdownOption toggle_option{tr("Toggle"), tr("Press once to hold, again to let go"),
+                                             &e.toggles[size_t(q)]};
+          const DropdownOption* option = q == int(Quest::grip) ? &grip_option
+                                         : controls::can_toggle(Quest(q)) ? &toggle_option : nullptr;
+          if (dropdown("host", "", items.data(), int(items.size()), &pick, dw_in, nullptr, false, option)) {
             const int id = ids[size_t(pick)];
             if (id == kAdd) {
               // The next free input, its list opened for the player's pick.
@@ -5127,20 +5578,211 @@ void App::draw_controls_editor(ControlsEdit& e, const ControlsEdit* base, float 
     return notes[hand].empty() ? 0.f : s(12) + s(22) * float(notes[hand].size());
   };
 
-  // Grip toggle, for both hands of this controller: under the controllers.
-  auto grip_toggle = [&] {
-    gap(14);
-    divider();
-    gap(14);
+  // Both cards below share one label column, so their fields line up.
+  const float cards_label_w = [&] {
+    float widest = 0;
+    for (const char* label : {tr("Forward"), tr("Up"), tr("Right"), tr("Tilt up"), tr("Turn left"), tr("Roll left"),
+                              tr("Stick dead zone"), tr("Invert stick left/right"), tr("Invert stick up/down"),
+                              tr("Trigger press at"), tr("Grip press at"), tr("Vibration")})
+      widest = std::max(widest, measure(fonts().regular, kBody, label).x);
+    return std::max(s(110), widest + s(16));
+  }();
+  // Where the game sees each controller in the hand: for games that hold a
+  // weapon or hand at the wrong angle on this controller.
+  auto offsets_card = [&] {
+    // --smoke-view *-offsets: the card with a turned and shifted controller, scrolled to.
+    static int smoke_offsets = options_.smoke_view.contains("-offsets") ? 30 : 0;
+    if (smoke_offsets == 30 && !locked) {
+      e.offsets[0] = {{0, 10, 25}, {-30, 0, 0}};
+      e.offsets[1] = controls::mirrored(e.offsets[0]);
+      e.mirror = !options_.smoke_view.ends_with("-split");
+    }
+    gap(16);
+    begin_card("controller-offsets", w, {22, 20});
+    // i18n: Controls page card heading: moving and turning where the game sees the controllers.
+    heading(tr("Position in hand"));
     ImGui::BeginDisabled(locked);
-    // A small checkbox with its hint on the same line, centred on the box.
-    // i18n: Controls page checkbox. The grip is the controller's side button held to grab.
-    checkbox("grip-toggle", tr("Grip toggle"), &e.grip_toggle, {}, true);
-    const ImVec2 min = ImGui::GetItemRectMin(), max = ImGui::GetItemRectMax();
-    // i18n: Controls page hint beside "Grip toggle".
-    draw_text(ImGui::GetWindowDrawList(), fonts().regular, kLabel, {max.x + s(10), text_y(fonts().regular, kLabel, min.y, max.y - min.y)},
-              color::text3, tr("Press once to hold, again to let go"));
+    struct Field {
+      const char* label;
+      bool turn;
+      int axis;
+      float sign;  // the shown direction against the controller's axis
+    };
+    // Shown as a player reads them: forward is -z; tilt up, turn left and roll left are positive turns.
+    const Field fields[]{
+        // i18n: Controls page "Position in hand" rows (millimetres, then degrees).
+        {tr("Forward"), false, 2, -1}, {tr("Up"), false, 1, 1},     {tr("Right"), false, 0, 1},
+        {tr("Tilt up"), true, 0, 1},   {tr("Turn left"), true, 1, 1}, {tr("Roll left"), true, 2, 1},
+    };
+    const float label_w = cards_label_w, field_w = s(108), col_gap = s(14);
+    const float col = field_w + col_gap;
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    // A little room under the heading.
+    const ImVec2 at{ImGui::GetCursorScreenPos().x, ImGui::GetCursorScreenPos().y + s(4)};
+    // Mirrored, one column sets both hands; else a Left and a Right column under their names.
+    const int hands = e.mirror ? 1 : 2;
+    const float head = e.mirror ? 0.f : s(20);
+    // Two blocks (shift, turn) side by side when they fit, else one under the other.
+    const float block_w = label_w + float(hands) * col;
+    const bool side = inner >= 2 * block_w + s(40);
+    bool changed = false;
+    for (int block = 0; block < 2; ++block) {
+      const float bx = at.x + (side ? block * (block_w + s(40)) : 0);
+      const float by = at.y + (side ? 0 : block * (head + 3 * s(46) + s(10)));
+      for (int hand = 0; hand < hands && hands > 1; ++hand) {
+        const char* name = hand ? "Right" : "Left";
+        draw_text(dl, fonts().semibold, kSmall + 1,
+                  {std::round(bx + label_w + hand * col + (field_w - measure(fonts().semibold, kSmall + 1, name).x) * 0.5f), by},
+                  color::text2, name);
+      }
+      for (int r = 0; r < 3; ++r) {
+        const auto& f = fields[block * 3 + r];
+        const float ry = by + head + r * s(46);
+        draw_text(dl, fonts().regular, kBody, {bx, text_y(fonts().regular, kBody, ry, s(38))}, color::text, f.label);
+        for (int hand = 0; hand < hands; ++hand) {
+          auto& o = e.offsets[size_t(hand)];
+          float& v = f.turn ? o.rotation[size_t(f.axis)] : o.position[size_t(f.axis)];
+          int shown = int(std::lround(v * f.sign));
+          const int limit = int(f.turn ? controls::kMaxTurnDeg : controls::kMaxShiftMm);
+          ImGui::SetCursorScreenPos({bx + label_w + hand * col, ry});
+          ImGui::PushID(block * 3 + r);
+          ImGui::PushID(hand);
+          if (number_field("##offset", &shown, -limit, limit, field_w, f.turn ? "°" : "mm", true)) {
+            v = float(shown) * f.sign;
+            changed = true;
+          }
+          ImGui::PopID();
+          ImGui::PopID();
+        }
+      }
+    }
+    const float rows_end = at.y + (side ? head + 3 * s(46) : 2 * (head + 3 * s(46)) + s(10));
+    ImGui::SetCursorScreenPos({at.x, rows_end + s(14)});
+    // i18n: Controls page checkbox under "Position in hand".
+    if (checkbox("offsets-mirror", tr("Mirror for both hands"), &e.mirror, {}, true)) changed = true;
+    if (changed && e.mirror) e.offsets[1] = controls::mirrored(e.offsets[0]);
+    const float rw = button_width(tr("Reset position"));
+    const ImVec2 cmin = ImGui::GetItemRectMin(), cmax = ImGui::GetItemRectMax();
+    ImGui::SetCursorScreenPos({at.x + inner - rw, cmin.y + (cmax.y - cmin.y - s(34)) * 0.5f});
+    // i18n: Controls page button: clears both hands' position offsets.
+    if (button(tr("Reset position"), 0, Tone::secondary, {rw, s(34)},
+               std::ranges::any_of(e.offsets, [](const auto& o) { return !o.zero(); }))) {
+      e.offsets = {};
+      e.mirror = true;
+    }
     ImGui::EndDisabled();
+    end_card();
+    // Held for a few frames: the first frame does not know the page height yet.
+    if (smoke_offsets > 0 && smoke_offsets--) ImGui::SetScrollHereY(1.0f);
+  };
+
+  // Sticks, press points and vibration per hand: what SteamVR's binding modes
+  // tune (joystick dead zone and inversion, click thresholds, haptics).
+  auto tuning_card = [&] {
+    static int smoke_tuning = options_.smoke_view.contains("-tuning") ? 30 : 0;
+    if (smoke_tuning == 30 && !locked) {
+      e.tuning[0] = {15, false, true, 30, 0, true, 60};
+      e.tuning[1] = e.tuning[0];
+      e.tuning_mirror = !options_.smoke_view.ends_with("-split");
+      if (!e.tuning_mirror) e.tuning[1].vibration = false;
+    }
+    gap(16);
+    begin_card("controller-tuning", w, {22, 20});
+    // i18n: Controls page card heading: stick dead zone and inversion, trigger and grip press points, vibration.
+    heading(tr("Sticks, triggers and vibration"));
+    ImGui::BeginDisabled(locked);
+    enum class Kind { percent, check };
+    struct Field {
+      const char* label;
+      Kind kind;
+    };
+    const Field fields[]{
+        // i18n: Controls page "Sticks, triggers and vibration" rows. Stick dead zone: how far the stick moves before the game sees it.
+        {tr("Stick dead zone"), Kind::percent}, {tr("Invert stick left/right"), Kind::check},
+        {tr("Invert stick up/down"), Kind::check},
+        // i18n: Controls page rows: how far the trigger or grip is pulled before it counts as pressed.
+        {tr("Trigger press at"), Kind::percent}, {tr("Grip press at"), Kind::percent}, {tr("Vibration"), Kind::percent},
+    };
+    const float label_w = cards_label_w;
+    const float field_w = s(108), col_gap = s(14);
+    const float col = field_w + col_gap;
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2 at{ImGui::GetCursorScreenPos().x, ImGui::GetCursorScreenPos().y + s(4)};
+    const int hands = e.tuning_mirror ? 1 : 2;
+    const float head = e.tuning_mirror ? 0.f : s(20);
+    const float block_w = label_w + float(hands) * col;
+    const bool side = inner >= 2 * block_w + s(40);
+    bool changed = false;
+    for (int block = 0; block < 2; ++block) {
+      const float bx = at.x + (side ? block * (block_w + s(40)) : 0);
+      const float by = at.y + (side ? 0 : block * (head + 3 * s(46) + s(10)));
+      for (int hand = 0; hand < hands && hands > 1; ++hand) {
+        const char* name = hand ? "Right" : "Left";
+        draw_text(dl, fonts().semibold, kSmall + 1,
+                  {std::round(bx + label_w + hand * col + (field_w - measure(fonts().semibold, kSmall + 1, name).x) * 0.5f), by},
+                  color::text2, name);
+      }
+      for (int r = 0; r < 3; ++r) {
+        const int index = block * 3 + r;
+        const auto& f = fields[index];
+        const float ry = by + head + r * s(46);
+        draw_text(dl, fonts().regular, kBody, {bx, text_y(fonts().regular, kBody, ry, s(38))}, color::text, f.label);
+        for (int hand = 0; hand < hands; ++hand) {
+          auto& t = e.tuning[size_t(hand)];
+          const float cx = bx + label_w + hand * col;
+          ImGui::PushID(index);
+          ImGui::PushID(hand);
+          if (f.kind == Kind::check) {
+            bool& v = index == 1 ? t.invert_x : t.invert_y;
+            ImGui::SetCursorScreenPos({std::round(cx + (field_w - s(22)) * 0.5f), ry + s(8)});
+            changed |= checkbox("##check", "", &v);
+          } else {
+            ImGui::SetCursorScreenPos({cx, ry});
+            switch (index) {
+              case 0: changed |= number_field("##deadzone", &t.deadzone, 0, controls::kMaxDeadzone, field_w, "%", true); break;
+              case 3:
+              case 4: {
+                int& v = index == 3 ? t.trigger_press : t.grip_press;
+                // i18n: Controls page: a trigger or grip press point left to the runtime.
+                if (number_field("##press", &v, 0, controls::kMaxPress, field_w, "%", false, tr("Auto"))) {
+                  if (v) v = std::max(v, controls::kMinPress);
+                  changed = true;
+                }
+                break;
+              }
+              default: {
+                int shown = t.vibration ? t.strength : 0;
+                // i18n: Controls page: vibration turned off.
+                if (number_field("##vibration", &shown, 0, 100, field_w, "%", false, tr("Off"))) {
+                  t.vibration = shown > 0;
+                  t.strength = shown > 0 ? shown : 100;
+                  changed = true;
+                }
+              }
+            }
+          }
+          ImGui::PopID();
+          ImGui::PopID();
+        }
+      }
+    }
+    const float rows_end = at.y + (side ? head + 3 * s(46) : 2 * (head + 3 * s(46)) + s(10));
+    ImGui::SetCursorScreenPos({at.x, rows_end + s(14)});
+    // i18n: Controls page checkbox under "Sticks, triggers and vibration".
+    if (checkbox("tuning-mirror", tr("Same for both hands"), &e.tuning_mirror, {}, true)) changed = true;
+    if (changed && e.tuning_mirror) e.tuning[1] = e.tuning[0];
+    // i18n: Controls page button: puts the sticks, press points and vibration back to their defaults.
+    const float rw = button_width(tr("Reset"));
+    const ImVec2 cmin = ImGui::GetItemRectMin(), cmax = ImGui::GetItemRectMax();
+    ImGui::SetCursorScreenPos({at.x + inner - rw, cmin.y + (cmax.y - cmin.y - s(34)) * 0.5f});
+    if (button(tr("Reset"), 0, Tone::secondary, {rw, s(34)},
+               std::ranges::any_of(e.tuning, [](const auto& t) { return t != controls::Tuning{}; }))) {
+      e.tuning = {};
+      e.tuning_mirror = true;
+    }
+    ImGui::EndDisabled();
+    end_card();
+    if (smoke_tuning > 0 && smoke_tuning--) ImGui::SetScrollHereY(1.0f);
   };
 
   if (!stacked) {
@@ -5151,7 +5793,6 @@ void App::draw_controls_editor(ControlsEdit& e, const ControlsEdit* base, float 
     const float nh = std::max(draw_notes(0, at.x, at.y + h + s(8)), draw_notes(1, at.x + half + mid, at.y + h + s(8)));
     ImGui::SetCursorScreenPos(at);
     ImGui::Dummy({inner, h + nh});
-    grip_toggle();
     end_card();
   } else {
     for (int hand = 0; hand < 2; ++hand) {
@@ -5163,10 +5804,11 @@ void App::draw_controls_editor(ControlsEdit& e, const ControlsEdit* base, float 
       const float nh = draw_notes(hand, at.x, at.y + h + s(8));
       ImGui::SetCursorScreenPos(at);
       ImGui::Dummy({inner, h + nh});
-      if (hand) grip_toggle();
       end_card();
     }
   }
+  offsets_card();
+  tuning_card();
 }
 
 }  // namespace venture::launcher

@@ -7,6 +7,7 @@
  */
 
 #include "dynarmic/mcl/bit.hpp"
+#include <bit>
 #include <oaknut/oaknut.hpp>
 
 #include "dynarmic/backend/arm64/a32_jitstate.h"
@@ -15,6 +16,8 @@
 #include "dynarmic/backend/arm64/emit_context.h"
 #include "dynarmic/backend/arm64/fpsr_manager.h"
 #include "dynarmic/backend/arm64/reg_alloc.h"
+#include "dynarmic/backend/arm64/stack_layout.h"
+#include "dynarmic/frontend/A32/a32_location_descriptor.h"
 #include "dynarmic/frontend/A32/a32_types.h"
 #include "dynarmic/interface/halt_reason.h"
 #include "dynarmic/ir/basic_block.h"
@@ -58,8 +61,37 @@ static void EmitSetUpperLocationDescriptor(oaknut::CodeGenerator& code, EmitCont
     }
 }
 
+// Venture: a compact link site. The patchable branch stays in line; unlinked,
+// it (and `exit`, for a halt or cycle check) jumps to a PC store and dispatcher
+// return emitted with the block's deferred code, as the x64 backend's
+// compact_block_links does with its cold-region stubs.
+static void EmitCompactBlockLink(oaknut::CodeGenerator& code, EmitContext& ctx, IR::LocationDescriptor next, SharedLabel exit) {
+    const std::size_t index = ctx.ebi.block_relocations[next].size();
+    EmitBlockLinkRelocation(code, ctx, next, BlockRelocationType::Branch);
+    ctx.deferred_emits.emplace_back([&code, &ctx, next, index, exit] {
+        code.l(*exit);
+        ctx.ebi.block_relocations[next][index].unlinked_offset = code.xptr<CodePtr>() - ctx.ebi.entry_point;
+        code.MOV(Wscratch0, A32::LocationDescriptor{next}.PC());
+        code.STR(Wscratch0, Xstate, offsetof(A32JitState, regs) + sizeof(u32) * 15);
+        EmitRelocation(code, ctx, LinkTarget::ReturnToDispatcher);
+    });
+}
+
 void EmitA32Terminal(oaknut::CodeGenerator& code, EmitContext& ctx, IR::Term::LinkBlock terminal, IR::LocationDescriptor initial_location, bool is_single_step) {
     EmitSetUpperLocationDescriptor(code, ctx, terminal.next, initial_location);
+
+    if (ctx.conf.compact_block_links && ctx.conf.HasOptimization(OptimizationFlag::BlockLinking) && !is_single_step) {
+        const SharedLabel exit = GenSharedLabel();
+        if (ctx.conf.enable_cycle_counting) {
+            code.CMP(Xticks, 0);
+            code.B(LE, *exit);
+        } else {
+            code.LDAR(Wscratch0, Xhalt);
+            code.CBNZ(Wscratch0, *exit);
+        }
+        EmitCompactBlockLink(code, ctx, terminal.next, exit);
+        return;
+    }
 
     oaknut::Label fail;
 
@@ -83,6 +115,11 @@ void EmitA32Terminal(oaknut::CodeGenerator& code, EmitContext& ctx, IR::Term::Li
 
 void EmitA32Terminal(oaknut::CodeGenerator& code, EmitContext& ctx, IR::Term::LinkBlockFast terminal, IR::LocationDescriptor initial_location, bool is_single_step) {
     EmitSetUpperLocationDescriptor(code, ctx, terminal.next, initial_location);
+
+    if (ctx.conf.compact_block_links && ctx.conf.HasOptimization(OptimizationFlag::BlockLinking) && !is_single_step) {
+        EmitCompactBlockLink(code, ctx, terminal.next, GenSharedLabel());
+        return;
+    }
 
     if (ctx.conf.HasOptimization(OptimizationFlag::BlockLinking) && !is_single_step) {
         EmitBlockLinkRelocation(code, ctx, terminal.next, BlockRelocationType::Branch);
@@ -113,15 +150,22 @@ void EmitA32Terminal(oaknut::CodeGenerator& code, EmitContext& ctx, IR::Term::Po
         code.BR(Xscratch1);
 
         code.l(fail);
+        if (ctx.conf.HasOptimization(OptimizationFlag::FastDispatch)) {
+            EmitRelocation(code, ctx, LinkTarget::FastDispatch);
+            return;
+        }
     }
 
     EmitRelocation(code, ctx, LinkTarget::ReturnToDispatcher);
 }
 
-void EmitA32Terminal(oaknut::CodeGenerator& code, EmitContext& ctx, IR::Term::FastDispatchHint, IR::LocationDescriptor, bool) {
+void EmitA32Terminal(oaknut::CodeGenerator& code, EmitContext& ctx, IR::Term::FastDispatchHint, IR::LocationDescriptor, bool is_single_step) {
+    // Venture: the inline table lookup in the prelude (as on x64).
+    if (ctx.conf.HasOptimization(OptimizationFlag::FastDispatch) && !is_single_step) {
+        EmitRelocation(code, ctx, LinkTarget::FastDispatch);
+        return;
+    }
     EmitRelocation(code, ctx, LinkTarget::ReturnToDispatcher);
-
-    // TODO: Implement FastDispatchHint optimization
 }
 
 void EmitA32Terminal(oaknut::CodeGenerator& code, EmitContext& ctx, IR::Term::If terminal, IR::LocationDescriptor initial_location, bool is_single_step) {
@@ -618,8 +662,29 @@ void EmitIR<IR::Opcode::A32CallSupervisor>(oaknut::CodeGenerator& code, EmitCont
         EmitRelocation(code, ctx, LinkTarget::AddTicks);
     }
 
-    code.MOV(W1, args[0].GetImmediateU32());
-    EmitRelocation(code, ctx, LinkTarget::CallSVC);
+    // Venture: fast supervisor calls run their handler inside the JIT, as on
+    // x64 and as in the A64 emitter; a transferring call runs with the host FPCR.
+    const u32 imm = args[0].GetImmediateU32();
+    const bool transfer_fp = ctx.conf.svc_fp_transfer && imm == *ctx.conf.svc_fp_transfer;
+    const bool fast = transfer_fp || (ctx.conf.svc_fast && imm == *ctx.conf.svc_fast);
+    const void* known = fast && ctx.conf.svc_lookup ? ctx.conf.svc_lookup(A32::LocationDescriptor{ctx.block.Location()}.PC(), imm) : nullptr;
+    if (transfer_fp) {
+        code.LDR(Wscratch0, SP, offsetof(StackLayout, save_host_fpcr));
+        code.MSR(oaknut::SystemReg::FPCR, Xscratch0);
+    }
+    code.MOV(W1, imm);
+    if (known) {
+        code.MOV(X2, std::bit_cast<u64>(known));
+        code.MOV(X3, Xstate);
+        EmitRelocation(code, ctx, LinkTarget::CallSVCFastKnown);
+    } else {
+        EmitRelocation(code, ctx, fast ? LinkTarget::CallSVCFast : LinkTarget::CallSVC);
+    }
+    if (transfer_fp) {
+        code.LDR(Wscratch0, Xstate, offsetof(A32JitState, upper_location_descriptor));
+        code.AND(Wscratch0, Wscratch0, 0xffff0000);
+        code.MSR(oaknut::SystemReg::FPCR, Xscratch0);
+    }
 
     if (ctx.conf.enable_cycle_counting) {
         EmitRelocation(code, ctx, LinkTarget::GetTicksRemaining);

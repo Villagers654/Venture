@@ -98,6 +98,11 @@ inline constexpr HostInput kIndexInputs[]{
     {"/input/trackpad", "Trackpad (swipe)"},
     {"/input/trackpad/force", "Trackpad press"},
     {"/input/trackpad/touch", "Trackpad touch"},
+    {"/input/trackpad/dpad_up", "Trackpad top"},
+    {"/input/trackpad/dpad_down", "Trackpad bottom"},
+    {"/input/trackpad/dpad_left", "Trackpad left"},
+    {"/input/trackpad/dpad_right", "Trackpad right"},
+    {"/input/trackpad/dpad_center", "Trackpad center"},
     {"/input/trigger/value", "Trigger"},
     {"/input/trigger/click", "Trigger click"},
     {"/input/squeeze/value", "Grip"},
@@ -125,6 +130,8 @@ inline constexpr HostInput kViveInputs[]{
     {"/input/trackpad/click", "Trackpad click"},
     {"/input/trackpad/dpad_up", "Trackpad top"},
     {"/input/trackpad/dpad_down", "Trackpad bottom"},
+    {"/input/trackpad/dpad_left", "Trackpad left"},
+    {"/input/trackpad/dpad_right", "Trackpad right"},
     {"/input/trackpad/dpad_center", "Trackpad center"},
     {"/input/trackpad/touch", "Trackpad touch"},
     {"/input/trigger/value", "Trigger"},
@@ -193,6 +200,7 @@ inline constexpr HostInput kCosmosInputs[]{
     {"/input/thumbstick", "Thumbstick"},
     {"/input/thumbstick/click", "Thumbstick click"},
     {"/input/trigger/value", "Trigger"},
+    {"/input/trigger/click", "Trigger click"},
     {"/input/squeeze/click", "Grip"},
     {"/input/system/click", "System", true, 2},
 };
@@ -204,6 +212,9 @@ inline constexpr HostInput kWmrInputs[]{
     {"/input/trackpad/click", "Trackpad click"},
     {"/input/trackpad/dpad_up", "Trackpad top"},
     {"/input/trackpad/dpad_down", "Trackpad bottom"},
+    {"/input/trackpad/dpad_left", "Trackpad left"},
+    {"/input/trackpad/dpad_right", "Trackpad right"},
+    {"/input/trackpad/dpad_center", "Trackpad center"},
     {"/input/trackpad/touch", "Trackpad touch"},
     {"/input/trigger/value", "Trigger"},
     {"/input/squeeze/click", "Grip"},
@@ -305,7 +316,9 @@ inline constexpr Profile kProfiles[]{
         "/input/thumbstick/click", "/input/trigger/value", "/input/squeeze/value", ""},
        {"/input/a/click", "/input/b/click", "", "/input/thumbstick", "/input/thumbstick/click",
         "/input/trigger/value", "/input/squeeze/value", ""}}},
-     "/input/view/click", "Left View button", "thumbstick trigger", "XR_VALVE_frame_controller_interaction"},
+     "/input/view/click", "Left View button",
+     "a b x y dpad_up dpad_down dpad_left dpad_right view menu bumper thumbstick trigger squeeze",
+     "XR_VALVE_frame_controller_interaction"},
     {"/interaction_profiles/khr/generic_controller", "Generic controller", "khr other unknown", "", "", kGenericInputs,
      {{{"/input/primary/click", "/input/secondary/click", "", "/input/thumbstick", "/input/thumbstick/click",
         "/input/trigger/value", "/input/squeeze/value", ""},
@@ -334,8 +347,52 @@ struct MenuChoice {
 };
 // A row's host inputs (component paths), in the player's order.
 using Inputs = std::vector<std::string>;
+// Where the game sees a controller in the hand: a shift in millimetres and a turn
+// in degrees, in the controller's own frame (x right, y up, z toward the player's
+// wrist). The turn is tilt (about x), turn (about y) and roll (about z), applied
+// as turn, then tilt, then roll. It moves every pose of that hand the game reads
+// (grip, aim, palm), as SteamVR's pose offsets do.
+inline constexpr float kMaxShiftMm = 200, kMaxTurnDeg = 180;
+struct Offset {
+  std::array<float, 3> position{};  // mm
+  std::array<float, 3> rotation{};  // degrees: tilt, turn, roll
+  bool operator==(const Offset&) const = default;
+  bool zero() const { return *this == Offset{}; }
+};
+// The same offset for the other hand: mirrored left to right.
+Offset mirrored(const Offset& offset);
+// How one hand's analog inputs and vibration reach the game, as SteamVR's binding
+// modes tune them (joystick dead zone and inversion, click thresholds, haptics).
+inline constexpr int kMaxDeadzone = 60, kMinPress = 5, kMaxPress = 95;
+struct Tuning {
+  int deadzone = 0;  // % of the stick's travel ignored around its centre; the rest is stretched to full travel
+  bool invert_x = false, invert_y = false;
+  int trigger_press = 0;  // % pulled that presses the trigger; 0: the runtime's own point
+  int grip_press = 0;     // % squeezed that presses the grip; 0: the runtime's own point
+  bool vibration = true;
+  int strength = 100;  // vibration strength, %
+  bool operator==(const Tuning&) const = default;
+};
+Tuning clamped(Tuning tuning);
+// The stick as the game sees it: inverted as chosen, then the dead zone.
+std::array<float, 2> shape_stick(const Tuning& tuning, float x, float y);
+// An analog input pressed at `percent` (0: 50 %), let go a little below it, so a
+// value resting at the point does not flicker.
+bool analog_press(float value, bool was_pressed, int percent);
+// How strongly the game's vibration reaches the controller, 0 to 1.
+inline float vibration_scale(const Tuning& t) { return t.vibration ? float(t.strength) / 100.f : 0.f; }
+// The rows a Toggle can latch: each press flips held and released.
+inline bool can_toggle(Quest q) {
+  return q == Quest::primary || q == Quest::secondary || q == Quest::stick_click || q == Quest::trigger || q == Quest::grip;
+}
+// The offset's turn as a quaternion (x, y, z, w).
+std::array<float, 4> orientation(const Offset& offset);
 struct Choice {
   std::array<std::array<std::optional<Inputs>, kQuestCount>, 2> rows{};
+  std::array<Offset, 2> offsets{};  // per hand
+  std::array<Tuning, 2> tuning{};   // per hand
+  // Toggle per row (both hands) for A/X, B/Y, stick click and trigger; the grip's is grip_toggle.
+  std::array<bool, kQuestCount> toggles{};
   MenuChoice menu;
   // Grip toggle: each press of a grip flips the game's grip between held and
   // released (both hands). Unset: the controller's default (needs_grip_toggle).
@@ -346,6 +403,13 @@ struct Choice {
 using Config = std::map<std::string, Choice, std::less<>>;
 
 const Profile* find_profile(std::string_view path);
+// The controller in one hand, from the host's evidence: `host_profile`, the
+// host's current interaction profile, unless the host runtime names the device's
+// installed render model (`render_model`, "oculus_quest_plus_controller_left")
+// and that model is another listed controller with the same physical inputs.
+// A runtime without a controller's own profile reports a more general one with
+// the same inputs (SteamVR reports Touch for a Quest 3's Touch Plus).
+std::string_view evident_profile(std::string_view host_profile, std::string_view render_model);
 // The controller's grip is a side button on a wand (Vive wands, Windows Mixed Reality),
 // tiring to hold the whole time a Quest game expects a grab held. The grip toggle
 // defaults on for these. Click grips under the fingers (Cosmos, PS VR2 Sense) hold
@@ -377,6 +441,9 @@ struct Resolved {
   std::array<std::array<Inputs, kQuestCount>, 2> rows{};
   Menu menu;
   bool grip_toggle = false;  // the game's grip latches: one press holds, the next lets go
+  std::array<Offset, 2> offsets{};  // per hand, within the limits
+  std::array<Tuning, 2> tuning{};   // per hand, within the limits
+  std::array<bool, kQuestCount> toggles{};  // rows other than the grip that latch
 };
 // The choices in effect: the defaults with `choice` (may be null) applied.
 // Inputs the controller cannot take (another hand's button, a reserved input,
@@ -387,10 +454,21 @@ Resolved resolve(const Profile& profile, const Choice* choice);
 // "/user/hand/left/input/trackpad/dpad_down"), one per host input of its row, or
 // none. Touch sensors follow their button where the host has a sensor there.
 // `dpad`: the host binds trackpad and stick halves (XR_EXT_dpad_binding); without
-// it the first half on a pad, in row order (and within a row, in its order),
-// gets the whole pad's press and the others stay unbound.
+// it halves are left out here and Venture splits the pad itself (pads()).
 std::vector<std::string> host_bindings(std::string_view guest_path, const Profile& profile,
                                        const Resolved& resolved, bool dpad);
+// Without XR_EXT_dpad_binding the host binds no halves: Venture reads the whole
+// pad and its press and decides the half itself. The pads one hand's rows use
+// halves of (component paths: "/input/trackpad", "/input/trackpad/click").
+struct Pad {
+  std::string axes, press;
+  bool operator==(const Pad&) const = default;
+};
+std::vector<Pad> pads(const Profile& profile, const Resolved& resolved, int hand);
+// Whether the half `component` names ("/input/trackpad/dpad_up") is where the
+// pad is pressed, at (x, y): the center within half the pad's radius, the four
+// halves as quarters beyond it.
+bool half_pressed(std::string_view component, float x, float y);
 // A menu source or direct menu input as the host can bind it (the dpad fallback), or "".
 std::string bindable(std::string_view hand_qualified, const Profile& profile, bool dpad);
 // Two Quest inputs of one hand on one host input. A held menu shares on purpose
@@ -404,7 +482,8 @@ std::vector<Conflict> conflicts(const Resolved& resolved, MenuMode mode);
 
 // VENTURE_CONTROLS and settings.json: {"<profile>": {"left": {"primary": "/input/a/click", ...},
 // "right": {...}, "menu": {"mode": "hold", "first": "...", "second": "...", "holdMs": 1000},
-// "gripToggle": true}} (gripToggle only when the player set it).
+// "gripToggle": true, "offsets": {"left": {"position": [0, 0, 0], "rotation": [-30, 0, 0]}}}
+// (gripToggle only when the player set it, offsets only for a hand that has one).
 // A row is a string ("" for none), or a list of strings when it has several
 // inputs ("stickClick": ["/input/thumbstick/click", "/input/shoulder/click"]).
 std::string encode(const Config& config);

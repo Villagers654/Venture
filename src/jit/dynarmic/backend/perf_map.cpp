@@ -14,13 +14,20 @@ namespace {
 std::atomic<CodeRegistrationCallback> code_registration{nullptr};
 std::atomic<CompileTimingCallback> compile_timing_callback{nullptr};
 thread_local CompileTimingScope* current_compile = nullptr;
+thread_local std::atomic<std::uint64_t>* compile_marker = nullptr;
 std::uint64_t CompileNow() noexcept {
     return std::chrono::duration_cast<std::chrono::nanoseconds>(
         std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 }
 void SetCompileTimingCallback(CompileTimingCallback cb) { compile_timing_callback.store(cb); }
+void SetCompileMarker(std::atomic<std::uint64_t>* marker) noexcept { compile_marker = marker; }
 CompileTimingScope::CompileTimingScope(std::uint64_t pc, bool a32, std::uint64_t descriptor) noexcept {
+    // Only the owning thread writes its marker: a plain load and store suffice.
+    if (auto* marker = compile_marker) {
+        marker_before = marker->load(std::memory_order_relaxed);
+        marker->store(pc | 1, std::memory_order_relaxed);
+    }
     callback = compile_timing_callback.load(std::memory_order_relaxed);
     if (!callback) return;
     timing.guest_pc = pc; timing.a32 = a32; timing.location_descriptor = descriptor;
@@ -34,6 +41,7 @@ void SetCompilePhase(CompilePhase phase) noexcept {
     current_compile->last_ns = now; current_compile->phase = phase;
 }
 CompileTimingScope::~CompileTimingScope() {
+    if (auto* marker = compile_marker) marker->store(marker_before, std::memory_order_relaxed);
     if (!callback) return;
     SetCompilePhase(phase);
     timing.end_ns = last_ns;
@@ -52,7 +60,7 @@ void SetCodeRegistrationCallback(CodeRegistrationCallback cb) { code_registratio
 #include <string>
 #include <fmt/format.h>
 
-#include "dynarmic/backend/x64/perf_map.h"
+#include "dynarmic/backend/perf_map.h"
 #include "common/common_types.h"
 #if defined(__linux__) && !defined(__ANDROID__)
 #    include <cstdio>
@@ -61,7 +69,7 @@ void SetCodeRegistrationCallback(CodeRegistrationCallback cb) { code_registratio
 #    include <sys/types.h>
 #    include <unistd.h>
 
-namespace Dynarmic::Backend::X64 {
+namespace Dynarmic::Backend {
 
 namespace {
 std::mutex mutex;
@@ -132,10 +140,10 @@ void PerfMapClear() {
     OpenFile();
 }
 
-}  // namespace Dynarmic::Backend::X64
+}  // namespace Dynarmic::Backend
 
 #else
-namespace Dynarmic::Backend::X64 {
+namespace Dynarmic::Backend {
 bool PerfMapActive() noexcept {
     return Dynarmic::code_registration.load(std::memory_order_relaxed);
 }

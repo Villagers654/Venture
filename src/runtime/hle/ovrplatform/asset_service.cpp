@@ -68,6 +68,19 @@ AssetService::AssetService(AppIdentity app, std::filesystem::path install,
                            std::shared_ptr<PipeChannel> channel,
                            std::filesystem::path language_state,
                            std::filesystem::path obb_view)
+    : AssetService(std::move(app), std::move(install), std::move(guest_root),
+                   std::move(ownership),
+                   channel ? AssetLauncherCall([channel](const Json& request) {
+                     return channel->call(request);
+                   })
+                           : AssetLauncherCall{},
+                   std::move(language_state), std::move(obb_view)) {}
+AssetService::AssetService(AppIdentity app, std::filesystem::path install,
+                           std::string guest_root,
+                           AssetOwnershipReader ownership,
+                           AssetLauncherCall channel,
+                           std::filesystem::path language_state,
+                           std::filesystem::path obb_view)
     : app_(std::move(app)),
       install_(std::move(install)),
       language_state_(std::move(language_state)),
@@ -152,7 +165,7 @@ std::string AssetService::filepath(const meta::File& f) const {
 Json AssetService::command(std::string_view action, const meta::File& f,
                            std::stop_token stop) const {
   if (!channel_ || stop.stop_requested()) return Json{};
-  return channel_->call({{"op", "asset." + std::string(action)},
+  return channel_({{"op", "asset." + std::string(action)},
                          {"id", f.id}, {"name", f.name}});
 }
 Model AssetService::details(const meta::File& f, std::stop_token stop) const {

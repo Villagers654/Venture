@@ -2,6 +2,7 @@
 #include <span>
 #include <vector>
 
+#include "fault_markers.h"
 #include "vulkan.h"
 
 namespace venture::vulkan {
@@ -73,16 +74,17 @@ struct DecodeRegion {
 struct DecodeResources;
 std::shared_ptr<DecodeResources> record_decode(VkDevice device, VkCommandBuffer command, VkBuffer source,
                                                VkDeviceSize source_size, VkBuffer destination,
-                                               VkDeviceSize destination_size, const DecodeRegion& region);
+                                               VkDeviceSize destination_size, const DecodeRegion& region,
+                                               const fault_markers::Site& site = {});
 // BC7 blocks of an RGBA8 image (tight 4-byte texels, as record_decode writes
 // them): ceil(width / 4) blocks per row, 16 bytes each.
 std::shared_ptr<DecodeResources> record_encode_bc7(VkDevice device, VkCommandBuffer command, VkBuffer source,
     VkDeviceSize source_size, VkBuffer destination, VkDeviceSize destination_size, std::uint32_t width,
-    std::uint32_t height);
+    std::uint32_t height, const fault_markers::Site& site = {});
 // Direct ASTC image decode. A zero activation word performs no image accesses;
 // this keeps recorded uploads valid when a sparse companion is backed later.
 // The destination is a GENERAL storage view of one mip (2D array or 3D).
 std::shared_ptr<DecodeResources> record_decode_image(VkDevice device, VkCommandBuffer command,
     VkBuffer source, VkDeviceSize source_size, VkImageView destination, VkBuffer activation,
-    const DecodeRegion& region, bool volume, std::uint32_t slice);
+    const DecodeRegion& region, bool volume, std::uint32_t slice, const fault_markers::Site& site = {});
 }  // namespace venture::vulkan

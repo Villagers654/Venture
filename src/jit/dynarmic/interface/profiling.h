@@ -2,6 +2,7 @@
 #pragma once
 #include <string_view>
 #include <array>
+#include <atomic>
 #include <cstdint>
 namespace Dynarmic {
 using CodeRegistrationCallback = void (*)(const void*, const void*, std::string_view);
@@ -40,6 +41,12 @@ public:
     CompileTimingCallback callback = nullptr;
     CompilePhase phase = CompilePhase::Prepare;
     std::uint64_t last_ns = 0;
+    std::uint64_t marker_before = 0;
 };
 void SetCompilePhase(CompilePhase phase) noexcept;
+// Venture stall diagnostics, always on: while the calling thread compiles a
+// block, its marker holds the block's guest PC | 1 (0 when not compiling), so
+// another thread can see a stall spent in translation. One relaxed store per
+// compile, nothing in emitted code. nullptr detaches the thread.
+void SetCompileMarker(std::atomic<std::uint64_t>* marker) noexcept;
 }

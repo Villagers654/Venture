@@ -8,6 +8,8 @@
 #include "core/signals.h"
 #include "core/thread.h"
 #include "core/hle_unwind.h"
+#include "cpu/guest_entry.h"
+#include "cpu/native_a64.h"
 #include "common/log.h"
 #include "common/json.h"
 #include "common/paths.h"
@@ -171,7 +173,7 @@ GuestAddr emit(Registry& r, std::span<const std::uint32_t> code) {
   auto bytes = code.size_bytes();
   if (bytes > 4096) throw std::runtime_error("HLE stub exceeds page size");
   if (r.used + bytes > 4096) {
-    r.page = AddressSpace::get().allocate(4096, kProtRead | kProtWrite | kProtExec, "[hle thunks]");
+    r.page = AddressSpace::get().allocate(4096, kProtRead | kProtWrite | kProtExec, kHleThunkRegion);
     if (!r.page) throw std::bad_alloc();
     // Reserve a readable ELF header at the module base for unwind discovery.
     r.used = 256;
@@ -211,12 +213,17 @@ FunctionId add(Registry& r, std::string_view library, std::string_view name, Han
   const auto svc = svc_for(execution);
   const bool condition_wait = library == "libc.so" && name.starts_with("pthread_cond_") &&
       (name.find("wait") != std::string_view::npos || name == "pthread_cond_timeout_np");
-  auto code = guest_stub(process_config().isa(), GuestStub::hle_call, id, svc);
+  process_engine();  // the engine picks the stub entry before the first stub
+  auto code = guest_entry_stub(process_config().isa(), GuestStub::hle_call, id, svc);
   if (condition_wait) {
     // A real frame keeps this cleanup distinct from the caller's catch frame.
     const auto leaf = code.words;
-    if (process_config().isa() == GuestIsa::a64)
-      code = {{{leaf[0], leaf[1], leaf[2], leaf[3], leaf[4], 0xa9bf7bfdu, leaf[5], 0xa8c17bfdu, leaf[6]}}, 9};
+    if (process_config().isa() == GuestIsa::a64 && &guest_entry() != &trap_entry())
+      // The native entry's routine returns to x30: call it, then pop the frame.
+      // movz, movk, stp x29,x30,[sp,#-16]!, ldr x17,#16, blr x17, ldp, ret, literal.
+      code = {{{leaf[0], leaf[1], 0xa9bf7bfdu, 0x58000091u, 0xd63f0220u, 0xa8c17bfdu, 0xd65f03c0u, leaf[6], leaf[7]}}, 9};
+    else if (process_config().isa() == GuestIsa::a64)
+      code ={{{leaf[0], leaf[1], leaf[2], leaf[3], leaf[4], 0xa9bf7bfdu, leaf[5], 0xa8c17bfdu, leaf[6]}}, 9};
     else
       code = {{{0xe92d4010u, leaf[0], leaf[1], leaf[2], 0xe8bd8010u, 0}}, 5};
   }
@@ -249,9 +256,10 @@ const FunctionInfo& function(FunctionId id) {
 GuestAddr thunk_address(FunctionId id) { return function(id).thunk; }
 const FunctionInfo* resolve_thunk(GuestAddr entry, std::uint32_t svc) {
   if (entry & 15) return nullptr;
-  std::array<std::uint32_t, 7> actual{};
+  std::array<std::uint32_t, 8> actual{};
   const bool arm = process_config().isa() == GuestIsa::a32;
-  if (!platform::read_memory(entry, actual.data(), (arm ? 4 : 7) * sizeof(std::uint32_t))) return nullptr;
+  const std::size_t read = arm ? 4 : 7;
+  if (!platform::read_memory(entry, actual.data(), read * sizeof(std::uint32_t))) return nullptr;
   const auto immediate = [arm](std::uint32_t word) {
     return arm ? ((word >> 4) & 0xf000u) | (word & 0xfffu) : (word >> 5) & 0xffffu;
   };
@@ -265,14 +273,20 @@ const FunctionInfo* resolve_thunk(GuestAddr entry, std::uint32_t svc) {
   if (info.execution == Execution::RunLoop) return nullptr;
   const auto expected_svc = svc_for(info.execution);
   if (svc != expected_svc) return nullptr;
-  const auto expected = guest_stub(process_config().isa(), GuestStub::hle_call, info.id, svc);
+  const auto expected = guest_entry_stub(process_config().isa(), GuestStub::hle_call, info.id, svc);
   const auto words = expected.instructions();
+  // A native entry slot is 8 words (its 64-bit literal ends the slot).
+  if (words.size() > actual.size()) return nullptr;
+  if (words.size() > read &&
+      !platform::read_memory(entry + read * sizeof(std::uint32_t), actual.data() + read,
+                             (words.size() - read) * sizeof(std::uint32_t)))
+    return nullptr;
   if (!std::equal(words.begin(), words.end(), actual.begin())) return nullptr;
   return &info;
 }
 const FunctionInfo* function_at(GuestAddr pc) {
-  // Thunks are 16-byte aligned and at most 7 instructions, so pc lies in the
-  // stub that starts at its 16-byte boundary or the one before.
+  // Thunks are 16-byte aligned and at most 8 words, so pc lies in the stub
+  // that starts at its 16-byte boundary or the one before.
   for (const auto entry : {pc & ~GuestAddr(15), (pc & ~GuestAddr(15)) - 16}) {
     std::array<std::uint32_t, 2> words{};
     if (!platform::read_memory(entry, words.data(), sizeof(words))) continue;
@@ -283,7 +297,7 @@ const FunctionInfo* function_at(GuestAddr pc) {
     const auto id = immediate(words[0]) | (immediate(words[1]) << 16);
     if (!id || id >= capacity) continue;
     const auto* found = registry().functions[id].load(std::memory_order_acquire);
-    if (found && found->thunk == entry && pc - entry < 7 * sizeof(std::uint32_t)) return found;
+    if (found && found->thunk == entry && pc - entry < 8 * sizeof(std::uint32_t)) return found;
   }
   return nullptr;
 }
@@ -302,11 +316,14 @@ GuestAddr code_stub(std::span<const std::uint32_t> instructions, std::string_vie
   auto& r = registry(); std::lock_guard lock(r.mutex); return emit(r, instructions);
 }
 GuestAddr code_stub(GuestStub kind, std::string_view name, std::uint32_t argument) {
-  auto code = guest_stub(process_config().isa(), kind, argument);
+  process_engine();
+  auto code = guest_entry_stub(process_config().isa(), kind, argument);
   if (kind == GuestStub::return_to_host || kind == GuestStub::call_return) {
     // Unwinders look up a saved return PC minus one, including our root LR.
-    std::array<std::uint32_t, 3> terminal{process_config().isa() == GuestIsa::a32 ? 0xe1a00000u : 0xd503201fu,
-        code.words[0], code.words[1]};
+    // The entry's stub follows whole (the native entry's carries a literal).
+    std::array<std::uint32_t, std::tuple_size_v<decltype(code.words)> + 1> terminal{
+        process_config().isa() == GuestIsa::a32 ? 0xe1a00000u : 0xd503201fu};
+    std::copy_n(code.words.begin(), code.count, terminal.begin() + 1);
     auto words = std::span(terminal).first(code.count + 1);
     auto address = code_stub(words, name);
     record_unwind_stub(address, std::uint32_t(words.size_bytes()), kind, argument);
@@ -375,7 +392,7 @@ void deliver_memory_fault(GuestThread& thread, FunctionId id, const MemoryFault&
                region.start, region.start + region.size, region.prot, region.name);
   else
     log::error("hle", "{}!{}: guest memory fault at {:#x} (unmapped)", f.library, f.name, fault.address);
-  thread.cpu().set_pc(thread.cpu().pc() - thread.cpu().trap_instruction_size());
+  thread.cpu().rewind_hle_call(f.thunk);
   signals::Info info{fault.bus ? signals::kSigBus : signals::kSigSegv,
                      fault.bus ? 2 : AddressSpace::get().segv_code(fault.address), fault.address};
   info.syndrome = fault.write ? 1ull << 6 : 0;

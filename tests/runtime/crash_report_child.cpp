@@ -1,6 +1,7 @@
 #include "common/log.h"
 #include "platform/crash_report.h"
 #include "platform/memory.h"
+#include "platform/runtime_child.h"
 #include "core/hle_runtime.h"
 #include "core/process.h"
 #include "core/process_runtime.h"
@@ -9,8 +10,13 @@
 #include "core/thread.h"
 #ifdef _WIN32
 #include <windows.h>
+#include <io.h>
 #endif
+#include <cstdio>
 #include <cstdlib>
+#include <exception>
+#include <stdexcept>
+#include <thread>
 #include <fstream>
 #include <string>
 
@@ -43,6 +49,20 @@ int main(int argc, char** argv) {
   const std::string text{std::istreambuf_iterator<char>(before), {}};
   if (text.find("earlier buffered info") != text.npos) return 3;
   before.close();
+#ifdef _WIN32
+  // A __fastfail no in-process handler sees, and the supervisor's lookup of
+  // Windows Error Reporting's record of it (main.cpp report_foreign_worker_exit).
+  if (mode == "fastfail") {
+    std::printf("%lu\n", GetCurrentProcessId());
+    std::fflush(stdout);
+    __fastfail(7);  // FAST_FAIL_FATAL_APP_EXIT
+  }
+  if (mode == "wer-lookup") {
+    std::printf("%s\n", venture::platform::system_crash_record(std::strtoul(argv[3], nullptr, 0),
+                                                              std::chrono::seconds(10)).c_str());
+    return 0;
+  }
+#endif
   if (mode == "guest") {
     std::uint32_t out = 0;
     if (venture::platform::read_memory(0, &out, sizeof(out))) return 4;
@@ -84,6 +104,22 @@ int main(int argc, char** argv) {
     return 6;
   }
   if (mode == "null-call") null_call(nullptr);
+  // Deliberate stops, which the C runtime ends through __fastfail (0xC0000409)
+  // on Windows without any exception handler seeing them.
+  if (mode == "abort") std::abort();
+  if (mode == "fatal-reason") {
+    venture::log::set_fatal_reason("JIT assertion failed: fixture (Unreachable code!)");
+    std::terminate();
+  }
+  if (mode == "thread-exception") {
+    std::thread([] { throw std::runtime_error("fixture worker failure"); }).join();
+  }
+#ifdef _WIN32
+  if (mode == "invalid-parameter") {
+    volatile int descriptor = -7;
+    _close(descriptor);
+  }
+#endif
 #ifdef _WIN32
   // A fault while the process heap lock is held (heap corruption caught in
   // RtlFreeHeap): the dump cannot finish, and the process must still end.

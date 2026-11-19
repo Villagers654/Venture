@@ -1,22 +1,20 @@
 #include "common/first_frame_progress.h"
 #include "common/log.h"
-#include "core/thread.h"
 #include "core/av_telemetry.h"
 #include "core/wait.h"
-#include "hle/openxr/state.h"
+#include "hle/vrapi/host.h"
 #include "hle/vrapi/state.h"
-#include "core/engine_policy.h"
-#include "hle/vrapi/vulkan_images.h"
-#include "core/process.h"
 #include "xr/clock.h"
 #include "xr/reference_spaces.h"
 #include "xr/haptic_output.h"
 #include "xr/menu_chord.h"
+#include "xr/sanitize.h"
 #include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstring>
+#include <format>
 #include <limits>
 
 namespace venture::hle::vrapi {
@@ -75,6 +73,7 @@ XrResult pump_events() {
       const auto &e = reinterpret_cast<const XrEventDataInteractionProfileChanged &>(event);
       venture::xr::clear_haptic_bindings(e.session);
       venture::xr::note_menu_profiles_changed(e.session);
+      state().input.profiles_stale = true;
     }
     if (event.type == XR_TYPE_EVENT_DATA_SESSION_STATE_CHANGED) {
       const auto &e = reinterpret_cast<const XrEventDataSessionStateChanged &>(event);
@@ -202,12 +201,10 @@ XrResult ensure_frame(std::uint64_t frame_index, Mobile *expected, FrameUse use)
     if (!v.wait_in_progress && !v.next_token && !s.pending_wait &&
         (!v.token || s.phase == Session::Phase::begun)) break;
     // PhaseSync simulation may reach Wait(N+1) before the renderer begins N.
-    auto *thread = GuestThread::current();
-    if (!thread) return XR_ERROR_CALL_ORDER_INVALID;
     const auto epoch = std::atomic_ref(s.frame_epoch).load(std::memory_order_acquire);
     sl.unlock();
     lock.unlock();
-    futex_wait(*thread, h2g(&s.frame_epoch), epoch, deadline);
+    if (!host::wait_frame_change(epoch, deadline)) return XR_ERROR_CALL_ORDER_INVALID;
     lock.lock();
     sl.lock();
   }
@@ -316,7 +313,7 @@ Tracking tracking_at(XrTime time, XrSpace target) {
   if (!time || !target || XR_FAILED(::xrLocateSpace(target, state().app, time, &location)))
     return out;
   // A Quest never reports NaN; undefined host values become neutral (hle/openxr/spaces.cpp).
-  hle::openxr::sanitize(location.locationFlags, location.pose);
+  venture::xr::sanitize(location.locationFlags, location.pose);
   out.status = flags(location.locationFlags) | 128;
   out.head.pose = pose(location.pose);
   out.head.time = seconds_from_time(time);
@@ -334,7 +331,7 @@ Tracking tracking_at(XrTime time, XrSpace target) {
     XrView views[2]{{XR_TYPE_VIEW}, {XR_TYPE_VIEW}};
     std::uint32_t count = 0;
     if (XR_SUCCEEDED(::xrLocateViews(session().handle, &li, &vs, 2, &count, views)) && count == 2) {
-      hle::openxr::sanitize_views(vs, count, views);
+      venture::xr::sanitize_views(vs, count, views);
       for (int eye = 0; eye < 2; ++eye) {
         out.eye[eye].view = view_matrix(views[eye].pose);
         out.eye[eye].projection = projection_matrix(views[eye].fov);
@@ -343,13 +340,34 @@ Tracking tracking_at(XrTime time, XrSpace target) {
   }
   return out;
 }
+namespace {
+// Destroys the session with its swapchain images, input and spaces. False when
+// the images could not be released (the session stays).
+bool close_session(const char *operation) {
+  auto release = destroy_host_chains();
+  if (XR_FAILED(release)) {
+    failure(std::format("{} bridges", operation).c_str(), release);
+    return false;
+  }
+  destroy_input();
+  auto &v = state();
+  for (auto space : {v.app, v.local, v.stage, v.view})
+    if (space)
+      ::xrDestroySpace(space);
+  v.app = v.local = v.stage = v.view = {};
+  auto r = session().destroy(SessionOwner::vrapi);
+  if (XR_FAILED(r))
+    failure(std::format("{} destroy", operation).c_str(), r);
+  return true;
+}
+} // namespace
 namespace guest {
 std::int32_t vrapi_Initialize(const Init *info) {
   std::lock_guard lock(state().mutex);
   if (!info || info->type != 1 || info->product != 1 || info->major != 1 || !info->java.vm ||
       !info->java.activity)
     return -1;
-  const bool vulkan = info->graphics_api == vulkan_api && process_config().isa() == GuestIsa::a64;
+  const bool vulkan = info->graphics_api == vulkan_api && host::vulkan_available();
   if (info->graphics_api != 0x10000 + 0x300 && info->graphics_api != 0x10000 + 0x200 && !vulkan) {
     failure("Initialize graphics API", unsupported);
     return -1;
@@ -375,6 +393,10 @@ void vrapi_Shutdown() {
     if (state().rings.size() == size)
       return;
   }
+  if (host::keeps_session() && session().owner == SessionOwner::vrapi) {
+    std::lock_guard sl(session().mutex);
+    close_session("Shutdown");
+  }
   if (state().initialized) invalidate_host_procedures();
   state().initialized = false;
   vrapi_DestroySystemVulkan();
@@ -388,7 +410,7 @@ Mobile *vrapi_EnterVrMode(const Mode *mode) {
   auto &v = state();
   const bool vulkan = v.init.graphics_api == vulkan_api;
   if (!v.initialized || !mode || mode->type != (vulkan ? 5 : 2) || !mode->java.vm || !mode->java.activity ||
-      !xr_images()) {
+      !host::images_available()) {
     failure("EnterVrMode", not_initialized);
     return nullptr;
   }
@@ -396,12 +418,7 @@ Mobile *vrapi_EnterVrMode(const Mode *mode) {
     failure("EnterVrMode duplicate", invalid_operation);
     return nullptr;
   }
-  XrGraphicsBindingVulkanKHR binding{XR_TYPE_GRAPHICS_BINDING_VULKAN_KHR};
-  if (vulkan && XR_FAILED(bind_vulkan_queue(*reinterpret_cast<const ModeVulkan *>(mode), binding))) {
-    failure("EnterVrMode Vulkan queue", invalid);
-    return nullptr;
-  }
-  if (XR_FAILED(session().create(SessionOwner::vrapi, vulkan ? &binding : nullptr)))
+  if (XR_FAILED(host::create_session(*mode)))
     return nullptr;
   v.mobile = reinterpret_cast<Mobile *>(++v.generation);
   v.token = v.next_token = false;
@@ -419,13 +436,15 @@ Mobile *vrapi_EnterVrMode(const Mode *mode) {
     ci = venture::xr::upright_reference_space(session().handle, ci);
     return ::xrCreateReferenceSpace(session().handle, &ci, &out);
   };
-  if (XR_FAILED(create(XR_REFERENCE_SPACE_TYPE_LOCAL, v.local)) ||
-      XR_FAILED(create(XR_REFERENCE_SPACE_TYPE_VIEW, v.view))) {
+  // A kept session (host::keeps_session) already has its spaces and input.
+  const bool fresh = !v.local;
+  if (fresh && (XR_FAILED(create(XR_REFERENCE_SPACE_TYPE_LOCAL, v.local)) ||
+                XR_FAILED(create(XR_REFERENCE_SPACE_TYPE_VIEW, v.view)))) {
     vrapi_LeaveVrMode(v.mobile);
     return nullptr;
   }
-  create(XR_REFERENCE_SPACE_TYPE_STAGE, v.stage);
-  if (XR_FAILED(set_app_space({{0, 0, 0, 1}, {0, 0, 0}})) || XR_FAILED(initialize_input()) ||
+  if (fresh) create(XR_REFERENCE_SPACE_TYPE_STAGE, v.stage);
+  if (XR_FAILED(set_app_space({{0, 0, 0, 1}, {0, 0, 0}})) || (fresh && XR_FAILED(initialize_input())) ||
       XR_FAILED(pump_events())) {
     vrapi_LeaveVrMode(v.mobile);
     return nullptr;
@@ -433,7 +452,7 @@ Mobile *vrapi_EnterVrMode(const Mode *mode) {
   const auto mobile = v.mobile;
   sl.unlock();
   lock.unlock();
-  if (auto* thread = GuestThread::current()) engine_policy::on_vrapi_session(*thread);
+  host::vr_mode_entered();
   return mobile;
 }
 void vrapi_LeaveVrMode(Mobile *mobile) {
@@ -443,20 +462,22 @@ void vrapi_LeaveVrMode(Mobile *mobile) {
     failure("LeaveVrMode", invalid);
     return;
   }
-  auto release = destroy_host_chains();
-  if (XR_FAILED(release)) {
-    failure("LeaveVrMode bridges", release);
+  auto &v = state();
+  if (host::keeps_session()) {
+    // The session keeps its swapchains, spaces and input for the next
+    // EnterVrMode; a frame the game left open is ended empty.
+    auto &s = session();
+    if (s.running && s.phase != Session::Phase::idle) {
+      auto r = s.phase == Session::Phase::waited ? s.begin(nullptr) : XR_SUCCESS;
+      XrFrameEndInfo empty{XR_TYPE_FRAME_END_INFO};
+      empty.displayTime = s.frame.predictedDisplayTime;
+      empty.environmentBlendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
+      if (XR_SUCCEEDED(r)) r = s.end(&empty);
+      if (XR_FAILED(r)) failure("LeaveVrMode open frame", r);
+    }
+  } else if (!close_session("LeaveVrMode")) {
     return;
   }
-  destroy_input();
-  auto &v = state();
-  for (auto space : {v.app, v.local, v.stage, v.view})
-    if (space)
-      ::xrDestroySpace(space);
-  v.app = v.local = v.stage = v.view = {};
-  auto r = session().destroy(SessionOwner::vrapi);
-  if (XR_FAILED(r))
-    failure("LeaveVrMode destroy", r);
   v.mobile = nullptr;
   v.token = v.next_token = false;
   wake_frame_waiters();
@@ -582,7 +603,7 @@ Pose vrapi_LocateTrackingSpace(Mobile *mobile, std::int32_t target) {
     failure("LocateTrackingSpace", r);
     return {};
   }
-  hle::openxr::sanitize(loc.locationFlags, loc.pose);
+  venture::xr::sanitize(loc.locationFlags, loc.pose);
   return pose(loc.pose);
 }
 Pose vrapi_GetTrackingTransform(Mobile *mobile, std::int32_t which) {
@@ -613,7 +634,7 @@ Pose vrapi_GetTrackingTransform(Mobile *mobile, std::int32_t which) {
     failure("GetTrackingTransform", r);
     return {};
   }
-  hle::openxr::sanitize(loc.locationFlags, loc.pose);
+  venture::xr::sanitize(loc.locationFlags, loc.pose);
   return pose(loc.pose);
 }
 void set_tracking_transform(Mobile *mobile, const Pose *value) {

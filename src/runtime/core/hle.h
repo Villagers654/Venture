@@ -133,9 +133,14 @@ std::string escaped_import(const std::exception& error);
 class CallContext {
  public:
   CallContext(GuestThread& thread, Cpu& cpu, const FunctionInfo& info, Registers registers = {})
-      : thread_(thread), cpu_(cpu), info_(info), registers_(registers) {}
+      : thread_(&thread), cpu_(cpu), info_(info), registers_(registers) {}
+  // A host whose guest code runs on the host's own threads (the Meta
+  // replacement libraries inside an Android game, cpu/native_entry.h) has no
+  // GuestThread; handlers it runs never call thread().
+  CallContext(Cpu& cpu, const FunctionInfo& info, Registers registers)
+      : thread_(nullptr), cpu_(cpu), info_(info), registers_(registers) {}
 
-  GuestThread& thread() const { return thread_; }
+  GuestThread& thread() const { return *thread_; }
   Cpu& cpu() const { return cpu_; }
   const FunctionInfo& info() const { return info_; }
   void* user() const { return info_.user; }
@@ -166,7 +171,7 @@ class CallContext {
     else if (auto* values = registers_.a32()) values[r] = static_cast<std::uint32_t>(value);
     else cpu_.set_x(r, value);
   }
-  GuestThread& thread_;
+  GuestThread* thread_;
   Cpu& cpu_;
   const FunctionInfo& info_;
   Registers registers_;

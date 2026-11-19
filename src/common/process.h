@@ -32,6 +32,11 @@ public:
   // lifecycle): its stop event on Windows, SIGTERM on POSIX. False when the
   // request could not be delivered.
   bool request_stop();
+  // Waits up to `milliseconds` for the process to exit; its exit code, or none
+  // if it is still running.
+  std::optional<int> wait(unsigned milliseconds);
+  // Ends the process at once (a stop request it did not answer).
+  void terminate();
 
 private:
   struct Impl;

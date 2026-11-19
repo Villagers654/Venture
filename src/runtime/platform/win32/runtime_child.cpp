@@ -12,6 +12,9 @@
 #include "common/environment.h"
 #include <windows.h>
 #include <dbghelp.h>
+#include <winevt.h>
+#include <format>
+#include <vector>
 #include <mutex>
 #include <cstdlib>
 #include <chrono>
@@ -105,6 +108,56 @@ bool request_runtime_stall_dump(unsigned timeout_ms) {
   const auto waited = WaitForSingleObject(complete.value, timeout_ms);
   log::info("startup-snapshot", "native dump attempt completed={} wait={}", waited == WAIT_OBJECT_0, waited);
   return waited == WAIT_OBJECT_0;
+}
+std::string system_crash_record(unsigned long pid, std::chrono::milliseconds wait) {
+  // Windows Error Reporting logs "Application Error" (event 1000) once
+  // WerFault has handled the crash, shortly after the process is gone. Its
+  // ProcessId field is "0x" and lowercase hex.
+  const auto query = std::format(
+      L"*[System[Provider[@Name='Application Error'] and EventID=1000 and TimeCreated[timediff(@SystemTime) <= 900000]]]"
+      L" and *[EventData[Data[@Name='ProcessId']='0x{:x}']]", pid);
+  static constexpr const wchar_t* fields[] = {
+      L"Event/EventData/Data[@Name='ModuleName']", L"Event/EventData/Data[@Name='FaultingOffset']",
+      L"Event/EventData/Data[@Name='ExceptionCode']", L"Event/EventData/Data[@Name='ModuleVersion']",
+      L"Event/EventData/Data[@Name='ModulePath']"};
+  const auto deadline = std::chrono::steady_clock::now() + wait;
+  for (;;) {
+    std::string found;
+    if (EVT_HANDLE results = EvtQuery(nullptr, L"Application", query.c_str(),
+                                      EvtQueryChannelPath | EvtQueryReverseDirection)) {
+      EVT_HANDLE event = nullptr;
+      DWORD returned = 0;
+      if (EvtNext(results, 1, &event, 0, 0, &returned) && returned == 1) {
+        if (EVT_HANDLE context = EvtCreateRenderContext(DWORD(std::size(fields)), const_cast<LPCWSTR*>(fields),
+                                                        EvtRenderContextValues)) {
+          DWORD used = 0, count = 0;
+          EvtRender(context, event, EvtRenderEventValues, 0, nullptr, &used, &count);
+          std::vector<std::byte> buffer(used);
+          if (used && EvtRender(context, event, EvtRenderEventValues, used, buffer.data(), &used, &count) &&
+              count == std::size(fields)) {
+            const auto* values = reinterpret_cast<const EVT_VARIANT*>(buffer.data());
+            auto text = [&](unsigned i) {
+              return values[i].Type == EvtVarTypeString && values[i].StringVal
+                  ? paths::utf8(std::filesystem::path(values[i].StringVal)) : std::string{};
+            };
+            const auto module = text(0), offset = text(1), code = text(2), version = text(3), path = text(4);
+            // FaultingOffset is 16 hex digits; drop the leading zeros.
+            auto short_offset = offset.substr(std::min(offset.find_first_not_of('0'), offset.size()));
+            if (short_offset.empty()) short_offset = "0";
+            found = std::format("Windows Error Reporting: exception 0x{} in {}+0x{}", code.empty() ? "?" : code,
+                                module.empty() ? "unknown" : module, short_offset);
+            if (!path.empty() && path != "unknown")
+              found += std::format(" ({}{})", path, version.empty() || version == "0.0.0.0" ? "" : ", version " + version);
+          }
+          EvtClose(context);
+        }
+        EvtClose(event);
+      }
+      EvtClose(results);
+    }
+    if (!found.empty() || std::chrono::steady_clock::now() >= deadline) return found;
+    Sleep(250);
+  }
 }
 void set_runtime_restart_channel(std::uintptr_t channel) { restart_channel = channel; }
 void set_runtime_launch_channel(std::uintptr_t channel) { launch_channel = channel; }

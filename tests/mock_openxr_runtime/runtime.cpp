@@ -3,6 +3,7 @@
 #include "control.h"
 #include "xr/sampler.h"
 #include "configuration.h"
+#include "headsets.h"
 #include "capture.h"
 #include "terminal_capture.h"
 #include "projection_selection.h"
@@ -203,6 +204,7 @@ struct Chain {
   std::uint32_t sequence = 0;
   std::uint32_t last_released = UINT32_MAX;
 };
+void destroy_images(Chain &c);
 std::map<XrSwapchain, Chain> chains;
 std::int64_t last_end_ns = 0;
 XrTime last_display_time = 0;
@@ -210,6 +212,8 @@ XrTime last_display_time = 0;
 std::vector<XrSwapchainSubImage> last_subimages;
 // Quad layers of the last accepted xrEndFrame, in submission order.
 std::vector<XrCompositionLayerQuad> last_quads;
+// Projection view fields of view of the last accepted xrEndFrame, in submission order.
+std::vector<XrFovf> last_projection_fov;
 // Compositor pacing. A compositor cannot show a frame before the GPU finishes
 // its images, and it lets the app pipeline one frame: xrWaitFrame for frame
 // N+1 returns once frame N-1 is GPU-complete, while N may still render. Each
@@ -929,6 +933,41 @@ XrResult enumerate(std::uint32_t cap, std::uint32_t *count, T *out, const std::v
   std::copy(values.begin(), values.end(), out);
   return XR_SUCCESS;
 }
+// VENTURE_MOCK_HEADSET: a headset runtime's API version and extensions (headsets.h).
+const HeadsetProfile* headset() {
+  const char* name = venture::environment::getenv("VENTURE_MOCK_HEADSET");
+  return name && *name ? headset_profile(name) : nullptr;
+}
+bool unknown_headset() {
+  const char* name = venture::environment::getenv("VENTURE_MOCK_HEADSET");
+  return name && *name && !headset_profile(name);
+}
+float headset_refresh_rate = 0;
+XrResult XRAPI_CALL headset_enumerate_refresh_rates(XrSession s, std::uint32_t cap, std::uint32_t* count, float* out) {
+  std::lock_guard lock(mutex);
+  const auto* profile = headset();
+  if (!profile || s != session) return XR_ERROR_HANDLE_INVALID;
+  return enumerate(cap, count, out, std::vector<float>(profile->refresh_rates.begin(), profile->refresh_rates.end()));
+}
+XrResult XRAPI_CALL headset_get_refresh_rate(XrSession s, float* rate) {
+  std::lock_guard lock(mutex);
+  const auto* profile = headset();
+  if (!profile || s != session) return XR_ERROR_HANDLE_INVALID;
+  if (!rate) return XR_ERROR_VALIDATION_FAILURE;
+  *rate = headset_refresh_rate ? headset_refresh_rate : profile->refresh_rates.front();
+  return XR_SUCCESS;
+}
+XrResult XRAPI_CALL headset_request_refresh_rate(XrSession s, float rate) {
+  std::lock_guard lock(mutex);
+  const auto* profile = headset();
+  if (!profile || s != session) return XR_ERROR_HANDLE_INVALID;
+  if (rate == 0.0f) return XR_SUCCESS;
+  if (profile->refuses_refresh_requests) return XR_ERROR_DISPLAY_REFRESH_RATE_UNSUPPORTED_FB;
+  if (std::ranges::find(profile->refresh_rates, rate) == profile->refresh_rates.end())
+    return XR_ERROR_DISPLAY_REFRESH_RATE_UNSUPPORTED_FB;
+  headset_refresh_rate = rate;
+  return XR_SUCCESS;
+}
 XrResult m_xrEnumerateInstanceExtensionProperties(const char *, std::uint32_t cap,
                                                   std::uint32_t *count,
                                                   XrExtensionProperties *out) {
@@ -1003,11 +1042,26 @@ XrResult m_xrEnumerateInstanceExtensionProperties(const char *, std::uint32_t ca
     e.extensionVersion = 1;
     extensions.push_back(e);
   }
+  if (const auto* profile = headset())
+    for (const auto name : profile->extensions) {
+      XrExtensionProperties e{XR_TYPE_EXTENSION_PROPERTIES};
+      std::memcpy(e.extensionName, name.data(), name.size());
+      e.extensionVersion = 1;
+      extensions.push_back(e);
+    }
   return enumerate(cap, count, out, extensions);
 }
 XrResult m_xrCreateInstance(const XrInstanceCreateInfo *info, XrInstance *out) {
   if (!info || !out || info->type != XR_TYPE_INSTANCE_CREATE_INFO || info->next)
     return XR_ERROR_VALIDATION_FAILURE;
+  if (unknown_headset()) {
+    std::cerr << "[mock-xr] unknown VENTURE_MOCK_HEADSET\n";
+    return XR_ERROR_INITIALIZATION_FAILED;
+  }
+  if (const auto* profile = headset(); profile && (XR_VERSION_MAJOR(info->applicationInfo.apiVersion) != 1 ||
+      XR_VERSION_MINOR(info->applicationInfo.apiVersion) > profile->api_minor))
+    return XR_ERROR_API_VERSION_UNSUPPORTED;
+  headset_refresh_rate = 0;
   input_attachment_usage = false;
   for (std::uint32_t i = 0; i < info->enabledExtensionCount; ++i)
     if (std::string_view(info->enabledExtensionNames[i]) == "XR_KHR_swapchain_usage_input_attachment_bit")
@@ -1334,9 +1388,12 @@ XrResult m_xrDestroySession(XrSession s) {
   if (gated_end) ++destroys_during_end;
   if (s != session)
     return XR_ERROR_HANDLE_INVALID;
-  if (!chains.empty())
-    return XR_ERROR_CALL_ORDER_INVALID;
   capture_writer.drain();
+  // OpenXR: destroying a session destroys its child handles, swapchains included.
+  if (!chains.empty()) vulkan_content.finish();
+  for (auto& [handle, chain] : chains) destroy_images(chain);
+  chains.clear();
+  stats.live_swapchains = 0;
   vulkan_content.release();
   release_frame_fences();
   d3d11::unbind();
@@ -1677,6 +1734,7 @@ XrResult m_xrEndFrame(XrSession, const XrFrameEndInfo *info) {
   }
   std::vector<XrSwapchainSubImage> submitted;
   std::vector<XrCompositionLayerQuad> quads;
+  std::vector<XrFovf> projection_fov;
   std::uint32_t passthrough_fb = 0, passthrough_htc_layers = 0;
   float htc_alpha = 0;
   for (std::uint32_t i = 0; i < info->layerCount; ++i) {
@@ -1722,8 +1780,10 @@ XrResult m_xrEndFrame(XrSession, const XrFrameEndInfo *info) {
             return invalid_layer(layer->type, "space-warp info");
           ++stats.space_warp;
         }
-      for (std::uint32_t eye = 0; eye < p.viewCount; ++eye)
+      for (std::uint32_t eye = 0; eye < p.viewCount; ++eye) {
         submitted.push_back(p.views[eye].subImage);
+        projection_fov.push_back(p.views[eye].fov);
+      }
       ++stats.projection;
       break;
     }
@@ -1804,6 +1864,7 @@ XrResult m_xrEndFrame(XrSession, const XrFrameEndInfo *info) {
   fence_frame();
   last_subimages = std::move(submitted);
   last_quads = std::move(quads);
+  last_projection_fov = std::move(projection_fov);
   stats.passthrough_fb = passthrough_fb;
   stats.passthrough_htc = passthrough_htc_layers;
   stats.passthrough_htc_alpha = htc_alpha;
@@ -1990,6 +2051,7 @@ XrResult m_xrDestroySwapchain(XrSwapchain h) {
   auto it = chains.find(h);
   if (it == chains.end())
     return XR_ERROR_HANDLE_INVALID;
+  ++stats.swapchain_destroys;
   capture_writer.drain();
   vulkan_content.finish();
   destroy_images(it->second);
@@ -2672,6 +2734,14 @@ XrResult m_xrGetInstanceProcAddr(XrInstance, const char *name, PFN_xrVoidFunctio
   for (const auto &entry : dispatch)
     if (std::strcmp(name, entry.name) == 0)
       *out = entry.function;
+  if (const auto* profile = headset(); profile && !profile->refresh_rates.empty()) {
+    if (std::strcmp(name, "xrEnumerateDisplayRefreshRatesFB") == 0)
+      *out = reinterpret_cast<PFN_xrVoidFunction>(&headset_enumerate_refresh_rates);
+    if (std::strcmp(name, "xrGetDisplayRefreshRateFB") == 0)
+      *out = reinterpret_cast<PFN_xrVoidFunction>(&headset_get_refresh_rate);
+    if (std::strcmp(name, "xrRequestDisplayRefreshRateFB") == 0)
+      *out = reinterpret_cast<PFN_xrVoidFunction>(&headset_request_refresh_rate);
+  }
   return *out ? XR_SUCCESS : XR_ERROR_FUNCTION_UNSUPPORTED;
 }
 } // namespace mock
@@ -2682,7 +2752,8 @@ extern "C" VENTURE_MOCK_EXPORT XrResult XRAPI_CALL xrNegotiateLoaderRuntimeInter
       request->structSize != sizeof(XrNegotiateRuntimeRequest))
     return XR_ERROR_INITIALIZATION_FAILED;
   request->runtimeInterfaceVersion = 1;
-  request->runtimeApiVersion = XR_MAKE_VERSION(1, 0, 0);
+  const auto* profile = mock::headset();
+  request->runtimeApiVersion = XR_MAKE_VERSION(1, profile ? profile->api_minor : 0, 0);
   request->getInstanceProcAddr = &mock::m_xrGetInstanceProcAddr;
   return XR_SUCCESS;
 }
@@ -2691,6 +2762,23 @@ extern "C" VENTURE_MOCK_EXPORT void ventureMockXrSetProfile(const char *profile)
   std::lock_guard lock(mock::mutex);
   mock::profile_override = profile ? profile : "";
   mock::profile_changed = true;
+}
+extern "C" VENTURE_MOCK_EXPORT std::uint32_t ventureMockXrSuggestedBindings(const char *profile, char *out,
+                                                                          std::uint32_t capacity) {
+  std::lock_guard lock(mock::mutex);
+  std::string text;
+  for (const auto &[path, bindings] : mock::bindings) {
+    const auto name = mock::path_names.find(path);
+    if (name == mock::path_names.end() || name->second != profile) continue;
+    for (const auto &binding : bindings)
+      if (const auto it = mock::path_names.find(binding.binding); it != mock::path_names.end()) text += it->second + '\n';
+  }
+  if (out && capacity) {
+    const auto size = std::min<std::size_t>(text.size(), capacity - 1);
+    std::memcpy(out, text.data(), size);
+    out[size] = 0;
+  }
+  return static_cast<std::uint32_t>(text.size() + 1);
 }
 extern "C" VENTURE_MOCK_EXPORT void ventureMockXrSetScript(const MockXrScript *s) {
   std::lock_guard lock(mock::mutex);
@@ -2733,6 +2821,13 @@ extern "C" VENTURE_MOCK_EXPORT std::uint32_t ventureMockXrLastSubImages(XrSwapch
   const auto count = static_cast<std::uint32_t>(mock::last_subimages.size());
   for (std::uint32_t i = 0; out && i < count && i < capacity; ++i)
     out[i] = mock::last_subimages[i];
+  return count;
+}
+extern "C" VENTURE_MOCK_EXPORT std::uint32_t ventureMockXrLastProjectionFov(XrFovf *out, std::uint32_t capacity) {
+  std::lock_guard lock(mock::mutex);
+  const auto count = static_cast<std::uint32_t>(mock::last_projection_fov.size());
+  for (std::uint32_t i = 0; out && i < count && i < capacity; ++i)
+    out[i] = mock::last_projection_fov[i];
   return count;
 }
 extern "C" VENTURE_MOCK_EXPORT std::uint32_t ventureMockXrLastQuads(XrCompositionLayerQuad *out,

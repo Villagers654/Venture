@@ -145,7 +145,28 @@ bool flatpak_steamvr() {
   // SteamVR's manifest is a link into the Steam library, which the sandbox may not see.
   if (auto target = std::filesystem::read_symlink(manifest, ec); !ec) path += " " + target.string();
   std::ostringstream contents;
-  if (std::ifstream file(manifest); file) contents << file.rdbuf();
-  return steamvr_manifest(path, contents.str());
+  std::ifstream file(manifest);
+  if (file) contents << file.rdbuf();
+  if (!steamvr_manifest(path, contents.str())) return false;
+  // The Flatpak exposes SteamVR's folder (tools/packaging/linux): it is
+  // unreachable when the manifest or its client library is not there.
+  if (!file) return true;
+  return !std::filesystem::exists(std::filesystem::path(steamvr_library(manifest.string(), contents.str())), ec);
+}
+std::string steamvr_library(std::string_view manifest_path, std::string_view contents) {
+  const std::filesystem::path manifest(manifest_path);
+  // "library_path": "<path>", relative to the manifest's real folder.
+  constexpr std::string_view key = "\"library_path\"";
+  auto at = contents.find(key);
+  if (at == std::string_view::npos) return {};
+  at = contents.find('"', contents.find(':', at + key.size()));
+  if (at == std::string_view::npos) return {};
+  const auto end = contents.find('"', at + 1);
+  if (end == std::string_view::npos) return {};
+  std::filesystem::path library(std::string(contents.substr(at + 1, end - at - 1)));
+  if (library.is_absolute()) return library.generic_string();
+  std::error_code ec;
+  auto real = std::filesystem::canonical(manifest, ec);
+  return ((ec ? manifest : real).parent_path() / library).generic_string();
 }
 } // namespace venture::environment

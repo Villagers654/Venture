@@ -1154,20 +1154,6 @@ static void EmitFPRecipStepFused(BlockOfCode& code, EmitContext& ctx, IR::Inst* 
     auto args = ctx.reg_alloc.GetArgumentInfo(inst);
 
     if constexpr (fsize != 16) {
-        if (code.HasHostFeature(HostFeature::FMA) && ctx.HasOptimization(OptimizationFlag::Unsafe_InaccurateNaN)) {
-            Xbyak::Label end, fallback;
-
-            const Xbyak::Xmm operand1 = ctx.reg_alloc.UseXmm(code, args[0]);
-            const Xbyak::Xmm operand2 = ctx.reg_alloc.UseXmm(code, args[1]);
-            const Xbyak::Xmm result = ctx.reg_alloc.ScratchXmm(code);
-
-            code.movaps(result, code.Const(xword, FP::FPValue<FPT, false, 0, 2>()));
-            FCODE(vfnmadd231s)(result, operand1, operand2);
-
-            ctx.reg_alloc.DefineValue(code, inst, result);
-            return;
-        }
-
         if (code.HasHostFeature(HostFeature::FMA)) {
             SharedLabel end = ctx.GenSharedLabel(), fallback = ctx.GenSharedLabel();
 
@@ -1507,19 +1493,6 @@ static void EmitFPRSqrtStepFused(BlockOfCode& code, EmitContext& ctx, IR::Inst* 
     auto args = ctx.reg_alloc.GetArgumentInfo(inst);
 
     if constexpr (fsize != 16) {
-        if (code.HasHostFeature(HostFeature::FMA | HostFeature::AVX) && ctx.HasOptimization(OptimizationFlag::Unsafe_InaccurateNaN)) {
-            const Xbyak::Xmm operand1 = ctx.reg_alloc.UseXmm(code, args[0]);
-            const Xbyak::Xmm operand2 = ctx.reg_alloc.UseXmm(code, args[1]);
-            const Xbyak::Xmm result = ctx.reg_alloc.ScratchXmm(code);
-
-            code.vmovaps(result, code.Const(xword, FP::FPValue<FPT, false, 0, 3>()));
-            FCODE(vfnmadd231s)(result, operand1, operand2);
-            FCODE(vmuls)(result, result, code.Const(xword, FP::FPValue<FPT, false, -1, 1>()));
-
-            ctx.reg_alloc.DefineValue(code, inst, result);
-            return;
-        }
-
         if (code.HasHostFeature(HostFeature::FMA | HostFeature::AVX)) {
             SharedLabel end = ctx.GenSharedLabel(), fallback = ctx.GenSharedLabel();
 

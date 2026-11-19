@@ -6,6 +6,8 @@
 #include "common/openxr_layers.h"
 #include "common/process.h"
 #include "common/saves_migration.h"
+#include "common/stall_record.h"
+#include "common/library/mods.h"
 #include "common/steam_library.h"
 #include "common/json.h"
 #include <algorithm>
@@ -183,7 +185,10 @@ std::string first_line_with(const fs::path &file, std::string_view prefix) {
 }
 
 void system_section(std::string &out) {
-  std::string os = first_line_with("/etc/os-release", "PRETTY_NAME=");
+  // In a Flatpak /etc/os-release names its runtime; the host's is in /run/host.
+  std::error_code host_ec;
+  const bool sandboxed = std::getenv("FLATPAK_ID") && fs::exists("/run/host/os-release", host_ec);
+  std::string os = first_line_with(sandboxed ? "/run/host/os-release" : "/etc/os-release", "PRETTY_NAME=");
   std::erase(os, '"');
   utsname u{};
   uname(&u);
@@ -191,6 +196,11 @@ void system_section(std::string &out) {
   const char *desktop = std::getenv("XDG_CURRENT_DESKTOP"), *session = std::getenv("XDG_SESSION_TYPE");
   out += std::format("Desktop: {} ({})\n", desktop ? desktop : "unknown", session ? session : "unknown session");
   std::string cpu = first_line_with("/proc/cpuinfo", "model name\t: ");
+  // Arm CPUs have no model name there: the device's name from the device tree or firmware.
+  if (cpu.empty()) cpu = read_file("/sys/firmware/devicetree/base/model");
+  if (cpu.empty()) cpu = read_file("/sys/devices/virtual/dmi/id/product_name");
+  std::erase(cpu, '\0');
+  std::erase(cpu, '\n');
   out += std::format("CPU: {} ({} threads)\n", cpu, std::thread::hardware_concurrency());
   long pages = sysconf(_SC_PHYS_PAGES), avail = sysconf(_SC_AVPHYS_PAGES), size = sysconf(_SC_PAGE_SIZE);
   out += std::format("RAM: {:.1f} GiB, {:.1f} GiB free\n", double(pages) * size / 1073741824.0,
@@ -330,6 +340,7 @@ void settings_section(std::string &out, const fs::path &data, const std::string 
       if (!game->rate.empty()) lines += std::format("  frame rate: {}\n", library::frame_rate_environment(*game));
       if (!game->mirror.empty()) lines += std::format("  mirror: {}\n", game->mirror);
       if (!game->mirror_eye.empty()) lines += std::format("  mirror eye: {}\n", game->mirror_eye);
+      if (!game->mirror_fullscreen.empty()) lines += std::format("  mirror fullscreen: {}\n", game->mirror_fullscreen);
       if (!game->pc_audio.empty()) lines += std::format("  PC audio: {}\n", game->pc_audio);
       if (!game->match_resolution.empty())
         lines += std::format("  match game resolution: {}\n", game->match_resolution);
@@ -363,6 +374,9 @@ void settings_section(std::string &out, const fs::path &data, const std::string 
                      source(game && !game->mirror.empty(), s.display.mirror == global.mirror),
                      library::mirror_eye_environment(display),
                      source(game && !game->mirror_eye.empty(), s.display.mirror_eye == global.mirror_eye));
+  out += std::format("  mirror fullscreen: {} ({})\n", library::mirror_fullscreen_environment(display),
+                     source(game && !game->mirror_fullscreen.empty(),
+                            s.display.mirror_fullscreen == global.mirror_fullscreen));
   out += std::format("  PC audio: {} ({})\n", library::pc_audio_environment(display),
                      source(game && !game->pc_audio.empty(), s.display.pc_audio == global.pc_audio));
   out += std::format("  match game resolution: {} ({})\n", library::eye_scale_environment(display),
@@ -395,6 +409,8 @@ void settings_section(std::string &out, const fs::path &data, const std::string 
                      source(false, s.passthrough == defaults.passthrough));
   if (s.passthrough && s.color_key) out += std::format("  passthrough color key: #{}\n", s.key_color);
   out += std::format("  game language: {}\n", s.game_language.empty() ? "the system's" : s.game_language);
+  out += std::format("  VR runtime: {}\n", s.xr_runtime.empty() ? "the system's active runtime (global default)"
+                                                                : s.xr_runtime + " (global setting)");
   out += std::format("  log level: {} ({})\n", s.log_level, source(false, s.log_level == defaults.log_level));
 
   out += "Runtime toggles:\n";
@@ -485,6 +501,17 @@ void timeline_section(std::string &out, const fs::path &file) {
   }
   for (std::size_t i = 0; i < kKeep; ++i) out += lines[i * (lines.size() - 1) / (kKeep - 1)] + "\n";
 }
+
+// The runtime's "[stall]" records (common/stall_record.h) from the whole log: where
+// the game's threads were each time its frames stopped for 250 ms or more.
+std::vector<stall::Record> stall_records(const fs::path &file) {
+  std::ifstream in(file, std::ios::binary);
+  std::string lines;
+  for (std::string line; std::getline(in, line);)
+    if (line.find(" [stall] #") != std::string::npos) lines += line.substr(0, 2048) + "\n";
+  return stall::parse_log(lines);
+}
+void stalls_section(std::string &out, const fs::path &file) { out += stall::report_section(stall_records(file)); }
 
 // The game's layer arrangements ("[xr-layers]": what it submits and what the host is
 // given) and the host session states, from the whole log, which log_section cuts in
@@ -660,11 +687,19 @@ struct Window {
 
 #ifndef _WIN32
 fs::path which(std::string_view name) {
+#ifdef __ANDROID__
+  // The desktop tools (lspci, systemctl, journalctl...) are not run on a
+  // headset: its Headset section says what matters, and an app's child
+  // blocks signals until it execs, so a child stuck before exec (seen under
+  // ARM translation) would hold the report past its timeout.
+  (void)name;
+#else
   const char *path = std::getenv("PATH");
   for (auto dir : std::views::split(std::string_view(path ? path : "/usr/bin:/bin"), ':')) {
     fs::path candidate = fs::path(std::string(dir.begin(), dir.end())) / name;
     if (access(candidate.c_str(), X_OK) == 0) return candidate;
   }
+#endif
   return {};
 }
 #else
@@ -1049,25 +1084,29 @@ std::string redact(std::string text, const std::vector<std::string> &private_tex
   return out;
 }
 
+std::string latest_launched_package(const fs::path &data) {
+  std::error_code ec;
+  std::string package;
+  // libstdc++'s file clock epoch is in 2174, so present times are negative.
+  auto newest = fs::file_time_type::min();
+  for (const auto &e : fs::directory_iterator(data / "logs", ec)) {
+    std::string name = paths::utf8(e.path().filename());
+    if (!name.starts_with("runtime-") || !name.ends_with(".log") || name.ends_with(".prev.log") ||
+        name.ends_with(".console.log") || name.find("-hs_err-") != std::string::npos)
+      continue;
+    if (auto t = e.last_write_time(ec); !ec && t > newest) {
+      newest = t;
+      package = name.substr(8, name.size() - 12);
+    }
+  }
+  return package;
+}
+
 fs::path write_debug_report(const DebugReport &request) {
   const fs::path logs = request.data / "logs";
   std::error_code ec;
   // The game: the one asked for, else the most recently written runtime log.
-  std::string package = request.package;
-  if (package.empty()) {
-    // libstdc++'s file clock epoch is in 2174, so present times are negative.
-    auto newest = fs::file_time_type::min();
-    for (const auto &e : fs::directory_iterator(logs, ec)) {
-      std::string name = paths::utf8(e.path().filename());
-      if (!name.starts_with("runtime-") || !name.ends_with(".log") || name.ends_with(".prev.log") ||
-          name.ends_with(".console.log") || name.find("-hs_err-") != std::string::npos)
-        continue;
-      if (auto t = e.last_write_time(ec); !ec && t > newest) {
-        newest = t;
-        package = name.substr(8, name.size() - 12);
-      }
-    }
-  }
+  std::string package = request.package.empty() ? latest_launched_package(request.data) : request.package;
 
   auto now = std::chrono::system_clock::now();
   std::string out = "Venture debug report\n";
@@ -1113,8 +1152,14 @@ fs::path write_debug_report(const DebugReport &request) {
            "stay on a black or loading screen.\n";
     steps.push_back("Sign in with Meta in Venture (the account that owns the game), then start the game again.");
   } else if (!run->failed) {
-    out += "The last run did not fail. If the problem happened in an earlier run, start the game again, "
-           "reproduce it, then send a new report.\n";
+    // A run that did not fail but froze: clear evidence of a Venture-side cause names it.
+    if (const auto stalls = stall::venture_cause(stall_records(runtime_log))) {
+      out += stalls->cause + "\n";
+      steps.push_back(stalls->advice);
+    } else {
+      out += "The last run did not fail. If the problem happened in an earlier run, start the game again, "
+             "reproduce it, then send a new report.\n";
+    }
   } else if (!library::missing_expansion(runtime_log).empty()) {
     // Not a log signature: games probe for optional patch OBBs at every start
     // (UE4 and Unity), so only a probe the game then failed on counts.
@@ -1168,6 +1213,7 @@ fs::path write_debug_report(const DebugReport &request) {
 
   out += "\n=== System ===\n";
   system_section(out);
+  if (!request.headset.empty()) out += "\n=== Headset ===\n" + request.headset;
   out += "\n=== VR runtime ===\n";
   xr_section(out);
   out += layer_lines;
@@ -1187,21 +1233,49 @@ fs::path write_debug_report(const DebugReport &request) {
     if (!text.empty()) out += std::format("\n=== Installed game (plan.json) ===\n{}\n", text);
     // A library card says "Partly downloaded" for any of these.
     try {
-      auto problems = library::install_problems(request.plan.parent_path(),
-                                                meta::parse_plan(paths::read_json(request.plan)));
+      const auto plan = meta::parse_plan(paths::read_json(request.plan));
+      auto problems = library::install_problems(request.plan.parent_path(), plan);
+      const auto replaced = library::replaced_files(request.plan.parent_path(), plan);
       out += "\n=== Installed files ===\n";
-      if (problems.empty()) out += "All required files are present with their recorded sizes.\n";
+      if (problems.empty())
+        out += replaced.empty() ? "All required files are present with their recorded sizes.\n"
+                                : "All required files are present.\n";
       for (auto &p : problems) out += p + "\n";
+      for (auto &r : replaced) out += r + "\n";
     } catch (const std::exception &) {
     }
   }
   if (!package.empty() && paths::safe_package(package)) {
-    // Files the player put in the mods folder replace same-named installed files.
-    std::string mods;
-    for (const auto &e : fs::directory_iterator(mods_dir(request.data, package), ec))
-      if (e.is_regular_file(ec))
-        mods += std::format("{} ({} bytes)\n", paths::utf8(e.path().filename()), e.file_size(ec));
-    if (!mods.empty()) out += "\n=== Mods folder ===\n" + mods;
+    // Installed mod packages (.qmod), the files they took, the loader and
+    // whether the APK is a patched one.
+    try {
+      // A pinned version keeps its own, named by its folder.
+      std::string pin;
+      if (!request.plan.empty()) try {
+          if (meta::parse_plan(paths::read_json(request.plan)).pinned) pin = paths::utf8(request.plan.parent_path().filename());
+        } catch (const std::exception &) {
+        }
+      const auto folder = mods_dir(request.data, package, pin);
+      std::string installed;
+      for (const auto &m : venture::mods::list(folder))
+        installed += std::format("{} {} ({}{}{})\n", m.manifest.id, m.manifest.version,
+                                 venture::mods::loader_name(m.manifest.loader), m.enabled ? "" : ", off",
+                                 m.dependency ? ", dependency" : "");
+      for (const auto &item : venture::mods::items(folder)) installed += "file for mods: " + item.name + "\n";
+      if (!venture::mods::loader_file(folder).empty()) installed += "Scotland2 loader: present\n";
+      if (!request.plan.empty()) {
+        std::string apk;
+        for (const auto &f : meta::parse_plan(paths::read_json(request.plan)).files)
+          if (f.kind == "apk") apk = f.name;
+        if (const auto loader = apk.empty() ? std::nullopt
+                                            : venture::mods::apk_loader(request.plan.parent_path() / paths::from_utf8(apk)))
+          installed += std::format("APK patched with the {} mod loader\n", venture::mods::loader_name(*loader));
+        if (!venture::mods::original_apk(request.plan.parent_path()).empty()) installed += "Original APK kept\n";
+      }
+      if (!installed.empty()) out += "\n=== Mods ===\n" + installed;
+    } catch (const std::exception &e) {
+      out += std::format("\n=== Mods ===\nunreadable: {}\n", e.what());
+    }
   }
 
   if (!package.empty()) {
@@ -1250,6 +1324,7 @@ fs::path write_debug_report(const DebugReport &request) {
     }
     facts_section(out, logs / (base + ".log"));
     timeline_section(out, logs / (base + ".log"));
+    stalls_section(out, logs / (base + ".log"));
     layers_section(out, logs / (base + ".log"));
     missing_classes_section(out, logs / (base + ".log"));
     if (window) {
@@ -1262,6 +1337,7 @@ fs::path write_debug_report(const DebugReport &request) {
     log_section(out, logs / (base + ".prev.log"), kSideLog);
     log_section(out, logs / (base + ".console.prev.log"), kSideLog);
   }
+  for (const auto &file : request.headset_logs) log_section(out, file, kSideLog);
   log_section(out, logs / "launcher.log", kLauncherLog);
   // A game started from Steam or a shortcut logs its launcher separately.
   fs::path direct;

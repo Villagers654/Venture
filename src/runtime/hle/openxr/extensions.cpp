@@ -13,23 +13,7 @@
 
 namespace venture::hle::openxr {
 XrResult refresh_rate(XrSession handle, float *out) {
-  if (!out)
-    return XR_ERROR_VALIDATION_FAILURE;
-  std::lock_guard sl(session().mutex);
-  if (handle && host_xr().enabled_extensions.contains("XR_FB_display_refresh_rate")) {
-    float rate = 0;
-    auto result = host_call<PFN_xrGetDisplayRefreshRateFB, "xrGetDisplayRefreshRateFB">(handle, &rate);
-    // Before the host session runs it may not expose the mode yet. Keep the
-    // same shared fallback as Android until the first period is available.
-    if (XR_FAILED(result) && result != XR_ERROR_SESSION_NOT_RUNNING) return result;
-    if (XR_SUCCEEDED(result)) {
-      if (!std::isfinite(rate) || rate <= 0) return XR_ERROR_RUNTIME_FAILURE;
-      session().observe_display_period(std::int64_t(std::llround(1e9 / rate)),
-                                       xr::DisplayTiming::Source::host);
-    }
-  }
-  *out = session().display_timing.rate();
-  return XR_SUCCESS;
+  return venture::xr::display_refresh_rate(handle, out);
 }
 namespace guest {
 namespace {

@@ -7,8 +7,11 @@
 #include "common/saves_migration.h"
 #include "hle/ovrplatform/broker.h"
 #include "common/log.h"
+#include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <csignal>
+#include <fstream>
 #include "launcher/ui/logo.h"
 #include "launcher/ui/style.h"
 #include "launcher/window_style.h"
@@ -42,7 +45,16 @@ void save_screenshot(SDL_Renderer *renderer, const fs::path &file) {
 // display's scale (Windows' DPI scale, Wayland's buffer scale such as 1.25 or
 // 1.5), so text, logos and edges are rasterized for the pixels they land on.
 static float ui_scale(SDL_Window *window) {
+#ifdef __ANDROID__
+  // A headset panel has a fixed size the user does not drag: the display's
+  // scale, but never so large that the narrowest layout (900 x 620) overflows.
+  int width = 0, height = 0;
+  SDL_GetWindowSizeInPixels(window, &width, &height);
+  const float fit = width > 0 && height > 0 ? std::min(width / 900.f, height / 620.f) : 1.f;
+  return std::max(1.f, std::min(SDL_GetWindowDisplayScale(window), fit));
+#else
   return std::max(1.f, SDL_GetWindowDisplayScale(window));
+#endif
 }
 // Pixels per window coordinate: 1 on Windows, the buffer scale on Wayland.
 static float pixel_density(SDL_Window *window) {
@@ -89,7 +101,15 @@ App::App(Options options) : Core(std::move(options)) {
   settings_adb_ = paths::utf8(settings_.adb);
   settings_key_hex_ = settings_.key_color;
   prefer_native_video_driver();
-  if (!SDL_Init(SDL_INIT_VIDEO))
+#if defined(__linux__) && !defined(__ANDROID__)
+  // A gamepad moves through the launcher like the keyboard (SteamOS's game
+  // mode and the Steam Frame give apps a gamepad); touch and controller rays
+  // arrive as mouse input.
+  constexpr SDL_InitFlags kSubsystems = SDL_INIT_VIDEO | SDL_INIT_GAMEPAD;
+#else
+  constexpr SDL_InitFlags kSubsystems = SDL_INIT_VIDEO;
+#endif
+  if (!SDL_Init(kSubsystems))
     throw std::runtime_error(std::string(video_unavailable_message()) + " (" + SDL_GetError() + ")");
   window_ = SDL_CreateWindow(
       "Venture", 1380, 880,
@@ -126,6 +146,7 @@ App::App(Options options) : Core(std::move(options)) {
   ImGui::CreateContext();
   auto &io = ImGui::GetIO();
   io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+  if (kSubsystems & SDL_INIT_GAMEPAD) io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
   io.IniFilename = nullptr;
   ui::load_fonts();
   theme();
@@ -149,7 +170,7 @@ App::App(Options options) : Core(std::move(options)) {
       options_.smoke_view.starts_with("library-") && colon != std::string::npos)
     search_ = options_.smoke_view.substr(colon + 1);
   if (options_.smoke_view == "settings" || options_.smoke_view == "settings-end" ||
-      options_.smoke_view == "settings-runtime")
+      options_.smoke_view == "settings-runtime" || options_.smoke_view == "settings-runtime-xr")
     page_ = 2;
   // The texture compression warning from Settings > Runtime (nothing is changed).
   if (options_.smoke_view == "settings-runtime-texture-warning") {
@@ -204,7 +225,9 @@ App::App(Options options) : Core(std::move(options)) {
     update_->file = update::Asset{"Venture-windows64-setup.exe", release + "download/v0.1.1/Venture-windows64-setup.exe"};
     update_->sums = update::Asset{"SHA256SUMS", release + "download/v0.1.1/SHA256SUMS"};
   }
-  if (!options_.smoke_import.empty())
+  // Screenshots of the Controls page read a controls file there (draw_controls).
+  if (!options_.smoke_import.empty() &&
+      !(options_.smoke_view.starts_with("controls") && options_.smoke_import.extension() == ".json"))
     scan_local(options_.smoke_import);
 }
 App::~App() {
@@ -442,6 +465,7 @@ SDL_Texture *App::discord_logo(int pixels) {
 void App::tick() {
   Core::tick();
   take_import_picks();
+  take_controls_files();
   textures_->drain();
   for (auto &g : visible_games())
     textures_->request(g, !options_.offline, store_id_of(g.id));
@@ -490,6 +514,41 @@ void App::choose_save_folder(const std::string &app_id) {
   SDL_ShowOpenFolderDialog(picked, new Pick{this, app_id}, window_, nullptr, false);
 }
 
+void App::choose_controls_file(bool save, const std::string &game) {
+  auto picked = [](void *data, const char *const *files, int) {
+    std::unique_ptr<std::pair<App *, ControlsFilePick>> pick(static_cast<std::pair<App *, ControlsFilePick> *>(data));
+    if (!files) {
+      log::warn("controls", "The file dialog failed: {}", SDL_GetError());
+      return;
+    }
+    if (!*files) return;  // cancelled
+    pick->second.file = paths::from_utf8(*files);
+    {
+      std::lock_guard lock(pick->first->import_mutex_);
+      pick->first->controls_file_picks_.push_back(std::move(pick->second));
+    }
+    pick->first->wake();
+  };
+  static const SDL_DialogFileFilter filters[] = {{"Controls (Venture or SteamVR)", "json"}};
+  auto *pick = new std::pair<App *, ControlsFilePick>{this, {save, game, {}}};
+  if (save)
+    SDL_ShowSaveFileDialog(picked, pick, window_, filters, 1, nullptr);
+  else
+    SDL_ShowOpenFileDialog(picked, pick, window_, filters, 1, nullptr, false);
+}
+
+void App::take_controls_files() {
+  std::vector<ControlsFilePick> picks;
+  {
+    std::lock_guard lock(import_mutex_);
+    picks.swap(controls_file_picks_);
+  }
+  for (auto &p : picks) {
+    if (p.save) export_controls(p.file, p.game);
+    else import_controls(p.file, p.game);
+  }
+}
+
 void App::take_import_picks() {
   std::vector<fs::path> picks;
   std::vector<std::pair<std::string, fs::path>> save_picks;
@@ -500,6 +559,53 @@ void App::take_import_picks() {
   }
   for (auto &p : picks) scan_local(p);
   for (auto &[id, folder] : save_picks) action([&] { import_saves_later(id, folder); });
+  std::vector<ModPick> mod_picks;
+  {
+    std::lock_guard lock(import_mutex_);
+    mod_picks.swap(mod_picks_);
+  }
+  for (auto &[id, obb, file] : mod_picks)
+    action([&] {
+      if (!obb.empty()) return replace_obb(id, obb, file);
+      if (!add_mod_file(file, id))
+        throw std::runtime_error(i18n::trf("No mod of this game takes {0}.", paths::utf8(file.filename())));
+    });
+}
+
+void App::take_dropped(const fs::path &file) {
+  const std::string shown = page_ == 0 ? selected_ : std::string();
+  bool taken = false, failed = false;
+  try {
+    std::error_code ec;
+    taken = fs::is_regular_file(file, ec) && add_mod_file(file, shown);
+  } catch (...) {
+    error(exception_text());
+    failed = true;
+  }
+  if (!taken && !failed) scan_local(file);
+}
+
+void App::choose_mod_file(const std::string &app_id, const std::string &obb) {
+  struct Pick {
+    App *app;
+    std::string id, obb;
+  };
+  auto picked = [](void *data, const char *const *files, int) {
+    std::unique_ptr<Pick> pick(static_cast<Pick *>(data));
+    if (!files) {
+      log::warn("mods", "The file dialog failed: {}", SDL_GetError());
+      return;
+    }
+    {
+      std::lock_guard lock(pick->app->import_mutex_);
+      for (auto f = files; *f; ++f) pick->app->mod_picks_.push_back({pick->id, pick->obb, paths::from_utf8(*f)});
+    }
+    pick->app->wake();
+  };
+  static const SDL_DialogFileFilter filters[] = {{"Mods and patched APKs", "qmod;apk;so"}, {"All files", "*"}};
+  static const SDL_DialogFileFilter obb_filters[] = {{"Expansion files", "obb"}, {"All files", "*"}};
+  SDL_ShowOpenFileDialog(picked, new Pick{this, app_id, obb}, window_, obb.empty() ? filters : obb_filters, 2, nullptr,
+                         obb.empty());
 }
 
 void App::report_smoke() {
@@ -594,9 +700,25 @@ int App::run() {
       if (e.type >= SDL_EVENT_KEY_DOWN && e.type <= SDL_EVENT_MOUSE_WHEEL)
         last_input_ = SDL_GetTicks();
       // A dropped APK, folder or archive opens the import page with it.
-      if (e.type == SDL_EVENT_DROP_FILE && e.drop.data)
-        scan_local(paths::from_utf8(e.drop.data));
-      if (e.type == SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED) {
+      // A .json dropped on a Controls page is a controls file. Mods (a .qmod,
+      // a patched APK of an installed version, a file a game's mod takes on its
+      // page) go to their game.
+      if (e.type == SDL_EVENT_DROP_FILE && e.drop.data) {
+        const auto file = paths::from_utf8(e.drop.data);
+        auto ext = file.extension().string();
+        std::ranges::transform(ext, ext.begin(), [](unsigned char c) { return char(std::tolower(c)); });
+        if (ext == ".json" && ImGui::GetFrameCount() - controls_drawn_frame_ <= 2)
+          import_controls(file, controls_drawn_game_);
+        else
+          take_dropped(file);
+      }
+#ifdef __ANDROID__
+      const bool rescale = e.type == SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED ||
+                           e.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED;
+#else
+      const bool rescale = e.type == SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED;
+#endif
+      if (rescale) {
         scale_ = ui_scale(window_) * float(settings_.interface_size) / 100;
         theme();
       }
@@ -693,7 +815,31 @@ int App::run() {
         }
     }
     smoke_install();
+    // --smoke-debug-report: the one-button debug report, once the library is read.
+    if (!options_.smoke_debug_report.empty() && !smoke_debug_reported_ && !refreshing_ && !scanning_) {
+      smoke_debug_reported_ = true;
+      try {
+        const auto report = save_debug_report(options_.smoke_select, VENTURE_VERSION);
+        if (options_.smoke_debug_report == "log") {
+          // Each line into the log (on Android, logcat, where adb reads it).
+          std::ifstream in(report, std::ios::binary);
+          for (std::string line; std::getline(in, line);) log::info("report", "| {}", line);
+        } else {
+          fs::copy_file(report, options_.smoke_debug_report, fs::copy_options::overwrite_existing);
+        }
+        log::info("launcher", "Smoke debug report written.");
+        smoke_exit_ = 0;
+      } catch (...) {
+        log::warn("launcher", "Smoke debug report failed: {}", exception_text());
+        smoke_exit_ = 1;
+      }
+    }
     smoke_import();
+    if (!options_.smoke_drops.empty() && !smoke_dropped_ && !installs_.empty() &&
+        (options_.smoke_select.empty() || selected_ == options_.smoke_select)) {
+      smoke_dropped_ = true;
+      for (const auto &file : options_.smoke_drops) take_dropped(file);
+    }
     if (options_.smoke_auth && !smoke_auth_opened_ && !refreshing_) {
       smoke_auth_opened_ = true;
       sign_in();

@@ -75,6 +75,8 @@ struct DisplaySettings {
   std::string mirror = "cropped";
   // The eye the mirror shows: "left" or "right"; "" follows the global setting.
   std::string mirror_eye = "left";
+  // The mirror opens fullscreen: "on" or "off"; "" follows the global setting.
+  std::string mirror_fullscreen = "off";
   // The game's audio also on the PC's own output (the system default) while it
   // plays on the headset: "on" or "off"; "" follows the global setting.
   std::string pc_audio = "off";
@@ -111,6 +113,8 @@ std::string frame_rate_environment(const DisplaySettings &d);
 std::string mirror_environment(const DisplaySettings &d);
 // VENTURE_MIRROR_EYE for effective settings.
 std::string mirror_eye_environment(const DisplaySettings &d);
+// VENTURE_MIRROR_FULLSCREEN for effective settings: "on" or "off".
+std::string mirror_fullscreen_environment(const DisplaySettings &d);
 // VENTURE_PC_AUDIO for effective settings: "on" or "off".
 std::string pc_audio_environment(const DisplaySettings &d);
 // VENTURE_EYE_SCALE for effective settings: "auto" or "off".

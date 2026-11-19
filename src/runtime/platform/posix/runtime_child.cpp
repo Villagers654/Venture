@@ -50,6 +50,8 @@ void write_packet(int fd, std::string_view packet) {
 }
 }
 std::optional<int> run_runtime_dump_helper(int, char**) { return std::nullopt; }
+// Fatal signals reach Venture's own handlers here (platform/posix/crash_report.cpp).
+std::string system_crash_record(unsigned long, std::chrono::milliseconds) { return {}; }
 void set_runtime_restart_channel(std::uintptr_t channel) { restart_channel = static_cast<int>(channel); }
 void set_runtime_launch_channel(std::uintptr_t channel) { launch_channel = static_cast<int>(channel); }
 void set_runtime_teardown_channel(std::uintptr_t channel) { teardown_channel = static_cast<int>(channel); }

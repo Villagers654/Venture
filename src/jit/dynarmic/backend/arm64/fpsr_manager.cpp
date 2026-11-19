@@ -31,6 +31,17 @@ void FpsrManager::Spill() {
     fpsr_loaded = false;
 }
 
+void FpsrManager::EmitFold() {
+    code.LDR(Wscratch0, Xstate, state_fpsr_offset);
+    code.MRS(Xscratch1, oaknut::SystemReg::FPSR);
+    code.ORR(Wscratch0, Wscratch0, Wscratch1);
+    code.STR(Wscratch0, Xstate, state_fpsr_offset);
+}
+
+void FpsrManager::EmitClearHost() {
+    code.MSR(oaknut::SystemReg::FPSR, XZR);
+}
+
 void FpsrManager::Load() {
     if (fpsr_loaded)
         return;

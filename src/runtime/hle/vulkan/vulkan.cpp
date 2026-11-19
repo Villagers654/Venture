@@ -39,6 +39,7 @@
 #include "gfx/queue_sync.h"
 #include "gfx/shared_image.h"
 #include "gfx/vulkan_enumerate.h"
+#include "fault_markers.h"
 #include "internal.h"
 #include "timing.h"
 #include "external.h"
@@ -382,6 +383,7 @@ void report_device_fault(Scope scope, GuestAddr handle, const char* name) {
   }
   report_breadcrumbs(device, scope == Scope::queue ? native_queue(g2h<VkQueue_T>(handle)) : VK_NULL_HANDLE);
   report_device_fault_info(device);
+  report_fault_markers(device);
   // The loss is reported asynchronously to the call that observed it, but
   // that call's guest frames, and every guest thread's, show which engine
   // thread submitted or waited and what it was doing.
@@ -1668,17 +1670,26 @@ VkResult create_device_impl(VkPhysicalDevice physical, const VkDeviceCreateInfo*
     address_report.pNext = const_cast<void*>(copy.pNext);
     copy.pNext = &address_report;
   }
-  const bool checkpoints = breadcrumbs_enabled() && std::ranges::any_of(host_extensions, [](const auto& e) {
+  // GPU fault breadcrumbs (fault_markers.cpp) wherever the driver offers them;
+  // the opt-in per-draw breadcrumbs use every marker extension there is.
+  auto fault_markers = fault_markers_for(host_extensions);
+  bool checkpoints = breadcrumbs_enabled() && std::ranges::any_of(host_extensions, [](const auto& e) {
     return std::string_view(e.extensionName) == VK_NV_DEVICE_DIAGNOSTIC_CHECKPOINTS_EXTENSION_NAME;
   });
-  if (checkpoints && unique_names.insert(VK_NV_DEVICE_DIAGNOSTIC_CHECKPOINTS_EXTENSION_NAME).second)
-    names.push_back(VK_NV_DEVICE_DIAGNOSTIC_CHECKPOINTS_EXTENSION_NAME);
   // Per-draw markers that need no barriers, wherever the driver offers them.
-  const bool buffer_marker = breadcrumbs_enabled() && std::ranges::any_of(host_extensions, [](const auto& e) {
+  bool buffer_marker = breadcrumbs_enabled() && std::ranges::any_of(host_extensions, [](const auto& e) {
     return std::string_view(e.extensionName) == VK_AMD_BUFFER_MARKER_EXTENSION_NAME;
   });
-  if (buffer_marker && unique_names.insert(VK_AMD_BUFFER_MARKER_EXTENSION_NAME).second)
-    names.push_back(VK_AMD_BUFFER_MARKER_EXTENSION_NAME);
+  // Marker extensions Venture added, dropped again if the driver refuses them.
+  std::vector<const char*> marker_names;
+  for (const char* name : {checkpoints || fault_markers == FaultMarkers::checkpoints
+                               ? VK_NV_DEVICE_DIAGNOSTIC_CHECKPOINTS_EXTENSION_NAME : nullptr,
+                           buffer_marker || fault_markers == FaultMarkers::buffer_marker
+                               ? VK_AMD_BUFFER_MARKER_EXTENSION_NAME : nullptr})
+    if (name && unique_names.insert(name).second) {
+      names.push_back(name);
+      marker_names.push_back(name);
+    }
   // XR Surface swapchains import decoded video pictures from the media
   // decoder's device on this GPU (gfx/shared_image.h). Host-only; enabling it
   // changes nothing else.
@@ -1701,10 +1712,21 @@ VkResult create_device_impl(VkPhysicalDevice physical, const VkDeviceCreateInfo*
                 copy.pQueueCreateInfos[i].queueCount, copy.pQueueCreateInfos[i].flags);
     log::info("vulkan-device", "Host allocator {}", alloc != nullptr);
   }
-  // The desktop mirror presents on a queue of its own, which the guest never sees.
+  // The desktop mirror presents on a queue of its own, which the guest never
+  // sees, or on one of the guest's when it took them all (xr/display_override.h).
   venture::xr::MirrorQueueRequest mirror_queue;
   if (mirror_capable) mirror_queue.add(families, copy);
   auto r = f(physical, &copy, alloc, out);
+  if ((r == VK_ERROR_EXTENSION_NOT_PRESENT || r == VK_ERROR_FEATURE_NOT_PRESENT) && !marker_names.empty()) {
+    // Diagnostics never cost the game its device.
+    log::warn("vulkan", "vkCreateDevice returned {} with GPU breadcrumb extensions; creating it without them", int(r));
+    std::erase_if(names, [&](const char* n) { return std::ranges::find(marker_names, n) != marker_names.end(); });
+    copy.enabledExtensionCount = static_cast<std::uint32_t>(names.size());
+    copy.ppEnabledExtensionNames = names.data();
+    fault_markers = FaultMarkers::none;
+    checkpoints = buffer_marker = false;
+    r = f(physical, &copy, alloc, out);
+  }
   if (trace) log::info("vulkan-device", "Host vkCreateDevice returned {}", int(r));
   if (r != VK_SUCCESS) {
     guest_device_create_failure.store(int(r), std::memory_order_relaxed);
@@ -1779,6 +1801,7 @@ VkResult create_device_impl(VkPhysicalDevice physical, const VkDeviceCreateInfo*
     prepare_texture_device(*out);
     if (trace) log::info("vulkan-device", "Guest device textures prepared");
     if (breadcrumbs_enabled()) prepare_breadcrumb_device(*out, checkpoints, buffer_marker);
+    prepare_fault_markers(*out, fault_markers);
     log::info("vulkan", "Guest device: {} (vendor=0x{:04x}, device=0x{:04x})",
               properties.deviceName, properties.vendorID, properties.deviceID);
   }
@@ -1800,6 +1823,7 @@ void release_device_resources(VkDevice device) {
   release_timing_device(device);
   release_texture_device(device);
   release_breadcrumb_device(device);
+  release_fault_markers(device);
   gfx::release_pipeline_device(device);
   release_sync_fd_device(device);
   release_hardware_buffer_device(device);
@@ -1881,6 +1905,7 @@ VkResult VKAPI_CALL queue_submit(VkQueue queue, std::uint32_t count, const VkSub
   // Facade work is noted when the dispatcher submits it here to its native
   // queue, in that queue's execution order.
   note_breadcrumb_submits(queue, count, submits);
+  fault_markers_submit(queue, count, submits);
   deferred_free_submitting(queue);
   auto r = texture_submit(queue, count, submits, fence, host<PFN_vkQueueSubmit>(queue, "vkQueueSubmit"));
   if (r == VK_SUCCESS) sync_fd_submitted(queue, count, submits);
@@ -1893,6 +1918,7 @@ VkResult VKAPI_CALL queue_submit2(VkQueue queue, std::uint32_t count, const VkSu
   if (auto facade = queue_facade(queue))
     return facade->deferred->submit2(facade->deferred_index, count, submits, fence);
   note_breadcrumb_submits(queue, count, submits);
+  fault_markers_submit(queue, count, submits);
   auto fn = host<PFN_vkQueueSubmit2>(queue, "vkQueueSubmit2");
   if (!fn) fn = host<PFN_vkQueueSubmit2>(queue, "vkQueueSubmit2KHR");
   if (!fn) return VK_ERROR_EXTENSION_NOT_PRESENT;
@@ -2049,6 +2075,7 @@ void VKAPI_CALL free_commands(VkDevice device, VkCommandPool pool, std::uint32_t
   for (std::uint32_t i = 0; i < count; ++i) {
     release_texture_commands(device, cmds[i]);
     release_render_commands(cmds[i]);
+    fault_markers_free(cmds[i]);
   }
   std::lock_guard lock(state_lock);
   for (std::uint32_t i = 0; i < count; ++i) {
@@ -2105,6 +2132,7 @@ void VKAPI_CALL destroy_pool(VkDevice device, VkCommandPool pool, const VkAlloca
   for (auto command : removed) {
     release_texture_commands(device, command);
     release_render_commands(command);
+    fault_markers_free(command);
   }
   trim_texture_pool(device, pool);
 }
@@ -2887,12 +2915,15 @@ std::uint32_t command_null_vertex_bindings(VkCommandBuffer command) {
   auto bindings = pool_null_vertex_bindings.find(it->second);
   return bindings == pool_null_vertex_bindings.end() ? 0 : bindings->second;
 }
-bool command_supports_compute(VkCommandBuffer command) {
+VkQueueFlags command_queue_flags(VkCommandBuffer command) {
   std::lock_guard lock(state_lock);
   auto it = command_pools.find(command);
-  if (it == command_pools.end()) return false;
+  if (it == command_pools.end()) return 0;
   auto flags = pool_flags.find(it->second);
-  return flags != pool_flags.end() && (flags->second & VK_QUEUE_COMPUTE_BIT);
+  return flags != pool_flags.end() ? flags->second : 0;
+}
+bool command_supports_compute(VkCommandBuffer command) {
+  return command_queue_flags(command) & VK_QUEUE_COMPUTE_BIT;
 }
 
 // XR invokes host ABI functions. Unlike generated guest handlers, these need

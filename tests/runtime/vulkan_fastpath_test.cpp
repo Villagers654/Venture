@@ -12,7 +12,9 @@
 #include <filesystem>
 #include <fstream>
 #include <thread>
+#if defined(__x86_64__) || defined(_M_X64)
 #include <xmmintrin.h>
+#endif
 #include "android/native_window.h"
 #include "common/json.h"
 #include "hle/vulkan/timing.h"
@@ -25,6 +27,30 @@
 #include "vulkan_test_support.h"
 
 namespace {
+// The host floating-point controls and sticky flags: MXCSR on x64, FPCR and
+// FPSR on AArch64.
+#if defined(__x86_64__) || defined(_M_X64)
+unsigned host_fp_control() { return _mm_getcsr(); }
+void set_host_fp_control(unsigned value) { _mm_setcsr(value); }
+void raise_host_fp_flags() { _mm_setcsr(_mm_getcsr() | 0x21); }  // invalid, inexact
+// Round down, no FTZ/DAZ, no flags; the compared bits are the controls.
+unsigned host_round_down(unsigned host) { return (host & ~0xe07fu) | 0x2000u; }
+constexpr unsigned kHostFpControlMask = 0xffc0u;
+#elif defined(__aarch64__)
+unsigned host_fp_control() { std::uint64_t v; __asm__ volatile("mrs %0, fpcr" : "=r"(v)); return unsigned(v); }
+void set_host_fp_control(unsigned value) {
+  __asm__ volatile("msr fpcr, %0\n\tmsr fpsr, xzr" : : "r"(std::uint64_t(value)));
+}
+void raise_host_fp_flags() {
+  std::uint64_t v;
+  __asm__ volatile("mrs %0, fpsr" : "=r"(v));
+  __asm__ volatile("msr fpsr, %0" : : "r"(v | 0x11));  // invalid, inexact
+}
+// RMode toward minus infinity, no FZ/FZ16.
+unsigned host_round_down(unsigned host) { return (host & ~((3u << 22) | (1u << 24) | (1u << 19))) | (2u << 22); }
+constexpr unsigned kHostFpControlMask = ~0u;
+#endif
+
 struct Resolver {
   PFN_vkGetInstanceProcAddr original;
   PFN_vkGetDeviceProcAddr gdpa{};
@@ -40,11 +66,11 @@ struct Resolver {
       std::uint32_t count, const VkViewport* views) {
     auto& self = *active;
     if (self.probe_fp) {
-      self.viewport_mxcsr = _mm_getcsr();
+      self.viewport_mxcsr = host_fp_control();
     }
     self.viewport(command, first, count, views);
     if (self.probe_fp)
-      _mm_setcsr(_mm_getcsr() | 0x21); // Driver invalid/inexact must not leak to guest FPSR.
+      raise_host_fp_flags(); // Driver invalid/inexact must not leak to guest FPSR.
   }
   static VkResult VKAPI_CALL pipeline_cache_data(VkDevice device, VkPipelineCache cache,
       std::size_t* size, void* data) {
@@ -196,31 +222,31 @@ TEST_CASE("Vulkan native pointer-argument forwards isolate host FP state from gu
   hle::CallContext ctx(thread, cpu, info);
   REQUIRE(info.try_handler(ctx)); // Warm admission is available for the real JIT call below.
   const auto saved_fpcr = thread.cpu().fpcr(), saved_fpsr = thread.cpu().fpsr();
-  const auto saved_host = _mm_getcsr();
+  const auto saved_host = host_fp_control();
   struct Restore {
     GuestThread& thread;
     std::uint32_t fpcr, fpsr;
     unsigned host;
-    ~Restore() { thread.cpu().set_fpcr(fpcr); thread.cpu().set_fpsr(fpsr); _mm_setcsr(host); }
+    ~Restore() { thread.cpu().set_fpcr(fpcr); thread.cpu().set_fpsr(fpsr); set_host_fp_control(host); }
   } restore{thread, saved_fpcr, saved_fpsr, saved_host};
   // GuestThread::call restores its saved CPU state, which would hide leaked
   // guest flags. Run an actual BLR/SVC stub and inspect FPSR before restoration.
   constexpr std::array code{0xd63f0280u, 0xd4000001u | (kSvcReturnToHost << 5)};
   const auto entry = hle::code_stub(code, "Vulkan native FP-state probe");
-  const auto host_mode = (saved_host & ~0xe07fu) | 0x2000u; // Host round down, no FTZ/DAZ/flags.
+  const auto host_mode = host_round_down(saved_host);
   thread.cpu().set_fpcr(0x01400000); // Guest round up and flush to zero.
   thread.cpu().set_fpsr(2);
   resolver.probe_fp = true;
-  _mm_setcsr(host_mode);
+  set_host_fp_control(host_mode);
   thread.cpu().set_x(0, h2g(d.command)); thread.cpu().set_x(1, 0);
   thread.cpu().set_x(2, 1); thread.cpu().set_x(3, h2g(&view));
   thread.cpu().set_x(20, thunk); thread.cpu().set_pc(entry);
   thread.run_until_return(0);
   const auto result_fpcr = thread.cpu().fpcr(), result_fpsr = thread.cpu().fpsr();
-  _mm_setcsr(saved_host);
+  set_host_fp_control(saved_host);
   thread.cpu().set_fpcr(saved_fpcr); thread.cpu().set_fpsr(saved_fpsr);
   resolver.probe_fp = false;
-  CHECK((resolver.viewport_mxcsr & 0xffc0u) == (host_mode & 0xffc0u));
+  CHECK((resolver.viewport_mxcsr & kHostFpControlMask) == (host_mode & kHostFpControlMask));
   CHECK(result_fpcr == 0x01400000);
   CHECK(result_fpsr == 2);
   REQUIRE(test::vk_call("vkEndCommandBuffer", d.command) == VK_SUCCESS);

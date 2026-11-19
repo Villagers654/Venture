@@ -10,19 +10,23 @@ from convert_apk import DEPS, java_tool
 # {Unsafe,Signal,SignalHandler}. java.xml supports framework resource parsers.
 # java.desktop backs the framework's android.graphics Bitmap/BitmapFactory/Paint
 # (java.awt.image, javax.imageio, java.awt.Font); the JVM runs it headless.
-# No java.sql or java.net.http.
-MODULES = "java.base,java.logging,java.xml,java.desktop,jdk.unsupported"
+# java.sql: Android's API has java.sql and javax.sql, and games reach them (Gson's
+# date adapters load java.sql.Time and Timestamp); jlink adds java.transaction.xa.
+# No java.net.http (not in Android's API).
+MODULES = "java.base,java.logging,java.xml,java.desktop,java.sql,jdk.unsupported"
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("output", type=Path)
+    parser.add_argument("--jdk", type=Path, default=DEPS / "jdk",
+                        help="the JDK whose modules make the runtime (another platform's, same release, to cross-link)")
     args = parser.parse_args()
-    subprocess.run([java_tool("jlink"), "--module-path", str(DEPS / "jdk/jmods"), "--add-modules", MODULES,
+    subprocess.run([java_tool("jlink"), "--module-path", str(args.jdk / "jmods"), "--add-modules", MODULES,
                     "--strip-debug", "--no-header-files", "--no-man-pages", "--output", str(args.output)], check=True)
     # jlink supplies legal/<module>; retain distribution-level notices as well.
     for name in ("NOTICE", "LICENSE", "ADDITIONAL_LICENSE_INFO", "ASSEMBLY_EXCEPTION"):
-        source = DEPS / "jdk" / name
+        source = args.jdk / name
         if source.exists():
             shutil.copy2(source, args.output / name)
     (args.output / "venture-modules.txt").write_text(MODULES + "\n", encoding="utf-8")

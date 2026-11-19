@@ -288,10 +288,13 @@ TEST_CASE("MediaPlayer JNI and Looper prepare start seek loop release callbacks"
   failure=static_cast<jstring>(env->CallStaticObjectMethod(cls,method,config,packets,times));
   if(env->ExceptionCheck())env->ExceptionDescribe();REQUIRE_FALSE(env->ExceptionCheck());
   if(failure){auto text=env->GetStringUTFChars(failure,nullptr);INFO(std::string(text));CHECK(failure==nullptr);env->ReleaseStringUTFChars(failure,text);}
-  method=env->GetStaticMethodID(cls,"image","([B[[B[J)Ljava/lang/String;");REQUIRE(method);
-  failure=static_cast<jstring>(env->CallStaticObjectMethod(cls,method,config,packets,times));
-  if(env->ExceptionCheck())env->ExceptionDescribe();REQUIRE_FALSE(env->ExceptionCheck());
-  if(failure){auto text=env->GetStringUTFChars(failure,nullptr);INFO(std::string(text));CHECK(failure==nullptr);env->ReleaseStringUTFChars(failure,text);}
+  for(const char* name:{"image","planar"}) {
+    CAPTURE(name);
+    method=env->GetStaticMethodID(cls,name,"([B[[B[J)Ljava/lang/String;");REQUIRE(method);
+    failure=static_cast<jstring>(env->CallStaticObjectMethod(cls,method,config,packets,times));
+    if(env->ExceptionCheck())env->ExceptionDescribe();REQUIRE_FALSE(env->ExceptionCheck());
+    if(failure){auto text=env->GetStringUTFChars(failure,nullptr);INFO(std::string(text));CHECK(failure==nullptr);env->ReleaseStringUTFChars(failure,text);}
+  }
   // PRIVATE images live in GPU buffers; this stands in for the Vulkan HLE's allocator.
   struct TestPayload : android::GpuPayload { mutable std::size_t writes=0; };
   android::set_gpu_allocator({[](const android::HardwareBufferDesc&){return true;},

@@ -1,6 +1,7 @@
 #include "core/xr_call_trace.h"
 #include "xr/menu_chord.h"
 #include "xr/grip_toggle.h"
+#include "xr/system_keyboard.h"
 #include "common/first_frame_progress.h"
 #include "common/startup_progress.h"
 #include "xr/dev_dump.h"
@@ -83,6 +84,25 @@ XrImages *xr_images() { return images.load(); }
 Session &session() {
   static Session s;
   return s;
+}
+XrResult display_refresh_rate(XrSession handle, float *out) {
+  if (!out)
+    return XR_ERROR_VALIDATION_FAILURE;
+  std::lock_guard sl(session().mutex);
+  if (handle && host_xr().enabled_extensions.contains("XR_FB_display_refresh_rate")) {
+    float rate = 0;
+    auto result = host_call<PFN_xrGetDisplayRefreshRateFB, "xrGetDisplayRefreshRateFB">(handle, &rate);
+    // Before the host session runs it may not expose the mode yet. Keep the
+    // same shared fallback as Android until the first period is available.
+    if (XR_FAILED(result) && result != XR_ERROR_SESSION_NOT_RUNNING) return result;
+    if (XR_SUCCEEDED(result)) {
+      if (!std::isfinite(rate) || rate <= 0) return XR_ERROR_RUNTIME_FAILURE;
+      session().observe_display_period(std::int64_t(std::llround(1e9 / rate)),
+                                       DisplayTiming::Source::host);
+    }
+  }
+  *out = session().display_timing.rate();
+  return XR_SUCCESS;
 }
 
 void Session::observe_display_period(std::int64_t value, DisplayTiming::Source source) {
@@ -198,44 +218,66 @@ XrResult Session::create(SessionOwner requested, const XrGraphicsBindingVulkanKH
   if (XR_SUCCEEDED(result)) {
     dev_dump_bind(b);
     this->binding = b;
-    frame_index = end_errors = last_report_frame = 0;
-    last_report_time = {};
-    hitches.restart();
-    owner = requested;
-    host_stop_requested = guest_exit_requested = false;
     auto get_queue = reinterpret_cast<PFN_vkGetDeviceQueue>(
         gpu.get_instance_proc_addr(b.instance, "vkGetDeviceQueue"));
     get_queue(b.device, b.queueFamilyIndex, b.queueIndex, &queue);
     uses_shared_gpu = queue == gpu.queue;
     gfx::register_queue(b.device, queue);
-    state = XR_SESSION_STATE_IDLE;
-    running = false;
-    phase = Phase::idle;
-    render_thread = {};
-    frame = {XR_TYPE_FRAME_STATE};
-    pending_frame = {XR_TYPE_FRAME_STATE};
-    wait_in_progress = pending_wait = false;
-    lost = XR_SUCCESS;
-    lead = {};
-    const auto* lead_setting = venture::environment::getenv("VENTURE_XR_FRAME_LEAD");
-    lead.enabled = lead_setting && std::string_view(lead_setting) == "1";
-    if (const auto* fixed = venture::environment::getenv("VENTURE_XR_FRAME_LEAD_MS"); lead.enabled && fixed) {
-      const auto ms = std::strtod(fixed, nullptr);
-      if (std::isfinite(ms) && ms > 0 && ms <= 8) lead.fixed_ns = lead.lead_ns = std::int64_t(ms * 1e6);
-    }
-    const auto* async_setting = venture::environment::getenv("VENTURE_XR_ASYNC_END");
-    lead.async = lead.enabled && async_setting && std::string_view(async_setting) == "1";
-    display_timing.restart();
-    guest_swap_interval = 1;
-    logged_swap_interval = 0;
-    if (h.enabled_extensions.contains("XR_FB_display_refresh_rate")) {
-      float rate = 0;
-      if (XR_SUCCEEDED((host_call<PFN_xrGetDisplayRefreshRateFB, "xrGetDisplayRefreshRateFB">(handle, &rate))) && std::isfinite(rate) && rate > 0)
-        observe_display_period(std::int64_t(std::llround(1e9 / rate)), DisplayTiming::Source::host);
-    }
-    if (auto observer = display_observer.load()) observer(display_timing.period.load());
+    created(requested);
   }
   return result;
+}
+XrResult Session::create_native(SessionOwner requested, const void *graphics) {
+  if (handle)
+    return XR_ERROR_LIMIT_REACHED;
+  auto &h = host_xr();
+  if (!h.available)
+    return XR_ERROR_FORM_FACTOR_UNAVAILABLE;
+  XrSessionCreateInfo info{XR_TYPE_SESSION_CREATE_INFO};
+  info.systemId = h.system;
+  info.next = graphics;
+  const auto result = xrCreateSession(h.instance, &info, &handle);
+  log::info("xr", "Host xrCreateSession result={}", int(result));
+  if (XR_FAILED(result)) return session_failed(result, std::format("{} refused it", h.runtime_name));
+  binding = {XR_TYPE_GRAPHICS_BINDING_VULKAN_KHR};
+  queue = nullptr;
+  uses_shared_gpu = false;
+  created(requested);
+  return result;
+}
+void Session::created(SessionOwner requested) {
+  auto &h = host_xr();
+  frame_index = end_errors = last_report_frame = 0;
+  last_report_time = {};
+  hitches.restart();
+  owner = requested;
+  host_stop_requested = guest_exit_requested = false;
+  state = XR_SESSION_STATE_IDLE;
+  running = false;
+  phase = Phase::idle;
+  render_thread = {};
+  frame = {XR_TYPE_FRAME_STATE};
+  pending_frame = {XR_TYPE_FRAME_STATE};
+  wait_in_progress = pending_wait = false;
+  lost = XR_SUCCESS;
+  lead = {};
+  const auto* lead_setting = venture::environment::getenv("VENTURE_XR_FRAME_LEAD");
+  lead.enabled = lead_setting && std::string_view(lead_setting) == "1";
+  if (const auto* fixed = venture::environment::getenv("VENTURE_XR_FRAME_LEAD_MS"); lead.enabled && fixed) {
+    const auto ms = std::strtod(fixed, nullptr);
+    if (std::isfinite(ms) && ms > 0 && ms <= 8) lead.fixed_ns = lead.lead_ns = std::int64_t(ms * 1e6);
+  }
+  const auto* async_setting = venture::environment::getenv("VENTURE_XR_ASYNC_END");
+  lead.async = lead.enabled && async_setting && std::string_view(async_setting) == "1";
+  display_timing.restart();
+  guest_swap_interval = 1;
+  logged_swap_interval = 0;
+  if (h.enabled_extensions.contains("XR_FB_display_refresh_rate")) {
+    float rate = 0;
+    if (XR_SUCCEEDED((host_call<PFN_xrGetDisplayRefreshRateFB, "xrGetDisplayRefreshRateFB">(handle, &rate))) && std::isfinite(rate) && rate > 0)
+      observe_display_period(std::int64_t(std::llround(1e9 / rate)), DisplayTiming::Source::host);
+  }
+  if (auto observer = display_observer.load()) observer(display_timing.period.load());
 }
 // Issues the runtime's xrWaitFrame for led frames as soon as it is requested,
 // independent of guest progress, after the host xrEndFrame of an asynchronous
@@ -308,6 +350,7 @@ XrResult Session::destroy(SessionOwner requested) {
     return XR_ERROR_RUNTIME_FAILURE;
   reset_menu_session(handle);
   reset_grip_session(handle);
+  keyboard::reset_session(handle);
   if (host_waiter) {
     {
       std::lock_guard waiter_lock(host_waiter->mutex);
@@ -316,7 +359,8 @@ XrResult Session::destroy(SessionOwner requested) {
     }
     host_waiter.reset();
   }
-  dev_destroy_parked_swapchains();
+  // Parked host chains go with the session; the line shows how far a teardown got.
+  log::info("xr", "Destroying the host session with {} parked swapchain(s)", dev_forget_parked_swapchains());
   auto result = xrDestroySession(handle);
   if (XR_SUCCEEDED(result)) {
     log::info("xr", "Session ended: submitted={} xrEndFrame_errors={}", frame_index, end_errors);
@@ -920,6 +964,17 @@ XrResult Session::end(const XrFrameEndInfo *info, std::shared_ptr<const void> ow
     led_info = *info;
     led_info.displayTime = host_frame.predictedDisplayTime;
     info = &led_info;
+  }
+  // The system keyboard's panel goes on top of the game's layers, for every
+  // API. The extended End owns the game's owner, so an asynchronous End keeps
+  // both alive; keyboard_frame keeps it for a synchronous one.
+  std::shared_ptr<const keyboard::Frame> keyboard_frame;
+  if (info && keyboard::shown()) [[unlikely]] {
+    keyboard_frame = keyboard::extend(handle, *info, owned);
+    if (keyboard_frame) {
+      info = &keyboard_frame->info;
+      if (owned) owned = keyboard_frame;
+    }
   }
   // An asynchronous submission returns success now; a failed host End is the
   // result of the guest's next wait or End, which take this request.

@@ -74,6 +74,9 @@ MirrorMode mirror_mode();
 std::uint32_t parse_mirror_eye(std::string_view value);
 // VENTURE_MIRROR_EYE, read once per process.
 std::uint32_t mirror_eye();
+// VENTURE_MIRROR_FULLSCREEN = on: the mirror opens fullscreen (F11 switches
+// either way while it shows). Read once per process.
+bool mirror_fullscreen();
 // The view the mirror shows of a projection with `view_count` views: the chosen
 // eye, or the only view of a mono one.
 inline std::uint32_t mirror_view(std::uint32_t view_count, std::uint32_t eye) { return eye < view_count ? eye : 0; }
@@ -85,12 +88,22 @@ const char* mirror_device_extension();
 // Graphics devices and instances created with those extensions enabled.
 void note_mirror_capable(const void* handle);
 bool mirror_capable(const void* handle);
-// The mirror's private present queue, added to a device as it is created
-// while the mirror is on: one more queue in a graphics family the device
-// already uses, else in another graphics or compute family with one to
-// spare, at the lowest priority. Without one the mirror stays off for that
-// device. Presenting there, a present that blocks (a locked or hidden
-// desktop) holds no queue the game uses.
+// The queue a device's mirror presents on. Its own: one more queue added to
+// the device as it is created while the mirror is on, in a graphics family the
+// device already uses, else in another graphics or compute family with one to
+// spare, at the lowest priority. Presenting there, a present that blocks (a
+// locked or hidden desktop) holds no queue the game uses. When the game took
+// every graphics and compute queue there is none to add, and the mirror
+// presents on one of the game's own graphics queues instead (`own` false,
+// `family` the game's graphics family, `index` 0): every driver call on a
+// native queue, the game's, the host runtime's and the mirror's, holds that
+// queue's gfx::queue_mutex, so the present is externally synchronized like
+// them. A device without a graphics queue has no mirror.
+struct MirrorQueue {
+  std::uint32_t family = 0, index = 0;
+  bool own = true;
+  bool operator==(const MirrorQueue&) const = default;
+};
 class MirrorQueueRequest {
  public:
   // Rewrites `info`'s queue list (kept alive by this object) to add the queue.
@@ -101,9 +114,18 @@ class MirrorQueueRequest {
  private:
   std::vector<VkDeviceQueueCreateInfo> queues_;
   std::vector<float> priorities_;
-  std::optional<std::pair<std::uint32_t, std::uint32_t>> queue_;
+  std::optional<MirrorQueue> queue_;
 };
-// Family and index of a device's mirror queue.
-std::optional<std::pair<std::uint32_t, std::uint32_t>> mirror_queue(VkDevice device);
+// A device's mirror queue.
+std::optional<MirrorQueue> mirror_queue(VkDevice device);
 void forget_mirror_queue(VkDevice device);
+// The queue (family, index) the mirror presents on, given the XR binding's queue
+// it blits on: its own queue, or for a shared one the binding's queue itself
+// when that is in the chosen family (one queue, one lock), else that family's
+// first queue.
+inline std::pair<std::uint32_t, std::uint32_t> mirror_present_queue(const MirrorQueue& queue, std::uint32_t binding_family,
+                                                                    std::uint32_t binding_index) {
+  if (queue.own || queue.family != binding_family) return {queue.family, queue.index};
+  return {binding_family, binding_index};
+}
 } // namespace venture::xr

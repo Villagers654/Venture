@@ -1794,7 +1794,8 @@ TEST_CASE("XR layer arrangements are described once, when they change, with chai
       [](const char*) { return false; }};
   std::array<XrCompositionLayerProjectionView, 2> views{};
   for (std::uint32_t i = 0; i < 2; ++i)
-    views[i] = {XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW, nullptr, {}, {}, {eyes, {{0, 0}, {100, 90}}, i}};
+    views[i] = {XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW, nullptr, {}, {-0.9075712f, 0.7853982f, 0.8377580f, -0.8726646f},
+                {eyes, {{0, 0}, {100, 90}}, i}};
   XrCompositionLayerProjection projection{XR_TYPE_COMPOSITION_LAYER_PROJECTION, nullptr, 0, space, 2, views.data()};
   XrCompositionLayerColorScaleBiasKHR fade{XR_TYPE_COMPOSITION_LAYER_COLOR_SCALE_BIAS_KHR};
   XrCompositionLayerQuad quad{XR_TYPE_COMPOSITION_LAYER_QUAD, &fade, XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT,
@@ -1810,7 +1811,8 @@ TEST_CASE("XR layer arrangements are described once, when they change, with chai
   const auto first = layouts.change(game, queries);
   REQUIRE(first);
   CHECK(*first == "layers arrangement #1: 1 layer, blend mode 1; [0] projection flags=0x0 space=77 "
-                  "view 0 chain 100x90 slice 0 rect 100x90 view 1 chain 100x90 slice 1 rect 100x90");
+                  "view 0 chain 100x90 slice 0 rect 100x90 fov -52.0/45.0/48.0/-50.0 "
+                  "view 1 chain 100x90 slice 1 rect 100x90 fov -52.0/45.0/48.0/-50.0");
   CHECK_FALSE(layouts.change(game, queries));
   // Dynamic resolution is not a change.
   views[0].subImage.imageRect.extent.width = views[1].subImage.imageRect.extent.width = 80;
@@ -5123,7 +5125,7 @@ TEST_CASE("the desktop mirror shows the chosen eye of the first projection layer
   CHECK(hx::mirror_eye(layers, 1)->sub.swapchain == left_chain);
   CHECK_FALSE(hx::mirror_eye(std::span(layers, 1), 0));
 }
-TEST_CASE("the desktop mirror gets a low-priority queue of its own beside the game's") {
+TEST_CASE("the desktop mirror gets a low-priority queue of its own beside the game's, else shares the game's") {
   using venture::xr::MirrorQueueRequest;
   const float one = 1.0f;
   VkDeviceQueueCreateInfo graphics{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};
@@ -5145,7 +5147,7 @@ TEST_CASE("the desktop mirror gets a low-priority queue of its own beside the ga
     CHECK(copy.pQueueCreateInfos[0].pQueuePriorities[0] == 1.0f);
     CHECK(copy.pQueueCreateInfos[0].pQueuePriorities[1] == 0.0f);
     request.created(device);
-    CHECK(venture::xr::mirror_queue(device) == std::pair{0u, 1u});
+    CHECK(venture::xr::mirror_queue(device) == venture::xr::MirrorQueue{0, 1, true});
   }
   // One graphics queue (RADV): a compute family's queue.
   {
@@ -5160,9 +5162,9 @@ TEST_CASE("the desktop mirror gets a low-priority queue of its own beside the ga
     CHECK(copy.pQueueCreateInfos[1].queueCount == 1);
     CHECK(copy.pQueueCreateInfos[1].pQueuePriorities[0] == 0.0f);
     request.created(device);
-    CHECK(venture::xr::mirror_queue(device) == std::pair{1u, 0u});
+    CHECK(venture::xr::mirror_queue(device) == venture::xr::MirrorQueue{1, 0, true});
   }
-  // Nothing to spare: the device is created as asked and has no mirror.
+  // Nothing to spare: the device is created as asked and presents on the game's graphics queue.
   {
     const VkQueueFamilyProperties families[] = {{VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT, 1},
                                                 {VK_QUEUE_TRANSFER_BIT, 2}};
@@ -5170,6 +5172,54 @@ TEST_CASE("the desktop mirror gets a low-priority queue of its own beside the ga
     MirrorQueueRequest request;
     request.add(families, copy);
     CHECK(copy.pQueueCreateInfos == &graphics);
+    CHECK(copy.queueCreateInfoCount == 1);
+    request.created(device);
+    CHECK(venture::xr::mirror_queue(device) == venture::xr::MirrorQueue{0, 0, false});
+  }
+  // Every graphics and compute queue taken in two families (the game asks for
+  // all of them): no queue is added, and the mirror shares the game's graphics family.
+  {
+    const VkQueueFamilyProperties families[] = {{VK_QUEUE_TRANSFER_BIT, 2},
+                                                {VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT, 16},
+                                                {VK_QUEUE_COMPUTE_BIT, 8}};
+    const float priorities[16] = {};
+    VkDeviceQueueCreateInfo all[2]{{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO},
+                                   {VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO}};
+    all[0].queueFamilyIndex = 2;
+    all[0].queueCount = 8;
+    all[0].pQueuePriorities = priorities;
+    all[1].queueFamilyIndex = 1;
+    all[1].queueCount = 16;
+    all[1].pQueuePriorities = priorities;
+    auto copy = info;
+    copy.queueCreateInfoCount = 2;
+    copy.pQueueCreateInfos = all;
+    MirrorQueueRequest request;
+    request.add(families, copy);
+    CHECK(copy.pQueueCreateInfos == all);
+    CHECK(copy.queueCreateInfoCount == 2);
+    CHECK(all[0].queueCount == 8);
+    CHECK(all[1].queueCount == 16);
+    request.created(device);
+    const auto queue = venture::xr::mirror_queue(device);
+    CHECK(queue == venture::xr::MirrorQueue{1, 0, false});
+    // It presents on the XR binding's queue when that is in the family, else the family's first.
+    REQUIRE(queue);
+    CHECK(venture::xr::mirror_present_queue(*queue, 1, 5) == std::pair{1u, 5u});
+    CHECK(venture::xr::mirror_present_queue(*queue, 2, 3) == std::pair{1u, 0u});
+    // Its own queue is used whatever the binding.
+    CHECK(venture::xr::mirror_present_queue({1, 16, true}, 1, 5) == std::pair{1u, 16u});
+  }
+  // A protected graphics queue is never shared, and no graphics queue means no mirror.
+  {
+    const VkQueueFamilyProperties families[] = {{VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT, 1},
+                                                {VK_QUEUE_TRANSFER_BIT, 2}};
+    VkDeviceQueueCreateInfo protected_queue = graphics;
+    protected_queue.flags = VK_DEVICE_QUEUE_CREATE_PROTECTED_BIT;
+    auto copy = info;
+    copy.pQueueCreateInfos = &protected_queue;
+    MirrorQueueRequest request;
+    request.add(families, copy);
     request.created(device);
     CHECK_FALSE(venture::xr::mirror_queue(device));
   }

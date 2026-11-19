@@ -17,7 +17,7 @@
 #include "dynarmic/backend/x64/a64_emit_x64.h"
 #include "dynarmic/backend/x64/a64_jitstate.h"
 #include "dynarmic/backend/x64/block_of_code.h"
-#include "dynarmic/backend/x64/exclusive_monitor_friend.h"
+#include "dynarmic/backend/exclusive_monitor_friend.h"
 #include "dynarmic/frontend/A64/a64_location_descriptor.h"
 #include "dynarmic/interface/exclusive_monitor.h"
 

@@ -884,6 +884,7 @@ void decode_mip(VkCommandBuffer cmd, const std::shared_ptr<Image>& img, std::uin
     if (std::ranges::any_of(img->companions, [](const auto& c) { return c->lazy; }))
       command_state[cmd].uploads.push_back({img, mip, layer, z});
   }
+  const fault_markers::Site site{img->info.tiling, img->info.extent, mip, layer, z};
   // Each recorded dispatch's descriptor pool is retained by the command buffer
   // before the next plane's decode can fail, and a failure still hands the
   // application its compute state back.
@@ -899,11 +900,12 @@ void decode_mip(VkCommandBuffer cmd, const std::shared_ptr<Image>& img, std::uin
         auto& companion = *img->companions[i - 1];
         resources = record_decode_image(d, cmd, source->buffer, source->size,
             companion.storage_views.at(mip), companion.activation->buffer, region,
-            img->info.imageType == VK_IMAGE_TYPE_3D, img->info.imageType == VK_IMAGE_TYPE_3D ? z : layer);
+            img->info.imageType == VK_IMAGE_TYPE_3D, img->info.imageType == VK_IMAGE_TYPE_3D ? z : layer, site);
       } else if (texels[i]) {
         region.format.decoded = planes[i].format == VK_FORMAT_BC7_SRGB_BLOCK ? VK_FORMAT_R8G8B8A8_SRGB
                                                                               : VK_FORMAT_R8G8B8A8_UNORM;
-        resources = record_decode(d, cmd, source->buffer, source->size, texels[i]->buffer, texels[i]->size, region);
+        resources = record_decode(d, cmd, source->buffer, source->size, texels[i]->buffer, texels[i]->size, region,
+                                  site);
         {
           std::lock_guard lock(texture_lock);
           command_state[cmd].resources.push_back(std::move(resources));
@@ -911,10 +913,10 @@ void decode_mip(VkCommandBuffer cmd, const std::shared_ptr<Image>& img, std::uin
         memory_barrier(d, cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
                        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
         resources = record_encode_bc7(d, cmd, texels[i]->buffer, texels[i]->size, decoded[i]->buffer,
-                                      decoded[i]->size, extent.width, extent.height);
+                                      decoded[i]->size, extent.width, extent.height, site);
       } else {
         resources = record_decode(d, cmd, source->buffer, source->size, decoded[i]->buffer,
-                                  decoded[i]->size, region);
+                                  decoded[i]->size, region, site);
       }
       std::lock_guard lock(texture_lock);
       command_state[cmd].resources.push_back(std::move(resources));
@@ -941,6 +943,8 @@ void decode_mip(VkCommandBuffer cmd, const std::shared_ptr<Image>& img, std::uin
   copy.imageExtent = extent;
   for (std::size_t i = 0; i < planes.size(); ++i) {
     if (!decoded[i]) continue;
+    FaultPass pass(cmd, {fault_markers::PassKind::decoded_copy, img->info.format, planes[i].format, extent.width,
+                         extent.height, 0, decoded[i]->size, {}, site});
     vk<PFN_vkCmdCopyBufferToImage>(d, "vkCmdCopyBufferToImage")(cmd, decoded[i]->buffer, img->plane(i), layout,
                                                                 1, &copy);
   }
@@ -1928,6 +1932,10 @@ void convert_depth(VkCommandBuffer cmd, const std::shared_ptr<Buffer>& words, st
   const std::uint32_t step = props.limits.maxComputeWorkGroupCount[0] * 64u;
   memory_barrier(d, cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
                  VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
+  FaultPass pass(cmd, {fault_markers::PassKind::depth_conversion,
+                       to_unorm ? VK_FORMAT_D32_SFLOAT : VK_FORMAT_X8_D24_UNORM_PACK32,
+                       to_unorm ? VK_FORMAT_X8_D24_UNORM_PACK32 : VK_FORMAT_D32_SFLOAT, count, 1, 0,
+                       VkDeviceSize(count) * 4, {ceil_div(std::min(step, count), 64), 1, 1}});
   vk<PFN_vkCmdBindPipeline>(d, "vkCmdBindPipeline")(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, p.pipeline);
   vk<PFN_vkCmdBindDescriptorSets>(d, "vkCmdBindDescriptorSets")(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, p.layout,
                                                                 0, 1, &set, 0, nullptr);
@@ -2281,6 +2289,7 @@ void VKAPI_CALL barrier(VkCommandBuffer cmd, VkPipelineStageFlags source, VkPipe
                         VkDependencyFlags flags, std::uint32_t memory_count, const VkMemoryBarrier* memory,
                         std::uint32_t buffer_count, const VkBufferMemoryBarrier* buffers,
                         std::uint32_t image_count, const VkImageMemoryBarrier* image_barriers) {
+  note_layouts(cmd, image_count, image_barriers);
   auto additional = shadow_ownership(cmd, image_count, image_barriers);
   if (!additional.empty()) {
     if (buffer_count) additional.insert(additional.end(), buffers, buffers + buffer_count);
@@ -2304,6 +2313,7 @@ void VKAPI_CALL wait_events(VkCommandBuffer cmd, std::uint32_t event_count, cons
                             std::uint32_t image_count, const VkImageMemoryBarrier* image_barriers) {
   { std::lock_guard lock(texture_lock);
     if (lazy_devices.contains(command_device(cmd))) command_state[cmd].may_wait = true; }
+  note_layouts(cmd, image_count, image_barriers);
   // Event source stages must match vkCmdSetEvent; don't change those stages.
   // Ownership transfers are prohibited with vkCmdWaitEvents by Vulkan.
   auto additional = shadow_ownership(cmd, image_count, image_barriers);
@@ -2318,6 +2328,7 @@ void VKAPI_CALL wait_events(VkCommandBuffer cmd, std::uint32_t event_count, cons
                                                                   image_count, image_barriers);
 }
 void VKAPI_CALL barrier2(VkCommandBuffer cmd, const VkDependencyInfo* info) {
+  note_layouts(cmd, info);
   std::vector<VkBufferMemoryBarrier2> buffers;
   if (info->bufferMemoryBarrierCount)
     buffers.assign(info->pBufferMemoryBarriers, info->pBufferMemoryBarriers + info->bufferMemoryBarrierCount);
@@ -2361,11 +2372,14 @@ void VKAPI_CALL wait_events2(VkCommandBuffer cmd, std::uint32_t count, const VkE
     if (lazy_devices.contains(command_device(cmd))) command_state[cmd].may_wait = true; }
   std::vector<std::vector<VkImageMemoryBarrier2>> images(count);
   std::vector<VkDependencyInfo> copies;
+  for (std::uint32_t i = 0; i < count; ++i) note_layouts(cmd, &infos[i]);
   for (std::uint32_t i = 0; i < count; ++i) copies.push_back(with_companions(infos[i], images[i]));
   vk<PFN_vkCmdWaitEvents2>(command_device(cmd), "vkCmdWaitEvents2")(cmd, count, events, copies.data());
 }
 void VKAPI_CALL execute_commands(VkCommandBuffer cmd, std::uint32_t count, const VkCommandBuffer* secondary) {
   vk<PFN_vkCmdExecuteCommands>(command_device(cmd), "vkCmdExecuteCommands")(cmd, count, secondary);
+  fault_markers_execute(cmd, count, secondary);
+  note_executed_layouts(cmd, count, secondary);
   std::lock_guard lock(texture_lock);
   if (count && lazy_devices.contains(command_device(cmd)))
     command_state[cmd].secondary.insert(command_state[cmd].secondary.end(), secondary, secondary + count);
@@ -2386,6 +2400,7 @@ VkResult VKAPI_CALL begin(VkCommandBuffer cmd, const VkCommandBufferBeginInfo* i
   if (r == VK_SUCCESS) {
     release_texture_commands(command_device(cmd), cmd);
     release_render_commands(cmd);
+    fault_markers_begin(cmd, *info);
     if (const auto bindings = command_null_vertex_bindings(cmd)) {
       static constexpr std::array<VkBuffer, max_null_vertex_bindings> buffers{};
       static constexpr std::array<VkDeviceSize, max_null_vertex_bindings> offsets{};
@@ -2404,6 +2419,7 @@ VkResult VKAPI_CALL begin(VkCommandBuffer cmd, const VkCommandBufferBeginInfo* i
   return r;
 }
 VkResult VKAPI_CALL end(VkCommandBuffer cmd) {
+  fault_markers_end(cmd);
   auto result = vk<PFN_vkEndCommandBuffer>(command_device(cmd), "vkEndCommandBuffer")(cmd);
   std::lock_guard lock(texture_lock);
   auto it = command_state.find(cmd);
@@ -3249,6 +3265,7 @@ VkResult texture_submit(VkQueue queue, std::uint32_t count, const VkSubmitInfo* 
   if (result == VK_SUCCESS) {
     passes_submitted.fetch_add(passes, std::memory_order_relaxed);
     track_guest_submit(queue, count, submits);
+    submitted_layouts(count, submits);
   }
   if (have_pageable_sources.load(std::memory_order_relaxed) && result == VK_SUCCESS) {
     auto binding = queue_binding(queue);
@@ -3265,6 +3282,7 @@ VkResult texture_submit2(VkQueue queue, std::uint32_t count, const VkSubmitInfo2
   if (result == VK_SUCCESS) {
     passes_submitted.fetch_add(passes, std::memory_order_relaxed);
     track_guest_submit(queue, count, submits);
+    submitted_layouts(count, submits);
   }
   if (have_pageable_sources.load(std::memory_order_relaxed) && result == VK_SUCCESS) {
     auto binding = queue_binding(queue);
@@ -3311,9 +3329,18 @@ void texture_queue_uncertain(VkQueue queue) {
   auto binding = queue_binding(queue);
   if (binding && lazy_devices.contains(binding->device)) lazy_devices.at(binding->device).finite_queues[queue] = false;
 }
+namespace {
+fault_markers::Pass decode_pass(fault_markers::PassKind kind, const DecodeRegion& region, VkFormat output,
+                                VkDeviceSize source_size, const std::uint32_t (&groups)[3],
+                                const fault_markers::Site& site) {
+  return {kind, region.format.compressed, output, region.width, region.height, VkDeviceSize(region.source_word) * 4,
+          source_size, {groups[0], groups[1], groups[2]}, site};
+}
+}  // namespace
 std::shared_ptr<DecodeResources> record_decode(VkDevice d, VkCommandBuffer cmd, VkBuffer source,
                                                VkDeviceSize source_size, VkBuffer dest,
-                                               VkDeviceSize dest_size, const DecodeRegion& region) {
+                                               VkDeviceSize dest_size, const DecodeRegion& region,
+                                               const fault_markers::Site& site) {
   auto resources = std::make_shared<DecodeResources>();
   resources->pipeline = pipeline(d);
   count_pass(decode_passes, cmd);
@@ -3342,6 +3369,9 @@ std::shared_ptr<DecodeResources> record_decode(VkDevice d, VkCommandBuffer cmd, 
     writes[i].pBufferInfo = &buffers[i];
   }
   vk<PFN_vkUpdateDescriptorSets>(d, "vkUpdateDescriptorSets")(d, 2, writes, 0, nullptr);
+  const std::uint32_t groups[] = {ceil_div(region.width, 8), ceil_div(region.height, 8), 1};
+  FaultPass pass(cmd, decode_pass(fault_markers::PassKind::decode, region, region.format.decoded, source_size,
+                                  groups, site));
   vk<PFN_vkCmdBindPipeline>(d, "vkCmdBindPipeline")(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, p.pipeline);
   vk<PFN_vkCmdBindDescriptorSets>(d, "vkCmdBindDescriptorSets")(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, p.layout,
                                                                 0, 1, &set, 0, nullptr);
@@ -3355,11 +3385,12 @@ std::shared_ptr<DecodeResources> record_decode(VkDevice d, VkCommandBuffer cmd, 
                            region.format.texel_bytes == 8 ? 0x80000000u : 0u};
   vk<PFN_vkCmdPushConstants>(d, "vkCmdPushConstants")(cmd, p.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
                                                       sizeof(push), push);
-  vk<PFN_vkCmdDispatch>(d, "vkCmdDispatch")(cmd, ceil_div(region.width, 8), ceil_div(region.height, 8), 1);
+  vk<PFN_vkCmdDispatch>(d, "vkCmdDispatch")(cmd, groups[0], groups[1], groups[2]);
   return resources;
 }
 std::shared_ptr<DecodeResources> record_encode_bc7(VkDevice d, VkCommandBuffer cmd, VkBuffer source,
-    VkDeviceSize source_size, VkBuffer dest, VkDeviceSize dest_size, std::uint32_t width, std::uint32_t height) {
+    VkDeviceSize source_size, VkBuffer dest, VkDeviceSize dest_size, std::uint32_t width, std::uint32_t height,
+    const fault_markers::Site& site) {
   auto resources = std::make_shared<DecodeResources>();
   resources->pipeline = image_pipeline(d, bc7_mode);
   count_pass(bc7_passes, cmd);
@@ -3382,18 +3413,22 @@ std::shared_ptr<DecodeResources> record_encode_bc7(VkDevice d, VkCommandBuffer c
     writes[i].pBufferInfo = &buffers[i];
   }
   vk<PFN_vkUpdateDescriptorSets>(d, "vkUpdateDescriptorSets")(d, 2, writes, 0, nullptr);
+  fault_markers::Pass marked{fault_markers::PassKind::bc7_encode, VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_BC7_UNORM_BLOCK,
+                             width, height, 0, source_size,
+                             {ceil_div(ceil_div(width, 4), 8), ceil_div(ceil_div(height, 4), 8), 1}, site};
+  FaultPass pass(cmd, marked);
   vk<PFN_vkCmdBindPipeline>(d, "vkCmdBindPipeline")(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, p.pipeline);
   vk<PFN_vkCmdBindDescriptorSets>(d, "vkCmdBindDescriptorSets")(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, p.layout,
                                                                 0, 1, &set, 0, nullptr);
   std::uint32_t push[8] = {width, height};
   vk<PFN_vkCmdPushConstants>(d, "vkCmdPushConstants")(cmd, p.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
                                                       sizeof(push), push);
-  vk<PFN_vkCmdDispatch>(d, "vkCmdDispatch")(cmd, ceil_div(ceil_div(width, 4), 8), ceil_div(ceil_div(height, 4), 8), 1);
+  vk<PFN_vkCmdDispatch>(d, "vkCmdDispatch")(cmd, marked.groups[0], marked.groups[1], marked.groups[2]);
   return resources;
 }
 std::shared_ptr<DecodeResources> record_decode_image(VkDevice d, VkCommandBuffer cmd, VkBuffer source,
     VkDeviceSize source_size, VkImageView destination, VkBuffer activation, const DecodeRegion& region,
-    bool volume, std::uint32_t slice) {
+    bool volume, std::uint32_t slice, const fault_markers::Site& site) {
   if ((region.format.compressed < VK_FORMAT_ASTC_4x4_UNORM_BLOCK ||
        region.format.compressed > VK_FORMAT_ASTC_12x12_SRGB_BLOCK) &&
       (region.format.compressed < VK_FORMAT_ASTC_4x4_SFLOAT_BLOCK ||
@@ -3426,6 +3461,9 @@ std::shared_ptr<DecodeResources> record_decode_image(VkDevice d, VkCommandBuffer
     else writes[i].pBufferInfo = &buffers[i == 0 ? 0 : 1];
   }
   vk<PFN_vkUpdateDescriptorSets>(d, "vkUpdateDescriptorSets")(d, 3, writes, 0, nullptr);
+  const std::uint32_t groups[] = {ceil_div(region.width, 8), ceil_div(region.height, 8), 1};
+  FaultPass pass(cmd, decode_pass(fault_markers::PassKind::decode_image, region, region.format.decoded, source_size,
+                                  groups, site));
   vk<PFN_vkCmdBindPipeline>(d, "vkCmdBindPipeline")(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, p.pipeline);
   vk<PFN_vkCmdBindDescriptorSets>(d, "vkCmdBindDescriptorSets")(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
       p.layout, 0, 1, &set, 0, nullptr);
@@ -3433,7 +3471,7 @@ std::shared_ptr<DecodeResources> record_decode_image(VkDevice d, VkCommandBuffer
       region.width, region.height, region.row_blocks, region.source_word, slice};
   vk<PFN_vkCmdPushConstants>(d, "vkCmdPushConstants")(cmd, p.layout, VK_SHADER_STAGE_COMPUTE_BIT,
       0, sizeof(push), push);
-  vk<PFN_vkCmdDispatch>(d, "vkCmdDispatch")(cmd, ceil_div(region.width, 8), ceil_div(region.height, 8), 1);
+  vk<PFN_vkCmdDispatch>(d, "vkCmdDispatch")(cmd, groups[0], groups[1], groups[2]);
   return resources;
 }
 SparseImageBindings sparse_image_bindings(const VkImageCreateInfo& image,

@@ -18,6 +18,11 @@
 #include "launcher/auth_browser.h"
 #include "launcher/options.h"
 #include "launcher/worker.h"
+// Defines VENTURE_HEADSET_CHECK, which gates the headset check below.
+#include "launcher/headset_check.h"
+#if VENTURE_HEADSET_CHECK
+#include "launcher/headset_play.h"
+#endif
 #include <chrono>
 #include <atomic>
 #include <deque>
@@ -30,6 +35,9 @@ class Source;
 namespace venture::launcher {
 // The message shown for the exception being handled.
 std::string exception_text();
+// A game's lock, held while its saves are imported or sent or its APK is
+// replaced; throws when another task or a running game holds it.
+std::shared_ptr<FileLock> save_lock(const fs::path &data, const std::string &package);
 struct AccountView {
   std::string key, alias, display_name;
   bool active = false, primary = false, signed_in = false, needs_reauth = false;
@@ -80,6 +88,12 @@ public:
   // Uploads a saved report in the background; `done` runs on the UI thread
   // with its link, or with why the upload failed.
   void share_debug_report(fs::path file, std::function<void(std::string url, std::string error)> done);
+#if VENTURE_HEADSET_CHECK
+  // The headset check (headset_play.h): on Android for every installed game,
+  // with the logs of `package`'s game when it is not empty; on Linux arm64
+  // the host as Play's runtime sees it.
+  headset::Check headset_check(std::string_view package = {}) const;
+#endif
 
 protected:
   // Completions are ready for tick(); called from worker threads.
@@ -176,6 +190,22 @@ protected:
   };
   std::map<std::string, Running> running_;
   std::set<std::string> launch_pending_;
+  // First-launch preparation (venture-runtime --prepare, see common/first_launch.h):
+  // one new install at a time, at idle priority, while no game runs or starts.
+  struct Preparation {
+    std::string app_id, package;
+    Process process;
+    bool stopped = false;  // asked to stop (a game starts or the game goes)
+  };
+  std::shared_ptr<Preparation> preparing_;
+  std::map<std::string, int> prepare_failures_;
+  uint64_t prepare_poll_ = 0;
+  bool needs_preparation(const library::Install &install) const;
+  void prepare_tick();
+  // Asks the running preparation to stop (only one of `package` when given) and
+  // hands it over for the caller to wait on with finish_preparation.
+  std::shared_ptr<Preparation> stop_preparation(std::string_view package = {});
+  static void finish_preparation(Preparation &preparation);
   // Cross-process game lock also covers a Steam launch beside an open UI.
   std::map<std::string, std::unique_ptr<FileLock>> game_locks_;
   bool steam_pending_ = false, steam_busy_ = false, steam_restart_ = false;
@@ -271,6 +301,10 @@ protected:
   std::string import_address_;         // typed for Wi-Fi debugging
   std::optional<fs::path> import_adb_; // adb found for the last scan
   std::unique_ptr<Worker> import_worker_;
+  // Adapting and installing games on a headset (headset_play.h), off the UI thread.
+  std::unique_ptr<Worker> headset_worker_;
+  std::mutex headset_status_mutex_;
+  std::string headset_status_;  // the install's latest step, shown as the notice
   mutable std::mutex adb_mutex_;       // read by the download thread
   fs::path adb_setting_;
   static ImportItem import_item(const import::Source &source);
@@ -335,6 +369,33 @@ protected:
   void export_saves_later(std::string_view app_id);
   // `serial`, or with none the first ready headset; throws saying why none is.
   static android::adb::Client headset(const fs::path &adb, std::string serial, std::stop_token stop);
+  // Mods (launcher/mods.cpp, common/library/mods.h), from a file dropped on
+  // the window or picked on a game's Mods tab (`shown_id`: the game page shown,
+  // if any). A .qmod installs for the game it names (else the shown one) with
+  // the dependencies its manifest gives downloads for; a patched APK of an
+  // installed game's version replaces its APK; on a game's page, a file one of
+  // its mods takes (copyExtensions) is added, and libsl2.so is its loader.
+  // Copies and downloads run on the import worker. False for a file that is
+  // none of these (the import page takes it); throws for one that cannot be added.
+  bool add_mod_file(const fs::path &file, std::string_view shown_id = {});
+  void set_mod_enabled(std::string_view app_id, const std::string &id, bool enabled);
+  void remove_mod(std::string_view app_id, const std::string &id);
+  void remove_mod_item(std::string_view app_id, const std::string &extension, const std::string &name);
+  void restore_original_apk(std::string_view app_id);
+  // Writes `file` over the installed expansion file `name` (an OBB of its
+  // plan), on the import worker. The store's file is not kept: restore_obb
+  // removes the replacement and downloads the game's files again from the store.
+  void replace_obb(std::string_view app_id, const std::string &name, const fs::path &file);
+  void restore_obb(std::string_view app_id, const std::string &name);
+  // The installs a mod or patched APK for `package` can go to, best first: the
+  // shown page's, then those whose version the mod names (`version`, if any),
+  // then the game's own over pinned versions. Only complete installs.
+  std::vector<const library::Install *> mod_targets(std::string_view package, std::string_view shown_id,
+                                                    std::string_view version) const;
+  // An install's mods (mods_dir): a pinned version keeps its own.
+  fs::path mods_folder(const library::Install &install) const;
+  std::set<std::string> mods_busy_;  // packages with a mod change running
+  std::uint64_t mods_generation_ = 0;  // counts mod changes, so views read the mods again
   // Saves settings and rescans the library folders they name.
   void apply_settings(library::Settings next, bool announce = true);
   void save_library();

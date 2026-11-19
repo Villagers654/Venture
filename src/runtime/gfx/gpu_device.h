@@ -24,8 +24,15 @@ typedef struct VkInstance_T* VkInstance;
 typedef struct VkPhysicalDevice_T* VkPhysicalDevice;
 typedef struct VkDevice_T* VkDevice;
 typedef struct VkQueue_T* VkQueue;
-typedef void (*PFN_vkVoidFunction)(void);
-typedef PFN_vkVoidFunction (*PFN_vkGetInstanceProcAddr)(VkInstance, const char*);
+// The calling convention vulkan.h gives these (aapcs-vfp on 32-bit Android ARM).
+#if __has_include(<vulkan/vk_platform.h>)
+#include <vulkan/vk_platform.h>
+#endif
+#ifndef VKAPI_PTR
+#define VKAPI_PTR
+#endif
+typedef void (VKAPI_PTR *PFN_vkVoidFunction)(void);
+typedef PFN_vkVoidFunction (VKAPI_PTR *PFN_vkGetInstanceProcAddr)(VkInstance, const char*);
 
 namespace venture::gfx {
 

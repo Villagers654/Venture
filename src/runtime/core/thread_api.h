@@ -22,6 +22,9 @@ int set_name(GuestAddr handle, const char* name);
 // Snapshot of live guest tids and names for /proc; do not hold core locks
 // while the caller formats the returned data or invokes guest callbacks.
 std::vector<std::pair<std::int32_t, std::string>> list();
+// The same without waiting: false when the registry is busy (diagnostics that
+// must not block on a thread holding it).
+bool try_list(std::vector<std::pair<std::int32_t, std::string>>& out);
 std::size_t count();
 // Unwinds guest calls to the core run loop (must not exit the host process).
 [[noreturn]] void exit(GuestThread&, GuestAddr result);

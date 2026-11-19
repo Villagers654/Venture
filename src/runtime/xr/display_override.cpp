@@ -166,6 +166,13 @@ std::uint32_t mirror_eye() {
   }();
   return eye;
 }
+bool mirror_fullscreen() {
+  static const bool on = [] {
+    const char* value = venture::environment::getenv("VENTURE_MIRROR_FULLSCREEN");
+    return value && std::string_view(value) == "on";
+  }();
+  return on;
+}
 const std::vector<const char*>& mirror_instance_extensions() {
   static const std::vector<const char*> names = [] {
     std::vector<const char*> out;
@@ -194,17 +201,17 @@ bool mirror_capable(const void* handle) {
 }
 namespace {
 std::mutex queues_mutex;
-std::vector<std::tuple<VkDevice, std::uint32_t, std::uint32_t>> mirror_queues;
+std::vector<std::pair<VkDevice, MirrorQueue>> mirror_queues;
 }
-std::optional<std::pair<std::uint32_t, std::uint32_t>> mirror_queue(VkDevice device) {
+std::optional<MirrorQueue> mirror_queue(VkDevice device) {
   std::lock_guard lock(queues_mutex);
-  for (const auto& [d, family, index] : mirror_queues)
-    if (d == device) return std::pair{family, index};
+  for (const auto& [d, queue] : mirror_queues)
+    if (d == device) return queue;
   return std::nullopt;
 }
 void forget_mirror_queue(VkDevice device) {
   std::lock_guard lock(queues_mutex);
-  std::erase_if(mirror_queues, [&](const auto& q) { return std::get<0>(q) == device; });
+  std::erase_if(mirror_queues, [&](const auto& q) { return q.first == device; });
 }
 void MirrorQueueRequest::add(std::span<const VkQueueFamilyProperties> families, VkDeviceCreateInfo& info) {
   queue_.reset();
@@ -229,20 +236,30 @@ void MirrorQueueRequest::add(std::span<const VkQueueFamilyProperties> families, 
     for (std::uint32_t f = 0; !family && f < families.size(); ++f)
       if (spare(f, flags)) family = f;
   if (!family) {
-    log::info("mirror", "Desktop mirror off for this device: no queue to spare for presenting");
+    // The game took them all: present on one of its own graphics queues,
+    // preferably the family of its first (usually the XR binding's).
+    for (const auto& q : queues_)
+      if (!q.flags && q.queueCount && q.queueFamilyIndex < families.size() &&
+          (families[q.queueFamilyIndex].queueFlags & VK_QUEUE_GRAPHICS_BIT)) {
+        queue_ = MirrorQueue{q.queueFamilyIndex, 0, false};
+        log::info("mirror", "Desktop mirror presents on the game's graphics queue family {}: no queue to spare",
+                  q.queueFamilyIndex);
+        return;
+      }
+    log::info("mirror", "Desktop mirror off for this device: no graphics queue to present on");
     return;
   }
   auto existing = std::ranges::find_if(queues_, [&](const auto& q) { return !q.flags && q.queueFamilyIndex == *family; });
   if (existing != queues_.end()) {
     priorities_.assign(existing->pQueuePriorities, existing->pQueuePriorities + existing->queueCount);
-    queue_ = std::pair{*family, existing->queueCount};
+    queue_ = MirrorQueue{*family, existing->queueCount};
     existing->queueCount++;
   } else {
     VkDeviceQueueCreateInfo q{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};
     q.queueFamilyIndex = *family;
     q.queueCount = 1;
     priorities_.clear();
-    queue_ = std::pair{*family, 0u};
+    queue_ = MirrorQueue{*family, 0};
     queues_.push_back(q);
     existing = queues_.end() - 1;
   }
@@ -255,7 +272,7 @@ void MirrorQueueRequest::add(std::span<const VkQueueFamilyProperties> families, 
 void MirrorQueueRequest::created(VkDevice device) const {
   // Also replaces what a destroyed device with the same handle left.
   std::lock_guard lock(queues_mutex);
-  std::erase_if(mirror_queues, [&](const auto& q) { return std::get<0>(q) == device; });
-  if (queue_) mirror_queues.emplace_back(device, queue_->first, queue_->second);
+  std::erase_if(mirror_queues, [&](const auto& q) { return q.first == device; });
+  if (queue_) mirror_queues.emplace_back(device, *queue_);
 }
 } // namespace venture::xr

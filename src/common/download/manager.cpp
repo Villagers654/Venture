@@ -672,7 +672,9 @@ void Manager::run(std::stop_token shutdown) {
         auto p = dir / paths::from_utf8(f.name);
         if (!paths::within(dir, p))
           throw std::runtime_error("File path escapes installation directory.");
-        if (fs::is_regular_file(p) && fs::file_size(p) == f.size)
+        std::error_code size_ec;
+        const auto have = fs::is_regular_file(p) ? fs::file_size(p, size_ec) : 0;
+        if (have == f.size || library::replaced_obb(f, have))
           remaining -= f.size;
         else {
           p += ".part";
@@ -701,6 +703,18 @@ void Manager::run(std::stop_token shutdown) {
       wake_();
       uint64_t finished = 0;
       for (auto &f : selected) {
+        // An OBB the player replaced in the game's folder is kept, never
+        // downloaded over (library::replaced_obb).
+        {
+          std::error_code size_ec;
+          const auto target = dir / paths::from_utf8(f.name);
+          if (fs::is_regular_file(target, size_ec) &&
+              library::replaced_obb(f, fs::file_size(target, size_ec))) {
+            log::info("downloads", "Keeping {}: it was replaced in the game's folder.", f.name);
+            finished += f.size;
+            continue;
+          }
+        }
         auto start = std::chrono::steady_clock::now();
         auto last = start;
         uint64_t initial = 0;

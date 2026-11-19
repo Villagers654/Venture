@@ -242,10 +242,14 @@ struct Session::Impl {
   Handle locale = 0;
   std::map<std::string, Handle, std::less<>> borrowed_strings;
   LaunchDetails launch_info;
+  bool join_intent_posted = false;
   std::string session_key;
   nlohmann::json presence = nlohmann::json::object();
   std::deque<std::string> heartbeats;
   Clock::time_point heartbeat_due = Clock::time_point::max();
+  // report_playing: the heartbeat runs without a presence call from the game,
+  // once the account's session is loaded (prepare).
+  bool playing = false, prepared = false;
   std::jthread presence_worker;
   std::vector<std::jthread> workers;
 
@@ -365,12 +369,30 @@ struct Session::Impl {
         heartbeat_due = Clock::time_point::max();
       }
       Result result;
+      bool prepare_now = false;
+      { std::lock_guard lock(mutex); prepare_now = playing && !prepared; }
+      if (prepare_now) {
+        // A game that never initializes the platform SDK has no loaded session yet.
+        Error error;
+        try { error = provider->prepare(); }
+        catch (...) { error = failure(ErrorCode::unauthenticated); }
+        if (error) {
+          // No signed-in account (an offline or local launch) or no app id: nothing to report.
+          log::info("ovrplatform", "Playtime not reported to Meta error={}", static_cast<int>(error.code));
+          continue;
+        }
+        std::lock_guard lock(mutex);
+        prepared = true;
+      }
       try { result = provider->heartbeat(current, stop); }
       catch (...) { result.error = failure(ErrorCode::unavailable); }
       std::lock_guard lock(mutex);
       if (stop.stop_requested()) return;
       if (result.error) {
         log::warn("ovrplatform", "Presence heartbeat failed error={}", static_cast<int>(result.error.code));
+        // While playing, a failed call (offline, a server error) is tried again later.
+        if (playing && result.error.code != ErrorCode::identity_mismatch)
+          heartbeat_due = Clock::now() + std::chrono::minutes(1);
       } else {
         try { heartbeat_due = Clock::now() + std::chrono::seconds(std::stoi(result.text)); }
         catch (...) { log::warn("ovrplatform", "Presence heartbeat invalid interval"); }
@@ -397,6 +419,26 @@ struct Session::Impl {
     }
     return {};
   }
+  // A launch from an accepted invite or a join (LaunchType Invite with a
+  // destination, lobby or match) reaches the game twice on a headset: in the
+  // launch details and, once the platform is up (cold or warm start), as a
+  // Notification_GroupPresence_JoinIntentReceived carrying the same fields.
+  // Called under mutex when initialization succeeds.
+  void post_join_intent() {
+    const auto& info = launch_info;
+    if (join_intent_posted || info.type != 2 ||
+        (info.destination.empty() && info.lobby.empty() && info.match.empty()))
+      return;
+    join_intent_posted = true;
+    Result intent;
+    intent.model = {"GroupPresenceJoinIntent",
+                    {{"DeeplinkMessage", info.deeplink},
+                     {"DestinationApiName", info.destination},
+                     {"LobbySessionId", info.lobby},
+                     {"MatchSessionId", info.match}}};
+    completed.push_back({0, 0x773889f6, std::move(intent)});
+    log::info("ovrplatform", "Group presence join intent queued for the invite launch");
+  }
   void finish(const Job& job, Result result) {
     startup_received(job, static_cast<int>(result.error.code));
     if (job.generation != generation || !pending.erase(job.id)) return;
@@ -421,8 +463,10 @@ struct Session::Impl {
                     Clock::now() - job.requested_at).count(),
                 static_cast<int>(result.error.code));
     }
+    const bool ready = job.init && state == State::ready;
     completed.push_back({job.id, job.type, std::move(result), job.init, Clock::now(), polls, job.host});
     startup_message(job.id, false);
+    if (ready) post_join_intent();
   }
   void run(std::stop_token stop) {
     for (;;) {
@@ -577,6 +621,15 @@ void Session::log_startup_snapshot() const {
     log::info("startup-snapshot", "request id={} type={:#x} host={} received={} queued={} popped={} taken_by_host={} error={}",
               r.id, r.type, r.host, r.received, r.queued, r.popped, r.taken_by_host, r.error);
 }
+void Session::report_playing() {
+  std::lock_guard lock(impl_->mutex);
+  if (impl_->playing) return;
+  impl_->playing = true;
+  // The current presence (none yet: an empty state, as a clear sends) starts it.
+  if (impl_->heartbeats.empty())
+    impl_->heartbeats.push_back(impl_->presence.empty() ? std::string{} : impl_->presence.dump());
+  impl_->wake.notify_all();
+}
 void Session::set_microphone_mute(VoipMuteState value) {
   std::lock_guard lock(impl_->mutex);
   if (value == VoipMuteState::unknown || value == VoipMuteState::muted ||
@@ -612,6 +665,8 @@ InitResult Session::initialize(std::string_view app_id) {
   impl_->wake.notify_all();
   if (error)
     log::warn("ovrplatform", "initialization failed error={}", static_cast<int>(error.code));
+  else
+    impl_->post_join_intent();
   return init_error(error);
 }
 Request Session::initialize_async(std::string_view app_id, std::uint32_t type) {

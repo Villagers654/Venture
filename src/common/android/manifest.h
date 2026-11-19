@@ -14,6 +14,15 @@ struct Manifest {
   std::uint32_t label_id = 0;     // android:label as a resource reference (resources.arsc)
   std::uint32_t banner_id = 0, icon_id = 0;  // <application> android:banner and android:icon
   std::vector<std::string> required_features;  // <uses-feature> names whose android:required is true
+  std::int32_t min_sdk = 0, target_sdk = 0;    // <uses-sdk>, 0 when absent
+  // Each <intent-filter> with action MAIN on an <activity> or <activity-alias>:
+  // how the home screen (or a headset's VR shell) may start the app.
+  struct LaunchFilter {
+    bool alias = false;  // on an <activity-alias>, which some shells do not start
+    std::vector<std::string> categories;
+  };
+  std::vector<LaunchFilter> launch_filters;
+  std::vector<std::string> native_libraries;  // <uses-native-library> names: system libraries the app asks for
 };
 // AOSP ResourceTypes.h binary XML; throws for malformed input or a manifest
 // without a package.

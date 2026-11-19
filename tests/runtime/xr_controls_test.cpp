@@ -19,6 +19,9 @@
 #include <chrono>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <string>
 #include <set>
 #include <thread>
@@ -324,7 +327,7 @@ TEST_CASE("A Touch-shaped controller's menu is its menu button and both stick cl
   }
 }
 
-TEST_CASE("Without XR_EXT_dpad_binding a Vive wand's trackpad press is X and A") {
+TEST_CASE("Without XR_EXT_dpad_binding Venture splits a Vive wand's trackpad into its halves") {
   venture::test::ScopedMenuMode automatic("");
   ScopedControls defaults("");
   auto& host = venture::xr::host_xr();
@@ -340,14 +343,30 @@ TEST_CASE("Without XR_EXT_dpad_binding a Vive wand's trackpad press is X and A")
   venture::xr::invalidate_host_procedures();
   REQUIRE_FALSE(venture::xr::host_dpad());
   VrApiGame game("/interaction_profiles/htc/vive_controller");
-  for (int hand = 0; hand < 2; ++hand) {
-    MockXrScript script{};
-    (hand ? script.right : script.left).thumbstick_click = true;  // the mock's trackpad/click
-    const auto state = game.read(script, hand);
-    CHECK(sees(state, Quest::primary, hand));
-    CHECK_FALSE(sees(state, Quest::secondary, hand));
-    CHECK_FALSE(sees(state, Quest::stick_click, hand));
-  }
+  // The mock's trackpad is its thumbstick vector and its press the stick click.
+  // Bottom is X / A, top Y / B, the center Stick click (#159: WMR's own runtime).
+  struct Press {
+    XrVector2f at;
+    Quest expected;
+  };
+  for (const auto& [at, expected] : {Press{{0.f, -0.9f}, Quest::primary}, Press{{0.1f, 0.8f}, Quest::secondary},
+                                     Press{{0.f, 0.1f}, Quest::stick_click}})
+    for (int hand = 0; hand < 2; ++hand) {
+      CAPTURE(hand);
+      CAPTURE(int(expected));
+      MockXrScript script{};
+      auto& c = hand ? script.right : script.left;
+      c.thumbstick = at;
+      c.thumbstick_click = true;
+      const auto state = game.read(script, hand);
+      for (const auto q : {Quest::primary, Quest::secondary, Quest::stick_click})
+        CHECK(sees(state, q, hand) == (q == expected));
+    }
+  // Touching the pad without pressing it presses nothing.
+  MockXrScript touched{};
+  touched.left.thumbstick = {0.f, -0.9f};
+  const auto state = game.read(touched, 0);
+  CHECK_FALSE(sees(state, Quest::primary, 0));
 }
 
 TEST_CASE("An OpenXR game's Touch bindings follow the player's controls on another controller") {
@@ -1412,4 +1431,200 @@ TEST_CASE("An OpenXR hand space made before the game suggests its bindings follo
   MockXrScript restored{};
   ventureMockXrSetScript(&restored);
   ventureMockXrSetProfile(nullptr);
+}
+
+TEST_CASE("A player's offset moves where a VrApi game sees that controller") {
+  venture::test::ScopedMenuMode automatic("");
+  constexpr const char* kIndexProfile = "/interaction_profiles/valve/index_controller";
+  // Where the game sees the left controller under `controls`.
+  auto locate = [&](const std::string& controls) {
+    ScopedControls scoped(controls);
+    VrApiGame game(kIndexProfile);
+    MockXrScript script{};
+    script.left.grip = {{0, 0, 0, 1}, {0.1f, 1.2f, -0.3f}};
+    ventureMockXrSetScript(&script);
+    REQUIRE(vr::sync_input() == XR_SUCCESS);
+    vr::abi::TrackingHead tracking{};
+    REQUIRE(vg::vrapi_GetInputTrackingState(game.mobile, 1, vg::vrapi_GetPredictedDisplayTime(game.mobile, 1),
+                                            &tracking) == 0);
+    return tracking.head.pose;
+  };
+  const auto plain = locate("");
+  Config shifted;
+  shifted[kIndexProfile].offsets[0].position = {0, 20, -100};  // 2 cm up, 10 cm forward
+  const auto moved = locate(encode(shifted));
+  CHECK(moved.position.x == doctest::Approx(plain.position.x).epsilon(0.001));
+  CHECK(moved.position.y - plain.position.y == doctest::Approx(0.02f).epsilon(0.01));
+  CHECK(moved.position.z - plain.position.z == doctest::Approx(-0.1f).epsilon(0.01));
+  // Another controller's offset leaves this one alone.
+  Config other;
+  other["/interaction_profiles/htc/vive_controller"].offsets[0].position = {0, 0, -100};
+  CHECK(locate(encode(other)).position.z == doctest::Approx(plain.position.z));
+  // A turn turns it.
+  Config turned;
+  turned[kIndexProfile].offsets[0].rotation = {0, 90, 0};
+  const auto t = locate(encode(turned));
+  CHECK(std::abs(t.orientation.y - plain.orientation.y) > 0.3f);
+}
+
+TEST_CASE("Tuning reaches a VrApi game: stick dead zone and inversion, trigger press point, toggles, vibration off") {
+  venture::test::ScopedMenuMode automatic("");
+  constexpr const char* kIndex = "/interaction_profiles/valve/index_controller";
+  Config config;
+  auto& c = config[kIndex];
+  c.tuning[0] = {20, false, true, 30, 0, false, 100};
+  c.toggles[int(Quest::primary)] = true;
+  ScopedControls controls(encode(config));
+  VrApiGame game(kIndex);
+  MockXrScript s{};
+  s.left.thumbstick = {0, -0.5f};
+  auto state = game.read(s, 0);
+  CHECK(state.raw_joystick.y == doctest::Approx(0.5f));
+  CHECK(state.joystick.y == doctest::Approx(0.375f));
+  s = {};
+  s.left.trigger = 0.35f;
+  CHECK((game.read(s, 0).buttons & 0x20000000u) != 0);  // pressed at 30 %, not the usual 55 %
+  s.right.trigger = 0.35f;
+  CHECK((game.read(s, 1).buttons & 0x20000000u) == 0);  // the right hand keeps the default
+  // A toggle: one press holds, the next lets go.
+  MockXrScript pressed{};
+  pressed.left.primary = true;
+  CHECK(sees(game.read(pressed, 0), Quest::primary, 0));
+  CHECK(sees(game.read(MockXrScript{}, 0), Quest::primary, 0));
+  CHECK_FALSE(sees(game.read(pressed, 0), Quest::primary, 0));
+  CHECK_FALSE(sees(game.read(MockXrScript{}, 0), Quest::primary, 0));
+  // Vibration off on the left only.
+  const auto pulses = ventureMockXrStats().haptic_pulses;
+  CHECK(vg::vrapi_SetHapticVibrationSimple(game.mobile, 1, 1.f) == 0);
+  CHECK(ventureMockXrStats().haptic_pulses == pulses);
+  CHECK(vg::vrapi_SetHapticVibrationSimple(game.mobile, 2, 1.f) == 0);
+  CHECK(ventureMockXrStats().haptic_pulses == pulses + 1);
+}
+
+TEST_CASE("Tuning reaches an OpenXR game: the grip's press point and a dead zone on its hand") {
+  venture::test::ScopedMenuMode automatic("");
+  constexpr const char* kIndex = "/interaction_profiles/valve/index_controller";
+  Config config;
+  config[kIndex].tuning[0].grip_press = 80;
+  ScopedControls controls(encode(config));
+  GripGame game(kIndex);
+  game.sync(0.6f, 0);
+  CHECK_FALSE(game.either().currentState);  // the left grip presses at 80 %
+  game.sync(0.85f, 0);
+  CHECK(game.either().currentState);
+  game.sync(0.75f, 0);
+  CHECK(game.either().currentState);  // held until a little lower
+  game.sync(0.65f, 0);
+  CHECK_FALSE(game.either().currentState);
+  CHECK(game.hand(0).currentState == doctest::Approx(0.65f));  // the analog grip is untouched
+}
+
+namespace {
+struct ScopedReport {
+  std::filesystem::path file =
+      std::filesystem::temp_directory_path() /
+      ("venture_controllers_test_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".json");
+  ScopedReport() { set(file.string().c_str()); }
+  ~ScopedReport() {
+    set(nullptr);
+    std::error_code ec;
+    std::filesystem::remove(file, ec);
+  }
+  static void set(const char* value) {
+#ifdef _WIN32
+    _putenv_s("VENTURE_CONTROLLER_REPORT", value ? value : "");
+#else
+    if (value) setenv("VENTURE_CONTROLLER_REPORT", value, 1); else unsetenv("VENTURE_CONTROLLER_REPORT");
+#endif
+    venture::environment::refresh();
+  }
+  std::string text() const {
+    std::ifstream in(file, std::ios::binary);
+    return {std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
+  }
+};
+struct ScopedModels {
+  explicit ScopedModels(std::array<std::string, 2> models) { venture::xr::override_controller_models(std::move(models)); }
+  ~ScopedModels() { venture::xr::override_controller_models(std::nullopt); }
+};
+std::set<std::string> suggested(const char* profile) {
+  std::string text(ventureMockXrSuggestedBindings(profile, nullptr, 0), '\0');
+  ventureMockXrSuggestedBindings(profile, text.data(), std::uint32_t(text.size()));
+  std::set<std::string> out;
+  for (std::size_t at = 0, end; (end = text.find('\n', at)) != std::string::npos; at = end + 1)
+    out.insert(text.substr(at, end - at));
+  return out;
+}
+}  // namespace
+
+TEST_CASE("Touch Plus is suggested with every input Venture binds on Touch, so a runtime that knows it picks it") {
+  // A runtime picks the most specific profile it has bindings for; one given only
+  // the Plus extras, or fewer inputs than Touch, could keep the controller on Touch.
+  venture::test::ScopedMenuMode automatic("");
+  ScopedControls defaults("");
+  OpenXrGame game("/interaction_profiles/meta/touch_controller_plus");
+  const XrAction a = game.action("a");
+  REQUIRE(game.suggest("/interaction_profiles/oculus/touch_controller", {{a, game.path("/user/hand/right/input/a/click")}}) ==
+          XR_SUCCESS);
+  game.start();
+  const auto touch = suggested("/interaction_profiles/oculus/touch_controller");
+  const auto plus = suggested("/interaction_profiles/meta/touch_controller_plus");
+  REQUIRE_FALSE(touch.empty());
+  for (const auto& path : touch) {
+    CAPTURE(path);
+    CHECK(plus.contains(path));
+  }
+  for (const char* hand : {"/user/hand/left", "/user/hand/right"})
+    for (const char* component : {"/input/trigger/value", "/input/trigger/touch", "/input/squeeze/value", "/input/thumbstick",
+                                  "/input/thumbstick/click", "/input/thumbstick/touch", "/input/thumbrest/touch",
+                                  "/input/grip/pose", "/input/aim/pose", "/output/haptic"}) {
+      CAPTURE(hand);
+      CAPTURE(component);
+      CHECK(plus.contains(std::string(hand) + component));
+    }
+  for (const char* path : {"/user/hand/left/input/x/click", "/user/hand/left/input/x/touch", "/user/hand/left/input/y/click",
+                           "/user/hand/left/input/y/touch", "/user/hand/left/input/menu/click", "/user/hand/right/input/a/click",
+                           "/user/hand/right/input/a/touch", "/user/hand/right/input/b/click", "/user/hand/right/input/b/touch"}) {
+    CAPTURE(path);
+    CHECK(plus.contains(path));
+  }
+  // The game bound only Touch, so it is still told Touch on the Plus host.
+  CHECK(game.current(1) == game.path("/interaction_profiles/oculus/touch_controller"));
+}
+
+TEST_CASE("A runtime that reports Touch for Touch Plus controllers: the report and the player's controls follow its render model") {
+  // SteamVR has no Touch Plus profile and reports Touch for a Quest 3's
+  // controllers; its render model for them is oculus_quest_plus_controller_*.
+  venture::test::ScopedMenuMode automatic("");
+  ScopedModels models({"oculus_quest_plus_controller_left", "oculus_quest_plus_controller_right"});
+  ScopedReport report;
+  Config config;
+  // The player swapped X and Y on the controller the Controls page showed them.
+  auto& plus = config["/interaction_profiles/meta/touch_controller_plus"];
+  plus.rows[0][int(Quest::primary)] = Inputs{"/input/y/click"};
+  plus.rows[0][int(Quest::secondary)] = Inputs{"/input/x/click"};
+  ScopedControls controls(encode(config));
+  VrApiGame game("/interaction_profiles/oculus/touch_controller");
+  MockXrScript script{};
+  press(script.left, "/input/x/click");
+  const auto left = game.read(script, 0);
+  CHECK(sees(left, Quest::secondary, 0));
+  CHECK_FALSE(sees(left, Quest::primary, 0));
+  const auto json = report.text();
+  CAPTURE(json);
+  CHECK(json.find("\"left\":\"/interaction_profiles/meta/touch_controller_plus\"") != std::string::npos);
+  CHECK(json.find("\"right\":\"/interaction_profiles/meta/touch_controller_plus\"") != std::string::npos);
+}
+
+TEST_CASE("Without a render model naming another controller, the host's profile is the controller") {
+  venture::test::ScopedMenuMode automatic("");
+  // A Quest 2's Touch: the runtime's own profile is the controller.
+  ScopedModels models({"oculus_quest2_controller_left", "oculus_quest2_controller_right"});
+  Config config;
+  config["/interaction_profiles/meta/touch_controller_plus"].rows[0][int(Quest::primary)] = Inputs{"/input/y/click"};
+  ScopedControls controls(encode(config));
+  VrApiGame game("/interaction_profiles/oculus/touch_controller");
+  MockXrScript script{};
+  press(script.left, "/input/x/click");
+  CHECK(sees(game.read(script, 0), Quest::primary, 0));  // Touch's defaults, not Touch Plus's controls
 }

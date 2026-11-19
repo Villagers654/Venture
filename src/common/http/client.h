@@ -41,6 +41,10 @@ Response post_loopback(uint16_t port, std::string_view path,
 std::string get_public(std::string url, std::stop_token stop = {});
 // Venture's latest published release from GitHub's API; no account data is sent.
 Response get_latest_release(std::stop_token stop = {});
+// Maven Central's listing of Meta's VR OS Java SDK (com.meta.metavr:metavr-os-jsdk):
+// each Horizon OS SDK release publishes it, so its newest version is the newest OS
+// SDK. No account data is sent.
+Response get_metavr_os_sdk(std::stop_token stop = {});
 // OculusDB's public package lookup (oculusdb.rui2015.me): only the package
 // name is sent, with no account data.
 Response get_oculusdb_package(std::string_view package, std::stop_token stop = {});
@@ -63,4 +67,9 @@ bool allowed_release(std::string_view url);
 void download_release(std::string url, const fs::path &destination, uint64_t expected,
                       std::stop_token stop, const Progress &progress);
 std::string get_release_text(std::string url, std::stop_token stop = {});
+// Mod packages and mod loaders from where a mod's manifest says to get them
+// (its dependencies' downloadIfMissing): https on the default port, with no
+// credentials in the URL. No account data is sent.
+bool allowed_mod_download(std::string_view url);
+void download_mod(std::string url, const fs::path &destination, std::stop_token stop);
 } // namespace venture::http

@@ -1,6 +1,7 @@
 #include "platform/thread_priority.h"
 #include "core/thread_lifetime.h"
 #include "vfs.h"
+#include "shell.h"
 #include "abi32.h"
 #include "core/guest_storage.h"
 #include "core/thread_api.h"
@@ -178,9 +179,35 @@ int cacheflush_fn(std::uint32_t start, std::uint32_t end, std::uint32_t flags) {
   return 0;
 }
 std::atomic<int> dumpable{1};
-int prctl_fn(int option, std::uint64_t a, std::uint64_t /*b*/, std::uint64_t /*c*/, std::uint64_t /*d*/) {
+std::atomic<int> thp_disabled{0};
+// PR_SET_VMA_ANON_NAME: a Quest kernel (Android common kernel) names anonymous
+// mappings for /proc/pid/maps. Validate as the kernel does; the name itself
+// is diagnostic only, so a valid request succeeds without storing it.
+int set_vma_anon_name(std::uint64_t address, std::uint64_t length, std::uint64_t name) {
+  constexpr std::uint64_t page = 4096;
+  if (address & (page - 1) || address + length < address) return failure(err::einval);
+  if (!name) return 0; // clears the name
+  for (unsigned i = 0;; ++i) {
+    if (i == 80) return failure(err::einval); // ANON_VMA_NAME_MAX_LEN including the terminator
+    const auto c = *g2h<unsigned char>(name + i);
+    if (!c) return 0;
+    if (c < 0x20 || c > 0x7e || c == '[' || c == ']' || c == '\\' || c == '$' || c == '`')
+      return failure(err::einval);
+  }
+}
+int prctl_fn(int option, std::uint64_t a, std::uint64_t b, std::uint64_t c, std::uint64_t d) {
   auto& thread = *GuestThread::current();
   switch (option) {
+    case 41: // PR_SET_THP_DISABLE: there are no transparent huge pages to disable; keep the flag.
+      if (b || c || d) return failure(err::einval);
+      thp_disabled = a != 0;
+      return 0;
+    case 42: // PR_GET_THP_DISABLE
+      if (a || b || c || d) return failure(err::einval);
+      return thp_disabled.load();
+    case 0x53564d41: // PR_SET_VMA
+      if (a != 0) return failure(err::einval); // only PR_SET_VMA_ANON_NAME exists
+      return set_vma_anon_name(b, c, d);
     case 3:
       return dumpable.load();
     case 4:
@@ -239,7 +266,9 @@ int unsupported() {
   log::warn("libc", "guest process creation/execution is unavailable");
   return failure(err::enosys);
 }
-int system_fn(const char* command) { return command ? unsupported() : 0; }
+// sh -c COMMAND for the simple file commands apps and mods run (shell.cpp);
+// the result is the wait status of a shell that exited with its status.
+int system_fn(const char* command) { return command ? (run_shell_command(command) & 0xff) << 8 : 1; }
 int spawn_fn(GuestAddr, const char*, GuestAddr, GuestAddr, GuestAddr, GuestAddr) {
   unsupported();
   return err::enosys;

@@ -36,6 +36,7 @@
 #include <cstring>
 #include <mutex>
 #include <optional>
+#include <tuple>
 #include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
@@ -85,6 +86,9 @@ std::unordered_map<VkImageView, View> views;
 // of an input attachment image (sampled_input_view).
 std::unordered_map<VkImageView, std::pair<VkDevice, VkImageView>> array_views;
 std::unordered_map<VkFramebuffer, VkExtent2D> clamped;
+// The attachments of framebuffers with an image whose layout is tracked
+// (tracked_layouts.cpp): a render pass leaves them in its final layouts.
+std::unordered_map<VkFramebuffer, std::vector<VkImageView>> tracked_attachments;
 struct Pass {
   // The attachments its subpasses use as input, color, resolve or
   // depth/stencil attachments. Only those must cover the framebuffer
@@ -99,6 +103,9 @@ struct Pass {
   std::vector<VkFormat> formats;
   std::vector<VkSampleCountFlagBits> samples;
   std::uint32_t view_layers = 1;
+  // Per subpass, the sample count of each input attachment by input attachment
+  // index (0 for VK_ATTACHMENT_UNUSED).
+  std::vector<std::vector<VkSampleCountFlagBits>> subpass_inputs;
   // (source, resolve attachment) pairs of color and depth/stencil resolves.
   std::vector<std::pair<std::uint32_t, std::uint32_t>> resolves;
 };
@@ -379,8 +386,16 @@ void record_pass(VkRenderPass pass, const Info& info) {
     out.formats.push_back(a.format);
     out.samples.push_back(a.samples);
   }
-  for (std::uint32_t i = 0; i < info.subpassCount; ++i) use_subpass(out, info.pSubpasses[i]);
-  auto views = [&](std::uint32_t mask) { out.view_layers = std::max(out.view_layers, std::uint32_t(std::bit_width(mask))); };
+  for (std::uint32_t i = 0; i < info.subpassCount; ++i) {
+    const auto& sp = info.pSubpasses[i];
+    use_subpass(out, sp);
+    auto& inputs = out.subpass_inputs.emplace_back();
+    for (std::uint32_t j = 0; j < sp.inputAttachmentCount; ++j) {
+      const auto index = sp.pInputAttachments[j].attachment;
+      inputs.push_back(index < out.samples.size() ? out.samples[index] : VkSampleCountFlagBits{});
+    }
+  }
+  auto views =[&](std::uint32_t mask) { out.view_layers = std::max(out.view_layers, std::uint32_t(std::bit_width(mask))); };
   if constexpr (std::is_same_v<Info, VkRenderPassCreateInfo2>) {
     for (std::uint32_t i = 0; i < info.subpassCount; ++i) views(info.pSubpasses[i].viewMask);
   } else if (auto* multiview = find_chain<VkRenderPassMultiviewCreateInfo>(
@@ -803,12 +818,51 @@ VkResult VKAPI_CALL create_framebuffer(VkDevice d, const VkFramebufferCreateInfo
   if (!blanks.empty()) placeholders[*out] = {d, std::move(blanks)};
   return r;
 }
+VkResult VKAPI_CALL create_tracked_framebuffer(VkDevice d, const VkFramebufferCreateInfo* info,
+                                               const VkAllocationCallbacks* alloc, VkFramebuffer* out) {
+  const auto r = create_framebuffer(d, info, alloc, out);
+  if (r != VK_SUCCESS || (info->flags & VK_FRAMEBUFFER_CREATE_IMAGELESS_BIT) || !info->pAttachments) return r;
+  std::vector<VkImage> attached;
+  {
+    std::lock_guard lock(mutex);
+    for (std::uint32_t i = 0; i < info->attachmentCount; ++i)
+      if (auto v = views.find(info->pAttachments[i]); v != views.end()) attached.push_back(v->second.image);
+  }
+  if (std::none_of(attached.begin(), attached.end(), [](VkImage image) { return layouts_tracked(image); })) return r;
+  std::lock_guard lock(mutex);
+  tracked_attachments[*out].assign(info->pAttachments, info->pAttachments + info->attachmentCount);
+  return r;
+}
+// A render pass instance leaves tracked attachments in its final layouts.
+void note_final_layouts(VkCommandBuffer cmd, const VkRenderPassBeginInfo* info) {
+  std::vector<std::tuple<VkImage, VkImageSubresourceRange, VkImageLayout>> out;
+  {
+    std::lock_guard lock(mutex);
+    auto pass = passes.find(info->renderPass);
+    if (pass == passes.end()) return;
+    const VkImageView* attachments = nullptr;
+    std::size_t count = 0;
+    if (auto* begin = find_chain<VkRenderPassAttachmentBeginInfo>(info->pNext,
+                                                                  VK_STRUCTURE_TYPE_RENDER_PASS_ATTACHMENT_BEGIN_INFO)) {
+      attachments = begin->pAttachments;
+      count = begin->attachmentCount;
+    } else if (auto it = tracked_attachments.find(info->framebuffer); it != tracked_attachments.end()) {
+      attachments = it->second.data();
+      count = it->second.size();
+    }
+    for (std::size_t i = 0; attachments && i < count && i < pass->second.final_layouts.size(); ++i)
+      if (auto v = views.find(attachments[i]); v != views.end())
+        out.emplace_back(v->second.image, v->second.range, pass->second.final_layouts[i]);
+  }
+  for (const auto& [image, range, layout] : out) note_layout(cmd, image, range, layout);
+}
 void VKAPI_CALL destroy_framebuffer(VkDevice d, VkFramebuffer framebuffer, const VkAllocationCallbacks* alloc) {
   std::optional<Substitution> owned;
   std::vector<StandIn> blanks;
   {
     std::lock_guard lock(mutex);
     clamped.erase(framebuffer);
+    tracked_attachments.erase(framebuffer);
     if (auto it = placeholders.find(framebuffer); it != placeholders.end()) {
       blanks = std::move(it->second.second);
       placeholders.erase(it);
@@ -942,6 +996,7 @@ void VKAPI_CALL set_scissor_with_count(VkCommandBuffer cmd, std::uint32_t count,
   forward(cmd, f);
 }
 void VKAPI_CALL begin_pass(VkCommandBuffer cmd, const VkRenderPassBeginInfo* info, VkSubpassContents contents) {
+  note_final_layouts(cmd, info);
   const auto area = pass_area(info);
   auto begin = host_begin(info);
   transition(cmd, begin.before);
@@ -951,6 +1006,7 @@ void VKAPI_CALL begin_pass(VkCommandBuffer cmd, const VkRenderPassBeginInfo* inf
   begin_area(cmd, area, inline_subpass(contents), std::move(begin.after));
 }
 void VKAPI_CALL begin_pass2(VkCommandBuffer cmd, const VkRenderPassBeginInfo* info, const VkSubpassBeginInfo* sub) {
+  note_final_layouts(cmd, info);
   const auto area = pass_area(info);
   auto begin = host_begin(info);
   transition(cmd, begin.before);
@@ -1071,6 +1127,16 @@ void note_image(VkImage image, const VkImageCreateInfo& info) {
   std::lock_guard lock(mutex);
   images[image] = {{info.extent.width, info.extent.height}, info.arrayLayers, info.samples, info.usage};
 }
+std::uint32_t single_sampled_subpass_inputs(VkRenderPass pass, std::uint32_t subpass) {
+  std::lock_guard lock(mutex);
+  auto it = passes.find(pass);
+  if (it == passes.end() || subpass >= it->second.subpass_inputs.size()) return 0;
+  const auto& inputs = it->second.subpass_inputs[subpass];
+  std::uint32_t mask = 0;
+  for (std::size_t i = 0; i < inputs.size() && i < 32; ++i)
+    if (inputs[i] == VK_SAMPLE_COUNT_1_BIT) mask |= 1u << i;
+  return mask;
+}
 VkImageView sampled_input_view(VkImageView view) {
   std::lock_guard lock(mutex);
   auto it = array_views.find(view);
@@ -1086,6 +1152,7 @@ VkExtent2D attachment_extent(VkImage image) {
   return it == images.end() ? VkExtent2D{} : it->second.extent;
 }
 void release_render_commands(VkCommandBuffer command) {
+  forget_command_layouts(command);
   std::lock_guard lock(mutex);
   states.erase(command);
 }
@@ -1133,7 +1200,7 @@ PFN_vkVoidFunction render_area_proc(std::string_view name) {
   FN(vkCreateRenderPass2, create_render_pass2<"vkCreateRenderPass2">);
   FN(vkCreateRenderPass2KHR, create_render_pass2<"vkCreateRenderPass2KHR">);
   FN(vkDestroyRenderPass, destroy_render_pass);
-  FN(vkCreateFramebuffer, create_framebuffer);
+  FN(vkCreateFramebuffer, create_tracked_framebuffer);
   FN(vkDestroyFramebuffer, destroy_framebuffer);
   FN(vkCreateGraphicsPipelines, create_graphics_pipelines);
   FN(vkDestroyPipeline, destroy_pipeline);

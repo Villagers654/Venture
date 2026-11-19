@@ -151,7 +151,14 @@ void JNICALL load_library(JNIEnv* env, jobject, jstring name, jobject loader) {
     }
     // load_guest_library owns any retained loader reference, never this call's.
     if (global) env->DeleteGlobalRef(global);
-    if (!loaded) fail(env, "java/lang/UnsatisfiedLinkError", error);
+    // load_guest_library logged the failure at its level; an absent optional
+    // library is a warning there, not an error to repeat here.
+    if (!loaded && !env->ExceptionCheck()) {
+      if (auto cls = env->FindClass("java/lang/UnsatisfiedLinkError")) {
+        env->ThrowNew(cls, error.c_str());
+        env->DeleteLocalRef(cls);
+      }
+    }
   });
 }
 

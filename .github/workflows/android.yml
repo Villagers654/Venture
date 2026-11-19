@@ -1,0 +1,120 @@
+# The one Venture APK for Android headsets (docs/design/native-headsets.md,
+# section 5): built with the pinned NDK and Google's command-line build tools
+# (cmake/AndroidSdk.cmake, no Gradle), checked without a device
+# (tools/android/check_apk.py), then installed and started in an Android
+# emulator. The emulator needs a hypervisor, which the development machine
+# does not offer, so this job is where the APK first runs. Called by ci.yml,
+# and by release.yml with release: true, which signs the APK with the release
+# key (secrets VENTURE_APK_KEYSTORE_BASE64 and VENTURE_APK_KEYSTORE_PASS) for
+# the GitHub Release; Venture's in-app update looks for venture-*-android-arm64.apk.
+name: Android
+
+on:
+  workflow_call:
+    inputs:
+      release:
+        type: boolean
+        default: false
+    secrets:
+      VENTURE_APK_KEYSTORE_BASE64:
+        required: false
+      VENTURE_APK_KEYSTORE_PASS:
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  apk:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+      - name: Cache keys
+        run: echo "FETCH_KEY=android-fetch-${{ hashFiles('CMakeLists.txt', 'cmake/**', 'src/**/CMakeLists.txt', 'third_party/**/CMakeLists.txt') }}" >> "$GITHUB_ENV"
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+      - name: Toolchain
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends cmake ninja-build
+      - name: Restore FetchContent sources
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            .deps/fetch
+            !.deps/fetch/*-build
+          key: ${{ env.FETCH_KEY }}
+          restore-keys: android-fetch-
+      # CI artifacts use a development key generated on the runner; a release
+      # build signs with the release key, and fails without it.
+      - name: Release key
+        if: inputs.release
+        env:
+          KEYSTORE_BASE64: ${{ secrets.VENTURE_APK_KEYSTORE_BASE64 }}
+          KEYSTORE_PASS: ${{ secrets.VENTURE_APK_KEYSTORE_PASS }}
+        run: |
+          [[ -n "$KEYSTORE_BASE64" && -n "$KEYSTORE_PASS" ]] || { echo "The release signing secrets are missing"; exit 1; }
+          umask 077
+          echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/venture-release.jks"
+          echo "VENTURE_APK_KEYSTORE=$RUNNER_TEMP/venture-release.jks" >> "$GITHUB_ENV"
+          echo "::add-mask::$KEYSTORE_PASS"
+          echo "VENTURE_APK_KEYSTORE_PASS=$KEYSTORE_PASS" >> "$GITHUB_ENV"
+      - name: Build
+        run: >-
+          cmake --preset linux-android-arm64 -DVENTURE_ANDROID_JAVA_HOME="$JAVA_HOME" &&
+          cmake --build build/linux-android-arm64 -j 4 --target venture_apk
+      - name: Remove the release key
+        if: always() && inputs.release
+        run: rm -f "$RUNNER_TEMP/venture-release.jks"
+      - name: Check
+        run: >-
+          python3 tools/android/check_apk.py build/linux-android-arm64/apk/*.apk
+          --build-tools .deps/fetch/android-build-tools-???????????????? --java-home "$JAVA_HOME"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: venture-android-arm64
+          path: build/linux-android-arm64/apk/*.apk
+          retention-days: 14
+      - name: Save FetchContent sources
+        if: always()
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            .deps/fetch
+            !.deps/fetch/*-build
+          key: ${{ env.FETCH_KEY }}
+
+  emulator:
+    needs: apk
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
+        with:
+          name: venture-android-arm64
+          path: apk
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules && sudo udevadm trigger --name-match=kvm
+      # An x86_64 image runs the arm64 APK through the image's own ARM
+      # translation (Android 11 and later), like an arm64 device would run it.
+      - name: Install and start
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          arch: x86_64
+          target: google_apis
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
+          script: python3 tools/android/emulator_smoke.py apk/*.apk --out smoke
+      # Not in a release: the release attaches every artifact it downloads.
+      - uses: actions/upload-artifact@v4
+        if: always() && !inputs.release
+        with:
+          name: venture-android-emulator-smoke
+          path: smoke
+          retention-days: 14

@@ -152,12 +152,13 @@ void publish_obb_file_locked(const fs::path& source, const fs::path& view) {
   }
 }
 }
-fs::path mods_dir(const fs::path& data, std::string_view package) {
-  if (!paths::safe_package(package)) throw std::runtime_error("Invalid game package.");
-  return data / "mods" / paths::from_utf8(package);
+fs::path mods_dir(const fs::path& data, std::string_view package, std::string_view pin) {
+  if (!paths::safe_package(package) || (!pin.empty() && !paths::version_folder(pin)))
+    throw std::runtime_error("Invalid game package.");
+  return data / "mods" / paths::from_utf8(pin.empty() ? std::string(package) : std::string(package) + "@" + std::string(pin));
 }
 void sync_obb_view(const fs::path& install, const fs::path& raw_view,
-                   std::span<const std::string> names, const fs::path& mods) {
+                   std::span<const std::string> names) {
   if (fs::weakly_canonical(install) == fs::weakly_canonical(raw_view))
     throw std::runtime_error("OBB view must be separate from installation");
 #ifdef _WIN32
@@ -190,18 +191,7 @@ void sync_obb_view(const fs::path& install, const fs::path& raw_view,
     if (entry.path().extension() == ".obb" || std::ranges::find(published, Json(name)) != published.end())
       remove_tree(view, entry.path());
   }
-  for (const auto& name : names) {
-    auto source = install / paths::from_utf8(name);
-    std::error_code ec;
-    if (!mods.empty() && fs::is_regular_file(source, ec)) {
-      const auto replacement = mods / paths::from_utf8(name);
-      if (paths::within(mods, replacement) && !is_link(replacement) && fs::is_regular_file(replacement, ec)) {
-        log::info("obb", "Using the replacement {} from the mods folder ({} bytes)", name, fs::file_size(replacement, ec));
-        source = replacement;
-      }
-    }
-    publish_obb_file_locked(source, view);
-  }
+  for (const auto& name : names) publish_obb_file_locked(install / paths::from_utf8(name), view);
   const Json current(std::vector<std::string>(names.begin(), names.end()));
   if (current != published) paths::atomic_write(record, current.dump());
 }

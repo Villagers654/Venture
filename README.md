@@ -52,7 +52,17 @@ Turn on **Add games to Steam** in Settings. Installed games appear in Steam and 
 
 ### Mods
 
-Mods that replace a game's expansion file (OBB), such as RE4 VR Definitive Edition, go in the game's mods folder: open the game in your library and choose **Open folder** next to **Mods**, then put the mod's file there under the same name as the installed file (for example `main.203.com.Armature.VR4.obb`). It is used from the next launch; your installation is not changed, and deleting the file goes back to the original.
+Everything about a game's mods is on its **Mods** tab in your library.
+
+- **Modded expansion file (OBB)**, such as for RE4 VR Definitive Edition: choose **Replace…** next to the expansion file, or drop the file on the game's page. It is written over the game's own file, which is not kept; **Restore** downloads the store's file again from Meta.
+
+Games modded with a mod loader (Scotland2 or QuestLoader, as QuestPatcher and ModsBeforeFriday set up on a Quest) work the same way here:
+
+- **Patched APK**: drop the patched APK of the installed version onto the Venture window. It replaces the game's APK in place, so its expansion files, saves and settings stay. **Restore original APK** on the game's **Mods** tab puts the store APK back. For Scotland2, Venture downloads the loader (`libsl2.so`) from its release, as the patchers do; you can also drop `libsl2.so` on the game's page.
+- **Mods (.qmod)**: drop `.qmod` files onto the window, or choose **Add mods** on the game's **Mods** tab. Mods it needs are downloaded from the links in its `mod.json`. Each mod can be turned off or removed there.
+- **Files your mods take**, such as sabers or playlists: drop them on the game's page once the mod that takes them is installed. They are listed on the **Mods** tab.
+
+At each launch Venture puts the enabled mods where their loader reads them (`/sdcard/ModData/<package>/Modloader/` for Scotland2, `/sdcard/Android/data/<package>/files/` for QuestLoader). Files a mod or the game changes there, such as its settings, stay yours.
 
 ### Mixed reality (passthrough)
 

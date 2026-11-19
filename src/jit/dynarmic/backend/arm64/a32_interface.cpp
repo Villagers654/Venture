@@ -153,6 +153,23 @@ private:
     std::mutex invalidation_mutex;
     boost::icl::interval_set<u32> invalid_cache_ranges;
     bool invalidate_entire_cache = false;
+
+public:
+    const void* CodeCacheBegin() const {
+        return current_address_space.CodeBegin();
+    }
+
+    std::size_t CodeCacheSize() const {
+        return current_address_space.CodeSize();
+    }
+
+    bool Precompile(std::uint64_t value) {
+        if (jit_interface->is_executing) {
+            return false;
+        }
+        PerformRequestedCacheInvalidation(static_cast<HaltReason>(Atomic::Load(&halt_reason)));
+        return current_address_space.Precompile(IR::LocationDescriptor{value}, 4 * 1024 * 1024);
+    }
 };
 
 Jit::Jit(UserConfig conf)
@@ -226,6 +243,23 @@ void Jit::ClearExclusiveState() {
 
 std::string Jit::Disassemble() const {
     return impl->Disassemble();
+}
+
+const void* Jit::CodeCacheBegin() const {
+    return impl->CodeCacheBegin();
+}
+
+std::size_t Jit::CodeCacheSize() const {
+    return impl->CodeCacheSize();
+}
+
+bool Jit::Precompile(std::uint64_t descriptor) {
+    return impl->Precompile(descriptor);
+}
+
+// The x64 backend's dispatcher profile cookie; not emitted by this backend.
+std::uint32_t Jit::GetProfileCookie() const {
+    return 0;
 }
 
 }  // namespace Dynarmic::A32

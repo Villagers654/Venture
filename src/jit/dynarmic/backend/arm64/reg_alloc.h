@@ -22,6 +22,7 @@
 #include "common/container/unordered_set.h"
 
 #include "dynarmic/backend/arm64/stack_layout.h"
+#include "dynarmic/ir/basic_block.h"
 #include "dynarmic/ir/cond.h"
 #include "dynarmic/ir/microinstruction.h"
 #include "dynarmic/ir/value.h"
@@ -170,6 +171,10 @@ public:
 
     ArgumentInfo GetArgumentInfo(IR::Inst* inst);
     bool WasValueDefined(IR::Inst* inst) const;
+    // Venture: counts this instruction's use of value without realizing it and
+    // returns where the value is (cold abort-exit stores); nullopt for an
+    // immediate or a value without a location (a Void instruction).
+    std::optional<HostLoc> UseInPlace(const IR::Value& value);
 
     auto ReadX(Argument& arg) { return RAReg<oaknut::XReg>{*this, RWType::Read, arg.value, nullptr}; }
     auto ReadW(Argument& arg) { return RAReg<oaknut::WReg>{*this, RWType::Read, arg.value, nullptr}; }
@@ -287,6 +292,13 @@ public:
     void PrepareForCall(std::optional<Argument::copyable_reference> arg0 = {}, std::optional<Argument::copyable_reference> arg1 = {}, std::optional<Argument::copyable_reference> arg2 = {}, std::optional<Argument::copyable_reference> arg3 = {});
 
     void DefineAsExisting(IR::Inst* inst, Argument& arg);
+    // Venture: counts one use of value by this instruction, outside its
+    // arguments (a folded address's operands, read by its access).
+    Argument UseArgument(const IR::Value& value);
+    // Venture: whether arg's location holds nothing needed after this
+    // instruction, so a new value may take it over (DefineAsExisting) without
+    // sharing it with live values of other widths.
+    bool IsLastUse(const Argument& arg);
     void DefineAsRegister(IR::Inst* inst, oaknut::Reg reg);
 
     void ReadWriteFlags(Argument& read, IR::Inst* write);
@@ -304,6 +316,30 @@ public:
     void AssertNoMoreUses() const;
 
     void EmitVerboseDebuggingOutput();
+
+    // Venture: next-use eviction (as on x64). Build records where each value
+    // of the block is used; with it, a full register file evicts the register
+    // whose values are needed furthest ahead instead of rotating.
+    void BuildNextUses(IR::Block& block);
+    // Call before emitting each instruction of the block.
+    void SetCurrentInstruction(const IR::Inst* inst) noexcept { current_position = inst->GetEmitPosition(); }
+    // Records that user reads value (a folded address's index, read by its access).
+    void AddUse(const IR::Inst* value, const IR::Inst* user);
+
+    // Venture: a guest register read whose JIT state slot (offset from Xstate)
+    // still holds its value at its last use, as on x64: spilling it stores
+    // nothing and reloads read the JIT state. word: 32 bits, reloaded
+    // zero-extended. Call after BuildNextUses.
+    void MarkRematerializable(const IR::Inst* inst, u32 offset, bool word);
+    // The emit position of inst's last use in the block, or nullopt.
+    std::optional<u32> LastUse(const IR::Inst* inst) const;
+    // Where a spilled value really is: the JIT state slot, or nullopt for its
+    // spill slot.
+    struct Remat {
+        u32 offset;
+        bool word;
+    };
+    std::optional<Remat> SpillRematerialization(int spill_index) const;
 
 private:
     friend struct Argument;
@@ -337,7 +373,32 @@ private:
     std::array<HostLocInfo, SpillCount> spills;
 
     mutable std::size_t alloc_candidate_index = 0;
+    // Venture: definitions by emit position (BuildNextUses), as x64 skips its
+    // per-definition set; the set serves instructions outside the table.
+    std::vector<u8> defined_by_position;
     ::Common::unordered_set<const IR::Inst*> defined_insts;
+    void MarkDefined(const IR::Inst* inst);
+    bool InTable(const IR::Inst* inst) const {
+        const u32 at = inst->GetEmitPosition();
+        return at < next_use_insts.size() && next_use_insts[at] == inst;
+    }
+    // Venture: spill slots at or above this were never used in the block, so
+    // slot walks and value lookups stop here.
+    std::size_t spill_high = 0;
+    // By emit position and by spill slot: 0 for none, else offset + 1 with
+    // bit 31 set for words.
+    std::vector<u32> remat_by_position;
+    std::array<u32, SpillCount> spill_remat{};
+    u32 RematCode(const HostLocInfo& info) const;
+    // word: a U32, whose spill from an FPR may hold other bits above 32.
+    void LoadSpill(oaknut::XReg reg, int spill_index, bool word = false);
+
+    static constexpr u32 no_use = UINT32_MAX;
+    // The first use of info's values at or after the current instruction.
+    u32 NextUse(const HostLocInfo& info) const;
+    std::vector<const IR::Inst*> next_use_insts;  // by emit position
+    std::vector<std::vector<u32>> next_use_positions;  // by emit position, ascending
+    u32 current_position = 0;
 };
 
 template<typename T>

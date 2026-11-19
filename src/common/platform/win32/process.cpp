@@ -167,6 +167,15 @@ bool Process::request_stop() {
   CloseHandle(event);
   return set;
 }
+std::optional<int> Process::wait(unsigned milliseconds) {
+  if (active())
+    WaitForSingleObject(impl_->handle, milliseconds);
+  return poll();
+}
+void Process::terminate() {
+  if (active())
+    TerminateProcess(impl_->handle, 1);
+}
 std::optional<int> Process::poll() {
   if (active() && WaitForSingleObject(impl_->handle, 0) == WAIT_OBJECT_0) {
     DWORD code = 0;

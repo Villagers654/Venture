@@ -1,10 +1,9 @@
 #include "core/wait.h"
-#include "core/process.h"
 #include "core/renderer_capabilities.h"
-#include "hle/openxr/state.h"
+#include "hle/vrapi/host.h"
+#include "xr/sanitize.h"
 #include "hle/vrapi/state.h"
 #include "common/log.h"
-#include "hle/vulkan/vulkan.h"
 #include "xr/vulkan_extensions.h"
 #include "xr/display_memory.h"
 #include "xr/display_override.h"
@@ -31,7 +30,7 @@ XrViewConfigurationView view() {
 }
 std::vector<float> rates() {
   float rate = 0;
-  if (XR_SUCCEEDED(hle::openxr::refresh_rate(session().handle, &rate)))
+  if (XR_SUCCEEDED(venture::xr::display_refresh_rate(session().handle, &rate)))
     return {rate};
   return {};
 }
@@ -45,7 +44,7 @@ XrResult bounds(XrExtent2Df &extent, XrPosef &stage) {
   XrSpaceLocation loc{XR_TYPE_SPACE_LOCATION};
   r = ::xrLocateSpace(state().stage, state().app, time_from_seconds(0), &loc);
   if (XR_SUCCEEDED(r)) {
-    hle::openxr::sanitize(loc.locationFlags, loc.pose);
+    venture::xr::sanitize(loc.locationFlags, loc.pose);
     stage = loc.pose;
   }
   return r;
@@ -64,9 +63,9 @@ std::int32_t vrapi_GetSystemPropertyInt(const Java *, std::int32_t property) {
   std::lock_guard lock(state().mutex);
   switch (property) {
   case 0:
-    if (process_config().device_identity->vrapi_type < 0)
+    if (host::device_type() < 0)
       failure("GetSystemPropertyInt device type absent from public VrApi enum", unsupported);
-    return process_config().device_identity->vrapi_type;
+    return host::device_type();
   case 1:
     return int(view().maxSwapchainSampleCount);
   case 2:
@@ -103,11 +102,11 @@ std::int32_t vrapi_GetSystemPropertyInt(const Java *, std::int32_t property) {
     // Meta's Mobile SDK 1.33 release notes retire this query because it is
     // always supported on standalone devices. Our image bridge likewise
     // supports both layers of a stereo array, independently of the producer.
-    return host_xr().available && xr_images();
+    return host_xr().available && host::images_available();
   case 129:
     // Mobile SDK 1.30 SRGB_LAYER_SOURCE_AVAILABLE: the image bridge preserves
     // GL_SRGB8_ALPHA8 as VK_FORMAT_R8G8B8A8_SRGB through compositor submission.
-    return host_xr().available && xr_images();
+    return host_xr().available && host::images_available();
   case 130:
     return renderer_capabilities::vrapi_variable_rate_shading;
   default:
@@ -119,7 +118,7 @@ float vrapi_GetSystemPropertyFloat(const Java *, std::int32_t property) {
   std::lock_guard lock(state().mutex);
   if (property == 4) {
     float rate = 0;
-    return XR_SUCCEEDED(hle::openxr::refresh_rate(session().handle, &rate)) ? rate : 0;
+    return XR_SUCCEEDED(venture::xr::display_refresh_rate(session().handle, &rate)) ? rate : 0;
   }
   if ((property == 7 || property == 8) && state().initialized) {
     if (state().mobile) {
@@ -310,7 +309,7 @@ std::int32_t vrapi_GetInstanceExtensionsVulkan(char *names, std::uint32_t *lengt
   if (!length)
     return invalid;
   return result(xr::guest_vulkan_extensions(host_xr().instance, host_xr().system, false,
-                    names ? *length : 0, length, names, vulkan::extension_translatable),
+                    names ? *length : 0, length, names, host::vulkan_extension_usable),
                 "GetInstanceExtensionsVulkan");
 }
 std::int32_t vrapi_GetDeviceExtensionsVulkan(char *names, std::uint32_t *length) {
@@ -318,7 +317,7 @@ std::int32_t vrapi_GetDeviceExtensionsVulkan(char *names, std::uint32_t *length)
   if (!length)
     return invalid;
   return result(xr::guest_vulkan_extensions(host_xr().instance, host_xr().system, true,
-                    names ? *length : 0, length, names, vulkan::extension_translatable),
+                    names ? *length : 0, length, names, host::vulkan_extension_usable),
                 "GetDeviceExtensionsVulkan");
 }
 std::int32_t vrapi_GetBoundaryGeometry(Mobile *mobile, std::uint32_t capacity, std::uint32_t *count,

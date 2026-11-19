@@ -4,10 +4,32 @@
 # ~/.config/openxr/1/active_runtime.json (exposed by --filesystem=xdg-config/openxr:ro)
 # or the host's /etc/xdg one (host-etc). A runtime library given by an absolute
 # host path that the sandbox lacks is redirected to the host-os mount /run/host.
+#
+# SteamVR's manifest is a link into the Steam folder, often through Steam's own
+# links in ~/.steam (steam, root), which the sandbox does not have: such a
+# target is looked up in the Steam folder itself (~/.local/share/Steam,
+# exposed read-only for SteamVR).
+link_target() {  # LINK: its target inside the sandbox, or nothing
+  target=$(readlink "$1") || return 1
+  case "$target" in /*) ;; *) target="$(dirname "$1")/$target" ;; esac
+  [ -e "$target" ] && { readlink -f "$target"; return 0; }
+  # A host manifest's absolute link names the host's /usr or /etc.
+  case "$1" in /run/host/*) [ -e "/run/host$target" ] && { readlink -f "/run/host$target"; return 0; } ;; esac
+  for link in "$HOME/.steam/steam/" "$HOME/.steam/root/"; do
+    case "$target" in
+      "$link"*) mapped="$HOME/.local/share/Steam/${target#"$link"}"
+                [ -e "$mapped" ] && { readlink -f "$mapped"; return 0; } ;;
+    esac
+  done
+  return 1
+}
 if [ -z "$XR_RUNTIME_JSON" ]; then
   for json in "$HOME/.config/openxr/1/active_runtime.json" \
               /run/host/etc/xdg/openxr/1/active_runtime.json \
               /run/host/usr/share/openxr/1/active_runtime.json; do
+    if [ -L "$json" ]; then
+      json=$(link_target "$json") || continue
+    fi
     [ -e "$json" ] || continue
     lib=$(sed -n 's/.*"library_path"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$json" | head -n 1)
     case "$lib" in
@@ -17,8 +39,8 @@ if [ -z "$XR_RUNTIME_JSON" ]; then
             sed "s#\"library_path\"[[:space:]]*:[[:space:]]*\"/#\"library_path\": \"/run/host/#" "$json" > "$out/active_runtime.json"
             json="$out/active_runtime.json"
           fi ;;
-      *) json=$(readlink -f "$json") ;;  # relative library paths resolve beside the real manifest
     esac
+    # Relative library paths resolve beside the real manifest (json is no link here).
     export XR_RUNTIME_JSON="$json"
     break
   done

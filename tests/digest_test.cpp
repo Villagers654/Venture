@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "common/digest.h"
+#include "common/sha256_portable.h"
 #include <doctest/doctest.h>
 #include <algorithm>
 #include <array>
@@ -35,4 +36,33 @@ TEST_CASE("SHA-256 binary vectors and streaming") {
   std::istringstream failed("input");
   failed.setstate(std::ios::badbit);
   CHECK_THROWS_AS(digest::sha256(failed), std::runtime_error);
+}
+TEST_CASE("the portable SHA-256 (Android) matches the system provider") {
+  // Every length across the one- and two-block padding edges, fed whole and in
+  // uneven pieces, plus a multi-megabyte input.
+  const auto hex = [](const std::array<std::uint8_t, 32>& bytes) {
+    std::string out;
+    for (auto byte : bytes) {
+      out += "0123456789abcdef"[byte >> 4];
+      out += "0123456789abcdef"[byte & 15];
+    }
+    return out;
+  };
+  std::vector<std::uint8_t> bytes(3145745);
+  for (std::size_t i = 0; i < bytes.size(); ++i) bytes[i] = static_cast<std::uint8_t>(i * 7 + (i >> 9));
+  for (std::size_t size = 0; size <= 300; ++size) {
+    CAPTURE(size);
+    const auto input = std::span<const std::uint8_t>(bytes).first(size);
+    digest::portable::Sha256 whole;
+    whole.update(input);
+    const auto expected = digest::sha256(input);
+    CHECK(hex(whole.finish()) == expected);
+    digest::portable::Sha256 pieces;
+    for (std::size_t at = 0, step = 1; at < size; at += step, step = step % 67 + 13)
+      pieces.update(input.subspan(at, std::min(step, size - at)));
+    CHECK(hex(pieces.finish()) == expected);
+  }
+  digest::portable::Sha256 large;
+  large.update(bytes);
+  CHECK(hex(large.finish()) == digest::sha256(bytes));
 }

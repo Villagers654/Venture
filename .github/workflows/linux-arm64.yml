@@ -1,0 +1,299 @@
+# Linux arm64, natively on GitHub's arm64 runner: the Steam Frame stand-in
+# (docs/design/native-headsets.md, section 8). It builds the shared code, the
+# game runtime (Dynarmic's arm64 backend for A64 and A32 guests) and their
+# tests with the release toolchain settings (cmake/toolchains/linux-baseline.cmake:
+# clang 22, static libc++), and runs the tests that pass on an AArch64 host.
+# Called by ci.yml.
+#
+# With package (release.yml), the package job instead builds the release as
+# linux.yml does for x64: in the glibc 2.35 baseline container (the same
+# Containerfile, built for aarch64), with ANGLE built natively against
+# Chromium's arm64 sysroot, then the package-release layout
+# (dist/Venture-linux-arm64) and its packages, Venture-<ver>-linux-aarch64.*
+# (tools/packaging/linux/build_packages.sh). Tests run there too but, as on
+# x64, do not block the packages.
+name: Linux arm64
+
+on:
+  workflow_call:
+    inputs:
+      test:
+        type: boolean
+        default: true
+      package:
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    if: ${{ !inputs.package }}
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 240
+    env:
+      LLVM: 22
+      # Toolchains bootstrap.py provisions (JDK, FFmpeg) live in the workspace, so they can be cached.
+      VENTURE_DATA_DIR: ${{ github.workspace }}/.deps/arm64-data
+    steps:
+      - uses: actions/checkout@v5
+      - name: Cache keys
+        run: |
+          {
+            echo "DEPS_KEY=linux-arm64-deps-${{ hashFiles('tools/bootstrap.py', 'tools/bootstrap_framework.py', 'tools/ffmpeg/**', 'tools/dex/**') }}"
+            echo "FETCH_KEY=linux-arm64-fetch-${{ hashFiles('CMakeLists.txt', 'cmake/**', 'src/**/CMakeLists.txt', 'third_party/**/CMakeLists.txt') }}"
+          } >> "$GITHUB_ENV"
+      # Ubuntu 24.04's CMake (3.28) and Ninja meet the project's minimums; clang
+      # and libc++ come from apt.llvm.org, and SDL3 configures against the same
+      # desktop headers as in the x64 baseline container. Mesa's lavapipe runs
+      # the Vulkan tests (runners have no GPU).
+      - name: Toolchain
+        run: |
+          curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key | sudo gpg --dearmor -o /usr/share/keyrings/llvm.gpg
+          echo "deb [signed-by=/usr/share/keyrings/llvm.gpg] http://apt.llvm.org/noble/ llvm-toolchain-noble-$LLVM main" |
+            sudo tee /etc/apt/sources.list.d/llvm.list
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake ninja-build pkg-config libssl-dev libsecret-1-dev \
+            clang-$LLVM lld-$LLVM llvm-$LLVM libc++-$LLVM-dev libc++abi-$LLVM-dev \
+            libwayland-dev libxkbcommon-dev libegl-dev libdrm-dev libgbm-dev \
+            libpipewire-0.3-dev libpulse-dev libasound2-dev libdbus-1-dev libudev-dev libusb-1.0-0-dev \
+            mesa-vulkan-drivers libvulkan1 nasm make
+          echo "/usr/lib/llvm-$LLVM/bin" >> "$GITHUB_PATH"
+      - name: Restore dependencies
+        id: deps
+        uses: actions/cache/restore@v4
+        with:
+          path: .deps/arm64-data/dev-cache/toolchains
+          key: ${{ env.DEPS_KEY }}
+      - name: Restore FetchContent sources
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            .deps/fetch
+            !.deps/fetch/*-build
+          key: ${{ env.FETCH_KEY }}
+          restore-keys: linux-arm64-fetch-
+      - name: Bootstrap (JDK, FFmpeg)
+        run: python3 tools/bootstrap.py --jdk
+      - name: Save dependencies
+        if: steps.deps.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: .deps/arm64-data/dev-cache/toolchains
+          key: ${{ env.DEPS_KEY }}
+      - name: Build
+        run: >-
+          cmake --preset linux-baseline -DVENTURE_BUILD_TESTS=ON &&
+          cmake --build build/linux-baseline -j 4
+      - name: Test
+        run: |
+          export VK_DRIVER_FILES=$(ls /usr/share/vulkan/icd.d/lvp_icd*.json | head -1)
+          export VK_ICD_FILENAMES=$VK_DRIVER_FILES
+          ctest --test-dir build/linux-baseline -j 4 --timeout 900 --output-on-failure -E '^dynarmic$'
+      # Every JIT case runs; the one that needs the x64 backend's inline fastmem
+      # exclusives skips itself.
+      - name: JIT tests
+        run: build/linux-baseline/bin/venture_dynarmic_tests
+      - name: Save FetchContent sources
+        if: always()
+        continue-on-error: true  # the key already exists when the CMake files did not change
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            .deps/fetch
+            !.deps/fetch/*-build
+          key: ${{ env.FETCH_KEY }}
+
+  package:
+    if: inputs.package
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 360
+    env:
+      VENTURE_BASELINE_JOBS: 4
+      # Runners have no FUSE; AppImages (appimagetool) extract themselves instead.
+      APPIMAGE_EXTRACT_AND_RUN: 1
+      APPIMAGETOOL_URL: https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-aarch64.AppImage
+      APPIMAGETOOL_SHA256: f0837e7448a0c1e4e650a93bb3e85802546e60654ef287576f46c71c126a9158
+      CCACHE_KEY: linux-arm64-ccache-release
+      # ANGLE is built on the runner itself, into the baseline's data root, where
+      # the container build finds it (.deps/angle/<pin>-linux-arm64 links there).
+      VENTURE_DATA_DIR: ${{ github.workspace }}/.deps/baseline-data
+    steps:
+      - name: Free disk space
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+      - uses: actions/checkout@v5
+      - name: Cache keys
+        run: |
+          {
+            echo "IMAGE_KEY=linux-arm64-image-${{ hashFiles('tools/linux-baseline/Containerfile') }}"
+            echo "DEPS_KEY=linux-arm64-baseline-deps-${{ hashFiles('tools/linux-baseline/Containerfile', 'tools/bootstrap.py', 'tools/bootstrap_framework.py', 'tools/ffmpeg/**', 'tools/dex/**') }}"
+            echo "ANGLE_KEY=linux-arm64-angle-${{ hashFiles('tools/angle/**', 'third_party/angle-patches/**') }}"
+            echo "FETCH_KEY=linux-arm64-fetch-${{ hashFiles('CMakeLists.txt', 'cmake/**', 'src/**/CMakeLists.txt', 'third_party/**/CMakeLists.txt') }}"
+            echo "CACHE_ARGS=-DVENTURE_AGENT_CACHE=ON -DVENTURE_AGENT_CACHE_ROOT=$RUNNER_TEMP -DVENTURE_CCACHE_MAX_SIZE=3GiB"
+          } >> "$GITHUB_ENV"
+
+      # The x64 baseline's Containerfile, built for aarch64 (Ubuntu 22.04's and
+      # apt.llvm.org's arm64 packages).
+      - name: Restore baseline image
+        id: image
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/baseline-image.tar
+          key: ${{ env.IMAGE_KEY }}
+      - name: Baseline image
+        run: |
+          command -v podman >/dev/null || { sudo apt-get update -q && sudo apt-get install -y -q podman; }
+          if [ -f "$RUNNER_TEMP/baseline-image.tar" ]; then
+            podman load -q -i "$RUNNER_TEMP/baseline-image.tar"
+          else
+            tools/linux-baseline/baseline.sh image
+            podman save -o "$RUNNER_TEMP/baseline-image.tar" localhost/venture-linux-baseline:22.04
+          fi
+      - name: Save baseline image
+        if: steps.image.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/baseline-image.tar
+          key: ${{ env.IMAGE_KEY }}
+
+      - name: Restore baseline dependencies
+        id: deps
+        uses: actions/cache/restore@v4
+        with:
+          path: .deps/baseline-data/dev-cache/toolchains
+          key: ${{ env.DEPS_KEY }}
+      - name: Restore ANGLE
+        id: angle
+        uses: actions/cache/restore@v4
+        with:
+          path: .deps/baseline-data/dev-cache/angle/prebuilt
+          key: ${{ env.ANGLE_KEY }}
+      - name: Restore FetchContent sources
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            .deps/fetch
+            !.deps/fetch/*-build
+          key: ${{ env.FETCH_KEY }}
+          restore-keys: linux-arm64-fetch-
+      - name: Restore compiler cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/ccache
+          key: ${{ env.CCACHE_KEY }}-${{ github.run_id }}
+          restore-keys: linux-arm64-ccache-
+
+      - name: Bootstrap (toolchain, JDK, FFmpeg, ccache) in the baseline
+        run: tools/linux-baseline/baseline.sh run python3 tools/bootstrap.py --jdk --ccache
+      - name: Save baseline dependencies
+        if: steps.deps.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: .deps/baseline-data/dev-cache/toolchains
+          key: ${{ env.DEPS_KEY }}
+
+      # Chromium ships no arm64-hosted clang: a build uses apt.llvm.org's LLVM of
+      # the clang major the pinned ANGLE expects (--host-llvm). The libraries link
+      # against Chromium's arm64 sysroot, so they load on any glibc the release
+      # supports. A cached artifact is only verified and linked.
+      - name: ANGLE (native arm64)
+        run: |
+          if [ "${{ steps.angle.outputs.cache-hit }}" = true ]; then
+            python3 tools/angle/build_angle.py --target linux-arm64
+            exit 0
+          fi
+          python3 tools/angle/build_angle.py --target linux-arm64 --prepare-only
+          major=$(sed -n 's/^ *clang_version = "\([0-9]*\)".*/\1/p' \
+            "$VENTURE_DATA_DIR/dev-cache/angle/source/build/toolchain/toolchain.gni")
+          [ -n "$major" ] || { echo "No clang_version in ANGLE's toolchain.gni"; exit 1; }
+          # A released major has its own suite; the newest one is trunk's.
+          suite=llvm-toolchain-noble-$major
+          curl -fsI "https://apt.llvm.org/noble/dists/$suite/Release" >/dev/null || suite=llvm-toolchain-noble
+          curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key | sudo gpg --dearmor -o /usr/share/keyrings/llvm.gpg
+          echo "deb [signed-by=/usr/share/keyrings/llvm.gpg] https://apt.llvm.org/noble/ $suite main" |
+            sudo tee /etc/apt/sources.list.d/llvm.list
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends "clang-$major" "lld-$major" "llvm-$major" "libclang-rt-$major-dev"
+          python3 tools/angle/build_angle.py --target linux-arm64 --host-llvm "/usr/lib/llvm-$major" --jobs 4
+          # The artifact is a copy; the Chromium checkout only takes disk from here on.
+          rm -rf "$VENTURE_DATA_DIR/dev-cache/angle/source"
+      # Saved right away, so a later failure never throws away an ANGLE build.
+      - name: Save ANGLE
+        if: steps.angle.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: .deps/baseline-data/dev-cache/angle/prebuilt
+          key: ${{ env.ANGLE_KEY }}
+
+      # The shipped configuration, as on x64: the linux-baseline preset in the
+      # baseline container, then the release layout (dist/Venture-linux-arm64).
+      - name: Build
+        run: >-
+          tools/linux-baseline/baseline.sh run bash -c
+          "export TMPDIR=$RUNNER_TEMP/tests && mkdir -p $RUNNER_TEMP/tests &&
+          cmake --preset linux-baseline $CACHE_ARGS -DVENTURE_BUILD_TESTS=${{ inputs.test && 'ON' || 'OFF' }} &&
+          cmake --build build/linux-baseline -j 4 --target all package-release"
+      # On a current Mesa lavapipe layered on the baseline, as linux.yml does
+      # (kisak's PPA builds arm64 too). As on x64, a failure here is reported
+      # and the packages still build.
+      - name: Test
+        if: inputs.test
+        continue-on-error: true
+        run: |
+          printf '%s\n' 'FROM localhost/venture-linux-baseline:22.04' \
+            'RUN apt-get update && apt-get install -y --no-install-recommends software-properties-common gpg-agent && add-apt-repository -y ppa:kisak/turtle && apt-get install -y --no-install-recommends mesa-vulkan-drivers && rm -rf /var/lib/apt/lists/* && dpkg-query -W mesa-vulkan-drivers | grep -q kisak' |
+            podman build -t localhost/venture-linux-test -
+          VENTURE_BASELINE_IMAGE=localhost/venture-linux-test tools/linux-baseline/baseline.sh run bash -c \
+            "export TMPDIR=$RUNNER_TEMP/tests VK_DRIVER_FILES=\$(ls /usr/share/vulkan/icd.d/lvp_icd*.json | head -1) &&
+            export VK_ICD_FILENAMES=\$VK_DRIVER_FILES &&
+            ctest --test-dir build/linux-baseline -j 4 --timeout 900 --output-on-failure -E '^dynarmic$' &&
+            build/linux-baseline/bin/venture_dynarmic_tests"
+      - name: Crash reports
+        if: failure() && inputs.test
+        run: find build/linux-baseline -name 'hs_err_pid*.log' -exec sh -c 'echo "== $1"; sed -n "1,120p" "$1"' _ {} \;
+
+      - name: Save FetchContent sources
+        if: always()
+        continue-on-error: true  # the key already exists when the CMake files did not change
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            .deps/fetch
+            !.deps/fetch/*-build
+          key: ${{ env.FETCH_KEY }}
+      - name: Save compiler cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/ccache
+          key: ${{ env.CCACHE_KEY }}-${{ github.run_id }}
+
+      # Never a half package: the layout carries what the x64 one does (launcher,
+      # runtime, Java framework and JRE, ANGLE, FFmpeg, SQLite) and starts here.
+      - name: Check the layout
+        run: |
+          layout=dist/Venture-linux-arm64
+          for f in venture venture-runtime venture-framework.jar venture-java-bridge.jar libEGL.so libGLESv2.so \
+            libavcodec.so.62 libsqlite3.so.0 java/jdk/bin/java java/agent/venture-jvmti-agent.so release-files.json; do
+            [ -f "$layout/$f" ] || { echo "Missing from the arm64 layout: $f"; exit 1; }
+          done
+          [ "$(od -An -tx1 -j18 -N2 "$layout/venture" | tr -d ' \n')" = b700 ] || { echo "venture is not an AArch64 binary"; exit 1; }
+          "$layout/venture" --version
+      - name: Packaging tools
+        run: |
+          sudo apt-get update -q && sudo apt-get install -y -q flatpak ostree librsvg2-common
+          flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+          flatpak install --user -y --noninteractive flathub org.gnome.Platform//51
+          curl -fsSL -o "$RUNNER_TEMP/appimagetool" "$APPIMAGETOOL_URL"
+          echo "$APPIMAGETOOL_SHA256  $RUNNER_TEMP/appimagetool" | sha256sum -c -
+          chmod +x "$RUNNER_TEMP/appimagetool"
+          echo "APPIMAGETOOL=$RUNNER_TEMP/appimagetool" >> "$GITHUB_ENV"
+      - name: Packages
+        run: tools/packaging/linux/build_packages.sh --layout dist/Venture-linux-arm64 --out dist/packages
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-arm64
+          path: dist/packages/Venture-*
+          if-no-files-found: error
+          compression-level: 0

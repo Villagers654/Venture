@@ -21,7 +21,7 @@
 #include "dynarmic/backend/x64/abi.h"
 #include "dynarmic/backend/x64/devirtualize.h"
 #include "dynarmic/backend/x64/emit_x64_memory.h"
-#include "dynarmic/backend/x64/exclusive_monitor_friend.h"
+#include "dynarmic/backend/exclusive_monitor_friend.h"
 #include "dynarmic/backend/x64/perf_map.h"
 #include "dynarmic/backend/x64/stack_layout.h"
 #include "dynarmic/common/spin_lock_x64.h"

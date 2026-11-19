@@ -9,7 +9,7 @@ public final class MediaFormat {
       KEY_FRAME_RATE = "frame-rate", KEY_DURATION = "durationUs", KEY_MAX_INPUT_SIZE = "max-input-size",
       KEY_LANGUAGE = "language", KEY_COLOR_FORMAT = "color-format", KEY_STRIDE = "stride",
       KEY_SLICE_HEIGHT = "slice-height", KEY_COLOR_RANGE = "color-range", KEY_COLOR_STANDARD = "color-standard",
-      KEY_COLOR_TRANSFER = "color-transfer", KEY_ROTATION = "rotation-degrees";
+      KEY_COLOR_TRANSFER = "color-transfer", KEY_ROTATION = "rotation-degrees", KEY_PROFILE = "profile", KEY_LEVEL = "level";
   // AOSP values; Unity's AndroidVideoMedia reads them through JNI.
   public static final int COLOR_RANGE_FULL = 1, COLOR_RANGE_LIMITED = 2,
       COLOR_STANDARD_BT709 = 1, COLOR_STANDARD_BT601_PAL = 2, COLOR_STANDARD_BT601_NTSC = 4, COLOR_STANDARD_BT2020 = 6,

@@ -8,15 +8,19 @@
 
 #pragma once
 
+#include <optional>
+#include <functional>
 #include <array>
 #include <cstddef>
 #include <memory>
+#include <utility>
 #include <vector>
 
 #include "common/common_types.h"
 #include "common/container/unordered_map.h"
 
 #include "dynarmic/backend/arm64/fastmem.h"
+#include "dynarmic/backend/arm64/host_feature.h"
 #include "dynarmic/interface/A32/coprocessor.h"
 #include "dynarmic/interface/optimization_flags.h"
 #include "dynarmic/ir/location_descriptor.h"
@@ -37,6 +41,10 @@ enum class Cond;
 enum class Opcode;
 }  // namespace Dynarmic::IR
 
+namespace Dynarmic {
+class ExclusiveMonitor;
+}  // namespace Dynarmic
+
 namespace Dynarmic::Backend::Arm64 {
 
 struct EmitContext;
@@ -46,6 +54,8 @@ using CodePtr = std::byte*;
 enum class LinkTarget {
     ReturnToDispatcher,
     ReturnFromRunCode,
+    FastDispatch,
+    DispatchSiteMiss,
     ReadMemory8,
     ReadMemory16,
     ReadMemory32,
@@ -76,7 +86,17 @@ enum class LinkTarget {
     ExclusiveWriteMemory32,
     ExclusiveWriteMemory64,
     ExclusiveWriteMemory128,
+    InlineExclusiveWriteFallback8,
+    InlineExclusiveWriteFallback16,
+    InlineExclusiveWriteFallback32,
+    InlineExclusiveWriteFallback64,
+    InlineExclusiveWriteFallback128,
+    AtomicMemory,
+    WrappedAtomicMemory,
+    AtomicCompareAndSwap128,
     CallSVC,
+    CallSVCFast,
+    CallSVCFastKnown,
     ExceptionRaised,
     InstructionSynchronizationBarrierRaised,
     InstructionCacheOperationRaised,
@@ -99,6 +119,9 @@ enum class BlockRelocationType {
 struct BlockRelocation {
     std::ptrdiff_t code_offset;
     BlockRelocationType type;
+    /// Venture: where an unlinked Branch site jumps (offset from the entry
+    /// point); 0 for a NOP that falls through to an inline unlinked path.
+    std::ptrdiff_t unlinked_offset = 0;
 };
 
 struct EmittedBlockInfo {
@@ -107,6 +130,9 @@ struct EmittedBlockInfo {
     std::vector<Relocation> relocations;
     ::Common::unordered_map<IR::LocationDescriptor, std::vector<BlockRelocation>> block_relocations;
     ::Common::unordered_map<std::ptrdiff_t, FastmemPatchInfo> fastmem_patch_info;
+    // Venture: guest code [first, second] outside the block that its code
+    // depends on (nzcv_exit_liveness), registered with the block's range.
+    std::vector<std::pair<u64, u64>> dependent_ranges;
 };
 
 struct EmitConfig {
@@ -167,6 +193,60 @@ struct EmitConfig {
 
     // Debugging
     bool very_verbose_debugging_output;
+
+    // Venture: supervisor calls dispatched inside the JIT (UserConfig::svc_fast,
+    // svc_fp_transfer, svc_fp_guest (A64 only) and svc_lookup).
+    std::optional<u32> svc_fast{};
+    std::optional<u32> svc_fp_transfer{};
+    std::optional<u32> svc_fp_guest{};
+    std::function<const void*(u64, u32)> svc_lookup{};
+
+    // Venture: inline exclusives (emit_arm64_memory.cpp), from UserConfig's
+    // global_monitor, processor_id, fastmem_exclusive_access,
+    // recompile_on_exclusive_fastmem_failure and elide_unchanged_exclusive_stores.
+    ExclusiveMonitor* global_monitor = nullptr;
+    std::size_t processor_id = 0;
+    bool fastmem_exclusive_access = false;
+    bool recompile_on_exclusive_fastmem_failure = true;
+    bool elide_unchanged_exclusive_stores = false;
+    // Venture: the guest ISA, for diagnostics (dynarmic/interface/code_stats.h).
+    bool is_a64 = false;
+    // Venture: block links keep only the patchable branch in the block's
+    // straight-line code; the unlinked exit is emitted with the deferred code.
+    bool compact_block_links = false;
+    // Venture: A64 UserConfig::diagnostic_entry. A selected block entry calls
+    // diagnostic_record(user, pc, state) with the host FPCR.
+    std::function<bool(u64)> diagnostic_selected;
+    void (*diagnostic_record)(void* user, u64 pc, const void* state) noexcept = nullptr;
+    void* diagnostic_user = nullptr;
+    // Venture: the host's optional instructions (host_feature.h), less
+    // UserConfig::disabled_host_features.
+    u32 host_features = 0;
+    bool HasHostFeature(HostFeature feature) const { return Arm64::HasHostFeature(host_features, feature); }
+
+    // Venture: A64 dispatch, as on x64 (A64::UserConfig of the same names).
+    // svc_return_link: a block with one RSB push that ends in PopRSBHint
+    // links to the pushed location instead of pushing and popping.
+    bool svc_return_link = false;
+    // Forward conditional links within one halt_polling_window_size skip
+    // the halt poll; LinkBlockFast across a window polls.
+    bool enable_bounded_halt_polling = false;
+    // Diagnostic counters: [0] RSB pops, [1] RSB misses, [2] fast-dispatch
+    // hints, [3] table misses.
+    u64* fast_dispatch_census = nullptr;
+    // dispatch_site_cache: the next indirect-branch site's {pc, code} slot,
+    // empty when the cache is off.
+    std::function<void*()> next_dispatch_site{};
+    // A64 cold_memory_abort_state is Live or All: abort exits are out of line
+    // and store the access's A64ColdSet* records.
+    bool cold_memory_abort_state = false;
+
+    // Venture: the A64 register cache (abi.h A64CachedRegister).
+    bool a64_register_cache = false;
+
+    // Venture: A64 UserConfig::nzcv_exit_liveness, reading successor code.
+    bool nzcv_exit_liveness = false;
+    std::function<std::optional<u32>(u64)> read_code;
 };
 
 EmittedBlockInfo EmitArm64(oaknut::CodeGenerator& code, IR::Block block, const EmitConfig& emit_conf, FastmemManager& fastmem_manager);
@@ -179,6 +259,14 @@ oaknut::Label EmitA32Cond(oaknut::CodeGenerator& code, EmitContext& ctx, IR::Con
 oaknut::Label EmitA64Cond(oaknut::CodeGenerator& code, EmitContext& ctx, IR::Cond cond);
 void EmitA32Terminal(oaknut::CodeGenerator& code, EmitContext& ctx);
 void EmitA64Terminal(oaknut::CodeGenerator& code, EmitContext& ctx);
+// Venture: the A64 terminal's per-block choices, made before the block's code.
+void PrepareA64Terminal(EmitContext& ctx);
+void PrepareA64NZCVExit(EmitContext& ctx);
+bool FuseA64CheckBit(EmitContext& ctx, IR::Inst* inst, IR::Inst* next, bool next_is_last);
+void FoldA64Addresses(EmitContext& ctx);
+bool EmitFoldedAddressAlias(EmitContext& ctx, IR::Inst* inst);
+void EmitA64RegisterCacheStore(oaknut::CodeGenerator& code, bool enabled);
+void EmitA64RegisterCacheLoad(oaknut::CodeGenerator& code, bool enabled);
 void EmitA32ConditionFailedTerminal(oaknut::CodeGenerator& code, EmitContext& ctx);
 void EmitA64ConditionFailedTerminal(oaknut::CodeGenerator& code, EmitContext& ctx);
 void EmitA32CheckMemoryAbort(oaknut::CodeGenerator& code, EmitContext& ctx, IR::Inst* inst, oaknut::Label& end);

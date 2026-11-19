@@ -70,12 +70,17 @@ struct MockXrStats {
   std::uint32_t passthrough_fb, passthrough_htc, blend_mode;
   float passthrough_htc_alpha;
   std::uint32_t live_passthrough;
+  std::uint32_t swapchain_destroys;  // xrDestroySwapchain calls that destroyed a swapchain
 };
 extern "C" VENTURE_MOCK_EXPORT void ventureMockXrRefreshEnvironment();
 extern "C" VENTURE_MOCK_EXPORT void ventureMockXrSetScript(const MockXrScript *);
 // The interaction profile the mock reports for both hands (null: the input timeline's).
 // The next xrPollEvent reports the change.
 extern "C" VENTURE_MOCK_EXPORT void ventureMockXrSetProfile(const char *profile);
+// The binding paths last suggested for `profile`, one per line, into `out`
+// (truncated to `capacity`); returns the size the whole text needs.
+extern "C" VENTURE_MOCK_EXPORT std::uint32_t ventureMockXrSuggestedBindings(const char *profile, char *out,
+                                                                          std::uint32_t capacity);
 extern "C" VENTURE_MOCK_EXPORT MockXrStats ventureMockXrStats();
 extern "C" VENTURE_MOCK_EXPORT XrTime ventureMockXrLastDisplayTime();
 // Hold a host frame wait before it returns a prediction; queries may proceed.
@@ -89,6 +94,8 @@ extern "C" VENTURE_MOCK_EXPORT std::uint32_t ventureMockXrDestroysDuringEnd();
 // Copies up to capacity subimages of the last accepted frame; returns the total.
 extern "C" VENTURE_MOCK_EXPORT std::uint32_t ventureMockXrLastSubImages(XrSwapchainSubImage *out,
                                                              std::uint32_t capacity);
+// Copies up to capacity projection view fields of view of the last accepted frame; returns the total.
+extern "C" VENTURE_MOCK_EXPORT std::uint32_t ventureMockXrLastProjectionFov(XrFovf *out, std::uint32_t capacity);
 // Copies up to capacity quad layers of the last accepted frame; returns the total.
 extern "C" VENTURE_MOCK_EXPORT std::uint32_t ventureMockXrLastQuads(XrCompositionLayerQuad *out,
                                                          std::uint32_t capacity);

@@ -15,6 +15,12 @@ namespace venture::platform {
 void lower_background_thread_priority() {
   SetThreadPriority(GetCurrentThread(), THREAD_MODE_BACKGROUND_BEGIN);
 }
+void enter_background_process_mode() {
+  // The idle class is inherited by child processes (the Java converter); background mode adds very
+  // low I/O and memory priority for this process. Threads keep their relative priorities inside.
+  SetPriorityClass(GetCurrentProcess(), IDLE_PRIORITY_CLASS);
+  SetPriorityClass(GetCurrentProcess(), PROCESS_MODE_BACKGROUND_BEGIN);
+}
 void lower_worker_thread_priority() { SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL); }
 namespace {
 struct Entry { HANDLE handle; bool scoped_audio = false; std::atomic<bool> exiting{false}; std::atomic<bool> audio{false}; std::atomic<int> nice{0}; int fifo = 0; bool realtime_request = false; Entry* previous = nullptr; std::unique_ptr<AudioThreadPriority> priority; };

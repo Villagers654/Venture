@@ -281,9 +281,282 @@ msgstr "SteamVR est votre runtime OpenXR, et le bac à sable du Flatpak ne peut 
 msgid "OK"
 msgstr "OK"
 
-#. Controls page checkbox and its hint. The grip is the controller's side button held to grab.
+#. Controls page, the last item of the Grip input's list, and its hint. The grip is the controller's side button held to grab.
 msgid "Grip toggle"
 msgstr "Poignée en bascule"
 
 msgid "Press once to hold, again to let go"
 msgstr "Appuyez une fois pour saisir, une seconde fois pour lâcher"
+
+msgid "Mirror fullscreen"
+msgstr "Miroir en plein écran"
+
+msgid "Off (F11 switches)"
+msgstr "Désactivé (F11 pour basculer)"
+
+msgid "On (F11 switches)"
+msgstr "Activé (F11 pour basculer)"
+
+msgid "Could not read controls file"
+msgstr "Impossible de lire le fichier de commandes"
+
+msgid "Controls not imported"
+msgstr "Commandes non importées"
+
+msgid "Could not save controls file"
+msgstr "Impossible d'enregistrer le fichier de commandes"
+
+msgid "Import controls: a Venture controls file, or a SteamVR binding file for Venture"
+msgstr "Importer des commandes : un fichier de commandes Venture, ou un fichier d'association SteamVR pour Venture"
+
+msgid "Export this controller's controls to share them"
+msgstr "Exporter les commandes de cette manette pour les partager"
+
+msgid "Position in hand"
+msgstr "Position dans la main"
+
+msgid "Forward"
+msgstr "Avant"
+
+msgid "Up"
+msgstr "Haut"
+
+msgid "Right"
+msgstr "Droite"
+
+msgid "Tilt up"
+msgstr "Incliner vers le haut"
+
+msgid "Turn left"
+msgstr "Tourner à gauche"
+
+msgid "Roll left"
+msgstr "Pivoter à gauche"
+
+msgid "Mirror for both hands"
+msgstr "Miroir pour les deux mains"
+
+msgid "Reset position"
+msgstr "Réinitialiser la position"
+
+msgid "Toggle"
+msgstr "Bascule"
+
+msgid "Sticks, triggers and vibration"
+msgstr "Joysticks, gâchettes et vibrations"
+
+msgid "Stick dead zone"
+msgstr "Zone morte du joystick"
+
+msgid "Invert stick left/right"
+msgstr "Inverser le joystick gauche/droite"
+
+msgid "Invert stick up/down"
+msgstr "Inverser le joystick haut/bas"
+
+msgid "Trigger press at"
+msgstr "Gâchette pressée à"
+
+msgid "Grip press at"
+msgstr "Poignée pressée à"
+
+msgid "Vibration"
+msgstr "Vibrations"
+
+msgid "Auto"
+msgstr "Auto"
+
+msgid "Off"
+msgstr "Désactivées"
+
+msgid "Same for both hands"
+msgstr "Identique pour les deux mains"
+
+msgid "Reset"
+msgstr "Réinitialiser"
+
+msgid "VR runtime"
+msgstr "Runtime VR"
+
+msgid "The OpenXR runtime games run on. Choose the one your headset uses when another is active, such as SteamVR for a Steam Frame while Virtual Desktop is the active runtime."
+msgstr "Le runtime OpenXR sur lequel tournent les jeux. Choisissez celui de votre casque quand un autre est actif, par exemple SteamVR pour un Steam Frame alors que Virtual Desktop est le runtime actif."
+
+msgid "not found"
+msgstr "introuvable"
+
+msgid "Default"
+msgstr "Par défaut"
+
+#, python-brace-format
+msgid "No mod of this game takes {0}."
+msgstr "Aucun mod de ce jeu ne prend en charge {0}."
+
+msgid "Its mod loader (Scotland2) is not here yet: go online once, or drop libsl2.so on its page."
+msgstr "Son chargeur de mods (Scotland2) n'est pas encore là : connectez-vous une fois à Internet, ou déposez libsl2.so sur sa page."
+
+msgid "Its mod loader (Scotland2) could not be downloaded: drop libsl2.so on its page."
+msgstr "Impossible de télécharger son chargeur de mods (Scotland2) : déposez libsl2.so sur sa page."
+
+msgid "Open the game's page, then add this mod there."
+msgstr "Ouvrez la page du jeu, puis ajoutez-y ce mod."
+
+#, python-brace-format
+msgid "{0} is a mod for {1}, which is not installed."
+msgstr "{0} est un mod pour {1}, qui n'est pas installé."
+
+#, python-brace-format
+msgid "Installing {0}…"
+msgstr "Installation de {0}…"
+
+#, python-brace-format
+msgid "Installed {1} {2} with {0} mod it needs."
+msgid_plural "Installed {1} {2} with {0} mods it needs."
+msgstr[0] "Installé : {1} {2}, avec {0} mod requis."
+msgstr[1] "Installé : {1} {2}, avec {0} mods requis."
+
+#, python-brace-format
+msgid "Installed {0} {1}."
+msgstr "Installé : {0} {1}."
+
+#, python-brace-format
+msgid "{0} also needs {1}: add their .qmod files."
+msgstr "{0} a aussi besoin de {1} : ajoutez leurs fichiers .qmod."
+
+msgid "Close the game before replacing its APK."
+msgstr "Fermez le jeu avant de remplacer son APK."
+
+msgid "Replacing the game's APK…"
+msgstr "Remplacement de l'APK du jeu…"
+
+msgid "This APK is already installed."
+msgstr "Cet APK est déjà installé."
+
+#, python-brace-format
+msgid "Installed the patched APK ({0} mod loader). Saves and settings stay."
+msgstr "APK modifié installé (chargeur de mods {0}). Les sauvegardes et les réglages sont conservés."
+
+msgid "Installed the APK. Saves and settings stay."
+msgstr "APK installé. Les sauvegardes et les réglages sont conservés."
+
+msgid "Added the Scotland2 mod loader."
+msgstr "Chargeur de mods Scotland2 ajouté."
+
+#, python-brace-format
+msgid "Added {0} for its mods."
+msgstr "{0} ajouté pour ses mods."
+
+msgid "Install this game first."
+msgstr "Installez d'abord ce jeu."
+
+msgid "The original APK is back. Saves and settings stay."
+msgstr "L'APK d'origine est rétabli. Les sauvegardes et les réglages sont conservés."
+
+#, python-brace-format
+msgid "{0} on"
+msgid_plural "{0} on"
+msgstr[0] "{0} activé"
+msgstr[1] "{0} activés"
+
+msgid "Add mods"
+msgstr "Ajouter des mods"
+
+msgid "Restore original APK"
+msgstr "Rétablir l'APK d'origine"
+
+msgid "Puts back the APK this game had before a patched one replaced it. Saves and settings stay."
+msgstr "Remet l'APK que ce jeu avait avant qu'un APK modifié le remplace. Les sauvegardes et les réglages sont conservés."
+
+#, python-brace-format
+msgid "by {0}"
+msgstr "par {0}"
+
+#, python-brace-format
+msgid "Needs {0}"
+msgstr "Requiert {0}"
+
+msgid "Remove"
+msgstr "Supprimer"
+
+msgid "Files for mods"
+msgstr "Fichiers pour les mods"
+
+msgid "This game has no expansion file (OBB) to replace."
+msgstr "Ce jeu n'a pas de fichier d'extension (OBB) à remplacer."
+
+msgid "Choose which expansion file to replace on the game's Mods tab."
+msgstr "Choisissez le fichier d'extension à remplacer dans l'onglet Mods du jeu."
+
+msgid "Close the game before replacing its expansion file."
+msgstr "Fermez le jeu avant de remplacer son fichier d'extension."
+
+#, python-brace-format
+msgid "Replacing {0}…"
+msgstr "Remplacement de {0}…"
+
+#, python-brace-format
+msgid "Replaced {0}. Restore downloads the store's file again."
+msgstr "{0} remplacé. Rétablir télécharge à nouveau le fichier de la boutique."
+
+msgid "This game was imported: import its expansion file again."
+msgstr "Ce jeu a été importé : importez à nouveau son fichier d'extension."
+
+msgid "Sign in and go online to download the store's file."
+msgstr "Connectez-vous et passez en ligne pour télécharger le fichier de la boutique."
+
+msgid "Expansion files (OBB)"
+msgstr "Fichiers d'extension (OBB)"
+
+msgid "Replace…"
+msgstr "Remplacer…"
+
+msgid "Restore"
+msgstr "Rétablir"
+
+msgid "Replaced with your file"
+msgstr "Remplacé par votre fichier"
+
+msgid "The store's file"
+msgstr "Le fichier de la boutique"
+
+msgid "Removes your file and downloads the store's file again from Meta."
+msgstr "Supprime votre fichier et télécharge à nouveau le fichier de la boutique depuis Meta."
+
+msgid "Mods"
+msgstr "Mods"
+
+msgid "None yet. Drop .qmod files on this window."
+msgstr "Aucun pour l'instant. Déposez des fichiers .qmod sur cette fenêtre."
+
+#, python-brace-format
+msgid "{0} installed"
+msgid_plural "{0} installed"
+msgstr[0] "{0} installé"
+msgstr[1] "{0} installés"
+
+msgid "Mod packages (.qmod), a patched APK of this version, or files your mods take. Dropping them on this window works too. Changes apply at the next launch."
+msgstr "Des paquets de mods (.qmod), un APK modifié de cette version ou des fichiers que vos mods prennent en charge. Vous pouvez aussi les déposer sur cette fenêtre. Les changements s'appliquent au prochain lancement."
+
+msgid "Mod loader"
+msgstr "Chargeur de mods"
+
+msgid "None: the APK is not patched"
+msgstr "Aucun : l'APK n'est pas modifié"
+
+msgid "Scotland2: libsl2.so is missing"
+msgstr "Scotland2 : libsl2.so manque"
+
+msgid "Patch the APK with a mod patcher (QuestPatcher or ModsBeforeFriday), then drop the patched APK here: its saves and settings stay."
+msgstr "Modifiez l'APK avec un outil de patch (QuestPatcher ou ModsBeforeFriday), puis déposez l'APK modifié ici : ses sauvegardes et ses réglages sont conservés."
+
+msgid "Installed mods"
+msgstr "Mods installés"
+
+#, python-brace-format
+msgid "Made for game version {0}"
+msgstr "Conçu pour la version {0} du jeu"
+
+msgid "Writes the file you choose over this one. The original is not kept: Restore downloads it again from Meta."
+msgstr "Écrit le fichier choisi à la place de celui-ci. L'original n'est pas conservé : Rétablir le télécharge à nouveau depuis Meta."
+
+msgid "Writes the file you choose over this one. The original is not kept: install or import the game again to get it back."
+msgstr "Écrit le fichier choisi à la place de celui-ci. L'original n'est pas conservé : installez ou importez à nouveau le jeu pour le récupérer."

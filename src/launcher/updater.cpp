@@ -4,15 +4,22 @@
 #include "common/environment.h"
 #include "common/paths.h"
 #include "common/process.h"
+#ifdef __ANDROID__
+#include "launcher/headset_play.h"
+#endif
 
 #include <algorithm>
 #include <cctype>
 #include <fstream>
 #include <stdexcept>
+#include <string_view>
+#include <vector>
 
 namespace venture::launcher::update {
 Method method() {
-#ifdef _WIN32
+#if defined(__ANDROID__)
+  return Method::apk;
+#elif defined(_WIN32)
   // The installer leaves its uninstaller beside venture.exe; a zip copy has none.
   std::error_code ec;
   if (fs::exists(paths::executable().parent_path() / "uninstall.exe", ec)) return Method::installer;
@@ -46,7 +53,16 @@ std::optional<Asset> pick(const Json &release, Method method) {
       return find(release, [](std::string_view n) { return n == "Venture-windows64-setup.exe"; });
     case Method::appimage:
       return find(release, [](std::string_view n) {
+#if defined(__aarch64__)
+        return n.starts_with("Venture-") && n.ends_with("-linux-aarch64.AppImage");
+#else
         return n.starts_with("Venture-") && n.ends_with("-linux-x86_64.AppImage");
+#endif
+      });
+    case Method::apk:
+      return find(release, [](std::string_view n) {
+        const auto name = lower(std::string(n));
+        return name.starts_with("venture-") && name.ends_with("-android-arm64.apk");
       });
     case Method::page:
       break;
@@ -56,6 +72,40 @@ std::optional<Asset> pick(const Json &release, Method method) {
 std::optional<Asset> sums(const Json &release) {
   return find(release, [](std::string_view n) { return n == "SHA256SUMS"; });
 }
+bool newer_version(std::string_view tag, std::string_view current) {
+  struct Version {
+    std::vector<int> parts;
+    bool prerelease = false;
+  };
+  auto parse = [](std::string_view text) {
+    Version out;
+    if (text.starts_with('v')) text.remove_prefix(1);
+    if (const auto dash = text.find('-'); dash != text.npos) {
+      out.prerelease = dash + 1 < text.size();
+      text = text.substr(0, dash);
+    }
+    for (std::size_t at = 0; at <= text.size();) {
+      const auto end = std::min(text.find('.', at), text.size());
+      const auto digits = text.substr(at, end - at);
+      int value = 0;
+      if (digits.empty()) return Version{};
+      for (char c : digits) {
+        if (c < '0' || c > '9') return Version{};
+        value = value * 10 + (c - '0');
+      }
+      out.parts.push_back(value);
+      at = end + 1;
+    }
+    return out;
+  };
+  auto a = parse(tag), b = parse(current);
+  if (a.parts.empty() || b.parts.empty()) return false;
+  a.parts.resize(std::max(a.parts.size(), b.parts.size()));
+  b.parts.resize(a.parts.size());
+  if (a.parts != b.parts) return a.parts > b.parts;
+  return b.prerelease && !a.prerelease;
+}
+
 std::string expected_sum(std::string_view text, std::string_view name) {
   // "<64 hex>  <name>" (or " *<name>" for binary mode), one file per line.
   while (!text.empty()) {
@@ -93,6 +143,12 @@ void apply(Method method, const fs::path &file) {
     // The installer's own pages reinstall over this copy and can start Venture again.
     start_detached(file, {});
     return;
+  }
+  if (method == Method::apk) {
+#ifdef __ANDROID__
+    launcher::headset::update_self(file);
+    return;
+#endif
   }
   if (method != Method::appimage) throw std::runtime_error("This copy of Venture updates from the release page.");
   const auto *image = environment::getenv("APPIMAGE");

@@ -22,4 +22,5 @@ void* graphics_symbol(void* lib, const char* name) {
 const char* egl_library_name() { return "libEGL.so"; }
 const char* gles_library_name() { return "libGLESv2.so"; }
 const char* vulkan_library_name() { return "libvulkan.so.1"; }
+std::vector<DisplayAdapter> display_adapters() { return {}; }
 }  // namespace venture::platform

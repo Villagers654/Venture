@@ -13,7 +13,10 @@
 // desktop refresh rate and presents with MAILBOX or IMMEDIATE on a private
 // low-priority queue, so the XR loop never waits for the desktop: a present
 // that blocks (a locked or hidden desktop) holds no queue the game uses, and
-// without an acquired image ready a frame is simply not mirrored.
+// without an acquired image ready a frame is simply not mirrored. A device
+// whose game took every queue has no private one: the mirror then presents on
+// the game's graphics queue under that queue's lock (xr/display_override.h),
+// and stops if a present ever holds it for more than 100 ms.
 //
 // Closing the window hides the mirror for the rest of the run; the game keeps
 // running. A minimized window costs nothing.

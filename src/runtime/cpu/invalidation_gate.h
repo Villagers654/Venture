@@ -42,6 +42,13 @@ class InvalidationGate {
       stopped_.notify_all();
     }
   }
+  // Owner, inside Run, around a host call that may block (a futex wait): while
+  // parked the run counts as stopped, so invalidators do not wait for the
+  // thread to wake. The owner must not execute or compile guest code until
+  // unpark(). A range queued meanwhile has halted the run, so it ends at the
+  // next block boundary and the next enter() applies it.
+  void park() { leave(); }
+  void unpark() { epoch_.fetch_add(1); }
   // Any thread: queue [p, p + n); `halt` stops a running JIT. Returns the
   // epoch to wait for, or 0 when the owner is outside Run (the next entry
   // applies the range).

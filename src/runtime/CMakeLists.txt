@@ -10,11 +10,28 @@ add_library(venture_runtime STATIC
   core/generated/a32_libc.cpp
   core/thread.cpp core/thread_lifetime.cpp core/tls.cpp
   core/dev_game_control.cpp core/dev_il2cpp.cpp core/engine_policy.cpp core/engine_defaults.cpp
-  core/profile.cpp core/memory_pressure.cpp core/session_timeline.cpp core/frame_cpu.cpp core/startup_diagnostics.cpp
+  core/profile.cpp core/memory_pressure.cpp core/session_timeline.cpp core/stall_finder.cpp core/frame_cpu.cpp core/startup_diagnostics.cpp
   core/pipeline_stats.cpp core/invalidation_stats.cpp core/av_telemetry.cpp
   core/wait.cpp core/readiness.cpp core/sync_census.cpp core/diagnostic_trace.cpp core/signals.cpp core/syscall.cpp core/a32_unwind.cpp core/shutdown_trace.cpp
   core/elf.cpp core/elf_relocations.cpp core/linker.cpp core/process_image.cpp core/process.cpp core/device_identity.cpp core/java_script_loader.cpp
-  cpu/dynarmic_backend.cpp cpu/dynarmic_a32_backend.cpp cpu/block_list.cpp cpu/host_tuning.cpp cpu/portable_cache.cpp cpu/pretranslate.cpp cpu/stubs.cpp cpu/kuser.cpp)
+  cpu/dynarmic_backend.cpp cpu/dynarmic_a32_backend.cpp cpu/block_list.cpp cpu/portable_cache.cpp cpu/pretranslate.cpp cpu/stubs.cpp cpu/guest_entry.cpp cpu/native_entry.cpp cpu/kuser.cpp cpu/engine_choice.cpp cpu/engine_select.cpp)
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64|ARM64)$")
+  # The native entry's routines (native-a64 execution on AArch64 hosts).
+  enable_language(ASM)
+  target_sources(venture_runtime PRIVATE cpu/native_entry_a64.S)
+  if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_sources(venture_runtime PRIVATE cpu/native_a64_backend.cpp cpu/native_a64_resume.S)
+    # The engine interposes sigaction and signal for every library in the
+    # process (the JVM's handlers must not run on a guest thread pointer). The
+    # object goes straight into each executable that runs guest code: from an
+    # archive, --exclude-libs ALL would make its symbols local.
+    add_library(venture_native_a64_interpose OBJECT cpu/native_a64_interpose.cpp)
+    target_link_libraries(venture_native_a64_interpose PRIVATE venture_runtime)
+    foreach(symbol sigaction signal bsd_signal sysv_signal __sysv_signal)
+      target_link_options(venture_native_a64_interpose INTERFACE "LINKER:--export-dynamic-symbol=${symbol}")
+    endforeach()
+  endif()
+endif()
 target_include_directories(venture_runtime PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_include_directories(venture_runtime PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
 target_link_libraries(venture_runtime PUBLIC venture_common PRIVATE dynarmic miniz venture_lz4 merry::mcl fmt::fmt)
@@ -34,7 +51,7 @@ if(WIN32)
   target_sources(venture_runtime PRIVATE platform/win32/runtime_qos.cpp)
   target_sources(venture_runtime PRIVATE platform/win32/cpu_affinity.cpp)
   target_sources(venture_runtime PRIVATE platform/win32/memory.cpp platform/win32/low_memory.cpp platform/win32/environment.cpp platform/win32/thread_priority.cpp)
-  target_link_libraries(venture_runtime PRIVATE mincore)
+  target_link_libraries(venture_runtime PRIVATE mincore wevtapi)
 else()
   target_sources(venture_runtime PRIVATE platform/posix/crash_report.cpp)
   target_link_libraries(venture_runtime PRIVATE ${CMAKE_DL_LIBS})
@@ -51,7 +68,7 @@ endif()
 add_subdirectory(hle)
 add_subdirectory(hle/steam)
 target_link_libraries(venture_runtime PRIVATE mimalloc-static)
-add_executable(venture-runtime main.cpp)
+add_executable(venture-runtime main.cpp host_check.cpp)
 if(TARGET venture_sqlite3)
   add_dependencies(venture-runtime venture_sqlite3)  # loaded at run time
 endif()
@@ -75,8 +92,7 @@ if(NOT WIN32)
 endif()
 # The ordinary launch path loads ANGLE from the executable directory. Stage the
 # provisioned, pinned runtime so a fresh build works without a developer env var.
-set(VENTURE_ANGLE_ROOT "${PROJECT_SOURCE_DIR}/.deps/angle/d2e5e488da0c6215f8276e5b8d992a4a6ec20c32"
-    CACHE PATH "Installed Venture ANGLE dependency")
+include("${PROJECT_SOURCE_DIR}/cmake/AngleRoot.cmake")
 if(WIN32)
   set(venture_angle_libraries libEGL.dll libGLESv2.dll)
 else()
@@ -105,11 +121,11 @@ add_custom_command(TARGET venture-runtime POST_BUILD
     "$<TARGET_FILE_DIR:venture-runtime>/LICENSES/LGPL-2.1.txt"
   COMMAND ${CMAKE_COMMAND} -E copy_if_different "${VENTURE_FFMPEG_ROOT}/venture-ffmpeg.json"
     "$<TARGET_FILE_DIR:venture-runtime>/venture-ffmpeg.json"
-  COMMAND ${CMAKE_COMMAND} -E copy_if_different "${PROJECT_SOURCE_DIR}/.deps/ffmpeg/archive/ffmpeg-8.1.3.tar.xz"
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different "${VENTURE_FFMPEG_BASE}/archive/ffmpeg-8.1.3.tar.xz"
     "$<TARGET_FILE_DIR:venture-runtime>/LICENSES/ffmpeg-8.1.3.tar.xz"
-  COMMAND ${CMAKE_COMMAND} -E copy_if_different "${PROJECT_SOURCE_DIR}/.deps/ffmpeg/signature/release.asc"
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different "${VENTURE_FFMPEG_BASE}/signature/release.asc"
     "$<TARGET_FILE_DIR:venture-runtime>/LICENSES/ffmpeg-8.1.3.tar.xz.asc" VERBATIM)
-target_link_libraries(venture-runtime PRIVATE venture_common)
+target_link_libraries(venture-runtime PRIVATE venture_common OpenXR::openxr_loader)
 target_link_libraries(venture-runtime PRIVATE venture_steam)
 target_link_libraries(venture-runtime PRIVATE venture_ovrplatform)
 
@@ -139,6 +155,9 @@ add_library(venture_android STATIC
 target_include_directories(venture_android PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(venture_android PUBLIC venture_common venture_runtime PRIVATE venture_hle venture_java zlibstatic)
 target_link_libraries(venture-runtime PRIVATE venture_runtime venture_hle)
+if(TARGET venture_native_a64_interpose)
+  target_link_libraries(venture-runtime PRIVATE venture_native_a64_interpose)
+endif()
 target_compile_options(venture-runtime PRIVATE -Wall -Wextra)
 
 # Keep ownership of core tests here; the libc worktrees add their own test sources.
@@ -148,6 +167,9 @@ if(VENTURE_BUILD_TESTS)
     list(REMOVE_ITEM core_tests "${PROJECT_SOURCE_DIR}/tests/runtime/core_a32_abi_test.cpp")
     target_sources(venture_tests PRIVATE ${core_tests})
     target_link_libraries(venture_tests PRIVATE venture_runtime miniz)
+    if(TARGET venture_native_a64_interpose)
+      target_link_libraries(venture_tests PRIVATE venture_native_a64_interpose)
+    endif()
     target_compile_options(venture_tests PRIVATE -Wall -Wextra)
   endfunction()
   cmake_language(DEFER DIRECTORY ${PROJECT_SOURCE_DIR} CALL venture_add_core_tests)
@@ -170,7 +192,7 @@ target_link_libraries(venture-runtime PRIVATE venture_vulkan)
 # layout documented in java/support_files.h. --java-home still overrides it.
 set(VENTURE_GUEST_TEST_JAVA_CLASSES "${PROJECT_BINARY_DIR}/guest/java-classes")
 add_custom_command(OUTPUT "${VENTURE_GUEST_TEST_JAVA_CLASSES}/org/venture/tests/VtestJni.class"
-  COMMAND "${VENTURE_JAVA_HOME}/bin/javac" --release 21 -d "${VENTURE_GUEST_TEST_JAVA_CLASSES}"
+  COMMAND "${VENTURE_HOST_JAVA_HOME}/bin/javac${VENTURE_HOST_JAVA_SUFFIX}" --release 21 -d "${VENTURE_GUEST_TEST_JAVA_CLASSES}"
     "${PROJECT_SOURCE_DIR}/tests/guest/java/VtestJni.java"
   DEPENDS "${PROJECT_SOURCE_DIR}/tests/guest/java/VtestJni.java" VERBATIM)
 add_custom_command(OUTPUT "${CMAKE_BINARY_DIR}/bin/guest/java-classes/org/venture/tests/VtestJni.class"

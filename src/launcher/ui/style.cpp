@@ -329,6 +329,8 @@ void draw_text(ImDrawList* dl, ImFont* font, float size, ImVec2 pos, ImU32 col, 
 }
 
 ImVec2 measure(ImFont* font, float size, std::string_view text, float wrap_width) {
+  // An empty view may have no data, and ImGui reads a null begin as a C string.
+  if (text.empty()) text = "";
   return font->CalcTextSizeA(s(size), FLT_MAX, wrap_width, text.data(), text.data() + text.size());
 }
 
@@ -391,6 +393,30 @@ bool ink(ImFont* font, float size, ImWchar cp, ImVec4* out) {
   *out = {g->X0 * k, g->Y0 * k, g->X1 * k, g->Y1 * k};
   return true;
 }
+
+// The glyph's drawn pixels, which can sit off-center in the box ink() gives
+// (the rasterizer's bitmap keeps empty rows and columns). Read from the font
+// atlas; falls back to ink() when the atlas has no CPU copy.
+bool painted_ink(ImFont* font, float size, ImWchar cp, ImVec4* out) {
+  if (!ink(font, size, cp, out)) return false;
+  ImFontBaked* baked = font->GetFontBaked(s(size));
+  const ImFontGlyph* g = baked->FindGlyphNoFallback(cp);
+  ImFontAtlas* atlas = font->OwnerAtlas;
+  ImTextureData* tex = atlas ? atlas->TexData : nullptr;
+  ImFontAtlasRect r;
+  if (!tex || !tex->Pixels || g->PackId < 0 || !atlas->GetCustomRect(g->PackId, &r) || !r.w || !r.h) return true;
+  const int alpha = tex->Format == ImTextureFormat_Alpha8 ? 0 : 3;
+  int x0 = r.w, y0 = r.h, x1 = -1, y1 = -1;
+  for (int y = 0; y < r.h; ++y)
+    for (int x = 0; x < r.w; ++x)
+      if (static_cast<const unsigned char*>(tex->GetPixelsAt(r.x + x, r.y + y))[alpha] >= 64) {
+        x0 = std::min(x0, x), x1 = std::max(x1, x), y0 = std::min(y0, y), y1 = std::max(y1, y);
+      }
+  if (x1 < 0) return true;
+  const float sx = (out->z - out->x) / r.w, sy = (out->w - out->y) / r.h;
+  *out = {out->x + x0 * sx, out->y + y0 * sy, out->x + (x1 + 1) * sx, out->y + (y1 + 1) * sy};
+  return true;
+}
 }  // namespace
 
 float text_y(ImFont* font, float size, float top, float height) {
@@ -415,8 +441,10 @@ void draw_glyph(ImDrawList* dl, char32_t glyph, float size, ImVec2 center, ImU32
   // its line box.
   ImVec4 k;
   ImVec2 pos;
-  if (ink(g_fonts.regular, size, ImWchar(glyph), &k)) {
-    pos = {std::round(center.x - (k.x + k.z) * 0.5f), std::round(center.y - (k.y + k.w) * 0.5f)};
+  if (painted_ink(g_fonts.regular, size, ImWchar(glyph), &k)) {
+    // A half-pixel tie goes up and left: std::round would put the ink a
+    // pixel right of and below the center of the circle or pill around it.
+    pos = {std::ceil(center.x - (k.x + k.z) * 0.5f - 0.5f), std::ceil(center.y - (k.y + k.w) * 0.5f - 0.5f)};
   } else {
     ImVec2 gs = measure(g_fonts.regular, size, g);
     pos = {std::round(center.x - gs.x * 0.5f), std::round(center.y - gs.y * 0.5f)};
@@ -721,7 +749,7 @@ bool submit_field(const char* id, const char* hint, std::string* value, float wi
 
 float menu_height(int rows) { return rows * s(38) + std::max(0, rows - 1) * s(2) + s(12); }
 
-void place_menu(ImVec2 at, float control_h, float menu_h, float pivot_x) {
+float place_menu(ImVec2 at, float control_h, float menu_h, float pivot_x) {
   const ImGuiViewport* vp = ImGui::GetMainViewport();
   const float gap = s(6), margin = s(12);
   const float below = vp->WorkPos.y + vp->WorkSize.y - margin - (at.y + control_h + gap);
@@ -731,7 +759,9 @@ void place_menu(ImVec2 at, float control_h, float menu_h, float pivot_x) {
     ImGui::SetNextWindowPos({at.x, at.y - gap}, ImGuiCond_Always, {pivot_x, 1});
   else
     ImGui::SetNextWindowPos({at.x, at.y + control_h + gap}, ImGuiCond_Always, {pivot_x, 0});
-  ImGui::SetNextWindowSizeConstraints({0, 0}, {FLT_MAX, std::max(s(80), up ? above : below)});
+  const float room = std::max(s(80), up ? above : below);
+  ImGui::SetNextWindowSizeConstraints({0, 0}, {FLT_MAX, room});
+  return room;
 }
 
 bool begin_menu(const char* id) {
@@ -792,7 +822,7 @@ float dropdown_width(const char* prefix, const char* const* items, int count) {
 }
 
 bool dropdown(const char* id, const char* prefix, const char* const* items, int count, int* current, float width,
-              const bool* dim, bool right) {
+              const bool* dim, bool right, const DropdownOption* option) {
   ImGui::PushID(id);
   std::string shown = std::string(prefix) + items[*current];
   ImFont* font = g_fonts.semibold;
@@ -816,8 +846,28 @@ bool dropdown(const char* id, const char* prefix, const char* const* items, int 
   if (chev_w > 0) draw_glyph(dl, icons::chevron_down, kLabel, {p.x + size.x - s(20), p.y + size.y * 0.5f}, color::text2);
   if (in.clicked) ImGui::OpenPopup("##menu");
   bool changed = false;
-  place_menu(p, size.y, menu_height(count));
+  const float option_h = s(56), divider_h = s(11);
+  const float room = place_menu(p, size.y, menu_height(count) + (option ? divider_h + option_h : 0));
   if (begin_menu("##menu")) {
+    // With an option and too little room, the choices scroll and the option stays
+    // in view under them.
+    const bool scroll = option && menu_height(count) + divider_h + option_h > room;
+    if (scroll) {
+      // As wide as the widest row (menu_item's width rule), with room for the scrollbar.
+      float wide = std::max({s(220), measure(g_fonts.regular, kBody, option->label).x + s(64),
+                             measure(g_fonts.regular, kLabel, option->hint).x + s(64)});
+      for (int i = 0; i < count; ++i)
+        wide = std::max(wide, measure(g_fonts.regular, kBody, visible_label(items[i])).x + s(64));
+      ImGui::BeginChild("##choices",
+                        {wide + ImGui::GetStyle().ScrollbarSize, std::max(s(76), room - s(12) - divider_h - option_h - s(4))},
+                        0, ImGuiWindowFlags_NoBackground);
+    }
+    auto check = [](ImVec2 row, float h) {
+      draw_glyph(ImGui::GetWindowDrawList(), icons::check, kSmall,
+                 {row.x + ImGui::GetWindowContentRegionMax().x - ImGui::GetWindowContentRegionMin().x - s(18),
+                  row.y + h * 0.5f},
+                 color::accent_text);
+    };
     for (int i = 0; i < count; ++i) {
       ImGui::PushID(i);
       ImVec2 row = ImGui::GetCursorScreenPos();
@@ -825,12 +875,38 @@ bool dropdown(const char* id, const char* prefix, const char* const* items, int 
         changed = *current != i;
         *current = i;
       }
-      if (i == *current)
-        draw_glyph(ImGui::GetWindowDrawList(), icons::check, kSmall,
-                   {row.x + ImGui::GetWindowContentRegionMax().x - ImGui::GetWindowContentRegionMin().x - s(18),
-                    row.y + s(19)},
-                   color::accent_text);
+      if (i == *current) {
+        check(row, s(38));
+        if (scroll && ImGui::IsWindowAppearing()) ImGui::SetScrollHereY();  // the current choice in view
+      }
       ImGui::PopID();
+    }
+    if (scroll) ImGui::EndChild();
+    if (option) {
+      // A divider sets the option apart from the choices above it.
+      const ImVec2 d = ImGui::GetCursorScreenPos();
+      const float full = ImGui::GetWindowContentRegionMax().x - ImGui::GetWindowContentRegionMin().x;
+      hline(ImGui::GetWindowDrawList(), d.x + s(8), d.x + full - s(8), d.y + divider_h * 0.5f - s(1),
+            color::alpha(color::stroke, 0.8f));
+      ImGui::Dummy({0, divider_h - s(4)});  // with the item spacing above and below
+      // Its label and hint, the check at the right like the choices'.
+      const ImVec2 row = ImGui::GetCursorScreenPos();
+      const float w = std::max({s(220), measure(g_fonts.regular, kBody, option->label).x + s(64),
+                                measure(g_fonts.regular, kLabel, option->hint).x + s(64), full});
+      auto in = interact("##option", {w, option_h});
+      ImDrawList* dl = ImGui::GetWindowDrawList();
+      if (in.hover > 0.01f)
+        dl->AddRectFilled(row, {row.x + w, row.y + option_h}, color::alpha(color::surface_top, in.hover), s(8));
+      draw_text(dl, g_fonts.regular, kBody, {std::round(row.x + s(12)), text_y(g_fonts.regular, kBody, row.y + s(6), s(24))},
+                color::text, option->label);
+      draw_text(dl, g_fonts.regular, kLabel,
+                {std::round(row.x + s(12)), text_y(g_fonts.regular, kLabel, row.y + s(29), s(18))}, color::text3,
+                option->hint);
+      if (*option->value) check(row, option_h);
+      if (in.clicked) {
+        *option->value = !*option->value;
+        ImGui::CloseCurrentPopup();
+      }
     }
     end_menu();
   }

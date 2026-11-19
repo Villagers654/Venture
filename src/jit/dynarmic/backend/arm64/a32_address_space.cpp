@@ -6,6 +6,9 @@
  * SPDX-License-Identifier: 0BSD
  */
 
+#include <cstring>
+#include <fmt/format.h>
+#include "dynarmic/backend/perf_map.h"
 #include "dynarmic/backend/arm64/a32_address_space.h"
 
 #include "dynarmic/backend/arm64/a32_jitstate.h"
@@ -19,6 +22,7 @@
 #include "dynarmic/frontend/A32/translate/a32_translate.h"
 #include "dynarmic/interface/A32/config.h"
 #include "dynarmic/interface/exclusive_monitor.h"
+#include "dynarmic/backend/exclusive_monitor_friend.h"
 #include "dynarmic/ir/opt_passes.h"
 
 namespace Dynarmic::Backend::Arm64 {
@@ -167,6 +171,43 @@ static void* EmitWrappedWriteCallTrampoline(oaknut::CodeGenerator& code, T* this
     return target;
 }
 
+// Venture: the fallback of an inline exclusive store (emit_arm64_memory.cpp):
+// Xscratch0 = vaddr, Xscratch1 = value, compared with the value this CPU's
+// exclusive load recorded. Returns Xscratch0 = 0 when stored, else 1, and
+// preserves every other caller-saved register.
+template<auto callback, typename T>
+static void* EmitInlineExclusiveWriteFallbackTrampoline(oaknut::CodeGenerator& code, const A32::UserConfig& conf) {
+    using namespace oaknut::util;
+
+    oaknut::Label l_addr, l_this;
+    auto fn = [](const A32::UserConfig& conf, A32::VAddr vaddr, T value) -> u64 {
+        T expected;
+        std::memcpy(&expected, GetExclusiveMonitorValuePointer(conf.global_monitor, conf.processor_id), sizeof(T));
+        return (conf.callbacks->*callback)(vaddr, value, expected) ? 0 : 1;
+    };
+
+    constexpr u64 save_regs = ABI_CALLER_SAVE & ~ToRegList(Xscratch0);
+
+    void* target = code.xptr<void*>();
+    ABI_PushRegisters(code, save_regs, 0);
+    code.LDR(X0, l_this);
+    code.MOV(X1, Xscratch0);
+    code.MOV(X2, Xscratch1);
+    code.LDR(Xscratch0, l_addr);
+    code.BLR(Xscratch0);
+    code.MOV(Xscratch0, X0);
+    ABI_PopRegisters(code, save_regs, 0);
+    code.RET();
+
+    code.align(8);
+    code.l(l_this);
+    code.dx(std::bit_cast<u64>(&conf));
+    code.l(l_addr);
+    code.dx(std::bit_cast<u64>(Common::FptrCast(fn)));
+
+    return target;
+}
+
 template<auto callback, typename T>
 static void* EmitExclusiveWriteCallTrampoline(oaknut::CodeGenerator& code, const A32::UserConfig& conf) {
     using namespace oaknut::util;
@@ -202,7 +243,9 @@ A32AddressSpace::A32AddressSpace(const A32::UserConfig& conf)
 void A32AddressSpace::GenerateIR(IR::Block& ir_block, IR::LocationDescriptor descriptor) const {
     ir_block.Reset(descriptor);
     A32::Translate(ir_block, A32::LocationDescriptor{descriptor}, conf.callbacks, {conf.arch_version, conf.define_unpredictable_behaviour, conf.hook_hint_instructions});
-    Optimization::Optimize(ir_block, conf, {});
+    // Venture: without the SHA2 instructions the SHA256 opcodes become plain
+    // IR, as on x64 without SHA-NI.
+    Optimization::Optimize(ir_block, conf, {.sha256 = !HasHostFeature(HostFeatures(conf.disabled_host_features), HostFeature::SHA256)});
 }
 
 void A32AddressSpace::InvalidateCacheRanges(const boost::icl::interval_set<u32>& ranges) {
@@ -239,7 +282,15 @@ void A32AddressSpace::EmitPrelude() {
     prelude_info.exclusive_write_memory_16 = EmitExclusiveWriteCallTrampoline<&A32::UserCallbacks::MemoryWriteExclusive16, u16>(code, conf);
     prelude_info.exclusive_write_memory_32 = EmitExclusiveWriteCallTrampoline<&A32::UserCallbacks::MemoryWriteExclusive32, u32>(code, conf);
     prelude_info.exclusive_write_memory_64 = EmitExclusiveWriteCallTrampoline<&A32::UserCallbacks::MemoryWriteExclusive64, u64>(code, conf);
+    if (conf.global_monitor) {
+        prelude_info.inline_exclusive_write_fallback_8 = EmitInlineExclusiveWriteFallbackTrampoline<&A32::UserCallbacks::MemoryWriteExclusive8, u8>(code, conf);
+        prelude_info.inline_exclusive_write_fallback_16 = EmitInlineExclusiveWriteFallbackTrampoline<&A32::UserCallbacks::MemoryWriteExclusive16, u16>(code, conf);
+        prelude_info.inline_exclusive_write_fallback_32 = EmitInlineExclusiveWriteFallbackTrampoline<&A32::UserCallbacks::MemoryWriteExclusive32, u32>(code, conf);
+        prelude_info.inline_exclusive_write_fallback_64 = EmitInlineExclusiveWriteFallbackTrampoline<&A32::UserCallbacks::MemoryWriteExclusive64, u64>(code, conf);
+    }
     prelude_info.call_svc = EmitCallTrampoline<&A32::UserCallbacks::CallSVC>(code, conf.callbacks);
+    prelude_info.call_svc_fast = EmitCallTrampoline<&A32::UserCallbacks::CallSVCFast>(code, conf.callbacks);
+    prelude_info.call_svc_fast_known = EmitCallTrampoline<&A32::UserCallbacks::CallSVCFastKnown>(code, conf.callbacks);
     prelude_info.exception_raised = EmitCallTrampoline<&A32::UserCallbacks::ExceptionRaised>(code, conf.callbacks);
     prelude_info.isb_raised = EmitCallTrampoline<&A32::UserCallbacks::InstructionSynchronizationBarrierRaised>(code, conf.callbacks);
     prelude_info.add_ticks = EmitCallTrampoline<&A32::UserCallbacks::AddTicks>(code, conf.callbacks);
@@ -345,6 +396,9 @@ void A32AddressSpace::EmitPrelude() {
         code.MOV(X1, Xstate);
         code.LDR(Xscratch0, l_addr);
         code.BLR(Xscratch0);
+        if (conf.HasOptimization(OptimizationFlag::ReturnStackBuffer)) {
+            EmitRSBResetAfterCompile(l_return_to_dispatcher);
+        }
         code.BR(X0);
 
         const auto fn = [](A32AddressSpace& self, A32JitState& context) -> CodePtr {
@@ -356,6 +410,24 @@ void A32AddressSpace::EmitPrelude() {
         code.dx(std::bit_cast<u64>(this));
         code.l(l_addr);
         code.dx(std::bit_cast<u64>(Common::FptrCast(fn)));
+    }
+
+    if (conf.HasOptimization(OptimizationFlag::FastDispatch)) {
+        // Venture: probe the fast dispatch table in emitted code (as on x64);
+        // a miss fills the entry through GetOrEmit. Same exits as the dispatcher.
+        fast_dispatch_table.Allocate(std::size_t{1} << fast_dispatch_bits);
+        prelude_info.fast_dispatch = code.xptr<void*>();
+        code.LDAR(Wscratch0, Xhalt);
+        code.CBNZ(Wscratch0, return_from_run_code);
+
+        if (conf.enable_cycle_counting) {
+            code.CMP(Xticks, 0);
+            code.B(LE, return_from_run_code);
+        }
+
+        static_assert(offsetof(A32JitState, regs) + 16 * sizeof(u32) == offsetof(A32JitState, upper_location_descriptor));
+        code.LDUR(X0, Xstate, offsetof(A32JitState, regs) + 15 * sizeof(u32));
+        EmitFastDispatchProbe(l_return_to_dispatcher, conf.HasOptimization(OptimizationFlag::ReturnStackBuffer), nullptr);
     }
 
     prelude_info.return_from_run_code = code.xptr<void*>();
@@ -386,8 +458,11 @@ void A32AddressSpace::EmitPrelude() {
     code.dx(std::bit_cast<u64>(prelude_info.return_to_dispatcher));
 
     prelude_info.end_of_prelude = code.offset();
+    PerfMapRegister(mem.ptr(), reinterpret_cast<const std::byte*>(mem.ptr()) + prelude_info.end_of_prelude, "a32_prelude");
 
-    mem.invalidate_all();
+    // Venture: only the prelude holds code. Cleaning the whole cache walked every
+    // line of it (128 MiB, 80 ms in an emulated arm64 machine) for each JIT.
+    mem.invalidate(mem.ptr(), prelude_info.end_of_prelude);
     ProtectCodeMemory();
 }
 
@@ -439,7 +514,30 @@ EmitConfig A32AddressSpace::GetEmitConfig() {
         .coprocessors = conf.coprocessors,
 
         .very_verbose_debugging_output = conf.very_verbose_debugging_output,
+
+        .svc_fast = conf.svc_fast,
+        .svc_fp_transfer = conf.svc_fp_transfer,
+        .svc_fp_guest = std::nullopt,
+        .svc_lookup = conf.svc_lookup,
+
+        .global_monitor = conf.global_monitor,
+        .processor_id = conf.processor_id,
+        .fastmem_exclusive_access = conf.fastmem_exclusive_access,
+        .recompile_on_exclusive_fastmem_failure = conf.recompile_on_exclusive_fastmem_failure,
+        .elide_unchanged_exclusive_stores = conf.elide_unchanged_exclusive_stores,
+        .compact_block_links = conf.compact_block_links,
+        .host_features = HostFeatures(conf.disabled_host_features),
     };
+}
+
+u64 A32AddressSpace::DescriptorPC(IR::LocationDescriptor descriptor) const {
+    return A32::LocationDescriptor{descriptor}.PC();
+}
+
+std::string A32AddressSpace::FriendlyName(IR::LocationDescriptor ir_descriptor) const {
+    const A32::LocationDescriptor descriptor{ir_descriptor};
+    return fmt::format("a32_{}{:08X}_{}_fpcr{:08X}", descriptor.TFlag() ? "t" : "a", descriptor.PC(),
+                       descriptor.EFlag() ? "be" : "le", descriptor.FPSCR().Value());
 }
 
 void A32AddressSpace::RegisterNewBasicBlock(const IR::Block& block, const EmittedBlockInfo&) {

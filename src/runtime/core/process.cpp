@@ -12,6 +12,7 @@
 #include "common/log.h"
 #include "common/paths.h"
 #include "common/file_ops.h"
+#include "common/library/mods.h"
 #include "common/saves_migration.h"
 #include <nlohmann/json.hpp>
 #include <miniz.h>
@@ -186,7 +187,20 @@ void configure_game(const std::filesystem::path& install,
     }
     obb_names.push_back(paths::utf8(name));
   }
-  sync_obb_view(std::filesystem::absolute(install), config.obb_dir, obb_names, mods_dir(base, config.package));
+  // Expansion files an earlier Venture used from the mods folder replace the
+  // installed ones once; that folder is not read for them any more.
+  try {
+    mods::adopt_legacy_obbs(std::filesystem::absolute(install), obb_names, mods_dir(base, config.package));
+  } catch (const std::exception& e) {
+    log::warn("mods", "Could not move the expansion files from the mods folder: {}", e.what());
+  }
+  sync_obb_view(std::filesystem::absolute(install), config.obb_dir, obb_names);
+  // Installed mods (.qmod) and their loader at the /sdcard paths the loader reads.
+  try {
+    mods::sync(mods_dir(base, config.package, pin), config.package, config.data_dir);
+  } catch (const std::exception& e) {
+    log::warn("mods", "Could not put the mods in place: {}", e.what());
+  }
   config.expansion_files = std::move(obb_names);
   config.properties = {{"ro.build.version.sdk", std::to_string(config.sdk_level)}, {"ro.product.cpu.abi", config.abi},
       {"ro.product.cpu.abilist", config.abi}};

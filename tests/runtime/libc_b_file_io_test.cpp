@@ -752,3 +752,36 @@ TEST_CASE("fts walks a directory tree preorder and postorder without changing di
   CHECK(call("rmdir", {h2g(sub.c_str())}) == 0);
   CHECK(call("rmdir", {h2g(root.c_str())}) == 0);
 }
+
+TEST_CASE("system runs the shell's file commands mods use, as sh -c does") {
+  // beatsaber-hook's mkpath is system("mkdir -p <path>"); Beat Saber mods make
+  // their folders with it.
+  Thread thread;
+  const std::string base = "/storage/emulated/0/shell-test";
+  auto sh = [&](const std::string& line) { return call("system", {h2g(line.c_str())}); };
+  auto is_dir = [](const std::string& path) {
+    Stat s{};
+    return path_stat(path.c_str(), &s) == 0 && (s.mode & 0170000) == 0040000;
+  };
+  CHECK(call("system", {0}) == 1);  // a shell is available
+  CHECK(sh("mkdir -p -m +rw " + base + "/Mods/Some\\ Mod/Playlists") == 0);  // mkpath's exact command
+  CHECK(is_dir(base + "/Mods/Some Mod/Playlists"));
+  CHECK(sh("mkdir -m u=rwx,go-w " + base + "/Mods/m") == 0);
+  CHECK(sh("mkdir -m 0755 " + base + "/Mods/o && rmdir " + base + "/Mods/m " + base + "/Mods/o") == 0);
+  CHECK(sh("mkdir -m +q " + base + "/Mods/bad") == 1 << 8);
+  CHECK_FALSE(is_dir(base + "/Mods/bad"));
+  CHECK(sh("mkdir -p '" + base + "/Mods'") == 0);  // already there
+  CHECK(sh("mkdir " + base + "/Mods") == 1 << 8);  // without -p it exists
+  CHECK(sh("/system/bin/mkdir \"" + base + "/a\" && touch " + base + "/a/f >/dev/null 2>&1") == 0);
+  Stat file{};
+  CHECK(path_stat((base + "/a/f").c_str(), &file) == 0);
+  CHECK(sh("rm " + base + "/a") == 1 << 8);  // a directory needs -r
+  CHECK(sh("false || rm -f " + base + "/missing; rmdir " + base + "/Mods/Some\\ Mod/Playlists") == 0);
+  CHECK_FALSE(is_dir(base + "/Mods/Some Mod/Playlists"));
+  // Programs and syntax a headset's sh has that this does not: as for a missing program.
+  CHECK(sh("am start -n x/y") == 127 << 8);
+  CHECK(sh("ls " + base + " | grep a") == 127 << 8);
+  CHECK(sh("echo $HOME") == 127 << 8);
+  CHECK(sh("rm -rf " + base) == 0);
+  CHECK_FALSE(is_dir(base));
+}

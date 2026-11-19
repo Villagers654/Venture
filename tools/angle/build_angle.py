@@ -1,9 +1,15 @@
 #!/usr/bin/env python3
-"""Build Venture's pinned ANGLE Vulkan DLLs/shared libraries (Windows/Linux x64).
+"""Build Venture's pinned ANGLE Vulkan DLLs/shared libraries (Windows/Linux x64,
+and Linux arm64 with --target linux-arm64: cross-built on a Linux x64 host, or
+built natively on a Linux arm64 host with --host-llvm).
 
 Windows provisions portable Microsoft Build Tools/SDK files and accepts their
 license; compilation uses ANGLE's pinned clang-cl, never cl.exe. Nothing is
 installed system-wide. See docs/BUILDING_ANGLE.md.
+
+A linux-arm64 artifact lives beside the host's, as .deps/angle/<pin>-linux-arm64.
+Any host links it from the cache once it is there (copied from the building
+host into <cache>/prebuilt/<key>); its hashes are checked as for a host build.
 """
 from __future__ import annotations
 import sys
@@ -85,7 +91,7 @@ def checkout(path: Path, url: str, revision: str, env):
         raise RuntimeError(f"{path}: expected {revision}, found {actual}; use a separate --cache")
 
 
-def prepare(cache: Path, swiftshader: bool, env):
+def prepare(cache: Path, swiftshader: bool, env, cpu: str = "x64"):
     depot = cache / "depot_tools"
     checkout(depot, DEPOT_URL, LOCK["depot_tools_commit"], env)
     link_install(ROOT / ".deps/angle-tools" / ("depot_tools-" + LOCK["depot_tools_commit"]), depot)
@@ -133,6 +139,10 @@ def prepare(cache: Path, swiftshader: bool, env):
              "build/toolchain/win/rc/win/rc.exe.sha1"], cwd=source, env=env)
     else:
         msvc = None
+    if cpu == "arm64":
+        # Chromium's Debian arm64 sysroot (a hook gclient --nohooks skipped).
+        run([sys.executable, "build/linux/sysroot_scripts/install-sysroot.py", "--arch=arm64"],
+            cwd=source, env=env)
     run([sys.executable, "build/util/lastchange.py", "-o", "build/util/LASTCHANGE"],
         cwd=source, env=env)
     # Later patches may touch earlier hunks. Individual reverse checks then
@@ -172,10 +182,36 @@ def prepare(cache: Path, swiftshader: bool, env):
     return source, msvc
 
 
-def gn_args(msvc: Path | None, swiftshader: bool) -> str:
+def host_llvm(cache: Path, llvm: Path, source: Path) -> Path:
+    """A clang_base_path for an LLVM install of the pinned major version.
+
+    Chromium ships no Linux arm64-hosted clang. Its BUILD files expect the
+    runtime libraries under per-target directories, as its own packages lay
+    them out; distribution LLVM packages use lib/clang/<major>/lib/linux.
+    """
+    gni = (source / "build/toolchain/toolchain.gni").read_text()
+    major = gni.split('clang_version = "', 1)[1].split('"', 1)[0]
+    version = run([llvm / "bin/clang", "--version"], cwd=cache, capture=True).splitlines()[0]
+    if f"clang version {major}." not in version:
+        raise RuntimeError(f"{llvm}: Chromium's toolchain at {PIN[:12]} expects clang {major}, found: {version}")
+    shim = cache / f"llvm-{major}-shim"
+    resource = llvm / "lib/clang" / major
+    target_lib = shim / "lib/clang" / major / "lib/aarch64-unknown-linux-gnu"
+    target_lib.mkdir(parents=True, exist_ok=True)
+    for link, real in ((shim / "bin", llvm / "bin"), (shim / "lib/clang" / major / "include", resource / "include")):
+        if not link.is_symlink():
+            link.symlink_to(real, target_is_directory=True)
+    for real in (resource / "lib/linux").glob("*-aarch64.*"):
+        link = target_lib / real.name.replace("-aarch64.", ".")
+        if not link.is_symlink():
+            link.symlink_to(real)
+    return shim
+
+
+def gn_args(msvc: Path | None, swiftshader: bool, cpu: str = "x64", clang_base: Path | None = None) -> str:
     args = {
         "is_debug": False, "is_component_build": False, "symbol_level": 1,
-        "target_cpu": "x64", "is_clang": True, "use_siso": False,
+        "target_cpu": cpu, "is_clang": True, "use_siso": False,
         "angle_enable_vulkan": True, "angle_enable_d3d11": False,
         "angle_use_custom_libvulkan": False,
         "angle_enable_gl": False, "angle_enable_null": False,
@@ -193,12 +229,21 @@ def gn_args(msvc: Path | None, swiftshader: bool) -> str:
         # Native Linux compiler toolchain with a headless Vulkan display. No
         # install-build-deps.sh or root-level package installation is performed.
         # Venture selects GPUs through Vulkan/OpenXR, so ANGLE needs no libpci.
-        args.update(use_sysroot=False, use_libpci=False, angle_use_x11=False, angle_use_wayland=False,
+        # A cross build links against Chromium's arm64 sysroot (older glibc than
+        # any supported host, so the libraries load everywhere).
+        args.update(use_sysroot=cpu != "x64", use_libpci=False, angle_use_x11=False, angle_use_wayland=False,
                     angle_use_vulkan_display=True, angle_vulkan_display_mode="headless")
+        if clang_base:
+            # An arm64 host compiles natively with its own LLVM, without
+            # Chromium's clang plugins (built only into Chromium's clang). A
+            # newer clang warns where the pinned one does not, so warnings
+            # stay warnings.
+            args.update(clang_base_path=clang_base.as_posix(), clang_use_chrome_plugins=False,
+                        treat_warnings_as_errors=False)
     return "".join(f"{key} = {json.dumps(value)}\n" for key, value in args.items())
 
 
-def valid_artifact(path: Path, key: str) -> bool:
+def valid_artifact(path: Path, key: str, target_os: str = sys.platform) -> bool:
     manifest = path / "manifest.json"
     if not manifest.exists():
         return False
@@ -206,7 +251,7 @@ def valid_artifact(path: Path, key: str) -> bool:
         data = json.loads(manifest.read_text())
     except (OSError, ValueError):
         return False
-    suffix = ".dll" if os.name == "nt" else ".so"
+    suffix = ".dll" if target_os == "win32" else ".so"
     required = {"bin/libEGL" + suffix, "bin/libGLESv2" + suffix,
                 "include/EGL/eglext_angle_venture.h", "LICENSE"}
     return data.get("key") == key and required <= data.get("files", {}).keys() and all(
@@ -284,7 +329,7 @@ def reuse_legacy_artifact(cache: Path, swiftshader: bool) -> Path | None:
     return None
 
 
-def install(source: Path, output: Path, destination: Path, key: str, elapsed: float):
+def install(source: Path, output: Path, destination: Path, key: str, elapsed: float, compiler: str = ""):
     destination.mkdir(parents=True)
     for subdir in ("bin", "lib", "licenses"):
         (destination / subdir).mkdir()
@@ -327,6 +372,8 @@ def install(source: Path, output: Path, destination: Path, key: str, elapsed: fl
     manifest = {"key": key, "angle_commit": PIN,
                 "patches": {p.name: sha(p) for p in PATCHES},
                 "toolchain": LOCK, "build_seconds": elapsed, "files": files}
+    if compiler:
+        manifest["compiler"] = compiler
     (destination / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
 
 
@@ -354,27 +401,40 @@ def main():
     parser.add_argument("--jobs", type=int, default=min(os.cpu_count() or 4, 16))
     parser.add_argument("--swiftshader", action="store_true")
     parser.add_argument("--prepare-only", action="store_true")
+    parser.add_argument("--target", choices=("host", "linux-arm64"), default="host",
+                        help="linux-arm64: build on a Linux x64 or arm64 host, or link an artifact already in the cache")
+    parser.add_argument("--host-llvm", type=Path,
+                        help="on a Linux arm64 host: an LLVM install of the clang major version the pin expects, "
+                             "such as /usr/lib/llvm-24 (Chromium ships no arm64-hosted clang)")
     args = parser.parse_args()
-    if platform.machine().lower() not in ("amd64", "x86_64") or sys.platform not in ("win32", "linux"):
+    native_arm64 = sys.platform == "linux" and platform.machine().lower() in ("aarch64", "arm64")
+    target_os, cpu = (sys.platform, "x64") if args.target == "host" else ("linux", "arm64")
+    if args.target == "host" and (platform.machine().lower() not in ("amd64", "x86_64") or sys.platform not in ("win32", "linux")):
         parser.error("Only Windows x64 and Linux x64 hosts are supported")
     if not PATCHES:
         raise RuntimeError("Missing Venture ANGLE patch")
     recipe = {"pin": PIN, "patches": [sha(p) for p in PATCHES], "lock": LOCK,
               "script": sha(Path(__file__)), "provision": sha(HERE / "provision_msvc.py"),
-              "platform": sys.platform, "swiftshader": args.swiftshader}
+              "platform": target_os, "swiftshader": args.swiftshader}
+    if cpu != "x64":
+        recipe["cpu"] = cpu
     digest = hashlib.sha256(json.dumps(recipe, sort_keys=True).encode()).hexdigest()
     patch_hash = hashlib.sha256(b"".join(p.read_bytes() for p in PATCHES)).hexdigest()
-    key = f"{PIN}-{patch_hash[:16]}-{digest[:16]}-{sys.platform}-x64"
+    key = f"{PIN}-{patch_hash[:16]}-{digest[:16]}-{target_os}-{cpu}"
+    slot = ROOT / ".deps/angle" / (PIN if args.target == "host" else f"{PIN}-{args.target}")
     cache = args.cache.resolve()
     cache.mkdir(parents=True, exist_ok=True)
     artifact = cache / "prebuilt" / key
     with cache_lock(cache / "build.lock"):
-        valid = valid_artifact(artifact, key)
-        if not valid and not args.prepare_only:
+        valid = valid_artifact(artifact, key, target_os)
+        if not valid and not args.prepare_only and args.target == "host":
             compatible = reuse_legacy_artifact(cache, args.swiftshader)
             if compatible:
-                link_install(ROOT / ".deps/angle" / PIN, compatible)
+                link_install(slot, compatible)
                 return
+        if (args.prepare_only or not valid) and args.target != "host" and (
+                sys.platform != "linux" or platform.machine().lower() not in ("amd64", "x86_64", "aarch64", "arm64")):
+            parser.error(f"{args.target} builds on a Linux x64 or arm64 host; copy its {key} artifact into {cache / 'prebuilt'}")
         if args.prepare_only or not valid:
             if artifact.exists() and not valid:
                 quarantine = artifact.with_name(key + f".invalid-{time.time_ns()}")
@@ -389,26 +449,32 @@ def main():
             env[f"GIT_CONFIG_VALUE_{count}"] = "true"
             env["GIT_CONFIG_COUNT"] = str(count + 1)
             start = time.monotonic()
-            source, msvc = prepare(cache, args.swiftshader, env)
+            source, msvc = prepare(cache, args.swiftshader, env, cpu)
             if args.prepare_only:
                 return
-            config = gn_args(msvc, args.swiftshader)
+            clang_base = None
+            if native_arm64:
+                if not args.host_llvm:
+                    parser.error("a Linux arm64 host needs --host-llvm")
+                clang_base = host_llvm(cache, args.host_llvm.resolve(), source)
+            config = gn_args(msvc, args.swiftshader, cpu, clang_base)
             config_hash = hashlib.sha256((PIN + config).encode()).hexdigest()[:16]
             output = source / "out" / ("Venture-" + config_hash)
             output.mkdir(parents=True, exist_ok=True)
             (output / "args.gn").write_text(config)
-            gn = source / "buildtools" / ("win/gn.exe" if os.name == "nt" else "linux64/gn")
+            gn = source / "buildtools" / ("win/gn.exe" if os.name == "nt" else "linux64/gn")  # linux64 holds the host-arch gn
             ninja = source / "third_party/ninja" / ("ninja.exe" if os.name == "nt" else "ninja")
             run([gn, "gen", output, "--fail-on-unused-args"], cwd=source, env=env)
             run([ninja, "-C", output, "-j", args.jobs, "libEGL", "libGLESv2"], cwd=source, env=env)
             elapsed = time.monotonic() - start
             staged = artifact.with_name(key + f".staging-{os.getpid()}")
-            install(source, output, staged, key, elapsed)
+            compiler = run([clang_base / "bin/clang", "--version"], cwd=cache, capture=True).splitlines()[0] if clang_base else ""
+            install(source, output, staged, key, elapsed, compiler)
             staged.rename(artifact)
             print(f"ANGLE built in {elapsed:.1f}s; artifacts: {artifact}", flush=True)
         else:
             print(f"Reusing SHA-256-verified ANGLE artifact: {artifact}", flush=True)
-        link_install(ROOT / ".deps/angle" / PIN, artifact)
+        link_install(slot, artifact)
 
 
 if __name__ == "__main__":

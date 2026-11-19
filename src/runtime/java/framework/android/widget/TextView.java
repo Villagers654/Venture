@@ -1,4 +1,5 @@
 package android.widget;
+import android.view.inputmethod.EditorInfo;
 public class TextView extends android.view.View {
   private android.text.Editable text = new android.text.SpannableStringBuilder();
   private android.text.Editable.Factory editableFactory = android.text.Editable.Factory.getInstance();
@@ -107,16 +108,54 @@ public class TextView extends android.view.View {
   public int getMaxLines() { return maxLines; }
   public void setTransformationMethod(android.text.method.TransformationMethod method) { transformation = method; }
   public android.text.method.TransformationMethod getTransformationMethod() { return transformation; }
-  public boolean onCheckIsTextEditor() { return inputType != 0; }
-  public android.view.inputmethod.InputConnection onCreateInputConnection(android.view.inputmethod.EditorInfo info) {
+  @Override public boolean onCheckIsTextEditor() { return inputType != 0; }
+  @Override public android.view.inputmethod.InputConnection onCreateInputConnection(android.view.inputmethod.EditorInfo info) {
     if (!onCheckIsTextEditor()) return null;
     info.inputType = inputType; info.imeOptions = imeOptions; info.hintText = hint;
+    // AOSP: an unspecified action is Next when a focusable view follows, else
+    // Done; Venture keeps no focus order, so Done. Multi-line Enter is a newline.
+    if ((info.imeOptions & EditorInfo.IME_MASK_ACTION) == EditorInfo.IME_ACTION_UNSPECIFIED)
+      info.imeOptions |= EditorInfo.IME_ACTION_DONE;
+    if ((inputType & EditorInfo.TYPE_MASK_CLASS) == EditorInfo.TYPE_CLASS_TEXT
+        && (inputType & (EditorInfo.TYPE_TEXT_FLAG_MULTI_LINE | EditorInfo.TYPE_TEXT_FLAG_IME_MULTI_LINE)) != 0)
+      info.imeOptions |= EditorInfo.IME_FLAG_NO_ENTER_ACTION;
     info.initialSelStart = android.text.Selection.getSelectionStart(text);
     info.initialSelEnd = android.text.Selection.getSelectionEnd(text);
-    return new android.view.inputmethod.BaseInputConnection(this, true);
+    return new EditableInputConnection(this);
   }
+  // AOSP EditableInputConnection: edits the view's own buffer, and an editor
+  // action goes to the view (Unity's field overrides onEditorAction).
+  private static final class EditableInputConnection extends android.view.inputmethod.BaseInputConnection {
+    private final TextView view;
+    EditableInputConnection(TextView view) { super(view, true); this.view = view; }
+    @Override public android.text.Editable getEditable() { return view.text; }
+    @Override public boolean performEditorAction(int action) { view.onEditorAction(action); return true; }
+    @Override public android.view.inputmethod.ExtractedText getExtractedText(
+        android.view.inputmethod.ExtractedTextRequest request, int flags) {
+      var out = new android.view.inputmethod.ExtractedText();
+      out.text = view.text.toString();
+      out.selectionStart = Math.max(0, view.getSelectionStart());
+      out.selectionEnd = Math.max(0, view.getSelectionEnd());
+      if (view.singleLine) out.flags |= android.view.inputmethod.ExtractedText.FLAG_SINGLE_LINE;
+      return out;
+    }
+  }
+  // AOSP TextView.onEditorAction: the listener first; Done closes the input
+  // method; Next/Previous move focus (no focus order here); others send Enter.
   public void onEditorAction(int action) {
-    if (editorListener != null) editorListener.onEditorAction(this, action, null);
+    if (editorListener != null && editorListener.onEditorAction(this, action, null)) return;
+    if (action == EditorInfo.IME_ACTION_NEXT || action == EditorInfo.IME_ACTION_PREVIOUS) return;
+    if (action == EditorInfo.IME_ACTION_DONE) {
+      var input = new android.view.inputmethod.InputMethodManager();
+      if (input.isActive(this)) input.hideSoftInputFromWindow(getWindowToken(), 0);
+      return;
+    }
+    long now = android.os.SystemClock.uptimeMillis();
+    int flags = android.view.KeyEvent.FLAG_SOFT_KEYBOARD | android.view.KeyEvent.FLAG_KEEP_TOUCH_MODE
+        | android.view.KeyEvent.FLAG_EDITOR_ACTION;
+    for (int keyAction : new int[] {android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.ACTION_UP})
+      dispatchKeyEvent(new android.view.KeyEvent(now, now, keyAction, android.view.KeyEvent.KEYCODE_ENTER, 0, 0,
+          android.view.KeyCharacterMap.VIRTUAL_KEYBOARD, 0, flags, 0x101));
   }
   public int getInputType() {
     return inputType;

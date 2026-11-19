@@ -141,8 +141,16 @@ bool submit_field(const char* id, const char* hint, std::string* value, float wi
 // marked in `dim` are listed in gray (still selectable). The label is centered,
 // or beside the chevron when `right`.
 // A label wider than a fixed `width` is ellipsized inside the pill's padding.
+// `option`, when set, ends the list with a setting of its own under a divider:
+// its label and hint, checked while *value is true; choosing it flips *value
+// (and closes the list) without changing the selection.
+struct DropdownOption {
+  const char* label;
+  const char* hint;
+  bool* value;
+};
 bool dropdown(const char* id, const char* prefix, const char* const* items, int count, int* current,
-              float width = 0, const bool* dim = nullptr, bool right = false);
+              float width = 0, const bool* dim = nullptr, bool right = false, const DropdownOption* option = nullptr);
 // The width that fits the widest of `items` (with `prefix`), its padding and chevron.
 float dropdown_width(const char* prefix, const char* const* items, int count);
 float dropdown_chevron_width();
@@ -156,7 +164,8 @@ bool tabs(const char* id, const char* const* items, int count, int* current, flo
 // Places the next menu under a control at `at` (its top-left; x is the menu's
 // edge, pivot_x 0 left-aligns and 1 right-aligns), or above it when the window
 // has more room there; a menu taller than the room scrolls.
-void place_menu(ImVec2 at, float control_h, float menu_h, float pivot_x = 0);
+// Returns the most height the menu gets there.
+float place_menu(ImVec2 at, float control_h, float menu_h, float pivot_x = 0);
 // The height of a menu of `rows` standard menu_item() rows.
 float menu_height(int rows);
 bool begin_menu(const char* id);

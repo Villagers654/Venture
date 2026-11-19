@@ -1,0 +1,10 @@
+/* The Platform loader exports the Meta Platform SDK (ovr*) and its JNI entry
+   points only; everything linked in stays internal. */
+{
+  global:
+    ovr*;
+    JNI_OnLoad;
+    Java_org_venture_1emu_game_*;
+  local:
+    *;
+};

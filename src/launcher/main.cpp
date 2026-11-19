@@ -27,6 +27,13 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
   }
   return venture::launcher::run(venture::launcher::parse_options(args));
 }
+#elif defined(__ANDROID__)
+// SDL's Java activity (src/android_app) calls SDL_main on its own thread once
+// the window exists; SDL_main.h renames main for that.
+#include <SDL3/SDL_main.h>
+int main(int argc, char **argv) {
+  return venture::launcher::run(venture::launcher::parse_options({argv, argv + argc}));
+}
 #else
 #include "launcher/auth_browser.h"
 #include <cstdio>
@@ -40,6 +47,12 @@ int main(int argc, char **argv) {
   // A browser handing back Meta's sign-in address (sign_in_link.h).
   if (argc == 4 && std::strcmp(argv[1], "--sign-in-callback") == 0)
     return venture::launcher::sign_in_link::deliver(argv[2], argv[3]);
+  // The Flatpak's packaged handler names no folder: the sandbox's own data folder.
+  if (argc == 3 && std::strcmp(argv[1], "--sign-in-callback") == 0) try {
+      return venture::launcher::sign_in_link::deliver(venture::paths::data_dir(), argv[2]);
+    } catch (...) {
+      return 1;
+    }
   if (int helper = venture::launcher::auth_browser_helper(argc, argv); helper >= 0)
     return helper;
   return venture::launcher::run(venture::launcher::parse_options({argv, argv + argc}));

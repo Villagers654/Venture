@@ -4,6 +4,7 @@
 #include "gfx/queue_sync.h"
 #include "hle/vulkan/internal.h"
 #include "xr/display_override.h"
+#include "xr/system_keyboard.h"
 #include "xr/xr_images.h"
 
 #include <SDL3/SDL.h>
@@ -23,6 +24,7 @@ struct wl_surface;
 #include <cmath>
 #include <condition_variable>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
@@ -101,9 +103,10 @@ class Mirror {
   XrGraphicsBindingVulkanKHR binding_{};
   bool shared_ = false;
   VkQueue queue_{};
-  // The private queue the mirror presents on.
+  // The queue the mirror presents on: its own, or one of the game's (`own_present_` false).
   VkQueue present_queue_{};
   std::uint32_t present_family_ = 0;
+  bool own_present_ = true;
   PFN_vkGetInstanceProcAddr get_{};
   MirrorMode mode_ = MirrorMode::off;
   // Mirror thread; while a slot is ready or recording the render thread reads
@@ -191,9 +194,14 @@ void Mirror::capture(const XrGraphicsBindingVulkanKHR& binding, bool shared, con
       mode_ = mirror_mode();
       get_ = gfx::gpu_device().get_instance_proc_addr;
       fn<PFN_vkGetDeviceQueue>("vkGetDeviceQueue")(binding.device, binding.queueFamilyIndex, binding.queueIndex, &queue_);
-      const auto present = *mirror_queue(binding.device);
+      const auto queue = *mirror_queue(binding.device);
+      const auto present = mirror_present_queue(queue, binding.queueFamilyIndex, binding.queueIndex);
+      own_present_ = queue.own;
       present_family_ = present.first;
       fn<PFN_vkGetDeviceQueue>("vkGetDeviceQueue")(binding.device, present.first, present.second, &present_queue_);
+      if (!own_present_)
+        log::info("mirror", "Desktop mirror presents on the game's queue (family {} index {})", present.first,
+                  present.second);
       thread_ = std::thread([this] { run(); });
       return;
     }
@@ -619,7 +627,17 @@ void Mirror::run() {
     if (const auto* mode = SDL_GetCurrentDisplayMode(SDL_GetDisplayForWindow(window_)); mode && mode->refresh_rate > 1)
       period = 1s / double(mode->refresh_rate);
   };
+  // While the system keyboard is open the PC keyboard types into the game's
+  // field through the mirror window too (SDL's text input: layouts, dead keys
+  // and IMEs), and Backspace, Enter and Escape act as the keyboard's Delete,
+  // action and close keys.
+  bool typing = false;
   auto pump = [&] {
+    if (const bool open = keyboard::shown(); open != typing) [[unlikely]] {
+      typing = open;
+      if (open) SDL_StartTextInput(window_);
+      else SDL_StopTextInput(window_);
+    }
     SDL_Event event;
     while (SDL_PollEvent(&event)) switch (event.type) {
         case SDL_EVENT_WINDOW_CLOSE_REQUESTED: close = true; break;
@@ -632,6 +650,21 @@ void Mirror::run() {
         case SDL_EVENT_WINDOW_MAXIMIZED: hidden = false; resize = true; break;
         case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED: resize = true; break;
         case SDL_EVENT_WINDOW_DISPLAY_CHANGED: refresh(); break;
+        case SDL_EVENT_KEY_DOWN:
+          // F11 switches between a window and fullscreen (borderless, on its display).
+          if (event.key.key == SDLK_F11 && !event.key.repeat)
+            SDL_SetWindowFullscreen(window_, !(SDL_GetWindowFlags(window_) & SDL_WINDOW_FULLSCREEN));
+          if (typing) {
+            // Android key codes: DEL, ENTER, BACK. A held Backspace repeats.
+            if (event.key.key == SDLK_BACKSPACE) keyboard::type_key(67);
+            else if ((event.key.key == SDLK_RETURN || event.key.key == SDLK_KP_ENTER) && !event.key.repeat)
+              keyboard::type_key(66);
+            else if (event.key.key == SDLK_ESCAPE && !event.key.repeat) keyboard::type_key(111);
+          }
+          break;
+        case SDL_EVENT_TEXT_INPUT:
+          if (typing && event.text.text) keyboard::type_text(event.text.text);
+          break;
         default: break;
       }
   };
@@ -645,6 +678,7 @@ void Mirror::run() {
   };
   bool fatal = !open_window();
   if (!fatal) {
+    if (mirror_fullscreen()) SDL_SetWindowFullscreen(window_, true);
     SDL_ShowWindow(window_);
     refresh();
   }
@@ -730,12 +764,27 @@ void Mirror::run() {
     present.swapchainCount = 1;
     present.pSwapchains = &swapchain_;
     present.pImageIndices = &index;
-    // The mirror's own queue: a present that blocks holds nothing the game uses.
-    const auto start = Clock::now();
-    r = fn<PFN_vkQueuePresentKHR>("vkQueuePresentKHR")(present_queue_, &present);
+    // On the mirror's own queue a present that blocks holds nothing the game
+    // uses. On one of the game's it holds that queue's lock like the game's
+    // own calls, and a present that blocks long stops the mirror rather than
+    // stall the game again.
+    Clock::duration held{};
+    {
+      std::optional<QueueGuard> guard;
+      if (!own_present_) guard.emplace(present_queue_, shared_ && present_queue_ == queue_);
+      if (guard && !*guard) break;  // the external queue is going away
+      const auto start = Clock::now();
+      r = fn<PFN_vkQueuePresentKHR>("vkQueuePresentKHR")(present_queue_, &present);
+      last_present = Clock::now();
+      held = last_present - start;
+    }
     holding_ = false;
-    last_present = Clock::now();
-    present_cost_.add(last_present - start);
+    present_cost_.add(held);
+    if (!own_present_ && held > 100ms) {
+      log::warn("mirror", "Desktop mirror stopped: a present on the game's queue held it for {} ms",
+                std::chrono::duration_cast<std::chrono::milliseconds>(held).count());
+      break;
+    }
     if (present_cost_.count == 1800) {  // about 30 s in
       Cost capture;
       {
@@ -789,6 +838,7 @@ void Mirror::release_device(VkDevice device) {
   dormant_ = !user_closed_ && !failed_;
   binding_ = {};
   queue_ = present_queue_ = {};
+  own_present_ = true;
   formats_.clear();
 }
 } // namespace

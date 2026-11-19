@@ -160,18 +160,25 @@ XrResult xrApplyHapticFeedback(XrSession handle, const XrHapticActionInfo *info,
   for (const auto &target_info : targets) {
     const auto *target = &target_info;
     const bool native = host_xr().enabled_extensions.contains(extension) && !(pcm && pcm_silent_on_host(handle, *target));
+    // The player's vibration on this controller: a native clip is scaled here, an
+    // emulated one in its pulses (apply_haptic).
+    const float scale = native ? venture::xr::vibration_scale(handle, *target) : 1.f;
     XrResult r;
     if (pcm) {
       auto &p = *reinterpret_cast<const XrHapticPcmVibrationFB *>(header);
-      if (native) {
+      if (native && scale <= 0) {
+        // Vibration off: accepted and dropped, as for an unbound output.
+        *p.samplesConsumed = std::min(p.bufferSize, uint32_t(XR_MAX_HAPTIC_PCM_BUFFER_SIZE_FB));
+        r = XR_SUCCESS;
+      } else if (native) {
         venture::xr::cancel_sequence(handle, target);
         // Mixed PCM clips can overshoot their nominal [-1,1] range. Bound the
         // native copy as well; do not alter the application's samples. Native
         // samplesConsumed still describes the accepted original input prefix.
-        if (amplitude > 1) {
+        if (amplitude > 1 || scale < 1) {
           auto count = std::min(p.bufferSize, uint32_t(XR_MAX_HAPTIC_PCM_BUFFER_SIZE_FB));
           std::vector<float> normalized(count);
-          for (uint32_t i = 0; i < count; ++i) normalized[i] = std::clamp(p.buffer[i], -1.f, 1.f);
+          for (uint32_t i = 0; i < count; ++i) normalized[i] = std::clamp(p.buffer[i], -1.f, 1.f) * scale;
           auto copy = p; copy.bufferSize = count; copy.buffer = normalized.data();
           r = ::xrApplyHapticFeedback(handle, target, reinterpret_cast<const XrHapticBaseHeader *>(&copy));
         } else r = ::xrApplyHapticFeedback(handle, target, header);
@@ -181,7 +188,15 @@ XrResult xrApplyHapticFeedback(XrSession handle, const XrHapticActionInfo *info,
     } else {
       auto &p = *reinterpret_cast<const XrHapticAmplitudeEnvelopeVibrationFB *>(header);
       venture::xr::cancel_sequence(handle, target);
-      if (host_xr().enabled_extensions.contains(extension)) r = ::xrApplyHapticFeedback(handle, target, header);
+      if (host_xr().enabled_extensions.contains(extension)) {
+        if (scale <= 0) r = XR_SUCCESS;
+        else if (scale < 1) {
+          std::vector<float> scaled(p.amplitudes, p.amplitudes + p.amplitudeCount);
+          for (auto &a : scaled) a *= scale;
+          auto copy = p; copy.amplitudes = scaled.data();
+          r = ::xrApplyHapticFeedback(handle, target, reinterpret_cast<const XrHapticBaseHeader *>(&copy));
+        } else r = ::xrApplyHapticFeedback(handle, target, header);
+      }
       else r = venture::xr::queue_envelope(handle, *target, {p.amplitudes, p.amplitudeCount}, p.duration);
     }
     venture::xr::haptic_event(pcm ? "xr_pcm" : "xr_envelope", handle, *target, amplitude, duration, 0,

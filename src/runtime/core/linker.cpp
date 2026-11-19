@@ -128,6 +128,9 @@ void promote(State& s, Library* lib) {
   lib->global = true;
 }
 std::string& last_error() { return thread_lifetime::local<std::string, struct LinkerLastError>(); }
+// The last failed open on this thread found no file for the requested library
+// itself (a probe), rather than a library that exists but cannot load.
+bool& last_error_absent() { static thread_local bool absent = false; return absent; }
 // Venture replaces app_process and its basic startup providers. These HLE
 // definitions exist before any app dlopen, independently of APK DT_NEEDED lists.
 // app_process lists libdl/liblog, then the default libc/libm dependencies.
@@ -690,7 +693,8 @@ Library* Linker::open_impl(std::string_view name, int flags, bool backing, const
     last_error() = e.what();
     // An absent requested library is an expected probe result (bionic logs
     // nothing); a missing dependency of a library that exists stays an error.
-    if (!root && dynamic_cast<const LibraryNotFound*>(&e)) log::warn("linker", "{}", last_error());
+    last_error_absent() = !root && dynamic_cast<const LibraryNotFound*>(&e);
+    if (last_error_absent()) log::warn("linker", "{}", last_error());
     else log::error("linker", "{}", last_error());
     // Roll back every newly introduced object after a failed load; retain previously live images.
     std::set<Library*> removed;
@@ -864,6 +868,7 @@ GuestAddr Linker::try_find_exidx(GuestAddr pc, std::int32_t* count) {
   return lock.owns_lock() ? find_exidx(pc, count) : 0;
 }
 std::string Linker::take_error() { auto text = std::move(last_error()); last_error().clear(); return text; }
+bool Linker::error_is_absent_library() const { return last_error_absent(); }
 std::vector<std::shared_ptr<const HleLibrary>> Linker::hle_libraries() const {
   auto& s = state(); std::lock_guard lock(s.mutex);
   std::vector<std::shared_ptr<const HleLibrary>> result;

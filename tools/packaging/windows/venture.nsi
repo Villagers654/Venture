@@ -20,6 +20,7 @@ SetCompressorDictSize 64
 !include LogicLib.nsh
 !include WinVer.nsh
 !include x64.nsh
+!include FileFunc.nsh
 
 !define APP "Venture"
 !define UNINSTALL_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\Venture"
@@ -59,6 +60,9 @@ VIAddVersionKey "LegalCopyright" "MIT License"
 !define MUI_FINISHPAGE_SHOWREADME_FUNCTION DesktopShortcut
 
 !insertmacro MUI_PAGE_WELCOME
+; Leaving the folder page refuses a folder this account cannot write and
+; waits for Venture and its games to close (CheckInstallDir).
+!define MUI_PAGE_CUSTOMFUNCTION_LEAVE DirectoryLeave
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
 !insertmacro MUI_PAGE_FINISH
@@ -143,6 +147,152 @@ Function .onInit
     MessageBox MB_ICONSTOP|MB_OK "Venture needs 64-bit Windows 10 or 11." /SD IDOK
     Abort
   ${EndIf}
+  ; This release's file list, for finding files of the folder still in use.
+  InitPluginsDir
+  File "/oname=$PLUGINSDIR\release.lst" "${UNINSTALL_LIST}"
+FunctionEnd
+
+; Pushes 1 when this account can write the folder $INSTDIR (or create it),
+; else 0. Nothing is left behind: a test file in an existing folder, or a test
+; folder in the nearest existing parent of one still to be created.
+Function Writable
+  Push $0
+  Push $1
+  StrCpy $0 $INSTDIR
+  StrCpy $1 0
+  ${DoUntil} ${FileExists} "$0\*.*"
+    ${If} ${FileExists} "$0"
+      ; A file, or a folder this account cannot even list.
+      StrCpy $1 blocked
+      ${Break}
+    ${EndIf}
+    ${GetParent} $0 $0
+    ${If} $0 == ""
+      ${Break}
+    ${EndIf}
+  ${Loop}
+  ${If} $1 == blocked
+  ${OrIf} $0 == ""
+    ; Not a folder that can be written, or a missing drive.
+    StrCpy $1 0
+  ${ElseIf} $0 == $INSTDIR
+    ClearErrors
+    FileOpen $1 "$0\venture-write-test.tmp" w
+    ${If} ${Errors}
+      StrCpy $1 0
+    ${Else}
+      FileClose $1
+      Delete "$0\venture-write-test.tmp"
+      StrCpy $1 1
+    ${EndIf}
+  ${Else}
+    ClearErrors
+    CreateDirectory "$0\venture-write-test.tmp"
+    ${If} ${FileExists} "$0\venture-write-test.tmp\*.*"
+      RMDir "$0\venture-write-test.tmp"
+      StrCpy $1 1
+    ${EndIf}
+  ${EndIf}
+  Exch $1
+  Exch
+  Pop $0
+FunctionEnd
+
+; Pushes the release files in $INSTDIR that cannot be opened for writing,
+; comma separated, or "" when none is. A running venture.exe,
+; venture-runtime.exe (the game) or venture-java.exe locks its executable and
+; the libraries it loaded; overwriting those fails with "Error opening file
+; for writing". Opening a file to write without writing changes nothing.
+Function InUseFiles
+  Push $R0
+  Push $R1
+  Push $R2
+  Push $R3
+  Push $R4
+  StrCpy $R0 ""
+  StrCpy $R4 0
+  ClearErrors
+  FileOpen $R1 "$PLUGINSDIR\release.lst" r
+  ${IfNot} ${Errors}
+    ${Do}
+      ClearErrors
+      FileRead $R1 $R2
+      ${If} ${Errors}
+        ${Break}
+      ${EndIf}
+      ${Do}
+        StrCpy $R3 $R2 1 -1
+        ${If} $R3 == "$\r"
+        ${OrIf} $R3 == "$\n"
+          StrCpy $R2 $R2 -1
+        ${Else}
+          ${Break}
+        ${EndIf}
+      ${Loop}
+      StrCpy $R3 $R2 1 -1
+      ${If} $R2 == ""
+      ${OrIf} $R3 == "\"
+        ${Continue}
+      ${EndIf}
+      ${IfNot} ${FileExists} "$INSTDIR\$R2"
+        ${Continue}
+      ${EndIf}
+      ClearErrors
+      FileOpen $R3 "$INSTDIR\$R2" a
+      ${If} ${Errors}
+        IntOp $R4 $R4 + 1
+        ${If} $R4 <= 8
+          ${If} $R0 != ""
+            StrCpy $R0 "$R0, "
+          ${EndIf}
+          StrCpy $R0 "$R0$R2"
+        ${ElseIf} $R4 == 9
+          StrCpy $R0 "$R0, ..."
+        ${EndIf}
+      ${Else}
+        FileClose $R3
+      ${EndIf}
+    ${Loop}
+    FileClose $R1
+  ${EndIf}
+  Pop $R4
+  Pop $R3
+  Pop $R2
+  Pop $R1
+  Exch $R0
+FunctionEnd
+
+; Sets $0 to "ok" when $INSTDIR can be installed to, else "cancel" after
+; telling the user why: a folder this account cannot write (Program Files
+; needs administrator rights, which this installer never asks for), or files
+; there still in use, which the user can close and retry.
+Function CheckInstallDir
+  Call Writable
+  Pop $0
+  ${If} $0 != 1
+    MessageBox MB_ICONEXCLAMATION|MB_OK "Venture cannot be installed in $INSTDIR because this Windows account cannot write to it. Folders such as Program Files need administrator rights, and this installer never asks for them.$\r$\n$\r$\nChoose a folder you own, such as the default:$\r$\n$LOCALAPPDATA\Programs\Venture" /SD IDOK
+    StrCpy $0 cancel
+    Return
+  ${EndIf}
+  ${Do}
+    Call InUseFiles
+    Pop $0
+    ${If} $0 == ""
+      StrCpy $0 ok
+      Return
+    ${EndIf}
+    MessageBox MB_ICONEXCLAMATION|MB_RETRYCANCEL "Venture, or a game it started, is still running from $INSTDIR, so its files cannot be replaced.$\r$\n$\r$\nClose Venture and any game it is running, then choose Retry.$\r$\n$\r$\nIn use: $0" /SD IDCANCEL IDRETRY retry
+    StrCpy $0 cancel
+    Return
+  retry:
+  ${Loop}
+FunctionEnd
+
+Function DirectoryLeave
+  Call CheckInstallDir
+  ${If} $0 != ok
+    Abort  ; stays on the folder page
+  ${EndIf}
 FunctionEnd
 
 Function un.onInit
@@ -169,6 +319,13 @@ FunctionEnd
 
 Section "Venture" SecMain
   SectionIn RO
+  ; Again for silent installs, which skip the folder page, and for anything
+  ; started since.
+  Call CheckInstallDir
+  ${If} $0 != ok
+    DetailPrint "Installation cancelled: $INSTDIR cannot be written or is in use."
+    Abort
+  ${EndIf}
   ; Upgrade in place: first remove exactly the files the previous version
   ; installed, so files dropped from the release do not linger.
   ${If} ${FileExists} "$INSTDIR\uninstall.lst"

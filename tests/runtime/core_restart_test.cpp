@@ -10,15 +10,26 @@
 #include <fstream>
 #include <sstream>
 
+namespace {
+// The child beside the test binary, so a build tree copied to another machine
+// (such as the arm64 VM) still finds it; else the build-time path.
+std::filesystem::path restart_child() {
+  const std::filesystem::path built = VENTURE_RESTART_CHILD;
+  const auto beside = venture::paths::executable().parent_path() / built.filename();
+  std::error_code error;
+  return std::filesystem::is_regular_file(beside, error) ? beside : built;
+}
+}  // namespace
+
 TEST_CASE("OS termination outcome survives the worker's final pipe record") {
-  const auto child = venture::platform::run_runtime_child(VENTURE_RESTART_CHILD,
+  const auto child = venture::platform::run_runtime_child(restart_child(),
       {"os-outcome"}, {}, [] { return false; }, {}, true);
   CHECK(child.status == 0);
   CHECK(child.os_termination);
   CHECK_FALSE(child.supervisor_stopped);
 }
 TEST_CASE("Guest abort remains fatal when its reporter exits zero") {
-  const auto child = venture::platform::run_runtime_child(VENTURE_RESTART_CHILD,
+  const auto child = venture::platform::run_runtime_child(restart_child(),
       {"abort-reporter-exit-zero"}, {}, [] { return false; }, {}, true);
   CHECK(child.status == 134);
   CHECK_FALSE(child.os_termination);
@@ -46,7 +57,7 @@ TEST_CASE("App supervisor preserves worker failure after a stop or elapsed bound
 }
 TEST_CASE("Host quit backstop ends the worker without per-thread native teardown") {
   for (const auto* mode : {"host-quit-backstop", "host-quit-backstop-signal"}) {
-    const auto child = venture::platform::run_runtime_child(VENTURE_RESTART_CHILD,
+    const auto child = venture::platform::run_runtime_child(restart_child(),
         {mode}, {}, [] { return false; }, {}, true);
     CHECK(child.status == (std::string_view(mode) == "host-quit-backstop" ? 124 : 139));
     CHECK_FALSE(child.restart);
@@ -146,40 +157,40 @@ TEST_CASE("Supervisor waits for the kernel once the worker has ended itself") {
 
 TEST_CASE("App worker restart uses a private channel and fresh processes") {
   using namespace venture::platform;
-  auto normal = run_runtime_child(VENTURE_RESTART_CHILD, {"exit"}, {}, [] { return false; });
+  auto normal = run_runtime_child(restart_child(), {"exit"}, {}, [] { return false; });
   CHECK(normal.status == 85);
   CHECK_FALSE(normal.restart);
   // A plain exit reports no Venture exit stage, so the supervisor can tell it
   // from its own exits and find the worker's HotSpot report by process id.
   CHECK(normal.exit_wait == RuntimeExitWait::none);
   CHECK(normal.worker_pid != 0);
-  auto restart = run_runtime_child(VENTURE_RESTART_CHILD, {"restart"}, {}, [] { return false; });
+  auto restart = run_runtime_child(restart_child(), {"restart"}, {}, [] { return false; });
   CHECK(restart.status == 0);
   CHECK(restart.restart);
-  auto next = run_runtime_child(VENTURE_RESTART_CHILD, {"arguments", "a space, a quote \" and \\ path"}, {}, [] { return false; });
+  auto next = run_runtime_child(restart_child(), {"arguments", "a space, a quote \" and \\ path"}, {}, [] { return false; });
   CHECK(next.status == 0);
   CHECK_FALSE(next.restart);
 }
 TEST_CASE("Concurrent worker exit cannot overtake a claimed supervisor relaunch") {
   using namespace venture::platform;
   // Control reproduces the original claim-to-publication race deterministically.
-  const auto lost = run_runtime_child(VENTURE_RESTART_CHILD,
+  const auto lost = run_runtime_child(restart_child(),
       {"restart-race-control"}, {}, [] { return false; });
   REQUIRE(lost.status == 0);
   REQUIRE_FALSE(lost.restart);
-  const auto first = run_runtime_child(VENTURE_RESTART_CHILD,
+  const auto first = run_runtime_child(restart_child(),
       {"restart-race"}, {}, [] { return false; });
   REQUIRE(first.status == 0);
   REQUIRE_FALSE(first.completion_status(false).has_value());
   REQUIRE(first.launch_payload == "claimed-cold-launch");
   // Drive the supervisor continuation into a fresh worker with the saved intent.
-  const auto fresh = run_runtime_child(VENTURE_RESTART_CHILD,
+  const auto fresh = run_runtime_child(restart_child(),
       {"received-cold-launch"}, {}, [] { return false; }, first.launch_payload);
   CHECK(fresh.status == 0);
   CHECK_FALSE(fresh.restart);
 }
 TEST_CASE("Supervisor never relaunches a worker with a fatal restart outcome") {
-  const auto failed = venture::platform::run_runtime_child(VENTURE_RESTART_CHILD,
+  const auto failed = venture::platform::run_runtime_child(restart_child(),
       {"failed-restart"}, {}, [] { return false; });
   CHECK(failed.status == 139);
   CHECK(failed.completion_status(false) == 139);
@@ -188,13 +199,13 @@ TEST_CASE("Supervisor never relaunches a worker with a fatal restart outcome") {
 TEST_CASE("Kernel worker termination bypasses blocked Windows DLL detach") {
 #ifdef _WIN32
   const auto control_began = std::chrono::steady_clock::now();
-  const auto control = venture::platform::run_runtime_child(VENTURE_RESTART_CHILD,
+  const auto control = venture::platform::run_runtime_child(restart_child(),
       {"detach-control", VENTURE_EXIT_DETACH_FIXTURE}, {}, [&] {
         return std::chrono::steady_clock::now() - control_began >= std::chrono::milliseconds(100);
       });
   CHECK(control.status == 124);
   const auto began = std::chrono::steady_clock::now();
-  const auto child = venture::platform::run_runtime_child(VENTURE_RESTART_CHILD,
+  const auto child = venture::platform::run_runtime_child(restart_child(),
       {"detach-hang", VENTURE_EXIT_DETACH_FIXTURE}, {}, [&] {
         return std::chrono::steady_clock::now() - began >= std::chrono::seconds(2);
       });
@@ -205,7 +216,7 @@ TEST_CASE("Kernel worker termination bypasses blocked Windows DLL detach") {
 }
 TEST_CASE("Post-exit log flush has an independent bound and identifies its waiter") {
   const auto began = std::chrono::steady_clock::now();
-  const auto child = venture::platform::run_runtime_child(VENTURE_RESTART_CHILD,
+  const auto child = venture::platform::run_runtime_child(restart_child(),
       {"post-exit-wait"}, {}, [] { return false; }, {}, true);
   CHECK(child.status == 124);
   CHECK(child.exit_wait == venture::platform::RuntimeExitWait::log_flush);
@@ -236,7 +247,7 @@ TEST_CASE("A blocked dump helper cannot prevent supervisor termination") {
       ("dump-helper-bound-" + std::to_string(began.time_since_epoch().count()));
   REQUIRE(SetEnvironmentVariableA("VENTURE_TEST_DUMP_HELPER_HANG", "1"));
   struct Clear { ~Clear() { SetEnvironmentVariableA("VENTURE_TEST_DUMP_HELPER_HANG", nullptr); } } clear;
-  const auto child = venture::platform::run_runtime_child(VENTURE_RESTART_CHILD,
+  const auto child = venture::platform::run_runtime_child(restart_child(),
       {"wait"}, {}, [&] { return std::chrono::steady_clock::now() - began >= std::chrono::milliseconds(100); }, {}, false, run);
   CHECK(child.status == 124);
   CHECK(child.dump_error == ERROR_TIMEOUT);
@@ -258,7 +269,7 @@ TEST_CASE("App worker cancellation remains bounded") {
       ("worker-timeout-" + std::to_string(began.time_since_epoch().count()));
   std::filesystem::create_directories(run_directory);
 #endif
-  auto child = venture::platform::run_runtime_child(VENTURE_RESTART_CHILD, {"wait"}, {}, [&] {
+  auto child = venture::platform::run_runtime_child(restart_child(), {"wait"}, {}, [&] {
     return steady_clock::now() - began >= milliseconds(100);
   }, {}, false, run_directory);
   CHECK(child.status == 124);
@@ -303,7 +314,7 @@ TEST_CASE("App worker cancellation remains bounded") {
 TEST_CASE("App worker stop request runs normal teardown before the timeout") {
   using namespace std::chrono;
   const auto began = steady_clock::now();
-  auto child = venture::platform::run_runtime_child(VENTURE_RESTART_CHILD, {"graceful"}, {}, [&] {
+  auto child = venture::platform::run_runtime_child(restart_child(), {"graceful"}, {}, [&] {
     return steady_clock::now() - began >= milliseconds(200);
   });
   CHECK(child.status == 0);
@@ -313,7 +324,7 @@ TEST_CASE("App worker stop request runs normal teardown before the timeout") {
 TEST_CASE("App worker grace starts after delayed lifecycle delivery") {
   using namespace std::chrono;
   const auto began = steady_clock::now();
-  auto child = venture::platform::run_runtime_child(VENTURE_RESTART_CHILD,
+  auto child = venture::platform::run_runtime_child(restart_child(),
       {"slow-diagnostics"}, {}, [&] { return steady_clock::now() - began >= milliseconds(100); }, {}, true);
   CHECK(child.status == 37);
   CHECK_FALSE(child.restart);
@@ -324,7 +335,7 @@ TEST_CASE("App worker stop request survives delayed initialization and a one-sho
   using namespace std::chrono;
   const auto began = steady_clock::now();
   bool requested = false;
-  auto child = venture::platform::run_runtime_child(VENTURE_RESTART_CHILD, {"graceful-delayed"}, {}, [&] {
+  auto child = venture::platform::run_runtime_child(restart_child(), {"graceful-delayed"}, {}, [&] {
     if (requested || steady_clock::now() - began < milliseconds(100)) return false;
     requested = true;
     return true;
@@ -340,7 +351,7 @@ TEST_CASE("Cold launch payload crosses fresh workers privately and without trunc
   for (std::size_t i = 0; i < payload.size(); ++i) payload[i] = static_cast<char>(i % 256);
   for (int restart = 0; restart < 2; ++restart) {
     const auto began = std::chrono::steady_clock::now();
-    auto child = run_runtime_child(VENTURE_RESTART_CHILD, {"intent"}, {}, [&] {
+    auto child = run_runtime_child(restart_child(), {"intent"}, {}, [&] {
       return std::chrono::steady_clock::now() - began >= std::chrono::seconds(5);
     }, payload);
     REQUIRE(child.status == 0);
@@ -348,7 +359,7 @@ TEST_CASE("Cold launch payload crosses fresh workers privately and without trunc
     CHECK(child.launch_payload == payload);
     payload = std::move(child.launch_payload);
   }
-  CHECK_THROWS_AS(run_runtime_child(VENTURE_RESTART_CHILD, {"intent"}, {}, [] { return false; },
+  CHECK_THROWS_AS(run_runtime_child(restart_child(), {"intent"}, {}, [] { return false; },
       std::string(runtime_launch_payload_limit + 1, 'x')), std::length_error);
 }
 TEST_CASE("Credential broker handles survive an app process restart") {
@@ -364,7 +375,7 @@ TEST_CASE("Credential broker handles survive an app process restart") {
   });
   for (const auto mode : {"broker-restart", "broker"}) {
     const auto began = std::chrono::steady_clock::now();
-    const auto result = venture::platform::run_runtime_child(VENTURE_RESTART_CHILD,
+    const auto result = venture::platform::run_runtime_child(restart_child(),
         {mode, std::to_string(handles[0]), std::to_string(handles[1])},
         {handles[0], handles[1]}, [&] {
           return std::chrono::steady_clock::now() - began >= std::chrono::seconds(5);
@@ -382,7 +393,7 @@ TEST_CASE("Credential broker handles survive an app process restart") {
 TEST_CASE("Guest exit preserves an unclosed stdio save and host evidence buffers") {
   const auto root = std::filesystem::temp_directory_path() /
       ("venture-exit-proof-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
-  const auto child = venture::platform::run_runtime_child(VENTURE_RESTART_CHILD,
+  const auto child = venture::platform::run_runtime_child(restart_child(),
       {"guest-file-exit", venture::paths::utf8(root)}, {}, [] { return false; }, {}, true);
   REQUIRE(child.status == 0);
   auto read = [](const auto& path) { std::ifstream in(path, std::ios::binary);
@@ -414,7 +425,7 @@ TEST_CASE("Guest exit preserves an unclosed stdio save and host evidence buffers
 
 TEST_CASE("Full and broken diagnostic pipes cannot obstruct reliable worker restart") {
   const auto began = std::chrono::steady_clock::now();
-  const auto child = venture::platform::run_runtime_child(VENTURE_RESTART_CHILD,
+  const auto child = venture::platform::run_runtime_child(restart_child(),
       {"telemetry-overload"}, {}, [&] { return std::chrono::steady_clock::now() - began >= std::chrono::seconds(5); });
   CHECK(child.status == 0);
   CHECK(child.restart);

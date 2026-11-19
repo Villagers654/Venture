@@ -12,13 +12,16 @@
 #include "platform/low_memory.h"
 #include "platform/memory.h"
 #include <dynarmic/interface/A32/a32.h>
-#include <dynarmic/backend/x64/a32_jitstate.h>
+#include "cpu/jit_backend.h"
 #include <dynarmic/interface/A32/coprocessor.h>
 #include <dynarmic/interface/exclusive_monitor.h>
 #include <dynarmic/interface/profiling.h>
+#include <dynarmic/interface/code_stats.h>
 #include <dynarmic/frontend/A32/a32_ir_emitter.h>
 #include <dynarmic/frontend/A32/a32_types.h>
 #include <algorithm>
+#include <array>
+#include <fstream>
 #include <atomic>
 #include <charconv>
 #include <condition_variable>
@@ -34,6 +37,17 @@
 
 namespace venture {
 namespace {
+// Diagnostics (VENTURE_JIT_CODE_STATS): how often translated code leaves for
+// a runtime callback. Off, each callback pays one predictable branch.
+namespace callback_census {
+enum Event : unsigned { memory_read, memory_write, exclusive_write, svc, svc_fast, svc_fast_known,
+                        exception, add_ticks, ticks_remaining, count };
+constexpr const char* names[count] = {"memory_read", "memory_write", "exclusive_write", "svc", "svc_fast",
+                                      "svc_fast_known", "exception", "add_ticks", "ticks_remaining"};
+const char* const path = environment::getenv("VENTURE_JIT_CODE_STATS");
+std::array<std::atomic<std::uint64_t>, count> events{};
+inline void hit(Event e) { if (path) [[unlikely]] events[e].fetch_add(1, std::memory_order_relaxed); }
+}
 using Dynarmic::HaltReason;
 using Dynarmic::A32::VAddr;
 using Dynarmic::A32::CoprocReg;
@@ -64,6 +78,8 @@ class A32Cpu final : public Cpu, private Dynarmic::A32::UserCallbacks {
   A32Cpu(A32Backend& backend, std::size_t slot) : backend_(backend), slot_(slot) {
     if (profile::enabled) Dynarmic::SetCodeRegistrationCallback(profile::register_translation);
     if (profile::compile_timing_enabled) Dynarmic::SetCompileTimingCallback(JitBlockList::compilation);
+    if (callback_census::path && !Dynarmic::CodeStats::Enable(callback_census::path))
+      log::warn("cpu", "VENTURE_JIT_CODE_STATS: cannot create {}", callback_census::path);
     Dynarmic::A32::UserConfig config{};
     // Diagnostics: VENTURE_JIT_DISABLED_HOST_FEATURES=<mask> hides host ISA extensions
     // (dynarmic HostFeature bits, e.g. 0xfe0 for every AVX-512 subset) from the emitter.
@@ -148,7 +164,8 @@ class A32Cpu final : public Cpu, private Dynarmic::A32::UserCallbacks {
     config.wall_clock_cntpct = true;
     // As on A64, retain load-time translations beyond 128 MiB. This bounded
     // reservation commits pages only as code is emitted, including on cold threads.
-    config.code_cache_size = 256 * 1024 * 1024;
+    // The arm64 backend's branches reach at most 128 MiB.
+    config.code_cache_size = VENTURE_JIT_PORTABLE_BLOCKS ? 256 * 1024 * 1024 : 128 * 1024 * 1024;
     for (unsigned i = 0; i < 16; ++i) config.coprocessors[i] = std::make_shared<Coprocessor>(*this, i);
     jit_ = std::make_unique<Dynarmic::A32::Jit>(config);
     jit_->SetCpsr(0x10); // User mode, ARM, little endian.
@@ -185,6 +202,12 @@ class A32Cpu final : public Cpu, private Dynarmic::A32::UserCallbacks {
   }
   void request_halt() override { external_halt_.store(true); jit_->HaltExecution(HaltReason::UserDefined2); }
 
+  void park() noexcept override {
+    if (jit_->IsExecuting()) { invalidations_->park(); parked_ = true; }
+  }
+  void unpark() noexcept override {
+    if (std::exchange(parked_, false)) invalidations_->unpark();
+  }
   std::pair<std::shared_ptr<InvalidationGate>, std::uint64_t> queue_invalidation(GuestAddr p, std::uint64_t n) {
     return {invalidations_, invalidations_->queue(p, n, [&] { jit_->HaltExecution(HaltReason::UserDefined3); })};
   }
@@ -256,6 +279,7 @@ class A32Cpu final : public Cpu, private Dynarmic::A32::UserCallbacks {
   VAddr compiling_pc_{};
   std::uint32_t compiling_mode_{};
   std::shared_ptr<InvalidationGate> invalidations_ = std::make_shared<InvalidationGate>();
+  bool parked_ = false;
   std::atomic<bool> external_halt_{false};
   void acknowledge_stop() { invalidations_->leave(); }
   bool accessible(VAddr p, std::size_t n, std::uint32_t prot) const {
@@ -276,6 +300,7 @@ class A32Cpu final : public Cpu, private Dynarmic::A32::UserCallbacks {
       memory_fault(p, true);
   }
   template<class T> bool exclusive(VAddr p, T value, T expected) {
+    callback_census::hit(callback_census::exclusive_write);
     // Dynarmic may hold the monitor here. Use its existing fault-contained
     // host atomic, without an arena mutation lock or recursive monitor lock.
     if ((p & (sizeof(T) - 1)) || !accessible(p, sizeof(T), kProtRead | kProtWrite)) {
@@ -333,6 +358,7 @@ class A32Cpu final : public Cpu, private Dynarmic::A32::UserCallbacks {
     return false;
   }
   std::uint64_t MemoryRead(VAddr p, std::size_t size) override {
+    callback_census::hit(callback_census::memory_read);
     switch (size) {
       case 1: return read<std::uint8_t>(p);
       case 2: return read<std::uint16_t>(p);
@@ -342,6 +368,7 @@ class A32Cpu final : public Cpu, private Dynarmic::A32::UserCallbacks {
     }
   }
   void MemoryWrite(VAddr p, std::uint64_t v, std::size_t size) override {
+    callback_census::hit(callback_census::memory_write);
     switch (size) {
       case 1: return write(p, static_cast<std::uint8_t>(v));
       case 2: return write(p, static_cast<std::uint16_t>(v));
@@ -355,10 +382,12 @@ class A32Cpu final : public Cpu, private Dynarmic::A32::UserCallbacks {
   bool MemoryWriteExclusive32(VAddr p, std::uint32_t v, std::uint32_t e) override { return exclusive(p, v, e); }
   bool MemoryWriteExclusive64(VAddr p, std::uint64_t v, std::uint64_t e) override { return exclusive(p, v, e); }
   void CallSVC(std::uint32_t immediate) override {
+    callback_census::hit(callback_census::svc);
     svc_width_ = (jit_->Cpsr() & 0x20) ? 2 : 4;
     svc_ = immediate & 0x00ffffff; exit_ = CpuExit::Svc; jit_->HaltExecution();
   }
   void CallSVCFast(std::uint32_t immediate) override {
+    callback_census::hit(callback_census::svc_fast);
     svc_width_ = (jit_->Cpsr() & 0x20) ? 2 : 4;
     svc_ = immediate & 0x00ffffff;
     if (dispatch_hle_in_jit()) return;
@@ -366,22 +395,24 @@ class A32Cpu final : public Cpu, private Dynarmic::A32::UserCallbacks {
     jit_->HaltExecution();
   }
   void CallSVCFastKnown(std::uint32_t immediate, const void* metadata, void* state) override {
+    callback_census::hit(callback_census::svc_fast_known);
     svc_ = immediate & 0x00ffffff;
-    auto& registers = *static_cast<Dynarmic::Backend::X64::A32JitState*>(state);
+    auto& registers = *static_cast<jit_backend::A32State*>(state);
     if (dispatch_hle_in_jit(*static_cast<const hle::FunctionInfo*>(metadata),
-                           hle::Registers(registers.Reg.data()))) return;
+                           hle::Registers(jit_backend::registers(registers)))) return;
     exit_ = has_hle_exception() ? CpuExit::HleException : CpuExit::Svc;
     jit_->HaltExecution();
   }
   void ExceptionRaised(VAddr p, Dynarmic::A32::Exception e) override {
+    callback_census::hit(callback_census::exception);
     using E = Dynarmic::A32::Exception;
     jit_->Regs()[15] = p;
     if (e == E::NoExecuteFault) { exit_ = CpuExit::MemoryFault; fault_ = {p, false, true}; }
     else exit_ = e == E::Breakpoint ? CpuExit::Breakpoint : CpuExit::UndefinedInstruction;
     jit_->HaltExecution();
   }
-  void AddTicks(std::uint64_t) override {}
-  std::uint64_t GetTicksRemaining() override { return 1ull << 60; }
+  void AddTicks(std::uint64_t) override { callback_census::hit(callback_census::add_ticks); }
+  std::uint64_t GetTicksRemaining() override { callback_census::hit(callback_census::ticks_remaining); return 1ull << 60; }
   class Coprocessor final : public Dynarmic::A32::Coprocessor {
    public:
     Coprocessor(A32Cpu& cpu, unsigned number) : cpu_(cpu), number_(number) {}
@@ -491,5 +522,15 @@ CpuBackend& a32_cpu_backend() {
     return make_a32_backend(config).release();
   }();
   return *backend;
+}
+void write_jit_code_stats() noexcept {
+  if (!callback_census::path) return;
+  try {
+    std::ofstream out(std::string(callback_census::path) + ".callbacks.json", std::ios::trunc);
+    out << "{";
+    for (unsigned i = 0; i < callback_census::count; ++i)
+      out << (i ? ", " : "") << '"' << callback_census::names[i] << "\": " << callback_census::events[i].load(std::memory_order_relaxed);
+    out << "}\n";
+  } catch (...) {}
 }
 } // namespace venture

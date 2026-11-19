@@ -46,6 +46,12 @@ void terminal_handoff(int status, std::chrono::milliseconds budget = std::chrono
 // Fatal host handler only: no mutex, formatting or allocation. Writes complete
 // pending lines and the supplied already formatted bytes to the file and stderr.
 void crash_write(const char* bytes, std::size_t size) noexcept;
+// The cause of a deliberate stop that is about to end the process (a failed
+// JIT assertion before std::terminate). The host crash report names it; the
+// first call wins and the text is truncated to 1 KiB.
+void set_fatal_reason(std::string_view reason) noexcept;
+// The reason set_fatal_reason stored, or "" (fatal handlers: no locks).
+const char* fatal_reason() noexcept;
 // Tests only: change the flush interval.
 void set_flush_interval(std::chrono::milliseconds interval);
 void write(Level level, std::string_view tag, std::string_view message);

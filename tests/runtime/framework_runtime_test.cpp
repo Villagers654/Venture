@@ -41,12 +41,13 @@
 #include "platform/network.h"
 
 #include "../async_wait.h"
+#include "android_fixtures.h"
 
 #ifdef VENTURE_ANDROID_FIXTURES
 TEST_CASE("AssetManager openFd owns a real bounded archive descriptor through production JNI") {
   using namespace venture;
   auto& assets = android::PackageAssets::get();
-  const auto fixtures = std::filesystem::path(VENTURE_ANDROID_FIXTURES);
+  const auto fixtures = venture::test::android_fixture_dir();
   REQUIRE(assets.open_apk((fixtures / "test.apk").string()));
   java::install_runtime_framework_bridges();
   java::register_framework_natives();
@@ -114,7 +115,7 @@ TEST_CASE("AssetManager openFd owns a real bounded archive descriptor through pr
 TEST_CASE("AssetManager streams stored and deflated content through production JNI") {
   using namespace venture;
   auto& assets = android::PackageAssets::get();
-  const auto fixtures = std::filesystem::path(VENTURE_ANDROID_FIXTURES);
+  const auto fixtures = venture::test::android_fixture_dir();
   REQUIRE(assets.open_apk((fixtures / "test.apk").string()));
   java::install_runtime_framework_bridges();
   java::register_framework_natives();

@@ -10,6 +10,8 @@
 #include <atomic>
 #include <array>
 #include "common/controls.h"
+#include "common/openxr_layers.h"
+#include "common/library/mods.h"
 #include <map>
 #include <memory>
 namespace venture::launcher {
@@ -25,6 +27,11 @@ struct ControlsEdit {
   // Per Quest input and hand: the host inputs (index + 1) in the player's order; empty: not assigned.
   std::array<std::array<std::vector<int>, 8>, 2> host{};
   bool grip_toggle = false;  // each grip press flips the game's grip held / released
+  std::array<controls::Offset, 2> offsets{};  // where the game sees each controller in the hand
+  bool mirror = true;  // the right offset follows the left, mirrored
+  std::array<controls::Tuning, 2> tuning{};  // sticks, press points and vibration per hand
+  bool tuning_mirror = true;  // the right hand's tuning follows the left
+  std::array<bool, 8> toggles{};  // per Quest row (not the grip): presses latch
   bool custom = false;  // per game: overrides the defaults
   bool initialized = false;
 };
@@ -117,6 +124,9 @@ private:
   std::optional<library::HostDisplay> host_display_;
   fs::file_time_type host_display_time_{};
   double host_display_checked_ = -10;
+  // Settings > VR runtime: the installed OpenXR runtimes, re-read every few seconds.
+  std::vector<openxr_layers::Runtime> xr_runtimes_;
+  double xr_runtimes_checked_ = -10;
   void draw_game_settings(const meta::Game& g, float width);
   bool smoke_played_ = false, smoke_auth_opened_ = false, smoke_reported_ = false;
   bool smoke_detail_started_ = false;
@@ -131,6 +141,8 @@ private:
   std::optional<std::string> smoke_install_home_;  // active account at start
   std::optional<int> smoke_exit_;
   bool smoke_import_started_ = false;
+  bool smoke_debug_reported_ = false;  // --smoke-debug-report written
+  bool smoke_dropped_ = false;  // --smoke-drop files taken, once the library is read
   std::vector<std::string> smoke_import_jobs_;  // the queued imports' job ids
   std::string smoke_import_error_;
   std::string exit_reason_;
@@ -145,6 +157,10 @@ private:
     bool copied = false;
   };
   std::optional<SharedReport> report_;
+  // The headset check's text while its dialog is open (Android).
+  std::optional<std::string> headset_check_;
+  bool headset_check_copied_ = false;
+  void draw_headset_check();
   // A newer published release than this build, offered once per version.
   struct Update {
     std::string version, url;
@@ -160,7 +176,9 @@ private:
   std::unique_ptr<Worker> update_worker_;  // the update download, off the library worker
   void start_update();
   bool update_checked_ = false;
+  bool os_sdk_checked_ = false;
   void check_update();
+  void check_os_sdk();
   void draw_update();
   // Saves a debug report about the game's last launch and uploads it.
   void share_report(std::string_view app_id);
@@ -172,6 +190,44 @@ private:
   std::string save_import_target_;
   std::vector<std::pair<std::string, fs::path>> save_picks_;
   void choose_save_folder(const std::string &app_id);
+  // Mods: a dropped file goes to its game's mods (add_mod_file), else to the
+  // import page; "Add mods" on a game's Mods tab picks files for that game.
+  void take_dropped(const fs::path &file);
+  // Mods, or with `obb` the file to write over that expansion file.
+  void choose_mod_file(const std::string &app_id, const std::string &obb = {});
+  struct ModPick {
+    std::string id, obb;
+    fs::path file;
+  };
+  std::vector<ModPick> mod_picks_;  // under import_mutex_
+  // The Mods tab: what it shows of the game's mods, read again after a change
+  // (mods_generation_), for another game, or every few seconds.
+  void draw_game_mods(const meta::Game &game, float width);
+  struct ModsView {
+    std::string game;
+    std::uint64_t generation = ~0ull;
+    double read_at = -10;
+    std::vector<mods::Installed> mods;
+    std::vector<mods::Item> items;
+    std::optional<mods::Loader> apk_loader;
+    std::vector<std::string> obbs;  // the install's expansion files
+    bool loader_present = false, original_apk = false;
+  };
+  ModsView mods_view_;
+  // Controls files: a dialog to read one into, or save the shown controller's
+  // controls from, the Controls page or a game's Controls tab (`game`: "" for the page).
+  void choose_controls_file(bool save, const std::string &game);
+  void take_controls_files();
+  void import_controls(const fs::path &file, const std::string &game);
+  void export_controls(const fs::path &file, const std::string &game);
+  struct ControlsFilePick {
+    bool save = false;
+    std::string game;
+    fs::path file;
+  };
+  std::vector<ControlsFilePick> controls_file_picks_;  // under import_mutex_
+  int controls_drawn_frame_ = -10;  // the last frame a Controls editor showed (drops import there)
+  std::string controls_drawn_game_;
   void draw_save_import();
   // Export save data: confirm before sending to headset.
   std::string save_export_target_;
@@ -180,17 +236,6 @@ private:
   std::string store_link_target_, store_link_text_;
   void draw_store_link();
   std::string save_game_;  // the game picked in the Import page's save data card
-  // A game's mods folder as its page summarizes it, re-read every few seconds:
-  // files replacing an installed file, and files matching none (another version).
-  struct ModsSummary {
-    double checked = -1;
-    int active = 0, unused = 0;
-    uint64_t bytes = 0;
-    std::string name;
-  };
-  std::map<std::string, ModsSummary> mods_;
-  const ModsSummary &mods_summary(const std::string &package, const fs::path &install);
-  void draw_mods(const fs::path &install, const std::string &package, float width);
   void take_import_picks();
   void draw_import();
   void draw_import_items(ImportScan &scan, bool device, float width);
@@ -209,6 +254,8 @@ private:
   void draw_controls();
   void draw_controls_editor(ControlsEdit& edit, const ControlsEdit* base, float width, const meta::Game* game);
   void draw_controller_picker(ControlsEdit& edit, float width, const controls::Config& config);
+  float controls_file_buttons_width() const;
+  void draw_controls_file_buttons(const std::string& game);
   void draw_game_controls(const meta::Game& game, float width);
   void read_controller_report();
   const art::Image* controller_image(const controls::Profile& profile, int hand);

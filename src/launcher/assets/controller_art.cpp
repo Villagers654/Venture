@@ -69,7 +69,8 @@ constexpr unsigned char generic_left[] = {
 constexpr unsigned char generic_right[] = {
 #embed "controllers/generic-right.png"
 };
-// The models the pictures were drawn from, for turning them (the generic picture stays still).
+// The models the pictures were drawn from, for turning them (the generic picture,
+// unbranded for any controller without a picture of its own, stays still).
 constexpr unsigned char index_left_glb[] = {
 #embed "controllers/index-left.glb"
 };

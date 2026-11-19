@@ -21,14 +21,20 @@
 #include <string_view>
 #include <vector>
 
+// openxr.h's handle type: a pointer on 64-bit targets, a 64-bit integer on
+// 32-bit ones (the armeabi-v7a libvrapi.so).
+#if UINTPTR_MAX == UINT64_MAX
 typedef struct XrInstance_T *XrInstance;
+#else
+typedef std::uint64_t XrInstance;
+#endif
 typedef std::uint64_t XrSystemId;
 
 namespace venture::xr {
 
 struct HostXr {
   bool available = false; // false: no runtime / no HMD -> flat debug mode
-  XrInstance instance = nullptr;
+  XrInstance instance{};
   XrSystemId system = 0;
   std::string runtime_name; // host runtime, e.g. "SteamVR/OpenXR"
   std::uint64_t runtime_version = 0;

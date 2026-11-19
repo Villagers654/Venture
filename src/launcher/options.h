@@ -20,12 +20,15 @@ struct Options {
       smoke_install;                 // app id to install through the Install action
   fs::path smoke_report, screenshot; // screenshot: PNG of the last smoke frame
   fs::path smoke_import;             // a path scanned as if dropped on the window
+  fs::path smoke_debug_report;       // a copy of the debug report (for --smoke-select's game) goes here; "log": into the log
+  fs::path smoke_headset;            // Android: the OpenXR runtime an emulator lacks (headset_play.h)
   bool smoke_import_start = false;   // then imports what it found and exits when done
+  std::vector<fs::path> smoke_drops; // --smoke-drop: files dropped on the selected game's page, in order
   bool interactive() const {
     return !automation && !cli && !launch_requested && smoke_seconds == 0 &&
            !smoke_play && !smoke_auth && !smoke_details && smoke_view.empty() &&
            smoke_select.empty() && smoke_install.empty() && smoke_report.empty() &&
-           screenshot.empty() && smoke_import.empty();
+           screenshot.empty() && smoke_import.empty() && smoke_drops.empty();
   }
 };
 inline Options parse_options(const std::vector<std::string> &args) {
@@ -61,6 +64,12 @@ inline Options parse_options(const std::vector<std::string> &args) {
       out.smoke_install = args[++i];
     else if (args[i] == "--smoke-import" && i + 1 < args.size())
       out.smoke_import = paths::from_utf8(args[++i]);
+    else if (args[i] == "--smoke-debug-report" && i + 1 < args.size())
+      out.smoke_debug_report = paths::from_utf8(args[++i]);
+    else if (args[i] == "--smoke-headset" && i + 1 < args.size())
+      out.smoke_headset = paths::from_utf8(args[++i]);
+    else if (args[i] == "--smoke-drop" && i + 1 < args.size())
+      out.smoke_drops.push_back(paths::from_utf8(args[++i]));
     else if (args[i] == "--smoke-import-start")
       out.smoke_import_start = true;
     else if (args[i] == "--screenshot" && i + 1 < args.size())

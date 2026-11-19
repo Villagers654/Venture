@@ -1,4 +1,4 @@
-set(VENTURE_JAVA_HOME "${PROJECT_SOURCE_DIR}/.deps/jdk" CACHE PATH "Pinned JDK (python tools/bootstrap.py --jdk)")
+include(${PROJECT_SOURCE_DIR}/cmake/JavaHome.cmake)
 if(NOT EXISTS "${VENTURE_JAVA_HOME}/include/jni.h")
   message(FATAL_ERROR "Missing JDK: run python tools/bootstrap.py --jdk")
 endif()
@@ -18,7 +18,7 @@ target_include_directories(venture_jvmti_agent PRIVATE "${VENTURE_JAVA_HOME}/inc
   "${VENTURE_JAVA_HOME}/include/${java_headers}")
 target_compile_options(venture_jvmti_agent PRIVATE -Wall -Wextra -Wpedantic)
 add_library(venture_java STATIC
-  execution_freeze.cpp
+  execution_freeze.cpp gc_clock.cpp
   abi.cpp jvm.cpp guest_jni.cpp jni32.cpp native_bridge.cpp elf_exports.cpp conversion.cpp method_hooks.cpp
   ../platform/${java_platform}/java_host.cpp
   ../platform/${java_platform}/java_entry.S)
@@ -44,12 +44,12 @@ target_compile_options(venture_java PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-Wall;-Wex
 set(VENTURE_JAVA_BRIDGE_JAR "${CMAKE_CURRENT_BINARY_DIR}/venture-java-bridge.jar" CACHE INTERNAL "JNI support classes")
 set(venture_bridge_classes "${CMAKE_CURRENT_BINARY_DIR}/classes-venture")
 add_custom_command(OUTPUT "${VENTURE_JAVA_BRIDGE_JAR}"
-  COMMAND "${VENTURE_JAVA_HOME}/bin/javac${java_exe}" -encoding UTF-8 --release 21 -d "${venture_bridge_classes}"
+  COMMAND "${VENTURE_HOST_JAVA_HOME}/bin/javac${VENTURE_HOST_JAVA_SUFFIX}" -encoding UTF-8 --release 21 -d "${venture_bridge_classes}"
     "${CMAKE_CURRENT_SOURCE_DIR}/bridge/com/venture/runtime/NativeLoader.java"
     "${CMAKE_CURRENT_SOURCE_DIR}/bridge/com/venture/runtime/NativeMethods.java"
     "${CMAKE_CURRENT_SOURCE_DIR}/bridge/com/venture/runtime/MethodHooks.java"
     "${CMAKE_CURRENT_SOURCE_DIR}/bridge/com/venture/runtime/DirectBuffers.java"
-  COMMAND "${VENTURE_JAVA_HOME}/bin/jar${java_exe}" --create --file "${VENTURE_JAVA_BRIDGE_JAR}" -C "${venture_bridge_classes}" .
+  COMMAND "${VENTURE_HOST_JAVA_HOME}/bin/jar${VENTURE_HOST_JAVA_SUFFIX}" --create --file "${VENTURE_JAVA_BRIDGE_JAR}" -C "${venture_bridge_classes}" .
   DEPENDS bridge/com/venture/runtime/NativeLoader.java bridge/com/venture/runtime/NativeMethods.java
     bridge/com/venture/runtime/MethodHooks.java bridge/com/venture/runtime/DirectBuffers.java VERBATIM)
 add_custom_target(venture_java_bridge_jar ALL DEPENDS "${VENTURE_JAVA_BRIDGE_JAR}")

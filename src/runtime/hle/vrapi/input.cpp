@@ -2,10 +2,14 @@
 #include "xr/grip_toggle.h"
 #include "core/av_telemetry.h"
 #include "xr/haptic_output.h"
-#include "hle/openxr/state.h"
+#include "hle/vrapi/host.h"
+#include "xr/sanitize.h"
 #include "hle/vrapi/state.h"
 #include "xr/bindings.h"
 #include "xr/hands.h"
+#include "xr/clock.h"
+#include "xr/system_keyboard.h"
+#include "core/wait.h"
 #include "common/log.h"
 #include <algorithm>
 #include <array>
@@ -14,6 +18,55 @@
 #include <cstring>
 
 namespace venture::hle::vrapi {
+namespace {
+// One hand's grip and aim spaces, with the player's offset for its current controller.
+XrResult make_hand_spaces(int hand) {
+  auto &input = state().input;
+  for (auto *space : {&input.grip[hand], &input.aim[hand]})
+    if (*space) {
+      ::xrDestroySpace(*space);
+      *space = {};
+    }
+  const auto &profile = input.profile_names[hand];
+  XrActionSpaceCreateInfo ci{XR_TYPE_ACTION_SPACE_CREATE_INFO};
+  ci.action = input.grip_action;
+  ci.subactionPath = input.hands[hand];
+  // VrApi reports the legacy Oculus controller pose, not the OpenXR grip: Meta's OpenXR plugin puts
+  // the grip 4 cm behind and 3 cm below it, pitched up 60 degrees (OculusPoseToGrip). This is
+  // that legacy pose within the grip.
+  ci.poseInActionSpace =
+      venture::xr::offset_pose(profile, hand, {{-0.5f, 0, 0, 0.8660254f}, {0, -0.0196410f, -0.0459808f}});
+  auto r = ::xrCreateActionSpace(session().handle, &ci, &input.grip[hand]);
+  if (XR_FAILED(r))
+    return r;
+  ci.poseInActionSpace = venture::xr::offset_pose(profile, hand, {{0, 0, 0, 1}, {0, 0, 0}});
+  ci.action = input.aim_action;
+  return ::xrCreateActionSpace(session().handle, &ci, &input.aim[hand]);
+}
+// After the host reports another controller: its offset moves the hand's spaces.
+void refresh_profiles() {
+  auto &input = state().input;
+  if (!input.profiles_stale || !input.set)
+    return;
+  input.profiles_stale = false;
+  for (int hand = 0; hand < 2; ++hand) {
+    XrInteractionProfileState profile{XR_TYPE_INTERACTION_PROFILE_STATE};
+    if (XR_FAILED(::xrGetCurrentInteractionProfile(session().handle, input.hands[hand], &profile)) ||
+        profile.interactionProfile == input.profiles[hand])
+      continue;
+    input.profiles[hand] = profile.interactionProfile;
+    char name[XR_MAX_PATH_LENGTH]{};
+    std::uint32_t size = 0;
+    input.profile_names[hand] =
+        profile.interactionProfile &&
+                XR_SUCCEEDED(::xrPathToString(host_xr().instance, profile.interactionProfile, sizeof(name), &size, name))
+            ? name
+            : "";
+    if (XR_FAILED(make_hand_spaces(hand)))
+      log::warn("vrapi", "Controller spaces not remade for {}", input.profile_names[hand]);
+  }
+}
+} // namespace
 XrResult initialize_input() {
   auto &input = state().input;
   auto instance = host_xr().instance;
@@ -57,6 +110,9 @@ XrResult initialize_input() {
       {&input.touch_b, "touch_b", XR_ACTION_TYPE_BOOLEAN_INPUT, "/input/y/touch", "/input/b/touch"},
       {&input.touch_rest, "touch_rest", XR_ACTION_TYPE_BOOLEAN_INPUT, "/input/thumbrest/touch",
        "/input/thumbrest/touch"},
+      // Bound below, only where the player's controls use pad halves the host cannot bind.
+      {&input.pad, "trackpad", XR_ACTION_TYPE_VECTOR2F_INPUT, nullptr, nullptr},
+      {&input.pad_press, "trackpad_press", XR_ACTION_TYPE_BOOLEAN_INPUT, nullptr, nullptr},
   };
   for (auto &spec : specs) {
     XrActionCreateInfo ci{XR_TYPE_ACTION_CREATE_INFO};
@@ -97,6 +153,13 @@ XrResult initialize_input() {
             bindings.push_back({*spec.handle, path});
         }
       }
+    for (int hand = 0; hand < 2; ++hand)
+      for (const bool press : {false, true})
+        for (const auto &mapped : venture::xr::pad_bindings(profile, hand, press)) {
+          XrPath path{};
+          if (XR_SUCCEEDED(::xrStringToPath(instance, mapped.c_str(), &path)))
+            bindings.push_back({press ? input.pad_press : input.pad, path});
+        }
     XrInteractionProfileSuggestedBinding bi{XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING};
     ::xrStringToPath(instance, profile.c_str(), &bi.interactionProfile);
     auto suggested = venture::xr::suggest_translated(instance, bi.interactionProfile, std::move(bindings));
@@ -116,19 +179,7 @@ XrResult initialize_input() {
   if (XR_FAILED(r))
     return r;
   for (int hand = 0; hand < 2; ++hand) {
-    XrActionSpaceCreateInfo ci{XR_TYPE_ACTION_SPACE_CREATE_INFO};
-    ci.action = input.grip_action;
-    ci.subactionPath = input.hands[hand];
-    // VrApi reports the legacy Oculus controller pose, not the OpenXR grip: Meta's OpenXR plugin puts
-    // the grip 4 cm behind and 3 cm below it, pitched up 60 degrees (OculusPoseToGrip). This is
-    // that legacy pose within the grip.
-    ci.poseInActionSpace = {{-0.5f, 0, 0, 0.8660254f}, {0, -0.0196410f, -0.0459808f}};
-    r = ::xrCreateActionSpace(session().handle, &ci, &input.grip[hand]);
-    if (XR_FAILED(r))
-      return r;
-    ci.poseInActionSpace = {{0, 0, 0, 1}, {0, 0, 0}};
-    ci.action = input.aim_action;
-    r = ::xrCreateActionSpace(session().handle, &ci, &input.aim[hand]);
+    r = make_hand_spaces(hand);
     if (XR_FAILED(r))
       return r;
   }
@@ -150,7 +201,7 @@ XrResult initialize_input() {
         ci.hand = hand ? XR_HAND_RIGHT_EXT : XR_HAND_LEFT_EXT;
         ci.handJointSet = XR_HAND_JOINT_SET_DEFAULT_EXT;
         auto created = host_call<PFN_xrCreateHandTrackerEXT, "xrCreateHandTrackerEXT">(session().handle, &ci, &input.trackers[hand]);
-        if (created == XR_ERROR_FEATURE_UNSUPPORTED && ci.next && hle::openxr::hand_tracking_required()) {
+        if (created == XR_ERROR_FEATURE_UNSUPPORTED && ci.next && host::hand_tracking_required()) {
           // A hands-only app on a host without free hands (Monado: controller-conforming only):
           // the host's controller-derived skeleton is the only hand source there is.
           static constexpr XrHandTrackingDataSourceEXT any_hands[]{
@@ -191,10 +242,35 @@ void destroy_input() {
   }
   i = {};
 }
+namespace {
+// The player's toggles (controls::Choice::toggles) by hand and Quest row: a latch
+// sees each sync once, however often the game reads the state in between.
+std::uint64_t input_syncs = 0;  // protected by state().mutex
+std::array<std::array<venture::xr::GripLatch, controls::kQuestCount>, 2> toggles{};
+std::array<bool, 2> trigger_down{}, grip_down{};
+} // namespace
 XrResult sync_input() {
+  ++input_syncs;
   XrActiveActionSet active{state().input.set, XR_NULL_PATH};
   XrActionsSyncInfo info{XR_TYPE_ACTIONS_SYNC_INFO, nullptr, 1, &active};
-  return venture::xr::sync_with_menu_chord(session().handle, &info);
+  const auto r = venture::xr::sync_with_menu_chord(session().handle, &info);
+  if (r == XR_SUCCESS)
+    refresh_profiles();
+  // The system keyboard, while open, takes each controller's aim ray and trigger.
+  if (r == XR_SUCCESS && venture::xr::keyboard::shown()) [[unlikely]] {
+    auto &i = state().input;
+    XrTime now = 0;
+    if (XR_FAILED(venture::xr::monotonic_to_time(venture::monotonic_ns(), &now))) now = 0;
+    for (int hand = 0; hand < 2; ++hand) {
+      XrActionStateGetInfo gi{XR_TYPE_ACTION_STATE_GET_INFO, nullptr, i.trigger, i.hands[hand]};
+      XrActionStateFloat value{XR_TYPE_ACTION_STATE_FLOAT};
+      const float pulled = XR_SUCCEEDED(::xrGetActionStateFloat(session().handle, &gi, &value)) && value.isActive
+                               ? value.currentState : 0.f;
+      if (venture::xr::keyboard::point(hand, i.aim[hand], pulled, now))
+        venture::xr::keyboard::tick("vrapi_simple", session().handle, i.haptic, i.hands[hand]);
+    }
+  }
+  return r;
 }
 namespace {
 float axis(XrAction action, int hand) {
@@ -226,7 +302,7 @@ XrResult joints(int hand, XrTime time, XrHandJointLocationsEXT &out) {
                                                                          &li, &out);
   if (XR_SUCCEEDED(r))
     for (std::uint32_t i = 0; i < out.jointCount; ++i) {
-      hle::openxr::sanitize(out.jointLocations[i].locationFlags, out.jointLocations[i].pose);
+      venture::xr::sanitize(out.jointLocations[i].locationFlags, out.jointLocations[i].pose);
       if (!std::isfinite(out.jointLocations[i].radius)) out.jointLocations[i].radius = 0;
     }
   return r;
@@ -261,7 +337,7 @@ std::int32_t vrapi_EnumerateInputDevices(Mobile *mobile, std::uint32_t index, In
                                   locations};
       hand_shown[hand] = venture::xr::hand_replaces_controller(
           XR_SUCCEEDED(joints(hand, time_from_seconds(0), loc)) && loc.isActive, sourced, active(hand),
-          hle::openxr::hand_tracking_required());
+          host::hand_tracking_required());
       if (hand_shown[hand])
         hands.push_back({32, std::uint32_t(hand + 3)});
     }
@@ -311,25 +387,68 @@ std::int32_t vrapi_GetCurrentInputState(Mobile *mobile, std::uint32_t id, InputS
     remote->header.time = vrapi_GetTimeInSeconds();
     if (!active(hand))
       return no_device;
-    remote->trigger = axis(i.trigger, hand);
-    remote->grip = axis(i.squeeze, hand);
+    // The open system keyboard has the controllers: the game sees them at rest,
+    // still connected and tracked, as on a Quest.
+    if (venture::xr::keyboard::shown()) [[unlikely]] {
+      remote->recenter = std::uint8_t(state().recenter_count);
+      return success;
+    }
+    // Pad halves the host cannot bind, split here from the pad and its press.
+    std::array<bool, controls::kQuestCount> half{};
+    if (i.pad) {
+      XrActionStateGetInfo pi{XR_TYPE_ACTION_STATE_GET_INFO, nullptr, i.pad, i.hands[hand]};
+      XrActionStateVector2f at{XR_TYPE_ACTION_STATE_VECTOR2F};
+      if (XR_SUCCEEDED(::xrGetActionStateVector2f(session().handle, &pi, &at)) && at.isActive)
+        half = venture::xr::split_pad(i.profile_names[hand], hand, at.currentState, button(i.pad_press, hand));
+    }
+    using controls::Quest;
+    auto pad = [&](Quest q) { return half[std::size_t(q)]; };
+    // The player's tuning and toggles for this hand's controller.
+    const auto resolved = venture::xr::resolved_controls(i.profile_names[hand]);
+    const controls::Tuning tuning = resolved ? resolved->tuning[hand] : controls::Tuning{};
+    remote->trigger = pad(Quest::trigger) ? 1.f : axis(i.trigger, hand);
+    remote->grip = pad(Quest::grip) ? 1.f : axis(i.squeeze, hand);
     remote->recenter = std::uint8_t(state().recenter_count);
+    bool trigger_pressed = remote->trigger > 0.55f;
+    if (tuning.trigger_press)
+      trigger_pressed = trigger_down[hand] = controls::analog_press(remote->trigger, trigger_down[hand], tuning.trigger_press);
+    bool grip_pressed = remote->grip > 0.55f;
+    if (tuning.grip_press && !(resolved && resolved->grip_toggle))
+      grip_pressed = grip_down[hand] = controls::analog_press(remote->grip, grip_down[hand], tuning.grip_press);
+    bool a = button(i.a, hand) || pad(Quest::primary), b = button(i.b, hand) || pad(Quest::secondary),
+         click = button(i.click, hand) || pad(Quest::stick_click);
+    auto toggled = [&](Quest q, bool pressed) {
+      auto &latch = toggles[hand][std::size_t(q)];
+      if (!resolved || !resolved->toggles[std::size_t(q)]) return latch = {}, pressed;
+      return latch.update(input_syncs, pressed ? 1.f : 0.f, true, 0);
+    };
+    a = toggled(Quest::primary, a);
+    b = toggled(Quest::secondary, b);
+    click = toggled(Quest::stick_click, click);
+    if (resolved && resolved->toggles[std::size_t(Quest::trigger)])
+      remote->trigger = (trigger_pressed = toggled(Quest::trigger, trigger_pressed)) ? 1.f : 0.f;
     remote->buttons =
-        (button(i.a, hand) ? (hand ? 1u : 0x100u) : 0u) |
-        (button(i.b, hand) ? (hand ? 2u : 0x200u) : 0u) |
-        (button(i.click, hand) ? 0x80000000u : 0u) | ((button(i.menu, hand) || (!hand && venture::xr::menu_chord_pulse(session().handle))) ? 0x100000u : 0u) |
-        (remote->trigger > 0.55f ? 0x20000000u : 0u) | (remote->grip > 0.55f ? 0x04000000u : 0u);
+        (a ? (hand ? 1u : 0x100u) : 0u) | (b ? (hand ? 2u : 0x200u) : 0u) | (click ? 0x80000000u : 0u) |
+        ((button(i.menu, hand) || (!hand && venture::xr::menu_chord_pulse(session().handle))) ? 0x100000u : 0u) |
+        (trigger_pressed ? 0x20000000u : 0u) | (grip_pressed ? 0x04000000u : 0u);
     remote->touches = (button(i.touch_trigger, hand) ? 0x40u : 0u) |
                       (button(i.touch_stick, hand) ? 0x20u : 0u) |
                       (button(i.touch_a, hand) ? (hand ? 1u : 4u) : 0u) |
                       (button(i.touch_b, hand) ? (hand ? 2u : 8u) : 0u) |
-                      (button(i.touch_rest, hand) ? 0x1000u : 0u);
+                      (button(i.touch_rest, hand) || pad(Quest::thumbrest) ? 0x1000u : 0u);
     XrActionStateGetInfo gi{XR_TYPE_ACTION_STATE_GET_INFO, nullptr, i.stick, i.hands[hand]};
     XrActionStateVector2f stick{XR_TYPE_ACTION_STATE_VECTOR2F};
     if (XR_SUCCEEDED(::xrGetActionStateVector2f(session().handle, &gi, &stick)) && stick.isActive) {
-      remote->raw_joystick = {stick.currentState.x, stick.currentState.y};
-      if (std::hypot(stick.currentState.x, stick.currentState.y) >= 0.1f)
+      controls::Tuning turned = tuning;  // inversion only: the raw stick keeps its centre
+      turned.deadzone = 0;
+      const auto raw = controls::shape_stick(turned, stick.currentState.x, stick.currentState.y);
+      remote->raw_joystick = {raw[0], raw[1]};
+      if (tuning.deadzone) {
+        const auto shaped = controls::shape_stick(tuning, stick.currentState.x, stick.currentState.y);
+        remote->joystick = {shaped[0], shaped[1]};
+      } else if (std::hypot(raw[0], raw[1]) >= 0.1f) {
         remote->joystick = remote->raw_joystick;
+      }
     }
     if (av::enabled()) {
       using Clock = std::chrono::steady_clock;
@@ -367,6 +486,11 @@ std::int32_t vrapi_GetCurrentInputState(Mobile *mobile, std::uint32_t id, InputS
     hand->pinch[1] = aim.pinchStrengthMiddle;
     hand->pinch[2] = aim.pinchStrengthRing;
     hand->pinch[3] = aim.pinchStrengthLittle;
+    if (venture::xr::keyboard::shown()) [[unlikely]] {
+      // No pinches or menu gesture reach the game while the keyboard is open.
+      hand->status &= ~0x13cu;
+      std::fill(std::begin(hand->pinch), std::end(hand->pinch), 0.f);
+    }
     return success;
   }
   return no_device;
@@ -394,7 +518,7 @@ std::int32_t vrapi_GetInputTrackingState(Mobile *mobile, std::uint32_t id, doubl
       const auto& q = out->head.pose.orientation;
       av::emit({{"kind", "controller_pose"}, {"api", "vrapi"},
                 {"hand", hand ? "/user/hand/right" : "/user/hand/left"},
-                {"space", reinterpret_cast<std::uintptr_t>(state().input.grip[hand])},
+                {"space", (std::uint64_t)state().input.grip[hand]},  // a pointer or, 32-bit, an integer
                 {"tracking_status", out->status}, {"orientation_valid", bool(out->status & 4u)},
                 {"query_seconds", time}, {"query_xr_time", query_time},
                 {"input_frame_index", state().input_frame_index},

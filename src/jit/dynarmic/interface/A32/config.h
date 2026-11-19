@@ -160,8 +160,9 @@ struct UserConfig {
     /// Venture (x64): emit blocks' deferred handlers into a separate upper part of
     /// the code cache, keeping consecutively compiled hot code contiguous.
     bool cold_code_region = false;
-    /// Venture (x64), requires cold_code_region: block links keep only the
-    /// patchable rel32 jump in hot code; unlinked exits are cold-region stubs.
+    /// Venture, requires cold_code_region on x64: block links keep only the
+    /// patchable jump in hot code; unlinked exits are cold-region stubs (x64) or
+    /// emitted with the block's deferred code (arm64).
     bool compact_block_links = false;
     /// Venture (x64): alignment of block entry points in bytes (a power of two;
     /// 1 packs blocks without padding).
@@ -293,7 +294,8 @@ struct UserConfig {
     // Callback address bit zero carries Thumb mode; code PC itself stays even.
     std::function<std::uint32_t(VAddr)> profile_cookie;
     bool profile_function_links = false;
-    // Diagnostic JIT feature mask (Backend::X64::HostFeature bits). Only disables detected features.
+    // Diagnostic JIT feature mask (Backend::X64::HostFeature or Backend::Arm64::HostFeature
+    // bits, by host). Only disables detected features.
     std::uint32_t disabled_host_features = 0;
 };
 

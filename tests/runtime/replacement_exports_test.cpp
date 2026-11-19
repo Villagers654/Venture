@@ -546,9 +546,12 @@ TEST_CASE("linker never resolves a bare library name against the host working di
   auto& linker = Linker::get();
   linker.set_search_paths({(dir / "empty").string()});
   auto* lib = linker.open("libventure-cwd-probe.so", kRtldNow, nullptr);
+  // An absent requested library is a probe result, not a broken library.
+  const bool absent = linker.error_is_absent_library();
   const auto error = linker.take_error();
   std::filesystem::current_path(previous);
   std::filesystem::remove_all(dir);
   CHECK(lib == nullptr);
   CHECK(error.find("library not found") != std::string::npos);
+  CHECK(absent);
 }

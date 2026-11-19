@@ -49,9 +49,22 @@ public final class PackageModel {
     BinaryResources.Node sdk = manifest.child("uses-sdk");
     app.targetSdkVersion = sdk == null ? 1 : sdk.integer("targetSdkVersion", 1);
     app.minSdkVersion = sdk == null ? 1 : sdk.integer("minSdkVersion", 1);
+    var features = new java.util.ArrayList<android.content.pm.FeatureInfo>();
     for (var n : manifest.children)
       if (n.name.equals("uses-permission"))
         permissions.add(n.text("name", ""));
+      else if (n.name.equals("uses-feature")) {
+        // Unity reads these (GET_CONFIGURATIONS) to enable the Quest system keyboard
+        // (oculus.software.overlay_keyboard); without them it reported the keyboard
+        // disabled and name entry never opened (Pinball Universe, #160).
+        var feature = new android.content.pm.FeatureInfo();
+        feature.name = n.text("name", null);
+        feature.version = n.integer("version", 0);
+        if (feature.name == null) feature.reqGlEsVersion = n.integer("glEsVersion", 0);
+        if (n.integer("required", 1) != 0) feature.flags = android.content.pm.FeatureInfo.FLAG_REQUIRED;
+        features.add(feature);
+      }
+    info.reqFeatures = features.isEmpty() ? null : features.toArray(android.content.pm.FeatureInfo[] ::new);
     BinaryResources.Node application = manifest.child("application");
     if (application == null)
       throw new IllegalArgumentException("Manifest has no application");

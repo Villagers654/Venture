@@ -1,7 +1,7 @@
 #include "cpu/pretranslate.h"
 #include "cpu/cpu.h"
 #include "cpu/portable_cache.h"
-#include <dynarmic/backend/x64/portable_block.h>
+#include "cpu/jit_backend.h"
 #include "common/environment.h"
 #include "common/log.h"
 #include "core/address_space.h"
@@ -74,6 +74,7 @@ struct State {
   std::size_t marked_done = 0;  // done.size() at the last explored mark
   std::atomic<bool> stopping{false};
   std::atomic<bool> paused{false};
+  std::atomic<unsigned> scans{0};  // completed image scans
   std::atomic<unsigned> busy{0}, waiting{0};
   std::atomic<std::uint64_t> translated{0}, failed{0}, explored{0}, translate_ns{0}, writer_wait_ns{0};
 };
@@ -88,6 +89,8 @@ bool enabled() {
     const auto* e = environment::getenv("VENTURE_JIT_AOT");
     if (e && std::string_view(e) == "0") return false;
     if (process_config().isa() != GuestIsa::a64) return false;
+    // It explores the blocks it stores through their portable form.
+    if (!VENTURE_JIT_PORTABLE_BLOCKS) return false;
     auto* cache = PortableBlockCache::get();
     if (!cache || !cache->accepting()) return false;
     state().cache = cache;
@@ -354,6 +357,7 @@ void take_reached(State& s) {
 }
 
 void work(unsigned index) {
+#if VENTURE_JIT_PORTABLE_BLOCKS
   worker_thread = true;
   platform::lower_background_thread_priority();
   auto& s = state();
@@ -363,7 +367,7 @@ void work(unsigned index) {
     return;
   }
   std::vector<std::uint8_t> bytes;
-  Dynarmic::Backend::X64::PortableBlock block;
+  jit_backend::portable::PortableBlock block;
   auto reported = std::chrono::steady_clock::now();
   for (;;) {
     Item item{};
@@ -379,6 +383,7 @@ void work(unsigned index) {
           lock.unlock();
           scan_images(s);
           lock.lock();
+          s.scans.fetch_add(1);
           continue;
         }
         // Little memory left: translate nothing ahead (each translation adds cache records and
@@ -434,7 +439,7 @@ void work(unsigned index) {
       (ok ? s.translated : s.failed).fetch_add(1, std::memory_order_relaxed);
       if (!ok) continue;
     }
-    if (!s.cache->copy(descriptor, bytes) || !Dynarmic::Backend::X64::DeserializePortableBlock(bytes, block)) continue;
+    if (!s.cache->copy(descriptor, bytes) || !jit_backend::portable::DeserializePortableBlock(bytes, block)) continue;
     s.explored.fetch_add(1, std::memory_order_relaxed);
     {
       std::lock_guard lock(s.mutex);
@@ -458,6 +463,9 @@ void work(unsigned index) {
       }
     }
   }
+#else
+  (void)index;
+#endif
 }
 
 void start() {
@@ -469,6 +477,7 @@ void start() {
   for (unsigned i = 0; i < workers; ++i) std::thread([i] { work(i); }).detach();
   log::info("jit", "Background translation: {} workers", workers);
 }
+std::once_flag workers_started;
 } // namespace
 
 namespace {
@@ -485,8 +494,7 @@ void hand_over() noexcept {
   thread_local auto& shard = s.shards[s.next_shard.fetch_add(1, std::memory_order_relaxed) % s.shards.size()];
   const auto count = std::exchange(pending.count, 0u);
   try {
-    static std::once_flag started;
-    std::call_once(started, start);
+    std::call_once(workers_started, start);
     {
       std::lock_guard lock(shard.mutex);
       const auto room = kReachedLimit / s.shards.size() - std::min(shard.reached.size(), kReachedLimit / s.shards.size());
@@ -524,5 +532,40 @@ void stop() noexcept {
   s.wake.notify_all();
   // A block takes well under a millisecond; a stuck worker never delays exit for long.
   for (int i = 0; i < 100 && s.busy.load(); ++i) std::this_thread::sleep_for(std::chrono::milliseconds(2));
+}
+
+bool prepare(bool (*stop_requested)(void*), void* context, std::uint64_t block_limit, PrepareResult& result) noexcept {
+  try {
+    if (!enabled()) return false;
+    auto& s = state();
+    std::call_once(workers_started, start);
+    // Worker 0 scans the loaded images at once; everything is a far root (no code ran), so
+    // the function entries go first, in image order, and their successors after them.
+    bool complete = false, limited = false;
+    while (!stop_requested(context)) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(100));
+      if (block_limit && s.explored.load() >= block_limit) {
+        limited = true;
+        break;
+      }
+      std::lock_guard lock(s.mutex);
+      if (s.scans.load() && !s.queued && !s.busy.load()) {
+        complete = true;
+        break;
+      }
+    }
+    stop();
+    {
+      std::lock_guard lock(s.mutex);
+      s.cache->flush();
+      // Only a finished pass may mark blocks explored: a stopped one still has successors queued.
+      if (complete) s.cache->mark_explored([&](std::uint64_t d) { return s.done.contains(d); });
+    }
+    result = {s.translated.load(), s.failed.load(), s.explored.load(), complete || limited, limited};
+    return true;
+  } catch (const std::exception& e) {
+    log::warn("jit", "Translation before the first launch failed: {}", e.what());
+    return false;
+  }
 }
 } // namespace venture::pretranslate

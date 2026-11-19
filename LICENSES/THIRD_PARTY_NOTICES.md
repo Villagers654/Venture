@@ -102,3 +102,20 @@ built by `tools/make_icon_font.py` from lucide-static 1.66.0) holds icons from
 > LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 > OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 > SOFTWARE.
+
+## apksig
+
+The Android app signs the games it adapts for a headset with apksig, the
+Android Open Source Project's APK signing library (`com.android.apksig`),
+taken unmodified from the pinned build-tools' `lib/apksigner.jar` and dexed
+into the app (`tools/android/build_apk.py --jar-classes`). It is used under
+the Apache License, Version 2.0 (`LICENSES/Apache-2.0.txt`):
+
+> Copyright (C) 2016 The Android Open Source Project
+>
+> Licensed under the Apache License, Version 2.0 (the "License"); you may not
+> use this file except in compliance with the License. Unless required by
+> applicable law or agreed to in writing, software distributed under the
+> License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
+> CONDITIONS OF ANY KIND, either express or implied. See the License for the
+> specific language governing permissions and limitations under the License.

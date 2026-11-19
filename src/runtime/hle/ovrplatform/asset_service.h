@@ -13,11 +13,19 @@ struct AssetOwnership {
   std::set<std::string> skus;
 };
 using AssetOwnershipReader = std::function<AssetOwnership(std::stop_token)>;
+// One request to the launcher's asset handler (download::asset_launcher_handler)
+// and its reply: the PC pipe, or the Venture app's Binder broker on a headset.
+using AssetLauncherCall = std::function<Json(const Json&)>;
 // Shared host service for C API and P10's Horizon request/JSON facade. Models
 // own their strings; deferred results must be awaited before reporting success.
 class AssetService : public std::enable_shared_from_this<AssetService> {
  public:
   using Notify = std::function<void(Model)>;
+  AssetService(AppIdentity, std::filesystem::path install,
+               std::string guest_root, AssetOwnershipReader,
+               AssetLauncherCall launcher,
+               std::filesystem::path language_state = {},
+               std::filesystem::path obb_view = {});
   AssetService(AppIdentity, std::filesystem::path install,
                std::string guest_root, AssetOwnershipReader,
                std::shared_ptr<PipeChannel> = {},
@@ -42,7 +50,7 @@ class AssetService : public std::enable_shared_from_this<AssetService> {
   std::filesystem::path obb_view_;
   std::string guest_root_, language_;
   AssetOwnershipReader ownership_;
-  std::shared_ptr<PipeChannel> channel_;
+  AssetLauncherCall channel_;
   mutable std::mutex mutex_;
   // The plan is Meta's reduced catalog: assets without their IAP details.
   mutable std::atomic<bool> reduced_{false};

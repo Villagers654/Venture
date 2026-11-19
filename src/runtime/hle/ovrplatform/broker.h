@@ -2,6 +2,7 @@
 #include "common/ipc.h"
 #include "hle/ovrplatform/provider.h"
 #include <chrono>
+#include <functional>
 #include <mutex>
 
 namespace venture::ovrplatform {
@@ -33,5 +34,10 @@ private:
 std::shared_ptr<Provider> brokered_provider(AppIdentity,
                                             std::string account_key,
                                             std::shared_ptr<PipeChannel>,
+                                            std::shared_ptr<HttpTransport>);
+// One request to the launcher's CredentialBroker::handle and its reply: the
+// PC pipe above, or the Venture app's Binder service on Android.
+using BrokerCall = std::function<venture::Json(const venture::Json&)>;
+std::shared_ptr<Provider> brokered_provider(AppIdentity, std::string account_key, BrokerCall,
                                             std::shared_ptr<HttpTransport>);
 } // namespace venture::ovrplatform

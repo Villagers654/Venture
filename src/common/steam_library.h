@@ -34,6 +34,10 @@ struct Game {
 struct Result {
   bool pending = false;
   size_t games = 0;
+  // While pending: what Steam's shortcuts lack, for the log ("<name>: its
+  // shortcut starts <old exe>"), so a restart prompt that keeps coming back
+  // shows what keeps changing.
+  std::string reason;
 };
 // Explicit roots and injectable process probe keep tests away from real Steam.
 Result sync(const fs::path &root, const fs::path &executable,

@@ -6,6 +6,9 @@
  * SPDX-License-Identifier: 0BSD
  */
 
+#include <arm_neon.h>
+#include <bit>
+
 #include <oaknut/oaknut.hpp>
 
 #include "dynarmic/backend/arm64/a32_jitstate.h"
@@ -297,13 +300,50 @@ void EmitIR<IR::Opcode::VectorGetElement16>(oaknut::CodeGenerator& code, EmitCon
     EmitGetElement<16>(code, ctx, inst, [&](auto& Wresult, auto& Qvalue, u8 index) { code.UMOV(Wresult, Qvalue->Helem()[index]); });
 }
 
+// Venture: LowLaneAliasing, as on x64: lane 0 stays in the vector domain, so
+// scalar FP users need no FPR -> GPR -> FPR round trip; integer users get one
+// FMOV from the register allocator. The value aliases its source vector when
+// that dies here (only the low lane is defined: RegAlloc moves a U32 out of an
+// FPR with a W move), and is otherwise an in-register FMOV that clears the
+// lanes above it, leaving a scalar known zero above its width.
+template<std::size_t size>
+static bool EmitLowLane(oaknut::CodeGenerator& code, EmitContext& ctx, IR::Inst* inst) {
+    if (!ctx.conf.HasOptimization(OptimizationFlag::LowLaneAliasing) || inst->GetArg(0).IsImmediate() ||
+        inst->GetArg(1).GetU8() != 0) {
+        return false;
+    }
+    auto args = ctx.reg_alloc.GetArgumentInfo(inst);
+    if (ctx.reg_alloc.IsLastUse(args[0])) {
+        ctx.reg_alloc.DefineAsExisting(inst, args[0]);
+        ctx.lane_aliases.insert(inst);
+        return true;
+    }
+    auto Qvalue = ctx.reg_alloc.ReadQ(args[0]);
+    if constexpr (size == 32) {
+        auto Sresult = ctx.reg_alloc.WriteS(inst);
+        RegAlloc::Realize(Qvalue, Sresult);
+        code.FMOV(Sresult, Qvalue->toS());
+    } else {
+        auto Dresult = ctx.reg_alloc.WriteD(inst);
+        RegAlloc::Realize(Qvalue, Dresult);
+        code.FMOV(Dresult, Qvalue->toD());
+    }
+    return true;
+}
+
 template<>
 void EmitIR<IR::Opcode::VectorGetElement32>(oaknut::CodeGenerator& code, EmitContext& ctx, IR::Inst* inst) {
+    if (EmitLowLane<32>(code, ctx, inst)) {
+        return;
+    }
     EmitGetElement<32>(code, ctx, inst, [&](auto& Wresult, auto& Qvalue, u8 index) { code.UMOV(Wresult, Qvalue->Selem()[index]); });
 }
 
 template<>
 void EmitIR<IR::Opcode::VectorGetElement64>(oaknut::CodeGenerator& code, EmitContext& ctx, IR::Inst* inst) {
+    if (EmitLowLane<64>(code, ctx, inst)) {
+        return;
+    }
     EmitGetElement<64>(code, ctx, inst, [&](auto& Xresult, auto& Qvalue, u8 index) { code.UMOV(Xresult, Qvalue->Delem()[index]); });
 }
 
@@ -637,10 +677,11 @@ void EmitIR<IR::Opcode::VectorEqual64>(oaknut::CodeGenerator& code, EmitContext&
 
 template<>
 void EmitIR<IR::Opcode::VectorEqual128>(oaknut::CodeGenerator& code, EmitContext& ctx, IR::Inst* inst) {
-    (void)code;
-    (void)ctx;
-    (void)inst;
-    UNREACHABLE();
+    EmitThreeOp(code, ctx, inst, [&](auto& Qresult, auto& Qa, auto& Qb) {
+        code.CMEQ(V0.D2(), Qa->D2(), Qb->D2());
+        code.EXT(V1.B16(), V0.B16(), V0.B16(), 8);
+        code.AND(Qresult->B16(), V0.B16(), V1.B16());
+    });
 }
 
 template<>
@@ -1223,7 +1264,29 @@ void EmitIR<IR::Opcode::VectorPolynomialMultiplyLong8>(oaknut::CodeGenerator& co
 
 template<>
 void EmitIR<IR::Opcode::VectorPolynomialMultiplyLong64>(oaknut::CodeGenerator& code, EmitContext& ctx, IR::Inst* inst) {
-    EmitThreeOpArrangedWiden<64>(code, ctx, inst, [&](auto Vresult, auto Va, auto Vb) { code.PMULL(Vresult, Va, Vb); });
+    if (ctx.conf.HasHostFeature(HostFeature::PMULL)) {
+        EmitThreeOpArrangedWiden<64>(code, ctx, inst, [&](auto Vresult, auto Va, auto Vb) { code.PMULL(Vresult, Va, Vb); });
+        return;
+    }
+    // Venture: 64-bit PMULL is FEAT_PMULL (optional); without it a carry-less
+    // multiply of the low lanes in C++, as on x64 without PCLMULQDQ.
+    auto args = ctx.reg_alloc.GetArgumentInfo(inst);
+    ctx.reg_alloc.PrepareForCall(args[0], args[1]);
+    const auto fn = [](uint64x2_t a, uint64x2_t b) -> uint64x2_t {
+        const u64 x = vgetq_lane_u64(a, 0);
+        const u64 y = vgetq_lane_u64(b, 0);
+        u64 lo = 0, hi = 0;
+        for (unsigned i = 0; i < 64; i++) {
+            if ((x >> i) & 1) {
+                lo ^= y << i;
+                hi ^= i ? y >> (64 - i) : 0;
+            }
+        }
+        return vcombine_u64(vcreate_u64(lo), vcreate_u64(hi));
+    };
+    code.MOV(Xscratch0, std::bit_cast<u64>(static_cast<uint64x2_t (*)(uint64x2_t, uint64x2_t)>(fn)));
+    code.BLR(Xscratch0);
+    ctx.reg_alloc.DefineAsRegister(inst, Q0);
 }
 
 template<>
@@ -1382,10 +1445,10 @@ void EmitIR<IR::Opcode::VectorSignExtend32>(oaknut::CodeGenerator& code, EmitCon
 
 template<>
 void EmitIR<IR::Opcode::VectorSignExtend64>(oaknut::CodeGenerator& code, EmitContext& ctx, IR::Inst* inst) {
-    (void)code;
-    (void)ctx;
-    (void)inst;
-    UNREACHABLE();
+    EmitTwoOp(code, ctx, inst, [&](auto& Qresult, auto& Qoperand) {
+        code.SSHR(D0, Qoperand->toD(), 63);
+        code.ZIP1(Qresult->D2(), Qoperand->D2(), V0.D2());
+    });
 }
 
 template<>
@@ -1403,20 +1466,61 @@ void EmitIR<IR::Opcode::VectorSignedAbsoluteDifference32>(oaknut::CodeGenerator&
     EmitThreeOpArranged<32>(code, ctx, inst, [&](auto Vresult, auto Va, auto Vb) { code.SABD(Vresult, Va, Vb); });
 }
 
+// GetUpperFromOp: the high half of each lane's full product; GetLowerFromOp: the low half.
+template<std::size_t esize, bool is_signed>
+static void EmitVectorMultiplyFull(oaknut::CodeGenerator& code, EmitContext& ctx, IR::Inst* inst) {
+    const auto upper_inst = inst->GetAssociatedPseudoOperation(IR::Opcode::GetUpperFromOp);
+    const auto lower_inst = inst->GetAssociatedPseudoOperation(IR::Opcode::GetLowerFromOp);
+
+    auto args = ctx.reg_alloc.GetArgumentInfo(inst);
+    auto Qa = ctx.reg_alloc.ReadQ(args[0]);
+    auto Qb = ctx.reg_alloc.ReadQ(args[1]);
+    RegAlloc::Realize(Qa, Qb);
+
+    if (upper_inst) {
+        auto Qupper = ctx.reg_alloc.WriteQ(upper_inst);
+        RegAlloc::Realize(Qupper);
+        if constexpr (esize == 16) {
+            if constexpr (is_signed) {
+                code.SMULL(V0.S4(), Qa->toD().H4(), Qb->toD().H4());
+                code.SMULL2(V1.S4(), Qa->H8(), Qb->H8());
+            } else {
+                code.UMULL(V0.S4(), Qa->toD().H4(), Qb->toD().H4());
+                code.UMULL2(V1.S4(), Qa->H8(), Qb->H8());
+            }
+            code.UZP2(Qupper->H8(), V0.H8(), V1.H8());
+        } else {
+            static_assert(esize == 32);
+            if constexpr (is_signed) {
+                code.SMULL(V0.D2(), Qa->toD().S2(), Qb->toD().S2());
+                code.SMULL2(V1.D2(), Qa->S4(), Qb->S4());
+            } else {
+                code.UMULL(V0.D2(), Qa->toD().S2(), Qb->toD().S2());
+                code.UMULL2(V1.D2(), Qa->S4(), Qb->S4());
+            }
+            code.UZP2(Qupper->S4(), V0.S4(), V1.S4());
+        }
+    }
+
+    if (lower_inst) {
+        auto Qlower = ctx.reg_alloc.WriteQ(lower_inst);
+        RegAlloc::Realize(Qlower);
+        if constexpr (esize == 16) {
+            code.MUL(Qlower->H8(), Qa->H8(), Qb->H8());
+        } else {
+            code.MUL(Qlower->S4(), Qa->S4(), Qb->S4());
+        }
+    }
+}
+
 template<>
 void EmitIR<IR::Opcode::VectorSignedMultiply16>(oaknut::CodeGenerator& code, EmitContext& ctx, IR::Inst* inst) {
-    (void)code;
-    (void)ctx;
-    (void)inst;
-    UNREACHABLE();
+    EmitVectorMultiplyFull<16, true>(code, ctx, inst);
 }
 
 template<>
 void EmitIR<IR::Opcode::VectorSignedMultiply32>(oaknut::CodeGenerator& code, EmitContext& ctx, IR::Inst* inst) {
-    (void)code;
-    (void)ctx;
-    (void)inst;
-    UNREACHABLE();
+    EmitVectorMultiplyFull<32, true>(code, ctx, inst);
 }
 
 template<>
@@ -1777,18 +1881,12 @@ void EmitIR<IR::Opcode::VectorUnsignedAbsoluteDifference32>(oaknut::CodeGenerato
 
 template<>
 void EmitIR<IR::Opcode::VectorUnsignedMultiply16>(oaknut::CodeGenerator& code, EmitContext& ctx, IR::Inst* inst) {
-    (void)code;
-    (void)ctx;
-    (void)inst;
-    UNREACHABLE();
+    EmitVectorMultiplyFull<16, false>(code, ctx, inst);
 }
 
 template<>
 void EmitIR<IR::Opcode::VectorUnsignedMultiply32>(oaknut::CodeGenerator& code, EmitContext& ctx, IR::Inst* inst) {
-    (void)code;
-    (void)ctx;
-    (void)inst;
-    UNREACHABLE();
+    EmitVectorMultiplyFull<32, false>(code, ctx, inst);
 }
 
 template<>

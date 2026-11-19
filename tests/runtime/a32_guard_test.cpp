@@ -1,6 +1,7 @@
 #include <doctest/doctest.h>
 #include "core/address_space.h"
 #include "core/low_address_space.h"
+#include "core/process.h"
 #include "cpu/a32_backend.h"
 #include "platform/low_memory.h"
 #include "platform/memory.h"
@@ -42,6 +43,8 @@ TEST_CASE("A32 occupied wrap guard preserves host memory and keeps fastmem throu
   REQUIRE(reserve_foreign_guard(guard));
   REQUIRE(platform::commit(guard, 65536, kProtRead | kProtWrite));
   *g2h<std::uint64_t>(guard) = canary;
+  // An A32 process: the engine choice (native A64 or translation) follows it.
+  process_config().abi = "armeabi-v7a";
   auto& as = AddressSpace::get();
   REQUIRE_NOTHROW(as.initialize(GuestIsa::a32));
   CHECK_FALSE(platform::reserve_low_memory_guard());

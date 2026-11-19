@@ -6,7 +6,15 @@ if(POLICY CMP0168)
   endif()
   cmake_policy(SET CMP0168 "${CMAKE_POLICY_DEFAULT_CMP0168}")
 endif()
-project(Venture VERSION 0.2.5 LANGUAGES C CXX)
+project(Venture VERSION 0.3.0 LANGUAGES C CXX)
+# A pre-release label ("alpha.1" makes 0.3.0-alpha.1). It shows in the launcher and
+# its update check; packages keep the plain numbers, which their formats need.
+set(VENTURE_VERSION_SUFFIX "alpha.1")
+if(VENTURE_VERSION_SUFFIX)
+  set(VENTURE_VERSION_FULL "${PROJECT_VERSION}-${VENTURE_VERSION_SUFFIX}")
+else()
+  set(VENTURE_VERSION_FULL "${PROJECT_VERSION}")
+endif()
 # All owned generators share this interpreter and its imported target.
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
 
@@ -15,6 +23,9 @@ option(VENTURE_BUILD_RUNTIME "Build the game runtime" ON)
 option(VENTURE_BUILD_TESTS "Build tests" ON)
 option(VENTURE_INSTALLED_GAME_TESTS "Register optional tests that scan installed games" OFF)
 option(VENTURE_BUILD_ANGLE_SMOKE "Build the native ANGLE Vulkan callback/render smoke test" OFF)
+# Android only: just the libraries installed games get (src/android_game), for
+# the APK's 32-bit (armeabi-v7a) sub-build.
+option(VENTURE_ANDROID_GAME_LIBRARIES "Build only the Android game libraries" OFF)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -51,7 +62,7 @@ include(cmake/ProbeCache.cmake)
 include(cmake/Dependencies.cmake)
 
 add_subdirectory(src/common)
-if(VENTURE_BUILD_RUNTIME OR VENTURE_BUILD_TESTS)
+if(VENTURE_BUILD_RUNTIME OR VENTURE_BUILD_TESTS OR VENTURE_BUILD_LAUNCHER OR VENTURE_ANDROID_GAME_LIBRARIES)
   add_subdirectory(src/runtime/hle/ovrplatform)
 endif()
 if(VENTURE_BUILD_RUNTIME)
@@ -59,6 +70,19 @@ if(VENTURE_BUILD_RUNTIME)
 endif()
 if(VENTURE_BUILD_LAUNCHER)
   add_subdirectory(src/launcher)
+endif()
+# The Quest compatibility OpenXR layer: shipped in the Android APK, built on
+# desktop hosts for its tests against the mock runtime.
+if(ANDROID OR (VENTURE_BUILD_TESTS AND VENTURE_BUILD_RUNTIME))
+  add_subdirectory(src/quest_layer)
+endif()
+# The one Venture APK for Android headsets: the launcher plus the pieces
+# installed games get (docs/design/native-headsets.md, section 5).
+if(ANDROID AND (VENTURE_BUILD_LAUNCHER OR VENTURE_ANDROID_GAME_LIBRARIES))
+  add_subdirectory(src/android_game)
+endif()
+if(ANDROID AND VENTURE_BUILD_LAUNCHER)
+  add_subdirectory(src/android_app)
 endif()
 if(VENTURE_BUILD_TESTS)
   enable_testing()

@@ -13,7 +13,8 @@ namespace {
 // android.R.attr resource IDs: shrunk APKs may drop attribute names and keep
 // only these, through the XML resource map.
 constexpr std::uint32_t kLabel = 0x01010001, kIcon = 0x01010002, kBanner = 0x0101031f, kVersionCode = 0x0101021b, kVersionName = 0x0101021c,
-                        kVersionCodeMajor = 0x01010576, kName = 0x01010003, kRequired = 0x0101028e;
+                        kVersionCodeMajor = 0x01010576, kName = 0x01010003, kRequired = 0x0101028e,
+                        kMinSdkVersion = 0x0101020c, kTargetSdkVersion = 0x01010270;
 constexpr std::uint64_t kTableLimit = 64u << 20;
 constexpr std::uint8_t kReference = 0x01, kString = 0x03, kIntDec = 0x10, kIntHex = 0x11, kBoolean = 0x12;
 
@@ -118,7 +119,9 @@ Manifest parse_manifest(std::span<const std::uint8_t> xml) {
   auto string = [&](std::uint32_t index) { return pool.get(index); };
   Manifest m;
   std::int64_t major = 0;
-  int depth = 0;
+  std::vector<std::string> tags;  // open elements, outermost first
+  std::optional<Manifest::LaunchFilter> filter;  // the open <intent-filter> of an activity
+  bool filter_main = false;
   for (std::size_t at = 8; at < end;) {
     const auto type = r.u16(at), header = r.u16(at + 2);
     const auto size = r.u32(at + 4);
@@ -128,18 +131,29 @@ Manifest parse_manifest(std::span<const std::uint8_t> xml) {
     } else if (type == 0x0180) {  // resource map: attribute name index -> resource ID
       for (std::size_t i = header; i + 4 <= size; i += 4) resource_ids.push_back(r.u32(at + i));
     } else if (type == 0x0102) {  // element start
-      ++depth;
       if (!pool.strings || size - header < 20) throw std::runtime_error("The APK manifest is malformed.");
       const auto ext = at + header;
       const auto tag = string(r.u32(ext + 4));
+      const std::string parent = tags.empty() ? std::string() : tags.back();
+      tags.push_back(tag);
+      const auto depth = tags.size();
       const auto start = r.u16(ext + 8), stride = r.u16(ext + 10), count = r.u16(ext + 12);
       if (start < 20 || stride < 20 || start > size - header || count > (size - header - start) / stride)
         throw std::runtime_error("The APK manifest is malformed.");
       const bool manifest = depth == 1 && tag == "manifest", application = depth == 2 && tag == "application";
       const bool feature = depth == 2 && tag == "uses-feature";
-      std::string feature_name;
+      const bool sdk = depth == 2 && tag == "uses-sdk";
+      const bool native_library = depth == 3 && parent == "application" && tag == "uses-native-library";
+      const bool intent_filter = depth == 4 && tag == "intent-filter" && (parent == "activity" || parent == "activity-alias");
+      const bool filter_entry = depth == 5 && filter && (tag == "action" || tag == "category");
+      if (intent_filter) {
+        filter = Manifest::LaunchFilter{.alias = parent == "activity-alias"};
+        filter_main = false;
+      }
+      std::string feature_name, entry_name;
       bool feature_required = true;  // android:required defaults to true
-      for (std::size_t i = 0; (manifest || application || feature) && i < count; ++i) {
+      const bool named_entry = native_library || filter_entry;
+      for (std::size_t i = 0; (manifest || application || feature || sdk || named_entry) && i < count; ++i) {
         const auto attr = ext + start + i * stride;
         const auto name_index = r.u32(attr + 4);
         const auto name = string(name_index);
@@ -170,11 +184,31 @@ Manifest parse_manifest(std::span<const std::uint8_t> xml) {
         } else if (feature && (id == kRequired || (!id && name == "required"))) {
           if (data_type == kBoolean) feature_required = data != 0;
           else if (const auto v = text(); !v.empty()) feature_required = v != "false";
+        } else if (sdk && (id == kMinSdkVersion || id == kTargetSdkVersion ||
+                           (!id && (name == "minSdkVersion" || name == "targetSdkVersion")))) {
+          // A preview SDK is written as its code name; it counts as unknown here.
+          std::int32_t level = 0;
+          if (integer) level = std::int32_t(data);
+          else if (const auto v = text(); !v.empty() && v.size() < 9 && digits(v)) level = std::stoi(v);
+          (id == kMinSdkVersion || (!id && name == "minSdkVersion") ? m.min_sdk : m.target_sdk) = level;
+        } else if (named_entry && (id == kName || (!id && name == "name"))) {
+          entry_name = text();
         }
       }
       if (feature && feature_required && !feature_name.empty()) m.required_features.push_back(feature_name);
+      if (native_library && !entry_name.empty()) m.native_libraries.push_back(entry_name);
+      if (filter_entry && tag == "action" && entry_name == "android.intent.action.MAIN") filter_main = true;
+      if (filter_entry && tag == "category" && !entry_name.empty()) filter->categories.push_back(entry_name);
     } else if (type == 0x0103) {  // element end
-      --depth;
+      if (tags.empty()) {
+        at += size;
+        continue;  // unbalanced; the identity above never depended on balance
+      }
+      if (tags.size() == 4 && tags.back() == "intent-filter" && filter) {
+        if (filter_main) m.launch_filters.push_back(std::move(*filter));
+        filter.reset();
+      }
+      tags.pop_back();
     }
     at += size;
   }

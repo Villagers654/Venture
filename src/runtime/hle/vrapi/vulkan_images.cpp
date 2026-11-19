@@ -28,6 +28,8 @@ class VulkanImages final : public XrImages {
   XrImages *previous_;
   std::map<std::uint32_t, Image> images_;
   std::map<VkImage, bool> destinations_;
+  // Images created before the device had a usable graphics queue; initialized at bind.
+  std::vector<std::uint32_t> uninitialized_;
   std::uint32_t next_ = 1;
   VkQueue queue_{};
   VkQueue guest_queue_{};
@@ -64,13 +66,19 @@ class VulkanImages final : public XrImages {
   void release(Image &image) {
     if (image.image) {
       vulkan::forget_image(image.image);
+      vulkan::untrack_layouts(image.image);
       vk<PFN_vkDestroyImage>("vkDestroyImage")(device(), image.image, nullptr);
     }
     if (image.memory) vk<PFN_vkFreeMemory>("vkFreeMemory")(device(), image.memory, nullptr);
     image = {};
   }
   void barrier(VkImage image, VkImageLayout before, VkImageLayout after,
-               const ImageDesc &desc) {
+               const ImageDesc &desc, VkCommandBuffer command = VK_NULL_HANDLE) {
+    const VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, desc.mip_count, 0, desc.layers * desc.face_count};
+    barrier(image, before, after, range, command);
+  }
+  void barrier(VkImage image, VkImageLayout before, VkImageLayout after,
+               const VkImageSubresourceRange &range, VkCommandBuffer command = VK_NULL_HANDLE) {
     VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
     b.oldLayout = before; b.newLayout = after;
     b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
@@ -78,11 +86,111 @@ class VulkanImages final : public XrImages {
     b.srcAccessMask = before == VK_IMAGE_LAYOUT_UNDEFINED ? 0
         : VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
     b.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
-    b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, desc.mip_count, 0,
-                          desc.layers * desc.face_count};
+    b.subresourceRange = range;
     vk<PFN_vkCmdPipelineBarrier>("vkCmdPipelineBarrier")(
-        command_, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+        command ? command : command_, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
         0, 0, nullptr, 0, nullptr, 1, &b);
+  }
+  // A new eye image starts cleared to transparent black in the layout VrApi
+  // hands it out in, SHADER_READ_ONLY_OPTIMAL: the guest's first barrier and
+  // every eye copy name that as the old layout, even for an image the guest has
+  // not drawn yet (a layer submitted before its first render). Left UNDEFINED,
+  // that transition is undefined behaviour; on hardware with compression
+  // metadata it reads metadata that was never initialized. Recorded on a
+  // graphics queue of the guest's device and waited for, once per ring; with
+  // none known yet (VK_ERROR_FEATURE_NOT_PRESENT), at bind.
+  VkResult initialize(std::span<const std::uint32_t> names) {
+    std::optional<vulkan::InternalQueue> queue;
+    std::uint32_t family = 0;
+    if (binding_) {
+      queue = vulkan::InternalQueue{queue_, binding_->submission_mutex};
+      family = binding_->family;
+    } else {
+      queue = vulkan::internal_queue(device());
+      if (!queue) return VK_ERROR_FEATURE_NOT_PRESENT;
+      auto binding = vulkan::queue_binding(queue->queue);
+      if (!binding) return VK_ERROR_FEATURE_NOT_PRESENT;
+      family = binding->family;
+    }
+    std::uint32_t count{};
+    auto query = physical_vk<PFN_vkGetPhysicalDeviceQueueFamilyProperties>("vkGetPhysicalDeviceQueueFamilyProperties");
+    query(physical(), &count, nullptr);
+    std::vector<VkQueueFamilyProperties> families(count);
+    query(physical(), &count, families.data());
+    if (family >= count || !(families[family].queueFlags & VK_QUEUE_GRAPHICS_BIT))
+      return VK_ERROR_FEATURE_NOT_PRESENT;
+    VkCommandPool pool{};
+    VkCommandBuffer command{};
+    VkFence fence{};
+    VkCommandPoolCreateInfo pi{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
+    pi.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
+    pi.queueFamilyIndex = family;
+    auto r = vk<PFN_vkCreateCommandPool>("vkCreateCommandPool")(device(), &pi, nullptr, &pool);
+    VkCommandBufferAllocateInfo ai{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO, nullptr, pool,
+                                   VK_COMMAND_BUFFER_LEVEL_PRIMARY, 1};
+    if (r == VK_SUCCESS) r = vk<PFN_vkAllocateCommandBuffers>("vkAllocateCommandBuffers")(device(), &ai, &command);
+    VkFenceCreateInfo fi{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+    if (r == VK_SUCCESS) r = vk<PFN_vkCreateFence>("vkCreateFence")(device(), &fi, nullptr, &fence);
+    VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+    bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    if (r == VK_SUCCESS) r = vk<PFN_vkBeginCommandBuffer>("vkBeginCommandBuffer")(command, &bi);
+    if (r == VK_SUCCESS) {
+      const VkClearColorValue black{};
+      for (auto name : names) {
+        auto it = images_.find(name);
+        if (it == images_.end()) continue;
+        // One the guest already transitioned (rendered before VrApi bound its queue) keeps its contents.
+        const auto layouts = vulkan::tracked_layouts(it->second.image);
+        if (std::any_of(layouts.begin(), layouts.end(), [](auto l) { return l != VK_IMAGE_LAYOUT_UNDEFINED; }))
+          continue;
+        const auto &desc = it->second.desc;
+        const VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, desc.mip_count, 0,
+                                            desc.layers * desc.face_count};
+        barrier(it->second.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, desc, command);
+        vk<PFN_vkCmdClearColorImage>("vkCmdClearColorImage")(
+            command, it->second.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &black, 1, &range);
+        barrier(it->second.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                desc, command);
+      }
+      r = vk<PFN_vkEndCommandBuffer>("vkEndCommandBuffer")(command);
+    }
+    if (r == VK_SUCCESS) {
+      VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+      submit.commandBufferCount = 1; submit.pCommandBuffers = &command;
+      std::lock_guard queue_lock(*queue->mutex);
+      r = vk<PFN_vkQueueSubmit>("vkQueueSubmit")(queue->queue, 1, &submit, fence);
+    }
+    if (r == VK_SUCCESS)
+      r = vk<PFN_vkWaitForFences>("vkWaitForFences")(device(), 1, &fence, VK_TRUE,
+                                                     std::numeric_limits<std::uint64_t>::max());
+    if (r == VK_SUCCESS)
+      for (auto name : names)
+        if (auto it = images_.find(name); it != images_.end()) {
+          const auto layouts = vulkan::tracked_layouts(it->second.image);
+          if (std::all_of(layouts.begin(), layouts.end(), [](auto l) { return l == VK_IMAGE_LAYOUT_UNDEFINED; }))
+            vulkan::track_layouts(it->second.image, it->second.desc.mip_count,
+                                  it->second.desc.layers * it->second.desc.face_count,
+                                  VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        }
+    if (fence) vk<PFN_vkDestroyFence>("vkDestroyFence")(device(), fence, nullptr);
+    if (pool) vk<PFN_vkDestroyCommandPool>("vkDestroyCommandPool")(device(), pool, nullptr);
+    return r;
+  }
+  // The source's subresources grouped by current layout: one range for the
+  // whole image when the guest left it in one layout, else one per subresource.
+  std::vector<std::pair<VkImageSubresourceRange, VkImageLayout>> source_ranges(VkImage source,
+                                                                               const ImageDesc &desc) const {
+    const auto layers = desc.layers * desc.face_count;
+    auto layouts = vulkan::tracked_layouts(source);
+    if (layouts.size() != std::size_t(desc.mip_count) * layers)
+      layouts.assign(std::size_t(desc.mip_count) * layers, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    if (std::all_of(layouts.begin(), layouts.end(), [&](auto l) { return l == layouts.front(); }))
+      return {{{VK_IMAGE_ASPECT_COLOR_BIT, 0, desc.mip_count, 0, layers}, layouts.front()}};
+    std::vector<std::pair<VkImageSubresourceRange, VkImageLayout>> out;
+    for (std::uint32_t mip = 0; mip < desc.mip_count; ++mip)
+      for (std::uint32_t layer = 0; layer < layers; ++layer)
+        out.push_back({{VK_IMAGE_ASPECT_COLOR_BIT, mip, 1, layer, 1}, layouts[std::size_t(mip) * layers + layer]});
+    return out;
   }
 public:
   VulkanImages(abi::SystemVulkan system, XrImages *previous) : system_(system), previous_(previous) {}
@@ -182,6 +290,10 @@ public:
     }
     guest_queue_ = queue;
     queue_ = vulkan::native_queue(queue); binding_ = binding;
+    if (!uninitialized_.empty()) {
+      if (auto r = initialize(uninitialized_); r != VK_SUCCESS) error("Initialize eye images", r);
+      uninitialized_.clear();
+    }
     out = {XR_TYPE_GRAPHICS_BINDING_VULKAN_KHR, nullptr, binding->instance,
            binding->physical, binding->device, binding->family, binding->index};
     return XR_SUCCESS;
@@ -250,12 +362,22 @@ public:
       }
       // The guest's framebuffers are clamped to the eye image's extent.
       vulkan::note_image(image.image, ci);
+      // The copy reads it in whatever layout the guest left it in.
+      vulkan::track_layouts(image.image, ci.mipLevels, ci.arrayLayers, VK_IMAGE_LAYOUT_UNDEFINED);
       if (venture::environment::getenv("VENTURE_TRACE_VULKAN"))
         log::info("vrapi-vulkan", "Eye source image {:#x} format={} flags={:#x} {}x{} layers={} mips={}",
                   reinterpret_cast<std::uintptr_t>(image.image), int(ci.format), ci.flags,
                   ci.extent.width, ci.extent.height, ci.arrayLayers, ci.mipLevels);
       name = next_++;
       images_.emplace(name, std::move(image));
+    }
+    if (XR_SUCCEEDED(result)) {
+      auto r = initialize(names);
+      if (r == VK_ERROR_FEATURE_NOT_PRESENT && !binding_) {
+        uninitialized_.insert(uninitialized_.end(), names.begin(), names.end());
+      } else if (r != VK_SUCCESS) {
+        result = error("Initialize eye images", r);
+      }
     }
     if (XR_FAILED(result)) { destroy_ring(names); std::fill(names.begin(), names.end(), 0); }
     return result;
@@ -268,6 +390,7 @@ public:
     for (auto name : names) if (auto it = images_.find(name); it != images_.end()) {
       release(it->second); images_.erase(it);
     }
+    std::erase_if(uninitialized_, [&](auto name) { return !images_.contains(name); });
   }
   bool owns_texture(std::uint32_t name, const ImageDesc &desc) const override {
     auto it = images_.find(name);
@@ -343,9 +466,13 @@ public:
       vk<PFN_vkCmdWriteTimestamp>("vkCmdWriteTimestamp")(command_, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, queries_,
                                                          2 * index);
     }
-    // VrApi's compositor samples guest color images; restore their readable
-    // layout after copying. XR requires color-attachment layout on release.
-    barrier(source, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, desc);
+    // The source is read in the layout the guest's accepted submissions left
+    // it in (VrApi does not fix one: a guest may submit an image still in
+    // COLOR_ATTACHMENT_OPTIMAL) and returned to it after the copy. XR requires
+    // color-attachment layout on release.
+    const auto source_layouts = source_ranges(source, desc);
+    for (const auto &[range, layout] : source_layouts)
+      barrier(source, layout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, range);
     barrier(destination, destinations_[destination] ? VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
         : VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, host_desc);
     // A substituted host format (e.g. SRGB for a host without 8-bit UNORM) needs a converting blit, not a copy.
@@ -378,7 +505,9 @@ public:
       vk<PFN_vkCmdCopyImage>("vkCmdCopyImage")(command_, source, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
           destination, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, copies.size(), copies.data());
     }
-    barrier(source, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, desc);
+    for (const auto &[range, layout] : source_layouts)
+      barrier(source, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+              layout == VK_IMAGE_LAYOUT_UNDEFINED ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : layout, range);
     barrier(destination, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, host_desc);
     if (queries_)
       vk<PFN_vkCmdWriteTimestamp>("vkCmdWriteTimestamp")(command_, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, queries_,

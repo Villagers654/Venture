@@ -11,6 +11,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <string>
 #include <thread>
 using namespace venture;
 using namespace venture::hle::libc;
@@ -32,6 +33,9 @@ TEST_CASE(
   REQUIRE(view > 0);
   auto readonly = call("mmap", {0, 8192, 1, 1, static_cast<std::uint64_t>(fd), 4096});
   REQUIRE(readonly > 0);
+  // Guest addresses even where the host OS places mappings higher (Linux arm64).
+  CHECK(static_cast<std::uint64_t>(view) < (1ull << 47));
+  CHECK(static_cast<std::uint64_t>(readonly) < (1ull << 47));
   CHECK(*g2h<std::uint32_t>(view) == original);
   *g2h<std::uint32_t>(view) = changed;
   CHECK(*g2h<std::uint32_t>(readonly) == changed);
@@ -63,6 +67,34 @@ TEST_CASE(
   CHECK(call("munmap", {static_cast<GuestAddr>(readonly), 8192}) == 0);
   CHECK(call("close", {static_cast<std::uint64_t>(fd)}) == 0);
   CHECK(call("unlink", {h2g(path.c_str())}) == 0);
+}
+
+// Mod loaders and allocators (Scotland2 for Beat Saber) query and set these
+// options at startup; a Quest kernel accepts them, so EINVAL is a divergence.
+TEST_CASE("libc B: prctl accepts the THP and anonymous VMA name options a Quest kernel supports") {
+  Thread thread;
+  constexpr std::uint64_t set_thp = 41, get_thp = 42, set_vma = 0x53564d41;
+  CHECK(call("prctl", {get_thp, 0, 0, 0, 0}) == 0);
+  CHECK(call("prctl", {set_thp, 1, 0, 0, 0}) == 0);
+  CHECK(call("prctl", {get_thp, 0, 0, 0, 0}) == 1);
+  CHECK(call("prctl", {set_thp, 0, 0, 0, 0}) == 0);
+  CHECK(call("prctl", {get_thp, 0, 0, 0, 0}) == 0);
+  CHECK(call("prctl", {set_thp, 1, 1, 0, 0}) == -1);
+  CHECK(*thread.thread.errno_location() == err::einval);
+  CHECK(call("prctl", {get_thp, 1, 0, 0, 0}) == -1);
+
+  const char name[] = "scudo:primary";
+  CHECK(call("prctl", {set_vma, 0, 0x7000, 8192, h2g(name)}) == 0);
+  CHECK(call("prctl", {set_vma, 0, 0x7000, 8192, 0}) == 0); // clears
+  CHECK(call("prctl", {set_vma, 0, 0x7001, 8192, h2g(name)}) == -1); // unaligned start
+  CHECK(*thread.thread.errno_location() == err::einval);
+  CHECK(call("prctl", {set_vma, 1, 0x7000, 8192, h2g(name)}) == -1); // unknown sub-option
+  const char bracket[] = "[heap]";
+  CHECK(call("prctl", {set_vma, 0, 0x7000, 8192, h2g(bracket)}) == -1);
+  const std::string longest(79, 'a'), too_long(80, 'a');
+  CHECK(call("prctl", {set_vma, 0, 0x7000, 8192, h2g(longest.c_str())}) == 0);
+  CHECK(call("prctl", {set_vma, 0, 0x7000, 8192, h2g(too_long.c_str())}) == -1);
+  CHECK(call("prctl", {12345, 0, 0, 0, 0}) == -1); // still unsupported
 }
 
 TEST_CASE("libc B: guest stat and dirent layouts") {

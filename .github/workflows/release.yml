@@ -28,9 +28,24 @@ jobs:
     with:
       test: true
       package: true
+  linux-arm64:
+    # The Steam Frame and other arm64 Linux devices (docs/design/native-headsets.md).
+    if: github.repository == 'Villagers654/Venture'
+    uses: ./.github/workflows/linux-arm64.yml
+    with:
+      test: true
+      package: true
+  android:
+    if: github.repository == 'Villagers654/Venture'
+    uses: ./.github/workflows/android.yml
+    with:
+      release: true
+    secrets:
+      VENTURE_APK_KEYSTORE_BASE64: ${{ secrets.VENTURE_APK_KEYSTORE_BASE64 }}
+      VENTURE_APK_KEYSTORE_PASS: ${{ secrets.VENTURE_APK_KEYSTORE_PASS }}
 
   publish:
-    needs: [windows, linux]
+    needs: [windows, linux, linux-arm64, android]
     runs-on: ubuntu-24.04
     permissions:
       contents: write

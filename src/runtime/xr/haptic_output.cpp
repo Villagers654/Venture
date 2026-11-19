@@ -1,4 +1,5 @@
 #include "xr/haptic_output.h"
+#include "xr/bindings.h"
 #include "xr/host_xr.h"
 #include "core/av_telemetry.h"
 #include <cmath>
@@ -99,6 +100,35 @@ bool haptic_suggested(const XrHapticActionInfo &info) {
   if (wanted == suggested.end()) return false;
   return info.subactionPath ? wanted->second.contains(path_name(info.subactionPath)) : !wanted->second.empty();
 }
+namespace {
+// One hand's scale: the controller the host reports there (cached once known, as above).
+float hand_scale(XrSession session, XrPath hand) {
+  XrPath profile = XR_NULL_PATH;
+  {
+    std::lock_guard lock(cache_mutex);
+    if (auto it = profiles.find({session, hand}); it != profiles.end()) profile = it->second;
+  }
+  if (!profile) {
+    XrInteractionProfileState state{XR_TYPE_INTERACTION_PROFILE_STATE};
+    if (XR_FAILED(::xrGetCurrentInteractionProfile(session, hand, &state)) || !state.interactionProfile) return 1;
+    profile = state.interactionProfile;
+    std::lock_guard lock(cache_mutex);
+    profiles.emplace(std::pair{session, hand}, profile);
+  }
+  const auto resolved = resolved_controls(path_name(profile));
+  if (!resolved) return 1;
+  return controls::vibration_scale(resolved->tuning[path_name(hand) == "/user/hand/right" ? 1 : 0]);
+}
+XrPath hand_path(int hand) {
+  XrPath path = XR_NULL_PATH;
+  ::xrStringToPath(host_xr().instance, hand ? "/user/hand/right" : "/user/hand/left", &path);
+  return path;
+}
+}  // namespace
+float vibration_scale(XrSession session, const XrHapticActionInfo &info) {
+  if (info.subactionPath) return hand_scale(session, info.subactionPath);
+  return std::max(hand_scale(session, hand_path(0)), hand_scale(session, hand_path(1)));
+}
 void clear_haptic_bindings(XrSession session) {
   std::lock_guard lock(cache_mutex);
   std::erase_if(cache, [session](auto &entry) { return entry.first.first == session; });
@@ -115,7 +145,7 @@ void haptic_event(std::string_view api, XrSession session, const XrHapticActionI
     {"duration_ns", duration}, {"frequency", frequency}, {"host_call", call},
     {"result", int(result)}, {"bound", safe && haptic_bound(session, info)},
     {"action_info_type", int(info.type)}, {"action_info_has_next", info.next != nullptr},
-    {"action", reinterpret_cast<std::uintptr_t>(info.action)}};
+    {"action", (std::uint64_t)info.action}};  // a pointer or, 32-bit, an integer
   if (safe) {
     auto per_hand = info;
     for (auto name : {"left", "right"}) {
@@ -160,6 +190,30 @@ XrResult apply_haptic(std::string_view api, XrSession session, const XrHapticAct
   // Negative and nonfinite amplitudes retain normal validation errors.
   auto translated = pulse;
   if (std::isfinite(translated.amplitude)) translated.amplitude = std::min(translated.amplitude, 1.f);
+  // The player's vibration (off, or a strength) on each hand's controller.
+  float scale = 1;
+  if (info.subactionPath) {
+    scale = hand_scale(session, info.subactionPath);
+  } else if (const float left = hand_scale(session, hand_path(0)), right = hand_scale(session, hand_path(1));
+             left != right) {
+    // The hands differ: each hand on its own, where the action has hands.
+    XrResult result = XR_SUCCESS;
+    bool split = true;
+    for (int hand = 0; hand < 2 && split; ++hand) {
+      auto one = info;
+      one.subactionPath = hand_path(hand);
+      if (!(hand ? right : left)) continue;
+      const auto r = apply_haptic(api, session, one, pulse, stage);
+      if (r == XR_ERROR_PATH_UNSUPPORTED) split = false;
+      else if (result == XR_SUCCESS) result = r;
+    }
+    if (split) return result;
+    scale = std::max(left, right);
+  } else {
+    scale = left;
+  }
+  if (scale <= 0 && std::isfinite(translated.amplitude) && translated.amplitude >= 0) return XR_SUCCESS;
+  if (std::isfinite(translated.amplitude) && translated.amplitude > 0) translated.amplitude *= scale;
   auto result = ::xrApplyHapticFeedback(session, &info, reinterpret_cast<const XrHapticBaseHeader *>(&translated));
   if (av::enabled()) {
     nlohmann::json fields{{"payload_type", int(pulse.type)}, {"has_next", pulse.next != nullptr}, {"stage", stage}};

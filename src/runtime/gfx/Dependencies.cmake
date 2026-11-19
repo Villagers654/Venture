@@ -28,7 +28,15 @@ FetchContent_Declare(venture_xr_headers
 set(ASTCENC_DECOMPRESSOR OFF CACHE BOOL "" FORCE)
 set(ASTCENC_CLI OFF CACHE BOOL "" FORCE)
 set(ASTCENC_UNITTEST OFF CACHE BOOL "" FORCE)
-set(ASTCENC_ISA_SSE2 ON CACHE BOOL "" FORCE)
+# The host's SIMD baseline: SSE2 on x64, NEON on AArch64 (VENTURE_ASTCENC is the library).
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64|ARM64")
+  set(ASTCENC_ISA_NEON ON CACHE BOOL "" FORCE)
+  set(ASTCENC_ISA_SSE2 OFF CACHE BOOL "" FORCE)
+  set(VENTURE_ASTCENC astcenc-neon-static CACHE INTERNAL "")
+else()
+  set(ASTCENC_ISA_SSE2 ON CACHE BOOL "" FORCE)
+  set(VENTURE_ASTCENC astcenc-sse2-static CACHE INTERNAL "")
+endif()
 FetchContent_Declare(venture_astcenc
   URL https://github.com/ARM-software/astc-encoder/archive/30aabb3f42406df45a910d8496f9bee17eeba9bb.tar.gz
   URL_HASH SHA256=4ae89d0d16435c761a65de3e96642a46b9a2e459152c72bcf1edcaf70ef7c2e8

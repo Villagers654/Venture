@@ -284,7 +284,7 @@ NativeArguments native_arguments(const Descriptor& d, const HostArguments& host,
     } else if (fp(t))
       value = simd < 8 ? host.fp[simd++] : host.stack[stack++];
     else
-      value = gp < 6 ? host.gp[gp++] : host.stack[stack++];
+      value = gp < host_gp_registers(abi) ? host.gp[gp++] : host.stack[stack++];
     value = narrow(t, value);
     if (fp(t) && out.doubles.size() < 8)
       out.doubles.push_back(std::bit_cast<double>(value));

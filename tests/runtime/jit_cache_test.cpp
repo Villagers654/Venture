@@ -5,6 +5,7 @@
 #include <dynarmic/interface/profiling.h>
 #include <dynarmic/interface/optimization_flags.h>
 #include <dynarmic/common/fp/op/FPRecipStepFused.h>
+#include <dynarmic/common/fp/op/FPRSqrtStepFused.h>
 #include <dynarmic/common/fp/op/FPRecipEstimate.h>
 #include <dynarmic/common/fp/fpsr.h>
 #include <dynarmic/common/fp/fpcr.h>
@@ -776,7 +777,9 @@ TEST_CASE("A64 conditional exits follow successor branches that read no flags") 
   }
 }
 
-TEST_CASE("A64 FRECPS infinity-times-zero lanes match the Arm reference") {
+// Infinity times zero is not a NaN case: FRECPS returns 2.0 and FRSQRTS 1.5, so
+// InaccurateNaN (which only relaxes NaN sign and payload) must give them too.
+TEST_CASE("A64 FRECPS and FRSQRTS infinity-times-zero lanes match the Arm reference") {
   struct Callbacks final : A64CacheCallbacks {
     std::uint32_t instruction = 0;
     std::optional<std::uint32_t> MemoryReadCode(Addr p) override {
@@ -799,16 +802,35 @@ TEST_CASE("A64 FRECPS infinity-times-zero lanes match the Arm reference") {
     if ((f & 0x7f800000) == 0) return sign | 1; // denormal
     return sign | (std::uint64_t((f >> 23 & 0xff) - 127 + 1023) << 52) | std::uint64_t(f & 0x7fffff) << 29;
   };
+  const auto is_nan = [](std::uint64_t v, bool doubles) {
+    return doubles ? (v & 0x7fffffffffffffffull) > 0x7ff0000000000000ull : (v & 0x7fffffffu) > 0x7f800000u;
+  };
+  for (const bool inaccurate_nan : {false, true})
   for (const std::uint32_t fpcr : {0u, 1u << 24}) {
+    CAPTURE(inaccurate_nan);
     CAPTURE(fpcr);
-    for (const std::uint32_t instruction : {0x5e21fc00u, 0x5e61fc00u, 0x4e21fc00u, 0x4e61fc00u}) {
+    // FRECPS and FRSQRTS: scalar S and D, vector 4S and 2D.
+    for (const std::uint32_t instruction : {0x5e21fc00u, 0x5e61fc00u, 0x4e21fc00u, 0x4e61fc00u,
+                                            0x5ea1fc00u, 0x5ee1fc00u, 0x4ea1fc00u, 0x4ee1fc00u}) {
       CAPTURE(instruction);
       Callbacks cb; cb.instruction = instruction;
       Dynarmic::A64::UserConfig config{}; config.callbacks = &cb;
       config.enable_cycle_counting = false;
+      if (inaccurate_nan) {
+        config.unsafe_optimizations = true;
+        config.optimizations |= Dynarmic::OptimizationFlag::Unsafe_InaccurateNaN;
+      }
       Dynarmic::A64::Jit jit(config); cb.jit = &jit;
-      // Bit 28 is set for scalar (0x5e...) and clear for vector (0x4e...) encodings.
-      const bool doubles = instruction & 0x00400000, vector = !(instruction & 0x10000000);
+      // Bit 28 is set for scalar (0x5e...) and clear for vector (0x4e...) encodings; bit 23 selects FRSQRTS.
+      const bool doubles = instruction & 0x00400000, vector = !(instruction & 0x10000000), rsqrt = instruction & 0x00800000;
+      const auto reference64 = [&](std::uint64_t x, std::uint64_t y, Dynarmic::FP::FPSR& status) {
+        return rsqrt ? Dynarmic::FP::FPRSqrtStepFused<std::uint64_t>(x, y, Dynarmic::FP::FPCR{fpcr}, status)
+                     : Dynarmic::FP::FPRecipStepFused<std::uint64_t>(x, y, Dynarmic::FP::FPCR{fpcr}, status);
+      };
+      const auto reference32 = [&](std::uint32_t x, std::uint32_t y, Dynarmic::FP::FPSR& status) {
+        return rsqrt ? Dynarmic::FP::FPRSqrtStepFused<std::uint32_t>(x, y, Dynarmic::FP::FPCR{fpcr}, status)
+                     : Dynarmic::FP::FPRecipStepFused<std::uint32_t>(x, y, Dynarmic::FP::FPCR{fpcr}, status);
+      };
       const std::size_t lanes = vector ? (doubles ? 2 : 4) : 1;
       for (std::size_t first = 0; first < singles.size(); first += lanes) {
         std::array<std::uint64_t, 2> a{}, b{}, expected{};
@@ -817,11 +839,11 @@ TEST_CASE("A64 FRECPS infinity-times-zero lanes match the Arm reference") {
           const auto [x, y] = singles[first + lane];
           if (doubles) {
             a[lane] = widen(x); b[lane] = widen(y);
-            expected[lane] = Dynarmic::FP::FPRecipStepFused<std::uint64_t>(a[lane], b[lane], Dynarmic::FP::FPCR{fpcr}, fpsr);
+            expected[lane] = reference64(a[lane], b[lane], fpsr);
           } else {
             const unsigned shift = 32 * (lane & 1);
             a[lane / 2] |= std::uint64_t(x) << shift; b[lane / 2] |= std::uint64_t(y) << shift;
-            expected[lane / 2] |= std::uint64_t(Dynarmic::FP::FPRecipStepFused<std::uint32_t>(x, y, Dynarmic::FP::FPCR{fpcr}, fpsr)) << shift;
+            expected[lane / 2] |= std::uint64_t(reference32(x, y, fpsr)) << shift;
           }
         }
         jit.SetFpcr(fpcr); jit.SetFpsr(0); jit.SetPC(0x5000);
@@ -832,11 +854,23 @@ TEST_CASE("A64 FRECPS infinity-times-zero lanes match the Arm reference") {
         // Infinity times zero raises no IOC (bit 0); only signalling NaN inputs do.
         // Under FZ, a flushed denormal sets IDC (bit 7) and, paired with an
         // infinity, still no IOC.
-        CHECK((jit.GetFpsr() & 0x81) == (fpsr.Value() & 0x81));
-        if (vector) {
-          CHECK(result[0] == expected[0]); CHECK(result[1] == expected[1]);
-        } else {
-          CHECK((result[0] & (doubles ? ~0ull : 0xffffffffull)) == expected[0]);
+        // InaccurateNaN may differ in NaN sign, payload and IOC only. FRSQRTS
+        // still leaves the host's Invalid from an infinity-zero pair in IOC.
+        if (!inaccurate_nan && !rsqrt) CHECK((jit.GetFpsr() & 0x81) == (fpsr.Value() & 0x81));
+        const std::size_t words = vector ? 2 : 1;
+        for (std::size_t w = 0; w < words; ++w) {
+          const std::uint64_t got = vector ? result[w] : result[0] & (doubles ? ~0ull : 0xffffffffull);
+          if (!inaccurate_nan) {
+            CHECK(got == expected[w]);
+          } else if (doubles) {
+            CHECK((is_nan(got, true) && is_nan(expected[w], true) || got == expected[w]));
+          } else {
+            for (unsigned shift : {0u, 32u}) {
+              if (!vector && shift) continue;
+              const std::uint64_t g = got >> shift & 0xffffffffu, e = expected[w] >> shift & 0xffffffffu;
+              CHECK((is_nan(g, false) && is_nan(e, false) || g == e));
+            }
+          }
         }
       }
     }

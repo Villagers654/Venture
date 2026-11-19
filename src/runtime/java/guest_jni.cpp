@@ -246,25 +246,43 @@ void trace_slow_call(JNIEnv* env, hle::CallContext& ctx, std::string_view name, 
 template <class F>
 void guard(hle::CallContext& ctx, F&& fn) {
   JNIEnv* env = nullptr;
+  jthrowable pending = nullptr;
   try {
     env = env_no_attach();
     if (!env || ctx.x(0) != thread_state().wrapper || !thread_state().wrapper)
       throw std::runtime_error("JNIEnv used on detached/wrong host thread");
     // JNI Design Overview, "Exception Handling": only exception inspection,
     // release/delete, monitor exit and local-frame operations may run while an
-    // exception is pending. Diagnose guest misuse before HotSpot aborts the host.
-    // https://docs.oracle.com/en/java/javase/21/docs/specs/jni/design.html
+    // exception is pending. https://docs.oracle.com/en/java/javase/21/docs/specs/jni/design.html
+    // Only CheckJNI aborts on other calls; release ART (retail Quest apps run
+    // without CheckJNI) performs them and the exception stays pending. Match
+    // that: set the exception aside so HotSpot never runs with it, make the
+    // call, and keep it pending afterwards unless the call threw its own (ART
+    // replaces a pending exception when it throws).
     const std::string_view name = ctx.info().name;
     const bool pending_safe = name.starts_with("Exception") || name.starts_with("Release") ||
         name == "DeleteLocalRef" || name == "DeleteGlobalRef" || name == "DeleteWeakGlobalRef" ||
         name == "MonitorExit" || name == "PushLocalFrame" || name == "PopLocalFrame";
     if (!pending_safe && env->ExceptionCheck()) {
-      log::error("jni", "guest called {} with a pending Java exception: {}", name, pending_exception(env));
-      env->ExceptionDescribe();
-      if (venture::environment::getenv("VENTURE_TRACE_THREADS")) signals::log_guest_threads("JNI call with a pending exception");
-      signals::deliver_synchronous(ctx.thread(), {signals::kSigAbrt, 0, ctx.cpu().pc()});
-      exit_guest_process(134);
+      static std::atomic<int> reported{0};
+      if (reported.fetch_add(1, std::memory_order_relaxed) < 64) {
+        log::warn("jni", "guest called {} with a pending Java exception (kept pending, as release ART does): {}",
+                  name, pending_exception(env));
+        if (venture::environment::getenv("VENTURE_TRACE_THREADS")) signals::log_guest_threads("JNI call with a pending exception");
+      }
+      pending = env->ExceptionOccurred();
+      env->ExceptionClear();
     }
+    struct Restore {
+      JNIEnv* env;
+      jthrowable& pending;
+      ~Restore() {
+        if (!pending) return;
+        if (!env->ExceptionCheck()) env->Throw(pending);
+        env->DeleteLocalRef(pending);
+        pending = nullptr;
+      }
+    } restore{env, pending};
     static const bool trace = venture::environment::getenv("VENTURE_TRACE_JNI") != nullptr;
     if (trace && name == "FindClass") log::info("jni-trace", "FindClass {}", g2h<const char>(ctx.x(1)));
     if (trace && (name == "GetMethodID" || name == "GetStaticMethodID" || name == "GetFieldID" || name == "GetStaticFieldID"))

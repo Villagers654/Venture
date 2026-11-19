@@ -26,6 +26,7 @@
 #include "dynarmic/backend/x64/emit_x64.h"
 #include "dynarmic/backend/x64/nzcv_util.h"
 #include "dynarmic/backend/x64/perf_map.h"
+#include "dynarmic/backend/code_stats.h"
 #include "dynarmic/interface/profiling.h"
 #include "dynarmic/backend/x64/stack_layout.h"
 #include "dynarmic/frontend/A32/a32_location_descriptor.h"
@@ -127,6 +128,7 @@ A32EmitX64::BlockDescriptor A32EmitX64::Emit(IR::Block& block) {
     // Start emitting.
     code.align(conf.block_alignment);
     const u8* const entrypoint = code.getCurr();
+    Backend::CodeStats::Recorder stats{false, A32::LocationDescriptor{block.Location()}.PC(), static_cast<u32>(block.CycleCount())};
     if (conf.profile_cookie)
         code.mov(code.dword[code.ABI_JIT_PTR + offsetof(A32JitState, profile_cookie)], conf.profile_cookie(ctx.Location().PC() | (ctx.Location().TFlag() ? 1u : 0u)));
     if (conf.profile_function_links) {
@@ -144,6 +146,7 @@ A32EmitX64::BlockDescriptor A32EmitX64::Emit(IR::Block& block) {
     }
 
     EmitCondPrelude(ctx);
+    stats.Add(Backend::CodeStats::Chunk::Prologue, entrypoint, code.getCurr());
     typedef void (EmitX64::*EmitHandlerFn)(EmitContext& context, IR::Inst* inst);
     constexpr EmitHandlerFn opcode_handlers[] = {
 #define OPCODE(name, type, ...) &EmitX64::Emit##name,
@@ -169,6 +172,7 @@ A32EmitX64::BlockDescriptor A32EmitX64::Emit(IR::Block& block) {
         code.EnsureMemoryCommitted();
         reg_alloc.SetCurrentInstruction(&inst);
         auto const opcode = inst.GetOpcode();
+        const u8* const op_start = code.getCurr();
         // Call the relevant Emit* member function.
         switch (opcode) {
 #define OPCODE(name, type, ...) case IR::Opcode::name: goto opcode_branch;
@@ -189,6 +193,7 @@ a32_branch:
         (this->*a32_handlers[size_t(opcode) - size_t(IR::Opcode::A32SetCheckBit)])(ctx, &inst);
 finish_this_inst:
         ctx.reg_alloc.EndOfAllocScope();
+        stats.Add(Backend::CodeStats::Chunk::Op, opcode, op_start, code.getCurr());
 #ifndef NDEBUG
         if (conf.very_verbose_debugging_output)
             EmitVerboseDebuggingOutput(reg_alloc);
@@ -197,6 +202,7 @@ finish_this_inst:
 
     reg_alloc.AssertNoMoreUses();
     code.EnsureMemoryCommitted();
+    const u8* const epilogue_start = code.getCurr();
 
     if (conf.enable_cycle_counting)
         EmitAddCycles(block.CycleCount());
@@ -204,16 +210,19 @@ finish_this_inst:
         code.mov(rbp, code.qword[rsp + ABI_SHADOW_SPACE + offsetof(StackLayout, abi_base_pointer)]);
     EmitTerminal(block.terminal, ctx.Location().SetSingleStepping(false), ctx.IsSingleStep());
     code.int3();
+    stats.Add(Backend::CodeStats::Chunk::Epilogue, epilogue_start, code.getCurr());
     // Venture: deferred handlers go to the cold region when there is one.
     const bool cold = code.HasColdRegion() && !ctx.deferred_emits.empty();
     if (cold)
         code.SwitchToColdCode();
+    const u8* const deferred_start = code.getCurr();
     for (auto& deferred_emit : ctx.deferred_emits) {
         code.EnsureMemoryCommitted();
         deferred_emit();
     }
     code.EnsureMemoryCommitted();
     code.int3();
+    stats.Add(Backend::CodeStats::Chunk::Deferred, deferred_start, code.getCurr());
     if (cold)
         code.SwitchToHotCode();
 

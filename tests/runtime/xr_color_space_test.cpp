@@ -1097,6 +1097,175 @@ TEST_CASE("XR eye chains past the reported eye size present through a host chain
   REQUIRE(g::xrDestroyInstance(instance) == XR_SUCCESS);
 }
 
+TEST_CASE("XR fields of view that contain the host's crop to it exactly") {
+  using venture::xr::crop_view_rect;
+  using venture::xr::fov_crop;
+  const auto rad = [](float degrees) { return degrees * 3.14159265358979f / 180; };
+  // Underdogs (Unity Symmetric Projection) on the Meta Horizon PC runtime: the
+  // host's left eye is 52/45 degrees out/in, 48 up and 50 down; the game renders 52/52/50/50.
+  const XrFovf host{rad(-52), rad(45), rad(48), rad(-50)};
+  const XrFovf symmetric{rad(-52), rad(52), rad(50), rad(-50)};
+  const auto crop = fov_crop(symmetric, host);
+  REQUIRE(crop);
+  CHECK(crop->left == doctest::Approx(0));
+  CHECK(crop->right == doctest::Approx((std::tan(rad(52)) - 1) / (2 * std::tan(rad(52)))).epsilon(1e-4));
+  CHECK(crop->up == doctest::Approx((std::tan(rad(50)) - std::tan(rad(48))) / (2 * std::tan(rad(50)))).epsilon(1e-4));
+  CHECK(crop->down == doctest::Approx(0));
+  // A Vulkan image has its up edge at row 0; a GLES image at its last row.
+  const auto right_pixels = std::int32_t(std::lround(2784 * crop->right));
+  const auto up_pixels = std::int32_t(std::lround(2536 * crop->up));
+  CHECK(right_pixels == 304);
+  CHECK(up_pixels == 86);
+  const auto vulkan = crop_view_rect({{0, 0}, {2784, 2536}}, *crop, true);
+  CHECK(vulkan.offset.x == 0);
+  CHECK(vulkan.extent.width == 2784 - right_pixels);
+  CHECK(vulkan.offset.y == up_pixels);
+  CHECK(vulkan.extent.height == 2536 - up_pixels);
+  const auto gles = crop_view_rect({{10, 20}, {2784, 2536}}, *crop, false);
+  CHECK(gles.offset.x == 10);
+  CHECK(gles.offset.y == 20);
+  CHECK(gles.extent.height == 2536 - up_pixels);
+  // The right eye mirrors it: the crop comes off its left side.
+  const auto right = fov_crop(symmetric, {rad(-45), rad(52), rad(48), rad(-50)});
+  REQUIRE(right);
+  CHECK(crop_view_rect({{0, 0}, {2784, 2536}}, *right, true).offset.x == right_pixels);
+  // Matching fields, and fields that do not contain the host's, are left alone.
+  CHECK_FALSE(fov_crop(host, host));
+  CHECK_FALSE(fov_crop(host, symmetric));
+  CHECK_FALSE(fov_crop({rad(-40), rad(40), rad(40), rad(-40)}, host));
+  CHECK_FALSE(fov_crop({0, 0, 0, 0}, host));
+}
+
+TEST_CASE("XR views wider than a fixed host field of view present through the crop that covers it") {
+  // The mock reports fovMutable false, as the Meta Horizon PC runtime does; such
+  // a host may compose with its own field of view whatever the game submits.
+  namespace g = venture::hle::openxr::guest;
+  const auto rad = [](float degrees) { return degrees * 3.14159265358979f / 180; };
+  struct Restore {
+    ~Restore() {
+      MockXrScript defaults{};
+      ventureMockXrSetScript(&defaults);
+    }
+  } restore;
+  MockXrScript script{};
+  script.view_fov = std::array{rad(-52), rad(45), rad(48), rad(-50)};
+  ventureMockXrSetScript(&script);
+  const char *names[]{"XR_KHR_vulkan_enable2"};
+  XrInstanceCreateInfo ci{XR_TYPE_INSTANCE_CREATE_INFO};
+  ci.applicationInfo.apiVersion = XR_MAKE_VERSION(1, 0, 0);
+  ci.enabledExtensionCount = 1;
+  ci.enabledExtensionNames = names;
+  XrInstance instance{};
+  REQUIRE(g::xrCreateInstance(&ci, &instance) == XR_SUCCESS);
+  auto &gpu = venture::gfx::gpu_device();
+  XrGraphicsBindingVulkanKHR binding{XR_TYPE_GRAPHICS_BINDING_VULKAN_KHR,
+      nullptr, gpu.instance, gpu.physical_device, gpu.device,
+      gpu.queue_family, gpu.queue_index};
+  XrSessionCreateInfo sc{XR_TYPE_SESSION_CREATE_INFO, &binding, 0, venture::xr::host_xr().system};
+  XrSession session{};
+  REQUIRE(g::xrCreateSession(instance, &sc, &session) == XR_SUCCESS);
+  XrReferenceSpaceCreateInfo reference{XR_TYPE_REFERENCE_SPACE_CREATE_INFO,
+      nullptr, XR_REFERENCE_SPACE_TYPE_LOCAL, {{0,0,0,1},{0,0,0}}};
+  XrSpace space{};
+  REQUIRE(g::xrCreateReferenceSpace(session, &reference, &space) == XR_SUCCESS);
+  XrEventDataBuffer event{XR_TYPE_EVENT_DATA_BUFFER};
+  while (g::xrPollEvent(instance, &event) == XR_SUCCESS) event = {XR_TYPE_EVENT_DATA_BUFFER};
+  XrSessionBeginInfo begin{XR_TYPE_SESSION_BEGIN_INFO, nullptr, XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO};
+  REQUIRE(g::xrBeginSession(session, &begin) == XR_SUCCESS);
+  XrSwapchainCreateInfo info{XR_TYPE_SWAPCHAIN_CREATE_INFO};
+  info.format = VK_FORMAT_R8G8B8A8_UNORM;
+  info.width = 400;
+  info.height = 300;
+  info.sampleCount = info.faceCount = info.mipCount = 1;
+  info.arraySize = 2;
+  info.usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT | XR_SWAPCHAIN_USAGE_TRANSFER_DST_BIT;
+  XrSwapchain eyes{};
+  REQUIRE(g::xrCreateSwapchain(session, &info, &eyes) == XR_SUCCESS);
+  struct Submitted {
+    std::array<XrSwapchainSubImage, 2> subimages{};
+    std::array<XrFovf, 2> fov{};
+  };
+  // Submits both eyes with the given fields; returns the host's rects and fields.
+  auto submit = [&](const XrFovf& left, const XrFovf& right) {
+    XrFrameState frame{XR_TYPE_FRAME_STATE};
+    REQUIRE(g::xrWaitFrame(session, nullptr, &frame) == XR_SUCCESS);
+    XrViewLocateInfo locate{XR_TYPE_VIEW_LOCATE_INFO, nullptr, XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO,
+                            frame.predictedDisplayTime, space};
+    XrViewState state{XR_TYPE_VIEW_STATE};
+    std::array<XrView, 2> located{XrView{XR_TYPE_VIEW}, XrView{XR_TYPE_VIEW}};
+    std::uint32_t count = 0;
+    REQUIRE(g::xrLocateViews(session, &locate, &state, 2, &count, located.data()) == XR_SUCCESS);
+    REQUIRE(g::xrBeginFrame(session, nullptr) == XR_SUCCESS);
+    std::uint32_t index{};
+    REQUIRE(g::xrAcquireSwapchainImage(eyes, nullptr, &index) == XR_SUCCESS);
+    XrSwapchainImageWaitInfo wait{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO, nullptr, XR_INFINITE_DURATION};
+    REQUIRE(g::xrWaitSwapchainImage(eyes, &wait) == XR_SUCCESS);
+    REQUIRE(g::xrReleaseSwapchainImage(eyes, nullptr) == XR_SUCCESS);
+    XrCompositionLayerProjectionView views[2]{};
+    for (std::uint32_t i = 0; i < 2; ++i) {
+      views[i] = {XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW};
+      views[i].pose = located[i].pose;
+      views[i].fov = i ? right : left;
+      views[i].subImage = {eyes, {{0, 0}, {400, 300}}, i};
+    }
+    XrCompositionLayerProjection projection{XR_TYPE_COMPOSITION_LAYER_PROJECTION, nullptr, 0, space, 2, views};
+    const auto* layer = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&projection);
+    XrFrameEndInfo end{XR_TYPE_FRAME_END_INFO, nullptr, frame.predictedDisplayTime,
+        XR_ENVIRONMENT_BLEND_MODE_OPAQUE, 1, &layer};
+    REQUIRE(g::xrEndFrame(session, &end) == XR_SUCCESS);
+    Submitted host;
+    REQUIRE(ventureMockXrLastSubImages(host.subimages.data(), 2) == 2);
+    REQUIRE(ventureMockXrLastProjectionFov(host.fov.data(), 2) == 2);
+    // The game's own views are unchanged.
+    CHECK(views[0].subImage.imageRect.extent.width == 400);
+    CHECK(views[0].fov.angleRight == left.angleRight);
+    return host;
+  };
+  const XrFovf host_fov{rad(-52), rad(45), rad(48), rad(-50)};
+  const XrFovf symmetric{rad(-52), rad(52), rad(50), rad(-50)};
+  const auto wide = submit(symmetric, symmetric);
+  const auto crop = venture::xr::fov_crop(symmetric, host_fov);
+  REQUIRE(crop);
+  const auto right_pixels = std::int32_t(std::lround(400 * crop->right));
+  const auto up_pixels = std::int32_t(std::lround(300 * crop->up));
+  CHECK(right_pixels > 0);
+  CHECK(up_pixels > 0);
+  for (std::uint32_t i = 0; i < 2; ++i) {
+    CAPTURE(i);
+    CHECK(wide.fov[i].angleLeft == doctest::Approx(host_fov.angleLeft));
+    CHECK(wide.fov[i].angleRight == doctest::Approx(host_fov.angleRight));
+    CHECK(wide.fov[i].angleUp == doctest::Approx(host_fov.angleUp));
+    CHECK(wide.fov[i].angleDown == doctest::Approx(host_fov.angleDown));
+    CHECK(wide.subimages[i].imageArrayIndex == i);
+    CHECK(wide.subimages[i].imageRect.offset.x == 0);
+    CHECK(wide.subimages[i].imageRect.extent.width == 400 - right_pixels);
+    CHECK(wide.subimages[i].imageRect.offset.y == up_pixels);
+    CHECK(wide.subimages[i].imageRect.extent.height == 300 - up_pixels);
+  }
+  // Views that match the host's, or are narrower, reach it as submitted.
+  const auto matching = submit(host_fov, host_fov);
+  CHECK(matching.subimages[0].imageRect.extent.width == 400);
+  CHECK(matching.subimages[0].imageRect.offset.y == 0);
+  const XrFovf narrow{rad(-40), rad(40), rad(40), rad(-40)};
+  const auto narrower = submit(narrow, narrow);
+  CHECK(narrower.subimages[1].imageRect.extent.width == 400);
+  CHECK(narrower.fov[1].angleLeft == doctest::Approx(narrow.angleLeft));
+  // Teardown: the parked host chain goes with the host session, which destroys
+  // its swapchains; no xrDestroySwapchain reaches the host for it (the Meta
+  // Horizon PC runtime called through null there when Underdogs quit).
+  const auto destroys = ventureMockXrStats().swapchain_destroys;
+  REQUIRE(g::xrDestroySwapchain(eyes) == XR_SUCCESS);
+  CHECK(ventureMockXrStats().live_swapchains == 1);
+  REQUIRE(g::xrRequestExitSession(session) == XR_SUCCESS);
+  while (g::xrPollEvent(instance, &event) == XR_SUCCESS) event = {XR_TYPE_EVENT_DATA_BUFFER};
+  REQUIRE(g::xrEndSession(session) == XR_SUCCESS);
+  REQUIRE(g::xrDestroySession(session) == XR_SUCCESS);
+  CHECK(ventureMockXrStats().swapchain_destroys == destroys);
+  CHECK(ventureMockXrStats().live_swapchains == 0);
+  CHECK(ventureMockXrStats().live_images == 0);
+  REQUIRE(g::xrDestroyInstance(instance) == XR_SUCCESS);
+}
+
 TEST_CASE("XR hosts reporting zero limits get Quest values and unclamped chains") {
   // SteamVR 2.18 with a Quest over Link reports a 0x0 swapchain maximum, no layers and
   // no tracking; Batman's eye chain once shrank to 1x1 and the headset went black.

@@ -12,12 +12,12 @@ venture_java_native_entry:
   movq %rdx, 40(%rsp)
   movq %r8, 48(%rsp)
   movq %r9, 56(%rsp)
-  movq %xmm0, 80(%rsp)
-  movq %xmm1, 88(%rsp)
-  movq %xmm2, 96(%rsp)
-  movq %xmm3, 104(%rsp)
+  movq %xmm0, 96(%rsp)
+  movq %xmm1, 104(%rsp)
+  movq %xmm2, 112(%rsp)
+  movq %xmm3, 120(%rsp)
   leaq 208(%rsp), %rax
-  movq %rax, 144(%rsp)
+  movq %rax, 160(%rsp)
   movq %r10, %rcx
   leaq 32(%rsp), %rdx
   call venture_java_native_dispatch

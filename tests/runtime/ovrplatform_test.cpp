@@ -321,6 +321,26 @@ TEST_CASE("Platform loader copy reports itself uninitialized until its own initi
   CHECK(arena.live == 0);
 }
 
+TEST_CASE("Platform initialization options are accepted and the platform starts") {
+  // Theater Elsewhere (Quill player) passes options to
+  // ovr_PlatformInitializeAndroidWithOptions; refusing them left the platform
+  // down and its entitlement check failed at start (#164).
+  optest::Arena arena;
+  Session session(optest::app(), std::make_shared<optest::FakeProvider>(), arena.memory());
+  auto slot = make_library(session);
+  const auto app = optest::app().app_id;
+  const std::string key = "disable_p2p_networking";
+  KeyValuePair64 pairs[1]{};
+  pairs[0].key = h2g(key.c_str());
+  pairs[0].type = 1;
+  pairs[0].int_value = 1;
+  CHECK(call_export(*slot, "ovr_IsPlatformInitialized") == 0);
+  CHECK(call_export(*slot, "ovr_PlatformInitializeAndroidWithOptions",
+                    {h2g(app.c_str()), 0, 0, h2g(pairs), 1}) == 0);
+  CHECK(call_export(*slot, "ovr_IsPlatformInitialized") == 1);
+  CHECK(arena.live == 0);
+}
+
 TEST_CASE("Platform voice setters and peer queries describe a device without connections") {
   // Space Pirate Trainer DX applies connection options during startup; the
   // guest loader aborts the process for any VoIP export it receives instead.
@@ -337,6 +357,76 @@ TEST_CASE("Platform voice setters and peer queries describe a device without con
   CHECK(optest::invoke(session, "ovr_Voip_GetLocalBitrate", {42}) == 0);
   CHECK(optest::invoke(session, "ovr_Voip_GetSyncTimestampDifference", {7}) == 0);
   CHECK(optest::invoke(session, "ovr_PopMessage") == 0);
+  CHECK(arena.live == 0);
+}
+
+TEST_CASE("Platform system VoIP is unavailable and its state model reads like any other") {
+  // UE5's Meta platform plugin (Artheon, Nope) imports these at load.
+  optest::Arena arena;
+  Session session(optest::app(), std::make_shared<optest::FakeProvider>(), arena.memory());
+  REQUIRE(session.initialize(optest::app().app_id) == InitResult::success);
+  CHECK(optest::invoke(session, "ovr_Voip_GetSystemVoipStatus") == 1);  // Unavailable
+  CHECK(optest::invoke(session, "ovr_Voip_GetSystemVoipMicrophoneMuted") == 0);  // Unknown
+  optest::invoke(session, "ovr_Voip_SetSystemVoipMicrophoneMuted", {1});
+  optest::invoke(session, "ovr_Voip_SetSystemVoipPassthrough", {1});
+  CHECK(optest::invoke(session, "ovr_Voip_GetSystemVoipMicrophoneMuted") == 0);
+  CHECK(optest::invoke(session, "ovr_PopMessage") == 0);
+  // Notification_Voip_SystemVoipState carries a SystemVoipState model.
+  session.notify(0x58D254A5, {"SystemVoipState", {{"MicrophoneMuted", std::uint32_t{2}},
+                                                  {"Status", std::uint32_t{1}}}});
+  const auto message = optest::wait_pop(session);
+  const auto state = session.get(message, "ovr_Message_GetSystemVoipState");
+  REQUIRE(state != 0);
+  CHECK(optest::invoke(session, "ovr_SystemVoipState_GetMicrophoneMuted", {state}) == 2);
+  CHECK(optest::invoke(session, "ovr_SystemVoipState_GetStatus", {state}) == 1);
+  CHECK(optest::invoke(session, "ovr_SystemVoipState_GetStatus", {0}) == 0);
+  session.free_message(message);
+  session.shutdown();
+  CHECK(arena.live == 0);
+}
+
+TEST_CASE("Platform push registration and native page requests complete with errors") {
+  // UE5's Meta platform plugin imports these natively (Artheon, Nope).
+  // Venture cannot receive Meta push notifications, and blocked users and
+  // cowatching viewers have no first page here, so no next page exists.
+  optest::Arena arena;
+  Session session(optest::app(), std::make_shared<optest::FakeProvider>(), arena.memory());
+  REQUIRE(session.initialize(optest::app().app_id) == InitResult::success);
+  for (auto [name, type] : {std::pair{"ovr_PushNotification_Register", 0x663a8b5fu},
+                            {"ovr_User_GetNextBlockedUserArrayPage", 0x7c2afdcbu},
+                            {"ovr_Cowatching_GetNextCowatchViewerArrayPage", 0x1d403932u}}) {
+    INFO(name);
+    const auto request = optest::invoke(session, name, {0});
+    REQUIRE(request != 0);
+    const auto message = optest::wait_pop(session);
+    CHECK(session.get(message, "ovr_Message_GetType") == type);
+    CHECK(session.get(message, "ovr_Message_GetRequestID") == request);
+    CHECK(session.get(message, "ovr_Message_IsError") == 1);
+    CHECK(session.get(message, "ovr_Message_GetPushNotificationResult") == 0);
+    session.free_message(message);
+  }
+  session.shutdown();
+  CHECK(arena.live == 0);
+}
+
+TEST_CASE("Platform peer networking describes a device that is never in a room") {
+  // UE4's OnlineSubsystemOculus imports these at load; unregistered, the
+  // linker mapped the guest loader for them, which aborts when called.
+  optest::Arena arena;
+  Session session(optest::app(), std::make_shared<optest::FakeProvider>(), arena.memory());
+  REQUIRE(session.initialize(optest::app().app_id) == InitResult::success);
+  optest::invoke(session, "ovr_Net_Connect", {42});
+  optest::invoke(session, "ovr_Net_Accept", {42});
+  CHECK(optest::invoke(session, "ovr_Net_IsConnected", {42}) == 0);
+  CHECK(optest::invoke(session, "ovr_Net_SendPacket", {42, 4, 0x1000, 0}) == 0);
+  CHECK(optest::invoke(session, "ovr_Net_AcceptForCurrentRoom") == 0);
+  CHECK(optest::invoke(session, "ovr_Net_ReadPacket") == 0);
+  optest::invoke(session, "ovr_Packet_Free", {0});
+  optest::invoke(session, "ovr_Net_Close", {42});
+  optest::invoke(session, "ovr_Net_CloseForCurrentRoom");
+  // No peer connects or changes state: nothing is queued for the game.
+  CHECK(optest::invoke(session, "ovr_PopMessage") == 0);
+  session.shutdown();
   CHECK(arena.live == 0);
 }
 

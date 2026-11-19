@@ -1,6 +1,7 @@
 #include "common/steam_library.h"
 #include "common/file_ops.h"
 #include "common/log.h"
+#include "common/process.h"
 #include <algorithm>
 #include <cctype>
 #include <cerrno>
@@ -14,6 +15,7 @@
 #include <shellapi.h>
 #include <tlhelp32.h>
 #else
+#include <fcntl.h>
 #include <spawn.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
@@ -142,6 +144,27 @@ uint32_t number(Vdf *n) {
     v |= uint32_t(uint8_t(n->value[i])) << (8 * i);
   return v;
 }
+// Venture in a Flatpak sandbox (FLATPAK_ID): Steam, outside it, starts it
+// through the host's flatpak command.
+bool sandboxed() {
+#ifdef _WIN32
+  return false;
+#else
+  const char *id = std::getenv("FLATPAK_ID");
+  return id && *id && paths::safe_name(id);
+#endif
+}
+// What a shortcut runs: the quoted program and folder, and the arguments
+// before "--launch <package>".
+struct Command {
+  std::string exe, start, prefix;
+};
+Command command(const fs::path &executable) {
+  if (sandboxed())
+    return {"\"/usr/bin/flatpak\"", "\"/usr/bin\"", std::string("run ") + std::getenv("FLATPAK_ID") + " "};
+  return {"\"" + paths::utf8(fs::absolute(executable)) + "\"",
+          "\"" + paths::utf8(fs::absolute(executable).parent_path()) + "\"", ""};
+}
 std::string owned_package(Vdf &entry) {
   auto tags = field(entry, "tags");
   if (!tags || tags->type != 0)
@@ -149,10 +172,12 @@ std::string owned_package(Vdf &entry) {
   bool ours = std::ranges::any_of(tags->children, [](const Vdf &n) {
     return n.type == 1 && n.value == std::string("Venture\0", 8);
   });
+  // "--launch <package>", after the Flatpak's "run <id> " when it starts Venture.
   auto options = text(entry, "LaunchOptions");
-  if (!ours || !options.starts_with("--launch "))
+  const auto at = options.rfind("--launch ");
+  if (!ours || at == std::string::npos || (at != 0 && !options.starts_with("run ")))
     return {};
-  auto package = options.substr(9);
+  auto package = options.substr(at + 9);
   return paths::safe_launch_target(package) ? package : "";
 }
 // Small bounded text KeyValues reader; no credentials or profile names are
@@ -413,11 +438,40 @@ bool any_process(std::initializer_list<std::string_view> names) {
   return false;
 #endif
 }
+#ifndef _WIN32
+// A sandbox (the Flatpak) has its own process list. Steam reads commands from
+// the FIFO ~/.steam/steam.pipe while it runs (the Flatpak exposes it), and
+// opening a FIFO's write end without blocking fails with ENXIO while no one
+// reads it. Nothing is written. Fails closed when the answer is unclear.
+bool steam_pipe_read() {
+  const char *home = std::getenv("HOME");
+  if (!home || !*home) return true;
+  const auto pipe = paths::from_utf8(home) / ".steam/steam.pipe";
+  const int fd = open(pipe.c_str(), O_WRONLY | O_NONBLOCK | O_CLOEXEC);
+  if (fd >= 0) {
+    close(fd);
+    return true;
+  }
+  return errno != ENXIO && errno != ENOENT;
+}
+#endif
 } // namespace
-bool running() { return any_process({"steam", "steamwebhelper"}); }
-bool vr_running() { return any_process({"vrserver", "vrmonitor"}); }
+bool running() {
+#ifndef _WIN32
+  if (sandboxed()) return steam_pipe_read();
+#endif
+  return any_process({"steam", "steamwebhelper"});
+}
+// A sandbox cannot see SteamVR's processes: Steam's own refusal to quit tells.
+bool vr_running() { return !sandboxed() && any_process({"vrserver", "vrmonitor"}); }
 namespace {
 void client_command(const fs::path &root, const char *arg) {
+  // In a sandbox Steam is the host's: asked through its steam:// handler (the
+  // desktop portal), the way the sandboxed program can reach it.
+  if (sandboxed()) {
+    open_url(std::string_view(arg) == "-shutdown" ? "steam://exit" : "steam://open/games");
+    return;
+  }
 #ifdef _WIN32
   auto exe = root / "steam.exe";
   // No working directory: Steam ignores -shutdown from a process started in its
@@ -460,14 +514,15 @@ fs::path best_art(const fs::path &cache, std::string_view id,
 // While Steam runs its shortcuts cannot change. They need a restart only when
 // a game is missing or stale there, or a removed game is still listed; art
 // waits for the next sync with Steam closed.
-bool listed(const fs::path &root, const fs::path &executable,
-            const std::vector<Game> &games) {
+// Empty when Steam's shortcuts are current, else why not.
+std::string unlisted(const fs::path &root, const fs::path &executable,
+                     const std::vector<Game> &games) {
   try {
     auto config = account_config(root);
     auto target = config / "shortcuts.vdf";
     safe_target(config, target);
     if (!fs::exists(target))
-      return games.empty();
+      return games.empty() ? "" : "Steam has no shortcuts file yet";
     auto doc = read_vdf(paths::read(target, limit));
     auto list = field(doc, "shortcuts");
     std::map<std::string, Vdf *> owned;
@@ -475,20 +530,27 @@ bool listed(const fs::path &root, const fs::path &executable,
       for (auto &e : list->children)
         if (auto package = owned_package(e); !package.empty())
           owned.try_emplace(package, &e);
-    std::string exe = "\"" + paths::utf8(fs::absolute(executable)) + "\"";
-    std::string start = "\"" + paths::utf8(fs::absolute(executable).parent_path()) + "\"";
+    const auto [exe, start, prefix] = command(executable);
     std::set<std::string> packages;
     for (const auto &g : games) {
       if (!paths::safe_launch_target(g.package) || !packages.insert(g.package).second)
         continue;
       auto found = owned.find(g.package);
-      if (found == owned.end() || text(*found->second, "appname") != g.name ||
-          text(*found->second, "exe") != exe || text(*found->second, "StartDir") != start)
-        return false;
+      if (found == owned.end()) return g.name + ": no shortcut yet";
+      if (auto name = text(*found->second, "appname"); name != g.name)
+        return g.name + ": its shortcut is named " + name;
+      if (auto old = text(*found->second, "exe"); old != exe)
+        return g.name + ": its shortcut starts " + old + ", not " + exe;
+      if (auto old = text(*found->second, "StartDir"); old != start)
+        return g.name + ": its shortcut starts in " + old + ", not " + start;
+      if (auto old = text(*found->second, "LaunchOptions"); old != prefix + "--launch " + g.package)
+        return g.name + ": its shortcut runs " + old;
     }
-    return std::ranges::all_of(owned, [&](const auto &e) { return packages.contains(e.first); });
-  } catch (const std::exception &) {
-    return false;
+    for (const auto &e : owned)
+      if (!packages.contains(e.first)) return e.first + " is no longer installed but still has a shortcut";
+    return {};
+  } catch (const std::exception &e) {
+    return std::string("Steam's shortcuts could not be read: ") + e.what();
   }
 }
 Result sync(const fs::path &root, const fs::path &executable,
@@ -497,7 +559,8 @@ Result sync(const fs::path &root, const fs::path &executable,
   if (root.empty())
     return {};
   auto deferred = [&]() -> Result {
-    return {!listed(root, executable, games), games.size()};
+    auto reason = unlisted(root, executable, games);
+    return {!reason.empty(), games.size(), std::move(reason)};
   };
   if (probe())
     return deferred();
@@ -531,7 +594,7 @@ Result sync(const fs::path &root, const fs::path &executable,
   std::set<std::string> packages, keys;
   for (auto &e : retained)
     keys.insert(e.key);
-  std::string exe = "\"" + paths::utf8(fs::absolute(executable)) + "\"";
+  const auto [exe, start, prefix] = command(executable);
   // Reserve existing keys; foreign entries keep even their original index keys.
   size_t next = 0;
   struct Art {
@@ -554,9 +617,8 @@ Result sync(const fs::path &root, const fs::path &executable,
     put(entry, "appid", integer(id), 2);
     put(entry, "appname", g.name);
     put(entry, "exe", exe);
-    put(entry, "StartDir",
-        "\"" + paths::utf8(fs::absolute(executable).parent_path()) + "\"");
-    put(entry, "LaunchOptions", "--launch " + g.package);
+    put(entry, "StartDir", start);
+    put(entry, "LaunchOptions", prefix + "--launch " + g.package);
     put(entry, "OpenVR", integer(1), 2);
     put(entry, "AllowOverlay", integer(1), 2);
     put(entry, "AllowDesktopConfig", integer(1), 2);

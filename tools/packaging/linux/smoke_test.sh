@@ -20,7 +20,12 @@ while [ $# -gt 0 ]; do
   esac
 done
 [ ${#tests[@]} -gt 0 ] || tests=(ldd deb rpm aur appimage flatpak)
-pkg() { ls "$packages"/Venture-*-linux-x86_64."$1" 2>/dev/null | head -n 1; }
+# The packages for the layout's architecture (build_packages.sh names them so).
+case $(od -An -tx1 -j18 -N2 "$layout/venture" 2>/dev/null | tr -d ' \n') in
+  b700) arch=aarch64 ;;
+  *) arch=x86_64 ;;
+esac
+pkg() { ls "$packages"/Venture-*-linux-$arch."$1" 2>/dev/null | head -n 1; }
 probe_dir=$(mktemp -d); trap 'rm -rf "$probe_dir"' EXIT
 failures=0
 result() { echo "== $1: $2"; [ "$2" = PASS ] || failures=$((failures + 1)); }

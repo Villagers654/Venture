@@ -1,0 +1,7 @@
+/* The Khronos loader's OpenXR entry points (openxr_loader.c); everything else stays internal. */
+{
+  global:
+    xr*;
+  local:
+    *;
+};

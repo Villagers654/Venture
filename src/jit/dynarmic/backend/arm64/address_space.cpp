@@ -6,10 +6,13 @@
  * SPDX-License-Identifier: 0BSD
  */
 
+#include <algorithm>
 #include <cstdio>
 
 #include <bit>
 
+#include "dynarmic/backend/perf_map.h"
+#include "dynarmic/interface/profiling.h"
 #include "dynarmic/backend/arm64/a64_address_space.h"
 #include "dynarmic/backend/arm64/a64_jitstate.h"
 #include "dynarmic/backend/arm64/abi.h"
@@ -22,7 +25,52 @@
 #include "dynarmic/interface/exclusive_monitor.h"
 #include "dynarmic/ir/location_descriptor.h"
 
+#ifdef _WIN32
+#    include <cstdlib>
+#    include <cstring>
+#else
+#    include <sys/mman.h>
+#endif
+
 namespace Dynarmic::Backend::Arm64 {
+
+AddressSpace::FastDispatchTable::~FastDispatchTable() {
+    if (!entries) {
+        return;
+    }
+#ifdef _WIN32
+    std::free(entries);
+#else
+    munmap(entries, count * sizeof(FastDispatchEntry));
+#endif
+}
+
+void AddressSpace::FastDispatchTable::Allocate(std::size_t entry_count) {
+    ASSERT(!entries && entry_count > 0);
+    count = entry_count;
+#ifdef _WIN32
+    entries = static_cast<FastDispatchEntry*>(std::calloc(count, sizeof(FastDispatchEntry)));
+    ASSERT(entries);
+#else
+    void* const pages = mmap(nullptr, count * sizeof(FastDispatchEntry), PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    ASSERT(pages != MAP_FAILED);
+    entries = static_cast<FastDispatchEntry*>(pages);
+#endif
+}
+
+void AddressSpace::FastDispatchTable::Clear() {
+    if (!entries) {
+        return;
+    }
+#ifdef _WIN32
+    std::memset(entries, 0, count * sizeof(FastDispatchEntry));
+#else
+    // Private anonymous pages read as zero again after MADV_DONTNEED.
+    if (madvise(entries, count * sizeof(FastDispatchEntry), MADV_DONTNEED) != 0) {
+        std::fill_n(entries, count, FastDispatchEntry{0, nullptr});
+    }
+#endif
+}
 
 AddressSpace::AddressSpace(std::size_t code_cache_size)
     : ir_block{IR::LocationDescriptor{0}}
@@ -70,8 +118,13 @@ CodePtr AddressSpace::GetOrEmit(IR::LocationDescriptor descriptor) {
     if (CodePtr block_entry = Get(descriptor)) {
         return block_entry;
     }
+    CompileTimingScope timing{DescriptorPC(descriptor), IsA32(), descriptor.Value()};
+    SetCompilePhase(CompilePhase::Decode);
     GenerateIR(ir_block, descriptor);
+    SetCompilePhase(CompilePhase::Emit);
     const EmittedBlockInfo block_info = Emit(std::move(ir_block));
+    SetCompilePhase(CompilePhase::Finalize);
+    timing.Complete();
     return block_info.entry_point;
 }
 
@@ -88,18 +141,135 @@ void AddressSpace::InvalidateBasicBlocks(const ::Common::unordered_set<IR::Locat
         // and the currently executing block may have references to itself which need to be unlinked.
         RelinkForDescriptor(descriptor, nullptr);
 
+        if (!fast_dispatch_table.empty()) {
+            FastDispatchEntry& entry = fast_dispatch_table[FastDispatchIndex(descriptor.Value())];
+            if (entry.location == ~descriptor.Value()) {
+                entry = {0, nullptr};
+            }
+        }
+
         block_entries.erase(iter);
     }
+    // Sites keep only a PC and code: any invalidation empties them all (x64).
+    ResetDispatchSites();
 
     ProtectCodeMemory();
 }
 
+void AddressSpace::ResetDispatchSites() {
+    // An empty slot's ~0 tag matches only a branch to PC ~0, which the miss
+    // handler dispatches without caching.
+    std::fill(dispatch_sites.begin(), dispatch_sites.end(),
+              FastDispatchEntry{~u64{0}, static_cast<CodePtr>(prelude_info.dispatch_site_miss)});
+}
+
 void AddressSpace::ClearCache() {
+    fast_dispatch_table.Clear();
+    ResetDispatchSites();
+    next_dispatch_site = 0;
     block_entries.clear();
     reverse_block_entries.clear();
     block_infos.clear();
     block_references.clear();
+    ClearBlockRanges();
     code.set_offset(prelude_info.end_of_prelude);
+    // Venture: a clear inside Run (a compile that found the cache full) leaves
+    // the return stack buffer, which lives on the run's stack, pointing into
+    // code that is about to be overwritten; the dispatcher resets it (as x64
+    // resets its RSB on every cache clear).
+    rsb_reset_pending = 1;
+    PerfMapClear();
+}
+
+void AddressSpace::EmitRSBResetAfterCompile(oaknut::Label& l_return_to_dispatcher) {
+    using namespace oaknut::util;
+
+    oaknut::Label done;
+    code.MOV(Xscratch0, std::bit_cast<u64>(&rsb_reset_pending));
+    code.LDRB(Wscratch1, Xscratch0);
+    code.CBZ(Wscratch1, done);
+    code.STRB(WZR, Xscratch0);
+    code.LDR(Xscratch0, l_return_to_dispatcher);
+    for (std::size_t i = 0; i < RSBEntries(!IsA32()); i++) {
+        code.STR(Xscratch0, SP, offsetof(StackLayout, rsb) + offsetof(RSBEntry, code_ptr) + i * sizeof(RSBEntry));
+    }
+    code.l(done);
+}
+
+CodePtr AddressSpace::FastDispatchFill(IR::LocationDescriptor descriptor) {
+    const CodePtr code_ptr = GetOrEmit(descriptor);
+    // GetOrEmit may have cleared the cache; code_ptr is valid either way.
+    fast_dispatch_table[FastDispatchIndex(descriptor.Value())] = {~descriptor.Value(), code_ptr};
+    return code_ptr;
+}
+
+void AddressSpace::EmitFastDispatchProbe(oaknut::Label& l_return_to_dispatcher, bool reset_rsb, u64* census, oaknut::Label* found) {
+    using namespace oaknut::util;
+
+    oaknut::Label miss, l_this, l_fill, l_table;
+    // FastDispatchIndex(X0) * sizeof(FastDispatchEntry)
+    code.EOR(Xscratch0, X0, X0, LSR, 16);
+    code.EOR(Xscratch0, Xscratch0, X0, LSR, 32);
+    code.UBFX(Xscratch0, Xscratch0, 1, fast_dispatch_bits);
+    code.LDR(Xscratch1, l_table);
+    code.ADD(Xscratch1, Xscratch1, Xscratch0, LSL, 4);
+    code.LDP(Xscratch0, Xscratch1, Xscratch1);
+    // The tag is ~location: tag XNOR location is zero on a hit.
+    code.EON(Xscratch0, Xscratch0, X0);
+    code.CBNZ(Xscratch0, miss);
+    if (found) {
+        code.B(*found);
+    } else {
+        code.BR(Xscratch1);
+    }
+
+    code.l(miss);
+    if (census) {
+        code.MOV(Xscratch0, std::bit_cast<u64>(census + 3));
+        code.LDR(Xscratch1, Xscratch0);
+        code.ADD(Xscratch1, Xscratch1, 1);
+        code.STR(Xscratch1, Xscratch0);
+    }
+    code.MOV(X1, X0);
+    code.LDR(X0, l_this);
+    code.LDR(Xscratch0, l_fill);
+    code.BLR(Xscratch0);
+    if (reset_rsb) {
+        EmitRSBResetAfterCompile(l_return_to_dispatcher);
+    }
+    if (found) {
+        code.MOV(Xscratch1, X0);
+        code.B(*found);
+    } else {
+        code.BR(X0);
+    }
+
+    const auto fill = [](AddressSpace& self, u64 location) -> CodePtr {
+        return self.FastDispatchFill(IR::LocationDescriptor{location});
+    };
+    code.align(8);
+    code.l(l_this);
+    code.dx(std::bit_cast<u64>(this));
+    code.l(l_fill);
+    code.dx(std::bit_cast<u64>(static_cast<CodePtr (*)(AddressSpace&, u64)>(fill)));
+    code.l(l_table);
+    code.dx(std::bit_cast<u64>(fast_dispatch_table.data()));
+}
+
+bool AddressSpace::Precompile(IR::LocationDescriptor descriptor, std::size_t min_space) {
+    if (Get(descriptor)) {
+        return true;
+    }
+    if (GetRemainingSize() < min_space) {
+        return false;
+    }
+    GetOrEmit(descriptor);
+    return true;
+}
+
+void AddressSpace::ReserveBlocks(std::size_t count) {
+    block_entries.reserve(block_entries.size() + count);
+    block_infos.reserve(block_infos.size() + count);
 }
 
 std::size_t AddressSpace::GetRemainingSize() {
@@ -126,6 +296,9 @@ EmittedBlockInfo AddressSpace::Emit(IR::Block block) {
     ProtectCodeMemory();
 
     RegisterNewBasicBlock(block, block_info);
+    SetCompilePhase(CompilePhase::Registration);
+    if (PerfMapActive())
+        PerfMapRegister(block_info.entry_point, block_info.entry_point + block_info.size, FriendlyName(block.Location()));
 
     return block_info;
 }
@@ -144,6 +317,12 @@ void AddressSpace::Link(EmittedBlockInfo& block_info) {
             break;
         case LinkTarget::ReturnFromRunCode:
             c.B(prelude_info.return_from_run_code);
+            break;
+        case LinkTarget::FastDispatch:
+            c.B(prelude_info.fast_dispatch);
+            break;
+        case LinkTarget::DispatchSiteMiss:
+            c.B(prelude_info.dispatch_site_miss);
             break;
         // { this, vaddr, size }
         case LinkTarget::ReadMemory8:
@@ -241,8 +420,38 @@ void AddressSpace::Link(EmittedBlockInfo& block_info) {
         case LinkTarget::ExclusiveWriteMemory128:
             c.BL(prelude_info.exclusive_write_memory_128);
             break;
+        case LinkTarget::AtomicMemory:
+            c.BL(prelude_info.atomic_memory);
+            break;
+        case LinkTarget::WrappedAtomicMemory:
+            c.BL(prelude_info.wrapped_atomic_memory);
+            break;
+        case LinkTarget::AtomicCompareAndSwap128:
+            c.BL(prelude_info.atomic_compare_and_swap_128);
+            break;
+        case LinkTarget::InlineExclusiveWriteFallback8:
+            c.BL(prelude_info.inline_exclusive_write_fallback_8);
+            break;
+        case LinkTarget::InlineExclusiveWriteFallback16:
+            c.BL(prelude_info.inline_exclusive_write_fallback_16);
+            break;
+        case LinkTarget::InlineExclusiveWriteFallback32:
+            c.BL(prelude_info.inline_exclusive_write_fallback_32);
+            break;
+        case LinkTarget::InlineExclusiveWriteFallback64:
+            c.BL(prelude_info.inline_exclusive_write_fallback_64);
+            break;
+        case LinkTarget::InlineExclusiveWriteFallback128:
+            c.BL(prelude_info.inline_exclusive_write_fallback_128);
+            break;
         case LinkTarget::CallSVC:
             c.BL(prelude_info.call_svc);
+            break;
+        case LinkTarget::CallSVCFast:
+            c.BL(prelude_info.call_svc_fast);
+            break;
+        case LinkTarget::CallSVCFastKnown:
+            c.BL(prelude_info.call_svc_fast_known);
             break;
         case LinkTarget::ExceptionRaised:
             c.BL(prelude_info.exception_raised);
@@ -280,7 +489,7 @@ void AddressSpace::LinkBlockLinks(const CodePtr entry_point, const CodePtr targe
     using namespace oaknut;
     using namespace oaknut::util;
 
-    for (auto [ptr_offset, type] : block_relocations_list) {
+    for (auto [ptr_offset, type, unlinked_offset] : block_relocations_list) {
         CodeGenerator c{mem.ptr(), mem.ptr()};
         c.set_xptr(reinterpret_cast<u32*>(entry_point + ptr_offset));
 
@@ -288,6 +497,8 @@ void AddressSpace::LinkBlockLinks(const CodePtr entry_point, const CodePtr targe
         case BlockRelocationType::Branch:
             if (target_ptr) {
                 c.B((void*)target_ptr);
+            } else if (unlinked_offset) {
+                c.B((void*)(entry_point + unlinked_offset));
             } else {
                 c.NOP();
             }

@@ -7,6 +7,7 @@
 #include "hle/vrapi/drawn_layers.h"
 #include "hle/vrapi/layers.h"
 #include "hle/vrapi/state.h"
+#include "hle/vrapi/submit.h"
 #include "hle/vrapi/vulkan_images.h"
 #include "xr/queue.h"
 #include "xr/desktop_mirror.h"
@@ -19,6 +20,7 @@
 #include <cmath>
 #include <cstring>
 #include <limits>
+#include <optional>
 #include <utility>
 #if defined(VENTURE_XR_HAS_ANGLE)
 #include "gfx/angle.h"
@@ -54,34 +56,6 @@ XrResult destroy_host_chains() {
   return XR_SUCCESS;
 }
 namespace {
-using FenceMap = std::map<std::pair<TextureSwapChain *, int>, std::vector<std::uint64_t>>;
-struct FrameCleanup {
-  ~FrameCleanup() {
-    auto &s = session();
-    if (s.phase != Session::Phase::begun)
-      return;
-    // A rejected VrApi layer must not strand an xrBeginFrame on its producer
-    // thread. End without layers, retaining the submission's original error.
-    XrFrameEndInfo discard{XR_TYPE_FRAME_END_INFO};
-    discard.displayTime = s.frame.predictedDisplayTime;
-    discard.environmentBlendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
-    auto r = s.end(&discard);
-    if (XR_SUCCEEDED(r)) {
-      complete_frame();
-    } else
-      failure("SubmitFrame2 discard", r);
-  }
-};
-bool valid_sampler(const TextureSamplerState &s) {
-  return s.min_filter >= TextureFilter::nearest && s.min_filter <= TextureFilter::cubic_mipmap_linear &&
-      (s.mag_filter == TextureFilter::nearest || s.mag_filter == TextureFilter::linear ||
-       s.mag_filter == TextureFilter::cubic) &&
-      s.wrap_s >= TextureWrap::repeat && s.wrap_s <= TextureWrap::clamp_border &&
-      s.wrap_t >= TextureWrap::repeat && s.wrap_t <= TextureWrap::clamp_border &&
-      std::isfinite(s.max_anisotropy) && s.max_anisotropy >= 1 &&
-      std::all_of(std::begin(s.border_color), std::end(s.border_color),
-                  [](float f) { return std::isfinite(f); });
-}
 XrResult apply_gles_sampler(const Ring &ring, const TextureSamplerState &s) {
 #if defined(VENTURE_XR_HAS_ANGLE)
   // VrApi.h also updates the application's GLES textures. The Vulkan-only
@@ -417,6 +391,48 @@ struct Submission {
     return XR_SUCCESS;
   }
 };
+// The PC runtime's images for one submission (hle/vrapi/submit.h): ring
+// slots copied into host chains through Venture's renderer, drawn layers on
+// the shared GPU, and the desktop mirror's eye.
+class PcImages {
+ public:
+  PcImages(const Submit &frame, const FenceMap *fences) : completion_fence_(frame.completion_fence) {
+    // ANGLE image operations lock the queue locally, after destination waits.
+    prepared_ = prepare_vulkan_submission();
+    if (XR_FAILED(prepared_)) return;
+    guest_queue_ = vulkan_submission_lock();
+    submission_.emplace();
+    submission_->fences = fences;
+  }
+  XrResult ready() const { return prepared_; }
+  int begin_layer(const LayerHeader &header, const XrView *eyes) {
+    submission_->mirror_layer = header.type == 1;
+    submission_->projection = header.type == 1;
+    submission_->mirror_eye = venture::xr::mirror_mode() == venture::xr::MirrorMode::off ? 0 : int(venture::xr::mirror_eye());
+    submission_->mirror_fov = eyes[submission_->mirror_eye].fov;
+    return submission_->mirror_eye;
+  }
+  XrResult image(TextureSwapChain *token, int slot, Rect rect, int eye, bool bottom_up, XrSwapchainSubImage &out) {
+    return submission_->image(token, slot, rect, eye, bottom_up, completion_fence_, out);
+  }
+  DrawnLayers *drawn() { return &drawn_; }
+  XrResult gather(std::vector<const XrCompositionLayerBaseHeader *> &layers) {
+    if (drawn_.empty()) return XR_SUCCESS;
+    return drawn_.gather([&](TextureSwapChain *token, int slot, DrawnLayers::Source &out) {
+      return submission_->source(token, slot, completion_fence_, out);
+    }, layers);
+  }
+  XrResult finish(std::vector<const XrCompositionLayerBaseHeader *> &layers) {
+    return submission_->finish([&] { return drawn_.present(layers); });
+  }
+
+ private:
+  std::uint64_t completion_fence_;
+  XrResult prepared_ = XR_SUCCESS;
+  std::unique_lock<std::recursive_mutex> guest_queue_;
+  std::optional<Submission> submission_;
+  DrawnLayers drawn_;
+};
 } // namespace
 namespace guest {
 TextureSwapChain *vrapi_CreateTextureSwapChain4(const SwapChainCreate *ci) {
@@ -425,9 +441,7 @@ TextureSwapChain *vrapi_CreateTextureSwapChain4(const SwapChainCreate *ci) {
     failure("CreateTextureSwapChain4", not_initialized);
     return nullptr;
   }
-  if (ci->width <= 0 || ci->height <= 0 || ci->levels <= 0 || ci->count <= 0 || ci->count > 16 ||
-      ci->array_size < 1 || ci->array_size > 2 || (ci->faces != 1 && ci->faces != 6) ||
-      ci->create_flags || ci->usage_flags != 1) {
+  if (!valid_swapchain_create(*ci)) {
     failure("CreateTextureSwapChain4", invalid);
     return nullptr;
   }
@@ -463,32 +477,6 @@ TextureSwapChain *vrapi_CreateTextureSwapChain4(const SwapChainCreate *ci) {
   auto token = reinterpret_cast<TextureSwapChain *>(++state().generation);
   state().rings[token] = std::move(ring);
   return token;
-}
-TextureSwapChain *vrapi_CreateTextureSwapChain3(std::int32_t type, std::int64_t format,
-                                                std::int32_t width, std::int32_t height,
-                                                std::int32_t levels, std::int32_t count) {
-  if (type != 0 && type != 2 && type != 3) {
-    failure("CreateTextureSwapChain3 type", unsupported);
-    return nullptr;
-  }
-  SwapChainCreate ci{format, width, height, levels, type == 3 ? 6 : 1, type == 2 ? 2 : 1,
-                     count,  0,     1};
-  return vrapi_CreateTextureSwapChain4(&ci);
-}
-// VrApi 1.0 to 1.1 creators take ovrTextureFormat (VRAPI_TEXTURE_FORMAT_*), not GL formats.
-TextureSwapChain *vrapi_CreateTextureSwapChain2(std::int32_t type, std::int32_t format,
-                                                std::int32_t width, std::int32_t height,
-                                                std::int32_t levels, std::int32_t count) {
-  constexpr std::int64_t formats[]{0,      0x8d62, 0x8057, 0x8056, 0x8058, 0x8c43,
-                                   0x881a, 0x81a5, 0x81a6, 0x88f0, 0x822c};
-  if (format < 0 || std::size_t(format) >= std::size(formats))
-    return nullptr;
-  return vrapi_CreateTextureSwapChain3(type, formats[format], width, height, levels, count);
-}
-TextureSwapChain *vrapi_CreateTextureSwapChain(std::int32_t type, std::int32_t format,
-                                               std::int32_t width, std::int32_t height,
-                                               std::int32_t levels, bool buffered) {
-  return vrapi_CreateTextureSwapChain2(type, format, width, height, levels, buffered ? 3 : 1);
 }
 void vrapi_DestroyTextureSwapChain(TextureSwapChain *token) {
   std::lock_guard lock(state().mutex);
@@ -623,170 +611,9 @@ std::int32_t vrapi_SetTextureSwapChainSamplerState(TextureSwapChain *token,
   }
   return success;
 }
-static std::int32_t submit_frame(Mobile *mobile, const Submit *frame, const FenceMap *fences) {
-  if (!mobile || !frame) return invalid;
-  auto r = ensure_frame(frame->frame_index, mobile);
-  if (XR_FAILED(r)) return result(r, "SubmitFrame2 wait");
-  std::unique_lock lock(state().mutex);
-  std::unique_lock sl(session().mutex);
-  if (!valid(mobile))
-    return invalid;
-  if (state().final_frame)
-    return invalid_operation;
-  if (!state().token || state().frame_index != frame->frame_index)
-    return invalid_operation;
-  if (session().phase == Session::Phase::waited) {
-    XrFrameBeginInfo bi{XR_TYPE_FRAME_BEGIN_INFO};
-    r = session().begin(&bi);
-    if (XR_FAILED(r))
-      return result(r, "SubmitFrame2 begin");
-    wake_frame_waiters();
-  }
-  FrameCleanup cleanup;
-  if ((frame->layer_count && !frame->layers) || frame->layer_count > 16 ||
-      frame->swap_interval < 1 || frame->swap_interval > 4 ||
-      !std::isfinite(frame->display_time) || frame->display_time < 0)
-    return invalid;
-  // FLUSH is satisfied by synchronous image copying/submission. FINAL closes
-  // submission until Leave/Enter; no process-wide shutdown is implied.
-  if (frame->flags & ~(2u | 4u | 64u))
-    return unsupported;
-  // The host runtime sets the frame rate, as it does for any PC OpenXR
-  // application: a larger VrApi swap interval (a Quest half-rate budget) still
-  // renders every host frame instead of repeating content.
-  if (session().logged_swap_interval != frame->swap_interval) {
-    session().logged_swap_interval = frame->swap_interval;
-    log::info("vrapi", "Swap interval={} requested; guest cadence follows the host display={} Hz",
-        frame->swap_interval, session().display_timing.rate());
-  }
-  std::unique_lock queue(gfx::gpu_device().queue_lock, std::defer_lock);
-  // ANGLE image operations lock the queue locally, after destination waits.
-  if (auto prepared = prepare_vulkan_submission(); XR_FAILED(prepared)) return result(prepared, "SubmitFrame queue");
-  auto guest_queue = vulkan_submission_lock();
-  Submission submission;
-  submission.fences = fences;
-  std::vector<LayerStorage> storage(frame->layer_count);
-  std::vector<const XrCompositionLayerBaseHeader *> layers;
-  DrawnLayers drawn;
-  XrViewLocateInfo locate{XR_TYPE_VIEW_LOCATE_INFO, nullptr,
-                          XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO,
-                          session().frame.predictedDisplayTime, state().view};
-  XrViewState vs{XR_TYPE_VIEW_STATE};
-  XrView eye_offsets[2]{{XR_TYPE_VIEW}, {XR_TYPE_VIEW}};
-  std::uint32_t count = 0;
-  r = ::xrLocateViews(session().handle, &locate, &vs, 2, &count, eye_offsets);
-  if (XR_FAILED(r) || count != 2)
-    return result(XR_FAILED(r) ? r : XR_ERROR_RUNTIME_FAILURE, "SubmitFrame2 eyes");
-  for (std::uint32_t i = 0; i < frame->layer_count && session().frame.shouldRender; ++i) {
-    const auto *header = frame->layers[i];
-    if (!header)
-      return invalid;
-    auto copy = [&](TextureSwapChain *token, int slot, Rect rect, int eye, bool bottom_up,
-                    XrSwapchainSubImage &out) {
-      return submission.image(token, slot, rect, eye, bottom_up, frame->completion_fence, out);
-    };
-    const auto translated = layers.size();
-    submission.mirror_layer = header->type == 1;
-    submission.projection = header->type == 1;
-    submission.mirror_eye = venture::xr::mirror_mode() == venture::xr::MirrorMode::off ? 0 : int(venture::xr::mirror_eye());
-    submission.mirror_fov = eye_offsets[submission.mirror_eye].fov;
-    r = translate_layer(*header, eye_offsets, copy, storage[i], layers, submission.mirror_eye, &drawn);
-    if (XR_FAILED(r)) {
-      {
-        // Once per process: debug reports carry the rejected layer's shape.
-        static std::once_flag reported;
-        std::call_once(reported, [&] {
-          log::warn("vrapi", "Rejected layer type={} flags={:#x} blend={}/{} completion_fence_present={} result={} reason={}",
-                    header->type, header->flags, header->src_blend, header->dst_blend,
-                    frame->completion_fence != 0, int(r), storage[i].reason ? storage[i].reason : "none");
-          log_layer_shape(*header);
-        });
-      }
-      // A layer the host cannot show is left out; the frame's other layers
-      // still display instead of the whole frame being discarded.
-      if (r == XR_ERROR_FEATURE_UNSUPPORTED) {
-        layers.resize(translated);
-        failure("SubmitFrame2 layer (skipped)", r);
-        continue;
-      }
-      return result(r, "SubmitFrame2 layer");
-    }
-  }
-  if (!drawn.empty()) {
-    r = drawn.gather([&](TextureSwapChain *token, int slot, DrawnLayers::Source &out) {
-      return submission.source(token, slot, frame->completion_fence, out);
-    }, layers);
-    if (XR_FAILED(r)) return result(r, "SubmitFrame2 drawn layer");
-  }
-  r = submission.finish([&] { return drawn.present(layers); });
-  if (XR_FAILED(r)) return result(r, "SubmitFrame2 handoff batch");
-  XrFrameEndInfo end{XR_TYPE_FRAME_END_INFO};
-  // Legacy VrApi predicts before rendering; the native wait occurs here in
-  // submission and may already target a later display after a load or stall.
-  // Submit this native frame at its waited target, not an older Quest target
-  // (or a queued future prediction). Preserve the guest's poses and storage.
-  end.displayTime = session().frame.predictedDisplayTime;
-  end.environmentBlendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
-  end.layerCount = std::uint32_t(layers.size());
-  end.layers = layers.data();
-  r = session().end(&end);
-  if (XR_SUCCEEDED(r)) {
-    state().final_frame = (frame->flags & 4) != 0;
-    auto now = monotonic_ns();
-    state().submissions.push_back(now);
-    while (state().submissions.size() > 1 && state().submissions.front() < now - 1'000'000'000)
-      state().submissions.pop_front();
-  }
-  if (session().phase != Session::Phase::begun) complete_frame();
-  return result(r, "SubmitFrame2 end");
-}
 std::int32_t vrapi_SubmitFrame2(Mobile *mobile, const Submit *frame) {
-  return submit_frame(mobile, frame, nullptr);
+  return submit_frame<PcImages>(mobile, frame, nullptr);
 }
-void vrapi_SubmitFrame(Mobile *mobile, const LegacyFrame *legacy) {
-  if (!legacy || legacy->type != 3 || legacy->layer_count < 0 || legacy->layer_count > 4) {
-    failure("SubmitFrame", invalid);
-    return;
-  }
-  Projection storage[4]{};
-  const LayerHeader *layers[4]{};
-  FenceMap fences;
-  for (int i = 0; i < legacy->layer_count; ++i) {
-    auto &p = storage[i];
-    auto &l = legacy->layers[i];
-    p.header = {1,
-                std::uint32_t(l.flags),
-                {l.color_scale, l.color_scale, l.color_scale, l.color_scale},
-                l.src_blend,
-                l.dst_blend,
-                0};
-    p.head = l.textures[0].head;
-    if (std::memcmp(&l.textures[0].head.pose, &l.textures[1].head.pose, sizeof(Pose)) != 0) {
-      failure("SubmitFrame per-eye render pose", unsupported);
-      return;
-    }
-    for (int eye = 0; eye < 2; ++eye) {
-      auto &t = l.textures[eye];
-      if (t.depth) {
-        failure("SubmitFrame depth", unsupported);
-        return;
-      }
-      p.textures[eye] = {t.color, t.index, t.tan_angles, t.rect};
-      if (t.completion_fence)
-        fences[{t.color, t.index}].push_back(t.completion_fence);
-    }
-    layers[i] = &p.header;
-  }
-  Submit frame{std::uint32_t(legacy->flags),
-               std::uint32_t(legacy->swap_interval),
-               std::uint64_t(legacy->frame_index),
-               0,
-               0,
-               std::uint32_t(legacy->layer_count),
-               layers};
-  auto r = submit_frame(mobile, &frame, &fences);
-  if (r < 0)
-    failure("SubmitFrame", r);
-}
+void vrapi_SubmitFrame(Mobile *mobile, const LegacyFrame *legacy) { submit_legacy_frame<PcImages>(mobile, legacy); }
 } // namespace guest
 } // namespace venture::hle::vrapi

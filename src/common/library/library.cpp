@@ -5,6 +5,7 @@
 #include "common/file_ops.h"
 #include <algorithm>
 #include <cctype>
+#include <charconv>
 #include <cstdlib>
 #include <deque>
 #include <format>
@@ -31,8 +32,23 @@ std::vector<std::string> install_problems(const fs::path &directory, const meta:
     auto n = fs::file_size(target, ec);
     if (ec || !n)
       out.push_back(f.name + " is empty");
-    else if (f.size && f.size != n)
+    else if (f.size && f.size != n && !replaced_obb(f, n))
       out.push_back(std::format("{} has {} bytes, the manifest says {}", f.name, n, f.size));
+  }
+  return out;
+}
+bool replaced_obb(const meta::File &file, uint64_t size) {
+  return file.base() && file.kind == "obb" && size && file.size && size != file.size;
+}
+std::vector<std::string> replaced_files(const fs::path &directory, const meta::Plan &plan) {
+  std::vector<std::string> out;
+  for (auto &f : plan.files) {
+    auto target = directory / paths::from_utf8(f.name);
+    std::error_code ec;
+    if (!paths::within(directory, target) || !fs::is_regular_file(target, ec)) continue;
+    const auto n = fs::file_size(target, ec);
+    if (!ec && replaced_obb(f, n))
+      out.push_back(std::format("{} was replaced ({} bytes; the store's file has {})", f.name, n, f.size));
   }
   return out;
 }
@@ -126,7 +142,9 @@ std::vector<Install> scan(const fs::path &root, bool* authoritative) {
           }
           auto n = fs::file_size(target);
           install.bytes += n;
-          if (!n || (f.size && f.size != n))
+          if (replaced_obb(f, n))
+            install.replaced.push_back(f.name);
+          else if (!n || (f.size && f.size != n))
             install.complete = false;
         }
         // Say once why an install counts as partly downloaded: a file that
@@ -817,6 +835,7 @@ Settings Settings::load(const fs::path &data) {
   if (auto jobs = number(j, "parallelDownloads"); jobs >= 1 && jobs <= 4)
     s.parallel_downloads = int(jobs);
   s.keep_translated_code = field(j, "keepTranslatedCode") != false;
+  s.xr_runtime = str(j, "xrRuntime");
   if (auto tag = str(j, "gameLanguage"); tag.size() <= 16 && std::ranges::all_of(tag, [](unsigned char c) {
         return std::isalnum(c) || c == '-';
       }))
@@ -878,6 +897,7 @@ void Settings::save(const fs::path &data) const {
          {"textureCompressionThreshold", texture_compression_threshold},
          {"parallelDownloads", parallel_downloads},
          {"keepTranslatedCode", keep_translated_code},
+         {"xrRuntime", xr_runtime},
          {"gameLanguage", game_language},
          {"interfaceLanguage", interface_language},
          {"mixedReality", passthrough},
@@ -918,6 +938,27 @@ void Settings::save(const fs::path &data) const {
   }
   paths::atomic_write(data / "settings.json", j.dump(2));
 }
+int metavr_os_sdk_from_maven(std::string_view metadata) {
+  int newest = 0;
+  for (std::size_t at = 0; (at = metadata.find("<version>", at)) != metadata.npos;) {
+    at += 9;
+    int major = 0;
+    const auto *begin = metadata.data() + at, *end = metadata.data() + metadata.size();
+    // "207" or "207.1": the OS SDK is the major number.
+    if (auto [next, ec] = std::from_chars(begin, end, major); ec == std::errc{} && next < end &&
+                                                              (*next == '<' || *next == '.'))
+      newest = std::max(newest, major);
+  }
+  return newest;
+}
+int cached_metavr_os_sdk(const fs::path &data) {
+  std::ifstream in(paths::io_path(data / "metavr-os-sdk.txt"));
+  int version = 0;
+  return in >> version && version > 0 ? version : 0;
+}
+void cache_metavr_os_sdk(const fs::path &data, int version) {
+  if (version > cached_metavr_os_sdk(data)) paths::atomic_write(data / "metavr-os-sdk.txt", std::to_string(version));
+}
 std::vector<std::pair<std::string, std::string>> launch_environment(const Settings &s, std::string_view app_id,
                                                                     bool automation) {
   // VENTURE_LOG_LEVEL: the launcher's log level, 0 (trace) to 4 (error).
@@ -929,6 +970,9 @@ std::vector<std::pair<std::string, std::string>> launch_environment(const Settin
   // The color key passthrough color, only when the user chose it; empty otherwise.
   environment.push_back({"VENTURE_PASSTHROUGH_KEY", s.passthrough && s.color_key ? s.key_color : ""});
   if (!s.game_language.empty()) environment.push_back({"VENTURE_LOCALE", s.game_language});
+  // The runtime the player chose over the system's active one, while it is still installed.
+  if (std::error_code ec; !s.xr_runtime.empty() && fs::is_regular_file(paths::from_utf8(s.xr_runtime), ec))
+    environment.push_back({"XR_RUNTIME_JSON", s.xr_runtime});
   // Implicit Vulkan layers the player keeps; the runtime leaves out the rest.
   if (!s.vulkan_layers.empty()) {
     std::string layers;
@@ -954,6 +998,7 @@ std::vector<std::pair<std::string, std::string>> launch_environment(const Settin
   environment.push_back({"VENTURE_FRAME_RATE", frame_rate_environment(display)});
   environment.push_back({"VENTURE_MIRROR", automation ? "off" : mirror_environment(display)});
   environment.push_back({"VENTURE_MIRROR_EYE", mirror_eye_environment(display)});
+  environment.push_back({"VENTURE_MIRROR_FULLSCREEN", mirror_fullscreen_environment(display)});
   // The game's audio on the PC too; off by default.
   environment.push_back({"VENTURE_PC_AUDIO", pc_audio_environment(display)});
   // Games that multiply the eye size they are told render at the resolution above.

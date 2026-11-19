@@ -37,7 +37,7 @@ add_custom_command(OUTPUT ${vk_generated}/vk_commands.inc ${vk_generated}/vk_str
   VERBATIM)
 
 add_library(venture_vulkan STATIC
-  vulkan.cpp multiview.cpp multiview_pipeline.cpp input_attachments.cpp callbacks.cpp chain.cpp hardware_buffer.cpp sync_fd.cpp timing.cpp window_readback.cpp wsi.cpp address_log.cpp breadcrumbs.cpp shader.cpp full_rate_image.cpp
+  vulkan.cpp multiview.cpp multiview_pipeline.cpp input_attachments.cpp callbacks.cpp chain.cpp hardware_buffer.cpp sync_fd.cpp timing.cpp window_readback.cpp wsi.cpp address_log.cpp breadcrumbs.cpp fault_markers.cpp shader.cpp full_rate_image.cpp
   ${vk_generated}/vk_commands.inc ${vk_generated}/vk_structs.inc ${vk_generated}/vk_members.inc
   ${vk_generated}/vk_borrow_traits.inc ${vk_generated}/vk_borrow_members.inc
   ${vk_generated}/vk_plain_members.inc ${vk_generated}/vk_plain_borrow.inc ${vk_generated}/vk_structure_extensions.inc)
@@ -63,11 +63,47 @@ set(GLSLANG_TESTS OFF CACHE BOOL "" FORCE)
 set(GLSLANG_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
 venture_vulkan_archive(glslang_archive glslang 9a1dc7519823c28fe46a4e7092ed512c040937fd
   https://codeload.github.com/KhronosGroup/glslang/tar.gz/9a1dc7519823c28fe46a4e7092ed512c040937fd)
-FetchContent_Declare(venture_glslang
-  URL "${glslang_archive}"
-  URL_HASH SHA256=14d017c1adb04f893b32d86c3f5df50313a752a4d27ef4084e545514ca0eee90
-  SYSTEM)
-FetchContent_MakeAvailable(venture_glslang)
+if(NOT CMAKE_CROSSCOMPILING)
+  FetchContent_Declare(venture_glslang
+    URL "${glslang_archive}"
+    URL_HASH SHA256=14d017c1adb04f893b32d86c3f5df50313a752a4d27ef4084e545514ca0eee90
+    SYSTEM)
+  FetchContent_MakeAvailable(venture_glslang)
+else()
+  # A cross build (Linux arm64 from Windows or x64 Linux) compiles shaders with
+  # the same pinned glslang built for the build host by the host compiler the
+  # toolchain names; SPIR-V is target independent.
+  FetchContent_Declare(venture_glslang
+    URL "${glslang_archive}"
+    URL_HASH SHA256=14d017c1adb04f893b32d86c3f5df50313a752a4d27ef4084e545514ca0eee90
+    SOURCE_SUBDIR venture-no-upstream-targets
+    SYSTEM)
+  FetchContent_MakeAvailable(venture_glslang)
+  if(NOT VENTURE_HOST_C_COMPILER OR NOT VENTURE_HOST_CXX_COMPILER)
+    message(FATAL_ERROR "A cross build needs VENTURE_HOST_C_COMPILER and VENTURE_HOST_CXX_COMPILER (set by the toolchain file)")
+  endif()
+  include(ExternalProject)
+  set(host_glslang_dir "${CMAKE_BINARY_DIR}/host-tools/glslang")
+  set(host_glslang "${host_glslang_dir}/StandAlone/glslang${CMAKE_HOST_EXECUTABLE_SUFFIX}")
+  if(CMAKE_HOST_WIN32)
+    set(host_glslang_link -DCMAKE_EXE_LINKER_FLAGS=-static)
+  endif()
+  ExternalProject_Add(venture_host_glslang
+    SOURCE_DIR "${venture_glslang_SOURCE_DIR}"
+    BINARY_DIR "${host_glslang_dir}"
+    CMAKE_GENERATOR "${CMAKE_GENERATOR}"
+    CMAKE_ARGS -DCMAKE_MAKE_PROGRAM=${CMAKE_MAKE_PROGRAM} -DCMAKE_BUILD_TYPE=Release
+      -DCMAKE_C_COMPILER=${VENTURE_HOST_C_COMPILER} -DCMAKE_CXX_COMPILER=${VENTURE_HOST_CXX_COMPILER}
+      -DENABLE_OPT=OFF -DBUILD_EXTERNAL=OFF -DENABLE_GLSLANG_BINARIES=ON -DGLSLANG_TESTS=OFF
+      -DGLSLANG_ENABLE_INSTALL=OFF -DENABLE_HLSL=OFF ${host_glslang_link}
+    BUILD_COMMAND ${CMAKE_COMMAND} --build . --target glslang-standalone
+    BUILD_BYPRODUCTS "${host_glslang}"
+    INSTALL_COMMAND ""
+    EXCLUDE_FROM_ALL TRUE)
+  add_executable(glslang-standalone IMPORTED GLOBAL)
+  set_target_properties(glslang-standalone PROPERTIES IMPORTED_LOCATION "${host_glslang}")
+  add_dependencies(glslang-standalone venture_host_glslang)
+endif()
 add_custom_command(OUTPUT ${vk_generated}/texture_decode.inc
   COMMAND $<TARGET_FILE:glslang-standalone> -V --target-env vulkan1.0
     -I${CMAKE_CURRENT_SOURCE_DIR}/shaders ${CMAKE_CURRENT_SOURCE_DIR}/shaders/decode.comp
@@ -104,7 +140,7 @@ foreach(shader subpass_probe.vert subpass_probe_write.frag subpass_probe_read.fr
   target_sources(venture_vulkan PRIVATE ${vk_generated}/${shader_name}.inc)
 endforeach()
 target_sources(venture_vulkan PRIVATE subpass_input_probe.cpp)
-target_sources(venture_vulkan PRIVATE texture.cpp render_area.cpp render_checks.cpp subpass_sync.cpp deferred_free.cpp descriptor_fill.cpp bound_sets.cpp ${vk_generated}/texture_decode.inc ${vk_generated}/texture_depth.inc ${vk_generated}/texture_bc7.inc)
+target_sources(venture_vulkan PRIVATE texture.cpp render_area.cpp render_checks.cpp subpass_sync.cpp deferred_free.cpp descriptor_fill.cpp bound_sets.cpp tracked_layouts.cpp ${vk_generated}/texture_decode.inc ${vk_generated}/texture_depth.inc ${vk_generated}/texture_bc7.inc)
 foreach(mode float_array srgb_array float_volume srgb_volume unorm_array unorm_volume)
   set(image_defines -DIMAGE_OUTPUT=1)
   if(mode MATCHES "srgb|unorm")

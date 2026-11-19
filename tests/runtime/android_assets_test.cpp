@@ -1,6 +1,7 @@
 #include "android/errors.h"
 #include <doctest/doctest.h>
 #include "android/package_assets.h"
+#include "android_fixtures.h"
 #include "android_test_support.h"
 #include "core/guest.h"
 #include "common/paths.h"
@@ -14,7 +15,7 @@
 using namespace venture;
 using namespace venture::android;
 namespace {
-const std::filesystem::path fixture_dir = VENTURE_ANDROID_FIXTURES;
+const std::filesystem::path fixture_dir = test::android_fixture_dir();
 std::string path(const char* name) { return (fixture_dir / name).string(); }
 std::vector<unsigned char> unhex(const std::string& text) {
   std::vector<unsigned char> bytes;
@@ -24,7 +25,10 @@ std::vector<unsigned char> unhex(const std::string& text) {
 }
 void check_oracle(const nlohmann::json& archive) {
   auto& assets = PackageAssets::get();
+  // The oracle records the path it wrote; the archive is found by its name in
+  // the fixture directory, wherever the tree was copied to.
   auto filename = archive.at("path").get<std::string>();
+  filename = path(filename.substr(filename.find_last_of("/\\") + 1).c_str());
   CAPTURE(filename);
   REQUIRE(assets.open_apk(filename));
   for (const auto& e : archive.at("entries")) {

@@ -76,6 +76,26 @@ public final class FrameworkTest {
   public static class NativeStartupActivity extends android.app.NativeActivity {
     public void createOnly() { super.onCreate(null); }
   }
+  // Games check the headset's OS through Meta's VR OS SDK version, under its current
+  // and earlier names; without them Starworn asked for a system update and closed.
+  private static void horizonOsVersion() throws Exception {
+    for (String[] call : new String[][]{{"metavr.os.Build$Version", "getApiVersion"},
+             {"horizonos.os.Build$HorizonOsSdk", "getVersion"}, {"horizonos.os.Build$Version", "getApiVersion"},
+             {"vros.os.VrosBuild", "getSdkVersion"}}) {
+      Object version = Class.forName(call[0]).getMethod(call[1]).invoke(null);
+      check(version instanceof Integer v && v >= 207, call[0] + "." + call[1] + " reports SDK 207 or later");
+    }
+    // The launcher's newest published SDK when higher than the framework's own.
+    var sdkVersion = Class.forName("metavr.os.Build").getDeclaredMethod("sdkVersion", String.class);
+    sdkVersion.setAccessible(true);
+    check((int) sdkVersion.invoke(null, "212") == 212 && (int) sdkVersion.invoke(null, "100") == 207
+          && (int) sdkVersion.invoke(null, (Object) null) == 207 && (int) sdkVersion.invoke(null, "x") == 207,
+          "the OS SDK is the launcher's newest, never below the framework's own");
+    for (String owner : new String[]{"metavr.os.Build$Version", "horizonos.os.Build$Version"}) {
+      Object name = Class.forName(owner).getMethod("getDisplayName").invoke(null);
+      check(name instanceof String n && !n.isBlank(), owner + ".getDisplayName names the OS");
+    }
+  }
   // AndroidX BuildCompat initializes SdkExtensions on every API 30+ device
   // (OnBackPressedDispatcher, so every ComponentActivity); a missing class
   // failed the activity's constructor (HyperVR's Bad Inmate).
@@ -769,6 +789,43 @@ public final class FrameworkTest {
         && Arrays.stream(caps.profileLevels).anyMatch(level ->
             level.profile == android.media.MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10)
         && caps.getAudioCapabilities() == null, "MediaCodecList lists the host HEVC decoder");
+    {
+      var high = android.media.MediaCodecInfo.CodecCapabilities.createFromProfileLevel("video/avc",
+          android.media.MediaCodecInfo.CodecProfileLevel.AVCProfileHigh, android.media.MediaCodecInfo.CodecProfileLevel.AVCLevel51);
+      var video = caps.getVideoCapabilities();
+      var big = android.media.MediaFormat.createVideoFormat("video/hevc", 16384, 16384);
+      var main = android.media.MediaFormat.createVideoFormat("video/hevc", 1920, 1080);
+      main.setInteger(android.media.MediaFormat.KEY_PROFILE, android.media.MediaCodecInfo.CodecProfileLevel.HEVCProfileMain);
+      var still = android.media.MediaFormat.createVideoFormat("video/hevc", 1920, 1080);
+      still.setInteger(android.media.MediaFormat.KEY_PROFILE, android.media.MediaCodecInfo.CodecProfileLevel.HEVCProfileMainStill);
+      var aac = new android.media.MediaCodecList(android.media.MediaCodecList.REGULAR_CODECS).findDecoderForFormat(
+          android.media.MediaFormat.createAudioFormat("audio/mp4a-latm", 48000, 2));
+      var aacType = Arrays.stream(android.media.MediaCodecList.getCodecInfoAt(4).getSupportedTypes()).findFirst().orElseThrow();
+      var audioCaps = android.media.MediaCodecList.getCodecInfoAt(4).getCapabilitiesForType(aacType).getAudioCapabilities();
+      var p1080 = new android.media.MediaCodecInfo.VideoCapabilities.PerformancePoint(1920, 1080, 60);
+      check(high != null && high.profileLevels.length == 1
+          && high.profileLevels[0].level == android.media.MediaCodecInfo.CodecProfileLevel.AVCLevel51
+          && android.media.MediaCodecInfo.CodecCapabilities.createFromProfileLevel("video/avc",
+              android.media.MediaCodecInfo.CodecProfileLevel.AVCProfileHigh444, 1) == null
+          && android.media.MediaCodecInfo.CodecCapabilities.createFromProfileLevel("video/mpeg2", 1, 1) == null
+          && Arrays.stream(caps.colorFormats).boxed().toList().equals(java.util.List.of(
+              android.media.MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible,
+              android.media.MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Planar,
+              android.media.MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420SemiPlanar,
+              android.media.MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420PackedPlanar,
+              android.media.MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420PackedSemiPlanar))
+          && caps.getEncoderCapabilities() == null && !caps.isFormatSupported(big) && caps.isFormatSupported(main)
+          && !caps.isFormatSupported(still) && video.getAchievableFrameRatesFor(1920, 1080) == null
+          && video.getSupportedPerformancePoints() == null
+          && p1080.covers(new android.media.MediaCodecInfo.VideoCapabilities.PerformancePoint(1280, 720, 60))
+          && !p1080.covers(new android.media.MediaCodecInfo.VideoCapabilities.PerformancePoint(3840, 2160, 30))
+          && p1080.covers(main) && "c2.android.aac.decoder".equals(aac)
+          && audioCaps.getInputChannelCountRanges()[0].getUpper() == 2,
+          "MediaCodecInfo answers capability queries for the host decoders");
+      boolean odd = false;
+      try { video.getAchievableFrameRatesFor(1919, 1080); } catch (IllegalArgumentException e) { odd = true; }
+      check(odd, "VideoCapabilities rejects sizes the decoder cannot output");
+    }
     var format = android.media.MediaFormat.createVideoFormat("video/hevc", 8192, 4096);
     format.setFeatureEnabled(android.media.MediaCodecInfo.CodecCapabilities.FEATURE_TunneledPlayback, false);
     check(!format.getFeatureEnabled(android.media.MediaCodecInfo.CodecCapabilities.FEATURE_TunneledPlayback)
@@ -1596,6 +1653,91 @@ public final class FrameworkTest {
   }
 
   // Rust android-activity binds KeyCharacterMap at startup (Starworn); maps follow Virtual.kcm.
+  // Issue 160: a text field opens Venture's system keyboard; its keys edit the
+  // field through the field's own InputConnection, as an Android input method.
+  private static void systemKeyboard() {
+    var context = new android.content.Context();
+    var input = (android.view.inputmethod.InputMethodManager) context.getSystemService(android.content.Context.INPUT_METHOD_SERVICE);
+    java.util.function.Consumer<String> tap = name -> {
+      int key = SystemKeyboard.keyIndex(name);
+      check(key >= 0, "the keyboard has a " + name + " key");
+      SystemKeyboard.onHostEvent(SystemKeyboard.PRESS, 1, key, SystemKeyboard.layout());
+      SystemKeyboard.onHostEvent(SystemKeyboard.RELEASE, 1, key, SystemKeyboard.layout());
+    };
+    check(!input.showSoftInput(new android.view.View(context), 0) && !SystemKeyboard.isShown() && !input.isActive(),
+        "a view without an input connection opens no keyboard");
+    var field = new android.widget.EditText(context);
+    field.setSingleLine(true);
+    var actions = new ArrayList<Integer>();
+    field.setOnEditorActionListener((view, id, event) -> { actions.add(id); return false; });
+    check(input.showSoftInput(field, 0) && SystemKeyboard.isShown() && input.isActive(field) && input.isAcceptingText(),
+        "showSoftInput on an EditText opens the keyboard");
+    tap.accept("h");
+    tap.accept("i");
+    check(field.getText().toString().equals("hi") && SystemKeyboard.preview().equals("hi"), "keys commit their text");
+    tap.accept("delete");
+    check(field.getText().toString().equals("h"), "backspace deletes one character");
+    tap.accept("shift");
+    tap.accept("a");
+    tap.accept("b");
+    check(field.getText().toString().equals("hAb"), "shift capitalizes the next letter only");
+    SystemKeyboard.onHostEvent(SystemKeyboard.PRESS, 0, SystemKeyboard.keyIndex("q"), SystemKeyboard.layout() - 1);
+    check(field.getText().toString().equals("hAb"), "a press on an earlier layout is dropped");
+    tap.accept("?123");
+    tap.accept("1");
+    tap.accept("ABC");
+    tap.accept("space");
+    check(field.getText().toString().equals("hAb1 "), "the symbols page types digits");
+    // The desktop mirror's PC keyboard: text by code point, and keys.
+    SystemKeyboard.onHostEvent(SystemKeyboard.TEXT, 'Z', 0, 0);
+    SystemKeyboard.onHostEvent(SystemKeyboard.TEXT, 0x1f600, 0, 0);
+    SystemKeyboard.onHostEvent(SystemKeyboard.KEY, android.view.KeyEvent.KEYCODE_DEL, 0, 0);
+    check(field.getText().toString().equals("hAb1 Z"), "typed text commits and Delete removes a whole code point");
+    tap.accept("action");
+    check(actions.equals(List.of(android.view.inputmethod.EditorInfo.IME_ACTION_DONE)) && !SystemKeyboard.isShown()
+        && !input.isActive(), "the action key sends Done to onEditorAction and closes the keyboard");
+    var secret = new android.widget.EditText(context);
+    secret.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD);
+    check(input.showSoftInput(secret, 0), "a password field opens the keyboard");
+    tap.accept("p");
+    tap.accept("w");
+    check(secret.getText().toString().equals("pw") && SystemKeyboard.preview().equals("••"),
+        "a password is masked in the keyboard's text line");
+    check(input.hideSoftInputFromWindow(secret.getWindowToken(), 0) && !SystemKeyboard.isShown(),
+        "hideSoftInputFromWindow closes the keyboard");
+    var backs = new ArrayList<Integer>();
+    var notes = new android.widget.EditText(context) {
+      @Override public boolean onKeyPreIme(int code, android.view.KeyEvent event) {
+        backs.add(code * 10 + event.getAction());
+        return false;
+      }
+    };
+    check(input.showSoftInput(notes, 0), "a multi-line field opens the keyboard");
+    tap.accept("a");
+    tap.accept("action");
+    check(notes.getText().toString().equals("a\n") && SystemKeyboard.isShown(), "Enter in a multi-line field is a newline");
+    tap.accept("close");
+    check(backs.equals(List.of(40, 41)) && !SystemKeyboard.isShown(), "the close key sends Back to the field, then closes");
+    // A game's own editor view (GameActivity's InputEnabledSurfaceView) and connection.
+    var events = new ArrayList<String>();
+    var surface = new android.view.View(context) {
+      @Override public boolean onCheckIsTextEditor() { return true; }
+      @Override public android.view.inputmethod.InputConnection onCreateInputConnection(android.view.inputmethod.EditorInfo info) {
+        info.inputType = android.text.InputType.TYPE_CLASS_TEXT;
+        info.imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_GO;
+        return new android.view.inputmethod.BaseInputConnection(this, false) {
+          @Override public boolean commitText(CharSequence text, int cursor) { events.add("commit:" + text); return super.commitText(text, cursor); }
+          @Override public boolean performEditorAction(int action) { events.add("action:" + action); return true; }
+        };
+      }
+    };
+    check(input.showSoftInput(surface, 0), "a game's editor view opens the keyboard");
+    tap.accept("x");
+    check(SystemKeyboard.preview().equals("x"), "the text line reads a connection without extracted text");
+    tap.accept("action");
+    check(events.equals(List.of("commit:x", "action:2")) && !SystemKeyboard.isShown(),
+        "a game's connection takes the text and its Go action, and the keyboard closes");
+  }
   private static void keyCharacterMap() throws Exception {
     var map = android.view.KeyCharacterMap.load(android.view.KeyCharacterMap.VIRTUAL_KEYBOARD);
     check(map == android.view.KeyCharacterMap.load(7) && map.getKeyboardType() == android.view.KeyCharacterMap.FULL
@@ -1907,6 +2049,7 @@ public final class FrameworkTest {
     textToSpeech();
     attributionSource();
     keyCharacterMap();
+    systemKeyboard();
     var power = new PowerManager();
     check(Float.isNaN(power.getThermalHeadroom(0)) && Float.isNaN(power.getThermalHeadroom(60)),
         "unavailable thermal prediction is NaN");
@@ -1973,6 +2116,7 @@ public final class FrameworkTest {
     check(styledEditor.isClickable(), "installing a click listener sets the Android clickable flag");
     censusValues();
     sdkExtensions();
+    horizonOsVersion();
     intentMatching();
     manifestResolutionRegressions();
     lenientUris();
@@ -2171,6 +2315,15 @@ public final class FrameworkTest {
         "declared install-time body permission is granted only to its package");
     check(trackingPermissions.checkPermission("com.oculus.permission.EYE_TRACKING", "test.intent") == -1,
         "body install-time grant does not grant dangerous eye permission");
+    // Unity enables the Quest system keyboard from the manifest's features (#160).
+    check(trackingPermissions.getPackageInfo("test.intent", 0).reqFeatures == null,
+        "a manifest without uses-feature has no requested features");
+    manifest.children.add(manifestNode("uses-feature", "name", "oculus.software.overlay_keyboard"));
+    var keyboard = new android.content.pm.PackageManager(new PackageModel(manifest))
+        .getPackageInfo("test.intent", 16384).reqFeatures;
+    check(keyboard != null && keyboard.length == 1 && keyboard[0].name.equals("oculus.software.overlay_keyboard")
+        && keyboard[0].flags == android.content.pm.FeatureInfo.FLAG_REQUIRED,
+        "uses-feature entries are the package's requested features");
     // Unity reads each requested permission's protection level (Dread Halls).
     check(packageManager.getPermissionInfo("android.permission.RECORD_AUDIO", 128).getProtection()
             == android.content.pm.PermissionInfo.PROTECTION_DANGEROUS

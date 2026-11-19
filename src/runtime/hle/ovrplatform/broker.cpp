@@ -21,7 +21,7 @@ class Brokered final : public Provider {
   User user_;
   Error identity_;
   bool ready_ = false;
-  std::shared_ptr<PipeChannel> channel_;
+  BrokerCall channel_;
   std::shared_ptr<HttpTransport> http_;
   std::mutex mutex_;
   std::once_flag cache_once_;
@@ -79,7 +79,7 @@ class Brokered final : public Provider {
     if (!ready_)
       return failure(ErrorCode::uninitialized);
     try {
-      auto reply = channel_->call(venture::Json{{"op", "validate"}});
+      auto reply = channel_(venture::Json{{"op", "validate"}});
       auto error = failure(code(reply, "error"));
       if (error) {
         token_.clear();
@@ -97,7 +97,7 @@ class Brokered final : public Provider {
 
 public:
   Brokered(AppIdentity app, std::string key,
-           std::shared_ptr<PipeChannel> channel,
+           BrokerCall channel,
            std::shared_ptr<HttpTransport> http)
       : app_(std::move(app)), key_(std::move(key)),
         channel_(std::move(channel)), http_(std::move(http)) {}
@@ -108,7 +108,7 @@ public:
   Error prepare() override {
     std::lock_guard lock(mutex_);
     try {
-      return accept(channel_->call(venture::Json{{"op", "credentials"}, {"appId", app_.app_id}}));
+      return accept(channel_(venture::Json{{"op", "credentials"}, {"appId", app_.app_id}}));
     } catch (...) {
       return failure(ErrorCode::unavailable);
     }
@@ -123,7 +123,7 @@ public:
         return {error};
     }
     try {
-      auto reply = channel_->call(venture::Json{{"op", "entitlement"}});
+      auto reply = channel_(venture::Json{{"op", "entitlement"}});
       if (stop.stop_requested()) return {failure(ErrorCode::cancelled)};
       return {failure(code(reply, "error"))};
     } catch (...) {
@@ -151,7 +151,7 @@ public:
     // The service token stays in the launcher; only presence and an interval
     // cross the same channel used for application credentials.
     try {
-      auto reply = channel_->call(venture::Json{{"op", "presence_heartbeat"}, {"presence", options}});
+      auto reply = channel_(venture::Json{{"op", "presence_heartbeat"}, {"presence", options}});
       if (stop.stop_requested()) return {failure(ErrorCode::cancelled)};
       if (auto error = failure(code(reply, "error"))) return {error};
       const auto interval = venture::number(reply, "interval");
@@ -184,7 +184,7 @@ public:
         user_ = {};
         // Refresh for subsequent calls; never replay this request, especially
         // ConsumePurchase. The launcher applies its existing refresh throttle.
-        if (auto error = accept(channel_->call(venture::Json{{"op", "refresh"}})))
+        if (auto error = accept(channel_(venture::Json{{"op", "refresh"}})))
           ready_ = false;
       }
       return response;
@@ -265,7 +265,7 @@ public:
       if (venture::number(graph_error, "code") == 190) {
         token_.clear();
         user_ = {};
-        auto error = accept(channel_->call(venture::Json{{"op", "refresh"}}));
+        auto error = accept(channel_(venture::Json{{"op", "refresh"}}));
         if (error) {
           ready_ = false;
           return {error};
@@ -408,7 +408,14 @@ std::shared_ptr<Provider>
 brokered_provider(AppIdentity app, std::string key,
                   std::shared_ptr<PipeChannel> channel,
                   std::shared_ptr<HttpTransport> http) {
-  return std::make_shared<Brokered>(std::move(app), std::move(key),
-                                    std::move(channel), std::move(http));
+  return brokered_provider(std::move(app), std::move(key),
+                           [channel = std::move(channel)](const venture::Json& request) {
+                             return channel->call(request);
+                           },
+                           std::move(http));
+}
+std::shared_ptr<Provider> brokered_provider(AppIdentity app, std::string key, BrokerCall call,
+                                            std::shared_ptr<HttpTransport> http) {
+  return std::make_shared<Brokered>(std::move(app), std::move(key), std::move(call), std::move(http));
 }
 } // namespace venture::ovrplatform

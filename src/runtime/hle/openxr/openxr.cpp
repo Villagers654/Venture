@@ -775,6 +775,7 @@ XrResult xrCreateSession(XrInstance instance, const XrSessionCreateInfo *info, X
   }
   auto result = session().create(SessionOwner::openxr, gles ? nullptr : &vulkan_binding);
   if (XR_SUCCEEDED(result)) {
+    venture::xr::forget_located_stereo_fov();
     *out = session().handle;
     state().gles = gles;
     state().color_space = XR_COLOR_SPACE_REC709_FB;
@@ -832,6 +833,7 @@ XrResult xrDestroySession(XrSession handle) {
     state().host_evictions = 0;
     state().foveation.clear();
     state().hands.clear();
+    venture::xr::forget_located_stereo_fov();
   }
   if (shutdown_trace::enabled) log::info("shutdown", "xrDestroySession returned result={}", int(result));
   return result;
@@ -1211,6 +1213,138 @@ void log_eye_routing(std::span<const XrCompositionLayerBaseHeader* const> host_l
   ++reports;
   log::info("xr", "Eye routing: {}", line);
 }
+// XrViewConfigurationProperties::fovMutable of the host's stereo views, asked
+// once per host instance; a failed query counts as mutable (nothing changes).
+bool host_fov_mutable() {
+  static XrInstance asked = XR_NULL_HANDLE;
+  static bool mutable_fov = true;
+  const auto& h = host_xr();
+  if (asked != h.instance) {
+    asked = h.instance;
+    XrViewConfigurationProperties properties{XR_TYPE_VIEW_CONFIGURATION_PROPERTIES};
+    mutable_fov = XR_FAILED(::xrGetViewConfigurationProperties(h.instance, h.system,
+                                                                XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO, &properties)) ||
+                  properties.fovMutable;
+  }
+  return mutable_fov;
+}
+std::string fov_text(const XrFovf& f) {
+  constexpr double degrees = 180.0 / std::numbers::pi;
+  return std::format("{:.1f}/{:.1f}/{:.1f}/{:.1f}", f.angleLeft * degrees, f.angleRight * degrees,
+                     f.angleUp * degrees, f.angleDown * degrees);
+}
+// A host whose stereo field of view is not mutable (fovMutable false: the Meta
+// Horizon PC runtime) may compose every projection view with its own field of
+// view whatever the game submits. A game that renders a wider one (Unity's
+// Symmetric Projection) then shows each eye's image stretched over the host's
+// field and shifted outward, so the eyes no longer converge. Such a view is
+// given to the host as the crop of its image that covers the host's field of
+// view, with that field of view, which every host shows the same way. Depth
+// and motion subimages chained to the view get the same crop. Views whose
+// field does not contain the host's, or that already match it, are unchanged.
+// `vflip`: the layer asks XR_FB_composition_layer_image_layout's vertical flip.
+const XrCompositionLayerProjection* fit_projection_fov(const XrCompositionLayerProjection& projection, bool vflip,
+                                                       std::deque<std::vector<std::byte>>& storage) {
+  const auto host = venture::xr::located_stereo_fov();
+  if (!host || projection.viewCount != 2 || !projection.views) return &projection;
+  const bool fov_mutable = host_fov_mutable();
+  std::array<std::optional<FovCrop>, 2> crops;
+  for (std::uint32_t v = 0; v < 2; ++v) crops[v] = venture::xr::fov_crop(projection.views[v].fov, (*host)[v]);
+  {
+    // Logged when the fields change, at most 8 times: what the game submits
+    // against the host's views, and where its view 1 is from its view 0 (along
+    // view 0's right axis: positive when the eyes are in order).
+    static std::string previous;
+    static unsigned reports = 0;
+    std::string key;
+    for (std::uint32_t v = 0; v < 2; ++v)
+      key += std::format("{}view {} fov {}, host fov {}", v ? "; " : "", v, fov_text(projection.views[v].fov),
+                         fov_text((*host)[v]));
+    const auto& p0 = projection.views[0].pose;
+    const auto& p1 = projection.views[1].pose;
+    const auto& q = p0.orientation;
+    const float right[3]{1 - 2 * (q.y * q.y + q.z * q.z), 2 * (q.x * q.y + q.w * q.z), 2 * (q.x * q.z - q.w * q.y)};
+    const float d[3]{p1.position.x - p0.position.x, p1.position.y - p0.position.y, p1.position.z - p0.position.z};
+    const auto line = std::format("{}; view 1 is {:.1f} mm from view 0, {:+.1f} mm along its right axis", key,
+                                  1000 * std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]),
+                                  1000 * (d[0] * right[0] + d[1] * right[1] + d[2] * right[2]));
+    bool differs = false;
+    for (std::uint32_t v = 0; v < 2; ++v) {
+      const auto& a = projection.views[v].fov;
+      const auto& b = (*host)[v];
+      differs |= std::abs(a.angleLeft - b.angleLeft) > 1e-4f || std::abs(a.angleRight - b.angleRight) > 1e-4f ||
+                 std::abs(a.angleUp - b.angleUp) > 1e-4f || std::abs(a.angleDown - b.angleDown) > 1e-4f;
+    }
+    if (key != previous && reports < 8) {
+      previous = key;
+      ++reports;
+      log::info("xr", "Projection views: {}; host fovMutable={}{}", line, fov_mutable,
+                !differs ? "; fields match"
+                : fov_mutable ? "; the host applies the game's fields"
+                : crops[0] && crops[1] ? "; the host keeps its own fields, so each view is presented through the crop that covers them"
+                : "; the host keeps its own fields and a game field does not contain the host's, so the views are left as submitted");
+    }
+  }
+  if (fov_mutable || (!crops[0] && !crops[1])) return &projection;
+  // Copies of the projection, its views and their chains, with the crops applied.
+  const auto subimage_offsets = [](XrStructureType type, std::size_t& size) -> std::optional<std::vector<std::size_t>> {
+    for (const auto& s : structure_metadata()) {
+      if (s.type != type) continue;
+      size = s.size;
+      std::vector<std::size_t> offsets;
+      for (const auto& m : member_metadata())
+        if (!m.pointer && std::string_view(m.structure) == s.name && std::string_view(m.type) == "XrSwapchainSubImage")
+          offsets.push_back(m.offset);
+      return offsets;
+    }
+    return std::nullopt;
+  };
+  const auto up_low = [&](XrSwapchain chain) {
+    const auto found = state().swapchains.find(chain);
+    const bool gles = found != state().swapchains.end() && !found->second.textures.empty();
+    return gles == vflip;
+  };
+  const auto crop_subimage = [&](XrSwapchainSubImage& sub, const FovCrop& crop) {
+    if (sub.imageRect.extent.width > 0 && sub.imageRect.extent.height > 0)
+      sub.imageRect = venture::xr::crop_view_rect(sub.imageRect, crop, up_low(sub.swapchain));
+  };
+  std::array<XrCompositionLayerProjectionView, 2> views{projection.views[0], projection.views[1]};
+  for (std::uint32_t v = 0; v < 2; ++v) {
+    if (!crops[v]) continue;
+    // Copy the view's chain node by node; a node of unknown layout leaves the view as submitted.
+    const XrBaseInStructure* head = nullptr;
+    XrBaseInStructure* tail = nullptr;
+    bool known = true;
+    for (auto* node = static_cast<const XrBaseInStructure*>(views[v].next); node; node = node->next) {
+      std::size_t size = 0;
+      const auto offsets = subimage_offsets(node->type, size);
+      if (!offsets || size < sizeof(XrBaseInStructure)) { known = false; break; }
+      auto& copy = storage.emplace_back(size);
+      std::memcpy(copy.data(), node, size);
+      for (const auto offset : *offsets) {
+        XrSwapchainSubImage sub;
+        std::memcpy(&sub, copy.data() + offset, sizeof(sub));
+        crop_subimage(sub, *crops[v]);
+        std::memcpy(copy.data() + offset, &sub, sizeof(sub));
+      }
+      auto* base = reinterpret_cast<XrBaseInStructure*>(copy.data());
+      base->next = nullptr;
+      (tail ? tail->next : head) = base;
+      tail = base;
+    }
+    if (!known) continue;
+    views[v].next = head;
+    crop_subimage(views[v].subImage, *crops[v]);
+    views[v].fov = (*host)[v];
+  }
+  auto& view_copy = storage.emplace_back(sizeof(views));
+  std::memcpy(view_copy.data(), views.data(), sizeof(views));
+  auto& layer_copy = storage.emplace_back(sizeof(projection));
+  auto* fitted = reinterpret_cast<XrCompositionLayerProjection*>(layer_copy.data());
+  *fitted = projection;
+  fitted->views = reinterpret_cast<const XrCompositionLayerProjectionView*>(view_copy.data());
+  return fitted;
+}
 }  // namespace
 
 XrResult xrEndFrame(XrSession handle, const XrFrameEndInfo *info) {
@@ -1314,6 +1448,8 @@ XrResult xrEndFrame(XrSession handle, const XrFrameEndInfo *info) {
   // remaining layer's swapchains when it carries a reconstruction opacity.
   PassthroughLayerStorage passthrough_storage;
   std::deque<std::vector<std::byte>> premultiplied;
+  // Projection layers presented through the crop that covers the host's field of view.
+  std::deque<std::vector<std::byte>> fitted_views;
   UnderlayAlpha underlay{.opacity = passthrough.underlay_opacity, .key = passthrough.key};
   bool underlay_pending = passthrough.underlay_opacity < 1 || passthrough.key;
   // Takes one host layer: copies its chain, validates it and maps its swapchains.
@@ -1360,6 +1496,15 @@ XrResult xrEndFrame(XrSession handle, const XrFrameEndInfo *info) {
                       int(p->views[j].type), valid_handle(p->views[j].subImage.swapchain, "XrSwapchain"));
           return XR_ERROR_VALIDATION_FAILURE;
         }
+      bool vflip = false;
+      if (enabled("XR_FB_composition_layer_image_layout"))
+        for (auto* node = static_cast<const XrBaseInStructure*>(p->next); node; node = node->next)
+          if (node->type == XR_TYPE_COMPOSITION_LAYER_IMAGE_LAYOUT_FB &&
+              (reinterpret_cast<const XrCompositionLayerImageLayoutFB*>(node)->flags &
+               XR_COMPOSITION_LAYER_IMAGE_LAYOUT_VERTICAL_FLIP_BIT_FB))
+            vflip = true;
+      p = fit_projection_fov(*p, vflip, fitted_views);
+      layer = reinterpret_cast<const XrCompositionLayerBaseHeader*>(p);
       for (std::uint32_t j = 0; j < p->viewCount; ++j) {
         const auto& rect = p->views[j].subImage.imageRect;
         if (rect.extent.width <= 0 || rect.extent.height <= 0) continue;

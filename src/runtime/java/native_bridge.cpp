@@ -82,6 +82,18 @@ std::mutex libraries_mutex;
 std::condition_variable libraries_changed;
 std::vector<std::shared_ptr<Loaded>> libraries;
 void* make_stub(NativeRecord* record) {
+#if defined(__aarch64__)
+  // BTI c; ldr x16,record; ldr x17,entry; br x17. Tail branch preserves the JVM's
+  // link register and arguments; x16/x17 are the AAPCS64 intra-call scratch registers.
+  const std::uint32_t instructions[] = {0xd503245f, 0x58000070, 0x58000091, 0xd61f0220};
+  std::array<std::byte, 32> code{};
+  std::memcpy(code.data(), instructions, sizeof(instructions));
+  const auto context = reinterpret_cast<std::uintptr_t>(record);
+  const auto entry = reinterpret_cast<std::uintptr_t>(&venture_java_native_entry);
+  std::memcpy(code.data() + 16, &context, 8);
+  std::memcpy(code.data() + 24, &entry, 8);
+  return platform::executable_stub(code);
+#else
   // ENDBR64; movabs r10,record; movabs r11,entry; jmp r11.
   // Tail jump preserves the JVM's return address and arguments. No live RWX.
   std::array<std::byte, 27> code{};
@@ -97,6 +109,7 @@ void* make_stub(NativeRecord* record) {
   code[25] = std::byte{0xff};
   code[26] = std::byte{0xe3};
   return platform::executable_stub(code);
+#endif
 }
 void JNICALL loader_load(JNIEnv* env, jclass, jstring name, jobject loader) noexcept {
   try {
@@ -140,7 +153,7 @@ HostArguments guest_path_arguments(JNIEnv* env, const Descriptor& descriptor,
     const bool floating = type == Type::Float || type == Type::Double;
     if (abi == HostAbi::Win64) stack_size += position++ >= 4;
     else if (floating) stack_size += fp++ >= 8;
-    else stack_size += gp++ >= 6;
+    else stack_size += gp++ >= host_gp_registers(abi);
   }
   gp = position = 2; fp = 0;
   for (auto type : descriptor.parameters) {
@@ -155,7 +168,7 @@ HostArguments guest_path_arguments(JNIEnv* env, const Descriptor& descriptor,
       spilled = fp >= 8;
       index = spilled ? stack++ : fp++;
     } else {
-      spilled = gp >= 6;
+      spilled = gp >= host_gp_registers(abi);
       index = spilled ? stack++ : gp++;
     }
     if (type != Type::Object) continue;
@@ -210,11 +223,7 @@ extern "C" std::uint64_t venture_java_native_dispatch(NativeRecord* record, cons
     if (trace)
       log::info("jni-trace", "native {}{} target={:#x}", record->name,
                 record->signature, record->function);
-#ifdef _WIN32
-    constexpr auto host_abi = HostAbi::Win64;
-#else
-    constexpr auto host_abi = HostAbi::SysV;
-#endif
+    constexpr auto host_abi = kHostAbi;
     std::vector<std::uint64_t> path_stack;
     const auto path_host = guest_path_arguments(env, record->descriptor, *host, host_abi, path_stack);
     if (env->ExceptionCheck()) return 0;
@@ -548,6 +557,12 @@ void bind_class(JNIEnv* env, jclass cls) {
     if (register_natives(env, cls, &native, 1) != JNI_OK) return;
   }
 }
+namespace {
+// System.loadLibrary of a library the app does not ship. Apps probe optional
+// libraries and catch the UnsatisfiedLinkError (Unity tries liblibhaptics_sdk.so
+// before libhaptics_sdk.so); one that does not closes with a FATAL EXCEPTION.
+struct AbsentLibrary : std::runtime_error { using std::runtime_error::runtime_error; };
+}  // namespace
 bool load_guest_library(const std::string& name, void* loader_ref, std::string* error) {
   std::shared_ptr<Loaded> record;
   try {
@@ -564,7 +579,12 @@ bool load_guest_library(const std::string& name, void* loader_ref, std::string* 
     if (thread.cpu().isa() == GuestIsa::a32) tokens = std::make_unique<jni32::NativeScope>();
     log::info("java", "Loading guest library {}", name);
     auto* image = Linker::get().open(name, kRtldNow | kRtldLocal | kRtldNoDelete, nullptr);
-    if (!image) throw std::runtime_error(Linker::get().take_error());
+    if (!image) {
+      const bool absent = Linker::get().error_is_absent_library();
+      auto text = Linker::get().take_error();
+      if (absent) throw AbsentLibrary(text);
+      throw std::runtime_error(text);
+    }
     {
       std::unique_lock lock(libraries_mutex);
       for (auto existing : libraries)
@@ -656,7 +676,9 @@ bool load_guest_library(const std::string& name, void* loader_ref, std::string* 
     }
     libraries_changed.notify_all();
     if (error) *error = e.what();
-    log::error("java", "load_guest_library: {}", e.what());
+    // Not an error by itself: the app decides, as on Android, which logs nothing.
+    if (dynamic_cast<const AbsentLibrary*>(&e)) log::warn("java", "load_guest_library: {}", e.what());
+    else log::error("java", "load_guest_library: {}", e.what());
     return false;
   } catch (...) {
     constexpr auto message = "guest native library load raised an unknown native exception";

@@ -25,6 +25,15 @@ struct CommitCharge {
   bool enforced = true;
 };
 bool commit_charge(CommitCharge& out);
+// Cumulative counters of this process, read around a frame stall (not cheap on
+// Windows, which walks the system's process list for hard faults): CPU time
+// (user + kernel), page faults (all, and those read from disk, -1 unknown) and
+// bytes read (Windows: all read I/O; Linux: rchar).
+struct ProcessActivity {
+  std::uint64_t cpu_ns = 0, faults = 0, read_bytes = 0;
+  std::int64_t hard_faults = -1;
+};
+bool process_activity(ProcessActivity& out);
 // Cumulative time each GPU engine has spent running this process's work, as the OS
 // accounts it: Windows "GPU Engine" Running Time (Task Manager's per-process GPU
 // usage); Linux DRM fdinfo drm-engine-* (amdgpu, i915, xe, panfrost, ...). Keyed by

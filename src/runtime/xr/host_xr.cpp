@@ -1,8 +1,10 @@
 #include "xr/application_identity.h"
 #include "xr/host_xr.h"
+#include "xr/host_extensions.h"
 #include "xr/display_memory.h"
 #include "xr/openxr_layers.h"
 #include "common/environment.h"
+#include "common/openxr_layers.h"
 
 #include <algorithm>
 #include <atomic>
@@ -45,50 +47,7 @@ XrResult create_instance(HostXr &h, const char *&operation) {
       log::info("xr", "Host extension enumeration result={}", int(result));
       return result;
     }
-    // r4-xr/report.md: SDK strings are not a guest capability list. This is
-    // only the host side; guest enumeration is filtered independently.
-    std::set<std::string> usable{"XR_KHR_vulkan_enable",
-                                       "XR_KHR_vulkan_enable2",
-                                       "XR_KHR_win32_convert_performance_counter_time",
-                                       "XR_KHR_convert_timespec_time",
-                                       "XR_EXT_hand_tracking",
-                                       "XR_EXT_hand_tracking_data_source",
-                                       "XR_EXT_hand_joints_motion_range",
-                                       "XR_FB_hand_tracking_aim",
-                                       "XR_FB_hand_tracking_capsules",
-                                       "XR_FB_hand_tracking_mesh",
-                                       "XR_FB_display_refresh_rate",
-                                       "XR_FB_color_space",
-                                       "XR_FB_swapchain_update_state",
-                                       "XR_FB_swapchain_update_state_vulkan",
-                                       "XR_META_performance_metrics",
-                                       "XR_KHR_generic_controller",
-                                       "XR_FB_haptic_pcm",
-                                       "XR_FB_haptic_amplitude_envelope",
-                                       "XR_KHR_composition_layer_depth",
-                                       "XR_KHR_swapchain_usage_input_attachment_bit",
-                                       "XR_MND_swapchain_usage_input_attachment_bit",
-                                       "XR_KHR_composition_layer_cylinder",
-                                       "XR_KHR_composition_layer_cube",
-                                       "XR_KHR_composition_layer_equirect",
-                                       "XR_KHR_composition_layer_equirect2",
-                                       "XR_KHR_composition_layer_color_scale_bias",
-                                       "XR_FB_space_warp",
-                                       "XR_EXT_local_floor",
-                                       "XR_EXT_performance_settings",
-                                       "XR_EXT_view_configuration_depth_range",
-                                       // Controllers (common/controls.h): their profiles on an
-                                       // OpenXR 1.0 instance, and trackpad halves.
-                                       "XR_KHR_binding_modification",
-                                       "XR_EXT_dpad_binding",
-                                       "XR_META_touch_controller_plus",
-                                       "XR_FB_touch_controller_pro",
-                                       "XR_HTC_vive_cosmos_controller_interaction",
-                                       "XR_HTC_vive_focus3_controller_interaction",
-                                       "XR_EXT_hp_mixed_reality_controller",
-                                       "XR_BD_controller_interaction",
-                                       "XR_MNDX_psvr2_interaction",
-                                       "XR_VALVE_frame_controller_interaction"};
+    std::set<std::string> usable(std::begin(kHostExtensions), std::end(kHostExtensions));
 #ifdef _WIN32
     // The headset's audio endpoints, for host audio (headset_audio_endpoint).
     usable.insert("XR_OCULUS_audio_device_guid");
@@ -268,8 +227,16 @@ HostXr initialize_host() {
     }
     if (result == XR_ERROR_RUNTIME_UNAVAILABLE)
       h.error = host_initialization_error(result, "get the headset system");
-    else if (result == XR_ERROR_FORM_FACTOR_UNAVAILABLE)
+    else if (result == XR_ERROR_FORM_FACTOR_UNAVAILABLE) {
       h.error = h.runtime_name + " reports no headset. Connect the headset, start its runtime and try again";
+      // Another installed runtime may be the one the headset is on (a Steam Frame on SteamVR
+      // while Virtual Desktop is the active runtime, #161).
+      std::string others;
+      for (const auto &r : venture::openxr_layers::installed_runtimes())
+        if (r.name != h.runtime_name) others += (others.empty() ? "" : ", ") + r.name;
+      if (!others.empty())
+        h.error += ", or choose the runtime your headset uses (" + others + ") in Venture's Settings > VR runtime";
+    }
     else if (!h.available)
       h.error = h.runtime_name + " has no head-mounted display system (XrResult " +
                 std::to_string(int(result)) + ")";

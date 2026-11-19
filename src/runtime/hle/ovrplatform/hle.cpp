@@ -10,8 +10,14 @@
 
 #include "common/log.h"
 #include "common/environment.h"
+// VENTURE_PLATFORM_NATIVE_HOST: the Android Platform loader inside a game
+// (src/android_game/platform) builds the handlers and their table alone; the
+// guest linker's library objects, loader copies and A32 adapters are the
+// runtime's.
+#ifndef VENTURE_PLATFORM_NATIVE_HOST
 #include "core/linker.h"
 #include "core/process.h"
+#endif
 #include "common/milestone.h"
 
 namespace venture::ovrplatform {
@@ -39,26 +45,56 @@ void async_init_on(hle::CallContext& ctx, Session& platform) {
   log_init(ctx);
   ctx.return_x(platform.initialize_async(text(ctx.x(0))));
 }
+// The configuration of the WithOptions entry points (ovrKeyValuePair[]: key,
+// type, then the string, int and double values; 40 bytes on arm64, 24 on A32).
+// Its keys tune services the game may use (peer-to-peer networking, co-watching)
+// and never decide whether the platform starts, so they are logged and the
+// platform initializes as without them. Refusing them stopped Theater Elsewhere
+// (Quill player) at start: no platform, so its entitlement check failed (#164).
+void log_init_options(std::string_view entry, GuestAddr pairs, std::uint64_t count, bool a32) {
+  const std::size_t stride = a32 ? 24 : sizeof(KeyValuePair64);
+  for (std::uint64_t i = 0; pairs && i < std::min<std::uint64_t>(count, 32); ++i) {
+    const auto* entry_bytes = g2h<const std::uint8_t>(pairs + i * stride);
+    std::uint64_t key = 0, string_value = 0;
+    std::int32_t type = 0, int_value = 0;
+    double double_value = 0;
+    if (a32) {
+      std::uint32_t words[4];
+      std::memcpy(words, entry_bytes, sizeof(words));
+      key = words[0], type = std::int32_t(words[1]), string_value = words[2], int_value = std::int32_t(words[3]);
+      std::memcpy(&double_value, entry_bytes + 16, sizeof(double_value));
+    } else {
+      KeyValuePair64 pair;
+      std::memcpy(&pair, entry_bytes, sizeof(pair));
+      key = pair.key, type = pair.type, string_value = pair.string_value, int_value = pair.int_value;
+      double_value = pair.double_value;
+    }
+    const auto name = text(key);
+    if (type == 0)
+      log::info("ovrplatform", "{} option {}={}", entry, name, text(string_value));
+    else if (type == 1)
+      log::info("ovrplatform", "{} option {}={}", entry, name, int_value);
+    else
+      log::info("ovrplatform", "{} option {}={}", entry, name, double_value);
+  }
+}
 void sync_options_on(hle::CallContext& ctx, Session& platform) {
   // Android WithOptions preserves X0..X4. Verified in the V-Speedway/Bait
   // loader at VA 0x537f0 (r5-platform evidence); X3/X4 are the config
-  // array/count. Nonempty configuration is not silently discarded.
-  if (ctx.x(4)) {
-    log_init(ctx);
-    log::warn("ovrplatform", "{}: initialization options unsupported", ctx.info().name);
-    ctx.return_x(static_cast<std::uint64_t>(InitResult::unknown));
-  } else
-    sync_init_on(ctx, platform);
+  // array/count.
+  log_init_options(ctx.info().name, ctx.x(3), ctx.x(4), false);
+  sync_init_on(ctx, platform);
 }
 void async_options_on(hle::CallContext& ctx, Session& platform) {
   log_init(ctx);
-  ctx.return_x(ctx.x(4) ? platform.reject_initialization(0x1ad307b4)
-                        : platform.initialize_async(text(ctx.x(0))));
+  log_init_options(ctx.info().name, ctx.x(3), ctx.x(4), false);
+  ctx.return_x(platform.initialize_async(text(ctx.x(0))));
 }
 void sync_init(hle::CallContext& ctx) { sync_init_on(ctx, session(ctx)); }
 void async_init(hle::CallContext& ctx) { async_init_on(ctx, session(ctx)); }
 void sync_options(hle::CallContext& ctx) { sync_options_on(ctx, session(ctx)); }
 void async_options(hle::CallContext& ctx) { async_options_on(ctx, session(ctx)); }
+#ifndef VENTURE_PLATFORM_NATIVE_HOST
 // A renamed copy of Meta's loader (Tomahawk's libovr_custom.so in Wizherd)
 // forwards to the one platform the game's loader uses, but each copy binds
 // its entry points in its own first initialize call: until then its
@@ -81,6 +117,7 @@ void copy_initialized(hle::CallContext& ctx) {
   auto& copy = loader_copy(ctx);
   ctx.return_x(copy.bound.load(std::memory_order_acquire) && copy.platform.initialized());
 }
+#endif
 void reject_developer_token(hle::CallContext& ctx) {
   log::warn("ovrplatform", "{}: developer credential scope is not verified", ctx.info().name);
   ctx.return_x(0);  // SDK bool; never substitute for the signed-in account.
@@ -192,6 +229,14 @@ void no_voice_connection(hle::CallContext&) {
   // The device has no voice peers or transport. Accept/Start/Stop cannot
   // create a connection or post a connection-established notification, so
   // options, output rate and microphone filters for connections never apply.
+}
+void no_peer_connection(hle::CallContext&) {
+  // OVR_Functions_Networking.h: void Accept/Close/Connect(peerID) and
+  // CloseForCurrentRoom. Peer-to-peer networking runs through Oculus Rooms,
+  // which this device cannot reach: no peer ever asks to connect, Connect
+  // never establishes a connection (so no ConnectionStateChange is posted,
+  // as for ovr_Voip_Start), and there is nothing to close. ReadPacket never
+  // hands out a packet, so Packet_Free has nothing to release.
 }
 void voice_status(hle::CallContext& ctx) {
   ctx.return_x(static_cast<std::uint32_t>(SystemVoipStatus::unavailable));
@@ -337,6 +382,13 @@ const std::vector<Export>& table() {
       VENTURE_EXPORT("ovrKeyValuePair_makeDouble", key_value_double),
       VENTURE_EXPORT("ovr_Voip_GetSystemVoipStatus", voice_status),
       VENTURE_EXPORT("ovr_Voip_SetMicrophoneMuted", microphone_mute),
+      // System VoIP is Horizon's party chat, which this device never joins
+      // (status Unavailable above): its microphone state is ovrVoipMuteState_Unknown,
+      // and muting it or passing game audio through applies to nothing. UE5's
+      // Meta platform plugin imports the getter (Artheon, Nope).
+      VENTURE_EXPORT("ovr_Voip_GetSystemVoipMicrophoneMuted", no_data),
+      VENTURE_EXPORT("ovr_Voip_SetSystemVoipMicrophoneMuted", no_voice_connection),
+      VENTURE_EXPORT("ovr_Voip_SetSystemVoipPassthrough", no_voice_connection),
       VENTURE_EXPORT("ovr_Voip_Accept", no_voice_connection),
       VENTURE_EXPORT("ovr_Voip_Start", no_voice_connection),
       VENTURE_EXPORT("ovr_Voip_Stop", no_voice_connection),
@@ -362,6 +414,16 @@ const std::vector<Export>& table() {
       VENTURE_EXPORT("ovr_ApplicationLifecycle_LogDeeplinkResult", log_deeplink_result),
       VENTURE_EXPORT("ovr_Net_ReadPacket", no_data),
       VENTURE_EXPORT("ovr_Net_IsConnected", no_data),
+      // UE4's OnlineSubsystemOculus imports these at load (Moss, Wrath 2,
+      // Resident Evil 4, Puzzling Places, Vader Immortal...): unresolved, each
+      // mapped the guest loader, which aborts if a call ever reaches it.
+      VENTURE_EXPORT("ovr_Net_Accept", no_peer_connection),
+      VENTURE_EXPORT("ovr_Net_Close", no_peer_connection),
+      VENTURE_EXPORT("ovr_Net_Connect", no_peer_connection),
+      VENTURE_EXPORT("ovr_Net_CloseForCurrentRoom", no_peer_connection),
+      // bool: false when the user is not in a room, which this device never is.
+      VENTURE_EXPORT("ovr_Net_AcceptForCurrentRoom", no_data),
+      VENTURE_EXPORT("ovr_Packet_Free", no_peer_connection),
       VENTURE_EXPORT("ovr_HTTP_GetWithMessageType", http_failed),
       VENTURE_EXPORT("ovr_Net_SendPacket", send_failed),
       VENTURE_EXPORT("ovr_Net_SendPacketToCurrentRoom", send_failed),
@@ -403,6 +465,7 @@ const std::vector<Export>& table() {
 }
 }  // namespace
 std::span<const Export> exports() { return table(); }
+#ifndef VENTURE_PLATFORM_NATIVE_HOST
 std::shared_ptr<HleLibrary> make_loader_copy(Session& platform, const HleLibrary& slot,
                                              const std::string& soname) {
   // Thunks keep their copy's state for the life of the process, as the session.
@@ -458,24 +521,19 @@ void platform32(hle::CallContext& ctx) {
       auto app = cursor.word();
       cursor.word();
       cursor.word();
-      bool options = false;
-      if (fn == async_options) {
-        cursor.word();
-        options = cursor.word() != 0;
-      }
       log_init(ctx);
-      value = options ? session(ctx).reject_initialization(0x1ad307b4)
-                      : session(ctx).initialize_async(text(app));
+      if (fn == async_options) {
+        const auto pairs = cursor.word();
+        log_init_options(d.symbol, pairs, cursor.word(), true);
+      }
+      value = session(ctx).initialize_async(text(app));
     } else if (fn == sync_options) {
       auto app = cursor.word();
       cursor.word();
       cursor.word();
-      cursor.word();
-      if (cursor.word()) {
-        log::warn("ovrplatform", "{}: initialization options unsupported", d.symbol);
-        value = std::uint64_t(InitResult::unknown);
-      } else
-        value = std::uint64_t(session(ctx).initialize(text(app)));
+      const auto pairs = cursor.word();
+      log_init_options(d.symbol, pairs, cursor.word(), true);
+      value = std::uint64_t(session(ctx).initialize(text(app)));
     } else if (fn == request) {
       for (const auto& spec : request_specs())
         if (spec.name == d.symbol) {
@@ -578,6 +636,9 @@ bool word_signature(hle::Handler fn, const hle::a32::Descriptor& d) {
       fn == sync_options || fn == http_failed)
     return true;
   if (d.result.kind == Kind::Composite || d.variadic) return false;
+  // These read no argument at all, so 64-bit IDs and floats cannot misdecode.
+  if (fn == no_data || fn == no_voice_connection || fn == no_peer_connection || fn == voice_status)
+    return true;
   return std::all_of(d.arguments.begin(), d.arguments.end(), [](const hle::a32::Type& t) {
     switch (t.kind) {
       case Kind::I8: case Kind::U8: case Kind::I16: case Kind::U16: case Kind::I32: case Kind::U32:
@@ -597,4 +658,5 @@ void register_a32_adapters(std::span<const Export> extra) {
       if (auto d = hle::a32::descriptor("libovrplatformloader.so", e.name); d && word_signature(e.handler, *d))
         hle::a32::register_adapter("libovrplatformloader.so", e.name, platform32);
 }
+#endif
 }  // namespace venture::ovrplatform

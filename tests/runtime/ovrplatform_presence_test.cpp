@@ -138,3 +138,117 @@ TEST_CASE("Platform CloudStorage2 user directory is the app's cloud folder and e
   session.shutdown();
   std::filesystem::remove_all(host.parent_path().parent_path());
 }
+
+TEST_CASE("Platform playtime: a running game's heartbeat starts without presence calls and repeats on Meta's interval") {
+  optest::Arena arena;
+  auto provider = std::make_shared<PresenceProvider>();
+  provider->interval = "1";
+  Session session(optest::app(), provider, arena.memory());
+  // The game never initializes the platform SDK or sets presence.
+  session.report_playing();
+  session.report_playing();  // once only
+  provider->wait(2);
+  {
+    std::lock_guard lock(provider->mutex);
+    CHECK(provider->prepare_entered);
+    CHECK(provider->states[0].empty());
+    CHECK(provider->states[1].empty());
+  }
+  session.shutdown();
+  CHECK(arena.live == 0);
+}
+
+TEST_CASE("Platform playtime: without a signed-in account nothing is sent") {
+  struct Offline final : Provider {
+    Error prepare() override { prepared = true; return failure(ErrorCode::unauthenticated); }
+    Result entitlement(std::stop_token) override { return {}; }
+    Result heartbeat(std::string_view, std::stop_token) override { ++sent; return {{}, {}, "1"}; }
+    std::atomic<bool> prepared = false;
+    std::atomic<int> sent = 0;
+  };
+  optest::Arena arena;
+  auto provider = std::make_shared<Offline>();
+  Session session(optest::app(), provider, arena.memory());
+  session.report_playing();
+  CHECK(venture::test::wait_until([&] { return provider->prepared.load(); }));
+  std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+  CHECK(provider->sent == 0);
+  session.shutdown();
+}
+
+TEST_CASE("Platform invite launch: the join intent follows initialization once, a normal launch has none") {
+  optest::Arena arena;
+  venture::LaunchDetails invite;
+  invite.type = 2;
+  invite.source = "invite";
+  invite.destination = "race";
+  invite.lobby = "lobby";
+  invite.match = "match";
+  invite.deeplink = "private message";
+  for (bool async : {false, true}) {
+    INFO("async=", async);
+    Session session(optest::app(), std::make_shared<PresenceProvider>(), arena.memory());
+    session.set_launch_details(invite);
+    if (async)
+      completion(session, session.initialize_async(optest::app().app_id), 0x1ad307b4);
+    else
+      REQUIRE(session.initialize(optest::app().app_id) == InitResult::success);
+    auto message = optest::wait_pop(session);
+    CHECK(session.get(message, "ovr_Message_GetType") == 0x773889f6);
+    CHECK(session.get(message, "ovr_Message_GetRequestID") == 0);
+    const auto intent = session.get(message, "ovr_Message_GetGroupPresenceJoinIntent");
+    REQUIRE(intent != 0);
+    auto field = [&](const char* getter) {
+      return std::string(venture::g2h<char>(session.get(intent, getter)));
+    };
+    CHECK(field("ovr_GroupPresenceJoinIntent_GetDestinationApiName") == "race");
+    CHECK(field("ovr_GroupPresenceJoinIntent_GetLobbySessionId") == "lobby");
+    CHECK(field("ovr_GroupPresenceJoinIntent_GetMatchSessionId") == "match");
+    CHECK(field("ovr_GroupPresenceJoinIntent_GetDeeplinkMessage") == "private message");
+    session.free_message(message);
+    // The launch details carry the same invite; initializing again posts nothing.
+    CHECK(session.get(session.launch_details(), "ovr_LaunchDetails_GetLaunchType") == 2);
+    REQUIRE(session.initialize(optest::app().app_id) == InitResult::success);
+    CHECK(session.pop() == 0);
+    session.shutdown();
+  }
+  Session normal(optest::app(), std::make_shared<PresenceProvider>(), arena.memory());
+  REQUIRE(normal.initialize(optest::app().app_id) == InitResult::success);
+  CHECK(normal.pop() == 0);
+  normal.shutdown();
+  CHECK(arena.live == 0);
+}
+
+TEST_CASE("Platform group presence panels complete as when the user closes them") {
+  optest::Arena arena;
+  Session session(optest::app(), std::make_shared<PresenceProvider>(), arena.memory());
+  REQUIRE(session.initialize(optest::app().app_id) == InitResult::success);
+  auto options = optest::invoke(session, "ovr_InviteOptions_Create");
+  auto id = optest::invoke(session, "ovr_GroupPresence_LaunchInvitePanel", {options});
+  optest::invoke(session, "ovr_InviteOptions_Destroy", {options});
+  auto message = optest::wait_pop(session);
+  CHECK(session.get(message, "ovr_Message_GetRequestID") == id);
+  CHECK(session.get(message, "ovr_Message_GetType") == 0x0f9ecf9f);
+  CHECK(session.get(message, "ovr_Message_IsError") == 0);
+  const auto info = session.get(message, "ovr_Message_GetInvitePanelResultInfo");
+  REQUIRE(info != 0);
+  CHECK(session.get(info, "ovr_InvitePanelResultInfo_GetInvitesSent") == 0);
+  session.free_message(message);
+  optest::invoke(session, "ovr_GroupPresence_LaunchRejoinDialog",
+                 {venture::h2g("lobby"), venture::h2g("match"), venture::h2g("race")});
+  message = optest::wait_pop(session);
+  CHECK(session.get(message, "ovr_Message_GetType") == 0x1577036f);
+  const auto rejoin = session.get(message, "ovr_Message_GetRejoinDialogResult");
+  REQUIRE(rejoin != 0);
+  CHECK(session.get(rejoin, "ovr_RejoinDialogResult_GetRejoinSelected") == 0);
+  session.free_message(message);
+  options = optest::invoke(session, "ovr_RosterOptions_Create");
+  completion(session, optest::invoke(session, "ovr_GroupPresence_LaunchRosterPanel", {options}), 0x35728882);
+  optest::invoke(session, "ovr_RosterOptions_Destroy", {options});
+  options = optest::invoke(session, "ovr_MultiplayerErrorOptions_Create");
+  completion(session, optest::invoke(session, "ovr_GroupPresence_LaunchMultiplayerErrorDialog", {options}),
+             0x2955af24);
+  optest::invoke(session, "ovr_MultiplayerErrorOptions_Destroy", {options});
+  session.shutdown();
+  CHECK(arena.live == 0);
+}

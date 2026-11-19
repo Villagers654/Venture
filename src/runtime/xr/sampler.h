@@ -16,7 +16,8 @@ struct SamplerOpenGLES {
   float maxAnisotropy = 1;
   XrColor4f borderColor{};
 };
-static_assert(sizeof(SamplerOpenGLES) == 72 && offsetof(SamplerOpenGLES, borderColor) == 52);
+// A 32-bit build (the armeabi-v7a libvrapi.so) passes its own ILP32 layout.
+static_assert(sizeof(void*) != 8 || (sizeof(SamplerOpenGLES) == 72 && offsetof(SamplerOpenGLES, borderColor) == 52));
 inline XrSwapchainStateSamplerVulkanFB default_sampler() {
   XrSwapchainStateSamplerVulkanFB s{XR_TYPE_SWAPCHAIN_STATE_SAMPLER_VULKAN_FB};
   s.minFilter = s.magFilter = VK_FILTER_LINEAR;

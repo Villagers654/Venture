@@ -93,6 +93,15 @@ std::vector<fs::path> steam_libraries(const std::vector<fs::path>& steam_roots) 
   return unique;
 }
 
+// Each entry of `dir`, without throwing: a folder that cannot be read (or stops
+// being readable midway) just ends the walk. A range-for over directory_iterator
+// throws from its increment, and this runs on the picture drawing thread.
+template <class F>
+void each_entry(const fs::path& dir, F&& f) {
+  std::error_code ec;
+  for (fs::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) f(*it);
+}
+
 bool named(const fs::path& path, std::string_view name) {
   return std::ranges::equal(paths::utf8(path.filename()), name,
                             [](char a, char b) { return std::tolower(uint8_t(a)) == std::tolower(uint8_t(b)); });
@@ -116,7 +125,7 @@ std::vector<fs::path> render_model_roots() {
     if (!j.is_discarded()) {
       for (const auto& runtime : json_paths(j, "runtime")) {
         add_driver(runtime);
-        for (const auto& entry : fs::directory_iterator(runtime / "drivers", ec)) add_driver(entry.path());
+        each_entry(runtime / "drivers", [&](const fs::directory_entry& entry) { add_driver(entry.path()); });
         const fs::path common = runtime.parent_path();
         if (named(common, "common") && named(common.parent_path(), "steamapps"))
           steam_roots.push_back(common.parent_path().parent_path());
@@ -129,12 +138,13 @@ std::vector<fs::path> render_model_roots() {
   // Drivers shipped as Steam apps (PlayStation VR2 App/SteamVR_Plug-In): a driver
   // manifest at most two levels into an app's folder.
   for (const auto& library : steam_libraries(steam_roots)) {
-    for (const auto& app : fs::directory_iterator(library / "steamapps/common", ec)) {
-      if (!app.is_directory(ec)) continue;
+    each_entry(library / "steamapps/common", [&](const fs::directory_entry& app) {
+      if (!app.is_directory(ec)) return;
       if (fs::exists(app.path() / "driver.vrdrivermanifest", ec)) add_driver(app.path());
-      for (const auto& sub : fs::directory_iterator(app.path(), ec))
+      each_entry(app.path(), [&](const fs::directory_entry& sub) {
         if (sub.is_directory(ec) && fs::exists(sub.path() / "driver.vrdrivermanifest", ec)) add_driver(sub.path());
-    }
+      });
+    });
   }
   std::vector<fs::path> unique;
   for (auto& root : roots)

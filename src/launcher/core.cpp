@@ -1,4 +1,7 @@
 #include "launcher/core.h"
+#ifdef __ANDROID__
+#include "launcher/headset_play.h"
+#endif
 #include "launcher/debug_report.h"
 #include "launcher/i18n/i18n.h"
 #include "launcher/sign_in_link.h"
@@ -6,6 +9,7 @@
 #include "common/android/manifest.h"
 #include "common/download/asset_files.h"
 #include "common/file_ops.h"
+#include "common/first_launch.h"
 #include "common/http/client.h"
 #include "common/library/import.h"
 #include "common/log.h"
@@ -40,6 +44,9 @@ Core::Core(Options options)
     : options_(std::move(options)), data_(paths::data_dir()), secrets_(data_),
       vault_(data_), settings_(library::Settings::defaults(data_)) {
   fs::create_directories(data_ / "logs");
+#ifdef __ANDROID__
+  if (!options_.smoke_headset.empty()) headset::use_runtime(options_.smoke_headset);
+#endif
   log::set_file(paths::utf8(data_ / "logs" / (options_.launch_requested ?
       "launcher-direct-" + std::to_string(current_process_id()) + ".log" :
       options_.cli ? "cli-" + std::to_string(current_process_id()) + ".log" : "launcher.log")));
@@ -115,6 +122,7 @@ void Core::start(bool refresh_library) {
     }
   worker_ = std::make_unique<Worker>([this] { wake(); });
   import_worker_ = std::make_unique<Worker>([this] { wake(); });
+  headset_worker_ = std::make_unique<Worker>([this] { wake(); });
   download::Manager::Services services;
   // Imports reopen their source with the adb set in Settings (or found).
   services.open_source = [this](std::string_view spec, std::string_view package,
@@ -182,12 +190,15 @@ void Core::shutdown() {
   running_.clear();  // Join IPC handlers before destroying the download manager.
   downloads_.reset();
   queue_lock_.reset();
+  if (headset_worker_)
+    headset_worker_->stop();
   if (import_worker_)
     import_worker_->stop();
   if (worker_)
     worker_->stop();
   worker_.reset();
   import_worker_.reset();
+  headset_worker_.reset();
 }
 void Core::uninstall(const library::Install &install) {
   std::unique_ptr<FileLock> lock;
@@ -196,6 +207,8 @@ void Core::uninstall(const library::Install &install) {
   } catch (...) {
     throw std::runtime_error("Close this game before uninstalling it.");
   }
+  // Its preparation reads the files that go.
+  if (auto preparation = stop_preparation(install.plan.package)) finish_preparation(*preparation);
   // Every version of the game goes, not only the newest: an older folder an
   // update left behind would otherwise keep the game installed (Pinball FX VR:
   // "uninstall removed the update but not the game").
@@ -1213,6 +1226,19 @@ void Core::sign_in() {
         auth_url_ = url;
         auth_manual_ = false;
         auth_paste_error_.clear();
+        // A sandboxed package hands the address back from the user's own
+        // browser (sign_in_link.h): open it there through the portal, no window.
+        if (auth_window_ && !options_.cli && !options_.automation && sign_in_link::system_browser()) {
+          auth_manual_ = true;
+          try {
+            open_url(url);
+            auth_status_ = "Meta's sign-in opened in your browser. Sign in there; the steps are below.";
+          } catch (const std::exception &e) {
+            log::warn("auth", "The sign-in link could not open in a browser: {}", e.what());
+            auth_status_ = "Open the sign-in link below in a browser.";
+          }
+          return;
+        }
         if (auth_window_)
           action([&] { browser_.open(url, data_); });
         auth_status_ = auth_window_ ? "Complete sign-in in the Meta window." : "Waiting for the sign-in address.";
@@ -1522,7 +1548,7 @@ void Core::uninstall_addon(std::string_view app, std::string_view sku) {
 }
 // The game's lock, held while its saves are imported or sent; another import or
 // export, or the game running from another launcher, holds it already.
-static std::shared_ptr<FileLock> save_lock(const fs::path &data, const std::string &package) {
+std::shared_ptr<FileLock> save_lock(const fs::path &data, const std::string &package) {
   try {
     return std::make_shared<FileLock>(data / "locks" / ("game-" + package + ".lock"), false);
   } catch (...) {
@@ -1736,6 +1762,44 @@ void Core::launch_game(std::string_view id, std::string_view requested,
     throw std::runtime_error(
         "This game is not completely installed. Resume its download first.");
   }
+#ifdef __ANDROID__
+  // On a headset a game runs as its own app, adapted and installed on the
+  // device (headset_play.h), not through venture-runtime.
+  if (launch_pending_.contains(game_id))
+    throw std::runtime_error("This game is already starting.");
+  launch_pending_.insert(game_id);
+  notice_ = "Preparing the game for this headsetâ¦";
+  // The asset files the game downloads while it runs, as the PC runtime's pipe gets them.
+  PipeChannel::Handler assets;
+  if (!i->plan.local && !choice.account_key.empty()) {
+    try {
+      assets = download::asset_launcher_handler(*downloads_, data_, root_of(*i), i->directory, choice.account_key);
+    } catch (const std::exception& e) {
+      log::warn("launcher", "{} gets no asset downloads: {}", game_id, e.what());
+    }
+  }
+  headset_worker_->submit([this, install = *i, account = choice.account_key, game_id,
+                           assets = std::move(assets)](std::stop_token stop) mutable -> Worker::Completion {
+    std::string failure;
+    try {
+      headset::play(install, account, data_, std::move(assets), stop, [this](std::string step) {
+        std::lock_guard lock(headset_status_mutex_);
+        headset_status_ = std::move(step);
+        wake();
+      });
+    } catch (...) {
+      failure = exception_text();
+    }
+    return [this, game_id, failure] {
+      launch_pending_.erase(game_id);
+      if (failure.empty())
+        notice_.clear();
+      else
+        error(failure);
+    };
+  });
+  return;
+#endif
   // A manifest another installer wrote (the legacy CLI) lacks the launcher's
   // catalog record. With an account, Play upgrades it from Meta's same-build
   // catalog before the runtime reads it, as selecting the game would.
@@ -1785,9 +1849,13 @@ void Core::launch_game(std::string_view id, std::string_view requested,
   notice_ = catalog_token.empty()
                 ? "Preparing application credentials..."
                 : "Updating the installation manifest from Meta...";
+  // A preparation running now would hold the caches the game writes; it stops at once
+  // and the game starts once it is gone.
+  auto preparation = stop_preparation();
   worker_->submit([this, install, app_id, key, runtime, root, details, reply,
-                   console, catalog_token](std::stop_token stop) -> Worker::Completion {
+                   console, catalog_token, preparation](std::stop_token stop) -> Worker::Completion {
     try {
+      if (preparation) finish_preparation(*preparation);
       if (reply) {
         std::lock_guard lock(reply->mutex);
         if (reply->done) return [this, app_id] {
@@ -1894,6 +1962,9 @@ void Core::launch_game(std::string_view id, std::string_view requested,
           // page. Smoke and automation runs open no mirror window.
           Environment environment = library::launch_environment(settings_, app_id, options_.automation);
           environment.push_back({"VENTURE_CONTROLLER_REPORT", paths::utf8(data_ / "controllers.json")});
+          // The newest Meta VR OS SDK seen; the runtime's own floor without one.
+          if (const int sdk = library::cached_metavr_os_sdk(data_))
+            environment.push_back({"VENTURE_METAVR_OS_SDK", std::to_string(sdk)});
           r.process.spawn(runtime, args, r.console, console,
                           [broker, routes = std::move(routes), details, key, queue = launch_queue_](const Json &request) {
                             const auto op = str(request, "op");
@@ -1938,23 +2009,138 @@ void Core::launch_game(std::string_view id, std::string_view requested,
     }
   });
 }
+// A complete install not launched since it was installed (no cache folder yet; installed in
+// the last two weeks, so older libraries never all start preparing at once), or one whose
+// preparation by this runtime build stopped before it finished.
+bool Core::needs_preparation(const library::Install &install) const {
+  if (!install.complete) return false;
+  const auto cache = data_ / "cache" / install.plan.package /
+      (install.plan.pinned ? install.directory.filename() : paths::from_utf8(install.plan.version_code));
+  switch (first_launch::stamp_state(cache, settings_.runtime)) {
+  case first_launch::State::complete: return false;
+  case first_launch::State::started: return true;
+  case first_launch::State::none: break;
+  }
+  std::error_code error;
+  if (fs::exists(cache, error) || error) return false;
+  const auto installed = fs::last_write_time(install.directory / "plan.json", error);
+  return !error && fs::file_time_type::clock::now() - installed < std::chrono::days(14);
+}
+std::shared_ptr<Core::Preparation> Core::stop_preparation(std::string_view package) {
+  if (!preparing_ || (!package.empty() && preparing_->package != package)) return nullptr;
+  preparing_->stopped = true;
+  preparing_->process.request_stop();
+  log::info("launcher", "Stopping the first-launch preparation of {}.", preparing_->app_id);
+  return std::exchange(preparing_, nullptr);
+}
+void Core::finish_preparation(Preparation &preparation) {
+  // Native translation stops within milliseconds; a Java conversion in progress finishes first
+  // (the game would wait for it anyway).
+  if (preparation.process.wait(20000)) return;
+  log::warn("launcher", "The first-launch preparation of {} did not stop; ending it.", preparation.app_id);
+  preparation.process.terminate();
+  preparation.process.wait(5000);
+}
+// Prepares the first launch of new installs while the launcher is open and no game runs:
+// the work every first launch does before it can start (native libraries, Java conversion,
+// translated code) is then done before the player presses Play.
+void Core::prepare_tick() {
+  if (!options_.interactive()) return;
+  const bool game_busy = !launch_pending_.empty() ||
+      std::ranges::any_of(running_, [](const auto &r) { return r.second.process.active(); });
+  if (preparing_) {
+    if (auto code = preparing_->process.poll()) {
+      const auto install = installed(preparing_->app_id);
+      if (install && needs_preparation(*install) && ++prepare_failures_[preparing_->app_id] == 2)
+        log::warn("launcher", "First-launch preparation of {} stopped twice (exit {}); its first launch does the work.",
+                  preparing_->app_id, *code);
+      else
+        log::info("launcher", "First-launch preparation of {} ended (exit {}).", preparing_->app_id, *code);
+      preparing_.reset();
+    } else if (game_busy && !preparing_->stopped) {
+      // A game started some other way (a Steam shortcut): the runtime stops it too.
+      stop_preparation();
+    }
+    return;
+  }
+  if (game_busy || scanning_ || now_ms() - prepare_poll_ < 5000) return;
+  prepare_poll_ = now_ms();
+  for (const auto &install : installs_) {
+    const auto id = install.id();
+    if (prepare_failures_[id] >= 2 || !needs_preparation(install)) continue;
+    auto preparation = std::make_shared<Preparation>();
+    preparation->app_id = id;
+    preparation->package = install.plan.package;
+    const auto log_file = data_ / "logs" / ("prepare-" + install.plan.package + ".log");
+    // Never in the player's way: a failure is only logged, and the first launch does the work.
+    try {
+      library::rotate_log(log_file);
+      // The game's own launch settings: the translated code is only valid for the same options.
+      preparation->process.spawn(settings_.runtime,
+                                 {"--game", paths::utf8(install.directory), "--package", install.plan.package,
+                                  "--account", play_key(id).empty() ? "local" : play_key(id), "--prepare",
+                                  "--log", paths::utf8(log_file), "--parent-pid", std::to_string(current_process_id())},
+                                 data_ / "logs" / ("prepare-" + install.plan.package + ".console.log"), false, {},
+                                 library::launch_environment(settings_, id, true));
+      log::info("launcher", "Preparing the first launch of {} in the background.", id);
+      preparing_ = preparation;
+    } catch (const std::exception &e) {
+      log::warn("launcher", "Could not prepare the first launch of {}: {}", id, e.what());
+      ++prepare_failures_[id];
+    }
+    return;
+  }
+}
 fs::path Core::save_debug_report(std::string_view app_id, std::string_view version) const {
   DebugReport request{.data = data_, .version = std::string(version)};
+  // No game asked for: the most recent launch, with its installation (the
+  // game's own over a pinned version) so its settings and files are reported.
   // A game no longer installed falls back to the most recent launch.
+  const std::string latest = app_id.empty() ? latest_launched_package(data_) : std::string();
+  const library::Install *found = nullptr;
   for (const auto &install : installs_)
-    if (!app_id.empty() && install.id() == app_id) {
-      request.package = install.plan.package;
-      request.app_id = std::string(app_id);
-      request.plan = install.directory / "plan.json";
-      if (auto g = std::ranges::find(games_, install.plan.app_id, &meta::Game::id); g != games_.end())
-        request.game = g->name + (install.plan.pinned ? " (" + install.plan.version + ")" : "");
-    }
+    if (app_id.empty() ? !latest.empty() && install.plan.package == latest && (!found || found->plan.pinned)
+                       : install.id() == app_id)
+      found = &install;
+  if (found) {
+    request.package = found->plan.package;
+    request.app_id = found->id();
+    request.plan = found->directory / "plan.json";
+    if (auto g = std::ranges::find(games_, found->plan.app_id, &meta::Game::id); g != games_.end())
+      request.game = g->name + (found->plan.pinned ? " (" + found->plan.version + ")" : "");
+  }
+#if VENTURE_HEADSET_CHECK
+#ifdef __ANDROID__
+  if (request.package.empty() && !app_id.empty())
+    if (auto i = std::ranges::find(installs_, app_id, &library::Install::id); i != installs_.end())
+      request.package = i->plan.package;
+#endif
+  auto check = headset_check(request.package);
+  request.headset = std::move(check.text);
+  request.headset_logs = std::move(check.logs);
+#endif
   for (const auto &account : account_index_.accounts)
     request.private_text.insert(request.private_text.end(), {account.key, account.account_id});
   for (const auto &account : accounts_)
     request.private_text.insert(request.private_text.end(), {account.alias, account.display_name});
   return write_debug_report(request);
 }
+#ifdef __ANDROID__
+headset::Check Core::headset_check(std::string_view package) const {
+  return headset::check(
+      installs_,
+      [this](const library::Install &install) {
+        auto g = std::ranges::find(games_, install.plan.app_id, &meta::Game::id);
+        return g != games_.end() ? g->name : install.label;
+      },
+      package, data_);
+}
+#elif VENTURE_HEADSET_CHECK
+headset::Check Core::headset_check(std::string_view) const {
+  return headset::check_linux(settings_.runtime, library::launch_environment(settings_, {}, options_.automation),
+                              data_);
+}
+#endif
 void Core::share_debug_report(fs::path file, std::function<void(std::string url, std::string error)> done) {
   worker_->submit([file = std::move(file), done = std::move(done)](std::stop_token stop) -> Worker::Completion {
     std::string url, error;
@@ -2037,7 +2223,7 @@ void Core::sync_steam() {
         steam_pending_ = result.pending;
         steam_games_ = result.games;
         if (result.pending)
-          log::info("steam", "{} games wait for Steam to close.", result.games);
+          log::info("steam", "{} games wait for Steam to close ({}).", result.games, result.reason);
         else
           log::info("steam", "Steam has {} Venture games.", result.games);
         if (generation != steam_generation_) { sync_steam(); return; }
@@ -2167,6 +2353,13 @@ void Core::paste_sign_in(std::string_view text) {
 void Core::tick() {
   worker_->drain();
   import_worker_->drain();
+  {
+    // Steps first: a finished install's own notice (or error) comes after them.
+    std::lock_guard lock(headset_status_mutex_);
+    if (!headset_status_.empty())
+      notice_ = std::exchange(headset_status_, {});
+  }
+  headset_worker_->drain();
   if ((steam_pending_ || steam_restart_) && !steam_busy_ && now_ms() - steam_poll_ > 2000) {
     steam_poll_ = now_ms();
     if (!steam_library::running()) {
@@ -2310,6 +2503,7 @@ void Core::tick() {
         }
       }
     }
+    prepare_tick();
     auto jobs = downloads_->snapshot();
     auto complete = std::ranges::count_if(
         jobs, [](auto &j) { return j.state == download::State::complete; });

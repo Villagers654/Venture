@@ -1,5 +1,8 @@
 #include "common/process.h"
 #include "common/platform/posix/dbus.h"
+#ifdef __ANDROID__
+#include "common/platform/android/jni.h"
+#endif
 #include <algorithm>
 #include <csignal>
 #include <fcntl.h>
@@ -99,6 +102,15 @@ void Process::spawn(const fs::path &exe, const std::vector<std::string> &args,
 bool Process::active() const { return impl_->pid > 0 && !impl_->exit; }
 bool Process::request_stop() {
   return active() && kill(impl_->pid, SIGTERM) == 0;
+}
+std::optional<int> Process::wait(unsigned milliseconds) {
+  for (unsigned waited = 0; active() && !poll() && waited < milliseconds; waited += 10)
+    usleep(10'000);
+  return poll();
+}
+void Process::terminate() {
+  if (active())
+    kill(impl_->pid, SIGKILL);
 }
 std::optional<int> Process::poll() {
   int status = 0;
@@ -220,6 +232,18 @@ bool portal_open(const fs::path &p, int flags, bool (*open_fd)(int)) {
   return opened;
 }
 } // namespace
+#ifdef __ANDROID__
+// Android: games and logs live in the app's private storage, which no file
+// manager shows; links open in the device's browser.
+void open_folder(const fs::path &) {
+  throw std::runtime_error("This headset has no file manager that can show Venture's folders.");
+}
+void reveal_file(const fs::path &file) { open_folder(file.parent_path()); }
+void open_url(const std::string &url) {
+  if (!android::open_url(url))
+    throw std::runtime_error("Could not open the link.");
+}
+#else
 void open_folder(const fs::path &p) {
   if (portal_open(p, O_DIRECTORY, dbus::portal_open_file)) return;
   if (!fs::is_directory(p) || !xdg_open(p.c_str()))
@@ -233,6 +257,7 @@ void open_url(const std::string &url) {
   if (!dbus::portal_open_uri(url) && !xdg_open(url.c_str()))
     throw std::runtime_error("Could not open the link.");
 }
+#endif
 void start_detached(const fs::path &executable, const std::vector<std::string> &args) {
   std::vector<char *> argv{const_cast<char *>(executable.c_str())};
   for (const auto &a : args) argv.push_back(const_cast<char *>(a.c_str()));

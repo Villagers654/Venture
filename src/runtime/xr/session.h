@@ -122,6 +122,9 @@ struct Session {
   void observe_display_period(std::int64_t, DisplayTiming::Source);
   void observe_host_event(const XrEventDataBuffer&);
   XrResult create(SessionOwner, const XrGraphicsBindingVulkanKHR *binding = nullptr);
+  // A session on the game's own graphics (`graphics`: the XrSessionCreateInfo next chain,
+  // such as a GLES binding), with no GPU queue of Venture's: libvrapi.so on Android headsets.
+  XrResult create_native(SessionOwner, const void *graphics);
   XrResult destroy(SessionOwner);
   // Host xrBeginSession/xrEndSession for either owner; both reset frame state.
   XrResult begin_session(const XrSessionBeginInfo *);
@@ -149,6 +152,8 @@ struct Session {
   void notify_frame_waiters();
 
 private:
+  // After a host xrCreateSession: this session's state for `owner`.
+  void created(SessionOwner owner);
   void note(XrResult);
   void reset_frames();
   void observe_host_frame(const XrFrameState&, std::int64_t returned_ns, std::int64_t frame_chain_ns, bool led);
@@ -169,6 +174,9 @@ private:
   void cancel_host_wait();
 };
 Session &session();
+// The display rate: the runtime's (XR_FB_display_refresh_rate) once it reports one, else
+// the observed or default period's. For VrApi's properties and the guest's OpenXR query.
+XrResult display_refresh_rate(XrSession, float *out);
 // Creates a host swapchain for `info`, falling back when the host rejects its format. Neither
 // VrApi nor guest OpenXR swapchain formats are negotiated with the host, and a host may reject
 // a format it lists (or not offer it at all: SteamVR on Windows has no 8-bit UNORM). An 8-bit

@@ -2,6 +2,7 @@
 """Build a relocatable shipping layout from a completed build (no source at launch)."""
 from __future__ import annotations
 import argparse
+import platform
 import fnmatch
 import hashlib
 import json
@@ -107,7 +108,9 @@ def scan(layout, forbidden, users=(), hosts=(), third_party=THIRD_PARTY):
             for value in sorted(set(users)) if value]
     drive = rb"(?<![a-z0-9])[a-z]:[/\\](?![/\\])"
     generic = [drive + rb"(?:users|build|agent|workspace)[/\\]",
-               rb"(?<![:/\\a-z0-9])/(?:home|users)/[^/\x00\s]+/",
+               # LLVM's release libc++abi (the Linux arm64 sysroot's, linked
+               # statically) names its sources by GitHub's public CI checkout.
+               rb"(?<![:/\\a-z0-9])/(?:home|users)/(?!runner/work/llvm-project/llvm-project/)[^/\x00\s]+/",
                drive + rb"[^\x00\r\n]{0,512}[/\\](?:build|src|source|_work|out|\.deps)[/\\]"]
     own = [re.compile(p) for p in own]
     generic = [re.compile(p) for p in generic]
@@ -201,7 +204,7 @@ dhcpcsvc dinput8 dnsapi dsound dwmapi dwrite dxgi dxva2 gdi32 gdiplus glu32 hid
 imagehlp imm32 iphlpapi kernel32 kernelbase ksuser mpr msimg32 msvcrt mswsock
 ncrypt netapi32 normaliz ntdll ole32 oleacc oleaut32 opengl32 powrprof propsys
 psapi rpcrt4 secur32 setupapi shcore shell32 shlwapi sspicli ucrtbase urlmon
-user32 userenv usp10 uxtheme version winhttp wininet winmm winspool.drv
+user32 userenv usp10 uxtheme version wevtapi winhttp wininet winmm winspool.drv
 wintrust wldap32 ws2_32 wsock32 wtsapi32 xinput1_4 xinput9_1_0
 """.split())
 # Installed by every Vulkan-capable GPU driver; Venture requires one.
@@ -291,23 +294,43 @@ def headless_jre(build, jdk):
     copy(fonts / "LICENSE", jdk.parent.parent / "licenses/dejavu-fonts/LICENSE")
 
 
+def cmake_target(build):
+    """(CMAKE_SYSTEM_NAME, CMAKE_SYSTEM_PROCESSOR) of a build tree: a cross
+    build (cmake/toolchains/linux-arm64.cmake) packages for its target."""
+    # CMake records the target in CMakeFiles/<version>/CMakeSystem.cmake.
+    text = "".join(path.read_text(encoding="utf-8") for path in sorted((build / "CMakeFiles").glob("*/CMakeSystem.cmake")))
+    system = re.search(r'^set\(CMAKE_SYSTEM_NAME "(.*)"\)$', text, re.M)
+    processor = re.search(r'^set\(CMAKE_SYSTEM_PROCESSOR "(.*)"\)$', text, re.M)
+    host = ("Windows", "AMD64") if os.name == "nt" else (platform.system(), platform.machine())
+    return (system.group(1) if system else host[0], processor.group(1) if processor else host[1])
+
+
 def static_runtime_notices(build, output):
     """Notices for system libraries linked statically by the Linux baseline
-    toolchain (cmake/toolchains/linux-baseline.cmake): OpenSSL and libc++."""
+    toolchain (cmake/toolchains/linux-baseline.cmake): OpenSSL and libc++.
+    A cross build's sysroot carries no documentation: its OpenSSL 3 is
+    Apache-2.0 and its libc++ is LLVM's (Apache-2.0 with LLVM exceptions)."""
     cache = (build / "CMakeCache.txt").read_text(encoding="utf-8") if (build / "CMakeCache.txt").is_file() else ""
+    # A cross build (cmake/toolchains/linux-arm64.cmake) links from a sysroot.
+    sysroot = re.search(r"^CMAKE_TOOLCHAIN_FILE:\w+=.*/linux-arm64\.cmake$", cache, re.M)
     crypto = re.search(r"^OPENSSL_CRYPTO_LIBRARY:FILEPATH=(.*)$", cache, re.M)
     if crypto and crypto.group(1).endswith(".a"):
         candidates = [Path("/usr/share/doc") / name / "copyright" for name in ("libssl-dev", "libssl3", "openssl")]
         candidates.append(Path(crypto.group(1)).parent.parent / "share/doc/openssl/LICENSE.txt")
+        if sysroot:
+            candidates.append(ROOT / "LICENSES/Apache-2.0.txt")
         source = next((p for p in candidates if p.is_file()), None)
         if source is None:
             raise RuntimeError("OpenSSL is linked statically but its license was not found")
         copy(source, output / "licenses/openssl" / ("LICENSE.txt" if source.suffix == ".txt" else "copyright"))
     if "-static-libstdc++" in cache and "-stdlib=libc++" in cache:
         llvm = sorted(Path("/usr/share/doc").glob("libc++*-dev/copyright"))
-        if not llvm:
+        if llvm:
+            copy(llvm[-1], output / "licenses/llvm-runtime/copyright")
+        elif sysroot:
+            copy(ROOT / "tools/release-notices/llvm/LICENSE.txt", output / "licenses/llvm-runtime/LICENSE.txt")
+        else:
             raise RuntimeError("libc++ is linked statically but its license was not found")
-        copy(llvm[-1], output / "licenses/llvm-runtime/copyright")
 
 
 def package(build, output, angle, strip, readobj):
@@ -336,11 +359,16 @@ def package(build, output, angle, strip, readobj):
             directory.rmdir()
     output.mkdir(parents=True, exist_ok=True)
     bin_dir = build / "bin"
-    windows = os.name == "nt"
+    system, processor = cmake_target(build)
+    windows = system == "Windows"
+    host_windows = os.name == "nt"
     suffix = ".exe" if windows else ""
     names = ["venture" + suffix, "venture-runtime" + suffix, "venture-framework.jar",
              "venture-java-bridge.jar"]
-    names += ["WebView2Loader.dll", "libEGL.dll", "libGLESv2.dll"] if windows else ["libEGL.so", "libGLESv2.so"]
+    if windows:
+        names += ["WebView2Loader.dll", "libEGL.dll", "libGLESv2.dll"]
+    elif angle:
+        names += ["libEGL.so", "libGLESv2.so"]
     names += ["avutil-60.dll", "avcodec-62.dll", "avformat-62.dll", "swscale-9.dll"] if windows else [
         "libavutil.so.60", "libavcodec.so.62", "libavformat.so.62", "libswscale.so.9"]
     if not windows:
@@ -361,7 +389,7 @@ def package(build, output, angle, strip, readobj):
         tree(bin_dir / "java" / name, output / "java" / name)
     # jdeps follows all compiled driver classes and recursively resolves the
     # reachable library classes. This excludes dex2jar's unused CLI/tool jars.
-    jdeps = ROOT / ".deps/jdk/bin" / ("jdeps.exe" if windows else "jdeps")
+    jdeps = ROOT / ".deps/jdk/bin" / ("jdeps.exe" if host_windows else "jdeps")
     cp = os.pathsep.join([str(bin_dir / "java/asm/asm.jar"), str(bin_dir / "java/dex2jar/lib/*")])
     dependencies = subprocess.run([str(jdeps), "--multi-release", "21", "--recursive",
         "--class-path", cp, str(bin_dir / "java/dex/classes")],
@@ -378,7 +406,12 @@ def package(build, output, angle, strip, readobj):
     for name in ("LICENSE.txt", "NOTICE.txt"):
         copy(bin_dir / "java/dex2jar" / name, output / "java/dex2jar" / name)
     copy(bin_dir / "java/android-32.hierarchy.tsv", output / "java/android-32.hierarchy.tsv")
-    subprocess.run([sys.executable, str(ROOT / "tools/dex/make_jre.py"), str(output / "java/jdk")], check=True)
+    # The JRE for the target: the host's jlink with the target JDK's modules
+    # (the same release) for a Linux arm64 cross build.
+    jre = [sys.executable, str(ROOT / "tools/dex/make_jre.py"), str(output / "java/jdk")]
+    if system == "Linux" and processor in ("aarch64", "arm64") and platform.machine().lower() not in ("aarch64", "arm64"):
+        jre += ["--jdk", str(ROOT / ".deps/jdk-linux-aarch64")]
+    subprocess.run(jre, check=True)
     # jlink links each module's legal notices to java.base's copies on POSIX.
     # The layout must stay link-free (repackaging and runtime bundles reject
     # links), so materialize them as regular files.
@@ -429,11 +462,12 @@ def package(build, output, angle, strip, readobj):
                       if "Copyright" in block and "Permission" in block)
         (output / "licenses/freetype" / (Path(relative).stem + ".txt")).write_text(notice + "\n")
     copy(ROOT / "src/runtime/hle/vulkan/shaders/LICENSE.gfxstream", output / "licenses/gfxstream/LICENSE")
-    copy(angle / "LICENSE", output / "licenses/angle/LICENSE")
-    index = json.loads((angle / "licenses/INDEX.json").read_text())
-    for source, name in index.items():
-        if source.startswith(ANGLE_NOTICES):
-            copy(angle / "licenses" / name, output / "licenses/angle" / source)
+    if angle:
+        copy(angle / "LICENSE", output / "licenses/angle/LICENSE")
+        index = json.loads((angle / "licenses/INDEX.json").read_text())
+        for source, name in index.items():
+            if source.startswith(ANGLE_NOTICES):
+                copy(angle / "licenses" / name, output / "licenses/angle" / source)
     if windows:
         webview2 = dependency_sources.get("webview2", dependency_sources.get(None, ROOT / ".deps/fetch") / "webview2-src")
         copy(webview2 / "LICENSE.txt", output / "licenses/webview2/LICENSE.txt")
@@ -450,12 +484,16 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--build", type=Path, required=True)
     parser.add_argument("--output", type=Path)
-    parser.add_argument("--angle", type=Path, required=True)
+    parser.add_argument("--angle", type=Path, required=True,
+                        help="installed ANGLE; 'none' leaves it out (a Linux layout for testing the launcher: games need it)")
     parser.add_argument("--strip", type=Path, required=True)
     parser.add_argument("--readobj", type=Path)
     args = parser.parse_args()
     output = args.output or ROOT / "dist" / ("Venture-win64" if os.name == "nt" else "Venture-linux64")
-    package(args.build.resolve(), output.resolve(), args.angle.resolve(), args.strip, args.readobj)
+    angle = None if str(args.angle) == "none" else args.angle.resolve()
+    if angle is None and cmake_target(args.build.resolve())[0] == "Windows":
+        raise SystemExit("--angle none: Windows layouts always ship ANGLE")
+    package(args.build.resolve(), output.resolve(), angle, args.strip, args.readobj)
 
 
 if __name__ == "__main__":

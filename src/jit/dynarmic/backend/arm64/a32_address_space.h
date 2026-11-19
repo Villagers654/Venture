@@ -30,6 +30,10 @@ protected:
     void EmitPrelude();
     EmitConfig GetEmitConfig() override;
     void RegisterNewBasicBlock(const IR::Block& block, const EmittedBlockInfo& block_info) override;
+    u64 DescriptorPC(IR::LocationDescriptor descriptor) const override;
+    bool IsA32() const override { return true; }
+    std::string FriendlyName(IR::LocationDescriptor descriptor) const override;
+    void ClearBlockRanges() override { block_ranges.ClearCache(); }
 
     const A32::UserConfig conf;
     BlockRangeInformation<u32> block_ranges;

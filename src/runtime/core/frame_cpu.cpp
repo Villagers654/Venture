@@ -1,10 +1,10 @@
 ﻿#include "core/frame_cpu.h"
+#include "common/stall_record.h"
 #include "common/environment.h"
 #include "platform/profile.h"
 #include "platform/thread_priority.h"
 #include <algorithm>
 #include <chrono>
-#include <cctype>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -31,14 +31,7 @@ std::vector<Tracked> tracked;
 std::shared_ptr<Thread> submitter;
 auto refreshed = std::chrono::steady_clock::time_point{};
 }
-std::string role_name(std::string_view input) {
-  std::string value(input);
-  std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) { return std::tolower(c); });
-  if (value == "unitymain" || value == "gamethread" || value == "mainthread" || value == "ue4gamethread") return "main";
-  if (value.starts_with("rhithread")) return "rhi";
-  if (value.starts_with("renderthread") || value == "unitygfxdevicew") return "render";
-  return {};
-}
+std::string role_name(std::string_view input) { return stall::thread_role(input); }
 void attach(std::int32_t tid) {
   if (!enabled) return;
   platform::thread_cycles_per_ns(); // Calibrate once at guest startup, never during a measured frame.

@@ -24,9 +24,13 @@ namespace Dynarmic::A64 {
 
 using namespace Backend::Arm64;
 
+static A64::UserConfig BackendConfig(A64::UserConfig conf) {
+    return conf;
+}
+
 struct Jit::Impl final {
-    Impl(Jit*, A64::UserConfig conf)
-            : conf(conf)
+    Impl(Jit*, A64::UserConfig conf_)
+            : conf(BackendConfig(std::move(conf_)))
             , current_address_space(conf)
             , core(conf) {}
 
@@ -140,6 +144,27 @@ struct Jit::Impl final {
 
     std::string Disassemble() const {
         return {};
+    }
+
+    const void* CodeCacheBegin() const {
+        return current_address_space.CodeBegin();
+    }
+
+    std::size_t CodeCacheSize() const {
+        return current_address_space.CodeSize();
+    }
+
+    bool Precompile(std::uint64_t value) {
+        if (is_executing) {
+            return false;
+        }
+        PerformRequestedCacheInvalidation(static_cast<HaltReason>(Atomic::Load(&halt_reason)));
+        // Do not evict demand-compiled blocks to warm a speculative descriptor.
+        return current_address_space.Precompile(IR::LocationDescriptor{value}, 4 * 1024 * 1024);
+    }
+
+    void ReserveBlocks(std::size_t count) {
+        current_address_space.ReserveBlocks(count);
     }
 
 private:
@@ -300,6 +325,32 @@ bool Jit::IsExecuting() const {
 
 std::string Jit::Disassemble() const {
     return impl->Disassemble();
+}
+
+const void* Jit::CodeCacheBegin() const {
+    return impl->CodeCacheBegin();
+}
+
+std::size_t Jit::CodeCacheSize() const {
+    return impl->CodeCacheSize();
+}
+
+bool Jit::Precompile(std::uint64_t descriptor) {
+    return impl->Precompile(descriptor);
+}
+
+// Installs only blocks a portable block source holds; this backend has none yet.
+bool Jit::PrecompileIdle(std::uint64_t) {
+    return false;
+}
+
+void Jit::ReserveBlocks(std::size_t count) {
+    impl->ReserveBlocks(count);
+}
+
+// The x64 backend's dispatcher profile cookie; not emitted by this backend.
+std::uint32_t Jit::GetProfileCookie() const {
+    return 0;
 }
 
 }  // namespace Dynarmic::A64

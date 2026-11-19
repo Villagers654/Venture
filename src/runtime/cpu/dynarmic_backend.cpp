@@ -1,8 +1,9 @@
+#include "cpu/engine_choice.h"
+#include "cpu/native_a64.h"
 #include "cpu/cpu.h"
 #include "cpu/outlined_atomics.h"
 #include "cpu/invalidation_gate.h"
 #include "cpu/block_list.h"
-#include "cpu/host_tuning.h"
 #include "cpu/portable_cache.h"
 #include "cpu/pretranslate.h"
 #include <utility>
@@ -20,7 +21,7 @@
 #include "platform/memory.h"
 #include "platform/process_info.h"
 #include <dynarmic/interface/A64/a64.h>
-#include <dynarmic/backend/x64/a64_jitstate.h>
+#include "cpu/jit_backend.h"
 #include <dynarmic/interface/exclusive_monitor.h>
 #include <dynarmic/interface/profiling.h>
 #include <algorithm>
@@ -169,7 +170,8 @@ class DynarmicCpu final : public Cpu, private Dynarmic::A64::UserCallbacks {
     config.tpidrro_el0 = &tpro_;
     // Keep load-time translations when the busiest thread exceeds 128 MiB.
     // This is a bounded reservation; the section commits pages only on emission.
-    config.code_cache_size = 256 * 1024 * 1024;
+    // The arm64 backend's branches reach at most 128 MiB.
+    config.code_cache_size = VENTURE_JIT_PORTABLE_BLOCKS ? 256 * 1024 * 1024 : 128 * 1024 * 1024;
     config.code_allocation_failed = alloc_failure::jit_code_refused;
     config.cntfrq_el0 = 1'000'000'000;
     config.ctr_el0 = 0x8444c004;  // 64-byte instruction/data lines.
@@ -194,15 +196,18 @@ class DynarmicCpu final : public Cpu, private Dynarmic::A64::UserCallbacks {
     // Candidate: per-site dispatch lookups for indirect branches (default off).
     if (const auto* inline_dispatch = environment::getenv("VENTURE_JIT_INLINE_DISPATCH"))
       config.inline_fast_dispatch = std::string_view(inline_dispatch) == "1";
-    // Returns pop the RSB at their own site, each with its own host indirect
-    // jump, on the CPUs where that was measured faster (cpu/host_tuning.cpp:
-    // AMD Zen 4 and later); elsewhere they share one lookup. A compact per-site
-    // form also lost on Lion Cove. VENTURE_JIT_INLINE_RSB_POP: "1" pops inline;
+    // Candidate: returns pop the RSB at their own site, each with its own host
+    // indirect jump (default off). Zen 4 Linux gains (2000x2040: North Star
+    // 6.53 -> 6.29 ms, Batman 5.19 -> 5.04 ms); Lion Cove Windows h2h scenes
+    // lose (North Star 286.9 -> 281 fps, Batman 342.6 -> 325.8, Cooking
+    // 555.6 -> 544.4), and so does a compact per-site form. "1" pops inline;
     // "compact" (candidate) has each return call one shared lookup and jump on
-    // its result; any other value shares the lookup.
-    const auto return_pop = host_tuning::return_pop();
-    config.inline_rsb_pop = return_pop == host_tuning::ReturnPop::per_site;
-    config.compact_rsb_pop = return_pop == host_tuning::ReturnPop::compact;
+    // its result.
+    config.inline_rsb_pop = false;
+    if (const auto* inline_pop = environment::getenv("VENTURE_JIT_INLINE_RSB_POP")) {
+      config.inline_rsb_pop = std::string_view(inline_pop) == "1";
+      config.compact_rsb_pop = std::string_view(inline_pop) == "compact";
+    }
     // Supervisor calls (HLE thunks) link to the next instruction's block instead
     // of pushing and popping the RSB. AC Nexus h2h scene 286.5 -> 291.4 fps. "0"
     // pushes and pops.
@@ -246,9 +251,9 @@ class DynarmicCpu final : public Cpu, private Dynarmic::A64::UserCallbacks {
       config.diagnostic_entry.selected = [](VAddr pc) { return pc_trace::selection().contains(pc); };
       config.diagnostic_entry.user = this;
       config.diagnostic_entry.record = [](void* user, VAddr pc, const void* raw) noexcept {
-        const auto& state=*static_cast<const Dynarmic::Backend::X64::A64JitState*>(raw);
+        const auto& state=*static_cast<const jit_backend::A64State*>(raw);
         const auto slot=static_cast<DynarmicCpu*>(user)->pc_observer_slot_;
-        pc_trace::record(slot,pc,state.sp,state.GetPstate(),state.reg,
+        pc_trace::record(slot,pc,state.sp,jit_backend::pstate(state),jit_backend::registers(state),
                          platform::profile_thread_id(),api_result_trace::now());
       };
       config.nzcv_exit_liveness = false;
@@ -350,6 +355,12 @@ class DynarmicCpu final : public Cpu, private Dynarmic::A64::UserCallbacks {
       idle_hints_ = 0;
     }
   }
+  void park() noexcept override {
+    if (jit_->IsExecuting()) { invalidations_->park(); parked_ = true; }
+  }
+  void unpark() noexcept override {
+    if (std::exchange(parked_, false)) invalidations_->unpark();
+  }
   std::pair<std::shared_ptr<InvalidationGate>, std::uint64_t> queue_invalidation(GuestAddr p, std::uint64_t n) {
     return {invalidations_, invalidations_->queue(p, n, [&] { jit_->HaltExecution(HaltReason::UserDefined3); })};
   }
@@ -400,6 +411,7 @@ class DynarmicCpu final : public Cpu, private Dynarmic::A64::UserCallbacks {
   CpuFault fault_{};
   std::uint32_t svc_{};
   std::shared_ptr<InvalidationGate> invalidations_ = std::make_shared<InvalidationGate>();
+  bool parked_ = false;
   std::vector<std::pair<GuestAddr, std::uint64_t>> cache_operations_;
   std::atomic<bool> external_halt_{false};
   JitBlockList block_list_;
@@ -450,6 +462,15 @@ class DynarmicCpu final : public Cpu, private Dynarmic::A64::UserCallbacks {
   template<class T> bool exclusive(VAddr address, T value, T expected) {
     // Fault callbacks must not take the exclusive monitor: Dynarmic may hold it here.
     const auto mapped = data_address(address);
+    if constexpr (std::is_integral_v<T>) {
+      // One fault-contained CAS. The arm64 backend sends every store-exclusive
+      // here, and memory_accessible reads /proc/self/maps on Linux; only a
+      // fault takes that path below.
+      std::uint64_t old = 0;
+      if (!(address & (sizeof(T) - 1)) &&
+          platform::atomic_rmw(mapped, sizeof(T), platform::AtomicRmw::compare_exchange, expected, value, old))
+        return static_cast<T>(old) == expected;
+    }
     if ((address & (sizeof(T) - 1)) || !platform::memory_accessible(mapped, sizeof(T), true)) { memory_fault(address, true); return false; }
     return platform::compare_exchange(mapped, &value, &expected, sizeof(T));
   }
@@ -570,9 +591,9 @@ class DynarmicCpu final : public Cpu, private Dynarmic::A64::UserCallbacks {
   }
   void CallSVCFastKnown(std::uint32_t immediate, const void* metadata, void* state) override {
     svc_ = immediate;
-    auto& registers = *static_cast<Dynarmic::Backend::X64::A64JitState*>(state);
+    auto& registers = *static_cast<jit_backend::A64State*>(state);
     if (hle::GuestFpScope fp(immediate == kSvcHleCallFastGuestFp);
-        dispatch_hle_in_jit(*static_cast<const hle::FunctionInfo*>(metadata), hle::Registers(registers.reg.data())))
+        dispatch_hle_in_jit(*static_cast<const hle::FunctionInfo*>(metadata), hle::Registers(jit_backend::registers(registers))))
       return;
     exit_ = has_hle_exception() ? CpuExit::HleException : CpuExit::Svc;
     jit_->HaltExecution();
@@ -626,7 +647,19 @@ void Backend::refresh_dispatch(GuestAddr p, std::uint64_t n, InvalidationCause c
 }
 }
 CpuBackend& cpu_backend() {
-  static auto* backend = process_config().isa() == GuestIsa::a32 ? &a32_cpu_backend() : new Backend;
+  static auto* backend = [] () -> CpuBackend* {
+    // This build carries its host architecture's Dynarmic backend, and on
+    // Linux AArch64 the native-a64 engine, which process_engine() picks when
+    // the host can run A64 guest code directly.
+    constexpr auto translated = build_arch() == HostArch::arm64 ? CpuEngine::dynarmic_arm64 : CpuEngine::dynarmic_x64;
+    const auto& choice = process_engine();
+#if VENTURE_NATIVE_A64
+    if (choice.engine == CpuEngine::native_a64) return &native_a64_backend();
+#endif
+    if (choice.engine != translated)
+      throw std::runtime_error(std::string("this build has no ") + engine_name(choice.engine) + " engine: " + choice.reason);
+    return process_config().isa() == GuestIsa::a32 ? &a32_cpu_backend() : new Backend;
+  }();
   return *backend;
 }
 }

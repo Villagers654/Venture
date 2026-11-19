@@ -1,4 +1,5 @@
 #include "common/controls.h"
+#include "common/controls_file.h"
 #include <doctest/doctest.h>
 #include <set>
 
@@ -229,20 +230,83 @@ TEST_CASE("Controls offer only inputs the controller has on that hand") {
   CHECK(right.menu.sources == std::vector<Inputs>{{"/user/hand/right/input/menu/click"}});
 }
 
-TEST_CASE("Controls trackpad halves fall back to the whole pad without XR_EXT_dpad_binding") {
-  // The first half on a pad, in row order, takes the pad's press; the others stay unbound.
-  CHECK(bind("/user/hand/left/input/x/click", kVive, nullptr, false) == "/user/hand/left/input/trackpad/click");
+TEST_CASE("Controls trackpad halves without XR_EXT_dpad_binding are split by Venture") {
+  // The host binds no half; Venture reads the pad and its press (#159: WMR on its own runtime).
+  CHECK_FALSE(bind("/user/hand/left/input/x/click", kVive, nullptr, false));
   CHECK_FALSE(bind("/user/hand/left/input/y/click", kVive, nullptr, false));
   CHECK_FALSE(bind("/user/hand/left/input/thumbstick/click", kVive, nullptr, false));
+  const auto& wmr = profile("/interaction_profiles/microsoft/motion_controller");
+  const auto r = resolve(wmr, nullptr);
+  for (int hand = 0; hand < 2; ++hand)
+    CHECK(pads(wmr, r, hand) == std::vector<Pad>{{"/input/trackpad", "/input/trackpad/click"}});
   // Index's pad has no click: its press is the force sensor.
   Choice choice;
   choice.rows[1][int(Quest::secondary)] = Inputs{"/input/trackpad/dpad_up"};
   REQUIRE(find_input(profile(kIndex), "/input/trackpad/force"));
-  // Not a listed Index input: the choice falls back to the default B.
+  CHECK_FALSE(bind("/user/hand/right/input/b/click", kIndex, &choice, false));
+  CHECK(bind("/user/hand/right/input/b/click", kIndex, &choice, true) == "/user/hand/right/input/trackpad/dpad_up");
+  CHECK(pads(profile(kIndex), resolve(profile(kIndex), &choice), 1) ==
+        std::vector<Pad>{{"/input/trackpad", "/input/trackpad/force"}});
+  CHECK(pads(profile(kIndex), resolve(profile(kIndex), &choice), 0).empty());
+  // Not a listed input: the choice falls back to the default B.
+  choice.rows[1][int(Quest::secondary)] = Inputs{"/input/thumbstick/dpad_up"};
   CHECK(bind("/user/hand/right/input/b/click", kIndex, &choice, false) == "/user/hand/right/input/b/click");
-  // A menu source on a half becomes the pad's press too.
+  // Controllers without halves read no pad.
+  CHECK(pads(profile(kTouch), resolve(profile(kTouch), nullptr), 0).empty());
+  // A menu source on a half becomes the pad's press.
   CHECK(bindable("/user/hand/left/input/trackpad/dpad_up", profile(kVive), false) == "/user/hand/left/input/trackpad/click");
   CHECK(bindable("/user/hand/left/input/trackpad/dpad_up", profile(kVive), true) == "/user/hand/left/input/trackpad/dpad_up");
+}
+
+TEST_CASE("Controls trackpad halves split the pad by where it is pressed") {
+  CHECK(half_pressed("/input/trackpad/dpad_center", 0.1f, -0.2f));
+  CHECK_FALSE(half_pressed("/input/trackpad/dpad_up", 0.1f, 0.2f));  // the center is not a half
+  CHECK(half_pressed("/input/trackpad/dpad_up", 0.2f, 0.9f));
+  CHECK(half_pressed("/input/trackpad/dpad_down", -0.3f, -0.8f));
+  CHECK_FALSE(half_pressed("/input/trackpad/dpad_down", 0.f, 0.8f));
+  CHECK(half_pressed("/input/trackpad/dpad_left", -0.9f, 0.1f));
+  CHECK(half_pressed("/input/trackpad/dpad_right", 0.9f, -0.1f));
+  CHECK_FALSE(half_pressed("/input/trackpad/dpad_center", 0.f, 0.7f));
+}
+
+TEST_CASE("Controls offsets are saved, limited, mirrored and turned") {
+  Config config;
+  auto& index = config[std::string(kIndex)];
+  index.offsets[0] = {{10, -5, 20}, {-30, 0, 0}};
+  index.offsets[1] = mirrored(index.offsets[0]);
+  CHECK(index.offsets[1] == Offset{{-10, -5, 20}, {-30, 0, 0}});
+  const auto back = decode(encode(config));
+  REQUIRE(back.contains(std::string(kIndex)));
+  CHECK(back.at(std::string(kIndex)).offsets == index.offsets);
+  // A hand without an offset is not written.
+  Config one;
+  one["x"].offsets[1].rotation = {0, 15, 0};
+  CHECK(encode(one).find("\"left\"") == std::string::npos);
+  // Out of range values are held at the limits.
+  const auto wild = decode(R"({"/interaction_profiles/valve/index_controller":{"offsets":{"left":{"position":[900,0,0],"rotation":[0,0,-400]}}}})");
+  const auto& o = wild.at(std::string(kIndex)).offsets[0];
+  CHECK(o.position[0] == kMaxShiftMm);
+  CHECK(o.rotation[2] == -kMaxTurnDeg);
+  CHECK(resolve(profile(kIndex), &wild.at(std::string(kIndex))).offsets[0] == o);
+  // Tilt alone turns about x; turn alone about y.
+  const auto tilt = orientation({{}, {90, 0, 0}});
+  CHECK(tilt[0] == doctest::Approx(0.70710678f));
+  CHECK(tilt[3] == doctest::Approx(0.70710678f));
+  const auto turn = orientation({{}, {0, -60, 0}});
+  CHECK(turn[1] == doctest::Approx(-0.5f));
+  CHECK(turn[3] == doctest::Approx(0.8660254f));
+  CHECK(orientation({}) == std::array<float, 4>{0, 0, 0, 1});
+}
+
+TEST_CASE("Controls Steam Frame touches follow every button with a sensor") {
+  const auto& frame = profile("/interaction_profiles/valve/frame_controller_valve");
+  const auto r = resolve(frame, nullptr);
+  CHECK(host_bindings("/user/hand/right/input/a/touch", frame, r, true) ==
+        std::vector<std::string>{"/user/hand/right/input/a/touch"});
+  CHECK(host_bindings("/user/hand/left/input/x/touch", frame, r, true) ==
+        std::vector<std::string>{"/user/hand/left/input/dpad_down/touch"});
+  CHECK(host_bindings("/user/hand/left/input/y/touch", frame, r, true) ==
+        std::vector<std::string>{"/user/hand/left/input/dpad_up/touch"});
 }
 
 TEST_CASE("Controls choices move, clear and refuse inputs") {
@@ -427,7 +491,7 @@ TEST_CASE("Controls conflicts count every input of a row") {
                                                                    {1, Quest::menu, Quest::stick_click}});
 }
 
-TEST_CASE("Controls trackpad halves in a row with several inputs follow the whole-pad fallback") {
+TEST_CASE("Controls trackpad halves in a row with several inputs are left to Venture without dpad binding") {
   const auto& vive = profile(kVive);
   Choice choice;
   // Left X on both trackpad halves and the trigger click.
@@ -436,21 +500,11 @@ TEST_CASE("Controls trackpad halves in a row with several inputs follow the whol
   CHECK(host_bindings("/user/hand/left/input/x/click", vive, r, true) ==
         std::vector<std::string>{"/user/hand/left/input/trackpad/dpad_down", "/user/hand/left/input/trackpad/dpad_up",
                                  "/user/hand/left/input/trigger/click"});
-  // Without XR_EXT_dpad_binding the row's first half takes the pad's press, its
-  // second half adds nothing and its plain button stays.
+  // Without XR_EXT_dpad_binding only the plain button is bound; one pad is read for the halves.
   CHECK(host_bindings("/user/hand/left/input/x/click", vive, r, false) ==
-        std::vector<std::string>{"/user/hand/left/input/trackpad/click", "/user/hand/left/input/trigger/click"});
-  // Y (the top half by default) and Stick click (the center) come later on the same pad: unbound.
+        std::vector<std::string>{"/user/hand/left/input/trigger/click"});
   CHECK(host_bindings("/user/hand/left/input/y/click", vive, r, false).empty());
-  CHECK(host_bindings("/user/hand/left/input/thumbstick/click", vive, r, false).empty());
-  // A half that is not its row's first input still loses to an earlier row's half.
-  Choice later;
-  later.rows[0][int(Quest::secondary)] = Inputs{"/input/menu/click", "/input/trackpad/dpad_up"};
-  const auto l = resolve(vive, &later);
-  CHECK(host_bindings("/user/hand/left/input/y/click", vive, l, false) ==
-        std::vector<std::string>{"/user/hand/left/input/menu/click"});
-  CHECK(host_bindings("/user/hand/left/input/x/click", vive, l, false) ==
-        std::vector<std::string>{"/user/hand/left/input/trackpad/click"});
+  CHECK(pads(vive, r, 0) == std::vector<Pad>{{"/input/trackpad", "/input/trackpad/click"}});
 }
 
 TEST_CASE("Controls rows with several inputs are saved as lists; single ones stay strings") {
@@ -540,4 +594,167 @@ TEST_CASE("Steam Frame: the bumper uses Valve's path, saved shoulder paths move 
   const auto r = resolve(frame, &rest);
   CHECK(host_bindings("/user/hand/right/input/thumbrest/touch", frame, r, true) ==
         std::vector<std::string>{"/user/hand/right/input/thumbstick/touch"});
+}
+
+TEST_CASE("Controls files round trip one controller") {
+  Choice choice;
+  choice.rows[1][int(Quest::primary)] = Inputs{"/input/b/click"};
+  choice.offsets[0] = {{0, 10, 0}, {-20, 0, 5}};
+  choice.grip_toggle = true;
+  const auto text = export_file(kIndex, choice);
+  CHECK(text.find("ventureControls") != std::string::npos);
+  const auto back = import_file(text, kTouch);
+  CHECK(back.error.empty());
+  CHECK_FALSE(back.steamvr);
+  REQUIRE(back.config.size() == 1);
+  CHECK(back.config.at(std::string(kIndex)) == choice);
+  CHECK_FALSE(import_file("not json", kTouch).error.empty());
+  CHECK_FALSE(import_file(R"({"ventureControls":1,"controllers":{"/interaction_profiles/none":{}}})", kTouch).error.empty());
+}
+
+TEST_CASE("Controls read a SteamVR binding file made for Venture") {
+  // As SteamVR's binding UI saves one for an Index player.
+  const auto text = R"({
+    "action_manifest_version": 0, "controller_type": "knuckles", "name": "Venture shared",
+    "bindings": {"/actions/venture_controls": {
+      "sources": [
+        {"path": "/user/hand/right/input/a", "mode": "button",
+         "inputs": {"click": {"output": "/actions/venture_controls/in/button_y_b"},
+                    "touch": {"output": "/actions/venture_controls/in/button_y_b_touch"}}},
+        {"path": "/user/hand/right/input/trackpad", "mode": "dpad", "parameters": {"sub_mode": "click"},
+         "inputs": {"north": {"output": "/actions/venture_controls/in/button_x_a"}}},
+        {"path": "/user/hand/left/input/thumbstick", "mode": "joystick",
+         "inputs": {"position": {"output": "/actions/venture_controls/in/thumbstick"},
+                    "click": {"output": "/actions/venture_controls/in/menu"}}},
+        {"path": "/user/hand/left/input/trigger", "mode": "trigger",
+         "inputs": {"pull": {"output": "/actions/venture_controls/in/trigger"},
+                    "click": {"output": "/actions/venture_controls/in/trigger_press"}}},
+        {"path": "/user/hand/left/input/system", "mode": "button",
+         "inputs": {"click": {"output": "/actions/venture_controls/in/button_x_a"}}},
+        {"path": "/user/hand/left/input/grip", "mode": "force_sensor",
+         "inputs": {"force": {"output": "/actions/other/in/fly"}}}
+      ],
+      "poses": [{"output": "/actions/venture_controls/in/grip_pose", "path": "/user/hand/left/pose/raw"}]
+    }}})";
+  const auto imported = import_file(text, kTouch);
+  CHECK(imported.error.empty());
+  CHECK(imported.steamvr);
+  REQUIRE(imported.config.contains(std::string(kIndex)));
+  const auto& c = imported.config.at(std::string(kIndex));
+  CHECK(c.rows[1][int(Quest::secondary)] == Inputs{"/input/a/click"});
+  CHECK(c.rows[1][int(Quest::primary)] == Inputs{"/input/trackpad/dpad_up"});
+  CHECK(c.rows[0][int(Quest::stick)] == Inputs{"/input/thumbstick"});
+  CHECK(c.rows[0][int(Quest::trigger)] == Inputs{"/input/trigger/value"});  // the click twin folds in
+  CHECK(c.menu == MenuChoice{MenuMode::button, "/user/hand/left/input/thumbstick/click", {}, kHoldMs});
+  CHECK_FALSE(c.rows[0][int(Quest::primary)]);  // the system button is the runtime's: left as it was
+  CHECK(imported.mapped == 6);
+  CHECK(imported.skipped == 2);  // the system button and the other action set's output
+  // A file for another game, and an unknown controller read for the one shown.
+  CHECK_FALSE(import_file(R"({"bindings":{"/actions/main":{"sources":[]}}})", kTouch).error.empty());
+  const auto unknown = import_file(R"({"controller_type":"mystery","bindings":{"/actions/venture_controls":{"sources":[
+      {"path":"/user/hand/right/input/b","mode":"button","inputs":{"click":{"output":"/actions/venture_controls/in/button_x_a"}}}]}}})",
+                                   kTouch);
+  REQUIRE(unknown.config.contains(std::string(kTouch)));
+  CHECK(unknown.config.at(std::string(kTouch)).rows[1][int(Quest::primary)] == Inputs{"/input/b/click"});
+}
+
+TEST_CASE("Controls tuning: sticks, press points, vibration and toggles are saved, limited and read back") {
+  Choice c;
+  c.tuning[0] = {20, true, false, 30, 0, true, 60};
+  c.tuning[1] = {0, false, true, 0, 70, false, 100};
+  c.toggles[int(Quest::primary)] = c.toggles[int(Quest::trigger)] = true;
+  Config config{{std::string(kIndex), c}};
+  const auto back = decode(encode(config));
+  REQUIRE(back.contains(std::string(kIndex)));
+  CHECK(back.at(std::string(kIndex)) == c);
+  // Defaults write nothing; out-of-range values are limited; unknown toggles are ignored.
+  CHECK(encode({{std::string(kIndex), Choice{}}}).find("tuning") == std::string::npos);
+  const auto odd = decode(R"({"/interaction_profiles/valve/index_controller":{"tuning":{"left":{"deadzone":99,"triggerPress":2,"strength":300}},"toggles":["menu","grip","secondary"]}})");
+  const auto& o = odd.at(std::string(kIndex));
+  CHECK(o.tuning[0].deadzone == kMaxDeadzone);
+  CHECK(o.tuning[0].trigger_press == kMinPress);
+  CHECK(o.tuning[0].strength == 100);
+  CHECK_FALSE(o.toggles[int(Quest::menu)]);
+  CHECK_FALSE(o.toggles[int(Quest::grip)]);  // the grip's toggle is grip_toggle
+  CHECK(o.toggles[int(Quest::secondary)]);
+  const auto r = resolve(profile(kIndex), &c);
+  CHECK(r.tuning[0].trigger_press == 30);
+  CHECK(r.toggles[int(Quest::trigger)]);
+}
+
+TEST_CASE("Controls tuning: the stick's dead zone stretches the rest, inversion flips, presses hold until a little lower") {
+  Tuning t;
+  CHECK(shape_stick(t, 0.05f, -0.5f) == std::array<float, 2>{0.05f, -0.5f});
+  t.invert_y = true;
+  CHECK(shape_stick(t, 0.05f, -0.5f) == std::array<float, 2>{0.05f, 0.5f});
+  t = {};
+  t.deadzone = 20;
+  CHECK(shape_stick(t, 0.1f, 0.1f) == std::array<float, 2>{0, 0});
+  const auto full = shape_stick(t, 1, 0);
+  CHECK(full[0] == doctest::Approx(1));
+  const auto half = shape_stick(t, 0, 0.6f);
+  CHECK(half[1] == doctest::Approx(0.5f));
+  CHECK_FALSE(analog_press(0.25f, false, 30));
+  CHECK(analog_press(0.3f, false, 30));
+  CHECK(analog_press(0.22f, true, 30));   // held until below 20 %
+  CHECK_FALSE(analog_press(0.19f, true, 30));
+  CHECK(analog_press(0.5f, false, 0));    // 0: half way
+  CHECK(vibration_scale({0, false, false, 0, 0, true, 40}) == doctest::Approx(0.4f));
+  CHECK(vibration_scale({0, false, false, 0, 0, false, 40}) == 0);
+}
+
+TEST_CASE("Controls read SteamVR's toggle buttons, click points, dead zone and vibration bindings") {
+  const auto imported = import_file(R"({"controller_type":"knuckles","bindings":{"/actions/venture_controls":{
+    "sources":[
+      {"path":"/user/hand/right/input/a","mode":"toggle_button","inputs":{"click":{"output":"/actions/venture_controls/in/button_x_a"}}},
+      {"path":"/user/hand/left/input/trigger","mode":"trigger","parameters":{"click_activate_threshold":"0.25"},
+       "inputs":{"pull":{"output":"/actions/venture_controls/in/trigger"}}},
+      {"path":"/user/hand/left/input/grip","mode":"toggle_button","inputs":{"click":{"output":"/actions/venture_controls/in/grip_press"}}},
+      {"path":"/user/hand/left/input/thumbstick","mode":"joystick","parameters":{"deadzone_pct":"12"},
+       "inputs":{"position":{"output":"/actions/venture_controls/in/thumbstick"}}}],
+    "haptics":[{"output":"/actions/venture_controls/out/haptic","path":"/user/hand/left/output/haptic"}]}}})",
+                                    kTouch);
+  CHECK(imported.error.empty());
+  REQUIRE(imported.config.contains(std::string(kIndex)));
+  const auto& c = imported.config.at(std::string(kIndex));
+  CHECK(c.toggles[int(Quest::primary)]);
+  CHECK(c.grip_toggle == true);
+  CHECK(c.tuning[0].trigger_press == 25);
+  CHECK(c.tuning[0].deadzone == 12);
+  CHECK(c.tuning[0].vibration);
+  CHECK_FALSE(c.tuning[1].vibration);
+}
+
+TEST_CASE("Controls name the controller the host runtime's render model shows, among controllers with the same inputs") {
+  constexpr std::string_view kPlus = "/interaction_profiles/meta/touch_controller_plus";
+  constexpr std::string_view kPro = "/interaction_profiles/facebook/touch_controller_pro";
+  // SteamVR reports Touch for every Touch-shaped Quest controller; its drivers
+  // (oculus for Link, vrlink for Steam Link) name the model of each one.
+  CHECK(evident_profile(kTouch, "oculus_quest_plus_controller_left") == kPlus);
+  CHECK(evident_profile(kTouch, "oculus_quest_plus_controller_right") == kPlus);
+  CHECK(evident_profile(kTouch, "oculus_quest_pro_controller_right") == kPro);
+  // A Quest 2's Touch, or a model no listed controller has: the host's profile.
+  CHECK(evident_profile(kTouch, "oculus_quest2_controller_left") == kTouch);
+  CHECK(evident_profile(kTouch, "oculus_rifts_controller_left") == kTouch);
+  CHECK(evident_profile(kTouch, "") == kTouch);
+  // A host that has the controller's own profile keeps it.
+  CHECK(evident_profile(kPlus, "oculus_quest_plus_controller_left") == kPlus);
+  // Never another layout: a Touch model behind an Index profile (a remapped
+  // controller) is reported as the Index profile its inputs are.
+  CHECK(evident_profile(kIndex, "oculus_quest_plus_controller_left") == kIndex);
+  CHECK(evident_profile(kTouch, "valve_controller_knu_1_0_left") == kTouch);
+  // A profile Venture does not list stays what the host said.
+  CHECK(evident_profile("/interaction_profiles/ext/hand_interaction_ext", "oculus_quest_plus_controller_left") ==
+        "/interaction_profiles/ext/hand_interaction_ext");
+  CHECK(evident_profile("", "oculus_quest_plus_controller_left").empty());
+}
+
+TEST_CASE("Controls Touch, Touch Plus and Touch Pro share one input list, so evidence can move between them") {
+  // The same physical layout: player controls and suggested bindings carry over.
+  const auto& touch = profile(kTouch);
+  for (auto path : {"/interaction_profiles/meta/touch_controller_plus", "/interaction_profiles/facebook/touch_controller_pro"}) {
+    CAPTURE(path);
+    CHECK(profile(path).inputs.data() == touch.inputs.data());
+    CHECK(profile(path).defaults == touch.defaults);
+  }
 }

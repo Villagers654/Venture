@@ -86,6 +86,12 @@ TEST_CASE("A64: SIMD forwarding agrees with architectural register reloads", "[a
 }
 
 TEST_CASE("A64: cached LR survives inline paired exclusives", "[a64][register-cache]") {
+#if !defined(__x86_64__) && !defined(_M_X64) && !defined(__aarch64__) && !defined(_M_ARM64)
+    // The 128-bit exclusives here must reach host memory inline
+    // (fastmem_exclusive_access); other backends take the callbacks for pairs,
+    // which read the test environment's memory.
+    SKIP("inline fastmem exclusive pairs are the x64 and arm64 backends'");
+#endif
     A64TestEnv env;
     ExclusiveMonitor monitor{1};
     alignas(16) std::array<u64, 2> memory{42, 73};
@@ -108,6 +114,43 @@ TEST_CASE("A64: cached LR survives inline paired exclusives", "[a64][register-ca
     REQUIRE(jit.GetRegister(2) == 42);
     REQUIRE(jit.GetRegister(3) == 73);
     REQUIRE(jit.GetRegister(4) == 0);
+}
+
+// Venture: with fastmem exclusives, a value-compared monitor and generations (the
+// runtime's configuration), 8-64 bit exclusive pairs run inline on host memory
+// in every backend: an increment reaches the host word, and a pair broken by
+// CLREX stores nothing.
+TEST_CASE("A64: inline exclusives update host memory", "[a64]") {
+    for (const bool broken : {false, true}) {
+        A64TestEnv env;
+        ExclusiveMonitor monitor{1};
+        monitor.EnableGenerations();
+        alignas(8) u32 word = 41;
+        A64::UserConfig config{};
+        config.callbacks = &env;
+        config.global_monitor = &monitor;
+        config.fastmem_pointer = 0;
+        config.fastmem_address_space_bits = 64;
+        config.silently_mirror_fastmem = false;
+        config.fastmem_exclusive_access = true;
+        config.unsafe_optimizations = true;
+        config.optimizations |= OptimizationFlag::Unsafe_IgnoreGlobalMonitor;
+        A64::Jit jit{config};
+        if (broken) {
+            // ldxr w1, [x0]; add w1, w1, #1; clrex; stxr w2, w1, [x0]; b .
+            env.code_mem = {0x885f7c01, 0x11000421, 0xd503305f, 0x88027c01, 0x14000000};
+        } else {
+            // ldaxr w1, [x0]; add w1, w1, #1; stlxr w2, w1, [x0]; cbnz w2, ldaxr; b .
+            env.code_mem = {0x885ffc01, 0x11000421, 0x8802fc01, 0x35ffffa2, 0x14000000};
+        }
+        jit.SetRegister(0, reinterpret_cast<u64>(&word));
+        jit.SetRegister(2, 7);
+        env.ticks_left = 5;
+        CheckedRun([&] { jit.Run(); });
+        REQUIRE(jit.GetRegister(1) == 42);
+        REQUIRE(jit.GetRegister(2) == (broken ? 1 : 0));
+        REQUIRE(word == (broken ? 41u : 42u));
+    }
 }
 
 TEST_CASE("A64: ADD", "[a64]") {

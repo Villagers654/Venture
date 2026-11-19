@@ -57,8 +57,13 @@ void host_signal(int signal, siginfo_t* info, void* raw_context) {
 #endif
     char where[1024], line[1200];
     location(address, where, sizeof(where));
-    auto n = std::snprintf(line, sizeof(line), " E [runtime] Host exception 0x%x at %s (thread %ld)\n",
-                           signal, where, static_cast<long>(syscall(SYS_gettid)));
+    // A deliberate stop names its cause (a failed JIT assertion before std::terminate).
+    const char* reason = signal == SIGABRT ? venture::log::fatal_reason() : "";
+    auto n = *reason
+        ? std::snprintf(line, sizeof(line), " E [runtime] Host abort: %s (thread %ld)\n", reason,
+                        static_cast<long>(syscall(SYS_gettid)))
+        : std::snprintf(line, sizeof(line), " E [runtime] Host exception 0x%x at %s (thread %ld)\n",
+                        signal, where, static_cast<long>(syscall(SYS_gettid)));
     venture::log::crash_write(line, n);
     void* frames[16];
     const int count = backtrace(frames, std::size(frames));

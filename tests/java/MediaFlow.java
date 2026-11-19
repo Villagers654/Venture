@@ -199,6 +199,72 @@ public class MediaFlow {
     } catch(Throwable e){return "image codec: "+e;}
     finally {if(codec!=null)codec.release();}
   }
+  // CRIWARE Mana asks the decoder for its MediaCodecInfo and color formats. A decoder configured
+  // for COLOR_FormatYUV420Planar outputs I420 (the host NV12 frame converted), and callers of the
+  // legacy getInputBuffers/getOutputBuffers arrays read every output through the same array.
+  public static String planar(byte[] config, byte[][] packets, long[] times) {
+    android.media.MediaCodec codec=null;
+    try {
+      codec=android.media.MediaCodec.createDecoderByType("video/avc");
+      var info=codec.getCodecInfo();
+      if(info==null || !info.getName().equals(codec.getName()) || !"c2.android.avc.decoder".equals(info.getName())
+         || info.isEncoder() || info.isAlias() || !codec.getCanonicalName().equals(info.getName()))return "codec info "+info;
+      var caps=info.getCapabilitiesForType("video/avc");
+      var formats=java.util.Arrays.stream(caps.colorFormats).boxed().toList();
+      if(!formats.contains(19) || !formats.contains(21) || !formats.contains(0x7f420888))return "color formats "+formats;
+      var alias=android.media.MediaCodec.createByCodecName("OMX.google.h264.decoder");
+      try {
+        var aliasInfo=alias.getCodecInfo();
+        if(!aliasInfo.getName().equals("OMX.google.h264.decoder") || !aliasInfo.isAlias()
+           || !"c2.android.avc.decoder".equals(alias.getCanonicalName()))return "alias info";
+      } finally {alias.release();}
+      var format=android.media.MediaFormat.createVideoFormat("video/avc",128,72);
+      format.setInteger("color-format",android.media.MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Planar);
+      format.setByteBuffer("csd-0",java.nio.ByteBuffer.wrap(config));codec.configure(format,null,null,0);
+      try{codec.getInputBuffers();return "buffer arrays before start";}catch(IllegalStateException expected){}
+      codec.start();
+      var output=codec.getOutputFormat();
+      if(output.getInteger("color-format")!=19 || output.getInteger("stride")!=128 || output.getInteger("slice-height")!=72)return "planar output format "+output;
+      var inputs=codec.getInputBuffers();var outputs=codec.getOutputBuffers();
+      if(inputs.length!=1 || inputs[0]==null || outputs.length!=1 || outputs[0]==null || outputs[0].capacity()<128*72*3/2)return "legacy arrays";
+      var buffer=new android.media.MediaCodec.BufferInfo();int input=0,frames=0;boolean queuedEos=false,eos=false;
+      long deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(5);
+      while(!eos && System.nanoTime()<deadline) {
+        int index=queuedEos?-1:codec.dequeueInputBuffer(1000);
+        if(index>=0) {
+          var in=inputs[index];in.clear();
+          if(input<packets.length){in.put(packets[input]);codec.queueInputBuffer(index,0,packets[input].length,times[input],0);input++;}
+          else {codec.queueInputBuffer(index,0,0,1000000,4);queuedEos=true;}
+        }
+        index=codec.dequeueOutputBuffer(buffer,1000);
+        if(index==android.media.MediaCodec.INFO_OUTPUT_BUFFERS_CHANGED){outputs=codec.getOutputBuffers();continue;}
+        if(index<0)continue;
+        eos=(buffer.flags&4)!=0;
+        if(!eos) {
+          frames++;
+          if(buffer.offset!=0 || buffer.size!=128*72*3/2)return "planar frame size "+buffer.size;
+          var bytes=outputs[index];
+          if(bytes.position()!=0 || bytes.remaining()!=buffer.size)return "legacy output window";
+          // The legacy array and the Image both carry I420 for this frame.
+          var image=codec.getOutputImage(index);if(image==null)return "no output image";
+          var planes=image.getPlanes();int offset=0;
+          for(var plane:planes) {
+            var data=plane.getBuffer();
+            for(int n=0;n<data.remaining();++n)if(data.get(n)!=bytes.get(offset+n))return "planar byte "+(offset+n);
+            offset+=data.remaining();
+          }
+          if(offset!=buffer.size)return "planar plane sizes";
+        }
+        codec.releaseOutputBuffer(index,false);
+      }
+      if(!eos || frames!=12)return "planar EOS/frame count "+frames;
+      codec.stop();
+      try{codec.getOutputBuffers();return "buffer arrays after stop";}catch(IllegalStateException expected){}
+      codec.release();codec=null;
+      return null;
+    } catch(Throwable e){return "planar codec: "+e;}
+    finally {if(codec!=null)codec.release();}
+  }
   // finds its video track only through MediaPlayer.getTrackInfo().
   public static String video(String fixture) {
     var extractor=new android.media.MediaExtractor();var player=new MediaPlayer();

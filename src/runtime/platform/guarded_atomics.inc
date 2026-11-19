@@ -1,6 +1,7 @@
-// Fault-contained x86-64 atomics shared by the Win32 and Linux platform layers.
-// Include after defining VENTURE_A0..VENTURE_A3 as the first four integer argument
-// registers of the host ABI (AT&T names, e.g. "%rcx").
+// Fault-contained atomics shared by the Win32 and Linux platform layers: x86-64
+// (include after defining VENTURE_A0..VENTURE_A3 as the first four integer
+// argument registers of the host ABI, AT&T names, e.g. "%rcx") and AArch64
+// (AAPCS64, below).
 //
 // Every routine is a frameless leaf whose only access to the target object is
 // one instruction. x86 faults are precise, so a fault leaves memory and the
@@ -16,6 +17,46 @@
 // LOCK CMPXCHG leaves memory unchanged when the comparison fails (Intel SDM
 // Vol. 2A CMPXCHG); RAX then holds the current value, so `old` is correct in
 // both cases. r11 is volatile in both the Microsoft x64 and System V ABIs.
+#if defined(__aarch64__)
+// AArch64: exclusive load/store loops (every ARMv8 core has them). Faults are
+// precise: a faulting LDAXR or STLXR stores nothing, and `old` is written only
+// after the store succeeded. A CAS whose comparison fails stores the value it
+// read back, so it needs write access exactly as x86's LOCK CMPXCHG does.
+// x9-x11 are temporaries in AAPCS64.
+#define VENTURE_GUARDED_A64_RMW(name, ldx, stx, reg, op) \
+  ".globl " name "\n" name ":\n1:\n  " ldx " " reg "9, [x0]\n  " op "\n  " stx " w11, " reg "10, [x0]\n" \
+  "  cbnz w11, 1b\n  str x9, [x2]\n  mov w0, #1\n  ret\n"
+#define VENTURE_GUARDED_A64_CAS(name, ldx, stx, reg, cmp) \
+  ".globl " name "\n" name ":\n1:\n  " ldx " " reg "9, [x0]\n  " cmp "\n  csel x10, x2, x9, eq\n" \
+  "  " stx " w11, " reg "10, [x0]\n  cbnz w11, 1b\n  str x9, [x3]\n  mov w0, #1\n  ret\n"
+asm(".text\n.p2align 4\n.globl venture_guarded_begin\nventure_guarded_begin:\n"
+    VENTURE_GUARDED_A64_RMW("venture_guarded_add1", "ldaxrb", "stlxrb", "w", "add w10, w9, w1")
+    VENTURE_GUARDED_A64_RMW("venture_guarded_add2", "ldaxrh", "stlxrh", "w", "add w10, w9, w1")
+    VENTURE_GUARDED_A64_RMW("venture_guarded_add4", "ldaxr", "stlxr", "w", "add w10, w9, w1")
+    VENTURE_GUARDED_A64_RMW("venture_guarded_add8", "ldaxr", "stlxr", "x", "add x10, x9, x1")
+    VENTURE_GUARDED_A64_RMW("venture_guarded_xchg1", "ldaxrb", "stlxrb", "w", "mov w10, w1")
+    VENTURE_GUARDED_A64_RMW("venture_guarded_xchg2", "ldaxrh", "stlxrh", "w", "mov w10, w1")
+    VENTURE_GUARDED_A64_RMW("venture_guarded_xchg4", "ldaxr", "stlxr", "w", "mov w10, w1")
+    VENTURE_GUARDED_A64_RMW("venture_guarded_xchg8", "ldaxr", "stlxr", "x", "mov x10, x1")
+    VENTURE_GUARDED_A64_CAS("venture_guarded_cas1", "ldaxrb", "stlxrb", "w", "cmp x9, x1")
+    VENTURE_GUARDED_A64_CAS("venture_guarded_cas2", "ldaxrh", "stlxrh", "w", "cmp x9, x1")
+    VENTURE_GUARDED_A64_CAS("venture_guarded_cas4", "ldaxr", "stlxr", "w", "cmp x9, x1")
+    VENTURE_GUARDED_A64_CAS("venture_guarded_cas8", "ldaxr", "stlxr", "x", "cmp x9, x1")
+    ".globl venture_guarded_load32\nventure_guarded_load32:\n  ldr w9, [x0]\n  str w9, [x1]\n  mov w0, #1\n  ret\n"
+    // venture_guarded_read(dst, src, n): as on x86-64, eight-byte words, then
+    // bytes; a 1, 2, 4 or 8-byte read is one load of that width.
+    ".globl venture_guarded_read\nventure_guarded_read:\n"
+    "  cmp x2, #4\n  b.eq 5f\n  cmp x2, #2\n  b.eq 6f\n  cmp x2, #8\n  b.lo 2f\n"
+    "1:\n  ldr x9, [x1], #8\n  str x9, [x0], #8\n  sub x2, x2, #8\n  cmp x2, #8\n  b.hs 1b\n"
+    "2:\n  cbz x2, 4f\n"
+    "3:\n  ldrb w9, [x1], #1\n  strb w9, [x0], #1\n  subs x2, x2, #1\n  b.ne 3b\n"
+    "4:\n  mov w0, #1\n  ret\n"
+    "5:\n  ldr w9, [x1]\n  str w9, [x0]\n  b 4b\n"
+    "6:\n  ldrh w9, [x1]\n  strh w9, [x0]\n  b 4b\n"
+    ".globl venture_guarded_fault\nventure_guarded_fault:\n  mov w0, #0\n  ret\n");
+#undef VENTURE_GUARDED_A64_CAS
+#undef VENTURE_GUARDED_A64_RMW
+#else
 #define VENTURE_GUARDED_OP(name, body, widen, out) \
   ".globl " name "\n" name ":\n" body "\n" widen "\n  movq %rax, (" out ")\n  movl $1, %eax\n  ret\n"
 #define VENTURE_GUARDED_RMW(name, insn, reg, widen) \
@@ -57,6 +98,7 @@ asm(".text\n.p2align 4\n.globl venture_guarded_begin\nventure_guarded_begin:\n"
 #undef VENTURE_GUARDED_CAS
 #undef VENTURE_GUARDED_RMW
 #undef VENTURE_GUARDED_OP
+#endif
 
 extern "C" {
 extern const char venture_guarded_begin[], venture_guarded_fault[];

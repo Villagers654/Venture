@@ -18,4 +18,8 @@ std::unique_ptr<CpuBackend> make_a32_backend(A32BackendConfig config);
 // Install before the first A32 Cpu is created; the arena owns query lifetime.
 void set_a32_memory_query(A32MemoryQuery query);
 CpuBackend& a32_cpu_backend();
+// VENTURE_JIT_CODE_STATS=<file>: Dynarmic writes every emitted block's code
+// there (dynarmic/interface/code_stats.h, tools/jit_code_stats.py), and this
+// writes the A32 JIT's runtime-callback counts to <file>.callbacks.json.
+void write_jit_code_stats() noexcept;
 } // namespace venture

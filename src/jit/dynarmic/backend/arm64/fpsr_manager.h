@@ -27,6 +27,13 @@ public:
 
     void GetFpsr(oaknut::WReg);
 
+    // Venture: for slow paths that rejoin the block (memory fallbacks). The
+    // fast path keeps the host FPSR live; the slow path folds it into the state
+    // before its call and clears it after, so the tracked state stays valid.
+    bool IsLoaded() const { return fpsr_loaded; }
+    void EmitFold();
+    void EmitClearHost();
+
 private:
     oaknut::CodeGenerator& code;
     std::size_t state_fpsr_offset;

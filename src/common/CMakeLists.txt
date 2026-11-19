@@ -1,5 +1,6 @@
 add_library(venture_common STATIC
   controls.cpp
+  controls_file.cpp
   digest.cpp
   environment.cpp
   log.cpp
@@ -14,6 +15,7 @@ add_library(venture_common STATIC
   launch_details.cpp
   openxr_layers.cpp
   startup_progress.cpp
+  stall_record.cpp
   system_fonts.cpp
   http/client.cpp
   meta/auth.cpp
@@ -25,9 +27,17 @@ add_library(venture_common STATIC
   library/eye_scale_db.cpp
   library/import.cpp
   library/save_import.cpp
+  library/mods.cpp
   android/adb.cpp
   android/archive.cpp
   android/manifest.cpp
+  android/native_host.cpp
+  android/elf.cpp
+  android/dex.cpp
+  android/apk_rewrite.cpp
+  android/game_adapter.cpp
+  android/headset_games.cpp
+  android/axml.cpp
   download/manager.cpp
   download/asset_files.cpp
 )
@@ -48,6 +58,18 @@ endif()
 if(WIN32)
   target_sources(venture_common PRIVATE platform/win32/digest.cpp platform/win32/paths.cpp platform/win32/secret_store.cpp platform/win32/process.cpp platform/win32/file_ops.cpp platform/win32/pipe.cpp platform/win32/openxr_layers.cpp platform/win32/system_fonts.cpp)
   target_link_libraries(venture_common PRIVATE crypt32 bcrypt shell32 ole32 uuid advapi32)
+elseif(ANDROID)
+  # One APK for every Android headset. The NDK has no stable crypto or keyring
+  # API for native code: portable SHA-256, sessions through the app's Keystore.
+  # HTTPS, the Keystore and the rest of the app's Java side through JNI
+  # (platform/android/jni.h); fonts from /system/fonts.
+  target_sources(venture_common PRIVATE sha256_portable.cpp platform/android/digest.cpp platform/android/secret_store.cpp
+    platform/android/jni.cpp platform/android/http_transfer.cpp platform/android/system_fonts.cpp
+    platform/posix/paths.cpp platform/posix/process.cpp platform/posix/file_ops.cpp platform/posix/pipe.cpp platform/posix/dbus.cpp platform/posix/openxr_layers.cpp)
+  target_link_libraries(venture_common PRIVATE ${CMAKE_DL_LIBS} log)
+  add_library(venture_core SHARED platform/android/native_core.cpp)
+  target_link_libraries(venture_core PRIVATE "$<LINK_LIBRARY:WHOLE_ARCHIVE,venture_common>")
+  target_link_options(venture_core PRIVATE -Wl,--no-undefined)
 else()
   find_package(OpenSSL REQUIRED)
   target_link_libraries(venture_common PRIVATE OpenSSL::Crypto)

@@ -427,6 +427,25 @@ public class View implements ViewParent {
   public boolean onKeyUp(int code, KeyEvent event) {
     return false;
   }
+  // AOSP: keys reach the focused view before a shown input method takes them
+  // (Unity's text field finishes its edit on Back there).
+  public boolean dispatchKeyEventPreIme(KeyEvent event) {
+    return onKeyPreIme(event.getKeyCode(), event);
+  }
+  public boolean onKeyPreIme(int code, KeyEvent event) {
+    return false;
+  }
+  // A text editor overrides these (TextView, GameActivity's InputEnabledSurfaceView):
+  // the input method asks the view it serves for its connection.
+  public boolean onCheckIsTextEditor() {
+    return false;
+  }
+  public android.view.inputmethod.InputConnection onCreateInputConnection(android.view.inputmethod.EditorInfo info) {
+    return null;
+  }
+  public boolean checkInputConnectionProxy(View view) {
+    return false;
+  }
   public boolean onTouchEvent(MotionEvent e) {
     return false;
   }
@@ -675,7 +694,6 @@ public class View implements ViewParent {
   public void setLongClickable(boolean longClickable) { this.longClickable = longClickable; }
   public boolean isLongClickable() { return longClickable; }
   public void bringToFront() { if (parent instanceof ViewGroup group) group.bringChildToFront(this); }
-  public boolean onKeyPreIme(int keyCode, KeyEvent event) { return false; }
   public boolean hasOnClickListeners() {
     return clickListener != null;
   }

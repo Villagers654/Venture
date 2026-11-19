@@ -14,13 +14,24 @@ target_compile_definitions(venture_imgui PUBLIC IMGUI_ENABLE_FREETYPE IMGUI_USE_
 include(${PROJECT_SOURCE_DIR}/cmake/I18n.cmake)
 i18n_add_library(venture_i18n SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/i18n)
 # The launcher without its window (core.h): the GUI and venture-cli share it.
-add_library(venture_launcher_core STATIC core.cpp debug_report.cpp diagnosis.cpp drives.cpp import.cpp sign_in_link.cpp store_link.cpp updater.cpp ui/rich_text_parse.cpp ui/text_scripts.cpp)
+add_library(venture_launcher_core STATIC core.cpp debug_report.cpp diagnosis.cpp drives.cpp headset_check.cpp import.cpp mods.cpp sign_in_link.cpp store_link.cpp updater.cpp ui/rich_text_parse.cpp ui/text_scripts.cpp)
 target_link_libraries(venture_launcher_core PUBLIC venture_common venture_ovrplatform venture_i18n)
 # Store links are looked up again once per version (core.cpp).
-target_compile_definitions(venture_launcher_core PRIVATE VENTURE_VERSION="${PROJECT_VERSION}")
-add_executable(venture WIN32 main.cpp app.cpp ui/style.cpp ui/views.cpp ui/chrome.cpp ui/logo.cpp ui/rich_text.cpp assets/texture_cache.cpp
+target_compile_definitions(venture_launcher_core PRIVATE VENTURE_VERSION="${VENTURE_VERSION_FULL}")
+set(venture_gui_sources main.cpp app.cpp ui/style.cpp ui/views.cpp ui/chrome.cpp ui/logo.cpp ui/rich_text.cpp assets/texture_cache.cpp
   assets/controller_art.cpp
   assets/render_model.cpp)
+if(ANDROID)
+  # The APK's native library (src/android_app): SDL's Java activity runs the
+  # launcher's SDL_main from libventure.so.
+  add_library(venture SHARED ${venture_gui_sources})
+  target_link_options(venture PRIVATE -Wl,--no-undefined)
+  # All of SDL: its Java classes call natives (JNI_OnLoad's registrations,
+  # HIDAPI) that nothing in C++ references.
+  target_link_libraries(venture PRIVATE "$<LINK_LIBRARY:WHOLE_ARCHIVE,SDL3::SDL3-static>")
+else()
+  add_executable(venture WIN32 ${venture_gui_sources})
+endif()
 # The logos ship inside the executable; assets/venture.svg, assets/steam.svg and
 # assets/discord.svg are their only sources.
 file(READ ${CMAKE_CURRENT_SOURCE_DIR}/assets/venture.svg VENTURE_LOGO_SVG)
@@ -43,7 +54,7 @@ file(CONFIGURE OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/generated/launcher/icon_font.h
 inline constexpr unsigned char kIconFont[] = {${ICON_FONT_BYTES}};
 " @ONLY)
 target_include_directories(venture PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/generated)
-target_compile_definitions(venture PRIVATE VENTURE_VERSION="${PROJECT_VERSION}")
+target_compile_definitions(venture PRIVATE VENTURE_VERSION="${VENTURE_VERSION_FULL}")
 target_link_libraries(venture PRIVATE venture_launcher_core venture_imgui webpdecoder)
 target_include_directories(venture SYSTEM PRIVATE ${stb_SOURCE_DIR} ${webp_SOURCE_DIR}/src ${nanosvg_SOURCE_DIR}/src)
 if(WIN32)
@@ -70,16 +81,26 @@ if(WIN32)
   target_sources(venture PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/generated/launcher/launcher.rc ${VENTURE_ICON})
   add_custom_command(TARGET venture POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_if_different
     ${webview2_SOURCE_DIR}/build/native/x64/WebView2Loader.dll $<TARGET_FILE_DIR:venture>/WebView2Loader.dll)
+elseif(ANDROID)
+  target_sources(venture_launcher_core PRIVATE platform/android/auth_browser.cpp platform/android/headset_play.cpp)
+  # The headset check asks the OpenXR runtime through the app's Khronos loader (dlopen).
+  target_link_libraries(venture_launcher_core PRIVATE OpenXR::headers)
+  # platform_service.cpp holds only JNI entry points: in the library itself, so no archive drops it.
+  target_sources(venture PRIVATE platform/android/window_style.cpp platform/android/platform_service.cpp)
 else()
-  target_sources(venture_launcher_core PRIVATE platform/posix/auth_browser.cpp)
+  # The headset check is shown on Linux arm64 only (headset_check.h); built everywhere here.
+  target_sources(venture_launcher_core PRIVATE platform/posix/auth_browser.cpp platform/posix/headset_check.cpp)
   target_sources(venture PRIVATE platform/posix/window_style.cpp)
 endif()
 if(MINGW)
   target_link_options(venture PRIVATE -municode)
 endif()
+if(ANDROID)
+  return()  # no terminal on a headset
+endif()
 # venture-cli: the launcher's commands in a terminal, on the same core.
 add_executable(venture-cli cli.cpp)
-target_compile_definitions(venture-cli PRIVATE VENTURE_VERSION="${PROJECT_VERSION}")
+target_compile_definitions(venture-cli PRIVATE VENTURE_VERSION="${VENTURE_VERSION_FULL}")
 target_link_libraries(venture-cli PRIVATE venture_launcher_core)
 if(WIN32)
   add_custom_command(TARGET venture-cli POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_if_different

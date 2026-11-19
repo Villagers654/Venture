@@ -891,6 +891,90 @@ TEST_CASE("VrApi Vulkan copies persistent guest images on the guest-owned device
     CHECK(bytes[eye * 4 + 2] == 191);
     CHECK(bytes[eye * 4 + 3] == 255);
   }
+  // A slot the guest never drew is copied as transparent black: eye images
+  // start cleared, in the shader-read layout every copy assumes.
+  REQUIRE(xr::xr_images()->copy_to_image(native_ring.textures[1], destination.image, native_ring.desc, 0, false) == XR_SUCCESS);
+  gpu.begin();
+  barrier(destination.image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+  test::vk_call("vkCmdCopyImageToBuffer", gpu.command, destination.image,
+                VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, readback.buffer, 2u, copies);
+  barrier(destination.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+  gpu.barrier(VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
+              VK_PIPELINE_STAGE_HOST_BIT, VK_ACCESS_HOST_READ_BIT);
+  gpu.submit();
+  for (int i = 0; i < 8; ++i) CHECK(bytes[i] == 0);
+  // A guest may submit an image in the layout it rendered it in, as VrApi on a
+  // Quest allows: the copy reads it there and leaves it there.
+  auto slot1 = vg::vrapi_GetTextureSwapChainBufferVulkan(ring, 1);
+  auto all = [&](VkImage image, VkImageLayout layout) {
+    const auto layouts = vulkan::tracked_layouts(image);
+    return layouts.size() == 2 && std::all_of(layouts.begin(), layouts.end(), [&](auto l) { return l == layout; });
+  };
+  CHECK(all(slot1, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL));
+  gpu.begin();
+  barrier(slot1, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+  VkClearColorValue red{{1, 0, 0, 1}};
+  test::vk_call("vkCmdClearColorImage", gpu.command, slot1, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &red, 1u, &range);
+  barrier(slot1, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+  CHECK(all(slot1, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL));  // recorded, not yet submitted
+  gpu.submit();
+  CHECK(all(slot1, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL));
+  REQUIRE(xr::xr_images()->copy_to_image(native_ring.textures[1], destination.image, native_ring.desc, 0, false) == XR_SUCCESS);
+  CHECK(all(slot1, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL));
+  gpu.begin();
+  barrier(destination.image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+  test::vk_call("vkCmdCopyImageToBuffer", gpu.command, destination.image,
+                VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, readback.buffer, 2u, copies);
+  barrier(destination.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+  gpu.barrier(VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
+              VK_PIPELINE_STAGE_HOST_BIT, VK_ACCESS_HOST_READ_BIT);
+  gpu.submit();
+  for (int eye = 0; eye < 2; ++eye) {
+    CHECK(bytes[eye * 4] == 255);
+    CHECK(bytes[eye * 4 + 1] == 0);
+    CHECK(bytes[eye * 4 + 3] == 255);
+  }
+  // A render pass leaves its attachment in the pass's final layout.
+  {
+    VkImageViewCreateInfo vi{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+    vi.image = slot1; vi.viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY; vi.format = VK_FORMAT_R8G8B8A8_UNORM;
+    vi.subresourceRange = range;
+    VkImageView view{};
+    REQUIRE(test::vk_call("vkCreateImageView", gpu.device, &vi, nullptr, &view) == VK_SUCCESS);
+    VkAttachmentDescription attachment{0, VK_FORMAT_R8G8B8A8_UNORM, VK_SAMPLE_COUNT_1_BIT,
+        VK_ATTACHMENT_LOAD_OP_LOAD, VK_ATTACHMENT_STORE_OP_STORE, VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+        VK_ATTACHMENT_STORE_OP_DONT_CARE, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL};
+    VkAttachmentReference color{0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+    VkSubpassDescription subpass{};
+    subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    subpass.colorAttachmentCount = 1; subpass.pColorAttachments = &color;
+    VkRenderPassCreateInfo rp{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};
+    rp.attachmentCount = 1; rp.pAttachments = &attachment; rp.subpassCount = 1; rp.pSubpasses = &subpass;
+    VkRenderPass pass{};
+    REQUIRE(test::vk_call("vkCreateRenderPass", gpu.device, &rp, nullptr, &pass) == VK_SUCCESS);
+    VkFramebufferCreateInfo fi{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
+    fi.renderPass = pass; fi.attachmentCount = 1; fi.pAttachments = &view;
+    fi.width = fi.height = 32; fi.layers = 2;
+    VkFramebuffer framebuffer{};
+    REQUIRE(test::vk_call("vkCreateFramebuffer", gpu.device, &fi, nullptr, &framebuffer) == VK_SUCCESS);
+    gpu.begin();
+    VkRenderPassBeginInfo bi{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
+    bi.renderPass = pass; bi.framebuffer = framebuffer; bi.renderArea = {{0, 0}, {32, 32}};
+    test::vk_call("vkCmdBeginRenderPass", gpu.command, &bi, VK_SUBPASS_CONTENTS_INLINE);
+    test::vk_call("vkCmdEndRenderPass", gpu.command);
+    gpu.submit();
+    CHECK(all(slot1, VK_IMAGE_LAYOUT_GENERAL));
+    REQUIRE(xr::xr_images()->copy_to_image(native_ring.textures[1], destination.image, native_ring.desc, 0, false) == XR_SUCCESS);
+    CHECK(all(slot1, VK_IMAGE_LAYOUT_GENERAL));
+    // Back to the layout VrApi images are handed out in, for the rest of the test.
+    gpu.begin();
+    barrier(slot1, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    gpu.submit();
+    CHECK(all(slot1, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL));
+    test::vk_call("vkDestroyFramebuffer", gpu.device, framebuffer, nullptr);
+    test::vk_call("vkDestroyRenderPass", gpu.device, pass, nullptr);
+    test::vk_call("vkDestroyImageView", gpu.device, view, nullptr);
+  }
   // Repeated copies retain both layouts and stable VkImage handles.
   REQUIRE(xr::xr_images()->copy_to_image(native_ring.textures[0], destination.image, native_ring.desc, 0, true) == XR_SUCCESS);
   CHECK(vg::vrapi_GetTextureSwapChainBufferVulkan(ring, 0) == source);

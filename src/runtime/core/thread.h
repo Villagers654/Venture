@@ -130,6 +130,9 @@ class GuestThread {
   // HLE function id + 1 while its handler runs, else 0: stall snapshots name a
   // blocking host call. Relaxed, owner-written; observers only report it.
   std::atomic<std::uint32_t> host_call{0};
+  // Guest PC | 1 of the block the JIT is compiling on this thread, else 0
+  // (Dynarmic::SetCompileMarker): stall snapshots name a translation stall.
+  std::atomic<std::uint64_t> jit_compiling{0};
   void request_shutdown_sample();
 
   explicit GuestThread(std::int32_t tid);

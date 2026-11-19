@@ -337,7 +337,16 @@ TEST_CASE("Steam sync while Steam runs asks for a restart only when its shortcut
   auto running = sync(f.root, exe, {}, games, [] { return true; });
   CHECK_FALSE(running.pending);
   CHECK(running.games == 2);
-  CHECK(sync(f.root, exe, {}, {games[0]}, [] { return true; }).pending);
-  CHECK(sync(f.root, exe, {}, {games[0], {"com.example.two", "Renamed", ""}}, [] { return true; }).pending);
-  CHECK(sync(f.root, f.root / "moved/venture.exe", {}, games, [] { return true; }).pending);
+  CHECK(running.reason.empty());
+  // Each restart prompt says what Steam's shortcuts lack, for the log.
+  auto removed = sync(f.root, exe, {}, {games[0]}, [] { return true; });
+  CHECK(removed.pending);
+  CHECK(removed.reason == "com.example.two is no longer installed but still has a shortcut");
+  auto renamed = sync(f.root, exe, {}, {games[0], {"com.example.two", "Renamed", ""}}, [] { return true; });
+  CHECK(renamed.pending);
+  CHECK(renamed.reason == "Renamed: its shortcut is named Two");
+  auto moved = sync(f.root, f.root / "moved/venture.exe", {}, games, [] { return true; });
+  CHECK(moved.pending);
+  CHECK(moved.reason.starts_with("One: its shortcut starts \""));
+  CHECK(moved.reason.find("moved") != std::string::npos);
 }

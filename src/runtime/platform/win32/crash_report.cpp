@@ -9,7 +9,10 @@
 #include <windows.h>
 #include <dbghelp.h>
 #include <psapi.h>
+#include <csignal>
+#include <cstdint>
 #include <cstdio>
+#include <exception>
 #include <filesystem>
 #include <string>
 
@@ -25,6 +28,10 @@ venture::GuestThread* fault_guest;
 volatile LONG reporting;
 std::wstring dump_path, dump_pattern, dump_directory;
 std::string dump_line;
+// A deliberate stop (abort, std::terminate, a CRT invalid-parameter or pure
+// call report) instead of an exception: the CRT ends those through __fastfail
+// (0xC0000409), which no exception handler sees.
+char abort_reason[1280];
 
 void location(void* address, char* output, std::size_t size) {
   MEMORY_BASIC_INFORMATION memory{};
@@ -96,8 +103,10 @@ DWORD WINAPI dump_worker(void*) {
   venture::api_result_trace::crash_flush();
   venture::pc_trace::flush();
   location(record.ExceptionAddress, where, sizeof(where));
-  auto n = std::snprintf(line, sizeof(line), " E [runtime] Host exception 0x%08lx at %s (thread %lu)\n",
-                         record.ExceptionCode, where, fault_tid);
+  auto n = abort_reason[0]
+      ? std::snprintf(line, sizeof(line), " E [runtime] Host abort: %s (thread %lu)\n", abort_reason, fault_tid)
+      : std::snprintf(line, sizeof(line), " E [runtime] Host exception 0x%08lx at %s (thread %lu)\n",
+                      record.ExceptionCode, where, fault_tid);
   venture::log::crash_write(line, n);
   // Walk the original exception context, not the helper's own stack. Leaf
   // return addresses are read through the OS to stop cleanly at bad stacks. A
@@ -168,6 +177,54 @@ LONG WINAPI host_exception(EXCEPTION_POINTERS* fault) {
   TerminateProcess(GetCurrentProcess(), record.ExceptionCode);
   return EXCEPTION_EXECUTE_HANDLER;
 }
+
+// The report of a deliberate stop on this thread: the stack from here and a
+// dump, then the status the CRT would have ended with (its __fastfail).
+[[noreturn]] void host_abort(const char* reason) {
+  if (InterlockedCompareExchange(&reporting, 1, 0)) {
+    // Another thread's report ends the process; a stop inside the report
+    // itself (its own thread) ends it here.
+    if (GetCurrentThreadId() != fault_tid) Sleep(35000);
+    TerminateProcess(GetCurrentProcess(), STATUS_STACK_BUFFER_OVERRUN);
+    for (;;) Sleep(INFINITE);
+  }
+  const char* detail = venture::log::fatal_reason();
+  std::snprintf(abort_reason, sizeof(abort_reason), "%s%s%s", reason, *detail ? ": " : "", detail);
+  RtlCaptureContext(&context);
+  record = EXCEPTION_RECORD{};
+  record.ExceptionCode = STATUS_STACK_BUFFER_OVERRUN;
+  record.ExceptionFlags = EXCEPTION_NONCONTINUABLE;
+  record.ExceptionAddress = reinterpret_cast<void*>(context.Rip);
+  fault_tid = GetCurrentThreadId();
+  fault_guest = venture::GuestThread::current();
+  venture::log::crash_write("", 0);
+  SetEvent(requested);
+  WaitForSingleObject(completed, 30000);
+  TerminateProcess(GetCurrentProcess(), STATUS_STACK_BUFFER_OVERRUN);
+  for (;;) Sleep(INFINITE);
+}
+void abort_signal(int) { host_abort("abort() was called"); }
+void terminate_handler() {
+  // The exception std::terminate was called for, if any (one that left a
+  // thread's function or a noexcept function).
+  static char text[768];
+  const char* reason = "std::terminate was called";
+  if (const auto current = std::current_exception()) {
+    try {
+      std::rethrow_exception(current);
+    } catch (const std::exception& e) {
+      std::snprintf(text, sizeof(text), "std::terminate: uncaught exception: %s", e.what());
+      reason = text;
+    } catch (...) {
+      reason = "std::terminate: uncaught exception of a non-standard type";
+    }
+  }
+  host_abort(reason);
+}
+void invalid_parameter(const wchar_t*, const wchar_t*, const wchar_t*, unsigned, std::uintptr_t) {
+  host_abort("the C runtime was passed an invalid parameter");
+}
+void pure_call() { host_abort("a pure virtual function was called"); }
 }
 
 void prepare_crash_stack() {
@@ -215,6 +272,11 @@ void install_crash_report(std::string_view log_path, std::string_view package) {
   WaitForSingleObject(ready, INFINITE);
   CloseHandle(worker);
   SetUnhandledExceptionFilter(host_exception);
+  // abort() raises SIGABRT before its __fastfail; the handler does not return.
+  std::signal(SIGABRT, abort_signal);
+  std::set_terminate(terminate_handler);
+  _set_invalid_parameter_handler(invalid_parameter);
+  _set_purecall_handler(pure_call);
   installed = true;
 }
 }

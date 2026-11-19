@@ -47,15 +47,27 @@ std::u16string from_modified_utf8(std::string_view);
 std::string to_modified_utf8(std::u16string_view);
 
 // Captured by platform/{win32,posix}/java_entry.S. Offsets are asserted there
-// by matching this layout; stack points at the first ABI stack argument.
+// by matching this layout; stack points at the first ABI stack argument. gp
+// holds the host ABI's integer argument registers (host_gp_registers), fp its
+// first eight floating-point ones.
 struct HostArguments {
-  std::array<std::uint64_t, 6> gp{};
+  std::array<std::uint64_t, 8> gp{};
   std::array<std::uint64_t, 8> fp{};
   const std::uint64_t* stack = nullptr;
 };
-static_assert(offsetof(HostArguments, fp) == 48);
-static_assert(offsetof(HostArguments, stack) == 112);
-enum class HostAbi { Win64, SysV };
+static_assert(offsetof(HostArguments, fp) == 64);
+static_assert(offsetof(HostArguments, stack) == 128);
+// The host JVM's calling convention: Windows x64, System V AMD64, or AAPCS64
+// (Linux AArch64: x0-x7 and v0-v7, independent, each stack argument in an 8-byte slot).
+enum class HostAbi { Win64, SysV, Aapcs64 };
+constexpr unsigned host_gp_registers(HostAbi abi) { return abi == HostAbi::Aapcs64 ? 8 : 6; }
+#if defined(_WIN32)
+inline constexpr HostAbi kHostAbi = HostAbi::Win64;
+#elif defined(__aarch64__)
+inline constexpr HostAbi kHostAbi = HostAbi::Aapcs64;
+#else
+inline constexpr HostAbi kHostAbi = HostAbi::SysV;
+#endif
 struct NativeArguments {
   std::vector<std::uint64_t> integers, stack;
   std::vector<double> doubles;

@@ -1,8 +1,12 @@
-# Flatpak of the baseline release layout (build_packages.sh flatpak).
-# OpenXR: the bundled loader reaches the host runtime through
+# The Flatpak, for x86_64 and aarch64 (the Steam Frame), on the GNOME runtime
+# (freedesktop 26.08 underneath), which carries WebKitGTK 6.0 for the embedded
+# Meta sign-in window. A template: `build_packages.sh flathub` fills in the
+# version and each architecture's tarball checksum for the Flathub submission;
+# `build_packages.sh flatpak` assembles a bundle from a local layout with these
+# finish-args. OpenXR: the bundled loader reaches the host runtime through
 # venture-flatpak.sh; see docs/LINUX_RELEASE_BUILD.md ("Flatpak and OpenXR").
-# The GNOME runtime (freedesktop 26.08 underneath) carries WebKitGTK 6.0 for
-# Meta sign-in.
+# The release binaries are the baseline builds (docs/LINUX_RELEASE_BUILD.md):
+# glibc 2.35, libc++ linked statically, ANGLE, FFmpeg and the JRE bundled.
 id: org.venture_emu.Venture
 runtime: org.gnome.Platform
 runtime-version: '51'
@@ -10,11 +14,13 @@ sdk: org.gnome.Sdk
 command: venture-flatpak.sh
 separate-locales: false
 finish-args:
-  - --share=network
-  - --share=ipc
+  # Wayland only (no X11 or IPC sockets), audio, network, the GPU.
   - --socket=wayland
   - --socket=pulseaudio
+  - --share=network
   - --device=dri
+  # Gamepads (Steam Input's virtual one on SteamOS) for the launcher's navigation.
+  - --device=input
   # OpenXR runtimes: Monado/Envision and WiVRn sockets, the user's runtime
   # manifest, Envision's runtime prefix, and host /etc + /usr (/run/host) for
   # system-installed runtimes such as distribution Monado packages.
@@ -24,6 +30,17 @@ finish-args:
   - --filesystem=xdg-data/envision:ro
   - --filesystem=host-os:ro
   - --filesystem=host-etc:ro
+  # SteamVR: its runtime manifest and client library in the Steam folder,
+  # OpenVR's paths file, and the shared memory its client and server talk over.
+  - --filesystem=xdg-data/Steam/steamapps/common/SteamVR:ro
+  - --filesystem=xdg-config/openvr:ro
+  - --device=shm
+  # Add games to Steam: the shortcuts and artwork in each Steam user's folder,
+  # the logins that name the current user, and Steam's command pipe, which
+  # tells whether Steam runs (the sandbox cannot see its process).
+  - --filesystem=xdg-data/Steam/userdata
+  - --filesystem=xdg-data/Steam/config/loginusers.vdf:ro
+  - --filesystem=~/.steam/steam.pipe
   # APK/OBB imports from the usual download location (file dialogs use portals).
   - --filesystem=xdg-download:ro
   - --talk-name=org.freedesktop.secrets
@@ -31,9 +48,22 @@ modules:
   - name: venture
     buildsystem: simple
     build-commands:
-      - cp -a venture /app/venture
-      - install -Dm755 venture-flatpak.sh /app/bin/venture-flatpak.sh
+      - install -d /app/venture
+      - find . -mindepth 1 -maxdepth 1 ! -name share ! -name venture-flatpak.sh ! -name '*.desktop' -exec cp -a {} /app/venture/ \;
       - cp -a share /app/share
+      - sed -i 's/^Exec=venture /Exec=venture-flatpak.sh /' /app/share/applications/org.venture_emu.Venture.desktop
+      - install -Dm755 venture-flatpak.sh /app/bin/venture-flatpak.sh
+      - install -Dm644 org.venture_emu.Venture.SignIn.desktop /app/share/applications/org.venture_emu.Venture.SignIn.desktop
     sources:
-      - type: dir
-        path: src
+      - type: archive
+        only-arches: [x86_64]
+        url: https://github.com/Villagers654/Venture/releases/download/v@VERSION@/Venture-@VERSION@-linux-x86_64.tar.gz
+        sha256: '@SHA256_x86_64@'
+      - type: archive
+        only-arches: [aarch64]
+        url: https://github.com/Villagers654/Venture/releases/download/v@VERSION@/Venture-@VERSION@-linux-aarch64.tar.gz
+        sha256: '@SHA256_aarch64@'
+      - type: file
+        path: venture-flatpak.sh
+      - type: file
+        path: org.venture_emu.Venture.SignIn.desktop

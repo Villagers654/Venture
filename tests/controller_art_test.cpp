@@ -73,6 +73,31 @@ TEST_CASE("bundled models drawn unturned match their pictures") {
   CHECK_FALSE(turnable(*controller("generic", "left")));  // the neutral picture stays still
 }
 
+TEST_CASE("the neutral picture for controllers without their own carries no logo") {
+  // The generic model's face plate prints the WebXR logo in light grey on dark;
+  // build_controller_art.py paints it out (its UNBRAND boxes), leaving the plate.
+  const struct {
+    const char* hand;
+    int x0, y0, x1, y1;
+  } plates[] = {{"left", 180, 55, 255, 175}, {"right", 200, 65, 285, 175}};
+  for (const auto& plate : plates) {
+    CAPTURE(plate.hand);
+    const Image* image = controller("generic", plate.hand);
+    REQUIRE(image);
+    int w = 0, h = 0, n = 0;
+    unsigned char* px = stbi_load_from_memory(image->png.data(), int(image->png.size()), &w, &h, &n, 4);
+    REQUIRE(px);
+    double brightest = 0;
+    for (int y = plate.y0; y < plate.y1; ++y)
+      for (int x = plate.x0; x < plate.x1; ++x) {
+        const unsigned char* p = px + (size_t(y) * w + x) * 4;
+        if (p[3] == 255) brightest = std::max(brightest, 0.299 * p[0] + 0.587 * p[1] + 0.114 * p[2]);
+      }
+    stbi_image_free(px);
+    CHECK(brightest < 100);  // the logo's letters were above 200
+  }
+}
+
 TEST_CASE("turning a model around hides the inputs on its far side") {
   const Image* image = controller("touch", "left");
   const ScenePtr scene = scene_of(*image);

@@ -13,12 +13,7 @@ target_include_directories(venture_audio SYSTEM PUBLIC ${miniaudio_SOURCE_DIR})
 target_compile_definitions(venture_audio PUBLIC MA_NO_DECODING MA_NO_ENCODING
   MA_NO_RESOURCE_MANAGER MA_NO_NODE_GRAPH MA_NO_ENGINE MA_NO_GENERATION)
 target_link_libraries(venture_audio PUBLIC venture_common venture_runtime venture_hle)
-if(WIN32)
-  set(media_install install)
-else()
-  set(media_install install-posix)
-endif()
-set(VENTURE_FFMPEG_ROOT "${PROJECT_SOURCE_DIR}/.deps/ffmpeg/${media_install}" CACHE PATH "Verified LGPL FFmpeg build")
+# VENTURE_FFMPEG_ROOT: cmake/FFmpegDependency.cmake (the target's verified build).
 if(NOT EXISTS "${VENTURE_FFMPEG_ROOT}/include/libavformat/avformat.h")
   message(FATAL_ERROR "Missing FFmpeg headers: run python tools/bootstrap.py --ffmpeg")
 endif()

@@ -12,6 +12,7 @@
 #include "common/meta/store.h"
 #include "common/process.h"
 #include "common/secret_store.h"
+#include "common/openxr_layers.h"
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
@@ -526,6 +527,33 @@ TEST_CASE(
   CHECK(result[0].bytes == 9);
   paths::atomic_write(dir / p.files[2].name, "X");
   CHECK_FALSE(library::scan(d.root)[0].complete);
+}
+TEST_CASE("a replaced OBB keeps the install complete and is named, other files are still size-checked") {
+  Directory d;
+  auto p = meta::build_plan("123456", binary());
+  auto dir = paths::game_dir(d.root, p.package, p.version_code);
+  paths::atomic_write(dir / "plan.json", p.json().dump());
+  REQUIRE(p.files[1].kind == "obb");
+  paths::atomic_write(dir / p.files[0].name, "ABCD");
+  paths::atomic_write(dir / p.files[1].name, "MODDED OBB");
+  paths::atomic_write(dir / p.files[2].name, "AB");
+  auto result = library::scan(d.root);
+  REQUIRE(result.size() == 1);
+  CHECK(result[0].complete);
+  CHECK(result[0].replaced == std::vector<std::string>{p.files[1].name});
+  CHECK(library::install_problems(dir, p).empty());
+  const auto replaced = library::replaced_files(dir, p);
+  REQUIRE(replaced.size() == 1);
+  CHECK(replaced[0] == p.files[1].name + " was replaced (10 bytes; the store's file has 3)");
+  // An empty OBB is damage, not a replacement.
+  paths::atomic_write(dir / p.files[1].name, "");
+  CHECK_FALSE(library::scan(d.root)[0].complete);
+  CHECK(library::replaced_files(dir, p).empty());
+  // The APK and other files keep their size check.
+  paths::atomic_write(dir / p.files[1].name, "OBB");
+  paths::atomic_write(dir / p.files[0].name, "ABCDE");
+  CHECK_FALSE(library::scan(d.root)[0].complete);
+  CHECK(library::scan(d.root)[0].replaced.empty());
 }
 TEST_CASE("the runtime is never a setting: a saved runtimeExecutable is ignored and dropped") {
   Directory d;
@@ -1231,6 +1259,35 @@ TEST_CASE("a runtime that ends on a fatal signal reports the signal and its trap
         "(SI_QUEUE) in tid 1001");
 }
 
+TEST_CASE("an optional library probe is never the stop reason; a fail-fast stop names its record") {
+  // A user report (H3VR2, 0.2.5): the launcher blamed Unity's probe for
+  // liblibhaptics_sdk.so, which it follows by loading libhaptics_sdk.so. The
+  // runtime logs an absent requested library as a warning, as Android logs nothing.
+  const std::string probe = "  12202.583 13404 I [java] Loading guest library liblibhaptics_sdk.so\n"
+                            "  12202.583 13404 W [linker] library not found: liblibhaptics_sdk.so\n"
+                            "  12202.583 13404 W [java] load_guest_library: library not found: liblibhaptics_sdk.so\n"
+                            "  12202.584 13404 I [java] Loading guest library libhaptics_sdk.so\n"
+                            "  12202.661 13404 I [xr] Guest instance created for com.rustltd.h3vr2 on SteamVR/OpenXR\n";
+  constexpr int fail_fast = -1073740791;  // 0xC0000409
+  CHECK(library::runtime_failure(probe, fail_fast) == "The runtime stopped unexpectedly (exit code 0xC0000409).");
+  // A __fastfail in a host library: the supervisor quotes Windows Error Reporting's record.
+  const std::string wer = "  12211.283 30416 E [runtime] The app process ended with status 0xC0000409 (a fail-fast "
+                          "stop, which no crash handler sees). Windows Error Reporting: exception 0xc0000409 in "
+                          "vrclient_x64.dll+0x1a2b3\n";
+  CHECK(library::runtime_failure(probe + wer, fail_fast) ==
+        "The app process ended with status 0xC0000409 (a fail-fast stop, which no crash handler sees). Windows "
+        "Error Reporting: exception 0xc0000409 in vrclient_x64.dll+0x1a2b3");
+  // Venture's own deliberate stop (a failed JIT assertion, then std::terminate) names its cause and dump.
+  const std::string abort = "  12205.1 428 E [jit] JIT assertion failed: false (Unreachable code!)\n"
+                            " E [runtime] Host abort: std::terminate was called: JIT assertion failed: false "
+                            "(Unreachable code!) (thread 428)\n"
+                            " E [host-stack]   #0 venture-runtime.exe+0x1234\n"
+                            " I [runtime] Crash dump: C:\\logs\\runtime-com.rustltd.h3vr2.dmp\n";
+  CHECK(library::runtime_failure(probe + abort, fail_fast) ==
+        "Host abort: std::terminate was called: JIT assertion failed: false (Unreachable code!) (thread 428) "
+        "Crash dump: C:\\logs\\runtime-com.rustltd.h3vr2.dmp");
+}
+
 TEST_CASE("an uncaught Java exception that closed the app is the stop reason, not a later error line") {
   // Pinball FX VR: ProfileInstaller's NoClassDefFoundError closed the app; the
   // report quoted an unrelated error line logged before it, then ones logged after.
@@ -1314,7 +1371,11 @@ TEST_CASE("updates pick this platform's release file and its checksum") {
     {"name": "SHA256SUMS", "size": 300, "browser_download_url": "https://github.com/Villagers654/Venture/releases/download/v9/SHA256SUMS"},
     {"name": "Venture-9-linux-x86_64.AppImage", "size": 7, "browser_download_url": "https://github.com/Villagers654/Venture/releases/download/v9/Venture-9-linux-x86_64.AppImage"},
     {"name": "Venture-windows64-setup.exe", "size": 9, "browser_download_url": "https://evil.example/Venture-windows64-setup.exe"},
-    {"name": "Venture-windows64.zip", "size": 8, "browser_download_url": "https://github.com/Villagers654/Venture/releases/download/v9/Venture-windows64.zip"}]})");
+    {"name": "Venture-windows64.zip", "size": 8, "browser_download_url": "https://github.com/Villagers654/Venture/releases/download/v9/Venture-windows64.zip"},
+    {"name": "venture-9-android-arm64.apk", "size": 6, "browser_download_url": "https://github.com/Villagers654/Venture/releases/download/v9/venture-9-android-arm64.apk"}]})");
+  const auto apk = update::pick(release, update::Method::apk);
+  REQUIRE(apk);
+  CHECK(apk->name == "venture-9-android-arm64.apk");
   const auto image = update::pick(release, update::Method::appimage);
   REQUIRE(image);
   CHECK(image->name == "Venture-9-linux-x86_64.AppImage");
@@ -1328,6 +1389,22 @@ TEST_CASE("updates pick this platform's release file and its checksum") {
   CHECK(update::expected_sum(text, "Venture-windows64-setup.exe") == std::string(64, 'a'));
   CHECK(update::expected_sum(text, "Venture-9-linux-x86_64.AppImage") == b);
   CHECK(update::expected_sum(text, "Venture-windows64.zip").empty());
+}
+
+TEST_CASE("update check compares versions, pre-releases before their release") {
+  using namespace venture::launcher;
+  CHECK(update::newer_version("v0.3.0", "0.2.5"));
+  CHECK(update::newer_version("v0.2.5.1", "0.2.5"));
+  CHECK_FALSE(update::newer_version("v0.2.5", "0.2.5"));
+  CHECK_FALSE(update::newer_version("v0.2.5", "0.3.0-alpha"));
+  // A pre-release moves on to its release and later ones, never back.
+  CHECK(update::newer_version("v0.3.0", "0.3.0-alpha.1"));
+  CHECK(update::newer_version("v0.3.1", "0.3.0-alpha"));
+  CHECK_FALSE(update::newer_version("v0.3.0-alpha", "0.3.0"));
+  CHECK_FALSE(update::newer_version("v0.3.0-beta", "0.3.0-alpha"));
+  CHECK_FALSE(update::newer_version("v0.3.x", "0.2.5"));
+  CHECK_FALSE(update::newer_version("v0..3", "0.2.5"));
+  CHECK_FALSE(update::newer_version("", "0.2.5"));
 }
 
 TEST_CASE("store catalogs keep Meta's asset type and name language packs by file") {
@@ -1349,4 +1426,38 @@ TEST_CASE("store catalogs keep Meta's asset type and name language packs by file
   CHECK(file("voices_all.pak").language_tag.empty());
   auto saved = meta::parse_plan(plan.json());
   CHECK(std::ranges::find(saved.files, "ko.lang", &meta::File::name)->language_tag == "ko");
+}
+TEST_CASE("the newest published Meta VR OS SDK is read from Maven and cached, never lower") {
+  // Maven Central's listing of com.meta.metavr:metavr-os-jsdk, a later release added.
+  CHECK(library::metavr_os_sdk_from_maven(R"(<metadata><versioning><latest>207</latest><release>207</release>
+    <versions><version>207</version><version>v208</version><version>209.1</version><version>x</version></versions>
+    </versioning></metadata>)") == 209);
+  CHECK(library::metavr_os_sdk_from_maven("<html>not found</html>") == 0);
+  Directory d;
+  CHECK(library::cached_metavr_os_sdk(d.root) == 0);
+  library::cache_metavr_os_sdk(d.root, 209);
+  library::cache_metavr_os_sdk(d.root, 207);
+  CHECK(library::cached_metavr_os_sdk(d.root) == 209);
+}
+TEST_CASE("the chosen VR runtime reaches the game as XR_RUNTIME_JSON while it is installed") {
+  Directory d;
+  auto settings = library::Settings::defaults(d.root);
+  auto runtime = [&] {
+    for (const auto& [key, value] : library::launch_environment(settings, "1"))
+      if (key == "XR_RUNTIME_JSON") return value;
+    return std::string("(unset)");
+  };
+  // The system's active runtime: nothing set, so the loader's own choice applies.
+  CHECK(runtime() == "(unset)");
+  const auto manifest = d.root / "openxr" / "steamxr_win64.json";
+  std::filesystem::create_directories(manifest.parent_path());
+  paths::atomic_write(manifest, R"({"file_format_version":"1.0.0","runtime":{"name":"SteamVR","library_path":"vrclient.dll"}})");
+  settings.xr_runtime = paths::utf8(manifest);
+  CHECK(runtime() == paths::utf8(manifest));
+  settings.save(d.root);
+  CHECK(library::Settings::load(d.root).xr_runtime == paths::utf8(manifest));
+  CHECK(openxr_layers::runtime_name(manifest) == "SteamVR");
+  // Uninstalled since: the active runtime again.
+  std::filesystem::remove(manifest);
+  CHECK(runtime() == "(unset)");
 }

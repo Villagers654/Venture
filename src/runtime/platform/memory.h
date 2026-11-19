@@ -12,6 +12,10 @@ void release(GuestAddr address, std::uint64_t size);
 bool commit(GuestAddr address, std::uint64_t size, std::uint32_t prot);
 bool decommit(GuestAddr address, std::uint64_t size);
 bool protect(GuestAddr address, std::uint64_t size, std::uint32_t prot);
+// POSIX: guest PROT_EXEC maps to host PROT_EXEC from now on (an engine that runs
+// guest code in place). Set before the first guest mapping; by default guest
+// executable pages are only host readable.
+void set_guest_code_executable(bool executable);
 bool memory_accessible(GuestAddr address, std::size_t size, bool write);
 bool read_memory(GuestAddr address, void* out, std::size_t size);
 bool write_memory(GuestAddr address, const void* data, std::size_t size);
@@ -48,7 +52,10 @@ std::optional<std::uint64_t> committed_bytes(GuestAddr address, std::uint64_t si
 // The first host mapping in a range, for diagnostics; empty when the range is free.
 std::string first_mapping(GuestAddr address, std::uint64_t size);
 struct FileMapping { GuestAddr base = 0, address = 0; std::uint64_t size = 0; };
-int map_shared_file(int host_fd, std::uint64_t offset, std::uint64_t size, std::uint32_t prot, FileMapping& out);
+// The OS places the view, or with `at` the view replaces that reserved range
+// (POSIX only; Windows views are never placed and fail with ENOMEM).
+int map_shared_file(int host_fd, std::uint64_t offset, std::uint64_t size, std::uint32_t prot, FileMapping& out,
+                    GuestAddr at = 0);
 void unmap_shared_file(const FileMapping& mapping);
 int sync_shared_file(GuestAddr address, std::uint64_t size, bool synchronous);
 }

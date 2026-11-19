@@ -159,3 +159,11 @@ TEST_CASE("SteamVR runtime manifests are recognised by path, link or contents") 
   CHECK_FALSE(environment::steamvr_manifest("/home/u/.config/openxr/1/active_runtime.json",
                                             R"({"runtime":{"name":"WiVRn","library_path":"libopenxr_wivrn.so"}})"));
 }
+TEST_CASE("A runtime manifest's library resolves beside the manifest") {
+  const std::string manifest = "/nonexistent/SteamVR/steamxr_linux64.json";
+  CHECK(environment::steamvr_library(manifest, R"({"runtime":{"library_path" : "bin/linux64/vrclient.so"}})") ==
+        "/nonexistent/SteamVR/bin/linux64/vrclient.so");
+  CHECK(environment::steamvr_library(manifest, R"({"runtime":{"library_path":"/opt/x/libxr.so"}})") ==
+        "/opt/x/libxr.so");
+  CHECK(environment::steamvr_library(manifest, R"({"runtime":{"name":"none"}})").empty());
+}

@@ -8,6 +8,7 @@
 #include "common/download/unity_bundle.h"
 #include "common/library/import.h"
 #include "common/library/library.h"
+#include "common/library/mods.h"
 #include "common/process.h"
 #include "common/library/save_import.h"
 #include "common/saves_migration.h"
@@ -554,16 +555,66 @@ TEST_CASE("a partly downloaded install names the files that make it so") {
                 {{}, "gone.bin", {}, "asset", 6}, {{}, "extra.bin", {}, "asset", 7}};
   plan.files[4].required = false;  // not a base file: never reported
   auto write = [&](const char *name, std::size_t n) { std::ofstream(d.root / name, std::ios::binary) << std::string(n, 'x'); };
-  write("game.apk", 3);
-  write("main.obb", 2);  // changed after install
+  write("game.apk", 2);  // changed after install
+  write("main.obb", 2);  // replaced by the player: named apart, never a problem
   write("data.bin.part", 1);
   CHECK(library::install_problems(d.root, plan) ==
-        std::vector<std::string>{"main.obb has 2 bytes, the manifest says 4",
+        std::vector<std::string>{"game.apk has 2 bytes, the manifest says 3",
                                  "data.bin is still downloading (1 of 5 bytes)", "gone.bin is missing"});
+  CHECK(library::replaced_files(d.root, plan) ==
+        std::vector<std::string>{"main.obb was replaced (2 bytes; the store's file has 4)"});
+  write("game.apk", 3);
   write("main.obb", 4);
   write("data.bin", 5);
   write("gone.bin", 6);
   CHECK(library::install_problems(d.root, plan).empty());
+}
+TEST_CASE("a patched APK replaces an installed game's APK in place, and the original comes back") {
+  Directory d;
+  const auto dir = d.root / "com.example.game" / "7";
+  apk(dir / "game.apk", "com.example.game", 7, 10);
+  write(dir / "main.7.com.example.game.obb", "obb");
+  meta::Plan plan{"1234567", "99", "com.example.game", "1.0", "7", {}};
+  plan.files = {{{}, "game.apk", {}, "apk", fs::file_size(dir / "game.apk")}, {{}, "main.7.com.example.game.obb", {}, "obb", 3}};
+  paths::atomic_write(dir / "plan.json", plan.json().dump(2));
+  const auto store_bytes = as_string(std::vector<std::uint8_t>(std::istreambuf_iterator<char>(std::ifstream(dir / "game.apk", std::ios::binary).rdbuf()), {}));
+  CHECK(mods::original_apk(dir).empty());
+  apk(d.root / "patched.apk", "com.example.game", 7, 500);
+  CHECK(mods::replace_apk(dir, d.root / "patched.apk"));
+  auto installed = meta::parse_plan(paths::read_json(dir / "plan.json"));
+  CHECK(installed.binary_id == "99");
+  CHECK(installed.files[0].size == fs::file_size(d.root / "patched.apk"));
+  CHECK(installed.files[0].sha256.size() == 64);
+  CHECK(fs::file_size(dir / "game.apk") == fs::file_size(d.root / "patched.apk"));
+  CHECK(fs::exists(dir / "main.7.com.example.game.obb"));
+  CHECK(library::install_problems(dir, installed).empty());
+  CHECK(mods::original_apk(dir) == dir / "game.apk.original");
+  // The same APK again changes nothing; another patch keeps the store's original.
+  CHECK_FALSE(mods::replace_apk(dir, d.root / "patched.apk"));
+  apk(d.root / "patched2.apk", "com.example.game", 7, 900);
+  CHECK(mods::replace_apk(dir, d.root / "patched2.apk"));
+  // Another game or version is refused.
+  apk(d.root / "other.apk", "com.example.other", 7);
+  apk(d.root / "newer.apk", "com.example.game", 8);
+  CHECK_THROWS(mods::replace_apk(dir, d.root / "other.apk"));
+  CHECK_THROWS(mods::replace_apk(dir, d.root / "newer.apk"));
+  mods::restore_apk(dir);
+  installed = meta::parse_plan(paths::read_json(dir / "plan.json"));
+  CHECK(installed.files[0].size == store_bytes.size());
+  CHECK(fs::file_size(dir / "game.apk") == store_bytes.size());
+  CHECK(mods::original_apk(dir).empty());
+  CHECK_THROWS(mods::restore_apk(dir));
+  // A replacement expansion file is written over the installed one; the install stays complete.
+  CHECK(mods::obb_names(dir) == std::vector<std::string>{"main.7.com.example.game.obb"});
+  write(d.root / "modded.obb", "a modded expansion file");
+  mods::replace_obb(dir, "main.7.com.example.game.obb", d.root / "modded.obb");
+  std::ifstream obb(dir / "main.7.com.example.game.obb", std::ios::binary);
+  CHECK(std::string(std::istreambuf_iterator<char>(obb), {}) == "a modded expansion file");
+  installed = meta::parse_plan(paths::read_json(dir / "plan.json"));
+  CHECK(library::install_problems(dir, installed).empty());
+  CHECK(library::replaced_files(dir, installed).size() == 1);
+  CHECK_THROWS(mods::replace_obb(dir, "patch.7.com.example.game.obb", d.root / "modded.obb"));
+  CHECK_THROWS(mods::replace_obb(dir, "../plan.json", d.root / "modded.obb"));
 }
 TEST_CASE("queued jobs start in list order, move, and cancel; a running job stops before it leaves") {
   Directory d;

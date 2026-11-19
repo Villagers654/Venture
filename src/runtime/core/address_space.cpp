@@ -8,6 +8,7 @@
 #include "core/guest_heap.h"
 #include "cpu/cpu.h"
 #include "cpu/a32_backend.h"
+#include "cpu/native_a64.h"
 #include "cpu/kuser.h"
 #include "platform/memory.h"
 #include "common/log.h"
@@ -39,7 +40,7 @@ struct State {
   bool maps_dirty = true;
   std::size_t logged_regions = 512;  // the next region count worth a log line
   std::atomic<std::uint64_t> stack_limit{kDefaultStackLimit};
-  static constexpr std::uint64_t arena_size = 1ull << 40;
+  std::uint64_t arena_size = 0;  // the A64 arena's, once reserved
 };
 State& state() { static auto* s = new State; return *s; }
 // Republishes the lock-free snapshot after a change confined to [lo, hi).
@@ -148,19 +149,50 @@ bool reserve_range(State& s, GuestAddr p, std::uint64_t n) {
 // code persisted against their addresses match in the next run.
 void reserve_arena(State& s) {
   if (s.arena) return;
+  // The engine decides how guest code executes (host-executable pages, the
+  // stub entry) before the first A64 guest mapping or stub.
+  process_engine();
   // 16 TiB: above where Windows places heaps and mapped views at random (about
   // 1-3 TiB) and below top-down allocations and images; Linux places nothing
   // there either. Later fixed candidates keep the address stable if it is taken.
-  for (const GuestAddr candidate : {0x100000000000ull, 0x110000000000ull, 0x120000000000ull, 0x130000000000ull}) {
-    s.arena = platform::reserve(candidate, State::arena_size, true);
+  // A 39-bit-VA arm64 kernel (512 GiB) has no room there: its smaller arenas
+  // lie below the PIE image, clear of the A64 guest heap arena (guest_heap.cpp).
+  // x64 keeps the 1 TiB arena, whose size sets library_slot's slot count.
+  // Adapted from the Joseph-DiGiovanni/Venture fork (ddcef01e4).
+  struct Candidate { GuestAddr address; std::uint64_t size; };
+  constexpr std::uint64_t large = 1ull << 40;
+#if defined(__aarch64__)
+  constexpr std::uint64_t small = 128ull << 30;
+  constexpr Candidate candidates[]{{0x100000000000ull, large}, {0x110000000000ull, large},
+                                   {0x120000000000ull, large}, {0x130000000000ull, large},
+                                   {0x3000000000ull, small}, {0x800000000ull, small / 2}};
+  constexpr std::uint64_t anywhere[]{large, small};
+#else
+  constexpr Candidate candidates[]{{0x100000000000ull, large}, {0x110000000000ull, large},
+                                   {0x120000000000ull, large}, {0x130000000000ull, large}};
+  constexpr std::uint64_t anywhere[]{large};
+#endif
+  for (const auto [candidate, size] : candidates) {
+    s.arena = platform::reserve(candidate, size, true);
+    if (s.arena) { s.arena_size = size; break; }
+    log::info("memory", "A64 guest arena candidate {:#x} unavailable: {}", candidate, platform::first_mapping(candidate, size));
+  }
+  for (const auto size : anywhere) {
     if (s.arena) break;
-    log::info("memory", "A64 guest arena candidate {:#x} unavailable: {}", candidate, platform::first_mapping(candidate, State::arena_size));
+    s.arena = platform::reserve(0, size, false);
+    if (s.arena) s.arena_size = size;
   }
-  if (!s.arena) s.arena = platform::reserve(0, State::arena_size, false);
   if (s.arena) {
-    s.reservations.push_back({s.arena, State::arena_size});
-    log::info("memory", "A64 guest arena [{:#x}, {:#x})", s.arena, s.arena + State::arena_size);
+    s.reservations.push_back({s.arena, s.arena_size});
+    log::info("memory", "A64 guest arena [{:#x}, {:#x})", s.arena, s.arena + s.arena_size);
   }
+}
+// The CPU backend from inside the lock. Its first use creates it, and the
+// native-a64 backend reads arena64(), which takes the lock to reserve an arena
+// not yet reserved (a fixed mapping is the process's first A64 mapping).
+CpuBackend& backend_locked(State& s) {
+  if (!a32_policy) reserve_arena(s);
+  return cpu_backend();
 }
 GuestAddr choose(State& s, std::uint64_t size, std::uint64_t alignment, bool grow_down = false) {
   const auto below = grow_down ? kStackGuardGap : 0;
@@ -169,7 +201,7 @@ GuestAddr choose(State& s, std::uint64_t size, std::uint64_t alignment, bool gro
     if (grow_down) {
       // Put grow-down VMAs at the high end of a hole. Bottom-up packing would
       // leave exactly stack_guard_gap below them and forbid their first growth.
-      auto top = s.arena + State::arena_size;
+      auto top = s.arena + s.arena_size;
       for (auto it = s.regions.rbegin(); it != s.regions.rend(); ++it) {
         const auto& r = it->second;
         if (r.start >= top) { top = std::min(top, r.gap_start()); continue; }
@@ -187,11 +219,11 @@ GuestAddr choose(State& s, std::uint64_t size, std::uint64_t alignment, bool gro
       }
     }
     auto p = align_up(s.arena + below, alignment);
-    for (auto it = s.regions.lower_bound(s.arena); it != s.regions.end() && it->first < s.arena + State::arena_size; ++it) {
+    for (auto it = s.regions.lower_bound(s.arena); it != s.regions.end() && it->first < s.arena + s.arena_size; ++it) {
       if (p + size <= it->second.gap_start()) break;
       p = align_up(it->first + it->second.size + below, alignment);
     }
-    if (p <= s.arena + State::arena_size && size <= s.arena + State::arena_size - p) return p;
+    if (p <= s.arena + s.arena_size && size <= s.arena + s.arena_size - p) return p;
   }
   auto reserve_size = align_up(size + alignment + below, platform::reservation_granularity());
   auto p = platform::reserve(0, reserve_size, false);
@@ -225,6 +257,9 @@ void erase(State& s, GuestAddr p, std::uint64_t n) {
   }
   for (auto it = s.shared_views.lower_bound(p); it != s.shared_views.end() && it->first < p+n;) {
     platform::unmap_shared_file(it->second.mapping);
+    // A view placed in the arena gives its range back to the reservation.
+    if (s.arena && it->first >= s.arena && it->first < s.arena + s.arena_size)
+      platform::reserve(it->first, it->second.size, true);
     it = s.shared_views.erase(it);
   }
 }
@@ -263,6 +298,7 @@ std::int64_t map_locked(State& s, GuestAddr hint, std::uint64_t size, std::uint3
     if (!p) return -err::kENOMEM;
   }
   const bool backed = !(flags & kMapAnonymous);
+  if ((prot & kProtExec) && !backend_locked(s).prepare_executable(p, size)) return -err::kENOMEM;
   if ((prot || backed) && !platform::commit(p, size, backed ? kProtRead | kProtWrite : prot)) {
     // The guest gets ENOMEM as mmap defines; the log names the limit.
     alloc_failure::report(alloc_failure::Kind::guest_mmap, std::format("guest mmap {}", name), size);
@@ -310,6 +346,13 @@ void AddressSpace::initialize(GuestIsa isa) {
     { auto& s = state(); profile::TimedLock lock(s.mutex); reserve_arena(s); }
     guest_heap::select64();
   }
+}
+std::pair<GuestAddr, GuestAddr> AddressSpace::arena64() const {
+  // Written once, by the first A64 allocation or initialize(). Read without the
+  // lock once set: a caller may hold it (a backend created by that allocation).
+  auto& s = state();
+  if (!s.arena && !a32_policy) { profile::TimedLock lock(s.mutex); reserve_arena(s); }
+  return s.arena ? std::pair{s.arena, s.arena + s.arena_size} : std::pair<GuestAddr, GuestAddr>{0, 0};
 }
 bool AddressSpace::is_guest_accessible(GuestAddr p, std::uint64_t n, bool write) const {
   if (a32_policy) return low32::accessible(p, n, write);
@@ -384,6 +427,7 @@ std::int64_t AddressSpace::protect(GuestAddr p, std::uint64_t size, std::uint32_
   if (end == p) return -err::kENOMEM;
   const bool partial = end < p + size;
   size = end - p;
+  if ((prot & kProtExec) && !backend_locked(s).prepare_executable(p, size)) return -err::kENOMEM;
   track_heap(s, p, end);
   split(s, p); split(s, p + size);
   std::int64_t result = 0;
@@ -391,16 +435,25 @@ std::int64_t AddressSpace::protect(GuestAddr p, std::uint64_t size, std::uint32_
   bool changed = false;
   for (auto it = s.regions.lower_bound(p); it != s.regions.end() && it->first < p + size; ++it) {
     auto& r = it->second;
+    const auto region_prot = region_protection(r, prot);
     // Commit also handles untouched PROT_NONE reservations, and never discards existing bytes.
     auto view = s.shared_views.upper_bound(r.start);
     const bool shared = view != s.shared_views.begin() && r.start < std::prev(view)->first + std::prev(view)->second.size;
-    if (!heap_region(r) && ((!shared && !platform::commit(r.start, r.size, prot)) || !platform::protect(r.start, r.size, prot))) {
+    // Heap pages keep mimalloc's read-write; where guest code runs natively they
+    // also take the guest's execute bit, or code written to malloc'd memory
+    // could not run.
+    const bool heap_exec_changed = heap_region(r) && guest_code_runs_natively() && ((r.prot ^ region_prot) & kProtExec);
+    if (heap_exec_changed && !platform::protect(r.start, r.size, kHeapProt | (region_prot & kProtExec))) {
+      result = -err::kENOMEM; break;
+    }
+    if (!heap_region(r) && ((!shared && !platform::commit(r.start, r.size, region_prot)) ||
+                            !platform::protect(r.start, r.size, region_prot))) {
       alloc_failure::report(alloc_failure::Kind::guest_mmap, std::format("guest mprotect {}", r.name), r.size);
       result = -err::kENOMEM; break;
     }
-    if ((r.prot | prot) & kProtExec) stale.emplace_back(r.start, r.size);
-    changed |= r.prot != prot;
-    r.prot = prot;
+    if ((r.prot | region_prot) & kProtExec) stale.emplace_back(r.start, r.size);
+    changed |= r.prot != region_prot;
+    r.prot = region_prot;
   }
   // A heap range back at malloc's protection needs no region.
   for (auto it = s.regions.lower_bound(p); it != s.regions.end() && it->first < p + size;)
@@ -453,7 +506,13 @@ std::int64_t AddressSpace::map_shared_file(int fd, std::uint64_t size, std::uint
   if (auto error = platform::map_shared_file(fd, offset, size, prot, view)) return error;
   const auto rounded = align_up(size, kGuestPageSize);
   if (!valid_range(view.address, rounded) || overlaps(s, view.address, view.address+rounded)) {
-    platform::unmap_shared_file(view); return -err::kENOMEM;
+    platform::unmap_shared_file(view);
+    // Linux arm64 places mappings below 2^48, above every guest address: the
+    // view then replaces a free range of the reserved arena.
+    reserve_arena(s);
+    const auto p = s.arena ? choose(s, rounded, kGuestPageSize) : 0;
+    if (!p || p < s.arena || p + rounded > s.arena + s.arena_size) return -err::kENOMEM;
+    if (auto error = platform::map_shared_file(fd, offset, size, prot, view, p)) return error;
   }
   s.shared_views.emplace(view.address, State::SharedView{view, rounded});
   s.regions.emplace(view.address, MemoryRegion{view.address, rounded, prot, std::string(name), offset});
@@ -492,16 +551,16 @@ GuestAddr AddressSpace::allocate_preferred(GuestAddr preferred, std::uint64_t si
   s.allocations.emplace(p, align_up(size, 4096)); return p;
 }
 GuestAddr AddressSpace::library_slot(std::string_view soname, std::uint64_t size, std::uint64_t alignment) {
-  // 64 slots of 4 GiB from a quarter into the arena: first-fit allocation
-  // fills from its bottom and grow-down regions take its top.
-  constexpr std::uint64_t slot_size = 4ull << 30, slots = 64;
+  // 4 GiB slots over the arena's second quarter (64 in a 1 TiB arena):
+  // first-fit allocation fills from its bottom and grow-down regions take its top.
+  constexpr std::uint64_t slot_size = 4ull << 30;
   if (a32_policy || size > slot_size || !alignment || alignment > slot_size) return 0;
   std::uint64_t hash = 0xcbf29ce484222325ull;
   for (const char c : soname) hash = (hash ^ std::uint8_t(c)) * 0x100000001b3ull;
   auto& s = state();
   { profile::TimedLock lock(s.mutex); reserve_arena(s); }
   if (!s.arena) return 0;
-  return s.arena + State::arena_size / 4 + (hash % slots) * slot_size;
+  return s.arena + s.arena_size / 4 + (hash % (s.arena_size / 4 / slot_size)) * slot_size;
 }
 GuestAddr AddressSpace::allocate_at(GuestAddr address, std::uint64_t size, std::uint32_t prot, std::string_view name) {
   if (a32_policy) return 0;

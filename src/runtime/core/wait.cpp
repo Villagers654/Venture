@@ -187,6 +187,15 @@ int wait(GuestThread& thread, GuestAddr address, std::uint32_t expected, std::in
   }
   bool signalled = true;
   int wait_error = 0;
+  // Parked, the JIT run this host call came from does not hold up code
+  // invalidation by other threads (a hook written into code waited for every
+  // blocked thread to wake). Unparked before any guest code runs again.
+  struct Park {
+    Cpu* cpu;
+    explicit Park(Cpu* c) : cpu(c) { if (cpu) cpu->park(); }
+    void release() noexcept { if (cpu) std::exchange(cpu, nullptr)->unpark(); }
+    ~Park() { release(); }
+  } park(thread.has_cpu() && GuestThread::current() == &thread ? &thread.cpu() : nullptr);
   if (deadline < 0) {
     while (!ready()) {
       if (event) {
@@ -211,6 +220,7 @@ int wait(GuestThread& thread, GuestAddr address, std::uint32_t expected, std::in
     // timer precision, which other modules in the process can change.
     if (!signalled) session_timeline::timed_wait_expired(monotonic_ns() - deadline);
   }
+  park.release();
   if (w.event) w.event->timing.resumed_ns = monotonic_ns();
   b.remove(w);
   lock.unlock();

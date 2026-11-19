@@ -7,6 +7,7 @@
 #include "xr/haptic_output.h"
 #include "common/log.h"
 #include "common/environment.h"
+#include "common/quest_xr_surface.h"
 #include "android/framework_bridge.h"
 #include "core/process.h"
 #include "common/android/manifest.h"
@@ -245,51 +246,23 @@ XrResult InputChain::copy(const void* root, bool validate_parent) {
   }
   return XR_SUCCESS;
 }
+// The shared table carries plain numbers; keep them the pinned headers' versions.
+static_assert(quest_xr::find("XR_FB_spatial_entity")->version == XR_FB_spatial_entity_SPEC_VERSION);
+static_assert(quest_xr::find("XR_FB_spatial_entity_query")->version == XR_FB_spatial_entity_query_SPEC_VERSION);
+static_assert(quest_xr::find("XR_FB_spatial_entity_storage")->version == XR_FB_spatial_entity_storage_SPEC_VERSION);
+static_assert(quest_xr::find("XR_FB_scene")->version == XR_FB_scene_SPEC_VERSION);
+static_assert(quest_xr::find("XR_FB_scene_capture")->version == XR_FB_scene_capture_SPEC_VERSION);
+static_assert(quest_xr::find("XR_EXT_debug_utils")->version == XR_EXT_debug_utils_SPEC_VERSION);
 std::map<std::string, std::uint32_t> capabilities() {
-  std::map<std::string, std::uint32_t> result{
-      {"XR_KHR_loader_init", 2},
-      {"XR_KHR_loader_init_android", 1},
-      {"XR_KHR_android_create_instance", 3},
-      {"XR_KHR_android_thread_settings", 6},
-      {"XR_FB_display_refresh_rate", 1},
-      {"XR_FB_color_space", 3},
-      {"XR_FB_foveation", 1},
-      {"XR_FB_foveation_configuration", 1},
-      {"XR_FB_swapchain_update_state", 3},
-      {"XR_FB_touch_controller_pro", 1},
-      {"XR_META_touch_controller_plus", 1},
-      {"XR_KHR_locate_spaces", 1},
-      {"XR_FB_haptic_pcm", 1},
-      {"XR_FB_haptic_amplitude_envelope", 1},
-      // Guest Vulkan images are copied to the host chain, which applies the flip.
-      {"XR_FB_composition_layer_image_layout", 1},
-      // Drawn flat where the host has no cylinders (xrEndFrame).
-      {"XR_KHR_composition_layer_cylinder", 1},
-      // Drawn into a projection layer where the host has none (sphere_layers.h).
-      {"XR_KHR_composition_layer_equirect", 3},
-      {"XR_KHR_composition_layer_equirect2", 1},
-      // Answered without the host (extensions.cpp xrRequestBoundaryVisibilityMETA).
-      {"XR_META_boundary_visibility", 1},
-  };
+  // What Venture answers itself (common/quest_xr_surface.h); host versions
+  // replace these below where the host enables the same extension.
+  std::map<std::string, std::uint32_t> result;
+  const bool a64 = process_config().isa() == GuestIsa::a64;
+  for (const auto &extension : quest_xr::kExtensions)
+    if (extension.isa == quest_xr::Isa::any || a64)
+      result.emplace(extension.name, extension.version);
   if (xr_images())
     result["XR_KHR_opengl_es_enable"] = 10;
-  if (process_config().isa() == GuestIsa::a64) {
-    result["XR_META_recommended_layer_resolution"] = 1;
-    result["XR_META_headset_id"] = 2;
-    result["XR_META_vulkan_swapchain_create_info"] = 1;  // translated to core usage flags (graphics.cpp)
-    // Compositor filter hints: host copies omit the node (PresentationLayers drops
-    // structures without metadata) and the host composites the full image.
-    result["XR_FB_composition_layer_settings"] = 1;
-    // Answered as a Quest without a room setup (spatial.cpp): anchors work in
-    // process, saves last for the process, queries find no scene, capture fails.
-    result["XR_FB_spatial_entity"] = XR_FB_spatial_entity_SPEC_VERSION;
-    result["XR_FB_spatial_entity_query"] = XR_FB_spatial_entity_query_SPEC_VERSION;
-    result["XR_FB_spatial_entity_storage"] = XR_FB_spatial_entity_storage_SPEC_VERSION;
-    result["XR_FB_scene"] = XR_FB_scene_SPEC_VERSION;
-    result["XR_FB_scene_capture"] = XR_FB_scene_capture_SPEC_VERSION;
-    // Messengers and labels are accepted; messages go to the log (debug_utils.cpp).
-    result["XR_EXT_debug_utils"] = XR_EXT_debug_utils_SPEC_VERSION;
-  }
   if (process_config().isa() == GuestIsa::a64 && java::host_vm() && android::surface_bridge().to_surface)
     result["XR_KHR_android_surface_swapchain"] = 4;
   const auto &host = host_xr();

@@ -1,6 +1,7 @@
 #include "common/controls.h"
 #include "common/json.h"
 #include <algorithm>
+#include <cmath>
 
 namespace venture::controls {
 namespace {
@@ -54,7 +55,35 @@ std::string pad_press(const Profile& p, std::string_view component) {
     if (find_input(p, id + suffix)) return id + suffix;
   return {};
 }
+Offset clamped(Offset o) {
+  for (auto& v : o.position) v = std::isfinite(v) ? std::clamp(v, -kMaxShiftMm, kMaxShiftMm) : 0.f;
+  for (auto& v : o.rotation) v = std::isfinite(v) ? std::clamp(v, -kMaxTurnDeg, kMaxTurnDeg) : 0.f;
+  return o;
+}
 }  // namespace
+
+Tuning clamped(Tuning t) {
+  t.deadzone = std::clamp(t.deadzone, 0, kMaxDeadzone);
+  auto press = [](int v) { return v ? std::clamp(v, kMinPress, kMaxPress) : 0; };
+  t.trigger_press = press(t.trigger_press);
+  t.grip_press = press(t.grip_press);
+  t.strength = std::clamp(t.strength, 0, 100);
+  return t;
+}
+std::array<float, 2> shape_stick(const Tuning& t, float x, float y) {
+  if (t.invert_x) x = -x;
+  if (t.invert_y) y = -y;
+  if (t.deadzone <= 0) return {x, y};
+  const float length = std::sqrt(x * x + y * y), dead = float(t.deadzone) / 100.f;
+  if (!(length > dead)) return {0, 0};
+  // Radial: the direction is kept and the travel past the dead zone fills the whole range.
+  const float scale = std::min(1.f, (length - dead) / (1.f - dead)) / length;
+  return {x * scale, y * scale};
+}
+bool analog_press(float value, bool was, int percent) {
+  const float press = float(percent ? percent : 50) / 100.f;
+  return was ? value > std::max(press - 0.1f, press * 0.5f) : value >= press;
+}
 
 std::string_view hand_root(int hand) { return hand ? "/user/hand/right" : "/user/hand/left"; }
 std::string_view quest_key(Quest q) { return kKeys[int(q)]; }
@@ -63,6 +92,20 @@ const Profile* find_profile(std::string_view path) {
   for (const auto& p : kProfiles)
     if (p.path == path) return &p;
   return nullptr;
+}
+std::string_view evident_profile(std::string_view host_profile, std::string_view render_model) {
+  const auto* host = find_profile(host_profile);
+  if (!host || render_model.empty()) return host_profile;
+  for (const auto& p : kProfiles) {
+    if (p.render_model.empty() || p.inputs.data() != host->inputs.data() ||
+        p.inputs.size() != host->inputs.size())
+      continue;
+    std::string_view model = render_model;
+    if (model.ends_with("_left")) model.remove_suffix(5);
+    else if (model.ends_with("_right")) model.remove_suffix(6);
+    if (model == p.render_model || render_model == p.render_model) return p.path;
+  }
+  return host_profile;
 }
 const HostInput* find_input(const Profile& p, std::string_view path) {
   for (const auto& input : p.inputs)
@@ -149,6 +192,14 @@ Resolved resolve(const Profile& p, const Choice* choice) {
     case MenuMode::off: m.kind = Menu::Kind::off; break;
   }
   r.grip_toggle = choice && choice->grip_toggle ? *choice->grip_toggle : needs_grip_toggle(p);
+  if (choice) {
+    for (int hand = 0; hand < 2; ++hand) {
+      r.offsets[size_t(hand)] = clamped(choice->offsets[size_t(hand)]);
+      r.tuning[size_t(hand)] = clamped(choice->tuning[size_t(hand)]);
+    }
+    for (int q = 0; q < kQuestCount; ++q)
+      r.toggles[size_t(q)] = choice->toggles[size_t(q)] && can_toggle(Quest(q)) && Quest(q) != Quest::grip;
+  }
   return r;
 }
 
@@ -159,6 +210,52 @@ std::string bindable(std::string_view path, const Profile& p, bool dpad) {
   if (!is_dpad(component) || dpad) return std::string(path);
   const auto press = pad_press(p, component);
   return press.empty() ? std::string() : std::string(hand_root(hand)) + press;
+}
+
+std::vector<Pad> pads(const Profile& p, const Resolved& r, int hand) {
+  std::vector<Pad> out;
+  for (int q = 0; q < kQuestCount; ++q)
+    for (const auto& host : r.rows[size_t(hand)][size_t(q)]) {
+      if (!is_dpad(host)) continue;
+      Pad pad{std::string(identifier(host)), pad_press(p, host)};
+      if (pad.press.empty() || std::ranges::find(out, pad) != out.end()) continue;
+      out.push_back(std::move(pad));
+    }
+  return out;
+}
+
+bool half_pressed(std::string_view component, float x, float y) {
+  const float length = std::sqrt(x * x + y * y);
+  if (component.ends_with("/dpad_center")) return length < 0.5f;
+  if (length < 0.5f) return false;
+  if (component.ends_with("/dpad_up")) return y >= std::abs(x);
+  if (component.ends_with("/dpad_down")) return -y >= std::abs(x);
+  if (component.ends_with("/dpad_left")) return -x > std::abs(y);
+  if (component.ends_with("/dpad_right")) return x > std::abs(y);
+  return false;
+}
+
+Offset mirrored(const Offset& o) {
+  // A mirror across the controller's y-z plane: x flips, and so do turns about y and z.
+  return {{-o.position[0], o.position[1], o.position[2]}, {o.rotation[0], -o.rotation[1], -o.rotation[2]}};
+}
+
+std::array<float, 4> orientation(const Offset& o) {
+  constexpr float kHalfRad = 3.14159265358979f / 360.f;
+  auto axis = [&](int i) {
+    const float a = o.rotation[size_t(i)] * kHalfRad;
+    std::array<float, 4> q{0, 0, 0, std::cos(a)};
+    q[size_t(i)] = std::sin(a);
+    return q;
+  };
+  auto mul = [](const std::array<float, 4>& a, const std::array<float, 4>& b) {
+    return std::array<float, 4>{a[3] * b[0] + a[0] * b[3] + a[1] * b[2] - a[2] * b[1],
+                                a[3] * b[1] - a[0] * b[2] + a[1] * b[3] + a[2] * b[0],
+                                a[3] * b[2] + a[0] * b[1] - a[1] * b[0] + a[2] * b[3],
+                                a[3] * b[3] - a[0] * b[0] - a[1] * b[1] - a[2] * b[2]};
+  };
+  // Turn (y), then tilt (x), then roll (z), each about the controller's own axes.
+  return mul(mul(axis(1), axis(0)), axis(2));
 }
 
 std::vector<std::string> host_bindings(std::string_view guest, const Profile& p, const Resolved& r, bool dpad) {
@@ -193,31 +290,15 @@ std::vector<std::string> host_bindings(std::string_view guest, const Profile& p,
     if (path.empty()) return {};
     return {std::move(path)};
   }
-  // Without XR_EXT_dpad_binding: whether `host` (an input of this row) is the
-  // first half on its pad, by row order and then by order within a row.
-  auto first_half = [&](const std::string& host) {
-    for (int other = 0; other < kQuestCount; ++other) {
-      if (other == int(Quest::menu)) continue;
-      for (const auto& o : r.rows[size_t(hand)][size_t(other)])
-        if (is_dpad(o) && identifier(o) == identifier(host)) return &o == &host;
-    }
-    return false;
-  };
   std::vector<std::string> out;
   auto add = [&](std::string path) {
     if (std::ranges::find(out, path) == out.end()) out.push_back(std::move(path));
   };
   for (const auto& host : r.rows[size_t(hand)][size_t(q)]) {
     const bool half = is_dpad(host);
-    if (half && !dpad && !first_half(host)) continue;
+    if (half && !dpad) continue;  // pads(): Venture splits the pad itself
     switch (part) {
-      case Part::main:
-        if (half && !dpad) {
-          if (const auto press = pad_press(p, host); !press.empty()) add(root + press);
-        } else {
-          add(root + host);
-        }
-        break;
+      case Part::main: add(root + host); break;
       case Part::x:
       case Part::y:
         if (is_axes(host)) add(root + host + (part == Part::x ? "/x" : "/y"));
@@ -286,6 +367,30 @@ std::string encode(const Config& config) {
       entry["menu"] = std::move(menu);
     }
     if (choice.grip_toggle) entry["gripToggle"] = *choice.grip_toggle;
+    Json offsets = Json::object();
+    for (int hand = 0; hand < 2; ++hand)
+      if (const auto& o = choice.offsets[size_t(hand)]; !o.zero())
+        offsets[hand ? "right" : "left"] = Json{{"position", o.position}, {"rotation", o.rotation}};
+    if (!offsets.empty()) entry["offsets"] = std::move(offsets);
+    Json tuning = Json::object();
+    for (int hand = 0; hand < 2; ++hand) {
+      const auto& t = choice.tuning[size_t(hand)];
+      if (t == Tuning{}) continue;
+      Json h = Json::object();
+      if (t.deadzone) h["deadzone"] = t.deadzone;
+      if (t.invert_x) h["invertX"] = true;
+      if (t.invert_y) h["invertY"] = true;
+      if (t.trigger_press) h["triggerPress"] = t.trigger_press;
+      if (t.grip_press) h["gripPress"] = t.grip_press;
+      if (!t.vibration) h["vibration"] = false;
+      if (t.strength != 100) h["strength"] = t.strength;
+      tuning[hand ? "right" : "left"] = std::move(h);
+    }
+    if (!tuning.empty()) entry["tuning"] = std::move(tuning);
+    Json toggles = Json::array();
+    for (int q = 0; q < kQuestCount; ++q)
+      if (choice.toggles[size_t(q)]) toggles.push_back(std::string(kKeys[q]));
+    if (!toggles.empty()) entry["toggles"] = std::move(toggles);
     j[profile] = std::move(entry);
   }
   return j.dump();
@@ -338,6 +443,46 @@ Config decode(std::string_view text) {
     }
     if (const auto toggle = entry.find("gripToggle"); toggle != entry.end() && toggle->is_boolean())
       choice.grip_toggle = toggle->get<bool>();
+    if (const auto offsets = entry.find("offsets"); offsets != entry.end() && offsets->is_object())
+      for (int hand = 0; hand < 2; ++hand) {
+        const auto o = offsets->find(hand ? "right" : "left");
+        if (o == offsets->end() || !o->is_object()) continue;
+        auto triple = [&](const char* key, std::array<float, 3>& out) {
+          const auto v = o->find(key);
+          if (v == o->end() || !v->is_array() || v->size() != 3) return;
+          for (size_t i = 0; i < 3; ++i)
+            if ((*v)[i].is_number()) out[i] = (*v)[i].get<float>();
+        };
+        Offset offset;
+        triple("position", offset.position);
+        triple("rotation", offset.rotation);
+        choice.offsets[size_t(hand)] = clamped(offset);
+      }
+    if (const auto tuning = entry.find("tuning"); tuning != entry.end() && tuning->is_object())
+      for (int hand = 0; hand < 2; ++hand) {
+        const auto h = tuning->find(hand ? "right" : "left");
+        if (h == tuning->end() || !h->is_object()) continue;
+        Tuning t;
+        auto number = [&](const char* key, int& out) {
+          if (const auto v = h->find(key); v != h->end() && v->is_number()) out = int(std::lround(v->get<double>()));
+        };
+        auto flag = [&](const char* key, bool& out) {
+          if (const auto v = h->find(key); v != h->end() && v->is_boolean()) out = v->get<bool>();
+        };
+        number("deadzone", t.deadzone);
+        flag("invertX", t.invert_x);
+        flag("invertY", t.invert_y);
+        number("triggerPress", t.trigger_press);
+        number("gripPress", t.grip_press);
+        flag("vibration", t.vibration);
+        number("strength", t.strength);
+        choice.tuning[size_t(hand)] = clamped(t);
+      }
+    if (const auto toggles = entry.find("toggles"); toggles != entry.end() && toggles->is_array())
+      for (const auto& key : *toggles)
+        for (int q = 0; q < kQuestCount; ++q)
+          if (key.is_string() && key.get<std::string>() == kKeys[q] && can_toggle(Quest(q)) && Quest(q) != Quest::grip)
+            choice.toggles[size_t(q)] = true;
     rename_paths(profile, choice);
     config[profile] = std::move(choice);
   }

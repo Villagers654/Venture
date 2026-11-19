@@ -6,6 +6,7 @@
 #include "core/hle_runtime.h"
 #include "core/thread_runtime.h"
 #include "core/wait.h"
+#include "cpu/native_a64.h"
 #include "cpu/state.h"
 #include "hle/ovravatar/driver.h"
 #include "platform/memory.h"
@@ -167,6 +168,40 @@ TEST_CASE("core HLE stall diagnostics name the function whose thunk holds a pc")
   CHECK(hle::function_at(0x1000) == nullptr);
 }
 
+TEST_CASE("core HLE thunks stay callable while an inline hook mprotects their page") {
+  // An inline hook on one host function (libc's abort) makes its page RW
+  // while it writes, then restores it; the other thunks on that page, mprotect
+  // among them, must keep running, and the hook's patch must run.
+  GuestThread thread(26); thread.attach_to_current_host_thread();
+  auto target = hle::make_thunk("libtest.so", "hooked", [](hle::CallContext& ctx) { ctx.return_x(1); });
+  const auto other = hle::make_thunk("libtest.so", "neighbour", [](hle::CallContext& ctx) { ctx.return_x(2); });
+  if ((target ^ other) & ~GuestAddr(4095))  // the first filled a page: the next shares the neighbour's
+    target = hle::make_thunk("libtest.so", "hooked2", [](hle::CallContext& ctx) { ctx.return_x(1); });
+  const auto page = target & ~GuestAddr(4095);
+  REQUIRE((other & ~GuestAddr(4095)) == page);
+  auto& space = AddressSpace::get();
+  CHECK(space.protect(page, 4096, kProtRead | kProtWrite) == 0);
+  MemoryRegion region;
+  REQUIRE(space.find(page, &region));
+  CHECK(region.prot == (kProtRead | kProtWrite | kProtExec));
+  CHECK(space.is_guest_executable(other));
+  CHECK(thread.call(other, {}) == 2);
+  // The hook's patch: mov x0,#3; ret over the target's first instructions.
+  auto* words = g2h<std::uint32_t>(target);
+  const std::array<std::uint32_t, 2> original{words[0], words[1]};
+  words[0] = 0xd2800060; words[1] = 0xd65f03c0;
+  CHECK(space.protect(page, 4096, kProtRead | kProtExec) == 0);
+  CHECK(thread.call(target, {}) == 3);
+  CHECK(thread.call(other, {}) == 2);
+  CHECK(space.protect(page, 4096, kProtRead | kProtWrite | kProtExec) == 0);
+  words[0] = original[0]; words[1] = original[1];
+  CHECK(space.protect(page, 4096, kProtNone) == 0);
+  REQUIRE(space.find(page, &region));
+  CHECK(region.prot == (kProtRead | kProtExec));
+  CHECK(thread.call(target, {}) == 1);
+  CHECK(space.protect(page, 4096, kProtRead | kProtWrite | kProtExec) == 0);
+}
+
 TEST_CASE("core CPU SVC and nested HLE callback preserve full context") {
   GuestThread thread(21); thread.attach_to_current_host_thread();
   Code add{0x8b010000, 0xd65f03c0};
@@ -278,7 +313,10 @@ TEST_CASE("core CPU invalidation replaces every block in a range") {
   words[14] = 0xd2800040;
   cpu_backend().invalidate(start, 4);
   CHECK(thread.call(start, {}) == 2);
-  for (unsigned i = 1; i <= 6; ++i) CHECK(thread.call(start + i * 4, {}) == 1);
+  // A translator keeps the other entries' blocks until their range is
+  // invalidated; code run in place sees the new instruction at once.
+  if (!guest_code_runs_natively())
+    for (unsigned i = 1; i <= 6; ++i) CHECK(thread.call(start + i * 4, {}) == 1);
   cpu_backend().invalidate(start + 56, 4);
   for (unsigned i = 1; i <= 6; ++i) CHECK(thread.call(start + i * 4, {}) == 2);
 }
@@ -378,7 +416,10 @@ TEST_CASE("core CPU CASP pairs and CAS with one register for both operands") {
   for (const Code& code : ops) {
     const bool word = (*g2h<std::uint32_t>(code.address) >> 30) == 2;
     INFO("instruction ", std::hex, *g2h<std::uint32_t>(code.address));
-    for (GuestAddr address : {gone + 64, h2g(&memory[0]) + (word ? 2 : 4)}) {
+    // Run directly, alignment is the host CPU's: with FEAT_LSE2 an unaligned
+    // atomic inside 16 bytes does not fault, as on the device itself.
+    const GuestAddr unaligned = h2g(&memory[0]) + (word ? 2 : 4);
+    for (GuestAddr address : {gone + 64, guest_code_runs_natively() ? gone + 64 : unaligned}) {
       cpu->set_pc(code.address); cpu->set_x(0, address); cpu->set_x(1, 1); cpu->set_x(2, 77);
       REQUIRE(cpu->run() == CpuExit::MemoryFault);
       CHECK(cpu->pc() == code.address);
@@ -388,7 +429,9 @@ TEST_CASE("core CPU CASP pairs and CAS with one register for both operands") {
       CHECK(cpu->x(2) == 77);
     }
   }
-  // A doubleword pair needs 16-byte alignment, a word pair 8.
+  // A doubleword pair needs 16-byte alignment, a word pair 8. Run directly,
+  // alignment faults are the host CPU's.
+  if (!guest_code_runs_natively())
   for (auto [code, address] : {std::pair{pair.address, h2g(&memory[1])}, std::pair{words.address, h2g(&memory[2]) + 4}}) {
     cpu->set_pc(code); cpu->set_x(0, address); cpu->set_x(2, 77);
     REQUIRE(cpu->run() == CpuExit::MemoryFault);

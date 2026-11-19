@@ -141,6 +141,9 @@ class Linker {
   bool try_address_info(GuestAddr address, DlInfo* out, std::chrono::milliseconds wait);
   GuestAddr try_find_exidx(GuestAddr pc, std::int32_t* count);
   std::string take_error();                                           // dlerror
+  // The last failed open on this thread found no file for the requested library
+  // (an optional probe, which bionic does not log), not a broken library.
+  bool error_is_absent_library() const;
 
   // dl_iterate_phdr() data for loaded ELF images and the synthetic unwind image.
   void for_each_image(const std::function<void(const Library&)>& visit);
