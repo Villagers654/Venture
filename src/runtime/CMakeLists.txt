@@ -14,7 +14,7 @@ add_library(venture_runtime STATIC
   core/pipeline_stats.cpp core/invalidation_stats.cpp core/av_telemetry.cpp
   core/wait.cpp core/readiness.cpp core/sync_census.cpp core/diagnostic_trace.cpp core/signals.cpp core/syscall.cpp core/a32_unwind.cpp core/shutdown_trace.cpp
   core/elf.cpp core/elf_relocations.cpp core/linker.cpp core/process_image.cpp core/process.cpp core/device_identity.cpp core/java_script_loader.cpp
-  cpu/dynarmic_backend.cpp cpu/dynarmic_a32_backend.cpp cpu/block_list.cpp cpu/portable_cache.cpp cpu/pretranslate.cpp cpu/stubs.cpp cpu/kuser.cpp)
+  cpu/dynarmic_backend.cpp cpu/dynarmic_a32_backend.cpp cpu/block_list.cpp cpu/host_tuning.cpp cpu/portable_cache.cpp cpu/pretranslate.cpp cpu/stubs.cpp cpu/kuser.cpp)
 target_include_directories(venture_runtime PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_include_directories(venture_runtime PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
 target_link_libraries(venture_runtime PUBLIC venture_common PRIVATE dynarmic miniz venture_lz4 merry::mcl fmt::fmt)

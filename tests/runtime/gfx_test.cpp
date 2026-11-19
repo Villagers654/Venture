@@ -332,6 +332,53 @@ TEST_CASE("GLES shadow maps preserve data and report mapping state with native v
   call("glBindBuffer", GL_PIXEL_PACK_BUFFER, 0);
   call("glDeleteBuffers", 1, &buffer);
 }
+TEST_CASE("GLES streaming maps keep no CPU mirror until a map preserves unwritten bytes") {
+  if (!have_angle()) return;
+  EglSession egl;
+  GLuint buffer{};
+  call("glGenBuffers", 1, &buffer);
+  call("glBindBuffer", GL_ARRAY_BUFFER, buffer);
+  const std::array<GLuint, 4> initial{11, 22, 33, 44};
+  call("glBufferData", GL_ARRAY_BUFFER, sizeof(initial), initial.data(), GL_STREAM_DRAW);
+  auto &buffers = *gfx::current_gl_state()->buffers32;
+  // Whole-buffer discarding maps, as engines stream per-frame vertices: each
+  // upload is emulated and none is copied into a mirror.
+  for (GLuint frame = 0; frame < 3; ++frame) {
+    auto *pointer = g2h<GLuint>(call("glMapBufferRange", GL_ARRAY_BUFFER, 0, sizeof(initial),
+        GL_MAP_WRITE_BIT | GL_MAP_INVALIDATE_BUFFER_BIT));
+    REQUIRE(pointer); REQUIRE(buffers.mappings.at(buffer)->emulated);
+    for (GLuint i = 0; i < 4; ++i) pointer[i] = 100 * (frame + 1) + i;
+    CHECK(call("glUnmapBuffer", GL_ARRAY_BUFFER) == GL_TRUE);
+    CHECK_FALSE(buffers.data.at(buffer).preserving_maps);
+    CHECK_FALSE(buffers.data.at(buffer).contents_known);
+    CHECK(buffers.data.at(buffer).contents.empty());
+  }
+  // The first map that keeps unwritten bytes has no mirror to start from, so
+  // it maps natively; the bytes it leaves alone are still the last upload's.
+  auto *pointer = g2h<GLuint>(call("glMapBufferRange", GL_ARRAY_BUFFER, 4, 4, GL_MAP_WRITE_BIT));
+  REQUIRE(pointer); REQUIRE_FALSE(buffers.mappings.at(buffer)->emulated);
+  pointer[0] = 7;
+  CHECK(call("glUnmapBuffer", GL_ARRAY_BUFFER) == GL_TRUE);
+  CHECK(buffers.data.at(buffer).preserving_maps);
+  // From then on the buffer is mirrored as before: a full discarding upload
+  // seeds the mirror, and the next preserving map is emulated over it.
+  pointer = g2h<GLuint>(call("glMapBufferRange", GL_ARRAY_BUFFER, 0, sizeof(initial),
+      GL_MAP_WRITE_BIT | GL_MAP_INVALIDATE_BUFFER_BIT));
+  REQUIRE(pointer); REQUIRE(buffers.mappings.at(buffer)->emulated);
+  for (GLuint i = 0; i < 4; ++i) pointer[i] = 500 + i;
+  CHECK(call("glUnmapBuffer", GL_ARRAY_BUFFER) == GL_TRUE);
+  CHECK(buffers.data.at(buffer).contents_known);
+  pointer = g2h<GLuint>(call("glMapBufferRange", GL_ARRAY_BUFFER, 8, 4, GL_MAP_WRITE_BIT));
+  REQUIRE(pointer); REQUIRE(buffers.mappings.at(buffer)->emulated);
+  pointer[0] = 9;
+  CHECK(call("glUnmapBuffer", GL_ARRAY_BUFFER) == GL_TRUE);
+  pointer = g2h<GLuint>(call("glMapBufferRange", GL_ARRAY_BUFFER, 0, sizeof(initial), GL_MAP_READ_BIT));
+  REQUIRE(pointer);
+  CHECK(pointer[0] == 500); CHECK(pointer[1] == 501); CHECK(pointer[2] == 9); CHECK(pointer[3] == 503);
+  CHECK(call("glUnmapBuffer", GL_ARRAY_BUFFER) == GL_TRUE);
+  CHECK(call("glGetError") == GL_NO_ERROR);
+  call("glDeleteBuffers", 1, &buffer);
+}
 TEST_CASE("gfx ANGLE binary cache identity and UE4 stereo framebuffer replay") {
   if (!have_angle()) return;
   EglSession egl;

@@ -1,4 +1,5 @@
 #include "cpu/portable_cache.h"
+#include "cpu/host_tuning.h"
 #include <dynarmic/backend/x64/portable_block.h>
 #include "common/environment.h"
 #include "common/file_ops.h"
@@ -115,6 +116,9 @@ std::uint64_t fingerprint() {
     h = fnv(h, name);
     h = fnv(h, value ? std::string_view(value) : std::string_view("unset"));
   }
+  // Defaults chosen per host CPU (cpu/host_tuning.cpp), not only their overrides.
+  const auto return_pop = static_cast<unsigned>(host_tuning::return_pop());
+  h = fnv(h, &return_pop, sizeof(return_pop));
 #if defined(__x86_64__) || defined(_M_X64)
   unsigned regs[4]{};
   for (const unsigned leaf : {0x1u, 0x7u, 0x80000001u}) {

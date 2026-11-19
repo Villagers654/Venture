@@ -2,6 +2,7 @@
 #include "cpu/outlined_atomics.h"
 #include "cpu/invalidation_gate.h"
 #include "cpu/block_list.h"
+#include "cpu/host_tuning.h"
 #include "cpu/portable_cache.h"
 #include "cpu/pretranslate.h"
 #include <utility>
@@ -193,18 +194,15 @@ class DynarmicCpu final : public Cpu, private Dynarmic::A64::UserCallbacks {
     // Candidate: per-site dispatch lookups for indirect branches (default off).
     if (const auto* inline_dispatch = environment::getenv("VENTURE_JIT_INLINE_DISPATCH"))
       config.inline_fast_dispatch = std::string_view(inline_dispatch) == "1";
-    // Candidate: returns pop the RSB at their own site, each with its own host
-    // indirect jump (default off). Zen 4 Linux gains (2000x2040: North Star
-    // 6.53 -> 6.29 ms, Batman 5.19 -> 5.04 ms); Lion Cove Windows h2h scenes
-    // lose (North Star 286.9 -> 281 fps, Batman 342.6 -> 325.8, Cooking
-    // 555.6 -> 544.4), and so does a compact per-site form. "1" pops inline;
+    // Returns pop the RSB at their own site, each with its own host indirect
+    // jump, on the CPUs where that was measured faster (cpu/host_tuning.cpp:
+    // AMD Zen 4 and later); elsewhere they share one lookup. A compact per-site
+    // form also lost on Lion Cove. VENTURE_JIT_INLINE_RSB_POP: "1" pops inline;
     // "compact" (candidate) has each return call one shared lookup and jump on
-    // its result.
-    config.inline_rsb_pop = false;
-    if (const auto* inline_pop = environment::getenv("VENTURE_JIT_INLINE_RSB_POP")) {
-      config.inline_rsb_pop = std::string_view(inline_pop) == "1";
-      config.compact_rsb_pop = std::string_view(inline_pop) == "compact";
-    }
+    // its result; any other value shares the lookup.
+    const auto return_pop = host_tuning::return_pop();
+    config.inline_rsb_pop = return_pop == host_tuning::ReturnPop::per_site;
+    config.compact_rsb_pop = return_pop == host_tuning::ReturnPop::compact;
     // Supervisor calls (HLE thunks) link to the next instruction's block instead
     // of pushing and popping the RSB. AC Nexus h2h scene 286.5 -> 291.4 fps. "0"
     // pushes and pops.
