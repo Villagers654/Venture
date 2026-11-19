@@ -10,8 +10,12 @@ from convert_apk import DEPS, java_tool
 # {Unsafe,Signal,SignalHandler}. java.xml supports framework resource parsers.
 # java.desktop backs the framework's android.graphics Bitmap/BitmapFactory/Paint
 # (java.awt.image, javax.imageio, java.awt.Font); the JVM runs it headless.
+# jdk.crypto.ec: JDK 21's SunEC provider (merged into java.base only in JDK 22). Without it
+# JSSE offers no ECDHE group, no ECDHE suite and no ECDSA signature, so Google, Firebase and most
+# CDN servers answer every HTTPS ClientHello with handshake_failure (issue 168). Dev runs use the
+# full JDK, so only the shipped JRE showed it.
 # No java.sql or java.net.http.
-MODULES = "java.base,java.logging,java.xml,java.desktop,jdk.unsupported"
+MODULES = "java.base,java.logging,java.xml,java.desktop,jdk.crypto.ec,jdk.unsupported"
 
 
 def main():
