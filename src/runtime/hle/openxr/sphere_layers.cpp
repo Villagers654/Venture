@@ -2,11 +2,14 @@
 #include "hle/openxr/state.h"
 #include "common/log.h"
 #include "gfx/gpu_device.h"
+#include "xr/desktop_mirror.h"
 #include "xr/dev_dump.h"
+#include "xr/display_override.h"
 #include "xr/queue.h"
 #include "xr/session.h"
 #include "xr/sphere_images.h"
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <map>
 #include <memory>
@@ -23,7 +26,12 @@ struct Chain {
   std::unique_ptr<venture::xr::SphereImages> images;
   std::vector<XrSwapchainImageVulkanKHR> host_images;
   std::uint32_t idle = 0;  // frames without a run
+  // What its last released image shows: the run's sources (key, release),
+  // draws and views. A run that would draw the same again reuses that image.
+  std::vector<std::uint64_t> shown;
+  std::vector<std::uint64_t> drawing;  // this frame's, until its image is released
   XrResult destroy() {
+    shown.clear();
     images.reset();  // waits for its commands
     if (!handle) return XR_SUCCESS;
     venture::xr::HostQueueLock queue(session().uses_shared_gpu);
@@ -102,11 +110,29 @@ venture::xr::LayerPlacement placement(const SphereLayers::Sphere& s, const XrPos
   p.clip[0] = x, p.clip[1] = y, p.clip[2] = x + w, p.clip[3] = y + h;
   // Zero or infinite radius: a sphere at infinity.
   const bool finite = s.radius > 0 && std::isfinite(s.radius);
-  if (finite)
+  if (finite && s.type != XR_TYPE_COMPOSITION_LAYER_QUAD && s.type != XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW)
     for (int i = 0; i < 3; ++i) p.local[i][i] = 1 / s.radius;
   // (u, v) in the subimage, from the shape's (a, b), then into the source.
   float su = 0, u0 = 0, vb = 0, v0 = 0;
-  if (s.type == XR_TYPE_COMPOSITION_LAYER_CYLINDER_KHR) {
+  if (s.type == XR_TYPE_COMPOSITION_LAYER_QUAD) {
+    // The quad's (x, y) in its frame over its size: (-0.5, 0.5) is the top left.
+    p.shape = venture::xr::LayerShape::quad;
+    p.local[0][0] = 1 / s.size.width, p.local[1][1] = 1 / s.size.height;
+    su = 1, u0 = 0.5f;
+    vb = -1, v0 = 0.5f;
+  } else if (s.type == XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW) {
+    // The view's image as a tan-angle plane in the view's frame: a ray
+    // (tx, ty, -1) shows (S, T) = ((tx - l) / (r - l), (ty - u) / (d - u)).
+    p.shape = venture::xr::LayerShape::plane;
+    const float l = std::tan(s.fov.angleLeft), r = std::tan(s.fov.angleRight);
+    const float u = std::tan(s.fov.angleUp), d = std::tan(s.fov.angleDown);
+    for (auto& row : p.local) std::fill(std::begin(row), std::end(row), 0.f);
+    p.local[0][0] = 1 / (r - l), p.local[0][3] = -l / (r - l);
+    p.local[1][1] = 1 / (d - u), p.local[1][3] = -u / (d - u);
+    p.local[2][3] = 1;
+    su = 1, u0 = 0;
+    vb = 1, v0 = 0;
+  } else if (s.type == XR_TYPE_COMPOSITION_LAYER_CYLINDER_KHR) {
     // The arc's middle is at -Z; it is radius * central / aspect high.
     p.shape = venture::xr::LayerShape::cylinder;
     su = 1 / s.central, u0 = 0.5f;
@@ -166,6 +192,12 @@ XrResult SphereLayers::add(const XrCompositionLayerBaseHeader* layer,
       return XR_ERROR_VALIDATION_FAILURE;
     // No arc, or none at a distance: nothing to show.
     if (!(e.radius > 0) || !std::isfinite(e.radius) || !(e.centralAngle > 0)) return XR_SUCCESS;
+  } else if (layer->type == XR_TYPE_COMPOSITION_LAYER_QUAD) {
+    const auto& e = *reinterpret_cast<const XrCompositionLayerQuad*>(layer);
+    s.flags = e.layerFlags, s.space = e.space, s.eye = e.eyeVisibility, s.sub = e.subImage, s.pose = e.pose;
+    s.size = e.size;
+    if (!std::isfinite(e.size.width) || !std::isfinite(e.size.height)) return XR_ERROR_VALIDATION_FAILURE;
+    if (!(e.size.width > 0) || !(e.size.height > 0)) return XR_SUCCESS;  // nothing to show
   } else {
     const auto& e = *reinterpret_cast<const XrCompositionLayerCubeKHR*>(layer);
     s.flags = e.layerFlags, s.space = e.space, s.eye = e.eyeVisibility, s.pose = {e.orientation, {0, 0, 0}};
@@ -196,7 +228,7 @@ XrResult SphereLayers::add(const XrCompositionLayerBaseHeader* layer,
     return XR_SUCCESS;
   }
   static std::set<XrStructureType> reported;
-  if (reported.insert(layer->type).second)
+  if (layer->type != XR_TYPE_COMPOSITION_LAYER_QUAD && reported.insert(layer->type).second)
     log::info("xr", "Host lacks {}; drawing layer type {} into a projection layer",
               layer->type == XR_TYPE_COMPOSITION_LAYER_EQUIRECT_KHR    ? "XR_KHR_composition_layer_equirect"
               : layer->type == XR_TYPE_COMPOSITION_LAYER_EQUIRECT2_KHR ? "XR_KHR_composition_layer_equirect2"
@@ -211,8 +243,81 @@ XrResult SphereLayers::add(const XrCompositionLayerBaseHeader* layer,
   runs_.back().spheres.push_back(s);
   return XR_SUCCESS;
 }
+bool SphereLayers::drawable(const XrCompositionLayerBaseHeader* layer) {
+  auto sampled = [](XrSwapchain handle) {
+    if (!valid_handle(handle, "XrSwapchain")) return false;
+    const auto& chain = state().swapchains.at(handle);
+    return !chain.guest_only && chain.info.sampleCount == 1 && color_format(VkFormat(chain.info.format)) &&
+           chain.released_index >= 0;
+  };
+  if (!layer) return false;
+  if (layer->type == XR_TYPE_COMPOSITION_LAYER_PROJECTION) {
+    const auto& p = *reinterpret_cast<const XrCompositionLayerProjection*>(layer);
+    if (p.viewCount != 2 || !p.views) return false;
+    for (std::uint32_t i = 0; i < 2; ++i)
+      if (p.views[i].type != XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW || !sampled(p.views[i].subImage.swapchain))
+        return false;
+    return true;
+  }
+  if (layer->type == XR_TYPE_COMPOSITION_LAYER_QUAD)
+    return sampled(reinterpret_cast<const XrCompositionLayerQuad*>(layer)->subImage.swapchain);
+  if (layer->type == XR_TYPE_COMPOSITION_LAYER_CUBE_KHR)
+    return sampled(reinterpret_cast<const XrCompositionLayerCubeKHR*>(layer)->swapchain);
+  if (layer->type == XR_TYPE_COMPOSITION_LAYER_CYLINDER_KHR)
+    return sampled(reinterpret_cast<const XrCompositionLayerCylinderKHR*>(layer)->subImage.swapchain);
+  if (layer->type == XR_TYPE_COMPOSITION_LAYER_EQUIRECT_KHR)
+    return sampled(reinterpret_cast<const XrCompositionLayerEquirectKHR*>(layer)->subImage.swapchain);
+  if (layer->type == XR_TYPE_COMPOSITION_LAYER_EQUIRECT2_KHR)
+    return sampled(reinterpret_cast<const XrCompositionLayerEquirect2KHR*>(layer)->subImage.swapchain);
+  return false;
+}
+XrResult SphereLayers::add_projection(const XrCompositionLayerProjection& projection,
+                                      std::vector<const XrCompositionLayerBaseHeader*>& layers) {
+  if (!drawable(reinterpret_cast<const XrCompositionLayerBaseHeader*>(&projection)))
+    return XR_ERROR_VALIDATION_FAILURE;
+  bool vflip = false;
+  if (enabled("XR_FB_composition_layer_image_layout"))
+    for (auto* next = static_cast<const XrBaseInStructure*>(projection.next); next; next = next->next)
+      if (next->type == XR_TYPE_COMPOSITION_LAYER_IMAGE_LAYOUT_FB)
+        vflip = reinterpret_cast<const XrCompositionLayerImageLayoutFB*>(next)->flags &
+                XR_COMPOSITION_LAYER_IMAGE_LAYOUT_VERTICAL_FLIP_BIT_FB;
+  for (std::uint32_t i = 0; i < 2; ++i) {
+    const auto& view = projection.views[i];
+    const auto& chain = state().swapchains.at(view.subImage.swapchain);
+    if (view.subImage.imageArrayIndex >= chain.info.arraySize * chain.info.faceCount)
+      return XR_ERROR_VALIDATION_FAILURE;
+  }
+  if (runs_.empty() || layers.empty() ||
+      layers.back() != reinterpret_cast<const XrCompositionLayerBaseHeader*>(&runs_.back().projection)) {
+    auto& run = runs_.emplace_back();
+    layers.push_back(reinterpret_cast<const XrCompositionLayerBaseHeader*>(&run.projection));
+  }
+  auto& run = runs_.back();
+  run.topped = true;
+  run.top_space = projection.space;
+  for (std::uint32_t i = 0; i < 2; ++i) {
+    const auto& view = projection.views[i];
+    Sphere s{};
+    s.type = XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW;
+    s.flags = projection.layerFlags;
+    s.space = projection.space;
+    s.eye = i ? XR_EYE_VISIBILITY_RIGHT : XR_EYE_VISIBILITY_LEFT;
+    s.sub = view.subImage;
+    s.pose = view.pose;
+    s.fov = view.fov;
+    s.flip = vflip;
+    run.spheres.push_back(s);
+    run.top_views[i] = {XR_TYPE_VIEW, nullptr, view.pose, view.fov};
+  }
+  static bool reported = false;
+  if (!std::exchange(reported, true))
+    log::info("xr", "Layers under a projection layer that blends by source alpha (underlays): drawing them and "
+              "the projection into one projection layer");
+  return XR_SUCCESS;
+}
 XrResult SphereLayers::present(XrSession handle, XrTime time,
-                               std::vector<const XrCompositionLayerBaseHeader*>& layers) {
+                               std::vector<const XrCompositionLayerBaseHeader*>& layers,
+                               std::optional<std::uint32_t> mirror_eye) {
   auto& p = presenter();
   std::vector<std::uintptr_t> used;
   std::set<Presenter::At> live;
@@ -249,7 +354,13 @@ XrResult SphereLayers::present(XrSession handle, XrTime time,
   };
   for (std::size_t index = 0; index < runs_.size(); ++index) {
     auto& run = runs_[index];
-    const XrSpace base = run.spheres.front().space;
+    if (run.spheres.empty()) {
+      drop(run);
+      continue;
+    }
+    // A run under a projection is drawn in the projection's space; where the
+    // host's views are not located, at the projection's own views.
+    const XrSpace base = run.topped ? run.top_space : run.spheres.front().space;
     XrViewLocateInfo locate{XR_TYPE_VIEW_LOCATE_INFO, nullptr, session().view_configuration, time, base};
     XrViewState view_state{XR_TYPE_VIEW_STATE};
     std::array<XrView, 2> views{};
@@ -258,8 +369,11 @@ XrResult SphereLayers::present(XrSession handle, XrTime time,
     constexpr auto located = XR_VIEW_STATE_ORIENTATION_VALID_BIT | XR_VIEW_STATE_POSITION_VALID_BIT;
     if (XR_FAILED(::xrLocateViews(handle, &locate, &view_state, 2, &count, views.data())) || count != 2 ||
         (view_state.viewStateFlags & located) != located) {
-      drop(run);
-      continue;
+      if (!run.topped) {
+        drop(run);
+        continue;
+      }
+      views = run.top_views;
     }
     if (p.chains.size() <= index) p.chains.resize(index + 1);
     auto& chain = p.chains[index];
@@ -311,6 +425,7 @@ XrResult SphereLayers::present(XrSession handle, XrTime time,
           gfx::gpu_device().get_instance_proc_addr, chain.info, chain.host_images, *p.frame);
     }
     const auto first = p.draws.size();
+    chain.drawing.clear();
     XrCompositionLayerFlags aberration = 0;
     for (const auto& s : run.spheres) {
       XrPosef pose = s.pose;
@@ -343,6 +458,8 @@ XrResult SphereLayers::present(XrSession handle, XrTime time,
       }
       live.insert(at);
       used.push_back(entry->second.key);
+      chain.drawing.push_back(entry->second.key);
+      chain.drawing.push_back(entry->second.serial);
       aberration |= s.flags & XR_COMPOSITION_LAYER_CORRECT_CHROMATIC_ABERRATION_BIT;
       for (std::uint32_t eye = 0; eye < 2; ++eye) {
         if (s.eye != XR_EYE_VISIBILITY_BOTH && s.eye != (eye ? XR_EYE_VISIBILITY_RIGHT : XR_EYE_VISIBILITY_LEFT))
@@ -352,6 +469,34 @@ XrResult SphereLayers::present(XrSession handle, XrTime time,
                          venture::xr::layer_bounds(where, views[eye], p.size)});
       }
     }
+    // Composited premultiplied (layer.frag) over the layers below.
+    run.projection.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT | aberration;
+    run.projection.space = base;
+    run.projection.viewCount = 2;
+    run.projection.views = run.views.data();
+    for (std::uint32_t eye = 0; eye < 2; ++eye)
+      run.views[eye] = {XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW, nullptr, views[eye].pose, views[eye].fov,
+                        {chain.handle, {{0, 0}, p.size}, eye}};
+    // The draws and views as numbers: the same as last time, the host's image stands.
+    for (std::size_t d = first; d < p.draws.size(); ++d) {
+      const auto& draw = p.draws[d];
+      chain.drawing.push_back(draw.source);
+      chain.drawing.push_back(draw.eye);
+      for (float c : draw.constants) chain.drawing.push_back(std::bit_cast<std::uint32_t>(c));
+    }
+    for (const auto& view : run.views) {
+      const float numbers[]{view.pose.orientation.x, view.pose.orientation.y, view.pose.orientation.z,
+                            view.pose.orientation.w, view.pose.position.x, view.pose.position.y,
+                            view.pose.position.z, view.fov.angleLeft, view.fov.angleRight, view.fov.angleUp,
+                            view.fov.angleDown};
+      for (float n : numbers) chain.drawing.push_back(std::bit_cast<std::uint32_t>(n));
+    }
+    chain.drawing.push_back(run.projection.layerFlags);
+    if (!chain.shown.empty() && chain.shown == chain.drawing) {
+      p.draws.resize(first);
+      continue;
+    }
+    chain.shown.clear();
     std::uint32_t target{};
     {
       venture::xr::HostQueueLock queue(session().uses_shared_gpu);
@@ -365,14 +510,6 @@ XrResult SphereLayers::present(XrSession handle, XrTime time,
     const auto waited = ::xrWaitSwapchainImage(chain.handle, &wait);
     if (waited != XR_SUCCESS && waited != XR_SESSION_LOSS_PENDING) return release(waited);
     if (waited == XR_SESSION_LOSS_PENDING) qualified = waited;
-    // Composited premultiplied (layer.frag) over the layers below.
-    run.projection.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT | aberration;
-    run.projection.space = base;
-    run.projection.viewCount = 2;
-    run.projection.views = run.views.data();
-    for (std::uint32_t eye = 0; eye < 2; ++eye)
-      run.views[eye] = {XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW, nullptr, views[eye].pose, views[eye].fov,
-                        {chain.handle, {{0, 0}, p.size}, eye}};
   }
   if (!p.acquired.empty()) {
     // Every run in one command buffer and one submission, after the sources'
@@ -386,9 +523,30 @@ XrResult SphereLayers::present(XrSession handle, XrTime time,
     }
     if (XR_SUCCEEDED(result)) result = p.frame->submit();
     else p.frame->abandon();
+    // The desktop mirror shows the frame's first projection layer: when that
+    // is a drawn run, its eye as drawn, before the image goes back.
+    if (XR_SUCCEEDED(result) && mirror_eye) {
+      const auto projection = std::ranges::find_if(layers, [](const XrCompositionLayerBaseHeader* layer) {
+        return layer && layer->type == XR_TYPE_COMPOSITION_LAYER_PROJECTION;
+      });
+      for (const auto& held : p.acquired) {
+        if (projection == layers.end() ||
+            *projection != reinterpret_cast<const XrCompositionLayerBaseHeader*>(&runs_[held.chain].projection))
+          continue;
+        const auto& chain = p.chains[held.chain];
+        const auto eye = venture::xr::mirror_view(2, *mirror_eye);
+        venture::xr::MirrorSource source{chain.host_images.at(held.target).image, VkFormat(chain.info.format), eye,
+                                         {{0, 0}, p.size}};
+        venture::xr::mirror_axis(runs_[held.chain].views[eye].fov, source.axis_x, source.axis_y);
+        venture::xr::mirror_capture(session().binding, session().uses_shared_gpu, source);
+      }
+    }
+    std::vector<std::size_t> drawn;
+    for (const auto& held : p.acquired) drawn.push_back(held.chain);
     result = release(result);
     if (XR_FAILED(result)) return result;
     if (result == XR_SESSION_LOSS_PENDING) qualified = result;
+    for (auto index : drawn) p.chains[index].shown = p.chains[index].drawing;
   }
   // Copies no longer drawn go. A chain unused for a second (a menu backdrop
   // gone in gameplay) returns its memory; a backdrop that comes and goes keeps it.

@@ -29,7 +29,7 @@ public class Context {
       DOWNLOAD_SERVICE = "download", NSD_SERVICE = "servicediscovery",
       GAME_SERVICE = "game", ACCESSIBILITY_SERVICE = "accessibility", KEYGUARD_SERVICE = "keyguard",
       USAGE_STATS_SERVICE = "usagestats", DEVICE_POLICY_SERVICE = "device_policy", BIOMETRIC_SERVICE = "biometric",
-      FINGERPRINT_SERVICE = "fingerprint";
+      FINGERPRINT_SERVICE = "fingerprint", USB_SERVICE = "usb", MIDI_SERVICE = "midi";
   private static final Map<String, SharedPreferences> preferences =
       new java.util.concurrent.ConcurrentHashMap<>();
   // Dynamic receivers match process-wide, as ActivityManagerService does; each
@@ -306,6 +306,8 @@ public class Context {
       case USAGE_STATS_SERVICE -> new android.app.usage.UsageStatsManager();
       case DEVICE_POLICY_SERVICE -> new android.app.admin.DevicePolicyManager();
       case BIOMETRIC_SERVICE -> new android.hardware.biometrics.BiometricManager();
+      case USB_SERVICE -> new android.hardware.usb.UsbManager(this);
+      case MIDI_SERVICE -> new android.media.midi.MidiManager();
       default -> null;
     });
   }
@@ -348,6 +350,8 @@ public class Context {
       java.util.Map.entry(android.app.usage.UsageStatsManager.class, USAGE_STATS_SERVICE),
       java.util.Map.entry(android.app.admin.DevicePolicyManager.class, DEVICE_POLICY_SERVICE),
       java.util.Map.entry(android.hardware.biometrics.BiometricManager.class, BIOMETRIC_SERVICE),
+      java.util.Map.entry(android.hardware.usb.UsbManager.class, USB_SERVICE),
+      java.util.Map.entry(android.media.midi.MidiManager.class, MIDI_SERVICE),
       java.util.Map.entry(android.hardware.fingerprint.FingerprintManager.class, FINGERPRINT_SERVICE));
   public String getSystemServiceName(Class<?> serviceClass) {
     return SERVICE_NAMES.get(serviceClass);

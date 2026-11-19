@@ -1,5 +1,6 @@
 #include "launcher/exit_report.h"
 #include "launcher/app.h"
+#include "launcher/document_picker.h"
 #include "launcher/i18n/i18n.h"
 #include "common/library/import.h"
 #include "common/download/asset_files.h"
@@ -169,7 +170,14 @@ App::App(Options options) : Core(std::move(options)) {
   if (const auto colon = options_.smoke_view.find(':');
       options_.smoke_view.starts_with("library-") && colon != std::string::npos)
     search_ = options_.smoke_view.substr(colon + 1);
-  if (options_.smoke_view == "settings" || options_.smoke_view == "settings-end" ||
+  // Settings > Updates (with --smoke-version 0.3.0-alpha.2 for a pre-release's
+  // look): settings-updates as it is, -stable with Stable chosen, -switch on
+  // Stable with the dialog choosing Experimental shows. Nothing is saved.
+  if (options_.smoke_view.starts_with("settings-updates")) page_ = 2;
+  if (options_.smoke_view == "settings-updates-stable" || options_.smoke_view == "settings-updates-switch")
+    settings_.experimental_updates = false;
+  if (options_.smoke_view == "settings-updates-switch") experimental_switch_ = true;
+  if (options_.smoke_view == "settings" || options_.smoke_view.starts_with("settings-end") ||
       options_.smoke_view == "settings-runtime" || options_.smoke_view == "settings-runtime-xr")
     page_ = 2;
   // The texture compression warning from Settings > Runtime (nothing is changed).
@@ -217,13 +225,19 @@ App::App(Options options) : Core(std::move(options)) {
   if (options_.smoke_view == "report")
     report_ = SharedReport{{}, "https://dpaste.com/EXAMPLE00", {}};
   // The update dialog an installed copy shows (nothing downloads until Update now).
-  if (options_.smoke_view == "update") {
+  // update-experimental: the experimental channel's offer of a pre-release;
+  // update-stable-older: Stable's offer of an older release to a pre-release build.
+  if (options_.smoke_view == "update" || options_.smoke_view == "update-experimental" ||
+      options_.smoke_view == "update-stable-older") {
     const std::string release = "https://github.com/Villagers654/Venture/releases/";
+    const std::string version = options_.smoke_view == "update"                ? "0.2.6"
+                                : options_.smoke_view == "update-stable-older" ? "0.2.5.1"
+                                                                               : "0.3.0-alpha.3";
     update_checked_ = true;
-    update_ = Update{"0.1.1", release + "tag/v0.1.1"};
+    update_ = Update{version, release + "tag/v" + version};
     update_->method = update::Method::installer;
-    update_->file = update::Asset{"Venture-windows64-setup.exe", release + "download/v0.1.1/Venture-windows64-setup.exe"};
-    update_->sums = update::Asset{"SHA256SUMS", release + "download/v0.1.1/SHA256SUMS"};
+    update_->file = update::Asset{"Venture-windows64-setup.exe", release + "download/v" + version + "/Venture-windows64-setup.exe"};
+    update_->sums = update::Asset{"SHA256SUMS", release + "download/v" + version + "/SHA256SUMS"};
   }
   // Screenshots of the Controls page read a controls file there (draw_controls).
   if (!options_.smoke_import.empty() &&
@@ -238,6 +252,8 @@ App::~App() {
   for (auto &[pixels, texture] : steam_logos_)
     SDL_DestroyTexture(texture);
   for (auto &[pixels, texture] : discord_logos_)
+    SDL_DestroyTexture(texture);
+  for (auto &[pixels, texture] : hearts_)
     SDL_DestroyTexture(texture);
   if (ImGui::GetCurrentContext()) {
     ImGui_ImplSDLRenderer3_Shutdown();
@@ -462,6 +478,15 @@ SDL_Texture *App::discord_logo(int pixels) {
     }
   return it->second;
 }
+SDL_Texture *App::heart(int pixels, bool outline) {
+  auto [it, inserted] = hearts_.try_emplace(outline ? -pixels : pixels, nullptr);
+  if (inserted)
+    if (SDL_Surface *surface = ui::heart_surface(pixels, outline)) {
+      it->second = SDL_CreateTextureFromSurface(renderer_, surface);
+      SDL_DestroySurface(surface);
+    }
+  return it->second;
+}
 void App::tick() {
   Core::tick();
   take_import_picks();
@@ -470,7 +495,26 @@ void App::tick() {
   for (auto &g : visible_games())
     textures_->request(g, !options_.offline, store_id_of(g.id));
 }
+#ifndef __ANDROID__
+// SDL's dialogs give paths here (launcher/document_picker.h).
+bool pick_documents(bool, std::function<void(std::vector<std::string>)>) { return false; }
+#endif
+
 void App::choose_import(bool folder) {
+  // A system document picker (Android's): the files or folder picked are one
+  // pick, their addresses one per line, so an APK and its expansion files
+  // picked together import together.
+  if (pick_documents(folder, [this](std::vector<std::string> uris) {
+        if (uris.empty()) return;  // cancelled
+        std::string picks;
+        for (const auto &uri : uris) picks += (picks.empty() ? "" : "\n") + uri;
+        {
+          std::lock_guard lock(import_mutex_);
+          import_picks_.push_back(paths::from_utf8(picks));
+        }
+        wake();
+      }))
+    return;
   // Portal (or zenity) dialogs answer on another thread; picks queue up for
   // the UI thread.
   auto picked = [](void *self, const char *const *files, int) {
@@ -819,7 +863,7 @@ int App::run() {
     if (!options_.smoke_debug_report.empty() && !smoke_debug_reported_ && !refreshing_ && !scanning_) {
       smoke_debug_reported_ = true;
       try {
-        const auto report = save_debug_report(options_.smoke_select, VENTURE_VERSION);
+        const auto report = save_debug_report(options_.smoke_select, version_);
         if (options_.smoke_debug_report == "log") {
           // Each line into the log (on Android, logcat, where adb reads it).
           std::ifstream in(report, std::ios::binary);

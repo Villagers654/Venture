@@ -14,7 +14,7 @@ target_compile_definitions(venture_imgui PUBLIC IMGUI_ENABLE_FREETYPE IMGUI_USE_
 include(${PROJECT_SOURCE_DIR}/cmake/I18n.cmake)
 i18n_add_library(venture_i18n SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/i18n)
 # The launcher without its window (core.h): the GUI and venture-cli share it.
-add_library(venture_launcher_core STATIC core.cpp debug_report.cpp diagnosis.cpp drives.cpp headset_check.cpp import.cpp mods.cpp sign_in_link.cpp store_link.cpp updater.cpp ui/rich_text_parse.cpp ui/text_scripts.cpp)
+add_library(venture_launcher_core STATIC core.cpp debug_report.cpp diagnosis.cpp drives.cpp headset_check.cpp host_features.cpp import.cpp mods.cpp sign_in_link.cpp store_link.cpp updater.cpp ui/rich_text_parse.cpp ui/text_scripts.cpp)
 target_link_libraries(venture_launcher_core PUBLIC venture_common venture_ovrplatform venture_i18n)
 # Store links are looked up again once per version (core.cpp).
 target_compile_definitions(venture_launcher_core PRIVATE VENTURE_VERSION="${VENTURE_VERSION_FULL}")
@@ -32,18 +32,23 @@ if(ANDROID)
 else()
   add_executable(venture WIN32 ${venture_gui_sources})
 endif()
-# The logos ship inside the executable; assets/venture.svg, assets/steam.svg and
-# assets/discord.svg are their only sources.
+# The logos ship inside the executable; assets/venture.svg, assets/steam.svg,
+# assets/discord.svg and assets/heart.svg are their only sources.
 file(READ ${CMAKE_CURRENT_SOURCE_DIR}/assets/venture.svg VENTURE_LOGO_SVG)
 file(READ ${CMAKE_CURRENT_SOURCE_DIR}/assets/steam.svg STEAM_LOGO_SVG)
 file(READ ${CMAKE_CURRENT_SOURCE_DIR}/assets/discord.svg DISCORD_LOGO_SVG)
+file(READ ${CMAKE_CURRENT_SOURCE_DIR}/assets/heart.svg HEART_SVG)
+file(READ ${CMAKE_CURRENT_SOURCE_DIR}/assets/heart-outline.svg HEART_OUTLINE_SVG)
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/assets/venture.svg
-  ${CMAKE_CURRENT_SOURCE_DIR}/assets/steam.svg ${CMAKE_CURRENT_SOURCE_DIR}/assets/discord.svg)
+  ${CMAKE_CURRENT_SOURCE_DIR}/assets/steam.svg ${CMAKE_CURRENT_SOURCE_DIR}/assets/discord.svg
+  ${CMAKE_CURRENT_SOURCE_DIR}/assets/heart.svg ${CMAKE_CURRENT_SOURCE_DIR}/assets/heart-outline.svg)
 file(CONFIGURE OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/generated/launcher/logo_svg.h
   CONTENT "#pragma once
 inline constexpr char kVentureLogoSvg[] = R\"svg(${VENTURE_LOGO_SVG})svg\";
 inline constexpr char kSteamLogoSvg[] = R\"svg(${STEAM_LOGO_SVG})svg\";
 inline constexpr char kDiscordLogoSvg[] = R\"svg(${DISCORD_LOGO_SVG})svg\";
+inline constexpr char kHeartSvg[] = R\"svg(${HEART_SVG})svg\";
+inline constexpr char kHeartOutlineSvg[] = R\"svg(${HEART_OUTLINE_SVG})svg\";
 " @ONLY)
 # The icon font for systems without Segoe's (tools/make_icon_font.py builds it).
 file(READ ${CMAKE_CURRENT_SOURCE_DIR}/assets/venture-icons.ttf ICON_FONT_HEX HEX)
@@ -83,10 +88,13 @@ if(WIN32)
     ${webview2_SOURCE_DIR}/build/native/x64/WebView2Loader.dll $<TARGET_FILE_DIR:venture>/WebView2Loader.dll)
 elseif(ANDROID)
   target_sources(venture_launcher_core PRIVATE platform/android/auth_browser.cpp platform/android/headset_play.cpp)
+  # Games install as the device's own apps (headset_play.h), which defines host_features().
+  target_compile_definitions(venture_launcher_core PUBLIC VENTURE_GAMES_AS_DEVICE_APPS=1)
   # The headset check asks the OpenXR runtime through the app's Khronos loader (dlopen).
   target_link_libraries(venture_launcher_core PRIVATE OpenXR::headers)
   # platform_service.cpp holds only JNI entry points: in the library itself, so no archive drops it.
-  target_sources(venture PRIVATE platform/android/window_style.cpp platform/android/platform_service.cpp)
+  target_sources(venture PRIVATE platform/android/window_style.cpp platform/android/platform_service.cpp
+    platform/android/documents.cpp)
 else()
   # The headset check is shown on Linux arm64 only (headset_check.h); built everywhere here.
   target_sources(venture_launcher_core PRIVATE platform/posix/auth_browser.cpp platform/posix/headset_check.cpp)

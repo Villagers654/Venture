@@ -31,7 +31,7 @@ private:
   std::unique_ptr<Impl> impl_;
 };
 // Draws composition layers the host cannot compose (spheres, cylinders, cubes,
-// VrApi tan-angle planes) into the eyes of a private host projection chain
+// VrApi tan-angle planes, quads and projection views under them) into the eyes of a private host projection chain
 // (shaders/layer.frag). Sources are either private copies of guest images that
 // the caller fills (GuestImages) on the binding queue before the frame is
 // submitted, or external images (VrApi's host chain images, acquired by the
@@ -87,6 +87,8 @@ enum class LayerShape : std::uint32_t {
   far_sphere = 3,
   // Cube directions, faces in Vulkan order from the source layer up.
   cube = 4,
+  // The plane z = 0, seen from either side; (a, b) = (x, y) on it.
+  quad = 5,
 };
 // One layer for one eye. `frame` is the layer's frame in the view's space and
 // `local` (row-major, column vectors) takes frame coordinates to shape space;

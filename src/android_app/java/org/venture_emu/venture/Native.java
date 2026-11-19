@@ -53,6 +53,9 @@ public final class Native {
     /** An oculus:// address from the device's browser, for a waiting manual sign-in. */
     static native void signInLink(String url);
 
+    /** The documents the user picked (Documents.pick); empty when cancelled. */
+    static native void documentsPicked(String[] uris);
+
     /**
      * One Platform broker request from a game Venture installed (PlatformService):
      * the JSON reply, or null when Venture did not install that package.

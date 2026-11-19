@@ -1002,7 +1002,8 @@ TEST_CASE("debug reports keep the last launch and leave out names, folders and t
   std::ifstream in(file, std::ios::binary);
   std::string report((std::istreambuf_iterator<char>(in)), {});
   CHECK(file.parent_path() == data / "reports");
-  CHECK(report.find("Venture: 9.9.9") != std::string::npos);
+  CHECK(report.find("Venture: 9.9.9 (stable build)") != std::string::npos);
+  CHECK(report.find("Update channel: stable\n") != std::string::npos);
   CHECK(report.find("Game: com.example.game") != std::string::npos);
   CHECK(report.find("started from ~") != std::string::npos);
   CHECK(report.find("runtime-com.example.game-20260101-000000-1-2.dmp") != std::string::npos);
@@ -1401,10 +1402,152 @@ TEST_CASE("update check compares versions, pre-releases before their release") {
   CHECK(update::newer_version("v0.3.0", "0.3.0-alpha.1"));
   CHECK(update::newer_version("v0.3.1", "0.3.0-alpha"));
   CHECK_FALSE(update::newer_version("v0.3.0-alpha", "0.3.0"));
-  CHECK_FALSE(update::newer_version("v0.3.0-beta", "0.3.0-alpha"));
+  // Pre-releases of one version in semantic versioning's order: numbers
+  // numerically, below words, and a longer suffix after its prefix.
+  CHECK(update::newer_version("v0.3.0-alpha.2", "0.3.0-alpha.1"));
+  CHECK(update::newer_version("v0.3.0-alpha.10", "0.3.0-alpha.9"));
+  CHECK(update::newer_version("v0.3.0-alpha.1", "0.3.0-alpha"));
+  CHECK(update::newer_version("v0.3.0-alpha.beta", "0.3.0-alpha.1"));
+  CHECK(update::newer_version("v0.3.0-beta", "0.3.0-alpha.7"));
+  CHECK(update::newer_version("v0.3.0-rc.1", "0.3.0-beta.2"));
+  CHECK_FALSE(update::newer_version("v0.3.0-alpha.2", "0.3.0-alpha.2"));
+  CHECK_FALSE(update::newer_version("v0.3.0-alpha.1", "0.3.0-alpha.2"));
+  CHECK(update::compare_versions("0.3.0-alpha.02", "0.3.0-alpha.2") == 0);
+  CHECK(update::compare_versions("v0.3", "0.3.0.0") == 0);
+  CHECK(update::newer_version("v0.3.0-alpha.1", "0.2.5.1"));
   CHECK_FALSE(update::newer_version("v0.3.x", "0.2.5"));
   CHECK_FALSE(update::newer_version("v0..3", "0.2.5"));
+  CHECK_FALSE(update::newer_version("v0.3.0-", "0.2.5"));
+  CHECK_FALSE(update::newer_version("v0.3.0-alpha..1", "0.2.5"));
   CHECK_FALSE(update::newer_version("", "0.2.5"));
+  CHECK_FALSE(update::compare_versions("0.3.0", "nightly"));
+  CHECK(update::prerelease("0.3.0-alpha.2"));
+  CHECK(update::prerelease("v0.3.0-rc"));
+  CHECK_FALSE(update::prerelease("0.2.5.1"));
+  CHECK_FALSE(update::prerelease("0.3.0-"));
+}
+
+TEST_CASE("update channels: what each offers, and when Stable goes back") {
+  using namespace venture::launcher;
+  using update::Channel;
+  // Stable: full releases that are later; never a pre-release.
+  CHECK(update::offered("v0.2.5.1", "0.2.5", Channel::stable));
+  CHECK_FALSE(update::offered("v0.3.0-alpha.2", "0.2.5.1", Channel::stable));
+  // A release build is never offered an older or the same release.
+  CHECK_FALSE(update::offered("v0.2.5", "0.2.5.1", Channel::stable));
+  CHECK_FALSE(update::offered("v0.2.5.1", "0.2.5.1", Channel::stable));
+  // Experimental: anything later, pre-release or not; never older.
+  CHECK(update::offered("v0.3.0-alpha.2", "0.2.5.1", Channel::experimental));
+  CHECK(update::offered("v0.3.0-alpha.3", "0.3.0-alpha.2", Channel::experimental));
+  CHECK(update::offered("v0.3.0", "0.3.0-alpha.3", Channel::experimental));
+  CHECK_FALSE(update::offered("v0.2.5.1", "0.3.0-alpha.2", Channel::experimental));
+  CHECK_FALSE(update::offered("v0.3.0-alpha.1", "0.3.0-alpha.2", Channel::experimental));
+  // A pre-release build on Stable is offered the latest stable release, older or newer.
+  CHECK(update::offered("v0.2.5.1", "0.3.0-alpha.2", Channel::stable));
+  CHECK(update::offered("v0.3.0", "0.3.0-alpha.2", Channel::stable));
+  CHECK(update::offered("v0.3.1", "0.3.0-alpha.2", Channel::stable));
+  CHECK_FALSE(update::offered("v0.3.0-alpha.3", "0.3.0-alpha.2", Channel::stable));
+  CHECK_FALSE(update::offered("nightly", "0.3.0-alpha.2", Channel::stable));
+  // Android refuses an APK whose version code (major.minor.patch) is lower.
+  CHECK(update::android_refuses("v0.2.5.1", "0.3.0-alpha.2"));
+  CHECK_FALSE(update::android_refuses("v0.3.0", "0.3.0-alpha.2"));  // same code
+  CHECK_FALSE(update::android_refuses("v0.3.1", "0.3.0-alpha.2"));
+  CHECK_FALSE(update::android_refuses("v0.2.5.1", "0.2.5"));
+}
+
+TEST_CASE("a new version takes its own build's update channel; a choice holds until then") {
+  using namespace venture::launcher;
+  using update::Channel;
+  CHECK(update::channel_of("0.3.0-alpha.2") == Channel::experimental);
+  CHECK(update::channel_of("0.3.0") == Channel::stable);
+  CHECK(update::channel_for_run("", "0.2.5") == Channel::stable);
+  CHECK(update::channel_for_run("0.2.5", "0.3.0-alpha.1") == Channel::experimental);
+  CHECK_FALSE(update::channel_for_run("0.3.0-alpha.1", "0.3.0-alpha.1"));
+
+  Directory d;
+  auto settings = library::Settings::defaults(d.root);
+  CHECK_FALSE(settings.experimental_updates);
+  // A first run (or an upgrade from a version that kept no record) of a pre-release.
+  CHECK(update::adopt_build_channel(settings, "0.3.0-alpha.1"));
+  CHECK(settings.experimental_updates);
+  CHECK(settings.last_run_version == "0.3.0-alpha.1");
+  // The user picks Stable; running the same build again keeps that choice.
+  settings.experimental_updates = false;
+  settings.save(d.root);
+  settings = library::Settings::load(d.root);
+  CHECK_FALSE(settings.experimental_updates);
+  CHECK(settings.last_run_version == "0.3.0-alpha.1");
+  CHECK_FALSE(update::adopt_build_channel(settings, "0.3.0-alpha.1"));
+  CHECK_FALSE(settings.experimental_updates);
+  // Another pre-release (an update, another AppImage file) sets experimental again.
+  CHECK(update::adopt_build_channel(settings, "0.3.0-alpha.2"));
+  CHECK(settings.experimental_updates);
+  // A stable build installed over it switches back to stable.
+  CHECK(update::adopt_build_channel(settings, "0.3.0"));
+  CHECK_FALSE(settings.experimental_updates);
+  // The user picks Experimental on a stable build; it holds for that build.
+  settings.experimental_updates = true;
+  CHECK_FALSE(update::adopt_build_channel(settings, "0.3.0"));
+  CHECK(settings.experimental_updates);
+  settings.save(d.root);
+  CHECK(paths::read_json(d.root / "settings.json").value("updateChannel", "") == "experimental");
+  CHECK(library::Settings::load(d.root).experimental_updates);
+}
+
+TEST_CASE("the experimental channel takes the newest non-draft release of a release list") {
+  using namespace venture::launcher;
+  using update::Channel;
+  // GitHub's /releases, newest first by date, which is not trusted for order.
+  const auto list = Json::parse(R"([
+    {"tag_name": "v0.3.1-alpha.1", "draft": true, "prerelease": true},
+    {"tag_name": "v0.3.0-alpha.3", "draft": false, "prerelease": true},
+    {"tag_name": "v0.2.5.1", "draft": false, "prerelease": false},
+    {"tag_name": "v0.3.0-alpha.10", "draft": false, "prerelease": true},
+    {"tag_name": "nightly", "draft": false, "prerelease": true},
+    {"tag_name": "v0.2.5", "draft": false, "prerelease": false},
+    "junk"])");
+  const Json* newest = update::newest_release(list, Channel::experimental);
+  REQUIRE(newest);
+  CHECK(newest->value("tag_name", "") == "v0.3.0-alpha.10");
+  const Json* stable = update::newest_release(list, Channel::stable);
+  REQUIRE(stable);
+  CHECK(stable->value("tag_name", "") == "v0.2.5.1");
+  // A full release that overtakes the pre-releases is the newest.
+  auto later = list;
+  later.push_back(Json{{"tag_name", "v0.3.0"}, {"draft", false}, {"prerelease", false}});
+  CHECK(update::newest_release(later, Channel::experimental)->value("tag_name", "") == "v0.3.0");
+  // GitHub's flag marks a pre-release even without a suffix.
+  const auto flagged = Json::parse(R"([{"tag_name": "v0.4.0", "draft": false, "prerelease": true}])");
+  CHECK(update::newest_release(flagged, Channel::experimental));
+  CHECK_FALSE(update::newest_release(flagged, Channel::stable));
+  CHECK_FALSE(update::newest_release(Json::parse(R"([{"tag_name": "v1.0.0", "draft": true}])"), Channel::experimental));
+  CHECK_FALSE(update::newest_release(Json::parse("[]"), Channel::experimental));
+  CHECK_FALSE(update::newest_release(Json::parse("{}"), Channel::experimental));
+}
+
+TEST_CASE("pre-release assets are picked for each update method and processor") {
+  using namespace venture::launcher;
+  const std::string base = "https://github.com/Villagers654/Venture/releases/download/v0.3.0-alpha.2/";
+  auto asset = [&](std::string name) {
+    return Json{{"name", name}, {"size", 5}, {"browser_download_url", base + name}};
+  };
+  // Packages carry the plain numbers; a suffix in a name is accepted too.
+  const Json release{{"tag_name", "v0.3.0-alpha.2"}, {"prerelease", true},
+                     {"assets", Json::array({asset("SHA256SUMS"), asset("Venture-windows64-setup.exe"),
+                                             asset("Venture-0.3.0-linux-x86_64.AppImage"),
+                                             asset("Venture-0.3.0-alpha.2-linux-aarch64.AppImage"),
+                                             asset("Venture-0.3.0-linux-aarch64.tar.gz"),
+                                             asset("venture-0.3.0-android-arm64.apk")})}};
+  CHECK(update::pick(release, update::Method::installer)->name == "Venture-windows64-setup.exe");
+  CHECK(update::pick(release, update::Method::apk)->name == "venture-0.3.0-android-arm64.apk");
+  CHECK(update::pick(release, update::Method::appimage, "x86_64")->name == "Venture-0.3.0-linux-x86_64.AppImage");
+  CHECK(update::pick(release, update::Method::appimage, "aarch64")->name ==
+        "Venture-0.3.0-alpha.2-linux-aarch64.AppImage");
+  CHECK_FALSE(update::pick(release, update::Method::page));
+  CHECK(update::sums(release));
+  // A release without this processor's AppImage falls back to the page (no file).
+  const Json x86_only{{"assets", Json::array({asset("Venture-0.3.0-linux-x86_64.AppImage")})}};
+  CHECK_FALSE(update::pick(x86_only, update::Method::appimage, "aarch64"));
 }
 
 TEST_CASE("store catalogs keep Meta's asset type and name language packs by file") {

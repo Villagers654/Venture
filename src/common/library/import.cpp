@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <fstream>
+#include <map>
 #include <set>
 
 namespace venture::import {
@@ -15,6 +16,26 @@ std::string lower(std::string s) {
 }
 bool is_apk(const fs::path &p) { return lower(paths::utf8(p.extension())) == ".apk"; }
 constexpr std::size_t kScanLimit = 20000;  // directory entries looked at per pick
+
+// Streams `file`, read at `path`, from `offset`.
+void read_file(const fs::path &path, const SourceFile &file, std::uint64_t offset,
+               const std::function<void(std::span<const std::uint8_t>)> &sink, std::stop_token stop) {
+  std::ifstream in(path, std::ios::binary);
+  if (!in) throw std::runtime_error("Could not read " + file.name + " from the import folder.");
+  in.seekg(std::streamoff(offset));
+  std::vector<std::uint8_t> buffer(1 << 20);
+  std::uint64_t total = offset;
+  while (in) {
+    if (stop.stop_requested()) throw std::runtime_error("Transfer paused.");
+    in.read(reinterpret_cast<char *>(buffer.data()), std::streamsize(buffer.size()));
+    const auto n = std::size_t(in.gcount());
+    if (!n) break;
+    total += n;
+    sink({buffer.data(), n});
+  }
+  if (in.bad() || total != file.size)
+    throw std::runtime_error(file.name + " changed or could not be read while importing.");
+}
 
 // Loose files on this computer.
 class LocalSource final : public Source {
@@ -27,34 +48,50 @@ protected:
   void read_from(const SourceFile &file, std::uint64_t offset,
                  const std::function<void(std::span<const std::uint8_t>)> &sink,
                  std::stop_token stop) const override {
-    std::ifstream in(paths::from_utf8(file.location), std::ios::binary);
-    if (!in) throw std::runtime_error("Could not read " + file.name + " from the import folder.");
-    in.seekg(std::streamoff(offset));
-    std::vector<std::uint8_t> buffer(1 << 20);
-    std::uint64_t total = offset;
-    while (in) {
-      if (stop.stop_requested()) throw std::runtime_error("Transfer paused.");
-      in.read(reinterpret_cast<char *>(buffer.data()), std::streamsize(buffer.size()));
-      const auto n = std::size_t(in.gcount());
-      if (!n) break;
-      total += n;
-      sink({buffer.data(), n});
-    }
-    if (in.bad() || total != file.size)
-      throw std::runtime_error(file.name + " changed or could not be read while importing.");
+    read_file(paths::from_utf8(file.location), file, offset, sink, stop);
   }
 
 private:
   fs::path picked_;
 };
 
+std::shared_ptr<const Documents> &documents() {
+  static std::shared_ptr<const Documents> value;
+  return value;
+}
+
+// Picked documents (Documents): each file's location is its address.
+class DocumentSource final : public Source {
+public:
+  DocumentSource(std::string picks, std::string shown, std::shared_ptr<const Documents> documents)
+      : picks_(std::move(picks)), shown_(std::move(shown)), documents_(std::move(documents)) {}
+  std::string spec() const override { return "path:" + picks_; }
+  std::string describe() const override { return shown_; }
+
+protected:
+  void read_from(const SourceFile &file, std::uint64_t offset,
+                 const std::function<void(std::span<const std::uint8_t>)> &sink,
+                 std::stop_token stop) const override {
+    const auto path = documents_->open(file.location);
+    if (!path) throw std::runtime_error("Could not open " + file.name + ". Pick the game's files again.");
+    read_file(*path, file, offset, sink, stop);
+  }
+
+private:
+  std::string picks_, shown_;
+  std::shared_ptr<const Documents> documents_;
+};
+
 // Members of a ZIP archive.
 class ArchiveSource final : public Source {
 public:
-  ArchiveSource(fs::path file, std::shared_ptr<android::Archive> archive)
-      : file_(std::move(file)), archive_(std::move(archive)) {}
-  std::string spec() const override { return "path:" + paths::utf8(file_); }
-  std::string describe() const override { return paths::utf8(file_); }
+  // `picked` is the pick it came from, `shown` its name for the user, and
+  // `keep` whatever keeps the archive's file readable (a picked document).
+  ArchiveSource(std::string picked, std::string shown, std::shared_ptr<android::Archive> archive,
+                std::shared_ptr<const void> keep = {})
+      : picked_(std::move(picked)), shown_(std::move(shown)), archive_(std::move(archive)), keep_(std::move(keep)) {}
+  std::string spec() const override { return "path:" + picked_; }
+  std::string describe() const override { return shown_; }
 
 protected:
   void read_from(const SourceFile &file, std::uint64_t offset,
@@ -75,8 +112,9 @@ protected:
   }
 
 private:
-  fs::path file_;
+  std::string picked_, shown_;
   std::shared_ptr<android::Archive> archive_;
+  std::shared_ptr<const void> keep_;
 };
 
 // An app on a headset.
@@ -154,37 +192,103 @@ std::uint64_t Source::save_bytes() const {
   return n;
 }
 
+namespace {
+// Every app in a ZIP archive read at `file`.
+void open_archive(std::vector<std::unique_ptr<Source>> &out, const fs::path &file, const std::string &picked,
+                  const std::string &shown, std::shared_ptr<const void> keep, std::stop_token stop) {
+  auto archive = std::make_shared<android::Archive>(file);
+  std::vector<std::pair<std::string, std::uint64_t>> listing;
+  for (auto &e : archive->entries()) listing.emplace_back(e.name, e.size);
+  for (auto &e : archive->entries()) {
+    if (!is_apk(paths::from_utf8(e.name)) || std::ranges::count(e.name, '/') > 2) continue;
+    const auto base = e.name.substr(e.name.rfind('/') + 1);
+    if (split_apk(base)) continue;
+    // An APK inside an archive is read in memory for its manifest only.
+    android::Manifest manifest;
+    try {
+      if (e.size > (1ull << 31)) throw std::runtime_error("too large to inspect");
+      std::vector<std::uint8_t> bytes;
+      bytes.reserve(e.size);
+      archive->extract(e, [&](auto chunk) { bytes.insert(bytes.end(), chunk.begin(), chunk.end()); }, stop);
+      manifest = android::read_apk(bytes);
+    } catch (const std::exception &error) {
+      log::warn("import", "Skipped {} in an archive: {}", e.name, error.what());
+      continue;
+    }
+    auto source = std::make_unique<ArchiveSource>(picked, shown, archive, keep);
+    source->manifest = manifest;
+    source->apk = {base, e.size, e.name};
+    add_data(*source, listing, e.name);
+    out.push_back(std::move(source));
+  }
+}
+
+// Every app in picked documents, one address per line in `picks`.
+std::vector<std::unique_ptr<Source>> open_documents(std::shared_ptr<const Documents> documents,
+                                                    const std::string &picks, std::stop_token stop) {
+  std::vector<std::string> addresses;
+  for (std::size_t at = 0; at < picks.size();) {
+    const auto end = std::min(picks.find('\n', at), picks.size());
+    if (end > at) addresses.push_back(picks.substr(at, end - at));
+    at = end + 1;
+  }
+  const auto listing = documents->list(addresses, stop);
+  std::vector<std::unique_ptr<Source>> out;
+  // One ZIP picked: its apps.
+  if (listing.files.size() == 1 && !is_apk(paths::from_utf8(listing.files.front().path)) && listing.root.empty()) {
+    const auto &zip = listing.files.front();
+    const auto path = documents->open(zip.uri);
+    if (!path) throw std::runtime_error("Could not open " + zip.path + ".");
+    if (!android::is_archive(*path))
+      throw std::runtime_error("Choose an APK with its expansion files, a folder, or a ZIP archive holding an APK "
+                               "and its data folder.");
+    open_archive(out, *path, picks, zip.path, path, stop);
+    if (out.empty()) throw std::runtime_error("No Android app (APK) was found in this archive.");
+    return out;
+  }
+  std::vector<std::pair<std::string, std::uint64_t>> files;
+  std::map<std::string, std::string, std::less<>> uris;
+  for (const auto &f : listing.files) {
+    if (stop.stop_requested()) throw std::runtime_error("Cancelled.");
+    files.emplace_back(f.path, f.size);
+    uris.emplace(f.path, f.uri);
+  }
+  for (const auto &[relative, size] : files) {
+    if (!is_apk(paths::from_utf8(relative)) || std::ranges::count(relative, '/') > 1) continue;
+    const auto name = relative.substr(relative.rfind('/') + 1);
+    if (split_apk(name)) continue;
+    android::Manifest manifest;
+    try {
+      const auto path = documents->open(uris.at(relative));
+      if (!path) throw std::runtime_error("it could not be opened");
+      manifest = android::read_apk(*path);
+    } catch (const std::exception &error) {
+      log::warn("import", "Skipped {}: {}", name, error.what());
+      continue;
+    }
+    auto source = std::make_unique<DocumentSource>(picks, listing.root.empty() ? name : listing.root, documents);
+    source->manifest = manifest;
+    source->apk = {name, size, uris.at(relative)};
+    add_data(*source, files, relative, listing.root);
+    for (auto &d : source->data) d.location = uris.at(d.location);
+    out.push_back(std::move(source));
+  }
+  if (out.empty()) throw std::runtime_error("No Android app (APK) was found in what you picked.");
+  return out;
+}
+}  // namespace
+
+void set_documents(std::shared_ptr<const Documents> value) { documents() = std::move(value); }
+
 std::vector<std::unique_ptr<Source>> open_local(const fs::path &picked, std::stop_token stop) {
+  if (const auto docs = documents(); docs && docs->handles(paths::utf8(picked)))
+    return open_documents(docs, paths::utf8(picked), stop);
   std::vector<std::unique_ptr<Source>> out;
   std::error_code ec;
   if (fs::is_regular_file(picked, ec) && !is_apk(picked)) {
     if (!android::is_archive(picked))
       throw std::runtime_error("Choose an APK, a folder, or a ZIP archive holding an APK and its data folder.");
-    auto archive = std::make_shared<android::Archive>(picked);
-    std::vector<std::pair<std::string, std::uint64_t>> listing;
-    for (auto &e : archive->entries()) listing.emplace_back(e.name, e.size);
-    for (auto &e : archive->entries()) {
-      if (!is_apk(paths::from_utf8(e.name)) || std::ranges::count(e.name, '/') > 2) continue;
-      const auto base = e.name.substr(e.name.rfind('/') + 1);
-      if (split_apk(base)) continue;
-      // An APK inside an archive is read in memory for its manifest only.
-      android::Manifest manifest;
-      try {
-        if (e.size > (1ull << 31)) throw std::runtime_error("too large to inspect");
-        std::vector<std::uint8_t> bytes;
-        bytes.reserve(e.size);
-        archive->extract(e, [&](auto chunk) { bytes.insert(bytes.end(), chunk.begin(), chunk.end()); }, stop);
-        manifest = android::read_apk(bytes);
-      } catch (const std::exception &error) {
-        log::warn("import", "Skipped {} in an archive: {}", e.name, error.what());
-        continue;
-      }
-      auto source = std::make_unique<ArchiveSource>(picked, archive);
-      source->manifest = manifest;
-      source->apk = {base, e.size, e.name};
-      add_data(*source, listing, e.name);
-      out.push_back(std::move(source));
-    }
+    open_archive(out, picked, paths::utf8(picked), paths::utf8(picked), {}, stop);
   } else if (fs::is_regular_file(picked, ec) || fs::is_directory(picked, ec)) {
     const bool file = fs::is_regular_file(picked, ec);
     const auto root = file ? picked.parent_path() : picked;

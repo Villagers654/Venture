@@ -522,6 +522,11 @@ Response get_latest_release(std::stop_token stop) {
   return memory("https://api.github.com/repos/Villagers654/Venture/releases/latest", nullptr, 1024 * 1024, stop,
                 {{"Accept", "application/vnd.github+json"}});
 }
+Response get_releases(int page, std::stop_token stop) {
+  return memory("https://api.github.com/repos/Villagers654/Venture/releases?per_page=" +
+                    std::to_string(kReleasesPerPage) + "&page=" + std::to_string(std::max(1, page)),
+                nullptr, 8 * 1024 * 1024, stop, {{"Accept", "application/vnd.github+json"}});
+}
 Response get_metavr_os_sdk(std::stop_token stop) {
   return memory("https://repo1.maven.org/maven2/com/meta/metavr/metavr-os-jsdk/maven-metadata.xml", nullptr,
                 256 * 1024, stop, {});

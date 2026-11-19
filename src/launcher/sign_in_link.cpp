@@ -158,8 +158,7 @@ bool take_over(const fs::path &data) {
   const bool ours = before == kEntry || before == std::string(kEntry) + ";";
   if (!ours || !fs::exists(previous_file(data), ec))
     paths::atomic_write(previous_file(data), ours ? std::string() : before);
-  const char *image = environment::getenv("APPIMAGE");
-  const fs::path program = image && *image ? paths::from_utf8(image) : paths::executable();
+  const fs::path program = paths::launch_program();
   paths::atomic_write(user_data() / "applications" / kEntry,
                       "[Desktop Entry]\nType=Application\nName=Venture sign-in\nNoDisplay=true\n"
                       "Exec=" + exec_arg(paths::utf8(program)) + " --sign-in-callback " +
@@ -173,6 +172,9 @@ bool system_browser() {
 #if defined(_WIN32) || defined(__ANDROID__)
   return false;
 #else
+  // A browser the portal starts stays hidden inside gamescope
+  // (environment::inside_gamescope); the embedded window is Venture's own.
+  if (environment::inside_gamescope()) return false;
   return !packaged_handler().empty();
 #endif
 }

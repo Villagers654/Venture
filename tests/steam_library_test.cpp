@@ -1,11 +1,22 @@
 #include "common/download/manager.h"
 #include "common/file_ops.h"
 #include "common/library/library.h"
+#include "common/environment.h"
 #include "common/steam_library.h"
 #include "launcher/options.h"
 #include <chrono>
 #include <cstdlib>
 #include <doctest/doctest.h>
+#include <thread>
+#ifndef _WIN32
+#include <csignal>
+#include <spawn.h>
+#include <sys/socket.h>
+#include <sys/wait.h>
+#include <sys/un.h>
+#include <unistd.h>
+extern char **environ;
+#endif
 using namespace venture;
 using namespace venture::steam_library;
 namespace {
@@ -349,4 +360,301 @@ TEST_CASE("Steam sync while Steam runs asks for a restart only when its shortcut
   CHECK(moved.pending);
   CHECK(moved.reason.starts_with("One: its shortcut starts \""));
   CHECK(moved.reason.find("moved") != std::string::npos);
+}
+#ifndef _WIN32
+TEST_CASE("Steam shortcuts of an AppImage start the image file, not its mount") {
+  // A report: every start of the AppImage found its shortcuts stale ("its
+  // shortcut starts /tmp/.mount_VenturmOdDkE/...") since each run mounts the
+  // image in a new folder, gone once it exits.
+  Fixture f;
+  Env flatpak{"FLATPAK_ID", ""};
+  unsetenv("FLATPAK_ID");
+  Env image{"APPIMAGE", f.root / "Applications/Venture-aarch64.AppImage"};
+  CHECK(paths::launch_program() == f.root / "Applications/Venture-aarch64.AppImage");
+  std::vector<Game> games{{"com.example.one", "One", ""}};
+  CHECK_FALSE(sync(f.root, paths::launch_program(), {}, games, [] { return false; }).pending);
+  const auto doc = read_vdf(paths::read(f.target));
+  CHECK(member(member(member(doc, "shortcuts"), "0"), "exe").value ==
+        "\"" + paths::utf8(f.root / "Applications/Venture-aarch64.AppImage") + "\"" + '\0');
+  // The next run, from another mount, finds them current while Steam runs.
+  CHECK_FALSE(sync(f.root, paths::launch_program(), {}, games, [] { return true; }).pending);
+  // A relative value is not the AppImage runtime's; the Flatpak is started by its own command.
+  image.set("Venture.AppImage");
+  CHECK(paths::launch_program() == paths::executable());
+  image.set(paths::utf8(f.root / "Venture.AppImage"));
+  flatpak.set("org.venture_emu.Venture");
+  CHECK(paths::launch_program() == paths::executable());
+}
+#endif
+TEST_CASE("A Steam restart handed to a helper syncs once Steam closes, then brings Steam back") {
+  Fixture f;
+  const auto exe = f.root / "Venture.AppImage";
+  Handoff handoff{f.root, exe, f.root / "art", {{"com.example.one", "One", "111"}, {"com.example.two", "Two", ""}},
+                  {{"WAYLAND_DISPLAY", "gamescope-0"}, {"LD_PRELOAD", "/overlay.so"}}};
+  auto copy = read_handoff(write_handoff(handoff));
+  CHECK(copy.root == handoff.root);
+  CHECK(copy.executable == exe);
+  CHECK(copy.art == handoff.art);
+  REQUIRE(copy.games.size() == 2);
+  CHECK(copy.games[0].package == "com.example.one");
+  CHECK(copy.games[0].art_id == "111");
+  CHECK(copy.games[1].name == "Two");
+  // Only session variables; never Steam's overlay preload.
+  REQUIRE(copy.environment.size() == 1);
+  CHECK(copy.environment[0] == std::pair<std::string, std::string>{"WAYLAND_DISPLAY", "gamescope-0"});
+  CHECK_THROWS(read_handoff("{}"));
+  CHECK_THROWS(read_handoff("not json"));
+  using namespace std::chrono_literals;
+  // Steam closes after a few polls; it does not come back by itself: the helper starts it.
+  int polls = 0, starts = 0;
+  auto result = finish_handoff(copy, [&] { return ++polls < 4; }, [] { return false; }, [&] { ++starts; }, 5s, 20ms,
+                               1ms);
+  CHECK(result.synced);
+  CHECK(result.started);
+  CHECK(starts == 1);
+  CHECK_FALSE(sync(f.root, exe, {}, copy.games, [] { return true; }).pending);
+  // Steam's session starts it again by itself (SteamOS's game mode): no second start.
+  polls = starts = 0;
+  result = finish_handoff(copy, [&] { return ++polls == 1; }, [&] { return ++polls > 10; }, [&] { ++starts; }, 5s, 5s,
+                          1ms);
+  CHECK(result.synced);
+  CHECK_FALSE(result.started);
+  CHECK(starts == 0);
+  // A service manager starts a new Steam as soon as the old one closes
+  // (Restart=always): the shortcuts are written once the Steam asked to quit
+  // has gone, and nothing starts a second one.
+  starts = 0;
+  bool asked_open = true;
+  int checks = 0;
+  result = finish_handoff(copy, [&] { return asked_open && (asked_open = ++checks < 3); }, [] { return true; },
+                          [&] { ++starts; }, 5s, 5s, 1ms);
+  CHECK(result.synced);
+  CHECK_FALSE(result.started);
+  // Steam that never closes leaves the shortcuts and Steam alone.
+  starts = 0;
+  result = finish_handoff(copy, [] { return true; }, [] { return true; }, [&] { ++starts; }, 10ms, 10ms, 1ms);
+  CHECK_FALSE(result.synced);
+  CHECK_FALSE(result.started);
+  CHECK(starts == 0);
+  CHECK(result.reason == "Steam did not close");
+}
+namespace {
+// Steam's steam://addnonsteamgame handler, as far as Venture sees it: it lists
+// the desktop entry the URL names under an id of its own and saves its
+// shortcuts, when the sentinel file exists, and takes the sentinel.
+struct FakeSteam {
+  fs::path target, sentinel;
+  uint32_t next_id = 0x9000'0001;
+  std::vector<std::string> urls;
+  bool accept = true;
+  bool open(const std::string &url) {
+    urls.push_back(url);
+    if (!accept || !fs::exists(sentinel)) return true;
+    fs::remove(sentinel);
+    std::string path;
+    const std::string prefix = "steam://addnonsteamgame/";
+    REQUIRE(url.starts_with(prefix));
+    for (size_t i = prefix.size(); i < url.size(); ++i)
+      if (url[i] == '%') {
+        path += char(std::stoi(url.substr(i + 1, 2), nullptr, 16));
+        i += 2;
+      } else {
+        path += url[i];
+      }
+    auto doc = fs::exists(target) ? read_vdf(paths::read(target)) : object("", {object("shortcuts", {})});
+    auto &list = doc.children[0];
+    Vdf id;
+    id.type = 2;
+    id.key = "appid";
+    for (int i = 0; i < 4; ++i) id.value += char(next_id >> (8 * i));
+    ++next_id;
+    // Steam names it from the entry and keeps the entry's path.
+    list.children.push_back(object(std::to_string(list.children.size()),
+                                   {id, vstring("AppName", "From entry"), vstring("Exe", "\"/usr/bin/env\""),
+                                    vstring("StartDir", "\"/usr/bin\""), vstring("ShortcutPath", path),
+                                    vstring("LaunchOptions", ""), object("tags", {})}));
+    paths::atomic_write(target, write_vdf(doc));
+    return true;
+  }
+};
+uint32_t id_of(const Vdf &entry) {
+  const auto &v = member(entry, "appid").value;
+  uint32_t n = 0;
+  for (int i = 0; i < 4; ++i) n |= uint32_t(uint8_t(v[i])) << (8 * i);
+  return n;
+}
+} // namespace
+TEST_CASE("Steam adds games while it runs through its own handler, and a later sync adopts them") {
+  Fixture f;
+  const auto exe = f.root / "Venture.AppImage";
+  FakeSteam steam{f.target, f.root / "addnonsteamgamefile"};
+  LiveAdd live;
+  live.sentinel = steam.sentinel;
+  live.open = [&](const std::string &url) { return steam.open(url); };
+  live.steam_running = [] { return true; };
+  live.wait = std::chrono::milliseconds(500);
+  live.poll = std::chrono::milliseconds(1);
+  std::vector<Game> games{{"com.example.one", "One", ""}, {"com.example.two", "Two", ""}};
+  // Steam running: both go in at once, and no restart is asked for.
+  auto result = sync(f.root, exe, {}, games, [] { return true; }, &live);
+  CHECK_FALSE(result.pending);
+  CHECK(steam.urls.size() == 2);
+  CHECK_FALSE(fs::exists(steam.sentinel));
+  const auto entry = f.root / "data" / "steam-shortcuts" / "com.example.one.desktop";
+  REQUIRE(fs::exists(entry));
+  CHECK(steam.urls[0] == add_game_url(entry));
+  const auto text = paths::read(entry);
+  CHECK(text.find("Name=One\n") != std::string::npos);
+  CHECK(text.find(" --launch \"com.example.one\"\n") != std::string::npos);
+  // Each game is handed to Steam once per run.
+  CHECK_FALSE(sync(f.root, exe, {}, games, [] { return true; }, &live).pending);
+  CHECK(steam.urls.size() == 2);
+  // Steam closed: they become ordinary Venture shortcuts under Steam's ids.
+  CHECK_FALSE(sync(f.root, exe, {}, games, [] { return false; }, &live).pending);
+  auto doc = read_vdf(paths::read(f.target));
+  const auto &list = member(doc, "shortcuts");
+  REQUIRE(list.children.size() == 2);
+  const auto &one = list.children[0];
+  CHECK(id_of(one) == 0x9000'0001);
+  CHECK(member(one, "appname").value == std::string("One") + '\0');
+  CHECK(member(one, "exe").value == "\"" + paths::utf8(fs::absolute(exe)) + "\"" + '\0');
+  CHECK(member(one, "LaunchOptions").value == std::string("--launch com.example.one") + '\0');
+  CHECK(member(one, "ShortcutPath").value == std::string(1, '\0'));
+  CHECK(member(member(one, "tags"), "0").value == std::string("Venture") + '\0');
+  for (const auto &n : one.children) CHECK((n.key != "AppName" && n.key != "Exe"));
+  CHECK_FALSE(fs::exists(entry));
+  CHECK_FALSE(sync(f.root, exe, {}, games, [] { return true; }).pending);
+}
+TEST_CASE("Steam's live add replaces a shortcut whose program is gone and never starts Steam") {
+  Fixture f;
+  // An AppImage's mount from an earlier run, gone now.
+  CHECK_FALSE(sync(f.root, f.root / "tmp/.mount_old/usr/bin/venture", {}, {{"com.example.one", "One", ""}},
+                   [] { return false; })
+                  .pending);
+  const auto exe = f.root / "Venture.AppImage";
+  FakeSteam steam{f.target, f.root / "addnonsteamgamefile"};
+  LiveAdd live;
+  live.sentinel = steam.sentinel;
+  live.open = [&](const std::string &url) { return steam.open(url); };
+  bool steam_runs = false;
+  live.steam_running = [&] { return steam_runs; };
+  live.wait = std::chrono::milliseconds(500);
+  live.poll = std::chrono::milliseconds(1);
+  std::vector<Game> games{{"com.example.one", "One", ""}};
+  // The probe also reports newer work; with Steam closed nothing is handed to it.
+  sync(f.root, exe, {}, games, [] { return true; }, &live);
+  CHECK(steam.urls.empty());
+  steam_runs = true;
+  CHECK_FALSE(sync(f.root, exe, {}, games, [] { return true; }, &live).pending);
+  REQUIRE(steam.urls.size() == 1);
+  CHECK_FALSE(sync(f.root, exe, {}, games, [] { return false; }).pending);
+  const auto doc = read_vdf(paths::read(f.target));
+  const auto &list = member(doc, "shortcuts");
+  REQUIRE(list.children.size() == 1);
+  CHECK(id_of(list.children[0]) == 0x9000'0001);
+  // A Steam that does not take the file: the game waits for Steam to close.
+  Fixture g;
+  FakeSteam refusing{g.target, g.root / "addnonsteamgamefile"};
+  refusing.accept = false;
+  live.tried.clear();
+  live.sentinel = refusing.sentinel;
+  live.open = [&](const std::string &url) { return refusing.open(url); };
+  live.wait = std::chrono::milliseconds(20);
+  auto result = sync(g.root, exe, {}, games, [] { return true; }, &live);
+  CHECK(result.pending);
+  CHECK_FALSE(fs::exists(refusing.sentinel));
+}
+#ifndef _WIN32
+TEST_CASE("Desktop entries for Steam quote their Exec line and URL as the specifications ask") {
+  const auto entry = desktop_entry(fs::path("/home/deck/My Games/Venture $1.AppImage"), {"com.example.one", "A\nB", ""});
+  CHECK(entry.find("Name=A\\nB\n") != std::string::npos);
+  CHECK(entry.find(R"(Exec="/home/deck/My Games/Venture \\$1.AppImage" --launch "com.example.one")") !=
+        std::string::npos);
+  CHECK(entry.find("Path=/home/deck/My Games\n") != std::string::npos);
+  CHECK(add_game_url(fs::path("/home/deck/a b%.desktop")) == "steam://addnonsteamgame/%2Fhome%2Fdeck%2Fa%20b%25.desktop");
+}
+TEST_CASE("Linux sees Steam running, and a Steam restart waits while Steam runs a game other than SteamVR") {
+  CHECK(restart_blocker().empty());
+  // Steam's reaper: "reaper SteamLaunch AppId=<id> -- <game>".
+  auto start = [](const char *id) {
+    pid_t pid = -1;
+    std::string app = std::string("AppId=") + id;
+    char *argv[] = {const_cast<char *>("/opt/steam/ubuntu12_32/reaper"), const_cast<char *>("-c"),
+                    const_cast<char *>("sleep 5; :"), const_cast<char *>("SteamLaunch"), app.data(),
+                    const_cast<char *>("--"), nullptr};
+    REQUIRE(posix_spawn(&pid, "/bin/sh", nullptr, nullptr, argv, environ) == 0);
+    return pid;
+  };
+  auto stop = [](pid_t pid) {
+    kill(pid, SIGKILL);
+    waitpid(pid, nullptr, 0);
+  };
+  auto wait_listed = [](pid_t pid) {
+    for (int i = 0; i < 200; ++i) {
+      if (paths::read(fs::path("/proc") / std::to_string(pid) / "cmdline").find("SteamLaunch") != std::string::npos)
+        return;
+      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+  };
+  // Kernel files report no size: a report found Steam never seen running on
+  // Linux, so shortcuts written while it ran were lost when it saved its own.
+  CHECK(paths::read("/proc/self/comm").ends_with("\n"));
+  {
+    const auto dir = paths::executable().parent_path() / "test-artifacts" / "fake-steam";
+    fs::create_directories(dir);
+    fs::copy_file("/bin/sleep", dir / "steam", fs::copy_options::overwrite_existing);
+    pid_t steam = -1;
+    std::string program = paths::utf8(dir / "steam");
+    char *argv[] = {program.data(), const_cast<char *>("5"), nullptr};
+    REQUIRE(posix_spawn(&steam, program.c_str(), nullptr, nullptr, argv, environ) == 0);
+    bool seen = false;
+    for (int i = 0; i < 200 && !seen; ++i) {
+      seen = running();
+      if (!seen) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    CHECK(seen);
+    kill(steam, SIGKILL);
+    waitpid(steam, nullptr, 0);
+  }
+  const auto shell = start("250820");  // SteamVR, the headset's shell
+  wait_listed(shell);
+  CHECK(restart_blocker().empty());
+  const auto game = start("620980");
+  wait_listed(game);
+  CHECK(restart_blocker().find("620980") != std::string::npos);
+  stop(game);
+  stop(shell);
+  CHECK(restart_blocker().empty());
+}
+#endif
+TEST_CASE("gamescope's Wayland display stands in for an unset WAYLAND_DISPLAY when its socket exists") {
+  CHECK(environment::gamescope_wayland_display("wayland-0", "gamescope-0", "/run/user/1000").empty());
+  CHECK(environment::gamescope_wayland_display(nullptr, nullptr, "/run/user/1000").empty());
+  CHECK(environment::gamescope_wayland_display(nullptr, "", "/run/user/1000").empty());
+  CHECK(environment::gamescope_wayland_display(nullptr, "gamescope-0", nullptr).empty());
+  Fixture f;
+  // No socket there: nothing to connect to.
+  CHECK(environment::gamescope_wayland_display("", "gamescope-0", paths::utf8(f.root).c_str()).empty());
+#ifndef _WIN32
+  // A short folder: sun_path holds 108 bytes.
+  const auto dir = fs::temp_directory_path() / ("vgs-" + std::to_string(getpid()));
+  fs::create_directories(dir);
+  const auto socket_path = dir / "gamescope-0";
+  fs::remove(socket_path);
+  const int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+  REQUIRE(fd >= 0);
+  sockaddr_un address{};
+  address.sun_family = AF_UNIX;
+  std::snprintf(address.sun_path, sizeof(address.sun_path), "%s", socket_path.c_str());
+  REQUIRE(bind(fd, reinterpret_cast<sockaddr *>(&address), sizeof(address)) == 0);
+  CHECK(environment::gamescope_wayland_display(nullptr, "gamescope-0", dir.c_str()) == "gamescope-0");
+  CHECK(environment::gamescope_wayland_display("", "gamescope-0", dir.c_str()) == "gamescope-0");
+  CHECK(environment::gamescope_wayland_display(nullptr, socket_path.c_str(), nullptr) == socket_path.string());
+  // A plain file of that name is not a display.
+  close(fd);
+  fs::remove(socket_path);
+  paths::atomic_write(socket_path, "");
+  CHECK(environment::gamescope_wayland_display(nullptr, "gamescope-0", dir.c_str()).empty());
+  fs::remove_all(dir);
+#endif
 }

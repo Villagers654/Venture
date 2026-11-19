@@ -16,6 +16,7 @@
 #include "common/steam_library.h"
 #include "common/android/adb.h"
 #include "launcher/auth_browser.h"
+#include "launcher/host_features.h"
 #include "launcher/options.h"
 #include "launcher/worker.h"
 // Defines VENTURE_HEADSET_CHECK, which gates the headset check below.
@@ -108,6 +109,12 @@ protected:
   virtual void on_art_changed(std::string_view /*id*/) {}
 
   Options options_;
+  // What this machine can do (host_features.h): the interface shows only what applies.
+  HostFeatures host_ = options_.smoke_device_apps ? device_app_features() : host_features();
+  bool shows(Feature feature) const { return shown(feature, host_); }
+  // This build's version (VENTURE_VERSION); --smoke-version stands in another
+  // for screenshots, such as a pre-release's.
+  std::string version_;
   fs::path data_;
   SecretStore secrets_;
   meta::AccountVault vault_;
@@ -211,10 +218,18 @@ protected:
   bool steam_pending_ = false, steam_busy_ = false, steam_restart_ = false;
   bool steam_sync_allowed_ = false, steam_scan_reliable_ = false, steam_unreliable_reported_ = false;
   size_t steam_games_ = 0;
+  // The games the last sync wanted in Steam, for a helper's sync after a
+  // restart (steam_library::Handoff); set when the helper took the restart
+  // over, so Venture does not start Steam itself as well.
+  std::vector<steam_library::Game> steam_titles_;
+  std::optional<steam_library::LiveAdd> steam_live_;
+  bool steam_live_checked_ = false;
+  bool steam_handed_off_ = false;
   uint64_t steam_poll_ = 0;
   std::atomic<uint64_t> steam_generation_{0};
   void sync_steam();
   void restart_steam();
+  void start_steam_again();
   // A new game the GUI asks about before it installs: where it goes and
   // whether it goes to Steam (app id, name).
   std::optional<std::pair<std::string, std::string>> install_ask_;

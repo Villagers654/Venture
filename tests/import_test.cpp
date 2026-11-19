@@ -306,6 +306,100 @@ TEST_CASE("APKs and archives are read through miniz from files and memory") {
 }
 
 namespace {
+// Documents as a system picker hands them out (Android's SAF): addresses
+// ("doc://<name>"), each read through a path the host gives for it. Here the
+// addresses name files in a folder; a picked "doc://tree/<dir>" lists a folder.
+class FakeDocuments final : public import::Documents {
+public:
+  explicit FakeDocuments(fs::path root) : root_(std::move(root)) {}
+  mutable int opened = 0;
+  bool handles(std::string_view picked) const override { return picked.starts_with("doc://"); }
+  Listing list(const std::vector<std::string> &picks, std::stop_token) const override {
+    Listing out;
+    for (const auto &pick : picks) {
+      const auto name = pick.substr(6);
+      if (name.starts_with("tree/")) {
+        const auto dir = root_ / paths::from_utf8(name.substr(5));
+        out.root = paths::utf8(dir.filename());
+        for (auto &e : fs::recursive_directory_iterator(dir))
+          if (e.is_regular_file()) {
+            auto relative = paths::utf8(e.path().lexically_relative(dir));
+            auto address = "doc://" + paths::utf8(e.path().lexically_relative(root_));
+            std::ranges::replace(relative, '\\', '/');
+            std::ranges::replace(address, '\\', '/');
+            out.files.push_back({relative, e.file_size(), address});
+          }
+      } else {
+        out.files.push_back({name, fs::file_size(root_ / name), pick});
+      }
+    }
+    return out;
+  }
+  std::shared_ptr<const fs::path> open(std::string_view uri) const override {
+    ++opened;
+    return std::make_shared<const fs::path>(root_ / paths::from_utf8(std::string(uri.substr(6))));
+  }
+
+private:
+  fs::path root_;
+};
+}  // namespace
+
+TEST_CASE("picked documents import like files: an APK with its expansion file, a folder, a ZIP") {
+  Directory d;
+  apk(d.root / "game.apk", "com.example.game", 12, 10);
+  write(d.root / "main.12.com.example.game.obb", "obbdata");
+  write(d.root / "notes.txt", "unrelated");
+  const auto docs = std::make_shared<FakeDocuments>(d.root);
+  import::set_documents(docs);
+  struct Reset {
+    ~Reset() { import::set_documents(nullptr); }
+  } reset;
+
+  // The APK and its expansion file picked together are one pick.
+  auto found = import::open_local(paths::from_utf8("doc://game.apk\ndoc://main.12.com.example.game.obb"));
+  REQUIRE(found.size() == 1);
+  auto &source = *found.front();
+  CHECK(source.manifest.package == "com.example.game");
+  CHECK(source.apk.location == "doc://game.apk");
+  REQUIRE(source.data.size() == 1);
+  CHECK(source.data.front().name == "main.12.com.example.game.obb");
+  CHECK(source.data.front().location == "doc://main.12.com.example.game.obb");
+  CHECK(source.describe() == "game.apk");
+  std::string obb;
+  source.read(source.data.front(), [&](auto chunk) { obb.append(chunk.begin(), chunk.end()); }, {});
+  CHECK(obb == "obbdata");
+  // An interrupted import reopens the same pick.
+  auto again = import::reopen(source.spec(), "com.example.game", {});
+  CHECK(again->data.size() == 1);
+
+  // A picked folder named after the package: its loose expansion files.
+  fs::create_directories(d.root / "com.example.game");
+  apk(d.root / "com.example.game" / "base.apk", "com.example.game", 12, 10);
+  write(d.root / "com.example.game" / "patch.12.com.example.game.obb", "patch");
+  found = import::open_local(paths::from_utf8("doc://tree/com.example.game"));
+  REQUIRE(found.size() == 1);
+  CHECK(found.front()->describe() == "com.example.game");
+  REQUIRE(found.front()->data.size() == 1);
+  CHECK(found.front()->data.front().location == "doc://com.example.game/patch.12.com.example.game.obb");
+
+  // A ZIP picked alone: the apps in it.
+  zip(d.root / "bundle.zip", {{"game.apk", paths::read(d.root / "game.apk")},
+                              {"com.example.game/main.12.com.example.game.obb", "zipped"}});
+  found = import::open_local(paths::from_utf8("doc://bundle.zip"));
+  REQUIRE(found.size() == 1);
+  CHECK(found.front()->describe() == "bundle.zip");
+  REQUIRE(found.front()->data.size() == 1);
+  std::string zipped;
+  found.front()->read(found.front()->data.front(), [&](auto chunk) { zipped.append(chunk.begin(), chunk.end()); }, {});
+  CHECK(zipped == "zipped");
+
+  // Nothing importable picked.
+  CHECK_THROWS_WITH(import::open_local(paths::from_utf8("doc://notes.txt\ndoc://main.12.com.example.game.obb")),
+                    doctest::Contains("No Android app"));
+}
+
+namespace {
 Json catalog_binary(std::uint64_t apk_size) {
   return Json{{"id", "456789"},
               {"binary_application", {{"id", "123456"}}},

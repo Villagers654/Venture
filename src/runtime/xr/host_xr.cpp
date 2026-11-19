@@ -246,11 +246,23 @@ HostXr initialize_host() {
 }
 }
 std::string host_initialization_error(std::int32_t result, const char *operation) {
-  // Flatpak's sandbox cannot reach SteamVR's server, whatever the error says.
-  if (venture::environment::flatpak_steamvr())
-    return "SteamVR does not work with the Venture Flatpak: the Flatpak sandbox cannot reach SteamVR. Use the "
-           "Venture AppImage, tarball or your distribution's package with SteamVR, or use WiVRn or Monado with the "
-           "Flatpak.";
+  // In the Flatpak SteamVR's folder may not be in the sandbox (a Steam library
+  // on another drive), whatever the error says: name the folder and the grant.
+  const auto steamvr = venture::environment::flatpak_steamvr_state();
+  if (steamvr.steamvr && !steamvr.visible) {
+    if (steamvr.hidden_folder.empty())
+      return "SteamVR's folder is not visible in the Venture Flatpak. Use the Venture AppImage, tarball or your "
+             "distribution's package with SteamVR.";
+    return "SteamVR's folder is not visible in the Venture Flatpak: " + steamvr.hidden_folder +
+           ". Give Venture read access in a terminal with: " +
+           venture::environment::flatpak_override_command(steamvr.hidden_folder) +
+           " and press Play again, or use the Venture AppImage.";
+  }
+  // SteamVR runs its OpenXR client inside Flatpak and other sandboxes from 2.19.1 on.
+  if (steamvr.steamvr && (result == XR_ERROR_RUNTIME_UNAVAILABLE || result == XR_ERROR_RUNTIME_FAILURE))
+    return std::string("SteamVR could not ") + operation + " (XrResult " + std::to_string(result) +
+           "). In the Venture Flatpak, SteamVR 2.19.1 or newer is needed: older SteamVR does not run in a sandbox. "
+           "Make sure SteamVR is up to date and running, then press Play again, or use the Venture AppImage.";
   if (result == XR_ERROR_RUNTIME_UNAVAILABLE)
     return "Your configured OpenXR runtime is unavailable. Make sure your headset and its runtime service are running, then press Play again.";
   // SteamVR answers xrCreateInstance this way while its server is stuck or

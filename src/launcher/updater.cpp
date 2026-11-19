@@ -47,18 +47,15 @@ std::string lower(std::string text) {
   return text;
 }
 }  // namespace
-std::optional<Asset> pick(const Json &release, Method method) {
+std::optional<Asset> pick(const Json &release, Method method, std::string_view arch) {
   switch (method) {
     case Method::installer:
       return find(release, [](std::string_view n) { return n == "Venture-windows64-setup.exe"; });
-    case Method::appimage:
-      return find(release, [](std::string_view n) {
-#if defined(__aarch64__)
-        return n.starts_with("Venture-") && n.ends_with("-linux-aarch64.AppImage");
-#else
-        return n.starts_with("Venture-") && n.ends_with("-linux-x86_64.AppImage");
-#endif
-      });
+    case Method::appimage: {
+      // Packages carry the plain numbers; a pre-release's name may carry its suffix too.
+      const std::string tail = "-linux-" + std::string(arch) + ".AppImage";
+      return find(release, [&](std::string_view n) { return n.starts_with("Venture-") && n.ends_with(tail); });
+    }
     case Method::apk:
       return find(release, [](std::string_view n) {
         const auto name = lower(std::string(n));
@@ -69,41 +66,130 @@ std::optional<Asset> pick(const Json &release, Method method) {
   }
   return {};
 }
+std::optional<Asset> pick(const Json &release, Method method) {
+#if defined(__aarch64__) || defined(_M_ARM64)
+  return pick(release, method, "aarch64");
+#else
+  return pick(release, method, "x86_64");
+#endif
+}
 std::optional<Asset> sums(const Json &release) {
   return find(release, [](std::string_view n) { return n == "SHA256SUMS"; });
 }
+namespace {
+struct Version {
+  std::vector<int> parts;
+  std::vector<std::string_view> suffix;  // dot-separated; empty for a release
+};
+bool all_digits(std::string_view text) {
+  return !text.empty() && std::ranges::all_of(text, [](char c) { return c >= '0' && c <= '9'; });
+}
+std::optional<Version> parse_version(std::string_view text) {
+  Version out;
+  if (text.starts_with('v')) text.remove_prefix(1);
+  std::string_view suffix;
+  if (const auto dash = text.find('-'); dash != text.npos) {
+    suffix = text.substr(dash + 1);
+    text = text.substr(0, dash);
+    if (suffix.empty()) return {};
+  }
+  for (std::size_t at = 0; at <= text.size();) {
+    const auto end = std::min(text.find('.', at), text.size());
+    const auto digits = text.substr(at, end - at);
+    if (!all_digits(digits) || digits.size() > 9) return {};
+    int value = 0;
+    for (char c : digits) value = value * 10 + (c - '0');
+    out.parts.push_back(value);
+    at = end + 1;
+  }
+  for (std::size_t at = 0; !suffix.empty() && at <= suffix.size();) {
+    const auto end = std::min(suffix.find('.', at), suffix.size());
+    const auto part = suffix.substr(at, end - at);
+    if (part.empty()) return {};
+    out.suffix.push_back(part);
+    at = end + 1;
+  }
+  return out;
+}
+int compare_part(std::string_view a, std::string_view b) {
+  const bool an = all_digits(a), bn = all_digits(b);
+  if (an != bn) return an ? -1 : 1;  // numbers sort before words
+  if (an) {
+    while (a.size() > 1 && a.front() == '0') a.remove_prefix(1);
+    while (b.size() > 1 && b.front() == '0') b.remove_prefix(1);
+    if (a.size() != b.size()) return a.size() < b.size() ? -1 : 1;
+  }
+  const int c = a.compare(b);
+  return c < 0 ? -1 : c > 0 ? 1 : 0;
+}
+}  // namespace
+std::optional<int> compare_versions(std::string_view a_text, std::string_view b_text) {
+  auto a = parse_version(a_text), b = parse_version(b_text);
+  if (!a || !b) return {};
+  a->parts.resize(std::max(a->parts.size(), b->parts.size()));
+  b->parts.resize(a->parts.size());
+  if (a->parts != b->parts) return a->parts < b->parts ? -1 : 1;
+  if (a->suffix.empty() || b->suffix.empty())
+    return a->suffix.empty() == b->suffix.empty() ? 0 : a->suffix.empty() ? 1 : -1;
+  for (std::size_t i = 0; i < std::min(a->suffix.size(), b->suffix.size()); ++i)
+    if (const int c = compare_part(a->suffix[i], b->suffix[i])) return c;
+  return a->suffix.size() == b->suffix.size() ? 0 : a->suffix.size() < b->suffix.size() ? -1 : 1;
+}
 bool newer_version(std::string_view tag, std::string_view current) {
-  struct Version {
-    std::vector<int> parts;
-    bool prerelease = false;
-  };
-  auto parse = [](std::string_view text) {
-    Version out;
-    if (text.starts_with('v')) text.remove_prefix(1);
-    if (const auto dash = text.find('-'); dash != text.npos) {
-      out.prerelease = dash + 1 < text.size();
-      text = text.substr(0, dash);
+  const auto order = compare_versions(tag, current);
+  return order && *order > 0;
+}
+bool prerelease(std::string_view version) {
+  const auto parsed = parse_version(version);
+  return parsed && !parsed->suffix.empty();
+}
+Channel channel_of(std::string_view version) {
+  return prerelease(version) ? Channel::experimental : Channel::stable;
+}
+std::optional<Channel> channel_for_run(std::string_view last_run, std::string_view running) {
+  if (last_run == running) return {};
+  return channel_of(running);
+}
+bool adopt_build_channel(library::Settings &settings, std::string_view running) {
+  const auto channel = channel_for_run(settings.last_run_version, running);
+  if (!channel) return false;
+  settings.experimental_updates = *channel == Channel::experimental;
+  settings.last_run_version = std::string(running);
+  return true;
+}
+const Json *newest_release(const Json &releases, Channel channel) {
+  if (!releases.is_array()) return nullptr;
+  const Json *best = nullptr;
+  std::string best_tag;
+  for (const auto &release : releases) {
+    if (!release.is_object() || release.value("draft", false)) continue;
+    const auto tag = release.value("tag_name", std::string{});
+    if (!parse_version(tag)) continue;
+    // GitHub's flag and the tag's suffix both mark a pre-release.
+    if (channel == Channel::stable && (release.value("prerelease", false) || prerelease(tag))) continue;
+    if (!best || newer_version(tag, best_tag)) {
+      best = &release;
+      best_tag = tag;
     }
-    for (std::size_t at = 0; at <= text.size();) {
-      const auto end = std::min(text.find('.', at), text.size());
-      const auto digits = text.substr(at, end - at);
-      int value = 0;
-      if (digits.empty()) return Version{};
-      for (char c : digits) {
-        if (c < '0' || c > '9') return Version{};
-        value = value * 10 + (c - '0');
-      }
-      out.parts.push_back(value);
-      at = end + 1;
-    }
-    return out;
+  }
+  return best;
+}
+bool offered(std::string_view tag, std::string_view current, Channel channel) {
+  if (channel == Channel::experimental) return newer_version(tag, current);
+  const auto order = compare_versions(tag, current);
+  if (!order || prerelease(tag)) return false;
+  return *order > 0 || (*order != 0 && prerelease(current));
+}
+bool android_refuses(std::string_view tag, std::string_view current) {
+  auto code = [](std::string_view version) -> std::optional<int64_t> {
+    const auto parsed = parse_version(version);
+    if (!parsed) return {};
+    auto parts = parsed->parts;
+    parts.resize(std::max<std::size_t>(parts.size(), 3));
+    return int64_t(parts[0]) * 1'000'000 + int64_t(parts[1]) * 1'000 + parts[2];
   };
-  auto a = parse(tag), b = parse(current);
-  if (a.parts.empty() || b.parts.empty()) return false;
-  a.parts.resize(std::max(a.parts.size(), b.parts.size()));
-  b.parts.resize(a.parts.size());
-  if (a.parts != b.parts) return a.parts > b.parts;
-  return b.prerelease && !a.prerelease;
+  const auto a = code(tag), b = code(current);
+  return a && b && *a < *b;
 }
 
 std::string expected_sum(std::string_view text, std::string_view name) {

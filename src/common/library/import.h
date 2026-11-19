@@ -47,9 +47,37 @@ protected:
                          const std::function<void(std::span<const std::uint8_t>)> &sink,
                          std::stop_token stop) const = 0;
 };
+// Documents a system picker hands out by address instead of path (Android's
+// Storage Access Framework: content:// documents and trees). The host sets
+// them once (set_documents); a pick of such addresses, one per line, then
+// goes through open_local like a path.
+struct Document {
+  std::string path;  // '/'-separated under the pick: a picked file's name, a picked folder's relative path
+  std::uint64_t size = 0;
+  std::string uri;
+};
+class Documents {
+public:
+  virtual ~Documents() = default;
+  // Whether `picked` is one of this host's document addresses.
+  virtual bool handles(std::string_view picked) const = 0;
+  // Every document in the picks: each picked file, and the files of each picked
+  // folder up to three levels down. `root` is a single picked folder's name.
+  struct Listing {
+    std::string root;
+    std::vector<Document> files;
+  };
+  virtual Listing list(const std::vector<std::string> &picks, std::stop_token stop) const = 0;
+  // A path this process reads the document through, valid while the handle lives.
+  virtual std::shared_ptr<const fs::path> open(std::string_view uri) const = 0;
+};
+void set_documents(std::shared_ptr<const Documents> documents);
+
 // Every app found at a picked path: an APK, a folder holding APKs (each with
 // its data in a <package>/ folder, Android/obb/<package>/, or beside it), or
-// a ZIP archive laid out the same way.
+// a ZIP archive laid out the same way. Picked documents (Documents), one
+// address per line, are read the same way: several files picked at once are
+// one folder holding them.
 std::vector<std::unique_ptr<Source>> open_local(const fs::path &picked, std::stop_token stop = {});
 std::unique_ptr<Source> open_device(const android::adb::Client &client, const android::adb::App &app);
 // Reopens a saved spec for one package; throws when it is gone.

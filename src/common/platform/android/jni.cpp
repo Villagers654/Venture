@@ -191,6 +191,7 @@ void attach(JNIEnv* env, jobject context, App app) {
   c.sign_in = global_class(env, "org/venture_emu/venture/SignIn");
   c.device = global_class(env, "org/venture_emu/venture/Device");
   c.installer = global_class(env, "org/venture_emu/venture/Installer");
+  c.documents = global_class(env, "org/venture_emu/venture/Documents");
   g_ready.store(true, std::memory_order_release);
 }
 }  // namespace venture::android

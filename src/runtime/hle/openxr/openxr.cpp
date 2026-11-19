@@ -1557,6 +1557,30 @@ XrResult xrEndFrame(XrSession handle, const XrFrameEndInfo *info) {
     layers.push_back(mapped);
     return XR_SUCCESS;
   };
+  // Underlays (sphere_layers.h): the layers from here up to the first
+  // projection layer that blends by source alpha, all quads or sphere types,
+  // are drawn with that projection into one projection layer. Not with a
+  // color key or reconstruction opacity, which the host copy of the lowest
+  // layer carries.
+  std::uint32_t underlay_top = info->layerCount;
+  if (!underlay_pending)
+    for (std::uint32_t j = i; j < info->layerCount; ++j) {
+      const auto* layer = info->layers[j];
+      if (!layer || !valid_handle(layer->space, "XrSpace") || !SphereLayers::drawable(layer)) break;
+      if (layer->type == XR_TYPE_COMPOSITION_LAYER_PROJECTION) {
+        if (j > i && (layer->layerFlags & XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT) &&
+            XR_SUCCEEDED(validate_chain(layer->next, false, layer->type, true))) underlay_top = j;
+        break;
+      }
+      // Drawn here, so only the guest's enabled extensions count (the host's need not).
+      if (XR_FAILED(validate_chain(layer->next, false, layer->type, true))) break;
+    }
+  for (; i <= underlay_top && underlay_top < info->layerCount; ++i) {
+    const auto* layer = info->layers[i];
+    const auto result = i < underlay_top ? drawn_spheres.add(layer, layers)
+        : drawn_spheres.add_projection(*reinterpret_cast<const XrCompositionLayerProjection*>(layer), layers);
+    if (XR_FAILED(result)) return result;
+  }
   for (; i < info->layerCount; ++i) {
     auto layer = info->layers[i];
     // Each backend gives a guest passthrough layer its form at this place:
@@ -1634,8 +1658,11 @@ XrResult xrEndFrame(XrSession handle, const XrFrameEndInfo *info) {
     }
   }
   // The desktop mirror shows the first projection layer's chosen eye.
+  // A drawn run's placeholder has no views yet: the run gives the mirror its
+  // eye once drawn (SphereLayers::present).
   std::optional<MirrorEye> mirror;
-  if (venture::xr::mirror_ready()) mirror = mirror_eye(layers, venture::xr::mirror_eye());
+  const bool mirroring = venture::xr::mirror_ready();
+  if (mirroring) mirror = mirror_eye(layers, venture::xr::mirror_eye());
   const auto prepared = [&] {
     vulkan::ScopedHostWait timing("guest_end_prepare");
     return prepare_swapchains(rects.submitted, passthrough.force_opaque,
@@ -1643,7 +1670,8 @@ XrResult xrEndFrame(XrSession handle, const XrFrameEndInfo *info) {
                               &eye_rects);
   }();
   if (prepared != XR_SUCCESS && prepared != XR_SESSION_LOSS_PENDING) return prepared;
-  const auto drawn = drawn_spheres.present(handle, info->displayTime, layers);
+  const auto drawn = drawn_spheres.present(handle, info->displayTime, layers,
+      mirroring && !mirror ? std::optional<std::uint32_t>(venture::xr::mirror_eye()) : std::nullopt);
   if (XR_FAILED(drawn)) return drawn;
   PresentationLayers mapped(true);
   for (auto& layer : layers)

@@ -105,6 +105,33 @@ void refresh() {
   std::lock_guard lock(shared.mutex);
   capture(shared);
 }
+std::string gamescope_wayland_display(const char* wayland, const char* gamescope, const char* runtime_dir) {
+  if ((wayland && *wayland) || !gamescope || !*gamescope) return {};
+  std::filesystem::path socket(gamescope);
+  if (socket.is_relative()) {
+    if (!runtime_dir || !*runtime_dir) return {};
+    socket = std::filesystem::path(runtime_dir) / socket;
+  }
+  std::error_code ec;
+  return std::filesystem::is_socket(socket, ec) ? std::string(gamescope) : std::string();
+}
+bool use_gamescope_wayland() {
+#if defined(_WIN32) || defined(__ANDROID__)
+  return false;
+#else
+  const auto display = gamescope_wayland_display(std::getenv("WAYLAND_DISPLAY"),
+                                                 std::getenv("GAMESCOPE_WAYLAND_DISPLAY"),
+                                                 std::getenv("XDG_RUNTIME_DIR"));
+  if (display.empty() || setenv("WAYLAND_DISPLAY", display.c_str(), 1) != 0) return false;
+  refresh();
+  return true;
+#endif
+}
+bool inside_gamescope() {
+  const auto* gamescope = getenv("GAMESCOPE_WAYLAND_DISPLAY");
+  const auto* wayland = getenv("WAYLAND_DISPLAY");
+  return gamescope && *gamescope && wayland && std::string_view(gamescope) == wayland;
+}
 bool passthrough_enabled() {
   const auto* value = getenv("VENTURE_PASSTHROUGH");
   return !value || std::string_view(value) != "0";
@@ -133,29 +160,9 @@ bool steamvr_manifest(std::string_view path, std::string_view contents) {
   for (char& c : text) c = char(c >= 'A' && c <= 'Z' ? c + ('a' - 'A') : c);
   return text.find("steamvr") != std::string::npos || text.find("steamxr") != std::string::npos;
 }
-bool flatpak_steamvr() {
-  const auto* id = getenv("FLATPAK_ID");
-  if (!id || !*id) return false;
-  std::filesystem::path manifest;
-  if (const auto* json = getenv("XR_RUNTIME_JSON"); json && *json) manifest = json;
-  else if (const auto* home = getenv("HOME"); home && *home) manifest = std::filesystem::path(home) / ".config/openxr/1/active_runtime.json";
-  else return false;
-  std::error_code ec;
-  std::string path = manifest.string();
-  // SteamVR's manifest is a link into the Steam library, which the sandbox may not see.
-  if (auto target = std::filesystem::read_symlink(manifest, ec); !ec) path += " " + target.string();
-  std::ostringstream contents;
-  std::ifstream file(manifest);
-  if (file) contents << file.rdbuf();
-  if (!steamvr_manifest(path, contents.str())) return false;
-  // The Flatpak exposes SteamVR's folder (tools/packaging/linux): it is
-  // unreachable when the manifest or its client library is not there.
-  if (!file) return true;
-  return !std::filesystem::exists(std::filesystem::path(steamvr_library(manifest.string(), contents.str())), ec);
-}
-std::string steamvr_library(std::string_view manifest_path, std::string_view contents) {
-  const std::filesystem::path manifest(manifest_path);
-  // "library_path": "<path>", relative to the manifest's real folder.
+namespace {
+// The "library_path" value of a runtime manifest, as written; empty when it names none.
+std::string library_path_value(std::string_view contents) {
   constexpr std::string_view key = "\"library_path\"";
   auto at = contents.find(key);
   if (at == std::string_view::npos) return {};
@@ -163,7 +170,71 @@ std::string steamvr_library(std::string_view manifest_path, std::string_view con
   if (at == std::string_view::npos) return {};
   const auto end = contents.find('"', at + 1);
   if (end == std::string_view::npos) return {};
-  std::filesystem::path library(std::string(contents.substr(at + 1, end - at - 1)));
+  return std::string(contents.substr(at + 1, end - at - 1));
+}
+}  // namespace
+FlatpakSteamVr flatpak_steamvr_state() {
+  FlatpakSteamVr out;
+  const auto* id = getenv("FLATPAK_ID");
+  if (!id || !*id) return out;
+  std::filesystem::path manifest;
+  if (const auto* json = getenv("XR_RUNTIME_JSON"); json && *json) manifest = json;
+  else if (const auto* home = getenv("HOME"); home && *home) manifest = std::filesystem::path(home) / ".config/openxr/1/active_runtime.json";
+  else return out;
+  std::error_code ec;
+  // SteamVR's manifest is often a link into SteamVR's folder, which the sandbox
+  // may not see: follow the links as far as the sandbox shows them. The last
+  // target is the host path of the manifest.
+  std::string path = manifest.string();
+  std::filesystem::path last = manifest;
+  for (int hop = 0; hop < 16 && std::filesystem::is_symlink(last, ec); ++hop) {
+    auto target = std::filesystem::read_symlink(last, ec);
+    if (ec) break;
+    if (target.is_relative()) target = last.parent_path() / target;
+    path += " " + target.string();
+    last = target.lexically_normal();
+  }
+  std::ostringstream contents;
+  std::ifstream file(manifest);
+  if (file) contents << file.rdbuf();
+  if (!steamvr_manifest(path, contents.str())) return out;
+  out.steamvr = true;
+  // The Flatpak exposes SteamVR's usual folders (tools/packaging/linux). The
+  // folder to grant: the manifest's when it is missing, else the client
+  // library's (SteamVR's own folder when the library is relative to it).
+  if (!file) {
+    out.hidden_folder = last.parent_path().generic_string();
+    out.visible = false;
+    return out;
+  }
+  const std::filesystem::path library(steamvr_library(manifest.string(), contents.str()));
+  if (library.empty() || std::filesystem::exists(library, ec)) return out;
+  out.visible = false;
+  if (const auto raw = library_path_value(contents.str()); raw.starts_with('/') || std::filesystem::path(raw).is_absolute()) {
+    out.hidden_folder = library.parent_path().generic_string();
+  } else {
+    auto real = std::filesystem::canonical(manifest, ec);
+    out.hidden_folder = (ec ? last : real).parent_path().generic_string();
+  }
+  return out;
+}
+bool flatpak_steamvr() {
+  const auto state = flatpak_steamvr_state();
+  return state.steamvr && !state.visible;
+}
+std::string flatpak_override_command(std::string_view folder) {
+  const auto* id = getenv("FLATPAK_ID");
+  std::string quoted = "'";
+  for (char c : folder) quoted += c == '\'' ? std::string("'\\''") : std::string(1, c);
+  quoted += "'";
+  return "flatpak override --user --filesystem=" + quoted + ":ro " + std::string(id && *id ? id : "org.venture_emu.Venture");
+}
+std::string steamvr_library(std::string_view manifest_path, std::string_view contents) {
+  const std::filesystem::path manifest(manifest_path);
+  // "library_path": "<path>", relative to the manifest's real folder.
+  const auto raw = library_path_value(contents);
+  if (raw.empty()) return {};
+  std::filesystem::path library(raw);
   if (library.is_absolute()) return library.generic_string();
   std::error_code ec;
   auto real = std::filesystem::canonical(manifest, ec);

@@ -216,6 +216,10 @@ void description(std::string_view raw, float width) {
 
 // The community server, for help and news.
 constexpr const char* kDiscord = "https://discord.gg/Ey9hHszvwa";
+// Donations, also linked from the README and the website.
+constexpr const char* kDonate = "https://ko-fi.com/Villagers654";
+// Ko-fi's coral, for the heart under the pointer.
+constexpr ImU32 kDonateHeart = IM_COL32(255, 94, 91, 255);
 
 // A modal dialog in the house style; returns true while open. Every dialog is
 // a title, a short message, optional settings-style rows, and dialog_footer().
@@ -401,6 +405,7 @@ void App::draw() {
     }
   draw_uninstall();
   draw_texture_warning();
+  draw_experimental_switch();
   draw_flatpak_steamvr();
   draw_save_import();
   draw_save_export();
@@ -542,8 +547,38 @@ void App::draw_sidebar() {
     ImVec2 p{std::round(row.x + s(10)), std::round(row.y + (s(kHeaderHeight) - m) * 0.5f)};
     if (SDL_Texture* mark = logo(int(m)))
       draw_image(dl, ImTextureID(reinterpret_cast<uintptr_t>(mark)), p, {p.x + m, p.y + m});
-    draw_text(dl, fonts().semibold, 22, {std::round(p.x + m + s(14)), text_y(fonts().semibold, 22, row.y, s(kHeaderHeight))},
-              color::text, "Venture");
+    const float tx = std::round(p.x + m + s(14));
+    if (!update::prerelease(version_)) {
+      draw_text(dl, fonts().semibold, 22, {tx, text_y(fonts().semibold, 22, row.y, s(kHeaderHeight))}, color::text,
+                "Venture");
+    } else {
+      // A pre-release build: an amber tag under the wordmark, the pair centred
+      // on the header line. Dark text on amber reads on any background.
+      // i18n: Tag under the Venture name in the sidebar on a pre-release (experimental) build. Short, in capitals.
+      const char* tag = tr("EXPERIMENTAL");
+      const float cap = s(15), between = s(7), bh = std::round(s(18));
+      const float top = std::round(row.y + (s(kHeaderHeight) - (cap + between + bh)) * 0.5f);
+      draw_text(dl, fonts().semibold, 22, {tx, text_y(fonts().semibold, 22, top, cap)}, color::text, "Venture");
+      // The pill spans the wordmark exactly; a tag too long for it (a
+      // translation) gets a smaller font rather than a wider pill.
+      // Edges and centring by drawn ink, not advance boxes.
+      const ImVec2 word = ink_span(fonts().semibold, 22, "Venture");
+      const float word_w = word.y - word.x;
+      float size = 12;
+      ImVec2 ts = ink_span(fonts().semibold, size, tag);
+      while (size > 8 && ts.y - ts.x > word_w - s(10)) ts = ink_span(fonts().semibold, size -= 0.5f, tag);
+      // Whole pixels covering the ink, so the pill's anti-aliased ends reach the letters' edges.
+      const ImVec2 b0{std::floor(tx + word.x), top + cap + between}, b1{std::ceil(tx + word.y), top + cap + between + bh};
+      dl->AddRectFilled(b0, b1, color::warning, bh * 0.5f);
+      draw_text(dl, fonts().semibold, size,
+                {b0.x + (b1.x - b0.x - (ts.y - ts.x)) * 0.5f - ts.x, caps_y(fonts().semibold, size, b0.y, bh)},
+                color::on_selected, tag);
+      if (ImGui::IsWindowHovered() && ImGui::IsMouseHoveringRect(b0, b1))
+        // i18n: Tooltip on the sidebar's EXPERIMENTAL tag. {0} is the version, such as 0.3.0-alpha.2.
+        tooltip(trf("Experimental build {0}. Pre-releases bring new features first and may have bugs. Settings > "
+                    "Updates chooses which releases Venture offers.",
+                    version_));
+    }
     ImGui::Dummy({0, s(kHeaderHeight)});
   }
   gap(kAfterHeader + 4);
@@ -567,6 +602,8 @@ void App::draw_sidebar() {
                      {tr("Controls"), icons::game, 5},
                      {tr("Settings"), icons::settings, 2}};
   for (const auto& item : nav) {
+    // Venture's controls map controllers for its runtime; a device's own apps use the device's.
+    if (item.page == 5 && !shows(Feature::controls)) continue;
     ImGui::PushID(item.page);
     ImVec2 p = ImGui::GetCursorScreenPos();
     float w = ImGui::GetContentRegionAvail().x, h = s(40);
@@ -598,12 +635,42 @@ void App::draw_sidebar() {
     ImGui::PopID();
   }
 
-  // Account pinned to the bottom; opens the accounts page.
-  float block_h = s(60);
-  ImGui::SetCursorPosY(std::max(ImGui::GetCursorPosY() + s(20), win_h - block_h - s(18)));
+  // Account pinned to the bottom; above it, past a rule, Donate: a row like
+  // the pages' that opens Ko-fi in the browser.
+  float block_h = s(60), row_h = s(40);
+  float bottom_y = std::max(ImGui::GetCursorPosY() + s(20), win_h - block_h - s(18) - row_h - s(18));
+  {
+    ImGui::SetCursorPosY(bottom_y);
+    ImVec2 r = ImGui::GetCursorScreenPos();
+    hline(dl, std::round(r.x + s(14)), std::round(r.x + ImGui::GetContentRegionAvail().x - s(14)), std::round(r.y));
+    ImGui::SetCursorPosY(bottom_y + s(12));
+    ImVec2 p = ImGui::GetCursorScreenPos();
+    float w = ImGui::GetContentRegionAvail().x, h = row_h;
+    if (ImGui::InvisibleButton("##donate", {w, h})) action([] { open_url(kDonate); });
+    bool hovered = ImGui::IsItemHovered();
+    if (hovered) {
+      ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+      // i18n: Tooltip of the Donate row at the bottom of the sidebar.
+      tooltip(tr("Donate on Ko-fi"));
+    }
+    float t = anim(ImGui::GetID("donate-hover"), hovered ? 1.f : 0.f, 20);
+    dl->AddRectFilled(p, {p.x + w, p.y + h}, color::alpha(color::surface, t), h * 0.5f);
+    ImU32 fg = color::mix(color::text2, color::text, t);
+    float m = std::round(s(17));
+    ImVec2 c{std::round(p.x + s(26)), std::round(p.y + h * 0.5f)};
+    if (SDL_Texture* mark = heart(int(m), true))
+      draw_image(dl, ImTextureID(reinterpret_cast<uintptr_t>(mark)), {c.x - m * 0.5f, c.y - m * 0.5f},
+                 {c.x + m * 0.5f, c.y + m * 0.5f}, {0, 0}, {1, 1}, color::mix(fg, kDonateHeart, t));
+    // i18n: Row at the bottom of the sidebar that opens the Ko-fi donation page.
+    const char* label = tr("Donate");
+    draw_text(dl, fonts().semibold, kBody, {std::round(p.x + s(50)), text_y(fonts().semibold, kBody, p.y, h)}, fg,
+              ellipsize(fonts().semibold, kBody, label, w - s(58)));
+  }
+  ImGui::SetCursorPosY(bottom_y + s(12) + row_h + s(6));
   {
     ImVec2 p = ImGui::GetCursorScreenPos();
     float w = ImGui::GetContentRegionAvail().x, h = block_h;
+    const float name_w = w - s(64);
     if (ImGui::InvisibleButton("##account", {w, h})) page_ = 3;
     bool hovered = ImGui::IsItemHovered();
     if (hovered) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
@@ -617,14 +684,14 @@ void App::draw_sidebar() {
     float tx = p.x + s(56);
     std::string name = shown ? account_name(*shown) : tr("Sign in");
     draw_text(dl, fonts().semibold, kSmall + 1, {std::round(tx), text_y(fonts().semibold, kSmall + 1, c.y - s(9))},
-              color::text, ellipsize(fonts().semibold, kSmall + 1, name, w - s(64)));
+              color::text, ellipsize(fonts().semibold, kSmall + 1, name, name_w));
     // i18n: Under the account name at the bottom of the sidebar.
     std::string state = !session_          ? tr("Connect your Meta account")
                         : options_.offline ? tr("Offline")
                         : accounts_.size() > 1 ? trn("{0} account", "{0} accounts", accounts_.size())
                                                : tr("Meta account");
     draw_text(dl, fonts().regular, kSmall - 0.5f, {std::round(tx), text_y(fonts().regular, kSmall - 0.5f, c.y + s(9))},
-              color::text2, ellipsize(fonts().regular, kSmall - 0.5f, state, w - s(64)));
+              color::text2, ellipsize(fonts().regular, kSmall - 0.5f, state, name_w));
   }
   ImGui::EndChild();
   ImGui::PopStyleColor();
@@ -1253,7 +1320,7 @@ void App::draw_game_page() {
         if (versions && menu_item(partial ? "Install another version\xE2\x80\xA6" : "Install a version\xE2\x80\xA6",
                                   icons::download, false, session_ && !options_.offline))
           action([&] { request_versions(g); });
-        if (tools && steam_sync_allowed_ && settings_.add_games_to_steam) {
+        if (tools && shows(Feature::steam) && steam_sync_allowed_ && settings_.add_games_to_steam) {
           bool in = in_steam(g.id);
           if (menu_item(in ? "Remove from Steam" : "Add to Steam", 0, false, true,
                         ImTextureID(reinterpret_cast<uintptr_t>(steam_logo(int(std::round(s(16))))))))
@@ -1273,10 +1340,13 @@ void App::draw_game_page() {
             open_folder(folder);
           });
         };
-        if (tools && menu_item("Show save data", icons::folder, false, true)) open_data(false);
-        if (tools && menu_item("Show game data", icons::folder, false, true)) open_data(true);
+        const bool data_folders = shows(Feature::game_data_folders);
+        if (tools && data_folders && menu_item("Show save data", icons::folder, false, true)) open_data(false);
+        if (tools && data_folders && menu_item("Show game data", icons::folder, false, true)) open_data(true);
         // Save imports go to the game's own install.
-        if (tools && !pinned && menu_item("Import save data", icons::save, false, !running)) save_import_target_ = g.id;
+        if (tools && !pinned && shows(Feature::save_transfer) &&
+            menu_item("Import save data", icons::save, false, !running))
+          save_import_target_ = g.id;
         // An import no signed-in account owns, keyed by its package: the store
         // listing it is names it and brings its art (found by package, or here).
         if (tools && !pinned && partial->plan.local && !digits(partial->plan.app_id, 5)) {
@@ -1373,9 +1443,10 @@ void App::draw_game_page() {
   std::vector<const char*> tab_items{"About"};
   if (has_addons) tab_items.push_back(addon_tab.c_str());
   if (has_settings) {
-    tab_items.push_back("Mods");
-    tab_items.push_back("Controls");
-    tab_items.push_back("Settings");
+    // Each applies to Venture's runtime (host_features.h).
+    if (shows(Feature::game_mods)) tab_items.push_back("Mods");
+    if (shows(Feature::controls)) tab_items.push_back("Controls");
+    if (shows(Feature::game_settings)) tab_items.push_back("Settings");
   }
   // --smoke-view game-controls* and game-settings* keep those tabs open for
   // screenshots (by name: the Add-ons tab can come and go while it is checked).
@@ -2072,25 +2143,32 @@ void App::draw_settings() {
 
   heading(tr("Library"));
   begin_card("library", w, {22, 2});
-  setting_row("Games folder", "New downloads go here. Games already installed stay where they are.", field_w,
-              s(38), input("##games", &settings_games_, ""));
-  divider();
-  setting_row("Android platform-tools (adb)",
-              "Used to import games from a headset. Leave empty to find adb automatically.", field_w, s(38),
-              input("##adb", &settings_adb_, "Found automatically"));
-  divider();
-  setting_row("Add games to Steam", "Installed games appear in Steam and SteamVR after Steam restarts.", s(44), s(24),
-              [&] {
-                if (toggle("steam", &settings_.add_games_to_steam)) action([&] { save_settings(); });
-              });
-  if (settings_.add_games_to_steam) {
+  // Each row the host supports (host_features.h), with a divider after it.
+  if (shows(Feature::games_folder)) {
+    setting_row("Games folder", "New downloads go here. Games already installed stay where they are.", field_w,
+                s(38), input("##games", &settings_games_, ""));
     divider();
-    setting_row("Add new games to Steam", "On by default. Each game's menu can add or remove it later.", s(44), s(24),
-                [&] {
-                  if (toggle("steam-new", &settings_.steam_add_new)) action([&] { save_settings(); });
-                });
   }
-  divider();
+  if (shows(Feature::adb_location)) {
+    setting_row("Android platform-tools (adb)",
+                "Used to import games from a headset. Leave empty to find adb automatically.", field_w, s(38),
+                input("##adb", &settings_adb_, "Found automatically"));
+    divider();
+  }
+  if (shows(Feature::steam)) {
+    setting_row("Add games to Steam", "Installed games appear in Steam and SteamVR after Steam restarts.", s(44),
+                s(24), [&] {
+                  if (toggle("steam", &settings_.add_games_to_steam)) action([&] { save_settings(); });
+                });
+    if (settings_.add_games_to_steam) {
+      divider();
+      setting_row("Add new games to Steam", "On by default. Each game's menu can add or remove it later.", s(44),
+                  s(24), [&] {
+                    if (toggle("steam-new", &settings_.steam_add_new)) action([&] { save_settings(); });
+                  });
+    }
+    divider();
+  }
   {
     const char* counts[] = {"One at a time", "2", "3", "4"};
     int choice = std::clamp(settings_.parallel_downloads, 1, 4) - 1;
@@ -2107,11 +2185,13 @@ void App::draw_settings() {
     });
   }
   divider();
-  setting_row("Ask when installing", "Installing a new game asks which drive it goes to and whether it goes to Steam.",
-              s(44), s(24), [&] {
-                if (toggle("install-ask", &settings_.install_ask)) action([&] { save_settings(); });
-              });
-  divider();
+  if (shows(Feature::install_ask)) {
+    setting_row("Ask when installing",
+                "Installing a new game asks which drive it goes to and whether it goes to Steam.", s(44), s(24), [&] {
+                  if (toggle("install-ask", &settings_.install_ask)) action([&] { save_settings(); });
+                });
+    divider();
+  }
   // The info button's tooltip is the row's one-line description.
   setting_row(tr("Look up imported games online"),
               "Finds the store page of an imported game no account owns on OculusDB. Only its package name is sent.",
@@ -2131,7 +2211,7 @@ void App::draw_settings() {
                             tr("Finds an imported game's store page on OculusDB. Only its package name is sent."),
                             kHelpIcon);
               });
-  if (steam_pending_ && settings_.add_games_to_steam) {
+  if (shows(Feature::steam) && steam_pending_ && settings_.add_games_to_steam) {
     divider();
     float bw = row_button_w(steam_restart_ ? "Waiting for Steam to close" : "Restart Steam");
     setting_row(std::format("{} games are waiting for Steam", steam_games_), "Steam adds them the next time it starts.", bw,
@@ -2146,19 +2226,27 @@ void App::draw_settings() {
   gap(20);
 
   // --smoke-view display* scrolls the Display card into view for screenshots.
-  if (options_.smoke_view.starts_with("display")) ImGui::SetScrollHereY(0.0f);
-  heading(tr("Display"));
-  begin_card("display", w, {22, 2});
-  draw_display_rows(settings_.display, false, "global");
-  ImGui::Dummy({0, 0});  // the last row keeps its bottom padding
-  end_card();
-  gap(20);
+  if (shows(Feature::display)) {
+    if (options_.smoke_view.starts_with("display")) ImGui::SetScrollHereY(0.0f);
+    heading(tr("Display"));
+    begin_card("display", w, {22, 2});
+    draw_display_rows(settings_.display, false, "global");
+    ImGui::Dummy({0, 0});  // the last row keeps its bottom padding
+    end_card();
+    gap(20);
+  }
 
-  heading(tr("Runtime"));
-  // --smoke-view settings-runtime(-texture-warning) shows the Runtime card at the top for screenshots.
-  if (options_.smoke_view.starts_with("settings-runtime")) ImGui::SetScrollHereY(0.0f);
-  begin_card("runtime", w, {22, 2});
-  {
+  // The Runtime card's rows all depend on games running in Venture's runtime;
+  // where games are the device's own apps the card is left out, and only the
+  // Updates card below remains.
+  const bool runtime_card = shows(Feature::vr_runtime);
+  if (runtime_card) {
+    heading(tr("Runtime"));
+    // --smoke-view settings-runtime(-texture-warning) shows the Runtime card at the top for screenshots.
+    if (options_.smoke_view.starts_with("settings-runtime")) ImGui::SetScrollHereY(0.0f);
+    begin_card("runtime", w, {22, 2});
+  }
+  if (shows(Feature::vr_runtime)) {
     // The OpenXR runtime games run on: the system's active one, or one the player
     // picks (a headset on SteamVR while another runtime is active, #161).
     if (const double now = ImGui::GetTime(); now - xr_runtimes_checked_ >= 3) {
@@ -2218,7 +2306,7 @@ void App::draw_settings() {
     });
     divider();
   }
-  {
+  if (shows(Feature::passthrough)) {
     // Automatic picks what the VR runtime or headset offers; Color key is the
     // user's choice for a streaming tool that keys a color (never automatic).
     const char* modes[] = {"Automatic", "Color key", "Off"};
@@ -2279,13 +2367,16 @@ void App::draw_settings() {
           });
       });
     }
+    divider();
   }
-  divider();
-  setting_row("Show runtime console", "Opens a console window with live output when a game starts.", s(44), s(24), [&] {
-    if (toggle("console", &settings_.console)) action([&] { save_settings(); });
-  });
-  divider();
-  {
+  if (shows(Feature::runtime_console)) {
+    setting_row("Show runtime console", "Opens a console window with live output when a game starts.", s(44), s(24),
+                [&] {
+                  if (toggle("console", &settings_.console)) action([&] { save_settings(); });
+                });
+    divider();
+  }
+  if (shows(Feature::game_language)) {
     static const char* names[] = {"System language", "English (US)", "English (UK)", "German", "French",
                                   "Spanish", "Italian", "Portuguese (Brazil)", "Dutch", "Polish", "Russian",
                                   "Swedish", "Turkish", "Japanese", "Korean", "Chinese (Simplified)",
@@ -2305,9 +2396,9 @@ void App::draw_settings() {
         action([&] { save_settings(); });
       }
     });
+    divider();
   }
-  divider();
-  {
+  if (shows(Feature::texture_compression)) {
     // i18n: Choices for "Compress textures".
     const char* modes[] = {tr("Always"), tr("Automatic"), tr("Off")};
     float dw = s(180);
@@ -2330,7 +2421,7 @@ void App::draw_settings() {
       }
     });
   }
-  if (settings_.texture_compression == 1) {
+  if (shows(Feature::texture_compression) && settings_.texture_compression == 1) {
     divider();
     static const char* shares[] = {"25%", "50%", "75%", "90%"};
     static constexpr int percents[] = {25, 50, 75, 90};
@@ -2348,17 +2439,45 @@ void App::draw_settings() {
         });
     });
   }
-  divider();
-  setting_row("Keep translated code",
-              "Saves the game code Venture translates, so later launches start sooner and load new areas without "
-              "stutter. Uses up to about 1 GB of disk per game.",
-              s(44), s(24), [&] {
-    if (toggle("translated-code", &settings_.keep_translated_code)) action([&] { save_settings(); });
-  });
-  divider();
-  setting_row("Check for updates", "Venture tells you when a new version is out.", s(44), s(24), [&] {
+  if (shows(Feature::texture_compression)) divider();
+  if (shows(Feature::translated_code)) {
+    setting_row("Keep translated code",
+                "Saves the game code Venture translates, so later launches start sooner and load new areas without "
+                "stutter. Uses up to about 1 GB of disk per game.",
+                s(44), s(24), [&] {
+      if (toggle("translated-code", &settings_.keep_translated_code)) action([&] { save_settings(); });
+    });
+  }
+  if (runtime_card) {
+    ImGui::Dummy({0, 0});  // the last row keeps its bottom padding
+    end_card();
+    gap(20);
+  }
+
+  // Venture's own updates, everywhere: the channel applies to the APK too.
+  if (options_.smoke_view.starts_with("settings-updates")) ImGui::SetScrollHereY(0.0f);
+  // i18n: Settings section: checking for new Venture versions and which kind it offers.
+  heading(tr("Updates"));
+  begin_card("updates", w, {22, 2});
+  // i18n: Settings row: Venture looks for a newer version when it starts.
+  setting_row(tr("Check for updates"), "Venture tells you when a new version is out.", s(44), s(24), [&] {
     if (toggle("updates", &settings_.check_updates)) action([&] { save_settings(); });
   });
+  divider();
+  {
+    // i18n: Update channels (Settings > Updates > Update channel): Stable offers full releases only, Experimental pre-releases too.
+    const char* channels[] = {tr("Stable"), tr("Experimental")};
+    int choice = settings_.experimental_updates ? 1 : 0;
+    const float dw = s(kControlW);
+    // i18n: Settings row: which kind of release Venture offers as an update.
+    setting_row(tr("Update channel"), "", dw, s(38), [&] {
+      if (dropdown("update-channel", "", channels, 2, &choice, dw) && choice != (settings_.experimental_updates ? 1 : 0)) {
+        // Experimental asks first; Stable switches at once.
+        if (choice == 1) experimental_switch_ = true;
+        else action([this] { set_update_channel(false); });
+      }
+    });
+  }
   ImGui::Dummy({0, 0});  // the last row keeps its bottom padding
   end_card();
   gap(20);
@@ -2373,14 +2492,14 @@ void App::draw_settings() {
     });
   }
   divider();
-  {
+  if (shows(Feature::logs_folder)) {
     float bw = row_button_w("Open logs", icons::folder);
     setting_row("Logs", "Launcher and game logs are kept on this PC.", bw, s(38), [&] {
       if (button("Open logs", icons::folder, Tone::secondary, {bw, s(38)}))
         action([&] { open_folder(data_ / "logs"); });
     });
+    divider();
   }
-  divider();
   {
     float bw = row_button_w("Upload debug report");
     setting_row("Debug report",
@@ -2436,20 +2555,36 @@ void App::draw_settings() {
     float tx = std::round(p.x + m + s(16)), cy = p.y + m * 0.5f;
     draw_text(adl, fonts().semibold, kBody, {tx, text_y(fonts().semibold, kBody, cy - s(10))}, color::text, "Venture");
     draw_text(adl, fonts().regular, kSmall, {tx, text_y(fonts().regular, kSmall, cy + s(10))}, color::text2,
-              "Version " VENTURE_VERSION);
+              "Version " + version_);
     float bw = row_button_w("Join our Discord", icons::people);
+    // i18n: Button in Settings > About that opens the Ko-fi donation page.
+    const char* donate = tr("Donate on Ko-fi");
+    float dw = row_button_w(donate, icons::people);
     ImGui::Dummy({m, m});
-    ImGui::SetCursorScreenPos({p.x + ImGui::GetContentRegionAvail().x - bw, cy - s(19)});
+    float right = p.x + ImGui::GetContentRegionAvail().x;
+    // Side by side when they fit beside the version, else the donate button under Discord's.
+    float text_right = tx + std::max(measure(fonts().semibold, kBody, "Venture").x,
+                                     measure(fonts().regular, kSmall, "Version " VENTURE_VERSION).x);
+    bool beside = right - bw - s(10) - dw >= text_right + s(16);
+    float top = cy - s(19), bottom = p.y + m;
+    ImGui::SetCursorScreenPos(beside ? ImVec2{right - bw - s(10) - dw, top} : ImVec2{right - dw, top + s(46)});
+    ImGui::PushID("donate");
+    if (button(donate, icons::people, Tone::secondary, {dw, s(38)}, true,
+               ImTextureID(reinterpret_cast<uintptr_t>(heart(int(std::round(s(16))))))))
+      action([] { open_url(kDonate); });
+    ImGui::PopID();
+    if (!beside) bottom = std::max(bottom, top + s(46) + s(38));
+    ImGui::SetCursorScreenPos({right - bw, top});
     if (button("Join our Discord##discord", icons::people, Tone::secondary, {bw, s(38)}, true,
                ImTextureID(reinterpret_cast<uintptr_t>(discord_logo(int(std::round(s(16))))))))
       action([] { open_url(kDiscord); });
-    ImGui::SetCursorScreenPos({p.x, p.y + m});
+    ImGui::SetCursorScreenPos({p.x, bottom});
     ImGui::Dummy({0, 0});
   }
   end_card();
   gap(30);
-  // --smoke-view settings-end shows the bottom for screenshots.
-  if (options_.smoke_view == "settings-end") ImGui::SetScrollHereY(1.0f);
+  // --smoke-view settings-end (-narrow) shows the bottom for screenshots.
+  if (options_.smoke_view.starts_with("settings-end")) ImGui::SetScrollHereY(1.0f);
 }
 
 // Settings > Appearance > Language: Automatic (the system's language), English
@@ -3333,96 +3468,107 @@ void App::draw_import() {
   gap(kAfterHeader);
   float w = std::min(ImGui::GetContentRegionAvail().x, s(kPageWidth));
 
-  heading("From a headset");
-  begin_card("import-headset", w, {22, 18});
-  {
-    float inner = ImGui::GetContentRegionAvail().x;
-    ImVec2 p = ImGui::GetCursorScreenPos();
-    ImDrawList* dl = ImGui::GetWindowDrawList();
-    float h = s(40);
-    std::string headline = "No headset connected";
-    auto device = std::ranges::find(import_devices_, import_serial_, &android::adb::Device::serial);
-    if (device != import_devices_.end() && device->ready())
-      headline = std::format("{}  \xC2\xB7  {} games", device->model.empty() ? "Headset" : device->model,
-                             import_device_.items.size());
-    else if (import_device_.busy)
-      headline = "Looking for a headset";
-    dl->AddCircleFilled({p.x + h * 0.5f, p.y + h * 0.5f}, h * 0.5f, color::surface_hi, 32);
-    draw_glyph(dl, icons::game, kHeading, {p.x + h * 0.5f, p.y + h * 0.5f}, color::text2);
-    float tx = std::round(p.x + h + s(14));
-    draw_text(dl, fonts().semibold, kBody, {tx, text_y(fonts().semibold, kBody, p.y, h)}, color::text,
-              ellipsize(fonts().semibold, kBody, headline, inner - h - s(200)));
-    if (ImGui::IsMouseHoveringRect({tx, p.y}, {p.x + inner - s(200), p.y + h}))
-      tooltip("Connect a Quest with USB and allow debugging on the headset, then scan.");
-    float bw = row_button_w("Scan headset", icons::refresh);
-    ImGui::SetCursorScreenPos({p.x + inner - bw, p.y + (h - s(kControlH)) * 0.5f});
-    if (import_device_.busy) {
-      ImVec2 sp = ImGui::GetCursorScreenPos();
-      ImGui::Dummy({bw, h});
-      ImGui::SetCursorScreenPos({sp.x + bw - s(28), sp.y + s(11)});
-      spinner(9, color::text2);
-    } else if (button("Scan headset", icons::refresh, Tone::secondary, {bw, s(kControlH)})) {
-      scan_headset();
-    }
-    ImGui::SetCursorScreenPos({p.x, p.y + h + s(14)});
-    ImGui::Dummy({inner, 0});
-    // Several headsets (or one over USB and Wi-Fi): pick the one to list.
-    if (import_devices_.size() > 1) {
-      for (size_t i = 0; i < import_devices_.size(); ++i) {
-        const auto& d = import_devices_[i];
-        auto label = (d.model.empty() ? d.serial : d.model + "  " + d.serial) + (d.ready() ? "" : "  (" + d.state + ")");
-        label += "##headset" + std::to_string(i);
-        if (i) ImGui::SameLine(0, s(8));
-        if (filter_chip(label.c_str(), d.serial == import_serial_) && !import_device_.busy && d.serial != import_serial_) {
-          import_serial_ = d.serial;
-          scan_headset();
-        }
-      }
-      gap(12);
-    }
-    if (!import_device_.error.empty()) {
-      ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + inner);
-      text(fonts().regular, kSmall, color::warning, import_device_.error);
-      ImGui::PopTextWrapPos();
-      gap(6);
-    }
-    draw_import_items(import_device_, true, inner);
-    // Wi-Fi debugging: adb connect to the headset's address.
+  // Another headset over adb, where Venture can run adb (host_features.h).
+  if (shows(Feature::import_device)) {
+    heading("From a headset");
+    begin_card("import-headset", w, {22, 18});
     {
-      float cw = row_button_w("Connect", icons::refresh), fw = std::min(s(240), inner * 0.4f);
-      ImVec2 row = ImGui::GetCursorPos();
-      const ImVec2 at = ImGui::GetCursorScreenPos();
-      draw_text(ImGui::GetWindowDrawList(), fonts().regular, kBody,
-                {std::round(at.x), text_y(fonts().regular, kBody, at.y, s(38))}, color::text, "Over Wi-Fi");
-      ImGui::SetCursorPos({row.x + inner - cw - fw - s(10), row.y});
-      bool enter = text_field("##address", "192.168.1.20:5555", &import_address_, fw,
-                              ImGuiInputTextFlags_EnterReturnsTrue).entered;
-      ImGui::SameLine(0, s(10));
-      if ((button("Connect##wifi", icons::refresh, Tone::secondary, {cw, s(kControlH)},
-                  !import_device_.busy && !import_address_.empty()) ||
-           enter) &&
-          !import_address_.empty())
-        connect_headset();
+      float inner = ImGui::GetContentRegionAvail().x;
+      ImVec2 p = ImGui::GetCursorScreenPos();
+      ImDrawList* dl = ImGui::GetWindowDrawList();
+      float h = s(40);
+      std::string headline = "No headset connected";
+      auto device = std::ranges::find(import_devices_, import_serial_, &android::adb::Device::serial);
+      if (device != import_devices_.end() && device->ready())
+        headline = std::format("{}  \xC2\xB7  {} games", device->model.empty() ? "Headset" : device->model,
+                               import_device_.items.size());
+      else if (import_device_.busy)
+        headline = "Looking for a headset";
+      dl->AddCircleFilled({p.x + h * 0.5f, p.y + h * 0.5f}, h * 0.5f, color::surface_hi, 32);
+      draw_glyph(dl, icons::game, kHeading, {p.x + h * 0.5f, p.y + h * 0.5f}, color::text2);
+      float tx = std::round(p.x + h + s(14));
+      draw_text(dl, fonts().semibold, kBody, {tx, text_y(fonts().semibold, kBody, p.y, h)}, color::text,
+                ellipsize(fonts().semibold, kBody, headline, inner - h - s(200)));
+      if (ImGui::IsMouseHoveringRect({tx, p.y}, {p.x + inner - s(200), p.y + h}))
+        tooltip("Connect a Quest with USB and allow debugging on the headset, then scan.");
+      float bw = row_button_w("Scan headset", icons::refresh);
+      ImGui::SetCursorScreenPos({p.x + inner - bw, p.y + (h - s(kControlH)) * 0.5f});
+      if (import_device_.busy) {
+        ImVec2 sp = ImGui::GetCursorScreenPos();
+        ImGui::Dummy({bw, h});
+        ImGui::SetCursorScreenPos({sp.x + bw - s(28), sp.y + s(11)});
+        spinner(9, color::text2);
+      } else if (button("Scan headset", icons::refresh, Tone::secondary, {bw, s(kControlH)})) {
+        scan_headset();
+      }
+      ImGui::SetCursorScreenPos({p.x, p.y + h + s(14)});
+      ImGui::Dummy({inner, 0});
+      // Several headsets (or one over USB and Wi-Fi): pick the one to list.
+      if (import_devices_.size() > 1) {
+        for (size_t i = 0; i < import_devices_.size(); ++i) {
+          const auto& d = import_devices_[i];
+          auto label = (d.model.empty() ? d.serial : d.model + "  " + d.serial) + (d.ready() ? "" : "  (" + d.state + ")");
+          label += "##headset" + std::to_string(i);
+          if (i) ImGui::SameLine(0, s(8));
+          if (filter_chip(label.c_str(), d.serial == import_serial_) && !import_device_.busy && d.serial != import_serial_) {
+            import_serial_ = d.serial;
+            scan_headset();
+          }
+        }
+        gap(12);
+      }
+      if (!import_device_.error.empty()) {
+        ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + inner);
+        text(fonts().regular, kSmall, color::warning, import_device_.error);
+        ImGui::PopTextWrapPos();
+        gap(6);
+      }
+      draw_import_items(import_device_, true, inner);
+      // Wi-Fi debugging: adb connect to the headset's address.
+      {
+        float cw = row_button_w("Connect", icons::refresh), fw = std::min(s(240), inner * 0.4f);
+        ImVec2 row = ImGui::GetCursorPos();
+        const ImVec2 at = ImGui::GetCursorScreenPos();
+        draw_text(ImGui::GetWindowDrawList(), fonts().regular, kBody,
+                  {std::round(at.x), text_y(fonts().regular, kBody, at.y, s(38))}, color::text, "Over Wi-Fi");
+        ImGui::SetCursorPos({row.x + inner - cw - fw - s(10), row.y});
+        bool enter = text_field("##address", "192.168.1.20:5555", &import_address_, fw,
+                                ImGuiInputTextFlags_EnterReturnsTrue).entered;
+        ImGui::SameLine(0, s(10));
+        if ((button("Connect##wifi", icons::refresh, Tone::secondary, {cw, s(kControlH)},
+                    !import_device_.busy && !import_address_.empty()) ||
+             enter) &&
+            !import_address_.empty())
+          connect_headset();
+      }
     }
+    end_card();
+    gap(20);
   }
-  end_card();
-  gap(20);
 
-  heading("From this computer");
+  heading(host_.runtime ? "From this computer"
+                        // i18n: Import page section where games run as the headset's own apps: files on the headset.
+                        : tr("From files on this headset"));
   begin_card("import-local", w, {22, 18});
   {
     float inner = ImGui::GetContentRegionAvail().x;
-    float fw = row_button_w("Choose folder", icons::folder), aw = row_button_w("Choose APK or ZIP", icons::package);
+    const bool folders = shows(Feature::import_folder);
+    // The system picker takes an APK and its expansion files together.
+    const char* files_label = host_.runtime ? "Choose APK or ZIP" : "Choose files";
+    float fw = folders ? row_button_w("Choose folder", icons::folder) : 0,
+          aw = row_button_w(files_label, icons::package);
     ImVec2 start = ImGui::GetCursorPos();
     const ImVec2 at = ImGui::GetCursorScreenPos();
     constexpr auto label = "A game's APK with its data";
     draw_text(ImGui::GetWindowDrawList(), fonts().regular, kBody,
               {std::round(at.x), text_y(fonts().regular, kBody, at.y, s(kControlH))}, color::text, label);
     float after = start.y;
-    ImGui::SetCursorPos({start.x + inner - fw - aw - s(10), start.y});
-    if (button("Choose folder", icons::folder, Tone::secondary, {fw, s(kControlH)})) choose_import(true);
-    ImGui::SameLine(0, s(10));
-    if (button("Choose APK or ZIP", icons::package, Tone::secondary, {aw, s(kControlH)})) choose_import(false);
+    ImGui::SetCursorPos({start.x + inner - fw - aw - (folders ? s(10) : 0), start.y});
+    if (folders) {
+      if (button("Choose folder", icons::folder, Tone::secondary, {fw, s(kControlH)})) choose_import(true);
+      ImGui::SameLine(0, s(10));
+    }
+    if (button(files_label, icons::package, Tone::secondary, {aw, s(kControlH)})) choose_import(false);
     const bool listing = import_local_.busy || !import_local_.error.empty() || !import_local_.items.empty();
     ImGui::SetCursorPosY(std::max(after, start.y + s(kControlH)) + (listing ? s(12) : 0));
     ImGui::Dummy({inner, 0});
@@ -3469,52 +3615,55 @@ void App::draw_import() {
     gap(20);
   }
 
-  // Saves for an installed game, from a headset or a copy of its Android/data folder.
-  heading("Save data");
-  begin_card("import-saves", w, {22, 18});
-  {
-    float inner = ImGui::GetContentRegionAvail().x;
-    std::vector<meta::Game> games;
-    for (const auto& g : visible_games())
-      if (installed(g.id)) games.push_back(g);
-    std::ranges::sort(games, {}, [](const meta::Game& g) { return lowercase(g.name); });
-    if (games.empty()) {
-      text(fonts().regular, kSmall, color::text3, "Install or import a game first.", false);
-    } else {
-      auto current = std::ranges::find(games, save_game_, &meta::Game::id);
-      int index = current == games.end() ? 0 : int(current - games.begin());
-      std::vector<const char*> names;
-      for (const auto& g : games) names.push_back(g.name.c_str());
-      float fw = row_button_w("From a folder", icons::folder), hw = row_button_w("From headset", icons::download),
-            tw = row_button_w("To headset", icons::save);
-      ImVec2 row = ImGui::GetCursorPos();
-      ImGui::SetCursorPos(row);
-      dropdown("save-game", "", names.data(), int(names.size()), &index,
-               std::min(s(360), inner - fw - hw - tw - s(30)));
-      save_game_ = games[index].id;
-      const bool running = running_.contains(save_game_) && running_[save_game_].process.active();
-      ImGui::SetCursorPos({row.x + inner - fw - hw - tw - s(20), row.y});
-      constexpr auto replaces = "Replaces the game's saves in Venture; the current ones are kept in a backup.";
-      if (button("From a folder##saves-page", icons::folder, Tone::secondary, {fw, s(kControlH)}, !running))
-        choose_save_folder(save_game_);
-      if (ImGui::IsItemHovered())
-        tooltip(replaces);
-      ImGui::SameLine(0, s(10));
-      if (button("From headset##saves-page", icons::download, Tone::primary, {hw, s(kControlH)}, !running))
-        action([id = save_game_, this] { import_saves_later(id, {}); });
-      if (ImGui::IsItemHovered())
-        tooltip(replaces);
-      ImGui::SameLine(0, s(10));
-      if (button("To headset##saves-page", icons::save, Tone::secondary, {tw, s(kControlH)}, !running))
-        save_export_target_ = save_game_;
-      if (ImGui::IsItemHovered())
-        tooltip("Replaces the game's saves on the headset and closes it there; the headset's current saves are "
-                "kept in a backup on this computer.");
-      ImGui::SetCursorPos({row.x, row.y + s(kControlH)});
-      ImGui::Dummy({inner, 0});
+  // Saves for an installed game, from a headset or a copy of its Android/data folder,
+  // for Venture's runtime: a game that is the device's own app keeps its own.
+  if (shows(Feature::save_transfer)) {
+    heading("Save data");
+    begin_card("import-saves", w, {22, 18});
+    {
+      float inner = ImGui::GetContentRegionAvail().x;
+      std::vector<meta::Game> games;
+      for (const auto& g : visible_games())
+        if (installed(g.id)) games.push_back(g);
+      std::ranges::sort(games, {}, [](const meta::Game& g) { return lowercase(g.name); });
+      if (games.empty()) {
+        text(fonts().regular, kSmall, color::text3, "Install or import a game first.", false);
+      } else {
+        auto current = std::ranges::find(games, save_game_, &meta::Game::id);
+        int index = current == games.end() ? 0 : int(current - games.begin());
+        std::vector<const char*> names;
+        for (const auto& g : games) names.push_back(g.name.c_str());
+        float fw = row_button_w("From a folder", icons::folder), hw = row_button_w("From headset", icons::download),
+              tw = row_button_w("To headset", icons::save);
+        ImVec2 row = ImGui::GetCursorPos();
+        ImGui::SetCursorPos(row);
+        dropdown("save-game", "", names.data(), int(names.size()), &index,
+                 std::min(s(360), inner - fw - hw - tw - s(30)));
+        save_game_ = games[index].id;
+        const bool running = running_.contains(save_game_) && running_[save_game_].process.active();
+        ImGui::SetCursorPos({row.x + inner - fw - hw - tw - s(20), row.y});
+        constexpr auto replaces = "Replaces the game's saves in Venture; the current ones are kept in a backup.";
+        if (button("From a folder##saves-page", icons::folder, Tone::secondary, {fw, s(kControlH)}, !running))
+          choose_save_folder(save_game_);
+        if (ImGui::IsItemHovered())
+          tooltip(replaces);
+        ImGui::SameLine(0, s(10));
+        if (button("From headset##saves-page", icons::download, Tone::primary, {hw, s(kControlH)}, !running))
+          action([id = save_game_, this] { import_saves_later(id, {}); });
+        if (ImGui::IsItemHovered())
+          tooltip(replaces);
+        ImGui::SameLine(0, s(10));
+        if (button("To headset##saves-page", icons::save, Tone::secondary, {tw, s(kControlH)}, !running))
+          save_export_target_ = save_game_;
+        if (ImGui::IsItemHovered())
+          tooltip("Replaces the game's saves on the headset and closes it there; the headset's current saves are "
+                  "kept in a backup on this computer.");
+        ImGui::SetCursorPos({row.x, row.y + s(kControlH)});
+        ImGui::Dummy({inner, 0});
+      }
     }
+    end_card();
   }
-  end_card();
   gap(30);
   if (options_.smoke_view == "import-end") ImGui::SetScrollHereY(1.0f);
 }
@@ -3522,8 +3671,10 @@ void App::draw_import() {
 void App::request_import(bool device) {
   const bool steam = settings_.add_games_to_steam && (steam_sync_allowed_ || options_.smoke_view == "import-ask");
   import_choices_.clear();  // free space changes between imports
-  for (auto& location : launcher::install_locations(settings_, launcher::local_volumes()))
-    import_choices_.emplace_back(location, launcher::free_space(location.folder));
+  // Drives and folders to pick from, where the host lets games go elsewhere (host_features.h).
+  if (shows(Feature::install_location))
+    for (auto& location : launcher::install_locations(settings_, launcher::local_volumes()))
+      import_choices_.emplace_back(location, launcher::free_space(location.folder));
   if (!settings_.install_ask || (!steam && import_choices_.size() < 2)) return start_import(device);
   import_choice_ = 0;
   import_steam_ = settings_.steam_add_new;
@@ -3665,8 +3816,10 @@ void App::request_install(const meta::Game& g) {
   const bool steam = settings_.add_games_to_steam && (steam_sync_allowed_ || options_.smoke_view == "install");
   if (installed(g.id, false) || !settings_.install_ask) return install_for_owner(g);
   install_choices_.clear();
-  for (auto& location : launcher::install_locations(settings_, launcher::local_volumes()))
-    install_choices_.emplace_back(location, launcher::free_space(location.folder));
+  // Drives and folders to pick from, where the host lets games go elsewhere (host_features.h).
+  if (shows(Feature::install_location))
+    for (auto& location : launcher::install_locations(settings_, launcher::local_volumes()))
+      install_choices_.emplace_back(location, launcher::free_space(location.folder));
   if (!steam && install_choices_.size() < 2) return install_for_owner(g);
   install_choice_ = 0;
   install_steam_ = in_steam(g.id) && settings_.steam_add_new;
@@ -3677,8 +3830,10 @@ void App::request_install(const meta::Game& g) {
 void App::request_versions(const meta::Game& g) {
   request_builds(g.id);
   install_choices_.clear();
-  for (auto& location : launcher::install_locations(settings_, launcher::local_volumes()))
-    install_choices_.emplace_back(location, launcher::free_space(location.folder));
+  // Drives and folders to pick from, where the host lets games go elsewhere (host_features.h).
+  if (shows(Feature::install_location))
+    for (auto& location : launcher::install_locations(settings_, launcher::local_volumes()))
+      install_choices_.emplace_back(location, launcher::free_space(location.folder));
   install_choice_ = 0;
   version_choice_ = -1;
   install_versions_ = true;
@@ -3841,7 +3996,12 @@ void App::draw_uninstall() {
     const std::string version =
         g && uninstall_target_->plan.pinned ? " (" + uninstall_target_->plan.version + ")" : std::string();
     dialog_text(g ? trf("Uninstall {0}?", g->name + version) : std::string(tr("Uninstall this game?")),
-                tr("Its files are removed from this PC. Saves are kept, and you can install it again from your library."));
+                host_.runtime
+                    ? tr("Its files are removed from this PC. Saves are kept, and you can install it again from your "
+                         "library.")
+                    // i18n: Uninstall dialog where each game is the headset's own app: Venture removes only its copy.
+                    : tr("Venture's copy of its files is removed. The game stays installed on this headset, with its "
+                         "saves, until you uninstall it in the headset's app settings."));
     const int clicked = dialog_footer({{tr("Cancel")}, {tr("Uninstall"), Tone::danger}});
     if (clicked == 1 && uninstall_target_) {
       action([&] { uninstall(*uninstall_target_); });
@@ -3882,16 +4042,32 @@ void App::draw_flatpak_steamvr() {
   static bool checked = false;
   if (!checked) {
     checked = true;
-    flatpak_steamvr_warning_ = environment::flatpak_steamvr();
+    const auto state = environment::flatpak_steamvr_state();
+    flatpak_steamvr_warning_ = state.steamvr && !state.visible;
+    flatpak_steamvr_folder_ = state.hidden_folder;
   }
   if (flatpak_steamvr_warning_ && !ImGui::IsPopupOpen("SteamVR and Flatpak")) ImGui::OpenPopup("SteamVR and Flatpak");
-  if (begin_dialog("SteamVR and Flatpak", 460)) {
-    // i18n: Shown at start in the Linux Flatpak when SteamVR is the active OpenXR runtime.
-    dialog_text(tr("SteamVR does not work with the Flatpak"),
-                tr("SteamVR is your OpenXR runtime, and the Flatpak sandbox cannot reach SteamVR, so games will not "
-                   "start. Use the Venture AppImage, tarball or your distribution's package with SteamVR, or use "
-                   "WiVRn or Monado with the Flatpak."));
-    int clicked = dialog_footer({{tr("OK"), Tone::primary}});
+  if (begin_dialog("SteamVR and Flatpak", 520)) {
+    const bool named = !flatpak_steamvr_folder_.empty();
+    const std::string command = named ? environment::flatpak_override_command(flatpak_steamvr_folder_) : "";
+    // i18n: Shown at start in the Linux Flatpak when SteamVR is the active OpenXR runtime but its folder (for
+    // example a Steam library on another drive) is outside the Flatpak's permissions.
+    dialog_text(tr("SteamVR is not visible to the Flatpak"),
+                named ? trf("SteamVR is your OpenXR runtime, but its folder {0} is not visible in the Flatpak "
+                            "sandbox, so games will not start. Give Venture read access with this command in a "
+                            "terminal, then start Venture again:",
+                            flatpak_steamvr_folder_) +
+                            "\n\n" + command
+                      : tr("SteamVR is your OpenXR runtime, but its files are not visible in the Flatpak sandbox, so "
+                           "games will not start. Use the Venture AppImage, tarball or your distribution's package "
+                           "with SteamVR."));
+    // i18n: Button in the SteamVR and Flatpak dialog: copies the flatpak override command.
+    int clicked = named ? dialog_footer({{tr("Copy command")}, {tr("OK"), Tone::primary}}) - 1
+                        : dialog_footer({{tr("OK"), Tone::primary}});
+    if (clicked == -1 && named) {  // Copy command: the dialog stays open
+      ImGui::SetClipboardText(command.c_str());
+      clicked = -2;
+    }
     if (clicked < 0 && (ImGui::IsKeyPressed(ImGuiKey_Enter) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter) ||
                         ImGui::IsKeyPressed(ImGuiKey_Escape)))
       clicked = 0;
@@ -4030,30 +4206,58 @@ void App::check_update() {
   if (!settings_.check_updates || options_.offline || options_.launch_requested ||
       venture::environment::getenv("FLATPAK_ID"))
     return;
-  worker_->submit([this](std::stop_token stop) -> Worker::Completion {
+  const auto channel = settings_.experimental_updates ? update::Channel::experimental : update::Channel::stable;
+  worker_->submit([this, channel](std::stop_token stop) -> Worker::Completion {
     std::string tag, url;
     Json release;
     try {
-      const auto r = http::get_latest_release(stop);
-      if (r.status == 200) {
-        release = Json::parse(r.body);
+      if (channel == update::Channel::stable) {
+        // GitHub's latest release: the newest that is neither a draft nor a pre-release.
+        if (const auto r = http::get_latest_release(stop); r.status == 200) release = Json::parse(r.body);
+      } else {
+        // Every published release, newest first: the highest version of the
+        // first page that has any, pre-release or not.
+        for (int page = 1; page <= 3; ++page) {
+          const auto r = http::get_releases(page, stop);
+          if (r.status != 200) break;
+          const auto list = Json::parse(r.body);
+          if (const Json* newest = update::newest_release(list, channel)) {
+            release = *newest;
+            break;
+          }
+          if (!list.is_array() || list.size() < std::size_t(http::kReleasesPerPage)) break;
+        }
+      }
+      if (release.is_object()) {
         tag = release.value("tag_name", "");
         url = release.value("html_url", "");
       }
     } catch (...) {
       log::info("launcher", "Update check failed: {}", exception_text());
     }
-    return [this, tag, url, release] {
+    return [this, tag, url, release, channel] {
       const std::string version = tag.starts_with('v') ? tag.substr(1) : tag;
-      if (!update::newer_version(tag, VENTURE_VERSION) || version == settings_.dismissed_update ||
+      // Experimental: a later version. Stable: no pre-release; a later release,
+      // or on a pre-release build the latest stable one even when older.
+      // A check started before the channel changed is dropped.
+      if (channel != (settings_.experimental_updates ? update::Channel::experimental : update::Channel::stable) ||
+          !update::offered(tag, version_, channel) || version == settings_.dismissed_update ||
           !url.starts_with("https://github.com/Villagers654/Venture/releases/"))
         return;
-      log::info("launcher", "Venture {} is available", version);
+      log::info("launcher", "Venture {} is available on the {} channel", version,
+                channel == update::Channel::experimental ? "experimental" : "stable");
       update_ = Update{version, url};
       update_->method = update::method();
       update_->file = update::pick(release, update_->method);
       update_->sums = update::sums(release);
       if (!update_->file || !update_->sums) update_->method = update::Method::page;
+      // Stable on a pre-release offers an older release; Android refuses an APK
+      // with a lower version code over this one, so that goes by the release
+      // page, and the dialog says why.
+      if (update_->method == update::Method::apk && update::android_refuses(tag, version_)) {
+        update_->method = update::Method::page;
+        update_->android_downgrade = true;
+      }
     };
   });
 }
@@ -4144,8 +4348,17 @@ void App::draw_update() {
     const std::string version = update_ ? update_->version : "";
     const bool in_place = update_ && update_->method != update::Method::page;
     const bool downloading = update_ && update_->downloading;
-    std::string detail = std::format("You're on {}. ", VENTURE_VERSION);
-    if (!in_place)
+    std::string detail;
+    if (update::prerelease(version))
+      // i18n: First line of the update dialog when the offered version is a pre-release (experimental channel).
+      detail = std::string(tr("An experimental pre-release: new features first, and it may have bugs.")) + "\n\n";
+    detail += std::format("You're on {}. ", version_);
+    if (update_ && update_->android_downgrade)
+      // i18n: Update dialog on a headset when Stable offers a release older than the installed pre-release.
+      detail += tr("Android doesn't install an older version over a newer one. To go back, uninstall Venture, "
+                   "then install this version from the release page. Uninstalling removes the data Android keeps "
+                   "for Venture.");
+    else if (!in_place)
       detail += "Download it from the release page.";
     else if (downloading) {
       const auto done = update_->done->load(), total = update_->total->load();
@@ -4188,6 +4401,43 @@ void App::draw_update() {
   }
 }
 
+void App::set_update_channel(bool experimental) {
+  settings_.experimental_updates = experimental;
+  save_settings();
+  // Ask again on the new channel; "Not now" still skips only the version it was pressed for.
+  if (!update_ || !update_->downloading) {
+    update_.reset();
+    update_checked_ = false;
+  }
+}
+
+// Settings > Updates > Update channel set to Experimental asks first. Stable
+// switches at once; on a pre-release build its next check offers the latest
+// stable release, older or not, through the usual update dialog.
+void App::draw_experimental_switch() {
+  if (experimental_switch_ && !ImGui::IsPopupOpen("Switch to experimental updates?"))
+    ImGui::OpenPopup("Switch to experimental updates?");
+  if (begin_dialog("Switch to experimental updates?", 480)) {
+    // i18n: Title of the dialog shown when the update channel is set to Experimental.
+    const char* title = tr("Switch to experimental updates?");
+    // i18n: Message of the Switch to experimental updates? dialog.
+    const char* body = tr("Pre-releases bring new features first and may have bugs. Venture will offer the newest "
+                          "pre-release. You can switch back to Stable any time, and Venture then offers the latest "
+                          "stable release.");
+    dialog_text(title, body);
+    // i18n: Main button of the Switch to experimental updates? dialog.
+    const char* confirm = tr("Switch to experimental");
+    int clicked = dialog_footer({{tr("Cancel")}, {confirm, Tone::primary}});
+    if (clicked < 0 && ImGui::IsKeyPressed(ImGuiKey_Escape)) clicked = 0;
+    if (clicked == 1) action([this] { set_update_channel(true); });
+    if (clicked >= 0) {
+      experimental_switch_ = false;
+      ImGui::CloseCurrentPopup();
+    }
+    end_dialog();
+  }
+}
+
 // The headset check (Settings > Troubleshooting, Android): the text the debug
 // report's Headset section has, scrollable, with Copy.
 void App::draw_headset_check() {
@@ -4217,7 +4467,7 @@ void App::draw_headset_check() {
 
 void App::share_report(std::string_view app_id) {
   action([&] {
-    report_ = SharedReport{save_debug_report(app_id, VENTURE_VERSION)};
+    report_ = SharedReport{save_debug_report(app_id, version_)};
     upload_report();
   });
 }
@@ -4239,7 +4489,9 @@ void App::draw_report() {
     const bool failed = report_ && !report_->error.empty();
     if (uploading)
       dialog_text("Uploading debug report\xE2\x80\xA6",
-                  "Logs and system details from this PC, without your name, folders or account details.");
+                  host_.runtime
+                      ? "Logs and system details from this PC, without your name, folders or account details."
+                      : "Logs and system details from this headset, without your name, folders or account details.");
     else if (failed)
       dialog_text("Couldn't upload the debug report",
                   std::format("{} The report is saved as {}: attach it to a GitHub issue or post it in our Discord "

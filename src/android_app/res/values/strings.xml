@@ -2,4 +2,5 @@
 <resources>
     <string name="app_name" translatable="false">Venture</string>
     <string name="sign_in_title">Sign in to Meta</string>
+    <string name="storage_reason">Venture places each game\'s expansion files in Android/obb, where the game reads them. On this Android version that needs storage access.</string>
 </resources>

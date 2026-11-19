@@ -853,6 +853,8 @@ Settings Settings::load(const fs::path &data) {
   s.console = field(j, "launchWithConsole") == true;
   s.check_updates = field(j, "checkForUpdates") != false;
   s.dismissed_update = str(j, "dismissedUpdate");
+  s.experimental_updates = str(j, "updateChannel") == "experimental";
+  if (auto version = str(j, "lastRunVersion"); version.size() <= 64) s.last_run_version = version;
   s.add_games_to_steam = field(j, "addGamesToSteam") != false;
   s.steam_add_new = field(j, "steamAddNew") != false;
   // Before install locations, the install dialog only asked about Steam.
@@ -906,6 +908,8 @@ void Settings::save(const fs::path &data) const {
          {"launchWithConsole", console},
          {"checkForUpdates", check_updates},
          {"dismissedUpdate", dismissed_update},
+         {"updateChannel", experimental_updates ? "experimental" : "stable"},
+         {"lastRunVersion", last_run_version},
          {"addGamesToSteam", add_games_to_steam},
          {"steamAddNew", steam_add_new},
          {"installAsk", install_ask},

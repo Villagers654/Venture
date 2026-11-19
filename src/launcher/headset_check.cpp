@@ -47,6 +47,7 @@ std::string describe_host(const nh::HostProfile& host, const HostFacts& facts) {
   out += std::format("Meta VrApi on the device: {}; Oculus Platform service: {}\n", yes(host.vrapi),
                      yes(host.platform_service));
   out += std::format("Venture may install apps: {}\n", yes(facts.install_permission));
+  out += std::format("Venture may place expansion files in Android/obb: {}\n", yes(facts.obb_access));
   out += std::format("Launch categories its VR apps share: {}\n", join(host.launch_categories));
   std::vector<std::string> metadata;
   for (const auto& [key, value] : host.launch_metadata) metadata.push_back(key + "=" + value);

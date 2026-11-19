@@ -35,6 +35,12 @@ class JreModulesTest(unittest.TestCase):
         # java.sql and javax.sql are Android API (Gson loads java.sql.Time), as are logging and XML.
         self.assertLessEqual({"java.logging", "java.xml", "java.sql"}, modules())
 
+    def test_tls_and_ec_crypto_are_in_the_jre(self):
+        # JDK 21 keeps SunEC in jdk.crypto.ec (java.base from JDK 22). Without it JSSE offers no
+        # ECDHE group or suite and Google/Firebase servers answer handshake_failure (issue 168);
+        # Android's EC KeyPairGenerator, KeyAgreement and Signature algorithms need it as well.
+        self.assertIn("jdk.crypto.ec", modules())
+
 
 if __name__ == "__main__":
     sys.exit(unittest.main())

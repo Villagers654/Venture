@@ -6,6 +6,7 @@
 #include "launcher/i18n/i18n.h"
 #include "launcher/sign_in_link.h"
 #include "launcher/store_link.h"
+#include "launcher/updater.h"
 #include "common/android/manifest.h"
 #include "common/download/asset_files.h"
 #include "common/file_ops.h"
@@ -41,7 +42,10 @@ std::string exception_text() {
   }
 }
 Core::Core(Options options)
-    : options_(std::move(options)), data_(paths::data_dir()), secrets_(data_),
+    : options_(std::move(options)),
+      version_(options_.automation && !options_.smoke_version.empty() ? options_.smoke_version
+                                                                       : std::string(VENTURE_VERSION)),
+      data_(paths::data_dir()), secrets_(data_),
       vault_(data_), settings_(library::Settings::defaults(data_)) {
   fs::create_directories(data_ / "logs");
 #ifdef __ANDROID__
@@ -54,12 +58,33 @@ Core::Core(Options options)
     log::info("launcher", "Venture command line starting.");
   else
     log::info("launcher", "Venture native launcher starting.");
-  steam_sync_allowed_ = options_.interactive() && steam_library::profile_sync_allowed();
+  steam_sync_allowed_ = options_.interactive() && shows(Feature::steam) && steam_library::profile_sync_allowed();
   if (!options_.interactive())
     log::info("steam", "Steam sync disabled for non-interactive launcher mode.");
+  else if (!shows(Feature::steam))
+    log::info("steam", "Steam sync off: games here are the device's own apps.");
   else if (!steam_sync_allowed_)
     log::info("steam", "Steam sync disabled: redirected data profile has no Steam root override.");
-  action([&] { settings_ = library::Settings::load(data_); });
+  bool settings_read = false;
+  action([&] {
+    settings_ = library::Settings::load(data_);
+    settings_read = true;
+  });
+  // A version that has not run before (a new install, an update, another
+  // AppImage file) takes the update channel of its own build: installing a
+  // pre-release over a release switches to experimental, and back. Only the
+  // window saves it; a smoke run's stand-in version applies in memory.
+  if (auto adopted = settings_; update::adopt_build_channel(adopted, version_)) {
+    if (options_.interactive() && settings_read) {  // an unreadable settings.json is not replaced
+      log::info("launcher", "Venture {} runs for the first time (last {}): update channel {}", version_,
+                settings_.last_run_version.empty() ? std::string("none") : settings_.last_run_version,
+                adopted.experimental_updates ? "experimental" : "stable");
+      settings_ = std::move(adopted);
+      action([&] { settings_.save(data_); });
+    } else if (!options_.smoke_version.empty()) {
+      settings_.experimental_updates = adopted.experimental_updates;
+    }
+  }
   log::set_level(static_cast<log::Level>(settings_.log_level));
   i18n::set_language(options_.language.empty() ? settings_.interface_language : options_.language);
   log::info("launcher", "Interface language: {}", i18n::language());
@@ -846,7 +871,7 @@ void Core::sign_out_account(std::string_view key) {
   }
   reload_accounts();
   notice_ =
-      "Account signed out. Its installed games and saves remain on this PC.";
+      "Account signed out. Its installed games and saves remain on this device.";
 }
 void Core::remove_account(std::string_view key, bool delete_saves) {
   std::string selected(key);
@@ -1277,7 +1302,7 @@ void Core::sign_out() {
   library_partial_ = false;
   auth_status_.clear();
   secrets_.clear();
-  notice_ = "Signed out. Installed games remain on this PC.";
+  notice_ = "Signed out. Installed games remain on this device.";
 }
 void Core::install(const meta::Game &g, const fs::path &root) {
   if (options_.offline)
@@ -2093,6 +2118,7 @@ void Core::prepare_tick() {
 }
 fs::path Core::save_debug_report(std::string_view app_id, std::string_view version) const {
   DebugReport request{.data = data_, .version = std::string(version)};
+  request.runtime = host_.runtime;
   // No game asked for: the most recent launch, with its installation (the
   // game's own over a pinned version) so its settings and files are reported.
   // A game no longer installed falls back to the most recent launch.
@@ -2166,7 +2192,7 @@ void Core::sync_steam() {
     steam_unreliable_reported_ = true;
     if (steam_restart_ && !steam_library::running()) { // Steam closed for a restart; bring it back regardless.
       steam_restart_ = false;
-      action([&] { steam_library::start_client(steam_library::discover_root()); });
+      start_steam_again();
     }
     return;
   }
@@ -2194,6 +2220,11 @@ void Core::sync_steam() {
   auto art = data_ / "cache/art";
   auto roots = settings_.roots();
   const bool online = !options_.offline;
+  // Steam's live add, where this system has it (steam_library::LiveAdd).
+  if (!steam_live_checked_) {
+    steam_live_checked_ = true;
+    steam_live_ = steam_library::live_add(steam_library::discover_root());
+  }
   worker_->submit([this, titles, art, roots, generation, online, icon_sources](std::stop_token stop) -> Worker::Completion {
     try {
       // Steam's library sidebar wants the square app icon; fetch each listing's once.
@@ -2216,12 +2247,16 @@ void Core::sync_steam() {
         if (!fs::is_directory(root)) throw std::runtime_error("Games root is unavailable.");
         (void)fs::directory_iterator(root); // Do not suppress permission errors.
       }
-      auto result = steam_library::sync(steam_library::discover_root(), paths::executable(), art, titles,
-          [this, generation] { return steam_generation_.load() != generation || steam_library::running(); });
-      return [this, result, generation] {
+      // The AppImage file, not its mount: shortcuts must outlast this run.
+      // One sync at a time (steam_busy_) uses steam_live_.
+      auto result = steam_library::sync(steam_library::discover_root(), paths::launch_program(), art, titles,
+          [this, generation] { return steam_generation_.load() != generation || steam_library::running(); },
+          steam_live_ ? &*steam_live_ : nullptr);
+      return [this, result, generation, titles] {
         steam_busy_ = false;
         steam_pending_ = result.pending;
         steam_games_ = result.games;
+        steam_titles_ = titles;
         if (result.pending)
           log::info("steam", "{} games wait for Steam to close ({}).", result.games, result.reason);
         else
@@ -2229,7 +2264,7 @@ void Core::sync_steam() {
         if (generation != steam_generation_) { sync_steam(); return; }
         if (!steam_pending_ && steam_restart_) {
           steam_restart_ = false;
-          action([&] { steam_library::start_client(steam_library::discover_root()); });
+          start_steam_again();
         }
       };
     } catch (const std::exception& e) {
@@ -2242,7 +2277,7 @@ void Core::sync_steam() {
         log::warn("steam", "Steam sync skipped: {}", message);
         if (steam_restart_) {
           steam_restart_ = false;
-          action([&] { steam_library::start_client(steam_library::discover_root()); });
+          start_steam_again();
         }
         if (generation != steam_generation_) sync_steam();
       };
@@ -2251,11 +2286,34 @@ void Core::sync_steam() {
 }
 void Core::restart_steam() {
   if (steam_restart_ || !steam_pending_) return;
-  if (steam_library::vr_running()) return error("Close SteamVR first: Steam does not quit while SteamVR is running.");
+  if (const auto blocker = steam_library::restart_blocker(); !blocker.empty()) return error(blocker);
   action([&] {
-    steam_library::request_shutdown(steam_library::discover_root());
+    const auto root = steam_library::discover_root();
+    if (steam_library::started_by_steam()) {
+      // Steam closes Venture when it quits (a start from Steam's library, as in
+      // SteamOS's game mode): a helper outside Steam's processes syncs once
+      // Steam has closed and brings it back.
+      const auto file = data_ / "steam-handoff.json";
+      paths::atomic_write(file, steam_library::write_handoff({root, paths::launch_program(), data_ / "cache/art",
+                                                              steam_titles_, steam_library::session_environment()}));
+      if (!steam_library::start_handoff(paths::launch_program(), file)) {
+        std::error_code ec;
+        fs::remove(file, ec);
+        throw std::runtime_error(
+            "Steam started Venture and would close it on quitting, before Venture could add the games. Quit Steam "
+            "yourself (or switch to Desktop Mode) and start Venture from the desktop to add them.");
+      }
+      log::info("steam", "A helper adds the games once Steam closes, then starts Steam again.");
+      steam_handed_off_ = true;
+    }
+    steam_library::request_shutdown(root);
     steam_restart_ = true; // Start only after the observed close and safe sync.
   });
+}
+void Core::start_steam_again() {
+  // The helper does it when Steam's close ends this Venture too.
+  if (steam_handed_off_) return;
+  action([&] { steam_library::start_client(steam_library::discover_root()); });
 }
 void Core::complete_sign_in(std::string callback) {
   if (!auth_ || !signing_in_ || verifying_)
@@ -2365,7 +2423,7 @@ void Core::tick() {
     if (!steam_library::running()) {
       if (!settings_.add_games_to_steam && steam_restart_) {
         steam_restart_ = false;
-        action([&] { steam_library::start_client(steam_library::discover_root()); });
+        start_steam_again();
       } else sync_steam();
     }
   }

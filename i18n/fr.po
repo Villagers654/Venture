@@ -125,6 +125,10 @@ msgstr "Paramètres"
 msgid "Sign in"
 msgstr "Se connecter"
 
+#. Row at the bottom of the sidebar that opens the Ko-fi donation page.
+msgid "Donate"
+msgstr "Faire un don"
+
 #. Under the account name at the bottom of the sidebar.
 #: src/launcher/ui/views.cpp:591
 msgid "Connect your Meta account"
@@ -169,6 +173,11 @@ msgstr "Dépannage"
 #: src/launcher/ui/views.cpp:1948
 msgid "About"
 msgstr "À propos"
+
+#. Tooltip of the Donate row at the bottom of the sidebar.
+#. Button in Settings > About that opens the Ko-fi donation page.
+msgid "Donate on Ko-fi"
+msgstr "Faire un don sur Ko-fi"
 
 #: src/launcher/ui/views.cpp:1980
 msgid "Automatic"
@@ -272,11 +281,17 @@ msgstr "Ne plus masquer"
 msgid "Hide from library"
 msgstr "Masquer de la bibliothèque"
 
-msgid "SteamVR does not work with the Flatpak"
-msgstr "SteamVR ne fonctionne pas avec le Flatpak"
+msgid "SteamVR is not visible to the Flatpak"
+msgstr "SteamVR n'est pas visible pour le Flatpak"
 
-msgid "SteamVR is your OpenXR runtime, and the Flatpak sandbox cannot reach SteamVR, so games will not start. Use the Venture AppImage, tarball or your distribution's package with SteamVR, or use WiVRn or Monado with the Flatpak."
-msgstr "SteamVR est votre runtime OpenXR, et le bac à sable du Flatpak ne peut pas atteindre SteamVR : les jeux ne démarreront pas. Utilisez l'AppImage, l'archive tar ou le paquet de votre distribution de Venture avec SteamVR, ou utilisez WiVRn ou Monado avec le Flatpak."
+msgid "SteamVR is your OpenXR runtime, but its folder {0} is not visible in the Flatpak sandbox, so games will not start. Give Venture read access with this command in a terminal, then start Venture again:"
+msgstr "SteamVR est votre runtime OpenXR, mais son dossier {0} n'est pas visible dans le bac à sable du Flatpak : les jeux ne démarreront pas. Donnez à Venture l'accès en lecture avec cette commande dans un terminal, puis relancez Venture :"
+
+msgid "SteamVR is your OpenXR runtime, but its files are not visible in the Flatpak sandbox, so games will not start. Use the Venture AppImage, tarball or your distribution's package with SteamVR."
+msgstr "SteamVR est votre runtime OpenXR, mais ses fichiers ne sont pas visibles dans le bac à sable du Flatpak : les jeux ne démarreront pas. Utilisez l'AppImage, l'archive tar ou le paquet de votre distribution de Venture avec SteamVR."
+
+msgid "Copy command"
+msgstr "Copier la commande"
 
 msgid "OK"
 msgstr "OK"
@@ -560,3 +575,46 @@ msgstr "Écrit le fichier choisi à la place de celui-ci. L'original n'est pas c
 
 msgid "Writes the file you choose over this one. The original is not kept: install or import the game again to get it back."
 msgstr "Écrit le fichier choisi à la place de celui-ci. L'original n'est pas conservé : installez ou importez à nouveau le jeu pour le récupérer."
+
+msgid "From files on this headset"
+msgstr "Depuis des fichiers de ce casque"
+
+msgid "Venture's copy of its files is removed. The game stays installed on this headset, with its saves, until you uninstall it in the headset's app settings."
+msgstr "La copie de ses fichiers dans Venture est supprimée. Le jeu reste installé sur ce casque, avec ses sauvegardes, jusqu'à ce que vous le désinstalliez dans les paramètres des applications du casque."
+
+msgid "EXPERIMENTAL"
+msgstr "EXPÉRIMENTAL"
+
+#, python-brace-format
+msgid "Experimental build {0}. Pre-releases bring new features first and may have bugs. Settings > Updates chooses which releases Venture offers."
+msgstr "Version expérimentale {0}. Les préversions apportent les nouveautés en premier et peuvent contenir des bugs. Paramètres > Mises à jour choisit les versions que Venture propose."
+
+msgid "Updates"
+msgstr "Mises à jour"
+
+msgid "Check for updates"
+msgstr "Rechercher des mises à jour"
+
+msgid "Stable"
+msgstr "Stable"
+
+msgid "Experimental"
+msgstr "Expérimental"
+
+msgid "Update channel"
+msgstr "Canal de mise à jour"
+
+msgid "An experimental pre-release: new features first, and it may have bugs."
+msgstr "Une préversion expérimentale : les nouveautés en premier, avec de possibles bugs."
+
+msgid "Android doesn't install an older version over a newer one. To go back, uninstall Venture, then install this version from the release page. Uninstalling removes the data Android keeps for Venture."
+msgstr "Android n'installe pas une version plus ancienne par-dessus une plus récente. Pour revenir en arrière, désinstallez Venture, puis installez cette version depuis la page de publication. La désinstallation supprime les données qu'Android conserve pour Venture."
+
+msgid "Switch to experimental updates?"
+msgstr "Passer aux mises à jour expérimentales ?"
+
+msgid "Pre-releases bring new features first and may have bugs. Venture will offer the newest pre-release. You can switch back to Stable any time, and Venture then offers the latest stable release."
+msgstr "Les préversions apportent les nouveautés en premier et peuvent contenir des bugs. Venture proposera la préversion la plus récente. Vous pouvez revenir à Stable à tout moment : Venture propose alors la dernière version stable."
+
+msgid "Switch to experimental"
+msgstr "Passer en expérimental"

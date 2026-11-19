@@ -19,7 +19,7 @@ struct App {
 };
 struct Classes {
   jclass http = nullptr, transfer = nullptr, keys = nullptr, sign_in = nullptr, device = nullptr,
-         installer = nullptr;
+         installer = nullptr, documents = nullptr;
 };
 // Sets the process's JavaVM, Context and helper classes, once; called on a
 // thread with the app's class loader (Native.nativeInit in the Venture app,

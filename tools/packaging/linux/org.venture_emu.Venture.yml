@@ -16,6 +16,10 @@ separate-locales: false
 finish-args:
   # Wayland only (no X11 or IPC sockets), audio, network, the GPU.
   - --socket=wayland
+  # gamescope's Wayland socket (SteamOS's game mode, the Steam Frame): gamescope
+  # unsets WAYLAND_DISPLAY for what it starts, so --socket=wayland finds no
+  # display there; the launcher connects to GAMESCOPE_WAYLAND_DISPLAY instead.
+  - --filesystem=xdg-run/gamescope-0
   - --socket=pulseaudio
   - --share=network
   - --device=dri
@@ -30,11 +34,25 @@ finish-args:
   - --filesystem=xdg-data/envision:ro
   - --filesystem=host-os:ro
   - --filesystem=host-etc:ro
-  # SteamVR: its runtime manifest and client library in the Steam folder,
-  # OpenVR's paths file, and the shared memory its client and server talk over.
+  # WiVRn installed as a Flatpak: its runtime lives in its app folder (WiVRn's
+  # documented grants for Flatpak clients).
+  - --filesystem=xdg-data/flatpak/app/io.github.wivrn.wivrn:ro
+  - --filesystem=/var/lib/flatpak/app/io.github.wivrn.wivrn:ro
+  # SteamVR (2.19.1 and later run their OpenXR client inside Flatpak): its
+  # runtime manifest and client library, in the Steam folder or installed with
+  # the system in /opt/steamvr (SteamOS on the Steam Frame; nothing where it is
+  # absent), OpenVR's paths file, and the host's /dev/shm, where its client and
+  # server share named objects. The client must be able to write its log:
+  # Steam's logs folder (also SteamVR's logs for debug reports), or
+  # ~/.config/openvr/logs when that one is elsewhere (venture-flatpak.sh). The
+  # same grants Valve reviewed for Chromium's Flatpak on the Steam Frame.
+  # SteamVR in a library elsewhere: the launcher names the flatpak override.
   - --filesystem=xdg-data/Steam/steamapps/common/SteamVR:ro
+  - --filesystem=/opt/steamvr:ro
   - --filesystem=xdg-config/openvr:ro
+  - --filesystem=xdg-config/openvr/logs:create
   - --device=shm
+  - --filesystem=xdg-data/Steam/logs
   # Add games to Steam: the shortcuts and artwork in each Steam user's folder,
   # the logins that name the current user, and Steam's command pipe, which
   # tells whether Steam runs (the sandbox cannot see its process).

@@ -42,6 +42,19 @@ assert "java/dex/classes/ready" in files
 assert ("java/agent/venture-jvmti-agent.dll" if os.name == "nt" else
         "java/agent/venture-jvmti-agent.so") in files
 assert "java/jdk/bin/javac.exe" not in files and "java/jdk/bin/javac" not in files
+# The shipped JRE carries JDK 21's SunEC: without it HTTPS offers no ECDHE and Google,
+# Firebase and most CDNs refuse the handshake (issue 168). Dev runs use the full JDK.
+jre_modules = next(l for l in (layout / "java/jdk/release").read_text().splitlines() if l.startswith("MODULES="))
+assert "jdk.crypto.ec" in jre_modules.split('"')[1].split(), jre_modules
+import subprocess
+try:
+    security = subprocess.run([str(layout / "java/jdk/bin" / ("java.exe" if os.name == "nt" else "java")),
+                               "-XshowSettings:security:all", "-version"], capture_output=True, text=True, timeout=60)
+except OSError:  # a cross-built JRE for another architecture
+    security = None
+if security is not None:
+    assert "Provider name: SunEC" in security.stdout + security.stderr, security.stdout + security.stderr
+    assert "TLS_ECDHE_" in security.stdout + security.stderr, "the shipped JRE enables no ECDHE suite"
 assert (layout / "LICENSE").read_bytes() == (ROOT / "LICENSE").read_bytes()
 assert (layout / "licenses/venture/MIT.txt").read_bytes() == (ROOT / "LICENSES/MIT.txt").read_bytes()
 assert (layout / "licenses/ffmpeg/LGPL-2.1.txt").read_bytes() == (ROOT / "LICENSES/LGPL-2.1.txt").read_bytes()

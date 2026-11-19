@@ -9,7 +9,7 @@ endif()
 project(Venture VERSION 0.3.0 LANGUAGES C CXX)
 # A pre-release label ("alpha.1" makes 0.3.0-alpha.1). It shows in the launcher and
 # its update check; packages keep the plain numbers, which their formats need.
-set(VENTURE_VERSION_SUFFIX "alpha.1")
+set(VENTURE_VERSION_SUFFIX "alpha.2")
 if(VENTURE_VERSION_SUFFIX)
   set(VENTURE_VERSION_FULL "${PROJECT_VERSION}-${VENTURE_VERSION_SUFFIX}")
 else()
@@ -31,6 +31,12 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+# No source here (or in a dependency) is a C++20 module. With C++23 and CMake 3.28+,
+# Ninja would otherwise run clang-scan-deps on every C++ source and collate the
+# results per target (*.ddi -> CXX.dd) before compiling: ~730 CPU-seconds in a fresh
+# Windows tree, and one empty .ddi stopped the whole target ("Syntax error: value,
+# object or array expected"). Set before any target, dependencies included.
+set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 

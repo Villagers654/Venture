@@ -41,6 +41,10 @@ Response post_loopback(uint16_t port, std::string_view path,
 std::string get_public(std::string url, std::stop_token stop = {});
 // Venture's latest published release from GitHub's API; no account data is sent.
 Response get_latest_release(std::stop_token stop = {});
+// One page (1-based, newest first) of Venture's published releases, pre-releases
+// included, for the experimental update channel; no account data is sent.
+inline constexpr int kReleasesPerPage = 30;
+Response get_releases(int page, std::stop_token stop = {});
 // Maven Central's listing of Meta's VR OS Java SDK (com.meta.metavr:metavr-os-jsdk):
 // each Horizon OS SDK release publishes it, so its newest version is the newest OS
 // SDK. No account data is sent.

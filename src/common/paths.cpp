@@ -219,15 +219,29 @@ fs::path game_dir(const fs::path &root, std::string_view package,
 }
 #ifndef _WIN32
 std::string read(const fs::path &file, size_t limit) {
-  std::ifstream in(file, std::ios::binary | std::ios::ate);
+  std::ifstream in(file, std::ios::binary);
   if (!in)
     throw std::runtime_error("Could not read local file.");
-  auto size = in.tellg();
-  if (size < 0 || uint64_t(size) > limit)
+  std::error_code ec;
+  const auto size = fs::file_size(file, ec);
+  if (!ec && size > limit)
     throw std::runtime_error("Local file is too large.");
-  std::string text(static_cast<size_t>(size), '\0');
-  in.seekg(0);
-  if (!in.read(text.data(), text.size()))
+  if (!ec && size > 0) {
+    std::string text(static_cast<size_t>(size), '\0');
+    if (!in.read(text.data(), std::streamsize(text.size())))
+      throw std::runtime_error("Could not read local file.");
+    return text;
+  }
+  // Kernel files (/proc/<pid>/comm, cmdline, stat) report no size and cannot
+  // seek to their end: read them to the end.
+  std::string text;
+  char buffer[16384];
+  while (in.read(buffer, sizeof buffer) || in.gcount() > 0) {
+    text.append(buffer, size_t(in.gcount()));
+    if (text.size() > limit)
+      throw std::runtime_error("Local file is too large.");
+  }
+  if (in.bad())
     throw std::runtime_error("Could not read local file.");
   return text;
 }

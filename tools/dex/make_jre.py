@@ -12,8 +12,13 @@ from convert_apk import DEPS, java_tool
 # (java.awt.image, javax.imageio, java.awt.Font); the JVM runs it headless.
 # java.sql: Android's API has java.sql and javax.sql, and games reach them (Gson's
 # date adapters load java.sql.Time and Timestamp); jlink adds java.transaction.xa.
+# jdk.crypto.ec: JDK 21's SunEC provider (merged into java.base only in JDK 22). Without it
+# JSSE offers no ECDHE group, no ECDHE suite and no ECDSA signature, so Google, Firebase and most
+# CDN servers answer every HTTPS ClientHello with handshake_failure (issue 168), and Android API
+# EC KeyPairGenerator, KeyAgreement and Signature algorithms are missing. Dev runs use the full
+# JDK, so only the shipped JRE showed it.
 # No java.net.http (not in Android's API).
-MODULES = "java.base,java.logging,java.xml,java.desktop,java.sql,jdk.unsupported"
+MODULES = "java.base,java.logging,java.xml,java.desktop,java.sql,jdk.crypto.ec,jdk.unsupported"
 
 
 def main():

@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <vector>
 
 namespace venture::launcher {
 namespace {
@@ -31,7 +32,8 @@ constexpr Rule kRules[] = {
     // posix/window_style.cpp video_unavailable_message().
     {{"needs a wayland session, and no wayland display was reachable"},
      "Venture found no Wayland session to open its window in.",
-     "Log in to a Wayland desktop session (Venture does not use X11), then start Venture again."},
+     "Log in to a Wayland desktop session or start Venture from Steam's game mode (Venture does not use X11), "
+     "then start Venture again."},
     // hle/ovrplatform/account_store.cpp: the game's process could not read the account.
     {{"meta session load failed stage=vault-session", "meta session load failed stage=vault-load",
       "meta session load failed stage=vault-index", "meta session load failed stage=empty-token"},
@@ -42,7 +44,17 @@ constexpr Rule kRules[] = {
     {{"[ovrplatform] initialization failed error=-20001"},
      "The game needs a signed-in Meta account that owns it.",
      "Sign in with the account that owns the game, then start it again."},
-    // xr/host_xr.cpp host_initialization_error().
+    // xr/host_xr.cpp host_initialization_error(): SteamVR's folder outside the
+    // Flatpak's permissions, or a SteamVR too old to run in a sandbox.
+    {{"steamvr's folder is not visible in the venture flatpak"},
+     "SteamVR was the OpenXR runtime, and its folder is not visible in the Venture Flatpak.",
+     "Run the flatpak override command from the runtime log to give Venture read access to SteamVR's folder, or "
+     "use the Venture AppImage."},
+    {{"in the venture flatpak, steamvr 2.19.1 or newer is needed"},
+     "SteamVR did not start its OpenXR client in the Venture Flatpak.",
+     "Update SteamVR to 2.19.1 or newer (older versions do not run in a sandbox) and make sure it is running, or "
+     "use the Venture AppImage."},
+    // Earlier Venture versions' host_initialization_error().
     {{"steamvr does not work with the venture flatpak"},
      "SteamVR was the OpenXR runtime, and the Venture Flatpak cannot reach SteamVR.",
      "Use the Venture AppImage, tarball or your distribution's package with SteamVR, or use WiVRn or Monado with "
@@ -209,5 +221,37 @@ std::optional<Diagnosis> diagnose(std::string_view evidence) {
         return Diagnosis{std::move(cause), std::string(rule.advice)};
       }
   return std::nullopt;
+}
+std::string without_recovered_startup_failures(std::string_view launcher_log) {
+  // core.cpp logs the first line at each start; app.cpp the failure lines.
+  constexpr std::string_view start = "[launcher] Venture native launcher starting.";
+  const auto failure_line = [](std::string_view line) {
+    return line.find("[launcher] Startup failed: ") != std::string_view::npos ||
+           line.find("[launcher] Launcher initialization failed.") != std::string_view::npos ||
+           (line.find("[launcher] Exit ") != std::string_view::npos &&
+            line.find("\"launcher_exception\"") != std::string_view::npos);
+  };
+  std::vector<std::string_view> lines;
+  for (size_t at = 0; at < launcher_log.size();) {
+    auto end = launcher_log.find('\n', at);
+    if (end == std::string_view::npos) end = launcher_log.size();
+    lines.push_back(launcher_log.substr(at, end - at));
+    at = end + 1;
+  }
+  // The last start that did not fail: failures of earlier starts are history.
+  size_t recovered = 0;  // lines before it
+  for (size_t i = 0; i < lines.size(); ++i) {
+    if (lines[i].find(start) == std::string_view::npos) continue;
+    size_t next = i + 1;
+    bool failed = false;
+    for (; next < lines.size() && lines[next].find(start) == std::string_view::npos; ++next)
+      failed = failed || lines[next].find("[launcher] Startup failed: ") != std::string_view::npos;
+    if (!failed) recovered = i;
+    i = next - 1;
+  }
+  std::string out;
+  for (size_t i = 0; i < lines.size(); ++i)
+    if (i >= recovered || !failure_line(lines[i])) out.append(lines[i]).push_back('\n');
+  return out;
 }
 } // namespace venture::launcher

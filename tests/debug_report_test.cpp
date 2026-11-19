@@ -114,6 +114,33 @@ TEST_CASE("debug report: known causes, most specific first") {
                        "install does not have\nI [Process] Application requested process exit 0\n").has_value());
   CHECK(diagnose("The Venture launcher needs a Wayland session, and no Wayland display was reachable")->cause.find(
             "Wayland") != std::string::npos);
+  // A report: three starts in SteamOS's game mode failed, then one from the desktop
+  // ran the game; its report blamed the missing Wayland session.
+  const std::string failed_start =
+      "331.249 31904 I [launcher] Venture native launcher starting.\n"
+      "331.265 31904 E [launcher] Startup failed: The Venture launcher needs a Wayland session, and no Wayland "
+      "display was reachable (check WAYLAND_DISPLAY and XDG_RUNTIME_DIR). (wayland not available)\n"
+      "331.265 31904 E [launcher] Exit {\"children\":[],\"launcherExitCode\":1,\"reason\":\"launcher_exception\","
+      "\"signal\":0}\n"
+      "331.265 31904 E [launcher] Launcher initialization failed. See system graphics configuration and folder "
+      "permissions.\n";
+  const std::string good_start =
+      "491.230 42784 I [launcher] Venture native launcher starting.\n"
+      "491.473 42784 I [library] Found 0 complete installations.\n"
+      "608.012 42784 I [launcher] Exit {\"children\":[],\"launcherExitCode\":0,\"reason\":\"window_close\","
+      "\"signal\":0}\n";
+  const auto recovered = without_recovered_startup_failures(failed_start + failed_start + good_start);
+  CHECK(recovered.find("Startup failed") == std::string::npos);
+  CHECK(recovered.find("launcher_exception") == std::string::npos);
+  CHECK(recovered.find("Found 0 complete installations") != std::string::npos);
+  CHECK_FALSE(diagnose(recovered).has_value());
+  // A failure after the last good start, or with no good start, still counts.
+  CHECK(diagnose(without_recovered_startup_failures(good_start + failed_start)).has_value());
+  CHECK(diagnose(without_recovered_startup_failures(failed_start)).has_value());
+  // A tail that begins inside a failed start.
+  CHECK_FALSE(diagnose(without_recovered_startup_failures(failed_start.substr(failed_start.find('\n') + 1) +
+                                                          good_start))
+                  .has_value());
   CHECK(error_line("Something FAILED here"));
   CHECK(error_line("connection timed out"));
   CHECK_FALSE(error_line("errorless profile, xidle"));

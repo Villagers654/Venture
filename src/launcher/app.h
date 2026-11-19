@@ -88,6 +88,8 @@ private:
   SDL_Texture *steam_logo(int pixels);
   std::map<int, SDL_Texture *> discord_logos_;
   SDL_Texture *discord_logo(int pixels);
+  std::map<int, SDL_Texture *> hearts_; // by pixel size; negative: the outlined heart
+  SDL_Texture *heart(int pixels, bool outline = false);
   std::map<const art::Image *, SDL_Texture *> controller_textures_;
   SDL_Texture *controller_texture(const art::Image *image);
   // Turned controllers: each picture's turn while the page stays open on one
@@ -115,9 +117,15 @@ private:
   // "Change anyway", dropped on Cancel.
   std::function<void()> texture_warning_;
   void draw_texture_warning();
-  // Flatpak with SteamVR as the OpenXR runtime (checked at start): told once
-  // that SteamVR cannot work from the Flatpak, and which builds or runtimes do.
+  // Settings > Updates: choosing Experimental asks first; Stable switches at once.
+  bool experimental_switch_ = false;
+  void draw_experimental_switch();
+  void set_update_channel(bool experimental);
+  // Flatpak with SteamVR as the OpenXR runtime and its folder not in the
+  // sandbox (checked at start): told once, with the flatpak override command
+  // that grants the folder (copyable).
   bool flatpak_steamvr_warning_ = false;
+  std::string flatpak_steamvr_folder_;
   void draw_flatpak_steamvr();
   // The host display of the last game launch (host-display.json), re-read when it changes.
   const library::HostDisplay* host_display();
@@ -168,6 +176,8 @@ private:
     update::Method method = update::Method::page;
     std::optional<update::Asset> file, sums;
     bool downloading = false;
+    // An older release Android would refuse over this APK: offered by its page.
+    bool android_downgrade = false;
     std::shared_ptr<std::atomic<uint64_t>> done = std::make_shared<std::atomic<uint64_t>>(0),
                                            total = std::make_shared<std::atomic<uint64_t>>(0);
     std::string error;

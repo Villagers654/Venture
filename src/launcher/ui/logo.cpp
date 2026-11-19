@@ -37,4 +37,7 @@ SDL_Surface* logo_surface(int pixels) { return rasterize(kVentureLogoSvg, pixels
 SDL_Surface* icon_surface(int pixels) { return rasterize(app_icon_svg(kVentureLogoSvg), pixels); }
 SDL_Surface* steam_logo_surface(int pixels) { return rasterize(kSteamLogoSvg, pixels); }
 SDL_Surface* discord_logo_surface(int pixels) { return rasterize(kDiscordLogoSvg, pixels); }
+SDL_Surface* heart_surface(int pixels, bool outline) {
+  return rasterize(outline ? kHeartOutlineSvg : kHeartSvg, pixels);
+}
 }  // namespace venture::launcher::ui

@@ -17,12 +17,14 @@ struct Options {
   bool cli = false; // venture-cli: no window, its own log
   std::string smoke_view,
       smoke_select,                  // smoke_select: app id whose page to open
-      smoke_install;                 // app id to install through the Install action
+      smoke_install,                 // app id to install through the Install action
+      smoke_version;                 // a version shown as this build's (a pre-release's look); not saved
   fs::path smoke_report, screenshot; // screenshot: PNG of the last smoke frame
   fs::path smoke_import;             // a path scanned as if dropped on the window
   fs::path smoke_debug_report;       // a copy of the debug report (for --smoke-select's game) goes here; "log": into the log
   fs::path smoke_headset;            // Android: the OpenXR runtime an emulator lacks (headset_play.h)
   bool smoke_import_start = false;   // then imports what it found and exits when done
+  bool smoke_device_apps = false;    // --smoke-device-apps: the interface of a host whose games are its own apps (host_features.h)
   std::vector<fs::path> smoke_drops; // --smoke-drop: files dropped on the selected game's page, in order
   bool interactive() const {
     return !automation && !cli && !launch_requested && smoke_seconds == 0 &&
@@ -60,6 +62,8 @@ inline Options parse_options(const std::vector<std::string> &args) {
       out.smoke_view = args[++i];
     else if (args[i] == "--smoke-select" && i + 1 < args.size())
       out.smoke_select = args[++i];
+    else if (args[i] == "--smoke-version" && i + 1 < args.size())
+      out.smoke_version = args[++i];
     else if (args[i] == "--smoke-install" && i + 1 < args.size())
       out.smoke_install = args[++i];
     else if (args[i] == "--smoke-import" && i + 1 < args.size())
@@ -70,6 +74,8 @@ inline Options parse_options(const std::vector<std::string> &args) {
       out.smoke_headset = paths::from_utf8(args[++i]);
     else if (args[i] == "--smoke-drop" && i + 1 < args.size())
       out.smoke_drops.push_back(paths::from_utf8(args[++i]));
+    else if (args[i] == "--smoke-device-apps")
+      out.smoke_device_apps = true;
     else if (args[i] == "--smoke-import-start")
       out.smoke_import_start = true;
     else if (args[i] == "--screenshot" && i + 1 < args.size())

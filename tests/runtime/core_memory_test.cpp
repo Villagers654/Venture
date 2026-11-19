@@ -2,8 +2,11 @@
 #include "core/address_space.h"
 #include "core/error.h"
 #include "platform/memory.h"
+#include "platform/process_info.h"
 #include <array>
+#include <bit>
 #include <cstring>
+#include <memory>
 using namespace venture;
 TEST_CASE("grow-down VMAs map only requested pages and honor the stack limit") {
   auto& space = AddressSpace::get();
@@ -70,6 +73,35 @@ TEST_CASE("guarded stores preserve protections and contain destination faults") 
   CHECK_FALSE(platform::guarded_store(UINT64_MAX - 7, value.data(), sizeof(value)));
   space.free(p);
   CHECK_FALSE(platform::guarded_store(p, value.data(), sizeof(value)));
+}
+TEST_CASE("guarded copies to and from host buffers need no address-space query") {
+  // Guest string and memory calls copy into host stack buffers, and guest
+  // memcpy writes into driver mappings (vkMapMemory). Those addresses must
+  // stay below the limit past which every copy first parses the mappings.
+  const auto limit = platform::host_user_address_limit();
+  CHECK(std::has_single_bit(limit));
+  CHECK(limit >= (std::uint64_t{1} << 39));
+  std::array<char, 64> local{};
+  auto heap = std::make_unique<char[]>(64u << 20);  // large enough to be its own mapping
+  CHECK(h2g(local.data()) + local.size() <= limit);
+  CHECK(h2g(heap.get()) + (64u << 20) <= limit);
+  auto& space = AddressSpace::get();
+  const auto p = space.allocate(8192, kProtRead | kProtWrite, "[host copy test]");
+  REQUIRE(p != 0);
+  std::memcpy(g2h<char>(p), "a guest string longer than eight bytes", 39);
+  platform::ProcessActivity before{}, after{};
+  const bool counted = platform::process_activity(before) && before.read_bytes;
+  platform::NativeMemoryFault fault;
+  for (int i = 0; i < 256; ++i) {
+    REQUIRE(platform::read_memory(p, local.data(), 39));
+    REQUIRE(platform::native_copy(h2g(heap.get()) + 4096 * i, p, 39, fault));
+  }
+  CHECK(std::memcmp(local.data(), "a guest string", 14) == 0);
+  CHECK(std::memcmp(heap.get() + 4096 * 255, "a guest string", 14) == 0);
+  // Linux counts the bytes read from files (rchar), /proc/self/maps included:
+  // a query per copy would read megabytes here.
+  if (counted && platform::process_activity(after)) CHECK(after.read_bytes - before.read_bytes < 64 * 1024);
+  space.free(p);
 }
 TEST_CASE("core memory 4 KiB splits, protections and fixed replacement") {
   auto& space = AddressSpace::get();

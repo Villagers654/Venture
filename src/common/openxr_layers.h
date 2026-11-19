@@ -42,8 +42,9 @@ bool environment_set(const char *name);
 // Installed OpenXR runtimes, for choosing the one a game runs on (the loader
 // takes XR_RUNTIME_JSON over the system's active runtime). Windows: HKLM then
 // HKCU SOFTWARE\Khronos\OpenXR\1\AvailableRuntimes values whose data is 0;
-// elsewhere openxr/1/*.json in the XDG config and data dirs and SteamVR's in
-// the Steam folder. Only manifests that exist, each once, active first.
+// elsewhere openxr/1/*.json in the XDG config and data dirs and SteamVR's for
+// this CPU in the runtime folders OpenVR's path registry names and in the Steam
+// folder. Only manifests that exist, each once, active first.
 struct Runtime {
   std::filesystem::path manifest;
   std::string name;  // the manifest's runtime name, else its file name

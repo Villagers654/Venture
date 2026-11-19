@@ -388,6 +388,9 @@ __declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 1;
 int main(int argc, char** argv) {
   if (auto status = venture::platform::run_runtime_dump_helper(argc, argv))
     venture::platform::terminate_runtime_process(*status);
+  // The desktop mirror's window inside gamescope (SteamOS's game mode) when
+  // started without the launcher's environment. Before any thread (setenv).
+  venture::environment::use_gamescope_wayland();
   venture::platform::pre_reserve_low_memory();
   struct ProfileExit { ~ProfileExit() { venture::profile::stop(); } } profile_exit;
   try {

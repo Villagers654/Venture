@@ -16,6 +16,11 @@ struct DebugReport {
   // Venture libraries inside the game.
   std::string headset;
   std::vector<fs::path> headset_logs;
+  // Games run in Venture's runtime here (HostFeatures::runtime). False where
+  // they are the device's own apps: the report then leaves out the PC's VR
+  // runtime, its processes, the launch environment and the runtime settings,
+  // and names the Headset section for what happened.
+  bool runtime = true;
   // Text removed wherever it appears: account ids, keys, aliases and names.
   std::vector<std::string> private_text;
 };

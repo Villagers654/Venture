@@ -97,6 +97,12 @@ void vertical_fade(ImDrawList* dl, ImVec2 a, ImVec2 b, ImU32 top, ImU32 bottom);
 // Top of a line of text whose cap height is centered in [top, top+height];
 // with height 0 the caps center on `top`.
 float text_y(ImFont* font, float size, float top, float height = 0);
+// The drawn (painted) horizontal extent of `text` from its origin: the first
+// glyph's left edge and the last glyph's right edge, in pixels.
+ImVec2 ink_span(ImFont* font, float size, std::string_view text);
+// The y that centers capital letters' painted height ("E") in [top, top + height],
+// unrounded, for small text in tight pills.
+float caps_y(ImFont* font, float size, float top, float height);
 // The cap-height center of text whose line box starts at `top`.
 float cap_center(ImFont* font, float size, float top);
 // A glyph whose ink is centered on `center`.

@@ -281,6 +281,121 @@ public final class FrameworkTest {
     @dalvik.annotation.optimization.CriticalNative @Deprecated public static native long tagged(long value);
     public static native void plain();
   }
+  private static String jsonWritten(java.util.function.Consumer<android.util.JsonWriter> body) {
+    var text = new java.io.StringWriter();
+    body.accept(new android.util.JsonWriter(text));
+    return text.toString();
+  }
+  private interface JsonStep { void run(android.util.JsonReader reader) throws java.io.IOException; }
+  private static Throwable jsonFailure(String json, boolean lenient, JsonStep step) {
+    var reader = new android.util.JsonReader(new java.io.StringReader(json));
+    reader.setLenient(lenient);
+    try { step.run(reader); return null; } catch (Throwable t) { return t; }
+  }
+  // android.util.JsonWriter/JsonReader (API 11): Firebase's JSON encoders write Crashlytics and
+  // session events with them, and Pets & Stuff quit at start on the missing class (issue 168).
+  private static void jsonStreams() throws Exception {
+    var text = new java.io.StringWriter();
+    var writer = new android.util.JsonWriter(text);
+    writer.beginObject().name("s").value("q\"b\\/\t\n\u0001 <")
+        .name("l").value(Long.MIN_VALUE).name("d").value(1.5).name("n").value((Number) 7)
+        .name("b").value(true).name("z").nullValue().name("x").value((String) null)
+        .name("a").beginArray().endArray().name("o").beginObject().endObject().endObject();
+    writer.close();
+    check(text.toString().equals("{\"s\":\"q\\\"b\\\\/\\t\\n\\u0001\\u2028<\",\"l\":-9223372036854775808,"
+            + "\"d\":1.5,\"n\":7,\"b\":true,\"z\":null,\"x\":null,\"a\":[],\"o\":{}}"),
+        "JsonWriter writes compact JSON with Android's escapes: " + text);
+    check(jsonWritten(w -> {
+            try {
+              w.setIndent("  ");
+              w.beginArray().value(1).beginObject().name("k").value("v").endObject().endArray();
+            } catch (java.io.IOException e) { throw new java.io.UncheckedIOException(e); }
+          }).equals("[\n  1,\n  {\n    \"k\": \"v\"\n  }\n]"),
+        "JsonWriter indents nested values and separates names with ': '");
+    var strict = new android.util.JsonWriter(new java.io.StringWriter());
+    boolean bareValue = false, nan = false, nesting = false, incomplete = false, second = false;
+    try { strict.value("top"); } catch (IllegalStateException expected) { bareValue = true; }
+    strict.beginArray();
+    try { strict.value(Double.NaN); } catch (IllegalArgumentException expected) { nan = true; }
+    try { strict.name("k"); } catch (IllegalStateException expected) { nesting = true; }
+    try { strict.close(); } catch (java.io.IOException expected) { incomplete = true; }
+    var single = new android.util.JsonWriter(new java.io.StringWriter());
+    single.beginArray().endArray();
+    try { single.beginArray(); } catch (IllegalStateException expected) { second = true; }
+    check(bareValue && nan && nesting && incomplete && second,
+        "strict JsonWriter refuses bare values, NaN, misplaced names, unfinished documents and second values");
+    var lenientText = new java.io.StringWriter();
+    var lenientWriter = new android.util.JsonWriter(lenientText);
+    lenientWriter.setLenient(true);
+    lenientWriter.value(Double.POSITIVE_INFINITY);
+    check(lenientWriter.isLenient() && lenientText.toString().equals("Infinity"),
+        "lenient JsonWriter writes a bare non-finite top-level value");
+
+    var reader = new android.util.JsonReader(new java.io.StringReader(
+        " {\"s\":\"a\\u0041\\n\\/\\\"\", \"i\":42, \"big\":9007199254740993, \"d\":-1.25e1, \"t\":true,"
+        + " \"f\":false, \"z\":null, \"arr\":[1, \"2\", 3.0], \"skip\":{\"x\":[{}, []]}, \"q\":\"12\"} "));
+    reader.beginObject();
+    check(reader.nextName().equals("s") && reader.peek() == android.util.JsonToken.STRING
+            && reader.nextString().equals("aA\n/\""), "JsonReader decodes string escapes");
+    check(reader.nextName().equals("i") && reader.peek() == android.util.JsonToken.NUMBER && reader.nextInt() == 42,
+        "JsonReader reads ints");
+    check(reader.nextName().equals("big") && reader.nextLong() == 9007199254740993L, "JsonReader reads longs exactly");
+    reader.nextName();
+    boolean notLong = false;
+    try { reader.nextLong(); } catch (NumberFormatException expected) { notLong = true; }
+    check(notLong && reader.nextString().equals("-1.25e1"),
+        "a fractional number is not a long, stays current and reads as its literal");
+    check(reader.nextName().equals("t") && reader.nextBoolean() && reader.nextName().equals("f") && !reader.nextBoolean(),
+        "JsonReader reads booleans");
+    boolean wrongType = false;
+    check(reader.nextName().equals("z") && reader.peek() == android.util.JsonToken.NULL, "JsonReader peeks null");
+    try { reader.nextString(); } catch (IllegalStateException expected) { wrongType = true; }
+    reader.nextNull();
+    check(wrongType, "nextString on null throws IllegalStateException");
+    check(reader.nextName().equals("arr"), "array name");
+    reader.beginArray();
+    check(reader.nextInt() == 1 && reader.nextInt() == 2 && reader.nextLong() == 3 && !reader.hasNext(),
+        "quoted and integral double numbers read as ints and longs");
+    reader.endArray();
+    check(reader.nextName().equals("skip"), "skip name");
+    reader.skipValue();
+    check(reader.nextName().equals("q") && reader.nextDouble() == 12.0 && !reader.hasNext(),
+        "skipValue skips a nested value and a numeric string reads as a double");
+    reader.endObject();
+    check(reader.peek() == android.util.JsonToken.END_DOCUMENT, "the document ends");
+    reader.close();
+
+    check(jsonFailure("\"bare\"", false, r -> r.peek()) instanceof android.util.MalformedJsonException
+            && jsonFailure("{'a':1}", false, r -> { r.beginObject(); r.nextName(); }) instanceof android.util.MalformedJsonException
+            && jsonFailure("[1,]", false, r -> { r.beginArray(); r.nextInt(); r.peek(); }) instanceof android.util.MalformedJsonException
+            && jsonFailure("[] []", false, r -> { r.beginArray(); r.endArray(); r.peek(); }) instanceof android.util.MalformedJsonException
+            && jsonFailure("[NaN]", false, r -> { r.beginArray(); r.nextDouble(); }) instanceof android.util.MalformedJsonException
+            && jsonFailure("[\"NaN\"]", false, r -> { r.beginArray(); r.nextDouble(); }) instanceof android.util.MalformedJsonException
+            && jsonFailure("[\"01\"]", false, r -> { r.beginArray(); r.nextInt(); }) instanceof android.util.MalformedJsonException
+            && jsonFailure("[\"abc", false, r -> { r.beginArray(); r.nextString(); }) instanceof android.util.MalformedJsonException
+            && jsonFailure("[1", false, r -> { r.beginArray(); r.nextInt(); r.hasNext(); }) instanceof java.io.EOFException
+            && jsonFailure("", false, r -> r.peek()) instanceof java.io.EOFException
+            && jsonFailure("[1]", false, r -> r.beginObject()) instanceof IllegalStateException,
+        "strict JsonReader refuses lenient syntax, NaN, octal, unterminated input and wrong token kinds");
+    var loose = new android.util.JsonReader(new java.io.StringReader(
+        ")]}'\n{a=>1; 'b'=x # comment\n, c:[1,,2,] /* block */ // line\n, d:NaN} true"));
+    loose.setLenient(true);
+    loose.beginObject();
+    check(loose.nextName().equals("a") && loose.nextInt() == 1 && loose.nextName().equals("b")
+            && loose.peek() == android.util.JsonToken.STRING && loose.nextString().equals("x"),
+        "lenient JsonReader takes the non-execute prefix, unquoted and single-quoted names, => and ;");
+    check(loose.nextName().equals("c"), "lenient name c");
+    loose.beginArray();
+    loose.nextInt();
+    loose.nextNull();
+    loose.nextInt();
+    loose.nextNull();
+    loose.endArray();
+    check(loose.nextName().equals("d") && Double.isNaN(loose.nextDouble()), "lenient JsonReader reads NaN");
+    loose.endObject();
+    check(loose.nextBoolean() && loose.peek() == android.util.JsonToken.END_DOCUMENT,
+        "lenient JsonReader takes omitted array elements as null, comments and several top-level values");
+  }
   private static BinaryResources.Node manifestNode(String tag, String... attributes) throws Exception {
     var constructor = BinaryResources.Node.class.getDeclaredConstructor(String.class);
     constructor.setAccessible(true);
@@ -590,6 +705,85 @@ public final class FrameworkTest {
       thread.quitSafely();
       thread.join(5000);
     }
+  }
+  // USB-MIDI libraries list USB and MIDI devices at start (a UE5 rhythm game's
+  // MIDI plugin stopped on NoClassDefFoundError UsbManager). No Android USB host
+  // or MIDI device is exposed, so both services answer as a device without them.
+  private static void usbAndMidi(android.content.Context context) throws Exception {
+    var usb = (android.hardware.usb.UsbManager) context.getSystemService(android.content.Context.USB_SERVICE);
+    check(usb != null && context.getSystemService(android.hardware.usb.UsbManager.class) == usb,
+        "the USB service is a cached context service, by name and by class");
+    var devices = usb.getDeviceList();
+    check(devices.isEmpty() && devices != usb.getDeviceList() && usb.getAccessoryList() == null,
+        "no USB device is attached (a fresh map each call) and no accessory is (null)");
+    var pm = context.getPackageManager();
+    check(!pm.hasSystemFeature(android.content.pm.PackageManager.FEATURE_USB_HOST)
+        && !pm.hasSystemFeature(android.content.pm.PackageManager.FEATURE_USB_ACCESSORY)
+        && !pm.hasSystemFeature(android.content.pm.PackageManager.FEATURE_MIDI), "no USB host, accessory or MIDI feature");
+    var device = new android.hardware.usb.UsbDevice("/dev/bus/usb/001/002", 0x0499, 0x1000,
+        android.hardware.usb.UsbConstants.USB_CLASS_PER_INTERFACE, 0, 0, "Maker", "Keys", "1.00", null);
+    var configuration = new android.hardware.usb.UsbConfiguration(1, null, 0x80, 50);
+    var midiInterface = new android.hardware.usb.UsbInterface(1, 0, null, android.hardware.usb.UsbConstants.USB_CLASS_AUDIO, 3, 0);
+    midiInterface.setEndpoints(new android.os.Parcelable[] {new android.hardware.usb.UsbEndpoint(0x81,
+        android.hardware.usb.UsbConstants.USB_ENDPOINT_XFER_BULK, 64, 0)});
+    configuration.setInterfaces(new android.os.Parcelable[] {midiInterface});
+    device.setConfigurations(new android.os.Parcelable[] {configuration});
+    var endpoint = device.getInterface(0).getEndpoint(0);
+    check(device.getDeviceId() == 1002 && device.getInterfaceCount() == 1 && configuration.getMaxPower() == 100
+        && endpoint.getDirection() == android.hardware.usb.UsbConstants.USB_DIR_IN && endpoint.getEndpointNumber() == 1
+        && endpoint.getType() == android.hardware.usb.UsbConstants.USB_ENDPOINT_XFER_BULK,
+        "USB descriptors decode as AOSP's classes do");
+    check(!usb.hasPermission(device) && usb.openDevice(device) == null, "no USB device can be opened");
+    var thread = new HandlerThread("usb-permission");
+    thread.start();
+    try {
+      var answer = new CompletableFuture<android.content.Intent>();
+      var receiver = new android.content.BroadcastReceiver() {
+        public void onReceive(android.content.Context c, android.content.Intent intent) { answer.complete(intent); }
+      };
+      context.registerReceiver(receiver, new android.content.IntentFilter("test.USB_PERMISSION"), null,
+          new Handler(thread.getLooper()));
+      var request = new android.content.Intent("test.USB_PERMISSION").putExtra("mine", 1)
+          .putExtra(android.hardware.usb.UsbManager.EXTRA_PERMISSION_GRANTED, "kept");
+      usb.requestPermission(device, android.app.PendingIntent.getBroadcast(context, 0, request,
+          android.app.PendingIntent.FLAG_MUTABLE));
+      var result = answer.get(2, TimeUnit.SECONDS);
+      check("test.USB_PERMISSION".equals(result.getAction()) && result.getIntExtra("mine", 0) == 1
+          && "kept".equals(result.getStringExtra(android.hardware.usb.UsbManager.EXTRA_PERMISSION_GRANTED))
+          && device.equals(result.getParcelableExtra(android.hardware.usb.UsbManager.EXTRA_DEVICE)),
+          "a mutable PendingIntent merges the fill-in extras under its own");
+      var denied = new CompletableFuture<android.content.Intent>();
+      var deniedReceiver = new android.content.BroadcastReceiver() {
+        public void onReceive(android.content.Context c, android.content.Intent intent) { denied.complete(intent); }
+      };
+      context.registerReceiver(deniedReceiver, new android.content.IntentFilter("test.USB_DENIED"), null,
+          new Handler(thread.getLooper()));
+      usb.requestPermission(device, android.app.PendingIntent.getBroadcast(context, 0,
+          new android.content.Intent("test.USB_DENIED"), android.app.PendingIntent.FLAG_MUTABLE));
+      check(!denied.get(2, TimeUnit.SECONDS).getBooleanExtra(android.hardware.usb.UsbManager.EXTRA_PERMISSION_GRANTED, true),
+          "a USB permission request is answered as denied");
+      context.unregisterReceiver(receiver);
+      context.unregisterReceiver(deniedReceiver);
+    } finally {
+      thread.quitSafely();
+      thread.join(5000);
+    }
+    var midi = (android.media.midi.MidiManager) context.getSystemService(android.content.Context.MIDI_SERVICE);
+    check(midi != null && context.getSystemService(android.media.midi.MidiManager.class) == midi,
+        "the MIDI service is a cached context service, by name and by class");
+    var added = new java.util.concurrent.atomic.AtomicInteger();
+    var callback = new android.media.midi.MidiManager.DeviceCallback() {
+      @Override public void onDeviceAdded(android.media.midi.MidiDeviceInfo info) { added.incrementAndGet(); }
+    };
+    midi.registerDeviceCallback(callback, null);
+    midi.registerDeviceCallback(android.media.midi.MidiManager.TRANSPORT_MIDI_BYTE_STREAM, Runnable::run, callback);
+    check(midi.getDevices().length == 0
+        && midi.getDevicesForTransport(android.media.midi.MidiManager.TRANSPORT_UNIVERSAL_MIDI_PACKETS).isEmpty()
+        && added.get() == 0, "no MIDI device is listed and callbacks register without one being reported");
+    midi.unregisterDeviceCallback(callback);
+    var opened = new java.util.concurrent.atomic.AtomicBoolean(true);
+    midi.openBluetoothDevice(null, d -> opened.set(d != null), null);
+    check(!opened.get(), "a Bluetooth MIDI device does not open");
   }
   // Process-local system services: PendingIntent kinds, alarms, notifications, OBB storage.
   private static void platformServices(android.content.Context context) throws Exception {
@@ -2044,6 +2238,7 @@ public final class FrameworkTest {
     check(AppMain.quitProgress() == 0 && AppMain.quitNativeCount() == 0,
         "default lifecycle has no menu termination admission state before a quit");
     questTlsClient();
+    jsonStreams();
     disabledTelemetry();
     androidCAStore();
     textToSpeech();
@@ -2302,6 +2497,7 @@ public final class FrameworkTest {
     filter.children.add(manifestNode("category", "name", "test.category"));
     declaredActivity.children.add(filter);
     app.children.add(declaredActivity);
+    app.children.add(manifestNode("receiver", "name", ".Measure"));
     manifest.children.add(app);
     var packageManager = new android.content.pm.PackageManager(new PackageModel(manifest));
     String bodyPermission = "com.oculus.permission.BODY_TRACKING";
@@ -2377,6 +2573,22 @@ public final class FrameworkTest {
           android.content.pm.PackageManager.VERSION_CODE_HIGHEST), 0);
       check(false, "an absent versioned package is not found");
     } catch (android.content.pm.PackageManager.NameNotFoundException expected) {}
+    // Google measurement reads its manifest receiver at start (Pets & Stuff, issue 168).
+    var receiverInfo = packageManager.getReceiverInfo(
+        new android.content.ComponentName("test.intent", "test.intent.Measure"), 0);
+    check(receiverInfo.name.equals("test.intent.Measure") && receiverInfo.packageName.equals("test.intent")
+            && receiverInfo.enabled && receiverInfo == packageManager.getReceiverInfo(
+                new android.content.ComponentName("test.intent", ".Measure"),
+                android.content.pm.PackageManager.ComponentInfoFlags.of(0)),
+        "getReceiverInfo answers a manifest receiver");
+    for (var absent : List.of(new android.content.ComponentName("test.intent", "test.intent.Main"),
+                              new android.content.ComponentName("test.intent", "test.intent.Absent"),
+                              new android.content.ComponentName("com.example.other", "test.intent.Measure"))) {
+      try {
+        packageManager.getReceiverInfo(absent, 0);
+        check(false, "getReceiverInfo finds no receiver " + absent);
+      } catch (android.content.pm.PackageManager.NameNotFoundException expected) {}
+    }
     // API 33's long-flag queries (AndroidX ProfileInstaller in Pinball FX VR).
     check(packageManager.getPackageInfo("test.intent",
               android.content.pm.PackageManager.PackageInfoFlags.of(0)).packageName.equals("test.intent")
@@ -3495,6 +3707,7 @@ public final class FrameworkTest {
     broadcasts();
     cancelledBroadcasts();
     platformServices(obbContext);
+    usbAndMidi(obbContext);
     // UE 5.4 BatteryReceiver/VolumeReceiver register with API 26 flags on the GameThread.
     var battery = obbContext.registerReceiver(null, new android.content.IntentFilter(android.content.Intent.ACTION_BATTERY_CHANGED),
         android.content.Context.RECEIVER_EXPORTED);

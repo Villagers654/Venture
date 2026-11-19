@@ -120,6 +120,13 @@ struct Settings {
   // The launcher asks GitHub for a newer release at start; "Not now" skips that version.
   bool check_updates = true;
   std::string dismissed_update;
+  // The update channel (Settings > Updates): experimental also offers
+  // pre-releases. Each new version that runs sets it from its own version
+  // (a "-suffix" pre-release is experimental), so installing either kind of
+  // build over the other switches it; a choice in Settings holds until then.
+  // `last_run_version` is the version that ran last.
+  bool experimental_updates = false;
+  std::string last_run_version;
   bool add_games_to_steam = true;
   // A newly installed game goes to Steam unless the user opts out: the
   // default, and whether installing asks (a checkbox in the GUI). Games left

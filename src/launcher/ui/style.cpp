@@ -419,6 +419,29 @@ bool painted_ink(ImFont* font, float size, ImWchar cp, ImVec4* out) {
 }
 }  // namespace
 
+ImVec2 ink_span(ImFont* font, float size, std::string_view text) {
+  const ImVec2 box = measure(font, size, text);
+  if (text.empty()) return {0, 0};
+  const char *at = text.data(), *end = at + text.size(), *last_at = at;
+  unsigned int first = 0, last = 0;
+  at += ImTextCharFromUtf8(&first, at, end);
+  last = first;
+  while (at < end) {
+    last_at = at;
+    at += ImTextCharFromUtf8(&last, at, end);
+  }
+  ImVec4 a, b;
+  if (!painted_ink(font, size, ImWchar(first), &a) || !painted_ink(font, size, ImWchar(last), &b)) return {0, box.x};
+  const float before_last = measure(font, size, std::string_view(text.data(), size_t(last_at - text.data()))).x;
+  return {a.x, before_last + b.z};
+}
+
+float caps_y(ImFont* font, float size, float top, float height) {
+  ImVec4 h;
+  if (!painted_ink(font, size, 'E', &h)) return text_y(font, size, top, height);
+  return top + (height - (h.w - h.y)) * 0.5f - h.y;
+}
+
 float text_y(ImFont* font, float size, float top, float height) {
   // Center the cap height (the "H"), not the line box: Segoe UI's box has
   // more room above the caps than below the baseline, so box centering sits

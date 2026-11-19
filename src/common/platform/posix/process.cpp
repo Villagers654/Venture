@@ -1,10 +1,12 @@
 #include "common/process.h"
 #include "common/platform/posix/dbus.h"
+#include "common/environment.h"
 #ifdef __ANDROID__
 #include "common/platform/android/jni.h"
 #endif
 #include <algorithm>
 #include <csignal>
+#include <cstdlib>
 #include <fcntl.h>
 #include <poll.h>
 #include <spawn.h>
@@ -254,6 +256,12 @@ void reveal_file(const fs::path &file) {
   if (!portal_open(file, 0, dbus::portal_open_directory)) open_folder(file.parent_path());
 }
 void open_url(const std::string &url) {
+  // gamescope (SteamOS's game mode) shows only the windows of the Steam game
+  // in front, and counts a window as that game's when its process descends
+  // from it: a browser the portal starts is the portal's and stays hidden.
+  // Started here it shows. A sandbox can only ask the portal.
+  const char *sandbox = std::getenv("FLATPAK_ID");
+  if (environment::inside_gamescope() && !(sandbox && *sandbox) && xdg_open(url.c_str())) return;
   if (!dbus::portal_open_uri(url) && !xdg_open(url.c_str()))
     throw std::runtime_error("Could not open the link.");
 }

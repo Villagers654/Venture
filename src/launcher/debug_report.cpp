@@ -1,5 +1,6 @@
 #include "launcher/debug_report.h"
 #include "launcher/diagnosis.h"
+#include "launcher/updater.h"
 #include "common/environment.h"
 #include "common/http/client.h"
 #include "common/library/library.h"
@@ -227,16 +228,25 @@ void system_section(std::string &out) {
 void xr_section(std::string &out) {
   xr_services(out);
   std::vector<fs::path> config;
-  if (const char *c = std::getenv("XDG_CONFIG_HOME"); c && *c) config.emplace_back(c);
-  else if (const char *h = std::getenv("HOME")) config.push_back(fs::path(h) / ".config");
+  // Flatpak moves XDG_CONFIG_HOME into the app's folder; the user's own is in
+  // ~/.config, and the host's /etc under /run/host.
+  const bool sandboxed = std::getenv("FLATPAK_ID") != nullptr;
+  const char *xdg_config = std::getenv("XDG_CONFIG_HOME");
+  if (xdg_config && *xdg_config) config.emplace_back(xdg_config);
+  if (const char *h = std::getenv("HOME"); h && (sandboxed || !xdg_config || !*xdg_config))
+    config.push_back(fs::path(h) / ".config");
+  if (sandboxed) config.emplace_back("/run/host/etc/xdg");
   config.emplace_back("/etc/xdg");
   config.emplace_back("/etc");
   std::error_code ec;
   for (const auto &dir : config) {
     auto active = dir / "openxr/1/active_runtime.json";
-    if (!fs::exists(active, ec)) continue;
+    if (!fs::exists(active, ec) && !fs::is_symlink(active, ec)) continue;
+    // A link whose target the sandbox does not show names that target.
     auto target = fs::canonical(active, ec);
-    out += std::format("Active OpenXR runtime: {} -> {}\n", paths::utf8(active), paths::utf8(target));
+    if (ec) target = fs::read_symlink(active, ec);
+    out += std::format("Active OpenXR runtime: {} -> {}{}\n", paths::utf8(active), paths::utf8(target),
+                       fs::exists(active, ec) ? "" : " (not visible here)");
     break;
   }
   std::vector<fs::path> data;
@@ -852,6 +862,8 @@ void processes_section(std::string &out) {
     if (found.size() >= 30) break;
   }
   out += "\n=== VR processes running now ===\n";
+  // Flatpak gives the sandbox its own process list: the host's SteamVR or Steam is not in it.
+  if (std::getenv("FLATPAK_ID")) out += "(inside the Flatpak sandbox: host processes are not visible)\n";
   for (const auto &p : found) out += p + "\n";
   if (found.empty()) out += "(none)\n";
 }
@@ -922,14 +934,20 @@ std::string evidence_section(std::string &out, const Window &window, [[maybe_unu
     for (const auto &l : lines) evidence += l + "\n";
     evidence_from(out, label, file, lines);
   };
-  // SteamVR's logs (vrserver, vrcompositor, vrclient_*, vrmonitor...).
-  if (auto steam = steam_library::discover_root(); !steam.empty()) {
-    static const std::regex steam_log(R"(^(vr|openxr|vulkan|console|stderr|connection))", std::regex::icase);
-    for (const auto &file : files_in_window(steam / "logs", window, 6, [&](const fs::path &p) {
-           auto n = lower_name(p);
-           return (n.ends_with(".txt") || n.ends_with(".log")) && std::regex_search(n, steam_log);
-         }))
-      add("SteamVR", file, log_errors(file, 5, false));
+  // SteamVR's logs (vrserver, vrcompositor, vrclient_*, vrmonitor...), and the
+  // client's own where VR_LOG_PATH moves it (the Flatpak's entry point does
+  // when Steam's logs are not writable there).
+  {
+    static const std::regex steam_log(R"(^(vr|xr|openxr|vulkan|console|stderr|connection))", std::regex::icase);
+    std::vector<fs::path> dirs;
+    if (auto steam = steam_library::discover_root(); !steam.empty()) dirs.push_back(steam / "logs");
+    if (const char *log = std::getenv("VR_LOG_PATH"); log && *log) dirs.push_back(paths::from_utf8(log));
+    for (const auto &dir : dirs)
+      for (const auto &file : files_in_window(dir, window, 6, [&](const fs::path &p) {
+             auto n = lower_name(p);
+             return (n.ends_with(".txt") || n.ends_with(".log")) && std::regex_search(n, steam_log);
+           }))
+        add("SteamVR", file, log_errors(file, 5, false));
   }
 #ifdef _WIN32
   windows_events(out, evidence, window);
@@ -1111,7 +1129,15 @@ fs::path write_debug_report(const DebugReport &request) {
   auto now = std::chrono::system_clock::now();
   std::string out = "Venture debug report\n";
   out += std::format("Created: {}\n", local_time(now, "%Y-%m-%d %H:%M:%S %z"));
-  out += std::format("Venture: {}\n", request.version);
+  out += std::format("Venture: {} ({} build)\n", request.version,
+                     update::prerelease(request.version) ? "experimental" : "stable");
+  try {
+    const auto settings = library::Settings::load(request.data);
+    out += std::format("Update channel: {}{}\n", settings.experimental_updates ? "experimental" : "stable",
+                       settings.check_updates ? "" : " (update checks off)");
+  } catch (const std::exception &e) {
+    out += std::format("Update channel: unknown (settings.json could not be read: {})\n", e.what());
+  }
   if (package.empty()) out += "Game: none launched yet\n";
   else if (request.game.empty()) out += std::format("Game: {}\n", package);
   else out += std::format("Game: {} ({})\n", request.game, package);
@@ -1140,7 +1166,13 @@ fs::path write_debug_report(const DebugReport &request) {
   openxr_layer_section(layer_lines, broken_layers);
   std::vector<std::string> steps;
   out += "\n=== Likely cause ===\n";
-  if (!run) {
+  if (!run && !request.runtime) {
+    // Each game is the device's own app: its run is in the Headset section
+    // (the check, and the logs of Venture's libraries inside the game).
+    out += "Games run as their own apps on this headset. The Headset section below has what this headset offers, "
+           "how each game is set up for it, and what Venture's libraries inside the game logged.\n";
+    steps.push_back("If a game has the problem, start it from Venture, reproduce the problem, then send a new report.");
+  } else if (!run) {
     out += package.empty() ? "No game has been started with this Venture yet.\n"
                            : std::format("{} has no run to report yet.\n", request.game.empty() ? package : request.game);
     steps.push_back("Start the game that has the problem, then send a new report.");
@@ -1189,7 +1221,9 @@ fs::path write_debug_report(const DebugReport &request) {
                // Another game's "<game> stopped: <why>" line is not this run's cause (Table Troopers'
                // crash was reported for I Am Cat).
                std::string launcher;
-               std::istringstream lines(tail_log(logs / "launcher.log", 64 << 10));
+               // A launcher start that failed (no Wayland display) and a later one that
+               // ran the game: the old failure is not this run's cause.
+               std::istringstream lines(without_recovered_startup_failures(tail_log(logs / "launcher.log", 64 << 10)));
                for (std::string line; std::getline(lines, line);) {
                  const auto at = line.find("[launcher] "), stop = line.find(" stopped: ");
                  if (at != std::string::npos && stop != std::string::npos && stop > at) {
@@ -1214,15 +1248,19 @@ fs::path write_debug_report(const DebugReport &request) {
   out += "\n=== System ===\n";
   system_section(out);
   if (!request.headset.empty()) out += "\n=== Headset ===\n" + request.headset;
-  out += "\n=== VR runtime ===\n";
-  xr_section(out);
-  out += layer_lines;
-  processes_section(out);
-  out += "\n=== Environment ===\n";
-  environment_section(out);
-  out += "\n=== Settings for this game ===\n";
-  settings_section(out, request.data, request.app_id);
+  // The PC's VR runtime and Venture's runtime settings, where games run in it.
+  if (request.runtime) {
+    out += "\n=== VR runtime ===\n";
+    xr_section(out);
+    out += layer_lines;
+    processes_section(out);
+    out += "\n=== Environment ===\n";
+    environment_section(out);
+    out += "\n=== Settings for this game ===\n";
+    settings_section(out, request.data, request.app_id);
+  }
   for (const char *name : {"settings.json", "host-displays.json", "passthrough.json"}) {
+    if (!request.runtime && std::string_view(name) != "settings.json") continue;
     std::string text = read_file(request.data / name);
     if (text.empty()) continue;
     out += std::format("\n=== {} ===\n{}", name, text);

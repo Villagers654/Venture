@@ -35,6 +35,8 @@ int main(int argc, char **argv) {
   return venture::launcher::run(venture::launcher::parse_options({argv, argv + argc}));
 }
 #else
+#include "common/environment.h"
+#include "common/steam_library.h"
 #include "launcher/auth_browser.h"
 #include <cstdio>
 #include <cstring>
@@ -53,6 +55,13 @@ int main(int argc, char **argv) {
     } catch (...) {
       return 1;
     }
+  // A sync after a Steam restart that outlives Steam (steam_library.h).
+  if (argc == 3 && std::strcmp(argv[1], "--steam-sync-after-exit") == 0)
+    return venture::steam_library::run_handoff(argv[2]);
+  // gamescope (SteamOS's game mode) names its Wayland display only in
+  // GAMESCOPE_WAYLAND_DISPLAY: the launcher, its sign-in window, file dialogs
+  // and the games it starts open their windows there. Before any thread.
+  venture::environment::use_gamescope_wayland();
   if (int helper = venture::launcher::auth_browser_helper(argc, argv); helper >= 0)
     return helper;
   return venture::launcher::run(venture::launcher::parse_options({argv, argv + argc}));

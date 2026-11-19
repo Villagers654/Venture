@@ -1,7 +1,7 @@
 #version 450
 // One composition layer drawn into one eye of a projection layer, for a layer
-// the host cannot compose itself: a sphere (equirect), a cylinder, a cube or a
-// plane given by a VrApi tan-angle matrix. Each pixel's ray is taken into the
+// the host cannot compose itself: a sphere (equirect), a cylinder, a cube, a
+// quad, or a plane given by a VrApi tan-angle matrix (also a projection view). Each pixel's ray is taken into the
 // layer's shape space, where the shapes are canonical (a unit cylinder about
 // +Y, a unit sphere, cube directions), and the hit is mapped to the source.
 layout(set=0,binding=0) uniform sampler2DArray sourceImage;
@@ -17,7 +17,7 @@ layout(push_constant) uniform Layer {
 } p;
 layout(location=0) out vec4 color;
 const float PI = 3.14159265358979;
-const int PLANE = 0, CYLINDER = 1, SPHERE = 2, FAR_SPHERE = 3, CUBE = 4;
+const int PLANE = 0, CYLINDER = 1, SPHERE = 2, FAR_SPHERE = 3, CUBE = 4, QUAD = 5;
 float factor(int f, float alpha) {
   return f == 0 ? 0.0 : f == 1 ? 1.0 : f == 2 ? alpha : 1.0 - alpha;
 }
@@ -65,6 +65,15 @@ void main() {
       found = place_turn(ab, uv);
     }
     if (!found) return;
+  } else if (shape == QUAD) {
+    // Where the ray meets the plane z = 0 in front of the eye.
+    vec4 o4 = vec4(p.row0.w, p.row1.w, p.row2.w, p.row3.w);
+    vec4 q4 = vec4(dot(p.row0, point), dot(p.row1, point), dot(p.row2, point), dot(p.row3, point));
+    if (o4.w <= 0.0 || q4.w <= 0.0) return;
+    vec3 o = o4.xyz / o4.w, r = q4.xyz / q4.w - o;
+    if (r.z == 0.0) return;
+    float t = -o.z / r.z;
+    if (t <= 0.0 || !place((o + t * r).xy, uv)) return;
   } else if (shape == FAR_SPHERE) {
     vec3 n = normalize(d);
     if (!place_turn(vec2(atan(n.x, -n.z), asin(clamp(n.y, -1.0, 1.0))), uv)) return;

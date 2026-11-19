@@ -28,6 +28,7 @@ struct HostFacts {
   std::string runtime;              // the OpenXR runtime's name and version; empty: none
   std::int64_t page_size = 0;
   bool install_permission = false;  // Venture may install apps
+  bool obb_access = false;          // Venture may write games' Android/obb folders (Installer.hasObbAccess)
   // What each runtime broker names for each ABI (Installer.runtimes).
   struct Runtime {
     std::string broker, abi, package, library;

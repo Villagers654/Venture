@@ -69,6 +69,7 @@ fs::path executable() {
   path.resize(n);
   return fs::path(path);
 }
+fs::path launch_program() { return executable(); }
 void atomic_write(const fs::path &file, std::string_view text) {
   fs::create_directories(file.parent_path());
   auto tmp = file;

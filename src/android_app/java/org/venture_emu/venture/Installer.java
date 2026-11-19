@@ -108,15 +108,7 @@ final class Installer {
     static String install(String apk, String packageName) {
         Context context = Native.appContext;
         PackageManager packages = context.getPackageManager();
-        if (!packages.canRequestPackageInstalls()) {
-            Intent settings = new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
-                    Uri.parse("package:" + context.getPackageName()));
-            try {
-                Device.start(settings);
-            } catch (Exception ignored) {
-            }
-            return "Allow Venture to install apps in the settings that just opened, then try again.";
-        }
+        if (!packages.canRequestPackageInstalls()) return askInstallPermission(context);
         PackageInstaller installer = packages.getPackageInstaller();
         PackageInstaller.SessionParams params =
                 new PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL);
@@ -197,8 +189,53 @@ final class Installer {
         }
     }
 
-    private static File obbFolder(String packageName) {
-        return new File(Environment.getExternalStorageDirectory(), "Android/obb/" + packageName);
+    // Opens Android's "Install unknown apps" page for Venture.
+    private static String askInstallPermission(Context context) {
+        Intent settings = new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                Uri.parse("package:" + context.getPackageName()));
+        try {
+            Device.start(settings);
+        } catch (Exception ignored) {
+        }
+        return "Allow Venture to install apps in the settings that just opened, then press Play again.";
+    }
+
+    /**
+     * Whether Venture may write other apps' Android/obb folders, which is
+     * where a game reads its expansion files. Android 11 and later give that
+     * to an app the user allows to install apps (the storage rules for app
+     * installers); Android 10 gives it with the storage permission (the
+     * manifest keeps legacy storage there).
+     */
+    static boolean hasObbAccess() {
+        if (Build.VERSION.SDK_INT >= 30) return Native.appContext.getPackageManager().canRequestPackageInstalls();
+        return Permissions.granted(android.Manifest.permission.WRITE_EXTERNAL_STORAGE);
+    }
+
+    /**
+     * Gets Venture the access hasObbAccess describes, asking the user where
+     * Android needs it: null when Venture has it, else a sentence for the user.
+     */
+    static String obbAccess() {
+        if (hasObbAccess()) return null;
+        if (Build.VERSION.SDK_INT >= 30) return askInstallPermission(Native.appContext);
+        if (Permissions.request(android.Manifest.permission.WRITE_EXTERNAL_STORAGE, R.string.storage_reason))
+            return null;
+        return "Venture needs storage access to place the game's expansion files in Android/obb. Allow it when "
+                + "Android asks (or in Venture's app settings), then press Play again.";
+    }
+
+    /**
+     * Android/obb/<package>: the system's expansion file root (the parent of
+     * Venture's own getObbDir(), so the device's real path, whatever volume it
+     * is on), then the package as one path component.
+     */
+    static File obbFolder(String packageName) {
+        File own = Native.appContext.getObbDir();
+        File root = own != null && own.getParentFile() != null
+                ? own.getParentFile()
+                : new File(new File(Environment.getExternalStorageDirectory(), "Android"), "obb");
+        return new File(root, packageName);
     }
 
     /** Android/obb/<package>, where the Venture libraries in the game leave their logs. */
@@ -211,9 +248,12 @@ final class Installer {
      * into Android/obb/<package>, where the game reads them, replacing older copies.
      */
     static String copyObbs(String packageName, String[] files) {
+        String access = obbAccess();
+        if (access != null) return access;
         File folder = obbFolder(packageName);
         if (!folder.isDirectory() && !folder.mkdirs())
-            return "Venture cannot write the game's expansion files to " + folder + ".";
+            return "Venture cannot write the game's expansion files to " + folder + " although Android gave it "
+                    + "access. Restart Venture and press Play again; if this stays, send a debug report.";
         byte[] buffer = new byte[1 << 20];
         for (String path : files) {
             File source = new File(path);
@@ -277,6 +317,7 @@ final class Installer {
             out.put("device", Build.MANUFACTURER + " " + Build.MODEL);
             out.put("platformService", hasService(packages, "com.oculus.horizon"));
             out.put("installPermission", packages.canRequestPackageInstalls());
+            out.put("obbAccess", hasObbAccess());
             markers(packages, out);
             return out.toString();
         } catch (Exception e) {

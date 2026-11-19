@@ -831,6 +831,24 @@ VkRect2D layer_bounds(const LayerPlacement &layer, const XrView &view, XrExtent2
       const float front = a[3][0] * q[0] + a[3][1] * q[1] + a[3][2] * q[2];
       if (!(front > 0) || !add(q[0], q[1], q[2])) return whole;
     }
+  } else if (layer.shape == LayerShape::quad) {
+    // A flat rect: its corners bound it when all are in front of the eye.
+    if (!invert(a, inverse_a)) return whole;
+    const float det = layer.map[0][0] * layer.map[1][1] - layer.map[0][1] * layer.map[1][0];
+    if (!(std::abs(det) > 1e-12f)) return whole;
+    for (float u : {layer.clip[0], layer.clip[2]})
+      for (float v : {layer.clip[1], layer.clip[3]}) {
+        const float du = u - layer.map[0][2], dv = v - layer.map[1][2];
+        const float p[4] = {(layer.map[1][1] * du - layer.map[0][1] * dv) / det,
+                            (layer.map[0][0] * dv - layer.map[1][0] * du) / det, 0, 1};
+        float q[4]{};
+        for (int i = 0; i < 4; ++i)
+          for (int j = 0; j < 4; ++j) q[i] += inverse_a[i][j] * p[j];
+        // As above: (x z, y z, z, w) up to scale, in front when z / w > 0.
+        if (q[3] == 0) return whole;
+        if (q[3] < 0) q[0] = -q[0], q[1] = -q[1], q[2] = -q[2];
+        if (!add(q[0], q[1], q[2])) return whole;
+      }
   } else {
     if (!invert(a, inverse_a)) return whole;
     // (a, b) of a source point: the inverse of the 2x3 map.

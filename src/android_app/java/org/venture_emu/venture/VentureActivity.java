@@ -72,4 +72,18 @@ public class VentureActivity extends SDLActivity {
         super.onNewIntent(intent);
         SignIn.deliverIntent(intent);
     }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        // Venture's document picks (Documents); everything else is SDL's.
+        if (!Documents.onResult(requestCode, resultCode, data))
+            super.onActivityResult(requestCode, resultCode, data);
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        // Venture's own requests (Permissions); everything else is SDL's.
+        if (!Permissions.onResult(requestCode, grantResults))
+            super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+    }
 }

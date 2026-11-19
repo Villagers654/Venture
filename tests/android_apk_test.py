@@ -205,5 +205,85 @@ class VrApiExports(unittest.TestCase):
         self.assertIn('vrapi_SubmitFrame2', guarded)
 
 
+class ManifestPermissions(unittest.TestCase):
+    """The APK declares only the permissions it uses. Its own files live in
+    app-specific storage (no permission); runtime permissions are asked at
+    the moment they are needed (Permissions.request), and broad storage access
+    is never declared."""
+
+    # Install-time permissions (normal, signature or app-op): no runtime dialog.
+    NORMAL = {
+        'android.permission.INTERNET',
+        'android.permission.ACCESS_NETWORK_STATE',
+        'android.permission.REQUEST_INSTALL_PACKAGES',
+        'android.permission.REQUEST_DELETE_PACKAGES',
+        'android.permission.QUERY_ALL_PACKAGES',
+        'android.permission.VIBRATE',
+        'org.khronos.openxr.permission.OPENXR',
+        'org.khronos.openxr.permission.OPENXR_SYSTEM',
+    }
+    # Runtime permissions, each with the newest API level that needs it
+    # (None: every level).
+    RUNTIME = {'android.permission.WRITE_EXTERNAL_STORAGE': 29}
+    NEVER = {
+        'android.permission.MANAGE_EXTERNAL_STORAGE',
+        'android.permission.READ_EXTERNAL_STORAGE',
+        'android.permission.READ_MEDIA_IMAGES',
+        'android.permission.READ_MEDIA_VIDEO',
+        'android.permission.READ_MEDIA_AUDIO',
+    }
+
+    def setUp(self):
+        self.root = ET.parse(ROOT / 'src/android_app/AndroidManifest.xml').getroot()
+        self.java = ''.join(p.read_text(encoding='utf-8')
+                            for p in (ROOT / 'src/android_app/java').rglob('*.java'))
+
+    def permissions(self):
+        return {e.get(ANDROID + 'name'): e for e in self.root.findall('uses-permission')}
+
+    def test_only_known_permissions(self):
+        declared = self.permissions()
+        self.assertFalse(set(declared) & self.NEVER)
+        self.assertEqual(set(declared) - self.NORMAL - set(self.RUNTIME), set())
+
+    def test_runtime_permissions_are_bounded_and_requested(self):
+        declared = self.permissions()
+        for name, max_sdk in self.RUNTIME.items():
+            if name not in declared:
+                continue
+            if max_sdk is not None:
+                self.assertEqual(declared[name].get(ANDROID + 'maxSdkVersion'), str(max_sdk), name)
+            short = name.rsplit('.', 1)[1]
+            self.assertRegex(self.java, r'Permissions\.request\(\s*android\.Manifest\.permission\.' + short,
+                             f'{name} is declared but never asked for')
+
+    def test_legacy_storage_only_where_the_storage_permission_is(self):
+        # Android 10 reads requestLegacyExternalStorage; the storage
+        # permission that goes with it ends at API 29.
+        application = self.root.find('application')
+        self.assertEqual(application.get(ANDROID + 'requestLegacyExternalStorage'), 'true')
+        self.assertIn('android.permission.WRITE_EXTERNAL_STORAGE', self.permissions())
+
+    def test_obb_access_follows_the_android_version(self):
+        installer = (ROOT / 'src/android_app/java/org/venture_emu/venture/Installer.java').read_text(encoding='utf-8')
+        body = installer[installer.index('static boolean hasObbAccess'):]
+        body = body[:body.index('\n    }\n')]
+        self.assertIn('SDK_INT >= 30', body)
+        self.assertIn('canRequestPackageInstalls', body)
+        self.assertIn('WRITE_EXTERNAL_STORAGE', body)
+        # The package is its own path component under the system's OBB root.
+        folder = installer[installer.index('static File obbFolder'):]
+        folder = folder[:folder.index('\n    }\n')]
+        self.assertIn('getObbDir()', folder)
+        self.assertIn('new File(root, packageName)', folder)
+        copy = installer[installer.index('static String copyObbs'):]
+        self.assertLess(copy.index('obbAccess()'), copy.index('mkdirs'))
+        # The game's expansion files are copied after the install asked for
+        # the install permission (headset_play.cpp).
+        play = (ROOT / 'src/launcher/platform/android/headset_play.cpp').read_text(encoding='utf-8')
+        play = play[play.index('void play('):]
+        self.assertLess(play.index('"install", "('), play.index('copy_to_obb(plan.package, files)'))
+
+
 if __name__ == '__main__':
     unittest.main()

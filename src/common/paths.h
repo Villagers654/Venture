@@ -10,6 +10,12 @@ fs::path data_dir();
 // the owner's profile. Failure returns legacy without copying or deleting data.
 fs::path migrate_data_dir(const fs::path &current, const fs::path &legacy);
 fs::path executable();
+// What a command that starts Venture again names (a Steam shortcut, the
+// oculus:// sign-in handler, a helper that outlives this process): the
+// AppImage file ($APPIMAGE) when Venture runs from one outside a Flatpak,
+// since executable() is then inside the image's mount, a new temporary folder
+// each run that is gone once Venture exits; executable() otherwise.
+fs::path launch_program();
 // UTF-8 <-> host path conversions that never throw. libc++ std::filesystem
 // throws runtime_error("locale not supported") for a byte string that is not
 // UTF-8 (path(u8string)) and for a Windows name holding an unpaired surrogate

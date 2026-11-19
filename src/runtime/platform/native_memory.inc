@@ -29,12 +29,16 @@ bool native_fault_matches(const NativeMemoryCall& call, GuestAddr address, bool 
   return matches;
 }
 bool native_ranges_valid(NativeMemoryCall& call) {
-  // A noncanonical x86 operand can report fault address zero. Validate only
-  // these unusual ranges before entering the CRT; ordinary user pointers take
-  // no OS query, and valid wider Linux mappings remain supported.
+  // A noncanonical x86 operand can report fault address zero, and an arm64
+  // fault drops the address's tag byte. Validate only ranges past the host's
+  // ordinary user address space before entering the CRT; ordinary user pointers
+  // (guest memory, host stacks and heaps, driver mappings) take no OS query,
+  // and valid wider Linux mappings remain supported. The query reads the whole
+  // /proc/self/maps on Linux: with a fixed 47-bit limit every host buffer of an
+  // arm64 host (48-bit user addresses) paid it on every guest memcpy or string call.
   const auto check = [&](GuestAddr address, bool write) {
     if (!call.size) return true;
-    constexpr GuestAddr usual_user_limit = 1ull << 47;
+    const GuestAddr usual_user_limit = host_user_address_limit();
     if (call.size > UINT64_MAX - address ||
         ((address >= usual_user_limit || call.size > usual_user_limit - address) &&
          !memory_accessible(address, call.size, write))) {

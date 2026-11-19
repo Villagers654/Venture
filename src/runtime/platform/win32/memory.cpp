@@ -8,10 +8,20 @@
 #include <cstdio>
 #include <cstring>
 #include <algorithm>
+#include <bit>
 #include <string>
 #include <vector>
 
 namespace venture::platform {
+std::uint64_t host_user_address_limit() {
+  static const std::uint64_t limit = [] {
+    SYSTEM_INFO info{};
+    GetSystemInfo(&info);
+    const auto top = reinterpret_cast<std::uint64_t>(info.lpMaximumApplicationAddress);
+    return top ? std::bit_ceil(top + 1) : std::uint64_t{1} << 47;
+  }();
+  return limit;
+}
 #include "platform/native_memory.inc"
 namespace {
 int native_memory_filter(EXCEPTION_POINTERS* exception, NativeMemoryCall& call) {

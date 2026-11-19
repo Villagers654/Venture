@@ -1,7 +1,10 @@
 #include "common/openxr_layers.h"
+#include "common/json.h"
 #include <algorithm>
 #include <cstdlib>
+#include <fstream>
 #include <iterator>
+#include <sstream>
 
 namespace venture::openxr_layers {
 std::vector<std::filesystem::path> implicit_manifests() {
@@ -51,6 +54,34 @@ std::vector<std::filesystem::path> config_roots() {
   roots.emplace_back("/etc");
   return roots;
 }
+// The "runtime" folders in OpenVR's path registry: VR_PATHREG_OVERRIDE, else
+// openvr/openvrpaths.vrpath in the user's config dir and in ~/.config (which a
+// sandbox that moves XDG_CONFIG_HOME, such as Flatpak, may still expose).
+std::vector<std::filesystem::path> openvr_runtimes() {
+  std::vector<std::filesystem::path> files;
+  if (const char *file = std::getenv("VR_PATHREG_OVERRIDE"); file && *file) {
+    files.emplace_back(file);
+  } else {
+    if (const char *config = std::getenv("XDG_CONFIG_HOME"); config && *config)
+      files.push_back(std::filesystem::path(config) / "openvr/openvrpaths.vrpath");
+    if (const char *h = std::getenv("HOME"); h && *h)
+      files.push_back(std::filesystem::path(h) / ".config/openvr/openvrpaths.vrpath");
+  }
+  std::vector<std::filesystem::path> out;
+  for (const auto &file : files) {
+    std::ifstream in(file, std::ios::binary);
+    if (!in) continue;
+    std::stringstream text;
+    text << in.rdbuf();
+    const Json j = Json::parse(text.str(), nullptr, false);
+    if (const auto &list = field(j, "runtime"); list.is_array())
+      for (const auto &entry : list)
+        if (entry.is_string() && !entry.get<std::string>().empty())
+          if (std::filesystem::path folder(entry.get<std::string>()); std::ranges::find(out, folder) == out.end())
+            out.push_back(std::move(folder));
+  }
+  return out;
+}
 }  // namespace
 std::filesystem::path active_runtime() {
 #if defined(__aarch64__)
@@ -88,10 +119,18 @@ std::vector<std::filesystem::path> runtime_manifests() {
     std::ranges::sort(found);
     out.insert(out.end(), found.begin(), found.end());
   }
-  // SteamVR registers no manifest outside its own folder.
+  // SteamVR registers no manifest outside its own folder: the folders OpenVR's
+  // path registry names (wherever SteamVR is installed, a Steam library or the
+  // system), then SteamVR in the usual Steam folders.
+#if defined(__aarch64__)
+  constexpr const char *kSteamXr = "steamxr_linuxarm64.json";
+#else
+  constexpr const char *kSteamXr = "steamxr_linux64.json";
+#endif
+  for (const auto &runtime : openvr_runtimes()) out.push_back(runtime / kSteamXr);
   if (!home.empty())
     for (const char *steam : {".local/share/Steam", ".steam/steam", ".var/app/com.valvesoftware.Steam/.local/share/Steam"})
-      out.push_back(home / steam / "steamapps/common/SteamVR/steamxr_linux64.json");
+      out.push_back(home / steam / "steamapps/common/SteamVR" / kSteamXr);
   return out;
 }
 bool environment_set(const char *name) { return std::getenv(name) != nullptr; }

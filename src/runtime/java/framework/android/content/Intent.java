@@ -137,6 +137,43 @@ public class Intent implements Parcelable {
   public int getFlags() {
     return flags;
   }
+  public static final int FILL_IN_ACTION = 1, FILL_IN_DATA = 2, FILL_IN_CATEGORIES = 4, FILL_IN_COMPONENT = 8,
+      FILL_IN_PACKAGE = 16;
+  /** AOSP's merge for a mutable PendingIntent: unset fields come from other (or
+   * every field the flags name), flags are OR'd, and this Intent's extras win. */
+  public int fillIn(Intent other, int fillFlags) {
+    int changes = 0;
+    if (other.action != null && (action == null || (fillFlags & FILL_IN_ACTION) != 0)) {
+      action = other.action;
+      changes |= FILL_IN_ACTION;
+    }
+    if ((other.data != null || other.type != null)
+        && ((data == null && type == null) || (fillFlags & FILL_IN_DATA) != 0)) {
+      data = other.data;
+      type = other.type;
+      changes |= FILL_IN_DATA;
+    }
+    if (!other.categories.isEmpty() && (categories.isEmpty() || (fillFlags & FILL_IN_CATEGORIES) != 0)) {
+      categories.clear();
+      categories.addAll(other.categories);
+      changes |= FILL_IN_CATEGORIES;
+    }
+    if (other.pkg != null && (pkg == null || (fillFlags & FILL_IN_PACKAGE) != 0)) {
+      pkg = other.pkg;
+      changes |= FILL_IN_PACKAGE;
+    }
+    if (other.component != null && (fillFlags & FILL_IN_COMPONENT) != 0) {
+      component = other.component;
+      changes |= FILL_IN_COMPONENT;
+    }
+    flags |= other.flags;
+    var merged = new Bundle();
+    merged.putAll(other.extras);
+    merged.putAll(extras);
+    extras.clear();
+    extras.putAll(merged);
+    return changes;
+  }
   public Intent putExtra(String k, String v) {
     extras.putString(k, v);
     return this;

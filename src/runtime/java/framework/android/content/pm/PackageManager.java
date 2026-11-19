@@ -5,6 +5,9 @@ public class PackageManager {
   public static final String FEATURE_BLUETOOTH = "android.hardware.bluetooth";
   public static final String FEATURE_BLUETOOTH_LE = "android.hardware.bluetooth_le";
   public static final String FEATURE_MICROPHONE = "android.hardware.microphone";
+  // No Android USB host, accessory port or MIDI service is exposed.
+  public static final String FEATURE_USB_HOST = "android.hardware.usb.host",
+      FEATURE_USB_ACCESSORY = "android.hardware.usb.accessory", FEATURE_MIDI = "android.software.midi";
   public static final String FEATURE_AUDIO_LOW_LATENCY = "android.hardware.audio.low_latency";
   public static final int GET_ACTIVITIES = 1, GET_INTENT_FILTERS = 32, GET_META_DATA = 128, GET_SIGNATURES = 64,
                           GET_SIGNING_CERTIFICATES = 0x08000000, PERMISSION_GRANTED = 0,
@@ -124,6 +127,15 @@ public class PackageManager {
         .findFirst()
         .orElseThrow(() -> new NameNotFoundException(name.toString()));
   }
+  // A manifest receiver's information (Google measurement checks its AppMeasurementReceiver at start);
+  // NameNotFoundException for another package or an undeclared class, as Android does.
+  public ActivityInfo getReceiverInfo(ComponentName name, int flags) throws NameNotFoundException {
+    check(name.getPackageName());
+    return model.receivers.stream()
+        .filter(r -> r.name.equals(name.getClassName()))
+        .findFirst()
+        .orElseThrow(() -> new NameNotFoundException(name.toString()));
+  }
   public static final int COMPONENT_ENABLED_STATE_DEFAULT = 0, COMPONENT_ENABLED_STATE_ENABLED = 1,
                           COMPONENT_ENABLED_STATE_DISABLED = 2, COMPONENT_ENABLED_STATE_DISABLED_USER = 3,
                           COMPONENT_ENABLED_STATE_DISABLED_UNTIL_USED = 4, DONT_KILL_APP = 1;
@@ -232,6 +244,9 @@ public class PackageManager {
   }
   public ServiceInfo getServiceInfo(ComponentName name, ComponentInfoFlags flags) throws NameNotFoundException {
     return getServiceInfo(name, (int) flags.getValue());
+  }
+  public ActivityInfo getReceiverInfo(ComponentName name, ComponentInfoFlags flags) throws NameNotFoundException {
+    return getReceiverInfo(name, (int) flags.getValue());
   }
   public ProviderInfo getProviderInfo(ComponentName name, ComponentInfoFlags flags) throws NameNotFoundException {
     return getProviderInfo(name, (int) flags.getValue());

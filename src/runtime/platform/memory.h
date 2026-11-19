@@ -17,6 +17,11 @@ bool protect(GuestAddr address, std::uint64_t size, std::uint32_t prot);
 // executable pages are only host readable.
 void set_guest_code_executable(bool executable);
 bool memory_accessible(GuestAddr address, std::size_t size, bool write);
+// The end of the host's default user address space, a power of two: where the
+// OS places stacks and mappings unless a program asks for wider addresses
+// (Linux x86-64 2^47, Linux arm64 with 48-bit addresses 2^48, Windows 2^47).
+// Addresses below it fault with their exact address.
+std::uint64_t host_user_address_limit();
 bool read_memory(GuestAddr address, void* out, std::size_t size);
 bool write_memory(GuestAddr address, const void* data, std::size_t size);
 bool compare_exchange(GuestAddr address, const void* value, void* expected, std::size_t size);

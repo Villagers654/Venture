@@ -1977,6 +1977,160 @@ TEST_CASE("XR draws guest cylinders a host cannot compose at their true arc, hon
   CHECK(xg::xrDestroyInstance(instance) == XR_SUCCESS);
 }
 
+TEST_CASE("XR draws quads under a source-alpha projection with it, so they show through its alpha holes") {
+  // Behemoth's menu (#120): two quads under a projection layer whose alpha is
+  // 0 where they show (flags 0x7). SteamVR's OpenVR compositor has no layer
+  // under its scene, and the menu was black. The host gets one drawn
+  // projection layer: the quad where the eye image is transparent, the eye
+  // image where it is opaque.
+  venture::test::XrImageFixture interop;
+  interop.staging = true;
+  venture::xr::install_xr_images(&interop);
+  struct Restore {
+    ~Restore() {
+      MockXrScript defaults{};
+      ventureMockXrSetScript(&defaults);
+      venture::xr::install_xr_images(nullptr);
+    }
+  } restore;
+  MockXrScript script{};
+  const float quarter = std::numbers::pi_v<float> / 4;
+  script.view_fov = std::array{-quarter, quarter, quarter, -quarter};
+  ventureMockXrSetScript(&script);
+  const char* extensions[]{"XR_KHR_opengl_es_enable"};
+  XrInstanceCreateInfo create{XR_TYPE_INSTANCE_CREATE_INFO};
+  create.applicationInfo.apiVersion = XR_MAKE_VERSION(1, 0, 0);
+  create.enabledExtensionNames = extensions;
+  create.enabledExtensionCount = 1;
+  XrInstance instance{};
+  REQUIRE(xg::xrCreateInstance(&create, &instance) == XR_SUCCESS);
+  xg::GlesBinding binding{XR_TYPE_GRAPHICS_BINDING_OPENGL_ES_ANDROID_KHR, nullptr, 1, 2, 3};
+  XrSessionCreateInfo session_info{XR_TYPE_SESSION_CREATE_INFO, &binding, 0, 1};
+  XrSession session{};
+  REQUIRE(xg::xrCreateSession(instance, &session_info, &session) == XR_SUCCESS);
+  XrReferenceSpaceCreateInfo space_info{XR_TYPE_REFERENCE_SPACE_CREATE_INFO, nullptr,
+      XR_REFERENCE_SPACE_TYPE_VIEW, {{0, 0, 0, 1}, {0, 0, 0}}};
+  XrSpace space{};
+  REQUIRE(xg::xrCreateReferenceSpace(session, &space_info, &space) == XR_SUCCESS);
+  XrSwapchainCreateInfo info{XR_TYPE_SWAPCHAIN_CREATE_INFO};
+  info.format = 0x8058;  // GL_RGBA8
+  info.width = info.height = 16;
+  info.arraySize = info.sampleCount = info.mipCount = info.faceCount = 1;
+  info.usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT | XR_SWAPCHAIN_USAGE_SAMPLED_BIT;
+  XrSwapchain panel{};
+  REQUIRE(xg::xrCreateSwapchain(session, &info, &panel) == XR_SUCCESS);
+  info.arraySize = 2;
+  XrSwapchain eyes{};
+  REQUIRE(xg::xrCreateSwapchain(session, &info, &eyes) == XR_SUCCESS);
+  auto& chains = venture::hle::openxr::state().swapchains;
+  auto poll = [&] {
+    XrEventDataBuffer event{XR_TYPE_EVENT_DATA_BUFFER};
+    while (xg::xrPollEvent(instance, &event) == XR_SUCCESS) event = {XR_TYPE_EVENT_DATA_BUFFER};
+  };
+  poll();
+  XrSessionBeginInfo begin{XR_TYPE_SESSION_BEGIN_INFO, nullptr, XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO};
+  REQUIRE(xg::xrBeginSession(session, &begin) == XR_SUCCESS);
+  poll();
+  using Pixel = std::array<std::uint8_t, 4>;
+  const Pixel red{255, 0, 0, 255}, green{0, 255, 0, 255}, clear{0, 0, 0, 0};
+  // A 1 m red quad 1 m ahead: view tangents -0.5 to 0.5.
+  XrCompositionLayerQuad quad{XR_TYPE_COMPOSITION_LAYER_QUAD};
+  quad.layerFlags = 7;
+  quad.space = space;
+  quad.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
+  quad.subImage = {panel, {{0, 0}, {16, 16}}, 0};
+  quad.pose = {{0, 0, 0, 1}, {0, 0, -1}};
+  quad.size = {1, 1};
+  // Each eye's image: transparent on the left half, opaque green on the right.
+  std::array<XrCompositionLayerProjectionView, 2> views{};
+  for (std::uint32_t eye = 0; eye < 2; ++eye)
+    views[eye] = {XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW, nullptr, {{0, 0, 0, 1}, {0, 0, 0}},
+                  {-quarter, quarter, quarter, -quarter}, {eyes, {{0, 0}, {16, 16}}, eye}};
+  XrCompositionLayerProjection projection{XR_TYPE_COMPOSITION_LAYER_PROJECTION, nullptr, 7, space, 2, views.data()};
+  const auto* quad_layer = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&quad);
+  const auto* projection_layer = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&projection);
+  auto submit = [&](std::array<const XrCompositionLayerBaseHeader*, 2> layers) {
+    XrFrameState timing{XR_TYPE_FRAME_STATE};
+    REQUIRE(xg::xrWaitFrame(session, nullptr, &timing) == XR_SUCCESS);
+    REQUIRE(xg::xrBeginFrame(session, nullptr) == XR_SUCCESS);
+    for (auto chain : {panel, eyes}) {
+      std::uint32_t index{};
+      REQUIRE(xg::xrAcquireSwapchainImage(chain, nullptr, &index) == XR_SUCCESS);
+      XrSwapchainImageWaitInfo wait{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO, nullptr, XR_INFINITE_DURATION};
+      REQUIRE(xg::xrWaitSwapchainImage(chain, &wait) == XR_SUCCESS);
+      interop.paint(chains.at(chain).textures[index], [&](std::uint32_t, std::uint32_t x, std::uint32_t) {
+        return chain == panel ? red : x < 8 ? clear : green;
+      });
+      REQUIRE(xg::xrReleaseSwapchainImage(chain, nullptr) == XR_SUCCESS);
+    }
+    XrFrameEndInfo end{XR_TYPE_FRAME_END_INFO, nullptr, timing.predictedDisplayTime,
+                       XR_ENVIRONMENT_BLEND_MODE_OPAQUE, 2, layers.data()};
+    REQUIRE(xg::xrEndFrame(session, &end) == XR_SUCCESS);
+  };
+  auto pixel = [&](std::uint32_t eye, float x, float y) {
+    std::array<XrSwapchainSubImage, 2> drawn{};
+    REQUIRE(ventureMockXrLastSubImages(drawn.data(), 2) == 2);
+    CHECK(drawn[eye].swapchain != chains.at(eyes).host_handle);
+    const auto image = reinterpret_cast<VkImage>(ventureMockXrReleasedImage(drawn[eye].swapchain));
+    REQUIRE(image);
+    const auto size = drawn[eye].imageRect.extent;
+    const auto px = std::int32_t((x + 1) / 2 * float(size.width)), py = std::int32_t((1 - y) / 2 * float(size.height));
+    return interop.read_pixel(px, py, std::uint32_t(drawn[eye].imageArrayIndex), image);
+  };
+  submit({quad_layer, projection_layer});
+  CHECK(ventureMockXrLastQuads(nullptr, 0) == 0);
+  for (std::uint32_t eye = 0; eye < 2; ++eye) {
+    CAPTURE(eye);
+    CHECK(pixel(eye, -0.25f, 0.2f) == red);    // the quad through the hole
+    CHECK(pixel(eye, -0.75f, 0.2f) == clear);  // the hole, past the quad
+    CHECK(pixel(eye, 0.25f, 0.2f) == green);   // the eye image over the quad
+    CHECK(pixel(eye, 0.75f, -0.2f) == green);
+    CHECK(pixel(eye, -0.25f, 0.75f) == clear);  // above the quad
+  }
+  // The same images again (a paused game): nothing is drawn, and the host
+  // shows the image it has.
+  std::array<XrSwapchainSubImage, 2> before{};
+  REQUIRE(ventureMockXrLastSubImages(before.data(), 2) == 2);
+  const auto acquired = ventureMockXrStats().acquired;
+  {
+    XrFrameState timing{XR_TYPE_FRAME_STATE};
+    REQUIRE(xg::xrWaitFrame(session, nullptr, &timing) == XR_SUCCESS);
+    REQUIRE(xg::xrBeginFrame(session, nullptr) == XR_SUCCESS);
+    std::array layers{quad_layer, projection_layer};
+    XrFrameEndInfo end{XR_TYPE_FRAME_END_INFO, nullptr, timing.predictedDisplayTime,
+                       XR_ENVIRONMENT_BLEND_MODE_OPAQUE, 2, layers.data()};
+    REQUIRE(xg::xrEndFrame(session, &end) == XR_SUCCESS);
+  }
+  CHECK(ventureMockXrStats().acquired == acquired);
+  std::array<XrSwapchainSubImage, 2> after{};
+  REQUIRE(ventureMockXrLastSubImages(after.data(), 2) == 2);
+  CHECK(after[0].swapchain == before[0].swapchain);
+  CHECK(pixel(0, -0.25f, 0.2f) == red);
+  // A moved quad is drawn again.
+  quad.pose.position.x = 0.5f;
+  submit({quad_layer, projection_layer});
+  CHECK(ventureMockXrStats().acquired > acquired);
+  CHECK(pixel(0, -0.25f, 0.2f) == clear);  // left of the moved quad, in the hole
+  CHECK(pixel(0, 0.25f, 0.2f) == green);
+  quad.pose.position.x = 0;
+  // A quad over the projection, or under an opaque one, reaches the host as submitted.
+  submit({projection_layer, quad_layer});
+  CHECK(ventureMockXrLastQuads(nullptr, 0) == 1);
+  projection.layerFlags = 0;
+  submit({quad_layer, projection_layer});
+  CHECK(ventureMockXrLastQuads(nullptr, 0) == 1);
+  std::array<XrSwapchainSubImage, 3> forwarded{};
+  CHECK(ventureMockXrLastSubImages(forwarded.data(), 3) == 3);
+  REQUIRE(xg::xrRequestExitSession(session) == XR_SUCCESS);
+  poll();
+  CHECK(xg::xrEndSession(session) == XR_SUCCESS);
+  CHECK(xg::xrDestroySpace(space) == XR_SUCCESS);
+  CHECK(xg::xrDestroySwapchain(eyes) == XR_SUCCESS);
+  CHECK(xg::xrDestroySwapchain(panel) == XR_SUCCESS);
+  CHECK(xg::xrDestroySession(session) == XR_SUCCESS);
+  CHECK(xg::xrDestroyInstance(instance) == XR_SUCCESS);
+}
+
 TEST_CASE("XR gives games upright LOCAL and LOCAL_FLOOR spaces when the host's are upside down") {
   // SteamVR without a room setup returned both turned upside down against
   // STAGE; Batman: Arkham Shadow's camera became NaN and the view stayed black.

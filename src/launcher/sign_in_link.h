@@ -18,7 +18,8 @@ bool take_over(const fs::path &data);
 // Whether sign-in goes to the user's own browser rather than an embedded
 // window: in a sandbox whose package hands oculus:// addresses back (the
 // Flatpak). The browser is reached through the desktop portal there and has
-// the user's saved passwords and passkeys.
+// the user's saved passwords and passkeys. Not inside gamescope, which would
+// not show that browser's window.
 bool system_browser();
 // Puts back the handler there was before take_over().
 void restore(const fs::path &data);

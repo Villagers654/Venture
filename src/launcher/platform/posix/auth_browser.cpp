@@ -1,9 +1,12 @@
 #include "launcher/auth_browser.h"
 #include "launcher/desktop_id.h"
 #include "common/log.h"
+#include "common/paths.h"
 #include "common/meta/auth.h"
 #include <atomic>
 #include <cerrno>
+#include <cstdint>
+#include <cstring>
 #include <csignal>
 #include <deque>
 #include <dlfcn.h>
@@ -100,12 +103,77 @@ template <class T> bool bind(void *lib, T &out, const char *name) {
   out = reinterpret_cast<T>(dlsym(lib, name));
   return out != nullptr;
 }
-bool load(Web &w) {
-  void *lib = dlopen("libwebkitgtk-6.0.so.4", RTLD_NOW | RTLD_LOCAL);
+// Whether the Wayland compositor offers a global `interface`, asked through
+// libwayland-client's registry; true when that cannot be told (GTK then
+// reports the display itself).
+bool compositor_offers(const char *interface) {
+  void *lib = dlopen("libwayland-client.so.0", RTLD_NOW | RTLD_LOCAL);
+  if (!lib) return true;
+  void *(*connect)(const char *) = nullptr;
+  void (*disconnect)(void *) = nullptr;
+  int (*roundtrip)(void *) = nullptr;
+  void *(*marshal_constructor)(void *, uint32_t, const void *, ...) = nullptr;
+  int (*add_listener)(void *, Fn *, void *) = nullptr;
+  void (*destroy)(void *) = nullptr;
+  const void *registry_interface = dlsym(lib, "wl_registry_interface");
+  if (!registry_interface || !bind(lib, connect, "wl_display_connect") ||
+      !bind(lib, disconnect, "wl_display_disconnect") || !bind(lib, roundtrip, "wl_display_roundtrip") ||
+      !bind(lib, marshal_constructor, "wl_proxy_marshal_constructor") ||
+      !bind(lib, add_listener, "wl_proxy_add_listener") || !bind(lib, destroy, "wl_proxy_destroy"))
+    return true;
+  void *display = connect(nullptr);
+  if (!display) return true;
+  struct Seen {
+    const char *wanted;
+    bool found = false;
+  } seen{interface};
+  // wl_registry_listener: global(data, registry, name, interface, version), global_remove.
+  struct Listener {
+    void (*global)(void *, void *, uint32_t, const char *, uint32_t);
+    void (*global_remove)(void *, void *, uint32_t);
+  };
+  static const Listener listener{
+      [](void *data, void *, uint32_t, const char *name, uint32_t) {
+        auto &s = *static_cast<Seen *>(data);
+        s.found = s.found || !std::strcmp(name, s.wanted);
+      },
+      [](void *, void *, uint32_t) {}};
+  // wl_display.get_registry (request 1, a new wl_registry).
+  void *registry = marshal_constructor(display, 1, registry_interface, nullptr);
+  bool told = false;
+  if (registry && !add_listener(registry, reinterpret_cast<Fn *>(const_cast<Listener *>(&listener)), &seen))
+    told = roundtrip(display) >= 0;
+  if (registry) destroy(registry);
+  disconnect(display);
+  return !told || seen.found;
+}
+// GTK 4 refuses a Wayland display without a data device manager (the
+// clipboard and drag and drop); GTK 3 runs without one. gamescope offers it
+// from 3.16.26 only, so on an older one WebKit2GTK 4.1 is the only window
+// that can open.
+// The AppImage's own WebKit2GTK 4.1 (tools/packaging/linux/bundle_webkit.sh),
+// beside the launcher; empty elsewhere.
+fs::path bundled_webkit() {
+  std::error_code ec;
+  const auto dir = paths::executable().parent_path() / "webkit";
+  return fs::is_regular_file(dir / "lib/libwebkit2gtk-4.1.so.0", ec) ? dir : fs::path();
+}
+// The system's WebKitGTK first (its updates come with the system), then the
+// AppImage's own where the system has none that can open here.
+bool load(Web &w, bool gtk4) {
+  void *lib = gtk4 ? dlopen("libwebkitgtk-6.0.so.4", RTLD_NOW | RTLD_LOCAL) : nullptr;
   w.api = 6;
   if (!lib) {
     lib = dlopen("libwebkit2gtk-4.1.so.0", RTLD_NOW | RTLD_LOCAL);
     w.api = 4;
+  }
+  if (const auto bundle = bundled_webkit(); !lib && !bundle.empty()) {
+    // Its TLS module (libsoup's HTTPS) and no other: the system's GIO modules
+    // are built for the system's GLib. WebKit starts its processes from
+    // ./lib/<triplet>/webkit2gtk-4.1 below the working directory.
+    setenv("GIO_MODULE_DIR", (bundle / "lib/gio/modules").c_str(), 1);
+    if (chdir(bundle.c_str()) == 0)
+      lib = dlopen((bundle / "lib/libwebkit2gtk-4.1.so.0").c_str(), RTLD_NOW | RTLD_LOCAL);
   }
   if (!lib)
     return false;
@@ -379,8 +447,12 @@ int helper_main() {
     }
   }).detach();
   auto &w = helper.web;
-  if (!load(w))
-    return helper.send("error webkit"), 1;
+  const bool gtk4 = compositor_offers("wl_data_device_manager");
+  if (!load(w, gtk4)) {
+    // WebKitGTK 6.0 is there but cannot open on this display: say why.
+    const bool gtk4_only = !gtk4 && dlopen("libwebkitgtk-6.0.so.4", RTLD_LAZY | RTLD_LOCAL);
+    return helper.send(gtk4_only ? "error compositor" : "error webkit"), 1;
+  }
   // Wayland only: without a Wayland display GTK fails to initialise rather
   // than opening an X11 connection.
   w.allowed_backends("wayland");
@@ -470,6 +542,9 @@ AuthBrowser::Event translate(std::string_view line) {
   if (line == "error webkit")
     return {Kind::error, "Meta sign-in needs WebKitGTK. Install webkitgtk-6.0 "
                          "(or webkit2gtk-4.1) from your distribution."};
+  if (line == "error compositor")
+    return {Kind::error, "The display cannot show Meta's sign-in window: it lacks the clipboard support GTK 4 "
+                         "needs (gamescope offers it from 3.16.26; SteamOS updates bring it)."};
   if (line == "error filter")
     return {Kind::error, "This WebKitGTK is too old to keep the sign-in window on Meta's pages. "
                          "Update webkitgtk-6.0 (or webkit2gtk-4.1)."};

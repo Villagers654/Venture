@@ -26,6 +26,7 @@ add_executable(venture_tests
   versions_test.cpp
   launcher_settings_test.cpp
   launcher_text_test.cpp
+  host_features_test.cpp
 
   ${PROJECT_SOURCE_DIR}/src/launcher/ui/rich_text_parse.cpp
   ${PROJECT_SOURCE_DIR}/src/launcher/ui/text_scripts.cpp
@@ -33,6 +34,7 @@ add_executable(venture_tests
   ${PROJECT_SOURCE_DIR}/src/launcher/diagnosis.cpp
   ${PROJECT_SOURCE_DIR}/src/launcher/drives.cpp
   ${PROJECT_SOURCE_DIR}/src/launcher/headset_check.cpp
+  ${PROJECT_SOURCE_DIR}/src/launcher/host_features.cpp
   ${PROJECT_SOURCE_DIR}/src/launcher/sign_in_link.cpp
   ${PROJECT_SOURCE_DIR}/src/launcher/updater.cpp
   broker_test.cpp
@@ -125,7 +127,7 @@ if(VENTURE_BUILD_LAUNCHER AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
     ${PROJECT_SOURCE_DIR}/src/launcher/platform/posix/window_style.cpp
     ${PROJECT_SOURCE_DIR}/src/launcher/ui/chrome.cpp)
   target_include_directories(venture_launcher_video_tests PRIVATE ${PROJECT_SOURCE_DIR}/src)
-  target_link_libraries(venture_launcher_video_tests PRIVATE SDL3::SDL3-static doctest::doctest)
+  target_link_libraries(venture_launcher_video_tests PRIVATE venture_common SDL3::SDL3-static doctest::doctest)
   add_test(NAME launcher_video_driver COMMAND venture_launcher_video_tests)
 endif()
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
@@ -247,6 +249,8 @@ add_test(NAME i18n_catalogs COMMAND "${Python3_EXECUTABLE}" "${PROJECT_SOURCE_DI
 add_test(NAME i18n_tools COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/i18n_tools_test.py")
 # The Android APK's packaging helpers and device-free APK checks (tools/android).
 add_test(NAME android_apk COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/android_apk_test.py")
+# The Linux Flatpak's Steam and SteamVR permissions and its entry point (tools/packaging/linux).
+add_test(NAME flatpak_wrapper COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/flatpak_wrapper_test.py")
 foreach(abi IN ITEMS a64 a32)
   add_executable(venture_replacement_exports_${abi} test_main.cpp runtime/replacement_exports_test.cpp)
   target_link_libraries(venture_replacement_exports_${abi} PRIVATE venture_hle doctest::doctest)

@@ -23,6 +23,13 @@ fs::path data_dir() {
   return directory;
 }
 fs::path executable() { return fs::read_symlink("/proc/self/exe"); }
+fs::path launch_program() {
+  // The AppImage runtime sets APPIMAGE to the image file's absolute path.
+  const char *image = std::getenv("APPIMAGE");
+  const char *flatpak = std::getenv("FLATPAK_ID");
+  if (image && *image && fs::path(image).is_absolute() && !(flatpak && *flatpak)) return fs::path(image);
+  return executable();
+}
 void atomic_write(const fs::path &file, std::string_view text) {
   fs::create_directories(file.parent_path());
   auto tmp = file;

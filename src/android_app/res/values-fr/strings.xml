@@ -1,4 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="sign_in_title">Se connecter à Meta</string>
+    <string name="storage_reason">Venture place les fichiers d\'extension de chaque jeu dans Android/obb, où le jeu les lit. Sur cette version d\'Android, il faut pour cela l\'accès au stockage.</string>
 </resources>

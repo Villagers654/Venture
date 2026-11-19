@@ -8,7 +8,8 @@
 #   tools/packaging/linux/build_packages.sh [--layout DIR] [--out DIR] [--version X.Y.Z] [FORMAT...]
 #   FORMAT: tar deb rpm aur appimage flatpak flathub (default: all but flathub)
 #
-# Needs rootless podman (deb: baseline image, rpm: Fedora image), appimagetool
+# Needs rootless podman (deb: baseline image, rpm: Fedora image, appimage:
+# Ubuntu 22.04 for the sign-in window's WebKit2GTK), appimagetool
 # (APPIMAGETOOL, default appimagetool on PATH) and flatpak with
 # org.gnome.Platform/<arch>/$FLATPAK_BRANCH (default 51) installed. flathub
 # reads both architectures' tarballs from --out (written by earlier tar runs).
@@ -41,6 +42,7 @@ base=Venture-$version-linux-$arch
 baseline_image=${VENTURE_BASELINE_IMAGE:-localhost/venture-linux-baseline:22.04}
 fedora_image=${VENTURE_FEDORA_IMAGE:-registry.fedoraproject.org/fedora:44}
 flatpak_branch=${FLATPAK_BRANCH:-51}
+webkit_image=${VENTURE_WEBKIT_IMAGE:-docker.io/library/ubuntu:22.04}
 work=$out/.work
 rm -rf "$work"; mkdir -p "$work" "$out"
 in_container() {  # IMAGE CMD... with $root and $out mounted at their own paths
@@ -145,6 +147,12 @@ do_appimage() {
   local appdir=$work/Venture.AppDir tool=${APPIMAGETOOL:-appimagetool}
   mkdir -p "$appdir/usr"
   cp -a --reflink=auto "$layout" "$appdir/usr/venture"
+  # The Meta sign-in window's own WebKit2GTK 4.1 for systems with none that can
+  # open (SteamOS, the Steam Frame): Ubuntu 22.04's, the glibc 2.35 baseline.
+  podman run --rm --security-opt label=disable --arch "$debarch" -v "$here:$here:ro" \
+    -v "$appdir/usr/venture:/appdir" "$webkit_image" sh -c \
+    "apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
+       libwebkit2gtk-4.1-0 glib-networking patchelf file python3 >/dev/null && $here/bundle_webkit.sh /appdir/webkit"
   desktop_files "$appdir/usr/share"
   cp "$appdir/usr/share/applications/$id.desktop" "$appdir/$id.desktop"
   cp "$appdir/usr/share/icons/hicolor/scalable/apps/$id.svg" "$appdir/$id.svg"

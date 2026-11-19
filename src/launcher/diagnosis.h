@@ -14,6 +14,9 @@ struct Diagnosis {
 // logs, the system's logs and the launcher's), most specific first; nothing
 // when no rule matches.
 std::optional<Diagnosis> diagnose(std::string_view evidence);
+// launcher.log without the startup failures of launcher starts that a later
+// successful start followed: they are not what went wrong since.
+std::string without_recovered_startup_failures(std::string_view launcher_log);
 // Whether a log line reports a failure (error, crash, timeout...).
 bool error_line(std::string_view line);
 // Lines that look like errors but are expected noise.

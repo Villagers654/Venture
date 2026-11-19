@@ -1,9 +1,32 @@
 # Reuse native CMake check results; never reuse generated targets or paths.
+
+# The target and compiler that check results belong to. A check result is only
+# valid for the target it was compiled for: a cross build must never see host
+# results (LIBC_HAS_ITOA=1 from a Windows tree broke SDL for linux-arm64).
+set(venture_check_target "${CMAKE_SYSTEM_NAME};${CMAKE_SYSTEM_PROCESSOR};${CMAKE_CROSSCOMPILING};${CMAKE_SIZEOF_VOID_P}")
+foreach(language C CXX)
+  string(APPEND venture_check_target ";${CMAKE_${language}_COMPILER_ID};${CMAKE_${language}_COMPILER_VERSION}")
+endforeach()
+# An initial cache seeded from another tree (tools/worktree_build.py -C) names
+# the target its results came from. Drop them all on any difference, before a
+# dependency runs its checks.
+if(DEFINED VENTURE_SEED_TARGET)
+  if(NOT VENTURE_SEED_TARGET STREQUAL venture_check_target)
+    list(LENGTH VENTURE_SEED_RESULTS count)
+    foreach(variable IN LISTS VENTURE_SEED_RESULTS)
+      unset(${variable} CACHE)
+    endforeach()
+    message(STATUS "Dropped ${count} seeded check results: seeded for ${VENTURE_SEED_TARGET}, configuring ${venture_check_target}")
+  endif()
+  unset(VENTURE_SEED_TARGET CACHE)
+  unset(VENTURE_SEED_RESULTS CACHE)
+endif()
+
 option(VENTURE_PROBE_CACHE "Reuse completed dependency checks for identical toolchains" ON)
 if(NOT VENTURE_PROBE_CACHE)
   return()
 endif()
-if(WIN32)
+if(CMAKE_HOST_WIN32)
   file(TO_CMAKE_PATH "$ENV{LOCALAPPDATA}/Venture/dev-cache/probes" default_root)
 elseif(DEFINED ENV{XDG_CACHE_HOME} AND NOT "$ENV{XDG_CACHE_HOME}" STREQUAL "")
   set(default_root "$ENV{XDG_CACHE_HOME}/Venture/dev-cache/probes")
@@ -32,7 +55,7 @@ endfunction()
 
 function(venture_probe_key output)
   file(SHA256 "${CMAKE_CURRENT_FUNCTION_LIST_FILE}" implementation_hash)
-  set(identity "probe-cache-v1;${implementation_hash};${CMAKE_VERSION};${CMAKE_SYSTEM};${CMAKE_SYSTEM_PROCESSOR};${CMAKE_SIZEOF_VOID_P}")
+  set(identity "probe-cache-v2;${implementation_hash};${CMAKE_VERSION};${CMAKE_SYSTEM};${venture_check_target}")
   set(compiler_identity "")
   foreach(language C CXX)
     if(NOT CMAKE_${language}_COMPILER)

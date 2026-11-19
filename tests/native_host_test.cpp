@@ -357,11 +357,12 @@ TEST_CASE("the headset check reports the host, its 32-bit support and each game'
   auto host = other_host();
   host.abis = {"arm64-v8a", "armeabi-v7a"};
   check::HostFacts facts{.abis32 = {"armeabi-v7a", "armeabi"}, .device = "Vendor Headset", .runtime = "Runtime 1.2.3",
-                         .page_size = 16384, .install_permission = true};
+                         .page_size = 16384, .install_permission = true, .obb_access = true};
   facts.runtimes.push_back({"system", "armeabi-v7a", "com.vendor.xr", "/lib/arm/libxr.so", true});
   const auto text = check::describe_host(host, facts);
   CHECK(text.find("Device: Vendor Headset") != std::string::npos);
   CHECK(text.find("page size 16384") != std::string::npos);
+  CHECK(text.find("Venture may place expansion files in Android/obb: yes") != std::string::npos);
   CHECK(text.find("32-bit ABIs (Build.SUPPORTED_32_BIT_ABIS): armeabi-v7a, armeabi") != std::string::npos);
   CHECK(text.find("ARM32 games: run natively") != std::string::npos);
   CHECK(text.find("OpenXR: Runtime 1.2.3, accepts version 1.0") != std::string::npos);
@@ -371,6 +372,7 @@ TEST_CASE("the headset check reports the host, its 32-bit support and each game'
   CHECK(bare.find("ARM32 games: cannot run here") != std::string::npos);
   CHECK(bare.find("OpenXR: no runtime answered") != std::string::npos);
   CHECK(bare.find("Runtime brokers: none answered") != std::string::npos);
+  CHECK(bare.find("Venture may place expansion files in Android/obb: no") != std::string::npos);
 
   auto apk = nh::profile(android::parse_manifest(compile(quest_manifest())), quest_entries());
   apk.slices = {{"armeabi-v7a", {"libmain.so", "libvrapi.so"}}};

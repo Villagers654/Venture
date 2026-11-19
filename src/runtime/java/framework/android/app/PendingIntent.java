@@ -84,9 +84,9 @@ public final class PendingIntent implements Parcelable {
     Intent deliver;
     synchronized (tokens) {
       if (cancelled) throw new CanceledException();
-      if (fill != null && !isImmutable())
-        throw new UnsupportedOperationException("Mutable PendingIntent fill-in unavailable");
       deliver = new Intent(intent);
+      // An immutable token ignores the fill-in; creation accepts no FILL_IN_* flags.
+      if (fill != null && !isImmutable()) deliver.fillIn(fill, 0);
       if ((key.identityFlags() & FLAG_ONE_SHOT) != 0) cancel();
     }
     switch (key.kind()) {

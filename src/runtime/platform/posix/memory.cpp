@@ -8,9 +8,13 @@
 #include <sys/resource.h>
 #include <sys/syscall.h>
 #include <sys/uio.h>
+#if defined(__linux__)
+#include <sys/auxv.h>
+#endif
 #include <unistd.h>
 #include <algorithm>
 #include <atomic>
+#include <bit>
 #include <optional>
 #include <cstdlib>
 #include <cstring>
@@ -314,6 +318,18 @@ bool write_memory(GuestAddr address, const void* data, std::size_t size) {
   if (address + size < address) return false;
   iovec local{const_cast<void*>(data), size}, remote{g2h(address), size};
   return process_vm_writev(getpid(), &local, 1, &remote, 1, 0) == static_cast<ssize_t>(size);
+}
+std::uint64_t host_user_address_limit() {
+  static const std::uint64_t limit = [] {
+    std::uint64_t top = 0;
+#if defined(__linux__)
+    // AT_RANDOM's bytes lie on the initial stack, which Linux places just below
+    // the top of the default user address space (mmap goes below the stack).
+    top = getauxval(AT_RANDOM);
+#endif
+    return top ? std::bit_ceil(top + 1) : std::uint64_t{1} << 47;
+  }();
+  return limit;
 }
 bool memory_accessible(GuestAddr address, std::size_t size, bool write) {
   if (address + size < address) return false;

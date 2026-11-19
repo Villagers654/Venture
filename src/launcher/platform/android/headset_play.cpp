@@ -6,6 +6,7 @@
 #include "launcher/headset_play.h"
 
 #include "launcher/headset_check.h"
+#include "launcher/host_features.h"
 
 #include "common/android/apk_rewrite.h"
 #include "common/android/game_adapter.h"
@@ -174,6 +175,7 @@ Probe probe() {
   facts.abis32 = abis32;
   facts.device = str(json, "device");
   facts.install_permission = field(json, "installPermission") == true;
+  facts.obb_access = field(json, "obbAccess") == true;
   facts.page_size = sysconf(_SC_PAGESIZE);
   host.android_api = static_cast<std::int32_t>(number(json, "sdk"));
   host.platform_service = field(json, "platformService") == true;
@@ -314,6 +316,14 @@ std::optional<Json> asset_request(std::string_view package, const Json& request)
 }
 
 const nh::HostProfile& host() { return probed().host; }
+}  // namespace venture::launcher::headset
+
+namespace venture::launcher {
+// Games here are the device's own apps (play() below).
+HostFeatures host_features() { return device_app_features(); }
+}  // namespace venture::launcher
+
+namespace venture::launcher::headset {
 void use_runtime(const fs::path& file) { g_runtime_file = file; }
 
 void play(const library::Install& install, const std::string& account, const fs::path& data,
@@ -330,17 +340,6 @@ void play(const library::Install& install, const std::string& account, const fs:
   const auto stamp_path = stamp_file(data, plan.package);
   JNIEnv* env = jni::env();
   const bool current = installed(plan, data).current;
-
-  // Expansion and asset files go to Android/obb/<package>, where the game
-  // reads them, with their catalog (plan.json) for the Platform loader's
-  // asset file calls.
-  std::vector<fs::path> files{install.directory / "plan.json"};
-  for (const auto& f : plan.files)
-    if (f.kind == "obb" || f.kind == "asset") files.push_back(install.directory / paths::from_utf8(f.name));
-  status("Copying the game's expansion files\xE2\x80\xA6");
-  copy_to_obb(plan.package, files);
-  // Asset downloads the game asks for while it runs.
-  if (assets) serve_assets(plan.package, install.directory, std::move(assets));
 
   if (!current) {
     status("Preparing the game for this headset\xE2\x80\xA6");
@@ -386,6 +385,20 @@ void play(const library::Install& install, const std::string& account, const fs:
     log::info("headset", "installed {} {} ({} replacements, layer {})", plan.package, plan.version,
               adapted.replace.size(), adapted.quest_layer);
   }
+
+  // Expansion and asset files go to Android/obb/<package>, where the game
+  // reads them, with their catalog (plan.json) for the Platform loader's
+  // asset file calls. This comes after the install: on Android 11 and later
+  // Venture may write that folder once the user allowed it to install apps,
+  // which the install asks for; Android 10 asks for storage access here
+  // (Installer.obbAccess).
+  std::vector<fs::path> files{install.directory / "plan.json"};
+  for (const auto& f : plan.files)
+    if (f.kind == "obb" || f.kind == "asset") files.push_back(install.directory / paths::from_utf8(f.name));
+  status("Copying the game's expansion files\xE2\x80\xA6");
+  copy_to_obb(plan.package, files);
+  // Asset downloads the game asks for while it runs.
+  if (assets) serve_assets(plan.package, install.directory, std::move(assets));
 
   status("Starting the game\xE2\x80\xA6");
   jni::LocalFrame frame(env);

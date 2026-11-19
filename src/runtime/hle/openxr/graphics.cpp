@@ -396,6 +396,11 @@ XrResult prepare_swapchains(const std::set<XrSwapchain>& submitted, bool force_o
       const auto recycled = evict();
       if (XR_FAILED(recycled)) return recycled;
     }
+    // What the game asked for, next to the host chain's own line: a report then
+    // shows a layer's format, static flag, mips and usage as the game made it.
+    log::info("xr", "Host swapchain is for the game's {}x{} format={} usage={:#x} flags={:#x} mips={} samples={} "
+              "arrays={} faces={}", r.info.width, r.info.height, r.desc.gl_format, r.info.usageFlags,
+              r.info.createFlags, r.info.mipCount, r.info.sampleCount, r.info.arraySize, r.info.faceCount);
     std::uint32_t count{};
     auto result = ::xrEnumerateSwapchainImages(r.host_handle, 0, &count, nullptr);
     if (XR_SUCCEEDED(result) && !count) result = XR_ERROR_RUNTIME_FAILURE;
