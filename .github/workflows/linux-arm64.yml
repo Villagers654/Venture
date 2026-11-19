@@ -282,6 +282,9 @@ jobs:
           "$layout/venture" --version
       - name: Packaging tools
         run: |
+          # The Flatpak manifest asks for --device=input, which needs flatpak 1.15.6 or later;
+          # Ubuntu 24.04 has 1.14, so flatpak comes from the Flatpak team's PPA.
+          sudo add-apt-repository -y ppa:flatpak/stable
           sudo apt-get update -q && sudo apt-get install -y -q flatpak ostree librsvg2-common
           flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
           flatpak install --user -y --noninteractive flathub org.gnome.Platform//51
