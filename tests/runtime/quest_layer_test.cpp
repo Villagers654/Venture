@@ -32,6 +32,24 @@
 using namespace venture;
 
 namespace {
+// An elevated process (GitHub's Windows runners are) makes the OpenXR loader
+// ignore XR_RUNTIME_JSON and XR_API_LAYER_PATH, so the mock runtime and the
+// layer under test can't be selected there.
+bool loader_ignores_test_environment() {
+#ifdef _WIN32
+  HANDLE token = nullptr;
+  TOKEN_ELEVATION elevation{};
+  DWORD size = 0;
+  const bool elevated = OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token) &&
+                        GetTokenInformation(token, TokenElevation, &elevation, sizeof(elevation), &size) &&
+                        elevation.TokenIsElevated;
+  if (token) CloseHandle(token);
+  if (elevated) MESSAGE("skipped: the OpenXR loader ignores XR_RUNTIME_JSON in an elevated process");
+  return elevated;
+#else
+  return false;
+#endif
+}
 const mock::HeadsetProfile& profile() {
   const char* name = std::getenv("VENTURE_MOCK_HEADSET");
   const auto* found = name ? mock::headset_profile(name) : nullptr;
@@ -117,6 +135,7 @@ TEST_CASE("the layer's manifests list exactly the extensions it answers") {
 }
 
 TEST_CASE("a Quest OpenXR 1.1 game runs on this headset's runtime through the layer") {
+  if (loader_ignores_test_environment()) return;
   const auto& headset = profile();
   CAPTURE(headset.name);
   const bool lowered = headset.api_minor == 0;
@@ -306,6 +325,7 @@ TEST_CASE("a Quest OpenXR 1.1 game runs on this headset's runtime through the la
 }
 
 TEST_CASE("a game that asks for OpenXR 1.0 gets a 1.0 instance, not a lowered one") {
+  if (loader_ignores_test_environment()) return;
   const char* layers[] = {VENTURE_QUEST_LAYER_NAME};
   XrInstanceCreateInfo create{XR_TYPE_INSTANCE_CREATE_INFO};
   std::strcpy(create.applicationInfo.applicationName, "Quest layer test");
@@ -319,6 +339,7 @@ TEST_CASE("a game that asks for OpenXR 1.0 gets a 1.0 instance, not a lowered on
 }
 
 TEST_CASE("without the layer, the profile's runtime accepts only its own OpenXR version") {
+  if (loader_ignores_test_environment()) return;
   XrInstanceCreateInfo create{XR_TYPE_INSTANCE_CREATE_INFO};
   std::strcpy(create.applicationInfo.applicationName, "Quest layer test");
   create.applicationInfo.apiVersion = XR_API_VERSION_1_1;
