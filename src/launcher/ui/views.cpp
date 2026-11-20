@@ -400,6 +400,7 @@ void App::draw() {
   draw_save_import();
   draw_save_export();
   draw_store_link();
+  draw_dev_identity_prompt();
   draw_cancel_download();
   draw_report();
   draw_update();
@@ -891,7 +892,7 @@ void App::draw_library() {
         if (clicked && over) {
           clicked = false;
           if (can_play)
-            action([&] { play(g); });
+            action([&] { play_or_ask(g); });
           else
             action([&] { install_for_owner(g); });
         }
@@ -1096,6 +1097,10 @@ void App::draw_game_page() {
       badge("Paused", color::text2, color::surface_hi);
     else
       badge("Not installed", color::text2, color::surface_hi, icons::cloud);
+    if (dev_identity(g.id)) {
+      ImGui::SameLine(0, s(6));
+      badge("DEV IDENTITY", color::warning, color::alpha(color::warning, 0.14f), icons::warning);
+    }
     if (update) {
       ImGui::SameLine(0, s(6));
       badge("Update available", color::accent_text, color::accent_wash, icons::update);
@@ -1162,7 +1167,7 @@ void App::draw_game_page() {
                    Tone::secondary, cta, !r.quitting && armed))
           r.quitting = r.process.request_stop();
       } else if (button("Play##play", icons::play, Tone::primary, cta)) {
-        action([&] { play(g); });
+        action([&] { play_or_ask(g); });
       }
       draw_tools();
       if (update) {
@@ -3713,6 +3718,35 @@ void App::draw_store_link() {
     if (clicked == 0 || !install || (c.done && c.target == store_link_target_)) {
       store_link_target_.clear();
       store_link_check_ = {};
+      ImGui::CloseCurrentPopup();
+    }
+    end_dialog();
+  }
+}
+
+void App::play_or_ask(const meta::Game& g) {
+  if (should_ask_dev_identity(g.id))
+    dev_ask_target_ = g.id;
+  else
+    play(g);
+}
+
+void App::draw_dev_identity_prompt() {
+  if (!dev_ask_target_.empty() && !ImGui::IsPopupOpen("Use dev identity?")) ImGui::OpenPopup("Use dev identity?");
+  if (begin_dialog("Use dev identity?", 500)) {
+    const auto* install = installed(dev_ask_target_, false);
+    dialog_text("Use dev identity?",
+                "This looks like a dev build. With dev identity it starts as a local developer user, with no Meta "
+                "account and no ownership check. Without it, it uses your Meta account as any store game does. You "
+                "can change this later in the game's menu.");
+    const int clicked = dialog_footer({{"Cancel"}, {"Use my Meta account"}, {"Use dev identity", Tone::primary}});
+    if (clicked >= 0 || !install || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+      const auto id = std::exchange(dev_ask_target_, {});
+      if (clicked == 1 || clicked == 2) {
+        action([&] { answer_dev_identity(id, clicked == 2); });
+        if (const auto* game = this->game(meta::base_app(id)))
+          action([&] { play(*game); });
+      }
       ImGui::CloseCurrentPopup();
     }
     end_dialog();

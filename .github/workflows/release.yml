@@ -1,6 +1,7 @@
 # A version tag (v1.2.3, or v1.2.3-rc1 for a pre-release) builds every download from source, runs the
 # tests on those builds, and attaches them to a draft GitHub Release; the release text is reviewed before it is published.
 # The website (Villagers654/venture-site) picks up published releases.
+# The DeliciousMeatPop fork builds the same way; the gate below names both repositories.
 name: Release
 
 on:
@@ -17,13 +18,13 @@ concurrency:
 
 jobs:
   windows:
-    if: github.repository == 'Villagers654/Venture'
+    if: github.repository == 'Villagers654/Venture' || github.repository == 'DeliciousMeatPop/Venture-UnknownSourceEdition'
     uses: ./.github/workflows/windows.yml
     with:
       test: true
       package: true
   linux:
-    if: github.repository == 'Villagers654/Venture'
+    if: github.repository == 'Villagers654/Venture' || github.repository == 'DeliciousMeatPop/Venture-UnknownSourceEdition'
     uses: ./.github/workflows/linux.yml
     with:
       test: true

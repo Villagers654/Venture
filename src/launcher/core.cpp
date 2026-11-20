@@ -1372,6 +1372,19 @@ void Core::set_dev_identity(std::string_view app_id, bool on) {
   else settings_.dev_identity.erase(id);
   settings_.save(data_);
 }
+bool Core::should_ask_dev_identity(std::string_view app_id) const {
+  const std::string id(app_id);
+  if (settings_.dev_identity.contains(id) || settings_.dev_identity_asked.contains(id)) return false;
+  const auto *i = installed(app_id, false);
+  return i && suggests_dev_identity(i->plan.package);
+}
+void Core::answer_dev_identity(std::string_view app_id, bool use) {
+  const std::string id(app_id);
+  settings_.dev_identity_asked.insert(id);
+  if (use) settings_.dev_identity.insert(id);
+  else settings_.dev_identity.erase(id);
+  settings_.save(data_);
+}
 bool Core::suggests_dev_identity(std::string_view package) {
   return ovrplatform::package_suggests_dev(package);
 }

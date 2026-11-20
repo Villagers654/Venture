@@ -179,6 +179,11 @@ private:
   // Link to store page...: the import whose dialog is open and the pasted link.
   std::string store_link_target_, store_link_text_;
   void draw_store_link();
+  // Play on a game whose package looks like a dev build asks once whether to use
+  // a local developer identity; the game starts after the answer.
+  std::string dev_ask_target_;
+  void play_or_ask(const meta::Game &g);
+  void draw_dev_identity_prompt();
   std::string save_game_;  // the game picked in the Import page's save data card
   // A game's mods folder as its page summarizes it, re-read every few seconds:
   // files replacing an installed file, and files matching none (another version).

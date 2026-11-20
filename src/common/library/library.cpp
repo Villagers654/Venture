@@ -861,6 +861,10 @@ Settings Settings::load(const fs::path &data) {
     for (const auto &id : dev)
       if (id.is_string() && !id.get<std::string>().empty() && id.get<std::string>().size() <= 64)
         s.dev_identity.insert(id.get<std::string>());
+  if (const auto &asked = field(j, "devIdentityAsked"); asked.is_array())
+    for (const auto &id : asked)
+      if (id.is_string() && !id.get<std::string>().empty() && id.get<std::string>().size() <= 64)
+        s.dev_identity_asked.insert(id.get<std::string>());
   if (const auto &hidden = field(j, "hiddenGames"); hidden.is_array())
     for (const auto &id : hidden)
       if (id.is_string() && !id.get<std::string>().empty() && id.get<std::string>().size() <= 64)
@@ -896,6 +900,7 @@ void Settings::save(const fs::path &data) const {
          {"lookupImportsOnline", lookup_imports_online},
          {"steamSkip", steam_skip},
          {"devIdentity", dev_identity},
+         {"devIdentityAsked", dev_identity_asked},
          {"hiddenGames", hidden},
          {"showHiddenGames", show_hidden},
          {"libraryInstalledOnly", installed_only}};

@@ -123,6 +123,9 @@ struct Settings {
   // default and never chosen automatically; every other app keeps the real
   // Meta path.
   std::set<std::string> dev_identity;
+  // Apps the launcher already asked about dev identity (either answer), so the
+  // prompt shows once per app.
+  std::set<std::string> dev_identity_asked;
   // Library entries the player hid (by library id): a view filter only. A
   // hidden game stays installed, launchable and in Steam; the library lists it
   // again while show_hidden is on (the library's "Show hidden" toggle).
