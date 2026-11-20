@@ -72,13 +72,13 @@ do_deb() {
 Package: venture
 Version: $version
 Architecture: amd64
-Maintainer: Venture developers <https://github.com/Villagers654/Venture/issues>
+Maintainer: Venture developers <https://github.com/DeliciousMeatPop/Venture-UnknownSourceEdition/issues>
 Installed-Size: $(du -sk "$stage" | cut -f1)
 Depends: libc6 (>= 2.35), libgcc-s1
 Recommends: libvulkan1, libwayland-client0, libwayland-egl1, libxkbcommon0, libpipewire-0.3-0 | libpulse0, libsecret-1-0, libfontconfig1
 Section: games
 Priority: optional
-Homepage: https://venture-emu.org/
+Homepage: https://github.com/DeliciousMeatPop/Venture-UnknownSourceEdition
 Description: Play Meta Quest games on PC VR
  Venture runs Meta Quest games on a PC VR headset through OpenXR. Every
  library it needs beyond glibc, the Vulkan loader and the desktop session is
@@ -111,7 +111,7 @@ pkgbase = venture-bin
 	pkgdesc = Play Meta Quest games on PC VR (prebuilt Linux release)
 	pkgver = $version
 	pkgrel = 1
-	url = https://venture-emu.org/
+	url = https://github.com/DeliciousMeatPop/Venture-UnknownSourceEdition
 	arch = x86_64
 	license = GPL-3.0-or-later
 	depends = glibc>=2.35
@@ -123,7 +123,7 @@ pkgbase = venture-bin
 	conflicts = venture
 	options = !strip
 	options = !debug
-	source = $base.tar.gz::https://github.com/Villagers654/Venture/releases/download/v$version/$base.tar.gz
+	source = $base.tar.gz::https://github.com/DeliciousMeatPop/Venture-UnknownSourceEdition/releases/download/v$version/$base.tar.gz
 	sha256sums = $sum
 
 pkgname = venture-bin

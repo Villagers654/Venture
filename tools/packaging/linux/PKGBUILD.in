@@ -4,7 +4,7 @@ pkgver=@VERSION@
 pkgrel=1
 pkgdesc="Play Meta Quest games on PC VR (prebuilt Linux release)"
 arch=('x86_64')
-url="https://venture-emu.org/"
+url="https://github.com/DeliciousMeatPop/Venture-UnknownSourceEdition"
 license=('GPL-3.0-or-later')
 depends=('glibc>=2.35' 'gcc-libs')
 optdepends=('vulkan-icd-loader: Vulkan loader (required to run games)'
@@ -13,7 +13,7 @@ optdepends=('vulkan-icd-loader: Vulkan loader (required to run games)'
 provides=('venture')
 conflicts=('venture')
 options=('!strip' '!debug')
-source=("Venture-${pkgver}-linux-x86_64.tar.gz::https://github.com/Villagers654/Venture/releases/download/v${pkgver}/Venture-${pkgver}-linux-x86_64.tar.gz")
+source=("Venture-${pkgver}-linux-x86_64.tar.gz::https://github.com/DeliciousMeatPop/Venture-UnknownSourceEdition/releases/download/v${pkgver}/Venture-${pkgver}-linux-x86_64.tar.gz")
 sha256sums=('@SHA256@')
 
 package() {

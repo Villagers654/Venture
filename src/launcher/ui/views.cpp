@@ -210,7 +210,7 @@ void description(std::string_view raw, float width) {
 }
 
 // The community server, for help and news.
-constexpr const char* kDiscord = "https://discord.gg/Ey9hHszvwa";
+constexpr const char* kProjectUrl = "https://github.com/DeliciousMeatPop/Venture-UnknownSourceEdition";
 
 // A modal dialog in the house style; returns true while open. Every dialog is
 // a title, a short message, optional settings-style rows, and dialog_footer().
@@ -2004,7 +2004,7 @@ void App::draw_settings() {
           save_settings();
         });
     }, [&] {
-      if (icon_button("passthrough-help", icons::info, "Mixed reality setups (opens the Venture wiki)", kHelpIcon))
+      if (icon_button("passthrough-help", icons::info, "Mixed reality setups (opens the upstream Venture wiki)", kHelpIcon))
         action([] { open_url("https://github.com/Villagers654/Venture/wiki/Mixed-Reality"); });
     });
     if (settings_.passthrough && settings_.color_key) {
@@ -2179,12 +2179,11 @@ void App::draw_settings() {
     draw_text(adl, fonts().semibold, kBody, {tx, text_y(fonts().semibold, kBody, cy - s(10))}, color::text, "Venture");
     draw_text(adl, fonts().regular, kSmall, {tx, text_y(fonts().regular, kSmall, cy + s(10))}, color::text2,
               "Version " VENTURE_VERSION);
-    float bw = row_button_w("Join our Discord", icons::people);
+    float bw = row_button_w("Project on GitHub", icons::people);
     ImGui::Dummy({m, m});
     ImGui::SetCursorScreenPos({p.x + ImGui::GetContentRegionAvail().x - bw, cy - s(19)});
-    if (button("Join our Discord##discord", icons::people, Tone::secondary, {bw, s(38)}, true,
-               ImTextureID(reinterpret_cast<uintptr_t>(discord_logo(int(std::round(s(16))))))))
-      action([] { open_url(kDiscord); });
+    if (button("Project on GitHub##project", icons::people, Tone::secondary, {bw, s(38)}))
+      action([] { open_url(kProjectUrl); });
     ImGui::SetCursorScreenPos({p.x, p.y + m});
     ImGui::Dummy({0, 0});
   }

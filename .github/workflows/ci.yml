@@ -19,9 +19,9 @@ permissions:
 
 jobs:
   windows:
-    # The private development mirror does not spend Actions minutes.
-    if: github.repository == 'Villagers654/Venture'
+    # Only this repository builds; other forks and mirrors do not spend Actions minutes.
+    if: github.repository == 'DeliciousMeatPop/Venture-UnknownSourceEdition'
     uses: ./.github/workflows/windows.yml
   linux:
-    if: github.repository == 'Villagers654/Venture'
+    if: github.repository == 'DeliciousMeatPop/Venture-UnknownSourceEdition'
     uses: ./.github/workflows/linux.yml

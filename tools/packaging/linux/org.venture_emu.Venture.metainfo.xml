@@ -9,8 +9,8 @@
     <p>Venture runs Meta Quest games on a PC VR headset through OpenXR.</p>
   </description>
   <launchable type="desktop-id">org.venture_emu.Venture.desktop</launchable>
-  <url type="homepage">https://venture-emu.org/</url>
-  <url type="bugtracker">https://github.com/Villagers654/Venture/issues</url>
+  <url type="homepage">https://github.com/DeliciousMeatPop/Venture-UnknownSourceEdition</url>
+  <url type="bugtracker">https://github.com/DeliciousMeatPop/Venture-UnknownSourceEdition/issues</url>
   <content_rating type="oars-1.1"/>
   <releases>
     <release version="@VERSION@"/>

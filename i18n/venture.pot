@@ -5,7 +5,7 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: Venture\n"
-"Report-Msgid-Bugs-To: https://github.com/Villagers654/Venture/issues\n"
+"Report-Msgid-Bugs-To: https://github.com/DeliciousMeatPop/Venture-UnknownSourceEdition/issues\n"
 "Language: \n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
