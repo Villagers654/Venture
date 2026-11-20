@@ -20,6 +20,7 @@ if(TARGET venture AND TARGET venture-runtime)
     add_custom_target(package-windows COMMAND "${Python3_EXECUTABLE}"
       "${PROJECT_SOURCE_DIR}/tools/packaging/windows/build_installer.py"
       --layout "${PROJECT_SOURCE_DIR}/dist/${venture_package_name}" --output-dir "${PROJECT_SOURCE_DIR}/dist"
+      --icon "${PROJECT_SOURCE_DIR}/src/launcher/assets/venture.ico"
       ${venture_import_tools} VERBATIM)
     add_dependencies(package-windows package-release)
   endif()

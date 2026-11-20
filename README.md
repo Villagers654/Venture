@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="docs/media/logo-unknown-source.webp" width="160" alt="Venture: Unknown Source Edition logo">
+<img src="docs/media/logo-unknown-source.svg" width="160" alt="Venture: Unknown Source Edition logo">
 
 # Venture: Unknown Source Edition
 

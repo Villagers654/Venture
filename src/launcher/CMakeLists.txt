@@ -56,14 +56,10 @@ if(WIN32)
   target_include_directories(venture PRIVATE platform/win32)
   target_compile_options(venture PRIVATE -fms-extensions)
   target_link_libraries(venture PRIVATE dwmapi)
-  # The executable's icon (taskbar, Start menu, shortcuts) is rasterized from assets/venture.svg at build time.
-  add_executable(venture-make-icon platform/win32/make_icon.cpp)
-  set_target_properties(venture-make-icon PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
-  target_include_directories(venture-make-icon SYSTEM PRIVATE ${stb_SOURCE_DIR} ${nanosvg_SOURCE_DIR}/src)
+  # The executable's icon (taskbar, Start menu, shortcuts) is this edition's own multi-size
+  # assets/venture.ico (16 to 256 px), copied as is; the upstream venture-make-icon rasterizer is not used.
   set(VENTURE_ICON ${CMAKE_CURRENT_BINARY_DIR}/generated/launcher/venture.ico)
-  add_custom_command(OUTPUT ${VENTURE_ICON}
-    COMMAND venture-make-icon ${CMAKE_CURRENT_SOURCE_DIR}/assets/venture.svg ${VENTURE_ICON}
-    DEPENDS venture-make-icon ${CMAKE_CURRENT_SOURCE_DIR}/assets/venture.svg ${CMAKE_CURRENT_SOURCE_DIR}/ui/app_icon.h VERBATIM)
+  configure_file(${CMAKE_CURRENT_SOURCE_DIR}/assets/venture.ico ${VENTURE_ICON} COPYONLY)
   file(CONFIGURE OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/generated/launcher/launcher.rc
     CONTENT "1 ICON \"${VENTURE_ICON}\"\n" @ONLY)
   set_source_files_properties(${CMAKE_CURRENT_BINARY_DIR}/generated/launcher/launcher.rc PROPERTIES OBJECT_DEPENDS ${VENTURE_ICON})
