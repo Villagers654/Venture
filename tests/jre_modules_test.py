@@ -30,6 +30,12 @@ class JreModulesTest(unittest.TestCase):
                     missing.setdefault(module, []).append(str(source.relative_to(ROOT)))
         self.assertEqual(missing, {}, "make_jre.py MODULES lacks modules the framework uses")
 
+    def test_tls_and_ec_crypto_are_in_the_jre(self):
+        # JDK 21 keeps SunEC in jdk.crypto.ec (java.base from JDK 22). Without it JSSE offers no
+        # ECDHE group or suite and Google/Firebase servers answer handshake_failure (issue 168);
+        # Android's EC KeyPairGenerator, KeyAgreement and Signature algorithms need it as well.
+        self.assertIn("jdk.crypto.ec", modules())
+
 
 if __name__ == "__main__":
     sys.exit(unittest.main())
