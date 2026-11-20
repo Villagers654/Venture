@@ -3818,7 +3818,7 @@ void App::check_update() {
     return [this, tag, url, release] {
       const std::string version = tag.starts_with('v') ? tag.substr(1) : tag;
       if (!newer_version(tag, VENTURE_VERSION) || version == settings_.dismissed_update ||
-          !url.starts_with("https://github.com/Villagers654/Venture/releases/"))
+          !url.starts_with("https://github.com/" + std::string(http::kReleaseRepo) + "/releases/"))
         return;
       log::info("launcher", "Venture {} is available", version);
       update_ = Update{version, url};

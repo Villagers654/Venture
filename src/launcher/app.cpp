@@ -4,6 +4,7 @@
 #include "common/library/import.h"
 #include "common/download/asset_files.h"
 #include "common/file_ops.h"
+#include "common/http/client.h"
 #include "common/saves_migration.h"
 #include "hle/ovrplatform/broker.h"
 #include "common/log.h"
@@ -197,7 +198,7 @@ App::App(Options options) : Core(std::move(options)) {
     report_ = SharedReport{{}, "https://dpaste.com/EXAMPLE00", {}};
   // The update dialog an installed copy shows (nothing downloads until Update now).
   if (options_.smoke_view == "update") {
-    const std::string release = "https://github.com/Villagers654/Venture/releases/";
+    const std::string release = "https://github.com/" + std::string(http::kReleaseRepo) + "/releases/";
     update_checked_ = true;
     update_ = Update{"0.1.1", release + "tag/v0.1.1"};
     update_->method = update::Method::installer;

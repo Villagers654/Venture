@@ -3,6 +3,8 @@
 #include <functional>
 #include <map>
 #include <stop_token>
+#include <string>
+#include <string_view>
 #include <vector>
 
 namespace venture::http {
@@ -39,7 +41,9 @@ Response get_loopback(uint16_t port, std::string_view path,
 Response post_loopback(uint16_t port, std::string_view path,
                        const Fields &fields, std::stop_token stop = {});
 std::string get_public(std::string url, std::stop_token stop = {});
-// Venture's latest published release from GitHub's API; no account data is sent.
+// The GitHub repository whose releases the launcher's updater follows (this fork).
+inline constexpr std::string_view kReleaseRepo = "DeliciousMeatPop/Venture-UnknownSourceEdition";
+// The latest published release of kReleaseRepo from GitHub's API; no account data is sent.
 Response get_latest_release(std::stop_token stop = {});
 // OculusDB's public package lookup (oculusdb.rui2015.me): only the package
 // name is sent, with no account data.

@@ -442,7 +442,7 @@ Response get_meta(std::string_view url, const Fields &headers,
   return memory(url, nullptr, 4 * 1024 * 1024, stop, headers);
 }
 Response get_latest_release(std::stop_token stop) {
-  return memory("https://api.github.com/repos/Villagers654/Venture/releases/latest", nullptr, 1024 * 1024, stop,
+  return memory("https://api.github.com/repos/" + std::string(kReleaseRepo) + "/releases/latest", nullptr, 1024 * 1024, stop,
                 {{"Accept", "application/vnd.github+json"}});
 }
 Response get_oculusdb_package(std::string_view package, std::stop_token stop) {
