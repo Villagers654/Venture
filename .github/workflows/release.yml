@@ -8,6 +8,11 @@ on:
     tags: ["v*"]
   # Run on a tag ("Use workflow from" > Tags) to rebuild that release's downloads.
   workflow_dispatch:
+    inputs:
+      skip_upstream_check:
+        description: "Skip the check for newer upstream Venture changes"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -16,14 +21,79 @@ concurrency:
   group: release-${{ github.ref_name }}
 
 jobs:
-  windows:
+  # Before building, see whether upstream Venture (Villagers654/Venture) has something this fork does not:
+  # a newer stable release, or new commits on its main. If it does, the run warns and the next job
+  # waits for your approval (Review deployments > Approve to build anyway, Reject to stop and merge first).
+  # Setup, once: Settings > Environments > New environment "upstream-newer" > Required reviewers: you
+  # (leave "Prevent self-review" off).
+  upstream-check:
     if: github.repository == 'DeliciousMeatPop/Venture-UnknownSourceEdition'
+    runs-on: ubuntu-24.04
+    outputs:
+      newer: ${{ steps.check.outputs.newer }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Compare with upstream
+        id: check
+        env:
+          UPSTREAM: https://github.com/Villagers654/Venture.git
+          SKIP: ${{ inputs.skip_upstream_check }}
+        run: |
+          newer=false
+          ours=$(sed -n 's/^project(Venture VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt | head -1)
+          # Upstream's tags: the newest stable (no "-") and the newest of any kind.
+          tags=$(git ls-remote --tags --refs "$UPSTREAM" 'v*' | sed 's|.*refs/tags/v||')
+          stable=$(printf '%s\n' "$tags" | grep -v -- '-' | sort -V | tail -1)
+          latest=$(printf '%s\n' "$tags" | sort -V | tail -1)
+          # Commits on upstream's main that this commit does not contain.
+          git fetch -q --no-tags "$UPSTREAM" main:refs/remotes/upstream/main
+          behind=$(git rev-list --count HEAD..refs/remotes/upstream/main)
+          {
+            echo "### Upstream check"
+            echo "| | |"; echo "|---|---|"
+            echo "| This fork's version | \`$ours\` |"
+            echo "| Upstream newest stable | \`${stable:-none}\` |"
+            echo "| Upstream newest (any) | \`${latest:-none}\` |"
+            echo "| Upstream main commits not in this build | $behind |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$SKIP" = "true" ]; then
+            echo "Upstream check skipped by request." | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            if [ -n "$stable" ] && [ "$stable" != "$ours" ] && [ "$(printf '%s\n%s\n' "$ours" "$stable" | sort -V | tail -1)" = "$stable" ]; then
+              echo "::warning title=Newer upstream release::Upstream Venture v$stable is newer than this fork's $ours. Merge or port it first, or approve to build anyway."
+              newer=true
+            fi
+            if [ "$behind" -gt 0 ]; then
+              echo "::warning title=Upstream has new commits::Upstream main is $behind commit(s) ahead of this build. Merge it first, or approve to build anyway."
+              newer=true
+            fi
+            if [ -n "$latest" ] && [ "$latest" != "$stable" ] && [ "$latest" != "$ours" ]; then
+              echo "::notice title=Upstream pre-release::Upstream has a pre-release, v$latest (not gating)."
+            fi
+          fi
+          echo "newer=$newer" >> "$GITHUB_OUTPUT"
+
+  # Runs only when the check found something newer; the environment pauses it until you approve or reject.
+  upstream-confirm:
+    needs: upstream-check
+    if: needs.upstream-check.outputs.newer == 'true'
+    runs-on: ubuntu-24.04
+    environment: upstream-newer
+    steps:
+      - run: 'echo "Approved - building without upstream newer changes."'
+
+  windows:
+    needs: [upstream-check, upstream-confirm]
+    if: ${{ !cancelled() && github.repository == 'DeliciousMeatPop/Venture-UnknownSourceEdition' && needs.upstream-check.result == 'success' && (needs.upstream-confirm.result == 'success' || needs.upstream-confirm.result == 'skipped') }}
     uses: ./.github/workflows/windows.yml
     with:
       test: true
       package: true
   linux:
-    if: github.repository == 'DeliciousMeatPop/Venture-UnknownSourceEdition'
+    needs: [upstream-check, upstream-confirm]
+    if: ${{ !cancelled() && github.repository == 'DeliciousMeatPop/Venture-UnknownSourceEdition' && needs.upstream-check.result == 'success' && (needs.upstream-confirm.result == 'success' || needs.upstream-confirm.result == 'skipped') }}
     uses: ./.github/workflows/linux.yml
     with:
       test: true
