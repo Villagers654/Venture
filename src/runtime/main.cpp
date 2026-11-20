@@ -232,7 +232,7 @@ int main(int argc, char** argv) {
     std::string account_key;
     std::uintptr_t credential_read = 0, credential_write = 0;
     bool inspect = false, boot_native = false, defer_gpu = false, test_a32_memory = false;
-    bool leaderboard_writes = true;
+    bool leaderboard_writes = true, dev_identity = false;
     bool runtime_worker = false, console = false;
     std::uint32_t parent_pid = 0;
     double run_seconds = 0;
@@ -268,6 +268,7 @@ int main(int argc, char** argv) {
       else if (option == "--boot-native") boot_native = true;
       else if (option == "--defer-gpu") defer_gpu = true;
       else if (option == "--no-leaderboard-writes") leaderboard_writes = false;
+      else if (option == "--dev-identity") dev_identity = true;
       else if (option == "--test-a32-memory")
         test_a32_memory = true;
       else if (option == "--run-guest-test") guest_test = venture::paths::from_utf8(value());
@@ -291,7 +292,7 @@ int main(int argc, char** argv) {
       }
       else if (option == "--help") {
         std::cout << "venture-runtime --game <install dir> [--boot-native | "
-                     "--inspect] [--package <pkg>] [--log <file>] [--console]\n"
+                     "--inspect] [--package <pkg>] [--log <file>] [--console] [--dev-identity]\n"
                      "venture-runtime --run-guest-test <so> [--test-dir "
                      "<dir>] [--log <file>] [--console]\n"
                      "Java options: --java-home <JDK/JRE> --class-path <jar or "
@@ -473,6 +474,7 @@ int main(int argc, char** argv) {
     if (!inspect) venture::engine_policy::prepare_renderer_defaults(venture::process_config(), libraries,
         {venture::renderer_capabilities::vrapi_variable_rate_shading});
     venture::process_config().platform_leaderboard_writes = leaderboard_writes;
+    venture::process_config().dev_identity = dev_identity;
     venture::freeze_process_isa();
     if (broker && account_key.empty())
       throw std::runtime_error("Credential broker requires an account key");

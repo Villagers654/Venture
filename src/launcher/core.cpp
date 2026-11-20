@@ -12,6 +12,7 @@
 #include "common/process.h"
 #include "common/saves_migration.h"
 #include "hle/ovrplatform/broker.h"
+#include "hle/ovrplatform/dev_provider.h"
 #include <chrono>
 
 namespace venture::launcher {
@@ -1364,6 +1365,16 @@ void Core::set_in_steam(std::string_view app_id, bool in) {
   settings_.save(data_);
   sync_steam();
 }
+void Core::set_dev_identity(std::string_view app_id, bool on) {
+  const std::string id(app_id);
+  if (on == settings_.dev_identity.contains(id)) return;
+  if (on) settings_.dev_identity.insert(id);
+  else settings_.dev_identity.erase(id);
+  settings_.save(data_);
+}
+bool Core::suggests_dev_identity(std::string_view package) {
+  return ovrplatform::package_suggests_dev(package);
+}
 void Core::set_hidden(std::string_view app_id, bool hidden) {
   const std::string id(app_id);
   if (hidden == settings_.hidden.contains(id)) return;
@@ -1775,18 +1786,22 @@ void Core::launch_game(std::string_view id, std::string_view requested,
   }
   const auto app_id = game_id;
   // The runtime's account for saves and platform calls; "local" is none.
-  const auto key = choice.account_key.empty() ? std::string("local") : choice.account_key;
+  // A dev-identity app uses no Meta account at all.
+  const bool dev = settings_.dev_identity.contains(game_id);
+  if (dev) catalog_token.clear();
+  const auto key = dev || choice.account_key.empty() ? std::string("local") : choice.account_key;
   const auto runtime = settings_.runtime;
   const auto root = root_of(install);
   const bool console = settings_.console;
   if (settings_.runtime_override())
     log::warn("launcher", "Using the runtime set by VENTURE_RUNTIME: {}",
               paths::utf8(runtime));
-  notice_ = catalog_token.empty()
+  notice_ = dev ? "Starting with dev identity..."
+          : catalog_token.empty()
                 ? "Preparing application credentials..."
                 : "Updating the installation manifest from Meta...";
   worker_->submit([this, install, app_id, key, runtime, root, details, reply,
-                   console, catalog_token](std::stop_token stop) -> Worker::Completion {
+                   console, catalog_token, dev](std::stop_token stop) -> Worker::Completion {
     try {
       if (reply) {
         std::lock_guard lock(reply->mutex);
@@ -1824,16 +1839,18 @@ void Core::launch_game(std::string_view id, std::string_view requested,
       ovrplatform::AppIdentity identity{
           install.plan.app_id, install.plan.package, install.plan.binary_id,
           static_cast<std::int64_t>(std::stoll(install.plan.version_code))};
-      auto broker = std::make_shared<ovrplatform::CredentialBroker>(
-          identity, key, ovrplatform::runtime_secret_store(key),
-          ovrplatform::meta_http_transport());
-      auto error = broker->prepare(stop);
-      if (error)
-        throw std::runtime_error(error.message);
+      std::shared_ptr<ovrplatform::CredentialBroker> broker;
+      if (!dev) {  // dev identity never touches the vault or Meta
+        broker = std::make_shared<ovrplatform::CredentialBroker>(
+            identity, key, ovrplatform::runtime_secret_store(key),
+            ovrplatform::meta_http_transport());
+        if (auto error = broker->prepare(stop))
+          throw std::runtime_error(error.message);
+      }
       if (stop.stop_requested())
         throw std::runtime_error("Game launch cancelled.");
       return [this, install, app_id, key, runtime, root, console, broker,
-              details, reply, catalog = std::move(catalog)] {
+              details, reply, dev, catalog = std::move(catalog)] {
         launch_pending_.erase(app_id);
         if (reply && !reply->begin()) {
           game_locks_.erase(app_id);
@@ -1841,7 +1858,7 @@ void Core::launch_game(std::string_view id, std::string_view requested,
         }
         bool success = false;
         action([&] {
-          auto valid = broker->handle(Json{{"op", "validate"}});
+          auto valid = broker ? broker->handle(Json{{"op", "validate"}}) : Json{{"error", 0}};
           if (number(valid, "error") != 0)
             throw std::runtime_error(
                 "Account changed while the game was starting. Try again.");
@@ -1882,6 +1899,8 @@ void Core::launch_game(std::string_view id, std::string_view requested,
               "--parent-pid", std::to_string(current_process_id())};
           if (console)
             args.push_back("--console");
+          if (dev)
+            args.push_back("--dev-identity");
           if (options_.smoke_seconds)
             args.insert(args.end(), {"--run-seconds",
                                      std::to_string(options_.smoke_seconds)});
@@ -1898,13 +1917,15 @@ void Core::launch_game(std::string_view id, std::string_view requested,
                           [broker, routes = std::move(routes), details, key, queue = launch_queue_](const Json &request) {
                             const auto op = str(request, "op");
                             if (op == "launch_details" || op == "launch_other_app") {
-                              if (number(broker->handle(Json{{"op", "validate"}}), "error") != 0)
+                              if (broker && number(broker->handle(Json{{"op", "validate"}}), "error") != 0)
                                 return Json{{"success", false}};
                               if (op == "launch_details") return Json{{"details", launch_details_json(details)}};
                               return request_launch(queue, key, request);
                             }
                             for (const auto &[prefix, handler] : routes)
                               if (op.starts_with(prefix)) return handler(request);
+                            if (!broker)  // dev identity: no credential service
+                              return Json{{"error", -20000}};
                             return broker->handle(request);
                           }, environment);
           success = true; // the process is running, even if cache bookkeeping fails
@@ -1917,6 +1938,9 @@ void Core::launch_game(std::string_view id, std::string_view requested,
                 std::chrono::system_clock::now()));
             save_library();
           }
+          if (dev)
+            log::warn("runtime", "Launched {} with DEV IDENTITY (no Meta account, entitlement not checked).", app_id);
+          else
           log::info("runtime",
                     "Launched Quest application {} using credential broker.",
                     app_id);

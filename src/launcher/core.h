@@ -191,6 +191,13 @@ protected:
   // Adds a game to Steam or leaves it out (saved), then syncs.
   void set_in_steam(std::string_view app_id, bool in);
   bool in_steam(std::string_view app_id) const { return !settings_.steam_skip.contains(std::string(app_id)); }
+  // Dev identity (saved): the app launches with a local developer user and no
+  // Meta account or entitlement check. Per app, off by default.
+  void set_dev_identity(std::string_view app_id, bool on);
+  bool dev_identity(std::string_view app_id) const { return settings_.dev_identity.contains(std::string(app_id)); }
+  // Whether the launcher should offer dev identity for a package (a "dev"
+  // namespace segment); only a suggestion, the user decides.
+  static bool suggests_dev_identity(std::string_view package);
   // Hides a library entry or brings it back (saved). Only the library view
   // changes: installs, launches and Steam shortcuts stay as they are.
   void set_hidden(std::string_view app_id, bool hidden);

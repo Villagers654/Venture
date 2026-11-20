@@ -118,6 +118,11 @@ struct Settings {
   // out are listed by app id.
   bool steam_add_new = true;
   std::set<std::string> steam_skip;
+  // Apps (by app id) the user marked as dev builds: they launch with a local
+  // developer identity and no Meta account or entitlement check. Off by
+  // default and never chosen automatically; every other app keeps the real
+  // Meta path.
+  std::set<std::string> dev_identity;
   // Library entries the player hid (by library id): a view filter only. A
   // hidden game stays installed, launchable and in Steam; the library lists it
   // again while show_hidden is on (the library's "Show hidden" toggle).

@@ -57,7 +57,10 @@ Library
   builds GAME [--as ACCOUNT]     Every version you can install, with its version
                                  code, binary id and release channels
   uninstall GAME [--yes]         Remove a game's files; saves are kept
-  play GAME [--as ACCOUNT|local] Launch a game and wait for it to exit
+  play GAME [--as ACCOUNT|local] [--dev-identity|--no-dev-identity]
+                                 Launch a game and wait for it to exit. --dev-identity
+                                 (saved per game) uses a local developer user instead of
+                                 a Meta account, for dev builds and other-store apps
   logs GAME [--lines N]          The end of a game's last runtime log
   report [GAME] [--upload]       Write a debug report about a game's last run
                                  (the most recent one by default): what happened,
@@ -913,6 +916,10 @@ int Cli::play_game(const Args &args) {
   if (!installed(g.id))
     throw std::runtime_error(std::format("{} is not installed. Install it first: venture-cli install \"{}\"", g.name,
                                          g.name));
+  if (args.flag("--dev-identity") && args.flag("--no-dev-identity"))
+    throw UsageError("Give --dev-identity or --no-dev-identity, not both.");
+  if (args.flag("--dev-identity") || args.flag("--no-dev-identity"))
+    set_dev_identity(g.id, args.flag("--dev-identity"));
   std::string key = play_key(g.id);
   if (auto as = args.value("--as"))
     key = resolve_account(*as, true);

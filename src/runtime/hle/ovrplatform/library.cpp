@@ -5,6 +5,7 @@
 #include "core/process.h"
 #include "hle/ovrplatform/asset_service.h"
 #include "hle/ovrplatform/broker.h"
+#include "hle/ovrplatform/dev_provider.h"
 #include "hle/ovrplatform/hle.h"
 #include "hle/ovrplatform/progression.h"
 
@@ -17,11 +18,12 @@ std::unique_ptr<Session> make_runtime_session(
     const AppIdentity& app, const std::filesystem::path& install,
     std::shared_ptr<PipeChannel> channel) {
   auto http = meta_http_transport();
-  auto provider = channel
+  const bool dev = process_config().dev_identity;
+  auto provider = dev ? dev_provider(app) : channel
       ? brokered_provider(app, process_config().account_key, channel, http)
       : owned_library_provider(
             app, runtime_secret_store(process_config().account_key), http);
-  if (!channel)
+  if (!channel && !dev)
     log::warn("accounts",
               "CLI credential fallback: the launching account's profile token is "
               "readable by game code. Use the launcher for credential isolation.");
@@ -32,7 +34,9 @@ std::unique_ptr<Session> make_runtime_session(
     register_asset_handlers(
         *session, std::make_shared<AssetService>(
                       app, install, process_config().guest_obb_dir(),
-                      asset_ownership_reader(provider, http), channel, state,
+                      dev ? AssetOwnershipReader([](std::stop_token) { return AssetOwnership{}; })
+                          : asset_ownership_reader(provider, http),
+                      channel, state,
                       process_config().obb_dir));
   }
   return session;

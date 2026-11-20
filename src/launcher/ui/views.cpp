@@ -1257,6 +1257,17 @@ void App::draw_game_page() {
                         ImTextureID(reinterpret_cast<uintptr_t>(steam_logo(int(std::round(s(16))))))))
             action([&] { set_in_steam(g.id, !in); });
         }
+        // Dev builds and other-store apps: a local developer identity instead of a
+        // Meta account. Per game and off by default; a package with a "dev"
+        // namespace segment only gets the item worded as a suggestion.
+        if (tools && partial) {
+          const bool dev = dev_identity(g.id);
+          const bool hint = !dev && suggests_dev_identity(partial->plan.package);
+          if (menu_item(dev ? "Turn off dev identity"
+                            : hint ? "Use dev identity (looks like a dev build)" : "Use dev identity",
+                        0, false, !running))
+            action([&] { set_dev_identity(g.id, !dev); });
+        }
         // The game's data for the account it plays as: its private storage, where
         // saves live, and its shared storage (Android/data/<package>, in
         // external-data), where homebrew ports look for the game data the player

@@ -12,6 +12,7 @@ add_library(venture_ovrplatform STATIC
   model.cpp
   identity_iap.cpp
   broker.cpp
+  dev_provider.cpp
   social.cpp
   horizon.cpp
   asset_service.cpp

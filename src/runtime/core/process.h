@@ -53,6 +53,8 @@ struct ProcessConfig {
   // cache.
   std::string account_key = "local";
   std::filesystem::path guest_cache_dir;
+  // Per-app opt-in (--dev-identity): a local developer identity instead of Meta's.
+  bool dev_identity = false;
   bool platform_leaderboard_writes = true; // per-launch opt-out, owner-authorized by default
   bool embedded_java_scripts = false; // tooling agent needed only for prepared Java loaders
   bool has_code = true; // classes.dex present; a native-only APK (hasCode="false") has none
