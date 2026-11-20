@@ -77,6 +77,7 @@ void notify_worker(std::string_view packet) noexcept {
 void notify_runtime_teardown_posted() { notify_worker(std::string_view("\1", 1)); }
 void notify_runtime_save_wait() { notify_worker(std::string_view("\3", 1)); }
 void notify_runtime_destroy_delivered() { notify_worker(std::string_view("\4", 1)); }
+void notify_runtime_host_ended() { notify_worker(std::string_view("\5", 1)); }
 const char* runtime_exit_wait_name(RuntimeExitWait wait) {
   switch (wait) {
     case RuntimeExitWait::arbitration: return "exit-arbitration";
@@ -272,6 +273,7 @@ RuntimeChildResult run_runtime_child(const std::filesystem::path& executable,
   RuntimeChildResult result{WIFEXITED(status) ? WEXITSTATUS(status) : 128 + WTERMSIG(status), restart,
       restart ? packet.substr(1, static_cast<std::size_t>(count - 1)) : std::string{}};
   result.os_termination = grace.os_termination;
+  result.host_ended = grace.host_ended;
   result.exit_wait = grace.exit_wait; result.exit_wait_tid = grace.exit_wait_tid;
   result.worker_pid = static_cast<unsigned long>(child);
   return result;

@@ -136,3 +136,34 @@ TEST_CASE("Driver and system implicit Vulkan layers and FoveaBridge stay by defa
                                                          "VK_LAYER_VALVE_steam_fossilize_64"});
   CHECK(vulkan_layer_filter_matches(builtin_kept_vulkan_layers, "VK_LAYER_foveabridge_test"));
 }
+TEST_CASE("Vulkan layers a host XR stack adds to Venture's instances stay out unless the player keeps them") {
+  // Example names: an injected layer, a validation layer, a driver layer on the keep list.
+  const char* added[] = {"VK_LAYER_EXAMPLE_injected", "VK_LAYER_KHRONOS_validation", "VK_LAYER_MESA_device_select"};
+  auto none = [](const char*) -> const char* { return nullptr; };
+  auto plan = plan_host_added_vulkan_layers(3, added, none);
+  CHECK(plan.kept == std::vector<const char*>{added[2]});
+  CHECK(plan.left_out == std::vector<std::string>{"VK_LAYER_EXAMPLE_injected", "VK_LAYER_KHRONOS_validation"});
+  // The player's own settings keep one, as for implicit layers.
+  plan = plan_host_added_vulkan_layers(3, added, [](const char* name) -> const char* {
+    if (std::string_view(name) == "VENTURE_VULKAN_LAYERS") return "VK_LAYER_EXAMPLE_*";
+    if (std::string_view(name) == "VK_INSTANCE_LAYERS") return "VK_LAYER_KHRONOS_validation";
+    return nullptr;
+  });
+  CHECK(plan.kept.size() == 3);
+  CHECK(plan.left_out.empty());
+  CHECK(plan_host_added_vulkan_layers(0, nullptr, none).kept.empty());
+}
+TEST_CASE("Leaving out host-added Vulkan layers rewrites the create info's layer list") {
+  const char* added[] = {"VK_LAYER_EXAMPLE_injected", "VK_LAYER_MESA_device_select"};
+  VkInstanceCreateInfo info{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
+  info.enabledLayerCount = 2;
+  info.ppEnabledLayerNames = added;
+  const auto plan = leave_out_host_added_vulkan_layers(info, "a test instance");
+  REQUIRE(info.enabledLayerCount == 1);
+  CHECK(std::string_view(info.ppEnabledLayerNames[0]) == "VK_LAYER_MESA_device_select");
+  CHECK(plan.left_out == std::vector<std::string>{"VK_LAYER_EXAMPLE_injected"});
+  VkInstanceCreateInfo empty{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
+  leave_out_host_added_vulkan_layers(empty, "a test instance");
+  CHECK(empty.enabledLayerCount == 0);
+  CHECK(empty.ppEnabledLayerNames == nullptr);
+}

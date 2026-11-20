@@ -2,6 +2,7 @@
 #include "common/openxr_layers.h"
 #include "common/paths.h"
 #include "xr/host_xr.h"
+#include "xr/openxr_layers.h"
 #include <doctest/doctest.h>
 #include <algorithm>
 #include <cstdlib>
@@ -175,6 +176,8 @@ TEST_CASE("OpenXR layer manifests are read as the loader reads them") {
 //      (XR_ERROR_API_LAYER_NOT_PRESENT) because no layer loads after it.
 //   2: a working layer first, then the broken ones and a layer that loads
 //      and fails every xrCreateInstance itself.
+//   3: only the working layer, which VENTURE_OPENXR_LAYERS_OFF names: it is
+//      left out though it works, and the instance starts without it.
 TEST_CASE("The host OpenXR instance leaves out only the implicit layers that fail to load" * doctest::skip()) {
 #ifdef _WIN32
   // An elevated process (CI runners are) makes the OpenXR loader ignore
@@ -208,6 +211,7 @@ TEST_CASE("The host OpenXR instance leaves out only the implicit layers that fai
                  Json{{"xrNegotiateLoaderApiLayerInterface", "ventureTestFailingNegotiate"}});
   write_manifest(dir / "working.json", "XR_APILAYER_VENTURE_test_working", paths::utf8(layer_library));
   std::vector<fs::path> first, later{dir / "missing.json", dir / "unloadable.json", dir / "missing_library.json"};
+  if (mode == 3) later.clear();
   if (working) first.push_back(dir / "working.json");
   if (mode == 1) later.push_back(dir / "no_entry.json");
   if (mode == 2) later.push_back(dir / "failing.json");
@@ -216,7 +220,7 @@ TEST_CASE("The host OpenXR instance leaves out only the implicit layers that fai
     // The report's view of the same registrations.
 #ifdef _WIN32
     const auto manifests = openxr_layers::implicit_manifests();
-    CHECK(std::ranges::find(manifests, dir / "missing.json") != manifests.end());
+    if (mode != 3) CHECK(std::ranges::find(manifests, dir / "missing.json") != manifests.end());
 #endif
     CHECK(openxr_layers::read(dir / "unloadable.json").problem.find("is not a") != std::string::npos);
 
@@ -226,10 +230,18 @@ TEST_CASE("The host OpenXR instance leaves out only the implicit layers that fai
     CHECK(host.instance != nullptr);
     const auto &skipped = host.skipped_api_layers;
     auto skipped_layer = [&](const char *name) { return std::ranges::find(skipped, name) != skipped.end(); };
-    CHECK(skipped_layer("XR_APILAYER_VENTURE_test_unloadable"));
-    CHECK(skipped_layer("XR_APILAYER_VENTURE_test_missing_library"));
-    CHECK_FALSE(skipped_layer("XR_APILAYER_VENTURE_test_working"));
-    CHECK(skipped.size() == std::size_t(mode == 0 ? 2 : 3));
+    if (mode == 3) {
+      CHECK(skipped_layer("XR_APILAYER_VENTURE_test_working"));
+      CHECK(skipped.size() == 1);
+      CHECK(xr::user_left_out_layers().size() == 1);
+      // Not in the instance: the loader never loaded it (-1) or holds it unused.
+      CHECK(layer_instances(layer_library) <= 0);
+    } else {
+      CHECK(skipped_layer("XR_APILAYER_VENTURE_test_unloadable"));
+      CHECK(skipped_layer("XR_APILAYER_VENTURE_test_missing_library"));
+      CHECK_FALSE(skipped_layer("XR_APILAYER_VENTURE_test_working"));
+      CHECK(skipped.size() == std::size_t(mode == 0 ? 2 : 3));
+    }
     if (mode == 1) {
       CHECK(skipped_layer("XR_APILAYER_VENTURE_test_no_entry"));
       // The working layer is in the instance, the only one created.

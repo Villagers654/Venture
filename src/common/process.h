@@ -22,10 +22,12 @@ public:
   Process &operator=(Process &&) noexcept;
   void spawn(const fs::path &executable, const std::vector<std::string> &args,
              const fs::path &log, bool console);
-  // `log` receives the child's stdout and stderr.
+  // `log` receives the child's stdout and stderr. The child inherits the
+  // launcher's environment with `environment` applied and without the
+  // variables named in `removed`.
   void spawn(const fs::path &executable, const std::vector<std::string> &args,
              const fs::path &log, bool console, PipeChannel::Handler broker,
-             const Environment &environment = {});
+             const Environment &environment = {}, const std::vector<std::string> &removed = {});
   bool active() const;
   std::optional<int> poll();
   // Asks a running venture-runtime to quit normally (the Android Activity

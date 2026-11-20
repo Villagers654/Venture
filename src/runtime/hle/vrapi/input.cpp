@@ -33,9 +33,9 @@ XrResult make_hand_spaces(int hand) {
   ci.subactionPath = input.hands[hand];
   // VrApi reports the legacy Oculus controller pose, not the OpenXR grip: Meta's OpenXR plugin puts
   // the grip 4 cm behind and 3 cm below it, pitched up 60 degrees (OculusPoseToGrip). This is
-  // that legacy pose within the grip.
+  // that legacy pose within the grip (a Quest's grip on this controller: offset_pose's grip).
   ci.poseInActionSpace =
-      venture::xr::offset_pose(profile, hand, {{-0.5f, 0, 0, 0.8660254f}, {0, -0.0196410f, -0.0459808f}});
+      venture::xr::offset_pose(profile, hand, {{-0.5f, 0, 0, 0.8660254f}, {0, -0.0196410f, -0.0459808f}}, true);
   auto r = ::xrCreateActionSpace(session().handle, &ci, &input.grip[hand]);
   if (XR_FAILED(r))
     return r;
@@ -110,6 +110,14 @@ XrResult initialize_input() {
       {&input.touch_b, "touch_b", XR_ACTION_TYPE_BOOLEAN_INPUT, "/input/y/touch", "/input/b/touch"},
       {&input.touch_rest, "touch_rest", XR_ACTION_TYPE_BOOLEAN_INPUT, "/input/thumbrest/touch",
        "/input/thumbrest/touch"},
+      {&input.stick_up, "stick_up", XR_ACTION_TYPE_BOOLEAN_INPUT, "/input/thumbstick/dpad_up",
+       "/input/thumbstick/dpad_up"},
+      {&input.stick_down, "stick_down", XR_ACTION_TYPE_BOOLEAN_INPUT, "/input/thumbstick/dpad_down",
+       "/input/thumbstick/dpad_down"},
+      {&input.stick_left, "stick_left", XR_ACTION_TYPE_BOOLEAN_INPUT, "/input/thumbstick/dpad_left",
+       "/input/thumbstick/dpad_left"},
+      {&input.stick_right, "stick_right", XR_ACTION_TYPE_BOOLEAN_INPUT, "/input/thumbstick/dpad_right",
+       "/input/thumbstick/dpad_right"},
       // Bound below, only where the player's controls use pad halves the host cannot bind.
       {&input.pad, "trackpad", XR_ACTION_TYPE_VECTOR2F_INPUT, nullptr, nullptr},
       {&input.pad_press, "trackpad_press", XR_ACTION_TYPE_BOOLEAN_INPUT, nullptr, nullptr},
@@ -431,10 +439,11 @@ std::int32_t vrapi_GetCurrentInputState(Mobile *mobile, std::uint32_t id, InputS
         (a ? (hand ? 1u : 0x100u) : 0u) | (b ? (hand ? 2u : 0x200u) : 0u) | (click ? 0x80000000u : 0u) |
         ((button(i.menu, hand) || (!hand && venture::xr::menu_chord_pulse(session().handle))) ? 0x100000u : 0u) |
         (trigger_pressed ? 0x20000000u : 0u) | (grip_pressed ? 0x04000000u : 0u);
-    remote->touches = (button(i.touch_trigger, hand) ? 0x40u : 0u) |
-                      (button(i.touch_stick, hand) ? 0x20u : 0u) |
-                      (button(i.touch_a, hand) ? (hand ? 1u : 4u) : 0u) |
-                      (button(i.touch_b, hand) ? (hand ? 2u : 8u) : 0u) |
+    // A touch row's buttons reach the touch actions through touch_bindings; its pad halves here.
+    remote->touches = (button(i.touch_trigger, hand) || pad(Quest::trigger_touch) ? 0x40u : 0u) |
+                      (button(i.touch_stick, hand) || pad(Quest::stick_touch) ? 0x20u : 0u) |
+                      (button(i.touch_a, hand) || pad(Quest::primary_touch) ? (hand ? 1u : 4u) : 0u) |
+                      (button(i.touch_b, hand) || pad(Quest::secondary_touch) ? (hand ? 2u : 8u) : 0u) |
                       (button(i.touch_rest, hand) || pad(Quest::thumbrest) ? 0x1000u : 0u);
     XrActionStateGetInfo gi{XR_TYPE_ACTION_STATE_GET_INFO, nullptr, i.stick, i.hands[hand]};
     XrActionStateVector2f stick{XR_TYPE_ACTION_STATE_VECTOR2F};
@@ -449,6 +458,18 @@ std::int32_t vrapi_GetCurrentInputState(Mobile *mobile, std::uint32_t id, InputS
       } else if (std::hypot(raw[0], raw[1]) >= 0.1f) {
         remote->joystick = remote->raw_joystick;
       }
+    }
+    // The direction rows' buttons push the stick all the way; the thumb is on it.
+    const bool up = button(i.stick_up, hand) || pad(Quest::stick_up),
+               down = button(i.stick_down, hand) || pad(Quest::stick_down),
+               left = button(i.stick_left, hand) || pad(Quest::stick_left),
+               right = button(i.stick_right, hand) || pad(Quest::stick_right);
+    if (up || down || left || right) {
+      const auto raw = controls::push_stick(remote->raw_joystick.x, remote->raw_joystick.y, up, down, left, right);
+      const auto shaped = controls::push_stick(remote->joystick.x, remote->joystick.y, up, down, left, right);
+      remote->raw_joystick = {raw[0], raw[1]};
+      remote->joystick = {shaped[0], shaped[1]};
+      remote->touches |= 0x20u;
     }
     if (av::enabled()) {
       using Clock = std::chrono::steady_clock;

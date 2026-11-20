@@ -4,8 +4,9 @@
 struct SDL_Window;
 namespace venture::launcher {
 void style_native_window(SDL_Window* window, unsigned char r, unsigned char g, unsigned char b);
-// Before SDL_Init: the platform's native video backend (Wayland on Linux),
-// unless the user chose one with SDL_VIDEO_DRIVER.
+// Before SDL_Init: the platform's native video backend (Wayland on Linux; in
+// gamescope its Xwayland, see environment::gamescope_xwayland), unless the
+// user chose one with SDL_VIDEO_DRIVER.
 void prefer_native_video_driver();
 // What to tell the user when SDL video cannot start.
 const char* video_unavailable_message();

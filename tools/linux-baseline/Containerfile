@@ -21,7 +21,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       libgcc-11-dev binutils make patch file git xz-utils gpgv pkg-config \
       python3 python3.12 \
       libssl-dev libsecret-1-dev \
-      libwayland-dev libxkbcommon-dev libegl-dev libdrm-dev libgbm-dev \
+      libwayland-dev libxkbcommon-dev libegl-dev libdrm-dev libgbm-dev libx11-dev libxext-dev \
       libpipewire-0.3-dev libpulse-dev libasound2-dev libdbus-1-dev libudev-dev libusb-1.0-0-dev \
       libvulkan1 mesa-vulkan-drivers && \
     rm -rf /var/lib/apt/lists/*

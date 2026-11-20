@@ -133,6 +133,76 @@ TEST_CASE("sign-in protection names where the session was actually stored") {
   CHECK_FALSE(fs::exists(d.root / "accounts" / key / "session.sealed"));
   CHECK_FALSE(SecretStore(d.root, key).load().has_value());
 }
+namespace {
+struct ForceFileStore {
+  ForceFileStore() { setenv("VENTURE_SECRET_STORE", "file", 1); }
+  ~ForceFileStore() { unsetenv("VENTURE_SECRET_STORE"); }
+};
+bool keyring_takes_sign_ins() {
+  return std::string(SecretStore::protection()) == "kept in your desktop keyring";
+}
+} // namespace
+TEST_CASE("a sign-in kept in a sealed file stays there, and its keyring copy goes") {
+  Directory d;
+  const auto key = random_account_key();
+  const auto dir = d.root / "accounts" / key;
+  const bool keyring = keyring_takes_sign_ins();
+  SecretStore(d.root, key).save(fixture());
+  CHECK(fs::exists(dir / "session.sealed") == !keyring);
+  {
+    // As in a session whose keyring cannot be opened without a prompt.
+    ForceFileStore file_store;
+    CHECK(std::string(SecretStore::protection()) == "kept in an encrypted file only your user can read");
+    SecretStore(d.root, key).save(fixture("888888"));
+  }
+  REQUIRE(fs::exists(dir / "session.sealed"));
+  auto mode = fs::status(dir / "session.sealed").permissions();
+  CHECK((mode & (fs::perms::group_all | fs::perms::others_all)) == fs::perms::none);
+  // Back where the keyring opens: the newer sealed copy is the one read, and a
+  // later save keeps it sealed, so the other session still finds it.
+  auto loaded = SecretStore(d.root, key).load();
+  REQUIRE(loaded.has_value());
+  CHECK(loaded->access_token == "fixture-secret-888888");
+  SecretStore(d.root, key).save(fixture("999999"));
+  CHECK(fs::exists(dir / "session.sealed"));
+  CHECK(SecretStore(d.root, key).load()->access_token == "fixture-secret-999999");
+  // No older keyring copy is left to come back once the sealed file is gone.
+  fs::remove(dir / "session.sealed");
+  fs::remove(dir / "session.key");
+  CHECK_FALSE(SecretStore(d.root, key).load().has_value());
+  SecretStore(d.root, key).clear();
+}
+TEST_CASE("a data root used without an open keyring keeps new sign-ins in sealed files") {
+  Directory d;
+  const auto key = random_account_key();
+  paths::atomic_write(d.root / "accounts" / ".file-store", "marker\n");
+  SecretStore(d.root, key).save(fixture());
+  CHECK(fs::exists(d.root / "accounts" / key / "session.sealed"));
+  CHECK(SecretStore(d.root, key).load()->access_token == "fixture-secret-777777");
+  SecretStore(d.root, key).clear();
+  CHECK_FALSE(SecretStore(d.root, key).load().has_value());
+  // The legacy slot follows the same marker.
+  SecretStore(d.root).save(fixture());
+  CHECK(fs::exists(d.root / "meta-session.sealed"));
+  SecretStore(d.root).clear();
+}
+TEST_CASE("a sign-in saved where no keyring answers marks its data root for sealed files") {
+  Directory d;
+  const auto key = random_account_key();
+  SecretStore(d.root, key).save(fixture());
+  // Only a save that found no usable keyring marks the root; one forced by
+  // VENTURE_SECRET_STORE does not.
+  CHECK(fs::exists(d.root / "accounts" / ".file-store") == !keyring_takes_sign_ins());
+  Directory forced;
+  {
+    ForceFileStore file_store;
+    SecretStore(forced.root, key).save(fixture());
+  }
+  CHECK(fs::exists(forced.root / "accounts" / key / "session.sealed"));
+  CHECK_FALSE(fs::exists(forced.root / "accounts" / ".file-store"));
+  SecretStore(d.root, key).clear();
+  SecretStore(forced.root, key).clear();
+}
 #endif
 TEST_CASE(
     "vault reconciles orphans and missing blobs without deleting secrets") {

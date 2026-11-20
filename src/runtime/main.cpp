@@ -562,6 +562,14 @@ int main(int argc, char** argv) {
         }
         if (result.supervisor_stopped)
           venture::log::warn("launch", "Stopping app worker after shutdown request or teardown grace expired");
+        // The player quit from the VR runtime's own menu, which then killed
+        // the worker before its quit finished: a quit, not a crash.
+        if (result.quit_kill()) {
+          venture::log::warn("launch", "The VR runtime ended the game's session and killed it before its quit "
+                             "finished (worker exit code {})", result.status);
+          venture::log::info("launch", "Exit code: 0 (quit from the VR runtime)");
+          return 0;
+        }
         if (const auto status = result.completion_status(stop.requested() || expired())) {
           // A debug report reads the run's result from this line.
           venture::log::info("launch", "Exit code: {}{}", *status, stop.requested() ? " (stop requested)" : "");

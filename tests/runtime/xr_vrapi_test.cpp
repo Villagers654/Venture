@@ -2221,6 +2221,16 @@ TEST_CASE("Host Activity quit stops the VrApi session without EXITING") {
   vr_frames.drain();
   CHECK(venture::xr::session().state == XR_SESSION_STATE_IDLE);
   CHECK_FALSE(venture::xr::session().running);
+  CHECK_FALSE(venture::xr::session().host_ended.load());
+}
+TEST_CASE("A quit from the host runtime's menu stops the VrApi session and starts the host quit") {
+  VrApiFrames vr_frames;
+  CHECK_FALSE(venture::xr::session().host_ended.load());
+  ventureMockXrEndSession();
+  vr_frames.drain();
+  CHECK(venture::xr::session().state == XR_SESSION_STATE_IDLE);
+  CHECK_FALSE(venture::xr::session().running);
+  CHECK(venture::xr::session().host_ended.load());
 }
 TEST_CASE("VrApi keeps a lagging renderer's frame and retires only abandoned ones") {
   using namespace std::chrono_literals;

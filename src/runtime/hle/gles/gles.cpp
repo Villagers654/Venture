@@ -112,6 +112,15 @@ void build_extensions(GlContextState& state) {
     state.extension_string += name;
   }
   state.extensions_ready = true;
+  // What the game sees decides its render path (UE4 picks framebuffer
+  // fetch, depth fetch and multiview MSAA from this list), and the list
+  // follows the host's Vulkan capabilities. Once per process, near the log's
+  // start, which debug reports keep.
+  static std::once_flag reported;
+  std::call_once(reported, [&] {
+    log::info("gles", "Guest GLES {}.{} on {}: {} extensions: {}", state.major_version, minor,
+              renderer ? renderer : "?", state.extensions.size(), state.extension_string);
+  });
   if (verbose_gl_debug()) {
     if (auto fn = reinterpret_cast<PFNGLDEBUGMESSAGECALLBACKPROC>(
             angle_proc("glDebugMessageCallbackKHR"))) {

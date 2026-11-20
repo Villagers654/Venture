@@ -31,7 +31,7 @@ TEST_CASE("credential broker sends only app credentials, refreshes on 190, and "
           "revokes on sign-out") {
   Server server;
   server.push(R"({"access_token":"fake-app-only-token"})");
-  server.push(R"({"id":"123456","alias":"fixture-app-alias"})");
+  server.push(R"({"id":"123456","alias":"fixture-app-alias","display_name":"Fixture Name"})");
   server.push(library().dump());
   auto store = std::make_shared<optest::FakeStore>();
   auto http = loopback_http_transport(server.port);
@@ -44,6 +44,7 @@ TEST_CASE("credential broker sends only app credentials, refreshes on 190, and "
   CHECK_FALSE(packet.contains("accountId"));
   CHECK_FALSE(packet.contains("profileToken"));
   CHECK(venture::str(packet, "appToken") == "fake-app-only-token");
+  CHECK(venture::str(packet, "displayName") == "Fixture Name");
   // Entitlement is asked only when the game asks for it.
   CHECK_FALSE(packet.contains("entitlementError"));
   CHECK(server.requests().size() == 2);
@@ -68,7 +69,11 @@ TEST_CASE("credential broker sends only app credentials, refreshes on 190, and "
   CHECK(server.requests().size() == 2);
   CHECK_FALSE(child->entitlement({}).error);
   CHECK(server.requests().back().find("/graphql") != std::string::npos);
-  CHECK(child->logged_in_user({}).user.id == 123456);
+  // ovr_User_GetLoggedInUser: the game's name and Oculus ID cross the broker.
+  const auto me = child->logged_in_user({});
+  CHECK(me.user.id == 123456);
+  CHECK(me.user.alias == "fixture-app-alias");
+  CHECK(me.user.display_name == "Fixture Name");
   CHECK(child->access_token({}).text == "fake-app-only-token");
   SUBCASE("presence shares the broker channel without exposing its service token") {
     server.push(R"({"seconds_until_next_call_due":60})");
@@ -113,8 +118,13 @@ TEST_CASE("credential broker sends only app credentials, refreshes on 190, and "
     auto age = child->service("ovr_UserAgeCategory_Get", {}, {});
     REQUIRE_FALSE(age.error);
     CHECK(std::get<std::int32_t>(age.model.fields.at("AgeCategory")) == 3);
-    server.push(R"({"id":"123456","alias":"fixture-app-alias"})");
-    CHECK_FALSE(child->service("ovr_User_Get", {{std::uint64_t{123456}}}, {}).error);
+    server.push(R"({"id":"123456","alias":"fixture-app-alias","display_name":"Fixture Name"})");
+    auto user = child->service("ovr_User_Get", {{std::uint64_t{123456}}}, {});
+    REQUIRE_FALSE(user.error);
+    CHECK(std::get<std::string>(user.model.fields.at("OculusID")) == "fixture-app-alias");
+    CHECK(std::get<std::string>(user.model.fields.at("DisplayName")) == "Fixture Name");
+    // Graph answers a user node asked without fields with its id alone.
+    CHECK(server.requests().back().find("fields=id%2Calias%2Cdisplay_name%2C") != std::string::npos);
     server.push(R"({"org_scoped_id":"18446744073709551615"})");
     auto org = child->service("ovr_User_GetOrgScopedID", {{std::uint64_t{123456}}}, {});
     REQUIRE_FALSE(org.error);

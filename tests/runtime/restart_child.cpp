@@ -20,6 +20,7 @@
 #else
 #include <unistd.h>
 #include <fcntl.h>
+#include <csignal>
 #endif
 #include <mutex>
 #include "platform/runtime_child.h"
@@ -50,6 +51,18 @@ int main(int argc, char** argv) {
     venture::platform::notify_runtime_exit_wait(venture::platform::RuntimeExitWait::os_termination, 0);
     venture::platform::terminate_runtime_process(0);
   }
+#ifndef _WIN32
+  // A worker quitting because the host runtime ended its session, which the
+  // host then kills (SteamVR after a quit from its dashboard), or which
+  // crashes during that quit.
+  if (mode == "host-ended-killed" || mode == "host-ended-crash") {
+    venture::platform::notify_runtime_host_ended();
+    venture::platform::notify_runtime_teardown_posted();
+    if (mode == "host-ended-crash") { signal(SIGSEGV, SIG_DFL); raise(SIGSEGV); }
+    kill(getpid(), SIGKILL);
+    return 5;
+  }
+#endif
   if (mode == "abort-reporter-exit-zero") {
     using namespace venture;
     set_terminal_guest_process_exit(true);

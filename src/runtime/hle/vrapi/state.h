@@ -46,6 +46,8 @@ struct Input {
   XrAction grip_action{}, aim_action{}, trigger{}, squeeze{}, stick{}, a{}, b{}, click{}, menu{},
       haptic{};
   XrAction touch_trigger{}, touch_stick{}, touch_a{}, touch_b{}, touch_rest{};
+  // The player's buttons for the stick's directions (controls::push_stick).
+  XrAction stick_up{}, stick_down{}, stick_left{}, stick_right{};
   // Without XR_EXT_dpad_binding: the pad and its press, split into halves here.
   XrAction pad{}, pad_press{};
   // Each hand's host profile (its offset and halves), refreshed when the host

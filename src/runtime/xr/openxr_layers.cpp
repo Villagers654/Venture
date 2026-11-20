@@ -1,6 +1,8 @@
 #include "xr/openxr_layers.h"
 #include "common/openxr_layers.h"
+#include "common/environment.h"
 #include "common/paths.h"
+#include <algorithm>
 #include <openxr/openxr.h>
 #include <openxr/openxr_loader_negotiation.h>
 
@@ -54,9 +56,48 @@ std::vector<ApiLayer> enabled_openxr_layers() {
   return out;
 }
 
-bool skip_openxr_layers(const std::vector<ApiLayer> &layers) {
+std::vector<std::string> user_left_out_names(std::string_view setting) {
+  std::vector<std::string> names;
+  std::string name;
+  for (char c : setting) {
+    if (c == ',' || c == ';' || c == ':' || c == ' ') {
+      if (!name.empty()) names.push_back(std::move(name));
+      name.clear();
+    } else {
+      name += c;
+    }
+  }
+  if (!name.empty()) names.push_back(std::move(name));
+  return names;
+}
+
+bool user_leaves_out(const std::vector<std::string> &names, std::string_view layer) {
+  return std::ranges::any_of(names, [&](const std::string &n) { return n == "all" || n == layer; });
+}
+
+const std::vector<ApiLayer> &user_left_out_layers() {
+  static const std::vector<ApiLayer> layers = [] {
+    std::vector<ApiLayer> out;
+    const char *setting = environment::getenv("VENTURE_OPENXR_LAYERS_OFF");
+    if (!setting || !*setting) return out;
+    const auto names = user_left_out_names(setting);
+    for (const auto &path : openxr_layers::implicit_manifests()) {
+      const auto layer = openxr_layers::read(path);
+      if (layer.name.empty() || layer.disable_environment.empty() || !user_leaves_out(names, layer.name)) continue;
+      out.push_back({layer.name, paths::utf8(path), layer.disable_environment, "left out by VENTURE_OPENXR_LAYERS_OFF"});
+    }
+    return out;
+  }();
+  return layers;
+}
+
+bool skip_openxr_layers(const std::vector<ApiLayer> &requested) {
   PFN_xrVoidFunction raw = nullptr;
   if (XR_FAILED(xrGetInstanceProcAddr(XR_NULL_HANDLE, "xrInitializeLoaderKHR", &raw)) || !raw) return false;
+  // The layers the user left out stay out whatever else is skipped.
+  auto layers = requested;
+  for (const auto &layer : user_left_out_layers())
+    if (std::ranges::none_of(layers, [&](const ApiLayer &l) { return l.name == layer.name; })) layers.push_back(layer);
   std::vector<XrLoaderInitPropertyValueEXT> values;
   for (const auto &layer : layers) values.push_back({layer.disable_environment.c_str(), "1"});
   XrLoaderInitInfoPropertiesEXT info{XR_TYPE_LOADER_INIT_INFO_PROPERTIES_EXT};

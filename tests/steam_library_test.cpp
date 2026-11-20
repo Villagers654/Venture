@@ -2,10 +2,12 @@
 #include "common/file_ops.h"
 #include "common/library/library.h"
 #include "common/environment.h"
+#include "common/process.h"
 #include "common/steam_library.h"
 #include "launcher/options.h"
 #include <chrono>
 #include <cstdlib>
+#include <map>
 #include <doctest/doctest.h>
 #include <thread>
 #ifndef _WIN32
@@ -657,4 +659,42 @@ TEST_CASE("gamescope's Wayland display stands in for an unset WAYLAND_DISPLAY wh
   CHECK(environment::gamescope_wayland_display(nullptr, "gamescope-0", dir.c_str()).empty());
   fs::remove_all(dir);
 #endif
+}
+TEST_CASE("a game started from a Venture that Steam started is not taken for Venture by Steam and SteamVR") {
+  std::map<std::string, std::string> vars{
+      {"SteamGameId", "13609473281357643776"}, {"SteamAppId", "0"}, {"SteamOverlayGameId", "13609473281357643776"},
+      {"STEAM_COMPAT_APP_ID", "0"}, {"SteamClientLaunch", "1"},
+      {"LD_PRELOAD", "/home/u/.steam/ubuntu12_32/gameoverlayrenderer.so:/home/u/.steam/ubuntu12_64/gameoverlayrenderer.so"}};
+  auto get = [&](const char *name) -> const char * {
+    auto it = vars.find(name);
+    return it == vars.end() ? nullptr : it->second.c_str();
+  };
+  auto identity = launch_identity(get);
+  CHECK(identity.removed ==
+        std::vector<std::string>{"SteamGameId", "SteamAppId", "SteamOverlayGameId", "STEAM_COMPAT_APP_ID", "LD_PRELOAD"});
+  CHECK(identity.replaced.empty());
+  // A preload of the player's own stays, in its order.
+  vars["LD_PRELOAD"] = "libmine.so /x/ubuntu12_64/gameoverlayrenderer.so:/opt/libother.so";
+  identity = launch_identity(get);
+  REQUIRE(identity.replaced.size() == 1);
+  CHECK(identity.replaced[0] == std::pair<std::string, std::string>{"LD_PRELOAD", "libmine.so:/opt/libother.so"});
+  // Started outside Steam: nothing to change.
+  vars = {{"LD_PRELOAD", "libmine.so"}, {"HOME", "/home/u"}};
+  identity = launch_identity(get);
+  CHECK(identity.removed.empty());
+  CHECK(identity.replaced.empty());
+}
+TEST_CASE("a child does not inherit the variables its spawn removes") {
+  Env game{"SteamGameId", fs::path("13609473281357643776")}, kept{"VENTURE_TEST_KEPT", fs::path("kept")};
+  const auto log = fs::temp_directory_path() / ("venture-env-child-" + std::to_string(current_process_id()) + ".log");
+  Process child;
+  child.spawn(VENTURE_ENVIRONMENT_CHILD, {"SteamGameId", "VENTURE_TEST_KEPT", "VENTURE_TEST_SET"}, log, false, nullptr,
+              {{"VENTURE_TEST_SET", "set"}}, {"SteamGameId"});
+  REQUIRE(child.wait(30000).has_value());
+  const auto output = paths::read(log, 4096);
+  CHECK(output.find("SteamGameId unset") != std::string::npos);
+  CHECK(output.find("VENTURE_TEST_KEPT=kept") != std::string::npos);
+  CHECK(output.find("VENTURE_TEST_SET=set") != std::string::npos);
+  std::error_code ec;
+  fs::remove(log, ec);
 }

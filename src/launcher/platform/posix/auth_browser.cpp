@@ -1,5 +1,6 @@
 #include "launcher/auth_browser.h"
 #include "launcher/desktop_id.h"
+#include "common/environment.h"
 #include "common/log.h"
 #include "common/paths.h"
 #include "common/meta/auth.h"
@@ -447,15 +448,20 @@ int helper_main() {
     }
   }).detach();
   auto &w = helper.web;
-  const bool gtk4 = compositor_offers("wl_data_device_manager");
+  // Inside gamescope beside the launcher's own window, on its Xwayland, where
+  // gamescope's close (SteamVR's close on Venture's panel) reaches it
+  // (window_style.h); Wayland when GTK cannot open X11 there. The data device
+  // GTK 4 needs is a Wayland matter.
+  const bool xwayland = environment::gamescope_xwayland();
+  const bool gtk4 = xwayland || compositor_offers("wl_data_device_manager");
   if (!load(w, gtk4)) {
     // WebKitGTK 6.0 is there but cannot open on this display: say why.
     const bool gtk4_only = !gtk4 && dlopen("libwebkitgtk-6.0.so.4", RTLD_LAZY | RTLD_LOCAL);
     return helper.send(gtk4_only ? "error compositor" : "error webkit"), 1;
   }
-  // Wayland only: without a Wayland display GTK fails to initialise rather
-  // than opening an X11 connection.
-  w.allowed_backends("wayland");
+  // Otherwise Wayland only: without a Wayland display GTK fails to initialise
+  // rather than opening an X11 connection.
+  w.allowed_backends(xwayland ? "x11,wayland" : "wayland");
   w.set_prgname(kDesktopId);  // the Wayland app_id: the launcher's icon, not a generic one
   if (w.api == 6 ? !w.init4() : !w.init3(nullptr, nullptr))
     return helper.send("error display"), 1;

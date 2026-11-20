@@ -138,10 +138,9 @@ std::array<bool, controls::kQuestCount> split_pad(std::string_view profile, int 
       if (host.find("/dpad_", 7) != std::string::npos && controls::half_pressed(host, at.x, at.y)) out[std::size_t(q)] = true;
   return out;
 }
-XrPosef offset_pose(std::string_view profile, int hand, const XrPosef& pose) {
-  const auto r = resolved_controls(profile);
-  if (!r || hand < 0 || hand > 1) return pose;
-  const auto& offset = r->offsets[std::size_t(hand)];
+namespace {
+// `offset` placed before `pose` in an action space: the controller moved and turned, then `pose`.
+XrPosef place(const controls::Offset& offset, const XrPosef& pose) {
   if (offset.zero()) return pose;
   const auto q = controls::orientation(offset);
   const XrQuaternionf a{q[0], q[1], q[2], q[3]}, b = pose.orientation;
@@ -156,6 +155,13 @@ XrPosef offset_pose(std::string_view profile, int hand, const XrPosef& pose) {
   out.position = {offset.position[0] / 1000.f + moved.x, offset.position[1] / 1000.f + moved.y,
                   offset.position[2] / 1000.f + moved.z};
   return out;
+}
+}  // namespace
+XrPosef offset_pose(std::string_view profile, int hand, const XrPosef& pose, bool grip) {
+  const auto r = resolved_controls(profile);
+  if (!r || hand < 0 || hand > 1) return pose;
+  const auto placed = place(r->offsets[std::size_t(hand)], pose);
+  return grip ? place(r->quest_grip[std::size_t(hand)], placed) : placed;
 }
 std::vector<std::string> touch_targets() {
   std::vector<std::string> targets{"/interaction_profiles/oculus/touch_controller"};

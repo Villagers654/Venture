@@ -1,6 +1,7 @@
 #include "common/controls.h"
 #include "common/controls_file.h"
 #include <doctest/doctest.h>
+#include <cmath>
 #include <set>
 
 using namespace venture::controls;
@@ -296,6 +297,34 @@ TEST_CASE("Controls offsets are saved, limited, mirrored and turned") {
   CHECK(turn[1] == doctest::Approx(-0.5f));
   CHECK(turn[3] == doctest::Approx(0.8660254f));
   CHECK(orientation({}) == std::array<float, 4>{0, 0, 0, 1});
+}
+
+TEST_CASE("A Steam Frame's grip moves to where a Quest's grip sits in the hand") {
+  // SteamVR's render models: Touch Plus openxr_grip at 20.6 degrees in the device
+  // frame both controllers share, the Frame's at 2.8091; the shift is Touch Plus's
+  // grip origin less the Frame's, in the Frame's grip frame.
+  const auto& frame = profile("/interaction_profiles/valve/frame_controller_valve");
+  const auto r = resolve(frame, nullptr);
+  CHECK(r.quest_grip[1].rotation[0] == doctest::Approx(20.6f - 2.8091f).epsilon(0.001));
+  CHECK(r.quest_grip[1].rotation[1] == 0);
+  CHECK(r.quest_grip[1].rotation[2] == 0);
+  const float c = std::cos(2.8091f * 3.14159265f / 180), s = std::sin(2.8091f * 3.14159265f / 180);
+  const float dy = -0.00182941f + 0.004277f, dz = 0.1019482f - 0.099501f;
+  CHECK(r.quest_grip[1].position[0] == doctest::Approx((-0.007f - 0.003117f) * 1000).epsilon(0.002));
+  CHECK(r.quest_grip[1].position[1] == doctest::Approx((c * dy + s * dz) * 1000).epsilon(0.01));
+  CHECK(r.quest_grip[1].position[2] == doctest::Approx((-s * dy + c * dz) * 1000).epsilon(0.01));
+  // The left hand's models are the right's mirrored.
+  CHECK(r.quest_grip[0] == mirrored(r.quest_grip[1]));
+  // A player's offset leaves it, and it is never what the player saves.
+  Choice choice;
+  choice.offsets[0].rotation = {-10, 0, 0};
+  const auto moved = resolve(frame, &choice);
+  CHECK(moved.quest_grip == r.quest_grip);
+  CHECK(moved.offsets[0].rotation[0] == -10);
+  CHECK(r.offsets[0].zero());
+  // Controllers whose host grip is already a Quest's keep it.
+  for (const auto& p : kProfiles)
+    if (p.path != frame.path) CHECK(resolve(p, nullptr).quest_grip == std::array<Offset, 2>{});
 }
 
 TEST_CASE("Controls Steam Frame touches follow every button with a sensor") {
@@ -757,4 +786,312 @@ TEST_CASE("Controls Touch, Touch Plus and Touch Pro share one input list, so evi
     CHECK(profile(path).inputs.data() == touch.inputs.data());
     CHECK(profile(path).defaults == touch.defaults);
   }
+}
+
+TEST_CASE("Controls stick buttons: Stick touch and the four directions take any button, none by default") {
+  for (const auto& p : kProfiles) {
+    CAPTURE(p.path);
+    const auto r = resolve(p, nullptr);
+    for (int hand = 0; hand < 2; ++hand)
+      for (int q = int(Quest::stick_touch); q < kQuestCount; ++q) CHECK(r.rows[size_t(hand)][size_t(q)].empty());
+    // No direction reaches the host until the player gives it a button.
+    CHECK(host_bindings("/user/hand/left/input/thumbstick/dpad_up", p, r, true).empty());
+  }
+  const auto& touch = profile(kTouch);
+  Choice c;
+  c.rows[1][int(Quest::stick_up)] = Inputs{"/input/a/click"};
+  c.rows[1][int(Quest::stick_down)] = Inputs{"/input/b/click", "/input/thumbstick"};  // a stick is no button
+  c.rows[1][int(Quest::stick_left)] = Inputs{"/input/system/click"};                 // the runtime's
+  c.rows[1][int(Quest::stick_touch)] = Inputs{"/input/trigger/value"};
+  c.rows[0][int(Quest::stick_right)] = Inputs{"/input/a/click"};  // not on the left controller
+  const auto r = resolve(touch, &c);
+  CHECK(r.rows[1][int(Quest::stick_up)] == Inputs{"/input/a/click"});
+  CHECK(r.rows[1][int(Quest::stick_down)] == Inputs{"/input/b/click"});
+  CHECK(r.rows[1][int(Quest::stick_left)].empty());
+  CHECK(r.rows[0][int(Quest::stick_right)].empty());
+  CHECK(host_bindings("/user/hand/right/input/thumbstick/dpad_up", touch, r, true) ==
+        std::vector<std::string>{"/user/hand/right/input/a/click"});
+  CHECK(host_bindings("/user/hand/right/input/thumbstick/dpad_down", touch, r, false) ==
+        std::vector<std::string>{"/user/hand/right/input/b/click"});
+  // The stick keeps the stick; its touch adds Stick touch and the directions' buttons.
+  CHECK(host_bindings("/user/hand/right/input/thumbstick", touch, r, true) ==
+        std::vector<std::string>{"/user/hand/right/input/thumbstick"});
+  CHECK(host_bindings("/user/hand/right/input/thumbstick/touch", touch, r, true) ==
+        std::vector<std::string>{"/user/hand/right/input/thumbstick/touch", "/user/hand/right/input/trigger/value",
+                                 "/user/hand/right/input/a/click", "/user/hand/right/input/b/click"});
+  CHECK(host_bindings("/user/hand/left/input/thumbstick/touch", touch, r, true) ==
+        std::vector<std::string>{"/user/hand/left/input/thumbstick/touch"});
+  // A button on A and on Stick up is shared, as any two rows on one button are.
+  CHECK(conflicts(r, MenuMode::automatic) ==
+        std::vector<Conflict>{{0, Quest::menu, Quest::stick_click}, {1, Quest::primary, Quest::stick_up},
+                              {1, Quest::secondary, Quest::stick_down}, {1, Quest::menu, Quest::stick_click},
+                              {1, Quest::trigger, Quest::stick_touch}});
+  // A Vive wand's trackpad half as Stick up: bound with XR_EXT_dpad_binding, else Venture splits the pad.
+  const auto& vive = profile(kVive);
+  Choice wand;
+  wand.rows[0][int(Quest::stick_up)] = Inputs{"/input/menu/click"};
+  wand.rows[0][int(Quest::stick_touch)] = Inputs{"/input/trackpad/dpad_center"};
+  const auto rv = resolve(vive, &wand);
+  CHECK(host_bindings("/user/hand/left/input/thumbstick/dpad_up", vive, rv, false) ==
+        std::vector<std::string>{"/user/hand/left/input/menu/click"});
+  CHECK(host_bindings("/user/hand/left/input/thumbstick/touch", vive, rv, true) ==
+        std::vector<std::string>{"/user/hand/left/input/trackpad/touch", "/user/hand/left/input/trackpad/dpad_center",
+                                 "/user/hand/left/input/menu/click"});
+  CHECK(pads(vive, rv, 0) == std::vector<Pad>{{"/input/trackpad", "/input/trackpad/click"}});
+}
+
+TEST_CASE("Controls offer every touch sensor a controller has as an input of its own") {
+  // A sensor the profile names in `touches` can go on any row, on the hand its button is on.
+  for (const auto& p : kProfiles) {
+    CAPTURE(p.path);
+    for (std::string_view t = p.touches; !t.empty();) {
+      const auto space = t.find(' ');
+      const auto name = t.substr(0, space);
+      CAPTURE(name);
+      const std::string id = "/input/" + std::string(name);
+      const auto* sensor = find_input(p, id + "/touch");
+      REQUIRE(sensor);
+      CHECK_FALSE(sensor->reserved);
+      for (const auto& in : p.inputs)
+        if (in.path.starts_with(id + "/")) CHECK(in.hands == sensor->hands);
+      if (space == std::string_view::npos) break;
+      t.remove_prefix(space + 1);
+    }
+    // No input is listed twice.
+    for (size_t i = 0; i < p.inputs.size(); ++i)
+      for (size_t j = i + 1; j < p.inputs.size(); ++j) CHECK(p.inputs[i].path != p.inputs[j].path);
+  }
+  // A sensor on a button row reaches the game's button; the touch follows it as for any input there.
+  const auto& index = profile(kIndex);
+  Choice c;
+  c.rows[1][int(Quest::secondary)] = Inputs{"/input/a/touch"};
+  c.rows[1][int(Quest::thumbrest)] = Inputs{"/input/trigger/touch"};
+  const auto r = resolve(index, &c);
+  CHECK(host_bindings("/user/hand/right/input/b/click", index, r, true) ==
+        std::vector<std::string>{"/user/hand/right/input/a/touch"});
+  CHECK(host_bindings("/user/hand/right/input/b/touch", index, r, true) ==
+        std::vector<std::string>{"/user/hand/right/input/a/touch"});
+  CHECK(host_bindings("/user/hand/right/input/thumbrest/touch", index, r, true) ==
+        std::vector<std::string>{"/user/hand/right/input/trigger/touch"});
+  // Any scalar input goes on any button or analog row (the runtime thresholds or
+  // gives 0 and 1); only the stick takes a stick or pad.
+  c = {};
+  c.rows[1][int(Quest::trigger)] = Inputs{"/input/b/click"};
+  c.rows[1][int(Quest::primary)] = Inputs{"/input/squeeze/force"};
+  c.rows[1][int(Quest::stick)] = Inputs{"/input/a/click"};
+  const auto mixed = resolve(index, &c);
+  CHECK(mixed.rows[1][int(Quest::trigger)] == Inputs{"/input/b/click"});
+  CHECK(mixed.rows[1][int(Quest::primary)] == Inputs{"/input/squeeze/force"});
+  CHECK(mixed.rows[1][int(Quest::stick)] == Inputs{"/input/thumbstick"});  // back to the default
+}
+
+TEST_CASE("Controls touch rows: X/A, Y/B and trigger touches take any button beside their own sensor") {
+  const auto& touch = profile(kTouch);
+  Choice c;
+  c.rows[1][int(Quest::primary_touch)] = Inputs{"/input/thumbrest/touch"};
+  c.rows[1][int(Quest::trigger_touch)] = Inputs{"/input/b/click", "/input/thumbstick"};  // a stick is no button
+  c.rows[0][int(Quest::secondary_touch)] = Inputs{"/input/x/click"};
+  c.rows[0][int(Quest::primary_touch)] = Inputs{"/input/a/click"};  // not on the left controller
+  const auto r = resolve(touch, &c);
+  CHECK(r.rows[1][int(Quest::trigger_touch)] == Inputs{"/input/b/click"});
+  CHECK(r.rows[0][int(Quest::primary_touch)].empty());
+  CHECK(host_bindings("/user/hand/right/input/a/touch", touch, r, true) ==
+        std::vector<std::string>{"/user/hand/right/input/a/touch", "/user/hand/right/input/thumbrest/touch"});
+  CHECK(host_bindings("/user/hand/right/input/trigger/touch", touch, r, true) ==
+        std::vector<std::string>{"/user/hand/right/input/trigger/touch", "/user/hand/right/input/b/click"});
+  CHECK(host_bindings("/user/hand/left/input/y/touch", touch, r, true) ==
+        std::vector<std::string>{"/user/hand/left/input/y/touch", "/user/hand/left/input/x/click"});
+  CHECK(host_bindings("/user/hand/left/input/x/touch", touch, r, true) ==
+        std::vector<std::string>{"/user/hand/left/input/x/touch"});
+  // The clicks stay their own rows'.
+  CHECK(host_bindings("/user/hand/right/input/a/click", touch, r, true) ==
+        std::vector<std::string>{"/user/hand/right/input/a/click"});
+  // A Vive wand has no touch sensors on its trigger: the row alone touches it, a pad half split by Venture.
+  const auto& vive = profile(kVive);
+  Choice wand;
+  wand.rows[1][int(Quest::trigger_touch)] = Inputs{"/input/trackpad/dpad_left"};
+  const auto rv = resolve(vive, &wand);
+  CHECK(host_bindings("/user/hand/right/input/trigger/touch", vive, rv, true) ==
+        std::vector<std::string>{"/user/hand/right/input/trackpad/dpad_left"});
+  CHECK(host_bindings("/user/hand/right/input/trigger/touch", vive, rv, false).empty());
+  CHECK(pads(vive, rv, 1) == std::vector<Pad>{{"/input/trackpad", "/input/trackpad/click"}});
+  // Saved and read back by their keys.
+  Config config;
+  config[std::string(kTouch)] = c;
+  const auto text = encode(config);
+  CHECK(text.find(R"("primaryTouch":"/input/thumbrest/touch")") != std::string::npos);
+  CHECK(text.find(R"("secondaryTouch":"/input/x/click")") != std::string::npos);
+  CHECK(text.find(R"("triggerTouch":["/input/b/click","/input/thumbstick"])") != std::string::npos);
+  CHECK(decode(text) == config);
+  Choice clean = c;
+  clean.rows[0][int(Quest::primary_touch)].reset();
+  const auto back = import_file(export_file(kTouch, clean), kIndex);
+  CHECK(back.error.empty());
+  REQUIRE(back.config.size() == 1);
+  CHECK(back.config.at(std::string(kTouch)) == clean);
+}
+
+TEST_CASE("Controls read SteamVR bindings of the button and trigger touch actions") {
+  const auto text = R"({
+    "controller_type": "knuckles",
+    "bindings": {"/actions/venture_controls": {
+      "sources": [
+        {"path": "/user/hand/right/input/a", "mode": "button",
+         "inputs": {"touch": {"output": "/actions/venture_controls/in/button_x_a_touch"}}},
+        {"path": "/user/hand/right/input/trackpad", "mode": "trackpad",
+         "inputs": {"touch": {"output": "/actions/venture_controls/in/trigger_touch"}}},
+        {"path": "/user/hand/left/input/b", "mode": "button",
+         "inputs": {"click": {"output": "/actions/venture_controls/in/button_y_b_touch"}}},
+        {"path": "/user/hand/left/input/trigger", "mode": "trigger",
+         "inputs": {"touch": {"output": "/actions/venture_controls/in/trigger_touch"}}}
+      ]}}})";
+  const auto imported = import_file(text, kTouch);
+  CHECK(imported.error.empty());
+  REQUIRE(imported.config.contains(std::string(kIndex)));
+  const auto& c = imported.config.at(std::string(kIndex));
+  CHECK_FALSE(c.rows[1][int(Quest::primary_touch)]);  // A's own sensor already touches A
+  CHECK(c.rows[1][int(Quest::trigger_touch)] == Inputs{"/input/trackpad/touch"});
+  CHECK(c.rows[0][int(Quest::secondary_touch)] == Inputs{"/input/b/click"});
+  CHECK_FALSE(c.rows[0][int(Quest::trigger_touch)]);  // the trigger's own sensor
+  CHECK(imported.mapped == 2);
+  CHECK(imported.skipped == 0);
+}
+
+TEST_CASE("Controls Touch Pro and Touch Plus rows: any input there reaches those sensors, on both paths") {
+  const auto& index = profile(kIndex);
+  // Nothing by default: the host's own sensor (on a Pro or Plus) is the layer's.
+  const auto plain = resolve(index, nullptr);
+  CHECK(host_bindings("/user/hand/right/input/trigger/curl_meta", index, plain, true).empty());
+  Choice c;
+  c.rows[1][int(Quest::trigger_curl)] = Inputs{"/input/trigger/value"};
+  c.rows[1][int(Quest::thumb_proximity)] = Inputs{"/input/thumbstick/touch", "/input/thumbstick"};  // no stick here
+  c.rows[0][int(Quest::thumbrest_force)] = Inputs{"/input/trackpad/force"};
+  c.rows[0][int(Quest::trigger_force)] = Inputs{"/input/squeeze/force"};
+  c.rows[0][int(Quest::stylus_force)] = Inputs{"/input/b/click"};
+  c.rows[1][int(Quest::trigger_slide)] = Inputs{"/input/trackpad/dpad_up"};
+  c.rows[1][int(Quest::trigger_proximity)] = Inputs{"/input/trigger/touch"};
+  const auto r = resolve(index, &c);
+  CHECK(r.rows[1][int(Quest::thumb_proximity)] == Inputs{"/input/thumbstick/touch"});
+  for (auto path : {"/input/trigger/curl_fb", "/input/trigger/curl_meta"})
+    CHECK(host_bindings(std::string("/user/hand/right") + path, index, r, true) ==
+          std::vector<std::string>{"/user/hand/right/input/trigger/value"});
+  for (auto path : {"/input/thumb_fb/proximity_fb", "/input/thumb_meta/proximity_meta"})
+    CHECK(host_bindings(std::string("/user/hand/right") + path, index, r, true) ==
+          std::vector<std::string>{"/user/hand/right/input/thumbstick/touch"});
+  for (auto path : {"/input/trigger/proximity_fb", "/input/trigger/proximity_meta"})
+    CHECK(host_bindings(std::string("/user/hand/right") + path, index, r, true) ==
+          std::vector<std::string>{"/user/hand/right/input/trigger/touch"});
+  CHECK(host_bindings("/user/hand/left/input/thumbrest/force", index, r, true) ==
+        std::vector<std::string>{"/user/hand/left/input/trackpad/force"});
+  CHECK(host_bindings("/user/hand/left/input/trigger/force", index, r, true) ==
+        std::vector<std::string>{"/user/hand/left/input/squeeze/force"});
+  CHECK(host_bindings("/user/hand/left/input/stylus_fb/force", index, r, true) ==
+        std::vector<std::string>{"/user/hand/left/input/b/click"});
+  CHECK(host_bindings("/user/hand/right/input/trigger/slide_meta", index, r, true) ==
+        std::vector<std::string>{"/user/hand/right/input/trackpad/dpad_up"});
+  CHECK(host_bindings("/user/hand/right/input/trigger/slide_meta", index, r, false).empty());  // Venture splits the pad
+  CHECK(pads(index, r, 1) == std::vector<Pad>{{"/input/trackpad", "/input/trackpad/force"}});
+  // Saved by their keys and read back; a controls file carries them.
+  Config config;
+  config[std::string(kIndex)] = c;
+  const auto text = encode(config);
+  for (auto key : {"thumbProximity", "triggerProximity", "triggerCurl", "triggerSlide", "triggerForce", "thumbrestForce",
+                   "stylusForce"})
+    CHECK(text.find(std::string("\"") + key + "\"") != std::string::npos);
+  CHECK(decode(text) == config);
+  const auto back = import_file(export_file(kIndex, c), kTouch);
+  CHECK(back.error.empty());
+  REQUIRE(back.config.size() == 1);
+  CHECK(back.config.at(std::string(kIndex)) == c);
+}
+
+TEST_CASE("Controls read SteamVR bindings of the Touch Pro and Touch Plus sensor actions") {
+  const auto text = R"({
+    "controller_type": "knuckles",
+    "bindings": {"/actions/venture_controls": {
+      "sources": [
+        {"path": "/user/hand/right/input/trigger", "mode": "trigger",
+         "inputs": {"pull": {"output": "/actions/venture_controls/in/plus_trigger_curl"},
+                    "touch": {"output": "/actions/venture_controls/in/trigger_proximity"}}},
+        {"path": "/user/hand/left/input/b", "mode": "button",
+         "inputs": {"click": {"output": "/actions/venture_controls/in/pro_stylus_force"}}}
+      ]}}})";
+  const auto imported = import_file(text, kTouch);
+  CHECK(imported.error.empty());
+  REQUIRE(imported.config.contains(std::string(kIndex)));
+  const auto& c = imported.config.at(std::string(kIndex));
+  CHECK(c.rows[1][int(Quest::trigger_curl)] == Inputs{"/input/trigger/value"});
+  CHECK(c.rows[1][int(Quest::trigger_proximity)] == Inputs{"/input/trigger/touch"});
+  CHECK(c.rows[0][int(Quest::stylus_force)] == Inputs{"/input/b/click"});
+  CHECK(imported.mapped == 3);
+  CHECK(imported.skipped == 0);
+}
+
+TEST_CASE("Controls stick buttons push the stick all the way, beside the stick's own travel") {
+  using A = std::array<float, 2>;
+  auto near = [](A a, A b) { return std::abs(a[0] - b[0]) < 1e-5f && std::abs(a[1] - b[1]) < 1e-5f; };
+  CHECK(push_stick(0.3f, -0.2f, false, false, false, false) == A{0.3f, -0.2f});  // no button: the stick as it is
+  CHECK(push_stick(0, 0, true, false, false, false) == A{0, 1});
+  CHECK(push_stick(0, 0, false, true, false, false) == A{0, -1});
+  CHECK(push_stick(0, 0, false, false, true, false) == A{-1, 0});
+  CHECK(push_stick(0, 0, false, false, false, true) == A{1, 0});
+  CHECK(push_stick(0.4f, -0.6f, true, true, false, false) == A{0.4f, 0});  // both ways: centred on that axis
+  // The other axis keeps the stick (steering while a button walks forward), within the round travel.
+  CHECK(near(push_stick(0.3f, 0, true, false, false, false), A{0.3f / std::sqrt(1.09f), 1 / std::sqrt(1.09f)}));
+  CHECK(near(push_stick(0, 0, true, false, false, true), A{std::sqrt(0.5f), std::sqrt(0.5f)}));
+  const auto pushed = push_stick(-0.9f, 0.9f, false, true, false, false);
+  CHECK(std::hypot(pushed[0], pushed[1]) == doctest::Approx(1));
+  CHECK(pushed[1] < 0);
+}
+
+TEST_CASE("Controls stick buttons are saved, read back and carried by controls files") {
+  Config config;
+  Choice& touch = config[std::string(kTouch)];
+  touch.rows[1][int(Quest::stick_up)] = Inputs{"/input/b/click"};
+  touch.rows[1][int(Quest::stick_down)] = Inputs{"/input/a/click", "/input/thumbrest/touch"};
+  touch.rows[0][int(Quest::stick_touch)] = Inputs{"/input/x/click"};
+  touch.rows[0][int(Quest::stick_left)] = Inputs{};
+  const auto text = encode(config);
+  CHECK(text.find(R"("stickUp":"/input/b/click")") != std::string::npos);
+  CHECK(text.find(R"("stickDown":["/input/a/click","/input/thumbrest/touch"])") != std::string::npos);
+  CHECK(text.find(R"("stickTouch":"/input/x/click")") != std::string::npos);
+  CHECK(text.find("\"stickRight\"") == std::string::npos);  // unset rows are left out
+  CHECK(decode(text) == config);
+  const auto file = export_file(kTouch, touch);
+  const auto back = import_file(file, kIndex);
+  CHECK(back.error.empty());
+  REQUIRE(back.config.size() == 1);
+  CHECK(back.config.at(std::string(kTouch)) == touch);
+  // Settings saved before these rows existed read as before.
+  const auto old = decode(R"({"/interaction_profiles/oculus/touch_controller":{"right":{"primary":"/input/b/click"}}})");
+  for (int q = int(Quest::stick_touch); q < kQuestCount; ++q) CHECK_FALSE(old.begin()->second.rows[1][size_t(q)]);
+}
+
+TEST_CASE("Controls read SteamVR bindings of the stick's direction and touch actions") {
+  const auto text = R"({
+    "controller_type": "knuckles",
+    "bindings": {"/actions/venture_controls": {
+      "sources": [
+        {"path": "/user/hand/left/input/a", "mode": "button",
+         "inputs": {"click": {"output": "/actions/venture_controls/in/thumbstick_up"}}},
+        {"path": "/user/hand/left/input/b", "mode": "button",
+         "inputs": {"click": {"output": "/actions/venture_controls/in/thumbstick_touch"},
+                    "touch": {"output": "/actions/venture_controls/in/thumbstick_touch"}}},
+        {"path": "/user/hand/right/input/trackpad", "mode": "dpad", "parameters": {"sub_mode": "click"},
+         "inputs": {"west": {"output": "/actions/venture_controls/in/thumbstick_left"},
+                    "east": {"output": "/actions/venture_controls/in/thumbstick_right"}}},
+        {"path": "/user/hand/right/input/thumbstick", "mode": "joystick",
+         "inputs": {"touch": {"output": "/actions/venture_controls/in/thumbstick_touch"}}}
+      ]}}})";
+  const auto imported = import_file(text, kTouch);
+  CHECK(imported.error.empty());
+  REQUIRE(imported.config.contains(std::string(kIndex)));
+  const auto& c = imported.config.at(std::string(kIndex));
+  CHECK(c.rows[0][int(Quest::stick_up)] == Inputs{"/input/a/click"});
+  CHECK(c.rows[0][int(Quest::stick_touch)] == Inputs{"/input/b/click"});  // a touch sensor is not a button here
+  CHECK(c.rows[1][int(Quest::stick_left)] == Inputs{"/input/trackpad/dpad_left"});
+  CHECK(c.rows[1][int(Quest::stick_right)] == Inputs{"/input/trackpad/dpad_right"});
+  CHECK_FALSE(c.rows[1][int(Quest::stick_touch)]);  // the stick's own sensor already touches the stick
+  CHECK(imported.mapped == 4);
+  CHECK(imported.skipped == 0);
 }

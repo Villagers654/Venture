@@ -5007,6 +5007,8 @@ void App::draw_controls() {
     }
     // The right A list open: Index trackpad halves among its inputs.
     if (options_.smoke_view == "controls-index-list") controls_open_line_ = std::array{1, int(Quest::primary), 0};
+    // The right Stick up list open: the buttons that can push the stick.
+    if (options_.smoke_view == "controls-stick-list") controls_open_line_ = std::array{1, int(Quest::stick_up), 0};
   }
   // --smoke-view controls* --smoke-import <file>.json: the page reads it, as a dropped file.
   static bool smoke_file = options_.smoke_view.starts_with("controls") && options_.smoke_import.extension() == ".json";
@@ -5168,7 +5170,55 @@ void App::draw_controls_editor(ControlsEdit& e, const ControlsEdit* base, float 
   const auto mode = MenuMode(e.menu_mode);
   auto quest_label = [](int hand, int q) {
     if (q == int(Quest::menu)) return std::string_view{"Menu"};
+    // The extra rows, after the Touch inputs: left and right labels.
+    static const std::array<const char*, 2> kExtraRows[]{
+        // i18n: Controls page row: buttons that touch the game's thumbstick, as a thumb resting on it would.
+        {mark("Stick touch"), mark("Stick touch")},
+        // i18n: Controls page row: buttons that push the game's thumbstick all the way up (forward) while held.
+        {mark("Stick up"), mark("Stick up")},
+        // i18n: Controls page row: buttons that push the game's thumbstick all the way down (back) while held.
+        {mark("Stick down"), mark("Stick down")},
+        // i18n: Controls page row: buttons that push the game's thumbstick all the way left while held.
+        {mark("Stick left"), mark("Stick left")},
+        // i18n: Controls page row: buttons that push the game's thumbstick all the way right while held.
+        {mark("Stick right"), mark("Stick right")},
+        // i18n: Controls page rows: buttons that touch the game's X (left) or A (right) button, as a resting thumb would.
+        {mark("X touch"), mark("A touch")},
+        // i18n: Controls page rows: buttons that touch the game's Y (left) or B (right) button, as a resting thumb would.
+        {mark("Y touch"), mark("B touch")},
+        // i18n: Controls page row: buttons that touch the game's trigger, as a resting finger would.
+        {mark("Trigger touch"), mark("Trigger touch")},
+        // i18n: Controls page row (Touch Pro and Touch Plus sensor): the thumb is near the controller's face.
+        {mark("Thumb proximity"), mark("Thumb proximity")},
+        // i18n: Controls page row (Touch Pro and Touch Plus sensor): the index finger is near the trigger.
+        {mark("Trigger proximity"), mark("Trigger proximity")},
+        // i18n: Controls page row (Touch Pro and Touch Plus sensor): how far the index finger curls around the trigger.
+        {mark("Trigger curl"), mark("Trigger curl")},
+        // i18n: Controls page row (Touch Pro and Touch Plus sensor): where the finger slides along the trigger.
+        {mark("Trigger slide"), mark("Trigger slide")},
+        // i18n: Controls page row (Touch Plus sensor): how hard the trigger is pressed past its end.
+        {mark("Trigger force"), mark("Trigger force")},
+        // i18n: Controls page row (Touch Pro sensor): how hard the thumb presses the thumb rest.
+        {mark("Thumbrest force"), mark("Thumbrest force")},
+        // i18n: Controls page row (Touch Pro sensor): how hard the stylus tip on the controller's base is pressed.
+        {mark("Stylus force"), mark("Stylus force")}};
+    static_assert(std::size(kExtraRows) == kQuestCount - int(Quest::stick_touch));
+    if (controls::is_extra(Quest(q))) return std::string_view{translate(kExtraRows[q - int(Quest::stick_touch)][size_t(hand)])};
     return hand ? controls::kQuestInputs[q].right : controls::kQuestInputs[q].left;
+  };
+  // Stick touch and the directions are extras: a row shows while it has a button
+  // or after "Add input" added it; the others always show (menu on the left only).
+  auto is_extra = [](int q) { return controls::is_extra(Quest(q)); };
+  auto row_shown = [&](int hand, int q) {
+    if (q == int(Quest::menu)) return hand == 0;
+    if (quest_label(hand, q).empty()) return false;
+    return !is_extra(q) || !e.host[hand][q].empty() || controls_extra_added_[size_t(hand)][size_t(q)];
+  };
+  auto can_add_extra = [&](int hand) {
+    if (locked) return false;
+    for (int q = int(Quest::stick_touch); q < kQuestCount; ++q)
+      if (!row_shown(hand, q)) return true;
+    return false;
   };
   // Rows that reach the same host input on one hand conflict. A held menu and a
   // two-button menu share on purpose: a press of one button still reaches the
@@ -5201,7 +5251,15 @@ void App::draw_controls_editor(ControlsEdit& e, const ControlsEdit* base, float 
   const float pad = s(22);
   const float inner = w - 2 * pad;
   // The label column also holds the hover + (and an extra input's x) beside the dropdown.
-  const float row_h = s(50), head_h = s(28), mid = s(4), gutter = s(30), lw = s(100), mark_w = s(14);
+  // It widens, up to a limit, for a longer translated label, so the label keeps
+  // its words beside the +.
+  const float lw = [&] {
+    float widest = 0;
+    for (int hand = 0; hand < 2; ++hand)
+      for (int q = 0; q < kQuestCount; ++q) widest = std::max(widest, measure(fonts().semibold, kBody, quest_label(hand, q)).x);
+    return std::clamp(widest + s(6) + s(26) + s(4), s(100), s(130));
+  }();
+  const float row_h = s(50), head_h = s(28), mid = s(4), gutter = s(30), mark_w = s(14);
   const float half_wide = (inner - mid) * 0.5f;
   const float dw = std::clamp(half_wide * 0.32f, s(146), s(190));
   const float rows_w = lw + dw + mark_w + s(8);
@@ -5211,13 +5269,19 @@ void App::draw_controls_editor(ControlsEdit& e, const ControlsEdit* base, float 
   // tall as the longer list.
   const float line_h = s(44);
   auto row_lines = [&](int hand, int q) { return q == int(Quest::menu) ? 1 : std::max<int>(1, int(e.host[hand][q].size())); };
-  int extra_lines = 0;
+  // Under the lists, on one line for both hands, the quiet "Add input" while an
+  // extra row is left to add.
+  const float add_h = s(50);
+  float list_h = 0;
+  bool any_add = false;
   for (int hand = 0; hand < 2; ++hand) {
-    int lines = 0;
-    for (int q = 0; q < kQuestCount; ++q) lines += row_lines(hand, q) - 1;
-    extra_lines = std::max(extra_lines, lines);
+    float h = 0;
+    for (int q = 0; q < kQuestCount; ++q)
+      if (row_shown(hand, q)) h += row_h + line_h * float(row_lines(hand, q) - 1);
+    list_h = std::max(list_h, h);
+    any_add = any_add || can_add_extra(hand);
   }
-  const float rows_h = head_h + row_h * 8 + line_h * float(extra_lines);
+  const float rows_h = head_h + list_h + (any_add ? add_h : 0.f);
   const std::array<const art::Image*, 2> images{controller_image(p, 0), controller_image(p, 1)};
   // One scale for the pair, so the two controllers read as a matched pair.
   const float pic_room = std::min(half - rows_w - gutter, s(460));
@@ -5298,7 +5362,7 @@ void App::draw_controls_editor(ControlsEdit& e, const ControlsEdit* base, float 
     };
     std::vector<Row> rows;
     for (int q = 0; q < kQuestCount; ++q) {
-      if (q == int(Quest::menu) ? hand != 0 : quest_label(hand, q).empty()) continue;
+      if (!row_shown(hand, q)) continue;
       std::vector<std::string_view> paths;
       if (q == int(Quest::menu)) {
         for (const auto& [h, mp] : menu.at)
@@ -5312,8 +5376,12 @@ void App::draw_controls_editor(ControlsEdit& e, const ControlsEdit* base, float 
       rows.push_back({q, std::move(paths), spot});
     }
     // Top to bottom as their inputs sit on the picture, so no callouts cross;
-    // rows without a spot follow.
-    std::ranges::stable_sort(rows, {}, [](const Row& r) { return r.spot ? r.spot->y : 1e9f; });
+    // rows without a spot follow. The extra rows stay after them in their own
+    // fixed order (touch, up, down, left, right), whatever they are given.
+    const auto extras = std::ranges::find_if(rows, [&](const Row& r) { return is_extra(r.q); });
+    std::stable_sort(rows.begin(), extras, [](const Row& a, const Row& b) {
+      return (a.spot ? a.spot->y : 1e9f) < (b.spot ? b.spot->y : 1e9f);
+    });
 
     const float x0 = at.x + (stacked ? 0 : hand * (half + mid));
     const float rows_x = hand ? x0 + half - rows_w : x0;
@@ -5435,8 +5503,9 @@ void App::draw_controls_editor(ControlsEdit& e, const ControlsEdit* base, float 
       const ImU32 lit_tone = color::accent;
       const bool is_menu = q == int(Quest::menu);
       const bool lost = !is_menu && e.host[hand][q].empty();
-      // A missing thumbrest only changes a hand pose; it is not worth a warning.
-      const bool quiet = lost && !twin[hand][q] && q == int(Quest::thumbrest);
+      // A missing thumbrest only changes a hand pose, and the stick's button rows
+      // are extras; neither is worth a warning.
+      const bool quiet = lost && !twin[hand][q] && (q == int(Quest::thumbrest) || is_extra(q));
       const bool warn = twin[hand][q] || (lost && !quiet);
       const ImU32 tone = warn ? color::warning : is_menu ? color::positive : color::accent_text;
       // The callout: across from the input at its height to the picture's edge,
@@ -5514,8 +5583,9 @@ void App::draw_controls_editor(ControlsEdit& e, const ControlsEdit* base, float 
                                          : std::string();
       // A one-line row that can take another input keeps the + spot beside its
       // dropdown free (shown on hover): a long label is ellipsized short of it.
-      bool can_add = false;
-      if (!is_menu && !locked && lines == 1)
+      // An extra row's first line keeps that spot for its remove x instead.
+      bool can_add = is_extra(q) && !locked;
+      if (!is_menu && !is_extra(q) && !locked && lines == 1)
         for (int i = 1; i <= n_inputs && !can_add; ++i) {
           const auto& in = p.inputs[size_t(i - 1)];
           can_add = !in.reserved && controls::on_hand(in, hand) && controls::is_axes(in.path) == (q == int(Quest::stick)) &&
@@ -5718,6 +5788,7 @@ void App::draw_controls_editor(ControlsEdit& e, const ControlsEdit* base, float 
         constexpr int kAdd = -1;
         ImGui::BeginDisabled(locked);
         std::optional<int> remove;  // a line taken out after the loop
+        bool drop_row = false;      // an extra row taken away after the loop
         for (int line = 0; line < lines; ++line) {
           ImGui::PushID(line);
           const float ly = ry + (row_h - s(38)) * 0.5f + line_h * float(line);
@@ -5796,7 +5867,14 @@ void App::draw_controls_editor(ControlsEdit& e, const ControlsEdit* base, float 
           if (line > 0 && small_button("remove", icons::cancel, "Remove this input",
                                        options_.smoke_view.ends_with("-remove-hover"), row_lit))
             remove = line;
-          if (line == lines - 1 && !locked && unused() &&
+          // An extra row's x takes the row away: its buttons cleared, the row hidden.
+          // Its list's "Add another input" adds more, so its first line has no +.
+          const bool extra_first = is_extra(q) && line == 0;
+          if (extra_first && !locked &&
+              small_button("remove-row", icons::cancel, "Remove this input",
+                           options_.smoke_view == "controls-extra-remove-hover" && q == int(Quest::stick_up), row_lit))
+            drop_row = true;
+          if (!extra_first && line == lines - 1 && !locked && unused() &&
               small_button("add", icons::add, "Add another input",
                            (options_.smoke_view.ends_with("-plus-hover") && q == int(Quest::stick_click)) ||
                                (options_.smoke_view.ends_with("-plus-hover-thumbrest") && q == int(Quest::thumbrest)),
@@ -5806,12 +5884,74 @@ void App::draw_controls_editor(ControlsEdit& e, const ControlsEdit* base, float 
           }
           ImGui::PopID();
         }
-        if (remove && *remove < int(row.size())) row.erase(row.begin() + *remove);
+        if (drop_row) {
+          row.clear();
+          controls_extra_added_[size_t(hand)][size_t(q)] = false;
+        } else if (remove && *remove < int(row.size())) {
+          row.erase(row.begin() + *remove);
+        }
         if (options_.smoke_view == "controls-edit" && hand == 0 && q == int(Quest::secondary))
           controls_active_ = hand * kQuestCount + q;
         ImGui::EndDisabled();
       }
       ImGui::PopID();
+    }
+    // Under the lists, on the label side: "Add input" lists the extra rows not
+    // shown; the one picked shows with its list open for a button.
+    if (can_add_extra(hand)) {
+      const float list_end = at.y + head_h + list_h;
+      // i18n: Controls page, under each controller's rows: adds a row such as Stick touch or Stick up.
+      const char* add_label = tr("Add input");
+      const float bh = s(34), bw = button_width(add_label, icons::add);
+      // Flush with the row labels on the outer side: the button's own padding
+      // (button_width's 20 each side) hangs outside, so the + and the text line up.
+      const float inset = s(20);
+      const ImVec2 b{hand ? rows_x + rows_w - bw + inset : rows_x - inset, list_end + (add_h - bh) * 0.5f};
+      ImGui::SetCursorScreenPos(b);
+      if (button(std::format("{}##add-extra", add_label).c_str(), icons::add, Tone::ghost, {bw, bh}))
+        ImGui::OpenPopup("##add-extra-list");
+      // --smoke-view controls-add-menu: the left list open.
+      if (options_.smoke_view == "controls-add-menu" && hand == 0) {
+        static int frames = 0;
+        if (frames++ == 3) ImGui::OpenPopup("##add-extra-list");
+      }
+      // In three groups, each in its fixed order; a group with nothing left to add is left out.
+      struct Group {
+        const char* name;
+        Quest first, last;
+      };
+      const Group groups[]{
+          // i18n: Controls page, a section of the Add input menu: rows for the thumbstick. Shown in capitals.
+          {tr("STICK"), Quest::stick_touch, Quest::stick_right},
+          // i18n: Controls page, a section of the Add input menu: rows that touch a button or the trigger. Shown in capitals.
+          {tr("BUTTON TOUCHES"), Quest::primary_touch, Quest::trigger_touch},
+          // i18n: Controls page, a section of the Add input menu: sensors only Touch Pro and Touch Plus controllers have, which only OpenXR games read. Shown in capitals.
+          {tr("TOUCH PRO AND PLUS"), Quest::thumb_proximity, Quest::stylus_force}};
+      int hidden = 0, sections = 0;
+      for (const auto& g : groups) {
+        int left = 0;
+        for (int q = int(g.first); q <= int(g.last); ++q) left += !row_shown(hand, q);
+        hidden += left;
+        sections += left > 0;
+      }
+      place_menu({hand ? b.x + bw : b.x, b.y}, bh, menu_height(hidden) + float(sections) * (s(4) + s(18)),
+                 hand ? 1.f : 0.f);
+      if (begin_menu("##add-extra-list")) {
+        for (const auto& g : groups) {
+          bool header = false;
+          for (int q = int(g.first); q <= int(g.last); ++q) {
+            if (row_shown(hand, q)) continue;
+            if (!std::exchange(header, true)) menu_section(g.name);
+            ImGui::PushID(q);
+            if (menu_item(std::string(quest_label(hand, q)).c_str())) {
+              controls_extra_added_[size_t(hand)][size_t(q)] = true;
+              controls_open_line_ = std::array{hand, q, 0};
+            }
+            ImGui::PopID();
+          }
+        }
+        end_menu();
+      }
     }
     ImGui::PopID();
     return std::max(rows_h, pic_y + pic_h - at.y);

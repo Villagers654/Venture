@@ -28,6 +28,8 @@ enum Input : std::uint8_t {
   grip_pose, aim_pose, palm_pose, trigger, trigger_press, trigger_touch, squeeze, squeeze_press,
   stick, stick_click, stick_touch, primary, primary_touch, secondary, secondary_touch, menu,
   thumbrest_touch, haptic, unbound_pose,
+  // The player's buttons for the stick's directions, merged into the stick (push_stick).
+  stick_up, stick_down, stick_left, stick_right,
   // A pad and its press, read where the host has no XR_EXT_dpad_binding: Venture
   // splits it into the halves the player's controls use (split_pads).
   pad, pad_press,
@@ -73,6 +75,10 @@ constexpr Fixed kInputs[input_count]{
     {"thumbrest_touch", "Thumb rest touch", kBool, "/input/thumbrest/touch", "/input/thumbrest/touch"},
     {"haptic", "Vibration", kVibration, "/output/haptic", "/output/haptic"},
     {"unbound_pose", "Unbound pose", kPose, "", "", Host::none},
+    {"thumbstick_up", "Thumbstick up", kBool, "/input/thumbstick/dpad_up", "/input/thumbstick/dpad_up"},
+    {"thumbstick_down", "Thumbstick down", kBool, "/input/thumbstick/dpad_down", "/input/thumbstick/dpad_down"},
+    {"thumbstick_left", "Thumbstick left", kBool, "/input/thumbstick/dpad_left", "/input/thumbstick/dpad_left"},
+    {"thumbstick_right", "Thumbstick right", kBool, "/input/thumbstick/dpad_right", "/input/thumbstick/dpad_right"},
     {"trackpad", "Trackpad", kVector, "/input/trackpad", "/input/trackpad", Host::pad},
     {"trackpad_press", "Trackpad press", kBool, "/input/trackpad/click", "/input/trackpad/click", Host::pad},
     {"pro_thumbrest_force", "Thumb rest force (Touch Pro)", kFloat, "/input/thumbrest/force", "/input/thumbrest/force", Host::pro},
@@ -348,6 +354,9 @@ void build_plans() {
   use(L.quest);
   for (const auto& [path, plan] : L.plans) use(plan);
   L.used[pad] = L.used[pad_press] = !venture::xr::host_dpad();
+  // The direction buttons push a stick the game reads.
+  for (const auto direction : {stick_up, stick_down, stick_left, stick_right})
+    L.used[direction] = L.used[stick];
   // The player's press point reads the analog twin, a toggle the boolean one.
   L.used[trigger] = L.used[trigger_press] = L.used[trigger] || L.used[trigger_press];
   L.used[squeeze] = L.used[squeeze_press] = L.used[squeeze] || L.used[squeeze_press];
@@ -478,6 +487,10 @@ std::vector<XrActionSuggestedBinding> fixed_bindings(const std::string& target, 
         case Host::pad: paths = venture::xr::pad_bindings(target, hand, i == pad_press); break;
         case Host::none: break;
       }
+      // A Pro or Plus sensor also takes the inputs of the player's row for it, on any host.
+      if (fixed.host == Host::pro || fixed.host == Host::plus || fixed.host == Host::proximity)
+        for (auto& path : touch_bindings(root + suffix, target))
+          if (std::ranges::find(paths, path) == paths.end()) paths.push_back(std::move(path));
       for (const auto& path : paths)
         if (const auto host = to_path(path)) bindings.push_back({L.host[std::size_t(i)], host});
     }
@@ -645,6 +658,21 @@ void split_pads() {
         case Quest::trigger: targets = {trigger, trigger_press}; break;
         case Quest::grip: targets = {squeeze, squeeze_press}; break;
         case Quest::thumbrest: targets = {thumbrest_touch}; break;
+        case Quest::stick_touch: targets = {stick_touch}; break;
+        case Quest::stick_up: targets = {stick_up, stick_touch}; break;
+        case Quest::stick_down: targets = {stick_down, stick_touch}; break;
+        case Quest::stick_left: targets = {stick_left, stick_touch}; break;
+        case Quest::stick_right: targets = {stick_right, stick_touch}; break;
+        case Quest::primary_touch: targets = {primary_touch}; break;
+        case Quest::secondary_touch: targets = {secondary_touch}; break;
+        case Quest::trigger_touch: targets = {trigger_touch}; break;
+        case Quest::thumb_proximity: targets = {pro_thumb_proximity, plus_thumb_proximity}; break;
+        case Quest::trigger_proximity: targets = {pro_trigger_proximity, plus_trigger_proximity}; break;
+        case Quest::trigger_curl: targets = {pro_trigger_curl, plus_trigger_curl}; break;
+        case Quest::trigger_slide: targets = {pro_trigger_slide, plus_trigger_slide}; break;
+        case Quest::trigger_force: targets = {plus_trigger_force}; break;
+        case Quest::thumbrest_force: targets = {pro_thumbrest_force}; break;
+        case Quest::stylus_force: targets = {pro_stylus_force}; break;
         default: continue;  // the stick takes no half; the menu has its own fallback
       }
       const auto& row = r->rows[std::size_t(hand)][std::size_t(q)];
@@ -672,6 +700,18 @@ void shape_inputs(XrTime now) {
     if (in[stick].active) {
       const auto v = venture::controls::shape_stick(t, in[stick].vector.x, in[stick].vector.y);
       in[stick].vector = {v[0], v[1]};
+    }
+    // The direction rows' buttons push the stick all the way (after the dead zone:
+    // a button is already all the way). A stick the host leaves unbound becomes
+    // active through them.
+    auto held = [&](Input direction) { return in[direction].active && in[direction].value > 0.5f; };
+    if (std::ranges::any_of(std::array{stick_up, stick_down, stick_left, stick_right}, [&](Input d) { return in[d].active; })) {
+      const auto v = venture::controls::push_stick(in[stick].vector.x, in[stick].vector.y, held(stick_up), held(stick_down),
+                                                   held(stick_left), held(stick_right));
+      in[stick].active = true;
+      in[stick].vector = {v[0], v[1]};
+      for (const auto d : {stick_up, stick_down, stick_left, stick_right})
+        if (in[d].active) in[stick].changed = std::max(in[stick].changed, in[d].changed);
     }
     // A press point of the player's: the boolean twin follows the analog value.
     auto press_at = [&](Input analog, Input boolean, int percent, bool& down) {
@@ -951,10 +991,11 @@ XrSpace located_space(XrSpace space) {
   if (value == L.values.end() || !value->second.active) return space;  // its own host space is never located
   const auto action = L.actions.find(entry.action);
   if (action == L.actions.end()) return space;
-  auto make = [&](XrAction host, XrPath subaction, XrSpace& out, int hand = -1) {
+  auto make = [&](XrAction host, XrPath subaction, XrSpace& out, int hand = -1, bool grip = false) {
     if (out) return out;
     const XrPosef pose =
-        hand >= 0 ? venture::xr::offset_pose(name_of(L.profiles[std::size_t(hand)]), hand, entry.pose) : entry.pose;
+        hand >= 0 ? venture::xr::offset_pose(name_of(L.profiles[std::size_t(hand)]), hand, entry.pose, grip)
+                  : entry.pose;
     XrActionSpaceCreateInfo ci{XR_TYPE_ACTION_SPACE_CREATE_INFO, nullptr, host, subaction, pose};
     if (XR_FAILED(::xrCreateActionSpace(entry.session, &ci, &out))) out = {};
     return out;
@@ -969,7 +1010,8 @@ XrSpace located_space(XrSpace space) {
     for (const auto& source : sources->second)
       if (source.hand == hand && kInputs[source.input].type == kPose && L.inputs[std::size_t(hand)][source.input].active)
         if (auto found = make(L.host[source.input], L.hands[std::size_t(hand)],
-                              entry.fixed[{source.hand, source.input, L.profiles[std::size_t(hand)]}], hand))
+                              entry.fixed[{source.hand, source.input, L.profiles[std::size_t(hand)]}], hand,
+                              source.input == grip_pose))
           return found;
   }
   if (action->second->host)

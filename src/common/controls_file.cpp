@@ -44,7 +44,17 @@ std::optional<Quest> row_of(std::string_view action, bool& known) {
       {"button_x_a", Quest::primary},  {"button_y_b", Quest::secondary},     {"menu", Quest::menu},
       {"thumbstick", Quest::stick},    {"thumbstick_click", Quest::stick_click}, {"trigger", Quest::trigger},
       {"trigger_press", Quest::trigger}, {"grip", Quest::grip},              {"grip_press", Quest::grip},
-      {"thumbrest_touch", Quest::thumbrest},
+      {"thumbrest_touch", Quest::thumbrest}, {"thumbstick_touch", Quest::stick_touch},
+      {"thumbstick_up", Quest::stick_up},    {"thumbstick_down", Quest::stick_down},
+      {"thumbstick_left", Quest::stick_left}, {"thumbstick_right", Quest::stick_right},
+      {"button_x_a_touch", Quest::primary_touch}, {"button_y_b_touch", Quest::secondary_touch},
+      {"trigger_touch", Quest::trigger_touch},
+      {"thumb_proximity", Quest::thumb_proximity}, {"plus_thumb_proximity", Quest::thumb_proximity},
+      {"trigger_proximity", Quest::trigger_proximity}, {"plus_trigger_proximity", Quest::trigger_proximity},
+      {"pro_trigger_curl", Quest::trigger_curl}, {"plus_trigger_curl", Quest::trigger_curl},
+      {"pro_trigger_slide", Quest::trigger_slide}, {"plus_trigger_slide", Quest::trigger_slide},
+      {"plus_trigger_force", Quest::trigger_force}, {"pro_thumbrest_force", Quest::thumbrest_force},
+      {"pro_stylus_force", Quest::stylus_force},
   };
   known = true;
   for (const auto& r : kRows)
@@ -145,6 +155,15 @@ Imported import_file(std::string_view text, std::string_view fallback) {
         continue;
       }
       const auto id = identifier_of(std::string_view(path).substr(hand ? 23 : 22));
+      // The rows this source's buttons (not its touch sensor) go to.
+      std::vector<Quest> source_rows;
+      for (const auto& [sub, binding] : inputs->items()) {
+        if (sub == "touch" || !binding.is_object()) continue;
+        const auto output = binding.value("output", std::string());
+        bool known = false;
+        if (const auto slash = output.rfind('/'); slash != std::string::npos)
+          if (const auto q = row_of(std::string_view(output).substr(slash + 1), known)) source_rows.push_back(*q);
+      }
       for (const auto& [sub, binding] : inputs->items()) {
         if (!binding.is_object()) continue;
         const auto output = binding.value("output", std::string());
@@ -160,6 +179,24 @@ Imported import_file(std::string_view text, std::string_view fallback) {
           continue;
         }
         const auto host = host_input(*p, id, mode, sub);
+        // An input's own touch sensor already touches it in the game; a touch row holds other buttons.
+        if (*q == Quest::stick_touch && (sub == "touch" || host == "/input/thumbstick/touch")) continue;
+        // A button's touch sensor bound to a touch action follows that button's row
+        // already (the sensor of that very input, the source's button going to the
+        // touch's own row, or a sensor that is no input of its own); any other sensor
+        // (a trackpad's touch) is a button there.
+        if ((*q == Quest::primary_touch || *q == Quest::secondary_touch || *q == Quest::trigger_touch) && sub == "touch") {
+          const Quest base = *q == Quest::primary_touch ? Quest::primary
+                             : *q == Quest::secondary_touch ? Quest::secondary
+                                                            : Quest::trigger;
+          const auto& own = kQuestInputs[size_t(*q)];
+          if (!find_input(*p, host) || std::ranges::contains(source_rows, base) ||
+              host == (hand ? own.right_path : own.left_path))
+            continue;
+        }
+        // A Pro or Plus sensor bound to its own action reaches the game as the host's
+        // own sensor; the row holds other inputs.
+        if (is_pro_plus(*q) && !host.empty() && !find_input(*p, host)) continue;
         const auto* input = host.empty() ? nullptr : find_input(*p, host);
         if (!input || input->reserved || !on_hand(*input, hand) || is_axes(host) != (*q == Quest::stick)) {
           ++out.skipped;

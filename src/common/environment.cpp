@@ -132,6 +132,10 @@ bool inside_gamescope() {
   const auto* wayland = getenv("WAYLAND_DISPLAY");
   return gamescope && *gamescope && wayland && std::string_view(gamescope) == wayland;
 }
+bool gamescope_xwayland() {
+  const auto* display = getenv("DISPLAY");
+  return inside_gamescope() && display && *display;
+}
 bool passthrough_enabled() {
   const auto* value = getenv("VENTURE_PASSTHROUGH");
   return !value || std::string_view(value) != "0";

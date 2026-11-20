@@ -272,6 +272,8 @@ void openxr_layer_section(std::string &out, std::string &broken) {
     const bool enabled = unusable || openxr_layers::enabled(layer);
     std::string state = layer.problem.empty() ? "ok" : layer.problem + (skipped ? " (the loader skips it)" : "");
     if (!enabled) state += std::format(" (disabled by {})", layer.disable_environment);
+    // The variable a tester sets to run without it (or VENTURE_OPENXR_LAYERS_OFF=<name>).
+    else if (!layer.disable_environment.empty()) state += std::format(" (off with {}=1)", layer.disable_environment);
     out += std::format("OpenXR implicit layer: {} ({}), library {}: {}\n", layer.name.empty() ? "unnamed" : layer.name,
                        paths::utf8(path), layer.library_path.empty() ? "none" : layer.library_path, state);
     if (!layer.problem.empty() && !skipped && enabled)
@@ -294,7 +296,7 @@ void environment_section(std::string &out) {
   // selections known to break VR games ("NAME=" matches one variable).
   static constexpr std::string_view wanted[] = {
       "VENTURE_", "XR_", "VK_", "OXR_", "STEAMVR_", "PRESSURE_VESSEL_", "VR_OVERRIDE=", "VR_PATHREG_OVERRIDE=",
-      "LD_PRELOAD=", "DRI_PRIME=", "MESA_VK_DEVICE_SELECT=", "__NV_PRIME_RENDER_OFFLOAD=",
+      "LD_PRELOAD=", "DRI_PRIME=", "MESA_", "TU_DEBUG=", "ANGLE_", "__NV_PRIME_RENDER_OFFLOAD=",
       "__GLX_VENDOR_LIBRARY_NAME=", "AMD_VULKAN_ICD=", "MANGOHUD", "DISABLE_MANGOHUD=", "ENABLE_VKBASALT=",
       "OBS_VKCAPTURE=", "XDG_CURRENT_DESKTOP=", "XDG_SESSION_TYPE=", "WAYLAND_DISPLAY=", "DISPLAY="};
   bool any = false;
@@ -638,7 +640,7 @@ Run read_run(const fs::path &log, const fs::path &console) {
   run.ended = modified(log);
   if (auto c = modified(console); c && (!run.ended || *c > *run.ended)) run.ended = c;
   std::optional<int> exit;
-  bool stopped = false, runtime_error = false;
+  bool stopped = false, runtime_error = false, host_quit = false;
   for (const auto &line : lines_of(text)) {
     // The supervisor's start comes first; its worker logs its own after it.
     constexpr std::string_view starting = "] Process started at ";
@@ -652,6 +654,7 @@ Run read_run(const fs::path &log, const fs::path &console) {
     if (auto at = line.find("] Exit code: "); at != std::string::npos) {
       exit = std::atoi(line.c_str() + at + 13);
       stopped = line.find("(stop requested)") != std::string::npos;
+      host_quit = line.find("(quit from the VR runtime)") != std::string::npos;
     }
     // Before this Venture logged its exit code: a guest's own exit.
     constexpr std::string_view terminal = "] Terminal guest process exit status=";
@@ -676,6 +679,8 @@ Run read_run(const fs::path &log, const fs::path &console) {
     run.failed = true;
   } else if (stopped) {
     run.result = std::format("stopped from Venture (exit code {})", *exit);
+  } else if (host_quit) {
+    run.result = "quit from the VR runtime's menu, which ended it before its quit finished";
   } else if (exit && *exit == 0) {
     run.result = "the game exited normally (exit code 0)";
   } else if (exit || runtime_error) {

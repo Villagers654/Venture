@@ -320,6 +320,8 @@ add_test(NAME venture_data_migration COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CU
 set_tests_properties(venture_data_migration PROPERTIES TIMEOUT 300)
 add_executable(venture_environment_child environment_child.cpp)
 target_link_libraries(venture_environment_child PRIVATE venture_common)
+add_dependencies(venture_tests venture_environment_child)
+target_compile_definitions(venture_tests PRIVATE VENTURE_ENVIRONMENT_CHILD="$<TARGET_FILE:venture_environment_child>")
 if(VENTURE_JAVA_HOME)
   add_test(NAME venture_host_environment COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/host_environment_test.py" "${VENTURE_JAVA_HOME}" "$<TARGET_FILE:venture_environment_child>")
 endif()
@@ -1033,11 +1035,15 @@ add_executable(venture_xr_tests test_main.cpp  runtime/xr_test.cpp runtime/xr_vr
   target_link_libraries(venture_test_xr_layer PRIVATE OpenXR::headers)
   add_dependencies(venture_xr_tests venture_test_xr_layer)
   target_compile_definitions(venture_xr_tests PRIVATE VENTURE_TEST_XR_LAYER="$<TARGET_FILE:venture_test_xr_layer>")
-  foreach(working 0 1 2)
+  foreach(working 0 1 2 3)
+    set(layers_off "")
+    if(working EQUAL 3)
+      set(layers_off ";VENTURE_OPENXR_LAYERS_OFF=XR_APILAYER_VENTURE_test_working")
+    endif()
     add_test(NAME xr_api_layer_skip_${working} COMMAND venture_xr_tests
       "--test-case=The host OpenXR instance leaves out only the implicit layers that fail to load" --no-skip=true)
     set_tests_properties(xr_api_layer_skip_${working} PROPERTIES TIMEOUT 60 ENVIRONMENT
-      "XR_RUNTIME_JSON=${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/mock_openxr_runtime.json;VENTURE_DATA_DIR=${CMAKE_CURRENT_BINARY_DIR}/xr-api-layer-${working}-data;VENTURE_TEST_XR_WORKING_LAYER=${working}")
+      "XR_RUNTIME_JSON=${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/mock_openxr_runtime.json;VENTURE_DATA_DIR=${CMAKE_CURRENT_BINARY_DIR}/xr-api-layer-${working}-data;VENTURE_TEST_XR_WORKING_LAYER=${working}${layers_off}")
   endforeach()
   add_test(NAME xr_no_hmd COMMAND venture_xr_probe)
   set_tests_properties(xr_no_hmd PROPERTIES

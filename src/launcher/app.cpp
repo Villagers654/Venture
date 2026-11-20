@@ -112,6 +112,8 @@ App::App(Options options) : Core(std::move(options)) {
 #endif
   if (!SDL_Init(kSubsystems))
     throw std::runtime_error(std::string(video_unavailable_message()) + " (" + SDL_GetError() + ")");
+  // Linux: wayland, or x11 on gamescope's Xwayland (window_style.h).
+  log::info("launcher", "Video driver: {}", SDL_GetCurrentVideoDriver());
   window_ = SDL_CreateWindow(
       "Venture", 1380, 880,
       SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY | SDL_WINDOW_HIDDEN |

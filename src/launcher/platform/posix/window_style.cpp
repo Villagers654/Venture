@@ -23,15 +23,20 @@ bool on_path(std::string_view name) {
 }  // namespace
 void style_native_window(SDL_Window*, unsigned char, unsigned char, unsigned char) {}
 void prefer_native_video_driver() {
-  // Wayland only; SDL is built without X11, so there is no XWayland path.
-  // Without the hint SDL 3.2 would skip Wayland on compositors lacking
-  // wp_fifo_manager_v1 (a frame-pacing concern for games, not for this UI;
-  // gamescope has none). A normal-priority hint yields to SDL_VIDEO_DRIVER
+  // Wayland, named: without the hint SDL 3.2 would pick X11 on compositors
+  // lacking wp_fifo_manager_v1 (a frame-pacing concern for games, not for this
+  // UI). Inside gamescope, its Xwayland: gamescope closes an app's windows
+  // (SteamVR's close on the app's panel, the Steam Frame's) only by sending
+  // WM_DELETE_WINDOW to its X11 windows, and logs that it cannot close Wayland
+  // ones, so on Wayland the close would do nothing. Wayland there still when
+  // this SDL has no X11. A normal-priority hint yields to SDL_VIDEO_DRIVER
   // (tests use offscreen).
-  SDL_SetHint(SDL_HINT_VIDEO_DRIVER, "wayland");
+  const bool xwayland = environment::gamescope_xwayland();
+  SDL_SetHint(SDL_HINT_VIDEO_DRIVER, xwayland ? "x11,wayland" : "wayland");
   // OpenGL through EGL from GLVND's libOpenGL, not libGL.so.1, which is GLX
-  // (an X11 API) and loads libGLX and libX11.
+  // and loads libGLX: on X11 too (SDL would use GLX there).
   SDL_SetHint(SDL_HINT_OPENGL_LIBRARY, "libOpenGL.so.0");
+  if (xwayland) SDL_SetHint(SDL_HINT_VIDEO_FORCE_EGL, "1");
   // The Wayland app_id: the desktop file's name, so docks and task bars show
   // its icon (SDL would use the executable's name, "venture").
   SDL_SetAppMetadataProperty(SDL_PROP_APP_METADATA_IDENTIFIER_STRING, kDesktopId);

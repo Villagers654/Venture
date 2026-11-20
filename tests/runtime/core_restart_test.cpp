@@ -28,6 +28,23 @@ TEST_CASE("OS termination outcome survives the worker's final pipe record") {
   CHECK(child.os_termination);
   CHECK_FALSE(child.supervisor_stopped);
 }
+#ifndef _WIN32
+TEST_CASE("A kill by the host runtime during the quit it asked for is a quit, a crash in it is not") {
+  const auto killed = venture::platform::run_runtime_child(restart_child(),
+      {"host-ended-killed"}, {}, [] { return false; }, {}, true);
+  CHECK(killed.status == 128 + 9);
+  CHECK(killed.host_ended);
+  CHECK(killed.quit_kill());
+  const auto crashed = venture::platform::run_runtime_child(restart_child(),
+      {"host-ended-crash"}, {}, [] { return false; }, {}, true);
+  CHECK(crashed.status == 128 + 11);
+  CHECK(crashed.host_ended);
+  CHECK_FALSE(crashed.quit_kill());
+  // A kill outside such a quit stays a failure.
+  venture::platform::RuntimeChildResult other{128 + 9, false};
+  CHECK_FALSE(other.quit_kill());
+}
+#endif
 TEST_CASE("Guest abort remains fatal when its reporter exits zero") {
   const auto child = venture::platform::run_runtime_child(restart_child(),
       {"abort-reporter-exit-zero"}, {}, [] { return false; }, {}, true);

@@ -19,7 +19,9 @@ ACTIVITY = f"{PACKAGE}/.VentureActivity"
 
 
 def adb(*args: str, check: bool = True, binary: bool = False):
-    result = subprocess.run(["adb", *args], capture_output=True, text=not binary)
+    # UTF-8 whatever the locale: logcat carries any text (Windows' code page fails on it).
+    text = {} if binary else {"text": True, "encoding": "utf-8", "errors": "replace"}
+    result = subprocess.run(["adb", *args], capture_output=True, **text)
     if check and result.returncode:
         sys.exit(f"emulator_smoke: adb {' '.join(args)} failed: {result.stderr}")
     return result.stdout
@@ -57,9 +59,14 @@ def main() -> int:
         problems.append("the Venture process is gone")
     crash_lines = [line for line in log.splitlines()
                    if ("FATAL EXCEPTION" in line or "Fatal signal" in line or "UnsatisfiedLinkError" in line)]
+    # A Java crash names the process on the line after FATAL EXCEPTION.
     if any(PACKAGE in line or "venture" in line.lower() for line in crash_lines) or \
-            f">>> {PACKAGE} <<<" in log:
+            f">>> {PACKAGE} <<<" in log or f"Process: {PACKAGE}," in log:
         problems.append("Venture crashed (see logcat.txt)")
+    # How the launcher ended, when it did: its own exit record.
+    exits = [line for line in log.splitlines() if "[launcher] Exit {" in line]
+    if not alive and exits:
+        problems.append(f"the launcher exited: {exits[-1].split('[launcher] ', 1)[1]}")
     for problem in problems:
         print(f"emulator_smoke: {problem}")
     if not problems:

@@ -16,9 +16,34 @@
 namespace venture::controls {
 
 // The Quest inputs a player can move, per hand. Touch sensors follow the button
-// they belong to (X touch follows X), so they are not listed separately.
-enum class Quest : int { primary, secondary, menu, stick, stick_click, trigger, grip, thumbrest, count };
+// they belong to (X touch follows X), so they are not listed separately. The
+// rows from Stick touch on are extras that take buttons and are empty by default:
+// Stick touch, X/A touch, Y/B touch and Trigger touch add buttons that touch that
+// input beside its own sensor, and Stick up, down, left and right push the stick
+// all the way that way while one of their buttons is held (push_stick). The last
+// seven are the Touch Pro and Touch Plus sensors an OpenXR game may read (VrApi
+// has no place for them): a host with them gives the game its own, and these rows
+// add inputs beside them (a button gives a full value, an analog input its value).
+enum class Quest : int {
+  primary, secondary, menu, stick, stick_click, trigger, grip, thumbrest,
+  stick_touch, stick_up, stick_down, stick_left, stick_right, primary_touch, secondary_touch, trigger_touch,
+  thumb_proximity, trigger_proximity, trigger_curl, trigger_slide, trigger_force, thumbrest_force, stylus_force, count
+};
 inline constexpr int kQuestCount = int(Quest::count);
+// A row that pushes the stick one way.
+inline constexpr bool is_direction(Quest q) { return q >= Quest::stick_up && q <= Quest::stick_right; }
+// An extra row: empty by default, its inputs added beside the Touch input's own.
+inline constexpr bool is_extra(Quest q) { return q >= Quest::stick_touch; }
+// A Touch Pro or Touch Plus sensor's row.
+inline constexpr bool is_pro_plus(Quest q) { return q >= Quest::thumb_proximity; }
+// The extra row whose buttons also touch a Touch input (stick, X/A, Y/B, trigger), or Quest::count.
+inline constexpr Quest touch_row(Quest q) {
+  return q == Quest::stick ? Quest::stick_touch
+         : q == Quest::primary ? Quest::primary_touch
+         : q == Quest::secondary ? Quest::secondary_touch
+         : q == Quest::trigger ? Quest::trigger_touch
+                               : Quest::count;
+}
 
 struct QuestInput {
   Quest id;
@@ -34,7 +59,37 @@ inline constexpr std::array<QuestInput, kQuestCount> kQuestInputs{{
     {Quest::trigger, "Trigger", "Trigger", "/input/trigger/value", "/input/trigger/value"},
     {Quest::grip, "Grip", "Grip", "/input/squeeze/value", "/input/squeeze/value"},
     {Quest::thumbrest, "Thumbrest", "Thumbrest", "/input/thumbrest/touch", "/input/thumbrest/touch"},
+    {Quest::stick_touch, "Stick touch", "Stick touch", "/input/thumbstick/touch", "/input/thumbstick/touch"},
+    // The stick's halves as Touch paths: what host_bindings answers for a direction row.
+    {Quest::stick_up, "Stick up", "Stick up", "/input/thumbstick/dpad_up", "/input/thumbstick/dpad_up"},
+    {Quest::stick_down, "Stick down", "Stick down", "/input/thumbstick/dpad_down", "/input/thumbstick/dpad_down"},
+    {Quest::stick_left, "Stick left", "Stick left", "/input/thumbstick/dpad_left", "/input/thumbstick/dpad_left"},
+    {Quest::stick_right, "Stick right", "Stick right", "/input/thumbstick/dpad_right", "/input/thumbstick/dpad_right"},
+    {Quest::primary_touch, "X touch", "A touch", "/input/x/touch", "/input/a/touch"},
+    {Quest::secondary_touch, "Y touch", "B touch", "/input/y/touch", "/input/b/touch"},
+    {Quest::trigger_touch, "Trigger touch", "Trigger touch", "/input/trigger/touch", "/input/trigger/touch"},
+    // Touch Pro paths; host_bindings also answers the Touch Plus ones (proximity_meta, curl_meta, slide_meta).
+    {Quest::thumb_proximity, "Thumb proximity", "Thumb proximity", "/input/thumb_fb/proximity_fb", "/input/thumb_fb/proximity_fb"},
+    {Quest::trigger_proximity, "Trigger proximity", "Trigger proximity", "/input/trigger/proximity_fb", "/input/trigger/proximity_fb"},
+    {Quest::trigger_curl, "Trigger curl", "Trigger curl", "/input/trigger/curl_fb", "/input/trigger/curl_fb"},
+    {Quest::trigger_slide, "Trigger slide", "Trigger slide", "/input/trigger/slide_fb", "/input/trigger/slide_fb"},
+    {Quest::trigger_force, "Trigger force", "Trigger force", "/input/trigger/force", "/input/trigger/force"},
+    {Quest::thumbrest_force, "Thumbrest force", "Thumbrest force", "/input/thumbrest/force", "/input/thumbrest/force"},
+    {Quest::stylus_force, "Stylus force", "Stylus force", "/input/stylus_fb/force", "/input/stylus_fb/force"},
 }};
+
+// Where the game sees a controller in the hand: a shift in millimetres and a turn
+// in degrees, in the controller's own frame (x right, y up, z toward the player's
+// wrist). The turn is tilt (about x), turn (about y) and roll (about z), applied
+// as turn, then tilt, then roll. It moves every pose of that hand the game reads
+// (grip, aim, palm), as SteamVR's pose offsets do.
+inline constexpr float kMaxShiftMm = 200, kMaxTurnDeg = 180;
+struct Offset {
+  std::array<float, 3> position{};  // mm
+  std::array<float, 3> rotation{};  // degrees: tilt, turn, roll
+  bool operator==(const Offset&) const = default;
+  bool zero() const { return *this == Offset{}; }
+};
 
 // One physical input of a host controller.
 struct HostInput {
@@ -64,6 +119,12 @@ struct Profile {
   std::string_view touches = "";
   // The host extension that defines the profile on an OpenXR 1.0 instance ("" = core).
   std::string_view extension = "";
+  // Where a Quest's grip pose sits within this controller's host grip pose, for
+  // the right hand (the left is mirrored), when the two differ in the hand.
+  // OpenXR leaves the grip's exact pitch to each runtime and controller; Quest
+  // games are made for Meta's. Applied to the grip only (aim and palm keep the
+  // host's), under the player's offset. Zero: the host's grip is a Quest's.
+  Offset quest_grip{};
 };
 
 namespace detail {
@@ -93,8 +154,11 @@ inline constexpr Row cosmos_right{"/input/a/click", "/input/b/click", "", "/inpu
 inline constexpr HostInput kIndexInputs[]{
     {"/input/a/click", "A"},
     {"/input/b/click", "B"},
+    {"/input/a/touch", "A touch"},
+    {"/input/b/touch", "B touch"},
     {"/input/thumbstick", "Thumbstick"},
     {"/input/thumbstick/click", "Thumbstick click"},
+    {"/input/thumbstick/touch", "Thumbstick touch"},
     {"/input/trackpad", "Trackpad (swipe)"},
     {"/input/trackpad/force", "Trackpad press"},
     {"/input/trackpad/touch", "Trackpad touch"},
@@ -105,6 +169,7 @@ inline constexpr HostInput kIndexInputs[]{
     {"/input/trackpad/dpad_center", "Trackpad center"},
     {"/input/trigger/value", "Trigger"},
     {"/input/trigger/click", "Trigger click"},
+    {"/input/trigger/touch", "Trigger touch"},
     {"/input/squeeze/value", "Grip"},
     {"/input/squeeze/force", "Grip squeeze (hard)"},
     {"/input/system/click", "System", true},
@@ -114,10 +179,16 @@ inline constexpr HostInput kTouchInputs[]{
     {"/input/y/click", "Y", false, 1},
     {"/input/a/click", "A", false, 2},
     {"/input/b/click", "B", false, 2},
+    {"/input/x/touch", "X touch", false, 1},
+    {"/input/y/touch", "Y touch", false, 1},
+    {"/input/a/touch", "A touch", false, 2},
+    {"/input/b/touch", "B touch", false, 2},
     {"/input/menu/click", "Menu", false, 1},
     {"/input/thumbstick", "Thumbstick"},
     {"/input/thumbstick/click", "Thumbstick click"},
+    {"/input/thumbstick/touch", "Thumbstick touch"},
     {"/input/trigger/value", "Trigger"},
+    {"/input/trigger/touch", "Trigger touch"},
     {"/input/squeeze/value", "Grip"},
     {"/input/thumbrest/touch", "Thumbrest"},
     {"/input/system/click", "Meta button", true, 2},
@@ -146,10 +217,16 @@ inline constexpr HostInput kPico4Inputs[]{
     {"/input/y/click", "Y", false, 1},
     {"/input/a/click", "A", false, 2},
     {"/input/b/click", "B", false, 2},
+    {"/input/x/touch", "X touch", false, 1},
+    {"/input/y/touch", "Y touch", false, 1},
+    {"/input/a/touch", "A touch", false, 2},
+    {"/input/b/touch", "B touch", false, 2},
     {"/input/menu/click", "Menu", false, 1},
     {"/input/thumbstick", "Thumbstick"},
     {"/input/thumbstick/click", "Thumbstick click"},
+    {"/input/thumbstick/touch", "Thumbstick touch"},
     {"/input/trigger/value", "Trigger"},
+    {"/input/trigger/touch", "Trigger touch"},
     {"/input/squeeze/value", "Grip"},
     {"/input/system/click", "System", true},
 };
@@ -159,10 +236,16 @@ inline constexpr HostInput kPicoNeo3Inputs[]{
     {"/input/y/click", "Y", false, 1},
     {"/input/a/click", "A", false, 2},
     {"/input/b/click", "B", false, 2},
+    {"/input/x/touch", "X touch", false, 1},
+    {"/input/y/touch", "Y touch", false, 1},
+    {"/input/a/touch", "A touch", false, 2},
+    {"/input/b/touch", "B touch", false, 2},
     {"/input/menu/click", "Menu"},
     {"/input/thumbstick", "Thumbstick"},
     {"/input/thumbstick/click", "Thumbstick click"},
+    {"/input/thumbstick/touch", "Thumbstick touch"},
     {"/input/trigger/value", "Trigger"},
+    {"/input/trigger/touch", "Trigger touch"},
     {"/input/squeeze/value", "Grip"},
     {"/input/system/click", "System", true},
 };
@@ -185,8 +268,13 @@ inline constexpr HostInput kFocus3Inputs[]{
     {"/input/menu/click", "Menu", false, 1},
     {"/input/thumbstick", "Thumbstick"},
     {"/input/thumbstick/click", "Thumbstick click"},
+    {"/input/thumbstick/touch", "Thumbstick touch"},
     {"/input/trigger/value", "Trigger"},
+    {"/input/trigger/click", "Trigger click"},
+    {"/input/trigger/touch", "Trigger touch"},
     {"/input/squeeze/value", "Grip"},
+    {"/input/squeeze/click", "Grip click"},
+    {"/input/squeeze/touch", "Grip touch"},
     {"/input/thumbrest/touch", "Thumbrest"},
     {"/input/system/click", "System", true, 2},
 };
@@ -199,6 +287,7 @@ inline constexpr HostInput kCosmosInputs[]{
     {"/input/shoulder/click", "Bumper"},
     {"/input/thumbstick", "Thumbstick"},
     {"/input/thumbstick/click", "Thumbstick click"},
+    {"/input/thumbstick/touch", "Thumbstick touch"},
     {"/input/trigger/value", "Trigger"},
     {"/input/trigger/click", "Trigger click"},
     {"/input/squeeze/click", "Grip"},
@@ -225,12 +314,19 @@ inline constexpr HostInput kSenseInputs[]{
     {"/input/triangle_mndx/click", "Triangle", false, 1},
     {"/input/cross_mndx/click", "Cross", false, 2},
     {"/input/circle_mndx/click", "Circle", false, 2},
+    {"/input/square_mndx/touch", "Square touch", false, 1},
+    {"/input/triangle_mndx/touch", "Triangle touch", false, 1},
+    {"/input/cross_mndx/touch", "Cross touch", false, 2},
+    {"/input/circle_mndx/touch", "Circle touch", false, 2},
     {"/input/share_mndx/click", "Create", false, 1},
     {"/input/options_mndx/click", "Options", false, 2},
     {"/input/thumbstick", "Thumbstick"},
     {"/input/thumbstick/click", "Thumbstick click"},
+    {"/input/thumbstick/touch", "Thumbstick touch"},
     {"/input/trigger/value", "Trigger"},
+    {"/input/trigger/touch", "Trigger touch"},
     {"/input/squeeze/click", "Grip"},
+    {"/input/squeeze/touch", "Grip touch"},
     {"/input/system/click", "PS button", true},
 };
 inline constexpr HostInput kFrameInputs[]{
@@ -238,20 +334,33 @@ inline constexpr HostInput kFrameInputs[]{
     {"/input/b/click", "B", false, 2},
     {"/input/x/click", "X", false, 2},
     {"/input/y/click", "Y", false, 2},
+    {"/input/a/touch", "A touch", false, 2},
+    {"/input/b/touch", "B touch", false, 2},
+    {"/input/x/touch", "X touch", false, 2},
+    {"/input/y/touch", "Y touch", false, 2},
     {"/input/dpad_up/click", "D-pad up", false, 1},
     {"/input/dpad_down/click", "D-pad down", false, 1},
     {"/input/dpad_left/click", "D-pad left", false, 1},
     {"/input/dpad_right/click", "D-pad right", false, 1},
+    {"/input/dpad_up/touch", "D-pad up touch", false, 1},
+    {"/input/dpad_down/touch", "D-pad down touch", false, 1},
+    {"/input/dpad_left/touch", "D-pad left touch", false, 1},
+    {"/input/dpad_right/touch", "D-pad right touch", false, 1},
     {"/input/view/click", "View", false, 1},
     {"/input/menu/click", "Menu", false, 2},
+    {"/input/view/touch", "View touch", false, 1},
+    {"/input/menu/touch", "Menu touch", false, 2},
     {"/input/bumper/click", "Bumper"},
+    {"/input/bumper/touch", "Bumper touch"},
     {"/input/thumbstick", "Thumbstick"},
     {"/input/thumbstick/click", "Thumbstick click"},
     // Valve's profile has no thumbrest sensor; a player can give the game's
     // Thumbrest the stick's touch sensor instead.
     {"/input/thumbstick/touch", "Thumbstick touch"},
     {"/input/trigger/value", "Trigger"},
+    {"/input/trigger/touch", "Trigger touch"},
     {"/input/squeeze/value", "Grip"},
+    {"/input/squeeze/touch", "Grip touch"},
     {"/input/system/click", "Steam button", true},
 };
 inline constexpr HostInput kGenericInputs[]{
@@ -318,7 +427,13 @@ inline constexpr Profile kProfiles[]{
         "/input/trigger/value", "/input/squeeze/value", ""}}},
      "/input/view/click", "Left View button",
      "a b x y dpad_up dpad_down dpad_left dpad_right view menu bumper thumbstick trigger squeeze",
-     "XR_VALVE_frame_controller_interaction"},
+     "XR_VALVE_frame_controller_interaction",
+     // SteamVR's render models put the Frame and Touch Plus in the same hand-aligned
+     // device frame (same hand model pose, aim within 0.6 degrees, handles along the
+     // same axis), but the Frame's openxr_grip is pitched 2.8 degrees where Touch
+     // Plus's is 20.6 (Meta's grip): a Quest game's held objects would point 17.8
+     // degrees low. Touch Plus's openxr_grip expressed in the Frame's.
+     {{-10.12f, 2.56f, 2.32f}, {17.79f, 0, 0}}},
     {"/interaction_profiles/khr/generic_controller", "Generic controller", "khr other unknown", "", "", kGenericInputs,
      {{{"/input/primary/click", "/input/secondary/click", "", "/input/thumbstick", "/input/thumbstick/click",
         "/input/trigger/value", "/input/squeeze/value", ""},
@@ -347,18 +462,6 @@ struct MenuChoice {
 };
 // A row's host inputs (component paths), in the player's order.
 using Inputs = std::vector<std::string>;
-// Where the game sees a controller in the hand: a shift in millimetres and a turn
-// in degrees, in the controller's own frame (x right, y up, z toward the player's
-// wrist). The turn is tilt (about x), turn (about y) and roll (about z), applied
-// as turn, then tilt, then roll. It moves every pose of that hand the game reads
-// (grip, aim, palm), as SteamVR's pose offsets do.
-inline constexpr float kMaxShiftMm = 200, kMaxTurnDeg = 180;
-struct Offset {
-  std::array<float, 3> position{};  // mm
-  std::array<float, 3> rotation{};  // degrees: tilt, turn, roll
-  bool operator==(const Offset&) const = default;
-  bool zero() const { return *this == Offset{}; }
-};
 // The same offset for the other hand: mirrored left to right.
 Offset mirrored(const Offset& offset);
 // How one hand's analog inputs and vibration reach the game, as SteamVR's binding
@@ -376,6 +479,10 @@ struct Tuning {
 Tuning clamped(Tuning tuning);
 // The stick as the game sees it: inverted as chosen, then the dead zone.
 std::array<float, 2> shape_stick(const Tuning& tuning, float x, float y);
+// The stick with the direction rows' buttons held: an axis one of its two
+// directions holds goes all the way that way (both: centred), the other keeps
+// the stick's own value, and the result stays within the stick's round travel.
+std::array<float, 2> push_stick(float x, float y, bool up, bool down, bool left, bool right);
 // An analog input pressed at `percent` (0: 50 %), let go a little below it, so a
 // value resting at the point does not flicker.
 bool analog_press(float value, bool was_pressed, int percent);
@@ -442,6 +549,9 @@ struct Resolved {
   Menu menu;
   bool grip_toggle = false;  // the game's grip latches: one press holds, the next lets go
   std::array<Offset, 2> offsets{};  // per hand, within the limits
+  // Per hand, the controller's quest_grip (the left mirrored): placed under the
+  // player's offset on the grip pose only.
+  std::array<Offset, 2> quest_grip{};
   std::array<Tuning, 2> tuning{};   // per hand, within the limits
   std::array<bool, kQuestCount> toggles{};  // rows other than the grip that latch
 };
@@ -452,7 +562,12 @@ struct Resolved {
 Resolved resolve(const Profile& profile, const Choice* choice);
 // The host paths a game's Touch path reaches ("/user/hand/left/input/x/click" ->
 // "/user/hand/left/input/trackpad/dpad_down"), one per host input of its row, or
-// none. Touch sensors follow their button where the host has a sensor there.
+// none. Touch sensors follow their button where the host has a sensor there;
+// the stick's touch also takes the Stick touch and direction rows' buttons, and
+// X/A, Y/B and the trigger's touch the buttons of their touch rows. A Touch Pro
+// or Touch Plus sensor names its row's inputs (the layer adds the host's own). The
+// stick's halves ("/user/hand/left/input/thumbstick/dpad_up") name a direction
+// row's host inputs, which the runtime merges into the stick (push_stick).
 // `dpad`: the host binds trackpad and stick halves (XR_EXT_dpad_binding); without
 // it halves are left out here and Venture splits the pad itself (pads()).
 std::vector<std::string> host_bindings(std::string_view guest_path, const Profile& profile,
@@ -486,6 +601,10 @@ std::vector<Conflict> conflicts(const Resolved& resolved, MenuMode mode);
 // (gripToggle only when the player set it, offsets only for a hand that has one).
 // A row is a string ("" for none), or a list of strings when it has several
 // inputs ("stickClick": ["/input/thumbstick/click", "/input/shoulder/click"]).
+// Row keys: primary, secondary, stick, stickClick, trigger, grip, thumbrest,
+// stickTouch, stickUp, stickDown, stickLeft, stickRight, primaryTouch, secondaryTouch,
+// triggerTouch, thumbProximity, triggerProximity, triggerCurl, triggerSlide,
+// triggerForce, thumbrestForce, stylusForce.
 std::string encode(const Config& config);
 // Malformed text or entries are ignored, never fatal.
 Config decode(std::string_view text);

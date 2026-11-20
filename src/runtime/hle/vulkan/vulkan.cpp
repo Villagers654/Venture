@@ -50,6 +50,7 @@
 #include "deferred_recording.h"
 #include "xr/api.h"
 #include "xr/vulkan_extensions.h"
+#include "xr/vulkan_layers.h"
 #include "xr/display_override.h"
 
 namespace venture::vulkan {
@@ -1048,7 +1049,16 @@ VkResult create_instance_impl(const VkInstanceCreateInfo* info, const VkAllocati
                               VkInstance* out, bool xr) {
   if (!info || !out) return VK_ERROR_INITIALIZATION_FAILED;
   *out = VK_NULL_HANDLE;
-  if (info->enabledLayerCount) return VK_ERROR_LAYER_NOT_PRESENT;
+  // A game's own layers are not available; under xrCreateVulkanInstanceKHR the
+  // list is also the host XR stack's additions, which Venture leaves out
+  // (xr/vulkan_layers.h).
+  if (info->enabledLayerCount && !xr) return VK_ERROR_LAYER_NOT_PRESENT;
+  auto layered = *info;
+  venture::xr::HostAddedVulkanLayers layers;
+  if (xr) {
+    layers = venture::xr::leave_out_host_added_vulkan_layers(layered, "the game's Vulkan instance");
+    info = &layered;
+  }
   if (!xr && !allowed_names(info->enabledExtensionCount, info->ppEnabledExtensionNames))
     return VK_ERROR_EXTENSION_NOT_PRESENT;
   std::vector<const char*> names;

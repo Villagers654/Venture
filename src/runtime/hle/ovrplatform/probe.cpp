@@ -62,6 +62,9 @@ int main(int argc, char** argv) {
       const auto auth = provider->access_token({});
       if (auth.error) return 1;
       const bool identity = std::string_view(argv[4]) == "--probe-identity";
+      if (identity)
+        std::cout << "logged_in_user oculus_id_present=" << !auth.user.alias.empty()
+                  << " display_name_present=" << !auth.user.display_name.empty() << '\n';
       const std::vector<std::string_view> names =
           std::string_view(argv[4]) == "--probe-age"
               ? std::vector<std::string_view>{"ovr_UserAgeCategory_Get"}
@@ -97,6 +100,11 @@ int main(int argc, char** argv) {
         std::cout << "service=" << name << " http=" << response.status
                   << " error=" << static_cast<int>(error.code)
                   << " elements=" << model.elements.size();
+        if (model.kind == "User")
+          std::cout << " oculus_id_present="
+                    << !std::get<std::string>(model.fields.at("OculusID")).empty()
+                    << " display_name_present="
+                    << !std::get<std::string>(model.fields.at("DisplayName")).empty();
         if (model.kind == "UserAccountAgeCategory")
           std::cout << " age_enum="
                     << std::get<std::int32_t>(model.fields.at("AgeCategory"));

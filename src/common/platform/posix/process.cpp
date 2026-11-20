@@ -42,7 +42,7 @@ void Process::spawn(const fs::path &exe, const std::vector<std::string> &args,
 }
 void Process::spawn(const fs::path &exe, const std::vector<std::string> &args,
                     const fs::path &log, bool, PipeChannel::Handler broker,
-                    const Environment &environment) {
+                    const Environment &environment, const std::vector<std::string> &removed) {
   if (active())
     throw std::runtime_error("This game is already running.");
   fs::create_directories(log.parent_path());
@@ -69,7 +69,7 @@ void Process::spawn(const fs::path &exe, const std::vector<std::string> &args,
     posix_spawn_file_actions_adddup2(&actions, static_cast<int>(h[0]), 64);
     posix_spawn_file_actions_adddup2(&actions, static_cast<int>(h[1]), 65);
   }
-  // The current environment with `environment` applied.
+  // The current environment with `environment` applied, without `removed`.
   std::vector<std::string> variables;
   for (auto &[key, value] : environment)
     variables.push_back(key + "=" + value);
@@ -77,7 +77,8 @@ void Process::spawn(const fs::path &exe, const std::vector<std::string> &args,
     std::string_view entry(*e);
     auto name = entry.substr(0, entry.find('='));
     if (std::none_of(environment.begin(), environment.end(),
-                     [&](auto &o) { return o.first == name; }))
+                     [&](auto &o) { return o.first == name; }) &&
+        std::find(removed.begin(), removed.end(), name) == removed.end())
       variables.emplace_back(entry);
   }
   std::vector<char *> envp;

@@ -45,4 +45,11 @@ struct ModelGetter {
 std::span<const ModelGetter> model_getters();
 const ModelGetter* model_getter(std::string_view name);
 Model user_model(std::uint64_t id, std::string alias, std::string display_name);
+// Signed Meta Platform 1.205: USER literal RVA 0x896880, current_room
+// appended by initializer 0x70980. Graph returns only the id for a user node
+// asked without fields, so every user read names them.
+inline constexpr const char* user_fields =
+    "id,alias,display_name,presence,presence_deeplink_message,"
+    "presence_destination_api_name,presence_lobby_session_id,"
+    "presence_match_session_id,presence_status,profile_url,profile_url_small,current_room";
 }  // namespace venture::ovrplatform

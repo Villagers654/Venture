@@ -125,11 +125,13 @@ void Session::observe_host_event(const XrEventDataBuffer& event) {
                            DisplayTiming::Source::host);
 }
 
-bool Session::deliver_host_event(const XrEventDataBuffer& event) const {
+bool Session::deliver_host_event(const XrEventDataBuffer& event) {
   if (event.type != XR_TYPE_EVENT_DATA_SESSION_STATE_CHANGED) return true;
   const auto& changed = reinterpret_cast<const XrEventDataSessionStateChanged&>(event);
-  return changed.session != handle || changed.state != XR_SESSION_STATE_EXITING ||
-         !host_stop_requested || guest_exit_requested;
+  if (changed.session != handle || changed.state != XR_SESSION_STATE_EXITING || guest_exit_requested) return true;
+  if (!host_stop_requested && !host_ended.exchange(true))
+    log::info("xr", "Host session state=8 (the VR runtime ended the session; quitting the game as a Quest menu quit)");
+  return false;
 }
 XrResult Session::request_host_stop() {
   // The game's frame thread holds the session mutex for most of each frame; a
@@ -252,6 +254,7 @@ void Session::created(SessionOwner requested) {
   hitches.restart();
   owner = requested;
   host_stop_requested = guest_exit_requested = false;
+  host_ended = false;
   state = XR_SESSION_STATE_IDLE;
   running = false;
   phase = Phase::idle;

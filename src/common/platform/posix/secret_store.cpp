@@ -1,8 +1,13 @@
 #include "common/secret_store.h"
 #include "common/meta/accounts.h"
+#include "common/environment.h"
 #include <dlfcn.h>
 #include <fcntl.h>
 #include <atomic>
+#include <chrono>
+#include <condition_variable>
+#include <mutex>
+#include <thread>
 #include <cstdlib>
 #include <fstream>
 #include <iterator>
@@ -122,6 +127,39 @@ void remove_sealed(const fs::path &file) {
   fs::remove(sealed_path(file), ec);
   fs::remove(key_path(file), ec);
 }
+bool has_sealed(const fs::path &file) {
+  std::error_code ec;
+  return fs::exists(sealed_path(file), ec);
+}
+// VENTURE_SECRET_STORE=file keeps sign-ins in the sealed file even where a
+// keyring answers, as Chromium's --password-store=basic does. Read on each
+// call (not the startup snapshot) so tests can switch it.
+bool file_store_forced() {
+  const char *value = std::getenv("VENTURE_SECRET_STORE");
+  return value && std::string_view(value) == "file";
+}
+// A data root that has been used where no keyring could be opened without a
+// prompt (SteamOS's game mode, a session without kwallet-pam or gnome-keyring's
+// PAM module, no Secret Service at all) keeps every sign-in in sealed files:
+// a credential saved to a keyring in one session would be unreachable in the
+// other. The marker lives in the data root's accounts folder.
+fs::path file_store_marker(const fs::path &file, bool legacy) {
+  return legacy ? file.parent_path() / "accounts" / ".file-store"
+                : file.parent_path().parent_path() / ".file-store";
+}
+bool file_store_root(const fs::path &file, bool legacy) {
+  std::error_code ec;
+  return fs::exists(file_store_marker(file, legacy), ec);
+}
+void mark_file_store_root(const fs::path &file, bool legacy) {
+  try {
+    if (!file_store_root(file, legacy))
+      paths::atomic_write(file_store_marker(file, legacy),
+                          "Sign-ins in this folder are kept in sealed files: a keyring could not be opened "
+                          "without a prompt where Venture ran.\n");
+  } catch (...) {
+  }  // the sealed file itself is saved; the marker only steers later saves
+}
 
 #ifdef VENTURE_HAVE_LIBSECRET
 // Persisted schema must continue matching existing Secret Service entries.
@@ -149,7 +187,11 @@ struct Libsecret {
   GList *(*list_append)(GList *, gpointer) = nullptr;
   void (*list_free)(GList *) = nullptr;
   void (*unref)(gpointer) = nullptr;
+  // Bounding a prompt nobody answers.
+  GCancellable *(*cancellable_new)() = nullptr;
+  void (*cancel)(GCancellable *) = nullptr;
   bool can_unlock = false;
+  bool can_cancel = false;
   bool ok = false;
 };
 const Libsecret &libsecret() {
@@ -170,6 +212,8 @@ const Libsecret &libsecret() {
                    bind(l.collection_locked, "secret_collection_get_locked") &&
                    bind(l.unlock, "secret_service_unlock_sync") && bind(l.list_append, "g_list_append") &&
                    bind(l.list_free, "g_list_free") && bind(l.unref, "g_object_unref");
+    l.can_cancel = bind(l.cancellable_new, "g_cancellable_new") && bind(l.cancel, "g_cancellable_cancel") &&
+                   bind(l.unref, "g_object_unref");
     return l;
   }();
   return api;
@@ -201,6 +245,79 @@ bool keyring_answers() {
   }
   return answered == 1;
 }
+// Whether the keyring takes a credential now without a prompt: a Secret
+// Service whose default collection exists and is unlocked. None of these
+// calls prompts. A locked one (a KDE wallet nobody opened, gnome-keyring
+// without its PAM module: SteamOS logs in without a password in both of its
+// modes) would ask for its password with a window of its own, which gamescope
+// never shows, and a lookup next time could not see the item.
+enum class KeyringState { unavailable, locked, unlocked };
+KeyringState keyring_state() {
+  auto &l = libsecret();
+  if (!l.ok) return KeyringState::unavailable;
+  // libsecret's file backend (SECRET_BACKEND=file: tests, sandboxes) has no
+  // collection to ask about and never prompts.
+  const char *backend = std::getenv("SECRET_BACKEND");
+  if ((backend && std::string_view(backend) != "service") || !l.can_unlock)
+    return keyring_answers() ? KeyringState::unlocked : KeyringState::unavailable;
+  GError *error = nullptr;
+  SecretService *service = l.service(SECRET_SERVICE_NONE, nullptr, &error);
+  if (!service) {
+    if (error) l.free_error(error);
+    answered = 0;
+    return KeyringState::unavailable;
+  }
+  // No default collection: a save would prompt to create one.
+  auto state = KeyringState::locked;
+  if (SecretCollection *collection =
+          l.for_alias(service, SECRET_COLLECTION_DEFAULT, SECRET_COLLECTION_NONE, nullptr, &error)) {
+    state = l.collection_locked(collection) ? KeyringState::locked : KeyringState::unlocked;
+    l.unref(collection);
+  } else if (error && error->domain == l.dbus_quark()) {
+    state = KeyringState::unavailable;
+  }
+  if (error) l.free_error(error);
+  l.unref(service);
+  answered = state == KeyringState::unavailable ? 0 : 1;
+  return state;
+}
+// Cancels the libsecret calls given its cancellable once `limit` passes, which
+// dismisses their prompt: an unlock prompt nobody answers (or can see) must
+// not hold the launcher or a game forever.
+class PromptLimit {
+public:
+  explicit PromptLimit(std::chrono::seconds limit) {
+    auto &l = libsecret();
+    if (!l.can_cancel) return;
+    cancellable_ = l.cancellable_new();
+    if (!cancellable_) return;
+    thread_ = std::thread([this, limit] {
+      std::unique_lock lock(mutex_);
+      if (!done_changed_.wait_for(lock, limit, [this] { return done_; })) libsecret().cancel(cancellable_);
+    });
+  }
+  ~PromptLimit() {
+    {
+      std::lock_guard lock(mutex_);
+      done_ = true;
+    }
+    done_changed_.notify_all();
+    if (thread_.joinable()) thread_.join();
+    if (cancellable_) libsecret().unref(cancellable_);
+  }
+  PromptLimit(const PromptLimit &) = delete;
+  PromptLimit &operator=(const PromptLimit &) = delete;
+  GCancellable *get() const { return cancellable_; }
+
+private:
+  GCancellable *cancellable_ = nullptr;
+  std::mutex mutex_;
+  std::condition_variable done_changed_;
+  bool done_ = false;
+  std::thread thread_;
+};
+// Long enough to type a keyring password.
+constexpr std::chrono::seconds prompt_limit{120};
 std::string root(const fs::path &file, bool legacy) {
   return paths::utf8(
       fs::absolute(legacy ? file.parent_path()
@@ -251,7 +368,8 @@ void unlock_default_collection() {
           l.for_alias(service, SECRET_COLLECTION_DEFAULT, SECRET_COLLECTION_NONE, nullptr, &error)) {
     if (l.collection_locked(collection)) {
       GList *objects = l.list_append(nullptr, collection);
-      l.unlock(service, objects, nullptr, nullptr, &error);
+      PromptLimit limit(prompt_limit);
+      l.unlock(service, objects, limit.get(), nullptr, &error);
       l.list_free(objects);
     }
     l.unref(collection);
@@ -263,19 +381,25 @@ void unlock_default_collection() {
 std::optional<std::string> keyring_load(const fs::path &file, const std::string &key) {
   auto &l = libsecret();
   if (!l.ok) return std::nullopt;
+  // gamescope (SteamOS's game mode, the Steam Frame) never shows the window of
+  // a keyring's prompt (another process's): a locked keyring stays closed
+  // rather than holding the launcher on a prompt nobody sees. The item stays
+  // in the keyring for a session that can open it.
+  if (environment::inside_gamescope() && keyring_state() != KeyringState::unlocked) return std::nullopt;
   auto location = root(file, key.empty()), slot = slot_of(key);
   // Saved to the keyring (a marker without a sealed file): open it first.
   std::error_code ec;
-  if (fs::exists(file, ec) && !fs::exists(sealed_path(file), ec)) unlock_default_collection();
+  if (fs::exists(file, ec) && !has_sealed(file)) unlock_default_collection();
+  PromptLimit limit(prompt_limit);  // a lookup unlocks the locked items it finds
   GError *error = nullptr;
-  auto *secret = l.lookup(&schema, nullptr, &error, "root", location.c_str(), "slot",
+  auto *secret = l.lookup(&schema, limit.get(), &error, "root", location.c_str(), "slot",
                           slot.c_str(), nullptr);
   if (!secret && !error && legacy_root(location) != location)
-    secret = l.lookup(&schema, nullptr, &error, "root", legacy_root(location).c_str(), "slot",
+    secret = l.lookup(&schema, limit.get(), &error, "root", legacy_root(location).c_str(), "slot",
                       slot.c_str(), nullptr);
   if (!secret && !error && !key.empty())
     if (auto origin = marker_root(file, key); !origin.empty() && origin != location)
-      secret = l.lookup(&schema, nullptr, &error, "root", origin.c_str(), "slot", slot.c_str(),
+      secret = l.lookup(&schema, limit.get(), &error, "root", origin.c_str(), "slot", slot.c_str(),
                         nullptr);
   switch (outcome(error)) {
   case Keyring::unreachable: return std::nullopt;
@@ -311,6 +435,8 @@ Keyring keyring_clear(const fs::path &file, const std::string &key) {
 }
 #else
 enum class Keyring { ok, unreachable, failed };
+enum class KeyringState { unavailable, locked, unlocked };
+KeyringState keyring_state() { return KeyringState::unavailable; }
 std::optional<std::string> keyring_load(const fs::path &, const std::string &) { return std::nullopt; }
 Keyring keyring_save(const fs::path &, const std::string &, const std::string &) { return Keyring::unreachable; }
 Keyring keyring_clear(const fs::path &, const std::string &) { return Keyring::unreachable; }
@@ -321,8 +447,11 @@ std::string root(const fs::path &file, bool legacy) {
 #endif
 } // namespace
 std::optional<Session> SecretStore::load() const {
-  auto plain = keyring_load(file_, key_);
-  if (!plain) plain = unseal(file_, slot_of(key_));
+  // A sealed file is the newest copy when there is one: a save to the keyring
+  // removes it, and a save to it can leave an older keyring item behind (a
+  // locked keyring is not cleared, which would need a prompt).
+  auto plain = unseal(file_, slot_of(key_));
+  if (!plain) plain = keyring_load(file_, key_);
   if (!plain) return {};
   auto j = parse_json(*plain);
   if (number(j, "version") != (key_.empty() ? 1 : 2) ||
@@ -334,9 +463,10 @@ std::optional<Session> SecretStore::load() const {
                  str(j, "displayName")};
 }
 void SecretStore::save(const Session &s) const {
-  auto location = root(file_, key_.empty());
+  const bool legacy = key_.empty();
+  auto location = root(file_, legacy);
   auto plain = Json{
-      {"version", key_.empty() ? 1 : 2},
+      {"version", legacy ? 1 : 2},
       {"key", key_},
       {"accessToken", s.access_token},
       {"accountId", s.account_id},
@@ -346,9 +476,24 @@ void SecretStore::save(const Session &s) const {
       {"savedAt", paths::timestamp()},
       {"source",
        s.source}}.dump();
-  switch (keyring_save(file_, key_, plain)) {
+  // The keyring only when it takes the credential without a prompt, and only
+  // for a slot and data root never kept in a sealed file: a credential that
+  // moved to a sealed file because some session could not open the keyring
+  // stays readable in that session.
+  const auto keyring = keyring_state();
+  const bool sealed_only = file_store_forced() || has_sealed(file_) || file_store_root(file_, legacy);
+  auto stored = Keyring::unreachable;
+  if (!sealed_only && keyring == KeyringState::unlocked) stored = keyring_save(file_, key_, plain);
+  switch (stored) {
   case Keyring::ok: remove_sealed(file_); break;
-  case Keyring::unreachable: seal(file_, slot_of(key_), plain); break;
+  case Keyring::unreachable:
+    seal(file_, slot_of(key_), plain);
+    if (keyring == KeyringState::unlocked) {
+      keyring_clear(file_, key_);  // an older keyring copy; best effort
+    } else if (!file_store_forced()) {
+      mark_file_store_root(file_, legacy);
+    }
+    break;
   case Keyring::failed: throw std::runtime_error("Could not save Meta session securely.");
   }
   // A non-secret marker allows orphan reconciliation; credentials stay in
@@ -363,7 +508,7 @@ void SecretStore::clear() const {
 }
 const char *SecretStore::protection() {
 #ifdef VENTURE_HAVE_LIBSECRET
-  if (keyring_answers()) return "kept in your desktop keyring";
+  if (!file_store_forced() && keyring_state() == KeyringState::unlocked) return "kept in your desktop keyring";
 #endif
   return "kept in an encrypted file only your user can read";
 }

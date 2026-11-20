@@ -7,12 +7,8 @@
 namespace venture::ovrplatform {
 namespace {
 using Json = nlohmann::json;
-// Signed Meta Platform 1.205: USER literal RVA 0x896880, current_room
-// appended by initializer 0x70980; DESTINATION literal RVA 0x896d30.
-constexpr auto user_fields =
-    "id,alias,display_name,presence,presence_deeplink_message,"
-    "presence_destination_api_name,presence_lobby_session_id,"
-    "presence_match_session_id,presence_status,profile_url,profile_url_small,current_room";
+// Signed Meta Platform 1.205: DESTINATION literal RVA 0x896d30 (user_fields
+// is model.h's USER literal).
 constexpr auto destination_fields = "api_name,display_name,deeplink_message,shareable_uri";
 std::string text(const Json& j, const char* key) {
   const auto it = j.find(key);

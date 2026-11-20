@@ -26,6 +26,17 @@ uint64_t now_ms() {
                       std::chrono::steady_clock::now().time_since_epoch())
                       .count());
 }
+// A game, its first-launch preparation and the host check started from the
+// library run as apps of their own to Steam and SteamVR, not as this Venture
+// (steam_library::launch_identity), unless this Venture is the game a Steam
+// shortcut started. Adds the replaced variables to `environment` and returns
+// the removed ones.
+std::vector<std::string> own_identity(Environment &environment, bool shortcut) {
+  if (shortcut) return {};
+  auto identity = steam_library::launch_identity([](const char *name) { return std::getenv(name); });
+  for (auto &variable : identity.replaced) environment.push_back(std::move(variable));
+  return identity.removed;
+}
 } // namespace
 std::string exception_text() {
   try {
@@ -1990,6 +2001,7 @@ void Core::launch_game(std::string_view id, std::string_view requested,
           // The newest Meta VR OS SDK seen; the runtime's own floor without one.
           if (const int sdk = library::cached_metavr_os_sdk(data_))
             environment.push_back({"VENTURE_METAVR_OS_SDK", std::to_string(sdk)});
+          const auto removed = own_identity(environment, options_.launch_requested);
           r.process.spawn(runtime, args, r.console, console,
                           [broker, routes = std::move(routes), details, key, queue = launch_queue_](const Json &request) {
                             const auto op = str(request, "op");
@@ -2002,7 +2014,7 @@ void Core::launch_game(std::string_view id, std::string_view requested,
                             for (const auto &[prefix, handler] : routes)
                               if (op.starts_with(prefix)) return handler(request);
                             return broker->handle(request);
-                          }, environment);
+                          }, environment, removed);
           success = true; // the process is running, even if cache bookkeeping fails
           r.exit.reset();
           r.tail.clear();
@@ -2101,12 +2113,14 @@ void Core::prepare_tick() {
     try {
       library::rotate_log(log_file);
       // The game's own launch settings: the translated code is only valid for the same options.
+      auto environment = library::launch_environment(settings_, id, true);
+      const auto removed = own_identity(environment, options_.launch_requested);
       preparation->process.spawn(settings_.runtime,
                                  {"--game", paths::utf8(install.directory), "--package", install.plan.package,
                                   "--account", play_key(id).empty() ? "local" : play_key(id), "--prepare",
                                   "--log", paths::utf8(log_file), "--parent-pid", std::to_string(current_process_id())},
                                  data_ / "logs" / ("prepare-" + install.plan.package + ".console.log"), false, {},
-                                 library::launch_environment(settings_, id, true));
+                                 environment, removed);
       log::info("launcher", "Preparing the first launch of {} in the background.", id);
       preparing_ = preparation;
     } catch (const std::exception &e) {

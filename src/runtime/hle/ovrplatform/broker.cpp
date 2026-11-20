@@ -60,7 +60,8 @@ class Brokered final : public Provider {
       return reject(ErrorCode::identity_mismatch);
     identity_ = failure(code(packet, "identityError"));
     token_ = venture::str(packet, "appToken");
-    user_ = {venture::number(packet, "appUserId"), venture::str(packet, "alias"), {}};
+    user_ = {venture::number(packet, "appUserId"), venture::str(packet, "alias"),
+             venture::str(packet, "displayName")};
     if (!identity_ &&
         (token_.empty() || !user_.id || token_.size() > 128 * 1024 ||
          token_.find('\0') != token_.npos))
@@ -350,7 +351,8 @@ venture::Json CredentialBroker::packet() const {
       {"identityError", static_cast<int>(identity_.error.code)},
       {"appToken", identity_.error ? "" : identity_.text},
       {"appUserId", identity_.user.id},
-      {"alias", identity_.user.alias}};
+      {"alias", identity_.user.alias},
+      {"displayName", identity_.user.display_name}};
 }
 venture::Json CredentialBroker::handle(const venture::Json &request) {
   std::lock_guard lock(mutex_);

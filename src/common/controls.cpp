@@ -5,8 +5,11 @@
 
 namespace venture::controls {
 namespace {
-constexpr std::string_view kKeys[kQuestCount]{"primary", "secondary", "menu",  "stick",
-                                              "stickClick", "trigger", "grip", "thumbrest"};
+constexpr std::string_view kKeys[kQuestCount]{"primary",    "secondary", "menu",      "stick",     "stickClick",
+                                              "trigger",    "grip",      "thumbrest", "stickTouch", "stickUp",
+                                              "stickDown",  "stickLeft", "stickRight", "primaryTouch", "secondaryTouch",
+                                              "triggerTouch", "thumbProximity", "triggerProximity", "triggerCurl",
+                                              "triggerSlide", "triggerForce", "thumbrestForce", "stylusForce"};
 constexpr std::string_view kModes[]{"automatic", "button", "hold", "chord", "off"};
 
 // "/input/trackpad/dpad_up" -> "/input/trackpad"; "/input/a/click" -> "/input/a".
@@ -79,6 +82,15 @@ std::array<float, 2> shape_stick(const Tuning& t, float x, float y) {
   // Radial: the direction is kept and the travel past the dead zone fills the whole range.
   const float scale = std::min(1.f, (length - dead) / (1.f - dead)) / length;
   return {x * scale, y * scale};
+}
+std::array<float, 2> push_stick(float x, float y, bool up, bool down, bool left, bool right) {
+  if (!up && !down && !left && !right) return {x, y};
+  if (up || down) y = float(int(up) - int(down));
+  if (left || right) x = float(int(right) - int(left));
+  // A round stick reaches no corner: a diagonal is all the way along it.
+  const float length = std::sqrt(x * x + y * y);
+  if (length > 1) x /= length, y /= length;
+  return {x, y};
 }
 bool analog_press(float value, bool was, int percent) {
   const float press = float(percent ? percent : 50) / 100.f;
@@ -192,6 +204,7 @@ Resolved resolve(const Profile& p, const Choice* choice) {
     case MenuMode::off: m.kind = Menu::Kind::off; break;
   }
   r.grip_toggle = choice && choice->grip_toggle ? *choice->grip_toggle : needs_grip_toggle(p);
+  r.quest_grip = {mirrored(p.quest_grip), p.quest_grip};
   if (choice) {
     for (int hand = 0; hand < 2; ++hand) {
       r.offsets[size_t(hand)] = clamped(choice->offsets[size_t(hand)]);
@@ -278,12 +291,24 @@ std::vector<std::string> host_bindings(std::string_view guest, const Profile& p,
   else if (c == "/input/thumbstick/y") q = Quest::stick, part = Part::y;
   else if (c == "/input/thumbstick/touch") q = Quest::stick, part = Part::touch;
   else if (c == "/input/thumbstick/click") q = Quest::stick_click;
+  else if (c == "/input/thumbstick/dpad_up") q = Quest::stick_up;
+  else if (c == "/input/thumbstick/dpad_down") q = Quest::stick_down;
+  else if (c == "/input/thumbstick/dpad_left") q = Quest::stick_left;
+  else if (c == "/input/thumbstick/dpad_right") q = Quest::stick_right;
   // Boolean actions may bind to the parent path of an analog input.
   else if (c == "/input/trigger" || c == "/input/trigger/value") q = Quest::trigger;
   else if (c == "/input/trigger/touch") q = Quest::trigger, part = Part::touch;
   else if (c == "/input/squeeze" || c == "/input/squeeze/value") q = Quest::grip;
   else if (c == "/input/thumbrest/touch") q = Quest::thumbrest;
-  else return {};  // Pro's pinch, force and stylus are not ordinary Touch controls
+  // Touch Pro and Touch Plus sensors: their rows' inputs, beside the host's own sensor.
+  else if (c == "/input/thumb_fb/proximity_fb" || c == "/input/thumb_meta/proximity_meta") q = Quest::thumb_proximity;
+  else if (c == "/input/trigger/proximity_fb" || c == "/input/trigger/proximity_meta") q = Quest::trigger_proximity;
+  else if (c == "/input/trigger/curl_fb" || c == "/input/trigger/curl_meta") q = Quest::trigger_curl;
+  else if (c == "/input/trigger/slide_fb" || c == "/input/trigger/slide_meta") q = Quest::trigger_slide;
+  else if (c == "/input/trigger/force") q = Quest::trigger_force;
+  else if (c == "/input/thumbrest/force") q = Quest::thumbrest_force;
+  else if (c == "/input/stylus_fb/force") q = Quest::stylus_force;
+  else return {};
   if (q == Quest::menu) {
     if (hand != 0 || r.menu.kind != Menu::Kind::direct) return {};
     auto path = bindable(root + r.menu.direct, p, dpad);
@@ -319,6 +344,15 @@ std::vector<std::string> host_bindings(std::string_view guest, const Profile& p,
         break;
       }
     }
+  }
+  // A touch: also each button of the input's touch row, and for the stick each
+  // button of the directions (a thumb pushing the stick touches it).
+  if (part == Part::touch && touch_row(q) != Quest::count) {
+    std::vector<Quest> extras{touch_row(q)};
+    if (q == Quest::stick) extras.insert(extras.end(), {Quest::stick_up, Quest::stick_down, Quest::stick_left, Quest::stick_right});
+    for (const auto extra : extras)
+      for (const auto& host : r.rows[size_t(hand)][size_t(extra)])
+        if (!is_dpad(host) || dpad) add(root + host);
   }
   return out;
 }

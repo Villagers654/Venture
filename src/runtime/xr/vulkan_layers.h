@@ -1,4 +1,6 @@
 #pragma once
+#include <vulkan/vulkan_core.h>
+#include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <string>
@@ -36,6 +38,27 @@ struct VulkanLayerPlan {
 extern const std::string_view builtin_kept_vulkan_layers;
 VulkanLayerPlan plan_vulkan_layers(const std::vector<ImplicitVulkanLayer>& layers,
                                    const std::function<const char*(const char*)>& getenv);
+// Explicit Vulkan layers in the final create info of an instance Venture makes
+// through xrCreateVulkanInstanceKHR. Venture asks for none there, so each was
+// added by the OpenXR runtime or one of its API layers, and it would wrap
+// every Vulkan call on that instance: the game's translated rendering and
+// Venture's own composition, not the native application such a layer is made
+// for (its heuristics, such as treating render passes the size of an XR
+// swapchain as eye rendering, do not hold there). They are left out like
+// third-party implicit layers and kept by the same rule: the player's
+// VENTURE_VULKAN_LAYERS, VK_INSTANCE_LAYERS, VK_LOADER_LAYERS_ALLOW or
+// VK_LOADER_LAYERS_ENABLE, or the built-in keep list. `getenv` reads the
+// process environment as it was at start.
+struct HostAddedVulkanLayers {
+  std::vector<const char*> kept;  // pointers into the given names
+  std::vector<std::string> left_out;
+};
+HostAddedVulkanLayers plan_host_added_vulkan_layers(std::uint32_t count, const char* const* names,
+                                                    const std::function<const char*(const char*)>& getenv);
+// Applies that plan to `info` (its layer list then points into the result's
+// `kept`, which must outlive the call that uses `info`) and logs what the host
+// added, once per distinct list. `what` names the instance in the log.
+HostAddedVulkanLayers leave_out_host_added_vulkan_layers(VkInstanceCreateInfo& info, std::string_view what);
 // Before the first Vulkan instance of the process: applies the plan through
 // each layer's disable_environment (every loader) and VK_LOADER_LAYERS_DISABLE
 // (loader 1.3.234 and later), and logs it. Steam's Fossilize layer is always

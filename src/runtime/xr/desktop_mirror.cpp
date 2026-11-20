@@ -360,6 +360,11 @@ bool Mirror::open_window() {
   SDL_SetHint(SDL_HINT_TIMER_RESOLUTION, "0");
   SDL_SetHint(SDL_HINT_WINDOW_ACTIVATE_WHEN_SHOWN, "0");
   SDL_SetHint(SDL_HINT_QUIT_ON_LAST_WINDOW_CLOSE, "0");
+#if !defined(_WIN32) && !defined(__ANDROID__)
+  // Wayland by name: SDL also has X11 (only the launcher's window uses it, in
+  // gamescope) and would pick it on compositors without wp_fifo_manager_v1.
+  SDL_SetHint(SDL_HINT_VIDEO_DRIVER, "wayland");
+#endif
   if (!SDL_InitSubSystem(SDL_INIT_VIDEO)) {
     log::warn("mirror", "Desktop mirror unavailable: {}", SDL_GetError());
     return false;

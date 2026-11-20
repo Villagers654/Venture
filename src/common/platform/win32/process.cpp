@@ -8,8 +8,9 @@
 namespace venture {
 namespace {
 // CreateProcessW's Unicode environment block: the current variables with
-// `overrides` applied, sorted by name case-insensitively as Windows requires.
-std::wstring environment_block(const Environment &overrides) {
+// `overrides` applied and without `removed`, sorted by name case-insensitively
+// as Windows requires.
+std::wstring environment_block(const Environment &overrides, const std::vector<std::string> &removed) {
   auto name = [](std::wstring_view entry) {
     // Drive-current-directory entries ("=C:=C:\...") start with '='.
     return entry.substr(0, entry.find(L'=', 1));
@@ -23,11 +24,14 @@ std::wstring environment_block(const Environment &overrides) {
     entries.push_back(paths::from_utf8(key).wstring() + L"=" +
                       paths::from_utf8(value).wstring());
   const size_t added = entries.size();
+  std::vector<std::wstring> gone;
+  for (auto &n : removed) gone.push_back(paths::from_utf8(n).wstring());
   if (auto strings = GetEnvironmentStringsW()) {
     for (auto p = strings; *p; p += wcslen(p) + 1) {
       std::wstring_view entry(p);
       if (std::none_of(entries.begin(), entries.begin() + added,
-                       [&](auto &o) { return same(name(o), name(entry)); }))
+                       [&](auto &o) { return same(name(o), name(entry)); }) &&
+          std::none_of(gone.begin(), gone.end(), [&](auto &g) { return same(g, name(entry)); }))
         entries.emplace_back(entry);
     }
     FreeEnvironmentStringsW(strings);
@@ -75,7 +79,7 @@ void Process::spawn(const fs::path &exe, const std::vector<std::string> &args,
 void Process::spawn(const fs::path &exe, const std::vector<std::string> &args,
                     const fs::path &log, bool console,
                     PipeChannel::Handler broker,
-                    const Environment &environment) {
+                    const Environment &environment, const std::vector<std::string> &removed) {
   if (active())
     throw std::runtime_error("This game is already running.");
   if (!fs::is_regular_file(exe))
@@ -125,8 +129,8 @@ void Process::spawn(const fs::path &exe, const std::vector<std::string> &args,
                          inherited.size() * sizeof(HANDLE), nullptr, nullptr);
   PROCESS_INFORMATION pi{};
   std::wstring block;
-  if (!environment.empty())
-    block = environment_block(environment);
+  if (!environment.empty() || !removed.empty())
+    block = environment_block(environment, removed);
   BOOL ok = setup &&
             CreateProcessW(
                 absolute.c_str(), cmd.data(), nullptr, nullptr, TRUE,

@@ -1103,6 +1103,17 @@ XrResult xrCreateVulkanInstanceKHR(XrInstance i, const XrVulkanInstanceCreateInf
     ptrs.push_back(n.c_str());
   vk.enabledExtensionCount = static_cast<std::uint32_t>(ptrs.size());
   vk.ppEnabledExtensionNames = ptrs.data();
+  // The game's own Vulkan layers are Android ones the host does not have; the
+  // instance starts without them, so any layer left in the list Venture's
+  // vkCreateInstance receives is one the host XR stack added (xr/vulkan_layers.h).
+  if (vk.enabledLayerCount) {
+    std::string layers;
+    for (std::uint32_t n = 0; n < vk.enabledLayerCount && vk.ppEnabledLayerNames; ++n)
+      if (vk.ppEnabledLayerNames[n]) layers += (layers.empty() ? "" : ", ") + std::string(vk.ppEnabledLayerNames[n]);
+    log::warn("xr", "The game's Vulkan instance asked for layers {}; it starts without them", layers);
+    vk.enabledLayerCount = 0;
+    vk.ppEnabledLayerNames = nullptr;
+  }
   auto copy = *info;
   copy.vulkanCreateInfo = &vk;
   vulkan::XrResolverScope resolver(reinterpret_cast<GuestAddr>(info->pfnGetInstanceProcAddr));

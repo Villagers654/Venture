@@ -303,6 +303,88 @@ msgstr "Poignée en bascule"
 msgid "Press once to hold, again to let go"
 msgstr "Appuyez une fois pour saisir, une seconde fois pour lâcher"
 
+#. Controls page row: buttons that touch the game's thumbstick, as a thumb resting on it would.
+msgid "Stick touch"
+msgstr "Stick touché"
+
+#. Controls page row: buttons that push the game's thumbstick all the way up (forward) while held.
+msgid "Stick up"
+msgstr "Stick haut"
+
+#. Controls page row: buttons that push the game's thumbstick all the way down (back) while held.
+msgid "Stick down"
+msgstr "Stick bas"
+
+#. Controls page row: buttons that push the game's thumbstick all the way left while held.
+msgid "Stick left"
+msgstr "Stick gauche"
+
+#. Controls page row: buttons that push the game's thumbstick all the way right while held.
+msgid "Stick right"
+msgstr "Stick droite"
+
+#. Controls page rows: buttons that touch the game's X (left) or A (right) button, as a resting thumb would.
+msgid "X touch"
+msgstr "X touché"
+
+msgid "A touch"
+msgstr "A touché"
+
+#. Controls page rows: buttons that touch the game's Y (left) or B (right) button, as a resting thumb would.
+msgid "Y touch"
+msgstr "Y touché"
+
+msgid "B touch"
+msgstr "B touché"
+
+#. Controls page row: buttons that touch the game's trigger, as a resting finger would.
+msgid "Trigger touch"
+msgstr "Trigger touché"
+
+#. Controls page row (Touch Pro and Touch Plus sensor): the thumb is near the controller's face.
+msgid "Thumb proximity"
+msgstr "Proximité pouce"
+
+#. Controls page row (Touch Pro and Touch Plus sensor): the index finger is near the trigger.
+msgid "Trigger proximity"
+msgstr "Proximité trigger"
+
+#. Controls page row (Touch Pro and Touch Plus sensor): how far the index finger curls around the trigger.
+msgid "Trigger curl"
+msgstr "Courbure trigger"
+
+#. Controls page row (Touch Pro and Touch Plus sensor): where the finger slides along the trigger.
+msgid "Trigger slide"
+msgstr "Glissement trigger"
+
+#. Controls page row (Touch Plus sensor): how hard the trigger is pressed past its end.
+msgid "Trigger force"
+msgstr "Force trigger"
+
+#. Controls page row (Touch Pro sensor): how hard the thumb presses the thumb rest.
+msgid "Thumbrest force"
+msgstr "Force thumbrest"
+
+#. Controls page row (Touch Pro sensor): how hard the stylus tip on the controller's base is pressed.
+msgid "Stylus force"
+msgstr "Force stylet"
+
+#. Controls page, a section of the Add input menu: rows for the thumbstick. Shown in capitals.
+msgid "STICK"
+msgstr "STICK"
+
+#. Controls page, a section of the Add input menu: rows that touch a button or the trigger. Shown in capitals.
+msgid "BUTTON TOUCHES"
+msgstr "BOUTONS TOUCHÉS"
+
+#. Controls page, a section of the Add input menu: sensors only Touch Pro and Touch Plus controllers have, which only OpenXR games read. Shown in capitals.
+msgid "TOUCH PRO AND PLUS"
+msgstr "TOUCH PRO ET PLUS"
+
+#. Controls page, under each controller's rows: adds a row such as Stick touch or Stick up.
+msgid "Add input"
+msgstr "Ajouter une entrée"
+
 msgid "Mirror fullscreen"
 msgstr "Miroir en plein écran"
 

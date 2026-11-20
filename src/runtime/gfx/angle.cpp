@@ -1,6 +1,7 @@
 #include "common/environment.h"
 #include "gfx/angle.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cstdlib>
 #include <functional>
@@ -51,6 +52,42 @@ void load_libraries() {
     failure =
         "ANGLE libraries unavailable; set VENTURE_ANGLE_DIR to the pinned ANGLE "
         "directory";
+}
+// One [facts] line (debug reports keep those whole) with the ANGLE features
+// that choose how guest framebuffers reach Vulkan. They follow the host's
+// Vulkan capabilities, not its vendor, and differ most between desktop GPUs
+// and tile-based ones such as the Steam Frame's (multisampled render to
+// texture through VK_EXT_multisampled_render_to_single_sampled or emulated,
+// dynamic rendering or render passes, framebuffer fetch).
+void log_angle_paths(EGLDisplay egl) {
+  using QueryStringi = const char* (*)(EGLDisplay, EGLint, EGLint);
+  using QueryAttrib = EGLBoolean (*)(EGLDisplay, EGLint, EGLAttrib*);
+  const auto query_string = angle_function<PFNEGLQUERYSTRINGPROC>("eglQueryString");
+  const char* extensions = query_string ? query_string(egl, EGL_EXTENSIONS) : nullptr;
+  const auto name_at = reinterpret_cast<QueryStringi>(angle_proc("eglQueryStringiANGLE"));
+  const auto attribute = reinterpret_cast<QueryAttrib>(angle_proc("eglQueryDisplayAttribANGLE"));
+  if (!extensions || !has_extension(extensions, "EGL_ANGLE_feature_control") || !name_at || !attribute) return;
+  constexpr EGLint feature_name = 0x3460, feature_status = 0x3464, feature_count = 0x3465;
+  static constexpr std::string_view wanted[] = {
+      "supportsMultisampledRenderToSingleSampled", "enableMultisampledRenderToTexture",
+      "supportsMultiviewMultisampleRenderToTexture", "preferMSRTSSFlagByDefault", "supportsDepthStencilResolve",
+      "supportsMultiview", "bresenhamLineRasterization", "preferDynamicRendering",
+      "supportsDynamicRenderingLocalRead", "supportsShaderFramebufferFetch",
+      "supportsRasterizationOrderAttachmentAccess", "supportsShaderFramebufferFetchDepthStencil",
+      "permanentlySwitchToFramebufferFetchMode", "supportsLegacyDithering", "supportsImageCompressionControl",
+      "useVkEventForImageBarrier", "exposeES32ForTesting"};
+  EGLAttrib count = 0;
+  if (!attribute(egl, feature_count, &count) || count <= 0) return;
+  std::string on, off;
+  for (EGLint i = 0; i < EGLint(count); ++i) {
+    const char* name = name_at(egl, feature_name, i);
+    const char* status = name_at(egl, feature_status, i);
+    if (!name || !status || std::ranges::find(wanted, std::string_view(name)) == std::end(wanted)) continue;
+    auto& list = std::string_view(status) == "enabled" ? on : off;
+    list += list.empty() ? "" : " ";
+    list += name;
+  }
+  log::info("facts", "ANGLE paths: on: {}; off: {}", on.empty() ? "none" : on, off.empty() ? "none" : off);
 }
 void init_display() {
   std::call_once(libraries_once, load_libraries);
@@ -201,6 +238,7 @@ void init_display() {
   }
   log::info("gfx", "ANGLE Vulkan EGL {}.{}, shared device {}", major, minor,
             shared);
+  log_angle_paths(display);
   install_blob_cache(display);
 }
 std::atomic<bool> context_lost{false};

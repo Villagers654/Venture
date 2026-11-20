@@ -5,6 +5,8 @@
 #include "common/paths.h"
 #include <algorithm>
 #include <cctype>
+#include <cstdlib>
+#include <format>
 #include <fstream>
 #include <mutex>
 #include <sstream>
@@ -119,6 +121,60 @@ VulkanLayerPlan plan_vulkan_layers(const std::vector<ImplicitVulkanLayer>& layer
       plan.loader_disable += (plan.loader_disable.empty() ? "" : ",") + layer.name;
     }
   }
+  return plan;
+}
+HostAddedVulkanLayers plan_host_added_vulkan_layers(std::uint32_t count, const char* const* names,
+                                                    const std::function<const char*(const char*)>& getenv) {
+  auto value = [&](const char* name) -> std::string_view {
+    const char* v = getenv(name);
+    return v ? std::string_view(v) : std::string_view();
+  };
+  const auto venture = value("VENTURE_VULKAN_LAYERS"), allow = value("VK_LOADER_LAYERS_ALLOW"),
+             enable = value("VK_LOADER_LAYERS_ENABLE"), instance = value("VK_INSTANCE_LAYERS");
+  HostAddedVulkanLayers plan;
+  for (std::uint32_t i = 0; i < count; ++i) {
+    const char* name = names[i];
+    if (!name) continue;
+    bool requested = false;
+    each_item(instance, ";:,", [&](std::string_view item) { requested = requested || equal_folded(item, name); });
+    const bool keep = requested || vulkan_layer_filter_matches(builtin_kept_vulkan_layers, name) ||
+                      vulkan_layer_filter_matches(venture, name) || vulkan_layer_filter_matches(allow, name) ||
+                      vulkan_layer_filter_matches(enable, name);
+    if (keep) plan.kept.push_back(name);
+    else plan.left_out.emplace_back(name);
+  }
+  return plan;
+}
+HostAddedVulkanLayers leave_out_host_added_vulkan_layers(VkInstanceCreateInfo& info, std::string_view what) {
+  auto plan = plan_host_added_vulkan_layers(info.enabledLayerCount, info.ppEnabledLayerNames,
+                                            [](const char* name) { return environment::getenv(name); });
+  info.enabledLayerCount = static_cast<std::uint32_t>(plan.kept.size());
+  info.ppEnabledLayerNames = plan.kept.empty() ? nullptr : plan.kept.data();
+  auto joined = [](const auto& list) {
+    std::string out;
+    for (const auto& name : list) out += (out.empty() ? "" : ", ") + std::string(name);
+    return out;
+  };
+  // The loader also enables the layers VK_INSTANCE_LAYERS names when the
+  // instance is created; one set in this process since start came from the host.
+  const char* live = std::getenv("VK_INSTANCE_LAYERS");
+  const char* initial = environment::getenv("VK_INSTANCE_LAYERS");
+  const std::string live_text = live ? live : "", initial_text = initial ? initial : "";
+  static std::mutex mutex;
+  static std::vector<std::string> logged;
+  const auto line = std::format("{}|{}|{}|{}", what, joined(plan.left_out), joined(plan.kept), live_text);
+  std::lock_guard lock(mutex);
+  if (std::ranges::find(logged, line) != logged.end()) return plan;
+  logged.push_back(line);
+  if (!plan.left_out.empty())
+    log::info("facts", "Vulkan layers the host XR runtime added to {} left out: {} (keep one with Settings "
+              "\"vulkanLayers\" or VENTURE_VULKAN_LAYERS)", what, joined(plan.left_out));
+  if (!plan.kept.empty()) log::info("facts", "Vulkan layers the host XR runtime added to {} kept: {}", what, joined(plan.kept));
+  if (plan.left_out.empty() && plan.kept.empty())
+    log::info("facts", "The host XR runtime added no Vulkan layers to {}", what);
+  if (live_text != initial_text)
+    log::warn("vulkan", "VK_INSTANCE_LAYERS changed in this process since start (now \"{}\"); the Vulkan loader "
+              "enables those layers in {} too", live_text, what);
   return plan;
 }
 void configure_vulkan_layers_for_process() {

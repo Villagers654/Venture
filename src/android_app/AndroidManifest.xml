@@ -50,12 +50,19 @@
         android:resizeableActivity="true"
         android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
 
+        <!-- Every configuration change, assetsPaths included, reaches the activity
+             (onConfigurationChanged) instead of recreating it. SDL cannot recreate
+             its activity: the old one's onDestroy quits the launcher's main and the
+             new one then exits the process. The launcher draws with ImGui and uses
+             no Android resources, so nothing needs reloading. assetsPaths is what
+             Android changes when it applies a resource overlay, as it does to the
+             running apps shortly after a first boot (CI's fresh emulator). -->
         <activity android:name=".VentureActivity"
             android:label="@string/app_name"
             android:exported="true"
             android:launchMode="singleTask"
             android:alwaysRetainTaskState="true"
-            android:configChanges="layoutDirection|locale|fontScale|orientation|uiMode|screenLayout|screenSize|smallestScreenSize|keyboard|keyboardHidden|navigation|density">
+            android:configChanges="mcc|mnc|locale|touchscreen|keyboard|keyboardHidden|navigation|orientation|screenLayout|uiMode|screenSize|smallestScreenSize|density|layoutDirection|colorMode|grammaticalGender|fontWeightAdjustment|fontScale|assetsPaths">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />

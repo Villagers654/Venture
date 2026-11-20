@@ -2,6 +2,7 @@
 #include "xr/api.h"
 #include "xr/display_timing.h"
 #include "xr/frame_hitches.h"
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <memory>
@@ -133,9 +134,17 @@ struct Session {
   // its EXITING event private for an Activity-driven host quit; guest requests
   // retain the normal OpenXR exit contract.
   bool host_stop_requested = false, guest_exit_requested = false;
+  // The host runtime ended the session on its own (EXITING that neither
+  // Venture nor the game asked for: a quit from SteamVR's dashboard). A Quest
+  // menu quit never shows the game EXITING either: the runtime quits it
+  // through the Activity lifecycle (app_runtime.cpp's monitor), as for a stop
+  // the launcher requests, which a later session does not undo.
+  std::atomic<bool> host_ended{false};
   XrResult request_host_stop();
   XrResult request_exit(SessionOwner expected = SessionOwner::none);
-  bool deliver_host_event(const XrEventDataBuffer&) const;
+  // Whether the game sees `event`: a host EXITING only after the game's own
+  // exit request. Records host_ended.
+  bool deliver_host_event(const XrEventDataBuffer&);
   XrResult wait(const XrFrameWaitInfo *, XrFrameState *);
   XrResult begin(const XrFrameBeginInfo *);
   // `owned` keeps everything `info` points to alive after the call returns; with

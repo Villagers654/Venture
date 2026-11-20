@@ -25,13 +25,13 @@ struct ControlsEdit {
   int menu_hold_ms = controls::kHoldMs;         // hold: how long
   int menu_chord_ms = controls::kChordHoldMs;   // two buttons: how long both are held (0: at once)
   // Per Quest input and hand: the host inputs (index + 1) in the player's order; empty: not assigned.
-  std::array<std::array<std::vector<int>, 8>, 2> host{};
+  std::array<std::array<std::vector<int>, controls::kQuestCount>, 2> host{};
   bool grip_toggle = false;  // each grip press flips the game's grip held / released
   std::array<controls::Offset, 2> offsets{};  // where the game sees each controller in the hand
   bool mirror = true;  // the right offset follows the left, mirrored
   std::array<controls::Tuning, 2> tuning{};  // sticks, press points and vibration per hand
   bool tuning_mirror = true;  // the right hand's tuning follows the left
-  std::array<bool, 8> toggles{};  // per Quest row (not the grip): presses latch
+  std::array<bool, controls::kQuestCount> toggles{};  // per Quest row (not the grip): presses latch
   bool custom = false;  // per game: overrides the defaults
   bool initialized = false;
 };
@@ -257,7 +257,10 @@ private:
   void draw_downloads();
   void draw_settings();
   ControlsEdit controls_, game_controls_;
-  int controls_hover_ = -1;  // hand * 8 + Quest input under the pointer
+  int controls_hover_ = -1;  // hand * kQuestCount + Quest input under the pointer
+  // The extra rows (stick, button and trigger touches, stick directions) added with "Add input" while
+  // unassigned, per hand; an assigned one always shows.
+  std::array<std::array<bool, controls::kQuestCount>, 2> controls_extra_added_{};
   int controls_active_ = -1;  // the row being changed (its list open or focused), last frame
   // A row line whose list opens next frame (an input just added): hand, Quest input, line.
   std::optional<std::array<int, 3>> controls_open_line_;

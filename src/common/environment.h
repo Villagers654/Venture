@@ -29,6 +29,12 @@ std::string gamescope_wayland_display(const char* wayland, const char* gamescope
 // process opens for Venture (the portal's file chooser, a browser the portal
 // starts) belongs to no Steam app and stays hidden.
 bool inside_gamescope();
+// Whether the launcher's windows (its own and its sign-in window's) go on
+// gamescope's Xwayland: inside gamescope, with its DISPLAY set. gamescope
+// closes an app's windows (SteamVR's close on the app's panel, as on the Steam
+// Frame) only by sending WM_DELETE_WINDOW to its X11 windows, and logs that it
+// cannot close Wayland ones. False elsewhere (Linux uses Wayland).
+bool gamescope_xwayland();
 // VENTURE_PASSTHROUGH: mixed reality is on by default; exactly "0" (the launcher's
 // opt-out) turns it off. Unset or any other value leaves it on.
 bool passthrough_enabled();

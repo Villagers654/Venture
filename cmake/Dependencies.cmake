@@ -82,11 +82,25 @@ set(SDL_TEST_LIBRARY OFF CACHE BOOL "" FORCE)
 set(SDL_TESTS OFF CACHE BOOL "" FORCE)
 set(SDL_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(SDL_INSTALL OFF CACHE BOOL "" FORCE)
-# Wayland only on Linux: no X11 video backend (Xlib, xcb, XCursor, XInput,
-# XRandR...) is compiled in or loaded at run time. No libdecor either: its
-# cairo/GTK plugins load libX11 and libxcb; the launcher draws its own
-# window chrome instead (launcher/ui/chrome.h).
-set(SDL_X11 OFF CACHE BOOL "" FORCE)
+# Wayland on Linux, with one exception: inside gamescope (SteamOS's game mode,
+# the Steam Frame) the launcher's window goes on gamescope's Xwayland, because
+# gamescope closes an app's windows (SteamVR's close on its panel) only by
+# WM_DELETE_WINDOW to X11 windows (launcher/window_style.h). SDL's X11 backend
+# is therefore compiled in, loading libX11 and libXext at run time and only when
+# that driver is asked for; everything else asks for Wayland by name. Its
+# optional extensions (XCursor, XInput2, XRandR, XFixes...) stay out: their
+# headers are not in the build's baseline. No libdecor either: its cairo/GTK
+# plugins load libX11 and libxcb on every Wayland desktop; the launcher draws
+# its own window chrome instead (launcher/ui/chrome.h).
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  set(SDL_X11 ON CACHE BOOL "" FORCE)
+else()
+  set(SDL_X11 OFF CACHE BOOL "" FORCE)
+endif()
+set(SDL_X11_SHARED ON CACHE BOOL "" FORCE)
+foreach(extension XCURSOR XDBE XINPUT XFIXES XRANDR XSCRNSAVER XSHAPE XSYNC)
+  set(SDL_X11_${extension} OFF CACHE BOOL "" FORCE)
+endforeach()
 set(SDL_WAYLAND_LIBDECOR OFF CACHE BOOL "" FORCE)
 # SDL loads its desktop libraries at run time by the name it derives from the
 # library it finds: the symlink chain lib<x>.so -> lib<x>.so.N -> lib<x>.so.N.M.
@@ -99,7 +113,7 @@ if(CMAKE_CROSSCOMPILING AND CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSROOT
   if(NOT triple AND VENTURE_LINUX_ARM64_TRIPLE)
     set(triple "${VENTURE_LINUX_ARM64_TRIPLE}")
   endif()
-  foreach(library asound drm gbm pulse udev wayland-client wayland-cursor wayland-egl xkbcommon pipewire-0.3 usb-1.0
+  foreach(library asound drm gbm pulse udev wayland-client wayland-cursor wayland-egl xkbcommon pipewire-0.3 usb-1.0 X11 Xext
                   dbus-1)
     string(TOUPPER "${library}" variable)
     string(REPLACE "-" "_" variable "${variable}")

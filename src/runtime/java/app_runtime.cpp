@@ -493,7 +493,11 @@ void launch_android_app(const AppLaunchOptions& options) {
       if (startup_diagnostics::enabled && !closing) startup_diagnostics::poll();
       const bool timed_out = options.run_seconds > 0 &&
           std::chrono::duration<double>(now - started).count() >= options.run_seconds;
-      const bool stopping = stop.requested() || timed_out || guest_process_exit_status() >= 0;
+      // The host runtime ended the session (a quit from SteamVR's dashboard):
+      // a stop like the launcher's, which SteamVR follows with a kill a few
+      // seconds later.
+      const bool host_ended = xr::session().host_ended.load();
+      const bool stopping = stop.requested() || timed_out || host_ended || guest_process_exit_status() >= 0;
       if (first_frame_probe.poll(std::chrono::duration_cast<std::chrono::seconds>(now - started).count(),
                                  first_frame_bound, startup_diagnostics::first_frame_submitted(), stopping) &&
           (startup_diagnostics::first_frame_snapshot_configured() || guest_process_exit_status() < 0)) {
@@ -514,7 +518,10 @@ void launch_android_app(const AppLaunchOptions& options) {
                          startup_diagnostics::frames_submitted(), stall_excluded || closing);
       if (!closing && stopping) {
         closing = true;
-        host_stop = stop.requested() || timed_out;
+        host_stop = stop.requested() || timed_out || host_ended;
+        // The supervisor then tells a kill by the VR runtime during this quit
+        // from a crash (RuntimeChildResult::host_ended).
+        if (host_ended && !stop.requested()) platform::notify_runtime_host_ended();
         presenting = presenting_at_quit(startup_diagnostics::first_frame_submitted(),
                                         startup_diagnostics::host_session_ever_focused(),
                                         startup_diagnostics::host_session_focused(), now - frame_advanced);
@@ -536,7 +543,8 @@ void launch_android_app(const AppLaunchOptions& options) {
           signals::log_guest_threads(timed_out ? "run time elapsed" : "stop requested");
         log::info("launch", "Shutdown requested; posting Android lifecycle teardown (host_quit={} backstop_ms={} reason={})",
                   host_stop.load(), bound.count(),
-                  timed_out ? "run time elapsed" : stop.requested() ? stop.reason() : "game exited");
+                  timed_out ? "run time elapsed" : stop.requested() ? stop.reason()
+                  : host_ended ? "the VR runtime ended the session" : "game exited");
         shutdown_trace::phase("request");
         shutdown_trace::begin();
       }

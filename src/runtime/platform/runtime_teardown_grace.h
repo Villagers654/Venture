@@ -60,6 +60,7 @@ class RuntimeTeardownGrace {
       if (!used_ && byte == 1) { posted(now); continue; }
       if (!used_ && byte == 3) { saving(); continue; }
       if (!used_ && byte == 4) { delivered(now); continue; }
+      if (!used_ && byte == 5) { host_ended = true; continue; }
       if (!used_ && byte != 2) continue;
       wire_[used_++] = byte;
       if (used_ != wire_.size()) continue;
@@ -86,6 +87,7 @@ class RuntimeTeardownGrace {
   RuntimeExitWait exit_wait = RuntimeExitWait::none;
   unsigned exit_wait_tid = 0;
   bool os_termination = false;
+  bool host_ended = false;  // notify_runtime_host_ended
  private:
   std::array<unsigned char, 10> wire_{};
   unsigned used_ = 0;

@@ -33,12 +33,20 @@ void remember_host_views(std::string_view, std::string_view, std::uint32_t, std:
 // The test host's instance always starts: no implicit API layer to leave out.
 std::vector<ApiLayer> enabled_openxr_layers() { return {}; }
 bool skip_openxr_layers(const std::vector<ApiLayer>&) { return true; }
+const std::vector<ApiLayer>& user_left_out_layers() {
+  static const std::vector<ApiLayer> none;
+  return none;
+}
 QuietLibraryErrors::QuietLibraryErrors() = default;
 QuietLibraryErrors::~QuietLibraryErrors() = default;
 }
 namespace venture::openxr_layers {
 // No other installed runtime to name beside the test host.
 std::vector<Runtime> installed_runtimes() { return {}; }
+// Nor any implicit layer for the start-up list.
+std::vector<std::filesystem::path> implicit_manifests() { return {}; }
+Manifest read(const std::filesystem::path&) { return {}; }
+bool enabled(const Manifest&) { return true; }
 }
 
 extern "C" {

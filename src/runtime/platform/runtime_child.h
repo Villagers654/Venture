@@ -36,6 +36,23 @@ struct RuntimeChildResult {
   // platform supervisor knows whether it actually stopped the worker.
   bool supervisor_stopped = false;
   bool os_termination = false;
+  // The worker was quitting because the host VR runtime ended its session.
+  // SteamVR kills a scene app that has not exited a few seconds after it
+  // ends the session; such a kill ended a quit the player asked for, not a
+  // crash (quit_kill()).
+  bool host_ended = false;
+  // A SIGKILL of a worker that was quitting for the host runtime. On Windows
+  // a TerminateProcess leaves whatever code its caller chose, which cannot be
+  // told from a crash's, so nothing counts as one there.
+  bool quit_kill() const { return host_ended && kill_status(status); }
+  static bool kill_status(int code) {
+#ifdef _WIN32
+    (void)code;
+    return false;
+#else
+    return code == 128 + 9;
+#endif
+  }
   // The worker's process id, for the reports it leaves behind (HotSpot's
   // fatal error report is named after it).
   unsigned long worker_pid = 0;
@@ -75,6 +92,9 @@ void notify_runtime_save_wait();
 // The quit lifecycle reached the game (pause, stop and the final callback);
 // the worker's destroy settle bound starts. See RuntimeTeardownGrace::delivered.
 void notify_runtime_destroy_delivered();
+// The worker quits because the host VR runtime ended its session, not because
+// the launcher asked. See RuntimeChildResult::host_ended.
+void notify_runtime_host_ended();
 std::string take_runtime_launch_payload();
 // Android Runtime.exit after a queued cold launcher intent. Kernel process
 // teardown is required: native globals and HotSpot cannot be reinitialized.

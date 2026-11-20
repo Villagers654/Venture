@@ -14,6 +14,7 @@
 // disable_environment set as a loader property (XR_EXT_loader_init_properties),
 // so the process environment stays as it is.
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace venture::xr {
@@ -24,10 +25,18 @@ struct ApiLayer {
 // The enabled implicit layers the loader would load, in its order, each
 // loaded and negotiated with as the loader does to find out whether it works.
 std::vector<ApiLayer> enabled_openxr_layers();
-// Disables exactly `layers` for this process's loader (xrInitializeLoaderKHR
-// with loader properties; an empty list enables them all again); call while
-// no instance exists. False when the loader refused.
+// Disables `layers`, plus the ones the user left out, for this process's
+// loader (xrInitializeLoaderKHR with loader properties; an empty list leaves
+// out only the user's); call while no instance exists. False when the loader
+// refused.
 bool skip_openxr_layers(const std::vector<ApiLayer> &layers);
+// The implicit layers VENTURE_OPENXR_LAYERS_OFF names (layer names separated
+// by commas or spaces, or "all"), for an A/B against a host's own layers
+// without editing system files. Read once.
+const std::vector<ApiLayer> &user_left_out_layers();
+// The names in such a setting, and whether they name `layer`.
+std::vector<std::string> user_left_out_names(std::string_view setting);
+bool user_leaves_out(const std::vector<std::string> &names, std::string_view layer);
 // While one lives, a library that fails to load on this thread fails quietly:
 // Windows otherwise shows a modal "Bad Image" error for a damaged DLL and
 // blocks the loader (and the game start) until someone closes it.

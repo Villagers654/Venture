@@ -2790,6 +2790,12 @@ extern "C" VENTURE_MOCK_EXPORT void ventureMockXrRestartSession() {
   mock::restart_pending = true;
   mock::events.push_back(XR_SESSION_STATE_STOPPING);
 }
+extern "C" VENTURE_MOCK_EXPORT void ventureMockXrEndSession() {
+  std::lock_guard lock(mock::mutex);
+  if (!mock::exit_pending && mock::session_state != XR_SESSION_STATE_STOPPING)
+    mock::events.push_back(XR_SESSION_STATE_STOPPING);
+  mock::exit_pending = true;
+}
 extern "C" VENTURE_MOCK_EXPORT void ventureMockXrLoseSession() {
   std::lock_guard lock(mock::mutex);
   mock::session_lost = true;

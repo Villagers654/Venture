@@ -31,6 +31,8 @@ std::vector<std::string> instance_enabled, device_enabled;
 // False when an XR runtime created the object without calling the GIPA it was given
 // (Virtual Desktop); the requested extensions, which the runtime must enable, stand in.
 bool instance_recorded = false, device_recorded = false;
+// Set while xrCreateVulkanInstanceKHR runs, which reaches record_instance.
+bool instance_through_xr = false;
 PFN_vkGetInstanceProcAddr angle_loader = nullptr;
 bool unified_image_layouts = false;
 PFN_vkGetInstanceProcAddr loader() {
@@ -227,7 +229,11 @@ VkResult VKAPI_CALL record_instance(const VkInstanceCreateInfo* ci,
   try {
     std::vector<std::string> names;
     remember(names, ci->enabledExtensionCount, ci->ppEnabledExtensionNames);
-    auto r = vk<PFN_vkCreateInstance>(nullptr, "vkCreateInstance")(ci, a, out);
+    // Venture asks for no layers here: any are the host XR stack's.
+    auto final = *ci;
+    xr::HostAddedVulkanLayers layers;
+    if (instance_through_xr) layers = xr::leave_out_host_added_vulkan_layers(final, "Venture's shared Vulkan instance");
+    auto r = vk<PFN_vkCreateInstance>(nullptr, "vkCreateInstance")(&final, a, out);
     if (r == VK_SUCCESS) { instance_enabled.swap(names); instance_recorded = true; }
     return r;
   } catch (...) {
@@ -419,7 +425,10 @@ VkResult create_instance(const VkInstanceCreateInfo* requested,
         instance_recorded = false;
         result = VK_ERROR_INITIALIZATION_FAILED;
         *out = nullptr;
-        return create(host.instance, &info, out, &result);
+        instance_through_xr = true;
+        const auto created = create(host.instance, &info, out, &result);
+        instance_through_xr = false;
+        return created;
       };
       xr_result = attempt(plan.api_version);
       if (XR_SUCCEEDED(xr_result) && result == VK_ERROR_INCOMPATIBLE_DRIVER && plan.retry_version) {
@@ -528,6 +537,19 @@ VkResult select_device(VkInstance instance, VkPhysicalDevice* out) {
               : prop.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU ? "integrated"
                                                                           : "other",
               vram >> 20, xr::host_xr().available ? "the XR runtime" : "Venture (first discrete GPU)");
+    // The driver by name and version ([facts]: kept whole in debug reports).
+    // One GPU family runs under different drivers (Adreno: Qualcomm's or
+    // Mesa's Turnip), whose capabilities pick different ANGLE paths.
+    const auto properties2 = vk<PFN_vkGetPhysicalDeviceProperties2>(instance, "vkGetPhysicalDeviceProperties2");
+    if (properties2 && prop.apiVersion >= VK_API_VERSION_1_2) {
+      VkPhysicalDeviceDriverProperties driver{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES};
+      VkPhysicalDeviceProperties2 query{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, &driver};
+      properties2(*out, &query);
+      log::info("facts", "Host Vulkan driver: {} ({}), driver id {}, Vulkan {}.{}.{}, GPU {} (vendor {:#06x} device {:#x})",
+                driver.driverName, driver.driverInfo, int(driver.driverID), VK_API_VERSION_MAJOR(prop.apiVersion),
+                VK_API_VERSION_MINOR(prop.apiVersion), VK_API_VERSION_PATCH(prop.apiVersion), prop.deviceName,
+                prop.vendorID, prop.deviceID);
+    }
   } catch (const std::exception&) {
   }
   return VK_SUCCESS;

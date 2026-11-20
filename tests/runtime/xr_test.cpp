@@ -603,6 +603,17 @@ TEST_CASE("XR PCM and envelope haptics bind both hands, append, replace and stop
     CHECK(xg::xrEndSession(session) == XR_SUCCESS);
     poll();
     CHECK(venture::xr::session().state == XR_SESSION_STATE_EXITING);
+    CHECK_FALSE(venture::xr::session().host_ended.load());
+  }
+  SUBCASE("A quit from the host runtime's menu stops at IDLE without guest EXITING and starts the host quit") {
+    CHECK_FALSE(venture::xr::session().host_ended.load());
+    ventureMockXrEndSession();
+    poll();
+    CHECK(venture::xr::session().state == XR_SESSION_STATE_STOPPING);
+    CHECK(xg::xrEndSession(session) == XR_SUCCESS);
+    poll();
+    CHECK(venture::xr::session().state == XR_SESSION_STATE_IDLE);
+    CHECK(venture::xr::session().host_ended.load());
   }
   CHECK(xg::xrDestroySession(session) == XR_SUCCESS);
   CHECK(xg::xrDestroyInstance(instance) == XR_SUCCESS);

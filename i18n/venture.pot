@@ -518,7 +518,7 @@ msgstr ""
 #: src/launcher/ui/views.cpp:2931
 #: src/launcher/ui/views.cpp:3060
 #: src/launcher/ui/views.cpp:3105
-#: src/launcher/ui/views.cpp:6008
+#: src/launcher/ui/views.cpp:6148
 msgid "Off"
 msgstr ""
 
@@ -867,137 +867,255 @@ msgid "Export this controller's controls to share them"
 msgstr ""
 
 #. notice after a controls file could not be read.
-#: src/launcher/ui/views.cpp:5085
+#: src/launcher/ui/views.cpp:5087
 msgid "Could not read controls file"
 msgstr ""
 
 #. notice; {} is why ("not a controls file").
-#: src/launcher/ui/views.cpp:5094
+#: src/launcher/ui/views.cpp:5096
 msgid "Controls not imported"
 msgstr ""
 
-#: src/launcher/ui/views.cpp:5130
+#: src/launcher/ui/views.cpp:5132
 msgid "Could not save controls file"
 msgstr ""
 
+#. Controls page row: buttons that touch the game's thumbstick, as a thumb resting on it would.
+#: src/launcher/ui/views.cpp:5176
+#: src/launcher/ui/views.cpp:5176
+msgid "Stick touch"
+msgstr ""
+
+#. Controls page row: buttons that push the game's thumbstick all the way up (forward) while held.
+#: src/launcher/ui/views.cpp:5178
+#: src/launcher/ui/views.cpp:5178
+msgid "Stick up"
+msgstr ""
+
+#. Controls page row: buttons that push the game's thumbstick all the way down (back) while held.
+#: src/launcher/ui/views.cpp:5180
+#: src/launcher/ui/views.cpp:5180
+msgid "Stick down"
+msgstr ""
+
+#. Controls page row: buttons that push the game's thumbstick all the way left while held.
+#: src/launcher/ui/views.cpp:5182
+#: src/launcher/ui/views.cpp:5182
+msgid "Stick left"
+msgstr ""
+
+#. Controls page row: buttons that push the game's thumbstick all the way right while held.
+#: src/launcher/ui/views.cpp:5184
+#: src/launcher/ui/views.cpp:5184
+msgid "Stick right"
+msgstr ""
+
+#. Controls page rows: buttons that touch the game's X (left) or A (right) button, as a resting thumb would.
+#: src/launcher/ui/views.cpp:5186
+msgid "X touch"
+msgstr ""
+
+#. Controls page rows: buttons that touch the game's X (left) or A (right) button, as a resting thumb would.
+#: src/launcher/ui/views.cpp:5186
+msgid "A touch"
+msgstr ""
+
+#. Controls page rows: buttons that touch the game's Y (left) or B (right) button, as a resting thumb would.
+#: src/launcher/ui/views.cpp:5188
+msgid "Y touch"
+msgstr ""
+
+#. Controls page rows: buttons that touch the game's Y (left) or B (right) button, as a resting thumb would.
+#: src/launcher/ui/views.cpp:5188
+msgid "B touch"
+msgstr ""
+
+#. Controls page row: buttons that touch the game's trigger, as a resting finger would.
+#: src/launcher/ui/views.cpp:5190
+#: src/launcher/ui/views.cpp:5190
+msgid "Trigger touch"
+msgstr ""
+
+#. Controls page row (Touch Pro and Touch Plus sensor): the thumb is near the controller's face.
+#: src/launcher/ui/views.cpp:5192
+#: src/launcher/ui/views.cpp:5192
+msgid "Thumb proximity"
+msgstr ""
+
+#. Controls page row (Touch Pro and Touch Plus sensor): the index finger is near the trigger.
+#: src/launcher/ui/views.cpp:5194
+#: src/launcher/ui/views.cpp:5194
+msgid "Trigger proximity"
+msgstr ""
+
+#. Controls page row (Touch Pro and Touch Plus sensor): how far the index finger curls around the trigger.
+#: src/launcher/ui/views.cpp:5196
+#: src/launcher/ui/views.cpp:5196
+msgid "Trigger curl"
+msgstr ""
+
+#. Controls page row (Touch Pro and Touch Plus sensor): where the finger slides along the trigger.
+#: src/launcher/ui/views.cpp:5198
+#: src/launcher/ui/views.cpp:5198
+msgid "Trigger slide"
+msgstr ""
+
+#. Controls page row (Touch Plus sensor): how hard the trigger is pressed past its end.
+#: src/launcher/ui/views.cpp:5200
+#: src/launcher/ui/views.cpp:5200
+msgid "Trigger force"
+msgstr ""
+
+#. Controls page row (Touch Pro sensor): how hard the thumb presses the thumb rest.
+#: src/launcher/ui/views.cpp:5202
+#: src/launcher/ui/views.cpp:5202
+msgid "Thumbrest force"
+msgstr ""
+
+#. Controls page row (Touch Pro sensor): how hard the stylus tip on the controller's base is pressed.
+#: src/launcher/ui/views.cpp:5204
+#: src/launcher/ui/views.cpp:5204
+msgid "Stylus force"
+msgstr ""
+
 #. Controls page, the last item of the Grip input's list. The grip is the controller's side button held to grab.
-#: src/launcher/ui/views.cpp:5751
+#: src/launcher/ui/views.cpp:5822
 msgid "Grip toggle"
 msgstr ""
 
 #. Controls page, under "Grip toggle" in the Grip input's list.
 #. Controls page, the last item of a button's input list (A/X, B/Y, stick click, trigger).
-#: src/launcher/ui/views.cpp:5753
-#: src/launcher/ui/views.cpp:5756
+#: src/launcher/ui/views.cpp:5824
+#: src/launcher/ui/views.cpp:5827
 msgid "Press once to hold, again to let go"
 msgstr ""
 
 #. Controls page, the last item of a button's input list (A/X, B/Y, stick click, trigger).
-#: src/launcher/ui/views.cpp:5756
+#: src/launcher/ui/views.cpp:5827
 msgid "Toggle"
 msgstr ""
 
+#. Controls page, under each controller's rows: adds a row such as Stick touch or Stick up.
+#: src/launcher/ui/views.cpp:5904
+msgid "Add input"
+msgstr ""
+
+#. Controls page, a section of the Add input menu: rows for the thumbstick. Shown in capitals.
+#: src/launcher/ui/views.cpp:5925
+msgid "STICK"
+msgstr ""
+
+#. Controls page, a section of the Add input menu: rows that touch a button or the trigger. Shown in capitals.
+#: src/launcher/ui/views.cpp:5927
+msgid "BUTTON TOUCHES"
+msgstr ""
+
+#. Controls page, a section of the Add input menu: sensors only Touch Pro and Touch Plus controllers have, which only OpenXR games read. Shown in capitals.
+#: src/launcher/ui/views.cpp:5929
+msgid "TOUCH PRO AND PLUS"
+msgstr ""
+
 #. Controls page "Position in hand" rows (millimetres, then degrees).
-#: src/launcher/ui/views.cpp:5836
-#: src/launcher/ui/views.cpp:5866
+#: src/launcher/ui/views.cpp:5976
+#: src/launcher/ui/views.cpp:6006
 msgid "Forward"
 msgstr ""
 
 #. Controls page "Position in hand" rows (millimetres, then degrees).
-#: src/launcher/ui/views.cpp:5836
-#: src/launcher/ui/views.cpp:5866
+#: src/launcher/ui/views.cpp:5976
+#: src/launcher/ui/views.cpp:6006
 msgid "Up"
 msgstr ""
 
 #. Controls page "Position in hand" rows (millimetres, then degrees).
-#: src/launcher/ui/views.cpp:5836
-#: src/launcher/ui/views.cpp:5866
+#: src/launcher/ui/views.cpp:5976
+#: src/launcher/ui/views.cpp:6006
 msgid "Right"
 msgstr ""
 
-#: src/launcher/ui/views.cpp:5836
-#: src/launcher/ui/views.cpp:5867
+#: src/launcher/ui/views.cpp:5976
+#: src/launcher/ui/views.cpp:6007
 msgid "Tilt up"
 msgstr ""
 
-#: src/launcher/ui/views.cpp:5836
-#: src/launcher/ui/views.cpp:5867
+#: src/launcher/ui/views.cpp:5976
+#: src/launcher/ui/views.cpp:6007
 msgid "Turn left"
 msgstr ""
 
-#: src/launcher/ui/views.cpp:5836
-#: src/launcher/ui/views.cpp:5867
+#: src/launcher/ui/views.cpp:5976
+#: src/launcher/ui/views.cpp:6007
 msgid "Roll left"
 msgstr ""
 
 #. Controls page "Sticks, triggers and vibration" rows. Stick dead zone: how far the stick moves before the game sees it.
-#: src/launcher/ui/views.cpp:5837
-#: src/launcher/ui/views.cpp:5953
+#: src/launcher/ui/views.cpp:5977
+#: src/launcher/ui/views.cpp:6093
 msgid "Stick dead zone"
 msgstr ""
 
 #. Controls page "Sticks, triggers and vibration" rows. Stick dead zone: how far the stick moves before the game sees it.
-#: src/launcher/ui/views.cpp:5837
-#: src/launcher/ui/views.cpp:5953
+#: src/launcher/ui/views.cpp:5977
+#: src/launcher/ui/views.cpp:6093
 msgid "Invert stick left/right"
 msgstr ""
 
-#: src/launcher/ui/views.cpp:5837
-#: src/launcher/ui/views.cpp:5954
+#: src/launcher/ui/views.cpp:5977
+#: src/launcher/ui/views.cpp:6094
 msgid "Invert stick up/down"
 msgstr ""
 
 #. Controls page rows: how far the trigger or grip is pulled before it counts as pressed.
-#: src/launcher/ui/views.cpp:5838
-#: src/launcher/ui/views.cpp:5956
+#: src/launcher/ui/views.cpp:5978
+#: src/launcher/ui/views.cpp:6096
 msgid "Trigger press at"
 msgstr ""
 
 #. Controls page rows: how far the trigger or grip is pulled before it counts as pressed.
-#: src/launcher/ui/views.cpp:5838
-#: src/launcher/ui/views.cpp:5956
+#: src/launcher/ui/views.cpp:5978
+#: src/launcher/ui/views.cpp:6096
 msgid "Grip press at"
 msgstr ""
 
 #. Controls page rows: how far the trigger or grip is pulled before it counts as pressed.
-#: src/launcher/ui/views.cpp:5838
-#: src/launcher/ui/views.cpp:5956
+#: src/launcher/ui/views.cpp:5978
+#: src/launcher/ui/views.cpp:6096
 msgid "Vibration"
 msgstr ""
 
 #. Controls page card heading: moving and turning where the game sees the controllers.
-#: src/launcher/ui/views.cpp:5855
+#: src/launcher/ui/views.cpp:5995
 msgid "Position in hand"
 msgstr ""
 
 #. Controls page checkbox under "Position in hand".
-#: src/launcher/ui/views.cpp:5914
+#: src/launcher/ui/views.cpp:6054
 msgid "Mirror for both hands"
 msgstr ""
 
 #. Controls page button: clears both hands' position offsets.
-#: src/launcher/ui/views.cpp:5916
-#: src/launcher/ui/views.cpp:5920
+#: src/launcher/ui/views.cpp:6056
+#: src/launcher/ui/views.cpp:6060
 msgid "Reset position"
 msgstr ""
 
 #. Controls page card heading: stick dead zone and inversion, trigger and grip press points, vibration.
-#: src/launcher/ui/views.cpp:5944
+#: src/launcher/ui/views.cpp:6084
 msgid "Sticks, triggers and vibration"
 msgstr ""
 
 #. Controls page: a trigger or grip press point left to the runtime.
-#: src/launcher/ui/views.cpp:5999
+#: src/launcher/ui/views.cpp:6139
 msgid "Auto"
 msgstr ""
 
 #. Controls page checkbox under "Sticks, triggers and vibration".
-#: src/launcher/ui/views.cpp:6024
+#: src/launcher/ui/views.cpp:6164
 msgid "Same for both hands"
 msgstr ""
 
 #. Controls page button: puts the sticks, press points and vibration back to their defaults.
-#: src/launcher/ui/views.cpp:6027
-#: src/launcher/ui/views.cpp:6030
+#: src/launcher/ui/views.cpp:6167
+#: src/launcher/ui/views.cpp:6170
 msgid "Reset"
 msgstr ""

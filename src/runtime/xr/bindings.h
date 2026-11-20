@@ -34,7 +34,9 @@ std::vector<std::string> pad_bindings(std::string_view profile, int hand, bool p
 std::array<bool, controls::kQuestCount> split_pad(std::string_view profile, int hand, XrVector2f at, bool pressed);
 // The player's offset for the hand's controller (`profile`), placed before a
 // pose in an action space: the controller moved and turned in the hand, then `pose`.
-XrPosef offset_pose(std::string_view profile, int hand, const XrPosef& pose);
+// `grip`: a pose in the host's grip pose space, which first moves to where a
+// Quest's grip sits on that controller (controls::Profile::quest_grip).
+XrPosef offset_pose(std::string_view profile, int hand, const XrPosef& pose, bool grip = false);
 // Suggests translated Touch bindings for host profile `profile`. A host that
 // refuses a path gets the suggestion again without touch sensors, then with
 // only the controller's listed inputs, so one unknown sensor never costs a

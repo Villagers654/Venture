@@ -255,8 +255,8 @@ HttpRequest identity_iap_request(std::string_view name,
     if (!user_id) throw std::invalid_argument("Invalid Platform ID");
     HttpRequest r{"identity-user"};
     r.id = std::to_string(user_id);
-    if (name == "ovr_User_GetOrgScopedID")
-      r.parameters.emplace_back("fields", "org_scoped_id");
+    r.parameters.emplace_back(
+        "fields", name == "ovr_User_GetOrgScopedID" ? "org_scoped_id" : user_fields);
     return r;
   }
   if (name == "ovr_IAP_GetProductsBySKU") {

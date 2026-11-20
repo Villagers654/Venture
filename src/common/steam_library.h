@@ -87,6 +87,20 @@ Result sync(const fs::path &root, const fs::path &executable,
 // ancestor processes, or in a sandbox, which cannot see them, Steam's launch
 // variable (SteamGameId). Linux only; Steam on Windows leaves them running.
 bool started_by_steam();
+// Steam's launch identity in an environment: the variables naming the app
+// Steam started (SteamGameId, SteamAppId, SteamOverlayGameId,
+// STEAM_COMPAT_APP_ID) and its overlay library in LD_PRELOAD. SteamVR's client
+// reads SteamGameId and then waits for Steam to name the app that connects,
+// so a game started by a Venture that Steam started as an app of its own
+// would be taken for Venture itself: on the Steam Frame a non-VR app, which
+// SteamVR shows on its theater screen. Without them the game is an app of its
+// own, as when Venture was not started by Steam. A Venture that Steam started
+// for one game (a shortcut's --launch) is that game, and keeps them.
+struct LaunchIdentity {
+  std::vector<std::string> removed;                          // variables the game does not inherit
+  std::vector<std::pair<std::string, std::string>> replaced;  // LD_PRELOAD without the overlay
+};
+LaunchIdentity launch_identity(const std::function<const char *(const char *)> &getenv);
 struct Handoff {
   fs::path root, executable, art;
   std::vector<Game> games;

@@ -10,6 +10,7 @@
 #include "common/environment.h"
 #include "common/paths.h"
 #include "common/process.h"
+#include "common/steam_library.h"
 #include "launcher/headset_check.h"
 #include "launcher/headset_play.h"
 
@@ -61,7 +62,11 @@ Check check_linux(const fs::path& runtime, const std::vector<std::pair<std::stri
     fs::create_directories(log.parent_path(), ec);
     fs::remove(log, ec);
     Process process;
-    process.spawn(runtime, {"--host-check"}, log, false, nullptr, environment);
+    // As Play starts a game from the library: an app of its own to SteamVR.
+    auto variables = environment;
+    auto identity = steam_library::launch_identity([](const char* name) { return std::getenv(name); });
+    for (auto& variable : identity.replaced) variables.push_back(std::move(variable));
+    process.spawn(runtime, {"--host-check"}, log, false, nullptr, variables, identity.removed);
     // Creating an OpenXR instance can start the VR runtime's service.
     if (auto code = process.wait(20000); !code) {
       process.terminate();

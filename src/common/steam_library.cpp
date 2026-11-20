@@ -998,6 +998,33 @@ bool handoff_variable(std::string_view name) {
 }
 } // namespace
 
+LaunchIdentity launch_identity(const std::function<const char *(const char *)> &getenv) {
+  LaunchIdentity out;
+  for (const char *name : {"SteamGameId", "SteamAppId", "SteamOverlayGameId", "STEAM_COMPAT_APP_ID"})
+    if (getenv(name)) out.removed.emplace_back(name);
+  // Steam preloads its overlay (gameoverlayrenderer.so, one per architecture)
+  // into what it starts; in the game it would hook its frames as Venture's.
+  if (const char *preload = getenv("LD_PRELOAD")) {
+    std::string kept;
+    bool dropped = false;
+    std::string_view rest(preload);
+    while (!rest.empty()) {
+      const auto end = rest.find_first_of(": ");
+      const auto entry = rest.substr(0, end);
+      rest = end == rest.npos ? std::string_view() : rest.substr(end + 1);
+      if (entry.empty()) continue;
+      if (fs::path(entry).filename() == "gameoverlayrenderer.so") {
+        dropped = true;
+        continue;
+      }
+      kept += (kept.empty() ? "" : ":") + std::string(entry);
+    }
+    if (dropped && kept.empty()) out.removed.emplace_back("LD_PRELOAD");
+    else if (dropped) out.replaced.emplace_back("LD_PRELOAD", kept);
+  }
+  return out;
+}
+
 bool started_by_steam() {
 #ifdef _WIN32
   return false;

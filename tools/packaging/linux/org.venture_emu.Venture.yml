@@ -14,12 +14,17 @@ sdk: org.gnome.Sdk
 command: venture-flatpak.sh
 separate-locales: false
 finish-args:
-  # Wayland only (no X11 or IPC sockets), audio, network, the GPU.
+  # Wayland (X11 only in gamescope, below; no IPC socket), audio, network, the GPU.
   - --socket=wayland
   # gamescope's Wayland socket (SteamOS's game mode, the Steam Frame): gamescope
   # unsets WAYLAND_DISPLAY for what it starts, so --socket=wayland finds no
   # display there; the launcher connects to GAMESCOPE_WAYLAND_DISPLAY instead.
   - --filesystem=xdg-run/gamescope-0
+  # gamescope's Xwayland, for the launcher's window there: gamescope's close
+  # (SteamVR's close on Venture's panel) reaches only X11 windows
+  # (src/launcher/window_style.h). fallback-x11 grants X11 only where Flatpak
+  # finds no Wayland session, which is gamescope's case; never on a Wayland desktop.
+  - --socket=fallback-x11
   - --socket=pulseaudio
   - --share=network
   - --device=dri

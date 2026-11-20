@@ -104,6 +104,9 @@ extern "C" VENTURE_MOCK_EXPORT std::uint64_t ventureMockXrReleasedImage(XrSwapch
 // Runtime-initiated stop (headset sleep): queues STOPPING; after the
 // application's xrEndSession the session returns through IDLE to READY.
 extern "C" VENTURE_MOCK_EXPORT void ventureMockXrRestartSession();
+// Runtime-initiated quit (SteamVR's dashboard quitting the app): queues
+// STOPPING; after the application's xrEndSession, IDLE then EXITING.
+extern "C" VENTURE_MOCK_EXPORT void ventureMockXrEndSession();
 // Host session loss: queues LOSS_PENDING; frame calls return SESSION_LOST.
 extern "C" VENTURE_MOCK_EXPORT void ventureMockXrLoseSession();
 extern "C" VENTURE_MOCK_EXPORT bool ventureMockXrAwaitHaptics(std::uint32_t count,

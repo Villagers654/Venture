@@ -169,6 +169,33 @@ HostXr initialize_host() {
     // The loader loads the runtime and every implicit API layer here; a damaged
     // DLL among them must fail its load, not stop the start behind a dialog.
     QuietLibraryErrors quiet_library_errors;
+    // A host's implicit API layers sit between Venture and the runtime and can
+    // reach into the shared Vulkan device; name each with the variable that
+    // turns it off ([facts]: debug reports keep these lines whole).
+    {
+      std::string listed;
+      for (const auto &path : openxr_layers::implicit_manifests()) {
+        const auto layer = openxr_layers::read(path);
+        if (layer.name.empty()) continue;
+        const bool off = !openxr_layers::enabled(layer) ||
+                         std::ranges::any_of(user_left_out_layers(), [&](const ApiLayer &l) { return l.name == layer.name; });
+        listed += std::format("{}{} ({}{})", listed.empty() ? "" : ", ", layer.name, off ? "off; " : "",
+                              layer.disable_environment.empty() ? std::string("no disable variable")
+                                                                : "off with " + layer.disable_environment + "=1");
+      }
+      log::info("facts", "Host OpenXR implicit API layers: {}", listed.empty() ? "none" : listed);
+    }
+    if (!user_left_out_layers().empty()) {
+      std::string names;
+      for (const auto &layer : user_left_out_layers()) {
+        names += (names.empty() ? "" : ", ") + layer.name;
+        h.skipped_api_layers.push_back(layer.name);
+      }
+      if (skip_openxr_layers({}))
+        log::warn("xr", "OpenXR API layers left out by VENTURE_OPENXR_LAYERS_OFF: {}", names);
+      else
+        log::warn("xr", "The OpenXR loader refused its layer properties; VENTURE_OPENXR_LAYERS_OFF has no effect");
+    }
     const char *operation = nullptr;
     XrResult result = create_instance(h, operation);
     std::string unloadable;
