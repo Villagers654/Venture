@@ -21,6 +21,12 @@ development builds and apps from outside the Meta store. See [What's different i
 
 </div>
 
+## Credit where it's due
+
+**Everything that matters here was built by [Villagers654](https://github.com/Villagers654).** Venture is his project: the ARM JIT integration, the Quest runtime and platform services, the OpenXR renderer, the launcher, the installer and packaging, the test suite, the compatibility work behind "25 games out of 25", and the countless hours of reverse-engineering and debugging that made running Quest games on PC feel easy. This fork adds one small opt-in feature on top of that foundation, and it would not exist without his work.
+
+Thank you, Villagers654, for building something this ambitious, this fast and this well, and for releasing it as free and open source so that others can build on it. If Venture is useful to you, please support him directly: [star the upstream project](https://github.com/Villagers654/Venture) and use the Ko-fi button above. Anything that also happens in upstream Venture should be reported [to him](https://github.com/Villagers654/Venture/issues), not to this fork.
+
 ## Why Venture
 
 - **Fast.** Venture is by far the fastest way to play Quest games on PC, with steady frame times.
