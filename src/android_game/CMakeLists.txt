@@ -75,7 +75,9 @@ add_library(venture_vrapi SHARED
   ${rt}/xr/hands.cpp ${rt}/xr/haptic_output.cpp ${rt}/xr/haptic_sequence.cpp ${rt}/xr/menu_chord.cpp
   ${rt}/xr/grip_toggle.cpp ${rt}/xr/display_override.cpp ${rt}/xr/display_memory.cpp ${rt}/xr/eye_scale.cpp
   ${rt}/platform/posix/xr_clock.cpp
-  ${rt}/core/device_identity.cpp)
+  ${rt}/core/device_identity.cpp
+  # The XR call trace marks each call for the stall finder (core/stall_watch.h).
+  ${rt}/core/stall_watch.cpp ${rt}/core/thread_lifetime.cpp)
 # The 32-bit library converts the records that hold pointers (ILP32 layouts).
 if(ANDROID_ABI STREQUAL "armeabi-v7a")
   target_sources(venture_vrapi PRIVATE vrapi/exports_ilp32.cpp)
