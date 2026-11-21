@@ -166,14 +166,16 @@ jobs:
           echo "APPIMAGETOOL=$RUNNER_TEMP/appimagetool" >> "$GITHUB_ENV"
       - name: Packages
         if: inputs.package
-        run: tools/packaging/linux/build_packages.sh --out dist/packages
+        # The Android 2D component (layoutlib), downloaded on demand: x86_64 only. It joins
+        # the packages so the artifact keeps one flat folder; files from two folders would
+        # land under packages/ in the release's assets.
+        run: |
+          tools/packaging/linux/build_packages.sh --out dist/packages
+          mv dist/Venture-layoutlib-*.zip dist/packages/
       - uses: actions/upload-artifact@v4
         if: inputs.package
         with:
           name: linux
-          # The Android 2D component (layoutlib), downloaded on demand: x86_64 only.
-          path: |
-            dist/packages/Venture-*
-            dist/Venture-layoutlib-*.zip
+          path: dist/packages/Venture-*
           if-no-files-found: error
           compression-level: 0
