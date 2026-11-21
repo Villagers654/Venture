@@ -39,20 +39,35 @@ public final class AppMain {
   public static boolean takePendingRelaunch() {
     var intent = takeRelaunchIntent();
     if (intent == null) return false;
-    if (!intent.getExtras().isEmpty())
-      throw new UnsupportedOperationException("Cold intent extras require the payload transport");
+    if (!intent.getExtras().isEmpty() || !isLauncher(intent))
+      throw new UnsupportedOperationException("Cold intent extras or activity require the payload transport");
     return true;
   }
+  private static Intent launcherIntent() {
+    return RuntimeEnvironment.get().packageManager.getLaunchIntentForPackage(
+        RuntimeEnvironment.get().manifest.info.packageName);
+  }
+  private static boolean isLauncher(Intent intent) {
+    var launcher = launcherIntent();
+    return launcher != null && launcher.getComponent().equals(intent.getComponent())
+        && java.util.Objects.equals(launcher.getAction(), intent.getAction())
+        && java.util.Objects.equals(launcher.getCategories(), intent.getCategories());
+  }
+  /**
+   * A new task's intent: the launch activity as the launcher starts it, or
+   * another activity the manifest declares, named by its class with at most an
+   * action (a 2D menu starting its VR activity, which Android runs in a new
+   * task and often in its own process). Data, types and categories have no
+   * transport.
+   */
   private static Intent takeRelaunchIntent() {
     var intent = pendingRelaunch.getAndSet(null);
     if (intent == null) return null;
-    var launcher = RuntimeEnvironment.get().packageManager.getLaunchIntentForPackage(
-        RuntimeEnvironment.get().manifest.info.packageName);
-    if (launcher == null || !launcher.getComponent().equals(intent.getComponent())
-        || !java.util.Objects.equals(launcher.getAction(), intent.getAction())
-        || !java.util.Objects.equals(launcher.getCategories(), intent.getCategories())
-        || intent.getData() != null || intent.getType() != null)
-      throw new UnsupportedOperationException("Cold process restart with a custom activity or intent data unavailable");
+    boolean declared = intent.getComponent() != null && RuntimeEnvironment.get().manifest.activities.stream()
+        .anyMatch(a -> a.name.equals(intent.getComponent().getClassName()));
+    if (intent.getData() != null || intent.getType() != null || !(isLauncher(intent)
+        || (declared && (intent.getCategories() == null || intent.getCategories().isEmpty()))))
+      throw new UnsupportedOperationException("Cold process restart with intent data, categories or an undeclared activity unavailable");
     return intent;
   }
   public static byte[] takePendingRelaunchPayload() {
@@ -65,6 +80,11 @@ public final class AppMain {
       var bytes = new java.io.ByteArrayOutputStream();
       var output = new java.io.DataOutputStream(bytes);
       output.writeInt(intent.getFlags());
+      // src/runtime/core/launch_payload.h reads the activity to choose the
+      // restarted process's framework; empty names the launch activity.
+      boolean launcher = isLauncher(intent);
+      output.writeUTF(launcher ? "" : intent.getComponent().getClassName());
+      output.writeUTF(launcher || intent.getAction() == null ? "" : intent.getAction());
       var extras = intent.getExtras();
       output.writeInt(extras.size());
       for (var key : extras.keySet()) {
@@ -89,7 +109,12 @@ public final class AppMain {
       // The fresh process is the cleared task, so the restart consumed
       // CLEAR_TASK. Keeping it would make an activity that forwards
       // getIntent() restart the process again.
-      var intent = new Intent(launcher).setFlags(input.readInt() & ~Intent.FLAG_ACTIVITY_CLEAR_TASK);
+      int flags = input.readInt() & ~Intent.FLAG_ACTIVITY_CLEAR_TASK;
+      String activity = input.readUTF(), action = input.readUTF();
+      var intent = activity.isEmpty() ? new Intent(launcher)
+          : new Intent(action.isEmpty() ? null : action).setComponent(
+                new ComponentName(launcher.getComponent().getPackageName(), activity));
+      intent.setFlags(flags);
       int count = input.readInt();
       if (count < 0 || count > payload.length / 3) throw new java.io.IOException();
       for (int i = 0; i < count; ++i) {
@@ -139,17 +164,17 @@ public final class AppMain {
       Looper.prepareMainLooper();
     if (Looper.myLooper() != Looper.getMainLooper())
       throw new IllegalStateException("Launch must run on Android main thread");
-    ActivityThread.ventureAttach();
     var env = RuntimeEnvironment.get();
     Thread.currentThread().setContextClassLoader(env.loader);
-    ActivityThread.currentActivityThread().ventureBindApplication(new Context());
+    Components.bindApplication();
     RuntimeEnvironment.trace(
         "Application.construct(" + env.manifest.info.applicationInfo.className + ")");
     env.application =
         (Application) env.loader.loadClass(env.manifest.info.applicationInfo.className)
             .getDeclaredConstructor()
             .newInstance();
-    env.application.ventureAttach(new Context());
+    Components.attachApplication(env.application);
+    HostDocuments.installIfGranted();
     for (var provider : env.manifest.providers) {
       // ActivityThread installs only this process's enabled providers (and multiprocess ones);
       // a provider declared for another process, such as an SDK's ":isolate", starts there.
@@ -224,7 +249,7 @@ public final class AppMain {
   private static void removeTask() {
     for (Activity activity : new java.util.ArrayList<>(activities)) {
       quitStages.putIfAbsent(activity, 0);
-      try { activity.performStop(); }
+      try { Components.stop(activity); }
       catch (RuntimeException | Error exited) {
         if (!isThreadExit(exited)) throw exited;
       }
@@ -259,19 +284,38 @@ public final class AppMain {
         try { LocalServices.shutdown(); }
         finally {
           try { drainQueuedWork(); }
-          finally { Looper.getMainLooper().quitSafely(); }
+          finally { quitMainLooper(); }
         }
       }
+    }
+  }
+  // Ends run()'s Looper.loop. AOSP's main Looper (the 2D framework's) refuses
+  // to quit, as ActivityThread ends the process instead; Venture's main returns
+  // to the runtime, so it lets the queue quit.
+  private static void quitMainLooper() {
+    Looper main = Looper.getMainLooper();
+    try {
+      main.quitSafely();
+    } catch (IllegalStateException notQuittable) {
+      try {
+        java.lang.reflect.Field allowed = MessageQueue.class.getDeclaredField("mQuitAllowed");
+        allowed.setAccessible(true);
+        allowed.setBoolean(main.getQueue(), true);
+      } catch (ReflectiveOperationException | RuntimeException e) {
+        notQuittable.addSuppressed(e);
+        throw notQuittable;
+      }
+      main.quitSafely();
     }
   }
   public static void activityFinished(Activity activity) {
     boolean wasTop = activities.peek() == activity;
     boolean removed = activities.remove(activity);
-    activity.ventureDeliverResult();
+    Components.deliverResult(activity);
     if (removed && activities.isEmpty())
       requestShutdown();
     else if (removed && wasTop)
-      activities.peek().performResume();
+      Components.resume(activities.peek());
   }
   public static void startActivity(Intent intent) {
     startActivityForResult(null, intent, -1);
@@ -314,26 +358,16 @@ public final class AppMain {
     var matches = env.manifest.resolveActivities(intent, 0);
     if (matches.isEmpty())
       throw new ActivityNotFoundException("Undeclared activity " + name);
-    var resolved = matches.get(0).activityInfo;
-    String className = resolved.targetActivity == null ? name : resolved.targetActivity;
     RuntimeEnvironment.trace("Activity.construct(" + name + ")");
-    Activity next = (Activity) env.loader.loadClass(className).getDeclaredConstructor().newInstance();
-    next.ventureAttach(env.application);
-    next.setIntent(intent);
-    next.ventureSetResultCaller(caller, request);
-    for (var info : env.manifest.activities)
-      if (info.name.equals(name) && info.theme != 0) {
-        next.setTheme(info.theme);
-        break;
-      }
+    Activity next = Components.createActivity(intent, matches.get(0).activityInfo, caller, request);
     Activity previous = activities.peek();
     if (previous != null)
-      previous.performPause();
+      Components.pause(previous);
     activities.push(next);
     try {
-      next.performLaunch();
+      Components.launch(next);
       if (activities.peek() == next && previous != null)
-        previous.performStop();
+        Components.stop(previous);
     } catch (ThreadDeath exited) {
       throw exited;
     } catch (RuntimeException | Error e) {
@@ -344,7 +378,7 @@ public final class AppMain {
       try { next.finish(); }
       catch (RuntimeException | Error cleanup) { e.addSuppressed(cleanup); }
       if (previous != null)
-        previous.performResume();
+        Components.resume(previous);
       throw e;
     }
     return next;

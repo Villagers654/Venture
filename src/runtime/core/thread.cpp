@@ -39,6 +39,7 @@
 #include "common/environment.h"
 #include "common/first_frame_progress.h"
 #include "platform/memory.h"
+#include "platform/profile.h"
 #include "platform/crash_report.h"
 #include "platform/thread_priority.h"
 #include "platform/timed_wait.h"
@@ -200,6 +201,7 @@ void GuestThread::attach_locked() {
   r.previous = current_thread;
   current_thread = this;
   Dynarmic::SetCompileMarker(&jit_compiling);
+  host_tid.store(platform::profile_thread_id(), std::memory_order_relaxed);
   live_threads.emplace(tid_, this);
   frame_cpu::attach(tid_);
   profile::attach(*this);

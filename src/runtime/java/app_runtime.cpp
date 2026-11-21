@@ -366,10 +366,26 @@ void launch_android_app(const AppLaunchOptions& options) {
   add_framework_natives(register_dex_conversion);
   register_sqlite_natives();
   register_graphics_natives();
-  log::info("launch", "Starting HotSpot with Android framework and verified class loading");
-  JvmOptions jvm{paths::utf8(options.java_home), {paths::utf8(support.framework), paths::utf8(support.bridge)},
+  // A 2D app (its launch activity is a panel, not immersive) runs on Android
+  // Studio's layoutlib where the build has it (docs/design/layoutlib.md).
+  std::vector<std::string> framework_jars{paths::utf8(support.framework), paths::utf8(support.bridge)};
+  // A release's layoutlib is a component the launcher downloads once the player agrees
+  // (common/layoutlib_component.h); support_files() finds it, or the build tree's.
+  const auto& support_2d = support;
+  const bool layoutlib = process_config().launches_2d && std::filesystem::is_regular_file(support.framework_2d) &&
+                         !support_2d.layoutlib.empty() && std::filesystem::is_regular_file(support_2d.layoutlib);
+  if (layoutlib) {
+    framework_jars = {paths::utf8(support.framework_2d), paths::utf8(support_2d.layoutlib), paths::utf8(support.bridge)};
+    log::info("launch", "Starting HotSpot with the Android 2D framework (layoutlib) and verified class loading");
+  } else {
+    if (process_config().launches_2d)
+      log::warn("launch", "The app's launch activity is 2D, but this build has no layoutlib; using Venture's framework");
+    log::info("launch", "Starting HotSpot with Android framework and verified class loading");
+  }
+  JvmOptions jvm{paths::utf8(options.java_home), framework_jars,
                  {"-Dventure.displayPeriodNs=" +
                      std::to_string(xr::display_timing_state().period.load())}};
+  if (layoutlib) jvm.extra_options.push_back("-Dventure.layoutlib=" + paths::utf8(support_2d.layoutlib.parent_path()));
   if (process_config().embedded_java_scripts)
     jvm.agent_path = paths::utf8(support.agent);
   // Settings > Game language. Engines read the language from Java's default
@@ -386,13 +402,28 @@ void launch_android_app(const AppLaunchOptions& options) {
     }
   }
   if (!start_jvm(jvm, &error)) throw std::runtime_error(error);
+  // layoutlib's natives and fonts load before any framework class initializes:
+  // DisplayMetrics, Choreographer and the rest read them in static initializers.
+  if (layoutlib) {
+    auto* env = host_env();
+    auto cls = env->FindClass("com/venture/runtime/layoutlib/Layoutlib");
+    auto start = cls ? env->GetStaticMethodID(cls, "start", "()V") : nullptr;
+    if (start) env->CallStaticVoidMethod(cls, start);
+    if (cls) env->DeleteLocalRef(cls);
+    if (!start || env->ExceptionCheck()) {
+      env->ExceptionDescribe();
+      throw std::runtime_error("layoutlib did not start");
+    }
+  }
   start_gc_clock();
   xr::set_application_identity(apk_label(), process_config().package, process_config().version_code);
   xr::configure_vulkan_layers_for_process();
   log::info("launch", "Initializing host OpenXR");
   auto& xr = xr::host_xr();
   if (!xr.available) throw std::runtime_error(xr.error);
-  {
+  if (layoutlib) {
+    log::info("launch", "Android display: the 2D app's panel");
+  } else {
     // The Android display covers both eyes at the size games render, as a
     // Quest's covers its panels; Unreal draws no more of an eye than the window.
     const auto display = xr::android_display_size(xr::reported_eye().target);
@@ -423,7 +454,7 @@ void launch_android_app(const AppLaunchOptions& options) {
     conversion.apk = paths::utf8(process_config().apk);
     conversion.package = process_config().package;
     conversion.cache = paths::utf8(process_config().cache_dir / "java");
-    conversion.framework_jars = {paths::utf8(support.framework), paths::utf8(support.bridge)};
+    conversion.framework_jars = framework_jars;
     conversion.hierarchy_metadata = {paths::utf8(support.hierarchy)};
     ConvertedApk converted;
     if (!convert_apk(conversion, &converted, &error)) {
@@ -476,7 +507,16 @@ void launch_android_app(const AppLaunchOptions& options) {
     startup_diagnostics::FrameStallTrigger frame_stall_probe;
     startup_diagnostics::FrameStallTrigger frame_freeze_probe{startup_diagnostics::FrameStallTrigger::dump_stall_seconds};
     // Shorter stalls (>= 250 ms) get a cheap snapshot and a [stall] record each.
-    stall_finder::Finder stall_records{gc_ns};
+    stall_finder::Finder stall_records{stall_finder::Sources{
+        .gc_ns = gc_ns,
+        .gpu = &vulkan::stall_evidence,
+        .xr_session_lock_held = [] {
+          auto& mutex = xr::session().mutex;
+          if (!mutex.try_lock()) return true;
+          mutex.unlock();
+          return false;
+        },
+    }};
     const auto first_frame_bound = startup_diagnostics::first_frame_timeout_seconds();
     // Render progress up to the quit (see presenting_at_quit).
     std::uint64_t seen_frames = 0;

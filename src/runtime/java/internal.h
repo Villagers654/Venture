@@ -25,6 +25,10 @@ jint attach_host(bool daemon, JavaVMAttachArgs* args, JNIEnv** out);
 jint detach_host();
 void throw_java(JNIEnv*, const char* type, const char* message) noexcept;
 void throw_thread_death(JNIEnv*) noexcept;
+// Whether cls declares the native a Venture bridge implements. In a 2D
+// process (docs/design/layoutlib.md) some framework classes are AOSP's, whose
+// natives layoutlib's runtime registers; their bridges then stand aside.
+bool declares_method(JNIEnv*, jclass cls, const char* name, const char* signature, bool is_static) noexcept;
 void init_bridge(JNIEnv*);
 jobject current_loader();
 

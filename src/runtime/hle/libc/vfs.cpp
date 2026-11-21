@@ -238,7 +238,10 @@ int resolve_path(std::string_view path, int dirfd, MappedPath* out) {
     return true;
   };
   bool mapped = false;
-  if (p == c.guest_apk_path()) {
+  // A folder the person picked, mounted as a removable volume (/storage/<id>).
+  for (const auto& [host, guest] : *document_roots::snapshot())
+    if (!mapped) mapped = map(guest, host, false);
+  if (!mapped && p == c.guest_apk_path()) {
     out->root = c.apk.parent_path();
     out->host = c.apk;
     out->readonly = true;
@@ -513,6 +516,21 @@ std::int64_t fd_open(const char* path, int flags, std::uint32_t mode, int dirfd)
   f->flags = flags & ~(o_cloexec | 0100 | 0200 | 01000);
   f->path = m.guest;
   const auto fd = FdTable::get().insert(f, 0, flags & o_cloexec);
+  if (file_io_trace::enabled) file_io_trace::opened(m.guest, flags, fd);
+  return fd;
+}
+std::int64_t fd_open_host(const std::filesystem::path& host, std::string guest, int flags) {
+  if ((flags & 3) == 3 || (flags & (0100 | 0200 | 01000))) return -err::einval;
+  MappedPath m;
+  m.guest = std::move(guest);
+  m.host = host;
+  m.root = host.parent_path();
+  int r = 0;
+  auto f = host::open(m, flags, 0600, &r);
+  if (!f) return r;
+  f->flags = flags & ~o_cloexec;
+  f->path = m.guest;
+  const auto fd = FdTable::get().insert(f, 0, false);
   if (file_io_trace::enabled) file_io_trace::opened(m.guest, flags, fd);
   return fd;
 }

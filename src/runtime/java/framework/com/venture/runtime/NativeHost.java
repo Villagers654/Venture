@@ -15,6 +15,9 @@ public final class NativeHost implements Host {
   public native int activeNetworkType();
   public native boolean hasInternetConnectivity();
   public native long[] processMemory();
+  public native int openDocumentFd(String hostPath, int flags);
+  public native int closeGuestFd(int fd);
+  public native boolean mountDocumentRoot(String id, String hostPath);
   public native boolean debuggerConnected();
   public native byte[] systemProperty(String key);
   public native android.media.AudioDeviceInfo[] audioDevices();
@@ -43,6 +46,13 @@ public final class NativeHost implements Host {
   public native void releaseSurface(long handle);
   public static native int copySurfacePixels(long handle, int left, int top, int right, int bottom,
       int width, int height, int[] argb);
+  // A software frame posted to a Surface's window (unpremultiplied ARGB, top row first); 0 or -errno.
+  public static native int publishSurfacePixels(long handle, int width, int height, int[] argb);
+  // A window whose producers publish finished frames for the 2D panel to composite (SurfaceView).
+  public static native long createPanelSurface(int width, int height);
+  public static native void resizeSurface(long handle, int width, int height);
+  // {width, height, serial low, serial high, ARGB...} of the newest frame after a serial, or null.
+  public static native int[] surfaceFrame(long handle, long afterSerial);
   public native long createNativeActivity(
       android.app.NativeActivity activity, String library, String entry);
   public native void nativeActivityEvent(long handle, int event, long surface);

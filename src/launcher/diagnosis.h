@@ -9,6 +9,7 @@ namespace venture::launcher {
 struct Diagnosis {
   std::string cause;   // what went wrong
   std::string advice;  // what to try next
+  bool device_lost = false;  // the GPU device was lost
 };
 // The first known failure signature in `evidence` (a run's runtime and console
 // logs, the system's logs and the launcher's), most specific first; nothing

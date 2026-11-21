@@ -515,6 +515,9 @@ int setvbuf_fn(GuestFile* p, char*, int mode, std::uint64_t) {
   return fflush_fn(p);
 }
 void setbuf_fn(GuestFile* p, char* b) { setvbuf_fn(p, b, b ? 0 : 2, 8192); }
+// bionic: setbuffer is setvbuf(buf ? _IOFBF : _IONBF, size); setlinebuf is setvbuf(NULL, _IOLBF, 0).
+void setbuffer_fn(GuestFile* p, char* b, int size) { setvbuf_fn(p, b, b ? 0 : 2, static_cast<std::uint64_t>(size < 0 ? 0 : size)); }
+int setlinebuf_fn(GuestFile* p) { return setvbuf_fn(p, nullptr, 1, 0); }
 void flockfile_fn(GuestFile* p) {
   if (auto s = stream(p)) s->mutex.lock();
 }
@@ -1102,7 +1105,7 @@ void register_stdio32_adapters() {
   A("fseek", fseek_fn); A("fseeko", fseek_fn); A("fseeko64", fseek_fn);
   A("ftell", ftell_fn); A("ftello", ftell_fn); A("ftello64", ftell_fn);
   A("fgetpos", fgetpos32); A("fsetpos", fsetpos32);
-  A("rewind", rewind_fn); A("setvbuf", setvbuf_fn); A("setbuf", setbuf_fn);
+  A("rewind", rewind_fn); A("setvbuf", setvbuf_fn); A("setbuf", setbuf_fn); A("setbuffer", setbuffer_fn); A("setlinebuf", setlinebuf_fn);
   A("feof", feof_fn); A("ferror", ferror_fn); A("clearerr", clearerr_fn); A("fileno", fileno_fn);
   A("flockfile", flockfile_fn); A("funlockfile", funlockfile_fn); A("ftrylockfile", ftrylockfile_fn);
   A("fmemopen", fmemopen_fn); A("tmpfile", tmpfile_fn);
@@ -1170,6 +1173,8 @@ void register_stdio(HleLibrary& lib) {
   B("rewind", rewind_fn);
   B("setvbuf", setvbuf_fn);
   B("setbuf", setbuf_fn);
+  B("setbuffer", setbuffer_fn);
+  B("setlinebuf", setlinebuf_fn);
   B("feof", feof_fn);
   B("ferror", ferror_fn);
   B("clearerr", clearerr_fn);

@@ -10,6 +10,7 @@
 #include "common/controls_file.h"
 #include "common/environment.h"
 #include "common/http/client.h"
+#include "common/layoutlib_component.h"
 #include "common/json.h"
 #include "common/log.h"
 #include "common/saves_migration.h"
@@ -405,6 +406,7 @@ void App::draw() {
     }
   draw_uninstall();
   draw_texture_warning();
+  draw_android_2d();
   draw_experimental_switch();
   draw_flatpak_steamvr();
   draw_save_import();
@@ -964,7 +966,7 @@ void App::draw_library() {
         if (clicked && over) {
           clicked = false;
           if (can_play)
-            action([&] { play(g); });
+            action([&] { request_play(g); });
           else
             action([&] { install_for_owner(g); });
         }
@@ -1235,7 +1237,7 @@ void App::draw_game_page() {
                    Tone::secondary, cta, !r.quitting && armed))
           r.quitting = r.process.request_stop();
       } else if (button("Play##play", icons::play, Tone::primary, cta)) {
-        action([&] { play(g); });
+        action([&] { request_play(g); });
       }
       draw_tools();
       if (update) {
@@ -1376,11 +1378,17 @@ void App::draw_game_page() {
   // A runtime that stopped with an error explains itself; the log stays one
   // click away instead of always on screen.
   // A game that closed itself for a known reason (exit code 0) explains it too.
-  // --smoke-view stopped shows it for screenshots.
-  if (options_.smoke_view == "stopped") {
+  // --smoke-view stopped shows it for screenshots; stopped-device-lost shows a
+  // device loss with a capture tool injected into the game.
+  if (options_.smoke_view == "stopped" || options_.smoke_view == "stopped-device-lost") {
     auto& r = running_[g.id];
     r.exit = 1;
-    r.failure = "Example: the game stopped with an error.";
+    r.failure = options_.smoke_view == "stopped"
+                    ? "Example: the game stopped with an error."
+                    : library::runtime_failure("  1.000 1 W [modules] Injected modules: Medal\n"
+                                               "  2.000 7 E [vulkan-fault] Native Vulkan device lost on guest tid "
+                                               "4242; ending the app as a fatal error\n",
+                                               1);
   }
   if (auto r = running_.find(g.id);
       r != running_.end() && r->second.exit && (*r->second.exit != 0 || !r->second.failure.empty())) {
@@ -2867,6 +2875,10 @@ void App::draw_display_rows(library::DisplaySettings& d, bool per_game, const ch
     if (per_game) {
       ids.insert(ids.begin(), "");
       names.insert(names.begin(), "Use global setting");
+    } else {
+      // Off on a standalone headset, which has no monitor (common/standalone.h).
+      ids.insert(ids.begin(), "auto");
+      names.insert(names.begin(), "Automatic");
     }
     const auto items = pointers(names);
     int choice = index(ids, d.mirror);
@@ -2878,7 +2890,7 @@ void App::draw_display_rows(library::DisplaySettings& d, bool per_game, const ch
   // The eye row, while the mirror (this game's, or the global one it follows) is on.
   // --smoke-view display-mirror-eye opens its list once.
   static bool smoke_eye = options_.smoke_view == "display-mirror-eye";
-  if ((per_game && d.mirror.empty() ? settings_.display.mirror : d.mirror) != "off") {
+  if (library::mirror_environment(per_game && d.mirror.empty() ? settings_.display : d) != "off") {
     divider();
     setting_row("Mirror eye", "", dw, s(38), [&] {
       if (std::exchange(smoke_eye, false)) {
@@ -4013,6 +4025,95 @@ void App::draw_uninstall() {
     }
     end_dialog();
   }
+}
+
+void App::request_play(const meta::Game& g) {
+  if (const auto size = android_2d_download(g.id)) {
+    android_2d_ask_ = Android2dAsk{g.id, play_key(g.id), g.name, *size};
+    return;
+  }
+  play(g);
+}
+
+void App::draw_android_2d() {
+  // Screenshots of the question and of the transfer (--smoke-view android-2d, android-2d-downloading).
+  static bool smoke = options_.smoke_view.starts_with("android-2d");
+  if (smoke) {
+    smoke = false;
+    android_2d_ask_ = Android2dAsk{"0", {}, "CitraVR", 135u << 20};
+    if (options_.smoke_view == "android-2d-downloading") {
+      android_2d_ask_->transfer = std::make_shared<Android2dAsk::Transfer>();
+      android_2d_ask_->transfer->done = 52u << 20;
+      android_2d_ask_->transfer->total = 135u << 20;
+    }
+  }
+  if (android_2d_ask_ && !ImGui::IsPopupOpen("Android 2D support")) ImGui::OpenPopup("Android 2D support");
+  if (!begin_dialog("Android 2D support", 480)) return;
+  auto& ask = *android_2d_ask_;
+  auto* transfer = ask.transfer.get();
+  std::string error;
+  if (transfer && transfer->finished) {
+    std::lock_guard lock(transfer->mutex);
+    error = transfer->error;
+  }
+  int clicked = -1;
+  if (transfer && !transfer->finished) {
+    // i18n: The Android 2D component downloading, before a 2D app starts.
+    dialog_text(tr("Downloading Android 2D support"),
+                trf("{0} starts when the download finishes.", ask.name));
+    gap(16);
+    const auto done = transfer->done.load(), total = transfer->total.load();
+    progress_bar(total ? float(double(done) / double(total)) : 0.f, {g_dialog_w, s(6)}, !total);
+    gap(8);
+    text(fonts().regular, kSmall, color::text2, trf("{0} of {1}", bytes(done), bytes(total ? total : ask.size)));
+    clicked = dialog_footer({{tr("Cancel")}});
+    if (clicked == 0) clicked = 2;  // stop and close
+  } else if (transfer && error.empty()) {
+    // Finished: start the game the player asked for.
+    const auto id = ask.id, key = ask.key;
+    android_2d_ask_.reset();
+    ImGui::CloseCurrentPopup();
+    end_dialog();
+    action([&] { play_as(id, key); });
+    return;
+  } else {
+    // i18n: Asked when Play is chosen on a 2D Android app (a flat window, not VR) before its support is downloaded.
+    dialog_text(error.empty() ? tr("This game needs Android 2D support") : tr("The download failed"),
+                error.empty()
+                    ? trf("{0} is a 2D Android app. Venture needs to download its Android 2D support once to run "
+                          "it ({1}). Download it now?", ask.name, bytes(ask.size))
+                    : error);
+    clicked = dialog_footer({{tr("Cancel")}, {error.empty() ? tr("Download and play") : tr("Try again"), Tone::primary,
+                                              true, icons::download}});
+    if (clicked == 1) {
+      auto next = std::make_shared<Android2dAsk::Transfer>();
+      next->total = ask.size;
+      const auto data = data_;
+      next->thread = std::jthread([next = next.get(), data](std::stop_token stop) {
+        try {
+          layoutlib_component::ensure(paths::executable().parent_path(), data, stop,
+                                      [next](std::uint64_t done, std::uint64_t total) {
+                                        next->done = done;
+                                        if (total) next->total = total;
+                                      });
+        } catch (const std::exception& e) {
+          std::lock_guard lock(next->mutex);
+          next->error = e.what();
+          if (next->error.empty()) next->error = "The download failed.";
+        }
+        next->finished = true;
+      });
+      ask.transfer = std::move(next);
+      clicked = -1;  // stays open with the progress
+    }
+  }
+  if (clicked == 0 || clicked == 2) {
+    if (ask.transfer) ask.transfer->thread.request_stop();
+    // The transfer's thread joins as the dialog's state goes (a stopped download stops promptly).
+    android_2d_ask_.reset();
+    ImGui::CloseCurrentPopup();
+  }
+  end_dialog();
 }
 
 void App::draw_texture_warning() {

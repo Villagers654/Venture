@@ -176,6 +176,56 @@ jlong JNICALL create_surface(JNIEnv* env, jobject, jint width, jint height,
   });
 }
 
+// A Surface the 2D panel composites (SurfaceView): EGL, Vulkan and
+// ANativeWindow producers publish each finished frame to the window.
+jlong JNICALL create_panel_surface(JNIEnv* env, jclass, jint width, jint height) {
+  return guarded(env, [&]() -> jlong {
+    if (width <= 0 || height <= 0) throw std::invalid_argument("Invalid surface dimensions");
+    auto* window = android::create_native_window(width, height);
+    if (!window) throw std::runtime_error("Cannot allocate native window");
+    std::lock_guard lock(window->lock);
+    window->image_consumer = true;
+    return static_cast<jlong>(h2g(window));
+  });
+}
+
+// The consumer's buffer size (SurfaceHolder.setFixedSize or the view's size),
+// which a producer's next buffers take unless it set its own geometry.
+void JNICALL resize_surface(JNIEnv* env, jclass, jlong address, jint width, jint height) {
+  guarded(env, [&] {
+    auto window = android::pin_native_window(static_cast<GuestAddr>(address));
+    if (!window || width <= 0 || height <= 0) throw std::invalid_argument("Invalid native window size");
+    std::lock_guard lock(window->lock);
+    window->width = width;
+    window->height = height;
+  });
+}
+
+// The window's newest frame after a serial: {width, height, serial low, serial
+// high, ARGB pixels top row first}, or null when none is newer.
+jintArray JNICALL surface_frame(JNIEnv* env, jclass, jlong address, jlong after) {
+  return guarded(env, [&]() -> jintArray {
+    auto window = android::pin_native_window(static_cast<GuestAddr>(address));
+    if (!window) return nullptr;
+    std::shared_ptr<const android::SurfaceFrame> frame;
+    { std::lock_guard lock(window->lock); frame = window->frame; }
+    if (!frame || frame->serial <= static_cast<std::uint64_t>(after) || frame->width <= 0 || frame->height <= 0 ||
+        frame->rgba.size() != std::size_t(frame->width) * frame->height * 4)
+      return nullptr;
+    const auto count = std::size_t(frame->width) * frame->height;
+    std::vector<jint> out(4 + count);
+    out[0] = frame->width; out[1] = frame->height;
+    out[2] = static_cast<jint>(frame->serial & 0xffffffffu); out[3] = static_cast<jint>(frame->serial >> 32);
+    for (std::size_t i = 0; i < count; ++i) {
+      const auto* p = frame->rgba.data() + i*4;
+      out[4+i] = static_cast<jint>(std::uint32_t(p[3]) << 24 | std::uint32_t(p[0]) << 16 | std::uint32_t(p[1]) << 8 | p[2]);
+    }
+    auto result = env->NewIntArray(static_cast<jsize>(out.size()));
+    if (result) env->SetIntArrayRegion(result, 0, static_cast<jsize>(out.size()), out.data());
+    return result;
+  });
+}
+
 void JNICALL release_surface(JNIEnv* env, jobject, jlong address) {
   guarded(env, [&] {
     auto* window =
@@ -384,6 +434,27 @@ void JNICALL set_priority(JNIEnv* env, jobject, jint tid, jint priority) {
   });
 }
 
+// A software producer's whole frame (Android's lockCanvas/unlockCanvasAndPost
+// on a Surface, as a virtual display's compositor posts): ARGB pixels, top row
+// first, published to the window's consumer.
+jint JNICALL publish_surface(JNIEnv* env, jclass, jlong address, jint width, jint height, jintArray source) {
+  return guarded(env, [&]() -> jint {
+    auto window = android::pin_native_window(static_cast<GuestAddr>(address));
+    if (!window) return -19; // -ENODEV: the Surface was released
+    if (!source || width <= 0 || height <= 0 || std::int64_t(width)*height != env->GetArrayLength(source)) return -22;
+    std::vector<jint> pixels(static_cast<std::size_t>(width)*height);
+    env->GetIntArrayRegion(source, 0, static_cast<jsize>(pixels.size()), pixels.data());
+    if (env->ExceptionCheck()) return -22;
+    std::vector<std::uint8_t> rgba(pixels.size()*4);
+    for (std::size_t i = 0; i < pixels.size(); ++i) {
+      const auto argb = static_cast<std::uint32_t>(pixels[i]);
+      rgba[i*4] = std::uint8_t(argb >> 16); rgba[i*4+1] = std::uint8_t(argb >> 8);
+      rgba[i*4+2] = std::uint8_t(argb); rgba[i*4+3] = std::uint8_t(argb >> 24);
+    }
+    return android::publish_window_rgba(window.get(), rgba, width, height);
+  });
+}
+
 jint JNICALL copy_surface(JNIEnv* env, jclass, jlong address, jint left, jint top, jint right, jint bottom,
                            jint width, jint height, jintArray destination) {
   return guarded(env, [&]() -> jint {
@@ -464,6 +535,14 @@ void register_natives(JNIEnv* env) {
        reinterpret_cast<void*>(release_surface)},
       {const_cast<char*>("copySurfacePixels"), const_cast<char*>("(JIIIIII[I)I"),
        reinterpret_cast<void*>(copy_surface)},
+      {const_cast<char*>("publishSurfacePixels"), const_cast<char*>("(JII[I)I"),
+       reinterpret_cast<void*>(publish_surface)},
+      {const_cast<char*>("createPanelSurface"), const_cast<char*>("(II)J"),
+       reinterpret_cast<void*>(create_panel_surface)},
+      {const_cast<char*>("resizeSurface"), const_cast<char*>("(JII)V"),
+       reinterpret_cast<void*>(resize_surface)},
+      {const_cast<char*>("surfaceFrame"), const_cast<char*>("(JJ)[I"),
+       reinterpret_cast<void*>(surface_frame)},
       {const_cast<char*>("readAsset"),
        const_cast<char*>("(Ljava/lang/String;)[B"),
        reinterpret_cast<void*>(read_asset)},

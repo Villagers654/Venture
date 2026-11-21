@@ -16,6 +16,7 @@
 #include <string_view>
 
 #include "core/hle.h"
+#include "core/stall_finder.h"
 
 namespace venture {
 class HleLibrary;
@@ -126,5 +127,8 @@ void end_app_after_device_loss();
 // Logs the device-local memory in use against the driver's budget (frame
 // stall captures: GPU memory past the budget stalls frames).
 void log_gpu_memory();
+// The stall finder's GPU evidence (core/stall_finder.h): breadcrumb position,
+// submissions Venture's queue dispatcher holds, held queue locks. Try-locks only.
+stall_finder::GpuEvidence stall_evidence();
 
 }  // namespace venture::vulkan

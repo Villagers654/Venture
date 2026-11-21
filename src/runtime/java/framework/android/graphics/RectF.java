@@ -27,6 +27,10 @@ public class RectF implements android.os.Parcelable {
   }
   public void offset(float dx, float dy) { left += dx; right += dx; top += dy; bottom += dy; }
   public void inset(float dx, float dy) { left += dx; right -= dx; top += dy; bottom -= dy; }
+  /** AOSP: the smallest integer Rect containing this one (floor of left/top, ceiling of right/bottom). */
+  public void roundOut(Rect dst) {
+    dst.set((int) Math.floor(left), (int) Math.floor(top), (int) Math.ceil(right), (int) Math.ceil(bottom));
+  }
   public boolean equals(Object o) {
     return o instanceof RectF r && left == r.left && top == r.top && right == r.right && bottom == r.bottom;
   }

@@ -107,8 +107,10 @@ It's built on other people's work, and we're grateful for it. Code from these pr
 | [0BSD](LICENSES/0BSD.txt) | [Dynarmic](https://github.com/merryhime/dynarmic), by merryhime (MerryMage) and its contributors |
 | [MIT](LICENSES/MIT.txt) | [musl](https://musl.libc.org/), by Rich Felker et al. |
 | [LGPL-2.1](LICENSES/LGPL-2.1.txt) | [FFmpeg](https://ffmpeg.org/), by the FFmpeg developers |
+| [Apache-2.0](LICENSES/Apache-2.0.txt) | [layoutlib](https://developer.android.com/studio), from the Android Open Source Project (Android Studio's layout renderer), with the [Android framework](https://source.android.com/) code it is built from |
+| [BSD-3-Clause](LICENSES/BSD-3-Clause.txt) | [Skia](https://skia.org/), by Google and the Skia authors, inside layoutlib's native library (its other components' licenses ship beside it in `layoutlib/licenses`) |
 
-Thank you to the Eden Emulator Project, whose Dynarmic fork Venture's JIT is built on; to merryhime and everyone who has worked on Dynarmic, which made a fast, accurate ARM JIT possible; and to the emulator projects it grew up with and borrows from, yuzu, Citra and Dolphin (Gekko). Thank you also to AXRB for pioneering Quest emulation on PC VR.
+Thank you to the Eden Emulator Project, whose Dynarmic fork Venture's JIT is built on; to merryhime and everyone who has worked on Dynarmic, which made a fast, accurate ARM JIT possible; and to the emulator projects it grew up with and borrows from, yuzu, Citra and Dolphin (Gekko); and to the Android Open Source Project, whose layoutlib draws Venture's Android 2D windows. Thank you also to AXRB for pioneering Quest emulation on PC VR.
 
 Venture is not affiliated with Meta; see [DISCLAIMER.md](DISCLAIMER.md).
 

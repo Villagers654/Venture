@@ -27,6 +27,24 @@ void register_queue(VkDevice device, VkQueue queue) {
   std::lock_guard lock(registry_mutex);
   queues[queue] = {device, std::move(mutex)};
 }
+std::vector<std::pair<VkQueue, std::string>> held_queue_locks() {
+  std::vector<std::pair<VkQueue, std::shared_ptr<std::recursive_mutex>>> all;
+  {
+    std::unique_lock lock(registry_mutex, std::try_to_lock);
+    if (!lock.owns_lock()) return {};
+    for (const auto& [queue, record] : queues) all.emplace_back(queue, record.mutex);
+  }
+  auto& gpu = gpu_device();
+  if (gpu.queue && std::ranges::none_of(all, [&](const auto& q) { return q.first == gpu.queue; }))
+    all.emplace_back(gpu.queue, queue_mutex(gpu.queue));
+  std::vector<std::pair<VkQueue, std::string>> held;
+  for (auto& [queue, mutex] : all) {
+    if (!mutex) continue;
+    if (mutex->try_lock()) { mutex->unlock(); continue; }
+    held.emplace_back(queue, platform::mutex_owner_thread(*mutex));
+  }
+  return held;
+}
 void forget_device_queues(VkDevice device) {
   std::lock_guard lock(registry_mutex);
   std::erase_if(queues, [=](const auto& item) { return item.second.device == device; });

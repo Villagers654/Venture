@@ -6,6 +6,7 @@
 #include "gfx/a32_handles.h"
 #include "fake_cpu32.h"
 #include "hle/openxr/openxr.h"
+#include "xr/haptic_sequence.h"
 #include "hle/opensles/abi.h"
 #include "hle/opensles/opensles.h"
 #include "hle/ovrplatform/microphone.h"
@@ -159,9 +160,11 @@ TEST_CASE("A32 VrApi 1.21 wire layouts, sret, Token32 and frame submission") {
   auto pulses = ventureMockXrStats().haptic_pulses;
   CHECK(std::int32_t(c.call("libvrapi.so", "vrapi_SetHapticVibrationSimple",
       CallBuilder32{}.value(mobile).value(2u).value(96.3344497680664f))) == 0);
+  REQUIRE(venture::xr::haptics_settled(std::chrono::seconds(2)));
   CHECK(ventureMockXrStats().haptic_pulses == pulses + 1);
   CHECK(std::int32_t(c.call("libvrapi.so", "vrapi_SetHapticVibrationSimple",
       CallBuilder32{}.value(mobile).value(2u).value(-0.00035392120480537415f))) == 0);
+  REQUIRE(venture::xr::haptics_settled(std::chrono::seconds(2)));
   CHECK(ventureMockXrStats().haptic_pulses == pulses + 1);
   CHECK(std::int32_t(c.call("libvrapi.so", "vrapi_SetHapticVibrationSimple",
       CallBuilder32{}.value(mobile).value(2u).value(0.0f))) == 0);

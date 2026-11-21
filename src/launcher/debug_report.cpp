@@ -3,11 +3,13 @@
 #include "launcher/updater.h"
 #include "common/environment.h"
 #include "common/http/client.h"
+#include "common/injected_modules.h"
 #include "common/library/library.h"
 #include "common/openxr_layers.h"
 #include "common/process.h"
 #include "common/saves_migration.h"
 #include "common/stall_record.h"
+#include "common/standalone.h"
 #include "common/library/mods.h"
 #include "common/steam_library.h"
 #include "common/json.h"
@@ -19,6 +21,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
+#include <deque>
 #include <format>
 #include <fstream>
 #include <functional>
@@ -145,7 +148,7 @@ void system_section(std::string &out) {
                      std::thread::hardware_concurrency());
   MEMORYSTATUSEX memory{.dwLength = sizeof(MEMORYSTATUSEX)};
   if (GlobalMemoryStatusEx(&memory))
-    out += std::format("RAM: {:.1f} GiB, {:.1f} GiB free\n", memory.ullTotalPhys / 1073741824.0,
+    out += std::format("RAM: {:.1f} GiB, {:.1f} GiB available\n", memory.ullTotalPhys / 1073741824.0,
                        memory.ullAvailPhys / 1073741824.0);
   const std::wstring display = L"SYSTEM\\CurrentControlSet\\Control\\Class\\{4d36e968-e325-11ce-bfc1-08002be10318}";
   for (const auto &sub : reg_subkeys(HKEY_LOCAL_MACHINE, display.c_str())) {
@@ -203,9 +206,21 @@ void system_section(std::string &out) {
   std::erase(cpu, '\0');
   std::erase(cpu, '\n');
   out += std::format("CPU: {} ({} threads)\n", cpu, std::thread::hardware_concurrency());
-  long pages = sysconf(_SC_PHYS_PAGES), avail = sysconf(_SC_AVPHYS_PAGES), size = sysconf(_SC_PAGE_SIZE);
-  out += std::format("RAM: {:.1f} GiB, {:.1f} GiB free\n", double(pages) * size / 1073741824.0,
-                     double(avail) * size / 1073741824.0);
+  // Available as the kernel estimates it (MemAvailable: free plus the page cache
+  // and reclaimable memory it can give back). _SC_AVPHYS_PAGES is MemFree, which
+  // a busy Linux system keeps near zero: a 16 GB Steam Frame showed "0.4 GiB free".
+  long pages = sysconf(_SC_PHYS_PAGES), size = sysconf(_SC_PAGE_SIZE);
+  double available = double(sysconf(_SC_AVPHYS_PAGES)) * size;
+  {
+    std::ifstream meminfo("/proc/meminfo");
+    for (std::string line; std::getline(meminfo, line);)
+      if (line.starts_with("MemAvailable:")) {
+        available = std::strtod(line.c_str() + 13, nullptr) * 1024.0;
+        break;
+      }
+  }
+  out += std::format("RAM: {:.1f} GiB, {:.1f} GiB available\n", double(pages) * size / 1073741824.0,
+                     available / 1073741824.0);
   // Names and kernel drivers from lspci, else the PCI ids sysfs gives.
   if (auto gpus = gpu_names(); !gpus.empty()) {
     out += gpus;
@@ -498,32 +513,57 @@ void facts_section(std::string &out, const fs::path &file) {
 // cuts in the middle: a slowdown that starts half an hour in shows when it began and
 // what changed with it. A long session keeps 120 lines spread evenly, first and last.
 void timeline_section(std::string &out, const fs::path &file) {
-  std::ifstream in(file, std::ios::binary);
-  if (!in) return;
-  std::vector<std::string> lines;
-  for (std::string line; std::getline(in, line);)
-    if (line.find(" [timeline] ") != std::string::npos) lines.push_back(line.substr(0, 1024));
-  if (lines.empty()) return;
-  constexpr std::size_t kKeep = 120;
-  out += std::format("\n=== Session timeline ({} minutes{}) ===\n", lines.size(),
-                     lines.size() > kKeep ? std::format(", {} shown", kKeep) : std::string());
-  if (lines.size() <= kKeep) {
-    for (const auto &line : lines) out += line + "\n";
-    return;
+  // Two passes, counting then taking the chosen lines, so that memory stays at
+  // the 120 lines shown however long the session was.
+  constexpr std::string_view marker = " [timeline] ";
+  std::size_t total = 0;
+  {
+    std::ifstream in(file, std::ios::binary);
+    if (!in) return;
+    for (std::string line; std::getline(in, line);)
+      if (line.find(marker) != std::string::npos) ++total;
   }
-  for (std::size_t i = 0; i < kKeep; ++i) out += lines[i * (lines.size() - 1) / (kKeep - 1)] + "\n";
+  if (!total) return;
+  constexpr std::size_t kKeep = 120;
+  out += std::format("\n=== Session timeline ({} minutes{}) ===\n", total,
+                     total > kKeep ? std::format(", {} shown", kKeep) : std::string());
+  std::ifstream in(file, std::ios::binary);
+  std::size_t index = 0, shown = 0;
+  for (std::string line; shown < std::min(total, kKeep) && std::getline(in, line);) {
+    if (line.find(marker) == std::string::npos) continue;
+    const std::size_t wanted = total <= kKeep ? shown : shown * (total - 1) / (kKeep - 1);
+    if (index++ != wanted) continue;
+    out += line.substr(0, 1024) + "\n";
+    ++shown;
+  }
 }
 
 // The runtime's "[stall]" records (common/stall_record.h) from the whole log: where
 // the game's threads were each time its frames stopped for 250 ms or more.
-std::vector<stall::Record> stall_records(const fs::path &file) {
+// With its "[stall-op]" lines: calls that ran 500 ms or more while frames kept coming.
+struct StallLog {
+  std::vector<stall::Record> records;
+  std::vector<stall::LongCall> calls;
+};
+StallLog stall_log(const fs::path &file) {
   std::ifstream in(file, std::ios::binary);
-  std::string lines;
-  for (std::string line; std::getline(in, line);)
-    if (line.find(" [stall] #") != std::string::npos) lines += line.substr(0, 2048) + "\n";
-  return stall::parse_log(lines);
+  std::string lines, calls;
+  // At most 4 MiB of each is held (thousands of records), however long the log.
+  constexpr std::size_t kHeld = 4 << 20;
+  for (std::string line; (lines.size() < kHeld || calls.size() < kHeld) && std::getline(in, line);) {
+    if (line.find(" [stall] #") != std::string::npos) {
+      if (lines.size() < kHeld) lines += line.substr(0, 2048) + "\n";
+    } else if (line.find(" [stall-op] ") != std::string::npos && calls.size() < kHeld) {
+      calls += line.substr(0, 1024) + "\n";
+    }
+  }
+  return {stall::parse_log(lines), stall::parse_calls(calls)};
 }
-void stalls_section(std::string &out, const fs::path &file) { out += stall::report_section(stall_records(file)); }
+std::vector<stall::Record> stall_records(const fs::path &file) { return stall_log(file).records; }
+void stalls_section(std::string &out, const fs::path &file) {
+  const auto log = stall_log(file);
+  out += stall::report_section(log.records, log.calls);
+}
 
 // The game's layer arrangements ("[xr-layers]": what it submits and what the host is
 // given) and the host session states, from the whole log, which log_section cuts in
@@ -532,21 +572,28 @@ void stalls_section(std::string &out, const fs::path &file) { out += stall::repo
 void layers_section(std::string &out, const fs::path &file) {
   std::ifstream in(file, std::ios::binary);
   if (!in) return;
-  std::vector<std::string> lines;
-  for (std::string line; std::getline(in, line);)
-    if (line.find(" [xr-layers] ") != std::string::npos || line.find(" [xr] Host session state=") != std::string::npos)
-      lines.push_back(line.substr(0, 2048));
-  if (lines.empty()) return;
+  // Only the first and last 60 are held while reading: a long session's log can
+  // have millions, and the report's memory must not grow with it.
   constexpr std::size_t kKeep = 120;
-  out += std::format("\n=== Frame layers and session states ({} lines{}) ===\n", lines.size(),
-                     lines.size() > kKeep ? std::format(", first and last {} shown", kKeep / 2) : std::string());
-  for (std::size_t i = 0; i < lines.size(); ++i) {
-    if (lines.size() > kKeep && i == kKeep / 2) {
-      out += std::format("... {} lines left out ...\n", lines.size() - kKeep);
-      i = lines.size() - kKeep / 2;
+  std::vector<std::string> first;
+  std::deque<std::string> last;
+  std::size_t total = 0;
+  for (std::string line; std::getline(in, line);)
+    if (line.find(" [xr-layers] ") != std::string::npos || line.find(" [xr] Host session state=") != std::string::npos) {
+      ++total;
+      if (first.size() < kKeep / 2) {
+        first.push_back(line.substr(0, 2048));
+        continue;
+      }
+      last.push_back(line.substr(0, 2048));
+      if (last.size() > kKeep / 2) last.pop_front();
     }
-    out += lines[i] + "\n";
-  }
+  if (!total) return;
+  out += std::format("\n=== Frame layers and session states ({} lines{}) ===\n", total,
+                     total > kKeep ? std::format(", first and last {} shown", kKeep / 2) : std::string());
+  for (const auto &line : first) out += line + "\n";
+  if (total > kKeep) out += std::format("... {} lines left out ...\n", total - kKeep);
+  for (const auto &line : last) out += line + "\n";
 }
 
 // The Android framework classes and members the game's Java needs and Venture lacks, from
@@ -1107,6 +1154,16 @@ std::string redact(std::string text, const std::vector<std::string> &private_tex
   return out;
 }
 
+// The runtime log's lines about modules injected into the game, from the
+// whole log: the first check runs as the GPU device is created.
+std::string module_lines(const fs::path &log) {
+  std::ifstream in(paths::io_path(log), std::ios::binary);
+  std::string out;
+  for (std::string line; std::getline(in, line);)
+    if (line.find("[modules] ") != std::string::npos) out += line + "\n";
+  return out;
+}
+
 std::string latest_launched_package(const fs::path &data) {
   std::error_code ec;
   std::string package;
@@ -1170,6 +1227,7 @@ fs::path write_debug_report(const DebugReport &request) {
   std::string layer_lines, broken_layers;
   openxr_layer_section(layer_lines, broken_layers);
   std::vector<std::string> steps;
+  const std::string modules = run ? module_lines(runtime_log) : std::string{};
   out += "\n=== Likely cause ===\n";
   if (!run && !request.runtime) {
     // Each game is the device's own app: its run is in the Headset section
@@ -1190,9 +1248,13 @@ fs::path write_debug_report(const DebugReport &request) {
     steps.push_back("Sign in with Meta in Venture (the account that owns the game), then start the game again.");
   } else if (!run->failed) {
     // A run that did not fail but froze: clear evidence of a Venture-side cause names it.
-    if (const auto stalls = stall::venture_cause(stall_records(runtime_log))) {
+    const auto records = stall_records(runtime_log);
+    if (const auto stalls = stall::venture_cause(records)) {
       out += stalls->cause + "\n";
       steps.push_back(stalls->advice);
+    } else if (const auto freezes = stall::freeze_cause(records)) {
+      out += freezes->cause + "\n";
+      steps.push_back(freezes->advice);
     } else {
       out += "The last run did not fail. If the problem happened in an earlier run, start the game again, "
              "reproduce it, then send a new report.\n";
@@ -1240,11 +1302,18 @@ fs::path write_debug_report(const DebugReport &request) {
                return diagnose(launcher);
              }()) {
     out += d->cause + "\n";
+    // A capture or overlay tool in the game's process first: closing it fixed
+    // the device losses of an AMD user's runs (Medal).
+    if (const auto programs = injected_modules::last_programs(modules); d->device_lost && !programs.empty())
+      steps.push_back(injected_modules::device_loss_advice(programs));
     steps.push_back(d->advice);
   } else {
     out += "No known failure signature: the errors below are the closest leads.\n";
     steps.push_back("Send this report with an issue.");
   }
+  // A run that failed for another reason may have frozen first.
+  if (run && run->failed)
+    if (const auto note = stall::freeze_note(stall_records(runtime_log)); !note.empty()) out += note + "\n";
   if (!steps.empty()) {
     out += "\n=== Next steps ===\n";
     for (const auto &s : steps) out += "- " + s + "\n";
@@ -1252,6 +1321,7 @@ fs::path write_debug_report(const DebugReport &request) {
 
   out += "\n=== System ===\n";
   system_section(out);
+  out += std::format("Standalone headset: {}\n", standalone::detect().reason);
   if (!request.headset.empty()) out += "\n=== Headset ===\n" + request.headset;
   // The PC's VR runtime and Venture's runtime settings, where games run in it.
   if (request.runtime) {
@@ -1259,6 +1329,26 @@ fs::path write_debug_report(const DebugReport &request) {
     xr_section(out);
     out += layer_lines;
     processes_section(out);
+    if (run) {
+      // Libraries other programs injected into the game, as the runtime found them.
+      out += "\n=== Injected modules ===\n";
+      const auto programs = injected_modules::last_programs(modules);
+      const auto details = injected_modules::details(modules);
+      if (modules.empty()) out += "Not recorded for this run.\n";
+      else if (details.empty())
+        out += "None: no other program had put a library into the game's process.\n";
+      else {
+        // Modules from the program that started Venture (Steam's overlay) are listed but never named.
+        out += std::format("At the last check: {}\n",
+                           !programs.empty() ? programs
+                           : std::ranges::any_of(details, [](const std::string &line) {
+                               return line.find(injected_modules::kFromStarter) != std::string::npos;
+                             })
+                               ? "none apart from the program that started Venture"
+                               : "none loaded");
+        for (const auto &line : details) out += line + "\n";
+      }
+    }
     out += "\n=== Environment ===\n";
     environment_section(out);
     out += "\n=== Settings for this game ===\n";
@@ -1397,7 +1487,16 @@ fs::path write_debug_report(const DebugReport &request) {
   fs::create_directories(dir);
   fs::path file = dir / std::format("venture-report-{}{}.txt", package.empty() ? "" : package + "-",
                                     local_time(now, "%Y%m%d-%H%M%S"));
-  std::ofstream(file, std::ios::binary) << redact(std::move(out), request.private_text);
+  // The logs keep to kReportBudget; whatever else grew past the upload limit is
+  // cut at a line, so that a report always uploads.
+  std::string text = redact(std::move(out), request.private_text);
+  if (text.size() > kPasteLimit) {
+    constexpr std::string_view cut = "... the report is cut here: it reached 1 MB ...\n";
+    text.resize(kPasteLimit - cut.size());
+    if (auto line = text.rfind('\n'); line != std::string::npos) text.resize(line + 1);
+    text += cut;
+  }
+  std::ofstream(file, std::ios::binary) << text;
   prune(dir);
   return file;
 }

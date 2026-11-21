@@ -40,6 +40,17 @@ public interface Host {
   default boolean debuggerConnected() {
     throw new UnsupportedOperationException("Host debugger state unavailable");
   }
+  // A guest descriptor on a host file the framework opened for the app (a
+  // picked document handed to native code), with Linux open(2) flags; a
+  // negative errno on failure. closeGuestFd closes one the app gave back.
+  default int openDocumentFd(String hostPath, int flags) {
+    throw new UnsupportedOperationException("Guest descriptors unavailable");
+  }
+  default int closeGuestFd(int fd) {
+    throw new UnsupportedOperationException("Guest descriptors unavailable");
+  }
+  // A picked folder as the removable storage volume /storage/<id> (id "1A2B-3C4D").
+  default boolean mountDocumentRoot(String id, String hostPath) { return false; }
   default long[] processMemory() {
     throw new UnsupportedOperationException("Host process memory accounting unavailable");
   }

@@ -1,5 +1,6 @@
 #include "common/environment.h"
 #include "core/process_runtime.h"
+#include "core/launch_payload.h"
 #include "core/java_script_loader.h"
 #include "core/a32_coverage.h"
 #include "core/linker_runtime.h"
@@ -122,6 +123,15 @@ void configure_game(const std::filesystem::path& install,
   if (!mz_zip_reader_extract_to_mem(&zip, index, manifest.data(), manifest.size(), 0))
     throw std::runtime_error("cannot read APK manifest");
   config.device_identity = &select_device_identity(manifest_supported_devices(manifest));
+  if (const char* forced = environment::getenv("VENTURE_ANDROID_2D"); forced && *forced)
+    config.launches_2d = std::string_view(forced) != "0";
+  else
+    // An app whose launch activity is 2D keeps AOSP's views in every process:
+    // its VR activities are view-based too (a 2D menu that starts an AppCompat
+    // VR activity in a new task). A restart into a 2D activity of a VR game
+    // gets them as well.
+    config.launches_2d = config.has_code && (manifest_launches_2d(manifest) ||
+        manifest_launches_2d(manifest, launch_payload::activity(launch_payload::peek())));
   log::info("launch", "Guest device identity: {} ({}){}", config.device_identity->model,
             config.device_identity->device,
             config.device_identity == &native_device_identity() ? "" : " via Horizon compatibility mode");

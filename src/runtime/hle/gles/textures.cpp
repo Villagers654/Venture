@@ -1,3 +1,4 @@
+#include "core/stall_watch.h"
 #include <algorithm>
 #include <chrono>
 #include <cstring>
@@ -414,10 +415,12 @@ void compressed_image(GLenum target, GLint level, GLenum format, GLsizei w,
 }
 void image2(GLenum t, GLint l, GLenum f, GLsizei w, GLsizei h, GLint b,
             GLsizei s, const void* p) {
+  stall_watch::texture_upload();
   compressed_image(t, l, f, w, h, 1, b, s, p, false);
 }
 void image3(GLenum t, GLint l, GLenum f, GLsizei w, GLsizei h, GLsizei d,
             GLint b, GLsizei s, const void* p) {
+  stall_watch::texture_upload();
   compressed_image(t, l, f, w, h, d, b, s, p, true);
 }
 // BC7 regions start on a 4x4 block and end on one or at the level's edge.
@@ -530,10 +533,12 @@ void compressed_sub(GLenum target, GLint level, GLint x, GLint y, GLint z,
 }
 void sub2(GLenum t, GLint l, GLint x, GLint y, GLsizei w, GLsizei h, GLenum f,
           GLsizei s, const void* p) {
+  stall_watch::texture_upload();
   compressed_sub(t, l, x, y, 0, w, h, 1, f, s, p, false);
 }
 void sub3(GLenum t, GLint l, GLint x, GLint y, GLint z, GLsizei w, GLsizei h,
           GLsizei d, GLenum f, GLsizei s, const void* p) {
+  stall_watch::texture_upload();
   compressed_sub(t, l, x, y, z, w, h, d, f, s, p, true);
 }
 void storage(GLenum target, GLsizei levels, GLenum format, GLsizei w, GLsizei h,
@@ -636,6 +641,7 @@ void delete_textures(GLsizei n, const GLuint* ids) {
 }
 void tex_image2(GLenum t, GLint l, GLint f, GLsizei w, GLsizei h, GLint b,
                 GLenum format, GLenum type, const void* p) {
+  stall_watch::texture_upload();
   if (!materialize_buffer_maps()) return;
   settle_target(t);
   preserve_gl_errors();
@@ -645,6 +651,7 @@ void tex_image2(GLenum t, GLint l, GLint f, GLsizei w, GLsizei h, GLint b,
 }
 void tex_image3(GLenum t, GLint l, GLint f, GLsizei w, GLsizei h, GLsizei d,
                 GLint b, GLenum format, GLenum type, const void* p) {
+  stall_watch::texture_upload();
   if (!materialize_buffer_maps()) return;
   settle_target(t);
   preserve_gl_errors();
@@ -661,6 +668,7 @@ bool emulated_level(GLenum target, GLint level) {
 }
 void tex_sub2(GLenum t, GLint l, GLint x, GLint y, GLsizei w, GLsizei h,
               GLenum f, GLenum type, const void* p) {
+  stall_watch::texture_upload();
   if (!materialize_buffer_maps()) return;
   if (emulated_level(t, l)) {
     gl_error(GL_INVALID_OPERATION);
@@ -671,6 +679,7 @@ void tex_sub2(GLenum t, GLint l, GLint x, GLint y, GLsizei w, GLsizei h,
 }
 void tex_sub3(GLenum t, GLint l, GLint x, GLint y, GLint z, GLsizei w,
               GLsizei h, GLsizei d, GLenum f, GLenum type, const void* p) {
+  stall_watch::texture_upload();
   if (!materialize_buffer_maps()) return;
   if (emulated_level(t, l)) {
     gl_error(GL_INVALID_OPERATION);

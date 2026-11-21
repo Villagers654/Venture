@@ -19,7 +19,12 @@ namespace venture::hle::vrapi {
 // Quest 3) shows a frame carrying a projection layer besides the game's own as
 // a head-locked panel surrounded by black (#63; Tales from the Galaxy's Edge,
 // whose OVRPlugin transition layer is drawn ahead of its eye buffer from the
-// first frame). Serialized by the VrApi state mutex.
+// first frame). A run at the bottom of a frame that has no projection layer
+// (a game's own eye buffer drawn because of its blend or color scale, a menu
+// alone) is submitted as that frame's projection layer, opaque: SteamVR on the
+// Steam Frame shows a frame without a projection layer black though its quads
+// are valid, and premultiplied content over nothing is the same image opaque.
+// Serialized by the VrApi state mutex.
 struct DrawnEye {
   TextureSwapChain *chain = nullptr;
   int slot = 0;
@@ -55,6 +60,11 @@ private:
   struct Run {
     std::array<XrCompositionLayerQuad, 2> quads{{{XR_TYPE_COMPOSITION_LAYER_QUAD},
                                                   {XR_TYPE_COMPOSITION_LAYER_QUAD}}};
+    // Instead of the quads when the run is the frame's projection layer.
+    XrCompositionLayerProjection projection{XR_TYPE_COMPOSITION_LAYER_PROJECTION};
+    std::array<XrCompositionLayerProjectionView, 2> views{{{XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW},
+                                                           {XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW}}};
+    bool as_projection = false;
     const XrCompositionLayerBaseHeader *placeholder() const {
       return reinterpret_cast<const XrCompositionLayerBaseHeader *>(&quads[0]);
     }

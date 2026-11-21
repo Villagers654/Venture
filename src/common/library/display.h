@@ -71,8 +71,10 @@ struct DisplaySettings {
   int custom_rate = 90;  // for "custom"
   // The desktop mirror window: "cropped" (the left eye filling the window, as
   // native PC VR games show it), "full" (the whole left eye) or "off"; ""
-  // follows the global setting.
-  std::string mirror = "cropped";
+  // follows the global setting. The global default "auto" is "cropped", or
+  // "off" on a standalone headset (common/standalone.h), which has no monitor
+  // to show it on.
+  std::string mirror = "auto";
   // The eye the mirror shows: "left" or "right"; "" follows the global setting.
   std::string mirror_eye = "left";
   // The mirror opens fullscreen: "on" or "off"; "" follows the global setting.
@@ -111,6 +113,8 @@ std::string resolution_environment(const DisplaySettings &d);
 std::string frame_rate_environment(const DisplaySettings &d);
 // VENTURE_MIRROR for effective settings.
 std::string mirror_environment(const DisplaySettings &d);
+// What "auto" means on this machine: "off" on a standalone headset, else "cropped".
+std::string automatic_mirror();
 // VENTURE_MIRROR_EYE for effective settings.
 std::string mirror_eye_environment(const DisplaySettings &d);
 // VENTURE_MIRROR_FULLSCREEN for effective settings: "on" or "off".

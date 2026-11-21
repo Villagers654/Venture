@@ -50,11 +50,38 @@ struct GuestImages::Impl {
   std::vector<Slot> slots;
   std::vector<XrSwapchainImageVulkanKHR> exposed;
   bool staged_mode = false;
+  bool sampled = false;
+  // External (zero-copy) slots: the images are a host chain's; slot_owned
+  // says which are acquired from the host now (always 1 for private slots).
+  bool external = false;
+  std::vector<std::uint8_t> slot_owned;
   std::vector<StagedImage> staged;
   std::uint64_t bytes = 0;
   template <class T> T fn(const char *name) const {
     return reinterpret_cast<T>(get(binding.instance, name));
   }
+  void begin(const XrGraphicsBindingVulkanKHR &, PFN_vkGetInstanceProcAddr, const XrSwapchainCreateInfo &,
+             bool staged, std::uint32_t count);
+  void make_slot_sync(Slot &slot) {
+    VkCommandBufferAllocateInfo ca{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO, nullptr, pool,
+                                   VK_COMMAND_BUFFER_LEVEL_PRIMARY, 1};
+    checked(fn<PFN_vkAllocateCommandBuffers>("vkAllocateCommandBuffers")(binding.device, &ca, &slot.command),
+            "Guest copy commands");
+    VkFenceCreateInfo fc{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+    checked(fn<PFN_vkCreateFence>("vkCreateFence")(binding.device, &fc, nullptr, &slot.fence), "Guest copy fence");
+  }
+  // A slot Venture may read or write now. Caller holds mutex. Logged once per object when refused.
+  bool usable(std::uint32_t index) {
+    if (index >= slots.size()) return false;
+    if (slot_owned[index]) return true;
+    if (!refused_logged) {
+      refused_logged = true;
+      log::warn("xr", "A zero-copy swapchain image was needed after it went back to the host runtime; "
+                "it is not read");
+    }
+    return false;
+  }
+  bool refused_logged = false;
   XrResult wait(Slot &slot, XrDuration timeout) {
     if (!binding.device)
       return XR_ERROR_GRAPHICS_DEVICE_INVALID;
@@ -107,7 +134,7 @@ struct GuestImages::Impl {
       if (slot.fence)
         fn<PFN_vkDestroyFence>("vkDestroyFence")(binding.device, slot.fence,
                                                  nullptr);
-      if (slot.image)
+      if (slot.image && !external)
         fn<PFN_vkDestroyImage>("vkDestroyImage")(binding.device, slot.image,
                                                  nullptr);
       if (slot.memory)
@@ -123,13 +150,13 @@ struct GuestImages::Impl {
     binding.device = VK_NULL_HANDLE;
   }
 };
-GuestImages::GuestImages(const XrGraphicsBindingVulkanKHR &binding,
-                         PFN_vkGetInstanceProcAddr get,
-                         const XrSwapchainCreateInfo &info, bool staged)
-    : impl_(std::make_unique<Impl>()) {
-  auto &s = *impl_;
+void GuestImages::Impl::begin(const XrGraphicsBindingVulkanKHR &binding_, PFN_vkGetInstanceProcAddr get_,
+                              const XrSwapchainCreateInfo &info_, bool staged, std::uint32_t count) {
+  auto &s = *this;
+  const auto &binding = binding_;
+  const auto &info = info_;
   s.binding = binding;
-  s.get = get;
+  s.get = get_;
   s.info = info;
   s.info.next = nullptr;
   s.staged_mode = staged;
@@ -162,10 +189,9 @@ GuestImages::GuestImages(const XrGraphicsBindingVulkanKHR &binding,
   checked(s.fn<PFN_vkCreateCommandPool>("vkCreateCommandPool")(
               binding.device, &pool, nullptr, &s.pool),
           "Guest image command pool");
-  const auto count =
-      info.createFlags & XR_SWAPCHAIN_CREATE_STATIC_IMAGE_BIT ? 1u : 3u;
   s.slots.resize(count);
   if (staged) s.staged.resize(count);
+  s.slot_owned.assign(count, 1);
   if (vulkan::timing_enabled()) {
     std::uint32_t n{};
     auto families = s.fn<PFN_vkGetPhysicalDeviceQueueFamilyProperties>(
@@ -187,6 +213,13 @@ GuestImages::GuestImages(const XrGraphicsBindingVulkanKHR &binding,
         s.queries = VK_NULL_HANDLE;
     }
   }
+}
+GuestImages::GuestImages(const XrGraphicsBindingVulkanKHR &binding,
+                         PFN_vkGetInstanceProcAddr get,
+                         const XrSwapchainCreateInfo &info, bool staged)
+    : impl_(std::make_unique<Impl>()) {
+  auto &s = *impl_;
+  s.begin(binding, get, info, staged, info.createFlags & XR_SWAPCHAIN_CREATE_STATIC_IMAGE_BIT ? 1u : 3u);
   VkPhysicalDeviceMemoryProperties memory{};
   s.fn<PFN_vkGetPhysicalDeviceMemoryProperties>(
       "vkGetPhysicalDeviceMemoryProperties")(binding.physicalDevice, &memory);
@@ -221,10 +254,19 @@ GuestImages::GuestImages(const XrGraphicsBindingVulkanKHR &binding,
     if (info.faceCount == 6)
       ci.flags |= VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
     VkImageFormatProperties supported{};
-    const auto capability = s.fn<PFN_vkGetPhysicalDeviceImageFormatProperties>(
-        "vkGetPhysicalDeviceImageFormatProperties")(
+    const auto properties = s.fn<PFN_vkGetPhysicalDeviceImageFormatProperties>(
+        "vkGetPhysicalDeviceImageFormatProperties");
+    // A color slot is also sampled where the format allows it: a color space
+    // conversion then draws from it straight into the host image
+    // (ColorImages::record_from) instead of reading the host image back.
+    if (s.aspects == VK_IMAGE_ASPECT_COLOR_BIT && !staged && !(ci.usage & VK_IMAGE_USAGE_SAMPLED_BIT) &&
+        properties(binding.physicalDevice, ci.format, ci.imageType, ci.tiling,
+                   ci.usage | VK_IMAGE_USAGE_SAMPLED_BIT, ci.flags, &supported) == VK_SUCCESS)
+      ci.usage |= VK_IMAGE_USAGE_SAMPLED_BIT;
+    const auto capability = properties(
         binding.physicalDevice, ci.format, ci.imageType, ci.tiling, ci.usage,
         ci.flags, &supported);
+    s.sampled = !staged && (ci.usage & VK_IMAGE_USAGE_SAMPLED_BIT);
     if (capability == VK_ERROR_FORMAT_NOT_SUPPORTED)
       throw XR_ERROR_SWAPCHAIN_FORMAT_UNSUPPORTED;
     if (capability != VK_SUCCESS)
@@ -235,16 +277,7 @@ GuestImages::GuestImages(const XrGraphicsBindingVulkanKHR &binding,
         ci.arrayLayers > supported.maxArrayLayers ||
         !(supported.sampleCounts & ci.samples))
       throw XR_ERROR_SWAPCHAIN_FORMAT_UNSUPPORTED;
-    VkCommandBufferAllocateInfo ca{
-        VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO, nullptr, s.pool,
-        VK_COMMAND_BUFFER_LEVEL_PRIMARY, 1};
-    checked(s.fn<PFN_vkAllocateCommandBuffers>("vkAllocateCommandBuffers")(
-                binding.device, &ca, &slot.command),
-            "Guest copy commands");
-    VkFenceCreateInfo fc{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
-    checked(s.fn<PFN_vkCreateFence>("vkCreateFence")(binding.device, &fc,
-                                                     nullptr, &slot.fence),
-            "Guest copy fence");
+    s.make_slot_sync(slot);
     if (staged) {
       // The provider's staging holds the released contents; nothing to
       // allocate or initialize here.
@@ -310,7 +343,53 @@ GuestImages::GuestImages(const XrGraphicsBindingVulkanKHR &binding,
   std::lock_guard lock(Impl::registry_mutex);
   Impl::registry.insert(&s);
 }
+GuestImages::GuestImages(const XrGraphicsBindingVulkanKHR &binding, PFN_vkGetInstanceProcAddr get,
+                         const XrSwapchainCreateInfo &info, std::span<const VkImage> external, bool sampled)
+    : impl_(std::make_unique<Impl>()) {
+  auto &s = *impl_;
+  s.external = true;
+  s.begin(binding, get, info, false, std::uint32_t(external.size()));
+  s.sampled = sampled && s.aspects == VK_IMAGE_ASPECT_COLOR_BIT;
+  s.slot_owned.assign(external.size(), 0);
+  for (std::size_t i = 0; i < external.size(); ++i) {
+    s.make_slot_sync(s.slots[i]);
+    s.slots[i].image = external[i];
+    s.exposed.push_back({XR_TYPE_SWAPCHAIN_IMAGE_VULKAN_KHR, nullptr, external[i]});
+  }
+  vulkan::add_device_release_hook(Impl::release_device);
+  std::lock_guard lock(Impl::registry_mutex);
+  Impl::registry.insert(&s);
+}
 GuestImages::~GuestImages() = default;
+bool GuestImages::external() const { return impl_->external; }
+void GuestImages::set_owned(std::uint32_t index, bool owned) {
+  std::lock_guard lock(impl_->mutex);
+  if (impl_->external && index < impl_->slot_owned.size()) impl_->slot_owned[index] = owned;
+}
+bool GuestImages::refused_unowned() const {
+  std::lock_guard lock(impl_->mutex);
+  return impl_->refused_logged;
+}
+bool GuestImages::owned(std::uint32_t index) const {
+  std::lock_guard lock(impl_->mutex);
+  return index < impl_->slot_owned.size() && impl_->slot_owned[index];
+}
+XrResult GuestImages::initialize(std::uint32_t index) {
+  auto &s = *impl_;
+  return submit(index, [&](VkCommandBuffer command, VkImage image, VkImageLayout layout) {
+    VkImageMemoryBarrier barrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+    barrier.image = image;
+    barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    barrier.newLayout = layout;
+    barrier.srcQueueFamilyIndex = barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+    barrier.subresourceRange = {s.aspects, 0, s.info.mipCount, 0, s.info.arraySize * s.info.faceCount};
+    s.fn<PFN_vkCmdPipelineBarrier>("vkCmdPipelineBarrier")(command, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                                                           VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr, 0,
+                                                           nullptr, 1, &barrier);
+    return XR_SUCCESS;
+  });
+}
 std::span<const XrSwapchainImageVulkanKHR> GuestImages::images() const {
   return impl_->exposed;
 }
@@ -321,6 +400,54 @@ XrResult GuestImages::wait(std::uint32_t index, XrDuration timeout) {
   if (index >= impl_->slots.size())
     return XR_ERROR_RUNTIME_FAILURE;
   return impl_->wait(impl_->slots[index], timeout);
+}
+bool GuestImages::sampled() const { return impl_->sampled; }
+XrResult GuestImages::submit(std::uint32_t index, const Commands &commands) {
+  auto &s = *impl_;
+  std::lock_guard slot_lock(s.mutex);
+  if (index >= s.slots.size() || !s.slots[index].image)
+    return XR_ERROR_RUNTIME_FAILURE;
+  if (!s.usable(index)) return XR_ERROR_CALL_ORDER_INVALID;
+  auto result = s.wait(s.slots[index], XR_INFINITE_DURATION);
+  if (result != XR_SUCCESS)
+    return result;
+  auto &slot = s.slots[index];
+  const auto start = s.queries ? monotonic_ns() : 0;
+  try {
+    checked(s.fn<PFN_vkResetCommandBuffer>("vkResetCommandBuffer")(slot.command, 0), "Guest pass reset");
+    VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+    checked(s.fn<PFN_vkBeginCommandBuffer>("vkBeginCommandBuffer")(slot.command, &bi), "Guest pass begin");
+    if (s.queries) {
+      s.fn<PFN_vkCmdResetQueryPool>("vkCmdResetQueryPool")(slot.command, s.queries, 2 * index, 2);
+      s.fn<PFN_vkCmdWriteTimestamp>("vkCmdWriteTimestamp")(slot.command, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                                                           s.queries, 2 * index);
+    }
+    result = commands(slot.command, slot.image, s.layout);
+    if (s.queries)
+      s.fn<PFN_vkCmdWriteTimestamp>("vkCmdWriteTimestamp")(slot.command, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+                                                           s.queries, 2 * index + 1);
+    // Ended either way, so the next reset starts from the executable state.
+    checked(s.fn<PFN_vkEndCommandBuffer>("vkEndCommandBuffer")(slot.command), "Guest pass end");
+    if (result != XR_SUCCESS)
+      return result;
+    checked(s.fn<PFN_vkResetFences>("vkResetFences")(s.binding.device, 1, &slot.fence), "Guest pass fence reset");
+    VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+    submit.commandBufferCount = 1;
+    submit.pCommandBuffers = &slot.command;
+    HostQueueLock lock(session().uses_shared_gpu);
+    if (!lock)
+      return XR_ERROR_RUNTIME_FAILURE;
+    checked(s.fn<PFN_vkQueueSubmit>("vkQueueSubmit")(s.queue, 1, &submit, slot.fence), "Guest pass submit");
+    slot.pending = true;
+    if (s.queries) {
+      slot.timed = true;
+      slot.sample = {"openxr-guest-handoff", vulkan::timing_frame(), monotonic_ns() - start, 0, 0, 0, 0, 0, 0};
+    }
+    return XR_SUCCESS;
+  } catch (const std::exception &e) {
+    log::error("xr", "Guest image pass failed: {}", e.what());
+    return XR_ERROR_RUNTIME_FAILURE;
+  }
 }
 XrResult GuestImages::drain() {
   std::lock_guard lock(impl_->mutex);
@@ -344,6 +471,7 @@ XrResult GuestImages::copy(std::uint32_t index, VkImage target,
   std::lock_guard slot_lock(s.mutex);
   if (index >= s.slots.size())
     return XR_ERROR_RUNTIME_FAILURE;
+  if (!s.usable(index)) return XR_ERROR_CALL_ORDER_INVALID;
   auto result = s.wait(s.slots[index], XR_INFINITE_DURATION);
   if (result != XR_SUCCESS)
     return result;
@@ -582,6 +710,7 @@ std::string GuestImages::sample_layers(std::uint32_t index, VkImage target, VkFo
     return std::format("not sampled (format {} -> {})", int(guest_format), int(target_format));
   std::lock_guard slot_lock(s.mutex);
   if (index >= s.slots.size() || !s.binding.device) return "not sampled (no slot)";
+  if (!s.usable(index)) return "not sampled (the image is the host runtime's)";
   auto &slot = s.slots[index];
   const bool guest = !s.staged_mode && slot.image;
   const auto guest_layers = guest ? s.info.arraySize * s.info.faceCount : 0u;

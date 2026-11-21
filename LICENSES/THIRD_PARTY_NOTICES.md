@@ -119,3 +119,34 @@ the Apache License, Version 2.0 (`LICENSES/Apache-2.0.txt`):
 > License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
 > CONDITIONS OF ANY KIND, either express or implied. See the License for the
 > specific language governing permissions and limitations under the License.
+
+## layoutlib
+
+On Windows and Linux x86_64, Android apps without a VR launch activity run on
+layoutlib, Android Studio's layout renderer from the Android Open Source
+Project (`com.android.tools.layoutlib:layoutlib` and `layoutlib-runtime`
+17.0.4 from Google's Maven repository, pinned by SHA256 in
+`cmake/Layoutlib.cmake`; docs/design/layoutlib.md). Release packages ship it
+in `layoutlib/`: its Android framework classes, rewritten at build time by
+`tools/layoutlib/ProcessLayoutlib.java` (`layoutlib/layoutlib.jar`), the
+framework resources compiled from the SDK platform's sources
+(`layoutlib/framework-res.apk`), and its native libraries, fonts, ICU and
+hyphenation data and keyboard maps unmodified. `venture-framework-2d.jar`
+holds Venture's framework classes compiled against it, with AOSP's NOTICE.
+layoutlib and the Android framework code are used under the Apache License,
+Version 2.0 (`LICENSES/Apache-2.0.txt`, also `layoutlib/LICENSE`):
+
+> Copyright (C) The Android Open Source Project
+>
+> Licensed under the Apache License, Version 2.0 (the "License"); you may not
+> use this file except in compliance with the License. Unless required by
+> applicable law or agreed to in writing, software distributed under the
+> License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
+> CONDITIONS OF ANY KIND, either express or implied. See the License for the
+> specific language governing permissions and limitations under the License.
+
+Its native library includes Skia (BSD-3-Clause, `LICENSES/BSD-3-Clause.txt`),
+FreeType, HarfBuzz, ICU, libpng, libjpeg-turbo, libwebp, zlib, Expat, SQLite
+and other components; Google's notices for every one of them ship unmodified
+in `layoutlib/licenses/<os>/` beside the libraries, and ICU's data notice in
+`layoutlib/licenses/icu/`. layoutlib is never part of Venture's Android app.

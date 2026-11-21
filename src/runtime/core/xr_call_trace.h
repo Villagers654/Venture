@@ -2,6 +2,7 @@
 // Bounded public API diagnostics. No guest pointers, names, payloads or handles.
 #include "common/environment.h"
 #include "core/api_result_trace.h"
+#include "core/stall_watch.h"
 #include <optional>
 #include "common/log.h"
 #include "platform/profile.h"
@@ -59,7 +60,9 @@ inline std::int64_t now() {
 }
 class Call {
  public:
-  explicit Call(const char* api) noexcept : active_(enabled() || api_result_trace::enabled()), frames_(enabled()) {
+  // Always: the stall finder's record of XR calls in progress and their timings.
+  explicit Call(const char* api) noexcept
+      : watch_(stall_watch::Kind::xr, api), active_(enabled() || api_result_trace::enabled()), frames_(enabled()) {
     if (!active_) return;
     if (api_result_trace::enabled()) result_call_.emplace(api, api_result_trace::Phase::xr);
     if (!frames_) return;
@@ -80,6 +83,7 @@ class Call {
   void state(int state) { if (frames_) { record_.state=state; record_.fields|=4; } }
   void layers(int layers) { if (frames_) { record_.layers=layers; record_.fields|=8; } }
   template<class Result> Result finish(Result result) noexcept {
+    watch_.finish(static_cast<int>(result));
     if (!active_) return result;
     if (result_call_) result_call_->finish(static_cast<std::int32_t>(result));
     try {
@@ -90,6 +94,7 @@ class Call {
     return result;
   }
  private:
+  stall_watch::Op watch_;
   bool active_, frames_;
   std::optional<api_result_trace::Call> result_call_;
   Record record_{};

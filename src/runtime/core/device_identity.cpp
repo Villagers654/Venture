@@ -1,5 +1,7 @@
 #include "core/device_identity.h"
+#include <algorithm>
 #include <array>
+#include <optional>
 #include <stdexcept>
 #include <vector>
 
@@ -51,7 +53,7 @@ const DeviceIdentity& select_device_identity(std::string_view supported) {
   return devices.front();
 }
 
-std::string manifest_supported_devices(std::span<const std::byte> xml) {
+void visit_manifest(std::span<const std::byte> xml, const ManifestVisitor& visit) {
   // AOSP android-12.1 ResourceTypes.h: ResChunk_header, ResStringPool_header,
   // ResXMLTree_node/attrExt/attribute; all offsets are relative to their chunk.
   auto u16 = [&](std::size_t at) -> std::uint16_t {
@@ -128,25 +130,19 @@ std::string manifest_supported_devices(std::span<const std::byte> xml) {
       auto start = u16(ext+8), stride = u16(ext+10), count = u16(ext+12);
       if (start < 20 || stride < 20 || start > size-header || count > (size-header-start)/stride)
         throw std::runtime_error("invalid manifest XML attributes");
-      if (tag == "meta-data" && parents == std::vector<std::string>{"manifest", "application"}) {
-        std::string name, value;
-        bool string_value = false;
+      // String attributes by name; nullopt for other value types.
+      auto attribute = [&](std::string_view wanted) -> std::optional<std::string> {
         for (std::size_t i = 0; i < count; ++i) {
           auto attr = ext + start + i*stride;
-          auto key = string(u32(attr+4));
-          if (key != "name" && key != "value") continue;
+          if (string(u32(attr+4)) != wanted) continue;
           if (u16(attr+12) != 8) throw std::runtime_error("invalid manifest attribute value");
           auto raw = u32(attr+8);
-          bool text = raw != 0xffffffff || xml[attr+15] == std::byte{3};
-          auto v = text ? string(raw != 0xffffffff ? raw : u32(attr+16)) : std::string{};
-          if (key == "name") name = v;
-          else { value = v; string_value = text; }
+          if (raw == 0xffffffff && xml[attr+15] != std::byte{3}) return std::nullopt;
+          return string(raw != 0xffffffff ? raw : u32(attr+16));
         }
-        if (name == "com.oculus.supportedDevices") {
-          if (!string_value) throw std::runtime_error("supportedDevices must be a manifest string");
-          return value;
-        }
-      }
+        return std::nullopt;
+      };
+      if (!visit(tag, parents, attribute)) return;
       parents.push_back(tag);
     } else if (type == 0x103) {
       if (parents.empty()) throw std::runtime_error("unbalanced manifest XML");
@@ -154,6 +150,82 @@ std::string manifest_supported_devices(std::span<const std::byte> xml) {
     }
     at += size;
   }
-  return {};
+}
+
+std::string manifest_supported_devices(std::span<const std::byte> xml) {
+  std::string result;
+  visit_manifest(xml, [&](std::string_view tag, const std::vector<std::string>& parents,
+                          const ManifestAttribute& attribute) {
+    if (tag != "meta-data" || parents != std::vector<std::string>{"manifest", "application"}) return true;
+    if (attribute("name") != "com.oculus.supportedDevices") return true;
+    auto value = attribute("value");
+    if (!value) throw std::runtime_error("supportedDevices must be a manifest string");
+    result = *value;
+    return false;
+  });
+  return result;
+}
+
+bool manifest_launches_2d(std::span<const std::byte> xml, std::string_view wanted) {
+  // The activity Venture launches (PackageModel.launchIntent: MAIN with INFO,
+  // then LAUNCHER, then Quest's VR category) runs immersive when one of its
+  // intent filters names an immersive category; otherwise Horizon OS shows it
+  // as a 2D panel. A native activity is always immersive here.
+  struct Activity {
+    std::string name;
+    bool immersive = false;
+    std::vector<std::string> main_categories;  // of its filters with action MAIN
+  };
+  std::vector<Activity> activities;
+  std::string package;
+  bool filter_main = false;
+  std::vector<std::string> filter_categories;
+  auto end_filter = [&] {
+    if (filter_main && !activities.empty())
+      activities.back().main_categories.insert(activities.back().main_categories.end(),
+                                               filter_categories.begin(), filter_categories.end());
+    filter_main = false;
+    filter_categories.clear();
+  };
+  visit_manifest(xml, [&](std::string_view tag, const std::vector<std::string>& parents,
+                          const ManifestAttribute& attribute) {
+    const auto depth = parents.size();
+    if (tag == "manifest" && depth == 0) {
+      package = attribute("package").value_or("");
+    } else if ((tag == "activity" || tag == "activity-alias") && depth == 2 && parents[1] == "application") {
+      end_filter();
+      activities.push_back({attribute("name").value_or("")});
+    } else if (tag == "intent-filter" && depth == 3 && !activities.empty()) {
+      end_filter();
+    } else if ((tag == "action" || tag == "category") && depth == 4 && parents[3] == "intent-filter" &&
+               !activities.empty()) {
+      auto name = attribute("name").value_or("");
+      if (tag == "action") filter_main |= name == "android.intent.action.MAIN";
+      else {
+        if (name == "com.oculus.intent.category.VR" || name == "org.khronos.openxr.intent.category.IMMERSIVE_HMD")
+          activities.back().immersive = true;
+        filter_categories.push_back(std::move(name));
+      }
+    }
+    return true;
+  });
+  end_filter();
+  auto is_2d = [](const Activity& activity) {
+    return !activity.immersive && activity.name != "android.app.NativeActivity";
+  };
+  if (!wanted.empty())
+    for (const auto& activity : activities) {
+      // A manifest may name an activity relative to its package (".Main", "Main").
+      std::string full = activity.name;
+      if (full.starts_with('.')) full = package + full;
+      else if (full.find('.') == std::string::npos) full = package + "." + full;
+      if (full == wanted) return is_2d(activity);
+    }
+  for (std::string_view category : {"android.intent.category.INFO", "android.intent.category.LAUNCHER",
+                                    "com.oculus.intent.category.VR"})
+    for (const auto& activity : activities)
+      if (std::ranges::find(activity.main_categories, category) != activity.main_categories.end())
+        return is_2d(activity);
+  return false;
 }
 } // namespace venture

@@ -1,0 +1,65 @@
+# How tools/layoutlib/ProcessLayoutlib.java turns Google's layoutlib.jar into the
+# framework classes Venture runs (docs/design/layoutlib.md). Rules are explained
+# at the top of that tool.
+
+# Android code runs as it does on a device where layoutlib's delegate serves
+# Android Studio's preview: resources from the IDE, edit mode, frozen time, a
+# render session's handler queue. Other delegates adapt the framework to a host
+# (font and data paths, no-op tracing, no system services behind Settings) and
+# stay; Venture's src/runtime/layoutlib/java replaces those that reach into the
+# preview's render session.
+undelegate android.content.res.Resources
+undelegate android.content.res.Resources$Theme
+undelegate android.content.res.TypedArray
+undelegate android.content.res.AssetManager
+# The framework resources are framework-res.apk beside layoutlib, not in /system.
+keep-delegate android.content.res.AssetManager.createSystemAssetsInZygoteLocked
+undelegate android.view.View
+undelegate android.view.ViewRootImpl
+undelegate android.view.LayoutInflater
+undelegate android.view.MenuInflater
+undelegate android.view.Choreographer
+undelegate android.view.HandlerActionQueue
+undelegate android.view.WindowManagerGlobal
+undelegate android.view.accessibility.AccessibilityManager
+undelegate android.view.inputmethod.InputMethodManager
+undelegate android.graphics.drawable.DrawableInflater
+undelegate android.graphics.drawable.AdaptiveIconDrawable
+undelegate android.graphics.drawable.NinePatchDrawable
+undelegate android.graphics.Typeface
+undelegate android.os.Handler
+undelegate android.os.HandlerThread
+undelegate android.app.Fragment
+undelegate android.preference.Preference
+undelegate android.widget.RemoteViews
+undelegate com.android.internal.policy.PhoneWindow
+undelegate com.android.internal.view.menu.MenuBuilder
+
+# Resources come from compiled APKs (resources.arsc, binary XML), read by
+# libandroidfw in libandroid_runtime, as on a device.
+native android.content.res.AssetManager
+native android.content.res.ApkAssets
+
+# Surfaces also carry Venture native windows (SurfaceTexture, ImageReader, media).
+window-handle android.view.Surface
+
+# The main thread's Looper waits in the message queue's natives: Venture's
+# MessageQueue_Delegate waits on the host (and serves guest ALoopers there).
+delegate-natives android.os.MessageQueue
+# The frame clock: Choreographer asks the display for its refresh rate through
+# DisplayManagerGlobal, which has no display service behind it.
+keep-delegate android.view.Choreographer.getRefreshRate
+
+# TypedArray hands AssetManager.applyStyle the native addresses of its arrays
+# (VMRuntime.addressOf), which HotSpot arrays do not have. As on AOSP's host
+# JVM runtime (Ravenwood), the addresses only name the arrays (Venture's
+# VMRuntime_Delegate and RavenwoodHelperBridge), and applyStyle runs its
+# Ravenwood version, which passes the arrays themselves to the native.
+delegate-native dalvik.system.VMRuntime.newNonMovableArray
+delegate-native dalvik.system.VMRuntime.addressOf
+ravenwood android.content.res.AssetManager.applyStyle
+
+# The preview loads views and other inflated classes through the class loader
+# of the context's own class (a framework ContextThemeWrapper's is the system
+# loader, which has none of the app's classes); AOSP asks the context.
+forward android.content.Context.getFrameworkClassLoader:getClassLoader

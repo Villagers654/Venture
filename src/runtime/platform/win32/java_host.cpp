@@ -1,4 +1,5 @@
 #include "platform/java_host.h"
+#include "common/injected_modules.h"
 
 #include <windows.h>
 
@@ -47,6 +48,8 @@ void* loaded_agent_symbol(const std::filesystem::path& agent, const char* name) 
 }
 void* jvm_entry(const std::filesystem::path& home) {
   auto bin = std::filesystem::absolute(home / "bin");
+  // Its libraries are Venture's, not injected (a development JDK lies outside the install).
+  injected_modules::trust(bin);
   // HotSpot resolves agent libraries (including java.instrument) through its
   // startup PATH as well as the legacy Windows loader. AddDllDirectory alone
   // only affects LoadLibraryEx calls which opt into that search list. Match

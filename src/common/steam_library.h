@@ -101,6 +101,14 @@ struct LaunchIdentity {
   std::vector<std::pair<std::string, std::string>> replaced;  // LD_PRELOAD without the overlay
 };
 LaunchIdentity launch_identity(const std::function<const char *(const char *)> &getenv);
+// The environment ("NAME=value" entries) to start Steam's own steam.sh with: this
+// process's without what Steam (and its runtime) set in a program it started. A
+// Venture that Steam started carries Steam's library path, overlay preload and
+// runtime variables, and steam.sh given them cannot set up its runtime ("Couldn't
+// set up the Steam Runtime. Are you running low on disk space?" on the Steam
+// Frame). PATH and LD_LIBRARY_PATH go back to the session's own, which Steam
+// keeps in SYSTEM_PATH and SYSTEM_LD_LIBRARY_PATH.
+std::vector<std::string> client_environment(const std::vector<std::string> &environment);
 struct Handoff {
   fs::path root, executable, art;
   std::vector<Game> games;

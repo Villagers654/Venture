@@ -2,6 +2,7 @@
 
 #include "common/android/archive.h"
 
+#include <algorithm>
 #include <miniz.h>
 
 #include <climits>
@@ -122,6 +123,9 @@ Manifest parse_manifest(std::span<const std::uint8_t> xml) {
   std::vector<std::string> tags;  // open elements, outermost first
   std::optional<Manifest::LaunchFilter> filter;  // the open <intent-filter> of an activity
   bool filter_main = false;
+  std::string activity;                  // the open <activity> or <activity-alias>
+  bool activity_immersive = false;
+  std::size_t activity_filters = 0;      // its first entry in m.launch_filters
   for (std::size_t at = 8; at < end;) {
     const auto type = r.u16(at), header = r.u16(at + 2);
     const auto size = r.u32(at + 4);
@@ -146,13 +150,19 @@ Manifest parse_manifest(std::span<const std::uint8_t> xml) {
       const bool native_library = depth == 3 && parent == "application" && tag == "uses-native-library";
       const bool intent_filter = depth == 4 && tag == "intent-filter" && (parent == "activity" || parent == "activity-alias");
       const bool filter_entry = depth == 5 && filter && (tag == "action" || tag == "category");
+      const bool activity_start = depth == 3 && parent == "application" && (tag == "activity" || tag == "activity-alias");
+      if (activity_start) {
+        activity.clear();
+        activity_immersive = false;
+        activity_filters = m.launch_filters.size();
+      }
       if (intent_filter) {
         filter = Manifest::LaunchFilter{.alias = parent == "activity-alias"};
         filter_main = false;
       }
       std::string feature_name, entry_name;
       bool feature_required = true;  // android:required defaults to true
-      const bool named_entry = native_library || filter_entry;
+      const bool named_entry = native_library || filter_entry || activity_start;
       for (std::size_t i = 0; (manifest || application || feature || sdk || named_entry) && i < count; ++i) {
         const auto attr = ext + start + i * stride;
         const auto name_index = r.u32(attr + 4);
@@ -197,6 +207,10 @@ Manifest parse_manifest(std::span<const std::uint8_t> xml) {
       }
       if (feature && feature_required && !feature_name.empty()) m.required_features.push_back(feature_name);
       if (native_library && !entry_name.empty()) m.native_libraries.push_back(entry_name);
+      if (activity_start) activity = entry_name;
+      if (filter_entry && tag == "category" &&
+          (entry_name == "com.oculus.intent.category.VR" || entry_name == "org.khronos.openxr.intent.category.IMMERSIVE_HMD"))
+        activity_immersive = true;
       if (filter_entry && tag == "action" && entry_name == "android.intent.action.MAIN") filter_main = true;
       if (filter_entry && tag == "category" && !entry_name.empty()) filter->categories.push_back(entry_name);
     } else if (type == 0x0103) {  // element end
@@ -205,9 +219,14 @@ Manifest parse_manifest(std::span<const std::uint8_t> xml) {
         continue;  // unbalanced; the identity above never depended on balance
       }
       if (tags.size() == 4 && tags.back() == "intent-filter" && filter) {
-        if (filter_main) m.launch_filters.push_back(std::move(*filter));
+        if (filter_main) {
+          filter->activity = activity;
+          m.launch_filters.push_back(std::move(*filter));
+        }
         filter.reset();
       }
+      if (tags.size() == 3 && (tags.back() == "activity" || tags.back() == "activity-alias"))
+        for (auto i = activity_filters; i < m.launch_filters.size(); ++i) m.launch_filters[i].immersive = activity_immersive;
       tags.pop_back();
     }
     at += size;
@@ -215,6 +234,14 @@ Manifest parse_manifest(std::span<const std::uint8_t> xml) {
   if (major) m.version_code |= major << 32;
   if (!paths::safe_package(m.package)) throw std::runtime_error("The APK manifest names no valid package.");
   return m;
+}
+bool launches_2d(const Manifest &m) {
+  for (std::string_view category : {"android.intent.category.INFO", "android.intent.category.LAUNCHER",
+                                    "com.oculus.intent.category.VR"})
+    for (const auto &filter : m.launch_filters)
+      if (std::ranges::find(filter.categories, category) != filter.categories.end())
+        return !filter.immersive && filter.activity != "android.app.NativeActivity";
+  return false;
 }
 Manifest read_apk(const fs::path &apk) {
   Archive archive(apk);

@@ -129,7 +129,7 @@ inline constexpr const char *scotland2_url = "https://github.com/sc2ad/scotland2
 
 // Expansion files (OBB) the player replaces: `file` is written over the
 // installed `name` (an "obb" file of the install's plan) in the game's folder.
-// The store's file is not kept: library::replaced_obb keeps such an install
+// The store's file is not kept: library::replaced_file keeps such an install
 // complete, and downloading the game again brings the store's file back.
 void replace_obb(const fs::path &directory, std::string_view name, const fs::path &file);
 // The OBB files an install's plan names, in its order.

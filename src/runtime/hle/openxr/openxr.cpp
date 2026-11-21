@@ -204,7 +204,7 @@ class PresentationLayers {
         submitted.insert(handle);
         if (flip_) flipped.insert(handle);
         if (host_) {
-          handle = state().swapchains.at(handle).host_handle;
+          handle = presented_handle(state().swapchains.at(handle));
           std::memcpy(writable() + offset, &handle, sizeof(handle));
         }
       }
@@ -234,7 +234,7 @@ class PresentationLayers {
     submitted.insert(sub.swapchain);
     if (flip_) flipped.insert(sub.swapchain);
     if (!host_) return false;
-    sub.swapchain = it->second.host_handle;
+    sub.swapchain = presented_handle(it->second);
     // Unreal's Meta OpenXR plugin can round a view's crop a pixel or two past
     // the swapchain's right or bottom edge. Quest's compositor accepts that;
     // desktop runtimes reject the whole frame (XR_ERROR_SWAPCHAIN_RECT_INVALID),
@@ -251,6 +251,8 @@ class PresentationLayers {
         r.extent = {std::int32_t(width), std::int32_t(height)};
       }
     }
+    // A zero-copy image is the game's own: no flip and no scaling.
+    if (it->second.present_direct) return true;
     if (it->second.textures.empty() == it->second.host_flip) {
       const auto y = std::int64_t(it->second.info.height) - sub.imageRect.offset.y -
                      sub.imageRect.extent.height;
@@ -826,6 +828,7 @@ XrResult xrDestroySession(XrSession handle) {
   if (XR_SUCCEEDED(result)) {
     forget_handle(handle);
     state().attached_sets.erase(handle);
+    state().performance_metrics.erase(handle);
     state().graphics = {XR_TYPE_GRAPHICS_BINDING_VULKAN_KHR};
     state().guest_graphics_queue_index = 0;
     state().presentation_epoch = 0;
@@ -1003,7 +1006,7 @@ XrResult xrPollEvent(XrInstance instance, XrEventDataBuffer *out) {
       session().state = e->state;
       if (e->state == XR_SESSION_STATE_STOPPING || e->state == XR_SESSION_STATE_EXITING ||
           e->state == XR_SESSION_STATE_LOSS_PENDING) suspend_passthrough_source();
-      if (e->state != XR_SESSION_STATE_FOCUSED) venture::xr::cancel_sequence(e->session);
+      if (e->state != XR_SESSION_STATE_FOCUSED) venture::xr::cancel_sequence(e->session, nullptr, false);
       log::info("xr", "Host session state={}", int(e->state));
       startup_diagnostics::note_host_session_state(int(e->state));
       // Frame functions of a session pending loss return SESSION_LOST; do
@@ -1191,9 +1194,15 @@ void log_eye_routing(std::span<const XrCompositionLayerBaseHeader* const> host_l
       const auto& sub = projection.views[i].subImage;
       const Swapchain* guest = nullptr;
       for (const auto& [handle, chain] : state().swapchains)
-        if (chain.host_handle && chain.host_handle == sub.swapchain) { guest = &chain; break; }
+        if (presented_handle(chain) && presented_handle(chain) == sub.swapchain) { guest = &chain; break; }
       line += std::format("{}view {}: ", line.empty() ? "" : "; ", i);
-      if (guest)
+      if (guest && guest->present_direct)
+        line += std::format("guest {}x{} arrays={} format={} zero-copy -> host {:#x} slice {} rect {}x{}+{}+{}",
+                            guest->info.width, guest->info.height, guest->info.arraySize, guest->info.format,
+                            reinterpret_cast<std::uintptr_t>(sub.swapchain), sub.imageArrayIndex,
+                            sub.imageRect.extent.width, sub.imageRect.extent.height, sub.imageRect.offset.x,
+                            sub.imageRect.offset.y);
+      else if (guest)
         line += std::format("guest {}x{} arrays={} format={} -> host {:#x} {}x{} arrays={} slice {} rect {}x{}+{}+{}",
                             guest->info.width, guest->info.height, guest->info.arraySize, guest->info.format,
                             reinterpret_cast<std::uintptr_t>(sub.swapchain), guest->host_info.width,
@@ -1678,6 +1687,8 @@ XrResult xrEndFrame(XrSession handle, const XrFrameEndInfo *info) {
     layer = static_cast<const XrCompositionLayerBaseHeader*>(mapped.chain(layer));
   log_eye_routing(layers);
   if (layout_report.line) layout_report.host = layer_type_list(layers);
+  // Zero-copy images this frame presents go back to the host before it gets the frame.
+  if (const auto released = release_direct_images(rects.submitted); XR_FAILED(released)) return released;
   auto host_info = *info;
   host_info.layerCount = static_cast<std::uint32_t>(layers.size());
   host_info.layers = layers.data();

@@ -1,4 +1,5 @@
 #include "common/library/display.h"
+#include "common/standalone.h"
 #include <algorithm>
 #include <cmath>
 #include <exception>
@@ -37,7 +38,12 @@ DisplaySettings display_from_json(const Json &j, bool per_game) {
     d.resolution = resolution;
   const auto rate = str(j, "frameRate");
   if (rate == "runtime" || rate == "custom" || listed_rate(rate)) d.rate = rate;
-  if (const auto mirror = str(j, "mirror"); mirror == "cropped" || mirror == "full" || mirror == "off") d.mirror = mirror;
+  if (const auto mirror = str(j, "mirror"); mirror == "cropped" || mirror == "full" || mirror == "off" ||
+                                            (!per_game && mirror == "auto"))
+    d.mirror = mirror;
+  // "cropped" was the global default before "auto": settings written then
+  // (without mirrorChosen) stored it whether or not the player chose it.
+  if (!per_game && d.mirror == "cropped" && !j.contains("mirrorChosen")) d.mirror = "auto";
   if (const auto eye = str(j, "mirrorEye"); eye == "left" || eye == "right") d.mirror_eye = eye;
   if (const auto f = str(j, "mirrorFullscreen"); f == "on" || f == "off") d.mirror_fullscreen = f;
   if (const auto pc = str(j, "pcAudio"); pc == "on" || pc == "off") d.pc_audio = pc;
@@ -71,7 +77,7 @@ DisplaySettings display_from_json(const Json &j, bool per_game) {
 Json display_to_json(const DisplaySettings &d) {
   Json j{{"resolution", d.resolution}, {"percent", d.percent}, {"frameRate", d.rate}, {"customFrameRate", d.custom_rate},
          {"mirror", d.mirror}, {"mirrorEye", d.mirror_eye}, {"mirrorFullscreen", d.mirror_fullscreen}, {"pcAudio", d.pc_audio},
-         {"matchResolution", d.match_resolution}};
+         {"matchResolution", d.match_resolution}, {"mirrorChosen", true}};
   // Only a game's own choice; the global settings keep none here.
   if (!d.texture_compression.empty()) j["textureCompression"] = d.texture_compression;
   if (d.texture_compression_threshold) j["textureCompressionThreshold"] = d.texture_compression_threshold;
@@ -124,8 +130,11 @@ std::string frame_rate_environment(const DisplaySettings &d) {
   return "runtime";
 }
 
+std::string automatic_mirror() { return standalone::detect().standalone ? "off" : "cropped"; }
+
 std::string mirror_environment(const DisplaySettings &d) {
-  return d.mirror == "full" || d.mirror == "off" ? d.mirror : "cropped";
+  if (d.mirror == "full" || d.mirror == "off" || d.mirror == "cropped") return d.mirror;
+  return automatic_mirror();
 }
 
 std::string mirror_eye_environment(const DisplaySettings &d) { return d.mirror_eye == "right" ? "right" : "left"; }

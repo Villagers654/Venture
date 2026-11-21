@@ -10,7 +10,7 @@ add_library(venture_runtime STATIC
   core/generated/a32_libc.cpp
   core/thread.cpp core/thread_lifetime.cpp core/tls.cpp
   core/dev_game_control.cpp core/dev_il2cpp.cpp core/engine_policy.cpp core/engine_defaults.cpp
-  core/profile.cpp core/memory_pressure.cpp core/session_timeline.cpp core/stall_finder.cpp core/frame_cpu.cpp core/startup_diagnostics.cpp
+  core/profile.cpp core/memory_pressure.cpp core/session_timeline.cpp core/stall_finder.cpp core/stall_watch.cpp core/frame_cpu.cpp core/startup_diagnostics.cpp
   core/pipeline_stats.cpp core/invalidation_stats.cpp core/av_telemetry.cpp
   core/wait.cpp core/readiness.cpp core/sync_census.cpp core/diagnostic_trace.cpp core/signals.cpp core/syscall.cpp core/a32_unwind.cpp core/shutdown_trace.cpp
   core/elf.cpp core/elf_relocations.cpp core/linker.cpp core/process_image.cpp core/process.cpp core/device_identity.cpp core/java_script_loader.cpp
@@ -203,6 +203,19 @@ add_custom_target(venture_guest_java_fixture DEPENDS "${CMAKE_BINARY_DIR}/bin/gu
 add_dependencies(venture-runtime venture_guest_java_fixture)
 add_subdirectory(java/framework)
 target_link_libraries(venture-runtime PRIVATE venture_java_framework)
+# Android 2D apps (docs/design/layoutlib.md): Google publishes layoutlib's
+# native runtime for x86-64 Windows, Linux and macOS only, so arm64 hosts need
+# it built from AOSP first. Desktop only; the Android APK never carries it.
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64)$")
+  set(venture_layoutlib_default ON)
+else()
+  set(venture_layoutlib_default OFF)
+endif()
+option(VENTURE_LAYOUTLIB "Run Android 2D apps on Android Studio's layoutlib" ${venture_layoutlib_default})
+if(VENTURE_LAYOUTLIB)
+  add_subdirectory(layoutlib)
+  add_dependencies(venture-runtime venture-layoutlib)
+endif()
 
 add_subdirectory(xr)
 target_link_libraries(venture-runtime PRIVATE venture_xr)

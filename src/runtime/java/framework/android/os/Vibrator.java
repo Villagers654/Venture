@@ -14,4 +14,8 @@ public class Vibrator {
     android.util.Log.w("Vibrator", "No host vibration device");
   }
   public void cancel() {}
+  // View.performHapticFeedback: a panel has no vibration motor.
+  public void performHapticFeedback(int constant, int flags, String reason, int privFlags, int usage) {}
+  public void performHapticFeedbackForInputDevice(int constant, int deviceId, int source, String reason,
+                                                  int privFlags, int usage) {}
 }

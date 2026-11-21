@@ -56,6 +56,8 @@ struct ProcessConfig {
   bool platform_leaderboard_writes = true; // per-launch opt-out, owner-authorized by default
   bool embedded_java_scripts = false; // tooling agent needed only for prepared Java loaders
   bool has_code = true; // classes.dex present; a native-only APK (hasCode="false") has none
+  // The launch activity is a 2D panel (manifest_launches_2d); VENTURE_ANDROID_2D=0/1 overrides.
+  bool launches_2d = false;
   // VENTURE_PASSTHROUGH (on unless "0"), captured once before guest/XR initialization.
   bool passthrough = true;
   // VENTURE_PASSTHROUGH_KEY: the user's color key (sRGB), the only way the

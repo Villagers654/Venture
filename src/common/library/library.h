@@ -11,8 +11,9 @@ struct Install {
   bool complete = false;
   uint64_t bytes = 0;
   std::string label;  // an imported app's own name (its APK label), when Meta has no listing
-  // OBB files whose size differs from the store's: the player replaced them
-  // (a modded expansion file), so they never make the install incomplete.
+  // Data files (OBB or asset files) whose size differs from the store's: the player
+  // replaced them (a mod, such as H3VR2's edited .hdog files), so they never make the
+  // install incomplete and are never downloaded over.
   std::vector<std::string> replaced;
   // Its library id: the app id, or for a version pinned beside the game's own
   // install meta::version_id. Launches, Steam and settings use it.
@@ -28,9 +29,11 @@ std::vector<Install> scan(const fs::path &root, bool* authoritative = nullptr);
 // Why an install is not complete: each required file that is missing, still
 // downloading, empty or not the size its manifest records. Empty when complete.
 std::vector<std::string> install_problems(const fs::path &directory, const meta::Plan &plan);
-// A base OBB file present with a size other than the store's is the player's
-// replacement, never damage: launches use it and only a warning names it.
-bool replaced_obb(const meta::File &file, uint64_t size);
+// A base data file (any but the APK) present with a size other than the store's is
+// the player's replacement, never damage: a download only gives a file its final
+// name once it arrived whole, so a size that differs later is the player's change.
+// Launches use it and only a warning names it. An empty file is still damage.
+bool replaced_file(const meta::File &file, uint64_t size);
 // "<name> was replaced (<n> bytes; the store's file has <m>)" for each one.
 std::vector<std::string> replaced_files(const fs::path &directory, const meta::Plan &plan);
 // Only the current account may reconcile its own previously confirmed titles.
@@ -80,7 +83,10 @@ LaunchChoice launch_choice(const meta::AccountIndex &accounts,
 // "[runtime]" error line main() writes for a failed launch, found in the tail
 // of the runtime log; that the game stopped responding and was closed when a
 // frame-stall snapshot with no frame after it ends the log and no fatal signal
-// follows; else the exit code with the last error line as context.
+// follows and Venture did not end the app itself (a GPU device loss, whose
+// error line is then the context, after the capture or overlay programs the
+// runtime found injected into the game); else the exit code with the last
+// error line as context.
 std::string runtime_failure(std::string_view log_tail, int exit_code);
 // Whether a run's log shows the game asking Meta for its signed-in user or
 // entitlement and getting "not signed in" (no account, or an expired one).

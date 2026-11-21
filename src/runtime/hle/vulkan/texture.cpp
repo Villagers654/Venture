@@ -1,5 +1,6 @@
 #include "texture.h"
 #include "texture_memory.h"
+#include "core/stall_watch.h"
 
 #include <algorithm>
 #include <array>
@@ -26,6 +27,7 @@
 #include "gfx/gpu_device.h"
 #include "gfx/pipeline_trace.h"
 #include "gfx/queue_sync.h"
+#include "gfx/texture_decode.h"
 #include "gfx/vulkan_enumerate.h"
 #include "gfx/vulkan_memory.h"
 #include "internal.h"
@@ -93,9 +95,18 @@ void checked(VkResult result) {
 }
 std::uint32_t ceil_div(std::uint32_t a, std::uint32_t b) { return a / b + (a % b != 0); }
 std::atomic<bool> emulation_forced{false};
+bool astc(VkFormat format) {
+  return (format >= VK_FORMAT_ASTC_4x4_UNORM_BLOCK && format <= VK_FORMAT_ASTC_12x12_SRGB_BLOCK) ||
+         (format >= VK_FORMAT_ASTC_4x4_SFLOAT_BLOCK && format <= VK_FORMAT_ASTC_12x12_SFLOAT_BLOCK);
+}
+// A compressed format the host samples with optimal tiling passes through: the
+// guest's images, views, copies and uploads reach the host unchanged, with no
+// decode or BC7 store (emulated_image covers the images the host refuses).
+// Other formats the decoder serves are decoded.
 bool emulated(VkPhysicalDevice physical, VkFormat format) {
   if (!texture_format(format)) return false;
   if (emulation_forced.load(std::memory_order_relaxed)) return true;
+  if (astc(format) && !gfx::native_astc_allowed()) return true;
   VkFormatProperties properties{};
   phys<PFN_vkGetPhysicalDeviceFormatProperties>(physical, "vkGetPhysicalDeviceFormatProperties")(
       physical, format, &properties);
@@ -450,6 +461,8 @@ std::map<VkImage, std::shared_ptr<Image>> images;
 std::map<VkCommandBuffer, Commands> command_state;
 // Guest D24 images the Chain created with 32-bit float depth (host_depth_format).
 std::map<VkImage, VkDevice> depth_aliases;
+// Images of a compressed format the host samples natively (not decoded): their block geometry.
+std::map<VkImage, TextureFormat> native_blocks;
 // Reset returns scratch allocations to the parent pool, including when the
 // guest requests RELEASE_RESOURCES (VkCommandBufferResetFlagBits). Reuse only
 // within that pool: exclusive buffers keep their queue-family ownership.
@@ -995,6 +1008,32 @@ bool host_image_info(const VkImageCreateInfo& guest, TextureStorage& storage, Vk
   if (!storage.planes[0].view_formats.empty()) host.flags |= VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT;
   return true;
 }
+std::atomic<bool> linear_refusal_forced{false};
+// Whether the host's image format properties accept this image as it is.
+bool host_accepts_image(VkPhysicalDevice physical, const VkImageCreateInfo& info) {
+  if (info.tiling == VK_IMAGE_TILING_LINEAR && linear_refusal_forced.load(std::memory_order_relaxed)) return false;
+  auto query = phys<PFN_vkGetPhysicalDeviceImageFormatProperties>(physical, "vkGetPhysicalDeviceImageFormatProperties");
+  if (!query) return true;  // nothing to ask: the host decides at creation
+  VkImageFormatProperties limits{};
+  if (query(physical, info.format, info.imageType, info.tiling, info.usage, info.flags, &limits) != VK_SUCCESS)
+    return false;
+  return info.extent.width <= limits.maxExtent.width && info.extent.height <= limits.maxExtent.height &&
+         info.extent.depth <= limits.maxExtent.depth && info.mipLevels <= limits.maxMipLevels &&
+         info.arrayLayers <= limits.maxArrayLayers && (limits.sampleCounts & info.samples);
+}
+// A guest image of a format the host samples natively still goes through the
+// decoder when the host refuses that image and the decoder can back it: a
+// LINEAR image (Quest drivers create LINEAR ASTC although they report it
+// unsupported; Creed: Rise to Glory), a 3D image of a 2D-block format (ASTC
+// "sliced 3D") or a shape past the host's limits. Everything else of a native
+// format is the host's own image.
+bool emulated_image(VkPhysicalDevice physical, const VkImageCreateInfo& info) {
+  if (emulated(physical, info.format)) return true;
+  if (!texture_format(info.format) || host_accepts_image(physical, info)) return false;
+  TextureStorage storage;
+  VkImageCreateInfo host{};
+  return host_image_info(info, storage, host);
+}
 
 VkResult write_activation(const std::shared_ptr<Buffer>& buffer, std::uint32_t value) {
   void* address{};
@@ -1379,12 +1418,17 @@ VkResult VKAPI_CALL create_image(VkDevice d, const VkImageCreateInfo* info,
   if (!info || !out) return VK_ERROR_INITIALIZATION_FAILED;
   if (!supported_sample_count(physical, *info)) return VK_ERROR_VALIDATION_FAILED;
   watch_gpu_memory(physical);
-  if (!emulated(physical, info->format)) {
+  if (!emulated_image(physical, *info)) {
     const auto guest_depth = take_guest_depth_format(info->format);
     auto result = create(d, info, alloc, out);
     if (result == VK_SUCCESS && guest_depth != VK_FORMAT_UNDEFINED) {
       std::lock_guard lock(texture_lock);
       depth_aliases[*out] = d;
+    }
+    // A native compressed image's block geometry, for copies with a decoded image of its class.
+    if (result == VK_SUCCESS && texture_format(info->format)) {
+      std::lock_guard lock(texture_lock);
+      native_blocks[*out] = texture_format(info->format);
     }
     if (result == VK_SUCCESS && census::enabled()) {
       census::created(*out, census::classify(*info));
@@ -1411,6 +1455,12 @@ VkResult VKAPI_CALL create_image(VkDevice d, const VkImageCreateInfo* info,
     if (!reported.exchange(true))
       log::warn("vulkan", "Linear compressed image (format {}) is stored as an optimal decoded image; "
                           "CPU access to its memory does not reach it", int(info->format));
+  } else if (!emulated(physical, info->format)) {
+    static std::atomic<bool> reported{false};
+    if (!reported.exchange(true))
+      log::info("vulkan", "The host samples format {} but refuses a {}x{}x{} image of type {} usage={:#x} "
+                          "flags={:#x}; images it refuses are decoded", int(info->format), info->extent.width,
+                info->extent.height, info->extent.depth, int(info->imageType), info->usage, info->flags);
   }
   if (const auto mode = compression_mode(); mode != 0) {
     VkDeviceSize decoded = 0;
@@ -1567,6 +1617,7 @@ void VKAPI_CALL destroy_image(VkDevice d, VkImage handle, const VkAllocationCall
       images.erase(it);
     }
     depth_aliases.erase(handle);
+    native_blocks.erase(handle);
   }
   if (census::enabled()) census::destroyed(handle);
   vk<PFN_vkDestroyImage>(d, "vkDestroyImage")(d, handle, alloc);
@@ -1807,7 +1858,7 @@ void VKAPI_CALL destroy_view(VkDevice d, VkImageView view, const VkAllocationCal
 }
 void VKAPI_CALL device_image_requirements(VkDevice d, const VkDeviceImageMemoryRequirements* info,
                                          VkMemoryRequirements2* out) {
-  if (emulated(device_physical(d), info->pCreateInfo->format)) {
+  if (emulated_image(device_physical(d), *info->pCreateInfo)) {
     TextureStorage storage;
     VkImageCreateInfo image_info{};
     if (!host_image_info(*info->pCreateInfo, storage, image_info)) {
@@ -1848,7 +1899,7 @@ void VKAPI_CALL device_image_requirements(VkDevice d, const VkDeviceImageMemoryR
 }
 void VKAPI_CALL device_sparse_requirements(VkDevice d, const VkDeviceImageMemoryRequirements* info,
                                           std::uint32_t* count, VkSparseImageMemoryRequirements2* out) {
-  if (emulated(device_physical(d), info->pCreateInfo->format)) {
+  if (emulated_image(device_physical(d), *info->pCreateInfo)) {
     *count = 0;  // No sparse residency properties for an emulated format.
     return;
   }
@@ -2010,6 +2061,7 @@ std::vector<VkBufferImageCopy> plain_regions(const Info& info) {
 }
 void VKAPI_CALL copy_buffer_image(VkCommandBuffer cmd, VkBuffer source, VkImage dest, VkImageLayout layout,
                                   std::uint32_t count, const VkBufferImageCopy* regions) {
+  stall_watch::texture_upload();
   if (depth_alias(dest)) return copy_buffer_depth(cmd, source, dest, layout, count, regions);
   auto d = command_device(cmd);
   auto img = image(dest);
@@ -2099,8 +2151,20 @@ void VKAPI_CALL copy_image(VkCommandBuffer cmd, VkImage source, VkImageLayout so
     // Uncompressed <-> compressed: each texel of the uncompressed image is one
     // block, and the extent counts source texels. The emulated side's blocks
     // live in its shadow buffer, laid out as an image of block-sized texels.
+    // Native compressed <-> decoded (a host-sampled format whose image the
+    // host refused is decoded, emulated_image): the native side is an image
+    // of the same blocks, addressed in texels like the guest's region.
     const auto& img = src ? *src : *dst;
     const auto bw = img.format.width, bh = img.format.height, bytes = img.format.block_bytes;
+    bool native = false;
+    {
+      std::lock_guard lock(texture_lock);
+      if (auto it = native_blocks.find(src ? dest : source); it != native_blocks.end()) {
+        if (it->second.width != bw || it->second.height != bh || it->second.block_bytes != bytes)
+          throw std::runtime_error("compressed copies between different block sizes are unsupported");
+        native = true;
+      }
+    }
     for (std::uint32_t i = 0; i < count; ++i) {
       const auto& r = regions[i];
       const auto& blocks_sub = src ? r.srcSubresource : r.dstSubresource;
@@ -2108,10 +2172,10 @@ void VKAPI_CALL copy_image(VkCommandBuffer cmd, VkImage source, VkImageLayout so
       const auto blocks_at = src ? r.srcOffset : r.dstOffset;
       const auto row = ceil_div(mip_extent(img, blocks_sub.mipLevel).width, bw);
       VkBufferImageCopy c{};
-      c.bufferRowLength = row;
+      c.bufferRowLength = native ? row * bw : row;
       c.imageOffset = src ? r.dstOffset : r.srcOffset;
-      c.imageExtent = src ? VkExtent3D{ceil_div(r.extent.width, bw), ceil_div(r.extent.height, bh), 1}
-                          : VkExtent3D{r.extent.width, r.extent.height, 1};
+      c.imageExtent = src && !native ? VkExtent3D{ceil_div(r.extent.width, bw), ceil_div(r.extent.height, bh), 1}
+                                     : VkExtent3D{r.extent.width, r.extent.height, 1};
       // Slices of a 3D image are its depth slices. The uncompressed image is
       // 3D when its subresource has one layer: copies between a 3D image and a
       // 2D array map depth slices to layers.
@@ -2162,13 +2226,17 @@ void VKAPI_CALL copy_image(VkCommandBuffer cmd, VkImage source, VkImageLayout so
   }
 }
 void VKAPI_CALL copy_buffer_image2(VkCommandBuffer cmd, const VkCopyBufferToImageInfo2* info) {
+  // Counted here only when it does not go on to copy_buffer_image.
   if (depth_alias(info->dstImage)) {
+    stall_watch::texture_upload();
     auto regions = plain_regions<VkBufferImageCopy2>(*info);
     return copy_buffer_depth(cmd, info->srcBuffer, info->dstImage, info->dstImageLayout, info->regionCount,
                              regions.data());
   }
-  if (!image(info->dstImage))
+  if (!image(info->dstImage)) {
+    stall_watch::texture_upload();
     return vk<PFN_vkCmdCopyBufferToImage2>(command_device(cmd), "vkCmdCopyBufferToImage2")(cmd, info);
+  }
   if (info->pNext) throw std::runtime_error("compressed buffer-image copy chain unsupported");
   std::vector<VkBufferImageCopy> regions;
   for (std::uint32_t i = 0; i < info->regionCount; ++i) {
@@ -2819,6 +2887,27 @@ void VKAPI_CALL format_properties2(VkPhysicalDevice p, VkFormat f, VkFormatPrope
       }
     }
 }
+// What a decoded image of the guest's format can be: the host's answer for
+// its storage. LINEAR is reported unsupported, as on the hosts it serves.
+VkResult decoded_image_properties(VkPhysicalDevice p, VkFormat f, VkImageType type, VkImageTiling tiling,
+                                  VkImageUsageFlags usage, VkImageCreateFlags flags, const void* chain,
+                                  VkImageFormatProperties* out) {
+  if (tiling != VK_IMAGE_TILING_OPTIMAL) return VK_ERROR_FORMAT_NOT_SUPPORTED;
+  VkImageCreateInfo guest{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO, chain, flags, type, f, {1, 1, 1}, 1, 1,
+                          VK_SAMPLE_COUNT_1_BIT, tiling, usage};
+  VkImageCreateInfo host{};
+  TextureStorage storage;
+  if (!host_image_info(guest, storage, host)) return VK_ERROR_FORMAT_NOT_SUPPORTED;
+  auto r = phys<PFN_vkGetPhysicalDeviceImageFormatProperties>(p, "vkGetPhysicalDeviceImageFormatProperties")(
+      p, host.format, type, tiling, host.usage, host.flags, out);
+  if (r == VK_SUCCESS) {
+    VkPhysicalDeviceProperties props{};
+    phys<PFN_vkGetPhysicalDeviceProperties>(p, "vkGetPhysicalDeviceProperties")(p, &props);
+    out->sampleCounts = VK_SAMPLE_COUNT_1_BIT;
+    out->maxResourceSize = std::min(out->maxResourceSize, VkDeviceSize(props.limits.maxStorageBufferRange));
+  }
+  return r;
+}
 // `chain` is the guest VkPhysicalDeviceImageFormatInfo2 chain, or nullptr.
 VkResult image_properties_chained(VkPhysicalDevice p, VkFormat f, VkImageType type, VkImageTiling tiling,
                                   VkImageUsageFlags usage, VkImageCreateFlags flags, const void* chain,
@@ -2829,27 +2918,21 @@ VkResult image_properties_chained(VkPhysicalDevice p, VkFormat f, VkImageType ty
     if (!usage) usage = VK_IMAGE_USAGE_SAMPLED_BIT;
     flags &= ~VkImageCreateFlags(VK_IMAGE_CREATE_SUBSAMPLED_BIT_EXT);
   }
-  const bool needs_decode = emulated(p, f);
-  if (needs_decode && tiling != VK_IMAGE_TILING_OPTIMAL) return VK_ERROR_FORMAT_NOT_SUPPORTED;
-  if (needs_decode) {
-    VkImageCreateInfo guest{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO, chain, flags, type, f, {1, 1, 1}, 1, 1,
-                            VK_SAMPLE_COUNT_1_BIT, tiling, usage};
-    VkImageCreateInfo host{};
-    TextureStorage storage;
-    if (!host_image_info(guest, storage, host)) return VK_ERROR_FORMAT_NOT_SUPPORTED;
-    f = host.format;
-    usage = host.usage;
-    flags = host.flags;
+  if (!emulated(p, f)) {
+    auto r = phys<PFN_vkGetPhysicalDeviceImageFormatProperties>(p, "vkGetPhysicalDeviceImageFormatProperties")(
+        p, f, type, tiling, usage, flags, out);
+    if (r == VK_ERROR_FORMAT_NOT_SUPPORTED && texture_format(f)) {
+      // A native compressed format the host refuses in this shape (sliced 3D)
+      // is decoded at creation (emulated_image) and answered as decoded.
+      VkImageFormatProperties decoded{};
+      if (decoded_image_properties(p, f, type, tiling, usage, flags, chain, &decoded) == VK_SUCCESS) {
+        *out = decoded;
+        return VK_SUCCESS;
+      }
+    }
+    return r;
   }
-  auto r = phys<PFN_vkGetPhysicalDeviceImageFormatProperties>(p, "vkGetPhysicalDeviceImageFormatProperties")(
-      p, f, type, tiling, usage, flags, out);
-  if (needs_decode && r == VK_SUCCESS) {
-    VkPhysicalDeviceProperties props{};
-    phys<PFN_vkGetPhysicalDeviceProperties>(p, "vkGetPhysicalDeviceProperties")(p, &props);
-    out->sampleCounts = VK_SAMPLE_COUNT_1_BIT;
-    out->maxResourceSize = std::min(out->maxResourceSize, VkDeviceSize(props.limits.maxStorageBufferRange));
-  }
-  return r;
+  return decoded_image_properties(p, f, type, tiling, usage, flags, chain, out);
 }
 VkResult VKAPI_CALL image_properties(VkPhysicalDevice p, VkFormat f, VkImageType type, VkImageTiling tiling,
                                      VkImageUsageFlags usage, VkImageCreateFlags flags,
@@ -2868,6 +2951,16 @@ VkResult VKAPI_CALL image_properties2(VkPhysicalDevice p, const VkPhysicalDevice
     auto result = phys<PFN_vkGetPhysicalDeviceImageFormatProperties2>(
         p, "vkGetPhysicalDeviceImageFormatProperties2")(p, &host, out);
     if (result == VK_SUCCESS) external_image_properties(out);
+    // As image_properties_chained: a shape of a native format the host
+    // refuses is decoded, when nothing but a format list extends the query.
+    if (result == VK_ERROR_FORMAT_NOT_SUPPORTED && texture_format(info->format) && !out->pNext) {
+      VkImageFormatProperties decoded{};
+      if (decoded_image_properties(p, info->format, info->type, info->tiling, host.usage, host.flags, info->pNext,
+                                   &decoded) == VK_SUCCESS) {
+        out->imageFormatProperties = decoded;
+        return VK_SUCCESS;
+      }
+    }
     return result;
   }
   // Only a format list may extend the query; it narrows the views as at creation.
@@ -3624,6 +3717,7 @@ std::optional<TextureView> texture_view(const TextureStorage& storage, VkFormat 
   return std::nullopt;
 }
 void force_texture_emulation(bool forced) { emulation_forced.store(forced, std::memory_order_relaxed); }
+void force_linear_compressed_refusal(bool forced) { linear_refusal_forced.store(forced, std::memory_order_relaxed); }
 void force_texture_compression(int mode) { compression_forced.store(mode, std::memory_order_relaxed); }
 std::vector<VkImage> emulated_texture_planes(VkImage handle) {
   std::vector<VkImage> out;
@@ -3687,8 +3781,20 @@ VkResult host_texture_features(VkPhysicalDevice physical, VkPhysicalDeviceFeatur
   if ((requested.textureCompressionASTC_LDR && !available.textureCompressionASTC_LDR) ||
       (requested.textureCompressionETC2 && !available.textureCompressionETC2))
     return VK_ERROR_FEATURE_NOT_PRESENT;
-  if (!native.textureCompressionASTC_LDR) requested.textureCompressionASTC_LDR = VK_FALSE;
-  if (!native.textureCompressionETC2) requested.textureCompressionETC2 = VK_FALSE;
+  // A format the host samples is the host's own image even when the guest
+  // never enabled its feature (a Quest driver samples ASTC either way), so a
+  // host feature behind a passed-through format is always enabled.
+  requested.textureCompressionASTC_LDR = native.textureCompressionASTC_LDR &&
+      (requested.textureCompressionASTC_LDR || !emulated(physical, VK_FORMAT_ASTC_4x4_UNORM_BLOCK));
+  requested.textureCompressionETC2 = native.textureCompressionETC2 &&
+      (requested.textureCompressionETC2 || !emulated(physical, VK_FORMAT_ETC2_R8G8B8_UNORM_BLOCK));
+  static std::once_flag reported;
+  std::call_once(reported, [&] {
+    log::info("vulkan", "ASTC: LDR {}, HDR {}{}",
+              emulated(physical, VK_FORMAT_ASTC_4x4_UNORM_BLOCK) ? "decoded by Venture" : "native (passed through)",
+              host_astc_hdr(physical) ? "native (passed through)" : "decoded by Venture",
+              gfx::native_astc_allowed() ? "" : " (VENTURE_NATIVE_ASTC=0)");
+  });
   // BC7 storage for decoded textures under GPU memory pressure (create_image).
   requested.textureCompressionBC |= native.textureCompressionBC;
   return VK_SUCCESS;

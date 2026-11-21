@@ -90,6 +90,12 @@ void throw_java(JNIEnv* env, const char* type, const char* message) noexcept {
     env->DeleteLocalRef(cls);
   }
 }
+bool declares_method(JNIEnv* env, jclass cls, const char* name, const char* signature, bool is_static) noexcept {
+  if (is_static ? env->GetStaticMethodID(cls, name, signature) != nullptr
+                : env->GetMethodID(cls, name, signature) != nullptr) return true;
+  env->ExceptionClear();
+  return false;
+}
 void throw_thread_death(JNIEnv* env) noexcept {
   if (env->ExceptionCheck()) return;
   auto cls = env->FindClass("java/lang/ThreadDeath");

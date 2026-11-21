@@ -294,6 +294,33 @@ public final class FrameworkTest {
   }
   // android.util.JsonWriter/JsonReader (API 11): Firebase's JSON encoders write Crashlytics and
   // session events with them, and Pets & Stuff quit at start on the missing class (issue 168).
+  // A public member of a class the reflecting app can see but the framework
+  // cannot (private here): ART judges only the member against the app caller.
+  private static final class HiddenAdapter {
+    public static int startupValue() { return 42; }
+    private static int secret() { return 7; }
+  }
+  private static void guestReflection() throws Exception {
+    var base = new android.content.Context();
+    var other = new android.content.Context();
+    var mutable = new android.content.MutableContextWrapper(base);
+    check(mutable.getBaseContext() == base, "MutableContextWrapper starts on its base");
+    mutable.setBaseContext(other);
+    check(mutable.getBaseContext() == other, "MutableContextWrapper.setBaseContext replaces the base");
+    var visible = HiddenAdapter.class.getDeclaredMethod("startupValue");
+    check(((Integer) NativeLoader.invoke(visible, null, new Object[0])) == 42,
+        "reflection through NativeLoader reaches a public static method of a class only the app can access");
+    @SuppressWarnings("deprecation") boolean opened = visible.isAccessible();
+    check(!opened, "the app's own Method object is not opened by the call");
+    var hidden = HiddenAdapter.class.getDeclaredMethod("secret");
+    boolean refused = false;
+    try {
+      NativeLoader.invoke(hidden, null, new Object[0]);
+    } catch (IllegalAccessException expected) {
+      refused = expected.getMessage().contains("FrameworkTest");
+    }
+    check(refused, "a private method of another class stays refused, naming the app caller");
+  }
   private static void jsonStreams() throws Exception {
     var text = new java.io.StringWriter();
     var writer = new android.util.JsonWriter(text);
@@ -1849,7 +1876,7 @@ public final class FrameworkTest {
   // Rust android-activity binds KeyCharacterMap at startup (Starworn); maps follow Virtual.kcm.
   // Issue 160: a text field opens Venture's system keyboard; its keys edit the
   // field through the field's own InputConnection, as an Android input method.
-  private static void systemKeyboard() {
+  private static void systemKeyboard() throws Exception {
     var context = new android.content.Context();
     var input = (android.view.inputmethod.InputMethodManager) context.getSystemService(android.content.Context.INPUT_METHOD_SERVICE);
     java.util.function.Consumer<String> tap = name -> {
@@ -1931,6 +1958,91 @@ public final class FrameworkTest {
     tap.accept("action");
     check(events.equals(List.of("commit:x", "action:2")) && !SystemKeyboard.isShown(),
         "a game's connection takes the text and its Go action, and the keyboard closes");
+    systemKeyboardWindows(context, tap);
+  }
+  // Windows that open the keyboard without showSoftInput: Unity's
+  // TouchScreenKeyboard dialog (a focused EditText, stateAlwaysVisible) and
+  // Unreal's virtual keyboard AlertDialog (an EditText with Ok and Cancel).
+  private static void systemKeyboardWindows(android.content.Context context, java.util.function.Consumer<String> tap)
+      throws Exception {
+    var hostField = RuntimeEnvironment.class.getDeclaredField("host");
+    hostField.setAccessible(true);
+    Object previousHost = hostField.get(null);
+    var logged = new CopyOnWriteArrayList<String>();
+    hostField.set(null, java.lang.reflect.Proxy.newProxyInstance(Host.class.getClassLoader(),
+        new Class<?>[]{Host.class}, (proxy, method, values) -> {
+          if (method.getName().equals("log")) { logged.add(values[1] + ": " + values[2]); return null; }
+          try { return method.invoke(previousHost, values); }
+          catch (java.lang.reflect.InvocationTargetException e) { throw e.getCause(); }
+        }));
+    try {
+      dialogKeyboards(context, tap, logged);
+    } finally {
+      hostField.set(null, previousHost);
+    }
+  }
+  private static void dialogKeyboards(android.content.Context context, java.util.function.Consumer<String> tap,
+      List<String> logged) {
+    var unity = new android.app.Dialog(context);
+    var layout = new android.widget.LinearLayout(context);
+    var field = new android.widget.EditText(context);
+    field.setImeOptions(android.view.inputmethod.EditorInfo.IME_ACTION_DONE);
+    field.setInputType(android.text.InputType.TYPE_CLASS_TEXT);
+    var reported = new ArrayList<String>();
+    field.addTextChangedListener(new android.text.TextWatcher() {
+      @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+      @Override public void onTextChanged(CharSequence s, int start, int before, int count) {}
+      @Override public void afterTextChanged(android.text.Editable s) { reported.add(s.toString()); }
+    });
+    field.setOnEditorActionListener((view, id, event) -> {
+      if (id != android.view.inputmethod.EditorInfo.IME_ACTION_DONE) return false;
+      reported.add("done");
+      unity.dismiss();
+      return true;
+    });
+    layout.addView(field);
+    unity.setContentView(layout);
+    unity.getWindow().setSoftInputMode(5);
+    field.requestFocus();
+    unity.show();
+    check(SystemKeyboard.isShown() && SystemKeyboard.servedView() == field,
+        "a dialog shown with stateAlwaysVisible opens the keyboard on its focused field");
+    tap.accept("a");
+    tap.accept("action");
+    check(reported.equals(List.of("a", "done")) && !unity.isShowing() && !SystemKeyboard.isShown(),
+        "the field reports its text and Done, and the dialog's dismissal leaves the keyboard closed");
+
+    var plain = new android.app.Dialog(context);
+    var other = new android.widget.EditText(context);
+    plain.setContentView(other);
+    other.requestFocus();
+    plain.show();
+    check(!SystemKeyboard.isShown(), "a dialog without a visible soft input mode opens no keyboard by itself");
+    var input = (android.view.inputmethod.InputMethodManager) context.getSystemService(android.content.Context.INPUT_METHOD_SERVICE);
+    check(input.showSoftInput(other, 0), "its field opens the keyboard on request");
+    plain.dismiss();
+    check(!SystemKeyboard.isShown(), "dismissing a dialog closes the keyboard on its field");
+
+    var typed = new android.widget.EditText(context);
+    typed.setInputType(android.text.InputType.TYPE_CLASS_TEXT);
+    var answers = new ArrayList<String>();
+    var unreal = new android.app.AlertDialog.Builder(context).setTitle("").setView(typed)
+        .setPositiveButton("Ok", (d, which) -> answers.add("ok:" + typed.getText()))
+        .setNegativeButton("Cancel", (d, which) -> answers.add("cancel"))
+        .create();
+    unreal.show();
+    check(unreal.isShowing() && SystemKeyboard.servedView() == typed,
+        "an AlertDialog with a text field waits for the keyboard instead of answering itself");
+    tap.accept("b");
+    tap.accept("o");
+    tap.accept("action");
+    check(answers.equals(List.of("ok:bo")) && !unreal.isShowing() && !SystemKeyboard.isShown(),
+        "the action key presses the dialog's positive button with the typed text");
+    unreal.show();
+    tap.accept("close");
+    check(answers.equals(List.of("ok:bo", "cancel")) && !unreal.isShowing() && !SystemKeyboard.isShown(),
+        "the close key presses its negative button");
+    check(logged.contains("dialog: Text field; the system keyboard answers"), "the text dialog is logged: " + logged);
   }
   private static void keyCharacterMap() throws Exception {
     var map = android.view.KeyCharacterMap.load(android.view.KeyCharacterMap.VIRTUAL_KEYBOARD);
@@ -2239,6 +2351,7 @@ public final class FrameworkTest {
         "default lifecycle has no menu termination admission state before a quit");
     questTlsClient();
     jsonStreams();
+    guestReflection();
     disabledTelemetry();
     androidCAStore();
     textToSpeech();

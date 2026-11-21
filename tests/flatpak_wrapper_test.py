@@ -41,6 +41,8 @@ def check_manifest() -> list[str]:
         "--filesystem=xdg-config/openvr:ro",
         "--filesystem=xdg-config/openvr/logs:create",
         "--device=shm",
+        # The host's IPC namespace: SteamVR's sandboxed client hung vrserver without it.
+        "--share=ipc",
         # WiVRn installed as a Flatpak.
         "--filesystem=xdg-data/flatpak/app/io.github.wivrn.wivrn:ro",
         "--filesystem=/var/lib/flatpak/app/io.github.wivrn.wivrn:ro",

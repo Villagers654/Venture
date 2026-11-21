@@ -38,6 +38,8 @@ TEST_CASE("funopen64 uses 64-bit seek callbacks and fread_unlocked bypasses floc
   CHECK(*thread.thread.errno_location() == err::kEINVAL);
   auto f = static_cast<GuestAddr>(call("funopen64", {h2g(&cookie), read, 0, seek, close}));
   REQUIRE(f != 0);
+  CHECK(call("setlinebuf", {f}) == 0); // bionic: setvbuf(f, NULL, _IOLBF, 0) (Kaldi ParseOptions)
+  call("setbuffer", {f, 0, 0}); // NULL buffer: unbuffered
   REQUIRE(call("setvbuf", {f, 0, 2, 0}) == 0); // _IONBF, exercise callbacks directly
   const std::uint64_t large = (1ull << 33) + 17;
   REQUIRE(call("fseeko64", {f, large, 0}) == 0);

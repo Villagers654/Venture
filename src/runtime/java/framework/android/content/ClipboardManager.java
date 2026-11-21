@@ -65,4 +65,9 @@ public class ClipboardManager extends android.text.ClipboardManager {
     }
     for (var l : current) l.onPrimaryClipChanged();
   }
+  // TextView asks this to decide whether Paste is offered.
+  public ClipDescription getPrimaryClipDescription() {
+    ClipData clip = getPrimaryClip();
+    return clip == null ? null : clip.getDescription();
+  }
 }

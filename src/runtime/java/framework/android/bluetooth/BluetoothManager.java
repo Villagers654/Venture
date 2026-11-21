@@ -4,7 +4,7 @@ package android.bluetooth;
 public final class BluetoothManager {
   private final android.content.Context context;
   private final BluetoothAdapter adapter;
-  public BluetoothManager() { this(new android.content.Context()); }
+  public BluetoothManager() { this(com.venture.runtime.Components.newContext()); }
   public BluetoothManager(android.content.Context context) {
     this.context = java.util.Objects.requireNonNull(context);
     adapter = new BluetoothAdapter(context);

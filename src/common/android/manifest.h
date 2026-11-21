@@ -20,6 +20,8 @@ struct Manifest {
   struct LaunchFilter {
     bool alias = false;  // on an <activity-alias>, which some shells do not start
     std::vector<std::string> categories;
+    std::string activity;    // its activity's android:name, as written
+    bool immersive = false;  // that activity has an immersive (VR) category in any of its filters
   };
   std::vector<LaunchFilter> launch_filters;
   std::vector<std::string> native_libraries;  // <uses-native-library> names: system libraries the app asks for
@@ -28,6 +30,11 @@ struct Manifest {
 // without a package.
 Manifest parse_manifest(std::span<const std::uint8_t> xml);
 Manifest read_apk(const fs::path &apk);
+// Whether the activity a headset launches is a 2D panel rather than immersive:
+// the first MAIN filter with INFO, then LAUNCHER, then Quest's VR category picks
+// it, and it is 2D unless one of its filters names an immersive category or it is
+// a NativeActivity (the runtime's own rule, core/device_identity.h).
+bool launches_2d(const Manifest &m);
 Manifest read_apk(std::span<const std::uint8_t> apk);  // an APK in memory
 // resources.arsc lookups as Android resolves them for an en-US device. Both
 // follow references and return an empty string for missing or odd entries.

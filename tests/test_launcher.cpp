@@ -1,3 +1,4 @@
+#include "common/standalone.h"
 #include "common/environment.h"
 #include "launcher/exit_report.h"
 #include "launcher/debug_report.h"
@@ -13,6 +14,8 @@
 #include "common/process.h"
 #include "common/secret_store.h"
 #include "common/openxr_layers.h"
+#include "common/injected_modules.h"
+#include "common/log.h"
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
@@ -525,10 +528,10 @@ TEST_CASE(
   result = library::scan(d.root);
   CHECK(result[0].complete);
   CHECK(result[0].bytes == 9);
-  paths::atomic_write(dir / p.files[2].name, "X");
+  paths::atomic_write(dir / p.files[2].name, "");
   CHECK_FALSE(library::scan(d.root)[0].complete);
 }
-TEST_CASE("a replaced OBB keeps the install complete and is named, other files are still size-checked") {
+TEST_CASE("replaced OBB and asset files keep the install complete and are named, the APK is still size-checked") {
   Directory d;
   auto p = meta::build_plan("123456", binary());
   auto dir = paths::game_dir(d.root, p.package, p.version_code);
@@ -549,8 +552,14 @@ TEST_CASE("a replaced OBB keeps the install complete and is named, other files a
   paths::atomic_write(dir / p.files[1].name, "");
   CHECK_FALSE(library::scan(d.root)[0].complete);
   CHECK(library::replaced_files(dir, p).empty());
-  // The APK and other files keep their size check.
+  // An asset file the player edited (H3VR2's .hdog files) is a replacement too.
   paths::atomic_write(dir / p.files[1].name, "OBB");
+  REQUIRE(p.files[2].kind == "asset");
+  paths::atomic_write(dir / p.files[2].name, "MODDED ASSET");
+  CHECK(library::scan(d.root)[0].complete);
+  CHECK(library::scan(d.root)[0].replaced == std::vector<std::string>{p.files[2].name});
+  paths::atomic_write(dir / p.files[2].name, "AB");
+  // The APK keeps its size check.
   paths::atomic_write(dir / p.files[0].name, "ABCDE");
   CHECK_FALSE(library::scan(d.root)[0].complete);
   CHECK(library::scan(d.root)[0].replaced.empty());
@@ -667,8 +676,9 @@ TEST_CASE("display settings save globally and per game, migrate unknown values a
 TEST_CASE("the desktop mirror is on by default, opt out globally or per game") {
   Directory d;
   auto settings = library::Settings::defaults(d.root);
-  CHECK(settings.display.mirror == "cropped");
-  CHECK(library::mirror_environment(settings.display) == "cropped");
+  // Automatic: cropped on a PC (and in this test, which has no headset panel).
+  CHECK(settings.display.mirror == "auto");
+  CHECK(library::mirror_environment(settings.display) == library::automatic_mirror());
   settings.display.mirror = "full";
   auto off = library::game_display_defaults();
   off.mirror = "off";
@@ -686,8 +696,29 @@ TEST_CASE("the desktop mirror is on by default, opt out globally or per game") {
   json["gameDisplay"] = {{"1", {{"resolution", "go"}}}};
   paths::atomic_write(d.root / "settings.json", json.dump());
   loaded = library::Settings::load(d.root);
-  CHECK(loaded.display.mirror == "cropped");
+  CHECK(loaded.display.mirror == "auto");
   CHECK(loaded.game_display["1"].mirror.empty());
+  // "cropped" saved before "auto" existed was the old default: automatic now.
+  // Once saved again, a chosen "cropped" stays.
+  json["display"] = {{"resolution", "runtime"}, {"mirror", "cropped"}};
+  paths::atomic_write(d.root / "settings.json", json.dump());
+  loaded = library::Settings::load(d.root);
+  CHECK(loaded.display.mirror == "auto");
+  loaded.display.mirror = "cropped";
+  loaded.save(d.root);
+  CHECK(library::Settings::load(d.root).display.mirror == "cropped");
+}
+TEST_CASE("a standalone headset is one whose only displays are built-in DSI panels") {
+  using standalone::classify;
+  CHECK(classify({{"DSI-1", true}, {"DSI-2", true}, {"HDMI-A-1", false}}).standalone);
+  // An Arm or x86 laptop's own panel is eDP; any external monitor rules it out.
+  CHECK_FALSE(classify({{"eDP-1", true}}).standalone);
+  CHECK_FALSE(classify({{"DSI-1", true}, {"DP-1", true}}).standalone);
+  CHECK_FALSE(classify({{"HDMI-A-1", true}}).standalone);
+  // Nothing visible: not a headset.
+  CHECK_FALSE(classify({}).standalone);
+  CHECK_FALSE(classify({{"DSI-1", false}}).standalone);
+  CHECK(classify({{"DSI-1", true}}).reason.find("DSI-1") != std::string::npos);
 }
 TEST_CASE("the desktop mirror shows the left eye by default, the right globally or per game") {
   Directory d;
@@ -1333,6 +1364,159 @@ TEST_CASE("a game closed while hung reports that it stopped responding, not a st
   const std::string segv = "  700.0 3 E [libc] Fatal signal 11 (SIGSEGV), code 1 (SEGV_MAPERR), fault addr 0x0 in tid 1003\n";
   CHECK(library::runtime_failure(header + rows + segv, 139).ends_with("Last error: Fatal signal 11 (SIGSEGV), code 1 "
                                                                        "(SEGV_MAPERR), fault addr 0x0 in tid 1003"));
+}
+
+TEST_CASE("a GPU device loss is reported as the reason, not as a hang") {
+  // A Pavlov report (0.2.5, RX 6750 XT): the device-loss path logs every guest
+  // thread's stack as a snapshot before ending the app, so the launcher said the
+  // game stopped responding, and a repeated error summary came after the loss.
+  const std::string lost =
+      "  537.552 3 W [vulkan-fault] lost device: AMD Radeon RX 6750 XT (vendor=0x1002, device=0x73df)\n"
+      "  537.557 3 E [signal] guest tid 1024: vkQueueSubmit returned VK_ERROR_DEVICE_LOST; guest registers and "
+      "frames:\n"
+      "  537.574 3 E [startup-snapshot] raw guest stacks reason=vulkan-device-lost registry_available=true "
+      "dropped=0 state=last-saved\n"
+      "  537.575 3 E [startup-snapshot] guest tid=1000 pc=0x100000009f28 (host call libc.so!usleep) lr=0x0 "
+      "sp=0x1000044045f0\n"
+      "  537.696 3 E [vulkan-fault] Native Vulkan device lost on guest tid 1024; ending the app as a fatal error\n"
+      "  537.704 5 E [bhaptics] getBondedDevices: Need android.permission.BLUETOOTH_CONNECT permission (3 times "
+      "in the last 9.5 s)\n";
+  CHECK(library::runtime_failure(lost, 1) ==
+        "The runtime stopped unexpectedly (exit code 1). Last error: Native Vulkan device lost on guest tid 1024; "
+        "ending the app as a fatal error");
+  // ANGLE's GL_CONTEXT_LOST ends the app the same way.
+  const std::string angle =
+      "  12.0 3 E [startup-snapshot] guest tid=1000 pc=0x0 lr=0x0 sp=0x0\n"
+      "  12.1 3 E [gfx] ANGLE: GL_CONTEXT_LOST (glGetError); the GPU device was lost, ending the app as a fatal "
+      "error\n";
+  CHECK(library::runtime_failure(angle, 1).ends_with(
+      "Last error: ANGLE: GL_CONTEXT_LOST (glGetError); the GPU device was lost, ending the app as a fatal error"));
+
+  // A capture tool injected into the game (Medal on an AMD RX 6750 XT): the
+  // launcher names it before the device loss, from the runtime's last check.
+  const std::string medal =
+      "  2.0 1 W [modules] Injected modules: Medal\n"
+      "  500.0 3 I [modules] Injected module: C:\\Users\\u\\AppData\\Local\\Medal\\MedalHook_x64.dll (product "
+      "\"Medal\")\n"
+      "  537.0 3 W [modules] Injected modules: Medal, OBS Studio\n";
+  CHECK(library::runtime_failure(medal + lost, 1) ==
+        "The runtime stopped unexpectedly (exit code 1). Capture or overlay programs (Medal, OBS Studio) were loaded "
+        "into the game. Close them fully, then try again. Last error: Native Vulkan device lost on guest tid 1024; "
+        "ending the app as a fatal error");
+  CHECK(library::runtime_failure("  2.0 1 W [modules] Injected modules: Medal\n" + angle, 1)
+            .starts_with("The runtime stopped unexpectedly (exit code 1). A capture or overlay program (Medal) was "
+                         "loaded into the game. Close it fully, then try again. Last error: ANGLE: GL_CONTEXT_LOST"));
+  // The last check found none: nothing to name.
+  CHECK(library::runtime_failure(medal + "  537.5 3 I [modules] Injected modules: none\n" + lost, 1) ==
+        "The runtime stopped unexpectedly (exit code 1). Last error: Native Vulkan device lost on guest tid 1024; "
+        "ending the app as a fatal error");
+  // A crash that is not a device loss is not blamed on them.
+  const std::string segv = "  700.0 3 E [libc] Fatal signal 11 (SIGSEGV), code 1 (SEGV_MAPERR), fault addr 0x0 in tid 3\n";
+  CHECK(library::runtime_failure(medal + segv, 139).find("overlay") == std::string::npos);
+}
+
+TEST_CASE("injected modules: what counts as injected, its program name and the log lines") {
+  using namespace venture::injected_modules;
+  const std::vector<std::string> roots = {"C:\\Windows\\System32", "C:\\Windows\\SysWOW64", "C:\\Windows\\WinSxS",
+                                          "C:\\Program Files\\Venture\\", "D:\\Steam\\steamapps\\common\\SteamVR"};
+  // Windows' folders (the DriverStore is in System32), Venture's install and the runtime: case and separators aside.
+  CHECK(inside("C:\\WINDOWS\\system32\\kernel32.dll", roots, true));
+  CHECK(inside("c:/windows/System32/DriverStore/FileRepository/u0401234.inf_amd64/B401/amdvlk64.dll", roots, true));
+  CHECK(inside("C:\\Windows\\WinSxS\\amd64_microsoft.windows.common-controls\\comctl32.dll", roots, true));
+  CHECK(inside("C:\\Program Files\\Venture\\java\\bin\\server\\jvm.dll", roots, true));
+  CHECK(inside("C:\\Program Files\\Venture\\libEGL.dll", roots, true));
+  CHECK(inside("D:\\Steam\\steamapps\\common\\SteamVR\\bin\\win64\\vrclient_x64.dll", roots, true));
+  // Not a prefix of a different folder, and not elsewhere.
+  CHECK_FALSE(inside("C:\\Program Files\\Venture Tools\\hook.dll", roots, true));
+  CHECK_FALSE(inside("C:\\Windows\\System32", roots, true));
+  CHECK_FALSE(inside("C:\\Users\\u\\AppData\\Local\\Medal\\app-4.2\\MedalHook_x64.dll", roots, true));
+  CHECK_FALSE(inside("C:\\Windows\\Temp\\hook.dll", roots, true));
+  // Linux paths compare exactly.
+  const std::vector<std::string> posix = {"/usr/lib"};
+  CHECK(inside("/usr/lib/libc.so.6", posix, false));
+  CHECK_FALSE(inside("/USR/lib/libc.so.6", posix, false));
+
+  // The program a user knows: product, else description, else file name.
+  const Module medal{"C:\\Users\\u\\AppData\\Local\\Medal\\MedalHook_x64.dll", "Medal", "Medal B.V.", "Medal hook",
+                     "4.2.0.0"};
+  const Module described{"C:\\Tools\\capture64.dll", "", "Example Co", "Example Capture Hook", ""};
+  const Module bare{"C:\\Tools\\inject64.dll"};
+  const Module comma{"/opt/x/libhook.so", "Hook, Inc. Overlay"};
+  CHECK(program_name(medal) == "Medal");
+  CHECK(program_name(described) == "Example Capture Hook");
+  CHECK(program_name(bare) == "inject64.dll");
+  CHECK(program_name(comma) == "Hook Inc. Overlay");
+  const Module medal_overlay{"C:\\Users\\u\\AppData\\Local\\Medal\\MedalOverlay.dll", "Medal"};
+  CHECK(summary(std::vector<Module>{medal, medal_overlay, bare}) == "Medal, inject64.dll");
+  CHECK(summary(std::vector<Module>{}) == "none");
+  CHECK(detail(medal) == "C:\\Users\\u\\AppData\\Local\\Medal\\MedalHook_x64.dll (product \"Medal\", company "
+                         "\"Medal B.V.\", version \"4.2.0.0\")");
+  CHECK(detail(described) == "C:\\Tools\\capture64.dll (company \"Example Co\", description \"Example Capture Hook\")");
+  CHECK(detail(bare) == "C:\\Tools\\inject64.dll");
+
+  // Read back from a runtime log: the last summary, every detail once.
+  const std::string log = "  1.0 1 I [modules] Injected module: C:\\a.dll\r\n"
+                          "  1.0 1 W [modules] Injected modules: A\r\n"
+                          "  2.0 1 I [other] Injected modules: not a module line\n"
+                          "  3.0 1 I [modules] Injected module: C:\\b.dll (product \"B\")\n"
+                          "  3.0 1 I [modules] Injected module: C:\\a.dll\n"
+                          "  3.0 1 W [modules] Injected modules: A, B\n";
+  CHECK(last_programs(log) == "A, B");
+  CHECK(details(log) == std::vector<std::string>{"C:\\a.dll", "C:\\b.dll (product \"B\")"});
+  CHECK(last_programs(log + "  4.0 1 I [modules] Injected modules: none\n").empty());
+  CHECK(last_programs("").empty());
+  // The program that started Venture (Steam, from a library shortcut): the folders of its
+  // ancestors, not the system's or Venture's own, and its modules listed but never named.
+  const std::vector<std::string> ancestors = {"C:\\Program Files\\Venture\\venture.exe",
+                                              "D:\\Steam\\steam.exe", "C:\\WINDOWS\\explorer.exe",
+                                              "C:\\Windows\\System32\\svchost.exe", "d:/steam/steamwebhelper.exe"};
+  const std::vector<std::string> excluded = {"C:\\Windows", "C:\\Program Files\\Venture"};
+  CHECK(starter_folders(ancestors, excluded, true) == std::vector<std::string>{"D:\\Steam"});
+  CHECK(starter_folders(std::vector<std::string>{"/usr/bin/bash", "/home/u/.steam/steam/ubuntu12_32/steam"},
+                        std::vector<std::string>{"/usr"}, false) ==
+        std::vector<std::string>{"/home/u/.steam/steam/ubuntu12_32"});
+  CHECK(starter_folders(std::vector<std::string>{"steam.exe", "/init"}, excluded, true).empty());
+  Module overlay{"D:\\Steam\\gameoverlayrenderer64.dll", "Steam", "Valve Corporation"};
+  overlay.from_starter = inside(overlay.path, starter_folders(ancestors, excluded, true), true);
+  CHECK(overlay.from_starter);
+  CHECK(summary(std::vector<Module>{overlay}) == "none");
+  CHECK(summary(std::vector<Module>{overlay, medal}) == "Medal");
+  CHECK(detail(overlay) == "D:\\Steam\\gameoverlayrenderer64.dll (product \"Steam\", company \"Valve Corporation\", "
+                           "from the program that started Venture)");
+  CHECK(detail(Module{"D:\\Steam\\x.dll", "", "", "", "", true}) ==
+        "D:\\Steam\\x.dll (from the program that started Venture)");
+  CHECK(device_loss_advice("Medal") ==
+        "A capture or overlay program (Medal) was loaded into the game. Close it fully, then try again.");
+
+  // A forced check is logged, also when it finds nothing (the runtime tests in this
+  // process may have made the first check already).
+  {
+    const auto path = fs::temp_directory_path() / ("venture-modules-log-" + std::to_string(current_process_id()));
+    const auto level = log::level();  // other tests may have raised it
+    log::set_level(log::Level::info);
+    log::set_file(paths::utf8(path));
+    log_loaded(true);
+    log::set_file("");
+    log::set_level(level);
+    std::ifstream in(path, std::ios::binary);
+    const std::string text{std::istreambuf_iterator<char>(in), {}};
+    in.close();
+    fs::remove(path);
+    CHECK(text.find("[modules] Injected modules: ") != std::string::npos);
+  }
+
+  // This process: whatever is listed comes from none of the system's folders.
+  const auto modules = scan();
+  for (const auto &module : modules) {
+    INFO(module.path);
+    CHECK_FALSE(module.path.empty());
+#ifdef _WIN32
+    std::string low = module.path;
+    for (auto &c : low) c = char(std::tolower(static_cast<unsigned char>(c)));
+    CHECK(low.find("\\system32\\") == std::string::npos);
+    CHECK(low.find("\\winsxs\\") == std::string::npos);
+#endif
+  }
 }
 
 TEST_CASE("a HotSpot fatal error report names the native crash like Venture's crash reporter") {

@@ -692,6 +692,31 @@ TEST_CASE("libc B: memfd seals positional I/O and UTF-8 streams") {
   CHECK(fd_pread(fd, bytes, 4, 0) == 4);
   CHECK(std::string(bytes, 4) == "abcd");
   FdTable::get().close(fd);
+  // A shared mapping (liblinkernsbypass patches a library copy through one):
+  // the bytes move to a host file, and descriptor I/O, the mapping, size and
+  // seals stay one object. The file is in the host cache and goes on close.
+  fd = call("memfd_create", {h2g("shared"), 2});
+  REQUIRE(fd >= 0);
+  const auto u = static_cast<std::uint64_t>(fd);
+  CHECK(fd_write(fd, "abcd", 4) == 4);
+  REQUIRE(call("ftruncate", {u, 8192}) == 0);
+  auto view = call("mmap", {0, 8192, 3, 1, u, 0});
+  REQUIRE(view > 0);
+  CHECK(std::string(g2h<char>(view), 4) == "abcd");
+  std::memcpy(g2h<char>(view) + 4096, "efgh", 4);
+  CHECK(fd_pread(fd, bytes, 4, 4096) == 4);
+  CHECK(std::string(bytes, 4) == "efgh");
+  CHECK(fd_pwrite(fd, "ijkl", 4, 0) == 4);
+  CHECK(std::string(g2h<char>(view), 4) == "ijkl");
+  CHECK(fd_seek(fd, 0, 2) == 8192);
+  CHECK(fd_fcntl(fd, 1033, 2 | 4) == 0);
+  CHECK(call("ftruncate", {u, 4096}) == -1);
+  CHECK(fd_pwrite(fd, "m", 1, 8192) == -err::eperm);
+  const auto memfd_dir = process_config().cache_dir / "memfd";
+  CHECK(std::distance(std::filesystem::directory_iterator(memfd_dir), {}) == 1);
+  CHECK(call("munmap", {static_cast<GuestAddr>(view), 8192}) == 0);
+  FdTable::get().close(fd);
+  CHECK(std::filesystem::is_empty(memfd_dir));
   char buffer[32]{};
   auto file = call("fmemopen", {h2g(buffer), 32, h2g("w+")});
   REQUIRE(file);

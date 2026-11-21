@@ -9,6 +9,7 @@ std::uint64_t frames_submitted();
 // The host session's last XrSessionState; a game is expected to render only while focused.
 void note_host_session_state(int state);
 bool host_session_focused();
+int host_session_state();
 // Any host session of this process reached FOCUSED (input was deliverable).
 bool host_session_ever_focused();
 // VENTURE_FIRST_FRAME_SNAPSHOT_SECONDS, which also requests a native dump and

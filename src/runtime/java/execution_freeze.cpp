@@ -153,6 +153,9 @@ bool in_host_query(jvmtiEnv* ti, jthread thread, jint state) {
   return top_native_is(ti, thread, state, [](std::string_view c, std::string_view m) {
     constexpr std::string_view queries[] = {"processMemory", "debuggerConnected", "systemProperty", "isMusicActive",
                                             "audioOutputProperties", "audioDevices"};
+    // The 2D panel's input thread waits in nativeEvents for the window's next
+    // events; it posts them to the main thread and runs no app code itself.
+    if (c == "Lcom/venture/runtime/layoutlib/PanelHost;") return m == "nativeEvents";
     return c == "Lcom/venture/runtime/NativeHost;" && std::ranges::find(queries, m) != std::end(queries);
   });
 }

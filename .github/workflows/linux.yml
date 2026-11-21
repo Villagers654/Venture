@@ -171,6 +171,9 @@ jobs:
         if: inputs.package
         with:
           name: linux
-          path: dist/packages/Venture-*
+          # The Android 2D component (layoutlib), downloaded on demand: x86_64 only.
+          path: |
+            dist/packages/Venture-*
+            dist/Venture-layoutlib-*.zip
           if-no-files-found: error
           compression-level: 0

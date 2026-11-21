@@ -111,3 +111,28 @@ extern "C" VENTURE_MOCK_EXPORT void ventureMockXrEndSession();
 extern "C" VENTURE_MOCK_EXPORT void ventureMockXrLoseSession();
 extern "C" VENTURE_MOCK_EXPORT bool ventureMockXrAwaitHaptics(std::uint32_t count,
                                                     std::uint32_t milliseconds);
+// Waits until at least `count` xrStopHapticFeedback calls have been accepted.
+extern "C" VENTURE_MOCK_EXPORT bool ventureMockXrAwaitHapticStops(std::uint32_t count,
+                                                        std::uint32_t milliseconds);
+// Every haptic output call (xrApplyHapticFeedback, xrStopHapticFeedback) takes this long,
+// without holding the mock's own lock: a slow runtime's haptics. VENTURE_MOCK_HAPTIC_DELAY_MS
+// sets it for a whole run; this overrides it (negative: back to the environment).
+extern "C" VENTURE_MOCK_EXPORT void ventureMockXrSetHapticDelay(std::int64_t microseconds);
+// While held, every haptic output call blocks (before its delay, without the mock's lock)
+// until released; the await waits until one is blocked there.
+extern "C" VENTURE_MOCK_EXPORT void ventureMockXrGateHaptics(bool hold);
+extern "C" VENTURE_MOCK_EXPORT bool ventureMockXrAwaitGatedHaptic(std::uint32_t milliseconds);
+// One accepted output on a hand: a core pulse (amplitude, duration) or, with
+// VENTURE_MOCK_PCM_RATE above 0, a native PCM buffer (peak amplitude, samples, rate).
+struct MockXrHapticRecord {
+  std::uint64_t time_ns;  // steady clock, when the call was accepted
+  std::uint32_t hand;     // 0 left, 1 right
+  float amplitude;
+  std::int64_t duration_ns;
+  std::uint32_t pcm_samples;  // 0 for a core pulse
+  float pcm_rate;
+  std::uint32_t append;       // a PCM buffer appended to the previous one
+};
+// Copies up to capacity records (oldest first) and returns how many there are; clear drops them.
+extern "C" VENTURE_MOCK_EXPORT std::uint32_t ventureMockXrHapticLog(MockXrHapticRecord *out, std::uint32_t capacity);
+extern "C" VENTURE_MOCK_EXPORT void ventureMockXrClearHapticLog();

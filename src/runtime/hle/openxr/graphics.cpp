@@ -151,6 +151,220 @@ XrResult create_gles_storage(Swapchain& record) {
   record.images.assign(images.begin(), images.end());
   return XR_SUCCESS;
 }
+bool depth_format(std::int64_t format) {
+  switch (VkFormat(format)) {
+  case VK_FORMAT_D16_UNORM: case VK_FORMAT_X8_D24_UNORM_PACK32: case VK_FORMAT_D32_SFLOAT:
+  case VK_FORMAT_D16_UNORM_S8_UINT: case VK_FORMAT_D24_UNORM_S8_UINT: case VK_FORMAT_D32_SFLOAT_S8_UINT:
+  case VK_FORMAT_S8_UINT: return true;
+  default: return false;
+  }
+}
+// XR_FB_color_space emulation can apply to this chain at any time (the game may
+// set a color space whenever it likes), which needs a pass over every frame.
+bool color_space_emulated(const XrSwapchainCreateInfo& info) {
+  return enabled("XR_FB_color_space") && !host_xr().enabled_extensions.contains("XR_FB_color_space") &&
+         (info.usageFlags & XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT);
+}
+// Zero-copy chains (docs/design/zero-copy-eyes.md). The game's queue work
+// must reach the host queue before the host may read an image.
+XrResult flush_guest_queue() {
+  return vulkan::flush_queue_submissions(state().graphics.device, state().graphics.queueFamilyIndex,
+                                         state().guest_graphics_queue_index) == VK_SUCCESS
+             ? XR_SUCCESS : XR_ERROR_RUNTIME_FAILURE;
+}
+// The game left the held image in another layout than OpenXR's attachment
+// layout (tracked from its submissions): move it back before the host takes it.
+XrResult restore_attachment_layout(Swapchain& r, std::uint32_t index) {
+  const auto image = r.images.at(index).image;
+  const auto layouts = vulkan::tracked_layouts(image);
+  const bool depth = depth_format(r.info.format);
+  const auto attachment = depth ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL : VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+  if (std::all_of(layouts.begin(), layouts.end(), [&](VkImageLayout l) { return l == attachment; })) return XR_SUCCESS;
+  static std::atomic_flag reported = ATOMIC_FLAG_INIT;
+  if (!reported.test_and_set(std::memory_order_relaxed))
+    log::info("xr", "The game released a zero-copy swapchain image in layout {}; it goes to the host in the "
+              "attachment layout", int(layouts.empty() ? VK_IMAGE_LAYOUT_UNDEFINED : layouts.front()));
+  const auto layers = r.info.arraySize * r.info.faceCount;
+  auto result = r.backing->submit(index, [&](VkCommandBuffer command, VkImage target, VkImageLayout layout) {
+    std::vector<VkImageMemoryBarrier> barriers;
+    for (std::uint32_t layer = 0; layer < layers && layer < layouts.size(); ++layer) {
+      if (layouts[layer] == layout) continue;
+      VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+      b.image = target;
+      b.oldLayout = layouts[layer];
+      b.newLayout = layout;
+      b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+      b.srcAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+      b.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+      b.subresourceRange = {VkImageAspectFlags(depth ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT), 0, 1,
+                            layer, 1};
+      if (depth && (r.info.format == VK_FORMAT_D24_UNORM_S8_UINT || r.info.format == VK_FORMAT_D32_SFLOAT_S8_UINT ||
+                    r.info.format == VK_FORMAT_D16_UNORM_S8_UINT))
+        b.subresourceRange.aspectMask |= VK_IMAGE_ASPECT_STENCIL_BIT;
+      barriers.push_back(b);
+    }
+    reinterpret_cast<PFN_vkCmdPipelineBarrier>(gfx::gpu_device().get_instance_proc_addr(
+        state().graphics.instance, "vkCmdPipelineBarrier"))(
+        command, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr, 0, nullptr,
+        std::uint32_t(barriers.size()), barriers.data());
+    return XR_SUCCESS;
+  });
+  if (XR_SUCCEEDED(result)) vulkan::track_layouts(image, 1, layers, attachment);
+  return result;
+}
+// Gives the held image (the front of the host's acquisitions) back to the host.
+XrResult release_held(Swapchain& r) {
+  if (!r.held) return XR_SUCCESS;
+  const auto index = *r.held;
+  if (r.host_acquired.empty() || r.host_acquired.front() != index) return XR_ERROR_RUNTIME_FAILURE;
+  auto result = flush_guest_queue();
+  if (XR_SUCCEEDED(result)) result = restore_attachment_layout(r, index);
+  if (XR_FAILED(result)) return result;
+  {
+    HostQueueLock queue(session().uses_shared_gpu);
+    if (!queue) return XR_ERROR_RUNTIME_FAILURE;
+    result = venture::xr::dev_release_swapchain(r.direct_handle, nullptr, r.images.at(index).image);
+  }
+  if (XR_FAILED(result)) return result;
+  r.backing->set_owned(index, false);
+  r.ownership.at(index)->guest.store(false, std::memory_order_release);
+  r.host_acquired.pop_front();
+  r.held.reset();
+  return result;
+}
+// A chain whose images the game used while they were the host's, or one a
+// consumer needed after its image went back, keeps its images from now on.
+void check_ownership(Swapchain& r) {
+  if (!r.direct_handle || r.copy_always) return;
+  const auto owner = std::find_if(r.ownership.begin(), r.ownership.end(),
+      [](const auto& o) { return o && o->violated.load(std::memory_order_acquire); });
+  const bool violated = owner != r.ownership.end();
+  if (!violated && !r.backing->refused_unowned()) return;
+  r.copy_always = true;
+  if (violated)
+    log::warn("xr", "Swapchain {}x{}: the game moved zero-copy image {} to layout {} while the host runtime had it; "
+              "it presents through a copy from now on", r.info.width, r.info.height, owner - r.ownership.begin(),
+              (*owner)->violation_layout.load(std::memory_order_relaxed));
+  else
+    log::warn("xr", "Swapchain {}x{}: an image was needed after it went back to the host runtime; it presents "
+              "through a copy from now on", r.info.width, r.info.height);
+}
+// Releases every host acquisition (waiting those the game never waited) and
+// destroys the zero-copy host chain.
+XrResult destroy_direct_swapchain(Swapchain& r) {
+  if (!r.direct_handle) return XR_SUCCESS;
+  const auto drained = r.backing->drain();
+  if (drained != XR_SUCCESS) return drained;
+  for (const auto& image : r.images) vulkan::untrack_layouts(image.image);
+  HostQueueLock queue(session().uses_shared_gpu);
+  if (!queue) return XR_ERROR_RUNTIME_FAILURE;
+  while (!r.host_acquired.empty()) {
+    const auto index = r.host_acquired.front();
+    if (r.host_unwaited.at(index)) {
+      XrSwapchainImageWaitInfo wait{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO, nullptr, 1'000'000'000};
+      if (::xrWaitSwapchainImage(r.direct_handle, &wait) != XR_SUCCESS) break;
+      r.host_unwaited[index] = 0;
+    }
+    if (XR_FAILED(::xrReleaseSwapchainImage(r.direct_handle, nullptr))) break;
+    r.host_acquired.pop_front();
+  }
+  // A chain with acquisitions left is destroyed, never parked for reuse.
+  const auto result = r.host_acquired.empty() ? venture::xr::dev_destroy_swapchain(r.direct_handle)
+                                              : ::xrDestroySwapchain(r.direct_handle);
+  if (XR_SUCCEEDED(result)) {
+    r.direct_handle = XR_NULL_HANDLE;
+    r.host_acquired.clear();
+    r.held.reset();
+  }
+  return result;
+}
+// Why the chain keeps private images and a copy; nullptr when its images can
+// be the host's. `offered`: the host lists `info.format`.
+const char* zero_copy_refusal(const XrSwapchainCreateInfo& info, bool guest_only, bool offered) {
+  if (!zero_copy_enabled()) return "zero-copy is off";
+  if (info.createFlags & XR_SWAPCHAIN_CREATE_STATIC_IMAGE_BIT) return "a static image";
+  if (info.mipCount != 1) return "mipmapped";
+  if (info.faceCount != 1) return "a cube";
+  if (guest_only) return "depth the host does not take";
+  if (!offered) return "its format is converted for the host";
+  if (color_space_emulated(info)) return "the game's color space is emulated";
+  if ((info.usageFlags & XR_SWAPCHAIN_USAGE_INPUT_ATTACHMENT_BIT_KHR) &&
+      !host_xr().enabled_extensions.contains("XR_KHR_swapchain_usage_input_attachment_bit"))
+    return "input attachment usage the host lacks";
+  XrSystemProperties properties{XR_TYPE_SYSTEM_PROPERTIES};
+  if (XR_SUCCEEDED(::xrGetSystemProperties(host_xr().instance, host_xr().system, &properties))) {
+    const auto& limits = properties.graphicsProperties;
+    if ((limits.maxSwapchainImageWidth && info.width > limits.maxSwapchainImageWidth) ||
+        (limits.maxSwapchainImageHeight && info.height > limits.maxSwapchainImageHeight))
+      return "larger than the host's maximum";
+  }
+  return nullptr;
+}
+// Makes `record` a zero-copy chain: a host chain like the game's, whose images
+// the game gets. On any refusal the record is unchanged and `why` says why.
+void create_direct_swapchain(Swapchain& record, bool guest_only, bool offered, std::string& why) {
+  if (const auto* refusal = zero_copy_refusal(record.info, guest_only, offered)) {
+    why = refusal;
+    return;
+  }
+  const bool depth = depth_format(record.info.format);
+  auto host = record.info;
+  host.next = nullptr;
+  // Venture's own reads of a held image (mirror, eye check, a copy on frames
+  // that need one) and the attachment layout OpenXR promises.
+  host.usageFlags |= XR_SWAPCHAIN_USAGE_TRANSFER_SRC_BIT |
+      (depth ? XR_SWAPCHAIN_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT
+             : XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT | XR_SWAPCHAIN_USAGE_SAMPLED_BIT);
+  XrSwapchain handle{};
+  XrResult result;
+  {
+    HostQueueLock queue(session().uses_shared_gpu);
+    if (!queue) { why = "the host queue is unavailable"; return; }
+    result = venture::xr::dev_create_swapchain(session().handle, &host, &handle);
+  }
+  std::vector<XrSwapchainImageVulkanKHR> images;
+  std::uint32_t count{};
+  if (XR_SUCCEEDED(result)) result = ::xrEnumerateSwapchainImages(handle, 0, &count, nullptr);
+  if (XR_SUCCEEDED(result) && !count) result = XR_ERROR_RUNTIME_FAILURE;
+  if (XR_SUCCEEDED(result)) {
+    images.assign(count, {XR_TYPE_SWAPCHAIN_IMAGE_VULKAN_KHR});
+    result = ::xrEnumerateSwapchainImages(handle, count, &count,
+        reinterpret_cast<XrSwapchainImageBaseHeader*>(images.data()));
+  }
+  std::unique_ptr<GuestImages> backing;
+  if (XR_SUCCEEDED(result)) {
+    std::vector<VkImage> handles;
+    for (const auto& image : images) handles.push_back(image.image);
+    try {
+      backing = std::make_unique<GuestImages>(state().graphics, gfx::gpu_device().get_instance_proc_addr,
+                                              record.info, handles, !depth);
+    } catch (...) {
+      result = XR_ERROR_RUNTIME_FAILURE;
+    }
+  }
+  if (XR_FAILED(result)) {
+    if (handle) {
+      HostQueueLock queue(session().uses_shared_gpu);
+      if (queue) ::xrDestroySwapchain(handle);
+    }
+    why = std::format("the host refused its chain ({})", int(result));
+    return;
+  }
+  record.direct_handle = handle;
+  record.backing = std::move(backing);
+  record.images = std::move(images);
+  record.host_unwaited.assign(count, 0);
+  record.initialized.assign(count, 0);
+  for (const auto& image : record.images) {
+    vulkan::track_layouts(image.image, 1, record.info.arraySize * record.info.faceCount, VK_IMAGE_LAYOUT_UNDEFINED);
+    auto& owner = record.ownership.emplace_back(std::make_shared<vulkan::ImageOwnership>());
+    vulkan::watch_ownership(image.image, owner);
+  }
+}
+}
+bool zero_copy_enabled() {
+  const auto* value = venture::environment::getenv("VENTURE_XR_ZERO_COPY");
+  return value && std::string_view(value) == "1";
 }
 VkFormat gl_to_vk(std::int64_t format) {
   switch (format) {
@@ -196,24 +410,49 @@ std::vector<std::int64_t> gles_swapchain_formats(const std::vector<std::int64_t>
       if (std::find(gl.begin(), gl.end(), f) == gl.end()) gl.push_back(f);
   return gl;
 }
-XrResult convert_color_image(Swapchain& r, std::uint32_t index, XrColorSpaceFB space,
-                             bool external_queue_held, bool force_opaque, float underlay_opacity, bool premultiply,
-                             const std::array<float, 3>* key) {
+namespace {
+// The color space / alpha pass a host image of this chain needs, if any.
+struct ColorPass {
+  ColorImages* images;
+  ColorMatrix matrix;
+  ColorImages::Alpha alpha;
+  float opacity;
+  const std::array<float, 3>* key;
+};
+std::optional<ColorPass> color_pass(Swapchain& r, XrColorSpaceFB space, bool force_opaque, float underlay_opacity,
+                                    bool premultiply, const std::array<float, 3>* key) {
   const bool color_emulated = enabled("XR_FB_color_space") &&
       !host_xr().enabled_extensions.contains("XR_FB_color_space") &&
       space != XR_COLOR_SPACE_REC709_FB && space != XR_COLOR_SPACE_UNMANAGED_FB &&
       (r.info.usageFlags & XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT);
   const bool alpha = force_opaque || underlay_opacity != 1 || key;
   if ((!color_emulated && !alpha) || !(r.host_info.usageFlags & XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT))
-    return XR_SUCCESS;
+    return std::nullopt;
   auto& images = alpha ? r.alpha_images : r.color_images;
   if (!images) images = std::make_unique<ColorImages>(state().graphics,
       gfx::gpu_device().get_instance_proc_addr, r.host_info, r.host_images, false, alpha);
-  const auto matrix = color_matrix(color_emulated ? space : XR_COLOR_SPACE_REC709_FB, XR_COLOR_SPACE_REC709_FB);
-  const auto mode = force_opaque ? ColorImages::Alpha::opaque
-                  : premultiply ? ColorImages::Alpha::premultiply : ColorImages::Alpha::preserve;
-  return images->convert(index, matrix, external_queue_held, mode, force_opaque ? 1 : underlay_opacity,
-                         force_opaque ? nullptr : key);
+  return ColorPass{images.get(),
+                   color_matrix(color_emulated ? space : XR_COLOR_SPACE_REC709_FB, XR_COLOR_SPACE_REC709_FB),
+                   force_opaque ? ColorImages::Alpha::opaque
+                   : premultiply ? ColorImages::Alpha::premultiply : ColorImages::Alpha::preserve,
+                   force_opaque ? 1 : underlay_opacity, force_opaque ? nullptr : key};
+}
+// Whether the pass can draw from the game's image straight into the host
+// image (one pass that only writes the host image) rather than copy into it
+// and convert it in place, which reads the host image back.
+bool direct_color_pass(const Swapchain& r) {
+  return r.backing && r.backing->sampled() && r.info.format == r.host_info.format &&
+         r.info.width == r.host_info.width && r.info.height == r.host_info.height && !r.flip_rows &&
+         r.info.sampleCount == r.host_info.sampleCount && r.host_info.mipCount == 1 &&
+         r.info.arraySize * r.info.faceCount == r.host_info.arraySize * r.host_info.faceCount;
+}
+}  // namespace
+XrResult convert_color_image(Swapchain& r, std::uint32_t index, XrColorSpaceFB space,
+                             bool external_queue_held, bool force_opaque, float underlay_opacity, bool premultiply,
+                             const std::array<float, 3>* key) {
+  const auto pass = color_pass(r, space, force_opaque, underlay_opacity, premultiply, key);
+  if (!pass) return XR_SUCCESS;
+  return pass->images->convert(index, pass->matrix, external_queue_held, pass->alpha, pass->opacity, pass->key);
 }
 
 XrResult destroy_host_swapchain(Swapchain& r) {
@@ -244,6 +483,8 @@ XrRect2Di host_image_rect(const Swapchain& r, XrRect2Di rect) {
   const auto x1 = std::clamp<std::int64_t>(std::int64_t(rect.offset.x) + rect.extent.width, x0 + 1, gw);
   const auto y1 = std::clamp<std::int64_t>(std::int64_t(rect.offset.y) + rect.extent.height, y0 + 1, gh);
   rect = {{std::int32_t(x0), std::int32_t(y0)}, {std::int32_t(x1 - x0), std::int32_t(y1 - y0)}};
+  // A zero-copy image is the game's own: no flip, no scaling.
+  if (r.present_direct) return rect;
   if (r.textures.empty() == r.flip_rows) rect.offset.y = std::int32_t(gh - y1);
   return map_presentation_rect(rect, {r.info.width, r.info.height}, {r.host_info.width, r.host_info.height});
 }
@@ -278,8 +519,9 @@ bool scalable_color_format(std::int64_t format) {
 // VENTURE_XR_LAYER_CHECK=<n> checks every n-th copy instead (diagnostics only).
 bool eye_slice_check_due(Swapchain& r) {
   ++r.host_copies;
-  if (r.info.arraySize * r.info.faceCount < 2 || r.info.sampleCount != 1 ||
-      !(r.host_info.usageFlags & XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT))
+  const bool color = r.present_direct ? !depth_format(r.info.format)
+                                      : bool(r.host_info.usageFlags & XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT);
+  if (r.info.arraySize * r.info.faceCount < 2 || r.info.sampleCount != 1 || !color)
     return false;
   static const long every = [] {
     const auto* value = venture::environment::getenv("VENTURE_XR_LAYER_CHECK");
@@ -316,12 +558,76 @@ XrResult prepare_swapchains(const std::set<XrSwapchain>& submitted, bool force_o
     }
     return result;
   };
-  // First allocate all host handles; never evict a member of this frame while
-  // preparing another member. The limit is learned solely from host results.
+  // This frame's alpha pass for a chain (none: opaque false, opacity 1, no key).
+  struct FrameAlpha {
+    bool opaque = false;
+    float opacity = 1;
+    bool premultiply = false;
+    std::optional<std::array<float, 3>> key;
+  };
+  const auto frame_alpha = [&](XrSwapchain handle, bool color) {
+    FrameAlpha a;
+    a.opaque = force_opaque && color;
+    const bool lowest = !a.opaque && color && underlay && underlay->swapchains.contains(handle);
+    a.opacity = lowest ? underlay->opacity : 1;
+    a.premultiply = lowest && underlay->premultiply;
+    a.key = lowest ? underlay->key : std::nullopt;
+    return a;
+  };
   for (auto handle : submitted) {
     auto& r = s.swapchains.at(handle);
     if (r.operation_in_progress) return XR_ERROR_CALL_ORDER_INVALID;
     if (r.released_index < 0) return XR_ERROR_LAYER_INVALID;
+    r.present_direct = r.release_direct = false;
+  }
+  // First allocate all host handles; never evict a member of this frame while
+  // preparing another member. The limit is learned solely from host results.
+  for (auto handle : submitted) {
+    auto& r = s.swapchains.at(handle);
+    // A zero-copy chain presents its held image as it is unless this frame
+    // needs a copy: a flip, an alpha pass or a scaled eye.
+    if (r.direct_handle) {
+      check_ownership(r);
+      {
+        const VkExtent2D* eye_rect = nullptr;
+        if (eye_rects)
+          if (const auto found = eye_rects->find(handle); found != eye_rects->end()) eye_rect = &found->second;
+        const auto reported = venture::xr::reported_eye();
+        if (eye_rect && !std::exchange(r.eye_observed, true))
+          venture::xr::eye_scale::observe(reported.told, reported.target, *eye_rect);
+        const VkExtent2D size{r.info.width, r.info.height};
+        const auto scaled = eye_rect && r.info.sampleCount == 1 && scalable_color_format(r.info.format) && [&] {
+          const auto host = venture::xr::eye_presentation_extent(size, *eye_rect, reported.target);
+          return host.width != size.width || host.height != size.height;
+        }();
+        const bool color = !depth_format(r.info.format);
+        const auto alpha = frame_alpha(handle, color);
+        const bool converted = color && color_space_emulated(r.info) && s.color_space != XR_COLOR_SPACE_REC709_FB &&
+                               s.color_space != XR_COLOR_SPACE_UNMANAGED_FB;
+        const bool copy = r.copy_always || r.flip_rows || scaled || converted || alpha.opaque ||
+                          alpha.opacity != 1 || alpha.key;
+        if (!copy) {
+          r.present_direct = true;
+          r.release_direct = r.held.has_value();
+          continue;
+        }
+        if (!r.held) {
+          // The image is already the host's (presented, or given back before
+          // the game's next wait): the host chain keeps its last copy (for a
+          // copy_always chain even an older one), or without one the image is
+          // shown as it is.
+          if (!r.host_handle || (!r.copy_always && r.host_serial != r.release_serial)) {
+            r.present_direct = true;
+            static std::atomic_flag reported_late = ATOMIC_FLAG_INIT;
+            if (!reported_late.test_and_set(std::memory_order_relaxed))
+              log::warn("xr", "A zero-copy swapchain needed a copy after its image went back to the host; "
+                        "that image is shown as it is");
+          }
+          continue;
+        }
+        r.release_direct = true;  // copied into the host chain below, then given back
+      }
+    }
     if (r.host_handle) continue;
     r.host_info = r.info;
     r.host_info.next = nullptr;
@@ -416,12 +722,36 @@ XrResult prepare_swapchains(const std::set<XrSwapchain>& submitted, bool force_o
   for (auto handle : submitted) {
     auto& r = s.swapchains.at(handle);
     r.last_submitted = s.presentation_epoch;
+    if (r.present_direct) {
+      if (!r.release_direct) continue;  // the host has had this release since an earlier frame
+      // The held image is the game's eye itself: the eye slice check and the
+      // desktop mirror read it before it goes back to the host.
+      const auto held = *r.held;
+      const auto image = r.images.at(held).image;
+      const auto layers = r.info.arraySize * r.info.faceCount;
+      if (eye_slice_check_due(r))
+        log::info("xr", "Eye slice check after {} presentations ({}x{} arrays={}, zero-copy): {}", r.host_copies,
+                  r.info.width, r.info.height, r.info.arraySize,
+                  r.backing->sample_layers(held, image, VkFormat(r.info.format), {r.info.width, r.info.height},
+                                           layers));
+      if (mirror && handle == mirror->sub.swapchain && r.info.sampleCount == 1 && !depth_format(r.info.format) &&
+          mirror->sub.imageArrayIndex < r.info.arraySize) {
+        venture::xr::MirrorSource source{image, VkFormat(r.info.format), mirror->sub.imageArrayIndex,
+                                         host_image_rect(r, mirror->sub.imageRect)};
+        venture::xr::mirror_axis(mirror->fov, source.axis_x, source.axis_y);
+        venture::xr::mirror_capture(session().binding, session().uses_shared_gpu, source);
+      }
+      ++r.direct_frames;
+      continue;
+    }
+    // A zero-copy image the host already has keeps the host chain's last copy.
+    if (r.direct_handle && !r.held) continue;
     const bool color = r.host_info.usageFlags & XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT;
-    const bool opaque = force_opaque && color;
-    const bool lowest = !opaque && color && underlay && underlay->swapchains.contains(handle);
-    const float opacity = lowest ? underlay->opacity : 1;
-    const bool premultiply = lowest && underlay->premultiply;
-    const auto key = lowest ? underlay->key : std::nullopt;
+    const auto alpha = frame_alpha(handle, color);
+    const bool opaque = alpha.opaque;
+    const float opacity = alpha.opacity;
+    const bool premultiply = alpha.premultiply;
+    const auto key = alpha.key;
     if (r.host_serial == r.release_serial && r.host_color == s.color_space && r.host_flip == r.flip_rows &&
         r.host_opaque == opaque && r.host_underlay == opacity && r.host_premultiplied == premultiply &&
         r.host_key == key) continue;
@@ -441,17 +771,43 @@ XrResult prepare_swapchains(const std::set<XrSwapchain>& submitted, bool force_o
       destroy_host_swapchain(r); return result;
     }
     if (result == XR_SESSION_LOSS_PENDING) qualified = result;
-    result = r.backing->copy(std::uint32_t(r.released_index), r.host_images.at(target).image, VkFormat(r.host_info.format),
-                             {r.host_info.width, r.host_info.height}, r.flip_rows);
-    if (XR_SUCCEEDED(result))
-      result = convert_color_image(r, target, s.color_space, false, opaque, opacity, premultiply, key ? &*key : nullptr);
-    if (XR_SUCCEEDED(result) && eye_slice_check_due(r))
-      log::info("xr", "Eye slice check after {} copies ({}x{} arrays={} -> host {}x{} arrays={}): {}", r.host_copies,
-                r.info.width, r.info.height, r.info.arraySize, r.host_info.width, r.host_info.height,
-                r.host_info.arraySize,
-                r.backing->sample_layers(std::uint32_t(r.released_index), r.host_images.at(target).image,
-                                         VkFormat(r.host_info.format), {r.host_info.width, r.host_info.height},
-                                         r.host_info.arraySize * r.host_info.faceCount));
+    const auto released = std::uint32_t(r.released_index);
+    const auto host_image = r.host_images.at(target).image;
+    const auto sample = [&] {
+      return r.backing->sample_layers(released, host_image, VkFormat(r.host_info.format),
+                                      {r.host_info.width, r.host_info.height},
+                                      r.host_info.arraySize * r.host_info.faceCount);
+    };
+    const bool check = eye_slice_check_due(r);
+    const auto pass = color_pass(r, s.color_space, opaque, opacity, premultiply, key ? &*key : nullptr);
+    // A color pass draws from the game's image into the host image, which it
+    // only writes; reading a runtime's externally shared image back gave a
+    // solid fill on one driver (AMD with Virtual Desktop).
+    const char* path = pass ? "copy, then conversion in place" : "copy";
+    result = XR_ERROR_LIMIT_REACHED;
+    if (pass && direct_color_pass(r)) {
+      result = r.backing->submit(released, [&](VkCommandBuffer command, VkImage image, VkImageLayout layout) {
+        return pass->images->record_from(command, image, layout, target, pass->matrix, pass->alpha, pass->opacity,
+                                         pass->key);
+      });
+      path = "conversion pass from the game's image";
+    }
+    std::string after_copy;
+    if (result == XR_ERROR_LIMIT_REACHED) {
+      result = r.backing->copy(released, host_image, VkFormat(r.host_info.format),
+                               {r.host_info.width, r.host_info.height}, r.flip_rows);
+      // Sampled between the stages too, so a report tells a lost copy from a
+      // broken conversion.
+      if (XR_SUCCEEDED(result) && check && pass) after_copy = sample();
+      if (XR_SUCCEEDED(result) && pass)
+        result = pass->images->convert(target, pass->matrix, false, pass->alpha, pass->opacity, pass->key);
+    }
+    if (XR_SUCCEEDED(result) && check)
+      log::info("xr", "Eye slice check after {} copies ({}x{} arrays={} -> host {}x{} arrays={}, {}): {}{}{}",
+                r.host_copies, r.info.width, r.info.height, r.info.arraySize, r.host_info.width,
+                r.host_info.height, r.host_info.arraySize, path,
+                after_copy.empty() ? "" : "after the copy: ", after_copy.empty() ? "" : after_copy + "; at the end: ",
+                sample());
     // The desktop mirror blits the eye exactly as the headset gets it, before
     // the image goes back to the runtime.
     if (XR_SUCCEEDED(result) && mirror && handle == mirror->sub.swapchain && r.info.sampleCount == 1 &&
@@ -482,6 +838,19 @@ XrResult prepare_swapchains(const std::set<XrSwapchain>& submitted, bool force_o
     r.host_key = key;
   }
   return qualified;
+}
+XrResult release_direct_images(const std::set<XrSwapchain>& submitted) {
+  auto& s = state();
+  XrResult result = XR_SUCCESS;
+  for (auto handle : submitted) {
+    const auto found = s.swapchains.find(handle);
+    if (found == s.swapchains.end()) continue;
+    auto& r = found->second;
+    if (!std::exchange(r.release_direct, false) || !r.held) continue;
+    const auto released = release_held(r);
+    if (XR_FAILED(released)) result = released;
+  }
+  return result;
 }
 namespace guest {
 XrResult xrGetOpenGLESGraphicsRequirementsKHR(XrInstance instance, XrSystemId system,
@@ -710,12 +1079,26 @@ XrResult create_swapchain(XrSession handle, const XrSwapchainCreateInfo *info, X
   if (copy.createFlags & ~XR_SWAPCHAIN_CREATE_STATIC_IMAGE_BIT)
     return XR_ERROR_VALIDATION_FAILURE;
   const bool gles_ring = state().gles && !surface;
+  // A Vulkan chain renders straight into a host chain's images when nothing
+  // needs a private copy (docs/design/zero-copy-eyes.md).
+  std::string copy_reason = gles_ring ? "OpenGL ES" : surface ? "an Android surface" : "";
+  if (!gles_ring && !surface) create_direct_swapchain(record, guest_only, offered(copy.format), copy_reason);
+  {
+    static std::atomic_uint reports{};
+    if (reports.fetch_add(1, std::memory_order_relaxed) < 48)
+      log::info("xr", "Swapchain {}x{} format={} usage={:#x} arrays={} samples={} mips={}: {}", copy.width,
+                copy.height, copy.format, copy.usageFlags, copy.arraySize, copy.sampleCount, copy.mipCount,
+                record.direct_handle ? std::format("zero-copy, the host's {} images", record.images.size())
+                                     : "private images and a copy (" + copy_reason + ")");
+  }
   try {
-    // A GLES chain's slots start without private images (create_gles_storage).
-    record.backing = std::make_unique<GuestImages>(state().graphics,
-        gfx::gpu_device().get_instance_proc_addr, copy, gles_ring);
-    const auto images = record.backing->images();
-    record.images.assign(images.begin(), images.end());
+    if (!record.direct_handle) {
+      // A GLES chain's slots start without private images (create_gles_storage).
+      record.backing = std::make_unique<GuestImages>(state().graphics,
+          gfx::gpu_device().get_instance_proc_addr, copy, gles_ring);
+      const auto images = record.backing->images();
+      record.images.assign(images.begin(), images.end());
+    }
     record.identity = std::make_unique<std::uint64_t>(0);
     record.handle = reinterpret_cast<XrSwapchain>(record.identity.get());
   } catch (XrResult result) {
@@ -794,6 +1177,7 @@ XrResult xrDestroySwapchain(XrSwapchain handle) {
   }
   auto result = destroy_host_swapchain(it->second);
   if (XR_SUCCEEDED(result)) result = forget_sphere_source(handle);
+  if (XR_SUCCEEDED(result)) result = destroy_direct_swapchain(it->second);
   // Staging is freed only after every Vulkan copy that reads it completed.
   if (XR_SUCCEEDED(result) && staged(it->second)) result = it->second.backing->drain();
   if (XR_SUCCEEDED(result)) {
@@ -895,6 +1279,35 @@ XrResult xrAcquireSwapchainImage(XrSwapchain handle, const XrSwapchainImageAcqui
     return XR_ERROR_CALL_ORDER_INVALID;
   if ((r.info.createFlags & XR_SWAPCHAIN_CREATE_STATIC_IMAGE_BIT) && r.static_acquired)
     return XR_ERROR_CALL_ORDER_INVALID;
+  if (r.direct_handle) {
+    if (r.operation_in_progress) return XR_ERROR_CALL_ORDER_INVALID;
+    check_ownership(r);
+    const auto count = std::uint32_t(r.images.size());
+    if (r.host_acquired.size() == count) {
+      // The game holds every other image: its last released one goes back first.
+      const auto released = release_held(r);
+      if (XR_FAILED(released)) return released;
+    }
+    std::uint32_t acquired{};
+    XrResult result;
+    {
+      HostQueueLock queue(session().uses_shared_gpu);
+      if (!queue) return XR_ERROR_RUNTIME_FAILURE;
+      result = ::xrAcquireSwapchainImage(r.direct_handle, nullptr, &acquired);
+    }
+    if (XR_FAILED(result)) return result;
+    if (acquired >= count || std::find(r.host_acquired.begin(), r.host_acquired.end(), acquired) != r.host_acquired.end()) {
+      log::error("xr", "The host returned swapchain image {} it had already given out", acquired);
+      return XR_ERROR_RUNTIME_FAILURE;
+    }
+    r.host_acquired.push_back(acquired);
+    r.host_unwaited[acquired] = 1;
+    r.backing->set_owned(acquired, true);
+    r.ownership[acquired]->guest.store(true, std::memory_order_release);
+    r.acquired.push_back(acquired);
+    *index = acquired;
+    return result;
+  }
   for (std::uint32_t n = 0; n < r.images.size(); ++n) {
     const auto candidate = (r.next_index + n) % r.images.size();
     if (std::find(r.acquired.begin(), r.acquired.end(), candidate) != r.acquired.end()) continue;
@@ -916,13 +1329,39 @@ XrResult xrWaitSwapchainImage(XrSwapchain handle, const XrSwapchainImageWaitInfo
     return XR_ERROR_VALIDATION_FAILURE;
   if (it->second.operation_in_progress || it->second.acquired.empty() || it->second.waited)
     return XR_ERROR_CALL_ORDER_INVALID;
+  // The host waits one image at a time: the held one, which it waited for the
+  // game, goes back before the next. A frame ended after this presents it as
+  // the host's last released image.
+  if (it->second.direct_handle && it->second.host_unwaited.at(it->second.acquired.front()))
+    if (const auto released = release_held(it->second); XR_FAILED(released)) return released;
   ImageOperation operation(it->second, lock);
   lock.unlock();
   const auto wait_start = vulkan::timing_enabled() ? monotonic_ns() : 0;
-  auto result = it->second.backing->wait(it->second.acquired.front(), info->timeout);
+  auto& chain = it->second;
+  const auto front = chain.acquired.front();
+  XrResult result = XR_SUCCESS;
+  if (chain.direct_handle && chain.host_unwaited.at(front)) {
+    // The pin keeps every other call on this chain out while the host waits.
+    XrSwapchainImageWaitInfo wait{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO, nullptr, info->timeout};
+    result = ::xrWaitSwapchainImage(chain.direct_handle, &wait);
+    if (result == XR_SUCCESS || result == XR_SESSION_LOSS_PENDING) chain.host_unwaited[front] = 0;
+  }
+  if (chain.direct_handle && !chain.initialized.at(front) && (result == XR_SUCCESS || result == XR_SESSION_LOSS_PENDING)) {
+    const auto initialized = chain.backing->initialize(front);
+    if (XR_FAILED(initialized)) result = initialized;
+    else {
+      chain.initialized[front] = 1;
+      vulkan::track_layouts(chain.images[front].image, 1, chain.info.arraySize * chain.info.faceCount,
+                            depth_format(chain.info.format) ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
+                                                            : VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+    }
+  }
+  if (result == XR_SUCCESS) result = chain.backing->wait(front, info->timeout);
+  else if (result == XR_SESSION_LOSS_PENDING && XR_FAILED(chain.backing->wait(front, info->timeout)))
+    result = XR_ERROR_RUNTIME_FAILURE;
   if (wait_start) vulkan::timing_host_wait("xr_image", monotonic_ns() - wait_start);
   lock.lock();
-  if (result == XR_SUCCESS) {
+  if (result == XR_SUCCESS || (result == XR_SESSION_LOSS_PENDING && chain.direct_handle)) {
     auto& r = it->second;
     r.waited = true;
   }
@@ -966,6 +1405,16 @@ XrResult xrReleaseSwapchainImage(XrSwapchain handle, const XrSwapchainImageRelea
     lock.lock();
     if (XR_FAILED(result))
       return result;
+  }
+  if (r.direct_handle) {
+    const auto index = r.acquired.front();
+    {
+      // The previous release, never presented (or presented through a copy),
+      // goes back to the host; this one stays Venture's until its frame.
+      const auto superseded = release_held(r);
+      if (XR_FAILED(superseded)) return superseded;
+      r.held = index;
+    }
   }
   // Retain the most recently released guest image. Host acquisition, upload
   // and gamut conversion happen only if a composition layer actually uses it.

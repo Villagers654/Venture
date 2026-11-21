@@ -20,6 +20,9 @@
 #include <unordered_map>
 #include <vector>
 
+namespace venture::vulkan {
+struct ImageOwnership;
+}
 namespace venture::hle::openxr {
 using namespace venture::xr;
 struct Object {
@@ -92,6 +95,29 @@ struct Swapchain {
   XrFoveationProfileFB profile{};
   XrSwapchainStateFoveationFlagsFB foveation_flags = 0;
   std::shared_ptr<AndroidSurface> android_surface;
+  // Zero-copy (docs/design/zero-copy-eyes.md): the host chain whose images are
+  // `images`, which the game renders into directly. Its acquire, wait and
+  // release map onto the host's; host_handle above is then only a presentation
+  // chain for frames that need a copy (flip, alpha pass, scaling).
+  XrSwapchain direct_handle{};
+  // Host images acquired by the game or Venture, in host acquisition order.
+  // The host releases its oldest waited image, so a held image is the front.
+  std::deque<std::uint32_t> host_acquired;
+  std::vector<std::uint8_t> host_unwaited, initialized;  // per image
+  // The game's latest released image, still Venture's: given back to the host
+  // at the end of the frame that presents it, when the next one replaces it,
+  // or before the game's next wait (OpenXR waits one image at a time).
+  std::optional<std::uint32_t> held;
+  // Every frame presents through host_handle with a copy, so direct_handle is
+  // never composited: after the game used an image that was the host's
+  // (ImageOwnership), or a consumer needed one after it went back.
+  bool copy_always = false;
+  // This frame: the layer names direct_handle (no copy), and the held image is
+  // released when the frame is handed to the host (release_direct_images).
+  bool present_direct = false, release_direct = false;
+  bool eye_observed = false;
+  std::uint64_t direct_frames = 0;  // releases presented without a copy
+  std::vector<std::shared_ptr<vulkan::ImageOwnership>> ownership;  // per image
 };
 struct Foveation {
   XrFoveationLevelFB level;
@@ -129,6 +155,8 @@ struct State {
   };
   std::map<XrAction, Action> actions;
   std::map<XrSession, std::set<std::uintptr_t>> attached_sets;
+  // XR_META_performance_metrics answered without the host: whether each session enabled it.
+  std::map<XrSession, bool> performance_metrics;
   struct Hand {
     bool left;
     std::array<bool, 4> pinching{};
@@ -248,6 +276,13 @@ XrResult prepare_swapchains(const std::set<XrSwapchain>& submitted, bool force_o
                             const UnderlayAlpha* underlay = nullptr, const MirrorEye* mirror = nullptr,
                             const std::map<XrSwapchain, VkExtent2D>* eye_rects = nullptr);
 XrResult destroy_host_swapchain(Swapchain&);
+// Gives the host the held images of the zero-copy chains prepare_swapchains
+// presented directly; just before the frame goes to the host.
+XrResult release_direct_images(const std::set<XrSwapchain>& submitted);
+// The host chain a layer names for this guest chain this frame.
+inline XrSwapchain presented_handle(const Swapchain& r) { return r.present_direct ? r.direct_handle : r.host_handle; }
+// Zero-copy setting: off unless VENTURE_XR_ZERO_COPY=1; off keeps every chain private (copy).
+bool zero_copy_enabled();
 XrResult convert_color_image(Swapchain&, std::uint32_t index, XrColorSpaceFB, bool external_queue_held = false,
                              bool force_opaque = false, float underlay_opacity = 1, bool premultiply = false,
                              const std::array<float, 3>* key = nullptr);

@@ -11,6 +11,7 @@
 #include "hle/vrapi/vrapi.h"
 #include "xr/bindings.h"
 #include "xr/host_xr.h"
+#include "xr/haptic_sequence.h"
 #include "xr/grip_toggle.h"
 #include "xr/menu_chord.h"
 #include "xr_images_fixture.h"
@@ -831,6 +832,58 @@ struct OpenXrGame {
   }
 };
 }  // namespace
+
+TEST_CASE("Without XR_EXT_dpad_binding an OpenXR game gets A/B and X/Y from a WMR controller's trackpad halves") {
+  // #159: H3VR2 (OpenXR) on Windows Mixed Reality's own runtime, by default
+  // controls: pad bottom pressed is X / A, top Y / B, on both hands.
+  venture::test::ScopedMenuMode automatic("");
+  ScopedControls defaults("");
+  auto& host = venture::xr::host_xr();
+  struct Restore {
+    venture::xr::HostXr& host;
+    std::set<std::string> saved;
+    ~Restore() {
+      host.enabled_extensions = saved;
+      venture::xr::invalidate_host_procedures();
+    }
+  } restore{host, host.enabled_extensions};
+  host.enabled_extensions.erase("XR_EXT_dpad_binding");
+  venture::xr::invalidate_host_procedures();
+  REQUIRE_FALSE(venture::xr::host_dpad());
+  OpenXrGame game("/interaction_profiles/microsoft/motion_controller");
+  const XrAction x = game.action("x"), y = game.action("y"), a = game.action("a"), b = game.action("b");
+  REQUIRE(game.suggest("/interaction_profiles/oculus/touch_controller",
+                       {{x, game.path("/user/hand/left/input/x/click")},
+                        {y, game.path("/user/hand/left/input/y/click")},
+                        {a, game.path("/user/hand/right/input/a/click")},
+                        {b, game.path("/user/hand/right/input/b/click")}}) == XR_SUCCESS);
+  game.start();
+  // The mock's trackpad is its thumbstick vector and its press the stick click.
+  auto at = [](int hand, XrVector2f where, bool click) {
+    MockXrScript script{};
+    auto& c = hand ? script.right : script.left;
+    c.thumbstick = where;
+    c.thumbstick_click = click;
+    return script;
+  };
+  for (int hand = 0; hand < 2; ++hand) {
+    CAPTURE(hand);
+    const XrAction lower = hand ? a : x, upper = hand ? b : y;
+    CHECK_FALSE(game.pressed(lower, MockXrScript{}));
+    CHECK_FALSE(game.pressed(upper, MockXrScript{}));
+    CHECK(game.pressed(lower, at(hand, {0.1f, -0.85f}, true)));
+    CHECK_FALSE(game.pressed(upper, at(hand, {0.1f, -0.85f}, true)));
+    CHECK(game.pressed(upper, at(hand, {-0.1f, 0.85f}, true)));
+    CHECK_FALSE(game.pressed(lower, at(hand, {-0.1f, 0.85f}, true)));
+    // Resting a thumb on the pad presses nothing; the center is Stick click's.
+    CHECK_FALSE(game.pressed(upper, at(hand, {0.f, 0.85f}, false)));
+    CHECK_FALSE(game.pressed(lower, at(hand, {0.f, 0.05f}, true)));
+    CHECK_FALSE(game.pressed(upper, at(hand, {0.f, 0.05f}, true)));
+  }
+  // The other hand's pad never presses this hand's buttons.
+  CHECK_FALSE(game.pressed(x, at(1, {0.f, -0.85f}, true)));
+  CHECK_FALSE(game.pressed(b, at(0, {0.f, 0.85f}, true)));
+}
 
 TEST_CASE("Touch Pro and Touch Plus rows give an OpenXR game those sensors from another controller's inputs") {
   venture::test::ScopedMenuMode automatic("");
@@ -1689,8 +1742,10 @@ TEST_CASE("Tuning reaches a VrApi game: stick dead zone and inversion, trigger p
   // Vibration off on the left only.
   const auto pulses = ventureMockXrStats().haptic_pulses;
   CHECK(vg::vrapi_SetHapticVibrationSimple(game.mobile, 1, 1.f) == 0);
+  REQUIRE(venture::xr::haptics_settled(std::chrono::seconds(2)));
   CHECK(ventureMockXrStats().haptic_pulses == pulses);
   CHECK(vg::vrapi_SetHapticVibrationSimple(game.mobile, 2, 1.f) == 0);
+  REQUIRE(venture::xr::haptics_settled(std::chrono::seconds(2)));
   CHECK(ventureMockXrStats().haptic_pulses == pulses + 1);
 }
 

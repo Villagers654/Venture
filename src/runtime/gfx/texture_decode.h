@@ -46,4 +46,10 @@ void cancel_astc_job(TextureJob& job) noexcept;
 // the job). Empty after a decoder failure, which is logged.
 const std::vector<std::uint8_t>& finish_astc_job(TextureJob& job);
 std::size_t astc_job_bytes(const TextureJob& job) noexcept;
+// VENTURE_NATIVE_ASTC (debug override): "0", "off", "false" or "never" make
+// Venture decode ASTC itself (Vulkan and GLES) even where the host GPU samples
+// ASTC, the path hosts without ASTC take. Unset or anything else: ASTC passes
+// through wherever the host reports it. native_astc_setting is the parse.
+bool native_astc_setting(const char* value) noexcept;
+bool native_astc_allowed() noexcept;
 }  // namespace venture::gfx

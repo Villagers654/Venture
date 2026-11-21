@@ -27,14 +27,6 @@ XrResult xrEnumerateEnvironmentBlendModes(XrInstance instance, XrSystemId system
   auto result = host_call<PFN_xrEnumerateEnvironmentBlendModes, "xrEnumerateEnvironmentBlendModes">(instance, systemId, viewConfigurationType, environmentBlendModeCapacityInput, environmentBlendModeCountOutput, environmentBlendModes);
   return result;
 }
-XrResult xrEnumeratePerformanceMetricsCounterPathsMETA(XrInstance instance, uint32_t counterPathCapacityInput, uint32_t* counterPathCountOutput, XrPath* counterPaths) {
-  std::lock_guard lock(venture::hle::openxr::state().mutex);
-  if (!enabled("XR_META_performance_metrics")) return XR_ERROR_FUNCTION_UNSUPPORTED;
-  if (!valid_handle(instance, "XrInstance")) return XR_ERROR_HANDLE_INVALID;
-  if (!counterPathCountOutput) return XR_ERROR_VALIDATION_FAILURE;
-  auto result = host_call<PFN_xrEnumeratePerformanceMetricsCounterPathsMETA, "xrEnumeratePerformanceMetricsCounterPathsMETA">(instance, counterPathCapacityInput, counterPathCountOutput, counterPaths);
-  return result;
-}
 XrResult xrEnumerateReferenceSpaces(XrSession session, uint32_t spaceCapacityInput, uint32_t* spaceCountOutput, XrReferenceSpaceType* spaces) {
   std::lock_guard lock(venture::hle::openxr::state().mutex);
   if (!valid_handle(session, "XrSession")) return XR_ERROR_HANDLE_INVALID;
@@ -47,15 +39,6 @@ XrResult xrEnumerateViewConfigurations(XrInstance instance, XrSystemId systemId,
   if (!valid_handle(instance, "XrInstance")) return XR_ERROR_HANDLE_INVALID;
   if (!viewConfigurationTypeCountOutput) return XR_ERROR_VALIDATION_FAILURE;
   auto result = host_call<PFN_xrEnumerateViewConfigurations, "xrEnumerateViewConfigurations">(instance, systemId, viewConfigurationTypeCapacityInput, viewConfigurationTypeCountOutput, viewConfigurationTypes);
-  return result;
-}
-XrResult xrGetPerformanceMetricsStateMETA(XrSession session, XrPerformanceMetricsStateMETA* state) {
-  std::lock_guard lock(venture::hle::openxr::state().mutex);
-  if (!enabled("XR_META_performance_metrics")) return XR_ERROR_FUNCTION_UNSUPPORTED;
-  if (!valid_handle(session, "XrSession")) return XR_ERROR_HANDLE_INVALID;
-  if (!state) return XR_ERROR_VALIDATION_FAILURE;
-  if (!state || XR_FAILED(validate_struct(state, XR_TYPE_PERFORMANCE_METRICS_STATE_META))) return XR_ERROR_VALIDATION_FAILURE;
-  auto result = host_call<PFN_xrGetPerformanceMetricsStateMETA, "xrGetPerformanceMetricsStateMETA">(session, state);
   return result;
 }
 XrResult xrGetReferenceSpaceBoundsRect(XrSession session, XrReferenceSpaceType referenceSpaceType, XrExtent2Df* bounds) {
@@ -95,28 +78,10 @@ XrResult xrPathToString(XrInstance instance, XrPath path, uint32_t bufferCapacit
   auto result = host_call<PFN_xrPathToString, "xrPathToString">(instance, path, bufferCapacityInput, bufferCountOutput, buffer);
   return result;
 }
-XrResult xrQueryPerformanceMetricsCounterMETA(XrSession session, XrPath counterPath, XrPerformanceMetricsCounterMETA* counter) {
-  std::lock_guard lock(venture::hle::openxr::state().mutex);
-  if (!enabled("XR_META_performance_metrics")) return XR_ERROR_FUNCTION_UNSUPPORTED;
-  if (!valid_handle(session, "XrSession")) return XR_ERROR_HANDLE_INVALID;
-  if (!counter) return XR_ERROR_VALIDATION_FAILURE;
-  if (!counter || XR_FAILED(validate_struct(counter, XR_TYPE_PERFORMANCE_METRICS_COUNTER_META))) return XR_ERROR_VALIDATION_FAILURE;
-  auto result = host_call<PFN_xrQueryPerformanceMetricsCounterMETA, "xrQueryPerformanceMetricsCounterMETA">(session, counterPath, counter);
-  return result;
-}
 XrResult xrResultToString(XrInstance instance, XrResult value, char buffer[XR_MAX_RESULT_STRING_SIZE]) {
   std::lock_guard lock(venture::hle::openxr::state().mutex);
   if (!valid_handle(instance, "XrInstance")) return XR_ERROR_HANDLE_INVALID;
   auto result = host_call<PFN_xrResultToString, "xrResultToString">(instance, value, buffer);
-  return result;
-}
-XrResult xrSetPerformanceMetricsStateMETA(XrSession session, const XrPerformanceMetricsStateMETA* state) {
-  std::lock_guard lock(venture::hle::openxr::state().mutex);
-  if (!enabled("XR_META_performance_metrics")) return XR_ERROR_FUNCTION_UNSUPPORTED;
-  if (!valid_handle(session, "XrSession")) return XR_ERROR_HANDLE_INVALID;
-  if (!state) return XR_ERROR_VALIDATION_FAILURE;
-  if (!state || XR_FAILED(validate_struct(state, XR_TYPE_PERFORMANCE_METRICS_STATE_META))) return XR_ERROR_VALIDATION_FAILURE;
-  auto result = host_call<PFN_xrSetPerformanceMetricsStateMETA, "xrSetPerformanceMetricsStateMETA">(session, state);
   return result;
 }
 XrResult xrStringToPath(XrInstance instance, const char* pathString, XrPath* path) {

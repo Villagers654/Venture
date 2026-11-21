@@ -81,6 +81,7 @@ void register_clock(HleLibrary& libc);      // clock_gettime, nanosleep, usleep,
 void register_syscall(HleLibrary& libc);    // syscall()
 void register_libdl(HleLibrary& libdl);     // dlopen/dlsym/dlclose/dlerror/dladdr/dl_iterate_phdr
 void register_loader(HleLibrary& loader);  // ld-android.so: the linker's __loader_* entry points
+void register_libdl_android(HleLibrary& lib);  // libdl_android.so: linker namespaces
 void shape_dlopen(HleLibrary& libdl, const HleLibrary& loader);  // A64 dlopen calls __loader_dlopen like bionic
 
 }  // namespace venture::hle::libc

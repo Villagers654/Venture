@@ -48,6 +48,44 @@ def copy(source, target):
     shutil.copy2(source, target)
 
 
+def venture_version():
+    """The full version (0.3.0-alpha.4) as CMakeLists.txt sets it: the release tag without its v."""
+    text = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
+    version = re.search(r"project\(Venture VERSION ([0-9.]+)", text).group(1)
+    suffix = re.search(r'set\(VENTURE_VERSION_SUFFIX "([^"]*)"\)', text).group(1)
+    return f"{version}-{suffix}" if suffix else version
+
+
+RELEASES = "https://github.com/Villagers654/Venture/releases/download"
+
+
+def layoutlib_component(output, windows):
+    """Moves layoutlib/ out of the layout into its own release file, downloaded the first
+    time a 2D app needs it (src/common/layoutlib_component.h), and records it in
+    layoutlib.json. Returns the archive's path, beside the layout."""
+    name = "Venture-layoutlib-windows64.zip" if windows else "Venture-layoutlib-linux-x86_64.zip"
+    archive = output.parent / name
+    archive.unlink(missing_ok=True)
+    source = output / "layoutlib"
+    with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as out:
+        for path in sorted(source.rglob("*")):
+            if path.is_file():
+                info = zipfile.ZipInfo(path.relative_to(output).as_posix(), (1980, 1, 1, 0, 0, 0))
+                info.compress_type = zipfile.ZIP_DEFLATED
+                info.external_attr = 0o644 << 16
+                with path.open("rb") as data:
+                    out.writestr(info, data.read(), compresslevel=9)
+    for path in sorted(source.rglob("*"), key=lambda p: len(p.parts), reverse=True):
+        path.unlink() if path.is_file() else path.rmdir()
+    source.rmdir()
+    digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+    (output / "layoutlib.json").write_text(json.dumps({
+        "url": f"{RELEASES}/v{venture_version()}/{name}", "sha256": digest,
+        "size": archive.stat().st_size}, indent=2) + "\n")
+    print(f"2D component: {archive} ({archive.stat().st_size / 1048576:.1f} MiB)")
+    return archive
+
+
 def tree(source, target):
     for path in sorted(source.rglob("*")):
         if path.is_file():
@@ -56,7 +94,8 @@ def tree(source, target):
 
 # Third-party files shipped as received: never modified, and only checked for
 # this machine's paths and identity (their upstream build paths are not ours).
-THIRD_PARTY = ("licenses/*", "WebView2Loader.dll", "java/asm/*", "java/dex2jar/*")
+THIRD_PARTY = ("licenses/*", "WebView2Loader.dll", "java/asm/*", "java/dex2jar/*", "layoutlib/lib/*", "layoutlib/data/*",
+               "layoutlib/licenses/*")
 
 
 def is_third_party(name, patterns=THIRD_PARTY):
@@ -378,6 +417,11 @@ def package(build, output, angle, strip, readobj):
         if not windows and name in ("libEGL.so", "libGLESv2.so") and not source.is_file():
             source = angle / "bin" / name
         copy(source, output / name)
+    # Android 2D apps' framework (docs/design/layoutlib.md): layoutlib with its
+    # natives, data and licenses, on hosts that build it (x86_64).
+    if (bin_dir / "venture-framework-2d.jar").is_file():
+        copy(bin_dir / "venture-framework-2d.jar", output / "venture-framework-2d.jar")
+        tree(bin_dir / "layoutlib", output / "layoutlib")
     for name in ("LGPL-2.1.txt", "ffmpeg-8.1.3.tar.xz", "ffmpeg-8.1.3.tar.xz.asc"):
         copy(bin_dir / "LICENSES" / name, output / "licenses/ffmpeg" / name)
     copy(bin_dir / "venture-ffmpeg.json", output / "licenses/ffmpeg/venture-ffmpeg.json")
@@ -430,7 +474,10 @@ def package(build, output, angle, strip, readobj):
         if path.is_file() and path.suffix.lower() in (".lib", ".a", ".pdb"):
             path.unlink()
     # Native binaries are copied, then stripped; the build retains its symbols.
+    # layoutlib's natives are Google's release builds, shipped as published.
     for path in sorted(output.rglob("*")):
+        if path.is_relative_to(output / "layoutlib"):
+            continue
         if path.is_file() and (path.suffix in (".dll", ".exe") or (not windows and (".so" in path.name or path.name in ("venture", "venture-runtime", "java")))):
             subprocess.run([str(strip), "--strip-all", str(path)], check=True)
             if windows:
@@ -474,6 +521,8 @@ def package(build, output, angle, strip, readobj):
         copy(webview2 / "NOTICE.txt", output / "licenses/webview2/NOTICE.txt")
         check_imports(output, readobj)
     scan(output, *identity(build))
+    if (output / "layoutlib").is_dir():
+        layoutlib_component(output, windows)
     files = {p.relative_to(output).as_posix(): {"bytes": p.stat().st_size, "sha256": hashlib.sha256(p.read_bytes()).hexdigest()}
              for p in sorted(output.rglob("*")) if p.is_file()}
     (output / "release-files.json").write_text(json.dumps({"files": files}, indent=2) + "\n")

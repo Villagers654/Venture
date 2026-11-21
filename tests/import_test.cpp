@@ -4,6 +4,7 @@
 #include "common/android/archive.h"
 #include "common/android/manifest.h"
 #include "common/digest.h"
+#include "common/layoutlib_component.h"
 #include "common/download/manager.h"
 #include "common/download/unity_bundle.h"
 #include "common/library/import.h"
@@ -961,3 +962,41 @@ TEST_CASE("a save export backs up the headset's saves and replaces the folders i
   CHECK(text(headset / "files/save.dat") == "venture");
 }
 #endif
+
+TEST_CASE("the Android 2D component is found where a build or a release put it, and unpacks only inside its folder") {
+  const auto root = fs::temp_directory_path() / ("venture-layoutlib-" + std::to_string(current_process_id()));
+  std::error_code ec;
+  fs::remove_all(root, ec);
+  const auto bin = root / "bin", data = root / "data";
+  fs::create_directories(bin);
+  namespace lc = layoutlib_component;
+  // No layoutlib.json and nothing staged: this copy has no 2D framework (arm64).
+  CHECK(lc::find(bin, data).empty());
+  CHECK_FALSE(lc::manifest(bin));
+  CHECK(lc::ensure(bin, data).empty());
+  // A release's manifest names a GitHub release file; anything else is ignored.
+  const std::string sum(64, 'a');
+  paths::atomic_write(bin / "layoutlib.json", std::string(R"({"url": "https://example.com/x.zip", "sha256": ")") + sum + R"(", "size": 10})");
+  CHECK_FALSE(lc::manifest(bin));
+  paths::atomic_write(bin / "layoutlib.json", std::string(R"({"url": "https://github.com/Villagers654/Venture/releases/download/v1/Venture-layoutlib-windows64.zip", "sha256": ")") + sum + R"(", "size": 10})");
+  const auto m = lc::manifest(bin);
+  REQUIRE(m);
+  CHECK(lc::folder(data, *m) == data / "components" / "layoutlib-aaaaaaaaaaaaaaaa");
+  CHECK(lc::find(bin, data).empty());
+  // Unpacked: found there.
+  const auto archive = root / "component.zip";
+  zip(archive, {{"layoutlib/layoutlib.jar", "jar"}, {"layoutlib/data/fonts/a.ttf", "font"}});
+  lc::unpack(archive, lc::folder(data, *m));
+  CHECK(lc::find(bin, data) == lc::folder(data, *m) / "layoutlib" / "layoutlib.jar");
+  CHECK(paths::read(lc::folder(data, *m) / "layoutlib/data/fonts/a.ttf", 64) == "font");
+  // An archive member outside the folder, or one without layoutlib.jar, is refused.
+  zip(archive, {{"../escape.txt", "x"}, {"layoutlib/layoutlib.jar", "jar"}});
+  CHECK_THROWS(lc::unpack(archive, root / "other"));
+  CHECK_FALSE(fs::exists(root / "escape.txt"));
+  zip(archive, {{"layoutlib/readme.txt", "x"}});
+  CHECK_THROWS_WITH(lc::unpack(archive, root / "other"), doctest::Contains("no layoutlib/layoutlib.jar"));
+  // A build tree's own copy comes first.
+  paths::atomic_write(bin / "layoutlib/layoutlib.jar", "staged");
+  CHECK(lc::find(bin, data) == bin / "layoutlib" / "layoutlib.jar");
+  fs::remove_all(root, ec);
+}

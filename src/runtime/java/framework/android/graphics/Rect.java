@@ -9,6 +9,7 @@ public class Rect implements android.os.Parcelable {
   public Rect(int l, int t, int r, int b) {
     set(l, t, r, b);
   }
+  public void offset(int dx, int dy) { left += dx; right += dx; top += dy; bottom += dy; }
   public void set(int l, int t, int r, int b) {
     left = l;
     top = t;

@@ -147,6 +147,10 @@ void fault_markers_submit(VkQueue queue, std::uint32_t count, const VkSubmitInfo
 void report_fault_markers(VkDevice device);
 // Tests: the queues' verdicts as a report would log them.
 std::vector<fault_markers::QueueVerdict> fault_marker_verdicts(VkDevice device);
+// While the device runs (a stall): one line on where the GPU's guest work
+// stands from the buffer marker words ("GPU idle: ...", "GPU busy: ..."), and
+// the per-queue lines into `lines`. Only try-locks; empty without breadcrumbs.
+std::string live_fault_markers(std::vector<std::string>& lines);
 FaultMarkers device_fault_markers(VkDevice device);
 // Brackets one Venture pass recorded into a guest command buffer.
 class FaultPass {

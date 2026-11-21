@@ -3,6 +3,10 @@ import android.os.*;
 import com.venture.runtime.*;
 public final class ColdRestartTest {
   private static void check(boolean condition) { if (!condition) throw new AssertionError("cold restart behavior"); }
+  private static byte[] payloadOf(Intent launcher, int flags) {
+    AppMain.startActivity(new Intent(launcher).addFlags(flags));
+    return AppMain.takePendingRelaunchPayload();
+  }
   public static void main(String[] args) throws Exception {
     try (RecordingHost host = new RecordingHost(args[1])) {
       RuntimeEnvironment.configure(args, host);
@@ -20,6 +24,7 @@ public final class ColdRestartTest {
         var bytes = new java.io.ByteArrayOutputStream();
         var output = new java.io.DataOutputStream(bytes);
         output.writeInt(Intent.FLAG_ACTIVITY_NEW_TASK);
+        output.writeUTF(""); output.writeUTF("");
         output.writeInt(1);
         output.writeUTF("scene"); output.writeBoolean(true); output.writeUTF("app-restart");
         var payload = bytes.toByteArray();
@@ -99,6 +104,24 @@ public final class ColdRestartTest {
       AppMain.startActivity(new Intent(launcher).addFlags(cold).setData(android.net.Uri.parse("app://private")));
       try { AppMain.takePendingRelaunchPayload(); throw new AssertionError("custom data lost"); }
       catch (UnsupportedOperationException correct) {}
+      AppMain.startActivity(new Intent().setClassName(args[0], args[0] + ".NotDeclared").addFlags(cold));
+      try { AppMain.takePendingRelaunchPayload(); throw new AssertionError("undeclared activity restarted"); }
+      catch (UnsupportedOperationException correct) {}
+      // Another declared activity in a new task (a 2D menu starting its VR
+      // activity) restarts the process into that activity with its extras.
+      var declared = RuntimeEnvironment.get().manifest.activities.stream()
+          .map(a -> a.name).filter(name -> !name.equals(launcher.getComponent().getClassName())).findFirst();
+      if (declared.isPresent()) {
+        AppMain.startActivity(new Intent().setClassName(args[0], declared.get()).addFlags(cold)
+            .putExtra("SelectedGame", "content://game"));
+        var moved = AppMain.restoreRelaunchIntent(launcher, AppMain.takePendingRelaunchPayload());
+        check(moved.getComponent().getClassName().equals(declared.get()) && moved.getAction() == null);
+        check("content://game".equals(moved.getStringExtra("SelectedGame")));
+      }
+      var launcherPayload = new java.io.DataInputStream(new java.io.ByteArrayInputStream(
+          payloadOf(launcher, cold)));
+      launcherPayload.readInt();
+      check(launcherPayload.readUTF().isEmpty());
       AppMain.startActivity(new Intent(launcher).addFlags(cold));
       try { NativeLoader.exit(7); throw new AssertionError("exit returned"); }
       catch (ThreadDeath stopped) {}

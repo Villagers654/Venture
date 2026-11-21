@@ -199,3 +199,116 @@ TEST_CASE("debug report: a run's stalls get their own section and name a Venture
   in.close();
   fs::remove_all(data);
 }
+
+TEST_CASE("stall detector: a freeze is logged at 4 s while ongoing, then only its end") {
+  stall::Detector d;
+  d.poll(0, 1, false);
+  CHECK(d.poll(250, 1, false) == Action::snapshot);
+  CHECK(d.poll(1000, 1, false) == Action::recheck);
+  CHECK(d.poll(3950, 1, false) == Action::none);
+  CHECK(d.poll(4000, 1, false) == Action::ongoing);
+  CHECK(d.duration_ms() == 4000);
+  CHECK(d.poll(9000, 1, false) == Action::none);  // once
+  CHECK(d.poll(9400, 2, false) == Action::record);
+  CHECK(d.duration_ms() == 9400);
+
+  SUBCASE("a freeze of a second or more that ends in a pause or quit is kept") {
+    stall::Detector s;
+    s.poll(0, 1, false);
+    CHECK(s.poll(250, 1, false) == Action::snapshot);
+    CHECK(s.poll(1000, 1, false) == Action::recheck);
+    CHECK(s.poll(2500, 1, true) == Action::unfocused);
+    CHECK(s.duration_ms() == 2500);
+    CHECK(s.poll(2550, 1, true) == Action::none);
+  }
+}
+
+TEST_CASE("stall records: summary, evidence, end lines and long calls parse back") {
+  stall::Record r{.id = 4, .at_s = 120, .ms = 4000, .clock = "12:03:41", .ongoing = true, .snapshots = 2,
+                  .cause = stall::Cause::xr, .threads = 40};
+  r.summary = "UnityGfxDeviceW was in guest.xrEndFrame from -0.01 s for 9.40 s; UnityMain polled fence 0xf00d 9000 "
+              "times, never signalled (submitted in guest submission #812 on queue 0x51 0.02 s before the stall began, "
+              "straight to the driver)";
+  r.evidence = {{"op", "UnityGfxDeviceW (render) (tid 7, guest 12): guest.xrEndFrame from -0.01 s for 9.40 s"},
+                {"gpu", "GPU idle: all 6 recent guest command buffers had completed"}};
+  std::string log;
+  for (const auto& line : stall::format(r)) log += std::format("  124.000 7 I [stall] {}\n", line);
+  CHECK(log.find("[stall] #4 at=120.0s ms=4000 cause=xr snapshots=2 threads=40 clock=12:03:41 state=ongoing") !=
+        std::string::npos);
+  log += "  125.000 7 I [stall-host] #4 threads=1 names=\"7 UnityGfxDeviceW\" stack=\"ntdll.dll+0x1\"\n";
+  log += std::format("  129.500 7 I [stall] {}\n", stall::format_end(4, 9400, ""));
+  log += std::format("  130.000 7 I [stall-op] {}\n",
+                     stall::format_call({.at_s = 200.5, .ms = 812, .thread = "UnityMain", .call = "vkQueueWaitIdle (0x51)"}));
+  const auto records = stall::parse_log(log);
+  REQUIRE(records.size() == 1);
+  CHECK(records[0].ms == 9400);
+  CHECK_FALSE(records[0].ongoing);  // the end line came
+  CHECK(records[0].clock == "12:03:41");
+  CHECK(records[0].summary == r.summary);
+  REQUIRE(records[0].evidence.size() == 2);
+  CHECK(records[0].evidence[1].kind == "gpu");
+  CHECK(records[0].evidence[1].text == r.evidence[1].text);
+  const auto calls = stall::parse_calls(log);
+  REQUIRE(calls.size() == 1);
+  CHECK(calls[0].ms == 812);
+  CHECK(calls[0].thread == "UnityMain");
+  CHECK(calls[0].call == "vkQueueWaitIdle (0x51)");
+
+  const auto section = stall::report_section(records, calls);
+  CHECK(section.find("1 of them was a freeze of 1 s or more.\n") != std::string::npos);
+  CHECK(section.find("#4 at 120.0 s (12:03:41): 9400 ms, cause xr") != std::string::npos);
+  CHECK(section.find("  Summary: UnityGfxDeviceW was in guest.xrEndFrame") != std::string::npos);
+  CHECK(section.find("  [gpu] GPU idle: all 6 recent guest command buffers had completed\n") != std::string::npos);
+  CHECK(section.find("Calls that took 500 ms or more while frames kept coming: 1\n  at 200.5 s: 812 ms, UnityMain: "
+                     "vkQueueWaitIdle (0x51)\n") != std::string::npos);
+  CHECK(stall::report_section({}, calls).starts_with("\n=== Stalls (0) ===\nCalls that took 500 ms"));
+
+  // Never ended: still frozen when the log ended.
+  auto frozen = stall::parse_log(log.substr(0, log.find("[stall] #4 end")));
+  REQUIRE(frozen.size() == 1);
+  CHECK(frozen[0].ongoing);
+  CHECK(stall::report_section(frozen).find("4000 ms and still frozen when the log ended") != std::string::npos);
+  const auto still = stall::freeze_cause(frozen);
+  REQUIRE(still);
+  CHECK(still->cause.find("The game froze while it had focus 1 time, the longest for 4.00 s at 12:03:41 (still frozen "
+                          "when the log ended): UnityGfxDeviceW") == 0);
+
+  const auto verdict = stall::freeze_cause(records);
+  REQUIRE(verdict);
+  CHECK(verdict->cause == "The game froze while it had focus 1 time, the longest for 9.40 s at 12:03:41: " + r.summary +
+                              " (see Stalls).");
+  CHECK(verdict->advice ==
+        "Send this report with an issue: its Stalls section shows where the game's threads were when it froze.");
+  CHECK(stall::freeze_note(records).starts_with("The game also froze while it had focus 1 time"));
+  stall::Record short_stall{.id = 1, .ms = 600};
+  CHECK_FALSE(stall::freeze_cause({short_stall}));
+  CHECK(stall::freeze_note({short_stall}).empty());
+}
+
+TEST_CASE("debug report: a run that froze names the freeze as its likely cause") {
+  using namespace venture::launcher;
+  const auto data = fs::temp_directory_path() / ("venture-report-freeze-" + std::to_string(current_process_id()));
+  fs::remove_all(data);
+  fs::create_directories(data / "logs");
+  const auto start = std::chrono::floor<std::chrono::seconds>(std::chrono::system_clock::now()) - std::chrono::minutes(2);
+  stall::Record r{.id = 1, .at_s = 60, .ms = 9400, .clock = "12:03:41", .snapshots = 2, .cause = stall::Cause::xr,
+                  .threads = 40};
+  r.summary = "UnityMain polled fence 0xf00d 9000 times, never signalled";
+  r.shown = {{.tid = 12, .name = "UnityGfxDeviceW", .role = "render", .where = "libopenxr_loader.so!xrEndFrame",
+              .cause = stall::Cause::xr}};
+  std::string lines;
+  for (const auto& line : stall::format(r)) lines += std::format("   69.400 7 I [stall] {}\n", line);
+  std::ofstream(data / "logs" / "runtime-com.example.game.log", std::ios::binary)
+      << std::format("  1.000 1 I [launch] Process started at {:%FT%TZ}\n", start) << lines
+      << "  99.000 1 I [launch] Exit code: 0 (stop requested)\n";
+  const auto file = write_debug_report({.data = data, .version = "9.9.9", .package = "com.example.game"});
+  std::ifstream in(file, std::ios::binary);
+  const std::string text{std::istreambuf_iterator<char>(in), {}};
+  CHECK(text.find("=== Likely cause ===\nThe game froze while it had focus 1 time, the longest for 9.40 s at "
+                  "12:03:41: UnityMain polled fence 0xf00d 9000 times, never signalled (see Stalls).\n") !=
+        std::string::npos);
+  CHECK(text.find("- Send this report with an issue: its Stalls section shows where") != std::string::npos);
+  CHECK(text.find("  Summary: UnityMain polled fence 0xf00d") != std::string::npos);
+  in.close();
+  fs::remove_all(data);
+}

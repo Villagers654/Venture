@@ -5,6 +5,7 @@
 #include <optional>
 #include <span>
 #include <atomic>
+#include <memory>
 #include <mutex>
 #include <array>
 #include <stdexcept>
@@ -416,8 +417,22 @@ void note_executed_layouts(VkCommandBuffer primary, std::uint32_t count, const V
 void forget_command_layouts(VkCommandBuffer command);
 void submitted_layouts(std::uint32_t count, const VkSubmitInfo* submits);
 void submitted_layouts(std::uint32_t count, const VkSubmitInfo2* submits);
+// The game's own vkQueueSubmit call (before any deferral): checks watched
+// zero-copy images against their ImageOwnership.
+void guest_submitting_layouts(std::uint32_t count, const VkSubmitInfo* submits);
+void guest_submitting_layouts(std::uint32_t count, const VkSubmitInfo2* submits);
 // Per subresource, mip-major ([mip * layers + layer]); empty if untracked.
 std::vector<VkImageLayout> tracked_layouts(VkImage image);
+// A tracked image that alternates between the game and an XR runtime (OpenXR
+// zero-copy eye images). `guest` is false while the XR runtime has it; a
+// submission that changes its layout or ends a render pass on it then sets
+// `violated` and records the layout. untrack_layouts also unwatches.
+struct ImageOwnership {
+  std::atomic<bool> guest{false};
+  std::atomic<bool> violated{false};
+  std::atomic<int> violation_layout{0};
+};
+void watch_ownership(VkImage image, std::shared_ptr<ImageOwnership> owner);
 // Attachment images created outside the guest's vkCreateImage (XR eye images).
 void note_image(VkImage image, const VkImageCreateInfo& info);
 void forget_image(VkImage image);
@@ -451,6 +466,9 @@ void host_astc_hdr_features(VkPhysicalDevice physical, const void* chain);
 // Tests: decode compressed formats even where the host samples them natively
 // (SwiftShader has ASTC and ETC2), so suites exercise the emulated path.
 void force_texture_emulation(bool forced);
+// Tests: the host is taken to refuse every LINEAR image of a compressed format it
+// samples (SwiftShader accepts them; most GPUs do not), so those images are decoded.
+void force_linear_compressed_refusal(bool forced);
 // Tests: 1 stores every eligible decoded texture as BC7, 0 never, 2 by GPU memory threshold, -1 as configured.
 void force_texture_compression(int mode);
 // Install an idle test queue only when the host has no private texture queue.

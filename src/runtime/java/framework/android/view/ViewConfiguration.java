@@ -54,6 +54,12 @@ public class ViewConfiguration {
   public float getScaledVerticalScrollFactor() {
     return scaled(64);
   }
+  public int getScaledFadingEdgeLength() {
+    return scaled(12);
+  }
+  public int getScaledMaximumDrawingCacheSize() {
+    return 480 * 800 * 4;
+  }
   public boolean hasPermanentMenuKey() {
     return false;
   }
@@ -80,5 +86,48 @@ public class ViewConfiguration {
   }
   public static float getScrollFriction() {
     return 0.015f;
+  }
+  // AOSP's static (density-independent, mostly deprecated) forms of the values above.
+  public static int getScrollBarSize() {
+    return 4;
+  }
+  public static int getFadingEdgeLength() {
+    return 12;
+  }
+  public static int getJumpTapTimeout() {
+    return 500;
+  }
+  public static int getMultiPressTimeout() {
+    return 300;
+  }
+  public static int getKeyRepeatTimeout() {
+    return getLongPressTimeout();
+  }
+  public static int getKeyRepeatDelay() {
+    return 50;
+  }
+  public static int getEdgeSlop() {
+    return 12;
+  }
+  public static int getTouchSlop() {
+    return 8;
+  }
+  public static int getWindowTouchSlop() {
+    return 16;
+  }
+  public static int getMinimumFlingVelocity() {
+    return 50;
+  }
+  public static int getMaximumFlingVelocity() {
+    return 8000;
+  }
+  public static int getMaximumDrawingCacheSize() {
+    return 480 * 800 * 4;
+  }
+  public static long getZoomControlsTimeout() {
+    return 3000;
+  }
+  public static long getGlobalActionKeyTimeout() {
+    return 500;
   }
 }

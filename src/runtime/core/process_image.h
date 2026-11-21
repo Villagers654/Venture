@@ -44,6 +44,10 @@ bool address_info(GuestAddr address, DlInfo* out);
 // Guest file contents of a synthesized image (/apex/.../libc.so, ...).
 std::optional<std::string> file(std::string_view guest_path);
 bool has_file(std::string_view guest_path);
+// The soname of the synthesized system library these bytes copy, identical or
+// with one short run of bytes changed (a copy whose DT_SONAME was rewritten so
+// the linker loads it again), or nullopt.
+std::optional<std::string> copied_library(std::string_view bytes);
 // AT_* values of the process; false when the type is absent.
 bool auxval(std::uint64_t type, std::uint64_t* value);
 std::string auxv();

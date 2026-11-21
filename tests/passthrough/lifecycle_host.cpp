@@ -3,6 +3,8 @@
 #include "support.h"
 #include "lifecycle_host.h"
 #include "core/session_timeline.h"
+#include "common/injected_modules.h"
+#include "core/stall_watch.h"
 #include "core/wait.h"
 #include "xr/bindings.h"
 #include "xr/clock.h"
@@ -63,6 +65,13 @@ XrResult XRAPI_CALL xrPollEvent(XrInstance, XrEventDataBuffer* out) {
 #include "common/library/display.h"
 #include <stdexcept>
 namespace venture {
+// The stall watch's bookkeeping (core/stall_watch.cpp) is a runtime service the fixture does not test.
+namespace stall_watch {
+Op::Op(Kind, const char* name, std::uint64_t) noexcept
+    : slot_(nullptr), name_(name), start_(0), depth_(0), kind_(Kind::none) {}
+Op::~Op() = default;
+void Op::finish(int) noexcept { finished_ = slot_ || name_ || depth_ || kind_ != Kind::none || true; }
+}  // namespace stall_watch
 GuestThread* GuestThread::current() { return nullptr; }
 int futex_wake(GuestAddr, int, std::uint32_t, sync_census::WakeSource) { return 0; }
 int futex_wait(GuestThread&, GuestAddr, std::uint32_t, std::int64_t, std::uint32_t, bool) {
@@ -89,6 +98,8 @@ void eye_rect(std::int32_t, std::int32_t) {}
 void recommended_size(std::int32_t, std::int32_t) {}
 void timed_wait_expired(std::int64_t) {}
 }
+// The first frame's check for injected modules is the runtime's (venture_common is not linked).
+namespace injected_modules { void log_loaded(bool) {} }
 namespace startup_diagnostics {
 void arm() {}
 void note_frame_submitted() {}

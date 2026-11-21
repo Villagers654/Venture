@@ -1,4 +1,5 @@
 #include "common/environment.h"
+#include "common/injected_modules.h"
 #include "core/thread_lifetime.h"
 #include "vulkan.h"
 
@@ -30,6 +31,7 @@
 #include "core/os_quit.h"
 #include "core/process.h"
 #include "core/signals.h"
+#include "core/stall_watch.h"
 #include "core/startup_stack.h"
 #include "core/thread.h"
 #include "core/thread_runtime.h"
@@ -248,6 +250,12 @@ std::shared_ptr<DeferredQueueSubmissions> deferred_device(VkDevice device) {
   std::lock_guard lock(state_lock);
   if (auto found = deferred_devices.find(device); found != deferred_devices.end()) return found->second;
   return {};
+}
+// A native queue behind facades: its submits come from the deferred dispatcher.
+bool facade_backend(VkQueue queue) {
+  if (!queue_facades_active.load(std::memory_order_acquire)) return false;
+  std::lock_guard lock(state_lock);
+  return std::ranges::any_of(queue_facades, [&](const auto& f) { return f.second->native == queue; });
 }
 VkResult VKAPI_CALL queue_submit(VkQueue, std::uint32_t, const VkSubmitInfo*, VkFence);
 VkResult VKAPI_CALL queue_submit2(VkQueue, std::uint32_t, const VkSubmitInfo2*, VkFence);
@@ -517,10 +525,74 @@ void report_device_fault_info(VkDevice device) {
     log::warn("vulkan-fault", "{} code={:#x} data={:#x}", v.description, v.vendorFaultCode, v.vendorFaultData);
   }
 }
+// The guest submission a queue_submit is handing down on this thread, so the
+// driver call's event names it (core/stall_watch.h).
+struct GuestSubmission { std::uint64_t fence = 0, id = 0; };
+thread_local GuestSubmission guest_submission;
+template <class F> constexpr stall_watch::Kind stall_kind() {
+  using K = stall_watch::Kind;
+  if constexpr (std::is_same_v<F, PFN_vkQueueSubmit> || std::is_same_v<F, PFN_vkQueueSubmit2>) return K::submit;
+  else if constexpr (std::is_same_v<F, PFN_vkWaitForFences> || std::is_same_v<F, PFN_vkWaitSemaphores> ||
+                     std::is_same_v<F, PFN_vkAcquireNextImageKHR>) return K::wait;
+  else if constexpr (std::is_same_v<F, PFN_vkQueuePresentKHR>) return K::present;
+  else if constexpr (std::is_same_v<F, PFN_vkQueueWaitIdle> || std::is_same_v<F, PFN_vkDeviceWaitIdle>) return K::idle;
+  else return K::none;
+}
+// Every native submit, wait, present and idle (the game's and Venture's own)
+// as a call in progress for the stall finder, and fence status checks as polls.
+// A clock read on entry and exit; status checks of the same fence only count.
+template <class F> struct StallScope {
+  static constexpr auto kind = stall_kind<F>();
+  std::optional<stall_watch::Op> op;
+  std::uint64_t queue = 0, object = 0;
+  template <class... A> explicit StallScope(const char* name, A... args) noexcept {
+    if constexpr (kind != stall_watch::Kind::none) {
+      const auto a = std::tuple(args...);
+      if constexpr (kind == stall_watch::Kind::submit || kind == stall_watch::Kind::present ||
+                    std::is_same_v<F, PFN_vkQueueWaitIdle>)
+        queue = sync_trace::handle(std::get<0>(a));
+      if constexpr (std::is_same_v<F, PFN_vkQueueSubmit> || std::is_same_v<F, PFN_vkQueueSubmit2>)
+        object = sync_trace::handle(std::get<3>(a));
+      else if constexpr (std::is_same_v<F, PFN_vkWaitForFences>)
+        object = std::get<1>(a) && std::get<2>(a) ? sync_trace::handle(std::get<2>(a)[0]) : 0;
+      else if constexpr (std::is_same_v<F, PFN_vkAcquireNextImageKHR>)
+        object = sync_trace::handle(std::get<1>(a));
+      op.emplace(kind, name, object ? object : queue);
+    }
+  }
+  template <class... A> void finish(const char* name, VkResult result, A... args) noexcept {
+    if constexpr (std::is_same_v<F, PFN_vkGetFenceStatus>) {
+      if (result == VK_SUCCESS || result == VK_NOT_READY)
+        stall_watch::fence_checked(sync_trace::handle(std::get<1>(std::tuple(args...))), result == VK_SUCCESS);
+    } else if constexpr (kind != stall_watch::Kind::none) {
+      const auto a = std::tuple(args...);
+      if constexpr (std::is_same_v<F, PFN_vkWaitForFences>) {
+        const auto count = std::get<1>(a);
+        const auto* fences = std::get<2>(a);
+        if (fences && count && result == VK_TIMEOUT) stall_watch::fence_checked(sync_trace::handle(fences[0]), false);
+        if (fences && result == VK_SUCCESS && (std::get<3>(a) || count == 1))
+          for (std::uint32_t i = 0; i < count; ++i) stall_watch::fence_checked(sync_trace::handle(fences[i]), true);
+      }
+      const auto start = op ? op->started() : 0;
+      const auto ns = stall_watch::now_ns() - start;
+      op.reset();
+      using E = stall_watch::Event;
+      if constexpr (kind == stall_watch::Kind::submit) {
+        const auto id = guest_submission.fence == object && object ? guest_submission.id : 0;
+        stall_watch::event(E::submit, name, queue, object, id, start, ns, int(result));
+      } else if (ns >= 1'000'000 || result != VK_SUCCESS) {
+        const auto event = kind == stall_watch::Kind::present ? E::present
+                           : kind == stall_watch::Kind::idle  ? E::idle : E::wait;
+        stall_watch::event(event, name, queue, object, 0, start, ns, int(result));
+      }
+    }
+  }
+};
 template <class F, std::size_t Slot, class... A>
 VkResult driver_result(const char* name, Scope scope, GuestAddr handle, A... args) {
   auto function = reinterpret_cast<F>(indexed_host_proc(scope, handle, Slot, name));
   if (!function) throw std::runtime_error("native Vulkan function disappeared");
+  StallScope<F> stall(name, args...);
   const auto trace = sync_trace::begin<F>(name, args...);
   std::unique_lock<std::recursive_mutex> physical_lock;
   auto unwrap = [&](auto value) {
@@ -536,6 +608,7 @@ VkResult driver_result(const char* name, Scope scope, GuestAddr handle, A... arg
     return value;
   });
   if constexpr (sync_trace::supported<F>) sync_trace::end<F>(trace, result, args...);
+  stall.finish(name, result, args...);
   if (ResultObservation::current) {
     ResultObservation::current->native_result = result;
     ResultObservation::current->native_function = name;
@@ -1907,11 +1980,41 @@ void VKAPI_CALL get_queue2(VkDevice device, const VkDeviceQueueInfo2* guest, VkQ
   if (out && *out && !info->flags) timing_queue(device, *out, info->queueFamilyIndex);
   if (out && *out) gfx::register_queue(device, *out);
 }
+// The stall finder's record of a guest submission: held by the deferred
+// dispatcher (a facade queue), given to the driver by it (its native queue),
+// or straight from the game. Names the submission for the driver call's event.
+struct NoteGuestSubmission {
+  GuestSubmission previous = guest_submission;
+  NoteGuestSubmission(VkQueue queue, VkFence fence) {
+    const auto f = sync_trace::handle(fence), q = sync_trace::handle(queue);
+    guest_submission = {f, facade_backend(queue) ? stall_watch::native_submit(q, f) : stall_watch::guest_submit(q, f, false)};
+  }
+  ~NoteGuestSubmission() { guest_submission = previous; }
+};
+// Set while a deferred queue dispatcher issues facade work to its native queue
+// through queue_submit/queue_submit2: that is not the game's own call.
+static thread_local bool facade_dispatch = false;
+static VkResult VKAPI_CALL dispatch_submit(VkQueue queue, std::uint32_t count, const VkSubmitInfo* submits, VkFence fence) {
+  facade_dispatch = true;
+  const auto result = queue_submit(queue, count, submits, fence);
+  facade_dispatch = false;
+  return result;
+}
+static VkResult VKAPI_CALL dispatch_submit2(VkQueue queue, std::uint32_t count, const VkSubmitInfo2* submits, VkFence fence) {
+  facade_dispatch = true;
+  const auto result = queue_submit2(queue, count, submits, fence);
+  facade_dispatch = false;
+  return result;
+}
 VkResult VKAPI_CALL queue_submit(VkQueue queue, std::uint32_t count, const VkSubmitInfo* submits, VkFence fence) {
+  if (!facade_dispatch) guest_submitting_layouts(count, submits);
   BinarySignalStorage filtered;
   submits = filter_binary_signals(queue, count, submits, filtered);
-  if (auto facade = queue_facade(queue))
+  if (auto facade = queue_facade(queue)) {
+    stall_watch::guest_submit(sync_trace::handle(queue), sync_trace::handle(fence), true);
     return facade->deferred->submit(facade->deferred_index, count, submits, fence);
+  }
+  NoteGuestSubmission noted(queue, fence);
   // Facade work is noted when the dispatcher submits it here to its native
   // queue, in that queue's execution order.
   note_breadcrumb_submits(queue, count, submits);
@@ -1923,10 +2026,14 @@ VkResult VKAPI_CALL queue_submit(VkQueue queue, std::uint32_t count, const VkSub
   return r;
 }
 VkResult VKAPI_CALL queue_submit2(VkQueue queue, std::uint32_t count, const VkSubmitInfo2* submits, VkFence fence) {
+  if (!facade_dispatch) guest_submitting_layouts(count, submits);
   BinarySignalStorage filtered;
   submits = filter_binary_signals(queue, count, submits, filtered);
-  if (auto facade = queue_facade(queue))
+  if (auto facade = queue_facade(queue)) {
+    stall_watch::guest_submit(sync_trace::handle(queue), sync_trace::handle(fence), true);
     return facade->deferred->submit2(facade->deferred_index, count, submits, fence);
+  }
+  NoteGuestSubmission noted(queue, fence);
   note_breadcrumb_submits(queue, count, submits);
   fault_markers_submit(queue, count, submits);
   auto fn = host<PFN_vkQueueSubmit2>(queue, "vkQueueSubmit2");
@@ -2683,7 +2790,7 @@ void install_queue_facades(VkDevice device, const VkDeviceCreateInfo& info,
     return VK_ERROR_FEATURE_NOT_PRESENT;
   };
   auto dispatcher = std::make_shared<DeferredQueueSubmissions>(device, std::move(bindings),
-      queue_submit, counter, queue_submit2);
+      dispatch_submit, counter, dispatch_submit2);
   for (auto& facade : facades) facade->deferred = dispatcher;
   {
     std::lock_guard lock(state_lock);
@@ -3043,9 +3150,32 @@ void end_app_after_device_loss() {
   // Embedded fixtures keep exception control of their simulated losses.
   auto* thread = GuestThread::current();
   if (!thread || os_quit::requested() || !terminal_guest_process_exit()) return;
+  // Injected capture and overlay tools are a known cause; the launcher names them.
+  injected_modules::log_loaded(true);
   log::error("vulkan-fault", "Native Vulkan device lost on guest tid {}; ending the app as a fatal error", thread->tid());
   record_guest_process_failure(1);
   exit_guest_process(1);
+}
+stall_finder::GpuEvidence stall_evidence() {
+  stall_finder::GpuEvidence e;
+  e.summary = live_fault_markers(e.lines);
+  std::vector<std::pair<VkQueue, std::shared_ptr<QueueFacade>>> facades;
+  {
+    std::unique_lock lock(state_lock, std::try_to_lock);
+    if (!lock.owns_lock()) e.lines.push_back("Vulkan state lock busy: Venture's queue dispatcher not read");
+    else for (const auto& [queue, facade] : queue_facades) facades.emplace_back(queue, facade);
+  }
+  for (const auto& [queue, facade] : facades) {
+    if (!facade->deferred) continue;
+    const auto held = facade->deferred->try_pending(facade->deferred_index);
+    if (!held) e.lines.push_back(std::format("queue {:#x}: Venture's queue dispatcher busy (a thread is inside it)",
+                                             sync_trace::handle(queue)));
+    else if (*held)
+      e.lines.push_back(std::format("queue {:#x}: Venture's queue dispatcher holds {} submissions until the "
+                                    "semaphores they wait for are signalled", sync_trace::handle(queue), *held));
+  }
+  for (const auto& [queue, owner] : gfx::held_queue_locks()) e.held_queue_locks.emplace_back(sync_trace::handle(queue), owner);
+  return e;
 }
 static std::atomic<bool> quit_device_lost{false};
 bool os_quit_device_lost() { return quit_device_lost.load(); }

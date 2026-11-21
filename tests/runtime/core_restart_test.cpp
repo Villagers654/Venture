@@ -1,6 +1,7 @@
 #include "platform/runtime_teardown_grace.h"
 #include <doctest/doctest.h>
 #include "platform/runtime_child.h"
+#include "core/launch_payload.h"
 #include "common/ipc.h"
 #include "common/paths.h"
 #include "common/environment.h"
@@ -447,4 +448,15 @@ TEST_CASE("Full and broken diagnostic pipes cannot obstruct reliable worker rest
   CHECK(child.status == 0);
   CHECK(child.restart);
   CHECK(child.launch_payload == "telemetry-survived");
+}
+
+TEST_CASE("A cold launch payload names the activity the restarted process starts") {
+  using venture::launch_payload::activity;
+  // AppMain writes flags (int), then the activity and the action as Java modified UTF-8.
+  const std::string flags("\x10\x00\x80\x00", 4);
+  const std::string name = "org.example.emu.vr.VrActivity";
+  CHECK(activity(flags + std::string{'\0', static_cast<char>(name.size())} + name + std::string(2, '\0')) == name);
+  CHECK(activity(flags + std::string(4, '\0')).empty());
+  CHECK(activity(flags + std::string{'\0', '\x40'} + "short").empty());
+  CHECK(activity("").empty());
 }

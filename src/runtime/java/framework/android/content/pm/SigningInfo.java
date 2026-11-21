@@ -9,6 +9,17 @@ public final class SigningInfo {
     signers = s.clone();
     this.history = history == null ? null : history.clone();
   }
+  /**
+   * API 35's public form, which AOSP's SigningInfo also has (a 2D process runs
+   * AOSP's, docs/design/layoutlib.md): past certificates oldest first.
+   */
+  public SigningInfo(int schemeVersion, java.util.Collection<Signature> signers,
+                     java.util.Collection<java.security.PublicKey> publicKeys,
+                     java.util.Collection<Signature> pastSigningCertificates) {
+    this(signers.toArray(new Signature[0]),
+         pastSigningCertificates == null || pastSigningCertificates.isEmpty() ? null
+             : pastSigningCertificates.toArray(new Signature[0]));
+  }
   public boolean hasPastSigningCertificates() {
     return history != null && history.length > 1;
   }

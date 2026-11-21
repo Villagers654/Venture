@@ -301,6 +301,10 @@ std::map<std::string, std::uint32_t> capabilities() {
   // Hosts without performance hints accept and ignore them (extensions.cpp).
   if (!result.contains("XR_EXT_performance_settings"))
     result["XR_EXT_performance_settings"] = 4;
+  // Quest's runtime always has performance metrics; without the host's, Venture
+  // answers with counters that hold no value yet (extensions.cpp).
+  if (!result.contains("XR_META_performance_metrics"))
+    result["XR_META_performance_metrics"] = XR_META_performance_metrics_SPEC_VERSION;
   if (result.contains("XR_FB_swapchain_update_state")) {
     result["XR_FB_swapchain_update_state_vulkan"] = 1;
     result["XR_FB_swapchain_update_state_opengl_es"] = 1;

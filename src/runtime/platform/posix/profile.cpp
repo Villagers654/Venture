@@ -35,7 +35,7 @@ enum : std::uint32_t { idle, requested, captured, released, done };
 struct Slot {
   std::atomic<std::uint32_t> state{idle};
   std::atomic<pid_t> target{0};
-  std::uintptr_t rip = 0, rbp = 0;
+  std::uintptr_t rip = 0, rbp = 0, rsp = 0;
 };
 Slot slot;
 std::mutex sampler_mutex;  // samplers only; never taken by a parked target
@@ -66,9 +66,11 @@ void park(int, siginfo_t*, void* raw) {
     // The program counter and frame pointer (x29) play rip's and rbp's part.
     slot.rip = static_cast<std::uintptr_t>(context.pc);
     slot.rbp = static_cast<std::uintptr_t>(context.regs[29]);
+    slot.rsp = static_cast<std::uintptr_t>(context.sp);
 #else
     slot.rip = static_cast<std::uintptr_t>(context.gregs[REG_RIP]);
     slot.rbp = static_cast<std::uintptr_t>(context.gregs[REG_RBP]);
+    slot.rsp = static_cast<std::uintptr_t>(context.gregs[REG_RSP]);
 #endif
     futex(slot.state, FUTEX_WAKE, 1);
     // Bounded: a sampler that vanished must not wedge the target.
@@ -281,6 +283,43 @@ bool profile_sample(const ProfileThread& t, const Cpu* cpu, const std::atomic<st
   slot.target.store(0, std::memory_order_release);
   slot.state.store(idle, std::memory_order_release);
   profile_cpu_time(t, out.cpu_ns);
+  return true;
+}
+bool profile_host_stack(const ProfileThread& t, std::span<std::uintptr_t> words, std::uintptr_t& ip,
+                        std::size_t& count) noexcept {
+  count = 0;
+  ip = 0;
+  if (!install_handler() || t.id == profile_thread_id()) return false;
+  std::lock_guard lock(sampler_mutex);
+  slot.target.store(static_cast<pid_t>(t.id), std::memory_order_release);
+  slot.state.store(requested, std::memory_order_release);
+  if (syscall(SYS_tgkill, getpid(), static_cast<pid_t>(t.id), sample_signal())) {
+    slot.state.store(idle, std::memory_order_release);
+    return false;
+  }
+  if (!wait_change(slot.state, requested, 50'000'000)) {
+    std::uint32_t expected = requested;
+    if (slot.state.compare_exchange_strong(expected, idle, std::memory_order_acq_rel)) {
+      slot.target.store(0, std::memory_order_release);
+      return false;
+    }
+  }
+  ip = slot.rip;
+  // Page by page, from the interrupted stack pointer (the handler's frame is
+  // below it); the first unreadable page ends the copy.
+  std::uintptr_t at = slot.rsp;
+  while (at && count < words.size()) {
+    const auto page_end = (at | 4095) + 1;
+    const auto n = std::min<std::size_t>((page_end - at) / sizeof(std::uintptr_t), words.size() - count);
+    if (!n || !read_self(at, words.data() + count, n * sizeof(std::uintptr_t))) break;
+    count += n;
+    at += n * sizeof(std::uintptr_t);
+  }
+  slot.state.store(released, std::memory_order_release);
+  futex(slot.state, FUTEX_WAKE, 1);
+  wait_change(slot.state, released, 2'000'000'000);
+  slot.target.store(0, std::memory_order_release);
+  slot.state.store(idle, std::memory_order_release);
   return true;
 }
 std::vector<ProfileModule> profile_modules() {

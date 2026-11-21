@@ -30,7 +30,7 @@ public final class RuntimeEnvironment {
     displayPeriod = period;
     RuntimeEnvironment e = current;
     if (e != null) e.refreshRate = (float)(1_000_000_000d / period);
-    if (changed) android.view.Choreographer.displayPeriodChanged(period);
+    if (changed) Components.displayPeriodChanged(period);
   }
   public volatile boolean hostVsync;
   private RuntimeEnvironment(String[] args) {
@@ -80,7 +80,9 @@ public final class RuntimeEnvironment {
     TlsPolicy.install();
     AndroidCAStore.install();
     AndroidKeyStore.install();
+    Components.configureProcess();
     current = new RuntimeEnvironment(args);
+    Components.configured(current);
   }
   public static void configure(String[] args) {
     configure(args, new NativeHost());

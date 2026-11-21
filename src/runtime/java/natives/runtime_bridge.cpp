@@ -1,4 +1,6 @@
 #include "core/process_exit.h"
+#include "core/document_roots.h"
+#include "core/launch_payload.h"
 #include "java/natives/runtime_bridge.h"
 
 #include <jni.h>
@@ -231,6 +233,35 @@ jlongArray JNICALL process_memory(JNIEnv* env, jobject) {
     return result;
   });
 }
+// ParcelFileDescriptor.getFd/detachFd on a document the framework opened.
+jint JNICALL open_document_fd(JNIEnv* env, jobject, jstring path, jint flags) {
+  return guarded(env, [&]() -> jint {
+    if (!path) throw std::invalid_argument("Missing document path");
+    std::u16string text(static_cast<std::size_t>(env->GetStringLength(path)), u' ');
+    env->GetStringRegion(path, 0, static_cast<jsize>(text.size()), reinterpret_cast<jchar*>(text.data()));
+    if (env->ExceptionCheck()) return -1;
+    const std::filesystem::path host(text);
+    return static_cast<jint>(hle::libc::fd_open_host(host, "/storage/document/" + paths::generic_utf8(host.filename()),
+                                                     flags));
+  });
+}
+// A picked folder, mounted for the guest as the removable volume /storage/<id>.
+jboolean JNICALL mount_document_root(JNIEnv* env, jobject, jstring id, jstring path) {
+  return guarded(env, [&]() -> jboolean {
+    if (!id || !path) throw std::invalid_argument("Missing document root");
+    std::u16string text(static_cast<std::size_t>(env->GetStringLength(path)), u' ');
+    env->GetStringRegion(path, 0, static_cast<jsize>(text.size()), reinterpret_cast<jchar*>(text.data()));
+    const char* utf = env->GetStringUTFChars(id, nullptr);
+    if (!utf) return JNI_FALSE;
+    const std::string volume(utf);
+    env->ReleaseStringUTFChars(id, utf);
+    if (env->ExceptionCheck()) return JNI_FALSE;
+    return document_roots::mount(volume, std::filesystem::path(text)) ? JNI_TRUE : JNI_FALSE;
+  });
+}
+jint JNICALL close_guest_fd(JNIEnv* env, jobject, jint fd) {
+  return guarded(env, [&]() -> jint { return hle::libc::FdTable::get().close(fd); });
+}
 jboolean JNICALL debugger_connected(JNIEnv* env, jobject) {
   return guarded(env, []() -> jboolean { return platform::process_debugger_attached(); });
 }
@@ -303,7 +334,7 @@ void JNICALL restart_process_with_intent(JNIEnv* env, jobject, jbyteArray payloa
 }
 jbyteArray JNICALL cold_launch_intent(JNIEnv* env, jobject) {
   return guarded(env, [&]() -> jbyteArray {
-    auto payload = platform::take_runtime_launch_payload();
+    auto payload = launch_payload::take();
     if (payload.empty()) return nullptr;
     auto result = env->NewByteArray(static_cast<jsize>(payload.size()));
     if (result) env->SetByteArrayRegion(result, 0, static_cast<jsize>(payload.size()),
@@ -336,6 +367,9 @@ void register_loopers(JNIEnv* env) {
       {const_cast<char*>("setupShadersDiskCache"), const_cast<char*>("(Ljava/lang/String;)V"), reinterpret_cast<void*>(setup_shaders_disk_cache)},
       {const_cast<char*>("processMemory"), const_cast<char*>("()[J"), reinterpret_cast<void*>(process_memory)},
       {const_cast<char*>("debuggerConnected"), const_cast<char*>("()Z"), reinterpret_cast<void*>(debugger_connected)},
+      {const_cast<char*>("openDocumentFd"), const_cast<char*>("(Ljava/lang/String;I)I"), reinterpret_cast<void*>(open_document_fd)},
+      {const_cast<char*>("closeGuestFd"), const_cast<char*>("(I)I"), reinterpret_cast<void*>(close_guest_fd)},
+      {const_cast<char*>("mountDocumentRoot"), const_cast<char*>("(Ljava/lang/String;Ljava/lang/String;)Z"), reinterpret_cast<void*>(mount_document_root)},
       {const_cast<char*>("systemProperty"), const_cast<char*>("(Ljava/lang/String;)[B"), reinterpret_cast<void*>(system_property)},
       {const_cast<char*>("beginProcessExit"), const_cast<char*>("()V"), reinterpret_cast<void*>(begin_process_exit)},
       {const_cast<char*>("endProcessExit"), const_cast<char*>("()V"), reinterpret_cast<void*>(end_process_exit)},
@@ -487,11 +521,13 @@ android::NativeWindow* from_surface(void*, jobject object) {
 jobject to_surface(void*, android::NativeWindow* window) {
   auto* env = host_env();
   auto cls = env->FindClass("android/view/Surface");
-  auto ctor = cls ? env->GetMethodID(cls, "<init>", "(J)V") : nullptr;
+  // Both Venture's Surface and AOSP's (a 2D process, where ProcessLayoutlib
+  // adds it) adopt a window reference through this factory.
+  auto adopt = cls ? env->GetStaticMethodID(cls, "ventureAdopt", "(J)Landroid/view/Surface;") : nullptr;
   jobject result = nullptr;
-  if (ctor) {
+  if (adopt) {
     android::acquire(window);
-    result = env->NewObject(cls, ctor, static_cast<jlong>(h2g(window)));
+    result = env->CallStaticObjectMethod(cls, adopt, static_cast<jlong>(h2g(window)));
     if (!result) android::release(window);
   }
   if (cls) env->DeleteLocalRef(cls);

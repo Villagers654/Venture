@@ -255,4 +255,12 @@ public class AudioManager {
     android.util.Log.w("AudioManager", "Bluetooth SCO unavailable");
   }
   public void stopBluetoothSco() {}
+  // Views' click sounds: the host plays no system sound effects.
+  public void playSoundEffect(int effectType) {}
+  public void playSoundEffect(int effectType, int userId) {}
+  public void playSoundEffect(int effectType, float volume) {}
+  public boolean areNavigationRepeatSoundEffectsEnabled() {
+    return false;
+  }
+  public void preDispatchKeyEvent(android.view.KeyEvent event, int stream) {}
 }

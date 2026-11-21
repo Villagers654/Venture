@@ -109,7 +109,7 @@ void observe(VkExtent2D, VkExtent2D, VkExtent2D) {}
 namespace xr {
 HostXr& host_xr() { static HostXr host; return host; }
 std::uint64_t host_procedure_generation() { return 1; }
-void cancel_sequence(XrSession, const XrHapticActionInfo*) {}
+void cancel_sequence(XrSession, const XrHapticActionInfo*, bool) {}
 void clear_haptic_bindings(XrSession) {}
 void forget_menu_action(XrAction) {}
 void forget_menu_action_set(XrActionSet) {}

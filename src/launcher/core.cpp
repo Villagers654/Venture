@@ -7,9 +7,12 @@
 #include "launcher/sign_in_link.h"
 #include "launcher/store_link.h"
 #include "launcher/updater.h"
+#include "common/standalone.h"
 #include "common/android/manifest.h"
+#include "common/layoutlib_component.h"
 #include "common/download/asset_files.h"
 #include "common/file_ops.h"
+#include "common/injected_modules.h"
 #include "common/first_launch.h"
 #include "common/http/client.h"
 #include "common/library/import.h"
@@ -69,6 +72,10 @@ Core::Core(Options options)
     log::info("launcher", "Venture command line starting.");
   else
     log::info("launcher", "Venture native launcher starting.");
+    log::info("launcher", "Standalone headset: {}", standalone::detect().reason);
+  // The runtimes it starts inherit them: modules from the program that started
+  // Venture (Steam's overlay) are not named as a cause of a device loss.
+  injected_modules::record_starters();
   steam_sync_allowed_ = options_.interactive() && shows(Feature::steam) && steam_library::profile_sync_allowed();
   if (!options_.interactive())
     log::info("steam", "Steam sync disabled for non-interactive launcher mode.");
@@ -1771,6 +1778,23 @@ Json Core::request_launch(const std::shared_ptr<LaunchQueue>& queue,
     request->cancel();
   return {{"success", result.get()}};
 }
+std::optional<std::uint64_t> Core::android_2d_download(std::string_view id) const {
+  const auto bin = paths::executable().parent_path();
+  const auto component = layoutlib_component::manifest(bin);
+  if (!component || !layoutlib_component::find(bin, data_).empty()) return std::nullopt;
+  const auto *install = installed(id);
+  if (!install) return std::nullopt;
+  for (const auto &f : install->plan.files) {
+    if (f.kind != "apk" || !f.base()) continue;
+    try {
+      if (android::launches_2d(android::read_apk(install->directory / paths::from_utf8(f.name)))) return component->size;
+    } catch (const std::exception &e) {
+      log::warn("launch", "Could not read {}'s manifest: {}", f.name, e.what());
+    }
+    break;
+  }
+  return std::nullopt;
+}
 void Core::launch_game(std::string_view id, std::string_view requested,
                        const LaunchDetails& details, std::shared_ptr<LaunchRequest> reply) {
   // Any installed game launches; the account only decides whose platform
@@ -2177,8 +2201,9 @@ headset::Check Core::headset_check(std::string_view package) const {
 }
 #elif VENTURE_HEADSET_CHECK
 headset::Check Core::headset_check(std::string_view) const {
+  // The debug report's: never loads the VR runtime (headset_play.h).
   return headset::check_linux(settings_.runtime, library::launch_environment(settings_, {}, options_.automation),
-                              data_);
+                              data_, false);
 }
 #endif
 void Core::share_debug_report(fs::path file, std::function<void(std::string url, std::string error)> done) {

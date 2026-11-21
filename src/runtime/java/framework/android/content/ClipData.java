@@ -1,11 +1,16 @@
 package android.content;
 public class ClipData {
   private final Item item;
+  private final ClipDescription description;
   public ClipData(CharSequence label, String[] mimeTypes, Item i) {
     item = i;
+    description = new ClipDescription(label, mimeTypes);
   }
   public static ClipData newPlainText(CharSequence label, CharSequence text) {
     return new ClipData(label, new String[] {"text/plain"}, new Item(text));
+  }
+  public ClipDescription getDescription() {
+    return description;
   }
   public int getItemCount() {
     return 1;

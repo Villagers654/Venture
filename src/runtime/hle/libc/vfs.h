@@ -198,6 +198,10 @@ class FdTable {
   std::map<int, Entry> fds_;
 };
 std::int64_t fd_open(const char*, int flags, std::uint32_t mode = 0600, int dirfd = at_cwd);
+// A guest descriptor on a host file outside the guest's mounts that the
+// framework opened for the app (a document the person picked); `guest` names it
+// in /proc/self/fd. No path to it is mapped, so only the descriptor reaches it.
+std::int64_t fd_open_host(const std::filesystem::path& host, std::string guest, int flags);
 std::int64_t fd_read(int, void*, std::uint64_t);
 std::int64_t fd_write(int, const void*, std::uint64_t);
 std::int64_t fd_pread(int, void*, std::uint64_t, std::int64_t);

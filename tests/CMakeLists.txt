@@ -876,6 +876,11 @@ if(TARGET venture_java)
     add_test(NAME venture_java_conversion COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/runtime/java_conversion_test.py")
     set_tests_properties(venture_java_conversion PROPERTIES ENVIRONMENT "VENTURE_CONVERSION_PROBE=$<TARGET_FILE:venture_java_conversion_probe>")
     # Locks the build JARs exclusively to prove the copy never reads them.
+    # A 2D app's windows stop with its activity, so the OS quit completes.
+    get_property(venture_test_android_jar GLOBAL PROPERTY VENTURE_LAYOUTLIB_ANDROID_JAR)
+    get_property(venture_test_build_tools GLOBAL PROPERTY VENTURE_LAYOUTLIB_BUILD_TOOLS)
+    if(VENTURE_LAYOUTLIB AND venture_test_android_jar)
+    endif()
     # A first launch's one-time work done before the launch (venture-runtime --prepare).
     add_test(NAME venture_first_launch_prepare COMMAND "${Python3_EXECUTABLE}"
       "${CMAKE_CURRENT_SOURCE_DIR}/runtime/first_launch_prepare_test.py"
@@ -973,7 +978,8 @@ if(TARGET venture_xr)
 add_executable(venture_xr_tests test_main.cpp  runtime/xr_test.cpp runtime/xr_vrapi_test.cpp runtime/xr_controls_test.cpp
      mock_openxr_runtime/input_timeline.cpp runtime/xr_android_surface_test.cpp
      runtime/xr_color_space_test.cpp runtime/xr_call_trace_test.cpp runtime/xr_passthrough_test.cpp
-     runtime/xr_vulkan_layers_test.cpp runtime/xr_api_layers_test.cpp runtime/xr_keyboard_test.cpp)
+     runtime/xr_vulkan_layers_test.cpp runtime/xr_api_layers_test.cpp runtime/xr_keyboard_test.cpp
+     runtime/xr_zero_copy_test.cpp runtime/xr_panel_window_test.cpp)
   target_link_libraries(venture_xr_tests PRIVATE venture_java_framework)
   target_compile_definitions(venture_xr_tests PRIVATE
     VENTURE_TEST_JAVA_HOME="${VENTURE_JAVA_HOME}" VENTURE_TEST_FRAMEWORK_JAR="${VENTURE_FRAMEWORK_JAR}")
@@ -1078,6 +1084,14 @@ target_sources(venture_tests PRIVATE )
     set_tests_properties(runtime_host_check PROPERTIES
       ENVIRONMENT "XR_RUNTIME_JSON=${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/mock_openxr_runtime.json"
       PASS_REGULAR_EXPRESSION "CPU engine for A64 games: [a-z0-9-]+ \\([^\n]+\\)\nCPU engine for A32 games: [^\n]+\nGLES: ANGLE on Vulkan\nOpenXR runtime manifest \\(XR_RUNTIME_JSON\\): [^\n]+\nOpenXR: [^\n]+, accepts version 1\\.[01]\nHeadset: [^\n]+\nOpenXR extensions \\([1-9]"
+      TIMEOUT 60)
+    # The debug report's passive check names the manifest and never loads the
+    # runtime: no runtime name, headset or extension list.
+    add_test(NAME runtime_host_check_passive COMMAND venture-runtime --host-check-passive)
+    set_tests_properties(runtime_host_check_passive PROPERTIES
+      ENVIRONMENT "XR_RUNTIME_JSON=${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/mock_openxr_runtime.json"
+      PASS_REGULAR_EXPRESSION "GLES: ANGLE on Vulkan\nOpenXR runtime manifest \\(XR_RUNTIME_JSON\\): [^\n]+\nOpenXR: runtime not queried "
+      FAIL_REGULAR_EXPRESSION "Headset:|OpenXR extensions|accepts version"
       TIMEOUT 60)
   endif()
 endif()

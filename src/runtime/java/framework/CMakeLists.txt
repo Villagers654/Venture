@@ -11,6 +11,7 @@ endif()
 file(GLOB_RECURSE VENTURE_FRAMEWORK_JAVA CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*.java")
 list(APPEND VENTURE_FRAMEWORK_JAVA "${CMAKE_CURRENT_SOURCE_DIR}/../bridge/com/venture/runtime/NativeMethods.java")
 list(APPEND VENTURE_FRAMEWORK_JAVA "${CMAKE_CURRENT_SOURCE_DIR}/../bridge/com/venture/runtime/MethodHooks.java")
+list(APPEND VENTURE_FRAMEWORK_JAVA "${CMAKE_CURRENT_SOURCE_DIR}/../bridge/com/venture/runtime/GuestReflection.java")
 # A pre-rebrand build tree may still contain classes from the released package.
 # Use a fresh generation and package only the current resource subtree.
 set(VENTURE_FRAMEWORK_CLASSES "${CMAKE_CURRENT_BINARY_DIR}/classes-venture")

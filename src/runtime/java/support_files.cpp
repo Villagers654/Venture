@@ -1,5 +1,6 @@
 #include "java/support_files.h"
 #include "common/paths.h"
+#include "common/layoutlib_component.h"
 
 namespace venture::java {
 SupportFiles support_files() {
@@ -15,6 +16,7 @@ SupportFiles support_files() {
 #endif
   return {home, bin / "venture-framework.jar",
           bin / "venture-java-bridge.jar",
-          bin / "java/android-32.hierarchy.tsv", bin / "java/dex/classes", bin / java, bin / agent};
+          bin / "java/android-32.hierarchy.tsv", bin / "java/dex/classes", bin / java, bin / agent,
+          bin / "venture-framework-2d.jar", layoutlib_component::find(bin, paths::data_dir())};
 }
 }  // namespace venture::java

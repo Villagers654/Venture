@@ -248,6 +248,66 @@ TEST_CASE("debug report: a failed run, its times, cause and next steps come firs
   fs::remove_all(data);
 }
 
+TEST_CASE("debug report: modules injected into the game, and the first step after a device loss") {
+  const auto data = fs::temp_directory_path() / ("venture-report-modules-" + std::to_string(current_process_id()));
+  fs::remove_all(data);
+  fs::create_directories(data / "logs");
+  const auto start = std::chrono::floor<std::chrono::seconds>(std::chrono::system_clock::now()) - std::chrono::minutes(2);
+  auto report = [&](const std::string &log) {
+    std::ofstream(data / "logs" / "runtime-com.example.game.log", std::ios::binary)
+        << std::format("  1.000 1 I [launch] Process started at {:%FT%TZ}\n", start) << log;
+    auto file = write_debug_report({.data = data, .version = "9.9.9", .package = "com.example.game"});
+    std::ifstream in(file, std::ios::binary);
+    return std::string{std::istreambuf_iterator<char>(in), {}};
+  };
+  // H3VR2 on an AMD GPU with Medal running: the device loss names Medal first.
+  const std::string medal =
+      "  2.000 1 I [modules] Injected modules: none\n"
+      "  9.000 3 I [modules] Injected module: C:\\Users\\u\\AppData\\Local\\Medal\\MedalHook_x64.dll (product "
+      "\"Medal\", company \"Medal B.V.\", version \"4.2.0.0\")\n"
+      "  9.000 3 W [modules] Injected modules: Medal\n";
+  const std::string lost =
+      "  537.696 3 E [vulkan-fault] Native Vulkan device lost on guest tid 1024; ending the app as a fatal error\n"
+      "  537.800 1 I [launch] Exit code: 1\n";
+  auto text = report(medal + lost);
+  CHECK(text.find("Result: The runtime stopped unexpectedly (exit code 1). A capture or overlay program (Medal) was "
+                  "loaded into the game. Close it fully, then try again. Last error: Native Vulkan device lost") !=
+        std::string::npos);
+  CHECK(text.find("=== Likely cause ===\nThe game lost the graphics device.") != std::string::npos);
+  CHECK(text.find("=== Next steps ===\n- A capture or overlay program (Medal) was loaded into the game. Close it "
+                  "fully, then try again.\n- Update the graphics driver") != std::string::npos);
+  CHECK(text.find("=== Injected modules ===\nAt the last check: Medal\nC:\\Users\\u\\AppData\\Local\\Medal\\"
+                  "MedalHook_x64.dll (product \"Medal\", company \"Medal B.V.\", version \"4.2.0.0\")\n") !=
+        std::string::npos);
+
+  // Without injected modules the device loss keeps its usual step, and the section says none.
+  text = report("  2.000 1 I [modules] Injected modules: none\n" + lost);
+  CHECK(text.find("=== Next steps ===\n- Update the graphics driver") != std::string::npos);
+  CHECK(text.find("capture or overlay program") == std::string::npos);
+  CHECK(text.find("=== Injected modules ===\nNone: no other program had put a library into the game's process.\n") !=
+        std::string::npos);
+
+  // Steam's overlay in a game started from a Steam library shortcut: listed, never named.
+  const std::string overlay = "  2.000 1 I [modules] Injected module: D:\\Steam\\gameoverlayrenderer64.dll (product "
+                              "\"Steam\", from the program that started Venture)\n"
+                              "  2.000 1 I [modules] Injected modules: none\n";
+  text = report(overlay + lost);
+  CHECK(text.find("capture or overlay program") == std::string::npos);
+  CHECK(text.find("=== Next steps ===\n- Update the graphics driver") != std::string::npos);
+  CHECK(text.find("=== Injected modules ===\nAt the last check: none apart from the program that started Venture\n"
+                  "D:\\Steam\\gameoverlayrenderer64.dll (product \"Steam\", from the program that started Venture)\n") !=
+        std::string::npos);
+
+  // A crash is not blamed on them, and a log from before the check says so.
+  text = report(medal + "  3.000 2 E [libc] Fatal signal 11 (SIGSEGV), code 1 in tid 2\n  3.100 1 I [launch] Exit "
+                        "code: 139\n");
+  CHECK(text.find("=== Likely cause ===\nThe game crashed.") != std::string::npos);
+  CHECK(text.find("- A capture or overlay program") == std::string::npos);
+  text = report(lost);
+  CHECK(text.find("=== Injected modules ===\nNot recorded for this run.\n") != std::string::npos);
+  fs::remove_all(data);
+}
+
 TEST_CASE("debug report: the game's overrides, effective settings and launch environment") {
   const auto data = fs::temp_directory_path() / ("venture-report-settings-" + std::to_string(current_process_id()));
   fs::remove_all(data);
@@ -354,6 +414,38 @@ TEST_CASE("debug report: the session timeline comes from the whole runtime log")
   text = report();
   CHECK(text.find("=== Session timeline (1 minutes) ===\n     60.000 9 I [timeline] t=1m fps=72.0\n") !=
         std::string::npos);
+  fs::remove_all(data);
+}
+
+TEST_CASE("debug report: a huge runtime log gives a report that still uploads") {
+  const auto data = fs::temp_directory_path() / ("venture-report-huge-" + std::to_string(current_process_id()));
+  fs::remove_all(data);
+  fs::create_directories(data / "logs");
+  const auto log = data / "logs" / "runtime-com.example.game.log";
+  {
+    // 6000 timeline and 6000 layer lines past the 1 and 2 KiB kept of each, ~25 MB of log.
+    std::ofstream out(log, std::ios::binary);
+    out << "  1.000 1 I [launch] Process started\n";
+    const std::string pad(2100, 'x');
+    for (int i = 0; i < 6000; ++i)
+      out << std::format("{:7}.000 9 I [timeline] t={}m fps=90 {}\n", i, i, pad)
+          << std::format("{:7}.500 4 I [xr-layers] layers back to arrangement #{} {}\n", i, i, pad);
+  }
+  const auto file = write_debug_report({.data = data, .version = "9.9.9", .package = "com.example.game"});
+  CHECK(fs::file_size(file) <= 1'000'000);
+  std::string text;
+  {
+    std::ifstream in(file, std::ios::binary);
+    text.assign(std::istreambuf_iterator<char>(in), {});
+  }
+  CHECK(text.find("=== Session timeline (6000 minutes, 120 shown) ===") != std::string::npos);
+  CHECK(text.find("[timeline] t=0m ") != std::string::npos);
+  CHECK(text.find("[timeline] t=5999m ") != std::string::npos);
+  CHECK(text.find("=== Frame layers and session states (6000 lines, first and last 60 shown) ===") !=
+        std::string::npos);
+  CHECK(text.find("arrangement #59 x") != std::string::npos);
+  CHECK(text.find("... 5880 lines left out ...\n   5940.500") != std::string::npos);
+  CHECK(text.find("arrangement #5999 x") != std::string::npos);
   fs::remove_all(data);
 }
 

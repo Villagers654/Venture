@@ -1,3 +1,4 @@
+#include "common/injected_modules.h"
 #include "common/log.h"
 #include "gfx/angle.h"
 #include "gfx/angle_callbacks.h"
@@ -820,6 +821,7 @@ GpuDevice& gpu_device() {
       throw std::runtime_error("Graphics device has no reported queue");
     register_queue_probe();
     xr::log_loaded_vulkan_layers();
+    injected_modules::log_loaded();
     publish_host_gpu();
   });
   return gpu;

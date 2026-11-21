@@ -17,4 +17,6 @@ public final class InputManager {
     android.util.Log.w("InputManager", "Android input-device producer unavailable; XR controllers use OpenXR");
   }
   public synchronized void unregisterInputDeviceListener(InputDeviceListener listener) { listeners.remove(listener); }
+  // View.requestPointerCapture: a panel's pointer stays a pointer.
+  public void requestPointerCapture(android.os.IBinder windowToken, int mode) {}
 }

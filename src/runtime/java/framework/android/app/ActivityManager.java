@@ -89,4 +89,18 @@ public class ActivityManager {
   public void setProcessStateSummary(byte[] state) {
     if (state != null && state.length > 128) throw new IllegalArgumentException("State summary over 128 bytes");
   }
+  // Framework code (window insets animation, renderer setup, PhoneWindow) asks these.
+  // The host is a desktop GPU with memory to spare, and Venture is up.
+  public static boolean isHighEndGfx() {
+    return true;
+  }
+  public static boolean isLowRamDeviceStatic() {
+    return false;
+  }
+  public static boolean isSystemReady() {
+    return true;
+  }
+  public static int getCurrentUser() {
+    return android.os.UserHandle.myUserId();
+  }
 }

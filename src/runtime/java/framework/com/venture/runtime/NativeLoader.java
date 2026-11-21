@@ -146,13 +146,18 @@ public final class NativeLoader {
   /** Retains reflection exceptions while intercepting reflected ELF loads. */
   public static Object invoke(Method method, Object target, Object[] args)
       throws IllegalAccessException, InvocationTargetException {
+    int kind = loadKind(method);
+    // Ordinary reflection needs no caller loader: skip the stack walk.
+    if (kind == 0 || kind == 3)
+      return GuestReflection.invoke(method, target, args);
     return invokeWithLoader(method, target, args, callerLoader());
   }
   public static Object invokeWithLoader(Method method, Object target, Object[] args,
       ClassLoader loader) throws IllegalAccessException, InvocationTargetException {
     int kind = loadKind(method);
+    // Access is judged against the app class calling Method.invoke, as ART does.
     if (kind == 0 || kind == 3)
-      return method.invoke(target, args);
+      return GuestReflection.invoke(method, target, args);
     boolean stat = Modifier.isStatic(method.getModifiers());
     if (!stat && target == null)
       throw new NullPointerException("Runtime.load receiver");

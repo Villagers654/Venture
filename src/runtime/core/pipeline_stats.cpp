@@ -1,6 +1,7 @@
 #include "core/pipeline_stats.h"
 #include "core/thread_lifetime.h"
 #include "core/profile.h"
+#include "core/stall_watch.h"
 #include "platform/profile.h"
 #include "common/environment.h"
 #include "common/log.h"
@@ -89,6 +90,7 @@ std::uint32_t pipeline_exchange_activity(std::uint32_t value) noexcept {
 void record_pipeline(PipelineSource source, bool compute, std::uint32_t count,
                      std::int64_t start_ns, std::uint64_t wall_ns,
                      std::span<const PipelineFeedback> feedback) noexcept {
+  stall_watch::pipelines(count, wall_ns);
   try {
     if (compile_trace_enabled()) {
       std::uint32_t hits = 0;

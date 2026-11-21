@@ -4,6 +4,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <functional>
 #include <memory>
 #include <string>
@@ -116,6 +117,9 @@ class Linker {
   void register_hle_library(std::shared_ptr<HleLibrary> library);
   // Directories searched for bare names (the APK's extracted lib dir first).
   void set_search_paths(std::vector<std::string> host_directories);
+  // A library file that exists only in guest memory (android_dlopen_ext with a
+  // memfd): open(guest_path) reads it from host_file.
+  void register_file(std::string guest_path, std::filesystem::path host_file);
 
   // dlopen(): loads `name` (bare soname or guest path) and its DT_NEEDED
   // closure, relocates, assigns TLS, runs initializers on the calling guest

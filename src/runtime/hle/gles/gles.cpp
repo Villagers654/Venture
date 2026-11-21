@@ -21,6 +21,7 @@
 #include "hle/gles/gles_state.h"
 #include "gfx/a32_handles.h"
 #include "gfx/gpu_device.h"
+#include "gfx/texture_decode.h"
 
 namespace venture::gfx {
 GLint guest_max_samples() {
@@ -88,9 +89,11 @@ void build_extensions(GlContextState& state) {
       has_extension(text, "GL_EXT_texture_compression_bptc") &&
       !(compression && (!std::strcmp(compression, "never") ||
                         !std::strcmp(compression, "0")));
+  // Where the GPU samples ASTC, ANGLE passes it straight to Vulkan and the
+  // fallback stays off; VENTURE_NATIVE_ASTC=0 turns it on regardless.
   state.astc_fallback =
       !has_extension(text, "GL_KHR_texture_compression_astc_ldr") ||
-      (compress && !native_astc());
+      (compress && !native_astc()) || !native_astc_allowed();
   state.bc7_fallback = state.astc_fallback && compress;
   GLint minor = 0;
   if (state.major_version >= 3)

@@ -15,6 +15,7 @@
 
 #include "gfx/gpu_device.h"
 #include "gfx/pipeline_trace.h"
+#include "gfx/texture_decode.h"
 #include "core/alloc_failure.h"
 #include "hle/vulkan/texture.h"
 #include "hle/vulkan/texture_memory.h"
@@ -1567,7 +1568,165 @@ TEST_CASE("Vulkan texture decode refused memory skips that texture, logs the lim
   REQUIRE(test::vk_call("vkResetCommandBuffer", gpu.command, 0u) == VK_SUCCESS);
 }
 
+// SwiftShader (the suites' GPU) samples ASTC LDR, as the Steam Frame's Turnip,
+// Intel's iGPUs and Android headsets do; desktop NVIDIA and AMD do not.
+TEST_CASE("Vulkan native ASTC passes through; an image the host refuses is decoded and copies keep the blocks") {
+  test::VulkanDevice gpu;
+  if (!native_astc(gpu.physical)) {
+    MESSAGE("the host GPU has no native ASTC; the decoded path is covered elsewhere");
+    return;
+  }
+  constexpr auto format = VK_FORMAT_ASTC_8x8_UNORM_BLOCK;
+  // The guest sees the host's own format properties and feature.
+  VkFormatProperties host{}, guest{};
+  reinterpret_cast<PFN_vkGetPhysicalDeviceFormatProperties>(
+      vulkan::raw_physical_proc(gpu.physical, "vkGetPhysicalDeviceFormatProperties"))(gpu.physical, format, &host);
+  test::vk_call("vkGetPhysicalDeviceFormatProperties", gpu.physical, format, &guest);
+  CHECK(guest.optimalTilingFeatures == host.optimalTilingFeatures);
+  CHECK(guest.linearTilingFeatures == host.linearTilingFeatures);
+  CHECK(guest.bufferFeatures == host.bufferFeatures);
+  VkPhysicalDeviceFeatures features{};
+  test::vk_call("vkGetPhysicalDeviceFeatures", gpu.physical, &features);
+  CHECK(features.textureCompressionASTC_LDR == VK_TRUE);
+
+  // An optimal sampled image is the host's: no decoded planes.
+  test::VulkanImage native(gpu, format, 64, 64);
+  CHECK(vulkan::emulated_texture_planes(native.image).empty());
+
+  // A shape the host refuses: LINEAR (Creed: Rise to Glory's transfer-only
+  // texture), else a 3D image of 2D blocks.
+  auto raw_query = reinterpret_cast<PFN_vkGetPhysicalDeviceImageFormatProperties>(
+      vulkan::raw_physical_proc(gpu.physical, "vkGetPhysicalDeviceImageFormatProperties"));
+  constexpr VkImageUsageFlags transfer = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+  constexpr VkImageUsageFlags sampled = transfer | VK_IMAGE_USAGE_SAMPLED_BIT;
+  VkImageFormatProperties limits{};
+  const bool linear_refused = raw_query(gpu.physical, format, VK_IMAGE_TYPE_2D, VK_IMAGE_TILING_LINEAR, transfer, 0,
+                                        &limits) != VK_SUCCESS;
+  const bool volume_refused = raw_query(gpu.physical, format, VK_IMAGE_TYPE_3D, VK_IMAGE_TILING_OPTIMAL, sampled, 0,
+                                        &limits) != VK_SUCCESS;
+  MESSAGE("host refuses LINEAR ASTC: " << linear_refused << ", 3D ASTC: " << volume_refused);
+  if (volume_refused) {
+    // Answered as the decoder serves it, so the guest may create it.
+    CHECK(test::vk_call("vkGetPhysicalDeviceImageFormatProperties", gpu.physical, format, VK_IMAGE_TYPE_3D,
+                        VK_IMAGE_TILING_OPTIMAL, sampled, 0u, &limits) == VK_SUCCESS);
+    CHECK(limits.sampleCounts == VK_SAMPLE_COUNT_1_BIT);
+  }
+  // A host that accepts both (SwiftShader) is taken to refuse LINEAR, as most GPUs do.
+  struct RefuseLinear {
+    bool on;
+    explicit RefuseLinear(bool on) : on(on) { if (on) vulkan::force_linear_compressed_refusal(true); }
+    ~RefuseLinear() { if (on) vulkan::force_linear_compressed_refusal(false); }
+  } refuse_linear(!linear_refused && !volume_refused);
+  const bool linear = linear_refused || refuse_linear.on;
+  VkImageCreateInfo ci{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+  ci.imageType = linear ? VK_IMAGE_TYPE_2D : VK_IMAGE_TYPE_3D;
+  ci.format = format;
+  ci.extent = {64, 64, linear ? 1u : 2u};
+  ci.mipLevels = 1;
+  ci.arrayLayers = 1;
+  ci.samples = VK_SAMPLE_COUNT_1_BIT;
+  ci.tiling = linear ? VK_IMAGE_TILING_LINEAR : VK_IMAGE_TILING_OPTIMAL;
+  ci.usage = linear ? transfer : sampled;
+  VkImage refused{};
+  REQUIRE(test::vk_call("vkCreateImage", gpu.device, &ci, nullptr, &refused) == VK_SUCCESS);
+  CHECK(!vulkan::emulated_texture_planes(refused).empty());
+  VkMemoryRequirements requirements{};
+  test::vk_call("vkGetImageMemoryRequirements", gpu.device, refused, &requirements);
+  VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+  ai.allocationSize = requirements.size;
+  ai.memoryTypeIndex = gpu.memory_type(requirements.memoryTypeBits, 0);
+  VkDeviceMemory memory{};
+  REQUIRE(test::vk_call("vkAllocateMemory", gpu.device, &ai, nullptr, &memory) == VK_SUCCESS);
+  REQUIRE(test::vk_call("vkBindImageMemory", gpu.device, refused, memory, 0ull) == VK_SUCCESS);
+
+  constexpr VkDeviceSize slice = 8 * 8 * 16;  // 64x64 texels of 8x8 blocks
+  test::VulkanBuffer upload(gpu, 2 * slice), readback(gpu, 2 * slice);
+  std::mt19937 random(171);
+  auto* bytes = static_cast<std::uint8_t*>(upload.mapped);
+  for (VkDeviceSize i = 0; i < 2 * slice; ++i) bytes[i] = static_cast<std::uint8_t>(random());
+  std::memset(readback.mapped, 0, 2 * slice);
+
+  gpu.begin();
+  native.transition();
+  VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+  b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+  b.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+  b.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+  b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+  b.image = refused;
+  b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+  test::vk_call("vkCmdPipelineBarrier", gpu.command, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                VK_PIPELINE_STAGE_TRANSFER_BIT, 0u, 0u, nullptr, 0u, nullptr, 1u, &b);
+  const auto after_transfer = [&] {
+    gpu.barrier(VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT);
+  };
+  // Slice 0 of the upload goes into the decoded image, then into the native one.
+  VkBufferImageCopy to_refused{0, 0, 0, {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, {0, 0, 0}, {64, 64, 1}};
+  test::vk_call("vkCmdCopyBufferToImage", gpu.command, upload.buffer, refused, VK_IMAGE_LAYOUT_GENERAL, 1u,
+                &to_refused);
+  after_transfer();
+  VkImageCopy across{{VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, {0, 0, 0}, {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+                     {0, 0, 0}, {64, 64, 1}};
+  test::vk_call("vkCmdCopyImage", gpu.command, refused, VK_IMAGE_LAYOUT_GENERAL, native.image,
+                VK_IMAGE_LAYOUT_GENERAL, 1u, &across);
+  after_transfer();
+  VkBufferImageCopy from_native{0, 0, 0, {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, {0, 0, 0}, {64, 64, 1}};
+  test::vk_call("vkCmdCopyImageToBuffer", gpu.command, native.image, VK_IMAGE_LAYOUT_GENERAL, readback.buffer, 1u,
+                &from_native);
+  after_transfer();
+  // Slice 1 goes into the native image, then into the decoded one (its second
+  // depth slice when 3D), and back out of the decoded image's blocks.
+  VkBufferImageCopy to_native{slice, 0, 0, {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, {0, 0, 0}, {64, 64, 1}};
+  test::vk_call("vkCmdCopyBufferToImage", gpu.command, upload.buffer, native.image, VK_IMAGE_LAYOUT_GENERAL, 1u,
+                &to_native);
+  after_transfer();
+  across.dstOffset.z = linear ? 0 : 1;
+  test::vk_call("vkCmdCopyImage", gpu.command, native.image, VK_IMAGE_LAYOUT_GENERAL, refused,
+                VK_IMAGE_LAYOUT_GENERAL, 1u, &across);
+  after_transfer();
+  VkBufferImageCopy from_refused{slice, 0, 0, {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, {0, 0, linear ? 0 : 1},
+                                 {64, 64, 1}};
+  test::vk_call("vkCmdCopyImageToBuffer", gpu.command, refused, VK_IMAGE_LAYOUT_GENERAL, readback.buffer, 1u,
+                &from_refused);
+  gpu.barrier(VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_HOST_BIT,
+              VK_ACCESS_HOST_READ_BIT);
+  gpu.submit();
+  CHECK(std::memcmp(readback.mapped, upload.mapped, slice) == 0);
+  CHECK(std::memcmp(static_cast<std::uint8_t*>(readback.mapped) + slice, bytes + slice, slice) == 0);
+  REQUIRE(test::vk_call("vkResetCommandBuffer", gpu.command, 0u) == VK_SUCCESS);
+  test::vk_call("vkDestroyImage", gpu.device, refused, nullptr);
+  test::vk_call("vkFreeMemory", gpu.device, memory, nullptr);
+}
+
+TEST_CASE("Vulkan ASTC decode override: forced decoding hides the host's ASTC") {
+  test::VulkanDevice gpu;
+  if (!native_astc(gpu.physical)) {
+    MESSAGE("the host GPU has no native ASTC");
+    return;
+  }
+  struct ForceDecode {
+    ForceDecode() { vulkan::force_texture_emulation(true); }
+    ~ForceDecode() { vulkan::force_texture_emulation(false); }
+  } force;
+  constexpr auto format = VK_FORMAT_ASTC_8x8_UNORM_BLOCK;
+  VkFormatProperties guest{};
+  test::vk_call("vkGetPhysicalDeviceFormatProperties", gpu.physical, format, &guest);
+  CHECK(guest.linearTilingFeatures == 0);
+  CHECK(guest.bufferFeatures == 0);
+  test::VulkanImage decoded(gpu, format, 64, 64);
+  CHECK(!vulkan::emulated_texture_planes(decoded.image).empty());
+}
+
 TEST_SUITE_END();
+
+TEST_CASE("VENTURE_NATIVE_ASTC: off values force decoding, anything else keeps the host's ASTC") {
+  CHECK(gfx::native_astc_setting(nullptr));
+  CHECK(gfx::native_astc_setting(""));
+  CHECK(gfx::native_astc_setting("1"));
+  CHECK(gfx::native_astc_setting("on"));
+  for (const char* off : {"0", "off", "false", "never"}) CHECK_FALSE(gfx::native_astc_setting(off));
+}
 
 
 TEST_CASE("Vulkan barriers on a null image are dropped; the rest of the barrier still records") {

@@ -3,6 +3,7 @@
 #include <array>
 #include <optional>
 #include "common/paths.h"
+#include "core/document_roots.h"
 #include "core/process.h"
 
 namespace venture {
@@ -29,6 +30,15 @@ inline std::optional<std::string> host_path_to_guest(std::string_view path) {
     for (; p != requested.end() && r != root.end() && *p == *r; ++p, ++r) {}
     if (r != root.end() || (host == c.apk && p != requested.end())) continue;
     const auto relative = paths::generic_utf8(requested.lexically_relative(root));
+    if (relative == ".") return guest;
+    return guest + "/" + relative;
+  }
+  // Folders the person picked, mounted as storage volumes.
+  for (const auto& [host, guest] : *document_roots::snapshot()) {
+    auto p = requested.begin(), r = host.begin();
+    for (; p != requested.end() && r != host.end() && *p == *r; ++p, ++r) {}
+    if (r != host.end()) continue;
+    const auto relative = paths::generic_utf8(requested.lexically_relative(host));
     if (relative == ".") return guest;
     return guest + "/" + relative;
   }

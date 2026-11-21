@@ -33,11 +33,15 @@ std::string slot_of(const std::string &key) { return key.empty() ? "legacy" : ke
 
 // Fallback when no Secret Service is reachable (libsecret absent, no session
 // bus or no keyring daemon): AES-256-GCM in a file only the user can read. The
-// key comes from a random per-slot key file and the machine id, so a copied
-// sealed file alone does not decrypt. This is weaker than a keyring.
+// key comes from a random per-slot key file, so a copied sealed file alone
+// does not decrypt. This is weaker than a keyring. Files sealed before 0.3.0
+// ("VSS1") also mixed in the machine id, which differs inside a container
+// (a Steam runtime launch on the Steam Frame), so a sign-in saved on one side
+// could not be read on the other; they are resealed without it when read.
 fs::path sealed_path(const fs::path &file) { return fs::path(file).replace_extension(".sealed"); }
 fs::path key_path(const fs::path &file) { return fs::path(file).replace_extension(".key"); }
-constexpr std::string_view sealed_magic = "VSS1";
+constexpr std::string_view sealed_magic_v1 = "VSS1";
+constexpr std::string_view sealed_magic = "VSS2";
 
 std::optional<std::string> read_private(const fs::path &file) {
   std::ifstream in(file, std::ios::binary);
@@ -62,7 +66,7 @@ std::string machine_id() {
     if (auto id = read_private(path); id && !id->empty()) return *id;
   return {};
 }
-std::string sealing_key(const fs::path &file, bool create) {
+std::string sealing_key(const fs::path &file, bool create, int version = 2) {
   auto random = read_private(key_path(file));
   if (!random || random->size() != 32) {
     if (!create) return {};
@@ -72,7 +76,8 @@ std::string sealing_key(const fs::path &file, bool create) {
     write_private(key_path(file), fresh);
     random = fresh;
   }
-  std::string material = "venture-sealed-session-v1\n" + *random + machine_id();
+  std::string material = version == 1 ? "venture-sealed-session-v1\n" + *random + machine_id()
+                                      : "venture-sealed-session-v2\n" + *random;
   std::string key(32, '\0');
   unsigned int size = 0;
   if (!EVP_Digest(material.data(), material.size(), reinterpret_cast<unsigned char *>(key.data()),
@@ -114,13 +119,21 @@ void seal(const fs::path &file, const std::string &slot, std::string_view plain)
 std::optional<std::string> unseal(const fs::path &file, const std::string &slot) {
   auto data = read_private(sealed_path(file));
   if (!data) return std::nullopt;
-  auto key = sealing_key(file, false);
-  if (key.empty() || data->size() < sealed_magic.size() + 12 + 16 || !data->starts_with(sealed_magic))
+  const bool v1 = data->starts_with(sealed_magic_v1);
+  auto key = sealing_key(file, false, v1 ? 1 : 2);
+  if (key.empty() || data->size() < sealed_magic.size() + 12 + 16 || !(v1 || data->starts_with(sealed_magic)))
     throw std::runtime_error("Could not unlock Meta session.");
   std::string_view view(*data);
   view.remove_prefix(sealed_magic.size());
-  return gcm(false, key, view.substr(0, 12), slot, view.substr(12, view.size() - 28),
-             view.substr(view.size() - 16), nullptr);
+  auto plain = gcm(false, key, view.substr(0, 12), slot, view.substr(12, view.size() - 28),
+                   view.substr(view.size() - 16), nullptr);
+  if (v1) {
+    try {
+      seal(file, slot, plain);  // without the machine id from now on
+    } catch (...) {
+    }  // still readable here; the next save reseals it
+  }
+  return plain;
 }
 void remove_sealed(const fs::path &file) {
   std::error_code ec;

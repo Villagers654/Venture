@@ -69,4 +69,29 @@ public class StorageManager {
     Objects.requireNonNull(rawPath, "rawPath cannot be null");
     return MOUNTED.get(rawPath);
   }
+
+  // AOSP StorageManager.UUID_DEFAULT: the primary shared storage's UUID.
+  public static final java.util.UUID UUID_DEFAULT = java.util.UUID.fromString("41217664-9172-527a-b3d5-edabb50a7d69");
+
+  /** The shared storage, then a removable volume for each folder the person picked. */
+  public java.util.List<StorageVolume> getStorageVolumes() {
+    java.util.List<StorageVolume> volumes = new java.util.ArrayList<>();
+    volumes.add(getPrimaryStorageVolume());
+    for (var root : com.venture.runtime.HostDocuments.roots().entrySet())
+      volumes.add(new StorageVolume(root.getKey(), root.getKey(), root.getValue(), root.getValue().getName(), false));
+    return volumes;
+  }
+  public java.util.List<StorageVolume> getRecentStorageVolumes() { return getStorageVolumes(); }
+  public StorageVolume getPrimaryStorageVolume() {
+    return new StorageVolume("emulated;0", null, RuntimeEnvironment.get().external, "Internal shared storage", true);
+  }
+  /** The volume holding a file, or null when none does. */
+  public StorageVolume getStorageVolume(File file) {
+    String path = file.getAbsolutePath();
+    for (StorageVolume volume : getStorageVolumes()) {
+      String root = volume.getDirectory().getAbsolutePath();
+      if (path.equals(root) || path.startsWith(root + File.separator)) return volume;
+    }
+    return null;
+  }
 }

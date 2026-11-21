@@ -31,6 +31,7 @@
 #include "xr/hands.h"
 #include "xr/math.h"
 #include "xr/session.h"
+#include "xr/haptic_sequence.h"
 #include <doctest/doctest.h>
 #include <thread>
 #include <future>
@@ -1700,10 +1701,12 @@ TEST_CASE(
   pulses = ventureMockXrStats().haptic_pulses;
   const float overdrive = 96.3344497680664f;
   CHECK(vg::vrapi_SetHapticVibrationSimple(mobile, 1, overdrive) == 0);
+  REQUIRE(venture::xr::haptics_settled(std::chrono::seconds(2)));
   CHECK(ventureMockXrStats().haptic_pulses == pulses + 1);
   CHECK(vg::vrapi_SetHapticVibrationSimple(mobile, 1, -0.00035392120480537415f) == 0);
   CHECK(vg::vrapi_SetHapticVibrationSimple(mobile, 1, -0.5f) == 0);
   CHECK(vg::vrapi_SetHapticVibrationSimple(mobile, 1, std::nanf("")) == vr::abi::invalid);
+  REQUIRE(venture::xr::haptics_settled(std::chrono::seconds(2)));
   CHECK(ventureMockXrStats().haptic_pulses == pulses + 1);
   CHECK(vg::vrapi_SetHapticVibrationSimple(mobile, 1, 0) == 0);
   vr::abi::HandPose hand{};
@@ -2818,7 +2821,9 @@ TEST_CASE("A hands-only app sees the host's hands in place of its controllers") 
 }
 namespace {
 // Layers no host layer shows exactly are drawn into one image per eye, shown
-// as one quad per eye over that eye's view (drawn_layers.h). The mock host's eyes see 45 degrees each way, 1024 pixels
+// as one quad per eye over that eye's view, or as the frame's projection layer
+// when they are its bottom and it has no other (drawn_layers.h). The mock
+// host's eyes see 45 degrees each way, 1024 pixels
 // across, 32 mm either side of the head; a layer in VIEW space (flag 4) has
 // the head at the origin. Ring textures are painted in quadrants, GLES rows
 // (row 0 at the bottom): bottom left red, bottom right green, top left blue,
@@ -2854,19 +2859,22 @@ struct DrawnLayerScene {
                         });
     return chain;
   }
-  // Submits one layer; returns the host layers of the frame.
-  std::uint32_t submit(const vr::abi::LayerHeader &header) {
-    const vr::abi::LayerHeader *layers[]{&header};
-    frames.submit.layer_count = 1;
+  // Submits one layer, over `below` if given; returns the host sub-images of the frame.
+  std::uint32_t submit(const vr::abi::LayerHeader &header, const vr::abi::LayerHeader *below = nullptr) {
+    const vr::abi::LayerHeader *layers[]{below ? below : &header, &header};
+    frames.submit.layer_count = below ? 2 : 1;
     frames.submit.layers = layers;
     REQUIRE(frames.submit_frame(index++) == 0);
     return ventureMockXrLastSubImages(nullptr, 0);
   }
-  // The drawn layer's texel for eye `eye` at view tangents (x, y): the frame
-  // must have been the drawn quads alone.
+  // The drawn layer's texel for eye `eye` at view tangents (x, y): the frame's
+  // last two sub-images must be the drawn ones.
   std::array<std::uint8_t, 4> pixel(int eye, float x, float y) {
-    std::array<XrSwapchainSubImage, 2> drawn{};
-    REQUIRE(ventureMockXrLastSubImages(drawn.data(), 2) == 2);
+    std::array<XrSwapchainSubImage, 4> all{};
+    const auto count = ventureMockXrLastSubImages(all.data(), 4);
+    REQUIRE(count >= 2);
+    REQUIRE(count <= 4);
+    const auto *drawn = &all[count - 2];
     const auto image = reinterpret_cast<VkImage>(ventureMockXrReleasedImage(drawn[eye].swapchain));
     REQUIRE(image);
     const auto px = std::int32_t((x + 1) / 2 * 1024), py = std::int32_t((1 - y) / 2 * 1024);
@@ -2915,9 +2923,10 @@ TEST_CASE("VrApi cylinders the host cannot compose are drawn at their true arc")
     const auto before = ventureMockXrStats();
     CHECK(scene.submit(cylinder.header) == 2);
     CHECK(ventureMockXrStats().cylinder == before.cylinder);
-    // One quad per eye, not a second projection layer.
-    CHECK(ventureMockXrStats().projection == before.projection);
-    CHECK(ventureMockXrStats().quad == before.quad + 2);
+    // Alone in the frame: its projection layer (SteamVR on the Steam Frame
+    // shows a frame of quads alone black).
+    CHECK(ventureMockXrStats().projection == before.projection + 1);
+    CHECK(ventureMockXrStats().quad == before.quad);
     // The unit cylinder spans pi radians and tan(30 degrees) up and down:
     // the left of the view shows the image's left, its top the image's top.
     for (int eye = 0; eye < 2; ++eye) {
@@ -2941,9 +2950,8 @@ TEST_CASE("VrApi cylinders the host cannot compose are drawn at their true arc")
     const auto before = ventureMockXrStats();
     CHECK(scene.submit(cylinder.header) == 2);
     CHECK(ventureMockXrStats().cylinder == before.cylinder);
-    // One quad per eye, not a second projection layer.
-    CHECK(ventureMockXrStats().projection == before.projection);
-    CHECK(ventureMockXrStats().quad == before.quad + 2);
+    CHECK(ventureMockXrStats().projection == before.projection + 1);
+    CHECK(ventureMockXrStats().quad == before.quad);
     CHECK(near(scene.pixel(0, -.3f, .1f), S::blue));
     CHECK(near(scene.pixel(0, .3f, -.1f), S::green));
     // Two metres ahead the arc is half as tall in the view as a round one's.
@@ -2963,25 +2971,43 @@ TEST_CASE("VrApi cylinders the host cannot compose are drawn at their true arc")
   }
 }
 TEST_CASE("VrApi drawn world-locked layers stay put in the world while the head moves") {
-  // Each eye's quad must cover exactly the view its image was drawn for, and
-  // the content must keep its place in app space as the head turns and moves.
+  // Each eye's quad (over a game's own eye buffer) or projection view (alone)
+  // must cover exactly the view its image was drawn for, and the content must
+  // keep its place in app space as the head turns and moves.
   DrawnLayerScene scene;
   HostExtension hidden("XR_KHR_composition_layer_cylinder");
   auto cylinder = head_locked_cylinder(scene.ring());
   cylinder.header.flags = 0; // world-locked: a unit cylinder about the app origin
+  // A game's eye buffer the host shows itself.
+  vr::abi::Projection below{};
+  below.header = {1, 0, {1, 1, 1, 1}, 1, 0, 0};
+  below.head.pose.orientation.w = 1;
+  auto *below_ring = scene.ring();
+  for (auto &t : below.textures) {
+    t.chain = below_ring;
+    t.tan_angles.m[0][0] = t.tan_angles.m[1][1] = 0.5f;
+    t.tan_angles.m[0][2] = t.tan_angles.m[1][2] = -0.5f;
+    t.tan_angles.m[2][2] = -1;
+    t.rect = {0, 0, 1, 1};
+  }
   struct Head {
     float yaw;
     XrVector3f position;
   };
+  for (const bool alone : {false, true})
   for (const Head head : {Head{0, {0, 0, 0}}, Head{.35f, {.05f, .02f, .03f}}, Head{-.3f, {-.04f, 0, -.05f}}}) {
+    CAPTURE(alone);
     CAPTURE(head.yaw);
     // The mock's head at 1.6 m is the app space's origin height.
     scene.script.head = {{0, std::sin(head.yaw / 2), 0, std::cos(head.yaw / 2)},
                          {head.position.x, 1.6f + head.position.y, head.position.z}};
     ventureMockXrSetScript(&scene.script);
-    CHECK(scene.submit(cylinder.header) == 2);
+    const auto before = ventureMockXrStats();
+    CHECK(scene.submit(cylinder.header, alone ? nullptr : &below.header) == (alone ? 2u : 4u));
+    // One projection layer either way: the game's, or the drawn one alone.
+    CHECK(ventureMockXrStats().projection == before.projection + 1);
     std::array<XrCompositionLayerQuad, 2> quads{};
-    REQUIRE(ventureMockXrLastQuads(quads.data(), 2) == 2);
+    REQUIRE(ventureMockXrLastQuads(quads.data(), 2) == (alone ? 0u : 2u));
     auto &session = venture::xr::session();
     XrViewLocateInfo locate{XR_TYPE_VIEW_LOCATE_INFO, nullptr, session.view_configuration,
                             ventureMockXrLastDisplayTime(), vr::state().app};
@@ -2989,14 +3015,19 @@ TEST_CASE("VrApi drawn world-locked layers stay put in the world while the head 
     std::array<XrView, 2> views{{{XR_TYPE_VIEW}, {XR_TYPE_VIEW}}};
     std::uint32_t count = 0;
     REQUIRE(::xrLocateViews(session.handle, &locate, &view_state, 2, &count, views.data()) == XR_SUCCESS);
+    std::array<XrFovf, 4> fovs{};
+    REQUIRE(ventureMockXrLastProjectionFov(fovs.data(), 4) == 2);
     for (int eye = 0; eye < 2; ++eye) {
       CAPTURE(eye);
+      const auto to_eye = venture::xr::inverse(views[eye].pose);
+      if (alone) {
+        CHECK(std::memcmp(&fovs[eye], &views[eye].fov, sizeof(XrFovf)) == 0);
+      } else {
       const auto &quad = quads[eye];
       CHECK(quad.space == vr::state().app);
       CHECK(quad.eyeVisibility == (eye ? XR_EYE_VISIBILITY_RIGHT : XR_EYE_VISIBILITY_LEFT));
       CHECK(quad.subImage.imageArrayIndex == std::uint32_t(eye));
       // The quad's corners, seen from the eye, lie on its view's frustum edges.
-      const auto to_eye = venture::xr::inverse(views[eye].pose);
       for (float sx : {-1.f, 1.f})
         for (float sy : {-1.f, 1.f}) {
           const auto corner = venture::xr::compose(
@@ -3006,6 +3037,7 @@ TEST_CASE("VrApi drawn world-locked layers stay put in the world while the head 
           CHECK(std::abs(-p.x / p.z - sx) < 1e-4f);
           CHECK(std::abs(-p.y / p.z - sy) < 1e-4f);
         }
+      }
       // The image's blue/white edge is the cylinder's line straight ahead of
       // the app origin, (0, y, -1): find it along one row of this eye's image
       // and check it is where that world point is seen from this eye now.
@@ -3037,6 +3069,57 @@ TEST_CASE("VrApi straight alpha cylinders are drawn premultiplied over the layer
   cylinder.header.src_blend = 5, cylinder.header.dst_blend = 2;
   CHECK(scene.submit(cylinder.header) == 2);
   CHECK(near(scene.pixel(1, -.3f, -.15f), {127, 0, 0, 127}));
+}
+TEST_CASE("VrApi eye buffers drawn for their blend are the frame's projection layer unless it has one") {
+  // RE4 (ONE_MINUS_SRC_ALPHA/SRC_ALPHA) and Robo Recall (ONE/ONE_MINUS_SRC_ALPHA
+  // with a color scale) on a host without XR_KHR_composition_layer_color_scale_bias
+  // (SteamVR on the Steam Frame): their eye buffers are drawn. Shown as quads
+  // alone, SteamVR there showed the headset black after the logos.
+  DrawnLayerScene scene;
+  HostExtension hidden("XR_KHR_composition_layer_color_scale_bias");
+  auto projection = [&](vr::abi::TextureSwapChain *ring, std::int32_t src, std::int32_t dst, float scale) {
+    vr::abi::Projection p{};
+    p.header = {1, 4, {scale, scale, scale, 1}, src, dst, 0};
+    p.head.pose.orientation.w = 1;
+    for (auto &t : p.textures) {
+      t.chain = ring;
+      t.rect = {0, 0, 1, 1};
+      t.tan_angles.m[0][0] = t.tan_angles.m[1][1] = 0.5f;
+      t.tan_angles.m[0][2] = t.tan_angles.m[1][2] = -0.5f;
+      t.tan_angles.m[2][2] = -1;
+    }
+    return p;
+  };
+  // Inverse alpha: the game's alpha 0 is opaque.
+  auto *clear_ring = scene.ring(0, 0);
+  auto re4 = projection(clear_ring, 5, 2, 1);
+  auto before = ventureMockXrStats();
+  CHECK(scene.submit(re4.header) == 2);
+  CHECK(ventureMockXrStats().projection == before.projection + 1);
+  CHECK(ventureMockXrStats().quad == before.quad);
+  CHECK(near(scene.pixel(0, -.5f, .5f), {0, 0, 255, 255}));
+  CHECK(near(scene.pixel(1, .5f, -.5f), {0, 255, 0, 255}));
+  // Premultiplied with a color scale.
+  auto *ring = scene.ring();
+  auto robo = projection(ring, 1, 5, .5f);
+  before = ventureMockXrStats();
+  CHECK(scene.submit(robo.header) == 2);
+  CHECK(ventureMockXrStats().projection == before.projection + 1);
+  CHECK(ventureMockXrStats().quad == before.quad);
+  CHECK(near(scene.pixel(0, .5f, .5f), {128, 128, 128, 255}));
+  // Drawn ahead of a projection layer the host shows (Tales from the Galaxy's
+  // Edge's transition layer before its eye buffer): quads, never a second
+  // projection layer.
+  auto game = projection(ring, 1, 0, 1);
+  const vr::abi::LayerHeader *layers[]{&robo.header, &game.header};
+  scene.frames.submit.layer_count = 2;
+  scene.frames.submit.layers = layers;
+  before = ventureMockXrStats();
+  REQUIRE(scene.frames.submit_frame(scene.index++) == 0);
+  CHECK(ventureMockXrStats().projection == before.projection + 1);
+  CHECK(ventureMockXrStats().quad == before.quad + 2);
+  std::array<XrCompositionLayerQuad, 2> quads{};
+  CHECK(ventureMockXrLastQuads(quads.data(), 2) == 2);
 }
 TEST_CASE("VrApi equirects, cubes and projective planes the host cannot compose are drawn") {
   DrawnLayerScene scene;

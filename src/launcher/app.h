@@ -8,6 +8,9 @@
 #include "launcher/ui/chrome.h"
 #include <imgui.h>
 #include <atomic>
+#include <mutex>
+#include <optional>
+#include <thread>
 #include <array>
 #include "common/controls.h"
 #include "common/openxr_layers.h"
@@ -117,6 +120,24 @@ private:
   // "Change anyway", dropped on Cancel.
   std::function<void()> texture_warning_;
   void draw_texture_warning();
+  // Play on a 2D Android app while this copy lacks the Android 2D component
+  // (android_2d_download): asks first, downloads it in the dialog, then plays.
+  struct Android2dAsk {
+    std::string id, key, name;
+    std::uint64_t size = 0;
+    struct Transfer {
+      std::atomic<std::uint64_t> done{0}, total{0};
+      std::atomic<bool> finished{false};
+      std::mutex mutex;
+      std::string error;  // under mutex, once finished
+      std::jthread thread;
+    };
+    std::shared_ptr<Transfer> transfer;
+  };
+  std::optional<Android2dAsk> android_2d_ask_;
+  // Play, or the Android 2D component's question first.
+  void request_play(const meta::Game& game);
+  void draw_android_2d();
   // Settings > Updates: choosing Experimental asks first; Stable switches at once.
   bool experimental_switch_ = false;
   void draw_experimental_switch();

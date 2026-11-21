@@ -4,6 +4,7 @@
 #include "core/linker_runtime.h"
 #include "core/process_image.h"
 #include "core/thread_runtime.h"
+#include "hle/libc/vfs.h"
 #include "hle/registry.h"
 #include "java/jvm.h"
 #include <map>
@@ -68,4 +69,64 @@ TEST_CASE("Published system libraries are visible through the guest module API")
   CHECK(thread.call(iterate, {callback, 0}) == 17);
   CHECK(seen.calls == 1);
   CHECK(seen.valid);
+}
+
+TEST_CASE("A library namespace loads a renamed memfd copy of a system library as that library") {
+  // libadrenotools (liblinkernsbypass): a namespace of its own, then a copy of
+  // a system library in a memfd whose DT_SONAME it rewrote, opened by
+  // descriptor into the namespace to get a second instance. Venture's linker
+  // is flat, so the copy is the system library itself.
+  AddressSpace::get().initialize(GuestIsa::a64);
+  register_all_hle_libraries();
+  java::register_jni_library();
+  auto& linker = Linker::get();
+  REQUIRE(linker.open("libart.so", kRtldNow | kRtldGlobal, nullptr));
+  process_image::publish();
+  auto& thread = GuestThread::adopt_current();
+  auto symbol = [&](const char* library, const char* name) {
+    auto* l = linker.open(library, kRtldNow, nullptr);
+    REQUIRE(l);
+    const auto address = l->find_symbol(name);
+    REQUIRE(address);
+    return address;
+  };
+  const auto create = symbol("libdl_android.so", "android_create_namespace");
+  const auto link_all = symbol("libdl_android.so", "android_link_namespaces_all_libs");
+  const auto loader_create = symbol("ld-android.so", "__loader_android_create_namespace");
+  const auto dlopen_ext = symbol("libdl.so", "android_dlopen_ext");
+  const auto dlopen = symbol("libdl.so", "dlopen");
+  const auto memfd = symbol("libc.so", "memfd_create");
+  const std::string hooks = "/data/app/hooks", name = "adrenotools-libvulkan", copy = "default_copy";
+  const auto ns = thread.call(create, {h2g(name.c_str()), h2g(hooks.c_str()), 0, 2, 0, 0});
+  REQUIRE(ns);
+  const auto other = thread.call(loader_create, {h2g(copy.c_str()), 0, 0, 2, 0, 0, 0});
+  REQUIRE(other);
+  CHECK(other != ns);
+  CHECK((thread.call(link_all, {ns, other}) & 0xff) == 1);
+  CHECK((thread.call(link_all, {ns, 0}) & 0xff) == 0);
+
+  const std::string soname = "libart.so";
+  auto bytes = process_image::file(process_image::system_path(soname));
+  REQUIRE(bytes);
+  const auto at = bytes->find(soname + '\0');
+  REQUIRE(at != std::string::npos);
+  bytes->replace(at, soname.size(), std::string(soname.size(), '0'));
+  const std::string memfd_name = process_image::system_path(soname);
+  const auto fd = static_cast<int>(thread.call(memfd, {h2g(memfd_name.c_str()), 0}));
+  REQUIRE(fd >= 0);
+  REQUIRE(hle::libc::fd_write(fd, bytes->data(), bytes->size()) == static_cast<std::int64_t>(bytes->size()));
+  struct {
+    std::uint64_t flags, address, size;
+    std::int32_t relro, library_fd;
+    std::int64_t offset;
+    GuestAddr ns;
+  } ext{0x210, 0, 0, 0, fd, 0, ns};
+  const auto path = "/proc/self/fd/" + std::to_string(fd);
+  const auto loaded = thread.call(dlopen_ext, {h2g(path.c_str()), kRtldNow, h2g(&ext)});
+  CHECK(loaded != 0);
+  CHECK(loaded == thread.call(dlopen, {h2g(soname.c_str()), kRtldNow}));
+  // An extended flag Venture does not implement still fails visibly.
+  ext.flags |= 0x400;
+  CHECK(thread.call(dlopen_ext, {h2g(path.c_str()), kRtldNow, h2g(&ext)}) == 0);
+  hle::libc::FdTable::get().close(fd);
 }

@@ -1,4 +1,5 @@
 #include "xr/haptic_output.h"
+#include "xr/haptic_sequence.h"
 #include "core/wait.h"
 #include "core/av_telemetry.h"
 #include "hle/vrapi/state.h"
@@ -73,12 +74,8 @@ struct Haptics {
         XrHapticVibration pulse{XR_TYPE_HAPTIC_VIBRATION, nullptr,
                                 std::int64_t(end - index) * sample_ns, XR_FREQUENCY_UNSPECIFIED,
                                 float(b.samples[index]) / 255};
-        auto r = venture::xr::apply_haptic("vrapi_buffer", b.session, b.action, pulse);
-        if (XR_FAILED(r)) {
-          failure("buffered haptic pulse", r);
-          queue.clear();
-          continue;
-        }
+        // The host call runs on the haptics worker, in order with stops (xr/haptic_sequence.h).
+        venture::xr::queue_vibration("vrapi_buffer", b.session, b.action, pulse, "host_pulse");
         b.played = end;
         delay = std::min(delay,
                          std::max<std::int64_t>(0, b.start + std::int64_t(end) * sample_ns - now));
@@ -104,9 +101,7 @@ void cancel_haptics(int hand) {
       if (session().handle && state().input.haptic) {
         XrHapticActionInfo ai{XR_TYPE_HAPTIC_ACTION_INFO, nullptr, state().input.haptic,
                               state().input.hands[i]};
-        auto r = venture::xr::stop_haptic("vrapi_buffer", session().handle, ai);
-        if (XR_FAILED(r))
-          failure("cancel haptics", r);
+        venture::xr::queue_stop("vrapi_buffer", session().handle, ai, "host_stop");
       }
     }
   h.changed.notify_all();
@@ -160,7 +155,8 @@ std::int32_t vrapi_SetHapticVibrationBuffer(Mobile *mobile, std::uint32_t id,
     queue.clear();
     XrHapticActionInfo ai{XR_TYPE_HAPTIC_ACTION_INFO, nullptr, state().input.haptic,
                           state().input.hands[id - 1]};
-    return result(venture::xr::stop_haptic("vrapi_buffer", session().handle, ai, "guest_request"), "EndHapticBuffer");
+    venture::xr::queue_stop("vrapi_buffer", session().handle, ai);
+    return result(XR_SUCCESS, "EndHapticBuffer");
   }
   float amplitude = 0;
   for (uint32_t i = 0; i < buffer->count; ++i) amplitude = std::max(amplitude, float(buffer->samples[i]) / 255);

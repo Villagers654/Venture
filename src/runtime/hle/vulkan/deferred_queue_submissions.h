@@ -3,6 +3,7 @@
 #include "serialized_queues.h"
 #include <deque>
 #include <map>
+#include <optional>
 #include <span>
 
 namespace venture::vulkan {
@@ -40,6 +41,8 @@ class DeferredQueueSubmissions {
   VkResult wait_submitted(std::uint32_t logical, std::uint64_t timeout_ns = UINT64_MAX);
   VkResult wait_idle(std::uint32_t logical);
   std::size_t pending(std::uint32_t logical) const;
+  // The same without waiting (stall diagnostics): nothing while another thread holds the dispatcher.
+  std::optional<std::size_t> try_pending(std::uint32_t logical) const;
   std::uint32_t queue_count() const { return static_cast<std::uint32_t>(bindings_.size()); }
  private:
   struct Job;

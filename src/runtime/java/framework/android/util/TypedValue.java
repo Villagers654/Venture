@@ -38,6 +38,15 @@ public class TypedValue {
     if (value == 0) return 0;
     return value > 0 ? 1 : -1;
   }
+  public static final int COMPLEX_UNIT_FRACTION = 0, COMPLEX_UNIT_FRACTION_PARENT = 1;
+  /** AOSP: a TYPE_FRACTION value of base (unit fraction) or of pbase (unit fraction-parent). */
+  public static float complexToFraction(int data, float base, float pbase) {
+    return switch (data & 15) {
+      case COMPLEX_UNIT_FRACTION -> complexToFloat(data) * base;
+      case COMPLEX_UNIT_FRACTION_PARENT -> complexToFloat(data) * pbase;
+      default -> 0;
+    };
+  }
   public static int complexToDimensionPixelOffset(int data, DisplayMetrics metrics) {
     return (int) applyDimension(data & 15, complexToFloat(data), metrics);
   }
@@ -46,7 +55,7 @@ public class TypedValue {
     return complexToDimension(data, m);
   }
   public float getFraction(float base, float parent) {
-    return complexToFloat(data) * ((data & 15) == 1 ? parent : base);
+    return complexToFraction(data, base, parent);
   }
   public CharSequence coerceToString() {
     return type == 3 ? string : String.valueOf(data);

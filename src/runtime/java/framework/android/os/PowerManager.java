@@ -24,7 +24,7 @@ public class PowerManager {
     return Float.NaN;
   }
   public void addThermalStatusListener(OnThermalStatusChangedListener listener) {
-    addThermalStatusListener(new android.content.Context().getMainExecutor(), listener);
+    addThermalStatusListener(com.venture.runtime.Components.newContext().getMainExecutor(), listener);
   }
   public void addThermalStatusListener(java.util.concurrent.Executor executor, OnThermalStatusChangedListener listener) {
     java.util.Objects.requireNonNull(executor);
@@ -36,7 +36,7 @@ public class PowerManager {
     // and posts the current status once, then only reports actual status changes.
     int status = getCurrentThermalStatus();
     try {
-      new android.content.Context().getMainExecutor().execute(() -> {
+      com.venture.runtime.Components.newContext().getMainExecutor().execute(() -> {
         try { executor.execute(() -> listener.onThermalStatusChanged(status)); }
         catch (RuntimeException error) { android.util.Log.e("PowerManager", "Thermal status callback failed"); }
       });

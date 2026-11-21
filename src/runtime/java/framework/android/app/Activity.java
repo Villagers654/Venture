@@ -356,6 +356,9 @@ public class Activity extends ContextWrapper implements KeyEvent.Callback, Windo
         if (!resumed || finished || generation != windowGeneration) return;
         windowFocused = true;
         onWindowFocusChanged(true);
+        // AOSP: a window whose soft input mode asks for a visible keyboard
+        // gets it on its focused text field when it gains focus.
+        com.venture.runtime.SystemKeyboard.windowFocused(window.getDecorView(), window.getAttributes().softInputMode);
       });
     });
   }
@@ -367,6 +370,7 @@ public class Activity extends ContextWrapper implements KeyEvent.Callback, Windo
       windowFocused = false;
       onWindowFocusChanged(false);
     }
+    com.venture.runtime.SystemKeyboard.windowClosed(window.getDecorView());
     resumed = false;
     fragments.dispatch(2);
     for (var c : lifecycleCallbacks()) c.onActivityPrePaused(this);

@@ -97,14 +97,17 @@ void register_image_readers(JNIEnv* env) {
 #define METHOD(n, s, f) {const_cast<char*>(n), const_cast<char*>(s), reinterpret_cast<void*>(f)}
   auto cls = env->FindClass("android/media/ImageReader");
   if (!cls) return;
-  const JNINativeMethod reader_methods[]{
-      METHOD("nativeCreate", "(IIIJI)J", reader_create), METHOD("nativeClose", "(J)V", reader_close),
-      METHOD("nativeWindow", "(J)J", reader_window), METHOD("nativeListen", "(J)V", reader_listen),
-      METHOD("nativeWait", "(JI)I", reader_wait), METHOD("nativeAcquire", "(JZ)J", reader_acquire),
-      METHOD("nativeRelease", "(J)V", image_release), METHOD("nativeInfo", "(J)[J", image_info),
-      METHOD("nativePlane", "(JI[I)Ljava/nio/ByteBuffer;", image_plane),
-      METHOD("nativeHardwareBuffer", "(J)J", image_buffer)};
-  env->RegisterNatives(cls, reader_methods, jint(std::size(reader_methods)));
+  // A 2D process (docs/design/layoutlib.md) runs AOSP's ImageReader on layoutlib's natives.
+  if (declares_method(env, cls, "nativeCreate", "(IIIJI)J", true)) {
+    const JNINativeMethod reader_methods[]{
+        METHOD("nativeCreate", "(IIIJI)J", reader_create), METHOD("nativeClose", "(J)V", reader_close),
+        METHOD("nativeWindow", "(J)J", reader_window), METHOD("nativeListen", "(J)V", reader_listen),
+        METHOD("nativeWait", "(JI)I", reader_wait), METHOD("nativeAcquire", "(JZ)J", reader_acquire),
+        METHOD("nativeRelease", "(J)V", image_release), METHOD("nativeInfo", "(J)[J", image_info),
+        METHOD("nativePlane", "(JI[I)Ljava/nio/ByteBuffer;", image_plane),
+        METHOD("nativeHardwareBuffer", "(J)J", image_buffer)};
+    env->RegisterNatives(cls, reader_methods, jint(std::size(reader_methods)));
+  }
   env->DeleteLocalRef(cls);
   if (env->ExceptionCheck()) return;
   cls = env->FindClass("android/hardware/HardwareBuffer");

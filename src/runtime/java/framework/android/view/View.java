@@ -767,6 +767,43 @@ public class View implements ViewParent {
   protected void onLayout(boolean changed, int left, int top, int right, int bottom) {}
   public void draw(android.graphics.Canvas canvas) { onDraw(canvas); }
   protected void onDraw(android.graphics.Canvas canvas) {}
+  // AOSP View layer, scroll bar style and over-scroll state. Venture composes no
+  // Java view tree, so these only keep what the app set (WebView-based SDKs set
+  // a software layer and inside-overlay scroll bars on their web views).
+  public static final int LAYER_TYPE_NONE = 0, LAYER_TYPE_SOFTWARE = 1, LAYER_TYPE_HARDWARE = 2;
+  public static final int SCROLLBARS_INSIDE_OVERLAY = 0, SCROLLBARS_INSIDE_INSET = 0x01000000,
+      SCROLLBARS_OUTSIDE_OVERLAY = 0x02000000, SCROLLBARS_OUTSIDE_INSET = 0x03000000;
+  public static final int OVER_SCROLL_ALWAYS = 0, OVER_SCROLL_IF_CONTENT_SCROLLS = 1, OVER_SCROLL_NEVER = 2;
+  private int layerType = LAYER_TYPE_NONE, scrollBarStyle = SCROLLBARS_INSIDE_OVERLAY,
+      overScrollMode = OVER_SCROLL_IF_CONTENT_SCROLLS;
+  private android.graphics.Paint layerPaint;
+  private float alpha = 1f;
+  public void setLayerType(int type, android.graphics.Paint paint) {
+    if (type < LAYER_TYPE_NONE || type > LAYER_TYPE_HARDWARE)
+      throw new IllegalArgumentException("Layer type can only be one of: LAYER_TYPE_NONE, LAYER_TYPE_SOFTWARE or LAYER_TYPE_HARDWARE");
+    layerType = type;
+    layerPaint = type == LAYER_TYPE_NONE ? null : paint;
+  }
+  public void setLayerPaint(android.graphics.Paint paint) {
+    if (layerType != LAYER_TYPE_NONE) layerPaint = paint;
+  }
+  public int getLayerType() { return layerType; }
+  public void setScrollBarStyle(int style) { scrollBarStyle = style & SCROLLBARS_OUTSIDE_INSET; }
+  public int getScrollBarStyle() { return scrollBarStyle; }
+  public void setOverScrollMode(int mode) {
+    if (mode < OVER_SCROLL_ALWAYS || mode > OVER_SCROLL_NEVER)
+      throw new IllegalArgumentException("Invalid overscroll mode " + mode);
+    overScrollMode = mode;
+  }
+  public int getOverScrollMode() { return overScrollMode; }
+  public float getAlpha() { return alpha; }
+  public void setAlpha(float alpha) { this.alpha = alpha; }
+  public void offsetLeftAndRight(int offset) {
+    left += offset; // AOSP moves mLeft and mRight together, with no layout pass
+  }
+  public void offsetTopAndBottom(int offset) {
+    top += offset;
+  }
   private OnHoverListener hoverListener;
   public void setOnHoverListener(OnHoverListener l) { hoverListener = l; }
   public interface OnHoverListener { boolean onHover(View v, MotionEvent event); }

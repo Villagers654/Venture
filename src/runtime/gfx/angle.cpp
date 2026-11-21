@@ -1,4 +1,5 @@
 #include "common/environment.h"
+#include "common/injected_modules.h"
 #include "gfx/angle.h"
 
 #include <algorithm>
@@ -260,6 +261,7 @@ void note_angle_gl_failure(GLenum error, std::string_view where) {
     log::error("gfx", "ANGLE: GL_CONTEXT_LOST ({}); the GPU device was lost", where);
     return;
   }
+  injected_modules::log_loaded(true);
   log::error("gfx", "ANGLE: GL_CONTEXT_LOST ({}); the GPU device was lost, ending the app as a fatal error", where);
   record_guest_process_failure(1);
   exit_guest_process(1);

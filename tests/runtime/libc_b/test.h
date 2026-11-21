@@ -36,6 +36,7 @@ struct Thread {
       c.obb_dir = root / "obb";
       c.apk = root / "base.apk";
       c.native_lib_dir = root / "lib";
+      c.cache_dir = root / "version-cache";
     });
   }
 };

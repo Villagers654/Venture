@@ -133,6 +133,9 @@ class GuestThread {
   // Guest PC | 1 of the block the JIT is compiling on this thread, else 0
   // (Dynarmic::SetCompileMarker): stall snapshots name a translation stall.
   std::atomic<std::uint64_t> jit_compiling{0};
+  // The OS thread id of the host thread it is attached to (0 before): stall
+  // snapshots pair its guest stack with its host stack.
+  std::atomic<std::uint32_t> host_tid{0};
   void request_shutdown_sample();
 
   explicit GuestThread(std::int32_t tid);

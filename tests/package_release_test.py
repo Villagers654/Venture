@@ -32,8 +32,23 @@ expected = {"venture.exe", "venture-runtime.exe", "libEGL.dll", "libGLESv2.dll",
 expected |= {"venture-framework.jar", "venture-java-bridge.jar", "LICENSE", "release-files.json"}
 expected |= {"avutil-60.dll", "avcodec-62.dll", "avformat-62.dll", "swscale-9.dll"} if os.name == "nt" else {
     "libavutil.so.60", "libavcodec.so.62", "libavformat.so.62", "libswscale.so.9", "libsqlite3.so.0"}
+# Android 2D apps' framework ships where the build made it (x86_64 hosts).
+layoutlib = (layout_parent / "bin/venture-framework-2d.jar").is_file()
+if layoutlib:
+    expected |= {"venture-framework-2d.jar", "layoutlib.json"}
 assert {p for p in actual if "/" not in p} == expected
 directories = {"java", "licenses"}
+if layoutlib:
+    # layoutlib is its own release file, downloaded the first time a 2D app needs it.
+    component = json.loads((layout / "layoutlib.json").read_text())
+    archive = layout.parent / component["url"].rsplit("/", 1)[1]
+    assert component["url"] == f"{release.RELEASES}/v{release.venture_version()}/{archive.name}"
+    assert component["size"] == archive.stat().st_size
+    assert component["sha256"] == hashlib.sha256(archive.read_bytes()).hexdigest()
+    with zipfile.ZipFile(archive) as packed:
+        names = set(packed.namelist())
+    assert {"layoutlib/layoutlib.jar", "layoutlib/framework-res.apk", "layoutlib/build.prop", "layoutlib/LICENSE"} <= names
+    assert any(p.startswith("layoutlib/licenses/") for p in names)
 assert {p.split("/")[0] for p in actual if "/" in p} == directories
 assert not any(Path(p).suffix in (".pdb", ".cpp", ".py", ".h", ".a", ".lib") for p in files)
 assert not any("mock" in p.lower() or "test" in p.lower() for p in files if not p.startswith("java/jdk/legal/"))

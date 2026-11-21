@@ -2,6 +2,7 @@
 #include "xr/grip_toggle.h"
 #include "core/av_telemetry.h"
 #include "xr/haptic_output.h"
+#include "xr/haptic_sequence.h"
 #include "hle/vrapi/host.h"
 #include "xr/sanitize.h"
 #include "hle/vrapi/state.h"
@@ -234,6 +235,8 @@ XrResult initialize_input() {
 }
 void destroy_input() {
   cancel_haptics();
+  // The queued stops reach the host before its actions go.
+  venture::xr::cancel_sequence(session().handle);
   venture::xr::clear_haptic_bindings(session().handle);
   auto &i = state().input;
   for (auto space : {i.grip[0], i.grip[1], i.aim[0], i.aim[1]})
@@ -565,10 +568,10 @@ std::int32_t vrapi_SetHapticVibrationSimple(Mobile *mobile, std::uint32_t id, fl
   cancel_haptics(int(id - 1));
   XrHapticActionInfo ai{XR_TYPE_HAPTIC_ACTION_INFO, nullptr, state().input.haptic,
                         state().input.hands[id - 1]};
+  // Host haptic calls run on the haptics worker, never under this lock (xr/haptic_sequence.h).
   if (amplitude <= 0) {
-    nlohmann::json fields;
-    if (venture::av::enabled()) fields = {{"input_amplitude", amplitude}, {"amplitude_clamped", amplitude < 0}};
-    return result(venture::xr::stop_haptic("vrapi_simple", session().handle, ai, "guest_request", std::move(fields)), "StopHaptic");
+    venture::xr::queue_stop("vrapi_simple", session().handle, ai);
+    return result(XR_SUCCESS, "StopHaptic");
   }
   XrHapticVibration vibration{
       XR_TYPE_HAPTIC_VIBRATION, nullptr,
@@ -576,8 +579,8 @@ std::int32_t vrapi_SetHapticVibrationSimple(Mobile *mobile, std::uint32_t id, fl
       XR_FREQUENCY_UNSPECIFIED, amplitude};
   // The shared output translator saturates finite positive overdrive and
   // records the original strength, as it does for core OpenXR submissions.
-  return result(venture::xr::apply_haptic("vrapi_simple", session().handle, ai, vibration, "guest_request"),
-                "Haptic");
+  venture::xr::queue_vibration("vrapi_simple", session().handle, ai, vibration);
+  return result(XR_SUCCESS, "Haptic");
 }
 std::int32_t vrapi_GetHandPose(Mobile *mobile, std::uint32_t id, double seconds,
                                HandPoseHeader *header) {

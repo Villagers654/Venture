@@ -6,7 +6,9 @@
 #include <array>
 #include <atomic>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
+#include <string_view>
 #include <format>
 #include <condition_variable>
 #include <cstdio>
@@ -80,6 +82,15 @@ std::shared_ptr<Decoder> decoder(AstcFormat format, unsigned workers) {
   return result;
 }
 }  // namespace
+bool native_astc_setting(const char* value) noexcept {
+  if (!value) return true;
+  const std::string_view v(value);
+  return v != "0" && v != "off" && v != "false" && v != "never";
+}
+bool native_astc_allowed() noexcept {
+  static const bool allowed = native_astc_setting(std::getenv("VENTURE_NATIVE_ASTC"));
+  return allowed;
+}
 bool astc_format(std::uint32_t format, AstcFormat& out) {
   bool srgb = format >= 0x93D0 && format <= 0x93DD;
   const auto index = format - (srgb ? 0x93D0 : 0x93B0);

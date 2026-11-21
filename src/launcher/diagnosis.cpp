@@ -22,6 +22,7 @@ struct Rule {
   // after detail_label.
   std::array<std::string_view, 2> detail{};
   std::string_view detail_label{};
+  bool device_lost = false;  // a GPU device loss: injected capture tools are a cause
 };
 constexpr std::string_view kSendReport = "Send this report with an issue: the game needs a fix in Venture.";
 constexpr std::string_view kGpuAdvice =
@@ -117,14 +118,14 @@ constexpr Rule kRules[] = {
     // Windows logs that reset (event 4101) for every device loss.
     {{"gpu fault verdict: the gpu stopped inside venture's"},
      "The graphics device was lost while it ran Venture's own GPU work.", kSendReport, {},
-     {"gpu fault verdict: "}},
+     {"gpu fault verdict: "}, {}, true},
     // The kernel's own reports of a GPU reset (amdgpu, i915/xe, NVIDIA Xid).
     {{"gpu reset", "ring timeout", "nvrm: xid", "gpu hang",
       "stopped responding and has successfully recovered"},  // Windows: Display event 4101
-     "The graphics driver reset the GPU during the game.", kGpuAdvice, {}, {"gpu fault verdict: "}},
+     "The graphics driver reset the GPU during the game.", kGpuAdvice, {}, {"gpu fault verdict: "}, {}, true},
     // hle/vulkan/vulkan.cpp, and the host's own device loss.
     {{"native vulkan device lost", "vk_error_device_lost"},
-     "The game lost the graphics device.", kGpuAdvice, {}, {"gpu fault verdict: "}},
+     "The game lost the graphics device.", kGpuAdvice, {}, {"gpu fault verdict: "}, {}, true},
     // core/alloc_failure.cpp: a refused allocation and the limit it likely hit.
     {{"likely limit: system commit limit"},
      "The PC ran out of commit memory (RAM plus page file), so memory requests failed even though RAM and GPU "
@@ -218,7 +219,7 @@ std::optional<Diagnosis> diagnose(std::string_view evidence) {
             cause += " " + std::string(rule.detail_label) + added + ".";
             break;
           }
-        return Diagnosis{std::move(cause), std::string(rule.advice)};
+        return Diagnosis{std::move(cause), std::string(rule.advice), rule.device_lost};
       }
   return std::nullopt;
 }

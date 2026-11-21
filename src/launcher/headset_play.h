@@ -60,10 +60,14 @@ Check check(const std::vector<library::Install>& installs,
             const std::filesystem::path& data);
 // The Linux arm64 build's check (headset_check.h, LinuxFacts): `runtime`
 // --host-check runs with Play's `environment` (library::launch_environment),
-// its output kept in `data`/logs/host-check.log. Never throws.
+// its output kept in `data`/logs/host-check.log. Never throws. Without
+// `query_runtime` (the debug report) it runs --host-check-passive, which never
+// loads the OpenXR runtime: pressing a report button must not be able to start
+// or hang the VR runtime (on the Steam Frame a hung SteamVR ends the headset's
+// session). Settings > Headset check queries it.
 Check check_linux(const std::filesystem::path& runtime,
                   const std::vector<std::pair<std::string, std::string>>& environment,
-                  const std::filesystem::path& data);
+                  const std::filesystem::path& data, bool query_runtime = true);
 
 // Installs a downloaded Venture APK over this copy (in-app update). Android
 // asks the user to confirm; the install restarts Venture. Throws on failure.

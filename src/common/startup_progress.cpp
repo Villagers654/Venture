@@ -46,6 +46,7 @@ void note_host_session_state(int state) {
   if (state == 5) host_focused_once.store(true, std::memory_order_relaxed);
 }
 bool host_session_focused() { return host_state.load(std::memory_order_relaxed) == 5; }  // XR_SESSION_STATE_FOCUSED
+int host_session_state() { return host_state.load(std::memory_order_relaxed); }
 bool host_session_ever_focused() { return host_focused_once.load(std::memory_order_relaxed); }
 bool first_frame_snapshot_configured() {
   return environment::getenv("VENTURE_FIRST_FRAME_SNAPSHOT_SECONDS") != nullptr;

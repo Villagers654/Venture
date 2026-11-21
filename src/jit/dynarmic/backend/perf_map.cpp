@@ -15,6 +15,8 @@ std::atomic<CodeRegistrationCallback> code_registration{nullptr};
 std::atomic<CompileTimingCallback> compile_timing_callback{nullptr};
 thread_local CompileTimingScope* current_compile = nullptr;
 thread_local std::atomic<std::uint64_t>* compile_marker = nullptr;
+thread_local unsigned compile_depth = 0;
+std::atomic<std::uint64_t> compiled_blocks{0}, compile_ns{0};
 std::uint64_t CompileNow() noexcept {
     return std::chrono::duration_cast<std::chrono::nanoseconds>(
         std::chrono::steady_clock::now().time_since_epoch()).count();
@@ -22,12 +24,16 @@ std::uint64_t CompileNow() noexcept {
 }
 void SetCompileTimingCallback(CompileTimingCallback cb) { compile_timing_callback.store(cb); }
 void SetCompileMarker(std::atomic<std::uint64_t>* marker) noexcept { compile_marker = marker; }
+CompileTotals GetCompileTotals() noexcept {
+    return {compiled_blocks.load(std::memory_order_relaxed), compile_ns.load(std::memory_order_relaxed)};
+}
 CompileTimingScope::CompileTimingScope(std::uint64_t pc, bool a32, std::uint64_t descriptor) noexcept {
     // Only the owning thread writes its marker: a plain load and store suffice.
     if (auto* marker = compile_marker) {
         marker_before = marker->load(std::memory_order_relaxed);
         marker->store(pc | 1, std::memory_order_relaxed);
     }
+    if (!compile_depth++) total_begin_ns = CompileNow();
     callback = compile_timing_callback.load(std::memory_order_relaxed);
     if (!callback) return;
     timing.guest_pc = pc; timing.a32 = a32; timing.location_descriptor = descriptor;
@@ -42,6 +48,8 @@ void SetCompilePhase(CompilePhase phase) noexcept {
 }
 CompileTimingScope::~CompileTimingScope() {
     if (auto* marker = compile_marker) marker->store(marker_before, std::memory_order_relaxed);
+    compiled_blocks.fetch_add(1, std::memory_order_relaxed);
+    if (!--compile_depth) compile_ns.fetch_add(CompileNow() - total_begin_ns, std::memory_order_relaxed);
     if (!callback) return;
     SetCompilePhase(phase);
     timing.end_ns = last_ns;

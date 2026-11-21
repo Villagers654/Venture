@@ -70,4 +70,13 @@ public final class Debug {
     out.nativePss = Math.toIntExact(residency[0]);
     out.otherPss = Math.toIntExact(residency[1]);
   }
+  // ViewDebug and the input connection's debug logging.
+  public static long getInstanceCount(Class<?> type) {
+    return 0;
+  }
+  public static String getCaller() {
+    StackTraceElement[] stack = new Throwable().getStackTrace();
+    return stack.length > 2 ? stack[2].getClassName() + "." + stack[2].getMethodName() + ":" + stack[2].getLineNumber()
+                            : "<bottom of call stack>";
+  }
 }

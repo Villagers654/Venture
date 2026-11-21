@@ -61,9 +61,14 @@ std::string result_name(XrInstance instance, XrResult result) {
   return std::format("XrResult {}", int(result));
 }
 
-void openxr(std::string& out) {
+void openxr(std::string& out, bool query_runtime) {
   if (const char* json = std::getenv("XR_RUNTIME_JSON"); json && *json)
     out += std::format("OpenXR runtime manifest (XR_RUNTIME_JSON): {}\n", json);
+  if (!query_runtime) {
+    out += "OpenXR: runtime not queried (the debug report leaves the VR runtime alone; the last game's log has its "
+           "answer, and Settings > Headset check queries it)\n";
+    return;
+  }
   std::uint32_t count = 0;
   XrResult result = xrEnumerateInstanceExtensionProperties(nullptr, 0, &count, nullptr);
   std::vector<XrExtensionProperties> extensions(count, {XR_TYPE_EXTENSION_PROPERTIES});
@@ -117,7 +122,7 @@ void openxr(std::string& out) {
 }
 }  // namespace
 
-std::string host_check() {
+std::string host_check(bool query_runtime) {
   std::string out;
   const auto host = probe_host_cpu_facts();
   out += std::format("CPU: {}, page size {}\n", arch_name(host.arch), host.page_size);
@@ -132,7 +137,7 @@ std::string host_check() {
   // ANGLE (bundled beside the runtime) on the host's Vulkan driver is the
   // build's one GLES path (docs/design/native-headsets.md, section 4.2).
   out += "GLES: ANGLE on Vulkan\n";
-  openxr(out);
+  openxr(out, query_runtime);
   return out;
 }
 }  // namespace venture

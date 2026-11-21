@@ -66,6 +66,17 @@ struct ColorImages::Impl {
     std::uint64_t frame = 0;
   };
   std::vector<Image> images;
+  // record_from's sources (the game's eye images): a view and descriptor per
+  // layer, made once and never changed, so a recorded pass can still be in
+  // flight when the next one is recorded.
+  struct Input {
+    VkImage image{};
+    std::vector<VkImageView> views;
+    std::vector<VkDescriptorSet> descriptors;
+  };
+  static constexpr std::size_t max_inputs = 8;
+  std::vector<Input> inputs;
+  VkDescriptorPool input_descriptors{};
   template <class T> T fn(const char *name) const {
     return reinterpret_cast<T>(get(binding.instance, name));
   }
@@ -106,6 +117,11 @@ struct ColorImages::Impl {
         fn<PFN_vkFreeMemory>("vkFreeMemory")(binding.device, image.memory,
                                              nullptr);
     }
+    for (auto &input : inputs)
+      for (auto view : input.views)
+        fn<PFN_vkDestroyImageView>("vkDestroyImageView")(binding.device, view, nullptr);
+    if (input_descriptors)
+      fn<PFN_vkDestroyDescriptorPool>("vkDestroyDescriptorPool")(binding.device, input_descriptors, nullptr);
     if (queries)
       fn<PFN_vkDestroyQueryPool>("vkDestroyQueryPool")(binding.device, queries,
                                                        nullptr);
@@ -307,6 +323,53 @@ struct ColorImages::Impl {
       }
     }
   }
+  // The target's commands, fence, views, framebuffers and descriptors.
+  void ensure_target(Image &image) {
+    if (image.command)
+      return;
+      VkCommandBufferAllocateInfo ca{
+          VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+      ca.commandPool = pool;
+      ca.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+      ca.commandBufferCount = 1;
+      check(fn<PFN_vkAllocateCommandBuffers>("vkAllocateCommandBuffers")(
+                binding.device, &ca, &image.command),
+            "Color command buffer failed");
+      VkFenceCreateInfo fc{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+      check(fn<PFN_vkCreateFence>("vkCreateFence")(binding.device, &fc, nullptr,
+                                                   &image.fence),
+            "Color fence failed");
+      for (std::uint32_t layer = 0; layer < layers(); ++layer)
+        for (std::uint32_t mip = 0; mip < info.mipCount; ++mip) {
+          auto &sub = image.subresources.emplace_back();
+          VkImageViewCreateInfo iv{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+          iv.viewType = VK_IMAGE_VIEW_TYPE_2D;
+          iv.format = VkFormat(info.format);
+          iv.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, mip, 1, layer, 1};
+          iv.image = image.target;
+          check(fn<PFN_vkCreateImageView>("vkCreateImageView")(
+                    binding.device, &iv, nullptr, &sub.target),
+                "Color target view failed");
+          VkFramebufferCreateInfo fb{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
+          fb.renderPass = render_pass;
+          fb.attachmentCount = 1;
+          fb.pAttachments = &sub.target;
+          fb.width = std::max(1u, info.width >> mip);
+          fb.height = std::max(1u, info.height >> mip);
+          fb.layers = 1;
+          check(fn<PFN_vkCreateFramebuffer>("vkCreateFramebuffer")(
+                    binding.device, &fb, nullptr, &sub.framebuffer),
+                "Color framebuffer failed");
+          VkDescriptorSetAllocateInfo da{
+              VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+          da.descriptorPool = descriptors;
+          da.descriptorSetCount = 1;
+          da.pSetLayouts = &descriptor_layout;
+          check(fn<PFN_vkAllocateDescriptorSets>("vkAllocateDescriptorSets")(
+                    binding.device, &da, &sub.descriptor),
+                "Color descriptor failed");
+        }
+  }
   void prepare(Image &image, VkImage input) {
     const bool borrowed = input != image.target &&
                           (info.usageFlags & XR_SWAPCHAIN_USAGE_SAMPLED_BIT);
@@ -375,50 +438,7 @@ struct ColorImages::Impl {
                 binding.device, image.source, image.memory, 0),
             "Color memory binding failed");
     }
-    if (!image.command) {
-      VkCommandBufferAllocateInfo ca{
-          VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
-      ca.commandPool = pool;
-      ca.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-      ca.commandBufferCount = 1;
-      check(fn<PFN_vkAllocateCommandBuffers>("vkAllocateCommandBuffers")(
-                binding.device, &ca, &image.command),
-            "Color command buffer failed");
-      VkFenceCreateInfo fc{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
-      check(fn<PFN_vkCreateFence>("vkCreateFence")(binding.device, &fc, nullptr,
-                                                   &image.fence),
-            "Color fence failed");
-      for (std::uint32_t layer = 0; layer < layers(); ++layer)
-        for (std::uint32_t mip = 0; mip < info.mipCount; ++mip) {
-          auto &sub = image.subresources.emplace_back();
-          VkImageViewCreateInfo iv{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
-          iv.viewType = VK_IMAGE_VIEW_TYPE_2D;
-          iv.format = VkFormat(info.format);
-          iv.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, mip, 1, layer, 1};
-          iv.image = image.target;
-          check(fn<PFN_vkCreateImageView>("vkCreateImageView")(
-                    binding.device, &iv, nullptr, &sub.target),
-                "Color target view failed");
-          VkFramebufferCreateInfo fb{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
-          fb.renderPass = render_pass;
-          fb.attachmentCount = 1;
-          fb.pAttachments = &sub.target;
-          fb.width = std::max(1u, info.width >> mip);
-          fb.height = std::max(1u, info.height >> mip);
-          fb.layers = 1;
-          check(fn<PFN_vkCreateFramebuffer>("vkCreateFramebuffer")(
-                    binding.device, &fb, nullptr, &sub.framebuffer),
-                "Color framebuffer failed");
-          VkDescriptorSetAllocateInfo da{
-              VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
-          da.descriptorPool = descriptors;
-          da.descriptorSetCount = 1;
-          da.pSetLayouts = &descriptor_layout;
-          check(fn<PFN_vkAllocateDescriptorSets>("vkAllocateDescriptorSets")(
-                    binding.device, &da, &sub.descriptor),
-                "Color descriptor failed");
-        }
-    }
+    ensure_target(image);
     for (std::size_t i = 0; i < image.subresources.size(); ++i) {
       auto &sub = image.subresources[i];
       VkImageViewCreateInfo iv{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
@@ -461,16 +481,111 @@ struct ColorImages::Impl {
         image.command, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
         VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr, 0, nullptr, 1, &b);
   }
-  void copy(Image &image, bool restore, VkImage input = VK_NULL_HANDLE) {
-    std::vector<VkImageCopy> regions;
-    for (std::uint32_t mip = 0; mip < info.mipCount; ++mip) {
-      VkImageCopy r{};
-      r.srcSubresource =
-          r.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, mip, 0, layers()};
-      r.extent = {std::max(1u, info.width >> mip),
-                  std::max(1u, info.height >> mip), 1};
-      regions.push_back(r);
+  std::array<float, 16> rows(const ColorMatrix &matrix, Alpha alpha, float camera_opacity,
+                             const Key *key) const {
+    std::array<float, 16> rows{};
+    for (unsigned r = 0; r < 3; ++r)
+      for (unsigned c = 0; c < 3; ++c)
+        rows[r * 4 + c] = float(matrix[r * 3 + c]);
+    if (passthrough_alpha) {
+      rows[3] = alpha == Alpha::premultiply ? 1.0f : 0.0f;
+      rows[7] = alpha == Alpha::opaque ? 1.0f : 0.0f;
+      rows[11] = camera_opacity;
+      if (key) {
+        rows[12] = (*key)[0]; rows[13] = (*key)[1]; rows[14] = (*key)[2];
+        rows[15] = 1;
+      }
     }
+    return rows;
+  }
+  // One full-target draw of a subresource; the attachment's loadOp is DONT_CARE.
+  void draw(VkCommandBuffer command, const Subresource &sub, std::uint32_t mip, VkDescriptorSet descriptor,
+            const std::array<float, 16> &rows) const {
+    const auto width = std::max(1u, info.width >> mip),
+               height = std::max(1u, info.height >> mip);
+    VkRenderPassBeginInfo rp{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
+    rp.renderPass = render_pass;
+    rp.framebuffer = sub.framebuffer;
+    rp.renderArea = {{0, 0}, {width, height}};
+    fn<PFN_vkCmdBeginRenderPass>("vkCmdBeginRenderPass")(
+        command, &rp, VK_SUBPASS_CONTENTS_INLINE);
+    fn<PFN_vkCmdBindPipeline>("vkCmdBindPipeline")(
+        command, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+    fn<PFN_vkCmdBindDescriptorSets>("vkCmdBindDescriptorSets")(
+        command, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout, 0,
+        1, &descriptor, 0, nullptr);
+    fn<PFN_vkCmdPushConstants>("vkCmdPushConstants")(
+        command, pipeline_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+        passthrough_alpha ? 64u : 48u, rows.data());
+    VkViewport vp{0, 0, float(width), float(height), 0, 1};
+    VkRect2D sc{{0, 0}, {width, height}};
+    fn<PFN_vkCmdSetViewport>("vkCmdSetViewport")(command, 0, 1, &vp);
+    fn<PFN_vkCmdSetScissor>("vkCmdSetScissor")(command, 0, 1, &sc);
+    fn<PFN_vkCmdDraw>("vkCmdDraw")(command, 3, 1, 0, 0);
+    fn<PFN_vkCmdEndRenderPass>("vkCmdEndRenderPass")(command);
+  }
+  // A view and descriptor per layer of a record_from source; null when full.
+  const Input *input(VkImage image) {
+    for (const auto &known : inputs)
+      if (known.image == image)
+        return &known;
+    if (inputs.size() == max_inputs)
+      return nullptr;
+    if (!input_descriptors) {
+      const auto count = std::uint32_t(max_inputs) * layers();
+      VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, count};
+      VkDescriptorPoolCreateInfo dp{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+      dp.maxSets = count;
+      dp.poolSizeCount = 1;
+      dp.pPoolSizes = &size;
+      check(fn<PFN_vkCreateDescriptorPool>("vkCreateDescriptorPool")(
+                binding.device, &dp, nullptr, &input_descriptors),
+            "Color source descriptor pool failed");
+    }
+    auto &added = inputs.emplace_back();
+    added.image = image;
+    for (std::uint32_t layer = 0; layer < layers(); ++layer) {
+      VkImageViewCreateInfo iv{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+      iv.viewType = VK_IMAGE_VIEW_TYPE_2D;
+      iv.format = VkFormat(info.format);
+      iv.image = image;
+      iv.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, layer, 1};
+      VkImageView view{};
+      check(fn<PFN_vkCreateImageView>("vkCreateImageView")(binding.device, &iv, nullptr, &view),
+            "Color source view failed");
+      added.views.push_back(view);
+      VkDescriptorSetAllocateInfo da{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+      da.descriptorPool = input_descriptors;
+      da.descriptorSetCount = 1;
+      da.pSetLayouts = &descriptor_layout;
+      VkDescriptorSet descriptor{};
+      check(fn<PFN_vkAllocateDescriptorSets>("vkAllocateDescriptorSets")(binding.device, &da, &descriptor),
+            "Color source descriptor failed");
+      added.descriptors.push_back(descriptor);
+      VkDescriptorImageInfo di{sampler, view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+      VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+      write.dstSet = descriptor;
+      write.dstBinding = 0;
+      write.descriptorCount = 1;
+      write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+      write.pImageInfo = &di;
+      fn<PFN_vkUpdateDescriptorSets>("vkUpdateDescriptorSets")(binding.device, 1, &write, 0, nullptr);
+    }
+    return &added;
+  }
+  void copy(Image &image, bool restore, VkImage input = VK_NULL_HANDLE) {
+    // One region per slice: these images are often a runtime's externally
+    // allocated arrays (see GuestImages::copy).
+    std::vector<VkImageCopy> regions;
+    for (std::uint32_t mip = 0; mip < info.mipCount; ++mip)
+      for (std::uint32_t layer = 0; layer < layers(); ++layer) {
+        VkImageCopy r{};
+        r.srcSubresource =
+            r.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, mip, layer, 1};
+        r.extent = {std::max(1u, info.width >> mip),
+                    std::max(1u, info.height >> mip), 1};
+        regions.push_back(r);
+      }
     fn<PFN_vkCmdCopyImage>("vkCmdCopyImage")(
         image.command, restore ? image.source : (input ? input : image.target),
         VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
@@ -601,45 +716,10 @@ XrResult ColorImages::convert_from(VkImage input, std::uint32_t index, const Col
                 image.initialized ? VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
                                   : VK_IMAGE_LAYOUT_UNDEFINED,
                 VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
-    std::array<float, 16> rows{};
-    for (unsigned r = 0; r < 3; ++r)
-      for (unsigned c = 0; c < 3; ++c)
-        rows[r * 4 + c] = float(matrix[r * 3 + c]);
-    if (s.passthrough_alpha) {
-      rows[3] = alpha == Alpha::premultiply ? 1.0f : 0.0f;
-      rows[7] = alpha == Alpha::opaque ? 1.0f : 0.0f;
-      rows[11] = camera_opacity;
-      if (key) {
-        rows[12] = (*key)[0]; rows[13] = (*key)[1]; rows[14] = (*key)[2];
-        rows[15] = 1;
-      }
-    }
-    for (std::size_t i = 0; i < image.subresources.size(); ++i) {
-      const auto mip = std::uint32_t(i) % s.info.mipCount;
-      const auto width = std::max(1u, s.info.width >> mip),
-                 height = std::max(1u, s.info.height >> mip);
-      auto &sub = image.subresources[i];
-      VkRenderPassBeginInfo rp{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
-      rp.renderPass = s.render_pass;
-      rp.framebuffer = sub.framebuffer;
-      rp.renderArea = {{0, 0}, {width, height}};
-      s.fn<PFN_vkCmdBeginRenderPass>("vkCmdBeginRenderPass")(
-          image.command, &rp, VK_SUBPASS_CONTENTS_INLINE);
-      s.fn<PFN_vkCmdBindPipeline>("vkCmdBindPipeline")(
-          image.command, VK_PIPELINE_BIND_POINT_GRAPHICS, s.pipeline);
-      s.fn<PFN_vkCmdBindDescriptorSets>("vkCmdBindDescriptorSets")(
-          image.command, VK_PIPELINE_BIND_POINT_GRAPHICS, s.pipeline_layout, 0,
-          1, &sub.descriptor, 0, nullptr);
-      s.fn<PFN_vkCmdPushConstants>("vkCmdPushConstants")(
-          image.command, s.pipeline_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0,
-          s.passthrough_alpha ? 64u : 48u, rows.data());
-      VkViewport vp{0, 0, float(width), float(height), 0, 1};
-      VkRect2D sc{{0, 0}, {width, height}};
-      s.fn<PFN_vkCmdSetViewport>("vkCmdSetViewport")(image.command, 0, 1, &vp);
-      s.fn<PFN_vkCmdSetScissor>("vkCmdSetScissor")(image.command, 0, 1, &sc);
-      s.fn<PFN_vkCmdDraw>("vkCmdDraw")(image.command, 3, 1, 0, 0);
-      s.fn<PFN_vkCmdEndRenderPass>("vkCmdEndRenderPass")(image.command);
-    }
+    const auto rows = s.rows(matrix, alpha, camera_opacity, key);
+    for (std::size_t i = 0; i < image.subresources.size(); ++i)
+      s.draw(image.command, image.subresources[i], std::uint32_t(i) % s.info.mipCount,
+             image.subresources[i].descriptor, rows);
     if (!image.owns_source)
       s.barrier(image, input, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                 VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
@@ -665,6 +745,50 @@ XrResult ColorImages::convert_from(VkImage input, std::uint32_t index, const Col
     // fence pending for command/descriptor reuse and destruction, rather than
     // blocking this releasing thread after every submit. Other source paths
     // retain completion waits because their producer queue may differ.
+    return XR_SUCCESS;
+  } catch (const std::exception &e) {
+    s.failed = true;
+    log::error("xr", "Color conversion failed: {}", e.what());
+    return XR_ERROR_RUNTIME_FAILURE;
+  }
+}
+XrResult ColorImages::record_from(VkCommandBuffer command, VkImage source, VkImageLayout source_layout,
+                                  std::uint32_t index, const ColorMatrix &matrix, Alpha alpha,
+                                  float camera_opacity, const Key *key) {
+  auto &s = *impl_;
+  if (s.failed || index >= s.images.size() || !command || !source || s.info.mipCount != 1)
+    return XR_ERROR_RUNTIME_FAILURE;
+  try {
+    s.initialize();
+    auto &image = s.images[index];
+    s.ensure_target(image);
+    const auto *input = s.input(source);
+    if (!input)
+      return XR_ERROR_LIMIT_REACHED;
+    const auto barrier = [&](VkImage target, VkImageLayout before, VkImageLayout after) {
+      VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+      b.oldLayout = before;
+      b.newLayout = after;
+      b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+      b.image = target;
+      b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, s.layers()};
+      b.srcAccessMask = before == VK_IMAGE_LAYOUT_UNDEFINED
+                            ? 0 : VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+      b.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+      s.fn<PFN_vkCmdPipelineBarrier>("vkCmdPipelineBarrier")(
+          command, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr, 0,
+          nullptr, 1, &b);
+    };
+    barrier(source, source_layout, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    // Every texel of the target is drawn, so its previous contents are discarded.
+    barrier(image.target, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+    const auto rows = s.rows(matrix, alpha, camera_opacity, key);
+    for (std::uint32_t layer = 0; layer < s.layers(); ++layer)
+      s.draw(command, image.subresources[layer], 0, input->descriptors[layer], rows);
+    barrier(source, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, source_layout);
+    // An in-place convert of this target later must not restore older contents.
+    image.initialized = true;
+    image.converted = false;
     return XR_SUCCESS;
   } catch (const std::exception &e) {
     s.failed = true;

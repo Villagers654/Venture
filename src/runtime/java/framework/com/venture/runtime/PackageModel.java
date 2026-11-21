@@ -75,6 +75,14 @@ public final class PackageModel {
     app.metaData = metadata(application, resources);
     app.theme = application.integer("theme", 0);
     app.flags = application.integer("debuggable", 0) != 0 ? ApplicationInfo.FLAG_DEBUGGABLE : 0;
+    // The manifest flags framework code reads (a view's RTL and text alignment
+    // resolution needs supportsRtl; AOSP's defaults otherwise).
+    if (application.integer("hasCode", 1) != 0) app.flags |= ApplicationInfo.FLAG_HAS_CODE;
+    if (application.integer("allowBackup", 1) != 0) app.flags |= ApplicationInfo.FLAG_ALLOW_BACKUP;
+    if (application.integer("largeHeap", 0) != 0) app.flags |= ApplicationInfo.FLAG_LARGE_HEAP;
+    if (application.integer("supportsRtl", 0) != 0) app.flags |= ApplicationInfo.FLAG_SUPPORTS_RTL;
+    if (application.integer("hardwareAccelerated", app.targetSdkVersion >= 14 ? 1 : 0) != 0)
+      app.flags |= ApplicationInfo.FLAG_HARDWARE_ACCELERATED;
     for (var n : application.children) {
       if (n.name.equals("activity") || n.name.equals("activity-alias")) {
         ActivityInfo a = new ActivityInfo();
@@ -138,7 +146,7 @@ public final class PackageModel {
         s.processName = processName(n.text("process", app.processName));
         s.enabled = n.integer("enabled", 1) != 0 && app.enabled;
         s.exported = n.integer("exported", 0) != 0;
-        s.foregroundServiceType = n.integer("foregroundServiceType", 0);
+        s.mForegroundServiceType = n.integer("foregroundServiceType", 0);
         services.add(s);
         for (var filter : n.children) {
           if (!filter.name.equals("intent-filter")) continue;

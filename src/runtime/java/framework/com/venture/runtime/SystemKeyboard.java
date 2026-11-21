@@ -93,6 +93,7 @@ public final class SystemKeyboard {
     editor = info;
     if (moved) {
       ++served;
+      owner = null;
       int type = info.inputType & InputType.TYPE_MASK_CLASS;
       page = type == InputType.TYPE_CLASS_NUMBER || type == InputType.TYPE_CLASS_PHONE
           || type == InputType.TYPE_CLASS_DATETIME ? 1 : 0;
@@ -112,6 +113,7 @@ public final class SystemKeyboard {
     view = null;
     connection = null;
     editor = null;
+    owner = null;
     ++served;
     pressed[0] = pressed[1] = hover[0] = hover[1] = -1;
     if (main != null) main.removeCallbacks(REPEAT);
@@ -149,6 +151,64 @@ public final class SystemKeyboard {
   }
   public static synchronized boolean isShown() { return view != null; }
   public static synchronized View servedView() { return view; }
+
+  // ---- Windows ----------------------------------------------------------------------
+  /** What a window that asked for the keyboard does when it ends an edit (an AlertDialog's buttons). */
+  public interface Owner {
+    /** The action key ended the edit and closed the keyboard. */
+    void onAction();
+    /** The close key closed the keyboard. */
+    void onClose();
+  }
+  private static Owner owner;
+  /** Opens the keyboard for a window that answers the edit's end itself. */
+  public static synchronized boolean show(View target, Owner answer) {
+    if (!show(target)) return false;
+    owner = answer;
+    return true;
+  }
+  private static final int SOFT_INPUT_MASK_STATE = 0x0f, SOFT_INPUT_STATE_VISIBLE = 4,
+      SOFT_INPUT_STATE_ALWAYS_VISIBLE = 5;
+  /**
+   * A window gained focus (an activity resumed, a dialog was shown). As AOSP's
+   * input method manager does, a window whose soft input mode asks for a
+   * visible keyboard (stateVisible, stateAlwaysVisible) gets it on its focused
+   * text field. Unity's TouchScreenKeyboard dialog opens the keyboard this way
+   * only: it focuses its EditText and sets stateAlwaysVisible, and never calls
+   * showSoftInput.
+   */
+  public static synchronized boolean windowFocused(View root, int softInputMode) {
+    int state = softInputMode & SOFT_INPUT_MASK_STATE;
+    if (root == null || (state != SOFT_INPUT_STATE_VISIBLE && state != SOFT_INPUT_STATE_ALWAYS_VISIBLE)) return false;
+    var focused = root.findFocus();
+    if (focused == null || !focused.onCheckIsTextEditor()) return false;
+    return show(focused);
+  }
+  /** A window went away: the keyboard closes if it was serving one of its views. */
+  public static synchronized void windowClosed(View root) {
+    if (view != null && root != null && within(view, root)) hide();
+  }
+  /** The window's focused text field, else its first one; null without one. */
+  public static View textField(View root) {
+    if (root == null) return null;
+    var focused = root.findFocus();
+    if (focused != null && focused.onCheckIsTextEditor()) return focused;
+    return firstEditor(root);
+  }
+  private static View firstEditor(View v) {
+    if (v.getVisibility() == View.VISIBLE && v.onCheckIsTextEditor()) return v;
+    if (v instanceof android.view.ViewGroup group)
+      for (int i = 0; i < group.getChildCount(); ++i) {
+        var found = firstEditor(group.getChildAt(i));
+        if (found != null) return found;
+      }
+    return null;
+  }
+  private static boolean within(View v, View root) {
+    for (View at = v; at != null; at = at.getParent() instanceof View p ? p : null)
+      if (at == root) return true;
+    return false;
+  }
 
   // ---- Host events ----------------------------------------------------------------
   /** One host event (also the tests' entry point); runs on the main Looper. */
@@ -315,20 +375,24 @@ public final class SystemKeyboard {
       return;
     }
     int before = served;
+    var answer = owner;
     connection.performEditorAction(id);
     if (served == before && view != null && id != EditorInfo.IME_ACTION_NEXT && id != EditorInfo.IME_ACTION_PREVIOUS)
       hide();
+    if (answer != null && view == null) answer.onAction();
   }
   // The close key is Back with the keyboard up: the field sees it first
   // (AOSP onKeyPreIme; Unity's field finishes its edit there), then it closes.
   private static void close() {
     var target = view;
+    var answer = owner;
     int before = served;
     long now = SystemClock.uptimeMillis();
     for (int action : new int[] {KeyEvent.ACTION_DOWN, KeyEvent.ACTION_UP})
       target.dispatchKeyEventPreIme(new KeyEvent(now, now, action, KeyEvent.KEYCODE_BACK, 0, 0,
           KeyCharacterMap.VIRTUAL_KEYBOARD, 0, KeyEvent.FLAG_SOFT_KEYBOARD | KeyEvent.FLAG_KEEP_TOUCH_MODE, 0x101));
     if (served == before) hide();
+    if (answer != null && view == null) answer.onClose();
   }
   private static void sendKey(int code) {
     long now = SystemClock.uptimeMillis();

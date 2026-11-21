@@ -879,10 +879,22 @@ const Value* stored(XrSession session, const XrActionStateGetInfo* info, XrActio
   if (!valid_handle(info->action, "XrAction") || action == L.actions.end()) return result = XR_ERROR_HANDLE_INVALID, nullptr;
   if (action->second->type != type) return result = XR_ERROR_ACTION_TYPE_MISMATCH, nullptr;
   if (!state().attached_sets[session].contains(key(action->second->set))) return result = XR_ERROR_ACTIONSET_NOT_ATTACHED, nullptr;
-  if (info->subactionPath && std::ranges::find(action->second->subactions, info->subactionPath) == action->second->subactions.end())
+  // An action declared without subaction paths, read with one: the core
+  // specification answers XR_ERROR_PATH_UNSUPPORTED, but Quest's runtime gives
+  // the action's state, and games written for it (CitraVR's per-hand triggers)
+  // stop on the error. Such a read gets the action's state, as there.
+  auto subaction = info->subactionPath;
+  if (subaction && action->second->subactions.empty()) {
+    static bool reported = false;
+    if (!std::exchange(reported, true))
+      log::info("xr", "Action {} has no subaction paths and is read with {}; answering its state, as Quest's runtime does",
+                action->second->name, name_of(subaction));
+    subaction = XR_NULL_PATH;
+  }
+  if (subaction && std::ranges::find(action->second->subactions, subaction) == action->second->subactions.end())
     return result = XR_ERROR_PATH_UNSUPPORTED, nullptr;
   static const Value inactive{};
-  const auto it = L.values.find({info->action, info->subactionPath});
+  const auto it = L.values.find({info->action, subaction});
   return it == L.values.end() ? &inactive : &it->second;
 }
 bool valid_name(std::string_view name) {

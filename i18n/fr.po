@@ -700,3 +700,27 @@ msgstr "Les préversions apportent les nouveautés en premier et peuvent conteni
 
 msgid "Switch to experimental"
 msgstr "Passer en expérimental"
+
+msgid "Downloading Android 2D support"
+msgstr "Téléchargement de la prise en charge Android 2D"
+
+msgid "{0} starts when the download finishes."
+msgstr "{0} démarre à la fin du téléchargement."
+
+msgid "{0} of {1}"
+msgstr "{0} sur {1}"
+
+msgid "This game needs Android 2D support"
+msgstr "Ce jeu a besoin de la prise en charge Android 2D"
+
+msgid "The download failed"
+msgstr "Le téléchargement a échoué"
+
+msgid "{0} is a 2D Android app. Venture needs to download its Android 2D support once to run it ({1}). Download it now?"
+msgstr "{0} est une application Android 2D. Venture doit télécharger une fois sa prise en charge Android 2D pour la lancer ({1}). La télécharger maintenant ?"
+
+msgid "Download and play"
+msgstr "Télécharger et jouer"
+
+msgid "Try again"
+msgstr "Réessayer"

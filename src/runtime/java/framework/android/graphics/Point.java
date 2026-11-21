@@ -10,4 +10,8 @@ public class Point {
     this.x = x;
     this.y = y;
   }
+  public final void offset(int dx, int dy) {
+    x += dx;
+    y += dy;
+  }
 }

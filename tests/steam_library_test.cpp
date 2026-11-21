@@ -684,6 +684,18 @@ TEST_CASE("a game started from a Venture that Steam started is not taken for Ven
   CHECK(identity.removed.empty());
   CHECK(identity.replaced.empty());
 }
+TEST_CASE("steam.sh starts with the session's environment, not the one Steam gave Venture") {
+  const std::vector<std::string> started_by_steam{
+      "HOME=/home/deck", "DISPLAY=:0", "PATH=/steam/runtime/bin:/usr/bin", "SYSTEM_PATH=/usr/bin:/bin",
+      "LD_LIBRARY_PATH=/steam/runtime/lib", "SYSTEM_LD_LIBRARY_PATH=", "LD_PRELOAD=/x/gameoverlayrenderer.so",
+      "STEAM_RUNTIME=/steam/runtime", "STEAM_RUNTIME_LIBRARY_PATH=/steam/runtime/lib", "SteamGameId=123",
+      "SteamAppId=0", "PRESSURE_VESSEL_RUNTIME=scout", "STEAM_COMPAT_CLIENT_INSTALL_PATH=/steam", "XDG_RUNTIME_DIR=/run/user/1000"};
+  CHECK(client_environment(started_by_steam) ==
+        std::vector<std::string>{"HOME=/home/deck", "DISPLAY=:0", "XDG_RUNTIME_DIR=/run/user/1000", "PATH=/usr/bin:/bin"});
+  // Started outside Steam: its own PATH and library path stay.
+  CHECK(client_environment({"HOME=/h", "PATH=/usr/bin", "LD_LIBRARY_PATH=/opt/lib"}) ==
+        std::vector<std::string>{"HOME=/h", "PATH=/usr/bin"});
+}
 TEST_CASE("a child does not inherit the variables its spawn removes") {
   Env game{"SteamGameId", fs::path("13609473281357643776")}, kept{"VENTURE_TEST_KEPT", fs::path("kept")};
   const auto log = fs::temp_directory_path() / ("venture-env-child-" + std::to_string(current_process_id()) + ".log");

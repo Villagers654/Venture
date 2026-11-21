@@ -42,6 +42,7 @@ public:
     CompilePhase phase = CompilePhase::Prepare;
     std::uint64_t last_ns = 0;
     std::uint64_t marker_before = 0;
+    std::uint64_t total_begin_ns = 0;
 };
 void SetCompilePhase(CompilePhase phase) noexcept;
 // Venture stall diagnostics, always on: while the calling thread compiles a
@@ -49,4 +50,8 @@ void SetCompilePhase(CompilePhase phase) noexcept;
 // another thread can see a stall spent in translation. One relaxed store per
 // compile, nothing in emitted code. nullptr detaches the thread.
 void SetCompileMarker(std::atomic<std::uint64_t>* marker) noexcept;
+// Venture's session timeline, always on: blocks compiled and the wall time
+// their outermost compiles took, process-wide. Two relaxed adds per compile.
+struct CompileTotals { std::uint64_t blocks = 0, ns = 0; };
+CompileTotals GetCompileTotals() noexcept;
 }

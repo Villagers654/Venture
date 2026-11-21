@@ -2,6 +2,7 @@
   "about": "Eye size multipliers of Quest titles: the eye a title renders over the eye size it is told (geometric mean of the sides). Entries come from Venture's survey runs and players' debug reports.",
   "titles": {
     "co.sn.supernatural": {
+      "name": "Supernatural",
       "multiplier": 1.0
     },
     "com.aarpinnovation.alcoveonquest": {
@@ -33,6 +34,7 @@
       "multiplier": 1.204
     },
     "com.BigBoxVR.PopulationONE": {
+      "name": "POPULATION: ONE",
       "multiplier": 1.0
     },
     "com.bodyswaps.bodyswap": {
@@ -60,6 +62,7 @@
       "multiplier": 1.001
     },
     "com.Claphanz.GolfVR": {
+      "name": "Golf+",
       "multiplier": 1.001
     },
     "com.coatsink.alone": {
@@ -125,6 +128,7 @@
       "multiplier": 1.204
     },
     "com.ilmxlab.tales": {
+      "name": "Star Wars: Tales from the Galaxy's Edge",
       "multiplier": 1.007
     },
     "com.ILMxLAB.VaderImmortal.ep1": {
@@ -176,6 +180,7 @@
       "multiplier": 1.08
     },
     "com.mixedrealms.hellsweepervr_untethered": {
+      "name": "Hellsweeper VR",
       "multiplier": 1.0
     },
     "com.Nanome.NanomeCurie": {
@@ -186,6 +191,7 @@
       "multiplier": 0.924
     },
     "com.NewFolderGames.IAmCat": {
+      "name": "I Am Cat",
       "multiplier": 1.002
     },
     "com.Oculus.FirstContact": {
@@ -219,6 +225,10 @@
       "name": "Moss",
       "multiplier": 1.488
     },
+    "com.poncle.vampiresurvivorsvr": {
+      "name": "Vampire Survivors VR",
+      "multiplier": 1.396
+    },
     "com.Raetae.Artheon": {
       "name": "Artheon – The Living Museum",
       "multiplier": 0.994
@@ -247,6 +257,7 @@
       "multiplier": 1.323
     },
     "com.rustltd.h3vr2": {
+      "name": "Hot Dogs, Horseshoes & Hand Grenades 2",
       "multiplier": 1.6
     },
     "com.s8l.vst": {
@@ -266,6 +277,7 @@
       "multiplier": 1.001
     },
     "com.SDI.TWDCH2": {
+      "name": "The Walking Dead: Saints & Sinners - Chapter 2: Retribution",
       "multiplier": 1.0
     },
     "com.simpsonsHitAndRun.vr": {
@@ -329,11 +341,17 @@
       "name": "BalanceBeamOculus",
       "multiplier": 1.001
     },
+    "com.yestermilli.Fumblers": {
+      "name": "Fumblers",
+      "multiplier": 1.0
+    },
     "com.YourCompany.RoboRecall": {
+      "name": "Robo Recall: Unplugged",
       "multiplier": 1.5
     },
     "com.zenstudios.PFXVRQuest": {
-      "multiplier": 1.001
+      "name": "Pinball FX VR",
+      "multiplier": 1.305
     },
     "com.zoink.ghostgiant": {
       "name": "Ghost Giant",

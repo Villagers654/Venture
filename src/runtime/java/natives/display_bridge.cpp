@@ -20,6 +20,20 @@ bool finish(JNIEnv* env) {
   }
   return !failed;
 }
+// Venture's classic framework takes the host display (its size, refresh
+// period and vsync pulses). A 2D app's framework is AOSP's on layoutlib, whose
+// display is the app's panel (docs/design/layoutlib.md): it has none of these
+// methods, and every call is skipped.
+bool framework_takes_display(JNIEnv* env) {
+  static std::atomic<int> known{-1};
+  if (const int value = known.load(std::memory_order_acquire); value >= 0) return value != 0;
+  auto metrics = env->FindClass("android/util/DisplayMetrics");
+  const bool takes = metrics && env->GetStaticMethodID(metrics, "ventureSetDisplaySize", "(II)V");
+  env->ExceptionClear();
+  if (metrics) env->DeleteLocalRef(metrics);
+  known.store(takes ? 1 : 0, std::memory_order_release);
+  return takes;
+}
 struct Metadata {
   jclass runtime{}, choreographer{}, system{};
   jmethodID period{}, configure{}, vsync{}, xr_vsync{}, nano{};
@@ -86,6 +100,7 @@ bool map_time(JNIEnv* env, const Metadata& ids, std::int64_t time, std::int64_t&
 bool update_framework_display_period(std::int64_t period) {
   auto* env = host_env();
   if (!env) return false;
+  if (!framework_takes_display(env)) return false;
   auto* ids = metadata(env);
   if (!ids) return false;
   // Establish the epoch during framework startup, before display-dependent
@@ -100,6 +115,7 @@ bool configure_framework_display(std::int32_t width, std::int32_t height,
                                  bool host_vsync) {
   auto* env = host_env();
   if (!env) return false;
+  if (!framework_takes_display(env)) return false;
   auto* ids = metadata(env);
   if (!ids) return false;
   std::int64_t mapped;
@@ -111,6 +127,7 @@ bool configure_framework_display(std::int32_t width, std::int32_t height,
 bool set_framework_display_size(std::int32_t width, std::int32_t height) {
   auto* env = host_env();
   if (!env) return false;
+  if (!framework_takes_display(env)) return false;
   auto metrics = env->FindClass("android/util/DisplayMetrics");
   auto set = metrics ? env->GetStaticMethodID(metrics, "ventureSetDisplaySize", "(II)V") : nullptr;
   if (set) env->CallStaticVoidMethod(metrics, set, width, height);
@@ -120,6 +137,7 @@ bool set_framework_display_size(std::int32_t width, std::int32_t height) {
 bool dispatch_framework_vsync(std::int64_t frame_time_ns) {
   auto* env = host_env();
   if (!env) return false;
+  if (!framework_takes_display(env)) return false;
   auto* ids = metadata(env);
   if (!ids) return false;
   env->CallStaticVoidMethod(ids->choreographer, ids->vsync, static_cast<jlong>(frame_time_ns));
@@ -128,6 +146,7 @@ bool dispatch_framework_vsync(std::int64_t frame_time_ns) {
 bool dispatch_framework_xr_vsync(std::int64_t time, std::int64_t period) {
   auto* env = host_env();
   if (!env) return false;
+  if (!framework_takes_display(env)) return false;
   auto* ids = metadata(env);
   if (!ids) return false;
   std::int64_t mapped;

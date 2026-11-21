@@ -1,6 +1,7 @@
 #include "core/session_timeline.h"
 #include "platform/process_info.h"
 #include <doctest/doctest.h>
+#include <array>
 
 using venture::session_timeline::Sample;
 using venture::session_timeline::format;
@@ -21,6 +22,28 @@ TEST_CASE("Session timeline: GPU busy time and GPU time per frame") {
 
   s.gpu_busy_ns = -1;  // the host cannot say
   CHECK(format(s).find("gpu_") == std::string::npos);
+}
+
+TEST_CASE("Session timeline: frame-time percentiles and Venture's work per minute") {
+  using namespace venture::session_timeline;
+  std::array<std::uint64_t, kBuckets> buckets{};
+  buckets[111] = 900;            // 11.1 ms frames (90 Hz)
+  buckets[222] = 90;             // a frame missed
+  buckets[kBuckets - 1] = 10;    // past 100 ms: read as the worst
+  CHECK(percentile(buckets.data(), buckets.size(), 0.50, 450'000'000) == 11'150'000);
+  CHECK(percentile(buckets.data(), buckets.size(), 0.95, 450'000'000) == 22'250'000);
+  CHECK(percentile(buckets.data(), buckets.size(), 0.995, 450'000'000) == 450'000'000);
+  std::array<std::uint64_t, kBuckets> empty{};
+  CHECK(percentile(empty.data(), empty.size(), 0.5, 0) == 0);
+
+  Sample s;
+  s.seconds = 60;
+  s.frames = {.count = 5400, .worst_ns = 450'000'000, .p50_ns = 11'150'000, .p95_ns = 11'150'000, .p99_ns = 22'250'000};
+  CHECK(format(s).find(" frame_ms=11.15/11.15/22.25") != std::string::npos);
+  CHECK(format(s).find("jit_blocks") == std::string::npos);  // no work read
+  s.work = {.jit_blocks = 812, .pipelines = 14, .uploads = 300, .gcs = 2, .jit_ns = 95'000'000,
+            .pipeline_ns = 210'000'000, .valid = true};
+  CHECK(format(s).find(" jit_blocks=812 jit_ms=95 pipelines=14 pipeline_ms=210 uploads=300 gcs=2") != std::string::npos);
 }
 
 TEST_CASE("Session timeline: per-process GPU engine times are named and monotonic") {

@@ -1,0 +1,66 @@
+# References from layoutlib's framework code to members Venture's classes lack
+# that a 2D process never runs (tools/layoutlib/CheckLinkage.java). Each one
+# would fail with NoSuchMethodError if it ran; a new one must be read and
+# either supplied by Venture's class or shown unreachable here.
+
+# Layoutlib's own preview contexts, test accessors and system-service registry:
+# a 2D process's contexts are HostContext, whose getSystemService is Venture's.
+from com\.android\.layoutlib\.bridge\.
+# layoutlib's build-time descriptions of its own bytecode changes.
+from com\.android\.tools\.layoutlib\.create\.
+from android\.app\.SystemServiceRegistry
+from android\.app\.ContextImpl
+from android\.app\.ApplicationPackageManager
+from android\.app\.LoadedApk
+from android\.app\.ActivityThread\$
+from android\.app\.\w+_Accessor$
+from android\.\w+(\.\w+)*\.\w*FrameworkInitializer
+# Package parsing, signatures, class loader factories and dex paths: Venture's
+# package manager and the converted APK's class loader do this work.
+from android\.content\.pm\.(SigningDetails|InstrumentationInfo|PermissionGroupInfo|ArchivedPackageInfo)$
+from com\.android\.internal\.pm\.
+from android\.util\.apk\.
+from android\.security\.net\.config\.
+from com\.android\.internal\.os\.ClassLoaderFactory$
+from dalvik\.system\.DexPathList
+from android\.app\.TaskInfo$
+# Services a 2D process gets from Venture (getSystemService), never from these.
+from android\.view\.autofill\.AutofillManager\$CompatibilityBridge$
+from android\.accounts\.AccountManager
+from android\.service\.notification\.
+from android\.os\.(SystemVibrator|NullVibratorManager|BatteryUsageStats)
+from android\.hardware\.input\.InputDevice(Sensor|Vibrator)Manager
+from android\.hardware\.fingerprint\.
+from android\.media\.(audiopolicy|midi|audiofx)\.
+from android\.media\.MediaTranscodingManager
+from android\.net\.(NetworkState|ConnectivityDiagnosticsManager|EthernetNetworkUpdateRequest)
+from android\.bluetooth\.BluetoothSocket$
+from android\.database\.sqlite\.SQLiteConnection$
+from android\.security\.keystore\.ParcelableKeyGenParameterSpec$
+# Layoutlib member classes of classes Venture replaces, which only layoutlib's
+# own version of the outer class creates (its builders, subclasses and impls).
+from android\.app\.usage\.UsageStats\$Builder$
+from android\.hardware\.usb\.UsbDevice\$Builder$
+from android\.media\.MediaCodecInfo\$
+from android\.media\.MediaCodec\$EventHandler$
+from android\.media\.MediaRouter\$
+from android\.net\.NetworkCapabilities\$Builder$
+from android\.net\.Uri\$(AbstractHierarchicalUri|OpaqueUri)$
+from android\.net\.nsd\.NsdManager\$
+from android\.net\.wifi\.WifiInfo\$Builder$
+from android\.os\.PowerManager\$SleepLock$
+# createPendingResult (Activity) and drag and drop of clip data with pending
+# intents (View): Venture's PendingIntent has no binder-backed form.
+android.app.PendingIntent.<init> (Landroid/content/IIntentSender;)V
+# Descriptors that cross Binder or wrap sockets and pipes (Parcel, IPC
+# transports, virtual machines, QoS sockets): a 2D process's descriptors are
+# Venture's host files, which never cross a process.
+android.os.ParcelFileDescriptor.<init> (Landroid/os/ParcelFileDescriptor;)V
+android.os.ParcelFileDescriptor.createPipe ()[Landroid/os/ParcelFileDescriptor;
+android.os.ParcelFileDescriptor.createSocketPair ()[Landroid/os/ParcelFileDescriptor;
+android.os.ParcelFileDescriptor.createSocketPair (I)[Landroid/os/ParcelFileDescriptor;
+android.os.ParcelFileDescriptor.fromDatagramSocket (Ljava/net/DatagramSocket;)Landroid/os/ParcelFileDescriptor;
+android.os.ParcelFileDescriptor.fromSocket (Ljava/net/Socket;)Landroid/os/ParcelFileDescriptor;
+# vold's volume records and the system's volume builder: a 2D process's
+# volumes are Venture's (the shared storage and picked folders).
+android.os.storage.StorageVolume.<init> (Ljava/lang/String;Ljava/io/File;Ljava/io/File;Ljava/lang/String;ZZZZZJLandroid/os/UserHandle;Ljava/util/UUID;Ljava/lang/String;Ljava/lang/String;)V

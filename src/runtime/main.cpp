@@ -1,4 +1,5 @@
 #include "xr/eye_scale.h"
+#include "xr/panel_window.h"
 #include "xr/system_keyboard.h"
 #include "common/environment.h"
 #include "common/log.h"
@@ -105,6 +106,8 @@ std::unique_ptr<venture::ovrplatform::Session> register_libraries(const std::fil
   if (!game.empty()) venture::java::install_horizon_bridge(*session);
   // The system keyboard games open through InputMethodManager.
   if (!game.empty()) venture::xr::keyboard::install_java_bridge();
+  // A 2D app's panel window (opens on its first frame; VR games present none).
+  if (!game.empty()) venture::xr::panel::install_java_bridge();
   // An installed game: Meta hears it is being played, as from a headset.
   if (!game.empty()) session->report_playing();
   return session;
@@ -460,9 +463,10 @@ int main(int argc, char** argv) {
         if (!runtime_worker) throw std::runtime_error("Lifecycle acknowledgement requires an app worker");
         venture::platform::set_runtime_teardown_channel(std::stoull(value()));
       }
-      else if (option == "--host-check") {
-        // The headset check's host lines (host_check.h); nothing else runs.
-        std::cout << venture::host_check() << std::flush;
+      else if (option == "--host-check" || option == "--host-check-passive") {
+        // The headset check's host lines (host_check.h); nothing else runs. The
+        // passive form (the debug report's) never loads the OpenXR runtime.
+        std::cout << venture::host_check(option == "--host-check") << std::flush;
         return 0;
       }
       else if (option == "--help") {
@@ -482,7 +486,8 @@ int main(int argc, char** argv) {
                      "Memory test: --test-a32-memory (reserve low arena and "
                      "exit before HLE)\n"
                      "Host check: --host-check (the CPU engine, GLES path and "
-                     "OpenXR runtime found here, then exit)\n";
+                     "OpenXR runtime found here, then exit); --host-check-passive "
+                     "(the same without loading the OpenXR runtime)\n";
         return 0;
       } else throw std::runtime_error("unknown option: " + option);
     }

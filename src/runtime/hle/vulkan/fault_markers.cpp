@@ -20,6 +20,7 @@
 #include <format>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <tuple>
 #include <unordered_map>
 
@@ -633,6 +634,32 @@ std::vector<QueueVerdict> fault_marker_verdicts(VkDevice d) {
   std::lock_guard lock(mutex);
   auto it = devices.find(d);
   return it == devices.end() ? std::vector<QueueVerdict>{} : verdicts(d, it->second);
+}
+std::string live_fault_markers(std::vector<std::string>& lines) {
+  // The stall finder must not wait behind a recording thread: a few tries only.
+  std::unique_lock lock(mutex, std::defer_lock);
+  for (int i = 0; i < 20 && !lock.try_lock(); ++i) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  if (!lock.owns_lock()) return "GPU breadcrumbs busy: not read";
+  if (devices.empty()) return {};
+  std::size_t completed = 0, waiting = 0, running = 0;
+  std::string busy;
+  bool checkpoints = false;
+  for (auto& [d, device] : devices) {
+    // VK_NV_device_diagnostic_checkpoints may be read only after a device loss.
+    if (device.kind == FaultMarkers::checkpoints) { checkpoints = true; continue; }
+    if (device.kind != FaultMarkers::buffer_marker) continue;
+    for (const auto& q : verdicts(d, device)) {
+      completed += q.completed;
+      waiting += q.waiting;
+      running += q.running;
+      for (const auto& line : q.lines) lines.push_back(line);
+      if (busy.empty() && q.running && !q.stopped.empty()) busy = std::format("{} had begun and not finished: {}", q.where, q.stopped);
+    }
+  }
+  if (running) return "GPU busy: " + busy;
+  if (waiting) return std::format("GPU: {} submitted guest command buffers had not started and none was running", waiting);
+  if (completed) return std::format("GPU idle: all {} recent guest command buffers had completed", completed);
+  return checkpoints ? "GPU state: breadcrumbs on this driver are read only after a device loss" : "";
 }
 void report_fault_markers(VkDevice d) {
   std::lock_guard lock(mutex);

@@ -13,6 +13,9 @@ public final class OsConstants {
   public static final int S_IFMT = 61440, S_IFREG = 32768, S_IFDIR = 16384;
   public static boolean S_ISREG(int mode) { return (mode & S_IFMT) == S_IFREG; }
   public static boolean S_ISDIR(int mode) { return (mode & S_IFMT) == S_IFDIR; }
+  public static final int S_IFIFO = 4096, S_IFSOCK = 49152, PROT_NONE = 0, PROT_READ = 1, PROT_WRITE = 2;
+  public static boolean S_ISFIFO(int mode) { return (mode & S_IFMT) == S_IFIFO; }
+  public static boolean S_ISSOCK(int mode) { return (mode & S_IFMT) == S_IFSOCK; }
   public static String errnoName(int errno) {
     return switch (errno) {
       case EPERM -> "EPERM"; case ENOENT -> "ENOENT"; case EINTR -> "EINTR"; case EIO -> "EIO"; case EBADF -> "EBADF";

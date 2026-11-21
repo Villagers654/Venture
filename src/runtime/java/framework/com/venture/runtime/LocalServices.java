@@ -86,7 +86,7 @@ public final class LocalServices {
       try {
         var env = RuntimeEnvironment.get();
         instance = (Service) env.loader.loadClass(name.getClassName()).getDeclaredConstructor().newInstance();
-        instance.ventureAttach(env.application == null ? new Context() : env.application);
+        instance.ventureAttach(env.application == null ? Components.newContext() : env.application);
         android.util.Log.i("LocalServices", "create " + name);
         instance.onCreate();
       } catch (ReflectiveOperationException failure) {
@@ -172,7 +172,7 @@ public final class LocalServices {
     Objects.requireNonNull(executor);
     ComponentName name = resolve(owner, intent);
     if (name == null || shuttingDown) return false;
-    Context outer = owner.ventureOuterContext();
+    Context outer = Components.outerContext(owner);
     Intent snapshot = new Intent(intent);
     synchronized (connectionsLock) {
       if (shuttingDown) return false;
@@ -195,7 +195,7 @@ public final class LocalServices {
   }
   public static void unbind(Context owner, ServiceConnection callback) {
     Objects.requireNonNull(callback);
-    Context outer = owner.ventureOuterContext();
+    Context outer = Components.outerContext(owner);
     synchronized (connectionsLock) {
       var owned = connections.get(outer);
       var client = owned == null ? null : owned.remove(callback);
@@ -220,8 +220,8 @@ public final class LocalServices {
   }
   /** Forget one component's leaked dispatchers before queued callbacks can run. */
   public static void removeContextRegistrations(Context owner) {
-    Context outer = owner.ventureOuterContext();
-    Context.ventureRemoveReceiverRegistrations(outer);
+    Context outer = Components.outerContext(owner);
+    Components.removeReceiverRegistrations(outer);
     List<Connection> leaked;
     synchronized (connectionsLock) {
       var owned = connections.remove(outer);
@@ -304,7 +304,7 @@ public final class LocalServices {
       synchronized (connectionsLock) { owners = new ArrayList<>(connections.keySet()); }
       try { for (var owner : owners) removeContextRegistrations(owner); }
       finally {
-        try { Context.ventureClearReceiverRegistrations(); }
+        try { Components.clearReceiverRegistrations(); }
         finally { records.clear(); }
       }
     }

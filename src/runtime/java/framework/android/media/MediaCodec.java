@@ -249,7 +249,10 @@ public final class MediaCodec {
         @Override public ByteBuffer getBuffer(){return buffer;}
       };
     }
-    @Override void throwISEIfImageIsInvalid(){if(planes==null)throw new IllegalStateException("Image is already closed");}
+    @Override protected void throwISEIfImageIsInvalid(){if(planes==null)throw new IllegalStateException("Image is already closed");}
+    // AOSP Image (a 2D process uses it): an image from a codec is not scaled or transformed.
+    public int getScalingMode(){return 0;}
+    public int getTransform(){return 0;}
     @Override public int getFormat(){throwISEIfImageIsInvalid();return android.graphics.ImageFormat.YUV_420_888;}
     @Override public int getWidth(){throwISEIfImageIsInvalid();return width;}
     @Override public int getHeight(){throwISEIfImageIsInvalid();return height;}

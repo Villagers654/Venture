@@ -24,9 +24,23 @@ public class AlertDialog extends Dialog {
   // the negative button, which declines (Abort, Cancel, No), else the neutral
   // one (Later), else the positive one (OK). A dialog without buttons only
   // shows information and stays up.
+  //
+  // A dialog that asks for text (Unreal's virtual keyboard dialog, a name
+  // prompt) is answered by the player instead: the system keyboard opens on
+  // its text field, its action key presses the positive button and its close
+  // key the negative one (or cancels).
   @Override public void show() {
     if (isShowing()) return;
     super.show();
+    if (!isShowing()) return;
+    var field = com.venture.runtime.SystemKeyboard.textField(getWindow().getDecorView());
+    if (field != null && com.venture.runtime.SystemKeyboard.show(field, new com.venture.runtime.SystemKeyboard.Owner() {
+          @Override public void onAction() { press(BUTTON_POSITIVE, false); }
+          @Override public void onClose() { press(BUTTON_NEGATIVE, true); }
+        })) {
+      android.util.Log.i("dialog", "Text field; the system keyboard answers");
+      return;
+    }
     android.widget.Button answer = null;
     for (int which : new int[] {BUTTON_NEGATIVE, BUTTON_NEUTRAL, BUTTON_POSITIVE})
       if (answer == null) answer = buttons.get(which);
@@ -44,6 +58,15 @@ public class AlertDialog extends Dialog {
     var looper = android.os.Looper.myLooper() != null ? android.os.Looper.myLooper() : android.os.Looper.getMainLooper();
     if (looper == null) { chosen.performClick(); return; }
     new android.os.Handler(looper).post(() -> { if (isShowing()) chosen.performClick(); });
+  }
+  // A button the keyboard ended the edit with; without it the dialog is
+  // dismissed (action) or cancelled (close), as Back cancels on Android.
+  private void press(int which, boolean cancelWithout) {
+    if (!isShowing()) return;
+    var button = buttons.get(which);
+    if (button != null) button.performClick();
+    else if (cancelWithout) cancel();
+    else dismiss();
   }
   public AlertDialog(android.content.Context c) {
     super(c);

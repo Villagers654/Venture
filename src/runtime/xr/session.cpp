@@ -3,6 +3,7 @@
 #include "xr/grip_toggle.h"
 #include "xr/system_keyboard.h"
 #include "common/first_frame_progress.h"
+#include "common/injected_modules.h"
 #include "common/startup_progress.h"
 #include "xr/dev_dump.h"
 #include "xr/session.h"
@@ -24,6 +25,7 @@
 #include "xr/clock.h"
 #include "xr/reference_spaces.h"
 #include "xr/haptic_output.h"
+#include "xr/haptic_sequence.h"
 #include <algorithm>
 #include <string>
 #include <string_view>
@@ -363,6 +365,8 @@ XrResult Session::destroy(SessionOwner requested) {
     host_waiter.reset();
   }
   // Parked host chains go with the session; the line shows how far a teardown got.
+  // No haptic call for this session may still be waiting or running on the haptics worker.
+  cancel_sequence(handle);
   log::info("xr", "Destroying the host session with {} parked swapchain(s)", dev_forget_parked_swapchains());
   auto result = xrDestroySession(handle);
   if (XR_SUCCEEDED(result)) {
@@ -1032,7 +1036,12 @@ XrResult Session::end(const XrFrameEndInfo *info, std::shared_ptr<const void> ow
         }
     }
     vulkan::timing_end_frame(info->displayTime, guest_swap_interval, display_timing.rate());
-    if (frame_index == 1) { profile::mark("first_frame_submission"); startup_diagnostics::arm(); }
+    if (frame_index == 1) {
+      profile::mark("first_frame_submission");
+      startup_diagnostics::arm();
+      // Capture tools often inject once the game shows its first frame.
+      injected_modules::log_loaded();
+    }
     startup_diagnostics::note_frame_submitted();
     if (profile::enabled) {
       for (std::uint32_t i = 0; i < info->layerCount; ++i)

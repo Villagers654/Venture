@@ -46,6 +46,9 @@ void register_libraries() {
   register_loader(*loader);
   if (process_config().isa() == GuestIsa::a64) shape_dlopen(*libdl, *loader);
   Linker::get().register_hle_library(loader);
+  auto libdl_android = make("libdl_android.so");
+  register_libdl_android(*libdl_android);
+  Linker::get().register_hle_library(libdl_android);
   // libc++_shared.so is always guest code shipped with the APK.
   // bionic's linker calls debuggerd_init() before loading the app's libraries.
   signals::install_debuggerd_handlers();

@@ -9,6 +9,9 @@ public class AudioTrack {
       STATE_INITIALIZED = 1, STATE_NO_STATIC_DATA = 2, PLAYSTATE_STOPPED = 1,
       PLAYSTATE_PAUSED = 2, PLAYSTATE_PLAYING = 3, WRITE_BLOCKING = 0, WRITE_NON_BLOCKING = 1,
       SUCCESS = 0, ERROR = -1, ERROR_BAD_VALUE = -2, ERROR_INVALID_OPERATION = -3, ERROR_DEAD_OBJECT = -6;
+  /** AOSP's gain range for setStereoVolume and setVolume. */
+  public static float getMinVolume() { return 0f; }
+  public static float getMaxVolume() { return 1f; }
   private volatile long handle;
   private volatile int playState = PLAYSTATE_STOPPED;
   private final int sampleRate, channelCount, format, capacityFrames, sessionId;

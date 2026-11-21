@@ -14,7 +14,13 @@
 #include "common/paths.h"
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <map>
+#include <mutex>
+#include <optional>
 namespace venture::hle::libc {
 namespace {
 std::string& local_error() { return thread_lifetime::local<std::string, struct DlLocalError>(); }
@@ -167,29 +173,160 @@ int iterate_fn(CallContext& c, GuestAddr callback, GuestAddr data) {
   AddressSpace::get().free(memory);
   return result;
 }
-// android_dlextinfo: flags, reserved_addr, reserved_size, ... Only the
-// reserved-address flags are supported: the library loads into that range.
-constexpr std::uint64_t kDlextReservedAddress = 0x1, kDlextReservedAddressHint = 0x2;
-bool placement(const std::uint64_t* ext, elf::Placement& out) {
-  if (!ext || !*ext) return true;
-  if (*ext & ~(kDlextReservedAddress | kDlextReservedAddressHint)) {
-    log::warn("libdl", "unsupported android_dlopen_ext flags {:#x}", *ext);
-    local_error() = "android_dlopen_ext: extended flags are not supported";
-    return false;
+// Linker namespaces (bionic linker_namespaces.h). Venture's linker is flat:
+// every library is visible to every caller, which is what a namespace linked
+// to all others sees. A namespace keeps what can still mean something without
+// isolation: its search paths, tried first for a bare name dlopened into it.
+// Links always succeed, since everything is already shared.
+struct Namespace {
+  std::string name;
+  std::vector<std::string> paths;  // ld_library_path, then default_library_path (guest)
+};
+std::mutex namespaces_mutex;
+std::map<GuestAddr, Namespace> namespaces;
+void split_paths(const char* text, std::vector<std::string>& out) {
+  std::string_view s = text ? text : "";
+  while (!s.empty()) {
+    auto end = std::min(s.find(':'), s.size());
+    if (end) out.emplace_back(s.substr(0, end));
+    s.remove_prefix(std::min(end + 1, s.size()));
   }
-  out = {ext[1], ext[2], (*ext & kDlextReservedAddress) != 0};
+}
+GuestAddr create_namespace(const char* name, const char* ld_library_path, const char* default_library_path,
+                           std::uint64_t type, const char*, GuestAddr) {
+  Namespace ns{name ? name : ""};
+  split_paths(ld_library_path, ns.paths);
+  split_paths(default_library_path, ns.paths);
+  // The handle is an opaque guest pointer, unique for the process's lifetime.
+  const auto handle = AddressSpace::get().allocate(kGuestPageSize, kProtRead, "[anon:linker_namespace]");
+  if (!handle) { local_error() = "android_create_namespace: out of memory"; return 0; }
+  log::info("libdl", "Linker namespace \"{}\" (type {:#x}, {} search paths) in Venture's flat linker", ns.name, type,
+            ns.paths.size());
+  std::lock_guard lock(namespaces_mutex);
+  namespaces[handle] = std::move(ns);
+  return handle;
+}
+GuestAddr loader_create_namespace(const char* name, const char* ld_library_path, const char* default_library_path,
+                                  std::uint64_t type, const char* permitted, GuestAddr parent, GuestAddr) {
+  return create_namespace(name, ld_library_path, default_library_path, type, permitted, parent);
+}
+bool link_namespaces(GuestAddr from, GuestAddr, const char*) {
+  if (!from) { local_error() = "android_link_namespaces: namespace_from is null"; return false; }
   return true;
 }
-Library* android_open(CallContext& c, const char* name, int flags, const std::uint64_t* ext) {
-  elf::Placement where;
-  if (!placement(ext, where)) return nullptr;
-  if (!name) return Linker::get().open_main(flags);
-  return Linker::get().open(name, flags, caller(c), where.address ? &where : nullptr);
+bool link_namespaces_all_libs(GuestAddr from, GuestAddr to) {
+  if (!from || !to) { local_error() = "android_link_namespaces_all_libs: a namespace is null"; return false; }
+  return true;
 }
+bool init_anonymous_namespace(const char*, const char*) { return true; }
 void* exported_namespace(const char*) {
   // No namespace is exported by this flat linker. Bionic returns null for an
   // absent/hidden namespace, including a null name, without changing dlerror.
   return nullptr;
+}
+// android_dlextinfo (android/dlext.h): flags, reserved_addr, reserved_size,
+// relro_fd, library_fd, library_fd_offset, library_namespace.
+struct DlextInfo {
+  std::uint64_t flags, reserved_addr, reserved_size;
+  std::int32_t relro_fd, library_fd;
+  std::int64_t library_fd_offset;
+  GuestAddr library_namespace;
+};
+static_assert(sizeof(DlextInfo) == 48 && offsetof(DlextInfo, library_namespace) == 40);
+constexpr std::uint64_t kDlextReservedAddress = 0x1, kDlextReservedAddressHint = 0x2, kDlextUseLibraryFd = 0x10,
+                        kDlextUseLibraryFdOffset = 0x20, kDlextForceLoad = 0x40, kDlextUseNamespace = 0x200;
+constexpr std::uint64_t kDlextSupported = kDlextReservedAddress | kDlextReservedAddressHint | kDlextUseLibraryFd |
+                                          kDlextUseLibraryFdOffset | kDlextForceLoad | kDlextUseNamespace;
+bool placement(const DlextInfo* ext, elf::Placement& out) {
+  if (!ext || !ext->flags) return true;
+  if (ext->flags & ~kDlextSupported) {
+    log::warn("libdl", "unsupported android_dlopen_ext flags {:#x}", ext->flags & ~kDlextSupported);
+    local_error() = "android_dlopen_ext: extended flags are not supported";
+    return false;
+  }
+  if (ext->flags & (kDlextReservedAddress | kDlextReservedAddressHint))
+    out = {ext->reserved_addr, ext->reserved_size, (ext->flags & kDlextReservedAddress) != 0};
+  return true;
+}
+// ANDROID_DLEXT_USE_LIBRARY_FD: the library is the descriptor's file, `name`
+// only names it. A descriptor on a guest path opens that path. One whose bytes
+// copy a system library Venture provides (liblinkernsbypass loads a copy of
+// libvulkan.so with a rewritten soname from a memfd, to get a second instance
+// in its own namespace) is that library, as the copy would run the same code.
+// Any other file in memory is written to the cache and loaded from there.
+std::optional<std::string> library_from_fd(const DlextInfo& ext, const char* name) {
+  const std::int64_t offset = ext.flags & kDlextUseLibraryFdOffset ? ext.library_fd_offset : 0;
+  auto file = FdTable::get().file(ext.library_fd);
+  if (!file) { local_error() = "android_dlopen_ext: library_fd is not an open descriptor"; return std::nullopt; }
+  if (!offset && file->path.starts_with('/')) {
+    MappedPath mapped;
+    if (!resolve_path(file->path, at_cwd, &mapped) && !mapped.device && std::filesystem::is_regular_file(mapped.host))
+      return file->path;
+  }
+  Stat st{};
+  if (int r = file->stat(&st); r || st.size <= offset) {
+    local_error() = "android_dlopen_ext: cannot read library_fd";
+    return std::nullopt;
+  }
+  std::string bytes(static_cast<std::size_t>(st.size - offset), '\0');
+  for (std::size_t done = 0; done < bytes.size();) {
+    auto n = file->pread(bytes.data() + done, bytes.size() - done, offset + static_cast<std::int64_t>(done));
+    if (n <= 0) { local_error() = "android_dlopen_ext: cannot read library_fd"; return std::nullopt; }
+    done += static_cast<std::size_t>(n);
+  }
+  if (auto soname = process_image::copied_library(bytes)) {
+    log::info("libdl", "android_dlopen_ext: {} (descriptor {}) copies the system {}; serving that library",
+              name ? name : "", ext.library_fd, *soname);
+    return *soname;
+  }
+  static std::atomic<unsigned> serial{0};
+  const auto base = paths::utf8(paths::from_utf8(name ? name : "library.so").filename());
+  const auto number = serial++;
+  const auto directory = process_config().cache_dir / "dlopen-fd";
+  std::error_code error;
+  std::filesystem::create_directories(directory, error);
+  const auto host = directory / paths::from_utf8(std::to_string(number) + "-" + base);
+  {
+    std::ofstream out(host, std::ios::binary | std::ios::trunc);
+    out.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+    if (!out) { local_error() = "android_dlopen_ext: cannot stage library_fd"; return std::nullopt; }
+  }
+  auto guest = (file->path.starts_with('/') ? file->path : "/memfd:" + base) + "#" + std::to_string(number);
+  Linker::get().register_file(guest, host);
+  return guest;
+}
+// A bare name dlopened into a namespace: its search paths first.
+std::string namespace_candidate(GuestAddr handle, const char* name) {
+  if (!handle || !name || std::strchr(name, '/')) return name ? name : "";
+  std::vector<std::string> paths;
+  {
+    std::lock_guard lock(namespaces_mutex);
+    if (auto it = namespaces.find(handle); it != namespaces.end()) paths = it->second.paths;
+  }
+  for (const auto& directory : paths) {
+    auto candidate = directory + "/" + name;
+    MappedPath mapped;
+    if (!resolve_path(candidate, at_cwd, &mapped) && !mapped.device && std::filesystem::is_regular_file(mapped.host))
+      return candidate;
+  }
+  return name;
+}
+Library* open_ext(const char* name, int flags, const DlextInfo* ext, Library* from) {
+  elf::Placement where;
+  if (!placement(ext, where)) return nullptr;
+  if (!name && !(ext && ext->flags & kDlextUseLibraryFd)) return Linker::get().open_main(flags);
+  std::string target = name ? name : "";
+  if (ext && ext->flags & kDlextUseLibraryFd) {
+    auto from_fd = library_from_fd(*ext, name);
+    if (!from_fd) return nullptr;
+    target = std::move(*from_fd);
+  } else if (ext && ext->flags & kDlextUseNamespace) {
+    target = namespace_candidate(ext->library_namespace, name);
+  }
+  return Linker::get().open(target, flags, from, where.address ? &where : nullptr);
+}
+Library* android_open(CallContext& c, const char* name, int flags, const DlextInfo* ext) {
+  return open_ext(name, flags, ext, caller(c));
 }
 void ld_path(char* out, std::uint64_t n) {
   auto path = process_config().guest_native_lib_dir() + ":" + process_config().guest_system_lib_dir();
@@ -283,11 +420,8 @@ Library* loader_dlopen(const char* name, int flags, GuestAddr) {
   if (!name) return Linker::get().open_main(flags);
   return Linker::get().open(name, flags, nullptr);
 }
-Library* loader_dlopen_ext(const char* name, int flags, const std::uint64_t* ext, GuestAddr caller) {
-  elf::Placement where;
-  if (!placement(ext, where)) return nullptr;
-  if (!name || !where.address) return loader_dlopen(name, flags, caller);
-  return Linker::get().open(name, flags, nullptr, &where);
+Library* loader_dlopen_ext(const char* name, int flags, const DlextInfo* ext, GuestAddr) {
+  return open_ext(name, flags, ext, nullptr);
 }
 GuestAddr loader_dlvsym(Library* l, const char* name, const char* version, GuestAddr caller_address) {
   if (!name) {
@@ -314,6 +448,23 @@ int dladdr32(GuestAddr address, DlInfo32* out) {
 std::uint32_t android_open32(CallContext& c, const char* name, int flags, const std::uint64_t* ext) {
   if (ext && *ext) { local_error() = "android_dlopen_ext: extended flags are not supported"; log::warn("libdl", "unsupported android_dlopen_ext flags {:#x}", *ext); return 0; }
   return dlopen32(c, name, flags);
+}
+// libdl_android.so: the platform-private namespace API libnativeloader and
+// in-process tools use. bionic's dlsym on its handle also reaches the linker's
+// __loader_* forms, which liblinkernsbypass looks up there.
+void register_namespace_api(HleLibrary& lib) {
+#define B(n, f) VENTURE_LIBC_BIND(lib, n, f)
+  B("android_create_namespace", create_namespace);
+  B("android_link_namespaces", link_namespaces);
+  B("android_link_namespaces_all_libs", link_namespaces_all_libs);
+  B("android_init_anonymous_namespace", init_anonymous_namespace);
+  B("android_get_exported_namespace", exported_namespace);
+  B("__loader_android_create_namespace", loader_create_namespace);
+  B("__loader_android_link_namespaces", link_namespaces);
+  B("__loader_android_link_namespaces_all_libs", link_namespaces_all_libs);
+  B("__loader_android_init_anonymous_namespace", init_anonymous_namespace);
+  B("__loader_android_get_exported_namespace", exported_namespace);
+#undef B
 }
 }  // namespace
 void register_libdl(HleLibrary& lib) {
@@ -391,7 +542,14 @@ void register_loader(HleLibrary& lib) {
   B("__loader_android_get_exported_namespace", exported_namespace);
   B("__loader_android_get_LD_LIBRARY_PATH", ld_path);
   B("__loader_android_update_LD_LIBRARY_PATH", update_path);
+  B("__loader_android_create_namespace", loader_create_namespace);
+  B("__loader_android_link_namespaces", link_namespaces);
+  B("__loader_android_link_namespaces_all_libs", link_namespaces_all_libs);
+  B("__loader_android_init_anonymous_namespace", init_anonymous_namespace);
 #undef B
+}
+void register_libdl_android(HleLibrary& lib) {
+  if (process_config().isa() == GuestIsa::a64) register_namespace_api(lib);
 }
 // bionic's libdl dlopen hands its return address to the linker's
 // __loader_dlopen through a BL. Tools such as liblinkernsbypass follow the

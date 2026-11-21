@@ -161,5 +161,6 @@ jobs:
           path: |
             dist/Venture-windows64.zip
             dist/Venture-windows64-setup.exe
+            dist/Venture-layoutlib-windows64.zip
           if-no-files-found: error
           compression-level: 0

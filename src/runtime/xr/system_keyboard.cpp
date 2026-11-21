@@ -3,6 +3,7 @@
 #include "java/jvm.h"
 #include "xr/dev_dump.h"
 #include "xr/haptic_output.h"
+#include "xr/haptic_sequence.h"
 #include "xr/host_xr.h"
 #include "xr/math.h"
 #include "xr/queue.h"
@@ -591,7 +592,7 @@ void tick(std::string_view api, XrSession session, XrAction haptic, XrPath hand)
   if (!haptic || !hand) return;
   const XrHapticActionInfo info{XR_TYPE_HAPTIC_ACTION_INFO, nullptr, haptic, hand};
   const XrHapticVibration pulse{XR_TYPE_HAPTIC_VIBRATION, nullptr, 15'000'000, XR_FREQUENCY_UNSPECIFIED, 0.35f};
-  apply_haptic(api, session, info, pulse, "keyboard_key");
+  queue_vibration(api, session, info, pulse, "keyboard_key");
 }
 
 void type_text(std::string_view utf8) {

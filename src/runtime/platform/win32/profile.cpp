@@ -215,6 +215,41 @@ bool profile_sample(const ProfileThread& t, const Cpu* cpu, const std::atomic<st
   profile_cpu_time(t, out.cpu_ns);
   return valid;
 }
+bool profile_host_stack(const ProfileThread& t, std::span<std::uintptr_t> words, std::uintptr_t& ip,
+                        std::size_t& count) noexcept {
+  count = 0;
+  ip = 0;
+  if (t.id == GetCurrentThreadId()) return false;
+  auto h = t.handle.get();
+  if (SuspendThread(h) == DWORD(-1)) return false;
+  CONTEXT context{};
+  context.ContextFlags = CONTEXT_CONTROL;
+  const bool valid = GetThreadContext(h, &context) != FALSE;
+  if (valid) {
+#if defined(_M_X64) || defined(__x86_64__)
+    ip = context.Rip;
+    std::uintptr_t at = context.Rsp;
+#else
+    ip = context.Pc;
+    std::uintptr_t at = context.Sp;
+#endif
+    // Page by page: the first page that cannot be read (the guard page, the
+    // end of the stack) ends the copy. A system call, not a user-mode lock.
+    while (count < words.size()) {
+      const auto page_end = (at | 4095) + 1;
+      const auto n = std::min<std::size_t>((page_end - at) / sizeof(std::uintptr_t), words.size() - count);
+      SIZE_T copied = 0;
+      if (!n || !ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<const void*>(at), words.data() + count,
+                                   n * sizeof(std::uintptr_t), &copied) ||
+          copied != n * sizeof(std::uintptr_t))
+        break;
+      count += n;
+      at += n * sizeof(std::uintptr_t);
+    }
+  }
+  if (ResumeThread(h) == DWORD(-1)) RaiseFailFastException(nullptr, nullptr, 0);
+  return valid;
+}
 std::vector<ProfileModule> profile_modules() {
   std::vector<ProfileModule> out;
   auto snapshot = retain(CreateToolhelp32Snapshot(TH32CS_SNAPMODULE, 0));

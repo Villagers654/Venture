@@ -49,8 +49,10 @@ add_custom_command(OUTPUT "${VENTURE_JAVA_BRIDGE_JAR}"
     "${CMAKE_CURRENT_SOURCE_DIR}/bridge/com/venture/runtime/NativeMethods.java"
     "${CMAKE_CURRENT_SOURCE_DIR}/bridge/com/venture/runtime/MethodHooks.java"
     "${CMAKE_CURRENT_SOURCE_DIR}/bridge/com/venture/runtime/DirectBuffers.java"
+    "${CMAKE_CURRENT_SOURCE_DIR}/bridge/com/venture/runtime/GuestReflection.java"
   COMMAND "${VENTURE_HOST_JAVA_HOME}/bin/jar${VENTURE_HOST_JAVA_SUFFIX}" --create --file "${VENTURE_JAVA_BRIDGE_JAR}" -C "${venture_bridge_classes}" .
   DEPENDS bridge/com/venture/runtime/NativeLoader.java bridge/com/venture/runtime/NativeMethods.java
-    bridge/com/venture/runtime/MethodHooks.java bridge/com/venture/runtime/DirectBuffers.java VERBATIM)
+    bridge/com/venture/runtime/MethodHooks.java bridge/com/venture/runtime/DirectBuffers.java
+    bridge/com/venture/runtime/GuestReflection.java VERBATIM)
 add_custom_target(venture_java_bridge_jar ALL DEPENDS "${VENTURE_JAVA_BRIDGE_JAR}")
 add_dependencies(venture_java venture_java_bridge_jar)

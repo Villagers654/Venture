@@ -34,6 +34,20 @@ void recommended_size(std::int32_t width, std::int32_t height);
 struct Frames {
   std::uint64_t count = 0, long_frames = 0;
   std::int64_t worst_ns = 0;
+  // Frame-to-frame intervals at these percentiles (0.1 ms steps); 0 when too few frames.
+  std::int64_t p50_ns = 0, p95_ns = 0, p99_ns = 0;
+};
+// Percentiles from a histogram of intervals in kBucketNs steps; the last bucket
+// holds everything longer, read as `worst_ns`.
+inline constexpr std::int64_t kBucketNs = 100'000;
+inline constexpr std::size_t kBuckets = 1001;
+std::int64_t percentile(const std::uint64_t* buckets, std::size_t count, double fraction, std::int64_t worst_ns);
+// One minute's Venture work that can slow frames: JIT compiles (blocks and wall
+// time), shader and pipeline compiles, texture uploads and Java collections.
+struct Work {
+  std::uint64_t jit_blocks = 0, pipelines = 0, uploads = 0, gcs = 0;
+  std::int64_t jit_ns = 0, pipeline_ns = 0;
+  bool valid = false;
 };
 // One minute's per-frame phases (sums over `frames` submissions, `waits` host waits).
 struct Phases {
@@ -54,6 +68,7 @@ struct Sample {
   Frames frames;
   Phases phases;
   Timeouts timeouts;
+  Work work;
   std::int32_t eye_width = 0, eye_height = 0, recommended_width = 0, recommended_height = 0;
   double cpu_percent = -1;          // whole process, of one core; < 0 unknown
   std::vector<ThreadCpu> top;       // busiest threads first

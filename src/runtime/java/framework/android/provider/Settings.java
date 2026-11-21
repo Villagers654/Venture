@@ -6,6 +6,9 @@ public final class Settings {
     }
   }
   public static class System {
+    public static String getStringForUser(android.content.ContentResolver r, String name, int user) {
+      return getString(r, name);
+    }
     public static final android.net.Uri CONTENT_URI = android.net.Uri.parse("content://settings/system");
     public static final android.net.Uri DEFAULT_RINGTONE_URI = getUriFor("ringtone"),
         DEFAULT_NOTIFICATION_URI = getUriFor("notification_sound"), DEFAULT_ALARM_ALERT_URI = getUriFor("alarm_alert");
@@ -31,6 +34,27 @@ public final class Settings {
     }
   }
   public static class Secure {
+    public static android.net.Uri getUriFor(String name) {
+      return android.net.Uri.withAppendedPath(CONTENT_URI, name);
+    }
+    public static String getStringForUser(android.content.ContentResolver r, String key, int user) {
+      return getString(r, key);
+    }
+    public static int getIntForUser(android.content.ContentResolver r, String key, int def, int user) {
+      return getInt(r, key, def);
+    }
+    public static float getFloatForUser(android.content.ContentResolver r, String key, float def, int user) {
+      return def;
+    }
+    public static boolean putInt(android.content.ContentResolver r, String key, int value) {
+      return false;
+    }
+    public static boolean putIntForUser(android.content.ContentResolver r, String key, int value, int user) {
+      return false;
+    }
+    public static boolean putString(android.content.ContentResolver r, String key, String value) {
+      return false;
+    }
     public static final String ANDROID_ID = "android_id";
     public static final android.net.Uri CONTENT_URI = android.net.Uri.parse("content://settings/secure");
     public static String getString(android.content.ContentResolver r, String key) {
@@ -53,6 +77,14 @@ public final class Settings {
     }
   }
   public static class Global {
+    public static long getLong(android.content.ContentResolver r, String key, long def) {
+      return def;
+    }
+    public static float getFloat(android.content.ContentResolver r, String key) throws SettingNotFoundException {
+      float value = getFloat(r, key, Float.NaN);
+      if (Float.isNaN(value)) throw new SettingNotFoundException(key);
+      return value;
+    }
     public static final String DEVICE_NAME = "device_name";
     public static final android.net.Uri CONTENT_URI = android.net.Uri.parse("content://settings/global");
     public static android.net.Uri getUriFor(String name) { return android.net.Uri.withAppendedPath(CONTENT_URI, name); }

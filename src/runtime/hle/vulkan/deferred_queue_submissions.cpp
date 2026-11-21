@@ -353,4 +353,9 @@ std::size_t DeferredQueueSubmissions::pending(std::uint32_t logical) const {
   std::lock_guard lock(mutex_);
   return pending_.at(logical).size();
 }
+std::optional<std::size_t> DeferredQueueSubmissions::try_pending(std::uint32_t logical) const {
+  std::unique_lock lock(mutex_, std::try_to_lock);
+  if (!lock.owns_lock() || logical >= pending_.size()) return std::nullopt;
+  return pending_[logical].size();
+}
 } // namespace venture::vulkan

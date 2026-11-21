@@ -50,6 +50,8 @@ std::condition_variable_any frame_changed;
 MockXrScript script;
 MockXrStats stats{};
 std::uint64_t haptic_per_hand[2]{};
+std::deque<MockXrHapticRecord> haptic_log;
+std::atomic<std::int64_t> haptic_delay_override_us{-1};
 std::uintptr_t next_id = 0x10000;
 template <class H> H token() {
   // VENTURE_MOCK_TYPED_HANDLES numbers each handle type from 1, as Virtual Desktop's VDXR does:
@@ -76,6 +78,8 @@ bool pending_frame = false;
 bool gate_wait = false, gated_wait = false;
 // ventureMockXrGateEnd: xrEndFrame blocks; host objects destroyed meanwhile are counted.
 bool gate_end = false, gated_end = false;
+// ventureMockXrGateHaptics: haptic output calls block until released.
+bool gate_haptics = false, gated_haptics = false;
 std::uint32_t destroys_during_end = 0;
 bool restart_pending = false; // Runtime-initiated stop that returns to READY.
 bool exit_pending = false;
@@ -166,6 +170,29 @@ bool trace_input() { return venture::environment::getenv("VENTURE_MOCK_TRACE_INP
 // runtime): the extension, its system properties and the motion-vector and
 // depth swapchain formats. Off by default so titles keep their usual path.
 bool space_warp() { return venture::environment::getenv("VENTURE_MOCK_SPACE_WARP") != nullptr; }
+// VENTURE_MOCK_COLOR_SPACE models a host with XR_FB_color_space: it lists the
+// color spaces and accepts any of them (the mock composites nothing). Off by
+// default, so Venture converts a game's color space itself as on SteamVR.
+bool color_space() { return venture::environment::getenv("VENTURE_MOCK_COLOR_SPACE") != nullptr; }
+XrColorSpaceFB current_color_space = XR_COLOR_SPACE_RIFT_CV1_FB;
+XrResult XRAPI_CALL enumerate_color_spaces(XrSession, std::uint32_t capacity, std::uint32_t* count,
+                                           XrColorSpaceFB* out) {
+  static constexpr XrColorSpaceFB spaces[]{XR_COLOR_SPACE_UNMANAGED_FB, XR_COLOR_SPACE_REC2020_FB,
+                                           XR_COLOR_SPACE_REC709_FB,   XR_COLOR_SPACE_RIFT_CV1_FB,
+                                           XR_COLOR_SPACE_RIFT_S_FB,   XR_COLOR_SPACE_QUEST_FB,
+                                           XR_COLOR_SPACE_P3_FB,       XR_COLOR_SPACE_ADOBE_RGB_FB};
+  if (!count || (capacity && !out)) return XR_ERROR_VALIDATION_FAILURE;
+  *count = std::uint32_t(std::size(spaces));
+  if (!capacity) return XR_SUCCESS;
+  if (capacity < *count) return XR_ERROR_SIZE_INSUFFICIENT;
+  std::copy(std::begin(spaces), std::end(spaces), out);
+  return XR_SUCCESS;
+}
+XrResult XRAPI_CALL set_color_space(XrSession, XrColorSpaceFB space) {
+  if (space < XR_COLOR_SPACE_UNMANAGED_FB || space > XR_COLOR_SPACE_ADOBE_RGB_FB) return XR_ERROR_COLOR_SPACE_UNSUPPORTED_FB;
+  current_color_space = space;
+  return XR_SUCCESS;
+}
 // VENTURE_MOCK_PASSTHROUGH: comma-separated host passthrough capabilities, any of
 // fb (XR_FB_passthrough reporting support), fb-unsupported (the extension
 // without support), htc (XR_HTC_passthrough), alpha_blend and additive (blend modes).
@@ -991,6 +1018,12 @@ XrResult m_xrEnumerateInstanceExtensionProperties(const char *, std::uint32_t ca
     XrExtensionProperties e{XR_TYPE_EXTENSION_PROPERTIES};
     std::strcpy(e.extensionName, name);
     e.extensionVersion = 1;
+    extensions.push_back(e);
+  }
+  if (color_space()) {
+    XrExtensionProperties e{XR_TYPE_EXTENSION_PROPERTIES};
+    std::strcpy(e.extensionName, "XR_FB_color_space");
+    e.extensionVersion = 3;
     extensions.push_back(e);
   }
   if (space_warp()) {
@@ -2556,8 +2589,62 @@ XrResult m_xrGetDeviceSampleRateFB(XrSession s, const XrHapticActionInfo *info, 
   out->sampleRate = *rate;
   return XR_SUCCESS;
 }
+// A slow runtime's haptic call: the delay runs without the mock's lock (taken once
+// by the dispatch wrapper), so frames and other calls proceed meanwhile.
+void haptic_host_delay() {
+  if (gate_haptics) {
+    // Held once, by the dispatch wrapper; the wait releases it.
+    std::unique_lock lock(mutex, std::adopt_lock);
+    gated_haptics = true;
+    haptic_changed.notify_all();
+    haptic_changed.wait(lock, [] { return !gate_haptics; });
+    gated_haptics = false;
+    lock.release();
+  }
+  auto us = haptic_delay_override_us.load();
+  if (us < 0) {
+    const char* text = venture::environment::getenv("VENTURE_MOCK_HAPTIC_DELAY_MS");
+    us = text && *text ? std::int64_t(std::strtod(text, nullptr) * 1000) : 0;
+  }
+  if (us <= 0) return;
+  mutex.unlock();
+  std::this_thread::sleep_for(std::chrono::microseconds(us));
+  mutex.lock();
+}
+// The hands of the current profile `info` reaches through bindings to */output/haptic, where
+// the script has that controller active.
+std::vector<int> haptic_hands(const XrHapticActionInfo *info) {
+  std::vector<int> out;
+  if (!script.active) return out;
+  auto profile = paths.find(current_profile());
+  if (profile == paths.end()) return out;
+  bool counted[2]{};
+  for (const auto &binding : bindings[profile->second]) {
+    if (binding.action != info->action) continue;
+    const auto &name = path_names.at(binding.binding);
+    if (!name.ends_with("/output/haptic")) continue;
+    if (!name.starts_with("/user/hand/left/") && !name.starts_with("/user/hand/right/")) continue;
+    int hand = name.starts_with("/user/hand/left/") ? 0 : 1;
+    auto root = hand ? "/user/hand/right" : "/user/hand/left";
+    if (info->subactionPath && path_names.at(info->subactionPath) != root) continue;
+    if (!(hand ? script.right.active : script.left.active) || counted[hand]) continue;
+    counted[hand] = true;
+    out.push_back(hand);
+  }
+  return out;
+}
+void record_haptic(int hand, float amplitude, std::int64_t duration, std::uint32_t samples = 0, float rate = 0,
+                   bool append = false) {
+  ++stats.haptic_pulses;
+  ++haptic_per_hand[hand];
+  const auto now = std::chrono::duration_cast<std::chrono::nanoseconds>(
+      std::chrono::steady_clock::now().time_since_epoch()).count();
+  haptic_log.push_back({std::uint64_t(now), std::uint32_t(hand), amplitude, duration, samples, rate, append ? 1u : 0u});
+  if (haptic_log.size() > 65536) haptic_log.pop_front();
+}
 XrResult m_xrApplyHapticFeedback(XrSession s, const XrHapticActionInfo *info,
                                  const XrHapticBaseHeader *header) {
+  haptic_host_delay();
   if (!info || info->type != XR_TYPE_HAPTIC_ACTION_INFO || info->next)
     return XR_ERROR_VALIDATION_FAILURE;
   if (s != session || !actions.contains(info->action))
@@ -2570,6 +2657,22 @@ XrResult m_xrApplyHapticFeedback(XrSession s, const XrHapticActionInfo *info,
     return XR_ERROR_ACTION_TYPE_MISMATCH;
   if (!attached_sets.contains(action_parents.at(info->action))) return XR_ERROR_ACTIONSET_NOT_ATTACHED;
   if (session_state != XR_SESSION_STATE_FOCUSED) return XR_SESSION_NOT_FOCUSED;
+  // With a positive VENTURE_MOCK_PCM_RATE the mock plays PCM buffers itself (XR_FB_haptic_pcm).
+  if (header && header->type == XR_TYPE_HAPTIC_PCM_VIBRATION_FB && pcm_rate() && *pcm_rate() > 0) {
+    auto &p = *reinterpret_cast<const XrHapticPcmVibrationFB *>(header);
+    if (p.next || !p.samplesConsumed || !p.buffer || !p.bufferSize || !(p.sampleRate > 0)) return XR_ERROR_VALIDATION_FAILURE;
+    float peak = 0;
+    for (std::uint32_t i = 0; i < p.bufferSize; ++i) {
+      if (!std::isfinite(p.buffer[i]) || p.buffer[i] < -1 || p.buffer[i] > 1) return XR_ERROR_VALIDATION_FAILURE;
+      peak = std::max(peak, std::abs(p.buffer[i]));
+    }
+    const auto count = std::min<std::uint32_t>(p.bufferSize, XR_MAX_HAPTIC_PCM_BUFFER_SIZE_FB);
+    *p.samplesConsumed = count;
+    for (auto hand : haptic_hands(info))
+      record_haptic(hand, peak, std::int64_t(double(count) * 1e9 / p.sampleRate), count, p.sampleRate, p.append != XR_FALSE);
+    haptic_changed.notify_all();
+    return XR_SUCCESS;
+  }
   if (!header || header->type != XR_TYPE_HAPTIC_VIBRATION || header->next)
     return XR_ERROR_VALIDATION_FAILURE;
   auto &v = *reinterpret_cast<const XrHapticVibration *>(header);
@@ -2579,29 +2682,13 @@ XrResult m_xrApplyHapticFeedback(XrSession s, const XrHapticActionInfo *info,
       !std::isfinite(v.frequency) || v.frequency < 0 ||
       (v.duration < 0 && v.duration != XR_MIN_HAPTIC_DURATION))
     return XR_ERROR_VALIDATION_FAILURE;
-  if (v.amplitude > 0 && v.duration != 0 && script.active) {
-    auto profile = paths.find(current_profile());
-    if (profile != paths.end()) {
-      bool counted[2]{};
-      for (const auto &binding : bindings[profile->second]) {
-        if (binding.action != info->action) continue;
-        const auto &name = path_names.at(binding.binding);
-        if (!name.ends_with("/output/haptic")) continue;
-        if (!name.starts_with("/user/hand/left/") && !name.starts_with("/user/hand/right/")) continue;
-        int hand = name.starts_with("/user/hand/left/") ? 0 : 1;
-        auto root = hand ? "/user/hand/right" : "/user/hand/left";
-        if (info->subactionPath && path_names.at(info->subactionPath) != root) continue;
-        if (!(hand ? script.right.active : script.left.active) || counted[hand]) continue;
-        counted[hand] = true;
-        ++stats.haptic_pulses;
-        ++haptic_per_hand[hand];
-      }
-    }
-  }
+  if (v.amplitude > 0 && v.duration != 0)
+    for (auto hand : haptic_hands(info)) record_haptic(hand, v.amplitude, v.duration);
   haptic_changed.notify_all();
   return XR_SUCCESS;
 }
 XrResult m_xrStopHapticFeedback(XrSession s, const XrHapticActionInfo *info) {
+  haptic_host_delay();
   if (!info || info->type != XR_TYPE_HAPTIC_ACTION_INFO || info->next)
     return XR_ERROR_VALIDATION_FAILURE;
   if (s != session || !actions.contains(info->action))
@@ -2615,6 +2702,7 @@ XrResult m_xrStopHapticFeedback(XrSession s, const XrHapticActionInfo *info) {
   if (!attached_sets.contains(action_parents.at(info->action))) return XR_ERROR_ACTIONSET_NOT_ATTACHED;
   if (session_state != XR_SESSION_STATE_FOCUSED) return XR_SESSION_NOT_FOCUSED;
   ++stats.haptic_stops;
+  haptic_changed.notify_all();
   return XR_SUCCESS;
 }
 XrResult m_xrCreateHandTrackerEXT(XrSession, const XrHandTrackerCreateInfoEXT *info,
@@ -2734,6 +2822,10 @@ XrResult m_xrGetInstanceProcAddr(XrInstance, const char *name, PFN_xrVoidFunctio
   for (const auto &entry : dispatch)
     if (std::strcmp(name, entry.name) == 0)
       *out = entry.function;
+  if (color_space() && std::strcmp(name, "xrEnumerateColorSpacesFB") == 0)
+    *out = reinterpret_cast<PFN_xrVoidFunction>(&enumerate_color_spaces);
+  if (color_space() && std::strcmp(name, "xrSetColorSpaceFB") == 0)
+    *out = reinterpret_cast<PFN_xrVoidFunction>(&set_color_space);
   if (const auto* profile = headset(); profile && !profile->refresh_rates.empty()) {
     if (std::strcmp(name, "xrEnumerateDisplayRefreshRatesFB") == 0)
       *out = reinterpret_cast<PFN_xrVoidFunction>(&headset_enumerate_refresh_rates);
@@ -2855,6 +2947,35 @@ extern "C" VENTURE_MOCK_EXPORT bool ventureMockXrAwaitHaptics(std::uint32_t coun
   std::unique_lock lock(mock::mutex);
   return mock::haptic_changed.wait_for(lock, std::chrono::milliseconds(milliseconds),
                                        [&] { return mock::stats.haptic_pulses >= count; });
+}
+extern "C" VENTURE_MOCK_EXPORT bool ventureMockXrAwaitHapticStops(std::uint32_t count,
+                                                        std::uint32_t milliseconds) {
+  std::unique_lock lock(mock::mutex);
+  return mock::haptic_changed.wait_for(lock, std::chrono::milliseconds(milliseconds),
+                                       [&] { return mock::stats.haptic_stops >= count; });
+}
+extern "C" VENTURE_MOCK_EXPORT void ventureMockXrSetHapticDelay(std::int64_t microseconds) {
+  mock::haptic_delay_override_us = microseconds;
+}
+extern "C" VENTURE_MOCK_EXPORT std::uint32_t ventureMockXrHapticLog(MockXrHapticRecord *out, std::uint32_t capacity) {
+  std::lock_guard lock(mock::mutex);
+  const auto count = static_cast<std::uint32_t>(mock::haptic_log.size());
+  for (std::uint32_t i = 0; out && i < count && i < capacity; ++i) out[i] = mock::haptic_log[i];
+  return count;
+}
+extern "C" VENTURE_MOCK_EXPORT void ventureMockXrClearHapticLog() {
+  std::lock_guard lock(mock::mutex);
+  mock::haptic_log.clear();
+}
+extern "C" VENTURE_MOCK_EXPORT void ventureMockXrGateHaptics(bool hold) {
+  std::lock_guard lock(mock::mutex);
+  mock::gate_haptics = hold;
+  mock::haptic_changed.notify_all();
+}
+extern "C" VENTURE_MOCK_EXPORT bool ventureMockXrAwaitGatedHaptic(std::uint32_t milliseconds) {
+  std::unique_lock lock(mock::mutex);
+  return mock::haptic_changed.wait_for(lock, std::chrono::milliseconds(milliseconds),
+                                       [] { return mock::gated_haptics; });
 }
 extern "C" VENTURE_MOCK_EXPORT void ventureMockXrGateEnd(bool hold) {
   std::lock_guard lock(mock::mutex);

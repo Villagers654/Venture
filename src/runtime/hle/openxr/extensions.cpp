@@ -390,6 +390,85 @@ XrResult xrPerfSettingsSetPerformanceLevelEXT(XrSession session, XrPerfSettingsD
     return XR_SUCCESS;
   return host_call<PFN_xrPerfSettingsSetPerformanceLevelEXT, "xrPerfSettingsSetPerformanceLevelEXT">(session, domain, level);
 }
+// XR_META_performance_metrics goes to a host that has it. Quest's runtime
+// always does, so without one Venture answers: the counters Quest names, the
+// enabled state per session, and counters that hold no valid value (an empty
+// counterFlags, which the extension allows).
+namespace {
+constexpr const char* kPerformanceCounters[] = {
+    "/perfmetrics_meta/app/cpu_frametime",           "/perfmetrics_meta/app/gpu_frametime",
+    "/perfmetrics_meta/app/motion_to_photon_latency", "/perfmetrics_meta/compositor/cpu_frametime",
+    "/perfmetrics_meta/compositor/gpu_frametime",    "/perfmetrics_meta/compositor/dropped_frame_count",
+    "/perfmetrics_meta/compositor/spacewarp_mode",   "/perfmetrics_meta/device/cpu_utilization_average",
+    "/perfmetrics_meta/device/cpu_utilization_worst", "/perfmetrics_meta/device/gpu_utilization",
+};
+bool host_performance_metrics() { return host_xr().enabled_extensions.contains("XR_META_performance_metrics"); }
+}  // namespace
+XrResult xrEnumeratePerformanceMetricsCounterPathsMETA(XrInstance instance, std::uint32_t capacity,
+                                                       std::uint32_t* count, XrPath* paths) {
+  std::lock_guard lock(state().mutex);
+  if (!enabled("XR_META_performance_metrics")) return XR_ERROR_FUNCTION_UNSUPPORTED;
+  if (!valid_handle(instance, "XrInstance")) return XR_ERROR_HANDLE_INVALID;
+  if (!count || (capacity && !paths)) return XR_ERROR_VALIDATION_FAILURE;
+  if (host_performance_metrics())
+    return host_call<PFN_xrEnumeratePerformanceMetricsCounterPathsMETA, "xrEnumeratePerformanceMetricsCounterPathsMETA">(
+        instance, capacity, count, paths);
+  *count = static_cast<std::uint32_t>(std::size(kPerformanceCounters));
+  if (!capacity) return XR_SUCCESS;
+  if (capacity < std::size(kPerformanceCounters)) return XR_ERROR_SIZE_INSUFFICIENT;
+  for (std::size_t i = 0; i < std::size(kPerformanceCounters); ++i)
+    if (auto result = host_call<PFN_xrStringToPath, "xrStringToPath">(instance, kPerformanceCounters[i], &paths[i]);
+        XR_FAILED(result))
+      return result;
+  return XR_SUCCESS;
+}
+XrResult xrSetPerformanceMetricsStateMETA(XrSession session, const XrPerformanceMetricsStateMETA* metrics) {
+  std::lock_guard lock(state().mutex);
+  if (!enabled("XR_META_performance_metrics")) return XR_ERROR_FUNCTION_UNSUPPORTED;
+  if (!valid_handle(session, "XrSession")) return XR_ERROR_HANDLE_INVALID;
+  if (!metrics || XR_FAILED(validate_struct(metrics, XR_TYPE_PERFORMANCE_METRICS_STATE_META)))
+    return XR_ERROR_VALIDATION_FAILURE;
+  if (host_performance_metrics())
+    return host_call<PFN_xrSetPerformanceMetricsStateMETA, "xrSetPerformanceMetricsStateMETA">(session, metrics);
+  state().performance_metrics[session] = metrics->enabled == XR_TRUE;
+  return XR_SUCCESS;
+}
+XrResult xrGetPerformanceMetricsStateMETA(XrSession session, XrPerformanceMetricsStateMETA* metrics) {
+  std::lock_guard lock(state().mutex);
+  if (!enabled("XR_META_performance_metrics")) return XR_ERROR_FUNCTION_UNSUPPORTED;
+  if (!valid_handle(session, "XrSession")) return XR_ERROR_HANDLE_INVALID;
+  if (!metrics || XR_FAILED(validate_struct(metrics, XR_TYPE_PERFORMANCE_METRICS_STATE_META)))
+    return XR_ERROR_VALIDATION_FAILURE;
+  if (host_performance_metrics())
+    return host_call<PFN_xrGetPerformanceMetricsStateMETA, "xrGetPerformanceMetricsStateMETA">(session, metrics);
+  auto it = state().performance_metrics.find(session);
+  metrics->enabled = it != state().performance_metrics.end() && it->second ? XR_TRUE : XR_FALSE;
+  return XR_SUCCESS;
+}
+XrResult xrQueryPerformanceMetricsCounterMETA(XrSession session, XrPath path, XrPerformanceMetricsCounterMETA* counter) {
+  std::lock_guard lock(state().mutex);
+  if (!enabled("XR_META_performance_metrics")) return XR_ERROR_FUNCTION_UNSUPPORTED;
+  if (!valid_handle(session, "XrSession")) return XR_ERROR_HANDLE_INVALID;
+  if (!counter || XR_FAILED(validate_struct(counter, XR_TYPE_PERFORMANCE_METRICS_COUNTER_META)))
+    return XR_ERROR_VALIDATION_FAILURE;
+  if (host_performance_metrics())
+    return host_call<PFN_xrQueryPerformanceMetricsCounterMETA, "xrQueryPerformanceMetricsCounterMETA">(session, path, counter);
+  auto it = state().performance_metrics.find(session);
+  if (it == state().performance_metrics.end() || !it->second) return XR_ERROR_VALIDATION_FAILURE;
+  bool known = false;
+  for (const char* name : kPerformanceCounters) {
+    XrPath candidate = XR_NULL_PATH;
+    if (XR_SUCCEEDED((host_call<PFN_xrStringToPath, "xrStringToPath">(host_xr().instance, name, &candidate))) &&
+        candidate == path)
+      known = true;
+  }
+  if (!known) return XR_ERROR_PATH_UNSUPPORTED;
+  counter->counterFlags = 0;
+  counter->counterUnit = XR_PERFORMANCE_METRICS_COUNTER_UNIT_GENERIC_META;
+  counter->uintValue = 0;
+  counter->floatValue = 0;
+  return XR_SUCCESS;
+}
 XrResult xrUpdateSwapchainFB(XrSwapchain handle, const XrSwapchainStateBaseHeaderFB *header) {
   std::lock_guard lock(state().mutex);
   auto it = state().swapchains.find(handle);
@@ -422,6 +501,8 @@ XrResult xrUpdateSwapchainFB(XrSwapchain handle, const XrSwapchainStateBaseHeade
         HostQueueLock host_queue(session().uses_shared_gpu);
         result = host_queue ? (it->second.host_handle ? update_host_sampler(it->second.host_handle, sampler)
                                                     : XR_SUCCESS) : XR_ERROR_RUNTIME_FAILURE;
+        if (XR_SUCCEEDED(result) && it->second.direct_handle)
+          result = update_host_sampler(it->second.direct_handle, sampler);
       }
       if (XR_FAILED(result)) {
         if (gl && xr_images())

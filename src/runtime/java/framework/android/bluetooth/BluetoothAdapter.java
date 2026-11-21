@@ -3,7 +3,7 @@ package android.bluetooth;
 public final class BluetoothAdapter {
   public static final int STATE_OFF = 10, STATE_TURNING_ON = 11, STATE_ON = 12, STATE_TURNING_OFF = 13;
   public static final int SCAN_MODE_NONE = 20, SCAN_MODE_CONNECTABLE = 21, SCAN_MODE_CONNECTABLE_DISCOVERABLE = 23;
-  private static final BluetoothAdapter DEFAULT = new BluetoothAdapter(new android.content.Context());
+  private static final BluetoothAdapter DEFAULT = new BluetoothAdapter(com.venture.runtime.Components.newContext());
   private final android.content.Context context;
   BluetoothAdapter(android.content.Context context) { this.context = java.util.Objects.requireNonNull(context); }
   public static BluetoothAdapter getDefaultAdapter() { return DEFAULT; }

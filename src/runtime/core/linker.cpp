@@ -119,6 +119,7 @@ struct State {
   bool inspect = false;
   ImportCoverageHook import_coverage;
   std::map<HleLibrary*, std::filesystem::path> backing_files;
+  std::map<std::string, std::filesystem::path> registered_files;  // register_file
   std::map<std::pair<std::filesystem::path, std::string>, std::set<std::string>> exports;
   std::vector<elf::Image*> exidx_images; // sorted by map_start, under mutex
 };
@@ -151,6 +152,7 @@ std::filesystem::path library_file(State& s, std::string_view name, std::string_
   // Like bionic's dlopen, a name without a slash is only searched for, never
   // taken as a path (which would find a host file in the working directory).
   if (name.find_first_of("/\\") != std::string_view::npos) {
+    if (auto it = s.registered_files.find(std::string(name)); it != s.registered_files.end()) return it->second;
     auto path = resolve_guest_path(name);
     if (!path.empty() && std::filesystem::is_regular_file(path)) return path;
   }
@@ -586,6 +588,10 @@ void Linker::register_hle_library(std::shared_ptr<HleLibrary> lib) {
   for (const auto& alias : lib->aliases()) s.names[alias] = lib;
 }
 void Linker::set_search_paths(std::vector<std::string> paths) { auto& s = state(); std::lock_guard lock(s.mutex); s.search_paths = std::move(paths); s.exports.clear(); s.backing_files.clear(); }
+void Linker::register_file(std::string guest_path, std::filesystem::path host_file) {
+  auto& s = state(); std::lock_guard lock(s.mutex);
+  s.registered_files[std::move(guest_path)] = std::move(host_file);
+}
 Library* Linker::open_main(int flags) {
   // bionic accepts these flag bits even when no filename is supplied.
   if (flags & ~(kRtldNow | kRtldLazy | kRtldGlobal | kRtldNoDelete | kRtldNoLoad)) {

@@ -1,0 +1,35 @@
+# Venture framework classes a 2D process keeps although layoutlib has them too
+# (tools/layoutlib/select_sources.py, docs/design/layoutlib.md). One regular
+# expression per line, matched against class paths such as android/media/AudioTrack.
+#
+# These are host services: audio, media, databases, sensors, networking, storage
+# and the system managers. Venture implements them over its own natives and the
+# host, where layoutlib has AOSP's versions, which reach system services over
+# Binder or natives a desktop does not have. Everything else Android Studio's
+# layoutlib has (views, widgets, graphics, text, resources, windows, the
+# activity and context classes) comes from layoutlib.
+# layoutlib's renderer draws into AOSP's ImageReader, whose natives are layoutlib's.
+^android/media/(?!ImageReader$|Image$)
+^android/(database|hardware|net|bluetooth|location|telephony|security|system|print|nfc|accounts|accessibilityservice)/
+# AOSP's DocumentsContract stays: it reaches HostDocuments through ContentResolver.call as Venture's does.
+^android/provider/(?!DocumentsContract(\$.*)?$)
+# Web views are out of scope: Venture's stand-ins fail quietly.
+^android/webkit/
+^android/app/(job|usage|admin)/
+^dalvik/system/
+^com/android/internal/os/
+^android/os/(Build|Process|Environment|Debug|StatFs|PowerManager|BatteryManager|Vibrator|VibratorManager|VibrationEffect|UserManager|FileObserver)$
+^android/os/(storage|ext)/
+# Descriptors of host files, which hand native code guest descriptors.
+^android/os/ParcelFileDescriptor(\$.*)?$
+^android/app/(ActivityManager|AlarmManager|NotificationManager|Notification|NotificationChannel|NotificationChannelGroup|PendingIntent|DownloadManager|KeyguardManager|UiModeManager|GameManager|GameState|LocaleManager|ApplicationExitInfo)$
+^android/(content|text)/ClipboardManager$
+^android/content/IntentSender$
+# The package model, content providers, broadcasts and services run on Venture's
+# component host (LocalServices, PackageModel).
+^android/content/pm/PackageManager$
+^android/content/(ContentResolver|ContentProvider|BroadcastReceiver)$
+^android/app/(Service|IntentService|QueuedWork)$
+
+# Venture-only classes the classic framework's own views use.
+omit ^android/view/QuestWindowInsetsController$

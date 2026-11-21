@@ -26,6 +26,20 @@ public class PackageManager {
   public PackageManager(PackageModel m) {
     model = m;
   }
+  // The permission dialog's request, as AOSP's Activity.requestPermissions starts
+  // it (values from AOSP PackageManager.java). Venture answers it in process.
+  public static final String ACTION_REQUEST_PERMISSIONS = "android.content.pm.action.REQUEST_PERMISSIONS",
+      EXTRA_REQUEST_PERMISSIONS_NAMES = "android.content.pm.extra.REQUEST_PERMISSIONS_NAMES",
+      EXTRA_REQUEST_PERMISSIONS_RESULTS = "android.content.pm.extra.REQUEST_PERMISSIONS_RESULTS";
+  public Intent buildRequestPermissionsIntent(String[] permissions) {
+    if (permissions == null || permissions.length == 0)
+      throw new IllegalArgumentException("permission cannot be null or empty");
+    Intent intent = new Intent(ACTION_REQUEST_PERMISSIONS);
+    intent.putExtra(EXTRA_REQUEST_PERMISSIONS_NAMES, permissions);
+    intent.setPackage(getPermissionControllerPackageName());
+    return intent;
+  }
+  public String getPermissionControllerPackageName() { return "com.android.permissioncontroller"; }
   // System packages a Quest has that games look up. Unity's built-in Oculus
   // provider checks com.oculus.systemactivities after reading the application's
   // vr_only/vr_dual metadata (Venture supplies that runtime through libvrapi HLE).
@@ -76,7 +90,9 @@ public class PackageManager {
       try {
         var signing = ApkSignatures.details(RuntimeEnvironment.get().apk);
         model.info.signatures = signing.signers();
-        model.info.signingInfo = new SigningInfo(signing.signers(), signing.history());
+        var history = signing.history();
+        model.info.signingInfo = new SigningInfo(3, java.util.List.of(signing.signers()), java.util.List.of(),
+            history == null ? java.util.List.of() : java.util.List.of(history));
       } catch (java.io.IOException e) {
         throw new IllegalStateException("Cannot read APK signer certificates", e);
       }
@@ -388,6 +404,120 @@ public class PackageManager {
   // Talsec's start asks this (API 30); the same installer answer, or NameNotFound for other packages.
   public InstallSourceInfo getInstallSourceInfo(String pkg) throws NameNotFoundException {
     check(pkg);
-    return new InstallSourceInfo(getInstallerPackageName(pkg));
+    String installer = getInstallerPackageName(pkg);
+    return new InstallSourceInfo(installer, null, null, installer);
+  }
+  // Framework code (views, widgets, resources) asks these of every app.
+  // Application properties (<property> in the manifest) are not modelled; a
+  // query finds none, as for an app that declares none.
+  public java.util.List<?> queryApplicationProperty(String name) {
+    return java.util.Collections.emptyList();
+  }
+  public int getUserId() {
+    return android.os.UserHandle.myUserId();
+  }
+  public int getPackageUid(String pkg, int flags) throws NameNotFoundException {
+    check(pkg);
+    return android.os.Process.myUid();
+  }
+  public ApplicationInfo getApplicationInfoAsUser(String pkg, int flags, int user) throws NameNotFoundException {
+    return getApplicationInfo(pkg, flags);
+  }
+  public ApplicationInfo getApplicationInfoAsUser(String pkg, int flags, android.os.UserHandle user)
+      throws NameNotFoundException {
+    return getApplicationInfo(pkg, flags);
+  }
+  public ApplicationInfo getApplicationInfoAsUser(String pkg, ApplicationInfoFlags flags, int user)
+      throws NameNotFoundException {
+    return getApplicationInfo(pkg, (int) flags.getValue());
+  }
+  public PackageInfo getPackageInfoAsUser(String pkg, int flags, int user) throws NameNotFoundException {
+    return getPackageInfo(pkg, flags);
+  }
+  public java.util.List<ApplicationInfo> getInstalledApplications(ApplicationInfoFlags flags) {
+    return getInstalledApplications((int) flags.getValue());
+  }
+  public java.util.List<ResolveInfo> queryIntentActivitiesAsUser(Intent intent, int flags, int user) {
+    return queryIntentActivities(intent, flags);
+  }
+  public java.util.List<ResolveInfo> queryIntentActivitiesAsUser(Intent intent, int flags,
+                                                                 android.os.UserHandle user) {
+    return queryIntentActivities(intent, flags);
+  }
+  public java.util.List<ResolveInfo> queryIntentServicesAsUser(Intent intent, int flags, int user) {
+    return queryIntentServices(intent, flags);
+  }
+  public java.util.List<ResolveInfo> queryIntentServicesAsUser(Intent intent, ResolveInfoFlags flags, int user) {
+    return queryIntentServices(intent, (int) flags.getValue());
+  }
+  public java.util.List<ResolveInfo> queryIntentContentProviders(Intent intent, int flags) {
+    return new java.util.ArrayList<>();
+  }
+  public ResolveInfo resolveActivityAsUser(Intent intent, int flags, int user) {
+    return resolveActivity(intent, flags);
+  }
+  public ResolveInfo resolveActivityAsUser(Intent intent, String type, int flags, int user) {
+    return resolveActivity(intent, flags);
+  }
+  public static final int SIGNATURE_MATCH = 0, SIGNATURE_NO_MATCH = -3, SIGNATURE_UNKNOWN_PACKAGE = -4;
+  public int checkSignatures(String first, String second) {
+    String own = model.info.packageName;
+    if (!own.equals(first) || !own.equals(second)) return SIGNATURE_UNKNOWN_PACKAGE;
+    return SIGNATURE_MATCH;
+  }
+  public boolean shouldShowRequestPermissionRationale(String permission) {
+    return false;
+  }
+  public android.content.res.Resources getResourcesForApplication(String pkg) throws NameNotFoundException {
+    check(pkg);
+    return RuntimeEnvironment.resources();
+  }
+  public android.content.res.Resources getResourcesForActivity(ComponentName name) throws NameNotFoundException {
+    return getResourcesForApplication(name.getPackageName());
+  }
+  // AOSP returns null when the package or the resource is missing.
+  public CharSequence getText(String pkg, int id, ApplicationInfo info) {
+    try {
+      return getResourcesForApplication(info).getText(id);
+    } catch (RuntimeException missing) {
+      return null;
+    }
+  }
+  public android.graphics.drawable.Drawable getDrawable(String pkg, int id, ApplicationInfo info) {
+    if (id == 0) return null;
+    try {
+      return getResourcesForApplication(info).getDrawable(id, null);
+    } catch (RuntimeException missing) {
+      return null;
+    }
+  }
+  public android.graphics.drawable.Drawable getDefaultActivityIcon() {
+    return android.content.res.Resources.getSystem().getDrawable(android.R.drawable.sym_def_app_icon, null);
+  }
+  public android.graphics.drawable.Drawable getApplicationIcon(ApplicationInfo info) {
+    android.graphics.drawable.Drawable icon = getDrawable(info.packageName, info.icon, info);
+    return icon != null ? icon : getDefaultActivityIcon();
+  }
+  public android.graphics.drawable.Drawable loadUnbadgedItemIcon(PackageItemInfo item, ApplicationInfo info) {
+    android.graphics.drawable.Drawable icon = getDrawable(item.packageName, item.icon, info);
+    return icon != null ? icon : getDefaultActivityIcon();
+  }
+  public android.graphics.drawable.Drawable loadItemIcon(PackageItemInfo item, ApplicationInfo info) {
+    return loadUnbadgedItemIcon(item, info);
+  }
+  public android.graphics.drawable.Drawable getUserBadgedIcon(android.graphics.drawable.Drawable icon,
+                                                              android.os.UserHandle user) {
+    return icon;
+  }
+  // Menu.addIntentOptions: the specific intents first, then the general one.
+  public java.util.List<ResolveInfo> queryIntentActivityOptions(ComponentName caller, Intent[] specifics,
+                                                                Intent intent, int flags) {
+    java.util.List<ResolveInfo> results = new java.util.ArrayList<>();
+    if (specifics != null)
+      for (Intent specific : specifics)
+        if (specific != null) results.addAll(queryIntentActivities(specific, flags));
+    for (ResolveInfo info : queryIntentActivities(intent, flags))
+      if (!results.contains(info)) results.add(info);
+    return results;
   }
 }

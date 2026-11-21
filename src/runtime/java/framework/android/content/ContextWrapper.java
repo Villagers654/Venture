@@ -9,6 +9,10 @@ public class ContextWrapper extends Context {
       throw new IllegalStateException("Base context already set");
     base = context;
   }
+  // AOSP's MutableContextWrapper.setBaseContext assigns mBase unconditionally.
+  void replaceBaseContext(Context context) {
+    base = context;
+  }
   @Override public Context ventureOuterContext() {
     return base == null ? this : base.ventureOuterContext();
   }

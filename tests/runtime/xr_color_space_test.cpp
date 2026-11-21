@@ -404,6 +404,189 @@ TEST_CASE("XR color handoff resolves multisample coverage and restores native "
   CHECK(read() == original);
 }
 
+namespace {
+// Records every image a copy or blit reads.
+struct CopySourceProbe {
+  inline static PFN_vkGetInstanceProcAddr fallback{};
+  inline static PFN_vkCmdCopyImage copy{};
+  inline static PFN_vkCmdCopyImageToBuffer to_buffer{};
+  inline static PFN_vkCmdBlitImage blit{};
+  inline static std::vector<VkImage> sources;
+  static void VKAPI_CALL copy_image(VkCommandBuffer command, VkImage source, VkImageLayout source_layout,
+      VkImage target, VkImageLayout target_layout, std::uint32_t count, const VkImageCopy* regions) {
+    sources.push_back(source);
+    copy(command, source, source_layout, target, target_layout, count, regions);
+  }
+  static void VKAPI_CALL copy_to_buffer(VkCommandBuffer command, VkImage source, VkImageLayout layout,
+      VkBuffer buffer, std::uint32_t count, const VkBufferImageCopy* regions) {
+    sources.push_back(source);
+    to_buffer(command, source, layout, buffer, count, regions);
+  }
+  static void VKAPI_CALL blit_image(VkCommandBuffer command, VkImage source, VkImageLayout source_layout,
+      VkImage target, VkImageLayout target_layout, std::uint32_t count, const VkImageBlit* regions, VkFilter filter) {
+    sources.push_back(source);
+    blit(command, source, source_layout, target, target_layout, count, regions, filter);
+  }
+  static PFN_vkVoidFunction VKAPI_CALL get(VkInstance instance, const char* name) {
+    if (!std::strcmp(name, "vkCmdCopyImage")) {
+      copy = reinterpret_cast<PFN_vkCmdCopyImage>(fallback(instance, name));
+      return reinterpret_cast<PFN_vkVoidFunction>(copy_image);
+    }
+    if (!std::strcmp(name, "vkCmdCopyImageToBuffer")) {
+      to_buffer = reinterpret_cast<PFN_vkCmdCopyImageToBuffer>(fallback(instance, name));
+      return reinterpret_cast<PFN_vkVoidFunction>(copy_to_buffer);
+    }
+    if (!std::strcmp(name, "vkCmdBlitImage")) {
+      blit = reinterpret_cast<PFN_vkCmdBlitImage>(fallback(instance, name));
+      return reinterpret_cast<PFN_vkVoidFunction>(blit_image);
+    }
+    return fallback(instance, name);
+  }
+  explicit CopySourceProbe(PFN_vkGetInstanceProcAddr original) {
+    fallback = original;
+    sources.clear();
+  }
+};
+} // namespace
+TEST_CASE("XR color pass draws from the game's image into a host image it only writes, matching copy then convert") {
+  using namespace venture::test;
+  VulkanDevice gpu;
+  auto get = venture::gfx::gpu_device().get_instance_proc_addr;
+  XrGraphicsBindingVulkanKHR binding{XR_TYPE_GRAPHICS_BINDING_VULKAN_KHR,
+      nullptr, gpu.instance, gpu.physical, gpu.device, gpu.family, 0};
+  constexpr std::uint32_t size = 8, layers = 2, bytes = size * size * layers * 4;
+  auto barrier = [&](VkImage image, VkImageLayout before, VkImageLayout after) {
+    VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+    b.image = image;
+    b.oldLayout = before;
+    b.newLayout = after;
+    b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, layers};
+    b.srcAccessMask = before == VK_IMAGE_LAYOUT_UNDEFINED
+                          ? 0 : VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+    b.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+    vk_call("vkCmdPipelineBarrier", gpu.command, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+            VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0u, 0u, nullptr, 0u, nullptr, 1u, &b);
+  };
+  VkBufferImageCopy whole{};
+  whole.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, layers};
+  whole.imageExtent = {size, size, 1};
+  auto read = [&](VkImage image) {
+    VulkanBuffer download(gpu, bytes);
+    REQUIRE(vk_call("vkResetCommandBuffer", gpu.command, 0u) == VK_SUCCESS);
+    gpu.begin();
+    barrier(image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+    vk_call("vkCmdCopyImageToBuffer", gpu.command, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+            download.buffer, 1u, &whole);
+    barrier(image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+    gpu.submit();
+    auto data = static_cast<unsigned char*>(download.mapped);
+    return std::vector<unsigned char>(data, data + bytes);
+  };
+  // A host image starts as a solid yellow with alpha 0, the fill one report
+  // showed: none of it may survive the pass.
+  auto fill_host = [&](VkImage image) {
+    REQUIRE(vk_call("vkResetCommandBuffer", gpu.command, 0u) == VK_SUCCESS);
+    gpu.begin();
+    barrier(image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+    VkClearColorValue yellow{{1, 1, 0, 0}};
+    VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, layers};
+    vk_call("vkCmdClearColorImage", gpu.command, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &yellow, 1u, &range);
+    barrier(image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+    gpu.submit();
+  };
+  for (auto format : {VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_R8G8B8A8_SRGB}) {
+    CAPTURE(format);
+    XrSwapchainCreateInfo info{XR_TYPE_SWAPCHAIN_CREATE_INFO};
+    info.format = format;
+    info.width = info.height = size;
+    info.arraySize = layers;
+    info.faceCount = info.mipCount = info.sampleCount = 1;
+    // The game asks for no sampling; Venture's slot images allow it anyway.
+    info.usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT;
+    GuestImages guest(binding, get, info);
+    REQUIRE(guest.sampled());
+    REQUIRE(guest.wait(0) == XR_SUCCESS);
+    const auto game = guest.images()[0].image;
+    std::vector<unsigned char> original(bytes);
+    for (std::uint32_t i = 0; i < bytes; i += 4) {
+      const auto pixel = i / 4, layer = pixel / (size * size);
+      original[i] = std::uint8_t(pixel * 7 + 16 * layer);
+      original[i + 1] = std::uint8_t(255 - pixel * 3);
+      original[i + 2] = std::uint8_t(pixel * 11 + 90 * layer);
+      original[i + 3] = std::uint8_t(pixel % 3 ? 255 : 40 + pixel);
+    }
+    VulkanBuffer upload(gpu, bytes);
+    std::memcpy(upload.mapped, original.data(), bytes);
+    REQUIRE(vk_call("vkResetCommandBuffer", gpu.command, 0u) == VK_SUCCESS);
+    gpu.begin();
+    barrier(game, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+    vk_call("vkCmdCopyBufferToImage", gpu.command, upload.buffer, game, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            1u, &whole);
+    barrier(game, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+    gpu.submit();
+    const auto matrix = color_matrix(XR_COLOR_SPACE_RIFT_CV1_FB, XR_COLOR_SPACE_REC709_FB);
+    for (bool passthrough : {false, true}) {
+      CAPTURE(passthrough);
+      const auto alpha = passthrough ? ColorImages::Alpha::opaque : ColorImages::Alpha::preserve;
+      VulkanImage direct_host(gpu, format, size, size, 1, layers, 0, nullptr, 1, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT);
+      VulkanImage copied_host(gpu, format, size, size, 1, layers, 0, nullptr, 1, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT);
+      fill_host(direct_host.image);
+      fill_host(copied_host.image);
+      XrSwapchainImageVulkanKHR direct_image{XR_TYPE_SWAPCHAIN_IMAGE_VULKAN_KHR, nullptr, direct_host.image};
+      XrSwapchainImageVulkanKHR copied_image{XR_TYPE_SWAPCHAIN_IMAGE_VULKAN_KHR, nullptr, copied_host.image};
+      // Reference: copy into the host image, then convert it in place.
+      REQUIRE(guest.copy(0, copied_host.image, format) == XR_SUCCESS);
+      REQUIRE(guest.wait(0) == XR_SUCCESS);
+      std::vector<unsigned char> expected;
+      {
+        ColorImages in_place(binding, get, info, {&copied_image, 1}, false, passthrough);
+        REQUIRE(in_place.convert(0, matrix, false, alpha) == XR_SUCCESS);
+        expected = read(copied_host.image);
+      }
+      CopySourceProbe probe(get);
+      ColorImages direct(binding, probe.get, info, {&direct_image, 1}, false, passthrough);
+      for (unsigned repeat = 0; repeat < 2; ++repeat) {
+        REQUIRE(guest.submit(0, [&](VkCommandBuffer command, VkImage image, VkImageLayout layout) {
+          CHECK(image == game);
+          CHECK(layout == VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+          return direct.record_from(command, image, layout, 0, matrix, alpha);
+        }) == XR_SUCCESS);
+        REQUIRE(guest.wait(0) == XR_SUCCESS);
+        CHECK(read(direct_host.image) == expected);
+      }
+      // The host image is never read, and the game's image stays as drawn.
+      CHECK(probe.sources.empty());
+      CHECK(read(game) == original);
+      if (!passthrough) {
+        // The pass converts: compare with the matrix applied on the CPU.
+        auto decode = [](double x) { return x <= .04045 ? x / 12.92 : std::pow((x + .055) / 1.055, 2.4); };
+        auto encode = [](double x) { return x <= .0031308 ? x * 12.92 : 1.055 * std::pow(x, 1 / 2.4) - .055; };
+        const auto output = read(direct_host.image);
+        for (std::uint32_t i = 0; i < bytes; i += 4) {
+          std::array<double, 3> rgb{};
+          for (unsigned c = 0; c < 3; ++c)
+            rgb[c] = format == VK_FORMAT_R8G8B8A8_SRGB ? decode(original[i + c] / 255.) : original[i + c] / 255.;
+          const auto converted = transform_color(matrix, rgb);
+          for (unsigned c = 0; c < 3; ++c) {
+            auto value = std::clamp(converted[c], 0., 1.);
+            if (format == VK_FORMAT_R8G8B8A8_SRGB) value = encode(value);
+            CHECK(std::abs(int(output[i + c]) - int(std::lround(value * 255))) <= 1);
+          }
+          CHECK(output[i + 3] == original[i + 3]);
+        }
+      } else {
+        const auto output = read(direct_host.image);
+        for (std::uint32_t i = 3; i < bytes; i += 4) CHECK(output[i] == 255);
+      }
+      // A failing recorder submits nothing and leaves the slot usable.
+      CHECK(guest.submit(0, [](VkCommandBuffer, VkImage, VkImageLayout) { return XR_ERROR_LIMIT_REACHED; }) ==
+            XR_ERROR_LIMIT_REACHED);
+      REQUIRE(guest.wait(0) == XR_SUCCESS);
+    }
+  }
+}
+
 #include "../mock_openxr_runtime/control.h"
 #include "common/environment.h"
 #include <cstdlib>
@@ -703,6 +886,8 @@ TEST_CASE("XR lazy swapchains retain guest color and recycle only inactive host 
         const auto& record = venture::hle::openxr::state().swapchains.at(chain);
         const auto guest_image = record.images.at(record.released_index).image;
         const auto& original = originals.at(guest_image);
+        // Same size and format: the pass draws from the game's image directly.
+        CHECK(record.backing->sampled());
         XrSwapchainSubImage sub{record.host_handle, {{0,0},{8,8}}, 0};
         std::vector<unsigned char> converted;
         std::string error;

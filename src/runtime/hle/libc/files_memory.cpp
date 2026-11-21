@@ -1,12 +1,20 @@
 #include "vfs.h"
 #include <algorithm>
 #include <cstring>
+#include <filesystem>
+
+#include "core/process.h"
 namespace venture::hle::libc {
 int chmod_at(int dirfd, const char* p, std::uint32_t mode, int flags);
 namespace {
 class MemoryFd final : public File {
  public:
   explicit MemoryFd(bool allow_seals) : seals_(allow_seals ? 0 : 1) { flags = 2; }
+  ~MemoryFd() override {
+    if (!host_) return;
+    host_.reset();
+    host::mutate(2, host_path_, nullptr, 0);
+  }
   std::int64_t read(void* p, std::uint64_t n) override {
     std::lock_guard lock(mutex);
     auto r = read_at(p, n, position_);
@@ -32,7 +40,7 @@ class MemoryFd final : public File {
     std::lock_guard lock(mutex);
     auto base = whence == 0   ? 0
                 : whence == 1 ? position_
-                : whence == 2 ? static_cast<std::int64_t>(bytes_.size())
+                : whence == 2 ? static_cast<std::int64_t>(size())
                               : -1;
     if (base < 0 || off < -base || off > INT64_MAX - base) return -err::einval;
     return position_ = base + off;
@@ -42,7 +50,7 @@ class MemoryFd final : public File {
     *s = {};
     s->mode = 0100777;
     s->ino = h2g(this);
-    s->size = bytes_.size();
+    s->size = size();
     s->blocks = (s->size + 511) / 512;
     return 0;
   }
@@ -50,8 +58,13 @@ class MemoryFd final : public File {
     if (size < 0) return -err::einval;
     std::lock_guard lock(mutex);
     const auto length = static_cast<std::uint64_t>(size);
-    if ((length < bytes_.size() && (seals_ & 2)) || (length > bytes_.size() && (seals_ & 4)))
+    if ((length < this->size() && (seals_ & 2)) || (length > this->size() && (seals_ & 4)))
       return -err::eperm;
+    if (host_) {
+      auto r = host_->truncate(size);
+      if (!r) host_size_ = length;
+      return r;
+    }
     try {
       bytes_.resize(size);
     } catch (...) {
@@ -60,6 +73,17 @@ class MemoryFd final : public File {
     return 0;
   }
   int sync() override { return 0; }
+  // A shared mapping needs a host file: the bytes move to a file in the game's
+  // host cache (outside its data, which the quit census watches), which then
+  // holds them for every later call. The last close removes it; a mapping
+  // keeps its pages after that, as a memfd's does.
+  int duplicate_host_fd() override {
+    std::lock_guard lock(mutex);
+    if (!host_) {
+      if (auto r = materialize()) return r;
+    }
+    return host_->duplicate_host_fd();
+  }
   std::int64_t control(int command, std::uint64_t value) override {
     std::lock_guard lock(mutex);
     if (command == 1034) return seals_;
@@ -70,16 +94,57 @@ class MemoryFd final : public File {
   }
 
  private:
+  std::uint64_t size() const { return host_ ? host_size_ : bytes_.size(); }
+  int materialize() {
+    const auto directory = process_config().cache_dir / "memfd";
+    std::error_code ignored;
+    std::filesystem::create_directories(directory, ignored);
+    for (int i = 0; i < 128; ++i) {
+      std::uint64_t random;
+      if (host::random(&random, 8)) return -err::eio;
+      MappedPath m;
+      m.guest = path;
+      m.host = m.root = directory;
+      m.host /= std::to_string(random);
+      int error = 0;
+      auto file = host::open(m, 2 | 0100 | 0200, 0600, &error);
+      if (!file) {
+        if (error == -err::eexist) continue;
+        return error ? error : -err::eio;
+      }
+      for (std::uint64_t done = 0; done < bytes_.size();) {
+        auto r = file->pwrite(bytes_.data() + done, bytes_.size() - done, static_cast<std::int64_t>(done));
+        if (r <= 0) {
+          file.reset();
+          host::mutate(2, m, nullptr, 0);
+          return r < 0 ? static_cast<int>(r) : -err::eio;
+        }
+        done += r;
+      }
+      host_path_ = m;
+      host_ = std::move(file);
+      host_size_ = bytes_.size();
+      std::vector<unsigned char>().swap(bytes_);
+      return 0;
+    }
+    return -err::eexist;
+  }
   std::int64_t read_at(void* p, std::uint64_t n, std::uint64_t off) {
-    n = std::min<std::uint64_t>(n, bytes_.size() - std::min<std::uint64_t>(off, bytes_.size()));
+    n = std::min<std::uint64_t>(n, size() - std::min<std::uint64_t>(off, size()));
+    if (host_) return n ? host_->pread(p, n, static_cast<std::int64_t>(off)) : 0;
     if (n) std::memcpy(p, bytes_.data() + off, n);
     return n;
   }
   std::int64_t write_at(const void* p, std::uint64_t n, std::uint64_t off) {
     if (seals_ & 8) return -err::eperm;
     if (n > INT64_MAX - off) return -err::efbig;
+    if (off + n > size() && (seals_ & 4)) return -err::eperm;
+    if (host_) {
+      auto r = n ? host_->pwrite(p, n, static_cast<std::int64_t>(off)) : 0;
+      if (r > 0) host_size_ = std::max<std::uint64_t>(host_size_, off + r);
+      return r;
+    }
     if (off + n > bytes_.size()) {
-      if (seals_ & 4) return -err::eperm;
       try {
         bytes_.resize(off + n);
       } catch (...) {
@@ -90,6 +155,9 @@ class MemoryFd final : public File {
     return n;
   }
   std::vector<unsigned char> bytes_;
+  std::shared_ptr<File> host_;
+  MappedPath host_path_;
+  std::uint64_t host_size_ = 0;
   std::int64_t position_ = 0;
   int seals_;
 };

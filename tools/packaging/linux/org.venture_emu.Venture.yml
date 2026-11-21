@@ -14,7 +14,7 @@ sdk: org.gnome.Sdk
 command: venture-flatpak.sh
 separate-locales: false
 finish-args:
-  # Wayland (X11 only in gamescope, below; no IPC socket), audio, network, the GPU.
+  # Wayland (X11 only in gamescope, below), audio, network, the GPU.
   - --socket=wayland
   # gamescope's Wayland socket (SteamOS's game mode, the Steam Frame): gamescope
   # unsets WAYLAND_DISPLAY for what it starts, so --socket=wayland finds no
@@ -57,6 +57,14 @@ finish-args:
   - --filesystem=xdg-config/openvr:ro
   - --filesystem=xdg-config/openvr/logs:create
   - --device=shm
+  # The host's IPC namespace (System V semaphores and shared memory, POSIX
+  # message queues). Chromium's Flatpak, the base those reviewed grants were
+  # added to, has it (as Flathub asks of X11 clients, which the launcher is in
+  # gamescope). Without it SteamVR's sandboxed client on the Steam Frame hung
+  # xrCreateInstance about 7 s while vrserver logged failed semaphore
+  # notifications, until its watchdog aborted vrserver and the headset's VR
+  # session went down with it.
+  - --share=ipc
   - --filesystem=xdg-data/Steam/logs
   # Add games to Steam: the shortcuts and artwork in each Steam user's folder,
   # the logins that name the current user, and Steam's command pipe, which

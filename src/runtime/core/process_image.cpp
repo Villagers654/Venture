@@ -858,6 +858,19 @@ bool has_file(std::string_view path) {
   auto& s = state(); std::lock_guard lock(s.mutex);
   return s.files.find(canonical(path)) != s.files.end();
 }
+std::optional<std::string> copied_library(std::string_view bytes) {
+  auto& s = state(); std::lock_guard lock(s.mutex);
+  for (const auto& [soname, image] : s.images) {
+    const std::string_view file = image.bytes;
+    if (file.size() != bytes.size()) continue;
+    auto first = std::mismatch(file.begin(), file.end(), bytes.begin()).first;
+    if (first == file.end()) return soname;
+    auto last = std::mismatch(file.rbegin(), file.rend(), bytes.rbegin()).first;
+    // A soname is at most a few dozen bytes; anything wider is another file.
+    if (static_cast<std::size_t>(std::distance(first, last.base())) <= 255) return soname;
+  }
+  return std::nullopt;
+}
 bool auxval(std::uint64_t type, std::uint64_t* value) {
   auto& s = state(); std::lock_guard lock(s.mutex);
   for (auto& [t, v] : s.auxv) if (t == type) { *value = v; return true; }

@@ -1,6 +1,7 @@
 // venture-cli: the Venture launcher from a terminal. Every command drives
 // launcher::Core, the same implementation the launcher window uses, so an
 // install, import or launch here is exactly the one the window performs.
+#include "common/layoutlib_component.h"
 #include "common/log.h"
 #include "common/environment.h"
 #include "common/search.h"
@@ -916,6 +917,13 @@ int Cli::play_game(const Args &args) {
   std::string key = play_key(g.id);
   if (auto as = args.value("--as"))
     key = resolve_account(*as, true);
+  if (const auto size = android_2d_download(g.id)) {
+    if (!confirm(args, std::format("{} is a 2D Android app. Download Venture's Android 2D support ({} MB, once)?",
+                                   g.name, (*size + (1 << 20) - 1) >> 20)))
+      return 1;
+    if (!json_) std::cout << "Downloading Android 2D support..." << std::endl;
+    layoutlib_component::ensure(paths::executable().parent_path(), data_);
+  }
   launch_game(g.id, key, {});
   if (!json_)
     std::cout << "Starting " << g.name << "\n" << std::flush;
@@ -1327,8 +1335,8 @@ int Cli::settings_cmd(const Args &args) {
     else if (key == "language")
       next.interface_language = value == "auto" ? "" : value;
     else if (key == "mirror") {
-      if (value != "cropped" && value != "full" && value != "off")
-        throw UsageError("mirror takes cropped, full or off.");
+      if (value != "auto" && value != "cropped" && value != "full" && value != "off")
+        throw UsageError("mirror takes auto, cropped, full or off.");
       next.display.mirror = value;
     } else if (key == "mirror-eye") {
       if (value != "left" && value != "right")

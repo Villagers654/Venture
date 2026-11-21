@@ -38,6 +38,10 @@ public class KeyEvent extends InputEvent {
   private static final int META_LOCK_MASK = META_CAPS_LOCK_ON | META_NUM_LOCK_ON | META_SCROLL_LOCK_ON;
   /** API 32's last key code (KEYCODE_PROFILE_SWITCH). */
   public static int getMaxKeyCode() { return 288; }
+  /** AOSP META_MODIFIER_MASK: Shift, Alt, Ctrl, Meta, Sym and Function, without the lock states. */
+  public static int getModifierMetaStateMask() {
+    return META_SHIFT_MASK | META_ALT_MASK | META_CTRL_MASK | META_META_MASK | META_SYM_ON | META_FUNCTION_ON;
+  }
   private final int action, code;
   private final long downTime, eventTime;
   private final int repeat, meta, device, scan, flags, source;

@@ -1,5 +1,8 @@
+#include "common/android/manifest.h"
 #include "core/device_identity.h"
 #include <doctest/doctest.h>
+#include <string>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -41,6 +44,88 @@ std::vector<std::byte> manifest(bool utf8, std::string_view value, bool applicat
   patch(4, out.size());
   return out;
 }
+
+// An element of a binary manifest with string attributes.
+struct Element {
+  std::string tag;
+  std::vector<std::pair<std::string, std::string>> attributes;
+  std::vector<Element> children;
+};
+std::vector<std::byte> binary_xml(const Element& root) {
+  std::vector<std::string> strings;
+  auto index = [&](const std::string& text) {
+    for (std::size_t i = 0; i < strings.size(); ++i) if (strings[i] == text) return std::uint32_t(i);
+    strings.push_back(text);
+    return std::uint32_t(strings.size() - 1);
+  };
+  std::vector<std::byte> body;
+  auto word = [](std::vector<std::byte>& out, std::uint32_t n) {
+    for (unsigned i = 0; i < 4; ++i) out.push_back(std::byte((n >> (8*i)) & 255));
+  };
+  auto emit = [&](auto& self, const Element& element) -> void {
+    const auto count = std::uint32_t(element.attributes.size());
+    word(body, 0x00100102); word(body, 36 + 20*count); word(body, 1); word(body, 0xffffffff);
+    word(body, 0xffffffff); word(body, index(element.tag)); word(body, 0x00140014); word(body, count); word(body, 0);
+    for (const auto& [name, value] : element.attributes) {
+      word(body, 0xffffffff); word(body, index(name)); word(body, index(value)); word(body, 0x03000008); word(body, index(value));
+    }
+    for (const auto& child : element.children) self(self, child);
+    word(body, 0x00100103); word(body, 24); word(body, 1); word(body, 0xffffffff);
+    word(body, 0xffffffff); word(body, index(element.tag));
+  };
+  emit(emit, root);
+  std::vector<std::byte> pool;
+  std::vector<std::byte> text;
+  std::vector<std::uint32_t> offsets;
+  for (const auto& s : strings) {
+    offsets.push_back(std::uint32_t(text.size()));
+    text.push_back(std::byte(s.size())); text.push_back(std::byte(s.size()));
+    for (char c : s) text.push_back(std::byte(c));
+    text.push_back(std::byte{});
+  }
+  while (text.size() % 4) text.push_back(std::byte{});
+  const auto count = std::uint32_t(strings.size());
+  word(pool, 0x001c0001); word(pool, 28 + 4*count + std::uint32_t(text.size())); word(pool, count); word(pool, 0);
+  word(pool, 0x100); word(pool, 28 + 4*count); word(pool, 0);
+  for (auto offset : offsets) word(pool, offset);
+  pool.insert(pool.end(), text.begin(), text.end());
+  std::vector<std::byte> out;
+  word(out, 0x00080003); word(out, std::uint32_t(8 + pool.size() + body.size()));
+  out.insert(out.end(), pool.begin(), pool.end());
+  out.insert(out.end(), body.begin(), body.end());
+  return out;
+}
+Element activity(std::string name, std::vector<std::string> categories, std::string action = "android.intent.action.MAIN") {
+  Element filter{"intent-filter", {}, {{"action", {{"name", action}}, {}}}};
+  for (auto& category : categories) filter.children.push_back({"category", {{"name", category}}, {}});
+  return {"activity", {{"name", std::move(name)}}, {filter}};
+}
+}
+TEST_CASE("A manifest's launch activity, or a named one, chooses between the 2D and the VR framework") {
+  // CitraVR's shape: a 2D launcher menu and a VR activity started in a new task.
+  auto xml = binary_xml({"manifest", {{"package", "org.example.emu"}}, {{"application", {}, {
+      activity("org.example.emu.ui.MainActivity", {"android.intent.category.LAUNCHER", "com.oculus.intent.category.2D"}),
+      activity(".vr.VrActivity", {"com.oculus.intent.category.VR", "android.intent.category.LAUNCHER"},
+               "android.intent.action.VIEW")}}}});
+  CHECK(venture::manifest_launches_2d(xml));
+  CHECK(venture::manifest_launches_2d(xml, "org.example.emu.ui.MainActivity"));
+  CHECK_FALSE(venture::manifest_launches_2d(xml, "org.example.emu.vr.VrActivity"));
+  CHECK(venture::manifest_launches_2d(xml, "org.example.emu.Missing"));
+  auto vr = binary_xml({"manifest", {{"package", "org.example.game"}}, {{"application", {}, {
+      activity("Game", {"com.oculus.intent.category.VR", "android.intent.category.LAUNCHER"})}}}});
+  CHECK_FALSE(venture::manifest_launches_2d(vr));
+  CHECK_FALSE(venture::manifest_launches_2d(vr, "org.example.game.Game"));
+  // The launcher reads the same rule from the APK before a launch, to offer the
+  // Android 2D component's download first (common/android/manifest.h).
+  auto parsed = [](const std::vector<std::byte>& bytes) {
+    return venture::android::parse_manifest({reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size()});
+  };
+  CHECK(venture::android::launches_2d(parsed(xml)));
+  CHECK_FALSE(venture::android::launches_2d(parsed(vr)));
+  auto native = binary_xml({"manifest", {{"package", "org.example.native"}}, {{"application", {}, {
+      activity("android.app.NativeActivity", {"android.intent.category.LAUNCHER"})}}}});
+  CHECK_FALSE(venture::manifest_launches_2d(native));
+  CHECK_FALSE(venture::android::launches_2d(parsed(native)));
 }
 TEST_CASE("Horizon compatibility selects the newest supported model no newer than native Quest 3") {
   using venture::select_device_identity;

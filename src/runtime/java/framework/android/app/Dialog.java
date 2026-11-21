@@ -67,6 +67,10 @@ public class Dialog implements android.content.DialogInterface {
     showing = true;
     android.util.Log.w("dialog", "Shown without presentation: " + summary());
     if (showListener != null) showListener.onShow(this);
+    // The window takes focus: a text field it focused with a visible soft
+    // input mode gets the system keyboard (Unity's TouchScreenKeyboard dialog).
+    if (showing)
+      com.venture.runtime.SystemKeyboard.windowFocused(window.getDecorView(), window.getAttributes().softInputMode);
   }
   CharSequence title() { return title; }
   String summary() {
@@ -84,6 +88,7 @@ public class Dialog implements android.content.DialogInterface {
   public void dismiss() {
     boolean wasShowing = showing;
     showing = false;
+    if (wasShowing) com.venture.runtime.SystemKeyboard.windowClosed(window.getDecorView());
     if (wasShowing && dismissListener != null) dismissListener.onDismiss(this);
   }
 }

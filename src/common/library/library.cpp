@@ -1,5 +1,6 @@
 #include "common/library/library.h"
 #include "common/environment.h"
+#include "common/injected_modules.h"
 #include "common/log.h"
 #include "common/saves_migration.h"
 #include "common/file_ops.h"
@@ -32,13 +33,13 @@ std::vector<std::string> install_problems(const fs::path &directory, const meta:
     auto n = fs::file_size(target, ec);
     if (ec || !n)
       out.push_back(f.name + " is empty");
-    else if (f.size && f.size != n && !replaced_obb(f, n))
+    else if (f.size && f.size != n && !replaced_file(f, n))
       out.push_back(std::format("{} has {} bytes, the manifest says {}", f.name, n, f.size));
   }
   return out;
 }
-bool replaced_obb(const meta::File &file, uint64_t size) {
-  return file.base() && file.kind == "obb" && size && file.size && size != file.size;
+bool replaced_file(const meta::File &file, uint64_t size) {
+  return file.base() && file.kind != "apk" && size && file.size && size != file.size;
 }
 std::vector<std::string> replaced_files(const fs::path &directory, const meta::Plan &plan) {
   std::vector<std::string> out;
@@ -47,7 +48,7 @@ std::vector<std::string> replaced_files(const fs::path &directory, const meta::P
     std::error_code ec;
     if (!paths::within(directory, target) || !fs::is_regular_file(target, ec)) continue;
     const auto n = fs::file_size(target, ec);
-    if (!ec && replaced_obb(f, n))
+    if (!ec && replaced_file(f, n))
       out.push_back(std::format("{} was replaced ({} bytes; the store's file has {})", f.name, n, f.size));
   }
   return out;
@@ -142,7 +143,7 @@ std::vector<Install> scan(const fs::path &root, bool* authoritative) {
           }
           auto n = fs::file_size(target);
           install.bytes += n;
-          if (replaced_obb(f, n))
+          if (replaced_file(f, n))
             install.replaced.push_back(f.name);
           else if (!n || (f.size && f.size != n))
             install.complete = false;
@@ -648,12 +649,17 @@ std::string missing_expansion(const fs::path &log) {
   return failed && frames < 10 ? name : std::string{};
 }
 std::string runtime_failure(std::string_view tail, int code) {
+  const auto injected = injected_modules::last_programs(tail);
   // fatal: the last fatal signal; cause: the trap that raised it (an import
   // with no implementation, or an A32 call without an ABI adapter), if any.
   std::string_view last, last_runtime, dump, fatal, cause, trap, guest_fault, guest_cause, session, stall_seconds;
   // java_fatal: the first uncaught Java exception (AppMain logs it as Android's
   // AndroidRuntime does); it closes the app, so later error lines are its fallout.
   std::string_view java_fatal;
+  // venture_fatal: the first error with which Venture itself ended the app (a
+  // GPU device loss). The device-loss path logs every guest thread's stack as a
+  // snapshot first, and later lines are its fallout, so neither is the reason.
+  std::string_view venture_fatal;
   // A frame-stall snapshot with no frame after it: the game was hung when it
   // was closed (by the user or the quit backstop). Its thread rows are
   // diagnostics, not an error, and must not be quoted as the reason.
@@ -697,6 +703,8 @@ std::string runtime_failure(std::string_view tail, int code) {
       continue;
     }
     last = message;
+    if (venture_fatal.empty() && message.find("ending the app as a fatal error") != message.npos)
+      venture_fatal = message;
     if (tag == "AndroidRuntime" && message.starts_with("FATAL EXCEPTION: ") && java_fatal.empty())
       java_fatal = message;
     if (tag == "runtime")
@@ -729,7 +737,7 @@ std::string runtime_failure(std::string_view tail, int code) {
         (dump.empty() ? "" : std::format(" Crash dump: {}", dump));
   // A hung game that was closed did not crash: say so instead of quoting an
   // unrelated error line. A fatal signal still outranks the stall.
-  if (stalled && fatal.empty() && guest_fault.empty() && java_fatal.empty())
+  if (stalled && fatal.empty() && guest_fault.empty() && java_fatal.empty() && venture_fatal.empty())
     return std::format("The game stopped responding{} and was closed (exit code {}).",
                        stall_seconds.empty() ? "" : std::format(" (no new frame for {} s)", stall_seconds),
                        exit_code) +
@@ -737,9 +745,14 @@ std::string runtime_failure(std::string_view tail, int code) {
   // Anything else (a crash) gets the exit code; the last error line is context
   // only, because some subsystems log recoverable errors.
   auto message = std::format("The runtime stopped unexpectedly (exit code {}).", exit_code);
+  // A device loss with a capture or overlay tool injected into the game: the
+  // tool is the first thing to rule out (Medal on an AMD GPU).
+  if (!venture_fatal.empty() && !injected.empty()) message += " " + injected_modules::device_loss_advice(injected);
   // A fatal signal outranks error lines around it: a game's own non-fatal
   // errors (a failed HTTPS request) are often logged last, even after it.
-  if (!java_fatal.empty())
+  if (!venture_fatal.empty())
+    message += std::format(" Last error: {}", venture_fatal);
+  else if (!java_fatal.empty())
     message += std::format(" Last error: {}", java_fatal);
   else if (!fatal.empty())
     message += cause.empty() ? std::format(" Last error: {}", fatal)

@@ -6,6 +6,7 @@
 #include "xr/session.h"
 #include <algorithm>
 #include <memory>
+#include <mutex>
 
 namespace venture::hle::vrapi {
 namespace {
@@ -113,8 +114,13 @@ XrResult DrawnLayers::present(std::vector<const XrCompositionLayerBaseHeader *> 
     p.acquired.clear();
     return result;
   };
+  // A frame without a projection layer gets its bottom run as one (drawn_layers.h).
+  const bool projection_free = std::none_of(layers.begin(), layers.end(), [](const XrCompositionLayerBaseHeader *l) {
+    return l->type == XR_TYPE_COMPOSITION_LAYER_PROJECTION;
+  });
   for (std::size_t index = 0; index < runs_.size(); ++index) {
     auto &run = runs_[index];
+    run.as_projection = index == 0 && projection_free && !layers.empty() && layers.front() == run.placeholder();
     const XrSpace base = run.layers.front().space;
     XrViewLocateInfo locate{XR_TYPE_VIEW_LOCATE_INFO, nullptr, session().view_configuration,
                             session().frame.predictedDisplayTime, base};
@@ -218,12 +224,33 @@ XrResult DrawnLayers::present(std::vector<const XrCompositionLayerBaseHeader *> 
       quad.pose = venture::xr::compose(
           views[eye].pose, {{0, 0, 0, 1}, {(l + r) / 2 * distance, (u + d) / 2 * distance, -distance}});
       quad.size = {(r - l) * distance, (u - d) * distance};
+      // The same image as the view it was drawn for.
+      run.views[eye] = {XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW};
+      run.views[eye].pose = views[eye].pose;
+      run.views[eye].fov = views[eye].fov;
+      run.views[eye].subImage = quad.subImage;
     }
+    if (run.as_projection) {
+      // Opaque: premultiplied content composited over nothing is itself.
+      run.projection = {XR_TYPE_COMPOSITION_LAYER_PROJECTION};
+      run.projection.space = base;
+      run.projection.viewCount = 2;
+      run.projection.views = run.views.data();
+    }
+    static std::once_flag reported[2];
+    std::call_once(reported[run.as_projection], [&] {
+      log::info("vrapi", "Drawn layers shown as {}", run.as_projection ? "the frame's projection layer (none other in it)"
+                                                                        : "one quad per eye over that eye's view");
+    });
   }
-  // The right eye's quad follows the left one each run left in the frame.
+  // The right eye's quad follows the left one each run left in the frame, or
+  // the projection layer takes the run's place.
   for (auto &run : runs_) {
     const auto at = std::find(layers.begin(), layers.end(), run.placeholder());
-    if (at != layers.end())
+    if (at == layers.end()) continue;
+    if (run.as_projection)
+      *at = reinterpret_cast<const XrCompositionLayerBaseHeader *>(&run.projection);
+    else
       layers.insert(at + 1, reinterpret_cast<const XrCompositionLayerBaseHeader *>(&run.quads[1]));
   }
   if (!p.acquired.empty()) {

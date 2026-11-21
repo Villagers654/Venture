@@ -38,8 +38,12 @@ using EGLenum = unsigned int;
 #include "vulkan_test_support.h"
 #include "hle/vulkan/internal.h"
 #include "hle/vulkan/chain.h"
+#include <array>
+#include <atomic>
 #include <chrono>
 #include <cstring>
+#include <span>
+#include <thread>
 #include <filesystem>
 #include <format>
 #include <fstream>
@@ -503,10 +507,12 @@ TEST_CASE("XR PCM and envelope haptics bind both hands, append, replace and stop
   zero.amplitude = 1;
   zero.duration = 0; // A valid no-op must not count as controller output.
   CHECK(xg::xrApplyHapticFeedback(session, &request, reinterpret_cast<XrHapticBaseHeader *>(&zero)) == XR_SUCCESS);
+  REQUIRE(venture::xr::haptics_settled(std::chrono::seconds(2)));
   CHECK(ventureMockXrStats().haptic_pulses == before);
   zero.duration = 10'000'000;
   zero.amplitude = 2.5f; // Captured finite overdrive from a grip interaction.
   CHECK(xg::xrApplyHapticFeedback(session, &request, reinterpret_cast<XrHapticBaseHeader *>(&zero)) == XR_SUCCESS);
+  REQUIRE(venture::xr::haptics_settled(std::chrono::seconds(2)));
   CHECK(ventureMockXrStats().haptic_pulses == before + 1);
   CHECK(zero.amplitude == 2.5f);
   ++before;
@@ -514,8 +520,10 @@ TEST_CASE("XR PCM and envelope haptics bind both hands, append, replace and stop
   wildcard.subactionPath = XR_NULL_PATH;
   const auto stops = ventureMockXrStats().haptic_stops;
   REQUIRE(xg::xrApplyHapticFeedback(session, &wildcard, reinterpret_cast<XrHapticBaseHeader *>(&zero)) == XR_SUCCESS);
+  REQUIRE(venture::xr::haptics_settled(std::chrono::seconds(2)));
   CHECK(ventureMockXrStats().haptic_pulses == before + 2);
   REQUIRE(xg::xrStopHapticFeedback(session, &wildcard) == XR_SUCCESS);
+  REQUIRE(venture::xr::haptics_settled(std::chrono::seconds(2)));
   CHECK(ventureMockXrStats().haptic_stops == stops + 1);
   before += 2;
   request.action = unbound;
@@ -523,6 +531,7 @@ TEST_CASE("XR PCM and envelope haptics bind both hands, append, replace and stop
   CHECK(rate.sampleRate == 0);
   zero.amplitude = 1;
   CHECK(xg::xrApplyHapticFeedback(session, &request, reinterpret_cast<XrHapticBaseHeader *>(&zero)) == XR_SUCCESS);
+  REQUIRE(venture::xr::haptics_settled(std::chrono::seconds(2)));
   CHECK(ventureMockXrStats().haptic_pulses == before);
   request.action = action;
   float first[]{-0.5f};
@@ -536,7 +545,8 @@ TEST_CASE("XR PCM and envelope haptics bind both hands, append, replace and stop
   REQUIRE(ventureMockXrAwaitHaptics(before + 1, 1000));
   pcm.append = XR_TRUE;
   CHECK(xg::xrApplyHapticFeedback(session, &request, reinterpret_cast<XrHapticBaseHeader *>(&pcm)) == XR_SUCCESS);
-  CHECK(consumed == 1);
+  // The first sample plays for 500 ms, past the backlog a host keeps: the append waits.
+  CHECK(consumed == 0);
   CHECK_FALSE(ventureMockXrAwaitHaptics(before + 2, 30));
   pcm.append = XR_FALSE;
   CHECK(xg::xrApplyHapticFeedback(session, &request, reinterpret_cast<XrHapticBaseHeader *>(&pcm)) == XR_SUCCESS);
@@ -574,6 +584,17 @@ TEST_CASE("XR PCM and envelope haptics bind both hands, append, replace and stop
   REQUIRE(xg::xrApplyHapticFeedback(session, &request, reinterpret_cast<XrHapticBaseHeader *>(&pcm)) == XR_SUCCESS);
   CHECK(consumed == 180);
   REQUIRE(ventureMockXrAwaitHaptics(dense + 2, 1000));
+  // Emulated PCM is paced as a host paces it: a whole clip when nothing waits, and an
+  // appended one only while less than native_pcm_backlog waits (not a second of buzz).
+  std::array<float, 2000> long_clip;
+  long_clip.fill(0.5f);
+  pcm.buffer = long_clip.data(); pcm.bufferSize = long_clip.size();
+  REQUIRE(xg::xrApplyHapticFeedback(session, &request, reinterpret_cast<XrHapticBaseHeader *>(&pcm)) == XR_SUCCESS);
+  CHECK(consumed == 2000);
+  pcm.append = XR_TRUE;
+  REQUIRE(xg::xrApplyHapticFeedback(session, &request, reinterpret_cast<XrHapticBaseHeader *>(&pcm)) == XR_SUCCESS);
+  CHECK(consumed == 0);
+  pcm.append = XR_FALSE;
   CHECK(xg::xrStopHapticFeedback(session, &request) == XR_SUCCESS);
   pcm.sampleRate = 0;
   consumed = 99;
@@ -753,6 +774,258 @@ TEST_CASE("XR PCM haptics use core vibration when the host's PCM sample rate is 
   CHECK(xg::xrDestroySession(session) == XR_SUCCESS);
   CHECK(xg::xrDestroyInstance(instance) == XR_SUCCESS);
   venture::xr::install_xr_images(nullptr);
+}
+
+// A session with one vibration action bound to both Touch controllers' outputs. A
+// positive pcm_rate makes the mock a host that plays XR_FB_haptic_pcm itself.
+struct HapticSession {
+  struct Env {
+    explicit Env(const char* rate) { set(rate); }
+    ~Env() { set(""); }
+    static void set(const char* value) {
+#ifdef _WIN32
+      _putenv_s("VENTURE_MOCK_PCM_RATE", value);
+#else
+      if (*value) setenv("VENTURE_MOCK_PCM_RATE", value, 1); else unsetenv("VENTURE_MOCK_PCM_RATE");
+#endif
+      venture::environment::refresh();
+      ventureMockXrRefreshEnvironment();
+    }
+  } env;
+  bool had_pcm = venture::xr::host_xr().enabled_extensions.contains("XR_FB_haptic_pcm");
+  venture::test::XrImageFixture interop;
+  XrInstance instance{};
+  XrSession session{};
+  XrAction action{};
+  XrPath hands[2]{};
+  MockXrScript script{};
+  explicit HapticSession(const char* pcm_rate = "") : env(pcm_rate) {
+    if (*pcm_rate) venture::xr::host_xr().enabled_extensions.insert("XR_FB_haptic_pcm");
+    venture::xr::install_xr_images(&interop);
+    const char *extensions[]{"XR_KHR_opengl_es_enable", "XR_FB_haptic_pcm", "XR_FB_haptic_amplitude_envelope"};
+    XrInstanceCreateInfo create{XR_TYPE_INSTANCE_CREATE_INFO};
+    create.applicationInfo.apiVersion = XR_MAKE_VERSION(1, 0, 0);
+    create.enabledExtensionCount = 3;
+    create.enabledExtensionNames = extensions;
+    REQUIRE(xg::xrCreateInstance(&create, &instance) == XR_SUCCESS);
+    xg::GlesBinding graphics{XR_TYPE_GRAPHICS_BINDING_OPENGL_ES_ANDROID_KHR, nullptr, 1, 2, 3};
+    XrSessionCreateInfo ci{XR_TYPE_SESSION_CREATE_INFO, &graphics, 0, 1};
+    REQUIRE(xg::xrCreateSession(instance, &ci, &session) == XR_SUCCESS);
+    XrActionSetCreateInfo set_info{XR_TYPE_ACTION_SET_CREATE_INFO};
+    std::strcpy(set_info.actionSetName, "haptic_timing");
+    std::strcpy(set_info.localizedActionSetName, "Haptic timing");
+    XrActionSet set{};
+    REQUIRE(xg::xrCreateActionSet(instance, &set_info, &set) == XR_SUCCESS);
+    XrPath outputs[2]{}, profile{};
+    REQUIRE(xg::xrStringToPath(instance, "/user/hand/left", &hands[0]) == XR_SUCCESS);
+    REQUIRE(xg::xrStringToPath(instance, "/user/hand/right", &hands[1]) == XR_SUCCESS);
+    REQUIRE(xg::xrStringToPath(instance, "/user/hand/left/output/haptic", &outputs[0]) == XR_SUCCESS);
+    REQUIRE(xg::xrStringToPath(instance, "/user/hand/right/output/haptic", &outputs[1]) == XR_SUCCESS);
+    REQUIRE(xg::xrStringToPath(instance, "/interaction_profiles/oculus/touch_controller", &profile) == XR_SUCCESS);
+    XrActionCreateInfo ai{XR_TYPE_ACTION_CREATE_INFO};
+    ai.actionType = XR_ACTION_TYPE_VIBRATION_OUTPUT;
+    ai.countSubactionPaths = 2;
+    ai.subactionPaths = hands;
+    std::strcpy(ai.actionName, "vibration");
+    std::strcpy(ai.localizedActionName, "Vibration");
+    REQUIRE(xg::xrCreateAction(set, &ai, &action) == XR_SUCCESS);
+    XrActionSuggestedBinding bindings[]{{action, outputs[0]}, {action, outputs[1]}};
+    XrInteractionProfileSuggestedBinding suggestion{XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING,
+        nullptr, profile, 2, bindings};
+    REQUIRE(xg::xrSuggestInteractionProfileBindings(instance, &suggestion) == XR_SUCCESS);
+    XrSessionActionSetsAttachInfo attach{XR_TYPE_SESSION_ACTION_SETS_ATTACH_INFO, nullptr, 1, &set};
+    REQUIRE(xg::xrAttachSessionActionSets(session, &attach) == XR_SUCCESS);
+    poll();
+    XrSessionBeginInfo begin{XR_TYPE_SESSION_BEGIN_INFO, nullptr, XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO};
+    REQUIRE(xg::xrBeginSession(session, &begin) == XR_SUCCESS);
+    poll();
+    ventureMockXrSetScript(&script);
+    ventureMockXrClearHapticLog();
+  }
+  ~HapticSession() {
+    ventureMockXrGateHaptics(false);
+    ventureMockXrSetHapticDelay(-1);
+    CHECK(xg::xrDestroySession(session) == XR_SUCCESS);
+    CHECK(xg::xrDestroyInstance(instance) == XR_SUCCESS);
+    venture::xr::install_xr_images(nullptr);
+    if (!had_pcm) venture::xr::host_xr().enabled_extensions.erase("XR_FB_haptic_pcm");
+  }
+  void poll() {
+    XrEventDataBuffer event{XR_TYPE_EVENT_DATA_BUFFER};
+    while (xg::xrPollEvent(instance, &event) == XR_SUCCESS) event = {XR_TYPE_EVENT_DATA_BUFFER};
+  }
+  XrHapticActionInfo hand(int index) const { return {XR_TYPE_HAPTIC_ACTION_INFO, nullptr, action, hands[index]}; }
+  XrResult pcm(int index, std::span<const float> samples, float rate, bool append, std::uint32_t& consumed) {
+    const auto info = hand(index);
+    XrHapticPcmVibrationFB p{XR_TYPE_HAPTIC_PCM_VIBRATION_FB, nullptr, std::uint32_t(samples.size()), samples.data(),
+                             rate, XrBool32(append ? XR_TRUE : XR_FALSE), &consumed};
+    return xg::xrApplyHapticFeedback(session, &info, reinterpret_cast<const XrHapticBaseHeader*>(&p));
+  }
+  static std::vector<MockXrHapticRecord> log() {
+    std::vector<MockXrHapticRecord> out(ventureMockXrHapticLog(nullptr, 0));
+    out.resize(ventureMockXrHapticLog(out.data(), std::uint32_t(out.size())));
+    return out;
+  }
+};
+
+// A host whose haptic calls are slow (a runtime's IPC to its compositor, a wireless
+// controller link) must never hold up the guest's OpenXR calls: the game's frame calls
+// (xrEndFrame and the rest) take the same lock its haptic calls do.
+TEST_CASE("XR haptics on a slow host never block the guest's OpenXR calls") {
+  HapticSession s;
+  using clock = std::chrono::steady_clock;
+  auto ms = [](clock::duration d) { return std::chrono::duration<double, std::milli>(d).count(); };
+  SUBCASE("Streamed PCM on both hands, 50 ms per host call") {
+    // Meta's Haptics SDK: 72-sample batches at 2000 Hz per controller, appended, as long
+    // as the runtime consumes them, on its own thread.
+    ventureMockXrSetHapticDelay(50'000);
+    std::atomic<bool> done{false};
+    double worst_call = 0, worst_lock = 0;
+    std::uint64_t calls = 0;
+    std::thread game([&] {
+      std::array<float, 72> batch;
+      for (std::size_t i = 0; i < batch.size(); ++i) batch[i] = (i % 2 ? -0.6f : 0.6f);
+      const auto end = clock::now() + std::chrono::milliseconds(1500);
+      bool append = false;
+      while (clock::now() < end) {
+        for (int h = 0; h < 2; ++h) {
+          std::uint32_t consumed = 0;
+          const auto start = clock::now();
+          CHECK(s.pcm(h, batch, 2000, append, consumed) == XR_SUCCESS);
+          worst_call = std::max(worst_call, ms(clock::now() - start));
+          ++calls;
+        }
+        append = true;
+        std::this_thread::sleep_for(std::chrono::milliseconds(36));
+      }
+      done = true;
+    });
+    // The render thread: each frame takes the guest API lock as xrEndFrame does.
+    while (!done) {
+      const auto start = clock::now();
+      { std::lock_guard lock(ox::state().mutex); }
+      worst_lock = std::max(worst_lock, ms(clock::now() - start));
+      std::this_thread::sleep_for(std::chrono::milliseconds(11));
+    }
+    game.join();
+    MESSAGE("slow host PCM: worst guest call " << worst_call << " ms, worst frame lock wait " << worst_lock
+            << " ms over " << calls << " calls");
+    CHECK(worst_call < 20);
+    CHECK(worst_lock < 20);
+    CHECK(ventureMockXrStats().haptic_pulses > 0);
+  }
+  SUBCASE("Core vibration and stops, 300 ms per host call") {
+    ventureMockXrSetHapticDelay(300'000);
+    XrHapticVibration pulse{XR_TYPE_HAPTIC_VIBRATION, nullptr, 50'000'000, XR_FREQUENCY_UNSPECIFIED, 0.7f};
+    const auto before = ventureMockXrStats();
+    // The worker is held inside the host call for the first pulse (left) until every later
+    // request is queued, so what it finds waiting is fixed.
+    ventureMockXrGateHaptics(true);
+    double worst = 0;
+    for (int i = 0; i < 6; ++i) {
+      const auto info = s.hand(i % 2);
+      const auto start = clock::now();
+      CHECK(xg::xrApplyHapticFeedback(s.session, &info, reinterpret_cast<const XrHapticBaseHeader*>(&pulse)) == XR_SUCCESS);
+      if (i == 5) CHECK(xg::xrStopHapticFeedback(s.session, &info) == XR_SUCCESS);
+      worst = std::max(worst, ms(clock::now() - start));
+      if (i == 0) REQUIRE(ventureMockXrAwaitGatedHaptic(5000));
+    }
+    MESSAGE("slow host core: worst guest call " << worst << " ms");
+    CHECK(worst < 20);
+    ventureMockXrGateHaptics(false);
+    // Waiting requests are replaced by newer ones for their hand (the third pulse by the
+    // fifth, the second and fourth by the sixth) and the stop withdraws the right hand's:
+    // the host gets the first and fifth pulses, both left, and the stop.
+    CHECK(ventureMockXrAwaitHapticStops(before.haptic_stops + 1, 5000));
+    REQUIRE(venture::xr::haptics_settled(std::chrono::seconds(5)));
+    CHECK(ventureMockXrStats().haptic_stops == before.haptic_stops + 1);
+    const auto log = HapticSession::log();
+    REQUIRE(log.size() == 2);
+    for (const auto &record : log) {
+      CHECK(record.hand == 0);
+      CHECK(record.amplitude == doctest::Approx(0.7f));
+      CHECK(record.duration_ns == 50'000'000);
+      CHECK(record.pcm_samples == 0);
+    }
+  }
+}
+
+// The emulated PCM path (hosts without XR_FB_haptic_pcm, such as SteamVR) plays a clip as
+// core pulses at the emulation rate: one per 4 ms of samples, equal neighbours merged,
+// each starting where the previous one ends.
+TEST_CASE("XR emulated PCM haptics keep their pulse amplitudes and timing") {
+  HapticSession s;
+  std::vector<float> clip;
+  const float levels[]{0.9f, 0.9f, 0.3f, 0.6f, 0.6f, 0.6f, 0.1f, 1.0f};
+  for (auto level : levels)
+    for (int i = 0; i < 8; ++i) clip.push_back(i % 2 ? -level : level);  // 8 samples = 4 ms at 2000 Hz
+  std::uint32_t consumed = 0;
+  REQUIRE(s.pcm(1, clip, 2000, false, consumed) == XR_SUCCESS);
+  CHECK(consumed == clip.size());
+  // Appended while the first part plays: continues it without a gap.
+  REQUIRE(s.pcm(1, clip, 2000, true, consumed) == XR_SUCCESS);
+  std::vector<std::pair<float, std::int64_t>> expected;  // merged amplitude, duration
+  for (int pass = 0; pass < 2; ++pass)
+    for (auto level : levels) {
+      if (!expected.empty() && expected.back().first == level) expected.back().second += 4'000'000;
+      else expected.push_back({level, 4'000'000});
+    }
+  REQUIRE(ventureMockXrAwaitHaptics(std::uint32_t(expected.size()), 2000));
+  std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  const auto log = HapticSession::log();
+  REQUIRE(log.size() == expected.size());
+  std::int64_t offset = 0;
+  for (std::size_t i = 0; i < log.size(); ++i) {
+    CAPTURE(i);
+    CHECK(log[i].hand == 1);
+    CHECK(log[i].amplitude == doctest::Approx(expected[i].first).epsilon(0.001));
+    CHECK(log[i].duration_ns == expected[i].second);
+    // Each pulse starts when the previous one ends (scheduling jitter allowed).
+    const auto at = std::int64_t(log[i].time_ns - log[0].time_ns);
+    CHECK(std::abs(at - offset) < 20'000'000);
+    offset += expected[i].second;
+  }
+}
+
+// On a host with XR_FB_haptic_pcm the samples go to the host as the game sent them, in order,
+// scaled only by the player's vibration strength, and a new clip replaces the old one.
+TEST_CASE("XR native PCM haptics reach the host in order and keep their samples") {
+  HapticSession s("2000");
+  std::array<float, 72> batch;
+  for (std::size_t i = 0; i < batch.size(); ++i) batch[i] = (i % 2 ? -0.5f : 0.5f) * float(i + 1) / batch.size();
+  std::uint32_t total = 0;
+  for (int i = 0; i < 10; ++i) {
+    std::uint32_t consumed = 0;
+    REQUIRE(s.pcm(0, batch, 2000, i > 0, consumed) == XR_SUCCESS);
+    CHECK(consumed == batch.size());
+    total += consumed;
+    std::this_thread::sleep_for(std::chrono::milliseconds(36));
+  }
+  REQUIRE(ventureMockXrAwaitHaptics(1, 2000));
+  std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  auto log = HapticSession::log();
+  REQUIRE_FALSE(log.empty());
+  std::uint32_t played = 0;
+  for (std::size_t i = 0; i < log.size(); ++i) {
+    CAPTURE(i);
+    CHECK(log[i].hand == 0);
+    CHECK(log[i].pcm_samples > 0);
+    CHECK(log[i].pcm_rate == 2000);
+    CHECK(log[i].append == (i > 0 ? 1u : 0u));
+    CHECK(log[i].amplitude == doctest::Approx(0.5f));
+    played += log[i].pcm_samples;
+  }
+  CHECK(played == total);
+  // A new clip (append false) is sent as one, replacing what plays.
+  ventureMockXrClearHapticLog();
+  std::uint32_t consumed = 0;
+  REQUIRE(s.pcm(0, batch, 2000, false, consumed) == XR_SUCCESS);
+  CHECK(consumed == batch.size());
+  std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  log = HapticSession::log();
+  REQUIRE(log.size() == 1);
+  CHECK(log[0].append == 0);
+  CHECK(log[0].pcm_samples == batch.size());
 }
 
 TEST_CASE("XR boundary visibility is negotiable and stays visible without passthrough") {
@@ -4544,7 +4817,7 @@ TEST_CASE("XR sampler states match session bindings with base-only acceptance") 
       REQUIRE(xg::xrGetSwapchainStateFB(chain, header(got)) == XR_SUCCESS);
       CHECK(fields(got) == fields(sampler));
       XrSwapchainStateSamplerVulkanFB native{XR_TYPE_SWAPCHAIN_STATE_SAMPLER_VULKAN_FB};
-      REQUIRE(venture::xr::host_call<PFN_xrGetSwapchainStateFB, "xrGetSwapchainStateFB">(venture::hle::openxr::state().swapchains.at(chain).host_handle, header(native)) == XR_SUCCESS);
+      REQUIRE(venture::xr::host_call<PFN_xrGetSwapchainStateFB, "xrGetSwapchainStateFB">(venture::hle::openxr::presented_handle(venture::hle::openxr::state().swapchains.at(chain)), header(native)) == XR_SUCCESS);
       CHECK(native.maxAnisotropy == (forward ? 8 : 1));
       if (forward) {
         CHECK(native.mipmapMode == VK_SAMPLER_MIPMAP_MODE_LINEAR);
@@ -4552,7 +4825,7 @@ TEST_CASE("XR sampler states match session bindings with base-only acceptance") 
         CHECK(native.swizzleRed == VK_COMPONENT_SWIZZLE_ONE);
         CHECK(native.swizzleAlpha == VK_COMPONENT_SWIZZLE_R);
         CHECK(native.borderColor.a == sampler.borderColor.a);
-        REQUIRE(venture::xr::host_call<PFN_xrGetSwapchainStateFB, "xrGetSwapchainStateFB">(venture::hle::openxr::state().swapchains.at(second).host_handle, header(native)) == XR_SUCCESS);
+        REQUIRE(venture::xr::host_call<PFN_xrGetSwapchainStateFB, "xrGetSwapchainStateFB">(venture::hle::openxr::presented_handle(venture::hle::openxr::state().swapchains.at(second)), header(native)) == XR_SUCCESS);
         CHECK(native.maxAnisotropy == 1); // unrelated swapchain retains its own sampler
         MockXrScript script{}; script.sampler_update_result = XR_ERROR_RUNTIME_FAILURE;
         ventureMockXrSetScript(&script);

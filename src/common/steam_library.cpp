@@ -630,7 +630,13 @@ void client_command(const fs::path &root, const char *arg) {
   auto exe = (root / "steam.sh").string();
   pid_t pid;
   char *args[] = {exe.data(), const_cast<char *>(arg), nullptr};
-  if (posix_spawn(&pid, exe.c_str(), nullptr, nullptr, args, environ))
+  std::vector<std::string> inherited;
+  for (char **e = environ; e && *e; ++e) inherited.emplace_back(*e);
+  auto entries = client_environment(inherited);
+  std::vector<char *> envp;
+  for (auto &entry : entries) envp.push_back(entry.data());
+  envp.push_back(nullptr);
+  if (posix_spawn(&pid, exe.c_str(), nullptr, nullptr, args, envp.data()))
     throw std::runtime_error("Could not request Steam restart.");
   std::thread([pid] {
     int status;
@@ -1022,6 +1028,31 @@ LaunchIdentity launch_identity(const std::function<const char *(const char *)> &
     if (dropped && kept.empty()) out.removed.emplace_back("LD_PRELOAD");
     else if (dropped) out.replaced.emplace_back("LD_PRELOAD", kept);
   }
+  return out;
+}
+
+std::vector<std::string> client_environment(const std::vector<std::string> &environment) {
+  constexpr std::string_view dropped[] = {"LD_PRELOAD", "LD_LIBRARY_PATH", "SteamGameId", "SteamAppId",
+                                          "SteamOverlayGameId", "SteamEnv", "STEAM_ZENITY", "SYSTEM_PATH",
+                                          "SYSTEM_LD_LIBRARY_PATH", "PATH"};
+  constexpr std::string_view dropped_prefixes[] = {"STEAM_RUNTIME", "PRESSURE_VESSEL_", "STEAM_COMPAT_"};
+  std::vector<std::string> out;
+  std::optional<std::string> path, system_path, system_libraries;
+  for (const auto &entry : environment) {
+    const auto equals = entry.find('=');
+    if (equals == std::string::npos) continue;
+    const std::string_view name(entry.data(), equals);
+    const auto value = entry.substr(equals + 1);
+    if (name == "PATH") path = value;
+    else if (name == "SYSTEM_PATH") system_path = value;
+    else if (name == "SYSTEM_LD_LIBRARY_PATH") system_libraries = value;
+    if (std::ranges::find(dropped, name) != std::end(dropped) ||
+        std::ranges::any_of(dropped_prefixes, [&](auto p) { return name.starts_with(p); }))
+      continue;
+    out.push_back(entry);
+  }
+  if (system_path || path) out.push_back("PATH=" + (system_path ? *system_path : *path));
+  if (system_libraries && !system_libraries->empty()) out.push_back("LD_LIBRARY_PATH=" + *system_libraries);
   return out;
 }
 

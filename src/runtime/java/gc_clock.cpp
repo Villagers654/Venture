@@ -1,6 +1,7 @@
 #include "java/gc_clock.h"
 #include "java/jvm.h"
 #include "common/log.h"
+#include "core/stall_watch.h"
 #include <jni.h>
 #include <jvmti.h>
 #include <atomic>
@@ -14,8 +15,12 @@ std::int64_t now_ns() {
   return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 // Called by the VM at a safepoint: no JNI, no allocation, only atomics.
-void JNICALL gc_start(jvmtiEnv*) { began.store(now_ns(), std::memory_order_relaxed); }
+void JNICALL gc_start(jvmtiEnv*) {
+  began.store(now_ns(), std::memory_order_relaxed);
+  stall_watch::gc_began();
+}
 void JNICALL gc_finish(jvmtiEnv*) {
+  stall_watch::gc_ended();
   if (const auto start = began.exchange(0, std::memory_order_relaxed))
     total.fetch_add(now_ns() - start, std::memory_order_relaxed);
 }

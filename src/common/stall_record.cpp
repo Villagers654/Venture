@@ -5,6 +5,7 @@
 #include <charconv>
 #include <format>
 #include <map>
+#include <ranges>
 #include <utility>
 
 namespace venture::stall {
@@ -147,7 +148,13 @@ std::vector<std::string> format(const Record& r) {
   if (r.read_kib >= 0) head += std::format(" read_kib={}", r.read_kib);
   if (r.gc_ms >= 0) head += std::format(" gc_ms={}", r.gc_ms);
   if (r.private_mib >= 0) head += std::format(" private_mib={}", r.private_mib);
+  if (!r.clock.empty()) head += " clock=" + r.clock;
+  if (r.ongoing) head += " state=ongoing";
+  if (!r.ended.empty()) head += " ended=" + r.ended;
   lines.push_back(std::move(head));
+  if (!r.summary.empty()) lines.push_back(std::format("#{} summary={}", r.id, quoted(r.summary, 900)));
+  for (const auto& e : r.evidence)
+    lines.push_back(std::format("#{} evidence={} text={}", r.id, e.kind, quoted(e.text, 900)));
   for (const auto& t : r.shown) {
     std::string line = std::format("#{} tid={} name={}", r.id, t.tid, quoted(t.name, 32));
     if (!t.role.empty()) line += " role=" + t.role;
@@ -158,6 +165,33 @@ std::vector<std::string> format(const Record& r) {
     lines.push_back(std::move(line));
   }
   return lines;
+}
+
+std::string format_end(int id, std::int64_t ms, std::string_view ended) {
+  return std::format("#{} end ms={}{}{}", id, ms, ended.empty() ? "" : " ended=", ended);
+}
+
+std::string format_call(const LongCall& c) {
+  return std::format("at={:.1f}s ms={} thread={} call={}", c.at_s, c.ms, quoted(c.thread, 64), quoted(c.call, 300));
+}
+
+std::vector<LongCall> parse_calls(std::string_view text) {
+  std::vector<LongCall> calls;
+  constexpr std::string_view tag = " [stall-op] ";
+  for (std::size_t at = 0; (at = text.find(tag, at)) != std::string_view::npos;) {
+    auto end = text.find('\n', at);
+    if (end == std::string_view::npos) end = text.size();
+    const auto f = fields(text.substr(at + tag.size(), end - at - tag.size()));
+    at = end;
+    if (!f.contains("ms") || !f.contains("call")) continue;
+    LongCall c;
+    c.at_s = number<double>(f, "at", 0);
+    c.ms = number<std::int64_t>(f, "ms", 0);
+    if (auto it = f.find("thread"); it != f.end()) c.thread = it->second;
+    c.call = f.find("call")->second;
+    calls.push_back(std::move(c));
+  }
+  return calls;
 }
 
 std::vector<Record> parse_log(std::string_view text) {
@@ -172,7 +206,25 @@ std::vector<Record> parse_log(std::string_view text) {
     int id = 0;
     const auto parsed = std::from_chars(line.data(), line.data() + line.size(), id);
     if (parsed.ec != std::errc{}) continue;
-    const auto f = fields(std::string_view(parsed.ptr, line.data() + line.size()));
+    const std::string_view rest(parsed.ptr, line.data() + line.size());
+    const auto f = fields(rest);
+    // The end of a record logged while ongoing, which may have other records' lines before it.
+    if (rest.starts_with(" end ")) {
+      auto r = records.rbegin();
+      while (r != records.rend() && r->id != id) ++r;
+      if (r == records.rend()) continue;
+      r->ms = number<std::int64_t>(f, "ms", r->ms);
+      r->ongoing = false;
+      if (auto it = f.find("ended"); it != f.end()) r->ended = it->second;
+      continue;
+    }
+    if (f.contains("summary") || f.contains("evidence")) {
+      if (records.empty() || records.back().id != id) continue;
+      if (auto it = f.find("summary"); it != f.end()) records.back().summary = it->second;
+      else if (auto text_it = f.find("text"); text_it != f.end())
+        records.back().evidence.push_back({f.find("evidence")->second, text_it->second});
+      continue;
+    }
     if (f.contains("tid")) {
       if (records.empty() || records.back().id != id) continue;  // a header the log lost
       Thread t;
@@ -200,14 +252,33 @@ std::vector<Record> parse_log(std::string_view text) {
     r.read_kib = number<std::int64_t>(f, "read_kib", -1);
     r.gc_ms = number<std::int64_t>(f, "gc_ms", -1);
     r.private_mib = number<std::int64_t>(f, "private_mib", -1);
+    if (auto it = f.find("clock"); it != f.end()) r.clock = it->second;
+    if (auto it = f.find("state"); it != f.end()) r.ongoing = it->second == "ongoing";
+    if (auto it = f.find("ended"); it != f.end()) r.ended = it->second;
     records.push_back(std::move(r));
   }
   return records;
 }
 
-std::string report_section(const std::vector<Record>& records) {
-  if (records.empty()) return {};
+namespace {
+std::string calls_section(const std::vector<LongCall>& calls) {
+  if (calls.empty()) return {};
   constexpr std::size_t kShown = 10;
+  std::vector<const LongCall*> longest;
+  for (const auto& c : calls) longest.push_back(&c);
+  std::ranges::stable_sort(longest, std::greater{}, &LongCall::ms);
+  std::string out = std::format("Calls that took 500 ms or more while frames kept coming: {}{}\n", calls.size(),
+                                calls.size() > kShown ? std::format(", longest {} shown", kShown) : std::string());
+  for (std::size_t i = 0; i < longest.size() && i < kShown; ++i)
+    out += std::format("  at {:.1f} s: {} ms, {}: {}\n", longest[i]->at_s, longest[i]->ms,
+                       longest[i]->thread.empty() ? "(unnamed)" : longest[i]->thread, longest[i]->call);
+  return out;
+}
+}  // namespace
+
+std::string report_section(const std::vector<Record>& records, const std::vector<LongCall>& calls) {
+  if (records.empty()) return calls.empty() ? std::string() : "\n=== Stalls (0) ===\n" + calls_section(calls);
+  constexpr std::size_t kShown = 10, kWithEvidence = 5, kEvidenceLines = 12;
   std::vector<const Record*> worst;
   std::int64_t total = 0;
   std::map<Cause, int> causes;
@@ -229,6 +300,11 @@ std::string report_section(const std::vector<Record>& records) {
                                 records.size() > kShown ? std::format(", worst {} shown", kShown) : std::string());
   out += std::format("Frames stopped for 250 ms or more {} times while the game had focus: {} in all, worst {}.\n",
                      records.size(), seconds(total), seconds(worst.front()->ms));
+  const auto freezes = std::ranges::count_if(records, [](const Record& r) { return r.ms >= freeze_ms; });
+  const auto frozen_at_end = std::ranges::count_if(records, &Record::ongoing);
+  if (freezes)
+    out += std::format("{} of them {} of 1 s or more{}.\n", freezes, freezes == 1 ? "was a freeze" : "were freezes",
+                       frozen_at_end ? std::format(" ({} still frozen when the log ended)", frozen_at_end) : "");
   std::vector<std::pair<int, Cause>> by_count;
   for (const auto& [cause, count] : causes) by_count.emplace_back(count, cause);
   std::ranges::stable_sort(by_count, std::greater{}, &std::pair<int, Cause>::first);
@@ -247,14 +323,22 @@ std::string report_section(const std::vector<Record>& records) {
   }
   for (std::size_t i = 0; i < worst.size() && i < kShown; ++i) {
     const auto& r = *worst[i];
-    out += std::format("#{} at {:.1f} s: {} ms, cause {}", r.id, r.at_s, r.ms, cause_name(r.cause));
+    out += std::format("#{} at {:.1f} s{}: {} ms{}, cause {}", r.id, r.at_s,
+                       r.clock.empty() ? std::string() : " (" + r.clock + ")", r.ms,
+                       r.ongoing ? " and still frozen when the log ended" : "", cause_name(r.cause));
     if (r.cpu_percent >= 0) out += std::format("; CPU {:.0f}%", r.cpu_percent);
     if (r.faults >= 0) out += std::format(", {} page faults", r.faults);
     if (r.hard_faults >= 0) out += std::format(" ({} from disk)", r.hard_faults);
     if (r.read_kib >= 0) out += std::format(", read {} KiB", r.read_kib);
     if (r.gc_ms >= 0) out += std::format(", Java GC {} ms", r.gc_ms);
     if (r.private_mib >= 0) out += std::format(", private {} MiB", r.private_mib);
-    out += std::format(", {} threads\n", r.threads);
+    out += std::format(", {} threads", r.threads);
+    if (r.ended == "unfocused") out += "; it ended when the game lost focus or quit";
+    out += '\n';
+    if (!r.summary.empty()) out += "  Summary: " + r.summary + "\n";
+    if (i < kWithEvidence)
+      for (std::size_t e = 0; e < r.evidence.size() && e < kEvidenceLines; ++e)
+        out += std::format("  [{}] {}\n", r.evidence[e].kind, r.evidence[e].text);
     for (const auto& t : r.shown) {
       out += std::format("  {}{} tid {}: {} [{}{}]\n", t.name.empty() ? "(unnamed)" : t.name,
                          t.role.empty() ? std::string() : " (" + t.role + ")", t.tid, t.where, cause_name(t.cause),
@@ -262,7 +346,45 @@ std::string report_section(const std::vector<Record>& records) {
       if (!t.stack.empty()) out += "    < " + t.stack + "\n";
     }
   }
+  return out + calls_section(calls);
+}
+
+namespace {
+const Record* longest_freeze(const std::vector<Record>& records, int& count) {
+  const Record* longest = nullptr;
+  count = 0;
+  for (const auto& r : records) {
+    if (r.ms < freeze_ms) continue;
+    ++count;
+    if (!longest || r.ms > longest->ms) longest = &r;
+  }
+  return longest;
+}
+std::string freeze_text(const Record& r, int count) {
+  std::string out = std::format("{} time{}, the longest for {}{}", count, count == 1 ? "" : "s", seconds(r.ms),
+                                r.clock.empty() ? std::format(" at {:.0f} s into the run", r.at_s) : " at " + r.clock);
+  if (r.ongoing) out += " (still frozen when the log ended)";
+  if (!r.summary.empty()) out += ": " + r.summary;
   return out;
+}
+}  // namespace
+
+std::optional<Verdict> freeze_cause(const std::vector<Record>& records) {
+  int count = 0;
+  const auto* longest = longest_freeze(records, count);
+  if (!longest) return {};
+  Verdict v;
+  v.cause = std::format("The game froze while it had focus {} (see Stalls).", freeze_text(*longest, count));
+  v.advice = "Send this report with an issue: its Stalls section shows where the game's threads were when it froze.";
+  return v;
+}
+
+std::string freeze_note(const std::vector<Record>& records) {
+  int count = 0;
+  const auto* longest = longest_freeze(records, count);
+  return longest ? std::format("The game also froze while it had focus {} (see Stalls).",
+                               freeze_text(*longest, count))
+                 : std::string();
 }
 
 std::optional<Verdict> venture_cause(const std::vector<Record>& records) {

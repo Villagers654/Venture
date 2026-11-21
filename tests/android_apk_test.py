@@ -137,6 +137,23 @@ class CheckApk(unittest.TestCase):
         write_apk(self.apk, complete_entries(), sign=False)
         self.assertIn('no APK signature block (v2/v3)', check_apk.check(self.apk))
 
+    def test_layoutlib_refused(self):
+        # The desktop-only 2D stack (docs/design/layoutlib.md) never ships in the APK.
+        stored, deflated = zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED
+        for name, data, method in (
+                ('lib/arm64-v8a/libandroid_runtime.so', elf(183), stored),
+                ('assets/layoutlib/layoutlib.jar', b'PK', deflated),
+                ('assets/venture-framework-2d.jar', b'PK', deflated),
+                ('classes2.dex', b'dex 035 Lcom/android/layoutlib/bridge/Bridge;', deflated),
+                ('assets/game/classes.dex', b'dex 035 Lcom/venture/runtime/layoutlib/Panel;', deflated)):
+            with self.subTest(name=name):
+                entries = complete_entries()
+                entries[name] = (data, method)
+                write_apk(self.apk, entries)
+                problems = check_apk.check(self.apk)
+                self.assertTrue(any(p.startswith(name + ':') and 'layoutlib is desktop only' in p for p in problems),
+                                problems)
+
     def test_game_library_of_the_wrong_abi(self):
         entries = complete_entries()
         entries['assets/game/lib/armeabi-v7a/libvrapi.so'] = (elf(183), zipfile.ZIP_DEFLATED)

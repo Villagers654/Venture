@@ -790,6 +790,13 @@ int App::run() {
           smoke_exit_ = 1;
         } else {
           direct_app_ = found->id();
+          // A shortcut's start shows no launcher window to ask in: the Android 2D
+          // component is downloaded when the game is first played from Venture.
+          if (const auto size = android_2d_download(direct_app_)) {
+            error(std::format("This game needs Venture's Android 2D support, a one-time {} MB download. Play it "
+                              "once from Venture to download it.", (*size + (1 << 20) - 1) >> 20));
+            smoke_exit_ = 1;
+          } else
           try { launch_game(direct_app_, play_key(direct_app_), {}); }
           catch (...) { error(exception_text()); smoke_exit_ = 1; }
         }

@@ -3,6 +3,7 @@
 #include <atomic>
 #include <filesystem>
 #include <memory>
+#include <span>
 #include <string>
 #include <vector>
 #include "cpu/cpu.h"
@@ -72,6 +73,12 @@ std::string profile_thread_start_module(const ProfileThread&);
 // No allocation, logging, or mutex acquisition while the target is suspended.
 // Cpu lifetime is pinned by the caller's per-thread lifetime guard.
 bool profile_sample(const ProfileThread&, const Cpu*, const std::atomic<std::uint32_t>*, ProfileSample&) noexcept;
+// Stall diagnostics: parks the thread (as profile_sample does), reads its
+// instruction and stack pointers and copies up to `words.size()` stack words
+// from the stack pointer, then releases it. No allocation, logging or locks
+// while it is parked. `count` is the number of words copied.
+bool profile_host_stack(const ProfileThread&, std::span<std::uintptr_t> words, std::uintptr_t& ip,
+                        std::size_t& count) noexcept;
 std::vector<ProfileModule> profile_modules();
 std::vector<ProfileSymbol> profile_wait_symbols();
 std::uintptr_t profile_image_base();

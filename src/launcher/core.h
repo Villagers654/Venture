@@ -262,6 +262,10 @@ protected:
   static Json request_launch(const std::shared_ptr<LaunchQueue>&, const std::string&, const Json&);
   void launch_game(std::string_view, std::string_view, const LaunchDetails&,
                    std::shared_ptr<LaunchRequest> = {});
+  // The download size of the Android 2D component when the installed game `id` is a
+  // 2D app and this copy gets that component on demand but has not yet
+  // (common/layoutlib_component.h); nullopt when it can start now.
+  std::optional<std::uint64_t> android_2d_download(std::string_view id) const;
   std::string selected_, notice_, warning_, auth_status_;
   bool library_partial_ = false;  // Meta did not confirm the whole library
   bool rescan_again_ = false;  // rescan() was asked for while a scan ran

@@ -2,10 +2,13 @@
 #include "common/environment.h"
 #include "common/log.h"
 #include "core/memory_pressure.h"
+#include "core/stall_watch.h"
+#include "dynarmic/interface/profiling.h"
 #include "platform/process_info.h"
 #include "platform/profile.h"
 #include "platform/thread_priority.h"
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <format>
@@ -24,6 +27,7 @@ constexpr std::size_t kTopThreads = 3;
 
 std::atomic<std::uint64_t> frames{0}, long_frames{0};
 std::atomic<std::int64_t> worst_ns{0};
+std::array<std::atomic<std::uint64_t>, kBuckets> intervals{};
 
 std::atomic<std::uint64_t> waits{0}, phase_frames{0}, late_frames{0};
 std::atomic<std::int64_t> wait_sum{0}, app_sum{0}, prep_sum{0}, end_sum{0}, margin_sum{0};
@@ -63,8 +67,35 @@ Phases take_phases() {
 }
 
 Frames take_frames() {
-  return {frames.exchange(0, std::memory_order_relaxed), long_frames.exchange(0, std::memory_order_relaxed),
-          worst_ns.exchange(0, std::memory_order_relaxed)};
+  Frames f{frames.exchange(0, std::memory_order_relaxed), long_frames.exchange(0, std::memory_order_relaxed),
+           worst_ns.exchange(0, std::memory_order_relaxed)};
+  std::array<std::uint64_t, kBuckets> counts{};
+  std::uint64_t total = 0;
+  for (std::size_t i = 0; i < kBuckets; ++i) total += counts[i] = intervals[i].exchange(0, std::memory_order_relaxed);
+  if (total >= 20) {
+    f.p50_ns = percentile(counts.data(), counts.size(), 0.50, f.worst_ns);
+    f.p95_ns = percentile(counts.data(), counts.size(), 0.95, f.worst_ns);
+    f.p99_ns = percentile(counts.data(), counts.size(), 0.99, f.worst_ns);
+  }
+  return f;
+}
+
+// Cumulative counters at the last sample; deltas give one minute's work.
+struct WorkTotals {
+  Dynarmic::CompileTotals jit;
+  stall_watch::Totals watch;
+};
+WorkTotals read_work() { return {Dynarmic::GetCompileTotals(), stall_watch::totals()}; }
+Work work_delta(const WorkTotals& now, const WorkTotals& before) {
+  Work w;
+  w.valid = true;
+  w.jit_blocks = now.jit.blocks - before.jit.blocks;
+  w.jit_ns = std::int64_t(now.jit.ns - before.jit.ns);
+  w.pipelines = now.watch.pipelines - before.watch.pipelines;
+  w.pipeline_ns = std::int64_t(now.watch.pipeline_ns - before.watch.pipeline_ns);
+  w.uploads = now.watch.uploads - before.watch.uploads;
+  w.gcs = now.watch.gcs - before.watch.gcs;
+  return w;
 }
 
 // A thread without a name of its own (host, driver or runtime threads) is named by its id
@@ -84,6 +115,7 @@ void run() {
   std::map<std::pair<std::uint32_t, std::uint64_t>, std::uint64_t> previous;
   std::map<std::string, std::uint64_t> previous_gpu;  // GPU engine running time at the last sample
   std::vector<platform::GpuEngineTime> engines;
+  auto work = read_work();
   for (;;) {
     std::this_thread::sleep_for(kInterval);
     const auto now = clock::now();
@@ -94,6 +126,9 @@ void run() {
     s.frames = take_frames();
     s.phases = take_phases();
     s.timeouts = take_timeouts();
+    const auto work_now = read_work();
+    s.work = work_delta(work_now, work);
+    work = work_now;
     unpack(eye.load(std::memory_order_relaxed), s.eye_width, s.eye_height);
     unpack(recommended.load(std::memory_order_relaxed), s.recommended_width, s.recommended_height);
     std::map<std::pair<std::uint32_t, std::uint64_t>, std::uint64_t> current;
@@ -170,6 +205,7 @@ void frame_submitted(std::int64_t now_ns, std::int64_t period_ns) {
   if (last_ns && now_ns > last_ns) {
     const auto interval = now_ns - last_ns;
     if (period_ns > 0 && interval * 2 > period_ns * 3) long_frames.fetch_add(1, std::memory_order_relaxed);
+    intervals[std::min<std::size_t>(std::size_t(interval / kBucketNs), kBuckets - 1)].fetch_add(1, std::memory_order_relaxed);
     auto worst = worst_ns.load(std::memory_order_relaxed);
     while (interval > worst && !worst_ns.compare_exchange_weak(worst, interval, std::memory_order_relaxed)) {}
   }
@@ -209,10 +245,27 @@ void recommended_size(std::int32_t width, std::int32_t height) {
   recommended.store(pack(width, height), std::memory_order_relaxed);
 }
 
+std::int64_t percentile(const std::uint64_t* buckets, std::size_t count, double fraction, std::int64_t worst_ns) {
+  std::uint64_t total = 0;
+  for (std::size_t i = 0; i < count; ++i) total += buckets[i];
+  if (!total) return 0;
+  const auto rank = std::uint64_t(fraction * double(total - 1)) + 1;  // 1-based
+  std::uint64_t seen = 0;
+  for (std::size_t i = 0; i < count; ++i) {
+    seen += buckets[i];
+    if (seen < rank) continue;
+    // The bucket's middle; the open last bucket reads as the worst interval.
+    return i + 1 == count ? std::max(worst_ns, std::int64_t(i) * kBucketNs) : std::int64_t(i) * kBucketNs + kBucketNs / 2;
+  }
+  return worst_ns;
+}
+
 std::string format(const Sample& s) {
   std::string out = std::format("t={:.0f}m fps={:.1f} worst_frame_ms={:.1f} long_frames={}", s.minutes,
                                 s.seconds > 0 ? s.frames.count / s.seconds : 0., s.frames.worst_ns / 1e6,
                                 s.frames.long_frames);
+  if (s.frames.p50_ns)
+    out += std::format(" frame_ms={:.2f}/{:.2f}/{:.2f}", s.frames.p50_ns / 1e6, s.frames.p95_ns / 1e6, s.frames.p99_ns / 1e6);
   if (s.cpu_percent >= 0) {
     out += std::format(" cpu={:.0f}%", s.cpu_percent);
     if (!s.top.empty()) {
@@ -242,6 +295,9 @@ std::string format(const Sample& s) {
   if (s.gpu_celsius > 0) out += std::format(" gpu_c={:.0f}", s.gpu_celsius);
   if (s.private_bytes) out += std::format(" private_mib={}", s.private_bytes / MiB);
   if (s.gpu_budget) out += std::format(" gpu_mib={}/{}", s.gpu_used / MiB, s.gpu_budget / MiB);
+  if (const auto& w = s.work; w.valid)
+    out += std::format(" jit_blocks={} jit_ms={:.0f} pipelines={} pipeline_ms={:.0f} uploads={} gcs={}", w.jit_blocks,
+                       w.jit_ns / 1e6, w.pipelines, w.pipeline_ns / 1e6, w.uploads, w.gcs);
   out += std::format(" threads={}", s.threads);
   return out;
 }

@@ -44,6 +44,11 @@ REQUIRED = {
 # ELF class and machine of the game libraries by ABI folder (EM_AARCH64, EM_ARM).
 GAME_ABIS = {"arm64-v8a": (2, 183), "armeabi-v7a": (1, 40)}
 SIGNING_BLOCK_MAGIC = b"APK Sig Block 42"
+# Android Studio's layoutlib draws Android 2D windows on desktop hosts only
+# (docs/design/layoutlib.md); a headset has the real framework. Neither its
+# files nor its classes, nor Venture's 2D framework built on it, belong here.
+DESKTOP_ONLY_FILES = ("layoutlib", "libandroid_runtime", "venture-framework-2d")
+DESKTOP_ONLY_CLASSES = (b"Lcom/android/layoutlib/", b"Lcom/venture/runtime/layoutlib/")
 
 
 def data_offset(apk: Path, info: zipfile.ZipInfo) -> int:
@@ -95,6 +100,15 @@ def check(apk: Path) -> list[str]:
                     problems.append(f"{name}: no game libraries for {parts[3]}")
                 elif header[:4] != b"\x7fELF" or found != expected:
                     problems.append(f"{name} is not an {parts[3]} library")
+        for name in entries:
+            base = name.rsplit("/", 1)[-1]
+            if any(part in base for part in DESKTOP_ONLY_FILES):
+                problems.append(f"{name}: layoutlib is desktop only")
+            elif name.endswith(".dex"):
+                data = z.read(name)
+                for prefix in DESKTOP_ONLY_CLASSES:
+                    if prefix in data:
+                        problems.append(f"{name}: has {prefix.decode()[1:-1]} classes (layoutlib is desktop only)")
         bad = z.testzip()
         if bad:
             problems.append(f"corrupt entry {bad}")

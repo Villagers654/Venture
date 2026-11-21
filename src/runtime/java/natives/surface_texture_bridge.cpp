@@ -118,6 +118,8 @@ jlongArray JNICALL update(JNIEnv* env,jclass,jlong handle,jint texture,jlong ser
 }
 void register_surface_textures(JNIEnv* env) {
   auto cls=env->FindClass("android/graphics/SurfaceTexture");if(!cls)return;
+  // AOSP's SurfaceTexture in a 2D process (docs/design/layoutlib.md) is not Venture's.
+  if(!declares_method(env,cls,"nativeCreate","()J",false)){env->DeleteLocalRef(cls);return;}
 #define METHOD(n,s,f) {const_cast<char*>(n),const_cast<char*>(s),reinterpret_cast<void*>(f)}
   const JNINativeMethod methods[]={METHOD("nativeCreate","()J",create),METHOD("nativeAcquire","(J)J",acquire),
     METHOD("nativeRelease","(J)V",release),METHOD("nativeSize","(JII)V",size),METHOD("nativeUpdate","(JIJ)[J",update)};

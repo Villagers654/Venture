@@ -81,6 +81,12 @@ void setup_jni() {
                                 const jbyte* bytes) {
     std::copy_n(bytes, count, array.begin() + start);
   };
+  table.GetArrayLength = [](JNIEnv*, jarray values) -> jsize {
+    return static_cast<jsize>(reinterpret_cast<std::vector<jint>*>(values)->size());
+  };
+  table.GetIntArrayRegion = [](JNIEnv*, jintArray values, jsize start, jsize count, jint* out) {
+    std::copy_n(reinterpret_cast<std::vector<jint>*>(values)->begin() + start, count, out);
+  };
   table.IsInstanceOf = [](JNIEnv*, jobject, jclass) -> jboolean {
     return JNI_TRUE;
   };
@@ -202,6 +208,17 @@ void acquire(NativeWindow* window) { ++window->refs; }
 void release(NativeWindow* window) {
   if (--window->refs == 0) windows.erase(h2g(window));
 }
+// The window's last software frame, as the XR consumer would receive it.
+int publish_window_rgba(NativeWindow* window, std::span<const std::uint8_t> rgba, std::int32_t width,
+                        std::int32_t height, bool, std::int64_t) {
+  auto frame = std::make_shared<SurfaceFrame>();
+  frame->width = width;
+  frame->height = height;
+  frame->serial = 1;
+  frame->rgba.assign(rgba.begin(), rgba.end());
+  window->frame = std::move(frame);
+  return 0;
+}
 class TestStream final : public AssetStream {
   std::size_t offset_ = 0;
 
@@ -249,6 +266,22 @@ TEST_CASE(
   surface = 0;
   CHECK(venture::java::acquire_surface_window(&env, &surface) == nullptr);
   CHECK(monitors == 0);
+}
+
+TEST_CASE("a software frame posted to a Surface reaches its window as RGBA") {
+  auto create = native<jlong(JNICALL*)(JNIEnv*, jobject, jint, jint, jint)>("createSurface(III)J");
+  auto release = native<void(JNICALL*)(JNIEnv*, jobject, jlong)>("releaseSurface(J)V");
+  auto publish = native<jint(JNICALL*)(JNIEnv*, jclass, jlong, jint, jint, jintArray)>("publishSurfacePixels(JII[I)I");
+  jlong surface = create(&env, nullptr, 2, 1, 1);
+  std::vector<jint> pixels{static_cast<jint>(0x80112233u), static_cast<jint>(0xff445566u)};
+  CHECK(publish(&env, nullptr, surface, 2, 1, reinterpret_cast<jintArray>(&pixels)) == 0);
+  auto* window = venture::android::native_window_from_guest(static_cast<venture::GuestAddr>(surface));
+  REQUIRE(window);
+  REQUIRE(window->frame);
+  CHECK(window->frame->rgba == std::vector<std::uint8_t>{0x11, 0x22, 0x33, 0x80, 0x44, 0x55, 0x66, 0xff});
+  CHECK(publish(&env, nullptr, surface, 3, 1, reinterpret_cast<jintArray>(&pixels)) == -22);
+  release(&env, nullptr, surface);
+  CHECK(publish(&env, nullptr, surface, 2, 1, reinterpret_cast<jintArray>(&pixels)) == -19);
 }
 
 TEST_CASE(
