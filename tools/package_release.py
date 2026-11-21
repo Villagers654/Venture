@@ -98,6 +98,13 @@ THIRD_PARTY = ("licenses/*", "WebView2Loader.dll", "java/asm/*", "java/dex2jar/*
                "layoutlib/licenses/*")
 
 
+# Copied byte for byte from a hash-pinned archive (layoutlib's runtime JAR from
+# Google's Maven): no build of this machine wrote them, so their contents cannot
+# carry its paths or identity, and reading 250 MB of fonts and ICU data three
+# ways took half a minute here and minutes on CI. Their names are still checked.
+RECEIVED = ("layoutlib/lib/*", "layoutlib/data/*", "layoutlib/licenses/*")
+
+
 def is_third_party(name, patterns=THIRD_PARTY):
     return any(fnmatch.fnmatchcase(name, pattern) for pattern in patterns)
 
@@ -171,6 +178,8 @@ def scan(layout, forbidden, users=(), hosts=(), third_party=THIRD_PARTY):
         name = path.relative_to(layout).as_posix()
         patterns = own if is_third_party(name, third_party) else own + generic
         check(name.encode("utf-8"), name, own + generic)
+        if is_third_party(name, RECEIVED):
+            continue
         check(path.read_bytes(), name, patterns)
         if path.suffix.lower() in (".jar", ".zip"):
             with zipfile.ZipFile(path) as archive:

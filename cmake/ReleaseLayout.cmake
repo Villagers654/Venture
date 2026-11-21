@@ -32,6 +32,8 @@ if(TARGET venture AND TARGET venture-runtime)
       "${PROJECT_SOURCE_DIR}/tests/package_release_test.py"
       --build "${CMAKE_BINARY_DIR}" --angle "${VENTURE_ANGLE_ROOT}"
       --strip "${CMAKE_STRIP}" ${venture_import_tools})
-    set_tests_properties(release_layout PROPERTIES TIMEOUT 600)
+    # Packages the whole release, the 2D component included, and scans every file:
+    # about 3.5 minutes here and well over 10 on CI's Windows runners.
+    set_tests_properties(release_layout PROPERTIES TIMEOUT 1800)
   endif()
 endif()
