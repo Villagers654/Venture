@@ -626,7 +626,13 @@ TEST_CASE("Linux sees Steam running, and a Steam restart waits while Steam runs 
   CHECK(restart_blocker().find("620980") != std::string::npos);
   stop(game);
   stop(shell);
-  CHECK(restart_blocker().empty());
+  // A child the shell forked just before the kill shows the reaper's command line until it execs.
+  bool cleared = false;
+  for (int i = 0; i < 200 && !cleared; ++i) {
+    cleared = restart_blocker().empty();
+    if (!cleared) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  }
+  CHECK(cleared);
 }
 #endif
 TEST_CASE("gamescope's Wayland display stands in for an unset WAYLAND_DISPLAY when its socket exists") {

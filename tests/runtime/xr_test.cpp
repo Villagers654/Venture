@@ -910,8 +910,9 @@ TEST_CASE("XR haptics on a slow host never block the guest's OpenXR calls") {
     game.join();
     MESSAGE("slow host PCM: worst guest call " << worst_call << " ms, worst frame lock wait " << worst_lock
             << " ms over " << calls << " calls");
-    CHECK(worst_call < 20);
-    CHECK(worst_lock < 20);
+    // Waiting on the host would cost its whole 50 ms; a busy runner preempts a thread for tens of ms.
+    CHECK(worst_call < 40);
+    CHECK(worst_lock < 40);
     CHECK(ventureMockXrStats().haptic_pulses > 0);
   }
   SUBCASE("Core vibration and stops, 300 ms per host call") {

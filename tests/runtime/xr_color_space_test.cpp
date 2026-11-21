@@ -571,7 +571,9 @@ TEST_CASE("XR color pass draws from the game's image into a host image it only w
           for (unsigned c = 0; c < 3; ++c) {
             auto value = std::clamp(converted[c], 0., 1.);
             if (format == VK_FORMAT_R8G8B8A8_SRGB) value = encode(value);
-            CHECK(std::abs(int(output[i + c]) - int(std::lround(value * 255))) <= 1);
+            // Drivers approximate the sRGB encode on store: Mesa's lavapipe lands 2 steps off in the darks.
+            const int tolerance = format == VK_FORMAT_R8G8B8A8_SRGB ? 2 : 1;
+            CHECK(std::abs(int(output[i + c]) - int(std::lround(value * 255))) <= tolerance);
           }
           CHECK(output[i + 3] == original[i + 3]);
         }
