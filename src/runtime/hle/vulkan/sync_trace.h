@@ -18,13 +18,13 @@
 namespace venture::vulkan::sync_trace {
 // Opt-in compact sink uses the existing bounded per-thread diagnostic queues.
 // Producers never compress or write files. The ordinary trace remains unchanged.
-template<class... A> void write(std::format_string<A...> format, A&&... args) {
+template<class... A> void write(std::string_view format, A&&... args) {
   static const bool compact = environment::getenv("VENTURE_DIAGNOSTIC_TRACE_ZLIB") != nullptr;
-  if (!compact) { log::info("vk-sync", format, std::forward<A>(args)...); return; }
+  if (!compact) { log::info("vk-sync", format, args...); return; }
   const auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
       std::chrono::steady_clock::now().time_since_epoch()).count();
-  diagnostic_trace("vk-sync", std::format("t_ns={} {}", ns,
-      std::format(format, std::forward<A>(args)...)));
+  const auto detail = std::vformat(format.data(), std::make_format_args(args...));
+  diagnostic_trace("vk-sync", std::vformat("t_ns={} {}", std::make_format_args(ns, detail)));
 }
 template<class H> std::uint64_t handle(H h) {
   if constexpr (std::is_pointer_v<H>) return reinterpret_cast<std::uintptr_t>(h);

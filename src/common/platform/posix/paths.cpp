@@ -1,4 +1,5 @@
 #include "common/paths.h"
+#include "launcher/i18n/i18n.h"
 #include <cstdlib>
 #include <fstream>
 #include <sys/stat.h>
@@ -17,8 +18,7 @@ fs::path data_dir() {
       return migrate_data_dir(fs::path(p) / "venture", fs::path(p) / legacy_name);
     if (auto p = std::getenv("HOME"))
       return migrate_data_dir(fs::path(p) / ".local/share/venture", fs::path(p) / ".local/share" / legacy_name);
-    throw std::runtime_error(
-        "Set XDG_DATA_HOME or HOME to locate application data.");
+    throw std::runtime_error(i18n::tr("Set XDG_DATA_HOME or HOME to locate application data."));
   }();
   return directory;
 }
@@ -32,8 +32,7 @@ void atomic_write(const fs::path &file, std::string_view text) {
     out.write(text.data(), text.size());
     out.flush();
     if (!out)
-      throw std::runtime_error("Could not save local file. Check free space "
-                               "and folder permissions.");
+      throw std::runtime_error(i18n::tr("Could not save local file. Check free space and folder permissions."));
   }
   chmod(tmp.c_str(), 0600);
   replace_file(tmp, file);

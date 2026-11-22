@@ -1,5 +1,6 @@
 #include "launcher/window_style.h"
 #include "launcher/desktop_id.h"
+#include "launcher/i18n/i18n.h"
 
 #include <SDL3/SDL.h>
 
@@ -20,7 +21,7 @@ void prefer_native_video_driver() {
 }
 bool client_side_decorations() { return true; }
 const char* video_unavailable_message() {
-  return "The Venture launcher needs a Wayland session, and no Wayland display was reachable "
-         "(check WAYLAND_DISPLAY and XDG_RUNTIME_DIR).";
+  return i18n::tr("The Venture launcher needs a Wayland session, and no Wayland display was reachable "
+         "(check WAYLAND_DISPLAY and XDG_RUNTIME_DIR).");
 }
 }  // namespace venture::launcher

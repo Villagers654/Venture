@@ -3,6 +3,7 @@
 #include "common/log.h"
 #include "common/saves_migration.h"
 #include "common/file_ops.h"
+#include "launcher/i18n/i18n.h"
 #include <algorithm>
 #include <cctype>
 #include <cstdlib>
@@ -23,16 +24,16 @@ std::vector<std::string> install_problems(const fs::path &directory, const meta:
       auto part = target;
       part += ".part";
       if (paths::within(directory, part) && fs::is_regular_file(part, ec))
-        out.push_back(std::format("{} is still downloading ({} of {} bytes)", f.name, fs::file_size(part, ec), f.size));
+        out.push_back(i18n::trf("{0} is still downloading ({1} of {2} bytes)", f.name, fs::file_size(part, ec), f.size));
       else
-        out.push_back(f.name + " is missing");
+        out.push_back(f.name + i18n::tr(" is missing"));
       continue;
     }
     auto n = fs::file_size(target, ec);
     if (ec || !n)
-      out.push_back(f.name + " is empty");
+      out.push_back(f.name + i18n::tr(" is empty"));
     else if (f.size && f.size != n)
-      out.push_back(std::format("{} has {} bytes, the manifest says {}", f.name, n, f.size));
+      out.push_back(i18n::trf("{0} has {1} bytes, the manifest says {2}", f.name, n, f.size));
   }
   return out;
 }
@@ -65,7 +66,7 @@ std::vector<Install> scan(const fs::path &root, bool* authoritative) {
     auto iterator = fs::directory_iterator(directory, options, error);
     if (error) {
       if (!authoritative)
-        throw fs::filesystem_error("Cannot read installation directory.", directory, error);
+        throw fs::filesystem_error(i18n::tr("Cannot read installation directory."), directory, error);
       log::warn("library", "Cannot read {}: {}", paths::utf8(directory), error.message());
       reliable = false;
       return fs::directory_iterator{};
@@ -163,11 +164,11 @@ void merge(std::vector<meta::Game> &games, const meta::Snapshot &s,
            std::string_view account) {
   if (account.empty() || (!s.account_id.empty() && s.account_id != account))
     throw std::runtime_error(
-        "Meta account changed. Sign in again before refreshing.");
+        i18n::tr("Meta account changed. Sign in again before refreshing."));
   std::set<std::string> confirmed;
   for (auto &g : s.games) {
     if (!g.owned || !digits(g.id, 5) || g.platform == "PC")
-      throw std::runtime_error("Invalid Quest entitlement snapshot.");
+      throw std::runtime_error(i18n::tr("Invalid Quest entitlement snapshot."));
     confirmed.insert(g.id);
   }
   // Without a stable identity, absence is never used to revoke cached entries.
@@ -217,7 +218,7 @@ std::vector<meta::Game> load(const fs::path &file) {
   std::vector<meta::Game> games;
   if (number(j, "version") != 1 || !field(j, "games").is_array())
     throw std::runtime_error(
-        "Library cache is unreadable. Refresh your library.");
+        i18n::tr("Library cache is unreadable. Refresh your library."));
   for (auto &r : j["games"]) {
     if (!digits(str(r, "id"), 5))
       continue;
@@ -275,7 +276,7 @@ void uninstall(const fs::path &library, const Install &install) {
   if (fs::weakly_canonical(target) != fs::weakly_canonical(install.directory) ||
       !paths::within(root, target))
     throw std::runtime_error(
-        "Installation path changed. Rescan the library first.");
+        i18n::tr("Installation path changed. Rescan the library first."));
   // Refuse traversing reparse points even when the final target is still inside
   // root.
   for (auto p = target; p != root && paths::within(root, p);
@@ -283,12 +284,12 @@ void uninstall(const fs::path &library, const Install &install) {
     if (fs::is_symlink(p) ||
         fs::weakly_canonical(p) != fs::absolute(p).lexically_normal())
       throw std::runtime_error(
-          "Cannot uninstall a linked installation directory.");
+          i18n::tr("Cannot uninstall a linked installation directory."));
   auto manifest = meta::parse_plan(paths::read_json(target / "plan.json"));
   if (manifest.app_id != install.plan.app_id ||
       manifest.binary_id != install.plan.binary_id)
     throw std::runtime_error(
-        "Installation changed. Rescan before uninstalling.");
+        i18n::tr("Installation changed. Rescan before uninstalling."));
   remove_obb_aliases(paths::data_dir(), install.plan.package, target,
                      install.plan.pinned ? install.plan.folder() : std::string());
   // The manifest goes last: an uninstall that cannot remove a file (the game
@@ -390,12 +391,12 @@ void refresh_catalog(const fs::path &root, const meta::Plan &catalog) {
   auto dir = paths::game_dir(root, catalog.package, catalog.folder());
   if (!paths::within(dir, dir / "plan.json") ||
       !paths::within(dir, dir / "plan.json.tmp"))
-    throw std::runtime_error("Unsafe installation manifest path.");
+    throw std::runtime_error(i18n::tr("Unsafe installation manifest path."));
   auto previous = meta::parse_plan(paths::read_json(dir / "plan.json"));
   if (previous.app_id != catalog.app_id ||
       previous.binary_id != catalog.binary_id)
     throw std::runtime_error(
-        "Installed build does not match the add-on catalog.");
+        i18n::tr("Installed build does not match the add-on catalog."));
   if (!meta::catalog_replaces(catalog, previous))
     throw std::runtime_error(meta::catalog_unavailable);
   auto plan = catalog;
@@ -445,32 +446,32 @@ void uninstall_addon(const fs::path &root, const Install &install,
   auto target =
       paths::game_dir(root, install.plan.package, install.plan.folder());
   if (fs::weakly_canonical(target) != fs::weakly_canonical(install.directory))
-    throw std::runtime_error("Installation path changed. Rescan first.");
+    throw std::runtime_error(i18n::tr("Installation path changed. Rescan first."));
   if (!paths::within(target, target / "plan.json") ||
       !paths::within(target, target / "plan.json.tmp"))
-    throw std::runtime_error("Unsafe installation manifest path.");
+    throw std::runtime_error(i18n::tr("Unsafe installation manifest path."));
   auto manifest = meta::parse_plan(paths::read_json(target / "plan.json"));
   if (manifest.app_id != install.plan.app_id ||
       manifest.binary_id != install.plan.binary_id)
     throw std::runtime_error(
-        "Installation changed. Rescan before removing an add-on.");
+        i18n::tr("Installation changed. Rescan before removing an add-on."));
   std::vector<fs::path> files;
   for (auto &f : manifest.files) {
     if (f.sku != sku)
       continue;
     if (f.base() || f.kind != "asset")
-      throw std::runtime_error("Invalid add-on file.");
+      throw std::runtime_error(i18n::tr("Invalid add-on file."));
     auto path = target / paths::from_utf8(f.name);
     for (auto candidate :
          {path, paths::from_utf8(paths::utf8(path) + ".part")}) {
       if (!paths::within(target, candidate) ||
           (fs::exists(candidate) && !fs::is_regular_file(candidate)))
-        throw std::runtime_error("Cannot remove an unsafe add-on file.");
+        throw std::runtime_error(i18n::tr("Cannot remove an unsafe add-on file."));
       files.push_back(std::move(candidate));
     }
   }
   if (files.empty())
-    throw std::runtime_error("Add-on is absent from the installed catalog.");
+    throw std::runtime_error(i18n::tr("Add-on is absent from the installed catalog."));
   // Remove the published state first; a failed/partial removal remains visibly
   // uninstalled and can be retried without touching the base game's files.
   std::erase(manifest.installed_addons, sku);
@@ -701,37 +702,37 @@ std::string runtime_failure(std::string_view tail, int code) {
   }
   // main() reports a failed launch as "[runtime] <reason>".
   if (!last_runtime.empty())
-    return std::string(last_runtime) + (dump.empty() ? "" : std::format(" Crash dump: {}", dump));
+    return std::string(last_runtime) + (dump.empty() ? "" : i18n::trf(" Crash dump: {}", dump));
   const auto exit_code = code < 0 || code > 255
       ? std::format("0x{:08X}", static_cast<std::uint32_t>(code)) : std::to_string(code);
   // A game without its VR session crashes on the invalid handle later
   // (OVRPlugin aborts in ovrp_SetupLayer); the failed session is the cause.
   if (!session.empty())
-    return std::format("{}. The game stopped after that (exit code {}).", session, exit_code) +
-        (dump.empty() ? "" : std::format(" Crash dump: {}", dump));
+    return i18n::trf("{0}. The game stopped after that (exit code {1}).", session, exit_code) +
+        (dump.empty() ? "" : i18n::trf(" Crash dump: {}", dump));
   // A hung game that was closed did not crash: say so instead of quoting an
   // unrelated error line. A fatal signal still outranks the stall.
   if (stalled && fatal.empty() && guest_fault.empty() && java_fatal.empty())
-    return std::format("The game stopped responding{} and was closed (exit code {}).",
-                       stall_seconds.empty() ? "" : std::format(" (no new frame for {} s)", stall_seconds),
+    return i18n::trf("The game stopped responding{0} and was closed (exit code {1}).",
+                       stall_seconds.empty() ? "" : i18n::trf(" (no new frame for {} s)", stall_seconds),
                        exit_code) +
-           (dump.empty() ? "" : std::format(" Crash dump: {}", dump));
+           (dump.empty() ? "" : i18n::trf(" Crash dump: {}", dump));
   // Anything else (a crash) gets the exit code; the last error line is context
   // only, because some subsystems log recoverable errors.
-  auto message = std::format("The runtime stopped unexpectedly (exit code {}).", exit_code);
+  auto message = i18n::trf("The runtime stopped unexpectedly (exit code {}).", exit_code);
   // A fatal signal outranks error lines around it: a game's own non-fatal
   // errors (a failed HTTPS request) are often logged last, even after it.
   if (!java_fatal.empty())
-    message += std::format(" Last error: {}", java_fatal);
+    message += i18n::trf(" Last error: {}", java_fatal);
   else if (!fatal.empty())
-    message += cause.empty() ? std::format(" Last error: {}", fatal)
-                             : std::format(" Last error: {} ({})", cause, fatal);
+    message += cause.empty() ? i18n::trf(" Last error: {}", fatal)
+                             : i18n::trf(" Last error: {0} ({1})", cause, fatal);
   else if (!guest_fault.empty())
-    message += guest_cause.empty() ? std::format(" Last error: {}", guest_fault)
-                                   : std::format(" Last error: {} ({})", guest_cause, guest_fault);
+    message += guest_cause.empty() ? i18n::trf(" Last error: {}", guest_fault)
+                                   : i18n::trf(" Last error: {0} ({1})", guest_cause, guest_fault);
   else if (!last.empty())
-    message += std::format(" Last error: {}", last);
-  if (!dump.empty()) message += std::format(" Crash dump: {}", dump);
+    message += i18n::trf(" Last error: {}", last);
+  if (!dump.empty()) message += i18n::trf(" Crash dump: {}", dump);
   return message;
 }
 void rotate_log(const fs::path &log) {
@@ -868,7 +869,7 @@ Settings Settings::load(const fs::path &data) {
 void Settings::save(const fs::path &data) const {
   if (!games.is_absolute() || !runtime.is_absolute())
     throw std::runtime_error(
-        "Use absolute paths for the games folder and runtime executable.");
+        i18n::tr("Use absolute paths for the games folder and runtime executable."));
   fs::create_directories(games);
   Json j{{"version", 1},
          {"gamesDirectory", paths::utf8(games)},
@@ -913,7 +914,7 @@ void Settings::save(const fs::path &data) const {
   }
   if (!adb.empty()) {
     if (!adb.is_absolute())
-      throw std::runtime_error("Use an absolute path for adb.");
+      throw std::runtime_error(i18n::tr("Use an absolute path for adb."));
     j["adbExecutable"] = paths::utf8(adb);
   }
   paths::atomic_write(data / "settings.json", j.dump(2));

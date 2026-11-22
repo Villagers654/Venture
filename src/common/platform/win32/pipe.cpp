@@ -1,4 +1,5 @@
 #include "common/platform/pipe.h"
+#include "launcher/i18n/i18n.h"
 #include <stdexcept>
 #include <windows.h>
 
@@ -14,7 +15,7 @@ std::array<std::uintptr_t, 4> make_pipes() {
     for (auto handle : {parent_read, parent_write, child_read, child_write})
       if (handle)
         CloseHandle(handle);
-    throw std::runtime_error("Could not create credential broker pipes.");
+    throw std::runtime_error(i18n::tr("Could not create credential broker pipes."));
   }
   return {reinterpret_cast<std::uintptr_t>(parent_read),
           reinterpret_cast<std::uintptr_t>(parent_write),
@@ -35,7 +36,7 @@ void read_pipe(std::uintptr_t h, void *out, std::size_t size) {
     if (!ReadFile(reinterpret_cast<HANDLE>(h), data, static_cast<DWORD>(size),
                   &n, nullptr) ||
         !n)
-      throw std::runtime_error("Credential broker pipe closed.");
+      throw std::runtime_error(i18n::tr("Credential broker pipe closed."));
     data += n;
     size -= n;
   }
@@ -47,7 +48,7 @@ void write_pipe(std::uintptr_t h, const void *in, std::size_t size) {
     if (!WriteFile(reinterpret_cast<HANDLE>(h), data, static_cast<DWORD>(size),
                    &n, nullptr) ||
         !n)
-      throw std::runtime_error("Credential broker pipe closed.");
+      throw std::runtime_error(i18n::tr("Credential broker pipe closed."));
     data += n;
     size -= n;
   }

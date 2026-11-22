@@ -1,5 +1,6 @@
 #include "common/ipc.h"
 #include "common/platform/pipe.h"
+#include "launcher/i18n/i18n.h"
 #include <limits>
 
 namespace venture {
@@ -18,16 +19,16 @@ std::shared_ptr<PipeChannel> PipeChannel::inherited(std::uintptr_t read,
                                                     std::uintptr_t write) {
   if (!platform::valid_pipe(read) || !platform::valid_pipe(write) ||
       read == write)
-    throw std::runtime_error("Invalid inherited credential channel.");
+    throw std::runtime_error(i18n::tr("Invalid inherited credential channel."));
   return std::shared_ptr<PipeChannel>(new PipeChannel(read, write));
 }
 void PipeChannel::send(const Json &value) {
   // A closed channel's handles are 0, which on POSIX is stdin: never use it.
   if (!write_.load())
-    throw std::runtime_error("Credential channel is closed.");
+    throw std::runtime_error(i18n::tr("Credential channel is closed."));
   auto bytes = value.dump();
   if (bytes.empty() || bytes.size() > 1024 * 1024)
-    throw std::runtime_error("Credential channel message exceeds its limit.");
+    throw std::runtime_error(i18n::tr("Credential channel message exceeds its limit."));
   std::array<unsigned char, 4> length{};
   for (unsigned i = 0; i < 4; ++i)
     length[i] = static_cast<unsigned char>(bytes.size() >> (8 * i));
@@ -36,19 +37,19 @@ void PipeChannel::send(const Json &value) {
 }
 Json PipeChannel::receive() {
   if (!read_.load())
-    throw std::runtime_error("Credential channel is closed.");
+    throw std::runtime_error(i18n::tr("Credential channel is closed."));
   std::array<unsigned char, 4> length{};
   platform::read_pipe(read_.load(), length.data(), length.size());
   std::uint32_t size = 0;
   for (unsigned i = 0; i < 4; ++i)
     size |= std::uint32_t(length[i]) << (8 * i);
   if (!size || size > 1024 * 1024)
-    throw std::runtime_error("Invalid credential channel message length.");
+    throw std::runtime_error(i18n::tr("Invalid credential channel message length."));
   std::string bytes(size, '\0');
   platform::read_pipe(read_.load(), bytes.data(), bytes.size());
   auto j = Json::parse(bytes, nullptr, false);
   if (!j.is_object())
-    throw std::runtime_error("Invalid credential channel message.");
+    throw std::runtime_error(i18n::tr("Invalid credential channel message."));
   return j;
 }
 Json PipeChannel::call(const Json &request) {
@@ -64,7 +65,7 @@ void PipeChannel::serve(const Handler &handler, std::stop_token stop) {
       try {
         response = handler(request);
       } catch (...) {
-        response = Json{{"error", "Credential broker unavailable"}};
+        response = Json{{"error", i18n::tr("Credential broker unavailable")}};
       }
       send(response);
     }

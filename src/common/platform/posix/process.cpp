@@ -1,5 +1,6 @@
 #include "common/process.h"
 #include "common/platform/posix/dbus.h"
+#include "launcher/i18n/i18n.h"
 #include <algorithm>
 #include <csignal>
 #include <fcntl.h>
@@ -39,7 +40,7 @@ void Process::spawn(const fs::path &exe, const std::vector<std::string> &args,
                     const fs::path &log, bool, PipeChannel::Handler broker,
                     const Environment &environment) {
   if (active())
-    throw std::runtime_error("This game is already running.");
+    throw std::runtime_error(i18n::tr("This game is already running."));
   fs::create_directories(log.parent_path());
   std::vector<std::string> storage{exe.string()};
   storage.insert(storage.end(), args.begin(), args.end());
@@ -84,8 +85,7 @@ void Process::spawn(const fs::path &exe, const std::vector<std::string> &args,
                            envp.data());
   posix_spawn_file_actions_destroy(&actions);
   if (error)
-    throw std::runtime_error(
-        "Could not start runtime. Check its executable path and permissions.");
+    throw std::runtime_error(i18n::tr("Could not start runtime. Check its executable path and permissions."));
   impl_ = std::make_unique<Impl>();
   impl_->pid = pid;
   if (broker) {
@@ -112,11 +112,11 @@ int run_tool(const fs::path &exe, const std::vector<std::string> &args,
              std::string *error, std::stop_token stop) {
   int out[2], err[2];
   if (pipe2(out, O_CLOEXEC))
-    throw std::runtime_error("Could not start " + exe.filename().string() + ".");
+    throw std::runtime_error(i18n::trf("Could not start {0}.", exe.filename().string()));
   if (pipe2(err, O_CLOEXEC)) {
     close(out[0]);
     close(out[1]);
-    throw std::runtime_error("Could not start " + exe.filename().string() + ".");
+    throw std::runtime_error(i18n::trf("Could not start {0}.", exe.filename().string()));
   }
   std::vector<std::string> storage{exe.string()};
   storage.insert(storage.end(), args.begin(), args.end());
@@ -137,7 +137,7 @@ int run_tool(const fs::path &exe, const std::vector<std::string> &args,
   if (failed) {
     close(out[0]);
     close(err[0]);
-    throw std::runtime_error("Could not start " + exe.filename().string() + ".");
+    throw std::runtime_error(i18n::trf("Could not start {0}.", exe.filename().string()));
   }
   bool stopped = false;
   std::optional<int> status;
@@ -223,7 +223,7 @@ bool portal_open(const fs::path &p, int flags, bool (*open_fd)(int)) {
 void open_folder(const fs::path &p) {
   if (portal_open(p, O_DIRECTORY, dbus::portal_open_file)) return;
   if (!fs::is_directory(p) || !xdg_open(p.c_str()))
-    throw std::runtime_error("Could not open the game folder.");
+    throw std::runtime_error(i18n::tr("Could not open the game folder."));
 }
 // OpenDirectory shows the file selected in its folder.
 void reveal_file(const fs::path &file) {
@@ -231,7 +231,7 @@ void reveal_file(const fs::path &file) {
 }
 void open_url(const std::string &url) {
   if (!dbus::portal_open_uri(url) && !xdg_open(url.c_str()))
-    throw std::runtime_error("Could not open the link.");
+    throw std::runtime_error(i18n::tr("Could not open the link."));
 }
 void start_detached(const fs::path &executable, const std::vector<std::string> &args) {
   std::vector<char *> argv{const_cast<char *>(executable.c_str())};
@@ -243,7 +243,7 @@ void start_detached(const fs::path &executable, const std::vector<std::string> &
   pid_t pid = -1;
   const int error = posix_spawn(&pid, executable.c_str(), nullptr, &attr, argv.data(), environ);
   posix_spawnattr_destroy(&attr);
-  if (error != 0) throw std::runtime_error("Could not start " + executable.filename().string() + ".");
+  if (error != 0) throw std::runtime_error(i18n::trf("Could not start {0}.", executable.filename().string()));
   std::thread([pid] { waitpid(pid, nullptr, 0); }).detach();
 }
 } // namespace venture

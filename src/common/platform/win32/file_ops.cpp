@@ -1,5 +1,6 @@
 #include "common/file_ops.h"
 #include "common/platform/win32/native_path.h"
+#include "launcher/i18n/i18n.h"
 #include <array>
 #include <cstring>
 #include <vector>
@@ -21,7 +22,7 @@ struct FileLock::Impl {
 };
 FileLock::FileLock(const fs::path &file, bool wait) : impl_(std::make_unique<Impl>()) {
   if (is_link(file) || is_link(file.parent_path()))
-    throw std::runtime_error("Cannot lock account data through a linked path.");
+    throw std::runtime_error(i18n::tr("Cannot lock account data through a linked path."));
   fs::create_directories(file.parent_path());
   impl_->handle = CreateFileW(platform::native_path(file).c_str(), GENERIC_READ | GENERIC_WRITE,
                               FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
@@ -29,7 +30,7 @@ FileLock::FileLock(const fs::path &file, bool wait) : impl_(std::make_unique<Imp
   if (impl_->handle == INVALID_HANDLE_VALUE ||
       !LockFileEx(impl_->handle, LOCKFILE_EXCLUSIVE_LOCK | (wait ? 0 : LOCKFILE_FAIL_IMMEDIATELY), 0, 1, 0,
                   &impl_->overlap))
-    throw std::runtime_error("Could not lock Venture account data.");
+    throw std::runtime_error(i18n::tr("Could not lock Venture account data."));
 }
 FileLock::~FileLock() = default;
 MappedFile::MappedFile(const fs::path &file) {
@@ -55,7 +56,7 @@ std::string random_account_key() {
   std::array<unsigned char, 6> bytes{};
   if (BCryptGenRandom(nullptr, bytes.data(), bytes.size(),
                       BCRYPT_USE_SYSTEM_PREFERRED_RNG) < 0)
-    throw std::runtime_error("Could not generate an account key.");
+    throw std::runtime_error(i18n::tr("Could not generate an account key."));
   std::string key;
   for (auto b : bytes) {
     key += "0123456789abcdef"[b >> 4];
@@ -69,7 +70,7 @@ bool is_link(const fs::path &path) {
     auto error = GetLastError();
     if (error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND)
       return false;
-    throw std::runtime_error("Could not inspect local data directory.");
+    throw std::runtime_error(i18n::tr("Could not inspect local data directory."));
   }
   return (attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0;
 }
@@ -104,7 +105,7 @@ void erase(const fs::path &path) {
     auto error = GetLastError();
     if (error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND)
       return;
-    throw std::runtime_error("Could not inspect local data for removal.");
+    throw std::runtime_error(i18n::tr("Could not inspect local data for removal."));
   }
   if ((attributes & FILE_ATTRIBUTE_DIRECTORY) &&
       !(attributes & FILE_ATTRIBUTE_REPARSE_POINT))
@@ -115,7 +116,7 @@ void erase(const fs::path &path) {
                       : DeleteFileW(native.c_str());
   if (!ok)
     throw std::runtime_error(
-        "Could not remove local data. Close the game or sign-in window first.");
+        i18n::tr("Could not remove local data. Close the game or sign-in window first."));
 }
 } // namespace
 void remove_tree(const fs::path &root, const fs::path &target) {
@@ -123,16 +124,16 @@ void remove_tree(const fs::path &root, const fs::path &target) {
                  t{platform::native_path(target)};
   auto relative = t.lexically_relative(r);
   if (relative.empty() || relative == "." || relative.has_root_path())
-    throw std::runtime_error("Invalid local data removal boundary.");
+    throw std::runtime_error(i18n::tr("Invalid local data removal boundary."));
   for (const auto &part : relative)
     if (part == "..")
-      throw std::runtime_error("Local data removal escapes its root.");
+      throw std::runtime_error(i18n::tr("Local data removal escapes its root."));
   for (auto p = t.parent_path(); p != r; p = p.parent_path())
     if (is_link(p))
       throw std::runtime_error(
-          "Cannot remove data through a linked directory.");
+          i18n::tr("Cannot remove data through a linked directory."));
   if (is_link(r))
-    throw std::runtime_error("Cannot remove data through a linked root.");
+    throw std::runtime_error(i18n::tr("Cannot remove data through a linked root."));
   erase(t);
 }
 void link_directory(const fs::path &link, const fs::path &target) {

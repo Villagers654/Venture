@@ -95,9 +95,9 @@ Frame cpu_frame(Cpu& cpu) {
 }
 // Host crash reports write guest frames after the logger turned terminal.
 bool crash_output = false;
-template <class... A> void report(std::format_string<A...> format, A&&... args) {
-  if (!crash_output) return log::error("signal", format, std::forward<A>(args)...);
-  const auto line = " E [signal] " + std::format(format, std::forward<A>(args)...) + "\n";
+template <class... A> void report(std::string_view format, A&&... args) {
+  if (!crash_output) return log::error("signal", format, args...);
+  const auto line = " E [signal] " + std::vformat(format.data(), std::make_format_args(args...)) + "\n";
   log::crash_write(line.data(), line.size());
 }
 // debuggerd's tombstone register block (libdebuggerd/tombstone.cpp print_thread_registers): four per line.

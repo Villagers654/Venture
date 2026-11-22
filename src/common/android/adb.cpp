@@ -3,6 +3,7 @@
 #include "common/environment.h"
 #include "common/log.h"
 #include "common/process.h"
+#include "launcher/i18n/i18n.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -163,14 +164,14 @@ std::vector<App> parse_files(std::string_view listing,
 std::string state_message(const Device &d) {
   if (d.ready()) return {};
   if (d.state == "unauthorized")
-    return "The headset has not authorized USB debugging for this computer. Put it on and choose Allow "
-           "(tick Always allow) in the prompt.";
+    return i18n::tr("The headset has not authorized USB debugging for this computer. Put it on and choose Allow "
+                    "(tick Always allow) in the prompt.");
   if (d.state == "no permissions")
-    return "This computer has no permission to use the headset's USB connection. Install the Android udev "
-           "rules (android-udev-rules) or reconnect the cable.";
-  if (d.state == "offline") return "The headset is connected but offline. Unplug it and plug it back in.";
-  if (d.state == "authorizing" || d.state == "connecting") return "Connecting to the headset...";
-  return "The headset is not ready (" + d.state + ").";
+    return i18n::tr("This computer has no permission to use the headset's USB connection. Install the Android udev "
+                    "rules (android-udev-rules) or reconnect the cable.");
+  if (d.state == "offline") return i18n::tr("The headset is connected but offline. Unplug it and plug it back in.");
+  if (d.state == "authorizing" || d.state == "connecting") return i18n::tr("Connecting to the headset...");
+  return i18n::trf("The headset is not ready ({0}).", d.state);
 }
 
 Client::Client(fs::path adb, std::string serial) : adb_(std::move(adb)), serial_(std::move(serial)) {}
@@ -183,7 +184,7 @@ std::vector<Device> Client::devices(std::stop_token stop) const {
   const int code = run_tool(adb_, {"devices", "-l"}, [&](std::string_view s) { out += s; }, &error, stop);
   if (code != 0) {
     auto reason = first_error(error);
-    throw std::runtime_error("adb could not list devices" + (reason.empty() ? "." : ": " + reason));
+    throw std::runtime_error(i18n::trf("adb could not list devices{0}", reason.empty() ? std::string(".") : std::string(": ") + reason));
   }
   return parse_devices(out);
 }
@@ -192,10 +193,10 @@ std::string Client::shell(const std::string &command, std::stop_token stop) cons
   args.insert(args.end(), {"shell", command});
   std::string out, error;
   const int code = run_tool(adb_, args, [&](std::string_view s) { out += s; }, &error, stop);
-  if (stop.stop_requested()) throw std::runtime_error("Cancelled.");
+  if (stop.stop_requested()) throw std::runtime_error(i18n::tr("Cancelled."));
   if (code != 0) {
     auto reason = first_error(error);
-    throw std::runtime_error("The headset did not answer" + (reason.empty() ? "." : ": " + reason));
+    throw std::runtime_error(i18n::trf("The headset did not answer{0}", reason.empty() ? std::string(".") : std::string(": ") + reason));
   }
   return out;
 }
@@ -233,7 +234,7 @@ void Client::pull(const RemoteFile &file, const std::function<void(std::span<con
                   std::stop_token stop, std::uint64_t offset) const {
   const auto quoted = quote(file.path);
   if (!quoted || offset % kPullBlock || offset > file.size)
-    throw std::runtime_error("The headset reported an unsupported file name.");
+    throw std::runtime_error(i18n::tr("The headset reported an unsupported file name."));
   // exec-out is binary-clean (no pty), so the stream is the file itself.
   auto args = base();
   args.insert(args.end(), {"exec-out", offset ? std::format("dd if={} bs={} skip={} 2>/dev/null", *quoted,
@@ -248,7 +249,7 @@ void Client::pull(const RemoteFile &file, const std::function<void(std::span<con
         sink({reinterpret_cast<const std::uint8_t *>(chunk.data()), chunk.size()});
       },
       &error, stop);
-  if (stop.stop_requested()) throw std::runtime_error("Transfer paused.");
+  if (stop.stop_requested()) throw std::runtime_error(i18n::tr("Transfer paused."));
   if (code != 0 || received != file.size - offset) {
     // exec-out drops the remote command's errors. Ask the headset again through
     // the shell, which reports them, to tell a changed or unreadable file from
@@ -270,10 +271,10 @@ void Client::pull(const RemoteFile &file, const std::function<void(std::span<con
     log::warn("adb", "Transfer of {} stopped: exit {}, {} of {} bytes from offset {}; now {} bytes, readable {}; {}",
               file.path, code, received, file.size - offset, offset, size, readable, reason.empty() ? "no error" : reason);
     if (changed)
-      throw std::runtime_error(name + " changed on the headset while it was copied. Close the game on the headset and retry.");
+      throw std::runtime_error(i18n::trf("{0} changed on the headset while it was copied. Close the game on the headset and retry.", name));
     if (!reason.empty())
-      throw std::runtime_error("The headset could not send " + name + ": " + reason);
-    throw std::runtime_error("The headset transfer of " + name + " stopped early. Check the cable and retry.");
+      throw std::runtime_error(i18n::trf("The headset could not send {0}: {1}", name, reason));
+    throw std::runtime_error(i18n::trf("The headset transfer of {0} stopped early. Check the cable and retry.", name));
   }
 }
 std::optional<std::string> Client::sha256(const RemoteFile &file, std::stop_token stop) const {
@@ -289,29 +290,29 @@ std::optional<std::string> Client::sha256(const RemoteFile &file, std::stop_toke
   return hash;
 }
 void Client::push(const fs::path &local, std::string_view remote, std::stop_token stop) const {
-  if (!quote(remote)) throw std::runtime_error("Unsupported path on the headset: " + std::string(remote));
+  if (!quote(remote)) throw std::runtime_error(i18n::trf("Unsupported path on the headset: {0}", std::string(remote)));
   auto args = base();
   args.insert(args.end(), {"push", paths::utf8(local), std::string(remote)});
   std::string error;
   // adb push prints progress on stdout; failures go to stderr.
   const int code = run_tool(adb_, args, [](std::string_view) {}, &error, stop);
-  if (stop.stop_requested()) throw std::runtime_error("Cancelled.");
+  if (stop.stop_requested()) throw std::runtime_error(i18n::tr("Cancelled."));
   if (code != 0) {
     auto reason = first_error(error);
-    throw std::runtime_error("Copying to the headset failed" + (reason.empty() ? ". Check the cable and retry." : ": " + reason));
+    throw std::runtime_error(i18n::trf("Copying to the headset failed{0}", reason.empty() ? std::string(i18n::tr(". Check the cable and retry.")) : std::string(": ") + reason));
   }
 }
 std::string Client::connect(std::string_view address, std::stop_token stop) const {
   auto valid = !address.empty() && address.size() < 256 && std::ranges::all_of(address, [](unsigned char c) {
     return std::isalnum(c) || std::string_view(".:-_[]").find(char(c)) != std::string_view::npos;
   });
-  if (!valid) throw std::runtime_error("Enter the headset's IP address, like 192.168.1.20 or 192.168.1.20:5555.");
+  if (!valid) throw std::runtime_error(i18n::tr("Enter the headset's IP address, like 192.168.1.20 or 192.168.1.20:5555."));
   std::string out, error;
   run_tool(adb_, {"connect", std::string(address)}, [&](std::string_view s) { out += s; }, &error, stop);
   // adb connect reports failure in its output, often with exit status 0.
   const auto reply = first_error(out.empty() ? error : out);
   if (!reply.starts_with("connected to ") && !reply.starts_with("already connected to "))
-    throw std::runtime_error("Could not connect to the headset" + (reply.empty() ? "." : ": " + reply));
+    throw std::runtime_error(i18n::trf("Could not connect to the headset{0}", reply.empty() ? std::string(".") : std::string(": ") + reply));
   return reply.substr(reply.find("connected to ") + 13);
 }
 }  // namespace venture::android::adb

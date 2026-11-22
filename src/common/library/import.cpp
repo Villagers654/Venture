@@ -2,6 +2,7 @@
 
 #include "common/android/archive.h"
 #include "common/log.h"
+#include "launcher/i18n/i18n.h"
 
 #include <algorithm>
 #include <fstream>
@@ -28,12 +29,12 @@ protected:
                  const std::function<void(std::span<const std::uint8_t>)> &sink,
                  std::stop_token stop) const override {
     std::ifstream in(paths::from_utf8(file.location), std::ios::binary);
-    if (!in) throw std::runtime_error("Could not read " + file.name + " from the import folder.");
+    if (!in) throw std::runtime_error(i18n::trf("Could not read {0} from the import folder.", file.name));
     in.seekg(std::streamoff(offset));
     std::vector<std::uint8_t> buffer(1 << 20);
     std::uint64_t total = offset;
     while (in) {
-      if (stop.stop_requested()) throw std::runtime_error("Transfer paused.");
+      if (stop.stop_requested()) throw std::runtime_error(i18n::tr("Transfer paused."));
       in.read(reinterpret_cast<char *>(buffer.data()), std::streamsize(buffer.size()));
       const auto n = std::size_t(in.gcount());
       if (!n) break;
@@ -41,7 +42,7 @@ protected:
       sink({buffer.data(), n});
     }
     if (in.bad() || total != file.size)
-      throw std::runtime_error(file.name + " changed or could not be read while importing.");
+      throw std::runtime_error(i18n::trf("{0} changed or could not be read while importing.", file.name));
   }
 
 private:
@@ -61,7 +62,7 @@ protected:
                  const std::function<void(std::span<const std::uint8_t>)> &sink,
                  std::stop_token stop) const override {
     const auto *entry = archive_->find(file.location);
-    if (!entry || entry->size != file.size) throw std::runtime_error(file.name + " is no longer in the archive.");
+    if (!entry || entry->size != file.size) throw std::runtime_error(i18n::trf("{0} is no longer in the archive.", file.name));
     // Compressed members only read from the start; skip what is already there.
     std::uint64_t skip = offset;
     archive_->extract(
@@ -159,7 +160,7 @@ std::vector<std::unique_ptr<Source>> open_local(const fs::path &picked, std::sto
   std::error_code ec;
   if (fs::is_regular_file(picked, ec) && !is_apk(picked)) {
     if (!android::is_archive(picked))
-      throw std::runtime_error("Choose an APK, a folder, or a ZIP archive holding an APK and its data folder.");
+      throw std::runtime_error(i18n::tr("Choose an APK, a folder, or a ZIP archive holding an APK and its data folder."));
     auto archive = std::make_shared<android::Archive>(picked);
     std::vector<std::pair<std::string, std::uint64_t>> listing;
     for (auto &e : archive->entries()) listing.emplace_back(e.name, e.size);
@@ -170,7 +171,7 @@ std::vector<std::unique_ptr<Source>> open_local(const fs::path &picked, std::sto
       // An APK inside an archive is read in memory for its manifest only.
       android::Manifest manifest;
       try {
-        if (e.size > (1ull << 31)) throw std::runtime_error("too large to inspect");
+        if (e.size > (1ull << 31)) throw std::runtime_error(i18n::tr("too large to inspect"));
         std::vector<std::uint8_t> bytes;
         bytes.reserve(e.size);
         archive->extract(e, [&](auto chunk) { bytes.insert(bytes.end(), chunk.begin(), chunk.end()); }, stop);
@@ -225,11 +226,11 @@ std::vector<std::unique_ptr<Source>> open_local(const fs::path &picked, std::sto
       out.push_back(std::move(source));
     }
     if (out.empty())
-      throw std::runtime_error(file ? "This APK could not be read." : "No Android app (APK) was found in this folder.");
+      throw std::runtime_error(file ? i18n::tr("This APK could not be read.") : i18n::tr("No Android app (APK) was found in this folder."));
   } else {
-    throw std::runtime_error("The chosen file or folder no longer exists.");
+    throw std::runtime_error(i18n::tr("The chosen file or folder no longer exists."));
   }
-  if (out.empty()) throw std::runtime_error("No Android app (APK) was found in this archive.");
+  if (out.empty()) throw std::runtime_error(i18n::tr("No Android app (APK) was found in this archive."));
   return out;
 }
 
@@ -266,20 +267,20 @@ std::unique_ptr<Source> reopen(std::string_view spec, std::string_view package, 
   if (spec.starts_with("path:")) {
     for (auto &source : open_local(paths::from_utf8(spec.substr(5)), stop))
       if (source->manifest.package == package) return std::move(source);
-    throw std::runtime_error("The import folder no longer holds this game.");
+    throw std::runtime_error(i18n::tr("The import folder no longer holds this game."));
   }
   if (spec.starts_with("adb:")) {
-    if (adb.empty()) throw std::runtime_error("Android platform-tools (adb) were not found. Set adb in Settings.");
+    if (adb.empty()) throw std::runtime_error(i18n::tr("Android platform-tools (adb) were not found. Set adb in Settings."));
     android::adb::Client client(adb, std::string(spec.substr(4)));
     auto devices = client.devices(stop);
     auto device = std::ranges::find(devices, client.serial(), &android::adb::Device::serial);
-    if (device == devices.end()) throw std::runtime_error("Connect the headset to resume this import.");
+    if (device == devices.end()) throw std::runtime_error(i18n::tr("Connect the headset to resume this import."));
     if (!device->ready()) throw std::runtime_error(android::adb::state_message(*device));
     auto app = client.app(package, stop);
-    if (!app) throw std::runtime_error("The game is no longer installed on the headset.");
+    if (!app) throw std::runtime_error(i18n::tr("The game is no longer installed on the headset."));
     return open_device(client, *app);
   }
-  throw std::runtime_error("Unknown import source.");
+  throw std::runtime_error(i18n::tr("Unknown import source."));
 }
 
 Plan plan(const meta::Plan &catalog, const Source &source) {

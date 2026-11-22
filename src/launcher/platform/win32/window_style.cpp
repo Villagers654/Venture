@@ -1,6 +1,7 @@
 #include "launcher/window_style.h"
 
 #include "common/environment.h"
+#include "launcher/i18n/i18n.h"
 
 #include <string_view>
 
@@ -31,5 +32,5 @@ bool client_side_decorations() {
   }();
   return forced;
 }
-const char* video_unavailable_message() { return "Could not initialize SDL video."; }
+const char* video_unavailable_message() { return i18n::tr("Could not initialize SDL video."); }
 }  // namespace venture::launcher

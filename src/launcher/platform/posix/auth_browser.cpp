@@ -1,5 +1,6 @@
 #include "launcher/auth_browser.h"
 #include "launcher/desktop_id.h"
+#include "launcher/i18n/i18n.h"
 #include "common/log.h"
 #include "common/meta/auth.h"
 #include <atomic>
@@ -293,7 +294,7 @@ void on_popup_close(void *, void *window) {
   w.api == 6 ? w.destroy4(window) : w.destroy3(window);
 }
 void on_popup_ready(void *view, void *) {
-  if (void *window = new_window("Sign in to Meta - Venture", 560, 760)) {
+  if (void *window = new_window(i18n::tr("Sign in to Meta - Venture").c_str(), 560, 760)) {
     connect(view, "close", on_popup_close, window);
     show(window, view);
   }
@@ -390,7 +391,7 @@ int helper_main() {
   // Before any web view exists: WebKit reads the DPI when its context starts.
   ensure_font_dpi(w);
   helper.loop = w.loop_new(nullptr, 0);
-  void *window = new_window("Sign in to Meta - Venture", 650, 820);
+  void *window = new_window(i18n::tr("Sign in to Meta - Venture").c_str(), 650, 820);
   // Ephemeral sessions keep cookies in memory, isolated for each sign-in.
   if (w.api == 6)
     helper.view = w.object_new(w.view_type(), "network-session",
@@ -468,31 +469,29 @@ AuthBrowser::Event translate(std::string_view line) {
       return {Kind::callback, std::string(uri)};
   }
   if (line == "error webkit")
-    return {Kind::error, "Meta sign-in needs WebKitGTK. Install webkitgtk-6.0 "
-                         "(or webkit2gtk-4.1) from your distribution."};
+    return {Kind::error, i18n::tr("Meta sign-in needs WebKitGTK. Install webkitgtk-6.0 (or webkit2gtk-4.1) from your distribution.")};
   if (line == "error filter")
-    return {Kind::error, "This WebKitGTK is too old to keep the sign-in window on Meta's pages. "
-                         "Update webkitgtk-6.0 (or webkit2gtk-4.1)."};
+    return {Kind::error, i18n::tr("This WebKitGTK is too old to keep the sign-in window on Meta's pages. Update webkitgtk-6.0 (or webkit2gtk-4.1).")};
   if (line == "error crashed")
-    return {Kind::error, "The Meta sign-in page stopped unexpectedly. Try again."};
-  return {Kind::error, "Could not open the Meta sign-in window."};
+    return {Kind::error, i18n::tr("The Meta sign-in page stopped unexpectedly. Try again.")};
+  return {Kind::error, i18n::tr("Could not open the Meta sign-in window.")};
 }
 } // namespace
 void AuthBrowser::open(std::string url, const fs::path &) {
   close();
   if (!meta::auth_navigation_allowed(url))
-    throw std::runtime_error("Sign-in URL is outside allowed Meta domains.");
+    throw std::runtime_error(i18n::tr("Sign-in URL is outside allowed Meta domains."));
   {
     std::lock_guard lock(impl_->mutex);
     impl_->events.clear();
   }
   int in[2], out[2];
   if (pipe2(in, O_CLOEXEC))
-    throw std::runtime_error("Could not open the Meta sign-in window.");
+    throw std::runtime_error(i18n::tr("Could not open the Meta sign-in window."));
   if (pipe2(out, O_CLOEXEC)) {
     ::close(in[0]);
     ::close(in[1]);
-    throw std::runtime_error("Could not open the Meta sign-in window.");
+    throw std::runtime_error(i18n::tr("Could not open the Meta sign-in window."));
   }
   // Queued before the helper starts, so a helper that exits early cannot
   // raise SIGPIPE here. The URL is far below the pipe capacity.
@@ -512,7 +511,7 @@ void AuthBrowser::open(std::string url, const fs::path &) {
   if (error) {
     ::close(in[1]);
     ::close(out[0]);
-    throw std::runtime_error("Could not open the Meta sign-in window.");
+    throw std::runtime_error(i18n::tr("Could not open the Meta sign-in window."));
   }
   {
     std::lock_guard lock(impl_->mutex);
@@ -556,11 +555,13 @@ void AuthBrowser::open(std::string url, const fs::path &) {
     // error, not a cancelled sign-in.
     if (!reported && !overflow &&
         ((WIFSIGNALED(status) && WTERMSIG(status) != SIGTERM) || (WIFEXITED(status) && WEXITSTATUS(status)))) {
-      const auto how = WIFSIGNALED(status) ? std::format("signal {}", WTERMSIG(status))
-                                           : std::format("exit code {}", WEXITSTATUS(status));
-      log::warn("auth", "The Meta sign-in window stopped with {}.", how);
-      impl->events.push_back({Kind::error, "The Meta sign-in window stopped unexpectedly (" + how +
-                                               "). Send a debug report if it happens again."});
+      const auto how = WIFSIGNALED(status) ? i18n::trf("signal {0}", WTERMSIG(status))
+                                           : i18n::trf("exit code {0}", WEXITSTATUS(status));
+      log::warn("auth", i18n::trf("The Meta sign-in window stopped with {0}.", how));
+      impl->events.push_back({Kind::error,
+                i18n::trf("The Meta sign-in window stopped unexpectedly ({0}). Send a debug report "
+                          "if it happens again.",
+                          how)});
     }
     impl->events.push_back({Kind::closed, {}});
   });

@@ -243,8 +243,9 @@ def extract_file(path: Path, rel: str, errors: list[str]) -> list[Found]:
                 break
             k += 1
         if not ok:
-            # Declarations (template <...> tr(const char (&)[N])) take no literal.
-            if code[ci + 2].kind != "id" or code[ci + 2].text not in ("const", "char"):
+            # Declarations (template <...> tr(const char (&)[N]), mark(std::string_view))
+            # take no literal.
+            if code[ci + 2].kind != "id" or code[ci + 2].text not in ("const", "char", "std"):
                 errors.append(f"{rel}:{t.line}: {t.text}() needs plain string literals")
             continue
         msgid = values["msgid"]

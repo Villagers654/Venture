@@ -1,5 +1,6 @@
 #include "launcher/auth_browser.h"
 #include "common/meta/auth.h"
+#include "launcher/i18n/i18n.h"
 #include "webview_compat.h"
 #include <atomic>
 #include <deque>
@@ -79,8 +80,8 @@ struct BrowserState {
   bool done = false, callback_sent = false;
   void fail() {
     emit({AuthBrowser::Kind::error,
-          "Could not open Meta sign-in. Install or repair the Microsoft Edge "
-          "WebView2 Runtime."});
+          i18n::tr("Could not open Meta sign-in. Install or repair the Microsoft Edge "
+          "WebView2 Runtime.")});
     if (window)
       PostMessageW(window, WM_CLOSE, 0, 0);
   }
@@ -371,7 +372,7 @@ void AuthBrowser::open(std::string url, const fs::path &data) {
   impl_->thread = std::thread([this, url = std::move(url), data] {
     auto emit = [this](Event e) { impl_->emit(std::move(e)); };
     if (FAILED(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED))) {
-      emit({Kind::error, "Could not initialize the Windows sign-in window."});
+      emit({Kind::error, i18n::tr("Could not initialize the Windows sign-in window.")});
       return;
     }
     auto state = std::make_shared<BrowserState>();
@@ -394,7 +395,7 @@ void AuthBrowser::open(std::string url, const fs::path &data) {
                         820, nullptr, nullptr, wc.hInstance, state.get());
     impl_->window = state->window;
     if (!state->window) {
-      emit({Kind::error, "Could not create the sign-in window."});
+      emit({Kind::error, i18n::tr("Could not create the sign-in window.")});
       CoUninitialize();
       return;
     }

@@ -1,5 +1,6 @@
 #include "common/meta/auth.h"
 #include "common/digest.h"
+#include "launcher/i18n/i18n.h"
 #include <algorithm>
 #include <optional>
 #include <regex>
@@ -58,7 +59,7 @@ std::string validate_callback(std::string_view url,
                               std::string_view challenge) {
   if (!is_callback(url) || challenge.empty() || url.size() > 3 * 1024 * 1024 ||
       url.find('?') == url.npos)
-    throw std::runtime_error("Invalid sign-in callback. Start sign-in again.");
+    throw std::runtime_error(i18n::tr("Invalid sign-in callback. Start sign-in again."));
   auto q = url.substr(url.find('?') + 1);
   q = q.substr(0, q.find('#'));
   std::string token, blob;
@@ -86,7 +87,7 @@ std::string validate_callback(std::string_view url,
   if (mismatch || tokens != 1 || blobs != 1 || blob.empty() ||
       blob.size() > 2 * 1024 * 1024)
     throw std::runtime_error(
-        "This sign-in callback belongs to a different session. Start sign-in again.");
+        i18n::tr("This sign-in callback belongs to a different session. Start sign-in again."));
   return blob;
 }
 Json post(std::string_view url, const http::Fields &fields,
@@ -106,17 +107,17 @@ Json post(std::string_view url, const http::Fields &fields,
       detail += " " + type;
     auto code = str(error, "code");
     if (digits(code, 1, 10))
-      detail += " code " + code;
+      detail += i18n::tr(" code ") + code;
     auto sub = str(error, "error_subcode");
     if (digits(sub, 1, 10))
-      detail += " subcode " + sub;
-    throw RequestError(r.status, "Meta " + endpoint + " failed (HTTP " +
-                             std::to_string(r.status) + detail +
-                             "). Try signing in again.");
+      detail += i18n::tr(" subcode ") + sub;
+    throw RequestError(r.status,
+                       i18n::trf("Meta {0} failed (HTTP {1}{2}). Try signing in again.",
+                                 endpoint, std::to_string(r.status), detail));
   }
   if (j.is_discarded())
     throw std::runtime_error(
-        "Meta's reply could not be read. Try again later.");
+        i18n::tr("Meta's reply could not be read. Try again later."));
   return j;
 }
 std::string Auth::begin(std::stop_token stop) {
@@ -127,7 +128,7 @@ std::string Auth::begin(std::stop_token stop) {
   challenge_ = str(j, "native_sso_token");
   auto etoken = str(j, "native_sso_etoken");
   if (challenge_.empty() || etoken.empty())
-    throw std::runtime_error("Meta's reply had no sign-in challenge.");
+    throw std::runtime_error(i18n::tr("Meta's reply had no sign-in challenge."));
   expires_ = std::chrono::steady_clock::now() + std::chrono::minutes(10);
   return "https://auth.meta.com/native_sso/confirm?" +
          http::form({{"native_app_id", "512466987071624"},
@@ -145,7 +146,7 @@ bool Auth::accepts(std::string_view callback) const {
 }
 Session Auth::complete(std::string_view callback, std::stop_token stop) {
   if (std::chrono::steady_clock::now() > expires_)
-    throw std::runtime_error("Sign-in expired. Start sign-in again.");
+    throw std::runtime_error(i18n::tr("Sign-in expired. Start sign-in again."));
   auto blob = validate_callback(callback, challenge_);
   auto challenge = std::exchange(challenge_, {});
   auto j = post(
@@ -156,7 +157,7 @@ Session Auth::complete(std::string_view callback, std::stop_token stop) {
       stop);
   auto token = str(j, "access_token");
   if (token.empty())
-    throw std::runtime_error("Meta did not return a sign-in token.");
+    throw std::runtime_error(i18n::tr("Meta did not return a sign-in token."));
   j = post("https://meta.graph.meta.com/graphql",
            {{"access_token", token},
             {"doc_id", "24112177345042346"},
@@ -166,7 +167,7 @@ Session Auth::complete(std::string_view callback, std::stop_token stop) {
                          "profile_tokens");
   if (!profiles.is_array() || profiles.empty() ||
       str(profiles[0], "access_token").empty())
-    throw std::runtime_error("Meta's reply had no Quest account token.");
+    throw std::runtime_error(i18n::tr("Meta's reply had no Quest account token."));
   return Session{str(profiles[0], "access_token"),
                  {},
                  {},

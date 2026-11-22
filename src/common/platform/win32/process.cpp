@@ -1,4 +1,5 @@
 #include "common/process.h"
+#include "launcher/i18n/i18n.h"
 #include <windows.h>
 
 #include <shellapi.h>
@@ -77,10 +78,11 @@ void Process::spawn(const fs::path &exe, const std::vector<std::string> &args,
                     PipeChannel::Handler broker,
                     const Environment &environment) {
   if (active())
-    throw std::runtime_error("This game is already running.");
+    throw std::runtime_error(i18n::tr("This game is already running."));
   if (!fs::is_regular_file(exe))
     throw std::runtime_error(
-        "Venture's runtime (venture-runtime.exe) was not found beside the launcher. Reinstall Venture.");
+        i18n::tr("Venture's runtime (venture-runtime.exe) was not found beside the launcher. "
+                 "Reinstall Venture."));
   auto absolute = fs::absolute(exe);
   std::wstring cmd = quote_windows_arg(absolute.wstring());
   for (auto &a : args)
@@ -98,7 +100,7 @@ void Process::spawn(const fs::path &exe, const std::vector<std::string> &args,
                               FILE_SHARE_READ | FILE_SHARE_WRITE, &sa,
                               CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
   if (output == INVALID_HANDLE_VALUE)
-    throw std::runtime_error("Could not create the runtime log.");
+    throw std::runtime_error(i18n::tr("Could not create the runtime log."));
   HANDLE input =
       CreateFileW(L"NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, &sa,
                   OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
@@ -141,8 +143,8 @@ void Process::spawn(const fs::path &exe, const std::vector<std::string> &args,
   if (input != INVALID_HANDLE_VALUE)
     CloseHandle(input);
   if (!ok)
-    throw std::runtime_error("Windows could not start the runtime. Check the "
-                             "executable path and permissions.");
+    throw std::runtime_error(i18n::tr("Windows could not start the runtime. Check the "
+                                      "executable path and permissions."));
   CloseHandle(pi.hThread);
   impl_ = std::make_unique<Impl>();
   impl_->handle = pi.hProcess;
@@ -182,7 +184,7 @@ int run_tool(const fs::path &exe, const std::vector<std::string> &args,
   std::wstring cmd = quote_windows_arg(absolute.wstring());
   for (auto &a : args)
     cmd += L" " + quote_windows_arg(paths::from_utf8(a).wstring());
-  const auto failure = "Could not start " + paths::utf8(exe.filename()) + ".";
+  const auto failure = i18n::trf("Could not start {0}.", paths::utf8(exe.filename()));
   SECURITY_ATTRIBUTES sa{sizeof(sa), nullptr, TRUE};
   HANDLE out_read = nullptr, out_write = nullptr, err_read = nullptr, err_write = nullptr;
   if (!CreatePipe(&out_read, &out_write, &sa, 0))
@@ -292,14 +294,14 @@ void open_folder(const fs::path &p) {
   if (!fs::is_directory(p) ||
       reinterpret_cast<INT_PTR>(ShellExecuteW(
           nullptr, L"open", p.c_str(), nullptr, nullptr, SW_SHOWNORMAL)) <= 32)
-    throw std::runtime_error("Could not open the game folder.");
+    throw std::runtime_error(i18n::tr("Could not open the game folder."));
 }
 void reveal_file(const fs::path &file) {
   const std::wstring args = L"/select,\"" + file.wstring() + L"\"";
   if (!fs::is_regular_file(file) ||
       reinterpret_cast<INT_PTR>(ShellExecuteW(nullptr, L"open", L"explorer.exe", args.c_str(), nullptr,
                                               SW_SHOWNORMAL)) <= 32)
-    throw std::runtime_error("Could not show the file.");
+    throw std::runtime_error(i18n::tr("Could not show the file."));
 }
 void start_detached(const fs::path &executable, const std::vector<std::string> &args) {
   std::wstring parameters;
@@ -310,11 +312,11 @@ void start_detached(const fs::path &executable, const std::vector<std::string> &
   if (reinterpret_cast<INT_PTR>(ShellExecuteW(nullptr, L"open", executable.c_str(),
                                               parameters.empty() ? nullptr : parameters.c_str(),
                                               executable.parent_path().c_str(), SW_SHOWNORMAL)) <= 32)
-    throw std::runtime_error("Could not start " + paths::utf8(executable.filename()) + ".");
+    throw std::runtime_error(i18n::trf("Could not start {0}.", paths::utf8(executable.filename())));
 }
 void open_url(const std::string &url) {
   if (reinterpret_cast<INT_PTR>(ShellExecuteW(nullptr, L"open", paths::from_utf8(url).c_str(), nullptr, nullptr,
                                               SW_SHOWNORMAL)) <= 32)
-    throw std::runtime_error("Could not open the link.");
+    throw std::runtime_error(i18n::tr("Could not open the link."));
 }
 } // namespace venture

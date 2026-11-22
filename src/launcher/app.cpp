@@ -30,12 +30,12 @@ void save_screenshot(SDL_Renderer *renderer, const fs::path &file) {
       raw ? SDL_ConvertSurface(raw, SDL_PIXELFORMAT_RGBA32) : nullptr;
   SDL_DestroySurface(raw);
   if (!rgba)
-    throw std::runtime_error("Could not read back the launcher frame.");
+    throw std::runtime_error(i18n::tr("Could not read back the launcher frame."));
   bool ok = stbi_write_png(paths::utf8(file).c_str(), rgba->w, rgba->h, 4,
                            rgba->pixels, rgba->pitch) != 0;
   SDL_DestroySurface(rgba);
   if (!ok)
-    throw std::runtime_error("Could not write the screenshot.");
+    throw std::runtime_error(i18n::tr("Could not write the screenshot."));
 }
 } // namespace
 // The UI is laid out and drawn in framebuffer pixels on every platform, at the
@@ -96,7 +96,7 @@ App::App(Options options) : Core(std::move(options)) {
       SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY | SDL_WINDOW_HIDDEN |
           (client_side_decorations() ? SDL_WINDOW_BORDERLESS : 0));
   if (!window_)
-    throw std::runtime_error("Could not create the launcher window.");
+    throw std::runtime_error(i18n::tr("Could not create the launcher window."));
   fit_window();
   if (client_side_decorations())
     SDL_SetWindowHitTest(
@@ -114,7 +114,7 @@ App::App(Options options) : Core(std::move(options)) {
                         SDL_WINDOWPOS_CENTERED);
   renderer_ = SDL_CreateRenderer(window_, nullptr);
   if (!renderer_)
-    throw std::runtime_error("Could not create an SDL renderer.");
+    throw std::runtime_error(i18n::tr("Could not create an SDL renderer."));
   SDL_SetRenderVSync(renderer_, 1);
   style_native_window(window_, 26, 27, 30);
   if (SDL_Surface *icon = ui::icon_surface(256)) {
@@ -188,7 +188,7 @@ App::App(Options options) : Core(std::move(options)) {
     signing_in_ = auth_manual_ = true;
     link_handler_ = options_.smoke_view == "manual-sign-in" ? 1 : -1;
     auth_url_ = "https://auth.meta.com/native_sso/confirm?native_app_id=512466987071624&native_sso_etoken=EXAMPLE";
-    auth_status_ = "Meta's sign-in window could not open. Sign in manually below.";
+    auth_status_ = i18n::tr("Meta's sign-in window could not open. Sign in manually below.");
   }
   if (options_.smoke_view == "import" || options_.smoke_view == "import-end" || options_.smoke_view == "import-link")
     page_ = 4;
@@ -464,7 +464,7 @@ void App::choose_import(bool folder) {
   if (folder) {
     SDL_ShowOpenFolderDialog(picked, this, window_, nullptr, false);
   } else {
-    static const SDL_DialogFileFilter filters[] = {{"Android apps and archives", "apk;zip"}};
+    static const SDL_DialogFileFilter filters[] = {{i18n::mark("Android apps and archives"), "apk;zip"}};
     SDL_ShowOpenFileDialog(picked, this, window_, filters, 1, nullptr, false);
   }
 }
@@ -618,7 +618,7 @@ int App::run() {
                                    options_.launch_package;
         });
         if (found == installs_.end()) {
-          error("The requested package is not installed.");
+          error(i18n::tr("The requested package is not installed."));
           smoke_exit_ = 1;
         } else {
           direct_app_ = found->id();
@@ -674,7 +674,7 @@ int App::run() {
       if (v == "report") report_ = SharedReport{.file = "venture-debug-report.txt", .url = "https://dpaste.com/EXAMPLE"};
       if (v == "report-uploading") report_ = SharedReport{.file = "venture-debug-report.txt"};
       if (v == "report-failed")
-        report_ = SharedReport{.file = "venture-debug-report.txt", .error = "The paste service did not answer."};
+        report_ = SharedReport{.file = "venture-debug-report.txt", .error = i18n::tr("The paste service did not answer.")};
     }
     // Ownership comes from the library refresh; without a cached library a
     // play before it finishes is refused as not owned.
@@ -776,8 +776,7 @@ int run(Options options) {
                            "graphics configuration and folder permissions.");
     if (!direct) SDL_ShowSimpleMessageBox(
         SDL_MESSAGEBOX_ERROR, "Venture",
-        "Venture could not start. Check graphics drivers and access to the "
-        "application data folder.",
+        i18n::tr("Venture could not start. Check graphics drivers and access to the application data folder."),
         nullptr);
     return 1;
   }

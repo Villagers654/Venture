@@ -3,25 +3,26 @@
 #include <algorithm>
 
 #include "common/meta/accounts.h"
+#include "launcher/i18n/i18n.h"
 
 namespace venture::download {
 bool remove_asset(const fs::path& install, std::string_view app,
                   std::string_view binary, std::string_view filename) {
   if (!paths::within(install, install / "plan.json") ||
       !paths::within(install, install / "plan.json.tmp"))
-    throw std::runtime_error("Unsafe asset manifest.");
+    throw std::runtime_error(i18n::tr("Unsafe asset manifest."));
   auto plan = meta::parse_plan(paths::read_json(install / "plan.json"));
   if (plan.app_id != app || plan.binary_id != binary)
-    throw std::runtime_error("Asset installation changed.");
+    throw std::runtime_error(i18n::tr("Asset installation changed."));
   auto found = std::ranges::find(plan.files, filename, &meta::File::name);
   if (found == plan.files.end() || found->kind != "asset")
-    throw std::runtime_error("Unknown asset.");
+    throw std::runtime_error(i18n::tr("Unknown asset."));
   auto path = install / paths::from_utf8(found->name), partial = path;
   partial += ".part";
   for (auto& p : {path, partial})
     if (!paths::within(install, p) ||
         (fs::exists(p) && !fs::is_regular_file(p)))
-      throw std::runtime_error("Unsafe asset file.");
+      throw std::runtime_error(i18n::tr("Unsafe asset file."));
   if (!found->sku.empty()) std::erase(plan.installed_addons, found->sku);
   paths::atomic_write(install / "plan.json", plan.json().dump(2));
   bool removed = fs::remove(path);
@@ -34,7 +35,7 @@ PipeChannel::Handler asset_launcher_handler(Manager& manager, fs::path data,
   if (fs::weakly_canonical(
           paths::game_dir(root, launch.package, launch.folder())) !=
       fs::weakly_canonical(install))
-    throw std::runtime_error("Invalid asset installation.");
+    throw std::runtime_error(i18n::tr("Invalid asset installation."));
   return [&manager, data = std::move(data), root = std::move(root),
           install = std::move(install), account = std::move(account),
           app = launch.app_id, binary = launch.binary_id, pinned = launch.pinned](

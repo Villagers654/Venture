@@ -1,6 +1,7 @@
 #include "common/android/manifest.h"
 
 #include "common/android/archive.h"
+#include "launcher/i18n/i18n.h"
 
 #include <miniz.h>
 
@@ -37,7 +38,7 @@ void utf8_append(std::string &out, std::uint32_t c) {
 struct Reader {
   std::span<const std::uint8_t> xml;
   std::uint16_t u16(std::size_t at) const {
-    if (at > xml.size() || xml.size() - at < 2) throw std::runtime_error("The APK manifest is truncated.");
+    if (at > xml.size() || xml.size() - at < 2) throw std::runtime_error(i18n::tr("The APK manifest is truncated."));
     return std::uint16_t(xml[at] | (xml[at + 1] << 8));
   }
   std::uint32_t u32(std::size_t at) const { return u16(at) | (std::uint32_t(u16(at + 2)) << 16); }
@@ -49,10 +50,10 @@ struct Pool {
   bool utf8 = false;
   std::vector<std::uint32_t> offsets;
   void load(std::size_t at, std::size_t header, std::size_t size) {
-    if (header < 28) throw std::runtime_error("The APK manifest is malformed.");
+    if (header < 28) throw std::runtime_error(i18n::tr("The APK manifest is malformed."));
     const auto count = r.u32(at + 8), start = r.u32(at + 20);
     if (count > (size - header) / 4 || start < header + std::size_t(count) * 4 || start > size)
-      throw std::runtime_error("The APK manifest is malformed.");
+      throw std::runtime_error(i18n::tr("The APK manifest is malformed."));
     utf8 = (r.u32(at + 16) & 0x100) != 0;
     strings = at + start;
     end = at + size;
@@ -62,14 +63,14 @@ struct Pool {
   std::string get(std::uint32_t index) const {
     if (index == 0xffffffff) return {};
     if (index >= offsets.size() || offsets[index] >= end - strings)
-      throw std::runtime_error("The APK manifest has an invalid string.");
+      throw std::runtime_error(i18n::tr("The APK manifest has an invalid string."));
     std::size_t at = strings + offsets[index];
     auto length = [&]() -> std::uint32_t {
       if (utf8) {
-        if (at >= end) throw std::runtime_error("The APK manifest is truncated.");
+        if (at >= end) throw std::runtime_error(i18n::tr("The APK manifest is truncated."));
         std::uint32_t n = r.xml[at++];
         if (n & 0x80) {
-          if (at >= end) throw std::runtime_error("The APK manifest is truncated.");
+          if (at >= end) throw std::runtime_error(i18n::tr("The APK manifest is truncated."));
           n = ((n & 0x7f) << 8) | r.xml[at++];
         }
         return n;
@@ -86,12 +87,12 @@ struct Pool {
     if (utf8) {
       length();  // UTF-16 length precedes the UTF-8 byte count
       const auto n = length();
-      if (n > end - at) throw std::runtime_error("The APK manifest is truncated.");
+      if (n > end - at) throw std::runtime_error(i18n::tr("The APK manifest is truncated."));
       out.assign(reinterpret_cast<const char *>(r.xml.data() + at), n);
       return out;
     }
     const auto n = length();
-    if (std::size_t(n) * 2 > end - at) throw std::runtime_error("The APK manifest is truncated.");
+    if (std::size_t(n) * 2 > end - at) throw std::runtime_error(i18n::tr("The APK manifest is truncated."));
     for (std::size_t i = 0; i < n; ++i) {
       std::uint32_t c = r.u16(at + i * 2);
       if (c >= 0xd800 && c < 0xdc00 && i + 1 < n) {
@@ -111,7 +112,7 @@ struct Pool {
 Manifest parse_manifest(std::span<const std::uint8_t> xml) {
   const Reader r{xml};
   if (r.u16(0) != 3 || r.u16(2) != 8 || r.u32(4) > xml.size())
-    throw std::runtime_error("The APK has no binary AndroidManifest.xml.");
+    throw std::runtime_error(i18n::tr("The APK has no binary AndroidManifest.xml."));
   const std::size_t end = r.u32(4);
   Pool pool{r};
   std::vector<std::uint32_t> resource_ids;
@@ -122,19 +123,19 @@ Manifest parse_manifest(std::span<const std::uint8_t> xml) {
   for (std::size_t at = 8; at < end;) {
     const auto type = r.u16(at), header = r.u16(at + 2);
     const auto size = r.u32(at + 4);
-    if (header < 8 || size < header || size > end - at) throw std::runtime_error("The APK manifest is malformed.");
+    if (header < 8 || size < header || size > end - at) throw std::runtime_error(i18n::tr("The APK manifest is malformed."));
     if (type == 0x0001 && !pool.strings) {  // string pool
       pool.load(at, header, size);
     } else if (type == 0x0180) {  // resource map: attribute name index -> resource ID
       for (std::size_t i = header; i + 4 <= size; i += 4) resource_ids.push_back(r.u32(at + i));
     } else if (type == 0x0102) {  // element start
       ++depth;
-      if (!pool.strings || size - header < 20) throw std::runtime_error("The APK manifest is malformed.");
+      if (!pool.strings || size - header < 20) throw std::runtime_error(i18n::tr("The APK manifest is malformed."));
       const auto ext = at + header;
       const auto tag = string(r.u32(ext + 4));
       const auto start = r.u16(ext + 8), stride = r.u16(ext + 10), count = r.u16(ext + 12);
       if (start < 20 || stride < 20 || start > size - header || count > (size - header - start) / stride)
-        throw std::runtime_error("The APK manifest is malformed.");
+        throw std::runtime_error(i18n::tr("The APK manifest is malformed."));
       const bool manifest = depth == 1 && tag == "manifest", application = depth == 2 && tag == "application";
       const bool feature = depth == 2 && tag == "uses-feature";
       std::string feature_name;
@@ -179,13 +180,13 @@ Manifest parse_manifest(std::span<const std::uint8_t> xml) {
     at += size;
   }
   if (major) m.version_code |= major << 32;
-  if (!paths::safe_package(m.package)) throw std::runtime_error("The APK manifest names no valid package.");
+  if (!paths::safe_package(m.package)) throw std::runtime_error(i18n::tr("The APK manifest names no valid package."));
   return m;
 }
 Manifest read_apk(const fs::path &apk) {
   Archive archive(apk);
   const auto *entry = archive.find("AndroidManifest.xml");
-  if (!entry) throw std::runtime_error(paths::utf8(apk.filename()) + " is not an Android app (no manifest).");
+  if (!entry) throw std::runtime_error(i18n::trf("{0} is not an Android app (no manifest).", paths::utf8(apk.filename())));
   auto m = parse_manifest(archive.read(*entry));
   if (m.label.empty() && m.label_id)
     if (const auto *table = archive.find("resources.arsc")) try {
@@ -196,7 +197,7 @@ Manifest read_apk(const fs::path &apk) {
 }
 Manifest read_apk(std::span<const std::uint8_t> apk) {
   mz_zip_archive zip{};
-  if (!mz_zip_reader_init_mem(&zip, apk.data(), apk.size(), 0)) throw std::runtime_error("The APK is not a ZIP archive.");
+  if (!mz_zip_reader_init_mem(&zip, apk.data(), apk.size(), 0)) throw std::runtime_error(i18n::tr("The APK is not a ZIP archive."));
   struct End {
     mz_zip_archive *zip;
     ~End() { mz_zip_reader_end(zip); }
@@ -204,10 +205,10 @@ Manifest read_apk(std::span<const std::uint8_t> apk) {
   const int index = mz_zip_reader_locate_file(&zip, "AndroidManifest.xml", nullptr, 0);
   mz_zip_archive_file_stat stat{};
   if (index < 0 || !mz_zip_reader_file_stat(&zip, mz_uint(index), &stat) || stat.m_uncomp_size > (16u << 20))
-    throw std::runtime_error("The APK has no readable manifest.");
+    throw std::runtime_error(i18n::tr("The APK has no readable manifest."));
   std::vector<std::uint8_t> xml(stat.m_uncomp_size);
   if (!mz_zip_reader_extract_to_mem(&zip, mz_uint(index), xml.data(), xml.size(), 0))
-    throw std::runtime_error("The APK manifest could not be read.");
+    throw std::runtime_error(i18n::tr("The APK manifest could not be read."));
   auto m = parse_manifest(xml);
   const int table = mz_zip_reader_locate_file(&zip, "resources.arsc", nullptr, 0);
   if (m.label.empty() && m.label_id && table >= 0 && mz_zip_reader_file_stat(&zip, mz_uint(table), &stat) &&
@@ -234,13 +235,13 @@ struct Table {
   Pool strings{r};  // the table's global value pool
   std::vector<std::size_t> packages;
   explicit Table(std::span<const std::uint8_t> arsc) : r{arsc} {
-    if (r.u16(0) != 2 || r.u32(4) > arsc.size()) throw std::runtime_error("The APK has no resource table.");
+    if (r.u16(0) != 2 || r.u32(4) > arsc.size()) throw std::runtime_error(i18n::tr("The APK has no resource table."));
     const std::size_t header = r.u16(2), end = r.u32(4);
     for (std::size_t at = header; at < end;) {
       const auto type = r.u16(at), chunk_header = r.u16(at + 2);
       const auto size = r.u32(at + 4);
       if (chunk_header < 8 || size < chunk_header || size > end - at)
-        throw std::runtime_error("The resource table is malformed.");
+        throw std::runtime_error(i18n::tr("The resource table is malformed."));
       if (type == 0x0001 && !strings.strings) strings.load(at, chunk_header, size);
       if (type == 0x0200) packages.push_back(at);
       at += size;
@@ -256,7 +257,7 @@ struct Table {
       for (std::size_t at = package + r.u16(package + 2); at < end;) {
         const auto type = r.u16(at), header = r.u16(at + 2);
         const auto size = r.u32(at + 4);
-        if (header < 8 || size < header || size > end - at) throw std::runtime_error("The resource table is malformed.");
+        if (header < 8 || size < header || size > end - at) throw std::runtime_error(i18n::tr("The resource table is malformed."));
         if (type == 0x0201 && header >= 36 && r.xml[at + 8] == type_id) candidate(at, header, size, entry, out);
         at += size;
       }

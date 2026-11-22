@@ -1,5 +1,6 @@
 #include "common/meta/accounts.h"
 #include "common/file_ops.h"
+#include "launcher/i18n/i18n.h"
 #include <algorithm>
 #include <set>
 
@@ -25,8 +26,7 @@ AccountIndex AccountVault::read_index() const {
     return result;
   auto j = paths::read_json(file);
   if (number(j, "version") != 2 || !field(j, "accounts").is_array())
-    throw std::runtime_error(
-        "Account index is unreadable. Credentials have been retained.");
+    throw std::runtime_error(i18n::tr("Account index is unreadable. Credentials have been retained."));
   std::set<std::string> keys, ids;
   for (const auto &row : j["accounts"]) {
     Account a{str(row, "key"),
@@ -37,16 +37,14 @@ AccountIndex AccountVault::read_index() const {
               field(row, "needsReauth") == true};
     if (!valid_account_key(a.key) || !account_id(a.account_id) ||
         !keys.insert(a.key).second || !ids.insert(a.account_id).second)
-      throw std::runtime_error("Account index contains invalid entries. "
-                               "Credentials have been retained.");
+      throw std::runtime_error(i18n::tr("Account index contains invalid entries. Credentials have been retained."));
     result.accounts.push_back(std::move(a));
   }
   result.primary = str(j, "primary");
   result.active = str(j, "active");
   if ((!result.primary.empty() && !result.find(result.primary)) ||
       (!result.active.empty() && !result.find(result.active)))
-    throw std::runtime_error(
-        "Account index selection is invalid. Credentials have been retained.");
+    throw std::runtime_error(i18n::tr("Account index selection is invalid. Credentials have been retained."));
   return result;
 }
 void AccountVault::write_index(const AccountIndex &index) const {
@@ -123,7 +121,7 @@ AccountIndex AccountVault::reconcile() const {
 }
 std::optional<Session> AccountVault::load(std::string_view key) const {
   if (!valid_account_key(key))
-    throw std::runtime_error("Invalid account key.");
+    throw std::runtime_error(i18n::tr("Invalid account key."));
   FileLock lock(data_ / "accounts/.lock");
   auto idx = read_index();
   auto a = idx.find(key);
@@ -131,7 +129,7 @@ std::optional<Session> AccountVault::load(std::string_view key) const {
     return {};
   auto s = SecretStore(data_, std::string(key)).load();
   if (!s || s->account_id != a->account_id)
-    throw std::runtime_error("Account credential does not match its slot.");
+    throw std::runtime_error(i18n::tr("Account credential does not match its slot."));
   return s;
 }
 std::optional<Session>
@@ -148,7 +146,7 @@ AccountVault::load_compatible(std::string_view key) const {
     return SecretStore(data_).load();
   }
   if (!valid_account_key(selected))
-    throw std::runtime_error("Invalid account key.");
+    throw std::runtime_error(i18n::tr("Invalid account key."));
   auto account = idx.find(selected);
   if (!account || !account->signed_in)
     return {};
@@ -158,8 +156,7 @@ AccountVault::load_compatible(std::string_view key) const {
       auto session = SecretStore(data_, selected).load();
       if (session) {
         if (session->account_id != account->account_id)
-          throw std::runtime_error(
-              "Account credential does not match its slot.");
+          throw std::runtime_error(i18n::tr("Account credential does not match its slot."));
         return session;
       }
     }
@@ -176,13 +173,12 @@ AccountVault::load_compatible(std::string_view key) const {
 std::string AccountVault::upsert_locked(AccountIndex &idx,
                                         const Session &session) {
   if (!account_id(session.account_id) || session.access_token.empty())
-    throw std::runtime_error("Sign-in did not return a stable Meta account.");
+    throw std::runtime_error(i18n::tr("Sign-in did not return a stable Meta account."));
   auto it =
       std::ranges::find(idx.accounts, session.account_id, &Account::account_id);
   if ((it == idx.accounts.end() || !it->signed_in) &&
       std::ranges::count(idx.accounts, true, &Account::signed_in) >= 4)
-    throw std::runtime_error(
-        "Sign out an account before adding another (maximum four).");
+    throw std::runtime_error(i18n::tr("Sign out an account before adding another (maximum four)."));
   auto key = it == idx.accounts.end() ? random_account_key() : it->key;
   while (it == idx.accounts.end() &&
          (idx.find(key) || fs::exists(data_ / "accounts" / key)))
@@ -193,8 +189,7 @@ std::string AccountVault::upsert_locked(AccountIndex &idx,
   auto verify = store.load();
   if (!verify || verify->account_id != session.account_id ||
       verify->access_token != session.access_token)
-    throw std::runtime_error("Account credential verification failed. "
-                             "Credentials have been retained.");
+    throw std::runtime_error(i18n::tr("Account credential verification failed. Credentials have been retained."));
   auto now = paths::timestamp();
   if (it == idx.accounts.end())
     idx.accounts.push_back({key, session.account_id, now, now, true, false});
@@ -218,7 +213,7 @@ std::string AccountVault::upsert(const Session &s) {
 void AccountVault::update_profile(std::string_view key, std::string_view alias,
                                   std::string_view display_name) {
   if (!valid_account_key(key))
-    throw std::runtime_error("Invalid account key.");
+    throw std::runtime_error(i18n::tr("Invalid account key."));
   FileLock lock(data_ / "accounts/.lock");
   auto idx = read_index();
   auto a = idx.find(key);
@@ -227,7 +222,7 @@ void AccountVault::update_profile(std::string_view key, std::string_view alias,
   SecretStore store(data_, std::string(key));
   auto s = store.load();
   if (!s || s->account_id != a->account_id)
-    throw std::runtime_error("Account credential does not match its slot.");
+    throw std::runtime_error(i18n::tr("Account credential does not match its slot."));
   bool changed = false;
   if (s->alias.empty() && !alias.empty()) {
     s->alias = alias;
@@ -242,12 +237,12 @@ void AccountVault::update_profile(std::string_view key, std::string_view alias,
 }
 void AccountVault::sign_out(std::string_view key) {
   if (!valid_account_key(key))
-    throw std::runtime_error("Invalid account key.");
+    throw std::runtime_error(i18n::tr("Invalid account key."));
   FileLock lock(data_ / "accounts/.lock");
   auto idx = read_index();
   auto it = std::ranges::find(idx.accounts, key, &Account::key);
   if (it == idx.accounts.end())
-    throw std::runtime_error("Unknown account.");
+    throw std::runtime_error(i18n::tr("Unknown account."));
   SecretStore(data_, std::string(key)).clear();
   it->signed_in = false;
   it->needs_reauth = true;
@@ -257,11 +252,11 @@ void AccountVault::sign_out(std::string_view key) {
 }
 void AccountVault::remove(std::string_view key) {
   if (!valid_account_key(key))
-    throw std::runtime_error("Invalid account key.");
+    throw std::runtime_error(i18n::tr("Invalid account key."));
   FileLock lock(data_ / "accounts/.lock");
   auto idx = read_index();
   if (!idx.find(key))
-    throw std::runtime_error("Unknown account.");
+    throw std::runtime_error(i18n::tr("Unknown account."));
   SecretStore(data_, std::string(key)).clear();
   std::erase_if(idx.accounts, [&](const auto &a) { return a.key == key; });
   if (idx.active == key)
@@ -272,30 +267,29 @@ void AccountVault::remove(std::string_view key) {
 }
 void AccountVault::set_active(std::string_view key) {
   if (!valid_account_key(key))
-    throw std::runtime_error("Invalid account key.");
+    throw std::runtime_error(i18n::tr("Invalid account key."));
   FileLock lock(data_ / "accounts/.lock");
   auto idx = read_index();
   auto it = std::ranges::find(idx.accounts, key, &Account::key);
   if (it == idx.accounts.end() || !it->signed_in || it->needs_reauth)
-    throw std::runtime_error("Reconnect this account before switching.");
+    throw std::runtime_error(i18n::tr("Reconnect this account before switching."));
   idx.active = key;
   it->last_used_at = paths::timestamp();
   write_index(idx);
 }
 void AccountVault::set_primary(std::string_view key) {
   if (!valid_account_key(key))
-    throw std::runtime_error("Invalid account key.");
+    throw std::runtime_error(i18n::tr("Invalid account key."));
   FileLock lock(data_ / "accounts/.lock");
   auto idx = read_index();
   if (!idx.find(key))
-    throw std::runtime_error("Unknown account.");
+    throw std::runtime_error(i18n::tr("Unknown account."));
   idx.primary = key;
   write_index(idx);
 }
 void AccountVault::set_app_sharing(bool enabled) {
   if (enabled)
-    throw std::runtime_error(
-        "App Sharing is not supported. Each account must own the game.");
+    throw std::runtime_error(i18n::tr("App Sharing is not supported. Each account must own the game."));
 }
 Migration
 AccountVault::migrate_v1(const std::function<Session(Session)> &resolve) {
@@ -322,8 +316,7 @@ AccountVault::migrate_v1(const std::function<Session(Session)> &resolve) {
     auto stored = SecretStore(data_, existing->key).load();
     if (!stored || stored->account_id != session->account_id ||
         stored->access_token.empty())
-      throw std::runtime_error("Existing account verification failed. Legacy "
-                               "credentials have been retained.");
+      throw std::runtime_error(i18n::tr("Existing account verification failed. Legacy credentials have been retained."));
     existing->signed_in = true;
     existing->needs_reauth = false;
     write_index(idx);
@@ -332,8 +325,7 @@ AccountVault::migrate_v1(const std::function<Session(Session)> &resolve) {
     if (!verified_index.find(existing->key) || !verified ||
         verified->account_id != stored->account_id ||
         verified->access_token != stored->access_token)
-      throw std::runtime_error("Existing account verification failed. Legacy "
-                               "credentials have been retained.");
+      throw std::runtime_error(i18n::tr("Existing account verification failed. Legacy credentials have been retained."));
     legacy.clear();
     return Migration::migrated;
   }
@@ -343,8 +335,7 @@ AccountVault::migrate_v1(const std::function<Session(Session)> &resolve) {
   if (!stored_index.find(key) || !stored ||
       stored->account_id != session->account_id ||
       stored->access_token != session->access_token)
-    throw std::runtime_error("Migrated account verification failed. Legacy "
-                             "credentials have been retained.");
+    throw std::runtime_error(i18n::tr("Migrated account verification failed. Legacy credentials have been retained."));
   legacy.clear();
   return Migration::migrated;
 }

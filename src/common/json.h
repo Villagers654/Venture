@@ -1,4 +1,5 @@
 #pragma once
+#include "launcher/i18n/i18n.h"
 #include <charconv>
 #include <nlohmann/json.hpp>
 #include <stdexcept>
@@ -12,7 +13,7 @@ using Json = nlohmann::json;
 inline Json parse_json(std::string_view text) {
   auto j = Json::parse(text, nullptr, false);
   if (j.is_discarded())
-    throw std::runtime_error("Invalid JSON response or file.");
+    throw std::runtime_error(i18n::tr("Invalid JSON response or file."));
   return j;
 }
 inline const Json &field(const Json &j, std::string_view key) {

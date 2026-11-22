@@ -1,4 +1,5 @@
 #include "common/file_ops.h"
+#include "launcher/i18n/i18n.h"
 #include <array>
 #include <cerrno>
 #include <fcntl.h>
@@ -19,12 +20,12 @@ struct FileLock::Impl {
 };
 FileLock::FileLock(const fs::path &file, bool wait) : impl_(std::make_unique<Impl>()) {
   if (is_link(file) || is_link(file.parent_path()))
-    throw std::runtime_error("Cannot lock account data through a linked path.");
+    throw std::runtime_error(i18n::tr("Cannot lock account data through a linked path."));
   fs::create_directories(file.parent_path());
   impl_->fd =
       open(file.c_str(), O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW, 0600);
   if (impl_->fd < 0 || flock(impl_->fd, LOCK_EX | (wait ? 0 : LOCK_NB)))
-    throw std::runtime_error("Could not lock Venture account data.");
+    throw std::runtime_error(i18n::tr("Could not lock Venture account data."));
 }
 FileLock::~FileLock() = default;
 MappedFile::MappedFile(const fs::path &file) {
@@ -47,7 +48,7 @@ std::string random_account_key() {
   std::array<unsigned char, 6> bytes{};
   int fd = open("/dev/urandom", O_RDONLY | O_CLOEXEC);
   if (fd < 0)
-    throw std::runtime_error("Could not generate an account key.");
+    throw std::runtime_error(i18n::tr("Could not generate an account key."));
   std::size_t done = 0;
   while (done < bytes.size()) {
     auto n = read(fd, bytes.data() + done, bytes.size() - done);
@@ -55,7 +56,7 @@ std::string random_account_key() {
       continue;
     if (n <= 0) {
       close(fd);
-      throw std::runtime_error("Could not generate an account key.");
+      throw std::runtime_error(i18n::tr("Could not generate an account key."));
     }
     done += n;
   }
@@ -92,16 +93,16 @@ void remove_tree(const fs::path &root, const fs::path &target) {
        t = fs::absolute(target).lexically_normal();
   auto relative = t.lexically_relative(r);
   if (relative.empty() || relative == "." || relative.has_root_path())
-    throw std::runtime_error("Invalid local data removal boundary.");
+    throw std::runtime_error(i18n::tr("Invalid local data removal boundary."));
   for (const auto &part : relative)
     if (part == "..")
-      throw std::runtime_error("Local data removal escapes its root.");
+      throw std::runtime_error(i18n::tr("Local data removal escapes its root."));
   for (auto p = t.parent_path(); p != r; p = p.parent_path())
     if (is_link(p))
       throw std::runtime_error(
-          "Cannot remove data through a linked directory.");
+          i18n::tr("Cannot remove data through a linked directory."));
   if (is_link(r))
-    throw std::runtime_error("Cannot remove data through a linked root.");
+    throw std::runtime_error(i18n::tr("Cannot remove data through a linked root."));
   fs::remove_all(t); // std::filesystem does not follow POSIX symlinks.
 }
 void link_directory(const fs::path &link, const fs::path &target) {
