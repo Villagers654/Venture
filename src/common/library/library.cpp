@@ -1020,7 +1020,7 @@ std::vector<std::pair<std::string, std::string>> launch_environment(const Settin
   environment.push_back({"VENTURE_PC_AUDIO", pc_audio_environment(display)});
   // Games that multiply the eye size they are told render at the resolution above.
   environment.push_back({"VENTURE_EYE_SCALE", eye_scale_environment(display)});
-  // Anisotropic filtering of the game's textures; automatic is on for a discrete GPU.
+  // Anisotropic filtering of the game's textures: 16x unless the player chose otherwise.
   environment.push_back({"VENTURE_ANISOTROPY", anisotropy_environment(display)});
   environment.push_back({"VENTURE_FOVEATION", foveation_environment(display)});
   // A game's advanced switches, only those it changed.

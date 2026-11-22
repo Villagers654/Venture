@@ -90,9 +90,9 @@ struct DisplaySettings {
   // game that resolution. "" follows the global setting.
   std::string match_resolution = "auto";
   // Anisotropic filtering of the game's textures (runtime gfx/anisotropy.h):
-  // "auto" (16x on a discrete GPU, the game's own on an integrated one), "off"
-  // or a level "2", "4", "8" or "16"; "" follows the global setting.
-  std::string anisotropy = "auto";
+  // "off" (the game's own) or a level "2", "4", "8" or "16" (the default, on
+  // every machine); "" follows the global setting.
+  std::string anisotropy = "16";
   // Foveated rendering (runtime gfx/foveation.h): "dynamic" (eye-tracked on a
   // headset with eye tracking, else off), "fixed" or "off"; "" follows the
   // global setting.
@@ -137,7 +137,7 @@ std::string mirror_fullscreen_environment(const DisplaySettings &d);
 std::string pc_audio_environment(const DisplaySettings &d);
 // VENTURE_EYE_SCALE for effective settings: "auto" or "off".
 std::string eye_scale_environment(const DisplaySettings &d);
-// VENTURE_ANISOTROPY for effective settings: "auto", "off", "2", "4", "8" or "16".
+// VENTURE_ANISOTROPY for effective settings: "off", "2", "4", "8" or "16".
 std::string anisotropy_environment(const DisplaySettings &d);
 // True for the values above.
 bool valid_anisotropy(std::string_view value);

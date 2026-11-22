@@ -10,18 +10,14 @@
 namespace venture::gfx {
 float parse_anisotropy(std::string_view value) {
   if (value == "off") return 0;
-  for (const float level : {2.0f, 4.0f, 8.0f, 16.0f})
+  for (const float level : {2.0f, 4.0f, 8.0f})
     if (value == std::to_string(int(level))) return level;
-  return kAutomaticAnisotropy;
+  return 16;
 }
 
 float anisotropy_level(float requested, const VkPhysicalDeviceProperties& properties,
                        const VkPhysicalDeviceFeatures& features) {
-  if (requested == 0 || !features.samplerAnisotropy) return 0;
-  if (requested == kAutomaticAnisotropy) {
-    if (properties.deviceType != VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU) return 0;
-    requested = 16;
-  }
+  if (requested <= 1 || !features.samplerAnisotropy) return 0;
   const float level = std::min(requested, properties.limits.maxSamplerAnisotropy);
   return level > 1 ? level : 0;
 }
@@ -33,13 +29,10 @@ float anisotropy_level(const VkPhysicalDeviceProperties& properties, const VkPhy
   static std::once_flag reported;
   std::call_once(reported, [&] {
     if (level > 0)
-      log::info("gfx", "Anisotropic filtering: {:.0f}x for the game's mipmapped textures ({})", level,
-                requested == kAutomaticAnisotropy ? "automatic, discrete GPU" : "chosen");
+      log::info("gfx", "Anisotropic filtering: {:.0f}x for the game's mipmapped textures", level);
     else
       log::info("gfx", "Anisotropic filtering: the game's own ({})",
-                requested == 0 ? "off"
-                : !features.samplerAnisotropy ? "the GPU has none"
-                                              : "automatic, integrated GPU");
+                requested == 0 ? "off" : "the GPU has none");
   });
   return level;
 }

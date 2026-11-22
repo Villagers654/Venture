@@ -2203,7 +2203,7 @@ TEST_CASE("gfx integer varyings without flat compile, link and render through th
 TEST_SUITE_END();
 
 
-TEST_CASE("Anisotropic filtering: automatic on discrete GPUs, and only mipmapped linear samplers are raised") {
+TEST_CASE("Anisotropic filtering: the chosen level on any GPU, and only mipmapped linear samplers are raised") {
   using namespace venture::gfx;
   VkPhysicalDeviceProperties discrete{}, integrated{};
   discrete.deviceType = VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU;
@@ -2212,20 +2212,19 @@ TEST_CASE("Anisotropic filtering: automatic on discrete GPUs, and only mipmapped
   integrated.limits.maxSamplerAnisotropy = 16;
   VkPhysicalDeviceFeatures features{}, none{};
   features.samplerAnisotropy = VK_TRUE;
-  CHECK(parse_anisotropy("") == kAutomaticAnisotropy);
-  CHECK(parse_anisotropy("on") == kAutomaticAnisotropy);
+  // 16x unless off or another level (the launcher's default on every machine).
+  CHECK(parse_anisotropy("") == 16);
+  CHECK(parse_anisotropy("auto") == 16);
   CHECK(parse_anisotropy("off") == 0);
   CHECK(parse_anisotropy("4") == 4);
   CHECK(parse_anisotropy("16") == 16);
-  CHECK(parse_anisotropy("32") == kAutomaticAnisotropy);
-  CHECK(anisotropy_level(kAutomaticAnisotropy, discrete, features) == 16);
-  CHECK(anisotropy_level(kAutomaticAnisotropy, integrated, features) == 0);
+  CHECK(parse_anisotropy("32") == 16);
+  CHECK(anisotropy_level(16, discrete, features) == 16);
   CHECK(anisotropy_level(16, integrated, features) == 16);
   CHECK(anisotropy_level(2, integrated, features) == 2);
   CHECK(anisotropy_level(0, discrete, features) == 0);
   CHECK(anisotropy_level(16, discrete, none) == 0);
   discrete.limits.maxSamplerAnisotropy = 8;
-  CHECK(anisotropy_level(kAutomaticAnisotropy, discrete, features) == 8);
   CHECK(anisotropy_level(16, discrete, features) == 8);
 
   VkSamplerCreateInfo base{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};

@@ -156,7 +156,7 @@ std::string pc_audio_environment(const DisplaySettings &d) { return d.pc_audio =
 std::string eye_scale_environment(const DisplaySettings &d) { return d.match_resolution == "off" ? "off" : "auto"; }
 
 std::string anisotropy_environment(const DisplaySettings &d) {
-  return valid_anisotropy(d.anisotropy) ? d.anisotropy : "auto";
+  return valid_anisotropy(d.anisotropy) ? d.anisotropy : "16";
 }
 
 std::string foveation_environment(const DisplaySettings &d) {
@@ -164,7 +164,7 @@ std::string foveation_environment(const DisplaySettings &d) {
 }
 
 bool valid_anisotropy(std::string_view value) {
-  return value == "auto" || value == "off" || value == "2" || value == "4" || value == "8" || value == "16";
+  return value == "off" || value == "2" || value == "4" || value == "8" || value == "16";
 }
 
 std::string overlay_environment(const DisplaySettings &d) { return d.overlay == "on" ? "on" : "off"; }

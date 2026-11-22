@@ -6,20 +6,16 @@
 // samplers (hle/vulkan/hardware_buffer.cpp) and the ones ANGLE creates for
 // GLES games (gfx/pipeline_trace.cpp).
 //
-//   VENTURE_ANISOTROPY = auto | off | 2 | 4 | 8 | 16
-//     auto (the default; the launcher's "Anisotropic filtering" Automatic) is
-//     16x on a discrete GPU and the game's own filtering on an integrated one,
-//     which shares memory bandwidth with the CPU (laptops' integrated GPUs,
-//     standalone headsets, where no measurement shows the cost is negligible).
-//     A number is that level on any GPU; off keeps the game's own. Levels are
-//     capped at the GPU's maxSamplerAnisotropy.
+//   VENTURE_ANISOTROPY = off | 2 | 4 | 8 | 16
+//     A number is that level on any GPU, capped at its maxSamplerAnisotropy;
+//     off keeps the game's own. Unset or anything else is 16, the launcher's
+//     default "Anisotropic filtering" on every machine.
 #include <vulkan/vulkan.h>
 #include <string_view>
 
 namespace venture::gfx {
-// The level VENTURE_ANISOTROPY asks for: kAutomaticAnisotropy, 0 (off) or
-// 2, 4, 8 or 16. Anything else is automatic.
-inline constexpr float kAutomaticAnisotropy = -1;
+// The level VENTURE_ANISOTROPY asks for: 0 (the game's own) for off, else 2,
+// 4, 8 or 16; anything else is 16.
 float parse_anisotropy(std::string_view value);
 // The level Venture gives samplers on this GPU for `requested`, or 0 to keep
 // the game's.

@@ -109,7 +109,7 @@ Settings
                                  color-key off|RRGGBB |
                                  mirror cropped|full|off | mirror-eye left|right |
                                  pc-audio on|off | match-resolution auto|off |
-                                 anisotropy auto|off|2|4|8|16 | foveation dynamic|fixed|off
+                                 anisotropy off|2|4|8|16 | foveation dynamic|fixed|off
                                  overlay on|off
 
 GAME is a name (or a unique part of it), an app id or a package name.
@@ -1352,7 +1352,7 @@ int Cli::settings_cmd(const Args &args) {
       next.display.match_resolution = value;
     } else if (key == "anisotropy") {
       if (!library::valid_anisotropy(value))
-        throw UsageError("anisotropy takes auto, off, 2, 4, 8 or 16.");
+        throw UsageError("anisotropy takes off, 2, 4, 8 or 16.");
       next.display.anisotropy = value;
     } else if (key == "foveation") {
       if (value != "dynamic" && value != "fixed" && value != "off")

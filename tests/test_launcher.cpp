@@ -753,11 +753,12 @@ TEST_CASE("the desktop mirror shows the left eye by default, the right globally 
   REQUIRE(loaded.game_display.contains("1"));
   CHECK(loaded.game_display["1"].mirror_eye.empty());
 }
-TEST_CASE("anisotropic filtering is automatic by default, off or a level globally or per game") {
+TEST_CASE("anisotropic filtering is 16x by default on every machine, off or a level globally or per game") {
   Directory d;
   auto settings = library::Settings::defaults(d.root);
-  CHECK(settings.display.anisotropy == "auto");
-  CHECK(library::anisotropy_environment(settings.display) == "auto");
+  CHECK(settings.display.anisotropy == "16");
+  CHECK(library::anisotropy_environment(settings.display) == "16");
+  CHECK_FALSE(library::valid_anisotropy("auto"));
   CHECK(library::game_display_defaults().anisotropy.empty());
   settings.display.anisotropy = "8";
   auto off = library::game_display_defaults();
@@ -770,12 +771,13 @@ TEST_CASE("anisotropic filtering is automatic by default, off or a level globall
   auto loaded = library::Settings::load(d.root);
   CHECK(library::anisotropy_environment(library::effective_display(loaded.display, nullptr)) == "8");
   CHECK(library::anisotropy_environment(library::effective_display(loaded.display, &loaded.game_display["1"])) == "off");
-  // Unknown values load as the default: dynamic globally, the global choice per game.
-  json["display"]["anisotropy"] = "32x";
+  // Unknown values (and the former "auto") load as 16x globally and as the
+  // global choice per game.
+  json["display"]["anisotropy"] = "auto";
   json["gameDisplay"] = {{"1", {{"anisotropy", "on"}, {"mirror", "full"}}}};
   paths::atomic_write(d.root / "settings.json", json.dump());
   loaded = library::Settings::load(d.root);
-  CHECK(loaded.display.anisotropy == "auto");
+  CHECK(loaded.display.anisotropy == "16");
   CHECK(loaded.game_display["1"].anisotropy.empty());
 }
 TEST_CASE("foveated rendering is dynamic by default, fixed or off globally or per game") {
