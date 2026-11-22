@@ -1,0 +1,5880 @@
+# Korean translation of Venture's interface.
+msgid ""
+msgstr ""
+"Project-Id-Version: Venture\n"
+"Language: ko\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=1; plural=0;\n"
+
+#. The whole --help text. Keep commands, options and the words in capitals (GAME, ACCOUNT, FOLDER...) in English and keep the descriptions in one column; lines are best under 80 characters.
+#: src/launcher/cli.cpp:42
+msgid ""
+"Venture command line\n"
+"\n"
+"Usage: venture-cli [--json] [--offline] <command> [arguments]\n"
+"\n"
+"Library\n"
+"  status                         Accounts, games folder, installs and downloads\n"
+"  library [--installed] [--search TEXT]\n"
+"                                 Games your accounts own and games installed here\n"
+"  info GAME                      Store details, installation and add-ons\n"
+"  install GAME [--as ACCOUNT] [--to FOLDER] [--build VERSION|all]\n"
+"                                 Download and install (or update) a game; a new\n"
+"                                 one goes to FOLDER instead of the games folder.\n"
+"                                 --build installs that version (or every one)\n"
+"                                 beside the others, each its own library entry\n"
+"                                 with its own saves, never updated\n"
+"  builds GAME [--as ACCOUNT]     Every version you can install, with its version\n"
+"                                 code, binary id and release channels\n"
+"  uninstall GAME [--yes]         Remove a game's files; saves are kept\n"
+"  play GAME [--as ACCOUNT|local] Launch a game and wait for it to exit\n"
+"  logs GAME [--lines N]          The end of a game's last runtime log\n"
+"  report [GAME] [--upload]       Write a debug report about a game's last run\n"
+"                                 (the most recent one by default): what happened,\n"
+"                                 its likely cause, the system setup and the logs,\n"
+"                                 with personal details removed; --upload also\n"
+"                                 shares it as a link (dpaste.com, 90 days)\n"
+"\n"
+"Add-ons\n"
+"  addons GAME [--as ACCOUNT]     List a game's add-ons (as the owning account)\n"
+"  addons install GAME SKU|--all  Install owned add-ons\n"
+"  addons remove GAME SKU         Remove an installed add-on\n"
+"\n"
+"Downloads\n"
+"  downloads                      The download and import queue\n"
+"  downloads cancel GAME          Cancel a game's download\n"
+"  downloads resume GAME          Resume a paused or failed download\n"
+"\n"
+"Import\n"
+"  import PATH [--to FOLDER] [--yes]\n"
+"                                 Import an APK, a folder or an archive\n"
+"  import --headset [--serial SERIAL] [--only PKG,...] [--to FOLDER] [--yes]\n"
+"                                 Import games from a Quest connected over adb\n"
+"  import-saves GAME --from FOLDER | --headset [--serial SERIAL]\n"
+"                                 Import an installed game's save data (the save\n"
+"                                 data it replaces is kept in a backup)\n"
+"  export-saves GAME [--serial SERIAL]\n"
+"                                 Send an installed game's save data to a Quest\n"
+"                                 over adb (the headset's saves are backed up first)\n"
+"\n"
+"Accounts\n"
+"  accounts                       Signed-in Meta accounts\n"
+"  accounts sign-in [--manual]    Add an account (opens Meta's sign-in window);\n"
+"                                 --manual prints Meta's link for any browser and\n"
+"                                 reads back the oculus:// address it ends on\n"
+"  accounts use ACCOUNT           Make an account active\n"
+"  accounts primary ACCOUNT       Mark the primary account\n"
+"  accounts sign-out ACCOUNT      Sign out; its games and saves stay\n"
+"  accounts remove ACCOUNT [--delete-saves] [--yes]\n"
+"\n"
+"Settings\n"
+"  settings                       Show settings\n"
+"  settings set KEY VALUE         games-folder PATH | runtime PATH|default |\n"
+"                                 adb PATH|auto | log-level trace|debug|info|warn|error |\n"
+"                                 console on|off | add-to-steam on|off |\n"
+"                                 add-new-to-steam on|off | passthrough on|off |\n"
+"                                 lookup-imports-online on|off |\n"
+"                                 language auto|en|CODE |\n"
+"                                 color-key off|RRGGBB |\n"
+"                                 mirror cropped|full|off | mirror-eye left|right |\n"
+"                                 pc-audio on|off | match-resolution auto|off\n"
+"\n"
+"GAME is a name (or a unique part of it), an app id or a package name.\n"
+"ACCOUNT is a name, alias, account key or the number `accounts` shows.\n"
+"Exit codes: 0 success, 1 failure, 2 usage, 130 interrupted; play returns the\n"
+"game's own exit code.\n"
+msgstr ""
+"Venture 명령줄\n"
+"\n"
+"사용법: venture-cli [--json] [--offline] <command> [arguments]\n"
+"\n"
+"Library\n"
+"  status                         계정, 게임 폴더, 설치와 다운로드\n"
+"  library [--installed] [--search TEXT]\n"
+"                                 계정이 소유한 게임과 여기에 설치된 게임\n"
+"  info GAME                      스토어 정보, 설치와 추가 콘텐츠\n"
+"  install GAME [--as ACCOUNT] [--to FOLDER] [--build VERSION|all]\n"
+"                                 게임을 다운로드해 설치(또는 업데이트)합니다. 새\n"
+"                                 게임은 게임 폴더 대신 FOLDER에 들어갑니다.\n"
+"                                 --build는 그 버전(또는 모든 버전)을 다른 버전과\n"
+"                                 나란히 설치하며, 각각 자체 라이브러리 항목과\n"
+"                                 세이브를 갖고 업데이트되지 않습니다\n"
+"  builds GAME [--as ACCOUNT]     설치할 수 있는 모든 버전과 버전 코드, 바이너리\n"
+"                                 id, 릴리스 채널\n"
+"  uninstall GAME [--yes]         게임 파일을 제거합니다. 세이브는 유지됩니다\n"
+"  play GAME [--as ACCOUNT|local] 게임을 실행하고 종료까지 대기\n"
+"  logs GAME [--lines N]          게임 마지막 런타임 로그의 끝 부분\n"
+"  report [GAME] [--upload]       게임 마지막 실행(기본값은 가장 최근)에 대한\n"
+"                                 디버그 보고서를 작성합니다: 무슨 일이 일어났는지,\n"
+"                                 예상 원인, 시스템 설정과 로그를 개인 정보를\n"
+"                                 제거하고 담습니다. --upload는 링크로 공유하기도\n"
+"                                 합니다(dpaste.com, 90일)\n"
+"\n"
+"Add-ons\n"
+"  addons GAME [--as ACCOUNT]     게임의 추가 콘텐츠 목록(소유 계정으로)\n"
+"  addons install GAME SKU|--all  소유한 추가 콘텐츠 설치\n"
+"  addons remove GAME SKU         설치된 추가 콘텐츠 제거\n"
+"\n"
+"Downloads\n"
+"  downloads                      다운로드와 가져오기 대기열\n"
+"  downloads cancel GAME          게임 다운로드 취소\n"
+"  downloads resume GAME          일시 중지되거나 실패한 다운로드 재개\n"
+"\n"
+"Import\n"
+"  import PATH [--to FOLDER] [--yes]\n"
+"                                 APK, 폴더 또는 아카이브 가져오기\n"
+"  import --headset [--serial SERIAL] [--only PKG,...] [--to FOLDER] [--yes]\n"
+"                                 adb로 연결된 Quest에서 게임 가져오기\n"
+"  import-saves GAME --from FOLDER | --headset [--serial SERIAL]\n"
+"                                 설치된 게임의 세이브 데이터를 가져옵니다\n"
+"                                 (대체되는 세이브 데이터는 백업에 유지됩니다)\n"
+"  export-saves GAME [--serial SERIAL]\n"
+"                                 설치된 게임의 세이브 데이터를 adb로 Quest에\n"
+"                                 보냅니다(헤드셋의 세이브는 먼저 백업됩니다)\n"
+"\n"
+"Accounts\n"
+"  accounts                       로그인한 Meta 계정\n"
+"  accounts sign-in [--manual]    계정 추가(Meta 로그인 창을 엽니다). --manual은\n"
+"                                 모든 브라우저에서 쓸 Meta 링크를 표시하고, 끝나는\n"
+"                                 oculus:// 주소를 다시 읽습니다\n"
+"  accounts use ACCOUNT           계정을 활성으로 만듭니다\n"
+"  accounts primary ACCOUNT       기본 계정으로 지정합니다\n"
+"  accounts sign-out ACCOUNT      로그아웃합니다. 게임과 세이브는 유지됩니다\n"
+"  accounts remove ACCOUNT [--delete-saves] [--yes]\n"
+"\n"
+"Settings\n"
+"  settings                       설정 표시\n"
+"  settings set KEY VALUE         games-folder PATH | runtime PATH|default |\n"
+"                                 adb PATH|auto | log-level trace|debug|info|warn|error |\n"
+"                                 console on|off | add-to-steam on|off |\n"
+"                                 add-new-to-steam on|off | passthrough on|off |\n"
+"                                 lookup-imports-online on|off |\n"
+"                                 language auto|en|CODE |\n"
+"                                 color-key off|RRGGBB |\n"
+"                                 mirror cropped|full|off | mirror-eye left|right |\n"
+"                                 pc-audio on|off | match-resolution auto|off\n"
+"\n"
+"GAME은 이름(또는 고유한 일부), 앱 id 또는 패키지 이름입니다.\n"
+"ACCOUNT는 이름, 별칭, 계정 키 또는 `accounts`가 표시하는 번호입니다.\n"
+"종료 코드: 0 성공, 1 실패, 2 사용법 오류, 130 중단. play는 게임 자체의\n"
+"종료 코드를 반환합니다.\n"
+
+#: src/launcher/cli.cpp:135
+#, python-brace-format
+msgid "Missing {0}."
+msgstr "누락되었습니다: {0}."
+
+#: src/launcher/cli.cpp:152
+#, python-brace-format
+msgid "{0} needs a value."
+msgstr "{0}에 값이 필요합니다."
+
+#: src/launcher/cli.cpp:157
+#, python-brace-format
+msgid "Unknown option {0}."
+msgstr "알 수 없는 옵션 {0}입니다."
+
+#: src/launcher/cli.cpp:230
+msgid " Pass --yes to confirm."
+msgstr " 확인하려면 --yes를 지정하세요."
+
+#: src/launcher/cli.cpp:236
+msgid "Cancelled.\n"
+msgstr "취소되었습니다.\n"
+
+#: src/launcher/cli.cpp:326
+msgid "warning: could not refresh the Meta library ("
+msgstr "경고: Meta 라이브러리를 새로고침하지 못했습니다("
+
+#: src/launcher/cli.cpp:327
+msgid "); showing the saved library.\n"
+msgstr "); 저장된 라이브러리를 표시합니다.\n"
+
+#: src/launcher/cli.cpp:343
+#, python-brace-format
+msgid "{0} does not own {1}."
+msgstr "{0}이(가) {1}을(를) 소유하지 않습니다."
+
+#: src/launcher/cli.cpp:359
+#, python-brace-format
+msgid "Reconnect {0}, which owns {1}."
+msgstr "{1}의 소유 계정인 {0}을(를) 다시 연결하세요."
+
+#: src/launcher/cli.cpp:374
+msgid "The Venture launcher is open and manages downloads. Use it, or close it first."
+msgstr "Venture 런처가 열려 있어 다운로드를 관리합니다. 런처를 사용하거나 먼저 닫으세요."
+
+#: src/launcher/cli.cpp:378
+msgid "This needs a connection. Run without --offline."
+msgstr "연결이 필요합니다. --offline 없이 실행하세요."
+
+#: src/launcher/cli.cpp:380
+msgid "Sign in first: venture-cli accounts sign-in"
+msgstr "먼저 로그인하세요: venture-cli accounts sign-in"
+
+#: src/launcher/cli.cpp:384
+#: src/launcher/ui/views.cpp:619
+msgid "Meta account"
+msgstr "Meta 계정"
+
+#: src/launcher/cli.cpp:388
+msgid "no account"
+msgstr "계정 없음"
+
+#: src/launcher/cli.cpp:405
+#, python-brace-format
+msgid "No account matches \"{0}\". See: venture-cli accounts"
+msgstr "\"{0}\"과(와) 일치하는 계정이 없습니다. 참고: venture-cli accounts"
+
+#: src/launcher/cli.cpp:406
+#, python-brace-format
+msgid "\"{0}\" matches several accounts; use its key."
+msgstr "\"{0}\"은(는) 여러 계정에 일치합니다. 키를 사용하세요."
+
+#: src/launcher/cli.cpp:443
+#, python-brace-format
+msgid "\"{0}\" matches {1} games:{2}"
+msgstr "\"{0}\"은(는) {1}개 게임에 일치합니다:{2}"
+
+#: src/launcher/cli.cpp:446
+#, python-brace-format
+msgid "No game matches \"{0}\". See: venture-cli library"
+msgstr "\"{0}\"과(와) 일치하는 게임이 없습니다. 참고: venture-cli library"
+
+#: src/launcher/cli.cpp:461
+msgid "importing"
+msgstr "가져오는 중"
+
+#: src/launcher/cli.cpp:461
+#: src/launcher/cli.cpp:1077
+msgid "downloading"
+msgstr "다운로드 중"
+
+#: src/launcher/cli.cpp:463
+msgid "needs attention"
+msgstr "확인 필요"
+
+#: src/launcher/cli.cpp:465
+#: src/launcher/cli.cpp:777
+#: src/launcher/cli.cpp:1077
+msgid "installed"
+msgstr "설치됨"
+
+#: src/launcher/cli.cpp:467
+msgid "paused"
+msgstr "일시 정지"
+
+#: src/launcher/cli.cpp:469
+msgid "not installed"
+msgstr "미설치"
+
+#: src/launcher/cli.cpp:528
+msgid "  queued"
+msgstr "  대기 중"
+
+#: src/launcher/cli.cpp:530
+msgid "  checking files"
+msgstr "  파일 확인 중"
+
+#: src/launcher/cli.cpp:533
+#, python-brace-format
+msgid "  {0:>3}%  {1} of {2}"
+msgstr "  {0:>3}%  {2} 중 {1}"
+
+#: src/launcher/cli.cpp:535
+#, python-brace-format
+msgid "  {0}/s  {1} left"
+msgstr "  {0}/s  {1} 남음"
+
+#: src/launcher/cli.cpp:555
+msgid "The job left the queue before it finished."
+msgstr "작업이 완료되기 전에 대기열에서 나갔습니다."
+
+#: src/launcher/cli.cpp:557
+#, python-brace-format
+msgid "The {0} did not finish."
+msgstr "{0}이(가) 완료되지 않았습니다."
+
+#: src/launcher/cli.cpp:573
+msgid "Sign in to list this game's versions."
+msgstr "이 게임의 버전을 보려면 로그인하세요."
+
+#: src/launcher/cli.cpp:618
+msgid "Games folder: "
+msgstr "게임 폴더: "
+
+#: src/launcher/cli.cpp:620
+msgid "Accounts:     none (venture-cli accounts sign-in)\n"
+msgstr "계정:     없음 (venture-cli accounts sign-in)\n"
+
+#: src/launcher/cli.cpp:623
+msgid "Account:      "
+msgstr "계정:      "
+
+#: src/launcher/cli.cpp:623
+msgid " signed in)\n"
+msgstr " 로그인됨)\n"
+
+#: src/launcher/cli.cpp:624
+msgid "Installed:    "
+msgstr "설치됨:    "
+
+#: src/launcher/cli.cpp:624
+msgid " games, "
+msgstr "개 게임, "
+
+#: src/launcher/cli.cpp:625
+msgid "Downloads:    "
+msgstr "다운로드:    "
+
+#: src/launcher/cli.cpp:625
+msgid "none"
+msgstr "없음"
+
+#: src/launcher/cli.cpp:625
+msgid " in the queue"
+msgstr " 대기 중"
+
+#: src/launcher/cli.cpp:628
+msgid "The Venture launcher is open; it manages downloads until it closes.\n"
+msgstr "Venture 런처가 열려 있어 닫힐 때까지 다운로드를 관리합니다.\n"
+
+#: src/launcher/cli.cpp:648
+msgid "No games match.\n"
+msgstr "일치하는 게임이 없습니다.\n"
+
+#: src/launcher/cli.cpp:648
+msgid "No games yet.\n"
+msgstr "아직 게임이 없습니다.\n"
+
+#: src/launcher/cli.cpp:657
+msgid "Game"
+msgstr "게임"
+
+#: src/launcher/cli.cpp:657
+#: src/launcher/cli.cpp:795
+#: src/launcher/cli.cpp:1079
+#: src/launcher/cli.cpp:1218
+msgid "Status"
+msgstr "상태"
+
+#: src/launcher/cli.cpp:657
+#: src/launcher/cli.cpp:795
+#: src/launcher/cli.cpp:1172
+#: src/launcher/ui/views.cpp:3448
+msgid "Version"
+msgstr "버전"
+
+#: src/launcher/cli.cpp:657
+#: src/launcher/cli.cpp:1079
+#: src/launcher/cli.cpp:1172
+msgid "Size"
+msgstr "크기"
+
+#: src/launcher/cli.cpp:657
+msgid "App ID"
+msgstr "앱 ID"
+
+#: src/launcher/cli.cpp:658
+#, python-brace-format
+msgid ""
+"\n"
+"{0} games, {1} installed\n"
+msgstr ""
+"\n"
+"{1}개 설치된 {0}개 게임\n"
+
+#: src/launcher/cli.cpp:686
+msgid "Publisher:  "
+msgstr "발행사:  "
+
+#: src/launcher/cli.cpp:687
+msgid "App ID:     "
+msgstr "앱 ID:     "
+
+#: src/launcher/cli.cpp:689
+msgid "Package:    "
+msgstr "패키지:    "
+
+#: src/launcher/cli.cpp:693
+msgid "Owned by:   "
+msgstr "소유:   "
+
+#: src/launcher/cli.cpp:693
+msgid "no signed-in account"
+msgstr "로그인한 계정 없음"
+
+#: src/launcher/cli.cpp:694
+msgid "Status:     "
+msgstr "상태:     "
+
+#: src/launcher/cli.cpp:694
+msgid " (update available)"
+msgstr " (업데이트 가능)"
+
+#: src/launcher/cli.cpp:696
+msgid "Installed:  version "
+msgstr "설치됨:  버전 "
+
+#: src/launcher/cli.cpp:697
+msgid "Folder:     "
+msgstr "폴더:     "
+
+#: src/launcher/cli.cpp:700
+msgid "Latest:     version "
+msgstr "최신:     버전 "
+
+#: src/launcher/cli.cpp:703
+msgid "Add-ons:    "
+msgstr "추가 콘텐츠:    "
+
+#: src/launcher/cli.cpp:703
+msgid " (venture-cli addons \""
+msgstr " (venture-cli addons \""
+
+#: src/launcher/cli.cpp:707
+msgid "warning: store details unavailable: "
+msgstr "경고: 스토어 정보를 사용할 수 없습니다: "
+
+#: src/launcher/cli.cpp:717
+#: src/launcher/cli.cpp:771
+#, python-brace-format
+msgid "No signed-in account owns {0}."
+msgstr "로그인한 계정이 {0}을(를) 소유하지 않습니다."
+
+#: src/launcher/cli.cpp:726
+msgid " is installed and up to date.\n"
+msgstr " 은(는) 설치되어 있고 최신 상태입니다.\n"
+
+#: src/launcher/cli.cpp:740
+#: src/launcher/cli.cpp:830
+#, python-brace-format
+msgid "{0} is not in the Meta library."
+msgstr "{0}은(는) Meta 라이브러리에 없습니다."
+
+#: src/launcher/cli.cpp:744
+msgid "Installing "
+msgstr "설치 중: "
+
+#: src/launcher/cli.cpp:744
+msgid " as "
+msgstr " (계정: "
+
+#: src/launcher/cli.cpp:745
+#: src/launcher/cli.cpp:840
+#: src/launcher/cli.cpp:1104
+#: src/launcher/ui/views.cpp:1092
+msgid "Downloading"
+msgstr "다운로드 중"
+
+#: src/launcher/cli.cpp:757
+msgid "The installed files did not pass the size check."
+msgstr "설치된 파일이 크기 검사를 통과하지 못했습니다."
+
+#: src/launcher/cli.cpp:760
+#, python-brace-format
+msgid "Installed {0} (version {1}, {2}).\n"
+msgstr "{0} 설치됨 (버전 {1}, {2}).\n"
+
+#: src/launcher/cli.cpp:775
+msgid "latest"
+msgstr "최신"
+
+#: src/launcher/cli.cpp:777
+msgid "installed beside"
+msgstr "나란히 설치됨"
+
+#: src/launcher/cli.cpp:795
+msgid "Code"
+msgstr "코드"
+
+#: src/launcher/cli.cpp:795
+msgid "Binary ID"
+msgstr "바이너리 ID"
+
+#: src/launcher/cli.cpp:795
+msgid "Channels"
+msgstr "채널"
+
+#: src/launcher/cli.cpp:796
+#, python-brace-format
+msgid ""
+"\n"
+"{0} versions of {1}\n"
+msgstr ""
+"\n"
+"{1}의 {0}개 버전\n"
+
+#: src/launcher/cli.cpp:803
+#, python-brace-format
+msgid "{0} is a version installed beside the game; name the game itself."
+msgstr "{0}은(는) 게임 옆에 설치된 버전입니다. 게임 이름을 지정하세요."
+
+#: src/launcher/cli.cpp:813
+#, python-brace-format
+msgid "{0} has no version {1}. See: venture-cli builds \"{2}\""
+msgstr "{0}에 버전 {1}이(가) 없습니다. 참고: venture-cli builds \"{2}\""
+
+#: src/launcher/cli.cpp:815
+#, python-brace-format
+msgid "{0} has {1} builds of version {2}; give the binary id (venture-cli builds)."
+msgstr "{0}에 버전 {2}의 {1}개 빌드가 있습니다. 바이너리 id를 지정하세요 (venture-cli builds)."
+
+#: src/launcher/cli.cpp:818
+#, python-brace-format
+msgid "Install all {0} versions of {1}?"
+msgstr "{1}의 모든 {0}개 버전을 설치할까요?"
+
+#: src/launcher/cli.cpp:834
+#, python-brace-format
+msgid "{0} of {1} versions are installed already.\n"
+msgstr "{1}개 버전 중 {0}개는 이미 설치되어 있습니다.\n"
+
+#: src/launcher/cli.cpp:858
+#, python-brace-format
+msgid "Installed {0} of {1} versions of {2}.\n"
+msgstr "{2}의 {1}개 버전 중 {0}개를 설치했습니다.\n"
+
+#: src/launcher/cli.cpp:870
+#, python-brace-format
+msgid "{0} is not installed."
+msgstr "{0}은(는) 설치되어 있지 않습니다."
+
+#: src/launcher/cli.cpp:871
+#, python-brace-format
+msgid "Uninstall {0} ({1})? Saves are kept."
+msgstr "{0} ({1})을(를) 삭제할까요? 세이브는 유지됩니다."
+
+#: src/launcher/cli.cpp:878
+msgid "Uninstalled "
+msgstr "삭제됨: "
+
+#: src/launcher/cli.cpp:878
+msgid ". Its saves are kept.\n"
+msgstr ". 세이브는 유지됩니다.\n"
+
+#: src/launcher/cli.cpp:887
+msgid "Give --from FOLDER or --headset."
+msgstr "--from FOLDER 또는 --headset을 지정하세요."
+
+#: src/launcher/cli.cpp:892
+#, python-brace-format
+msgid "Imported {0} save files ({1}) of {2}.\n"
+msgstr "{2}의 세이브 파일 {0}개({1})를 가져왔습니다.\n"
+
+#: src/launcher/cli.cpp:893
+msgid "The save data it replaced is in "
+msgstr "대체한 세이브 데이터는 여기에 있습니다: "
+
+#: src/launcher/cli.cpp:904
+#, python-brace-format
+msgid "Sent {0} save files ({1}) of {2} to the headset.\n"
+msgstr "{2}의 세이브 파일 {0}개({1})를 헤드셋으로 보냈습니다.\n"
+
+#: src/launcher/cli.cpp:905
+#, python-brace-format
+msgid "{0} files the headset would not back up were left unchanged.\n"
+msgstr "헤드셋이 백업하지 않은 {0}개 파일은 변경되지 않았습니다.\n"
+
+#: src/launcher/cli.cpp:906
+msgid "The headset's previous saves are in "
+msgstr "헤드셋의 이전 세이브는 여기에 있습니다: "
+
+#: src/launcher/cli.cpp:914
+#, python-brace-format
+msgid "{0} is not installed. Install it first: venture-cli install \"{1}\""
+msgstr "{0}은(는) 설치되어 있지 않습니다. 먼저 설치하세요: venture-cli install \"{1}\""
+
+#: src/launcher/cli.cpp:921
+msgid "Starting "
+msgstr "시작 중: "
+
+#: src/launcher/cli.cpp:925
+msgid "The game did not start."
+msgstr "게임을 시작하지 못했습니다."
+
+#: src/launcher/cli.cpp:927
+msgid "Running. Log: "
+msgstr "실행 중. 로그: "
+
+#: src/launcher/cli.cpp:934
+msgid "Stopping "
+msgstr "중지 중: "
+
+#: src/launcher/cli.cpp:948
+msgid " stopped: "
+msgstr " 중지됨: "
+
+#: src/launcher/cli.cpp:950
+msgid " stopped.\n"
+msgstr " 중지됨.\n"
+
+#: src/launcher/cli.cpp:950
+msgid " exited.\n"
+msgstr " 종료됨.\n"
+
+#: src/launcher/cli.cpp:959
+#, python-brace-format
+msgid "{0} has no installation to log."
+msgstr "{0}에 로그할 설치가 없습니다."
+
+#: src/launcher/cli.cpp:962
+#, python-brace-format
+msgid "{0} has not run yet."
+msgstr "{0}은(는) 아직 실행되지 않았습니다."
+
+#: src/launcher/cli.cpp:1009
+msgid "Full report: "
+msgstr "전체 보고서: "
+
+#: src/launcher/cli.cpp:1011
+msgid "Link to share: "
+msgstr "공유 링크: "
+
+#: src/launcher/cli.cpp:1014
+msgid "The report could not be uploaded: "
+msgstr "보고서를 업로드하지 못했습니다: "
+
+#: src/launcher/cli.cpp:1030
+#: src/launcher/cli.cpp:1282
+msgid "Removed "
+msgstr "제거됨: "
+
+#: src/launcher/cli.cpp:1030
+msgid " from "
+msgstr "에서 "
+
+#: src/launcher/cli.cpp:1055
+msgid "Downloading add-on"
+msgstr "추가 콘텐츠 다운로드 중"
+
+#: src/launcher/cli.cpp:1058
+msgid "Every owned add-on is installed.\n"
+msgstr "소유한 추가 콘텐츠가 모두 설치되어 있습니다.\n"
+
+#: src/launcher/cli.cpp:1059
+#, python-brace-format
+msgid "Installed {0} add-on(s) for {1}.\n"
+msgstr "{1}의 추가 콘텐츠 {0}개를 설치했습니다.\n"
+
+#: src/launcher/cli.cpp:1071
+msgid " has no add-ons"
+msgstr "에 추가 콘텐츠가 없습니다"
+
+#: src/launcher/cli.cpp:1071
+msgid " listed: "
+msgstr " (목록: "
+
+#: src/launcher/cli.cpp:1077
+msgid "owned"
+msgstr "소유"
+
+#: src/launcher/cli.cpp:1079
+msgid "Add-on"
+msgstr "추가 콘텐츠"
+
+#: src/launcher/cli.cpp:1079
+msgid "SKU"
+msgstr "SKU"
+
+#: src/launcher/cli.cpp:1091
+#, python-brace-format
+msgid "{0} has no download in the queue."
+msgstr "{0}은(는) 대기열에 다운로드가 없습니다."
+
+#: src/launcher/cli.cpp:1095
+msgid "Cancelled the download of "
+msgstr "다운로드 취소됨: "
+
+#: src/launcher/cli.cpp:1099
+msgid "Downloads need a connection. Run without --offline."
+msgstr "다운로드에는 연결이 필요합니다. --offline 없이 실행하세요."
+
+#: src/launcher/cli.cpp:1102
+msgid "Reconnect the account this download belongs to."
+msgstr "이 다운로드의 계정을 다시 연결하세요."
+
+#: src/launcher/cli.cpp:1104
+#: src/launcher/cli.cpp:1185
+#: src/launcher/ui/views.cpp:969
+#: src/launcher/ui/views.cpp:1822
+msgid "Importing"
+msgstr "가져오는 중"
+
+#: src/launcher/cli.cpp:1109
+msgid "Finished "
+msgstr "완료됨: "
+
+#: src/launcher/cli.cpp:1113
+#, python-brace-format
+msgid "Unknown downloads command \"{0}\"."
+msgstr "알 수 없는 downloads 명령 \"{0}\"입니다."
+
+#: src/launcher/cli.cpp:1124
+msgid "The download queue is empty.\n"
+msgstr "다운로드 대기열이 비어 있습니다.\n"
+
+#: src/launcher/cli.cpp:1130
+#: src/launcher/ui/views.cpp:997
+#: src/launcher/ui/views.cpp:1824
+#, python-brace-format
+msgid "{0} of {1}"
+msgstr "{1} 중 {0}"
+
+#: src/launcher/cli.cpp:1131
+#: src/launcher/ui/views.cpp:3891
+msgid "Download"
+msgstr "다운로드"
+
+#: src/launcher/cli.cpp:1131
+msgid "State"
+msgstr "상태"
+
+#: src/launcher/cli.cpp:1131
+msgid "Progress"
+msgstr "진행률"
+
+#: src/launcher/cli.cpp:1131
+msgid "Error"
+msgstr "오류"
+
+#: src/launcher/cli.cpp:1152
+msgid "No Android apps were found to import."
+msgstr "가져올 Android 앱을 찾을 수 없습니다."
+
+#: src/launcher/cli.cpp:1169
+msgid "Skipped"
+msgstr "건너뜀"
+
+#: src/launcher/cli.cpp:1172
+msgid "App"
+msgstr "앱"
+
+#: src/launcher/cli.cpp:1172
+msgid "Package"
+msgstr "패키지"
+
+#: src/launcher/cli.cpp:1172
+#: src/launcher/ui/views.cpp:560
+#: src/launcher/ui/views.cpp:3040
+#: src/launcher/ui/views.cpp:3058
+#: src/launcher/ui/views.cpp:3352
+msgid "Import"
+msgstr "가져오기"
+
+#: src/launcher/cli.cpp:1174
+msgid "Nothing here can be imported."
+msgstr "여기서 가져올 수 있는 항목이 없습니다."
+
+#: src/launcher/cli.cpp:1175
+#, python-brace-format
+msgid "Import {0} app(s)?"
+msgstr "앱 {0}개를 가져올까요?"
+
+#: src/launcher/cli.cpp:1191
+#, python-brace-format
+msgid "Imported {0} app(s).\n"
+msgstr "앱 {0}개를 가져왔습니다.\n"
+
+#: src/launcher/cli.cpp:1206
+msgid "No accounts. Add one: venture-cli accounts sign-in\n"
+msgstr "계정이 없습니다. 추가하세요: venture-cli accounts sign-in\n"
+
+#: src/launcher/cli.cpp:1212
+msgid "signed out"
+msgstr "로그아웃됨"
+
+#: src/launcher/cli.cpp:1212
+msgid "needs reconnect"
+msgstr "다시 연결 필요"
+
+#: src/launcher/cli.cpp:1212
+msgid "signed in"
+msgstr "로그인됨"
+
+#: src/launcher/cli.cpp:1214
+msgid ", primary"
+msgstr ", 기본"
+
+#: src/launcher/cli.cpp:1218
+msgid "Account"
+msgstr "계정"
+
+#: src/launcher/cli.cpp:1218
+msgid "Alias"
+msgstr "별명"
+
+#: src/launcher/cli.cpp:1218
+msgid "Key"
+msgstr "키"
+
+#: src/launcher/cli.cpp:1223
+msgid "Sign-in needs a connection. Run without --offline."
+msgstr "로그인에는 연결이 필요합니다. --offline 없이 실행하세요."
+
+#: src/launcher/cli.cpp:1235
+msgid "Complete sign-in in the Meta window.\n"
+msgstr "Meta 창에서 로그인을 완료하세요.\n"
+
+#: src/launcher/cli.cpp:1239
+msgid "1. Open this link in any browser and sign in to Meta:\n\n"
+msgstr "1. 어떤 브라우저에서든 이 링크를 열어 Meta에 로그인하세요:\n\n"
+
+#: src/launcher/cli.cpp:1240
+msgid "2. Paste the oculus:// address that Meta's Continue button tries to open\n"
+msgstr "2. Meta의 계속(Continue) 버튼이 열려는 oculus:// 주소를 붙여넣으세요\n"
+
+#: src/launcher/cli.cpp:1241
+msgid "   (in Firefox, press Ctrl+Shift+K before Continue and paste the message it shows):\n"
+msgstr "   (Firefox에서는 계속 전에 Ctrl+Shift+K를 누른 뒤 표시되는 메시지를 붙여넣으세요):\n"
+
+#: src/launcher/cli.cpp:1251
+#: src/launcher/cli.cpp:1258
+msgid "Sign-in did not finish."
+msgstr "로그인을 완료하지 못했습니다."
+
+#: src/launcher/cli.cpp:1260
+msgid "Signed in as "
+msgstr "로그인됨: "
+
+#: src/launcher/cli.cpp:1273
+#, python-brace-format
+msgid "Remove {0} from Venture{1}?"
+msgstr "{0}을(를) Venture에서{1} 제거할까요?"
+
+#: src/launcher/cli.cpp:1273
+msgid " and delete its saves"
+msgstr " 그리고 세이브도 삭제"
+
+#: src/launcher/cli.cpp:1277
+#, python-brace-format
+msgid "Unknown accounts command \"{0}\"."
+msgstr "알 수 없는 accounts 명령 \"{0}\"입니다."
+
+#: src/launcher/cli.cpp:1279
+msgid "Active account: "
+msgstr "활성 계정: "
+
+#: src/launcher/cli.cpp:1280
+msgid "Primary account: "
+msgstr "기본 계정: "
+
+#: src/launcher/cli.cpp:1281
+msgid "Signed out "
+msgstr "로그아웃됨: "
+
+#: src/launcher/cli.cpp:1281
+msgid ". Its games and saves stay on this PC."
+msgstr ". 게임과 세이브는 이 PC에 유지됩니다."
+
+#: src/launcher/cli.cpp:1300
+#, python-brace-format
+msgid "{0} takes on or off."
+msgstr "{0}은(는) on 또는 off를 받습니다."
+
+#: src/launcher/cli.cpp:1309
+msgid "log-level takes trace, debug, info, warn or error."
+msgstr "log-level은 trace, debug, info, warn 또는 error를 받습니다."
+
+#: src/launcher/cli.cpp:1318
+msgid "color-key takes off or a color as six hex digits (RRGGBB), such as FF00FF."
+msgstr "color-key는 off 또는 6자리 16진수 색상(RRGGBB, 예: FF00FF)을 받습니다."
+
+#: src/launcher/cli.cpp:1331
+msgid "mirror takes cropped, full or off."
+msgstr "mirror는 cropped, full 또는 off를 받습니다."
+
+#: src/launcher/cli.cpp:1335
+msgid "mirror-eye takes left or right."
+msgstr "mirror-eye는 left 또는 right를 받습니다."
+
+#: src/launcher/cli.cpp:1341
+msgid "match-resolution takes auto or off."
+msgstr "match-resolution은 auto 또는 off를 받습니다."
+
+#: src/launcher/cli.cpp:1345
+#, python-brace-format
+msgid "Unknown setting \"{0}\"."
+msgstr "알 수 없는 설정 \"{0}\"입니다."
+
+#: src/launcher/cli.cpp:1349
+#, python-brace-format
+msgid "Unknown settings command \"{0}\"."
+msgstr "알 수 없는 settings 명령 \"{0}\"입니다."
+
+#: src/launcher/cli.cpp:1395
+#, python-brace-format
+msgid "Unknown command \"{0}\"."
+msgstr "알 수 없는 명령 \"{0}\"입니다."
+
+#: src/launcher/cli.cpp:1425
+#: src/launcher/cli.cpp:1458
+#: src/launcher/cli.cpp:1464
+msgid "error: "
+msgstr "오류: "
+
+#: src/launcher/cli.cpp:1458
+msgid "See: venture-cli --help"
+msgstr "참고: venture-cli --help"
+
+#: src/launcher/cli.cpp:1461
+msgid ""
+"\n"
+"Interrupted. Queued downloads continue the next time Venture opens.\n"
+msgstr ""
+"\n"
+"중단되었습니다. 대기 중인 다운로드는 Venture를 다음에 열 때 계속됩니다.\n"
+
+#: src/launcher/core.cpp:29
+msgid "Unexpected response data. Refresh and try again."
+msgstr "예상하지 못한 응답 데이터입니다. 새로고침한 뒤 다시 시도하세요."
+
+#: src/launcher/core.cpp:31
+msgid "Could not access local files. Check the selected folder and permissions."
+msgstr "로컬 파일에 접근할 수 없습니다. 선택한 폴더와 권한을 확인하세요."
+
+#: src/launcher/core.cpp:35
+msgid "An unexpected operation failed. Try again."
+msgstr "예상하지 못한 작업이 실패했습니다. 다시 시도하세요."
+
+#: src/launcher/core.cpp:76
+msgid "Legacy account mode: connect to Meta to finish account migration. Your original credentials are retained."
+msgstr "레거시 계정 모드: Meta에 연결해 계정 이동을 완료하세요. 원래 인증 정보는 유지됩니다."
+
+#: src/launcher/core.cpp:82
+msgid "Save migration found conflicts; both copies were retained. Review the account migration status."
+msgstr "세이브 이동에서 충돌이 발견되어 두 복사본 모두 유지되었습니다. 계정 이동 상태를 확인하세요."
+
+#: src/launcher/core.cpp:85
+msgid "Some saves are busy; migration will retry on the next start."
+msgstr "일부 세이브가 사용 중입니다. 다음 시작 시 이동을 다시 시도합니다."
+
+#: src/launcher/core.cpp:87
+msgid "Account and saves migrated. Older Venture builds will show signed out."
+msgstr "계정과 세이브를 이동했습니다. 이전 Venture 빌드에서는 로그아웃된 것으로 표시됩니다."
+
+#: src/launcher/core.cpp:194
+msgid "Close this game before uninstalling it."
+msgstr "삭제하기 전에 이 게임을 닫으세요."
+
+#: src/launcher/core.cpp:273
+msgid "Settings saved."
+msgstr "설정을 저장했습니다."
+
+#: src/launcher/core.cpp:619
+#, python-brace-format
+msgid "OculusDB answered HTTP {0}."
+msgstr "OculusDB가 HTTP {0}으로 응답했습니다."
+
+#: src/launcher/core.cpp:663
+msgid "Invalid store link."
+msgstr "유효하지 않은 스토어 링크입니다."
+
+#: src/launcher/core.cpp:670
+msgid "Wait for this game's download to finish."
+msgstr "이 게임의 다운로드가 끝날 때까지 기다리세요."
+
+#: src/launcher/core.cpp:698
+msgid "Only imported games can be linked to a store page."
+msgstr "가져온 게임만 스토어 페이지와 연결할 수 있습니다."
+
+#: src/launcher/core.cpp:703
+msgid "Paste the game's Meta store link, like meta.com/experiences/1234567890123456, or its ID."
+msgstr "게임의 Meta 스토어 링크(meta.com/experiences/1234567890123456 같은 형태)나 ID를 붙여넣으세요."
+
+#: src/launcher/core.cpp:707
+msgid "Store pages can't be checked in offline mode."
+msgstr "오프라인 모드에서는 스토어 페이지를 확인할 수 없습니다."
+
+#: src/launcher/core.cpp:783
+msgid "Sign out an account before adding another (maximum four)."
+msgstr "다른 계정을 추가하기 전에(최대 4개) 계정을 로그아웃하세요."
+
+#: src/launcher/core.cpp:789
+msgid "Reconnect this account before switching."
+msgstr "전환하기 전에 이 계정을 다시 연결하세요."
+
+#: src/launcher/core.cpp:811
+#: src/launcher/core.cpp:838
+msgid "Invalid account key."
+msgstr "유효하지 않은 계정 키입니다."
+
+#: src/launcher/core.cpp:833
+msgid "Account signed out. Its installed games and saves remain on this PC."
+msgstr "계정을 로그아웃했습니다. 설치된 게임과 세이브는 이 PC에 유지됩니다."
+
+#: src/launcher/core.cpp:842
+msgid "Close running games before removing an account."
+msgstr "계정을 제거하기 전에 실행 중인 게임을 닫으세요."
+
+#: src/launcher/core.cpp:1029
+msgid "Paste the game's Meta store link, like meta.com/experiences/1234567890123456."
+msgstr "게임의 Meta 스토어 링크(meta.com/experiences/1234567890123456 같은 형태)를 붙여넣으세요."
+
+#: src/launcher/core.cpp:1044
+msgid "Meta says this account does not own that game."
+msgstr "Meta에 따르면 이 계정이 그 게임을 소유하지 않습니다."
+
+#: src/launcher/core.cpp:1046
+#: src/launcher/core.cpp:1093
+msgid "Meta returned a different account. Sign out and reconnect."
+msgstr "Meta가 다른 계정을 반환했습니다. 로그아웃한 뒤 다시 연결하세요."
+
+#: src/launcher/core.cpp:1051
+#, python-brace-format
+msgid "{0} is in your library."
+msgstr "{0}은(는) 라이브러리에 있습니다."
+
+#: src/launcher/core.cpp:1068
+msgid "Offline mode. Restart without --offline to connect to Meta."
+msgstr "오프라인 모드입니다. Meta에 연결하려면 --offline 없이 다시 시작하세요."
+
+#: src/launcher/core.cpp:1186
+msgid "Sign-in needs a connection. Restart without --offline."
+msgstr "로그인에는 연결이 필요합니다. --offline 없이 다시 시작하세요."
+
+#: src/launcher/core.cpp:1193
+msgid "Opening secure Meta sign-in..."
+msgstr "보안 Meta 로그인을 여는 중..."
+
+#: src/launcher/core.cpp:1215
+msgid "Complete sign-in in the Meta window."
+msgstr "Meta 창에서 로그인을 완료하세요."
+
+#: src/launcher/core.cpp:1216
+msgid "Waiting for the sign-in address."
+msgstr "로그인 주소를 기다리는 중입니다."
+
+#: src/launcher/core.cpp:1252
+msgid "Signed out. Installed games remain on this PC."
+msgstr "로그아웃했습니다. 설치된 게임은 이 PC에 유지됩니다."
+
+#: src/launcher/core.cpp:1256
+#: src/launcher/core.cpp:1316
+msgid "Downloads are unavailable in offline mode."
+msgstr "오프라인 모드에서는 다운로드를 사용할 수 없습니다."
+
+#: src/launcher/core.cpp:1258
+msgid "Sign in to install or update this game."
+msgstr "이 게임을 설치하거나 업데이트하려면 로그인하세요."
+
+#: src/launcher/core.cpp:1262
+#: src/launcher/core.cpp:1331
+msgid "Choose an absolute folder to install to."
+msgstr "설치할 절대 경로 폴더를 선택하세요."
+
+#: src/launcher/core.cpp:1318
+msgid "Only games from the Meta store have other versions."
+msgstr "Meta 스토어의 게임에만 다른 버전이 있습니다."
+
+#: src/launcher/core.cpp:1324
+#: src/launcher/core.cpp:1394
+msgid "Reconnect the owning account before installing."
+msgstr "설치하기 전에 소유 계정을 다시 연결하세요."
+
+#: src/launcher/core.cpp:1328
+msgid "Sign in to install this game."
+msgstr "이 게임을 설치하려면 로그인하세요."
+
+#: src/launcher/core.cpp:1417
+msgid "Could not verify installed add-on files. Rescan to retry."
+msgstr "설치된 추가 콘텐츠 파일을 확인할 수 없습니다. 다시 스캔해 시도하세요."
+
+#: src/launcher/core.cpp:1496
+msgid "Sign in to install add-ons."
+msgstr "추가 콘텐츠를 설치하려면 로그인하세요."
+
+#: src/launcher/core.cpp:1499
+msgid "Install the base game before its add-ons."
+msgstr "추가 콘텐츠 전에 본 게임을 설치하세요."
+
+#: src/launcher/core.cpp:1504
+#: src/launcher/core.cpp:1648
+msgid "Refresh add-ons to confirm ownership before installing."
+msgstr "설치하기 전에 추가 콘텐츠를 새로고침해 소유를 확인하세요."
+
+#: src/launcher/core.cpp:1512
+msgid "Installed game was not found."
+msgstr "설치된 게임을 찾을 수 없습니다."
+
+#: src/launcher/core.cpp:1515
+msgid "Close this game before removing an add-on."
+msgstr "추가 콘텐츠를 제거하기 전에 이 게임을 닫으세요."
+
+#: src/launcher/core.cpp:1527
+msgid "This game's saves are in use: another save import or export is still running, or the game is open in another Venture window."
+msgstr "이 게임의 세이브가 사용 중입니다: 다른 세이브 가져오기 또는 내보내기가 진행 중이거나, 게임이 다른 Venture 창에 열려 있습니다."
+
+#: src/launcher/core.cpp:1533
+msgid "Install this game before importing its save data."
+msgstr "세이브 데이터를 가져오기 전에 이 게임을 설치하세요."
+
+#: src/launcher/core.cpp:1534
+msgid "Save data imports go to the game's own install."
+msgstr "세이브 데이터 가져오기는 게임 자체의 설치에 적용됩니다."
+
+#: src/launcher/core.cpp:1538
+msgid "Close this game before importing its save data."
+msgstr "세이브 데이터를 가져오기 전에 이 게임을 닫으세요."
+
+#: src/launcher/core.cpp:1547
+#, python-brace-format
+msgid "No save data for {0} was found there. Pick a copy of the game's Android/data/{1} folder, or of its files folder."
+msgstr "{0}의 세이브 데이터가 그곳에 없습니다. 게임의 Android/data/{1} 폴더 복사본 또는 files 폴더를 선택하세요."
+
+#: src/launcher/core.cpp:1552
+#: src/launcher/core.cpp:1583
+msgid "adb was not found. Install Android platform-tools, or set adb's location in Settings."
+msgstr "adb를 찾을 수 없습니다. Android platform-tools를 설치하거나 설정에서 adb 위치를 지정하세요."
+
+#: src/launcher/core.cpp:1563
+msgid "No headset found. Connect it with a USB cable (or turn on Wi-Fi debugging) and enable developer mode in the Meta Horizon app."
+msgstr "헤드셋을 찾을 수 없습니다. USB 케이블로 연결하고(Wi-Fi 디버깅 켜기) Meta Horizon 앱에서 개발자 모드를 활성화하세요."
+
+#: src/launcher/core.cpp:1572
+msgid "Install this game before sending its save data."
+msgstr "세이브 데이터를 보내기 전에 이 게임을 설치하세요."
+
+#: src/launcher/core.cpp:1573
+msgid "Save data exports come from the game's own install."
+msgstr "세이브 데이터 내보내기는 게임 자체의 설치에서 가져옵니다."
+
+#: src/launcher/core.cpp:1577
+msgid "Close this game before sending its save data."
+msgstr "세이브 데이터를 보내기 전에 이 게임을 닫으세요."
+
+#: src/launcher/core.cpp:1591
+msgid "Sending save data to the headset..."
+msgstr "세이브 데이터를 헤드셋으로 보내는 중..."
+
+#: src/launcher/core.cpp:1597
+#, python-brace-format
+msgid "Sent {0} save file{1} to the headset.{2}{3}{4}{5}"
+msgstr "세이브 파일 {0}개{1}를 헤드셋으로 보냈습니다.{2}{3}{4}{5}"
+
+#: src/launcher/core.cpp:1599
+#, python-brace-format
+msgid " {0} {1} the headset would not back up {2} left unchanged (see the log)."
+msgstr " 헤드셋이 백업하지 않은 {1} {0}개 {2} 변경되지 않았습니다 (로그를 참조하세요)."
+
+#: src/launcher/core.cpp:1601
+#: src/launcher/core.cpp:1606
+#: src/launcher/core.cpp:1632
+msgid "file"
+msgstr "파일"
+
+#: src/launcher/core.cpp:1601
+#: src/launcher/core.cpp:1606
+#: src/launcher/core.cpp:1632
+msgid "files"
+msgstr "파일"
+
+#: src/launcher/core.cpp:1602
+msgid "was"
+msgstr "는"
+
+#: src/launcher/core.cpp:1602
+msgid "were"
+msgstr "들은"
+
+#: src/launcher/core.cpp:1604
+#, python-brace-format
+msgid " Removed {0} {1} from the headset that Venture's copy doesn't have."
+msgstr " Venture의 복사본에 없는 헤드셋의 {1} {0}개를 제거했습니다."
+
+#: src/launcher/core.cpp:1608
+msgid " The headset's previous saves are kept in a backup."
+msgstr " 헤드셋의 이전 세이브는 백업에 보관됩니다."
+
+#: src/launcher/core.cpp:1609
+msgid " Settings and saves the game keeps in private storage stay as they are on the headset."
+msgstr " 게임이 비공개 저장소에 보관하는 설정과 세이브는 헤드셋에서 그대로 유지됩니다."
+
+#: src/launcher/core.cpp:1624
+msgid "Importing save data..."
+msgstr "세이브 데이터를 가져오는 중..."
+
+#: src/launcher/core.cpp:1630
+#, python-brace-format
+msgid "Imported {0} save file{1}.{2}{3}"
+msgstr "세이브 파일 {0}개{1}를 가져왔습니다.{2}{3}"
+
+#: src/launcher/core.cpp:1631
+#, python-brace-format
+msgid " {0} the headset would not send {1} skipped (see the log)."
+msgstr " 헤드셋이 보내지 않은 {1} {0}개를 건너뛰었습니다 (로그를 참조하세요)."
+
+#: src/launcher/core.cpp:1634
+msgid " The save data it replaced is kept in a backup."
+msgstr " 대체한 세이브 데이터는 백업에 보관됩니다."
+
+#: src/launcher/core.cpp:1723
+msgid "Reconnect that account before playing, or choose another."
+msgstr "플레이하기 전에 그 계정을 다시 연결하거나 다른 계정을 선택하세요."
+
+#: src/launcher/core.cpp:1732
+#: src/launcher/core.cpp:2282
+#, python-brace-format
+msgid "Its install lacks the expansion file {0}. Import the game again together with that file (it is in Android/obb/{1} on the headset)."
+msgstr "설치에 확장 파일 {0}이(가) 없습니다. 그 파일과 함께 게임을 다시 가져오세요 (헤드셋의 Android/obb/{1}에 있습니다)."
+
+#: src/launcher/core.cpp:1736
+#, python-brace-format
+msgid "This game is not completely installed: its expansion file {0} is missing. Resume its download first."
+msgstr "이 게임이 완전히 설치되지 않았습니다: 확장 파일 {0}이(가) 없습니다. 먼저 다운로드를 재개하세요."
+
+#: src/launcher/core.cpp:1741
+msgid "This game is not completely installed. Resume its download first."
+msgstr "이 게임이 완전히 설치되지 않았습니다. 먼저 다운로드를 재개하세요."
+
+#: src/launcher/core.cpp:1763
+msgid "This game is already running or starting."
+msgstr "이 게임은 이미 실행 중이거나 시작 중입니다."
+
+#: src/launcher/core.cpp:1767
+msgid "Another version of this game is starting."
+msgstr "이 게임의 다른 버전이 시작 중입니다."
+
+#: src/launcher/core.cpp:1770
+msgid "Another version of this game is running. Quit it first."
+msgstr "이 게임의 다른 버전이 실행 중입니다. 먼저 종료하세요."
+
+#: src/launcher/core.cpp:1778
+msgid "This game is already running in another Venture launcher."
+msgstr "이 게임은 이미 다른 Venture 런처에서 실행 중입니다."
+
+#: src/launcher/core.cpp:1790
+msgid "Preparing application credentials..."
+msgstr "응용 프로그램 자격 증명을 준비하는 중..."
+
+#: src/launcher/core.cpp:1791
+msgid "Updating the installation manifest from Meta..."
+msgstr "Meta에서 설치 매니페스트를 업데이트하는 중..."
+
+#: src/launcher/core.cpp:1838
+msgid "Game launch cancelled."
+msgstr "게임 실행이 취소되었습니다."
+
+#: src/launcher/core.cpp:1851
+msgid "Account changed while the game was starting. Try again."
+msgstr "게임 시작 중 계정이 변경되었습니다. 다시 시도하세요."
+
+#: src/launcher/core.cpp:1857
+msgid "The library folders changed while the game was starting. Try again."
+msgstr "게임 시작 중 라이브러리 폴더가 변경되었습니다. 다시 시도하세요."
+
+#: src/launcher/core.cpp:1860
+msgid "Wait for this game's downloads to finish, then play again."
+msgstr "이 게임의 다운로드가 끝난 뒤 다시 플레이하세요."
+
+#: src/launcher/core.cpp:2033
+msgid "Games root is unavailable."
+msgstr "게임 루트를 사용할 수 없습니다."
+
+#: src/launcher/core.cpp:2071
+msgid "Close SteamVR first: Steam does not quit while SteamVR is running."
+msgstr "먼저 SteamVR을 닫으세요: SteamVR 실행 중에는 Steam을 종료할 수 없습니다."
+
+#: src/launcher/core.cpp:2081
+msgid "Verifying your Quest account..."
+msgstr "Quest 계정을 확인하는 중..."
+
+#: src/launcher/core.cpp:2109
+msgid "Meta did not return a numeric account identity. Sign-in was not saved."
+msgstr "Meta가 숫자 계정 식별자를 반환하지 않았습니다. 로그인이 저장되지 않았습니다."
+
+#: src/launcher/core.cpp:2121
+msgid "Existing local saves were attached to your first account."
+msgstr "기존 로컬 세이브가 첫 계정에 연결되었습니다."
+
+#: src/launcher/core.cpp:2161
+msgid "That has no oculus:// address. Copy the whole console message or the address itself."
+msgstr "oculus:// 주소가 없습니다. 콘솔 메시지 전체나 주소 자체를 복사하세요."
+
+#: src/launcher/core.cpp:2163
+msgid "That address is from an earlier sign-in. Copy the one Meta gave for this sign-in."
+msgstr "그 주소는 이전 로그인의 것입니다. 이번 로그인에서 Meta가 준 주소를 복사하세요."
+
+#: src/launcher/core.cpp:2194
+msgid "The launching account is no longer signed in."
+msgstr "시작한 계정이 더 이상 로그인되어 있지 않습니다."
+
+#: src/launcher/core.cpp:2201
+msgid "Meta sign-in is ready."
+msgstr "Meta 로그인 준비가 되었습니다."
+
+#: src/launcher/core.cpp:2210
+msgid "Meta's sign-in window could not open. Sign in manually below."
+msgstr "Meta 로그인 창을 열 수 없습니다. 아래에서 수동으로 로그인하세요."
+
+#: src/launcher/core.cpp:2214
+msgid "Meta's sign-in opened in your browser. Sign in there; the steps are below."
+msgstr "Meta 로그인이 브라우저에서 열렸습니다.거기에서 로그인하세요. 단계는 아래에 있습니다."
+
+#: src/launcher/core.cpp:2286
+#: src/launcher/core.cpp:2291
+#: src/launcher/core.cpp:2296
+#: src/launcher/core.cpp:2301
+#: src/launcher/core.cpp:2305
+#, python-brace-format
+msgid "{0} closed: {1}"
+msgstr "{0}이(가) 닫혔습니다: {1}"
+
+#: src/launcher/core.cpp:2289
+msgid "It needs a Meta account. Use Sign in at the bottom left with the account that owns it, then start it again."
+msgstr "Meta 계정이 필요합니다. 왼쪽 아래의 로그인에서 소유 계정으로 로그인한 뒤 다시 시작하세요."
+
+#: src/launcher/core.cpp:2294
+msgid "Meta says the signed-in account does not own it, and the game closed. Sign in with the account that bought it, then start it again."
+msgstr "Meta에 따르면 로그인한 계정이 이 게임을 소유하지 않아 게임이 닫혔습니다. 구매한 계정으로 로그인한 뒤 다시 시작하세요."
+
+#: src/launcher/core.cpp:2299
+msgid "It requires Meta device attestation, which only a real Quest headset can provide, so it cannot run in Venture."
+msgstr "Meta 장치 인증이 필요한데 실제 Quest 헤드셋만 제공할 수 있어 Venture에서 실행할 수 없습니다."
+
+#: src/launcher/core.cpp:2304
+#, python-brace-format
+msgid "It showed the message \"{0}\" and then quit."
+msgstr "\"{0}\" 메시지를 표시한 뒤 종료되었습니다."
+
+#: src/launcher/core.cpp:2311
+#, python-brace-format
+msgid "{0} stopped: {1}"
+msgstr "{0}이(가) 중지되었습니다: {1}"
+
+#: src/launcher/core.cpp:2327
+#, python-brace-format
+msgid "{0} is installed with the saves already on this PC. To use the headset's saves instead, choose Import save data in its menu."
+msgstr "{0}은(는) 세이브가 이미 이 PC에 있는 상태로 설치되어 있습니다. 대신 헤드셋의 세이브를 사용하려면 메뉴에서 세이브 데이터 가져오기를 선택하세요."
+
+#: src/launcher/import.cpp:228
+msgid "Importing 1 game."
+msgstr "게임을 가져오는 중 (1개)."
+
+#: src/launcher/import.cpp:228
+#, python-brace-format
+msgid "Importing {0} games."
+msgstr "게임을 가져오는 중 ({0}개)."
+
+#: src/launcher/platform/posix/auth_browser.cpp:560
+#, python-brace-format
+msgid "signal {0}"
+msgstr "시그널 {0}"
+
+#: src/launcher/platform/posix/auth_browser.cpp:561
+#, python-brace-format
+msgid "exit code {0}"
+msgstr "종료 코드 {0}"
+
+#: src/launcher/platform/posix/auth_browser.cpp:564
+#, python-brace-format
+msgid "The Meta sign-in window stopped unexpectedly ({0}). Send a debug report if it happens again."
+msgstr "Meta 로그인 창이 예기치 않게정지했습니다 ({0}). 다시 발생하면 디버그 보고서를 보내세요."
+
+#: src/launcher/ui/views.cpp:43
+msgid "Less than a minute left"
+msgstr "1분 미만 남음"
+
+#: src/launcher/ui/views.cpp:45
+#, python-brace-format
+msgid "{} min left"
+msgstr "{}분 남음"
+
+#: src/launcher/ui/views.cpp:46
+#, python-brace-format
+msgid "{0} hr {1} min left"
+msgstr "{0}시간 {1}분 남음"
+
+#: src/launcher/ui/views.cpp:47
+#, python-brace-format
+msgid "{} hr left"
+msgstr "{}시간 남음"
+
+#: src/launcher/ui/views.cpp:374
+#, python-brace-format
+msgid "{0} games will appear in Steam after it restarts."
+msgstr "{0}개의 게임이 Steam 재시작 후 표시됩니다."
+
+#: src/launcher/ui/views.cpp:378
+#: src/launcher/ui/views.cpp:379
+#: src/launcher/ui/views.cpp:1972
+#: src/launcher/ui/views.cpp:1976
+msgid "Waiting for Steam to close"
+msgstr "Steam 닫기를 기다리는 중"
+
+#: src/launcher/ui/views.cpp:378
+#: src/launcher/ui/views.cpp:379
+#: src/launcher/ui/views.cpp:1972
+#: src/launcher/ui/views.cpp:1976
+msgid "Restart Steam"
+msgstr "Steam 재시작"
+
+#. Sidebar pages.
+#: src/launcher/ui/views.cpp:558
+#: src/launcher/ui/views.cpp:637
+#: src/launcher/ui/views.cpp:654
+#: src/launcher/ui/views.cpp:1045
+#: src/launcher/ui/views.cpp:1046
+#: src/launcher/ui/views.cpp:1908
+msgid "Library"
+msgstr "라이브러리"
+
+#: src/launcher/ui/views.cpp:559
+#: src/launcher/ui/views.cpp:1781
+msgid "Downloads"
+msgstr "다운로드"
+
+#: src/launcher/ui/views.cpp:561
+#: src/launcher/ui/views.cpp:1385
+#: src/launcher/ui/views.cpp:1397
+#: src/launcher/ui/views.cpp:1411
+#: src/launcher/ui/views.cpp:4420
+#: src/launcher/ui/views.cpp:4423
+msgid "Controls"
+msgstr "컨트롤"
+
+#: src/launcher/ui/views.cpp:562
+#: src/launcher/ui/views.cpp:1386
+#: src/launcher/ui/views.cpp:1397
+#: src/launcher/ui/views.cpp:1413
+#: src/launcher/ui/views.cpp:1874
+msgid "Settings"
+msgstr "설정"
+
+#: src/launcher/ui/views.cpp:612
+#: src/launcher/ui/views.cpp:2847
+msgid "Sign in"
+msgstr "로그인"
+
+#. Under the account name at the bottom of the sidebar.
+#: src/launcher/ui/views.cpp:616
+#: src/launcher/ui/views.cpp:2805
+msgid "Connect your Meta account"
+msgstr "Meta 계정을 연결하세요"
+
+#: src/launcher/ui/views.cpp:617
+msgid "Offline"
+msgstr "오프라인"
+
+#: src/launcher/ui/views.cpp:618
+#, python-brace-format
+msgid "{0} account"
+msgid_plural "{0} accounts"
+msgstr[0] "{0}개 계정"
+
+#: src/launcher/ui/views.cpp:645
+msgid "Meta didn't confirm your full library, so games confirmed earlier are kept. "
+msgstr "Meta가 전체 라이브러리를 확인하지 못해 이전에 확인한 게임을 유지합니다. "
+
+#: src/launcher/ui/views.cpp:648
+msgid "Sort by: Recently played"
+msgstr "정렬: 최근 플레이"
+
+#: src/launcher/ui/views.cpp:652
+msgid "Name"
+msgstr "이름"
+
+#: src/launcher/ui/views.cpp:652
+msgid "Recently played"
+msgstr "최근 플레이"
+
+#: src/launcher/ui/views.cpp:669
+msgid "Search"
+msgstr "검색"
+
+#: src/launcher/ui/views.cpp:671
+msgid "Sort by: "
+msgstr "정렬: "
+
+#: src/launcher/ui/views.cpp:689
+#, python-brace-format
+msgid "All  {0}##all"
+msgstr "전체  {0}##all"
+
+#: src/launcher/ui/views.cpp:690
+#, python-brace-format
+msgid "Installed  {0}##installed"
+msgstr "설치됨  {0}##installed"
+
+#. Library filter chip that lists the games the player hid; {0} is how many.
+#: src/launcher/ui/views.cpp:698
+#, python-brace-format
+msgid "Show hidden  {0}"
+msgstr "숨김 표시  {0}"
+
+#: src/launcher/ui/views.cpp:735
+msgid "Finding your games…"
+msgstr "게임을 찾는 중…"
+
+#: src/launcher/ui/views.cpp:737
+msgid "No results"
+msgstr "결과 없음"
+
+#: src/launcher/ui/views.cpp:739
+msgid "Nothing installed yet"
+msgstr "아직 설치된 게임이 없습니다"
+
+#. Library empty state when the player hid every game; "Show hidden" is the filter chip.
+#: src/launcher/ui/views.cpp:742
+msgid "All your games are hidden"
+msgstr "모든 게임이 숨겨져 있습니다"
+
+#. Library empty state when the player hid every game; "Show hidden" is the filter chip.
+#: src/launcher/ui/views.cpp:742
+msgid "Select Show hidden to see them."
+msgstr "보기에는 '숨김 표시'를 선택하세요."
+
+#: src/launcher/ui/views.cpp:744
+#: src/launcher/ui/views.cpp:746
+msgid "No games yet"
+msgstr "아직 게임이 없습니다"
+
+#: src/launcher/ui/views.cpp:744
+msgid "Sign in, or import a game."
+msgstr "로그인하거나 게임을 가져오세요."
+
+#: src/launcher/ui/views.cpp:751
+#: src/launcher/ui/views.cpp:2835
+msgid "Refresh library"
+msgstr "라이브러리 새로고침"
+
+#: src/launcher/ui/views.cpp:757
+msgid "Sign in with Meta"
+msgstr "Meta로 로그인"
+
+#: src/launcher/ui/views.cpp:840
+#: src/launcher/ui/views.cpp:936
+#: src/launcher/ui/views.cpp:1300
+msgid "Unhide"
+msgstr "숨김 해제"
+
+#: src/launcher/ui/views.cpp:840
+#: src/launcher/ui/views.cpp:936
+#: src/launcher/ui/views.cpp:1300
+msgid "Hide from library"
+msgstr "라이브러리에서 숨기기"
+
+#: src/launcher/ui/views.cpp:868
+#: src/launcher/ui/views.cpp:934
+#: src/launcher/ui/views.cpp:1173
+msgid "Update"
+msgstr "업데이트"
+
+#: src/launcher/ui/views.cpp:870
+#: src/launcher/ui/views.cpp:921
+#: src/launcher/ui/views.cpp:1101
+msgid "Update available"
+msgstr "업데이트 가능"
+
+#: src/launcher/ui/views.cpp:908
+#: src/launcher/ui/views.cpp:1088
+msgid "Playing now"
+msgstr "지금 플레이 중"
+
+#: src/launcher/ui/views.cpp:912
+#, python-brace-format
+msgid "Downloading  {0:.0f}%"
+msgstr "다운로드 중  {0:.0f}%"
+
+#: src/launcher/ui/views.cpp:915
+#: src/launcher/ui/views.cpp:1096
+msgid "Paused"
+msgstr "일시 정지"
+
+#: src/launcher/ui/views.cpp:917
+#: src/launcher/ui/views.cpp:978
+#: src/launcher/ui/views.cpp:1094
+msgid "Needs attention"
+msgstr "확인 필요"
+
+#: src/launcher/ui/views.cpp:919
+msgid "Partly downloaded"
+msgstr "일부 다운로드됨"
+
+#: src/launcher/ui/views.cpp:919
+#: src/launcher/ui/views.cpp:1098
+msgid "Not installed"
+msgstr "미설치"
+
+#. Status under a library entry the player hid, while hidden entries are shown.
+#: src/launcher/ui/views.cpp:926
+#: src/launcher/ui/views.cpp:1105
+msgid "Hidden"
+msgstr "숨김"
+
+#: src/launcher/ui/views.cpp:1090
+#: src/launcher/ui/views.cpp:1711
+#: src/launcher/ui/views.cpp:1711
+#: src/launcher/ui/views.cpp:1727
+#: src/launcher/ui/views.cpp:1729
+msgid "Installed"
+msgstr "설치됨"
+
+#: src/launcher/ui/views.cpp:1112
+#: src/launcher/ui/views.cpp:2187
+msgid "Version "
+msgstr "버전 "
+
+#: src/launcher/ui/views.cpp:1123
+msgid "Meta's asset catalog was unavailable when this was installed; some downloadable content may be missing."
+msgstr "설치 시 Meta 에셋 카탈로그를 사용할 수 없어 일부 다운로드 가능한 콘텐츠가 누락되었을 수 있습니다."
+
+#: src/launcher/ui/views.cpp:1159
+#: src/launcher/ui/views.cpp:1601
+msgid "Reconnect to play"
+msgstr "플레이하려면 다시 연결"
+
+#: src/launcher/ui/views.cpp:1164
+msgid "Quitting..."
+msgstr "종료 중..."
+
+#: src/launcher/ui/views.cpp:1164
+msgid "Quit game"
+msgstr "게임 종료"
+
+#: src/launcher/ui/views.cpp:1167
+msgid "Play"
+msgstr "플레이"
+
+#: src/launcher/ui/views.cpp:1180
+msgid "Pause download"
+msgstr "다운로드 일시 정지"
+
+#: src/launcher/ui/views.cpp:1206
+msgid "Resume download"
+msgstr "다운로드 재개"
+
+#: src/launcher/ui/views.cpp:1206
+#: src/launcher/ui/views.cpp:1735
+#: src/launcher/ui/views.cpp:1738
+#: src/launcher/ui/views.cpp:3513
+msgid "Install"
+msgstr "설치"
+
+#: src/launcher/ui/views.cpp:1213
+msgid "Sign in to Meta to install this game."
+msgstr "이 게임을 설치하려면 Meta에 로그인하세요."
+
+#: src/launcher/ui/views.cpp:1229
+#: src/launcher/ui/views.cpp:1462
+msgid "Open folder"
+msgstr "폴더 열기"
+
+#: src/launcher/ui/views.cpp:1253
+#: src/launcher/ui/views.cpp:2137
+msgid "Check for updates"
+msgstr "업데이트 확인"
+
+#: src/launcher/ui/views.cpp:1258
+msgid "Install another version…"
+msgstr "다른 버전 설치…"
+
+#: src/launcher/ui/views.cpp:1258
+msgid "Install a version…"
+msgstr "버전 설치…"
+
+#: src/launcher/ui/views.cpp:1263
+msgid "Remove from Steam"
+msgstr "Steam에서 제거"
+
+#: src/launcher/ui/views.cpp:1263
+#: src/launcher/ui/views.cpp:3339
+#: src/launcher/ui/views.cpp:3508
+msgid "Add to Steam"
+msgstr "Steam에 추가"
+
+#: src/launcher/ui/views.cpp:1281
+msgid "Show save data"
+msgstr "세이브 데이터 표시"
+
+#: src/launcher/ui/views.cpp:1282
+msgid "Show game data"
+msgstr "게임 데이터 표시"
+
+#: src/launcher/ui/views.cpp:1284
+msgid "Import save data"
+msgstr "세이브 데이터 가져오기"
+
+#: src/launcher/ui/views.cpp:1290
+msgid "Link to store page…"
+msgstr "스토어 페이지 연결…"
+
+#: src/launcher/ui/views.cpp:1295
+msgid "Remove store link"
+msgstr "스토어 링크 제거"
+
+#: src/launcher/ui/views.cpp:1302
+#: src/launcher/ui/views.cpp:3571
+msgid "Uninstall"
+msgstr "삭제"
+
+#: src/launcher/ui/views.cpp:1319
+msgid "Example: the game stopped with an error."
+msgstr "예: 게임이 오류로정지했습니다."
+
+#: src/launcher/ui/views.cpp:1327
+#, python-brace-format
+msgid "{0} stopped unexpectedly"
+msgstr "{0}이(가) 예기치 않게정지했습니다"
+
+#: src/launcher/ui/views.cpp:1327
+#, python-brace-format
+msgid "{0} closed"
+msgstr "{0}이(가) 닫혔습니다"
+
+#: src/launcher/ui/views.cpp:1329
+#, python-brace-format
+msgid "Exit code {0}"
+msgstr "종료 코드 {0}"
+
+#: src/launcher/ui/views.cpp:1336
+#: src/launcher/ui/views.cpp:1353
+msgid "Report issue"
+msgstr "문제 보고"
+
+#: src/launcher/ui/views.cpp:1336
+#: src/launcher/ui/views.cpp:1349
+msgid "Copy log"
+msgstr "로그 복사"
+
+#: src/launcher/ui/views.cpp:1337
+#: src/launcher/ui/views.cpp:1340
+msgid "Hide log"
+msgstr "로그 숨기기"
+
+#: src/launcher/ui/views.cpp:1340
+msgid "Show log"
+msgstr "로그 표시"
+
+#: src/launcher/ui/views.cpp:1378
+msgid "Add-ons"
+msgstr "추가 콘텐츠"
+
+#: src/launcher/ui/views.cpp:1378
+#, python-brace-format
+msgid "Add-ons  {0}"
+msgstr "추가 콘텐츠  {0}"
+
+#: src/launcher/ui/views.cpp:1382
+#: src/launcher/ui/views.cpp:1406
+#: src/launcher/ui/views.cpp:2175
+msgid "About"
+msgstr "정보"
+
+#: src/launcher/ui/views.cpp:1448
+#, python-brace-format
+msgid "{0} in use"
+msgstr "{0} 사용 중"
+
+#: src/launcher/ui/views.cpp:1449
+#, python-brace-format
+msgid "{0}{1} unused"
+msgstr "{0}{1} 사용 안 함"
+
+#: src/launcher/ui/views.cpp:1451
+msgid "In use: "
+msgstr "사용 중: "
+
+#: src/launcher/ui/views.cpp:1452
+#, python-brace-format
+msgid "Files here replace the game's OBB files of the same name, for example main.<version>{0}.obb. Files under any other name are unused. Delete a file to go back to the original."
+msgstr "여기서 게임의 OBB 파일(예: main.<version>{0}.obb)을같은 이름으로 대체합니다. 다른 이름의 파일은 사용되지 않습니다. 원본으로 돌아가려면 파일을 삭제하세요."
+
+#: src/launcher/ui/views.cpp:1456
+msgid "Mods"
+msgstr "모드"
+
+#: src/launcher/ui/views.cpp:1480
+msgid "A Quest game from your Meta library."
+msgstr "Meta 라이브러리의 Quest 게임입니다."
+
+#: src/launcher/ui/views.cpp:1486
+msgid "Additional details"
+msgstr "추가 정보"
+
+#: src/launcher/ui/views.cpp:1489
+msgid "Publisher"
+msgstr "발행사"
+
+#: src/launcher/ui/views.cpp:1491
+msgid "Installed version"
+msgstr "설치된 버전"
+
+#: src/launcher/ui/views.cpp:1491
+msgid "Unknown"
+msgstr "알 수 없음"
+
+#: src/launcher/ui/views.cpp:1492
+msgid "Size on disk"
+msgstr "디스크 크기"
+
+#: src/launcher/ui/views.cpp:1495
+msgid "Latest version"
+msgstr "최신 버전"
+
+#: src/launcher/ui/views.cpp:1496
+msgid "Download size"
+msgstr "다운로드 크기"
+
+#: src/launcher/ui/views.cpp:1503
+#: src/launcher/ui/views.cpp:1548
+msgid "Owned by"
+msgstr "소유자"
+
+#: src/launcher/ui/views.cpp:1503
+msgid "Owner"
+msgstr "소유자"
+
+#: src/launcher/ui/views.cpp:1505
+msgid "Platform"
+msgstr "플랫폼"
+
+#: src/launcher/ui/views.cpp:1526
+msgid "Checking the latest release…"
+msgstr "최신 릴리스 확인 중…"
+
+#: src/launcher/ui/views.cpp:1534
+#: src/launcher/ui/views.cpp:3961
+msgid "Try again"
+msgstr "다시 시도"
+
+#: src/launcher/ui/views.cpp:1548
+msgid "Playing as"
+msgstr "플레이 중 (계정)"
+
+#: src/launcher/ui/views.cpp:1548
+msgid "Installing with"
+msgstr "설치 중 (계정)"
+
+#: src/launcher/ui/views.cpp:1558
+msgid "Installing switches to this account."
+msgstr "설치하면 이 계정으로 전환됩니다."
+
+#: src/launcher/ui/views.cpp:1601
+msgid "Active account"
+msgstr "활성 계정"
+
+#: src/launcher/ui/views.cpp:1602
+#: src/launcher/ui/views.cpp:2871
+msgid "Signed in"
+msgstr "로그인됨"
+
+#: src/launcher/ui/views.cpp:1639
+msgid "Checking what's available…"
+msgstr "사용 가능한 항목 확인 중…"
+
+#: src/launcher/ui/views.cpp:1640
+#, python-brace-format
+msgid "{0} owned  ·  {1} available"
+msgstr "{0}개 소유  ·  {1}개 사용 가능"
+
+#: src/launcher/ui/views.cpp:1641
+#, python-brace-format
+msgid "{0} available  ·  none owned by this account"
+msgstr "{0}개 사용 가능  ·  이 계정이 소유한 항목 없음"
+
+#: src/launcher/ui/views.cpp:1662
+#, python-brace-format
+msgid "Install all owned ({0})"
+msgstr "소유한 전체 설치 ({0})"
+
+#: src/launcher/ui/views.cpp:1674
+msgid "Add-ons are checked against the account that owns this game."
+msgstr "추가 콘텐츠는 이 게임을 소유한 계정으로 확인됩니다."
+
+#: src/launcher/ui/views.cpp:1677
+msgid "Switch to "
+msgstr "전환: "
+
+#: src/launcher/ui/views.cpp:1709
+#, python-brace-format
+msgid "Downloading  ·  {0} of {1}"
+msgstr "다운로드 중  ·  {1} 중 {0}"
+
+#: src/launcher/ui/views.cpp:1709
+msgid "Queued"
+msgstr "대기 중"
+
+#: src/launcher/ui/views.cpp:1713
+#: src/launcher/ui/views.cpp:1713
+msgid "Owned"
+msgstr "소유"
+
+#: src/launcher/ui/views.cpp:1715
+msgid "Available in the Meta store"
+msgstr "Meta 스토어에서 사용 가능"
+
+#: src/launcher/ui/views.cpp:1724
+msgid "Close the game to remove add-ons"
+msgstr "게임을 닫고 추가 콘텐츠를 제거하세요"
+
+#: src/launcher/ui/views.cpp:1740
+msgid "Install the game first"
+msgstr "먼저 게임을 설치하세요"
+
+#: src/launcher/ui/views.cpp:1742
+#: src/launcher/ui/views.cpp:1744
+msgid "Not owned"
+msgstr "미소유"
+
+#: src/launcher/ui/views.cpp:1769
+msgid "Show fewer"
+msgstr "더 적게 보기"
+
+#: src/launcher/ui/views.cpp:1770
+#, python-brace-format
+msgid "Show {0} more add-on{1} you don't own"
+msgstr "소유하지 않은 추가 콘텐츠 {0}개{1} 더 보기"
+
+#: src/launcher/ui/views.cpp:1791
+msgid "No downloads"
+msgstr "다운로드 없음"
+
+#: src/launcher/ui/views.cpp:1793
+#: src/launcher/ui/views.cpp:1795
+msgid "Go to library"
+msgstr "라이브러리로 이동"
+
+#: src/launcher/ui/views.cpp:1884
+msgid "Appearance"
+msgstr "화면"
+
+#: src/launcher/ui/views.cpp:1892
+msgid "Interface size"
+msgstr "인터페이스 크기"
+
+#: src/launcher/ui/views.cpp:1892
+msgid "Makes text and everything else in Venture larger."
+msgstr "Venture의 텍스트와 모든 요소를 크게 만듭니다."
+
+#: src/launcher/ui/views.cpp:1910
+msgid "Games folder"
+msgstr "게임 폴더"
+
+#: src/launcher/ui/views.cpp:1910
+msgid "New downloads go here. Games already installed stay where they are."
+msgstr "새 다운로드는 여기에 저장됩니다. 이미 설치된 게임은 있는 그대로 유지됩니다."
+
+#: src/launcher/ui/views.cpp:1913
+msgid "Android platform-tools (adb)"
+msgstr "Android platform-tools (adb)"
+
+#: src/launcher/ui/views.cpp:1914
+msgid "Used to import games from a headset. Leave empty to find adb automatically."
+msgstr "헤드셋에서 게임을 가져오는 데 사용합니다. 비워 두면 adb를 자동으로 찾습니다."
+
+#: src/launcher/ui/views.cpp:1915
+msgid "Found automatically"
+msgstr "자동 감지됨"
+
+#: src/launcher/ui/views.cpp:1917
+msgid "Add games to Steam"
+msgstr "게임을 Steam에 추가"
+
+#: src/launcher/ui/views.cpp:1918
+msgid "Installed games appear in Steam and SteamVR after Steam restarts."
+msgstr "설치된 게임은 Steam 재시작 후 Steam과 SteamVR에 표시됩니다."
+
+#: src/launcher/ui/views.cpp:1923
+msgid "Add new games to Steam"
+msgstr "새 게임을 Steam에 추가"
+
+#: src/launcher/ui/views.cpp:1924
+msgid "On by default. Each game's menu can add or remove it later."
+msgstr "기본값으로 켜져 있습니다. 각 게임 메뉴에서 나중에 추가하거나 제거할 수 있습니다."
+
+#: src/launcher/ui/views.cpp:1930
+msgid "One at a time"
+msgstr "한 번에 하나"
+
+#: src/launcher/ui/views.cpp:1933
+msgid "Downloads at once"
+msgstr "동시 다운로드 수"
+
+#: src/launcher/ui/views.cpp:1934
+msgid "More games download side by side on a fast connection. A game's own files and add-ons still download one after another."
+msgstr "빠른 연결에서는 여러 게임을 동시에 다운로드합니다. 게임 자체의 파일과 추가 콘텐츠는 여전히 순차적으로 다운로드됩니다."
+
+#: src/launcher/ui/views.cpp:1945
+msgid "Ask when installing"
+msgstr "설치 시 확인"
+
+#: src/launcher/ui/views.cpp:1946
+msgid "Installing a new game asks which drive it goes to and whether it goes to Steam."
+msgstr "새 게임을 설치할 때 어떤 드라이브에 저장할지, Steam에 넣을지 묻습니다."
+
+#: src/launcher/ui/views.cpp:1952
+msgid "Look up imported games online"
+msgstr "가져온 게임 온라인 조회"
+
+#: src/launcher/ui/views.cpp:1953
+msgid "Finds the store page of an imported game no account owns on OculusDB. Only its package name is sent."
+msgstr "OculusDB에서 어떤 계정도 소유하지 않은 가져온 게임의 스토어 페이지를 찾습니다. 전송되는 것은 패키지 이름뿐입니다."
+
+#: src/launcher/ui/views.cpp:1967
+msgid "Finds an imported game's store page on OculusDB. Only its package name is sent."
+msgstr "OculusDB에서 가져온 게임의 스토어 페이지를 찾습니다. 전송되는 것은 패키지 이름뿐입니다."
+
+#: src/launcher/ui/views.cpp:1973
+#, python-brace-format
+msgid "{} games are waiting for Steam"
+msgstr "{}개의 게임이 Steam을 기다리고 있습니다"
+
+#: src/launcher/ui/views.cpp:1974
+msgid "Steam adds them the next time it starts."
+msgstr "Steam은 다음 시작 시 추가합니다."
+
+#: src/launcher/ui/views.cpp:1987
+#: src/launcher/ui/views.cpp:2540
+msgid "Display"
+msgstr "디스플레이"
+
+#: src/launcher/ui/views.cpp:1994
+#: src/launcher/ui/views.cpp:2545
+msgid "Runtime"
+msgstr "런타임"
+
+#. Choices for "Compress textures".
+#. Choices for "Match game resolution".
+#: src/launcher/ui/views.cpp:2001
+#: src/launcher/ui/views.cpp:2090
+#: src/launcher/ui/views.cpp:2207
+#: src/launcher/ui/views.cpp:2424
+#: src/launcher/ui/views.cpp:2694
+msgid "Automatic"
+msgstr "자동"
+
+#: src/launcher/ui/views.cpp:2001
+msgid "Color key"
+msgstr "색 키"
+
+#. Choices for "Compress textures".
+#. Choices for "Match game resolution".
+#. Choices for "Audio on PC too".
+#. Choices of a troubleshooting setting, after its default.
+#: src/launcher/ui/views.cpp:2001
+#: src/launcher/ui/views.cpp:2090
+#: src/launcher/ui/views.cpp:2424
+#: src/launcher/ui/views.cpp:2471
+#: src/launcher/ui/views.cpp:2520
+#: src/launcher/ui/views.cpp:2649
+#: src/launcher/ui/views.cpp:2694
+#: src/launcher/ui/views.cpp:4188
+msgid "Off"
+msgstr "끄기"
+
+#: src/launcher/ui/views.cpp:2004
+msgid "Passthrough (mixed reality)"
+msgstr "패스스루(혼합 현실)"
+
+#: src/launcher/ui/views.cpp:2013
+msgid "Mixed reality setups (opens the Venture wiki)"
+msgstr "혼합 현실 설정(Venture 위키 열기)"
+
+#: src/launcher/ui/views.cpp:2019
+msgid "Magenta"
+msgstr "자홍색"
+
+#: src/launcher/ui/views.cpp:2019
+msgid "Green"
+msgstr "초록색"
+
+#: src/launcher/ui/views.cpp:2019
+msgid "Blue"
+msgstr "파란색"
+
+#: src/launcher/ui/views.cpp:2019
+msgid "Black"
+msgstr "검은색"
+
+#: src/launcher/ui/views.cpp:2019
+#: src/launcher/ui/views.cpp:2254
+msgid "Custom"
+msgstr "사용자 지정"
+
+#: src/launcher/ui/views.cpp:2032
+msgid "Key color"
+msgstr "키 색상"
+
+#: src/launcher/ui/views.cpp:2062
+msgid "Show runtime console"
+msgstr "런타임 콘솔 표시"
+
+#: src/launcher/ui/views.cpp:2062
+msgid "Opens a console window with live output when a game starts."
+msgstr "게임 시작 시 실시간 출력이 있는 콘솔 창을 엽니다."
+
+#: src/launcher/ui/views.cpp:2067
+msgid "System language"
+msgstr "시스템 언어"
+
+#: src/launcher/ui/views.cpp:2077
+msgid "Game language"
+msgstr "게임 언어"
+
+#: src/launcher/ui/views.cpp:2078
+msgid "The language games see as the system language. Most games also have their own language option; this one is for games that only follow the system."
+msgstr "게임이 시스템 언어로 인식하는 언어입니다. 대부분의 게임은 자체 언어 옵션도 있지만, 이 설정은 시스템에만 따르는 게임을 위해 있습니다."
+
+#. Choices for "Compress textures".
+#: src/launcher/ui/views.cpp:2090
+#: src/launcher/ui/views.cpp:2694
+msgid "Always"
+msgstr "항상"
+
+#. Settings row: store game textures compressed, in less GPU memory.
+#: src/launcher/ui/views.cpp:2093
+#: src/launcher/ui/views.cpp:2695
+msgid "Compress textures"
+msgstr "텍스처 압축"
+
+#: src/launcher/ui/views.cpp:2094
+msgid "Stores game textures at a quarter of the GPU memory, with a small loss of detail. Automatic: only once the GPU memory in use passes a threshold."
+msgstr "게임 텍스처를 GPU 메모리의 1/4로 저장하며 세부 품질이 약간 떨어집니다. 자동: GPU 사용량이 임계값을 넘을 때만 적용됩니다."
+
+#. Settings row: GPU memory in use before new textures are compressed.
+#: src/launcher/ui/views.cpp:2119
+#: src/launcher/ui/views.cpp:2722
+msgid "Compression threshold"
+msgstr "압축 임계값"
+
+#: src/launcher/ui/views.cpp:2120
+msgid "GPU memory in use before new textures are compressed. Lower leaves room for larger games."
+msgstr "새 텍스처가 압축되기 전 GPU 사용량입니다. 낮게 설정하면 큰 게임에 여지를 남깁니다."
+
+#: src/launcher/ui/views.cpp:2130
+msgid "Keep translated code"
+msgstr "번역된 코드 유지"
+
+#: src/launcher/ui/views.cpp:2131
+msgid "Saves the game code Venture translates, so later launches start sooner and load new areas without stutter. Uses up to about 1 GB of disk per game."
+msgstr "Venture가 번역한 게임 코드를 저장해 다음 실행을 더 빨리 시작하고 새 지역을 끊김 없이 로딩합니다. 게임당 최대 약 1GB의 디스크를 사용합니다."
+
+#: src/launcher/ui/views.cpp:2137
+msgid "Venture tells you when a new version is out."
+msgstr "새 버전이 나오면 알려줍니다."
+
+#. Faint link under a game's settings that opens its troubleshooting switches.
+#: src/launcher/ui/views.cpp:2144
+#: src/launcher/ui/views.cpp:2578
+msgid "Troubleshooting"
+msgstr "문제 해결"
+
+#: src/launcher/ui/views.cpp:2147
+msgid "Trace"
+msgstr "추적"
+
+#: src/launcher/ui/views.cpp:2147
+msgid "Debug"
+msgstr "디버그"
+
+#: src/launcher/ui/views.cpp:2147
+msgid "Info"
+msgstr "정보"
+
+#: src/launcher/ui/views.cpp:2147
+msgid "Warnings"
+msgstr "경고"
+
+#: src/launcher/ui/views.cpp:2147
+msgid "Errors"
+msgstr "오류"
+
+#: src/launcher/ui/views.cpp:2149
+msgid "Log detail"
+msgstr "로그 세부"
+
+#: src/launcher/ui/views.cpp:2149
+msgid "More detail helps when reporting a problem."
+msgstr "세부 정보가 많을수록 문제 보고에 도움이 됩니다."
+
+#: src/launcher/ui/views.cpp:2155
+#: src/launcher/ui/views.cpp:2157
+msgid "Open logs"
+msgstr "로그 열기"
+
+#: src/launcher/ui/views.cpp:2156
+msgid "Logs"
+msgstr "로그"
+
+#: src/launcher/ui/views.cpp:2156
+msgid "Launcher and game logs are kept on this PC."
+msgstr "런처와 게임 로그는 이 PC에 보관됩니다."
+
+#: src/launcher/ui/views.cpp:2163
+#: src/launcher/ui/views.cpp:2168
+msgid "Upload debug report"
+msgstr "디버그 보고서 업로드"
+
+#: src/launcher/ui/views.cpp:2164
+msgid "Debug report"
+msgstr "디버그 보고서"
+
+#: src/launcher/ui/views.cpp:2165
+msgid "Uploads the last game launch's logs and this PC's setup and gives you a link to put in a bug report. Your name, folders and account details are left out."
+msgstr "마지막 게임 실행 로그와 이 PC 설정을 업로드해 버그 보고서에 넣을 링크를 제공합니다. 이름, 폴더, 계정 정보는 제외됩니다."
+
+#: src/launcher/ui/views.cpp:2188
+msgid "Join our Discord"
+msgstr "Discord에 참여"
+
+#: src/launcher/ui/views.cpp:2191
+msgid "Join our Discord##discord"
+msgstr "Discord에 참여##discord"
+
+#: src/launcher/ui/views.cpp:2215
+msgid "Language"
+msgstr "언어"
+
+#: src/launcher/ui/views.cpp:2239
+#: src/launcher/ui/views.cpp:2252
+msgid "Runtime default"
+msgstr "런타임 기본값"
+
+#: src/launcher/ui/views.cpp:2241
+msgid "Percent of runtime"
+msgstr "런타임의 비율"
+
+#: src/launcher/ui/views.cpp:2242
+msgid "Custom size"
+msgstr "사용자 지정 크기"
+
+#: src/launcher/ui/views.cpp:2324
+#: src/launcher/ui/views.cpp:2326
+#: src/launcher/ui/views.cpp:2427
+#: src/launcher/ui/views.cpp:2474
+#: src/launcher/ui/views.cpp:2497
+#: src/launcher/ui/views.cpp:2523
+#: src/launcher/ui/views.cpp:2694
+#: src/launcher/ui/views.cpp:2719
+msgid "Use global setting"
+msgstr "전역 설정 사용"
+
+#: src/launcher/ui/views.cpp:2349
+msgid "Resolution per eye"
+msgstr "눈당 해상도"
+
+#: src/launcher/ui/views.cpp:2382
+msgid "Percent of runtime size"
+msgstr "런타임 크기의 비율"
+
+#: src/launcher/ui/views.cpp:2397
+msgid "Size per eye"
+msgstr "눈당 크기"
+
+#. Settings row: make games render at the resolution above although they scale it up themselves.
+#: src/launcher/ui/views.cpp:2416
+msgid "Match game resolution"
+msgstr "게임 해상도 일치"
+
+#: src/launcher/ui/views.cpp:2438
+msgid "Many Quest games render larger than the size they are asked for. Automatic learns how much and asks for less, so they render at the resolution above instead of wasting GPU time."
+msgstr "많은 Quest 게임이 요청한 크기보다 크게 렌더링합니다. '자동'은 그 정도를 학습해 더 작게 요청하므로, GPU 시간을 낭비하지 않고 위의 해상도로 렌더링됩니다."
+
+#: src/launcher/ui/views.cpp:2443
+msgid "Frame rate"
+msgstr "프레임 속도"
+
+#: src/launcher/ui/views.cpp:2457
+msgid "Custom frame rate"
+msgstr "사용자 지정 프레임 속도"
+
+#: src/launcher/ui/views.cpp:2464
+msgid "Desktop mirror"
+msgstr "데스크톱 미러"
+
+#: src/launcher/ui/views.cpp:2471
+msgid "Cropped"
+msgstr "자름"
+
+#: src/launcher/ui/views.cpp:2471
+msgid "Whole eye"
+msgstr "눈 전체"
+
+#: src/launcher/ui/views.cpp:2488
+msgid "Mirror eye"
+msgstr "미러 눈"
+
+#: src/launcher/ui/views.cpp:2494
+#: src/launcher/ui/views.cpp:4135
+#: src/launcher/ui/views.cpp:4735
+msgid "Left"
+msgstr "왼쪽"
+
+#: src/launcher/ui/views.cpp:2494
+#: src/launcher/ui/views.cpp:4135
+#: src/launcher/ui/views.cpp:4733
+#: src/launcher/ui/views.cpp:4735
+msgid "Right"
+msgstr "오른쪽"
+
+#. Settings row: also play the game's sound on the PC's speakers or headphones.
+#: src/launcher/ui/views.cpp:2512
+msgid "Audio on PC too"
+msgstr "PC에서도 오디오"
+
+#. Choices for "Audio on PC too".
+#. Choices of a troubleshooting setting, after its default.
+#: src/launcher/ui/views.cpp:2520
+#: src/launcher/ui/views.cpp:2649
+msgid "On"
+msgstr "켜기"
+
+#. Faint link under a game's settings that opens its troubleshooting switches.
+#: src/launcher/ui/views.cpp:2578
+msgid "Troubleshooting settings changed"
+msgstr "문제 해결 설정이 변경되었습니다"
+
+#. Warning before a game's troubleshooting switches are shown.
+#. Title of a game's troubleshooting switches.
+#: src/launcher/ui/views.cpp:2591
+#: src/launcher/ui/views.cpp:2603
+msgid "Troubleshooting settings"
+msgstr "문제 해결 설정"
+
+#: src/launcher/ui/views.cpp:2592
+msgid "These change how Venture runs this game. A wrong choice can make it look broken or crash. Change them only when asked to in a bug report."
+msgstr "이 설정들은 Venture가 이 게임을 실행하는 방식을 바꿉니다. 잘못 선택하면 화면이 깨지거나 충돌할 수 있습니다. 버그 보고서에서 요청받을 때만 변경하세요."
+
+#: src/launcher/ui/views.cpp:2595
+msgid "Show them"
+msgstr "보기"
+
+#: src/launcher/ui/views.cpp:2595
+#: src/launcher/ui/views.cpp:2942
+#: src/launcher/ui/views.cpp:3352
+#: src/launcher/ui/views.cpp:3513
+#: src/launcher/ui/views.cpp:3571
+#: src/launcher/ui/views.cpp:3593
+#: src/launcher/ui/views.cpp:3639
+#: src/launcher/ui/views.cpp:3659
+#: src/launcher/ui/views.cpp:3720
+#: src/launcher/ui/views.cpp:3721
+msgid "Cancel"
+msgstr "취소"
+
+#. Advanced setting: the GPU checks that a game's reads stay inside its buffers and images.
+#: src/launcher/ui/views.cpp:2610
+msgid "GPU bounds checks"
+msgstr "GPU 범위 검사"
+
+#: src/launcher/ui/views.cpp:2611
+msgid "Stops a game's out-of-range GPU reads, which crash PC graphics drivers. Off can fix effects that look wrong in some games, but the game may crash."
+msgstr "범위를 벗어난 게임의 GPU 읽기를 막아 PC 그래픽 드라이버 충돌을 방지합니다. 끄면 일부 게임에서 이상하게 보이는 효과를 고칠 수 있지만 게임이 충돌할 수 있습니다."
+
+#: src/launcher/ui/views.cpp:2613
+#: src/launcher/ui/views.cpp:2618
+#: src/launcher/ui/views.cpp:2623
+#: src/launcher/ui/views.cpp:2628
+#: src/launcher/ui/views.cpp:2638
+msgid "Default (On)"
+msgstr "기본값(켜기)"
+
+#. Advanced setting: new descriptor sets start with empty descriptors.
+#: src/launcher/ui/views.cpp:2615
+msgid "Start new resource slots empty"
+msgstr "새 리소스 슬롯을 비워서 시작"
+
+#: src/launcher/ui/views.cpp:2616
+msgid "Fills the shader resource slots a game has not written yet with empty ones, as a Quest does. Prevents GPU crashes on AMD graphics cards."
+msgstr "게임이 아직 작성하지 않은 셰이더 리소스 슬롯을 Quest처럼 빈 값으로 채웁니다. AMD 그래픽 카드의 GPU 충돌을 방지합니다."
+
+#. Advanced setting: games may bind empty (null) shader resources.
+#: src/launcher/ui/views.cpp:2620
+msgid "Allow empty resources"
+msgstr "빈 리소스 허용"
+
+#: src/launcher/ui/views.cpp:2621
+msgid "Lets a game use empty shader resources, as a Quest does. Turn off only to test a graphics driver problem."
+msgstr "게임이 Quest처럼 빈 셰이더 리소스를 사용할 수 있게 합니다. 그래픽 드라이버 문제를 테스트할 때만 끄세요."
+
+#. Advanced setting: shader variables start at zero.
+#: src/launcher/ui/views.cpp:2625
+msgid "Zero shader variables"
+msgstr "셰이더 변수를 0으로 시작"
+
+#: src/launcher/ui/views.cpp:2626
+msgid "Starts shader variables at zero, as a Quest's driver does. Prevents speckles or flicker in games that read a variable before setting it."
+msgstr "Quest 드라이버처럼 셰이더 변수를 0부터 시작합니다. 값을 설정하기 전에 읽는 게임에서 잡점이나 깜빡임을 방지합니다."
+
+#. Advanced setting: render pass inputs are read as ordinary images, one layer per eye.
+#: src/launcher/ui/views.cpp:2630
+msgid "Read pass inputs as images"
+msgstr "패스 입력을 이미지로 읽기"
+
+#: src/launcher/ui/views.cpp:2631
+msgid "Reads render pass inputs as ordinary images, one layer per eye. Automatic turns it on for AMD graphics cards, whose driver otherwise shows the left eye's picture in the right eye."
+msgstr "렌더 패스 입력을 눈당 한 레이어의 일반 이미지로 읽습니다. '자동'은 AMD 그래픽 카드에서 켜며, 드라이버가 그렇지 않으면 왼쪽 눈 화면을 오른쪽 눈에 표시하기 때문입니다."
+
+#: src/launcher/ui/views.cpp:2633
+msgid "Default (Automatic)"
+msgstr "기본값(자동)"
+
+#. Advanced setting: games are offered the Quest's foveated rendering interface.
+#: src/launcher/ui/views.cpp:2635
+msgid "Foveation support"
+msgstr "포비에이션 지원"
+
+#: src/launcher/ui/views.cpp:2636
+msgid "Offers games the Quest's foveated rendering interface; the PC still renders every pixel. Off can help a game that shows nothing or flickers."
+msgstr "게임에 Quest의 포비에이션 렌더링 인터페이스를 제공합니다. PC는 여전히 모든 픽셀을 렌더링합니다. 아무것도 표시되지 않거나 깜빡이는 게임에 끄는 것이 도움이 될 수 있습니다."
+
+#: src/launcher/ui/views.cpp:2663
+#: src/launcher/ui/views.cpp:3963
+msgid "Done"
+msgstr "완료"
+
+#: src/launcher/ui/views.cpp:2664
+#: src/launcher/ui/views.cpp:2665
+#: src/launcher/ui/views.cpp:4421
+msgid "Reset to defaults"
+msgstr "기본값으로 재설정"
+
+#: src/launcher/ui/views.cpp:2742
+msgid "Sign in manually##manual"
+msgstr "수동 로그인##manual"
+
+#: src/launcher/ui/views.cpp:2748
+msgid "1. Open this link in any browser and sign in to Meta."
+msgstr "1. 어떤 브라우저에서든 이 링크를 열어 Meta에 로그인하세요."
+
+#: src/launcher/ui/views.cpp:2749
+msgid "Open this link in any browser and sign in to Meta. When it asks, let it open Venture."
+msgstr "어떤 브라우저에서든 이 링크를 열어 Meta에 로그인하세요. 허용을 묻면 Venture 열기를 허용하세요."
+
+#: src/launcher/ui/views.cpp:2751
+#: src/launcher/ui/views.cpp:3961
+msgid "Copy link"
+msgstr "링크 복사"
+
+#: src/launcher/ui/views.cpp:2751
+msgid "Open"
+msgstr "열기"
+
+#: src/launcher/ui/views.cpp:2761
+msgid "Open##manual-open"
+msgstr "열기##manual-open"
+
+#: src/launcher/ui/views.cpp:2765
+msgid "No browser opened. Copy the link instead."
+msgstr "브라우저가 열리지 않았습니다. 대신 링크를 복사하세요."
+
+#: src/launcher/ui/views.cpp:2769
+msgid "Copy link##manual-copy"
+msgstr "링크 복사##manual-copy"
+
+#: src/launcher/ui/views.cpp:2771
+#: src/launcher/ui/views.cpp:2791
+msgid "Link copied."
+msgstr "링크가 복사되었습니다."
+
+#: src/launcher/ui/views.cpp:2776
+msgid "Paste the address instead##manual-paste-open"
+msgstr "대신 주소 붙여넣기##manual-paste-open"
+
+#: src/launcher/ui/views.cpp:2779
+msgid "2. Paste the oculus:// address that Meta's Continue button tries to open."
+msgstr "2. Meta의 계속(Continue) 버튼이 열려는 oculus:// 주소를 붙여넣으세요."
+
+#: src/launcher/ui/views.cpp:2782
+msgid "In Firefox, press Ctrl+Shift+K before Continue, then copy the message it shows."
+msgstr "Firefox에서는 계속 전에 Ctrl+Shift+K를 누른 뒤 표시되는 메시지를 복사하세요."
+
+#: src/launcher/ui/views.cpp:2798
+msgid "Accounts"
+msgstr "계정"
+
+#: src/launcher/ui/views.cpp:2807
+msgid "Waiting for Meta…##signin"
+msgstr "Meta 대기 중…##signin"
+
+#: src/launcher/ui/views.cpp:2807
+msgid "Sign in with Meta##signin"
+msgstr "Meta로 로그인##signin"
+
+#: src/launcher/ui/views.cpp:2836
+msgid "Open at startup"
+msgstr "시작 시 열기"
+
+#: src/launcher/ui/views.cpp:2838
+msgid "Sign out"
+msgstr "로그아웃"
+
+#: src/launcher/ui/views.cpp:2839
+msgid "Remove from Venture"
+msgstr "Venture에서 제거"
+
+#: src/launcher/ui/views.cpp:2847
+msgid "Reconnect"
+msgstr "다시 연결"
+
+#: src/launcher/ui/views.cpp:2848
+msgid "Switch"
+msgstr "전환"
+
+#: src/launcher/ui/views.cpp:2869
+msgid "Active  ·  offline"
+msgstr "활성  ·  오프라인"
+
+#: src/launcher/ui/views.cpp:2869
+msgid "Active"
+msgstr "활성"
+
+#: src/launcher/ui/views.cpp:2870
+msgid "Sign-in expired"
+msgstr "로그인 만료"
+
+#: src/launcher/ui/views.cpp:2872
+msgid "Signed out  ·  games and saves are kept"
+msgstr "로그아웃됨  ·  게임과 세이브는 유지됩니다"
+
+#: src/launcher/ui/views.cpp:2873
+msgid "  ·  Opens at startup"
+msgstr "  ·  시작 시 열기"
+
+#: src/launcher/ui/views.cpp:2900
+msgid "Waiting for Meta…"
+msgstr "Meta 대기 중…"
+
+#: src/launcher/ui/views.cpp:2900
+msgid "Add account"
+msgstr "계정 추가"
+
+#: src/launcher/ui/views.cpp:2904
+msgid "Up to four accounts can be signed in. Sign one out to add another."
+msgstr "최대 4개 계정으로 로그인할 수 있습니다. 다른 계정을 추가하려면 하나를 로그아웃하세요."
+
+#: src/launcher/ui/views.cpp:2923
+msgid "Cancel##signin-cancel"
+msgstr "취소##signin-cancel"
+
+#: src/launcher/ui/views.cpp:2936
+#, python-brace-format
+msgid "Remove {0}?"
+msgstr "{0}을(를) 제거할까요?"
+
+#: src/launcher/ui/views.cpp:2936
+msgid "this account"
+msgstr "이 계정"
+
+#: src/launcher/ui/views.cpp:2937
+msgid "Venture forgets its sign-in. Installed games stay, and you can add the account again any time."
+msgstr "Venture가 로그인 정보를 잊습니다. 설치된 게임은 유지되며, 언제든 계정을 다시 추가할 수 있습니다."
+
+#: src/launcher/ui/views.cpp:2940
+msgid "Also delete its saves"
+msgstr "세이브도 삭제"
+
+#: src/launcher/ui/views.cpp:2940
+msgid "Saves can't be recovered once deleted."
+msgstr "삭제된 세이브는 복구할 수 없습니다."
+
+#: src/launcher/ui/views.cpp:2942
+#: src/launcher/ui/views.cpp:5059
+msgid "Remove"
+msgstr "제거"
+
+#: src/launcher/ui/views.cpp:2964
+msgid "Search games"
+msgstr "게임 검색"
+
+#: src/launcher/ui/views.cpp:3014
+#, python-brace-format
+msgid "Version {0}"
+msgstr "버전 {0}"
+
+#: src/launcher/ui/views.cpp:3015
+#, python-brace-format
+msgid "Version {0} ({1})"
+msgstr "버전 {0} ({1})"
+
+#: src/launcher/ui/views.cpp:3016
+#, python-brace-format
+msgid "{0}  ·  {1} in {2} file{3}"
+msgstr "{0}  ·  {1} · {2}개 파일{3}"
+
+#: src/launcher/ui/views.cpp:3019
+#, python-brace-format
+msgid "  ·  saves {0}"
+msgstr "  ·  세이브 {0}"
+
+#: src/launcher/ui/views.cpp:3020
+#, python-brace-format
+msgid "  ·  {0} skipped"
+msgstr "  ·  {0}개 건너뜀"
+
+#: src/launcher/ui/views.cpp:3037
+#, python-brace-format
+msgid "{0} selected{1}"
+msgstr "{0} 선택됨{1}"
+
+#: src/launcher/ui/views.cpp:3037
+msgid "1 game"
+msgstr "1개 게임"
+
+#: src/launcher/ui/views.cpp:3037
+#: src/launcher/ui/views.cpp:3294
+#, python-brace-format
+msgid "{0} games"
+msgstr "{0}개 게임"
+
+#: src/launcher/ui/views.cpp:3041
+msgid "Import 1 game"
+msgstr "1개 게임 가져오기"
+
+#: src/launcher/ui/views.cpp:3042
+#, python-brace-format
+msgid "Import {0} games"
+msgstr "{0}개 게임 가져오기"
+
+#: src/launcher/ui/views.cpp:3062
+msgid "From a headset"
+msgstr "헤드셋에서"
+
+#: src/launcher/ui/views.cpp:3069
+msgid "No headset connected"
+msgstr "연결된 헤드셋 없음"
+
+#: src/launcher/ui/views.cpp:3072
+#, python-brace-format
+msgid "{0}  ·  {1} games"
+msgstr "{0}  ·  {1}개 게임"
+
+#: src/launcher/ui/views.cpp:3072
+msgid "Headset"
+msgstr "헤드셋"
+
+#: src/launcher/ui/views.cpp:3075
+msgid "Looking for a headset"
+msgstr "헤드셋 검색 중"
+
+#: src/launcher/ui/views.cpp:3082
+msgid "Connect a Quest with USB and allow debugging on the headset, then scan."
+msgstr "Quest를 USB로 연결하고 헤드셋에서 디버깅을 허용한 뒤 스캔하세요."
+
+#: src/launcher/ui/views.cpp:3083
+#: src/launcher/ui/views.cpp:3090
+msgid "Scan headset"
+msgstr "헤드셋 스캔"
+
+#: src/launcher/ui/views.cpp:3118
+msgid "Connect"
+msgstr "연결"
+
+#: src/launcher/ui/views.cpp:3122
+msgid "Over Wi-Fi"
+msgstr "Wi-Fi로"
+
+#: src/launcher/ui/views.cpp:3127
+msgid "Connect##wifi"
+msgstr "연결##wifi"
+
+#: src/launcher/ui/views.cpp:3137
+msgid "From this computer"
+msgstr "이 컴퓨터에서"
+
+#: src/launcher/ui/views.cpp:3141
+#: src/launcher/ui/views.cpp:3149
+msgid "Choose folder"
+msgstr "폴더 선택"
+
+#: src/launcher/ui/views.cpp:3141
+#: src/launcher/ui/views.cpp:3151
+msgid "Choose APK or ZIP"
+msgstr "APK 또는 ZIP 선택"
+
+#: src/launcher/ui/views.cpp:3144
+msgid "A game's APK with its data"
+msgstr "데이터가 포함된 게임 APK"
+
+#: src/launcher/ui/views.cpp:3160
+msgid "Reading the game files..."
+msgstr "게임 파일을 읽는 중..."
+
+#: src/launcher/ui/views.cpp:3178
+msgid "From your Meta account"
+msgstr "Meta 계정에서"
+
+#: src/launcher/ui/views.cpp:3187
+msgid "A game you own, by its store link"
+msgstr "소유한 게임을 스토어 링크로"
+
+#: src/launcher/ui/views.cpp:3199
+msgid "Save data"
+msgstr "세이브 데이터"
+
+#: src/launcher/ui/views.cpp:3208
+msgid "Install or import a game first."
+msgstr "먼저 게임을 설치하거나 가져오세요."
+
+#: src/launcher/ui/views.cpp:3214
+#: src/launcher/ui/views.cpp:3639
+msgid "From a folder"
+msgstr "폴더에서"
+
+#: src/launcher/ui/views.cpp:3214
+#: src/launcher/ui/views.cpp:3640
+msgid "From headset"
+msgstr "헤드셋에서"
+
+#: src/launcher/ui/views.cpp:3215
+msgid "To headset"
+msgstr "헤드셋으로"
+
+#: src/launcher/ui/views.cpp:3223
+msgid "Replaces the game's saves in Venture; the current ones are kept in a backup."
+msgstr "Venture의 게임 세이브를 대체합니다. 현재 세이브는 백업에 보관됩니다."
+
+#: src/launcher/ui/views.cpp:3224
+msgid "From a folder##saves-page"
+msgstr "폴더에서##saves-page"
+
+#: src/launcher/ui/views.cpp:3229
+msgid "From headset##saves-page"
+msgstr "헤드셋에서##saves-page"
+
+#: src/launcher/ui/views.cpp:3234
+msgid "To headset##saves-page"
+msgstr "헤드셋으로##saves-page"
+
+#: src/launcher/ui/views.cpp:3237
+msgid "Replaces the game's saves on the headset and closes it there; the headset's current saves are kept in a backup on this computer."
+msgstr "헤드셋의 게임 세이브를 대체하고 거기서 종료합니다. 헤드셋의 현재 세이브는 이 컴퓨터에 백업됩니다."
+
+#: src/launcher/ui/views.cpp:3320
+#: src/launcher/ui/views.cpp:3491
+#, python-brace-format
+msgid "{0}  ·  {1} free"
+msgstr "{0}  ·  {1} 여유"
+
+#: src/launcher/ui/views.cpp:3329
+#: src/launcher/ui/views.cpp:3500
+msgid "Install to"
+msgstr "설치 위치"
+
+#: src/launcher/ui/views.cpp:3334
+#, python-brace-format
+msgid "Not enough space: the new games need {0}."
+msgstr "공간이 부족합니다: 새 게임에 {0} 필요합니다."
+
+#: src/launcher/ui/views.cpp:3339
+#: src/launcher/ui/views.cpp:3508
+msgid "Appears in your Steam library and launches in SteamVR."
+msgstr "Steam 라이브러리에 표시되고 SteamVR에서 실행됩니다."
+
+#: src/launcher/ui/views.cpp:3345
+msgid "The installed game updates where it is."
+msgstr "설치된 게임은 있는 위치에서 업데이트됩니다."
+
+#: src/launcher/ui/views.cpp:3346
+msgid "The installed games update where they are."
+msgstr "설치된 게임은 있는 위치에서 업데이트됩니다."
+
+#: src/launcher/ui/views.cpp:3347
+msgid "1 installed game updates where it is."
+msgstr "설치된 게임 1개는 있는 위치에서 업데이트됩니다."
+
+#: src/launcher/ui/views.cpp:3348
+#, python-brace-format
+msgid "{0} installed games update where they are."
+msgstr "설치된 게임 {0}개는 있는 위치에서 업데이트됩니다."
+
+#: src/launcher/ui/views.cpp:3356
+#: src/launcher/ui/views.cpp:3518
+msgid "Don't ask again"
+msgstr "다시 묻지 않기"
+
+#: src/launcher/ui/views.cpp:3387
+#: src/launcher/ui/views.cpp:3528
+#: src/launcher/ui/views.cpp:3539
+msgid "This game is no longer in your library."
+msgstr "이 게임은 더 이상 라이브러리에 없습니다."
+
+#: src/launcher/ui/views.cpp:3419
+msgid "This game"
+msgstr "이 게임"
+
+#: src/launcher/ui/views.cpp:3455
+msgid "  ·  latest"
+msgstr "  ·  최신"
+
+#: src/launcher/ui/views.cpp:3457
+msgid "  ·  installed"
+msgstr "  ·  설치됨"
+
+#: src/launcher/ui/views.cpp:3460
+#, python-brace-format
+msgid "All versions ({0})"
+msgstr "모든 버전 ({0})"
+
+#: src/launcher/ui/views.cpp:3504
+#, python-brace-format
+msgid "Not enough space: the game needs {0}."
+msgstr "공간이 부족합니다: 게임에 {0} 필요합니다."
+
+#: src/launcher/ui/views.cpp:3531
+#, python-brace-format
+msgid "{0} versions are downloading."
+msgstr "{0}개 버전을 다운로드 중입니다."
+
+#: src/launcher/ui/views.cpp:3532
+msgid "The version is downloading."
+msgstr "버전을 다운로드 중입니다."
+
+#: src/launcher/ui/views.cpp:3533
+msgid "That version is installed already."
+msgstr "그 버전은 이미 설치되어 있습니다."
+
+#: src/launcher/ui/views.cpp:3533
+msgid "Every version is installed already."
+msgstr "모든 버전이 이미 설치되어 있습니다."
+
+#: src/launcher/ui/views.cpp:3569
+#, python-brace-format
+msgid "Uninstall {0}?"
+msgstr "{0} 삭제할까요?"
+
+#: src/launcher/ui/views.cpp:3569
+msgid "Uninstall this game?"
+msgstr "이 게임을 삭제할까요?"
+
+#: src/launcher/ui/views.cpp:3570
+msgid "Its files are removed from this PC. Saves are kept, and you can install it again from your library."
+msgstr "파일은 이 PC에서 제거됩니다. 세이브는 유지되며, 라이브러리에서 다시 설치할 수 있습니다."
+
+#. Warning when Compress textures changes from Always to Automatic or Off.
+#: src/launcher/ui/views.cpp:3589
+msgid "Disable texture compression?"
+msgstr "텍스처 압축을 비활성화할까요?"
+
+#: src/launcher/ui/views.cpp:3590
+msgid "This can increase video memory use by up to 4 times. It isn't recommended on GPUs with less than 20 GB of video memory."
+msgstr "비디오 메모리 사용량이 최대 4배까지 늘어날 수 있습니다. 비디오 메모리가 20GB 미만인 GPU에는 권장하지 않습니다."
+
+#: src/launcher/ui/views.cpp:3593
+msgid "Change anyway"
+msgstr "그래도 변경"
+
+#. Shown at start in the Linux Flatpak when SteamVR is the active OpenXR runtime.
+#: src/launcher/ui/views.cpp:3616
+msgid "SteamVR does not work with the Flatpak"
+msgstr "SteamVR은 Flatpak과 함께 작동하지 않습니다"
+
+#: src/launcher/ui/views.cpp:3617
+msgid "SteamVR is your OpenXR runtime, and the Flatpak sandbox cannot reach SteamVR, so games will not start. Use the Venture AppImage, tarball or your distribution's package with SteamVR, or use WiVRn or Monado with the Flatpak."
+msgstr "SteamVR이 OpenXR 런타임인데 Flatpak 샌드박스에서 SteamVR에 도달할 수 없어 게임이 시작되지 않습니다. SteamVR과 함께는 Venture의 AppImage, tarball 또는 배포판 패키지를 사용하고, Flatpak과 함께는 WiVRn이나 Monado를 사용하세요."
+
+#: src/launcher/ui/views.cpp:3620
+msgid "OK"
+msgstr "확인"
+
+#: src/launcher/ui/views.cpp:3636
+#, python-brace-format
+msgid "Import saves for {0}"
+msgstr "{0}의 세이브 가져오기"
+
+#: src/launcher/ui/views.cpp:3636
+msgid "Import saves"
+msgstr "세이브 가져오기"
+
+#: src/launcher/ui/views.cpp:3637
+msgid "From a Quest connected over USB (developer mode), or a copy of the game's Android/data folder. The saves they replace are kept in a backup."
+msgstr "USB로 연결된 Quest(개발자 모드) 또는 게임의 Android/data 폴더 복사본에서 가져옵니다. 대체한 세이브는 백업에 보관됩니다."
+
+#: src/launcher/ui/views.cpp:3655
+#, python-brace-format
+msgid "Send the saves of {0} to the headset?"
+msgstr "{0}의 세이브를 헤드셋으로 보낼까요?"
+
+#: src/launcher/ui/views.cpp:3656
+msgid "Send this game's saves to the headset?"
+msgstr "이 게임의 세이브를 헤드셋으로 보낼까요?"
+
+#: src/launcher/ui/views.cpp:3657
+msgid "This closes the game on the headset and replaces its saves with Venture's copy. The headset's current saves are backed up on this computer first."
+msgstr "헤드셋의 게임을 종료하고 그 세이브를 Venture의 복사본으로 대체합니다. 헤드셋의 현재 세이브는 먼저 이 컴퓨터에 백업됩니다."
+
+#: src/launcher/ui/views.cpp:3659
+msgid "Send to headset"
+msgstr "헤드셋으로 보내기"
+
+#: src/launcher/ui/views.cpp:3690
+msgid "Link to store page"
+msgstr "스토어 페이지 연결"
+
+#. {0} is an Android package name such as com.studio.game.
+#: src/launcher/ui/views.cpp:3692
+#, python-brace-format
+msgid "Paste the game's Meta store link or its ID. Its name, description and art then come from the store. The store page must be for {0}."
+msgstr "게임의 Meta 스토어 링크나 ID를 붙여넣으세요. 그러면 이름, 설명과 이미지를 스토어에서 가져옵니다. 스토어 페이지는 {0} 것이어야 합니다."
+
+#: src/launcher/ui/views.cpp:3705
+msgid "Checking the store page…"
+msgstr "스토어 페이지 확인 중…"
+
+#. {0} is a game's store name, {1} and {2} Android package names.
+#: src/launcher/ui/views.cpp:3711
+#, python-brace-format
+msgid "This store page is for {0} ({1}), not {2}. Link it anyway only for a modified build or another edition of the same game."
+msgstr "이 스토어 페이지는 {0}({1}) 것이므로 {2}가 아닙니다. 수정된 빌드나 같은 게임의 다른 에디션일 때만 연결하세요."
+
+#: src/launcher/ui/views.cpp:3720
+msgid "Link anyway"
+msgstr "그래도 연결"
+
+#: src/launcher/ui/views.cpp:3721
+msgid "Link"
+msgstr "연결"
+
+#: src/launcher/ui/views.cpp:3740
+#, python-brace-format
+msgid "Cancel {0}?"
+msgstr "{0}을(를) 취소할까요?"
+
+#: src/launcher/ui/views.cpp:3740
+msgid "Cancel this download?"
+msgstr "이 다운로드를 취소할까요?"
+
+#: src/launcher/ui/views.cpp:3741
+msgid "Its downloaded files are deleted. An installed game is kept as it is."
+msgstr "다운로드된 파일이 삭제됩니다. 설치된 게임은 그대로 유지됩니다."
+
+#: src/launcher/ui/views.cpp:3742
+msgid "Keep downloading"
+msgstr "다운로드 계속"
+
+#: src/launcher/ui/views.cpp:3742
+msgid "Cancel download"
+msgstr "다운로드 취소"
+
+#: src/launcher/ui/views.cpp:3818
+msgid "Close your game first, then update."
+msgstr "먼저 게임을 닫은 뒤 업데이트하세요."
+
+#: src/launcher/ui/views.cpp:3870
+#, python-brace-format
+msgid "You're on {0}. "
+msgstr "{0}을(를) 사용 중입니다. "
+
+#: src/launcher/ui/views.cpp:3872
+msgid "Download it from the release page."
+msgstr "릴리스 페이지에서 다운로드하세요."
+
+#: src/launcher/ui/views.cpp:3875
+#, python-brace-format
+msgid "Downloading the update: {0}%"
+msgstr "업데이트 다운로드 중: {0}%"
+
+#: src/launcher/ui/views.cpp:3876
+msgid "Downloading the update…"
+msgstr "업데이트 다운로드 중…"
+
+#: src/launcher/ui/views.cpp:3878
+msgid "Venture closes to install it. Your games and saves stay."
+msgstr "설치를 위해 Venture가 종료됩니다. 게임과 세이브는 유지됩니다."
+
+#: src/launcher/ui/views.cpp:3880
+msgid "Venture replaces this AppImage and restarts. Your games and saves stay."
+msgstr "Venture가 이 AppImage를 교체하고 재시작됩니다. 게임과 세이브는 유지됩니다."
+
+#: src/launcher/ui/views.cpp:3881
+#, python-brace-format
+msgid "Venture {0} is available"
+msgstr "Venture {0} 사용 가능"
+
+#: src/launcher/ui/views.cpp:3890
+msgid "Not now"
+msgstr "지금 안 함"
+
+#: src/launcher/ui/views.cpp:3891
+msgid "Updating…"
+msgstr "업데이트 중…"
+
+#: src/launcher/ui/views.cpp:3891
+msgid "Update now"
+msgstr "지금 업데이트"
+
+#: src/launcher/ui/views.cpp:3893
+msgid "What's new##update"
+msgstr "새로운 점##update"
+
+#: src/launcher/ui/views.cpp:3893
+msgid "What's new"
+msgstr "새로운 점"
+
+#: src/launcher/ui/views.cpp:3935
+msgid "Uploading debug report…"
+msgstr "디버그 보고서 업로드 중…"
+
+#: src/launcher/ui/views.cpp:3936
+msgid "Logs and system details from this PC, without your name, folders or account details."
+msgstr "이 PC의 로그와 시스템 정보입니다. 이름, 폴더, 계정 정보는 제외됩니다."
+
+#: src/launcher/ui/views.cpp:3938
+msgid "Couldn't upload the debug report"
+msgstr "디버그 보고서를 업로드하지 못했습니다"
+
+#: src/launcher/ui/views.cpp:3939
+#, python-brace-format
+msgid "{0} The report is saved as {1}: attach it to a GitHub issue or post it in our Discord instead."
+msgstr "{0} 보고서가 {1}(으)로 저장되었습니다. GitHub 이슈에 첨부하거나 Discord에 게시하세요."
+
+#: src/launcher/ui/views.cpp:3942
+msgid "Debug report uploaded"
+msgstr "디버그 보고서가 업로드되었습니다"
+
+#: src/launcher/ui/views.cpp:3943
+msgid "Put this link in a GitHub issue or our Discord with what happened. It stays readable for 90 days."
+msgstr "이 링크를 GitHub 이슈나 Discord에 발생한 내용과 함께 남기세요. 90일간 읽을 수 있습니다."
+
+#: src/launcher/ui/views.cpp:3961
+msgid "Copied"
+msgstr "복사됨"
+
+#: src/launcher/ui/views.cpp:3964
+msgid "Show file##report"
+msgstr "파일 표시##report"
+
+#: src/launcher/ui/views.cpp:3964
+msgid "Show file"
+msgstr "파일 표시"
+
+#: src/launcher/ui/views.cpp:4139
+#: src/launcher/ui/views.cpp:4140
+msgid "stick"
+msgstr "스틱"
+
+#: src/launcher/ui/views.cpp:4141
+msgid "pad "
+msgstr "패드 "
+
+#: src/launcher/ui/views.cpp:4142
+msgid "R"
+msgstr "R"
+
+#: src/launcher/ui/views.cpp:4142
+msgid "L"
+msgstr "L"
+
+#: src/launcher/ui/views.cpp:4158
+msgid "Both stick clicks"
+msgstr "스틱 클릭 둘 다"
+
+#: src/launcher/ui/views.cpp:4158
+#, python-brace-format
+msgid "{0} or both stick clicks"
+msgstr "{0} 또는 스틱 클릭 둘 다"
+
+#: src/launcher/ui/views.cpp:4182
+#, python-brace-format
+msgid "Both {0}{1}"
+msgstr "{0}{1} 둘 다"
+
+#: src/launcher/ui/views.cpp:4303
+msgid "Connected"
+msgstr "연결됨"
+
+#: src/launcher/ui/views.cpp:4304
+msgid "Last used"
+msgstr "최근 사용"
+
+#: src/launcher/ui/views.cpp:4319
+msgid "Search controllers"
+msgstr "컨트롤러 검색"
+
+#: src/launcher/ui/views.cpp:4345
+msgid "No controller matches."
+msgstr "일치하는 컨트롤러가 없습니다."
+
+#: src/launcher/ui/views.cpp:4427
+msgid "Reset to defaults##controls"
+msgstr "기본값으로 재설정##controls"
+
+#: src/launcher/ui/views.cpp:4507
+msgid "Menu"
+msgstr "메뉴"
+
+#: src/launcher/ui/views.cpp:4575
+#: src/launcher/ui/views.cpp:4580
+msgid "Custom controls for this game"
+msgstr "이 게임의 사용자 지정 컨트롤"
+
+#: src/launcher/ui/views.cpp:4576
+#: src/launcher/ui/views.cpp:4588
+msgid "Reset to my defaults"
+msgstr "내 기본값으로 재설정"
+
+#: src/launcher/ui/views.cpp:4846
+#, python-brace-format
+msgid "Shared with {0}"
+msgstr "{0}과(와) 공유"
+
+#: src/launcher/ui/views.cpp:4847
+msgid "No button for it here"
+msgstr "여기에 해당 버튼이 없습니다"
+
+#: src/launcher/ui/views.cpp:4937
+#, python-brace-format
+msgid "Automatic ({0})##auto"
+msgstr "자동 ({0})##auto"
+
+#: src/launcher/ui/views.cpp:4939
+msgid "ONE BUTTON"
+msgstr "버튼 하나"
+
+#: src/launcher/ui/views.cpp:4953
+msgid "MORE"
+msgstr "더"
+
+#: src/launcher/ui/views.cpp:4954
+msgid "Hold a button...##hold"
+msgstr "버튼 누르고 대기...##hold"
+
+#: src/launcher/ui/views.cpp:4958
+msgid "Press two buttons together...##chord"
+msgstr "두 버튼 함께 누르기...##chord"
+
+#: src/launcher/ui/views.cpp:4962
+msgid "Off##off"
+msgstr "끄기##off"
+
+#: src/launcher/ui/views.cpp:4996
+msgid "Press two buttons together"
+msgstr "두 버튼 함께 누르기"
+
+#: src/launcher/ui/views.cpp:4996
+msgid "Hold a button"
+msgstr "버튼 누르고 대기"
+
+#: src/launcher/ui/views.cpp:5016
+msgid "Hold both for"
+msgstr "둘 다 누르고"
+
+#: src/launcher/ui/views.cpp:5016
+msgid "Hold for"
+msgstr "누르고"
+
+#: src/launcher/ui/views.cpp:5020
+msgid "None"
+msgstr "없음"
+
+#: src/launcher/ui/views.cpp:5020
+msgid "0.5 s"
+msgstr "0.5초"
+
+#: src/launcher/ui/views.cpp:5020
+msgid "1 s"
+msgstr "1초"
+
+#: src/launcher/ui/views.cpp:5020
+msgid "2 s"
+msgstr "2초"
+
+#: src/launcher/ui/views.cpp:5033
+#, python-brace-format
+msgid "Menu and {0} share a button; {1} sees those presses too."
+msgstr "메뉴와 {0}이(가) 버튼을 공유합니다. {1}도 그 누름을 인식합니다."
+
+#: src/launcher/ui/views.cpp:5035
+msgid "the game"
+msgstr "게임"
+
+#: src/launcher/ui/views.cpp:5036
+msgid "Games get no menu button."
+msgstr "게임에는 메뉴 버튼이 없습니다."
+
+#: src/launcher/ui/views.cpp:5059
+msgid "Not assigned"
+msgstr "미지정"
+
+#: src/launcher/ui/views.cpp:5064
+msgid "System (kept by the runtime)"
+msgstr "시스템(런타임이 유지)"
+
+#: src/launcher/ui/views.cpp:5068
+#: src/launcher/ui/views.cpp:5122
+msgid "Add another input"
+msgstr "입력 추가"
+
+#: src/launcher/ui/views.cpp:5118
+msgid "Remove this input"
+msgstr "이 입력 제거"
+
+#. Controls page checkbox. The grip is the controller's side button held to grab.
+#: src/launcher/ui/views.cpp:5163
+msgid "Grip toggle"
+msgstr "그립 토글"
+
+#: src/launcher/ui/views.cpp:5167
+msgid "Press once to hold, again to let go"
+msgstr "한 번 누르면 잡고, 다시 누르면 놓습니다"
+
+msgid "This game is already running."
+msgstr "이 게임은 이미 실행 중입니다."
+
+msgid "Venture's runtime (venture-runtime.exe) was not found beside the launcher. Reinstall Venture."
+msgstr "Venture 런타임(venture-runtime.exe)을 런처 옆에서 찾을 수 없습니다. Venture를 다시 설치하세요."
+
+msgid "Could not create the runtime log."
+msgstr "런타임 로그를 생성할 수 없습니다."
+
+msgid "Windows could not start the runtime. Check the executable path and permissions."
+msgstr "Windows에서 런타임을 시작할 수 없습니다. 실행 파일 경로와 권한을 확인하세요."
+
+msgid "Could not start {0}."
+msgstr "{0}을(를) 시작할 수 없습니다."
+
+msgid "Could not open the game folder."
+msgstr "게임 폴더를 열 수 없습니다."
+
+msgid "Could not show the file."
+msgstr "파일을 표시할 수 없습니다."
+
+msgid "Could not open the link."
+msgstr "링크를 열 수 없습니다."
+
+#: src/common/android/adb.cpp:167
+msgid "The headset has not authorized USB debugging for this computer. Put it on and choose Allow (tick Always allow) in the prompt."
+msgstr "헤드셋이 이 컴퓨터의 USB 디버깅을 승인하지 않았습니다. 헤드셋에 표시된 프롬프트에서 허용을 선택하세요(항상 허용에 체크)."
+
+#: src/common/android/adb.cpp:170
+msgid "This computer has no permission to use the headset's USB connection. Install the Android udev rules (android-udev-rules) or reconnect the cable."
+msgstr "이 컴퓨터는 헤드셋의 USB 연결을 사용할 권한이 없습니다. Android udev 규칙(android-udev-rules)을 설치하거나 케이블을 다시 연결하세요."
+
+#: src/common/android/adb.cpp:172
+msgid "The headset is connected but offline. Unplug it and plug it back in."
+msgstr "헤드셋이 연결되어 있지만 오프라인입니다. 케이블을 분리했다가 다시 연결하세요."
+
+#: src/common/android/adb.cpp:173
+msgid "Connecting to the headset..."
+msgstr "헤드셋에 연결하는 중..."
+
+#: src/common/android/adb.cpp:174
+#, python-brace-format
+msgid "The headset is not ready ({0})."
+msgstr "헤드셋이 준비되지 않았습니다 ({0})."
+
+#: src/common/android/adb.cpp:187
+#, python-brace-format
+msgid "adb could not list devices{0}"
+msgstr "adb가 장치를 목록으로 가져오지 못했습니다{0}"
+
+#: src/common/android/adb.cpp:196 src/common/android/adb.cpp:299
+msgid "Cancelled."
+msgstr "취소했습니다."
+
+#: src/common/android/adb.cpp:199
+#, python-brace-format
+msgid "The headset did not answer{0}"
+msgstr "헤드셋이 응답하지 않{0}"
+
+#: src/common/android/adb.cpp:237
+msgid "The headset reported an unsupported file name."
+msgstr "헤드셋이 지원하지 않는 파일 이름을 보고했습니다."
+
+#: src/common/android/adb.cpp:252 src/common/android/archive.cpp:66 src/common/download/manager.cpp:639 src/common/download/manager.cpp:739 src/common/download/manager.cpp:917 src/common/download/manager.cpp:1012 src/common/download/manager.cpp:1059 src/common/download/manager.cpp:1098 src/common/library/import.cpp:37 src/common/meta/commerce.cpp:89 src/common/meta/commerce.cpp:178
+msgid "Transfer paused."
+msgstr "전송을 일시중지했습니다."
+
+#: src/common/android/adb.cpp:274
+#, python-brace-format
+msgid "{0} changed on the headset while it was copied. Close the game on the headset and retry."
+msgstr "{0}이(가) 헤드셋에서 복사하는 동안 변경되었습니다. 헤드셋에서 게임을 닫고 다시 시도하세요."
+
+#: src/common/android/adb.cpp:276
+#, python-brace-format
+msgid "The headset could not send {0}: {1}"
+msgstr "헤드셋이 {0}을(를) 보낼 수 없습니다: {1}"
+
+#: src/common/android/adb.cpp:277
+#, python-brace-format
+msgid "The headset transfer of {0} stopped early. Check the cable and retry."
+msgstr "{0}의 헤드셋 전송이 중간에 중단되었습니다. 케이블을 확인하고 다시 시도하세요."
+
+#: src/common/android/adb.cpp:293
+#, python-brace-format
+msgid "Unsupported path on the headset: {0}"
+msgstr "헤드셋에서 지원되지 않는 경로: {0}"
+
+#: src/common/android/adb.cpp:302
+#, python-brace-format
+msgid "Copying to the headset failed{0}"
+msgstr "헤드셋으로 복사하지 못했습니다{0}"
+
+#: src/common/android/adb.cpp:302
+msgid ". Check the cable and retry."
+msgstr " 케이블을 확인하고 다시 시도하세요."
+
+#: src/common/android/adb.cpp:309
+msgid "Enter the headset's IP address, like 192.168.1.20 or 192.168.1.20:5555."
+msgstr "헤드셋의 IP 주소를 입력하세요. 예: 192.168.1.20 또는 192.168.1.20:5555"
+
+#: src/common/android/adb.cpp:315
+#, python-brace-format
+msgid "Could not connect to the headset{0}"
+msgstr "헤드셋에 연결할 수 없습니다{0}"
+
+#: src/common/android/archive.cpp:30
+#, python-brace-format
+msgid "Could not open {0}."
+msgstr "{0}을(를) 열 수 없습니다."
+
+#: src/common/android/archive.cpp:34
+#, python-brace-format
+msgid "{0} is not a readable ZIP archive."
+msgstr "{0}은(는) 읽을 수 있는 ZIP 아카이브가 아닙니다."
+
+#: src/common/android/archive.cpp:39
+#, python-brace-format
+msgid "{0} has an unreadable entry."
+msgstr "{0}에 읽을 수 없는 항목이 있습니다."
+
+#: src/common/android/archive.cpp:51
+#, python-brace-format
+msgid "Archive member {0} is too large."
+msgstr "아카이브 구성 요소 {0}이(가) 너무 큽니다."
+
+#: src/common/android/archive.cpp:55 src/common/android/archive.cpp:62
+#, python-brace-format
+msgid "Could not read {0} from the archive."
+msgstr "아카이브에서 {0}을(를) 읽을 수 없습니다."
+
+#: src/common/android/archive.cpp:77
+#, python-brace-format
+msgid "{0} in the archive is damaged."
+msgstr "아카이브의 {0}이(가) 손상되었습니다."
+
+#: src/common/android/manifest.cpp:41 src/common/android/manifest.cpp:70 src/common/android/manifest.cpp:73 src/common/android/manifest.cpp:90 src/common/android/manifest.cpp:95
+msgid "The APK manifest is truncated."
+msgstr "APK 매니페스트가 잘렸습니다."
+
+#: src/common/android/manifest.cpp:53 src/common/android/manifest.cpp:56 src/common/android/manifest.cpp:126 src/common/android/manifest.cpp:133 src/common/android/manifest.cpp:138
+msgid "The APK manifest is malformed."
+msgstr "APK 매니페스트 형식이 잘못되었습니다."
+
+#: src/common/android/manifest.cpp:66
+msgid "The APK manifest has an invalid string."
+msgstr "APK 매니페스트에 잘못된 문자열이 있습니다."
+
+#: src/common/android/manifest.cpp:115
+msgid "The APK has no binary AndroidManifest.xml."
+msgstr "APK에 바이너리 AndroidManifest.xml이 없습니다."
+
+#: src/common/android/manifest.cpp:183
+msgid "The APK manifest names no valid package."
+msgstr "APK 매니페스트에 유효한 패키지가 없습니다."
+
+#: src/common/android/manifest.cpp:189
+#, python-brace-format
+msgid "{0} is not an Android app (no manifest)."
+msgstr "{0}은(는) Android 앱이 아닙니다(매니페스트 없음)."
+
+#: src/common/android/manifest.cpp:200
+msgid "The APK is not a ZIP archive."
+msgstr "APK가 ZIP 아카이브가 아닙니다."
+
+#: src/common/android/manifest.cpp:208
+msgid "The APK has no readable manifest."
+msgstr "APK에 읽을 수 있는 매니페스트가 없습니다."
+
+#: src/common/android/manifest.cpp:211
+msgid "The APK manifest could not be read."
+msgstr "APK 매니페스트를 읽을 수 없습니다."
+
+#: src/common/android/manifest.cpp:238
+msgid "The APK has no resource table."
+msgstr "APK에 리소스 테이블이 없습니다."
+
+#: src/common/android/manifest.cpp:244 src/common/android/manifest.cpp:260
+msgid "The resource table is malformed."
+msgstr "리소스 테이블 형식이 잘못되었습니다."
+
+#: src/common/controls.h:98 src/common/controls.h:115 src/common/controls.h:145 src/common/controls.h:158 src/common/controls.h:170 src/common/controls.h:181 src/common/controls.h:195 src/common/controls.h:203 src/common/controls.h:221 src/common/controls.h:239 src/common/controls.h:251
+msgid "Thumbstick click"
+msgstr "썸스틱 클릭"
+
+#: src/common/controls.h:99
+msgid "Trackpad (swipe)"
+msgstr "트랙패드(스와이프)"
+
+#: src/common/controls.h:100
+msgid "Trackpad press"
+msgstr "트랙패드 누르기"
+
+#: src/common/controls.h:101 src/common/controls.h:130 src/common/controls.h:208
+msgid "Trackpad touch"
+msgstr "트랙패드 터치"
+
+#: src/common/controls.h:103 src/common/controls.h:132
+msgid "Trigger click"
+msgstr "트리거 클릭"
+
+#: src/common/controls.h:105
+msgid "Grip squeeze (hard)"
+msgstr "그립 스퀴즈(강하게)"
+
+#: src/common/controls.h:126 src/common/controls.h:205
+msgid "Trackpad click"
+msgstr "트랙패드 클릭"
+
+#: src/common/controls.h:127 src/common/controls.h:206
+msgid "Trackpad top"
+msgstr "트랙패드 위"
+
+#: src/common/controls.h:128 src/common/controls.h:207
+msgid "Trackpad bottom"
+msgstr "트랙패드 아래"
+
+#: src/common/controls.h:129
+msgid "Trackpad center"
+msgstr "트랙패드 중앙"
+
+#: src/common/controls.h:211
+msgid "Windows button"
+msgstr "Windows 버튼"
+
+#: src/common/controls.h:242
+msgid "Thumbstick touch"
+msgstr "썸스틱 터치"
+
+#: src/common/controls.h:245
+msgid "Steam button"
+msgstr "Steam 버튼"
+
+#: src/common/controls.h:263
+msgid "Left trackpad press"
+msgstr "왼쪽 트랙패드 누르기"
+
+#: src/common/controls.h:264
+msgid "Meta Quest Touch"
+msgstr "Meta Quest Touch"
+
+#: src/common/controls.h:265 src/common/controls.h:267 src/common/controls.h:269 src/common/controls.h:275 src/common/controls.h:277 src/common/controls.h:279 src/common/controls.h:281 src/common/controls.h:288 src/common/controls.h:290 src/common/controls.h:293
+msgid "Left menu button"
+msgstr "왼쪽 메뉴 버튼"
+
+#: src/common/controls.h:266
+msgid "Meta Quest Touch Plus"
+msgstr "Meta Quest Touch Plus"
+
+#: src/common/controls.h:268
+msgid "Meta Quest Touch Pro"
+msgstr "Meta Quest Touch Pro"
+
+#: src/common/controls.h:270
+msgid "HTC Vive wand"
+msgstr "HTC Vive 와ند"
+
+#: src/common/controls.h:276
+msgid "HTC Vive Cosmos"
+msgstr "HTC Vive Cosmos"
+
+#: src/common/controls.h:278
+msgid "HTC Vive Focus 3"
+msgstr "HTC Vive Focus 3"
+
+#: src/common/controls.h:280
+msgid "HP Reverb G2"
+msgstr "HP Reverb G2"
+
+#: src/common/controls.h:282
+msgid "Windows Mixed Reality"
+msgstr "Windows Mixed Reality"
+
+#: src/common/controls.h:295
+msgid "PlayStation VR2 Sense"
+msgstr "PlayStation VR2 Sense"
+
+#: src/common/controls.h:301
+msgid "Left Create button"
+msgstr "왼쪽 Create 버튼"
+
+#: src/common/controls.h:309
+msgid "Left View button"
+msgstr "왼쪽 View 버튼"
+
+#: src/common/controls.h:310
+msgid "Generic controller"
+msgstr "일반 컨트롤러"
+
+#: src/common/digest.cpp:18
+msgid "cannot read SHA-256 input"
+msgstr "SHA-256 입력을 읽을 수 없습니다"
+
+#: src/common/download/asset_files.cpp:13
+msgid "Unsafe asset manifest."
+msgstr "안전하지 않은 에셋 매니페스트입니다."
+
+#: src/common/download/asset_files.cpp:16
+msgid "Asset installation changed."
+msgstr "에셋 설치가 변경되었습니다."
+
+#: src/common/download/asset_files.cpp:19
+msgid "Unknown asset."
+msgstr "알 수 없는 에셋입니다."
+
+#: src/common/download/asset_files.cpp:25
+msgid "Unsafe asset file."
+msgstr "안전하지 않은 에셋 파일입니다."
+
+#: src/common/download/asset_files.cpp:38
+msgid "Invalid asset installation."
+msgstr "잘못된 에셋 설치입니다."
+
+#: src/common/download/manager.cpp:38
+msgid "Checking ownership and build"
+msgstr "소유권과 빌드 확인 중"
+
+#: src/common/download/manager.cpp:163
+msgid "Invalid version to download."
+msgstr "다운로드할 버전을 잘못 지정했습니다."
+
+#: src/common/download/manager.cpp:172
+msgid "Invalid add-on download."
+msgstr "잘못된 추가 콘텐츠 다운로드입니다."
+
+#: src/common/download/manager.cpp:185
+msgid "Invalid asset download."
+msgstr "잘못된 에셋 다운로드입니다."
+
+#: src/common/download/manager.cpp:195
+msgid "Invalid import source."
+msgstr "잘못된 가져오기 소스입니다."
+
+#: src/common/download/manager.cpp:228
+msgid "Pause downloads before deleting an asset."
+msgstr "에셋을 삭제하기 전에 다운로드를 일시중지하세요."
+
+#: src/common/download/manager.cpp:248
+msgid "Select a signed-in account before downloading."
+msgstr "다운로드하기 전에 로그인한 계정을 선택하세요."
+
+#: src/common/download/manager.cpp:250 src/common/download/manager.cpp:559
+msgid "Sign in before resuming downloads."
+msgstr "다운로드를 재개하기 전에 로그인하세요."
+
+#: src/common/download/manager.cpp:252
+msgid "Invalid download destination."
+msgstr "잘못된 다운로드 대상입니다."
+
+#: src/common/download/manager.cpp:260
+msgid "The cancelled download is still stopping. Try again shortly."
+msgstr "취소된 다운로드가 아직 중지 중입니다. 잠시 후 다시 시도하세요."
+
+#: src/common/download/manager.cpp:310
+msgid "Pause this game's downloads before removing an add-on."
+msgstr "추가 콘텐츠를 삭제하기 전에 이 게임의 다운로드를 일시중지하세요."
+
+#: src/common/download/manager.cpp:478 src/common/saves_migration.cpp:29
+msgid "Invalid primary account key."
+msgstr "잘못된 기본 계정 키입니다."
+
+#: src/common/download/manager.cpp:578 src/common/meta/store.cpp:974
+msgid "Meta says this account does not own this game."
+msgstr "Meta에 따르면 이 계정은 이 게임을 소유하지 않습니다."
+
+#: src/common/download/manager.cpp:619
+msgid "Meta did not confirm ownership of this add-on. No files were downloaded."
+msgstr "Meta가 이 추가 콘텐츠의 소유권을 확인하지 않았습니다. 파일이 다운로드되지 않았습니다."
+
+#: src/common/download/manager.cpp:630
+msgid "No files were found for this add-on."
+msgstr "이 추가 콘텐츠의 파일을 찾을 수 없습니다."
+
+#: src/common/download/manager.cpp:636
+msgid "Meta did not confirm ownership of this asset."
+msgstr "Meta가 이 에셋의 소유권을 확인하지 않았습니다."
+
+#: src/common/download/manager.cpp:647 src/common/download/manager.cpp:934
+msgid "Installation manifest path escapes the game folder."
+msgstr "설치 매니페스트 경로가 게임 폴더를 벗어납니다."
+
+#: src/common/download/manager.cpp:656 src/common/download/manager.cpp:939
+msgid "This folder belongs to another build. Uninstall that version or choose another games directory."
+msgstr "이 폴더는 다른 빌드에 속합니다. 그 버전을 삭제하거나 다른 게임 디렉터리를 선택하세요."
+
+#: src/common/download/manager.cpp:668
+msgid "Invalid download size."
+msgstr "잘못된 다운로드 크기입니다."
+
+#: src/common/download/manager.cpp:675 src/common/download/manager.cpp:962
+msgid "File path escapes installation directory."
+msgstr "파일 경로가 설치 디렉터리를 벗어납니다."
+
+#: src/common/download/manager.cpp:682
+msgid "Partial file path escapes installation directory."
+msgstr "부분 파일 경로가 설치 디렉터리를 벗어납니다."
+
+#: src/common/download/manager.cpp:688 src/common/download/manager.cpp:999
+msgid "Not enough free space. Free disk space or choose another games folder in Settings."
+msgstr "여유 공간이 부족합니다. 디스크 공간을 확보하거나 설정에서 다른 게임 폴더를 선택하세요."
+
+#: src/common/download/manager.cpp:746
+msgid "Add-on content did not pass the size check."
+msgstr "추가 콘텐츠가 크기 검사를 통과하지 못했습니다."
+
+#: src/common/download/manager.cpp:783
+msgid "Could not access the download folder. Check free space and permissions, then resume."
+msgstr "다운로드 폴더에 접근할 수 없습니다. 여유 공간과 권한을 확인한 뒤 계속하세요."
+
+#: src/common/download/manager.cpp:790
+msgid "Meta returned unexpected file details. Refresh the library and retry."
+msgstr "Meta가 예상하지 못한 파일 상세 정보를 반환했습니다. 라이브러리를 새로고침하고 다시 시도하세요."
+
+#: src/common/download/manager.cpp:798
+msgid "Partial files saved. Resume to continue."
+msgstr "부분 파일을 저장했습니다. 계속하려면 재개하세요."
+
+#: src/common/download/manager.cpp:851 src/common/download/manager.cpp:861 src/common/download/manager.cpp:870
+msgid "Could not write to the games folder. Check free space and permissions, then retry."
+msgstr "게임 폴더에 쓸 수 없습니다. 여유 공간과 권한을 확인한 뒤 다시 시도하세요."
+
+#: src/common/download/manager.cpp:874
+msgid " changed while it was being imported."
+msgstr " 가져오는 동안 변경되었습니다."
+
+#: src/common/download/manager.cpp:880
+msgid " arrived damaged (its checksum differs from the headset's). Check the cable and retry."
+msgstr " 손상되어 도착했습니다(헤드셋의 체크섬과 다름). 케이블을 확인하고 다시 시도하세요."
+
+#: src/common/download/manager.cpp:904
+msgid "The import source no longer holds this game."
+msgstr "가져오기 소스에 이 게임이 더 이상 없습니다."
+
+#: src/common/download/manager.cpp:989
+msgid "Invalid import size."
+msgstr "잘못된 가져오기 크기입니다."
+
+#: src/common/download/manager.cpp:1043
+#, python-brace-format
+msgid "{0} is damaged in {1}: it has {2} bytes of {3}. Reinstall the game on the headset, or copy the file again, then retry."
+msgstr "{0}이(가) {1}에서 손상되었습니다: {3} 중 {2}바이트입니다. 헤드셋에서 게임을 다시 설치하거나 파일을 다시 복사한 뒤 다시 시도하세요."
+
+#: src/common/download/manager.cpp:1061
+msgid " did not pass the size check."
+msgstr " 크기 검사를 통과하지 못했습니다."
+
+#: src/common/download/manager.cpp:1073 src/common/library/save_import.cpp:111
+msgid "A save's path escapes the game's storage."
+msgstr "세이브 경로가 게임 저장소를 벗어납니다."
+
+#: src/common/http/client.cpp:17 src/common/http/client.cpp:153 src/common/http/client.cpp:284 src/common/http/client.cpp:294
+msgid "HTTP initialization failed."
+msgstr "HTTP 초기화에 실패했습니다."
+
+#: src/common/http/client.cpp:201 src/common/http/client.cpp:611
+msgid "Transfer paused. Resume when ready."
+msgstr "전송을 일시중지했습니다. 준비되면 재개하세요."
+
+#: src/common/http/client.cpp:204
+msgid "Connection timed out. Check your connection and retry."
+msgstr "접속 시간 초과입니다. 연결을 확인하고 다시 시도하세요."
+
+#: src/common/http/client.cpp:207
+#, python-brace-format
+msgid "The secure connection could not be verified ({}). This system's certificate store may be out of date."
+msgstr "보안 연결을 확인할 수 없습니다({}). 이 시스템의 인증서 저장소가 오래되었을 수 있습니다."
+
+#: src/common/http/client.cpp:210
+#, python-brace-format
+msgid "Network transfer failed ({}). Check your connection and retry."
+msgstr "네트워크 전송에 실패했습니다({}). 연결을 확인하고 다시 시도하세요."
+
+#: src/common/http/client.cpp:216
+msgid "File redirect is missing its destination."
+msgstr "파일 리다이렉트에 대상이 없습니다."
+
+#: src/common/http/client.cpp:220
+msgid "Invalid file redirect."
+msgstr "잘못된 파일 리다이렉트입니다."
+
+#: src/common/http/client.cpp:226
+msgid "File redirect is outside Meta delivery domains."
+msgstr "파일 리다이렉트가 Meta 전달 도메인 밖에 있습니다."
+
+#: src/common/http/client.cpp:227
+msgid "Update redirect is outside Venture's GitHub releases."
+msgstr "업데이트 리다이렉트가 Venture의 GitHub 릴리스 밖에 있습니다."
+
+#: src/common/http/client.cpp:232
+msgid "Refused a credential-bearing file redirect."
+msgstr "자격 증명을 포함한 파일 리다이렉트를 거부했습니다."
+
+#: src/common/http/client.cpp:291
+msgid "Invalid HTTP header."
+msgstr "잘못된 HTTP 헤더입니다."
+
+#: src/common/http/client.cpp:320
+msgid "Invalid URL."
+msgstr "잘못된 URL입니다."
+
+#: src/common/http/client.cpp:337
+msgid "URL encoding failed."
+msgstr "URL 인코딩에 실패했습니다."
+
+#: src/common/http/client.cpp:349
+msgid "URL decoding failed."
+msgstr "URL 디코딩에 실패했습니다."
+
+#: src/common/http/client.cpp:419 src/common/http/client.cpp:502 src/common/http/client.cpp:563
+msgid "File URL is outside Meta delivery domains."
+msgstr "파일 URL이 Meta 전달 도메인 밖에 있습니다."
+
+#: src/common/http/client.cpp:440
+msgid "Refused an invalid Meta commerce URL."
+msgstr "잘못된 Meta 상거래 URL을 거부했습니다."
+
+#: src/common/http/client.cpp:449
+msgid "Invalid package name."
+msgstr "잘못된 패키지 이름입니다."
+
+#: src/common/http/client.cpp:457 src/common/http/client.cpp:468
+msgid "Invalid loopback test URL."
+msgstr "잘못된 루프백 테스트 URL입니다."
+
+#: src/common/http/client.cpp:475
+msgid "Artwork URL is outside Meta delivery domains."
+msgstr "아트work URL이 Meta 전달 도메인 밖에 있습니다."
+
+#: src/common/http/client.cpp:482
+msgid "Artwork is unavailable. Refresh to retry."
+msgstr "아트work를 사용할 수 없습니다. 새로고침해 다시 시도하세요."
+
+#: src/common/http/client.cpp:485
+msgid "Too many artwork redirects."
+msgstr "아트work 리다이렉트가 너무 많습니다."
+
+#: src/common/http/client.cpp:496
+msgid "Meta's file server won't send this game to this account (HTTP 404). It does this for apps that came with the headset rather than from the store. Get the game from the Meta Horizon Store on this account, or download it with another account that owns it."
+msgstr "Meta 파일 서버가 이 게임이 이 계정으로 전송되지 않습니다(HTTP 404). 스토어가 아니라 헤드셋에 기본 제공된 앱일 때 이렇게 합니다. 이 계정으로 Meta Horizon 스토어에서 게임을 받으거나, 게임을 소유한 다른 계정으로 다운로드하세요."
+
+#: src/common/http/client.cpp:497
+#, python-brace-format
+msgid "File server refused the transfer (HTTP {0}). Sign in again, then resume."
+msgstr "파일 서버가 전송을 거부했습니다(HTTP {0}). 다시 로그인한 뒤 계속하세요."
+
+#: src/common/http/client.cpp:536
+msgid "Too many file redirects."
+msgstr "파일 리다이렉트가 너무 많습니다."
+
+#: src/common/http/client.cpp:548
+msgid "Invalid resume range. Retry the transfer."
+msgstr "잘못된 재개 범위입니다. 전송을 다시 시도하세요."
+
+#: src/common/http/client.cpp:553
+msgid "Inconsistent resume range. Retry the transfer."
+msgstr "일관성 없는 재개 범위입니다. 전송을 다시 시도하세요."
+
+#: src/common/http/client.cpp:568 src/common/http/client.cpp:573
+msgid "Update URL is outside Venture's GitHub releases."
+msgstr "업데이트 URL이 Venture의 GitHub 릴리스 밖에 있습니다."
+
+#: src/common/http/client.cpp:580
+#, python-brace-format
+msgid "GitHub returned HTTP {0}."
+msgstr "GitHub가 HTTP {0}을(를) 반환했습니다."
+
+#: src/common/http/client.cpp:583
+msgid "Too many redirects. Try again later."
+msgstr "리다이렉트가 너무 많습니다. 나중에 다시 시도하세요."
+
+#: src/common/http/client.cpp:643
+msgid "File server returned an error page. Sign in again, then resume."
+msgstr "파일 서버가 오류 페이지를 반환했습니다. 다시 로그인한 뒤 계속하세요."
+
+#: src/common/http/client.cpp:656
+msgid "File exceeded its expected size. Retry the transfer."
+msgstr "파일이 예상 크기를 초과했습니다. 전송을 다시 시도하세요."
+
+#: src/common/http/client.cpp:659
+msgid "Could not write download. Check free disk space and folder permissions."
+msgstr "다운로드를 쓸 수 없습니다. 여유 디스크 공간과 폴더 권한을 확인하세요."
+
+#: src/common/http/client.cpp:682
+msgid "File is incomplete. Resume to retry the remaining bytes."
+msgstr "파일이 불완전합니다. 계속하여 남은 바이트를 다시 시도하세요."
+
+#: src/common/http/client.cpp:686
+msgid "Too many file redirects. Try again later."
+msgstr "파일 리다이렉트가 너무 많습니다. 나중에 다시 시도하세요."
+
+#: src/common/ipc.cpp:22
+msgid "Invalid inherited credential channel."
+msgstr "잘못된 상속된 자격 증명 채널입니다."
+
+#: src/common/ipc.cpp:28 src/common/ipc.cpp:40
+msgid "Credential channel is closed."
+msgstr "자격 증명 채널이 닫혔습니다."
+
+#: src/common/ipc.cpp:31
+msgid "Credential channel message exceeds its limit."
+msgstr "자격 증명 채널 메시지가 한도를 초과했습니다."
+
+#: src/common/ipc.cpp:47
+msgid "Invalid credential channel message length."
+msgstr "잘못된 자격 증명 채널 메시지 길이입니다."
+
+#: src/common/ipc.cpp:52
+msgid "Invalid credential channel message."
+msgstr "잘못된 자격 증명 채널 메시지입니다."
+
+#: src/common/ipc.cpp:68
+msgid "Credential broker unavailable"
+msgstr "자격 증명 브로커를 사용할 수 없습니다"
+
+#: src/common/json.h:16
+msgid "Invalid JSON response or file."
+msgstr "잘못된 JSON 응답 또는 파일입니다."
+
+#: src/common/launch_details.cpp:11
+msgid "Invalid launch details"
+msgstr "잘못된 시작 상세 정보"
+
+#: src/common/launch_details.cpp:15
+msgid "Invalid launch type"
+msgstr "잘못된 시작 종류"
+
+#: src/common/launch_details.cpp:21
+msgid "Invalid launch field"
+msgstr "잘못된 시작 필드"
+
+#: src/common/launch_details.cpp:23
+msgid "Invalid launch room"
+msgstr "잘못된 시작 룸"
+
+#: src/common/library/import.cpp:32
+#, python-brace-format
+msgid "Could not read {0} from the import folder."
+msgstr "가져오기 폴더에서 {0}을(를) 읽을 수 없습니다."
+
+#: src/common/library/import.cpp:45
+#, python-brace-format
+msgid "{0} changed or could not be read while importing."
+msgstr "{0}이(가) 가져오는 동안 변경되거나 읽을 수 없었습니다."
+
+#: src/common/library/import.cpp:65
+#, python-brace-format
+msgid "{0} is no longer in the archive."
+msgstr "{0}이(가) 더 이상 아카이브에 없습니다."
+
+#: src/common/library/import.cpp:163
+msgid "Choose an APK, a folder, or a ZIP archive holding an APK and its data folder."
+msgstr "APK, 폴더, 또는 APK와 데이터 폴더를 담은 ZIP 아카이브를 선택하세요."
+
+#: src/common/library/import.cpp:174
+msgid "too large to inspect"
+msgstr "검사하기에는 너무 큼"
+
+#: src/common/library/import.cpp:229
+msgid "This APK could not be read."
+msgstr "이 APK를 읽을 수 없습니다."
+
+#: src/common/library/import.cpp:229
+msgid "No Android app (APK) was found in this folder."
+msgstr "이 폴더에 Android 앱(APK)이 없습니다."
+
+#: src/common/library/import.cpp:231
+msgid "The chosen file or folder no longer exists."
+msgstr "선택한 파일이나 폴더가 더 이상 존재하지 않습니다."
+
+#: src/common/library/import.cpp:233
+msgid "No Android app (APK) was found in this archive."
+msgstr "이 아카이브에 Android 앱(APK)이 없습니다."
+
+#: src/common/library/import.cpp:270
+msgid "The import folder no longer holds this game."
+msgstr "가져오기 폴더에 이 게임이 더 이상 없습니다."
+
+#: src/common/library/import.cpp:273
+msgid "Android platform-tools (adb) were not found. Set adb in Settings."
+msgstr "Android platform-tools(adb)를 찾을 수 없습니다. 설정에서 adb를 지정하세요."
+
+#: src/common/library/import.cpp:277
+msgid "Connect the headset to resume this import."
+msgstr "이 가져오기를 계속하려면 헤드셋을 연결하세요."
+
+#: src/common/library/import.cpp:280
+msgid "The game is no longer installed on the headset."
+msgstr "게임이 헤드셋에 설치되어 있지 않습니다."
+
+#: src/common/library/import.cpp:283
+msgid "Unknown import source."
+msgstr "알 수 없는 가져오기 소스입니다."
+
+#: src/common/library/library.cpp:27
+#, python-brace-format
+msgid "{0} is still downloading ({1} of {2} bytes)"
+msgstr "{0}은(는) 아직 다운로드 중입니다 ({2}바이트 중 {1})"
+
+#: src/common/library/library.cpp:29
+msgid " is missing"
+msgstr " 이(가) 없습니다"
+
+#: src/common/library/library.cpp:34
+msgid " is empty"
+msgstr " 이(가) 비어 있습니다"
+
+#: src/common/library/library.cpp:36
+#, python-brace-format
+msgid "{0} has {1} bytes, the manifest says {2}"
+msgstr "{0}은(는) {1}바이트이고, 매니페스트에는 {2}라고 합니다"
+
+#: src/common/library/library.cpp:69
+msgid "Cannot read installation directory."
+msgstr "설치 디렉터리를 읽을 수 없습니다."
+
+#: src/common/library/library.cpp:167
+msgid "Meta account changed. Sign in again before refreshing."
+msgstr "Meta 계정이 변경되었습니다. 새로고침하기 전에 다시 로그인하세요."
+
+#: src/common/library/library.cpp:171
+msgid "Invalid Quest entitlement snapshot."
+msgstr "잘못된 Quest 권한 스냅샷입니다."
+
+#: src/common/library/library.cpp:221
+msgid "Library cache is unreadable. Refresh your library."
+msgstr "라이브러리 캐시를 읽을 수 없습니다. 라이브러리를 새로고침하세요."
+
+#: src/common/library/library.cpp:279
+msgid "Installation path changed. Rescan the library first."
+msgstr "설치 경로가 변경되었습니다. 먼저 라이브러리를 다시 스캔하세요."
+
+#: src/common/library/library.cpp:287
+msgid "Cannot uninstall a linked installation directory."
+msgstr "링크된 설치 디렉터리를 삭제할 수 없습니다."
+
+#: src/common/library/library.cpp:292
+msgid "Installation changed. Rescan before uninstalling."
+msgstr "설치가 변경되었습니다. 삭제하기 전에 다시 스캔하세요."
+
+#: src/common/library/library.cpp:394 src/common/library/library.cpp:452
+msgid "Unsafe installation manifest path."
+msgstr "안전하지 않은 설치 매니페스트 경로입니다."
+
+#: src/common/library/library.cpp:399
+msgid "Installed build does not match the add-on catalog."
+msgstr "설치된 빌드가 추가 콘텐츠 카탈로그와 일치하지 않습니다."
+
+#: src/common/library/library.cpp:449
+msgid "Installation path changed. Rescan first."
+msgstr "설치 경로가 변경되었습니다. 먼저 다시 스캔하세요."
+
+#: src/common/library/library.cpp:457
+msgid "Installation changed. Rescan before removing an add-on."
+msgstr "설치가 변경되었습니다. 추가 콘텐츠를 삭제하기 전에 다시 스캔하세요."
+
+#: src/common/library/library.cpp:463
+msgid "Invalid add-on file."
+msgstr "잘못된 추가 콘텐츠 파일입니다."
+
+#: src/common/library/library.cpp:469
+msgid "Cannot remove an unsafe add-on file."
+msgstr "안전하지 않은 추가 콘텐츠 파일을 삭제할 수 없습니다."
+
+#: src/common/library/library.cpp:474
+msgid "Add-on is absent from the installed catalog."
+msgstr "추가 콘텐츠가 설치된 카탈로그에 없습니다."
+
+#: src/common/library/library.cpp:705 src/common/library/library.cpp:712 src/common/library/library.cpp:719 src/common/library/library.cpp:735
+#, python-brace-format
+msgid " Crash dump: {}"
+msgstr " 충돌 덤프: {}"
+
+#: src/common/library/library.cpp:711
+#, python-brace-format
+msgid "{0}. The game stopped after that (exit code {1})."
+msgstr "{0}. 그 뒤 게임이 중단되었습니다(종료 코드 {1})."
+
+#: src/common/library/library.cpp:716
+#, python-brace-format
+msgid "The game stopped responding{0} and was closed (exit code {1})."
+msgstr "게임이 응답을 멈추었{0} 종료되었습니다(종료 코드 {1})."
+
+#: src/common/library/library.cpp:717
+#, python-brace-format
+msgid " (no new frame for {} s)"
+msgstr " (새 프레임을 {}초간 받지 못함)"
+
+#: src/common/library/library.cpp:722
+#, python-brace-format
+msgid "The runtime stopped unexpectedly (exit code {})."
+msgstr "런타임이 예상치 않게 중단되었습니다(종료 코드 {})."
+
+#: src/common/library/library.cpp:726 src/common/library/library.cpp:728 src/common/library/library.cpp:731 src/common/library/library.cpp:734
+#, python-brace-format
+msgid " Last error: {}"
+msgstr " 마지막 오류: {}"
+
+#: src/common/library/library.cpp:729 src/common/library/library.cpp:732
+#, python-brace-format
+msgid " Last error: {0} ({1})"
+msgstr " 마지막 오류: {0} ({1})"
+
+#: src/common/library/library.cpp:872
+msgid "Use absolute paths for the games folder and runtime executable."
+msgstr "게임 폴더와 런타임 실행 파일에 절대 경로를 사용하세요."
+
+#: src/common/library/library.cpp:917
+msgid "Use an absolute path for adb."
+msgstr "adb에 절대 경로를 사용하세요."
+
+#: src/common/library/save_import.cpp:70
+msgid "Save import cancelled."
+msgstr "세이브 가져오기를 취소했습니다."
+
+#: src/common/library/save_import.cpp:87
+msgid "No save files were found to import."
+msgstr "가져올 세이브 파일을 찾을 수 없습니다."
+
+#: src/common/library/save_import.cpp:101
+#, python-brace-format
+msgid "Imported {0} save files ({1} bytes, {2} skipped) of {3}{4}"
+msgstr "{3}의 세이브 파일 {0}개({1}바이트, {2}개 건너뜀)를 가져왔습니다{4}"
+
+#: src/common/library/save_import.cpp:127
+#, python-brace-format
+msgid "Skipped {0} of {1}: {2}"
+msgstr "{1} 중 {0}을(를) 건너뜀: {2}"
+
+#: src/common/library/save_import.cpp:132
+#, python-brace-format
+msgid "Copying {0} from the headset failed."
+msgstr "헤드셋에서 {0}을(를) 복사하지 못했습니다."
+
+#: src/common/library/save_import.cpp:200 src/common/library/save_import.cpp:218
+msgid "This game is not installed on the headset."
+msgstr "이 게임은 헤드셋에 설치되어 있지 않습니다."
+
+#: src/common/library/save_import.cpp:203
+#, python-brace-format
+msgid "The headset has no save data for this game in Android/data/{0}. Saves a game keeps in its private storage cannot be read over USB."
+msgstr "헤드셋의 Android/data/{0}에 이 게임의 세이브 데이터가 없습니다. 게임이 비공개 저장소에 두는 세이브는 USB로 읽을 수 없습니다."
+
+#: src/common/library/save_import.cpp:208
+msgid "The headset would not send any of this game's save files (see the log)."
+msgstr "헤드셋이 이 게임의 세이브 파일을 하나도 보내지 않았습니다(로그 참조)."
+
+#: src/common/library/save_import.cpp:247
+msgid "Save export cancelled."
+msgstr "세이브 내보내기를 취소했습니다."
+
+#: src/common/library/save_import.cpp:257
+#, python-brace-format
+msgid "Not sending {0} of {1}: the headset would not send its copy for the backup"
+msgstr "{1}의 {0}을(를) 보내지 않습니다: 헤드셋이 백업용 사본을 보내지 않음"
+
+#: src/common/library/save_import.cpp:261
+#, python-brace-format
+msgid "Not sending {0} of {1}: the headset's shell cannot name it"
+msgstr "{1}의 {0}을(를) 보내지 않습니다: 헤드셋 셸이 이름을 붙일 수 없음"
+
+#: src/common/library/save_import.cpp:277
+msgid "This game keeps its saves in private storage, which can't be sent over USB."
+msgstr "이 게임은 세이브를 USB로 보낼 수 없는 비공개 저장소에 둡니다."
+
+#: src/common/library/save_import.cpp:278
+msgid "Venture has no save data for this game to send. Play it here first, or import its saves."
+msgstr "Venture에 보낼 이 게임의 세이브 데이터가 없습니다. 먼저 여기서 플레이하거나 세이브를 가져오세요."
+
+#: src/common/library/save_import.cpp:293
+#, python-brace-format
+msgid "Removing {0} file{1} from the headset that Venture's copy no longer has"
+msgstr "Venture 사본에 더 이상 없는 헤드셋의 {0} 파일{1}을(를) 삭제하는 중"
+
+#: src/common/library/save_import.cpp:313
+msgid "The headset did not receive every save file. Check the cable and retry."
+msgstr "헤드셋이 모든 세이브 파일을 받지 못했습니다. 케이블을 확인하고 다시 시도하세요."
+
+#: src/common/library/save_import.cpp:322
+msgid "The headset could not replace the game's saves."
+msgstr "헤드셋이 게임의 세이브를 교체할 수 없습니다."
+
+#: src/common/library/save_import.cpp:323
+#, python-brace-format
+msgid "The headset could not replace the game's saves. Its previous saves are in {0}."
+msgstr "헤드셋이 게임의 세이브를 교체할 수 없습니다. 이전 세이브는 {0}에 있습니다."
+
+#: src/common/library/save_import.cpp:336
+#, python-brace-format
+msgid "Exported {0} save files ({1} bytes, {2} kept, {3} removed) of {4} to the headset{5}{6}"
+msgstr "{4}의 세이브 파일 {0}개({1}바이트, {2}개 유지, {3}개 삭제)를 헤드셋에 내보냈습니다{5}{6}"
+
+#: src/common/meta/accounts.cpp:29
+msgid "Account index is unreadable. Credentials have been retained."
+msgstr "계정 인덱스를 읽을 수 없습니다. 자격 증명을 유지했습니다."
+
+#: src/common/meta/accounts.cpp:40
+msgid "Account index contains invalid entries. Credentials have been retained."
+msgstr "계정 인덱스에 잘못된 항목이 있습니다. 자격 증명을 유지했습니다."
+
+#: src/common/meta/accounts.cpp:47
+msgid "Account index selection is invalid. Credentials have been retained."
+msgstr "계정 인덱스 선택이 잘못되었습니다. 자격 증명을 유지했습니다."
+
+#: src/common/meta/accounts.cpp:132 src/common/meta/accounts.cpp:159 src/common/meta/accounts.cpp:225 src/common/platform/posix/secret_store.cpp:331
+msgid "Account credential does not match its slot."
+msgstr "계정 자격 증명이 해당 슬롯과 일치하지 않습니다."
+
+#: src/common/meta/accounts.cpp:176
+msgid "Sign-in did not return a stable Meta account."
+msgstr "로그인이 안정적인 Meta 계정을 반환하지 않았습니다."
+
+#: src/common/meta/accounts.cpp:192
+msgid "Account credential verification failed. Credentials have been retained."
+msgstr "계정 자격 증명 확인에 실패했습니다. 자격 증명을 유지했습니다."
+
+#: src/common/meta/accounts.cpp:245 src/common/meta/accounts.cpp:259 src/common/meta/accounts.cpp:286
+msgid "Unknown account."
+msgstr "알 수 없는 계정입니다."
+
+#: src/common/meta/accounts.cpp:292
+msgid "App Sharing is not supported. Each account must own the game."
+msgstr "앱 공유는 지원되지 않습니다. 각 계정이 게임을 소유해야 합니다."
+
+#: src/common/meta/accounts.cpp:319 src/common/meta/accounts.cpp:328
+msgid "Existing account verification failed. Legacy credentials have been retained."
+msgstr "기존 계정 확인에 실패했습니다. 레거시 자격 증명을 유지했습니다."
+
+#: src/common/meta/accounts.cpp:338
+msgid "Migrated account verification failed. Legacy credentials have been retained."
+msgstr "이설된 계정 확인에 실패했습니다. 레거시 자격 증명을 유지했습니다."
+
+#: src/common/meta/auth.cpp:62
+msgid "Invalid sign-in callback. Start sign-in again."
+msgstr "잘못된 로그인 콜백입니다. 로그인을 다시 시작하세요."
+
+#: src/common/meta/auth.cpp:90
+msgid "This sign-in callback belongs to a different session. Start sign-in again."
+msgstr "이 로그인 콜백은 다른 세션에 속합니다. 로그인을 다시 시작하세요."
+
+#: src/common/meta/auth.cpp:110
+msgid " code "
+msgstr " 코드 "
+
+#: src/common/meta/auth.cpp:113
+msgid " subcode "
+msgstr " 서브코드 "
+
+#: src/common/meta/auth.cpp:115
+#, python-brace-format
+msgid "Meta {0} failed (HTTP {1}{2}). Try signing in again."
+msgstr "Meta {0}에 실패했습니다(HTTP {1}{2}). 다시 로그인해 보세요."
+
+#: src/common/meta/auth.cpp:120
+msgid "Meta's reply could not be read. Try again later."
+msgstr "Meta 응답을 읽을 수 없습니다. 나중에 다시 시도하세요."
+
+#: src/common/meta/auth.cpp:131
+msgid "Meta's reply had no sign-in challenge."
+msgstr "Meta 응답에 로그인 챌린지가 없습니다."
+
+#: src/common/meta/auth.cpp:149
+msgid "Sign-in expired. Start sign-in again."
+msgstr "로그인이 만료되었습니다. 로그인을 다시 시작하세요."
+
+#: src/common/meta/auth.cpp:160
+msgid "Meta did not return a sign-in token."
+msgstr "Meta가 로그인 토큰을 반환하지 않았습니다."
+
+#: src/common/meta/auth.cpp:170
+msgid "Meta's reply had no Quest account token."
+msgstr "Meta 응답에 Quest 계정 토큰이 없습니다."
+
+#: src/common/meta/commerce.cpp:31
+msgid "Meta returned invalid purchase times."
+msgstr "Meta가 잘못된 구매 시각을 반환했습니다."
+
+#: src/common/meta/commerce.cpp:36
+msgid "Invalid purchase list."
+msgstr "잘못된 구매 목록입니다."
+
+#: src/common/meta/commerce.cpp:44
+msgid "Meta returned incomplete add-on ownership."
+msgstr "Meta가 불완전한 추가 콘텐츠 소유권을 반환했습니다."
+
+#: src/common/meta/commerce.cpp:58
+msgid "Sign in to retrieve add-ons."
+msgstr "추가 콘텐츠를 가져오려면 로그인하세요."
+
+#: src/common/meta/commerce.cpp:63
+msgid "Meta did not return an application token."
+msgstr "Meta가 애플리케이션 토큰을 반환하지 않았습니다."
+
+#: src/common/meta/commerce.cpp:69
+msgid "Invalid Meta commerce endpoint."
+msgstr "잘못된 Meta 상거래 엔드포인트입니다."
+
+#: src/common/meta/commerce.cpp:83 src/common/meta/commerce.cpp:114
+msgid "Meta returned invalid add-on pagination."
+msgstr "Meta가 잘못된 추가 콘텐츠 페이지네이션을 반환했습니다."
+
+#: src/common/meta/commerce.cpp:87
+msgid "Meta returned credential-bearing pagination."
+msgstr "Meta가 자격 증명을 포함한 페이지네이션을 반환했습니다."
+
+#: src/common/meta/commerce.cpp:99
+#, python-brace-format
+msgid "Meta add-on read failed (HTTP {0}, code {1}). Refresh or sign in again."
+msgstr "Meta 추가 콘텐츠 읽기에 실패했습니다(HTTP {0}, 코드 {1}). 새로고침하거나 다시 로그인하세요."
+
+#: src/common/meta/commerce.cpp:104
+msgid "Meta returned an invalid add-on list."
+msgstr "Meta가 잘못된 추가 콘텐츠 목록을 반환했습니다."
+
+#: src/common/meta/commerce.cpp:107
+msgid "Meta returned an incomplete add-on list."
+msgstr "Meta가 불완전한 추가 콘텐츠 목록을 반환했습니다."
+
+#: src/common/meta/commerce.cpp:117
+msgid "Meta returned too many add-on pages."
+msgstr "Meta가 너무 많은 추가 콘텐츠 페이지를 반환했습니다."
+
+#: src/common/meta/commerce.cpp:143
+msgid "Meta returned unexpected add-on products."
+msgstr "Meta가 예상하지 못한 추가 콘텐츠 제품을 반환했습니다."
+
+#: src/common/meta/commerce.cpp:165
+msgid "Public add-on name is unavailable."
+msgstr "공개 추가 콘텐츠 이름을 사용할 수 없습니다."
+
+#: src/common/meta/commerce.cpp:174
+msgid "Meta has no current offer for this add-on."
+msgstr "Meta에 이 추가 콘텐츠의 현재 제공 항목이 없습니다."
+
+#: src/common/meta/commerce.cpp:180
+msgid "Public Meta add-on details are unavailable. Refresh to retry."
+msgstr "공개 Meta 추가 콘텐츠 상세 정보를 사용할 수 없습니다. 새로고침해 다시 시도하세요."
+
+#: src/common/meta/commerce.cpp:191
+msgid "Invalid application build."
+msgstr "잘못된 애플리케이션 빌드입니다."
+
+#: src/common/meta/commerce.cpp:193
+msgid "Meta did not confirm ownership of this game."
+msgstr "Meta가 이 게임의 소유권을 확인하지 않았습니다."
+
+#: src/common/meta/commerce.cpp:201
+msgid "Meta could not verify this build belongs to the game."
+msgstr "Meta가 이 빌드가 게임에 속하는지 확인할 수 없습니다."
+
+#: src/common/meta/commerce.cpp:203
+msgid "Meta returned a different game's build."
+msgstr "Meta가 다른 게임의 빌드를 반환했습니다."
+
+#: src/common/meta/store.cpp:27
+msgid "Invalid Quest application ID."
+msgstr "잘못된 Quest 애플리케이션 ID입니다."
+
+#: src/common/meta/store.cpp:104
+msgid "Meta returned an incomplete list. Previous data was kept."
+msgstr "Meta가 불완전한 목록을 반환했습니다. 이전 데이터를 유지했습니다."
+
+#: src/common/meta/store.cpp:109
+msgid "Meta returned an invalid list. Previous data was kept."
+msgstr "Meta가 잘못된 목록을 반환했습니다. 이전 데이터를 유지했습니다."
+
+#: src/common/meta/store.cpp:195 src/common/meta/store.cpp:667
+msgid "Meta returned incomplete entitlements. Previous library was kept."
+msgstr "Meta가 불완전한 권한을 반환했습니다. 이전 라이브러리를 유지했습니다."
+
+#: src/common/meta/store.cpp:211
+msgid "Meta returned invalid pagination. Previous library was kept."
+msgstr "Meta가 잘못된 페이지네이션을 반환했습니다. 이전 라이브러리를 유지했습니다."
+
+#: src/common/meta/store.cpp:214 src/common/meta/store.cpp:685
+msgid "Meta returned a partial or unconfirmed library. Previously confirmed titles were kept."
+msgstr "Meta가 부분적이거나 확인되지 않은 라이브러리를 반환했습니다. 이전에 확인한 게임을 유지했습니다."
+
+#: src/common/meta/store.cpp:218 src/common/meta/store.cpp:598
+msgid "Meta returned an invalid account identity."
+msgstr "Meta가 잘못된 계정 식별자를 반환했습니다."
+
+#: src/common/meta/store.cpp:230
+msgid "Invalid base content size."
+msgstr "잘못된 기본 콘텐츠 크기입니다."
+
+#: src/common/meta/store.cpp:298
+msgid "Meta returned no version history for that game."
+msgstr "Meta가 해당 게임의 버전 이력을 반환하지 않았습니다."
+
+#: src/common/meta/store.cpp:362
+msgid "Invalid add-on SKU."
+msgstr "잘못된 추가 콘텐츠 SKU입니다."
+
+#: src/common/meta/store.cpp:371
+msgid "Invalid add-on content size."
+msgstr "잘못된 추가 콘텐츠 크기입니다."
+
+#: src/common/meta/store.cpp:419
+msgid "Meta did not return an Android build for this game."
+msgstr "Meta가 이 게임의 Android 빌드를 반환하지 않았습니다."
+
+#: src/common/meta/store.cpp:423
+msgid "Meta returned an unsafe content filename."
+msgstr "Meta가 안전하지 않은 콘텐츠 파일 이름을 반환했습니다."
+
+#: src/common/meta/store.cpp:429
+msgid "Meta returned a filename reserved for installation state."
+msgstr "Meta가 설치 상태에 예약된 파일 이름을 반환했습니다."
+
+#: src/common/meta/store.cpp:447
+msgid "Meta returned invalid add-on metadata."
+msgstr "Meta가 잘못된 추가 콘텐츠 메타데이터를 반환했습니다."
+
+#: src/common/meta/store.cpp:453
+msgid "Meta omitted valid file details or size. Download was not started."
+msgstr "Meta가 유효한 파일 상세 정보나 크기를 누락했습니다. 다운로드가 시작되지 않았습니다."
+
+#: src/common/meta/store.cpp:462
+msgid "Meta returned conflicting file names. Download was not started."
+msgstr "Meta가 충돌하는 파일 이름을 반환했습니다. 다운로드가 시작되지 않았습니다."
+
+#: src/common/meta/store.cpp:477
+msgid "Meta's asset list was incomplete, so the download did not start."
+msgstr "Meta 에셋 목록이 불완전해 다운로드가 시작되지 않았습니다."
+
+#: src/common/meta/store.cpp:498
+msgid "Invalid installation plan."
+msgstr "잘못된 설치 플랜입니다."
+
+#: src/common/meta/store.cpp:529
+msgid "Invalid installation filename."
+msgstr "잘못된 설치 파일 이름입니다."
+
+#: src/common/meta/store.cpp:540 src/common/meta/store.cpp:557
+msgid "Invalid installation asset metadata."
+msgstr "잘못된 설치 에셋 메타데이터입니다."
+
+#: src/common/meta/store.cpp:546
+msgid "Invalid installation file hash."
+msgstr "잘못된 설치 파일 해시입니다."
+
+#: src/common/meta/store.cpp:562
+msgid "Installation has no APK."
+msgstr "설치에 APK가 없습니다."
+
+#: src/common/meta/store.cpp:565 src/common/meta/store.cpp:572
+msgid "Invalid installed add-ons."
+msgstr "잘못된 설치된 추가 콘텐츠입니다."
+
+#: src/common/meta/store.cpp:580 src/common/meta/store.cpp:591
+msgid "Not signed in to Meta."
+msgstr "Meta에 로그인되어 있지 않습니다."
+
+#: src/common/meta/store.cpp:624
+msgid ". Try signing in again."
+msgstr " 다시 로그인해 보세요."
+
+#: src/common/meta/store.cpp:627
+#, python-brace-format
+msgid "Meta could not list your games right now ({0}). Use Refresh in the library to try again."
+msgstr "Meta가 지금 게임 목록을 가져올 수 없습니다({0}). 라이브러리에서 새로고침을 사용해 다시 시도하세요."
+
+#: src/common/meta/store.cpp:662
+msgid "Meta returned an invalid list. Previous library was kept."
+msgstr "Meta가 잘못된 목록을 반환했습니다. 이전 라이브러리를 유지했습니다."
+
+#: src/common/meta/store.cpp:698 src/common/meta/store.cpp:744
+msgid "Meta did not return the requested build."
+msgstr "Meta가 요청한 빌드를 반환하지 않았습니다."
+
+#: src/common/meta/store.cpp:716
+msgid "Meta did not return the requested binary metadata."
+msgstr "Meta가 요청한 바이너리 메타데이터를 반환하지 않았습니다."
+
+#: src/common/meta/store.cpp:749
+msgid "Meta's asset list was incomplete."
+msgstr "Meta 에셋 목록이 불완전했습니다."
+
+#: src/common/meta/store.cpp:758
+msgid "Meta returned invalid asset details."
+msgstr "Meta가 잘못된 에셋 상세 정보를 반환했습니다."
+
+#: src/common/meta/store.cpp:813
+msgid "Meta did not return a live Quest listing."
+msgstr "Meta가 실시간 Quest 목록을 반환하지 않았습니다."
+
+#: src/common/meta/store.cpp:842
+msgid "Public Meta artwork is unavailable. Refresh to retry."
+msgstr "공개 Meta 아트work를 사용할 수 없습니다. 새로고침해 다시 시도하세요."
+
+#: src/common/meta/store.cpp:861
+msgid "Artwork listing is unavailable."
+msgstr "아트work 목록을 사용할 수 없습니다."
+
+#: src/common/meta/store.cpp:931
+msgid "Meta has no Quest game with that id."
+msgstr "Meta에 해당 id의 Quest 게임이 없습니다."
+
+#: src/common/meta/store.cpp:942
+msgid "Meta has no Quest game at that link."
+msgstr "Meta에 해당 링크의 Quest 게임이 없습니다."
+
+#: src/common/meta/store.cpp:947
+msgid "Meta did not say whether this account owns the game. Try again later."
+msgstr "Meta가 이 계정이 게임을 소유하는지 알려주지 않았습니다. 나중에 다시 시도하세요."
+
+#: src/common/meta/store.cpp:969
+msgid "The live release response did not identify this Quest application."
+msgstr "라이브 릴리스 응답이 이 Quest 애플리케이션을 식별하지 않았습니다."
+
+#: src/common/meta/store.cpp:978
+msgid "Refresh your library: ownership could not be verified for this download."
+msgstr "라이브러리를 새로고침하세요: 이 다운로드의 소유권을 확인할 수 없습니다."
+
+#: src/common/meta/store.cpp:983
+msgid "No downloadable live Quest release was returned."
+msgstr "다운로드 가능한 라이브 Quest 릴리스가 반환되지 않았습니다."
+
+#: src/common/meta/store.cpp:993
+msgid "Download content must have a numeric identifier."
+msgstr "다운로드 콘텐츠에는 숫자 식별자가 필요합니다."
+
+#: src/common/meta/store.cpp:997
+msgid "Download destination is not an approved Meta host."
+msgstr "다운로드 대상이 승인된 Meta 호스트가 아닙니다."
+
+#: src/common/meta/store.cpp:1006
+msgid "Meta supplied no authorization for Quest file delivery."
+msgstr "Meta가 Quest 파일 전달에 대한 인가를 제공하지 않았습니다."
+
+#: src/common/meta/store.h:106
+msgid "Meta's asset catalog is temporarily unavailable. Try again later."
+msgstr "Meta 에셋 카탈로그를 일시적으로 사용할 수 없습니다. 나중에 다시 시도하세요."
+
+#: src/common/openxr_layers.cpp:29
+#, python-brace-format
+msgid "the library {0} is missing"
+msgstr "라이브러리 {0}이(가) 없음"
+
+#: src/common/openxr_layers.cpp:32
+#, python-brace-format
+msgid "the library {0} cannot be read"
+msgstr "라이브러리 {0}을(를) 읽을 수 없음"
+
+#: src/common/openxr_layers.cpp:36 src/common/openxr_layers.cpp:38
+#, python-brace-format
+msgid "the library {0} is not a DLL"
+msgstr "라이브러리 {0}이(가) DLL이 아님"
+
+#: src/common/openxr_layers.cpp:48
+#, python-brace-format
+msgid "the library {0} is a {1} DLL, not one for this {2} process"
+msgstr "라이브러리 {0}은(는) {1} DLL이며 이 {2} 프로세스용이 아님"
+
+#: src/common/openxr_layers.cpp:51
+#, python-brace-format
+msgid "the library {0} is not a shared library"
+msgstr "라이브러리 {0}이(가) 공유 라이브러리가 아님"
+
+#: src/common/openxr_layers.cpp:61
+#, python-brace-format
+msgid "the library {0} is an {1} library, not one for this {2} process"
+msgstr "라이브러리 {0}은(는) {1} 라이브러리이며 이 {2} 프로세스용이 아님"
+
+#: src/common/openxr_layers.cpp:73
+msgid "the manifest is not valid JSON"
+msgstr "매니페스트가 유효한 JSON이 아님"
+
+#: src/common/openxr_layers.cpp:78
+msgid "the manifest has no \"api_layer\""
+msgstr "매니페스트에 \"api_layer\"가 없음"
+
+#: src/common/openxr_layers.cpp:90
+#, python-brace-format
+msgid "the manifest lacks \"{0}\""
+msgstr "매니페스트에 \"{0}\"이(가) 없음"
+
+#: src/common/openxr_layers.cpp:94
+msgid "the manifest lacks \"file_format_version\""
+msgstr "매니페스트에 \"file_format_version\"이(가) 없음"
+
+#: src/common/openxr_layers.cpp:95
+msgid "the manifest lacks \"disable_environment\""
+msgstr "매니페스트에 \"disable_environment\"가 없음"
+
+#: src/common/openxr_layers.cpp:112
+msgid "the manifest is missing"
+msgstr "매니페스트가 없음"
+
+#: src/common/openxr_layers.cpp:121
+msgid "the manifest cannot be read"
+msgstr "매니페스트를 읽을 수 없음"
+
+#: src/common/paths.cpp:215
+msgid "Invalid game installation path."
+msgstr "잘못된 게임 설치 경로입니다."
+
+#: src/common/paths.cpp:218
+msgid "Game path escapes the games directory."
+msgstr "게임 경로가 게임 디렉터리를 벗어납니다."
+
+#: src/common/paths.cpp:225 src/common/paths.cpp:232 src/common/platform/win32/paths.cpp:30 src/common/platform/win32/paths.cpp:42
+msgid "Could not read local file."
+msgstr "로컬 파일을 읽을 수 없습니다."
+
+#: src/common/paths.cpp:228 src/common/platform/win32/paths.cpp:34
+msgid "Local file is too large."
+msgstr "로컬 파일이 너무 큽니다."
+
+#: src/common/platform/posix/digest.cpp:15 src/common/platform/win32/digest.cpp:34
+msgid "cannot create SHA-256 hash"
+msgstr "SHA-256 해시를 생성할 수 없습니다"
+
+#: src/common/platform/posix/digest.cpp:19 src/common/platform/posix/digest.cpp:24 src/common/platform/win32/digest.cpp:38 src/common/platform/win32/digest.cpp:47
+msgid "SHA-256 already finished"
+msgstr "SHA-256이 이미 완료됨"
+
+#: src/common/platform/posix/digest.cpp:21 src/common/platform/win32/digest.cpp:42
+msgid "cannot update SHA-256 hash"
+msgstr "SHA-256 해시를 업데이트할 수 없습니다"
+
+#: src/common/platform/posix/digest.cpp:28 src/common/platform/win32/digest.cpp:50
+msgid "cannot finish SHA-256 hash"
+msgstr "SHA-256 해시를 완료할 수 없습니다"
+
+#: src/common/platform/posix/file_ops.cpp:23 src/common/platform/win32/file_ops.cpp:25
+msgid "Cannot lock account data through a linked path."
+msgstr "링크된 경로를 통해 계정 데이터를 잠글 수 없습니다."
+
+#: src/common/platform/posix/file_ops.cpp:28 src/common/platform/win32/file_ops.cpp:33
+msgid "Could not lock Venture account data."
+msgstr "Venture 계정 데이터를 잠글 수 없습니다."
+
+#: src/common/platform/posix/file_ops.cpp:51 src/common/platform/posix/file_ops.cpp:59 src/common/platform/win32/file_ops.cpp:59
+msgid "Could not generate an account key."
+msgstr "계정 키를 생성할 수 없습니다."
+
+#: src/common/platform/posix/file_ops.cpp:96 src/common/platform/win32/file_ops.cpp:127
+msgid "Invalid local data removal boundary."
+msgstr "잘못된 로컬 데이터 삭제 경계입니다."
+
+#: src/common/platform/posix/file_ops.cpp:99 src/common/platform/win32/file_ops.cpp:130
+msgid "Local data removal escapes its root."
+msgstr "로컬 데이터 삭제가 루트를 벗어납니다."
+
+#: src/common/platform/posix/file_ops.cpp:103 src/common/platform/win32/file_ops.cpp:134
+msgid "Cannot remove data through a linked directory."
+msgstr "링크된 디렉터리를 통해 데이터를 삭제할 수 없습니다."
+
+#: src/common/platform/posix/file_ops.cpp:105 src/common/platform/win32/file_ops.cpp:136
+msgid "Cannot remove data through a linked root."
+msgstr "링크된 루트를 통해 데이터를 삭제할 수 없습니다."
+
+#: src/common/platform/posix/paths.cpp:21
+msgid "Set XDG_DATA_HOME or HOME to locate application data."
+msgstr "XDG_DATA_HOME 또는 HOME을 설정해 앱 데이터를 찾도록 하세요."
+
+#: src/common/platform/posix/paths.cpp:35 src/common/platform/win32/paths.cpp:82
+msgid "Could not save local file. Check free space and folder permissions."
+msgstr "로컬 파일을 저장할 수 없습니다. 여유 공간과 폴더 권한을 확인하세요."
+
+#: src/common/platform/posix/pipe.cpp:20 src/common/platform/win32/pipe.cpp:18
+msgid "Could not create credential broker pipes."
+msgstr "자격 증명 브로커 파이프를 생성할 수 없습니다."
+
+#: src/common/platform/posix/pipe.cpp:30
+msgid "Could not duplicate credential broker pipes."
+msgstr "자격 증명 브로커 파이프를 복제할 수 없습니다."
+
+#: src/common/platform/posix/pipe.cpp:54 src/common/platform/posix/pipe.cpp:59 src/common/platform/posix/pipe.cpp:88 src/common/platform/win32/pipe.cpp:39 src/common/platform/win32/pipe.cpp:51
+msgid "Credential broker pipe closed."
+msgstr "자격 증명 브로커 파이프가 닫혔습니다."
+
+#: src/common/platform/posix/process.cpp:88
+msgid "Could not start runtime. Check its executable path and permissions."
+msgstr "런타임을 시작할 수 없습니다. 실행 파일 경로와 권한을 확인하세요."
+
+#: src/common/platform/posix/secret_store.cpp:47 src/common/platform/posix/secret_store.cpp:53 src/common/platform/posix/secret_store.cpp:67 src/common/platform/posix/secret_store.cpp:106
+msgid "Could not save Meta session."
+msgstr "Meta 세션을 저장할 수 없습니다."
+
+#: src/common/platform/posix/secret_store.cpp:76
+msgid "Could not protect Meta session."
+msgstr "Meta 세션을 보호할 수 없습니다."
+
+#: src/common/platform/posix/secret_store.cpp:99 src/common/platform/posix/secret_store.cpp:115 src/common/platform/posix/secret_store.cpp:283
+msgid "Could not unlock Meta session."
+msgstr "Meta 세션 잠금을 풀 수 없습니다."
+
+#: src/common/platform/posix/secret_store.cpp:296
+msgid "Venture Meta session"
+msgstr "Venture Meta 세션"
+
+#: src/common/platform/posix/secret_store.cpp:353
+msgid "Could not save Meta session securely."
+msgstr "Meta 세션을 안전하게 저장할 수 없습니다."
+
+#: src/common/platform/posix/secret_store.cpp:361
+msgid "Could not clear Meta session securely."
+msgstr "Meta 세션을 안전하게 지울 수 없습니다."
+
+#: src/common/platform/posix/secret_store.cpp:367
+msgid "kept in your desktop keyring"
+msgstr "데스크톱 키링에 보관됨"
+
+#: src/common/platform/posix/secret_store.cpp:369
+msgid "kept in an encrypted file only your user can read"
+msgstr "사용자만 읽을 수 있는 암호화된 파일에 보관됨"
+
+#: src/common/platform/win32/digest.cpp:17
+msgid "cannot open SHA-256 provider"
+msgstr "SHA-256 제공자를 열 수 없습니다"
+
+#: src/common/platform/win32/file_ops.cpp:73
+msgid "Could not inspect local data directory."
+msgstr "로컬 데이터 디렉터리를 검사할 수 없습니다."
+
+#: src/common/platform/win32/file_ops.cpp:108
+msgid "Could not inspect local data for removal."
+msgstr "삭제할 로컬 데이터를 검사할 수 없습니다."
+
+#: src/common/platform/win32/file_ops.cpp:119
+msgid "Could not remove local data. Close the game or sign-in window first."
+msgstr "로컬 데이터를 삭제할 수 없습니다. 먼저 게임이나 로그인 창을 닫으세요."
+
+#: src/common/platform/win32/paths.cpp:57
+msgid "Windows could not locate Local AppData."
+msgstr "Windows가 로컬 AppData를 찾을 수 없습니다."
+
+#: src/common/platform/win32/paths.cpp:69
+msgid "Could not locate executable."
+msgstr "실행 파일을 찾을 수 없습니다."
+
+#: src/common/platform/win32/paths.cpp:93 src/common/platform/win32/paths.cpp:117
+msgid "Could not replace local file. Check folder permissions."
+msgstr "로컬 파일을 교체할 수 없습니다. 폴더 권한을 확인하세요."
+
+#: src/common/platform/win32/secret_store.cpp:31
+msgid "Windows could not unlock the Meta session. Sign in again."
+msgstr "Windows가 Meta 세션 잠금을 풀 수 없습니다. 다시 로그인하세요."
+
+#: src/common/platform/win32/secret_store.cpp:45
+msgid "Account credential path is linked."
+msgstr "계정 자격 증명 경로가 링크되어 있습니다."
+
+#: src/common/platform/win32/secret_store.cpp:59
+msgid "Invalid Meta session. Sign in again."
+msgstr "잘못된 Meta 세션입니다. 다시 로그인하세요."
+
+#: src/common/platform/win32/secret_store.cpp:87
+msgid "encrypted for your Windows account"
+msgstr "Windows 계정으로 암호화됨"
+
+#: src/common/saves_migration.cpp:16
+msgid "Invalid account save path."
+msgstr "잘못된 계정 세이브 경로입니다."
+
+#: src/common/saves_migration.cpp:22
+msgid "Account save path is linked or escapes its root."
+msgstr "계정 세이브 경로가 링크되어 있거나 루트를 벗어납니다."
+
+#: src/common/saves_migration.cpp:32
+msgid "Cannot migrate saves through a linked root."
+msgstr "링크된 루트를 통해 세이브를 이설할 수 없습니다."
+
+#: src/common/saves_migration.cpp:39
+msgid "Save migration journal is unreadable; saves have been retained."
+msgstr "세이브 이설 저널을 읽을 수 없습니다. 세이브를 유지했습니다."
+
+#: src/common/saves_migration.cpp:111
+msgid "Linked OBB source escapes installation"
+msgstr "링크된 OBB 소스가 설치를 벗어남"
+
+#: src/common/saves_migration.cpp:155 src/common/saves_migration.cpp:287
+msgid "Invalid game package."
+msgstr "잘못된 게임 패키지입니다."
+
+#: src/common/saves_migration.cpp:161
+msgid "OBB view must be separate from installation"
+msgstr "OBB 보기는 설치와 분리되어야 합니다"
+
+#: src/common/saves_migration.cpp:169 src/common/saves_migration.cpp:208
+msgid "Invalid OBB view filename"
+msgstr "잘못된 OBB 보기 파일 이름"
+
+#: src/common/saves_migration.cpp:172
+msgid "Linked OBB view directory"
+msgstr "링크된 OBB 보기 디렉터리"
+
+#: src/common/saves_migration.cpp:216
+msgid "Expansion file is not a regular file"
+msgstr "확장 파일이 일반 파일이 아닙니다"
+
+#: src/common/saves_migration.cpp:242
+msgid "Invalid account for the OBB view."
+msgstr "OBB 보기에 잘못된 계정입니다."
+
+#: src/common/saves_migration.cpp:279
+msgid "Invalid OBB publication path"
+msgstr "잘못된 OBB 게시 경로"
+
+#: src/common/steam.cpp:10
+msgid "Not a Steam launch plan"
+msgstr "Steam 시작 플랜이 아닙니다"
+
+#: src/common/steam.cpp:13
+msgid "Invalid Steam plan identity"
+msgstr "잘못된 Steam 플랜 식별자"
+
+#: src/common/steam.cpp:17
+msgid "Invalid Steam manifest or Android package"
+msgstr "잘못된 Steam 매니페스트 또는 Android 패키지"
+
+#: src/common/steam.cpp:20
+msgid "Steam plan has no files"
+msgstr "Steam 플랜에 파일이 없습니다"
+
+#: src/common/steam.cpp:25
+msgid "Invalid Steam plan filename"
+msgstr "잘못된 Steam 플랜 파일 이름"
+
+#: src/common/steam.cpp:26
+msgid "Unsafe Steam plan path"
+msgstr "안전하지 않은 Steam 플랜 경로"
+
+#: src/common/steam.cpp:27
+msgid "Duplicate Steam file"
+msgstr "중복된 Steam 파일"
+
+#: src/common/steam.cpp:30
+msgid "Steam launch APK must be beside plan"
+msgstr "Steam 시작 APK는 플랜 옆에 있어야 합니다"
+
+#: src/common/steam.cpp:31
+msgid "Invalid Steam file kind"
+msgstr "잘못된 Steam 파일 종류"
+
+#: src/common/steam.cpp:34
+msgid "Steam plan needs exactly one launch APK"
+msgstr "Steam 플랜에는 시작 APK가 정확히 하나 필요합니다"
+
+#: src/common/steam_library.cpp:34
+msgid "Truncated Steam VDF."
+msgstr "Steam VDF가 잘렸습니다."
+
+#: src/common/steam_library.cpp:42
+msgid "Unterminated Steam VDF string."
+msgstr "종료되지 않은 Steam VDF 문자열입니다."
+
+#: src/common/steam_library.cpp:47 src/common/steam_library.cpp:86
+msgid "Steam VDF nesting exceeds 64."
+msgstr "Steam VDF 중첩이 64를 초과했습니다."
+
+#: src/common/steam_library.cpp:56
+msgid "Steam VDF field count exceeds limit."
+msgstr "Steam VDF 필드 수가 한도를 초과했습니다."
+
+#: src/common/steam_library.cpp:79
+msgid "Unsupported Steam VDF wire type; leaving file unchanged."
+msgstr "지원되지 않는 Steam VDF 와이어 형식입니다. 파일을 변경하지 않고 유지합니다."
+
+#: src/common/steam_library.cpp:89
+msgid "Invalid Steam VDF key."
+msgstr "잘못된 Steam VDF 키입니다."
+
+#: src/common/steam_library.cpp:98 src/common/steam_library.cpp:235
+msgid "Steam VDF exceeds size limit."
+msgstr "Steam VDF가 크기 한도를 초과했습니다."
+
+#: src/common/steam_library.cpp:189
+msgid "Invalid Steam loginusers VDF."
+msgstr "잘못된 Steam loginusers VDF입니다."
+
+#: src/common/steam_library.cpp:199
+msgid "Steam loginusers nesting exceeds 64."
+msgstr "Steam loginusers 중첩이 64를 초과했습니다."
+
+#: src/common/steam_library.cpp:205
+msgid "Truncated loginusers."
+msgstr "loginusers가 잘렸습니다."
+
+#: src/common/steam_library.cpp:210
+msgid "Unexpected loginusers brace."
+msgstr "예상하지 못한 loginusers 중괄호입니다."
+
+#: src/common/steam_library.cpp:214
+msgid "Invalid loginusers key."
+msgstr "잘못된 loginusers 키입니다."
+
+#: src/common/steam_library.cpp:222
+msgid "Invalid loginusers value."
+msgstr "잘못된 loginusers 값입니다."
+
+#: src/common/steam_library.cpp:230
+msgid "Steam output path escapes account config."
+msgstr "Steam 출력 경로가 계정 설정을 벗어납니다."
+
+#: src/common/steam_library.cpp:239
+msgid "Trailing Steam VDF bytes."
+msgstr "Steam VDF의 꼬리 바이트입니다."
+
+#: src/common/steam_library.cpp:366
+msgid "Steam profile is ambiguous or unavailable; sign in to Steam once."
+msgstr "Steam 프로필이 모호하거나 사용할 수 없습니다. 한 번 Steam에 로그인하세요."
+
+#: src/common/steam_library.cpp:370
+msgid "Linked Steam account config is unsupported."
+msgstr "링크된 Steam 계정 설정은 지원되지 않습니다."
+
+#: src/common/steam_library.cpp:427 src/common/steam_library.cpp:433
+msgid "Could not request Steam restart."
+msgstr "Steam 재시작을 요청할 수 없습니다."
+
+#: src/common/steam_library.cpp:520
+msgid "Steam shortcuts is not an object."
+msgstr "Steam 단축키가 개체가 아닙니다."
+
+#: src/common/steam_library.cpp:608
+msgid "Steam shortcuts changed during sync; leaving them unchanged. Retry sync."
+msgstr "동기화 중 Steam 단축키가 변경되었습니다. 변경하지 않고 유지합니다. 동기화를 다시 시도하세요."
+
+#: src/launcher/app.cpp:33
+msgid "Could not read back the launcher frame."
+msgstr "런처 프레임을 다시 읽을 수 없습니다."
+
+#: src/launcher/app.cpp:38
+msgid "Could not write the screenshot."
+msgstr "화면 캡처를 쓸 수 없습니다."
+
+#: src/launcher/app.cpp:99
+msgid "Could not create the launcher window."
+msgstr "런처 창을 생성할 수 없습니다."
+
+#: src/launcher/app.cpp:117
+msgid "Could not create an SDL renderer."
+msgstr "SDL 렌더러를 생성할 수 없습니다."
+
+#: src/launcher/app.cpp:467
+msgid "Android apps and archives"
+msgstr "Android 앱과 아카이브"
+
+#: src/launcher/app.cpp:621
+msgid "The requested package is not installed."
+msgstr "요청한 패키지가 설치되어 있지 않습니다."
+
+#: src/launcher/app.cpp:677
+msgid "The paste service did not answer."
+msgstr "붙여넣기 서비스가 응답하지 않았습니다."
+
+#: src/launcher/app.cpp:779
+msgid "Venture could not start. Check graphics drivers and access to the application data folder."
+msgstr "Venture를 시작할 수 없습니다. 그래픽 드라이버와 앱 데이터 폴더 접근을 확인하세요."
+
+#: src/launcher/assets/texture_cache.cpp:46
+msgid "Artwork has an unsupported format or dimensions."
+msgstr "아트work의 형식이나 크기를 지원하지 않습니다."
+
+#: src/launcher/assets/texture_cache.cpp:52
+msgid "Could not decode the cover image."
+msgstr "커버 이미지를 디코딩할 수 없습니다."
+
+#: src/launcher/cli.cpp:1007
+msgid "=== System ==="
+msgstr "=== 시스템 ==="
+
+#: src/launcher/cli.cpp:1051
+msgid "add-on SKU or --all"
+msgstr "추가 콘텐츠 SKU 또는 --all"
+
+#: src/launcher/cli.cpp:1146
+msgid "path to import"
+msgstr "가져올 경로"
+
+#: src/launcher/cli.cpp:1257 src/launcher/core.cpp:2154 src/launcher/core.cpp:2231
+msgid "Sign-in cancelled."
+msgstr "로그인을 취소했습니다."
+
+#: src/launcher/debug_report.cpp:93
+msgid " (file missing)"
+msgstr " (파일 없음)"
+
+#: src/launcher/debug_report.cpp:137
+#, python-brace-format
+msgid "OS: Windows {0} build {1}{2} ({3})\n"
+msgstr "OS: Windows {0} 빌드 {1}{2} ({3})\n"
+
+#: src/launcher/debug_report.cpp:140 src/launcher/debug_report.cpp:195
+#, python-brace-format
+msgid "CPU: {0} ({1} threads)\n"
+msgstr "CPU: {0} ({1}개 스레드)\n"
+
+#: src/launcher/debug_report.cpp:146 src/launcher/debug_report.cpp:197
+#, python-brace-format
+msgid "RAM: {0:.1f} GiB, {1:.1f} GiB free\n"
+msgstr "RAM: {0:.1f} GiB, {1:.1f} GiB 여유\n"
+
+#: src/launcher/debug_report.cpp:153
+#, python-brace-format
+msgid "GPU: {0}, driver {1}\n"
+msgstr "GPU: {0}, 드라이버 {1}\n"
+
+#: src/launcher/debug_report.cpp:158
+#, python-brace-format
+msgid "  Vulkan driver: {0}\n"
+msgstr "  Vulkan 드라이버: {0}\n"
+
+#: src/launcher/debug_report.cpp:165
+#, python-brace-format
+msgid "Active OpenXR runtime: {0}\n"
+msgstr "활성 OpenXR 런타임: {0}\n"
+
+#: src/launcher/debug_report.cpp:165
+msgid "(none registered)"
+msgstr " (등록된 없음)"
+
+#: src/launcher/debug_report.cpp:168
+#, python-brace-format
+msgid "OpenXR runtime ({0}): {1}{2}\n"
+msgstr "OpenXR 런타임 ({0}): {1}{2}\n"
+
+#: src/launcher/debug_report.cpp:168 src/launcher/debug_report.cpp:170 src/launcher/debug_report.cpp:172
+msgid " (disabled)"
+msgstr " (비활성화)"
+
+#: src/launcher/debug_report.cpp:170
+#, python-brace-format
+msgid "Vulkan driver ({0}): {1}{2}\n"
+msgstr "Vulkan 드라이버 ({0}): {1}{2}\n"
+
+#: src/launcher/debug_report.cpp:172
+#, python-brace-format
+msgid "Vulkan implicit layer ({0}): {1}{2}\n"
+msgstr "Vulkan 임플리시트 레이어 ({0}): {1}{2}\n"
+
+#: src/launcher/debug_report.cpp:191
+#, python-brace-format
+msgid "OS: {0} (kernel {1} {2})\n"
+msgstr "OS: {0} (커널 {1} {2})\n"
+
+#: src/launcher/debug_report.cpp:193
+#, python-brace-format
+msgid "Desktop: {0} ({1})\n"
+msgstr "데스크톱: {0} ({1})\n"
+
+#: src/launcher/debug_report.cpp:193
+msgid "unknown session"
+msgstr "알 수 없는 세션"
+
+#: src/launcher/debug_report.cpp:212
+#, python-brace-format
+msgid "GPU: {0}:{1}, driver {2}\n"
+msgstr "GPU: {0}:{1}, 드라이버 {2}\n"
+
+#: src/launcher/debug_report.cpp:215
+#, python-brace-format
+msgid "VR input devices: {0}\n"
+msgstr "VR 입력 장치: {0}\n"
+
+#: src/launcher/debug_report.cpp:230
+#, python-brace-format
+msgid "Active OpenXR runtime: {0} -> {1}\n"
+msgstr "활성 OpenXR 런타임: {0} -> {1}\n"
+
+#: src/launcher/debug_report.cpp:239
+#, python-brace-format
+msgid "Vulkan implicit layer: {0}\n"
+msgstr "Vulkan 임플리시트 레이어: {0}\n"
+
+#: src/launcher/debug_report.cpp:254
+msgid " (the loader skips it)"
+msgstr " (로더가 건너뜀)"
+
+#: src/launcher/debug_report.cpp:255
+#, python-brace-format
+msgid " (disabled by {0})"
+msgstr " ({0}이(가) 비활성화)"
+
+#: src/launcher/debug_report.cpp:256
+#, python-brace-format
+msgid "OpenXR implicit layer: {0} ({1}), library {2}: {3}\n"
+msgstr "OpenXR 임플리시트 레이어: {0} ({1}), 라이브러리 {2}: {3}\n"
+
+#: src/launcher/debug_report.cpp:256
+msgid "unnamed"
+msgstr "이름 없음"
+
+#: src/launcher/debug_report.cpp:259
+#, python-brace-format
+msgid "OpenXR API layer broken: {0} ({1}): {2}\n"
+msgstr "OpenXR API 레이어 손상: {0} ({1}): {2}\n"
+
+#: src/launcher/debug_report.cpp:321
+msgid "game override"
+msgstr "게임 오버라이드"
+
+#: src/launcher/debug_report.cpp:321
+msgid "global default"
+msgstr "전역 기본값"
+
+#: src/launcher/debug_report.cpp:321
+msgid "global setting"
+msgstr "전역 설정"
+
+#: src/launcher/debug_report.cpp:324
+msgid "Game overrides:"
+msgstr "게임 오버라이드:"
+
+#: src/launcher/debug_report.cpp:330
+#, python-brace-format
+msgid "  resolution: {0}\n"
+msgstr "  해상도: {0}\n"
+
+#: src/launcher/debug_report.cpp:331
+#, python-brace-format
+msgid "  frame rate: {0}\n"
+msgstr "  프레임 속도: {0}\n"
+
+#: src/launcher/debug_report.cpp:332
+#, python-brace-format
+msgid "  mirror: {0}\n"
+msgstr "  미러: {0}\n"
+
+#: src/launcher/debug_report.cpp:333
+#, python-brace-format
+msgid "  mirror eye: {0}\n"
+msgstr "  미러 눈: {0}\n"
+
+#: src/launcher/debug_report.cpp:334
+#, python-brace-format
+msgid "  PC audio: {0}\n"
+msgstr "  PC 오디오: {0}\n"
+
+#: src/launcher/debug_report.cpp:336
+#, python-brace-format
+msgid "  match game resolution: {0}\n"
+msgstr "  게임 해상도 일치: {0}\n"
+
+#: src/launcher/debug_report.cpp:338
+#, python-brace-format
+msgid "  texture compression: {0}\n"
+msgstr "  텍스처 압축: {0}\n"
+
+#: src/launcher/debug_report.cpp:340
+#, python-brace-format
+msgid "  texture compression threshold: {0}%\n"
+msgstr "  텍스처 압축 임계값: {0}%\n"
+
+#: src/launcher/debug_report.cpp:341
+#, python-brace-format
+msgid "  advanced {0}: {1}\n"
+msgstr "  고급 {0}: {1}\n"
+
+#: src/launcher/debug_report.cpp:343 src/launcher/debug_report.cpp:394
+#, python-brace-format
+msgid "  controls: {0}\n"
+msgstr "  컨트롤: {0}\n"
+
+#: src/launcher/debug_report.cpp:344
+msgid " none (the game follows the global settings)\n"
+msgstr " 없음 (게임이 전역 설정을 따름)\n"
+
+#: src/launcher/debug_report.cpp:347
+msgid "Effective settings:\n"
+msgstr "적용된 설정:\n"
+
+#: src/launcher/debug_report.cpp:351
+msgid "the host runtime's recommended size"
+msgstr "호스트 런타임의 권장 크기"
+
+#: src/launcher/debug_report.cpp:354
+msgid " of the host runtime's pixel count"
+msgstr " 호스트 런타임 픽셀 수의 "
+
+#: src/launcher/debug_report.cpp:355
+#, python-brace-format
+msgid "  resolution: {0} ({1})\n"
+msgstr "  해상도: {0} ({1})\n"
+
+#: src/launcher/debug_report.cpp:360
+#, python-brace-format
+msgid "  frame rate: {0} ({1})\n"
+msgstr "  프레임 속도: {0} ({1})\n"
+
+#: src/launcher/debug_report.cpp:360
+msgid "the host runtime's rate"
+msgstr "호스트 런타임의 속도"
+
+#: src/launcher/debug_report.cpp:363
+#, python-brace-format
+msgid "  mirror: {0} ({1}), eye {2} ({3})\n"
+msgstr "  미러: {0} ({1}), 눈 {2} ({3})\n"
+
+#: src/launcher/debug_report.cpp:367
+#, python-brace-format
+msgid "  PC audio: {0} ({1})\n"
+msgstr "  PC 오디오: {0} ({1})\n"
+
+#: src/launcher/debug_report.cpp:369
+#, python-brace-format
+msgid "  match game resolution: {0} ({1})\n"
+msgstr "  게임 해상도 일치: {0} ({1})\n"
+
+#: src/launcher/debug_report.cpp:380
+msgid "VENTURE_TEXTURE_COMPRESSION in the launcher's environment"
+msgstr "런처 환경의 VENTURE_TEXTURE_COMPRESSION"
+
+#: src/launcher/debug_report.cpp:382
+#, python-brace-format
+msgid "  texture compression: {0} ({1})"
+msgstr "  텍스처 압축: {0} ({1})"
+
+#: src/launcher/debug_report.cpp:387
+msgid "VENTURE_TEXTURE_COMPRESSION_THRESHOLD in the launcher's environment"
+msgstr "런처 환경의 VENTURE_TEXTURE_COMPRESSION_THRESHOLD"
+
+#: src/launcher/debug_report.cpp:390
+#, python-brace-format
+msgid ", threshold {0}% ({1})"
+msgstr ", 임계값 {0}% ({1})"
+
+#: src/launcher/debug_report.cpp:394
+msgid "the game's own"
+msgstr "게임 자체의"
+
+#: src/launcher/debug_report.cpp:394
+msgid "the global controls"
+msgstr "전역 컨트롤"
+
+#: src/launcher/debug_report.cpp:395
+#, python-brace-format
+msgid "  mixed reality (passthrough): {0} ({1})\n"
+msgstr "  혼합 현실(패스스루): {0} ({1})\n"
+
+#: src/launcher/debug_report.cpp:397
+#, python-brace-format
+msgid "  passthrough color key: #{0}\n"
+msgstr "  패스스루 컬러 키: #{0}\n"
+
+#: src/launcher/debug_report.cpp:398
+#, python-brace-format
+msgid "  game language: {0}\n"
+msgstr "  게임 언어: {0}\n"
+
+#: src/launcher/debug_report.cpp:398
+msgid "the system's"
+msgstr "시스템의"
+
+#: src/launcher/debug_report.cpp:399
+#, python-brace-format
+msgid "  log level: {0} ({1})\n"
+msgstr "  로그 수준: {0} ({1})\n"
+
+#: src/launcher/debug_report.cpp:401
+msgid "Runtime toggles:\n"
+msgstr "런타임 토글:\n"
+
+#: src/launcher/debug_report.cpp:406
+#, python-brace-format
+msgid "  keep translated code: {0} ({1})\n"
+msgstr "  번역 코드 유지: {0} ({1})\n"
+
+#: src/launcher/debug_report.cpp:408
+msgid "VENTURE_JIT_PTC in the launcher's environment"
+msgstr "런처 환경의 VENTURE_JIT_PTC"
+
+#: src/launcher/debug_report.cpp:412
+msgid "  overlay blocking: on, every third-party implicit Vulkan layer is left out (global default)\n"
+msgstr "  오버레이 차단: 켜짐, 모든 서드파티 임플리시트 Vulkan 레이어 제외(전역 기본값)\n"
+
+#: src/launcher/debug_report.cpp:416
+#, python-brace-format
+msgid "  overlay blocking: on, except the kept layers {0} (global setting)\n"
+msgstr "  오버레이 차단: 켜짐, 유지된 레이어 {0} 제외(전역 설정)\n"
+
+#: src/launcher/debug_report.cpp:419
+msgid "Launch environment from these settings:\n"
+msgstr "이 설정으로 실행 환경:\n"
+
+#: src/launcher/debug_report.cpp:429
+#, python-brace-format
+msgid ""
+"\n"
+"=== {0} left out: the report is full ===\n"
+msgstr ""
+"\n"
+"=== {0} 제외: 보고서 용량 초과 ===\n"
+
+#: src/launcher/debug_report.cpp:433
+#, python-brace-format
+msgid ""
+"\n"
+"=== {0} ({1} KiB, written {2}{3}) ===\n"
+msgstr ""
+"\n"
+"=== {0}({1} KiB, {2}{3}에 기록됨) ===\n"
+
+#: src/launcher/debug_report.cpp:434
+msgid ", start and end"
+msgstr ", 시작과 종료"
+
+#: src/launcher/debug_report.cpp:442
+#, python-brace-format
+msgid "... {0} KiB left out ...\n"
+msgstr "... {0} KiB 생략 ...\n"
+
+#: src/launcher/debug_report.cpp:467
+msgid ""
+"\n"
+"=== Session facts ===\n"
+msgstr ""
+"\n"
+"=== 세션 정보 ===\n"
+
+#: src/launcher/debug_report.cpp:481
+#, python-brace-format
+msgid ""
+"\n"
+"=== Session timeline ({0} minutes{1}) ===\n"
+msgstr ""
+"\n"
+"=== 세션 타임라인({0}분{1}) ===\n"
+
+#: src/launcher/debug_report.cpp:482
+#, python-brace-format
+msgid ", {0} shown"
+msgstr ", {0}개 표시"
+
+#: src/launcher/debug_report.cpp:503
+#, python-brace-format
+msgid ""
+"\n"
+"=== Frame layers and session states ({0} lines{1}) ===\n"
+msgstr ""
+"\n"
+"=== 프레임 레이어와 세션 상태({0}줄{1}) ===\n"
+
+#: src/launcher/debug_report.cpp:504
+#, python-brace-format
+msgid ", first and last {0} shown"
+msgstr ", 처음과 마지막 {0}개 표시"
+
+#: src/launcher/debug_report.cpp:507
+#, python-brace-format
+msgid "... {0} lines left out ...\n"
+msgstr "... {0}줄 생략 ...\n"
+
+#: src/launcher/debug_report.cpp:545
+#, python-brace-format
+msgid ""
+"\n"
+"=== Missing Android classes and members ({0} needed by {1} app classes) ===\n"
+msgstr ""
+"\n"
+"=== 누락된 Android 클래스와 멤버({1}개 앱 클래스가 {0}개 필요) ===\n"
+
+#: src/launcher/debug_report.cpp:548
+#, python-brace-format
+msgid "{0} ({1}; e.g. {2})\n"
+msgstr "{0} ({1}; 예: {2})\n"
+
+#: src/launcher/debug_report.cpp:627
+#, python-brace-format
+msgid "closed: its install lacks the expansion file {0}"
+msgstr "종료됨: 설치에 확장 파일 {0}이(가) 없음"
+
+#: src/launcher/debug_report.cpp:630
+msgid "closed: it needs a signed-in Meta account that owns it"
+msgstr "종료됨: 이를 소유한 로그인된 Meta 계정이 필요함"
+
+#: src/launcher/debug_report.cpp:633
+msgid "closed: Meta says the signed-in account does not own it"
+msgstr "종료됨: Meta에 따르면 로그인한 계정이 이를 소유하지 않음"
+
+#: src/launcher/debug_report.cpp:636
+msgid "closed: it requires Meta device attestation, which only a real Quest can provide"
+msgstr "종료됨: 실제 Quest만 제공할 수 있는 Meta 기기 인증이 필요함"
+
+#: src/launcher/debug_report.cpp:639
+#, python-brace-format
+msgid "closed after showing the message \"{0}\""
+msgstr "메시지 \"{0}\"을(를) 표시한 뒤 종료됨"
+
+#: src/launcher/debug_report.cpp:642
+#, python-brace-format
+msgid "stopped from Venture (exit code {0})"
+msgstr "Venture에서 중단됨(종료 코드 {0})"
+
+#: src/launcher/debug_report.cpp:644
+msgid "the game exited normally (exit code 0)"
+msgstr "게임이 정상 종료됨(종료 코드 0)"
+
+#: src/launcher/debug_report.cpp:648
+msgid "did not start: "
+msgstr "시작되지 않음: "
+
+#: src/launcher/debug_report.cpp:651
+msgid "no exit recorded (still running, or Venture was closed while it ran)"
+msgstr "종료 기록 없음(실행 중이거나, 실행 중 Venture가 닫힘)"
+
+#: src/launcher/debug_report.cpp:755 src/launcher/debug_report.cpp:820
+msgid ""
+"\n"
+"=== VR processes running now ===\n"
+msgstr ""
+"\n"
+"=== 현재 실행 중인 VR 프로세스 ===\n"
+
+#: src/launcher/debug_report.cpp:805
+msgid "Windows event log:\n"
+msgstr "Windows 이벤트 로그:\n"
+
+#: src/launcher/debug_report.cpp:857
+msgid "none detected"
+msgstr "감지된 없음"
+
+#: src/launcher/debug_report.cpp:871
+#, python-brace-format
+msgid "Flatpak app data: {0}\n"
+msgstr "Flatpak 앱 데이터: {0}\n"
+
+#: src/launcher/debug_report.cpp:926
+msgid "User journal"
+msgstr "사용자 저널"
+
+#: src/launcher/debug_report.cpp:940
+msgid "Crashed programs (coredumpctl):\n"
+msgstr "충돌한 프로그램(coredumpctl):\n"
+
+#: src/launcher/debug_report.cpp:1074
+msgid "Venture debug report\n"
+msgstr "Venture 디버그 보고서\n"
+
+#: src/launcher/debug_report.cpp:1075
+#, python-brace-format
+msgid "Created: {0}\n"
+msgstr "생성: {0}\n"
+
+#: src/launcher/debug_report.cpp:1076
+#, python-brace-format
+msgid "Venture: {0}\n"
+msgstr "Venture: {0}\n"
+
+#: src/launcher/debug_report.cpp:1077
+msgid "Game: none launched yet\n"
+msgstr "게임: 아직 시작된 게임 없음\n"
+
+#: src/launcher/debug_report.cpp:1079
+#, python-brace-format
+msgid "Game: {0} ({1})\n"
+msgstr "게임: {0} ({1})\n"
+
+#: src/launcher/debug_report.cpp:1094
+#, python-brace-format
+msgid "Last run: {0} to {1} ({2}{3})\n"
+msgstr "마지막 실행: {0} ~ {1} ({2}{3})\n"
+
+#: src/launcher/debug_report.cpp:1095
+msgid "start estimated, "
+msgstr "시작 추정, "
+
+#: src/launcher/debug_report.cpp:1104
+msgid ""
+"\n"
+"=== Likely cause ===\n"
+msgstr ""
+"\n"
+"=== 가능한 원인 ===\n"
+
+#: src/launcher/debug_report.cpp:1106
+msgid "No game has been started with this Venture yet.\n"
+msgstr "아직 이 Venture로 시작한 게임이 없습니다.\n"
+
+#: src/launcher/debug_report.cpp:1107
+#, python-brace-format
+msgid "{0} has no run to report yet.\n"
+msgstr "{0}은(는) 아직 보고할 실행이 없습니다.\n"
+
+#: src/launcher/debug_report.cpp:1108
+msgid "Start the game that has the problem, then send a new report."
+msgstr "문제가 있는 게임을 시작한 뒤 새 보고서를 보내세요."
+
+#: src/launcher/debug_report.cpp:1113
+msgid "The game ran without a Meta user: no Meta account was signed in for it. Games that need one can stay on a black or loading screen.\n"
+msgstr "게임이 Meta 사용자 없이 실행되었습니다: 로그인된 Meta 계정이 없습니다. 계정이 필요한 게임은 검은 화면이나 로딩 화면에 머물 수 있습니다.\n"
+
+#: src/launcher/debug_report.cpp:1115 src/launcher/debug_report.cpp:1129
+msgid "Sign in with Meta in Venture (the account that owns the game), then start the game again."
+msgstr "Venture에서 Meta로 로그인한 뒤(게임을 소유한 계정) 게임을 다시 시작하세요."
+
+#: src/launcher/debug_report.cpp:1117
+msgid "The last run did not fail. If the problem happened in an earlier run, start the game again, reproduce it, then send a new report.\n"
+msgstr "마지막 실행은 실패하지 않았습니다. 문제가 이전 실행에서 발생했다면 게임을 다시 시작해 재현한 뒤 새 보고서를 보내세요.\n"
+
+#: src/launcher/debug_report.cpp:1122
+msgid "The game looked for an expansion file (OBB) that its install does not have.\n"
+msgstr "게임이 설치에 없는 확장 파일(OBB)을 찾았습니다.\n"
+
+#: src/launcher/debug_report.cpp:1123
+msgid "Install the game again, or import it again together with its OBB file."
+msgstr "게임을 다시 설치하거나 OBB 파일과 함께 다시 가져오세요."
+
+#: src/launcher/debug_report.cpp:1128
+msgid "No Meta account was signed in for the game, so its ownership check failed and it closed.\n"
+msgstr "게임에 로그인된 Meta 계정이 없어 소유권 확인에 실패해 종료되었습니다.\n"
+
+#: src/launcher/debug_report.cpp:1131
+msgid "Meta refused the game's ownership check: the signed-in account may not own it.\n"
+msgstr "Meta가 게임 소유권 확인을 거부했습니다: 로그인한 계정이 게임을 소유하지 않을 수 있습니다.\n"
+
+#: src/launcher/debug_report.cpp:1132
+msgid "Sign in with the Meta account that owns the game, then start it again."
+msgstr "게임을 소유한 Meta 계정으로 로그인한 뒤 다시 시작하세요."
+
+#: src/launcher/debug_report.cpp:1135
+msgid "Meta answered the game's ownership check with \"not entitled\": the signed-in Meta account does not own this game, so the game closed itself. This is not a crash.\n"
+msgstr "Meta가 게임 소유권 확인에 \"권한 없음\"으로 응답했습니다: 로그인한 Meta 계정이 이 게임을 소유하지 않아 게임이 스스로 종료되었습니다. 이는 충돌이 아닙니다.\n"
+
+#: src/launcher/debug_report.cpp:1137
+msgid "Sign in with the Meta account that bought the game, then start it again."
+msgstr "게임을 구매한 Meta 계정으로 로그인한 뒤 다시 시작하세요."
+
+#: src/launcher/debug_report.cpp:1162
+msgid "No known failure signature: the errors below are the closest leads.\n"
+msgstr "알려진 실패 시그니처가 없습니다: 아래 오류가 가장 가까운 단서입니다.\n"
+
+#: src/launcher/debug_report.cpp:1163
+msgid "Send this report with an issue."
+msgstr "이 보고서를 이슈와 함께 보내세요."
+
+#: src/launcher/debug_report.cpp:1166
+msgid ""
+"\n"
+"=== Next steps ===\n"
+msgstr ""
+"\n"
+"=== 다음 단계 ===\n"
+
+#: src/launcher/debug_report.cpp:1170
+msgid ""
+"\n"
+"=== System ===\n"
+msgstr ""
+"\n"
+"=== 시스템 ===\n"
+
+#: src/launcher/debug_report.cpp:1172
+msgid ""
+"\n"
+"=== VR runtime ===\n"
+msgstr ""
+"\n"
+"=== VR 런타임 ===\n"
+
+#: src/launcher/debug_report.cpp:1176
+msgid ""
+"\n"
+"=== Environment ===\n"
+msgstr ""
+"\n"
+"=== 환경 ===\n"
+
+#: src/launcher/debug_report.cpp:1178
+msgid ""
+"\n"
+"=== Settings for this game ===\n"
+msgstr ""
+"\n"
+"=== 이 게임의 설정 ===\n"
+
+#: src/launcher/debug_report.cpp:1188
+#, python-brace-format
+msgid ""
+"\n"
+"=== Installed game (plan.json) ===\n"
+"{0}\n"
+msgstr ""
+"\n"
+"=== 설치된 게임(plan.json) ===\n"
+"{0}\n"
+
+#: src/launcher/debug_report.cpp:1193
+msgid ""
+"\n"
+"=== Installed files ===\n"
+msgstr ""
+"\n"
+"=== 설치된 파일 ===\n"
+
+#: src/launcher/debug_report.cpp:1194
+msgid "All required files are present with their recorded sizes.\n"
+msgstr "모든 필수 파일이 기록된 크기와 함께 존재합니다.\n"
+
+#: src/launcher/debug_report.cpp:1204
+#, python-brace-format
+msgid "{0} ({1} bytes)\n"
+msgstr "{0} ({1}바이트)\n"
+
+#: src/launcher/debug_report.cpp:1205
+msgid ""
+"\n"
+"=== Mods folder ===\n"
+msgstr ""
+"\n"
+"=== 모드 폴더 ===\n"
+
+#: src/launcher/debug_report.cpp:1215
+#, python-brace-format
+msgid "{0} ({1} KiB)\n"
+msgstr "{0} ({1} KiB)\n"
+
+#: src/launcher/debug_report.cpp:1217
+msgid ""
+"\n"
+"=== Crash dumps on this PC (not included) ===\n"
+msgstr ""
+"\n"
+"=== 이 PC의 충돌 덤프(미포함) ===\n"
+
+#: src/launcher/debug_report.cpp:1249
+#, python-brace-format
+msgid ""
+"\n"
+"=== {0} (written {1}) ===\n"
+"{2}"
+msgstr ""
+"\n"
+"=== {0}({1}에 기록됨) ===\n"
+"{2}"
+
+#: src/launcher/debug_report.cpp:1257
+#, python-brace-format
+msgid ""
+"\n"
+"=== Errors logged during the last run ({0} to {1}) ===\n"
+msgstr ""
+"\n"
+"=== 마지막 실행 중 기록된 오류({0} ~ {1}) ===\n"
+
+#: src/launcher/debug_report.cpp:1259
+msgid "No other log written during the run reports an error.\n"
+msgstr "실행 중 기록된 다른 로그에 오류가 보고되지 않았습니다.\n"
+
+#: src/launcher/debug_report.cpp:1289
+msgid "The report is empty."
+msgstr "보고서가 비어 있습니다."
+
+#: src/launcher/debug_report.cpp:1290
+msgid "The report is too large to upload."
+msgstr "보고서가 업로드할 수 없을 정도로 큽니다."
+
+#: src/launcher/debug_report.cpp:1296
+#, python-brace-format
+msgid "The upload service answered {0}."
+msgstr "업로드 서비스가 {0}으로 응답했습니다."
+
+#: src/launcher/diagnosis.cpp:24
+msgid "Send this report with an issue: the game needs a fix in Venture."
+msgstr "이 보고서를 이슈와 함께 보내세요: 이 게임은 Venture에서 수정이 필요합니다."
+
+#: src/launcher/diagnosis.cpp:26
+msgid "Update the graphics driver and turn off overlays and capture tools (MangoHud, vkBasalt, OBS), then try again."
+msgstr "그래픽 드라이버를 업데이트하고 오버레이와 캡처 도구(MangoHud, vkBasalt, OBS)를 끈 뒤 다시 시도하세요."
+
+#: src/launcher/diagnosis.cpp:32
+msgid "Venture found no Wayland session to open its window in."
+msgstr "Venture가 창을 열 Wayland 세션을 찾지 못했습니다."
+
+#: src/launcher/diagnosis.cpp:33
+msgid "Log in to a Wayland desktop session (Venture does not use X11), then start Venture again."
+msgstr "Wayland 데스크톱 세션에 로그인한 뒤(Venture는 X11을 사용하지 않습니다) Venture를 다시 시작하세요."
+
+#: src/launcher/diagnosis.cpp:37
+msgid "The game could not read your Meta sign-in."
+msgstr "게임이 Meta 로그인을 읽을 수 없습니다."
+
+#: src/launcher/diagnosis.cpp:38
+msgid "Make sure your desktop keyring is running and unlocked (Linux), or choose Reconnect on the account in Accounts, then start the game again."
+msgstr "데스크톱 키링이 실행 중이고 잠금이 풀렸는지 확인하세요(Linux). 또는 계정에서 해당 계정의 다시 연결을 선택한 뒤 게임을 다시 시작하세요."
+
+#: src/launcher/diagnosis.cpp:42
+msgid "The game needs a signed-in Meta account that owns it."
+msgstr "게임은 이를 소유한 로그인된 Meta 계정이 필요합니다."
+
+#: src/launcher/diagnosis.cpp:43
+msgid "Sign in with the account that owns the game, then start it again."
+msgstr "게임을 소유한 계정으로 로그인한 뒤 다시 시작하세요."
+
+#: src/launcher/diagnosis.cpp:46
+msgid "SteamVR was the OpenXR runtime, and the Venture Flatpak cannot reach SteamVR."
+msgstr "SteamVR이 OpenXR 런타임이었고, Venture Flatpak은 SteamVR에 도달할 수 없습니다."
+
+#: src/launcher/diagnosis.cpp:47
+msgid "Use the Venture AppImage, tarball or your distribution's package with SteamVR, or use WiVRn or Monado with the Flatpak."
+msgstr "SteamVR에는 Venture AppImage, tarball 또는 배포판 패키지를 사용하고, Flatpak에는 WiVRn 또는 Monado를 사용하세요."
+
+#: src/launcher/diagnosis.cpp:54
+msgid "An OpenXR API layer installed on this PC could not be loaded, and the VR runtime could not start with it."
+msgstr "이 PC에 설치된 OpenXR API 레이어를 로드할 수 없어 VR 런타임을 시작할 수 없습니다."
+
+#: src/launcher/diagnosis.cpp:55
+msgid "Repair or reinstall the program that installed the layer, or uninstall it so its leftover registration goes, update Venture, then press Play again."
+msgstr "레이어를 설치한 프로그램을 수리하거나 다시 설치하거나, 남은 등록이 사라지도록 삭제한 뒤 Venture를 업데이트하고 다시 재생을 누르세요."
+
+#: src/launcher/diagnosis.cpp:60
+msgid "No OpenXR runtime was running, or none is set as the active one."
+msgstr "실행 중인 OpenXR 런타임이 없거나 활성으로 설정된 런타임이 없습니다."
+
+#: src/launcher/diagnosis.cpp:61
+msgid "Start your VR runtime (SteamVR, WiVRn or Monado), make it the active OpenXR runtime, connect the headset, then press Play again."
+msgstr "VR 런타임을 시작하고(SteamVR, WiVRn 또는 Monado) 활성 OpenXR 런타임으로 설정한 뒤 헤드셋을 연결하고 다시 재생을 누르세요."
+
+#: src/launcher/diagnosis.cpp:67
+msgid "SteamVR found no headset: it was not connected yet when the game started."
+msgstr "SteamVR이 헤드셋을 찾지 못했습니다: 게임 시작 시 아직 연결되어 있지 않았습니다."
+
+#: src/launcher/diagnosis.cpp:68
+msgid "Connect the headset to SteamVR first (Quest Link, Air Link, Virtual Desktop or Steam Link) and wait until SteamVR shows it as connected, then press Play again."
+msgstr "먼저 헤드셋을 SteamVR에 연결하세요(Quest Link, Air Link, Virtual Desktop 또는 Steam Link). SteamVR에 연결된 것으로 표시될 때까지 기다린 뒤 다시 재생을 누르세요."
+
+#: src/launcher/diagnosis.cpp:71
+msgid "The VR runtime could not start a session; it is often still shutting down from an earlier one."
+msgstr "VR 런타임이 세션을 시작할 수 없습니다. 이전 세션 종료 중일 때가 많습니다."
+
+#: src/launcher/diagnosis.cpp:72
+msgid "Close your VR runtime completely and start it again, then press Play again."
+msgstr "VR 런타임을 완전히 닫고 다시 시작한 뒤 다시 재생을 누르세요."
+
+#: src/launcher/diagnosis.cpp:74
+msgid "The active OpenXR runtime does not support Vulkan, which Venture renders with."
+msgstr "활성 OpenXR 런타임이 Venture 렌더링에 사용하는 Vulkan을 지원하지 않습니다."
+
+#: src/launcher/diagnosis.cpp:75
+msgid "Update your VR runtime or switch to one with Vulkan support (SteamVR, WiVRn, Monado)."
+msgstr "VR 런타임을 업데이트하거나 Vulkan을 지원하는 런타임으로 전환하세요(SteamVR, WiVRn, Monado)."
+
+#: src/launcher/diagnosis.cpp:77
+msgid "Your VR runtime had no headset connected."
+msgstr "VR 런타임에 연결된 헤드셋이 없었습니다."
+
+#: src/launcher/diagnosis.cpp:78
+msgid "Connect the headset and make sure it is tracking, then start the game again."
+msgstr "헤드셋을 연결하고 추적이 되는지 확인한 뒤 게임을 다시 시작하세요."
+
+#: src/launcher/diagnosis.cpp:81
+msgid "The VR runtime did not create the game's VR session."
+msgstr "VR 런타임이 게임의 VR 세션을 생성하지 않았습니다."
+
+#: src/launcher/diagnosis.cpp:82
+msgid "Update Venture and your graphics driver, close other VR tools and overlays (OpenXR Toolkit, other OpenXR layers), restart your VR runtime, then try again. If it keeps happening, send this report."
+msgstr "Venture와 그래픽 드라이버를 업데이트하고 다른 VR 도구와 오버레이(OpenXR Toolkit, 기타 OpenXR 레이어)를 닫은 뒤 VR 런타임을 다시 시작한 뒤 다시 시도하세요. 계속 발생하면 이 보고서를 보내세요."
+
+#: src/launcher/diagnosis.cpp:89
+msgid "Virtual Desktop's own OpenXR runtime (VDXR) ran the game, and the game was closed from outside. Virtual Desktop closes SteamVR when a game starts on VDXR and closes that game when SteamVR starts again; controllers and trackers that only SteamVR sees (Index controllers, Vive trackers) do not work on VDXR."
+msgstr "Virtual Desktop 자체 OpenXR 런타임(VDXR)이 게임을 실행했고, 게임이 외부에서 종료되었습니다. Virtual Desktop은 VDXR에서 게임이 시작되면 SteamVR을 닫고, SteamVR이 다시 시작되면 그 게임을 닫습니다. SteamVR에서만 인식하는 컨트롤러와 트래커(Index 컨트롤러, Vive 트래커)는 VDXR에서 작동하지 않습니다."
+
+#: src/launcher/diagnosis.cpp:92
+msgid "To use SteamVR controllers or trackers, set OpenXR Runtime to SteamVR in the Virtual Desktop Streamer app, start SteamVR, then press Play. To stay on VDXR, leave SteamVR closed while the game runs."
+msgstr "SteamVR 컨트롤러나 트래커를 사용하려면 Virtual Desktop Streamer 앱에서 OpenXR 런타임을 SteamVR으로 설정하고 SteamVR을 시작한 뒤 재생을 누르세요. VDXR을 유지하려면 게임 실행 중 SteamVR을 닫은 채 두세요."
+
+#: src/launcher/diagnosis.cpp:96
+msgid "Another program closed the game (exit status 0xFFFFFFFF, a forced close from outside Venture). VR runtimes do this to the games they run when they shut down or hand the headset to another runtime."
+msgstr "다른 프로그램이 게임을 종료했습니다(종료 코드 0xFFFFFFFF, Venture 외부에서 강제 종료). VR 런타임은 종료되거나 헤드셋을 다른 런타임에 넘길 때 자신이 실행 중인 게임에 이렇게 합니다."
+
+#: src/launcher/diagnosis.cpp:98
+msgid "Keep your VR runtime running while the game plays, and do not start or close another VR runtime meanwhile. If nothing like that happened, send this report with an issue."
+msgstr "게임 실행 중 VR 런타임을 유지하고, 그 사이에 다른 VR 런타임을 시작하거나 닫지 마세요. 그런 일이 없었으면 이 보고서를 이슈와 함께 보내세요."
+
+#: src/launcher/diagnosis.cpp:103
+msgid "The graphics driver reset the GPU during the game."
+msgstr "게임 실행 중 그래픽 드라이버가 GPU를 재설정했습니다."
+
+#: src/launcher/diagnosis.cpp:106
+msgid "The game lost the graphics device."
+msgstr "게임이 그래픽 장치를 잃었습니다."
+
+#: src/launcher/diagnosis.cpp:109
+msgid "The PC ran out of commit memory (RAM plus page file), so memory requests failed even though RAM and GPU memory looked free. Graphics drivers count GPU memory against this limit too."
+msgstr "PC의 커밋 메모리(RAM + 페이지 파일)가 부족해 RAM과 GPU 메모리에 여유가 있어 보였는데도 메모리 요청이 실패했습니다. 그래픽 드라이버도 이 한도에 GPU 메모리를 포함합니다."
+
+#: src/launcher/diagnosis.cpp:111
+msgid "Let Windows manage the page file size, or set it to at least 16 GB (Settings > System > About > Advanced system settings > Performance > Advanced > Virtual memory), close other large programs, then try again. On Linux, add swap or use vm.overcommit_memory=0."
+msgstr "Windows가 페이지 파일 크기를 관리하도록 하거나 최소 16 GB로 설정하세요(설정 > 시스템 > 정보 > 고급 시스템 설정 > 성능 > 고급 > 가상 메모리). 다른 큰 프로그램을 닫은 뒤 다시 시도하세요. Linux에서는 swap을 추가하거나 vm.overcommit_memory=0을 사용하세요."
+
+#: src/launcher/diagnosis.cpp:115
+msgid "The game reached the graphics driver's limit on the number of GPU memory allocations."
+msgstr "게임이 그래픽 드라이버의 GPU 메모리 할당 수 한도에 도달했습니다."
+
+#: src/launcher/diagnosis.cpp:116
+msgid "Update the graphics driver and send this report with an issue."
+msgstr "그래픽 드라이버를 업데이트하고 이 보고서를 이슈와 함께 보내세요."
+
+#: src/launcher/diagnosis.cpp:118
+msgid "The small part of GPU memory the CPU can write to filled up (Resizable BAR is off)."
+msgstr "CPU가 쓸 수 있는 GPU 메모리의 작은 부분이 가득 찼습니다(Resizable BAR 꺼짐)."
+
+#: src/launcher/diagnosis.cpp:119
+msgid "Turn on Resizable BAR (Re-Size BAR or Smart Access Memory) in the PC's firmware settings if it supports it, update the graphics driver, and send this report with an issue."
+msgstr "PC 펌웨어 설정에서 지원하는 경우 Resizable BAR(Re-Size BAR 또는 Smart Access Memory)를 켜고 그래픽 드라이버를 업데이트한 뒤 이 보고서를 이슈와 함께 보내세요."
+
+#: src/launcher/diagnosis.cpp:122 src/launcher/diagnosis.cpp:134
+msgid "The GPU ran out of memory."
+msgstr "GPU 메모리가 부족합니다."
+
+#: src/launcher/diagnosis.cpp:123 src/launcher/diagnosis.cpp:135
+msgid "Close other programs that use the GPU or lower the resolution (Settings > Display), then try again."
+msgstr "GPU를 사용하는 다른 프로그램을 닫거나 해상도를 낮춘 뒤(설정 > 디스플레이) 다시 시도하세요."
+
+#: src/launcher/diagnosis.cpp:125
+msgid "Venture's store of translated game code could not grow."
+msgstr "Venture의 번역된 게임 코드 저장소를 늘릴 수 없습니다."
+
+#: src/launcher/diagnosis.cpp:126
+msgid "Close other large programs, then try again. If it keeps happening, send this report with an issue."
+msgstr "다른 큰 프로그램을 닫은 뒤 다시 시도하세요. 계속 발생하면 이 보고서를 이슈와 함께 보내세요."
+
+#: src/launcher/diagnosis.cpp:128
+msgid "The game used up the memory area Venture gives it."
+msgstr "게임이 Venture가 주는 메모리 영역을 모두 사용했습니다."
+
+#: src/launcher/diagnosis.cpp:130
+msgid "A memory request was refused although no memory limit was near."
+msgstr "메모리 한도에 근접하지 않았는데 메모리 요청이 거부되었습니다."
+
+#: src/launcher/diagnosis.cpp:131
+msgid "Update the graphics driver, close other programs, then try again. If it keeps happening, send this report with an issue."
+msgstr "그래픽 드라이버를 업데이트하고 다른 프로그램을 닫은 뒤 다시 시도하세요. 계속 발생하면 이 보고서를 이슈와 함께 보내세요."
+
+#: src/launcher/diagnosis.cpp:137
+msgid "The system ran out of memory and stopped a program."
+msgstr "시스템 메모리가 부족해 프로그램을 중단했습니다."
+
+#: src/launcher/diagnosis.cpp:138
+msgid "Close other programs, then try again."
+msgstr "다른 프로그램을 닫은 뒤 다시 시도하세요."
+
+#: src/launcher/diagnosis.cpp:141
+msgid "The game called an Android function that Venture does not provide yet."
+msgstr "게임이 Venture가 아직 제공하지 않는 Android 함수를 호출했습니다."
+
+#: src/launcher/diagnosis.cpp:148
+msgid "The game stopped on an uncaught Java exception, most often an Android class or method that Venture does not provide yet."
+msgstr "게임이 처리되지 않은 Java 예외로 중단되었습니다. 대부분은 Venture가 아직 제공하지 않는 Android 클래스나 메서드입니다."
+
+#: src/launcher/diagnosis.cpp:152
+msgid "The game crashed."
+msgstr "게임이 충돌했습니다."
+
+#: src/launcher/diagnosis.cpp:194
+msgid " Broken layer: "
+msgstr " 깨진 레이어: "
+
+#: src/launcher/drives.cpp:46
+msgid "Local drive"
+msgstr "로컬 드라이브"
+
+#: src/launcher/drives.cpp:82
+msgid "Removable Disk"
+msgstr "이동식 디스크"
+
+#: src/launcher/drives.cpp:82
+msgid "Local Disk"
+msgstr "로컬 디스크"
+
+#: src/launcher/import.cpp:51 src/launcher/import.cpp:101
+msgid "Android platform-tools (adb) were not found. Install them, or set adb's location in Settings."
+msgstr "Android platform-tools(adb)를 찾을 수 없습니다. 설치하거나 설정에서 adb 위치를 지정하세요."
+
+#: src/launcher/import.cpp:52
+msgid "adb was not found at the location set in Settings."
+msgstr "설정에서 지정한 위치에 adb를 찾을 수 없습니다."
+
+#: src/launcher/import.cpp:66
+msgid "No games are installed on this headset."
+msgstr "이 헤드셋에 설치된 게임이 없습니다."
+
+#: src/launcher/import.cpp:169
+msgid "A newer version is installed"
+msgstr "더 새로운 버전이 설치되어 있습니다"
+
+#: src/launcher/import.cpp:172
+msgid "Updates the installed version"
+msgstr "설치된 버전을 업데이트합니다"
+
+#: src/launcher/import.cpp:172
+msgid "Completes the installation"
+msgstr "설치를 완료합니다"
+
+#: src/launcher/import.cpp:174
+msgid "Ready to import"
+msgstr "가져오기 준비 완료"
+
+#: src/launcher/import.cpp:203
+msgid "Choose an absolute folder to import to."
+msgstr "가져올 절대 경로 폴더를 선택하세요."
+
+#: src/launcher/import.cpp:220
+msgid "Select a game to import."
+msgstr "가져올 게임을 선택하세요."
+
+#: src/launcher/platform/posix/auth_browser.cpp:297 src/launcher/platform/posix/auth_browser.cpp:394
+msgid "Sign in to Meta - Venture"
+msgstr "Meta에 로그인 - Venture"
+
+#: src/launcher/platform/posix/auth_browser.cpp:472
+msgid "Meta sign-in needs WebKitGTK. Install webkitgtk-6.0 (or webkit2gtk-4.1) from your distribution."
+msgstr "Meta 로그인에는 WebKitGTK가 필요합니다. 배포판에서 webkitgtk-6.0(또는 webkit2gtk-4.1)을 설치하세요."
+
+#: src/launcher/platform/posix/auth_browser.cpp:474
+msgid "This WebKitGTK is too old to keep the sign-in window on Meta's pages. Update webkitgtk-6.0 (or webkit2gtk-4.1)."
+msgstr "이 WebKitGTK는 Meta 페이지에 로그인 창을 유지하기에는 너무 오래되었습니다. webkitgtk-6.0(또는 webkit2gtk-4.1)을 업데이트하세요."
+
+#: src/launcher/platform/posix/auth_browser.cpp:476
+msgid "The Meta sign-in page stopped unexpectedly. Try again."
+msgstr "Meta 로그인 페이지가 예상치 않게 중단되었습니다. 다시 시도하세요."
+
+#: src/launcher/platform/posix/auth_browser.cpp:477 src/launcher/platform/posix/auth_browser.cpp:490 src/launcher/platform/posix/auth_browser.cpp:494 src/launcher/platform/posix/auth_browser.cpp:514
+msgid "Could not open the Meta sign-in window."
+msgstr "Meta 로그인 창을 열 수 없습니다."
+
+#: src/launcher/platform/posix/auth_browser.cpp:483
+msgid "Sign-in URL is outside allowed Meta domains."
+msgstr "로그인 URL이 허용된 Meta 도메인 밖에 있습니다."
+
+#: src/launcher/platform/posix/auth_browser.cpp:560
+#, python-brace-format
+msgid "The Meta sign-in window stopped with {0}."
+msgstr "Meta 로그인 창이 {0}으로 중단되었습니다."
+
+#: src/launcher/platform/posix/window_style.cpp:24
+msgid "The Venture launcher needs a Wayland session, and no Wayland display was reachable (check WAYLAND_DISPLAY and XDG_RUNTIME_DIR)."
+msgstr "Venture 런처에는 Wayland 세션이 필요하지만 도달 가능한 Wayland 디스플레이가 없습니다(WAYLAND_DISPLAY와 XDG_RUNTIME_DIR을 확인하세요)."
+
+#: src/launcher/platform/win32/auth_browser.cpp:83
+msgid "Could not open Meta sign-in. Install or repair the Microsoft Edge WebView2 Runtime."
+msgstr "Meta 로그인을 열 수 없습니다. Microsoft Edge WebView2 런타임을 설치하거나 수리하세요."
+
+#: src/launcher/platform/win32/auth_browser.cpp:375
+msgid "Could not initialize the Windows sign-in window."
+msgstr "Windows 로그인 창을 초기화할 수 없습니다."
+
+#: src/launcher/platform/win32/auth_browser.cpp:398
+msgid "Could not create the sign-in window."
+msgstr "로그인 창을 생성할 수 없습니다."
+
+#: src/launcher/platform/win32/window_style.cpp:35
+msgid "Could not initialize SDL video."
+msgstr "SDL 비디오를 초기화할 수 없습니다."
+
+#: src/launcher/ui/views.cpp:1715
+msgid "Meta store"
+msgstr "Meta 스토어"
+
+#: src/launcher/updater.cpp:79
+#, python-brace-format
+msgid "The release does not list a checksum for {0}."
+msgstr "릴리스에 {0}의 체크섬이 목록에 없습니다."
+
+#: src/launcher/updater.cpp:88
+msgid "The downloaded update did not match its checksum. Try again."
+msgstr "다운로드한 업데이트가 체크섬과 일치하지 않습니다. 다시 시도하세요."
+
+#: src/launcher/updater.cpp:98
+msgid "This copy of Venture updates from the release page."
+msgstr "이 Venture 사본은 릴리스 페이지에서 업데이트됩니다."
+
+#: src/launcher/updater.cpp:100
+msgid "Could not find this AppImage."
+msgstr "이 AppImage를 찾을 수 없습니다."

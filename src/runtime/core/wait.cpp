@@ -71,11 +71,10 @@ void spin_on(const std::atomic<bool>& flag) noexcept {
   for (int i = 0; i < 32 && !flag.load(std::memory_order_acquire); ++i) spin_pause();
 }
 template<class... Args>
-void record_futex(std::format_string<Args...> format, Args&&... args) noexcept {
+void record_futex(std::string_view format, Args&&... args) noexcept {
   try {
-    std::array<char, 512> text;
-    const auto formatted = std::format_to_n(text.data(), text.size(), format, std::forward<Args>(args)...);
-    diagnostic_trace("futex-trace", std::string_view(text.data(), std::min(std::size_t(formatted.size), text.size())));
+    const auto full = std::vformat(format.data(), std::make_format_args(args...));
+    diagnostic_trace("futex-trace", std::string_view(full.data(), std::min(full.size(), std::size_t(512))));
   } catch (...) {}
 }
 struct Waiter {

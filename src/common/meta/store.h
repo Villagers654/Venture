@@ -1,5 +1,6 @@
 #pragma once
 #include "common/meta/auth.h"
+#include "launcher/i18n/i18n.h"
 #include <set>
 namespace venture::meta {
 struct Game {
@@ -101,8 +102,8 @@ struct Details {
   uint64_t size = 0;
   Plan plan;
 };
-inline constexpr const char *catalog_unavailable =
-    "Meta's asset catalog is temporarily unavailable. Try again later.";
+inline const char *catalog_unavailable =
+    i18n::tr("Meta's asset catalog is temporarily unavailable. Try again later.");
 // Throws catalog_unavailable for a plan without its asset catalog.
 void require_asset_catalog(const Plan &plan);
 std::vector<Addon> group_addons(const Plan &plan);

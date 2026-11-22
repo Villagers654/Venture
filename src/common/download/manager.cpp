@@ -7,6 +7,7 @@
 #include "common/log.h"
 #include "common/meta/accounts.h"
 #include "common/saves_migration.h"
+#include "launcher/i18n/i18n.h"
 #include <algorithm>
 #include <format>
 #include <fstream>
@@ -34,13 +35,13 @@ const char *label(State s) {
   case State::queued:
     return "Queued";
   case State::checking:
-    return "Checking ownership and build";
+    return i18n::tr("Checking ownership and build");
   case State::downloading:
     return "Downloading";
   case State::paused:
     return "Paused";
   case State::failed:
-    return "Needs attention";
+    return i18n::tr("Needs attention");
   case State::complete:
     return "Installed";
   }
@@ -159,7 +160,7 @@ void Manager::enqueue_version(std::string app, std::string binary,
                               std::string name, fs::path root,
                               std::string token, std::string account) {
   if (!digits(binary))
-    throw std::runtime_error("Invalid version to download.");
+    throw std::runtime_error(i18n::tr("Invalid version to download."));
   enqueue_job(std::move(app), std::move(name), std::move(root),
               std::move(token), std::move(account), std::move(binary), {}, {},
               {}, {}, {}, true);
@@ -168,7 +169,7 @@ void Manager::enqueue_addon(std::string app, std::string name, fs::path root,
                             std::string binary, std::string sku,
                             std::string token) {
   if (!digits(binary) || !meta::valid_sku(sku))
-    throw std::runtime_error("Invalid add-on download.");
+    throw std::runtime_error(i18n::tr("Invalid add-on download."));
   enqueue_job(std::move(app), std::move(name), std::move(root),
               std::move(token), active_key(), std::move(binary), std::move(sku));
 }
@@ -181,7 +182,7 @@ void Manager::enqueue_asset(std::string app, fs::path root, std::string binary,
                             std::string token, std::string account,
                             bool pinned) {
   if (!digits(binary) || !digits(id) || !paths::safe_name(filename))
-    throw std::runtime_error("Invalid asset download.");
+    throw std::runtime_error(i18n::tr("Invalid asset download."));
   auto display = filename;
   enqueue_job(std::move(app), std::move(display), std::move(root),
               std::move(token), std::move(account), std::move(binary), {},
@@ -191,7 +192,7 @@ void Manager::enqueue_import(std::string app, std::string name, fs::path root,
                              std::string token, std::string account,
                              std::string source, std::string package) {
   if (!valid_source(source) || !paths::safe_package(package))
-    throw std::runtime_error("Invalid import source.");
+    throw std::runtime_error(i18n::tr("Invalid import source."));
   enqueue_job(std::move(app), std::move(name), std::move(root),
               std::move(token), std::move(account), {}, {}, {}, {},
               std::move(source), std::move(package));
@@ -224,7 +225,7 @@ bool Manager::delete_asset(const fs::path& install, std::string_view app,
     if (e->job.app_id == app &&
         (e->job.state == State::queued || e->job.state == State::checking ||
          e->job.state == State::downloading))
-      throw std::runtime_error("Pause downloads before deleting an asset.");
+      throw std::runtime_error(i18n::tr("Pause downloads before deleting an asset."));
   bool removed = remove_asset(install, app, binary, filename);
   std::erase_if(jobs_, [&](auto& e) {
     return e->job.app_id == app && e->job.binary_id == binary &&
@@ -244,11 +245,11 @@ void Manager::enqueue_job(std::string app, std::string name, fs::path root,
   // files a source lacks, when an account owns the game.
   const bool import = !source.empty();
   if (!(import && account == "local") && !meta::valid_account_key(account))
-    throw std::runtime_error("Select a signed-in account before downloading.");
+    throw std::runtime_error(i18n::tr("Select a signed-in account before downloading."));
   if (token.empty() && !import)
-    throw std::runtime_error("Sign in before resuming downloads.");
+    throw std::runtime_error(i18n::tr("Sign in before resuming downloads."));
   if ((!digits(app, 5) && !(import && app == package)) || !root.is_absolute())
-    throw std::runtime_error("Invalid download destination.");
+    throw std::runtime_error(i18n::tr("Invalid download destination."));
   std::lock_guard lock(mutex_);
   for (auto &e : jobs_)
     if (e->job.app_id == app && e->job.account == account &&
@@ -256,7 +257,7 @@ void Manager::enqueue_job(std::string app, std::string name, fs::path root,
         e->job.asset_name == asset_name && e->job.pinned == pinned) {
       if (e->removed)
         throw std::runtime_error(
-            "The cancelled download is still stopping. Try again shortly.");
+            i18n::tr("The cancelled download is still stopping. Try again shortly."));
       if (e->job.state == State::queued || e->job.state == State::checking ||
           e->job.state == State::downloading)
         return;
@@ -306,13 +307,13 @@ void Manager::uninstall_addon(std::string_view app, const fs::path &root,
         (e->job.state == State::queued || e->job.state == State::checking ||
          e->job.state == State::downloading))
       throw std::runtime_error(
-          "Pause this game's downloads before removing an add-on.");
+          i18n::tr("Pause this game's downloads before removing an add-on."));
   auto installs = library::scan(root);
   auto found = std::ranges::find_if(installs, [&](auto &i) {
     return i.plan.app_id == app && i.plan.binary_id == binary;
   });
   if (found == installs.end())
-    throw std::runtime_error("Installed game was not found.");
+    throw std::runtime_error(i18n::tr("Installed game was not found."));
   library::uninstall_addon(root, *found, sku);
   std::erase_if(jobs_, [&](auto &e) {
     return e->job.app_id == app && e->job.binary_id == binary &&
@@ -468,13 +469,13 @@ std::vector<Job> Manager::snapshot(std::string_view account) const {
 }
 void Manager::set_account(std::string key) {
   if (!key.empty() && !meta::valid_account_key(key))
-    throw std::runtime_error("Invalid account key.");
+    throw std::runtime_error(i18n::tr("Invalid account key."));
   std::lock_guard lock(mutex_);
   active_account_ = std::move(key);
 }
 void Manager::adopt_legacy(std::string_view primary) {
   if (!meta::valid_account_key(primary))
-    throw std::runtime_error("Invalid primary account key.");
+    throw std::runtime_error(i18n::tr("Invalid primary account key."));
   std::lock_guard lock(mutex_);
   for (auto &e : jobs_)
     if (e->job.account.empty())
@@ -555,7 +556,7 @@ void Manager::run(std::stop_token shutdown) {
         continue;
       }
       if (!signed_in)
-        throw std::runtime_error("Sign in before resuming downloads.");
+        throw std::runtime_error(i18n::tr("Sign in before resuming downloads."));
       auto &store = *signed_in;
       // An asset of an install whose manifest is Meta's reduced catalog: the
       // full query failed for this build before and would again, after
@@ -574,7 +575,7 @@ void Manager::run(std::stop_token shutdown) {
         return std::nullopt;
       }();
       if (reduced_install && !store.owns(e->job.app_id))
-        throw std::runtime_error("Meta says this account does not own this game.");
+        throw std::runtime_error(i18n::tr("Meta says this account does not own this game."));
       auto plan = reduced_install ? *reduced_install
                   : e->job.binary_id.empty()
                       ? store.owned_plan(e->job.app_id)
@@ -615,8 +616,8 @@ void Manager::run(std::stop_token shutdown) {
         }
       if (!e->job.sku.empty() &&
           !store.owned_skus(e->job.app_id).contains(e->job.sku))
-        throw std::runtime_error("Meta did not confirm ownership of this "
-                                 "add-on. No files were downloaded.");
+        throw std::runtime_error(i18n::tr("Meta did not confirm ownership of this "
+                                          "add-on. No files were downloaded."));
       if (selected.empty())
         for (auto &f : plan.files)
           if (!e->job.asset_id.empty()
@@ -626,24 +627,24 @@ void Manager::run(std::stop_token shutdown) {
                                    : f.sku == e->job.sku)
             selected.push_back(f);
       if (selected.empty())
-        throw std::runtime_error("No files were found for this add-on.");
+        throw std::runtime_error(i18n::tr("No files were found for this add-on."));
       if (!e->job.asset_id.empty() &&
           (!selected[0].sku.empty() || !selected[0].iap_id.empty())) {
         if (selected[0].sku.empty() ||
             !store.owned_skus(e->job.app_id).contains(selected[0].sku))
           throw std::runtime_error(
-              "Meta did not confirm ownership of this asset.");
+              i18n::tr("Meta did not confirm ownership of this asset."));
       }
       if (stop.stop_requested())
-        throw std::runtime_error("Transfer paused.");
+        throw std::runtime_error(i18n::tr("Transfer paused."));
       auto dir = paths::game_dir(e->job.root, plan.package, plan.folder());
       if (!version_base && !e->job.binary_id.empty() && !fs::exists(dir / "plan.json"))
-        throw std::runtime_error("Install the base game before its add-ons.");
+        throw std::runtime_error(i18n::tr("Install the base game before its add-ons."));
       fs::create_directories(dir);
       if (!paths::within(dir, dir / "plan.json") ||
           !paths::within(dir, dir / "plan.json.tmp"))
         throw std::runtime_error(
-            "Installation manifest path escapes the game folder.");
+            i18n::tr("Installation manifest path escapes the game folder."));
       bool keep_manifest = false;
       if (fs::exists(dir / "plan.json")) {
         auto previous = meta::parse_plan(paths::read_json(dir / "plan.json"));
@@ -652,8 +653,8 @@ void Manager::run(std::stop_token shutdown) {
         if (previous.binary_id != plan.binary_id ||
             previous.app_id != plan.app_id)
           throw std::runtime_error(
-              "This folder belongs to another build. Uninstall that version or "
-              "choose another games directory.");
+              i18n::tr("This folder belongs to another build. Uninstall that version or "
+                       "choose another games directory."));
         auto catalog = meta::group_addons(plan);
         for (auto &sku : previous.installed_addons)
           if (std::ranges::find(catalog, sku, &meta::Addon::sku) !=
@@ -664,28 +665,28 @@ void Manager::run(std::stop_token shutdown) {
       uint64_t total = 0;
       for (auto &f : selected) {
         if (f.size > UINT64_MAX - total)
-          throw std::runtime_error("Invalid download size.");
+          throw std::runtime_error(i18n::tr("Invalid download size."));
         total += f.size;
       }
       uint64_t remaining = total;
       for (auto &f : selected) {
         auto p = dir / paths::from_utf8(f.name);
         if (!paths::within(dir, p))
-          throw std::runtime_error("File path escapes installation directory.");
+          throw std::runtime_error(i18n::tr("File path escapes installation directory."));
         if (fs::is_regular_file(p) && fs::file_size(p) == f.size)
           remaining -= f.size;
         else {
           p += ".part";
           if (!paths::within(dir, p))
             throw std::runtime_error(
-                "Partial file path escapes installation directory.");
+                i18n::tr("Partial file path escapes installation directory."));
           if (fs::is_regular_file(p))
             remaining -= std::min(f.size, fs::file_size(p));
         }
       }
       if (fs::space(dir).available < remaining + 64 * 1024 * 1024)
-        throw std::runtime_error("Not enough free space. Free disk space or "
-                                 "choose another games folder in Settings.");
+        throw std::runtime_error(i18n::tr("Not enough free space. Free disk space or "
+                                          "choose another games folder in Settings."));
       if (!plan.assets_complete && e->job.sku.empty() && e->job.asset_id.empty())
         log::warn("downloads",
                   "Meta's asset catalog is unavailable; installing the APK "
@@ -735,14 +736,14 @@ void Manager::run(std::stop_token shutdown) {
         finished += f.size;
       }
       if (stop.stop_requested())
-        throw std::runtime_error("Transfer paused.");
+        throw std::runtime_error(i18n::tr("Transfer paused."));
       if (!e->job.sku.empty() || !e->job.asset_id.empty()) {
         // Publish only after every file in the SKU passed the size check.
         for (auto &f : selected) {
           auto target = dir / paths::from_utf8(f.name);
           if (!fs::is_regular_file(target) || fs::file_size(target) != f.size)
             throw std::runtime_error(
-                "Add-on content did not pass the size check.");
+                i18n::tr("Add-on content did not pass the size check."));
         }
         // A kept manifest is the better catalog: only its add-on marker
         // changes, never its file list.
@@ -779,22 +780,22 @@ void Manager::run(std::stop_token shutdown) {
       std::lock_guard lock(mutex_);
       e->job.importing = false;
       e->job.state = stop.stop_requested() ? State::paused : State::failed;
-      e->job.error = "Could not access the download folder. Check free space "
-                     "and permissions, then resume.";
+      e->job.error = i18n::tr("Could not access the download folder. Check free space "
+                              "and permissions, then resume.");
       save_locked();
     } catch (const Json::exception &) {
       std::lock_guard lock(mutex_);
       e->job.importing = false;
       e->job.state = State::failed;
-      e->job.error = "Meta returned unexpected file details. Refresh the "
-                     "library and retry.";
+      e->job.error = i18n::tr("Meta returned unexpected file details. Refresh the "
+                              "library and retry.");
       save_locked();
     } catch (const std::exception &error) {
       std::lock_guard lock(mutex_);
       e->job.importing = false;
       e->job.state = stop.stop_requested() ? State::paused : State::failed;
       e->job.error = stop.stop_requested()
-                         ? "Partial files saved. Resume to continue."
+                         ? i18n::tr("Partial files saved. Resume to continue.")
                          : error.what();
       e->job.bytes_per_second = 0;
       save_locked();
@@ -847,8 +848,8 @@ std::string copy(const import::Source &source, const import::SourceFile &file,
   {
     std::ofstream out(part, std::ios::binary | (done ? std::ios::app : std::ios::trunc));
     if (!out)
-      throw std::runtime_error("Could not write to the games folder. Check "
-                               "free space and permissions, then retry.");
+      throw std::runtime_error(i18n::tr("Could not write to the games folder. Check "
+                                        "free space and permissions, then retry."));
     report(done);
     source.read(
         file,
@@ -857,8 +858,8 @@ std::string copy(const import::Source &source, const import::SourceFile &file,
                     std::streamsize(chunk.size()));
           if (!out)
             throw std::runtime_error(
-                "Could not write to the games folder. Check free space "
-                "and permissions, then retry.");
+                i18n::tr("Could not write to the games folder. Check free space "
+                         "and permissions, then retry."));
           sha.update(chunk);
           done += chunk.size();
           report(done);
@@ -866,18 +867,18 @@ std::string copy(const import::Source &source, const import::SourceFile &file,
         stop, done);
     out.close();
     if (!out)
-      throw std::runtime_error("Could not write to the games folder. Check "
-                               "free space and permissions, then retry.");
+      throw std::runtime_error(i18n::tr("Could not write to the games folder. Check "
+                                        "free space and permissions, then retry."));
   }
   if (done != file.size)
-    throw std::runtime_error(file.name + " changed while it was being imported.");
+    throw std::runtime_error(file.name + i18n::tr(" changed while it was being imported."));
   checker.join();
   const auto hash = sha.finish();
   if (remote && *remote != hash) {
     fs::remove(part, ec);
     throw std::runtime_error(file.name +
-                             " arrived damaged (its checksum differs from the "
-                             "headset's). Check the cable and retry.");
+                             i18n::tr(" arrived damaged (its checksum differs from the "
+                                      "headset's). Check the cable and retry."));
   }
   return hash;
 }
@@ -900,7 +901,7 @@ uint64_t Manager::run_import(Entry &e, meta::Store *store, std::stop_token stop)
           : import::reopen(spec, package,
                            android::adb::locate().value_or(fs::path{}), stop);
   if (!source || source->manifest.package != package)
-    throw std::runtime_error("The import source no longer holds this game.");
+    throw std::runtime_error(i18n::tr("The import source no longer holds this game."));
   // The source's files install as they are. When a signed-in account owns
   // the Meta build of the same version, that build only supplies the files
   // the source lacks.
@@ -913,7 +914,7 @@ uint64_t Manager::run_import(Entry &e, meta::Store *store, std::stop_token stop)
         catalog = store->owned_plan(app_id, binary);
     } catch (...) {
       if (stop.stop_requested())
-        throw std::runtime_error("Transfer paused.");
+        throw std::runtime_error(i18n::tr("Transfer paused."));
     }
     if (catalog && catalog->package != package)
       catalog.reset();
@@ -930,13 +931,13 @@ uint64_t Manager::run_import(Entry &e, meta::Store *store, std::stop_token stop)
   if (!paths::within(dir, dir / "plan.json") ||
       !paths::within(dir, dir / "plan.json.tmp"))
     throw std::runtime_error(
-        "Installation manifest path escapes the game folder.");
+        i18n::tr("Installation manifest path escapes the game folder."));
   if (fs::exists(dir / "plan.json")) {
     auto previous = meta::parse_plan(paths::read_json(dir / "plan.json"));
     if (previous.binary_id != plan.binary_id || previous.app_id != plan.app_id)
       throw std::runtime_error(
-          "This folder belongs to another build. Uninstall that version or "
-          "choose another games directory.");
+          i18n::tr("This folder belongs to another build. Uninstall that version or "
+                   "choose another games directory."));
     auto catalog_addons = meta::group_addons(plan);
     for (auto &sku : previous.installed_addons)
       if (std::ranges::find(catalog_addons, sku, &meta::Addon::sku) !=
@@ -958,7 +959,7 @@ uint64_t Manager::run_import(Entry &e, meta::Store *store, std::stop_token stop)
     auto target = dir / paths::from_utf8(f.name);
     if (!paths::within(dir, target) ||
         !paths::within(dir, paths::from_utf8(paths::utf8(target) + ".part")))
-      throw std::runtime_error("File path escapes installation directory.");
+      throw std::runtime_error(i18n::tr("File path escapes installation directory."));
     return target;
   };
   auto present = [&](const meta::File &f) {
@@ -985,7 +986,7 @@ uint64_t Manager::run_import(Entry &e, meta::Store *store, std::stop_token stop)
   uint64_t total = 0, remaining = 0;
   for (auto &step : imported.steps) {
     if (step.file.size > UINT64_MAX - total)
-      throw std::runtime_error("Invalid import size.");
+      throw std::runtime_error(i18n::tr("Invalid import size."));
     total += step.file.size;
     if (!present(step.file))
       remaining += step.file.size;
@@ -995,8 +996,8 @@ uint64_t Manager::run_import(Entry &e, meta::Store *store, std::stop_token stop)
     remaining += source->save_bytes();
   }
   if (fs::space(dir).available < remaining + 64 * 1024 * 1024)
-    throw std::runtime_error("Not enough free space. Free disk space or "
-                             "choose another games folder in Settings.");
+    throw std::runtime_error(i18n::tr("Not enough free space. Free disk space or "
+                                      "choose another games folder in Settings."));
   paths::atomic_write(dir / "plan.json", plan.json().dump(2));
   {
     std::lock_guard lock(mutex_);
@@ -1008,7 +1009,7 @@ uint64_t Manager::run_import(Entry &e, meta::Store *store, std::stop_token stop)
   uint64_t finished = 0;
   for (auto &step : imported.steps) {
     if (stop.stop_requested())
-      throw std::runtime_error("Transfer paused.");
+      throw std::runtime_error(i18n::tr("Transfer paused."));
     const auto target = target_of(step.file);
     if (present(step.file)) {
       finished += step.file.size;
@@ -1039,9 +1040,9 @@ uint64_t Manager::run_import(Entry &e, meta::Store *store, std::stop_token stop)
       if (const auto whole = unity_bundle_size(part); whole && *whole != step.from->size) {
         std::error_code ec;
         fs::remove(part, ec);
-        throw std::runtime_error(std::format(
-            "{} is damaged in {}: it has {} bytes of {}. Reinstall the game on the headset, or copy the "
-            "file again, then retry.",
+        throw std::runtime_error(i18n::trf(
+            "{0} is damaged in {1}: it has {2} bytes of {3}. Reinstall the game on the headset, or "
+            "copy the file again, then retry.",
             step.file.name, source->describe(), step.from->size, *whole));
       }
       fs::rename(part, target);
@@ -1055,9 +1056,9 @@ uint64_t Manager::run_import(Entry &e, meta::Store *store, std::stop_token stop)
                [&](uint64_t done, uint64_t) { report(done); });
     }
     if (stop.stop_requested())
-      throw std::runtime_error("Transfer paused.");
+      throw std::runtime_error(i18n::tr("Transfer paused."));
     if (!present(step.file))
-      throw std::runtime_error(step.file.name + " did not pass the size check.");
+      throw std::runtime_error(step.file.name + i18n::tr(" did not pass the size check."));
     finished += step.file.size;
   }
   if (!saves.empty()) {
@@ -1069,7 +1070,7 @@ uint64_t Manager::run_import(Entry &e, meta::Store *store, std::stop_token stop)
     for (auto &file : source->saves) {
       const auto target = staging / paths::from_utf8(file.name);
       if (!paths::within(staging, target))
-        throw std::runtime_error("A save's path escapes the game's storage.");
+        throw std::runtime_error(i18n::tr("A save's path escapes the game's storage."));
       fs::create_directories(target.parent_path());
       {
         std::lock_guard lock(mutex_);
@@ -1094,7 +1095,7 @@ uint64_t Manager::run_import(Entry &e, meta::Store *store, std::stop_token stop)
       wake_();
     }
     if (stop.stop_requested())
-      throw std::runtime_error("Transfer paused.");
+      throw std::runtime_error(i18n::tr("Transfer paused."));
     fs::rename(staging, saves);
     log::info("downloads", "Imported {} saves of {}.", source->saves.size() - skipped, package);
   }

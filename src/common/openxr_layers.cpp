@@ -1,6 +1,7 @@
 #include "common/openxr_layers.h"
 #include "common/json.h"
 #include "common/paths.h"
+#include "launcher/i18n/i18n.h"
 #include <array>
 #include <cstdint>
 #include <cstring>
@@ -25,17 +26,16 @@ std::string text_of(const Json &node, const char *key) {
 
 std::string library_problem(const std::filesystem::path &library) {
   std::error_code ec;
-  if (!std::filesystem::exists(library, ec)) return "the library " + paths::utf8(library) + " is missing";
+  if (!std::filesystem::exists(library, ec)) return i18n::trf("the library {0} is missing", paths::utf8(library));
   std::ifstream in(paths::io_path(library), std::ios::binary);
   std::array<unsigned char, 4096> head{};
-  if (!in) return "the library " + paths::utf8(library) + " cannot be read";
+  if (!in) return i18n::trf("the library {0} cannot be read", paths::utf8(library));
   in.read(reinterpret_cast<char *>(head.data()), head.size());
   const auto size = static_cast<std::size_t>(in.gcount());
-  const std::string named = "the library " + paths::utf8(library);
 #ifdef _WIN32
-  if (size < 0x40 || head[0] != 'M' || head[1] != 'Z') return named + " is not a DLL";
+  if (size < 0x40 || head[0] != 'M' || head[1] != 'Z') return i18n::trf("the library {0} is not a DLL", paths::utf8(library));
   const auto pe = le32(&head[0x3C]);
-  if (std::size_t(pe) + 6 > size || std::memcmp(&head[pe], "PE\0\0", 4) != 0) return named + " is not a DLL";
+  if (std::size_t(pe) + 6 > size || std::memcmp(&head[pe], "PE\0\0", 4) != 0) return i18n::trf("the library {0} is not a DLL", paths::utf8(library));
   const auto machine = le16(&head[pe + 4]);
 #if defined(_M_ARM64) || defined(__aarch64__)
   constexpr std::uint16_t wanted = 0xAA64;
@@ -45,10 +45,10 @@ std::string library_problem(const std::filesystem::path &library) {
   constexpr std::uint16_t wanted = 0x14C;
 #endif
   if (machine != wanted)
-    return named + " is a " + machine_name(machine, true) + " DLL, not one for this " + machine_name(wanted, true) +
-           " process";
+    return i18n::trf("the library {0} is a {1} DLL, not one for this {2} process",
+                     paths::utf8(library), machine_name(machine, true), machine_name(wanted, true));
 #else
-  if (size < 20 || std::memcmp(head.data(), "\x7f" "ELF", 4) != 0) return named + " is not a shared library";
+  if (size < 20 || std::memcmp(head.data(), "\x7f" "ELF", 4) != 0) return i18n::trf("the library {0} is not a shared library", paths::utf8(library));
   const auto machine = le16(&head[18]);
 #if defined(__aarch64__)
   constexpr std::uint16_t wanted = 183;
@@ -58,8 +58,8 @@ std::string library_problem(const std::filesystem::path &library) {
   constexpr std::uint16_t wanted = 3;
 #endif
   if (machine != wanted)
-    return named + " is an " + machine_name(machine, false) + " library, not one for this " +
-           machine_name(wanted, false) + " process";
+    return i18n::trf("the library {0} is an {1} library, not one for this {2} process",
+                     paths::utf8(library), machine_name(machine, false), machine_name(wanted, false));
 #endif
   return {};
 }
@@ -70,12 +70,12 @@ Manifest parse(const std::filesystem::path &path, std::string_view text) {
   // jsoncpp, the loader's parser, accepts comments.
   const auto json = Json::parse(text.begin(), text.end(), nullptr, false, true);
   if (json.is_discarded() || !json.is_object()) {
-    out.problem = "the manifest is not valid JSON";
+    out.problem = i18n::tr("the manifest is not valid JSON");
     return out;
   }
   const auto layer = json.find("api_layer");
   if (layer == json.end() || !layer->is_object()) {
-    out.problem = "the manifest has no \"api_layer\"";
+    out.problem = i18n::tr("the manifest has no \"api_layer\"");
     return out;
   }
   out.name = text_of(*layer, "name");
@@ -87,12 +87,12 @@ Manifest parse(const std::filesystem::path &path, std::string_view text) {
       if (to.is_string()) out.functions[from] = to.get<std::string>();
   for (const char *required : {"name", "api_version", "library_path", "implementation_version"})
     if (const auto field = layer->find(required); field == layer->end() || !field->is_string()) {
-      out.problem = std::string("the manifest lacks \"") + required + "\"";
+      out.problem = i18n::trf("the manifest lacks \"{0}\"", required);
       return out;
     }
   if (const auto version = json.find("file_format_version"); version == json.end() || !version->is_string())
-    out.problem = "the manifest lacks \"file_format_version\"";
-  else if (out.disable_environment.empty()) out.problem = "the manifest lacks \"disable_environment\"";
+    out.problem = i18n::tr("the manifest lacks \"file_format_version\"");
+  else if (out.disable_environment.empty()) out.problem = i18n::tr("the manifest lacks \"disable_environment\"");
   // A path with a separator is the file itself (relative to the manifest); a
   // bare name is found through the library search path.
   if (out.library_path.find_first_of("/\\") != std::string::npos) {
@@ -109,7 +109,7 @@ Manifest read(const std::filesystem::path &path) {
   if (!std::filesystem::exists(path, ec)) {
     Manifest out;
     out.manifest = path;
-    out.problem = "the manifest is missing";
+    out.problem = i18n::tr("the manifest is missing");
     return out;
   }
   std::ifstream in(paths::io_path(path), std::ios::binary);
@@ -118,7 +118,7 @@ Manifest read(const std::filesystem::path &path) {
   if (!in) {
     Manifest out;
     out.manifest = path;
-    out.problem = "the manifest cannot be read";
+    out.problem = i18n::tr("the manifest cannot be read");
     return out;
   }
   auto out = parse(path, text.str());

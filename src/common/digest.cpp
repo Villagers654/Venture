@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "common/digest.h"
+#include "launcher/i18n/i18n.h"
 #include <array>
 #include <stdexcept>
 
@@ -14,7 +15,7 @@ std::string sha256(std::istream& input) {
   std::array<std::uint8_t, 65536> bytes;
   while (input.read(reinterpret_cast<char*>(bytes.data()), bytes.size()) || input.gcount())
     hash.update(std::span(bytes).first(static_cast<std::size_t>(input.gcount())));
-  if (!input.eof() || input.bad()) throw std::runtime_error("cannot read SHA-256 input");
+  if (!input.eof() || input.bad()) throw std::runtime_error(i18n::tr("cannot read SHA-256 input"));
   return hash.finish();
 }
 } // namespace venture::digest

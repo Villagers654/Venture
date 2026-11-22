@@ -1,4 +1,5 @@
 #include "common/meta/store.h"
+#include "launcher/i18n/i18n.h"
 #include <algorithm>
 #include <chrono>
 
@@ -27,12 +28,12 @@ uint64_t purchase_time(const Json &value, bool optional = false) {
   auto [end, error] =
       std::from_chars(text.data(), text.data() + text.size(), result);
   if (error != std::errc{} || end != text.data() + text.size())
-    throw std::runtime_error("Meta returned invalid purchase times.");
+    throw std::runtime_error(i18n::tr("Meta returned invalid purchase times."));
   return result;
 }
 }  // namespace
 std::set<std::string> parse_owned_skus(const Json& rows) {
-  if (!rows.is_array()) throw std::runtime_error("Invalid purchase list.");
+  if (!rows.is_array()) throw std::runtime_error(i18n::tr("Invalid purchase list."));
   std::set<std::string> owned;
   auto now =
       std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
@@ -40,7 +41,7 @@ std::set<std::string> parse_owned_skus(const Json& rows) {
     const auto &item = field(row, "item");
     auto sku = str(item, "sku"), type = str(item, "type");
     if (!valid_sku(sku) || type.empty())
-      throw std::runtime_error("Meta returned incomplete add-on ownership.");
+      throw std::runtime_error(i18n::tr("Meta returned incomplete add-on ownership."));
     std::transform(type.begin(), type.end(), type.begin(),
                    [](unsigned char c) { return char(std::tolower(c)); });
     auto expiry = purchase_time(field(row, "expiration_time"), true);
@@ -54,18 +55,18 @@ std::set<std::string> parse_owned_skus(const Json& rows) {
 
 std::string Store::app_token(std::string_view app_id) const {
   if (!digits(app_id, 5) || token_.empty())
-    throw std::runtime_error("Sign in to retrieve add-ons.");
+    throw std::runtime_error(i18n::tr("Sign in to retrieve add-ons."));
   auto j = request("https://graph.oculus.com/authenticate_application",
                    {{"app_id", std::string(app_id)}, {"access_token", token_}});
   auto token = str(j, "access_token");
   if (token.empty() || token.find_first_of("\r\n") != token.npos)
-    throw std::runtime_error("Meta did not return an application token.");
+    throw std::runtime_error(i18n::tr("Meta did not return an application token."));
   return token;
 }
 Json Store::commerce(std::string_view edge, const http::Fields &fields,
                      const std::string &token) const {
   if (edge != "available_purchases" && edge != "viewer_purchases")
-    throw std::runtime_error("Invalid Meta commerce endpoint.");
+    throw std::runtime_error(i18n::tr("Invalid Meta commerce endpoint."));
   auto params = fields;
   params.emplace_back("app_version", "0");
   const auto path = "/v1.20/application/" + std::string(edge);
@@ -79,13 +80,13 @@ Json Store::commerce(std::string_view edge, const http::Fields &fields,
         (!u.port.empty() && u.port != "443") || !u.user.empty() ||
         !u.password.empty() || u.path != path || url.find('#') != url.npos ||
         !seen.insert(url).second)
-      throw std::runtime_error("Meta returned invalid add-on pagination.");
+      throw std::runtime_error(i18n::tr("Meta returned invalid add-on pagination."));
     for (auto &[key, value] : http::query(u.query))
       if (key == "access_token")
         throw std::runtime_error(
-            "Meta returned credential-bearing pagination.");
+            i18n::tr("Meta returned credential-bearing pagination."));
     if (stop_.stop_requested())
-      throw std::runtime_error("Transfer paused.");
+      throw std::runtime_error(i18n::tr("Transfer paused."));
     http::Fields headers{{"Authorization", "Bearer " + token}};
     auto response =
         read_ ? read_(url, headers) : http::get_meta(url, headers, stop_);
@@ -95,25 +96,25 @@ Json Store::commerce(std::string_view edge, const http::Fields &fields,
       // Server text and response bodies may contain account data or tokens.
       auto code = number(field(j, "error"), "code");
       throw std::runtime_error(
-          "Meta add-on read failed (HTTP " + std::to_string(response.status) +
-          ", code " + std::to_string(code) + "). Refresh or sign in again.");
+          i18n::trf("Meta add-on read failed (HTTP {0}, code {1}). Refresh or sign in again.",
+                    response.status, code));
     }
     auto &data = field(j, "data");
     if (!data.is_array())
-      throw std::runtime_error("Meta returned an invalid add-on list.");
+      throw std::runtime_error(i18n::tr("Meta returned an invalid add-on list."));
     for (auto &row : data) {
       if (!row.is_object())
-        throw std::runtime_error("Meta returned an incomplete add-on list.");
+        throw std::runtime_error(i18n::tr("Meta returned an incomplete add-on list."));
       rows.push_back(row);
     }
     auto &next = field(field(j, "paging"), "next");
     if (next.is_null() || next == "")
       return rows;
     if (!next.is_string())
-      throw std::runtime_error("Meta returned invalid add-on pagination.");
+      throw std::runtime_error(i18n::tr("Meta returned invalid add-on pagination."));
     url = next.get<std::string>();
   }
-  throw std::runtime_error("Meta returned too many add-on pages.");
+  throw std::runtime_error(i18n::tr("Meta returned too many add-on pages."));
 }
 std::set<std::string> Store::owned_skus(std::string_view app_id) const {
   return parse_owned_skus(commerce(
@@ -139,7 +140,7 @@ std::vector<Addon> Store::addons(const Plan &plan) const {
     auto sku = str(product, "sku");
     auto found = std::ranges::find(result, sku, &Addon::sku);
     if (!valid_sku(sku) || !seen.insert(sku).second || found == result.end())
-      throw std::runtime_error("Meta returned unexpected add-on products.");
+      throw std::runtime_error(i18n::tr("Meta returned unexpected add-on products."));
     auto &offer = field(product, "current_offer");
     found->name = str(offer, "name");
     found->description = str(offer, "description");
@@ -161,7 +162,7 @@ std::vector<Addon> Store::addons(const Plan &plan) const {
       try {
         auto item = public_item(file->iap_id);
         if (str(item, "display_name").empty())
-          throw std::runtime_error("Public add-on name is unavailable.");
+          throw std::runtime_error(i18n::tr("Public add-on name is unavailable."));
         auto display = card(item);
         addon.name = display.name;
         addon.description = display.description;
@@ -170,13 +171,13 @@ std::vector<Addon> Store::addons(const Plan &plan) const {
             str(field(field(item, "current_offer"), "price"), "formatted");
         if (addon.price_text.empty()) {
           addon.price_text = "Unavailable";
-          addon.error = "Meta has no current offer for this add-on.";
+          addon.error = i18n::tr("Meta has no current offer for this add-on.");
         }
       } catch (...) {
         if (stop_.stop_requested())
-          throw std::runtime_error("Transfer paused.");
+          throw std::runtime_error(i18n::tr("Transfer paused."));
         addon.error =
-            "Public Meta add-on details are unavailable. Refresh to retry.";
+            i18n::tr("Public Meta add-on details are unavailable. Refresh to retry.");
       }
     }
     if (addon.name.empty())
@@ -187,9 +188,9 @@ std::vector<Addon> Store::addons(const Plan &plan) const {
 
 Plan Store::owned_plan(std::string_view id, std::string_view binary_id) const {
   if (!digits(id, 5) || !digits(binary_id))
-    throw std::runtime_error("Invalid application build.");
+    throw std::runtime_error(i18n::tr("Invalid application build."));
   if (!owns(id))
-    throw std::runtime_error("Meta did not confirm ownership of this game.");
+    throw std::runtime_error(i18n::tr("Meta did not confirm ownership of this game."));
   auto binary = binary_details(binary_id);
   auto parent = str(field(binary, "binary_application"), "id");
   if (parent.empty()) {
@@ -197,9 +198,9 @@ Plan Store::owned_plan(std::string_view id, std::string_view binary_id) const {
     if (std::ranges::none_of(
             list, [&](auto &b) { return str(b, "id") == binary_id; }))
       throw std::runtime_error(
-          "Meta could not verify this build belongs to the game.");
+          i18n::tr("Meta could not verify this build belongs to the game."));
   } else if (parent != id)
-    throw std::runtime_error("Meta returned a different game's build.");
+    throw std::runtime_error(i18n::tr("Meta returned a different game's build."));
   return build_plan(id, binary);
 }
 } // namespace venture::meta

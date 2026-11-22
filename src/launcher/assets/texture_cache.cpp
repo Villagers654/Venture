@@ -1,5 +1,6 @@
 #include "launcher/assets/texture_cache.h"
 #include "common/log.h"
+#include "launcher/i18n/i18n.h"
 #define STB_IMAGE_IMPLEMENTATION
 #define STBI_ONLY_JPEG
 #define STBI_ONLY_PNG
@@ -42,13 +43,13 @@ bool info(const std::string &bytes, int &w, int &h) {
 Image decode(const std::string &bytes) {
   int w = 0, h = 0, c = 0;
   if (!info(bytes, w, h))
-    throw std::runtime_error("Artwork has an unsupported format or dimensions.");
+    throw std::runtime_error(i18n::tr("Artwork has an unsupported format or dimensions."));
   const auto *encoded = reinterpret_cast<const uint8_t *>(bytes.data());
   bool webp = is_webp(bytes);
   uint8_t *pixels = webp ? WebPDecodeRGBA(encoded, bytes.size(), &w, &h)
                          : stbi_load_from_memory(encoded, int(bytes.size()), &w, &h, &c, 4);
   if (!pixels)
-    throw std::runtime_error("Could not decode the cover image.");
+    throw std::runtime_error(i18n::tr("Could not decode the cover image."));
   Image out{std::make_shared<std::vector<uint8_t>>(pixels, pixels + size_t(w) * h * 4), w, h};
   if (webp)
     WebPFree(pixels);

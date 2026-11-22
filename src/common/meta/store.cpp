@@ -1,4 +1,5 @@
 #include "common/meta/store.h"
+#include "launcher/i18n/i18n.h"
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -23,7 +24,7 @@ bool pause_for(std::stop_token stop, std::chrono::milliseconds delay) {
 }
 void require_id(std::string_view id) {
   if (!digits(id, 5))
-    throw std::runtime_error("Invalid Quest application ID.");
+    throw std::runtime_error(i18n::tr("Invalid Quest application ID."));
 }
 std::string upper_ascii(std::string text) {
   for (char &letter : text)
@@ -100,12 +101,12 @@ Json nodes(const Json &j) {
     for (auto &edge : edges) {
       if (!field(edge, "node").is_object())
         throw std::runtime_error(
-            "Meta returned an incomplete list. Previous data was kept.");
+            i18n::tr("Meta returned an incomplete list. Previous data was kept."));
       result.push_back(edge["node"]);
     }
   else
     throw std::runtime_error(
-        "Meta returned an invalid list. Previous data was kept.");
+        i18n::tr("Meta returned an invalid list. Previous data was kept."));
   return result;
 }
 bool quest_app(const Json &record) {
@@ -191,7 +192,7 @@ Snapshot parse_library(const Json &response) {
     auto id = str(item, "id");
     if (!item.is_object() || !digits(id, 5))
       throw std::runtime_error(
-          "Meta returned incomplete entitlements. Previous library was kept.");
+          i18n::tr("Meta returned incomplete entitlements. Previous library was kept."));
     if (quest_app(item)) {
       if (seen.insert(id).second) {
         auto g = card(item);
@@ -207,15 +208,14 @@ Snapshot parse_library(const Json &response) {
   if (c.is_object() && c.contains("page_info") &&
       !field(page, "has_next_page").is_boolean())
     throw std::runtime_error(
-        "Meta returned invalid pagination. Previous library was kept.");
+        i18n::tr("Meta returned invalid pagination. Previous library was kept."));
   s.complete = field(page, "has_next_page") == false && classified;
   if (!s.complete)
-    s.warning = "Meta returned a partial or unconfirmed library. Previously "
-                "confirmed titles were kept.";
+    s.warning = i18n::tr("Meta returned a partial or unconfirmed library. Previously confirmed titles were kept.");
   auto &user = field(field(field(response, "data"), "viewer"), "user");
   s.account_id = str(user, "id");
   if (!s.account_id.empty() && !digits(s.account_id))
-    throw std::runtime_error("Meta returned an invalid account identity.");
+    throw std::runtime_error(i18n::tr("Meta returned an invalid account identity."));
   s.alias = str(user, "alias");
   s.display_name = str(user, "display_name");
   if (s.alias.empty())
@@ -227,7 +227,7 @@ uint64_t Plan::size() const {
   for (auto &f : files)
     if (f.base()) {
       if (f.size > UINT64_MAX - s)
-        throw std::runtime_error("Invalid base content size.");
+        throw std::runtime_error(i18n::tr("Invalid base content size."));
       s += f.size;
     }
   return s;
@@ -295,7 +295,7 @@ std::string Build::label() const {
 std::vector<Build> release_builds(const Json &history, const Json &live) {
   const auto &application = field(field(history, "data"), "node");
   if (!application.is_object())
-    throw std::runtime_error("Meta returned no version history for that game.");
+    throw std::runtime_error(i18n::tr("Meta returned no version history for that game."));
   Json candidates = Json::array();
   for (auto key : {"primary_binaries", "binaries"}) {
     if (field(application, key).is_null())
@@ -359,7 +359,7 @@ std::vector<Addon> group_addons(const Plan &plan) {
     if (f.sku.empty())
       continue;
     if (!valid_sku(f.sku))
-      throw std::runtime_error("Invalid add-on SKU.");
+      throw std::runtime_error(i18n::tr("Invalid add-on SKU."));
     auto found = std::ranges::find(result, f.sku, &Addon::sku);
     if (found == result.end()) {
       Addon addon;
@@ -368,7 +368,7 @@ std::vector<Addon> group_addons(const Plan &plan) {
       found = result.end() - 1;
     }
     if (f.size > UINT64_MAX - found->size)
-      throw std::runtime_error("Invalid add-on content size.");
+      throw std::runtime_error(i18n::tr("Invalid add-on content size."));
     found->size += f.size;
   }
   return result;
@@ -416,17 +416,17 @@ Plan build_plan(std::string_view app_id, const Json &b) {
       str(b, "__typename") == "RiftBinary" ||
       (!parent.empty() && parent != app_id))
     throw std::runtime_error(
-        "Meta did not return an Android build for this game.");
+        i18n::tr("Meta did not return an Android build for this game."));
   std::set<std::string> names;
   auto add = [&](const Json &file, std::string name, std::string kind) {
     if (!paths::safe_name(name))
-      throw std::runtime_error("Meta returned an unsafe content filename.");
+      throw std::runtime_error(i18n::tr("Meta returned an unsafe content filename."));
     std::string key = name;
     std::transform(key.begin(), key.end(), key.begin(),
                    [](unsigned char c) { return char(std::tolower(c)); });
     if (key == "plan.json" || key == "plan.json.tmp" || key.ends_with(".part"))
       throw std::runtime_error(
-          "Meta returned a filename reserved for installation state.");
+          i18n::tr("Meta returned a filename reserved for installation state."));
     File f{str(file, "id"), name, str(file, "uri"), kind, number(file, "size")};
     if (kind == "asset") {
       f.asset_type = asset_type(file);
@@ -444,13 +444,13 @@ Plan build_plan(std::string_view app_id, const Json &b) {
         f.offer_id = str(field(iap, "public_offer"), "id");
         if (!digits(f.iap_id) || (!f.sku.empty() && !valid_sku(f.sku)) ||
             (!f.offer_id.empty() && !digits(f.offer_id)))
-          throw std::runtime_error("Meta returned invalid add-on metadata.");
+          throw std::runtime_error(i18n::tr("Meta returned invalid add-on metadata."));
       }
     }
     if ((!digits(f.id) && f.uri.empty()) ||
         (!f.uri.empty() && !http::allowed_delivery(f.uri)) || !f.size)
       throw std::runtime_error(
-          "Meta omitted valid file details or size. Download was not started.");
+          i18n::tr("Meta omitted valid file details or size. Download was not started."));
     if (!names.insert(key).second) {
       for (auto &existing : p.files)
         if (existing.name == f.name && existing.id == f.id &&
@@ -459,7 +459,7 @@ Plan build_plan(std::string_view app_id, const Json &b) {
             existing.iap_id == f.iap_id && existing.offer_id == f.offer_id)
           return;
       throw std::runtime_error(
-          "Meta returned conflicting file names. Download was not started.");
+          i18n::tr("Meta returned conflicting file names. Download was not started."));
     }
     p.files.push_back(std::move(f));
   };
@@ -474,7 +474,7 @@ Plan build_plan(std::string_view app_id, const Json &b) {
     if (number(assets, "count") > list.size() ||
         field(field(assets, "page_info"), "has_next_page") == true)
       throw std::runtime_error(
-          "Meta's asset list was incomplete, so the download did not start.");
+          i18n::tr("Meta's asset list was incomplete, so the download did not start."));
     for (auto &a : list) {
       auto name = str(a, "file_name");
       add(a, name, "asset");
@@ -495,7 +495,7 @@ Plan parse_plan(const Json &j) {
       !paths::safe_package(p.package) || !digits(p.version_code) ||
       !field(j, "files").is_array() ||
       (j.contains("assetCatalog") && j["assetCatalog"] != "unavailable"))
-    throw std::runtime_error("Invalid installation plan.");
+    throw std::runtime_error(i18n::tr("Invalid installation plan."));
   p.assets_complete = !j.contains("assetCatalog");
   p.launcher_format = j.contains("installedAddons");
   p.pinned = !p.local && field(j, "pinned") == true;
@@ -526,7 +526,7 @@ Plan parse_plan(const Json &j) {
                    [](unsigned char c) { return char(std::tolower(c)); });
     if (!paths::safe_name(name) || !names.insert(key).second ||
         key == "plan.json" || key == "plan.json.tmp" || key.ends_with(".part"))
-      throw std::runtime_error("Invalid installation filename.");
+      throw std::runtime_error(i18n::tr("Invalid installation filename."));
     File file{str(f, "id"), name, {}, str(f, "kind"), number(f, "size")};
     if (legacy_cli && file.kind == "obb" && name.ends_with(".obb") &&
         !expansion_name(name, p.package))
@@ -537,13 +537,13 @@ Plan parse_plan(const Json &j) {
     file.language_english_name = str(field(f, "language"), "english_name");
     file.language_native_name = str(field(f, "language"), "native_name");
     if (f.contains("required") && !f["required"].is_boolean())
-      throw std::runtime_error("Invalid installation asset metadata.");
+      throw std::runtime_error(i18n::tr("Invalid installation asset metadata."));
     file.required = field(f, "required") != false;
     file.sha256 = str(f, "sha256");
     if (!file.sha256.empty() &&
         (file.sha256.size() != 64 ||
          file.sha256.find_first_not_of("0123456789abcdef") != std::string::npos))
-      throw std::runtime_error("Invalid installation file hash.");
+      throw std::runtime_error(i18n::tr("Invalid installation file hash."));
     auto &iap = field(f, "iap_item");
     file.sku = str(iap, "sku");
     file.iap_id = str(iap, "id");
@@ -554,22 +554,22 @@ Plan parse_plan(const Json &j) {
         (!file.offer_id.empty() && !digits(file.offer_id)) ||
         (file.kind != "asset" &&
          (!file.sku.empty() || !file.iap_id.empty() || !file.required)))
-      throw std::runtime_error("Invalid installation asset metadata.");
+      throw std::runtime_error(i18n::tr("Invalid installation asset metadata."));
     p.files.push_back(std::move(file));
     apk |= str(f, "kind") == "apk" && name.ends_with(".apk");
   }
   if (!apk)
-    throw std::runtime_error("Installation has no APK.");
+    throw std::runtime_error(i18n::tr("Installation has no APK."));
   if (j.contains("installedAddons")) {
     if (!j["installedAddons"].is_array())
-      throw std::runtime_error("Invalid installed add-ons.");
+      throw std::runtime_error(i18n::tr("Invalid installed add-ons."));
     auto catalog = group_addons(p);
     std::set<std::string> seen;
     for (auto &entry : j["installedAddons"]) {
       auto sku = str(entry);
       if (!valid_sku(sku) || !seen.insert(sku).second ||
           std::ranges::find(catalog, sku, &Addon::sku) == catalog.end())
-        throw std::runtime_error("Invalid installed add-ons.");
+        throw std::runtime_error(i18n::tr("Invalid installed add-ons."));
       p.installed_addons.push_back(std::move(sku));
     }
   }
@@ -577,7 +577,7 @@ Plan parse_plan(const Json &j) {
 }
 Json Store::query(std::string_view doc, const Json &vars) const {
   if (token_.empty())
-    throw std::runtime_error("Not signed in to Meta.");
+    throw std::runtime_error(i18n::tr("Not signed in to Meta."));
   return request("https://graph.oculus.com/graphql",
                  {{"access_token", token_},
                   {"doc_id", std::string(doc)},
@@ -588,14 +588,14 @@ Json Store::request(std::string_view url, const http::Fields &fields) const {
 }
 Snapshot Store::identity() const {
   if (token_.empty())
-    throw std::runtime_error("Not signed in to Meta.");
+    throw std::runtime_error(i18n::tr("Not signed in to Meta."));
   auto j = request("https://graph.oculus.com/me", {{"access_token", token_},
                                                    {"fields", "id,alias,display_name"},
                                                    {"method", "GET"}});
   Snapshot s;
   s.account_id = str(j, "id");
   if (!digits(s.account_id))
-    throw std::runtime_error("Meta returned an invalid account identity.");
+    throw std::runtime_error(i18n::tr("Meta returned an invalid account identity."));
   s.alias = str(j, "alias");
   s.display_name = str(j, "display_name");
   if (s.alias.empty())
@@ -621,10 +621,10 @@ Snapshot Store::library() const {
           }
         }
         std::string reason = error.what();
-        if (auto end = reason.find(". Try signing in again."); end != reason.npos)
+        if (auto end = reason.find(i18n::tr(". Try signing in again.")); end != reason.npos)
           reason.resize(end);
-        throw RequestError(error.status, "Meta could not list your games right now (" + reason +
-                                             "). Use Refresh in the library to try again.");
+        throw RequestError(error.status,
+                           i18n::trf("Meta could not list your games right now ({0}). Use Refresh in the library to try again.", reason));
       }
     }
   }
@@ -659,12 +659,12 @@ Snapshot Store::headset_library() const {
                              {"variables", vars.dump()}});
     auto &c = field(field(field(response, "data"), "entitlements"), "active_android_entitlements");
     if (!field(c, "edges").is_array())
-      throw std::runtime_error("Meta returned an invalid list. Previous library was kept.");
+      throw std::runtime_error(i18n::tr("Meta returned an invalid list. Previous library was kept."));
     for (auto &e : nodes(c)) {
       auto &item = field(e, "item");
       auto id = str(item, "id");
       if (!item.is_object() || !digits(id, 5))
-        throw std::runtime_error("Meta returned incomplete entitlements. Previous library was kept.");
+        throw std::runtime_error(i18n::tr("Meta returned incomplete entitlements. Previous library was kept."));
       if (quest_app(item) && seen.insert(id).second) {
         auto g = card(item);
         g.owned = true;
@@ -682,8 +682,7 @@ Snapshot Store::headset_library() const {
     vars["cursorID"] = cursor;
   }
   if (!s.complete)
-    s.warning = "Meta returned a partial or unconfirmed library. Previously "
-                "confirmed titles were kept.";
+    s.warning = i18n::tr("Meta returned a partial or unconfirmed library. Previously confirmed titles were kept.");
   log::info("meta", "Listed {} Quest titles from the headset library query; complete={}", s.games.size(), s.complete);
   return s;
 }
@@ -696,7 +695,7 @@ Json Store::binary_details(std::string_view id) const {
       auto response = query("4734929166632773", {{"binaryID", id}});
       auto binary = field(field(response, "data"), "node");
       if (!binary.is_object() || str(binary, "id") != id)
-        throw std::runtime_error("Meta did not return the requested build.");
+        throw std::runtime_error(i18n::tr("Meta did not return the requested build."));
       return binary;
     } catch (const RequestError& error) {
       if (error.status < 500 || error.status >= 600 || stop_.stop_requested()) throw;
@@ -714,7 +713,7 @@ Json Store::binary_details(std::string_view id) const {
     auto response = query("9973165429396704", {{"binary_id", binary_id}});
     auto value = field(field(response, "data"), "metadata");
     if (!value.is_object() || str(value, "id") != binary_id || str(value, "__typename") != type)
-      throw std::runtime_error("Meta did not return the requested binary metadata.");
+      throw std::runtime_error(i18n::tr("Meta did not return the requested binary metadata."));
     return value;
   };
   auto binary = metadata(id, "AndroidBinary");
@@ -742,12 +741,12 @@ Json Store::fallback_assets(std::string_view id) const {
   auto response = query("24072064135771905", {{"binaryID", id}});
   auto &binary = field(field(response, "data"), "node");
   if (str(binary, "id") != id)
-    throw std::runtime_error("Meta did not return the requested build.");
+    throw std::runtime_error(i18n::tr("Meta did not return the requested build."));
   auto &assets = field(binary, "asset_files");
   auto list = nodes(assets);
   if (number(assets, "count") > list.size() ||
       field(field(assets, "page_info"), "has_next_page") == true)
-    throw std::runtime_error("Meta's asset list was incomplete.");
+    throw std::runtime_error(i18n::tr("Meta's asset list was incomplete."));
   struct Entry {
     std::string id, name;
     uint64_t size;
@@ -756,7 +755,7 @@ Json Store::fallback_assets(std::string_view id) const {
   for (auto &a : list) {
     Entry e{str(a, "id"), str(a, "file_name"), number(a, "size")};
     if (!digits(e.id) || !e.size)
-      throw std::runtime_error("Meta returned invalid asset details.");
+      throw std::runtime_error(i18n::tr("Meta returned invalid asset details."));
     std::lock_guard lock(cache_mutex);
     if (auto i = cache.find(e.id); i != cache.end())
       e.name = i->second;
@@ -811,7 +810,7 @@ Details Store::details(std::string_view id) const {
   auto j = query("6549406941839522", {{"itemId", id}, {"hmdType", "EUREKA"}});
   auto &item = field(field(j, "data"), "item");
   if (str(item, "id") != id || !quest_app(item))
-    throw std::runtime_error("Meta did not return a live Quest listing.");
+    throw std::runtime_error(i18n::tr("Meta did not return a live Quest listing."));
   auto &b = field(item, "latest_supported_binary");
   Details result{card(item), str(b, "id"), str(b, "version"),
                  str(b, "version_code"), number(b, "size")};
@@ -840,7 +839,7 @@ Json Store::public_item(std::string_view id) const {
           R"venture(\["LSD",\[\],\{"token":"([A-Za-z0-9_-]{1,200})")venture");
       if (!std::regex_search(html, match, pattern))
         throw std::runtime_error(
-            "Public Meta artwork is unavailable. Refresh to retry.");
+            i18n::tr("Public Meta artwork is unavailable. Refresh to retry."));
       verifier = match[1].str();
     }
     try {
@@ -859,7 +858,7 @@ Json Store::public_item(std::string_view id) const {
   }
   auto &item = field(field(j, "data"), "item");
   if (str(item, "id") != id)
-    throw std::runtime_error("Artwork listing is unavailable.");
+    throw std::runtime_error(i18n::tr("Artwork listing is unavailable."));
   return item;
 }
 Game Store::artwork(std::string_view id) const { return card(public_item(id)); }
@@ -929,7 +928,7 @@ std::vector<Build> Store::all_builds(std::string_view id) const {
   const auto release = query("6549406941839522", {{"hmdType", "EUREKA"}, {"itemId", id}});
   const auto &item = field(field(release, "data"), "item");
   if (str(item, "id") != id || !quest_app(item))
-    throw std::runtime_error("Meta has no Quest game with that id.");
+    throw std::runtime_error(i18n::tr("Meta has no Quest game with that id."));
   const auto &live = field(item, "latest_supported_binary");
   return release_builds(query("2885322071572384", {{"applicationID", id}}),
                         android_build(live) ? live : Json{});
@@ -940,12 +939,12 @@ Snapshot Store::owned_listing(std::string_view id) const {
   const auto &data = field(response, "data");
   const auto &item = field(data, "item");
   if (str(item, "id") != id || !quest_app(item))
-    throw std::runtime_error("Meta has no Quest game at that link.");
+    throw std::runtime_error(i18n::tr("Meta has no Quest game at that link."));
   const auto &entitled = field(item, "is_viewer_entitled");
   Snapshot s;
   s.account_id = str(field(field(data, "viewer"), "user"), "id");
   if (!entitled.is_boolean() || !digits(s.account_id))
-    throw std::runtime_error("Meta did not say whether this account owns the game. Try again later.");
+    throw std::runtime_error(i18n::tr("Meta did not say whether this account owns the game. Try again later."));
   if (entitled.get<bool>()) {
     auto g = card(item);
     g.owned = true;
@@ -967,21 +966,21 @@ Plan Store::owned_plan(std::string_view id) const {
   const auto release = query("6549406941839522", {{"hmdType", "EUREKA"}, {"itemId", id}});
   const auto &application = field(field(release, "data"), "item");
   if (str(application, "id") != id || !quest_app(application))
-    throw std::runtime_error("The live release response did not identify this Quest application.");
+    throw std::runtime_error(i18n::tr("The live release response did not identify this Quest application."));
   // The listing says whether this account owns the app; the whole library is
   // asked only when it does not (Meta fails that query for some accounts).
   if (const auto &entitled = field(application, "is_viewer_entitled"); entitled.is_boolean()) {
     if (!entitled.get<bool>())
-      throw std::runtime_error("Meta says this account does not own this game.");
+      throw std::runtime_error(i18n::tr("Meta says this account does not own this game."));
   } else {
     const auto entitlement = library();
     if (std::ranges::find(entitlement.games, id, &Game::id) == entitlement.games.end())
-      throw std::runtime_error("Refresh your library: ownership could not be verified for this download.");
+      throw std::runtime_error(i18n::tr("Refresh your library: ownership could not be verified for this download."));
   }
   auto selected = field(application, "latest_supported_binary");
   const auto selected_id = str(selected, "id");
   if (!digits(selected_id) || !android_build(selected))
-    throw std::runtime_error("No downloadable live Quest release was returned.");
+    throw std::runtime_error(i18n::tr("No downloadable live Quest release was returned."));
   const auto details = binary_details(selected_id);
   selected.update(details);
   return build_plan(id, selected);
@@ -991,11 +990,11 @@ std::string Store::download_url(const File &f) const {
     if (!f.uri.empty())
       return f.uri;
     if (!digits(f.id))
-      throw std::runtime_error("Download content must have a numeric identifier.");
+      throw std::runtime_error(i18n::tr("Download content must have a numeric identifier."));
     return "https://securecdn.oculus.com/binaries/download/?" + http::form({{"id", f.id}});
   }();
   if (!http::allowed_delivery(address))
-    throw std::runtime_error("Download destination is not an approved Meta host.");
+    throw std::runtime_error(i18n::tr("Download destination is not an approved Meta host."));
   const auto destination = http::parse_url(address);
   if (token_endpoint(destination)) {
     if (delivery_.empty()) {
@@ -1004,7 +1003,7 @@ std::string Store::download_url(const File &f) const {
           "https://graph.oculus.com/authenticate_application?" + http::form(scope), {});
       const auto credential = str(authorization, "access_token");
       if (credential.empty())
-        throw std::runtime_error("Meta supplied no authorization for Quest file delivery.");
+        throw std::runtime_error(i18n::tr("Meta supplied no authorization for Quest file delivery."));
       delivery_ = credential;
     }
     http::Fields parameters;

@@ -40,6 +40,10 @@ file(READ "${venture_eye_scale_db}" VENTURE_EYE_SCALE_TITLES)
 configure_file(library/eye_scale_titles.h.in "${CMAKE_CURRENT_BINARY_DIR}/generated/eye_scale_titles.h" @ONLY)
 target_include_directories(venture_common PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
 target_link_libraries(venture_common PUBLIC nlohmann_json::nlohmann_json CURL::libcurl PRIVATE miniz)
+# The i18n markers (tr/trf/...) in common's sources resolve into venture_i18n
+# (defined in src/launcher); every target that links venture_common needs the
+# catalog. $<TARGET_EXISTS:> keeps this valid when the launcher is not built.
+target_link_libraries(venture_common PRIVATE $<$<TARGET_EXISTS:venture_i18n>:venture_i18n>)
 if(VENTURE_BUILD_LAUNCHER)
   target_compile_definitions(venture_common PRIVATE VENTURE_STEAM_ART)
   target_include_directories(venture_common SYSTEM PRIVATE ${stb_SOURCE_DIR} ${webp_SOURCE_DIR}/src)

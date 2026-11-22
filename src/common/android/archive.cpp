@@ -1,4 +1,5 @@
 #include "common/android/archive.h"
+#include "launcher/i18n/i18n.h"
 
 #include <miniz.h>
 
@@ -26,16 +27,16 @@ Archive::Archive(const fs::path &file) : state_(std::make_unique<State>()) {
   state_->file.open(file, std::ios::binary);
   std::error_code ec;
   state_->size = fs::file_size(file, ec);
-  if (!state_->file || ec) throw std::runtime_error("Could not open " + paths::utf8(file.filename()) + ".");
+  if (!state_->file || ec) throw std::runtime_error(i18n::trf("Could not open {0}.", paths::utf8(file.filename())));
   state_->zip.m_pRead = read_at;
   state_->zip.m_pIO_opaque = state_.get();
   if (!mz_zip_reader_init(&state_->zip, state_->size, 0))
-    throw std::runtime_error(paths::utf8(file.filename()) + " is not a readable ZIP archive.");
+    throw std::runtime_error(i18n::trf("{0} is not a readable ZIP archive.", paths::utf8(file.filename())));
   const auto count = mz_zip_reader_get_num_files(&state_->zip);
   for (mz_uint i = 0; i < count; ++i) {
     mz_zip_archive_file_stat stat{};
     if (!mz_zip_reader_file_stat(&state_->zip, i, &stat))
-      throw std::runtime_error(paths::utf8(file.filename()) + " has an unreadable entry.");
+      throw std::runtime_error(i18n::trf("{0} has an unreadable entry.", paths::utf8(file.filename())));
     if (stat.m_is_directory) continue;
     entries_.push_back({stat.m_filename, stat.m_uncomp_size, i});
   }
@@ -47,22 +48,22 @@ const Archive::Entry *Archive::find(std::string_view name) const {
   return nullptr;
 }
 std::vector<std::uint8_t> Archive::read(const Entry &entry, std::uint64_t limit) const {
-  if (entry.size > limit) throw std::runtime_error("Archive member " + entry.name + " is too large.");
+  if (entry.size > limit) throw std::runtime_error(i18n::trf("Archive member {0} is too large.", entry.name));
   std::vector<std::uint8_t> data(entry.size);
   std::lock_guard lock(state_->mutex);
   if (!mz_zip_reader_extract_to_mem(&state_->zip, entry.index, data.data(), data.size(), 0))
-    throw std::runtime_error("Could not read " + entry.name + " from the archive.");
+    throw std::runtime_error(i18n::trf("Could not read {0} from the archive.", entry.name));
   return data;
 }
 void Archive::extract(const Entry &entry, const std::function<void(std::span<const std::uint8_t>)> &sink,
                       std::stop_token stop) const {
   std::lock_guard lock(state_->mutex);
   auto *it = mz_zip_reader_extract_iter_new(&state_->zip, entry.index, 0);
-  if (!it) throw std::runtime_error("Could not read " + entry.name + " from the archive.");
+  if (!it) throw std::runtime_error(i18n::trf("Could not read {0} from the archive.", entry.name));
   std::vector<std::uint8_t> buffer(1 << 20);
   try {
     for (;;) {
-      if (stop.stop_requested()) throw std::runtime_error("Transfer paused.");
+      if (stop.stop_requested()) throw std::runtime_error(i18n::tr("Transfer paused."));
       const auto n = mz_zip_reader_extract_iter_read(it, buffer.data(), buffer.size());
       if (!n) break;
       sink({buffer.data(), n});
@@ -73,7 +74,7 @@ void Archive::extract(const Entry &entry, const std::function<void(std::span<con
   }
   // Frees the iterator and reports a CRC or size mismatch.
   if (!mz_zip_reader_extract_iter_free(it))
-    throw std::runtime_error(entry.name + " in the archive is damaged.");
+    throw std::runtime_error(i18n::trf("{0} in the archive is damaged.", entry.name));
 }
 bool is_archive(const fs::path &file) {
   std::ifstream in(file, std::ios::binary);

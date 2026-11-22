@@ -1,6 +1,7 @@
 #include "common/secret_store.h"
 #include "common/meta/accounts.h"
 #include "common/file_ops.h"
+#include "launcher/i18n/i18n.h"
 #include <windows.h>
 
 #include <wincrypt.h>
@@ -27,8 +28,7 @@ std::string crypt(std::string_view bytes, bool protect, std::string_view key) {
           : CryptUnprotectData(&input, nullptr, &extra, nullptr, nullptr,
                                CRYPTPROTECT_UI_FORBIDDEN, &output);
   if (!ok)
-    throw std::runtime_error(
-        "Windows could not unlock the Meta session. Sign in again.");
+    throw std::runtime_error(i18n::tr("Windows could not unlock the Meta session. Sign in again."));
   std::string result(reinterpret_cast<char *>(output.pbData), output.cbData);
   SecureZeroMemory(output.pbData, output.cbData);
   LocalFree(output.pbData);
@@ -38,11 +38,11 @@ std::string crypt(std::string_view bytes, bool protect, std::string_view key) {
 SecretStore::SecretStore(fs::path directory, std::string key)
     : key_(std::move(key)) {
   if (!meta::valid_account_key(key_))
-    throw std::runtime_error("Invalid account key.");
+    throw std::runtime_error(i18n::tr("Invalid account key."));
   file_ = std::move(directory) / "accounts" / key_ / "session.dpapi";
   if (is_link(file_.parent_path()) ||
       is_link(file_.parent_path().parent_path()) || is_link(file_))
-    throw std::runtime_error("Account credential path is linked.");
+    throw std::runtime_error(i18n::tr("Account credential path is linked."));
 }
 std::optional<Session> SecretStore::load() const {
   if (!fs::exists(file_))
@@ -56,7 +56,7 @@ std::optional<Session> SecretStore::load() const {
   SecureZeroMemory(plain.data(), plain.size());
   if (number(j, "version") != (key_.empty() ? 1 : 2) ||
       str(j, "accessToken").empty() || (!key_.empty() && str(j, "key") != key_))
-    throw std::runtime_error("Invalid Meta session. Sign in again.");
+    throw std::runtime_error(i18n::tr("Invalid Meta session. Sign in again."));
   return Session{str(j, "accessToken"), str(j, "accountId"),
                  str(j, "alias"),       str(j, "savedAt"),
                  str(j, "source"),      str(j, "profileId"),
@@ -84,6 +84,6 @@ void SecretStore::save(const Session &s) const {
 }
 void SecretStore::clear() const { fs::remove(file_); }
 const char *SecretStore::protection() {
-  return "encrypted for your Windows account";
+  return i18n::tr("encrypted for your Windows account");
 }
 } // namespace venture

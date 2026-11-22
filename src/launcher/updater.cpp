@@ -4,6 +4,7 @@
 #include "common/environment.h"
 #include "common/paths.h"
 #include "common/process.h"
+#include "launcher/i18n/i18n.h"
 
 #include <algorithm>
 #include <cctype>
@@ -75,7 +76,7 @@ std::string expected_sum(std::string_view text, std::string_view name) {
 fs::path fetch(const Asset &file, const Asset &sums, const fs::path &folder, std::stop_token stop,
                const http::Progress &progress) {
   const auto expected = expected_sum(http::get_release_text(sums.url, stop), file.name);
-  if (expected.empty()) throw std::runtime_error("The release does not list a checksum for " + file.name + ".");
+  if (expected.empty()) throw std::runtime_error(i18n::trf("The release does not list a checksum for {0}.", file.name));
   fs::create_directories(folder);
   const auto path = folder / paths::from_utf8(file.name);
   http::download_release(file.url, path, file.size, stop, progress);
@@ -84,7 +85,7 @@ fs::path fetch(const Asset &file, const Asset &sums, const fs::path &folder, std
     in.close();
     std::error_code ec;
     fs::remove(path, ec);
-    throw std::runtime_error("The downloaded update did not match its checksum. Try again.");
+    throw std::runtime_error(i18n::tr("The downloaded update did not match its checksum. Try again."));
   }
   return path;
 }
@@ -94,9 +95,9 @@ void apply(Method method, const fs::path &file) {
     start_detached(file, {});
     return;
   }
-  if (method != Method::appimage) throw std::runtime_error("This copy of Venture updates from the release page.");
+  if (method != Method::appimage) throw std::runtime_error(i18n::tr("This copy of Venture updates from the release page."));
   const auto *image = environment::getenv("APPIMAGE");
-  if (!image || !*image) throw std::runtime_error("Could not find this AppImage.");
+  if (!image || !*image) throw std::runtime_error(i18n::tr("Could not find this AppImage."));
   const fs::path target = paths::from_utf8(image);
   // Same folder, then one rename: the running image stays mounted from the old file.
   auto staged = target.parent_path() / ("." + paths::utf8(target.filename()) + ".update");

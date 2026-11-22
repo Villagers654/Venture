@@ -1,5 +1,6 @@
 #include "common/paths.h"
 #include "common/platform/win32/native_path.h"
+#include "launcher/i18n/i18n.h"
 #include <windows.h>
 
 #include <algorithm>
@@ -26,11 +27,11 @@ std::string read(const fs::path &file, size_t limit) {
                          FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                          nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr)};
   if (input.handle == INVALID_HANDLE_VALUE)
-    throw std::runtime_error("Could not read local file.");
+    throw std::runtime_error(i18n::tr("Could not read local file."));
   LARGE_INTEGER size{};
   if (!GetFileSizeEx(input.handle, &size) || size.QuadPart < 0 ||
       std::uint64_t(size.QuadPart) > limit)
-    throw std::runtime_error("Local file is too large.");
+    throw std::runtime_error(i18n::tr("Local file is too large."));
   std::string text(static_cast<size_t>(size.QuadPart), '\0');
   for (size_t offset = 0; offset < text.size();) {
     DWORD count = 0;
@@ -38,7 +39,7 @@ std::string read(const fs::path &file, size_t limit) {
         std::min<size_t>(text.size() - offset, MAXDWORD));
     if (!ReadFile(input.handle, text.data() + offset, chunk, &count, nullptr) ||
         !count)
-      throw std::runtime_error("Could not read local file.");
+      throw std::runtime_error(i18n::tr("Could not read local file."));
     offset += count;
   }
   return text;
@@ -53,7 +54,7 @@ fs::path data_dir() {
   static const fs::path directory = [] {
     PWSTR folder = nullptr;
     if (FAILED(SHGetKnownFolderPath(FOLDERID_LocalAppData, 0, nullptr, &folder)))
-      throw std::runtime_error("Windows could not locate Local AppData.");
+      throw std::runtime_error(i18n::tr("Windows could not locate Local AppData."));
     fs::path base(folder);
     CoTaskMemFree(folder);
     constexpr auto legacy_name = L"QuestPort"; // rebrand: legacy default directory
@@ -65,7 +66,7 @@ fs::path executable() {
   std::wstring path(32768, L'\0');
   auto n = GetModuleFileNameW(nullptr, path.data(), DWORD(path.size()));
   if (!n || n == path.size())
-    throw std::runtime_error("Could not locate executable.");
+    throw std::runtime_error(i18n::tr("Could not locate executable."));
   path.resize(n);
   return fs::path(path);
 }
@@ -78,8 +79,7 @@ void atomic_write(const fs::path &file, std::string_view text) {
     out.write(text.data(), text.size());
     out.flush();
     if (!out)
-      throw std::runtime_error("Could not save local file. Check free space "
-                               "and folder permissions.");
+      throw std::runtime_error(i18n::tr("Could not save local file. Check free space and folder permissions."));
   }
   replace_file(tmp, file);
 }
@@ -90,7 +90,7 @@ void replace_file(const fs::path &source, const fs::path &destination) {
   const auto target = platform::native_path(destination);
   if (input.handle == INVALID_HANDLE_VALUE || target.size() > 32767)
     throw std::runtime_error(
-        "Could not replace local file. Check folder permissions.");
+        i18n::tr("Could not replace local file. Check folder permissions."));
   const auto bytes = target.size() * sizeof(wchar_t);
   std::vector<std::byte> buffer(sizeof(FILE_RENAME_INFO) + bytes);
   auto* rename = std::construct_at(
@@ -114,6 +114,6 @@ void replace_file(const fs::path &source, const fs::path &destination) {
       return;
   }
   throw std::runtime_error(
-      "Could not replace local file. Check folder permissions.");
+      i18n::tr("Could not replace local file. Check folder permissions."));
 }
 } // namespace venture::paths

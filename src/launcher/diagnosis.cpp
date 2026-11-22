@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "launcher/diagnosis.h"
+#include "launcher/i18n/i18n.h"
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -20,135 +21,135 @@ struct Rule {
   // When one appears, the rest of its line (as written) is added to the cause.
   std::array<std::string_view, 2> detail{};
 };
-constexpr std::string_view kSendReport = "Send this report with an issue: the game needs a fix in Venture.";
+constexpr std::string_view kSendReport = i18n::mark("Send this report with an issue: the game needs a fix in Venture.");
 constexpr std::string_view kGpuAdvice =
-    "Update the graphics driver and turn off overlays and capture tools (MangoHud, vkBasalt, OBS), then try again.";
+    i18n::mark("Update the graphics driver and turn off overlays and capture tools (MangoHud, vkBasalt, OBS), then try again.");
 // Most specific first: the first rule that matches names the cause. Each
 // signature is a line Venture (or the system) writes for that failure.
 constexpr Rule kRules[] = {
     // posix/window_style.cpp video_unavailable_message().
     {{"needs a wayland session, and no wayland display was reachable"},
-     "Venture found no Wayland session to open its window in.",
-     "Log in to a Wayland desktop session (Venture does not use X11), then start Venture again."},
+     i18n::mark("Venture found no Wayland session to open its window in."),
+     i18n::mark("Log in to a Wayland desktop session (Venture does not use X11), then start Venture again.")},
     // hle/ovrplatform/account_store.cpp: the game's process could not read the account.
     {{"meta session load failed stage=vault-session", "meta session load failed stage=vault-load",
       "meta session load failed stage=vault-index", "meta session load failed stage=empty-token"},
-     "The game could not read your Meta sign-in.",
-     "Make sure your desktop keyring is running and unlocked (Linux), or choose Reconnect on the account in "
-     "Accounts, then start the game again."},
+     i18n::mark("The game could not read your Meta sign-in."),
+     i18n::mark("Make sure your desktop keyring is running and unlocked (Linux), or choose Reconnect on the account in "
+     "Accounts, then start the game again.")},
     // ovrplatform: Meta refused the game's sign-in or entitlement check.
     {{"[ovrplatform] initialization failed error=-20001"},
-     "The game needs a signed-in Meta account that owns it.",
-     "Sign in with the account that owns the game, then start it again."},
+     i18n::mark("The game needs a signed-in Meta account that owns it."),
+     i18n::mark("Sign in with the account that owns the game, then start it again.")},
     // xr/host_xr.cpp host_initialization_error().
     {{"steamvr does not work with the venture flatpak"},
-     "SteamVR was the OpenXR runtime, and the Venture Flatpak cannot reach SteamVR.",
-     "Use the Venture AppImage, tarball or your distribution's package with SteamVR, or use WiVRn or Monado with "
-     "the Flatpak."},
+     i18n::mark("SteamVR was the OpenXR runtime, and the Venture Flatpak cannot reach SteamVR."),
+     i18n::mark("Use the Venture AppImage, tarball or your distribution's package with SteamVR, or use WiVRn or Monado with "
+     "the Flatpak.")},
     // xr/host_xr.cpp: an implicit OpenXR API layer the loader could not load
     // failed the host instance (the loader's "Failed loading layer
     // information"), named by the runtime's "OpenXR API layer broken:" warning
     // or the report's own check of the registered layers (debug_report.cpp).
     {{"repair or uninstall the program that installed it", "failed loading layer information"},
-     "An OpenXR API layer installed on this PC could not be loaded, and the VR runtime could not start with it.",
-     "Repair or reinstall the program that installed the layer, or uninstall it so its leftover registration goes, "
-     "update Venture, then press Play again.",
+     i18n::mark("An OpenXR API layer installed on this PC could not be loaded, and the VR runtime could not start with it."),
+     i18n::mark("Repair or reinstall the program that installed the layer, or uninstall it so its leftover registration goes, "
+     "update Venture, then press Play again."),
      "could not create an instance",
      {"openxr api layer broken: "}},
     {{"your configured openxr runtime is unavailable", "xr_error_runtime_unavailable"},
-     "No OpenXR runtime was running, or none is set as the active one.",
-     "Start your VR runtime (SteamVR, WiVRn or Monado), make it the active OpenXR runtime, connect the headset, "
-     "then press Play again."},
+     i18n::mark("No OpenXR runtime was running, or none is set as the active one."),
+     i18n::mark("Start your VR runtime (SteamVR, WiVRn or Monado), make it the active OpenXR runtime, connect the headset, "
+     "then press Play again.")},
     // SteamVR's vrserver.txt when it saw no headset (a Quest over Link, Air Link or
     // Virtual Desktop not connected yet); its xrCreateInstance then fails with -2.
     {{"vriniterror_driver_wirelesshmdnotconnected", "vriniterror_init_hmdnotfound",
       "vriniterror_driver_hmddisplaynotfound"},
-     "SteamVR found no headset: it was not connected yet when the game started.",
-     "Connect the headset to SteamVR first (Quest Link, Air Link, Virtual Desktop or Steam Link) and wait until "
-     "SteamVR shows it as connected, then press Play again."},
+     i18n::mark("SteamVR found no headset: it was not connected yet when the game started."),
+     i18n::mark("Connect the headset to SteamVR first (Quest Link, Air Link, Virtual Desktop or Steam Link) and wait until "
+     "SteamVR shows it as connected, then press Play again.")},
     {{"the openxr runtime failed to create an instance (xrresult -2)"},
-     "The VR runtime could not start a session; it is often still shutting down from an earlier one.",
-     "Close your VR runtime completely and start it again, then press Play again."},
+     i18n::mark("The VR runtime could not start a session; it is often still shutting down from an earlier one."),
+     i18n::mark("Close your VR runtime completely and start it again, then press Play again.")},
     {{"does not support vulkan (xr_khr_vulkan_enable2)"},
-     "The active OpenXR runtime does not support Vulkan, which Venture renders with.",
-     "Update your VR runtime or switch to one with Vulkan support (SteamVR, WiVRn, Monado)."},
+     i18n::mark("The active OpenXR runtime does not support Vulkan, which Venture renders with."),
+     i18n::mark("Update your VR runtime or switch to one with Vulkan support (SteamVR, WiVRn, Monado).")},
     {{"hmd result -35 (flat mode)", "xr_error_form_factor_unavailable"},
-     "Your VR runtime had no headset connected.",
-     "Connect the headset and make sure it is tracking, then start the game again."},
+     i18n::mark("Your VR runtime had no headset connected."),
+     i18n::mark("Connect the headset and make sure it is tracking, then start the game again.")},
     // xr/session.cpp session_failed(): the game ran on without its session.
     {{"the vr session could not be created: "},
-     "The VR runtime did not create the game's VR session.",
-     "Update Venture and your graphics driver, close other VR tools and overlays (OpenXR Toolkit, other OpenXR "
-     "layers), restart your VR runtime, then try again. If it keeps happening, send this report."},
+     i18n::mark("The VR runtime did not create the game's VR session."),
+     i18n::mark("Update Venture and your graphics driver, close other VR tools and overlays (OpenXR Toolkit, other OpenXR "
+     "layers), restart your VR runtime, then try again. If it keeps happening, send this report.")},
     // runtime/main.cpp report_foreign_worker_exit(): 0xFFFFFFFF from outside,
     // with the run's host runtime from xr/host_xr.cpp's facts line. Virtual
     // Desktop closes SteamVR when a game starts on its own runtime (VDXR), and
     // closes that game when SteamVR starts again (H3VR2 with Index controllers).
     {{"status 0xffffffff outside venture's exit paths"},
-     "Virtual Desktop's own OpenXR runtime (VDXR) ran the game, and the game was closed from outside. Virtual "
+     i18n::mark("Virtual Desktop's own OpenXR runtime (VDXR) ran the game, and the game was closed from outside. Virtual "
      "Desktop closes SteamVR when a game starts on VDXR and closes that game when SteamVR starts again; controllers "
-     "and trackers that only SteamVR sees (Index controllers, Vive trackers) do not work on VDXR.",
-     "To use SteamVR controllers or trackers, set OpenXR Runtime to SteamVR in the Virtual Desktop Streamer app, "
-     "start SteamVR, then press Play. To stay on VDXR, leave SteamVR closed while the game runs.",
+     "and trackers that only SteamVR sees (Index controllers, Vive trackers) do not work on VDXR."),
+     i18n::mark("To use SteamVR controllers or trackers, set OpenXR Runtime to SteamVR in the Virtual Desktop Streamer app, "
+     "start SteamVR, then press Play. To stay on VDXR, leave SteamVR closed while the game runs."),
      "host runtime: virtualdesktopxr"},
     {{"status 0xffffffff outside venture's exit paths"},
-     "Another program closed the game (exit status 0xFFFFFFFF, a forced close from outside Venture). VR runtimes "
-     "do this to the games they run when they shut down or hand the headset to another runtime.",
-     "Keep your VR runtime running while the game plays, and do not start or close another VR runtime meanwhile. "
-     "If nothing like that happened, send this report with an issue."},
+     i18n::mark("Another program closed the game (exit status 0xFFFFFFFF, a forced close from outside Venture). VR runtimes "
+     "do this to the games they run when they shut down or hand the headset to another runtime."),
+     i18n::mark("Keep your VR runtime running while the game plays, and do not start or close another VR runtime meanwhile. "
+     "If nothing like that happened, send this report with an issue.")},
     // The kernel's own reports of a GPU reset (amdgpu, i915/xe, NVIDIA Xid).
     {{"gpu reset", "ring timeout", "nvrm: xid", "gpu hang",
       "stopped responding and has successfully recovered"},  // Windows: Display event 4101
-     "The graphics driver reset the GPU during the game.", kGpuAdvice},
+     i18n::mark("The graphics driver reset the GPU during the game."), kGpuAdvice},
     // hle/vulkan/vulkan.cpp, and the host's own device loss.
     {{"native vulkan device lost", "vk_error_device_lost"},
-     "The game lost the graphics device.", kGpuAdvice},
+     i18n::mark("The game lost the graphics device."), kGpuAdvice},
     // core/alloc_failure.cpp: a refused allocation and the limit it likely hit.
     {{"likely limit: system commit limit"},
-     "The PC ran out of commit memory (RAM plus page file), so memory requests failed even though RAM and GPU "
-     "memory looked free. Graphics drivers count GPU memory against this limit too.",
-     "Let Windows manage the page file size, or set it to at least 16 GB (Settings > System > About > Advanced "
+     i18n::mark("The PC ran out of commit memory (RAM plus page file), so memory requests failed even though RAM and GPU "
+     "memory looked free. Graphics drivers count GPU memory against this limit too."),
+     i18n::mark("Let Windows manage the page file size, or set it to at least 16 GB (Settings > System > About > Advanced "
      "system settings > Performance > Advanced > Virtual memory), close other large programs, then try again. "
-     "On Linux, add swap or use vm.overcommit_memory=0."},
+     "On Linux, add swap or use vm.overcommit_memory=0.")},
     {{"likely limit: vulkan maxmemoryallocationcount"},
-     "The game reached the graphics driver's limit on the number of GPU memory allocations.",
-     "Update the graphics driver and send this report with an issue."},
+     i18n::mark("The game reached the graphics driver's limit on the number of GPU memory allocations."),
+     i18n::mark("Update the graphics driver and send this report with an issue.")},
     {{"likely limit: small cpu-visible vram heap"},
-     "The small part of GPU memory the CPU can write to filled up (Resizable BAR is off).",
-     "Turn on Resizable BAR (Re-Size BAR or Smart Access Memory) in the PC's firmware settings if it supports it, "
-     "update the graphics driver, and send this report with an issue."},
+     i18n::mark("The small part of GPU memory the CPU can write to filled up (Resizable BAR is off)."),
+     i18n::mark("Turn on Resizable BAR (Re-Size BAR or Smart Access Memory) in the PC's firmware settings if it supports it, "
+     "update the graphics driver, and send this report with an issue.")},
     {{"likely limit: gpu memory budget"},
-     "The GPU ran out of memory.",
-     "Close other programs that use the GPU or lower the resolution (Settings > Display), then try again."},
+     i18n::mark("The GPU ran out of memory."),
+     i18n::mark("Close other programs that use the GPU or lower the resolution (Settings > Display), then try again.")},
     {{"likely limit: jit code space"},
-     "Venture's store of translated game code could not grow.",
-     "Close other large programs, then try again. If it keeps happening, send this report with an issue."},
+     i18n::mark("Venture's store of translated game code could not grow."),
+     i18n::mark("Close other large programs, then try again. If it keeps happening, send this report with an issue.")},
     {{"likely limit: guest heap arena"},
-     "The game used up the memory area Venture gives it.", kSendReport},
+     i18n::mark("The game used up the memory area Venture gives it."), kSendReport},
     {{"likely limit: none near"},
-     "A memory request was refused although no memory limit was near.",
-     "Update the graphics driver, close other programs, then try again. If it keeps happening, send this report "
-     "with an issue."},
+     i18n::mark("A memory request was refused although no memory limit was near."),
+     i18n::mark("Update the graphics driver, close other programs, then try again. If it keeps happening, send this report "
+     "with an issue.")},
     {{"vk_error_out_of_device_memory", "gl_out_of_memory", "xr_error_out_of_memory", "out_of_device_memory"},
-     "The GPU ran out of memory.",
-     "Close other programs that use the GPU or lower the resolution (Settings > Display), then try again."},
+     i18n::mark("The GPU ran out of memory."),
+     i18n::mark("Close other programs that use the GPU or lower the resolution (Settings > Display), then try again.")},
     {{"out of memory: killed process", "oom-kill"},
-     "The system ran out of memory and stopped a program.",
-     "Close other programs, then try again."},
+     i18n::mark("The system ran out of memory and stopped a program."),
+     i18n::mark("Close other programs, then try again.")},
     // runtime_failure(): a trap names the import or ABI adapter that is missing.
     {{"[hle] unimplemented ", "[a32-abi] unsupported "},
-     "The game called an Android function that Venture does not provide yet.", kSendReport},
+     i18n::mark("The game called an Android function that Venture does not provide yet."), kSendReport},
     // com/venture/runtime/AppMain.java: an uncaught Java exception closes the
     // app as on Android. Most are a framework class or method Venture lacks
     // (Pinball FX VR: PackageManager$PackageInfoFlags); a reinstall never helps.
     // java/app_launcher.cpp: the same on the game's Android main thread
     // (Ballrs: CameraManager$AvailabilityCallback while Unity starts).
     {{"[androidruntime] fatal exception: ", "android main thread stopped on an uncaught "},
-     "The game stopped on an uncaught Java exception, most often an Android class or method that Venture does not "
-     "provide yet.",
+     i18n::mark("The game stopped on an uncaught Java exception, most often an Android class or method that Venture does not "
+     "provide yet."),
      kSendReport},
     {{"[libc] fatal signal ", "e [signal] guest tid "},
-     "The game crashed.", kSendReport},
+     i18n::mark("The game crashed."), kSendReport},
 };
 } // namespace
 
@@ -182,7 +183,7 @@ std::optional<Diagnosis> diagnose(std::string_view evidence) {
     for (auto signature : rule.signatures)
       if (!signature.empty() && text.find(signature) != std::string::npos &&
           (rule.also.empty() || text.find(rule.also) != std::string::npos)) {
-        std::string cause(rule.cause);
+        std::string cause(i18n::translate(rule.cause.data()));
         for (auto prefix : rule.detail)
           if (const auto at = prefix.empty() ? std::string::npos : text.find(prefix); at != std::string::npos) {
             const auto from = at + prefix.size();
@@ -190,10 +191,10 @@ std::optional<Diagnosis> diagnose(std::string_view evidence) {
             auto line = evidence.substr(from, end - from);
             while (!line.empty() && (line.back() == '\r' || line.back() == ' ' || line.back() == '.'))
               line.remove_suffix(1);
-            cause += " Broken layer: " + std::string(line) + ".";
+            cause += i18n::tr(" Broken layer: ") + std::string(line) + ".";
             break;
           }
-        return Diagnosis{std::move(cause), std::string(rule.advice)};
+        return Diagnosis{std::move(cause), i18n::translate(rule.advice.data())};
       }
   return std::nullopt;
 }

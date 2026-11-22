@@ -51,24 +51,24 @@ void set_flush_interval(std::chrono::milliseconds interval);
 void write(Level level, std::string_view tag, std::string_view message);
 
 template <class... Args>
-void trace(std::string_view tag, std::format_string<Args...> fmt, Args&&... args) {
-  if (level() <= Level::trace) write(Level::trace, tag, std::format(fmt, std::forward<Args>(args)...));
+void trace(std::string_view tag, std::string_view fmt, Args&&... args) {
+  if (level() <= Level::trace) write(Level::trace, tag, std::vformat(fmt.data(), std::make_format_args(args...)));
 }
 template <class... Args>
-void debug(std::string_view tag, std::format_string<Args...> fmt, Args&&... args) {
-  if (level() <= Level::debug) write(Level::debug, tag, std::format(fmt, std::forward<Args>(args)...));
+void debug(std::string_view tag, std::string_view fmt, Args&&... args) {
+  if (level() <= Level::debug) write(Level::debug, tag, std::vformat(fmt.data(), std::make_format_args(args...)));
 }
 template <class... Args>
-void info(std::string_view tag, std::format_string<Args...> fmt, Args&&... args) {
-  if (level() <= Level::info) write(Level::info, tag, std::format(fmt, std::forward<Args>(args)...));
+void info(std::string_view tag, std::string_view fmt, Args&&... args) {
+  if (level() <= Level::info) write(Level::info, tag, std::vformat(fmt.data(), std::make_format_args(args...)));
 }
 template <class... Args>
-void warn(std::string_view tag, std::format_string<Args...> fmt, Args&&... args) {
-  if (level() <= Level::warn) write(Level::warn, tag, std::format(fmt, std::forward<Args>(args)...));
+void warn(std::string_view tag, std::string_view fmt, Args&&... args) {
+  if (level() <= Level::warn) write(Level::warn, tag, std::vformat(fmt.data(), std::make_format_args(args...)));
 }
 template <class... Args>
-void error(std::string_view tag, std::format_string<Args...> fmt, Args&&... args) {
-  write(Level::error, tag, std::format(fmt, std::forward<Args>(args)...));
+void error(std::string_view tag, std::string_view fmt, Args&&... args) {
+  write(Level::error, tag, std::vformat(fmt.data(), std::make_format_args(args...)));
 }
 
 }  // namespace venture::log

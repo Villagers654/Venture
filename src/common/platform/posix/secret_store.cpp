@@ -1,5 +1,6 @@
 #include "common/secret_store.h"
 #include "common/meta/accounts.h"
+#include "launcher/i18n/i18n.h"
 #include <dlfcn.h>
 #include <fcntl.h>
 #include <atomic>
@@ -20,7 +21,7 @@ namespace venture {
 SecretStore::SecretStore(fs::path directory, std::string key)
     : key_(std::move(key)) {
   if (!meta::valid_account_key(key_))
-    throw std::runtime_error("Invalid account key.");
+    throw std::runtime_error(i18n::tr("Invalid account key."));
   file_ = std::move(directory) / "accounts" / key_ / "session.dpapi";
 }
 namespace {
@@ -43,13 +44,13 @@ void write_private(const fs::path &file, std::string_view bytes) {
   fs::create_directories(file.parent_path());
   auto temp = fs::path(file).concat(".tmp");
   int fd = ::open(temp.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
-  if (fd < 0) throw std::runtime_error("Could not save Meta session.");
+  if (fd < 0) throw std::runtime_error(i18n::tr("Could not save Meta session."));
   ::fchmod(fd, 0600);
   bool ok = ::write(fd, bytes.data(), bytes.size()) == ssize_t(bytes.size()) && ::fsync(fd) == 0;
   ::close(fd);
   if (!ok || ::rename(temp.c_str(), file.c_str()) != 0) {
     ::unlink(temp.c_str());
-    throw std::runtime_error("Could not save Meta session.");
+    throw std::runtime_error(i18n::tr("Could not save Meta session."));
   }
 }
 std::string machine_id() {
@@ -63,7 +64,7 @@ std::string sealing_key(const fs::path &file, bool create) {
     if (!create) return {};
     std::string fresh(32, '\0');
     if (RAND_bytes(reinterpret_cast<unsigned char *>(fresh.data()), 32) != 1)
-      throw std::runtime_error("Could not save Meta session.");
+      throw std::runtime_error(i18n::tr("Could not save Meta session."));
     write_private(key_path(file), fresh);
     random = fresh;
   }
@@ -72,7 +73,7 @@ std::string sealing_key(const fs::path &file, bool create) {
   unsigned int size = 0;
   if (!EVP_Digest(material.data(), material.size(), reinterpret_cast<unsigned char *>(key.data()),
                   &size, EVP_sha256(), nullptr) || size != 32)
-    throw std::runtime_error("Could not protect Meta session.");
+    throw std::runtime_error(i18n::tr("Could not protect Meta session."));
   return key;
 }
 std::string gcm(bool encrypt, std::string_view key, std::string_view nonce,
@@ -95,14 +96,14 @@ std::string gcm(bool encrypt, std::string_view key, std::string_view nonce,
     tag_out->assign(16, '\0');
     ok = EVP_CIPHER_CTX_ctrl(ctx.get(), EVP_CTRL_GCM_GET_TAG, 16, tag_out->data()) == 1;
   }
-  if (!ok) throw std::runtime_error("Could not unlock Meta session.");
+  if (!ok) throw std::runtime_error(i18n::tr("Could not unlock Meta session."));
   return out;
 }
 void seal(const fs::path &file, const std::string &slot, std::string_view plain) {
   auto key = sealing_key(file, true);
   std::string nonce(12, '\0'), tag;
   if (RAND_bytes(reinterpret_cast<unsigned char *>(nonce.data()), 12) != 1)
-    throw std::runtime_error("Could not save Meta session.");
+    throw std::runtime_error(i18n::tr("Could not save Meta session."));
   auto cipher = gcm(true, key, nonce, slot, plain, {}, &tag);
   write_private(sealed_path(file), std::string(sealed_magic) + nonce + cipher + tag);
 }
@@ -111,7 +112,7 @@ std::optional<std::string> unseal(const fs::path &file, const std::string &slot)
   if (!data) return std::nullopt;
   auto key = sealing_key(file, false);
   if (key.empty() || data->size() < sealed_magic.size() + 12 + 16 || !data->starts_with(sealed_magic))
-    throw std::runtime_error("Could not unlock Meta session.");
+    throw std::runtime_error(i18n::tr("Could not unlock Meta session."));
   std::string_view view(*data);
   view.remove_prefix(sealed_magic.size());
   return gcm(false, key, view.substr(0, 12), slot, view.substr(12, view.size() - 28),
@@ -279,7 +280,7 @@ std::optional<std::string> keyring_load(const fs::path &file, const std::string 
                         nullptr);
   switch (outcome(error)) {
   case Keyring::unreachable: return std::nullopt;
-  case Keyring::failed: throw std::runtime_error("Could not unlock Meta session.");
+  case Keyring::failed: throw std::runtime_error(i18n::tr("Could not unlock Meta session."));
   case Keyring::ok: break;
   }
   if (!secret) return std::nullopt;
@@ -292,7 +293,7 @@ Keyring keyring_save(const fs::path &file, const std::string &key, const std::st
   if (!l.ok) return Keyring::unreachable;
   auto location = root(file, key.empty()), slot = slot_of(key);
   GError *error = nullptr;
-  bool ok = l.store(&schema, SECRET_COLLECTION_DEFAULT, "Venture Meta session", plain.c_str(),
+  bool ok = l.store(&schema, SECRET_COLLECTION_DEFAULT, i18n::tr("Venture Meta session"), plain.c_str(),
                     nullptr, &error, "root", location.c_str(), "slot", slot.c_str(), nullptr);
   auto result = outcome(error);
   return result == Keyring::ok && !ok ? Keyring::failed : result;
@@ -327,7 +328,7 @@ std::optional<Session> SecretStore::load() const {
   auto j = parse_json(*plain);
   if (number(j, "version") != (key_.empty() ? 1 : 2) ||
       str(j, "accessToken").empty() || (!key_.empty() && str(j, "key") != key_))
-    throw std::runtime_error("Account credential does not match its slot.");
+    throw std::runtime_error(i18n::tr("Account credential does not match its slot."));
   return Session{str(j, "accessToken"), str(j, "accountId"),
                  str(j, "alias"),       str(j, "savedAt"),
                  str(j, "source"),      str(j, "profileId"),
@@ -349,7 +350,7 @@ void SecretStore::save(const Session &s) const {
   switch (keyring_save(file_, key_, plain)) {
   case Keyring::ok: remove_sealed(file_); break;
   case Keyring::unreachable: seal(file_, slot_of(key_), plain); break;
-  case Keyring::failed: throw std::runtime_error("Could not save Meta session securely.");
+  case Keyring::failed: throw std::runtime_error(i18n::tr("Could not save Meta session securely."));
   }
   // A non-secret marker allows orphan reconciliation; credentials stay in
   // Secret Service (or the sealed file).
@@ -357,14 +358,14 @@ void SecretStore::save(const Session &s) const {
 }
 void SecretStore::clear() const {
   if (keyring_clear(file_, key_) == Keyring::failed)
-    throw std::runtime_error("Could not clear Meta session securely.");
+    throw std::runtime_error(i18n::tr("Could not clear Meta session securely."));
   remove_sealed(file_);
   fs::remove(file_);
 }
 const char *SecretStore::protection() {
 #ifdef VENTURE_HAVE_LIBSECRET
-  if (keyring_answers()) return "kept in your desktop keyring";
+  if (keyring_answers()) return i18n::tr("kept in your desktop keyring");
 #endif
-  return "kept in an encrypted file only your user can read";
+  return i18n::tr("kept in an encrypted file only your user can read");
 }
 } // namespace venture

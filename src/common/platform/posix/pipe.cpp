@@ -1,4 +1,5 @@
 #include "common/platform/pipe.h"
+#include "launcher/i18n/i18n.h"
 #include <cerrno>
 #include <fcntl.h>
 #include <poll.h>
@@ -16,7 +17,7 @@ std::array<std::uintptr_t, 4> make_pipes() {
     for (int fd : {a[0], a[1], b[0], b[1]})
       if (fd >= 0)
         close(fd);
-    throw std::runtime_error("Could not create credential broker pipes.");
+    throw std::runtime_error(i18n::tr("Could not create credential broker pipes."));
   }
   // Process uses child descriptors 64/65. Keep sources above them so dup2
   // actions cannot clobber one another, and reserve zero for a closed channel.
@@ -26,7 +27,7 @@ std::array<std::uintptr_t, 4> make_pipes() {
     if (copy < 0) {
       for (int opened : {a[0], a[1], b[0], b[1]})
         close(opened);
-      throw std::runtime_error("Could not duplicate credential broker pipes.");
+      throw std::runtime_error(i18n::tr("Could not duplicate credential broker pipes."));
     }
     close(*fd);
     *fd = copy;
@@ -50,12 +51,12 @@ void read_pipe(std::uintptr_t h, void *out, std::size_t size) {
     if (!ready || (ready < 0 && errno == EINTR))
       continue;
     if (ready < 0 || (p.revents & POLLNVAL))
-      throw std::runtime_error("Credential broker pipe closed.");
+      throw std::runtime_error(i18n::tr("Credential broker pipe closed."));
     auto n = read(static_cast<int>(h), data, size);
     if (n < 0 && errno == EINTR)
       continue;
     if (n <= 0)
-      throw std::runtime_error("Credential broker pipe closed.");
+      throw std::runtime_error(i18n::tr("Credential broker pipe closed."));
     data += n;
     size -= n;
   }
@@ -84,7 +85,7 @@ void write_pipe(std::uintptr_t h, const void *in, std::size_t size) {
     if (n < 0 && errno == EINTR)
       continue;
     if (n <= 0)
-      throw std::runtime_error("Credential broker pipe closed.");
+      throw std::runtime_error(i18n::tr("Credential broker pipe closed."));
     data += n;
     size -= n;
   }

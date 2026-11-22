@@ -1,4 +1,5 @@
 #include "common/http/client.h"
+#include "launcher/i18n/i18n.h"
 #include <algorithm>
 #include <cctype>
 #include <cstdlib>
@@ -13,7 +14,7 @@ namespace {
 struct Global {
   Global() {
     if (curl_global_init(CURL_GLOBAL_DEFAULT))
-      throw std::runtime_error("HTTP initialization failed.");
+      throw std::runtime_error(i18n::tr("HTTP initialization failed."));
   }
   ~Global() { curl_global_cleanup(); }
 };
@@ -149,7 +150,7 @@ Handle handle(std::string_view url, std::stop_token *stop) {
   init();
   Handle h(curl_easy_init(), curl_easy_cleanup);
   if (!h)
-    throw std::runtime_error("HTTP initialization failed.");
+    throw std::runtime_error(i18n::tr("HTTP initialization failed."));
   use_system_ca(h.get());
   curl_easy_setopt(h.get(), CURLOPT_URL, std::string(url).c_str());
   curl_easy_setopt(h.get(), CURLOPT_PROTOCOLS_STR, "https");
@@ -197,40 +198,38 @@ size_t headers(char *data, size_t size, size_t count, void *ctx) {
 }
 void check(CURLcode code, std::stop_token stop) {
   if (stop.stop_requested())
-    throw std::runtime_error("Transfer paused. Resume when ready.");
+    throw std::runtime_error(i18n::tr("Transfer paused. Resume when ready."));
   if (code == CURLE_OPERATION_TIMEDOUT)
     throw std::runtime_error(
-        "Connection timed out. Check your connection and retry.");
+        i18n::tr("Connection timed out. Check your connection and retry."));
   // A connection that works but cannot be verified is not the user's network.
   if (code == CURLE_PEER_FAILED_VERIFICATION || code == CURLE_SSL_CACERT_BADFILE)
-    throw std::runtime_error(std::format(
-        "The secure connection could not be verified ({}). This system's certificate store may be out of date.",
+    throw std::runtime_error(i18n::trf("The secure connection could not be verified ({}). This system's certificate store may be out of date.",
         curl_easy_strerror(code)));
   if (code != CURLE_OK)
-    throw std::runtime_error(std::format(
-        "Network transfer failed ({}). Check your connection and retry.", curl_easy_strerror(code)));
+    throw std::runtime_error(i18n::trf("Network transfer failed ({}). Check your connection and retry.", curl_easy_strerror(code)));
 }
 std::string redirect(std::string_view from, const Response &r,
                      bool (*allowed)(std::string_view) = allowed_delivery) {
   auto i = r.headers.find("location");
   if (i == r.headers.end())
-    throw std::runtime_error("File redirect is missing its destination.");
+    throw std::runtime_error(i18n::tr("File redirect is missing its destination."));
   UrlHandle u(curl_url(), curl_url_cleanup);
   if (curl_url_set(u.get(), CURLUPART_URL, std::string(from).c_str(), 0) ||
       curl_url_set(u.get(), CURLUPART_URL, i->second.c_str(), 0))
-    throw std::runtime_error("Invalid file redirect.");
+    throw std::runtime_error(i18n::tr("Invalid file redirect."));
   char *text = nullptr;
   curl_url_get(u.get(), CURLUPART_URL, &text, 0);
   std::string result = text ? text : "";
   curl_free(text);
   if (!allowed(result))
-    throw std::runtime_error(allowed == allowed_delivery ? "File redirect is outside Meta delivery domains."
-                                                         : "Update redirect is outside Venture's GitHub releases.");
+    throw std::runtime_error(allowed == allowed_delivery ? i18n::tr("File redirect is outside Meta delivery domains.")
+                                                         : i18n::tr("Update redirect is outside Venture's GitHub releases."));
   // A credential in a Location must obey the same host restriction as the
   // initial request.
   for (auto &[key, value] : query(parse_url(result).query))
     if (key == "access_token" && !secure_binary(result))
-      throw std::runtime_error("Refused a credential-bearing file redirect.");
+      throw std::runtime_error(i18n::tr("Refused a credential-bearing file redirect."));
   return result;
 }
 bool redirected(long status) {
@@ -282,17 +281,17 @@ Response memory(std::string_view url, const Fields *fields, size_t limit,
   }
   raw_headers = curl_slist_append(nullptr, "Accept: application/json");
   if (!raw_headers)
-    throw std::runtime_error("HTTP initialization failed.");
+    throw std::runtime_error(i18n::tr("HTTP initialization failed."));
   std::unique_ptr<curl_slist, decltype(&curl_slist_free_all)> hs(
       nullptr, curl_slist_free_all);
   hs.reset(raw_headers);
   for (auto &[key, value] : extra_headers) {
     if (key.empty() || key.find_first_of("\r\n:") != key.npos ||
         value.find_first_of("\r\n") != value.npos)
-      throw std::runtime_error("Invalid HTTP header.");
+      throw std::runtime_error(i18n::tr("Invalid HTTP header."));
     auto *next = curl_slist_append(raw_headers, (key + ": " + value).c_str());
     if (!next)
-      throw std::runtime_error("HTTP initialization failed.");
+      throw std::runtime_error(i18n::tr("HTTP initialization failed."));
     hs.release();
     hs.reset(raw_headers = next);
   }
@@ -318,7 +317,7 @@ Url parse_url(std::string_view url) {
   UrlHandle u(curl_url(), curl_url_cleanup);
   if (curl_url_set(u.get(), CURLUPART_URL, std::string(url).c_str(),
                    CURLU_NON_SUPPORT_SCHEME))
-    throw std::runtime_error("Invalid URL.");
+    throw std::runtime_error(i18n::tr("Invalid URL."));
   auto part = [&](CURLUPart key) {
     char *p = nullptr;
     curl_url_get(u.get(), key, &p, 0);
@@ -335,7 +334,7 @@ std::string encode(std::string_view text) {
   init();
   char *p = curl_easy_escape(nullptr, text.data(), int(text.size()));
   if (!p)
-    throw std::runtime_error("URL encoding failed.");
+    throw std::runtime_error(i18n::tr("URL encoding failed."));
   std::string out(p);
   curl_free(p);
   return out;
@@ -347,7 +346,7 @@ std::string decode(std::string_view text) {
   int n = 0;
   char *p = curl_easy_unescape(nullptr, s.data(), int(s.size()), &n);
   if (!p)
-    throw std::runtime_error("URL decoding failed.");
+    throw std::runtime_error(i18n::tr("URL decoding failed."));
   std::string out(p, n);
   curl_free(p);
   return out;
@@ -417,7 +416,7 @@ bool secure_binary(std::string_view url) {
 }
 std::string with_delivery_token(std::string_view url, std::string_view token) {
   if (!allowed_delivery(url))
-    throw std::runtime_error("File URL is outside Meta delivery domains.");
+    throw std::runtime_error(i18n::tr("File URL is outside Meta delivery domains."));
   if (!secure_binary(url))
     return std::string(url);
   auto pairs = query(parse_url(url).query);
@@ -438,7 +437,7 @@ Response get_meta(std::string_view url, const Fields &headers,
       !u.password.empty() ||
       (u.path != "/v1.20/application/available_purchases" &&
        u.path != "/v1.20/application/viewer_purchases"))
-    throw std::runtime_error("Refused an invalid Meta commerce URL.");
+    throw std::runtime_error(i18n::tr("Refused an invalid Meta commerce URL."));
   return memory(url, nullptr, 4 * 1024 * 1024, stop, headers);
 }
 Response get_latest_release(std::stop_token stop) {
@@ -447,7 +446,7 @@ Response get_latest_release(std::stop_token stop) {
 }
 Response get_oculusdb_package(std::string_view package, std::stop_token stop) {
   if (!paths::safe_package(package))
-    throw std::runtime_error("Invalid package name.");
+    throw std::runtime_error(i18n::tr("Invalid package name."));
   return memory("https://oculusdb.rui2015.me/api/v1/packagename/" + encode(package), nullptr, 1024 * 1024, stop,
                 {{"Accept", "application/json"}});
 }
@@ -455,7 +454,7 @@ Response get_loopback(uint16_t port, std::string_view path,
                       const Fields &headers, std::stop_token stop) {
   if (!port || !path.starts_with('/') || path.starts_with("//") ||
       path.find_first_of("\r\n#") != path.npos)
-    throw std::runtime_error("Invalid loopback test URL.");
+    throw std::runtime_error(i18n::tr("Invalid loopback test URL."));
   return memory("http://127.0.0.1:" + std::to_string(port) + std::string(path),
                 nullptr, 4 * 1024 * 1024, stop, headers, true);
 }
@@ -466,24 +465,24 @@ Response post_loopback(uint16_t port, std::string_view path, const Fields &field
                        std::stop_token stop) {
   if (!port || !path.starts_with('/') || path.starts_with("//") ||
       path.find_first_of("\r\n#") != path.npos)
-    throw std::runtime_error("Invalid loopback test URL.");
+    throw std::runtime_error(i18n::tr("Invalid loopback test URL."));
   return memory("http://127.0.0.1:" + std::to_string(port) + std::string(path),
                 &fields, 4 * 1024 * 1024, stop, {}, true);
 }
 std::string get_image(std::string url, std::stop_token stop) {
   for (int i = 0; i < 8; ++i) {
     if (!allowed_delivery(url))
-      throw std::runtime_error("Artwork URL is outside Meta delivery domains.");
+      throw std::runtime_error(i18n::tr("Artwork URL is outside Meta delivery domains."));
     auto r = memory(url, nullptr, 20 * 1024 * 1024, stop);
     if (redirected(r.status)) {
       url = redirect(url, r);
       continue;
     }
     if (r.status != 200)
-      throw std::runtime_error("Artwork is unavailable. Refresh to retry.");
+      throw std::runtime_error(i18n::tr("Artwork is unavailable. Refresh to retry."));
     return r.body;
   }
-  throw std::runtime_error("Too many artwork redirects.");
+  throw std::runtime_error(i18n::tr("Too many artwork redirects."));
 }
 static int hex_digit(char c) {
   return c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : c >= 'A' && c <= 'F' ? c - 'A' + 10 : -1;
@@ -494,16 +493,13 @@ static int hex_digit(char c) {
 // does not help there.
 std::string refusal(long status) {
   if (status == 404)
-    return "Meta's file server won't send this game to this account (HTTP 404). It does this for "
-           "apps that came with the headset rather than from the store. Get the game from the "
-           "Meta Horizon Store on this account, or download it with another account that owns it.";
-  return "File server refused the transfer (HTTP " + std::to_string(status) +
-         "). Sign in again, then resume.";
+    return i18n::tr("Meta's file server won't send this game to this account (HTTP 404). It does this for apps that came with the headset rather than from the store. Get the game from the Meta Horizon Store on this account, or download it with another account that owns it.");
+  return i18n::trf("File server refused the transfer (HTTP {0}). Sign in again, then resume.", status);
 }
 std::string delivery_file_name(std::string url, std::stop_token stop) {
   for (int i = 0; i < 8; ++i) {
     if (!allowed_delivery(url))
-      throw std::runtime_error("File URL is outside Meta delivery domains.");
+      throw std::runtime_error(i18n::tr("File URL is outside Meta delivery domains."));
     auto r = memory(url, nullptr, 64 * 1024, stop, {{"Range", "bytes=0-0"}});
     if (redirected(r.status)) {
       url = redirect(url, r);
@@ -537,7 +533,7 @@ std::string delivery_file_name(std::string url, std::stop_token stop) {
     }
     return name;
   }
-  throw std::runtime_error("Too many file redirects.");
+  throw std::runtime_error(i18n::tr("Too many file redirects."));
 }
 RangeDecision check_range(long status, uint64_t offset, uint64_t expected,
                           std::string_view range, uint64_t length) {
@@ -549,46 +545,46 @@ RangeDecision check_range(long status, uint64_t offset, uint64_t expected,
   std::smatch m;
   std::string s(range);
   if (!std::regex_match(s, m, pattern))
-    throw std::runtime_error("Invalid resume range. Retry the transfer.");
+    throw std::runtime_error(i18n::tr("Invalid resume range. Retry the transfer."));
   auto start = number(Json(m[1].str())), end = number(Json(m[2].str())),
        total = number(Json(m[3].str()));
   if (start != offset || end < start || total <= end ||
       (expected && total != expected) || (length && length != end - start + 1))
-    throw std::runtime_error("Inconsistent resume range. Retry the transfer.");
+    throw std::runtime_error(i18n::tr("Inconsistent resume range. Retry the transfer."));
   return {offset, expected ? expected : total};
 }
 namespace {
 void fetch_file(std::string url, const fs::path &dest, uint64_t expected, std::stop_token stop,
-                const Progress &progress, bool (*allowed)(std::string_view), const char *outside);
+                const Progress &progress, bool (*allowed)(std::string_view), std::string_view outside);
 }
 void download(std::string url, const fs::path &dest, uint64_t expected,
               std::stop_token stop, const Progress &progress) {
   fetch_file(std::move(url), dest, expected, stop, progress, allowed_delivery,
-             "File URL is outside Meta delivery domains.");
+             i18n::tr("File URL is outside Meta delivery domains."));
 }
 void download_release(std::string url, const fs::path &dest, uint64_t expected,
                       std::stop_token stop, const Progress &progress) {
   fetch_file(std::move(url), dest, expected, stop, progress, allowed_release,
-             "Update URL is outside Venture's GitHub releases.");
+             i18n::tr("Update URL is outside Venture's GitHub releases."));
 }
 std::string get_release_text(std::string url, std::stop_token stop) {
   for (int i = 0; i < 8; ++i) {
     if (!allowed_release(url))
-      throw std::runtime_error("Update URL is outside Venture's GitHub releases.");
+      throw std::runtime_error(i18n::tr("Update URL is outside Venture's GitHub releases."));
     auto r = memory(url, nullptr, 1024 * 1024, stop);
     if (redirected(r.status)) {
       url = redirect(url, r, allowed_release);
       continue;
     }
     if (r.status != 200)
-      throw std::runtime_error("GitHub returned HTTP " + std::to_string(r.status) + ".");
+      throw std::runtime_error(i18n::trf("GitHub returned HTTP {0}.", r.status));
     return r.body;
   }
-  throw std::runtime_error("Too many redirects. Try again later.");
+  throw std::runtime_error(i18n::tr("Too many redirects. Try again later."));
 }
 namespace {
 void fetch_file(std::string url, const fs::path &dest, uint64_t expected, std::stop_token stop,
-                const Progress &progress, bool (*allowed)(std::string_view), const char *outside) {
+                const Progress &progress, bool (*allowed)(std::string_view), std::string_view outside) {
   fs::create_directories(dest.parent_path());
   auto part = dest;
   part += ".part";
@@ -610,9 +606,9 @@ void fetch_file(std::string url, const fs::path &dest, uint64_t expected, std::s
   }
   for (int redirects = 0; redirects < 8; ++redirects) {
     if (!allowed(url))
-      throw std::runtime_error(outside);
+      throw std::runtime_error(std::string(outside));
     if (stop.stop_requested())
-      throw std::runtime_error("Transfer paused. Resume when ready.");
+      throw std::runtime_error(i18n::tr("Transfer paused. Resume when ready."));
     Response r;
     auto h = handle(url, &stop);
     if (offset)
@@ -644,8 +640,7 @@ void fetch_file(std::string url, const fs::path &dest, uint64_t expected, std::s
               auto type = lower(hdr["content-type"]);
               if (type.find("text/html") != type.npos ||
                   type.find("application/json") != type.npos)
-                throw std::runtime_error("File server returned an error page. "
-                                         "Sign in again, then resume.");
+                throw std::runtime_error(i18n::tr("File server returned an error page. Sign in again, then resume."));
               auto d = check_range(out.response->status, out.offset,
                                    out.expected, hdr["content-range"],
                                    number(Json(hdr["content-length"])));
@@ -658,11 +653,10 @@ void fetch_file(std::string url, const fs::path &dest, uint64_t expected, std::s
             }
             if (out.total && n > out.total - out.done)
               throw std::runtime_error(
-                  "File exceeded its expected size. Retry the transfer.");
+                  i18n::tr("File exceeded its expected size. Retry the transfer."));
             out.out.write(b, n);
             if (!out.out)
-              throw std::runtime_error("Could not write download. Check free "
-                                       "disk space and folder permissions.");
+              throw std::runtime_error(i18n::tr("Could not write download. Check free disk space and folder permissions."));
             out.done += n;
             (*out.progress)(out.done, out.total);
             return n;
@@ -685,11 +679,11 @@ void fetch_file(std::string url, const fs::path &dest, uint64_t expected, std::s
     if (!sink.opened || !sink.done || (sink.total && sink.done != sink.total) ||
         sink.out.fail())
       throw std::runtime_error(
-          "File is incomplete. Resume to retry the remaining bytes.");
+          i18n::tr("File is incomplete. Resume to retry the remaining bytes."));
     paths::replace_file(part, dest);
     return;
   }
-  throw std::runtime_error("Too many file redirects. Try again later.");
+  throw std::runtime_error(i18n::tr("Too many file redirects. Try again later."));
 }
 } // namespace
 } // namespace venture::http

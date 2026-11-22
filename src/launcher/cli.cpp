@@ -132,7 +132,7 @@ struct Args {
   }
   const std::string &word(size_t i, std::string_view what) const {
     if (i >= words.size())
-      throw UsageError(std::format("Missing {}.", what));
+      throw UsageError(i18n::trf("Missing {0}.", what));
     return words[i];
   }
 };
@@ -227,13 +227,13 @@ bool confirm(const Args &args, const std::string &question) {
   if (args.flag("--yes"))
     return true;
   if (!terminal(stdin))
-    throw UsageError(question + " Pass --yes to confirm.");
+    throw UsageError(question + i18n::tr(" Pass --yes to confirm."));
   std::cout << question << " [y/N] " << std::flush;
   std::string answer;
   std::getline(std::cin, answer);
   if (lower(answer) == "y" || lower(answer) == "yes")
     return true;
-  std::cout << "Cancelled.\n";
+  std::cout << i18n::tr("Cancelled.\n");
   return false;
 }
 
@@ -323,8 +323,8 @@ private:
   void wait_library() {
     wait([&] { return !refreshing_ && !scanning_ && library_pending_.empty(); });
     if (!refresh_error_.empty())
-      std::cerr << "warning: could not refresh the Meta library (" << refresh_error_
-                << "); showing the saved library.\n";
+      std::cerr << i18n::tr("warning: could not refresh the Meta library (") << refresh_error_
+                << i18n::tr("); showing the saved library.\n");
   }
   void wait_details(const std::string &id) {
     if (options_.offline || !session_)
@@ -340,7 +340,7 @@ private:
     auto key = resolve_account(*as);
     auto owners = game_owners(g.id);
     if (std::ranges::find(owners, key) == owners.end())
-      throw std::runtime_error(std::format("{} does not own {}.", account_label(key), g.name));
+      throw std::runtime_error(i18n::trf("{0} does not own {1}.", account_label(key), g.name));
     owner_pick_[g.id] = key;
   }
   // Runs `fn` as the account that owns the game (as the window's Install
@@ -356,7 +356,7 @@ private:
       if (!owner.empty() && owner != account_key_) {
         auto other = account(owner);
         if (!other || !other->signed_in || other->needs_reauth)
-          throw std::runtime_error(std::format("Reconnect {}, which owns {}.", account_label(owner), g.name));
+          throw std::runtime_error(i18n::trf("Reconnect {0}, which owns {1}.", account_label(owner), g.name));
         switch_account(owner);
         wait_library();
       }
@@ -371,21 +371,21 @@ private:
   void print(const Json &j) { std::cout << j.dump(2) << "\n"; }
   void need_queue() {
     if (!owns_download_queue())
-      throw std::runtime_error("The Venture launcher is open and manages downloads. Use it, or close it first.");
+      throw std::runtime_error(i18n::tr("The Venture launcher is open and manages downloads. Use it, or close it first."));
   }
   void need_online() {
     if (options_.offline)
-      throw std::runtime_error("This needs a connection. Run without --offline.");
+      throw std::runtime_error(i18n::tr("This needs a connection. Run without --offline."));
     if (!session_)
-      throw std::runtime_error("Sign in first: venture-cli accounts sign-in");
+      throw std::runtime_error(i18n::tr("Sign in first: venture-cli accounts sign-in"));
   }
 
   std::string account_name(const AccountView &a) const {
-    return !a.display_name.empty() ? a.display_name : !a.alias.empty() ? a.alias : "Meta account";
+    return !a.display_name.empty() ? a.display_name : !a.alias.empty() ? a.alias : i18n::tr("Meta account");
   }
   std::string account_label(std::string_view key) const {
     if (key == "local")
-      return "no account";
+      return i18n::tr("no account");
     auto a = account(key);
     return a ? account_name(*a) : std::string(key);
   }
@@ -402,8 +402,8 @@ private:
     }
     if (found.size() == 1)
       return found.front();
-    throw std::runtime_error(found.empty() ? std::format("No account matches \"{}\". See: venture-cli accounts", query)
-                                           : std::format("\"{}\" matches several accounts; use its key.", query));
+    throw std::runtime_error(found.empty() ? i18n::trf("No account matches \"{0}\". See: venture-cli accounts", query)
+                                           : i18n::trf("\"{0}\" matches several accounts; use its key.", query));
   }
 
   std::string package_of(const meta::Game &g) const {
@@ -440,10 +440,10 @@ private:
         std::string names;
         for (size_t i = 0; i < found.size() && i < 8; ++i)
           names += std::format("\n  {} ({})", found[i].name, found[i].id);
-        throw std::runtime_error(std::format("\"{}\" matches {} games:{}", query, found.size(), names));
+        throw std::runtime_error(i18n::trf("\"{0}\" matches {1} games:{2}", query, found.size(), names));
       }
     }
-    throw std::runtime_error(std::format("No game matches \"{}\". See: venture-cli library", query));
+    throw std::runtime_error(i18n::trf("No game matches \"{0}\". See: venture-cli library", query));
   }
 
   struct GameState {
@@ -458,15 +458,15 @@ private:
     bool active = s.job && (s.job->state == download::State::downloading || s.job->state == download::State::queued ||
                             s.job->state == download::State::checking);
     if (active)
-      s.label = s.job->importing ? "importing" : "downloading";
+      s.label = s.job->importing ? i18n::tr("importing") : i18n::tr("downloading");
     else if (s.job && s.job->state == download::State::failed)
-      s.label = "needs attention";
+      s.label = i18n::tr("needs attention");
     else if (s.install && s.install->complete)
-      s.label = "installed";
+      s.label = i18n::tr("installed");
     else if (s.install || (s.job && s.job->state == download::State::paused && s.job->done))
-      s.label = "paused";
+      s.label = i18n::tr("paused");
     else
-      s.label = "not installed";
+      s.label = i18n::tr("not installed");
     return s;
   }
   Json game_json(const meta::Game &g) const {
@@ -525,14 +525,14 @@ private:
           auto now = std::chrono::steady_clock::now();
           std::string text = std::format("{} {}", verb, j.name.empty() ? id : j.name);
           if (j.state == download::State::queued)
-            text += "  queued";
+            text += i18n::tr("  queued");
           else if (j.state == download::State::checking)
-            text += "  checking files";
+            text += i18n::tr("  checking files");
           else if (j.total) {
             const double f = double(j.done) / double(j.total);
-            text += std::format("  {:>3}%  {} of {}", int(f * 100), bytes(j.done), bytes(j.total));
+            text += i18n::trf("  {0:>3}%  {1} of {2}", int(f * 100), bytes(j.done), bytes(j.total));
             if (j.bytes_per_second > 1)
-              text += std::format("  {}/s  {} left", bytes(uint64_t(j.bytes_per_second)),
+              text += i18n::trf("  {0}/s  {1} left", bytes(uint64_t(j.bytes_per_second)),
                                   duration(double(j.total - j.done) / j.bytes_per_second));
           }
           if (tty) {
@@ -552,9 +552,9 @@ private:
     if (tty)
       std::cout << "\r\x1b[K" << std::flush;
     if (!last)
-      throw std::runtime_error("The job left the queue before it finished.");
+      throw std::runtime_error(i18n::tr("The job left the queue before it finished."));
     if (last->state != download::State::complete)
-      throw std::runtime_error(last->error.empty() ? std::format("The {} did not finish.", lower(verb))
+      throw std::runtime_error(last->error.empty() ? i18n::trf("The {0} did not finish.", lower(verb))
                                                    : last->error);
     return *last;
   }
@@ -570,7 +570,7 @@ private:
     std::vector<meta::Build> list;
     as_owner(g, [&] {
       if (!session_)
-        throw std::runtime_error("Sign in to list this game's versions.");
+        throw std::runtime_error(i18n::tr("Sign in to list this game's versions."));
       list = meta::Store(session_->access_token).all_builds(g.id);
       return 0;
     });
@@ -615,17 +615,17 @@ int Cli::status(const Args &) {
   if (json_)
     return print(out), 0;
   std::cout << "Venture " << VENTURE_VERSION << "\n";
-  std::cout << "Games folder: " << paths::utf8(settings_.games) << "\n";
+  std::cout << i18n::tr("Games folder: ") << paths::utf8(settings_.games) << "\n";
   if (accounts_.empty())
-    std::cout << "Accounts:     none (venture-cli accounts sign-in)\n";
+    std::cout << i18n::tr("Accounts:     none (venture-cli accounts sign-in)\n");
   for (auto &a : accounts_)
     if (a.active)
-      std::cout << "Account:      " << account_name(a) << " (" << accounts_.size() << " signed in)\n";
-  std::cout << "Installed:    " << complete << " games, " << bytes(total) << "\n";
-  std::cout << "Downloads:    " << (jobs.empty() ? std::string("none") : std::to_string(jobs.size()) + " in the queue")
+      std::cout << i18n::tr("Account:      ") << account_name(a) << " (" << accounts_.size() << i18n::tr(" signed in)\n");
+  std::cout << i18n::tr("Installed:    ") << complete << i18n::tr(" games, ") << bytes(total) << "\n";
+  std::cout << i18n::tr("Downloads:    ") << (jobs.empty() ? std::string(i18n::tr("none")) : std::to_string(jobs.size()) + i18n::tr(" in the queue"))
             << "\n";
   if (!owns_download_queue())
-    std::cout << "The Venture launcher is open; it manages downloads until it closes.\n";
+    std::cout << i18n::tr("The Venture launcher is open; it manages downloads until it closes.\n");
   return 0;
 }
 
@@ -645,7 +645,7 @@ int Cli::library_list(const Args &args) {
     return print(out), 0;
   }
   if (games.empty()) {
-    std::cout << (only_installed || !query.empty() ? "No games match.\n" : "No games yet.\n");
+    std::cout << (only_installed || !query.empty() ? i18n::tr("No games match.\n") : i18n::tr("No games yet.\n"));
     return 0;
   }
   std::vector<std::vector<std::string>> rows;
@@ -654,8 +654,8 @@ int Cli::library_list(const Args &args) {
     rows.push_back({g.name, s.label, s.install ? s.install->plan.version : "",
                     s.install ? bytes(s.install->bytes) : "", g.id});
   }
-  table({"Game", "Status", "Version", "Size", "App ID"}, rows);
-  std::cout << std::format("\n{} games, {} installed\n", games.size(),
+  table({i18n::tr("Game"), i18n::tr("Status"), i18n::tr("Version"), i18n::tr("Size"), i18n::tr("App ID")}, rows);
+  std::cout << i18n::trf("\n{0} games, {1} installed\n", games.size(),
                            std::ranges::count_if(games, [&](auto &g) { return installed(g.id) != nullptr; }));
   return 0;
 }
@@ -683,28 +683,28 @@ int Cli::info(const Args &args) {
   auto s = state_of(g);
   std::cout << g.name << "\n";
   if (!g.publisher.empty())
-    std::cout << "Publisher:  " << g.publisher << "\n";
-  std::cout << "App ID:     " << g.id << "\n";
+    std::cout << i18n::tr("Publisher:  ") << g.publisher << "\n";
+  std::cout << i18n::tr("App ID:     ") << g.id << "\n";
   if (auto p = package_of(g); !p.empty())
-    std::cout << "Package:    " << p << "\n";
+    std::cout << i18n::tr("Package:    ") << p << "\n";
   std::string owners;
   for (auto &key : game_owners(g.id))
     owners += (owners.empty() ? "" : ", ") + account_label(key);
-  std::cout << "Owned by:   " << (owners.empty() ? "no signed-in account" : owners) << "\n";
-  std::cout << "Status:     " << s.label << (update_available(g.id) ? " (update available)" : "") << "\n";
+  std::cout << i18n::tr("Owned by:   ") << (owners.empty() ? i18n::tr("no signed-in account") : owners) << "\n";
+  std::cout << i18n::tr("Status:     ") << s.label << (update_available(g.id) ? i18n::tr(" (update available)") : "") << "\n";
   if (s.install) {
-    std::cout << "Installed:  version " << s.install->plan.version << ", " << bytes(s.install->bytes) << "\n";
-    std::cout << "Folder:     " << paths::utf8(s.install->directory) << "\n";
+    std::cout << i18n::tr("Installed:  version ") << s.install->plan.version << ", " << bytes(s.install->bytes) << "\n";
+    std::cout << i18n::tr("Folder:     ") << paths::utf8(s.install->directory) << "\n";
   }
   if (detail != details_.end() && !detail->second.version.empty())
-    std::cout << "Latest:     version " << detail->second.version
+    std::cout << i18n::tr("Latest:     version ") << detail->second.version
               << (detail->second.size ? ", " + bytes(detail->second.size) : "") << "\n";
   if (!list.empty())
-    std::cout << "Add-ons:    " << list.size() << " (venture-cli addons \"" << g.name << "\")\n";
+    std::cout << i18n::tr("Add-ons:    ") << list.size() << i18n::tr(" (venture-cli addons \"") << g.name << "\")\n";
   if (auto d = plain_description(g.description, 700); !d.empty())
     std::cout << "\n" << d;
   if (auto e = detail_errors_.find(g.id); e != detail_errors_.end())
-    std::cerr << "warning: store details unavailable: " << e->second << "\n";
+    std::cerr << i18n::tr("warning: store details unavailable: ") << e->second << "\n";
   return 0;
 }
 
@@ -714,7 +714,7 @@ int Cli::install_game(const Args &args) {
   wait_library();
   auto g = resolve_game(args.word(1, "game"));
   if (game_owners(g.id).empty())
-    throw std::runtime_error(std::format("No signed-in account owns {}.", g.name));
+    throw std::runtime_error(i18n::trf("No signed-in account owns {0}.", g.name));
   pick_owner(args, g);
   if (auto which = args.value("--build"))
     return install_builds(args, g, *which);
@@ -723,7 +723,7 @@ int Cli::install_game(const Args &args) {
     if (!update_available(g.id)) {
       if (json_)
         return print(game_json(g)), 0;
-      std::cout << g.name << " is installed and up to date.\n";
+      std::cout << g.name << i18n::tr(" is installed and up to date.\n");
       return 0;
     }
   }
@@ -737,12 +737,12 @@ int Cli::install_game(const Args &args) {
   try {
     auto entry = game(g.id);
     if (!entry)
-      throw std::runtime_error(std::format("{} is not in the Meta library.", g.name));
+      throw std::runtime_error(i18n::trf("{0} is not in the Meta library.", g.name));
     const auto to = args.value("--to");
     install_for_owner(*entry, to ? fs::absolute(paths::from_utf8(*to)).lexically_normal() : fs::path{});
     if (!json_)
-      std::cout << "Installing " << g.name << " as " << account_label(account_key_) << "\n";
-    follow(g.id, "", "Downloading");
+      std::cout << i18n::tr("Installing ") << g.name << i18n::tr(" as ") << account_label(account_key_) << "\n";
+    follow(g.id, "", i18n::tr("Downloading"));
     // Judge the files from a scan that started after the job completed.
     wait_scan();
     rescan();
@@ -754,10 +754,10 @@ int Cli::install_game(const Args &args) {
   restore();
   auto done = installed(g.id);
   if (!done)
-    throw std::runtime_error("The installed files did not pass the size check.");
+    throw std::runtime_error(i18n::tr("The installed files did not pass the size check."));
   if (json_)
     return print(game_json(g)), 0;
-  std::cout << std::format("Installed {} (version {}, {}).\n", g.name, done->plan.version, bytes(done->bytes));
+  std::cout << i18n::trf("Installed {0} (version {1}, {2}).\n", g.name, done->plan.version, bytes(done->bytes));
   return 0;
 }
 
@@ -768,13 +768,13 @@ int Cli::list_builds(const Args &args) {
   if (!meta::version_binary(g.id).empty())
     g = resolve_game(std::string(meta::base_app(g.id)));
   if (game_owners(g.id).empty())
-    throw std::runtime_error(std::format("No signed-in account owns {}.", g.name));
+    throw std::runtime_error(i18n::trf("No signed-in account owns {0}.", g.name));
   pick_owner(args, g);
   const auto list = owner_builds(g);
   auto status = [&](const meta::Build &b) {
-    std::string out = b.live ? "latest" : "";
+    std::string out = b.live ? i18n::tr("latest") : "";
     if (auto i = installed_build(g.id, b.binary_id))
-      out += std::string(out.empty() ? "" : ", ") + (i->plan.pinned ? "installed beside" : "installed");
+      out += std::string(out.empty() ? "" : ", ") + (i->plan.pinned ? i18n::tr("installed beside") : i18n::tr("installed"));
     return out;
   };
   if (json_) {
@@ -792,15 +792,15 @@ int Cli::list_builds(const Args &args) {
       channels += (channels.empty() ? "" : ", ") + c;
     rows.push_back({b.version, b.version_code, b.binary_id, channels.empty() ? "-" : channels, status(b)});
   }
-  table({"Version", "Code", "Binary ID", "Channels", "Status"}, rows);
-  std::cout << std::format("\n{} versions of {}\n", list.size(), g.name);
+  table({i18n::tr("Version"), i18n::tr("Code"), i18n::tr("Binary ID"), i18n::tr("Channels"), i18n::tr("Status")}, rows);
+  std::cout << i18n::trf("\n{0} versions of {1}\n", list.size(), g.name);
   return 0;
 }
 
 int Cli::install_builds(const Args &args, const meta::Game &game_entry, const std::string &which) {
   const auto g = game_entry;
   if (!meta::version_binary(g.id).empty())
-    throw UsageError(std::format("{} is a version installed beside the game; name the game itself.", g.name));
+    throw UsageError(i18n::trf("{0} is a version installed beside the game; name the game itself.", g.name));
   const auto list = owner_builds(g);
   std::vector<meta::Build> chosen;
   if (which == "all")
@@ -810,12 +810,12 @@ int Cli::install_builds(const Args &args, const meta::Game &game_entry, const st
       if (b.binary_id == which || b.version == which)
         chosen.push_back(b);
     if (chosen.empty())
-      throw std::runtime_error(std::format("{} has no version {}. See: venture-cli builds \"{}\"", g.name, which, g.name));
+      throw std::runtime_error(i18n::trf("{0} has no version {1}. See: venture-cli builds \"{2}\"", g.name, which, g.name));
     if (chosen.size() > 1)
-      throw std::runtime_error(std::format("{} has {} builds of version {}; give the binary id (venture-cli builds).",
+      throw std::runtime_error(i18n::trf("{0} has {1} builds of version {2}; give the binary id (venture-cli builds).",
                                            g.name, chosen.size(), which));
   }
-  if (which == "all" && !confirm(args, std::format("Install all {} versions of {}?", chosen.size(), g.name)))
+  if (which == "all" && !confirm(args, i18n::trf("Install all {0} versions of {1}?", chosen.size(), g.name)))
     return 1;
   const auto home = account_key_;
   auto restore = [&] {
@@ -827,17 +827,17 @@ int Cli::install_builds(const Args &args, const meta::Game &game_entry, const st
   try {
     auto entry = game(g.id);
     if (!entry)
-      throw std::runtime_error(std::format("{} is not in the Meta library.", g.name));
+      throw std::runtime_error(i18n::trf("{0} is not in the Meta library.", g.name));
     const auto to = args.value("--to");
     queued = install_versions(*entry, chosen, to ? fs::absolute(paths::from_utf8(*to)).lexically_normal() : fs::path{});
     if (!json_ && queued < chosen.size())
-      std::cout << std::format("{} of {} versions are installed already.\n", chosen.size() - queued, chosen.size());
+      std::cout << i18n::trf("{0} of {1} versions are installed already.\n", chosen.size() - queued, chosen.size());
     for (auto &b : chosen) {
       if (!download::base_job(downloads_->snapshot(), meta::version_id(g.id, b.binary_id)))
         continue;  // installed already, nothing queued
       // One version failing does not stop the others.
       try {
-        follow(meta::version_id(g.id, b.binary_id), "", "Downloading");
+        follow(meta::version_id(g.id, b.binary_id), "", i18n::tr("Downloading"));
       } catch (const Interrupted &) {
         throw;
       } catch (const std::exception &e) {
@@ -855,7 +855,7 @@ int Cli::install_builds(const Args &args, const meta::Game &game_entry, const st
   if (json_)
     return print(Json{{"queued", queued}, {"failed", failed}}), failed.empty() ? 0 : 1;
   if (queued)
-    std::cout << std::format("Installed {} of {} versions of {}.\n", queued - std::min(queued, failed.size()), queued,
+    std::cout << i18n::trf("Installed {0} of {1} versions of {2}.\n", queued - std::min(queued, failed.size()), queued,
                              g.name);
   for (auto &f : failed)
     std::cerr << "  " << f << "\n";
@@ -867,15 +867,15 @@ int Cli::uninstall_game(const Args &args) {
   auto g = resolve_game(args.word(1, "game"));
   auto i = installed(g.id, false);
   if (!i)
-    throw std::runtime_error(std::format("{} is not installed.", g.name));
-  if (!confirm(args, std::format("Uninstall {} ({})? Saves are kept.", g.name, bytes(i->bytes))))
+    throw std::runtime_error(i18n::trf("{0} is not installed.", g.name));
+  if (!confirm(args, i18n::trf("Uninstall {0} ({1})? Saves are kept.", g.name, bytes(i->bytes))))
     return 1;
   const auto copy = *i;
   uninstall(copy);
   wait_scan();
   if (json_)
     return print({{"id", g.id}, {"name", g.name}, {"uninstalled", true}}), 0;
-  std::cout << "Uninstalled " << g.name << ". Its saves are kept.\n";
+  std::cout << i18n::tr("Uninstalled ") << g.name << i18n::tr(". Its saves are kept.\n");
   return 0;
 }
 
@@ -884,13 +884,13 @@ int Cli::import_saves_cmd(const Args &args) {
   auto g = resolve_game(args.word(1, "game"));
   const auto from = args.value("--from");
   if (from.has_value() == args.flag("--headset"))
-    throw UsageError("Give --from FOLDER or --headset.");
+    throw UsageError(i18n::tr("Give --from FOLDER or --headset."));
   auto task = import_saves(g.id, from ? paths::from_utf8(*from) : fs::path{}, args.value("--serial").value_or(""));
   auto n = task(std::stop_token{});
   if (json_)
     return print({{"id", g.id}, {"files", n.files}, {"skipped", n.skipped}, {"bytes", n.bytes}, {"backup", paths::utf8(n.backup)}}), 0;
-  std::cout << std::format("Imported {} save files ({}) of {}.\n", n.files, bytes(n.bytes), g.name);
-  if (!n.backup.empty()) std::cout << "The save data it replaced is in " << paths::utf8(n.backup) << "\n";
+  std::cout << i18n::trf("Imported {0} save files ({1}) of {2}.\n", n.files, bytes(n.bytes), g.name);
+  if (!n.backup.empty()) std::cout << i18n::tr("The save data it replaced is in ") << paths::utf8(n.backup) << "\n";
   return 0;
 }
 
@@ -901,9 +901,9 @@ int Cli::export_saves_cmd(const Args &args) {
   auto n = task(std::stop_token{});
   if (json_)
     return print({{"id", g.id}, {"files", n.files}, {"kept", n.kept}, {"bytes", n.bytes}, {"backup", paths::utf8(n.backup)}}), 0;
-  std::cout << std::format("Sent {} save files ({}) of {} to the headset.\n", n.files, bytes(n.bytes), g.name);
-  if (n.kept) std::cout << std::format("{} files the headset would not back up were left unchanged.\n", n.kept);
-  if (!n.backup.empty()) std::cout << "The headset's previous saves are in " << paths::utf8(n.backup) << "\n";
+  std::cout << i18n::trf("Sent {0} save files ({1}) of {2} to the headset.\n", n.files, bytes(n.bytes), g.name);
+  if (n.kept) std::cout << i18n::trf("{0} files the headset would not back up were left unchanged.\n", n.kept);
+  if (!n.backup.empty()) std::cout << i18n::tr("The headset's previous saves are in ") << paths::utf8(n.backup) << "\n";
   return 0;
 }
 
@@ -911,27 +911,27 @@ int Cli::play_game(const Args &args) {
   wait_scan();
   auto g = resolve_game(args.word(1, "game"));
   if (!installed(g.id))
-    throw std::runtime_error(std::format("{} is not installed. Install it first: venture-cli install \"{}\"", g.name,
+    throw std::runtime_error(i18n::trf("{0} is not installed. Install it first: venture-cli install \"{1}\"", g.name,
                                          g.name));
   std::string key = play_key(g.id);
   if (auto as = args.value("--as"))
     key = resolve_account(*as, true);
   launch_game(g.id, key, {});
   if (!json_)
-    std::cout << "Starting " << g.name << "\n" << std::flush;
+    std::cout << i18n::tr("Starting ") << g.name << "\n" << std::flush;
   wait([&] { return !launch_pending_.contains(g.id); });
   auto r = running_.find(g.id);
   if (r == running_.end())
-    throw std::runtime_error(notice_.empty() ? "The game did not start." : notice_);
+    throw std::runtime_error(notice_.empty() ? i18n::tr("The game did not start.") : notice_);
   if (!json_)
-    std::cout << "Running. Log: " << paths::utf8(r->second.log) << "\n" << std::flush;
+    std::cout << i18n::tr("Running. Log: ") << paths::utf8(r->second.log) << "\n" << std::flush;
   bool stopped = false;
   try {
     wait([&] { return r->second.exit.has_value(); });
   } catch (const Interrupted &) {
     // The game quits through the Activity lifecycle, as it would when this
     // process exits. A second Ctrl+C leaves now.
-    std::cerr << "\nStopping " << g.name << "...\n";
+    std::cerr << "\n" << i18n::tr("Stopping ") << g.name << "...\n";
     interrupted = 0;
     r->second.process.request_stop();
     const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(30);
@@ -945,9 +945,9 @@ int Cli::play_game(const Args &args) {
     print({{"id", g.id}, {"name", g.name}, {"exitCode", code}, {"stopped", stopped}, {"error", r->second.failure},
            {"log", paths::utf8(r->second.log)}});
   else if (code != 0)
-    std::cerr << g.name << " stopped: " << r->second.failure << "\n";
+    std::cerr << g.name << i18n::tr(" stopped: ") << r->second.failure << "\n";
   else
-    std::cout << g.name << (stopped ? " stopped.\n" : " exited.\n");
+    std::cout << g.name << (stopped ? i18n::tr(" stopped.\n") : i18n::tr(" exited.\n"));
   return stopped && code == 0 ? 130 : code;
 }
 
@@ -956,10 +956,10 @@ int Cli::logs(const Args &args) {
   auto g = resolve_game(args.word(1, "game"));
   auto package = package_of(g);
   if (package.empty())
-    throw std::runtime_error(std::format("{} has no installation to log.", g.name));
+    throw std::runtime_error(i18n::trf("{0} has no installation to log.", g.name));
   auto file = data_ / "logs" / ("runtime-" + package + ".log");
   if (!fs::exists(file))
-    throw std::runtime_error(std::format("{} has not run yet.", g.name));
+    throw std::runtime_error(i18n::trf("{0} has not run yet.", g.name));
   const auto wanted = size_t(number(Json(args.value("--lines").value_or("40"))));
   std::ifstream in(file, std::ios::binary);
   std::deque<std::string> lines;
@@ -1004,14 +1004,14 @@ int Cli::report(const Args &args) {
   } else {
     // The summary: everything before the system details.
     std::ifstream in(file, std::ios::binary);
-    for (std::string line; std::getline(in, line) && line != "=== System ===";)
+    for (std::string line; std::getline(in, line) && line != tr("=== System ===");)
       std::cout << line << "\n";
-    std::cout << "Full report: " << paths::utf8(file) << "\n";
+    std::cout << i18n::tr("Full report: ") << paths::utf8(file) << "\n";
     if (!url.empty())
-      std::cout << "Link to share: " << url << "\n";
+      std::cout << i18n::tr("Link to share: ") << url << "\n";
   }
   if (!error.empty())
-    throw std::runtime_error("The report could not be uploaded: " + error);
+    throw std::runtime_error(i18n::tr("The report could not be uploaded: ") + error);
   return 0;
 }
 
@@ -1027,7 +1027,7 @@ int Cli::addons_cmd(const Args &args) {
     uninstall_addon(g.id, sku);
     wait_scan();
     if (!json_)
-      std::cout << "Removed " << sku << " from " << g.name << ".\n";
+      std::cout << i18n::tr("Removed ") << sku << i18n::tr(" from ") << g.name << ".\n";
     return 0;
   }
   pick_owner(args, g);
@@ -1048,15 +1048,15 @@ int Cli::addons_owned(const Args &args, const meta::Game &g, const std::string &
           skus.push_back(a.sku);
       install_all_owned_addons(g.id);
     } else {
-      skus.push_back(args.word(at + 1, "add-on SKU or --all"));
+      skus.push_back(args.word(at + 1, tr("add-on SKU or --all")));
       install_addon(g.id, skus.front());
     }
     for (auto &sku : skus)
-      follow(g.id, sku, "Downloading add-on");
+      follow(g.id, sku, i18n::tr("Downloading add-on"));
     wait_scan();
     if (!json_)
-      std::cout << (skus.empty() ? "Every owned add-on is installed.\n"
-                                 : std::format("Installed {} add-on(s) for {}.\n", skus.size(), g.name));
+      std::cout << (skus.empty() ? i18n::tr("Every owned add-on is installed.\n")
+                                 : i18n::trf("Installed {0} add-on(s) for {1}.\n", skus.size(), g.name));
     return 0;
   }
   auto list = addons(g.id);
@@ -1068,15 +1068,15 @@ int Cli::addons_owned(const Args &args, const meta::Game &g, const std::string &
     return print(out), 0;
   }
   if (list.empty()) {
-    std::cout << g.name << " has no add-ons" << (addon_errors_.contains(g.id) ? " listed: " + addon_errors_[g.id] : ".")
+    std::cout << g.name << i18n::tr(" has no add-ons") << (addon_errors_.contains(g.id) ? i18n::tr(" listed: ") + addon_errors_[g.id] : ".")
               << "\n";
     return 0;
   }
   std::vector<std::vector<std::string>> rows;
   for (auto &a : list)
-    rows.push_back({a.name, a.installed ? "installed" : a.downloading ? "downloading" : a.owned ? "owned" : a.price_text,
+    rows.push_back({a.name, a.installed ? i18n::tr("installed") : a.downloading ? i18n::tr("downloading") : a.owned ? i18n::tr("owned") : a.price_text,
                     a.size ? bytes(a.size) : "", a.sku});
-  table({"Add-on", "Status", "Size", "SKU"}, rows);
+  table({i18n::tr("Add-on"), i18n::tr("Status"), i18n::tr("Size"), i18n::tr("SKU")}, rows);
   return 0;
 }
 
@@ -1088,29 +1088,29 @@ int Cli::downloads_cmd(const Args &args) {
     auto g = resolve_game(args.word(2, "game"));
     auto job = download::base_job(downloads_->snapshot(), g.id);
     if (!job)
-      throw std::runtime_error(std::format("{} has no download in the queue.", g.name));
+      throw std::runtime_error(i18n::trf("{0} has no download in the queue.", g.name));
     if (sub == "cancel") {
       downloads_->cancel(g.id);
       if (!json_)
-        std::cout << "Cancelled the download of " << g.name << ".\n";
+        std::cout << i18n::tr("Cancelled the download of ") << g.name << ".\n";
       return 0;
     }
     if (options_.offline)
-      throw std::runtime_error("Downloads need a connection. Run without --offline.");
+      throw std::runtime_error(i18n::tr("Downloads need a connection. Run without --offline."));
     auto owner = job->account == "local" ? std::nullopt : vault_.load(job->account);
     if (!owner && job->account != "local")
-      throw std::runtime_error("Reconnect the account this download belongs to.");
+      throw std::runtime_error(i18n::tr("Reconnect the account this download belongs to."));
     downloads_->resume(*job, owner ? owner->access_token : std::string{});
-    follow(g.id, "", job->importing ? "Importing" : "Downloading");
+    follow(g.id, "", job->importing ? i18n::tr("Importing") : i18n::tr("Downloading"));
     wait_scan();
     rescan();
     wait_scan();
     if (!json_)
-      std::cout << "Finished " << g.name << ".\n";
+      std::cout << i18n::tr("Finished ") << g.name << ".\n";
     return 0;
   }
   if (sub != "list")
-    throw UsageError(std::format("Unknown downloads command \"{}\".", sub));
+    throw UsageError(i18n::trf("Unknown downloads command \"{0}\".", sub));
   auto jobs = downloads_->snapshot();
   if (json_) {
     Json out = Json::array();
@@ -1121,14 +1121,14 @@ int Cli::downloads_cmd(const Args &args) {
     return print(out), 0;
   }
   if (jobs.empty()) {
-    std::cout << "The download queue is empty.\n";
+    std::cout << i18n::tr("The download queue is empty.\n");
     return 0;
   }
   std::vector<std::vector<std::string>> rows;
   for (auto &j : jobs)
     rows.push_back({j.name + (j.sku.empty() ? "" : " (" + j.sku + ")"), job_state(j.state),
-                    j.total ? std::format("{} of {}", bytes(j.done), bytes(j.total)) : "", j.error});
-  table({"Download", "State", "Progress", "Error"}, rows);
+                    j.total ? i18n::trf("{0} of {1}", bytes(j.done), bytes(j.total)) : "", j.error});
+  table({i18n::tr("Download"), i18n::tr("State"), i18n::tr("Progress"), i18n::tr("Error")}, rows);
   return 0;
 }
 
@@ -1143,13 +1143,13 @@ int Cli::import_cmd(const Args &args) {
       import_serial_ = *serial;
     scan_headset();
   } else {
-    scan_local(paths::from_utf8(args.word(1, "path to import")));
+    scan_local(paths::from_utf8(args.word(1, tr("path to import"))));
   }
   wait([&] { return !scan.busy; });
   if (!scan.error.empty())
     throw std::runtime_error(scan.error);
   if (scan.items.empty())
-    throw std::runtime_error("No Android apps were found to import.");
+    throw std::runtime_error(i18n::tr("No Android apps were found to import."));
   // --only com.a,com.b imports just those packages.
   std::set<std::string> only;
   if (auto list = args.value("--only"))
@@ -1166,13 +1166,13 @@ int Cli::import_cmd(const Args &args) {
     auto match = import_match(item);
     ready += match.importable && item.selected;
     rows.push_back({match.game ? match.game->name : item.label.empty() ? item.package : item.label, item.package,
-                    item.version_name, bytes(item.bytes), item.selected ? match.status : "Skipped"});
+                    item.version_name, bytes(item.bytes), item.selected ? match.status : i18n::tr("Skipped")});
   }
   if (!json_)
-    table({"App", "Package", "Version", "Size", "Import"}, rows);
+    table({i18n::tr("App"), i18n::tr("Package"), i18n::tr("Version"), i18n::tr("Size"), i18n::tr("Import")}, rows);
   if (!ready)
-    throw std::runtime_error("Nothing here can be imported.");
-  if (!confirm(args, std::format("Import {} app(s)?", ready)))
+    throw std::runtime_error(i18n::tr("Nothing here can be imported."));
+  if (!confirm(args, i18n::trf("Import {0} app(s)?", ready)))
     return 1;
   std::vector<std::string> ids;
   for (auto &item : scan.items)
@@ -1182,13 +1182,13 @@ int Cli::import_cmd(const Args &args) {
   const auto to = args.value("--to");
   start_import(headset, to ? fs::absolute(paths::from_utf8(*to)).lexically_normal() : fs::path{});
   for (auto &id : ids)
-    follow(id, "", "Importing");
+    follow(id, "", i18n::tr("Importing"));
   wait_scan();
   rescan();
   wait_scan();
   if (json_)
     return print({{"imported", ids}}), 0;
-  std::cout << std::format("Imported {} app(s).\n", ids.size());
+  std::cout << i18n::trf("Imported {0} app(s).\n", ids.size());
   return 0;
 }
 
@@ -1203,24 +1203,24 @@ int Cli::accounts_cmd(const Args &args) {
       return print(out), 0;
     }
     if (accounts_.empty()) {
-      std::cout << "No accounts. Add one: venture-cli accounts sign-in\n";
+      std::cout << i18n::tr("No accounts. Add one: venture-cli accounts sign-in\n");
       return 0;
     }
     std::vector<std::vector<std::string>> rows;
     for (size_t i = 0; i < accounts_.size(); ++i) {
       auto &a = accounts_[i];
-      std::string state = !a.signed_in ? "signed out" : a.needs_reauth ? "needs reconnect" : "signed in";
+      std::string state = !a.signed_in ? i18n::tr("signed out") : a.needs_reauth ? i18n::tr("needs reconnect") : i18n::tr("signed in");
       if (a.primary)
-        state += ", primary";
+        state += i18n::tr(", primary");
       rows.push_back({std::string(a.active ? "*" : " ") + std::to_string(i + 1), account_name(a), a.alias, state,
                       a.key});
     }
-    table({" #", "Account", "Alias", "Status", "Key"}, rows);
+    table({" #", i18n::tr("Account"), i18n::tr("Alias"), i18n::tr("Status"), i18n::tr("Key")}, rows);
     return 0;
   }
   if (sub == "sign-in") {
     if (options_.offline)
-      throw std::runtime_error("Sign-in needs a connection. Run without --offline.");
+      throw std::runtime_error(i18n::tr("Sign-in needs a connection. Run without --offline."));
     notice_.clear();
     const bool manual = args.flag("--manual");
     auth_window_ = !manual;
@@ -1232,13 +1232,13 @@ int Cli::accounts_cmd(const Args &args) {
       shown = auth_status_;
     };
     if (!json_ && !manual)
-      std::cout << "Complete sign-in in the Meta window.\n" << std::flush;
+      std::cout << i18n::tr("Complete sign-in in the Meta window.\n") << std::flush;
     // Manually, or when the window could not open: the link out, the address back.
     wait([&] { return !signing_in_ || (!auth_url_.empty() && (manual || auth_manual_)); }, status);
     if (signing_in_ && !verifying_) {
-      std::cerr << "1. Open this link in any browser and sign in to Meta:\n\n" << auth_url_ << "\n\n"
-                << "2. Paste the oculus:// address that Meta's Continue button tries to open\n"
-                << "   (in Firefox, press Ctrl+Shift+K before Continue and paste the message it shows):\n"
+      std::cerr << i18n::tr("1. Open this link in any browser and sign in to Meta:\n\n") << auth_url_ << "\n\n"
+                << i18n::tr("2. Paste the oculus:// address that Meta's Continue button tries to open\n")
+                << i18n::tr("   (in Firefox, press Ctrl+Shift+K before Continue and paste the message it shows):\n")
                 << std::flush;
       std::string line;
       while (signing_in_ && !verifying_ && std::getline(std::cin, line)) {
@@ -1248,16 +1248,16 @@ int Cli::accounts_cmd(const Args &args) {
       }
       if (signing_in_ && !verifying_) {  // input ended
         cancel_sign_in();
-        throw std::runtime_error("Sign-in did not finish.");
+        throw std::runtime_error(i18n::tr("Sign-in did not finish."));
       }
     }
     wait([&] { return !signing_in_; }, status);
     if (!notice_.empty())
       throw std::runtime_error(notice_);
-    if (!session_ || auth_status_ == "Sign-in cancelled.")
-      throw std::runtime_error("Sign-in did not finish.");
+    if (!session_ || auth_status_ == tr("Sign-in cancelled."))
+      throw std::runtime_error(i18n::tr("Sign-in did not finish."));
     if (!json_)
-      std::cout << "Signed in as " << account_label(account_key_) << ".\n";
+      std::cout << i18n::tr("Signed in as ") << account_label(account_key_) << ".\n";
     return 0;
   }
   const auto key = resolve_account(args.word(2, "account"));
@@ -1270,16 +1270,16 @@ int Cli::accounts_cmd(const Args &args) {
     sign_out_account(key);
   else if (sub == "remove") {
     const bool saves = args.flag("--delete-saves");
-    if (!confirm(args, std::format("Remove {} from Venture{}?", name, saves ? " and delete its saves" : "")))
+    if (!confirm(args, i18n::trf("Remove {0} from Venture{1}?", name, saves ? i18n::tr(" and delete its saves") : "")))
       return 1;
     remove_account(key, saves);
   } else
-    throw UsageError(std::format("Unknown accounts command \"{}\".", sub));
+    throw UsageError(i18n::trf("Unknown accounts command \"{0}\".", sub));
   if (!json_)
-    std::cout << (sub == "use"        ? "Active account: " + name
-                  : sub == "primary"  ? "Primary account: " + name
-                  : sub == "sign-out" ? "Signed out " + name + ". Its games and saves stay on this PC."
-                                      : "Removed " + name + ".")
+    std::cout << (sub == "use"        ? i18n::tr("Active account: ") + name
+                  : sub == "primary"  ? i18n::tr("Primary account: ") + name
+                  : sub == "sign-out" ? i18n::tr("Signed out ") + name + i18n::tr(". Its games and saves stay on this PC.")
+                                      : i18n::tr("Removed ") + name + ".")
               << "\n";
   return 0;
 }
@@ -1297,7 +1297,7 @@ int Cli::settings_cmd(const Args &args) {
         return true;
       if (v == "off" || v == "false" || v == "0")
         return false;
-      throw UsageError(std::format("{} takes on or off.", key));
+      throw UsageError(i18n::trf("{0} takes on or off.", key));
     };
     if (key == "games-folder")
       next.games = fs::absolute(paths::from_utf8(value)).lexically_normal();
@@ -1306,7 +1306,7 @@ int Cli::settings_cmd(const Args &args) {
     else if (key == "log-level") {
       const auto it = std::ranges::find(kLevels, lower(value));
       if (it == std::end(kLevels))
-        throw UsageError("log-level takes trace, debug, info, warn or error.");
+        throw UsageError(i18n::tr("log-level takes trace, debug, info, warn or error."));
       next.log_level = int(it - std::begin(kLevels));
     } else if (key == "passthrough" || key == "steam-frame-passthrough") {
       next.passthrough = on_off(value);
@@ -1315,7 +1315,7 @@ int Cli::settings_cmd(const Args &args) {
       else if (environment::parse_color_key(value)) {
         next.color_key = true;
         next.key_color = value.starts_with('#') ? value.substr(1) : value;
-      } else throw UsageError("color-key takes off or a color as six hex digits (RRGGBB), such as FF00FF.");
+      } else throw UsageError(i18n::tr("color-key takes off or a color as six hex digits (RRGGBB), such as FF00FF."));
     } else if (key == "console")
       next.console = on_off(value);
     else if (key == "add-to-steam")
@@ -1328,25 +1328,25 @@ int Cli::settings_cmd(const Args &args) {
       next.interface_language = value == "auto" ? "" : value;
     else if (key == "mirror") {
       if (value != "cropped" && value != "full" && value != "off")
-        throw UsageError("mirror takes cropped, full or off.");
+        throw UsageError(i18n::tr("mirror takes cropped, full or off."));
       next.display.mirror = value;
     } else if (key == "mirror-eye") {
       if (value != "left" && value != "right")
-        throw UsageError("mirror-eye takes left or right.");
+        throw UsageError(i18n::tr("mirror-eye takes left or right."));
       next.display.mirror_eye = value;
     } else if (key == "pc-audio") {
       next.display.pc_audio = on_off(value) ? "on" : "off";
     } else if (key == "match-resolution") {
       if (value != "auto" && value != "off")
-        throw UsageError("match-resolution takes auto or off.");
+        throw UsageError(i18n::tr("match-resolution takes auto or off."));
       next.display.match_resolution = value;
     }
     else
-      throw UsageError(std::format("Unknown setting \"{}\".", key));
+      throw UsageError(i18n::trf("Unknown setting \"{0}\".", key));
     apply_settings(std::move(next), false);
     wait_scan();
   } else if (sub != "show") {
-    throw UsageError(std::format("Unknown settings command \"{}\".", sub));
+    throw UsageError(i18n::trf("Unknown settings command \"{0}\".", sub));
   }
   Json out{{"games-folder", paths::utf8(settings_.games)},
            {"runtime", settings_.runtime_override() ? paths::utf8(settings_.runtime) + " (VENTURE_RUNTIME)" : "default"},
@@ -1458,10 +1458,10 @@ int run_cli(const std::vector<std::string> &argv) {
     std::cerr << tr("error: ") << e.what() << "\n" << tr("See: venture-cli --help") << "\n";
     return 2;
   } catch (const Interrupted &) {
-    std::cerr << "\nInterrupted. Queued downloads continue the next time Venture opens.\n";
+    std::cerr << i18n::tr("\nInterrupted. Queued downloads continue the next time Venture opens.\n");
     return 130;
   } catch (...) {
-    std::cerr << "error: " << exception_text() << "\n";
+    std::cerr << i18n::tr("error: ") << exception_text() << "\n";
     return 1;
   }
 }

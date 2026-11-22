@@ -60,6 +60,17 @@ endif()
 if(VENTURE_BUILD_LAUNCHER)
   add_subdirectory(src/launcher)
 endif()
+# venture_common's i18n markers resolve into venture_i18n (defined above, in
+# src/launcher). Every runtime executable that links venture_common needs the
+# catalog; the launcher executables already get it via venture_launcher_core.
+if(TARGET venture_i18n)
+  foreach(t IN ITEMS venture-runtime venture-java venture_xr_probe
+                     venture-runtime-platform-check venture_tests)
+    if(TARGET ${t})
+      target_link_libraries(${t} PRIVATE venture_i18n)
+    endif()
+  endforeach()
+endif()
 if(VENTURE_BUILD_TESTS)
   enable_testing()
   add_subdirectory(tests)

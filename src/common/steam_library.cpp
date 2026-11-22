@@ -1,4 +1,5 @@
 #include "common/steam_library.h"
+#include "launcher/i18n/i18n.h"
 #include "common/file_ops.h"
 #include "common/log.h"
 #include <algorithm>
@@ -30,7 +31,7 @@ struct Reader {
   size_t fields = 0;
   std::string take(size_t n) {
     if (n > bytes.size() - pos)
-      throw std::runtime_error("Truncated Steam VDF.");
+      throw std::runtime_error(i18n::tr("Truncated Steam VDF."));
     auto s = std::string(bytes.substr(pos, n));
     pos += n;
     return s;
@@ -38,12 +39,12 @@ struct Reader {
   std::string string() {
     auto end = bytes.find('\0', pos);
     if (end == bytes.npos)
-      throw std::runtime_error("Unterminated Steam VDF string.");
+      throw std::runtime_error(i18n::tr("Unterminated Steam VDF string."));
     return take(end - pos + 1);
   }
   Vdf object(unsigned depth) {
     if (depth > 64)
-      throw std::runtime_error("Steam VDF nesting exceeds 64.");
+      throw std::runtime_error(i18n::tr("Steam VDF nesting exceeds 64."));
     Vdf result;
     for (;;) {
       auto type = uint8_t(take(1)[0]);
@@ -52,7 +53,7 @@ struct Reader {
         return result;
       }
       if (++fields > 200000)
-        throw std::runtime_error("Steam VDF field count exceeds limit.");
+        throw std::runtime_error(i18n::tr("Steam VDF field count exceeds limit."));
       Vdf node;
       node.type = type;
       node.key = string();
@@ -75,18 +76,17 @@ struct Reader {
       else if (type == 9)
         node.value = take(1);
       else
-        throw std::runtime_error(
-            "Unsupported Steam VDF wire type; leaving file unchanged.");
+        throw std::runtime_error(i18n::tr("Unsupported Steam VDF wire type; leaving file unchanged."));
       result.children.push_back(std::move(node));
     }
   }
 };
 void encode(const Vdf &obj, std::string &out, unsigned depth) {
   if (depth > 64)
-    throw std::runtime_error("Steam VDF nesting exceeds 64.");
+    throw std::runtime_error(i18n::tr("Steam VDF nesting exceeds 64."));
   for (const auto &n : obj.children) {
     if (n.key.find('\0') != n.key.npos)
-      throw std::runtime_error("Invalid Steam VDF key.");
+      throw std::runtime_error(i18n::tr("Invalid Steam VDF key."));
     out += char(n.type);
     out += n.key;
     out += '\0';
@@ -95,7 +95,7 @@ void encode(const Vdf &obj, std::string &out, unsigned depth) {
     else
       out += n.value;
     if (out.size() > limit)
-      throw std::runtime_error("Steam VDF exceeds size limit.");
+      throw std::runtime_error(i18n::tr("Steam VDF exceeds size limit."));
   }
   out += char(obj.end);
 }
@@ -186,7 +186,7 @@ struct TextReader {
           c = bytes[pos++];
         s += c;
       }
-      throw std::runtime_error("Invalid Steam loginusers VDF.");
+      throw std::runtime_error(i18n::tr("Invalid Steam loginusers VDF."));
     }
     s += c;
     while (pos < bytes.size() && !std::isspace(uint8_t(bytes[pos])) &&
@@ -196,22 +196,22 @@ struct TextReader {
   }
   Vdf object(unsigned depth = 0) {
     if (depth > 64)
-      throw std::runtime_error("Steam loginusers nesting exceeds 64.");
+      throw std::runtime_error(i18n::tr("Steam loginusers nesting exceeds 64."));
     Vdf obj;
     for (;;) {
       auto k = token();
       if (k.empty()) {
         if (depth)
-          throw std::runtime_error("Truncated loginusers.");
+          throw std::runtime_error(i18n::tr("Truncated loginusers."));
         return obj;
       }
       if (k == "}") {
         if (!depth)
-          throw std::runtime_error("Unexpected loginusers brace.");
+          throw std::runtime_error(i18n::tr("Unexpected loginusers brace."));
         return obj;
       }
       if (k == "{")
-        throw std::runtime_error("Invalid loginusers key.");
+        throw std::runtime_error(i18n::tr("Invalid loginusers key."));
       auto v = token();
       if (v == "{") {
         auto n = object(depth + 1);
@@ -219,7 +219,7 @@ struct TextReader {
         obj.children.push_back(std::move(n));
       } else {
         if (v == "}")
-          throw std::runtime_error("Invalid loginusers value.");
+          throw std::runtime_error(i18n::tr("Invalid loginusers value."));
         put(obj, k, v);
       }
     }
@@ -227,16 +227,16 @@ struct TextReader {
 };
 void safe_target(const fs::path &config, const fs::path &path) {
   if (!paths::within(config, path) || is_link(path))
-    throw std::runtime_error("Steam output path escapes account config.");
+    throw std::runtime_error(i18n::tr("Steam output path escapes account config."));
 }
 } // namespace
 Vdf read_vdf(std::string_view bytes) {
   if (bytes.size() > limit)
-    throw std::runtime_error("Steam VDF exceeds size limit.");
+    throw std::runtime_error(i18n::tr("Steam VDF exceeds size limit."));
   Reader r{bytes};
   auto out = r.object(0);
   if (r.pos != bytes.size())
-    throw std::runtime_error("Trailing Steam VDF bytes.");
+    throw std::runtime_error(i18n::tr("Trailing Steam VDF bytes."));
   return out;
 }
 std::string write_vdf(const Vdf &obj) {
@@ -363,12 +363,11 @@ fs::path account_config(const fs::path &root) {
   else if (users.size() == 1)
     config = users.begin()->second;
   else
-    throw std::runtime_error(
-        "Steam profile is ambiguous or unavailable; sign in to Steam once.");
+    throw std::runtime_error(i18n::tr("Steam profile is ambiguous or unavailable; sign in to Steam once."));
   // userdata itself may be a link (Scoop keeps it in its persist directory);
   // nothing inside it may be.
   if (is_link(config) || !paths::within(root / "userdata", config))
-    throw std::runtime_error("Linked Steam account config is unsupported.");
+    throw std::runtime_error(i18n::tr("Linked Steam account config is unsupported."));
   return config;
 }
 namespace {
@@ -425,13 +424,13 @@ void client_command(const fs::path &root, const char *arg) {
   if (reinterpret_cast<intptr_t>(ShellExecuteW(nullptr, L"open", exe.c_str(),
                                                paths::from_utf8(arg).c_str(),
                                                nullptr, SW_HIDE)) <= 32)
-    throw std::runtime_error("Could not request Steam restart.");
+    throw std::runtime_error(i18n::tr("Could not request Steam restart."));
 #else
   auto exe = (root / "steam.sh").string();
   pid_t pid;
   char *args[] = {exe.data(), const_cast<char *>(arg), nullptr};
   if (posix_spawn(&pid, exe.c_str(), nullptr, nullptr, args, environ))
-    throw std::runtime_error("Could not request Steam restart.");
+    throw std::runtime_error(i18n::tr("Could not request Steam restart."));
   std::thread([pid] {
     int status;
     while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {
@@ -518,7 +517,7 @@ Result sync(const fs::path &root, const fs::path &executable,
     list = &doc.children.back();
   }
   if (list->type != 0)
-    throw std::runtime_error("Steam shortcuts is not an object.");
+    throw std::runtime_error(i18n::tr("Steam shortcuts is not an object."));
   std::map<std::string, Vdf> prior;
   std::vector<Vdf> retained;
   for (auto &e : list->children) {
@@ -606,8 +605,7 @@ Result sync(const fs::path &root, const fs::path &executable,
   if (bytes != old) {
     if (fs::exists(target) != existed ||
         (existed && paths::read(target, limit) != old))
-      throw std::runtime_error("Steam shortcuts changed during sync; leaving "
-                               "them unchanged. Retry sync.");
+      throw std::runtime_error(i18n::tr("Steam shortcuts changed during sync; leaving them unchanged. Retry sync."));
     if (fs::exists(target))
       paths::atomic_write(config / "shortcuts.vdf.venture.bak", old);
     paths::atomic_write(target, bytes);

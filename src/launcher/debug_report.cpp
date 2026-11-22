@@ -1,5 +1,6 @@
 #include "launcher/debug_report.h"
 #include "launcher/diagnosis.h"
+#include "launcher/i18n/i18n.h"
 #include "common/environment.h"
 #include "common/http/client.h"
 #include "common/library/library.h"
@@ -89,7 +90,7 @@ std::wstring reg_string(HKEY root, const wchar_t *key, const wchar_t *value, boo
 // then skips that driver without a message).
 std::string manifest(const std::string &path) {
   std::error_code ec;
-  return fs::exists(paths::from_utf8(path), ec) ? path : path + " (file missing)";
+  return fs::exists(paths::from_utf8(path), ec) ? path : path + i18n::tr(" (file missing)");
 }
 
 std::optional<DWORD> reg_dword(HKEY root, const wchar_t *key, const wchar_t *value) {
@@ -133,42 +134,42 @@ void system_section(std::string &out) {
   const wchar_t *nt = L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion";
   std::string build = narrow(reg_string(HKEY_LOCAL_MACHINE, nt, L"CurrentBuildNumber"));
   auto ubr = reg_dword(HKEY_LOCAL_MACHINE, nt, L"UBR");
-  out += std::format("OS: Windows {} build {}{} ({})\n", std::atoi(build.c_str()) >= 22000 ? "11" : "10", build,
+  out += i18n::trf("OS: Windows {0} build {1}{2} ({3})\n", std::atoi(build.c_str()) >= 22000 ? "11" : "10", build,
                      ubr ? std::format(".{}", *ubr) : "",
                      narrow(reg_string(HKEY_LOCAL_MACHINE, nt, L"DisplayVersion")));
-  out += std::format("CPU: {} ({} threads)\n",
+  out += i18n::trf("CPU: {0} ({1} threads)\n",
                      narrow(reg_string(HKEY_LOCAL_MACHINE, L"HARDWARE\\DESCRIPTION\\System\\CentralProcessor\\0",
                                        L"ProcessorNameString")),
                      std::thread::hardware_concurrency());
   MEMORYSTATUSEX memory{.dwLength = sizeof(MEMORYSTATUSEX)};
   if (GlobalMemoryStatusEx(&memory))
-    out += std::format("RAM: {:.1f} GiB, {:.1f} GiB free\n", memory.ullTotalPhys / 1073741824.0,
+    out += i18n::trf("RAM: {0:.1f} GiB, {1:.1f} GiB free\n", memory.ullTotalPhys / 1073741824.0,
                        memory.ullAvailPhys / 1073741824.0);
   const std::wstring display = L"SYSTEM\\CurrentControlSet\\Control\\Class\\{4d36e968-e325-11ce-bfc1-08002be10318}";
   for (const auto &sub : reg_subkeys(HKEY_LOCAL_MACHINE, display.c_str())) {
     std::wstring key = display + L"\\" + sub;
     std::string name = narrow(reg_string(HKEY_LOCAL_MACHINE, key.c_str(), L"DriverDesc"));
     if (name.empty()) continue;
-    out += std::format("GPU: {}, driver {}\n", name,
+    out += i18n::trf("GPU: {0}, driver {1}\n", name,
                        narrow(reg_string(HKEY_LOCAL_MACHINE, key.c_str(), L"DriverVersion")));
     // The Vulkan loader finds each adapter's driver here. With none usable it has
     // no window-surface support and ANGLE cannot start (no VK_KHR_surface).
     std::string vulkan = narrow(reg_string(HKEY_LOCAL_MACHINE, key.c_str(), L"VulkanDriverName", true));
-    if (!vulkan.empty()) out += std::format("  Vulkan driver: {}\n", manifest(vulkan));
+    if (!vulkan.empty()) out += i18n::trf("  Vulkan driver: {0}\n", manifest(vulkan));
   }
 }
 
 void xr_section(std::string &out) {
   const wchar_t *xr = L"SOFTWARE\\Khronos\\OpenXR\\1";
   std::string active = narrow(reg_string(HKEY_LOCAL_MACHINE, xr, L"ActiveRuntime"));
-  out += std::format("Active OpenXR runtime: {}\n", active.empty() ? "(none registered)" : active);
+  out += i18n::trf("Active OpenXR runtime: {0}\n", active.empty() ? i18n::tr("(none registered)") : active);
   for (auto [root, label] : {std::pair{HKEY_LOCAL_MACHINE, "machine"}, std::pair{HKEY_CURRENT_USER, "user"}}) {
     for (const auto &[name, value] : reg_values(root, L"SOFTWARE\\Khronos\\OpenXR\\1\\AvailableRuntimes"))
-      out += std::format("OpenXR runtime ({}): {}{}\n", label, name, value ? " (disabled)" : "");
+      out += i18n::trf("OpenXR runtime ({0}): {1}{2}\n", label, name, value ? i18n::tr(" (disabled)") : "");
     for (const auto &[name, value] : reg_values(root, L"SOFTWARE\\Khronos\\Vulkan\\Drivers"))
-      out += std::format("Vulkan driver ({}): {}{}\n", label, manifest(name), value ? " (disabled)" : "");
+      out += i18n::trf("Vulkan driver ({0}): {1}{2}\n", label, manifest(name), value ? i18n::tr(" (disabled)") : "");
     for (const auto &[name, value] : reg_values(root, L"SOFTWARE\\Khronos\\Vulkan\\ImplicitLayers"))
-      out += std::format("Vulkan implicit layer ({}): {}{}\n", label, name, value ? " (disabled)" : "");
+      out += i18n::trf("Vulkan implicit layer ({0}): {1}{2}\n", label, name, value ? i18n::tr(" (disabled)") : "");
   }
 }
 #else
@@ -187,14 +188,14 @@ void system_section(std::string &out) {
   std::erase(os, '"');
   utsname u{};
   uname(&u);
-  out += std::format("OS: {} (kernel {} {})\n", os, u.release, u.machine);
+  out += i18n::trf("OS: {0} (kernel {1} {2})\n", os, u.release, u.machine);
   const char *desktop = std::getenv("XDG_CURRENT_DESKTOP"), *session = std::getenv("XDG_SESSION_TYPE");
-  out += std::format("Desktop: {} ({})\n", desktop ? desktop : "unknown", session ? session : "unknown session");
+  out += i18n::trf("Desktop: {0} ({1})\n", desktop ? desktop : "unknown", session ? session : i18n::tr("unknown session"));
   std::string cpu = first_line_with("/proc/cpuinfo", "model name\t: ");
-  out += std::format("CPU: {} ({} threads)\n", cpu, std::thread::hardware_concurrency());
+  out += i18n::trf("CPU: {0} ({1} threads)\n", cpu, std::thread::hardware_concurrency());
   long pages = sysconf(_SC_PHYS_PAGES), avail = sysconf(_SC_AVPHYS_PAGES), size = sysconf(_SC_PAGE_SIZE);
-  out += std::format("RAM: {:.1f} GiB, {:.1f} GiB free\n", double(pages) * size / 1073741824.0,
-                     double(avail) * size / 1073741824.0);
+  out += i18n::trf("RAM: {0:.1f} GiB, {1:.1f} GiB free\n", double(pages) * size / 1073741824.0,
+                   double(avail) * size / 1073741824.0);
   // Names and kernel drivers from lspci, else the PCI ids sysfs gives.
   if (auto gpus = gpu_names(); !gpus.empty()) {
     out += gpus;
@@ -208,10 +209,10 @@ void system_section(std::string &out) {
       auto driver = fs::read_symlink(device / "driver", ec).filename().string();
       std::erase(vendor, '\n');
       std::erase(id, '\n');
-      out += std::format("GPU: {}:{}, driver {}\n", vendor, id, driver);
+      out += i18n::trf("GPU: {0}:{1}, driver {2}\n", vendor, id, driver);
     }
   }
-  out += std::format("VR input devices: {}\n", vr_inputs());
+  out += i18n::trf("VR input devices: {0}\n", vr_inputs());
 }
 
 void xr_section(std::string &out) {
@@ -226,7 +227,7 @@ void xr_section(std::string &out) {
     auto active = dir / "openxr/1/active_runtime.json";
     if (!fs::exists(active, ec)) continue;
     auto target = fs::canonical(active, ec);
-    out += std::format("Active OpenXR runtime: {} -> {}\n", paths::utf8(active), paths::utf8(target));
+    out += i18n::trf("Active OpenXR runtime: {0} -> {1}\n", paths::utf8(active), paths::utf8(target));
     break;
   }
   std::vector<fs::path> data;
@@ -235,7 +236,7 @@ void xr_section(std::string &out) {
   for (auto d : {"/usr/local/share", "/usr/share", "/etc"}) data.emplace_back(d);
   for (const auto &dir : data)
     for (const auto &f : fs::directory_iterator(dir / "vulkan/implicit_layer.d", ec))
-      out += std::format("Vulkan implicit layer: {}\n", paths::utf8(f.path()));
+      out += i18n::trf("Vulkan implicit layer: {0}\n", paths::utf8(f.path()));
 }
 #endif
 
@@ -250,12 +251,12 @@ void openxr_layer_section(std::string &out, std::string &broken) {
     const bool unusable = layer.problem.starts_with("the manifest");
     const bool skipped = unusable || (layer.library.has_parent_path() && layer.problem.ends_with(" is missing"));
     const bool enabled = unusable || openxr_layers::enabled(layer);
-    std::string state = layer.problem.empty() ? "ok" : layer.problem + (skipped ? " (the loader skips it)" : "");
-    if (!enabled) state += std::format(" (disabled by {})", layer.disable_environment);
-    out += std::format("OpenXR implicit layer: {} ({}), library {}: {}\n", layer.name.empty() ? "unnamed" : layer.name,
+    std::string state = layer.problem.empty() ? "ok" : layer.problem + (skipped ? i18n::tr(" (the loader skips it)") : "");
+    if (!enabled) state += i18n::trf(" (disabled by {0})", layer.disable_environment);
+    out += i18n::trf("OpenXR implicit layer: {0} ({1}), library {2}: {3}\n", layer.name.empty() ? i18n::tr("unnamed") : layer.name,
                        paths::utf8(path), layer.library_path.empty() ? "none" : layer.library_path, state);
     if (!layer.problem.empty() && !skipped && enabled)
-      broken += std::format("OpenXR API layer broken: {} ({}): {}\n", layer.name, paths::utf8(path), layer.problem);
+      broken += i18n::trf("OpenXR API layer broken: {0} ({1}): {2}\n", layer.name, paths::utf8(path), layer.problem);
   }
 }
 
@@ -317,55 +318,55 @@ void settings_section(std::string &out, const fs::path &data, const std::string 
   const auto global = library::global_display_defaults();
   const auto defaults = library::Settings::defaults(data);
   auto source = [](bool by_game, bool global_default) {
-    return by_game ? "game override" : global_default ? "global default" : "global setting";
+    return by_game ? i18n::tr("game override") : global_default ? i18n::tr("global default") : i18n::tr("global setting");
   };
 
-  out += "Game overrides:";
+  out += i18n::tr("Game overrides:");
   if (app_id.empty()) out += " (game not identified; the global settings apply)\n";
   else {
     std::string lines;
     if (game) {
       if (!game->resolution.empty())
-        lines += std::format("  resolution: {}\n", library::resolution_environment(*game));
-      if (!game->rate.empty()) lines += std::format("  frame rate: {}\n", library::frame_rate_environment(*game));
-      if (!game->mirror.empty()) lines += std::format("  mirror: {}\n", game->mirror);
-      if (!game->mirror_eye.empty()) lines += std::format("  mirror eye: {}\n", game->mirror_eye);
-      if (!game->pc_audio.empty()) lines += std::format("  PC audio: {}\n", game->pc_audio);
+        lines += i18n::trf("  resolution: {0}\n", library::resolution_environment(*game));
+      if (!game->rate.empty()) lines += i18n::trf("  frame rate: {0}\n", library::frame_rate_environment(*game));
+      if (!game->mirror.empty()) lines += i18n::trf("  mirror: {0}\n", game->mirror);
+      if (!game->mirror_eye.empty()) lines += i18n::trf("  mirror eye: {0}\n", game->mirror_eye);
+      if (!game->pc_audio.empty()) lines += i18n::trf("  PC audio: {0}\n", game->pc_audio);
       if (!game->match_resolution.empty())
-        lines += std::format("  match game resolution: {}\n", game->match_resolution);
+        lines += i18n::trf("  match game resolution: {0}\n", game->match_resolution);
       if (!game->texture_compression.empty())
-        lines += std::format("  texture compression: {}\n", game->texture_compression);
+        lines += i18n::trf("  texture compression: {0}\n", game->texture_compression);
       if (game->texture_compression_threshold)
-        lines += std::format("  texture compression threshold: {}%\n", game->texture_compression_threshold);
-      for (const auto &[id, value] : game->advanced) lines += std::format("  advanced {}: {}\n", id, value);
+        lines += i18n::trf("  texture compression threshold: {0}%\n", game->texture_compression_threshold);
+      for (const auto &[id, value] : game->advanced) lines += i18n::trf("  advanced {0}: {1}\n", id, value);
     }
-    if (own_controls) lines += std::format("  controls: {}\n", controls::encode(s.game_controls.at(app_id)));
-    out += lines.empty() ? " none (the game follows the global settings)\n" : "\n" + lines;
+    if (own_controls) lines += i18n::trf("  controls: {0}\n", controls::encode(s.game_controls.at(app_id)));
+    out += lines.empty() ? i18n::tr(" none (the game follows the global settings)\n") : "\n" + lines;
   }
 
-  out += "Effective settings:\n";
+  out += i18n::tr("Effective settings:\n");
   const auto display = library::effective_display(s.display, game);
   {
     const auto value = library::resolution_environment(display);
-    std::string text = value == "runtime" ? "the host runtime's recommended size" : value;
+    std::string text = value == "runtime" ? i18n::tr("the host runtime's recommended size") : value;
     for (const auto &preset : library::headset_presets)
       if (display.resolution == preset.id) text = std::format("{} ({})", preset.name, value);
-    if (display.resolution == "percent") text = value + " of the host runtime's pixel count";
-    out += std::format("  resolution: {} ({})\n", text,
+    if (display.resolution == "percent") text = value + i18n::tr(" of the host runtime's pixel count");
+    out += i18n::trf("  resolution: {0} ({1})\n", text,
                        source(game && !game->resolution.empty(), s.display.resolution == global.resolution));
   }
   {
     const auto value = library::frame_rate_environment(display);
-    out += std::format("  frame rate: {} ({})\n", value == "runtime" ? "the host runtime's rate" : value + " Hz",
+    out += i18n::trf("  frame rate: {0} ({1})\n", value == "runtime" ? i18n::tr("the host runtime's rate") : value + " Hz",
                        source(game && !game->rate.empty(), s.display.rate == global.rate));
   }
-  out += std::format("  mirror: {} ({}), eye {} ({})\n", library::mirror_environment(display),
+  out += i18n::trf("  mirror: {0} ({1}), eye {2} ({3})\n", library::mirror_environment(display),
                      source(game && !game->mirror.empty(), s.display.mirror == global.mirror),
                      library::mirror_eye_environment(display),
                      source(game && !game->mirror_eye.empty(), s.display.mirror_eye == global.mirror_eye));
-  out += std::format("  PC audio: {} ({})\n", library::pc_audio_environment(display),
+  out += i18n::trf("  PC audio: {0} ({1})\n", library::pc_audio_environment(display),
                      source(game && !game->pc_audio.empty(), s.display.pc_audio == global.pc_audio));
-  out += std::format("  match game resolution: {} ({})\n", library::eye_scale_environment(display),
+  out += i18n::trf("  match game resolution: {0} ({1})\n", library::eye_scale_environment(display),
                      source(game && !game->match_resolution.empty(),
                             s.display.match_resolution == global.match_resolution));
   {
@@ -376,46 +377,46 @@ void settings_section(std::string &out, const fs::path &data, const std::string 
     const bool by_game = game && !game->texture_compression.empty();
     const char *name = mode == "never" || mode == "0" ? "Off" : mode == "auto" || mode == "2" ? "Automatic" : "Always";
     const char *from = mode_from && std::string_view(mode_from) == "inherited"
-                           ? "VENTURE_TEXTURE_COMPRESSION in the launcher's environment"
+                           ? i18n::tr("VENTURE_TEXTURE_COMPRESSION in the launcher's environment")
                            : source(by_game, s.texture_compression == defaults.texture_compression);
-    out += std::format("  texture compression: {} ({})", name, from);
+    out += i18n::trf("  texture compression: {0} ({1})", name, from);
     if (std::string_view(name) == "Automatic") {
       const long parsed = threshold.empty() ? 0 : std::strtol(threshold.c_str(), nullptr, 10);
       const char *threshold_source =
           threshold_from && std::string_view(threshold_from) == "inherited"
-              ? "VENTURE_TEXTURE_COMPRESSION_THRESHOLD in the launcher's environment"
+              ? i18n::tr("VENTURE_TEXTURE_COMPRESSION_THRESHOLD in the launcher's environment")
               : source(by_game && game->texture_compression_threshold,
                        s.texture_compression_threshold == defaults.texture_compression_threshold);
-      out += std::format(", threshold {}% ({})", parsed >= 1 && parsed <= 100 ? parsed : 50, threshold_source);
+      out += i18n::trf(", threshold {0}% ({1})", parsed >= 1 && parsed <= 100 ? parsed : 50, threshold_source);
     }
     out += '\n';
   }
-  out += std::format("  controls: {}\n", own_controls ? "the game's own" : "the global controls");
-  out += std::format("  mixed reality (passthrough): {} ({})\n", s.passthrough ? "on" : "off",
+  out += i18n::trf("  controls: {0}\n", own_controls ? i18n::tr("the game's own") : i18n::tr("the global controls"));
+  out += i18n::trf("  mixed reality (passthrough): {0} ({1})\n", s.passthrough ? "on" : "off",
                      source(false, s.passthrough == defaults.passthrough));
-  if (s.passthrough && s.color_key) out += std::format("  passthrough color key: #{}\n", s.key_color);
-  out += std::format("  game language: {}\n", s.game_language.empty() ? "the system's" : s.game_language);
-  out += std::format("  log level: {} ({})\n", s.log_level, source(false, s.log_level == defaults.log_level));
+  if (s.passthrough && s.color_key) out += i18n::trf("  passthrough color key: #{0}\n", s.key_color);
+  out += i18n::trf("  game language: {0}\n", s.game_language.empty() ? i18n::tr("the system's") : s.game_language);
+  out += i18n::trf("  log level: {0} ({1})\n", s.log_level, source(false, s.log_level == defaults.log_level));
 
-  out += "Runtime toggles:\n";
+  out += i18n::tr("Runtime toggles:\n");
   {
     // The runtime keeps translated code unless VENTURE_JIT_PTC is 0.
     const auto [ptc, from] = variable("VENTURE_JIT_PTC");
     const bool kept = ptc != "0";
-    out += std::format("  keep translated code: {} ({})\n", kept ? "on" : "off",
+    out += i18n::trf("  keep translated code: {0} ({1})\n", kept ? "on" : "off",
                        from && std::string_view(from) == "inherited"
-                           ? "VENTURE_JIT_PTC in the launcher's environment"
+                           ? i18n::tr("VENTURE_JIT_PTC in the launcher's environment")
                            : source(false, s.keep_translated_code == defaults.keep_translated_code));
   }
   if (s.vulkan_layers.empty())
-    out += "  overlay blocking: on, every third-party implicit Vulkan layer is left out (global default)\n";
+    out += i18n::tr("  overlay blocking: on, every third-party implicit Vulkan layer is left out (global default)\n");
   else {
     std::string kept;
     for (const auto &layer : s.vulkan_layers) kept += (kept.empty() ? "" : ", ") + layer;
-    out += std::format("  overlay blocking: on, except the kept layers {} (global setting)\n", kept);
+    out += i18n::trf("  overlay blocking: on, except the kept layers {0} (global setting)\n", kept);
   }
 
-  out += "Launch environment from these settings:\n";
+  out += i18n::tr("Launch environment from these settings:\n");
   for (const auto &[key, value] : environment) out += std::format("  {}={}\n", key, value);
 }
 
@@ -425,12 +426,12 @@ void log_section(std::string &out, const fs::path &file, size_t limit) {
   if (ec) return;
   constexpr size_t header = 256;
   if (out.size() + header >= kReportBudget) {
-    out += std::format("\n=== {} left out: the report is full ===\n", paths::utf8(file.filename()));
+    out += i18n::trf("\n=== {0} left out: the report is full ===\n", paths::utf8(file.filename()));
     return;
   }
   limit = std::min(limit, kReportBudget - out.size() - header);
-  out += std::format("\n=== {} ({} KiB, written {}{}) ===\n", paths::utf8(file.filename()), (size + 1023) / 1024,
-                     local_time(fs::last_write_time(file, ec)), size > limit ? ", start and end" : "");
+  out += i18n::trf("\n=== {0} ({1} KiB, written {2}{3}) ===\n", paths::utf8(file.filename()), (size + 1023) / 1024,
+                     local_time(fs::last_write_time(file, ec)), size > limit ? i18n::tr(", start and end") : "");
   std::string text;
   if (size > limit) {
     // The start holds the session's setup (device, swapchains, layers), which a
@@ -438,7 +439,7 @@ void log_section(std::string &out, const fs::path &file, size_t limit) {
     text = read_file(file, limit / 4);
     text.resize(text.rfind('\n') + 1);
     std::string end = tail_log(file, limit - text.size());
-    out += text + std::format("... {} KiB left out ...\n", (size - text.size() - end.size() + 1023) / 1024);
+    out += text + i18n::trf("... {0} KiB left out ...\n", (size - text.size() - end.size() + 1023) / 1024);
     text = std::move(end);
   } else {
     text = tail_log(file, limit);
@@ -463,7 +464,7 @@ std::string session_facts(const fs::path &file) {
   return facts;
 }
 void facts_section(std::string &out, const fs::path &file) {
-  if (const auto facts = session_facts(file); !facts.empty()) out += "\n=== Session facts ===\n" + facts;
+  if (const auto facts = session_facts(file); !facts.empty()) out += i18n::tr("\n=== Session facts ===\n") + facts;
 }
 
 // The runtime's once-a-minute "[timeline]" lines from the whole log, which log_section
@@ -477,8 +478,8 @@ void timeline_section(std::string &out, const fs::path &file) {
     if (line.find(" [timeline] ") != std::string::npos) lines.push_back(line.substr(0, 1024));
   if (lines.empty()) return;
   constexpr std::size_t kKeep = 120;
-  out += std::format("\n=== Session timeline ({} minutes{}) ===\n", lines.size(),
-                     lines.size() > kKeep ? std::format(", {} shown", kKeep) : std::string());
+  out += i18n::trf("\n=== Session timeline ({0} minutes{1}) ===\n", lines.size(),
+                     lines.size() > kKeep ? i18n::trf(", {0} shown", kKeep) : std::string());
   if (lines.size() <= kKeep) {
     for (const auto &line : lines) out += line + "\n";
     return;
@@ -499,11 +500,11 @@ void layers_section(std::string &out, const fs::path &file) {
       lines.push_back(line.substr(0, 2048));
   if (lines.empty()) return;
   constexpr std::size_t kKeep = 120;
-  out += std::format("\n=== Frame layers and session states ({} lines{}) ===\n", lines.size(),
-                     lines.size() > kKeep ? std::format(", first and last {} shown", kKeep / 2) : std::string());
+  out += i18n::trf("\n=== Frame layers and session states ({0} lines{1}) ===\n", lines.size(),
+                     lines.size() > kKeep ? i18n::trf(", first and last {0} shown", kKeep / 2) : std::string());
   for (std::size_t i = 0; i < lines.size(); ++i) {
     if (lines.size() > kKeep && i == kKeep / 2) {
-      out += std::format("... {} lines left out ...\n", lines.size() - kKeep);
+      out += i18n::trf("... {0} lines left out ...\n", lines.size() - kKeep);
       i = lines.size() - kKeep / 2;
     }
     out += lines[i] + "\n";
@@ -541,10 +542,10 @@ void missing_classes_section(std::string &out, const fs::path &log) {
   if (missing.empty()) return;
   std::vector<std::pair<std::string, std::pair<int, std::string>>> sorted(missing.begin(), missing.end());
   std::ranges::stable_sort(sorted, [](auto &a, auto &b) { return a.second.first > b.second.first; });
-  out += std::format("\n=== Missing Android classes and members ({} needed by {} app classes) ===\n", sorted.size(),
+  out += i18n::trf("\n=== Missing Android classes and members ({0} needed by {1} app classes) ===\n", sorted.size(),
                      failures.size());
   for (std::size_t i = 0; i < sorted.size() && i < 80; ++i)
-    out += std::format("{} ({}; e.g. {})\n", sorted[i].first, sorted[i].second.first, sorted[i].second.second);
+    out += i18n::trf("{0} ({1}; e.g. {2})\n", sorted[i].first, sorted[i].second.first, sorted[i].second.second);
 }
 
 // Keeps the newest few reports.
@@ -623,31 +624,31 @@ Run read_run(const fs::path &log, const fs::path &console) {
     if (line.find(" E [runtime] ") != std::string::npos) runtime_error = true;
   }
   if (auto obb = library::missing_expansion(log); !obb.empty()) {
-    run.result = std::format("closed: its install lacks the expansion file {}", obb);
+    run.result = i18n::trf("closed: its install lacks the expansion file {0}", obb);
     run.failed = true;
   } else if (library::needed_meta_sign_in(log)) {
-    run.result = "closed: it needs a signed-in Meta account that owns it";
+    run.result = i18n::tr("closed: it needs a signed-in Meta account that owns it");
     run.failed = true;
   } else if (library::refused_entitlement(log)) {
-    run.result = "closed: Meta says the signed-in account does not own it";
+    run.result = i18n::tr("closed: Meta says the signed-in account does not own it");
     run.failed = true;
   } else if (library::needed_device_attestation(log)) {
-    run.result = "closed: it requires Meta device attestation, which only a real Quest can provide";
+    run.result = i18n::tr("closed: it requires Meta device attestation, which only a real Quest can provide");
     run.failed = true;
   } else if (auto dialog = library::game_dialog(log); !dialog.empty() && !stopped) {
-    run.result = std::format("closed after showing the message \"{}\"", dialog);
+    run.result = i18n::trf("closed after showing the message \"{0}\"", dialog);
     run.failed = true;
   } else if (stopped) {
-    run.result = std::format("stopped from Venture (exit code {})", *exit);
+    run.result = i18n::trf("stopped from Venture (exit code {0})", *exit);
   } else if (exit && *exit == 0) {
-    run.result = "the game exited normally (exit code 0)";
+    run.result = i18n::tr("the game exited normally (exit code 0)");
   } else if (exit || runtime_error) {
     // A runtime that failed before opening its log still wrote its console.
     const std::string tail = text.empty() ? tail_log(console) : text;
-    run.result = (exit ? "" : "did not start: ") + library::runtime_failure(tail, exit.value_or(1));
+    run.result = (exit ? "" : i18n::tr("did not start: ")) + library::runtime_failure(tail, exit.value_or(1));
     run.failed = true;
   } else {
-    run.result = "no exit recorded (still running, or Venture was closed while it ran)";
+    run.result = i18n::tr("no exit recorded (still running, or Venture was closed while it ran)");
   }
   return run;
 }
@@ -751,7 +752,7 @@ void processes_section(std::string &out) {
         found.push_back(std::format("{} {}", entry.th32ProcessID, name));
     CloseHandle(snapshot);
   }
-  out += "\n=== VR processes running now ===\n";
+  out += i18n::tr("\n=== VR processes running now ===\n");
   for (const auto &p : found) out += p + "\n";
   if (found.empty()) out += "(none)\n";
 }
@@ -801,7 +802,7 @@ void windows_events(std::string &out, std::string &evidence, const Window &windo
     }
   }
   if (found.empty()) return;
-  out += "Windows event log:\n";
+  out += i18n::tr("Windows event log:\n");
   for (const auto &f : found) out += "  " + f + "\n", evidence += f + "\n";
 }
 #else
@@ -816,7 +817,7 @@ void processes_section(std::string &out) {
     if (relevant_process(name) && pid != std::to_string(getpid())) found.push_back(pid + " " + name);
     if (found.size() >= 30) break;
   }
-  out += "\n=== VR processes running now ===\n";
+  out += i18n::tr("\n=== VR processes running now ===\n");
   for (const auto &p : found) out += p + "\n";
   if (found.empty()) out += "(none)\n";
 }
@@ -853,7 +854,7 @@ std::string vr_inputs() {
     }
   std::string out;
   for (const auto &n : names) out += (out.empty() ? "" : ", ") + n;
-  return out.empty() ? "none detected" : out;
+  return out.empty() ? i18n::tr("none detected") : out;
 }
 // The user services and Flatpak installs of the common Linux VR runtimes.
 void xr_services(std::string &out) {
@@ -867,7 +868,7 @@ void xr_services(std::string &out) {
   std::error_code ec;
   if (const char *home = std::getenv("HOME"))
     for (auto app : {"io.github.wivrn.wivrn", "org.monado.Monado", "org.gabmus.envision"})
-      if (fs::is_directory(fs::path(home) / ".var/app" / app, ec)) out += std::format("Flatpak app data: {}\n", app);
+      if (fs::is_directory(fs::path(home) / ".var/app" / app, ec)) out += i18n::trf("Flatpak app data: {0}\n", app);
 }
 #endif
 
@@ -922,7 +923,7 @@ std::string evidence_section(std::string &out, const Window &window, [[maybe_unu
     out += std::format("{}:\n", title);
     for (const auto &f : found) out += "  " + f + "\n", evidence += f + "\n";
   };
-  journal("User journal", {"--user", "--since=" + since, "--until=" + until, "--no-pager", "-o", "short-iso", "-n",
+  journal(i18n::tr("User journal"), {"--user", "--since=" + since, "--until=" + until, "--no-pager", "-o", "short-iso", "-n",
                            "300", "--grep=(venture|openxr|wivrn|monado|envision|steamvr|vrserver|vrcompositor|"
                            "vulkan|pipewire|xdg-desktop-portal|secret|keyring)"});
   journal("Kernel", {"-k", "--since=" + since, "--until=" + until, "--no-pager", "-o", "short-iso", "-n", "400",
@@ -936,7 +937,7 @@ std::string evidence_section(std::string &out, const Window &window, [[maybe_unu
       dumps.push_back(one_line(line));
   if (dumps.size() > 6) dumps.erase(dumps.begin(), dumps.end() - 6);
   if (!dumps.empty()) {
-    out += "Crashed programs (coredumpctl):\n";
+    out += i18n::tr("Crashed programs (coredumpctl):\n");
     for (const auto &d : dumps) out += "  " + d + "\n", evidence += "coredump " + d + "\n";
   }
 #endif
@@ -1070,12 +1071,12 @@ fs::path write_debug_report(const DebugReport &request) {
   }
 
   auto now = std::chrono::system_clock::now();
-  std::string out = "Venture debug report\n";
-  out += std::format("Created: {}\n", local_time(now, "%Y-%m-%d %H:%M:%S %z"));
-  out += std::format("Venture: {}\n", request.version);
-  if (package.empty()) out += "Game: none launched yet\n";
+  std::string out = i18n::tr("Venture debug report\n");
+  out += i18n::trf("Created: {0}\n", local_time(now, "%Y-%m-%d %H:%M:%S %z"));
+  out += i18n::trf("Venture: {0}\n", request.version);
+  if (package.empty()) out += i18n::tr("Game: none launched yet\n");
   else if (request.game.empty()) out += std::format("Game: {}\n", package);
-  else out += std::format("Game: {} ({})\n", request.game, package);
+  else out += i18n::trf("Game: {0} ({1})\n", request.game, package);
 
   // What happened, then why: the summary a reader needs first.
   const std::string base = "runtime-" + package;
@@ -1090,8 +1091,8 @@ fs::path write_debug_report(const DebugReport &request) {
     if (!start) start = modified(logs / (base + ".prev.log"));
     if (!start || *start > end || end - *start > std::chrono::hours(6)) start = end - std::chrono::hours(1);
     window = Window{*start - std::chrono::seconds(5), end + std::chrono::seconds(5)};
-    out += std::format("Last run: {} to {} ({}{})\n", local_time(*start), local_time(end),
-                       run->started ? "" : "start estimated, ", duration_text(end - *start));
+    out += i18n::trf("Last run: {0} to {1} ({2}{3})\n", local_time(*start), local_time(end),
+                       run->started ? "" : i18n::tr("start estimated, "), duration_text(end - *start));
     out += std::format("Result: {}\n", run->result);
   }
   // Gathered before the summary is written, which they inform.
@@ -1100,40 +1101,40 @@ fs::path write_debug_report(const DebugReport &request) {
   std::string layer_lines, broken_layers;
   openxr_layer_section(layer_lines, broken_layers);
   std::vector<std::string> steps;
-  out += "\n=== Likely cause ===\n";
+  out += i18n::tr("\n=== Likely cause ===\n");
   if (!run) {
-    out += package.empty() ? "No game has been started with this Venture yet.\n"
-                           : std::format("{} has no run to report yet.\n", request.game.empty() ? package : request.game);
-    steps.push_back("Start the game that has the problem, then send a new report.");
+    out += package.empty() ? i18n::tr("No game has been started with this Venture yet.\n")
+                           : i18n::trf("{0} has no run to report yet.\n", request.game.empty() ? package : request.game);
+    steps.push_back(i18n::tr("Start the game that has the problem, then send a new report."));
   } else if (!run->failed &&
              tail_log(runtime_log, 512 << 10).find("Application credentials received without a user: error -20001") !=
                  std::string::npos) {
     // Games that need a Meta user (Pinball FX VR) wait on a black screen without one.
-    out += "The game ran without a Meta user: no Meta account was signed in for it. Games that need one can "
-           "stay on a black or loading screen.\n";
-    steps.push_back("Sign in with Meta in Venture (the account that owns the game), then start the game again.");
+    out += i18n::tr("The game ran without a Meta user: no Meta account was signed in for it. Games that need one can "
+                     "stay on a black or loading screen.\n");
+    steps.push_back(i18n::tr("Sign in with Meta in Venture (the account that owns the game), then start the game again."));
   } else if (!run->failed) {
-    out += "The last run did not fail. If the problem happened in an earlier run, start the game again, "
-           "reproduce it, then send a new report.\n";
+    out += i18n::tr("The last run did not fail. If the problem happened in an earlier run, start the game again, "
+                     "reproduce it, then send a new report.\n");
   } else if (!library::missing_expansion(runtime_log).empty()) {
     // Not a log signature: games probe for optional patch OBBs at every start
     // (UE4 and Unity), so only a probe the game then failed on counts.
-    out += "The game looked for an expansion file (OBB) that its install does not have.\n";
-    steps.push_back("Install the game again, or import it again together with its OBB file.");
+    out += i18n::tr("The game looked for an expansion file (OBB) that its install does not have.\n");
+    steps.push_back(i18n::tr("Install the game again, or import it again together with its OBB file."));
   } else if (library::needed_meta_sign_in(runtime_log)) {
     // The run's result already names it; a crash in launcher.log from another game's run is not it.
     if (tail_log(runtime_log, 512 << 10).find("Application credentials received without a user: error -20001") !=
         std::string::npos) {
-      out += "No Meta account was signed in for the game, so its ownership check failed and it closed.\n";
-      steps.push_back("Sign in with Meta in Venture (the account that owns the game), then start the game again.");
+      out += i18n::tr("No Meta account was signed in for the game, so its ownership check failed and it closed.\n");
+      steps.push_back(i18n::tr("Sign in with Meta in Venture (the account that owns the game), then start the game again."));
     } else {
-      out += "Meta refused the game's ownership check: the signed-in account may not own it.\n";
-      steps.push_back("Sign in with the Meta account that owns the game, then start it again.");
+      out += i18n::tr("Meta refused the game's ownership check: the signed-in account may not own it.\n");
+      steps.push_back(i18n::tr("Sign in with the Meta account that owns the game, then start it again."));
     }
   } else if (library::refused_entitlement(runtime_log)) {
-    out += "Meta answered the game's ownership check with \"not entitled\": the signed-in Meta account does not "
-           "own this game, so the game closed itself. This is not a crash.\n";
-    steps.push_back("Sign in with the Meta account that bought the game, then start it again.");
+    out += i18n::tr("Meta answered the game's ownership check with \"not entitled\": the signed-in Meta account does not "
+                     "own this game, so the game closed itself. This is not a crash.\n");
+    steps.push_back(i18n::tr("Sign in with the Meta account that bought the game, then start it again."));
   } else if (auto d = [&] {
                // The run's own logs first: launcher.log also holds earlier runs, whose
                // failures (a runtime that was still closing) are not this run's.
@@ -1158,23 +1159,23 @@ fs::path write_debug_report(const DebugReport &request) {
     out += d->cause + "\n";
     steps.push_back(d->advice);
   } else {
-    out += "No known failure signature: the errors below are the closest leads.\n";
-    steps.push_back("Send this report with an issue.");
+    out += i18n::tr("No known failure signature: the errors below are the closest leads.\n");
+    steps.push_back(i18n::tr("Send this report with an issue."));
   }
   if (!steps.empty()) {
-    out += "\n=== Next steps ===\n";
+    out += i18n::tr("\n=== Next steps ===\n");
     for (const auto &s : steps) out += "- " + s + "\n";
   }
 
-  out += "\n=== System ===\n";
+  out += i18n::tr("\n=== System ===\n");
   system_section(out);
-  out += "\n=== VR runtime ===\n";
+  out += i18n::tr("\n=== VR runtime ===\n");
   xr_section(out);
   out += layer_lines;
   processes_section(out);
-  out += "\n=== Environment ===\n";
+  out += i18n::tr("\n=== Environment ===\n");
   environment_section(out);
-  out += "\n=== Settings for this game ===\n";
+  out += i18n::tr("\n=== Settings for this game ===\n");
   settings_section(out, request.data, request.app_id);
   for (const char *name : {"settings.json", "host-displays.json", "passthrough.json"}) {
     std::string text = read_file(request.data / name);
@@ -1184,13 +1185,13 @@ fs::path write_debug_report(const DebugReport &request) {
   }
   if (!request.plan.empty()) {
     std::string text = read_file(request.plan);
-    if (!text.empty()) out += std::format("\n=== Installed game (plan.json) ===\n{}\n", text);
+    if (!text.empty()) out += i18n::trf("\n=== Installed game (plan.json) ===\n{0}\n", text);
     // A library card says "Partly downloaded" for any of these.
     try {
       auto problems = library::install_problems(request.plan.parent_path(),
                                                 meta::parse_plan(paths::read_json(request.plan)));
-      out += "\n=== Installed files ===\n";
-      if (problems.empty()) out += "All required files are present with their recorded sizes.\n";
+      out += i18n::tr("\n=== Installed files ===\n");
+      if (problems.empty()) out += i18n::tr("All required files are present with their recorded sizes.\n");
       for (auto &p : problems) out += p + "\n";
     } catch (const std::exception &) {
     }
@@ -1200,8 +1201,8 @@ fs::path write_debug_report(const DebugReport &request) {
     std::string mods;
     for (const auto &e : fs::directory_iterator(mods_dir(request.data, package), ec))
       if (e.is_regular_file(ec))
-        mods += std::format("{} ({} bytes)\n", paths::utf8(e.path().filename()), e.file_size(ec));
-    if (!mods.empty()) out += "\n=== Mods folder ===\n" + mods;
+        mods += i18n::trf("{0} ({1} bytes)\n", paths::utf8(e.path().filename()), e.file_size(ec));
+    if (!mods.empty()) out += i18n::tr("\n=== Mods folder ===\n") + mods;
   }
 
   if (!package.empty()) {
@@ -1211,9 +1212,9 @@ fs::path write_debug_report(const DebugReport &request) {
     for (const auto &e : fs::directory_iterator(logs, ec)) {
       std::string name = paths::utf8(e.path().filename());
       if (name.starts_with("runtime-" + package + "-") && name.ends_with(".dmp"))
-        dumps += std::format("{} ({} KiB)\n", name, (e.file_size(ec) + 1023) / 1024);
+        dumps += i18n::trf("{0} ({1} KiB)\n", name, (e.file_size(ec) + 1023) / 1024);
     }
-    if (!dumps.empty()) out += "\n=== Crash dumps on this PC (not included) ===\n" + dumps;
+    if (!dumps.empty()) out += i18n::tr("\n=== Crash dumps on this PC (not included) ===\n") + dumps;
     // HotSpot's report of the newest native crash, cut to what names it (a few
     // KiB of the budget): the summary, the crashing thread and its native
     // stack (which driver or layer). Registers, memory and the module and
@@ -1245,7 +1246,7 @@ fs::path write_debug_report(const DebugReport &request) {
           text += '\n';
         }
       }
-      out += std::format("\n=== {} (written {}) ===\n{}", paths::utf8(crash.filename()), local_time(crash_time), text);
+      out += i18n::trf("\n=== {0} (written {1}) ===\n{2}", paths::utf8(crash.filename()), local_time(crash_time), text);
       if (!text.empty() && text.back() != '\n') out += '\n';
     }
     facts_section(out, logs / (base + ".log"));
@@ -1253,9 +1254,9 @@ fs::path write_debug_report(const DebugReport &request) {
     layers_section(out, logs / (base + ".log"));
     missing_classes_section(out, logs / (base + ".log"));
     if (window) {
-      out += std::format("\n=== Errors logged during the last run ({} to {}) ===\n", local_time(window->from),
+      out += i18n::trf("\n=== Errors logged during the last run ({0} to {1}) ===\n", local_time(window->from),
                          local_time(window->to));
-      out += evidence_text.empty() ? "No other log written during the run reports an error.\n" : evidence_text;
+      out += evidence_text.empty() ? i18n::tr("No other log written during the run reports an error.\n") : evidence_text;
     }
     log_section(out, logs / (base + ".log"), kRuntimeLog);
     log_section(out, logs / (base + ".console.log"), kSideLog);
@@ -1285,14 +1286,14 @@ fs::path write_debug_report(const DebugReport &request) {
 
 std::string upload_debug_report(const fs::path &file, std::stop_token stop) {
   std::string text = read_file(file, kPasteLimit + 1);
-  if (text.empty()) throw std::runtime_error("The report is empty.");
-  if (text.size() > kPasteLimit) throw std::runtime_error("The report is too large to upload.");
+  if (text.empty()) throw std::runtime_error(i18n::tr("The report is empty."));
+  if (text.size() > kPasteLimit) throw std::runtime_error(i18n::tr("The report is too large to upload."));
   auto r = http::post("https://dpaste.com/api/v2/",
                       {{"content", text}, {"title", paths::utf8(file.filename())}, {"expiry_days", kPasteDays}},
                       stop);
   std::string url = r.body.substr(0, r.body.find_first_of("\r\n"));
   if (r.status != 201 || !url.starts_with("https://dpaste.com/"))
-    throw std::runtime_error(std::format("The upload service answered {}.", r.status));
+    throw std::runtime_error(i18n::trf("The upload service answered {0}.", r.status));
   return url;
 }
 } // namespace venture::launcher

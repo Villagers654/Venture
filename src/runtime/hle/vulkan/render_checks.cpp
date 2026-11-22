@@ -64,17 +64,17 @@ bool enabled() {
 }
 // Public API object-lifetime diagnostics only: never read image, buffer or shader contents.
 template <class... A>
-void object_trace(std::format_string<A...> fmt, A&&... args) {
+void object_trace(std::string_view fmt, A&&... args) {
   if (!enabled()) return;
   static std::atomic<unsigned> records{0};
   if (records.fetch_add(1, std::memory_order_relaxed) < 8192)
-    log::info("vulkan-object", fmt, std::forward<A>(args)...);
+    log::info("vulkan-object", fmt, args...);
 }
 
 template <class... A>
-void report(std::format_string<A...> fmt, A&&... args) {
+void report(std::string_view fmt, A&&... args) {
   if (reports.fetch_add(1, std::memory_order_relaxed) < 64)
-    log::warn("vulkan-check", fmt, std::forward<A>(args)...);
+    log::warn("vulkan-check", fmt, args...);
 }
 template <class F>
 F host(VkDevice device, const char* name) {

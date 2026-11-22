@@ -2,6 +2,7 @@
 #include "common/file_ops.h"
 #include "common/log.h"
 #include "common/meta/accounts.h"
+#include "launcher/i18n/i18n.h"
 #ifdef _WIN32
 #include "common/platform/win32/native_path.h"
 #endif
@@ -12,32 +13,30 @@ fs::path account_data_dir(const fs::path &data, std::string_view key,
                           std::string_view package, std::string_view pin) {
   if ((key != "local" && !meta::valid_account_key(key)) ||
       !paths::safe_package(package) || (!pin.empty() && !paths::version_folder(pin)))
-    throw std::runtime_error("Invalid account save path.");
+    throw std::runtime_error(i18n::tr("Invalid account save path."));
   auto root = data / "data/users";
   const auto name = pin.empty() ? std::string(package) : std::string(package) + "@" + std::string(pin);
   auto path = root / paths::from_utf8(key) / paths::from_utf8(name);
   if (!paths::within(root, path) || is_link(root.parent_path()) ||
       is_link(root) || is_link(path.parent_path()) || is_link(path))
-    throw std::runtime_error(
-        "Account save path is linked or escapes its root.");
+    throw std::runtime_error(i18n::tr("Account save path is linked or escapes its root."));
   return path;
 }
 SaveMigration migrate_saves(const fs::path &data, std::string_view primary,
                             bool adopt_local) {
   const std::string key = primary.empty() ? "local" : std::string(primary);
   if (key != "local" && !meta::valid_account_key(key))
-    throw std::runtime_error("Invalid primary account key.");
+    throw std::runtime_error(i18n::tr("Invalid primary account key."));
   const auto legacy = data / "data", users = legacy / "users";
   if (is_link(legacy) || is_link(users))
-    throw std::runtime_error("Cannot migrate saves through a linked root.");
+    throw std::runtime_error(i18n::tr("Cannot migrate saves through a linked root."));
   FileLock lock(users / ".migration.lock");
   auto journal_file = users / "migration.json";
   Json rows = Json::array();
   if (fs::exists(journal_file)) {
     auto journal = paths::read_json(journal_file);
     if (number(journal, "version") != 1 || !field(journal, "moves").is_array())
-      throw std::runtime_error(
-          "Save migration journal is unreadable; saves have been retained.");
+      throw std::runtime_error(i18n::tr("Save migration journal is unreadable; saves have been retained."));
     rows = journal["moves"];
   }
   SaveMigration result;
@@ -109,7 +108,7 @@ void publish_obb_file_locked(const fs::path& source, const fs::path& view) {
     remove_tree(view, target);
     return;
   }
-  if (!paths::within(source.parent_path(), source)) throw std::runtime_error("Linked OBB source escapes installation");
+  if (!paths::within(source.parent_path(), source)) throw std::runtime_error(i18n::tr("Linked OBB source escapes installation"));
   std::error_code ec;
   if (!is_link(target) && fs::equivalent(source, target, ec) && !ec) return;
   const auto source_id = file_identity(source), target_id = file_identity(target);
@@ -153,13 +152,13 @@ void publish_obb_file_locked(const fs::path& source, const fs::path& view) {
 }
 }
 fs::path mods_dir(const fs::path& data, std::string_view package) {
-  if (!paths::safe_package(package)) throw std::runtime_error("Invalid game package.");
+  if (!paths::safe_package(package)) throw std::runtime_error(i18n::tr("Invalid game package."));
   return data / "mods" / paths::from_utf8(package);
 }
 void sync_obb_view(const fs::path& install, const fs::path& raw_view,
                    std::span<const std::string> names, const fs::path& mods) {
   if (fs::weakly_canonical(install) == fs::weakly_canonical(raw_view))
-    throw std::runtime_error("OBB view must be separate from installation");
+    throw std::runtime_error(i18n::tr("OBB view must be separate from installation"));
 #ifdef _WIN32
   // Per-account expansion views repeat the package name and can exceed MAX_PATH.
   const fs::path view{platform::native_path(raw_view)};
@@ -167,10 +166,10 @@ void sync_obb_view(const fs::path& install, const fs::path& raw_view,
   const auto& view = raw_view;
 #endif
   for (const auto& name : names)
-    if (!paths::safe_name(name)) throw std::runtime_error("Invalid OBB view filename");
+    if (!paths::safe_name(name)) throw std::runtime_error(i18n::tr("Invalid OBB view filename"));
   fs::create_directories(view.parent_path());
   FileLock lock(view.parent_path() / (view.filename().string() + ".lock"));
-  if (is_link(view)) throw std::runtime_error("Linked OBB view directory");
+  if (is_link(view)) throw std::runtime_error(i18n::tr("Linked OBB view directory"));
   fs::create_directories(view);
   // The game owns this directory as on Android (Android/obb/<package> is
   // writable to its app) and may keep its own files here: CRIWARE titles unpack
@@ -206,7 +205,7 @@ void sync_obb_view(const fs::path& install, const fs::path& raw_view,
   if (current != published) paths::atomic_write(record, current.dump());
 }
 void detach_obb_file(const fs::path& raw_view, std::string_view name) {
-  if (!paths::safe_name(name)) throw std::runtime_error("Invalid OBB view filename");
+  if (!paths::safe_name(name)) throw std::runtime_error(i18n::tr("Invalid OBB view filename"));
 #ifdef _WIN32
   const fs::path view{platform::native_path(raw_view)};
 #else
@@ -214,7 +213,7 @@ void detach_obb_file(const fs::path& raw_view, std::string_view name) {
 #endif
   FileLock lock(view.parent_path() / (view.filename().string() + ".lock"));
   const auto target = view / paths::from_utf8(name);
-  if (is_link(target) || !fs::is_regular_file(target)) throw std::runtime_error("Expansion file is not a regular file");
+  if (is_link(target) || !fs::is_regular_file(target)) throw std::runtime_error(i18n::tr("Expansion file is not a regular file"));
   const auto sidecar = obb_copy_sidecar(view);
   Json copies = Json::object();
   if (fs::exists(sidecar) && !is_link(sidecar)) {
@@ -240,7 +239,7 @@ void detach_obb_file(const fs::path& raw_view, std::string_view name) {
 }
 fs::path obb_view_for(const fs::path& install, const fs::path& view, std::string_view account) {
   if (account != "local" && !meta::valid_account_key(account))
-    throw std::runtime_error("Invalid account for the OBB view.");
+    throw std::runtime_error(i18n::tr("Invalid account for the OBB view."));
   const auto parent = view.parent_path();
   fs::create_directories(parent);
   const auto probe = parent / (".link-" + random_account_key());
@@ -277,7 +276,7 @@ void publish_obb_file(const fs::path& source, const fs::path& raw_view) {
   const auto& view = raw_view;
 #endif
   if (!paths::safe_name(paths::utf8(source.filename())) || is_link(view))
-    throw std::runtime_error("Invalid OBB publication path");
+    throw std::runtime_error(i18n::tr("Invalid OBB publication path"));
   fs::create_directories(view);
   FileLock lock(view.parent_path() / (view.filename().string() + ".lock"));
   publish_obb_file_locked(source, view);
@@ -285,7 +284,7 @@ void publish_obb_file(const fs::path& source, const fs::path& raw_view) {
 
 void remove_cached_obb_aliases(const fs::path& data, std::string_view package) {
   if (!paths::safe_package(package))
-    throw std::runtime_error("Invalid game package.");
+    throw std::runtime_error(i18n::tr("Invalid game package."));
   const auto cache = data / "cache" / paths::from_utf8(package);
   if (fs::exists(cache) && !is_link(cache) && paths::within(data, cache))
     for (const auto& version : fs::directory_iterator(cache)) {

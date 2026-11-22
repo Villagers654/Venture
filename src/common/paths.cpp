@@ -1,5 +1,6 @@
 #include "common/paths.h"
 #include "common/log.h"
+#include "launcher/i18n/i18n.h"
 #include <atomic>
 #include <algorithm>
 #include <cctype>
@@ -211,24 +212,24 @@ bool safe_launch_target(std::string_view target) {
 fs::path game_dir(const fs::path &root, std::string_view package,
                   std::string_view version) {
   if (!safe_package(package) || !version_folder(version))
-    throw std::runtime_error("Invalid game installation path.");
+    throw std::runtime_error(i18n::tr("Invalid game installation path."));
   auto p = root / from_utf8(package) / from_utf8(version);
   if (!within(root, p))
-    throw std::runtime_error("Game path escapes the games directory.");
+    throw std::runtime_error(i18n::tr("Game path escapes the games directory."));
   return p;
 }
 #ifndef _WIN32
 std::string read(const fs::path &file, size_t limit) {
   std::ifstream in(file, std::ios::binary | std::ios::ate);
   if (!in)
-    throw std::runtime_error("Could not read local file.");
+    throw std::runtime_error(i18n::tr("Could not read local file."));
   auto size = in.tellg();
   if (size < 0 || uint64_t(size) > limit)
-    throw std::runtime_error("Local file is too large.");
+    throw std::runtime_error(i18n::tr("Local file is too large."));
   std::string text(static_cast<size_t>(size), '\0');
   in.seekg(0);
   if (!in.read(text.data(), text.size()))
-    throw std::runtime_error("Could not read local file.");
+    throw std::runtime_error(i18n::tr("Could not read local file."));
   return text;
 }
 #endif

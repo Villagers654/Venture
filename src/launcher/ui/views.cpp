@@ -40,11 +40,11 @@ std::string bytes(uint64_t n) {
 
 // Remaining time the way the Quest store words it: "12 min left".
 std::string time_left(uint64_t seconds) {
-  if (seconds < 60) return "Less than a minute left";
+  if (seconds < 60) return tr("Less than a minute left");
   uint64_t minutes = (seconds + 30) / 60;
-  if (minutes < 60) return std::format("{} min left", minutes);
-  return minutes % 60 ? std::format("{} hr {} min left", minutes / 60, minutes % 60)
-                      : std::format("{} hr left", minutes / 60);
+  if (minutes < 60) return trf("{} min left", minutes);
+  return minutes % 60 ? trf("{0} hr {1} min left", minutes / 60, minutes % 60)
+                      : trf("{} hr left", minutes / 60);
 }
 
 std::string lowercase(std::string s) {
@@ -55,7 +55,7 @@ std::string lowercase(std::string s) {
 // The name Meta shows for the account: its display name, else its alias.
 std::string account_name(const AccountView& a) {
   if (!a.display_name.empty()) return a.display_name;
-  return a.alias.empty() ? "Meta account" : a.alias;
+  return a.alias.empty() ? tr("Meta account") : a.alias;
 }
 
 // Each account keeps one muted hue so several accounts stay distinguishable.
@@ -69,7 +69,7 @@ ImU32 account_tint(std::string_view key) {
 // Round initials avatar; `ring` marks the active account.
 void avatar(ImDrawList* dl, ImVec2 c, float r, const AccountView* a, bool ring, float font_size) {
   std::string ini = a ? initials(account_name(*a)) : std::string();
-  if (a && account_name(*a) == "Meta account") ini.clear();
+  if (a && account_name(*a) == tr("Meta account")) ini.clear();
   dl->AddCircleFilled(c, r, a ? account_tint(a->key) : color::surface_top, 48);
   if (ring) dl->AddCircle(c, r + s(3), color::selected, 48, s(2));
   if (!ini.empty()) {
@@ -371,14 +371,14 @@ void App::draw() {
     begin_card("steam-pending", ImGui::GetContentRegionAvail().x, {20, 14});
     float y = ImGui::GetCursorPosY();
     float right = ImGui::GetWindowContentRegionMax().x;
-    auto pending = std::format("{} games will appear in Steam after it restarts.", steam_games_);
+    auto pending = trf("{0} games will appear in Steam after it restarts.", steam_games_);
     ImVec2 bp = ImGui::GetCursorScreenPos();
     draw_text(ImGui::GetWindowDrawList(), fonts().regular, kBody, {std::round(bp.x), text_y(fonts().regular, kBody, bp.y, s(38))},
               color::text, pending);
-    const char* label = steam_restart_ ? "Waiting for Steam to close##pending" : "Restart Steam##pending";
-    float bw = row_button_w(steam_restart_ ? "Waiting for Steam to close" : "Restart Steam");
+    std::string label = std::string(steam_restart_ ? tr("Waiting for Steam to close") : tr("Restart Steam")) + "##pending";
+    float bw = row_button_w(steam_restart_ ? tr("Waiting for Steam to close") : tr("Restart Steam"));
     ImGui::SetCursorPos({right - bw, y});
-    if (button(label, 0, Tone::secondary, {bw, s(38)}, !steam_restart_)) restart_steam();
+    if (button(label.c_str(), 0, Tone::secondary, {bw, s(38)}, !steam_restart_)) restart_steam();
     end_card();
     gap(20);
   }
@@ -634,7 +634,7 @@ void App::draw_library() {
 
   // Header: title left; search, sort and refresh at the end of the filter row.
   float top = ImGui::GetCursorPosY();
-  page_title("Library");
+  page_title(tr("Library"));
   if (!warning_.empty()) {
     ImGui::SameLine(0, s(10));
     ImGui::SetCursorPosY(top + s(kHeaderHeight - 20) * 0.5f);
@@ -642,16 +642,16 @@ void App::draw_library() {
     ImGui::Dummy({s(20), s(20)});
     draw_glyph(ImGui::GetWindowDrawList(), icons::info, kBody, {p.x + s(10), p.y + s(10)}, color::text3);
     if (ImGui::IsItemHovered())
-      tooltip("Meta didn't confirm your full library, so games confirmed earlier are kept. " + warning_);
+      tooltip(std::string(tr("Meta didn't confirm your full library, so games confirmed earlier are kept. ")) + warning_);
   }
   float after_title = top + s(kHeaderHeight);
-  const float sort_w = measure(fonts().semibold, kSmall + 1, "Sort by: Recently played").x + s(52);
+  const float sort_w = measure(fonts().semibold, kSmall + 1, tr("Sort by: Recently played")).x + s(52);
   if (!all.empty() || !search_.empty() || hidden_count) {
     // At the end of the filter chips' row, centred on them and clear of the
     // window buttons; on its own row under the title when the window is narrow.
-    const char* sorts[] = {"Name", "Recently played"};
+    const char* sorts[] = {tr("Name"), tr("Recently played")};
     float content_w = ImGui::GetContentRegionAvail().x;
-    float title_w = measure(fonts().semibold, kDisplay, "Library").x + s(warning_.empty() ? 24 : 54);
+    float title_w = measure(fonts().semibold, kDisplay, tr("Library")).x + s(warning_.empty() ? 24 : 54);
     const bool can_refresh = refreshing_ || (session_ && !options_.offline);
     float fixed = s(10) + sort_w + (can_refresh ? s(10) + s(38) : 0);
     const bool chips = !all.empty() || hidden_count;
@@ -666,9 +666,9 @@ void App::draw_library() {
                       : top + s(kHeaderHeight - 38) * 0.5f;
     if (!beside) after_title = y + s(38);
     ImGui::SetCursorPos({beside ? x : ImGui::GetWindowContentRegionMin().x, y});
-    search_field("search", "Search", &search_, search_w);
+    search_field("search", tr("Search"), &search_, search_w);
     ImGui::SameLine(0, s(10));
-    dropdown("sort", "Sort by: ", sorts, 2, &sort_, sort_w);
+    dropdown("sort", tr("Sort by: "), sorts, 2, &sort_, sort_w);
     if (can_refresh) {
       ImGui::SameLine(0, s(10));
       if (refreshing_) {
@@ -686,8 +686,8 @@ void App::draw_library() {
   // Filter chips; "Hidden" shows or hides the entries the player hid.
   if (!all.empty() || hidden_count) {
     auto installed_count = std::ranges::count_if(all, [&](auto& g) { return installed(g.id) != nullptr; });
-    std::string all_label = std::format("All  {}##all", all.size());
-    std::string installed_label = std::format("Installed  {}##installed", installed_count);
+    std::string all_label = trf("All  {0}##all", all.size());
+    std::string installed_label = trf("Installed  {0}##installed", installed_count);
     // The choice is remembered (settings.json libraryInstalledOnly).
     if (filter_chip(all_label.c_str(), !settings_.installed_only)) action([&] { set_installed_only(false); });
     ImGui::SameLine(0, s(8));
@@ -732,29 +732,29 @@ void App::draw_library() {
   if (all.empty()) {
     gap(80);
     if (refreshing_)
-      empty_state(icons::library, "Finding your games\xE2\x80\xA6", "");
+      empty_state(icons::library, tr("Finding your games\xE2\x80\xA6"), "");
     else if (!search_.empty())
-      empty_state(icons::search, "No results", "");
+      empty_state(icons::search, tr("No results"), "");
     else if (settings_.installed_only)
-      empty_state(icons::download, "Nothing installed yet", "");
+      empty_state(icons::download, tr("Nothing installed yet"), "");
     else if (hidden_count)
       // i18n: Library empty state when the player hid every game; "Show hidden" is the filter chip.
       empty_state(icons::hide, tr("All your games are hidden"), tr("Select Show hidden to see them."));
     else if (!session_)
-      empty_state(icons::library, "No games yet", "Sign in, or import a game.");
+      empty_state(icons::library, tr("No games yet"), tr("Sign in, or import a game."));
     else
-      empty_state(icons::library, "No games yet", refresh_error_);
+      empty_state(icons::library, tr("No games yet"), refresh_error_);
     if (session_ && !refreshing_ && search_.empty() && !settings_.installed_only && !hidden_count && !options_.offline) {
       gap(22);
       float bw = s(200);
       ImGui::SetCursorPosX((ImGui::GetContentRegionAvail().x - bw) * 0.5f + ImGui::GetCursorPosX());
-      if (button("Refresh library", 0, Tone::primary, {bw, s(44)})) refresh();
+      if (button(tr("Refresh library"), 0, Tone::primary, {bw, s(44)})) refresh();
     }
     if (!session_ && !refreshing_ && search_.empty()) {
       gap(22);
       float bw = s(200);
       ImGui::SetCursorPosX((ImGui::GetContentRegionAvail().x - bw) * 0.5f + ImGui::GetCursorPosX());
-      if (button("Sign in with Meta", 0, Tone::primary, {bw, s(44)})) {
+      if (button(tr("Sign in with Meta"), 0, Tone::primary, {bw, s(44)})) {
         page_ = 3;
         sign_in();
       }
@@ -865,9 +865,9 @@ void App::draw_library() {
       draw_glyph(gdl, icons::update, kSmall, c, over ? color::accent : color::on_accent);
       if (over) {
         ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
-        tooltip("Update");
+        tooltip(tr("Update"));
       } else if (t > 0.01f && (m.x - c.x) * (m.x - c.x) + (m.y - c.y) * (m.y - c.y) <= cr * cr) {
-        tooltip("Update available");
+        tooltip(tr("Update available"));
       }
       if (clicked && over) {
         clicked = false;
@@ -905,20 +905,20 @@ void App::draw_library() {
     std::string status;
     ImU32 status_col = color::text2;
     if (running) {
-      draw_text(gdl, fonts().regular, kSmall, {p.x, sy}, color::text2, "Playing now");
+      draw_text(gdl, fonts().regular, kSmall, {p.x, sy}, color::text2, tr("Playing now"));
     } else {
       if (downloading)
         status = job->state == download::State::downloading && job->total
-                     ? std::format("Downloading  {:.0f}%", 100.0 * double(job->done) / double(job->total))
+                     ? trf("Downloading  {0:.0f}%", 100.0 * double(job->done) / double(job->total))
                      : std::string(download::label(job->state));
       else if (job && job->state == download::State::paused && !local)
-        status = "Paused";
+        status = tr("Paused");
       else if (job && job->state == download::State::failed)
-        status = "Needs attention", status_col = color::warning;
+        status = tr("Needs attention"), status_col = color::warning;
       else if (!local)
-        status = installed(g.id, false) ? "Partly downloaded" : "Not installed";
+        status = installed(g.id, false) ? tr("Partly downloaded") : tr("Not installed");
       else if (update)
-        status = "Update available", status_col = color::accent_text;
+        status = tr("Update available"), status_col = color::accent_text;
       else
         status = g.publisher;
       if (is_hidden) {
@@ -931,7 +931,7 @@ void App::draw_library() {
     if (clicked) select(g.id);
     ImGui::SetNextWindowPos(card_menu_at_, ImGuiCond_Appearing);
     if (begin_menu("card-menu")) {
-      if (update && menu_item("Update", icons::update, false, can_update))
+      if (update && menu_item(tr("Update"), icons::update, false, can_update))
         action([&] { install_for_owner(g); });
       if (is_hidden ? menu_item(tr("Unhide"), icons::view) : menu_item(tr("Hide from library"), icons::hide))
         action([&] { set_hidden(g.id, !is_hidden); });
@@ -966,7 +966,7 @@ void App::download_progress(const download::Job& job, float width) {
   ImFont* lead_font = fonts().semibold;
   float lead_size = measured ? kHeading + 4 : kBody;
   std::string lead = measured ? std::format("{:.0f}%", frac * 100)
-                     : job.importing ? std::string("Importing")
+                     : job.importing ? tr("Importing")
                                      : std::string(download::label(job.state));
   float lead_top = text_y(lead_font, lead_size, y, row);
   draw_text(dl, lead_font, lead_size, {p.x, lead_top}, measured ? color::text : color::text2,
@@ -975,7 +975,7 @@ void App::download_progress(const download::Job& job, float width) {
   ImU32 note_col = color::text2;
   // A paused download says so in the badge above.
   if (job.state == State::failed)
-    note = "Needs attention", note_col = color::warning;
+    note = tr("Needs attention"), note_col = color::warning;
   else if (job.state == State::downloading && job.bytes_per_second > 0 && job.total > job.done)
     note = time_left(uint64_t(double(job.total - job.done) / job.bytes_per_second));
   if (measured && !note.empty()) {
@@ -994,7 +994,7 @@ void App::download_progress(const download::Job& job, float width) {
     y += s(8);
     float h = s(18);
     float top = text_y(fonts().regular, kSmall, y, h);
-    draw_text(dl, fonts().regular, kSmall, {p.x, top}, color::text3, bytes(job.done) + " of " + bytes(job.total));
+    draw_text(dl, fonts().regular, kSmall, {p.x, top}, color::text3, trf("{0} of {1}", bytes(job.done), bytes(job.total)));
     if (job.state == State::downloading && job.bytes_per_second > 0) {
       std::string speed = bytes(uint64_t(job.bytes_per_second)) + "/s";
       draw_text(dl, fonts().regular, kSmall, {std::round(right - measure(fonts().regular, kSmall, speed).x), top},
@@ -1042,8 +1042,8 @@ void App::draw_game_page() {
   {
     ImVec2 header = ImGui::GetCursorPos();
     ImGui::SetCursorPos({header.x - s(12), header.y + s(kHeaderHeight - 34) * 0.5f});
-    float bw = button_width("Library", icons::chevron_left) - s(16);
-    if (button("Library##back", icons::chevron_left, Tone::ghost, {bw, s(34)})) {
+    float bw = button_width(tr("Library"), icons::chevron_left) - s(16);
+    if (button((std::string(tr("Library")) + "##back").c_str(), icons::chevron_left, Tone::ghost, {bw, s(34)})) {
       selected_.clear();
       return;
     }
@@ -1085,20 +1085,20 @@ void App::draw_game_page() {
     gap(10);
     // State badges and the installed build.
     if (running)
-      badge("Playing now", color::positive, color::alpha(color::positive, 0.16f));
+      badge(tr("Playing now"), color::positive, color::alpha(color::positive, 0.16f));
     else if (local)
-      badge("Installed", color::text, color::surface_top, icons::check);
+      badge(tr("Installed"), color::text, color::surface_top, icons::check);
     else if (downloading)
-      badge("Downloading", color::accent_text, color::accent_wash, icons::download);
+      badge(tr("Downloading"), color::accent_text, color::accent_wash, icons::download);
     else if (job && job->state == download::State::failed)
-      badge("Needs attention", color::warning, color::alpha(color::warning, 0.14f));
+      badge(tr("Needs attention"), color::warning, color::alpha(color::warning, 0.14f));
     else if (partial || (job && job->state == download::State::paused && job->done))
-      badge("Paused", color::text2, color::surface_hi);
+      badge(tr("Paused"), color::text2, color::surface_hi);
     else
-      badge("Not installed", color::text2, color::surface_hi, icons::cloud);
+      badge(tr("Not installed"), color::text2, color::surface_hi, icons::cloud);
     if (update) {
       ImGui::SameLine(0, s(6));
-      badge("Update available", color::accent_text, color::accent_wash, icons::update);
+      badge(tr("Update available"), color::accent_text, color::accent_wash, icons::update);
     }
     if (hidden(g.id)) {
       ImGui::SameLine(0, s(6));
@@ -1107,8 +1107,10 @@ void App::draw_game_page() {
     if (local) {
       ImGui::SameLine(0, s(10));
       ImVec2 b = ImGui::GetCursorScreenPos();
-      std::string build = (local->plan.version.empty() ? std::string() : "Version " + local->plan.version + "  \xC2\xB7  ") +
-                          bytes(local->bytes);
+      std::string build =
+          (local->plan.version.empty() ? std::string()
+                                       : std::string(tr("Version ")) + local->plan.version + "  \xC2\xB7  ") +
+          bytes(local->bytes);
       std::string shown = ellipsize(fonts().regular, kSmall, build, ImGui::GetContentRegionAvail().x);
       draw_text(ImGui::GetWindowDrawList(), fonts().regular, kSmall, {std::round(b.x), text_y(fonts().regular, kSmall, b.y, s(22))},
                 color::text3, shown);
@@ -1118,7 +1120,8 @@ void App::draw_game_page() {
       gap(10);
       ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + inner);
       text(fonts().regular, kSmall, color::warning,
-           "Meta's asset catalog was unavailable when this was installed; some downloadable content may be missing.");
+           tr("Meta's asset catalog was unavailable when this was installed; some downloadable content may be "
+              "missing."));
       ImGui::PopTextWrapPos();
     }
     gap(14);
@@ -1153,27 +1156,29 @@ void App::draw_game_page() {
     // complete (files changed or a catalog refresh listed new ones).
     if (local || running) {
       if (launch_choice(g.id, play_key(g.id)).status == library::LaunchStatus::reconnect) {
-        if (button("Reconnect to play##play", 0, Tone::primary, cta)) page_ = 3;
+        if (button((std::string(tr("Reconnect to play")) + "##play").c_str(), 0, Tone::primary, cta)) page_ = 3;
       } else if (running) {
         // Quits as the headset's menu would: the game gets its Android lifecycle and saves first.
         auto& r = running_[g.id];
         const bool armed = std::chrono::steady_clock::now() - r.started >= std::chrono::seconds(3);
-        if (button(r.quitting ? "Quitting...##play" : "Quit game##play", r.quitting ? 0 : icons::cancel,
-                   Tone::secondary, cta, !r.quitting && armed))
+        if (button((std::string(r.quitting ? tr("Quitting...") : tr("Quit game")) + "##play").c_str(),
+                   r.quitting ? 0 : icons::cancel, Tone::secondary, cta, !r.quitting && armed))
           r.quitting = r.process.request_stop();
-      } else if (button("Play##play", icons::play, Tone::primary, cta)) {
+      } else if (button((std::string(tr("Play")) + "##play").c_str(), icons::play, Tone::primary, cta)) {
         action([&] { play(g); });
       }
       draw_tools();
       if (update) {
         gap(8);
-        if (button("Update", icons::update, Tone::secondary, {inner, s(42)}, session_ && !options_.offline && !downloading))
+        if (button(tr("Update"), icons::update, Tone::secondary, {inner, s(42)},
+                   session_ && !options_.offline && !downloading))
           action([&] { install(g); });
       }
     } else if (downloading) {
       download_progress(*job, inner);
       gap(4);
-      if (button("Pause download##download", icons::pause, Tone::secondary, {inner - s(52), s(46)}))
+      if (button((std::string(tr("Pause download")) + "##download").c_str(), icons::pause, Tone::secondary,
+                 {inner - s(52), s(46)}))
         downloads_->cancel(g.id);
       ImGui::SameLine(0, s(6));
       if (icon_button("show-downloads", icons::download, nullptr, 46, true, true)) page_ = 1;
@@ -1198,13 +1203,14 @@ void App::draw_game_page() {
         gap(4);
         size_note.clear();
       }
-      std::string label = (resumable || partial ? "Resume download" : "Install") + size_note + "##install";
+      std::string label = std::string(resumable || partial ? tr("Resume download") : tr("Install")) + size_note +
+                          "##install";
       if (button(label.c_str(), icons::download, Tone::primary, cta, usable && !options_.offline))
         action([&] { request_install(g); });
       draw_tools();
       if (!session_ && owners.empty()) {
         gap(8);
-        text(fonts().regular, kSmall, color::text3, "Sign in to Meta to install this game.", false);
+        text(fonts().regular, kSmall, color::text3, tr("Sign in to Meta to install this game."), false);
       }
     }
     // The owning account (when it is not simply the active one) and the mods
@@ -1220,7 +1226,7 @@ void App::draw_game_page() {
       if (!stacked && rows_h > 0) at.y = std::max(at.y, std::round(bottom - rows_h));
       ImGui::SetCursorScreenPos(at);
       // The account picker and Open folder share one width and height.
-      float control_w = button_width("Open folder", icons::folder);
+      float control_w = button_width(tr("Open folder"), icons::folder);
       if (const AccountView* a = owner_row ? account(owner_for(g.id)) : nullptr)
         control_w = std::max(control_w, std::min(s(220), s(70) + measure(fonts().semibold, kSmall, account_name(*a)).x));
       ImGui::BeginGroup();
@@ -1244,16 +1250,17 @@ void App::draw_game_page() {
     {
       ImGui::SetNextWindowPos({more.x + s(46), more.y + s(52)}, ImGuiCond_Appearing, {1, 0});
       if (begin_menu("game-menu")) {
-        if (tools && !pinned && menu_item("Check for updates", icons::refresh, false, session_ && !options_.offline)) {
+        if (tools && !pinned && menu_item(tr("Check for updates"), icons::refresh, false,
+                                          session_ && !options_.offline)) {
           details_.erase(g.id);
           select(g.id);
         }
-        if (versions && menu_item(partial ? "Install another version\xE2\x80\xA6" : "Install a version\xE2\x80\xA6",
+        if (versions && menu_item(partial ? tr("Install another version\xE2\x80\xA6") : tr("Install a version\xE2\x80\xA6"),
                                   icons::download, false, session_ && !options_.offline))
           action([&] { request_versions(g); });
         if (tools && steam_sync_allowed_ && settings_.add_games_to_steam) {
           bool in = in_steam(g.id);
-          if (menu_item(in ? "Remove from Steam" : "Add to Steam", 0, false, true,
+          if (menu_item(in ? tr("Remove from Steam") : tr("Add to Steam"), 0, false, true,
                         ImTextureID(reinterpret_cast<uintptr_t>(steam_logo(int(std::round(s(16))))))))
             action([&] { set_in_steam(g.id, !in); });
         }
@@ -1271,10 +1278,11 @@ void App::draw_game_page() {
             open_folder(folder);
           });
         };
-        if (tools && menu_item("Show save data", icons::folder, false, true)) open_data(false);
-        if (tools && menu_item("Show game data", icons::folder, false, true)) open_data(true);
+        if (tools && menu_item(tr("Show save data"), icons::folder, false, true)) open_data(false);
+        if (tools && menu_item(tr("Show game data"), icons::folder, false, true)) open_data(true);
         // Save imports go to the game's own install.
-        if (tools && !pinned && menu_item("Import save data", icons::save, false, !running)) save_import_target_ = g.id;
+        if (tools && !pinned && menu_item(tr("Import save data"), icons::save, false, !running))
+          save_import_target_ = g.id;
         // An import no signed-in account owns, keyed by its package: the store
         // listing it is names it and brings its art (found by package, or here).
         if (tools && !pinned && partial->plan.local && !digits(partial->plan.app_id, 5)) {
@@ -1291,7 +1299,7 @@ void App::draw_game_page() {
         // A view filter only: the game stays installed, playable and in Steam.
         if (hidden(g.id) ? menu_item(tr("Unhide"), icons::view) : menu_item(tr("Hide from library"), icons::hide))
           action([&] { set_hidden(g.id, !hidden(g.id)); });
-        if (tools && menu_item("Uninstall", icons::trash, true, !running && !downloads_->busy()))
+        if (tools && menu_item(tr("Uninstall"), icons::trash, true, !running && !downloads_->busy()))
           uninstall_target_ = *partial;
         end_menu();
       }
@@ -1308,39 +1316,42 @@ void App::draw_game_page() {
   if (options_.smoke_view == "stopped") {
     auto& r = running_[g.id];
     r.exit = 1;
-    r.failure = "Example: the game stopped with an error.";
+    r.failure = tr("Example: the game stopped with an error.");
   }
   if (auto r = running_.find(g.id);
       r != running_.end() && r->second.exit && (*r->second.exit != 0 || !r->second.failure.empty())) {
     begin_card("stopped", ImGui::GetContentRegionAvail().x, {22, 18}, color::alpha(color::danger, 0.12f));
     float right = ImGui::GetWindowContentRegionMax().x;
     float y = ImGui::GetCursorPosY();
-    text(fonts().semibold, kBody, color::text, g.name + (*r->second.exit != 0 ? " stopped unexpectedly" : " closed"),
-         false);
+    text(fonts().semibold, kBody, color::text,
+         *r->second.exit != 0 ? trf("{0} stopped unexpectedly", g.name) : trf("{0} closed", g.name), false);
     const std::string failure =
-        r->second.failure.empty() ? std::format("Exit code {}", *r->second.exit) : r->second.failure;
+        r->second.failure.empty() ? trf("Exit code {0}", *r->second.exit) : r->second.failure;
     ImGui::PushTextWrapPos(right - s(400));
     text(fonts().regular, kSmall, color::text2, failure);
     ImGui::PopTextWrapPos();
     const float block = ImGui::GetCursorPosY() - ImGui::GetStyle().ItemSpacing.y - y;
     const float row_h = std::max(block, s(kControlH));
     // The three buttons share one width.
-    const float bw = std::max({button_width("Report issue"), button_width("Copy log"), button_width("Hide log")});
+    const float bw = std::max({button_width(tr("Report issue")), button_width(tr("Copy log")),
+                               button_width(tr("Hide log"))});
     const float by = y + (row_h - s(kControlH)) * 0.5f;
     bool open = log_open_.contains(g.id);
-    const char* toggle_label = open ? "Hide log##log" : "Show log##log";
+    std::string toggle_label = std::string(open ? tr("Hide log") : tr("Show log")) + "##log";
     float x = right - bw;
     ImGui::SetCursorPos({x, by});
-    if (button(toggle_label, 0, Tone::secondary, {bw, s(kControlH)})) {
+    if (button(toggle_label.c_str(), 0, Tone::secondary, {bw, s(kControlH)})) {
       if (open) log_open_.erase(g.id);
       else log_open_.insert(g.id);
     }
     x -= s(8) + bw;
     ImGui::SetCursorPos({x, by});
-    if (button("Copy log##copy", 0, Tone::secondary, {bw, s(kControlH)})) ImGui::SetClipboardText(r->second.tail.c_str());
+    if (button((std::string(tr("Copy log")) + "##copy").c_str(), 0, Tone::secondary, {bw, s(kControlH)}))
+      ImGui::SetClipboardText(r->second.tail.c_str());
     x -= s(8) + bw;
     ImGui::SetCursorPos({x, by});
-    if (button("Report issue##issue", 0, Tone::secondary, {bw, s(kControlH)})) share_report(g.id);
+    if (button((std::string(tr("Report issue")) + "##issue").c_str(), 0, Tone::secondary, {bw, s(kControlH)}))
+      share_report(g.id);
     ImGui::SetCursorPosY(y + row_h);
     ImGui::Dummy({0, 0});
     if (open) {
@@ -1364,15 +1375,15 @@ void App::draw_game_page() {
   // Add-ons belong to the game's own install, not a pinned version.
   auto addon_list = meta::version_binary(g.id).empty() ? addons(g.id) : std::vector<meta::Addon>{};
   bool has_addons = !addon_list.empty() || checking_addons;
-  std::string addon_tab = addon_list.empty() ? std::string("Add-ons") : std::format("Add-ons  {}", addon_list.size());
+  std::string addon_tab = addon_list.empty() ? tr("Add-ons") : trf("Add-ons  {0}", addon_list.size());
   // About, Add-ons when the game has any, and once it is installed Controls and
   // its own Settings, which override Settings for it.
   const bool has_settings = partial != nullptr;
-  std::vector<const char*> tab_items{"About"};
+  std::vector<const char*> tab_items{tr("About")};
   if (has_addons) tab_items.push_back(addon_tab.c_str());
   if (has_settings) {
-    tab_items.push_back("Controls");
-    tab_items.push_back("Settings");
+    tab_items.push_back(tr("Controls"));
+    tab_items.push_back(tr("Settings"));
   }
   // --smoke-view game-controls* and game-settings* keep those tabs open for
   // screenshots (by name: the Add-ons tab can come and go while it is checked).
@@ -1382,22 +1393,24 @@ void App::draw_game_page() {
   if (smoke_tab && has_settings) {
     static bool scrolled = false;
     if (!std::exchange(scrolled, true)) ImGui::SetScrollHereY(0.0f);
+    // Compare against the marked value so the match holds in any language.
+    const char* wanted = std::string_view(smoke_tab) == "Controls" ? tr("Controls") : tr("Settings");
     for (int i = 0; i < int(tab_items.size()); ++i)
-      if (std::string_view(tab_items[size_t(i)]) == smoke_tab) game_tab_ = i;
+      if (std::string_view(tab_items[size_t(i)]) == wanted) game_tab_ = i;
   }
   if (game_tab_ >= int(tab_items.size())) game_tab_ = 0;
   if (tab_items.size() > 1) {
     tabs("game-tabs", tab_items.data(), int(tab_items.size()), &game_tab_, avail);
     gap(20);
   } else {
-    text(fonts().semibold, kTitle, color::text, "About", false);
+    text(fonts().semibold, kTitle, color::text, tr("About"), false);
     gap(8);
   }
   float body_w = std::min(ImGui::GetContentRegionAvail().x, avail);
   const std::string_view tab = tab_items[game_tab_];
-  if (tab == "Controls")
+  if (tab == tr("Controls"))
     draw_game_controls(g, std::min(body_w, s(1180)));
-  else if (tab == "Settings")
+  else if (tab == tr("Settings"))
     draw_game_settings(g, std::min(body_w, s(kPageWidth)));
   else if (game_tab_ == 1 && has_addons)
     draw_addons(g, std::min(body_w, s(980)));
@@ -1432,20 +1445,21 @@ const App::ModsSummary& App::mods_summary(const std::string& package, const fs::
 void App::draw_mods(const fs::path& install, const std::string& package, float bw) {
   const auto& m = mods_summary(package, install);
   std::string status;
-  if (m.active) status = std::format("{} in use", m.active);
-  if (m.unused) status += std::format("{}{} unused", status.empty() ? "" : "  \xC2\xB7  ", m.unused);
+  if (m.active) status = trf("{0} in use", m.active);
+  if (m.unused) status += trf("{0}{1} unused", status.empty() ? "" : "  \xC2\xB7  ", m.unused);
   const ImU32 tone = m.unused ? color::warning : color::positive;
-  const auto tip = (m.active == 1 ? "In use: " + m.name + "\n\n" : std::string()) +
-                   "Files here replace the game's OBB files of the same name, for example main.<version>." + package +
-                   ".obb. Files under any other name are unused. Delete a file to go back to the original.";
+  const auto tip = (m.active == 1 ? tr("In use: ") + m.name + "\n\n" : std::string()) +
+                   trf("Files here replace the game's OBB files of the same name, for example main.<version>{0}.obb. "
+                       "Files under any other name are unused. Delete a file to go back to the original.",
+                       package);
   float sw = status.empty() ? 0 : std::round(measure(fonts().regular, kSmall, status).x + s(14));
-  setting_row("Mods", tip, sw + bw, s(38), [&] {
+  setting_row(tr("Mods"), tip, sw + bw, s(38), [&] {
     ImVec2 p = ImGui::GetCursorScreenPos();
     if (sw)
       draw_text(ImGui::GetWindowDrawList(), fonts().regular, kSmall,
                 {p.x, text_y(fonts().regular, kSmall, p.y, s(38))}, tone, status);
     ImGui::SetCursorScreenPos({p.x + sw, p.y});
-    if (button("Open folder##mods", icons::folder, Tone::secondary, {bw, s(38)}))
+    if (button((std::string(tr("Open folder")) + "##mods").c_str(), icons::folder, Tone::secondary, {bw, s(38)}))
       action([&] {
         auto folder = mods_dir(data_, package);
         fs::create_directories(folder);
@@ -1463,31 +1477,32 @@ void App::draw_about(const meta::Game& g, float width) {
   float side_w = two ? std::min(s(380), width * 0.36f) : width;
   float main_w = two ? width - side_w - s(40) : width;
   ImGui::BeginGroup();
-  description(g.description.empty() ? "A Quest game from your Meta library." : g.description, std::min(main_w, s(760)));
+  description(g.description.empty() ? tr("A Quest game from your Meta library.") : g.description,
+              std::min(main_w, s(760)));
   ImGui::EndGroup();
   if (two) ImGui::SameLine(0, s(40));
   else gap(26);
   ImGui::BeginGroup();
-  heading("Additional details");
+  heading(tr("Additional details"));
   gap(10);
   std::vector<std::pair<std::string, std::string>> rows;
-  if (!g.publisher.empty()) rows.emplace_back("Publisher", g.publisher);
+  if (!g.publisher.empty()) rows.emplace_back(tr("Publisher"), g.publisher);
   if (local) {
-    rows.emplace_back("Installed version", local->plan.version.empty() ? "Unknown" : local->plan.version);
-    rows.emplace_back("Size on disk", bytes(local->bytes));
+    rows.emplace_back(tr("Installed version"), local->plan.version.empty() ? tr("Unknown") : local->plan.version);
+    rows.emplace_back(tr("Size on disk"), bytes(local->bytes));
   }
   if (detail != details_.end()) {
-    if (!detail->second.version.empty()) rows.emplace_back("Latest version", detail->second.version);
-    if (detail->second.size && !local) rows.emplace_back("Download size", bytes(detail->second.size));
+    if (!detail->second.version.empty()) rows.emplace_back(tr("Latest version"), detail->second.version);
+    if (detail->second.size && !local) rows.emplace_back(tr("Download size"), bytes(detail->second.size));
   }
   auto owners = game_owners(g.id);
   if (!owners.empty()) {
     std::string names;
     for (auto& k : owners)
       if (auto* a = account(k)) names += (names.empty() ? "" : ", ") + account_name(*a);
-    rows.emplace_back(owners.size() > 1 ? "Owned by" : "Owner", names);
+    rows.emplace_back(owners.size() > 1 ? tr("Owned by") : tr("Owner"), names);
   }
-  rows.emplace_back("Platform", "Meta Quest");
+  rows.emplace_back(tr("Platform"), "Meta Quest");
   float key_w = std::min(s(150), side_w * 0.42f);
   ImDrawList* dl = ImGui::GetWindowDrawList();
   ImVec2 p = ImGui::GetCursorScreenPos();
@@ -1508,7 +1523,7 @@ void App::draw_about(const meta::Game& g, float width) {
     ImGui::BeginGroup();
     spinner(7, color::text3);
     ImGui::SameLine(0, s(8));
-    text(fonts().regular, kSmall, color::text3, "Checking the latest release\xE2\x80\xA6", false);
+    text(fonts().regular, kSmall, color::text3, tr("Checking the latest release\xE2\x80\xA6"), false);
     ImGui::EndGroup();
   } else if (auto e = detail_errors_.find(g.id); e != detail_errors_.end()) {
     gap(10);
@@ -1516,7 +1531,8 @@ void App::draw_about(const meta::Game& g, float width) {
     text(fonts().regular, kSmall, color::warning, e->second);
     ImGui::PopTextWrapPos();
     gap(6);
-    if (button("Try again##details", icons::refresh, Tone::secondary, {0, s(34)})) select(g.id);
+    if (button((std::string(tr("Try again")) + "##details").c_str(), icons::refresh, Tone::secondary, {0, s(34)}))
+      select(g.id);
   }
   ImGui::EndGroup();
 }
@@ -1529,7 +1545,7 @@ void App::draw_owner(const meta::Game& g, bool installed, float w) {
   const AccountView* a = account(key);
   if (!a) return;
   bool pick = owners.size() > 1;
-  std::string lead = installed ? "Playing as" : pick ? "Installing with" : "Owned by";
+  std::string lead = installed ? tr("Playing as") : pick ? tr("Installing with") : tr("Owned by");
   std::string name = account_name(*a);
   ImFont* rf = fonts().regular;
   ImFont* sf = fonts().semibold;
@@ -1538,7 +1554,8 @@ void App::draw_owner(const meta::Game& g, bool installed, float w) {
   ImVec2 p{};
   bool clicked = false;
   ImGui::PushID("owner");
-  setting_row(lead, !installed && key != account_key_ ? "Installing switches to this account." : "", w, h, [&] {
+  setting_row(lead,
+              !installed && key != account_key_ ? tr("Installing switches to this account.") : "", w, h, [&] {
     p = ImGui::GetCursorScreenPos();
     bool hovered = false;
     if (pick) {
@@ -1581,7 +1598,8 @@ void App::draw_owner(const meta::Game& g, bool installed, float w) {
       float tx = q.x + s(50);
       draw_text(pdl, sf, kSmall + 1, {std::round(tx), text_y(sf, kSmall + 1, q.y + rh * 0.5f - s(9))}, color::text,
                 ellipsize(sf, kSmall + 1, account_name(*o), rw - s(50) - s(34)));
-      std::string state = !usable ? "Reconnect to play" : k == account_key_ ? "Active account" : "Signed in";
+      std::string state = !usable ? tr("Reconnect to play") : k == account_key_ ? tr("Active account")
+                                                                                : tr("Signed in");
       draw_text(pdl, rf, kLabel + 0.5f, {std::round(tx), text_y(rf, kLabel + 0.5f, q.y + rh * 0.5f + s(9))},
                 usable ? color::text3 : color::warning, state);
       if (k == key) draw_glyph(pdl, icons::check, kSmall, {q.x + rw - s(20), q.y + rh * 0.5f}, color::accent_text);
@@ -1618,9 +1636,9 @@ void App::draw_addons(const meta::Game& g, float width) {
   // 36 px control line.
   float top = ImGui::GetCursorPosY();
   float left_x = ImGui::GetCursorPosX();
-  std::string summary = list.empty() ? "Checking what's available\xE2\x80\xA6"
-                        : owned      ? std::format("{} owned  \xC2\xB7  {} available", owned, list.size())
-                                     : std::format("{} available  \xC2\xB7  none owned by this account", list.size());
+  std::string summary = list.empty() ? tr("Checking what's available\xE2\x80\xA6")
+                        : owned      ? trf("{0} owned  \xC2\xB7  {1} available", owned, list.size())
+                                     : trf("{0} available  \xC2\xB7  none owned by this account", list.size());
   {
     ImVec2 sp = ImGui::GetCursorScreenPos();
     draw_text(ImGui::GetWindowDrawList(), rf, kBody, {std::round(sp.x), text_y(rf, kBody, sp.y, s(36))}, color::text2,
@@ -1641,7 +1659,7 @@ void App::draw_addons(const meta::Game& g, float width) {
       }
     }
     if (to_install > 1 && local && active_owns) {
-      std::string bulk = std::format("Install all owned ({})", to_install);
+      std::string bulk = trf("Install all owned ({0})", to_install);
       float bw = button_width(bulk, icons::download);
       ImGui::SetCursorPos({right - s(36) - s(10) - bw, top});
       if (button((bulk + "##addons").c_str(), icons::download, Tone::secondary, {bw, s(36)},
@@ -1653,10 +1671,10 @@ void App::draw_addons(const meta::Game& g, float width) {
 
   if (!active_owns && !owners.empty()) {
     begin_card("addons-owner", width);
-    text(rf, kBody, color::text2, "Add-ons are checked against the account that owns this game.");
+    text(rf, kBody, color::text2, tr("Add-ons are checked against the account that owns this game."));
     if (const AccountView* o = account(owner_for(g.id))) {
       gap(12);
-      std::string label_text = "Switch to " + account_name(*o) + "##addons-switch";
+      std::string label_text = tr("Switch to ") + account_name(*o) + "##addons-switch";
       if (button(label_text.c_str(), icons::swap, Tone::secondary, {0, s(38)}, o->signed_in && !o->needs_reauth))
         action([&, key = o->key] { switch_account(key); });
     }
@@ -1688,13 +1706,13 @@ void App::draw_addons(const meta::Game& g, float width) {
               ellipsize(sf, kBody, a.name, w - ctrl_w - s(16)));
     std::string sub;
     if (a.downloading)
-      sub = a.total ? std::format("Downloading  \xC2\xB7  {} of {}", bytes(a.done), bytes(a.total)) : "Queued";
+      sub = a.total ? trf("Downloading  \xC2\xB7  {0} of {1}", bytes(a.done), bytes(a.total)) : tr("Queued");
     else if (a.installed)
-      sub = a.size ? "Installed  \xC2\xB7  " + bytes(a.size) : "Installed";
+      sub = a.size ? std::string(tr("Installed")) + "  \xC2\xB7  " + bytes(a.size) : tr("Installed");
     else if (a.owned)
-      sub = a.size ? "Owned  \xC2\xB7  " + bytes(a.size) : "Owned";
+      sub = a.size ? std::string(tr("Owned")) + "  \xC2\xB7  " + bytes(a.size) : tr("Owned");
     else
-      sub = a.price_text.empty() ? "Available in the Meta store" : a.price_text + "  \xC2\xB7  Meta store";
+      sub = a.price_text.empty() ? tr("Available in the Meta store") : a.price_text + "  \xC2\xB7  " + tr("Meta store");
     draw_text(dl, rf, kSmall, {std::round(p.x), text_y(rf, kSmall, cy + s(10))}, color::text3, sub);
     if (own_error)
       draw_text(dl, rf, kSmall, {std::round(p.x), text_y(rf, kSmall, cy + s(30))}, color::warning,
@@ -1703,27 +1721,27 @@ void App::draw_addons(const meta::Game& g, float width) {
     float cx = p.x + w;
     if (a.installed) {
       ImGui::SetCursorScreenPos({cx - s(36), cy - s(18)});
-      if (icon_button("remove", icons::trash, running ? "Close the game to remove add-ons" : nullptr, 36,
+      if (icon_button("remove", icons::trash, running ? tr("Close the game to remove add-ons") : nullptr, 36,
                       !running && !downloads_->busy()))
         action([&] { uninstall_addon(g.id, a.sku); });
-      float bw = badge_width("Installed", icons::check);
+      float bw = badge_width(tr("Installed"), icons::check);
       ImGui::SetCursorScreenPos({cx - s(36) - s(10) - bw, cy - s(11)});
-      badge("Installed", color::text, color::surface_top, icons::check);
+      badge(tr("Installed"), color::text, color::surface_top, icons::check);
     } else if (a.downloading) {
       float bw = s(150);
       ImGui::SetCursorScreenPos({cx - bw, cy - s(2)});
       progress_bar(a.total ? float(double(a.done) / double(a.total)) : 0.f, {bw, s(4)}, !a.total);
     } else if (a.owned) {
-      float bw = button_width("Install", icons::download);
+      float bw = button_width(tr("Install"), icons::download);
       ImGui::SetCursorScreenPos({cx - bw, cy - s(18)});
       bool can = local && session_ && !options_.offline;
-      if (button("Install##addon", icons::download, Tone::secondary, {bw, s(36)}, can))
+      if (button((std::string(tr("Install")) + "##addon").c_str(), icons::download, Tone::secondary, {bw, s(36)}, can))
         action([&] { install_addon(g.id, a.sku); });
-      if (!local && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) tooltip("Install the game first");
+      if (!local && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) tooltip(tr("Install the game first"));
     } else {
-      float bw = badge_width("Not owned");
+      float bw = badge_width(tr("Not owned"));
       ImGui::SetCursorScreenPos({cx - bw, cy - s(11)});
-      badge("Not owned", color::text3, color::surface_hi);
+      badge(tr("Not owned"), color::text3, color::surface_hi);
     }
     if (!last) hline(dl, p.x, p.x + w, p.y + h);
     ImGui::SetCursorScreenPos({p.x, p.y + h + s(1)});
@@ -1748,8 +1766,8 @@ void App::draw_addons(const meta::Game& g, float width) {
     if (hov) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
     ImDrawList* dl = ImGui::GetWindowDrawList();
     size_t hidden = unowned - std::min(unowned, preview);
-    std::string more = expanded ? "Show fewer"
-                                : std::format("Show {} more add-on{} you don't own", hidden, hidden == 1 ? "" : "s");
+    std::string more = expanded ? tr("Show fewer")
+                                : trf("Show {0} more add-on{1} you don't own", hidden, hidden == 1 ? "" : "s");
     ImVec2 ms = measure(sf, kSmall + 1, more);
     ImU32 col = hov ? color::text : color::accent_text;
     draw_text(dl, sf, kSmall + 1, {std::round(p.x), text_y(sf, kSmall + 1, p.y, h)}, col, more);
@@ -1760,7 +1778,7 @@ void App::draw_addons(const meta::Game& g, float width) {
 
 // ---------------------------------------------------------------------------
 void App::draw_downloads() {
-  page_title("Downloads");
+  page_title(tr("Downloads"));
   gap(kAfterHeader);
   auto jobs = downloads_->snapshot();
   if (jobs.empty()) {
@@ -1770,11 +1788,11 @@ void App::draw_downloads() {
     const float block = storage->GetFloat(id, s(260)), top = ImGui::GetCursorPosY();
     ImGui::SetCursorPosY(top + std::max(0.f, (ImGui::GetContentRegionAvail().y - block) * 0.5f - s(kHeaderHeight)));
     const float start = ImGui::GetCursorPosY();
-    empty_state(icons::download, "No downloads", "");
+    empty_state(icons::download, tr("No downloads"), "");
     gap(22);
-    float bw = row_button_w("Go to library");
+    float bw = row_button_w(tr("Go to library"));
     ImGui::SetCursorPosX((ImGui::GetContentRegionAvail().x - bw) * 0.5f + ImGui::GetCursorPosX());
-    if (button("Go to library", 0, Tone::secondary, {bw, s(kControlH)})) page_ = 0;
+    if (button(tr("Go to library"), 0, Tone::secondary, {bw, s(kControlH)})) page_ = 0;
     storage->SetFloat(id, ImGui::GetCursorPosY() - start);
     return;
   }
@@ -1800,9 +1818,10 @@ void App::draw_downloads() {
     bool active = j.state == download::State::queued || j.state == download::State::checking ||
                   j.state == download::State::downloading;
     float fraction = j.total ? float(double(j.done) / double(j.total)) : 0.f;
-    std::string state = j.importing && j.state == download::State::downloading ? "Importing" : download::label(j.state);
+    std::string state =
+        j.importing && j.state == download::State::downloading ? tr("Importing") : download::label(j.state);
     if (j.state == download::State::downloading && j.total) state += std::format("  \xC2\xB7  {:.0f}%", fraction * 100);
-    std::string detail = bytes(j.done) + " of " + (j.total ? bytes(j.total) : "\xE2\x80\xA6");
+    std::string detail = trf("{0} of {1}", bytes(j.done), j.total ? bytes(j.total) : std::string("\xE2\x80\xA6"));
     if (j.bytes_per_second > 0 && j.total > j.done && active) {
       auto seconds = uint64_t(double(j.total - j.done) / j.bytes_per_second);
       detail += std::format("  \xC2\xB7  {}/s  \xC2\xB7  {}", bytes(uint64_t(j.bytes_per_second)), time_left(seconds));
@@ -1870,7 +1889,7 @@ void App::draw_settings() {
     int choice = int(std::ranges::find(percents, settings_.interface_size) - std::begin(percents));
     if (choice == 4) choice = 0;
     float dw = s(180);
-    setting_row(tr("Interface size"), "Makes text and everything else in Venture larger.", dw, s(38), [&] {
+    setting_row(tr("Interface size"), tr("Makes text and everything else in Venture larger."), dw, s(38), [&] {
       if (dropdown("interface-size", "", sizes, 4, &choice, dw))
         action([this, size = percents[choice]] {
           settings_.interface_size = size;
@@ -1888,32 +1907,32 @@ void App::draw_settings() {
 
   heading(tr("Library"));
   begin_card("library", w, {22, 2});
-  setting_row("Games folder", "New downloads go here. Games already installed stay where they are.", field_w,
+  setting_row(tr("Games folder"), tr("New downloads go here. Games already installed stay where they are."), field_w,
               s(38), input("##games", &settings_games_, ""));
   divider();
-  setting_row("Android platform-tools (adb)",
-              "Used to import games from a headset. Leave empty to find adb automatically.", field_w, s(38),
-              input("##adb", &settings_adb_, "Found automatically"));
+  setting_row(tr("Android platform-tools (adb)"),
+              tr("Used to import games from a headset. Leave empty to find adb automatically."), field_w, s(38),
+              input("##adb", &settings_adb_, tr("Found automatically")));
   divider();
-  setting_row("Add games to Steam", "Installed games appear in Steam and SteamVR after Steam restarts.", s(44), s(24),
-              [&] {
+  setting_row(tr("Add games to Steam"),
+              tr("Installed games appear in Steam and SteamVR after Steam restarts."), s(44), s(24), [&] {
                 if (toggle("steam", &settings_.add_games_to_steam)) action([&] { save_settings(); });
               });
   if (settings_.add_games_to_steam) {
     divider();
-    setting_row("Add new games to Steam", "On by default. Each game's menu can add or remove it later.", s(44), s(24),
-                [&] {
+    setting_row(tr("Add new games to Steam"),
+                tr("On by default. Each game's menu can add or remove it later."), s(44), s(24), [&] {
                   if (toggle("steam-new", &settings_.steam_add_new)) action([&] { save_settings(); });
                 });
   }
   divider();
   {
-    const char* counts[] = {"One at a time", "2", "3", "4"};
+    const char* counts[] = {tr("One at a time"), "2", "3", "4"};
     int choice = std::clamp(settings_.parallel_downloads, 1, 4) - 1;
     float dw = s(180);
-    setting_row("Downloads at once",
-                "More games download side by side on a fast connection. A game's own files and add-ons still "
-                "download one after another.",
+    setting_row(tr("Downloads at once"),
+                tr("More games download side by side on a fast connection. A game's own files and add-ons still "
+                   "download one after another."),
                 dw, s(38), [&] {
       if (dropdown("parallel-downloads", "", counts, 4, &choice, dw))
         action([this, jobs = choice + 1] {
@@ -1923,14 +1942,15 @@ void App::draw_settings() {
     });
   }
   divider();
-  setting_row("Ask when installing", "Installing a new game asks which drive it goes to and whether it goes to Steam.",
-              s(44), s(24), [&] {
+  setting_row(tr("Ask when installing"),
+              tr("Installing a new game asks which drive it goes to and whether it goes to Steam."), s(44), s(24),
+              [&] {
                 if (toggle("install-ask", &settings_.install_ask)) action([&] { save_settings(); });
               });
   divider();
   // The info button's tooltip is the row's one-line description.
   setting_row(tr("Look up imported games online"),
-              "Finds the store page of an imported game no account owns on OculusDB. Only its package name is sent.",
+              tr("Finds the store page of an imported game no account owns on OculusDB. Only its package name is sent."),
               s(44), s(24), [&] {
                 if (toggle("lookup-imports", &settings_.lookup_imports_online))
                   action([&] {
@@ -1949,10 +1969,11 @@ void App::draw_settings() {
               });
   if (steam_pending_ && settings_.add_games_to_steam) {
     divider();
-    float bw = row_button_w(steam_restart_ ? "Waiting for Steam to close" : "Restart Steam");
-    setting_row(std::format("{} games are waiting for Steam", steam_games_), "Steam adds them the next time it starts.", bw,
+    float bw = row_button_w(steam_restart_ ? tr("Waiting for Steam to close") : tr("Restart Steam"));
+    setting_row(trf("{} games are waiting for Steam", steam_games_),
+                tr("Steam adds them the next time it starts."), bw,
                 s(38), [&] {
-                  if (button(steam_restart_ ? "Waiting for Steam to close" : "Restart Steam", 0, Tone::secondary,
+                  if (button(steam_restart_ ? tr("Waiting for Steam to close") : tr("Restart Steam"), 0, Tone::secondary,
                              {bw, s(38)}, !steam_restart_))
                     restart_steam();
                 });
@@ -1977,10 +1998,10 @@ void App::draw_settings() {
   {
     // Automatic picks what the VR runtime or headset offers; Color key is the
     // user's choice for a streaming tool that keys a color (never automatic).
-    const char* modes[] = {"Automatic", "Color key", "Off"};
+    const char* modes[] = {tr("Automatic"), tr("Color key"), tr("Off")};
     int mode = !settings_.passthrough ? 2 : settings_.color_key ? 1 : 0;
     float dw = s(180);
-    setting_row("Passthrough (mixed reality)", "", dw, s(38), [&] {
+    setting_row(tr("Passthrough (mixed reality)"), "", dw, s(38), [&] {
       if (dropdown("passthrough", "", modes, 3, &mode, dw))
         action([this, mode] {
           settings_.passthrough = mode != 2;
@@ -1988,13 +2009,14 @@ void App::draw_settings() {
           save_settings();
         });
     }, [&] {
-      if (icon_button("passthrough-help", icons::info, "Mixed reality setups (opens the Venture wiki)", kHelpIcon))
+      if (icon_button("passthrough-help", icons::info,
+                      tr("Mixed reality setups (opens the Venture wiki)"), kHelpIcon))
         action([] { open_url("https://github.com/Villagers654/Venture/wiki/Mixed-Reality"); });
     });
     if (settings_.passthrough && settings_.color_key) {
       divider();
       // The common defaults of keying tools, magenta first (rare in games).
-      static const char* names[] = {"Magenta", "Green", "Blue", "Black", "Custom"};
+      static const char* names[] = {tr("Magenta"), tr("Green"), tr("Blue"), tr("Black"), tr("Custom")};
       static const char* hexes[] = {"FF00FF", "00FF00", "0000FF", "000000"};
       const auto upper = [](std::string text) {
         for (auto& c : text) c = char(std::toupper(static_cast<unsigned char>(c)));
@@ -2007,7 +2029,7 @@ void App::draw_settings() {
       const bool custom = preset == 4;
       const float sw = s(38), hw = s(120), gapw = s(10);
       const float cw = sw + gapw + (custom ? hw + gapw : 0) + dw;
-      setting_row("Key color", "", cw, s(38), [&] {
+      setting_row(tr("Key color"), "", cw, s(38), [&] {
         const auto rgb = environment::parse_color_key(settings_.key_color).value_or(std::array<std::uint8_t, 3>{255, 0, 255});
         const ImVec2 at = ImGui::GetCursorScreenPos();
         auto* draw = ImGui::GetWindowDrawList();
@@ -2037,12 +2059,12 @@ void App::draw_settings() {
     }
   }
   divider();
-  setting_row("Show runtime console", "Opens a console window with live output when a game starts.", s(44), s(24), [&] {
+  setting_row(tr("Show runtime console"), tr("Opens a console window with live output when a game starts."), s(44), s(24), [&] {
     if (toggle("console", &settings_.console)) action([&] { save_settings(); });
   });
   divider();
   {
-    static const char* names[] = {"System language", "English (US)", "English (UK)", "German", "French",
+    static const char* names[] = {tr("System language"), "English (US)", "English (UK)", "German", "French",
                                   "Spanish", "Italian", "Portuguese (Brazil)", "Dutch", "Polish", "Russian",
                                   "Swedish", "Turkish", "Japanese", "Korean", "Chinese (Simplified)",
                                   "Chinese (Traditional)"};
@@ -2052,9 +2074,9 @@ void App::draw_settings() {
     int choice = int(std::ranges::find(tags, settings_.game_language) - std::begin(tags));
     if (choice == count) choice = 0;
     float dw = s(180);
-    setting_row("Game language",
-                "The language games see as the system language. Most games also have their own language "
-                "option; this one is for games that only follow the system.",
+    setting_row(tr("Game language"),
+                tr("The language games see as the system language. Most games also have their own language "
+                   "option; this one is for games that only follow the system."),
                 dw, s(38), [&] {
       if (dropdown("language", "", names, count, &choice, dw)) {
         settings_.game_language = tags[choice];
@@ -2069,8 +2091,8 @@ void App::draw_settings() {
     float dw = s(180);
     // i18n: Settings row: store game textures compressed, in less GPU memory.
     setting_row(tr("Compress textures"),
-                "Stores game textures at a quarter of the GPU memory, with a small loss of detail. Automatic: "
-                "only once the GPU memory in use passes a threshold.",
+                tr("Stores game textures at a quarter of the GPU memory, with a small loss of detail. Automatic: "
+                   "only once the GPU memory in use passes a threshold."),
                 dw, s(38), [&] {
       int mode = settings_.texture_compression;
       if (dropdown("textures", "", modes, 3, &mode, dw)) {
@@ -2095,7 +2117,7 @@ void App::draw_settings() {
     float dw = s(180);
     // i18n: Settings row: GPU memory in use before new textures are compressed.
     setting_row(tr("Compression threshold"),
-                "GPU memory in use before new textures are compressed. Lower leaves room for larger games.", dw,
+                tr("GPU memory in use before new textures are compressed. Lower leaves room for larger games."), dw,
                 s(38), [&] {
       if (dropdown("texture-threshold", "", shares, 4, &choice, dw))
         action([this, percent = percents[choice]] {
@@ -2105,14 +2127,14 @@ void App::draw_settings() {
     });
   }
   divider();
-  setting_row("Keep translated code",
-              "Saves the game code Venture translates, so later launches start sooner and load new areas without "
-              "stutter. Uses up to about 1 GB of disk per game.",
+  setting_row(tr("Keep translated code"),
+              tr("Saves the game code Venture translates, so later launches start sooner and load new areas without "
+                 "stutter. Uses up to about 1 GB of disk per game."),
               s(44), s(24), [&] {
     if (toggle("translated-code", &settings_.keep_translated_code)) action([&] { save_settings(); });
   });
   divider();
-  setting_row("Check for updates", "Venture tells you when a new version is out.", s(44), s(24), [&] {
+  setting_row(tr("Check for updates"), tr("Venture tells you when a new version is out."), s(44), s(24), [&] {
     if (toggle("updates", &settings_.check_updates)) action([&] { save_settings(); });
   });
   ImGui::Dummy({0, 0});  // the last row keeps its bottom padding
@@ -2122,28 +2144,28 @@ void App::draw_settings() {
   heading(tr("Troubleshooting"));
   begin_card("diagnostics", w, {22, 2});
   {
-    const char* levels[] = {"Trace", "Debug", "Info", "Warnings", "Errors"};
+    const char* levels[] = {tr("Trace"), tr("Debug"), tr("Info"), tr("Warnings"), tr("Errors")};
     float dw = s(180);
-    setting_row("Log detail", "More detail helps when reporting a problem.", dw, s(38), [&] {
+    setting_row(tr("Log detail"), tr("More detail helps when reporting a problem."), dw, s(38), [&] {
       if (dropdown("log", "", levels, 5, &settings_.log_level, dw)) action([&] { save_settings(); });
     });
   }
   divider();
   {
-    float bw = row_button_w("Open logs", icons::folder);
-    setting_row("Logs", "Launcher and game logs are kept on this PC.", bw, s(38), [&] {
-      if (button("Open logs", icons::folder, Tone::secondary, {bw, s(38)}))
+    float bw = row_button_w(tr("Open logs"), icons::folder);
+    setting_row(tr("Logs"), tr("Launcher and game logs are kept on this PC."), bw, s(38), [&] {
+      if (button(tr("Open logs"), icons::folder, Tone::secondary, {bw, s(38)}))
         action([&] { open_folder(data_ / "logs"); });
     });
   }
   divider();
   {
-    float bw = row_button_w("Upload debug report");
-    setting_row("Debug report",
-                "Uploads the last game launch's logs and this PC's setup and gives you a link to put in a bug "
-                "report. Your name, folders and account details are left out.",
+    float bw = row_button_w(tr("Upload debug report"));
+    setting_row(tr("Debug report"),
+                tr("Uploads the last game launch's logs and this PC's setup and gives you a link to put in a bug "
+                   "report. Your name, folders and account details are left out."),
                 bw, s(38), [&] {
-                  if (button("Upload debug report", 0, Tone::secondary, {bw, s(38)})) share_report({});
+                  if (button(tr("Upload debug report"), 0, Tone::secondary, {bw, s(38)})) share_report({});
                 });
   }
   ImGui::Dummy({0, 0});  // the last row keeps its bottom padding
@@ -2162,11 +2184,11 @@ void App::draw_settings() {
     float tx = std::round(p.x + m + s(16)), cy = p.y + m * 0.5f;
     draw_text(adl, fonts().semibold, kBody, {tx, text_y(fonts().semibold, kBody, cy - s(10))}, color::text, "Venture");
     draw_text(adl, fonts().regular, kSmall, {tx, text_y(fonts().regular, kSmall, cy + s(10))}, color::text2,
-              "Version " VENTURE_VERSION);
-    float bw = row_button_w("Join our Discord", icons::people);
+              std::string(tr("Version ")) + VENTURE_VERSION);
+    float bw = row_button_w(tr("Join our Discord"), icons::people);
     ImGui::Dummy({m, m});
     ImGui::SetCursorScreenPos({p.x + ImGui::GetContentRegionAvail().x - bw, cy - s(19)});
-    if (button("Join our Discord##discord", icons::people, Tone::secondary, {bw, s(38)}, true,
+    if (button(tr("Join our Discord##discord"), icons::people, Tone::secondary, {bw, s(38)}, true,
                ImTextureID(reinterpret_cast<uintptr_t>(discord_logo(int(std::round(s(16))))))))
       action([] { open_url(kDiscord); });
     ImGui::SetCursorScreenPos({p.x, p.y + m});
@@ -2214,10 +2236,10 @@ std::vector<std::string> resolution_ids() {
   return ids;
 }
 std::vector<std::string> resolution_names() {
-  std::vector<std::string> names{"Runtime default"};
+  std::vector<std::string> names{tr("Runtime default")};
   for (const auto& p : library::headset_presets) names.emplace_back(p.name);
-  names.emplace_back("Percent of runtime");
-  names.emplace_back("Custom size");
+  names.emplace_back(tr("Percent of runtime"));
+  names.emplace_back(tr("Custom size"));
   return names;
 }
 std::vector<std::string> rate_ids() {
@@ -2227,9 +2249,9 @@ std::vector<std::string> rate_ids() {
   return ids;
 }
 std::vector<std::string> rate_names() {
-  std::vector<std::string> names{"Runtime default"};
+  std::vector<std::string> names{tr("Runtime default")};
   for (int hz : library::frame_rates) names.push_back(std::format("{} Hz", hz));
-  names.emplace_back("Custom");
+  names.emplace_back(tr("Custom"));
   return names;
 }
 // A whole-number field drawn as a pill like the dropdowns, its value centered
@@ -2299,9 +2321,9 @@ void App::draw_display_rows(library::DisplaySettings& d, bool per_game, const ch
   auto res_ids = resolution_ids(), res_names = resolution_names(), hz_ids = rate_ids(), hz_names = rate_names();
   if (per_game) {
     res_ids.insert(res_ids.begin(), "");
-    res_names.insert(res_names.begin(), "Use global setting");
+    res_names.insert(res_names.begin(), tr("Use global setting"));
     hz_ids.insert(hz_ids.begin(), "");
-    hz_names.insert(hz_names.begin(), "Use global setting");
+    hz_names.insert(hz_names.begin(), tr("Use global setting"));
   }
   auto pointers = [](const std::vector<std::string>& v) {
     std::vector<const char*> out;
@@ -2324,7 +2346,7 @@ void App::draw_display_rows(library::DisplaySettings& d, bool per_game, const ch
   // --smoke-view display-menu / game-settings-menu / display-rates opens a list once.
   static bool smoke_menu = options_.smoke_view == "display-menu" || options_.smoke_view == "game-settings-menu";
   static bool smoke_rates = options_.smoke_view == "display-rates";
-  setting_row("Resolution per eye", "", dw, s(38), [&] {
+  setting_row(tr("Resolution per eye"), "", dw, s(38), [&] {
     if (std::exchange(smoke_menu, false)) {
       ImGui::PushID("resolution");
       ImGui::OpenPopup("##menu");
@@ -2357,7 +2379,7 @@ void App::draw_display_rows(library::DisplaySettings& d, bool per_game, const ch
       result = std::format("{} x {}", w, h);
     }
     const float rw = result.empty() ? 0 : measure(fonts().regular, kSmall + 1, result).x + s(16);
-    setting_row("Percent of runtime size", "", dw + rw, s(38), [&] {
+    setting_row(tr("Percent of runtime size"), "", dw + rw, s(38), [&] {
       const ImVec2 p = ImGui::GetCursorScreenPos();
       if (!result.empty())
         draw_text(ImGui::GetWindowDrawList(), fonts().regular, kSmall + 1,
@@ -2372,7 +2394,7 @@ void App::draw_display_rows(library::DisplaySettings& d, bool per_game, const ch
   if (d.resolution == "custom") {
     divider();
     const float fw = (dw - s(28)) * 0.5f;
-    setting_row("Size per eye", "", dw, s(38), [&] {
+    setting_row(tr("Size per eye"), "", dw, s(38), [&] {
       changed |= number_field("##width", &d.width, library::min_custom_side, library::max_custom_side, fw);
       ImGui::SameLine(0, 0);
       ImVec2 p = ImGui::GetCursorScreenPos();
@@ -2418,7 +2440,7 @@ void App::draw_display_rows(library::DisplaySettings& d, bool per_game, const ch
                 kHelpIcon);
   });
   divider();
-  setting_row("Frame rate", "", dw, s(38), [&] {
+  setting_row(tr("Frame rate"), "", dw, s(38), [&] {
     if (std::exchange(smoke_rates, false)) {
       ImGui::PushID("rate");
       ImGui::OpenPopup("##menu");
@@ -2432,23 +2454,24 @@ void App::draw_display_rows(library::DisplaySettings& d, bool per_game, const ch
   });
   if (d.rate == "custom") {
     divider();
-    setting_row("Custom frame rate", "", dw, s(38), [&] {
+    setting_row(tr("Custom frame rate"), "", dw, s(38), [&] {
       changed |= number_field("##custom-rate", &d.custom_rate, library::min_custom_rate, library::max_custom_rate, dw, "Hz");
     });
   }
   divider();
   // --smoke-view display-mirror opens the mirror list once.
   static bool smoke_mirror = options_.smoke_view == "display-mirror";
-  setting_row("Desktop mirror", "", dw, s(38), [&] {
+  setting_row(tr("Desktop mirror"), "", dw, s(38), [&] {
     if (std::exchange(smoke_mirror, false)) {
       ImGui::PushID("mirror");
       ImGui::OpenPopup("##menu");
       ImGui::PopID();
     }
-    std::vector<std::string> ids{"cropped", "full", "off"}, names{"Cropped", "Whole eye", "Off"};
+    std::vector<std::string> ids{"cropped", "full", "off"},
+        names{tr("Cropped"), tr("Whole eye"), tr("Off")};
     if (per_game) {
       ids.insert(ids.begin(), "");
-      names.insert(names.begin(), "Use global setting");
+      names.insert(names.begin(), tr("Use global setting"));
     }
     const auto items = pointers(names);
     int choice = index(ids, d.mirror);
@@ -2462,16 +2485,16 @@ void App::draw_display_rows(library::DisplaySettings& d, bool per_game, const ch
   static bool smoke_eye = options_.smoke_view == "display-mirror-eye";
   if ((per_game && d.mirror.empty() ? settings_.display.mirror : d.mirror) != "off") {
     divider();
-    setting_row("Mirror eye", "", dw, s(38), [&] {
+    setting_row(tr("Mirror eye"), "", dw, s(38), [&] {
       if (std::exchange(smoke_eye, false)) {
         ImGui::PushID("mirror-eye");
         ImGui::OpenPopup("##menu");
         ImGui::PopID();
       }
-      std::vector<std::string> ids{"left", "right"}, names{"Left", "Right"};
+      std::vector<std::string> ids{"left", "right"}, names{tr("Left"), tr("Right")};
       if (per_game) {
         ids.insert(ids.begin(), "");
-        names.insert(names.begin(), "Use global setting");
+        names.insert(names.begin(), tr("Use global setting"));
       }
       const auto items = pointers(names);
       int choice = index(ids, d.mirror_eye);
@@ -2716,15 +2739,16 @@ void App::manual_sign_in() {
   gap(6);
   if (!auth_manual_) {
     gap(4);
-    if (link("Sign in manually##manual", color::text2)) auth_manual_ = true;
+    if (link(tr("Sign in manually##manual"), color::text2)) auth_manual_ = true;
     return;
   }
   const float w = ImGui::GetContentRegionAvail().x;
   const bool paste = link_handler_ != 1 || auth_paste_open_;
-  text(sf, kSmall, color::text, paste ? "1. Open this link in any browser and sign in to Meta."
-                                      : "Open this link in any browser and sign in to Meta. When it asks, let it open Venture.");
+  text(sf, kSmall, color::text,
+       paste ? tr("1. Open this link in any browser and sign in to Meta.")
+             : tr("Open this link in any browser and sign in to Meta. When it asks, let it open Venture."));
   gap(8);
-  const float copy_w = button_width("Copy link"), open_w = button_width("Open");
+  const float copy_w = button_width(tr("Copy link")), open_w = button_width(tr("Open"));
   ImVec2 p = ImGui::GetCursorScreenPos();
   const float field_w = w - copy_w - open_w - s(20), h = s(34);
   ImDrawList* dl = ImGui::GetWindowDrawList();
@@ -2734,27 +2758,28 @@ void App::manual_sign_in() {
   ImGui::Dummy({field_w, h});
   ImGui::SameLine(0, s(10));
   ImGui::SetCursorScreenPos({p.x + field_w + s(10), p.y - (s(40) - h) * 0.5f});
-  if (button("Open##manual-open", 0, Tone::secondary, {open_w, s(40)})) {
+  if (button(tr("Open##manual-open"), 0, Tone::secondary, {open_w, s(40)})) {
     try {
       open_url(auth_url_);
     } catch (const std::exception &) {
-      auth_paste_error_ = "No browser opened. Copy the link instead.";
+      auth_paste_error_ = tr("No browser opened. Copy the link instead.");
     }
   }
   ImGui::SetCursorScreenPos({p.x + field_w + open_w + s(20), p.y - (s(40) - h) * 0.5f});
-  if (button("Copy link##manual-copy", 0, Tone::secondary, {copy_w, s(40)})) {
+  if (button(tr("Copy link##manual-copy"), 0, Tone::secondary, {copy_w, s(40)})) {
     ImGui::SetClipboardText(auth_url_.c_str());
-    auth_paste_error_ = "Link copied.";
+    auth_paste_error_ = tr("Link copied.");
   }
   ImGui::SetCursorScreenPos({p.x, p.y + h});
   if (!paste) {
     gap(12);
-    if (link("Paste the address instead##manual-paste-open", color::text2)) auth_paste_open_ = true;
+    if (link(tr("Paste the address instead##manual-paste-open"), color::text2)) auth_paste_open_ = true;
   } else {
     gap(14);
-    text(sf, kSmall, color::text, "2. Paste the oculus:// address that Meta's Continue button tries to open.");
+    text(sf, kSmall, color::text, tr("2. Paste the oculus:// address that Meta's Continue button tries to open."));
     ImGui::SetCursorPosY(ImGui::GetCursorPosY() - s(5));  // the hint belongs to step 2
-    text(rf, kSmall, color::text2, "In Firefox, press Ctrl+Shift+K before Continue, then copy the message it shows.");
+    text(rf, kSmall, color::text2,
+         tr("In Firefox, press Ctrl+Shift+K before Continue, then copy the message it shows."));
     gap(2);
     if (submit_field("manual-paste", "oculus://\xE2\x80\xA6", &auth_paste_, w, icons::lock)) {
       paste_sign_in(auth_paste_);
@@ -2763,23 +2788,23 @@ void App::manual_sign_in() {
     gap(8);
   }
   if (!auth_paste_error_.empty()) {
-    text(rf, kSmall, auth_paste_error_ == "Link copied." ? color::text2 : color::warning, auth_paste_error_);
+    text(rf, kSmall, auth_paste_error_ == tr("Link copied.") ? color::text2 : color::warning, auth_paste_error_);
     gap(4);
   }
 }
 
 // ---------------------------------------------------------------------------
 void App::draw_account() {
-  page_title("Accounts");
+  page_title(tr("Accounts"));
   gap(kAfterHeader);
   float w = std::min(ImGui::GetContentRegionAvail().x, s(kPageWidth));
   ImFont* rf = fonts().regular;
   ImFont* sf = fonts().semibold;
   if (accounts_.empty()) {
     begin_card("connect", w, {28, 28});
-    text(sf, kTitle, color::text, "Connect your Meta account", false);
+    text(sf, kTitle, color::text, tr("Connect your Meta account"), false);
     gap(8);
-    if (button(signing_in_ ? "Waiting for Meta\xE2\x80\xA6##signin" : "Sign in with Meta##signin", 0, Tone::primary,
+    if (button(signing_in_ ? tr("Waiting for Meta\xE2\x80\xA6##signin") : tr("Sign in with Meta##signin"), 0, Tone::primary,
                {s(220), s(46)}, !signing_in_))
       sign_in();
   } else {
@@ -2807,11 +2832,11 @@ void App::draw_account() {
       ImGui::SetCursorScreenPos({x, cy - s(18)});
       if (icon_button("more", icons::more, nullptr, 36)) ImGui::OpenPopup("account-menu");
       if (begin_menu("account-menu")) {
-        if (active && menu_item("Refresh library", icons::refresh, false, !refreshing_ && !options_.offline)) refresh();
-        if (usable && !a.primary && accounts_.size() > 1 && menu_item("Open at startup", icons::star))
+        if (active && menu_item(tr("Refresh library"), icons::refresh, false, !refreshing_ && !options_.offline)) refresh();
+        if (usable && !a.primary && accounts_.size() > 1 && menu_item(tr("Open at startup"), icons::star))
           action([&, key = a.key] { mark_primary(key); });
-        if (a.signed_in && menu_item("Sign out", icons::signout)) action([&, key = a.key] { sign_out_account(key); });
-        if (menu_item("Remove from Venture", icons::trash, true)) {
+        if (a.signed_in && menu_item(tr("Sign out"), icons::signout)) action([&, key = a.key] { sign_out_account(key); });
+        if (menu_item(tr("Remove from Venture"), icons::trash, true)) {
           remove_account_ = a.key;
           remove_saves_ = false;
         }
@@ -2819,8 +2844,8 @@ void App::draw_account() {
       }
       x -= s(10);
       const char* cta = nullptr;
-      if (!usable) cta = a.needs_reauth ? "Reconnect" : "Sign in";
-      else if (!active) cta = "Switch";
+      if (!usable) cta = a.needs_reauth ? tr("Reconnect") : tr("Sign in");
+      else if (!active) cta = tr("Switch");
       if (cta) {
         float bw = button_width(cta);
         x -= bw;
@@ -2841,11 +2866,11 @@ void App::draw_account() {
       float text_w = x - tx - s(8);
       draw_text(dl, sf, kBody + 1, {std::round(tx), text_y(sf, kBody + 1, cy - s(10))}, color::text,
                 ellipsize(sf, kBody + 1, account_name(a), text_w));
-      std::string state = active          ? (options_.offline ? "Active  \xC2\xB7  offline" : "Active")
-                          : a.needs_reauth ? "Sign-in expired"
-                          : a.signed_in    ? "Signed in"
-                                           : "Signed out  \xC2\xB7  games and saves are kept";
-      if (a.primary && accounts_.size() > 1) state += "  \xC2\xB7  Opens at startup";
+      std::string state = active          ? (options_.offline ? tr("Active  \xC2\xB7  offline") : tr("Active"))
+                          : a.needs_reauth ? tr("Sign-in expired")
+                          : a.signed_in    ? tr("Signed in")
+                                           : tr("Signed out  \xC2\xB7  games and saves are kept");
+      if (a.primary && accounts_.size() > 1) state += tr("  \xC2\xB7  Opens at startup");
       if (!a.alias.empty() && !a.display_name.empty() && a.alias != a.display_name && !generated_alias(a.alias))
         state = "@" + a.alias + "  \xC2\xB7  " + state;
       draw_text(dl, rf, kSmall, {std::round(tx), text_y(rf, kSmall, cy + s(11))}, a.needs_reauth ? color::warning : color::text2,
@@ -2872,11 +2897,11 @@ void App::draw_account() {
       ImVec2 c{p.x + r + s(3), p.y + row_h * 0.5f};
       dl->AddCircleFilled(c, r, hov ? color::surface_top : color::surface_hi, 48);
       draw_glyph(dl, icons::add, kBody, c, enabled ? color::text : color::text3);
-      std::string label = signing_in_ ? "Waiting for Meta\xE2\x80\xA6" : "Add account";
+      std::string label = signing_in_ ? tr("Waiting for Meta\xE2\x80\xA6") : tr("Add account");
       draw_text(dl, sf, kBody, {std::round(p.x + r * 2 + s(22)), text_y(sf, kBody, p.y, row_h)},
                 enabled ? color::text : color::text3, label);
       if (!room && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-        tooltip("Up to four accounts can be signed in. Sign one out to add another.");
+        tooltip(tr("Up to four accounts can be signed in. Sign one out to add another."));
       if (clicked) action([&] { add_account(); });
     }
   }
@@ -2895,7 +2920,7 @@ void App::draw_account() {
     text(rf, kSmall, color::text2, auth_status_, false);
     if (signing_in_) {
       ImGui::SetCursorScreenPos({x + measure(rf, kSmall, auth_status_).x + s(14), row.y});
-      if (link("Cancel##signin-cancel", color::text2)) cancel_sign_in();
+      if (link(tr("Cancel##signin-cancel"), color::text2)) cancel_sign_in();
     }
     ImGui::SetCursorScreenPos({row.x, row.y + line});
     ImGui::Dummy({0, 0});
@@ -2908,13 +2933,13 @@ void App::draw_remove_account() {
   if (remove_account_ && !ImGui::IsPopupOpen("Remove account?")) ImGui::OpenPopup("Remove account?");
   if (begin_dialog("Remove account?", 460)) {
     const AccountView* a = remove_account_ ? account(*remove_account_) : nullptr;
-    dialog_text("Remove " + (a ? account_name(*a) : std::string("this account")) + "?",
-                "Venture forgets its sign-in. Installed games stay, and you can add the account again any time.");
+    dialog_text(trf("Remove {0}?", a ? account_name(*a) : tr("this account")),
+                tr("Venture forgets its sign-in. Installed games stay, and you can add the account again any time."));
     gap(10);
     divider();
-    setting_row("Also delete its saves", "Saves can't be recovered once deleted.", s(44), s(24),
+    setting_row(tr("Also delete its saves"), tr("Saves can't be recovered once deleted."), s(44), s(24),
                 [&] { toggle("remove-saves", &remove_saves_); });
-    const int clicked = dialog_footer({{"Cancel"}, {"Remove", Tone::danger}});
+    const int clicked = dialog_footer({{tr("Cancel")}, {tr("Remove"), Tone::danger}});
     if (clicked == 1 && remove_account_)
       action([&, key = *remove_account_, saves = remove_saves_] { remove_account(key, saves); });
     if (clicked >= 0) {
@@ -2936,7 +2961,7 @@ void App::draw_import_items(ImportScan& scan, bool device, float width) {
   // A headset can hold many games: a search narrows its list, and long folder lists. Hidden picks stay picked.
   if ((device && !scan.items.empty()) || scan.items.size() > 6 || !scan.search.empty()) {
     gap(6);
-    search_field(device ? "import-search##device" : "import-search##local", "Search games", &scan.search,
+    search_field(device ? "import-search##device" : "import-search##local", tr("Search games"), &scan.search,
                  std::min(s(320), width));
     gap(10);
   }
@@ -2986,13 +3011,13 @@ void App::draw_import_items(ImportScan& scan, bool device, float width) {
     std::string title = match.game ? match.game->name : item.label.empty() ? item.package : item.label;
     draw_text(dl, fonts().semibold, kBody, {x, text_y(fonts().semibold, kBody, mid - s(10))}, color::text,
               ellipsize(fonts().semibold, kBody, title, text_right - x));
-    std::string version = item.version_name.empty() ? std::format("Version {}", item.version_code)
-                                                    : std::format("Version {} ({})", item.version_name, item.version_code);
-    std::string detail = std::format("{}  \xC2\xB7  {} in {} file{}", version, bytes(item.bytes), item.files,
-                                     item.files == 1 ? "" : "s");
+    std::string version = item.version_name.empty() ? trf("Version {0}", item.version_code)
+                                                    : trf("Version {0} ({1})", item.version_name, item.version_code);
+    std::string detail = trf("{0}  \xC2\xB7  {1} in {2} file{3}", version, bytes(item.bytes), item.files,
+                             item.files == 1 ? "" : "s");
     if (match.game || !item.label.empty()) detail = item.package +"  \xC2\xB7  " + detail;
-    if (item.saves) detail += std::format("  \xC2\xB7  saves {}", bytes(item.save_bytes));
-    if (item.skipped) detail += std::format("  \xC2\xB7  {} skipped", item.skipped);
+    if (item.saves) detail += trf("  \xC2\xB7  saves {0}", bytes(item.save_bytes));
+    if (item.skipped) detail += trf("  \xC2\xB7  {0} skipped", item.skipped);
     draw_text(dl, fonts().regular, kSmall, {x, text_y(fonts().regular, kSmall, mid + s(11))}, color::text2,
               ellipsize(fonts().regular, kSmall, detail, text_right - x));
     ImGui::SetCursorScreenPos({right - bw, mid - s(12)});
@@ -3009,12 +3034,12 @@ void App::draw_import_items(ImportScan& scan, bool device, float width) {
   ImVec2 row = ImGui::GetCursorScreenPos();
   if (ready)
     draw_text(dl, fonts().regular, kSmall, {row.x, text_y(fonts().regular, kSmall, row.y, s(40))}, color::text2,
-              std::format("{} selected{}", ready == 1 ? std::string("1 game") : std::format("{} games", ready),
+              trf("{0} selected{1}", ready == 1 ? std::string(tr("1 game")) : trf("{0} games", ready),
                           ready_bytes ? "  \xC2\xB7  " + bytes(ready_bytes) : std::string()));
   ImGui::SetCursorScreenPos({row.x + width - bw, row.y});
-  std::string label = ready == 0   ? std::string("Import")
-                      : ready == 1 ? std::string("Import 1 game")
-                                   : std::format("Import {} games", ready);
+  std::string label = ready == 0   ? std::string(tr("Import"))
+                      : ready == 1 ? tr("Import 1 game")
+                                   : trf("Import {0} games", ready);
   label += device ? "##device" : "##local";
   if (button(label.c_str(), icons::download, Tone::primary, {bw, s(40)}, ready > 0))
     action([&, device] { request_import(device); });
@@ -3030,39 +3055,39 @@ void App::draw_import() {
     smoke_ask = false;
     request_import(false);
   }
-  page_title("Import");
+  page_title(tr("Import"));
   gap(kAfterHeader);
   float w = std::min(ImGui::GetContentRegionAvail().x, s(kPageWidth));
 
-  heading("From a headset");
+  heading(tr("From a headset"));
   begin_card("import-headset", w, {22, 18});
   {
     float inner = ImGui::GetContentRegionAvail().x;
     ImVec2 p = ImGui::GetCursorScreenPos();
     ImDrawList* dl = ImGui::GetWindowDrawList();
     float h = s(40);
-    std::string headline = "No headset connected";
+    std::string headline = tr("No headset connected");
     auto device = std::ranges::find(import_devices_, import_serial_, &android::adb::Device::serial);
     if (device != import_devices_.end() && device->ready())
-      headline = std::format("{}  \xC2\xB7  {} games", device->model.empty() ? "Headset" : device->model,
-                             import_device_.items.size());
+      headline = trf("{0}  \xC2\xB7  {1} games", device->model.empty() ? tr("Headset") : device->model,
+                     import_device_.items.size());
     else if (import_device_.busy)
-      headline = "Looking for a headset";
+      headline = tr("Looking for a headset");
     dl->AddCircleFilled({p.x + h * 0.5f, p.y + h * 0.5f}, h * 0.5f, color::surface_hi, 32);
     draw_glyph(dl, icons::game, kHeading, {p.x + h * 0.5f, p.y + h * 0.5f}, color::text2);
     float tx = std::round(p.x + h + s(14));
     draw_text(dl, fonts().semibold, kBody, {tx, text_y(fonts().semibold, kBody, p.y, h)}, color::text,
               ellipsize(fonts().semibold, kBody, headline, inner - h - s(200)));
     if (ImGui::IsMouseHoveringRect({tx, p.y}, {p.x + inner - s(200), p.y + h}))
-      tooltip("Connect a Quest with USB and allow debugging on the headset, then scan.");
-    float bw = row_button_w("Scan headset", icons::refresh);
+      tooltip(tr("Connect a Quest with USB and allow debugging on the headset, then scan."));
+    float bw = row_button_w(tr("Scan headset"), icons::refresh);
     ImGui::SetCursorScreenPos({p.x + inner - bw, p.y + (h - s(kControlH)) * 0.5f});
     if (import_device_.busy) {
       ImVec2 sp = ImGui::GetCursorScreenPos();
       ImGui::Dummy({bw, h});
       ImGui::SetCursorScreenPos({sp.x + bw - s(28), sp.y + s(11)});
       spinner(9, color::text2);
-    } else if (button("Scan headset", icons::refresh, Tone::secondary, {bw, s(kControlH)})) {
+    } else if (button(tr("Scan headset"), icons::refresh, Tone::secondary, {bw, s(kControlH)})) {
       scan_headset();
     }
     ImGui::SetCursorScreenPos({p.x, p.y + h + s(14)});
@@ -3090,16 +3115,16 @@ void App::draw_import() {
     draw_import_items(import_device_, true, inner);
     // Wi-Fi debugging: adb connect to the headset's address.
     {
-      float cw = row_button_w("Connect", icons::refresh), fw = std::min(s(240), inner * 0.4f);
+      float cw = row_button_w(tr("Connect"), icons::refresh), fw = std::min(s(240), inner * 0.4f);
       ImVec2 row = ImGui::GetCursorPos();
       const ImVec2 at = ImGui::GetCursorScreenPos();
       draw_text(ImGui::GetWindowDrawList(), fonts().regular, kBody,
-                {std::round(at.x), text_y(fonts().regular, kBody, at.y, s(38))}, color::text, "Over Wi-Fi");
+                {std::round(at.x), text_y(fonts().regular, kBody, at.y, s(38))}, color::text, tr("Over Wi-Fi"));
       ImGui::SetCursorPos({row.x + inner - cw - fw - s(10), row.y});
       bool enter = text_field("##address", "192.168.1.20:5555", &import_address_, fw,
                               ImGuiInputTextFlags_EnterReturnsTrue).entered;
       ImGui::SameLine(0, s(10));
-      if ((button("Connect##wifi", icons::refresh, Tone::secondary, {cw, s(kControlH)},
+      if ((button(tr("Connect##wifi"), icons::refresh, Tone::secondary, {cw, s(kControlH)},
                   !import_device_.busy && !import_address_.empty()) ||
            enter) &&
           !import_address_.empty())
@@ -3109,21 +3134,21 @@ void App::draw_import() {
   end_card();
   gap(20);
 
-  heading("From this computer");
+  heading(tr("From this computer"));
   begin_card("import-local", w, {22, 18});
   {
     float inner = ImGui::GetContentRegionAvail().x;
-    float fw = row_button_w("Choose folder", icons::folder), aw = row_button_w("Choose APK or ZIP", icons::package);
+    float fw = row_button_w(tr("Choose folder"), icons::folder), aw = row_button_w(tr("Choose APK or ZIP"), icons::package);
     ImVec2 start = ImGui::GetCursorPos();
     const ImVec2 at = ImGui::GetCursorScreenPos();
-    constexpr auto label = "A game's APK with its data";
+    const char* label = tr("A game's APK with its data");
     draw_text(ImGui::GetWindowDrawList(), fonts().regular, kBody,
               {std::round(at.x), text_y(fonts().regular, kBody, at.y, s(kControlH))}, color::text, label);
     float after = start.y;
     ImGui::SetCursorPos({start.x + inner - fw - aw - s(10), start.y});
-    if (button("Choose folder", icons::folder, Tone::secondary, {fw, s(kControlH)})) choose_import(true);
+    if (button(tr("Choose folder"), icons::folder, Tone::secondary, {fw, s(kControlH)})) choose_import(true);
     ImGui::SameLine(0, s(10));
-    if (button("Choose APK or ZIP", icons::package, Tone::secondary, {aw, s(kControlH)})) choose_import(false);
+    if (button(tr("Choose APK or ZIP"), icons::package, Tone::secondary, {aw, s(kControlH)})) choose_import(false);
     const bool listing = import_local_.busy || !import_local_.error.empty() || !import_local_.items.empty();
     ImGui::SetCursorPosY(std::max(after, start.y + s(kControlH)) + (listing ? s(12) : 0));
     ImGui::Dummy({inner, 0});
@@ -3132,7 +3157,7 @@ void App::draw_import() {
       ImGui::SetCursorScreenPos({sp.x + s(9), sp.y + s(9)});
       spinner(9, color::text2);
       draw_text(ImGui::GetWindowDrawList(), fonts().regular, kSmall,
-                {sp.x + s(30), text_y(fonts().regular, kSmall, sp.y, s(18))}, color::text2, "Reading the game files...");
+                {sp.x + s(30), text_y(fonts().regular, kSmall, sp.y, s(18))}, color::text2, tr("Reading the game files..."));
       ImGui::SetCursorScreenPos({sp.x, sp.y + s(26)});
       ImGui::Dummy({inner, 0});
     }
@@ -3150,7 +3175,7 @@ void App::draw_import() {
   // A game the account owns that its library did not list, checked on the
   // game's own store listing. --smoke-view import-link shows it offline.
   if ((session_ && !options_.offline) || options_.smoke_view == "import-link") {
-    heading("From your Meta account");
+    heading(tr("From your Meta account"));
     begin_card("import-owned", w, {22, 18});
     {
       float inner = ImGui::GetContentRegionAvail().x;
@@ -3159,7 +3184,7 @@ void App::draw_import() {
       const ImVec2 at = ImGui::GetCursorScreenPos();
       draw_text(ImGui::GetWindowDrawList(), fonts().regular, kBody,
                 {std::round(at.x), text_y(fonts().regular, kBody, at.y, s(kControlH))}, color::text,
-                ellipsize(fonts().regular, kBody, "A game you own, by its store link", inner - fw - s(16)));
+                ellipsize(fonts().regular, kBody, tr("A game you own, by its store link"), inner - fw - s(16)));
       ImGui::SetCursorPos({start.x + inner - fw, start.y + (s(kControlH) - s(34)) * 0.5f});  // submit_field is 34 tall
       if (submit_field("owned-link", "meta.com/experiences/\xE2\x80\xA6", &owned_link_, fw, icons::add, !adding_))
         add_owned();
@@ -3171,7 +3196,7 @@ void App::draw_import() {
   }
 
   // Saves for an installed game, from a headset or a copy of its Android/data folder.
-  heading("Save data");
+  heading(tr("Save data"));
   begin_card("import-saves", w, {22, 18});
   {
     float inner = ImGui::GetContentRegionAvail().x;
@@ -3180,14 +3205,14 @@ void App::draw_import() {
       if (installed(g.id)) games.push_back(g);
     std::ranges::sort(games, {}, [](const meta::Game& g) { return lowercase(g.name); });
     if (games.empty()) {
-      text(fonts().regular, kSmall, color::text3, "Install or import a game first.", false);
+      text(fonts().regular, kSmall, color::text3, tr("Install or import a game first."), false);
     } else {
       auto current = std::ranges::find(games, save_game_, &meta::Game::id);
       int index = current == games.end() ? 0 : int(current - games.begin());
       std::vector<const char*> names;
       for (const auto& g : games) names.push_back(g.name.c_str());
-      float fw = row_button_w("From a folder", icons::folder), hw = row_button_w("From headset", icons::download),
-            tw = row_button_w("To headset", icons::save);
+      float fw = row_button_w(tr("From a folder"), icons::folder), hw = row_button_w(tr("From headset"), icons::download),
+            tw = row_button_w(tr("To headset"), icons::save);
       ImVec2 row = ImGui::GetCursorPos();
       ImGui::SetCursorPos(row);
       dropdown("save-game", "", names.data(), int(names.size()), &index,
@@ -3195,22 +3220,22 @@ void App::draw_import() {
       save_game_ = games[index].id;
       const bool running = running_.contains(save_game_) && running_[save_game_].process.active();
       ImGui::SetCursorPos({row.x + inner - fw - hw - tw - s(20), row.y});
-      constexpr auto replaces = "Replaces the game's saves in Venture; the current ones are kept in a backup.";
-      if (button("From a folder##saves-page", icons::folder, Tone::secondary, {fw, s(kControlH)}, !running))
+      auto replaces = tr("Replaces the game's saves in Venture; the current ones are kept in a backup.");
+      if (button(tr("From a folder##saves-page"), icons::folder, Tone::secondary, {fw, s(kControlH)}, !running))
         choose_save_folder(save_game_);
       if (ImGui::IsItemHovered())
         tooltip(replaces);
       ImGui::SameLine(0, s(10));
-      if (button("From headset##saves-page", icons::download, Tone::primary, {hw, s(kControlH)}, !running))
+      if (button(tr("From headset##saves-page"), icons::download, Tone::primary, {hw, s(kControlH)}, !running))
         action([id = save_game_, this] { import_saves_later(id, {}); });
       if (ImGui::IsItemHovered())
         tooltip(replaces);
       ImGui::SameLine(0, s(10));
-      if (button("To headset##saves-page", icons::save, Tone::secondary, {tw, s(kControlH)}, !running))
+      if (button(tr("To headset##saves-page"), icons::save, Tone::secondary, {tw, s(kControlH)}, !running))
         save_export_target_ = save_game_;
       if (ImGui::IsItemHovered())
-        tooltip("Replaces the game's saves on the headset and closes it there; the headset's current saves are "
-                "kept in a backup on this computer.");
+        tooltip(tr("Replaces the game's saves on the headset and closes it there; the headset's current saves are "
+                   "kept in a backup on this computer."));
       ImGui::SetCursorPos({row.x, row.y + s(kControlH)});
       ImGui::Dummy({inner, 0});
     }
@@ -3266,7 +3291,7 @@ void App::draw_import_ask() {
         draw_glyph(dl, picked.size() == 1 ? icons::package : icons::game, kHeading,
                    {at.x + tw * 0.5f, at.y + th * 0.5f}, color::text3);
       }
-      std::string name = std::format("{} games", picked.size());
+      std::string name = trf("{0} games", picked.size());
       if (picked.size() == 1) {
         const auto& item = *picked.front().first;
         name = game ? game->name : item.label.empty() ? item.package : item.label;
@@ -3292,7 +3317,7 @@ void App::draw_import_ask() {
                             }) > 1;
         const auto drive = shared ? location.drive + "  \xC2\xB7  " + paths::utf8(location.folder.filename())
                                   : location.drive;
-        labels.push_back(free ? std::format("{}  \xC2\xB7  {} free", drive, bytes(free)) : drive);
+        labels.push_back(free ? trf("{0}  \xC2\xB7  {1} free", drive, bytes(free)) : drive);
       }
       std::vector<const char*> items;
       for (auto& label : labels) items.push_back(label.c_str());
@@ -3301,34 +3326,34 @@ void App::draw_import_ask() {
       fits = !free || free > new_bytes;
       const float dw = w - s(130);
       divider();
-      setting_row("Install to", "", dw, s(38), [&] {
+      setting_row(tr("Install to"), "", dw, s(38), [&] {
         dialog_dropdown("import-to", items.data(), int(items.size()), &import_choice_, dw);
       });
       if (!fits)
         text(fonts().regular, kSmall, color::danger,
-             std::format("Not enough space: the new games need {}.", bytes(new_bytes)), false);
+             trf("Not enough space: the new games need {0}.", bytes(new_bytes)), false);
     }
     const bool steam = settings_.add_games_to_steam && (steam_sync_allowed_ || options_.smoke_view == "import-ask");
     if (steam && any_new) {
       divider();
-      setting_row("Add to Steam", "Appears in your Steam library and launches in SteamVR.", s(44), s(24),
+      setting_row(tr("Add to Steam"), tr("Appears in your Steam library and launches in SteamVR."), s(44), s(24),
                   [&] { toggle("import-steam", &import_steam_); });
     }
     if (updates) {
       gap(10);
       text(fonts().regular, kSmall, color::text3,
-           updates == 1 && picked.size() == 1 ? std::string("The installed game updates where it is.")
-           : updates == picked.size()          ? std::string("The installed games update where they are.")
-           : updates == 1                      ? std::string("1 installed game updates where it is.")
-                                               : std::format("{} installed games update where they are.", updates),
+           updates == 1 && picked.size() == 1 ? std::string(tr("The installed game updates where it is."))
+           : updates == picked.size()          ? std::string(tr("The installed games update where they are."))
+           : updates == 1                      ? std::string(tr("1 installed game updates where it is."))
+                                               : trf("{0} installed games update where they are.", updates),
            false);
     }
 
-    const int clicked = dialog_footer({{"Cancel"}, {"Import", Tone::primary, fits && !picked.empty(), icons::download}},
+    const int clicked = dialog_footer({{tr("Cancel")}, {tr("Import"), Tone::primary, fits && !picked.empty(), icons::download}},
                                       [&](float h) {
       const ImVec2 row = ImGui::GetCursorScreenPos();
       ImGui::SetCursorScreenPos({row.x, row.y + (h - s(16)) * 0.5f});
-      checkbox("import-remember", "Don't ask again", &import_remember_, {}, true);
+      checkbox("import-remember", tr("Don't ask again"), &import_remember_, {}, true);
     });
     if (clicked == 1) {
       const auto folder = import_choices_.size() > 1 ? import_choices_[import_choice_].first.folder : fs::path{};
@@ -3359,7 +3384,7 @@ void App::request_install(const meta::Game& g) {
   if (const auto binary = meta::version_binary(g.id); !binary.empty()) {
     const auto* i = installed(g.id, false);
     const auto* base = game(meta::base_app(g.id));
-    if (!i || !base) throw std::runtime_error("This game is no longer in your library.");
+    if (!i || !base) throw std::runtime_error(tr("This game is no longer in your library."));
     install_versions(*base, {meta::Build{std::string(binary), i->plan.version, i->plan.version_code}}, root_of(*i));
     return;
   }
@@ -3391,7 +3416,7 @@ void App::draw_install_ask() {
   ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {s(10), 0});
   if (begin_dialog("Install game", 480)) {
     const std::string id = install_ask_ ? install_ask_->first : std::string();
-    const std::string name = install_ask_ ? install_ask_->second : std::string("This game");
+    const std::string name = install_ask_ ? install_ask_->second : std::string(tr("This game"));
     const float w = s(424);
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const auto detail = details_.find(id);
@@ -3420,19 +3445,19 @@ void App::draw_install_ask() {
     if (install_versions_) {
       const float dw = w - s(130);
       divider();
-      setting_row("Version", "", dw, s(38), [&] {
+      setting_row(tr("Version"), "", dw, s(38), [&] {
         if (versions != builds_.end()) {
           const auto& list = versions->second;
           std::vector<std::string> labels;
           for (auto& b : list) {
             // Builds that share a version name are told apart by their version codes.
             std::string label = std::ranges::count(list, b.version, &meta::Build::version) > 1 ? b.label() : b.version;
-            if (b.live) label += "  \xC2\xB7  latest";
+            if (b.live) label += tr("  \xC2\xB7  latest");
             else if (!b.channels.empty() && b.channels.front() != "LIVE") label += "  \xC2\xB7  " + lowercase(b.channels.front());
-            if (installed_build(id, b.binary_id)) label += "  \xC2\xB7  installed";
+            if (installed_build(id, b.binary_id)) label += tr("  \xC2\xB7  installed");
             labels.push_back(std::move(label));
           }
-          labels.push_back(std::format("All versions ({})", list.size()));
+          labels.push_back(trf("All versions ({0})", list.size()));
           std::vector<const char*> items;
           for (auto& label : labels) items.push_back(label.c_str());
           // It starts on the latest build.
@@ -3463,7 +3488,7 @@ void App::draw_install_ask() {
                             }) > 1;
         const auto drive = shared ? location.drive + "  \xC2\xB7  " + paths::utf8(location.folder.filename())
                                   : location.drive;
-        labels.push_back(free ? std::format("{}  \xC2\xB7  {} free", drive, bytes(free)) : drive);
+        labels.push_back(free ? trf("{0}  \xC2\xB7  {1} free", drive, bytes(free)) : drive);
       }
       std::vector<const char*> items;
       for (auto& label : labels) items.push_back(label.c_str());
@@ -3472,25 +3497,25 @@ void App::draw_install_ask() {
       fits = !size || !free || free > size;
       const float dw = w - s(130);
       divider();
-      setting_row("Install to", "", dw,
+      setting_row(tr("Install to"), "", dw,
                   s(38), [&] {
                     dialog_dropdown("install-to", items.data(), int(items.size()), &install_choice_, dw);
                   });
-      if (!fits) text(fonts().regular, kSmall, color::danger, std::format("Not enough space: the game needs {}.", bytes(size)), false);
+      if (!fits) text(fonts().regular, kSmall, color::danger, trf("Not enough space: the game needs {0}.", bytes(size)), false);
     }
     if (!install_versions_ && settings_.add_games_to_steam && (steam_sync_allowed_ || options_.smoke_view == "install")) {
       divider();
-      setting_row("Add to Steam", "Appears in your Steam library and launches in SteamVR.", s(44), s(24),
+      setting_row(tr("Add to Steam"), tr("Appears in your Steam library and launches in SteamVR."), s(44), s(24),
                   [&] { toggle("steam-add", &install_steam_); });
     }
 
     // A quiet "don't ask again" at the left of the buttons.
-    const int clicked = dialog_footer({{"Cancel"}, {"Install", Tone::primary, fits && versions_ready, icons::download}},
+    const int clicked = dialog_footer({{tr("Cancel")}, {tr("Install"), Tone::primary, fits && versions_ready, icons::download}},
                                       [&](float h) {
       if (install_versions_) return;
       const ImVec2 row = ImGui::GetCursorScreenPos();
       ImGui::SetCursorScreenPos({row.x, row.y + (h - s(16)) * 0.5f});
-      checkbox("install-remember", "Don't ask again", &install_remember_, {}, true);
+      checkbox("install-remember", tr("Don't ask again"), &install_remember_, {}, true);
     });
     if (clicked == 1 && install_versions_ && versions != builds_.end()) {
       const auto folder = install_choices_.empty() ? settings_.games : install_choices_[install_choice_].first.folder;
@@ -3500,18 +3525,18 @@ void App::draw_install_ask() {
       else chosen.push_back(list[size_t(version_choice_)]);
       action([&, id, folder, chosen] {
         const auto* g = game(id);
-        if (!g) throw std::runtime_error("This game is no longer in your library.");
+        if (!g) throw std::runtime_error(tr("This game is no longer in your library."));
         const auto copy = *g;
         const auto queued = install_versions(copy, chosen, folder);
-        if (queued > 1) notice_ = std::format("{} versions are downloading.", queued);
-        else if (queued) notice_ = "The version is downloading.";
-        else notice_ = chosen.size() == 1 ? "That version is installed already." : "Every version is installed already.";
+        if (queued > 1) notice_ = trf("{0} versions are downloading.", queued);
+        else if (queued) notice_ = tr("The version is downloading.");
+        else notice_ = chosen.size() == 1 ? tr("That version is installed already.") : tr("Every version is installed already.");
       });
     } else if (clicked == 1) {
       const auto folder = install_choices_.empty() ? settings_.games : install_choices_[install_choice_].first.folder;
       action([&, id, folder, add = install_steam_, remember = install_remember_] {
         const auto* g = game(id);
-        if (!g) throw std::runtime_error("This game is no longer in your library.");
+        if (!g) throw std::runtime_error(tr("This game is no longer in your library."));
         const auto copy = *g;
         if (remember) {
           // The chosen drive becomes the games folder; the old one stays a library folder.
@@ -3608,11 +3633,11 @@ void App::draw_save_import() {
   if (!save_import_target_.empty() && !ImGui::IsPopupOpen("Import save data")) ImGui::OpenPopup("Import save data");
   if (begin_dialog("Import save data", 460)) {
     const meta::Game* g = game(save_import_target_);
-    dialog_text(g ? "Import saves for " + g->name : std::string("Import saves"),
-                "From a Quest connected over USB (developer mode), or a copy of the game's Android/data folder. "
-                "The saves they replace are kept in a backup.");
-    const int clicked = dialog_footer({{"Cancel"}, {"From a folder", Tone::secondary, true, icons::folder},
-                                       {"From headset", Tone::primary, true, icons::download}});
+    dialog_text(g ? trf("Import saves for {0}", g->name) : std::string(tr("Import saves")),
+                tr("From a Quest connected over USB (developer mode), or a copy of the game's Android/data folder. "
+                   "The saves they replace are kept in a backup."));
+    const int clicked = dialog_footer({{tr("Cancel")}, {tr("From a folder"), Tone::secondary, true, icons::folder},
+                                       {tr("From headset"), Tone::primary, true, icons::download}});
     if (clicked == 1) choose_save_folder(save_import_target_);
     if (clicked == 2) action([id = save_import_target_, this] { import_saves_later(id, {}); });
     if (clicked >= 0) {
@@ -3712,9 +3737,9 @@ void App::draw_cancel_download() {
   if (cancel_target_ && !ImGui::IsPopupOpen("Cancel download?")) ImGui::OpenPopup("Cancel download?");
   if (begin_dialog("Cancel download?", 460)) {
     const auto& j = cancel_target_;
-    dialog_text(j ? "Cancel " + j->name + "?" : std::string("Cancel this download?"),
-                "Its downloaded files are deleted. An installed game is kept as it is.");
-    const int clicked = dialog_footer({{"Keep downloading"}, {"Cancel download", Tone::danger}});
+    dialog_text(j ? trf("Cancel {0}?", j->name) : std::string(tr("Cancel this download?")),
+                tr("Its downloaded files are deleted. An installed game is kept as it is."));
+    const int clicked = dialog_footer({{tr("Keep downloading")}, {tr("Cancel download"), Tone::danger}});
     if (clicked == 1 && cancel_target_) action([&] { downloads_->remove(*cancel_target_, true); });
     if (clicked >= 0) {
       cancel_target_.reset();
@@ -3790,7 +3815,7 @@ void App::start_update() {
   if (!update_ || update_->downloading || update_->method == update::Method::page) return;
   for (const auto &[id, r] : running_)
     if (!r.exit) {
-      update_->error = "Close your game first, then update.";
+      update_->error = tr("Close your game first, then update.");
       return;
     }
   if (!update_worker_) update_worker_ = std::make_unique<Worker>([this] { wake(); });
@@ -3842,18 +3867,18 @@ void App::draw_update() {
     const std::string version = update_ ? update_->version : "";
     const bool in_place = update_ && update_->method != update::Method::page;
     const bool downloading = update_ && update_->downloading;
-    std::string detail = std::format("You're on {}. ", VENTURE_VERSION);
+    std::string detail = trf("You're on {0}. ", VENTURE_VERSION);
     if (!in_place)
-      detail += "Download it from the release page.";
+      detail += tr("Download it from the release page.");
     else if (downloading) {
       const auto done = update_->done->load(), total = update_->total->load();
-      detail += total ? std::format("Downloading the update: {}%", done * 100 / total)
-                      : std::string("Downloading the update\xE2\x80\xA6");
+      detail += total ? trf("Downloading the update: {0}%", done * 100 / total)
+                      : std::string(tr("Downloading the update\xE2\x80\xA6"));
     } else if (update_->method == update::Method::installer)
-      detail += "Venture closes to install it. Your games and saves stay.";
+      detail += tr("Venture closes to install it. Your games and saves stay.");
     else
-      detail += "Venture replaces this AppImage and restarts. Your games and saves stay.";
-    dialog_text(std::format("Venture {} is available", version), detail);
+      detail += tr("Venture replaces this AppImage and restarts. Your games and saves stay.");
+    dialog_text(trf("Venture {0} is available", version), detail);
     if (update_ && !update_->error.empty()) {
       gap(8);
       ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + g_dialog_w);
@@ -3862,10 +3887,10 @@ void App::draw_update() {
     }
     bool news = false;
     const int clicked = dialog_footer(
-        {{"Not now", Tone::secondary, !downloading},
-         {in_place ? (downloading ? "Updating\xE2\x80\xA6" : "Update now") : "Download", Tone::primary, !downloading}},
+        {{tr("Not now"), Tone::secondary, !downloading},
+         {in_place ? (downloading ? tr("Updating\xE2\x80\xA6") : tr("Update now")) : tr("Download"), Tone::primary, !downloading}},
         [&](float h) {
-          if (in_place) news = button("What's new##update", 0, Tone::ghost, {button_width("What's new"), h});
+          if (in_place) news = button(tr("What's new##update"), 0, Tone::ghost, {button_width(tr("What's new")), h});
         });
     if (news) action([url = update_->url] { open_url(url); });
     if (clicked == 0) {
@@ -3907,15 +3932,15 @@ void App::draw_report() {
     const bool uploading = report_ && report_->url.empty() && report_->error.empty();
     const bool failed = report_ && !report_->error.empty();
     if (uploading)
-      dialog_text("Uploading debug report\xE2\x80\xA6",
-                  "Logs and system details from this PC, without your name, folders or account details.");
+      dialog_text(tr("Uploading debug report\xE2\x80\xA6"),
+                   tr("Logs and system details from this PC, without your name, folders or account details."));
     else if (failed)
-      dialog_text("Couldn't upload the debug report",
-                  std::format("{} The report is saved as {}: attach it to a GitHub issue or post it in our Discord "
-                              "instead.", report_->error, paths::utf8(report_->file.filename())));
+      dialog_text(tr("Couldn't upload the debug report"),
+                  trf("{0} The report is saved as {1}: attach it to a GitHub issue or post it in our Discord "
+                      "instead.", report_->error, paths::utf8(report_->file.filename())));
     else
-      dialog_text("Debug report uploaded",
-                  "Put this link in a GitHub issue or our Discord with what happened. It stays readable for 90 days.");
+      dialog_text(tr("Debug report uploaded"),
+                   tr("Put this link in a GitHub issue or our Discord with what happened. It stays readable for 90 days."));
     // The link, or the upload in progress, in a field-like box.
     if (!failed) {
       gap(16);
@@ -3933,10 +3958,10 @@ void App::draw_report() {
       ImGui::SetCursorScreenPos({p.x, p.y + h});
       ImGui::Dummy({g_dialog_w, 0});
     }
-    const char* main = failed ? "Try again" : report_ && report_->copied ? "Copied" : "Copy link";
+    const char* main = failed ? tr("Try again") : report_ && report_->copied ? tr("Copied") : tr("Copy link");
     bool show = false;
-    const int clicked = dialog_footer({{"Done"}, {main, Tone::primary, !uploading}}, [&](float h) {
-      show = button("Show file##report", icons::folder, Tone::ghost, {button_width("Show file", icons::folder), h});
+    const int clicked = dialog_footer({{tr("Done")}, {main, Tone::primary, !uploading}}, [&](float h) {
+      show = button(tr("Show file##report"), icons::folder, Tone::ghost, {button_width(tr("Show file"), icons::folder), h});
     });
     if (show && report_) action([file = report_->file] { reveal_file(file); });
     if (clicked == 0) {
@@ -4107,14 +4132,14 @@ bool is_button(const controls::HostInput& in) {
                           in.path.find("/dpad_") != std::string_view::npos);
 }
 bool is_button(const Choice& c) { return is_button(*c.input) && controls::on_hand(*c.input, c.hand); }
-std::string choice_label(const Choice& c) { return std::format("{} {}", c.hand ? "Right" : "Left", c.input->label); }
+std::string choice_label(const Choice& c) { return std::format("{} {}", c.hand ? tr("Right") : tr("Left"), translate(c.input->label.data())); }
 // "L stick", "R B": a choice short enough for two to share the menu pill.
 std::string short_label(const Choice& c) {
   std::string l(c.input->label);
-  if (l == "Thumbstick click") l = "stick";
-  else if (l.starts_with("Thumbstick")) l = "stick" + l.substr(10);
-  else if (l.starts_with("Trackpad ")) l = "pad " + l.substr(9);
-  return std::format("{} {}", c.hand ? "R" : "L", l);
+  if (l == "Thumbstick click") l = tr("stick");
+  else if (l.starts_with("Thumbstick")) l = tr("stick") + l.substr(10);
+  else if (l.starts_with("Trackpad ")) l = tr("pad ") + l.substr(9);
+  return std::format("{} {}", c.hand ? tr("R") : tr("L"), l);
 }
 // The menu row's short line for a held button, and for two buttons; no hold reads as a plain press.
 
@@ -4130,7 +4155,7 @@ MenuInput resolved_menu(const ControlsEdit& e) {
     case MenuMode::automatic: {
       // The controller's menu button where the runtime leaves it to the game, and
       // both stick clicks (the Stick click rows) on every runtime.
-      MenuInput m{p.menu_path.empty() ? "Both stick clicks" : std::format("{} or both stick clicks", p.menu_label), {}};
+      MenuInput m{p.menu_path.empty() ? tr("Both stick clicks") : trf("{0} or both stick clicks", translate(p.menu_label.data())), {}};
       if (!p.menu_path.empty()) m.at.emplace_back(0, p.menu_path);
       const std::array clicks{host_paths(p, e.host[0][size_t(Quest::stick_click)]),
                               host_paths(p, e.host[1][size_t(Quest::stick_click)])};
@@ -4154,13 +4179,13 @@ MenuInput resolved_menu(const ControlsEdit& e) {
         std::string l(a.input->label);
         for (auto& ch : l) ch = char(std::tolower(static_cast<unsigned char>(ch)));
         if (l.starts_with("thumbstick")) l.erase(0, 5);  // "stick click"
-        label = std::format("Both {}{}", l, l.ends_with('s') ? "" : "s");
+        label = trf("Both {0}{1}", l, l.ends_with('s') ? "" : "s");
       } else {
         label = std::format("{} + {}", short_label(a), short_label(b));  // "L stick + R B"
       }
       return {label, {{a.hand, a.input->path}, {b.hand, b.input->path}}};
     }
-    case MenuMode::off: return {"Off", {}};
+    case MenuMode::off: return {tr("Off"), {}};
   }
   return {};
 }
@@ -4275,12 +4300,12 @@ void App::draw_controller_picker(ControlsEdit& e, float width, const controls::C
   dl->AddRectFilled(p, {p.x + size.x, p.y + size.y}, hovered || open ? color::surface_top : color::surface_hi,
                     size.y * 0.5f);
   auto tag_of = [&](int i) -> std::pair<std::string_view, ImU32> {
-    if (i == controls_connected_) return {"Connected", color::positive};
-    if (i == controls_last_used_) return {"Last used", color::text2};
+    if (i == controls_connected_) return {tr("Connected"), color::positive};
+    if (i == controls_last_used_) return {tr("Last used"), color::text2};
     return {{}, 0};
   };
   // The pill names the controller only; Connected and Last used show in the list.
-  const auto name = ellipsize(fonts().semibold, kSmall + 1, kProfiles[e.profile].name, width - s(56));
+  const auto name = ellipsize(fonts().semibold, kSmall + 1, translate(kProfiles[e.profile].name.data()), width - s(56));
   draw_text(dl, fonts().semibold, kSmall + 1, {std::round(p.x + s(16)), text_y(fonts().semibold, kSmall + 1, p.y, size.y)},
             color::text, name);
   draw_glyph(dl, icons::chevron_down, kLabel, {p.x + size.x - s(20), p.y + size.y * 0.5f}, color::text2);
@@ -4291,7 +4316,7 @@ void App::draw_controller_picker(ControlsEdit& e, float width, const controls::C
   if (begin_menu("##list")) {
     if (ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere(0);
     ImGui::PushStyleColor(ImGuiCol_NavCursor, IM_COL32(0, 0, 0, 0));
-    search_field("search", "Search controllers", &controls_search_, list_w - s(12));
+    search_field("search", tr("Search controllers"), &controls_search_, list_w - s(12));
     ImGui::PopStyleColor();
     gap(4);
     int shown = 0, matches = 0;
@@ -4304,7 +4329,7 @@ void App::draw_controller_picker(ControlsEdit& e, float width, const controls::C
       ImGui::PushID(i);
       const ImVec2 row = ImGui::GetCursorScreenPos();
       const float row_w = ImGui::GetContentRegionAvail().x;
-      if (menu_item(kProfiles[i].name.data()) && i != e.profile) open_controls(e, i, config);
+      if (menu_item(translate(kProfiles[i].name.data())) && i != e.profile) open_controls(e, i, config);
       ImDrawList* ml = ImGui::GetWindowDrawList();
       float right = row.x + row_w - s(12);
       if (i == e.profile) {
@@ -4317,7 +4342,7 @@ void App::draw_controller_picker(ControlsEdit& e, float width, const controls::C
     if (!shown) {
       gap(8);
       ImGui::Indent(s(12));
-      text(fonts().regular, kSmall, color::text3, "No controller matches.", false);
+      text(fonts().regular, kSmall, color::text3, tr("No controller matches."), false);
       ImGui::Unindent(s(12));
       gap(8);
     }
@@ -4392,14 +4417,14 @@ void App::draw_controls() {
   }
   const float w = std::min(ImGui::GetContentRegionAvail().x, s(1180));
   const float top = ImGui::GetCursorPosY();
-  page_title("Controls");
-  const float bw = button_width("Reset to defaults");
+  page_title(tr("Controls"));
+  const float bw = button_width(tr("Reset to defaults"));
   const float hw = std::min(w, ImGui::GetContentRegionAvail().x - s(header_right_inset()));
-  const float pw = std::clamp(hw - bw - s(10) - measure(fonts().semibold, kDisplay, "Controls").x - s(24), s(180), s(300));
+  const float pw = std::clamp(hw - bw - s(10) - measure(fonts().semibold, kDisplay, tr("Controls")).x - s(24), s(180), s(300));
   ImGui::SetCursorPos({ImGui::GetCursorStartPos().x + hw - pw - bw - s(10), top + s(kHeaderHeight - 38) * 0.5f});
   draw_controller_picker(controls_, pw, settings_.controls);
   ImGui::SetCursorPos({ImGui::GetCursorStartPos().x + hw - bw, top + s(kHeaderHeight - 38) * 0.5f});
-  if (button("Reset to defaults##controls", 0, Tone::secondary, {bw, s(38)})) reset_controls(controls_, controls_.profile);
+  if (button(tr("Reset to defaults##controls"), 0, Tone::secondary, {bw, s(38)})) reset_controls(controls_, controls_.profile);
   ImGui::SetCursorPosY(top + s(kHeaderHeight));
   gap(kAfterHeader);
   draw_controls_editor(controls_, nullptr, w, nullptr);
@@ -4479,7 +4504,7 @@ void App::draw_controls_editor(ControlsEdit& e, const ControlsEdit* base, float 
   const auto menu = resolved_menu(e);
   const auto mode = MenuMode(e.menu_mode);
   auto quest_label = [](int hand, int q) {
-    if (q == int(Quest::menu)) return std::string_view{"Menu"};
+    if (q == int(Quest::menu)) return std::string_view{tr("Menu")};
     return hand ? controls::kQuestInputs[q].right : controls::kQuestInputs[q].left;
   };
   // Rows that reach the same host input on one hand conflict. A held menu and a
@@ -4547,12 +4572,12 @@ void App::draw_controls_editor(ControlsEdit& e, const ControlsEdit* base, float 
     const ImVec2 t0 = ImGui::GetItemRectMin(), t1 = ImGui::GetItemRectMax();
     draw_text(ImGui::GetWindowDrawList(), fonts().regular, kBody,
               {t1.x + s(12), text_y(fonts().regular, kBody, t0.y, t1.y - t0.y)}, color::text,
-              "Custom controls for this game");
-    const float bw = button_width("Reset to my defaults");
+              tr("Custom controls for this game"));
+    const float bw = button_width(tr("Reset to my defaults"));
     const float right = row.x + inner;
     // The picker and reset share the line when they fit beside the toggle, else take the next.
     const float label_end = t1.x - ImGui::GetWindowPos().x + ImGui::GetScrollX() + s(12) +
-                            measure(fonts().regular, kBody, "Custom controls for this game").x + s(24);
+                            measure(fonts().regular, kBody, tr("Custom controls for this game")).x + s(24);
     const bool wrap = right - bw - s(10) - s(220) < label_end;
     const float line = wrap ? row.y + s(38) + s(12) : row.y;
     const float pw = std::clamp(right - bw - s(10) - (wrap ? row.x : label_end), s(180), s(300));
@@ -4560,7 +4585,7 @@ void App::draw_controls_editor(ControlsEdit& e, const ControlsEdit* base, float 
     draw_controller_picker(game_controls_.custom ? game_controls_ : controls_, pw,
                            game_controls_.custom && game ? settings_.game_controls[game->id] : settings_.controls);
     ImGui::SetCursorPos({right - bw, line});
-    if (button("Reset to my defaults", 0, Tone::secondary, {bw, s(38)}, game_controls_.custom) && game) {
+    if (button(tr("Reset to my defaults"), 0, Tone::secondary, {bw, s(38)}, game_controls_.custom) && game) {
       // The game's own controls become the player's again (all controllers).
       settings_.game_controls[game->id] = settings_.controls;
       open_controls(game_controls_, game_controls_.profile, settings_.controls);
@@ -4705,9 +4730,9 @@ void App::draw_controls_editor(ControlsEdit& e, const ControlsEdit* base, float 
       draw_image(dl, ImTextureID(reinterpret_cast<uintptr_t>(still)), {pic_x, pic_y}, {pic_x + pic_w, pic_y + pic_h});
     }
     draw_text(dl, fonts().semibold, kHeading,
-              {std::round(hand ? rows_x + rows_w - measure(fonts().semibold, kHeading, "Right").x : rows_x),
+              {std::round(hand ? rows_x + rows_w - measure(fonts().semibold, kHeading, tr("Right")).x : rows_x),
                text_y(fonts().semibold, kHeading, at.y, s(24))},
-              color::text, hand ? "Right" : "Left");
+              color::text, hand ? tr("Right") : tr("Left"));
 
     // While the menu is being changed or pointed at, ring the buttons it uses
     // (on the right controller too, where its row has no callout).
@@ -4818,8 +4843,8 @@ void App::draw_controls_editor(ControlsEdit& e, const ControlsEdit* base, float 
 
       // The Quest input, and under it a warning only; the pill says the rest.
       std::string sub = is_menu         ? std::string()
-                        : twin[hand][q] ? std::format("Shared with {}", quest_label(hand, twin[hand][q] - 1))
-                        : lost && !quiet ? std::string("No button for it here")
+                        : twin[hand][q] ? trf("Shared with {0}", quest_label(hand, twin[hand][q] - 1))
+                        : lost && !quiet ? std::string(tr("No button for it here"))
                                          : std::string();
       // A one-line row that can take another input keeps the + spot beside its
       // dropdown free (shown on hover): a long label is ellipsized short of it.
@@ -4909,9 +4934,9 @@ void App::draw_controls_editor(ControlsEdit& e, const ControlsEdit* base, float 
             };
             ControlsEdit automatic_edit = e;
             automatic_edit.menu_mode = int(MenuMode::automatic);
-            if (item(std::format("Automatic ({})##auto", resolved_menu(automatic_edit).label), automatic))
+            if (item(trf("Automatic ({0})##auto", resolved_menu(automatic_edit).label), automatic))
               e.menu_mode = int(MenuMode::automatic);
-            menu_section("ONE BUTTON");
+            menu_section(tr("ONE BUTTON"));
             ImGui::BeginChild("##buttons", {0, std::min(s(40) * float(2 * n_inputs), s(240))}, 0,
                               ImGuiWindowFlags_NoBackground);
             for (int c = 1; c <= 2 * n_inputs; ++c) {
@@ -4925,16 +4950,16 @@ void App::draw_controls_editor(ControlsEdit& e, const ControlsEdit* base, float 
               ImGui::PopID();
             }
             ImGui::EndChild();
-            menu_section("MORE");
-            if (item("Hold a button...##hold", mode == MenuMode::hold)) {
+            menu_section(tr("MORE"));
+            if (item(tr("Hold a button...##hold"), mode == MenuMode::hold)) {
               e.menu_mode = int(MenuMode::hold);
               controls_menu_detail_ = 1;
             }
-            if (item("Press two buttons together...##chord", mode == MenuMode::chord)) {
+            if (item(tr("Press two buttons together...##chord"), mode == MenuMode::chord)) {
               e.menu_mode = int(MenuMode::chord);
               controls_menu_detail_ = 2;
             }
-            if (item("Off##off", mode == MenuMode::off)) e.menu_mode = int(MenuMode::off);
+            if (item(tr("Off##off"), mode == MenuMode::off)) e.menu_mode = int(MenuMode::off);
             end_menu();
           }
           // The compact picker for hold and two buttons.
@@ -4968,7 +4993,7 @@ void App::draw_controls_editor(ControlsEdit& e, const ControlsEdit* base, float 
             const float room = vp->WorkPos.x + vp->WorkSize.x - f.x - s(14) * 2 - s(16);
             const float fw = std::max(dw_in + s(12), std::min({dropdown_width("", items.data(), int(items.size())),
                                                                s(320), room}));
-            text(fonts().semibold, kSmall, color::text, two ? "Press two buttons together" : "Hold a button", false);
+            text(fonts().semibold, kSmall, color::text, two ? tr("Press two buttons together") : tr("Hold a button"), false);
             gap(8);
             auto pick = [&](const char* id, int* value) {
               int at_i = int(std::ranges::find(ids, *value) - ids.begin());
@@ -4988,11 +5013,11 @@ void App::draw_controls_editor(ControlsEdit& e, const ControlsEdit* base, float 
               pick("button", &e.menu_input);
             }
             gap(10);
-            text(fonts().regular, kLabel, color::text3, two ? "Hold both for" : "Hold for", false);
+            text(fonts().regular, kLabel, color::text3, two ? tr("Hold both for") : tr("Hold for"), false);
             gap(4);
             // Two buttons may open at once ("None"); a held button needs a hold (0 is just one button).
             static constexpr int kChordHolds[] = {0, 500, 1000, 2000};
-            static const char* kChordHoldNames[] = {"None", "0.5 s", "1 s", "2 s"};
+            static const char* kChordHoldNames[] = {tr("None"), tr("0.5 s"), tr("1 s"), tr("2 s")};
             const int* holds = two ? kChordHolds : kChordHolds + 1;
             const char** hold_names = two ? kChordHoldNames : kChordHoldNames + 1;
             const int count = two ? 4 : 3;
@@ -5005,10 +5030,10 @@ void App::draw_controls_editor(ControlsEdit& e, const ControlsEdit* base, float 
           ImGui::PopStyleVar(4);
         }
         if (twin[hand][q])
-          notes[hand].push_back({std::format("Menu and {} share a button; {} sees those presses too.",
-                                             quest_label(hand, twin[hand][q] - 1),
-                                             game ? std::string(game->name) : std::string("the game"))});
-        if (mode == MenuMode::off) notes[hand].push_back({"Games get no menu button.", false});
+          notes[hand].push_back({trf("Menu and {0} share a button; {1} sees those presses too.",
+                                     quest_label(hand, twin[hand][q] - 1),
+                                     game ? std::string(game->name) : std::string(tr("the game")))});
+        if (mode == MenuMode::off) notes[hand].push_back({tr("Games get no menu button."), false});
       } else {
         // One dropdown per host input of the row, stacked. Each lists the inputs this
         // row can take on this hand (a stick only on a stick or pad) that the row's
@@ -5031,16 +5056,16 @@ void App::draw_controls_editor(ControlsEdit& e, const ControlsEdit* base, float 
           ImGui::PushID(line);
           const float ly = ry + (row_h - s(38)) * 0.5f + line_h * float(line);
           const int current = line < int(row.size()) ? row[size_t(line)] : 0;
-          std::vector<std::string> names{lines > 1 ? "Remove" : "Not assigned"};
+          std::vector<std::string> names{lines > 1 ? tr("Remove") : tr("Not assigned")};
           std::vector<int> ids{0};
           for (int i = 1; i <= n_inputs; ++i) {
             if (!eligible(i) || (i != current && std::ranges::contains(row, i))) continue;
             const auto& in = p.inputs[size_t(i - 1)];
-            names.emplace_back(in.reserved ? "System (kept by the runtime)" : in.label);
+            names.emplace_back(in.reserved ? tr("System (kept by the runtime)") : translate(in.label.data()));
             ids.push_back(i);
           }
           if (line == lines - 1 && current && unused()) {
-            names.emplace_back("Add another input");
+            names.emplace_back(tr("Add another input"));
             ids.push_back(kAdd);
           }
           std::vector<const char*> items;
@@ -5090,11 +5115,11 @@ void App::draw_controls_editor(ControlsEdit& e, const ControlsEdit* base, float 
           };
           // Both small buttons show only while the row is pointed at or being changed.
           const bool row_lit = hover == hand * kQuestCount + q || active == hand * kQuestCount + q;
-          if (line > 0 && small_button("remove", icons::cancel, "Remove this input",
+          if (line > 0 && small_button("remove", icons::cancel, tr("Remove this input"),
                                        options_.smoke_view.ends_with("-remove-hover"), row_lit))
             remove = line;
           if (line == lines - 1 && !locked && unused() &&
-              small_button("add", icons::add, "Add another input",
+              small_button("add", icons::add, tr("Add another input"),
                            (options_.smoke_view.ends_with("-plus-hover") && q == int(Quest::stick_click)) ||
                                (options_.smoke_view.ends_with("-plus-hover-thumbrest") && q == int(Quest::thumbrest)),
                            row_lit)) {
