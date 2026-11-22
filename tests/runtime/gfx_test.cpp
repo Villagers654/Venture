@@ -1740,6 +1740,92 @@ TEST_CASE("gfx multiview eye layers survive MSAA resolve and XR orientation conv
   for (auto shader : shaders) call("glDeleteShader", shader);
 }
 
+TEST_CASE("gfx base-vertex draws reach both eyes of a multiview framebuffer, plain and multisampled") {
+  // The GL state Homeworld: Vast Reaches draws with: base-vertex draws into
+  // multisampled render-to-texture multiview eye layers, with the shader's
+  // optional #extension inside an #ifdef. ANGLE's own multiview takes it, so no
+  // per-eye replay of the draws is needed.
+  if (!have_angle()) return;
+  EglSession egl;
+  const auto* extensions = g2h<const char>(call("glGetString", GL_EXTENSIONS));
+  REQUIRE(gfx::has_extension(extensions, "GL_OVR_multiview2"));
+  REQUIRE((gfx::has_extension(extensions, "GL_EXT_draw_elements_base_vertex") ||
+           gfx::has_extension(extensions, "GL_OES_draw_elements_base_vertex")));
+  const bool msaa = gfx::has_extension(extensions, "GL_OVR_multiview_multisampled_render_to_texture");
+  const char* sources[]{
+      "#version 300 es\n#extension GL_OVR_multiview2 : require\n"
+      "#ifdef UNDEFINED_OPTIONAL_EXTENSION\n#extension GL_EXT_shader_texture_lod : enable\n#endif\n"
+      "layout(num_views=2) in;\nflat out highp uint eye;\n"
+      "void main(){vec2 p=vec2((gl_VertexID<<1)&2,gl_VertexID&2);gl_Position=vec4(p*2.-1.,0,1);eye=gl_ViewID_OVR;}\n",
+      "#version 300 es\nprecision highp float;\nflat in highp uint eye;\nout vec4 color;\n"
+      "void main(){color=vec4(eye==0u?1.:0.,eye==1u?1.:0.,0.,1.);}\n"};
+  GLuint shaders[2];
+  const auto program = static_cast<GLuint>(call("glCreateProgram"));
+  for (int i = 0; i < 2; ++i) {
+    shaders[i] = static_cast<GLuint>(call("glCreateShader", i ? GL_FRAGMENT_SHADER : GL_VERTEX_SHADER));
+    call("glShaderSource", shaders[i], 1, &sources[i], 0);
+    call("glCompileShader", shaders[i]);
+    GLint compiled{};
+    call("glGetShaderiv", shaders[i], GL_COMPILE_STATUS, &compiled);
+    REQUIRE(compiled);
+    call("glAttachShader", program, shaders[i]);
+  }
+  call("glLinkProgram", program);
+  GLint linked{};
+  call("glGetProgramiv", program, GL_LINK_STATUS, &linked);
+  REQUIRE(linked);
+  call("glUseProgram", program);
+  GLuint texture{}, fbo[2]{}, indices{};
+  call("glGenTextures", 1, &texture);
+  call("glBindTexture", GL_TEXTURE_2D_ARRAY, texture);
+  call("glTexStorage3D", GL_TEXTURE_2D_ARRAY, 1, GL_RGBA8, 4, 4, 2);
+  call("glGenFramebuffers", 2, fbo);
+  call("glGenBuffers", 1, &indices);
+  call("glBindBuffer", GL_ELEMENT_ARRAY_BUFFER, indices);
+  // Indices 1 to 3 with base vertex -1: gl_VertexID 0, 1 and 2.
+  const std::uint16_t values[]{1, 2, 3};
+  call("glBufferData", GL_ELEMENT_ARRAY_BUFFER, sizeof(values), values, GL_STATIC_DRAW);
+  for (const bool multisampled : {false, true}) {
+    if (multisampled && !msaa) continue;
+    for (int draw = 0; draw < 4; ++draw) {
+      CAPTURE(multisampled);
+      CAPTURE(draw);
+      call("glBindFramebuffer", GL_FRAMEBUFFER, fbo[0]);
+      if (multisampled)
+        call("glFramebufferTextureMultisampleMultiviewOVR", GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, texture, 0, 4, 0, 2);
+      else
+        call("glFramebufferTextureMultiviewOVR", GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, texture, 0, 0, 2);
+      REQUIRE(call("glCheckFramebufferStatus", GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE);
+      call("glViewport", 0, 0, 4, 4);
+      call("glClearColor", 0.f, 0.f, 0.f, 1.f);
+      call("glClear", GL_COLOR_BUFFER_BIT);
+      if (draw == 0) call("glDrawArrays", GL_TRIANGLES, 0, 3);
+      if (draw == 1) call("glDrawElementsBaseVertexEXT", GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, 0, -1);
+      if (draw == 2) call("glDrawRangeElementsBaseVertexEXT", GL_TRIANGLES, 1, 3, 3, GL_UNSIGNED_SHORT, 0, -1);
+      if (draw == 3) call("glDrawElementsInstancedBaseVertexEXT", GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, 0, 1, -1);
+      REQUIRE(call("glGetError") == GL_NO_ERROR);
+      for (int eye = 0; eye < 2; ++eye) {
+        CAPTURE(eye);
+        call("glBindFramebuffer", GL_FRAMEBUFFER, fbo[1]);
+        call("glFramebufferTextureLayer", GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, texture, 0, eye);
+        std::array<std::uint8_t, 4> pixel{};
+        call("glReadPixels", 1, 1, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel.data());
+        CHECK(pixel[0] == (eye == 0 ? 255 : 0));
+        CHECK(pixel[1] == (eye == 1 ? 255 : 0));
+        CHECK(pixel[3] == 255);
+      }
+    }
+  }
+  call("glBindFramebuffer", GL_FRAMEBUFFER, 0);
+  call("glDeleteBuffers", 1, &indices);
+  call("glDeleteFramebuffers", 2, fbo);
+  call("glDeleteTextures", 1, &texture);
+  call("glUseProgram", 0);
+  call("glDeleteProgram", program);
+  for (auto shader : shaders) call("glDeleteShader", shader);
+  CHECK(call("glGetError") == GL_NO_ERROR);
+}
+
 TEST_CASE("gfx multisampled render-to-texture depth survives a render pass break") {
   // Unity on Quest attaches its eye depth as a multisampled render-to-texture
   // depth texture (multiview: a depth array) and draws the skybox and the
