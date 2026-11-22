@@ -1264,7 +1264,7 @@ int Cli::accounts_cmd(const Args &args) {
     wait([&] { return !signing_in_; }, status);
     if (!notice_.empty())
       throw std::runtime_error(notice_);
-    if (!session_ || auth_status_ == "Sign-in cancelled.")
+    if (!session_ || auth_status_ == tr("Sign-in cancelled."))  // core.cpp sets it translated
       throw std::runtime_error("Sign-in did not finish.");
     if (!json_)
       std::cout << "Signed in as " << account_label(account_key_) << ".\n";

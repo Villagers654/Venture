@@ -25,26 +25,33 @@ const char* mode_name(Mode mode) {
 Level effective_level(Level requested) { return requested == Level::none ? Level::medium : requested; }
 
 Regions regions(const Pattern& pattern) {
-  // Degrees from the centre where half rate, then quarter rate, begins.
-  // Fixed regions sit around the lens centre and stay wide: the eye moves
-  // across them. Eye-tracked ones follow the gaze, so they are tighter.
+  // Degrees from the centre where half rate (2x1 radial), quarter (2x2),
+  // eighth (4x2 radial) and sixteenth (4x4) begin. Fixed regions sit around
+  // the lens centre and stay wide: the eye moves across them. Eye-tracked ones
+  // follow the gaze, so they are tighter, and go coarser further out: past
+  // about 30 degrees from the gaze acuity is a tenth of the fovea's or less,
+  // coarser than a 4-pixel fragment at headset resolutions (about 20 pixels
+  // per degree), and coarse shading keeps geometry edges and depth at full
+  // resolution, so it does not shimmer as a lower resolution would.
   if (pattern.eye_tracked) {
     switch (pattern.level) {
       case Level::none: return {};
-      case Level::low: return {28, 40};
-      case Level::medium: return {24, 34};
-      case Level::high: return {20, 30};
+      case Level::low: return {28, 40, 52, 64};
+      case Level::medium: return {24, 34, 44, 54};
+      case Level::high: return {20, 30, 40, 50};
     }
   }
   // On a Quest 3 field of view these shade about 85%, 67% and 54% of the eye
   // image's fragments (eye-tracked: 47%, 39% and 35%), close to the savings
   // Meta measured for its levels (Low +6.5%, Medium +11.5%, High +21% frame
   // rate in an ALU-bound scene; eye-tracked 36-52% GPU time).
+  // Fixed: only the far edge goes past 2x2, where the lens already blurs
+  // (Quest's own High level renders its outermost ring at 1/16).
   switch (pattern.level) {
     case Level::none: return {};
     case Level::low: return {46, 58};
-    case Level::medium: return {38, 50};
-    case Level::high: return {32, 44};
+    case Level::medium: return {38, 50, 60};
+    case Level::high: return {32, 44, 52, 60};
   }
   return {};
 }
@@ -73,6 +80,8 @@ RateField::RateField(const Pattern& pattern, const Fov& fov, const Centre& centr
   const auto r = regions(pattern);
   half_cos_ = std::cos(std::min(r.half, 179.0f) / kDegrees);
   quarter_cos_ = std::cos(std::min(r.quarter, 179.0f) / kDegrees);
+  eighth_cos_ = r.eighth < 180 ? std::cos(r.eighth / kDegrees) : -2.0f;
+  sixteenth_cos_ = r.sixteenth < 180 ? std::cos(r.sixteenth / kDegrees) : -2.0f;
   none_ = false;
 }
 
@@ -82,11 +91,14 @@ Rate RateField::at(float u, float v) const {
   // from the centre: dot / |point| (the centre is unit length).
   const float px = tl_ + (tr_ - tl_) * u, py = tu_ + (td_ - tu_) * v;
   const float cosine = (px * cx_ + py * cy_ - cz_) / std::sqrt(px * px + py * py + 1);
-  if (cosine <= quarter_cos_) return Rate::quarter;
   if (cosine > half_cos_) return Rate::full;
-  // Half rate along the axis the point lies away from the centre on: the
-  // radial direction, where acuity falls fastest.
-  return std::abs(px - ox_) >= std::abs(py - oy_) ? Rate::half_x : Rate::half_y;
+  if (cosine <= sixteenth_cos_) return Rate::sixteenth;
+  // Half and eighth rate coarser along the axis the point lies away from the
+  // centre on: the radial direction, where acuity falls fastest.
+  const bool radial_x = std::abs(px - ox_) >= std::abs(py - oy_);
+  if (cosine <= eighth_cos_) return radial_x ? Rate::eighth_x : Rate::eighth_y;
+  if (cosine <= quarter_cos_) return Rate::quarter;
+  return radial_x ? Rate::half_x : Rate::half_y;
 }
 
 Rate rate_at(const Pattern& pattern, const Fov& fov, const Centre& centre, float u, float v) {
@@ -95,17 +107,22 @@ Rate rate_at(const Pattern& pattern, const Fov& fov, const Centre& centre, float
 
 std::uint8_t shading_rate_value(Rate rate) {
   switch (rate) {
-    case Rate::half_x: return 1 << 2;      // 2x1
-    case Rate::half_y: return 1;           // 1x2
-    case Rate::quarter: return 1 << 2 | 1; // 2x2
-    default: return 0;                     // 1x1
+    case Rate::half_x: return 1 << 2;        // 2x1
+    case Rate::half_y: return 1;             // 1x2
+    case Rate::quarter: return 1 << 2 | 1;   // 2x2
+    case Rate::eighth_x: return 2 << 2 | 1;  // 4x2
+    case Rate::eighth_y: return 1 << 2 | 2;  // 2x4
+    case Rate::sixteenth: return 2 << 2 | 2; // 4x4
+    default: return 0;                       // 1x1
   }
 }
 
 void density_value(Rate rate, std::uint8_t& x, std::uint8_t& y) {
-  // 0.5 rounds up so the GPU's density never falls below half.
-  x = rate == Rate::half_x || rate == Rate::quarter ? 128 : 255;
-  y = rate == Rate::half_y || rate == Rate::quarter ? 128 : 255;
+  // Densities round up so the GPU's never falls below the rate's.
+  const auto value = shading_rate_value(rate);
+  const auto density = [](unsigned log2_size) { return std::uint8_t(log2_size == 0 ? 255 : log2_size == 1 ? 128 : 64); };
+  x = density(value >> 2);
+  y = density(value & 3);
 }
 
 void fill_shading_rates(std::span<std::uint8_t> out, std::uint32_t width, std::uint32_t height,

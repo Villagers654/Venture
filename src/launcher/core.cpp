@@ -46,14 +46,14 @@ std::string exception_text() {
   try {
     throw;
   } catch (const Json::exception &) {
-    return "Unexpected response data. Refresh and try again.";
+    return i18n::tr("Unexpected response data. Refresh and try again.");
   } catch (const fs::filesystem_error &) {
-    return "Could not access local files. Check the selected folder and "
-           "permissions.";
+    return i18n::tr("Could not access local files. Check the selected folder and "
+                    "permissions.");
   } catch (const std::exception &e) {
     return e.what();
   } catch (...) {
-    return "An unexpected operation failed. Try again.";
+    return i18n::tr("An unexpected operation failed. Try again.");
   }
 }
 Core::Core(Options options)
@@ -125,20 +125,20 @@ Core::Core(Options options)
       session_ = vault_.load(account_key_);
     if (migration == meta::Migration::needs_identity) {
       session_ = secrets_.load();
-      warning_ = "Legacy account mode: connect to Meta to finish account "
-                 "migration. Your original credentials are retained.";
+      warning_ = i18n::tr("Legacy account mode: connect to Meta to finish account "
+                          "migration. Your original credentials are retained.");
     } else {
       auto saves = migrate_saves(data_, account_index_.primary,
                                  !account_index_.primary.empty());
       if (saves.conflicts)
-        warning_ = "Save migration found conflicts; both copies were retained. "
-                   "Review the account migration status.";
+        warning_ = i18n::tr("Save migration found conflicts; both copies were retained. "
+                            "Review the account migration status.");
       if (saves.deferred)
         warning_ =
-            "Some saves are busy; migration will retry on the next start.";
+            i18n::tr("Some saves are busy; migration will retry on the next start.");
       if (migration == meta::Migration::migrated)
-        notice_ = "Account and saves migrated. Older Venture builds will "
-                  "show signed out.";
+        notice_ = i18n::tr("Account and saves migrated. Older Venture builds will "
+                           "show signed out.");
     }
     if (session_)
       account_scope_ = session_->account_id;
@@ -249,7 +249,7 @@ void Core::uninstall(const library::Install &install) {
   try {
     lock = std::make_unique<FileLock>(data_ / "locks" / ("game-" + install.plan.package + ".lock"), false);
   } catch (...) {
-    throw std::runtime_error("Close this game before uninstalling it.");
+    throw std::runtime_error(i18n::tr("Close this game before uninstalling it."));
   }
   // Its preparation reads the files that go.
   if (auto preparation = stop_preparation(install.plan.package)) finish_preparation(*preparation);
@@ -330,7 +330,7 @@ void Core::apply_settings(library::Settings next, bool announce) {
   }
   log::set_level(static_cast<log::Level>(settings_.log_level));
   if (announce)
-    notice_ = "Settings saved.";
+    notice_ = i18n::tr("Settings saved.");
   rescan();
 }
 void Core::action(const std::function<void()> &fn) {
@@ -720,14 +720,14 @@ void Core::resolve_store_links() {
 }
 void Core::write_store_link(const std::string &package, const std::string &store_id, bool removed) {
   if (!paths::safe_package(package) || (!store_id.empty() && !digits(store_id, 5)))
-    throw std::runtime_error("Invalid store link.");
+    throw std::runtime_error(i18n::tr("Invalid store link."));
   const auto jobs = downloads_ ? downloads_->snapshot() : std::vector<download::Job>{};
   bool changed = false;
   for (auto &i : installs_) {
     if (!i.plan.local || i.plan.package != package || digits(i.plan.app_id, 5))
       continue;
     if (plan_busy(jobs, i.id()))
-      throw std::runtime_error("Wait for this game's download to finish.");
+      throw std::runtime_error(i18n::tr("Wait for this game's download to finish."));
     const auto file = i.directory / "plan.json";
     auto plan = meta::parse_plan(paths::read_json(file));
     plan.store_app_id = store_id;
@@ -840,13 +840,13 @@ void Core::add_account() {
   if (std::ranges::count(account_index_.accounts, true,
                          &meta::Account::signed_in) >= 4)
     throw std::runtime_error(
-        "Sign out an account before adding another (maximum four).");
+        i18n::tr("Sign out an account before adding another (maximum four)."));
   sign_in();
 }
 void Core::switch_account(std::string_view key) {
   auto loaded = vault_.load(key);
   if (!loaded)
-    throw std::runtime_error("Reconnect this account before switching.");
+    throw std::runtime_error(i18n::tr("Reconnect this account before switching."));
   vault_.set_active(key);
   ++epoch_;
   browser_.close();
@@ -868,7 +868,7 @@ void Core::switch_account(std::string_view key) {
 }
 void Core::sign_out_account(std::string_view key) {
   if (!meta::valid_account_key(key))
-    throw std::runtime_error("Invalid account key.");
+    throw std::runtime_error(i18n::tr("Invalid account key."));
   const bool active = account_key_ == key;
   downloads_->cancel_account(key);
   vault_.sign_out(key);
@@ -890,16 +890,16 @@ void Core::sign_out_account(std::string_view key) {
   }
   reload_accounts();
   notice_ =
-      "Account signed out. Its installed games and saves remain on this device.";
+      i18n::tr("Account signed out. Its installed games and saves remain on this device.");
 }
 void Core::remove_account(std::string_view key, bool delete_saves) {
   std::string selected(key);
   if (!meta::valid_account_key(selected))
-    throw std::runtime_error("Invalid account key.");
+    throw std::runtime_error(i18n::tr("Invalid account key."));
   for (const auto &[id, running] : running_)
     if (running.process.active())
       throw std::runtime_error(
-          "Close running games before removing an account.");
+          i18n::tr("Close running games before removing an account."));
   sign_out_account(selected);
   vault_.remove(selected);
   if (delete_saves)
@@ -1086,7 +1086,7 @@ void Core::add_owned() {
   // the last run of digits long enough to be an app id.
   std::string id = store_link::id_from_link(owned_link_);
   if (id.empty()) {
-    error("Paste the game's Meta store link, like meta.com/experiences/1234567890123456.");
+    error(i18n::tr("Paste the game's Meta store link, like meta.com/experiences/1234567890123456."));
     return;
   }
   adding_ = true;
@@ -1101,14 +1101,15 @@ void Core::add_owned() {
         adding_ = false;
         action([&] {
           if (snapshot.games.empty())
-            throw std::runtime_error("Meta says this account does not own that game.");
+            throw std::runtime_error(i18n::tr("Meta says this account does not own that game."));
           if (session_ && !session_->account_id.empty() && session_->account_id != snapshot.account_id)
-            throw std::runtime_error("Meta returned a different account. Sign out and reconnect.");
+            throw std::runtime_error(i18n::tr("Meta returned a different account. Sign out and reconnect."));
           library::merge(games_, snapshot, account_scope_);
           save_library();
           owned_link_.clear();
           log::info("library", "Added {} from its store listing", snapshot.games.front().id);
-          notice_ = snapshot.games.front().name + " is in your library.";
+          // i18n: {0} is the game's name, just added to the library from its store link.
+          notice_ = i18n::trf("{0} is in your library.", snapshot.games.front().name);
           fill_metadata();
         });
       };
@@ -1125,7 +1126,7 @@ void Core::add_owned() {
 }
 void Core::refresh() {
   if (options_.offline) {
-    notice_ = "Offline mode. Restart without --offline to connect to Meta.";
+    notice_ = i18n::tr("Offline mode. Restart without --offline to connect to Meta.");
     return;
   }
   if (refreshing_ || !session_)
@@ -1150,7 +1151,7 @@ void Core::refresh() {
             if (session_ && !session_->account_id.empty() &&
                 session_->account_id != snapshot.account_id)
               throw std::runtime_error(
-                  "Meta returned a different account. Sign out and reconnect.");
+                  i18n::tr("Meta returned a different account. Sign out and reconnect."));
             account_scope_ = snapshot.account_id;
             if (session_)
               session_->account_id = snapshot.account_id;
@@ -1243,14 +1244,14 @@ void Core::select(std::string id) {
 }
 void Core::sign_in() {
   if (options_.offline) {
-    notice_ = "Sign-in needs a connection. Restart without --offline.";
+    notice_ = i18n::tr("Sign-in needs a connection. Restart without --offline.");
     return;
   }
   if (signing_in_)
     return;
   signing_in_ = true;
   verifying_ = false;
-  auth_status_ = "Opening secure Meta sign-in...";
+  auth_status_ = i18n::tr("Opening secure Meta sign-in...");
   notice_.clear();
   auto epoch = ++epoch_;
   refreshing_ = false;
@@ -1276,16 +1277,16 @@ void Core::sign_in() {
           auth_manual_ = true;
           try {
             open_url(url);
-            auth_status_ = "Meta's sign-in opened in your browser. Sign in there; the steps are below.";
+            auth_status_ = i18n::tr("Meta's sign-in opened in your browser. Sign in there; the steps are below.");
           } catch (const std::exception &e) {
             log::warn("auth", "The sign-in link could not open in a browser: {}", e.what());
-            auth_status_ = "Open the sign-in link below in a browser.";
+            auth_status_ = i18n::tr("Open the sign-in link below in a browser.");
           }
           return;
         }
         if (auth_window_)
           action([&] { browser_.open(url, data_); });
-        auth_status_ = auth_window_ ? "Complete sign-in in the Meta window." : "Waiting for the sign-in address.";
+        auth_status_ = auth_window_ ? i18n::tr("Complete sign-in in the Meta window.") : i18n::tr("Waiting for the sign-in address.");
       };
     } catch (...) {
       auto e = exception_text();
@@ -1321,17 +1322,17 @@ void Core::sign_out() {
   library_partial_ = false;
   auth_status_.clear();
   secrets_.clear();
-  notice_ = "Signed out. Installed games remain on this device.";
+  notice_ = i18n::tr("Signed out. Installed games remain on this device.");
 }
 void Core::install(const meta::Game &g, const fs::path &root) {
   if (options_.offline)
-    throw std::runtime_error("Downloads are unavailable in offline mode.");
+    throw std::runtime_error(i18n::tr("Downloads are unavailable in offline mode."));
   if (!session_)
-    throw std::runtime_error("Sign in to install or update this game.");
+    throw std::runtime_error(i18n::tr("Sign in to install or update this game."));
   const auto *current = installed(g.id, false);
   auto target = current ? root_of(*current) : root.empty() ? settings_.games : root.lexically_normal();
   if (!target.is_absolute())
-    throw std::runtime_error("Choose an absolute folder to install to.");
+    throw std::runtime_error(i18n::tr("Choose an absolute folder to install to."));
   if (!std::ranges::contains(settings_.roots(), target)) {
     fs::create_directories(target);
     auto next = settings_;
@@ -1385,22 +1386,22 @@ const library::Install *Core::installed_build(std::string_view app_id, std::stri
 }
 size_t Core::install_versions(const meta::Game &g, const std::vector<meta::Build> &chosen, const fs::path &root) {
   if (options_.offline)
-    throw std::runtime_error("Downloads are unavailable in offline mode.");
+    throw std::runtime_error(i18n::tr("Downloads are unavailable in offline mode."));
   if (!digits(g.id, 5))
-    throw std::runtime_error("Only games from the Meta store have other versions.");
+    throw std::runtime_error(i18n::tr("Only games from the Meta store have other versions."));
   const auto game_copy = g;
   const auto owner = owner_for(game_copy.id);
   if (!owner.empty() && owner != account_key_) {
     auto other = account(owner);
     if (!other || !other->signed_in || other->needs_reauth)
-      throw std::runtime_error("Reconnect the owning account before installing.");
+      throw std::runtime_error(i18n::tr("Reconnect the owning account before installing."));
     switch_account(owner);
   }
   if (!session_)
-    throw std::runtime_error("Sign in to install this game.");
+    throw std::runtime_error(i18n::tr("Sign in to install this game."));
   auto target = root.empty() ? settings_.games : root.lexically_normal();
   if (!target.is_absolute())
-    throw std::runtime_error("Choose an absolute folder to install to.");
+    throw std::runtime_error(i18n::tr("Choose an absolute folder to install to."));
   if (!std::ranges::contains(settings_.roots(), target)) {
     fs::create_directories(target);
     auto next = settings_;
@@ -1463,7 +1464,7 @@ void Core::install_for_owner(const meta::Game &g, const fs::path &root) {
   if (!owner.empty() && owner != account_key_) {
     auto other = account(owner);
     if (!other || !other->signed_in || other->needs_reauth)
-      throw std::runtime_error("Reconnect the owning account before installing.");
+      throw std::runtime_error(i18n::tr("Reconnect the owning account before installing."));
     switch_account(owner);
   }
   install(game_copy, root);
@@ -1486,7 +1487,7 @@ std::vector<meta::Addon> Core::addons(std::string_view app) const {
       addon.installed =
           install && library::addon_installed(*install, addon.sku);
     } catch (const fs::filesystem_error &) {
-      addon.error = "Could not verify installed add-on files. Rescan to retry.";
+      addon.error = i18n::tr("Could not verify installed add-on files. Rescan to retry.");
     }
     if (auto error = addon_errors_.find(std::string(app));
         error != addon_errors_.end())
@@ -1565,15 +1566,15 @@ void Core::refresh_addons(std::string app) {
 }
 void Core::install_addon(std::string_view app, std::string_view sku) {
   if (options_.offline || !session_)
-    throw std::runtime_error("Sign in to install add-ons.");
+    throw std::runtime_error(i18n::tr("Sign in to install add-ons."));
   auto current = installed(app);
   if (!current)
-    throw std::runtime_error("Install the base game before its add-ons.");
+    throw std::runtime_error(i18n::tr("Install the base game before its add-ons."));
   auto list = addons(app);
   auto addon = std::ranges::find(list, sku, &meta::Addon::sku);
   if (addon == list.end() || !addon->owned)
     throw std::runtime_error(
-        "Refresh add-ons to confirm ownership before installing.");
+        i18n::tr("Refresh add-ons to confirm ownership before installing."));
   downloads_->enqueue_addon(std::string(app), addon->name, root_of(*current),
                             current->plan.binary_id, std::string(sku),
                             session_->access_token);
@@ -1581,10 +1582,10 @@ void Core::install_addon(std::string_view app, std::string_view sku) {
 void Core::uninstall_addon(std::string_view app, std::string_view sku) {
   auto current = installed(app, false);
   if (!current)
-    throw std::runtime_error("Installed game was not found.");
+    throw std::runtime_error(i18n::tr("Installed game was not found."));
   auto running = running_.find(std::string(app));
   if (running != running_.end() && !running->second.exit)
-    throw std::runtime_error("Close this game before removing an add-on.");
+    throw std::runtime_error(i18n::tr("Close this game before removing an add-on."));
   FileLock lock(data_ / "locks" / ("game-" + current->plan.package + ".lock"), false);
   downloads_->uninstall_addon(app, root_of(*current), current->plan.binary_id,
                               sku);
@@ -1596,18 +1597,18 @@ std::shared_ptr<FileLock> save_lock(const fs::path &data, const std::string &pac
   try {
     return std::make_shared<FileLock>(data / "locks" / ("game-" + package + ".lock"), false);
   } catch (...) {
-    throw std::runtime_error("This game's saves are in use: another save import or export is still running, "
-                             "or the game is open in another Venture window.");
+    throw std::runtime_error(i18n::tr("This game's saves are in use: another save import or export is still running, "
+                                      "or the game is open in another Venture window."));
   }
 }
 Core::SaveImport Core::import_saves(std::string_view app_id, const fs::path &folder, std::string serial) {
   auto current = installed(app_id, false);
-  if (!current) throw std::runtime_error("Install this game before importing its save data.");
-  if (current->plan.pinned) throw std::runtime_error("Save data imports go to the game's own install.");
+  if (!current) throw std::runtime_error(i18n::tr("Install this game before importing its save data."));
+  if (current->plan.pinned) throw std::runtime_error(i18n::tr("Save data imports go to the game's own install."));
   const auto package = current->plan.package;
   auto running = running_.find(std::string(app_id));
   if (running != running_.end() && !running->second.exit)
-    throw std::runtime_error("Close this game before importing its save data.");
+    throw std::runtime_error(i18n::tr("Close this game before importing its save data."));
   // Also keeps the game from starting until the import is done.
   auto lock = save_lock(data_, package);
   auto key = launch_choice(app_id, play_key(app_id)).account_key;
@@ -1616,12 +1617,13 @@ Core::SaveImport Core::import_saves(std::string_view app_id, const fs::path &fol
     return [data = data_, key, package, folder, lock](std::stop_token stop) {
       auto found = saves::find_local(folder, package);
       if (!found)
-        throw std::runtime_error("No save data for " + package + " was found there. Pick a copy of the game's "
-                                 "Android/data/" + package + " folder, or of its files folder.");
+        // i18n: {0} is the game's Android package name (com.studio.game); Android/data/{0} is a folder on the headset.
+        throw std::runtime_error(i18n::trf("No save data for {0} was found there. Pick a copy of the game's "
+                                           "Android/data/{0} folder, or of its files folder.", package));
       return saves::import_local(data, key, package, *found, stop);
     };
   const auto adb = adb_path();
-  if (adb.empty()) throw std::runtime_error("adb was not found. Install Android platform-tools, or set adb's location in Settings.");
+  if (adb.empty()) throw std::runtime_error(i18n::tr("adb was not found. Install Android platform-tools, or set adb's location in Settings."));
   return [data = data_, key, package, adb, serial, lock](std::stop_token stop) {
     return saves::import_headset(data, key, package, headset(adb, serial, stop), stop);
   };
@@ -1631,8 +1633,8 @@ android::adb::Client Core::headset(const fs::path &adb, std::string serial, std:
     auto devices = android::adb::Client(adb).devices(stop);
     auto ready = std::ranges::find_if(devices, &android::adb::Device::ready);
     if (ready == devices.end())
-      throw std::runtime_error(devices.empty() ? "No headset found. Connect it with a USB cable (or turn on Wi-Fi "
-                                                 "debugging) and enable developer mode in the Meta Horizon app."
+      throw std::runtime_error(devices.empty() ? i18n::tr("No headset found. Connect it with a USB cable (or turn on Wi-Fi "
+                                                          "debugging) and enable developer mode in the Meta Horizon app.")
                                                : android::adb::state_message(devices.front()));
     serial = ready->serial;
   }
@@ -1640,41 +1642,44 @@ android::adb::Client Core::headset(const fs::path &adb, std::string serial, std:
 }
 Core::SaveExport Core::export_saves(std::string_view app_id, std::string serial) {
   auto current = installed(app_id, false);
-  if (!current) throw std::runtime_error("Install this game before sending its save data.");
-  if (current->plan.pinned) throw std::runtime_error("Save data exports come from the game's own install.");
+  if (!current) throw std::runtime_error(i18n::tr("Install this game before sending its save data."));
+  if (current->plan.pinned) throw std::runtime_error(i18n::tr("Save data exports come from the game's own install."));
   const auto package = current->plan.package;
   auto running = running_.find(std::string(app_id));
   if (running != running_.end() && !running->second.exit)
-    throw std::runtime_error("Close this game before sending its save data.");
+    throw std::runtime_error(i18n::tr("Close this game before sending its save data."));
   // Keeps the game from starting (and changing its saves) while they are sent.
   auto lock = save_lock(data_, package);
   auto key = launch_choice(app_id, play_key(app_id)).account_key;
   if (key.empty()) key = "local";
   const auto adb = adb_path();
-  if (adb.empty()) throw std::runtime_error("adb was not found. Install Android platform-tools, or set adb's location in Settings.");
+  if (adb.empty()) throw std::runtime_error(i18n::tr("adb was not found. Install Android platform-tools, or set adb's location in Settings."));
   return [data = data_, key, package, adb, serial, lock](std::stop_token stop) {
     return saves::export_headset(data, key, package, headset(adb, serial, stop), stop);
   };
 }
 void Core::export_saves_later(std::string_view app_id) {
   auto task = export_saves(app_id);
-  notice_ = "Sending save data to the headset...";
+  notice_ = i18n::tr("Sending save data to the headset...");
   import_worker_->submit([this, task = std::move(task)](std::stop_token stop) -> Worker::Completion {
     std::string message;
     bool sent = false;
     try {
       auto n = task(stop);
-      message = std::format("Sent {} save file{} to the headset.{}{}{}{}", n.files, n.files == 1 ? "" : "s",
-                            n.kept ? std::format(" {} {} the headset would not back up {} left unchanged (see the log).",
-                                                 n.kept, n.kept == 1 ? "file" : "files", n.kept == 1 ? "was" : "were")
-                                   : "",
-                            n.removed ? std::format(" Removed {} {} from the headset that Venture's copy doesn't have.",
-                                                    n.removed, n.removed == 1 ? "file" : "files")
-                                      : "",
-                            n.backup.empty() ? "" : " The headset's previous saves are kept in a backup.",
-                            n.has_private ? " Settings and saves the game keeps in private storage stay as they are "
-                                            "on the headset."
-                                          : "");
+      // i18n: Notice after a game's saves were sent to the headset; the sentences below may follow it.
+      message = i18n::trn("Sent {0} save file to the headset.", "Sent {0} save files to the headset.", n.files);
+      if (n.kept)
+        message += " " + i18n::trn("{0} file the headset would not back up was left unchanged (see the log).",
+                                   "{0} files the headset would not back up were left unchanged (see the log).",
+                                   n.kept);
+      if (n.removed)
+        message += " " + i18n::trn("Removed {0} file from the headset that Venture's copy doesn't have.",
+                                   "Removed {0} files from the headset that Venture's copy doesn't have.", n.removed);
+      if (!n.backup.empty())
+        message += std::string(" ") + i18n::tr("The headset's previous saves are kept in a backup.");
+      if (n.has_private)
+        message += std::string(" ") + i18n::tr("Settings and saves the game keeps in private storage stay as they are "
+                                               "on the headset.");
       sent = true;
     } catch (...) {
       message = exception_text();
@@ -1687,17 +1692,19 @@ void Core::export_saves_later(std::string_view app_id) {
 }
 void Core::import_saves_later(std::string_view app_id, const fs::path &folder) {
   auto task = import_saves(app_id, folder);
-  notice_ = "Importing save data...";
+  notice_ = i18n::tr("Importing save data...");
   import_worker_->submit([this, task = std::move(task)](std::stop_token stop) -> Worker::Completion {
     std::string message;
     bool imported = false;
     try {
       auto n = task(stop);
-      message = std::format("Imported {} save file{}.{}{}", n.files, n.files == 1 ? "" : "s",
-                            n.skipped ? std::format(" {} the headset would not send {} skipped (see the log).", n.skipped,
-                                                    n.skipped == 1 ? "file" : "files")
-                                      : "",
-                            n.backup.empty() ? "" : " The save data it replaced is kept in a backup.");
+      // i18n: Notice after a game's saves were imported; the sentences below may follow it.
+      message = i18n::trn("Imported {0} save file.", "Imported {0} save files.", n.files);
+      if (n.skipped)
+        message += " " + i18n::trn("{0} file the headset would not send was skipped (see the log).",
+                                   "{0} files the headset would not send were skipped (see the log).", n.skipped);
+      if (!n.backup.empty())
+        message += std::string(" ") + i18n::tr("The save data it replaced is kept in a backup.");
       imported = true;
     } catch (...) {
       message = exception_text();
@@ -1711,7 +1718,7 @@ void Core::import_saves_later(std::string_view app_id, const fs::path &folder) {
 void Core::install_all_owned_addons(std::string_view app) {
   if (!addons_.contains(std::string(app)))
     throw std::runtime_error(
-        "Refresh add-ons to confirm ownership before installing.");
+        i18n::tr("Refresh add-ons to confirm ownership before installing."));
   for (auto &addon : addons(app))
     if (addon.owned && !addon.installed && !addon.downloading)
       install_addon(app, addon.sku);
@@ -1803,7 +1810,7 @@ void Core::launch_game(std::string_view id, std::string_view requested,
   auto choice = requested == "local" ? library::LaunchChoice{}
                                      : launch_choice(id, requested);
   if (choice.status == library::LaunchStatus::reconnect)
-    throw std::runtime_error("Reconnect that account before playing, or choose another.");
+    throw std::runtime_error(i18n::tr("Reconnect that account before playing, or choose another."));
   const std::string game_id(id);
   auto i = installed(game_id);
   if (!i) {
@@ -1812,24 +1819,26 @@ void Core::launch_game(std::string_view id, std::string_view requested,
     if (auto partial = installed(game_id, false)) {
       auto missing = library::missing_expansions(*partial);
       if (!missing.empty() && partial->plan.local)
-        throw std::runtime_error(std::format(
-            "Its install lacks the expansion file {}. Import the game again together with that file (it is in "
-            "Android/obb/{} on the headset).", missing.front(), partial->plan.package));
+        // i18n: {0} is an expansion (OBB) file name, {1} the game's Android package name.
+        throw std::runtime_error(i18n::trf(
+            "Its install lacks the expansion file {0}. Import the game again together with that file (it is in "
+            "Android/obb/{1} on the headset).", missing.front(), partial->plan.package));
       if (!missing.empty())
-        throw std::runtime_error(std::format(
-            "This game is not completely installed: its expansion file {} is missing. Resume its download first.",
+        // i18n: {0} is an expansion (OBB) file name.
+        throw std::runtime_error(i18n::trf(
+            "This game is not completely installed: its expansion file {0} is missing. Resume its download first.",
             missing.front()));
     }
     throw std::runtime_error(
-        "This game is not completely installed. Resume its download first.");
+        i18n::tr("This game is not completely installed. Resume its download first."));
   }
 #ifdef __ANDROID__
   // On a headset a game runs as its own app, adapted and installed on the
   // device (headset_play.h), not through venture-runtime.
   if (launch_pending_.contains(game_id))
-    throw std::runtime_error("This game is already starting.");
+    throw std::runtime_error(i18n::tr("This game is already starting."));
   launch_pending_.insert(game_id);
-  notice_ = "Preparing the game for this headsetâ¦";
+  notice_ = i18n::tr("Preparing the game for this headset\xE2\x80\xA6");
   // The asset files the game downloads while it runs, as the PC runtime's pipe gets them.
   PipeChannel::Handler assets;
   if (!i->plan.local && !choice.account_key.empty()) {
@@ -1881,14 +1890,14 @@ void Core::launch_game(std::string_view id, std::string_view requested,
       catalog_token = owner->access_token;
   if ((running_.contains(game_id) && running_[game_id].process.active()) ||
       launch_pending_.contains(game_id))
-    throw std::runtime_error("This game is already running or starting.");
+    throw std::runtime_error(i18n::tr("This game is already running or starting."));
   // Versions of one game share its package, as on a headset: one at a time.
   for (const auto &other : launch_pending_)
     if (auto o = installed(other, false); o && o->plan.package == i->plan.package)
-      throw std::runtime_error("Another version of this game is starting.");
+      throw std::runtime_error(i18n::tr("Another version of this game is starting."));
   for (const auto &[other, r] : running_)
     if (auto o = installed(other, false); o && other != game_id && r.process.active() && o->plan.package == i->plan.package)
-      throw std::runtime_error("Another version of this game is running. Quit it first.");
+      throw std::runtime_error(i18n::tr("Another version of this game is running. Quit it first."));
   launch_pending_.insert(game_id);
   const auto install = *i;
   try {
@@ -1896,7 +1905,7 @@ void Core::launch_game(std::string_view id, std::string_view requested,
         data_ / "locks" / ("game-" + install.plan.package + ".lock"), false);
   } catch (...) {
     launch_pending_.erase(game_id);
-    throw std::runtime_error("This game is already running in another Venture launcher.");
+    throw std::runtime_error(i18n::tr("This game is already running in another Venture launcher."));
   }
   const auto app_id = game_id;
   // The runtime's account for saves and platform calls; "local" is none.
@@ -1908,8 +1917,8 @@ void Core::launch_game(std::string_view id, std::string_view requested,
     log::warn("launcher", "Using the runtime set by VENTURE_RUNTIME: {}",
               paths::utf8(runtime));
   notice_ = catalog_token.empty()
-                ? "Preparing application credentials..."
-                : "Updating the installation manifest from Meta...";
+                ? i18n::tr("Preparing application credentials...")
+                : i18n::tr("Updating the installation manifest from Meta...");
   // A preparation running now would hold the caches the game writes; it stops at once
   // and the game starts once it is gone.
   auto preparation = stop_preparation();
@@ -1960,7 +1969,7 @@ void Core::launch_game(std::string_view id, std::string_view requested,
       if (error)
         throw std::runtime_error(error.message);
       if (stop.stop_requested())
-        throw std::runtime_error("Game launch cancelled.");
+        throw std::runtime_error(i18n::tr("Game launch cancelled."));
       return [this, install, app_id, key, runtime, root, console, broker,
               details, reply, catalog = std::move(catalog)] {
         launch_pending_.erase(app_id);
@@ -1973,17 +1982,17 @@ void Core::launch_game(std::string_view id, std::string_view requested,
           auto valid = broker->handle(Json{{"op", "validate"}});
           if (number(valid, "error") != 0)
             throw std::runtime_error(
-                "Account changed while the game was starting. Try again.");
+                i18n::tr("Account changed while the game was starting. Try again."));
           if (catalog) {
             if (!std::ranges::contains(settings_.roots(), root) ||
                 paths::game_dir(root, catalog->package, catalog->folder()) !=
                     install.directory)
               throw std::runtime_error(
-                  "The library folders changed while the game was starting. Try "
-                  "again.");
+                  i18n::tr("The library folders changed while the game was starting. Try "
+                           "again."));
             if (!downloads_->refresh_catalog(root, *catalog))
               throw std::runtime_error(
-                  "Wait for this game's downloads to finish, then play again.");
+                  i18n::tr("Wait for this game's downloads to finish, then play again."));
             log::info("launcher",
                       "Upgraded the installation manifest of {} from Meta's "
                       "catalog before launch.",
@@ -2340,8 +2349,8 @@ void Core::restart_steam() {
         std::error_code ec;
         fs::remove(file, ec);
         throw std::runtime_error(
-            "Steam started Venture and would close it on quitting, before Venture could add the games. Quit Steam "
-            "yourself (or switch to Desktop Mode) and start Venture from the desktop to add them.");
+            i18n::tr("Steam started Venture and would close it on quitting, before Venture could add the games. Quit "
+                     "Steam yourself (or switch to Desktop Mode) and start Venture from the desktop to add them."));
       }
       log::info("steam", "A helper adds the games once Steam closes, then starts Steam again.");
       steam_handed_off_ = true;
@@ -2359,7 +2368,7 @@ void Core::complete_sign_in(std::string callback) {
   if (!auth_ || !signing_in_ || verifying_)
     return;
   verifying_ = true;
-  auth_status_ = "Verifying your Quest account...";
+  auth_status_ = i18n::tr("Verifying your Quest account...");
   auto auth = auth_;
   auto epoch = epoch_;
   worker_->submit([this, auth, callback,
@@ -2387,8 +2396,8 @@ void Core::complete_sign_in(std::string callback) {
         action([&] {
           if (!digits(session.account_id))
             throw std::runtime_error(
-                "Meta did not return a numeric account identity. Sign-in "
-                "was not saved.");
+                i18n::tr("Meta did not return a numeric account identity. Sign-in "
+                         "was not saved."));
           const bool first = vault_.index().accounts.empty();
           account_key_ = vault_.upsert(session);
           session_ = session;
@@ -2400,7 +2409,7 @@ void Core::complete_sign_in(std::string callback) {
               migrate_saves(data_, account_index_.primary, first);
           if (migrated.moved && first)
             notice_ =
-                "Existing local saves were attached to your first account.";
+                i18n::tr("Existing local saves were attached to your first account.");
           if (snapshot) {
             library::merge(games_, *snapshot, account_scope_);
             warning_ = snapshot->warning;
@@ -2433,16 +2442,16 @@ void Core::cancel_sign_in() {
   browser_.close();
   auth_.reset();
   signing_in_ = verifying_ = false;
-  auth_status_ = "Sign-in cancelled.";
+  auth_status_ = i18n::tr("Sign-in cancelled.");
 }
 void Core::paste_sign_in(std::string_view text) {
   if (!auth_ || !signing_in_ || verifying_)
     return;
   auto callback = meta::find_callback(text);
   if (callback.empty())
-    auth_paste_error_ = "That has no oculus:// address. Copy the whole console message or the address itself.";
+    auth_paste_error_ = i18n::tr("That has no oculus:// address. Copy the whole console message or the address itself.");
   else if (!auth_->accepts(callback))
-    auth_paste_error_ = "That address is from an earlier sign-in. Copy the one Meta gave for this sign-in.";
+    auth_paste_error_ = i18n::tr("That address is from an earlier sign-in. Copy the one Meta gave for this sign-in.");
   else {
     auth_paste_error_.clear();
     complete_sign_in(std::move(callback));
@@ -2487,7 +2496,7 @@ void Core::tick() {
   while (auto event = browser_.poll()) {
     if (event->kind == AuthBrowser::Kind::ready) {
       auth_page_loaded_ = true;
-      auth_status_ = "Meta sign-in is ready.";
+      auth_status_ = i18n::tr("Meta sign-in is ready.");
       log::info("auth", "Meta sign-in page loaded.");
     }
     if (event->kind == AuthBrowser::Kind::error) {
@@ -2496,11 +2505,11 @@ void Core::tick() {
         // The sign-in still works in any browser: open it in the default one
         // (no WebKitGTK or WebView2 here) and keep waiting for its address.
         auth_manual_ = true;
-        auth_status_ = "Meta's sign-in window could not open. Sign in manually below.";
+        auth_status_ = i18n::tr("Meta's sign-in window could not open. Sign in manually below.");
         if (!options_.cli && !options_.automation)
           try {
             open_url(auth_url_);
-            auth_status_ = "Meta's sign-in opened in your browser. Sign in there; the steps are below.";
+            auth_status_ = i18n::tr("Meta's sign-in opened in your browser. Sign in there; the steps are below.");
           } catch (const std::exception &e) {
             log::warn("auth", "The sign-in link could not open in a browser: {}", e.what());
           }
@@ -2517,7 +2526,7 @@ void Core::tick() {
       ++epoch_;
       signing_in_ = false;
       auth_.reset();
-      auth_status_ = "Sign-in cancelled.";
+      auth_status_ = i18n::tr("Sign-in cancelled.");
     }
     if (event->kind == AuthBrowser::Kind::callback)
       complete_sign_in(std::move(event->value));
@@ -2568,29 +2577,34 @@ void Core::tick() {
                   *r.exit);
         if (auto obb = library::missing_expansion(r.log); !obb.empty()) {
           auto entry = game(id);
-          r.failure = std::format("Its install lacks the expansion file {}. Import the game again together with "
-                                  "that file (it is in Android/obb/{} on the headset).", obb,
-                                  entry && !entry->package.empty() ? entry->package : "<package>");
-          error(std::format("{} closed: {}", entry ? entry->name : id, r.failure));
+          r.failure = i18n::trf("Its install lacks the expansion file {0}. Import the game again together with "
+                                "that file (it is in Android/obb/{1} on the headset).", obb,
+                                entry && !entry->package.empty() ? entry->package : "<package>");
+          // i18n: A game closed on its own; {0} is its name, {1} why (a sentence such as "It needs a Meta account...").
+          error(i18n::trf("{0} closed: {1}", entry ? entry->name : id, r.failure));
         } else if (library::needed_meta_sign_in(r.log)) {
           auto entry = game(id);
-          r.failure = "It needs a Meta account. Use Sign in at the bottom left with the account that owns it, then "
-                      "start it again.";
-          error(std::format("{} closed: {}", entry ? entry->name : id, r.failure));
+          // i18n: Why a game closed, on its card in the library. "Sign in" is the sidebar's button.
+          r.failure = i18n::tr("It needs a Meta account. Use Sign in at the bottom left with the account that owns it, "
+                               "then start it again.");
+          error(i18n::trf("{0} closed: {1}", entry ? entry->name : id, r.failure));
         } else if (library::refused_entitlement(r.log)) {
           auto entry = game(id);
-          r.failure = "Meta says the signed-in account does not own it, and the game closed. Sign in with the "
-                      "account that bought it, then start it again.";
-          error(std::format("{} closed: {}", entry ? entry->name : id, r.failure));
+          // i18n: Why a game closed, on its card in the library.
+          r.failure = i18n::tr("Meta says the signed-in account does not own it, and the game closed. Sign in with the "
+                               "account that bought it, then start it again.");
+          error(i18n::trf("{0} closed: {1}", entry ? entry->name : id, r.failure));
         } else if (library::needed_device_attestation(r.log)) {
           auto entry = game(id);
-          r.failure = "It requires Meta device attestation, which only a real Quest headset can provide, so it "
-                      "cannot run in Venture.";
-          error(std::format("{} closed: {}", entry ? entry->name : id, r.failure));
+          // i18n: Why a game closed, on its card in the library.
+          r.failure = i18n::tr("It requires Meta device attestation, which only a real Quest headset can provide, so "
+                               "it cannot run in Venture.");
+          error(i18n::trf("{0} closed: {1}", entry ? entry->name : id, r.failure));
         } else if (auto dialog = library::game_dialog(r.log); !dialog.empty()) {
           auto entry = game(id);
-          r.failure = std::format("It showed the message \"{}\" and then quit.", dialog);
-          error(std::format("{} closed: {}", entry ? entry->name : id, r.failure));
+          // i18n: Why a game closed, on its card in the library; {0} is the game's own message, as it wrote it.
+          r.failure = i18n::trf("It showed the message \"{0}\" and then quit.", dialog);
+          error(i18n::trf("{0} closed: {1}", entry ? entry->name : id, r.failure));
         } else if (*r.exit != 0) {
           // A runtime that failed before opening its log still wrote stderr.
           r.failure = library::runtime_failure(
@@ -2613,8 +2627,9 @@ void Core::tick() {
       for (const auto &j : jobs)
         if (j.state == download::State::complete && j.saves_kept &&
             saves_kept_notified_.insert(j.app_id + '/' + std::to_string(j.generation)).second)
-          notice_ = std::format("{} is installed with the saves already on this PC. To use the headset's saves "
-                                "instead, choose Import save data in its menu.", j.name);
+          // i18n: {0} is the game's name. "Import save data" is the item in the game's menu.
+          notice_ = i18n::trf("{0} is installed with the saves already on this PC. To use the headset's saves "
+                              "instead, choose Import save data in its menu.", j.name);
     }
   }
 }

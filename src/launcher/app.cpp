@@ -219,7 +219,7 @@ App::App(Options options) : Core(std::move(options)) {
     signing_in_ = auth_manual_ = true;
     link_handler_ = options_.smoke_view == "manual-sign-in" ? 1 : -1;
     auth_url_ = "https://auth.meta.com/native_sso/confirm?native_app_id=512466987071624&native_sso_etoken=EXAMPLE";
-    auth_status_ = "Meta's sign-in window could not open. Sign in manually below.";
+    auth_status_ = i18n::tr("Meta's sign-in window could not open. Sign in manually below.");
   }
   if (options_.smoke_view == "import" || options_.smoke_view == "import-end" || options_.smoke_view == "import-link")
     page_ = 4;
@@ -534,7 +534,10 @@ void App::choose_import(bool folder) {
   if (folder) {
     SDL_ShowOpenFolderDialog(picked, this, window_, nullptr, false);
   } else {
-    static const SDL_DialogFileFilter filters[] = {{"Android apps and archives", "apk;zip"}};
+    // The names stay valid until the dialog's callback: translations are static text.
+    static SDL_DialogFileFilter filters[] = {{nullptr, "apk;zip"}};
+    // i18n: File type filter in the system's file picker for Import (.apk and .zip files).
+    filters[0].name = i18n::tr("Android apps and archives");
     SDL_ShowOpenFileDialog(picked, this, window_, filters, 1, nullptr, false);
   }
 }
@@ -575,7 +578,9 @@ void App::choose_controls_file(bool save, const std::string &game) {
     }
     pick->first->wake();
   };
-  static const SDL_DialogFileFilter filters[] = {{"Controls (Venture or SteamVR)", "json"}};
+  static SDL_DialogFileFilter filters[] = {{nullptr, "json"}};
+  // i18n: File type filter in the system's file picker for controls files (.json).
+  filters[0].name = i18n::tr("Controls (Venture or SteamVR)");
   auto *pick = new std::pair<App *, ControlsFilePick>{this, {save, game, {}}};
   if (save)
     SDL_ShowSaveFileDialog(picked, pick, window_, filters, 1, nullptr);
@@ -648,8 +653,12 @@ void App::choose_mod_file(const std::string &app_id, const std::string &obb) {
     }
     pick->app->wake();
   };
-  static const SDL_DialogFileFilter filters[] = {{"Mods and patched APKs", "qmod;apk;so"}, {"All files", "*"}};
-  static const SDL_DialogFileFilter obb_filters[] = {{"Expansion files", "obb"}, {"All files", "*"}};
+  static SDL_DialogFileFilter filters[] = {{nullptr, "qmod;apk;so"}, {nullptr, "*"}};
+  static SDL_DialogFileFilter obb_filters[] = {{nullptr, "obb"}, {nullptr, "*"}};
+  // i18n: File type filters in the system's file picker for a game's mods (.qmod, .apk, .so) and expansion files (.obb).
+  filters[0].name = i18n::tr("Mods and patched APKs");
+  obb_filters[0].name = i18n::tr("Expansion files");
+  filters[1].name = obb_filters[1].name = i18n::tr("All files");
   SDL_ShowOpenFileDialog(picked, new Pick{this, app_id, obb}, window_, obb.empty() ? filters : obb_filters, 2, nullptr,
                          obb.empty());
 }
@@ -786,15 +795,16 @@ int App::run() {
                                    options_.launch_package;
         });
         if (found == installs_.end()) {
-          error("The requested package is not installed.");
+          error(i18n::tr("The requested package is not installed."));
           smoke_exit_ = 1;
         } else {
           direct_app_ = found->id();
           // A shortcut's start shows no launcher window to ask in: the Android 2D
           // component is downloaded when the game is first played from Venture.
           if (const auto size = android_2d_download(direct_app_)) {
-            error(std::format("This game needs Venture's Android 2D support, a one-time {} MB download. Play it "
-                              "once from Venture to download it.", (*size + (1 << 20) - 1) >> 20));
+            // i18n: {0} is the download's size in megabytes.
+            error(i18n::trf("This game needs Venture's Android 2D support, a one-time {0} MB download. Play it "
+                            "once from Venture to download it.", (*size + (1 << 20) - 1) >> 20));
             smoke_exit_ = 1;
           } else
           try { launch_game(direct_app_, play_key(direct_app_), {}); }
@@ -975,8 +985,8 @@ int run(Options options) {
                            "graphics configuration and folder permissions.");
     if (!direct) SDL_ShowSimpleMessageBox(
         SDL_MESSAGEBOX_ERROR, "Venture",
-        "Venture could not start. Check graphics drivers and access to the "
-        "application data folder.",
+        i18n::tr("Venture could not start. Check graphics drivers and access to the "
+                 "application data folder."),
         nullptr);
     return 1;
   }

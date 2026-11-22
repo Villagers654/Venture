@@ -5,6 +5,7 @@
 
 #include "common/library/import.h"
 #include "common/log.h"
+#include "launcher/i18n/i18n.h"
 
 
 namespace venture::launcher {
@@ -47,23 +48,23 @@ void Core::scan_headset() {
       adb = android::adb::locate(configured);
       if (!adb) {
         error = configured.empty()
-                    ? "Android platform-tools (adb) were not found. Install them, or set adb's location in Settings."
-                    : "adb was not found at the location set in Settings.";
+                    ? i18n::tr("Android platform-tools (adb) were not found. Install them, or set adb's location in Settings.")
+                    : i18n::tr("adb was not found at the location set in Settings.");
       } else {
         android::adb::Client list(*adb);
         devices = list.devices(stop);
         auto ready = std::ranges::find_if(devices, [&](auto &d) { return d.ready() && d.serial == serial; });
         if (ready == devices.end()) ready = std::ranges::find_if(devices, &android::adb::Device::ready);
         if (devices.empty()) {
-          error = "No headset found. Connect it with a USB cable (or turn on Wi-Fi debugging) and enable "
-                  "developer mode in the Meta Horizon app.";
+          error = i18n::tr("No headset found. Connect it with a USB cable (or turn on Wi-Fi debugging) and enable "
+                           "developer mode in the Meta Horizon app.");
         } else if (ready == devices.end()) {
           error = android::adb::state_message(devices.front());
         } else {
           chosen = ready->serial;
           android::adb::Client client(*adb, chosen);
           for (auto &app : client.apps(stop)) items.push_back(import_item(*import::open_device(client, app)));
-          if (items.empty()) error = "No games are installed on this headset.";
+          if (items.empty()) error = i18n::tr("No games are installed on this headset.");
         }
       }
     } catch (...) {
@@ -98,8 +99,8 @@ void Core::connect_headset() {
     try {
       auto adb = android::adb::locate(configured);
       if (!adb)
-        throw std::runtime_error("Android platform-tools (adb) were not found. Install them, or set adb's "
-                                 "location in Settings.");
+        throw std::runtime_error(i18n::tr("Android platform-tools (adb) were not found. Install them, or set adb's "
+                                          "location in Settings."));
       serial = android::adb::Client(*adb).connect(address, stop);
     } catch (...) {
       error = exception_text();
@@ -163,16 +164,17 @@ Core::ImportMatch Core::import_match(const ImportItem &item) const {
   if (installed) {
     const auto code = std::int64_t(number(Json(installed->plan.version_code)));
     if (installed->complete && code == item.version_code) {
-      m.status = "Installed";
+      // i18n: Status badge of an app in the Import list: this version is already installed.
+      m.status = i18n::tr("Installed");
       return m;
     }
     if (installed->complete && code > item.version_code) {
-      m.status = "A newer version is installed";
+      m.status = i18n::tr("A newer version is installed");
       return m;
     }
-    m.status = installed->complete ? "Updates the installed version" : "Completes the installation";
+    m.status = installed->complete ? i18n::tr("Updates the installed version") : i18n::tr("Completes the installation");
   } else {
-    m.status = "Ready to import";
+    m.status = i18n::tr("Ready to import");
   }
   m.importable = true;
   return m;
@@ -201,7 +203,7 @@ void Core::start_import(bool device, const fs::path &root, std::optional<bool> s
     auto target = root.empty() ? settings_.games : root.lexically_normal();
     const auto *current = installed_package(item.package);
     if (current) target = root_of(*current);
-    if (!target.is_absolute()) throw std::runtime_error("Choose an absolute folder to import to.");
+    if (!target.is_absolute()) throw std::runtime_error(i18n::tr("Choose an absolute folder to import to."));
     if (!std::ranges::contains(settings_.roots(), target)) {
       fs::create_directories(target);
       auto next = settings_;
@@ -218,13 +220,13 @@ void Core::start_import(bool device, const fs::path &root, std::optional<bool> s
     item.selected = false;
     ++queued;
   }
-  if (!queued) throw std::runtime_error("Select a game to import.");
+  if (!queued) throw std::runtime_error(i18n::tr("Select a game to import."));
   // Downloads lists the active account's jobs (and local ones); show these
   // when one other account imports them all.
   if (std::ranges::all_of(accounts, [&](auto &k) { return k == accounts.front(); }) &&
       accounts.front() != "local" && accounts.front() != account_key_)
     switch_account(accounts.front());
-  notice_ = queued == 1 ? "Importing 1 game." : std::format("Importing {} games.", queued);
+  notice_ = i18n::trn("Importing {0} game.", "Importing {0} games.", queued);
   on_install_queued();
 }
 }  // namespace venture::launcher

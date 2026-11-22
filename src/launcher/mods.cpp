@@ -48,7 +48,7 @@ std::string ensure_loader(const fs::path &mods, const fs::path &apk, bool offlin
 // The installed APK; parse_plan accepts no plan without one.
 fs::path apk_path(const library::Install &install) {
   auto apk = std::ranges::find(install.plan.files, std::string("apk"), &meta::File::kind);
-  if (apk == install.plan.files.end()) throw std::runtime_error("This installation has no APK.");
+  if (apk == install.plan.files.end()) throw std::runtime_error(tr("This installation has no APK."));
   return install.directory / paths::from_utf8(apk->name);
 }
 }  // namespace

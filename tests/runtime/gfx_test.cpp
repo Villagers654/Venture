@@ -2274,11 +2274,18 @@ TEST_CASE("Foveation: full rate in the middle, half then quarter towards the edg
   const Fov fov{-52 * d, 42 * d, 43 * d, -50 * d};  // about a Quest 3 left eye
   const Centre ahead{};
   Pattern pattern{Level::medium, false, 0};
-  // Straight ahead is full rate, the far corner quarter rate.
+  // Straight ahead is full rate, the far corner (66 degrees out) 4x2 at
+  // Medium; Low stops at 2x2 and High reaches 4x4 there.
   const float cu = std::tan(52 * d) / (std::tan(52 * d) + std::tan(42 * d));
   const float cv = std::tan(43 * d) / (std::tan(43 * d) + std::tan(50 * d));
   CHECK(rate_at(pattern, fov, ahead, cu, cv) == Rate::full);
-  CHECK(rate_at(pattern, fov, ahead, 0, 1) == Rate::quarter);
+  CHECK(rate_at(pattern, fov, ahead, 0, 1) == Rate::eighth_x);
+  CHECK(rate_at(Pattern{Level::low, false, 0}, fov, ahead, 0, 1) == Rate::quarter);
+  CHECK(rate_at(Pattern{Level::high, false, 0}, fov, ahead, 0, 1) == Rate::sixteenth);
+  // Eye-tracked goes coarser closer in: 52 degrees left of the gaze is 4x2
+  // (coarser across, the radial axis) at Medium, the corner 4x4.
+  CHECK(rate_at(Pattern{Level::medium, true, 0}, fov, ahead, 0, cv) == Rate::eighth_x);
+  CHECK(rate_at(Pattern{Level::medium, true, 0}, fov, ahead, 0, 1) == Rate::sixteenth);
   // Half rate along the radial direction.
   bool half_x = false, half_y = false;
   for (float u = 0; u <= 1; u += 0.01f) half_x |= rate_at(pattern, fov, ahead, u, cv) == Rate::half_x;
@@ -2297,6 +2304,9 @@ TEST_CASE("Foveation: full rate in the middle, half then quarter towards the edg
   CHECK(low == doctest::Approx(0.85).epsilon(0.05));
   CHECK(medium == doctest::Approx(0.67).epsilon(0.05));
   CHECK(high == doctest::Approx(0.54).epsilon(0.05));
+  MESSAGE("fixed low/medium/high: " << low << " " << medium << " " << high << ", eye-tracked low/medium/high: "
+                                    << fraction(Level::low, true) << " " << fraction(Level::medium, true) << " "
+                                    << fraction(Level::high, true));
   CHECK(fraction(Level::medium, true) < medium);
   CHECK(fraction(Level::none, false) == 1);
   // Eye-tracked: the full-rate region follows the gaze.
@@ -2320,7 +2330,15 @@ TEST_CASE("Foveation: full rate in the middle, half then quarter towards the edg
   CHECK((x == 255 && y == 128));
   std::vector<std::uint8_t> densities(8 * 8 * 2);
   fill_densities(densities, 8, 8, Pattern{Level::high, false, 0}, fov, ahead);
-  CHECK(densities[0] == 128);  // top-left corner: quarter rate
+  CHECK(densities[0] == 64);  // top-left corner at High: 4 pixels across
+  density_value(Rate::eighth_x, x, y);
+  CHECK((x == 64 && y == 128));
+  CHECK(shading_rate_value(Rate::eighth_x) == 9);
+  CHECK(shading_rate_value(Rate::eighth_y) == 6);
+  CHECK(shading_rate_value(Rate::sixteenth) == 10);
+  // Overlapping views keep the finer size on each axis: 2x1 and 1x2 give 1x1.
+  CHECK(finer_rate(shading_rate_value(Rate::half_x), shading_rate_value(Rate::half_y)) == 0);
+  CHECK(finer_rate(shading_rate_value(Rate::eighth_x), shading_rate_value(Rate::sixteenth)) == 9);
 }
 TEST_CASE("Foveation: an eye-tracked map refills fast enough to follow the gaze every frame") {
   using namespace venture::gfx::foveation;

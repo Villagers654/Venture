@@ -11,11 +11,15 @@
 #include <string>
 #include <atomic>
 #include <cmath>
+#include <condition_variable>
 #include <cstring>
 #include <map>
 #include <memory>
 #include <mutex>
+#include <span>
+#include <thread>
 #include <unordered_map>
+#include <vector>
 
 namespace venture::gfx::foveation {
 namespace {
@@ -62,6 +66,7 @@ struct MapState {
   std::unique_ptr<Image> map;
   std::vector<std::uint8_t> bytes, uploaded;
   std::string signature;
+  std::string requested;  // the latest signature handed to the refill thread
   std::uint32_t frames = 0;
 };
 // The eye views of the latest frame, for scene passes that render into the
@@ -122,6 +127,7 @@ struct Device {
   std::vector<Image*> clears;
   std::vector<MapState*> uploads;
   std::atomic<bool> pending{false};
+  bool seen_eye = false, seen_scene = false;  // the first pass of each kind is logged
   static constexpr std::size_t kStagingSlots = 8;
   std::array<Staging, kStagingSlots> staging{};
   std::size_t next_staging = 0;
@@ -218,30 +224,36 @@ VkImageView full_rate_view(Device& d, std::uint32_t width, std::uint32_t height)
   return image ? image_view(d, *image, 0, 1) : VK_NULL_HANDLE;
 }
 std::uint32_t texels(std::uint32_t pixels, std::uint32_t texel) { return (pixels + texel - 1) / texel; }
-std::uint32_t area(std::uint8_t value) { return (1u << (value >> 2)) * (1u << (value & 3)); }
+// Logs the first eye pass and the first scene pass a device foveates, so a
+// run shows which of a game's passes foveation reached. With the device's mutex held.
+void note_pass(Device& d, bool eye, std::uint32_t width, std::uint32_t height, const char* how) {
+  bool& seen = eye ? d.seen_eye : d.seen_scene;
+  if (std::exchange(seen, true)) return;
+  log::info("gfx", "Foveation: first {} pass foveated ({}x{}, {})", eye ? "eye" : "scene", width, height, how);
+}
 
 // Fills a scene map (two eye layers and their union) from the latest eye
 // views: the target covers each eye's whole view, as the game's stereo
 // targets do. With the device's mutex held. True when its contents changed.
+void fill_scene_bytes(std::span<std::uint8_t> bytes, std::uint32_t w, std::uint32_t h, const ScenePattern& p) {
+  const auto layer = std::size_t(w) * h;
+  std::fill(bytes.begin(), bytes.end(), std::uint8_t(0));
+  if (!p.valid || bytes.size() < 3 * layer) return;
+  for (std::uint32_t eye = 0; eye < 2; ++eye) {
+    const RateField field(p.pattern, p.fov[eye], p.centre[eye]);
+    auto* out = bytes.data() + eye * layer;
+    for (std::uint32_t y = 0; y < h; ++y)
+      for (std::uint32_t x = 0; x < w; ++x)
+        out[std::size_t(y) * w + x] =
+            shading_rate_value(field.at((float(x) + 0.5f) / float(w), (float(y) + 0.5f) / float(h)));
+  }
+  auto* combined = bytes.data() + 2 * layer;
+  for (std::size_t i = 0; i < layer; ++i) combined[i] = finer_rate(bytes[i], bytes[layer + i]);
+}
 bool fill_scene_map(MapState& m, const ScenePattern& p) {
   if (!m.map || p.signature == m.signature) return false;
-  m.signature = p.signature;
-  const auto w = m.map->width, h = m.map->height;
-  const auto layer = std::size_t(w) * h;
-  std::fill(m.bytes.begin(), m.bytes.end(), std::uint8_t(0));
-  if (p.valid) {
-    for (std::uint32_t eye = 0; eye < 2; ++eye) {
-      const RateField field(p.pattern, p.fov[eye], p.centre[eye]);
-      auto* out = m.bytes.data() + eye * layer;
-      for (std::uint32_t y = 0; y < h; ++y)
-        for (std::uint32_t x = 0; x < w; ++x)
-          out[std::size_t(y) * w + x] =
-              shading_rate_value(field.at((float(x) + 0.5f) / float(w), (float(y) + 0.5f) / float(h)));
-    }
-    auto* combined = m.bytes.data() + 2 * layer;
-    for (std::size_t i = 0; i < layer; ++i)
-      combined[i] = area(m.bytes[i]) <= area(m.bytes[layer + i]) ? m.bytes[i] : m.bytes[layer + i];
-  }
+  m.signature = m.requested = p.signature;
+  fill_scene_bytes(m.bytes, m.map->width, m.map->height, p);
   return true;
 }
 void queue_upload(Device& d, MapState& m) {
@@ -568,10 +580,13 @@ VkResult VKAPI_CALL create_framebuffer(VkDevice device, const VkFramebufferCreat
     views.assign(info->pAttachments, info->pAttachments + info->attachmentCount);
     std::uint32_t base = 0, count = 1;
     VkImageView rate{};
-    if (const auto* eye = eye_among(*d, views, base, count))
+    if (const auto* eye = eye_among(*d, views, base, count)) {
       rate = eye_map_view(*d, *eye, base, count, 0, info->width, info->height, false);
-    else if (pass->second.scene)
+      if (rate) note_pass(*d, true, info->width, info->height, "framebuffer");
+    } else if (pass->second.scene) {
       rate = scene_map_view(*d, w, h, false);
+      if (rate) note_pass(*d, false, info->width, info->height, "framebuffer");
+    }
     if (!rate) rate = full_rate_view(*d, w, h);
     if (!rate) {
       lock.unlock();
@@ -720,10 +735,13 @@ bool add_begin_view(Device& d, const VkRenderPassBeginInfo* info, VkRenderPassBe
   const auto height = std::uint32_t(info->renderArea.offset.y) + info->renderArea.extent.height;
   if (eye && width == eye->swapchain->width && height == eye->swapchain->height &&
       texels(width, d.texel.width) == declared->second.width &&
-      texels(height, d.texel.height) == declared->second.height)
+      texels(height, d.texel.height) == declared->second.height) {
     rate = eye_map_view(d, *eye, base, count, count, width, height, true);
-  else if (!eye && pass->second.scene)
+    if (rate) note_pass(d, true, width, height, "imageless framebuffer");
+  } else if (!eye && pass->second.scene) {
     rate = scene_map_view(d, declared->second.width, declared->second.height, true);
+    if (rate) note_pass(d, false, width, height, "imageless framebuffer");
+  }
   // Imageless views must match the declared size exactly.
   if (!rate) rate = full_rate_view(d, declared->second.width, declared->second.height);
   if (!rate) return false;
@@ -782,11 +800,14 @@ void VKAPI_CALL begin_rendering(VkCommandBuffer command, const VkRenderingInfo* 
     const auto* eye = d->active && !own ? eye_among(*d, views, base, count) : nullptr;
     const auto width = std::uint32_t(info->renderArea.offset.x) + info->renderArea.extent.width;
     const auto height = std::uint32_t(info->renderArea.offset.y) + info->renderArea.extent.height;
-    if (eye)
+    if (eye) {
       rate.imageView = eye_map_view(*d, *eye, base, count, view_count(info->viewMask), width, height, false);
-    else if (d->active && !own && info->colorAttachmentCount && info->viewMask == 3 && info->pDepthAttachment &&
-             info->pDepthAttachment->imageView)
+      if (rate.imageView) note_pass(*d, true, width, height, "dynamic rendering");
+    } else if (d->active && !own && info->colorAttachmentCount && info->viewMask == 3 && info->pDepthAttachment &&
+               info->pDepthAttachment->imageView) {
       rate.imageView = scene_map_view(*d, texels(width, d->texel.width), texels(height, d->texel.height), false);
+      if (rate.imageView) note_pass(*d, false, width, height, "dynamic rendering");
+    }
     if (rate.imageView) {
       rate.imageLayout = kMapLayout;
       rate.shadingRateAttachmentTexelSize = d->texel;
@@ -1059,6 +1080,181 @@ std::string signature_of(const Pattern& pattern, std::span<const EyeView> views)
                  q(v.centre.y / std::max(1e-3f, -v.centre.z), 229);
   return signature;
 }
+// Fills an eye swapchain's map contents (`layers` eye layers, then their
+// union) for `views`.
+void fill_eye_bytes(std::span<std::uint8_t> bytes, std::uint32_t w, std::uint32_t h, std::uint32_t layers,
+                    VkExtent2D texel, bool bottom_up, const Pattern& pattern, std::span<const EyeView> views) {
+  const auto layer_size = std::size_t(w) * h;
+  std::fill(bytes.begin(), bytes.end(), std::uint8_t(0));
+  if (bytes.size() < layer_size * (layers + 1)) return;
+  std::vector<bool> drawn(layer_size * layers, false);
+  for (const auto& v : views) {
+    if (v.layer >= layers || !v.width || !v.height) continue;
+    const RateField field(pattern, v.fov, v.centre);
+    const auto left = std::uint32_t(std::max(0, v.x)), top = std::uint32_t(std::max(0, v.y));
+    const auto x0 = left / texel.width, y0 = top / texel.height;
+    const auto x1 = std::min(w, texels(left + v.width, texel.width));
+    const auto y1 = std::min(h, texels(top + v.height, texel.height));
+    for (auto ty = y0; ty < y1; ++ty)
+      for (auto tx = x0; tx < x1; ++tx) {
+        const float px = (float(tx) + 0.5f) * float(texel.width);
+        const float py = (float(ty) + 0.5f) * float(texel.height);
+        const float u = std::clamp((px - float(v.x)) / float(v.width), 0.0f, 1.0f);
+        float t = std::clamp((py - float(v.y)) / float(v.height), 0.0f, 1.0f);
+        if (bottom_up) t = 1 - t;  // GLES rows run up the view
+        const auto value = shading_rate_value(field.at(u, t));
+        const auto i = v.layer * layer_size + std::size_t(ty) * w + tx;
+        // Overlapping views keep the finer rate.
+        bytes[i] = drawn[i] ? finer_rate(bytes[i], value) : value;
+        drawn[i] = true;
+      }
+  }
+  // The combined layer: per texel the finest rate of any eye layer.
+  auto* combined = bytes.data() + layers * layer_size;
+  for (std::size_t i = 0; i < layer_size; ++i) {
+    auto finest = bytes[i];
+    for (std::uint32_t l = 1; l < layers; ++l) finest = finer_rate(finest, bytes[l * layer_size + i]);
+    combined[i] = finest;
+  }
+  static std::once_flag reported;
+  std::call_once(reported, [&] {
+    log::info("gfx", "Foveation: {} level {}, {:.0f}% of an eye's fragments shaded",
+              pattern.eye_tracked ? "eye-tracked" : "fixed", int(pattern.level),
+              100 * shaded_fraction({bytes.data(), layer_size}));
+  });
+}
+
+// Map refills after the first run on their own thread: a gaze-driven refill
+// (a few hundred microseconds for two headset eyes and the scene map) would
+// otherwise land on the thread ending the frame, which in most games is the
+// render thread the frame rate hangs on. The maps follow a frame or two
+// later, well inside the time the eye takes to settle after a saccade.
+struct EyeJob {
+  Pattern pattern;
+  std::vector<EyeView> views;
+  std::string signature;
+};
+class Refills {
+ public:
+  ~Refills() {
+    {
+      std::lock_guard lock(mutex_);
+      stop_ = true;
+    }
+    wake_.notify_all();
+    if (thread_.joinable()) thread_.join();
+  }
+  void scene() {
+    {
+      std::lock_guard lock(mutex_);
+      scene_ = true;
+      start();
+    }
+    wake_.notify_one();
+  }
+  void eye(const void* swapchain, EyeJob job) {
+    {
+      std::lock_guard lock(mutex_);
+      eyes_[swapchain] = std::move(job);
+      start();
+    }
+    wake_.notify_one();
+  }
+
+ private:
+  void start() {
+    if (!thread_.joinable() && !stop_) thread_ = std::thread([this] { run(); });
+  }
+  void run() {
+    for (;;) {
+      std::unique_lock lock(mutex_);
+      wake_.wait(lock, [&] { return stop_ || scene_ || !eyes_.empty(); });
+      if (stop_) return;
+      const bool scene = std::exchange(scene_, false);
+      auto eyes = std::move(eyes_);
+      eyes_.clear();
+      lock.unlock();
+      if (scene) refill_scenes();
+      for (auto& [swapchain, job] : eyes) refill_eye(swapchain, job);
+    }
+  }
+  static bool registered(const Device* d) {
+    return std::any_of(devices.begin(), devices.end(), [&](const auto& entry) { return entry.second.get() == d; });
+  }
+  static void refill_scenes() {
+    const auto scene = current_scene();
+    struct Target {
+      std::shared_ptr<Device> device;
+      std::pair<std::uint32_t, std::uint32_t> extent;
+    };
+    std::vector<Target> targets;
+    {
+      std::lock_guard registry(registry_mutex);
+      for (auto& [key, device] : devices) {
+        if (!device->active) continue;
+        std::lock_guard lock(device->mutex);
+        for (auto& [extent, m] : device->scene_maps)
+          if (m->map && m->signature != scene.signature) targets.push_back({device, extent});
+      }
+    }
+    for (auto& t : targets) {
+      const auto [w, h] = t.extent;
+      std::vector<std::uint8_t> bytes(std::size_t(w) * h * 3);
+      fill_scene_bytes(bytes, w, h, scene);
+      std::lock_guard registry(registry_mutex);
+      if (!registered(t.device.get())) continue;
+      std::lock_guard lock(t.device->mutex);
+      const auto it = t.device->scene_maps.find(t.extent);
+      if (it == t.device->scene_maps.end() || !it->second->map || it->second->bytes.size() != bytes.size()) continue;
+      auto& m = *it->second;
+      if (m.signature == scene.signature) continue;
+      m.bytes.swap(bytes);
+      m.signature = scene.signature;
+      queue_upload(*t.device, m);
+    }
+  }
+  static void refill_eye(const void* swapchain, const EyeJob& job) {
+    const Image* image = nullptr;
+    std::uint32_t w = 0, h = 0, layers = 0;
+    VkExtent2D texel{};
+    bool bottom_up = false;
+    std::size_t size = 0;
+    {
+      std::lock_guard registry(registry_mutex);
+      const auto it = swapchains.find(swapchain);
+      if (it == swapchains.end()) return;
+      auto& s = *it->second;
+      std::lock_guard lock(s.device->mutex);
+      if (!s.map || s.signature == job.signature) return;
+      image = s.map.get();
+      w = s.map->width;
+      h = s.map->height;
+      layers = s.layers;
+      texel = s.device->texel;
+      bottom_up = s.bottom_up;
+      size = s.bytes.size();
+    }
+    std::vector<std::uint8_t> bytes(size);
+    fill_eye_bytes(bytes, w, h, layers, texel, bottom_up, job.pattern, job.views);
+    std::lock_guard registry(registry_mutex);
+    const auto it = swapchains.find(swapchain);
+    if (it == swapchains.end()) return;
+    auto& s = *it->second;
+    std::lock_guard lock(s.device->mutex);
+    if (s.map.get() != image || s.bytes.size() != size) return;
+    s.bytes.swap(bytes);
+    s.signature = job.signature;
+    queue_upload(*s.device, s);
+  }
+
+  std::mutex mutex_;  // a leaf: nothing else is locked while it is held, or locked under it
+  std::condition_variable wake_;
+  bool stop_ = false, scene_ = false;
+  std::unordered_map<const void*, EyeJob> eyes_;  // the latest views per swapchain
+  std::thread thread_;
+};
+// After the registry, so it is destroyed (and its thread joined) first.
+Refills refills;
 }  // namespace
 
 void update_scene_views(const EyeView& left, const EyeView& right, Level requested, float vertical_offset_degrees,
@@ -1079,14 +1275,8 @@ void update_scene_views(const EyeView& left, const EyeView& right, Level request
     }
     scene_pattern.signature = signature;
   }
-  const auto scene = current_scene();
-  std::lock_guard registry(registry_mutex);
-  for (auto& [key, device] : devices) {
-    if (!device->active) continue;
-    std::lock_guard lock(device->mutex);
-    for (auto& [extent, m] : device->scene_maps)
-      if (fill_scene_map(*m, scene)) queue_upload(*device, *m);
-  }
+  // Scene maps made from now on fill from the new views as they are created.
+  refills.scene();
 }
 
 void update_eye_views(const void* swapchain, std::span<const EyeView> views, Level requested,
@@ -1101,53 +1291,20 @@ void update_eye_views(const void* swapchain, std::span<const EyeView> views, Lev
   auto& d = *s.device;
   std::lock_guard lock(d.mutex);
   if (!s.map) return;
-  // Uploaded again now and then in case a command buffer carrying an upload
-  // was never submitted.
-  const bool refresh = ++s.frames % 600 == 0;
   if (signature != s.signature) {
-    s.signature = std::move(signature);
-    const auto w = s.map->width, h = s.map->height;
-    const auto layer_size = std::size_t(w) * h;
-    std::fill(s.bytes.begin(), s.bytes.end(), std::uint8_t(0));
-    std::vector<bool> drawn(layer_size * s.layers, false);
-    for (const auto& v : views) {
-      if (v.layer >= s.layers || !v.width || !v.height) continue;
-      const RateField field(pattern, v.fov, v.centre);
-      const auto left = std::uint32_t(std::max(0, v.x)), top = std::uint32_t(std::max(0, v.y));
-      const auto x0 = left / d.texel.width, y0 = top / d.texel.height;
-      const auto x1 = std::min(w, texels(left + v.width, d.texel.width));
-      const auto y1 = std::min(h, texels(top + v.height, d.texel.height));
-      for (auto ty = y0; ty < y1; ++ty)
-        for (auto tx = x0; tx < x1; ++tx) {
-          const float px = (float(tx) + 0.5f) * float(d.texel.width);
-          const float py = (float(ty) + 0.5f) * float(d.texel.height);
-          const float u = std::clamp((px - float(v.x)) / float(v.width), 0.0f, 1.0f);
-          float t = std::clamp((py - float(v.y)) / float(v.height), 0.0f, 1.0f);
-          if (s.bottom_up) t = 1 - t;  // GLES rows run up the view
-          const auto value = shading_rate_value(field.at(u, t));
-          const auto i = v.layer * layer_size + std::size_t(ty) * w + tx;
-          // Overlapping views keep the finer rate.
-          if (!drawn[i] || area(value) < area(s.bytes[i])) s.bytes[i] = value;
-          drawn[i] = true;
-        }
+    if (s.signature.empty()) {
+      // The first fill here, so the swapchain's first frames are foveated.
+      fill_eye_bytes(s.bytes, s.map->width, s.map->height, s.layers, d.texel, s.bottom_up, pattern, views);
+      s.signature = s.requested = std::move(signature);
+      queue_upload(d, s);
+    } else if (signature != s.requested) {
+      s.requested = signature;
+      refills.eye(swapchain, {pattern, {views.begin(), views.end()}, std::move(signature)});
     }
-    // The combined layer: per texel the finest rate of any eye layer.
-    auto* combined = s.bytes.data() + s.layers * layer_size;
-    for (std::size_t i = 0; i < layer_size; ++i) {
-      auto finest = s.bytes[i];
-      for (std::uint32_t l = 1; l < s.layers; ++l)
-        if (area(s.bytes[l * layer_size + i]) < area(finest)) finest = s.bytes[l * layer_size + i];
-      combined[i] = finest;
-    }
-    static std::once_flag reported;
-    std::call_once(reported, [&] {
-      log::info("gfx", "Foveation: {} level {}, {:.0f}% of an eye's fragments shaded",
-                pattern.eye_tracked ? "eye-tracked" : "fixed", int(pattern.level),
-                100 * shaded_fraction({s.bytes.data(), layer_size}));
-    });
-  } else if (!refresh && s.bytes == s.uploaded) {
     return;
   }
-  queue_upload(d, s);
+  // Uploaded again now and then in case a command buffer carrying an upload
+  // was never submitted.
+  if (++s.frames % 600 == 0 || s.bytes != s.uploaded) queue_upload(d, s);
 }
 }  // namespace venture::gfx::foveation

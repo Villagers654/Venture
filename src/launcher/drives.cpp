@@ -1,5 +1,6 @@
 #include "launcher/drives.h"
 #include "common/paths.h"
+#include "launcher/i18n/i18n.h"
 #include <algorithm>
 #include <cctype>
 #ifdef _WIN32
@@ -42,7 +43,8 @@ std::vector<InstallLocation> install_locations(const library::Settings &settings
   for (const auto &folder : settings.roots()) {
     const auto *v = volume_of(folder, volumes);
     if (v) used.push_back(v);
-    result.push_back({folder, v ? v->name : std::string("Local drive"), true});
+    // i18n: Install location whose drive is unknown.
+    result.push_back({folder, v ? v->name : std::string(i18n::tr("Local drive")), true});
   }
   for (const auto &v : volumes)
     if (std::ranges::find(used, &v) == used.end())
@@ -78,7 +80,7 @@ std::vector<Volume> local_volumes() {
     if (!GetVolumeInformationW(d, label, MAX_PATH + 1, nullptr, nullptr, nullptr, nullptr, 0)) continue;
     std::wstring root(d);
     std::string name = paths::utf8(fs::path(root.substr(0, 2))) + "  " +
-        (*label ? paths::utf8(fs::path(label)) : type == DRIVE_REMOVABLE ? "Removable Disk" : "Local Disk");
+        (*label ? paths::utf8(fs::path(label)) : type == DRIVE_REMOVABLE ? i18n::tr("Removable Disk") : i18n::tr("Local Disk"));
     result.push_back({fs::path(root), std::move(name)});
   }
   SetErrorMode(mode);
@@ -115,7 +117,8 @@ std::vector<Volume> local_volumes() {
     if (access(point.c_str(), W_OK) != 0) continue;
     if (std::ranges::any_of(result, [&](auto &v) { return v.root == point; })) continue;
     const fs::path root(point);
-    result.push_back({root, home ? std::string("Home") : paths::utf8(root.filename())});
+    // i18n: Name of the drive that holds the home folder (Linux), in the install location list.
+    result.push_back({root, home ? std::string(i18n::trc("drive", "Home")) : paths::utf8(root.filename())});
   }
   return result;
 }

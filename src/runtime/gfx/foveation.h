@@ -36,10 +36,13 @@ enum class Level : std::uint8_t { none, low, medium, high };
 // (often a Quest 3 tuning for its faster GPU) does not turn it off.
 Level effective_level(Level requested);
 
-// Fragment sizes the pattern uses. Every GPU with shading-rate attachments
-// supports these (VK_KHR_fragment_shading_rate's required rates), and a
-// density map expresses them as densities 1 and 0.5.
-enum class Rate : std::uint8_t { full, half_x, half_y, quarter };
+// Fragment sizes the pattern uses: 1x1, 2x1 and 1x2 (radial), 2x2, 4x2 and
+// 2x4 (radial), 4x4. Every GPU with shading-rate attachments takes up to 2x2
+// (VK_KHR_fragment_shading_rate's required rates); where it lacks a larger one
+// (many take no 4-pixel side, and multisampled passes often stop at 2x2) the
+// GPU uses the largest it has that fits inside, so the same map works on all.
+// A density map expresses them as densities 1, 0.5 and 0.25.
+enum class Rate : std::uint8_t { full, half_x, half_y, quarter, eighth_x, eighth_y, sixteenth };
 
 // One eye's projection, as XrFovf: angles in radians from the view axis,
 // left and down negative.
@@ -60,10 +63,10 @@ struct Pattern {
   // view sharper). Ignored when eye-tracked.
   float vertical_offset_degrees = 0;
 };
-// Angles (degrees from the centre) where the half- and quarter-rate regions
-// begin; 180 means never.
+// Angles (degrees from the centre) where the half-, quarter-, eighth- and
+// sixteenth-rate regions begin; 180 means never.
 struct Regions {
-  float half = 180, quarter = 180;
+  float half = 180, quarter = 180, eighth = 180, sixteenth = 180;
 };
 Regions regions(const Pattern& pattern);
 
@@ -83,12 +86,18 @@ class RateField {
   float tl_ = 0, tr_ = 0, tu_ = 0, td_ = 0;
   float cx_ = 0, cy_ = 0, cz_ = -1;  // unit length
   float ox_ = 0, oy_ = 0;            // the centre on the z = -1 plane
-  float half_cos_ = 1, quarter_cos_ = 1;
+  float half_cos_ = 1, quarter_cos_ = 1, eighth_cos_ = -1, sixteenth_cos_ = -1;
 };
 
 // VK_KHR_fragment_shading_rate's attachment encoding of a rate:
 // (log2(width) << 2) | log2(height).
 std::uint8_t shading_rate_value(Rate rate);
+// The finer of two encoded rates on each axis: where views overlap, no axis
+// gets coarser than either view asks.
+constexpr std::uint8_t finer_rate(std::uint8_t a, std::uint8_t b) {
+  const unsigned w = (a >> 2) < (b >> 2) ? (a >> 2) : (b >> 2), h = (a & 3) < (b & 3) ? (a & 3) : (b & 3);
+  return std::uint8_t(w << 2 | h);
+}
 // VK_EXT_fragment_density_map's R8G8_UNORM density of a rate (x, y).
 void density_value(Rate rate, std::uint8_t& x, std::uint8_t& y);
 
