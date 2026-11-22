@@ -2844,6 +2844,32 @@ void App::draw_display_rows(library::DisplaySettings& d, bool per_game, const ch
                 kHelpIcon);
   });
   divider();
+  // Sharper textures at a distance (runtime gfx/anisotropy.h): Automatic is
+  // 16x on a discrete GPU and the game's own filtering on an integrated one.
+  // --smoke-view display-anisotropy opens its list once.
+  static bool smoke_anisotropy = options_.smoke_view == "display-anisotropy";
+  // i18n: Settings row: texture filtering that keeps textures sharp at a distance.
+  setting_row(tr("Anisotropic filtering"), "", dw, s(38), [&] {
+    if (std::exchange(smoke_anisotropy, false)) {
+      ImGui::PushID("anisotropy");
+      ImGui::OpenPopup("##menu");
+      ImGui::PopID();
+    }
+    std::vector<std::string> ids{"auto", "off", "2", "4", "8", "16"};
+    // i18n: Choices for "Anisotropic filtering".
+    std::vector<std::string> names{tr("Automatic"), tr("Off"), "2x", "4x", "8x", "16x"};
+    if (per_game) {
+      ids.insert(ids.begin(), "");
+      names.insert(names.begin(), tr("Use global setting"));
+    }
+    const auto items = pointers(names);
+    int choice = index(ids, d.anisotropy);
+    if (dropdown("anisotropy", "", items.data(), int(items.size()), &choice, dw)) {
+      d.anisotropy = ids[choice];
+      changed = true;
+    }
+  });
+  divider();
   setting_row("Frame rate", "", dw, s(38), [&] {
     if (std::exchange(smoke_rates, false)) {
       ImGui::PushID("rate");
@@ -2952,6 +2978,18 @@ void App::draw_display_rows(library::DisplaySettings& d, bool per_game, const ch
       changed = true;
     }
   });
+  // A game that is running keeps the settings it started with; after a change
+  // the card says so until no game runs. --smoke-view display-restart shows it.
+  bool playing = options_.smoke_view == "display-restart";
+  for (const auto& [game, run] : running_) playing |= run.process.active();
+  if (changed && playing) display_restart_note_ = true;
+  if (!playing) display_restart_note_ = false;
+  if (display_restart_note_ || options_.smoke_view == "display-restart") {
+    divider();
+    ImGui::Dummy({0, s(10)});
+    text(fonts().regular, kBody, color::text2, "Restart the game to apply these changes.", false);
+    ImGui::Dummy({0, s(2)});
+  }
   ImGui::PopID();
   if (changed) action([this] { save_settings(); });
 }

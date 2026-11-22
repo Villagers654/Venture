@@ -394,6 +394,9 @@ int main(int argc, char** argv) {
   // The desktop mirror's window inside gamescope (SteamOS's game mode) when
   // started without the launcher's environment. Before any thread (setenv).
   venture::environment::use_gamescope_wayland();
+  // Venture foveates the game's own passes; the host's layer would foveate only
+  // its copy (common/environment.h). Before any thread or loader (setenv).
+  venture::environment::disable_host_foveation_layer();
   venture::platform::pre_reserve_low_memory();
   struct ProfileExit { ~ProfileExit() { venture::profile::stop(); } } profile_exit;
   try {

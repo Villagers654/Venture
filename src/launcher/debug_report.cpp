@@ -371,6 +371,7 @@ void settings_section(std::string &out, const fs::path &data, const std::string 
       if (!game->pc_audio.empty()) lines += std::format("  PC audio: {}\n", game->pc_audio);
       if (!game->match_resolution.empty())
         lines += std::format("  match game resolution: {}\n", game->match_resolution);
+      if (!game->anisotropy.empty()) lines += std::format("  anisotropic filtering: {}\n", game->anisotropy);
       if (!game->texture_compression.empty())
         lines += std::format("  texture compression: {}\n", game->texture_compression);
       if (game->texture_compression_threshold)
@@ -409,6 +410,8 @@ void settings_section(std::string &out, const fs::path &data, const std::string 
   out += std::format("  match game resolution: {} ({})\n", library::eye_scale_environment(display),
                      source(game && !game->match_resolution.empty(),
                             s.display.match_resolution == global.match_resolution));
+  out += std::format("  anisotropic filtering: {} ({})\n", library::anisotropy_environment(display),
+                     source(game && !game->anisotropy.empty(), s.display.anisotropy == global.anisotropy));
   {
     // As the runtime reads them (texture.cpp): unset is always, a threshold
     // outside 1-100 is 50%.

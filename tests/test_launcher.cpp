@@ -753,6 +753,31 @@ TEST_CASE("the desktop mirror shows the left eye by default, the right globally 
   REQUIRE(loaded.game_display.contains("1"));
   CHECK(loaded.game_display["1"].mirror_eye.empty());
 }
+TEST_CASE("anisotropic filtering is automatic by default, off or a level globally or per game") {
+  Directory d;
+  auto settings = library::Settings::defaults(d.root);
+  CHECK(settings.display.anisotropy == "auto");
+  CHECK(library::anisotropy_environment(settings.display) == "auto");
+  CHECK(library::game_display_defaults().anisotropy.empty());
+  settings.display.anisotropy = "8";
+  auto off = library::game_display_defaults();
+  off.anisotropy = "off";
+  settings.game_display["1"] = off;
+  settings.save(d.root);
+  auto json = paths::read_json(d.root / "settings.json");
+  CHECK(json["display"]["anisotropy"] == "8");
+  CHECK(json["gameDisplay"]["1"]["anisotropy"] == "off");
+  auto loaded = library::Settings::load(d.root);
+  CHECK(library::anisotropy_environment(library::effective_display(loaded.display, nullptr)) == "8");
+  CHECK(library::anisotropy_environment(library::effective_display(loaded.display, &loaded.game_display["1"])) == "off");
+  // Unknown values load as the default: automatic globally, the global choice per game.
+  json["display"]["anisotropy"] = "32x";
+  json["gameDisplay"] = {{"1", {{"anisotropy", "on"}, {"mirror", "full"}}}};
+  paths::atomic_write(d.root / "settings.json", json.dump());
+  loaded = library::Settings::load(d.root);
+  CHECK(loaded.display.anisotropy == "auto");
+  CHECK(loaded.game_display["1"].anisotropy.empty());
+}
 TEST_CASE("the game's audio on the PC is off by default, on globally or per game") {
   Directory d;
   auto settings = library::Settings::defaults(d.root);

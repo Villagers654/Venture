@@ -15,6 +15,7 @@ Requires:       libgcc_s.so.1()(64bit)
 Recommends:     libvulkan.so.1()(64bit)
 Recommends:     libsecret-1.so.0()(64bit)
 Recommends:     libfontconfig.so.1()(64bit)
+Recommends:     (libwebkitgtk-6.0.so.4()(64bit) or libwebkit2gtk-4.1.so.0()(64bit))
 %global debug_package %{nil}
 %global __strip /bin/true
 %global __brp_check_rpaths %{nil}

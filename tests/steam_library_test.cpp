@@ -635,6 +635,20 @@ TEST_CASE("Linux sees Steam running, and a Steam restart waits while Steam runs 
   CHECK(cleared);
 }
 #endif
+TEST_CASE("The runtime keeps the host's FDM injection layer out unless the user set its variable") {
+  constexpr const char* name = "DISABLE_VULKAN_FDM_INJECTION_LAYER";
+#ifdef _WIN32
+  _putenv_s(name, "");
+#else
+  unsetenv(name);
+#endif
+  environment::refresh();
+  CHECK(environment::disable_host_foveation_layer());
+  REQUIRE(std::getenv(name));
+  CHECK(std::string_view(std::getenv(name)) == "1");
+  CHECK(std::string_view(environment::getenv(name)) == "1");
+  CHECK_FALSE(environment::disable_host_foveation_layer());  // already set: the user's value stays
+}
 TEST_CASE("gamescope's Wayland display stands in for an unset WAYLAND_DISPLAY when its socket exists") {
   CHECK(environment::gamescope_wayland_display("wayland-0", "gamescope-0", "/run/user/1000").empty());
   CHECK(environment::gamescope_wayland_display(nullptr, nullptr, "/run/user/1000").empty());

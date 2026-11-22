@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Collect WebKit2GTK 4.1 (GTK 3) and the libraries it needs into DEST, for the
-# AppImage's Meta sign-in window where the system has no WebKitGTK that can
+# AppImage's and arm64 tarball's Meta sign-in window where the system has no WebKitGTK that can
 # open: the Steam Frame and SteamOS ship none, and GTK 4's WebKitGTK 6.0
 # cannot open on a gamescope older than 3.16.26. The sign-in helper
 # (src/launcher/platform/posix/auth_browser.cpp) uses DEST only then.

@@ -8,8 +8,8 @@
 #   tools/packaging/linux/build_packages.sh [--layout DIR] [--out DIR] [--version X.Y.Z] [FORMAT...]
 #   FORMAT: tar deb rpm aur appimage flatpak flathub (default: all but flathub)
 #
-# Needs rootless podman (deb: baseline image, rpm: Fedora image, appimage:
-# Ubuntu 22.04 for the sign-in window's WebKit2GTK), appimagetool
+# Needs rootless podman (deb: baseline image, rpm: Fedora image, appimage and
+# arm64 tar: Ubuntu 22.04 for the sign-in window's WebKit2GTK), appimagetool
 # (APPIMAGETOOL, default appimagetool on PATH) and flatpak with
 # org.gnome.Platform/<arch>/$FLATPAK_BRANCH (default 51) installed. flathub
 # reads both architectures' tarballs from --out (written by earlier tar runs).
@@ -66,9 +66,23 @@ fhs_tree() {
   desktop_files "$1/usr/share"
 }
 
+# The Meta sign-in window's own WebKit2GTK 4.1 for systems with none that can
+# open (SteamOS, the Steam Frame): Ubuntu 22.04's, the glibc 2.35 baseline.
+# Built once into $work/webkit; the AppImage and the arm64 tarball (the Steam
+# Frame's) carry it beside the launcher, where the sign-in helper looks for it
+# (auth_browser.cpp).
+make_webkit() {
+  mkdir -p "$work/webkit"
+  podman run --rm --security-opt label=disable --arch "$debarch" -v "$here:$here:ro" \
+    -v "$work/webkit:/out" "$webkit_image" sh -c \
+    "apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
+       libwebkit2gtk-4.1-0 glib-networking patchelf file python3 >/dev/null && $here/bundle_webkit.sh /out/webkit"
+}
+
 do_tar() {
   local stage=$work/tar/$tardir
   mkdir -p "$stage"; cp -a --reflink=auto "$layout/." "$stage/"
+  if [ "$arch" = aarch64 ]; then cp -a "$work/webkit/webkit" "$stage/webkit"; fi
   desktop_files "$stage/share"
   tar -C "$work/tar" --owner=0 --group=0 --sort=name -czf "$out/$base.tar.gz" "$tardir"
   echo "tar: $out/$base.tar.gz"
@@ -86,7 +100,7 @@ Architecture: $debarch
 Maintainer: Venture developers <https://github.com/Villagers654/Venture/issues>
 Installed-Size: $(du -sk "$stage" | cut -f1)
 Depends: libc6 (>= 2.35), libgcc-s1
-Recommends: libvulkan1, libwayland-client0, libwayland-egl1, libxkbcommon0, libpipewire-0.3-0 | libpulse0, libsecret-1-0, libfontconfig1
+Recommends: libvulkan1, libwayland-client0, libwayland-egl1, libxkbcommon0, libpipewire-0.3-0 | libpulse0, libsecret-1-0, libfontconfig1, libwebkitgtk-6.0-4 | libwebkit2gtk-4.1-0
 Section: games
 Priority: optional
 Homepage: https://venture-emu.org/
@@ -131,6 +145,7 @@ pkgbase = venture-bin
 	optdepends = vulkan-icd-loader: Vulkan loader (required to run games)
 	optdepends = libsecret: keep sign-ins in the desktop keyring
 	optdepends = fontconfig: system fonts in the launcher
+	optdepends = webkitgtk-6.0: the Meta sign-in window
 	provides = venture
 	conflicts = venture
 	options = !strip
@@ -147,12 +162,7 @@ do_appimage() {
   local appdir=$work/Venture.AppDir tool=${APPIMAGETOOL:-appimagetool}
   mkdir -p "$appdir/usr"
   cp -a --reflink=auto "$layout" "$appdir/usr/venture"
-  # The Meta sign-in window's own WebKit2GTK 4.1 for systems with none that can
-  # open (SteamOS, the Steam Frame): Ubuntu 22.04's, the glibc 2.35 baseline.
-  podman run --rm --security-opt label=disable --arch "$debarch" -v "$here:$here:ro" \
-    -v "$appdir/usr/venture:/appdir" "$webkit_image" sh -c \
-    "apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
-       libwebkit2gtk-4.1-0 glib-networking patchelf file python3 >/dev/null && $here/bundle_webkit.sh /appdir/webkit"
+  cp -a "$work/webkit/webkit" "$appdir/usr/venture/webkit"
   desktop_files "$appdir/usr/share"
   cp "$appdir/usr/share/applications/$id.desktop" "$appdir/$id.desktop"
   cp "$appdir/usr/share/icons/hicolor/scalable/apps/$id.svg" "$appdir/$id.svg"
@@ -219,10 +229,14 @@ do_flathub() {
 
 # The formats build side by side, each in its own stage under $work; aur and
 # flathub read the tarballs, so they come after.
-pids=() parallel=() later=()
+pids=() parallel=() later=() webkit=0
 for format in "${formats[@]}"; do
   case $format in aur|flathub) later+=("$format") ;; *) parallel+=("$format") ;; esac
+  case $format/$arch in appimage/*|tar/aarch64) webkit=1 ;; esac
 done
+if [ $webkit = 1 ]; then
+  make_webkit > "$work/webkit.log" 2>&1 || { cat "$work/webkit.log"; echo "webkit failed" >&2; exit 1; }
+fi
 for format in "${parallel[@]}"; do
   ( "do_$format" ) > "$work/$format.log" 2>&1 &
   pids+=($!)

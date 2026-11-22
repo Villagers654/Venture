@@ -80,7 +80,7 @@ modules:
     buildsystem: simple
     build-commands:
       - install -d /app/venture
-      - find . -mindepth 1 -maxdepth 1 ! -name share ! -name venture-flatpak.sh ! -name '*.desktop' -exec cp -a {} /app/venture/ \;
+      - find . -mindepth 1 -maxdepth 1 ! -name share ! -name webkit ! -name venture-flatpak.sh ! -name '*.desktop' -exec cp -a {} /app/venture/ \;
       - cp -a share /app/share
       - sed -i 's/^Exec=venture /Exec=venture-flatpak.sh /' /app/share/applications/org.venture_emu.Venture.desktop
       - install -Dm755 venture-flatpak.sh /app/bin/venture-flatpak.sh

@@ -20,6 +20,17 @@ void refresh();
 // and the processes Venture starts use it. Call before other threads start
 // (setenv). True when it set it.
 bool use_gamescope_wayland();
+// Keeps the host's own foveation layer out of the runtime process: SteamOS's
+// Vulkan FDM injection layer (the Steam Frame) adds a fragment density map to
+// render passes into the host's swapchain images. Venture renders games into
+// its own images and copies them to the host's (or presents them directly),
+// so the layer foveates only that copy, blurring what the game already drew
+// at full resolution without saving its GPU time; Venture's own foveation
+// works on the game's passes instead. Sets the layer's disable variable
+// (DISABLE_VULKAN_FDM_INJECTION_LAYER) unless the user set it, so the Vulkan
+// and OpenXR loaders leave it out. Call before other threads start and before
+// any loader (setenv). True when it set it.
+bool disable_host_foveation_layer();
 // The display use_gamescope_wayland() would set from these variables (the
 // socket must exist), or empty.
 std::string gamescope_wayland_display(const char* wayland, const char* gamescope, const char* runtime_dir);

@@ -4,7 +4,7 @@
 // one (Settings > Runtime). The launcher passes the effective choice to the
 // runtime as VENTURE_RESOLUTION, VENTURE_FRAME_RATE, VENTURE_MIRROR and
 // VENTURE_MIRROR_EYE (src/runtime/xr/display_override.h), VENTURE_EYE_SCALE
-// (src/runtime/xr/eye_scale.h), VENTURE_PC_AUDIO
+// (src/runtime/xr/eye_scale.h), VENTURE_ANISOTROPY (src/runtime/gfx/anisotropy.h), VENTURE_PC_AUDIO
 // (src/runtime/audio/output_mirror.h) and VENTURE_TEXTURE_COMPRESSION(_THRESHOLD)
 // (src/runtime/hle/vulkan/texture.cpp).
 #pragma once
@@ -86,6 +86,10 @@ struct DisplaySettings {
   // is told for less, so it renders at the resolution above; "off" tells every
   // game that resolution. "" follows the global setting.
   std::string match_resolution = "auto";
+  // Anisotropic filtering of the game's textures (runtime gfx/anisotropy.h):
+  // "auto" (16x on a discrete GPU, the game's own on an integrated one), "off"
+  // or a level "2", "4", "8" or "16"; "" follows the global setting.
+  std::string anisotropy = "auto";
   // A game's decoded textures stored as BC7: a texture_compression_modes id;
   // "" follows the global setting, which Settings::texture_compression keeps
   // (empty here in the global settings).
@@ -123,6 +127,10 @@ std::string mirror_fullscreen_environment(const DisplaySettings &d);
 std::string pc_audio_environment(const DisplaySettings &d);
 // VENTURE_EYE_SCALE for effective settings: "auto" or "off".
 std::string eye_scale_environment(const DisplaySettings &d);
+// VENTURE_ANISOTROPY for effective settings: "auto", "off", "2", "4", "8" or "16".
+std::string anisotropy_environment(const DisplaySettings &d);
+// True for the values above.
+bool valid_anisotropy(std::string_view value);
 // VENTURE_TEXTURE_COMPRESSION for a game, its own choice over the global one
 // (Settings::texture_compression and _threshold): "always", "auto" or "never",
 // and for "auto" its VENTURE_TEXTURE_COMPRESSION_THRESHOLD percent (0 otherwise).

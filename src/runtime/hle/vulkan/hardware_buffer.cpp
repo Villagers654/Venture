@@ -22,6 +22,7 @@
 #include "android/hardware_buffer.h"
 #include "common/log.h"
 #include "external.h"
+#include "gfx/anisotropy.h"
 #include "gfx/gpu_device.h"
 #include "gfx/vulkan_enumerate.h"
 #include "internal.h"
@@ -601,6 +602,8 @@ VkResult VKAPI_CALL create_sampler(VkDevice d, const VkSamplerCreateInfo* info, 
                                                             VK_STRUCTURE_TYPE_SAMPLER_YCBCR_CONVERSION_INFO);
       node && conversion_components(node->conversion))
     unlink(&copy, VK_STRUCTURE_TYPE_SAMPLER_YCBCR_CONVERSION_INFO);
+  // The device has samplerAnisotropy whenever the level is set (host_texture_features).
+  if (const auto physical = device_physical(d)) gfx::raise_anisotropy(copy, guest_anisotropy(physical));
   return device_fn<PFN_vkCreateSampler>(d, "vkCreateSampler")(d, &copy, alloc, out);
 }
 VkResult VKAPI_CALL create_conversion(VkDevice d, const VkSamplerYcbcrConversionCreateInfo* info,

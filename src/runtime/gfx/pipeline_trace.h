@@ -27,6 +27,9 @@ void prioritize_pipeline(VkPipeline pipeline);
 // worker has started on this thread.
 void await_pipelines(std::span<const VkPipeline> pipelines);
 PFN_vkVoidFunction pipeline_proc(std::string_view name);
+// The anisotropy ANGLE's samplers get (gfx/anisotropy.h), set when its device
+// is created with samplerAnisotropy; 0 keeps the game's own.
+void set_angle_anisotropy(float level);
 VkResult create_decode_pipeline(VkDevice, VkPipelineCache, std::uint32_t,
                                 const VkComputePipelineCreateInfo*, const VkAllocationCallbacks*, VkPipeline*);
 }

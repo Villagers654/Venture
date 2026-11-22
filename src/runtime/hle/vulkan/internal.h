@@ -458,6 +458,9 @@ void trim_texture_pool(VkDevice device, VkCommandPool pool);
 void texture_extensions(VkPhysicalDevice physical, std::vector<VkExtensionProperties>& extensions);
 void guest_texture_features(VkPhysicalDevice physical, VkPhysicalDeviceFeatures& features);
 VkResult host_texture_features(VkPhysicalDevice physical, VkPhysicalDeviceFeatures& requested);
+// The anisotropy Venture gives the game's samplers on this GPU, or 0 for the
+// game's own (gfx/anisotropy.h); host_texture_features enables samplerAnisotropy for it.
+float guest_anisotropy(VkPhysicalDevice physical);
 // VK_EXT_texture_compression_astc_hdr, reported like a Quest's Adreno and decoded
 // to FP16 where the host lacks it; host_astc_hdr clears the guest's request.
 bool guest_astc_hdr(VkPhysicalDevice physical);

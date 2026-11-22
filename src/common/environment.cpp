@@ -127,6 +127,17 @@ bool use_gamescope_wayland() {
   return true;
 #endif
 }
+bool disable_host_foveation_layer() {
+  constexpr const char* name = "DISABLE_VULKAN_FDM_INJECTION_LAYER";
+  if (std::getenv(name)) return false;
+#ifdef _WIN32
+  if (_putenv_s(name, "1") != 0) return false;
+#else
+  if (setenv(name, "1", 0) != 0) return false;
+#endif
+  refresh();
+  return true;
+}
 bool inside_gamescope() {
   const auto* gamescope = getenv("GAMESCOPE_WAYLAND_DISPLAY");
   const auto* wayland = getenv("WAYLAND_DISPLAY");

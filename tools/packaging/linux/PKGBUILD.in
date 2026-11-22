@@ -9,7 +9,8 @@ license=('GPL-3.0-or-later')
 depends=('glibc>=2.35' 'gcc-libs')
 optdepends=('vulkan-icd-loader: Vulkan loader (required to run games)'
             'libsecret: keep sign-ins in the desktop keyring'
-            'fontconfig: system fonts in the launcher')
+            'fontconfig: system fonts in the launcher'
+            'webkitgtk-6.0: the Meta sign-in window')
 provides=('venture')
 conflicts=('venture')
 options=('!strip' '!debug')

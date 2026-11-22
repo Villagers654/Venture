@@ -112,6 +112,7 @@ private:
   // Display settings rows, for Settings (global) or a game's Settings tab;
   // a change is saved at once.
   void draw_display_rows(library::DisplaySettings& display, bool per_game, const char* id);
+  bool display_restart_note_ = false;  // a Display setting changed while a game runs
   // A game's texture compression rows (its Settings tab, beside Settings > Runtime's).
   void draw_game_runtime_rows(const std::string& id);
   void draw_game_advanced(const std::string& id, float width);

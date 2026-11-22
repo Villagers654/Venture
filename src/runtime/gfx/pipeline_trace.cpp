@@ -1,4 +1,5 @@
 #include "gfx/pipeline_trace.h"
+#include "gfx/anisotropy.h"
 #include "core/thread_lifetime.h"
 #include "gfx/spirv_precision.h"
 #include "common/environment.h"
@@ -952,9 +953,23 @@ VkResult VKAPI_CALL marker_tag(VkDevice handle, const VkDebugMarkerObjectTagInfo
   copy.object = reinterpret_cast<std::uint64_t>(resolve(reinterpret_cast<VkPipeline>(info->object), "name"));
   return copy.object ? d->marker_tag(handle, &copy) : VK_SUCCESS;
 }
-// The loader ANGLE resolves through: pipeline creation plus its shader modules.
-PFN_vkVoidFunction angle_proc(std::string_view name) {
+// ANGLE's samplers for GLES games, with the anisotropy Venture gives them.
+std::atomic<float> angle_anisotropy{0};
+std::atomic<PFN_vkCreateSampler> angle_create_sampler_next{nullptr};
+VkResult VKAPI_CALL angle_create_sampler(VkDevice d, const VkSamplerCreateInfo* info,
+                                         const VkAllocationCallbacks* alloc, VkSampler* out) {
+  auto copy = *info;
+  raise_anisotropy(copy, angle_anisotropy.load(std::memory_order_relaxed));
+  return angle_create_sampler_next.load(std::memory_order_relaxed)(d, &copy, alloc, out);
+}
+// The loader ANGLE resolves through: pipeline creation plus its shader modules
+// and samplers. `fn` is the function the wrapped loader resolved.
+PFN_vkVoidFunction angle_proc(std::string_view name, PFN_vkVoidFunction fn) {
   if (name == "vkCreateShaderModule") return reinterpret_cast<PFN_vkVoidFunction>(create_module);
+  if (name == "vkCreateSampler") {
+    angle_create_sampler_next = reinterpret_cast<PFN_vkCreateSampler>(fn);
+    return reinterpret_cast<PFN_vkVoidFunction>(angle_create_sampler);
+  }
   return pipeline_proc(name);
 }
 std::atomic<PFN_vkGetDeviceProcAddr> device_loader{nullptr};
@@ -964,7 +979,7 @@ PFN_vkVoidFunction VKAPI_CALL device_gdpa(VkDevice d, const char* name) {
   // display initialization can wrap another loader while old devices live.
   if (auto entry = device(d)) get = entry->loader;
   auto fn = get ? get(d, name) : nullptr;
-  if (fn) if (auto traced = angle_proc(name)) return traced;
+  if (fn) if (auto traced = angle_proc(name, fn)) return traced;
   return fn;
 }
 PFN_vkVoidFunction VKAPI_CALL gipa(VkInstance i, const char* name) {
@@ -975,10 +990,11 @@ PFN_vkVoidFunction VKAPI_CALL gipa(VkInstance i, const char* name) {
     device_loader = reinterpret_cast<PFN_vkGetDeviceProcAddr>(fn);
     return reinterpret_cast<PFN_vkVoidFunction>(device_gdpa);
   }
-  if (auto traced = angle_proc(name)) return traced;
+  if (auto traced = angle_proc(name, fn)) return traced;
   return fn;
 }
 }
+void set_angle_anisotropy(float level) { angle_anisotropy = level; }
 bool pipeline_pending(VkPipeline pipeline) noexcept {
   if (!is_proxy(pipeline)) return false;
   const auto s = proxy(pipeline).state.load(std::memory_order_acquire);

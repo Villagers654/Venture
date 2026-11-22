@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <cmath>
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
@@ -12,6 +13,7 @@
 #include <random>
 #include <set>
 #include <thread>
+#include <vector>
 #include <zlib.h>
 
 #include "android/native_window.h"
@@ -21,6 +23,8 @@
 #include "core/process.h"
 #include "core/pipeline_stats.h"
 #include "gfx/angle.h"
+#include "gfx/anisotropy.h"
+#include "gfx/foveation.h"
 #include "gfx/blob_cache.h"
 #include "gfx/dispatch.h"
 #include "gfx/gpu_device.h"
@@ -2039,3 +2043,122 @@ TEST_CASE("gfx guest no-error contexts follow KHR_no_error over validated ANGLE"
 
 TEST_SUITE_END();
 
+
+TEST_CASE("Anisotropic filtering: automatic on discrete GPUs, and only mipmapped linear samplers are raised") {
+  using namespace venture::gfx;
+  VkPhysicalDeviceProperties discrete{}, integrated{};
+  discrete.deviceType = VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU;
+  discrete.limits.maxSamplerAnisotropy = 16;
+  integrated.deviceType = VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU;
+  integrated.limits.maxSamplerAnisotropy = 16;
+  VkPhysicalDeviceFeatures features{}, none{};
+  features.samplerAnisotropy = VK_TRUE;
+  CHECK(parse_anisotropy("") == kAutomaticAnisotropy);
+  CHECK(parse_anisotropy("on") == kAutomaticAnisotropy);
+  CHECK(parse_anisotropy("off") == 0);
+  CHECK(parse_anisotropy("4") == 4);
+  CHECK(parse_anisotropy("16") == 16);
+  CHECK(parse_anisotropy("32") == kAutomaticAnisotropy);
+  CHECK(anisotropy_level(kAutomaticAnisotropy, discrete, features) == 16);
+  CHECK(anisotropy_level(kAutomaticAnisotropy, integrated, features) == 0);
+  CHECK(anisotropy_level(16, integrated, features) == 16);
+  CHECK(anisotropy_level(2, integrated, features) == 2);
+  CHECK(anisotropy_level(0, discrete, features) == 0);
+  CHECK(anisotropy_level(16, discrete, none) == 0);
+  discrete.limits.maxSamplerAnisotropy = 8;
+  CHECK(anisotropy_level(kAutomaticAnisotropy, discrete, features) == 8);
+  CHECK(anisotropy_level(16, discrete, features) == 8);
+
+  VkSamplerCreateInfo base{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
+  base.magFilter = base.minFilter = VK_FILTER_LINEAR;
+  base.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+  base.maxLod = VK_LOD_CLAMP_NONE;
+  auto info = base;
+  CHECK(raise_anisotropy(info, 16));
+  CHECK(info.anisotropyEnable == VK_TRUE);
+  CHECK(info.maxAnisotropy == 16);
+  info = base;
+  info.anisotropyEnable = VK_TRUE;
+  info.maxAnisotropy = 2;
+  CHECK(raise_anisotropy(info, 16));
+  CHECK(info.maxAnisotropy == 16);
+  info.maxAnisotropy = 16;
+  CHECK_FALSE(raise_anisotropy(info, 8));  // the game asked for more
+  CHECK(info.maxAnisotropy == 16);
+  info = base;
+  CHECK_FALSE(raise_anisotropy(info, 0));
+  info.minFilter = VK_FILTER_NEAREST;
+  CHECK_FALSE(raise_anisotropy(info, 16));
+  info = base;
+  info.maxLod = 0.25f;  // ANGLE's unmipmapped GL texture
+  CHECK_FALSE(raise_anisotropy(info, 16));
+  info = base;
+  info.unnormalizedCoordinates = VK_TRUE;
+  CHECK_FALSE(raise_anisotropy(info, 16));
+  VkSamplerReductionModeCreateInfo reduction{VK_STRUCTURE_TYPE_SAMPLER_REDUCTION_MODE_CREATE_INFO};
+  reduction.reductionMode = VK_SAMPLER_REDUCTION_MODE_MAX;
+  info = base;
+  info.pNext = &reduction;
+  CHECK_FALSE(raise_anisotropy(info, 16));
+  reduction.reductionMode = VK_SAMPLER_REDUCTION_MODE_WEIGHTED_AVERAGE;
+  CHECK(raise_anisotropy(info, 16));
+}
+TEST_CASE("Foveation: full rate in the middle, half then quarter towards the edges, by level") {
+  using namespace venture::gfx::foveation;
+  CHECK(parse_mode("") == Mode::automatic);
+  CHECK(parse_mode("fixed") == Mode::fixed);
+  CHECK(parse_mode("off") == Mode::off);
+  CHECK(effective_level(Level::none) == Level::medium);
+  CHECK(effective_level(Level::high) == Level::high);
+  const float d = 3.14159265f / 180;
+  const Fov fov{-52 * d, 42 * d, 43 * d, -50 * d};  // about a Quest 3 left eye
+  const Centre ahead{};
+  Pattern pattern{Level::medium, false, 0};
+  // Straight ahead is full rate, the far corner quarter rate.
+  const float cu = std::tan(52 * d) / (std::tan(52 * d) + std::tan(42 * d));
+  const float cv = std::tan(43 * d) / (std::tan(43 * d) + std::tan(50 * d));
+  CHECK(rate_at(pattern, fov, ahead, cu, cv) == Rate::full);
+  CHECK(rate_at(pattern, fov, ahead, 0, 1) == Rate::quarter);
+  // Half rate along the radial direction.
+  bool half_x = false, half_y = false;
+  for (float u = 0; u <= 1; u += 0.01f) half_x |= rate_at(pattern, fov, ahead, u, cv) == Rate::half_x;
+  for (float v = 0; v <= 1; v += 0.01f) half_y |= rate_at(pattern, fov, ahead, cu, v) == Rate::half_y;
+  CHECK(half_x);
+  CHECK(half_y);
+  CHECK(rate_at(Pattern{Level::none}, fov, ahead, 0, 1) == Rate::full);
+  // Higher levels shade fewer fragments; eye-tracked fewer than fixed.
+  auto fraction = [&](Level level, bool eye, Centre centre = {}) {
+    std::vector<std::uint8_t> rates(200 * 200);
+    fill_shading_rates(rates, 200, 200, 16, 16, 3200, 3200, Pattern{level, eye, 0}, fov, centre);
+    return shaded_fraction(rates);
+  };
+  const float low = fraction(Level::low, false), medium = fraction(Level::medium, false),
+              high = fraction(Level::high, false);
+  CHECK(low == doctest::Approx(0.85).epsilon(0.05));
+  CHECK(medium == doctest::Approx(0.67).epsilon(0.05));
+  CHECK(high == doctest::Approx(0.54).epsilon(0.05));
+  CHECK(fraction(Level::medium, true) < medium);
+  CHECK(fraction(Level::none, false) == 1);
+  // Eye-tracked: the full-rate region follows the gaze.
+  const Centre right{std::tan(30 * d), 0, -1};
+  pattern = {Level::medium, true, 0};
+  const float gaze_u = (std::tan(30 * d) + std::tan(52 * d)) / (std::tan(52 * d) + std::tan(42 * d));
+  CHECK(rate_at(pattern, fov, right, gaze_u, cv) == Rate::full);
+  CHECK(rate_at(pattern, fov, ahead, gaze_u, cv) != Rate::full);
+  // A vertical offset moves the fixed pattern up.
+  CHECK(rate_at(Pattern{Level::high, false, 0}, fov, ahead, cu, 0.02f) != Rate::full);
+  CHECK(rate_at(Pattern{Level::high, false, 30}, fov, ahead, cu, 0.02f) == Rate::full);
+  // Encodings: KHR (log2 w << 2 | log2 h) and density map R8G8.
+  CHECK(shading_rate_value(Rate::full) == 0);
+  CHECK(shading_rate_value(Rate::half_x) == 4);
+  CHECK(shading_rate_value(Rate::half_y) == 1);
+  CHECK(shading_rate_value(Rate::quarter) == 5);
+  std::uint8_t x = 0, y = 0;
+  density_value(Rate::quarter, x, y);
+  CHECK((x == 128 && y == 128));
+  density_value(Rate::half_y, x, y);
+  CHECK((x == 255 && y == 128));
+  std::vector<std::uint8_t> densities(8 * 8 * 2);
+  fill_densities(densities, 8, 8, Pattern{Level::high, false, 0}, fov, ahead);
+  CHECK(densities[0] == 128);  // top-left corner: quarter rate
+}

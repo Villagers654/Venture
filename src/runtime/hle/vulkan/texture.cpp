@@ -24,6 +24,7 @@
 #include "full_rate_image.h"
 #include "common/log.h"
 #include "core/alloc_failure.h"
+#include "gfx/anisotropy.h"
 #include "gfx/gpu_device.h"
 #include "gfx/pipeline_trace.h"
 #include "gfx/queue_sync.h"
@@ -3797,7 +3798,19 @@ VkResult host_texture_features(VkPhysicalDevice physical, VkPhysicalDeviceFeatur
   });
   // BC7 storage for decoded textures under GPU memory pressure (create_image).
   requested.textureCompressionBC |= native.textureCompressionBC;
+  if (guest_anisotropy(physical) > 0) requested.samplerAnisotropy = VK_TRUE;
   return VK_SUCCESS;
+}
+float guest_anisotropy(VkPhysicalDevice physical) {
+  static std::mutex lock;
+  static std::map<VkPhysicalDevice, float> levels;
+  std::lock_guard guard(lock);
+  if (auto it = levels.find(physical); it != levels.end()) return it->second;
+  VkPhysicalDeviceProperties properties{};
+  VkPhysicalDeviceFeatures features{};
+  phys<PFN_vkGetPhysicalDeviceProperties>(physical, "vkGetPhysicalDeviceProperties")(physical, &properties);
+  phys<PFN_vkGetPhysicalDeviceFeatures>(physical, "vkGetPhysicalDeviceFeatures")(physical, &features);
+  return levels[physical] = gfx::anisotropy_level(properties, features);
 }
 // Returns a retired command buffer's scratch to its pool; the rest is destroyed
 // after the lock is released (`done` outlives `lock`).

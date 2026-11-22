@@ -1,6 +1,7 @@
 #include "common/injected_modules.h"
 #include "common/log.h"
 #include "gfx/angle.h"
+#include "gfx/anisotropy.h"
 #include "gfx/angle_callbacks.h"
 #include "gfx/pipeline_trace.h"
 #include "gfx/gpu_device_internal.h"
@@ -635,6 +636,17 @@ VkResult create_device(VkPhysicalDevice physical,
   if (result == VK_SUCCESS) {
     gpu.device = *out;
     mirror_queue.created(*out);
+    // ANGLE enables samplerAnisotropy where the GPU has it (for
+    // GL_EXT_texture_filter_anisotropic); its samplers may then be raised.
+    bool anisotropy = ci.pEnabledFeatures && ci.pEnabledFeatures->samplerAnisotropy;
+    for (auto* next = static_cast<const VkBaseInStructure*>(ci.pNext); next; next = next->pNext)
+      if (next->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2)
+        anisotropy |= reinterpret_cast<const VkPhysicalDeviceFeatures2*>(next)->features.samplerAnisotropy == VK_TRUE;
+    VkPhysicalDeviceProperties properties{};
+    VkPhysicalDeviceFeatures features{};
+    vk<PFN_vkGetPhysicalDeviceProperties>(gpu.instance, "vkGetPhysicalDeviceProperties")(physical, &properties);
+    features.samplerAnisotropy = anisotropy;
+    set_angle_anisotropy(anisotropy_level(properties, features));
   }
   return result;
 }

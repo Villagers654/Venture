@@ -152,15 +152,15 @@ bool compositor_offers(const char *interface) {
 // clipboard and drag and drop); GTK 3 runs without one. gamescope offers it
 // from 3.16.26 only, so on an older one WebKit2GTK 4.1 is the only window
 // that can open.
-// The AppImage's own WebKit2GTK 4.1 (tools/packaging/linux/bundle_webkit.sh),
-// beside the launcher; empty elsewhere.
+// The AppImage's and arm64 tarball's own WebKit2GTK 4.1
+// (tools/packaging/linux/bundle_webkit.sh), beside the launcher; empty elsewhere.
 fs::path bundled_webkit() {
   std::error_code ec;
   const auto dir = paths::executable().parent_path() / "webkit";
   return fs::is_regular_file(dir / "lib/libwebkit2gtk-4.1.so.0", ec) ? dir : fs::path();
 }
 // The system's WebKitGTK first (its updates come with the system), then the
-// AppImage's own where the system has none that can open here.
+// package's own where the system has none that can open here.
 bool load(Web &w, bool gtk4) {
   void *lib = gtk4 ? dlopen("libwebkitgtk-6.0.so.4", RTLD_NOW | RTLD_LOCAL) : nullptr;
   w.api = 6;
