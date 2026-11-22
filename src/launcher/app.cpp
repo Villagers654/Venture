@@ -188,7 +188,7 @@ App::App(Options options) : Core(std::move(options)) {
     texture_warning_ = [] {};
   }
   // Display override examples for screenshots: display (defaults), display-menu,
-  // display-rates, display-mirror, display-mirror-eye and display-pc-audio (open lists),
+  // display-rates, display-mirror, display-mirror-eye, display-pc-audio and display-overlay (open lists),
   // display-scale and display-custom (their extra rows); game-settings-override
   // shows a game's own choices, game-settings-override-end down to its Runtime card.
   if (options_.smoke_view.starts_with("display")) page_ = 2;
@@ -203,7 +203,7 @@ App::App(Options options) : Core(std::move(options)) {
   }
   if (options_.smoke_view.starts_with("game-settings-override") && !options_.smoke_select.empty())
     settings_.game_display[options_.smoke_select] = {.resolution = "quest3", .rate = "144", .mirror = "full", .mirror_eye = "right",
-                                                     .pc_audio = "on", .texture_compression = "auto", .texture_compression_threshold = 75};
+                                                     .pc_audio = "on", .overlay = "on", .texture_compression = "auto", .texture_compression_threshold = 75};
   // game-settings-advanced opens a game's Advanced card; -changed has one switch turned off.
   if (options_.smoke_view == "game-settings-advanced-changed" && !options_.smoke_select.empty())
     settings_.game_display.try_emplace(options_.smoke_select, library::game_display_defaults())

@@ -29,6 +29,7 @@ DisplaySettings game_display_defaults() {
   d.match_resolution.clear();
   d.anisotropy.clear();
   d.foveation.clear();
+  d.overlay.clear();
   return d;
 }
 
@@ -52,6 +53,7 @@ DisplaySettings display_from_json(const Json &j, bool per_game) {
   if (const auto m = str(j, "matchResolution"); m == "auto" || m == "off") d.match_resolution = m;
   if (const auto a = str(j, "anisotropy"); valid_anisotropy(a)) d.anisotropy = a;
   if (const auto f = str(j, "foveation"); f == "dynamic" || f == "fixed" || f == "off") d.foveation = f;
+  if (const auto o = str(j, "overlay"); o == "on" || o == "off") d.overlay = o;
   // A game's texture compression; the global one is a top-level setting.
   if (const auto mode = str(j, "textureCompression");
       per_game && std::ranges::find(texture_compression_modes, mode) != std::end(texture_compression_modes))
@@ -81,7 +83,8 @@ DisplaySettings display_from_json(const Json &j, bool per_game) {
 Json display_to_json(const DisplaySettings &d) {
   Json j{{"resolution", d.resolution}, {"percent", d.percent}, {"frameRate", d.rate}, {"customFrameRate", d.custom_rate},
          {"mirror", d.mirror}, {"mirrorEye", d.mirror_eye}, {"mirrorFullscreen", d.mirror_fullscreen}, {"pcAudio", d.pc_audio},
-         {"matchResolution", d.match_resolution}, {"anisotropy", d.anisotropy}, {"foveation", d.foveation}, {"mirrorChosen", true}};
+         {"matchResolution", d.match_resolution}, {"anisotropy", d.anisotropy}, {"foveation", d.foveation},
+         {"overlay", d.overlay}, {"mirrorChosen", true}};
   // Only a game's own choice; the global settings keep none here.
   if (!d.texture_compression.empty()) j["textureCompression"] = d.texture_compression;
   if (d.texture_compression_threshold) j["textureCompressionThreshold"] = d.texture_compression_threshold;
@@ -118,6 +121,7 @@ DisplaySettings effective_display(const DisplaySettings &global, const DisplaySe
   if (!game->match_resolution.empty()) d.match_resolution = game->match_resolution;
   if (!game->anisotropy.empty()) d.anisotropy = game->anisotropy;
   if (!game->foveation.empty()) d.foveation = game->foveation;
+  if (!game->overlay.empty()) d.overlay = game->overlay;
   return d;
 }
 
@@ -162,6 +166,8 @@ std::string foveation_environment(const DisplaySettings &d) {
 bool valid_anisotropy(std::string_view value) {
   return value == "auto" || value == "off" || value == "2" || value == "4" || value == "8" || value == "16";
 }
+
+std::string overlay_environment(const DisplaySettings &d) { return d.overlay == "on" ? "on" : "off"; }
 
 std::pair<std::string, int> texture_compression_environment(int global_mode, int global_threshold,
                                                             const DisplaySettings *game) {

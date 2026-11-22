@@ -979,7 +979,7 @@ add_executable(venture_xr_tests test_main.cpp  runtime/xr_test.cpp runtime/xr_vr
      mock_openxr_runtime/input_timeline.cpp runtime/xr_android_surface_test.cpp
      runtime/xr_color_space_test.cpp runtime/xr_call_trace_test.cpp runtime/xr_passthrough_test.cpp
      runtime/xr_vulkan_layers_test.cpp runtime/xr_api_layers_test.cpp runtime/xr_keyboard_test.cpp
-     runtime/xr_zero_copy_test.cpp runtime/xr_panel_window_test.cpp)
+     runtime/xr_zero_copy_test.cpp runtime/xr_panel_window_test.cpp runtime/xr_stats_overlay_test.cpp)
   target_link_libraries(venture_xr_tests PRIVATE venture_java_framework)
   target_compile_definitions(venture_xr_tests PRIVATE
     VENTURE_TEST_JAVA_HOME="${VENTURE_JAVA_HOME}" VENTURE_TEST_FRAMEWORK_JAR="${VENTURE_FRAMEWORK_JAR}")

@@ -373,6 +373,7 @@ void settings_section(std::string &out, const fs::path &data, const std::string 
         lines += std::format("  match game resolution: {}\n", game->match_resolution);
       if (!game->anisotropy.empty()) lines += std::format("  anisotropic filtering: {}\n", game->anisotropy);
       if (!game->foveation.empty()) lines += std::format("  foveated rendering: {}\n", game->foveation);
+      if (!game->overlay.empty()) lines += std::format("  performance overlay: {}\n", game->overlay);
       if (!game->texture_compression.empty())
         lines += std::format("  texture compression: {}\n", game->texture_compression);
       if (game->texture_compression_threshold)
@@ -415,6 +416,8 @@ void settings_section(std::string &out, const fs::path &data, const std::string 
                      source(game && !game->anisotropy.empty(), s.display.anisotropy == global.anisotropy));
   out += std::format("  foveated rendering: {} ({})\n", library::foveation_environment(display),
                      source(game && !game->foveation.empty(), s.display.foveation == global.foveation));
+  out += std::format("  performance overlay: {} ({})\n", library::overlay_environment(display),
+                     source(game && !game->overlay.empty(), s.display.overlay == global.overlay));
   {
     // As the runtime reads them (texture.cpp): unset is always, a threshold
     // outside 1-100 is 50%.

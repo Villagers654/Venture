@@ -2,6 +2,7 @@
 #include "xr/menu_chord.h"
 #include "xr/grip_toggle.h"
 #include "xr/system_keyboard.h"
+#include "xr/stats_overlay.h"
 #include "common/first_frame_progress.h"
 #include "common/injected_modules.h"
 #include "common/startup_progress.h"
@@ -356,6 +357,7 @@ XrResult Session::destroy(SessionOwner requested) {
   reset_menu_session(handle);
   reset_grip_session(handle);
   keyboard::reset_session(handle);
+  stats_overlay::reset_session(handle);
   if (host_waiter) {
     {
       std::lock_guard waiter_lock(host_waiter->mutex);
@@ -981,6 +983,15 @@ XrResult Session::end(const XrFrameEndInfo *info, std::shared_ptr<const void> ow
     if (keyboard_frame) {
       info = &keyboard_frame->info;
       if (owned) owned = keyboard_frame;
+    }
+  }
+  // The performance overlay goes on top of both when it is on (off: one load).
+  std::shared_ptr<const stats_overlay::Frame> overlay_frame;
+  if (info && stats_overlay::enabled()) [[unlikely]] {
+    overlay_frame = stats_overlay::extend(handle, *info, owned ? owned : std::shared_ptr<const void>(keyboard_frame));
+    if (overlay_frame) {
+      info = &overlay_frame->info;
+      if (owned) owned = overlay_frame;
     }
   }
   // An asynchronous submission returns success now; a failed host End is the

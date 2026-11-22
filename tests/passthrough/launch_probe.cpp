@@ -14,6 +14,7 @@ int main(int argc, char** argv) {
     venture::paths::atomic_write(venture::paths::from_utf8(argv[i + 1]) / "launch-options.json",
         venture::Json{{"passthrough", value("VENTURE_PASSTHROUGH")},
                       {"pcAudio", value("VENTURE_PC_AUDIO")},
+                      {"overlay", value("VENTURE_STATS_OVERLAY")},
                       {"textureCompression", value("VENTURE_TEXTURE_COMPRESSION")},
                       {"textureCompressionThreshold", value("VENTURE_TEXTURE_COMPRESSION_THRESHOLD")}}.dump());
     return 0;

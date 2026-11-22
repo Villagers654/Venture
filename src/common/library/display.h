@@ -1,12 +1,14 @@
-// Display settings: resolution and frame rate overrides, the desktop mirror and
-// the game's audio on the PC, for every game (Settings > Display) and per game
-// (a game's Settings tab), and a game's own texture compression over the global
-// one (Settings > Runtime). The launcher passes the effective choice to the
-// runtime as VENTURE_RESOLUTION, VENTURE_FRAME_RATE, VENTURE_MIRROR and
-// VENTURE_MIRROR_EYE (src/runtime/xr/display_override.h), VENTURE_EYE_SCALE
-// (src/runtime/xr/eye_scale.h), VENTURE_ANISOTROPY (src/runtime/gfx/anisotropy.h), VENTURE_FOVEATION
-// (src/runtime/gfx/foveation.h), VENTURE_PC_AUDIO
-// (src/runtime/audio/output_mirror.h) and VENTURE_TEXTURE_COMPRESSION(_THRESHOLD)
+// Display settings: resolution and frame rate overrides, the desktop mirror,
+// the game's audio on the PC, foveated rendering and the performance overlay,
+// for every game (Settings > Display) and per game (a game's Settings tab), and
+// a game's own texture compression over the global one (Settings > Runtime).
+// The launcher passes the effective choice to the runtime as
+// VENTURE_RESOLUTION, VENTURE_FRAME_RATE, VENTURE_MIRROR and VENTURE_MIRROR_EYE
+// (src/runtime/xr/display_override.h), VENTURE_EYE_SCALE
+// (src/runtime/xr/eye_scale.h), VENTURE_ANISOTROPY (src/runtime/gfx/anisotropy.h),
+// VENTURE_FOVEATION (src/runtime/gfx/foveation.h), VENTURE_PC_AUDIO
+// (src/runtime/audio/output_mirror.h), VENTURE_STATS_OVERLAY
+// (src/runtime/xr/stats_overlay.h) and VENTURE_TEXTURE_COMPRESSION(_THRESHOLD)
 // (src/runtime/hle/vulkan/texture.cpp).
 #pragma once
 #include "common/json.h"
@@ -95,6 +97,9 @@ struct DisplaySettings {
   // headset with eye tracking, else off), "fixed" or "off"; "" follows the
   // global setting.
   std::string foveation = "dynamic";
+  // The in-headset performance overlay (frame rates and times, the game's CPU,
+  // GPU and memory use): "on" or "off"; "" follows the global setting.
+  std::string overlay = "off";
   // A game's decoded textures stored as BC7: a texture_compression_modes id;
   // "" follows the global setting, which Settings::texture_compression keeps
   // (empty here in the global settings).
@@ -138,6 +143,8 @@ std::string anisotropy_environment(const DisplaySettings &d);
 bool valid_anisotropy(std::string_view value);
 // VENTURE_FOVEATION for effective settings: "dynamic", "fixed" or "off".
 std::string foveation_environment(const DisplaySettings &d);
+// VENTURE_STATS_OVERLAY for effective settings: "on" or "off".
+std::string overlay_environment(const DisplaySettings &d);
 // VENTURE_TEXTURE_COMPRESSION for a game, its own choice over the global one
 // (Settings::texture_compression and _threshold): "always", "auto" or "never",
 // and for "auto" its VENTURE_TEXTURE_COMPRESSION_THRESHOLD percent (0 otherwise).

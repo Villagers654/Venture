@@ -1025,6 +1025,8 @@ std::vector<std::pair<std::string, std::string>> launch_environment(const Settin
   environment.push_back({"VENTURE_FOVEATION", foveation_environment(display)});
   // A game's advanced switches, only those it changed.
   for (auto &variable : advanced_environment(display)) environment.push_back(std::move(variable));
+  // The in-headset performance overlay; off by default.
+  environment.push_back({"VENTURE_STATS_OVERLAY", overlay_environment(display)});
   return environment;
 }
 } // namespace venture::library

@@ -56,7 +56,8 @@ foreach(target IN ITEMS venture_passthrough_tests venture_passthrough_lifecycle_
   elseif(NOT WIN32 AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     # Runtime services reached only from fixture-unreached branches of kept
     # functions (the controller layer's pad and pose tuning, the system keyboard
-    # in Session::end) stay unresolved, as in the PE link above.
+    # and the performance overlay in Session::end) stay unresolved, as in the
+    # PE link above.
     target_link_options(${target} PRIVATE -Wl,--unresolved-symbols=ignore-in-object-files)
   endif()
 endforeach()

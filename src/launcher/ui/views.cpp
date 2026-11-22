@@ -3004,6 +3004,31 @@ void App::draw_display_rows(library::DisplaySettings& d, bool per_game, const ch
       changed = true;
     }
   });
+  divider();
+  // The in-headset performance overlay (src/runtime/xr/stats_overlay.h), off by
+  // default. --smoke-view display-overlay opens its list once.
+  static bool smoke_overlay = options_.smoke_view == "display-overlay";
+  // i18n: Settings row: show the frame rate, frame times and the game's CPU, GPU and memory use in the headset while playing.
+  setting_row(tr("Performance overlay"), "", dw, s(38), [&] {
+    if (std::exchange(smoke_overlay, false)) {
+      ImGui::PushID("overlay");
+      ImGui::OpenPopup("##menu");
+      ImGui::PopID();
+    }
+    std::vector<std::string> ids{"off", "on"};
+    // i18n: Choices for "Performance overlay".
+    std::vector<std::string> names{tr("Off"), tr("On")};
+    if (per_game) {
+      ids.insert(ids.begin(), "");
+      names.insert(names.begin(), tr("Use global setting"));
+    }
+    const auto items = pointers(names);
+    int choice = index(ids, d.overlay);
+    if (dropdown("overlay", "", items.data(), int(items.size()), &choice, dw)) {
+      d.overlay = ids[choice];
+      changed = true;
+    }
+  });
   // A game that is running keeps the settings it started with; after a change
   // the card says so until no game runs. --smoke-view display-restart shows it.
   bool playing = options_.smoke_view == "display-restart";
