@@ -69,3 +69,26 @@ TEST_CASE("core CPU executes page-aligned guest heap memory after mprotect") {
   CHECK(space.protect(heap_end - 4096, 8192, kProtRead) == -err::kENOMEM);
   CHECK(space.protect(heap_begin - 4096, 8192, kProtRead) == -err::kENOMEM);
 }
+// A Quest's 39-bit address space puts every pointer below 512 GiB, and code
+// may treat a higher one as garbage (Custom Types' GC descriptor check under
+// modded Beat Saber): the A64 guest heap and the mmap arena both lie there.
+TEST_CASE("A64 guest memory lies below 512 GiB as on a Quest") {
+  AddressSpace::get().initialize(GuestIsa::a64);
+  constexpr GuestAddr quest_top = 1ull << 39;
+  const auto [heap_begin, heap_end] = guest_heap::arena64();
+  REQUIRE(heap_begin);
+  CHECK(heap_end <= quest_top);
+  const auto [arena_begin, arena_end] = AddressSpace::get().arena64();
+  REQUIRE(arena_begin);
+  CHECK(arena_end <= quest_top);
+  CHECK((heap_end <= arena_begin || arena_end <= heap_begin));
+  // Libraries keep their addresses from run to run though the arena's varies.
+  const auto slot = AddressSpace::get().library_slot("libil2cpp.so", 64ull << 20, 4096);
+  CHECK(slot >= 0x6000000000ull);
+  CHECK(slot + (4ull << 30) <= 0x7000000000ull);
+  CHECK(slot == AddressSpace::get().library_slot("libil2cpp.so", 1ull << 20, 4096));
+  const auto mapped = AddressSpace::get().allocate(1ull << 20, kProtRead | kProtWrite, "[anon:test]");
+  REQUIRE(mapped);
+  CHECK(mapped + (1ull << 20) <= quest_top);
+  AddressSpace::get().free(mapped);
+}

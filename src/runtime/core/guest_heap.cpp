@@ -87,10 +87,10 @@ void select64() {
     // as every pointer does in a Quest's 39-bit address space: code may treat a
     // higher one as garbage (Custom Types 0.17's GC descriptor check aborts
     // modded Beat Saber 1.37 when il2cpp's class tables are above 0xe000000000).
-    // Later candidates stay below that; the last is the old 15 TiB address.
+    // Later candidates stay below that and below the A64 mmap arena
+    // (address_space.cpp, from 192 GiB); the last is the old 15 TiB address.
     std::uint64_t p = 0;
-    for (const std::uint64_t candidate : {0x2000000000ull, 0x3000000000ull, 0x5000000000ull, 0x6800000000ull,
-                                          0xf0000000000ull}) {
+    for (const std::uint64_t candidate : {0x2000000000ull, 0x1000000000ull, 0xf0000000000ull}) {
       p = platform::reserve(candidate, size + window, true);
       if (p) break;
       log::info("memory", "A64 guest heap candidate {:#x} unavailable", candidate);

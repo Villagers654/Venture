@@ -41,6 +41,7 @@ struct State {
   std::size_t logged_regions = 512;  // the next region count worth a log line
   std::atomic<std::uint64_t> stack_limit{kDefaultStackLimit};
   std::uint64_t arena_size = 0;  // the A64 arena's, once reserved
+  bool low_arena = false;  // the arena is the free range below 512 GiB (reserve_arena)
 };
 State& state() { static auto* s = new State; return *s; }
 // Republishes the lock-free snapshot after a change confined to [lo, hi).
@@ -145,6 +146,9 @@ bool reserve_range(State& s, GuestAddr p, std::uint64_t n) {
   }
   return true;
 }
+// The A64 arena below 512 GiB (reserve_arena), and its library slots.
+constexpr GuestAddr kLowArenaBegin = 0x3000000000ull, kLowArenaEnd = 0x8000000000ull, kLowSlots = 0x6000000000ull;
+constexpr std::uint64_t kLowArenaMinimum = 128ull << 30;
 // The arena's address is fixed, so libraries (library_slot) and translated
 // code persisted against their addresses match in the next run.
 void reserve_arena(State& s) {
@@ -152,20 +156,40 @@ void reserve_arena(State& s) {
   // The engine decides how guest code executes (host-executable pages, the
   // stub entry) before the first A64 guest mapping or stub.
   process_engine();
-  // 16 TiB: above where Windows places heaps and mapped views at random (about
-  // 1-3 TiB) and below top-down allocations and images; Linux places nothing
-  // there either. Later fixed candidates keep the address stable if it is taken.
-  // A 39-bit-VA arm64 kernel (512 GiB) has no room there: its smaller arenas
-  // lie below the PIE image, clear of the A64 guest heap arena (guest_heap.cpp).
-  // x64 keeps the 1 TiB arena, whose size sets library_slot's slot count.
-  // Adapted from the Joseph-DiGiovanni/Venture fork (ddcef01e4).
+  // Below 512 GiB first, where a Quest's 39-bit address space puts every
+  // pointer: code may treat a higher one as garbage. Custom Types 0.18's GC
+  // descriptor check takes il2cpp classes whose type hierarchy lies above
+  // 0xe000000000 for corruption and dumps every class it meets, 5 ms per
+  // method, which froze modded Beat Saber 1.40 at start when the arena was at
+  // 16 TiB. The arena is the largest free range between 192 GiB (above the A64
+  // guest heap, guest_heap.cpp) and 512 GiB, at least 128 GiB: Windows starts
+  // thread stacks at a random address up to about 1 TiB, so in about half of
+  // runs a few megabytes of them lie in that range. Its address therefore
+  // varies; library_slot's addresses do not. A 39-bit-VA arm64 kernel has its
+  // PIE image near 341 GiB and its mmap area below 512 GiB, which leave a
+  // smaller range or none. The fixed candidates remain for a host whose low
+  // range is taken. Adapted from the Joseph-DiGiovanni/Venture fork (ddcef01e4).
+  for (int attempt = 0; attempt < 3 && !s.arena; ++attempt) {
+    GuestAddr best = 0;
+    std::uint64_t best_size = 0;
+    for (const auto [begin, end] : platform::free_ranges(kLowArenaBegin, kLowArenaEnd - kLowArenaBegin)) {
+      const auto start = align_up(begin, 1ull << 30), stop = align_down(end, 1ull << 30);
+      if (stop > start && stop - start > best_size) best = start, best_size = stop - start;
+    }
+    if (best_size < kLowArenaMinimum) {
+      log::info("memory", "A64 guest arena below 512 GiB unavailable: largest free range {} GiB", best_size >> 30);
+      break;
+    }
+    s.arena = platform::reserve(best, best_size, true);
+    if (s.arena) s.arena_size = best_size, s.low_arena = true;
+  }
   struct Candidate { GuestAddr address; std::uint64_t size; };
   constexpr std::uint64_t large = 1ull << 40;
 #if defined(__aarch64__)
   constexpr std::uint64_t small = 128ull << 30;
-  constexpr Candidate candidates[]{{0x100000000000ull, large}, {0x110000000000ull, large},
-                                   {0x120000000000ull, large}, {0x130000000000ull, large},
-                                   {0x3000000000ull, small}, {0x800000000ull, small / 2}};
+  constexpr Candidate candidates[]{{0x3000000000ull, small}, {0x800000000ull, small / 2},
+                                   {0x100000000000ull, large}, {0x110000000000ull, large},
+                                   {0x120000000000ull, large}, {0x130000000000ull, large}};
   constexpr std::uint64_t anywhere[]{large, small};
 #else
   constexpr Candidate candidates[]{{0x100000000000ull, large}, {0x110000000000ull, large},
@@ -173,6 +197,7 @@ void reserve_arena(State& s) {
   constexpr std::uint64_t anywhere[]{large};
 #endif
   for (const auto [candidate, size] : candidates) {
+    if (s.arena) break;
     s.arena = platform::reserve(candidate, size, true);
     if (s.arena) { s.arena_size = size; break; }
     log::info("memory", "A64 guest arena candidate {:#x} unavailable: {}", candidate, platform::first_mapping(candidate, size));
@@ -551,8 +576,12 @@ GuestAddr AddressSpace::allocate_preferred(GuestAddr preferred, std::uint64_t si
   s.allocations.emplace(p, align_up(size, 4096)); return p;
 }
 GuestAddr AddressSpace::library_slot(std::string_view soname, std::uint64_t size, std::uint64_t alignment) {
-  // 4 GiB slots over the arena's second quarter (64 in a 1 TiB arena):
-  // first-fit allocation fills from its bottom and grow-down regions take its top.
+  // 4 GiB slots: first-fit allocation fills the arena from its bottom and
+  // grow-down regions take its top. With a low arena, whose address varies,
+  // 16 slots at 384-448 GiB, the same in every run: one outside the arena is
+  // reserved where it is free, and a taken one (Windows' thread stacks) leaves
+  // its library to the arena for that run. A fixed arena has them over its
+  // second quarter (64 in a 1 TiB arena).
   constexpr std::uint64_t slot_size = 4ull << 30;
   if (a32_policy || size > slot_size || !alignment || alignment > slot_size) return 0;
   std::uint64_t hash = 0xcbf29ce484222325ull;
@@ -560,6 +589,7 @@ GuestAddr AddressSpace::library_slot(std::string_view soname, std::uint64_t size
   auto& s = state();
   { profile::TimedLock lock(s.mutex); reserve_arena(s); }
   if (!s.arena) return 0;
+  if (s.low_arena) return kLowSlots + (hash % 16) * slot_size;
   return s.arena + s.arena_size / 4 + (hash % (s.arena_size / 4 / slot_size)) * slot_size;
 }
 GuestAddr AddressSpace::allocate_at(GuestAddr address, std::uint64_t size, std::uint32_t prot, std::string_view name) {

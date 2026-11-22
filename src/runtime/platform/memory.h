@@ -3,6 +3,8 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <utility>
+#include <vector>
 #include "core/guest.h"
 
 namespace venture::platform {
@@ -56,6 +58,9 @@ bool native_compare(GuestAddr a, GuestAddr b, std::size_t, int& result, NativeMe
 std::optional<std::uint64_t> committed_bytes(GuestAddr address, std::uint64_t size);
 // The first host mapping in a range, for diagnostics; empty when the range is free.
 std::string first_mapping(GuestAddr address, std::uint64_t size);
+// The free ranges of [address, address + size), as [begin, end) in address
+// order; empty when it cannot be queried.
+std::vector<std::pair<GuestAddr, GuestAddr>> free_ranges(GuestAddr address, std::uint64_t size);
 struct FileMapping { GuestAddr base = 0, address = 0; std::uint64_t size = 0; };
 // The OS places the view, or with `at` the view replaces that reserved range
 // (POSIX only; Windows views are never placed and fail with ENOMEM).

@@ -40,6 +40,23 @@ std::string first_mapping(GuestAddr address, std::uint64_t size) {
   std::fclose(maps);
   return found;
 }
+std::vector<std::pair<GuestAddr, GuestAddr>> free_ranges(GuestAddr address, std::uint64_t size) {
+  std::FILE* maps = std::fopen("/proc/self/maps", "r");
+  if (!maps) return {};
+  std::vector<std::pair<GuestAddr, GuestAddr>> ranges;
+  const GuestAddr end = address + size;
+  GuestAddr p = address;
+  char line[512];
+  while (p < end && std::fgets(line, sizeof(line), maps)) {  // sorted by address
+    unsigned long long begin = 0, stop = 0;
+    if (std::sscanf(line, "%llx-%llx", &begin, &stop) != 2 || stop <= p) continue;
+    if (begin > p) ranges.push_back({p, std::min<GuestAddr>(begin, end)});
+    p = stop;
+  }
+  if (p < end) ranges.push_back({p, end});
+  std::fclose(maps);
+  return ranges;
+}
 std::optional<std::uint64_t> committed_bytes(GuestAddr, std::uint64_t) {
   // Linux anonymous mappings use overcommit; resident pages are not commit.
   return std::nullopt;

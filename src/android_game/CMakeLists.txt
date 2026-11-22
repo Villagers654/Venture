@@ -77,7 +77,9 @@ add_library(venture_vrapi SHARED
   ${rt}/platform/posix/xr_clock.cpp
   ${rt}/core/device_identity.cpp
   # The XR call trace marks each call for the stall finder (core/stall_watch.h).
-  ${rt}/core/stall_watch.cpp ${rt}/core/thread_lifetime.cpp)
+  ${rt}/core/stall_watch.cpp ${rt}/core/thread_lifetime.cpp
+  # No-op eye gaze and performance overlay, which are the PC runtime's.
+  vrapi/xr_pc_only.cpp)
 # The 32-bit library converts the records that hold pointers (ILP32 layouts).
 if(ANDROID_ABI STREQUAL "armeabi-v7a")
   target_sources(venture_vrapi PRIVATE vrapi/exports_ilp32.cpp)

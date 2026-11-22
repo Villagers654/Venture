@@ -108,6 +108,21 @@ std::string first_mapping(GuestAddr address, std::uint64_t size) {
   }
   return {};
 }
+std::vector<std::pair<GuestAddr, GuestAddr>> free_ranges(GuestAddr address, std::uint64_t size) {
+  std::vector<std::pair<GuestAddr, GuestAddr>> ranges;
+  const auto end = address + size;
+  for (GuestAddr p = address; p < end;) {
+    MEMORY_BASIC_INFORMATION m{};
+    if (!VirtualQuery(g2h(p), &m, sizeof(m))) return {};
+    const auto next = std::min(end, h2g(m.BaseAddress) + m.RegionSize);
+    if (m.State == MEM_FREE) {
+      if (!ranges.empty() && ranges.back().second == p) ranges.back().second = next;
+      else ranges.push_back({p, next});
+    }
+    p = next;
+  }
+  return ranges;
+}
 std::optional<std::uint64_t> committed_bytes(GuestAddr address, std::uint64_t size) {
   if (address + size < address) return std::nullopt;
   const auto end = address + size;
