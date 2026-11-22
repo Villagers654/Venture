@@ -170,7 +170,11 @@ bool manifest_launches_2d(std::span<const std::byte> xml, std::string_view wante
   // The activity Venture launches (PackageModel.launchIntent: MAIN with INFO,
   // then LAUNCHER, then Quest's VR category) runs immersive when one of its
   // intent filters names an immersive category; otherwise Horizon OS shows it
-  // as a 2D panel. A native activity is always immersive here.
+  // as a 2D panel. A native activity (or one naming its native library,
+  // android.app.lib_name) is always immersive here, and so is every activity of
+  // a vr_only application (com.samsung.android.vr.application.mode), which
+  // Horizon OS runs immersive whatever its filters name (The Climb 2's
+  // CryEngine EngineActivity: LAUNCHER only).
   struct Activity {
     std::string name;
     bool immersive = false;
@@ -178,6 +182,7 @@ bool manifest_launches_2d(std::span<const std::byte> xml, std::string_view wante
   };
   std::vector<Activity> activities;
   std::string package;
+  bool vr_only = false;
   bool filter_main = false;
   std::vector<std::string> filter_categories;
   auto end_filter = [&] {
@@ -195,6 +200,13 @@ bool manifest_launches_2d(std::span<const std::byte> xml, std::string_view wante
     } else if ((tag == "activity" || tag == "activity-alias") && depth == 2 && parents[1] == "application") {
       end_filter();
       activities.push_back({attribute("name").value_or("")});
+    } else if (tag == "meta-data" && depth == 2 && parents[1] == "application") {
+      if (attribute("name").value_or("") == "com.samsung.android.vr.application.mode" &&
+          attribute("value").value_or("") == "vr_only")
+        vr_only = true;
+    } else if (tag == "meta-data" && depth == 3 && parents[1] == "application" &&
+               (parents[2] == "activity" || parents[2] == "activity-alias") && !activities.empty()) {
+      if (attribute("name").value_or("") == "android.app.lib_name") activities.back().immersive = true;
     } else if (tag == "intent-filter" && depth == 3 && !activities.empty()) {
       end_filter();
     } else if ((tag == "action" || tag == "category") && depth == 4 && parents[3] == "intent-filter" &&
@@ -210,8 +222,8 @@ bool manifest_launches_2d(std::span<const std::byte> xml, std::string_view wante
     return true;
   });
   end_filter();
-  auto is_2d = [](const Activity& activity) {
-    return !activity.immersive && activity.name != "android.app.NativeActivity";
+  auto is_2d = [&](const Activity& activity) {
+    return !vr_only && !activity.immersive && activity.name != "android.app.NativeActivity";
   };
   if (!wanted.empty())
     for (const auto& activity : activities) {

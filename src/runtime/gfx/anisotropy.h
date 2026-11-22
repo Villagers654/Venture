@@ -23,10 +23,11 @@ float anisotropy_level(float requested, const VkPhysicalDeviceProperties& proper
                        const VkPhysicalDeviceFeatures& features);
 // The same from VENTURE_ANISOTROPY, logged once per process.
 float anisotropy_level(const VkPhysicalDeviceProperties& properties, const VkPhysicalDeviceFeatures& features);
-// Raises `info` to `level` when it filters linearly between mip levels and
-// asked for less; true when it changed. Samplers it cannot apply to stay as
-// they are: unnormalized coordinates, min/max reduction, YCbCr conversion,
-// fewer than two mip levels (maxLod under 1; ANGLE gives unmipmapped GL
-// textures 0.25) or a point-filtered minification.
+// Raises `info` to `level` when it is trilinear (linear minification and
+// linear between mip levels) and asked for less; true when it changed. Other
+// samplers stay as they are: nearest mip selection, depth comparison,
+// unnormalized coordinates, min/max reduction, YCbCr conversion, fewer than
+// two mip levels (maxLod under 1; ANGLE gives unmipmapped GL textures 0.25)
+// or a point-filtered minification.
 bool raise_anisotropy(VkSamplerCreateInfo& info, float level);
 }  // namespace venture::gfx

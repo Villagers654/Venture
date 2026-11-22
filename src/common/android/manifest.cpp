@@ -15,7 +15,7 @@ namespace {
 // only these, through the XML resource map.
 constexpr std::uint32_t kLabel = 0x01010001, kIcon = 0x01010002, kBanner = 0x0101031f, kVersionCode = 0x0101021b, kVersionName = 0x0101021c,
                         kVersionCodeMajor = 0x01010576, kName = 0x01010003, kRequired = 0x0101028e,
-                        kMinSdkVersion = 0x0101020c, kTargetSdkVersion = 0x01010270;
+                        kMinSdkVersion = 0x0101020c, kTargetSdkVersion = 0x01010270, kValue = 0x01010024;
 constexpr std::uint64_t kTableLimit = 64u << 20;
 constexpr std::uint8_t kReference = 0x01, kString = 0x03, kIntDec = 0x10, kIntHex = 0x11, kBoolean = 0x12;
 
@@ -151,6 +151,9 @@ Manifest parse_manifest(std::span<const std::uint8_t> xml) {
       const bool intent_filter = depth == 4 && tag == "intent-filter" && (parent == "activity" || parent == "activity-alias");
       const bool filter_entry = depth == 5 && filter && (tag == "action" || tag == "category");
       const bool activity_start = depth == 3 && parent == "application" && (tag == "activity" || tag == "activity-alias");
+      // <meta-data> of the application (Horizon's VR mode) or of an activity (a native library).
+      const bool app_meta = depth == 3 && parent == "application" && tag == "meta-data";
+      const bool activity_meta = depth == 4 && (parent == "activity" || parent == "activity-alias") && tag == "meta-data";
       if (activity_start) {
         activity.clear();
         activity_immersive = false;
@@ -160,9 +163,9 @@ Manifest parse_manifest(std::span<const std::uint8_t> xml) {
         filter = Manifest::LaunchFilter{.alias = parent == "activity-alias"};
         filter_main = false;
       }
-      std::string feature_name, entry_name;
+      std::string feature_name, entry_name, entry_value;
       bool feature_required = true;  // android:required defaults to true
-      const bool named_entry = native_library || filter_entry || activity_start;
+      const bool named_entry = native_library || filter_entry || activity_start || app_meta || activity_meta;
       for (std::size_t i = 0; (manifest || application || feature || sdk || named_entry) && i < count; ++i) {
         const auto attr = ext + start + i * stride;
         const auto name_index = r.u32(attr + 4);
@@ -203,11 +206,18 @@ Manifest parse_manifest(std::span<const std::uint8_t> xml) {
           (id == kMinSdkVersion || (!id && name == "minSdkVersion") ? m.min_sdk : m.target_sdk) = level;
         } else if (named_entry && (id == kName || (!id && name == "name"))) {
           entry_name = text();
+        } else if ((app_meta || activity_meta) && (id == kValue || (!id && name == "value"))) {
+          entry_value = text();
         }
       }
       if (feature && feature_required && !feature_name.empty()) m.required_features.push_back(feature_name);
       if (native_library && !entry_name.empty()) m.native_libraries.push_back(entry_name);
       if (activity_start) activity = entry_name;
+      // Horizon OS runs a vr_only application immersive whatever its filters
+      // name, and an activity naming its native library is a NativeActivity
+      // (CryEngine's EngineActivity in The Climb 2: LAUNCHER only).
+      if (app_meta && entry_name == "com.samsung.android.vr.application.mode" && entry_value == "vr_only") m.vr_only = true;
+      if (activity_meta && entry_name == "android.app.lib_name") activity_immersive = true;
       if (filter_entry && tag == "category" &&
           (entry_name == "com.oculus.intent.category.VR" || entry_name == "org.khronos.openxr.intent.category.IMMERSIVE_HMD"))
         activity_immersive = true;
@@ -240,7 +250,7 @@ bool launches_2d(const Manifest &m) {
                                     "com.oculus.intent.category.VR"})
     for (const auto &filter : m.launch_filters)
       if (std::ranges::find(filter.categories, category) != filter.categories.end())
-        return !filter.immersive && filter.activity != "android.app.NativeActivity";
+        return !m.vr_only && !filter.immersive && filter.activity != "android.app.NativeActivity";
   return false;
 }
 Manifest read_apk(const fs::path &apk) {

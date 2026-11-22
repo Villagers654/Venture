@@ -2248,6 +2248,12 @@ TEST_CASE("Anisotropic filtering: the chosen level on any GPU, and only mipmappe
   info.minFilter = VK_FILTER_NEAREST;
   CHECK_FALSE(raise_anisotropy(info, 16));
   info = base;
+  info.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;  // The Climb 2's hands and menu text
+  CHECK_FALSE(raise_anisotropy(info, 16));
+  info = base;
+  info.compareEnable = VK_TRUE;  // a shadow map
+  CHECK_FALSE(raise_anisotropy(info, 16));
+  info = base;
   info.maxLod = 0.25f;  // ANGLE's unmipmapped GL texture
   CHECK_FALSE(raise_anisotropy(info, 16));
   info = base;

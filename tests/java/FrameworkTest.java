@@ -2741,11 +2741,16 @@ public final class FrameworkTest {
     check(packageManager.resolveContentProvider("com.google.android.gms.chimera", 0) == null
         && packageManager.resolveContentProvider(null, 0) == null,
         "an authority no package provides resolves to null");
-    // Talsec asks for the install source at start (Yeeps): the same installer as getInstallerPackageName.
+    // A game is installed by a Quest's store (Oculus Core Mobile Services), and Talsec asks for the
+    // install source at start (Yeeps): the same installer as getInstallerPackageName.
     try {
-      var source = packageManager.getInstallSourceInfo(packageManager.getInstalledPackages(0).get(0).packageName);
-      check(source.getInstallingPackageName() == null && source.getPackageSource() == 0, "install source of the game");
+      String game = packageManager.getInstalledPackages(0).get(0).packageName;
+      check("com.oculus.ocms".equals(packageManager.getInstallerPackageName(game)), "installer of the game");
+      var source = packageManager.getInstallSourceInfo(game);
+      check("com.oculus.ocms".equals(source.getInstallingPackageName()) && source.getPackageSource() == 0,
+          "install source of the game");
     } catch (android.content.pm.PackageManager.NameNotFoundException e) { throw new AssertionError(e); }
+    check(packageManager.getInstallerPackageName("com.oculus.systemux") == null, "installer of a system package");
     try {
       packageManager.getInstallSourceInfo("com.example.absent");
       check(false, "install source of another package is not found");

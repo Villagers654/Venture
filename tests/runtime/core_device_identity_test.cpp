@@ -126,6 +126,31 @@ TEST_CASE("A manifest's launch activity, or a named one, chooses between the 2D 
       activity("android.app.NativeActivity", {"android.intent.category.LAUNCHER"})}}}});
   CHECK_FALSE(venture::manifest_launches_2d(native));
   CHECK_FALSE(venture::android::launches_2d(parsed(native)));
+  // The Climb 2: CryEngine's NativeActivity subclass with only LAUNCHER, in a
+  // vr_only application. Either one makes it immersive.
+  auto engine = [](bool vr_only, bool lib_name) {
+    Element launch = activity("com.crytek.cryengine.EngineActivity", {"android.intent.category.LAUNCHER"});
+    if (lib_name) launch.children.push_back({"meta-data", {{"name", "android.app.lib_name"}, {"value", "AndroidLauncher"}}, {}});
+    Element application{"application", {}, {}};
+    if (vr_only)
+      application.children.push_back(
+          {"meta-data", {{"name", "com.samsung.android.vr.application.mode"}, {"value", "vr_only"}}, {}});
+    application.children.push_back(std::move(launch));
+    return binary_xml({"manifest", {{"package", "com.crytek.climb2"}}, {std::move(application)}});
+  };
+  for (auto [vr_only, lib_name] : {std::pair{true, true}, std::pair{true, false}, std::pair{false, true}}) {
+    CHECK_FALSE(venture::manifest_launches_2d(engine(vr_only, lib_name)));
+    CHECK_FALSE(venture::manifest_launches_2d(engine(vr_only, lib_name), "com.crytek.cryengine.EngineActivity"));
+    CHECK_FALSE(venture::android::launches_2d(parsed(engine(vr_only, lib_name))));
+  }
+  CHECK(venture::manifest_launches_2d(engine(false, false)));
+  CHECK(venture::android::launches_2d(parsed(engine(false, false))));
+  // Another meta-data value is not Horizon's VR mode.
+  auto dual = binary_xml({"manifest", {{"package", "org.example.app"}}, {{"application", {}, {
+      {"meta-data", {{"name", "com.samsung.android.vr.application.mode"}, {"value", "dual"}}, {}},
+      activity("org.example.app.Main", {"android.intent.category.LAUNCHER"})}}}});
+  CHECK(venture::manifest_launches_2d(dual));
+  CHECK(venture::android::launches_2d(parsed(dual)));
 }
 TEST_CASE("Horizon compatibility selects the newest supported model no newer than native Quest 3") {
   using venture::select_device_identity;

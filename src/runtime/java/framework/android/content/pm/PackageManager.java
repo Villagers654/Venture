@@ -398,8 +398,12 @@ public class PackageManager {
       return null;
     }
   }
+  // A Quest installs store apps through Oculus Core Mobile Services, so that is
+  // the installer a game sees for itself. Other packages (a Quest's system
+  // apps) answer null, as preinstalled packages do.
+  public static final String STORE_INSTALLER = "com.oculus.ocms";
   public String getInstallerPackageName(String pkg) {
-    return null;
+    return model.info.packageName.equals(pkg) ? STORE_INSTALLER : null;
   }
   // Talsec's start asks this (API 30); the same installer answer, or NameNotFound for other packages.
   public InstallSourceInfo getInstallSourceInfo(String pkg) throws NameNotFoundException {

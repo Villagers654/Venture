@@ -38,7 +38,11 @@ float anisotropy_level(const VkPhysicalDeviceProperties& properties, const VkPhy
 }
 
 bool raise_anisotropy(VkSamplerCreateInfo& info, float level) {
-  if (level <= 1 || info.unnormalizedCoordinates || info.minFilter != VK_FILTER_LINEAR || info.maxLod < 1)
+  // Only trilinear samplers: anisotropy on a nearest-mip sampler drew cyan
+  // specks over The Climb 2's hands and turned its white menu text red
+  // (NVIDIA), and a depth comparison gains nothing from it.
+  if (level <= 1 || info.unnormalizedCoordinates || info.minFilter != VK_FILTER_LINEAR ||
+      info.mipmapMode != VK_SAMPLER_MIPMAP_MODE_LINEAR || info.compareEnable || info.maxLod < 1)
     return false;
   if (info.anisotropyEnable && info.maxAnisotropy >= level) return false;
   for (auto* next = static_cast<const VkBaseInStructure*>(info.pNext); next; next = next->pNext) {

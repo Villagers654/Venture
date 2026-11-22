@@ -21,9 +21,11 @@ struct Manifest {
     bool alias = false;  // on an <activity-alias>, which some shells do not start
     std::vector<std::string> categories;
     std::string activity;    // its activity's android:name, as written
-    bool immersive = false;  // that activity has an immersive (VR) category in any of its filters
+    bool immersive = false;  // that activity has an immersive (VR) category in any filter, or names a native library
   };
   std::vector<LaunchFilter> launch_filters;
+  // <application> meta-data com.samsung.android.vr.application.mode is vr_only.
+  bool vr_only = false;
   std::vector<std::string> native_libraries;  // <uses-native-library> names: system libraries the app asks for
 };
 // AOSP ResourceTypes.h binary XML; throws for malformed input or a manifest
@@ -32,8 +34,9 @@ Manifest parse_manifest(std::span<const std::uint8_t> xml);
 Manifest read_apk(const fs::path &apk);
 // Whether the activity a headset launches is a 2D panel rather than immersive:
 // the first MAIN filter with INFO, then LAUNCHER, then Quest's VR category picks
-// it, and it is 2D unless one of its filters names an immersive category or it is
-// a NativeActivity (the runtime's own rule, core/device_identity.h).
+// it, and it is 2D unless one of its filters names an immersive category, it is
+// a NativeActivity (or names its native library, android.app.lib_name) or the
+// application is vr_only (the runtime's own rule, core/device_identity.h).
 bool launches_2d(const Manifest &m);
 Manifest read_apk(std::span<const std::uint8_t> apk);  // an APK in memory
 // resources.arsc lookups as Android resolves them for an en-US device. Both

@@ -1,6 +1,6 @@
 package android.content.pm;
 
-/** API 30. Venture answers as for a package installed by no installer app, matching getInstallerPackageName. */
+/** API 30. The installer getInstallerPackageName names (a Quest's store, com.oculus.ocms). */
 public final class InstallSourceInfo {
   public static final int PACKAGE_SOURCE_UNSPECIFIED = 0;
   private final String installer;
