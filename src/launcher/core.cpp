@@ -29,13 +29,14 @@ uint64_t now_ms() {
                       std::chrono::steady_clock::now().time_since_epoch())
                       .count());
 }
-// A game, its first-launch preparation and the host check started from the
-// library run as apps of their own to Steam and SteamVR, not as this Venture
-// (steam_library::launch_identity), unless this Venture is the game a Steam
-// shortcut started. Adds the replaced variables to `environment` and returns
-// the removed ones.
-std::vector<std::string> own_identity(Environment &environment, bool shortcut) {
-  if (shortcut) return {};
+// A game, its first-launch preparation and the host check run as apps of their
+// own to Steam and SteamVR, not as this Venture (steam_library::launch_identity).
+// That holds for a game its own Steam shortcut started too: SteamVR keeps controller
+// bindings per app, and a game that ran as its shortcut's Steam app got that app's
+// empty bindings, not the ones the player set, while Steam still shows the shortcut
+// as playing (it follows the process it started). Adds the replaced variables to
+// `environment` and returns the removed ones.
+std::vector<std::string> own_identity(Environment &environment) {
   auto identity = steam_library::launch_identity([](const char *name) { return std::getenv(name); });
   for (auto &variable : identity.replaced) environment.push_back(std::move(variable));
   return identity.removed;
@@ -2025,7 +2026,7 @@ void Core::launch_game(std::string_view id, std::string_view requested,
           // The newest Meta VR OS SDK seen; the runtime's own floor without one.
           if (const int sdk = library::cached_metavr_os_sdk(data_))
             environment.push_back({"VENTURE_METAVR_OS_SDK", std::to_string(sdk)});
-          const auto removed = own_identity(environment, options_.launch_requested);
+          const auto removed = own_identity(environment);
           r.process.spawn(runtime, args, r.console, console,
                           [broker, routes = std::move(routes), details, key, queue = launch_queue_](const Json &request) {
                             const auto op = str(request, "op");
@@ -2138,7 +2139,7 @@ void Core::prepare_tick() {
       library::rotate_log(log_file);
       // The game's own launch settings: the translated code is only valid for the same options.
       auto environment = library::launch_environment(settings_, id, true);
-      const auto removed = own_identity(environment, options_.launch_requested);
+      const auto removed = own_identity(environment);
       preparation->process.spawn(settings_.runtime,
                                  {"--game", paths::utf8(install.directory), "--package", install.plan.package,
                                   "--account", play_key(id).empty() ? "local" : play_key(id), "--prepare",

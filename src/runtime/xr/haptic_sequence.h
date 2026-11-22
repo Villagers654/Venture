@@ -2,6 +2,7 @@
 #include "xr/api.h"
 #include <chrono>
 #include <cstdint>
+#include <deque>
 #include <span>
 #include <string_view>
 #include <vector>
@@ -12,6 +13,24 @@ struct HapticSample { float amplitude; XrDuration duration; };
 // alternating-sign carrier samples. Core vibration cannot reproduce a carrier.
 std::vector<HapticSample> pcm_envelope(std::span<const float>, float rate,
                                       std::size_t capacity, std::uint32_t &consumed);
+
+// The next host pulse of an emulated stream, taken from the front of `samples` (4 ms each).
+// A host call per sample is 250 a second per hand, more than any native game sends; Index
+// controllers' lighthouse driver then stalls both controllers' input. So host calls are at
+// least host_pulse_spacing apart, and within that the pulse follows the stream's shape:
+// - the first host_pulse_spacing of samples always go into one pulse, at their RMS level but
+//   never below host_pulse_peak_kept of their peak, so a short hit keeps its punch;
+// - silence at the end of that window ends the pulse early (the motor stops between hits);
+// - past the window the pulse continues only while samples stay at the pulse's level (within
+//   host_pulse_step, or that fraction of the level), so ramps, fades and a hit's tail arrive
+//   as pulses of their own;
+// - silence (at most host_pulse_silent) sends no pulse: amplitude 0, `span` long.
+// `duration` is how long the pulse plays and `span` how much of the stream it covers.
+constexpr XrDuration host_pulse_spacing = 20'000'000;
+constexpr float host_pulse_peak_kept = 0.7f, host_pulse_step = 0.05f, host_pulse_step_fraction = 0.12f,
+                host_pulse_silent = 0.02f;
+struct HostPulse { float amplitude; XrDuration duration; XrDuration span; };
+HostPulse next_host_pulse(std::deque<HapticSample> &samples);
 
 // Haptic output. Every host haptic call (xrApplyHapticFeedback, xrStopHapticFeedback) runs on
 // one worker thread, never on the caller's: these functions only queue work and return, so a

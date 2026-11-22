@@ -26,10 +26,44 @@ on:
 
 permissions:
   contents: read
+  actions: read  # earlier runs' artifacts (.github/actions/earlier-result)
 
 jobs:
+  # A successful earlier run on the same inputs stands in for the build (.github/actions/earlier-result).
+  reuse:
+    runs-on: ubuntu-24.04
+    outputs:
+      key: ${{ steps.earlier.outputs.key }}
+      run: ${{ steps.earlier.outputs.run }}
+    steps:
+      - uses: actions/checkout@v5
+      - id: earlier
+        uses: ./.github/actions/earlier-result
+        with:
+          name: linux-arm64-${{ inputs.package && 'release' || 'ci' }}-${{ inputs.test && 'test' || 'notest' }}
+          workflow: linux-arm64.yml
+          artifacts: ${{ inputs.package && 'linux-arm64' || '' }}
+  reused:
+    needs: reuse
+    if: needs.reuse.outputs.run != '' && inputs.package
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux-arm64
+          path: linux-arm64
+          run-id: ${{ needs.reuse.outputs.run }}
+          github-token: ${{ github.token }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-arm64
+          path: linux-arm64/*
+          if-no-files-found: error
+          compression-level: 0
+
   build:
-    if: ${{ !inputs.package }}
+    needs: reuse
+    if: ${{ !inputs.package && needs.reuse.outputs.run == '' }}
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 240
     env:
@@ -43,6 +77,7 @@ jobs:
           {
             echo "DEPS_KEY=linux-arm64-deps-${{ hashFiles('tools/bootstrap.py', 'tools/bootstrap_framework.py', 'tools/ffmpeg/**', 'tools/dex/**') }}"
             echo "FETCH_KEY=linux-arm64-fetch-${{ hashFiles('CMakeLists.txt', 'cmake/**', 'src/**/CMakeLists.txt', 'third_party/**/CMakeLists.txt') }}"
+            echo "CACHE_ARGS=-DVENTURE_AGENT_CACHE=ON -DVENTURE_AGENT_CACHE_ROOT=$RUNNER_TEMP -DVENTURE_CCACHE_MAX_SIZE=3GiB -DVENTURE_PROBE_CACHE_ROOT=$RUNNER_TEMP/ccache/probes"
           } >> "$GITHUB_ENV"
       # Ubuntu 24.04's CMake (3.28) and Ninja meet the project's minimums; clang
       # and libc++ come from apt.llvm.org, and SDL3 configures against the same
@@ -67,6 +102,7 @@ jobs:
           path: .deps/arm64-data/dev-cache/toolchains
           key: ${{ env.DEPS_KEY }}
       - name: Restore FetchContent sources
+        id: fetch
         uses: actions/cache/restore@v4
         with:
           path: |
@@ -74,8 +110,16 @@ jobs:
             !.deps/fetch/*-build
           key: ${{ env.FETCH_KEY }}
           restore-keys: linux-arm64-fetch-
-      - name: Bootstrap (JDK, FFmpeg)
-        run: python3 tools/bootstrap.py --jdk
+      - name: Restore compiler cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/ccache
+          key: linux-arm64-ccache-ci-${{ github.run_id }}
+          restore-keys: |
+            linux-arm64-ccache-ci-
+            linux-arm64-ccache-release-
+      - name: Bootstrap (JDK, FFmpeg, ccache)
+        run: python3 tools/bootstrap.py --jdk --ccache
       - name: Save dependencies
         if: steps.deps.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
@@ -84,7 +128,7 @@ jobs:
           key: ${{ env.DEPS_KEY }}
       - name: Build
         run: >-
-          cmake --preset linux-baseline -DVENTURE_BUILD_TESTS=ON &&
+          cmake --preset linux-baseline $CACHE_ARGS -DVENTURE_BUILD_TESTS=ON &&
           cmake --build build/linux-baseline -j 4
       - name: Test
         run: |
@@ -96,17 +140,27 @@ jobs:
       - name: JIT tests
         run: build/linux-baseline/bin/venture_dynarmic_tests
       - name: Save FetchContent sources
-        if: always()
-        continue-on-error: true  # the key already exists when the CMake files did not change
+        if: always() && steps.fetch.outputs.cache-hit != 'true'
+        continue-on-error: true
         uses: actions/cache/save@v4
         with:
           path: |
             .deps/fetch
             !.deps/fetch/*-build
           key: ${{ env.FETCH_KEY }}
+      - name: Save compiler cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/ccache
+          key: linux-arm64-ccache-ci-${{ github.run_id }}
+      - uses: ./.github/actions/save-result
+        with:
+          key: ${{ needs.reuse.outputs.key }}
 
   package:
-    if: inputs.package
+    needs: reuse
+    if: inputs.package && needs.reuse.outputs.run == ''
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 360
     env:
@@ -120,8 +174,9 @@ jobs:
       # the container build finds it (.deps/angle/<pin>-linux-arm64 links there).
       VENTURE_DATA_DIR: ${{ github.workspace }}/.deps/baseline-data
     steps:
+      # In the background: deleting takes a minute and a half, and the space is only needed once the build runs.
       - name: Free disk space
-        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+        run: nohup sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL > /dev/null 2>&1 &
       - uses: actions/checkout@v5
       - name: Cache keys
         run: |
@@ -130,7 +185,7 @@ jobs:
             echo "DEPS_KEY=linux-arm64-baseline-deps-${{ hashFiles('tools/linux-baseline/Containerfile', 'tools/bootstrap.py', 'tools/bootstrap_framework.py', 'tools/ffmpeg/**', 'tools/dex/**') }}"
             echo "ANGLE_KEY=linux-arm64-angle-${{ hashFiles('tools/angle/**', 'third_party/angle-patches/**') }}"
             echo "FETCH_KEY=linux-arm64-fetch-${{ hashFiles('CMakeLists.txt', 'cmake/**', 'src/**/CMakeLists.txt', 'third_party/**/CMakeLists.txt') }}"
-            echo "CACHE_ARGS=-DVENTURE_AGENT_CACHE=ON -DVENTURE_AGENT_CACHE_ROOT=$RUNNER_TEMP -DVENTURE_CCACHE_MAX_SIZE=3GiB"
+            echo "CACHE_ARGS=-DVENTURE_AGENT_CACHE=ON -DVENTURE_AGENT_CACHE_ROOT=$RUNNER_TEMP -DVENTURE_CCACHE_MAX_SIZE=3GiB -DVENTURE_PROBE_CACHE_ROOT=$RUNNER_TEMP/ccache/probes"
           } >> "$GITHUB_ENV"
 
       # The x64 baseline's Containerfile, built for aarch64 (Ubuntu 22.04's and
@@ -170,6 +225,7 @@ jobs:
           path: .deps/baseline-data/dev-cache/angle/prebuilt
           key: ${{ env.ANGLE_KEY }}
       - name: Restore FetchContent sources
+        id: fetch
         uses: actions/cache/restore@v4
         with:
           path: |
@@ -254,8 +310,8 @@ jobs:
         run: find build/linux-baseline -name 'hs_err_pid*.log' -exec sh -c 'echo "== $1"; sed -n "1,120p" "$1"' _ {} \;
 
       - name: Save FetchContent sources
-        if: always()
-        continue-on-error: true  # the key already exists when the CMake files did not change
+        if: always() && steps.fetch.outputs.cache-hit != 'true'
+        continue-on-error: true
         uses: actions/cache/save@v4
         with:
           path: |
@@ -300,3 +356,6 @@ jobs:
           path: dist/packages/Venture-*
           if-no-files-found: error
           compression-level: 0
+      - uses: ./.github/actions/save-result
+        with:
+          key: ${{ needs.reuse.outputs.key }}

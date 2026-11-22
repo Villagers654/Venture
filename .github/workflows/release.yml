@@ -11,6 +11,7 @@ on:
 
 permissions:
   contents: read
+  actions: read  # earlier runs' artifacts (.github/actions/earlier-result)
 
 concurrency:
   group: release-${{ github.ref_name }}

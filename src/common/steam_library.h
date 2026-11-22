@@ -94,8 +94,9 @@ bool started_by_steam();
 // so a game started by a Venture that Steam started as an app of its own
 // would be taken for Venture itself: on the Steam Frame a non-VR app, which
 // SteamVR shows on its theater screen. Without them the game is an app of its
-// own, as when Venture was not started by Steam. A Venture that Steam started
-// for one game (a shortcut's --launch) is that game, and keeps them.
+// own, as when Venture was not started by Steam. A game a shortcut's --launch
+// started drops them too: as its shortcut's Steam app it got that app's empty
+// SteamVR bindings instead of the player's.
 struct LaunchIdentity {
   std::vector<std::string> removed;                          // variables the game does not inherit
   std::vector<std::pair<std::string, std::string>> replaced;  // LD_PRELOAD without the overlay

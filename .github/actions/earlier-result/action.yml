@@ -1,0 +1,55 @@
+# Finds an earlier successful run of the same job on the same inputs: every tracked file except
+# the top-level and docs/ Markdown and the other workflows. A rerun of a release whose fix touched one platform's workflow
+# then rebuilds only that platform, and CI skips a tree it already built and tested.
+# The job that does the work saves its run id under `key` when it succeeds (see save-result).
+name: Earlier result
+description: Look up a successful earlier run of this job on identical inputs
+inputs:
+  name:
+    description: Job identity, for example windows-release
+    required: true
+  workflow:
+    description: The workflow file that defines the job, under .github/workflows
+    required: true
+  artifacts:
+    description: Space-separated artifact names the earlier run must still have
+    default: ""
+outputs:
+  key:
+    description: Cache key for this job's inputs
+    value: ${{ steps.key.outputs.key }}
+  run:
+    description: Id of the earlier run to reuse, empty when the job must run
+    value: ${{ steps.check.outputs.run }}
+runs:
+  using: composite
+  steps:
+    - id: key
+      shell: bash
+      run: |
+        digest=$( { git ls-files -s -- . ':(exclude,glob)*.md' ':(exclude,glob)docs/**/*.md' ':(exclude).github/**'
+                    git ls-files -s -- ".github/workflows/${{ inputs.workflow }}" .github/actions; } | sha256sum | cut -c1-40)
+        echo "key=result-${{ inputs.name }}-$digest" >> "$GITHUB_OUTPUT"
+    - id: restore
+      uses: actions/cache/restore@v4
+      with:
+        path: .earlier-result
+        key: ${{ steps.key.outputs.key }}
+        # Saved on the job's runner, read on Linux.
+        enableCrossOsArchive: true
+    - id: check
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        ARTIFACTS: ${{ inputs.artifacts }}
+      run: |
+        run=$(cat .earlier-result/run 2>/dev/null || true)
+        if [ -n "$run" ]; then
+          have=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run/artifacts?per_page=100" \
+                   --jq '.artifacts[] | select(.expired | not) | .name' 2>/dev/null || true)
+          for name in $ARTIFACTS; do
+            grep -qxF "$name" <<< "$have" || { echo "Run $run no longer has $name"; run=; break; }
+          done
+        fi
+        [ -n "$run" ] && echo "Reusing run $run: the inputs are identical" || echo "No earlier result: building"
+        echo "run=$run" >> "$GITHUB_OUTPUT"

@@ -1,0 +1,82 @@
+# Keeps the Actions cache (10 GB per repository; past it GitHub evicts the least recently used, main's
+# toolchains included) to what later runs can use. After every CI or release run:
+# - each ref keeps only its newest cache per kind (a key minus its hash or run id), so superseded
+#   compiler caches and dependency sources go;
+# - a tag's caches go at the first run after a day unused (another tag cannot read them; only
+#   main's are shared), and a pull request's once it is closed.
+name: Cache cleanup
+
+on:
+  workflow_run:
+    workflows: [CI, Release]
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  pull-requests: read
+
+concurrency:
+  group: cache-cleanup
+
+jobs:
+  cleanup:
+    if: github.repository == 'Villagers654/Venture'
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Delete superseded and stale caches
+        shell: python
+        run: |
+          import json, os, re, subprocess, time
+          from datetime import datetime, timezone
+
+          repo = os.environ["GITHUB_REPOSITORY"]
+          def api(*args):
+              out = subprocess.run(["gh", "api", *args], check=True, capture_output=True, text=True).stdout
+              return json.loads(out) if out.strip() else None
+
+          caches = []
+          for page in range(1, 100):
+              batch = api(f"repos/{repo}/actions/caches?per_page=100&page={page}")["actions_caches"]
+              caches += batch
+              if len(batch) < 100:
+                  break
+          now = datetime.now(timezone.utc)
+          age = lambda c: (now - datetime.fromisoformat(c["last_accessed_at"].replace("Z", "+00:00"))).total_seconds()
+          # The kind: the key without its trailing content hash or run id.
+          kind = lambda key: re.sub(r"-(?:[0-9a-f]{16,}|[0-9]+)$", "", key)
+          doomed = {}
+          open_prs = {}
+          newest = {}
+          for c in caches:
+              ref = c["ref"]
+              if "/tags/" in ref and age(c) > 86400:
+                  doomed[c["id"]] = (c, "tag scope unused for a day")
+                  continue
+              pr = re.match(r"refs/pull/(\d+)/", ref)
+              if pr:
+                  number = pr.group(1)
+                  if number not in open_prs:
+                      open_prs[number] = api(f"repos/{repo}/pulls/{number}")["state"] == "open"
+                  if not open_prs[number]:
+                      doomed[c["id"]] = (c, "pull request closed")
+                      continue
+              group = (ref, kind(c["key"]))
+              if group not in newest or c["created_at"] > newest[group]["created_at"]:
+                  newest[group] = c
+          keep = {c["id"] for c in newest.values()}
+          for c in caches:
+              if c["id"] not in keep and c["id"] not in doomed:
+                  doomed[c["id"]] = (c, "superseded")
+          freed = 0
+          for cache_id, (c, why) in doomed.items():
+              try:
+                  api("-X", "DELETE", f"repos/{repo}/actions/caches/{cache_id}")
+              except subprocess.CalledProcessError:
+                  continue  # already gone
+              freed += c["size_in_bytes"]
+              print(f"deleted {c['key']} ({c['ref']}, {c['size_in_bytes'] >> 20} MiB): {why}")
+          total = sum(c["size_in_bytes"] for c in caches)
+          print(f"freed {freed >> 20} MiB of {total >> 20} MiB in {len(caches)} caches")

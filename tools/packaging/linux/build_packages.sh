@@ -217,7 +217,23 @@ do_flathub() {
   echo "flathub: $hub/$id.yml"
 }
 
-for format in "${formats[@]}"; do "do_$format"; done
+# The formats build side by side, each in its own stage under $work; aur and
+# flathub read the tarballs, so they come after.
+pids=() parallel=() later=()
+for format in "${formats[@]}"; do
+  case $format in aur|flathub) later+=("$format") ;; *) parallel+=("$format") ;; esac
+done
+for format in "${parallel[@]}"; do
+  ( "do_$format" ) > "$work/$format.log" 2>&1 &
+  pids+=($!)
+done
+failed=0
+for i in "${!pids[@]}"; do
+  wait "${pids[$i]}" || { echo "${parallel[$i]} failed:" >&2; failed=1; }
+  cat "$work/${parallel[$i]}.log"
+done
+[ $failed = 0 ] || exit 1
+for format in "${later[@]}"; do "do_$format"; done
 rm -rf "$work"
 ( cd "$out" && sha256sum "Venture-$version-linux-$arch".* > "SHA256SUMS-linux-$arch.txt" 2>/dev/null || true )
 ls -la "$out"

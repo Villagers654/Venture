@@ -36,6 +36,39 @@ std::vector<HapticSample> pcm_envelope(std::span<const float> input, float rate,
   }
   return out;
 }
+HostPulse next_host_pulse(std::deque<HapticSample> &samples) {
+  HostPulse out{0, 0, 0};
+  if (samples.empty()) return out;
+  if (samples.front().amplitude <= host_pulse_silent) {
+    while (!samples.empty() && samples.front().amplitude <= host_pulse_silent) {
+      out.span += samples.front().duration;
+      samples.pop_front();
+    }
+    return out;
+  }
+  double energy = 0;
+  float peak = 0;
+  const auto level = [&] {
+    return std::max(float(std::sqrt(energy / double(out.duration))), host_pulse_peak_kept * peak);
+  };
+  while (!samples.empty()) {
+    const auto next = samples.front();
+    const bool silent = next.amplitude <= host_pulse_silent;
+    if (out.span >= host_pulse_spacing) {
+      const auto current = level();
+      if (silent || std::abs(next.amplitude - current) > std::max(host_pulse_step, host_pulse_step_fraction * current))
+        break;
+    }
+    out.span += next.duration;
+    samples.pop_front();
+    if (silent) continue;  // time passes; the pulse grows only if sound follows in the window
+    out.duration = out.span;
+    energy += double(next.amplitude) * next.amplitude * double(next.duration);
+    peak = std::max(peak, next.amplitude);
+  }
+  out.amplitude = level();
+  return out;
+}
 namespace {
 using Key = std::tuple<XrSession, XrAction, XrPath>;
 Key key_of(XrSession session, const XrHapticActionInfo &info) { return {session, info.action, info.subactionPath}; }
@@ -173,18 +206,13 @@ class Worker {
         }
         if (s.due <= now && s.samples.empty()) { it = streams.erase(it); continue; }
         if (s.due <= now) {
-          auto sample = s.samples.front();
-          s.samples.pop_front();
-          // Coalesce identical samples, preserving cancellation via the lock.
-          while (!s.samples.empty() && s.samples.front().amplitude == sample.amplitude) {
-            sample.duration += s.samples.front().duration;
-            s.samples.pop_front();
-          }
-          pulses.push_back({it->first, s.id, s.action, s.pcm,
-                            {XR_TYPE_HAPTIC_VIBRATION, nullptr, sample.duration, XR_FREQUENCY_UNSPECIFIED, sample.amplitude}});
-          // Each pulse starts where the one before it ends.
-          s.due = sample.duration > std::numeric_limits<std::int64_t>::max() - s.due
-              ? std::numeric_limits<std::int64_t>::max() : s.due + sample.duration;
+          const auto pulse = next_host_pulse(s.samples);
+          if (pulse.amplitude > 0)
+            pulses.push_back({it->first, s.id, s.action, s.pcm,
+                              {XR_TYPE_HAPTIC_VIBRATION, nullptr, pulse.duration, XR_FREQUENCY_UNSPECIFIED, pulse.amplitude}});
+          // The next pulse starts where the stream this one covered ends.
+          s.due = pulse.span > std::numeric_limits<std::int64_t>::max() - s.due
+              ? std::numeric_limits<std::int64_t>::max() : s.due + pulse.span;
         }
         delay = std::min(delay, std::max<std::int64_t>(1, s.due - now));
         ++it;

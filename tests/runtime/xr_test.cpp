@@ -4,6 +4,7 @@
 using EGLenum = unsigned int;
 #include "common/environment.h"
 #include "common/log.h"
+#include <deque>
 #include <cmath>
 #include <cstdlib>
 #include <algorithm>
@@ -558,7 +559,8 @@ TEST_CASE("XR PCM and envelope haptics bind both hands, append, replace and stop
   XrHapticAmplitudeEnvelopeVibrationFB env{XR_TYPE_HAPTIC_AMPLITUDE_ENVELOPE_VIBRATION_FB,
       nullptr, 16'000'000, 2, amplitudes};
   CHECK(xg::xrApplyHapticFeedback(session, &request, reinterpret_cast<XrHapticBaseHeader *>(&env)) == XR_SUCCESS);
-  REQUIRE(ventureMockXrAwaitHaptics(before + 4, 1000));
+  // Two 8 ms steps reach the host as one 16 ms pulse: host pulses are at least 20 ms apart.
+  REQUIRE(ventureMockXrAwaitHaptics(before + 3, 1000));
   REQUIRE(xg::xrStopHapticFeedback(session, &request) == XR_SUCCESS);
   // Appending PCM must replace an overlapping non-PCM all-hands effect.
   auto overlap = ventureMockXrStats().haptic_pulses;
@@ -965,12 +967,17 @@ TEST_CASE("XR emulated PCM haptics keep their pulse amplitudes and timing") {
   CHECK(consumed == clip.size());
   // Appended while the first part plays: continues it without a gap.
   REQUIRE(s.pcm(1, clip, 2000, true, consumed) == XR_SUCCESS);
-  std::vector<std::pair<float, std::int64_t>> expected;  // merged amplitude, duration
+  // The host gets the stream as next_host_pulse shapes it (its own test case below).
+  std::deque<venture::xr::HapticSample> stream;
   for (int pass = 0; pass < 2; ++pass)
-    for (auto level : levels) {
-      if (!expected.empty() && expected.back().first == level) expected.back().second += 4'000'000;
-      else expected.push_back({level, 4'000'000});
-    }
+    for (auto level : levels) stream.push_back({level, 4'000'000});
+  std::vector<std::pair<float, std::int64_t>> expected;  // amplitude, duration
+  std::vector<std::int64_t> spans;
+  while (!stream.empty()) {
+    const auto pulse = venture::xr::next_host_pulse(stream);
+    if (pulse.amplitude > 0) expected.push_back({pulse.amplitude, pulse.duration});
+    spans.push_back(pulse.span);
+  }
   REQUIRE(ventureMockXrAwaitHaptics(std::uint32_t(expected.size()), 2000));
   std::this_thread::sleep_for(std::chrono::milliseconds(100));
   const auto log = HapticSession::log();
@@ -984,7 +991,59 @@ TEST_CASE("XR emulated PCM haptics keep their pulse amplitudes and timing") {
     // Each pulse starts when the previous one ends (scheduling jitter allowed).
     const auto at = std::int64_t(log[i].time_ns - log[0].time_ns);
     CHECK(std::abs(at - offset) < 20'000'000);
-    offset += expected[i].second;
+    offset += spans[i];
+  }
+}
+
+TEST_CASE("XR emulated haptics follow the stream's shape at most 50 host pulses a second") {
+  using venture::xr::HapticSample;
+  using venture::xr::next_host_pulse;
+  const auto stream = [](std::initializer_list<float> levels) {
+    std::deque<HapticSample> out;
+    for (auto level : levels) out.push_back({level, 4'000'000});
+    return out;
+  };
+  // A steady buzz is one pulse however long it lasts.
+  auto steady = stream({0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f});
+  auto pulse = next_host_pulse(steady);
+  CHECK(pulse.amplitude == doctest::Approx(0.5f));
+  CHECK(pulse.duration == 40'000'000);
+  CHECK(steady.empty());
+  // A 4 ms hit followed by silence: a short full-strength pulse, then nothing for the gap.
+  auto hit = stream({1.0f, 0, 0, 0, 0, 0, 0, 0, 0, 0});
+  pulse = next_host_pulse(hit);
+  CHECK(pulse.amplitude == doctest::Approx(1.0f));
+  CHECK(pulse.duration == 4'000'000);
+  CHECK(pulse.span == 20'000'000);
+  pulse = next_host_pulse(hit);
+  CHECK(pulse.amplitude == 0);
+  CHECK(pulse.span == 20'000'000);
+  // A hit with a weak tail keeps most of its peak, and the tail is a pulse of its own.
+  auto tail = stream({1.0f, 0.2f, 0.2f, 0.2f, 0.2f, 0.2f, 0.2f, 0.2f, 0.2f, 0.2f});
+  pulse = next_host_pulse(tail);
+  CHECK(pulse.amplitude == doctest::Approx(0.7f));
+  CHECK(pulse.duration == 20'000'000);
+  pulse = next_host_pulse(tail);
+  CHECK(pulse.amplitude == doctest::Approx(0.2f));
+  CHECK(pulse.duration == 20'000'000);
+  // A ramp arrives as rising steps.
+  auto ramp = stream({0.1f, 0.2f, 0.3f, 0.4f, 0.5f, 0.6f, 0.7f, 0.8f, 0.9f, 1.0f});
+  const auto low = next_host_pulse(ramp), high = next_host_pulse(ramp);
+  CHECK(low.amplitude < high.amplitude);
+  CHECK(low.duration == 20'000'000);
+  CHECK(high.duration == 20'000'000);
+  CHECK(ramp.empty());
+  // A stream that changes every sample still makes host calls at least 20 ms apart.
+  std::deque<HapticSample> rough;
+  for (int i = 0; i < 250; ++i) rough.push_back({i % 2 ? 0.1f : 0.9f, 4'000'000});
+  std::int64_t at = 0, last_call = -20'000'000;
+  while (!rough.empty()) {
+    pulse = next_host_pulse(rough);
+    if (pulse.amplitude > 0) {
+      CHECK(at - last_call >= 20'000'000);
+      last_call = at;
+    }
+    at += pulse.span;
   }
 }
 

@@ -18,13 +18,48 @@ on:
 
 permissions:
   contents: read
+  actions: read  # earlier runs' artifacts (.github/actions/earlier-result)
 
 env:
   # Toolchains and the ANGLE build live under the data root; D: has the space for them.
   VENTURE_DATA_DIR: D:\venture
 
 jobs:
+  # A successful earlier run on the same inputs stands in for the build (.github/actions/earlier-result).
+  reuse:
+    runs-on: ubuntu-24.04
+    outputs:
+      key: ${{ steps.earlier.outputs.key }}
+      run: ${{ steps.earlier.outputs.run }}
+    steps:
+      - uses: actions/checkout@v5
+      - id: earlier
+        uses: ./.github/actions/earlier-result
+        with:
+          name: windows-${{ inputs.package && 'release' || 'ci' }}-${{ inputs.test && 'test' || 'notest' }}
+          workflow: windows.yml
+          artifacts: ${{ inputs.package && 'windows' || '' }}
+  reused:
+    needs: reuse
+    if: needs.reuse.outputs.run != '' && inputs.package
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows
+          path: windows
+          run-id: ${{ needs.reuse.outputs.run }}
+          github-token: ${{ github.token }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: windows/*
+          if-no-files-found: error
+          compression-level: 0
+
   build:
+    needs: reuse
+    if: needs.reuse.outputs.run == ''
     runs-on: windows-2025
     timeout-minutes: 360
     steps:
@@ -57,6 +92,7 @@ jobs:
           path: D:\venture\dev-cache\angle\prebuilt
           key: ${{ env.ANGLE_KEY }}
       - name: Restore FetchContent sources
+        id: fetch
         uses: actions/cache/restore@v4
         with:
           path: |
@@ -91,16 +127,18 @@ jobs:
           path: D:\venture\dev-cache\angle\prebuilt
           key: ${{ env.ANGLE_KEY }}
 
+      # CMake's check results ride along in the compiler cache (ccache only manages its 0-f subdirectories).
       - name: Configure
         run: >-
           .deps/cmake/bin/cmake --preset windows-release -DVENTURE_BUILD_TESTS=${{ inputs.test && 'ON' || 'OFF' }}
           -DVENTURE_AGENT_CACHE=ON "-DVENTURE_AGENT_CACHE_ROOT=${{ runner.temp }}" -DVENTURE_CCACHE_MAX_SIZE=3GiB
+          "-DVENTURE_PROBE_CACHE_ROOT=${{ runner.temp }}/ccache/probes"
       - name: Build
         run: .deps/cmake/bin/cmake --build --preset windows-release ${{ inputs.package && '--target all package-release' || '' }}
       - name: Save FetchContent sources
-        if: always()
+        if: always() && steps.fetch.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
-        continue-on-error: true  # the key already exists when the CMake files did not change
+        continue-on-error: true
         with:
           path: |
             .deps/fetch
@@ -164,3 +202,6 @@ jobs:
             dist/Venture-layoutlib-windows64.zip
           if-no-files-found: error
           compression-level: 0
+      - uses: ./.github/actions/save-result
+        with:
+          key: ${{ needs.reuse.outputs.key }}

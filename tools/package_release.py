@@ -2,6 +2,7 @@
 """Build a relocatable shipping layout from a completed build (no source at launch)."""
 from __future__ import annotations
 import argparse
+import concurrent.futures
 import platform
 import fnmatch
 import hashlib
@@ -140,34 +141,68 @@ def scan(layout, forbidden, users=(), hosts=(), third_party=THIRD_PARTY):
     Android resources). Any other build machine's paths (C:/Users/, /home/<u>/,
     .../build/) are rejected too, except in third-party files shipped as received.
     """
+    # Each pattern goes with the literals one of which every match contains: a
+    # substring test (memchr speed) decides whether the regex runs at all, and
+    # whether the UTF-16 views need decoding. The regexes alone took 90% of
+    # packaging time (minutes on CI) on files that hold none of the literals.
     own = []
     for value in forbidden:
         # A POSIX path only in its own form (\\root is a registry key, not /root).
         variants = {value} if value.startswith("/") else {value, value.replace("\\", "/"), value.replace("/", "\\")}
         for variant in variants:
             if variant:
-                escaped = re.escape(variant.lower().encode())
-                own.append(rb"(?<![a-z0-9._~-])" + escaped + rb"(?![a-z0-9._~-])")
+                literal = variant.lower().encode()
+                own.append((rb"(?<![a-z0-9._~-])" + re.escape(literal) + rb"(?![a-z0-9._~-])", (literal,)))
     token = lambda value, inner: rb"(?<![a-z0-9])" + inner(re.escape(value.lower().encode())) + rb"(?![a-z0-9])"
-    own += [token(value, lambda v: v) for value in sorted(set(hosts)) if value]
-    own += [token(value, lambda v: rb"(?:(?<=[/\\@])" + v + rb"|" + v + rb"(?=[/\\@]))")
+    own += [(token(value, lambda v: v), (value.lower().encode(),)) for value in sorted(set(hosts)) if value]
+    own += [(token(value, lambda v: rb"(?:(?<=[/\\@])" + v + rb"|" + v + rb"(?=[/\\@]))"), (value.lower().encode(),))
             for value in sorted(set(users)) if value]
     drive = rb"(?<![a-z0-9])[a-z]:[/\\](?![/\\])"
-    generic = [drive + rb"(?:users|build|agent|workspace)[/\\]",
+    # A drive-rooted path through one of these directories holds /dir/ with either slash on each side.
+    through = lambda *dirs: tuple(a + d + b for d in dirs for a in (b"/", b"\\") for b in (b"/", b"\\"))
+    generic = [(drive + rb"(?:users|build|agent|workspace)[/\\]",
+                tuple(a + d + b for d in (b"users", b"build", b"agent", b"workspace")
+                      for a in (b":/", b":\\") for b in (b"/", b"\\"))),
                # LLVM's release libc++abi (the Linux arm64 sysroot's, linked
                # statically) names its sources by GitHub's public CI checkout.
-               rb"(?<![:/\\a-z0-9])/(?:home|users)/(?!runner/work/llvm-project/llvm-project/)[^/\x00\s]+/",
-               drive + rb"[^\x00\r\n]{0,512}[/\\](?:build|src|source|_work|out|\.deps)[/\\]"]
-    own = [re.compile(p) for p in own]
-    generic = [re.compile(p) for p in generic]
+               (rb"(?<![:/\\a-z0-9])/(?:home|users)/(?!runner/work/llvm-project/llvm-project/)[^/\x00\s]+/",
+                (b"/home/", b"/users/")),
+               (drive + rb"[^\x00\r\n]{0,512}[/\\](?:build|src|source|_work|out|\.deps)[/\\]",
+                through(b"build", b"src", b"source", b"_work", b"out", b".deps"))]
+    own = [(re.compile(p), anchors) for p, anchors in own]
+    generic = [(re.compile(p), anchors) for p, anchors in generic]
 
-    def check(data, name, patterns):
-        # Decode both UTF-16 alignments; deleting NUL bytes would join unrelated
-        # C strings and misclassify URI schemes as absolute Windows paths.
-        views = [data.lower()] + [data[offset:].decode("utf-16le", errors="replace").lower().encode("utf-8")
-                                  for offset in (0, 1)]
+    def wide(patterns):
+        # The UTF-16 views lower-case after decoding: ASCII letters then match
+        # whatever case the raw code units had (bytes.lower() covers that), and
+        # U+212A KELVIN SIGN and U+0130 lower to "k" and "i" + a combining dot.
+        anchors = [a for _, group in patterns for a in group]
+        ascii_only = all(a.isascii() for a in anchors)
+        risky = any(b"k" in a or b"i" in a for a in anchors)
+        # One alternation finds whether any anchor occurs in a single pass, far
+        # quicker than a substring search per anchor over a large buffer.
+        either = lambda group: re.compile(b"|".join(re.escape(a) for a in sorted(set(group), key=len, reverse=True)))
+        return (patterns, ascii_only, risky, either(a.decode().encode("utf-16le") for a in anchors if a.isascii()),
+                either(anchors))
+
+    only_own, everything = wide(own), wide(own + generic)
+
+    def check(data, name, prepared):
+        patterns, ascii_only, risky, wide_anchors, any_anchor = prepared
+        lowered = data.lower()
+        views = [lowered]
+        # Decode both UTF-16 alignments only when the raw bytes can hold a match;
+        # deleting NUL bytes would join unrelated C strings and misclassify URI
+        # schemes as absolute Windows paths.
+        if (not ascii_only or wide_anchors.search(lowered)
+                or (risky and (b"\x2a\x21" in data or b"\x30\x01" in data))):
+            views += [data[offset:].decode("utf-16le", errors="replace").lower().encode("utf-8") for offset in (0, 1)]
         for view in views:
-            for pattern in patterns:
+            if ascii_only and not any_anchor.search(view):
+                continue
+            for pattern, group in patterns:
+                if not any(a in view for a in group):
+                    continue
                 match = pattern.search(view)
                 if match:
                     raise RuntimeError("Non-redistributable path or identity in %s: %r" % (name, match.group()[:120]))
@@ -176,16 +211,27 @@ def scan(layout, forbidden, users=(), hosts=(), third_party=THIRD_PARTY):
         if not path.is_file():
             continue
         name = path.relative_to(layout).as_posix()
-        patterns = own if is_third_party(name, third_party) else own + generic
-        check(name.encode("utf-8"), name, own + generic)
+        patterns = only_own if is_third_party(name, third_party) else everything
+        check(name.encode("utf-8"), name, everything)
         if is_third_party(name, RECEIVED):
             continue
         check(path.read_bytes(), name, patterns)
         if path.suffix.lower() in (".jar", ".zip"):
             with zipfile.ZipFile(path) as archive:
-                for entry in archive.infolist():
-                    check(entry.filename.encode("utf-8"), name + ":" + entry.filename, own + generic)
-                    check(archive.read(entry), name + ":" + entry.filename, patterns)
+                entries = [(entry.filename, archive.read(entry)) for entry in archive.infolist()]
+            # Tens of thousands of small class files: scan the archive's names and
+            # contents as one buffer each. The separator ends every pattern, so a
+            # match inside an entry is still found; entry by entry runs only on a
+            # hit, to name the entry (or dismiss a match across two of them).
+            names = b"\n".join(entry.encode("utf-8") for entry, _ in entries)
+            contents = b"\n".join(data for _, data in entries)
+            try:
+                check(names, name, everything)
+                check(contents, name, patterns)
+            except RuntimeError:
+                for entry, data in entries:
+                    check(entry.encode("utf-8"), name + ":" + entry, everything)
+                    check(data, name + ":" + entry, patterns)
 
 
 def remap_pe_source_names(path):
@@ -285,11 +331,11 @@ def import_report(layout, readobj):
         if path.is_file():
             shipped.setdefault(path.parent, set()).add(path.name.lower())
     report = {}
-    for path in sorted(layout.rglob("*")):
-        if not path.is_file() or path.suffix.lower() not in (".exe", ".dll"):
-            continue
+    binaries = [path for path in sorted(layout.rglob("*")) if path.is_file() and path.suffix.lower() in (".exe", ".dll")]
+    with concurrent.futures.ThreadPoolExecutor(os.cpu_count()) as pool:
+        all_imports = list(pool.map(lambda path: pe_imports(path, readobj), binaries))
+    for path, imports in zip(binaries, all_imports):
         directories = [path.parent] + [layout / d for d in LAYOUT_DLL_DIRS]
-        imports = pe_imports(path, readobj)
         missing = [name for name in imports if not is_os_provided(name)
                    and not any(name.lower() in shipped.get(d, ()) for d in directories)]
         report[path.relative_to(layout).as_posix()] = (imports, missing)
@@ -484,13 +530,14 @@ def package(build, output, angle, strip, readobj):
             path.unlink()
     # Native binaries are copied, then stripped; the build retains its symbols.
     # layoutlib's natives are Google's release builds, shipped as published.
-    for path in sorted(output.rglob("*")):
-        if path.is_relative_to(output / "layoutlib"):
-            continue
-        if path.is_file() and (path.suffix in (".dll", ".exe") or (not windows and (".so" in path.name or path.name in ("venture", "venture-runtime", "java")))):
-            subprocess.run([str(strip), "--strip-all", str(path)], check=True)
-            if windows:
-                remap_pe_source_names(path)
+    def strip_one(path):
+        subprocess.run([str(strip), "--strip-all", str(path)], check=True)
+        if windows:
+            remap_pe_source_names(path)
+    natives = [path for path in sorted(output.rglob("*")) if not path.is_relative_to(output / "layoutlib")
+               and path.is_file() and (path.suffix in (".dll", ".exe") or (not windows and (".so" in path.name or path.name in ("venture", "venture-runtime", "java"))))]
+    with concurrent.futures.ThreadPoolExecutor(os.cpu_count()) as pool:
+        list(pool.map(strip_one, natives))
     copy(ROOT / "LICENSE", output / "LICENSE")
     copy(ROOT / "LICENSES/MIT.txt", output / "licenses/venture/MIT.txt")
     copy(ROOT / "LICENSES/0BSD.txt", output / "licenses/venture/0BSD.txt")

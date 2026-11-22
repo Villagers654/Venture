@@ -1,0 +1,19 @@
+# Records this run as the successful result for its inputs (see earlier-result). Use it as the job's last step.
+name: Save result
+description: Record this run as the result for the given inputs key
+inputs:
+  key:
+    description: The key earlier-result computed
+    required: true
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: mkdir -p .earlier-result && echo "${{ github.run_id }}" > .earlier-result/run
+    - uses: actions/cache/save@v4
+      continue-on-error: true  # a rerun of the same run finds the key already saved
+      with:
+        path: .earlier-result
+        key: ${{ inputs.key }}
+        # Saved on the job's runner, read on Linux.
+        enableCrossOsArchive: true

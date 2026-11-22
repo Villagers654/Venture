@@ -23,9 +23,43 @@ on:
 
 permissions:
   contents: read
+  actions: read  # earlier runs' artifacts (.github/actions/earlier-result)
 
 jobs:
+  # A successful earlier run on the same inputs stands in for the build (.github/actions/earlier-result).
+  reuse:
+    runs-on: ubuntu-24.04
+    outputs:
+      key: ${{ steps.earlier.outputs.key }}
+      run: ${{ steps.earlier.outputs.run }}
+    steps:
+      - uses: actions/checkout@v5
+      - id: earlier
+        uses: ./.github/actions/earlier-result
+        with:
+          name: android-${{ inputs.release && 'release' || 'ci' }}
+          workflow: android.yml
+          artifacts: venture-android-arm64
+  reused:
+    needs: reuse
+    if: needs.reuse.outputs.run != '' && inputs.release
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: venture-android-arm64
+          path: apk
+          run-id: ${{ needs.reuse.outputs.run }}
+          github-token: ${{ github.token }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: venture-android-arm64
+          path: apk/*.apk
+          if-no-files-found: error
+
   apk:
+    needs: reuse
+    if: needs.reuse.outputs.run == ''
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
@@ -37,8 +71,9 @@ jobs:
           distribution: temurin
           java-version: 21
       - name: Toolchain
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends cmake ninja-build
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends cmake ninja-build ccache
       - name: Restore FetchContent sources
+        id: fetch
         uses: actions/cache/restore@v4
         with:
           path: |
@@ -46,6 +81,14 @@ jobs:
             !.deps/fetch/*-build
           key: ${{ env.FETCH_KEY }}
           restore-keys: android-fetch-
+      - name: Restore compiler cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/ccache
+          key: android-ccache-${{ inputs.release && 'release' || 'ci' }}-${{ github.run_id }}
+          restore-keys: |
+            android-ccache-ci-
+            android-ccache-release-
       # CI artifacts use a development key generated on the runner; a release
       # build signs with the release key, and fails without it.
       - name: Release key
@@ -62,7 +105,9 @@ jobs:
           echo "VENTURE_APK_KEYSTORE_PASS=$KEYSTORE_PASS" >> "$GITHUB_ENV"
       - name: Build
         run: >-
-          cmake --preset linux-android-arm64 -DVENTURE_ANDROID_JAVA_HOME="$JAVA_HOME" &&
+          cmake --preset linux-android-arm64 -DVENTURE_ANDROID_JAVA_HOME="$JAVA_HOME"
+          -DVENTURE_AGENT_CACHE=ON -DVENTURE_AGENT_CACHE_ROOT="$RUNNER_TEMP" -DVENTURE_CCACHE_MAX_SIZE=2GiB
+          -DVENTURE_PROBE_CACHE_ROOT="$RUNNER_TEMP/ccache/probes" &&
           cmake --build build/linux-android-arm64 -j 4 --target venture_apk
       - name: Remove the release key
         if: always() && inputs.release
@@ -77,7 +122,7 @@ jobs:
           path: build/linux-android-arm64/apk/*.apk
           retention-days: 14
       - name: Save FetchContent sources
-        if: always()
+        if: always() && steps.fetch.outputs.cache-hit != 'true'
         continue-on-error: true
         uses: actions/cache/save@v4
         with:
@@ -85,9 +130,15 @@ jobs:
             .deps/fetch
             !.deps/fetch/*-build
           key: ${{ env.FETCH_KEY }}
+      - name: Save compiler cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/ccache
+          key: android-ccache-${{ inputs.release && 'release' || 'ci' }}-${{ github.run_id }}
 
   emulator:
-    needs: apk
+    needs: [reuse, apk]
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -118,3 +169,6 @@ jobs:
           name: venture-android-emulator-smoke
           path: smoke
           retention-days: 14
+      - uses: ./.github/actions/save-result
+        with:
+          key: ${{ needs.reuse.outputs.key }}
