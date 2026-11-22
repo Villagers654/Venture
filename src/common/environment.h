@@ -27,9 +27,11 @@ bool use_gamescope_wayland();
 // so the layer foveates only that copy, blurring what the game already drew
 // at full resolution without saving its GPU time; Venture's own foveation
 // works on the game's passes instead. Sets the layer's disable variable
-// (DISABLE_VULKAN_FDM_INJECTION_LAYER) unless the user set it, so the Vulkan
-// and OpenXR loaders leave it out. Call before other threads start and before
-// any loader (setenv). True when it set it.
+// (DISABLE_VULKAN_FDM_INJECTION_LAYER) unless the user set it or turned
+// Venture's foveated rendering off (VENTURE_FOVEATION=off, which leaves the
+// host's layer as the host set it), so the Vulkan and OpenXR loaders leave it
+// out. Call before other threads start and before any loader (setenv). True
+// when it set it.
 bool disable_host_foveation_layer();
 // The display use_gamescope_wayland() would set from these variables (the
 // socket must exist), or empty.

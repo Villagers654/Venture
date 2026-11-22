@@ -2105,7 +2105,8 @@ TEST_CASE("Anisotropic filtering: automatic on discrete GPUs, and only mipmapped
 }
 TEST_CASE("Foveation: full rate in the middle, half then quarter towards the edges, by level") {
   using namespace venture::gfx::foveation;
-  CHECK(parse_mode("") == Mode::automatic);
+  CHECK(parse_mode("") == Mode::dynamic);
+  CHECK(parse_mode("dynamic") == Mode::dynamic);
   CHECK(parse_mode("fixed") == Mode::fixed);
   CHECK(parse_mode("off") == Mode::off);
   CHECK(effective_level(Level::none) == Level::medium);
@@ -2161,4 +2162,28 @@ TEST_CASE("Foveation: full rate in the middle, half then quarter towards the edg
   std::vector<std::uint8_t> densities(8 * 8 * 2);
   fill_densities(densities, 8, 8, Pattern{Level::high, false, 0}, fov, ahead);
   CHECK(densities[0] == 128);  // top-left corner: quarter rate
+}
+TEST_CASE("Foveation: an eye-tracked map refills fast enough to follow the gaze every frame") {
+  using namespace venture::gfx::foveation;
+  const float d = 3.14159265f / 180;
+  const Fov fov{-52 * d, 42 * d, 43 * d, -50 * d};
+  // RateField answers as rate_at does.
+  const Centre gaze{std::tan(10 * d), std::tan(-5 * d), -1};
+  const Pattern pattern{Level::high, true, 0};
+  const RateField field(pattern, fov, gaze);
+  for (float u = 0; u <= 1; u += 0.05f)
+    for (float v = 0; v <= 1; v += 0.05f) CHECK(field.at(u, v) == rate_at(pattern, fov, gaze, u, v));
+  // Two 2800x2856 eyes in 16-pixel texels: a frame's refill on a gaze move.
+  const std::uint32_t w = (2800 + 15) / 16, h = (2856 + 15) / 16;
+  std::vector<std::uint8_t> rates(std::size_t(w) * h);
+  constexpr int kFrames = 50;
+  const auto began = std::chrono::steady_clock::now();
+  for (int frame = 0; frame < kFrames; ++frame) {
+    const Centre moving{std::tan(float(frame % 20) * d), 0, -1};
+    for (int eye = 0; eye < 2; ++eye) fill_shading_rates(rates, w, h, 16, 16, 2800, 2856, pattern, fov, moving);
+  }
+  const double ms =
+      std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - began).count() / kFrames;
+  MESSAGE("gaze refill of two eyes: " << ms << " ms");
+  CHECK(ms < 2.0);  // well under a frame even on a loaded machine
 }

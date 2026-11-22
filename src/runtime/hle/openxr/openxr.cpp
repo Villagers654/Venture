@@ -1656,6 +1656,7 @@ XrResult xrEndFrame(XrSession handle, const XrFrameEndInfo *info) {
     // Blits, which reverse rows, take single-sample images only.
     r.flip_rows = rects.flipped.contains(chain) && r.info.sampleCount == 1;
   }
+  foveate_eye_views(layers, info->displayTime);
   if (venture::environment::getenv("VENTURE_XR_SWAPCHAIN_STATS")) {
     const auto ever = std::count_if(state().swapchains.begin(), state().swapchains.end(),
         [](const auto& entry) { return entry.second.ever_submitted; });

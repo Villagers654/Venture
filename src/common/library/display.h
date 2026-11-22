@@ -4,7 +4,8 @@
 // one (Settings > Runtime). The launcher passes the effective choice to the
 // runtime as VENTURE_RESOLUTION, VENTURE_FRAME_RATE, VENTURE_MIRROR and
 // VENTURE_MIRROR_EYE (src/runtime/xr/display_override.h), VENTURE_EYE_SCALE
-// (src/runtime/xr/eye_scale.h), VENTURE_ANISOTROPY (src/runtime/gfx/anisotropy.h), VENTURE_PC_AUDIO
+// (src/runtime/xr/eye_scale.h), VENTURE_ANISOTROPY (src/runtime/gfx/anisotropy.h), VENTURE_FOVEATION
+// (src/runtime/gfx/foveation.h), VENTURE_PC_AUDIO
 // (src/runtime/audio/output_mirror.h) and VENTURE_TEXTURE_COMPRESSION(_THRESHOLD)
 // (src/runtime/hle/vulkan/texture.cpp).
 #pragma once
@@ -90,6 +91,10 @@ struct DisplaySettings {
   // "auto" (16x on a discrete GPU, the game's own on an integrated one), "off"
   // or a level "2", "4", "8" or "16"; "" follows the global setting.
   std::string anisotropy = "auto";
+  // Foveated rendering (runtime gfx/foveation.h): "dynamic" (eye-tracked on a
+  // headset with eye tracking, else off), "fixed" or "off"; "" follows the
+  // global setting.
+  std::string foveation = "dynamic";
   // A game's decoded textures stored as BC7: a texture_compression_modes id;
   // "" follows the global setting, which Settings::texture_compression keeps
   // (empty here in the global settings).
@@ -131,6 +136,8 @@ std::string eye_scale_environment(const DisplaySettings &d);
 std::string anisotropy_environment(const DisplaySettings &d);
 // True for the values above.
 bool valid_anisotropy(std::string_view value);
+// VENTURE_FOVEATION for effective settings: "dynamic", "fixed" or "off".
+std::string foveation_environment(const DisplaySettings &d);
 // VENTURE_TEXTURE_COMPRESSION for a game, its own choice over the global one
 // (Settings::texture_compression and _threshold): "always", "auto" or "never",
 // and for "auto" its VENTURE_TEXTURE_COMPRESSION_THRESHOLD percent (0 otherwise).

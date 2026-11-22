@@ -1022,6 +1022,7 @@ std::vector<std::pair<std::string, std::string>> launch_environment(const Settin
   environment.push_back({"VENTURE_EYE_SCALE", eye_scale_environment(display)});
   // Anisotropic filtering of the game's textures; automatic is on for a discrete GPU.
   environment.push_back({"VENTURE_ANISOTROPY", anisotropy_environment(display)});
+  environment.push_back({"VENTURE_FOVEATION", foveation_environment(display)});
   // A game's advanced switches, only those it changed.
   for (auto &variable : advanced_environment(display)) environment.push_back(std::move(variable));
   return environment;

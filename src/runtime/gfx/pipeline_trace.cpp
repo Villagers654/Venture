@@ -1,5 +1,6 @@
 #include "gfx/pipeline_trace.h"
 #include "gfx/anisotropy.h"
+#include "gfx/foveation_vulkan.h"
 #include "core/thread_lifetime.h"
 #include "gfx/spirv_precision.h"
 #include "common/environment.h"
@@ -601,8 +602,11 @@ void run(Proxy& p, const char* trace_kind, const char* via = nullptr) {
   const auto start = monotonic_ns();
   try {
     auto& d = *job->device;
-    create_traced(d, profile::PipelineSource::async, d.graphics, d.handle, VK_NULL_HANDLE, 1,
-                  &job->copy->info, nullptr, &pipeline, result);
+    auto info = job->copy->info;
+    foveation::PipelineStorage foveated;
+    foveation::patch_pipelines(d.handle, {&info, 1}, foveated);
+    create_traced(d, profile::PipelineSource::async, d.graphics, d.handle, VK_NULL_HANDLE, 1, &info, nullptr,
+                  &pipeline, result);
   } catch (...) {
     result = VK_ERROR_OUT_OF_HOST_MEMORY;
   }
@@ -780,6 +784,12 @@ VkResult VKAPI_CALL graphics(VkDevice handle, VkPipelineCache cache, std::uint32
         if (resolved.empty()) resolved.assign(infos, infos + count);
         resolved[i].basePipelineHandle = resolve(infos[i].basePipelineHandle, "base");
       }
+    // Foveation lets its shading-rate attachments set the rate (gfx/foveation_vulkan.h).
+    foveation::PipelineStorage foveated;
+    if (infos && count && foveation::device_active(handle)) {
+      if (resolved.empty()) resolved.assign(infos, infos + count);
+      foveation::patch_pipelines(handle, resolved, foveated);
+    }
     VkResult result;
     create_traced(*d, d->source, d->graphics, handle, cache, count, resolved.empty() ? infos : resolved.data(), a, out, result);
     return result;
@@ -970,7 +980,8 @@ PFN_vkVoidFunction angle_proc(std::string_view name, PFN_vkVoidFunction fn) {
     angle_create_sampler_next = reinterpret_cast<PFN_vkCreateSampler>(fn);
     return reinterpret_cast<PFN_vkVoidFunction>(angle_create_sampler);
   }
-  return pipeline_proc(name);
+  if (auto traced = pipeline_proc(name)) return traced;
+  return foveation::proc(name);
 }
 std::atomic<PFN_vkGetDeviceProcAddr> device_loader{nullptr};
 PFN_vkVoidFunction VKAPI_CALL device_gdpa(VkDevice d, const char* name) {

@@ -130,6 +130,8 @@ bool use_gamescope_wayland() {
 bool disable_host_foveation_layer() {
   constexpr const char* name = "DISABLE_VULKAN_FDM_INJECTION_LAYER";
   if (std::getenv(name)) return false;
+  // Foveated rendering off in Venture: the host's layer stays as the host set it.
+  if (const char* mode = std::getenv("VENTURE_FOVEATION"); mode && std::string_view(mode) == "off") return false;
 #ifdef _WIN32
   if (_putenv_s(name, "1") != 0) return false;
 #else

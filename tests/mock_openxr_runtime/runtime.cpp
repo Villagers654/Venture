@@ -88,6 +88,28 @@ XrTime begun_time = 0;
 XrTime predicted = 0;
 std::map<std::string, XrPath> paths;
 std::map<XrPath, std::string> path_names;
+// VENTURE_MOCK_EYE_GAZE: a headset with eye tracking (XR_EXT_eye_gaze_interaction).
+// "yaw,pitch" in degrees (right and up positive) holds the gaze there; "sweep"
+// moves it round a 15-degree circle every 4 seconds.
+const char* mock_eye_gaze() {
+  static const char* value = venture::environment::getenv("VENTURE_MOCK_EYE_GAZE");
+  return value && *value ? value : nullptr;
+}
+XrQuaternionf mock_gaze_rotation(XrTime time) {
+  float yaw = 0, pitch = 0;
+  const std::string_view text = mock_eye_gaze() ? mock_eye_gaze() : "";
+  if (text == "sweep") {
+    const double turn = double(time % 4'000'000'000) / 4e9 * 2 * 3.14159265358979;
+    yaw = float(15 * std::cos(turn));
+    pitch = float(15 * std::sin(turn));
+  } else if (std::sscanf(std::string(text).c_str(), "%f,%f", &yaw, &pitch) != 2) {
+    yaw = pitch = 0;
+  }
+  // Yaw about +y (a right turn is negative), then pitch about +x.
+  const float y = -yaw * 3.14159265358979f / 360, x = pitch * 3.14159265358979f / 360;
+  const XrQuaternionf turn{0, std::sin(y), 0, std::cos(y)}, tilt{std::sin(x), 0, 0, std::cos(x)};
+  return venture::xr::multiply(turn, tilt);
+}
 struct Space {
   XrReferenceSpaceType type;
   XrPosef offset;
@@ -100,6 +122,7 @@ struct Space {
 };
 std::map<XrSpace, Space> spaces;
 XrPosef local_origin{{0, 0, 0, 1}, {0, 1.6f, 0}};
+XrTime located_time = 0;  // the time of the space being located (m_xrLocateSpace)
 XrPosef world_pose(XrSpace space);
 bool space_active(XrSpace space);
 std::set<XrActionSet> action_sets;
@@ -1005,6 +1028,12 @@ XrResult m_xrEnumerateInstanceExtensionProperties(const char *, std::uint32_t ca
     e.extensionVersion = 9;
     extensions.push_back(e);
   }
+  if (mock_eye_gaze()) {
+    XrExtensionProperties e{XR_TYPE_EXTENSION_PROPERTIES};
+    std::strcpy(e.extensionName, "XR_EXT_eye_gaze_interaction");
+    e.extensionVersion = 2;
+    extensions.push_back(e);
+  }
   for (auto name : {"XR_KHR_vulkan_enable", "XR_KHR_vulkan_enable2", "XR_EXT_hand_tracking", "XR_EXT_local_floor",
                     VENTURE_MOCK_TIME_EXTENSION, "XR_KHR_composition_layer_cube",
                     "XR_KHR_composition_layer_cylinder", "XR_KHR_composition_layer_equirect",
@@ -1168,6 +1197,9 @@ XrResult m_xrGetSystemProperties(XrInstance, XrSystemId id, XrSystemProperties *
       reinterpret_cast<XrSystemHandTrackingPropertiesEXT*>(node)->supportsHandTracking = XR_TRUE;
       hand_written = true;
     }
+    if (node->type == XR_TYPE_SYSTEM_EYE_GAZE_INTERACTION_PROPERTIES_EXT)
+      reinterpret_cast<XrSystemEyeGazeInteractionPropertiesEXT*>(node)->supportsEyeGazeInteraction =
+          mock_eye_gaze() ? XR_TRUE : XR_FALSE;
     if (node->type == XR_TYPE_SYSTEM_PASSTHROUGH_PROPERTIES_FB)
       reinterpret_cast<XrSystemPassthroughPropertiesFB*>(node)->supportsPassthrough = passthrough("fb");
     if (node->type == XR_TYPE_SYSTEM_PASSTHROUGH_PROPERTIES2_FB)
@@ -1572,6 +1604,7 @@ XrResult m_xrLocateSpace(XrSpace space, XrSpace base, XrTime time, XrSpaceLocati
     return XR_ERROR_HANDLE_INVALID;
   if (time <= 0)
     return XR_ERROR_TIME_INVALID;
+  located_time = time;
   const bool active = space_active(space) && space_active(base);
   out->locationFlags = active ? 15 : 0;
   out->pose = venture::xr::compose(venture::xr::inverse(world_pose(base)), world_pose(space));
@@ -2483,10 +2516,24 @@ XrResult get_action_state(XrSession s, const XrActionStateGetInfo* info, XrActio
   if (session_state != XR_SESSION_STATE_FOCUSED) out = {};
   return XR_SUCCESS;
 }
+// Whether `action` is bound to the eye gaze pose (XR_EXT_eye_gaze_interaction).
+bool gaze_action(XrAction action) {
+  if (!mock_eye_gaze()) return false;
+  for (const auto& [profile, list] : bindings) {
+    const auto name = path_names.find(profile);
+    if (name == path_names.end() || name->second != "/interaction_profiles/ext/eye_gaze_interaction") continue;
+    for (const auto& binding : list)
+      if (binding.action == action) return true;
+  }
+  return false;
+}
 XrPosef world_pose(XrSpace space) {
   const auto& s = spaces.at(space);
   XrPosef pose{{0, 0, 0, 1}, {0, 0, 0}};
-  if (s.action) {
+  if (s.action && gaze_action(s.action)) {
+    // The gaze from between the eyes, turned with the head.
+    pose = {venture::xr::multiply(script.head.orientation, mock_gaze_rotation(located_time)), script.head.position};
+  } else if (s.action) {
     auto it = action_states.find({s.action, s.hand});
     if (it != action_states.end() && it->second.source) {
       const auto& source = path_names.at(it->second.source);
@@ -2506,7 +2553,7 @@ XrPosef world_pose(XrSpace space) {
 bool space_active(XrSpace space) {
   const auto& s = spaces.at(space);
   if (!script.active) return false;
-  if (!s.action) return true;
+  if (!s.action || gaze_action(s.action)) return true;
   auto it = action_states.find({s.action, s.hand});
   return it != action_states.end() && it->second.active;
 }

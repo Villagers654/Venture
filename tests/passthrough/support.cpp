@@ -11,6 +11,10 @@
 #include "xr/queue.h"
 #include "xr/eye_scale.h"
 #include "gfx/gpu_device.h"
+#ifdef VENTURE_PASSTHROUGH_REAL_SESSION
+#include "gfx/foveation_vulkan.h"
+#include "xr/eye_gaze.h"
+#endif
 #include "hle/vulkan/timing.h"
 #include "core/process.h"
 #include "common/log.h"
@@ -54,6 +58,22 @@ Level level() { return Level::warn; }
 void write(Level, std::string_view, std::string_view message) { std::fprintf(stderr, "%.*s\n", int(message.size()), message.data()); }
 }
 namespace java { JavaVM_* host_vm() { return nullptr; } }
+#ifdef VENTURE_PASSTHROUGH_REAL_SESSION
+// Foveated rendering (gfx/foveation_vulkan.h, xr/eye_gaze.h) stays off in the
+// fixture, which links no GPU library: VENTURE_FOVEATION is not in effect.
+namespace gfx::foveation {
+bool wanted() { return false; }
+bool eye_tracked() { return false; }
+void register_eye_swapchain(VkDevice, const void*, std::span<const EyeImage>, std::uint32_t, std::uint32_t,
+                            std::uint32_t, bool) {}
+void forget_eye_swapchain(VkDevice, const void*) {}
+void update_eye_views(const void*, std::span<const EyeView>, Level, float, bool) {}
+void update_scene_views(const EyeView&, const EyeView&, Level, float, bool) {}
+}  // namespace gfx::foveation
+namespace xr::eye_gaze {
+std::optional<XrVector3f> direction(XrTime) { return std::nullopt; }
+}  // namespace xr::eye_gaze
+#endif
 namespace android { SurfaceBridge surface_bridge() { return {}; } }
 namespace vulkan {
 bool timing_enabled() { return false; }

@@ -1,5 +1,6 @@
 #include "common/environment.h"
 #include "xr/menu_chord.h"
+#include "xr/eye_gaze.h"
 #include "xr/grip_toggle.h"
 #include "xr/haptic_output.h"
 #include "xr/bindings.h"
@@ -226,6 +227,8 @@ XrResult suggest(XrInstance instance, const XrInteractionProfileSuggestedBinding
         break;
       }
     }
+  // Venture's gaze (eye-tracked foveation) joins a game's own eye gaze bindings.
+  eye_gaze::add_binding(instance, profile, bindings);
   auto copy = *info;
   copy.countSuggestedBindings = static_cast<std::uint32_t>(bindings.size()); copy.suggestedBindings = bindings.data();
   return ::xrSuggestInteractionProfileBindings(instance, &copy);
@@ -243,9 +246,15 @@ XrResult attach_with_menu_chord(XrSession session, const XrSessionActionSetsAtta
   std::vector<XrActionSet> sets;
   if (info->countActionSets) sets.assign(info->actionSets, info->actionSets + info->countActionSets);
   sets.push_back(chord_set);
+  // Venture's gaze (eye-tracked foveation) is attached with the game's sets.
+  eye_gaze::before_attach(host_xr().instance);
+  if (const auto gaze = eye_gaze::action_set(host_xr().instance)) sets.push_back(gaze);
   auto copy = *info; copy.countActionSets = static_cast<std::uint32_t>(sets.size()); copy.actionSets = sets.data();
   result = host_call<PFN_xrAttachSessionActionSets, "xrAttachSessionActionSets">(session, &copy);
-  if (XR_SUCCEEDED(result)) sessions[session].attached = true;
+  if (XR_SUCCEEDED(result)) {
+    sessions[session].attached = true;
+    eye_gaze::attached(session);
+  }
   return result;
 }
 XrResult sync_with_menu_chord(XrSession session, const XrActionsSyncInfo* info) {
@@ -256,6 +265,7 @@ XrResult sync_with_menu_chord(XrSession session, const XrActionsSyncInfo* info) 
   std::vector<XrActiveActionSet> sets;
   if (info->countActiveActionSets) sets.assign(info->activeActionSets, info->activeActionSets + info->countActiveActionSets);
   sets.push_back({chord_set, XR_NULL_PATH});
+  if (const auto gaze = eye_gaze::action_set(host_xr().instance)) sets.push_back({gaze, XR_NULL_PATH});
   auto copy = *info; copy.countActiveActionSets = static_cast<std::uint32_t>(sets.size()); copy.activeActionSets = sets.data();
   auto result = host_call<PFN_xrSyncActions, "xrSyncActions">(session, &copy);
   if (XR_FAILED(result)) return result;
@@ -365,7 +375,11 @@ void forget_menu_action(XrAction action) {
 void forget_menu_action_set(XrActionSet set) {
   forget_menu_actions([&](XrAction, XrActionSet s) { return s == set; });
 }
-void reset_menu_session(XrSession session) { std::lock_guard lock(mutex); sessions.erase(session); }
+void reset_menu_session(XrSession session) {
+  eye_gaze::forget_session(session);
+  std::lock_guard lock(mutex);
+  sessions.erase(session);
+}
 bool menu_chord_pulse(XrSession session) {
   std::lock_guard lock(mutex); auto it = sessions.find(session);
   return it != sessions.end() && it->second.active && it->second.pulse &&

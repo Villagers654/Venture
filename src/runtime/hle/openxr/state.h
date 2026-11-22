@@ -52,6 +52,11 @@ VENTURE_XR_HANDLE_TYPE(XrTriangleMeshFB)
 VENTURE_XR_HANDLE_TYPE(XrDebugUtilsMessengerEXT)
 #undef VENTURE_XR_HANDLE_TYPE
 struct AndroidSurface;
+struct Foveation {
+  XrFoveationLevelFB level;
+  float vertical;
+  XrFoveationDynamicFB dynamic;
+};
 struct Swapchain {
   XrSwapchain handle{}; // stable, guest-only identity
   std::unique_ptr<std::uint64_t> identity;
@@ -94,6 +99,7 @@ struct Swapchain {
   bool sampler_updated = false;
   XrFoveationProfileFB profile{};
   XrSwapchainStateFoveationFlagsFB foveation_flags = 0;
+  Foveation foveation_requested{XR_FOVEATION_LEVEL_NONE_FB, 0, XR_FOVEATION_DYNAMIC_DISABLED_FB};
   std::shared_ptr<AndroidSurface> android_surface;
   // Zero-copy (docs/design/zero-copy-eyes.md): the host chain whose images are
   // `images`, which the game renders into directly. Its acquire, wait and
@@ -118,11 +124,6 @@ struct Swapchain {
   bool eye_observed = false;
   std::uint64_t direct_frames = 0;  // releases presented without a copy
   std::vector<std::shared_ptr<vulkan::ImageOwnership>> ownership;  // per image
-};
-struct Foveation {
-  XrFoveationLevelFB level;
-  float vertical;
-  XrFoveationDynamicFB dynamic;
 };
 struct State {
   std::recursive_mutex mutex;
@@ -269,6 +270,11 @@ struct MirrorEye {
 // The first projection layer's view `eye` (0 left, 1 right; a mono projection's
 // only view), if a layer is one.
 std::optional<MirrorEye> mirror_eye(std::span<const XrCompositionLayerBaseHeader* const> layers, std::uint32_t eye);
+// Venture's foveation (gfx/foveation_vulkan.h): a Vulkan chain that may hold
+// eyes gets a foveation map, and each frame's projection views fill it.
+void register_foveation(const Swapchain& chain);
+void forget_foveation(const Swapchain& chain);
+void foveate_eye_views(std::span<const XrCompositionLayerBaseHeader* const> layers, XrTime time);
 // `eye_rects`: the largest projection-view rect this frame of each color chain
 // a projection layer shows; a new host chain for one is sized to the eye size
 // the game was told (xr/presentation.h eye_presentation_extent).

@@ -1,5 +1,6 @@
 #include "common/injected_modules.h"
 #include "common/log.h"
+#include "gfx/foveation_vulkan.h"
 #include "gfx/angle.h"
 #include "gfx/anisotropy.h"
 #include "gfx/angle_callbacks.h"
@@ -603,6 +604,10 @@ VkResult create_device(VkPhysicalDevice physical,
     families.resize(family_count);
     mirror_queue.add(families, ci);
   }
+  // Foveated rendering's shading-rate attachments (gfx/foveation_vulkan.h).
+  foveation::DeviceAdditions foveated;
+  foveation::add_to_device(loader(), gpu.instance, physical, ci, foveated);
+  ci = foveated.info;
   VkResult result = VK_ERROR_INITIALIZATION_FAILED;
   try {
     auto& host = xr::host_xr();
@@ -636,6 +641,8 @@ VkResult create_device(VkPhysicalDevice physical,
   if (result == VK_SUCCESS) {
     gpu.device = *out;
     mirror_queue.created(*out);
+    foveation::register_device(*out, physical, loader(), gpu.instance,
+                               vk<PFN_vkGetDeviceProcAddr>(gpu.instance, "vkGetDeviceProcAddr"), foveated.added);
     // ANGLE enables samplerAnisotropy where the GPU has it (for
     // GL_EXT_texture_filter_anisotropic); its samplers may then be raised.
     bool anisotropy = ci.pEnabledFeatures && ci.pEnabledFeatures->samplerAnisotropy;
@@ -934,6 +941,7 @@ bool borrow_angle_device(VkInstance i, VkPhysicalDevice p, VkDevice d,
 void discard_angle_device() {
   std::lock_guard lock(creation_lock);
   if (gpu.device) release_pipeline_device(gpu.device);
+  if (gpu.device) foveation::release_device(gpu.device);
   gpu.instance = nullptr;
   gpu.physical_device = nullptr;
   gpu.device = nullptr;

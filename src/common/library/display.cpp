@@ -28,6 +28,7 @@ DisplaySettings game_display_defaults() {
   d.pc_audio.clear();
   d.match_resolution.clear();
   d.anisotropy.clear();
+  d.foveation.clear();
   return d;
 }
 
@@ -50,6 +51,7 @@ DisplaySettings display_from_json(const Json &j, bool per_game) {
   if (const auto pc = str(j, "pcAudio"); pc == "on" || pc == "off") d.pc_audio = pc;
   if (const auto m = str(j, "matchResolution"); m == "auto" || m == "off") d.match_resolution = m;
   if (const auto a = str(j, "anisotropy"); valid_anisotropy(a)) d.anisotropy = a;
+  if (const auto f = str(j, "foveation"); f == "dynamic" || f == "fixed" || f == "off") d.foveation = f;
   // A game's texture compression; the global one is a top-level setting.
   if (const auto mode = str(j, "textureCompression");
       per_game && std::ranges::find(texture_compression_modes, mode) != std::end(texture_compression_modes))
@@ -79,7 +81,7 @@ DisplaySettings display_from_json(const Json &j, bool per_game) {
 Json display_to_json(const DisplaySettings &d) {
   Json j{{"resolution", d.resolution}, {"percent", d.percent}, {"frameRate", d.rate}, {"customFrameRate", d.custom_rate},
          {"mirror", d.mirror}, {"mirrorEye", d.mirror_eye}, {"mirrorFullscreen", d.mirror_fullscreen}, {"pcAudio", d.pc_audio},
-         {"matchResolution", d.match_resolution}, {"anisotropy", d.anisotropy}, {"mirrorChosen", true}};
+         {"matchResolution", d.match_resolution}, {"anisotropy", d.anisotropy}, {"foveation", d.foveation}, {"mirrorChosen", true}};
   // Only a game's own choice; the global settings keep none here.
   if (!d.texture_compression.empty()) j["textureCompression"] = d.texture_compression;
   if (d.texture_compression_threshold) j["textureCompressionThreshold"] = d.texture_compression_threshold;
@@ -115,6 +117,7 @@ DisplaySettings effective_display(const DisplaySettings &global, const DisplaySe
   if (!game->pc_audio.empty()) d.pc_audio = game->pc_audio;
   if (!game->match_resolution.empty()) d.match_resolution = game->match_resolution;
   if (!game->anisotropy.empty()) d.anisotropy = game->anisotropy;
+  if (!game->foveation.empty()) d.foveation = game->foveation;
   return d;
 }
 
@@ -150,6 +153,10 @@ std::string eye_scale_environment(const DisplaySettings &d) { return d.match_res
 
 std::string anisotropy_environment(const DisplaySettings &d) {
   return valid_anisotropy(d.anisotropy) ? d.anisotropy : "auto";
+}
+
+std::string foveation_environment(const DisplaySettings &d) {
+  return d.foveation == "fixed" || d.foveation == "off" ? d.foveation : "dynamic";
 }
 
 bool valid_anisotropy(std::string_view value) {

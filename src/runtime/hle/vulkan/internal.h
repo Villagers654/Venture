@@ -201,7 +201,7 @@ std::uint32_t command_null_vertex_bindings(VkCommandBuffer command);
 // The pass-through layers between the guest's dispatch and the host, top first.
 // A layer forwards a command it intercepts to the next layer below it that also
 // intercepts it, else to the host, so every layer sees every call it hooks.
-enum class Layer { dispatch, breadcrumbs, render_check, render_area, multiview, hardware_buffer, sync_fd, external, wsi, shader, bound_sets, texture, pipeline, deferred_free, descriptor_fill };
+enum class Layer { dispatch, breadcrumbs, render_check, render_area, multiview, hardware_buffer, sync_fd, external, wsi, shader, bound_sets, texture, pipeline, deferred_free, descriptor_fill, foveation };
 // Whether the device has nullDescriptor enabled (VENTURE_VULKAN_NULL_DESCRIPTORS).
 bool device_null_descriptor(VkDevice device);
 // New descriptor sets start with null descriptors (descriptor_fill.cpp).

@@ -44,6 +44,24 @@ foreach(env 1.0 1.1)
     VERBATIM)
   target_sources(venture_tests PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/vulkan_subpass_inputs.${env}.inc)
 endforeach()
+# Foveation on a real GPU: VENTURE_FOVEATION is read once per process, so the
+# case runs in its own process with fixed foveation on.
+target_sources(venture_tests PRIVATE runtime/foveation_vulkan_test.cpp)
+foreach(stage vert frag)
+  add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/foveation_vulkan.${stage}.inc
+    COMMAND $<TARGET_FILE:glslang-standalone> -V --target-env vulkan1.0
+      ${PROJECT_SOURCE_DIR}/tests/runtime/foveation_vulkan.${stage}
+      -o ${CMAKE_CURRENT_BINARY_DIR}/foveation_vulkan.${stage}.spv
+    COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tools/codegen/vk_spirv.py
+      ${CMAKE_CURRENT_BINARY_DIR}/foveation_vulkan.${stage}.spv
+      ${CMAKE_CURRENT_BINARY_DIR}/foveation_vulkan.${stage}.inc
+    DEPENDS glslang-standalone runtime/foveation_vulkan.${stage} ${PROJECT_SOURCE_DIR}/tools/codegen/vk_spirv.py
+    VERBATIM)
+  target_sources(venture_tests PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/foveation_vulkan.${stage}.inc)
+endforeach()
+add_test(NAME gfx_foveation COMMAND venture_tests
+  "--test-case=Foveation shades an eye pass's edges in coarse fragments on the GPU")
+set_tests_properties(gfx_foveation PROPERTIES ENVIRONMENT VENTURE_FOVEATION=fixed)
 target_link_libraries(venture_tests PRIVATE ${VENTURE_ASTCENC})
 if(UNIX)
   target_link_libraries(venture_tests PRIVATE ${CMAKE_DL_LIBS})

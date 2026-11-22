@@ -20,11 +20,11 @@
 #include <string_view>
 
 namespace venture::gfx::foveation {
-// VENTURE_FOVEATION = auto | fixed | off
-//   auto (the launcher's "Foveated rendering" Automatic, the default) is
-//   eye-tracked when the headset reports eye tracking, else off. fixed centres
+// VENTURE_FOVEATION = dynamic | fixed | off
+//   dynamic (the launcher's "Foveated rendering" Dynamic, the default, also
+//   when unset) is eye-tracked when the headset reports eye tracking, else off. fixed centres
 //   the pattern on the lens; off renders everything at full resolution.
-enum class Mode { automatic, fixed, off };
+enum class Mode { dynamic, fixed, off };
 Mode parse_mode(std::string_view value);
 const char* mode_name(Mode mode);
 
@@ -70,6 +70,21 @@ Regions regions(const Pattern& pattern);
 // The rate at a point of the eye image: u and v in 0..1 from the image's top
 // left, v down.
 Rate rate_at(const Pattern& pattern, const Fov& fov, const Centre& centre, float u, float v);
+// rate_at for many points of one view: the tangents, centre and region
+// cosines worked out once, so a map refills every frame (a gaze-following
+// map changes as often as the gaze) for a few microseconds per thousand texels.
+class RateField {
+ public:
+  RateField(const Pattern& pattern, const Fov& fov, const Centre& centre);
+  Rate at(float u, float v) const;
+
+ private:
+  bool none_ = true;
+  float tl_ = 0, tr_ = 0, tu_ = 0, td_ = 0;
+  float cx_ = 0, cy_ = 0, cz_ = -1;  // unit length
+  float ox_ = 0, oy_ = 0;            // the centre on the z = -1 plane
+  float half_cos_ = 1, quarter_cos_ = 1;
+};
 
 // VK_KHR_fragment_shading_rate's attachment encoding of a rate:
 // (log2(width) << 2) | log2(height).

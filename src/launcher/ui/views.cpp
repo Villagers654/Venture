@@ -2870,6 +2870,32 @@ void App::draw_display_rows(library::DisplaySettings& d, bool per_game, const ch
     }
   });
   divider();
+  // Foveated rendering (runtime gfx/foveation.h): Dynamic follows the gaze on
+  // a headset with eye tracking and is off otherwise; Fixed centres on the
+  // lens. --smoke-view display-foveation opens its list once.
+  static bool smoke_foveation = options_.smoke_view == "display-foveation";
+  // i18n: Settings row: render the edges of the view at lower resolution.
+  setting_row(tr("Foveated rendering"), "", dw, s(38), [&] {
+    if (std::exchange(smoke_foveation, false)) {
+      ImGui::PushID("foveation");
+      ImGui::OpenPopup("##menu");
+      ImGui::PopID();
+    }
+    std::vector<std::string> ids{"dynamic", "fixed", "off"};
+    // i18n: Choices for "Foveated rendering".
+    std::vector<std::string> names{tr("Dynamic"), tr("Fixed"), tr("Off")};
+    if (per_game) {
+      ids.insert(ids.begin(), "");
+      names.insert(names.begin(), tr("Use global setting"));
+    }
+    const auto items = pointers(names);
+    int choice = index(ids, d.foveation);
+    if (dropdown("foveation", "", items.data(), int(items.size()), &choice, dw)) {
+      d.foveation = ids[choice];
+      changed = true;
+    }
+  });
+  divider();
   setting_row("Frame rate", "", dw, s(38), [&] {
     if (std::exchange(smoke_rates, false)) {
       ImGui::PushID("rate");

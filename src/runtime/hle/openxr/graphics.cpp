@@ -1,5 +1,8 @@
 #include "xr/dev_dump.h"
 #include "gfx/gpu_device.h"
+#include "gfx/foveation_vulkan.h"
+#include "xr/eye_gaze.h"
+#include "xr/math.h"
 #include "common/environment.h"
 #include "common/log.h"
 #include "hle/vulkan/vulkan.h"
@@ -21,6 +24,10 @@
 #include <bit>
 #include <cstdlib>
 #include <cstring>
+#include <map>
+#include <set>
+#include <array>
+#include <optional>
 #include <sstream>
 
 namespace venture::hle::openxr {
@@ -498,6 +505,119 @@ std::optional<MirrorEye> mirror_eye(std::span<const XrCompositionLayerBaseHeader
       return MirrorEye{view.subImage, view.fov};
     }
   return std::nullopt;
+}
+void register_foveation(const Swapchain& r) {
+  // Eye chains are colour images the game renders into; small chains (UI
+  // quads, icons) are left out. A chain that never shows in a projection
+  // layer keeps a full-rate map.
+  if (!gfx::foveation::wanted() || r.images.empty() || depth_format(r.info.format) ||
+      !(r.info.usageFlags & XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT) || r.info.width < 512 || r.info.height < 512)
+    return;
+  std::vector<gfx::foveation::EyeImage> images;
+  for (const auto& image : r.images) images.push_back({image.image, 0});
+  gfx::foveation::register_eye_swapchain(state().graphics.device, r.handle, images, r.info.width, r.info.height,
+                                         r.info.arraySize * r.info.faceCount, false);
+}
+void forget_foveation(const Swapchain& r) {
+  if (gfx::foveation::wanted()) gfx::foveation::forget_eye_swapchain(state().graphics.device, r.handle);
+}
+namespace {
+std::set<XrSwapchain>& fixed_chains() {
+  thread_local std::set<XrSwapchain> chains;
+  return chains;
+}
+// Where each eye of a projection layer looks, as a direction in that eye's
+// view space: straight ahead for fixed foveation; for eye-tracked, the gaze
+// (from the head, in its frame) meets a point 2 m away, and each eye looks at
+// that point from its own position, so both eyes keep the same part of the
+// scene sharp (and canted displays get their own centres). The last gaze is
+// held through a blink; after that, nullopt (fixed regions).
+std::optional<std::array<gfx::foveation::Centre, 2>> gaze_centres(const XrCompositionLayerProjection& projection,
+                                                                 XrTime time) {
+  if (!gfx::foveation::eye_tracked() || projection.viewCount < 2 || !projection.views) return std::nullopt;
+  static std::optional<XrVector3f> held;
+  static XrTime held_time = 0;
+  constexpr XrTime kBlink = 300'000'000;  // ns
+  if (auto gaze = venture::xr::eye_gaze::direction(time)) {
+    held = gaze;
+    held_time = time;
+  } else if (!held || time - held_time > kBlink) {
+    held.reset();
+    return std::nullopt;
+  }
+  using namespace venture::xr;
+  const auto& a = projection.views[0].pose;
+  const auto& b = projection.views[1].pose;
+  // The head: between the eyes, turned halfway between them.
+  auto qb = b.orientation;
+  if (a.orientation.x * qb.x + a.orientation.y * qb.y + a.orientation.z * qb.z + a.orientation.w * qb.w < 0)
+    qb = {-qb.x, -qb.y, -qb.z, -qb.w};
+  XrQuaternionf head{a.orientation.x + qb.x, a.orientation.y + qb.y, a.orientation.z + qb.z, a.orientation.w + qb.w};
+  const float n = std::sqrt(head.x * head.x + head.y * head.y + head.z * head.z + head.w * head.w);
+  if (!(n > 0)) return std::nullopt;
+  head = {head.x / n, head.y / n, head.z / n, head.w / n};
+  const XrVector3f middle{(a.position.x + b.position.x) / 2, (a.position.y + b.position.y) / 2,
+                          (a.position.z + b.position.z) / 2};
+  const float gaze_length = length(*held);
+  if (!(gaze_length > 0)) return std::nullopt;
+  constexpr float kDistance = 2.0f;  // m
+  const auto offset = rotate(head, {held->x / gaze_length * kDistance, held->y / gaze_length * kDistance,
+                                    held->z / gaze_length * kDistance});
+  const XrVector3f point{middle.x + offset.x, middle.y + offset.y, middle.z + offset.z};
+  std::array<gfx::foveation::Centre, 2> out;
+  for (int eye = 0; eye < 2; ++eye) {
+    const auto& pose = projection.views[eye].pose;
+    const auto d = rotate(inverse(pose.orientation), {point.x - pose.position.x, point.y - pose.position.y,
+                                                      point.z - pose.position.z});
+    out[eye] = {d.x, d.y, d.z};
+  }
+  return out;
+}
+}  // namespace
+
+void foveate_eye_views(std::span<const XrCompositionLayerBaseHeader* const> layers, XrTime time) {
+  if (!gfx::foveation::wanted()) return;
+  std::map<XrSwapchain, std::vector<gfx::foveation::EyeView>> chains;
+  bool scene_done = false;
+  for (auto* layer : layers) {
+    if (!layer || layer->type != XR_TYPE_COMPOSITION_LAYER_PROJECTION) continue;
+    const auto& projection = *reinterpret_cast<const XrCompositionLayerProjection*>(layer);
+    const auto centres = gaze_centres(projection, time);
+    std::vector<gfx::foveation::EyeView> layer_views;
+    for (std::uint32_t i = 0; projection.views && i < projection.viewCount; ++i) {
+      const auto& view = projection.views[i];
+      const auto& rect = view.subImage.imageRect;
+      gfx::foveation::EyeView v{view.subImage.imageArrayIndex, rect.offset.x, rect.offset.y,
+                                std::uint32_t(std::max(0, rect.extent.width)),
+                                std::uint32_t(std::max(0, rect.extent.height)),
+                                {view.fov.angleLeft, view.fov.angleRight, view.fov.angleUp, view.fov.angleDown},
+                                centres && i < 2 ? (*centres)[i] : gfx::foveation::Centre{}};
+      chains[view.subImage.swapchain].push_back(v);
+      layer_views.push_back(v);
+    }
+    // The first projection layer's eyes also shape the game's own stereo targets.
+    if (!scene_done && layer_views.size() >= 2) {
+      scene_done = true;
+      const auto it = state().swapchains.find(projection.views[0].subImage.swapchain);
+      const auto requested = it == state().swapchains.end() ? Foveation{} : it->second.foveation_requested;
+      gfx::foveation::update_scene_views(layer_views[0], layer_views[1],
+                                         gfx::foveation::Level(std::clamp<int>(requested.level, 0, 3)),
+                                         requested.vertical, centres.has_value());
+    }
+    // A chain shows the gaze only when all its views come from layers that follow it.
+    if (!centres)
+      for (std::uint32_t i = 0; projection.views && i < projection.viewCount; ++i)
+        fixed_chains().insert(projection.views[i].subImage.swapchain);
+  }
+  for (auto& [chain, views] : chains) {
+    const auto it = state().swapchains.find(chain);
+    if (it == state().swapchains.end()) continue;
+    const auto& requested = it->second.foveation_requested;
+    const bool gaze = !fixed_chains().contains(chain);
+    gfx::foveation::update_eye_views(chain, views, gfx::foveation::Level(std::clamp<int>(requested.level, 0, 3)),
+                                     requested.vertical, gaze);
+  }
+  fixed_chains().clear();
 }
 namespace {
 // A color format the guest copy can scale with a filtered blit (guest_images.cpp).
@@ -1116,6 +1236,7 @@ XrResult create_swapchain(XrSession handle, const XrSwapchainCreateInfo *info, X
       result = xr_images()->update_sampler(record.textures, record.desc, record.sampler_gles);
   } else if (!surface) {
     note_images(record);
+    register_foveation(record);
   }
   if (XR_FAILED(result)) {
     forget_images(record);
@@ -1181,6 +1302,7 @@ XrResult xrDestroySwapchain(XrSwapchain handle) {
   // Staging is freed only after every Vulkan copy that reads it completed.
   if (XR_SUCCEEDED(result) && staged(it->second)) result = it->second.backing->drain();
   if (XR_SUCCEEDED(result)) {
+    forget_foveation(it->second);
     forget_images(it->second);
     if (staged(it->second)) xr_images()->destroy_staging(it->second.backing->staged());
     if (!it->second.textures.empty())

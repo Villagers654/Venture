@@ -528,6 +528,10 @@ XrResult xrUpdateSwapchainFB(XrSwapchain handle, const XrSwapchainStateBaseHeade
     return XR_ERROR_VALIDATION_FAILURE;
   it->second.profile = f->profile;
   it->second.foveation_flags = f->flags;
+  // The level Venture's foveation uses for this chain (gfx/foveation_vulkan.h);
+  // it stays when the profile is destroyed. A null profile is no request.
+  if (f->profile) it->second.foveation_requested = *state().foveation.at(f->profile);
+  else it->second.foveation_requested = {};
   return XR_SUCCESS;
 }
 XrResult xrGetSwapchainStateFB(XrSwapchain handle, XrSwapchainStateBaseHeaderFB *header) {

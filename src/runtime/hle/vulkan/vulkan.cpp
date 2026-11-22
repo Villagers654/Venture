@@ -36,6 +36,7 @@
 #include "core/thread.h"
 #include "core/thread_runtime.h"
 #include "core/wait.h"
+#include "gfx/foveation_vulkan.h"
 #include "gfx/gpu_device.h"
 #include "gfx/pipeline_trace.h"
 #include "gfx/queue_sync.h"
@@ -1608,10 +1609,12 @@ VkResult create_device_impl(VkPhysicalDevice physical, const VkDeviceCreateInfo*
   VkPhysicalDeviceFaultFeaturesEXT fault{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FAULT_FEATURES_EXT};
   PFN_vkGetPhysicalDeviceFeatures2 query_features{};
   std::uint32_t instance_version{};
+  VkInstance host_instance{};
   {
     std::lock_guard lock(state_lock);
     auto pi = physicals.find(physical);
-    auto ii = instances.find(pi != physicals.end() ? pi->second : gfx::gpu_device().instance);
+    host_instance = pi != physicals.end() ? pi->second : gfx::gpu_device().instance;
+    auto ii = instances.find(host_instance);
     instance_version = ii != instances.end() ? ii->second.version : gfx::gpu_device().api_version;
     const bool core = ii != instances.end() ? ii->second.version >= VK_API_VERSION_1_1
                                            : gfx::gpu_device().api_version >= VK_API_VERSION_1_1;
@@ -1799,7 +1802,10 @@ VkResult create_device_impl(VkPhysicalDevice physical, const VkDeviceCreateInfo*
   // sees, or on one of the guest's when it took them all (xr/display_override.h).
   venture::xr::MirrorQueueRequest mirror_queue;
   if (mirror_capable) mirror_queue.add(families, copy);
-  auto r = f(physical, &copy, alloc, out);
+  // Foveated rendering's shading-rate attachments (gfx/foveation_vulkan.h).
+  gfx::foveation::DeviceAdditions foveated;
+  gfx::foveation::add_to_device(loader(), host_instance, physical, copy, foveated);
+  auto r = f(physical, &foveated.info, alloc, out);
   if ((r == VK_ERROR_EXTENSION_NOT_PRESENT || r == VK_ERROR_FEATURE_NOT_PRESENT) && !marker_names.empty()) {
     // Diagnostics never cost the game its device.
     log::warn("vulkan", "vkCreateDevice returned {} with GPU breadcrumb extensions; creating it without them", int(r));
@@ -1808,7 +1814,8 @@ VkResult create_device_impl(VkPhysicalDevice physical, const VkDeviceCreateInfo*
     copy.ppEnabledExtensionNames = names.data();
     fault_markers = FaultMarkers::none;
     checkpoints = buffer_marker = false;
-    r = f(physical, &copy, alloc, out);
+    gfx::foveation::add_to_device(loader(), host_instance, physical, copy, foveated);
+    r = f(physical, &foveated.info, alloc, out);
   }
   if (trace) log::info("vulkan-device", "Host vkCreateDevice returned {}", int(r));
   if (r != VK_SUCCESS) {
@@ -1880,6 +1887,7 @@ VkResult create_device_impl(VkPhysicalDevice physical, const VkDeviceCreateInfo*
     auto gdpa = reinterpret_cast<PFN_vkGetDeviceProcAddr>(loader()(device_instance(*out), "vkGetDeviceProcAddr"));
     gfx::register_pipeline_device(*out, gdpa, feedback, profile::PipelineSource::guest,
                                   gfx::async_pipeline_extensions_allowed(unique_names));
+    gfx::foveation::register_device(*out, physical, loader(), device_instance(*out), gdpa, foveated.added);
     if (trace) log::info("vulkan-device", "Guest device queue configured");
     prepare_texture_device(*out);
     if (trace) log::info("vulkan-device", "Guest device textures prepared");
@@ -1908,6 +1916,7 @@ void release_device_resources(VkDevice device) {
   release_breadcrumb_device(device);
   release_fault_markers(device);
   gfx::release_pipeline_device(device);
+  gfx::foveation::release_device(device);
   release_sync_fd_device(device);
   release_hardware_buffer_device(device);
   release_external_device(device);
@@ -2486,6 +2495,9 @@ constexpr std::pair<Layer, PFN_vkVoidFunction (*)(std::string_view)> layer_chain
     {Layer::pipeline, gfx::pipeline_proc},
     {Layer::deferred_free, deferred_free_proc},
     {Layer::descriptor_fill, descriptor_fill_proc},
+    // Lowest: adds foveation's attachment to the host's render passes, after
+    // every layer above has translated them, and calls the driver.
+    {Layer::foveation, gfx::foveation::proc},
 };
 // Layer functions that run in the JIT: host bookkeeping under a short lock
 // (never across a GPU wait) around the next call, no guest callbacks, no

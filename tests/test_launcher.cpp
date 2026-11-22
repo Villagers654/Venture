@@ -770,13 +770,38 @@ TEST_CASE("anisotropic filtering is automatic by default, off or a level globall
   auto loaded = library::Settings::load(d.root);
   CHECK(library::anisotropy_environment(library::effective_display(loaded.display, nullptr)) == "8");
   CHECK(library::anisotropy_environment(library::effective_display(loaded.display, &loaded.game_display["1"])) == "off");
-  // Unknown values load as the default: automatic globally, the global choice per game.
+  // Unknown values load as the default: dynamic globally, the global choice per game.
   json["display"]["anisotropy"] = "32x";
   json["gameDisplay"] = {{"1", {{"anisotropy", "on"}, {"mirror", "full"}}}};
   paths::atomic_write(d.root / "settings.json", json.dump());
   loaded = library::Settings::load(d.root);
   CHECK(loaded.display.anisotropy == "auto");
   CHECK(loaded.game_display["1"].anisotropy.empty());
+}
+TEST_CASE("foveated rendering is dynamic by default, fixed or off globally or per game") {
+  Directory d;
+  auto settings = library::Settings::defaults(d.root);
+  CHECK(settings.display.foveation == "dynamic");
+  CHECK(library::foveation_environment(settings.display) == "dynamic");
+  CHECK(library::game_display_defaults().foveation.empty());
+  settings.display.foveation = "fixed";
+  auto off = library::game_display_defaults();
+  off.foveation = "off";
+  settings.game_display["1"] = off;
+  settings.save(d.root);
+  auto json = paths::read_json(d.root / "settings.json");
+  CHECK(json["display"]["foveation"] == "fixed");
+  CHECK(json["gameDisplay"]["1"]["foveation"] == "off");
+  auto loaded = library::Settings::load(d.root);
+  CHECK(library::foveation_environment(library::effective_display(loaded.display, nullptr)) == "fixed");
+  CHECK(library::foveation_environment(library::effective_display(loaded.display, &loaded.game_display["1"])) == "off");
+  // Unknown values load as the default: dynamic globally, the global choice per game.
+  json["display"]["foveation"] = "eye";
+  json["gameDisplay"] = {{"1", {{"foveation", "on"}}}};
+  paths::atomic_write(d.root / "settings.json", json.dump());
+  loaded = library::Settings::load(d.root);
+  CHECK(loaded.display.foveation == "dynamic");
+  CHECK_FALSE(loaded.game_display.contains("1"));  // nothing of its own left: it follows the global setting
 }
 TEST_CASE("the game's audio on the PC is off by default, on globally or per game") {
   Directory d;

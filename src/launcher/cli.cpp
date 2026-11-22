@@ -109,7 +109,7 @@ Settings
                                  color-key off|RRGGBB |
                                  mirror cropped|full|off | mirror-eye left|right |
                                  pc-audio on|off | match-resolution auto|off |
-                                 anisotropy auto|off|2|4|8|16
+                                 anisotropy auto|off|2|4|8|16 | foveation auto|fixed|off
 
 GAME is a name (or a unique part of it), an app id or a package name.
 ACCOUNT is a name, alias, account key or the number `accounts` shows.
@@ -1353,6 +1353,10 @@ int Cli::settings_cmd(const Args &args) {
       if (!library::valid_anisotropy(value))
         throw UsageError("anisotropy takes auto, off, 2, 4, 8 or 16.");
       next.display.anisotropy = value;
+    } else if (key == "foveation") {
+      if (value != "auto" && value != "fixed" && value != "off")
+        throw UsageError("foveation takes auto, fixed or off.");
+      next.display.foveation = value;
     }
     else
       throw UsageError(std::format("Unknown setting \"{}\".", key));
@@ -1376,7 +1380,8 @@ int Cli::settings_cmd(const Args &args) {
            {"mirror-eye", library::mirror_eye_environment(settings_.display)},
            {"pc-audio", library::pc_audio_environment(settings_.display)},
            {"match-resolution", library::eye_scale_environment(settings_.display)},
-           {"anisotropy", library::anisotropy_environment(settings_.display)}};
+           {"anisotropy", library::anisotropy_environment(settings_.display)},
+           {"foveation", library::foveation_environment(settings_.display)}};
   Json folders = Json::array();
   for (const auto &folder : settings_.libraries)
     folders.push_back(paths::utf8(folder));

@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cstring>
+#include <string_view>
 #include <filesystem>
 #include <format>
 #include <openxr/openxr.h>
@@ -52,6 +53,11 @@ XrResult create_instance(HostXr &h, const char *&operation) {
     // The headset's audio endpoints, for host audio (headset_audio_endpoint).
     usable.insert("XR_OCULUS_audio_device_guid");
 #endif
+    // The gaze for eye-tracked foveated rendering (xr/eye_gaze.h): Dynamic
+    // (VENTURE_FOVEATION unset or dynamic) follows it; fixed and off never do.
+    if (const char* fov = environment::getenv("VENTURE_FOVEATION");
+        !fov || (std::string_view(fov) != "fixed" && std::string_view(fov) != "off"))
+      usable.insert("XR_EXT_eye_gaze_interaction");
     // Passthrough backends are chosen by what the host offers (hle/openxr/passthrough.cpp);
     // XR_HTC_passthrough is only a host-side target and never offered to guests.
     if (environment::passthrough_enabled()) {

@@ -637,12 +637,20 @@ TEST_CASE("Linux sees Steam running, and a Steam restart waits while Steam runs 
 #endif
 TEST_CASE("The runtime keeps the host's FDM injection layer out unless the user set its variable") {
   constexpr const char* name = "DISABLE_VULKAN_FDM_INJECTION_LAYER";
+  const auto set = [](const char* key, const char* value) {
 #ifdef _WIN32
-  _putenv_s(name, "");
+    _putenv_s(key, value);
 #else
-  unsetenv(name);
+    if (*value) setenv(key, value, 1); else unsetenv(key);
 #endif
-  environment::refresh();
+    environment::refresh();
+  };
+  set(name, "");
+  // Venture's foveated rendering off: the host's layer stays.
+  set("VENTURE_FOVEATION", "off");
+  CHECK_FALSE(environment::disable_host_foveation_layer());
+  CHECK_FALSE(std::getenv(name));
+  set("VENTURE_FOVEATION", "");
   CHECK(environment::disable_host_foveation_layer());
   REQUIRE(std::getenv(name));
   CHECK(std::string_view(std::getenv(name)) == "1");
