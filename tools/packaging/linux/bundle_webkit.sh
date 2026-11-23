@@ -42,7 +42,7 @@ helpers=$lib/webkit2gtk-4.1
   { echo "Install libwebkit2gtk-4.1-0 and glib-networking first" >&2; exit 1; }
 command -v patchelf >/dev/null || { echo "Install patchelf first" >&2; exit 1; }
 
-host_provided='^(ld-linux.*|libc|libm|libdl|libpthread|librt|libresolv|libutil|libnsl|libanl|libmvec|libgcc_s|libstdc\+\+|libGL|libGLX|libGLdispatch|libOpenGL|libEGL|libGLESv1_CM|libGLESv2|libgbm|libdrm|libdrm_.*|libwayland-client|libwayland-server|libwayland-egl|libwayland-cursor|libX11|libX11-xcb|libxcb.*|libfontconfig|libfreetype|libharfbuzz|libexpat|libz|libdbus-1|libsystemd|libudev|libasound|libgpg-error|libgcrypt|libselinux|libcap)\.so'
+host_provided='^(ld-linux.*|libc|libm|libdl|libpthread|librt|libresolv|libutil|libnsl|libanl|libmvec|libgcc_s|libstdc\+\+|libGL|libGLX|libGLdispatch|libOpenGL|libEGL|libGLESv1_CM|libGLESv2|libgbm|libdrm|libdrm_.*|libwayland-client|libwayland-server|libwayland-egl|libwayland-cursor|libX11|libX11-xcb|libxcb.*|libfontconfig|libfreetype|libharfbuzz|libexpat|libz|libdbus-1|libsystemd|libudev|libasound|libgpg-error|libgcrypt|libcap)\.so'
 
 rm -rf "$dest"
 mkdir -p "$dest/lib/gio/modules" "$dest/lib/$triplet"
