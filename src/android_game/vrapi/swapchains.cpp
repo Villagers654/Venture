@@ -268,6 +268,8 @@ class NativeImages {
   DrawnLayers *drawn() { return nullptr; }
   XrResult gather(std::vector<const XrCompositionLayerBaseHeader *> &) { return XR_SUCCESS; }
   XrResult finish(std::vector<const XrCompositionLayerBaseHeader *> &) { return XR_SUCCESS; }
+  XrResult completion(std::function<void()> &) { return XR_SUCCESS; }
+  std::shared_ptr<const void> retained() const { return nullptr; }
 
  private:
   std::set<std::pair<TextureSwapChain *, bool>> shown_;

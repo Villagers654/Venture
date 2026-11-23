@@ -3278,3 +3278,130 @@ TEST_CASE("VrApi drawn layer frame cost (measurement)" * doctest::skip()) {
   vg::vrapi_DestroyTextureSwapChain(menu);
   vg::vrapi_DestroyTextureSwapChain(panorama);
 }
+// A frame whose host End follows its GPU work may still be ending on the host
+// waiter when the game goes on to its next frame or tears its session down.
+TEST_CASE("VrApi frames ended after their GPU work keep the host's frame order and objects") {
+  using namespace std::chrono_literals;
+  venture::test::XrImageFixture images;
+  venture::xr::install_xr_images(&images);
+  vr::abi::Init init{1, 1, 1, 42, 0, 0x10300, {1, 2, 3}};
+  REQUIRE(vg::vrapi_Initialize(&init) == 0);
+  vr::abi::Mode mode{2, 0, {1, 2, 3}, 4, 5, 6};
+  auto *mobile = vg::vrapi_EnterVrMode(&mode);
+  REQUIRE(mobile);
+  auto &s = venture::xr::session();
+  struct Restore {
+    ~Restore() { ventureMockXrGateEnd(false); }
+  } restore;
+  auto wait = [&] {
+    XrFrameState frame{XR_TYPE_FRAME_STATE};
+    return s.wait(nullptr, &frame);
+  };
+  auto begin = [&] {
+    std::lock_guard lock(s.mutex);
+    return s.begin(nullptr);
+  };
+  auto end = [&](std::function<void()> completed) {
+    std::lock_guard lock(s.mutex);
+    XrFrameEndInfo info{XR_TYPE_FRAME_END_INFO};
+    info.displayTime = s.frame.predictedDisplayTime;
+    info.environmentBlendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
+    if (!completed) return s.end(&info);
+    return s.end(&info, std::make_shared<int>(), std::move(completed));
+  };
+  // Ends the next frame with its GPU work (`gpu`) or its host End held, then
+  // runs `next` meanwhile: `next` must wait for that End.
+  auto during_held_end = [&](bool gpu, auto next) {
+    std::promise<void> reached, release;
+    auto reached_future = reached.get_future();
+    std::shared_future<void> released = release.get_future().share();
+    std::function<void()> completed = [] {};
+    if (gpu) completed = [&reached, released] { reached.set_value(); released.wait(); };
+    else ventureMockXrGateEnd(true);
+    REQUIRE(end(std::move(completed)) == XR_SUCCESS);
+    REQUIRE((gpu ? reached_future.wait_for(5s) == std::future_status::ready : ventureMockXrAwaitGatedEnd(5000)));
+    auto pending = std::async(std::launch::async, next);
+    CHECK(pending.wait_for(100ms) == std::future_status::timeout);
+    if (gpu) release.set_value();
+    else ventureMockXrGateEnd(false);
+    REQUIRE(pending.wait_for(5s) == std::future_status::ready);
+    return pending.get();
+  };
+  // A plain first frame: its End's diagnostics create and destroy a space.
+  REQUIRE(wait() == XR_SUCCESS);
+  REQUIRE(begin() == XR_SUCCESS);
+  REQUIRE(end({}) == XR_SUCCESS);
+  const auto destroys = ventureMockXrDestroysDuringEnd();
+
+  // The game waits for its next frame before ending this one: the next host
+  // Begin follows the End.
+  REQUIRE(wait() == XR_SUCCESS);
+  REQUIRE(begin() == XR_SUCCESS);
+  REQUIRE(wait() == XR_SUCCESS);
+  const auto before = ventureMockXrStats();
+  CHECK(during_held_end(true, begin) == XR_SUCCESS);
+  CHECK(ventureMockXrStats().begins == before.begins + 1);
+  CHECK(ventureMockXrStats().waits == before.waits);
+
+  // The game's next host wait follows the End too, with or without a frame
+  // rate cap pacing it.
+  for (const bool capped : {false, true}) {
+    CAPTURE(capped);
+    {
+      std::lock_guard lock(s.mutex);
+      s.cap = {};
+      s.cap.period_ns = capped ? 1'000'000'000 / 30 : 0;
+    }
+    const auto waits = ventureMockXrStats().waits;
+    CHECK(during_held_end(true, wait) == XR_SUCCESS);
+    CHECK(ventureMockXrStats().waits == waits + 1);
+    REQUIRE(begin() == XR_SUCCESS);
+  }
+  {
+    std::lock_guard lock(s.mutex);
+    s.cap = {};
+  }
+
+  // An End whose GPU wait fails while the game's next wait is already under
+  // way: that wait gets the failure and makes no host wait; the one after paces
+  // on the host again, so the next Begin has its host wait.
+  {
+    std::promise<void> reached, release;
+    auto reached_future = reached.get_future();
+    std::shared_future<void> released = release.get_future().share();
+    const auto waits = ventureMockXrStats().waits;
+    REQUIRE(end([&reached, released] {
+      reached.set_value();
+      released.wait();
+      throw std::runtime_error("device lost");
+    }) == XR_SUCCESS);
+    REQUIRE(reached_future.wait_for(5s) == std::future_status::ready);
+    auto pending = std::async(std::launch::async, wait);
+    CHECK(pending.wait_for(100ms) == std::future_status::timeout);
+    release.set_value();
+    REQUIRE(pending.wait_for(5s) == std::future_status::ready);
+    CHECK(pending.get() == XR_ERROR_RUNTIME_FAILURE);
+    CHECK(ventureMockXrStats().waits == waits);
+    REQUIRE(wait() == XR_SUCCESS);
+    CHECK(ventureMockXrStats().waits == waits + 1);
+    CHECK(XR_SUCCEEDED(begin()));
+  }
+
+  // Recentering and leaving VR mode destroy host spaces and swapchains only
+  // after the End that may use them.
+  auto pose = vg::vrapi_GetTrackingTransform(mobile, 2);
+  during_held_end(false, [&] {
+    vg::set_tracking_transform(mobile, &pose);
+    return 0;
+  });
+  CHECK(ventureMockXrDestroysDuringEnd() == destroys);
+  REQUIRE(wait() == XR_SUCCESS);
+  REQUIRE(begin() == XR_SUCCESS);
+  during_held_end(false, [&] {
+    vg::vrapi_LeaveVrMode(mobile);
+    return 0;
+  });
+  CHECK(ventureMockXrDestroysDuringEnd() == destroys);
+  vg::vrapi_Shutdown();
+  venture::xr::install_xr_images(nullptr);
+}

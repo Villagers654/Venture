@@ -285,9 +285,21 @@ void Session::created(SessionOwner requested) {
   }
   if (auto observer = display_observer.load()) observer(display_timing.period.load());
 }
+// Blocks until a frame's GPU work has completed; a failed wait fails its End.
+static XrResult wait_gpu_completion(const std::function<void()> &completed) {
+  vulkan::ScopedHostWait timing("xr_end_gpu_completion");
+  try {
+    completed();
+    return XR_SUCCESS;
+  } catch (const std::exception &e) {
+    log::warn("xr", "Frame completion wait failed: {}", e.what());
+    return XR_ERROR_RUNTIME_FAILURE;
+  }
+}
 // Issues the runtime's xrWaitFrame for led frames as soon as it is requested,
 // independent of guest progress, after the host xrEndFrame of an asynchronous
-// submission. One per session, retired at destroy after its last request has
+// submission. An End after its GPU work is made alone: the guest's next wait
+// is its own. One per session, retired at destroy after its last request has
 // returned; detached and shared, so process exit never joins it.
 struct HostWaiter {
   std::mutex mutex;
@@ -302,9 +314,21 @@ struct HostWaiter {
   // An asynchronous submission: its owner keeps the layers alive until the
   // host xrEndFrame returns. A failed End is this request's result, unwaited.
   std::shared_ptr<const void> end_owner;
+  std::function<void()> end_completed;  // waited before the End
   XrFrameEndInfo end_info{XR_TYPE_FRAME_END_INFO};
   bool shared_queue = true;
   bool ending = false;  // an asynchronous host End is requested or in flight
+  bool end_alone = false;  // no host wait follows it (a failed one is left done)
+  // Until an asynchronous host End has returned. With `take`, a failed End
+  // alone is handed over (the waiter goes idle): the guest's wait, decided
+  // while that End was in flight, returns its failure instead of a host wait.
+  XrResult await_end(bool take = false) {
+    std::unique_lock lock(mutex);
+    changed.wait(lock, [&] { return !ending; });
+    if (!take || !end_alone || state != State::done) return XR_SUCCESS;
+    state = State::idle;
+    return result;
+  }
   void run() {
     std::unique_lock lock(mutex);
     for (;;) {
@@ -312,26 +336,43 @@ struct HostWaiter {
       if (state != State::requested) return;
       const auto target = session;
       auto owner = std::move(end_owner);
+      auto completed = std::move(end_completed);
       const auto end = end_info;
       const bool shared = shared_queue;
+      const bool then_wait = !end_alone;
       lock.unlock();
       XrResult r = XR_SUCCESS;
       if (owner) {
-        {
+        // No queue lock: the guest's next frame submits meanwhile.
+        if (completed) r = wait_gpu_completion(completed);
+        if (XR_SUCCEEDED(r)) {
           std::optional<vulkan::ScopedHostWait> lock_timing(std::in_place, "xr_end_queue_lock");
           HostQueueLock queue(shared);
           lock_timing.reset();
           r = !queue ? XR_ERROR_RUNTIME_FAILURE
                      : [&] { vulkan::ScopedHostWait timing("xr_end_frame"); return xrEndFrame(target, &end); }();
+          dev_dump_frame(&end, r);
         }
-        dev_dump_frame(&end, r);
         owner.reset();
+        completed = nullptr;
       }
       XrFrameState waited{XR_TYPE_FRAME_STATE};
       // A cancelled request (loss, end, destroy) still made its promised End.
       lock.lock();
       const bool skip = cancelled;
       ending = false;
+      if (!then_wait) {
+        // Settled together with `ending`: an await_end that returns sees how it ended.
+        state = State::idle;
+        if (XR_FAILED(r)) {
+          frame = {XR_TYPE_FRAME_STATE};
+          result = r;
+          returned_ns = monotonic_ns();
+          state = State::done;
+        }
+        changed.notify_all();
+        continue;
+      }
       changed.notify_all();
       lock.unlock();
       if (XR_SUCCEEDED(r)) r = skip ? XR_ERROR_SESSION_NOT_RUNNING : xrWaitFrame(target, nullptr, &waited);
@@ -425,14 +466,14 @@ void Session::finish_host_end() {
     std::lock_guard lock(mutex);
     waiter = host_waiter;
   }
-  if (!waiter) return;
-  std::unique_lock lock(waiter->mutex);
-  waiter->changed.wait(lock, [&] { return !waiter->ending; });
+  if (waiter) waiter->await_end();
 }
 void Session::request_host_wait() {
-  request_host_end({XR_TYPE_FRAME_END_INFO}, nullptr);
+  std::function<void()> none;
+  request_host_end({XR_TYPE_FRAME_END_INFO}, nullptr, none);
 }
-bool Session::request_host_end(const XrFrameEndInfo& info, std::shared_ptr<const void> owned) {
+bool Session::request_host_end(const XrFrameEndInfo& info, std::shared_ptr<const void> owned,
+                               std::function<void()>& completed) {
   if (!host_waiter) {
     host_waiter = std::make_shared<HostWaiter>();
     std::thread([waiter = host_waiter] { waiter->run(); }).detach();
@@ -441,6 +482,8 @@ bool Session::request_host_end(const XrFrameEndInfo& info, std::shared_ptr<const
   if (host_waiter->state != HostWaiter::State::idle) return false;
   host_waiter->ending = owned != nullptr;
   host_waiter->end_owner = std::move(owned);
+  host_waiter->end_alone = bool(completed);
+  host_waiter->end_completed = std::move(completed);
   host_waiter->end_info = info;
   host_waiter->shared_queue = uses_shared_gpu;
   host_waiter->cancelled = false;
@@ -454,6 +497,8 @@ bool Session::host_wait_pending() {
   if (!host_waiter) return false;
   std::lock_guard lock(host_waiter->mutex);
   if (host_waiter->state == HostWaiter::State::idle) return false;
+  // An End alone in flight: the guest's wait is its own.
+  if (host_waiter->state == HostWaiter::State::requested && host_waiter->end_alone) return false;
   if (host_waiter->generation == run_generation) return true;
   // A wait from before a session reset: retire it once it has returned.
   if (host_waiter->state == HostWaiter::State::done) host_waiter->state = HostWaiter::State::idle;
@@ -749,9 +794,14 @@ XrResult Session::wait(const XrFrameWaitInfo *info, XrFrameState *out) {
   }
   // A simulation thread may wait for frame N+1 while the render thread ends N.
   // No API-state or GPU queue lock may be held across the runtime's pacing wait.
+  const auto end_waiter = proxied ? nullptr : host_waiter;
   lock.unlock();
+  // An End alone still in flight comes first; if it failed, that is this wait's
+  // result and no host wait is made.
+  const auto ended = end_waiter ? end_waiter->await_end(true) : XR_SUCCESS;
   const auto wait_start = monotonic_ns();
   auto result = [&] {
+    if (XR_FAILED(ended)) return ended;
     vulkan::ScopedHostWait timing("xr_wait_frame");
     if (!proxied) return xrWaitFrame(handle, info, out);
     // Unled: the requested wait is this frame's host wait.
@@ -835,6 +885,8 @@ XrResult Session::begin(const XrFrameBeginInfo *info) {
     notify_frame_waiters();
     return abandoned ? XR_FRAME_DISCARDED : XR_SUCCESS;
   }
+  // The previous frame's asynchronous host End comes first.
+  finish_host_end();
   HostQueueLock queue(uses_shared_gpu);
   if (!queue)
     return XR_ERROR_RUNTIME_FAILURE;
@@ -886,7 +938,8 @@ XrResult Session::begin(const XrFrameBeginInfo *info) {
 
   }());
 }
-XrResult Session::end(const XrFrameEndInfo *info, std::shared_ptr<const void> owned) {
+XrResult Session::end(const XrFrameEndInfo *info, std::shared_ptr<const void> owned,
+                      std::function<void()> completed) {
   xr_call_trace::Call trace("session.xrEndFrame");
   return trace.finish([&]() -> XrResult {
   if (info) { trace.display(info->displayTime); trace.layers(info->layerCount); }
@@ -995,14 +1048,17 @@ XrResult Session::end(const XrFrameEndInfo *info, std::shared_ptr<const void> ow
     }
   }
   // An asynchronous submission returns success now; a failed host End is the
-  // result of the guest's next wait or End, which take this request.
-  const bool async = owned && async_end_ready() && request_host_end(*info, std::move(owned));
+  // result of the guest's next wait or End, which take this request. A refused
+  // request leaves `owned` and `completed` to this thread.
+  const bool async = owned && (completed || async_end_ready()) && request_host_end(*info, owned, completed);
   std::optional<HostQueueLock> queue;
   XrResult result = XR_SUCCESS;
   std::int64_t end_ns = 0;
   if (async) {
     ++lead.async_ends;
   } else {
+    if (completed)
+      if (auto r = wait_gpu_completion(completed); XR_FAILED(r)) return r;
     std::optional<vulkan::ScopedHostWait> lock_timing(std::in_place, "xr_end_queue_lock");
     queue.emplace(uses_shared_gpu);
     lock_timing.reset();
