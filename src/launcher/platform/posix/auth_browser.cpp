@@ -481,6 +481,9 @@ int helper_main() {
   // GTK 4 needs is a Wayland matter.
   const bool xwayland = environment::gamescope_xwayland();
   const bool gtk4 = xwayland || compositor_offers("wl_data_device_manager");
+  // WebKit's DMA-BUF renderer flickers on gamescope's Xwayland and hits an
+  // explicit-sync protocol error on Wayland with Mesa's zink.
+  setenv("WEBKIT_DISABLE_DMABUF_RENDERER", "1", 0);
   if (!load(w, gtk4)) {
     // WebKitGTK 6.0 is there but cannot open on this display: say why.
     const bool gtk4_only = !gtk4 && dlopen("libwebkitgtk-6.0.so.4", RTLD_LAZY | RTLD_LOCAL);
