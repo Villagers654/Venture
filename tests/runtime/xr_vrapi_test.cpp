@@ -558,6 +558,28 @@ TEST_CASE("VrApi projection sends each eye only the part of its frustum inside t
     CHECK(quad.pose.position.y == doctest::Approx((u + d) / 2 * 10));
     CHECK(quad.pose.position.z == doctest::Approx(-10));
   }
+  // SteamVR composes a projection view at its own fov: the same part stays a
+  // projection layer there.
+  auto &runtime = venture::xr::host_xr().runtime_name;
+  const auto mock = std::exchange(runtime, std::string("SteamVR/OpenXR"));
+  rects.clear();
+  layers.clear();
+  vr::LayerStorage steamvr;
+  const auto result = vr::translate_layer(projection.header, eyes, image, steamvr, layers);
+  runtime = mock;
+  REQUIRE(result == XR_SUCCESS);
+  REQUIRE(layers.size() == 1);
+  CHECK(layers[0] == reinterpret_cast<const XrCompositionLayerBaseHeader *>(&steamvr.projection));
+  CHECK(steamvr.projection.space == vr::state().app);
+  REQUIRE(steamvr.projection.viewCount == 2);
+  for (int eye = 0; eye < 2; ++eye) {
+    CAPTURE(eye);
+    const auto &fov = steamvr.projection.views[eye].fov;
+    CHECK(fov.angleLeft == doctest::Approx(std::max(-45 * degree, host[eye].angleLeft)));
+    CHECK(fov.angleRight == doctest::Approx(std::min(45 * degree, host[eye].angleRight)));
+    CHECK(fov.angleUp == doctest::Approx(std::min(45 * degree, host[eye].angleUp)));
+    CHECK(fov.angleDown == doctest::Approx(std::max(-45 * degree, host[eye].angleDown)));
+  }
 }
 
 TEST_CASE("VrApi head-locked projections become one head-locked quad per eye") {

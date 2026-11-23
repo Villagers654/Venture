@@ -201,6 +201,9 @@ bool texture_transform(const Matrix &m) {
     }
   return m.m[0][0] > 0 && m.m[1][1] > 0;
 }
+// SteamVR composes a projection view at the fov it carries: a frustum
+// narrower than the host's view stays a projection layer there.
+bool host_composes_view_fov() { return host_xr().runtime_name.starts_with("SteamVR"); }
 } // namespace
 // The host layers that show this layer exactly, or an error with dst.reason.
 static XrResult translate_native(const LayerHeader &header, const XrView *eyes, LayerImage image,
@@ -315,7 +318,7 @@ static XrResult translate_native(const LayerHeader &header, const XrView *eyes, 
       for (int eye = 0; eye < 2; ++eye) eye_quad(eye);
       return XR_SUCCESS;
     }
-    if (!spans && !constant) {
+    if (!spans && !constant && !host_composes_view_fov()) {
       // A frustum narrower than the host's view (The Climb 2's 45-degree
       // credits) is a plane in front of each eye too; the Meta runtime would
       // stretch it over the display (fit_host_view). Place it far, where
