@@ -95,16 +95,15 @@ XrResult fov(const Matrix &m, const Rect &rect, XrFovf &out, XrQuaternionf &orie
 // view, whatever fov the view sends. A wider frustum, such as the symmetric one
 // SUGGESTED_EYE_FOV describes (-54..+54 degrees for a -54..+40 eye), then
 // reached each eye stretched and about 15 degrees off, outwards: a cross-eyed
-// world. Narrow the rect to the
-// part inside the host's view; fov() then gives that part's frustum, the same
-// rays on every runtime. A side where the guest frustum is the narrower keeps
-// its edge, and the result is false: no projection view shows such a frustum
-// alike everywhere. A rotated plane's tangents are not the eye's: leave it.
-bool fit_host_view(Rect &rect, const XrFovf &guest, bool bottom_up, XrQuaternionf orientation,
+// world. Narrow the rect to the part inside the host's view; fov() then gives
+// that part's frustum, the same rays on every runtime. A side where the guest
+// frustum is the narrower keeps its edge. A rotated plane's tangents are not
+// the eye's: leave it.
+void fit_host_view(Rect &rect, const XrFovf &guest, bool bottom_up, XrQuaternionf orientation,
                    const XrFovf &host) {
   if (!(host.angleLeft < host.angleRight && host.angleDown < host.angleUp) ||
       1 - std::abs(orientation.w) > 1e-6f)
-    return true;
+    return;
   const float l = std::tan(guest.angleLeft), r = std::tan(guest.angleRight);
   const float u = std::tan(guest.angleUp), d = std::tan(guest.angleDown);
   // S/Q and T/Q are affine in a ray's tangents (fov()).
@@ -117,17 +116,14 @@ bool fit_host_view(Rect &rect, const XrFovf &guest, bool bottom_up, XrQuaternion
     t1 = 1 - t1;
     std::swap(t0, t1);
   }
-  constexpr float slack = 1e-4f; // float noise of a frustum equal to the host's
-  const bool spans = s0 > -slack && t0 > -slack && s1 < 1 + slack && t1 < 1 + slack;
   s0 = std::max(s0, 0.f);
   t0 = std::max(t0, 0.f);
   s1 = std::min(s1, 1.f);
   t1 = std::min(t1, 1.f);
   if (s1 <= s0 || t1 <= t0)
-    return spans;
+    return;
   rect = {rect.x + s0 * rect.width, rect.y + t0 * rect.height, (s1 - s0) * rect.width,
           (t1 - t0) * rect.height};
-  return spans;
 }
 XrQuaternionf quaternion(const float (&r)[3][3]) {
   XrQuaternionf q{};
@@ -244,15 +240,15 @@ static XrResult translate_native(const LayerHeader &header, const XrView *eyes, 
   // row. Analytic layers keep that API convention, in their content and their
   // placement alike; projection layers follow their own tan-angle matrix.
   const bool api_bottom_up = state().init.graphics_api != vulkan_api;
-  // The plane a view's rays reach through its frustum, `distance` metres
-  // ahead: the same rays and image, shown to that eye only.
-  auto eye_quad = [&](int eye, float distance = 1) {
+  // The plane a view's rays reach through its frustum, a metre ahead: the
+  // same rays and image, shown to that eye only.
+  auto eye_quad = [&](int eye) {
     const auto &view = dst.views[eye];
     const float l = std::tan(view.fov.angleLeft), r = std::tan(view.fov.angleRight);
     const float u = std::tan(view.fov.angleUp), d = std::tan(view.fov.angleDown);
     auto &quad = dst.quad[eye];
-    quad.pose = compose(view.pose, {{0, 0, 0, 1}, {(l + r) / 2 * distance, (u + d) / 2 * distance, -distance}});
-    quad.size = {(r - l) * distance, (u - d) * distance};
+    quad.pose = compose(view.pose, {{0, 0, 0, 1}, {(l + r) / 2, (u + d) / 2, -1}});
+    quad.size = {r - l, u - d};
     quad.subImage = view.subImage;
     quad.eyeVisibility = eye ? XR_EYE_VISIBILITY_RIGHT : XR_EYE_VISIBILITY_LEFT;
     append(quad);
@@ -282,7 +278,6 @@ static XrResult translate_native(const LayerHeader &header, const XrView *eyes, 
   } else if (header.type == 1) {
     auto &src = reinterpret_cast<const Projection &>(header);
     int constant = 0;
-    bool spans = true;
     for (int i = 0; i < 2; ++i) {
       const int eye = first_eye == 1 ? 1 - i : i;
       auto &t = src.textures[eye];
@@ -297,7 +292,7 @@ static XrResult translate_native(const LayerHeader &header, const XrView *eyes, 
         view.fov = eyes[eye].fov;
         ++constant;
       } else {
-        spans = fit_host_view(rect, view.fov, bottom_up, orientation, eyes[eye].fov) && spans;
+        fit_host_view(rect, view.fov, bottom_up, orientation, eyes[eye].fov);
         r = fov(t.tan_angles, rect, view.fov, orientation, bottom_up);
         if (XR_FAILED(r)) return r;
       }
@@ -315,14 +310,6 @@ static XrResult translate_native(const LayerHeader &header, const XrView *eyes, 
       for (int eye = 0; eye < 2; ++eye) eye_quad(eye);
       return XR_SUCCESS;
     }
-    if (!spans && !constant) {
-      // A frustum narrower than the host's view (The Climb 2's 45-degree
-      // credits) is a plane in front of each eye too; the Meta runtime would
-      // stretch it over the display (fit_host_view). Place it far, where
-      // reprojection moves it about as little as a projection without depth.
-      for (int eye = 0; eye < 2; ++eye) eye_quad(eye, 10);
-      return XR_SUCCESS;
-    }
     if (constant == 2) {
       // A constant texel covers every ray of each eye wherever the head is.
       // Head-lock it, as the guest's predicted head pose would let reprojection
@@ -337,6 +324,11 @@ static XrResult translate_native(const LayerHeader &header, const XrView *eyes, 
       }
       return XR_SUCCESS;
     }
+    // A frustum narrower than the host's view on some side (The Climb 2's
+    // 45-degree credits, a game's own frustum on a headset wider than a
+    // Quest) stays a projection layer at that frustum, as a Quest composes it
+    // and OpenXR defines it. Per-eye quads showed SteamVR on the Steam Frame
+    // black.
     dst.projection.viewCount = 2;
     dst.projection.views = dst.views;
     append(dst.projection);

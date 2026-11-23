@@ -527,8 +527,9 @@ TEST_CASE("VrApi projection sends each eye only the part of its frustum inside t
     }
   }
   // The Climb 2's credits: +-45 degrees, narrower than the host's view on some
-  // sides. The part inside the host's view becomes one quad per eye, 10 m
-  // ahead, which the Meta runtime cannot stretch over the display.
+  // sides. The part inside the host's view stays a projection layer at that
+  // part's frustum, as a Quest composes it (SteamVR on the Steam Frame showed
+  // per-eye quads black).
   for (auto &t : projection.textures) {
     t.tan_angles = tan_angles(45 * degree, 45 * degree, false);
     t.rect = {0, 0, 1, 1};
@@ -537,7 +538,10 @@ TEST_CASE("VrApi projection sends each eye only the part of its frustum inside t
   vr::LayerStorage storage;
   std::vector<const XrCompositionLayerBaseHeader *> layers;
   REQUIRE(vr::translate_layer(projection.header, eyes, image, storage, layers) == XR_SUCCESS);
-  REQUIRE(layers.size() == 2);
+  REQUIRE(layers.size() == 1);
+  CHECK(layers[0] == reinterpret_cast<const XrCompositionLayerBaseHeader *>(&storage.projection));
+  CHECK(storage.projection.space == vr::state().app);
+  REQUIRE(storage.projection.viewCount == 2);
   for (int eye = 0; eye < 2; ++eye) {
     CAPTURE(eye);
     const float l = std::max(-1.f, std::tan(host[eye].angleLeft));
@@ -548,15 +552,11 @@ TEST_CASE("VrApi projection sends each eye only the part of its frustum inside t
     CHECK(rects[eye].width == doctest::Approx((r - l) / 2));
     CHECK(rects[eye].y == doctest::Approx((d + 1) / 2));
     CHECK(rects[eye].height == doctest::Approx((u - d) / 2));
-    const auto &quad = storage.quad[eye];
-    CHECK(layers[eye] == reinterpret_cast<const XrCompositionLayerBaseHeader *>(&quad));
-    CHECK(quad.space == vr::state().app);
-    CHECK(quad.eyeVisibility == (eye ? XR_EYE_VISIBILITY_RIGHT : XR_EYE_VISIBILITY_LEFT));
-    CHECK(quad.size.width == doctest::Approx((r - l) * 10));
-    CHECK(quad.size.height == doctest::Approx((u - d) * 10));
-    CHECK(quad.pose.position.x == doctest::Approx(eyes[eye].pose.position.x + (l + r) / 2 * 10));
-    CHECK(quad.pose.position.y == doctest::Approx((u + d) / 2 * 10));
-    CHECK(quad.pose.position.z == doctest::Approx(-10));
+    const auto &fov = storage.projection.views[eye].fov;
+    CHECK(fov.angleLeft == doctest::Approx(std::atan(l)));
+    CHECK(fov.angleRight == doctest::Approx(std::atan(r)));
+    CHECK(fov.angleUp == doctest::Approx(std::atan(u)));
+    CHECK(fov.angleDown == doctest::Approx(std::atan(d)));
   }
 }
 
