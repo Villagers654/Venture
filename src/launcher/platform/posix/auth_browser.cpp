@@ -18,6 +18,7 @@
 #include <sys/wait.h>
 #include <thread>
 #include <unistd.h>
+#include <vector>
 extern char **environ;
 
 // Meta sign-in runs WebKitGTK in a separate helper process (the launcher
@@ -99,6 +100,9 @@ struct Web {
   void *(*filter_store_save_finish)(void *, void *, void **) = nullptr;
   void *(*content_manager)(void *) = nullptr;
   void (*add_filter)(void *, void *) = nullptr;
+  void *(*menu_items)(void *) = nullptr; // GList
+  int (*item_action)(void *) = nullptr;
+  void (*menu_remove)(void *, void *) = nullptr;
 };
 template <class T> bool bind(void *lib, T &out, const char *name) {
   out = reinterpret_cast<T>(dlsym(lib, name));
@@ -209,7 +213,10 @@ bool load(Web &w, bool gtk4) {
             bind(lib, w.filter_store_save, "webkit_user_content_filter_store_save") &&
             bind(lib, w.filter_store_save_finish, "webkit_user_content_filter_store_save_finish") &&
             bind(lib, w.content_manager, "webkit_web_view_get_user_content_manager") &&
-            bind(lib, w.add_filter, "webkit_user_content_manager_add_filter");
+            bind(lib, w.add_filter, "webkit_user_content_manager_add_filter") &&
+            bind(lib, w.menu_items, "webkit_context_menu_get_items") &&
+            bind(lib, w.item_action, "webkit_context_menu_item_get_stock_action") &&
+            bind(lib, w.menu_remove, "webkit_context_menu_remove");
   if (w.api == 6)
     return ok && bind(lib, w.init4, "gtk_init_check") &&
            bind(lib, w.window_new4, "gtk_window_new") &&
@@ -302,7 +309,27 @@ int on_permission(void *, void *request, void *) {
   g_helper->web.permission_deny(request);
   return 1;
 }
-int on_suppress(void *, void *, void *, void *, void *) { return 1; }
+// Right-click menu: edit actions only (WebKitContextMenuAction COPY..SELECT_ALL,
+// PASTE_AS_PLAIN_TEXT).
+constexpr int kMenuCopy = 14, kMenuSelectAll = 18, kMenuPastePlain = 45;
+int on_context_menu(void *, void *menu, void *, void *, void *) {
+  auto &w = g_helper->web;
+  struct List {
+    void *data;
+    List *next, *prev;
+  };
+  std::vector<void *> others;
+  bool kept = false;
+  for (auto *node = static_cast<List *>(w.menu_items(menu)); node; node = node->next) {
+    const int action = w.item_action(node->data);
+    if ((action >= kMenuCopy && action <= kMenuSelectAll) || action == kMenuPastePlain)
+      kept = true;
+    else
+      others.push_back(node->data);
+  }
+  for (void *item : others) w.menu_remove(menu, item);
+  return kept ? 0 : 1;
+}
 void on_load_changed(void *view, int event, void *) {
   auto &h = *g_helper;
   if (event == kLoadStarted || event == kLoadRedirected || event == kLoadCommitted) {
@@ -333,7 +360,7 @@ void *on_create(void *view, void *, void *);
 void attach(void *view) {
   connect(view, "decide-policy", on_decide_policy);
   connect(view, "permission-request", on_permission);
-  connect(view, "context-menu", on_suppress);
+  connect(view, "context-menu", on_context_menu);
   connect(view, "load-changed", on_load_changed);
   connect(view, "load-failed", on_load_failed);
   connect(view, "create", on_create);
@@ -454,6 +481,9 @@ int helper_main() {
   // GTK 4 needs is a Wayland matter.
   const bool xwayland = environment::gamescope_xwayland();
   const bool gtk4 = xwayland || compositor_offers("wl_data_device_manager");
+  // WebKit's DMA-BUF renderer flickers on gamescope's Xwayland and hits an
+  // explicit-sync protocol error on Wayland with Mesa's zink.
+  setenv("WEBKIT_DISABLE_DMABUF_RENDERER", "1", 0);
   if (!load(w, gtk4)) {
     // WebKitGTK 6.0 is there but cannot open on this display: say why.
     const bool gtk4_only = !gtk4 && dlopen("libwebkitgtk-6.0.so.4", RTLD_LAZY | RTLD_LOCAL);
