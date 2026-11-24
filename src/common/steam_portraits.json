@@ -1,0 +1,186 @@
+{
+  "about": "Steam portrait capsules made from a title's landscape store cover, keyed by package name and framed for the cover whose file has cover_sha256 (another cover, as after a store update, gets the default). zoom: 0 shows the whole cover across the capsule's width over a blurred fill, 1 fills the capsule's height, above 1 closer still. focus_x and focus_y: the point of the cover the capsule centres on, from 0 (its left or top edge) to 1 (its right or bottom edge), 0.5 by default; near an edge the cover's edge stops the capsule there. A title without an entry gets zoom 0.",
+  "titles": {
+    "com.AnotherAxiom.GorillaTag": {
+      "name": "Gorilla Tag",
+      "cover_sha256": "86b13c5d6bbf90209f6948047ab16924b2aa46b0274af9c76f8b23768be24967",
+      "zoom": 0.55,
+      "focus_x": 0.5813
+    },
+    "com.Armature.VR4": {
+      "name": "Resident Evil 4",
+      "cover_sha256": "69b4f27c4213e9bc9b38705a1582db416e2171978f759a03ebefe2f845f14ba7",
+      "zoom": 0.8,
+      "focus_x": 0.4428
+    },
+    "com.camouflaj.manta": {
+      "name": "Batman: Arkham Shadow",
+      "cover_sha256": "c92a04f0d94cc6be9d0cfca1fd08e1bc8378bf38e0904a9865d9376647983fea",
+      "zoom": 1,
+      "focus_x": 0.5
+    },
+    "com.CaveManStudio.ContractorsVR": {
+      "name": "Contractors",
+      "cover_sha256": "e87ec6a6665bd1fdcd87183ed832dd94c1d92d0e1600d53c66c93a884e4b4332",
+      "zoom": 0.55,
+      "focus_x": 0.6242
+    },
+    "com.CombatWaffleStudios.GhostsOfTabor": {
+      "name": "Ghosts of Tabor",
+      "cover_sha256": "5e005de4ecac89662d08ddea3361c492f0990e2b7baf5b11648de554f8a56800",
+      "zoom": 0.45,
+      "focus_x": 0.496
+    },
+    "com.crytek.climb": {
+      "name": "The Climb",
+      "cover_sha256": "aec417ec75419d2ffcecca9eb7099b5911fd246e511142d2463b6cd56dee08cf",
+      "zoom": 0.43,
+      "focus_x": 0.6185
+    },
+    "com.crytek.climb2": {
+      "name": "The Climb 2",
+      "cover_sha256": "28388e343af5e056d54e65a7eb4a0ffa7f56d3236131b4d2136f59bf76d69c1b",
+      "zoom": 0.55,
+      "focus_x": 0.587
+    },
+    "com.CyanWorlds.Myst": {
+      "name": "Myst",
+      "cover_sha256": "d2260e979de769848a25a19fd1ddf820f5f037a1cddfbd44781820ebeb76b908",
+      "zoom": 0.5,
+      "focus_x": 0.5
+    },
+    "com.halfbrick.fruitninjavr": {
+      "name": "Fruit Ninja",
+      "cover_sha256": "478631b823eb914292a907bedcc9749796489cfeeb332a3b42d2c5fb71333678",
+      "zoom": 0.1,
+      "focus_x": 0.5
+    },
+    "com.kurzgesagt.outofscale": {
+      "name": "Out of Scale: A Kurzgesagt Adventure",
+      "cover_sha256": "45d8ba8e61a2a6b2405d046aaf4ae1ac10acde86e7d0cb972744fefd58017c02",
+      "zoom": 0.65,
+      "focus_x": 0.4896
+    },
+    "com.Magnopus.MissionISS": {
+      "name": "Mission: ISS",
+      "cover_sha256": "ac359a6a39743508ed866e2be5d93b006efea642197e850167f5b9b555ff7a6a",
+      "zoom": 1,
+      "focus_x": 0.7
+    },
+    "com.meta.curio.toybox": {
+      "name": "First Encounters",
+      "cover_sha256": "edaa0c8dc1ff5e65cce6d02f02d45d1f6da1f6eb5c2aabc1708d869162aa314b",
+      "zoom": 0.3,
+      "focus_x": 0.5
+    },
+    "com.MightyCoconut.WalkaboutMiniGolf": {
+      "name": "Walkabout Mini Golf",
+      "cover_sha256": "d14d482a3704711198ecf294ceba6e451a7176969d70ced50b3fa94c351c02c8",
+      "zoom": 0.5,
+      "focus_x": 0.509
+    },
+    "com.NewFolderGames.IAmCat": {
+      "name": "I Am Cat",
+      "cover_sha256": "97516eda06889f437bf6f3bc8aa96ff17cc14d6bdbf4d9d219bbad19a2ad89fa",
+      "zoom": 0.9,
+      "focus_x": 0.56
+    },
+    "com.oculus.samples.firsthand": {
+      "name": "First Hand",
+      "cover_sha256": "e70cc9e02f1d8c6550fa7fecc1b87d03b7a05bb297ee8cc394ef03f130b1476f",
+      "zoom": 0.6,
+      "focus_x": 0.49
+    },
+    "com.othergate.doe": {
+      "name": "Dungeons of Eternity",
+      "cover_sha256": "c197cf9e9bc5a5210ac53668935fbbb66c85d8575a2e3d18b735e8b7b5557a4a",
+      "zoom": 0.5,
+      "focus_x": 0.5
+    },
+    "com.sadetta.premiumbowling": {
+      "name": "Premium Bowling",
+      "cover_sha256": "383f5ebb1193c0e852d3ac6bbf6290a4bf15835cfd779ad62cb2fc0cd7b39944",
+      "zoom": 1.15,
+      "focus_x": 0.684,
+      "focus_y": 0
+    },
+    "com.Sanzaru.Wrath2": {
+      "name": "Asgard's Wrath 2",
+      "cover_sha256": "53cdb266c29020a325d37bf4e68aaf5c5e278abc81d4bd7d132e480884f41f5a",
+      "zoom": 1,
+      "focus_x": 0.2375
+    },
+    "com.steelcrategames.keeptalkingandnobodyexplodes": {
+      "name": "Keep Talking and Nobody Explodes",
+      "cover_sha256": "1f8857a4d31641ef84c37bef38fdfb3b094b78f048f4760a6bcb29f60f7f3a19",
+      "zoom": 0.2,
+      "focus_x": 0.5
+    },
+    "com.StressLevelZero.BONELAB": {
+      "name": "BONELAB",
+      "cover_sha256": "565bede9a6fed1143ddc8c08c2be84cd7967fc6377ddd254288f0433ff84b788",
+      "zoom": 0.6,
+      "focus_x": 0.71
+    },
+    "com.TriangleFactory.Breachers": {
+      "name": "Breachers",
+      "cover_sha256": "336cdc4e6654cc3d278f23896a04f84e5889d3de9ce03d438074f09ebceae134",
+      "zoom": 0.25,
+      "focus_x": 0.493
+    },
+    "com.TriangleFactory.HyperDash": {
+      "name": "Hyper Dash",
+      "cover_sha256": "85bcc805e7537b12be9820149b26d2605b6b733bd7cabe1ec0ade0c1c4162c84",
+      "zoom": 0.3,
+      "focus_x": 0.493
+    },
+    "com.Ubisoft.ACNexusVR": {
+      "name": "Assassin's Creed Nexus VR",
+      "cover_sha256": "0d78fa5662c949c3d72ada949714d2ac42509220658e63f545325be39de438f0",
+      "zoom": 1,
+      "focus_x": 0.775
+    },
+    "com.vankrupt.pavlov": {
+      "name": "Pavlov Shack",
+      "cover_sha256": "ba8752a164f8b12601d3bb89b8a783cc783a99d559095410d243f3bca7cc7f2f",
+      "zoom": 0.65,
+      "focus_x": 0.5104
+    },
+    "com.vertigogames.azs1hd": {
+      "name": "Arizona Sunshine Remake",
+      "cover_sha256": "8bda30a4ed924709bcff5015ee35697dbaa3f6a81a04e4bedc78b3d244ca872b",
+      "zoom": 0.6,
+      "focus_x": 0.29
+    },
+    "com.vertigogames.azsq": {
+      "name": "Arizona Sunshine",
+      "cover_sha256": "224afb9e0d2e6485bbe4273c2cb3982d6495a210e99e6ffccda4e0f45cabed06",
+      "zoom": 0.45,
+      "focus_x": 0.71
+    },
+    "com.vrchat.oculus.quest": {
+      "name": "VRChat",
+      "cover_sha256": "88a2f5239f0fbe97ec7b493838f651c5ceb37eece810e8d9dfffff7c0f45c7cb",
+      "zoom": 0.85,
+      "focus_x": 0.2947
+    },
+    "com.YourCompany.RoboRecall": {
+      "name": "Robo Recall: Unplugged",
+      "cover_sha256": "d05c0b087101e44e5f7fcc4c8734c116fbc40fbeea78a21986e8ff345d7e2bc1",
+      "zoom": 1,
+      "focus_x": 0.5
+    },
+    "quest.eleven.forfunlabs": {
+      "name": "Eleven Table Tennis",
+      "cover_sha256": "e53160a2cd65cca3f172442c86a33fc49dcca37a699d5650b20f20a8dbd12713",
+      "zoom": 0.6,
+      "focus_x": 0.5
+    },
+    "unity.SUPERHOT_Team.SUPERHOT_VR_QA": {
+      "name": "SUPERHOT VR",
+      "cover_sha256": "1e03fe1304c3be1eb6175710d68b20caf726fdb705da3516ce7f176ec2c82960",
+      "zoom": 0.3,
+      "focus_x": 0.5
+    }
+  }
+}
