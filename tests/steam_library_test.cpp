@@ -8,10 +8,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <map>
-#include <miniz.h>
 #include <doctest/doctest.h>
-#include <utility>
-#include <vector>
 #include <thread>
 #ifndef _WIN32
 #include <csignal>
@@ -204,67 +201,6 @@ TEST_CASE("Steam sync adds artwork once and keeps images set in Steam") {
   CHECK(paths::read(grid / (std::to_string(id) + "p.jpg")) == "custom cover");
   CHECK(paths::read(hero) == "custom hero");
   CHECK(member(read_vdf(paths::read(f.target)), "shortcuts").children.size() == 2);
-}
-TEST_CASE("Steam sync makes portrait art from a landscape cover and replaces an icon copied there") {
-  Fixture f;
-  auto image = [](int w, int h) {
-    const std::vector<unsigned char> rgba(std::size_t(w) * h * 4, 200);
-    std::size_t size = 0;
-    void *data = tdefl_write_image_to_png_file_in_memory(rgba.data(), w, h, 4, &size);
-    std::string png(static_cast<const char *>(data), size);
-    mz_free(data);
-    return png;
-  };
-  auto png_size = [](const std::string &png) {
-    auto be32 = [&](std::size_t at) {
-      return std::uint32_t(std::uint8_t(png[at])) << 24 | std::uint32_t(std::uint8_t(png[at + 1])) << 16 |
-             std::uint32_t(std::uint8_t(png[at + 2])) << 8 | std::uint8_t(png[at + 3]);
-    };
-    return png.size() < 24 ? std::pair<std::uint32_t, std::uint32_t>{} : std::pair{be32(16), be32(20)};
-  };
-  fs::create_directories(f.root / "art");
-  paths::atomic_write(f.root / "art" / "111111_icon.image", image(8, 8));
-  const auto exe = f.root / "venture.exe";
-  const std::vector<Game> games{{"com.example.one", "One", "111111"}};
-  sync(f.root, exe, f.root / "art", games, [] { return false; });
-  const auto value = member(member(read_vdf(paths::read(f.target)), "shortcuts").children.at(0), "appid").value;
-  std::uint32_t id = 0;
-  for (int i = 3; i >= 0; --i) id = id << 8 | std::uint8_t(value[std::size_t(i)]);
-  const auto grid = f.config / "grid";
-  const auto portrait = grid / (std::to_string(id) + "p.png");
-  // No cover yet: a small icon makes no portrait.
-  CHECK_FALSE(fs::exists(portrait));
-  // An earlier version copied the icon there; with a cover it becomes a capsule.
-  paths::atomic_write(portrait, paths::read(grid / (std::to_string(id) + "_icon.png")));
-  paths::atomic_write(f.root / "art" / "111111.image", image(160, 90));
-  sync(f.root, exe, f.root / "art", games, [] { return false; });
-  CHECK(png_size(paths::read(portrait)) == std::pair<std::uint32_t, std::uint32_t>{600, 900});
-  // A framed title whose cover is not the framed one (as after a store
-  // update) gets the default portrait, the same as an unknown title's.
-  paths::atomic_write(f.root / "art" / "222222.image", image(160, 90));
-  const std::vector<Game> both{games[0], {"com.YourCompany.RoboRecall", "Framed", "222222"}};
-  sync(f.root, exe, f.root / "art", both, [] { return false; });
-  std::uint32_t framed = 0;
-  for (const auto &e : member(read_vdf(paths::read(f.target)), "shortcuts").children)
-    if (member(e, "appname").value.starts_with("Framed"))
-      for (int i = 3; i >= 0; --i) framed = framed << 8 | std::uint8_t(member(e, "appid").value[std::size_t(i)]);
-  REQUIRE(framed);
-  CHECK(paths::read(grid / (std::to_string(framed) + "p.png")) == paths::read(portrait));
-  // An earlier version copied the cover itself where there was no icon; that
-  // becomes a capsule too.
-  const auto framed_portrait = grid / (std::to_string(framed) + "p.png");
-  paths::atomic_write(framed_portrait, paths::read(grid / (std::to_string(framed) + ".png")));
-  sync(f.root, exe, f.root / "art", both, [] { return false; });
-  CHECK(paths::read(framed_portrait) == paths::read(portrait));
-  // While Steam runs, a listed game's copied icon is replaced as well.
-  paths::atomic_write(exe, "");  // its shortcuts start a program that exists
-  paths::atomic_write(portrait, paths::read(grid / (std::to_string(id) + "_icon.png")));
-  LiveAdd live;
-  live.sentinel = f.root / "addnonsteamgamefile";
-  live.open = [](const std::string &) { return false; };
-  live.steam_running = [] { return true; };
-  sync(f.root, exe, f.root / "art", both, [] { return true; }, &live);
-  CHECK(png_size(paths::read(portrait)) == std::pair<std::uint32_t, std::uint32_t>{600, 900});
 }
 TEST_CASE(
     "Steam sync defers while running and never overwrites corrupt shortcuts") {

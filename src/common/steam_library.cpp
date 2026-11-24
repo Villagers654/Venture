@@ -651,15 +651,7 @@ void request_shutdown(const fs::path &root) {
 }
 void start_client(const fs::path &root) { client_command(root, "-silent"); }
 // Implemented separately with the same bounded decoders used by the launcher.
-// A portrait from a landscape cover is made to Steam's capsule shape, framed
-// as common/steam_portraits.json says for a known package.
-bool install_art(const fs::path &source, const fs::path &destination, std::string_view kind,
-                 std::string_view package);
-// Whether `existing` is art an earlier sync made that a new one replaces: a
-// portrait copied from the store's small icon, or made of the whole cover
-// before the title's framing was known. `id` names the cached art.
-bool replaced_art(const fs::path &existing, const fs::path &cache, std::string_view id, std::string_view package,
-                  std::string_view kind);
+bool install_art(const fs::path &source, const fs::path &destination);
 // Steam keeps grid artwork as <appid><suffix> with the image's own extension;
 // the file there, if any.
 fs::path artwork_present(const fs::path &png) {
@@ -731,7 +723,6 @@ void add_while_running(const fs::path &root, const fs::path &executable, const f
                        const std::vector<Game> &games, LiveAdd &live) {
   struct Listed {
     uint32_t id = 0;    // of the shortcut made from Venture's desktop entry
-    uint32_t appid = 0;  // of the shortcut that works, the desktop entry's first
     bool works = false;
   };
   try {
@@ -749,17 +740,13 @@ void add_while_running(const fs::path &root, const fs::path &executable, const f
         if (package.empty()) continue;
         auto &l = out[package];
         std::error_code ec;
-        const bool from_entry = !entry_package(e).empty();
-        bool works = from_entry;
-        if (from_entry) {
+        if (!entry_package(e).empty()) {
           l.id = number(field(e, "appid"));
+          l.works = true;
         } else if (const auto program = paths::from_utf8(unquoted(text_any(e, "exe")));
                    !program.is_absolute() || fs::exists(program, ec)) {
-          works = true;
+          l.works = true;
         }
-        // The shortcut that works, the live-added one first.
-        if (works && (!l.appid || from_entry)) l.appid = number(field(e, "appid"));
-        l.works = l.works || works;
       }
       return out;
     };
@@ -767,21 +754,7 @@ void add_while_running(const fs::path &root, const fs::path &executable, const f
     for (const auto &g : games) {
       if (!paths::safe_launch_target(g.package) || live.tried.contains(g.package)) continue;
       if (!live.steam_running || !live.steam_running()) return;
-      if (auto found = before.find(g.package); found != before.end() && found->second.works) {
-        // Grid images may change while Steam runs, as for the games added
-        // below: a portrait an earlier sync made that a new one replaces
-        // (replaced_art) is replaced now. A file that cannot be is left.
-        try {
-          const auto destination = config / "grid" / artwork_name(found->second.appid, "portrait");
-          safe_target(config, destination);
-          if (const auto existing = artwork_present(destination);
-              !existing.empty() && replaced_art(existing, art, g.art_id, g.package, "portrait"))
-            if (const auto source = best_art(art, g.art_id, "portrait"); !source.empty())
-              install_art(source, destination, "portrait", g.package);
-        } catch (...) {
-        }
-        continue;
-      }
+      if (auto found = before.find(g.package); found != before.end() && found->second.works) continue;
       live.tried.insert(g.package);
       fs::create_directories(entry_folder());
       const auto entry = entry_file(g.package);
@@ -813,11 +786,8 @@ void add_while_running(const fs::path &root, const fs::path &executable, const f
       for (auto kind : {"portrait", "hero", "logo", "header", "icon"}) {
         const auto destination = config / "grid" / artwork_name(listed.id, kind);
         safe_target(config, destination);
-        if (const auto existing = artwork_present(destination);
-            !existing.empty() && !replaced_art(existing, art, g.art_id, g.package, kind))
-          continue;
-        if (const auto source = best_art(art, g.art_id, kind); !source.empty())
-          install_art(source, destination, kind, g.package);
+        if (!artwork_present(destination).empty()) continue;
+        if (const auto source = best_art(art, g.art_id, kind); !source.empty()) install_art(source, destination);
       }
     }
   } catch (const std::exception &e) {
@@ -929,7 +899,7 @@ Result sync(const fs::path &root, const fs::path &executable,
   struct Art {
     fs::path source, destination;
     size_t index;
-    std::string_view kind, package;
+    bool icon;
   };
   std::vector<Art> artwork;
   for (const auto &g : games) {
@@ -974,15 +944,13 @@ Result sync(const fs::path &root, const fs::path &executable,
       safe_target(config, destination);
       // Artwork is added once. What Steam already has there, ours from an
       // earlier sync or a custom image the user set in Steam (any image
-      // type), stays (but an icon copied as a portrait); a custom icon is the
-      // shortcut's own icon field.
+      // type), stays; a custom icon is the shortcut's own icon field.
       const bool icon_kind = std::string_view(kind) == "icon";
       if (icon_kind)
         if (auto *icon = field(entry, "icon"); icon && !icon->value.empty() &&
             fs::exists(paths::from_utf8(icon->value.c_str())))
           continue;
-      if (auto existing = artwork_present(destination);
-          !existing.empty() && !replaced_art(existing, art, g.art_id, g.package, kind)) {
+      if (auto existing = artwork_present(destination); !existing.empty()) {
         if (icon_kind)
           put(entry, "icon", paths::utf8(existing));
         continue;
@@ -990,7 +958,8 @@ Result sync(const fs::path &root, const fs::path &executable,
       auto source = best_art(art, g.art_id, kind);
       if (source.empty())
         continue;
-      artwork.push_back({source, destination, retained.size(), kind, g.package});
+      artwork.push_back({source, destination, retained.size(),
+                         std::string_view(kind) == "icon"});
     }
     retained.push_back(std::move(entry));
   }
@@ -1001,7 +970,7 @@ Result sync(const fs::path &root, const fs::path &executable,
   for (auto &a : artwork) {
     if (probe())
       return deferred();
-    if (install_art(a.source, a.destination, a.kind, a.package) && a.kind == "icon")
+    if (install_art(a.source, a.destination) && a.icon)
       put(list->children[a.index], "icon", paths::utf8(a.destination));
   }
   bytes = write_vdf(doc);

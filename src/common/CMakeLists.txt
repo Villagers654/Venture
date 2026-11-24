@@ -51,10 +51,6 @@ set(venture_eye_scale_db "${PROJECT_SOURCE_DIR}/third_party/venture-eye-scale/ti
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${venture_eye_scale_db}")
 file(READ "${venture_eye_scale_db}" VENTURE_EYE_SCALE_TITLES)
 configure_file(library/eye_scale_titles.h.in "${CMAKE_CURRENT_BINARY_DIR}/generated/eye_scale_titles.h" @ONLY)
-# How Steam portraits frame known titles' store covers (common/steam_art.cpp).
-set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/steam_portraits.json")
-file(READ "${CMAKE_CURRENT_SOURCE_DIR}/steam_portraits.json" VENTURE_STEAM_PORTRAITS)
-configure_file(steam_portraits.h.in "${CMAKE_CURRENT_BINARY_DIR}/generated/steam_portraits.h" @ONLY)
 target_include_directories(venture_common PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
 target_link_libraries(venture_common PUBLIC nlohmann_json::nlohmann_json CURL::libcurl PRIVATE miniz)
 if(VENTURE_BUILD_LAUNCHER)
