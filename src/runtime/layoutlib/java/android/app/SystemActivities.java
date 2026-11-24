@@ -55,6 +55,19 @@ final class SystemActivities {
             : action.equals(CREATE_DOCUMENT) ? PanelHost.PICK_SAVE : PanelHost.PICK_OPEN;
         String name = intent.getStringExtra(EXTRA_TITLE);
         boolean many = intent.getBooleanExtra(EXTRA_ALLOW_MULTIPLE, false);
+        // In the headset the host's dialog cannot be seen: the picker is on the
+        // panel (a development script's answer still comes first).
+        String scripted = kind != PanelHost.PICK_SAVE && caller != null && PanelHost.inHeadset()
+            ? PanelHost.takeScriptedPick() : null;
+        if (kind != PanelHost.PICK_SAVE && caller != null && PanelHost.inHeadset() && scripted == null) {
+          HeadsetPicker.show(caller, kind == PanelHost.PICK_FOLDER, path ->
+              answer(caller, callerWho, requestCode, kind, path == null ? null : new String[] {path}));
+          return true;
+        }
+        if (scripted != null) {
+          answer(caller, callerWho, requestCode, kind, scripted.isEmpty() ? null : new String[] {scripted});
+          return true;
+        }
         Thread picker = new Thread(() -> {
           String[] paths = PanelHost.pick(kind, name, many);
           new Handler(Looper.getMainLooper()).post(() -> answer(caller, callerWho, requestCode, kind, paths));

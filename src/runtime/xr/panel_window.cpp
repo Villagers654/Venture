@@ -1,5 +1,7 @@
 #include "xr/panel_window.h"
+#include "common/first_frame_progress.h"
 #include "common/log.h"
+#include "common/startup_progress.h"
 #include "java/jvm.h"
 #include <SDL3/SDL.h>
 #include <jni.h>
@@ -70,6 +72,14 @@ std::int32_t android_meta(std::uint16_t mod) {
 }
 
 namespace {
+std::atomic<bool> closing{false};
+}
+bool close_requested() { return closing.load(std::memory_order_relaxed); }
+void request_close() {
+  if (!closing.exchange(true)) log::info("panel", "The 2D app's window was closed; ending the app as a removed task");
+}
+
+namespace {
 // Android's MotionEvent actions and sources, as Panel.pointer takes them.
 constexpr std::int32_t kDown = 0, kUp = 1, kMove = 2, kHoverMove = 7, kHoverExit = 10;
 constexpr std::int32_t kTouchscreen = 0x1002, kMouse = 0x2002;
@@ -95,7 +105,9 @@ struct Shared {
   int width = 0, height = 0;
   std::uint64_t generation = 0;
   std::string title = "Venture";
-  bool started = false, closed = false;
+  // closed: the person closed the window (the app is ending); no_window: it
+  // could not open, and the panel goes on in the headset only.
+  bool started = false, closed = false, no_window = false;
   Uint32 wake = 0;
 };
 Shared& shared() {
@@ -296,7 +308,7 @@ void Window::show_pick() {
 void Window::run() {
   if (!open()) {
     std::lock_guard lock(s_.mutex);
-    s_.closed = true;
+    s_.no_window = true;
     s_.pick_done.notify_all();
     return;
   }
@@ -307,7 +319,7 @@ void Window::run() {
     if (!SDL_WaitEventTimeout(&event, 250)) continue;
     do {
       if (event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED || event.type == SDL_EVENT_QUIT) {
-        push(s_, {close, 0, 0, 0, 0, 0});
+        request_close();
         running = false;
       } else if (event.type == s_.wake) {
         draw(true);
@@ -343,11 +355,21 @@ void JNICALL java_present(JNIEnv* env, jclass, jint width, jint height, jobject 
     s.started = true;
     wake = s.wake;
   }
+  // The panel's image is a 2D app's frame, as an XR frame is an immersive
+  // game's: the first one ends its startup (no "No first frame" stall report,
+  // the ordinary quit path). While an XR session has focus its frames alone
+  // count, so a frozen XR loop is still seen as one.
+  if (start) {
+    log::info("panel", "2D app's first frame shown ({}x{})", width, height);
+    startup_diagnostics::arm();
+  }
+  if (!startup_diagnostics::host_session_focused()) startup_diagnostics::note_frame_submitted();
   if (start) {
     std::thread([] {
       Window window;
       window.run();
     }).detach();
+    start_headset();
   } else if (wake) {
     SDL_Event event{};
     event.type = wake;
@@ -367,6 +389,8 @@ void JNICALL java_title(JNIEnv* env, jclass, jstring title) {
 }
 
 // Blocks up to a second for events; null when none came.
+void JNICALL java_close(JNIEnv*, jclass) { request_close(); }
+
 jintArray JNICALL java_events(JNIEnv* env, jclass) {
   auto& s = shared();
   std::vector<std::int32_t> values;
@@ -400,7 +424,7 @@ jobjectArray JNICALL java_pick(JNIEnv* env, jclass, jint kind, jstring name, jbo
   Uint32 wake;
   {
     std::lock_guard lock(s.mutex);
-    if (!s.started || s.closed || !s.wake || s.pick) return nullptr;
+    if (!s.started || s.closed || s.no_window || !s.wake || s.pick) return nullptr;
     s.pick = pick;
     wake = s.wake;
   }
@@ -412,7 +436,7 @@ jobjectArray JNICALL java_pick(JNIEnv* env, jclass, jint kind, jstring name, jbo
     std::unique_lock lock(s.mutex);
     // A shown dialog always calls back, which `pick` outlives; one the window
     // closed before showing never will.
-    s.pick_done.wait(lock, [&] { return pick->done || (s.closed && !pick->shown); });
+    s.pick_done.wait(lock, [&] { return pick->done || ((s.closed || s.no_window) && !pick->shown); });
     paths = pick->paths;
     s.pick.reset();
   }
@@ -428,6 +452,8 @@ jobjectArray JNICALL java_pick(JNIEnv* env, jclass, jint kind, jstring name, jbo
   return out;
 }
 
+jboolean JNICALL java_in_headset(JNIEnv*, jclass) { return in_headset() ? JNI_TRUE : JNI_FALSE; }
+
 void register_natives(JNIEnv* env) {
   auto cls = env->FindClass("com/venture/runtime/layoutlib/PanelHost");
   if (!cls) {  // the classic framework: no 2D panel
@@ -438,6 +464,8 @@ void register_natives(JNIEnv* env) {
       {const_cast<char*>("nativePresent"), const_cast<char*>("(IILjava/nio/ByteBuffer;)V"), reinterpret_cast<void*>(java_present)},
       {const_cast<char*>("nativeTitle"), const_cast<char*>("(Ljava/lang/String;)V"), reinterpret_cast<void*>(java_title)},
       {const_cast<char*>("nativeEvents"), const_cast<char*>("()[I"), reinterpret_cast<void*>(java_events)},
+      {const_cast<char*>("nativeClose"), const_cast<char*>("()V"), reinterpret_cast<void*>(java_close)},
+      {const_cast<char*>("nativeInHeadset"), const_cast<char*>("()Z"), reinterpret_cast<void*>(java_in_headset)},
       {const_cast<char*>("nativePick"), const_cast<char*>("(ILjava/lang/String;Z)[Ljava/lang/String;"), reinterpret_cast<void*>(java_pick)},
   };
   if (env->RegisterNatives(cls, methods, jint(std::size(methods))) != JNI_OK) {
@@ -447,6 +475,33 @@ void register_natives(JNIEnv* env) {
   env->DeleteLocalRef(cls);
 }
 } // namespace
+
+std::uint64_t copy_frame(std::uint64_t seen, std::vector<std::uint8_t>& out, int& width, int& height) {
+  auto& s = shared();
+  std::lock_guard lock(s.mutex);
+  if (!s.started || s.generation == seen) return 0;
+  out = s.pixels;
+  width = s.width;
+  height = s.height;
+  return s.generation;
+}
+
+std::array<int, 2> frame_size() {
+  auto& s = shared();
+  std::lock_guard lock(s.mutex);
+  return {s.width, s.height};
+}
+
+void post_events(const std::vector<std::array<std::int32_t, 6>>& events) {
+  if (events.empty()) return;
+  auto& s = shared();
+  {
+    std::lock_guard lock(s.mutex);
+    // Nobody reads a closed panel's input; never grow without bound.
+    if (s.events.size() < 4096) s.events.insert(s.events.end(), events.begin(), events.end());
+  }
+  s.events_ready.notify_all();
+}
 
 void install_java_bridge() {
   static std::once_flag once;

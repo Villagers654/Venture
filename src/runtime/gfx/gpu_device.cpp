@@ -36,6 +36,8 @@ std::vector<std::string> instance_enabled, device_enabled;
 bool instance_recorded = false, device_recorded = false;
 // Set while xrCreateVulkanInstanceKHR runs, which reaches record_instance.
 bool instance_through_xr = false;
+// The shared device came from xrCreateVulkanDeviceKHR (a runtime was available).
+bool device_through_xr = false;
 PFN_vkGetInstanceProcAddr angle_loader = nullptr;
 bool unified_image_layouts = false;
 PFN_vkGetInstanceProcAddr loader() {
@@ -626,6 +628,7 @@ VkResult create_device(VkPhysicalDevice physical,
                    static_cast<int>(xr_result));
         return VK_ERROR_INITIALIZATION_FAILED;
       }
+      device_through_xr = result == VK_SUCCESS;
       if (result == VK_SUCCESS && !device_recorded) {
         log::info("gfx", "The XR runtime created the Vulkan device itself; using the requested extensions");
         std::vector<std::string> requested;
@@ -862,6 +865,10 @@ const std::vector<std::string>& enabled_gpu_device_extensions() {
   return device_enabled;
 }
 bool gpu_unified_image_layouts_enabled() { return unified_image_layouts; }
+bool gpu_device_through_xr() {
+  std::lock_guard lock(creation_lock);
+  return device_through_xr;
+}
 bool host_vulkan_instance_extension(std::string_view name) {
   if (!loader()) return false;
   auto enumerate = vk<PFN_vkEnumerateInstanceExtensionProperties>(

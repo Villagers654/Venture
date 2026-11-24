@@ -52,6 +52,11 @@ struct HostXr {
 // instance and system). Thread-safe.
 HostXr &host_xr();
 bool shutdown_host_xr(); // host-only, after sessions/devices have been retired
+// A process that started without a headset (a 2D app) attaches when one comes:
+// lists the extensions and creates the instance once the loader finds a runtime,
+// and asks for the headset system again. True once `available`. Thread-safe;
+// quiet while nothing changes, so it may be polled.
+bool retry_host_xr();
 // XR_OCULUS_audio_device_guid (Windows): the WASAPI endpoint the runtime plays
 // the headset's audio on (input: records its microphone from), in UTF-8; empty
 // when the runtime does not offer it or names none, and after shutdown.

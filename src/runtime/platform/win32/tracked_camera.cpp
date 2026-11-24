@@ -5,18 +5,118 @@
 // a worker; GetVideoStreamFrameBuffer with a buffer is avoided (it fails in
 // Vulkan applications), its header-only form polls for new frames.
 #include "xr/tracked_camera.h"
+#include "common/json.h"
 #include "common/log.h"
+#include "common/paths.h"
 #include <windows.h>
 #include <d3d11.h>
 #include <dxgi.h>
 #include <atomic>
 #include <chrono>
 #include <cstring>
+#include <format>
 #include <mutex>
 #include <thread>
 
 namespace venture::xr {
 namespace {
+// Every call into the OpenVR client runs under a structured exception guard.
+// The client and the GPU driver libraries it loads run inside this process,
+// and a fault in them (SteamVR's camera stream on an AMD RX 6700 faulted in
+// amdlvr64.dll as Haymaker created its passthrough) would end the game. A
+// faulted call fails instead: the camera is given up for this process, and
+// later runs skip it while the faulting library and the client are the same
+// files (passthrough then uses the next backend or none).
+struct CallFault { DWORD code = 0; void* address = nullptr; };
+std::atomic<bool> faulted{false};
+int fault_filter(EXCEPTION_POINTERS* exception, CallFault& fault) {
+  switch (exception->ExceptionRecord->ExceptionCode) {
+  case EXCEPTION_ACCESS_VIOLATION: case EXCEPTION_IN_PAGE_ERROR: case EXCEPTION_ILLEGAL_INSTRUCTION:
+  case EXCEPTION_PRIV_INSTRUCTION: case EXCEPTION_INT_DIVIDE_BY_ZERO: case EXCEPTION_ARRAY_BOUNDS_EXCEEDED:
+    break;
+  default: return EXCEPTION_CONTINUE_SEARCH;
+  }
+  fault = {exception->ExceptionRecord->ExceptionCode, exception->ExceptionRecord->ExceptionAddress};
+  return EXCEPTION_EXECUTE_HANDLER;
+}
+// No C++ object lives in this frame; the call is indirect so the guarded scope
+// covers it (see platform/win32/memory.cpp on Clang's SEH scopes).
+bool invoke_guarded(void (*call)(void*), void* context, CallFault& fault) {
+  __try {
+    call(context);
+  } __except(fault_filter(GetExceptionInformation(), fault)) {
+    return false;
+  }
+  return true;
+}
+template<class F> void trampoline(void* context) { (*static_cast<F*>(context))(); }
+
+std::string module_path(HMODULE module) {
+  std::wstring path(MAX_PATH, L'\0');
+  for (;;) {
+    const auto length = GetModuleFileNameW(module, path.data(), DWORD(path.size()));
+    if (!length) return {};
+    if (length < path.size()) { path.resize(length); return paths::utf8(path); }
+    path.resize(path.size() * 2);
+  }
+}
+// A file's size and last write time: a driver or SteamVR update changes it.
+std::string file_identity(const std::string& path) {
+  WIN32_FILE_ATTRIBUTE_DATA data{};
+  if (path.empty() || !GetFileAttributesExW(paths::from_utf8(path).c_str(), GetFileExInfoStandard, &data)) return {};
+  return std::format("{}:{}", (std::uint64_t(data.nFileSizeHigh) << 32) | data.nFileSizeLow,
+                     (std::uint64_t(data.ftLastWriteTime.dwHighDateTime) << 32) | data.ftLastWriteTime.dwLowDateTime);
+}
+std::filesystem::path fault_record() { return paths::data_dir() / "openvr-camera-fault.json"; }
+std::string client_path() { return module_path(GetModuleHandleW(L"vrclient_x64.dll")); }
+
+void note_fault(const char* what, const CallFault& fault) {
+  if (faulted.exchange(true)) return;
+  HMODULE module = nullptr;
+  GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                     static_cast<LPCWSTR>(fault.address), &module);
+  const auto path = module ? module_path(module) : std::string{};
+  const auto name = path.empty() ? std::string("unknown") : paths::utf8(paths::from_utf8(path).filename());
+  const auto offset = module ? reinterpret_cast<std::uintptr_t>(fault.address) - reinterpret_cast<std::uintptr_t>(module) : 0;
+  log::error("xr-passthrough",
+             "OpenVR camera call {} faulted (exception {:#010x} at {}+{:#x}); the camera is not used, and later runs "
+             "skip it until {} or SteamVR's OpenVR client is updated",
+             what, fault.code, name, offset, name);
+  try {
+    const auto client = client_path();
+    paths::atomic_write(fault_record(), Json{{"version", 1}, {"call", what}, {"module", path},
+                                             {"module_identity", file_identity(path)}, {"client", client},
+                                             {"client_identity", file_identity(client)},
+                                             {"updated", paths::timestamp()}}.dump(2));
+  } catch (...) {}
+}
+// A fault recorded by an earlier run still applies: the same faulting library
+// and the same client files are installed.
+bool earlier_fault_applies() {
+  static const bool applies = [] {
+    try {
+      const auto record = parse_json(paths::read(fault_record(), 64 * 1024));
+      const auto module = record.value("module", std::string{}), client = record.value("client", std::string{});
+      const bool same = !module.empty() && file_identity(module) == record.value("module_identity", std::string{}) &&
+                        client == client_path() && file_identity(client) == record.value("client_identity", std::string{});
+      if (same)
+        log::info("xr-passthrough", "OpenVR camera skipped: an earlier run's call {} faulted in {}; it is tried again "
+                  "when that file or SteamVR's OpenVR client changes", record.value("call", std::string{}), module);
+      return same;
+    } catch (...) { return false; }
+  }();
+  return applies;
+}
+// Runs `call` unless a call has faulted; a fault returns `failed`.
+template<class R, class F> R guarded(const char* what, R failed, F&& call) {
+  if (faulted.load(std::memory_order_relaxed)) return failed;
+  R result = failed;
+  auto body = [&] { result = call(); };
+  CallFault fault;
+  if (invoke_guarded(&trampoline<decltype(body)>, &body, fault)) return result;
+  note_fault(what, fault);
+  return failed;
+}
 // OpenVR API contract (openvr_capi.h, IVRSystem_022 / IVRTrackedCamera_006).
 struct HmdMatrix34 { float m[3][4]; };
 struct HmdVector2 { float v[2]; };
@@ -36,59 +136,90 @@ constexpr std::int32_t prop_num_cameras = 1039, prop_frame_layout = 1040, prop_c
 constexpr std::uint32_t matrix34_tag = 20;
 struct SystemTable {
   void* f[27];
-  void dxgi_output(std::int32_t* index) const { reinterpret_cast<void (*)(std::int32_t*)>(f[7])(index); }
+  void dxgi_output(std::int32_t* index) const {
+    guarded("GetDXGIOutputInfo", 0, [&] { reinterpret_cast<void (*)(std::int32_t*)>(f[7])(index); return 0; });
+  }
   void poses(std::int32_t origin, float predicted, TrackedDevicePose* out, std::uint32_t count) const {
-    reinterpret_cast<void (*)(std::int32_t, float, TrackedDevicePose*, std::uint32_t)>(f[11])(origin, predicted, out, count);
+    guarded("GetDeviceToAbsoluteTrackingPose", 0, [&] {
+      reinterpret_cast<void (*)(std::int32_t, float, TrackedDevicePose*, std::uint32_t)>(f[11])(origin, predicted, out, count);
+      return 0;
+    });
   }
   std::int32_t int32(std::int32_t prop, std::int32_t* error) const {
-    return reinterpret_cast<std::int32_t (*)(std::uint32_t, std::int32_t, std::int32_t*)>(f[23])(hmd, prop, error);
+    *error = 1; // TrackedProp_WrongDataType, kept when the call faults
+    return guarded("GetInt32TrackedDeviceProperty", 0, [&] {
+      return reinterpret_cast<std::int32_t (*)(std::uint32_t, std::int32_t, std::int32_t*)>(f[23])(hmd, prop, error);
+    });
   }
   std::uint32_t array(std::int32_t prop, std::uint32_t tag, void* out, std::uint32_t size, std::int32_t* error) const {
-    return reinterpret_cast<std::uint32_t (*)(std::uint32_t, std::int32_t, std::uint32_t, void*, std::uint32_t, std::int32_t*)>(
-        f[26])(hmd, prop, tag, out, size, error);
+    *error = 1;
+    return guarded("GetArrayTrackedDeviceProperty", 0u, [&] {
+      return reinterpret_cast<std::uint32_t (*)(std::uint32_t, std::int32_t, std::uint32_t, void*, std::uint32_t, std::int32_t*)>(
+          f[26])(hmd, prop, tag, out, size, error);
+    });
   }
 };
+// A faulted camera call returns -1, which no call answers on success.
 struct CameraTable {
   void* f[14];
-  std::int32_t has_camera(bool* out) const { return reinterpret_cast<std::int32_t (*)(std::uint32_t, bool*)>(f[1])(hmd, out); }
+  std::int32_t has_camera(bool* out) const {
+    return guarded("HasCamera", -1, [&] { return reinterpret_cast<std::int32_t (*)(std::uint32_t, bool*)>(f[1])(hmd, out); });
+  }
   std::int32_t frame_size(std::uint32_t* w, std::uint32_t* h, std::uint32_t* bytes) const {
-    return reinterpret_cast<std::int32_t (*)(std::uint32_t, std::int32_t, std::uint32_t*, std::uint32_t*, std::uint32_t*)>(f[2])(
-        hmd, frame_type, w, h, bytes);
+    return guarded("GetCameraFrameSize", -1, [&] {
+      return reinterpret_cast<std::int32_t (*)(std::uint32_t, std::int32_t, std::uint32_t*, std::uint32_t*, std::uint32_t*)>(f[2])(
+          hmd, frame_type, w, h, bytes);
+    });
   }
   std::int32_t intrinsics(std::uint32_t camera, HmdVector2* focal, HmdVector2* center) const {
-    return reinterpret_cast<std::int32_t (*)(std::uint32_t, std::uint32_t, std::int32_t, HmdVector2*, HmdVector2*)>(f[3])(
-        hmd, camera, frame_type, focal, center);
+    return guarded("GetCameraIntrinsics", -1, [&] {
+      return reinterpret_cast<std::int32_t (*)(std::uint32_t, std::uint32_t, std::int32_t, HmdVector2*, HmdVector2*)>(f[3])(
+          hmd, camera, frame_type, focal, center);
+    });
   }
   std::int32_t acquire(std::uint64_t* handle) const {
-    return reinterpret_cast<std::int32_t (*)(std::uint32_t, std::uint64_t*)>(f[5])(hmd, handle);
+    return guarded("AcquireVideoStreamingService", -1, [&] {
+      return reinterpret_cast<std::int32_t (*)(std::uint32_t, std::uint64_t*)>(f[5])(hmd, handle);
+    });
   }
-  std::int32_t release(std::uint64_t handle) const { return reinterpret_cast<std::int32_t (*)(std::uint64_t)>(f[6])(handle); }
+  std::int32_t release(std::uint64_t handle) const {
+    return guarded("ReleaseVideoStreamingService", -1, [&] { return reinterpret_cast<std::int32_t (*)(std::uint64_t)>(f[6])(handle); });
+  }
   std::int32_t header(std::uint64_t handle, FrameHeader* out) const {
-    return reinterpret_cast<std::int32_t (*)(std::uint64_t, std::int32_t, void*, std::uint32_t, FrameHeader*, std::uint32_t)>(f[7])(
-        handle, frame_type, nullptr, 0, out, sizeof(FrameHeader));
+    return guarded("GetVideoStreamFrameBuffer", -1, [&] {
+      return reinterpret_cast<std::int32_t (*)(std::uint64_t, std::int32_t, void*, std::uint32_t, FrameHeader*, std::uint32_t)>(f[7])(
+          handle, frame_type, nullptr, 0, out, sizeof(FrameHeader));
+    });
   }
   std::int32_t texture(std::uint64_t handle, void* device, void** view, FrameHeader* out) const {
-    return reinterpret_cast<std::int32_t (*)(std::uint64_t, std::int32_t, void*, void**, FrameHeader*, std::uint32_t)>(f[9])(
-        handle, frame_type, device, view, out, sizeof(FrameHeader));
+    return guarded("GetVideoStreamTextureD3D11", -1, [&] {
+      return reinterpret_cast<std::int32_t (*)(std::uint64_t, std::int32_t, void*, void**, FrameHeader*, std::uint32_t)>(f[9])(
+          handle, frame_type, device, view, out, sizeof(FrameHeader));
+    });
   }
-  std::int32_t tracking_space() const { return reinterpret_cast<std::int32_t (*)()>(f[13])(); }
+  std::int32_t tracking_space() const {
+    return guarded("GetCameraTrackingSpace", 1, [&] { return reinterpret_cast<std::int32_t (*)()>(f[13])(); });
+  }
 };
 struct Tables { const SystemTable* system = nullptr; const CameraTable* camera = nullptr; };
 // IVRClientCore_003 has no virtual destructor; GetGenericInterface is slot 3.
 Tables tables() {
+  if (faulted.load()) return {};
   const auto module = GetModuleHandleW(L"vrclient_x64.dll");
   if (!module) return {};
   using Factory = void* (*)(const char*, int*);
   const auto factory = reinterpret_cast<Factory>(reinterpret_cast<void*>(GetProcAddress(module, "VRClientCoreFactory")));
   if (!factory) return {};
   int error = 0;
-  auto* core = factory("IVRClientCore_003", &error);
+  auto* core = guarded("VRClientCoreFactory", static_cast<void*>(nullptr), [&] { return factory("IVRClientCore_003", &error); });
   if (!core || error) return {};
   using Generic = void* (*)(void*, const char*, std::int32_t*);
   const auto generic = reinterpret_cast<Generic>((*static_cast<void***>(core))[3]);
   std::int32_t system_error = 0, camera_error = 0;
-  auto* system = generic(core, "FnTable:IVRSystem_022", &system_error);
-  auto* camera = generic(core, "FnTable:IVRTrackedCamera_006", &camera_error);
+  auto* system = guarded("GetGenericInterface", static_cast<void*>(nullptr),
+                         [&] { return generic(core, "FnTable:IVRSystem_022", &system_error); });
+  auto* camera = guarded("GetGenericInterface", static_cast<void*>(nullptr),
+                         [&] { return generic(core, "FnTable:IVRTrackedCamera_006", &camera_error); });
   if (!system || !camera || system_error || camera_error) return {};
   return {static_cast<const SystemTable*>(system), static_cast<const CameraTable*>(camera)};
 }
@@ -208,7 +339,8 @@ class OpenVRCamera final : public TrackedCamera {
   void run() noexcept {
     std::uint32_t last = 0;
     bool reported = false;
-    while (!stopping.load()) {
+    // A faulted client call ends the stream; latest() then stays without frames.
+    while (!stopping.load() && !faulted.load()) {
       FrameHeader header{};
       if (api.camera->header(handle, &header) != 0 || header.sequence == last) {
         std::this_thread::sleep_for(std::chrono::milliseconds(2));
@@ -239,6 +371,7 @@ class OpenVRCamera final : public TrackedCamera {
 } // namespace
 
 bool tracked_camera_present() {
+  if (faulted.load() || earlier_fault_applies()) return false;
   const auto api = tables();
   if (!api.camera) return false;
   bool has = false;

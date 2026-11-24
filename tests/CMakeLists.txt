@@ -880,6 +880,9 @@ if(TARGET venture_java)
     get_property(venture_test_android_jar GLOBAL PROPERTY VENTURE_LAYOUTLIB_ANDROID_JAR)
     get_property(venture_test_build_tools GLOBAL PROPERTY VENTURE_LAYOUTLIB_BUILD_TOOLS)
     if(VENTURE_LAYOUTLIB AND venture_test_android_jar)
+      # A Java-only 2D app starts on the primary ABI without a headset.
+      # A 2D app's panel in the headset: Venture's own session, the laser, the
+      # system keyboard, a runtime that appears later and both quits.
     endif()
     # A first launch's one-time work done before the launch (venture-runtime --prepare).
     add_test(NAME venture_first_launch_prepare COMMAND "${Python3_EXECUTABLE}"
@@ -989,6 +992,9 @@ add_executable(venture_xr_tests test_main.cpp  runtime/xr_test.cpp runtime/xr_vr
   add_test(NAME venture_xr_tests COMMAND venture_xr_tests)
   add_subdirectory(passthrough)
   add_subdirectory(passthrough_source_transport)
+  if(WIN32)
+    add_subdirectory(openvr_camera_fault)
+  endif()
   # Run wall-clock pacing assertions before long CPU/compile work accumulates.
   set_tests_properties(venture_xr_tests PROPERTIES COST 2000)
 

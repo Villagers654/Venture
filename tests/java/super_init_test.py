@@ -30,7 +30,7 @@ with tempfile.TemporaryDirectory(prefix="venture-super-init-") as directory:
         command += [str(work / dex), str(work / (dex + ".jar")), str(work / (dex + ".errors.tsv"))]
     log = subprocess.run(command, check=True, capture_output=True, text=True).stdout
     print(log, end="")
-    assert "superclass constructor calls retargeted=6 synthetic constructors=7 unresolved=0" in log, log
+    assert "superclass constructor calls retargeted=7 synthetic constructors=7 unresolved=0" in log, log
     for dex in dexes:
         assert (work / (dex + ".errors.tsv")).read_text() == "", dex
     merged = work / "app.jar"

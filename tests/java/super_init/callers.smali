@@ -72,6 +72,26 @@
     return-object v1
 .end method
 
+# Allocated before a try block and initialized after it, with the handler's path joining
+# the normal one (androidx datastore's protobuf G.<init> in FalaVR): the handler keeps the
+# registers it had in the try range, so the allocation survives the join.
+.method public static acrossTry(Ljava/lang/String;)Ljava/lang/Object;
+    .registers 3
+    new-instance v0, LPlainData;
+    :try_start
+    invoke-static {p0}, Ljava/lang/Integer;->parseInt(Ljava/lang/String;)I
+    move-result v1
+    :try_end
+    .catch Ljava/lang/NumberFormatException; {:try_start .. :try_end} :caught
+    goto :join
+    :caught
+    const/4 v1, -0x1
+    :join
+    invoke-direct {v0}, Ljava/lang/Object;-><init>()V
+    iput v1, v0, LPlainData;->value:I
+    return-object v0
+.end method
+
 # Ordinary construction of the same classes stays as written.
 .method public static ordinary()Ljava/lang/Object;
     .registers 2

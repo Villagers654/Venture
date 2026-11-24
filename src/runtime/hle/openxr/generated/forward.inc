@@ -41,13 +41,6 @@ XrResult xrEnumerateViewConfigurations(XrInstance instance, XrSystemId systemId,
   auto result = host_call<PFN_xrEnumerateViewConfigurations, "xrEnumerateViewConfigurations">(instance, systemId, viewConfigurationTypeCapacityInput, viewConfigurationTypeCountOutput, viewConfigurationTypes);
   return result;
 }
-XrResult xrGetReferenceSpaceBoundsRect(XrSession session, XrReferenceSpaceType referenceSpaceType, XrExtent2Df* bounds) {
-  std::lock_guard lock(venture::hle::openxr::state().mutex);
-  if (!valid_handle(session, "XrSession")) return XR_ERROR_HANDLE_INVALID;
-  if (!bounds) return XR_ERROR_VALIDATION_FAILURE;
-  auto result = host_call<PFN_xrGetReferenceSpaceBoundsRect, "xrGetReferenceSpaceBoundsRect">(session, referenceSpaceType, bounds);
-  return result;
-}
 XrResult xrGetViewConfigurationProperties(XrInstance instance, XrSystemId systemId, XrViewConfigurationType viewConfigurationType, XrViewConfigurationProperties* configurationProperties) {
   std::lock_guard lock(venture::hle::openxr::state().mutex);
   if (!valid_handle(instance, "XrInstance")) return XR_ERROR_HANDLE_INVALID;

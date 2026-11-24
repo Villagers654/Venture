@@ -23,7 +23,7 @@ add_library(venture_xr_capture STATIC capture.cpp)
 target_include_directories(venture_xr_capture PUBLIC ${PROJECT_SOURCE_DIR}/src/runtime)
 target_link_libraries(venture_xr_capture PUBLIC Vulkan::Headers OpenXR::headers PRIVATE zlibstatic)
 
-add_library(venture_xr STATIC system_keyboard.cpp stats_overlay.cpp panel_window.cpp passthrough_source.cpp passthrough_source_sbn1.cpp color_space.cpp color_images.cpp sphere_images.cpp guest_images.cpp desktop_mirror.cpp dev_dump.cpp session.cpp sanitize.cpp clock.cpp reference_spaces.cpp menu_chord.cpp grip_toggle.cpp bindings.cpp openvr_devices.cpp hands.cpp angle_images.cpp haptic_output.cpp haptic_sequence.cpp
+add_library(venture_xr STATIC system_keyboard.cpp stats_overlay.cpp panel_window.cpp panel_xr.cpp passthrough_source.cpp passthrough_source_sbn1.cpp color_space.cpp color_images.cpp sphere_images.cpp guest_images.cpp desktop_mirror.cpp dev_dump.cpp session.cpp sanitize.cpp clock.cpp reference_spaces.cpp menu_chord.cpp grip_toggle.cpp bindings.cpp openvr_devices.cpp hands.cpp angle_images.cpp haptic_output.cpp haptic_sequence.cpp
   ../hle/openxr/state.cpp ../hle/openxr/openxr.cpp ../hle/openxr/graphics.cpp
   ../hle/openxr/extensions.cpp ../hle/openxr/actions.cpp ../hle/openxr/controller_layer.cpp ../hle/openxr/register.cpp ../hle/openxr/a32.cpp ../hle/openxr/hands.cpp
   ../hle/openxr/spaces.cpp ../hle/openxr/haptics.cpp ../hle/openxr/spatial.cpp ../hle/openxr/debug_utils.cpp
@@ -38,6 +38,8 @@ add_library(venture_xr STATIC system_keyboard.cpp stats_overlay.cpp panel_window
 if(WIN32)
   target_sources(venture_xr PRIVATE ../platform/win32/xr_clock.cpp ../platform/win32/passthrough_source.cpp ../platform/win32/passthrough_source_sbn1.cpp
     ../platform/win32/tracked_camera.cpp)
+  # Structured exception guards around the OpenVR client's calls.
+  set_source_files_properties(../platform/win32/tracked_camera.cpp PROPERTIES COMPILE_OPTIONS "-fms-extensions")
   target_link_libraries(venture_xr PRIVATE bcrypt)
 else()
   target_sources(venture_xr PRIVATE ../platform/posix/xr_clock.cpp ../platform/posix/passthrough_source.cpp ../platform/posix/passthrough_source_sbn1.cpp

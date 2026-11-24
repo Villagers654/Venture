@@ -1,0 +1,26 @@
+# The Windows OpenVR camera against a stand-in client whose camera call
+# faults: three processes in order over one data directory.
+add_library(venture_fake_vrclient SHARED fake_vrclient.cpp)
+add_executable(venture_openvr_camera_fault_tests tests.cpp ../test_main.cpp)
+target_link_libraries(venture_openvr_camera_fault_tests PRIVATE venture_xr doctest::doctest)
+add_dependencies(venture_openvr_camera_fault_tests venture_fake_vrclient)
+set(openvr_fault_data "${CMAKE_CURRENT_BINARY_DIR}/openvr-camera-fault-data")
+target_compile_definitions(venture_openvr_camera_fault_tests PRIVATE
+  VENTURE_FAKE_VRCLIENT="$<TARGET_FILE:venture_fake_vrclient>"
+  VENTURE_OPENVR_FAULT_DATA="${openvr_fault_data}")
+set(previous "")
+foreach(step IN ITEMS fault skip retry)
+  if(step STREQUAL "fault")
+    set(filter "*gives up the camera*")
+  elseif(step STREQUAL "skip")
+    set(filter "*later run skips*")
+  else()
+    set(filter "*tried again*")
+  endif()
+  add_test(NAME openvr_camera_fault_${step} COMMAND venture_openvr_camera_fault_tests "--test-case=${filter}")
+  set_tests_properties(openvr_camera_fault_${step} PROPERTIES RESOURCE_LOCK openvr_camera_fault TIMEOUT 60)
+  if(previous)
+    set_tests_properties(openvr_camera_fault_${step} PROPERTIES DEPENDS ${previous})
+  endif()
+  set(previous openvr_camera_fault_${step})
+endforeach()

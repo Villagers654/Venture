@@ -57,6 +57,9 @@ struct GpuDevice {
 // available). Thread-safe; returns the same object afterwards.
 GpuDevice& gpu_device();
 bool shutdown_for_os_quit();
+// The device was created through the host XR runtime (XR_KHR_vulkan_enable2),
+// so a host session may use it; false for a device made without a runtime.
+bool gpu_device_through_xr();
 // Whether optimal-tiling images of `format` (a VkFormat; this header keeps
 // vulkan.h out) blit both ways with linear filtering on this device: what a
 // scaled presentation copy needs. False before the device exists.

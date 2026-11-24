@@ -23,6 +23,10 @@ undelegate android.view.HandlerActionQueue
 undelegate android.view.WindowManagerGlobal
 undelegate android.view.accessibility.AccessibilityManager
 undelegate android.view.inputmethod.InputMethodManager
+# Showing and hiding the soft keyboard is Venture's system keyboard
+# (src/runtime/layoutlib/java/android/view/inputmethod/InputMethodManager_Delegate.java).
+keep-delegate android.view.inputmethod.InputMethodManager.showSoftInput
+keep-delegate android.view.inputmethod.InputMethodManager.hideSoftInputFromWindow
 undelegate android.graphics.drawable.DrawableInflater
 undelegate android.graphics.drawable.AdaptiveIconDrawable
 undelegate android.graphics.drawable.NinePatchDrawable

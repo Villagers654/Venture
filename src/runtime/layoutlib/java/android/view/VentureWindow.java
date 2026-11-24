@@ -110,6 +110,8 @@ public final class VentureWindow extends ViewRootImpl {
       host.dispatchVisibilityAggregated(!stopped && host.getVisibility() == View.VISIBLE);
     }
     if (!stopped) scheduleTraversals();
+    // A stopped window's text field no longer takes the system keyboard.
+    if (stopped && host != null) com.venture.runtime.SystemKeyboard.windowClosed(host);
     panel.windowStopped(this);
   }
 
@@ -235,11 +237,16 @@ public final class VentureWindow extends ViewRootImpl {
     if (mAttachInfo.mHasWindowFocus == focused) return;
     windowFocusChanged(focused);
     ((Session) mWindowSession).focusChanged(focused, mAttachInfo.mWindowToken);
+    // As AOSP's input method manager does, a window whose soft input mode asks
+    // for a visible keyboard gets it on its focused text field (in the headset).
+    if (focused && mView != null && com.venture.runtime.layoutlib.PanelHost.inHeadset())
+      com.venture.runtime.SystemKeyboard.windowFocused(mView, mWindowAttributes.softInputMode);
   }
 
   public void remove() {
     if (removed) return;
     removed = true;
+    if (mView != null) com.venture.runtime.SystemKeyboard.windowClosed(mView);
     unscheduleTraversals();
     die(true);
     if (renderer != null) renderer.destroy();

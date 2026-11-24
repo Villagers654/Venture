@@ -58,6 +58,12 @@ struct ProcessConfig {
   bool has_code = true; // classes.dex present; a native-only APK (hasCode="false") has none
   // The launch activity is a 2D panel (manifest_launches_2d); VENTURE_ANDROID_2D=0/1 overrides.
   bool launches_2d = false;
+  // The activity this process starts (the launch activity, or a restart's) is a
+  // 2D panel too: it needs no headset, so the host XR runtime is optional.
+  bool starts_on_panel = false;
+  // The APK has no native code: the guest ISA is the device's primary ABI and
+  // nothing is extracted.
+  bool no_native_code = false;
   // VENTURE_PASSTHROUGH (on unless "0"), captured once before guest/XR initialization.
   bool passthrough = true;
   // VENTURE_PASSTHROUGH_KEY: the user's color key (sRGB), the only way the

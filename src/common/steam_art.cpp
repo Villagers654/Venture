@@ -62,7 +62,7 @@ Pixels resize(const Pixels &src, int x, int y, int cw, int ch, int w, int h) {
                           w, h, w * 4, STBIR_RGBA);
   return out;
 }
-// How a title's portrait shows its cover (common/steam_portraits.json): zoom 0
+// How a title's portrait shows its cover (third_party/venture-steam-art/titles.json): zoom 0
 // the whole cover across the capsule's width, 1 the capsule's full height,
 // above 1 closer still; the focus is the point of the cover (0 to 1 across
 // its width and down its height) the capsule centres on, as far as the cover

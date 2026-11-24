@@ -652,7 +652,7 @@ void request_shutdown(const fs::path &root) {
 void start_client(const fs::path &root) { client_command(root, "-silent"); }
 // Implemented separately with the same bounded decoders used by the launcher.
 // A portrait from a landscape cover is made to Steam's capsule shape, framed
-// as common/steam_portraits.json says for a known package.
+// as third_party/venture-steam-art/titles.json says for a known package.
 bool install_art(const fs::path &source, const fs::path &destination, std::string_view kind,
                  std::string_view package);
 // Whether `existing` is art an earlier sync made that a new one replaces: a

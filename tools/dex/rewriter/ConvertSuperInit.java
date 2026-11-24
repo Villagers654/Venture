@@ -122,14 +122,20 @@ final class ConvertSuperInit {
         }
         if (n == 0) return;
         frames[0] = entry; work.add(0);
-        // A catch handler starts from unknown registers: R8 does not carry an uninitialized
-        // reference into a handler, and an unknown receiver only means "leave the call as is".
+        // A catch handler starts from the registers before any statement its try range covers
+        // (a throwing statement writes nothing). R8 can allocate before a try block and
+        // initialize after it, so the allocation reaches the merge after the handler intact
+        // (androidx datastore's protobuf.G.<init> in FalaVR).
+        List<int[]> ranges = new ArrayList<>();  // start, end, handler
         if (code.tryStmts != null)
-            for (TryCatchNode t : code.tryStmts)
+            for (TryCatchNode t : code.tryStmts) {
+                Integer start = labels.get(t.start), end = labels.get(t.end);
+                if (start == null || end == null) continue;
                 for (var h : t.handler) {
                     Integer at = labels.get(h);
-                    if (at != null && frames[at] == null) { frames[at] = blank(registers); work.add(at); }
+                    if (at != null) ranges.add(new int[]{start, end, at});
                 }
+            }
         Interpreter interpreter = new Interpreter();
         try {
             while (!work.isEmpty()) {
@@ -142,7 +148,15 @@ final class ConvertSuperInit {
                 if (s.op == null || s.op.canContinue()) next.add(i + 1);
                 if (s instanceof JumpStmtNode j) next.add(labels.get(j.label));
                 if (s instanceof BaseSwitchStmtNode sw) for (var l : sw.labels) next.add(labels.get(l));
+                for (int[] r : ranges)
+                    if (i >= r[0] && i < r[1] && s.op != null && s.op != Op.NOP) next.add(-1 - r[2]);
                 for (Integer t : next) {
+                    if (t != null && t < 0) {  // a handler: the state before statement i
+                        int h = -1 - t;
+                        if (frames[h] == null) { frames[h] = blank(registers).init(frames[i]); frames[h].setTmp(UNKNOWN); work.add(h); }
+                        else if (merge(frames[h], frames[i])) work.add(h);
+                        continue;
+                    }
                     if (t == null || t >= n) continue;
                     if (frames[t] == null) { frames[t] = blank(registers).init(after); frames[t].setTmp(after.getTmp()); work.add(t); }
                     else if (merge(frames[t], after)) work.add(t);

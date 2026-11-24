@@ -588,6 +588,14 @@ bool point(int hand, XrSpace aim, float trigger, XrTime time) {
   h.down = down;
   return pressed;
 }
+std::optional<float> hit_distance(int hand) {
+  if (hand < 0 || hand > 1) return std::nullopt;
+  auto &s = shared();
+  std::lock_guard lock(s.mutex);
+  const auto &at = s.hands[std::size_t(hand)].at;
+  if (!s.open || !at) return std::nullopt;
+  return at->distance;
+}
 void tick(std::string_view api, XrSession session, XrAction haptic, XrPath hand) {
   if (!haptic || !hand) return;
   const XrHapticActionInfo info{XR_TYPE_HAPTIC_ACTION_INFO, nullptr, haptic, hand};

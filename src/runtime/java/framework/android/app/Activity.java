@@ -407,6 +407,11 @@ public class Activity extends ContextWrapper implements KeyEvent.Callback, Windo
   public boolean hasWindowFocus() { return windowFocused; }
   public android.view.View getCurrentFocus() { return getWindow().getDecorView().findFocus(); }
   public android.window.OnBackInvokedDispatcher getOnBackInvokedDispatcher() { return getWindow().getOnBackInvokedDispatcher(); }
+  private android.window.SplashScreen.Impl splashScreen;
+  public final synchronized android.window.SplashScreen getSplashScreen() {
+    if (splashScreen == null) splashScreen = new android.window.SplashScreen.Impl();
+    return splashScreen;
+  }
   // A Quest app window shows no action bar or options panel, so the menu is never built.
   public void invalidateOptionsMenu() {}
   public boolean onCreateOptionsMenu(android.view.Menu menu) { return true; }

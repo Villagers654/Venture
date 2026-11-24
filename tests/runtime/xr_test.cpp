@@ -65,6 +65,7 @@ struct XrForwardingFixture {
   inline static XrForwardingFixture* active = nullptr;
   std::atomic<unsigned> bounds_resolves{0}, sync_resolves{0}, missing_resolves{0};
   bool second = false, missing = false, transient = false;
+  int bounds_type = -1;
   XrInstance instance{};
   XrSession session = reinterpret_cast<XrSession>(0x3330);
   XrForwardingFixture() {
@@ -85,7 +86,8 @@ struct XrForwardingFixture {
     if (XR_SUCCEEDED(result)) venture::hle::openxr::track_handle(session, "XrSession", instance);
     return result;
   }
-  static XrResult XRAPI_CALL first(XrSession, XrReferenceSpaceType, XrExtent2Df* out) {
+  static XrResult XRAPI_CALL first(XrSession, XrReferenceSpaceType type, XrExtent2Df* out) {
+    active->bounds_type = int(type);
     *out = {1234, 1}; return XR_SUCCESS;
   }
   static XrResult XRAPI_CALL next(XrSession, XrReferenceSpaceType, XrExtent2Df* out) {
@@ -224,6 +226,24 @@ TEST_CASE("XR forwarding slots retain results and refresh after instance recreat
   REQUIRE(xg::xrGetReferenceSpaceBoundsRect(fixture.session, stage, &bounds) == XR_SUCCESS);
   CHECK(bounds.width == 4321); CHECK(bounds.height == 0);
   CHECK(fixture.bounds_resolves == 2);
+}
+TEST_CASE("XR play area bounds of the floor spaces built from STAGE are STAGE's") {
+  namespace xg = venture::hle::openxr::guest;
+  XrForwardingFixture fixture;
+  REQUIRE(fixture.create() == XR_SUCCESS);
+  // The legacy raw and floor types of XR_OCULUS_common_reference_spaces and
+  // LOCAL_FLOOR share the STAGE play area; a game that asks with them must not
+  // read a host refusal as no play area (issue 175: room scale greyed out).
+  for (int type : {1000043000, 1000043001, int(XR_REFERENCE_SPACE_TYPE_LOCAL_FLOOR), int(XR_REFERENCE_SPACE_TYPE_STAGE)}) {
+    XrExtent2Df bounds{};
+    fixture.bounds_type = -1;
+    REQUIRE(xg::xrGetReferenceSpaceBoundsRect(fixture.session, XrReferenceSpaceType(type), &bounds) == XR_SUCCESS);
+    CHECK(fixture.bounds_type == int(XR_REFERENCE_SPACE_TYPE_STAGE));
+    CHECK(bounds.width == 1234);
+  }
+  XrExtent2Df bounds{};
+  REQUIRE(xg::xrGetReferenceSpaceBoundsRect(fixture.session, XR_REFERENCE_SPACE_TYPE_LOCAL, &bounds) == XR_SUCCESS);
+  CHECK(fixture.bounds_type == int(XR_REFERENCE_SPACE_TYPE_LOCAL));
 }
 TEST_CASE("XR forwarding caches missing procedures but retries transient lookup errors") {
   namespace xg = venture::hle::openxr::guest;

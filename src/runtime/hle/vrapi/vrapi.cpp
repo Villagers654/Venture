@@ -1,4 +1,5 @@
 #include "common/first_frame_progress.h"
+#include "xr/panel_window.h"
 #include "common/log.h"
 #include "core/av_telemetry.h"
 #include "core/wait.h"
@@ -405,6 +406,8 @@ void vrapi_Shutdown() {
   state().events.clear();
 }
 Mobile *vrapi_EnterVrMode(const Mode *mode) {
+  // A 2D app's panel may hold the host session (xr/panel_window.h): it ends first.
+  venture::xr::panel::release_headset();
   std::unique_lock lock(state().mutex);
   std::unique_lock sl(session().mutex);
   auto &v = state();

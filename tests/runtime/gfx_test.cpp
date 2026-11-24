@@ -8,6 +8,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <functional>
 #include <random>
@@ -39,6 +40,7 @@
 #include "hle/vulkan/timing.h"
 #include "platform/profile.h"
 #include "common/json.h"
+#include "common/log.h"
 #include "common/paths.h"
 #include "xr/xr_images.h"
 #include "gfx_test_support.h"
@@ -840,6 +842,48 @@ TEST_CASE("gfx relaxed SPIR-V keeps fp16 except vector magnitudes") {
   std::vector<std::uint32_t> plain(module.begin(), module.begin() + 5);
   CHECK_FALSE(venture::gfx::promote_relaxed_magnitudes(plain, out));
   CHECK_FALSE(venture::gfx::promote_relaxed_magnitudes(std::vector<std::uint32_t>{1, 2, 3}, out));
+}
+TEST_CASE("gfx a failed shader compile or program link the game reads back is logged with its info log") {
+  // Unreal quits on a failed bound shader state without writing the reason
+  // anywhere Venture sees (Espire 1 on Linux), so the status query logs it.
+  if (!have_angle()) return;
+  EglSession egl;
+  const auto previous_log = log::file();
+  const auto log_path = std::filesystem::temp_directory_path() / "venture-gles-build-failure.log";
+  std::filesystem::remove(log_path);
+  log::set_file(paths::utf8(log_path));
+  const char* vs = "#version 300 es\nout vec4 v;void main(){v=vec4(1);gl_Position=vec4(0);}";
+  const char* fs = "#version 300 es\nprecision mediump float;flat in ivec4 v;out vec4 c;void main(){c=vec4(v);}";
+  const char* broken = "#version 300 es\nvoid main(){undeclared_name=1;}";
+  GLuint shaders[3];
+  const char* sources[]{vs, fs, broken};
+  GLint compiled[3]{};
+  for (int i = 0; i < 3; ++i) {
+    shaders[i] = static_cast<GLuint>(call("glCreateShader", i == 1 ? GL_FRAGMENT_SHADER : GL_VERTEX_SHADER));
+    call("glShaderSource", shaders[i], 1, &sources[i], 0);
+    call("glCompileShader", shaders[i]);
+    call("glGetShaderiv", shaders[i], GL_COMPILE_STATUS, &compiled[i]);
+  }
+  CHECK(compiled[0]);
+  CHECK(compiled[1]);
+  CHECK_FALSE(compiled[2]);
+  // The varying's type differs between the stages, which fails the link.
+  const auto program = static_cast<GLuint>(call("glCreateProgram"));
+  call("glAttachShader", program, shaders[0]);
+  call("glAttachShader", program, shaders[1]);
+  call("glLinkProgram", program);
+  GLint linked = GL_TRUE;
+  call("glGetProgramiv", program, GL_LINK_STATUS, &linked);
+  CHECK_FALSE(linked);
+  log::flush();
+  log::set_file(previous_log);
+  const auto text = paths::read(log_path);
+  std::filesystem::remove(log_path);
+  CHECK(text.find(std::format("Shader compile {} failed: ", shaders[2])) != std::string::npos);
+  CHECK(text.find("undeclared_name") != std::string::npos);
+  CHECK(text.find(std::format("Program link {} failed: ", program)) != std::string::npos);
+  call("glDeleteProgram", program);
+  for (auto shader : shaders) call("glDeleteShader", shader);
 }
 TEST_CASE("gfx mediump shader math keeps the range Quest games rely on") {
   // UE4 materials fade by length() of a mediump world offset in centimetres.

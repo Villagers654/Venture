@@ -9,11 +9,14 @@ import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
 import android.view.InputDevice;
+import android.view.KeyCharacterMap;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
 import android.view.VentureWindow;
 import android.view.View;
 import android.view.WindowManager;
+import android.view.inputmethod.EditorInfo;
+import android.view.inputmethod.InputConnection;
 import com.venture.runtime.RuntimeEnvironment;
 import java.io.File;
 import java.io.FileOutputStream;
@@ -434,6 +437,39 @@ public final class Panel {
   public void key(KeyEvent event) {
     VentureWindow window = focusedWindow();
     if (window != null) window.deliver(event);
+  }
+
+  private View textEditor;
+  private InputConnection textConnection;
+
+  /**
+   * Typed text. The focused view that is a text editor gets it as an input
+   * method commits text, through the InputConnection the view creates (an
+   * EditText, a Compose text field or a WebView-free custom editor alike); any
+   * other view gets one ACTION_MULTIPLE key event holding the characters.
+   */
+  public void text(String characters, long eventTime) {
+    VentureWindow window = focusedWindow();
+    if (window == null) return;
+    View root = window.view();
+    View focused = root == null ? null : root.findFocus();
+    if (focused != null && focused.onCheckIsTextEditor()) {
+      // A connection the editor closed (its input restarted) refuses the text;
+      // a fresh one then takes it, as an input method reconnects.
+      for (int attempt = 0; attempt < 2; ++attempt) {
+        if (focused != textEditor || textConnection == null || attempt > 0) {
+          EditorInfo info = new EditorInfo();
+          info.packageName = focused.getContext().getPackageName();
+          info.fieldId = focused.getId();
+          textConnection = focused.onCreateInputConnection(info);
+          textEditor = focused;
+        }
+        if (textConnection == null) break;
+        if (textConnection.commitText(characters, 1)) return;
+        textConnection = null;
+      }
+    }
+    key(new KeyEvent(eventTime, characters, KeyCharacterMap.VIRTUAL_KEYBOARD, 0));
   }
 
   /** One line per view beside a panel dump: class, id, bounds in its parent, state, text. */

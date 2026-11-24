@@ -38,6 +38,7 @@
 #include "xr/display_override.h"
 #include "xr/host_xr.h"
 #include "xr/native.h"
+#include "xr/panel_window.h"
 #include "xr/vulkan_layers.h"
 #include "xr/session.h"
 #include "android/choreographer.h"
@@ -293,6 +294,9 @@ void require_recorded_outcome(ExecutionFreeze& execution) {
     if (!os_host_calls_safe()) os_quit_failed("host call remained after execution stop");
     if (!vulkan::begin_terminal_allocator_bridge())
       os_quit_failed("Vulkan allocator ownership unavailable after execution stop");
+    // A 2D app's headset view (xr/panel_window.h) ends before the devices idle
+    // and the host instance goes.
+    xr::panel::stop_headset();
     platform::notify_runtime_exit_wait(platform::RuntimeExitWait::vulkan_shutdown, 0);
     if (!vulkan::wait_devices_for_os_quit(std::chrono::seconds(2)))
       os_quit_failed("Vulkan queue/device idle failed or exceeded its bound");
@@ -355,8 +359,9 @@ void launch_android_app(const AppLaunchOptions& options) {
       throw std::runtime_error("Cannot select mock OpenXR runtime");
   } else if (!mode.empty() && mode != "host") {
     throw std::runtime_error("VENTURE_XR_RUNTIME must be mock or host");
-  } else {
+  } else if (!(process_config().launches_2d && process_config().starts_on_panel)) {
     // SteamVR and other runtimes report the headset unavailable while starting.
+    // A 2D app's panel needs no headset, so it does not wait for one.
     xr::set_system_wait(std::chrono::seconds(30));
   }
   const auto support = support_files();
@@ -420,7 +425,11 @@ void launch_android_app(const AppLaunchOptions& options) {
   xr::configure_vulkan_layers_for_process();
   log::info("launch", "Initializing host OpenXR");
   auto& xr = xr::host_xr();
-  if (!xr.available) throw std::runtime_error(xr.error);
+  // A 2D app starting on its panel runs in its desktop window without a
+  // headset; an XR session it opens later then fails as on a device without one.
+  if (!xr.available && !(layoutlib && process_config().starts_on_panel)) throw std::runtime_error(xr.error);
+  if (!xr.available)
+    log::warn("launch", "No headset ({}); the 2D app runs in its desktop window", xr.error);
   if (layoutlib) {
     log::info("launch", "Android display: the 2D app's panel");
   } else {
@@ -537,7 +546,10 @@ void launch_android_app(const AppLaunchOptions& options) {
       // a stop like the launcher's, which SteamVR follows with a kill a few
       // seconds later.
       const bool host_ended = xr::session().host_ended.load();
-      const bool stopping = stop.requested() || timed_out || host_ended || guest_process_exit_status() >= 0;
+      // Closing a 2D app's window removes its task, as the launcher's stop does.
+      const bool window_closed = xr::panel::close_requested();
+      const bool stopping = stop.requested() || timed_out || host_ended || window_closed ||
+                            guest_process_exit_status() >= 0;
       if (first_frame_probe.poll(std::chrono::duration_cast<std::chrono::seconds>(now - started).count(),
                                  first_frame_bound, startup_diagnostics::first_frame_submitted(), stopping) &&
           (startup_diagnostics::first_frame_snapshot_configured() || guest_process_exit_status() < 0)) {
@@ -558,7 +570,7 @@ void launch_android_app(const AppLaunchOptions& options) {
                          startup_diagnostics::frames_submitted(), stall_excluded || closing);
       if (!closing && stopping) {
         closing = true;
-        host_stop = stop.requested() || timed_out || host_ended;
+        host_stop = stop.requested() || timed_out || host_ended || window_closed;
         // The supervisor then tells a kill by the VR runtime during this quit
         // from a crash (RuntimeChildResult::host_ended).
         if (host_ended && !stop.requested()) platform::notify_runtime_host_ended();
@@ -584,7 +596,8 @@ void launch_android_app(const AppLaunchOptions& options) {
         log::info("launch", "Shutdown requested; posting Android lifecycle teardown (host_quit={} backstop_ms={} reason={})",
                   host_stop.load(), bound.count(),
                   timed_out ? "run time elapsed" : stop.requested() ? stop.reason()
-                  : host_ended ? "the VR runtime ended the session" : "game exited");
+                  : host_ended ? "the VR runtime ended the session"
+                  : window_closed ? "the app's window was closed" : "game exited");
         shutdown_trace::phase("request");
         shutdown_trace::begin();
       }
@@ -757,8 +770,10 @@ void launch_android_app(const AppLaunchOptions& options) {
   shutdown_trace::phase("native-activities-destroyed");
   const auto status = guest_process_exit_status();
   // An exit the host did not request, before any XR frame, leaves the launcher
-  // nothing to show: report it and never return success for it.
-  if (!host_stop && !frame_loop_started.load(std::memory_order_relaxed)) {
+  // nothing to show: report it and never return success for it. A 2D app's
+  // shown panel frame counts (the person closed its window).
+  if (!host_stop && !frame_loop_started.load(std::memory_order_relaxed) &&
+      !startup_diagnostics::first_frame_submitted()) {
     const auto last = hle::libc::last_guest_error();
     log::error("runtime", "The game exited before its first XR frame ({}){}{}",
                status >= 0 ? std::format("exit code {}", status) : std::string("main loop ended"),

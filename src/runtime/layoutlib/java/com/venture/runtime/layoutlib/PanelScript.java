@@ -28,7 +28,7 @@ import java.util.List;
  *   wait <text>       until a shown view has <text>
  *   sleep <ms>
  *   key <NAME>        a KeyEvent keycode name without KEYCODE_ (BACK, ENTER, TAB)
- *   type <text>       characters to the focused view
+ *   type <text>       characters to the focused view, as typed text (Panel.text)
  *   pick <path>       answers the app's next document picker with a host path
  *                     instead of the host's dialog ("pick" alone cancels it)
  *   quit              the host's close request
@@ -132,7 +132,7 @@ final class PanelScript {
         return 300;
       }
       case "type" -> {
-        panel.key(new KeyEvent(SystemClock.uptimeMillis(), argument, KeyCharacterMap.VIRTUAL_KEYBOARD, 0));
+        panel.text(argument, SystemClock.uptimeMillis());
         return 300;
       }
       case "pick" -> {
@@ -140,7 +140,7 @@ final class PanelScript {
         return 0;
       }
       case "quit" -> {
-        com.venture.runtime.AppMain.requestShutdown();
+        PanelHost.close();
         return 0;
       }
       default -> throw new IllegalArgumentException("unknown step");

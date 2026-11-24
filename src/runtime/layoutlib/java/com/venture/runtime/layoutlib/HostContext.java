@@ -313,6 +313,10 @@ public class HostContext extends ContextStubs {
       case BIOMETRIC_SERVICE -> new android.hardware.biometrics.BiometricManager();
       case USB_SERVICE -> new android.hardware.usb.UsbManager(this);
       case MIDI_SERVICE -> new android.media.midi.MidiManager();
+      // AOSP's SystemServiceRegistry gives a device without an autofill service an
+      // AutofillManager with no binder, which reports autofill disabled (Compose
+      // requires the manager and threw 'Autofill service could not be located').
+      case "autofill" -> new android.view.autofill.AutofillManager(this, null);
       default -> null;
     });
   }
@@ -354,7 +358,8 @@ public class HostContext extends ContextStubs {
       Map.entry(android.app.admin.DevicePolicyManager.class, DEVICE_POLICY_SERVICE),
       Map.entry(android.hardware.biometrics.BiometricManager.class, BIOMETRIC_SERVICE),
       Map.entry(android.hardware.usb.UsbManager.class, USB_SERVICE),
-      Map.entry(android.media.midi.MidiManager.class, MIDI_SERVICE));
+      Map.entry(android.media.midi.MidiManager.class, MIDI_SERVICE),
+      Map.entry(android.view.autofill.AutofillManager.class, "autofill"));
   @Override public String getSystemServiceName(Class<?> serviceClass) { return SERVICE_NAMES.get(serviceClass); }
 
   // Permissions: only the hosted application's uid has grants.

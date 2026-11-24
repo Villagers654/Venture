@@ -167,6 +167,53 @@ XrResult create_without_broken_layers(HostXr &h, const char *&operation, XrResul
       log::warn("xr", "The host instance runs without the broken OpenXR API layers: {}", names(broken));
     return result;
 }
+void describe_system(HostXr &h, XrResult result) {
+  // `available` goes last: a late attach (retry_host_xr) publishes a filled instance.
+  const bool ok = XR_SUCCEEDED(result);
+  h.system_result = result;
+  log::info("xr", "Host {} {}.{}.{}: HMD result {}{}", h.runtime_name,
+            XR_VERSION_MAJOR(h.runtime_version), XR_VERSION_MINOR(h.runtime_version),
+            XR_VERSION_PATCH(h.runtime_version), int(result), ok ? "" : " (flat mode)");
+  if (ok) {
+    XrSystemProperties system_properties{XR_TYPE_SYSTEM_PROPERTIES};
+    if (XR_SUCCEEDED(xrGetSystemProperties(h.instance, h.system, &system_properties))) {
+      recall_display_period(h.runtime_name, system_properties.systemName);
+      // [facts] lines are collected whole into debug reports.
+      XrViewConfigurationView views[2]{{XR_TYPE_VIEW_CONFIGURATION_VIEW}, {XR_TYPE_VIEW_CONFIGURATION_VIEW}};
+      std::uint32_t count = 0;
+      if (XR_FAILED(xrEnumerateViewConfigurationViews(h.instance, h.system, XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO,
+                                                      2, &count, views)))
+        count = 0;
+      log::info("facts", "Host runtime: {} {}.{}.{}; headset: {} (vendor {:#x}); recommended eye {}x{}, max {}x{}",
+                h.runtime_name, XR_VERSION_MAJOR(h.runtime_version), XR_VERSION_MINOR(h.runtime_version),
+                XR_VERSION_PATCH(h.runtime_version), system_properties.systemName, system_properties.vendorId,
+                count ? views[0].recommendedImageRectWidth : 0, count ? views[0].recommendedImageRectHeight : 0,
+                count ? views[0].maxImageRectWidth : 0, count ? views[0].maxImageRectHeight : 0);
+      if (count)
+        remember_host_views(h.runtime_name, system_properties.systemName, views[0].recommendedImageRectWidth,
+                            views[0].recommendedImageRectHeight, views[0].maxImageRectWidth,
+                            views[0].maxImageRectHeight);
+    }
+  }
+  if (result == XR_ERROR_RUNTIME_UNAVAILABLE)
+    h.error = host_initialization_error(result, "get the headset system");
+  else if (result == XR_ERROR_FORM_FACTOR_UNAVAILABLE) {
+    h.error = h.runtime_name + " reports no headset. Connect the headset, start its runtime and try again";
+    // Another installed runtime may be the one the headset is on (a Steam Frame on SteamVR
+    // while Virtual Desktop is the active runtime, #161).
+    std::string others;
+    for (const auto &r : venture::openxr_layers::installed_runtimes())
+      if (r.name != h.runtime_name) others += (others.empty() ? "" : ", ") + r.name;
+    if (!others.empty())
+      h.error += ", or choose the runtime your headset uses (" + others + ") in Venture's Settings > VR runtime";
+  }
+  else if (!ok)
+    h.error = h.runtime_name + " has no head-mounted display system (XrResult " +
+              std::to_string(int(result)) + ")";
+  if (ok) h.error.clear();
+  std::atomic_thread_fence(std::memory_order_release);
+  h.available = ok;
+}
 HostXr initialize_host() {
     HostXr h;
     // The Khronos loader honors XR_RUNTIME_JSON in this process. Never write
@@ -232,47 +279,7 @@ HostXr initialize_host() {
           [&] { return static_cast<std::int32_t>(xrGetSystem(h.instance, &system, &h.system)); },
           system_wait, std::chrono::milliseconds(500)));
     }
-    h.available = XR_SUCCEEDED(result);
-    h.system_result = result;
-    log::info("xr", "Host {} {}.{}.{}: HMD result {}{}", h.runtime_name,
-              XR_VERSION_MAJOR(h.runtime_version), XR_VERSION_MINOR(h.runtime_version),
-              XR_VERSION_PATCH(h.runtime_version), int(result), h.available ? "" : " (flat mode)");
-    if (h.available) {
-      XrSystemProperties system_properties{XR_TYPE_SYSTEM_PROPERTIES};
-      if (XR_SUCCEEDED(xrGetSystemProperties(h.instance, h.system, &system_properties))) {
-        recall_display_period(h.runtime_name, system_properties.systemName);
-        // [facts] lines are collected whole into debug reports.
-        XrViewConfigurationView views[2]{{XR_TYPE_VIEW_CONFIGURATION_VIEW}, {XR_TYPE_VIEW_CONFIGURATION_VIEW}};
-        std::uint32_t count = 0;
-        if (XR_FAILED(xrEnumerateViewConfigurationViews(h.instance, h.system, XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO,
-                                                        2, &count, views)))
-          count = 0;
-        log::info("facts", "Host runtime: {} {}.{}.{}; headset: {} (vendor {:#x}); recommended eye {}x{}, max {}x{}",
-                  h.runtime_name, XR_VERSION_MAJOR(h.runtime_version), XR_VERSION_MINOR(h.runtime_version),
-                  XR_VERSION_PATCH(h.runtime_version), system_properties.systemName, system_properties.vendorId,
-                  count ? views[0].recommendedImageRectWidth : 0, count ? views[0].recommendedImageRectHeight : 0,
-                  count ? views[0].maxImageRectWidth : 0, count ? views[0].maxImageRectHeight : 0);
-        if (count)
-          remember_host_views(h.runtime_name, system_properties.systemName, views[0].recommendedImageRectWidth,
-                              views[0].recommendedImageRectHeight, views[0].maxImageRectWidth,
-                              views[0].maxImageRectHeight);
-      }
-    }
-    if (result == XR_ERROR_RUNTIME_UNAVAILABLE)
-      h.error = host_initialization_error(result, "get the headset system");
-    else if (result == XR_ERROR_FORM_FACTOR_UNAVAILABLE) {
-      h.error = h.runtime_name + " reports no headset. Connect the headset, start its runtime and try again";
-      // Another installed runtime may be the one the headset is on (a Steam Frame on SteamVR
-      // while Virtual Desktop is the active runtime, #161).
-      std::string others;
-      for (const auto &r : venture::openxr_layers::installed_runtimes())
-        if (r.name != h.runtime_name) others += (others.empty() ? "" : ", ") + r.name;
-      if (!others.empty())
-        h.error += ", or choose the runtime your headset uses (" + others + ") in Venture's Settings > VR runtime";
-    }
-    else if (!h.available)
-      h.error = h.runtime_name + " has no head-mounted display system (XrResult " +
-                std::to_string(int(result)) + ")";
+    describe_system(h, result);
     // Process lifetime: the GPU may outlive other static objects and refers to
     // this instance. Guest destruction never tears down the shared host instance.
     return h;
@@ -341,6 +348,43 @@ HostXr &host_xr() {
     return initialize_host();
   }();
   return state;
+}
+bool retry_host_xr() {
+  auto &h = host_xr();
+  std::lock_guard lock(configuration_mutex);
+  if (h.available) return true;
+  if (!h.instance) {
+    // A runtime installed or selected since: the loader finds it now. Quiet
+    // until one answers, so a desktop-only run logs nothing while it polls.
+    std::uint32_t count = 0;
+    if (XR_FAILED(xrEnumerateInstanceExtensionProperties(nullptr, 0, &count, nullptr))) return false;
+    log::info("xr", "An OpenXR runtime is now available; attaching");
+    const char *operation = nullptr;
+    HostXr fresh;
+    fresh.get_instance_proc_addr = h.get_instance_proc_addr;
+    fresh.skipped_api_layers = h.skipped_api_layers;
+    if (XR_FAILED(create_instance(fresh, operation))) {
+      if (fresh.instance) xrDestroyInstance(fresh.instance);
+      return false;
+    }
+    h.available_extensions = std::move(fresh.available_extensions);
+    h.enabled_extensions = std::move(fresh.enabled_extensions);
+    h.instance = fresh.instance;
+    XrInstanceProperties properties{XR_TYPE_INSTANCE_PROPERTIES};
+    if (XR_SUCCEEDED(xrGetInstanceProperties(h.instance, &properties))) {
+      h.runtime_name = properties.runtimeName;
+      h.runtime_version = properties.runtimeVersion;
+    }
+    invalidate_host_procedures();
+  }
+  XrSystemGetInfo system{XR_TYPE_SYSTEM_GET_INFO};
+  system.formFactor = XR_FORM_FACTOR_HEAD_MOUNTED_DISPLAY;
+  XrSystemId id = 0;
+  const auto result = xrGetSystem(h.instance, &system, &id);
+  if (result == XR_ERROR_FORM_FACTOR_UNAVAILABLE && h.system_result == result) return false;
+  h.system = id;
+  describe_system(h, result);
+  return h.available;
 }
 std::uint64_t host_procedure_generation() {
   return procedure_generation.load(std::memory_order_acquire);

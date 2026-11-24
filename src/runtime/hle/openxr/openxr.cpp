@@ -9,6 +9,7 @@
 #include "xr/reference_spaces.h"
 #include "xr/display_override.h"
 #include "xr/desktop_mirror.h"
+#include "xr/panel_window.h"
 #include "common/first_frame_progress.h"
 #include "common/log.h"
 #include "core/engine_policy.h"
@@ -744,6 +745,8 @@ XrResult xrCreateSession(XrInstance instance, const XrSessionCreateInfo *info, X
         host_xr().enabled_extensions.contains("XR_FB_space_warp");
   }
   if (auto *thread = GuestThread::current()) engine_policy::on_xr_session(*thread, space_warp);
+  // A 2D app's panel may hold the host session (xr/panel_window.h): it ends first.
+  venture::xr::panel::release_headset();
   std::lock_guard lock(state().mutex);
   std::lock_guard session_lock(session().mutex);
   if (!valid_handle(instance, "XrInstance"))
@@ -920,6 +923,25 @@ XrResult xrCreateReferenceSpace(XrSession handle, const XrReferenceSpaceCreateIn
             int(info->referenceSpaceType), int(native.referenceSpaceType), int(result),
             XR_SUCCEEDED(result) ? reinterpret_cast<std::uintptr_t>(*out) : 0, p.orientation.x, p.orientation.y,
             p.orientation.z, p.orientation.w, p.position.x, p.position.y, p.position.z);
+  return result;
+}
+XrResult xrGetReferenceSpaceBoundsRect(XrSession handle, XrReferenceSpaceType type, XrExtent2Df* bounds) {
+  std::lock_guard lock(state().mutex);
+  if (!valid_handle(handle, "XrSession")) return XR_ERROR_HANDLE_INVALID;
+  if (!bounds) return XR_ERROR_VALIDATION_FAILURE;
+  // The play area is the host's STAGE rectangle. The floor spaces Venture
+  // builds from STAGE (the legacy raw and floor types above, and LOCAL_FLOOR,
+  // native or emulated) share its extent, as on a Quest, so their bounds are
+  // STAGE's rather than a host refusal that reads as no play area.
+  const int guest = int(type);
+  auto native = type;
+  if (guest == 1000043000 || guest == 1000043001 || type == XR_REFERENCE_SPACE_TYPE_LOCAL_FLOOR)
+    native = XR_REFERENCE_SPACE_TYPE_STAGE;
+  const auto result = venture::xr::host_call<PFN_xrGetReferenceSpaceBoundsRect, "xrGetReferenceSpaceBoundsRect">(handle, native, bounds);
+  static std::atomic<int> reports{0};
+  if (reports.fetch_add(1, std::memory_order_relaxed) < 8)
+    log::info("xr", "Reference space bounds guest_type={} host_type={} result={} extent={:.2f}x{:.2f} m", guest,
+              int(native), int(result), bounds->width, bounds->height);
   return result;
 }
 XrResult xrBeginSession(XrSession handle, const XrSessionBeginInfo *info) {

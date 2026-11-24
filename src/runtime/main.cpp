@@ -675,7 +675,8 @@ int main(int argc, char** argv) {
     venture::AddressSpace::get().initialize(venture::process_config().isa());
     venture::log::info("launch", "Validating cached {} libraries", venture::process_config().abi);
     auto libraries = venture::extract_native_libraries();
-    if (libraries.empty()) throw std::runtime_error("no native libraries in the selected APK slice");
+    if (libraries.empty() && !venture::process_config().no_native_code)
+      throw std::runtime_error("no native libraries in the selected APK slice");
     if (!inspect) venture::engine_policy::prepare_renderer_defaults(venture::process_config(), libraries,
         {venture::renderer_capabilities::vrapi_variable_rate_shading});
     venture::process_config().platform_leaderboard_writes = leaderboard_writes;

@@ -18,7 +18,7 @@ public final class PanelHost {
   private PanelHost() {}
 
   // Event records from the host, six values each (panel_window.h).
-  private static final int POINTER = 0, SCROLL = 1, KEY = 2, TEXT = 3, CLOSE = 4;
+  private static final int POINTER = 0, SCROLL = 1, KEY = 2, TEXT = 3;
 
   private static boolean nativeHost = true;
   private static boolean started;
@@ -93,12 +93,9 @@ public final class PanelHost {
           panel.key(event);
         }
         case TEXT -> {
-          // A typed character, as Android delivers text without a key: one
-          // ACTION_MULTIPLE event whose characters the focused view inserts.
-          String characters = new String(Character.toChars(events[i + 1]));
-          panel.key(new KeyEvent(now, characters, KeyCharacterMap.VIRTUAL_KEYBOARD, 0));
+          // A typed character, as an input method commits it (Panel.text).
+          panel.text(new String(Character.toChars(events[i + 1])), now);
         }
-        case CLOSE -> com.venture.runtime.AppMain.requestShutdown();
         default -> {}
       }
     }
@@ -112,6 +109,9 @@ public final class PanelHost {
    * person cancelled or the host has no window to show it. Blocks; never call
    * it on the main thread. A development script's answer comes first.
    */
+  /** A development script's answer for the next picker (empty: cancel), or null. */
+  public static String takeScriptedPick() { return PanelScript.takePick(); }
+
   public static String[] pick(int kind, String name, boolean many) {
     String scripted = PanelScript.takePick();
     if (scripted != null) return scripted.isEmpty() ? null : new String[] {scripted};
@@ -122,6 +122,37 @@ public final class PanelHost {
       return null;
     }
   }
+
+  /**
+   * The person closes the app's window: the runtime ends the app as a Quest
+   * ends a removed task (pause, stop, then the process), as a stop from the
+   * launcher does. Without the host's natives the activities finish instead.
+   */
+  static void close() {
+    try {
+      nativeClose();
+    } catch (UnsatisfiedLinkError notInThisHost) {
+      com.venture.runtime.AppMain.requestShutdown();
+    }
+  }
+
+  /**
+   * The panel is shown in the headset (Venture's own XR session for the app,
+   * panel_window.h): the system keyboard and the in-panel document picker are
+   * used there; on the desktop alone the PC keyboard and the host's dialogs are.
+   */
+  public static boolean inHeadset() {
+    if (!nativeHost) return false;
+    try {
+      return nativeInHeadset();
+    } catch (UnsatisfiedLinkError notInThisHost) {
+      return false;
+    }
+  }
+
+  private static native boolean nativeInHeadset();
+
+  private static native void nativeClose();
 
   private static native String[] nativePick(int kind, String name, boolean many);
 

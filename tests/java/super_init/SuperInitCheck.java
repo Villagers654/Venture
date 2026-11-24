@@ -34,6 +34,11 @@ public class SuperInitCheck {
             check(t.getMessage().equals(flag ? "flagged" : "plain"), "handler message " + t.getMessage());
             check(t.getCause() instanceof NumberFormatException, "handler cause");
         }
+        for (String text : new String[] {"9", "x"}) {
+            Object across = call("acrossTry", new Class<?>[] {String.class}, text);
+            check(across.getClass().getName().equals("PlainData"), "acrossTry class " + across.getClass());
+            check(across.getClass().getField("value").getInt(across) == (text.equals("9") ? 9 : -1), "acrossTry field");
+        }
         Object busy = call("noargs", new Class<?>[] {int.class}, 5);
         check(busy.getClass().getName().equals("BusyData"), "noargs class " + busy.getClass());
         check(busy.getClass().getField("value").getInt(busy) == 5, "noargs parameter after the register shift");

@@ -10,7 +10,8 @@
 #include <thread>
 
 namespace venture::xr {
-enum class SessionOwner { none, openxr, vrapi };
+// panel: Venture's own session showing a 2D app's panel (xr/panel_window.h).
+enum class SessionOwner { none, openxr, vrapi, panel };
 struct HostWaiter;
 
 // Shared by both APIs. Callers keep the recursive lock while operating on the

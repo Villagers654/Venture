@@ -102,19 +102,29 @@ void configure_game(const std::filesystem::path& install,
   mz_zip_archive zip{};
   if (!mz_zip_reader_init_file(&zip, paths::utf8(paths::io_path(config.apk)).c_str(), 0)) throw std::runtime_error("cannot open APK ZIP");
   struct End { mz_zip_archive* zip; ~End() { mz_zip_reader_end(zip); } } end{&zip};
-  bool a64 = false, a32 = false;
+  bool a64 = false, a32 = false, other = false;
   for (mz_uint i = 0; i < mz_zip_reader_get_num_files(&zip); ++i) {
     mz_zip_archive_file_stat entry{};
     if (!mz_zip_reader_file_stat(&zip, i, &entry)) throw std::runtime_error("invalid APK ZIP entry");
     std::string_view member(entry.m_filename);
-    if (!member.ends_with(".so")) continue;
+    if (!member.ends_with(".so") || !member.starts_with("lib/")) continue;
     a64 |= member.starts_with("lib/arm64-v8a/");
     a32 |= member.starts_with("lib/armeabi-v7a/");
+    other = true;
   }
-  if (!a64 && !a32) throw std::runtime_error("APK has no supported ARM native library slice");
-  select_process_isa(a64 ? GuestIsa::a64 : GuestIsa::a32);
-  log::info("launch", "Selected APK native slice {}", config.abi);
   config.has_code = mz_zip_reader_locate_file(&zip, "classes.dex", nullptr, 0) >= 0;
+  // Android's package manager gives an APK without native libraries the
+  // device's primary ABI (a Quest's arm64-v8a) and extracts nothing; one whose
+  // libraries are all for other machines does not install.
+  config.no_native_code = !other && config.has_code;
+  if (!a64 && !a32 && !config.no_native_code)
+    throw std::runtime_error(other ? "APK has no supported ARM native library slice"
+                                   : "APK has neither Java nor native code");
+  select_process_isa(a64 || config.no_native_code ? GuestIsa::a64 : GuestIsa::a32);
+  if (config.no_native_code)
+    log::info("launch", "APK has no native code; using the device's primary ABI {}", config.abi);
+  else
+    log::info("launch", "Selected APK native slice {}", config.abi);
   const auto index = mz_zip_reader_locate_file(&zip, "AndroidManifest.xml", nullptr, 0);
   mz_zip_archive_file_stat stat{};
   if (index < 0 || !mz_zip_reader_file_stat(&zip, index, &stat) || stat.m_uncomp_size > 16*1024*1024)
@@ -123,15 +133,16 @@ void configure_game(const std::filesystem::path& install,
   if (!mz_zip_reader_extract_to_mem(&zip, index, manifest.data(), manifest.size(), 0))
     throw std::runtime_error("cannot read APK manifest");
   config.device_identity = &select_device_identity(manifest_supported_devices(manifest));
+  const auto started_activity = launch_payload::activity(launch_payload::peek());
+  config.starts_on_panel = config.has_code && manifest_launches_2d(manifest, started_activity);
   if (const char* forced = environment::getenv("VENTURE_ANDROID_2D"); forced && *forced)
-    config.launches_2d = std::string_view(forced) != "0";
+    config.starts_on_panel = config.launches_2d = std::string_view(forced) != "0";
   else
     // An app whose launch activity is 2D keeps AOSP's views in every process:
     // its VR activities are view-based too (a 2D menu that starts an AppCompat
     // VR activity in a new task). A restart into a 2D activity of a VR game
     // gets them as well.
-    config.launches_2d = config.has_code && (manifest_launches_2d(manifest) ||
-        manifest_launches_2d(manifest, launch_payload::activity(launch_payload::peek())));
+    config.launches_2d = config.has_code && (manifest_launches_2d(manifest) || config.starts_on_panel);
   log::info("launch", "Guest device identity: {} ({}){}", config.device_identity->model,
             config.device_identity->device,
             config.device_identity == &native_device_identity() ? "" : " via Horizon compatibility mode");
@@ -217,6 +228,7 @@ void configure_game(const std::filesystem::path& install,
 }
 std::vector<std::filesystem::path> extract_native_libraries() {
   auto& config = process_config();
+  if (config.no_native_code) return {};
   mz_zip_archive zip{};
   if (!mz_zip_reader_init_file(&zip, paths::utf8(paths::io_path(config.apk)).c_str(), 0)) throw std::runtime_error("cannot open APK ZIP");
   struct End { mz_zip_archive* zip; ~End() { mz_zip_reader_end(zip); } } end{&zip};

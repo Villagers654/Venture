@@ -61,6 +61,10 @@ void reset_session(XrSession);
 // pressed a key (the caller ticks that hand's vibration).
 bool point(int hand, XrSpace aim, float trigger, XrTime time);
 void tick(std::string_view api, XrSession, XrAction haptic, XrPath hand);
+// How far along that hand's aim ray the keyboard was hit at its last point();
+// nullopt while it is closed or the ray misses it (a 2D panel behind it then
+// takes the ray, panel_xr.cpp).
+std::optional<float> hit_distance(int hand);
 
 // ---- The desktop mirror's keyboard ---------------------------------------------------
 void type_text(std::string_view utf8);

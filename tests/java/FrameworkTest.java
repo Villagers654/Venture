@@ -3556,6 +3556,20 @@ public final class FrameworkTest {
     dispatcher.registerOnBackInvokedCallback(0, () -> back.add("low"));
     dispatcher.registerOnBackInvokedCallback(1000000, () -> back.add("overlay"));
     check(dispatcher.dispatch() && back.equals(List.of("overlay")), "OnBackInvokedDispatcher calls the top priority callback");
+    // androidx core-splashscreen on API 31 (RDR1's Quest port, issue 123): the
+    // activity's splash screen keeps an exit listener; no splash is shown, so it
+    // is never called.
+    var splash = activity.getSplashScreen();
+    var exits = new java.util.ArrayList<android.window.SplashScreenView>();
+    android.window.SplashScreen.OnExitAnimationListener exit = exits::add;
+    splash.setOnExitAnimationListener(exit);
+    splash.setSplashScreenTheme(0);
+    var kept = ((android.window.SplashScreen.Impl) splash).listener() == exit;
+    splash.clearOnExitAnimationListener();
+    check(splash == activity.getSplashScreen() && kept && exits.isEmpty()
+        && ((android.window.SplashScreen.Impl) splash).listener() == null
+        && new android.window.SplashScreenView(activity).getIconAnimationDuration().isZero(),
+        "Activity.getSplashScreen keeps and clears the exit listener (androidx core-splashscreen)");
     Path testRoot = Path.of("build/framework-tests");
     Files.createDirectories(testRoot);
     try (var loader = new dalvik.system.PathClassLoader("", FrameworkTest.class.getClassLoader())) {

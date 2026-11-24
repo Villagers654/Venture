@@ -448,15 +448,40 @@ void program_binary(GLuint program, GLenum format, const void* binary, GLsizei l
   ProgramTimer timer{2};
   fn(program, format, binary, length);
 }
+// A failed compile or link that the game reads back is logged with the
+// driver's info log, so a game that quits on one (Unreal's fatal shader-state
+// error) leaves its reason in the debug report. Logging happens only on the
+// game's own status query, so a parallel compile is never forced to finish.
+template <class GetLog>
+void log_build_failure(const char* what, GLuint object, GetLog get_log) {
+  static std::atomic<unsigned> reports{0};
+  if (reports.fetch_add(1, std::memory_order_relaxed) >= 16) return;
+  std::string text(4096, '\0');
+  GLsizei length = 0;
+  get_log(object, static_cast<GLsizei>(text.size()), &length, text.data());
+  text.resize(static_cast<std::size_t>(std::clamp<GLsizei>(length, 0, static_cast<GLsizei>(text.size()))));
+  while (!text.empty() && (text.back() == '\n' || text.back() == '\0')) text.pop_back();
+  log::warn("gles", "{} {} failed: {}", what, object, text.empty() ? "(no info log)" : text);
+}
 void get_programiv(GLuint program, GLenum name, GLint* value) {
   static const auto fn = angle_function<PFNGLGETPROGRAMIVPROC, "glGetProgramiv">();
-  ProgramTimer timer{3};
-  fn(program, name, value);
+  {
+    std::optional<ProgramTimer> timer;
+    if (program_timing) timer.emplace(3);
+    fn(program, name, value);
+  }
+  if (name == GL_LINK_STATUS && value && *value == GL_FALSE)
+    log_build_failure("Program link", program, angle_function<PFNGLGETPROGRAMINFOLOGPROC, "glGetProgramInfoLog">());
 }
 void get_shaderiv(GLuint shader, GLenum name, GLint* value) {
   static const auto fn = angle_function<PFNGLGETSHADERIVPROC, "glGetShaderiv">();
-  ProgramTimer timer{4};
-  fn(shader, name, value);
+  {
+    std::optional<ProgramTimer> timer;
+    if (program_timing) timer.emplace(4);
+    fn(shader, name, value);
+  }
+  if (name == GL_COMPILE_STATUS && value && *value == GL_FALSE)
+    log_build_failure("Shader compile", shader, angle_function<PFNGLGETSHADERINFOLOGPROC, "glGetShaderInfoLog">());
 }
 void get_program_binary(GLuint program, GLsizei size, GLsizei* length, GLenum* format, void* binary) {
   static const auto fn = angle_function<PFNGLGETPROGRAMBINARYPROC, "glGetProgramBinary">();
@@ -620,12 +645,12 @@ hle::Handler special_gl_handler(std::string_view name) {
     return wrap<&get_pointer>();
   if (name == "glClientWaitSync") return wrap<&client_wait>();
   if (name == "glFinish") return wrap<&finish>();
+  if (name == "glGetProgramiv") return wrap<&get_programiv>();
+  if (name == "glGetShaderiv") return wrap<&get_shaderiv>();
   if (program_timing) {
     if (name == "glCompileShader") return wrap<&compile_shader>();
     if (name == "glLinkProgram") return wrap<&link_program>();
     if (name == "glProgramBinary" || name == "glProgramBinaryOES") return wrap<&program_binary>();
-    if (name == "glGetProgramiv") return wrap<&get_programiv>();
-    if (name == "glGetShaderiv") return wrap<&get_shaderiv>();
     if (name == "glGetProgramBinary" || name == "glGetProgramBinaryOES") return wrap<&get_program_binary>();
   }
   return texture_gl_handler(name);
