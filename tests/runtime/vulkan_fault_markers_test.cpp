@@ -8,6 +8,7 @@
 #include <thread>
 #include <vector>
 
+#include "common/environment.h"
 #include "hle/vulkan/fault_markers.h"
 #include "hle/vulkan/internal.h"
 #include "hle/vulkan/texture.h"
@@ -17,6 +18,19 @@ using namespace venture;
 using namespace venture::vulkan::fault_markers;
 
 namespace {
+// VENTURE_VULKAN_BREADCRUMBS for one scope.
+struct Breadcrumbs {
+  explicit Breadcrumbs(const char* value) { set(value); }
+  ~Breadcrumbs() { set(""); }
+  static void set(const char* value) {
+#ifdef _WIN32
+    _putenv_s("VENTURE_VULKAN_BREADCRUMBS", value);
+#else
+    if (*value) setenv("VENTURE_VULKAN_BREADCRUMBS", value, 1); else unsetenv("VENTURE_VULKAN_BREADCRUMBS");
+#endif
+    environment::refresh();
+  }
+};
 Pass astc_decode() {
   Pass p{PassKind::decode, VK_FORMAT_ASTC_8x8_UNORM_BLOCK, VK_FORMAT_R8G8B8A8_UNORM, 2048, 2048, 0, 5592464,
          {256, 256, 1}};
@@ -170,7 +184,7 @@ TEST_CASE("fault marker readout names the command buffer and Venture pass the GP
   CHECK(verdict({}) == "no marked guest command buffer was submitted before the loss");
 }
 
-TEST_CASE("fault markers use the driver's checkpoints where offered, buffer markers otherwise") {
+TEST_CASE("fault markers use the driver's checkpoints where offered, buffer markers only when asked for") {
   auto extension = [](const char* name) {
     VkExtensionProperties e{};
     std::snprintf(e.extensionName, sizeof(e.extensionName), "%s", name);
@@ -179,9 +193,15 @@ TEST_CASE("fault markers use the driver's checkpoints where offered, buffer mark
   const VkExtensionProperties both[]{extension(VK_AMD_BUFFER_MARKER_EXTENSION_NAME),
                                      extension(VK_NV_DEVICE_DIAGNOSTIC_CHECKPOINTS_EXTENSION_NAME)};
   CHECK(vulkan::fault_markers_for(both) == vulkan::FaultMarkers::checkpoints);
-  CHECK(vulkan::fault_markers_for(std::span(both, 1)) == vulkan::FaultMarkers::buffer_marker);
+  // Buffer markers cost GPU time every frame: only VENTURE_VULKAN_BREADCRUMBS=1.
+  CHECK(vulkan::fault_markers_for(std::span(both, 1)) == vulkan::FaultMarkers::none);
   CHECK(vulkan::fault_markers_for(std::span(both + 1, 1)) == vulkan::FaultMarkers::checkpoints);
   CHECK(vulkan::fault_markers_for({}) == vulkan::FaultMarkers::none);
+  Breadcrumbs on("1");
+  CHECK(vulkan::fault_markers_for(both) == vulkan::FaultMarkers::checkpoints);
+  CHECK(vulkan::fault_markers_for(std::span(both, 1)) == vulkan::FaultMarkers::buffer_marker);
+  Breadcrumbs off("0");
+  CHECK(vulkan::fault_markers_for(both) == vulkan::FaultMarkers::none);
 }
 
 TEST_CASE("NV checkpoints give each submission's fault marker words") {
@@ -217,6 +237,7 @@ TEST_CASE("Vulkan fault markers follow guest command buffers and texture passes 
     ForceEmulation() { vulkan::force_texture_emulation(true); }
     ~ForceEmulation() { vulkan::force_texture_emulation(false); }
   } force;
+  Breadcrumbs markers("1");  // buffer markers are opt-in
   test::VulkanDevice gpu(false, false, true);  // timeline semaphores
   // Live words need buffer markers; checkpoints report progress after a loss only.
   if (vulkan::device_fault_markers(gpu.device) != vulkan::FaultMarkers::buffer_marker) {

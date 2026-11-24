@@ -778,8 +778,12 @@ int App::run() {
         theme();
       }
     };
+    // Idle, the window redraws 10 times a second; while a game plays, once a
+    // second, so it takes next to no GPU time from the game (on a standalone
+    // headset they share one mobile GPU). Any input redraws at once.
+    const bool playing = std::ranges::any_of(running_, [](const auto& r) { return r.second.process.active(); });
     int wait =
-        (frame - last_input_ > 1200 && !ImGui::IsAnyItemActive()) ? 100 : 0;
+        (frame - last_input_ > 1200 && !ImGui::IsAnyItemActive()) ? (playing ? 1000 : 100) : 0;
     if (SDL_GetWindowFlags(window_) & SDL_WINDOW_MINIMIZED)
       wait = 250;
     if (wait && SDL_WaitEventTimeout(&event, wait))

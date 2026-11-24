@@ -1652,14 +1652,39 @@ VkResult create_device_impl(VkPhysicalDevice physical, const VkDeviceCreateInfo*
       if (query_properties) query_properties(physical, &properties);
       if (!indexing.robustBufferAccessUpdateAfterBind) supported.robustBufferAccess = VK_FALSE;
     }
-    enabled.robustBufferAccess |= supported.robustBufferAccess;
-    if (!base_features) copy.pEnabledFeatures = &features;
     auto has_extension = [&](const char* name) {
       return std::ranges::any_of(host_extensions, [&](const auto& e) { return std::string_view(e.extensionName) == name; });
     };
-    const bool has_robust2 = query_features && has_extension(VK_EXT_ROBUSTNESS_2_EXTENSION_NAME);
     VkPhysicalDeviceProperties properties{};
     host<PFN_vkGetPhysicalDeviceProperties>(physical, "vkGetPhysicalDeviceProperties")(physical, &properties);
+    // A GPU whose out-of-bounds accesses are already bounded without any
+    // robustness feature (VK_EXT_pipeline_robustness defaults: Turnip on the
+    // Steam Frame's Adreno) only pays for the features: robustBufferAccess2
+    // adds bounds checks to its shaders. Venture adds what the GPU lacks.
+    bool default_buffers = false, default_images = false;
+    if (query_features && (has_extension(VK_EXT_PIPELINE_ROBUSTNESS_EXTENSION_NAME) ||
+                           (instance_version >= VK_API_VERSION_1_4 && properties.apiVersion >= VK_API_VERSION_1_4))) {
+      VkPhysicalDevicePipelineRobustnessPropertiesEXT defaults{
+          VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PIPELINE_ROBUSTNESS_PROPERTIES_EXT};
+      VkPhysicalDeviceProperties2 properties2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, &defaults};
+      auto query_properties = host<PFN_vkGetPhysicalDeviceProperties2>(physical,
+          instance_version >= VK_API_VERSION_1_1 ? "vkGetPhysicalDeviceProperties2" : "vkGetPhysicalDeviceProperties2KHR");
+      if (query_properties) {
+        query_properties(physical, &properties2);
+        const auto bounded = [](VkPipelineRobustnessBufferBehaviorEXT b) {
+          return b == VK_PIPELINE_ROBUSTNESS_BUFFER_BEHAVIOR_ROBUST_BUFFER_ACCESS_EXT ||
+                 b == VK_PIPELINE_ROBUSTNESS_BUFFER_BEHAVIOR_ROBUST_BUFFER_ACCESS_2_EXT;
+        };
+        default_buffers = bounded(defaults.defaultRobustnessStorageBuffers) &&
+                          bounded(defaults.defaultRobustnessUniformBuffers) &&
+                          bounded(defaults.defaultRobustnessVertexInputs);
+        default_images = defaults.defaultRobustnessImages == VK_PIPELINE_ROBUSTNESS_IMAGE_BEHAVIOR_ROBUST_IMAGE_ACCESS_EXT ||
+                         defaults.defaultRobustnessImages == VK_PIPELINE_ROBUSTNESS_IMAGE_BEHAVIOR_ROBUST_IMAGE_ACCESS_2_EXT;
+      }
+    }
+    if (!default_buffers) enabled.robustBufferAccess |= supported.robustBufferAccess;
+    if (!base_features) copy.pEnabledFeatures = &features;
+    const bool has_robust2 = query_features && has_extension(VK_EXT_ROBUSTNESS_2_EXTENSION_NAME);
     const bool has_image = query_features && (has_extension(VK_EXT_IMAGE_ROBUSTNESS_EXTENSION_NAME) ||
         (instance_version >= VK_API_VERSION_1_3 && properties.apiVersion >= VK_API_VERSION_1_3));
     VkPhysicalDeviceFeatures2 query{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
@@ -1671,6 +1696,11 @@ VkResult create_device_impl(VkPhysicalDevice physical, const VkDeviceCreateInfo*
     };
     // robustBufferAccess2 requires robustBufferAccess (VUID-04000).
     robust2.robustBufferAccess2 &= enabled.robustBufferAccess;
+    if (default_buffers) robust2.robustBufferAccess2 = VK_FALSE;
+    if (default_images) {
+      robust2.robustImageAccess2 = VK_FALSE;
+      image_robust.robustImageAccess = VK_FALSE;
+    }
     if (has_robust2 && (robust2.robustBufferAccess2 || robust2.robustImageAccess2)) {
       if (requested_robust2) {
         requested_robust2->robustBufferAccess2 |= robust2.robustBufferAccess2;
@@ -1692,9 +1722,11 @@ VkResult create_device_impl(VkPhysicalDevice physical, const VkDeviceCreateInfo*
       if (has_extension(VK_EXT_IMAGE_ROBUSTNESS_EXTENSION_NAME))
         add_extension(VK_EXT_IMAGE_ROBUSTNESS_EXTENSION_NAME);
     }
-    log::info("vulkan-robustness", "GPU bounds checks enabled buffer={} buffer2={} image={} image2={}",
+    log::info("vulkan-robustness", "GPU bounds checks enabled buffer={} buffer2={} image={} image2={}{}{}",
         bool(enabled.robustBufferAccess), bool(robust2.robustBufferAccess2),
-        bool(image_robust.robustImageAccess), bool(robust2.robustImageAccess2));
+        bool(image_robust.robustImageAccess), bool(robust2.robustImageAccess2),
+        default_buffers ? "; the GPU bounds buffer accesses without them" : "",
+        default_images ? "; the GPU bounds image accesses without them" : "");
   }
   // Unbound vertex bindings read zero, as on Quest. Without this, AMD's Windows
   // driver fetches a binding the guest never bound through a 0xdeadbeef-poisoned
@@ -3009,6 +3041,15 @@ VkCommandPool command_pool(VkCommandBuffer command) {
   auto it = command_pools.find(command);
   if (it == command_pools.end()) throw std::runtime_error("untracked Vulkan command buffer");
   return it->second;
+}
+bool with_live_physical(VkPhysicalDevice physical, const std::function<void()>& use) {
+  std::lock_guard lock(state_lock);
+  for (const auto& [device, record] : devices)
+    if (record.physical == physical) {
+      use();
+      return true;
+    }
+  return false;
 }
 VkPhysicalDevice device_physical(VkDevice device) {
   std::lock_guard lock(state_lock);

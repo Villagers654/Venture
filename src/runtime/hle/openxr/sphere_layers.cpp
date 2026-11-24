@@ -452,9 +452,17 @@ XrResult SphereLayers::present(XrSession handle, XrTime time,
       if (fresh || entry->second.serial != guest.release_serial) {
         result = guest.backing->copy(std::uint32_t(guest.released_index), image, VkFormat(guest.info.format), {},
                                      false, cube ? -1 : std::int32_t(s.sub.imageArrayIndex));
-        if (XR_FAILED(result)) return release(result);
-        chain.images->filled(entry->second.key);
-        entry->second.serial = guest.release_serial;
+        // A zero-copy image already back with the host is not read: the layer
+        // keeps its last copy, or without one waits for the chain's next
+        // release (which copies from then on, check_ownership).
+        if (result == XR_ERROR_CALL_ORDER_INVALID && guest.direct_handle) {
+          if (fresh) continue;
+        } else if (XR_FAILED(result)) {
+          return release(result);
+        } else {
+          chain.images->filled(entry->second.key);
+          entry->second.serial = guest.release_serial;
+        }
       }
       live.insert(at);
       used.push_back(entry->second.key);

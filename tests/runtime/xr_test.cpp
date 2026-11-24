@@ -54,6 +54,7 @@ using EGLenum = unsigned int;
 #include <numbers>
 #include <cstdio>
 #include <doctest/doctest.h>
+#include "xr_zero_copy_setting.h"
 
 static_assert(sizeof(venture::xr::SamplerOpenGLES) == sizeof(XrSwapchainStateSamplerOpenGLESFB));
 static_assert(offsetof(venture::xr::SamplerOpenGLES, borderColor) == offsetof(XrSwapchainStateSamplerOpenGLESFB, borderColor));
@@ -3593,6 +3594,7 @@ TEST_CASE("XR full-resolution startup resources enumerate real Vulkan images") {
 }
 
 TEST_CASE("XR guest lifecycle and real Vulkan swapchain through mock loader") {
+  venture::test::ZeroCopySetting copies("0");  // the copy path (lazy host chains)
   REQUIRE(venture::xr::host_xr().available);
   CHECK(venture::xr::host_xr().runtime_name == "Venture Mock OpenXR");
   const char *extensions[]{

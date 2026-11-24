@@ -287,7 +287,7 @@ XrResult destroy_host_swapchain(Swapchain&);
 XrResult release_direct_images(const std::set<XrSwapchain>& submitted);
 // The host chain a layer names for this guest chain this frame.
 inline XrSwapchain presented_handle(const Swapchain& r) { return r.present_direct ? r.direct_handle : r.host_handle; }
-// Zero-copy setting: off unless VENTURE_XR_ZERO_COPY=1; off keeps every chain private (copy).
+// Zero-copy setting: on unless VENTURE_XR_ZERO_COPY=0, which keeps every chain private (copy).
 bool zero_copy_enabled();
 XrResult convert_color_image(Swapchain&, std::uint32_t index, XrColorSpaceFB, bool external_queue_held = false,
                              bool force_opaque = false, float underlay_opacity = 1, bool premultiply = false,

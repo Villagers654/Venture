@@ -756,9 +756,12 @@ TEST_CASE("the desktop mirror shows the left eye by default, the right globally 
   REQUIRE(loaded.game_display.contains("1"));
   CHECK(loaded.game_display["1"].mirror_eye.empty());
 }
-TEST_CASE("anisotropic filtering is 16x by default on every machine, off or a level globally or per game") {
+TEST_CASE("anisotropic filtering is 16x by default on a PC and off on a standalone headset, off or a level globally or per game") {
   Directory d;
   auto settings = library::Settings::defaults(d.root);
+  // This machine is a PC; a standalone headset's default is the game's own.
+  REQUIRE_FALSE(venture::standalone::detect().standalone);
+  CHECK(library::automatic_anisotropy() == "16");
   CHECK(settings.display.anisotropy == "16");
   CHECK(library::anisotropy_environment(settings.display) == "16");
   CHECK_FALSE(library::valid_anisotropy("auto"));
@@ -770,6 +773,7 @@ TEST_CASE("anisotropic filtering is 16x by default on every machine, off or a le
   settings.save(d.root);
   auto json = paths::read_json(d.root / "settings.json");
   CHECK(json["display"]["anisotropy"] == "8");
+  CHECK(json["display"]["anisotropyChosen"] == true);
   CHECK(json["gameDisplay"]["1"]["anisotropy"] == "off");
   auto loaded = library::Settings::load(d.root);
   CHECK(library::anisotropy_environment(library::effective_display(loaded.display, nullptr)) == "8");

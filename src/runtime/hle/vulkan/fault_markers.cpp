@@ -1,13 +1,17 @@
-// GPU fault breadcrumbs, always on where the host device allows them.
+// GPU fault breadcrumbs: on by default where the driver keeps checkpoints for
+// it (VK_NV_device_diagnostic_checkpoints); VK_AMD_buffer_marker words only
+// with VENTURE_VULKAN_BREADCRUMBS=1, as they cost GPU time every frame.
 //
 // A guest command buffer writes a TOP_OF_PIPE marker when it begins and a
 // BOTTOM_OF_PIPE marker at its end; each Venture pass recorded into it writes
 // TOP_OF_PIPE and BOTTOM_OF_PIPE markers before it and a BOTTOM_OF_PIPE marker
 // after it. With VK_NV_device_diagnostic_checkpoints, which the driver keeps
 // for this purpose, each of those is one checkpoint whose pipeline progress the
-// driver reports after a loss. A driver without it gets VK_AMD_buffer_marker
-// words in host memory instead; their BOTTOM_OF_PIPE writes made North Star's
-// GPU frame 3% longer on an RTX 5090, which offers both. After a
+// driver reports after a loss. With VENTURE_VULKAN_BREADCRUMBS=1 a driver
+// without it gets VK_AMD_buffer_marker words in host memory instead; their
+// BOTTOM_OF_PIPE writes made North Star's GPU frame 3% longer on an RTX 5090,
+// which offers both (a tiler such as the Steam Frame's Adreno waits for idle at
+// each one). After a
 // device loss the words name the submission, command buffer and pass that had
 // begun and not finished. Draws and dispatches are not hooked: they stay
 // direct driver calls from the JIT (VENTURE_VULKAN_BREADCRUMBS=1 adds per-draw
@@ -440,13 +444,13 @@ std::vector<QueueVerdict> verdicts(VkDevice d, Device& device) {
 }  // namespace
 
 FaultMarkers fault_markers_for(std::span<const VkExtensionProperties> extensions) {
-  if (const auto* v = environment::getenv("VENTURE_VULKAN_BREADCRUMBS"); v && std::string_view(v) == "0")
-    return FaultMarkers::none;
+  const auto* v = environment::getenv("VENTURE_VULKAN_BREADCRUMBS");
+  if (v && std::string_view(v) == "0") return FaultMarkers::none;
   auto has = [&](std::string_view name) {
     return std::ranges::any_of(extensions, [&](const auto& e) { return name == e.extensionName; });
   };
   if (has(VK_NV_DEVICE_DIAGNOSTIC_CHECKPOINTS_EXTENSION_NAME)) return FaultMarkers::checkpoints;
-  if (has(VK_AMD_BUFFER_MARKER_EXTENSION_NAME)) return FaultMarkers::buffer_marker;
+  if (v && std::string_view(v) == "1" && has(VK_AMD_BUFFER_MARKER_EXTENSION_NAME)) return FaultMarkers::buffer_marker;
   return FaultMarkers::none;
 }
 const char* fault_marker_extension(FaultMarkers kind) {

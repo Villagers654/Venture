@@ -1258,14 +1258,17 @@ GpuMemory gpu_memory(VkPhysicalDevice physical) {
   }();
   if (heap_cap && m.limit > heap_cap) m.limit = heap_cap;
   if (!last_physical.exchange(physical, std::memory_order_relaxed)) {
-    // Once a device answers, the headroom monitor samples it every second.
+    // Once a device answers, the headroom monitor samples the latest one every
+    // second, only while a device of it is alive: a game that destroys its
+    // instance and makes another leaves the old handle dangling.
     memory_pressure::set_gpu_probe([](std::uint64_t& usage, std::uint64_t& budget) {
       const auto physical = last_physical.load(std::memory_order_relaxed);
       if (!physical) return false;
-      const auto [used, limit] = gpu_memory(physical);
-      usage = used;
-      budget = limit;
-      return limit != 0;
+      GpuMemory sample;
+      if (!with_live_physical(physical, [&] { sample = gpu_memory(physical); })) return false;
+      usage = sample.usage;
+      budget = sample.limit;
+      return sample.limit != 0;
     });
   }
   // Each whole GiB crossed, up or down, goes to the log: a few lines per run
@@ -4032,9 +4035,13 @@ PFN_vkVoidFunction texture_proc(std::string_view name) {
 void log_gpu_memory() {
   // GLES titles create no guest images; their frames come from the shared device.
   auto physical = last_physical.load(std::memory_order_relaxed);
-  if (!physical) physical = gfx::gpu_device().physical_device;
-  if (!physical) return;
-  if (const auto [usage, limit] = gpu_memory(physical); limit)
-    log::info("vulkan", "GPU memory in use now: {} of {} MiB", usage >> 20, limit >> 20);
+  GpuMemory sample;
+  if (!physical || !with_live_physical(physical, [&] { sample = gpu_memory(physical); })) {
+    physical = gfx::gpu_device().physical_device;
+    if (!physical) return;
+    sample = gpu_memory(physical);
+  }
+  if (sample.limit)
+    log::info("vulkan", "GPU memory in use now: {} of {} MiB", sample.usage >> 20, sample.limit >> 20);
 }
 }  // namespace venture::vulkan

@@ -156,7 +156,7 @@ XrResult prepare_passthrough_images(XrSession target, const XrCompositionLayerPr
         ? ColorImages::Alpha::opaque
         : (projection.layerFlags & XR_COMPOSITION_LAYER_UNPREMULTIPLIED_ALPHA_BIT)
             ? ColorImages::Alpha::premultiply : ColorImages::Alpha::preserve;
-    const auto matrix = color_matrix(state().color_space, XR_COLOR_SPACE_REC709_FB);
+    const auto matrix = color_matrix(XR_COLOR_SPACE_REC709_FB, XR_COLOR_SPACE_REC709_FB);  // colours pass through
     if (XR_SUCCEEDED(result)) result = eye.color->convert(index, matrix, false, alpha, camera_opacity);
     {
       HostQueueLock queue(session().uses_shared_gpu);

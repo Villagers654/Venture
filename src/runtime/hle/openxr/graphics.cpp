@@ -166,12 +166,6 @@ bool depth_format(std::int64_t format) {
   default: return false;
   }
 }
-// XR_FB_color_space emulation can apply to this chain at any time (the game may
-// set a color space whenever it likes), which needs a pass over every frame.
-bool color_space_emulated(const XrSwapchainCreateInfo& info) {
-  return enabled("XR_FB_color_space") && !host_xr().enabled_extensions.contains("XR_FB_color_space") &&
-         (info.usageFlags & XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT);
-}
 // Zero-copy chains (docs/design/zero-copy-eyes.md). The game's queue work
 // must reach the host queue before the host may read an image.
 XrResult flush_guest_queue() {
@@ -294,7 +288,6 @@ const char* zero_copy_refusal(const XrSwapchainCreateInfo& info, bool guest_only
   if (info.faceCount != 1) return "a cube";
   if (guest_only) return "depth the host does not take";
   if (!offered) return "its format is converted for the host";
-  if (color_space_emulated(info)) return "the game's color space is emulated";
   if ((info.usageFlags & XR_SWAPCHAIN_USAGE_INPUT_ATTACHMENT_BIT_KHR) &&
       !host_xr().enabled_extensions.contains("XR_KHR_swapchain_usage_input_attachment_bit"))
     return "input attachment usage the host lacks";
@@ -371,7 +364,7 @@ void create_direct_swapchain(Swapchain& record, bool guest_only, bool offered, s
 }
 bool zero_copy_enabled() {
   const auto* value = venture::environment::getenv("VENTURE_XR_ZERO_COPY");
-  return value && std::string_view(value) == "1";
+  return !value || std::string_view(value) != "0";
 }
 VkFormat gl_to_vk(std::int64_t format) {
   switch (format) {
@@ -428,18 +421,18 @@ struct ColorPass {
 };
 std::optional<ColorPass> color_pass(Swapchain& r, XrColorSpaceFB space, bool force_opaque, float underlay_opacity,
                                     bool premultiply, const std::array<float, 3>* key) {
-  const bool color_emulated = enabled("XR_FB_color_space") &&
-      !host_xr().enabled_extensions.contains("XR_FB_color_space") &&
-      space != XR_COLOR_SPACE_REC709_FB && space != XR_COLOR_SPACE_UNMANAGED_FB &&
-      (r.info.usageFlags & XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT);
+  // A game's XR_FB_color_space on a host without it is not converted: the
+  // host has no colour management to say what its panel shows, and a pass over
+  // every eye texel each frame costs more than the guess is worth (FramePort
+  // passes colours through too). Only alpha work takes a pass.
+  (void)space;
   const bool alpha = force_opaque || underlay_opacity != 1 || key;
-  if ((!color_emulated && !alpha) || !(r.host_info.usageFlags & XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT))
-    return std::nullopt;
+  if (!alpha || !(r.host_info.usageFlags & XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT)) return std::nullopt;
   auto& images = alpha ? r.alpha_images : r.color_images;
   if (!images) images = std::make_unique<ColorImages>(state().graphics,
       gfx::gpu_device().get_instance_proc_addr, r.host_info, r.host_images, false, alpha);
   return ColorPass{images.get(),
-                   color_matrix(color_emulated ? space : XR_COLOR_SPACE_REC709_FB, XR_COLOR_SPACE_REC709_FB),
+                   color_matrix(XR_COLOR_SPACE_REC709_FB, XR_COLOR_SPACE_REC709_FB),
                    force_opaque ? ColorImages::Alpha::opaque
                    : premultiply ? ColorImages::Alpha::premultiply : ColorImages::Alpha::preserve,
                    force_opaque ? 1 : underlay_opacity, force_opaque ? nullptr : key};
@@ -707,7 +700,9 @@ XrResult prepare_swapchains(const std::set<XrSwapchain>& submitted, bool force_o
   for (auto handle : submitted) {
     auto& r = s.swapchains.at(handle);
     // A zero-copy chain presents its held image as it is unless this frame
-    // needs a copy: a flip, an alpha pass or a scaled eye.
+    // needs a copy: a flip or an alpha pass. An eye rendered past the size the
+    // game was told goes to the host as it is: the compositor samples it once
+    // either way, and a downscale would read and write every texel first.
     if (r.direct_handle) {
       check_ownership(r);
       {
@@ -717,17 +712,9 @@ XrResult prepare_swapchains(const std::set<XrSwapchain>& submitted, bool force_o
         const auto reported = venture::xr::reported_eye();
         if (eye_rect && !std::exchange(r.eye_observed, true))
           venture::xr::eye_scale::observe(reported.told, reported.target, *eye_rect);
-        const VkExtent2D size{r.info.width, r.info.height};
-        const auto scaled = eye_rect && r.info.sampleCount == 1 && scalable_color_format(r.info.format) && [&] {
-          const auto host = venture::xr::eye_presentation_extent(size, *eye_rect, reported.target);
-          return host.width != size.width || host.height != size.height;
-        }();
         const bool color = !depth_format(r.info.format);
         const auto alpha = frame_alpha(handle, color);
-        const bool converted = color && color_space_emulated(r.info) && s.color_space != XR_COLOR_SPACE_REC709_FB &&
-                               s.color_space != XR_COLOR_SPACE_UNMANAGED_FB;
-        const bool copy = r.copy_always || r.flip_rows || scaled || converted || alpha.opaque ||
-                          alpha.opacity != 1 || alpha.key;
+        const bool copy = r.copy_always || r.flip_rows || alpha.opaque || alpha.opacity != 1 || alpha.key;
         if (!copy) {
           r.present_direct = true;
           r.release_direct = r.held.has_value();

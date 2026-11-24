@@ -14,23 +14,12 @@
 #include <cstdint>
 #include <cstdlib>
 #include <doctest/doctest.h>
+#include "xr_zero_copy_setting.h"
 #include <string>
 #include <vector>
 
 namespace {
-// VENTURE_XR_ZERO_COPY for one scope.
-struct ZeroCopySetting {
-  explicit ZeroCopySetting(const char* value) { set(value); }
-  ~ZeroCopySetting() { set(""); }
-  static void set(const char* value) {
-#ifdef _WIN32
-    _putenv_s("VENTURE_XR_ZERO_COPY", value);
-#else
-    if (*value) setenv("VENTURE_XR_ZERO_COPY", value, 1); else unsetenv("VENTURE_XR_ZERO_COPY");
-#endif
-    venture::environment::refresh();
-  }
-};
+using venture::test::ZeroCopySetting;
 
 // One guest session on the mock runtime, presenting a two-slice chain as a
 // projection or quad layer, each slice cleared to its own color.
@@ -431,7 +420,7 @@ TEST_CASE("XR chains that cannot be the host's keep private images") {
   CHECK_FALSE(direct(large));
 }
 
-TEST_CASE("XR a game's color space keeps zero-copy on a host that has XR_FB_color_space") {
+TEST_CASE("XR a game's color space keeps zero-copy with or without the host's XR_FB_color_space") {
   namespace g = venture::hle::openxr::guest;
   // The host instance is the process's: its enabled list is set as if the
   // mock had offered the extension at startup.
@@ -465,12 +454,12 @@ TEST_CASE("XR a game's color space keeps zero-copy on a host that has XR_FB_colo
     const auto info = ZeroCopyScene::info();
     REQUIRE(g::xrCreateSwapchain(scene.session, &info, &chain) == XR_SUCCESS);
     auto& record = state.swapchains.at(chain);
-    // The host shows P3 itself, so nothing converts the eye; without the
-    // extension Venture converts every frame and keeps the copy.
-    CHECK((record.direct_handle != XR_NULL_HANDLE) == host_has_it);
+    // The host shows P3 itself, or has no colour management and is given the
+    // game's colours as they are: either way nothing converts the eye.
+    CHECK(record.direct_handle != XR_NULL_HANDLE);
     scene.draw(chain, .5f);
     REQUIRE(scene.present(chain) == XR_SUCCESS);
-    CHECK(record.present_direct == host_has_it);
+    CHECK(record.present_direct);
     REQUIRE(g::xrDestroySwapchain(chain) == XR_SUCCESS);
   }
 }

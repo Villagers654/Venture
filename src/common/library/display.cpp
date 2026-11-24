@@ -17,7 +17,15 @@ bool listed_rate(std::string_view rate) {
 bool side(int v) { return v >= min_custom_side && v <= max_custom_side; }
 } // namespace
 
-DisplaySettings global_display_defaults() { return {}; }
+// 16x on a PC; a standalone headset's mobile GPU shares its memory bandwidth
+// with everything else, so its games keep their own filtering, as on a Quest.
+std::string automatic_anisotropy() { return standalone::detect().standalone ? "off" : "16"; }
+
+DisplaySettings global_display_defaults() {
+  DisplaySettings d;
+  d.anisotropy = automatic_anisotropy();
+  return d;
+}
 DisplaySettings game_display_defaults() {
   DisplaySettings d;
   d.resolution.clear();
@@ -52,6 +60,9 @@ DisplaySettings display_from_json(const Json &j, bool per_game) {
   if (const auto pc = str(j, "pcAudio"); pc == "on" || pc == "off") d.pc_audio = pc;
   if (const auto m = str(j, "matchResolution"); m == "auto" || m == "off") d.match_resolution = m;
   if (const auto a = str(j, "anisotropy"); valid_anisotropy(a)) d.anisotropy = a;
+  // Settings written before anisotropyChosen stored 16x whether or not the
+  // player chose it.
+  if (!per_game && d.anisotropy == "16" && !j.contains("anisotropyChosen")) d.anisotropy = automatic_anisotropy();
   if (const auto f = str(j, "foveation"); f == "dynamic" || f == "fixed" || f == "off") d.foveation = f;
   if (const auto o = str(j, "overlay"); o == "on" || o == "off") d.overlay = o;
   // A game's texture compression; the global one is a top-level setting.
@@ -84,7 +95,7 @@ Json display_to_json(const DisplaySettings &d) {
   Json j{{"resolution", d.resolution}, {"percent", d.percent}, {"frameRate", d.rate}, {"customFrameRate", d.custom_rate},
          {"mirror", d.mirror}, {"mirrorEye", d.mirror_eye}, {"mirrorFullscreen", d.mirror_fullscreen}, {"pcAudio", d.pc_audio},
          {"matchResolution", d.match_resolution}, {"anisotropy", d.anisotropy}, {"foveation", d.foveation},
-         {"overlay", d.overlay}, {"mirrorChosen", true}};
+         {"overlay", d.overlay}, {"mirrorChosen", true}, {"anisotropyChosen", true}};
   // Only a game's own choice; the global settings keep none here.
   if (!d.texture_compression.empty()) j["textureCompression"] = d.texture_compression;
   if (d.texture_compression_threshold) j["textureCompressionThreshold"] = d.texture_compression_threshold;
@@ -156,7 +167,7 @@ std::string pc_audio_environment(const DisplaySettings &d) { return d.pc_audio =
 std::string eye_scale_environment(const DisplaySettings &d) { return d.match_resolution == "off" ? "off" : "auto"; }
 
 std::string anisotropy_environment(const DisplaySettings &d) {
-  return valid_anisotropy(d.anisotropy) ? d.anisotropy : "16";
+  return valid_anisotropy(d.anisotropy) ? d.anisotropy : automatic_anisotropy();
 }
 
 std::string foveation_environment(const DisplaySettings &d) {

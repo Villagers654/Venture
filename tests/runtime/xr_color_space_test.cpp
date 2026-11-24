@@ -1,6 +1,7 @@
 #include "xr/color_space.h"
 #include <cmath>
 #include <doctest/doctest.h>
+#include "xr_zero_copy_setting.h"
 #include <stdexcept>
 #include "unorm_test_support.h"
 
@@ -730,6 +731,7 @@ TEST_CASE("XR guest first wait establishes attachment layouts and handoff copies
 }
 
 TEST_CASE("XR lazy swapchains retain guest color and recycle only inactive host chains") {
+  venture::test::ZeroCopySetting copies("0");  // the copy path
   namespace g = venture::hle::openxr::guest;
   MockXrScript script;
   script.swapchain_limit = 16;
@@ -895,15 +897,9 @@ TEST_CASE("XR lazy swapchains retain guest color and recycle only inactive host 
         std::string error;
         REQUIRE(read_eye(binding, get, record.host_images.at(record.host_index).image,
             VkFormat(info.format), sub, converted, &error));
-        auto decode = [](double x) { return x <= .04045 ? x / 12.92 : std::pow((x + .055) / 1.055, 2.4); };
-        auto encode = [](double x) { return x <= .0031308 ? x * 12.92 : 1.055 * std::pow(x, 1 / 2.4) - .055; };
-        const auto matrix = color_matrix(XR_COLOR_SPACE_P3_FB, XR_COLOR_SPACE_REC709_FB);
-        const auto rgb = transform_color(matrix, {decode(original[0]/255.), decode(original[1]/255.), decode(original[2]/255.)});
-        for (unsigned pixel = 0; pixel < converted.size(); pixel += 4) {
-          for (unsigned c = 0; c < 3; ++c)
-            CHECK(std::abs(int(converted[pixel+c]) - int(std::lround(encode(std::clamp(rgb[c], 0., 1.)) * 255))) <= 1);
-          CHECK(converted[pixel+3] == original[pixel+3]);
-        }
+        // The game's P3 goes to a host without XR_FB_color_space unconverted.
+        for (unsigned pixel = 0; pixel < converted.size(); pixel += 4)
+          for (unsigned c = 0; c < 4; ++c) CHECK(converted[pixel+c] == original[pixel+c]);
       }
       CHECK(host[1].imageArrayIndex == 1);
       CHECK(host[0].imageRect.offset.y == 2);
@@ -1200,6 +1196,7 @@ TEST_CASE("XR eye presentation fits the reported eye size and keeps small oversh
 }
 
 TEST_CASE("XR eye chains past the reported eye size present through a host chain of that size") {
+  venture::test::ZeroCopySetting copies("0");  // the copy path
   // The mock recommends 1024x1024 per eye. A game multiplying that renders a
   // larger eye; the host chain holds the reported size, a quad keeps its own.
   namespace g = venture::hle::openxr::guest;
@@ -1454,6 +1451,7 @@ TEST_CASE("XR views wider than a fixed host field of view present through the cr
 }
 
 TEST_CASE("XR hosts reporting zero limits get Quest values and unclamped chains") {
+  venture::test::ZeroCopySetting copies("0");  // the copy path
   // SteamVR 2.18 with a Quest over Link reports a 0x0 swapchain maximum, no layers and
   // no tracking; Batman's eye chain once shrank to 1x1 and the headset went black.
   namespace g = venture::hle::openxr::guest;

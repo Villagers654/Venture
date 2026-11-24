@@ -182,6 +182,9 @@ PFN_vkVoidFunction raw_physical_proc(VkPhysicalDevice physical, const char* name
 VkDevice command_device(VkCommandBuffer command);
 VkCommandPool command_pool(VkCommandBuffer command);
 VkPhysicalDevice device_physical(VkDevice device);
+// Runs `use` while a device of `physical` is alive (and none can be destroyed);
+// false, without running it, when none is.
+bool with_live_physical(VkPhysicalDevice physical, const std::function<void()>& use);
 bool device_density_maps_enabled(VkDevice device);
 // Quest devices always have VK_EXT_fragment_density_map. On a host without it the
 // guest is offered it anyway (VENTURE_VULKAN_QUEST_DENSITY_MAPS=0 opts out); its
