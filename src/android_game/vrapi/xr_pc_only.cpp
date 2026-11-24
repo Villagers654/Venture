@@ -2,8 +2,11 @@
 // overlay, which the shared XR session code calls, have nothing to do in a
 // game on the headset: the headset's runtime foveates and the overlay draws
 // with Venture's Vulkan device, which a native headset session does not have
-// (stats_overlay.h: extend is null there).
+// (stats_overlay.h: extend is null there). A 2D app's panel in the headset is
+// the PC runtime's too (xr/panel_window.h): on a headset the system shows 2D
+// apps, so a VR session never has a panel session to release first.
 #include "xr/eye_gaze.h"
+#include "xr/panel_window.h"
 #include "xr/stats_overlay.h"
 
 namespace venture::xr::eye_gaze {
@@ -22,3 +25,7 @@ void set_enabled(bool) {}
 std::shared_ptr<const Frame> extend(XrSession, const XrFrameEndInfo&, std::shared_ptr<const void>) { return nullptr; }
 void reset_session(XrSession) {}
 }  // namespace venture::xr::stats_overlay
+
+namespace venture::xr::panel {
+void release_headset() {}
+}  // namespace venture::xr::panel
