@@ -2317,8 +2317,10 @@ TEST_CASE("Foveation: full rate in the middle, half then quarter towards the edg
   CHECK(parse_mode("dynamic") == Mode::dynamic);
   CHECK(parse_mode("fixed") == Mode::fixed);
   CHECK(parse_mode("off") == Mode::off);
+  // Venture's level whatever the game asks for.
   CHECK(effective_level(Level::none) == Level::medium);
-  CHECK(effective_level(Level::high) == Level::high);
+  CHECK(effective_level(Level::low) == Level::medium);
+  CHECK(effective_level(Level::high) == Level::medium);
   const float d = 3.14159265f / 180;
   const Fov fov{-52 * d, 42 * d, 43 * d, -50 * d};  // about a Quest 3 left eye
   const Centre ahead{};

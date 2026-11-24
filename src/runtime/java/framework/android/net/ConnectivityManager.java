@@ -104,6 +104,8 @@ public class ConnectivityManager {
       default -> null;
     };
   }
+  // Deprecated since API 14, where AOSP always answers true: background data is never restricted.
+  @Deprecated public boolean getBackgroundDataSetting() { return true; }
   public boolean isActiveNetworkMetered() {
     var network = getActiveNetwork();
     var capabilities = network == null ? null : capabilitiesOf(network);

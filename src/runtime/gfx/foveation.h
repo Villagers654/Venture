@@ -30,10 +30,11 @@ const char* mode_name(Mode mode);
 
 // XR_FB_foveation_configuration's levels.
 enum class Level : std::uint8_t { none, low, medium, high };
-// The level a game asked for (XR_FB_foveation profiles, VrApi's foveation
-// level) or, when it asked for none, Venture's default: Medium, Meta's
-// recommended balance. Foveation is Venture's own setting, so a game's "none"
-// (often a Quest 3 tuning for its faster GPU) does not turn it off.
+// The level Venture renders at: Medium, Meta's recommended balance, whatever
+// the game asked for (XR_FB_foveation profiles, VrApi's foveation level).
+// Foveation is Venture's own setting: a game's fixed foveation (often a Quest
+// tuning) neither replaces Venture's eye-tracked or fixed pattern nor turns it
+// off, and with the setting off nothing is foveated.
 Level effective_level(Level requested);
 
 // Fragment sizes the pattern uses: 1x1, 2x1 and 1x2 (radial), 2x2, 4x2 and

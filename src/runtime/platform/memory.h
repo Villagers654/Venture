@@ -14,6 +14,13 @@ void release(GuestAddr address, std::uint64_t size);
 bool commit(GuestAddr address, std::uint64_t size, std::uint32_t prot);
 bool decommit(GuestAddr address, std::uint64_t size);
 bool protect(GuestAddr address, std::uint64_t size, std::uint32_t prot);
+// Overcommit: the range's pages take `prot` but are committed on first touch,
+// as Linux backs an anonymous mapping, for a mapping the host's commit limit
+// refuses whole (Windows). commit/protect/decommit keep the range lazy;
+// forget_lazy drops it when the range is unmapped. POSIX hosts overcommit
+// already: commit_lazy is commit and forget_lazy does nothing.
+bool commit_lazy(GuestAddr address, std::uint64_t size, std::uint32_t prot);
+void forget_lazy(GuestAddr address, std::uint64_t size);
 // POSIX: guest PROT_EXEC maps to host PROT_EXEC from now on (an engine that runs
 // guest code in place). Set before the first guest mapping; by default guest
 // executable pages are only host readable.

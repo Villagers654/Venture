@@ -285,6 +285,8 @@ GuestAddr reserve(GuestAddr address, std::uint64_t size, bool exact) {
 }
 void release(GuestAddr address, std::uint64_t size) { munmap(g2h(address), size); }
 bool commit(GuestAddr address, std::uint64_t size, std::uint32_t prot) { return protect(address, size, prot); }
+bool commit_lazy(GuestAddr address, std::uint64_t size, std::uint32_t prot) { return commit(address, size, prot); }
+void forget_lazy(GuestAddr, std::uint64_t) {}
 bool decommit(GuestAddr address, std::uint64_t size) {
   return mprotect(g2h(address), size, PROT_NONE) == 0 && madvise(g2h(address), size, MADV_DONTNEED) == 0;
 }

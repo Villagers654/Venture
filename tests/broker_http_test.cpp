@@ -125,6 +125,12 @@ TEST_CASE("credential broker sends only app credentials, refreshes on 190, and "
     CHECK(std::get<std::string>(user.model.fields.at("DisplayName")) == "Fixture Name");
     // Graph answers a user node asked without fields with its id alone.
     CHECK(server.requests().back().find("fields=id%2Calias%2Cdisplay_name%2C") != std::string::npos);
+    // The player's own node answered with its id alone takes the names /me gave.
+    server.push(R"({"id":"123456"})");
+    auto bare = child->service("ovr_User_Get", {{std::uint64_t{123456}}}, {});
+    REQUIRE_FALSE(bare.error);
+    CHECK(std::get<std::string>(bare.model.fields.at("OculusID")) == "fixture-app-alias");
+    CHECK(std::get<std::string>(bare.model.fields.at("DisplayName")) == "Fixture Name");
     server.push(R"({"org_scoped_id":"18446744073709551615"})");
     auto org = child->service("ovr_User_GetOrgScopedID", {{std::uint64_t{123456}}}, {});
     REQUIRE_FALSE(org.error);
@@ -148,13 +154,13 @@ TEST_CASE("credential broker sends only app credentials, refreshes on 190, and "
     CHECK(cached.model.elements.empty());
 #endif
     CHECK(child->service("ovr_IAP_LaunchCheckoutFlow", {}, {}).error.code == ErrorCode::unsupported);
-    CHECK(server.requests().size() == 9);
-    for (std::size_t i = 3; i < 9; ++i)
+    CHECK(server.requests().size() == 10);
+    for (std::size_t i = 3; i < 10; ++i)
       CHECK(server.requests()[i].find("fake-session-not-a-real-token") == std::string::npos);
     store->replace();
     CHECK(child->service("ovr_IAP_GetViewerPurchasesDurableCache", {}, {}).error.code == ErrorCode::identity_mismatch);
     CHECK(child->service("ovr_UserAgeCategory_Get", {}, {}).error.code == ErrorCode::uninitialized);
-    CHECK(server.requests().size() == 9);
+    CHECK(server.requests().size() == 10);
     return;
   }
   bool consume = false;

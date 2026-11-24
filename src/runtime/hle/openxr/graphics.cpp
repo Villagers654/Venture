@@ -600,9 +600,11 @@ void foveate_eye_views(std::span<const XrCompositionLayerBaseHeader* const> laye
       scene_done = true;
       const auto it = state().swapchains.find(projection.views[0].subImage.swapchain);
       const auto requested = it == state().swapchains.end() ? Foveation{} : it->second.foveation_requested;
+      // The game's profile (level, vertical offset) is its own fixed foveation;
+      // Venture's setting decides the pattern (gfx/foveation.h effective_level).
       gfx::foveation::update_scene_views(layer_views[0], layer_views[1],
-                                         gfx::foveation::Level(std::clamp<int>(requested.level, 0, 3)),
-                                         requested.vertical, centres.has_value());
+                                         gfx::foveation::Level(std::clamp<int>(requested.level, 0, 3)), 0,
+                                         centres.has_value());
     }
     // A chain shows the gaze only when all its views come from layers that follow it.
     if (!centres)
@@ -614,8 +616,8 @@ void foveate_eye_views(std::span<const XrCompositionLayerBaseHeader* const> laye
     if (it == state().swapchains.end()) continue;
     const auto& requested = it->second.foveation_requested;
     const bool gaze = !fixed_chains().contains(chain);
-    gfx::foveation::update_eye_views(chain, views, gfx::foveation::Level(std::clamp<int>(requested.level, 0, 3)),
-                                     requested.vertical, gaze);
+    gfx::foveation::update_eye_views(chain, views, gfx::foveation::Level(std::clamp<int>(requested.level, 0, 3)), 0,
+                                     gaze);
   }
   fixed_chains().clear();
 }
@@ -1376,6 +1378,12 @@ XrResult xrEnumerateSwapchainImages(XrSwapchain handle, std::uint32_t capacity,
               log::error("xr", "Full-resolution startup resource failed: {}", e.what());
               return XR_ERROR_RUNTIME_FAILURE;
             }
+            // On a GPU with density maps the game's eye passes read this map:
+            // Venture's foveation fills it with its pattern.
+            if (gfx::foveation::wanted())
+              gfx::foveation::attach_density_map(binding.device, r.handle, r.full_rate_resource->image(),
+                                                 r.full_rate_resource->width(), r.full_rate_resource->height(),
+                                                 r.info.arraySize * r.info.faceCount);
           }
           auto& resource = *reinterpret_cast<XrSwapchainImageFoveationVulkanFB*>(p);
           resource.image = r.full_rate_resource->image();

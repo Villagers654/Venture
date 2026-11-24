@@ -60,7 +60,7 @@ foreach(stage vert frag)
   target_sources(venture_tests PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/foveation_vulkan.${stage}.inc)
 endforeach()
 add_test(NAME gfx_foveation COMMAND venture_tests
-  "--test-case=Foveation shades an eye pass's edges in coarse fragments on the GPU")
+  "--test-case=Foveation shades an eye pass's edges in coarse fragments on the GPU,Foveation replaces a game's own density map on an eye pass,Foveation fills a swapchain's density map with its pattern on a GPU with density maps")
 set_tests_properties(gfx_foveation PROPERTIES ENVIRONMENT VENTURE_FOVEATION=fixed)
 target_link_libraries(venture_tests PRIVATE ${VENTURE_ASTCENC})
 if(UNIX)

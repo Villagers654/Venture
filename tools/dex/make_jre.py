@@ -17,8 +17,11 @@ from convert_apk import DEPS, java_tool
 # CDN servers answer every HTTPS ClientHello with handshake_failure (issue 168), and Android API
 # EC KeyPairGenerator, KeyAgreement and Signature algorithms are missing. Dev runs use the full
 # JDK, so only the shipped JRE showed it.
+# java.management and jdk.management: SystemClock.currentThreadTimeMillis and
+# Debug.threadCpuTimeNanos read the thread's CPU time through ThreadMXBean. Without them
+# Vampire Survivors VR's ad SDK quit at start on NoClassDefFoundError ManagementFactory.
 # No java.net.http (not in Android's API).
-MODULES = "java.base,java.logging,java.xml,java.desktop,java.sql,jdk.crypto.ec,jdk.unsupported"
+MODULES = "java.base,java.logging,java.xml,java.desktop,java.sql,java.management,jdk.management,jdk.crypto.ec,jdk.unsupported"
 
 
 def main():

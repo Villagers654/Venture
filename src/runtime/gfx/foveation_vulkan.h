@@ -12,6 +12,12 @@
 // pipeline cannot shade coarsely (depth or sample-mask writes the GPU cannot
 // combine with it, sample shading) the GPU itself keeps it at full rate.
 //
+// On a GPU with density maps (VK_EXT_fragment_density_map: the Steam Frame's
+// Adreno, a tiler) an eye pass that reads the runtime's XR_FB_foveation_vulkan
+// density map keeps it and takes no shading-rate attachment: Venture fills that
+// map with its pattern, so the GPU renders each tile at the pattern's
+// resolution, which saves memory traffic as well as shading, as Quest does.
+//
 // Maps are filled from the eye views the game submits each frame (xrEndFrame's
 // projection layers: rectangle, array layer and field of view) and the gaze,
 // and uploaded before the next submission on the queue that renders the eyes.
@@ -50,8 +56,10 @@ void add_to_device(PFN_vkGetInstanceProcAddr gipa, VkInstance instance, VkPhysic
 // After creating a device while wanted(): `active` when it was created with
 // additions (out.added), so its passes are foveated from now. `raw` resolves
 // the driver's own functions, which the intercepted commands call.
+// `native_density`: the device has density maps enabled (VK_EXT_fragment_density_map
+// on the GPU itself): passes keep the density maps they use (attach_density_map).
 void register_device(VkDevice device, VkPhysicalDevice physical, PFN_vkGetInstanceProcAddr gipa,
-                     VkInstance instance, PFN_vkGetDeviceProcAddr raw, bool active);
+                     VkInstance instance, PFN_vkGetDeviceProcAddr raw, bool active, bool native_density = false);
 void release_device(VkDevice device);
 bool device_active(VkDevice device);
 // The device commands foveation intercepts (render passes, framebuffers,
@@ -76,6 +84,17 @@ struct EyeImage {
 void register_eye_swapchain(VkDevice device, const void* swapchain, std::span<const EyeImage> images,
                             std::uint32_t width, std::uint32_t height, std::uint32_t layers, bool bottom_up);
 void forget_eye_swapchain(VkDevice device, const void* swapchain);
+// An eye swapchain's XR_FB_foveation_vulkan density map on a device registered
+// with native_density: an R8G8_UNORM image of `width` x `height` texels and
+// `layers` layers (one per eye layer), in `layout` (FRAGMENT_DENSITY_MAP_OPTIMAL)
+// between uploads, which the runtime owns and the game's eye passes read. Venture fills it with its pattern
+// from the views the swapchain shows (update_eye_views), uploaded before the
+// next pass begins, so the GPU renders the eye passes tile by tile at the
+// pattern's resolution. Ignored elsewhere; forget_eye_swapchain drops it, and
+// the caller destroys the image after that.
+void attach_density_map(VkDevice device, const void* swapchain, VkImage image, std::uint32_t width,
+                        std::uint32_t height, std::uint32_t layers,
+                        VkImageLayout layout = VK_IMAGE_LAYOUT_FRAGMENT_DENSITY_MAP_OPTIMAL_EXT);
 // One eye view the game submitted in a projection layer.
 struct EyeView {
   std::uint32_t layer = 0;

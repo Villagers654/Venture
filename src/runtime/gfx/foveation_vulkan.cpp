@@ -104,6 +104,7 @@ struct Device {
   VkExtent2D texel{16, 16};
   bool layered = false;  // layeredShadingRateAttachments
   bool active = false;   // shading-rate attachments enabled: passes get them
+  bool native_density = false;  // density maps on the GPU (attach_density_map)
 #define VFN(name) PFN_##name name = nullptr;
   VFN(vkCreateRenderPass) VFN(vkCreateRenderPass2) VFN(vkDestroyRenderPass) VFN(vkCreateFramebuffer)
   VFN(vkCreateImageView) VFN(vkDestroyImageView) VFN(vkCmdBeginRenderPass) VFN(vkCmdBeginRenderPass2)
@@ -126,9 +127,10 @@ struct Device {
   // far more frames than any game keeps in flight.
   std::vector<Image*> clears;
   std::vector<MapState*> uploads;
+  std::vector<Swapchain*> density_uploads;
   std::atomic<bool> pending{false};
   bool seen_eye = false, seen_scene = false;  // the first pass of each kind is logged
-  static constexpr std::size_t kStagingSlots = 8;
+  static constexpr std::size_t kStagingSlots = 16;
   std::array<Staging, kStagingSlots> staging{};
   std::size_t next_staging = 0;
   std::vector<Staging> retired_staging;
@@ -139,6 +141,13 @@ struct Swapchain : MapState {  // map contents: the eye layers, then the combine
   std::uint32_t width = 0, height = 0, layers = 1;  // the eye images', in pixels
   bool bottom_up = false;
   std::vector<EyeImage> images;
+  // The swapchain's XR_FB_foveation_vulkan density map on a GPU with density
+  // maps (attach_density_map): R8G8 densities, one layer per eye layer.
+  VkImage density{};
+  std::uint32_t density_width = 0, density_height = 0, density_layers = 0;
+  VkImageLayout density_layout = VK_IMAGE_LAYOUT_FRAGMENT_DENSITY_MAP_OPTIMAL_EXT;
+  std::vector<std::uint8_t> density_bytes;
+  std::string density_signature;
 };
 
 std::mutex registry_mutex;  // devices and swapchains; each device's own state under its mutex
@@ -320,21 +329,52 @@ VkImageAspectFlags format_aspects(VkFormat format) {
     default: return VK_IMAGE_ASPECT_COLOR_BIT;
   }
 }
-bool to_pass2(const VkRenderPassCreateInfo& in, Pass2& out) {
+// Venture's foveation replaces the game's: a density map the game gives a pass
+// (XR_FB_foveation_vulkan's, which the bridge fills with full density, or one
+// of its own) is dropped so the pass takes Venture's shading-rate attachment.
+// Unity's Quest renderer foveates its eye passes this way, so keeping the
+// game's map left them at full resolution whatever Venture's setting said.
+// The attachment itself stays, unreferenced, so indices and framebuffers hold.
+const void* without_density(const void* next) {
+  const auto* p = static_cast<const VkBaseInStructure*>(next);
+  return p && (p->sType == VK_STRUCTURE_TYPE_RENDER_PASS_FRAGMENT_DENSITY_MAP_CREATE_INFO_EXT ||
+               p->sType == VK_STRUCTURE_TYPE_RENDERING_FRAGMENT_DENSITY_MAP_ATTACHMENT_INFO_EXT)
+             ? p->pNext
+             : next;
+}
+// On a GPU with density maps (the Steam Frame's Adreno) a pass keeps the
+// density map it uses: Venture fills the XR_FB_foveation_vulkan maps with its
+// own pattern (attach_density_map), so the GPU renders each tile at the
+// pattern's resolution, saving memory traffic as well as shading, as Quest
+// foveates. Such a pass takes no shading-rate attachment (a pass has one or
+// the other). A density map the game makes itself keeps the game's contents.
+bool uses_density(const void* next) {
+  for (auto* p = static_cast<const VkBaseInStructure*>(next); p; p = p->pNext) {
+    if (p->sType == VK_STRUCTURE_TYPE_RENDER_PASS_FRAGMENT_DENSITY_MAP_CREATE_INFO_EXT)
+      return reinterpret_cast<const VkRenderPassFragmentDensityMapCreateInfoEXT*>(p)
+                 ->fragmentDensityMapAttachment.attachment != VK_ATTACHMENT_UNUSED;
+    if (p->sType == VK_STRUCTURE_TYPE_RENDERING_FRAGMENT_DENSITY_MAP_ATTACHMENT_INFO_EXT)
+      return reinterpret_cast<const VkRenderingFragmentDensityMapAttachmentInfoEXT*>(p)->imageView != VK_NULL_HANDLE;
+  }
+  return false;
+}
+const void* density_kept_or_dropped(const Device& d, const void* next) {
+  return d.native_density && uses_density(next) ? next : without_density(next);
+}
+bool to_pass2(const VkRenderPassCreateInfo& in, Pass2& out, bool keep_density) {
+  if (keep_density && uses_density(in.pNext)) return false;  // the pass foveates with its density map
   const VkRenderPassMultiviewCreateInfo* multiview = nullptr;
   const VkRenderPassInputAttachmentAspectCreateInfo* aspects = nullptr;
-  const void* density = nullptr;
   for (auto* p = static_cast<const VkBaseInStructure*>(in.pNext); p; p = p->pNext) {
     if (p->sType == VK_STRUCTURE_TYPE_RENDER_PASS_MULTIVIEW_CREATE_INFO)
       multiview = reinterpret_cast<const VkRenderPassMultiviewCreateInfo*>(p);
     else if (p->sType == VK_STRUCTURE_TYPE_RENDER_PASS_INPUT_ATTACHMENT_ASPECT_CREATE_INFO)
       aspects = reinterpret_cast<const VkRenderPassInputAttachmentAspectCreateInfo*>(p);
     else if (p->sType == VK_STRUCTURE_TYPE_RENDER_PASS_FRAGMENT_DENSITY_MAP_CREATE_INFO_EXT)
-      density = p;
+      continue;  // replaced by Venture's attachment (without_density)
     else
       return false;
   }
-  if (density) return false;  // the game foveates this pass itself
   out.info.flags = in.flags;
   for (std::uint32_t i = 0; i < in.attachmentCount; ++i) {
     const auto& a = in.pAttachments[i];
@@ -457,7 +497,7 @@ VkResult VKAPI_CALL create_render_pass(VkDevice device, const VkRenderPassCreate
   if (!d) return fallback<PFN_vkCreateRenderPass>("vkCreateRenderPass")(device, info, alloc, out);
   Pass2 p;
   std::optional<std::uint32_t> index;
-  if (d->active && d->vkCreateRenderPass2 && to_pass2(*info, p)) index = add_rate_attachment(*d, p);
+  if (d->active && d->vkCreateRenderPass2 && to_pass2(*info, p, d->native_density)) index = add_rate_attachment(*d, p);
   if (!index) return forget_pass(*d, d->vkCreateRenderPass(device, info, alloc, out), out);
   const bool scene = scene_pass(p);
   finish_pass2(p);
@@ -475,6 +515,7 @@ VkResult VKAPI_CALL create_render_pass2(VkDevice device, const VkRenderPassCreat
   if (!d->active) return d->vkCreateRenderPass2(device, info, alloc, out);
   Pass2 p;
   p.info = *info;
+  p.info.pNext = density_kept_or_dropped(*d, info->pNext);
   p.attachments.assign(info->pAttachments, info->pAttachments + info->attachmentCount);
   p.subpasses.assign(info->pSubpasses, info->pSubpasses + info->subpassCount);
   p.dependencies.assign(info->pDependencies, info->pDependencies + info->dependencyCount);
@@ -637,6 +678,65 @@ Staging* staging_slot(Device& d, VkDeviceSize size) {
   slot.size = ci.size;
   return &slot;
 }
+// Records the density maps with new contents (attach_density_map) into
+// `command`, under d.mutex. Each upload rewrites the whole image, so whatever
+// layout the game left it in is discarded (UNDEFINED) and it ends in the
+// layout the runtime gave it to the game in (FRAGMENT_DENSITY_MAP_OPTIMAL); the
+// barriers order it after earlier passes' density reads and before this one's.
+void record_density_uploads(Device& d, VkCommandBuffer command) {
+  if (d.density_uploads.empty()) return;
+  struct Copy {
+    Swapchain* swapchain;
+    Staging* staging;
+  };
+  std::vector<Copy> copies;
+  for (auto* s : d.density_uploads) {
+    if (!s->density || s->density_bytes.empty()) continue;
+    auto* slot = staging_slot(d, s->density_bytes.size());
+    if (!slot) continue;
+    std::memcpy(slot->mapped, s->density_bytes.data(), s->density_bytes.size());
+    copies.push_back({s, slot});
+  }
+  d.density_uploads.clear();
+  if (copies.empty()) return;
+  auto barrier = [](const Swapchain& s, VkImageLayout from, VkImageLayout to, VkAccessFlags src, VkAccessFlags dst) {
+    VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+    b.srcAccessMask = src;
+    b.dstAccessMask = dst;
+    b.oldLayout = from;
+    b.newLayout = to;
+    b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    b.image = s.density;
+    b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, s.density_layers};
+    return b;
+  };
+  // Density maps are read in their own stage; a map in another layout (tests,
+  // on a GPU without density maps) by anything.
+  const bool density_layout = std::all_of(copies.begin(), copies.end(), [](const Copy& c) {
+    return c.swapchain->density_layout == VK_IMAGE_LAYOUT_FRAGMENT_DENSITY_MAP_OPTIMAL_EXT;
+  });
+  const VkPipelineStageFlags density_stage =
+      density_layout ? VK_PIPELINE_STAGE_FRAGMENT_DENSITY_PROCESS_BIT_EXT : VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+  std::vector<VkImageMemoryBarrier> before, after;
+  for (const auto& c : copies) {
+    before.push_back(barrier(*c.swapchain, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0,
+                             VK_ACCESS_TRANSFER_WRITE_BIT));
+    after.push_back(barrier(*c.swapchain, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, c.swapchain->density_layout,
+                            VK_ACCESS_TRANSFER_WRITE_BIT,
+                            density_layout ? VK_ACCESS_FRAGMENT_DENSITY_MAP_READ_BIT_EXT : VK_ACCESS_MEMORY_READ_BIT));
+  }
+  d.vkCmdPipelineBarrier(command, density_stage, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         0, 0, nullptr, 0, nullptr, std::uint32_t(before.size()), before.data());
+  for (const auto& c : copies) {
+    VkBufferImageCopy region{};
+    region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, c.swapchain->density_layers};
+    region.imageExtent = {c.swapchain->density_width, c.swapchain->density_height, 1};
+    d.vkCmdCopyBufferToImage(command, c.staging->buffer, c.swapchain->density,
+                             VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+  }
+  d.vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_TRANSFER_BIT, density_stage,
+                         0, 0, nullptr, 0, nullptr, std::uint32_t(after.size()), after.data());
+}
 // Records the pending clears and map uploads into `command` before the pass
 // it begins: queue order puts them after every earlier frame's passes and
 // before this one's.
@@ -645,6 +745,7 @@ void record_pending(Device& d, VkCommandBuffer command) {
   std::lock_guard lock(d.mutex);
   if (!d.pending) return;
   d.pending = false;
+  record_density_uploads(d, command);
   struct Copy {
     Image* image;
     Staging* staging;
@@ -793,8 +894,11 @@ void VKAPI_CALL begin_rendering(VkCommandBuffer command, const VkRenderingInfo* 
       views.push_back(info->pColorAttachments[i].resolveImageView);
     }
     std::uint32_t base = 0, count = 1;
-    bool own = false;  // the game foveates this pass itself
-    for (auto* p = static_cast<const VkBaseInStructure*>(info->pNext); p; p = p->pNext)
+    // The game's own shading-rate image stays; its density map gives way to
+    // Venture's attachment (without_density).
+    const void* next = d->active ? density_kept_or_dropped(*d, info->pNext) : info->pNext;
+    bool own = false;
+    for (auto* p = static_cast<const VkBaseInStructure*>(next); p; p = p->pNext)
       own |= p->sType == VK_STRUCTURE_TYPE_RENDERING_FRAGMENT_SHADING_RATE_ATTACHMENT_INFO_KHR ||
              p->sType == VK_STRUCTURE_TYPE_RENDERING_FRAGMENT_DENSITY_MAP_ATTACHMENT_INFO_EXT;
     const auto* eye = d->active && !own ? eye_among(*d, views, base, count) : nullptr;
@@ -808,18 +912,19 @@ void VKAPI_CALL begin_rendering(VkCommandBuffer command, const VkRenderingInfo* 
       rate.imageView = scene_map_view(*d, texels(width, d->texel.width), texels(height, d->texel.height), false);
       if (rate.imageView) note_pass(*d, false, width, height, "dynamic rendering");
     }
+    copy = *info;
+    copy.pNext = next;
     if (rate.imageView) {
       rate.imageLayout = kMapLayout;
       rate.shadingRateAttachmentTexelSize = d->texel;
-      rate.pNext = info->pNext;
-      copy = *info;
+      rate.pNext = next;
       copy.pNext = &rate;
     }
   }
   // Pending uploads (a map created just now among them) go first. Nothing may
   // come between a suspended render pass instance and its resumption.
   if (!(info->flags & VK_RENDERING_RESUMING_BIT)) record_pending(*d, command);
-  d->vkCmdBeginRendering(command, rate.imageView ? &copy : info);
+  d->vkCmdBeginRendering(command, &copy);
 }
 
 template <class F>
@@ -890,12 +995,13 @@ void add_to_device(PFN_vkGetInstanceProcAddr gipa, VkInstance instance, VkPhysic
 }
 
 void register_device(VkDevice device, VkPhysicalDevice physical, PFN_vkGetInstanceProcAddr gipa,
-                     VkInstance instance, PFN_vkGetDeviceProcAddr raw, bool active) {
+                     VkInstance instance, PFN_vkGetDeviceProcAddr raw, bool active, bool native_density) {
   if (!wanted() || !device || !raw || !gipa) return;
   auto d = std::make_shared<Device>();
   d->device = device;
   d->physical = physical;
   d->active = active;
+  d->native_density = native_density;
 #define VFN(name) d->name = reinterpret_cast<PFN_##name>(raw(device, #name));
   VFN(vkCreateRenderPass) VFN(vkCreateRenderPass2) VFN(vkDestroyRenderPass) VFN(vkCreateFramebuffer)
   VFN(vkCreateImageView) VFN(vkDestroyImageView) VFN(vkCmdBeginRenderPass) VFN(vkCmdBeginRenderPass2)
@@ -925,8 +1031,9 @@ void register_device(VkDevice device, VkPhysicalDevice physical, PFN_vkGetInstan
                      rates.minFragmentShadingRateAttachmentTexelSize.height, 1u});
     d->texel = {size, size};
     d->layered = rates.layeredShadingRateAttachments;
-    log::info("gfx", "Foveation: {} with shading-rate attachments ({}x{} pixels per texel{})",
-              eye_tracked() ? "eye-tracked" : "fixed", size, size, d->layered ? ", per-eye layers" : "");
+    log::info("gfx", "Foveation: {} with shading-rate attachments ({}x{} pixels per texel{}){}",
+              eye_tracked() ? "eye-tracked" : "fixed", size, size, d->layered ? ", per-eye layers" : "",
+              native_density ? "; eye passes with density maps keep them, filled with Venture's pattern" : "");
   }
   std::lock_guard lock(registry_mutex);
   fallback_gipa = gipa;
@@ -984,7 +1091,8 @@ PFN_vkVoidFunction proc(std::string_view name) {
 }
 
 void patch_pipelines(VkDevice device, std::span<VkGraphicsPipelineCreateInfo> infos, PipelineStorage& storage) {
-  if (!device_active(device)) return;
+  const auto d = find(device);
+  if (!d || !d->active) return;
   storage.states.clear();
   storage.states.reserve(infos.size());
   for (auto& info : infos) {
@@ -995,6 +1103,14 @@ void patch_pipelines(VkDevice device, std::span<VkGraphicsPipelineCreateInfo> in
     if (info.pDynamicState)
       for (std::uint32_t i = 0; i < info.pDynamicState->dynamicStateCount && !skip; ++i)
         skip = info.pDynamicState->pDynamicStates[i] == VK_DYNAMIC_STATE_FRAGMENT_SHADING_RATE_KHR;
+    // Dynamic rendering loses the game's density map (without_density), but
+    // keeps it on a GPU with density maps (uses_density), where such a
+    // pipeline renders only with its density map and no shading-rate image.
+    if (info.renderPass == VK_NULL_HANDLE &&
+        (info.flags & VK_PIPELINE_CREATE_RENDERING_FRAGMENT_DENSITY_MAP_ATTACHMENT_BIT_EXT)) {
+      if (d->native_density) skip = true;
+      else info.flags &= ~VkPipelineCreateFlags(VK_PIPELINE_CREATE_RENDERING_FRAGMENT_DENSITY_MAP_ATTACHMENT_BIT_EXT);
+    }
     if (skip) continue;
     // Full rate from the pipeline; the attachment's rate replaces it. Where
     // the GPU cannot shade a pipeline coarsely (shader depth or sample-mask
@@ -1053,10 +1169,31 @@ void forget_eye_swapchain(VkDevice device, const void* swapchain) {
   for (auto v = d->views.begin(); v != d->views.end();)
     v = d->eyes.contains(v->second.image) ? std::next(v) : d->views.erase(v);
   std::erase(d->uploads, s.get());
+  std::erase(d->density_uploads, s.get());
   if (s->map) {
     std::erase(d->clears, s->map.get());
     d->retired.push_back(std::move(s->map));  // command buffers in flight may still read it
   }
+}
+
+void attach_density_map(VkDevice device, const void* swapchain, VkImage image, std::uint32_t width,
+                        std::uint32_t height, std::uint32_t layers, VkImageLayout layout) {
+  const auto d = find(device);
+  if (!d || !d->native_density || !image || !width || !height || !layers) return;
+  std::lock_guard registry(registry_mutex);
+  const auto it = swapchains.find(swapchain);
+  if (it == swapchains.end() || it->second->device != d.get()) return;
+  auto& s = *it->second;
+  std::lock_guard lock(d->mutex);
+  s.density = image;
+  s.density_width = width;
+  s.density_height = height;
+  s.density_layers = layers;
+  s.density_layout = layout;
+  s.density_bytes.assign(std::size_t(width) * height * layers * 2, 255);  // full density until the first frame
+  s.density_signature.clear();
+  log::info("gfx", "Foveation: the eye swapchain's density map ({}x{} texels, {} layers) takes Venture's pattern",
+            width, height, layers);
 }
 
 namespace {
@@ -1290,6 +1427,19 @@ void update_eye_views(const void* swapchain, std::span<const EyeView> views, Lev
   auto& s = *it->second;
   auto& d = *s.device;
   std::lock_guard lock(d.mutex);
+  if (s.density && signature != s.density_signature) {
+    // A few thousand texels: filled here, every time the views or gaze move.
+    const auto layer_bytes = std::size_t(s.density_width) * s.density_height * 2;
+    std::fill(s.density_bytes.begin(), s.density_bytes.end(), std::uint8_t(255));
+    for (const auto& v : views)
+      if (v.layer < s.density_layers)
+        fill_densities(std::span(s.density_bytes).subspan(v.layer * layer_bytes, layer_bytes), s.density_width,
+                       s.density_height, pattern, v.fov, v.centre);
+    s.density_signature = signature;
+    if (std::find(d.density_uploads.begin(), d.density_uploads.end(), &s) == d.density_uploads.end())
+      d.density_uploads.push_back(&s);
+    d.pending = true;
+  }
   if (!s.map) return;
   if (signature != s.signature) {
     if (s.signature.empty()) {
@@ -1306,5 +1456,10 @@ void update_eye_views(const void* swapchain, std::span<const EyeView> views, Lev
   // Uploaded again now and then in case a command buffer carrying an upload
   // was never submitted.
   if (++s.frames % 600 == 0 || s.bytes != s.uploaded) queue_upload(d, s);
+  if (s.density && s.frames % 600 == 0 &&
+      std::find(d.density_uploads.begin(), d.density_uploads.end(), &s) == d.density_uploads.end()) {
+    d.density_uploads.push_back(&s);
+    d.pending = true;
+  }
 }
 }  // namespace venture::gfx::foveation

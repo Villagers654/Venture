@@ -182,3 +182,81 @@ TEST_CASE("core memory supports 2 GiB reservations without truncation") {
   CHECK(*g2h<std::uint64_t>(p + bytes - 8) == 0xabcd);
   space.free(p);
 }
+#ifdef _WIN32
+#include <windows.h>
+#include <psapi.h>
+// Linux backs an anonymous mapping as it is touched, so games map more than RAM
+// plus swap (DOWNSHOT asked for 48 GiB read-write). Windows refuses to commit
+// such a range whole; its pages are committed on first touch instead, from
+// guest code, host code and the checked accessors alike.
+TEST_CASE("core memory commits an anonymous mapping larger than the commit limit as it is touched") {
+  // A job commit limit stands in for a full system commit limit (a system-managed
+  // page file would grow instead); it is lifted again at the end.
+  HANDLE job = CreateJobObjectW(nullptr, nullptr);
+  REQUIRE(job);
+  PROCESS_MEMORY_COUNTERS_EX counters{};
+  REQUIRE(GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&counters),
+                               sizeof(counters)));
+  JOBOBJECT_EXTENDED_LIMIT_INFORMATION limit{};
+  limit.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_PROCESS_MEMORY;
+  limit.ProcessMemoryLimit = counters.PrivateUsage + (2ull << 30);
+  REQUIRE(SetInformationJobObject(job, JobObjectExtendedLimitInformation, &limit, sizeof(limit)));
+  REQUIRE(AssignProcessToJobObject(job, GetCurrentProcess()));
+  struct Lift { HANDLE job; ~Lift() {
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION none{};
+    SetInformationJobObject(job, JobObjectExtendedLimitInformation, &none, sizeof(none));
+    CloseHandle(job);
+  } } lift{job};
+  auto& space = AddressSpace::get();
+  const std::uint64_t size = 8ull << 30;
+  auto mapped = space.map(0, size, kProtRead | kProtWrite, kMapPrivate | kMapAnonymous, nullptr, 0, "[overcommit]");
+  REQUIRE(mapped > 0);
+  const auto p = static_cast<GuestAddr>(mapped);
+  // Plain host access commits the touched chunk only.
+  *g2h<std::uint64_t>(p) = 0x1234;
+  *g2h<std::uint64_t>(p + size / 2) = 0x5678;
+  *g2h<std::uint64_t>(p + size - 8) = 0x9abc;
+  CHECK(*g2h<std::uint64_t>(p) == 0x1234);
+  CHECK(*g2h<std::uint64_t>(p + size / 2) == 0x5678);
+  CHECK(*g2h<std::uint64_t>(p + size - 8) == 0x9abc);
+  CHECK(*g2h<std::uint64_t>(p + (1ull << 30)) == 0);
+  auto committed = platform::committed_bytes(p, size);
+  REQUIRE(committed);
+  CHECK(*committed < (64ull << 20));
+  // The checked accessors see untouched pages as the mapping's.
+  const GuestAddr untouched = p + (3ull << 30);
+  std::uint64_t value = 1;
+  CHECK(platform::memory_accessible(untouched, 8, true));
+  CHECK(platform::read_memory(untouched + (1 << 20), &value, 8));
+  CHECK(value == 0);
+  value = 0x77;
+  CHECK(platform::write_memory(untouched + (2 << 20), &value, 8));
+  CHECK(*g2h<std::uint64_t>(untouched + (2 << 20)) == 0x77);
+  // A protection change reaches untouched pages too.
+  const GuestAddr readonly = p + (5ull << 30), none = p + (6ull << 30);
+  CHECK(space.protect(readonly, 1 << 20, kProtRead) == 0);
+  CHECK(space.protect(none, 1 << 20, kProtNone) == 0);
+  CHECK(platform::read_memory(readonly, &value, 8));
+  CHECK(value == 0);
+  CHECK_FALSE(platform::write_memory(readonly, &value, 8));
+  CHECK_FALSE(platform::guarded_store(readonly + 4096, &value, 8));
+  CHECK_FALSE(platform::read_memory(none, &value, 8));
+  CHECK(space.protect(none, 1 << 20, kProtRead | kProtWrite) == 0);
+  *g2h<std::uint64_t>(none) = 0x42;
+  CHECK(*g2h<std::uint64_t>(none) == 0x42);
+  // MADV_DONTNEED leaves zero pages behind, still committed on touch.
+  CHECK(space.advise(p, 1 << 20, 4) == 0);
+  CHECK(*g2h<std::uint64_t>(p) == 0);
+  *g2h<std::uint64_t>(p) = 5;
+  CHECK(*g2h<std::uint64_t>(p) == 5);
+  CHECK(space.unmap(p, size) == 0);
+  // The range is ordinary again: a small mapping there commits at once.
+  REQUIRE(space.map(p, 1 << 20, kProtRead, kMapPrivate | kMapAnonymous | kMapFixedNoReplace, nullptr, 0,
+                    "[after overcommit]") == static_cast<std::int64_t>(p));
+  CHECK_FALSE(platform::write_memory(p, &value, 8));
+  committed = platform::committed_bytes(p, 1 << 20);
+  REQUIRE(committed);
+  CHECK(*committed == (1u << 20));
+  CHECK(space.unmap(p, 1 << 20) == 0);
+}
+#endif

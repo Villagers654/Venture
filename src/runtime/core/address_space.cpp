@@ -278,7 +278,7 @@ void erase(State& s, GuestAddr p, std::uint64_t n) {
     if (r.prot & kProtExec) cpu_backend().invalidate(r.start, r.size, InvalidationCause::unmap);
     auto view = s.shared_views.upper_bound(r.start);
     const bool shared = view != s.shared_views.begin() && r.start < std::prev(view)->first + std::prev(view)->second.size;
-    if (!shared && !heap_region(r)) platform::decommit(r.start, r.size);
+    if (!shared && !heap_region(r)) { platform::decommit(r.start, r.size); platform::forget_lazy(r.start, r.size); }
   }
   for (auto it = s.shared_views.lower_bound(p); it != s.shared_views.end() && it->first < p+n;) {
     platform::unmap_shared_file(it->second.mapping);
@@ -287,6 +287,17 @@ void erase(State& s, GuestAddr p, std::uint64_t n) {
       platform::reserve(it->first, it->second.size, true);
     it = s.shared_views.erase(it);
   }
+}
+// Linux backs an anonymous mapping page by page as it is touched, so a game may
+// map far more than RAM plus swap (Unreal reserves tens of GiB read-write at
+// start; DOWNSHOT asked for 48 GiB). Where the host refuses to commit the range
+// whole, its pages are committed on first touch instead. Already committed
+// pages keep their bytes.
+bool overcommit(GuestAddr p, std::uint64_t size, std::uint32_t prot, std::string_view name) {
+  if (!platform::commit_lazy(p, size, prot)) return false;
+  log::info("memory", "guest {} {:#x}+{:#x}: the host refused to commit {:.1f} MiB at once; its pages are committed as they are touched",
+            name, p, size, size / 1048576.0);
+  return true;
 }
 std::int64_t map_locked(State& s, GuestAddr hint, std::uint64_t size, std::uint32_t prot,
                         std::uint32_t flags, const AddressSpace::FileReader* file,
@@ -324,7 +335,8 @@ std::int64_t map_locked(State& s, GuestAddr hint, std::uint64_t size, std::uint3
   }
   const bool backed = !(flags & kMapAnonymous);
   if ((prot & kProtExec) && !backend_locked(s).prepare_executable(p, size)) return -err::kENOMEM;
-  if ((prot || backed) && !platform::commit(p, size, backed ? kProtRead | kProtWrite : prot)) {
+  if ((prot || backed) && !platform::commit(p, size, backed ? kProtRead | kProtWrite : prot) &&
+      (backed || !overcommit(p, size, prot, name))) {
     // The guest gets ENOMEM as mmap defines; the log names the limit.
     alloc_failure::report(alloc_failure::Kind::guest_mmap, std::format("guest mmap {}", name), size);
     return -err::kENOMEM;
@@ -471,8 +483,10 @@ std::int64_t AddressSpace::protect(GuestAddr p, std::uint64_t size, std::uint32_
     if (heap_exec_changed && !platform::protect(r.start, r.size, kHeapProt | (region_prot & kProtExec))) {
       result = -err::kENOMEM; break;
     }
-    if (!heap_region(r) && ((!shared && !platform::commit(r.start, r.size, region_prot)) ||
-                            !platform::protect(r.start, r.size, region_prot))) {
+    if (!heap_region(r) &&
+        ((!shared && !platform::commit(r.start, r.size, region_prot) &&
+          !overcommit(r.start, r.size, region_prot, r.name)) ||
+         !platform::protect(r.start, r.size, region_prot))) {
       alloc_failure::report(alloc_failure::Kind::guest_mmap, std::format("guest mprotect {}", r.name), r.size);
       result = -err::kENOMEM; break;
     }

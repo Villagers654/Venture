@@ -167,7 +167,7 @@ jlong JNICALL create_surface(JNIEnv* env, jobject, jint width, jint height,
   return guarded(env, [&]() -> jlong {
     if (width <= 0 || height <= 0)
       throw std::invalid_argument("Invalid surface dimensions");
-    if (format != 1 && format != 4)
+    if (format != 1 && format != 2 && format != 4)
       throw std::invalid_argument("Unsupported surface pixel format");
     auto* window = android::create_native_window(width, height);
     if (!window) throw std::runtime_error("Cannot allocate native window");

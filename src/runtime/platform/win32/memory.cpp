@@ -8,6 +8,8 @@
 #include <cstdio>
 #include <cstring>
 #include <algorithm>
+#include <atomic>
+#include <map>
 #include <bit>
 #include <string>
 #include <vector>
@@ -395,6 +397,99 @@ DWORD protection(std::uint32_t prot) {
   if (prot & (kProtRead | kProtExec)) return PAGE_READONLY;
   return PAGE_NOACCESS;
 }
+// Lazily committed ranges (commit_lazy): reserved pages that take their guest
+// protection and get committed on first touch, as Linux backs an overcommitted
+// anonymous mapping. The table holds non-overlapping [start, end) ranges with the
+// protection their committed pages have. Committing on a fault happens under the
+// shared lock, so a protection change (exclusive) never races a commit with a
+// stale protection.
+struct LazyRange { GuestAddr end; std::uint32_t prot; };
+SRWLOCK lazy_lock = SRWLOCK_INIT;
+std::map<GuestAddr, LazyRange> lazy_ranges;
+std::atomic<bool> lazy_any{false};
+constexpr std::uint64_t kLazyChunk = 64 * 1024;
+// Splits so that no range crosses `at`. Exclusive lock held.
+void lazy_split(GuestAddr at) {
+  auto it = lazy_ranges.upper_bound(at);
+  if (it == lazy_ranges.begin()) return;
+  --it;
+  if (it->first < at && at < it->second.end) {
+    lazy_ranges.emplace(at, it->second);
+    it->second.end = at;
+  }
+}
+// Calls f(start, end, range) for each lazy piece of [a, b), after splitting at
+// a and b. Exclusive lock held.
+template <class F> void lazy_each(GuestAddr a, GuestAddr b, F&& f) {
+  lazy_split(a); lazy_split(b);
+  for (auto it = lazy_ranges.lower_bound(a); it != lazy_ranges.end() && it->first < b; ++it)
+    f(it->first, it->second.end, it->second);
+}
+bool lazy_overlaps(GuestAddr a, GuestAddr b) {
+  auto it = lazy_ranges.upper_bound(a);
+  if (it != lazy_ranges.begin() && std::prev(it)->second.end > a) return true;
+  return it != lazy_ranges.end() && it->first < b;
+}
+// VirtualProtect only the committed blocks of [a, b); reserved pages have no protection to change.
+bool protect_committed(GuestAddr a, GuestAddr b, std::uint32_t prot) {
+  MEMORY_BASIC_INFORMATION region{};
+  for (auto pos = a; pos < b;) {
+    if (!VirtualQuery(g2h(pos), &region, sizeof(region))) return false;
+    const auto end = std::min<GuestAddr>(b, h2g(region.BaseAddress) + region.RegionSize);
+    DWORD previous;
+    if (region.State == MEM_COMMIT && !VirtualProtect(g2h(pos), end - pos, protection(prot), &previous)) return false;
+    pos = end;
+  }
+  return true;
+}
+bool access_allowed(std::uint32_t prot, bool write, bool execute) {
+  return write ? (prot & kProtWrite) : execute ? (prot & kProtExec) : (prot & (kProtRead | kProtWrite | kProtExec));
+}
+// Commits the chunk of a lazy range around `address` when the range allows the
+// access. False when the address is not lazy, the access is refused, or the
+// system commit limit refuses it too (then the fault stays a fault).
+bool lazy_fault(GuestAddr address, bool write, bool execute) {
+  if (!lazy_any.load(std::memory_order_acquire)) return false;
+  AcquireSRWLockShared(&lazy_lock);
+  bool committed = false;
+  auto it = lazy_ranges.upper_bound(address);
+  if (it != lazy_ranges.begin()) {
+    --it;
+    if (address < it->second.end && access_allowed(it->second.prot, write, execute)) {
+      const auto start = std::max<GuestAddr>(it->first, address & ~(kLazyChunk - 1));
+      const auto end = std::min<GuestAddr>(it->second.end, (address & ~(kLazyChunk - 1)) + kLazyChunk);
+      committed = VirtualAlloc(g2h(start), end - start, MEM_COMMIT, protection(it->second.prot)) != nullptr;
+    }
+  }
+  ReleaseSRWLockShared(&lazy_lock);
+  return committed;
+}
+// Commits every lazy page of [address, address + size) that allows the access,
+// so callers that query page state first (memory_accessible) see them.
+void lazy_touch(GuestAddr address, std::size_t size, bool write) {
+  if (!lazy_any.load(std::memory_order_acquire) || !size) return;
+  for (auto pos = address & ~(kLazyChunk - 1); pos < address + size; pos += kLazyChunk)
+    lazy_fault(std::max(pos, address), write, false);
+}
+bool guarded_access_ready();
+}
+bool commit_lazy(GuestAddr address, std::uint64_t size, std::uint32_t prot) {
+  if (!guarded_access_ready()) return false;
+  AcquireSRWLockExclusive(&lazy_lock);
+  lazy_each(address, address + size, [](GuestAddr, GuestAddr, LazyRange&) {});
+  lazy_ranges.erase(lazy_ranges.lower_bound(address), lazy_ranges.lower_bound(address + size));
+  lazy_ranges.emplace(address, LazyRange{address + size, prot});
+  const bool ok = protect_committed(address, address + size, prot);
+  lazy_any.store(true, std::memory_order_release);
+  ReleaseSRWLockExclusive(&lazy_lock);
+  return ok;
+}
+void forget_lazy(GuestAddr address, std::uint64_t size) {
+  if (!lazy_any.load(std::memory_order_acquire)) return;
+  AcquireSRWLockExclusive(&lazy_lock);
+  lazy_split(address); lazy_split(address + size);
+  lazy_ranges.erase(lazy_ranges.lower_bound(address), lazy_ranges.lower_bound(address + size));
+  ReleaseSRWLockExclusive(&lazy_lock);
 }
 std::uint64_t reservation_granularity() { return 65536; }
 GuestAddr reserve(GuestAddr address, std::uint64_t size, bool exact) {
@@ -403,15 +498,50 @@ GuestAddr reserve(GuestAddr address, std::uint64_t size, bool exact) {
   return h2g(p);
 }
 void release(GuestAddr address, std::uint64_t) { VirtualFree(g2h(address), 0, MEM_RELEASE); }
-bool commit(GuestAddr address, std::uint64_t size, std::uint32_t prot) {
-  return VirtualAlloc(g2h(address), size, MEM_COMMIT, protection(prot)) != nullptr;
+namespace {
+// Applies a commit or protection change to [a, b) where lazy ranges overlap it:
+// their pages take the new protection (committed ones now, reserved ones on
+// first touch), the rest goes to `other`. Exclusive lock held.
+template <class F> bool lazy_apply(GuestAddr a, GuestAddr b, std::uint32_t prot, F&& other) {
+  bool ok = true;
+  GuestAddr pos = a;
+  lazy_each(a, b, [&](GuestAddr start, GuestAddr end, LazyRange& range) {
+    if (pos < start) ok = ok && other(pos, start);
+    range.prot = prot;
+    ok = ok && protect_committed(start, end, prot);
+    pos = end;
+  });
+  if (pos < b) ok = ok && other(pos, b);
+  return ok;
 }
+}
+bool commit(GuestAddr address, std::uint64_t size, std::uint32_t prot) {
+  const auto direct = [prot](GuestAddr a, GuestAddr b) {
+    return VirtualAlloc(g2h(a), b - a, MEM_COMMIT, protection(prot)) != nullptr;
+  };
+  if (!lazy_any.load(std::memory_order_acquire)) return direct(address, address + size);
+  AcquireSRWLockExclusive(&lazy_lock);
+  const bool ok = lazy_overlaps(address, address + size) ? lazy_apply(address, address + size, prot, direct)
+                                                         : direct(address, address + size);
+  ReleaseSRWLockExclusive(&lazy_lock);
+  return ok;
+}
+// Decommitted lazy pages stay lazy: the next touch commits fresh zero pages, as
+// after MADV_DONTNEED. Unmapping forgets them (forget_lazy).
 bool decommit(GuestAddr address, std::uint64_t size) {
   return VirtualFree(g2h(address), size, MEM_DECOMMIT) != 0;
 }
 bool protect(GuestAddr address, std::uint64_t size, std::uint32_t prot) {
-  DWORD previous;
-  return VirtualProtect(g2h(address), size, protection(prot), &previous) != 0;
+  const auto direct = [prot](GuestAddr a, GuestAddr b) {
+    DWORD previous;
+    return VirtualProtect(g2h(a), b - a, protection(prot), &previous) != 0;
+  };
+  if (!lazy_any.load(std::memory_order_acquire)) return direct(address, address + size);
+  AcquireSRWLockExclusive(&lazy_lock);
+  const bool ok = lazy_overlaps(address, address + size) ? lazy_apply(address, address + size, prot, direct)
+                                                         : direct(address, address + size);
+  ReleaseSRWLockExclusive(&lazy_lock);
+  return ok;
 }
 int map_shared_file(int fd, std::uint64_t offset, std::uint64_t size, std::uint32_t prot, FileMapping& out, GuestAddr at) {
   if (at) return -err::kENOMEM;
@@ -453,6 +583,7 @@ bool write_memory(GuestAddr address, const void* data, std::size_t size) {
 }
 bool memory_accessible(GuestAddr address, std::size_t size, bool write) {
   if (address + size < address) return false;
+  lazy_touch(address, size, write);
   MEMORY_BASIC_INFORMATION region{};
   for (auto pos = address; pos < address + size;) {
     if (!VirtualQuery(g2h(pos), &region, sizeof(region)) || region.State != MEM_COMMIT ||
@@ -464,6 +595,7 @@ bool memory_accessible(GuestAddr address, std::size_t size, bool write) {
 }
 bool compare_exchange(GuestAddr address, const void* value, void* expected, std::size_t size) {
   MEMORY_BASIC_INFORMATION region{};
+  lazy_touch(address, size, true);
   if ((address & (size - 1)) || !VirtualQuery(g2h(address), &region, sizeof(region)) ||
       region.State != MEM_COMMIT || region.Protect != PAGE_READWRITE ||
       address + size > h2g(region.BaseAddress) + region.RegionSize) return false;
@@ -495,6 +627,13 @@ namespace {
 // Guard-page and other exceptions are left to the rest of the chain.
 LONG CALLBACK guarded_fault(EXCEPTION_POINTERS* exception) {
   const auto code = exception->ExceptionRecord->ExceptionCode;
+  // A lazily committed page gets committed and the access retried, from guest
+  // code, the JIT or host code alike.
+  if (code == EXCEPTION_ACCESS_VIOLATION && exception->ExceptionRecord->NumberParameters >= 2 &&
+      lazy_fault(h2g(reinterpret_cast<void*>(exception->ExceptionRecord->ExceptionInformation[1])),
+                 exception->ExceptionRecord->ExceptionInformation[0] == 1,
+                 exception->ExceptionRecord->ExceptionInformation[0] == 8))
+    return EXCEPTION_CONTINUE_EXECUTION;
   if ((code != EXCEPTION_ACCESS_VIOLATION && code != EXCEPTION_IN_PAGE_ERROR &&
        code != EXCEPTION_GUARD_PAGE) ||
       !guarded_ip(exception->ContextRecord->Rip))

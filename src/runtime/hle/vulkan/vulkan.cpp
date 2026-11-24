@@ -1887,7 +1887,8 @@ VkResult create_device_impl(VkPhysicalDevice physical, const VkDeviceCreateInfo*
     auto gdpa = reinterpret_cast<PFN_vkGetDeviceProcAddr>(loader()(device_instance(*out), "vkGetDeviceProcAddr"));
     gfx::register_pipeline_device(*out, gdpa, feedback, profile::PipelineSource::guest,
                                   gfx::async_pipeline_extensions_allowed(unique_names));
-    gfx::foveation::register_device(*out, physical, loader(), device_instance(*out), gdpa, foveated.added);
+    gfx::foveation::register_device(*out, physical, loader(), device_instance(*out), gdpa, foveated.added,
+                                    device_density_maps_enabled(*out));
     if (trace) log::info("vulkan-device", "Guest device queue configured");
     prepare_texture_device(*out);
     if (trace) log::info("vulkan-device", "Guest device textures prepared");

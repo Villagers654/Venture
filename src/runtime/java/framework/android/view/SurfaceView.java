@@ -85,7 +85,8 @@ public class SurfaceView extends View {
     }
     public void setFormat(int f) {
       // OPAQUE (-1), TRANSPARENT (-2) and TRANSLUCENT (-3) resolve to RGBA_8888, as on Android.
-      if (f != 1 && f != 4 && (f > -1 || f < -3))
+      // RGBX_8888 (2): Gear VR era Unity players ask for it.
+      if (f != 1 && f != 2 && f != 4 && (f > -1 || f < -3))
         throw new UnsupportedOperationException("Surface format " + f);
       int resolved = f < 0 ? 1 : f;
       if (resolved == format)

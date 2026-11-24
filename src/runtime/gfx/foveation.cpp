@@ -22,7 +22,7 @@ const char* mode_name(Mode mode) {
   }
 }
 
-Level effective_level(Level requested) { return requested == Level::none ? Level::medium : requested; }
+Level effective_level(Level) { return Level::medium; }
 
 Regions regions(const Pattern& pattern) {
   // Degrees from the centre where half rate (2x1 radial), quarter (2x2),

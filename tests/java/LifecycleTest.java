@@ -58,6 +58,8 @@ public final class LifecycleTest {
       checkVisibleFrame(view); // Detached fallback uses display size, not child bounds.
       // Unity sets TRANSLUCENT before the surface exists (Ninja Legends); Android resolves it to RGBA_8888.
       view.getHolder().setFormat(-3);
+      // Gear VR era Unity players ask for RGBX_8888 (Art Plunge quit on it).
+      new SurfaceView(this).getHolder().setFormat(2);
       view.getHolder().addCallback(this);
       setContentView(view);
     }

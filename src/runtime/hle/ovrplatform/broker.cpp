@@ -229,6 +229,10 @@ public:
             std::get<std::uint64_t>(model.fields.at("ID")) !=
                 std::get<std::uint64_t>(args.values.at(0)))
           throw std::invalid_argument("Mismatched Platform user");
+        if (name == "ovr_User_Get") {
+          std::lock_guard lock(mutex_);
+          fill_own_names(model, user_);
+        }
       } catch (...) {
         auto error = failure(ErrorCode::invalid_response);
         error.http_status = response.status;

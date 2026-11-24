@@ -42,6 +42,15 @@ struct User {
   Id id = 0;
   std::string alias, display_name;
 };
+// The player's own ovr_User_Get node can come back with its id alone
+// (Lightkeepers: fields=[id] while /me named the same user), and a game that
+// names the player from it then shows its default name. Fills what the node
+// left empty from the signed-in identity, only for that identity's own id.
+inline void fill_own_names(Model& user, const User& self) {
+  if (!self.id || std::get<std::uint64_t>(user.fields.at("ID")) != self.id) return;
+  for (auto [field, value] : {std::pair{"OculusID", &self.alias}, std::pair{"DisplayName", &self.display_name}})
+    if (auto& text = std::get<std::string>(user.fields.at(field)); text.empty()) text = *value;
+}
 struct Result {
   Error error;
   User user{};

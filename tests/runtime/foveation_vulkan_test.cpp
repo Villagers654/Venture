@@ -147,7 +147,7 @@ VkDeviceMemory bind(const Gpu& g, VkMemoryRequirements r, VkMemoryPropertyFlags 
 
 // `scene`: a multiview pass over two layers of the game's own image, with
 // depth, shaped by the frame's eye views; else a pass into an eye image.
-void run(bool scene) {
+void run(bool scene, bool game_density = false) {
   if (!fov::wanted()) {
     MESSAGE("VENTURE_FOVEATION=fixed is not set for this process (ctest's gfx_foveation runs it)");
     return;
@@ -245,6 +245,14 @@ void run(bool scene) {
   multiview.pCorrelationMasks = &view_mask;
   VkRenderPassCreateInfo rpci{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};
   if (scene) rpci.pNext = &multiview;
+  // A game's own density map (Unity's Quest eye passes) gives way to Venture's
+  // shading-rate attachment; the layer drops it before the driver sees it.
+  VkRenderPassFragmentDensityMapCreateInfoEXT density{VK_STRUCTURE_TYPE_RENDER_PASS_FRAGMENT_DENSITY_MAP_CREATE_INFO_EXT};
+  density.fragmentDensityMapAttachment = {VK_ATTACHMENT_UNUSED, VK_IMAGE_LAYOUT_UNDEFINED};
+  if (game_density) {
+    density.pNext = rpci.pNext;
+    rpci.pNext = &density;
+  }
   rpci.attachmentCount = scene ? 2 : 1;
   rpci.pAttachments = attachments;
   rpci.subpassCount = 1;
@@ -427,7 +435,163 @@ void run(bool scene) {
   g.device_fn<PFN_vkDestroyDevice>("vkDestroyDevice")(dev, nullptr);
   g.instance_fn<PFN_vkDestroyInstance>("vkDestroyInstance")(g.instance, nullptr);
 }
+// A GPU with density maps (the Steam Frame's Adreno): the swapchain's
+// XR_FB_foveation_vulkan map takes Venture's pattern, uploaded before the next
+// pass begins. The map's layout here is TRANSFER_SRC (this GPU need not have
+// density maps); the runtime's is FRAGMENT_DENSITY_MAP_OPTIMAL.
+void run_density_map() {
+  if (!fov::wanted()) {
+    MESSAGE("VENTURE_FOVEATION=fixed is not set for this process (ctest's gfx_foveation runs it)");
+    return;
+  }
+  Gpu g;
+  if (!open(g)) return;
+  const auto dev = g.device;
+  fov::register_device(dev, g.physical, g.gipa, g.instance, g.gdpa, true, true);
+  auto make_image = [&](VkFormat format, std::uint32_t size, VkImageUsageFlags usage, VkDeviceMemory& memory) {
+    VkImageCreateInfo ici{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+    ici.imageType = VK_IMAGE_TYPE_2D;
+    ici.format = format;
+    ici.extent = {size, size, 1};
+    ici.mipLevels = ici.arrayLayers = 1;
+    ici.samples = VK_SAMPLE_COUNT_1_BIT;
+    ici.usage = usage;
+    VkImage image{};
+    REQUIRE(g.device_fn<PFN_vkCreateImage>("vkCreateImage")(dev, &ici, nullptr, &image) == VK_SUCCESS);
+    VkMemoryRequirements req{};
+    g.device_fn<PFN_vkGetImageMemoryRequirements>("vkGetImageMemoryRequirements")(dev, image, &req);
+    memory = bind(g, req, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    REQUIRE(g.device_fn<PFN_vkBindImageMemory>("vkBindImageMemory")(dev, image, memory, 0) == VK_SUCCESS);
+    return image;
+  };
+  constexpr std::uint32_t kTexels = 16;
+  VkDeviceMemory eye_memory{}, density_memory{};
+  const auto eye_image = make_image(VK_FORMAT_R8G8B8A8_UNORM, kSize, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, eye_memory);
+  const auto density = make_image(VK_FORMAT_R8G8_UNORM, kTexels,
+                                  VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, density_memory);
+  int swapchain_key = 0;
+  const fov::EyeImage eye{eye_image, 0};
+  fov::register_eye_swapchain(dev, &swapchain_key, {&eye, 1}, kSize, kSize, 1, false);
+  fov::attach_density_map(dev, &swapchain_key, density, kTexels, kTexels, 1, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+  fov::EyeView view;
+  view.width = view.height = kSize;
+  view.fov = {-0.8f, 0.8f, 0.8f, -0.8f};
+  fov::update_eye_views(&swapchain_key, {&view, 1}, fov::Level::high, 0, false);
+
+  // Any pass: the upload is recorded before it begins.
+  VkAttachmentDescription colour{};
+  colour.format = VK_FORMAT_R8G8B8A8_UNORM;
+  colour.samples = VK_SAMPLE_COUNT_1_BIT;
+  colour.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+  colour.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+  colour.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+  colour.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+  colour.finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+  VkAttachmentReference reference{0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+  VkSubpassDescription subpass{};
+  subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+  subpass.colorAttachmentCount = 1;
+  subpass.pColorAttachments = &reference;
+  VkRenderPassCreateInfo rpci{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};
+  rpci.attachmentCount = 1;
+  rpci.pAttachments = &colour;
+  rpci.subpassCount = 1;
+  rpci.pSubpasses = &subpass;
+  VkRenderPass pass{};
+  REQUIRE(g.device_fn<PFN_vkCreateRenderPass>("vkCreateRenderPass")(dev, &rpci, nullptr, &pass) == VK_SUCCESS);
+  VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+  vci.image = eye_image;
+  vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+  vci.format = VK_FORMAT_R8G8B8A8_UNORM;
+  vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+  VkImageView eye_view{};
+  REQUIRE(g.device_fn<PFN_vkCreateImageView>("vkCreateImageView")(dev, &vci, nullptr, &eye_view) == VK_SUCCESS);
+  VkFramebufferCreateInfo fci{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
+  fci.renderPass = pass;
+  fci.attachmentCount = 1;
+  fci.pAttachments = &eye_view;
+  fci.width = fci.height = kSize;
+  fci.layers = 1;
+  VkFramebuffer framebuffer{};
+  REQUIRE(g.device_fn<PFN_vkCreateFramebuffer>("vkCreateFramebuffer")(dev, &fci, nullptr, &framebuffer) ==
+          VK_SUCCESS);
+  VkBufferCreateInfo bci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+  bci.size = VkDeviceSize(kTexels) * kTexels * 2;
+  bci.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+  VkBuffer buffer{};
+  REQUIRE(g.device_fn<PFN_vkCreateBuffer>("vkCreateBuffer")(dev, &bci, nullptr, &buffer) == VK_SUCCESS);
+  VkMemoryRequirements req{};
+  g.device_fn<PFN_vkGetBufferMemoryRequirements>("vkGetBufferMemoryRequirements")(dev, buffer, &req);
+  const auto buffer_memory = bind(g, req, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+  REQUIRE(g.device_fn<PFN_vkBindBufferMemory>("vkBindBufferMemory")(dev, buffer, buffer_memory, 0) == VK_SUCCESS);
+
+  VkCommandPoolCreateInfo cpci{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO, nullptr, 0, g.family};
+  VkCommandPool pool{};
+  REQUIRE(g.device_fn<PFN_vkCreateCommandPool>("vkCreateCommandPool")(dev, &cpci, nullptr, &pool) == VK_SUCCESS);
+  VkCommandBufferAllocateInfo cbai{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO, nullptr, pool,
+                                   VK_COMMAND_BUFFER_LEVEL_PRIMARY, 1};
+  VkCommandBuffer command{};
+  REQUIRE(g.device_fn<PFN_vkAllocateCommandBuffers>("vkAllocateCommandBuffers")(dev, &cbai, &command) ==
+          VK_SUCCESS);
+  VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+  REQUIRE(g.device_fn<PFN_vkBeginCommandBuffer>("vkBeginCommandBuffer")(command, &begin) == VK_SUCCESS);
+  VkClearValue clear{};
+  VkRenderPassBeginInfo rpbi{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
+  rpbi.renderPass = pass;
+  rpbi.framebuffer = framebuffer;
+  rpbi.renderArea = {{0, 0}, {kSize, kSize}};
+  rpbi.clearValueCount = 1;
+  rpbi.pClearValues = &clear;
+  g.device_fn<PFN_vkCmdBeginRenderPass>("vkCmdBeginRenderPass")(command, &rpbi, VK_SUBPASS_CONTENTS_INLINE);
+  g.device_fn<PFN_vkCmdEndRenderPass>("vkCmdEndRenderPass")(command);
+  VkBufferImageCopy region{};
+  region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+  region.imageExtent = {kTexels, kTexels, 1};
+  g.device_fn<PFN_vkCmdCopyImageToBuffer>("vkCmdCopyImageToBuffer")(
+      command, density, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, buffer, 1, &region);
+  REQUIRE(g.device_fn<PFN_vkEndCommandBuffer>("vkEndCommandBuffer")(command) == VK_SUCCESS);
+  VkQueue queue{};
+  g.device_fn<PFN_vkGetDeviceQueue>("vkGetDeviceQueue")(dev, g.family, 0, &queue);
+  VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+  submit.commandBufferCount = 1;
+  submit.pCommandBuffers = &command;
+  REQUIRE(g.device_fn<PFN_vkQueueSubmit>("vkQueueSubmit")(queue, 1, &submit, VK_NULL_HANDLE) == VK_SUCCESS);
+  REQUIRE(g.device_fn<PFN_vkQueueWaitIdle>("vkQueueWaitIdle")(queue) == VK_SUCCESS);
+
+  void* mapped = nullptr;
+  REQUIRE(g.device_fn<PFN_vkMapMemory>("vkMapMemory")(dev, buffer_memory, 0, VK_WHOLE_SIZE, 0, &mapped) ==
+          VK_SUCCESS);
+  std::vector<std::uint8_t> got(std::size_t(kTexels) * kTexels * 2), expected(got.size());
+  std::memcpy(got.data(), mapped, got.size());
+  // Venture's level (Medium), fixed, whatever the game asked.
+  fov::fill_densities(expected, kTexels, kTexels, fov::Pattern{fov::Level::medium, false, 0}, view.fov, {});
+  CHECK(got == expected);
+  const auto at = [&](std::uint32_t x, std::uint32_t y, int c) { return got[(std::size_t(y) * kTexels + x) * 2 + c]; };
+  CHECK(at(kTexels / 2, kTexels / 2, 0) == 255);  // full density in the middle
+  CHECK(at(0, 0, 0) < 255);                       // coarser at the corner
+  CHECK(at(0, 0, 1) < 255);
+
+  g.device_fn<PFN_vkDeviceWaitIdle>("vkDeviceWaitIdle")(dev);
+  fov::forget_eye_swapchain(dev, &swapchain_key);
+  g.device_fn<PFN_vkDestroyCommandPool>("vkDestroyCommandPool")(dev, pool, nullptr);
+  g.device_fn<PFN_vkDestroyFramebuffer>("vkDestroyFramebuffer")(dev, framebuffer, nullptr);
+  g.device_fn<PFN_vkDestroyImageView>("vkDestroyImageView")(dev, eye_view, nullptr);
+  g.device_fn<PFN_vkDestroyRenderPass>("vkDestroyRenderPass")(dev, pass, nullptr);
+  g.device_fn<PFN_vkDestroyBuffer>("vkDestroyBuffer")(dev, buffer, nullptr);
+  g.device_fn<PFN_vkFreeMemory>("vkFreeMemory")(dev, buffer_memory, nullptr);
+  g.device_fn<PFN_vkDestroyImage>("vkDestroyImage")(dev, density, nullptr);
+  g.device_fn<PFN_vkFreeMemory>("vkFreeMemory")(dev, density_memory, nullptr);
+  g.device_fn<PFN_vkDestroyImage>("vkDestroyImage")(dev, eye_image, nullptr);
+  g.device_fn<PFN_vkFreeMemory>("vkFreeMemory")(dev, eye_memory, nullptr);
+  fov::release_device(dev);
+  g.device_fn<PFN_vkDestroyDevice>("vkDestroyDevice")(dev, nullptr);
+  g.instance_fn<PFN_vkDestroyInstance>("vkDestroyInstance")(g.instance, nullptr);
+}
 }  // namespace
 
 TEST_CASE("Foveation shades an eye pass's edges in coarse fragments on the GPU") { run(false); }
 TEST_CASE("Foveation shades a stereo scene pass into the game's own image on the GPU") { run(true); }
+TEST_CASE("Foveation replaces a game's own density map on an eye pass") { run(false, true); }
+TEST_CASE("Foveation fills a swapchain's density map with its pattern on a GPU with density maps") {
+  run_density_map();
+}

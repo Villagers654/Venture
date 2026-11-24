@@ -12,7 +12,9 @@ FRAMEWORK = ROOT / "src/runtime/java/framework"
 OWNERS = {"java.awt": "java.desktop", "javax.imageio": "java.desktop", "javax.swing": "java.desktop",
           "java.beans": "java.desktop", "javax.sound": "java.desktop", "java.util.logging": "java.logging",
           "javax.xml": "java.xml", "org.w3c.dom": "java.xml", "org.xml.sax": "java.xml", "java.sql": "java.sql",
-          "java.net.http": "java.net.http", "sun.misc": "jdk.unsupported"}
+          "java.net.http": "java.net.http", "sun.misc": "jdk.unsupported",
+          "java.lang.management": "java.management", "javax.management": "java.management",
+          "com.sun.management": "jdk.management"}
 
 
 def modules():

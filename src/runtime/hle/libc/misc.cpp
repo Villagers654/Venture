@@ -290,6 +290,12 @@ void register_misc(HleLibrary& lib) {
   if (process_config().isa() == GuestIsa::a32) {
     auto guard32 = static_cast<std::uint32_t>(stack_guard);
     lib.add_data("__stack_chk_guard", low_data(std::as_bytes(std::span(&guard32, 1))));
+    // 32-bit bionic exports the page size and its shift as data (libc.map.txt
+    // "arm x86 mips"): old NDKs' PAGE_SIZE read __page_size. Gear VR Unity games
+    // import it, and an unresolved data import fails the library's load.
+    static constexpr std::uint32_t page_size = 4096, page_shift = 12;
+    lib.add_data("__page_size", low_data(std::as_bytes(std::span(&page_size, 1))));
+    lib.add_data("__page_shift", low_data(std::as_bytes(std::span(&page_shift, 1))));
   } else
     lib.add_data("__stack_chk_guard", h2g(&stack_guard));
 #define B(n, f) bind<&f>(lib, n)
