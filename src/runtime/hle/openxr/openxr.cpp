@@ -970,7 +970,16 @@ XrResult xrRequestExitSession(XrSession handle) {
   if (!valid_handle(handle, "XrSession")) return XR_ERROR_HANDLE_INVALID;
   return session().request_exit();
 }
-namespace { void schedule_space_probe(); }
+namespace {
+void schedule_space_probe();
+void log_hidden_focus_dip(const venture::xr::FocusDips::Hidden &dip) {
+  static std::atomic<unsigned> logged{};
+  const auto n = logged.fetch_add(1, std::memory_order_relaxed);
+  if (n < 20 || n % 100 == 0)
+    log::info("xr", "Host focus came back after {:.0f} ms; the game kept focus ({} state changes hidden, {} so far)",
+              dip.ns / 1e6, dip.changes, n + 1);
+}
+}  // namespace
 XrResult xrPollEvent(XrInstance instance, XrEventDataBuffer *out) {
   xr_call_trace::Call trace("guest.xrPollEvent");
   return trace.finish([&]() -> XrResult {
@@ -989,8 +998,13 @@ XrResult xrPollEvent(XrInstance instance, XrEventDataBuffer *out) {
   }
   XrResult result;
   for (;;) {
-    *out = {XR_TYPE_EVENT_DATA_BUFFER};
-    result = ::xrPollEvent(instance, out);
+    venture::xr::FocusDips::Hidden hidden;
+    bool late = false;
+    result = session().focus_dips.poll(session().handle, monotonic_ns(), *out,
+        [&](XrEventDataBuffer &e) { return ::xrPollEvent(instance, &e); }, &hidden, &late);
+    if (hidden.ns) log_hidden_focus_dip(hidden);
+    if (late) log::info("xr", "Host focus away for over {} s: the game now sees it",
+                        venture::xr::FocusDips::kMaxDipNs / 1'000'000'000.0);
     if (result != XR_SUCCESS)
       return result;
     if (!session().deliver_host_event(*out)) continue;

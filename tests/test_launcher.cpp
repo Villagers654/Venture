@@ -711,6 +711,9 @@ TEST_CASE("the desktop mirror is on by default, opt out globally or per game") {
 TEST_CASE("a standalone headset is one whose only displays are built-in DSI panels") {
   using standalone::classify;
   CHECK(classify({{"DSI-1", true}, {"DSI-2", true}, {"HDMI-A-1", false}}).standalone);
+  // The Steam Frame: its panel and a writeback (capture) connector, which is no display.
+  CHECK(classify({{"DSI-1", true}, {"Writeback-1", true}}).standalone);
+  CHECK_FALSE(classify({{"Writeback-1", true}}).standalone);
   // An Arm or x86 laptop's own panel is eDP; any external monitor rules it out.
   CHECK_FALSE(classify({{"eDP-1", true}}).standalone);
   CHECK_FALSE(classify({{"DSI-1", true}, {"DP-1", true}}).standalone);

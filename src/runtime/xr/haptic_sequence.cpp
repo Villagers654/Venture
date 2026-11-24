@@ -117,6 +117,8 @@ class Worker {
   std::condition_variable changed, settled;
   std::deque<Op> ops;
   std::map<Key, Stream> streams;
+  std::map<Key, RenewalCap> renewals;  // plain vibrations per target (queue_vibration)
+  int capped_logged = 0;
   std::vector<Key> active;  // targets with a host call running now
   std::uint64_t next_id = 1;
   bool stopping = false;
@@ -355,9 +357,22 @@ void queue_vibration(std::string_view api, XrSession session, const XrHapticActi
   auto &w = worker();
   std::lock_guard lock(w.mutex);
   w.withdraw(session, &action);
-  Op op{Op::Kind::vibrate, key_of(session, action), action, std::string(api), std::string(stage)};
+  const Key key = key_of(session, action);
+  // Every request counts toward a renewal streak, stops too: a game calling each frame renews.
+  const auto duration = w.renewals[key].duration(pulse.duration, monotonic_ns());
+  if (!(pulse.amplitude > 0)) {  // validated finite and >= 0 by the caller
+    w.stop(api, stage, session, action);
+    return;
+  }
+  Op op{Op::Kind::vibrate, key, action, std::string(api), std::string(stage)};
   op.pulse = pulse;
   op.pulse.next = nullptr;
+  if (duration != pulse.duration && w.capped_logged < 3) {
+    ++w.capped_logged;
+    log::info("xr", "Haptics: a vibration renewed every {:.0f} ms is cut from {} ms to {} ms, so a stalled game stops buzzing",
+              w.renewals[key].interval / 1e6, pulse.duration / 1'000'000, duration / 1'000'000);
+  }
+  op.pulse.duration = duration;
   w.push(std::move(op));
 }
 void queue_stop(std::string_view api, XrSession session, const XrHapticActionInfo &action, std::string_view stage) {

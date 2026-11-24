@@ -258,6 +258,7 @@ void Session::created(SessionOwner requested) {
   owner = requested;
   host_stop_requested = guest_exit_requested = false;
   host_ended = false;
+  focus_dips.reset();
   state = XR_SESSION_STATE_IDLE;
   running = false;
   phase = Phase::idle;

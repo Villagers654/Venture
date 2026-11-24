@@ -36,7 +36,9 @@ std::vector<Connector> read_connectors() {
 Decision classify(const std::vector<Connector>& connectors) {
   std::string panels, others;
   for (const auto& c : connectors) {
-    if (!c.connected) continue;
+    // A writeback connector captures what the display engine composes (screen recording); it
+    // is no display, and reads "connected" whenever it exists (the Steam Frame has Writeback-1).
+    if (!c.connected || type_of(c.name) == "Writeback") continue;
     auto& list = type_of(c.name) == "DSI" ? panels : others;
     list += (list.empty() ? "" : ", ") + c.name;
   }

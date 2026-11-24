@@ -509,8 +509,12 @@ TEST_CASE("XR PCM and envelope haptics bind both hands, append, replace and stop
   CHECK(xg::xrApplyHapticFeedback(session, &request, reinterpret_cast<XrHapticBaseHeader *>(&zero)) == XR_ERROR_VALIDATION_FAILURE);
   CHECK(ventureMockXrStats().haptic_pulses == before);
   zero.amplitude = 0;
+  // Amplitude 0 is a stop at the host (SteamVR ignores a silent vibration and kept the last one).
+  const auto silent_stops = ventureMockXrStats().haptic_stops;
   CHECK(xg::xrApplyHapticFeedback(session, &request, reinterpret_cast<XrHapticBaseHeader *>(&zero)) == XR_SUCCESS);
+  REQUIRE(venture::xr::haptics_settled(std::chrono::seconds(2)));
   CHECK(ventureMockXrStats().haptic_pulses == before);
+  CHECK(ventureMockXrStats().haptic_stops == silent_stops + 1);
   XrBaseInStructure unknown{static_cast<XrStructureType>(0x7ffffffe), nullptr};
   request.next = &unknown;
   zero.next = &unknown;
@@ -6133,4 +6137,105 @@ TEST_CASE("Frame hitches separate one stall from scattered misses per report win
   hitches.submitted(now += 5'000'000'000, period);
   CHECK(hitches.worst_ns == 0);
   CHECK(hitches.long_frames == 0);
+}
+
+TEST_CASE("Brief host focus dips stay hidden from the game; long ones and session ends reach it in order") {
+  using venture::xr::FocusDips;
+  const auto session = reinterpret_cast<XrSession>(std::uintptr_t{0x51});
+  const auto other = reinterpret_cast<XrSession>(std::uintptr_t{0x52});
+  std::deque<XrEventDataBuffer> host;
+  auto state = [](XrSession s, XrSessionState st) {
+    XrEventDataBuffer e{XR_TYPE_EVENT_DATA_BUFFER};
+    auto& c = reinterpret_cast<XrEventDataSessionStateChanged&>(e);
+    c = {XR_TYPE_EVENT_DATA_SESSION_STATE_CHANGED, nullptr, s, st, 0};
+    return e;
+  };
+  auto state_of = [](const XrEventDataBuffer& e) {
+    return reinterpret_cast<const XrEventDataSessionStateChanged&>(e).state;
+  };
+  auto pull = [&](XrEventDataBuffer& e) {
+    if (host.empty()) return XR_EVENT_UNAVAILABLE;
+    e = host.front();
+    host.pop_front();
+    return XR_SUCCESS;
+  };
+  FocusDips dips;
+  XrEventDataBuffer out{};
+  std::int64_t now = 1'000'000'000;
+  // Start-up transitions always pass, focus included.
+  for (auto st : {XR_SESSION_STATE_READY, XR_SESSION_STATE_SYNCHRONIZED, XR_SESSION_STATE_VISIBLE, XR_SESSION_STATE_FOCUSED})
+    host.push_back(state(session, st));
+  for (auto st : {XR_SESSION_STATE_READY, XR_SESSION_STATE_SYNCHRONIZED, XR_SESSION_STATE_VISIBLE, XR_SESSION_STATE_FOCUSED}) {
+    REQUIRE(dips.poll(session, now, out, pull) == XR_SUCCESS);
+    CHECK(state_of(out) == st);
+  }
+  // A dip in the first second of focus still reaches the game.
+  host.push_back(state(session, XR_SESSION_STATE_VISIBLE));
+  REQUIRE(dips.poll(session, now += 500'000'000, out, pull) == XR_SUCCESS);
+  CHECK(state_of(out) == XR_SESSION_STATE_VISIBLE);
+  host.push_back(state(session, XR_SESSION_STATE_FOCUSED));
+  REQUIRE(dips.poll(session, now, out, pull) == XR_SUCCESS);
+  CHECK(state_of(out) == XR_SESSION_STATE_FOCUSED);
+  // Focused for a while: a 523 ms dip through SYNCHRONIZED is hidden whole.
+  now += 2'000'000'000;
+  host.push_back(state(session, XR_SESSION_STATE_VISIBLE));
+  host.push_back(state(session, XR_SESSION_STATE_SYNCHRONIZED));
+  CHECK(dips.poll(session, now, out, pull) == XR_EVENT_UNAVAILABLE);
+  CHECK(dips.holding());
+  host.push_back(state(session, XR_SESSION_STATE_VISIBLE));
+  host.push_back(state(session, XR_SESSION_STATE_FOCUSED));
+  FocusDips::Hidden hidden;
+  CHECK(dips.poll(session, now + 523'000'000, out, pull, &hidden) == XR_EVENT_UNAVAILABLE);
+  CHECK_FALSE(dips.holding());
+  CHECK(hidden.ns == 523'000'000);
+  CHECK(hidden.changes == 4);
+  // Other events and other sessions' states pass during a dip.
+  now += 2'000'000'000;
+  host.push_back(state(session, XR_SESSION_STATE_VISIBLE));
+  host.push_back(state(other, XR_SESSION_STATE_STOPPING));
+  REQUIRE(dips.poll(session, now, out, pull) == XR_SUCCESS);
+  CHECK(reinterpret_cast<XrEventDataSessionStateChanged&>(out).session == other);
+  CHECK(dips.holding());
+  // Away past the limit: the game sees it late, in order.
+  bool late = false;
+  CHECK(dips.poll(session, now + FocusDips::kMaxDipNs - 1, out, pull, nullptr, &late) == XR_EVENT_UNAVAILABLE);
+  CHECK_FALSE(late);
+  REQUIRE(dips.poll(session, now + FocusDips::kMaxDipNs + 1, out, pull, nullptr, &late) == XR_SUCCESS);
+  CHECK(late);
+  CHECK(state_of(out) == XR_SESSION_STATE_VISIBLE);
+  host.push_back(state(session, XR_SESSION_STATE_FOCUSED));
+  REQUIRE(dips.poll(session, now += 3'000'000'000, out, pull) == XR_SUCCESS);
+  CHECK(state_of(out) == XR_SESSION_STATE_FOCUSED);
+  // Stopping during a dip delivers everything at once.
+  now += 2'000'000'000;
+  host.push_back(state(session, XR_SESSION_STATE_VISIBLE));
+  host.push_back(state(session, XR_SESSION_STATE_SYNCHRONIZED));
+  host.push_back(state(session, XR_SESSION_STATE_STOPPING));
+  for (auto st : {XR_SESSION_STATE_VISIBLE, XR_SESSION_STATE_SYNCHRONIZED, XR_SESSION_STATE_STOPPING}) {
+    REQUIRE(dips.poll(session, now, out, pull) == XR_SUCCESS);
+    CHECK(state_of(out) == st);
+  }
+  CHECK_FALSE(dips.holding());
+}
+
+TEST_CASE("A vibration renewed every frame is cut to a few frames; a one-off rumble keeps its length") {
+  using venture::xr::RenewalCap;
+  RenewalCap cap;
+  std::int64_t now = 5'000'000'000;
+  constexpr XrDuration two_s = 2'000'000'000;
+  CHECK(cap.duration(two_s, now) == two_s);  // first request
+  CHECK(cap.duration(two_s, now += 11'111'111) == two_s);
+  CHECK(cap.duration(two_s, now += 11'111'111) == two_s);
+  // The third renewal in a row: cut to the 100 ms floor (4 frames at 90 Hz are less).
+  CHECK(cap.duration(two_s, now += 11'111'111) == RenewalCap::kCapMinNs);
+  CHECK(cap.duration(50'000'000, now += 11'111'111) == 50'000'000);  // short requests pass
+  CHECK(cap.duration(XR_MIN_HAPTIC_DURATION, now += 11'111'111) == XR_MIN_HAPTIC_DURATION);
+  // Renewed every 200 ms: about four intervals (the interval is smoothed).
+  for (int i = 0; i < 12; ++i) cap.duration(two_s, now += 200'000'000);
+  const auto slow = cap.duration(two_s, now += 200'000'000);
+  CHECK(slow > 780'000'000);
+  CHECK(slow <= 800'000'000);
+  // After a gap the streak starts over: a one-off rumble plays whole.
+  CHECK(cap.duration(two_s, now += 1'000'000'000) == two_s);
+  CHECK(cap.duration(1'500'000'000, now += 400'000'000) == 1'500'000'000);
 }

@@ -1,5 +1,6 @@
 #pragma once
 #include "xr/api.h"
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <deque>
@@ -46,7 +47,35 @@ XrResult queue_haptic(XrSession, const XrHapticActionInfo &, std::span<const flo
                       float rate, bool append, std::uint32_t &consumed);
 // An amplitude envelope played as core pulses (hosts without XR_FB_haptic_amplitude_envelope).
 XrResult queue_envelope(XrSession, const XrHapticActionInfo &, std::span<const float>, XrDuration);
-// A core vibration (apply_haptic on the worker), replacing a sequence playing there.
+// A game that wants a buzz while something lasts asks for a long vibration (OVRPlugin: about
+// 2 s) and renews it every frame, then stops it. When its frame thread stalls (a load, a hitch)
+// neither the renewal nor the stop comes, and the last request buzzes for its full length.
+// Renewed every frame, a few renewal intervals feel the same: once a hand's vibrations come
+// kRenewStreak times in a row, each within kRenewNs of the last, each is cut to
+// kCapIntervals intervals, at least kCapMinNs. A one-off rumble keeps its length.
+struct RenewalCap {
+  static constexpr std::int64_t kRenewNs = 250'000'000, kCapMinNs = 100'000'000;
+  static constexpr int kRenewStreak = 3, kCapIntervals = 4;
+  std::int64_t last = 0, interval = 0;
+  int streak = 0;
+  XrDuration duration(XrDuration requested, std::int64_t now) {
+    const auto gap = last ? now - last : -1;
+    if (gap >= 0 && gap <= kRenewNs) {
+      interval = streak ? (interval * 3 + gap) / 4 : gap;
+      ++streak;
+    } else {
+      streak = 0;
+      interval = 0;
+    }
+    last = now ? now : 1;
+    const XrDuration cap = std::max<XrDuration>(kCapMinNs, kCapIntervals * interval);
+    return streak >= kRenewStreak && requested > cap ? cap : requested;
+  }
+};
+// A core vibration (apply_haptic on the worker), replacing a sequence playing there. Amplitude
+// 0 is a stop (queue_stop): Quest SDKs stop a vibration that way, and a runtime that ignores
+// a silent request (SteamVR) kept the last one buzzing for its full length. A vibration renewed
+// every frame is shortened (RenewalCap).
 void queue_vibration(std::string_view api, XrSession, const XrHapticActionInfo &, const XrHapticVibration &,
                      std::string_view stage = "guest_request");
 // Stops output on the target (stop_haptic on the worker) and withdraws work waiting for it.

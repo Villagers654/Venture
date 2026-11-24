@@ -64,7 +64,16 @@ XrResult pump_events() {
   auto &s = session();
   XrEventDataBuffer event{XR_TYPE_EVENT_DATA_BUFFER};
   XrResult r;
-  while ((r = ::xrPollEvent(host_xr().instance, &event)) == XR_SUCCESS) {
+  auto poll = [&] {
+    venture::xr::FocusDips::Hidden hidden;
+    const auto result = s.focus_dips.poll(s.handle, monotonic_ns(), event,
+        [](XrEventDataBuffer &e) { return ::xrPollEvent(host_xr().instance, &e); }, &hidden);
+    if (hidden.ns)
+      log::info("xr", "Host focus came back after {:.0f} ms; the game kept focus ({} state changes hidden)",
+                hidden.ns / 1e6, hidden.changes);
+    return result;
+  };
+  while ((r = poll()) == XR_SUCCESS) {
     if (!s.deliver_host_event(event)) {
       event = {XR_TYPE_EVENT_DATA_BUFFER};
       continue;

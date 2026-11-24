@@ -7,7 +7,8 @@
 // DSI panel, the internal link headsets and phones use. A laptop's own panel
 // is eDP or LVDS, so a laptop (Arm or x86) is never taken for a headset, and a
 // machine with any external monitor never is. With no display connector
-// visible at all the answer is no.
+// visible at all the answer is no. A writeback connector (screen capture) is
+// not a display.
 //
 // VENTURE_STANDALONE=1 or 0 overrides the detection. Windows is never
 // standalone; the Android build always runs on the headset itself.

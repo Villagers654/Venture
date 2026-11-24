@@ -1,6 +1,7 @@
 #pragma once
 #include "xr/api.h"
 #include "xr/display_timing.h"
+#include "xr/focus_dips.h"
 #include "xr/frame_hitches.h"
 #include <atomic>
 #include <chrono>
@@ -141,6 +142,8 @@ struct Session {
   // through the Activity lifecycle (app_runtime.cpp's monitor), as for a stop
   // the launcher requests, which a later session does not undo.
   std::atomic<bool> host_ended{false};
+  // Brief host focus dips the game never sees (xrPollEvent and VrApi's event pump).
+  FocusDips focus_dips;
   XrResult request_host_stop();
   XrResult request_exit(SessionOwner expected = SessionOwner::none);
   // Whether the game sees `event`: a host EXITING only after the game's own
