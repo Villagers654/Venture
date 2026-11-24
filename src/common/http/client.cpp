@@ -783,6 +783,9 @@ void fetch_file(std::string url, const fs::path &dest, uint64_t expected, std::s
       url = redirect(url, r, allowed);
       continue;
     }
+    // A refusal with an empty body never reaches the write callback's check.
+    if (r.status != 200 && r.status != 206)
+      throw std::runtime_error(refusal(r.status));
     if (!sink.opened || !sink.done || (sink.total && sink.done != sink.total) ||
         sink.out.fail())
       throw std::runtime_error(
