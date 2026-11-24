@@ -354,8 +354,6 @@ inline constexpr HostInput kFrameInputs[]{
     {"/input/bumper/touch", "Bumper touch"},
     {"/input/thumbstick", "Thumbstick"},
     {"/input/thumbstick/click", "Thumbstick click"},
-    // Valve's profile has no thumbrest sensor; a player can give the game's
-    // Thumbrest the stick's touch sensor instead.
     {"/input/thumbstick/touch", "Thumbstick touch"},
     {"/input/trigger/value", "Trigger"},
     {"/input/trigger/touch", "Trigger touch"},
@@ -421,10 +419,12 @@ inline constexpr Profile kProfiles[]{
      "square_mndx triangle_mndx cross_mndx circle_mndx trigger thumbstick squeeze", "XR_MNDX_psvr2_interaction"},
     {"/interaction_profiles/valve/frame_controller_valve", "Steam Frame", "valve frame steam link", "",
      "frame_controller", kFrameInputs,
+     // No thumb rest: a thumb resting on the face of the controller rests on the
+     // X/A button (the left d-pad's down, the right A), whose touch stands in.
      {{{"/input/dpad_down/click", "/input/dpad_up/click", "/input/view/click", "/input/thumbstick",
-        "/input/thumbstick/click", "/input/trigger/value", "/input/squeeze/value", ""},
+        "/input/thumbstick/click", "/input/trigger/value", "/input/squeeze/value", "/input/dpad_down/touch"},
        {"/input/a/click", "/input/b/click", "", "/input/thumbstick", "/input/thumbstick/click",
-        "/input/trigger/value", "/input/squeeze/value", ""}}},
+        "/input/trigger/value", "/input/squeeze/value", "/input/a/touch"}}},
      "/input/view/click", "Left View button",
      "a b x y dpad_up dpad_down dpad_left dpad_right view menu bumper thumbstick trigger squeeze",
      "XR_VALVE_frame_controller_interaction",
