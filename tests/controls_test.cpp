@@ -336,6 +336,11 @@ TEST_CASE("Controls Steam Frame touches follow every button with a sensor") {
         std::vector<std::string>{"/user/hand/left/input/dpad_down/touch"});
   CHECK(host_bindings("/user/hand/left/input/y/touch", frame, r, true) ==
         std::vector<std::string>{"/user/hand/left/input/dpad_up/touch"});
+  // No thumb rest: the X/A button under a resting thumb stands in.
+  CHECK(host_bindings("/user/hand/right/input/thumbrest/touch", frame, r, true) ==
+        std::vector<std::string>{"/user/hand/right/input/a/touch"});
+  CHECK(host_bindings("/user/hand/left/input/thumbrest/touch", frame, r, true) ==
+        std::vector<std::string>{"/user/hand/left/input/dpad_down/touch"});
 }
 
 TEST_CASE("Controls choices move, clear and refuse inputs") {
