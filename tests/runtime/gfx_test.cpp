@@ -2376,14 +2376,14 @@ TEST_CASE("Foveation: full rate in the middle, half then quarter towards the edg
   CHECK(shading_rate_value(Rate::quarter) == 5);
   std::uint8_t x = 0, y = 0;
   density_value(Rate::quarter, x, y);
-  CHECK((x == 128 && y == 128));
+  CHECK((x == 127 && y == 127));
   density_value(Rate::half_y, x, y);
-  CHECK((x == 255 && y == 128));
+  CHECK((x == 255 && y == 127));
   std::vector<std::uint8_t> densities(8 * 8 * 2);
   fill_densities(densities, 8, 8, Pattern{Level::high, false, 0}, fov, ahead);
-  CHECK(densities[0] == 64);  // top-left corner at High: 4 pixels across
+  CHECK(densities[0] == 63);  // top-left corner at High: 4 pixels across
   density_value(Rate::eighth_x, x, y);
-  CHECK((x == 64 && y == 128));
+  CHECK((x == 63 && y == 127));
   CHECK(shading_rate_value(Rate::eighth_x) == 9);
   CHECK(shading_rate_value(Rate::eighth_y) == 6);
   CHECK(shading_rate_value(Rate::sixteenth) == 10);

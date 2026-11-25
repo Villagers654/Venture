@@ -1107,17 +1107,17 @@ void VKAPI_CALL bind_pipeline(VkCommandBuffer cmd, VkPipelineBindPoint point, Vk
 }
 void VKAPI_CALL end_pass(VkCommandBuffer cmd) {
   const auto after = end_area(cmd);
-  host<PFN_vkCmdEndRenderPass>(cmd, "vkCmdEndRenderPass")(cmd);
+  next<PFN_vkCmdEndRenderPass, "vkCmdEndRenderPass">(command_device(cmd))(cmd);
   transition(cmd, after);
 }
 void VKAPI_CALL end_pass2(VkCommandBuffer cmd, const VkSubpassEndInfo* info) {
   const auto after = end_area(cmd);
-  host<PFN_vkCmdEndRenderPass2>(cmd, "vkCmdEndRenderPass2")(cmd, info);
+  next<PFN_vkCmdEndRenderPass2, "vkCmdEndRenderPass2">(command_device(cmd))(cmd, info);
   transition(cmd, after);
 }
 void VKAPI_CALL end_rendering(VkCommandBuffer cmd) {
   end_area(cmd);
-  host<PFN_vkCmdEndRendering>(cmd, "vkCmdEndRendering")(cmd);
+  next<PFN_vkCmdEndRendering, "vkCmdEndRendering">(command_device(cmd))(cmd);
 }
 }  // namespace
 

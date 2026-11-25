@@ -117,12 +117,17 @@ std::uint8_t shading_rate_value(Rate rate) {
   }
 }
 
+std::uint8_t density_of(unsigned log2_size) {
+  // A GPU takes the fragment size as 1 / density and rounds it down (Turnip),
+  // so a density just under 1/2 or 1/4 gives exactly 2 or 4 pixels: 128/255
+  // and 64/255 gave 1.99 and 3.98, which rounded to 1 and 2 on one axis.
+  return std::uint8_t(log2_size == 0 ? 255 : log2_size == 1 ? 127 : 63);
+}
+
 void density_value(Rate rate, std::uint8_t& x, std::uint8_t& y) {
-  // Densities round up so the GPU's never falls below the rate's.
   const auto value = shading_rate_value(rate);
-  const auto density = [](unsigned log2_size) { return std::uint8_t(log2_size == 0 ? 255 : log2_size == 1 ? 128 : 64); };
-  x = density(value >> 2);
-  y = density(value & 3);
+  x = density_of(value >> 2);
+  y = density_of(value & 3);
 }
 
 void fill_shading_rates(std::span<std::uint8_t> out, std::uint32_t width, std::uint32_t height,

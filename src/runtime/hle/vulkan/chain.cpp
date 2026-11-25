@@ -74,7 +74,7 @@ void Chain::density_usage(VkImageUsageFlags2KHR& value) {
 bool Chain::subsampled_kept() {
   if (!density_enabled()) return false;
   const auto device = device_ ? device_ : (command_ ? command_device(command_) : VkDevice{});
-  return !device || !gfx::foveation::device_active(device);
+  return !device || !gfx::foveation::device_active(device) || gfx::foveation::device_native_density(device);
 }
 void Chain::density_flags(VkImageCreateFlags& value) {
   if ((value & VK_IMAGE_CREATE_SUBSAMPLED_BIT_EXT) && !subsampled_kept()) value &= ~VK_IMAGE_CREATE_SUBSAMPLED_BIT_EXT;

@@ -2,10 +2,12 @@
 #include "internal.h"
 #include "vulkan.h"
 #include "common/log.h"
+#include "gfx/foveation_vulkan.h"
 #include "gfx/queue_sync.h"
 #include "gfx/vulkan_memory.h"
 #include <stdexcept>
 #include <algorithm>
+#include <bit>
 #include <map>
 #include <mutex>
 
@@ -44,6 +46,8 @@ struct FullRateImage::Impl {
                   std::uint32_t queue_index, std::uint32_t layers,
                   std::uint32_t eye_width, std::uint32_t eye_height) {
     const bool native_density = device_density_maps_enabled(device);
+    const bool filled_density = native_density && gfx::foveation::wanted() &&
+                                gfx::foveation::device_native_density(device);
     if (native_density) {
       auto properties = reinterpret_cast<PFN_vkGetPhysicalDeviceProperties2>(
           raw_physical_proc(physical, "vkGetPhysicalDeviceProperties2"));
@@ -54,8 +58,14 @@ struct FullRateImage::Impl {
           VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_DENSITY_MAP_PROPERTIES_EXT};
       VkPhysicalDeviceProperties2 host{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, &density};
       properties(physical, &host);
-      const auto x = std::max(1u, density.maxFragmentDensityTexelSize.width);
-      const auto y = std::max(1u, density.maxFragmentDensityTexelSize.height);
+      // A map Venture fills with its pattern has the finest texels the GPU
+      // takes (a power of two, as the GPU derives its texel size from the map
+      // and framebuffer sizes), so its regions follow the pattern closely;
+      // otherwise the coarsest: the smallest map.
+      const bool filled = filled_density;
+      const auto texel = filled ? density.minFragmentDensityTexelSize : density.maxFragmentDensityTexelSize;
+      const auto x = std::bit_ceil(std::max(1u, texel.width));
+      const auto y = std::bit_ceil(std::max(1u, texel.height));
       width = eye_width / x + (eye_width % x != 0);
       height = eye_height / y + (eye_height % y != 0);
     } else if (emulated_density_maps(physical)) {
@@ -75,6 +85,8 @@ struct FullRateImage::Impl {
     ci.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
                VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
     if (native_density) ci.usage |= VK_IMAGE_USAGE_FRAGMENT_DENSITY_MAP_BIT_EXT;
+    // Venture writes its pattern into the map from the CPU (foveation_vulkan.h).
+    if (filled_density && gfx::foveation::density_host_writes(device)) ci.usage |= VK_IMAGE_USAGE_HOST_TRANSFER_BIT_EXT;
     check(vk<PFN_vkCreateImage>("vkCreateImage")(device, &ci, nullptr, &image),
           "Create full-rate compatibility image failed");
     VkMemoryRequirements requirements{};

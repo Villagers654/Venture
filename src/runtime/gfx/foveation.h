@@ -101,6 +101,8 @@ constexpr std::uint8_t finer_rate(std::uint8_t a, std::uint8_t b) {
 }
 // VK_EXT_fragment_density_map's R8G8_UNORM density of a rate (x, y).
 void density_value(Rate rate, std::uint8_t& x, std::uint8_t& y);
+// The density (R8 UNORM) whose fragment size is 2^log2_size pixels.
+std::uint8_t density_of(unsigned log2_size);
 
 // Fills a width x height map whose texels each cover texel_width x
 // texel_height pixels of a framebuffer_width x framebuffer_height eye image.

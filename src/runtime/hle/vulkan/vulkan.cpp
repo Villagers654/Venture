@@ -1337,6 +1337,39 @@ VkResult VKAPI_CALL enumerate_groups(VkInstance instance, std::uint32_t* count,
   *count = written;
   return written < groups.size() ? VK_INCOMPLETE : VK_SUCCESS;
 }
+// Whether the GPU reads a one-layer shading-rate view layered in a multiview
+// pass (rate_layer_probe.cpp), on a GPU without layered rate attachments. Once
+// per driver: a result in the probe cache stands until the driver changes.
+bool rates_read_next_layer(VkPhysicalDevice physical, VkDevice device, const VkDeviceCreateInfo& info) try {
+  auto get = reinterpret_cast<PFN_vkGetPhysicalDeviceProperties2>(
+      raw_physical_proc(physical, "vkGetPhysicalDeviceProperties2"));
+  if (!get) return false;
+  VkPhysicalDeviceFragmentShadingRatePropertiesKHR rates{
+      VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADING_RATE_PROPERTIES_KHR};
+  VkPhysicalDeviceProperties2 properties{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, &rates};
+  get(physical, &properties);
+  if (rates.layeredShadingRateAttachments) return false;
+  const auto& p = properties.properties;
+  const auto directory = gpu_probe_cache_directory();
+  const auto file = directory.empty() ? std::filesystem::path{}
+                                      : rate_layer_probe_file(directory, p.vendorID, p.deviceID, p.driverVersion);
+  auto probe = file.empty() ? RateLayerProbe::unavailable : cached_rate_layer_probe(file);
+  const bool cached = probe != RateLayerProbe::unavailable;
+  double milliseconds = 0;
+  if (!cached) {
+    probe = probe_rate_layers(physical, device, std::span(info.pQueueCreateInfos, info.queueCreateInfoCount),
+                              gfx::foveation::rate_texel_size(rates), &milliseconds);
+    if (!file.empty()) cache_rate_layer_probe(file, probe);
+  }
+  if (probe != RateLayerProbe::unavailable)
+    log::info("vulkan", "Shading-rate layer probe ({}): view 1 read {} on {}",
+              cached ? std::string("cached") : std::format("{:.1f} ms", milliseconds),
+              probe == RateLayerProbe::next_layer ? "the one-layer view's next layer" : "the view's own layer",
+              p.deviceName);
+  return probe == RateLayerProbe::next_layer;
+} catch (...) {
+  return false;
+}
 VkResult create_device_impl(VkPhysicalDevice physical, const VkDeviceCreateInfo* info,
                             const VkAllocationCallbacks* alloc, VkDevice* out, bool xr) {
   if (!info || !out) return VK_ERROR_INITIALIZATION_FAILED;
@@ -1919,14 +1952,16 @@ VkResult create_device_impl(VkPhysicalDevice physical, const VkDeviceCreateInfo*
     auto gdpa = reinterpret_cast<PFN_vkGetDeviceProcAddr>(loader()(device_instance(*out), "vkGetDeviceProcAddr"));
     gfx::register_pipeline_device(*out, gdpa, feedback, profile::PipelineSource::guest,
                                   gfx::async_pipeline_extensions_allowed(unique_names));
-    // Shading-rate attachments foveate every pass where the GPU has them,
-    // density-map eye passes included: their maps are dropped. A driver may
-    // read a density map on the CPU while it records the pass (Turnip does),
-    // so a map Venture rewrites on the GPU each frame is read mid-copy, and
-    // Turnip 26.2's density-map passes crashed in its viewport patching
-    // (fdm_apply_viewports) on the Steam Frame a second after the first frame.
+    // Density-map eye passes keep their maps, which Venture fills, and every
+    // other pass takes a shading-rate attachment. Where shading-rate
+    // attachments are enabled too, the maps are kept only when Venture writes
+    // them from the CPU (host image copies): a driver may read a density map on
+    // the CPU while it records the pass (Turnip does), so a map rewritten on
+    // the GPU each frame was read mid-copy.
     gfx::foveation::register_device(*out, physical, loader(), device_instance(*out), gdpa, foveated.added,
-                                    device_density_maps_enabled(*out) && !foveated.added);
+                                    device_density_maps_enabled(*out) && (!foveated.added || foveated.host_copy),
+                                    foveated.host_copy,
+                                    foveated.added && rates_read_next_layer(physical, *out, *info));
     if (trace) log::info("vulkan-device", "Guest device queue configured");
     prepare_texture_device(*out);
     if (trace) log::info("vulkan-device", "Guest device textures prepared");

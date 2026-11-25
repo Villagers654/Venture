@@ -15,8 +15,10 @@
 // On a GPU with density maps (VK_EXT_fragment_density_map: the Steam Frame's
 // Adreno, a tiler) an eye pass that reads the runtime's XR_FB_foveation_vulkan
 // density map keeps it and takes no shading-rate attachment: Venture fills that
-// map with its pattern, so the GPU renders each tile at the pattern's
-// resolution, which saves memory traffic as well as shading, as Quest does.
+// map with its pattern, one layer per eye, so the GPU renders each tile at the
+// pattern's resolution, which saves memory traffic as well as shading, as Quest
+// does. The map is written from the CPU (VK_EXT_host_image_copy) whenever no
+// pass reading it is being recorded.
 //
 // Maps are filled from the eye views the game submits each frame (xrEndFrame's
 // projection layers: rectangle, array layer and field of view) and the gaze,
@@ -50,6 +52,11 @@ struct DeviceAdditions {
   VkPhysicalDeviceFragmentShadingRateFeaturesKHR features{
       VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADING_RATE_FEATURES_KHR};
   bool added = false;
+  // On a device with density maps: VK_EXT_host_image_copy, so Venture writes
+  // the density maps it fills from the CPU (register_device's host_copy).
+  VkPhysicalDeviceHostImageCopyFeaturesEXT host_copy_features{
+      VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_HOST_IMAGE_COPY_FEATURES_EXT};
+  bool host_copy = false;
 };
 void add_to_device(PFN_vkGetInstanceProcAddr gipa, VkInstance instance, VkPhysicalDevice physical,
                    const VkDeviceCreateInfo& in, DeviceAdditions& out);
@@ -57,14 +64,30 @@ void add_to_device(PFN_vkGetInstanceProcAddr gipa, VkInstance instance, VkPhysic
 // additions (out.added), so its passes are foveated from now. `raw` resolves
 // the driver's own functions, which the intercepted commands call.
 // `native_density`: passes keep the density maps they use (attach_density_map).
-// The runtime passes false wherever shading-rate attachments are enabled: a
-// driver may read a density map on the CPU while recording (Turnip does), so
-// the GPU-uploaded pattern is not ready in time, and Turnip 26.2 crashed in
-// density-map passes on the Steam Frame.
+// `host_copy`: the device was created with host image copies (DeviceAdditions),
+// so those maps are written from the CPU between the passes that read them: a
+// driver may read a density map on the CPU while recording a pass (Turnip does,
+// at its beginning and end), so a pattern uploaded on the GPU is not there in
+// time. The runtime keeps density maps where shading-rate attachments are
+// enabled only with host copies.
+// `next_layer_rates`: the GPU reads a single-layer rate view layered, view N
+// at the view's layer plus N (the runtime's probe shows it), so a multiview
+// pass on a GPU without layered rate attachments gets each eye's own rates
+// rather than their union.
 void register_device(VkDevice device, VkPhysicalDevice physical, PFN_vkGetInstanceProcAddr gipa,
-                     VkInstance instance, PFN_vkGetDeviceProcAddr raw, bool active, bool native_density = false);
+                     VkInstance instance, PFN_vkGetDeviceProcAddr raw, bool active, bool native_density = false,
+                     bool host_copy = false, bool next_layer_rates = false);
+// The rate texel size foveation uses on a GPU with shading-rate attachments
+// (`properties` its VkPhysicalDeviceFragmentShadingRatePropertiesKHR): the
+// largest square it takes, at most 16.
+std::uint32_t rate_texel_size(const VkPhysicalDeviceFragmentShadingRatePropertiesKHR& properties);
 void release_device(VkDevice device);
 bool device_active(VkDevice device);
+// Passes on the device keep their density maps (register_device's native_density).
+bool device_native_density(VkDevice device);
+// Density maps Venture fills on the device are written from the CPU: they need
+// VK_IMAGE_USAGE_HOST_TRANSFER_BIT_EXT.
+bool density_host_writes(VkDevice device);
 // The device commands foveation intercepts (render passes, framebuffers,
 // image views, beginning passes, queue submission), or nullptr. They call the
 // driver's functions from register_device.

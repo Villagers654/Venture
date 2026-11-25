@@ -18,7 +18,9 @@
 #include <mutex>
 #include <span>
 #include <thread>
+#include <tuple>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace venture::gfx::foveation {
@@ -88,6 +90,7 @@ ScenePattern current_scene() {
 struct PassInfo {
   std::uint32_t index = 0;  // the attachment Venture added
   bool scene = false;       // stereo (multiview over two views) with depth: the game's 3D scene
+  std::uint32_t views = 1;  // the highest multiview view index plus one
 };
 
 struct Staging {
@@ -103,8 +106,18 @@ struct Device {
   VkPhysicalDeviceMemoryProperties memory{};
   VkExtent2D texel{16, 16};
   bool layered = false;  // layeredShadingRateAttachments
+  bool next_layer = false;  // a single-layer rate view is read layered (register_device's next_layer_rates)
   bool active = false;   // shading-rate attachments enabled: passes get them
   bool native_density = false;  // density maps on the GPU (attach_density_map)
+  // Density maps are written from the CPU (VK_EXT_host_image_copy) rather than
+  // uploaded on the GPU: a driver may read a density map on the CPU when it
+  // records a pass (Turnip does, at the pass's beginning and end), so the map
+  // must hold its pattern then, and the same pattern at both.
+  bool host_density = false;
+  PFN_vkCopyMemoryToImageEXT vkCopyMemoryToImage = nullptr;
+  PFN_vkCmdEndRenderPass vkCmdEndRenderPass = nullptr;
+  PFN_vkCmdEndRenderPass2 vkCmdEndRenderPass2 = nullptr;
+  PFN_vkCmdEndRendering vkCmdEndRendering = nullptr;
 #define VFN(name) PFN_##name name = nullptr;
   VFN(vkCreateRenderPass) VFN(vkCreateRenderPass2) VFN(vkDestroyRenderPass) VFN(vkCreateFramebuffer)
   VFN(vkCreateImageView) VFN(vkDestroyImageView) VFN(vkCmdBeginRenderPass) VFN(vkCmdBeginRenderPass2)
@@ -117,8 +130,12 @@ struct Device {
   std::unordered_map<VkRenderPass, PassInfo> passes;
   std::unordered_map<VkImageView, ViewEntry> views;        // views of eye images
   std::unordered_map<VkImage, EyeEntry> eyes;
-  std::unordered_map<VkFramebuffer, VkExtent2D> imageless;  // the rate image size each declares
-  std::map<std::pair<std::uint32_t, std::uint32_t>, std::unique_ptr<Image>> full_rate;  // by extent in texels
+  struct Declared {
+    std::uint32_t width = 0, height = 0, layers = 1;
+  };
+  std::unordered_map<VkFramebuffer, Declared> imageless;  // the rate image each declares, and its layers' reach
+  // By extent in texels and layer count.
+  std::map<std::tuple<std::uint32_t, std::uint32_t, std::uint32_t>, std::unique_ptr<Image>> full_rate;
   std::map<std::pair<std::uint32_t, std::uint32_t>, std::unique_ptr<MapState>> scene_maps;  // by extent in texels
   std::vector<std::unique_ptr<Image>> retired;  // eye maps of destroyed swapchains, freed with the device
   // Work recorded into the next command buffer that begins a pass: images to
@@ -128,6 +145,12 @@ struct Device {
   std::vector<Image*> clears;
   std::vector<MapState*> uploads;
   std::vector<Swapchain*> density_uploads;
+  // Host-written density maps: the passes that read one, the command buffers
+  // recording such a pass now (and how many), and maps waiting until none is.
+  std::unordered_set<VkRenderPass> density_passes;
+  std::unordered_map<VkCommandBuffer, std::uint32_t> density_recording;
+  std::vector<Swapchain*> density_writes;
+  std::uint32_t density_waits = 0;  // frames the waiting maps have waited
   std::atomic<bool> pending{false};
   bool seen_eye = false, seen_scene = false;  // the first pass of each kind is logged
   static constexpr std::size_t kStagingSlots = 16;
@@ -226,10 +249,19 @@ VkImageView image_view(Device& d, Image& image, std::uint32_t first, std::uint32
   }
   return view;
 }
-// A full-rate map of exactly this extent in texels (imageless framebuffers declare it).
-VkImageView full_rate_view(Device& d, std::uint32_t width, std::uint32_t height) {
-  auto& image = d.full_rate[{width, height}];
-  if (!image) image = create_image(d, width, height, 1);
+// A full-rate map of exactly this extent in texels (imageless framebuffers
+// declare it), for a pass whose layers or views reach `layers` deep.
+//
+// Every rate view a pass gets is one layer unless the GPU takes layered rate
+// images (layeredShadingRateAttachments), but a GPU may still read it layered,
+// view or layer N at the view's layer plus N: Turnip on the Steam Frame's
+// Adreno programs its rate image that way for every pass. So the layers after a
+// single-layer view hold the same rates as the view, as many as the pass
+// reaches, and such a GPU reads correct rates rather than past the image.
+VkImageView full_rate_view(Device& d, std::uint32_t width, std::uint32_t height, std::uint32_t layers) {
+  layers = std::max(1u, layers);
+  auto& image = d.full_rate[{width, height, layers}];
+  if (!image) image = create_image(d, width, height, layers);
   return image ? image_view(d, *image, 0, 1) : VK_NULL_HANDLE;
 }
 std::uint32_t texels(std::uint32_t pixels, std::uint32_t texel) { return (pixels + texel - 1) / texel; }
@@ -241,13 +273,16 @@ void note_pass(Device& d, bool eye, std::uint32_t width, std::uint32_t height, c
   log::info("gfx", "Foveation: first {} pass foveated ({}x{}, {})", eye ? "eye" : "scene", width, height, how);
 }
 
-// Fills a scene map (two eye layers and their union) from the latest eye
-// views: the target covers each eye's whole view, as the game's stereo
-// targets do. With the device's mutex held. True when its contents changed.
+// Layers of a scene map: two eye layers, then their union twice (a GPU may
+// read a single-layer view's next layer for view 1: full_rate_view).
+constexpr std::uint32_t kSceneLayers = 4;
+// Fills a scene map from the latest eye views: the target covers each eye's
+// whole view, as the game's stereo targets do. With the device's mutex held.
+// True when its contents changed.
 void fill_scene_bytes(std::span<std::uint8_t> bytes, std::uint32_t w, std::uint32_t h, const ScenePattern& p) {
   const auto layer = std::size_t(w) * h;
   std::fill(bytes.begin(), bytes.end(), std::uint8_t(0));
-  if (!p.valid || bytes.size() < 3 * layer) return;
+  if (!p.valid || bytes.size() < kSceneLayers * layer) return;
   for (std::uint32_t eye = 0; eye < 2; ++eye) {
     const RateField field(p.pattern, p.fov[eye], p.centre[eye]);
     auto* out = bytes.data() + eye * layer;
@@ -258,6 +293,7 @@ void fill_scene_bytes(std::span<std::uint8_t> bytes, std::uint32_t w, std::uint3
   }
   auto* combined = bytes.data() + 2 * layer;
   for (std::size_t i = 0; i < layer; ++i) combined[i] = finer_rate(bytes[i], bytes[layer + i]);
+  std::copy_n(combined, layer, combined + layer);
 }
 bool fill_scene_map(MapState& m, const ScenePattern& p) {
   if (!m.map || p.signature == m.signature) return false;
@@ -276,15 +312,16 @@ VkImageView scene_map_view(Device& d, std::uint32_t width, std::uint32_t height,
   auto& m = d.scene_maps[{width, height}];
   if (!m) {
     m = std::make_unique<MapState>();
-    m->map = create_image(d, width, height, 3);
+    m->map = create_image(d, width, height, kSceneLayers);
     if (!m->map) {
       m.reset();
       return VK_NULL_HANDLE;
     }
-    m->bytes.assign(std::size_t(width) * height * 3, 0);
+    m->bytes.assign(std::size_t(width) * height * kSceneLayers, 0);
     if (fill_scene_map(*m, current_scene())) queue_upload(d, *m);
   }
-  if (single_layer || !d.layered) return image_view(d, *m->map, 2, 1);
+  // A GPU that reads a one-layer view layered takes the eye layers from the first.
+  if (single_layer || !d.layered) return image_view(d, *m->map, d.next_layer ? 0 : 2, 1);
   return image_view(d, *m->map, 0, 2);
 }
 
@@ -298,9 +335,9 @@ VkImageView eye_map_view(Device& d, const EyeEntry& entry, std::uint32_t base, s
   if (!s.map || texels(width, d.texel.width) > s.map->width || texels(height, d.texel.height) > s.map->height)
     return VK_NULL_HANDLE;
   const auto first = entry.first_layer + base;
-  const auto combined = s.layers;  // the map's last layer: the union of the eyes' full-rate regions
+  const auto combined = s.layers;  // the first union layer (the eye layers' finest rates)
   if (multiview_views > 1 || count > 1) {
-    if (single_layer || !d.layered) return image_view(d, *s.map, combined, 1);
+    if (single_layer || !d.layered) return image_view(d, *s.map, d.next_layer ? first : combined, 1);
     return image_view(d, *s.map, first, std::max(count, multiview_views));
   }
   return image_view(d, *s.map, first, 1);
@@ -470,6 +507,12 @@ bool scene_pass(const Pass2& p) {
       return true;
   return false;
 }
+// How deep the pass's multiview views reach (view_reach over its subpasses).
+std::uint32_t pass_reach(const Pass2& p) {
+  std::uint32_t mask = 0;
+  for (const auto& sub : p.subpasses) mask |= sub.viewMask;
+  return std::max(1u, std::uint32_t(std::bit_width(mask)));
+}
 void finish_pass2(Pass2& p) {
   p.info.attachmentCount = std::uint32_t(p.attachments.size());
   p.info.pAttachments = p.attachments.data();
@@ -484,10 +527,12 @@ void finish_pass2(Pass2& p) {
 // Destroyed passes and views stay in the maps (their destruction may be
 // deferred by other layers); a new one that reuses a handle replaces or
 // removes the stale entry.
-VkResult forget_pass(Device& d, VkResult result, const VkRenderPass* out) {
+VkResult forget_pass(Device& d, VkResult result, const VkRenderPass* out, bool density = false) {
   if (result == VK_SUCCESS) {
     std::lock_guard lock(d.mutex);
     d.passes.erase(*out);
+    if (density) d.density_passes.insert(*out);
+    else d.density_passes.erase(*out);
   }
   return result;
 }
@@ -498,13 +543,17 @@ VkResult VKAPI_CALL create_render_pass(VkDevice device, const VkRenderPassCreate
   Pass2 p;
   std::optional<std::uint32_t> index;
   if (d->active && d->vkCreateRenderPass2 && to_pass2(*info, p, d->native_density)) index = add_rate_attachment(*d, p);
-  if (!index) return forget_pass(*d, d->vkCreateRenderPass(device, info, alloc, out), out);
+  if (!index)
+    return forget_pass(*d, d->vkCreateRenderPass(device, info, alloc, out), out,
+                       d->native_density && uses_density(info->pNext));
   const bool scene = scene_pass(p);
+  const auto views = pass_reach(p);
   finish_pass2(p);
   const auto result = d->vkCreateRenderPass2(device, &p.info, alloc, out);
   if (result == VK_SUCCESS) {
     std::lock_guard lock(d->mutex);
-    d->passes[*out] = {*index, scene};
+    d->passes[*out] = {*index, scene, views};
+    d->density_passes.erase(*out);
   }
   return result;
 }
@@ -513,6 +562,8 @@ VkResult VKAPI_CALL create_render_pass2(VkDevice device, const VkRenderPassCreat
   const auto d = find(device);
   if (!d) return fallback<PFN_vkCreateRenderPass2>("vkCreateRenderPass2")(device, info, alloc, out);
   if (!d->active) return d->vkCreateRenderPass2(device, info, alloc, out);
+  if (d->native_density && uses_density(info->pNext))  // the pass foveates with its density map
+    return forget_pass(*d, d->vkCreateRenderPass2(device, info, alloc, out), out, true);
   Pass2 p;
   p.info = *info;
   p.info.pNext = density_kept_or_dropped(*d, info->pNext);
@@ -521,13 +572,17 @@ VkResult VKAPI_CALL create_render_pass2(VkDevice device, const VkRenderPassCreat
   p.dependencies.assign(info->pDependencies, info->pDependencies + info->dependencyCount);
   p.correlation.assign(info->pCorrelatedViewMasks, info->pCorrelatedViewMasks + info->correlatedViewMaskCount);
   const auto index = add_rate_attachment(*d, p);
-  if (!index) return forget_pass(*d, d->vkCreateRenderPass2(device, info, alloc, out), out);
+  if (!index)
+    return forget_pass(*d, d->vkCreateRenderPass2(device, info, alloc, out), out,
+                       d->native_density && uses_density(info->pNext));
   const bool scene = scene_pass(p);
+  const auto views = pass_reach(p);
   finish_pass2(p);
   const auto result = d->vkCreateRenderPass2(device, &p.info, alloc, out);
   if (result == VK_SUCCESS) {
     std::lock_guard lock(d->mutex);
-    d->passes[*out] = {*index, scene};
+    d->passes[*out] = {*index, scene, views};
+    d->density_passes.erase(*out);
   }
   return result;
 }
@@ -577,6 +632,7 @@ VkResult VKAPI_CALL create_framebuffer(VkDevice device, const VkFramebufferCreat
     return d->vkCreateFramebuffer(device, info, alloc, out);
   }
   const auto w = texels(info->width, d->texel.width), h = texels(info->height, d->texel.height);
+  const auto reach = std::max(info->layers, pass->second.views);  // the rate image's layers a GPU may read
   auto copy = *info;
   std::vector<VkImageView> views;
   std::vector<VkFramebufferAttachmentImageInfo> images;
@@ -614,7 +670,7 @@ VkResult VKAPI_CALL create_framebuffer(VkDevice device, const VkFramebufferCreat
     const auto result = d->vkCreateFramebuffer(device, &copy, alloc, out);
     if (result == VK_SUCCESS) {
       lock.lock();
-      d->imageless[*out] = {w, h};
+      d->imageless[*out] = {w, h, reach};
     }
     return result;
   } else {
@@ -628,7 +684,7 @@ VkResult VKAPI_CALL create_framebuffer(VkDevice device, const VkFramebufferCreat
       rate = scene_map_view(*d, w, h, false);
       if (rate) note_pass(*d, false, info->width, info->height, "framebuffer");
     }
-    if (!rate) rate = full_rate_view(*d, w, h);
+    if (!rate) rate = full_rate_view(*d, w, h, reach);
     if (!rate) {
       lock.unlock();
       log::warn("gfx", "Foveation: no shading-rate image for a {}x{} framebuffer", info->width, info->height);
@@ -678,6 +734,49 @@ Staging* staging_slot(Device& d, VkDeviceSize size) {
   slot.size = ci.size;
   return &slot;
 }
+// Writes a density map's pattern from the CPU. With the device's mutex held.
+void write_density(Device& d, Swapchain& s) {
+  if (!s.density || s.density_bytes.empty()) return;
+  VkMemoryToImageCopyEXT region{VK_STRUCTURE_TYPE_MEMORY_TO_IMAGE_COPY_EXT};
+  region.pHostPointer = s.density_bytes.data();
+  region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, s.density_layers};
+  region.imageExtent = {s.density_width, s.density_height, 1};
+  VkCopyMemoryToImageInfoEXT copy{VK_STRUCTURE_TYPE_COPY_MEMORY_TO_IMAGE_INFO_EXT};
+  copy.dstImage = s.density;
+  copy.dstImageLayout = s.density_layout;
+  copy.regionCount = 1;
+  copy.pRegions = &region;
+  if (const auto result = d.vkCopyMemoryToImage(d.device, &copy); result != VK_SUCCESS) {
+    static std::once_flag reported;
+    std::call_once(reported, [&] { log::warn("gfx", "Foveation: writing a density map failed ({})", int(result)); });
+  }
+}
+// Writes the waiting density maps when no pass that reads one is being
+// recorded, so every pass reads one pattern from its beginning to its end.
+// With the device's mutex held.
+void write_waiting_densities(Device& d) {
+  if (d.density_writes.empty() || !d.density_recording.empty()) return;
+  for (auto* s : d.density_writes) write_density(d, *s);
+  d.density_writes.clear();
+  d.density_waits = 0;
+}
+// A pass that reads a host-written density map begins or ends recording.
+void density_pass_begins(Device& d, VkCommandBuffer command) {
+  std::lock_guard lock(d.mutex);
+  write_waiting_densities(d);
+  ++d.density_recording[command];
+}
+void density_pass_ends(Device& d, VkCommandBuffer command) {
+  std::lock_guard lock(d.mutex);
+  const auto it = d.density_recording.find(command);
+  if (it == d.density_recording.end()) return;
+  if (--it->second == 0) d.density_recording.erase(it);
+  write_waiting_densities(d);
+}
+bool reads_host_density(const Device& d, VkRenderPass pass) {
+  return d.host_density && d.density_passes.contains(pass);
+}
+
 // Records the density maps with new contents (attach_density_map) into
 // `command`, under d.mutex. Each upload rewrites the whole image, so whatever
 // layout the game left it in is discarded (UNDEFINED) and it ends in the
@@ -844,7 +943,7 @@ bool add_begin_view(Device& d, const VkRenderPassBeginInfo* info, VkRenderPassBe
     if (rate) note_pass(d, false, width, height, "imageless framebuffer");
   }
   // Imageless views must match the declared size exactly.
-  if (!rate) rate = full_rate_view(d, declared->second.width, declared->second.height);
+  if (!rate) rate = full_rate_view(d, declared->second.width, declared->second.height, declared->second.layers);
   if (!rate) return false;
   views.push_back(rate);
   attachments = *begin;
@@ -865,7 +964,31 @@ void VKAPI_CALL begin_render_pass(VkCommandBuffer command, const VkRenderPassBeg
   // The view first: a new full-rate image is cleared by record_pending.
   const bool added = add_begin_view(*d, info, copy, attachments, views);
   record_pending(*d, command);
+  bool density;
+  {
+    std::lock_guard lock(d->mutex);
+    density = reads_host_density(*d, info->renderPass);
+  }
+  if (density) density_pass_begins(*d, command);
   d->vkCmdBeginRenderPass(command, added ? &copy : info, contents);
+}
+void VKAPI_CALL end_render_pass(VkCommandBuffer command) {
+  const auto d = find(command);
+  if (!d) return fallback<PFN_vkCmdEndRenderPass>("vkCmdEndRenderPass")(command);
+  d->vkCmdEndRenderPass(command);
+  if (d->host_density) density_pass_ends(*d, command);
+}
+void VKAPI_CALL end_render_pass2(VkCommandBuffer command, const VkSubpassEndInfo* info) {
+  const auto d = find(command);
+  if (!d) return fallback<PFN_vkCmdEndRenderPass2>("vkCmdEndRenderPass2")(command, info);
+  d->vkCmdEndRenderPass2(command, info);
+  if (d->host_density) density_pass_ends(*d, command);
+}
+void VKAPI_CALL end_rendering(VkCommandBuffer command) {
+  const auto d = find(command);
+  if (!d) return fallback<PFN_vkCmdEndRendering>("vkCmdEndRendering")(command);
+  d->vkCmdEndRendering(command);
+  if (d->host_density) density_pass_ends(*d, command);
 }
 void VKAPI_CALL begin_render_pass2(VkCommandBuffer command, const VkRenderPassBeginInfo* info,
                                    const VkSubpassBeginInfo* sub) {
@@ -877,6 +1000,12 @@ void VKAPI_CALL begin_render_pass2(VkCommandBuffer command, const VkRenderPassBe
   // The view first: a new full-rate image is cleared by record_pending.
   const bool added = add_begin_view(*d, info, copy, attachments, views);
   record_pending(*d, command);
+  bool density;
+  {
+    std::lock_guard lock(d->mutex);
+    density = reads_host_density(*d, info->renderPass);
+  }
+  if (density) density_pass_begins(*d, command);
   d->vkCmdBeginRenderPass2(command, added ? &copy : info, sub);
 }
 // Dynamic rendering into an eye image gets its map; other rendering none.
@@ -924,6 +1053,7 @@ void VKAPI_CALL begin_rendering(VkCommandBuffer command, const VkRenderingInfo* 
   // Pending uploads (a map created just now among them) go first. Nothing may
   // come between a suspended render pass instance and its resumption.
   if (!(info->flags & VK_RENDERING_RESUMING_BIT)) record_pending(*d, command);
+  if (d->host_density && d->native_density && uses_density(info->pNext)) density_pass_begins(*d, command);
   d->vkCmdBeginRendering(command, &copy);
 }
 
@@ -974,28 +1104,70 @@ void add_to_device(PFN_vkGetInstanceProcAddr gipa, VkInstance instance, VkPhysic
     log::info("gfx", "Foveation: the GPU has no shading-rate attachments; rendering stays at full resolution");
     return;
   }
+  bool own_rates = false;
   for (auto* p = static_cast<const VkBaseInStructure*>(in.pNext); p; p = p->pNext)
     if (p->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADING_RATE_FEATURES_KHR) {
       // The device asks for shading rates itself; foveate only if it enables attachments.
       out.added = reinterpret_cast<const VkPhysicalDeviceFragmentShadingRateFeaturesKHR*>(p)
                       ->attachmentFragmentShadingRate;
-      return;
+      own_rates = true;
+      break;
     }
+  if (own_rates && !out.added) return;
   out.extensions.assign(in.ppEnabledExtensionNames, in.ppEnabledExtensionNames + in.enabledExtensionCount);
-  if (std::none_of(out.extensions.begin(), out.extensions.end(), [](const char* e) {
-        return std::string_view(e) == VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME;
-      }))
-    out.extensions.push_back(VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME);
-  out.features = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADING_RATE_FEATURES_KHR, const_cast<void*>(in.pNext)};
-  out.features.attachmentFragmentShadingRate = VK_TRUE;
-  out.info.pNext = &out.features;
+  const auto enabled = [&](std::string_view name) {
+    return std::any_of(out.extensions.begin(), out.extensions.end(), [&](const char* e) { return name == e; });
+  };
+  if (!own_rates) {
+    if (!enabled(VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME))
+      out.extensions.push_back(VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME);
+    out.features = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADING_RATE_FEATURES_KHR, const_cast<void*>(in.pNext)};
+    out.features.attachmentFragmentShadingRate = VK_TRUE;
+    out.info.pNext = &out.features;
+    out.added = true;
+  }
+  // A device with density maps gets host image copies, so the density maps
+  // Venture fills are written from the CPU (register_device).
+  if (enabled(VK_EXT_FRAGMENT_DENSITY_MAP_EXTENSION_NAME) && has(VK_EXT_HOST_IMAGE_COPY_EXTENSION_NAME)) {
+    bool listed = false;
+    for (auto* p = static_cast<const VkBaseInStructure*>(in.pNext); p; p = p->pNext)
+      if (p->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_HOST_IMAGE_COPY_FEATURES_EXT) {
+        listed = true;
+        out.host_copy = reinterpret_cast<const VkPhysicalDeviceHostImageCopyFeaturesEXT*>(p)->hostImageCopy;
+      } else if (p->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_4_FEATURES) {
+        listed = true;
+        out.host_copy = reinterpret_cast<const VkPhysicalDeviceVulkan14Features*>(p)->hostImageCopy;
+      }
+    if (!listed) {
+      VkPhysicalDeviceHostImageCopyFeaturesEXT supported_copy{
+          VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_HOST_IMAGE_COPY_FEATURES_EXT};
+      VkPhysicalDeviceFeatures2 query{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, &supported_copy};
+      features2(physical, &query);
+      if (supported_copy.hostImageCopy) {
+        out.host_copy_features.pNext = const_cast<void*>(out.info.pNext);
+        out.host_copy_features.hostImageCopy = VK_TRUE;
+        out.info.pNext = &out.host_copy_features;
+        out.host_copy = true;
+      }
+    }
+    if (out.host_copy && !enabled(VK_EXT_HOST_IMAGE_COPY_EXTENSION_NAME))
+      out.extensions.push_back(VK_EXT_HOST_IMAGE_COPY_EXTENSION_NAME);
+  }
   out.info.enabledExtensionCount = std::uint32_t(out.extensions.size());
   out.info.ppEnabledExtensionNames = out.extensions.data();
-  out.added = true;
+}
+
+std::uint32_t rate_texel_size(const VkPhysicalDeviceFragmentShadingRatePropertiesKHR& rates) {
+  // The largest square texel the GPU takes, at most 16: the smallest map.
+  auto size = std::min({rates.maxFragmentShadingRateAttachmentTexelSize.width,
+                        rates.maxFragmentShadingRateAttachmentTexelSize.height, 16u});
+  return std::max({size, rates.minFragmentShadingRateAttachmentTexelSize.width,
+                   rates.minFragmentShadingRateAttachmentTexelSize.height, 1u});
 }
 
 void register_device(VkDevice device, VkPhysicalDevice physical, PFN_vkGetInstanceProcAddr gipa,
-                     VkInstance instance, PFN_vkGetDeviceProcAddr raw, bool active, bool native_density) {
+                     VkInstance instance, PFN_vkGetDeviceProcAddr raw, bool active, bool native_density,
+                     bool host_copy, bool next_layer_rates) {
   if (!wanted() || !device || !raw || !gipa) return;
   auto d = std::make_shared<Device>();
   d->device = device;
@@ -1016,6 +1188,41 @@ void register_device(VkDevice device, VkPhysicalDevice physical, PFN_vkGetInstan
     d->vkCreateRenderPass2 = reinterpret_cast<PFN_vkCreateRenderPass2>(raw(device, "vkCreateRenderPass2KHR"));
   if (!d->vkCmdBeginRenderPass2)
     d->vkCmdBeginRenderPass2 = reinterpret_cast<PFN_vkCmdBeginRenderPass2>(raw(device, "vkCmdBeginRenderPass2KHR"));
+  d->vkCmdEndRenderPass = reinterpret_cast<PFN_vkCmdEndRenderPass>(raw(device, "vkCmdEndRenderPass"));
+  d->vkCmdEndRenderPass2 = reinterpret_cast<PFN_vkCmdEndRenderPass2>(raw(device, "vkCmdEndRenderPass2"));
+  if (!d->vkCmdEndRenderPass2)
+    d->vkCmdEndRenderPass2 = reinterpret_cast<PFN_vkCmdEndRenderPass2>(raw(device, "vkCmdEndRenderPass2KHR"));
+  d->vkCmdEndRendering = reinterpret_cast<PFN_vkCmdEndRendering>(raw(device, "vkCmdEndRendering"));
+  if (!d->vkCmdEndRendering)
+    d->vkCmdEndRendering = reinterpret_cast<PFN_vkCmdEndRendering>(raw(device, "vkCmdEndRenderingKHR"));
+  if (native_density && host_copy) {
+    d->vkCopyMemoryToImage = reinterpret_cast<PFN_vkCopyMemoryToImageEXT>(raw(device, "vkCopyMemoryToImageEXT"));
+    if (!d->vkCopyMemoryToImage)
+      d->vkCopyMemoryToImage = reinterpret_cast<PFN_vkCopyMemoryToImageEXT>(raw(device, "vkCopyMemoryToImage"));
+    // The density map's layout and format must take host copies.
+    VkPhysicalDeviceHostImageCopyPropertiesEXT copies{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_HOST_IMAGE_COPY_PROPERTIES_EXT};
+    VkPhysicalDeviceProperties2 properties{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, &copies};
+    const auto properties2 =
+        reinterpret_cast<PFN_vkGetPhysicalDeviceProperties2>(gipa(instance, "vkGetPhysicalDeviceProperties2"));
+    bool layout = false;
+    if (properties2) {
+      properties2(physical, &properties);
+      std::vector<VkImageLayout> layouts(copies.copyDstLayoutCount);
+      copies.pCopySrcLayouts = nullptr;
+      copies.copySrcLayoutCount = 0;
+      copies.pCopyDstLayouts = layouts.data();
+      properties2(physical, &properties);
+      layouts.resize(std::min<std::size_t>(layouts.size(), copies.copyDstLayoutCount));
+      layout = std::find(layouts.begin(), layouts.end(), VK_IMAGE_LAYOUT_FRAGMENT_DENSITY_MAP_OPTIMAL_EXT) != layouts.end();
+    }
+    VkFormatProperties3 format{VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_3};
+    VkFormatProperties2 format2{VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_2, &format};
+    const auto format_properties = reinterpret_cast<PFN_vkGetPhysicalDeviceFormatProperties2>(
+        gipa(instance, "vkGetPhysicalDeviceFormatProperties2"));
+    if (format_properties) format_properties(physical, VK_FORMAT_R8G8_UNORM, &format2);
+    d->host_density = d->vkCopyMemoryToImage && d->vkCmdEndRenderPass && layout &&
+                      (format.optimalTilingFeatures & VK_FORMAT_FEATURE_2_HOST_IMAGE_TRANSFER_BIT_EXT);
+  }
   reinterpret_cast<PFN_vkGetPhysicalDeviceMemoryProperties>(gipa(instance, "vkGetPhysicalDeviceMemoryProperties"))(
       physical, &d->memory);
   if (active) {
@@ -1024,16 +1231,16 @@ void register_device(VkDevice device, VkPhysicalDevice physical, PFN_vkGetInstan
     VkPhysicalDeviceProperties2 properties{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, &rates};
     reinterpret_cast<PFN_vkGetPhysicalDeviceProperties2>(gipa(instance, "vkGetPhysicalDeviceProperties2"))(
         physical, &properties);
-    // The largest square texel the GPU takes, at most 16: the smallest map.
-    auto size = std::min({rates.maxFragmentShadingRateAttachmentTexelSize.width,
-                          rates.maxFragmentShadingRateAttachmentTexelSize.height, 16u});
-    size = std::max({size, rates.minFragmentShadingRateAttachmentTexelSize.width,
-                     rates.minFragmentShadingRateAttachmentTexelSize.height, 1u});
+    const auto size = rate_texel_size(rates);
     d->texel = {size, size};
     d->layered = rates.layeredShadingRateAttachments;
+    d->next_layer = !d->layered && next_layer_rates;
     log::info("gfx", "Foveation: {} with shading-rate attachments ({}x{} pixels per texel{}){}",
-              eye_tracked() ? "eye-tracked" : "fixed", size, size, d->layered ? ", per-eye layers" : "",
-              native_density ? "; eye passes with density maps keep them, filled with Venture's pattern" : "");
+              eye_tracked() ? "eye-tracked" : "fixed", size, size,
+              d->layered ? ", per-eye layers" : d->next_layer ? ", per-eye layers read after a one-layer view" : "",
+              !native_density   ? ""
+              : d->host_density ? "; eye passes with density maps keep them, written with Venture's pattern on the CPU"
+                                : "; eye passes with density maps keep them, filled with Venture's pattern");
   }
   std::lock_guard lock(registry_mutex);
   fallback_gipa = gipa;
@@ -1077,6 +1284,14 @@ bool device_active(VkDevice device) {
   const auto d = find(device);
   return d && d->active;
 }
+bool device_native_density(VkDevice device) {
+  const auto d = find(device);
+  return d && d->native_density;
+}
+bool density_host_writes(VkDevice device) {
+  const auto d = find(device);
+  return d && d->host_density;
+}
 
 PFN_vkVoidFunction proc(std::string_view name) {
   if (!wanted()) return nullptr;
@@ -1087,6 +1302,9 @@ PFN_vkVoidFunction proc(std::string_view name) {
   if (name == "vkCmdBeginRenderPass") return fn(begin_render_pass);
   if (name == "vkCmdBeginRenderPass2" || name == "vkCmdBeginRenderPass2KHR") return fn(begin_render_pass2);
   if (name == "vkCmdBeginRendering" || name == "vkCmdBeginRenderingKHR") return fn(begin_rendering);
+  if (name == "vkCmdEndRenderPass") return fn(end_render_pass);
+  if (name == "vkCmdEndRenderPass2" || name == "vkCmdEndRenderPass2KHR") return fn(end_render_pass2);
+  if (name == "vkCmdEndRendering" || name == "vkCmdEndRenderingKHR") return fn(end_rendering);
   return nullptr;
 }
 
@@ -1097,6 +1315,11 @@ void patch_pipelines(VkDevice device, std::span<VkGraphicsPipelineCreateInfo> in
   storage.states.reserve(infos.size());
   for (auto& info : infos) {
     bool skip = false;
+    if (info.renderPass != VK_NULL_HANDLE) {
+      // A pass that foveates with its density map has no shading-rate attachment.
+      std::lock_guard lock(d->mutex);
+      skip = d->density_passes.contains(info.renderPass);
+    }
     for (auto* p = static_cast<const VkBaseInStructure*>(info.pNext); p && !skip; p = p->pNext)
       skip = p->sType == VK_STRUCTURE_TYPE_PIPELINE_FRAGMENT_SHADING_RATE_STATE_CREATE_INFO_KHR ||
              p->sType == VK_STRUCTURE_TYPE_PIPELINE_CREATE_FLAGS_2_CREATE_INFO_KHR;
@@ -1139,9 +1362,10 @@ void register_eye_swapchain(VkDevice device, const void* swapchain, std::span<co
   s->images.assign(images.begin(), images.end());
   {
     std::lock_guard lock(d->mutex);
-    // One layer per eye layer plus the union of them (multiview passes on a
-    // GPU without per-layer rate images).
-    s->map = create_image(*d, texels(width, d->texel.width), texels(height, d->texel.height), s->layers + 1);
+    // One layer per eye layer, then their union as many times (multiview
+    // passes on a GPU without per-layer rate images take a single-layer view
+    // of the first, which a GPU may still read layered: full_rate_view).
+    s->map = create_image(*d, texels(width, d->texel.width), texels(height, d->texel.height), 2 * s->layers);
     if (!s->map) {
       log::warn("gfx", "Foveation: no map for a {}x{} eye swapchain", width, height);
       return;
@@ -1170,6 +1394,7 @@ void forget_eye_swapchain(VkDevice device, const void* swapchain) {
     v = d->eyes.contains(v->second.image) ? std::next(v) : d->views.erase(v);
   std::erase(d->uploads, s.get());
   std::erase(d->density_uploads, s.get());
+  std::erase(d->density_writes, s.get());
   if (s->map) {
     std::erase(d->clears, s->map.get());
     d->retired.push_back(std::move(s->map));  // command buffers in flight may still read it
@@ -1218,12 +1443,12 @@ std::string signature_of(const Pattern& pattern, std::span<const EyeView> views)
   return signature;
 }
 // Fills an eye swapchain's map contents (`layers` eye layers, then their
-// union) for `views`.
+// union `layers` times) for `views`.
 void fill_eye_bytes(std::span<std::uint8_t> bytes, std::uint32_t w, std::uint32_t h, std::uint32_t layers,
                     VkExtent2D texel, bool bottom_up, const Pattern& pattern, std::span<const EyeView> views) {
   const auto layer_size = std::size_t(w) * h;
   std::fill(bytes.begin(), bytes.end(), std::uint8_t(0));
-  if (bytes.size() < layer_size * (layers + 1)) return;
+  if (bytes.size() < layer_size * layers * 2) return;
   std::vector<bool> drawn(layer_size * layers, false);
   for (const auto& v : views) {
     if (v.layer >= layers || !v.width || !v.height) continue;
@@ -1253,6 +1478,7 @@ void fill_eye_bytes(std::span<std::uint8_t> bytes, std::uint32_t w, std::uint32_
     for (std::uint32_t l = 1; l < layers; ++l) finest = finer_rate(finest, bytes[l * layer_size + i]);
     combined[i] = finest;
   }
+  for (std::uint32_t l = 1; l < layers; ++l) std::copy_n(combined, layer_size, combined + l * layer_size);
   static std::once_flag reported;
   std::call_once(reported, [&] {
     log::info("gfx", "Foveation: {} level {}, {:.0f}% of an eye's fragments shaded",
@@ -1416,6 +1642,26 @@ void update_scene_views(const EyeView& left, const EyeView& right, Level request
   refills.scene();
 }
 
+// Fills an eye swapchain's density map from the views it shows, each over its
+// own rectangle of the eye image as the shading-rate maps are (fill_eye_bytes).
+// A density texel covers a power-of-two square of pixels, as a GPU sizes it
+// from the map and framebuffer sizes. With the device's mutex held.
+void fill_eye_densities(Swapchain& s, const Pattern& pattern, std::span<const EyeView> views) {
+  const auto w = s.density_width, h = s.density_height, layers = s.density_layers;
+  const auto texel_of = [](std::uint32_t pixels, std::uint32_t texels) {
+    const auto ratio = (pixels + texels - 1) / std::max(1u, texels);
+    return std::max(1u, std::bit_ceil(ratio));
+  };
+  const VkExtent2D texel{texel_of(s.width, w), texel_of(s.height, h)};
+  const auto layer_size = std::size_t(w) * h;
+  std::vector<std::uint8_t> rates(layer_size * layers * 2);
+  fill_eye_bytes(rates, w, h, layers, texel, s.bottom_up, pattern, views);
+  for (std::size_t i = 0; i < layer_size * layers && 2 * i + 1 < s.density_bytes.size(); ++i) {
+    s.density_bytes[2 * i] = density_of(rates[i] >> 2);
+    s.density_bytes[2 * i + 1] = density_of(rates[i] & 3);
+  }
+}
+
 void update_eye_views(const void* swapchain, std::span<const EyeView> views, Level requested,
                       float vertical_offset_degrees, bool gaze) {
   if (views.empty()) return;
@@ -1429,16 +1675,26 @@ void update_eye_views(const void* swapchain, std::span<const EyeView> views, Lev
   std::lock_guard lock(d.mutex);
   if (s.density && signature != s.density_signature) {
     // A few thousand texels: filled here, every time the views or gaze move.
-    const auto layer_bytes = std::size_t(s.density_width) * s.density_height * 2;
-    std::fill(s.density_bytes.begin(), s.density_bytes.end(), std::uint8_t(255));
-    for (const auto& v : views)
-      if (v.layer < s.density_layers)
-        fill_densities(std::span(s.density_bytes).subspan(v.layer * layer_bytes, layer_bytes), s.density_width,
-                       s.density_height, pattern, v.fov, v.centre);
+    fill_eye_densities(s, pattern, views);
     s.density_signature = signature;
-    if (std::find(d.density_uploads.begin(), d.density_uploads.end(), &s) == d.density_uploads.end())
-      d.density_uploads.push_back(&s);
-    d.pending = true;
+    if (d.host_density) {
+      if (std::find(d.density_writes.begin(), d.density_writes.end(), &s) == d.density_writes.end())
+        d.density_writes.push_back(&s);
+    } else {
+      if (std::find(d.density_uploads.begin(), d.density_uploads.end(), &s) == d.density_uploads.end())
+        d.density_uploads.push_back(&s);
+      d.pending = true;
+    }
+  }
+  if (d.host_density && !d.density_writes.empty()) {
+    write_waiting_densities(d);
+    // A pass counted as recording that never ended (its command buffer reset
+    // or freed mid-pass) would hold the maps back for good: after a second of
+    // frames they are written anyway.
+    if (!d.density_writes.empty() && ++d.density_waits > 90) {
+      d.density_recording.clear();
+      write_waiting_densities(d);
+    }
   }
   if (!s.map) return;
   if (signature != s.signature) {
@@ -1456,7 +1712,7 @@ void update_eye_views(const void* swapchain, std::span<const EyeView> views, Lev
   // Uploaded again now and then in case a command buffer carrying an upload
   // was never submitted.
   if (++s.frames % 600 == 0 || s.bytes != s.uploaded) queue_upload(d, s);
-  if (s.density && s.frames % 600 == 0 &&
+  if (s.density && !d.host_density && s.frames % 600 == 0 &&
       std::find(d.density_uploads.begin(), d.density_uploads.end(), &s) == d.density_uploads.end()) {
     d.density_uploads.push_back(&s);
     d.pending = true;

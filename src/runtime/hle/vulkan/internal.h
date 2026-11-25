@@ -364,6 +364,22 @@ std::filesystem::path subpass_input_probe_file(const std::filesystem::path& dire
 SubpassInputProbe cached_subpass_input_probe(const std::filesystem::path& file);
 // Stores a conclusive result (unavailable is not stored). Never throws.
 void cache_subpass_input_probe(const std::filesystem::path& file, SubpassInputProbe result);
+// Whether a single-layer shading-rate view in a two-view pass gives view 1 the
+// rates of the view's next layer, as a render on the device shows
+// (rate_layer_probe.cpp): next_layer on a GPU that reads rate images layered
+// though it reports no layered rate attachments, same_layer as the
+// specification has it.
+enum class RateLayerProbe { next_layer, same_layer, unavailable };
+// Renders the two-view pass with `texel`-pixel rate texels on a graphics queue
+// the device was created with, before anything else submits to it. Never
+// throws: unavailable on any failure.
+RateLayerProbe probe_rate_layers(VkPhysicalDevice physical, VkDevice device,
+                                 std::span<const VkDeviceQueueCreateInfo> queues, std::uint32_t texel,
+                                 double* milliseconds = nullptr);
+std::filesystem::path rate_layer_probe_file(const std::filesystem::path& directory, std::uint32_t vendor_id,
+                                            std::uint32_t device_id, std::uint32_t driver_version);
+RateLayerProbe cached_rate_layer_probe(const std::filesystem::path& file);
+void cache_rate_layer_probe(const std::filesystem::path& file, RateLayerProbe result);
 // Subpass inputs read as sampled images (input_attachments.cpp): on when the
 // probe shows a multiview subpass input reading another view's layer (AMD's
 // and Intel's Windows drivers read the first view's), or, when the probe
