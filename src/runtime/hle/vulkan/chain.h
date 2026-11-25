@@ -59,6 +59,7 @@ class Chain {
   std::optional<bool> density_;
   void depth_format(VkFormat& value);
   bool density_enabled();
+  bool subsampled_kept();
   void density_layout(VkImageLayout& value);
   void density_usage(VkImageUsageFlags& value);
   void density_usage(VkImageUsageFlags2KHR& value);

@@ -2,6 +2,7 @@
 #include "external.h"
 #include "internal.h"
 #include "full_rate_image.h"
+#include "gfx/foveation_vulkan.h"
 
 #include <vulkan/vulkan_android.h>
 
@@ -67,8 +68,16 @@ void Chain::density_usage(VkImageUsageFlags2KHR& value) {
     if (!value) value = VK_IMAGE_USAGE_2_SAMPLED_BIT_KHR;
   }
 }
+// Subsampled images and samplers need passes with density maps. Where
+// Venture's shading-rate attachments foveate the passes instead (their
+// density maps are dropped), images are full resolution and sampled normally.
+bool Chain::subsampled_kept() {
+  if (!density_enabled()) return false;
+  const auto device = device_ ? device_ : (command_ ? command_device(command_) : VkDevice{});
+  return !device || !gfx::foveation::device_active(device);
+}
 void Chain::density_flags(VkImageCreateFlags& value) {
-  if ((value & VK_IMAGE_CREATE_SUBSAMPLED_BIT_EXT) && !density_enabled()) value &= ~VK_IMAGE_CREATE_SUBSAMPLED_BIT_EXT;
+  if ((value & VK_IMAGE_CREATE_SUBSAMPLED_BIT_EXT) && !subsampled_kept()) value &= ~VK_IMAGE_CREATE_SUBSAMPLED_BIT_EXT;
 }
 void Chain::density_view_flags(VkImageViewCreateFlags& value) {
   constexpr VkImageViewCreateFlags mask = VK_IMAGE_VIEW_CREATE_FRAGMENT_DENSITY_MAP_DYNAMIC_BIT_EXT |
@@ -78,7 +87,7 @@ void Chain::density_view_flags(VkImageViewCreateFlags& value) {
 void Chain::density_sampler_flags(VkSamplerCreateFlags& value) {
   constexpr VkSamplerCreateFlags mask = VK_SAMPLER_CREATE_SUBSAMPLED_BIT_EXT |
                                        VK_SAMPLER_CREATE_SUBSAMPLED_COARSE_RECONSTRUCTION_BIT_EXT;
-  if ((value & mask) && !density_enabled()) value &= ~mask;
+  if ((value & mask) && !subsampled_kept()) value &= ~mask;
 }
 void Chain::density_pipeline_flags(VkPipelineCreateFlags& value) {
   if ((value & VK_PIPELINE_CREATE_RENDERING_FRAGMENT_DENSITY_MAP_ATTACHMENT_BIT_EXT) && !density_enabled())

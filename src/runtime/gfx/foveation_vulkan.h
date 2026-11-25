@@ -56,8 +56,11 @@ void add_to_device(PFN_vkGetInstanceProcAddr gipa, VkInstance instance, VkPhysic
 // After creating a device while wanted(): `active` when it was created with
 // additions (out.added), so its passes are foveated from now. `raw` resolves
 // the driver's own functions, which the intercepted commands call.
-// `native_density`: the device has density maps enabled (VK_EXT_fragment_density_map
-// on the GPU itself): passes keep the density maps they use (attach_density_map).
+// `native_density`: passes keep the density maps they use (attach_density_map).
+// The runtime passes false wherever shading-rate attachments are enabled: a
+// driver may read a density map on the CPU while recording (Turnip does), so
+// the GPU-uploaded pattern is not ready in time, and Turnip 26.2 crashed in
+// density-map passes on the Steam Frame.
 void register_device(VkDevice device, VkPhysicalDevice physical, PFN_vkGetInstanceProcAddr gipa,
                      VkInstance instance, PFN_vkGetDeviceProcAddr raw, bool active, bool native_density = false);
 void release_device(VkDevice device);

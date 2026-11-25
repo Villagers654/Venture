@@ -9,7 +9,7 @@ endif()
 project(Venture VERSION 0.3.0 LANGUAGES C CXX)
 # A pre-release label ("alpha.1" makes 0.3.0-alpha.1). It shows in the launcher and
 # its update check; packages keep the plain numbers, which their formats need.
-set(VENTURE_VERSION_SUFFIX "alpha.9")
+set(VENTURE_VERSION_SUFFIX "alpha.10")
 if(VENTURE_VERSION_SUFFIX)
   set(VENTURE_VERSION_FULL "${PROJECT_VERSION}-${VENTURE_VERSION_SUFFIX}")
 else()

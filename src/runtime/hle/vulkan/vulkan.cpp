@@ -1919,8 +1919,14 @@ VkResult create_device_impl(VkPhysicalDevice physical, const VkDeviceCreateInfo*
     auto gdpa = reinterpret_cast<PFN_vkGetDeviceProcAddr>(loader()(device_instance(*out), "vkGetDeviceProcAddr"));
     gfx::register_pipeline_device(*out, gdpa, feedback, profile::PipelineSource::guest,
                                   gfx::async_pipeline_extensions_allowed(unique_names));
+    // Shading-rate attachments foveate every pass where the GPU has them,
+    // density-map eye passes included: their maps are dropped. A driver may
+    // read a density map on the CPU while it records the pass (Turnip does),
+    // so a map Venture rewrites on the GPU each frame is read mid-copy, and
+    // Turnip 26.2's density-map passes crashed in its viewport patching
+    // (fdm_apply_viewports) on the Steam Frame a second after the first frame.
     gfx::foveation::register_device(*out, physical, loader(), device_instance(*out), gdpa, foveated.added,
-                                    device_density_maps_enabled(*out));
+                                    device_density_maps_enabled(*out) && !foveated.added);
     if (trace) log::info("vulkan-device", "Guest device queue configured");
     prepare_texture_device(*out);
     if (trace) log::info("vulkan-device", "Guest device textures prepared");
