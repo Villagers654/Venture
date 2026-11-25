@@ -107,6 +107,9 @@ public class Window {
   public View peekDecorView() {
     return decor;
   }
+  public View getCurrentFocus() {
+    return decor.findFocus();
+  }
   public final android.content.Context getContext() {
     return surfaceContext;
   }

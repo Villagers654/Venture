@@ -610,6 +610,14 @@ VkResult create_device(VkPhysicalDevice physical,
   foveation::DeviceAdditions foveated;
   foveation::add_to_device(loader(), gpu.instance, physical, ci, foveated);
   ci = foveated.info;
+  // ANGLE enables samplerAnisotropy where the GPU has it (for
+  // GL_EXT_texture_filter_anisotropic); its samplers may then be raised. Read
+  // before creation: an XR runtime may append temporary feature nodes to the
+  // chain during it (record_device), which dangle once it returns.
+  bool anisotropy = ci.pEnabledFeatures && ci.pEnabledFeatures->samplerAnisotropy;
+  for (auto* next = static_cast<const VkBaseInStructure*>(ci.pNext); next; next = next->pNext)
+    if (next->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2)
+      anisotropy |= reinterpret_cast<const VkPhysicalDeviceFeatures2*>(next)->features.samplerAnisotropy == VK_TRUE;
   VkResult result = VK_ERROR_INITIALIZATION_FAILED;
   try {
     auto& host = xr::host_xr();
@@ -646,12 +654,6 @@ VkResult create_device(VkPhysicalDevice physical,
     mirror_queue.created(*out);
     foveation::register_device(*out, physical, loader(), gpu.instance,
                                vk<PFN_vkGetDeviceProcAddr>(gpu.instance, "vkGetDeviceProcAddr"), foveated.added);
-    // ANGLE enables samplerAnisotropy where the GPU has it (for
-    // GL_EXT_texture_filter_anisotropic); its samplers may then be raised.
-    bool anisotropy = ci.pEnabledFeatures && ci.pEnabledFeatures->samplerAnisotropy;
-    for (auto* next = static_cast<const VkBaseInStructure*>(ci.pNext); next; next = next->pNext)
-      if (next->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2)
-        anisotropy |= reinterpret_cast<const VkPhysicalDeviceFeatures2*>(next)->features.samplerAnisotropy == VK_TRUE;
     VkPhysicalDeviceProperties properties{};
     VkPhysicalDeviceFeatures features{};
     vk<PFN_vkGetPhysicalDeviceProperties>(gpu.instance, "vkGetPhysicalDeviceProperties")(physical, &properties);

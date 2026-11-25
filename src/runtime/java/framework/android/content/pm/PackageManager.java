@@ -9,7 +9,7 @@ public class PackageManager {
   public static final String FEATURE_USB_HOST = "android.hardware.usb.host",
       FEATURE_USB_ACCESSORY = "android.hardware.usb.accessory", FEATURE_MIDI = "android.software.midi";
   public static final String FEATURE_AUDIO_LOW_LATENCY = "android.hardware.audio.low_latency";
-  public static final int GET_ACTIVITIES = 1, GET_INTENT_FILTERS = 32, GET_META_DATA = 128, GET_SIGNATURES = 64,
+  public static final int GET_ACTIVITIES = 1, GET_INTENT_FILTERS = 32, GET_META_DATA = 128, GET_SIGNATURES = 64, GET_PERMISSIONS = 4096,
                           GET_SIGNING_CERTIFICATES = 0x08000000, PERMISSION_GRANTED = 0,
                           PERMISSION_DENIED = -1;
   public static final String FEATURE_VR_MODE_HIGH_PERFORMANCE =

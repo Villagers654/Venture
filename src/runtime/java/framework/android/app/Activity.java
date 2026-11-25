@@ -405,7 +405,7 @@ public class Activity extends ContextWrapper implements KeyEvent.Callback, Windo
   }
   public void finishAffinity() { finish(); }
   public boolean hasWindowFocus() { return windowFocused; }
-  public android.view.View getCurrentFocus() { return getWindow().getDecorView().findFocus(); }
+  public android.view.View getCurrentFocus() { return getWindow().getCurrentFocus(); }
   public android.window.OnBackInvokedDispatcher getOnBackInvokedDispatcher() { return getWindow().getOnBackInvokedDispatcher(); }
   private android.window.SplashScreen.Impl splashScreen;
   public final synchronized android.window.SplashScreen getSplashScreen() {
