@@ -90,4 +90,22 @@ class XrImageBridge {
   struct Impl;
   std::unique_ptr<Impl> impl_;
 };
+// Everything submitted to the shared queue so far, ANGLE's and the bridges'
+// work included: an empty submission whose fence signals once all of it has
+// completed (a fence's scope covers all earlier submissions on its queue).
+class QueueMarker {
+ public:
+  // Takes the shared queue's locks for the submission; throws on failure.
+  static std::shared_ptr<QueueMarker> submit();
+  ~QueueMarker();
+  // Blocks without any queue lock until the marked work has completed.
+  void wait();
+  QueueMarker(const QueueMarker&) = delete;
+  QueueMarker& operator=(const QueueMarker&) = delete;
+
+ private:
+  explicit QueueMarker(VkFence fence) : fence_(fence) {}
+  VkFence fence_;
+  bool waited_ = false;
+};
 }  // namespace venture::gfx

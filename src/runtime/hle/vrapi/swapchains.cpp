@@ -3,6 +3,7 @@
 #include "common/log.h"
 #include "core/wait.h"
 #include "gfx/gpu_device.h"
+#include "gfx/xr_images.h"
 #include "hle/openxr/state.h"
 #include "hle/vrapi/drawn_layers.h"
 #include "hle/vrapi/layers.h"
@@ -425,6 +426,23 @@ class PcImages {
   XrResult finish(std::vector<const XrCompositionLayerBaseHeader *> &layers) {
     return submission_->finish([&] { return drawn_.present(layers); });
   }
+  // After finish(), with no queue lock held: the GPU work the frame's End must
+  // wait for. A runtime may show a GLES frame (drawn through ANGLE) before that
+  // work has completed: earlier image content at the new pose. Vulkan frames
+  // were not seen to.
+  XrResult completion(std::function<void()> &out) {
+    if (!xr_images()->application_uses_gles()) return XR_SUCCESS;
+    try {
+      out = [marker = gfx::QueueMarker::submit()] { marker->wait(); };
+    } catch (const std::exception &e) {
+      log::warn("vrapi", "Frame completion marker failed: {}", e.what());
+      return XR_ERROR_RUNTIME_FAILURE;
+    }
+    return XR_SUCCESS;
+  }
+  // What the frame's layers point into besides the caller's storage: the drawn
+  // runs, moved out (their elements stay where they are).
+  std::shared_ptr<const void> retained() { return std::make_shared<const DrawnLayers>(std::move(drawn_)); }
 
  private:
   std::uint64_t completion_fence_;
@@ -485,6 +503,7 @@ void vrapi_DestroyTextureSwapChain(TextureSwapChain *token) {
     failure("DestroyTextureSwapChain", invalid);
     return;
   }
+  session().finish_host_end();  // an End in flight may still use its host chains
   std::unique_lock queue(gfx::gpu_device().queue_lock, std::defer_lock);
   if (state().init.graphics_api != vulkan_api) queue.lock();
   auto guest_queue = vulkan_submission_lock();

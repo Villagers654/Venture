@@ -263,8 +263,10 @@ XrResult set_app_space(XrPosef offset) {
   XrSpace replacement{};
   auto r = ::xrCreateReferenceSpace(session().handle, &info, &replacement);
   if (XR_SUCCEEDED(r)) {
-    if (v.app)
+    if (v.app) {
+      session().finish_host_end();  // an End in flight may still use it
       ::xrDestroySpace(v.app);
+    }
     v.app = replacement;
     v.transform = offset;
   }
@@ -354,6 +356,7 @@ namespace {
 // Destroys the session with its swapchain images, input and spaces. False when
 // the images could not be released (the session stays).
 bool close_session(const char *operation) {
+  session().finish_host_end();  // an End in flight may still use its chains and spaces
   auto release = destroy_host_chains();
   if (XR_FAILED(release)) {
     failure(std::format("{} bridges", operation).c_str(), release);

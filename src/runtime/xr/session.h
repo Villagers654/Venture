@@ -6,6 +6,7 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <thread>
@@ -152,8 +153,13 @@ struct Session {
   XrResult wait(const XrFrameWaitInfo *, XrFrameState *);
   XrResult begin(const XrFrameBeginInfo *);
   // `owned` keeps everything `info` points to alive after the call returns; with
-  // it, a led session may submit asynchronously (FrameLead::async).
-  XrResult end(const XrFrameEndInfo *, std::shared_ptr<const void> owned = {});
+  // it, a led session may submit asynchronously (FrameLead::async). With a
+  // `completed` wait too (blocks until the frame's GPU work has completed;
+  // throws on failure), the host waiter makes the host xrEndFrame after it
+  // whenever the waiter is free, and the game's thread goes on meanwhile; the
+  // next Begin, and the guest's next host wait, follow that End.
+  XrResult end(const XrFrameEndInfo *, std::shared_ptr<const void> owned = {},
+               std::function<void()> completed = {});
   // The next end() may submit asynchronously; the caller holds the mutex.
   bool async_end_ready() const { return lead.async && lead_active(); }
   // Waits until an asynchronous host xrEndFrame has returned: the submission
@@ -173,10 +179,12 @@ private:
   std::shared_ptr<HostWaiter> host_waiter;
   bool lead_active() const;
   void request_host_wait();
-  // Hands `info` (kept alive by `owned`) to the host waiter: host xrEndFrame,
-  // then the next host wait (only the wait without `owned`). False if a host
-  // wait is already outstanding.
-  bool request_host_end(const XrFrameEndInfo& info, std::shared_ptr<const void> owned);
+  // Hands `info` (kept alive by `owned`) to the host waiter: host xrEndFrame
+  // after `completed` (if any; moved from only when accepted) has returned,
+  // then the next host wait unless there was `completed`. False if the waiter
+  // is busy.
+  bool request_host_end(const XrFrameEndInfo& info, std::shared_ptr<const void> owned,
+                        std::function<void()>& completed);
   bool host_wait_pending();
   // Blocks for the requested host wait; the caller holds no session mutex.
   // A cancelled take (loss, end, destroy) returns without a frame.

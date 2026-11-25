@@ -757,4 +757,34 @@ bool XrImageBridge::take_gpu_span(std::uint32_t index, std::uint64_t& begin_ns,
   end_ns = static_cast<std::uint64_t>(double(ticks[1]) * impl_->timestamp_period);
   return true;
 }
+std::shared_ptr<QueueMarker> QueueMarker::submit() {
+  VkFenceCreateInfo info{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+  VkFence fence{};
+  check(device_proc<PFN_vkCreateFence>("vkCreateFence")(gpu_device().device, &info, nullptr, &fence),
+        "vkCreateFence marker");
+  try {
+    QueueGuard queue;
+    check(device_proc<PFN_vkQueueSubmit>("vkQueueSubmit")(gpu_device().queue, 0, nullptr, fence),
+          "vkQueueSubmit marker");
+  } catch (...) {
+    device_proc<PFN_vkDestroyFence>("vkDestroyFence")(gpu_device().device, fence, nullptr);
+    throw;
+  }
+  return std::shared_ptr<QueueMarker>(new QueueMarker(fence));
+}
+// A pending fence may not be destroyed: an unwaited marker waits first (a
+// lost device fails the wait; its fences are destroyable then).
+QueueMarker::~QueueMarker() {
+  if (!waited_) {
+    try {
+      wait_fence(fence_, false);
+    } catch (...) {
+    }
+  }
+  device_proc<PFN_vkDestroyFence>("vkDestroyFence")(gpu_device().device, fence_, nullptr);
+}
+void QueueMarker::wait() {
+  wait_fence(fence_);
+  waited_ = true;
+}
 }  // namespace venture::gfx

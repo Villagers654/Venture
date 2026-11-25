@@ -12,9 +12,15 @@
 //   DrawnLayers *drawn();      // nullptr: layers no runtime layer shows exactly are left out
 //   XrResult gather(std::vector<const XrCompositionLayerBaseHeader *> &);  // drawn layers' sources
 //   XrResult finish(std::vector<const XrCompositionLayerBaseHeader *> &);  // images handed over
+//   // After finish(): a wait for the GPU work the End must follow (empty: a
+//   // plain End), and (only then, once) what the layers point into besides
+//   // the frame's storage.
+//   XrResult completion(std::function<void()> &);
+//   std::shared_ptr<const void> retained();
 #pragma once
 #include <cmath>
 #include <cstring>
+#include <functional>
 #include <map>
 #include <mutex>
 #include <utility>
@@ -133,6 +139,9 @@ std::int32_t submit_frame(Mobile *mobile, const Submit *frame, const FenceMap *f
   if (XR_FAILED(r)) return result(r, "SubmitFrame2 drawn layer");
   r = images.finish(layers);
   if (XR_FAILED(r)) return result(r, "SubmitFrame2 handoff batch");
+  std::function<void()> completed;
+  r = images.completion(completed);
+  if (XR_FAILED(r)) return result(r, "SubmitFrame2 completion");
   XrFrameEndInfo end{XR_TYPE_FRAME_END_INFO};
   // Legacy VrApi predicts before rendering; the native wait occurs here in
   // submission and may already target a later display after a load or stall.
@@ -142,7 +151,19 @@ std::int32_t submit_frame(Mobile *mobile, const Submit *frame, const FenceMap *f
   end.environmentBlendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
   end.layerCount = std::uint32_t(layers.size());
   end.layers = layers.data();
-  r = session().end(&end);
+  // An End after the frame's GPU work may complete on the host waiter after
+  // this returns: the layers and what they point into move to the submission
+  // (moving the vectors keeps every element's address).
+  std::shared_ptr<const void> owned;
+  if (completed) {
+    struct Owned {
+      std::vector<LayerStorage> storage;
+      std::vector<const XrCompositionLayerBaseHeader *> layers;
+      std::shared_ptr<const void> images;
+    };
+    owned = std::make_shared<const Owned>(Owned{std::move(storage), std::move(layers), images.retained()});
+  }
+  r = session().end(&end, std::move(owned), std::move(completed));
   if (XR_SUCCEEDED(r)) {
     state().final_frame = (frame->flags & 4) != 0;
     auto now = monotonic_ns();
