@@ -22,4 +22,19 @@ public class UiModeManager {
   public void addForceInvertStateChangeListener(java.util.concurrent.Executor executor,
                                                 ForceInvertStateChangeListener listener) {}
   public void removeForceInvertStateChangeListener(ForceInvertStateChangeListener listener) {}
+  // The user's contrast setting (API 34), from -1 to 1: always the standard 0,
+  // so listeners are never called.
+  public interface ContrastChangeListener {
+    void onContrastChanged(float contrast);
+  }
+  public float getContrast() {
+    return 0f;
+  }
+  public void addContrastChangeListener(java.util.concurrent.Executor executor, ContrastChangeListener listener) {
+    java.util.Objects.requireNonNull(executor);
+    java.util.Objects.requireNonNull(listener);
+  }
+  public void removeContrastChangeListener(ContrastChangeListener listener) {
+    java.util.Objects.requireNonNull(listener);
+  }
 }

@@ -228,4 +228,6 @@ void submit_legacy_frame(Mobile *mobile, const LegacyFrame *legacy) {
 bool valid_sampler(const TextureSamplerState &);
 // CreateTextureSwapChain4's arguments VrApi accepts.
 bool valid_swapchain_create(const SwapChainCreate &);
+// A valid request with VrApi's conventions resolved (a full mip chain's -1 as its level count).
+SwapChainCreate normalized_swapchain_create(const SwapChainCreate &);
 }  // namespace venture::hle::vrapi

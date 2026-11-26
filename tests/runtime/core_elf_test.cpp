@@ -195,6 +195,28 @@ TEST_CASE("core an import versioned by an app library binds that library's defin
   CHECK(*g2h<GuestAddr>(consumer->find_symbol("bound")) == own);
   CHECK(linker.close(consumer) == 0); CHECK(linker.close(provider) == 0);
 }
+TEST_CASE("core a library the app opens binds its own exports ahead of libc's") {
+  // Android opens an app's libraries in the app's linker namespace, where the
+  // global group has no system libraries: lookups start at the opened library.
+  // GeckoView's mozglue defines pthread_create, finds libc's through dlsym and
+  // stops on purpose when its own references bound libc's (Interplay Learning).
+  register_all_hle_libraries();
+  auto directory = std::filesystem::current_path() / "build/core-fixtures";
+  std::filesystem::create_directories(directory);
+  struct RestoreInspection { ~RestoreInspection() { linker_set_inspection(false); } } restore;
+  linker_set_inspection(true);
+  auto& linker = Linker::get();
+  auto* libc = linker.open("libc.so", kRtldNow, nullptr);
+  INFO(linker.take_error()); REQUIRE(libc);
+  auto* interposer = linker.open(scope_fixture(directory, "libinterposer.so", "pthread_create", false).string(),
+                                 kRtldNow, nullptr);
+  INFO(linker.take_error()); REQUIRE(interposer);
+  const auto own = interposer->load_bias + 0x900;
+  CHECK(interposer->find_symbol("pthread_create") == own);
+  CHECK(*g2h<GuestAddr>(interposer->find_symbol("bound")) == own);
+  CHECK(linker.symbol(libc, "pthread_create") != own);
+  CHECK(linker.close(interposer) == 0);
+}
 TEST_CASE("core a relocation may name a dynsym entry past the hash table's chain count") {
   // GeckoView's libnss3 (Aim XR's Vuplex 3D WebView): Mozilla's post-link step
   // appends an undefined mprotect to dynsym without adding it to DT_HASH, and

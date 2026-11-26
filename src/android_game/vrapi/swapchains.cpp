@@ -295,6 +295,8 @@ TextureSwapChain *vrapi_CreateTextureSwapChain4(const SwapChainCreate *ci) {
     failure("CreateTextureSwapChain4", invalid);
     return nullptr;
   }
+  const auto normalized = normalized_swapchain_create(*ci);
+  ci = &normalized;
   const bool vulkan = state().init.graphics_api == vulkan_api;
   if (vulkan && !vrapi_native::vulkan::bound()) {
     failure("CreateTextureSwapChain4 Vulkan device", not_initialized);

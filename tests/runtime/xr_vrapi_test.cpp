@@ -14,6 +14,7 @@
 #include "hle/vrapi/layers.h"
 #include "hle/vrapi/vrapi.h"
 #include "hle/vrapi/state.h"
+#include "hle/vrapi/submit.h"
 #include "hle/vrapi/vulkan_images.h"
 #include "vulkan_test_support.h"
 #include "gfx/queue_sync.h"
@@ -3404,4 +3405,22 @@ TEST_CASE("VrApi frames ended after their GPU work keep the host's frame order a
   CHECK(ventureMockXrDestroysDuringEnd() == destroys);
   vg::vrapi_Shutdown();
   venture::xr::install_xr_images(nullptr);
+}
+
+// VrApi's conventions in a swapchain request: a full mip chain (-1), the
+// protected and subsampled create flags, and usage flags are accepted, as
+// VrApi accepts them (Art Plunge's OVRPlugin divided by the length of a
+// refused swapchain).
+TEST_CASE("VrApi swapchain requests take VrApi's conventions") {
+  namespace abi = venture::hle::vrapi;
+  abi::SwapChainCreate ci{0x8c43, 1024, 512, -1, 1, 2, 3, 0x3, 0x7};
+  CHECK(abi::valid_swapchain_create(ci));
+  CHECK(abi::normalized_swapchain_create(ci).levels == 11);
+  ci.levels = 1;
+  CHECK(abi::normalized_swapchain_create(ci).levels == 1);
+  ci.create_flags = 0x4;
+  CHECK(!abi::valid_swapchain_create(ci));
+  ci.create_flags = 0;
+  ci.levels = 0;
+  CHECK(!abi::valid_swapchain_create(ci));
 }

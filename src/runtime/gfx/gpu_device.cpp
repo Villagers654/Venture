@@ -653,7 +653,8 @@ VkResult create_device(VkPhysicalDevice physical,
     gpu.device = *out;
     mirror_queue.created(*out);
     foveation::register_device(*out, physical, loader(), gpu.instance,
-                               vk<PFN_vkGetDeviceProcAddr>(gpu.instance, "vkGetDeviceProcAddr"), foveated.added);
+                               vk<PFN_vkGetDeviceProcAddr>(gpu.instance, "vkGetDeviceProcAddr"), foveated.added,
+                               foveated.density, foveated.host_copy, false, foveated.density);
     VkPhysicalDeviceProperties properties{};
     VkPhysicalDeviceFeatures features{};
     vk<PFN_vkGetPhysicalDeviceProperties>(gpu.instance, "vkGetPhysicalDeviceProperties")(physical, &properties);

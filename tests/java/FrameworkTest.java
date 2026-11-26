@@ -128,6 +128,35 @@ public final class FrameworkTest {
       hostField.set(null, oldHost);
     }
   }
+  // GeckoView (Vuplex's web view) reads the 12/24-hour setting when its
+  // runtime resumes and registers for contrast changes on its thread; both
+  // classes were missing, which stopped Interplay Learning at startup (#190).
+  private static void dateFormatAndContrast() {
+    java.util.Locale saved = java.util.Locale.getDefault();
+    try {
+      java.util.Locale.setDefault(java.util.Locale.US);
+      check(!android.text.format.DateFormat.is24HourFormat(null), "US English uses a 12-hour clock");
+      check(String.valueOf(android.text.format.DateFormat.getDateFormatOrder(null)).equals("Mdy"), "US date order");
+      java.util.Locale.setDefault(java.util.Locale.GERMANY);
+      check(android.text.format.DateFormat.is24HourFormat(null), "German uses a 24-hour clock");
+      check(String.valueOf(android.text.format.DateFormat.getDateFormatOrder(null)).equals("dMy"), "German date order");
+      java.util.Calendar day = new java.util.GregorianCalendar(java.util.TimeZone.getTimeZone("UTC"));
+      day.clear();
+      day.set(2026, java.util.Calendar.NOVEMBER, 26, 14, 5);
+      java.util.Locale.setDefault(java.util.Locale.US);
+      check(android.text.format.DateFormat.format("yyyy-MM-dd HH:mm 'c'", day).toString().equals("2026-11-26 14:05 c"),
+            "DateFormat.format with a calendar");
+      check(android.text.format.DateFormat.getBestDateTimePattern(java.util.Locale.US, "jm").contains("h"),
+            "best pattern for hour and minute in US English");
+    } finally {
+      java.util.Locale.setDefault(saved);
+    }
+    var modes = new android.app.UiModeManager();
+    android.app.UiModeManager.ContrastChangeListener listener = contrast -> {};
+    modes.addContrastChangeListener(Runnable::run, listener);
+    modes.removeContrastChangeListener(listener);
+    check(modes.getContrast() == 0f, "standard contrast");
+  }
   private static void censusValues() {
     byte[] bytes = {0, 1, 2, (byte) 251, (byte) 255};
     check(android.util.Base64.encodeToString(bytes, 0).equals("AAEC+/8=\n"), "Android Base64 DEFAULT ends in LF");
@@ -2423,6 +2452,7 @@ public final class FrameworkTest {
     styledEditor.setOnClickListener(view -> {});
     check(styledEditor.isClickable(), "installing a click listener sets the Android clickable flag");
     censusValues();
+    dateFormatAndContrast();
     sdkExtensions();
     horizonOsVersion();
     intentMatching();

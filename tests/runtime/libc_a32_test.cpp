@@ -452,6 +452,7 @@ TEST_CASE("A32 libc process, numeric, inet, syslog and mremap adapters keep ARM 
   // struct rusage: two 32-bit timevals and 14 longs, 72 bytes.
   CHECK(call("getrusage", {0, p}) == 0);
   CHECK(words[1] < 1000000); CHECK(words[2] == 0); CHECK(words[17] == 0); CHECK(words[18] == 0xa5a5a5a5);
+  CHECK(call("getdtablesize", {}) == 32768);  // RLIMIT_NOFILE's soft limit (CubeyTube)
   std::strcpy(memory.at<char>(256), "inet");
   const auto group = call("getgrnam", {p + 256});
   REQUIRE(group != 0);

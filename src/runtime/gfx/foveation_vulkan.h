@@ -57,6 +57,13 @@ struct DeviceAdditions {
   VkPhysicalDeviceHostImageCopyFeaturesEXT host_copy_features{
       VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_HOST_IMAGE_COPY_FEATURES_EXT};
   bool host_copy = false;
+  // A GPU with density maps (non-subsampled targets) and host image copies, a
+  // tiler such as the Steam Frame's Adreno, foveates with density maps instead
+  // of shading-rate attachments (register_device's `density`): VK_EXT_fragment_density_map
+  // and its features are added rather than VK_KHR_fragment_shading_rate.
+  VkPhysicalDeviceFragmentDensityMapFeaturesEXT density_features{
+      VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_DENSITY_MAP_FEATURES_EXT};
+  bool density = false;
 };
 void add_to_device(PFN_vkGetInstanceProcAddr gipa, VkInstance instance, VkPhysicalDevice physical,
                    const VkDeviceCreateInfo& in, DeviceAdditions& out);
@@ -74,9 +81,15 @@ void add_to_device(PFN_vkGetInstanceProcAddr gipa, VkInstance instance, VkPhysic
 // at the view's layer plus N (the runtime's probe shows it), so a multiview
 // pass on a GPU without layered rate attachments gets each eye's own rates
 // rather than their union.
+// `density`: the device was created for density-map foveation (DeviceAdditions'
+// density). Passes that draw colour with depth get a density map of Venture's
+// pattern (an eye's or the scene's, else full density) and none gets a
+// shading-rate attachment; all maps are written from the CPU between the
+// passes that read them. Needs native_density and host_copy; without them the
+// device is not foveated.
 void register_device(VkDevice device, VkPhysicalDevice physical, PFN_vkGetInstanceProcAddr gipa,
                      VkInstance instance, PFN_vkGetDeviceProcAddr raw, bool active, bool native_density = false,
-                     bool host_copy = false, bool next_layer_rates = false);
+                     bool host_copy = false, bool next_layer_rates = false, bool density = false);
 // The rate texel size foveation uses on a GPU with shading-rate attachments
 // (`properties` its VkPhysicalDeviceFragmentShadingRatePropertiesKHR): the
 // largest square it takes, at most 16.

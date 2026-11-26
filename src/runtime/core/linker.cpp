@@ -308,6 +308,23 @@ Definition resolve(State& s, elf::Image* requester, const std::vector<Library*>&
   if (requester && requester->symbolic && !skip_self) {
     auto d = lookup_one(requester->owner, name, version, hide_absent, registered); if (d.library) return d;
   }
+  // Android loads an app's libraries in the app's linker namespace, whose
+  // global group holds none of the system libraries, so a lookup starts at the
+  // group's root (the library System.loadLibrary or dlopen opened) and then
+  // its dependencies: the root's own exports bind its references ahead of
+  // libc's. GeckoView's mozglue interposes pthread_create, finds libc's with
+  // dlsym and stops on purpose when its own references reached libc's.
+  // App libraries flagged DF_1_GLOBAL still come first: they are the global
+  // group.
+  if (requester && relocation && !skip_self && requester->owner && !requester->owner->is_hle() && !local.empty() &&
+      local.front() == requester->owner) {
+    for (auto* lib : s.globals) {
+      if (lib->is_hle()) continue;
+      if (auto* image = lib->mapped_image(); !image || !(image->dynamic(0x6ffffffb) & 2)) continue;
+      auto d = lookup_one(lib, name, version, hide_absent, registered); if (d.library) return d;
+    }
+    auto d = lookup_one(requester->owner, name, version, hide_absent, registered); if (d.library) return d;
+  }
   // The host executable substitutes for app_process: its startup HLE APIs
   // must not disappear merely because their slots have no guest ELF flags.
   for (auto soname : startup_libraries) {

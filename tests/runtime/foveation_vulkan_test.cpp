@@ -8,9 +8,11 @@
 
 #include <vulkan/vulkan.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <cstring>
 #include <span>
+#include <string_view>
 #include <vector>
 
 #include "gfx/foveation_vulkan.h"
@@ -587,6 +589,411 @@ void run_density_map() {
   g.device_fn<PFN_vkDestroyDevice>("vkDestroyDevice")(dev, nullptr);
   g.instance_fn<PFN_vkDestroyInstance>("vkDestroyInstance")(g.instance, nullptr);
 }
+
+// Density-map foveation (a tiler with density maps and host image copies, such
+// as the Steam Frame's Adreno) against a driver that records what it is asked
+// for: no GPU here has density maps. Passes that draw colour with depth get a
+// density map and none gets a shading-rate attachment; maps are written from
+// the CPU, never while a pass that reads one is being recorded.
+namespace fake {
+struct Handle {
+  const void* key;  // the loader's dispatch key: a device and its command buffers share it
+};
+const int dispatch = 0;
+Handle device_object{&dispatch}, command_object{&dispatch};
+struct Image {
+  VkImageCreateInfo info{};
+  std::vector<std::uint8_t> bytes;  // the latest host copy
+  int writes = 0;
+};
+std::vector<Image> images;  // VkImage n is images[n - 1]
+std::vector<VkImage> view_images;  // VkImageView n views view_images[n - 1]
+std::vector<VkAttachmentDescription2> pass_attachments;
+VkAttachmentReference density_reference{VK_ATTACHMENT_UNUSED, VK_IMAGE_LAYOUT_UNDEFINED};
+bool pass_has_rates = false;
+std::vector<VkImageView> framebuffer_views;
+VkImageView rendering_density{};
+bool recording = false;
+int writes_while_recording = 0;
+std::uintptr_t next_handle = 1000;
+
+std::size_t index_of(VkImage handle) { return reinterpret_cast<std::uintptr_t>(handle) - 1; }
+std::size_t viewed(VkImageView view) { return index_of(view_images.at(reinterpret_cast<std::uintptr_t>(view) - 1)); }
+
+VKAPI_ATTR void VKAPI_CALL properties(VkPhysicalDevice, VkPhysicalDeviceProperties* p) {
+  *p = {};
+  p->apiVersion = VK_API_VERSION_1_3;
+}
+VKAPI_ATTR void VKAPI_CALL properties2(VkPhysicalDevice, VkPhysicalDeviceProperties2* p) {
+  p->properties.apiVersion = VK_API_VERSION_1_3;
+  for (auto* n = static_cast<VkBaseOutStructure*>(p->pNext); n; n = n->pNext) {
+    if (n->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_HOST_IMAGE_COPY_PROPERTIES_EXT) {
+      auto* c = reinterpret_cast<VkPhysicalDeviceHostImageCopyPropertiesEXT*>(n);
+      if (c->pCopyDstLayouts && c->copyDstLayoutCount) c->pCopyDstLayouts[0] = VK_IMAGE_LAYOUT_FRAGMENT_DENSITY_MAP_OPTIMAL_EXT;
+      c->copyDstLayoutCount = 1;
+    } else if (n->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_DENSITY_MAP_PROPERTIES_EXT) {
+      auto* m = reinterpret_cast<VkPhysicalDeviceFragmentDensityMapPropertiesEXT*>(n);
+      m->minFragmentDensityTexelSize = {16, 16};  // Turnip's
+      m->maxFragmentDensityTexelSize = {512, 512};
+    }
+  }
+}
+VKAPI_ATTR void VKAPI_CALL features2(VkPhysicalDevice, VkPhysicalDeviceFeatures2* f) {
+  for (auto* n = static_cast<VkBaseOutStructure*>(f->pNext); n; n = n->pNext) {
+    if (n->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_DENSITY_MAP_FEATURES_EXT) {
+      auto* m = reinterpret_cast<VkPhysicalDeviceFragmentDensityMapFeaturesEXT*>(n);
+      m->fragmentDensityMap = m->fragmentDensityMapNonSubsampledImages = VK_TRUE;
+    } else if (n->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_HOST_IMAGE_COPY_FEATURES_EXT) {
+      reinterpret_cast<VkPhysicalDeviceHostImageCopyFeaturesEXT*>(n)->hostImageCopy = VK_TRUE;
+    } else if (n->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADING_RATE_FEATURES_KHR) {
+      reinterpret_cast<VkPhysicalDeviceFragmentShadingRateFeaturesKHR*>(n)->attachmentFragmentShadingRate = VK_TRUE;
+    }
+  }
+}
+VKAPI_ATTR VkResult VKAPI_CALL extensions(VkPhysicalDevice, const char*, std::uint32_t* count, VkExtensionProperties* out) {
+  static const char* names[] = {VK_EXT_FRAGMENT_DENSITY_MAP_EXTENSION_NAME, VK_EXT_HOST_IMAGE_COPY_EXTENSION_NAME,
+                                VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME};
+  if (out)
+    for (std::uint32_t i = 0; i < std::min<std::uint32_t>(*count, 3); ++i) std::strcpy(out[i].extensionName, names[i]);
+  *count = 3;
+  return VK_SUCCESS;
+}
+VKAPI_ATTR void VKAPI_CALL format2(VkPhysicalDevice, VkFormat, VkFormatProperties2* p) {
+  for (auto* n = static_cast<VkBaseOutStructure*>(p->pNext); n; n = n->pNext)
+    if (n->sType == VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_3)
+      reinterpret_cast<VkFormatProperties3*>(n)->optimalTilingFeatures = VK_FORMAT_FEATURE_2_HOST_IMAGE_TRANSFER_BIT_EXT;
+}
+VKAPI_ATTR void VKAPI_CALL memory(VkPhysicalDevice, VkPhysicalDeviceMemoryProperties* p) {
+  *p = {};
+  p->memoryTypeCount = p->memoryHeapCount = 1;
+  p->memoryTypes[0].propertyFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+}
+VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL gipa(VkInstance, const char* name) {
+  const std::string_view n = name;
+  if (n == "vkGetPhysicalDeviceProperties") return reinterpret_cast<PFN_vkVoidFunction>(properties);
+  if (n == "vkGetPhysicalDeviceProperties2") return reinterpret_cast<PFN_vkVoidFunction>(properties2);
+  if (n == "vkGetPhysicalDeviceFeatures2") return reinterpret_cast<PFN_vkVoidFunction>(features2);
+  if (n == "vkEnumerateDeviceExtensionProperties") return reinterpret_cast<PFN_vkVoidFunction>(extensions);
+  if (n == "vkGetPhysicalDeviceFormatProperties2") return reinterpret_cast<PFN_vkVoidFunction>(format2);
+  if (n == "vkGetPhysicalDeviceMemoryProperties") return reinterpret_cast<PFN_vkVoidFunction>(memory);
+  return nullptr;
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL create_image(VkDevice, const VkImageCreateInfo* ci, const VkAllocationCallbacks*, VkImage* out) {
+  images.push_back({*ci, {}, 0});
+  *out = reinterpret_cast<VkImage>(std::uintptr_t(images.size()));
+  return VK_SUCCESS;
+}
+VKAPI_ATTR void VKAPI_CALL destroy_image(VkDevice, VkImage, const VkAllocationCallbacks*) {}
+VKAPI_ATTR void VKAPI_CALL requirements(VkDevice, VkImage, VkMemoryRequirements* r) { *r = {4096, 256, 1}; }
+VKAPI_ATTR VkResult VKAPI_CALL allocate(VkDevice, const VkMemoryAllocateInfo*, const VkAllocationCallbacks*, VkDeviceMemory* out) {
+  *out = reinterpret_cast<VkDeviceMemory>(next_handle++);
+  return VK_SUCCESS;
+}
+VKAPI_ATTR void VKAPI_CALL free_memory(VkDevice, VkDeviceMemory, const VkAllocationCallbacks*) {}
+VKAPI_ATTR VkResult VKAPI_CALL bind_image(VkDevice, VkImage, VkDeviceMemory, VkDeviceSize) { return VK_SUCCESS; }
+VKAPI_ATTR VkResult VKAPI_CALL transition(VkDevice, std::uint32_t count, const VkHostImageLayoutTransitionInfoEXT* t) {
+  for (std::uint32_t i = 0; i < count; ++i) CHECK(t[i].newLayout == VK_IMAGE_LAYOUT_FRAGMENT_DENSITY_MAP_OPTIMAL_EXT);
+  return VK_SUCCESS;
+}
+VKAPI_ATTR VkResult VKAPI_CALL copy(VkDevice, const VkCopyMemoryToImageInfoEXT* info) {
+  CHECK(info->dstImageLayout == VK_IMAGE_LAYOUT_FRAGMENT_DENSITY_MAP_OPTIMAL_EXT);
+  auto& target = images.at(index_of(info->dstImage));
+  const auto& r = info->pRegions[0];
+  const auto size = std::size_t(r.imageExtent.width) * r.imageExtent.height * r.imageSubresource.layerCount * 2;
+  const auto* bytes = static_cast<const std::uint8_t*>(r.pHostPointer);
+  target.bytes.assign(bytes, bytes + size);
+  // A new map's first write is fine mid-pass: no pass reads it yet.
+  if (recording && target.writes) ++writes_while_recording;
+  ++target.writes;
+  return VK_SUCCESS;
+}
+VKAPI_ATTR VkResult VKAPI_CALL create_view(VkDevice, const VkImageViewCreateInfo* ci, const VkAllocationCallbacks*, VkImageView* out) {
+  view_images.push_back(ci->image);
+  *out = reinterpret_cast<VkImageView>(std::uintptr_t(view_images.size()));
+  return VK_SUCCESS;
+}
+VKAPI_ATTR void VKAPI_CALL destroy_view(VkDevice, VkImageView, const VkAllocationCallbacks*) {}
+VKAPI_ATTR void VKAPI_CALL destroy_pass(VkDevice, VkRenderPass, const VkAllocationCallbacks*) {}
+VKAPI_ATTR VkResult VKAPI_CALL create_pass2(VkDevice, const VkRenderPassCreateInfo2* info, const VkAllocationCallbacks*, VkRenderPass* out) {
+  pass_attachments.assign(info->pAttachments, info->pAttachments + info->attachmentCount);
+  density_reference = {VK_ATTACHMENT_UNUSED, VK_IMAGE_LAYOUT_UNDEFINED};
+  for (auto* n = static_cast<const VkBaseInStructure*>(info->pNext); n; n = n->pNext)
+    if (n->sType == VK_STRUCTURE_TYPE_RENDER_PASS_FRAGMENT_DENSITY_MAP_CREATE_INFO_EXT)
+      density_reference = reinterpret_cast<const VkRenderPassFragmentDensityMapCreateInfoEXT*>(n)->fragmentDensityMapAttachment;
+  pass_has_rates = false;
+  for (std::uint32_t s = 0; s < info->subpassCount; ++s)
+    for (auto* n = static_cast<const VkBaseInStructure*>(info->pSubpasses[s].pNext); n; n = n->pNext)
+      pass_has_rates |= n->sType == VK_STRUCTURE_TYPE_FRAGMENT_SHADING_RATE_ATTACHMENT_INFO_KHR;
+  *out = reinterpret_cast<VkRenderPass>(next_handle++);
+  return VK_SUCCESS;
+}
+VKAPI_ATTR VkResult VKAPI_CALL create_framebuffer(VkDevice, const VkFramebufferCreateInfo* info, const VkAllocationCallbacks*, VkFramebuffer* out) {
+  framebuffer_views.assign(info->pAttachments, info->pAttachments + info->attachmentCount);
+  *out = reinterpret_cast<VkFramebuffer>(next_handle++);
+  return VK_SUCCESS;
+}
+VKAPI_ATTR void VKAPI_CALL begin_pass(VkCommandBuffer, const VkRenderPassBeginInfo*, VkSubpassContents) { recording = true; }
+VKAPI_ATTR void VKAPI_CALL end_pass(VkCommandBuffer) { recording = false; }
+VKAPI_ATTR void VKAPI_CALL begin_rendering(VkCommandBuffer, const VkRenderingInfo* info) {
+  rendering_density = {};
+  for (auto* n = static_cast<const VkBaseInStructure*>(info->pNext); n; n = n->pNext)
+    if (n->sType == VK_STRUCTURE_TYPE_RENDERING_FRAGMENT_DENSITY_MAP_ATTACHMENT_INFO_EXT) {
+      const auto* d = reinterpret_cast<const VkRenderingFragmentDensityMapAttachmentInfoEXT*>(n);
+      CHECK(d->imageLayout == VK_IMAGE_LAYOUT_FRAGMENT_DENSITY_MAP_OPTIMAL_EXT);
+      rendering_density = d->imageView;
+    }
+  recording = true;
+}
+VKAPI_ATTR void VKAPI_CALL end_rendering(VkCommandBuffer) { recording = false; }
+VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL gdpa(VkDevice, const char* name) {
+  const std::string_view n = name;
+#define FAKE(vk, f) \
+  if (n == vk) return reinterpret_cast<PFN_vkVoidFunction>(f);
+  FAKE("vkCreateImage", create_image)
+  FAKE("vkDestroyImage", destroy_image)
+  FAKE("vkGetImageMemoryRequirements", requirements)
+  FAKE("vkAllocateMemory", allocate)
+  FAKE("vkFreeMemory", free_memory)
+  FAKE("vkBindImageMemory", bind_image)
+  FAKE("vkTransitionImageLayoutEXT", transition)
+  FAKE("vkCopyMemoryToImageEXT", copy)
+  FAKE("vkCreateImageView", create_view)
+  FAKE("vkDestroyImageView", destroy_view)
+  FAKE("vkDestroyRenderPass", destroy_pass)
+  FAKE("vkCreateRenderPass2", create_pass2)
+  FAKE("vkCreateFramebuffer", create_framebuffer)
+  FAKE("vkCmdBeginRenderPass", begin_pass)
+  FAKE("vkCmdEndRenderPass", end_pass)
+  FAKE("vkCmdBeginRendering", begin_rendering)
+  FAKE("vkCmdEndRendering", end_rendering)
+#undef FAKE
+  return nullptr;
+}
+
+template <class F>
+F hooked(const char* name) {
+  auto f = fov::proc(name);
+  REQUIRE(f);
+  return reinterpret_cast<F>(f);
+}
+// The horizontal density at texel (x, y) of `layer` in the latest write.
+std::uint8_t density_at(std::size_t image, std::uint32_t x, std::uint32_t y, std::uint32_t layer) {
+  const auto& map = images.at(image);
+  const auto w = map.info.extent.width, h = map.info.extent.height;
+  return map.bytes.at(2 * ((std::size_t(layer) * h + y) * w + x));
+}
+}  // namespace fake
+
+void run_density_foveation() {
+  if (!fov::wanted()) {
+    MESSAGE("VENTURE_FOVEATION=fixed is not set for this process (ctest's gfx_foveation runs it)");
+    return;
+  }
+  using fake::hooked;
+  const auto physical = reinterpret_cast<VkPhysicalDevice>(std::uintptr_t(1));
+  const auto instance = reinterpret_cast<VkInstance>(std::uintptr_t(2));
+  const auto dev = reinterpret_cast<VkDevice>(&fake::device_object);
+  const auto command = reinterpret_cast<VkCommandBuffer>(&fake::command_object);
+
+  // Density maps and host image copies rather than shading-rate attachments,
+  // although this GPU offers those too.
+  VkDeviceCreateInfo dci{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
+  fov::DeviceAdditions added;
+  fov::add_to_device(fake::gipa, instance, physical, dci, added);
+  REQUIRE(added.added);
+  CHECK(added.density);
+  CHECK(added.host_copy);
+  const std::vector<std::string_view> names(added.info.ppEnabledExtensionNames,
+                                            added.info.ppEnabledExtensionNames + added.info.enabledExtensionCount);
+  const auto listed = [&](std::string_view name) { return std::find(names.begin(), names.end(), name) != names.end(); };
+  CHECK(listed(VK_EXT_FRAGMENT_DENSITY_MAP_EXTENSION_NAME));
+  CHECK(listed(VK_EXT_HOST_IMAGE_COPY_EXTENSION_NAME));
+  CHECK(!listed(VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME));
+  bool density_features = false;
+  for (auto* n = static_cast<const VkBaseInStructure*>(added.info.pNext); n; n = n->pNext) {
+    CHECK(n->sType != VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADING_RATE_FEATURES_KHR);
+    if (n->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_DENSITY_MAP_FEATURES_EXT) {
+      const auto* f = reinterpret_cast<const VkPhysicalDeviceFragmentDensityMapFeaturesEXT*>(n);
+      density_features = f->fragmentDensityMap && f->fragmentDensityMapNonSubsampledImages;
+    }
+  }
+  CHECK(density_features);
+
+  fov::register_device(dev, physical, fake::gipa, instance, fake::gdpa, true, true, true, false, true);
+  REQUIRE(fov::device_active(dev));
+  CHECK(fov::density_host_writes(dev));
+
+  // A stereo pass drawing colour with depth gets a density map, never a
+  // shading-rate attachment; one without depth stays as it is.
+  VkAttachmentDescription2 colour{VK_STRUCTURE_TYPE_ATTACHMENT_DESCRIPTION_2};
+  colour.format = VK_FORMAT_R8G8B8A8_UNORM;
+  colour.samples = VK_SAMPLE_COUNT_1_BIT;
+  colour.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+  colour.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+  colour.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+  colour.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+  colour.finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+  auto depth = colour;
+  depth.format = VK_FORMAT_D32_SFLOAT;
+  depth.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+  const VkAttachmentDescription2 attachments[] = {colour, depth};
+  const VkAttachmentReference2 colour_ref{VK_STRUCTURE_TYPE_ATTACHMENT_REFERENCE_2, nullptr, 0,
+                                          VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_ASPECT_COLOR_BIT};
+  const VkAttachmentReference2 depth_ref{VK_STRUCTURE_TYPE_ATTACHMENT_REFERENCE_2, nullptr, 1,
+                                         VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, VK_IMAGE_ASPECT_DEPTH_BIT};
+  VkSubpassDescription2 subpass{VK_STRUCTURE_TYPE_SUBPASS_DESCRIPTION_2};
+  subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+  subpass.viewMask = 3;
+  subpass.colorAttachmentCount = 1;
+  subpass.pColorAttachments = &colour_ref;
+  subpass.pDepthStencilAttachment = &depth_ref;
+  VkRenderPassCreateInfo2 rpci{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO_2};
+  rpci.attachmentCount = 2;
+  rpci.pAttachments = attachments;
+  rpci.subpassCount = 1;
+  rpci.pSubpasses = &subpass;
+  const auto create_pass = hooked<PFN_vkCreateRenderPass2>("vkCreateRenderPass2");
+  VkRenderPass scene{};
+  REQUIRE(create_pass(dev, &rpci, nullptr, &scene) == VK_SUCCESS);
+  REQUIRE(fake::pass_attachments.size() == 3);
+  CHECK(fake::pass_attachments[2].format == VK_FORMAT_R8G8_UNORM);
+  CHECK(fake::pass_attachments[2].initialLayout == VK_IMAGE_LAYOUT_FRAGMENT_DENSITY_MAP_OPTIMAL_EXT);
+  CHECK(fake::pass_attachments[2].storeOp == VK_ATTACHMENT_STORE_OP_DONT_CARE);
+  CHECK(fake::density_reference.attachment == 2);
+  CHECK(!fake::pass_has_rates);
+  VkRenderPass flat{};
+  auto colour_only = subpass;
+  colour_only.pDepthStencilAttachment = nullptr;
+  auto flat_info = rpci;
+  flat_info.attachmentCount = 1;
+  flat_info.pSubpasses = &colour_only;
+  REQUIRE(create_pass(dev, &flat_info, nullptr, &flat) == VK_SUCCESS);
+  CHECK(fake::pass_attachments.size() == 1);
+  CHECK(fake::density_reference.attachment == VK_ATTACHMENT_UNUSED);
+  CHECK(!fake::pass_has_rates);
+
+  // The scene's framebuffer takes the scene map: 32-pixel texels, written from
+  // the CPU before the pass begins, full density in the middle, coarser at the edges.
+  fov::EyeView left, right;
+  left.width = right.width = 1024;
+  left.height = right.height = 1024;
+  right.layer = 1;
+  fov::update_scene_views(left, right, fov::Level::high, 0, false);
+  const auto create_view = hooked<PFN_vkCreateImageView>("vkCreateImageView");
+  VkImage colour_image{}, depth_image{};
+  VkImageCreateInfo target{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+  target.extent = {1024, 1024, 1};
+  target.arrayLayers = 2;
+  fake::create_image(dev, &target, nullptr, &colour_image);
+  fake::create_image(dev, &target, nullptr, &depth_image);
+  VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+  vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 2};
+  VkImageView views[2]{};
+  vci.image = colour_image;
+  create_view(dev, &vci, nullptr, &views[0]);
+  vci.image = depth_image;
+  create_view(dev, &vci, nullptr, &views[1]);
+  VkFramebufferCreateInfo fci{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
+  fci.renderPass = scene;
+  fci.attachmentCount = 2;
+  fci.pAttachments = views;
+  fci.width = fci.height = 1024;
+  fci.layers = 1;
+  VkFramebuffer framebuffer{};
+  REQUIRE(hooked<PFN_vkCreateFramebuffer>("vkCreateFramebuffer")(dev, &fci, nullptr, &framebuffer) == VK_SUCCESS);
+  REQUIRE(fake::framebuffer_views.size() == 3);
+  const auto scene_map = fake::viewed(fake::framebuffer_views[2]);
+  CHECK(fake::images[scene_map].info.format == VK_FORMAT_R8G8_UNORM);
+  CHECK(fake::images[scene_map].info.usage ==
+        (VK_IMAGE_USAGE_FRAGMENT_DENSITY_MAP_BIT_EXT | VK_IMAGE_USAGE_HOST_TRANSFER_BIT_EXT));
+  CHECK(fake::images[scene_map].info.extent.width == 32);
+  CHECK(fake::images[scene_map].info.extent.height == 32);
+  CHECK(fake::images[scene_map].writes == 1);  // the full density it starts at
+  VkRenderPassBeginInfo begin{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
+  begin.renderPass = scene;
+  begin.framebuffer = framebuffer;
+  begin.renderArea.extent = {1024, 1024};
+  const auto begin_pass = hooked<PFN_vkCmdBeginRenderPass>("vkCmdBeginRenderPass");
+  const auto end_pass = hooked<PFN_vkCmdEndRenderPass>("vkCmdEndRenderPass");
+  begin_pass(command, &begin, VK_SUBPASS_CONTENTS_INLINE);
+  CHECK(fake::images[scene_map].writes >= 2);
+  const std::uint32_t combined = 2;  // the eyes' union, which a single-layer view shows
+  CHECK(fake::density_at(scene_map, 16, 16, combined) == 255);
+  CHECK(fake::density_at(scene_map, 0, 0, combined) < 255);
+
+  // An eye swapchain's first pattern waits while a pass that reads a density
+  // map is being recorded, and is written when it ends.
+  VkImage eye_image{};
+  VkImageCreateInfo eye_info = target;
+  eye_info.arrayLayers = 1;
+  fake::create_image(dev, &eye_info, nullptr, &eye_image);
+  const int swapchain_key = 0;
+  const fov::EyeImage eye{eye_image, 0};
+  fov::register_eye_swapchain(dev, &swapchain_key, {&eye, 1}, 1024, 1024, 1, false);
+  const auto eye_map = fake::images.size() - 1;
+  CHECK(fake::images[eye_map].info.format == VK_FORMAT_R8G8_UNORM);
+  fov::EyeView view = left;
+  fov::update_eye_views(&swapchain_key, {&view, 1}, fov::Level::high, 0, false);
+  CHECK(fake::images[eye_map].writes == 1);  // only the full density it was created with
+  end_pass(command);
+  CHECK(fake::images[eye_map].writes == 2);
+  CHECK(fake::density_at(eye_map, 16, 16, 0) == 255);
+  CHECK(fake::density_at(eye_map, 0, 0, 0) < 255);
+  CHECK(fake::writes_while_recording == 0);
+
+  // Dynamic rendering into the eye image with depth gets the eye map; without
+  // depth it gets none. The pipelines it may use are flagged for density maps
+  // and get no shading-rate state.
+  vci.image = eye_image;
+  vci.subresourceRange.layerCount = 1;
+  VkImageView eye_view{};
+  create_view(dev, &vci, nullptr, &eye_view);
+  VkRenderingAttachmentInfo colour_attachment{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+  colour_attachment.imageView = eye_view;
+  VkRenderingAttachmentInfo depth_attachment{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+  depth_attachment.imageView = views[1];
+  VkRenderingInfo rendering{VK_STRUCTURE_TYPE_RENDERING_INFO};
+  rendering.renderArea.extent = {1024, 1024};
+  rendering.layerCount = 1;
+  rendering.colorAttachmentCount = 1;
+  rendering.pColorAttachments = &colour_attachment;
+  rendering.pDepthAttachment = &depth_attachment;
+  const auto begin_rendering = hooked<PFN_vkCmdBeginRendering>("vkCmdBeginRendering");
+  const auto end_rendering = hooked<PFN_vkCmdEndRendering>("vkCmdEndRendering");
+  begin_rendering(command, &rendering);
+  REQUIRE(fake::rendering_density);
+  CHECK(fake::viewed(fake::rendering_density) == eye_map);
+  end_rendering(command);
+  rendering.pDepthAttachment = nullptr;
+  begin_rendering(command, &rendering);
+  CHECK(!fake::rendering_density);
+  end_rendering(command);
+  CHECK(fake::writes_while_recording == 0);
+
+  const VkFormat colour_format = VK_FORMAT_R8G8B8A8_UNORM;
+  VkPipelineRenderingCreateInfo pipeline_rendering{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
+  pipeline_rendering.colorAttachmentCount = 1;
+  pipeline_rendering.pColorAttachmentFormats = &colour_format;
+  pipeline_rendering.depthAttachmentFormat = VK_FORMAT_D32_SFLOAT;
+  auto flat_rendering = pipeline_rendering;
+  flat_rendering.depthAttachmentFormat = VK_FORMAT_UNDEFINED;
+  VkGraphicsPipelineCreateInfo pipelines[3]{};
+  for (auto& p : pipelines) p.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+  pipelines[0].pNext = &pipeline_rendering;
+  pipelines[1].pNext = &flat_rendering;
+  pipelines[2].renderPass = scene;
+  fov::PipelineStorage storage;
+  fov::patch_pipelines(dev, pipelines, storage);
+  CHECK((pipelines[0].flags & VK_PIPELINE_CREATE_RENDERING_FRAGMENT_DENSITY_MAP_ATTACHMENT_BIT_EXT));
+  CHECK(!(pipelines[1].flags & VK_PIPELINE_CREATE_RENDERING_FRAGMENT_DENSITY_MAP_ATTACHMENT_BIT_EXT));
+  CHECK(pipelines[2].flags == 0);
+  CHECK(pipelines[2].pNext == nullptr);
+  CHECK(storage.states.empty());
+
+  fov::forget_eye_swapchain(dev, &swapchain_key);
+  fov::release_device(dev);
+}
 }  // namespace
 
 TEST_CASE("Foveation shades an eye pass's edges in coarse fragments on the GPU") { run(false); }
@@ -594,4 +1001,7 @@ TEST_CASE("Foveation shades a stereo scene pass into the game's own image on the
 TEST_CASE("Foveation replaces a game's own density map on an eye pass") { run(false, true); }
 TEST_CASE("Foveation fills a swapchain's density map with its pattern on a GPU with density maps") {
   run_density_map();
+}
+TEST_CASE("Foveation renders with density maps instead of shading-rate attachments on a tiler") {
+  run_density_foveation();
 }

@@ -1961,11 +1961,15 @@ VkResult create_device_impl(VkPhysicalDevice physical, const VkDeviceCreateInfo*
     // attachments are enabled too, the maps are kept only when Venture writes
     // them from the CPU (host image copies): a driver may read a density map on
     // the CPU while it records the pass (Turnip does), so a map rewritten on
-    // the GPU each frame was read mid-copy.
+    // the GPU each frame was read mid-copy. A device foveating with density
+    // maps (a tiler's, foveated.density) has density maps whether or not the
+    // game asked for them, and no shading-rate attachments to probe.
     gfx::foveation::register_device(*out, physical, loader(), device_instance(*out), gdpa, foveated.added,
-                                    device_density_maps_enabled(*out) && (!foveated.added || foveated.host_copy),
+                                    (device_density_maps_enabled(*out) || foveated.density) &&
+                                        (!foveated.added || foveated.host_copy),
                                     foveated.host_copy,
-                                    foveated.added && rates_read_next_layer(physical, *out, *info));
+                                    foveated.added && !foveated.density && rates_read_next_layer(physical, *out, *info),
+                                    foveated.density);
     if (trace) log::info("vulkan-device", "Guest device queue configured");
     prepare_texture_device(*out);
     if (trace) log::info("vulkan-device", "Guest device textures prepared");

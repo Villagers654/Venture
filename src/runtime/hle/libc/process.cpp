@@ -134,6 +134,13 @@ int getrlimit_fn(int resource, Limit* out) {
   *out = limits[resource];
   return 0;
 }
+// The descriptor table's size: RLIMIT_NOFILE's soft limit (bionic's LP32
+// legacy getdtablesize, which CubeyTube calls).
+int getdtablesize_fn() {
+  Limit l{};
+  getrlimit_fn(7, &l);
+  return int(std::min<std::uint64_t>(l.current, INT32_MAX));
+}
 int setrlimit_fn(int resource, const Limit* in) {
   if (resource < 0 || resource >= 16 || !in || in->current > in->maximum)
     return failure(err::einval);
@@ -503,6 +510,8 @@ void register_process(HleLibrary& lib) {
     abi32::adapt<&getrlimit_fn>("getrlimit64"); abi32::adapt<&setrlimit_fn>("setrlimit64"); abi32::adapt<&prlimit_fn>("prlimit64");
     abi32::adapt<&getpwuid_r32>("getpwuid_r"); abi32::adapt<&getpwnam_r32>("getpwnam_r"); abi32::adapt<&getpwuid32>("getpwuid");
     abi32::adapt<&getrusage32>("getrusage"); abi32::adapt<&getgrnam32>("getgrnam");
+    // Not in the NDK headers (bionic's LP32 legacy), so no generated descriptor.
+    a32::register_adapter("libc.so", "getdtablesize", [](CallContext& c) { a32::invoke(&getdtablesize_fn, c); });
     // Process images are unavailable on both ISAs: ENOSYS before any argv read.
     for (auto name : {"execl", "execle", "execlp", "execv", "execve", "execvp", "execvpe"})
       a32::register_adapter("libc.so", name, [](CallContext& c) { a32::invoke(&unsupported, c); });
@@ -539,6 +548,7 @@ void register_process(HleLibrary& lib) {
   B("sysconf", sysconf_fn);
   B("getrlimit", getrlimit_fn);
   B("getrlimit64", getrlimit_fn);
+  B("getdtablesize", getdtablesize_fn);
   B("setrlimit", setrlimit_fn);
   B("setrlimit64", setrlimit_fn);
   B("prlimit", prlimit_fn);

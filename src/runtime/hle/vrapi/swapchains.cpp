@@ -463,6 +463,8 @@ TextureSwapChain *vrapi_CreateTextureSwapChain4(const SwapChainCreate *ci) {
     failure("CreateTextureSwapChain4", invalid);
     return nullptr;
   }
+  const auto normalized = normalized_swapchain_create(*ci);
+  ci = &normalized;
   const bool vulkan = state().init.graphics_api == vulkan_api;
   auto format = vulkan ? (ci->format > 0 && ci->format <= std::numeric_limits<std::int32_t>::max()
         ? static_cast<VkFormat>(ci->format) : VK_FORMAT_UNDEFINED) : hle::openxr::gl_to_vk(ci->format);

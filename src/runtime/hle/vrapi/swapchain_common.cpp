@@ -2,9 +2,12 @@
 // validation and the older creators, which forward to the host's
 // vrapi_CreateTextureSwapChain4.
 #include <algorithm>
+#include <atomic>
+#include <bit>
 #include <cmath>
 #include <iterator>
 
+#include "common/log.h"
 #include "hle/vrapi/submit.h"
 
 namespace venture::hle::vrapi {
@@ -18,10 +21,28 @@ bool valid_sampler(const TextureSamplerState &s) {
       std::all_of(std::begin(s.border_color), std::end(s.border_color),
                   [](float f) { return std::isfinite(f); });
 }
+// VrApi_Types.h's VRAPI_TEXTURE_SWAPCHAIN_FULL_MIP_CHAIN.
+constexpr std::int32_t kFullMipChain = -1;
 bool valid_swapchain_create(const SwapChainCreate &ci) {
-  return !(ci.width <= 0 || ci.height <= 0 || ci.levels <= 0 || ci.count <= 0 || ci.count > 16 ||
-           ci.array_size < 1 || ci.array_size > 2 || (ci.faces != 1 && ci.faces != 6) ||
-           ci.create_flags || ci.usage_flags != 1);
+  // Protected (0x1) and subsampled (0x2) creation are Quest compositor
+  // features with nothing to protect or subsample here: ignored. Usage flags
+  // only narrow what the images are for, and every ring image can be sampled
+  // and rendered to.
+  const bool ok = !(ci.width <= 0 || ci.height <= 0 || (ci.levels <= 0 && ci.levels != kFullMipChain) ||
+                    ci.count <= 0 || ci.count > 16 || ci.array_size < 1 || ci.array_size > 2 ||
+                    (ci.faces != 1 && ci.faces != 6) || (ci.create_flags & ~std::uint64_t(3)));
+  static std::atomic<int> reported{0};
+  if (!ok && reported.fetch_add(1) < 4)
+    log::warn("vrapi", "Swapchain refused: format={:#x} {}x{} levels={} faces={} layers={} count={} create={:#x} usage={:#x}",
+              ci.format, ci.width, ci.height, ci.levels, ci.faces, ci.array_size, ci.count, ci.create_flags,
+              ci.usage_flags);
+  return ok;
+}
+SwapChainCreate normalized_swapchain_create(const SwapChainCreate &ci) {
+  auto out = ci;
+  if (out.levels == kFullMipChain)
+    out.levels = std::int32_t(std::bit_width(std::uint32_t(std::max(ci.width, ci.height))));
+  return out;
 }
 namespace guest {
 TextureSwapChain *vrapi_CreateTextureSwapChain3(std::int32_t type, std::int64_t format,

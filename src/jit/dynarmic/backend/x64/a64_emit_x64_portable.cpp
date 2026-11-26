@@ -259,14 +259,10 @@ void A64EmitX64::FinishCapture(const IR::LocationDescriptor& descriptor, CodePtr
     code.unwind_observer = nullptr;
     if (capture.failure)
         return PortableStat(capture.failure);
-    for (const u64 value : capture.unclassified) {
-        char text[48];
-        if ((value >> 40) < 0xf)
-            std::snprintf(text, sizeof(text), "raw imm %llx", static_cast<unsigned long long>(value));
-        else
-            std::snprintf(text, sizeof(text), "raw imm %llx TiB", static_cast<unsigned long long>(value >> 40));
-        PortableStat(text);
-    }
+    // Counted by kind, not by value: one key per value grew the periodic cache report
+    // without bound (a line of megabytes every 10 seconds in long sessions).
+    for (const u64 value : capture.unclassified)
+        PortableStat((value >> 40) < 0xf ? "raw imm" : "raw imm high");
     const u8* const base = code.getCode();
     const size_t hot_begin = static_cast<const u8*>(entrypoint) - base, hot_end = hot_begin + size;
     PortableBlock block;
