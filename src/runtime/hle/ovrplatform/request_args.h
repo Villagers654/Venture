@@ -21,12 +21,17 @@ enum class ArgKind {
   bytes,
   options,
   model,
+  // ovrKeyValuePair array (OVR_Types.h), read as alternating key/value strings.
+  pairs,
+  // A declaration no snapshot reads (float arrays, custom query structs,
+  // version handles): the raw argument bits, so the request still completes.
   unsupported
 };
 struct ArgDescriptor {
   ArgKind kind;
   int count_index = -1;
   std::string_view tag{};
+  std::string_view name{};  // the SDK declaration's parameter name
 };
 struct RequestArgumentSpec {
   const char* name;

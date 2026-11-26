@@ -21,6 +21,7 @@
 #define VENTURE_LOG_WRITE ::write
 #define VENTURE_LOG_CLOSE ::close
 #endif
+#include <condition_variable>
 #include <mutex>
 #include <future>
 #include <string>
@@ -45,10 +46,28 @@ std::string g_path;
 #ifdef _WIN32
 HANDLE g_native_file = INVALID_HANDLE_VALUE;
 #endif
+// Lines for the file wait in one of two buffers, and only the writer thread
+// writes the file: a thread that logs never waits for the disk. A game that
+// logged 30 MB/s made every logging thread, its render thread among them,
+// queue for a 64 KiB buffer's synchronous writes behind one lock, and froze
+// for a second whenever a write stalled.
 // Publish only complete lines. A fatal handler must not wait for a mutex held
 // by the faulting thread or enter the C++ stream/allocator implementation.
-std::atomic<char> g_pending[65536];
-std::atomic<std::size_t> g_pending_size{0};
+constexpr std::size_t kBuffer = std::size_t(1) << 20;
+std::atomic<char> g_buffers[2][kBuffer];
+std::atomic<std::size_t> g_sizes[2]{};
+std::atomic<int> g_active{0};    // the buffer lines go to
+std::atomic<int> g_writing{-1};  // the buffer being written, or -1
+// Serializes file writes, set_file and flush; taken before g_mutex.
+std::mutex &g_io_mutex = *new std::mutex;
+std::condition_variable &g_wake = *new std::condition_variable;
+bool g_wake_now = false;  // requires g_mutex
+// A run's log stops taking info and lower lines past the limit, and warnings
+// and errors past twice it. Requires g_mutex, like the counts below.
+std::uint64_t g_limit = std::uint64_t(256) << 20;
+std::uint64_t g_buffered = 0;  // bytes taken for the current file
+std::uint64_t g_capped[2]{};   // info and lower, and warning or error lines left out past the limit
+std::uint64_t g_dropped = 0;   // lines left out while both buffers were full
 std::atomic<bool> g_crashing{false};
 std::atomic<bool> g_stderr{true};
 static_assert(std::atomic<std::size_t>::is_always_lock_free);
@@ -73,22 +92,45 @@ void raw_write(int fd, const char* bytes, std::size_t size) noexcept {
     size -= n;
   }
 }
-void write_pending() noexcept {
-  const auto size = g_pending_size.load(std::memory_order_acquire);
+void write_buffer(int index) noexcept {
+  const auto size = g_sizes[index].load(std::memory_order_acquire);
   char chunk[4096];
   for (std::size_t at = 0; at < size;) {
     const auto count = std::min(size - at, sizeof(chunk));
     for (std::size_t i = 0; i < count; ++i)
-      chunk[i] = g_pending[at + i].load(std::memory_order_relaxed);
+      chunk[i] = g_buffers[index][at + i].load(std::memory_order_relaxed);
     raw_write(g_file, chunk, count);
     at += count;
   }
 }
-void flush_file() noexcept {
-  if (g_file < 0) return;
-  write_pending();
-  if (!g_crashing.load(std::memory_order_acquire))
-    g_pending_size.store(0, std::memory_order_release);
+// Requires g_io_mutex and not g_mutex: writes the active buffer out, taking
+// new lines in the other one meanwhile.
+void drain() noexcept {
+  int index;
+  {
+    std::lock_guard lock(g_mutex);
+    if (g_file < 0 || g_crashing.load(std::memory_order_acquire)) return;
+    index = g_active.load(std::memory_order_relaxed);
+    if (!g_sizes[index].load(std::memory_order_relaxed)) return;
+    g_writing.store(index, std::memory_order_release);
+    g_active.store(index ^ 1, std::memory_order_release);
+  }
+  write_buffer(index);
+  if (g_crashing.load(std::memory_order_acquire)) return;
+  g_sizes[index].store(0, std::memory_order_release);
+  g_writing.store(-1, std::memory_order_release);
+}
+// Requires g_mutex. Appends whole text to the active buffer; false if it is full.
+bool push(std::string_view text) {
+  const int index = g_active.load(std::memory_order_relaxed);
+  const auto size = g_sizes[index].load(std::memory_order_relaxed);
+  if (text.size() > kBuffer - size) return false;
+  for (std::size_t i = 0; i < text.size(); ++i)
+    g_buffers[index][size + i].store(text[i], std::memory_order_relaxed);
+  g_sizes[index].store(size + text.size(), std::memory_order_release);
+  g_buffered += text.size();
+  if (size + text.size() > kBuffer / 2) g_wake_now = true;
+  return true;
 }
 struct Console {
   std::FILE* stream = nullptr;
@@ -111,21 +153,47 @@ struct Repeat {
 };
 // Never destroyed: threads may still log during static destruction.
 auto &g_repeats = *new std::unordered_map<std::string, Repeat>;
-// With a log file, info and lower lines are buffered: the file is flushed on
-// every warning or error and otherwise at most once per interval.
+// With a log file, lines reach it within the interval, and warnings and
+// errors at once (the writer wakes for them).
 std::chrono::milliseconds g_flush_interval{250};
-Clock::time_point g_flushed;
+
+std::string format_line(Level level, std::string_view tag, std::string_view message, Clock::time_point clock,
+                        std::uint64_t repeats = 0, double since = 0) {
+  auto now = std::chrono::duration_cast<std::chrono::milliseconds>(clock.time_since_epoch()).count();
+  auto tid = std::hash<std::thread::id>{}(std::this_thread::get_id()) % 100000;
+  return repeats ? std::format("{:>10}.{:03} {:>5} {} [{}] {} ({} times in the last {:.1f} s)\n", now / 1000,
+                               now % 1000, tid, kNames[static_cast<int>(level)], tag, message, repeats, since)
+                 : std::format("{:>10}.{:03} {:>5} {} [{}] {}\n", now / 1000, now % 1000, tid,
+                               kNames[static_cast<int>(level)], tag, message);
+}
+
+// Requires g_mutex. Takes a line for the file, or counts it left out.
+void file_line(Level level, std::string_view line, Clock::time_point clock) {
+  const bool important = level >= Level::warn;
+  if (g_buffered + line.size() > (important ? 2 * g_limit : g_limit)) {
+    if (!g_capped[important]++)
+      push(format_line(Level::warn, "log",
+                       std::format("The log file reached {} MiB this run: {} written no more", g_limit >> 20,
+                                   important ? "warnings and errors are" : "info and lower lines are"),
+                       clock));
+    g_wake_now = true;
+    return;
+  }
+  if (g_dropped &&
+      push(format_line(Level::warn, "log",
+                       std::format("{} lines left out: the log writer fell behind", g_dropped), clock)))
+    g_dropped = 0;
+  // A line longer than a buffer keeps its start.
+  if (!push(line.substr(0, kBuffer)))
+    ++g_dropped;
+  if (important) g_wake_now = true;
+  if (g_wake_now) g_wake.notify_one();
+}
 
 // Requires g_mutex.
 void emit(Level level, std::string_view tag, std::string_view message, Clock::time_point clock,
           std::uint64_t repeats = 0, double since = 0) {
-  auto now = std::chrono::duration_cast<std::chrono::milliseconds>(clock.time_since_epoch()).count();
-  auto tid = std::hash<std::thread::id>{}(std::this_thread::get_id()) % 100000;
-  std::string line =
-      repeats ? std::format("{:>10}.{:03} {:>5} {} [{}] {} ({} times in the last {:.1f} s)\n", now / 1000,
-                            now % 1000, tid, kNames[static_cast<int>(level)], tag, message, repeats, since)
-              : std::format("{:>10}.{:03} {:>5} {} [{}] {}\n", now / 1000, now % 1000, tid,
-                            kNames[static_cast<int>(level)], tag, message);
+  std::string line = format_line(level, tag, message, clock, repeats, since);
   const bool important = level >= Level::warn;
 #ifdef __ANDROID__
   // Android discards an app's stderr: lines at the log level also go to logcat.
@@ -144,23 +212,7 @@ void emit(Level level, std::string_view tag, std::string_view message, Clock::ti
   }
   if (g_file >= 0) {
     if (g_crashing.load(std::memory_order_acquire)) return;
-    auto pending = g_pending_size.load(std::memory_order_relaxed);
-    if (line.size() > sizeof(g_pending) - pending) {
-      flush_file();
-      pending = 0;
-    }
-    if (g_crashing.load(std::memory_order_acquire)) return;
-    if (line.size() > sizeof(g_pending)) {
-      raw_write(g_file, line.data(), line.size());
-    } else {
-      for (std::size_t i = 0; i < line.size(); ++i)
-        g_pending[pending + i].store(line[i], std::memory_order_relaxed);
-      g_pending_size.store(pending + line.size(), std::memory_order_release);
-    }
-    if (important || clock - g_flushed >= g_flush_interval) {
-      flush_file();
-      g_flushed = clock;
-    }
+    file_line(level, line, clock);
     // The launcher captures stderr into its own console log; with a file set,
     // stderr carries only warnings and errors instead of a second full copy.
     if (!important || !g_stderr.load(std::memory_order_relaxed))
@@ -210,35 +262,46 @@ void sweep_repeats(Clock::time_point clock) {
   }
 }
 
-struct ExitFlush {
-  ~ExitFlush() {
+// Writes the pending repeat counts and every line taken so far.
+void flush_all() {
+  std::lock_guard io(g_io_mutex);
+  {
     std::lock_guard lock(g_mutex);
     flush_repeats();
-    flush_file();
   }
+  drain();
+  {
+    // Lines left out at the end are still counted.
+    std::lock_guard lock(g_mutex);
+    if (!g_dropped || g_file < 0 ||
+        !push(format_line(Level::warn, "log", std::format("{} lines left out: the log writer fell behind", g_dropped),
+                          Clock::now())))
+      return;
+    g_dropped = 0;
+  }
+  drain();
+}
+struct ExitFlush {
+  ~ExitFlush() { flush_all(); }
 } g_exit_flush; // Destroyed before g_file.
 // Buffered lines reach the file within the flush interval even when nothing is
 // logged after them. Flushing only on the next line kept a stalled process's
 // last lines in memory: its log ended up to an interval before the stall, so a
 // hang read as one at an earlier step (issue 23's runs "stopped" at HotSpot's
 // start).
-void start_flusher() {
+void start_writer() {
   static std::once_flag started;
   std::call_once(started, [] {
     std::thread([] {
       for (;;) {
-        std::chrono::milliseconds wait;
         {
-          std::lock_guard lock(g_mutex);
-          const auto clock = Clock::now();
-          if (g_file >= 0 && g_pending_size.load(std::memory_order_acquire) &&
-              !g_crashing.load(std::memory_order_acquire) && clock - g_flushed >= g_flush_interval) {
-            flush_file();
-            g_flushed = clock;
-          }
-          wait = std::clamp(g_flush_interval, std::chrono::milliseconds(1), std::chrono::milliseconds(250));
+          std::unique_lock lock(g_mutex);
+          const auto wait = std::clamp(g_flush_interval, std::chrono::milliseconds(1), std::chrono::milliseconds(250));
+          g_wake.wait_for(lock, wait, [] { return g_wake_now; });
+          g_wake_now = false;
         }
-        std::this_thread::sleep_for(wait);
+        std::lock_guard io(g_io_mutex);
+        drain();
       }
     }).detach();
   });
@@ -294,11 +357,7 @@ void attach_console() {
 #endif
 }
 
-void flush() {
-  std::lock_guard lock(g_mutex);
-  flush_repeats();
-  flush_file();
-}
+void flush() { flush_all(); }
 void prepare_terminal_handoff() {
   // Process-lifetime worker: never join it during exit, because an unrelated
   // writer can own the logging/stdio locks indefinitely. Allocation and thread
@@ -329,9 +388,13 @@ void terminal_handoff(int status, std::chrono::milliseconds budget) noexcept {
 void crash_write(const char* bytes, std::size_t size) noexcept {
   // Normal console mirrors flush each line. Do not enter their stdio locks
   // here: the faulting thread may hold one. Fatal output uses native writes.
-  // The first call drains the buffer; subsequent frame lines append directly.
-  if (!g_crashing.exchange(true, std::memory_order_acq_rel) && g_file >= 0)
-    write_pending();
+  // The first call writes the buffers, the one being written first (some of
+  // its lines may then appear twice); subsequent frame lines append directly.
+  if (!g_crashing.exchange(true, std::memory_order_acq_rel) && g_file >= 0) {
+    const int writing = g_writing.load(std::memory_order_acquire);
+    if (writing >= 0) write_buffer(writing);
+    write_buffer(g_active.load(std::memory_order_acquire));
+  }
   if (g_file >= 0) raw_write(g_file, bytes, size);
   raw_write(2, bytes, size);
 }
@@ -355,6 +418,13 @@ const char* fatal_reason() noexcept {
 void set_flush_interval(std::chrono::milliseconds interval) {
   std::lock_guard lock(g_mutex);
   g_flush_interval = interval;
+  g_wake_now = true;
+  g_wake.notify_one();
+}
+
+void set_file_limit(std::uint64_t bytes) {
+  std::lock_guard lock(g_mutex);
+  g_limit = bytes;
 }
 
 void set_level(Level level) { g_level = level; }
@@ -368,14 +438,25 @@ void set_repeat_period(std::chrono::milliseconds period) {
 }
 
 void set_file(std::string_view path) {
-  std::lock_guard lock(g_mutex);
   // Pending counts belong to the old destination; the new one gets its own
   // first occurrences.
-  flush_repeats();
-  flush_file();
+  std::lock_guard io(g_io_mutex);
+  {
+    std::lock_guard lock(g_mutex);
+    flush_repeats();
+  }
+  drain();
+  std::lock_guard lock(g_mutex);
+  // Lines taken since the drain still belong to the old file.
+  if (g_file >= 0 && !g_crashing.load(std::memory_order_acquire)) {
+    const int index = g_active.load(std::memory_order_relaxed);
+    write_buffer(index);
+    g_sizes[index].store(0, std::memory_order_release);
+  }
   if (g_file >= 0) VENTURE_LOG_CLOSE(g_file);
   g_file = -1;
   g_path = path;
+  g_buffered = g_capped[0] = g_capped[1] = g_dropped = 0;
   if (!path.empty()) {
 #ifdef _WIN32
     g_file = _wopen(paths::from_utf8(path).c_str(), _O_WRONLY | _O_CREAT | _O_APPEND | _O_BINARY,
@@ -384,7 +465,7 @@ void set_file(std::string_view path) {
 #else
     g_file = ::open(paths::from_utf8(path).c_str(), O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0600);
 #endif
-    if (g_file >= 0) start_flusher();
+    if (g_file >= 0) start_writer();
   }
 }
 

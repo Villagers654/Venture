@@ -1,6 +1,7 @@
 #include "hle/ovrplatform/horizon.h"
 #include "common/log.h"
 #include <algorithm>
+#include <stdexcept>
 
 namespace venture::ovrplatform {
 namespace {
@@ -73,22 +74,166 @@ Json encode(const Model& model) {
   }
   return out;
 }
+// The C API answers launch details synchronously
+// (ovr_ApplicationLifecycle_GetLaunchDetails); Horizon's
+// ApplicationLifecycle.GetLaunchDetails is a request, answered from the same
+// details. Les Mills Bodycombat's deep-link reader dereferences the result
+// while its first scene loads.
+constexpr RequestSpec launch_details_request{"ovr_ApplicationLifecycle_GetLaunchDetails", 0};
 const RequestSpec* resolve(std::string_view module, std::string_view method) {
   auto service = pascal(module);
-  if (service == "Users") service = "User";
-  if (service == "Entitlements") service = "Entitlement";
+  if (service == "ApplicationLifecycle" && pascal(method) == "GetLaunchDetails") return &launch_details_request;
+  if (service.empty()) return nullptr;
   if (service == "Iap") service = "IAP";
-  const auto name = "ovr_" + service + "_" + pascal(method);
   const auto lower = [](std::string value) {
     for (auto& c : value) if (c >= 'A' && c <= 'Z') c = char(c - 'A' + 'a');
     return value;
   };
+  // Horizon modules name services in the plural or singular where the C API
+  // uses the other (Users/User, Entitlements/Entitlement, Achievements).
+  std::vector<std::string> services{service};
+  if (service.ends_with('s')) services.push_back(service.substr(0, service.size() - 1));
+  else services.push_back(service + 's');
   // C exports preserve acronyms (ID, SKU); ToPascalCase only produces Id/Sku.
-  for (const auto& spec : request_specs())
-    if (lower(spec.name) == lower(name)) return &spec;
+  for (const auto& candidate : services) {
+    const auto name = lower("ovr_" + candidate + "_" + pascal(method));
+    for (const auto& spec : request_specs())
+      if (lower(spec.name) == name) return &spec;
+  }
   return nullptr;
 }
+std::string text(const Json& value) {
+  if (value.is_string()) return value.get<std::string>();
+  if (value.is_boolean()) return value.get<bool>() ? "1" : "0";
+  if (value.is_null()) return {};
+  return value.dump();
+}
+std::uint64_t unsigned_value(const Json& value) {
+  if (value.is_number_unsigned()) return value.get<std::uint64_t>();
+  if (value.is_number_integer()) return static_cast<std::uint64_t>(value.get<std::int64_t>());
+  if (value.is_number_float()) return static_cast<std::uint64_t>(value.get<double>());
+  if (value.is_boolean()) return value.get<bool>();
+  const auto s = text(value);
+  if (s.empty() || s == "0") return 0;
+  if (!valid_id(s)) throw std::invalid_argument("Horizon number");
+  return std::stoull(s);
+}
+std::int64_t signed_value(const Json& value) {
+  if (value.is_number_integer()) return value.get<std::int64_t>();
+  if (value.is_number_float()) return static_cast<std::int64_t>(value.get<double>());
+  if (value.is_string() && value.get_ref<const std::string&>().starts_with('-'))
+    return -static_cast<std::int64_t>(unsigned_value(value.get<std::string>().substr(1)));
+  return static_cast<std::int64_t>(unsigned_value(value));
+}
+// The length a count parameter takes from the value it counts.
+std::uint64_t length(const Json& value) {
+  if (value.is_array() || value.is_object()) return value.size();
+  return value.is_string() ? value.get_ref<const std::string&>().size() : 0;
+}
+// Any other request: its JSON names the C declaration's parameters in
+// snake_case (Users::Get's {user_id} is ovr_User_Get(userID)); a parameter the
+// JSON leaves out takes its type's empty value.
+RequestArgs generic_arguments(const RequestArgumentSpec& desc, const Json& data) {
+  RequestArgs out;
+  std::vector<int> counted(desc.arguments.size(), -1);
+  for (std::size_t i = 0; i < desc.arguments.size(); ++i)
+    if (const auto at = desc.arguments[i].count_index; at >= 0 && static_cast<std::size_t>(at) < counted.size())
+      counted[at] = static_cast<int>(i);
+  try {
+    for (std::size_t i = 0; i < desc.arguments.size(); ++i) {
+      const auto& d = desc.arguments[i];
+      const auto found = data.find(wire_name(d.name));
+      const Json value = found == data.end() ? Json(nullptr) : *found;
+      const Json* counts = nullptr;
+      if (counted[i] >= 0)
+        if (auto it = data.find(wire_name(desc.arguments[counted[i]].name)); it != data.end()) counts = &*it;
+      switch (d.kind) {
+        case ArgKind::string: out.values.emplace_back(text(value)); break;
+        case ArgKind::id:
+        case ArgKind::size: out.values.emplace_back(counts ? length(*counts) : unsigned_value(value)); break;
+        case ArgKind::i64: out.values.emplace_back(signed_value(value)); break;
+        case ArgKind::u32:
+          out.values.emplace_back(static_cast<std::uint32_t>(counts ? length(*counts) : signed_value(value)));
+          break;
+        case ArgKind::i32:
+          out.values.emplace_back(static_cast<std::int32_t>(counts ? length(*counts) : signed_value(value)));
+          break;
+        case ArgKind::boolean:
+          out.values.emplace_back(value.is_boolean() ? value.get<bool>() : signed_value(value) != 0);
+          break;
+        case ArgKind::enumeration:
+          out.values.emplace_back(EnumValue{static_cast<std::int32_t>(value.is_number() ? signed_value(value) : 0)});
+          break;
+        case ArgKind::string_array: {
+          std::vector<std::string> list;
+          if (value.is_array()) for (const auto& item : value) list.push_back(text(item));
+          out.values.emplace_back(std::move(list));
+          break;
+        }
+        case ArgKind::id_array: {
+          std::vector<Id> list;
+          if (value.is_array()) for (const auto& item : value) list.push_back(unsigned_value(item));
+          out.values.emplace_back(std::move(list));
+          break;
+        }
+        case ArgKind::bytes: {
+          const auto bytes = text(value);
+          const auto* begin = reinterpret_cast<const std::byte*>(bytes.data());
+          out.values.emplace_back(std::vector<std::byte>(begin, begin + bytes.size()));
+          break;
+        }
+        case ArgKind::options: {
+          // Option setters are Set<Field>; the JSON names the fields in
+          // snake_case. Dictionaries are stored as Session::set_option does.
+          OptionsSnapshot options{std::string(d.tag), {}};
+          if (value.is_object())
+            for (const auto& [field, item] : value.items()) {
+              const auto name = pascal(field);
+              if (name.empty()) continue;
+              if (item.is_object())
+                for (const auto& [k, v] : item.items()) options.fields[name + '\0' + k] = {"String", text(v)};
+              else if (item.is_array())
+                for (const auto& v : item) options.fields[name].push_back(text(v));
+              else
+                options.fields[name] = {text(item)};
+            }
+          out.values.emplace_back(std::move(options));
+          break;
+        }
+        case ArgKind::model: {
+          PageSnapshot page{std::string(d.tag), {}, {}};
+          if (value.is_string()) page.next_url = value.get<std::string>();
+          else if (value.is_object()) {
+            const auto paging = value.contains("paging") ? value["paging"] : value;
+            if (paging.is_object()) {
+              page.next_url = text(paging.value("next", Json(nullptr)));
+              page.previous_url = text(paging.value("previous", Json(nullptr)));
+            }
+          }
+          out.values.emplace_back(std::move(page));
+          break;
+        }
+        case ArgKind::pairs: {
+          std::vector<std::string> pairs;
+          if (value.is_object())
+            for (const auto& [k, v] : value.items()) {
+              pairs.push_back(k);
+              pairs.push_back(text(v));
+            }
+          out.values.emplace_back(std::move(pairs));
+          break;
+        }
+        case ArgKind::unsupported: out.values.emplace_back(std::uint64_t{0}); break;
+      }
+    }
+  } catch (const std::exception&) {
+    return {{}, failure(ErrorCode::invalid_argument)};
+  }
+  return out;
+}
 RequestArgs arguments(const RequestSpec& spec, const Json& data) {
+  if (&spec == &launch_details_request)
+    return data.empty() ? RequestArgs{} : RequestArgs{{}, failure(ErrorCode::invalid_argument)};
   // Request JSON is produced by Epic's service wrappers, e.g. Users::Get
   // 0x747b834 {user_id}, GetLoggedInUser 0x747c5b0 {}, Entitlements 0x745833c {}.
   for (const auto& desc : request_argument_specs()) {
@@ -115,9 +260,9 @@ RequestArgs arguments(const RequestSpec& spec, const Json& data) {
       if (valid_id(text)) return {{static_cast<std::uint64_t>(std::stoull(text))}};
       return {{}, failure(ErrorCode::invalid_argument)};
     }
-    return {{}, failure(ErrorCode::unsupported)};
+    return generic_arguments(desc, data);
   }
-  return {{}, failure(ErrorCode::unsupported)};
+  return data.empty() ? RequestArgs{} : RequestArgs{{}, failure(ErrorCode::invalid_argument)};
 }
 }  // namespace
 InitResult Horizon::setup(std::string_view app_id) { return session_.initialize(app_id); }
@@ -125,20 +270,26 @@ std::uint64_t Horizon::request(std::string_view module, std::string_view method,
                               std::int32_t version, std::string_view data,
                               std::int32_t cookie, bool subscription) {
   std::lock_guard lock(mutex_);
+  // A subscription is a stream of events for its own session id. Venture's
+  // services raise none of their own, so it stays open and quiet until stop().
+  if (subscription) return next_session_++;
   const auto* spec = resolve(module, method);
   RequestArgs args;
   try {
     auto json = Json::parse(data.empty() ? "{}" : data);
     if (!json.is_object() || version != 1) args.error = failure(ErrorCode::invalid_argument);
-    else if (spec && !subscription) args = arguments(*spec, json);
-    else args.error = failure(ErrorCode::unsupported);
+    else if (spec) args = arguments(*spec, json);
+    else {
+      // pascal() keeps only letters and digits: identifiers, never guest data.
+      log::warn("horizon", "no Platform request for {}.{}", pascal(module), pascal(method));
+      args.error = failure(ErrorCode::unsupported);
+    }
   } catch (...) { args.error = failure(ErrorCode::invalid_argument); }
   // Never log guest-controlled JSON, method strings, IDs, aliases or proofs.
   static constexpr RequestSpec unknown{"ovr_Horizon_Unsupported", 0};
   auto request = session_.request_host(spec ? *spec : unknown, std::move(args));
-  auto route = subscription ? next_session_++ : global_session;
-  pending_.push_back({request, route, cookie, spec ? spec->name : unknown.name});
-  return subscription ? route : request;
+  pending_.push_back({request, global_session, cookie, spec ? spec->name : unknown.name});
+  return request;
 }
 void Horizon::collect() {
   for (auto it = pending_.begin(); it != pending_.end();) {
@@ -182,7 +333,7 @@ void Horizon::stop(std::uint64_t session) {
   std::lock_guard lock(mutex_);
   collect();
   std::erase_if(ready_, [=](const auto& r) { return r.session == session; });
-  // Completed errors for unsupported subscriptions have no network work.
+  // Subscriptions hold no request; a stopped session drops its completions.
   // Keep outstanding IDs until collect() can retire the shared completion.
   for (auto& p : pending_) if (p.session == session) p.session = 0;
 }

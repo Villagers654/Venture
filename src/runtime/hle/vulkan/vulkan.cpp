@@ -366,7 +366,11 @@ struct ResultObservation {
   ResultObservation() : previous(current) { current = this; }
   ~ResultObservation() { current = previous; }
   void report(const char* name, VkResult result) const {
-    if (result == VK_SUCCESS) return;
+    // Positive results are statuses (VK_NOT_READY from a fence poll, VK_TIMEOUT,
+    // VK_INCOMPLETE, VK_SUBOPTIMAL_KHR), not failures. A render thread polls
+    // its fences every frame, and taking the log's lock for each one made it
+    // wait on every log write another thread was doing.
+    if (result >= VK_SUCCESS) return;
     if (native_result == result)
       log::warn("vulkan-result", "{} returned VkResult={} source=host driver ({})", name,
                 static_cast<int>(result), native_function);

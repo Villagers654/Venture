@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <format>
 #include <stdexcept>
 
 #include "core/guest.h"
@@ -135,9 +136,43 @@ RequestArgs snapshot_request_args(Session& session, const RequestArgumentSpec& s
           out.values.emplace_back(std::move(*value));
           break;
         }
+        case ArgKind::pairs: {
+          // OVR_Types.h ovrKeyValuePair {const char* key; ovrKeyValuePairType
+          // valueType; const char* stringValue; int intValue; double
+          // doubleValue}: 40 bytes on AArch64, 24 on AAPCS32 (double 8-aligned).
+          const std::size_t stride = pointer_bytes == 8 ? 40 : 24;
+          const std::size_t type_at = pointer_bytes, string_at = pointer_bytes == 8 ? 16 : 8,
+                            int_at = pointer_bytes == 8 ? 24 : 12, double_at = pointer_bytes == 8 ? 32 : 16;
+          std::vector<std::string> value;
+          auto n = count();
+          std::size_t total = 0;
+          for (std::size_t j = 0; j < n; ++j) {
+            std::array<std::byte, 40> pair{};
+            read(b + j * stride, pair.data(), stride, pointer_bytes);
+            const auto word = [&](std::size_t at) {
+              std::uint64_t v = 0;
+              std::memcpy(&v, pair.data() + at, pointer_bytes);
+              return v;
+            };
+            std::int32_t type = 0, integer = 0;
+            double real = 0;
+            std::memcpy(&type, pair.data() + type_at, 4);
+            std::memcpy(&integer, pair.data() + int_at, 4);
+            std::memcpy(&real, pair.data() + double_at, 8);
+            value.push_back(copy_string(word(0), pointer_bytes));
+            if (type == 0) value.push_back(word(string_at) ? copy_string(word(string_at), pointer_bytes) : std::string{});
+            else if (type == 1) value.push_back(std::to_string(integer));
+            else if (type == 2) value.push_back(std::format("{}", real));
+            else throw std::invalid_argument("invalid Platform key/value type");
+            total += value[value.size() - 2].size() + value.back().size();
+            if (total > 4 * 1024 * 1024) throw std::invalid_argument("oversized Platform key/value pairs");
+          }
+          out.values.emplace_back(std::move(value));
+          break;
+        }
         case ArgKind::unsupported:
-          out.error = unsupported_operation(spec.name);
-          return out;
+          out.values.emplace_back(b);
+          break;
       }
     }
   } catch (const std::invalid_argument&) {

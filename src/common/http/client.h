@@ -39,6 +39,12 @@ Response get_loopback(uint16_t port, std::string_view path,
 Response post_loopback(uint16_t port, std::string_view path,
                        const Fields &fields, std::stop_token stop = {});
 std::string get_public(std::string url, std::stop_token stop = {});
+// A game's own ovr_HTTP_Get / ovr_HTTP_Post: any https URL without
+// credentials in it, as the game could fetch itself. No account data, cookie
+// or token is sent; redirects stay on https.
+bool allowed_guest(std::string_view url);
+Response get_guest(std::string url, std::stop_token stop = {});
+Response post_guest(std::string url, std::stop_token stop = {});
 // Venture's latest published release from GitHub's API; no account data is sent.
 Response get_latest_release(std::stop_token stop = {});
 // One page (1-based, newest first) of Venture's published releases, pre-releases

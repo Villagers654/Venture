@@ -716,6 +716,7 @@ endif()
 
 target_sources(venture_tests PRIVATE runtime/ovrplatform_test.cpp runtime/ovrplatform_http_test.cpp
   runtime/ovrplatform_presence_test.cpp runtime/assetfile_test.cpp runtime/horizon_test.cpp
+  runtime/ovrplatform_emulated_test.cpp
   # The Android Platform loader's dispatcher, host independent.
   runtime/native_platform_test.cpp ${PROJECT_SOURCE_DIR}/src/android_game/platform/native_platform.cpp
   # The 32-bit loader's call conversion, host independent.

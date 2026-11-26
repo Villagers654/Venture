@@ -61,3 +61,36 @@ TEST_CASE("an info line reaches the log file when nothing is logged after it") {
   }
   CHECK(written);
 }
+TEST_CASE("a log file stops taking lines past its limit and says so") {
+  LogFile file;
+  log::set_file_limit(4096);
+  const std::string filler(100, 'x');
+  for (int i = 0; i < 200; ++i) log::info("test", "info {} {}", i, filler);
+  log::warn("test", "a warning past the info limit");
+  for (int i = 0; i < 200; ++i) log::warn("test", "warning {} {}", i, filler);
+  log::set_file_limit(std::uint64_t(256) << 20);
+  const auto text = file.text();
+  CHECK(count(text, "info and lower lines are written no more") == 1);
+  CHECK(count(text, "warnings and errors are written no more") == 1);
+  CHECK(count(text, "a warning past the info limit") == 1);
+  CHECK(count(text, "info 199 ") == 0);
+  CHECK(count(text, "warning 199 ") == 0);
+  CHECK(text.size() < 3 * 4096);
+}
+TEST_CASE("a burst of log lines all reach the file in order") {
+  LogFile file;
+  const std::string filler(200, 'y');
+  for (int i = 0; i < 20000; ++i) log::info("test", "line {:05} {}", i, filler);
+  log::flush();
+  const auto text = file.text();
+  std::size_t at = 0, written = 0;
+  for (int i = 0; i < 20000; ++i) {
+    const auto next = text.find(std::format("line {:05} ", i), at);
+    if (next == text.npos) continue;
+    ++written;
+    at = next;
+  }
+  // 4.5 MB in a tight loop: the writer may fall behind and say how many it left out.
+  CHECK(written > 0);
+  if (written < 20000) CHECK(text.find("lines left out: the log writer fell behind") != text.npos);
+}

@@ -161,6 +161,18 @@ std::string_view message_type_name(std::uint32_t type) {
   return "Unknown";
 }
 
+namespace {
+// The launch's details, for the synchronous C getter and Horizon's request.
+Model launch_model(const LaunchDetails& info) {
+  return {"LaunchDetails",
+          {{"LaunchType", info.type},
+           {"RoomID", info.room},
+           {"LaunchSource", info.source},
+           {"DeeplinkMessage", info.deeplink}, {"DestinationApiName", info.destination},
+           {"LobbySessionID", info.lobby}, {"MatchSessionID", info.match},
+           {"Users", std::make_shared<const Model>(Model{"UserArray"})}}};
+}
+}  // namespace
 struct Session::Impl {
   using Clock = std::chrono::steady_clock;
   enum class State { uninitialized, initializing, ready, failed, shutdown };
@@ -294,11 +306,31 @@ struct Session::Impl {
         name == "ovr_GroupPresence_SetMatchSession" || name == "ovr_GroupPresence_SetIsJoinable" ||
         name == "ovr_GroupPresence_SetDeeplinkMessageOverride" || name == "ovr_AbuseReport_ReportRequestHandled" ||
         name == "ovr_Application_GetVersion" || name == "ovr_ApplicationLifecycle_GetSessionKey" ||
-        name == "ovr_ApplicationLifecycle_RegisterSessionKey" || name == "ovr_ApplicationLifecycle_GetRegisteredPIDs";
+        name == "ovr_ApplicationLifecycle_RegisterSessionKey" || name == "ovr_ApplicationLifecycle_GetRegisteredPIDs" ||
+        name == "ovr_ApplicationLifecycle_GetLaunchDetails" || name.starts_with("ovr_RichPresence_Set") ||
+        name == "ovr_RichPresence_Clear";
   }
-  Result local_request(const Job& job) { // caller holds mutex; never does I/O
+  // The deprecated RichPresence calls are the same presence state under their
+  // old names (OVR_Requests_RichPresence.h): RichPresenceOptions' ApiName is
+  // GroupPresenceOptions' DestinationApiName.
+  static std::optional<Job> group_presence(const Job& job) {
+    if (!job.name.starts_with("ovr_RichPresence_")) return {};
+    Job alias = job;
+    alias.name = "ovr_GroupPresence_" + job.name.substr(17);
+    if (alias.name == "ovr_GroupPresence_Set" && !alias.args.values.empty())
+      if (auto* options = std::get_if<OptionsSnapshot>(&alias.args.values[0]))
+        if (auto it = options->fields.find("ApiName"); it != options->fields.end()) {
+          options->fields["DestinationApiName"] = it->second;
+          options->fields.erase("ApiName");
+        }
+    return alias;
+  }
+  Result local_request(const Job& request) { // caller holds mutex; never does I/O
+    const auto alias = group_presence(request);
+    const auto& job = alias ? *alias : request;
     const auto& name = job.name;
     const auto& args = job.args.values;
+    if (name == "ovr_ApplicationLifecycle_GetLaunchDetails") return {{}, {}, {}, launch_model(launch_info)};
     if (name.starts_with("ovr_GroupPresence_")) {
       auto next = presence;
       if (name == "ovr_GroupPresence_Clear") next = nlohmann::json::object();
@@ -451,7 +483,8 @@ struct Session::Impl {
     if (result.error)
       log::warn("ovrplatform", "{} request={} type={:#x} error={}", job.name, job.id, job.type,
                 static_cast<int>(result.error.code));
-    else if (job.name.starts_with("ovr_GroupPresence_Set") || job.name == "ovr_GroupPresence_Clear")
+    else if (job.name.starts_with("ovr_GroupPresence_Set") || job.name == "ovr_GroupPresence_Clear" ||
+             job.name.starts_with("ovr_RichPresence_"))
       log::info("ovrplatform", "{} request={} type={:#x} completed", job.name, job.id, job.type);
     else
       log::debug("ovrplatform", "{} request={} type={:#x} completed", job.name,
@@ -936,15 +969,7 @@ Handle Session::launch_details() {
   if (impl_->state == Impl::State::shutdown) return 0;
   if (impl_->launch) return impl_->launch;
   auto graph = std::make_unique<Graph>(impl_->memory);
-  const auto& info = impl_->launch_info;
-  Model launch{"LaunchDetails",
-               {{"LaunchType", info.type},
-                {"RoomID", info.room},
-                {"LaunchSource", info.source},
-                {"DeeplinkMessage", info.deeplink}, {"DestinationApiName", info.destination},
-                {"LobbySessionID", info.lobby}, {"MatchSessionID", info.match},
-                {"Users", std::make_shared<const Model>(Model{"UserArray"})}}};
-  auto root = graph->model(launch, impl_->serial);
+  auto root = graph->model(launch_model(impl_->launch_info), impl_->serial);
   impl_->launch = impl_->publish(std::move(graph), root);
   return root;
 }

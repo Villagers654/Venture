@@ -5,6 +5,7 @@
 #include "core/process.h"
 #include "hle/ovrplatform/asset_service.h"
 #include "hle/ovrplatform/broker.h"
+#include "hle/ovrplatform/emulated.h"
 #include "hle/ovrplatform/hle.h"
 #include "hle/ovrplatform/progression.h"
 
@@ -49,6 +50,8 @@ std::unique_ptr<Session> make_runtime_session(
   auto session = std::make_unique<Session>(
       app, std::move(provider),
       std::move(memory));
+  register_emulated_handlers(*session, app,
+                             paths::data_dir() / "accounts" / process_config().account_key / "platform" / app.app_id);
   ProgressionPolicy policy;
   policy.leaderboard_writes = process_config().platform_leaderboard_writes;
   register_progression_handlers(*session, policy);

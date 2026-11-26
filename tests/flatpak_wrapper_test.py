@@ -142,6 +142,75 @@ out=$(XR_RUNTIME_JSON=/x/runtime.json VR_PATHREG_OVERRIDE=/x/openvrpaths.vrpath 
       XDG_RUNTIME_DIR="$root/frame/run" VK_DRIVER_FILES=none sh "$root/bin/wrapper.sh")
 check "XR_RUNTIME_JSON kept" "$(echo "$out" | value XR_RUNTIME_JSON)" "/x/runtime.json"
 check "VR_PATHREG_OVERRIDE kept" "$(echo "$out" | value VR_PATHREG_OVERRIDE)" "/x/openvrpaths.vrpath"
+
+# 6. Vulkan drivers: the host's where the runtime's loader resolves them, the
+#    runtime's for the rest. The fake dynamic loader fails libraries whose file
+#    says so, as the real one reports a missing library or symbol version.
+cat > "$root/bin/ldso" <<'EOF'
+#!/bin/sh
+[ "$1" = "--list" ] || exit 2
+case "$(cat "$2")" in
+  missing) echo "libfoo.so.9 => not found" ;;
+  version) echo "$2: /lib/libc.so.6: version \`GLIBC_9.99' not found (required by $2)" ;;
+  foreign) echo "$2: not a dynamic executable"; exit 1 ;;
+  spirv)  # Needs a library only the host has, found through LD_LIBRARY_PATH.
+    for dir in $(echo "${LD_LIBRARY_PATH:-}" | tr ':' ' '); do
+      [ -e "$dir/libSPIRV-Tools.so" ] && exit 0
+    done
+    echo "$1: error while loading shared libraries: libSPIRV-Tools.so: cannot open shared object file: No such file or directory"
+    exit 127 ;;
+  locked) echo "        libnvidia-glcore.so.580.95.05 => not found" ;;
+esac
+exit 0
+EOF
+chmod +x "$root/bin/ldso"
+sed -e "s#^host=/run/host\$#host=$root/runhost#" \
+    -e "s#^ldso=.*#ldso=$root/bin/ldso#" \
+    -e "s#^  icd=/usr/lib/.*#  icd=$root/runtime-icd#" \
+    -e 's#^exec /app/venture/venture "\$@"$#echo "VK_DRIVER_FILES=${VK_DRIVER_FILES:-}"; echo "LD_LIBRARY_PATH=${LD_LIBRARY_PATH:-}"#' \
+    "$WRAPPER" > "$root/bin/vulkan.sh"
+library() { tr -d '\n\r' < "$1" | sed -n 's/.*"library_path"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p'; }
+grep -q "^ldso=$root/bin/ldso\$" "$root/bin/vulkan.sh" || { echo "FAIL the entry point has no ldso= line"; fail=1; }
+grep -q "^  icd=$root/runtime-icd\$" "$root/bin/vulkan.sh" || { echo "FAIL the entry point has no icd= line"; fail=1; }
+vulkan() { env -u VK_ICD_FILENAMES -u VK_DRIVER_FILES -u LD_LIBRARY_PATH HOME="$root/vk" XDG_RUNTIME_DIR="$root/vk/run" FLATPAK_ID=org.venture_emu.Venture sh "$root/bin/vulkan.sh" | value "${1:-VK_DRIVER_FILES}"; }
+mkdir -p "$root/vk/run" "$root/runtime-icd"
+echo '{"ICD":{"library_path":"libvulkan_freedreno.so","api_version":"1.4.300"}}' > "$root/runtime-icd/freedreno_icd.aarch64.json"
+echo '{"ICD":{"library_path":"libvulkan_lvp.so","api_version":"1.4.300"}}' > "$root/runtime-icd/lvp_icd.aarch64.json"
+check "no host drivers: the runtime's" "$(vulkan)" "$root/runtime-icd"
+icds=$root/runhost/usr/share/vulkan/icd.d; mkdir -p "$icds"
+echo 'missing' > "$root/runhost/usr/lib/libvulkan_freedreno.so"
+printf '{\n  "ICD": {\n    "library_path": "/usr/lib/libvulkan_freedreno.so",\n    "api_version": "1.4.330"\n  }\n}\n' > "$icds/freedreno_icd.aarch64.json"
+check "host driver missing a library: the runtime's" "$(vulkan)" "$root/runtime-icd"
+echo 'version' > "$root/runhost/usr/lib/libvulkan_freedreno.so"
+check "host driver needing a newer libc: the runtime's" "$(vulkan)" "$root/runtime-icd"
+echo 'ok' > "$root/runhost/usr/lib/libvulkan_freedreno.so"
+mkdir -p "$root/runhost/usr/lib32"; echo 'foreign' > "$root/runhost/usr/lib32/libvulkan_radeon.so"
+echo '{"ICD":{"library_path":"/usr/lib32/libvulkan_radeon.so"}}' > "$icds/radeon_icd.i686.json"
+echo '{"ICD":{"library_path":"libGLX_nvidia.so.0"}}' > "$icds/nvidia_icd.json"
+copy=$root/vk/run/app/org.venture_emu.Venture/vulkan/host-freedreno_icd.aarch64.json
+check "host Turnip first, the runtime's other drivers after" "$(vulkan)" "$copy:$root/runtime-icd/lvp_icd.aarch64.json"
+check "host driver library under /run/host" "$(library "$copy" 2>/dev/null)" "$root/runhost/usr/lib/libvulkan_freedreno.so"
+# A bare library name (Debian's manifests) is found in the host's library directories.
+echo 'ok' > "$root/runhost/usr/lib/libvulkan_lvp.so"
+echo '{"ICD":{"library_path":"libvulkan_lvp.so"}}' > "$icds/lvp_icd.json"
+lvp=$root/vk/run/app/org.venture_emu.Venture/vulkan/host-lvp_icd.json
+check "bare host library names resolved" "$(vulkan)" "$copy:$lvp"
+check "bare host library under /run/host" "$(library "$lvp" 2>/dev/null)" "$root/runhost/usr/lib/libvulkan_lvp.so"
+# A host-only library versioned to its exact build (NVIDIA's) is not linked: the driver stays out.
+echo 'locked' > "$root/runhost/usr/lib/libGLX_nvidia.so.0"; : > "$root/runhost/usr/lib/libnvidia-glcore.so.580.95.05"
+check "host driver needing a build-locked library: left out" "$(vulkan)" "$copy:$lvp"
+check "no host libraries needed: LD_LIBRARY_PATH unset" "$(vulkan LD_LIBRARY_PATH)" ""
+# A library the runtime lacks (SteamOS's Mesa links libSPIRV-Tools.so) comes from the host,
+# linked into a private directory the dynamic loader searches; one the host lacks too rejects it.
+echo 'spirv' > "$root/runhost/usr/lib/libvulkan_freedreno.so"
+check "host driver needing a library neither has: the runtime's" "$(vulkan)" "$lvp:$root/runtime-icd/freedreno_icd.aarch64.json"
+: > "$root/runhost/usr/lib/libSPIRV-Tools.so"
+deps=$root/vk/run/app/org.venture_emu.Venture/vulkan/lib
+check "host driver with a host-only library: the host's" "$(vulkan)" "$copy:$lvp"
+check "host-only libraries on LD_LIBRARY_PATH" "$(vulkan LD_LIBRARY_PATH)" "$deps"
+check "host-only library linked from the host" "$(readlink "$deps/libSPIRV-Tools.so")" "$root/runhost/usr/lib/libSPIRV-Tools.so"
+out=$(VK_DRIVER_FILES=/x/icd.json HOME="$root/vk" XDG_RUNTIME_DIR="$root/vk/run" sh "$root/bin/vulkan.sh" | value VK_DRIVER_FILES)
+check "VK_DRIVER_FILES kept" "$out" "/x/icd.json"
 exit $fail
 '''
 

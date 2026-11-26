@@ -545,6 +545,29 @@ Response get_loopback(uint16_t port, std::string_view path,
   return memory("http://127.0.0.1:" + std::to_string(port) + std::string(path),
                 nullptr, 4 * 1024 * 1024, stop, headers, true);
 }
+bool allowed_guest(std::string_view url) {
+  try {
+    const auto u = parse_url(url);
+    return u.scheme == "https" && !u.host.empty() && u.user.empty() && u.password.empty() &&
+           url.find_first_of("\r\n") == url.npos;
+  } catch (const std::runtime_error &) {
+    return false;
+  }
+}
+Response get_guest(std::string url, std::stop_token stop) {
+  for (int i = 0; i < 8; ++i) {
+    if (!allowed_guest(url)) throw std::runtime_error("Refused a game HTTP URL.");
+    auto r = memory(url, nullptr, 16 * 1024 * 1024, stop);
+    if (!redirected(r.status)) return r;
+    url = redirect(url, r, allowed_guest);
+  }
+  throw std::runtime_error("Too many redirects.");
+}
+Response post_guest(std::string url, std::stop_token stop) {
+  if (!allowed_guest(url)) throw std::runtime_error("Refused a game HTTP URL.");
+  const Fields none;
+  return memory(url, &none, 16 * 1024 * 1024, stop);
+}
 std::string get_public(std::string url, std::stop_token stop) {
   return get_image(std::move(url), stop);
 }

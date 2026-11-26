@@ -16,6 +16,7 @@ add_library(venture_ovrplatform STATIC
   horizon.cpp
   asset_service.cpp
   progression.cpp
+  emulated.cpp
 )
 if(WIN32)
   target_sources(venture_ovrplatform PRIVATE ../../platform/win32/ovrplatform_locale.cpp)

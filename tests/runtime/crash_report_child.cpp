@@ -43,6 +43,10 @@ int main(int argc, char** argv) {
   venture::platform::install_crash_report(argv[1], "org.venture.crashtest");
   venture::log::set_flush_interval(std::chrono::hours(1));
   venture::log::warn("test", "start crash test");
+  // A warning wakes the log writer: let it write and settle so the info line
+  // below stays in its buffer (the flush interval is an hour).
+  venture::log::flush();
+  std::this_thread::sleep_for(std::chrono::milliseconds(200));
   venture::log::info("test", "earlier buffered info survives");
   // Prove the regression actually exercises pending userspace log bytes.
   std::ifstream before(argv[1], std::ios::binary);

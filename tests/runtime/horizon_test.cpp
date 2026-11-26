@@ -45,6 +45,25 @@ TEST_CASE("Horizon auth JSON and cookies share native Platform services") {
   CHECK(venture::parse_json(message.data) == venture::Json::object());
   CHECK(arena.live == 0); // Horizon never allocates a guest handle graph.
 }
+TEST_CASE("Horizon answers launch details as the C getter does") {
+  Arena arena;
+  auto provider = std::make_shared<FakeProvider>();
+  Session session(app(), provider, arena.memory());
+  Horizon horizon(session);
+  REQUIRE(horizon.setup(app().app_id) == InitResult::success);
+  horizon.request("application_lifecycle", "get_launch_details", 1, "{}", 7);
+  auto message = wait_message(horizon);
+  REQUIRE(message.status_code == 0);
+  CHECK(message.cookie == 7);
+  auto details = venture::parse_json(message.data);
+  CHECK(details.at("launch_type") == 1);
+  CHECK(details.at("launch_source") == "library");
+  CHECK(details.at("deeplink_message") == "");
+  CHECK(details.at("users").at("data").empty());
+  horizon.request("application_lifecycle", "get_launch_details", 1, R"({"x":1})", 8);
+  CHECK(wait_message(horizon).status_code == static_cast<int>(ErrorCode::invalid_argument));
+  CHECK(arena.live == 0);
+}
 TEST_CASE("Horizon cannot initialize with a different app or invent identity") {
   Arena arena;
   auto provider = std::make_shared<FakeProvider>();

@@ -87,6 +87,7 @@ def generate(evidence=None):
         t = t.strip().removeprefix('const ')
         kind, tag, count = 'unsupported', '', -1
         if t in ('char *', 'string'): kind = 'string'
+        elif t in ('ovrKeyValuePair *', 'ovrKeyValuePair[]'): kind = 'pairs'
         elif t in ('char **', 'string[]'): kind = 'string_array'
         elif t in ('ovrID *', 'UInt64[]'): kind = 'id_array'
         elif t == 'void *': kind = 'bytes'
@@ -108,14 +109,14 @@ def generate(evidence=None):
             if arg in option_kinds: kind, tag = 'options', option_kinds[arg]
             elif name == 'ovr_Avatar_LaunchAvatarEditor': kind, tag = 'options', 'AvatarEditorOptions'
             else: kind = 'string'
-        if kind in ('string_array', 'id_array', 'bytes'):
+        if kind in ('string_array', 'id_array', 'bytes', 'pairs'):
             # All public array/blob declarations pair with a following count;
             # attenuation/struct arrays deliberately remain unsupported.
             for j in range(index + 1, len(all_args)):
                 if all_args[j][0].strip() in ('int', 'unsigned int', 'size_t', 'UIntPtr'):
                     count = j; break
             if count == -1: kind = 'unsupported'
-        return f'ArgDescriptor{{ArgKind::{kind}, {count}, "{tag}"}}'
+        return f'ArgDescriptor{{ArgKind::{kind}, {count}, "{tag}", "{arg}"}}'
 
     (HERE / 'request_args.inc').write_text(newline="\n", data=banner + ''.join(
         f'VENTURE_REQUEST_ARGS("{name}"' + ''.join(', ' + descriptor(name, t, a, arguments(signatures[name][1]), i)
@@ -166,7 +167,9 @@ def generate(evidence=None):
         elif rt == 'double': kind = 'f64'
         elif rt.endswith('Handle'): kind, nested = 'model', rt.removeprefix('ovr').removesuffix('Handle')
         elif rt == 'IntPtr': kind, nested = 'model', field
-        if field in ('Data', 'ExtraData') and kind in ('string', 'model'): kind, nested = 'blob', ''
+        # OVR_CloudStorageData.h: ovr_CloudStorageData_GetData returns const void *.
+        if field in ('Data', 'ExtraData') and (kind in ('string', 'model') or rt.replace(' ', '') == 'void*'):
+            kind, nested = 'blob', ''
         if model.endswith('Array'):
             if field == 'Element': op, kind, nested = 'element', 'model', model.removesuffix('Array')
             elif field == 'Size': op = 'size'

@@ -120,7 +120,7 @@ VENTURE_MODEL_GETTER("ovr_Challenge_GetVisibility", "Challenge", "Visibility", s
 VENTURE_MODEL_GETTER("ovr_CloudStorageConflictMetadata_GetLocal", "CloudStorageConflictMetadata", "Local", model, field, "CloudStorageMetadata")
 VENTURE_MODEL_GETTER("ovr_CloudStorageConflictMetadata_GetRemote", "CloudStorageConflictMetadata", "Remote", model, field, "CloudStorageMetadata")
 VENTURE_MODEL_GETTER("ovr_CloudStorageData_GetBucket", "CloudStorageData", "Bucket", string, field, "")
-VENTURE_MODEL_GETTER("ovr_CloudStorageData_GetData", "CloudStorageData", "Data", scalar, field, "")
+VENTURE_MODEL_GETTER("ovr_CloudStorageData_GetData", "CloudStorageData", "Data", blob, field, "")
 VENTURE_MODEL_GETTER("ovr_CloudStorageData_GetDataSize", "CloudStorageData", "DataSize", scalar, field, "")
 VENTURE_MODEL_GETTER("ovr_CloudStorageData_GetKey", "CloudStorageData", "Key", string, field, "")
 VENTURE_MODEL_GETTER("ovr_CloudStorageMetadataArray_GetElement", "CloudStorageMetadataArray", "Element", model, element, "CloudStorageMetadata")

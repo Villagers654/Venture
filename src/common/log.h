@@ -2,6 +2,7 @@
 #pragma once
 
 #include <chrono>
+#include <cstdint>
 #include <format>
 #include <string>
 #include <string_view>
@@ -52,6 +53,10 @@ void crash_write(const char* bytes, std::size_t size) noexcept;
 void set_fatal_reason(std::string_view reason) noexcept;
 // The reason set_fatal_reason stored, or "" (fatal handlers: no locks).
 const char* fatal_reason() noexcept;
+// A run's log file takes info and lower lines up to `bytes` (256 MiB unless
+// set), and warnings and errors up to twice that; a line says when it stops.
+// Tests only.
+void set_file_limit(std::uint64_t bytes);
 // Tests only: change the flush interval.
 void set_flush_interval(std::chrono::milliseconds interval);
 void write(Level level, std::string_view tag, std::string_view message);
