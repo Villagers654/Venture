@@ -268,8 +268,13 @@ HostXr initialize_host() {
     }
     if (result == XR_ERROR_RUNTIME_UNAVAILABLE)
       h.error = host_initialization_error(result, "get the headset system");
-    else if (result == XR_ERROR_FORM_FACTOR_UNAVAILABLE)
-      h.error = h.runtime_name + " reports no headset. Connect the headset, start its runtime and try again";
+    else if (result == XR_ERROR_FORM_FACTOR_UNAVAILABLE) {
+      if (venture::environment::getenv("VENTURE_BYPASS_HEADSET_WAIT")) {
+        h.error.clear();
+      } else {
+        h.error = h.runtime_name + " reports no headset. Connect the headset, start its runtime and try again";
+      }
+    }
     else if (!h.available)
       h.error = h.runtime_name + " has no head-mounted display system (XrResult " +
                 std::to_string(int(result)) + ")";

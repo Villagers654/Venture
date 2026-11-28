@@ -832,6 +832,7 @@ Settings Settings::load(const fs::path &data) {
   if (const auto color = str(j, "passthroughKeyColor"); environment::parse_color_key(color))
     s.key_color = color.starts_with('#') ? color.substr(1) : color;
   s.console = field(j, "launchWithConsole") == true;
+  s.bypass_headset_wait = field(j, "bypassHeadsetWait") == true;
   s.check_updates = field(j, "checkForUpdates") != false;
   s.dismissed_update = str(j, "dismissedUpdate");
   s.add_games_to_steam = field(j, "addGamesToSteam") != false;
@@ -884,6 +885,7 @@ void Settings::save(const fs::path &data) const {
          {"passthroughColorKey", color_key},
          {"passthroughKeyColor", key_color},
          {"launchWithConsole", console},
+         {"bypassHeadsetWait", bypass_headset_wait},
          {"checkForUpdates", check_updates},
          {"dismissedUpdate", dismissed_update},
          {"addGamesToSteam", add_games_to_steam},
@@ -928,6 +930,7 @@ std::vector<std::pair<std::string, std::string>> launch_environment(const Settin
   environment.push_back({"VENTURE_CONTROLS", controls::encode(s.controls_for(app_id))});
   // The color key passthrough color, only when the user chose it; empty otherwise.
   environment.push_back({"VENTURE_PASSTHROUGH_KEY", s.passthrough && s.color_key ? s.key_color : ""});
+  if (s.bypass_headset_wait) environment.push_back({"VENTURE_BYPASS_HEADSET_WAIT", "1"});
   if (!s.game_language.empty()) environment.push_back({"VENTURE_LOCALE", s.game_language});
   // Implicit Vulkan layers the player keeps; the runtime leaves out the rest.
   if (!s.vulkan_layers.empty()) {

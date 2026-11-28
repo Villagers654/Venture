@@ -145,6 +145,8 @@ struct Settings {
   int texture_compression_threshold = 50;
   // Translated game code and pipelines kept between launches (Settings > Runtime).
   bool keep_translated_code = true;
+  // Bypass waiting for a headset connection when starting a game without a headset.
+  bool bypass_headset_wait = false;
   // Games that download at once (Settings > Library); one by default.
   int parallel_downloads = 1;
   // The language games see as the system language, a BCP-47 tag such as

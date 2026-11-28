@@ -2041,6 +2041,12 @@ void App::draw_settings() {
     if (toggle("console", &settings_.console)) action([&] { save_settings(); });
   });
   divider();
+  setting_row(tr("Skip headset connection (PC Mode)"),
+              tr("Launches games without waiting for a VR headset. Emulates PC mode with a fixed camera position for quick desktop playtesting."),
+              s(44), s(24), [&] {
+    if (toggle("bypass-headset-wait", &settings_.bypass_headset_wait)) action([&] { save_settings(); });
+  });
+  divider();
   {
     static const char* names[] = {"System language", "English (US)", "English (UK)", "German", "French",
                                   "Spanish", "Italian", "Portuguese (Brazil)", "Dutch", "Polish", "Russian",
