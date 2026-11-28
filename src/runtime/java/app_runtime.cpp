@@ -342,14 +342,21 @@ void launch_android_app(const AppLaunchOptions& options) {
   // The bundled headless mock is used only when explicitly requested; a normal
   // launch uses the system's active OpenXR runtime and fails visibly without one.
   const std::string_view mode = venture::environment::getenv("VENTURE_XR_RUNTIME") ? venture::environment::getenv("VENTURE_XR_RUNTIME") : "";
-  if (mode == "mock") {
+  const bool bypass_headset = venture::environment::getenv("VENTURE_BYPASS_HEADSET_WAIT") != nullptr;
+  if (mode == "mock" || (mode.empty() && bypass_headset)) {
     // Respect the loader's explicit override, including a test runtime outside
     // a shipping layout. The adjacent mock remains the development default.
     const auto* manifest = std::getenv("XR_RUNTIME_JSON");
     const auto mock = manifest && *manifest ? paths::from_utf8(manifest)
         : options.runtime_directory / "mock_openxr_runtime.json";
-    if (!std::filesystem::is_regular_file(mock) || !xr::set_runtime_manifest_for_process(paths::utf8(mock)))
+    if (std::filesystem::is_regular_file(mock) && xr::set_runtime_manifest_for_process(paths::utf8(mock))) {
+      log::info("launch", "Bypassing headset wait: selected mock OpenXR runtime (head position locked)");
+    } else if (mode == "mock") {
       throw std::runtime_error("Cannot select mock OpenXR runtime");
+    } else {
+      // If mock manifest is not found, don't wait 30 seconds on host runtime
+      xr::set_system_wait(std::chrono::milliseconds(0));
+    }
   } else if (!mode.empty() && mode != "host") {
     throw std::runtime_error("VENTURE_XR_RUNTIME must be mock or host");
   } else {
@@ -387,7 +394,13 @@ void launch_android_app(const AppLaunchOptions& options) {
   xr::configure_vulkan_layers_for_process();
   log::info("launch", "Initializing host OpenXR");
   auto& xr = xr::host_xr();
-  if (!xr.available) throw std::runtime_error(xr.error);
+  if (!xr.available) {
+    if (bypass_headset) {
+      log::warn("launch", "Host OpenXR reports no headset; continuing with bypass (head position locked)");
+    } else {
+      throw std::runtime_error(xr.error);
+    }
+  }
   {
     // The Android display covers both eyes at the size games render, as a
     // Quest's covers its panels; Unreal draws no more of an eye than the window.

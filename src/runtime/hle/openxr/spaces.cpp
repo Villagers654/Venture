@@ -1,6 +1,7 @@
 #include "hle/openxr/state.h"
 #include "hle/openxr/controller_layer.h"
 #include "core/av_telemetry.h"
+#include "common/environment.h"
 #include "common/log.h"
 #include "xr/host_xr.h"
 #include <atomic>
@@ -129,6 +130,13 @@ XrResult xrLocateSpace(XrSpace space, XrSpace baseSpace, XrTime time, XrSpaceLoc
         sanitize(velocity->velocityFlags, velocity->linearVelocity, velocity->angularVelocity);
       }
     report_hand_pose(space, *location);
+  } else if (venture::environment::getenv("VENTURE_BYPASS_HEADSET_WAIT")) {
+    location->locationFlags = XR_SPACE_LOCATION_ORIENTATION_VALID_BIT |
+                              XR_SPACE_LOCATION_POSITION_VALID_BIT |
+                              XR_SPACE_LOCATION_ORIENTATION_TRACKED_BIT |
+                              XR_SPACE_LOCATION_POSITION_TRACKED_BIT;
+    location->pose = {{0, 0, 0, 1}, {0, 1.6f, 0}};
+    return XR_SUCCESS;
   }
   return result;
 }
